@@ -2,7 +2,6 @@
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
-from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
@@ -42,7 +41,6 @@ class MyPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
         消息文本 = event.message_str.strip()
-        logger.info(f"馒头bot收到消息文本：{消息文本}")
 
         if 消息文本 == "随机英文单词":
             回复内容 = await 获取随机英文单词回复()
@@ -55,7 +53,6 @@ class MyPlugin(Star):
         else:
             return
 
-        logger.info(f"馒头bot准备回复内容：{回复内容}")
         yield event.plain_result(回复内容)
         event.stop_event()
 
