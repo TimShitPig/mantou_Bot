@@ -1,5 +1,12 @@
-﻿from astrbot.api.event import AstrMessageEvent, filter
+﻿from pathlib import Path
+import sys
+
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+
+插件目录 = Path(__file__).resolve().parent
+if str(插件目录) not in sys.path:
+    sys.path.insert(0, str(插件目录))
 
 from 功能文件.oiapi.古诗词名句 import 获取古诗词名句回复
 from 功能文件.oiapi.疯狂星期四 import 获取疯狂星期四回复
