@@ -12,10 +12,10 @@ from 功能文件.oiapi.古诗词名句 import 获取古诗词名句回复
 from 功能文件.oiapi.疯狂星期四 import 获取疯狂星期四回复
 from 功能文件.oiapi.随机一言 import 获取随机一言回复
 from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
-from 功能文件.管理功能.数字撤回 import 处理数字撤回
+import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.0")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.1")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -27,7 +27,7 @@ class MyPlugin(Star):
     async def on_all_message(self, event: AstrMessageEvent):
         消息文本 = event.message_str.strip()
 
-        if await 处理数字撤回(event, 消息文本):
+        if await 处理数字撤回兼容(event, 消息文本):
             event.stop_event()
             return
 
@@ -47,3 +47,20 @@ class MyPlugin(Star):
 
     async def terminate(self):
         pass
+
+
+async def 处理数字撤回兼容(event: AstrMessageEvent, 消息文本: str) -> bool:
+    处理数字撤回 = getattr(数字撤回功能, "处理数字撤回", None)
+    if callable(处理数字撤回):
+        return await 处理数字撤回(event, 消息文本)
+
+    是否需要撤回数字消息 = getattr(数字撤回功能, "是否需要撤回数字消息", None)
+    尝试撤回当前消息 = getattr(数字撤回功能, "尝试撤回当前消息", None)
+    if not callable(是否需要撤回数字消息) or not callable(尝试撤回当前消息):
+        return False
+
+    if not 是否需要撤回数字消息(消息文本):
+        return False
+
+    await 尝试撤回当前消息(event)
+    return True
