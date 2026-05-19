@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.4.2 |
+| 版本 | v1.4.1 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -90,5 +90,4 @@ aiohttp
 
 - [AstrBot 官方仓库](https://github.com/AstrBotDevs/AstrBot)
 - [AstrBot 插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
-
 
