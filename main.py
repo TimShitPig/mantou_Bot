@@ -16,7 +16,7 @@ from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
 import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.3")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.4")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -68,9 +68,21 @@ async def 处理数字撤回兼容(event: AstrMessageEvent, 消息文本: str) -
 
 
 def 清理消息文本(event: AstrMessageEvent) -> str:
-    文本 = str(getattr(event, "message_str", "") or "")
+    消息对象 = getattr(event, "message_obj", None)
+    文本 = 读取字段(消息对象, "raw_message") or 读取字段(event, "raw_message")
+    if 文本 is None:
+        文本 = getattr(event, "message_str", "")
+    文本 = str(文本 or "")
     文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 文本)
     文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
     文本 = re.sub(r"\[At:[^\]]+\]", "", 文本)
     文本 = 文本.replace("@", "").replace("＠", "")
     return 文本.strip()
+
+
+def 读取字段(对象, 字段名: str):
+    if 对象 is None:
+        return None
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
