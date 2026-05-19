@@ -1,76 +1,60 @@
 ﻿# 馒头bot
 
-## 项目简介
-
-馒头bot 是一个适用于 AstrBot 的插件项目。
-
-当前已接入 oiapi 的随机英文单词、随机一言和疯狂星期四接口，可用于获取英语学习内容、一句随机文字和 KFC 文案。
+适用于 AstrBot 的插件项目，当前接入多个 oiapi 文本类接口。
 
 ## 项目信息
 
-- 插件名：馒头bot
-- 作者：馒头
-- 仓库：https://github.com/TimShitPig/mantou_Bot
-- 版本：v1.3.0
+| 项目 | 内容 |
+| --- | --- |
+| 插件名 | 馒头bot |
+| 作者 | 馒头 |
+| 版本 | v1.4.0 |
+| 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
-## 功能列表
+## 功能导航
 
-### 随机英文单词
+| 功能 | 触发文本 | 接口 |
+| --- | --- | --- |
+| 随机英文单词 | `随机英文单词` | `RandEnglishDict` |
+| 随机一言 | `随机一言` | `AWord` |
+| 疯狂星期四 | `疯狂星期四` | `KFC` |
+| 古诗词名句 | `古诗词名句` | `Sentences` |
 
-发送以下普通文本即可触发：
+<details>
+<summary>查看随机英文单词</summary>
 
-```text
-随机英文单词
-```
+发送 `随机英文单词`，返回单词、中文翻译、英文例句和例句译文。
 
-回复内容包含：
+接口：`https://oiapi.net/api/RandEnglishDict`
 
-- 单词
-- 中文翻译
-- 英文例句
-- 例句译文
+</details>
 
-接口来源：
+<details>
+<summary>查看随机一言</summary>
 
-```text
-https://oiapi.net/api/RandEnglishDict
-```
+发送 `随机一言`，返回一言内容、出处和时间。
 
-### 随机一言
+接口：`https://oiapi.net/api/AWord`
 
-发送以下普通文本即可触发：
+</details>
 
-```text
-随机一言
-```
+<details>
+<summary>查看疯狂星期四</summary>
 
-回复内容包含：
+发送 `疯狂星期四`，返回一段随机 KFC 疯狂星期四文案。
 
-- 一言内容
-- 出处
-- 时间
+接口：`https://oiapi.net/api/KFC`
 
-接口来源：
+</details>
 
-```text
-https://oiapi.net/api/AWord
-```
+<details>
+<summary>查看古诗词名句</summary>
 
-### 疯狂星期四
+发送 `古诗词名句`，返回名句、作者和作品。
 
-发送以下普通文本即可触发：
+接口：`https://oiapi.net/api/Sentences`
 
-```text
-疯狂星期四
-```
-
-回复内容为一段随机 KFC 疯狂星期四文案。
-
-接口来源：
-
-```text
-https://oiapi.net/api/KFC
-```
+</details>
 
 ## 项目结构
 
@@ -82,30 +66,25 @@ https://oiapi.net/api/KFC
 ├── README.md
 └── 功能文件/
     └── oiapi/
+        ├── 古诗词名句.py
         ├── 疯狂星期四.py
         ├── 随机一言.py
         └── 随机英文单词.py
 ```
 
-`main.py` 只负责 AstrBot 插件注册、消息监听和功能调用。
-
-具体功能代码放在 `功能文件/oiapi/` 目录中。
+`main.py` 只负责 AstrBot 插件注册、消息监听和功能调用，具体功能代码放在 `功能文件/oiapi/` 目录中。
 
 ## 安装方式
 
-将插件目录放入 AstrBot 的 `data/plugins` 目录。
-
-然后在 AstrBot WebUI 的插件管理中重载插件。
+将插件目录放入 AstrBot 的 `data/plugins` 目录，然后在 AstrBot WebUI 的插件管理中重载插件。
 
 ## 依赖说明
 
-本插件使用异步 HTTP 请求库：
+依赖已写入 `requirements.txt`：
 
 ```text
 aiohttp
 ```
-
-依赖已写入 `requirements.txt`，AstrBot 加载插件时可按插件依赖机制安装。
 
 ## 参考链接
 
