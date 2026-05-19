@@ -1,36 +1,20 @@
-﻿from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
-from typing import Any, Callable, Coroutine
+﻿from pathlib import Path
+import sys
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 插件目录 = Path(__file__).resolve().parent
-功能目录 = 插件目录 / "功能文件" / "oiapi"
+if str(插件目录) not in sys.path:
+    sys.path.insert(0, str(插件目录))
+
+from 功能文件.oiapi.古诗词名句 import 获取古诗词名句回复
+from 功能文件.oiapi.疯狂星期四 import 获取疯狂星期四回复
+from 功能文件.oiapi.随机一言 import 获取随机一言回复
+from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
 
 
-功能函数 = Callable[[], Coroutine[Any, Any, str]]
-
-
-def 加载功能函数(文件名: str, 函数名: str) -> 功能函数:
-    模块路径 = 功能目录 / 文件名
-    模块名 = f"mantou_bot_{模块路径.stem}"
-    模块规格 = spec_from_file_location(模块名, 模块路径)
-    if 模块规格 is None or 模块规格.loader is None:
-        raise ImportError(f"无法加载功能文件：{模块路径}")
-
-    模块 = module_from_spec(模块规格)
-    模块规格.loader.exec_module(模块)
-    return getattr(模块, 函数名)
-
-
-获取古诗词名句回复 = 加载功能函数("古诗词名句.py", "获取古诗词名句回复")
-获取疯狂星期四回复 = 加载功能函数("疯狂星期四.py", "获取疯狂星期四回复")
-获取随机一言回复 = 加载功能函数("随机一言.py", "获取随机一言回复")
-获取随机英文单词回复 = 加载功能函数("随机英文单词.py", "获取随机英文单词回复")
-
-
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.4.1")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.4.0")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
