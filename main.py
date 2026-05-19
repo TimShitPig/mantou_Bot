@@ -31,7 +31,7 @@ def 加载功能函数(文件名: str, 函数名: str) -> 功能函数:
 获取随机英文单词回复 = 加载功能函数("随机英文单词.py", "获取随机英文单词回复")
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.4.1")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.4.2")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -61,3 +61,4 @@ class MyPlugin(Star):
 
     async def terminate(self):
         pass
+
