@@ -1,4 +1,5 @@
 ﻿from pathlib import Path
+import re
 import sys
 
 from astrbot.api.event import AstrMessageEvent, filter
@@ -15,7 +16,7 @@ from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
 import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.1")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.3")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -25,7 +26,7 @@ class MyPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
-        消息文本 = event.message_str.strip()
+        消息文本 = 清理消息文本(event)
 
         if await 处理数字撤回兼容(event, 消息文本):
             event.stop_event()
@@ -64,3 +65,12 @@ async def 处理数字撤回兼容(event: AstrMessageEvent, 消息文本: str) -
 
     await 尝试撤回当前消息(event)
     return True
+
+
+def 清理消息文本(event: AstrMessageEvent) -> str:
+    文本 = str(getattr(event, "message_str", "") or "")
+    文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 文本)
+    文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
+    文本 = re.sub(r"\[At:[^\]]+\]", "", 文本)
+    文本 = 文本.replace("@", "").replace("＠", "")
+    return 文本.strip()

@@ -31,8 +31,21 @@ async def 处理数字撤回(event: AstrMessageEvent, 消息文本: str) -> bool
     if not 当前消息编号:
         logger.warning("数字撤回警告：当前事件缺少 message_id，将只尝试撤回历史消息")
 
-    历史消息 = await 获取当前会话历史消息(event, bot)
-    待撤回编号 = 提取该用户历史消息编号(历史消息, 当前用户编号, 当前消息编号)
+    当前消息详情 = await 获取消息详情(bot, 当前消息编号) if 当前消息编号 else {}
+    当前消息序号 = 获取当前消息序号(event) or 提取消息序号(当前消息详情)
+    当前消息时间 = 获取当前消息时间(event) or 提取消息时间(当前消息详情)
+
+    历史消息 = await 获取当前会话历史消息(event, bot, 当前消息序号)
+    if not 历史消息:
+        logger.warning("数字撤回警告：未获取到历史消息，将只尝试撤回当前数字消息")
+
+    待撤回编号 = 提取该用户历史消息编号(
+        历史消息,
+        当前用户编号,
+        当前消息编号,
+        当前消息序号,
+        当前消息时间,
+    )
 
     撤回成功数 = 0
     for 消息编号 in 待撤回编号:
@@ -50,19 +63,51 @@ async def 处理数字撤回(event: AstrMessageEvent, 消息文本: str) -> bool
     return True
 
 
-async def 获取当前会话历史消息(event: AstrMessageEvent, bot: Any) -> list[dict[str, Any]]:
+async def 获取当前会话历史消息(
+    event: AstrMessageEvent, bot: Any, 当前消息序号: Any = None
+) -> list[dict[str, Any]]:
     群号 = 获取当前群号(event)
     用户编号 = 获取当前用户编号(event)
 
     if 群号:
-        响应 = await 调用动作(bot, "get_group_msg_history", group_id=群号, count=历史拉取数量)
+        参数列表 = []
+        if 当前消息序号:
+            参数列表.append({"group_id": 群号, "message_seq": 当前消息序号, "count": 历史拉取数量})
+        参数列表.append({"group_id": 群号, "count": 历史拉取数量})
+        响应 = await 调用动作直到有历史(bot, "get_group_msg_history", 参数列表)
     elif 用户编号:
-        响应 = await 调用动作(bot, "get_friend_msg_history", user_id=用户编号, count=历史拉取数量)
+        参数列表 = []
+        if 当前消息序号:
+            参数列表.append({"user_id": 用户编号, "message_seq": 当前消息序号, "count": 历史拉取数量})
+        参数列表.append({"user_id": 用户编号, "count": 历史拉取数量})
+        响应 = await 调用动作直到有历史(bot, "get_friend_msg_history", 参数列表)
     else:
         logger.warning("数字撤回无法获取历史：缺少 group_id/user_id")
         return []
 
-    return 解析历史消息列表(响应)
+    历史消息 = 解析历史消息列表(响应)
+    logger.info(f"数字撤回历史拉取：count={len(历史消息)}")
+    return 历史消息
+
+
+async def 调用动作直到有历史(bot: Any, 动作名: str, 参数列表: list[dict[str, Any]]) -> Any:
+    最后响应 = None
+    for 参数 in 参数列表:
+        响应 = await 调用动作(bot, 动作名, **参数)
+        if 解析历史消息列表(响应):
+            return 响应
+        最后响应 = 响应
+    return 最后响应
+
+
+async def 获取消息详情(bot: Any, 消息编号: Any) -> dict[str, Any]:
+    响应 = await 调用动作(bot, "get_msg", message_id=消息编号)
+    if isinstance(响应, dict):
+        数据 = 响应.get("data")
+        if isinstance(数据, dict):
+            return 数据
+        return 响应
+    return {}
 
 
 async def 调用动作(bot: Any, 动作名: str, **参数: Any) -> Any:
@@ -100,17 +145,25 @@ def 解析历史消息列表(响应: Any) -> list[dict[str, Any]]:
 
 
 def 提取该用户历史消息编号(
-    历史消息: list[dict[str, Any]], 当前用户编号: Any, 当前消息编号: Any
+    历史消息: list[dict[str, Any]],
+    当前用户编号: Any,
+    当前消息编号: Any,
+    当前消息序号: Any = None,
+    当前消息时间: Any = None,
 ) -> list[Any]:
     当前用户 = 规范编号(当前用户编号)
     当前消息 = 规范编号(当前消息编号)
+    当前序号 = 规范数字(当前消息序号)
+    当前时间 = 规范数字(当前消息时间)
     结果: list[Any] = []
     已见: set[str] = set()
 
-    for 消息 in reversed(历史消息):
+    for 消息 in 排序历史消息(历史消息):
         消息编号 = 消息.get("message_id") or 消息.get("id")
         消息编号文本 = 规范编号(消息编号)
         if not 消息编号文本 or 消息编号文本 == 当前消息 or 消息编号文本 in 已见:
+            continue
+        if 是否当前消息之后或本身(消息, 当前序号, 当前时间):
             continue
 
         发送者编号 = 获取历史消息用户编号(消息)
@@ -123,6 +176,27 @@ def 提取该用户历史消息编号(
             break
 
     return 结果
+
+
+def 排序历史消息(历史消息: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    带排序键: list[tuple[int, int, dict[str, Any]]] = []
+    for 下标, 消息 in enumerate(历史消息):
+        排序键 = 提取消息序号(消息) or 提取消息时间(消息)
+        if 排序键 is None:
+            return 历史消息
+        带排序键.append((排序键, 下标, 消息))
+    return [消息 for _, _, 消息 in sorted(带排序键, key=lambda 项: (项[0], 项[1]), reverse=True)]
+
+
+def 是否当前消息之后或本身(消息: dict[str, Any], 当前序号: int | None, 当前时间: int | None) -> bool:
+    消息序号 = 提取消息序号(消息)
+    if 当前序号 is not None and 消息序号 is not None:
+        return 消息序号 >= 当前序号
+
+    消息时间 = 提取消息时间(消息)
+    if 当前时间 is not None and 消息时间 is not None:
+        return 消息时间 > 当前时间
+    return False
 
 
 def 获取历史消息用户编号(消息: dict[str, Any]) -> str:
@@ -171,6 +245,30 @@ def 获取当前消息编号(event: AstrMessageEvent) -> Any:
     return getattr(消息对象, "message_id", None) or getattr(消息对象, "id", None)
 
 
+def 获取当前消息序号(event: AstrMessageEvent) -> Any:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message_seq", "seq", "real_id"):
+            值 = 读取字段(对象, 字段名)
+            if 值:
+                return 值
+    return None
+
+
+def 获取当前消息时间(event: AstrMessageEvent) -> Any:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("time", "timestamp"):
+            值 = 读取字段(对象, 字段名)
+            if 值:
+                return 值
+    return None
+
+
 def 获取当前用户编号(event: AstrMessageEvent) -> Any:
     try:
         用户编号 = event.get_sender_id()
@@ -212,6 +310,31 @@ def 规范编号(编号: Any) -> str:
     if 编号 is None:
         return ""
     return str(编号).strip()
+
+
+def 规范数字(值: Any) -> int | None:
+    if 值 is None:
+        return None
+    try:
+        return int(值)
+    except (TypeError, ValueError):
+        return None
+
+
+def 提取消息序号(消息: dict[str, Any]) -> int | None:
+    for 字段名 in ("message_seq", "seq", "real_id"):
+        数字 = 规范数字(消息.get(字段名))
+        if 数字 is not None:
+            return 数字
+    return None
+
+
+def 提取消息时间(消息: dict[str, Any]) -> int | None:
+    for 字段名 in ("time", "timestamp"):
+        数字 = 规范数字(消息.get(字段名))
+        if 数字 is not None:
+            return 数字
+    return None
 
 
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
