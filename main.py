@@ -16,7 +16,7 @@ from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
 import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.4")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.6.5")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -68,10 +68,33 @@ async def 处理数字撤回兼容(event: AstrMessageEvent, 消息文本: str) -
 
 
 def 清理消息文本(event: AstrMessageEvent) -> str:
+    候选文本 = [清理文本片段(文本) for 文本 in 获取消息文本候选(event)]
+    候选文本 = [文本 for 文本 in 候选文本 if 文本]
+
+    for 文本 in 候选文本:
+        if 数字撤回功能.是否需要撤回数字消息(文本):
+            return 文本
+
+    for 文本 in 候选文本:
+        if 文本 in ("随机英文单词", "随机一言", "疯狂星期四", "古诗词名句"):
+            return 文本
+
+    return 候选文本[0] if 候选文本 else ""
+
+
+def 获取消息文本候选(event: AstrMessageEvent) -> list:
     消息对象 = getattr(event, "message_obj", None)
-    文本 = 读取字段(消息对象, "raw_message") or 读取字段(event, "raw_message")
-    if 文本 is None:
-        文本 = getattr(event, "message_str", "")
+    return [
+        读取字段(消息对象, "raw_message"),
+        读取字段(event, "raw_message"),
+        读取字段(消息对象, "message_str"),
+        读取字段(event, "message_str"),
+        读取字段(消息对象, "message"),
+        读取字段(event, "message"),
+    ]
+
+
+def 清理文本片段(文本) -> str:
     文本 = str(文本 or "")
     文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 文本)
     文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
