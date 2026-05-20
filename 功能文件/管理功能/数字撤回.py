@@ -24,7 +24,7 @@ def 获取消息文本(event: AstrMessageEvent) -> str:
     for 对象 in (消息对象,):
         if 对象 is None:
             continue
-        for 字段名 in ("raw_message", "message"):
+        for 字段名 in ("message",):
             文本 = 转成文本(读取字段(对象, 字段名))
             if 文本:
                 候选文本.append(文本)
