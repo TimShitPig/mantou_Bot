@@ -10,6 +10,7 @@ from astrbot.api.event import AstrMessageEvent
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
+卡片消息规则 = re.compile(r"\[ComponentType\.Json\]|\[CQ:json,", re.IGNORECASE)
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -25,7 +26,7 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
 
 def 是否群名片消息(event: AstrMessageEvent) -> bool:
     for 文本 in 获取原始文本候选(event):
-        if 群名片规则.search(文本):
+        if 群名片规则.search(文本) or 卡片消息规则.search(文本):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
@@ -58,6 +59,8 @@ def 包含群名片消息段(消息: Any) -> bool:
 def 是否群名片消息段(消息段: Any) -> bool:
     if not isinstance(消息段, dict):
         return False
+    if 消息段.get("type") == "json":
+        return True
     if 消息段.get("type") != "contact":
         return False
     数据 = 消息段.get("data")

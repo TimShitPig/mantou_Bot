@@ -19,9 +19,10 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
+卡片消息规则 = re.compile(r"\[ComponentType\.Json\]|\[CQ:json,", re.IGNORECASE)
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.12")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.13")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -111,7 +112,7 @@ def 是否群名片消息兼容(event: AstrMessageEvent) -> bool:
         return 是否群名片消息(event)
 
     for 文本 in 获取原始文本候选(event):
-        if 群名片规则.search(文本):
+        if 群名片规则.search(文本) or 卡片消息规则.search(文本):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
@@ -142,7 +143,11 @@ def 包含群名片消息段(消息: Any) -> bool:
 
 
 def 是否群名片消息段(消息段: Any) -> bool:
-    if not isinstance(消息段, dict) or 消息段.get("type") != "contact":
+    if not isinstance(消息段, dict):
+        return False
+    if 消息段.get("type") == "json":
+        return True
+    if 消息段.get("type") != "contact":
         return False
     数据 = 消息段.get("data")
     if not isinstance(数据, dict):
