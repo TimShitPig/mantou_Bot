@@ -17,10 +17,10 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
 def 获取消息文本(event: AstrMessageEvent) -> str:
     消息对象 = getattr(event, "message_obj", None)
     候选文本 = []
-    for 对象 in (消息对象, event):
+    for 对象 in (event, 消息对象):
         if 对象 is None:
             continue
-        for 字段名 in ("raw_message", "message", "message_str"):
+        for 字段名 in ("message_str", "raw_message", "message"):
             文本 = 转成文本(读取字段(对象, 字段名))
             if 文本:
                 候选文本.append(文本)
@@ -78,17 +78,24 @@ def 转成文本(值: Any) -> str:
     if 值 is None:
         return ""
     if isinstance(值, str):
-        return 值.strip()
+        return 清理可见文本(值)
     if isinstance(值, list):
-        return "".join(转消息段文本(消息段) for 消息段 in 值).strip()
+        return 清理可见文本("".join(转消息段文本(消息段) for 消息段 in 值))
     if isinstance(值, dict):
-        return 转消息段文本(值).strip()
-    return str(值).strip()
+        return 清理可见文本(转消息段文本(值))
+    return ""
+
+
+def 清理可见文本(文本: str) -> str:
+    文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 文本)
+    文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
+    文本 = re.sub(r"\[At:[^\]]+\]", "", 文本)
+    return 文本.strip()
 
 
 def 转消息段文本(消息段: Any) -> str:
     if not isinstance(消息段, dict):
-        return str(消息段)
+        return ""
     if 消息段.get("type") != "text":
         return ""
     数据 = 消息段.get("data")

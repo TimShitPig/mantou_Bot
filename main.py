@@ -15,7 +15,7 @@ from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
 import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.4")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.5")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
