@@ -8,10 +8,14 @@ from astrbot.api.event import AstrMessageEvent
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
+链接规则 = re.compile(r"https?://", re.IGNORECASE)
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
-    return bool(数字撤回规则.search(str(消息文本 or "").strip()))
+    文本 = str(消息文本 or "").strip()
+    if 链接规则.search(文本):
+        return False
+    return bool(数字撤回规则.search(文本))
 
 
 def 获取消息文本(event: AstrMessageEvent) -> str:
