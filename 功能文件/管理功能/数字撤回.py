@@ -15,12 +15,16 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
 
 
 def 获取消息文本(event: AstrMessageEvent) -> str:
+    事件文本 = 清理可见文本(str(getattr(event, "message_str", "") or ""))
+    if 事件文本:
+        return 事件文本
+
     消息对象 = getattr(event, "message_obj", None)
     候选文本 = []
-    for 对象 in (event, 消息对象):
+    for 对象 in (消息对象,):
         if 对象 is None:
             continue
-        for 字段名 in ("message_str", "raw_message", "message"):
+        for 字段名 in ("raw_message", "message"):
             文本 = 转成文本(读取字段(对象, 字段名))
             if 文本:
                 候选文本.append(文本)
