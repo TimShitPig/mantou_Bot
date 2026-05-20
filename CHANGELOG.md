@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.5.8
+
+### 修复
+
+- oiapi 命令文本独立读取 `message_str`、`raw_message` 和 text 消息段，修复 aiocqhttp 下 `随机一言` 等命令不命中的问题。
+
 ## v1.5.7
 
 ### 修复
