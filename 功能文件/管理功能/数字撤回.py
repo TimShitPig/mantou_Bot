@@ -25,7 +25,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         logger.warning(f"数字撤回失败：当前事件缺少 bot 实例，message_id={消息编号}")
         return False
 
-    for 撤回函数 in (使用_delete_msg撤回, 使用_call_api撤回, 使用_call_action撤回):
+    for 撤回函数 in (使用_delete_msg撤回, 使用_api_call_action撤回, 使用_call_api撤回, 使用_call_action撤回):
         try:
             if await 撤回函数(bot, 消息编号):
                 logger.info(f"数字撤回成功：message_id={消息编号}")
@@ -39,11 +39,16 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
 
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
     消息对象 = getattr(event, "message_obj", None)
-    if 消息对象 is None:
-        return None
-    if isinstance(消息对象, dict):
-        return 消息对象.get("message_id") or 消息对象.get("id")
-    return getattr(消息对象, "message_id", None) or getattr(消息对象, "id", None)
+    for 对象 in (消息对象, event):
+        if 对象 is None:
+            continue
+        if isinstance(对象, dict):
+            消息编号 = 对象.get("message_id") or 对象.get("id")
+        else:
+            消息编号 = getattr(对象, "message_id", None) or getattr(对象, "id", None)
+        if 消息编号:
+            return 消息编号
+    return None
 
 
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
@@ -51,6 +56,15 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
     if not callable(撤回方法):
         return False
     await 撤回方法(message_id=消息编号)
+    return True
+
+
+async def 使用_api_call_action撤回(bot: Any, 消息编号: Any) -> bool:
+    api = getattr(bot, "api", None)
+    调用方法 = getattr(api, "call_action", None)
+    if not callable(调用方法):
+        return False
+    await 调用方法("delete_msg", message_id=消息编号)
     return True
 
 
