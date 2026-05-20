@@ -14,6 +14,23 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
     return bool(数字撤回规则.search(str(消息文本 or "").strip()))
 
 
+def 获取消息文本(event: AstrMessageEvent) -> str:
+    消息对象 = getattr(event, "message_obj", None)
+    候选文本 = []
+    for 对象 in (消息对象, event):
+        if 对象 is None:
+            continue
+        for 字段名 in ("raw_message", "message", "message_str"):
+            文本 = 转成文本(读取字段(对象, 字段名))
+            if 文本:
+                候选文本.append(文本)
+
+    for 文本 in 候选文本:
+        if 是否需要撤回数字消息(文本):
+            return 文本
+    return 候选文本[0] if 候选文本 else ""
+
+
 async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
     消息编号 = 获取当前消息编号(event)
     if not 消息编号:
@@ -49,6 +66,35 @@ def 获取当前消息编号(event: AstrMessageEvent) -> Any:
         if 消息编号:
             return 消息编号
     return None
+
+
+def 读取字段(对象: Any, 字段名: str) -> Any:
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
+
+
+def 转成文本(值: Any) -> str:
+    if 值 is None:
+        return ""
+    if isinstance(值, str):
+        return 值.strip()
+    if isinstance(值, list):
+        return "".join(转消息段文本(消息段) for 消息段 in 值).strip()
+    if isinstance(值, dict):
+        return 转消息段文本(值).strip()
+    return str(值).strip()
+
+
+def 转消息段文本(消息段: Any) -> str:
+    if not isinstance(消息段, dict):
+        return str(消息段)
+    if 消息段.get("type") != "text":
+        return ""
+    数据 = 消息段.get("data")
+    if isinstance(数据, dict):
+        return str(数据.get("text") or "")
+    return ""
 
 
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
