@@ -7,11 +7,11 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 
-数字撤回规则 = re.compile(r"^\d{9,12}$")
+数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
-    return bool(数字撤回规则.fullmatch(str(消息文本 or "").strip()))
+    return bool(数字撤回规则.search(str(消息文本 or "").strip()))
 
 
 async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
