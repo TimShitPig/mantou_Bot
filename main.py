@@ -18,9 +18,10 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
+群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.11")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.12")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -42,7 +43,7 @@ class MyPlugin(Star):
             回复内容 = await 获取古诗词名句回复()
         else:
             消息文本 = 获取消息文本兼容(event)
-            if 数字撤回功能.是否群名片消息(event) or (
+            if 是否群名片消息兼容(event) or (
                 not 是否链接消息(命令文本)
                 and not 是否链接消息(消息文本)
                 and 数字撤回功能.是否需要撤回数字消息(消息文本)
@@ -102,6 +103,51 @@ def 转消息段文本(消息段: Any) -> str:
     if isinstance(数据, dict):
         return str(数据.get("text") or "")
     return ""
+
+
+def 是否群名片消息兼容(event: AstrMessageEvent) -> bool:
+    是否群名片消息 = getattr(数字撤回功能, "是否群名片消息", None)
+    if callable(是否群名片消息):
+        return 是否群名片消息(event)
+
+    for 文本 in 获取原始文本候选(event):
+        if 群名片规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含群名片消息段(消息):
+            return True
+    return False
+
+
+def 获取原始文本候选(event: AstrMessageEvent) -> list[str]:
+    消息对象 = getattr(event, "message_obj", None)
+    结果: list[str] = []
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message_str", "raw_message"):
+            值 = 读取字段(对象, 字段名)
+            if isinstance(值, str) and 值:
+                结果.append(值)
+    return 结果
+
+
+def 包含群名片消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否群名片消息段(消息段) for 消息段 in 消息)
+    return 是否群名片消息段(消息)
+
+
+def 是否群名片消息段(消息段: Any) -> bool:
+    if not isinstance(消息段, dict) or 消息段.get("type") != "contact":
+        return False
+    数据 = 消息段.get("data")
+    if not isinstance(数据, dict):
+        return False
+    return str(数据.get("type") or "").lower() in ("group", "qq_group")
 
 
 def 清理命令文本(文本: str) -> str:
