@@ -9,6 +9,11 @@ from astrbot.api.event import AstrMessageEvent
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
+群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
+
+
+def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    return 是否群名片消息(event) or 是否需要撤回数字消息(消息文本)
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
@@ -16,6 +21,49 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
     if 链接规则.search(文本):
         return False
     return bool(数字撤回规则.search(文本))
+
+
+def 是否群名片消息(event: AstrMessageEvent) -> bool:
+    for 文本 in 获取原始文本候选(event):
+        if 群名片规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含群名片消息段(消息):
+            return True
+    return False
+
+
+def 获取原始文本候选(event: AstrMessageEvent) -> list[str]:
+    消息对象 = getattr(event, "message_obj", None)
+    结果: list[str] = []
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message_str", "raw_message"):
+            值 = 读取字段(对象, 字段名)
+            if isinstance(值, str) and 值:
+                结果.append(值)
+    return 结果
+
+
+def 包含群名片消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否群名片消息段(消息段) for 消息段 in 消息)
+    return 是否群名片消息段(消息)
+
+
+def 是否群名片消息段(消息段: Any) -> bool:
+    if not isinstance(消息段, dict):
+        return False
+    if 消息段.get("type") != "contact":
+        return False
+    数据 = 消息段.get("data")
+    if not isinstance(数据, dict):
+        return False
+    return str(数据.get("type") or "").lower() in ("group", "qq_group")
 
 
 def 获取消息文本(event: AstrMessageEvent) -> str:

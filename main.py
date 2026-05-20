@@ -20,7 +20,7 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.10")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.11")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -42,7 +42,11 @@ class MyPlugin(Star):
             回复内容 = await 获取古诗词名句回复()
         else:
             消息文本 = 获取消息文本兼容(event)
-            if not 是否链接消息(命令文本) and not 是否链接消息(消息文本) and 数字撤回功能.是否需要撤回数字消息(消息文本):
+            if 数字撤回功能.是否群名片消息(event) or (
+                not 是否链接消息(命令文本)
+                and not 是否链接消息(消息文本)
+                and 数字撤回功能.是否需要撤回数字消息(消息文本)
+            ):
                 await 数字撤回功能.尝试撤回当前消息(event)
                 event.stop_event()
             return
