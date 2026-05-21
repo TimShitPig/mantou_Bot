@@ -19,10 +19,10 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
-卡片消息规则 = re.compile(r"\[ComponentType\.Json\]|\[CQ:json,", re.IGNORECASE)
+卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.13")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.14")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -118,7 +118,7 @@ def 是否群名片消息兼容(event: AstrMessageEvent) -> bool:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
-        if 包含群名片消息段(消息):
+        if 包含群名片消息段(消息) or 包含卡片标记(消息):
             return True
     return False
 
@@ -153,6 +153,16 @@ def 是否群名片消息段(消息段: Any) -> bool:
     if not isinstance(数据, dict):
         return False
     return str(数据.get("type") or "").lower() in ("group", "qq_group")
+
+
+def 包含卡片标记(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, list):
+        return any(包含卡片标记(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return any(包含卡片标记(子值) for 子值 in 值.values())
+    return bool(卡片消息规则.search(str(值)))
 
 
 def 清理命令文本(文本: str) -> str:

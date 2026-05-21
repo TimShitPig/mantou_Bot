@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.5.14
+
+### 修复
+
+- 群名片撤回兼容 AstrBot 将 JSON 卡片放在组件对象中的情况，识别 `ComponentType.Json`、`ComponentType.Share` 和 `ComponentType.Contact`。
+
 ## v1.5.13
 
 ### 修复
