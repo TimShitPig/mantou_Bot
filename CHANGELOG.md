@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.5.25
+
+### 新增
+
+- 新增 QQ 闪传/文件卡片撤回，识别 AstrBot `ComponentType.File`、OneBot `file` 消息段、`[CQ:file,...]` 和展示文本 `QQ闪传`。
+
 ## v1.5.24
 
 ### 新增

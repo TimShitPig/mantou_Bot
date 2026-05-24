@@ -16,7 +16,8 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息",
     re.IGNORECASE,
 )
-数字撤回模块版本 = "1.5.24"
+文件卡片规则 = re.compile(r"ComponentType\.File|\[CQ:file,|QQ闪传", re.IGNORECASE)
+数字撤回模块版本 = "1.5.25"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -29,7 +30,12 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
     if 是否At消息(event):
         return False
-    return 是否群名片消息(event) or 是否合并转发消息(event) or 是否需要撤回数字消息(消息文本)
+    return (
+        是否群名片消息(event)
+        or 是否合并转发消息(event)
+        or 是否文件卡片消息(event)
+        or 是否需要撤回数字消息(消息文本)
+    )
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
@@ -61,6 +67,19 @@ def 是否合并转发消息(event: AstrMessageEvent) -> bool:
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
         if 包含合并转发消息段(消息) or 包含合并转发标记(消息):
+            return True
+    return False
+
+
+def 是否文件卡片消息(event: AstrMessageEvent) -> bool:
+    for 文本 in 获取原始文本候选(event):
+        if 文件卡片规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含文件卡片消息段(消息) or 包含文件卡片标记(消息):
             return True
     return False
 
@@ -109,6 +128,12 @@ def 包含合并转发消息段(消息: Any) -> bool:
     return 是否合并转发消息段(消息)
 
 
+def 包含文件卡片消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否文件卡片消息段(消息段) for 消息段 in 消息)
+    return 是否文件卡片消息段(消息)
+
+
 def 是否At消息段(消息段: Any) -> bool:
     if isinstance(消息段, dict):
         return 是否At类型值(消息段.get("type"))
@@ -119,6 +144,12 @@ def 是否合并转发消息段(消息段: Any) -> bool:
     if isinstance(消息段, dict):
         return 是否合并转发类型值(消息段.get("type"))
     return 是否合并转发类型值(读取字段(消息段, "type"))
+
+
+def 是否文件卡片消息段(消息段: Any) -> bool:
+    if isinstance(消息段, dict):
+        return 是否文件卡片类型值(消息段.get("type"))
+    return 是否文件卡片类型值(读取字段(消息段, "type"))
 
 
 def 包含At对象标记(值: Any) -> bool:
@@ -141,6 +172,16 @@ def 包含合并转发标记(值: Any) -> bool:
     return bool(合并转发规则.search(str(值)))
 
 
+def 包含文件卡片标记(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含文件卡片标记(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return 是否文件卡片消息段(值) or any(包含文件卡片标记(子值) for 子值 in 值.values())
+    return bool(文件卡片规则.search(str(值)))
+
+
 def 是否At类型值(值: Any) -> bool:
     for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
         if 候选 is None:
@@ -159,6 +200,16 @@ def 是否合并转发类型值(值: Any) -> bool:
         if 文本 in ("forward", "node", "nodes") or 文本.endswith((".forward", ".node", ".nodes")):
             return True
         if any(标记 in 文本 for 标记 in ("componenttype.forward", "componenttype.node", "componenttype.nodes")):
+            return True
+    return False
+
+
+def 是否文件卡片类型值(值: Any) -> bool:
+    for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
+        if 候选 is None:
+            continue
+        文本 = str(候选).strip().lower()
+        if 文本 == "file" or 文本.endswith(".file") or "componenttype.file" in 文本:
             return True
     return False
 

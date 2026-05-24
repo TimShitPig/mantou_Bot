@@ -51,6 +51,7 @@
 - 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]` 和组件对象字符串中的 `ComponentType.Json`。
 - 合并转发/聊天记录消息需要撤回当前消息，包括 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward`、`ComponentType.Node`、`ComponentType.Nodes`。
+- QQ 闪传/文件卡片消息需要撤回当前消息，包括 OneBot `file`、`[CQ:file,...]`、AstrBot `ComponentType.File` 和展示文本 `QQ闪传`。
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
 - 数字撤回规则：消息中出现独立连续 9 到 12 位数字就触发。
 - `你好1078887813` 和 `你好A1078887813 你好` 应触发。
