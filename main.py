@@ -1,4 +1,5 @@
 ﻿from pathlib import Path
+import importlib
 import re
 import sys
 from typing import Any
@@ -11,18 +12,27 @@ from astrbot.api.star import Context, Star, register
 if str(插件目录) not in sys.path:
     sys.path.insert(0, str(插件目录))
 
-from 功能文件.oiapi.古诗词名句 import 获取古诗词名句回复
-from 功能文件.oiapi.疯狂星期四 import 获取疯狂星期四回复
-from 功能文件.oiapi.随机一言 import 获取随机一言回复
-from 功能文件.oiapi.随机英文单词 import 获取随机英文单词回复
-import 功能文件.管理功能.数字撤回 as 数字撤回功能
+importlib.invalidate_caches()
+古诗词名句模块 = importlib.import_module("功能文件.oiapi.古诗词名句")
+疯狂星期四模块 = importlib.import_module("功能文件.oiapi.疯狂星期四")
+随机一言模块 = importlib.import_module("功能文件.oiapi.随机一言")
+随机英文单词模块 = importlib.import_module("功能文件.oiapi.随机英文单词")
+数字撤回功能 = importlib.import_module("功能文件.管理功能.数字撤回")
+
+for 功能模块 in (古诗词名句模块, 疯狂星期四模块, 随机一言模块, 随机英文单词模块, 数字撤回功能):
+    importlib.reload(功能模块)
+
+获取古诗词名句回复 = 古诗词名句模块.获取古诗词名句回复
+获取疯狂星期四回复 = 疯狂星期四模块.获取疯狂星期四回复
+获取随机一言回复 = 随机一言模块.获取随机一言回复
+获取随机英文单词回复 = 随机英文单词模块.获取随机英文单词回复
 
 
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
-插件版本 = "1.5.18"
+插件版本 = "1.5.19"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
