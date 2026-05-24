@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from astrbot.api import logger
@@ -29,15 +30,18 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         文件列表 = await 获取全部群文件(bot, 群号)
         删除成功 = 0
         删除失败 = 0
-        for 文件 in 文件列表:
+        删除间隔 = 获取删除间隔秒数(配置)
+        for 索引, 文件 in enumerate(文件列表):
             try:
                 await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
                 删除成功 += 1
+                if 删除间隔 > 0 and 索引 < len(文件列表) - 1:
+                    await asyncio.sleep(删除间隔)
             except Exception as exc:
                 删除失败 += 1
                 logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={exc}")
 
-        return f"群文件清理完成：成功 {删除成功} 个，失败 {删除失败} 个。"
+        return f"群文件清理完成：成功 {删除成功} 个，失败 {删除失败} 个"
     except Exception as exc:
         logger.warning(f"群文件清理失败：group_id={群号}, error={exc}")
         return f"群文件清理失败：{exc}"
@@ -97,6 +101,15 @@ def 获取管理员QQ列表(配置: Any) -> set[str]:
     if not isinstance(值, list):
         return set()
     return {str(项目).strip() for 项目 in 值 if str(项目).strip()}
+
+
+def 获取删除间隔秒数(配置: Any) -> float:
+    值 = 读取字段(配置, "group_file_cleanup_delete_interval_seconds")
+    try:
+        间隔 = float(值)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, 间隔)
 
 
 def 获取发送者QQ(event: Any) -> str:

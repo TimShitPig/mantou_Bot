@@ -4,5 +4,11 @@
     "type": "list",
     "hint": "只有这里填写的 QQ 号可以使用“清理群文件”或“群文件清理”。这是插件自己的管理员，不是群管理员。",
     "default": []
+  },
+  "group_file_cleanup_delete_interval_seconds": {
+    "description": "群文件批量删除间隔秒数",
+    "type": "float",
+    "hint": "每删除一个群文件后等待多少秒再删下一个。0 表示不等待，删除频率最高。",
+    "default": 0.0
   }
 }
