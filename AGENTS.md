@@ -47,6 +47,14 @@
 - 正确加载最新版时，日志必须出现 `Plugin 馒头bot (vX.Y.Z)`；如果仍有缓存疑问，再临时加入启动日志确认版本号和源码路径。
 - 如果 WebUI 重载后仍是旧行号，直接重启 AstrBot 进程或容器；重启前后都要确认 `/AstrBot/data/plugins/馒头bot` 下的文件内容就是最新版本。
 
+## AstrBot 限流排查
+
+- 日志出现 `rate_limit_check.stage`、`会话 xxx 被限流`、`根据限流策略，此会话处理将被暂停 xxx 秒` 时，优先判断为 AstrBot 核心限流，不是本插件代码限流。
+- AstrBot 官方配置在 `data/cmd_config.json` 的 `platform_settings.rate_limit`，默认示例为 `time: 60`、`count: 30`、`strategy: "stall"`；`stall` 会暂停会话等待，`discard` 会丢弃超限消息。
+- 官方文档说明 `data/cmd_config.json` 是默认配置 `default`，WebUI 新建的其他配置文件在 `data/config/abconf_*.json`；排查时必须确认当前平台实际使用哪个配置文件。
+- 想取消或降低触发概率，应在 AstrBot 配置里调大 `count`、调小 `time`，或把 `strategy` 改成 `discard`；插件内无法清除已经由 AstrBot 核心挂起的会话。
+- 如果已经触发 `stall`，通常只能等待暂停时间结束；想立即恢复应先尝试在 WebUI 禁用/启用对应会话或重载配置，仍无效再重启 AstrBot。
+
 ## 功能边界
 
 - 保留 oiapi 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
