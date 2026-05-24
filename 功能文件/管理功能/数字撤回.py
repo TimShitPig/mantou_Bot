@@ -17,11 +17,13 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     re.IGNORECASE,
 )
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
-数字撤回模块版本 = "1.5.26"
+数字撤回模块版本 = "1.5.27"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
+    if 是否疑似闪传待诊断(event):
+        记录闪传诊断日志(event, 消息文本)
     if not 是否需要撤回消息(event, 消息文本):
         return False
     return await 尝试撤回当前消息(event)
@@ -82,6 +84,23 @@ def 是否闪传消息(event: AstrMessageEvent) -> bool:
         if 包含闪传标记(消息):
             return True
     return False
+
+
+def 是否疑似闪传待诊断(event: AstrMessageEvent) -> bool:
+    return 是否闪传消息(event)
+
+
+def 记录闪传诊断日志(event: AstrMessageEvent, 消息文本: str) -> None:
+    消息对象 = getattr(event, "message_obj", None)
+    logger.info(
+        "闪传诊断："
+        f"message_id={获取当前消息编号(event)}, "
+        f"message_str={限制长度(getattr(event, 'message_str', ''))}, "
+        f"raw_message={限制长度(getattr(event, 'raw_message', ''))}, "
+        f"提取文本={限制长度(消息文本)}, "
+        f"event_message={描述值(读取字段(event, 'message'))}, "
+        f"message_obj_message={描述值(读取字段(消息对象, 'message'))}"
+    )
 
 
 def 是否At消息(event: AstrMessageEvent) -> bool:
@@ -308,6 +327,43 @@ def 转消息段文本(消息段: Any) -> str:
     if isinstance(数据, dict):
         return str(数据.get("text") or "")
     return ""
+
+
+def 限制长度(值: Any, 最大长度: int = 300) -> str:
+    文本 = str(值 or "")
+    if len(文本) > 最大长度:
+        return 文本[:最大长度] + "..."
+    return 文本
+
+
+def 描述值(值: Any) -> str:
+    if 值 is None:
+        return "None"
+    if isinstance(值, list):
+        return "[" + ", ".join(描述消息段(消息段) for 消息段 in 值) + "]"
+    return 描述消息段(值)
+
+
+def 描述消息段(消息段: Any) -> str:
+    if isinstance(消息段, dict):
+        return 限制长度(
+            {
+                "class": type(消息段).__name__,
+                "type": 消息段.get("type"),
+                "data": 消息段.get("data"),
+                "str": str(消息段),
+            }
+        )
+    return 限制长度(
+        {
+            "class": type(消息段).__name__,
+            "type": 读取字段(消息段, "type"),
+            "data": 读取字段(消息段, "data"),
+            "value": 读取字段(消息段, "value"),
+            "name": 读取字段(消息段, "name"),
+            "str": str(消息段),
+        }
+    )
 
 
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
