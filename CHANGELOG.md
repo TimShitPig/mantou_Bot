@@ -1,5 +1,12 @@
 ﻿# 更新日志
 
+## v1.5.26
+
+### 修复
+
+- QQ 闪传/文件卡片撤回兼容 aiocqhttp 显示为 `该消息类型暂不支持查看` 的情况。
+- 收窄 QQ 闪传判断，不再按普通 OneBot `file`、`[CQ:file,...]` 或 AstrBot `ComponentType.File` 撤回普通文件。
+
 ## v1.5.25
 
 ### 新增
