@@ -11,10 +11,11 @@ from astrbot.api.event import AstrMessageEvent
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
+At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
-    return 是否群名片消息(event) or 是否需要撤回数字消息(消息文本)
+    return 是否群名片消息(event) or (not 是否At消息(event) and 是否需要撤回数字消息(消息文本))
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
@@ -37,6 +38,19 @@ def 是否群名片消息(event: AstrMessageEvent) -> bool:
     return False
 
 
+def 是否At消息(event: AstrMessageEvent) -> bool:
+    for 文本 in 获取原始文本候选(event):
+        if At消息规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含At消息段(消息):
+            return True
+    return False
+
+
 def 获取原始文本候选(event: AstrMessageEvent) -> list[str]:
     消息对象 = getattr(event, "message_obj", None)
     结果: list[str] = []
@@ -54,6 +68,16 @@ def 包含群名片消息段(消息: Any) -> bool:
     if isinstance(消息, list):
         return any(是否群名片消息段(消息段) for 消息段 in 消息)
     return 是否群名片消息段(消息)
+
+
+def 包含At消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否At消息段(消息段) for 消息段 in 消息)
+    return 是否At消息段(消息)
+
+
+def 是否At消息段(消息段: Any) -> bool:
+    return isinstance(消息段, dict) and 消息段.get("type") == "at"
 
 
 def 是否群名片消息段(消息段: Any) -> bool:

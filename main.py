@@ -20,9 +20,10 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
+At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.14")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.15")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -45,7 +46,8 @@ class MyPlugin(Star):
         else:
             消息文本 = 获取消息文本兼容(event)
             if 是否群名片消息兼容(event) or (
-                not 是否链接消息(命令文本)
+                not 是否At消息兼容(event)
+                and not 是否链接消息(命令文本)
                 and not 是否链接消息(消息文本)
                 and 数字撤回功能.是否需要撤回数字消息(消息文本)
             ):
@@ -123,6 +125,23 @@ def 是否群名片消息兼容(event: AstrMessageEvent) -> bool:
     return False
 
 
+def 是否At消息兼容(event: AstrMessageEvent) -> bool:
+    是否At消息 = getattr(数字撤回功能, "是否At消息", None)
+    if callable(是否At消息):
+        return 是否At消息(event)
+
+    for 文本 in 获取原始文本候选(event):
+        if At消息规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含At消息段(消息):
+            return True
+    return False
+
+
 def 获取原始文本候选(event: AstrMessageEvent) -> list[str]:
     消息对象 = getattr(event, "message_obj", None)
     结果: list[str] = []
@@ -140,6 +159,16 @@ def 包含群名片消息段(消息: Any) -> bool:
     if isinstance(消息, list):
         return any(是否群名片消息段(消息段) for 消息段 in 消息)
     return 是否群名片消息段(消息)
+
+
+def 包含At消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否At消息段(消息段) for 消息段 in 消息)
+    return 是否At消息段(消息)
+
+
+def 是否At消息段(消息段: Any) -> bool:
+    return isinstance(消息段, dict) and 消息段.get("type") == "at"
 
 
 def 是否群名片消息段(消息段: Any) -> bool:
