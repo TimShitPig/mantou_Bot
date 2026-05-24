@@ -3,6 +3,7 @@ import re
 import sys
 from typing import Any
 
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
@@ -21,15 +22,18 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
+插件版本 = "1.5.18"
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.17")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
 
     async def initialize(self):
-        pass
+        logger.info(
+            f"馒头bot运行版本：v{插件版本}，main={__file__}，数字撤回={getattr(数字撤回功能, '__file__', '')}"
+        )
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
