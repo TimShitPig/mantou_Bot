@@ -23,7 +23,7 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.16")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.17")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)

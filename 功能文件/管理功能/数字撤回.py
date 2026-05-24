@@ -127,6 +127,10 @@ def 获取消息文本(event: AstrMessageEvent) -> str:
 
 
 async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
+    if 是否At消息(event):
+        logger.info("数字撤回跳过：普通@消息不撤回")
+        return False
+
     消息编号 = 获取当前消息编号(event)
     if not 消息编号:
         logger.warning("数字撤回失败：当前事件缺少 message_id")
