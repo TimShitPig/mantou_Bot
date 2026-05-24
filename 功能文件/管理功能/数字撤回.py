@@ -12,7 +12,14 @@ from astrbot.api.event import AstrMessageEvent
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
-数字撤回模块版本 = "1.5.20"
+数字撤回模块版本 = "1.5.22"
+
+
+async def 处理数字撤回(event: AstrMessageEvent) -> bool:
+    消息文本 = 获取消息文本(event)
+    if not 是否需要撤回消息(event, 消息文本):
+        return False
+    return await 尝试撤回当前消息(event)
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -151,7 +158,7 @@ def 获取消息文本(event: AstrMessageEvent) -> str:
 
 async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
     if 是否At消息(event):
-        logger.info(f"数字撤回跳过：普通@消息不撤回，version=v{数字撤回模块版本}，file={__file__}")
+        logger.info("数字撤回跳过：普通@消息不撤回")
         return False
 
     消息编号 = 获取当前消息编号(event)
@@ -167,7 +174,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
     for 撤回函数 in (使用_delete_msg撤回, 使用_api_call_action撤回, 使用_call_api撤回, 使用_call_action撤回):
         try:
             if await 撤回函数(bot, 消息编号):
-                logger.info(f"数字撤回成功：message_id={消息编号}，version=v{数字撤回模块版本}，file={__file__}")
+                logger.info(f"数字撤回成功：message_id={消息编号}")
                 return True
         except Exception as exc:
             logger.warning(f"数字撤回尝试失败：message_id={消息编号}, error={exc}")

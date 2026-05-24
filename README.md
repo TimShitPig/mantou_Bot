@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.5.20 |
+| 版本 | v1.5.22 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -78,6 +78,7 @@
 ├── requirements.txt
 ├── README.md
 └── 功能文件/
+    ├── 消息工具.py
     ├── oiapi/
     │   ├── 古诗词名句.py
     │   ├── 疯狂星期四.py
