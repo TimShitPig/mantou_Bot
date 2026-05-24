@@ -45,15 +45,19 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
 async def 获取全部群文件(bot: Any, 群号: Any) -> list[dict[str, Any]]:
     根目录 = await 调用动作(bot, "get_group_root_files", group_id=群号)
     文件列表 = 提取文件列表(根目录)
-    文件夹列表 = 提取文件夹列表(根目录)
+    待处理文件夹 = 提取文件夹列表(根目录)
+    已处理文件夹: set[str] = set()
 
-    for 文件夹 in 文件夹列表:
+    while 待处理文件夹:
+        文件夹 = 待处理文件夹.pop(0)
         文件夹编号 = 文件夹.get("folder_id") or 文件夹.get("id")
-        if not 文件夹编号:
+        if not 文件夹编号 or str(文件夹编号) in 已处理文件夹:
             continue
+        已处理文件夹.add(str(文件夹编号))
         文件夹内容 = await 调用动作(bot, "get_group_files_by_folder", group_id=群号, folder_id=文件夹编号)
         文件列表.extend(提取文件列表(文件夹内容))
-    return [文件 for 文件 in 文件列表 if 文件.get("file_id")]
+        待处理文件夹.extend(提取文件夹列表(文件夹内容))
+    return 去重文件列表(文件列表)
 
 
 async def 删除群文件(bot: Any, 群号: Any, 文件编号: Any, busid: Any = None) -> None:
@@ -85,6 +89,21 @@ def 提取文件夹列表(响应: Any) -> list[dict[str, Any]]:
         return []
     文件夹列表 = 数据.get("folders") or []
     return [文件夹 for 文件夹 in 文件夹列表 if isinstance(文件夹, dict)]
+
+
+def 去重文件列表(文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    结果 = []
+    已见文件: set[str] = set()
+    for 文件 in 文件列表:
+        文件编号 = 文件.get("file_id")
+        if not 文件编号:
+            continue
+        去重键 = f"{文件编号}:{文件.get('busid', '')}"
+        if 去重键 in 已见文件:
+            continue
+        已见文件.add(去重键)
+        结果.append(文件)
+    return 结果
 
 
 def 获取管理员QQ列表(配置: Any) -> set[str]:
