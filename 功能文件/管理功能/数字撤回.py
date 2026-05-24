@@ -12,7 +12,7 @@ from astrbot.api.event import AstrMessageEvent
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
-数字撤回模块版本 = "1.5.22"
+数字撤回模块版本 = "1.5.23"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
