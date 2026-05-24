@@ -17,13 +17,14 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     re.IGNORECASE,
 )
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
-数字撤回模块版本 = "1.5.27"
+数字撤回模块版本 = "1.5.28"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
-    if 是否疑似闪传待诊断(event):
-        记录闪传诊断日志(event, 消息文本)
+    卡片类型 = 获取卡片撤回类型(event)
+    if 卡片类型:
+        记录卡片诊断日志(event, 消息文本, 卡片类型)
     if not 是否需要撤回消息(event, 消息文本):
         return False
     return await 尝试撤回当前消息(event)
@@ -86,14 +87,21 @@ def 是否闪传消息(event: AstrMessageEvent) -> bool:
     return False
 
 
-def 是否疑似闪传待诊断(event: AstrMessageEvent) -> bool:
-    return 是否闪传消息(event)
+def 获取卡片撤回类型(event: AstrMessageEvent) -> str:
+    if 是否群名片消息(event):
+        return "群名片/JSON卡片"
+    if 是否合并转发消息(event):
+        return "合并转发"
+    if 是否闪传消息(event):
+        return "QQ闪传"
+    return ""
 
 
-def 记录闪传诊断日志(event: AstrMessageEvent, 消息文本: str) -> None:
+def 记录卡片诊断日志(event: AstrMessageEvent, 消息文本: str, 卡片类型: str) -> None:
     消息对象 = getattr(event, "message_obj", None)
     logger.info(
-        "闪传诊断："
+        "卡片诊断："
+        f"类型={卡片类型}, "
         f"message_id={获取当前消息编号(event)}, "
         f"message_str={限制长度(getattr(event, 'message_str', ''))}, "
         f"raw_message={限制长度(getattr(event, 'raw_message', ''))}, "
