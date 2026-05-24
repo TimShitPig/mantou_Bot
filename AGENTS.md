@@ -27,6 +27,7 @@
 - `main.py` 只用来调用：只保留插件注册、模块加载和功能分发，不写具体功能实现、消息解析或业务判断。
 - 消息解析与管理功能判断放到 `功能文件/管理功能/` 内，oiapi 请求逻辑放到 `功能文件/oiapi/` 内。
 - 数字撤回判断只能使用可见文本或 text 消息段，禁止把事件对象、非文本消息段或 ID 字段 `str()` 后参与数字匹配。
+- 插件配置必须使用 AstrBot `_conf_schema.json`；新增配置时同步说明 README、CHANGELOG 和 AGENTS。
 
 ## 排错原则
 
@@ -55,6 +56,9 @@
 - 合并转发/聊天记录消息需要撤回当前消息，包括 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward`、`ComponentType.Node`、`ComponentType.Nodes`。
 - QQ 闪传消息需要撤回当前消息，只识别展示文本 `QQ闪传` 和 aiocqhttp 显示文本 `该消息类型暂不支持查看`；普通文件、OneBot `file`、`[CQ:file,...]`、AstrBot `ComponentType.File` 不应撤回。
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
+- 群文件清理只能由插件配置 `group_file_cleanup_admin_qq` 里的 QQ 使用；这是插件管理员白名单，不等同于群管理员。
+- 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
+- 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。
 - 数字撤回规则：消息中出现独立连续 9 到 12 位数字就触发。
 - `你好1078887813` 和 `你好A1078887813 你好` 应触发。
 - `107888A7813`、`1234567890123`、`123 456 789` 不应触发。

@@ -20,19 +20,21 @@ importlib.invalidate_caches()
 随机英文单词模块 = 加载功能模块("功能文件.oiapi.随机英文单词")
 数字撤回功能 = 加载功能模块("功能文件.管理功能.数字撤回")
 消息工具 = 加载功能模块("功能文件.管理功能.消息工具")
+群文件清理功能 = 加载功能模块("功能文件.管理功能.群文件清理")
 
 获取古诗词名句回复 = getattr(古诗词名句模块, "获取古诗词名句回复")
 获取疯狂星期四回复 = getattr(疯狂星期四模块, "获取疯狂星期四回复")
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.5.29"
+插件版本 = "1.5.30"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
 class MyPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
+        self.config = config
 
     async def initialize(self):
         pass
@@ -50,6 +52,8 @@ class MyPlugin(Star):
             回复内容 = await 获取疯狂星期四回复()
         elif 命令文本 == "古诗词名句":
             回复内容 = await 获取古诗词名句回复()
+        else:
+            回复内容 = await 群文件清理功能.处理群文件清理(event, 命令文本, self.config)
 
         if 回复内容 is None:
             if await 数字撤回功能.处理数字撤回(event):

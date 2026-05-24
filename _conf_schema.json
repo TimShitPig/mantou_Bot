@@ -1,0 +1,8 @@
+{
+  "group_file_cleanup_admin_qq": {
+    "description": "群文件清理功能管理员 QQ 白名单",
+    "type": "list",
+    "hint": "只有这里填写的 QQ 号可以使用“清理群文件”或“群文件清理”。这是插件自己的管理员，不是群管理员。",
+    "default": []
+  }
+}
