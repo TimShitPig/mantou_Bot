@@ -12,7 +12,11 @@ from astrbot.api.event import AstrMessageEvent
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
-数字撤回模块版本 = "1.5.23"
+合并转发规则 = re.compile(
+    r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息",
+    re.IGNORECASE,
+)
+数字撤回模块版本 = "1.5.24"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -25,7 +29,7 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
     if 是否At消息(event):
         return False
-    return 是否群名片消息(event) or 是否需要撤回数字消息(消息文本)
+    return 是否群名片消息(event) or 是否合并转发消息(event) or 是否需要撤回数字消息(消息文本)
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
@@ -44,6 +48,19 @@ def 是否群名片消息(event: AstrMessageEvent) -> bool:
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
         if 包含群名片消息段(消息) or 包含卡片标记(消息):
+            return True
+    return False
+
+
+def 是否合并转发消息(event: AstrMessageEvent) -> bool:
+    for 文本 in 获取原始文本候选(event):
+        if 合并转发规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含合并转发消息段(消息) or 包含合并转发标记(消息):
             return True
     return False
 
@@ -86,10 +103,22 @@ def 包含At消息段(消息: Any) -> bool:
     return 是否At消息段(消息)
 
 
+def 包含合并转发消息段(消息: Any) -> bool:
+    if isinstance(消息, list):
+        return any(是否合并转发消息段(消息段) for 消息段 in 消息)
+    return 是否合并转发消息段(消息)
+
+
 def 是否At消息段(消息段: Any) -> bool:
     if isinstance(消息段, dict):
         return 是否At类型值(消息段.get("type"))
     return 是否At类型值(读取字段(消息段, "type"))
+
+
+def 是否合并转发消息段(消息段: Any) -> bool:
+    if isinstance(消息段, dict):
+        return 是否合并转发类型值(消息段.get("type"))
+    return 是否合并转发类型值(读取字段(消息段, "type"))
 
 
 def 包含At对象标记(值: Any) -> bool:
@@ -102,12 +131,34 @@ def 包含At对象标记(值: Any) -> bool:
     return bool(At消息规则.search(str(值)))
 
 
+def 包含合并转发标记(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含合并转发标记(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return 是否合并转发消息段(值) or any(包含合并转发标记(子值) for 子值 in 值.values())
+    return bool(合并转发规则.search(str(值)))
+
+
 def 是否At类型值(值: Any) -> bool:
     for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
         if 候选 is None:
             continue
         文本 = str(候选).strip().lower()
         if 文本 == "at" or 文本.endswith(".at") or "componenttype.at" in 文本:
+            return True
+    return False
+
+
+def 是否合并转发类型值(值: Any) -> bool:
+    for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
+        if 候选 is None:
+            continue
+        文本 = str(候选).strip().lower()
+        if 文本 in ("forward", "node", "nodes") or 文本.endswith((".forward", ".node", ".nodes")):
+            return True
+        if any(标记 in 文本 for 标记 in ("componenttype.forward", "componenttype.node", "componenttype.nodes")):
             return True
     return False
 
@@ -171,16 +222,13 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         logger.warning(f"数字撤回失败：当前事件缺少 bot 实例，message_id={消息编号}")
         return False
 
-    for 撤回函数 in (使用_delete_msg撤回, 使用_api_call_action撤回, 使用_call_api撤回, 使用_call_action撤回):
-        try:
-            if await 撤回函数(bot, 消息编号):
-                logger.info(f"数字撤回成功：message_id={消息编号}")
-                return True
-        except Exception as exc:
-            logger.warning(f"数字撤回尝试失败：message_id={消息编号}, error={exc}")
-
-    logger.warning(f"数字撤回失败：没有可用的撤回接口，message_id={消息编号}")
-    return False
+    try:
+        await 使用_delete_msg撤回(bot, 消息编号)
+        logger.info(f"数字撤回成功：message_id={消息编号}")
+        return True
+    except Exception as exc:
+        logger.warning(f"数字撤回失败：message_id={消息编号}, error={exc}")
+        return False
 
 
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
@@ -236,31 +284,6 @@ def 转消息段文本(消息段: Any) -> str:
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
     撤回方法 = getattr(bot, "delete_msg", None)
     if not callable(撤回方法):
-        return False
+        raise RuntimeError("当前 bot 没有 delete_msg 撤回接口")
     await 撤回方法(message_id=消息编号)
-    return True
-
-
-async def 使用_api_call_action撤回(bot: Any, 消息编号: Any) -> bool:
-    api = getattr(bot, "api", None)
-    调用方法 = getattr(api, "call_action", None)
-    if not callable(调用方法):
-        return False
-    await 调用方法("delete_msg", message_id=消息编号)
-    return True
-
-
-async def 使用_call_api撤回(bot: Any, 消息编号: Any) -> bool:
-    调用方法 = getattr(bot, "call_api", None)
-    if not callable(调用方法):
-        return False
-    await 调用方法("delete_msg", message_id=消息编号)
-    return True
-
-
-async def 使用_call_action撤回(bot: Any, 消息编号: Any) -> bool:
-    调用方法 = getattr(bot, "call_action", None)
-    if not callable(调用方法):
-        return False
-    await 调用方法("delete_msg", message_id=消息编号)
     return True

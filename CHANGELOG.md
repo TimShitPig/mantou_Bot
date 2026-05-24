@@ -1,5 +1,15 @@
 ﻿# 更新日志
 
+## v1.5.24
+
+### 新增
+
+- 数字撤回模块新增合并转发/聊天记录消息撤回，识别 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward/Node/Nodes`。
+
+### 调整
+
+- 撤回实现只保留 `bot.delete_msg(message_id=...)` 一个接口；OneBot 11 标准没有批量撤回接口，当前仍只撤回触发消息本身。
+
 ## v1.5.23
 
 ### 调整
