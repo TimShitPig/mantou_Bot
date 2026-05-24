@@ -9,6 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
+白名单域名规则 = re.compile(r"changdunovel\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
@@ -17,7 +18,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     re.IGNORECASE,
 )
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
-数字撤回模块版本 = "1.5.28"
+数字撤回模块版本 = "1.5.29"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -31,6 +32,8 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if 是否白名单消息(event, 消息文本):
+        return False
     if 是否At消息(event):
         return False
     return (
@@ -46,6 +49,21 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
     if 链接规则.search(文本):
         return False
     return bool(数字撤回规则.search(文本))
+
+
+def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if 白名单域名规则.search(str(消息文本 or "")):
+        return True
+    for 文本 in 获取原始文本候选(event):
+        if 白名单域名规则.search(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        消息 = 读取字段(对象, "message")
+        if 包含白名单域名(消息):
+            return True
+    return False
 
 
 def 是否群名片消息(event: AstrMessageEvent) -> bool:
@@ -197,6 +215,16 @@ def 包含闪传标记(值: Any) -> bool:
     return bool(闪传消息规则.search(str(值)))
 
 
+def 包含白名单域名(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含白名单域名(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return any(包含白名单域名(子值) for 子值 in 值.values())
+    return bool(白名单域名规则.search(str(值)))
+
+
 def 是否At类型值(值: Any) -> bool:
     for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
         if 候选 is None:
@@ -337,7 +365,7 @@ def 转消息段文本(消息段: Any) -> str:
     return ""
 
 
-def 限制长度(值: Any, 最大长度: int = 300) -> str:
+def 限制长度(值: Any, 最大长度: int = 2000) -> str:
     文本 = str(值 or "")
     if len(文本) > 最大长度:
         return 文本[:最大长度] + "..."

@@ -51,6 +51,7 @@
 - 保留 oiapi 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
 - 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]` 和组件对象字符串中的 `ComponentType.Json`。
+- 白名单域名 `changdunovel.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。
 - 合并转发/聊天记录消息需要撤回当前消息，包括 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward`、`ComponentType.Node`、`ComponentType.Nodes`。
 - QQ 闪传消息需要撤回当前消息，只识别展示文本 `QQ闪传` 和 aiocqhttp 显示文本 `该消息类型暂不支持查看`；普通文件、OneBot `file`、`[CQ:file,...]`、AstrBot `ComponentType.File` 不应撤回。
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
