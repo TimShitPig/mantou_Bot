@@ -32,7 +32,7 @@ for 功能模块 in (古诗词名句模块, 疯狂星期四模块, 随机一言�
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
-插件版本 = "1.5.19"
+插件版本 = "1.5.20"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)

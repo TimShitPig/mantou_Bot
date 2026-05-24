@@ -11,8 +11,8 @@ from astrbot.api.event import AstrMessageEvent
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
-At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
-数字撤回模块版本 = "1.5.19"
+At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
+数字撤回模块版本 = "1.5.20"
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -49,7 +49,7 @@ def 是否At消息(event: AstrMessageEvent) -> bool:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
-        if 包含At消息段(消息):
+        if 包含At消息段(消息) or 包含At对象标记(消息):
             return True
     return False
 
@@ -80,7 +80,29 @@ def 包含At消息段(消息: Any) -> bool:
 
 
 def 是否At消息段(消息段: Any) -> bool:
-    return isinstance(消息段, dict) and 消息段.get("type") == "at"
+    if isinstance(消息段, dict):
+        return 是否At类型值(消息段.get("type"))
+    return 是否At类型值(读取字段(消息段, "type"))
+
+
+def 包含At对象标记(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含At对象标记(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return 是否At消息段(值) or any(包含At对象标记(子值) for 子值 in 值.values())
+    return bool(At消息规则.search(str(值)))
+
+
+def 是否At类型值(值: Any) -> bool:
+    for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
+        if 候选 is None:
+            continue
+        文本 = str(候选).strip().lower()
+        if 文本 == "at" or 文本.endswith(".at") or "componenttype.at" in 文本:
+            return True
+    return False
 
 
 def 是否群名片消息段(消息段: Any) -> bool:
