@@ -23,7 +23,7 @@ import 功能文件.管理功能.数字撤回 as 数字撤回功能
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
 
 
-@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.15")
+@register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", "1.5.16")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -44,10 +44,12 @@ class MyPlugin(Star):
         elif 命令文本 == "古诗词名句":
             回复内容 = await 获取古诗词名句回复()
         else:
+            if 是否At消息兼容(event):
+                return
+
             消息文本 = 获取消息文本兼容(event)
             if 是否群名片消息兼容(event) or (
-                not 是否At消息兼容(event)
-                and not 是否链接消息(命令文本)
+                not 是否链接消息(命令文本)
                 and not 是否链接消息(消息文本)
                 and 数字撤回功能.是否需要撤回数字消息(消息文本)
             ):

@@ -15,7 +15,9 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]")
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
-    return 是否群名片消息(event) or (not 是否At消息(event) and 是否需要撤回数字消息(消息文本))
+    if 是否At消息(event):
+        return False
+    return 是否群名片消息(event) or 是否需要撤回数字消息(消息文本)
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
