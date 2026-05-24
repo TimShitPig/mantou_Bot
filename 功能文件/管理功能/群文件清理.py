@@ -25,16 +25,29 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         return "群文件清理失败：当前事件缺少 bot 实例。"
 
     try:
-        文件列表 = await 获取全部群文件(bot, 群号)
         删除成功 = 0
         删除失败 = 0
-        for 文件 in 文件列表:
-            try:
-                await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
-                删除成功 += 1
-            except Exception as exc:
-                删除失败 += 1
-                logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={exc}")
+        已失败文件: set[str] = set()
+
+        while True:
+            文件列表 = await 获取全部群文件(bot, 群号)
+            待删文件 = [文件 for 文件 in 文件列表 if 获取文件去重键(文件) not in 已失败文件]
+            if not 待删文件:
+                break
+
+            本轮成功 = 0
+            for 文件 in 待删文件:
+                try:
+                    await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
+                    删除成功 += 1
+                    本轮成功 += 1
+                except Exception as exc:
+                    删除失败 += 1
+                    已失败文件.add(获取文件去重键(文件))
+                    logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={exc}")
+
+            if 本轮成功 == 0:
+                break
 
         return f"群文件清理完成：成功 {删除成功} 个，失败 {删除失败} 个"
     except Exception as exc:
@@ -95,15 +108,21 @@ def 去重文件列表(文件列表: list[dict[str, Any]]) -> list[dict[str, Any
     结果 = []
     已见文件: set[str] = set()
     for 文件 in 文件列表:
-        文件编号 = 文件.get("file_id")
-        if not 文件编号:
+        去重键 = 获取文件去重键(文件)
+        if not 去重键:
             continue
-        去重键 = f"{文件编号}:{文件.get('busid', '')}"
         if 去重键 in 已见文件:
             continue
         已见文件.add(去重键)
         结果.append(文件)
     return 结果
+
+
+def 获取文件去重键(文件: dict[str, Any]) -> str:
+    文件编号 = 文件.get("file_id")
+    if not 文件编号:
+        return ""
+    return f"{文件编号}:{文件.get('busid', '')}"
 
 
 def 获取管理员QQ列表(配置: Any) -> set[str]:
