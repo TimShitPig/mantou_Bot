@@ -424,7 +424,7 @@ def 提取七猫链接(值: Any) -> str:
     文本 = str(值)
     for 模式 in (
         r"https?://(?:www\.)?qimao\.com/shuku/\d+/?",
-        r"https?://app-share\.wtzw\.com/[^\s'\"<>，。]+article-detail/\d+[^\s'\"<>，。]*",
+        r"https?://app-share\.wtzw\.com/[^\s'\"<>，。]+(?:article-detail|short-story-detail)/\d+[^\s'\"<>，。]*",
     ):
         匹配 = re.search(模式, 文本)
         if 匹配:
@@ -437,7 +437,7 @@ def 提取七猫链接(值: Any) -> str:
 def 包含七猫链接(文本: str) -> bool:
     return bool(
         re.search(r"qimao\.com/shuku/\d+", 文本)
-        or re.search(r"app-share\.wtzw\.com/.+article-detail/\d+", 文本)
+        or re.search(r"app-share\.wtzw\.com/.+(?:article-detail|short-story-detail)/\d+", 文本)
     )
 
 
@@ -447,7 +447,7 @@ def 提取书籍编号(文本: str) -> str:
         return 文本
     for 模式 in (
         r"qimao\.com/shuku/(\d+)",
-        r"article-detail/(\d+)",
+        r"(?:article-detail|short-story-detail)/(\d+)",
         r"(?:book_id|bookid|id)=(\d+)",
     ):
         匹配 = re.search(模式, 文本)
