@@ -29,6 +29,7 @@ except Exception:
 ]
 解密密钥 = bytes.fromhex("32343263636238323330643730396531")
 下载并发数 = 8
+进度日志分段数 = 10
 
 
 def 获取七猫小说回复流(event: Any, 命令文本: str) -> AsyncIterator[str] | None:
@@ -62,6 +63,10 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
                 yield "七猫小说下载失败：没有获取到章节目录"
                 return
 
+            logger.info(
+                f"七猫小说开始下载：book_id={书籍编号}, "
+                f"title={详情.get('title')}, author={详情.get('author')}, chapters={len(目录)}"
+            )
             yield 格式化下载提示(详情, len(目录))
 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录)
@@ -71,6 +76,10 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
                 return
 
             文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
+            logger.info(
+                f"七猫小说章节下载完成：book_id={书籍编号}, "
+                f"title={详情.get('title')}, success={len(成功章节)}, total={len(目录)}, file_size={len(文件内容)}"
+            )
             发送成功, 发送错误 = await 发送文本文件给当前会话(event, 文件名, 文件内容)
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
@@ -164,6 +173,33 @@ async def 下载全部章节(
     目录: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     信号量 = asyncio.Semaphore(下载并发数)
+    总数 = len(目录)
+    已完成 = 0
+    成功数 = 0
+    失败数 = 0
+    上次日志进度 = 0
+    进度锁 = asyncio.Lock()
+
+    logger.info(f"七猫小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%")
+
+    async def 记录进度(是否成功: bool) -> None:
+        nonlocal 已完成, 成功数, 失败数, 上次日志进度
+        async with 进度锁:
+            已完成 += 1
+            if 是否成功:
+                成功数 += 1
+            else:
+                失败数 += 1
+
+            当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
+            if 当前进度 <= 上次日志进度 and 已完成 < 总数:
+                return
+            上次日志进度 = 当前进度
+            百分比 = int(已完成 * 100 / 总数) if 总数 else 100
+            logger.info(
+                f"七猫小说章节进度：book_id={书籍编号}, "
+                f"progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}"
+            )
 
     async def 下载单章(章节: dict[str, Any]) -> dict[str, str]:
         async with 信号量:
@@ -171,9 +207,11 @@ async def 下载全部章节(
             章节编号 = str(章节.get("id"))
             try:
                 正文 = await 获取章节正文(session, 书籍编号, 章节编号)
+                await 记录进度(True)
                 return {"id": 章节编号, "title": 标题, "content": 正文}
             except Exception as exc:
                 logger.warning(f"七猫章节下载失败：book_id={书籍编号}, chapter_id={章节编号}, error={exc}")
+                await 记录进度(False)
                 return {"id": 章节编号, "title": 标题, "content": ""}
 
     return await asyncio.gather(*(下载单章(章节) for 章节 in 目录))
@@ -301,18 +339,23 @@ async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件�
 
     群号 = 获取群号(event)
     用户号 = 获取发送者QQ(event)
+    logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
 
     直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
     if 直接发送成功:
+        logger.info(f"七猫小说文件发送成功：method=base64, file={文件名}, size={len(文件内容)}")
         return True, ""
 
     临时路径 = 写入临时文件(文件名, 文件内容)
+    logger.info(f"七猫小说写入临时文件：file={临时路径}, size={len(文件内容)}, direct_error={直接发送错误}")
     try:
         if 群号:
             await 调用方法("upload_group_file", group_id=群号, file=str(临时路径), name=文件名)
+            logger.info(f"七猫小说文件发送成功：method=temp_group_file, file={文件名}, group_id={群号}")
             return True, ""
         if 用户号:
             await 调用方法("upload_private_file", user_id=用户号, file=str(临时路径), name=文件名)
+            logger.info(f"七猫小说文件发送成功：method=temp_private_file, file={文件名}, user_id={用户号}")
             return True, ""
         return False, "没有获取到群号或用户号"
     except Exception as exc:
@@ -321,6 +364,7 @@ async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件�
     finally:
         try:
             临时路径.unlink(missing_ok=True)
+            logger.info(f"七猫小说临时文件已删除：file={临时路径}")
         except Exception as exc:
             logger.warning(f"七猫小说临时文件删除失败：file={临时路径}, error={exc}")
 
