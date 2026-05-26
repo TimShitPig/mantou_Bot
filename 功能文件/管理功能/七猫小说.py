@@ -6,7 +6,6 @@ import hashlib
 import html
 import random
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -30,7 +29,7 @@ except Exception:
 解密密钥 = bytes.fromhex("32343263636238323330643730396531")
 下载并发数 = 8
 进度日志分段数 = 10
-内存发送最大字节 = 5 * 1024 * 1024
+下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
 
 
 def 获取七猫小说回复流(event: Any, 命令文本: str) -> AsyncIterator[str] | None:
@@ -100,7 +99,7 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
         回复.append("文件已发送")
     else:
         回复.append(f"文件发送失败：{发送错误}")
-        回复.append("临时文件已删除，没有保存在本地")
+        回复.append("下载缓存文件已删除，没有保存在本地")
     yield "\n".join(回复)
 
 
@@ -342,56 +341,31 @@ async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件�
     用户号 = 获取发送者QQ(event)
     logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
 
-    if len(文件内容) <= 内存发送最大字节:
-        直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
-        if 直接发送成功:
-            return True, ""
-    else:
-        直接发送错误 = f"文件大小 {len(文件内容)} 超过内存发送上限 {内存发送最大字节}，跳过 base64/dataurl"
-        logger.info(f"七猫小说跳过内存发送：file={文件名}, size={len(文件内容)}, limit={内存发送最大字节}")
-    logger.warning(f"七猫小说内存发送失败，准备使用临时文件：file={文件名}, error={直接发送错误}")
-
-    临时路径 = 写入临时文件(文件名, 文件内容)
-    logger.info(f"七猫小说写入临时文件：file={临时路径}, size={len(文件内容)}, direct_error={直接发送错误}")
+    缓存路径 = 写入下载缓存文件(文件名, 文件内容)
+    logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
     try:
-        return await 尝试发送临时文件(调用方法, 群号, 用户号, 文件名, 临时路径, 直接发送错误)
+        return await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 缓存路径)
     finally:
         try:
-            临时路径.unlink(missing_ok=True)
-            logger.info(f"七猫小说临时文件已删除：file={临时路径}")
+            缓存路径.unlink(missing_ok=True)
+            logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
         except Exception as exc:
-            logger.warning(f"七猫小说临时文件删除失败：file={临时路径}, error={exc}")
+            logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
 
 
-async def 尝试直接发送内存文件(
+async def 尝试发送缓存文件(
     调用方法: Any,
     群号: str,
     用户号: str,
     文件名: str,
-    文件内容: bytes,
+    缓存路径: Path,
 ) -> tuple[bool, str]:
-    base64内容 = base64.b64encode(文件内容).decode("ascii")
-    候选列表 = [
-        ("base64", "base64://" + base64内容),
-        ("dataurl", "data:text/plain;base64," + base64内容),
-    ]
-    return await 按候选发送文件(调用方法, 群号, 用户号, 文件名, 候选列表)
-
-
-async def 尝试发送临时文件(
-    调用方法: Any,
-    群号: str,
-    用户号: str,
-    文件名: str,
-    临时路径: Path,
-    直接发送错误: str,
-) -> tuple[bool, str]:
-    候选列表 = [("file_uri", 临时路径.as_uri()), ("path", str(临时路径))]
+    候选列表 = [("path", str(缓存路径)), ("file_uri", 缓存路径.as_uri())]
     成功, 错误 = await 按候选发送文件(调用方法, 群号, 用户号, 文件名, 候选列表)
     if 成功:
         return True, ""
-    logger.warning(f"七猫小说临时文件发送失败：file={临时路径}, direct_error={直接发送错误}, error={错误}")
-    return False, 错误 or 直接发送错误
+    logger.warning(f"七猫小说下载缓存文件发送失败：file={缓存路径}, error={错误}")
+    return False, 错误
 
 
 async def 按候选发送文件(
@@ -421,13 +395,28 @@ async def 按候选发送文件(
     return False, "；".join(错误列表)
 
 
-def 写入临时文件(文件名: str, 文件内容: bytes) -> Path:
-    临时目录 = Path(tempfile.gettempdir()) / "mantou_bot_qimao"
-    临时目录.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="qimao_", suffix=".txt", dir=临时目录, delete=False) as 临时文件:
-        临时文件.write(文件内容)
-        临时路径 = Path(临时文件.name)
-    return 临时路径
+def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
+    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    缓存路径 = 生成不冲突缓存路径(文件名)
+    缓存路径.write_bytes(文件内容)
+    return 缓存路径
+
+
+def 生成不冲突缓存路径(文件名: str) -> Path:
+    安全文件名 = Path(清理文件名(文件名)).name or "七猫小说.txt"
+    if not 安全文件名.lower().endswith(".txt"):
+        安全文件名 = f"{安全文件名}.txt"
+    缓存路径 = 下载缓存目录 / 安全文件名
+    if not 缓存路径.exists():
+        return 缓存路径
+
+    后缀 = 缓存路径.suffix
+    主名 = 缓存路径.stem
+    for 序号 in range(1, 1000):
+        候选路径 = 下载缓存目录 / f"{主名}_{序号}{后缀}"
+        if not 候选路径.exists():
+            return 候选路径
+    raise RuntimeError("下载缓存目录中同名文件过多")
 
 
 def 签名参数(参数: dict[str, Any]) -> dict[str, Any]:
