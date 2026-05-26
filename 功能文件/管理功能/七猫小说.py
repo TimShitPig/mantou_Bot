@@ -343,24 +343,13 @@ async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件�
 
     直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
     if 直接发送成功:
-        logger.info(f"七猫小说文件发送成功：method=base64, file={文件名}, size={len(文件内容)}")
         return True, ""
+    logger.warning(f"七猫小说内存发送失败，准备使用临时文件：file={文件名}, error={直接发送错误}")
 
     临时路径 = 写入临时文件(文件名, 文件内容)
     logger.info(f"七猫小说写入临时文件：file={临时路径}, size={len(文件内容)}, direct_error={直接发送错误}")
     try:
-        if 群号:
-            await 调用方法("upload_group_file", group_id=群号, file=str(临时路径), name=文件名)
-            logger.info(f"七猫小说文件发送成功：method=temp_group_file, file={文件名}, group_id={群号}")
-            return True, ""
-        if 用户号:
-            await 调用方法("upload_private_file", user_id=用户号, file=str(临时路径), name=文件名)
-            logger.info(f"七猫小说文件发送成功：method=temp_private_file, file={文件名}, user_id={用户号}")
-            return True, ""
-        return False, "没有获取到群号或用户号"
-    except Exception as exc:
-        logger.warning(f"七猫小说文件发送失败：file={临时路径}, direct_error={直接发送错误}, error={exc}")
-        return False, str(exc)
+        return await 尝试发送临时文件(调用方法, 群号, 用户号, 文件名, 临时路径, 直接发送错误)
     finally:
         try:
             临时路径.unlink(missing_ok=True)
@@ -376,17 +365,55 @@ async def 尝试直接发送内存文件(
     文件名: str,
     文件内容: bytes,
 ) -> tuple[bool, str]:
-    文件数据 = "base64://" + base64.b64encode(文件内容).decode("ascii")
-    try:
-        if 群号:
-            await 调用方法("upload_group_file", group_id=群号, file=文件数据, name=文件名)
-            return True, ""
-        if 用户号:
-            await 调用方法("upload_private_file", user_id=用户号, file=文件数据, name=文件名)
-            return True, ""
+    base64内容 = base64.b64encode(文件内容).decode("ascii")
+    候选列表 = [
+        ("base64", "base64://" + base64内容),
+        ("dataurl", "data:text/plain;base64," + base64内容),
+    ]
+    return await 按候选发送文件(调用方法, 群号, 用户号, 文件名, 候选列表)
+
+
+async def 尝试发送临时文件(
+    调用方法: Any,
+    群号: str,
+    用户号: str,
+    文件名: str,
+    临时路径: Path,
+    直接发送错误: str,
+) -> tuple[bool, str]:
+    候选列表 = [("file_uri", 临时路径.as_uri()), ("path", str(临时路径))]
+    成功, 错误 = await 按候选发送文件(调用方法, 群号, 用户号, 文件名, 候选列表)
+    if 成功:
+        return True, ""
+    logger.warning(f"七猫小说临时文件发送失败：file={临时路径}, direct_error={直接发送错误}, error={错误}")
+    return False, 错误 or 直接发送错误
+
+
+async def 按候选发送文件(
+    调用方法: Any,
+    群号: str,
+    用户号: str,
+    文件名: str,
+    候选列表: list[tuple[str, str]],
+) -> tuple[bool, str]:
+    if not 群号 and not 用户号:
         return False, "没有获取到群号或用户号"
-    except Exception as exc:
-        return False, str(exc)
+
+    错误列表 = []
+    for 方法名, 文件参数 in 候选列表:
+        try:
+            if 群号:
+                await 调用方法("upload_group_file", group_id=群号, file=文件参数, name=文件名)
+                logger.info(f"七猫小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}")
+                return True, ""
+            await 调用方法("upload_private_file", user_id=用户号, file=文件参数, name=文件名)
+            logger.info(f"七猫小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户号}")
+            return True, ""
+        except Exception as exc:
+            错误文本 = f"{方法名}: {exc}"
+            错误列表.append(错误文本)
+            logger.warning(f"七猫小说文件发送候选失败：method={方法名}, file={文件名}, error={exc}")
+    return False, "；".join(错误列表)
 
 
 def 写入临时文件(文件名: str, 文件内容: bytes) -> Path:
