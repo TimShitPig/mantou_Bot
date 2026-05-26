@@ -86,20 +86,20 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
         yield f"七猫小说下载失败：{exc}"
         return
 
+    if 发送成功:
+        return
+
     标题 = 详情.get("title") or f"七猫小说{书籍编号}"
     失败数量 = len(章节内容) - len(成功章节)
     回复 = [
-        f"七猫小说下载完成：{标题}",
+        f"七猫小说文件发送失败：{标题}",
         f"章节：成功 {len(成功章节)} / 总计 {len(目录)}",
         f"文件：{文件名}",
     ]
     if 失败数量:
         回复.append(f"失败章节：{失败数量}")
-    if 发送成功:
-        回复.append("文件已发送")
-    else:
-        回复.append(f"文件发送失败：{发送错误}")
-        回复.append("下载缓存文件已删除，没有保存在本地")
+    回复.append(f"原因：{发送错误}")
+    回复.append("下载缓存文件已删除，没有保存在本地")
     yield "\n".join(回复)
 
 
