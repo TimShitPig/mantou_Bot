@@ -1,0 +1,411 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import html
+import random
+import re
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+from astrbot.api import logger
+
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import unpad
+except Exception:
+    AES = None
+    unpad = None
+
+
+搜索命令 = "七猫搜索"
+下载命令 = {"七猫小说", "七猫下载", "七猫小说下载"}
+签名密钥 = "d3dGiJc651gSQ8w1"
+应用版本列表 = [
+    "73720", "73700", "73620", "73600", "73500", "73420", "73400",
+    "73328", "73325", "73320", "73300", "73220", "73200", "73100",
+    "73000", "72900", "72820", "72800", "70720", "62010", "62112",
+]
+解密密钥 = bytes.fromhex("32343263636238323330643730396531")
+下载并发数 = 8
+
+
+async def 处理七猫小说(event: Any, 命令文本: str) -> str | None:
+    搜索关键词 = 提取参数(命令文本, 搜索命令)
+    if 搜索关键词 is not None:
+        if not 搜索关键词:
+            return "用法：七猫搜索 小说名"
+        return await 搜索小说回复(搜索关键词)
+
+    下载关键词 = 提取下载参数(命令文本)
+    if 下载关键词 is None:
+        return None
+    if not 下载关键词:
+        return "用法：七猫小说 小说名/七猫书籍ID/七猫链接"
+    return await 下载小说并发送(event, 下载关键词)
+
+
+async def 搜索小说回复(关键词: str) -> str:
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            结果 = await 搜索小说(session, 关键词)
+    except Exception as exc:
+        logger.warning(f"七猫搜索失败：keyword={关键词}, error={exc}")
+        return f"七猫搜索失败：{exc}"
+
+    if not 结果:
+        return "没有搜索到七猫小说结果"
+
+    行列表 = ["七猫搜索结果："]
+    for 序号, 书籍 in enumerate(结果[:5], start=1):
+        标题 = 清理网页文本(书籍.get("original_title") or 书籍.get("title") or "")
+        作者 = 清理网页文本(书籍.get("original_author") or 书籍.get("author") or "未知")
+        字数 = 书籍.get("words_num") or "未知"
+        行列表.append(f"{序号}. {标题} | 作者：{作者} | ID：{书籍.get('id')} | 字数：{字数}")
+    行列表.append("下载：七猫小说 书籍ID")
+    return "\n".join(行列表)
+
+
+async def 下载小说并发送(event: Any, 关键词: str) -> str:
+    if AES is None or unpad is None:
+        return "七猫小说下载失败：缺少 pycryptodome 依赖，请先安装 requirements.txt"
+
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)) as session:
+            书籍编号 = await 解析书籍编号(session, 关键词)
+            if not 书籍编号:
+                return "没有找到可下载的七猫小说"
+
+            详情 = await 获取小说详情(session, 书籍编号)
+            目录 = await 获取小说目录(session, 书籍编号)
+            if not 目录:
+                return "七猫小说下载失败：没有获取到章节目录"
+
+            章节内容 = await 下载全部章节(session, 书籍编号, 目录)
+            成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
+            if not 成功章节:
+                return "七猫小说下载失败：没有获取到可用章节正文"
+
+            文件路径 = 写入小说文件(书籍编号, 详情, 目录, 章节内容)
+            发送成功, 发送错误 = await 发送文件给当前会话(event, 文件路径)
+    except Exception as exc:
+        logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
+        return f"七猫小说下载失败：{exc}"
+
+    标题 = 详情.get("title") or f"七猫小说{书籍编号}"
+    失败数量 = len(章节内容) - len(成功章节)
+    回复 = [
+        f"七猫小说下载完成：{标题}",
+        f"章节：成功 {len(成功章节)} / 总计 {len(目录)}",
+        f"文件：{文件路径.name}",
+    ]
+    if 失败数量:
+        回复.append(f"失败章节：{失败数量}")
+    if 发送成功:
+        回复.append("文件已发送")
+    else:
+        回复.append(f"文件发送失败：{发送错误}")
+        回复.append(f"已保存：{文件路径}")
+    return "\n".join(回复)
+
+
+async def 搜索小说(session: aiohttp.ClientSession, 关键词: str) -> list[dict[str, Any]]:
+    参数 = 签名参数({
+        "extend": "",
+        "tab": "0",
+        "gender": "0",
+        "refresh_state": "8",
+        "page": "1",
+        "wd": 关键词,
+        "is_short_story_user": "0",
+    })
+    数据 = await 请求JSON(session, "https://api-bc.wtzw.com/search/v1/words", 参数, 生成请求头("00000000"))
+    书籍列表 = 读取字段路径(数据, ("data", "books"))
+    return [书籍 for 书籍 in (书籍列表 or []) if isinstance(书籍, dict)]
+
+
+async def 解析书籍编号(session: aiohttp.ClientSession, 关键词: str) -> str:
+    链接编号 = 提取书籍编号(关键词)
+    if 链接编号:
+        return 链接编号
+    搜索结果 = await 搜索小说(session, 关键词)
+    if not 搜索结果:
+        return ""
+    return str(搜索结果[0].get("id") or "")
+
+
+async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
+    数据 = await 请求JSON(
+        session,
+        "https://api-bc.wtzw.com/api/v1/reader/detail",
+        签名参数({"id": 书籍编号}),
+        生成请求头(书籍编号),
+    )
+    详情 = 数据.get("data") if isinstance(数据, dict) else {}
+    if not isinstance(详情, dict) or not 详情:
+        raise RuntimeError("小说详情接口没有返回有效数据")
+    return {
+        "title": 清理网页文本(详情.get("title") or f"七猫小说{书籍编号}"),
+        "author": 清理网页文本(详情.get("author") or "未知"),
+        "intro": 清理网页文本(详情.get("intro") or ""),
+        "words_num": 详情.get("words_num") or "",
+        "tags": "、".join(
+            清理网页文本(标签.get("title") or "")
+            for 标签 in 详情.get("book_tag_list", [])
+            if isinstance(标签, dict) and 标签.get("title")
+        ),
+    }
+
+
+async def 获取小说目录(session: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+    数据 = await 请求JSON(
+        session,
+        "https://api-ks.wtzw.com/api/v1/chapter/chapter-list",
+        签名参数({"chapter_ver": "0", "id": 书籍编号}),
+        生成请求头(书籍编号),
+    )
+    章节列表 = 读取字段路径(数据, ("data", "chapter_lists")) or []
+    目录 = [章节 for 章节 in 章节列表 if isinstance(章节, dict) and 章节.get("id")]
+    return sorted(目录, key=lambda 章节: int(章节.get("chapter_sort") or 0))
+
+
+async def 下载全部章节(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    信号量 = asyncio.Semaphore(下载并发数)
+
+    async def 下载单章(章节: dict[str, Any]) -> dict[str, str]:
+        async with 信号量:
+            标题 = 清理网页文本(章节.get("title") or f"第{章节.get('chapter_sort', '')}章")
+            章节编号 = str(章节.get("id"))
+            try:
+                正文 = await 获取章节正文(session, 书籍编号, 章节编号)
+                return {"id": 章节编号, "title": 标题, "content": 正文}
+            except Exception as exc:
+                logger.warning(f"七猫章节下载失败：book_id={书籍编号}, chapter_id={章节编号}, error={exc}")
+                return {"id": 章节编号, "title": 标题, "content": ""}
+
+    return await asyncio.gather(*(下载单章(章节) for 章节 in 目录))
+
+
+async def 获取章节正文(session: aiohttp.ClientSession, 书籍编号: str, 章节编号: str) -> str:
+    数据 = await 请求JSON(
+        session,
+        "https://api-ks.wtzw.com/api/v1/chapter/content",
+        签名参数({"id": 书籍编号, "chapterId": 章节编号}),
+        生成请求头(书籍编号),
+    )
+    加密正文 = 读取字段路径(数据, ("data", "content"))
+    if not 加密正文:
+        错误 = 读取字段路径(数据, ("errors", "details")) or "章节正文为空"
+        raise RuntimeError(str(错误))
+    return 解密正文(str(加密正文))
+
+
+async def 请求JSON(
+    session: aiohttp.ClientSession,
+    地址: str,
+    参数: dict[str, Any],
+    请求头: dict[str, str],
+) -> dict[str, Any]:
+    async with session.get(地址, params=参数, headers=请求头) as response:
+        文本 = await response.text()
+        if response.status >= 400:
+            raise RuntimeError(f"HTTP {response.status}: {文本[:120]}")
+        try:
+            数据 = await response.json(content_type=None)
+        except Exception as exc:
+            raise RuntimeError(f"JSON解析失败：{文本[:120]}") from exc
+        if isinstance(数据, dict) and 数据.get("errors"):
+            详情 = 读取字段路径(数据, ("errors", "details")) or 读取字段路径(数据, ("errors", "title"))
+            raise RuntimeError(str(详情 or "接口返回错误"))
+        return 数据
+
+
+def 写入小说文件(
+    书籍编号: str,
+    详情: dict[str, Any],
+    目录: list[dict[str, Any]],
+    章节内容: list[dict[str, str]],
+) -> Path:
+    保存目录 = Path(__file__).resolve().parents[2] / "downloads" / "七猫小说"
+    保存目录.mkdir(parents=True, exist_ok=True)
+
+    标题 = 详情.get("title") or f"七猫小说{书籍编号}"
+    文件路径 = 保存目录 / f"{清理文件名(标题)}_{书籍编号}.txt"
+    标签 = 详情.get("tags") or ""
+
+    内容列表 = [
+        f"名称：{标题}",
+        f"作者：{详情.get('author') or '未知'}",
+        f"标签：{标签}",
+        f"字数：{详情.get('words_num') or '未知'}",
+        f"书籍ID：{书籍编号}",
+        f"章节数：{len(目录)}",
+        "",
+        "简介：",
+        str(详情.get("intro") or ""),
+        "",
+    ]
+
+    for 章节 in 章节内容:
+        if not 章节["content"]:
+            continue
+        内容列表.append(章节["title"])
+        内容列表.append("")
+        内容列表.append(章节["content"].strip())
+        内容列表.append("")
+
+    文件路径.write_text("\n".join(内容列表), encoding="utf-8")
+    return 文件路径
+
+
+async def 发送文件给当前会话(event: Any, 文件路径: Path) -> tuple[bool, str]:
+    bot = getattr(event, "bot", None)
+    api = getattr(bot, "api", None)
+    调用方法 = getattr(api, "call_action", None)
+    if not callable(调用方法):
+        return False, "当前 bot 没有 api.call_action 接口"
+
+    群号 = 获取群号(event)
+    try:
+        if 群号:
+            await 调用方法("upload_group_file", group_id=群号, file=str(文件路径), name=文件路径.name)
+            return True, ""
+        用户号 = 获取发送者QQ(event)
+        if 用户号:
+            await 调用方法("upload_private_file", user_id=用户号, file=str(文件路径), name=文件路径.name)
+            return True, ""
+        return False, "没有获取到群号或用户号"
+    except Exception as exc:
+        logger.warning(f"七猫小说文件发送失败：file={文件路径}, error={exc}")
+        return False, str(exc)
+
+
+def 签名参数(参数: dict[str, Any]) -> dict[str, Any]:
+    结果 = dict(参数)
+    待签名 = "".join(f"{键}={结果[键]}" for 键 in sorted(结果)) + 签名密钥
+    结果["sign"] = hashlib.md5(待签名.encode("utf-8")).hexdigest()
+    return 结果
+
+
+def 生成请求头(书籍编号: str) -> dict[str, str]:
+    random.seed(书籍编号)
+    请求头 = {
+        "AUTHORIZATION": "",
+        "app-version": random.choice(应用版本列表),
+        "application-id": "com.****.reader",
+        "channel": "unknown",
+        "net-env": "1",
+        "platform": "android",
+        "qm-params": "",
+        "reg": "0",
+    }
+    待签名 = "".join(f"{键}={请求头[键]}" for 键 in sorted(请求头)) + 签名密钥
+    请求头["sign"] = hashlib.md5(待签名.encode("utf-8")).hexdigest()
+    return 请求头
+
+
+def 解密正文(加密正文: str) -> str:
+    原始内容 = base64.b64decode(加密正文)
+    cipher = AES.new(解密密钥, AES.MODE_CBC, iv=原始内容[:16])
+    解密内容 = unpad(cipher.decrypt(原始内容[16:]), AES.block_size)
+    return 解密内容.decode("utf-8").strip()
+
+
+def 提取下载参数(命令文本: str) -> str | None:
+    for 命令 in 下载命令:
+        参数 = 提取参数(命令文本, 命令)
+        if 参数 is not None:
+            return 参数
+    return None
+
+
+def 提取参数(命令文本: str, 命令: str) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if 文本 == 命令:
+        return ""
+    前缀 = f"{命令} "
+    if 文本.startswith(前缀):
+        return 文本[len(前缀):].strip()
+    return None
+
+
+def 提取书籍编号(文本: str) -> str:
+    文本 = str(文本 or "").strip()
+    if re.fullmatch(r"\d{4,20}", 文本):
+        return 文本
+    for 模式 in (
+        r"qimao\.com/shuku/(\d+)",
+        r"article-detail/(\d+)",
+        r"(?:book_id|bookid|id)=(\d+)",
+    ):
+        匹配 = re.search(模式, 文本)
+        if 匹配:
+            return 匹配.group(1)
+    return ""
+
+
+def 清理网页文本(文本: Any) -> str:
+    文本 = re.sub(r"<[^>]+>", "", str(文本 or ""))
+    return html.unescape(文本).strip()
+
+
+def 清理文件名(文件名: str) -> str:
+    文件名 = re.sub(r'[\\/:*?"<>|]', "_", 文件名).strip()
+    return 文件名[:80] or "七猫小说"
+
+
+def 读取字段路径(数据: Any, 路径: tuple[str, ...]) -> Any:
+    当前 = 数据
+    for 字段 in 路径:
+        if not isinstance(当前, dict):
+            return None
+        当前 = 当前.get(字段)
+    return 当前
+
+
+def 获取群号(event: Any) -> str:
+    for 方法名 in ("get_group_id", "get_group"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        if isinstance(值, dict):
+            值 = 值.get("group_id") or 值.get("id")
+        if 值:
+            return str(值)
+    return ""
+
+
+def 获取发送者QQ(event: Any) -> str:
+    for 方法名 in ("get_sender_id", "get_user_id"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "sender_id") or 读取字段(对象, "user_id") or 读取字段(对象, "sender")
+        if isinstance(值, dict):
+            值 = 值.get("user_id") or 值.get("id")
+        if 值:
+            return str(值)
+    return ""
+
+
+def 读取字段(对象: Any, 字段名: str) -> Any:
+    if 对象 is None:
+        return None
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
