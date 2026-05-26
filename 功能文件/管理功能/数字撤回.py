@@ -9,7 +9,7 @@ from astrbot.api.event import AstrMessageEvent
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
-白名单域名规则 = re.compile(r"changdunovel\.com", re.IGNORECASE)
+白名单域名规则 = re.compile(r"changdunovel\.com|qimao\.com|app-share\.wtzw\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)

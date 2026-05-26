@@ -8,7 +8,7 @@ import random
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiohttp
 from astrbot.api import logger
@@ -21,8 +21,6 @@ except Exception:
     unpad = None
 
 
-搜索命令 = "七猫搜索"
-下载命令 = {"七猫小说", "七猫下载", "七猫小说下载"}
 签名密钥 = "d3dGiJc651gSQ8w1"
 应用版本列表 = [
     "73720", "73700", "73620", "73600", "73500", "73420", "73400",
@@ -33,67 +31,51 @@ except Exception:
 下载并发数 = 8
 
 
-async def 处理七猫小说(event: Any, 命令文本: str) -> str | None:
-    搜索关键词 = 提取参数(命令文本, 搜索命令)
-    if 搜索关键词 is not None:
-        if not 搜索关键词:
-            return "用法：七猫搜索 小说名"
-        return await 搜索小说回复(搜索关键词)
-
-    下载关键词 = 提取下载参数(命令文本)
+def 获取七猫小说回复流(event: Any, 命令文本: str) -> AsyncIterator[str] | None:
+    下载关键词 = (
+        提取直接七猫链接参数(命令文本)
+        or 提取事件七猫链接(event)
+    )
     if 下载关键词 is None:
         return None
-    if not 下载关键词:
-        return "用法：七猫小说 小说名/七猫书籍ID/七猫链接"
-    return await 下载小说并发送(event, 下载关键词)
+    return 生成下载回复流(event, 下载关键词)
 
 
-async def 搜索小说回复(关键词: str) -> str:
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            结果 = await 搜索小说(session, 关键词)
-    except Exception as exc:
-        logger.warning(f"七猫搜索失败：keyword={关键词}, error={exc}")
-        return f"七猫搜索失败：{exc}"
-
-    if not 结果:
-        return "没有搜索到七猫小说结果"
-
-    行列表 = ["七猫搜索结果："]
-    for 序号, 书籍 in enumerate(结果[:5], start=1):
-        标题 = 清理网页文本(书籍.get("original_title") or 书籍.get("title") or "")
-        作者 = 清理网页文本(书籍.get("original_author") or 书籍.get("author") or "未知")
-        字数 = 书籍.get("words_num") or "未知"
-        行列表.append(f"{序号}. {标题} | 作者：{作者} | ID：{书籍.get('id')} | 字数：{字数}")
-    行列表.append("下载：七猫小说 书籍ID")
-    return "\n".join(行列表)
-
-
-async def 下载小说并发送(event: Any, 关键词: str) -> str:
+async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str]:
+    if not 关键词:
+        yield "没有识别到七猫小说链接"
+        return
     if AES is None or unpad is None:
-        return "七猫小说下载失败：缺少 pycryptodome 依赖，请先安装 requirements.txt"
+        yield "七猫小说下载失败：缺少 pycryptodome 依赖，请先安装 requirements.txt"
+        return
 
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)) as session:
             书籍编号 = await 解析书籍编号(session, 关键词)
             if not 书籍编号:
-                return "没有找到可下载的七猫小说"
+                yield "没有找到可下载的七猫小说"
+                return
 
             详情 = await 获取小说详情(session, 书籍编号)
             目录 = await 获取小说目录(session, 书籍编号)
             if not 目录:
-                return "七猫小说下载失败：没有获取到章节目录"
+                yield "七猫小说下载失败：没有获取到章节目录"
+                return
+
+            yield 格式化下载提示(详情, len(目录))
 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
-                return "七猫小说下载失败：没有获取到可用章节正文"
+                yield "七猫小说下载失败：没有获取到可用章节正文"
+                return
 
             文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
             发送成功, 发送错误 = await 发送文本文件给当前会话(event, 文件名, 文件内容)
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
-        return f"七猫小说下载失败：{exc}"
+        yield f"七猫小说下载失败：{exc}"
+        return
 
     标题 = 详情.get("title") or f"七猫小说{书籍编号}"
     失败数量 = len(章节内容) - len(成功章节)
@@ -109,7 +91,7 @@ async def 下载小说并发送(event: Any, 关键词: str) -> str:
     else:
         回复.append(f"文件发送失败：{发送错误}")
         回复.append("临时文件已删除，没有保存在本地")
-    return "\n".join(回复)
+    yield "\n".join(回复)
 
 
 async def 搜索小说(session: aiohttp.ClientSession, 关键词: str) -> list[dict[str, Any]]:
@@ -152,6 +134,10 @@ async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str) 
         "author": 清理网页文本(详情.get("author") or "未知"),
         "intro": 清理网页文本(详情.get("intro") or ""),
         "words_num": 详情.get("words_num") or "",
+        "is_over": 详情.get("is_over") or "",
+        "chapters": 详情.get("chapters") or "",
+        "chapter_list_desc": 清理网页文本(详情.get("chapter_list_desc") or ""),
+        "category_over_words": 清理网页文本(详情.get("category_over_words") or ""),
         "tags": "、".join(
             清理网页文本(标签.get("title") or "")
             for 标签 in 详情.get("book_tag_list", [])
@@ -261,6 +247,51 @@ def 生成小说文件内容(
     return 文件名, "\n".join(内容列表).encode("utf-8")
 
 
+def 格式化下载提示(详情: dict[str, Any], 目录数量: int) -> str:
+    return "\n".join([
+        f"书名：{详情.get('title') or '未知'}",
+        f"作者：{详情.get('author') or '未知'}",
+        f"状态：{获取状态文本(详情)}",
+        f"章节：{获取章节数量文本(详情, 目录数量)}",
+        f"字数：{格式化字数(详情.get('words_num'))}",
+        "",
+        "正在下载中请稍等.....",
+    ])
+
+
+def 获取状态文本(详情: dict[str, Any]) -> str:
+    if str(详情.get("is_over")) == "1":
+        return "完结"
+    for 字段名 in ("category_over_words", "chapter_list_desc"):
+        文本 = str(详情.get(字段名) or "")
+        if "完结" in 文本:
+            return "完结"
+        if "连载" in 文本:
+            return "连载"
+    return "连载"
+
+
+def 获取章节数量文本(详情: dict[str, Any], 目录数量: int) -> str:
+    章节数 = str(详情.get("chapters") or "").strip()
+    if not 章节数:
+        章节数 = str(目录数量)
+    return f"{章节数} 章"
+
+
+def 格式化字数(字数: Any) -> str:
+    文本 = str(字数 or "").strip()
+    if not 文本:
+        return "未知"
+    if "字" in 文本:
+        return 文本
+    if 文本.isdigit():
+        数值 = int(文本)
+        if 数值 >= 10000:
+            return f"{round(数值 / 10000)}万字"
+        return f"{数值}字"
+    return 文本
+
+
 async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes) -> tuple[bool, str]:
     bot = getattr(event, "bot", None)
     api = getattr(bot, "api", None)
@@ -354,22 +385,60 @@ def 解密正文(加密正文: str) -> str:
     return 解密内容.decode("utf-8").strip()
 
 
-def 提取下载参数(命令文本: str) -> str | None:
-    for 命令 in 下载命令:
-        参数 = 提取参数(命令文本, 命令)
-        if 参数 is not None:
-            return 参数
-    return None
-
-
-def 提取参数(命令文本: str, 命令: str) -> str | None:
+def 提取直接七猫链接参数(命令文本: str) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 == 命令:
-        return ""
-    前缀 = f"{命令} "
-    if 文本.startswith(前缀):
-        return 文本[len(前缀):].strip()
+    if not 文本:
+        return None
+    if 包含七猫链接(文本):
+        return 文本
     return None
+
+
+def 提取事件七猫链接(event: Any) -> str | None:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message_str", "raw_message", "message"):
+            链接 = 提取七猫链接(读取字段(对象, 字段名))
+            if 链接:
+                return 链接
+    return None
+
+
+def 提取七猫链接(值: Any) -> str:
+    if 值 is None:
+        return ""
+    if isinstance(值, (list, tuple, set)):
+        for 子值 in 值:
+            链接 = 提取七猫链接(子值)
+            if 链接:
+                return 链接
+        return ""
+    if isinstance(值, dict):
+        for 子值 in 值.values():
+            链接 = 提取七猫链接(子值)
+            if 链接:
+                return 链接
+        return ""
+    文本 = str(值)
+    for 模式 in (
+        r"https?://(?:www\.)?qimao\.com/shuku/\d+/?",
+        r"https?://app-share\.wtzw\.com/[^\s'\"<>，。]+article-detail/\d+[^\s'\"<>，。]*",
+    ):
+        匹配 = re.search(模式, 文本)
+        if 匹配:
+            return 匹配.group(0)
+    if 包含七猫链接(文本):
+        return 文本
+    return ""
+
+
+def 包含七猫链接(文本: str) -> bool:
+    return bool(
+        re.search(r"qimao\.com/shuku/\d+", 文本)
+        or re.search(r"app-share\.wtzw\.com/.+article-detail/\d+", 文本)
+    )
 
 
 def 提取书籍编号(文本: str) -> str:

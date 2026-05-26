@@ -28,7 +28,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.5.36"
+插件版本 = "1.5.39"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -56,7 +56,12 @@ class MyPlugin(Star):
         else:
             回复内容 = await 群文件清理功能.处理群文件清理(event, 命令文本, self.config)
             if 回复内容 is None:
-                回复内容 = await 七猫小说功能.处理七猫小说(event, 命令文本)
+                七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本)
+                if 七猫回复流 is not None:
+                    async for 七猫回复内容 in 七猫回复流:
+                        yield event.plain_result(七猫回复内容)
+                    event.stop_event()
+                    return
 
         if 回复内容 is None:
             if await 数字撤回功能.处理数字撤回(event):
