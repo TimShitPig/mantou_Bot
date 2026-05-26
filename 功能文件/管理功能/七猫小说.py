@@ -30,6 +30,7 @@ except Exception:
 解密密钥 = bytes.fromhex("32343263636238323330643730396531")
 下载并发数 = 8
 进度日志分段数 = 10
+内存发送最大字节 = 5 * 1024 * 1024
 
 
 def 获取七猫小说回复流(event: Any, 命令文本: str) -> AsyncIterator[str] | None:
@@ -341,9 +342,13 @@ async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件�
     用户号 = 获取发送者QQ(event)
     logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
 
-    直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
-    if 直接发送成功:
-        return True, ""
+    if len(文件内容) <= 内存发送最大字节:
+        直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
+        if 直接发送成功:
+            return True, ""
+    else:
+        直接发送错误 = f"文件大小 {len(文件内容)} 超过内存发送上限 {内存发送最大字节}，跳过 base64/dataurl"
+        logger.info(f"七猫小说跳过内存发送：file={文件名}, size={len(文件内容)}, limit={内存发送最大字节}")
     logger.warning(f"七猫小说内存发送失败，准备使用临时文件：file={文件名}, error={直接发送错误}")
 
     临时路径 = 写入临时文件(文件名, 文件内容)
