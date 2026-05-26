@@ -6,6 +6,7 @@ import hashlib
 import html
 import random
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -88,8 +89,8 @@ async def 下载小说并发送(event: Any, 关键词: str) -> str:
             if not 成功章节:
                 return "七猫小说下载失败：没有获取到可用章节正文"
 
-            文件路径 = 写入小说文件(书籍编号, 详情, 目录, 章节内容)
-            发送成功, 发送错误 = await 发送文件给当前会话(event, 文件路径)
+            文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
+            发送成功, 发送错误 = await 发送文本文件给当前会话(event, 文件名, 文件内容)
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
         return f"七猫小说下载失败：{exc}"
@@ -99,7 +100,7 @@ async def 下载小说并发送(event: Any, 关键词: str) -> str:
     回复 = [
         f"七猫小说下载完成：{标题}",
         f"章节：成功 {len(成功章节)} / 总计 {len(目录)}",
-        f"文件：{文件路径.name}",
+        f"文件：{文件名}",
     ]
     if 失败数量:
         回复.append(f"失败章节：{失败数量}")
@@ -107,7 +108,7 @@ async def 下载小说并发送(event: Any, 关键词: str) -> str:
         回复.append("文件已发送")
     else:
         回复.append(f"文件发送失败：{发送错误}")
-        回复.append(f"已保存：{文件路径}")
+        回复.append("临时文件已删除，没有保存在本地")
     return "\n".join(回复)
 
 
@@ -226,17 +227,14 @@ async def 请求JSON(
         return 数据
 
 
-def 写入小说文件(
+def 生成小说文件内容(
     书籍编号: str,
     详情: dict[str, Any],
     目录: list[dict[str, Any]],
     章节内容: list[dict[str, str]],
-) -> Path:
-    保存目录 = Path(__file__).resolve().parents[2] / "downloads" / "七猫小说"
-    保存目录.mkdir(parents=True, exist_ok=True)
-
+) -> tuple[str, bytes]:
     标题 = 详情.get("title") or f"七猫小说{书籍编号}"
-    文件路径 = 保存目录 / f"{清理文件名(标题)}_{书籍编号}.txt"
+    文件名 = f"{清理文件名(标题)}_{书籍编号}.txt"
     标签 = 详情.get("tags") or ""
 
     内容列表 = [
@@ -260,11 +258,10 @@ def 写入小说文件(
         内容列表.append(章节["content"].strip())
         内容列表.append("")
 
-    文件路径.write_text("\n".join(内容列表), encoding="utf-8")
-    return 文件路径
+    return 文件名, "\n".join(内容列表).encode("utf-8")
 
 
-async def 发送文件给当前会话(event: Any, 文件路径: Path) -> tuple[bool, str]:
+async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes) -> tuple[bool, str]:
     bot = getattr(event, "bot", None)
     api = getattr(bot, "api", None)
     调用方法 = getattr(api, "call_action", None)
@@ -272,18 +269,58 @@ async def 发送文件给当前会话(event: Any, 文件路径: Path) -> tuple[b
         return False, "当前 bot 没有 api.call_action 接口"
 
     群号 = 获取群号(event)
+    用户号 = 获取发送者QQ(event)
+
+    直接发送成功, 直接发送错误 = await 尝试直接发送内存文件(调用方法, 群号, 用户号, 文件名, 文件内容)
+    if 直接发送成功:
+        return True, ""
+
+    临时路径 = 写入临时文件(文件名, 文件内容)
     try:
         if 群号:
-            await 调用方法("upload_group_file", group_id=群号, file=str(文件路径), name=文件路径.name)
+            await 调用方法("upload_group_file", group_id=群号, file=str(临时路径), name=文件名)
             return True, ""
-        用户号 = 获取发送者QQ(event)
         if 用户号:
-            await 调用方法("upload_private_file", user_id=用户号, file=str(文件路径), name=文件路径.name)
+            await 调用方法("upload_private_file", user_id=用户号, file=str(临时路径), name=文件名)
             return True, ""
         return False, "没有获取到群号或用户号"
     except Exception as exc:
-        logger.warning(f"七猫小说文件发送失败：file={文件路径}, error={exc}")
+        logger.warning(f"七猫小说文件发送失败：file={临时路径}, direct_error={直接发送错误}, error={exc}")
         return False, str(exc)
+    finally:
+        try:
+            临时路径.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(f"七猫小说临时文件删除失败：file={临时路径}, error={exc}")
+
+
+async def 尝试直接发送内存文件(
+    调用方法: Any,
+    群号: str,
+    用户号: str,
+    文件名: str,
+    文件内容: bytes,
+) -> tuple[bool, str]:
+    文件数据 = "base64://" + base64.b64encode(文件内容).decode("ascii")
+    try:
+        if 群号:
+            await 调用方法("upload_group_file", group_id=群号, file=文件数据, name=文件名)
+            return True, ""
+        if 用户号:
+            await 调用方法("upload_private_file", user_id=用户号, file=文件数据, name=文件名)
+            return True, ""
+        return False, "没有获取到群号或用户号"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def 写入临时文件(文件名: str, 文件内容: bytes) -> Path:
+    临时目录 = Path(tempfile.gettempdir()) / "mantou_bot_qimao"
+    临时目录.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="qimao_", suffix=".txt", dir=临时目录, delete=False) as 临时文件:
+        临时文件.write(文件内容)
+        临时路径 = Path(临时文件.name)
+    return 临时路径
 
 
 def 签名参数(参数: dict[str, Any]) -> dict[str, Any]:
