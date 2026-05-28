@@ -14,15 +14,15 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
     发送者 = 获取发送者QQ(event)
     管理员列表 = 获取管理员QQ列表(配置)
     if not 发送者 or 发送者 not in 管理员列表:
-        return "没有权限使用群文件清理。"
+        return "没有权限使用群文件清理"
 
     群号 = 获取群号(event)
     if not 群号:
-        return "群文件清理只能在群聊中使用。"
+        return "群文件清理只能在群聊中使用"
 
     bot = getattr(event, "bot", None)
     if bot is None:
-        return "群文件清理失败：当前事件缺少 bot 实例。"
+        return "群文件清理失败：当前事件缺少 bot 实例"
 
     try:
         删除成功 = 0
