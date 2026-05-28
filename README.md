@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.5.51 |
+| 版本 | v1.5.52 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -22,6 +22,7 @@
 | 管理功能 | 数字撤回 | `连续 9-12 位数字` | 自动撤回符合规则的数字消息 |
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、合并转发和 QQ 闪传消息 |
 | 管理功能 | 群文件清理 | `清理群文件` / `群文件清理` | 仅插件配置白名单 QQ 可用，循环扫描并批量清理当前群群文件 |
+| 管理功能 | 授权链接 | `授权` | 生成 QQ 群服务授权链接，供群主在安卓/鸿蒙 QQ 打开授权 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫链接，先回复书籍信息再下载并发送到 QQ |
 | oiapi | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 识别番茄小说链接，通过 OIAPI FqRead 下载 txt 并发送到 QQ |
 
@@ -90,6 +91,7 @@
     ├── 下载缓存/
     └── 管理功能/
         ├── 消息工具.py
+        ├── 授权链接.py
         ├── 七猫小说.py
         ├── 群文件清理.py
         └── 数字撤回.py
@@ -122,6 +124,8 @@ pycryptodome
 番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数、简介和 `正在下载中请稍等.....`，正文按约 500 万字分段请求后合并为一个 txt。文件写入 `功能文件/下载缓存/`，优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。通过 `File` 组件发送时会延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
 
 QQ 官方机器人 `qq_official` 发送文件应走官方富媒体接口，AstrBot `File` 组件会封装 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files` 上传，并通过 `msg_type=7` 的 `media` 消息发送。官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊拒绝普通 txt 文件，这是平台能力限制；OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
+
+发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接。插件会动态获取当前群号和机器人 QQ 号，并尝试通过 `getUidFromUin` 等适配器扩展接口把机器人 QQ 转为 UID；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
 
 ## 参考链接
 
