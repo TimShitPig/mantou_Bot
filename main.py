@@ -29,7 +29,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.5.49"
+插件版本 = "1.5.50"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -67,7 +67,10 @@ class MyPlugin(Star):
                 番茄回复流 = 番茄小说模块.获取番茄小说回复流(event, 命令文本, self.config)
                 if 番茄回复流 is not None:
                     async for 番茄回复内容 in 番茄回复流:
-                        yield event.plain_result(番茄回复内容)
+                        if isinstance(番茄回复内容, str):
+                            yield event.plain_result(番茄回复内容)
+                        else:
+                            yield 番茄回复内容
                     event.stop_event()
                     return
 

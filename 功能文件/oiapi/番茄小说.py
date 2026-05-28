@@ -11,6 +11,11 @@ from typing import Any, AsyncIterator
 import aiohttp
 from astrbot.api import logger
 
+try:
+    from astrbot.api import message_components as Comp
+except Exception:
+    Comp = None
+
 
 API_URL = "https://oiapi.net/api/FqRead"
 LANDING_URL = "https://api.fqnovel.com/novel_ug/share/landing_page"
@@ -79,7 +84,17 @@ async def generate_download_stream(event: Any, source: str, config: Any) -> Asyn
                 f"\u756a\u8304\u5c0f\u8bf4\u7ae0\u8282\u4e0b\u8f7d\u5b8c\u6210\uff1abook_id={book_id}, "
                 f"title={meta.get('title')}, success={len(ok_chapters)}, total={len(chapters)}, file_size={len(file_content)}"
             )
-            sent, send_error = await send_text_file(event, file_name, file_content)
+            send_result = await prepare_text_file_send(event, file_name, file_content)
+            cache_path = send_result.get("cache_path")
+            chain_result = send_result.get("chain_result")
+            if chain_result is not None:
+                try:
+                    yield chain_result
+                finally:
+                    delete_cache_file(cache_path)
+                return
+            sent = bool(send_result.get("sent"))
+            send_error = str(send_result.get("error") or "")
     except Exception as exc:
         logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1asource={limit_text(source)}, book_id={book_id}, error={exc}")
         yield f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1a{exc}"
@@ -425,26 +440,41 @@ def format_download_notice(meta: dict[str, Any], chapter_count: int) -> str:
     ])
 
 
-async def send_text_file(event: Any, file_name: str, file_content: bytes) -> tuple[bool, str]:
-    bot = getattr(event, "bot", None)
-    api = getattr(bot, "api", None)
-    call_action = getattr(api, "call_action", None)
-    if not callable(call_action):
-        return False, "\u5f53\u524d bot \u6ca1\u6709 api.call_action \u63a5\u53e3"
-
+async def prepare_text_file_send(event: Any, file_name: str, file_content: bytes) -> dict[str, Any]:
     group_id = get_group_id(event)
     user_id = get_user_id(event)
     logger.info(f"\u756a\u8304\u5c0f\u8bf4\u51c6\u5907\u53d1\u9001\u6587\u4ef6\uff1afile={file_name}, size={len(file_content)}, group_id={group_id}, user_id={user_id}")
     cache_path = write_cache_file(file_name, file_content)
     logger.info(f"\u756a\u8304\u5c0f\u8bf4\u5199\u5165\u4e0b\u8f7d\u7f13\u5b58\uff1afile={cache_path}, size={len(file_content)}")
-    try:
-        return await send_file_candidates(call_action, group_id, user_id, file_name, [("path", str(cache_path)), ("file_uri", cache_path.as_uri())])
-    finally:
+
+    if Comp is not None and hasattr(event, "chain_result"):
         try:
-            cache_path.unlink(missing_ok=True)
-            logger.info(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5df2\u5220\u9664\uff1afile={cache_path}")
+            chain_result = event.chain_result([Comp.File(name=file_name, file=str(cache_path))])
+            logger.info(f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u4f7f\u7528 AstrBot File \u7ec4\u4ef6\u53d1\u9001\uff1afile={file_name}, path={cache_path}")
+            return {"sent": True, "chain_result": chain_result, "cache_path": cache_path, "error": ""}
         except Exception as exc:
-            logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5220\u9664\u5931\u8d25\uff1afile={cache_path}, error={exc}")
+            logger.warning(f"\u756a\u8304\u5c0f\u8bf4 AstrBot File \u7ec4\u4ef6\u6784\u5efa\u5931\u8d25\uff1afile={file_name}, error={exc}")
+
+    bot = getattr(event, "bot", None)
+    api = getattr(bot, "api", None)
+    call_action = getattr(api, "call_action", None)
+    if callable(call_action):
+        sent, error = await send_file_candidates(call_action, group_id, user_id, file_name, [("path", str(cache_path)), ("file_uri", cache_path.as_uri())])
+        delete_cache_file(cache_path)
+        return {"sent": sent, "chain_result": None, "cache_path": None, "error": error}
+
+    delete_cache_file(cache_path)
+    return {"sent": False, "chain_result": None, "cache_path": None, "error": "\u5f53\u524d bot \u6ca1\u6709 api.call_action \u63a5\u53e3\uff0c\u4e5f\u65e0\u6cd5\u4f7f\u7528 AstrBot File \u7ec4\u4ef6"}
+
+
+def delete_cache_file(cache_path: Any) -> None:
+    if not cache_path:
+        return
+    try:
+        Path(cache_path).unlink(missing_ok=True)
+        logger.info(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5df2\u5220\u9664\uff1afile={cache_path}")
+    except Exception as exc:
+        logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5220\u9664\u5931\u8d25\uff1afile={cache_path}, error={exc}")
 
 
 async def send_file_candidates(
