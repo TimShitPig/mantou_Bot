@@ -18,6 +18,7 @@ importlib.invalidate_caches()
 疯狂星期四模块 = 加载功能模块("功能文件.oiapi.疯狂星期四")
 随机一言模块 = 加载功能模块("功能文件.oiapi.随机一言")
 随机英文单词模块 = 加载功能模块("功能文件.oiapi.随机英文单词")
+番茄小说模块 = 加载功能模块("功能文件.oiapi.番茄小说")
 数字撤回功能 = 加载功能模块("功能文件.管理功能.数字撤回")
 消息工具 = 加载功能模块("功能文件.管理功能.消息工具")
 群文件清理功能 = 加载功能模块("功能文件.管理功能.群文件清理")
@@ -28,7 +29,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.5.48"
+插件版本 = "1.5.49"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -60,6 +61,13 @@ class MyPlugin(Star):
                 if 七猫回复流 is not None:
                     async for 七猫回复内容 in 七猫回复流:
                         yield event.plain_result(七猫回复内容)
+                    event.stop_event()
+                    return
+
+                番茄回复流 = 番茄小说模块.获取番茄小说回复流(event, 命令文本, self.config)
+                if 番茄回复流 is not None:
+                    async for 番茄回复内容 in 番茄回复流:
+                        yield event.plain_result(番茄回复内容)
                     event.stop_event()
                     return
 

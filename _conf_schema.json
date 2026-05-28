@@ -4,5 +4,11 @@
     "type": "list",
     "hint": "只有这里填写的 QQ 号可以使用“清理群文件”或“群文件清理”。这是插件自己的管理员，不是群管理员。",
     "default": []
+  },
+  "番茄小说key": {
+    "description": "番茄小说 OIAPI FqRead key",
+    "type": "string",
+    "hint": "用于调用 https://oiapi.net/api/FqRead 下载番茄小说。",
+    "default": ""
   }
 }
