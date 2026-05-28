@@ -13,6 +13,11 @@ import aiohttp
 from astrbot.api import logger
 
 try:
+    from astrbot.api import message_components as Comp
+except Exception:
+    Comp = None
+
+try:
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import unpad
 except Exception:
@@ -30,6 +35,7 @@ except Exception:
 下载并发数 = 20
 进度日志分段数 = 10
 下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
+文件组件缓存清理延迟 = 600
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
 
@@ -81,7 +87,16 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
                 f"七猫小说章节下载完成：book_id={书籍编号}, "
                 f"title={详情.get('title')}, success={len(成功章节)}, total={len(目录)}, file_size={len(文件内容)}"
             )
-            发送成功, 发送错误 = await 发送文本文件给当前会话(event, 文件名, 文件内容)
+            发送结果 = await 准备发送文本文件给当前会话(event, 文件名, 文件内容)
+            文件发送结果 = 发送结果.get("chain_result")
+            if 文件发送结果 is not None:
+                try:
+                    yield 文件发送结果
+                finally:
+                    延迟删除下载缓存文件(发送结果.get("cache_path"))
+                return
+            发送成功 = bool(发送结果.get("sent"))
+            发送错误 = str(发送结果.get("error") or "")
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
         yield f"七猫小说下载失败：{exc}"
@@ -340,28 +355,59 @@ def 格式化字数(字数: Any) -> str:
     return 文本
 
 
-async def 发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes) -> tuple[bool, str]:
-    bot = getattr(event, "bot", None)
-    api = getattr(bot, "api", None)
-    调用方法 = getattr(api, "call_action", None)
-    if not callable(调用方法):
-        return False, "当前 bot 没有 api.call_action 接口"
 
+async def 准备发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes) -> dict[str, Any]:
     群号 = 获取群号(event)
     用户号 = 获取发送者QQ(event)
     logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
 
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
-    try:
-        return await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 缓存路径)
-    finally:
-        try:
-            缓存路径.unlink(missing_ok=True)
-            logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
-        except Exception as exc:
-            logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
 
+    if Comp is not None and hasattr(event, "chain_result"):
+        try:
+            文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(缓存路径))])
+            logger.info(f"七猫小说文件使用 AstrBot File 组件发送：file={文件名}, path={缓存路径}")
+            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 缓存路径, "error": ""}
+        except Exception as exc:
+            logger.warning(f"七猫小说 AstrBot File 组件构建失败：file={文件名}, error={exc}")
+
+    bot = getattr(event, "bot", None)
+    api = getattr(bot, "api", None)
+    调用方法 = getattr(api, "call_action", None)
+    if not callable(调用方法):
+        删除下载缓存文件(缓存路径)
+        return {"sent": False, "chain_result": None, "cache_path": None, "error": "当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件"}
+
+    try:
+        发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 缓存路径)
+        return {"sent": 发送成功, "chain_result": None, "cache_path": None, "error": 发送错误}
+    finally:
+        删除下载缓存文件(缓存路径)
+
+
+def 删除下载缓存文件(缓存路径: Any) -> None:
+    if not 缓存路径:
+        return
+    try:
+        Path(缓存路径).unlink(missing_ok=True)
+        logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
+    except Exception as exc:
+        logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
+
+
+def 延迟删除下载缓存文件(缓存路径: Any, 延迟秒数: int = 文件组件缓存清理延迟) -> None:
+    if not 缓存路径:
+        return
+
+    async def 执行删除() -> None:
+        await asyncio.sleep(延迟秒数)
+        删除下载缓存文件(缓存路径)
+
+    try:
+        asyncio.create_task(执行删除())
+    except RuntimeError:
+        删除下载缓存文件(缓存路径)
 
 async def 尝试发送缓存文件(
     调用方法: Any,

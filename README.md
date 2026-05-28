@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.5.50 |
+| 版本 | v1.5.51 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -117,9 +117,11 @@ pycryptodome
 | `group_file_cleanup_admin_qq` | 群文件清理功能管理员 QQ 白名单 |
 | `番茄小说key` | 调用 `https://oiapi.net/api/FqRead` 的 OIAPI key |
 
-七猫小说下载完成后会临时写入 `功能文件/下载缓存/`，通过本地文件路径上传到 QQ，上传尝试结束后自动删除 txt 文件。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`。txt 文件顶部会写入免责声明，文件发送成功后不再额外发送完成提示，只有发送失败时回复错误原因。
+七猫小说下载完成后会临时写入 `功能文件/下载缓存/`，优先通过 AstrBot `File` 组件上传到 QQ，无法使用时再回退 OneBot 本地路径上传。通过 `File` 组件发送时会延迟清理缓存，避免适配器读取前文件被删除；OneBot 回退上传尝试结束后立即删除 txt 文件。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`。txt 文件顶部会写入免责声明，文件发送成功后不再额外发送完成提示，只有发送失败时回复错误原因。
 
-番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数、简介和 `正在下载中请稍等.....`，正文按约 500 万字分段请求后合并为一个 txt。文件写入 `功能文件/下载缓存/`，优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
+番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数、简介和 `正在下载中请稍等.....`，正文按约 500 万字分段请求后合并为一个 txt。文件写入 `功能文件/下载缓存/`，优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。通过 `File` 组件发送时会延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
+
+QQ 官方机器人 `qq_official` 发送文件应走官方富媒体接口，AstrBot `File` 组件会封装 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files` 上传，并通过 `msg_type=7` 的 `media` 消息发送。官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊拒绝普通 txt 文件，这是平台能力限制；OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
 ## 参考链接
 

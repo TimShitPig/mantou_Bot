@@ -1,5 +1,17 @@
 ﻿# 更新日志
 
+## v1.5.51
+
+### 修复
+
+- 七猫小说文件发送增加 AstrBot `File` 组件路径，兼容 QQ 官方机器人 `qq_official` 富媒体发送。
+- 七猫和番茄通过 `File` 组件发送时改为延迟清理下载缓存，避免适配器读取本地文件前缓存被删除。
+
+### 说明
+
+- QQ 官方机器人发送文件应走官方富媒体接口 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files`，AstrBot `File` 组件会封装为 `msg_type=7` 的 `media` 消息；OneBot 的 `upload_group_file`/`upload_private_file` 只作为 OneBot 适配器回退。
+- 官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊仍拒绝普通 txt 文件，这是平台能力限制，不是 OneBot 接口能修复的问题。
+
 ## v1.5.50
 
 ### 修复

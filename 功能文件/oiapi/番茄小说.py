@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import asyncio
 import json
 import math
 import re
@@ -23,6 +24,7 @@ CACHE_DIR = Path(__file__).resolve().parents[1] / "\u4e0b\u8f7d\u7f13\u5b58"
 DISCLAIMER = "\u58f0\u660e\uff1a\u672c\u6587\u4ef6\u7531\u673a\u5668\u4eba\u81ea\u52a8\u6574\u7406\u751f\u6210\uff0c\u4ec5\u4f9b\u4e2a\u4eba\u5b66\u4e60\u4ea4\u6d41\u548c\u4e34\u65f6\u9605\u8bfb\u4f7f\u7528\u3002\u5185\u5bb9\u7248\u6743\u5f52\u539f\u4f5c\u8005\u53ca\u76f8\u5173\u5e73\u53f0\u6240\u6709\uff0c\u8bf7\u52ff\u7528\u4e8e\u5546\u4e1a\u7528\u9014\u6216\u4e8c\u6b21\u4f20\u64ad\u3002\u5982\u559c\u6b22\u672c\u4e66\uff0c\u8bf7\u652f\u6301\u6b63\u7248\u3002"
 MAX_WORDS_PER_RANGE = 5_000_000
 PROGRESS_STEPS = 10
+FILE_COMPONENT_CACHE_DELETE_DELAY = 600
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
@@ -91,7 +93,7 @@ async def generate_download_stream(event: Any, source: str, config: Any) -> Asyn
                 try:
                     yield chain_result
                 finally:
-                    delete_cache_file(cache_path)
+                    schedule_delete_cache_file(cache_path)
                 return
             sent = bool(send_result.get("sent"))
             send_error = str(send_result.get("error") or "")
@@ -465,6 +467,20 @@ async def prepare_text_file_send(event: Any, file_name: str, file_content: bytes
 
     delete_cache_file(cache_path)
     return {"sent": False, "chain_result": None, "cache_path": None, "error": "\u5f53\u524d bot \u6ca1\u6709 api.call_action \u63a5\u53e3\uff0c\u4e5f\u65e0\u6cd5\u4f7f\u7528 AstrBot File \u7ec4\u4ef6"}
+
+
+def schedule_delete_cache_file(cache_path: Any, delay_seconds: int = FILE_COMPONENT_CACHE_DELETE_DELAY) -> None:
+    if not cache_path:
+        return
+
+    async def delete_later() -> None:
+        await asyncio.sleep(delay_seconds)
+        delete_cache_file(cache_path)
+
+    try:
+        asyncio.create_task(delete_later())
+    except RuntimeError:
+        delete_cache_file(cache_path)
 
 
 def delete_cache_file(cache_path: Any) -> None:
