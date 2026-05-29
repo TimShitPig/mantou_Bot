@@ -22,6 +22,7 @@ OIAPI地址 = 'https://oiapi.net/api/FqRead'
 文件组件缓存删除延迟 = 600
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
+长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
 链接正则 = re.compile('https?://[^\\s\'\\"<>\\u3001\\uff0c\\u3002]+', re.IGNORECASE)
 
 def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> AsyncIterator[str] | None:
@@ -36,9 +37,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
         yield '番茄小说下载失败：缺少插件配置 番茄小说key'
         return
     书籍编号 = 提取书籍编号(来源)
-    if not 书籍编号:
-        yield '没有识别到番茄小说链接'
-        return
+    解析来源 = 来源
     章节列表: list[dict[str, Any]] = []
     章节结果列表: list[dict[str, Any]] = []
     成功章节列表: list[dict[str, Any]] = []
@@ -47,7 +46,13 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
     try:
         超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=90)
         async with aiohttp.ClientSession(timeout=超时, headers=浏览器请求头) as 会话:
-            书籍信息 = await 获取书籍信息(会话, 书籍编号, 来源)
+            if not 书籍编号:
+                解析来源 = await 展开番茄短链(会话, 来源)
+                书籍编号 = 提取书籍编号(解析来源)
+            if not 书籍编号:
+                yield '没有识别到番茄小说链接'
+                return
+            书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源)
             章节列表 = await 获取章节目录(会话, 书籍编号, 接口key)
             if not 章节列表:
                 章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
@@ -76,7 +81,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
             已发送 = bool(发送结果.get('sent'))
             发送错误 = str(发送结果.get('error') or '')
     except Exception as 异常:
-        logger.warning(f'番茄小说下载失败：source={限制文本长度(来源)}, book_id={书籍编号}, error={异常}')
+        logger.warning(f'番茄小说下载失败：source={限制文本长度(解析来源)}, book_id={书籍编号}, error={异常}')
         yield f'番茄小说下载失败：{异常}'
         return
     if 已发送:
@@ -127,6 +132,24 @@ async def 获取网页书籍信息(会话: aiohttp.ClientSession, 书籍编号: 
         logger.debug(f'fanqie page meta failed: book_id={书籍编号}, error={异常}')
         return {}
     return 合并书籍信息(从网页文本提取书籍信息(网页文本), 从状态提取书籍信息(提取初始状态(网页文本)))
+
+async def 展开番茄短链(会话: aiohttp.ClientSession, 来源: str) -> str:
+    if not 长读短链正则.search(str(来源 or '')):
+        return 来源
+    try:
+        async with 会话.get(来源, allow_redirects=True, timeout=20) as 响应:
+            最终地址 = str(响应.url)
+            网页文本 = await 响应.text()
+    except Exception as 异常:
+        logger.debug(f'番茄小说短链展开失败：source={限制文本长度(来源)}, error={异常}')
+        return 来源
+    if 提取书籍编号(最终地址):
+        logger.info(f'番茄小说短链已展开：source={来源}, target={最终地址}')
+        return 最终地址
+    if 提取书籍编号(网页文本):
+        logger.info(f'番茄小说短链页面包含书籍ID：source={来源}')
+        return 网页文本
+    return 最终地址 or 来源
 
 async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> list[dict[str, Any]]:
     响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'chapters', '')
@@ -432,8 +455,13 @@ def 提取番茄来源(值: Any) -> str:
     for 文本 in 生成文本变体(原始文本):
         for 匹配 in 链接正则.finditer(文本):
             链接 = 匹配.group(0).rstrip('),.;]')
+            if 长读短链正则.search(链接):
+                return 链接
             if 番茄域名正则.search(链接) and 提取书籍编号(链接):
                 return 链接
+        短链匹配 = 长读短链正则.search(文本)
+        if 短链匹配:
+            return 短链匹配.group(0)
         if 番茄域名正则.search(文本) and 提取书籍编号(文本):
             return 文本
         if re.fullmatch('\\d{15,25}', 文本.strip()):
