@@ -360,10 +360,6 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
     群号 = 获取群号(event)
     用户号 = 获取发送者QQ(event)
     logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
-    if 是否QQ官方群聊(event):
-        错误 = "QQ 官方机器人群聊暂不支持发送普通 txt 文件，平台富媒体上传接口返回 call inner proxy error"
-        logger.warning(f"七猫小说跳过 QQ 官方群聊文件上传：file={文件名}, group_id={群号}, error={错误}")
-        return {"sent": False, "chain_result": None, "cache_path": None, "error": 错误}
 
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
@@ -632,16 +628,6 @@ def 获取发送者QQ(event: Any) -> str:
         if 值:
             return str(值)
     return ""
-
-
-def 是否QQ官方群聊(event: Any) -> bool:
-    if not 获取群号(event):
-        return False
-    消息对象 = getattr(event, "message_obj", None)
-    平台元数据 = getattr(event, "platform_meta", None)
-    候选值列表 = (type(event).__name__, 读取字段(平台元数据, "name"), 读取字段(平台元数据, "id"), 读取字段(event, "self_id"), 读取字段(消息对象, "self_id"))
-    平台文本 = " ".join(str(值 or "") for 值 in 候选值列表).lower()
-    return "qq_official" in 平台文本 or "qqofficial" in 平台文本
 
 
 def 读取字段(对象: Any, 字段名: str) -> Any:

@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.6.9 |
+| 版本 | v1.6.10 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -123,7 +123,7 @@ pycryptodome
 
 番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 `changdunovel.com/t/短码` 分享短链和 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，外部提示不显示简介，txt 文件头部会保留简介。正文按约 500 万字分段请求后合并为一个 txt。文件写入 `功能文件/下载缓存/`，优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。通过 `File` 组件发送时会延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
 
-QQ 官方机器人 `qq_official` 群聊暂不发送普通 txt 文件；官方富媒体上传普通文件容易返回 `call inner proxy error`，插件会直接提示平台限制，避免 AstrBot 在响应阶段反复重试。非 QQ 官方群聊仍优先使用 AstrBot `File` 组件，无法使用时再回退 OneBot 的 `upload_group_file`/`upload_private_file`。
+QQ 官方机器人 `qq_official` 发送文件应优先走 AstrBot `File` 组件，它会封装官方富媒体接口并发送 `media` 消息；如果 QQ 官方群聊返回 `call inner proxy error`，这是平台富媒体上传限制或临时错误。OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
 发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接；如果当前适配器取不到数字群号，可以发送 `授权 数字群号` 手动指定 `groupCode`；如果也取不到机器人 QQ，可以发送 `授权 数字群号 机器人QQ` 手动指定 `botUin`。插件会动态获取当前群号和机器人 QQ 号，机器人 QQ 会优先读取 AstrBot `context.robot_id`，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发授权命令时会输出一条受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时会输出 `授权链接UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
 
