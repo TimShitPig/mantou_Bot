@@ -86,7 +86,7 @@
 - `shing-yu/7mao-novel-downloader` 已归档且 README 说明 4.0+ 开源部分为 AGPL-3.0、核心模块部分代码私有；本仓库不要直接复制其私有下载逻辑，七猫功能应以本地自测接口结果维护。
 - 番茄小说功能放在 `功能文件/oiapi/番茄小说.py`，只识别番茄明文链接和 JSON 卡片中的链接，不做 `番茄小说 书名` 搜索命令。插件配置项名必须是 `番茄小说key`，只支持单个 key。请求 `https://oiapi.net/api/FqRead` 时必须带 `key` 和 `type=json`。
 - 番茄小说识别 `book_id=数字`、`fanqienovel.com/数字`、`changdunovel.com/...book_id=数字`、`changdunovel.com/t/短码` 和 15-25 位书籍 ID；短链需要先请求一次并从最终地址或页面文本提取 `book_id`。书籍详情优先请求 `https://api.fqnovel.com/novel_ug/share/landing_page`，再用 `https://fanqienovel.com/page/{book_id}` 补齐，最后用 `FqRead method=chapters` 补章节数。不引入 App 签名、Cookie、Argus/Ladon/Gorgon、状态持久化、备用源和 key 轮换逻辑。
-- 番茄小说下载前必须先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，不发封面图片，不回复简介。正文优先按章节范围请求 `method=chapter`，超过约 500 万字时分段请求并合并成一个 txt，范围失败时拆成小范围或单章，失败章写 `【下载失败】`。
+- 番茄小说下载前必须先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，不发封面图片，外部提示不回复简介，但 txt 文件头部必须保留简介。正文优先按章节范围请求 `method=chapter`，超过约 500 万字时分段请求并合并成一个 txt，范围失败时拆成小范围或单章，失败章写 `【下载失败】`。
 - 番茄小说文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`，txt 顶部必须写入与七猫一致的免责声明。发送文件必须走本地缓存：QQ 官方群聊直接提示平台限制，其他场景写入 `功能文件/下载缓存/` 后优先使用 AstrBot `File` 组件发送，无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。`File` 组件路径延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
 - 数字撤回规则：消息中出现独立连续 9 到 12 位数字就触发。
 - `你好1078887813` 和 `你好A1078887813 你好` 应触发。
