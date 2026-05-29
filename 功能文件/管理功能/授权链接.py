@@ -94,6 +94,10 @@ async def 获取群号(event: Any) -> str:
 
 async def 获取机器人QQ(event: Any, 上下文: Any = None) -> str:
     bot = getattr(event, "bot", None)
+    上下文机器人QQ = 提取数字字段(上下文, ("robot_id", "self_id", "bot_id", "botUin", "uin", "qq"))
+    if 上下文机器人QQ:
+        return 上下文机器人QQ
+
     接口返回QQ = await 从接口获取机器人QQ(bot)
     if 接口返回QQ:
         return 接口返回QQ
@@ -262,6 +266,11 @@ def 提取数字字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int]
                     return 数字
         return ""
 
+    for 字段名 in 字段列表:
+        数字 = 规范化数字(读取字段(值, 字段名))
+        if 数字:
+            return 数字
+
     if hasattr(值, "__dict__"):
         return 提取数字字段(vars(值), 字段列表, 已见)
     return ""
@@ -303,6 +312,11 @@ def 提取UID字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int] | 
                 if UID:
                     return UID
         return ""
+
+    for 字段名 in 字段列表:
+        UID = 规范化UID(读取字段(值, 字段名), 排除QQ)
+        if UID:
+            return UID
 
     if hasattr(值, "__dict__"):
         return 提取UID字段(vars(值), 字段列表, 已见, 排除QQ)

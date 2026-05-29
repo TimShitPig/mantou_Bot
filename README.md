@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.6.4 |
+| 版本 | v1.6.5 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -125,7 +125,7 @@ pycryptodome
 
 QQ 官方机器人 `qq_official` 发送文件应走官方富媒体接口，AstrBot `File` 组件会封装 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files` 上传，并通过 `msg_type=7` 的 `media` 消息发送。官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊拒绝普通 txt 文件，这是平台能力限制；OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
-发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接；如果当前适配器取不到数字群号，可以发送 `授权 数字群号` 手动指定 `groupCode`。插件会动态获取当前群号和机器人 QQ 号，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发授权命令时会输出一条受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时会输出 `授权链接UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
+发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接；如果当前适配器取不到数字群号，可以发送 `授权 数字群号` 手动指定 `groupCode`。插件会动态获取当前群号和机器人 QQ 号，机器人 QQ 会优先读取 AstrBot `context.robot_id`，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发授权命令时会输出一条受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时会输出 `授权链接UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
 
 ## 参考链接
 

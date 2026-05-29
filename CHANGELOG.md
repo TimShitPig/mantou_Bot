@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.6.5
+
+### 修复
+
+- 授权链接获取机器人 QQ 号时优先读取 AstrBot `context.robot_id`，兼容 qq_official 事件和 `get_login_info` 不返回数字 `botUin` 的情况。
+
 ## v1.6.4
 
 ### 修复
