@@ -115,7 +115,7 @@ async def 获取分享落地页信息(会话: aiohttp.ClientSession, 来源: str
     作者 = 数据.get('author')
     if isinstance(作者, dict):
         作者 = 作者.get('name')
-    return {'title': 清理文本(数据.get('title')), 'author': 清理文本(作者), 'intro': 清理文本(数据.get('intro')), 'word_count': 格式化字数(数据.get('word_count') or 数据.get('preview_word_count')), 'status': 规范化状态(数据.get('creation_status'), ''), 'chapter_count': 安全整数(数据.get('chapter_count') or 数据.get('chapter_num') or 数据.get('all_chapter_num') or 数据.get('latest_chapter_index'))}
+    return {'title': 清理文本(数据.get('title')), 'author': 清理文本(作者), 'word_count': 格式化字数(数据.get('word_count') or 数据.get('preview_word_count')), 'status': 规范化状态(数据.get('creation_status'), ''), 'chapter_count': 安全整数(数据.get('chapter_count') or 数据.get('chapter_num') or 数据.get('all_chapter_num') or 数据.get('latest_chapter_index'))}
 
 async def 获取网页书籍信息(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
     try:
@@ -295,7 +295,7 @@ def 构造序号目录(章节数: int) -> list[dict[str, Any]]:
 
 def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 目录: list[dict[str, Any]], 章节结果列表: list[dict[str, Any]]) -> tuple[str, bytes]:
     文件名 = 构造文件名(书籍编号, 书籍信息)
-    行列表 = [免责声明, '', f"名称：{书籍信息.get('title') or f'番茄小说{书籍编号}'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f"字数：{书籍信息.get('word_count') or '未知'}", f"简介：{书籍信息.get('intro') or '暂无简介'}", f'书籍ID：{书籍编号}', f'章节数：{len(目录)}', '']
+    行列表 = [免责声明, '', f"名称：{书籍信息.get('title') or f'番茄小说{书籍编号}'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f"字数：{书籍信息.get('word_count') or '未知'}", f'书籍ID：{书籍编号}', f'章节数：{len(目录)}', '']
     for 章节 in 章节结果列表:
         行列表.append(str(章节.get('title') or f"第{章节.get('index')}章"))
         行列表.append('')
@@ -309,8 +309,7 @@ def 构造文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
     return f'[{状态文本(书籍信息)}]书名：{书名} 作者：{作者}.txt'
 
 def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
-    简介 = 限制文本长度(书籍信息.get('intro') or '暂无简介', 160)
-    return '\n'.join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f'章节：{章节数} 章', f"字数：{书籍信息.get('word_count') or '未知'}", f'简介：{简介}', '', '正在下载中请稍等.....'])
+    return '\n'.join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f'章节：{章节数} 章', f"字数：{书籍信息.get('word_count') or '未知'}", '', '正在下载中请稍等.....'])
 
 async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes) -> dict[str, Any]:
     群号 = 获取群号(事件)
@@ -468,7 +467,7 @@ def 获取番茄小说key(配置: Any) -> str:
     return str(值 or '').strip()
 
 def 默认书籍信息(书籍编号: str) -> dict[str, Any]:
-    return {'book_id': 书籍编号, 'title': f'番茄小说{书籍编号}', 'author': '未知', 'intro': '', 'status': '未知', 'word_count': '未知', 'chapter_count': 0}
+    return {'book_id': 书籍编号, 'title': f'番茄小说{书籍编号}', 'author': '未知', 'status': '未知', 'word_count': '未知', 'chapter_count': 0}
 
 def 合并书籍信息(基础信息: dict[str, Any], 新增信息: dict[str, Any]) -> dict[str, Any]:
     结果 = dict(基础信息 or {})
@@ -476,7 +475,7 @@ def 合并书籍信息(基础信息: dict[str, Any], 新增信息: dict[str, Any
         if 值 in (None, '', 0):
             continue
         当前值 = 结果.get(键)
-        if 当前值 in (None, '', 0, '未知', '暂无简介') or (键 == 'title' and str(当前值).startswith('番茄小说')):
+        if 当前值 in (None, '', 0, '未知') or (键 == 'title' and str(当前值).startswith('番茄小说')):
             结果[键] = 值
     return 结果
 
@@ -496,8 +495,6 @@ def 从状态提取书籍信息(状态数据: Any) -> dict[str, Any]:
             分数 += 3
         if 书籍信息.get('author'):
             分数 += 3
-        if 书籍信息.get('intro'):
-            分数 += 1
         if 书籍信息.get('word_count') and 书籍信息.get('word_count') != '未知':
             分数 += 1
         if 书籍信息.get('chapter_count'):
@@ -519,15 +516,14 @@ def 从字典提取书籍信息(数据: dict[str, Any]) -> dict[str, Any]:
         作者 = 读取任意字段(作者, ('name', 'author_name', 'authorName'))
     原始状态 = 读取任意字段(数据, ('creation_status', 'creationStatus', 'status', 'book_status', 'bookStatus'))
     状态描述 = 清理文本(读取任意字段(数据, ('status_text', 'statusText', 'status_desc', 'statusDesc')))
-    return {'title': 清理文本(读取任意字段(数据, ('book_name', 'bookName', 'bookTitle', 'title', 'name'))), 'author': 清理文本(作者), 'intro': 清理文本(读取任意字段(数据, ('intro', 'abstract', 'description', 'summary', 'bookAbstract'))), 'word_count': 格式化字数(读取任意字段(数据, ('word_count', 'wordCount', 'word_number', 'wordNumber', 'totalWords'))), 'status': 规范化状态(原始状态, 状态描述), 'chapter_count': 安全整数(读取任意字段(数据, ('chapter_count', 'chapterCount', 'chapter_num', 'chapterNum', 'all_chapter_num', 'latest_chapter_index')))}
+    return {'title': 清理文本(读取任意字段(数据, ('book_name', 'bookName', 'bookTitle', 'title', 'name'))), 'author': 清理文本(作者), 'word_count': 格式化字数(读取任意字段(数据, ('word_count', 'wordCount', 'word_number', 'wordNumber', 'totalWords'))), 'status': 规范化状态(原始状态, 状态描述), 'chapter_count': 安全整数(读取任意字段(数据, ('chapter_count', 'chapterCount', 'chapter_num', 'chapterNum', 'all_chapter_num', 'latest_chapter_index')))}
 
 def 从网页文本提取书籍信息(网页文本: str) -> dict[str, Any]:
     文本 = str(网页文本 or '')
     书名 = 提取HTML字段(文本, ('<meta[^>]+property=["\\\']og:title["\\\'][^>]+content=["\\\']([^"\\\']+)', '<title>(.*?)</title>'))
     书名 = re.sub('[_-].*\\u756a\\u8304\\u5c0f\\u8bf4.*$', '', 书名).strip()
     作者 = 提取HTML字段(文本, ('authorName["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)', 'author_name["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)'))
-    简介 = 提取HTML字段(文本, ('<meta[^>]+name=["\\\']description["\\\'][^>]+content=["\\\']([^"\\\']+)', 'intro["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)'))
-    return {'title': 清理文本(书名), 'author': 清理文本(作者), 'intro': 清理文本(简介)}
+    return {'title': 清理文本(书名), 'author': 清理文本(作者)}
 
 def 提取初始状态(网页文本: str) -> dict[str, Any]:
     匹配 = re.search('window\\.__INITIAL_STATE__\\s*=\\s*(\\{.+?)</script>', 网页文本 or '', re.DOTALL)
