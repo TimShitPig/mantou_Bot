@@ -75,7 +75,7 @@
 - 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件。
 - 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。
 - 授权链接功能放在 `功能文件/管理功能/授权链接.py`，`main.py` 只调用 `处理授权链接`。触发指令固定为 `授权`，只生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...`，JSON 参数必须包含 `page_name=ai_group_service_agreement_pop_page`、数字 `groupCode`、数字 `botUin`、字符串 `botUid`、`screen=1`，再整体 URL 编码。
-- 授权链接的 `groupCode` 和 `botUin` 必须优先从当前事件和 bot API 动态获取；`botUid` 必须优先通过 `getUidFromUin` 或适配器等价扩展接口实时转换。取不到 `botUid` 时应明确提示失败，不要生成缺参链接或硬编码 UID。授权链接只支持群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
+- 授权链接的 `groupCode` 和 `botUin` 必须优先从当前事件、事件 JSON、消息段 JSON、URL 编码 JSON 和 bot API 动态获取；`botUid` 必须优先从事件 JSON 或通过 `getUidFromUin`、适配器等价扩展接口实时转换。取不到 `botUid` 时应明确提示失败，不要生成缺参链接或硬编码 UID。授权命令触发时应保留受控诊断日志 `授权链接事件诊断`，便于按真实消息 JSON 补规则；授权链接只支持群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
 - QQ 官方机器人 `qq_official` 发送文件不能使用 OneBot 的 `upload_group_file`/`upload_private_file` 作为主路径；应优先使用 AstrBot `File` 组件，它会走 QQ 官方富媒体接口 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files`，再发送 `msg_type=7` 的 `media` 消息。官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊拒绝普通 txt 文件，这是平台能力限制，不要用臆造 OneBot 接口修复。
 - 通过 AstrBot `File` 组件发送本地缓存文件时，不能在 yield 后立即删除缓存；应延迟清理，避免 qq_official/其他适配器在响应阶段读取文件前缓存已不存在。OneBot 回退接口调用完成后可以立即删除缓存。
 - 七猫小说功能只允许放在 `功能文件/管理功能/七猫小说.py` 一个文件内，不拆分多个 py 文件；`main.py` 只负责加载模块并调用 `获取七猫小说回复流`。
