@@ -101,22 +101,24 @@ async def 从接口获取机器人QQ(bot: Any) -> str:
 
 async def 获取机器人UID(event: Any, 机器人QQ: str) -> str:
     bot = getattr(event, "bot", None)
-    本地UID = 提取本地机器人UID(event, bot)
+    本地UID = 提取本地机器人UID(event, bot, 机器人QQ)
     if 本地UID:
         return 本地UID
 
     for 动作名 in 取UID动作名列表:
         for 参数 in 构造UID参数候选(机器人QQ):
             响应 = await 调用机器人动作(bot, 动作名, **参数)
-            机器人UID = 提取UID(响应)
+            机器人UID = 提取UID(响应, 机器人QQ)
             if 机器人UID:
                 return 机器人UID
+            if 响应 not in (None, ""):
+                logger.info(f"授权链接UID转换响应未识别：action={动作名}, params={参数}, response={诊断文本(响应, 2000)}")
     return ""
 
 
-def 提取本地机器人UID(event: Any, bot: Any) -> str:
+def 提取本地机器人UID(event: Any, bot: Any, 机器人QQ: str = "") -> str:
     for 对象 in (*获取事件候选对象(event), bot, getattr(bot, "api", None)):
-        UID = 提取UID字段(对象, 机器人UID字段列表)
+        UID = 提取UID字段(对象, 机器人UID字段列表, 排除QQ=机器人QQ)
         if UID:
             return UID
     return ""
@@ -127,9 +129,14 @@ def 构造UID参数候选(机器人QQ: str) -> list[dict[str, Any]]:
     return [
         {"uin": 数字QQ},
         {"uin": str(机器人QQ)},
+        {"uins": [数字QQ]},
+        {"uin_list": [数字QQ]},
         {"user_id": 数字QQ},
+        {"user_id": str(机器人QQ)},
         {"qq": 数字QQ},
+        {"qq": str(机器人QQ)},
         {"botUin": 数字QQ},
+        {"botUin": str(机器人QQ)},
     ]
 
 
@@ -169,26 +176,25 @@ async def 等待结果(值: Any) -> Any:
     return 值
 
 
-def 提取UID(值: Any) -> str:
+def 提取UID(值: Any, 排除QQ: str = "") -> str:
     if isinstance(值, str):
-        return 规范化UID(值)
+        return 规范化UID(值, 排除QQ)
     if isinstance(值, dict):
         for 字段名 in ("botUid", "bot_uid", "uid", "user_uid", "uin_uid"):
-            UID = 规范化UID(值.get(字段名))
+            UID = 规范化UID(值.get(字段名), 排除QQ)
             if UID:
                 return UID
         for 字段名 in ("data", "result", "ret", "response"):
-            UID = 提取UID(值.get(字段名))
+            UID = 提取UID(值.get(字段名), 排除QQ)
             if UID:
                 return UID
         for 子项 in 值.values():
-            if isinstance(子项, (dict, list)):
-                UID = 提取UID(子项)
-                if UID:
-                    return UID
+            UID = 提取UID(子项, 排除QQ)
+            if UID:
+                return UID
     if isinstance(值, list):
         for 子项 in 值:
-            UID = 提取UID(子项)
+            UID = 提取UID(子项, 排除QQ)
             if UID:
                 return UID
     return ""
@@ -249,7 +255,7 @@ def 提取数字字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int]
     return ""
 
 
-def 提取UID字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int] | None = None) -> str:
+def 提取UID字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int] | None = None, 排除QQ: str = "") -> str:
     if 已见 is None:
         已见 = set()
     if 值 is None or callable(值):
@@ -261,18 +267,18 @@ def 提取UID字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int] | 
 
     if isinstance(值, dict):
         for 字段名 in 字段列表:
-            UID = 规范化UID(值.get(字段名))
+            UID = 规范化UID(值.get(字段名), 排除QQ)
             if UID:
                 return UID
         for 子项 in 值.values():
-            UID = 提取UID字段(子项, 字段列表, 已见)
+            UID = 提取UID字段(子项, 字段列表, 已见, 排除QQ)
             if UID:
                 return UID
         return ""
 
     if isinstance(值, (list, tuple, set)):
         for 子项 in 值:
-            UID = 提取UID字段(子项, 字段列表, 已见)
+            UID = 提取UID字段(子项, 字段列表, 已见, 排除QQ)
             if UID:
                 return UID
         return ""
@@ -281,13 +287,13 @@ def 提取UID字段(值: Any, 字段列表: tuple[str, ...], 已见: set[int] | 
         for 文本 in 生成文本变体(值):
             JSON对象 = 解析JSON对象(文本)
             if JSON对象 is not None:
-                UID = 提取UID字段(JSON对象, 字段列表, 已见)
+                UID = 提取UID字段(JSON对象, 字段列表, 已见, 排除QQ)
                 if UID:
                     return UID
         return ""
 
     if hasattr(值, "__dict__"):
-        return 提取UID字段(vars(值), 字段列表, 已见)
+        return 提取UID字段(vars(值), 字段列表, 已见, 排除QQ)
     return ""
 
 
@@ -353,6 +359,14 @@ def 记录授权事件诊断(event: Any) -> None:
         logger.warning(f"授权链接事件诊断失败：error={exc}")
 
 
+def 诊断文本(值: Any, 最大长度: int = 2000) -> str:
+    try:
+        文本 = json.dumps(诊断序列化对象(值), ensure_ascii=False, default=str)
+    except Exception:
+        文本 = str(值)
+    return 限制文本长度(文本, 最大长度)
+
+
 def 诊断序列化对象(值: Any, 深度: int = 0, 已见: set[int] | None = None) -> Any:
     if 已见 is None:
         已见 = set()
@@ -406,10 +420,12 @@ def 规范化数字(值: Any) -> str:
     return 文本 if 文本.isdigit() else ""
 
 
-def 规范化UID(值: Any) -> str:
+def 规范化UID(值: Any, 排除QQ: str = "") -> str:
     if 值 is None or callable(值):
         return ""
     文本 = str(值).strip()
-    if not 文本 or 文本.isdigit():
+    if not 文本:
+        return ""
+    if 排除QQ and 文本 == str(排除QQ):
         return ""
     return 文本 if 文本.startswith("u_") or len(文本) >= 8 else ""
