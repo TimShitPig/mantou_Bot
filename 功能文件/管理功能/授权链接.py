@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 from typing import Any
 
@@ -26,12 +27,13 @@ from astrbot.api import logger
 
 
 async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = None, 配置: Any = None) -> str | None:
-    if str(命令文本 or "").strip() not in 授权命令:
+    手动群号 = 提取授权命令群号(命令文本)
+    if 手动群号 is None:
         return None
 
     记录授权事件诊断(event)
 
-    群号 = await 获取群号(event)
+    群号 = 手动群号 or await 获取群号(event)
     if not 群号:
         return "授权链接生成失败：没有获取到数字QQ群号，请在目标群里发送“授权”"
 
@@ -51,6 +53,16 @@ async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = Non
         "",
         "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。",
     ])
+
+
+def 提取授权命令群号(命令文本: str) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if 文本 in 授权命令:
+        return ""
+    匹配 = re.fullmatch(r"授权\s+([1-9]\d{4,11})", 文本)
+    if not 匹配:
+        return None
+    return 匹配.group(1)
 
 
 def 生成授权链接(群号: str, 机器人QQ: str, 机器人UID: str) -> str:
