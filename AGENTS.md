@@ -72,7 +72,7 @@
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
 - 群文件清理只能由插件配置 `group_file_cleanup_admin_qq` 里的 QQ 使用；这是插件管理员白名单，不等同于群管理员。
 - 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
-- `qq_official` 等没有 `api.call_action` 的适配器可以通过插件配置 `napcat_onebot_http_url` 借用 NapCat OneBot HTTP 执行群文件清理；如果 NapCat 配置了 access_token，必须同步填写 `napcat_onebot_access_token`。也可以配置 `napcat_webui_url` 和 `napcat_webui_token` 复用 NapCat WebUI 实时调试接口。QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号，必须发送 `清理群文件 数字群号` 或配置 `group_file_cleanup_group_map` 映射为真实数字群号。
+- 群文件清理不连接 NapCat、NapCat WebUI 或其他外部机器人实例；NapCat 实时调试只能作为确认 OneBot action 参数和返回结构的参考。插件只能调用当前 AstrBot 适配器暴露的 `api.call_action`，QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号。
 - 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件。
 - 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。
 - 授权链接功能放在 `功能文件/管理功能/授权链接.py`，`main.py` 只调用 `处理授权链接`。触发指令固定为 `授权`、`授权 数字群号` 或 `授权 数字群号 机器人QQ`；后两者用于适配器取不到数字 `groupCode` 或数字 `botUin` 时手动指定。只生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...`，JSON 参数必须包含 `page_name=ai_group_service_agreement_pop_page`、数字 `groupCode`、数字 `botUin`、字符串 `botUid`、`screen=1`，再整体 URL 编码。

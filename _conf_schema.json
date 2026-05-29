@@ -5,36 +5,6 @@
     "hint": "只有这里填写的 QQ 号可以使用“清理群文件”或“群文件清理”。这是插件自己的管理员，不是群管理员。",
     "default": []
   },
-  "napcat_onebot_http_url": {
-    "description": "NapCat OneBot HTTP 地址",
-    "type": "string",
-    "hint": "当 qq_official 等适配器没有 api.call_action 时，用这个地址借用 NapCat 调用 get_group_root_files、get_group_files_by_folder 和 delete_group_file，例如 http://127.0.0.1:3000。",
-    "default": ""
-  },
-  "napcat_onebot_access_token": {
-    "description": "NapCat OneBot HTTP access_token",
-    "type": "string",
-    "hint": "如果 NapCat OneBot HTTP 配置了 access_token，就在这里填写；插件会用 Authorization: Bearer token 请求。",
-    "default": ""
-  },
-  "group_file_cleanup_group_map": {
-    "description": "群文件清理群号映射",
-    "type": "list",
-    "hint": "用于 qq_official 这类只返回 group_openid 的适配器，格式为 group_openid=数字QQ群号，例如 3DCAFB7B7F2B89615EA8898EAEC54A02=808692477。也可以直接发送“清理群文件 数字群号”。",
-    "default": []
-  },
-  "napcat_webui_url": {
-    "description": "NapCat WebUI 地址",
-    "type": "string",
-    "hint": "如果想复用 NapCat WebUI 的实时调试功能，填写 WebUI 地址，例如 http://127.0.0.1:6099。未配置 napcat_onebot_http_url 时才使用。",
-    "default": ""
-  },
-  "napcat_webui_token": {
-    "description": "NapCat WebUI token",
-    "type": "string",
-    "hint": "NapCat WebUI 登录后 localStorage 里的 token，用于请求 /api/Debug/create 和 /api/Debug/call。",
-    "default": ""
-  },
   "番茄小说key": {
     "description": "番茄小说 OIAPI FqRead key",
     "type": "string",
