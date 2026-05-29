@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import html
 import asyncio
 import json
@@ -8,884 +7,682 @@ import re
 import urllib.parse
 from pathlib import Path
 from typing import Any, AsyncIterator
-
 import aiohttp
 from astrbot.api import logger
-
 try:
-    from astrbot.api import message_components as Comp
+    from astrbot.api import message_components as 消息组件
 except Exception:
-    Comp = None
+    消息组件 = None
+OIAPI地址 = 'https://oiapi.net/api/FqRead'
+落地页接口地址 = 'https://api.fqnovel.com/novel_ug/share/landing_page'
+下载缓存目录 = Path(__file__).resolve().parents[1] / '下载缓存'
+免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
+每段最大字数 = 5000000
+进度分段数 = 10
+文件组件缓存删除延迟 = 600
+浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
+番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
+链接正则 = re.compile('https?://[^\\s\'\\"<>\\u3001\\uff0c\\u3002]+', re.IGNORECASE)
 
-
-API_URL = "https://oiapi.net/api/FqRead"
-LANDING_URL = "https://api.fqnovel.com/novel_ug/share/landing_page"
-CACHE_DIR = Path(__file__).resolve().parents[1] / "\u4e0b\u8f7d\u7f13\u5b58"
-DISCLAIMER = "\u58f0\u660e\uff1a\u672c\u6587\u4ef6\u7531\u673a\u5668\u4eba\u81ea\u52a8\u6574\u7406\u751f\u6210\uff0c\u4ec5\u4f9b\u4e2a\u4eba\u5b66\u4e60\u4ea4\u6d41\u548c\u4e34\u65f6\u9605\u8bfb\u4f7f\u7528\u3002\u5185\u5bb9\u7248\u6743\u5f52\u539f\u4f5c\u8005\u53ca\u76f8\u5173\u5e73\u53f0\u6240\u6709\uff0c\u8bf7\u52ff\u7528\u4e8e\u5546\u4e1a\u7528\u9014\u6216\u4e8c\u6b21\u4f20\u64ad\u3002\u5982\u559c\u6b22\u672c\u4e66\uff0c\u8bf7\u652f\u6301\u6b63\u7248\u3002"
-MAX_WORDS_PER_RANGE = 5_000_000
-PROGRESS_STEPS = 10
-FILE_COMPONENT_CACHE_DELETE_DELAY = 600
-BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://fanqienovel.com/",
-}
-DOMAIN_RE = re.compile(r"fanqienovel\.com|changdunovel\.com|fqnovel\.com|novelfm\.com", re.IGNORECASE)
-URL_RE = re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.IGNORECASE)
-
-
-def get_fanqie_reply_stream(event: Any, command_text: str, config: Any) -> AsyncIterator[str] | None:
-    source = extract_direct_source(command_text) or extract_event_source(event)
-    if source is None:
+def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> AsyncIterator[str] | None:
+    来源 = 提取直接来源(命令文本) or 提取事件来源(事件)
+    if 来源 is None:
         return None
-    return generate_download_stream(event, source, config)
+    return 生成下载回复流(事件, 来源, 配置)
 
-
-async def generate_download_stream(event: Any, source: str, config: Any) -> AsyncIterator[str]:
-    api_key = get_fanqie_key(config)
-    if not api_key:
-        yield "\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1a\u7f3a\u5c11\u63d2\u4ef6\u914d\u7f6e \u756a\u8304\u5c0f\u8bf4key"
+async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncIterator[str]:
+    接口key = 获取番茄小说key(配置)
+    if not 接口key:
+        yield '番茄小说下载失败：缺少插件配置 番茄小说key'
         return
-
-    book_id = extract_book_id(source)
-    if not book_id:
-        yield "\u6ca1\u6709\u8bc6\u522b\u5230\u756a\u8304\u5c0f\u8bf4\u94fe\u63a5"
+    书籍编号 = 提取书籍编号(来源)
+    if not 书籍编号:
+        yield '没有识别到番茄小说链接'
         return
-
-    chapters: list[dict[str, Any]] = []
-    chapter_results: list[dict[str, Any]] = []
-    ok_chapters: list[dict[str, Any]] = []
-    file_name = ""
-    meta: dict[str, Any] = {}
+    章节列表: list[dict[str, Any]] = []
+    章节结果列表: list[dict[str, Any]] = []
+    成功章节列表: list[dict[str, Any]] = []
+    文件名 = ''
+    书籍信息: dict[str, Any] = {}
     try:
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=90)
-        async with aiohttp.ClientSession(timeout=timeout, headers=BROWSER_HEADERS) as session:
-            meta = await fetch_book_meta(session, book_id, source)
-            chapters = await fetch_catalog(session, book_id, api_key)
-            if not chapters:
-                chapters = build_index_catalog(safe_int(meta.get("chapter_count")))
-            if not chapters:
-                yield "\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1a\u6ca1\u6709\u83b7\u53d6\u5230\u7ae0\u8282\u76ee\u5f55"
+        超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=90)
+        async with aiohttp.ClientSession(timeout=超时, headers=浏览器请求头) as 会话:
+            书籍信息 = await 获取书籍信息(会话, 书籍编号, 来源)
+            章节列表 = await 获取章节目录(会话, 书籍编号, 接口key)
+            if not 章节列表:
+                章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
+            if not 章节列表:
+                yield '番茄小说下载失败：没有获取到章节目录'
                 return
-
-            meta = merge_meta(meta, {"chapter_count": len(chapters)})
-            logger.info(
-                f"\u756a\u8304\u5c0f\u8bf4\u5f00\u59cb\u4e0b\u8f7d\uff1abook_id={book_id}, "
-                f"title={meta.get('title')}, author={meta.get('author')}, chapters={len(chapters)}"
-            )
-            yield format_download_notice(meta, len(chapters))
-
-            chapter_results = await download_all_chapters(session, book_id, chapters, api_key, parse_word_count(meta.get("word_count")))
-            ok_chapters = [item for item in chapter_results if item.get("success")]
-            if not ok_chapters:
-                yield "\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1a\u6ca1\u6709\u83b7\u53d6\u5230\u53ef\u7528\u7ae0\u8282\u6b63\u6587"
+            书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
+            logger.info(f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+            yield 格式化下载提示(书籍信息, len(章节列表))
+            章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
+            成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+            if not 成功章节列表:
+                yield '番茄小说下载失败：没有获取到可用章节正文'
                 return
-
-            file_name, file_content = build_txt_file(book_id, meta, chapters, chapter_results)
-            logger.info(
-                f"\u756a\u8304\u5c0f\u8bf4\u7ae0\u8282\u4e0b\u8f7d\u5b8c\u6210\uff1abook_id={book_id}, "
-                f"title={meta.get('title')}, success={len(ok_chapters)}, total={len(chapters)}, file_size={len(file_content)}"
-            )
-            send_result = await prepare_text_file_send(event, file_name, file_content)
-            cache_path = send_result.get("cache_path")
-            chain_result = send_result.get("chain_result")
-            if chain_result is not None:
+            文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
+            logger.info(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
+            发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容)
+            缓存路径 = 发送结果.get('cache_path')
+            链式结果 = 发送结果.get('chain_result')
+            if 链式结果 is not None:
                 try:
-                    yield chain_result
+                    yield 链式结果
                 finally:
-                    schedule_delete_cache_file(cache_path)
+                    延迟删除缓存文件(缓存路径)
                 return
-            sent = bool(send_result.get("sent"))
-            send_error = str(send_result.get("error") or "")
-    except Exception as exc:
-        logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1asource={limit_text(source)}, book_id={book_id}, error={exc}")
-        yield f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u5931\u8d25\uff1a{exc}"
+            已发送 = bool(发送结果.get('sent'))
+            发送错误 = str(发送结果.get('error') or '')
+    except Exception as 异常:
+        logger.warning(f'番茄小说下载失败：source={限制文本长度(来源)}, book_id={书籍编号}, error={异常}')
+        yield f'番茄小说下载失败：{异常}'
         return
-
-    if sent:
+    if 已发送:
         return
+    书名 = 书籍信息.get('title') or f'番茄小说{书籍编号}'
+    yield '\n'.join([f'番茄小说文件发送失败：{书名}', f'章节：成功 {len(成功章节列表)} / 总计 {len(章节列表)}', f'文件：{文件名}', f'原因：{限制文本长度(发送错误, 500)}', '下载缓存文件已删除，没有保存在本地'])
 
-    title = meta.get("title") or f"\u756a\u8304\u5c0f\u8bf4{book_id}"
-    yield "\n".join([
-        f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u53d1\u9001\u5931\u8d25\uff1a{title}",
-        f"\u7ae0\u8282\uff1a\u6210\u529f {len(ok_chapters)} / \u603b\u8ba1 {len(chapters)}",
-        f"\u6587\u4ef6\uff1a{file_name}",
-        f"\u539f\u56e0\uff1a{limit_text(send_error, 500)}",
-        "\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5df2\u5220\u9664\uff0c\u6ca1\u6709\u4fdd\u5b58\u5728\u672c\u5730",
-    ])
+async def 获取书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, 来源: str) -> dict[str, Any]:
+    书籍信息 = 默认书籍信息(书籍编号)
+    书籍信息 = 合并书籍信息(书籍信息, await 获取分享落地页信息(会话, 来源, 书籍编号))
+    return 合并书籍信息(书籍信息, await 获取网页书籍信息(会话, 书籍编号))
 
-
-async def fetch_book_meta(session: aiohttp.ClientSession, book_id: str, source: str) -> dict[str, Any]:
-    meta = default_meta(book_id)
-    meta = merge_meta(meta, await fetch_share_landing_meta(session, source, book_id))
-    return merge_meta(meta, await fetch_web_meta(session, book_id))
-
-
-async def fetch_share_landing_meta(session: aiohttp.ClientSession, source: str, book_id: str) -> dict[str, Any]:
-    if not str(source or "").startswith("http"):
+async def 获取分享落地页信息(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str) -> dict[str, Any]:
+    if not str(来源 or '').startswith('http'):
         return {}
     try:
-        async with session.get(source, allow_redirects=True, timeout=20) as response:
-            page_text = await response.text()
-            final_url = str(response.url)
-    except Exception as exc:
-        logger.debug(f"fanqie share page failed: source={limit_text(source)}, error={exc}")
+        async with 会话.get(来源, allow_redirects=True, timeout=20) as 响应:
+            网页文本 = await 响应.text()
+            最终地址 = str(响应.url)
+    except Exception as 异常:
+        logger.debug(f'fanqie share page failed: source={限制文本长度(来源)}, error={异常}')
         return {}
-
-    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(final_url).query, keep_blank_values=True))
-    params = {
-        "aid": query.get("aid", "1967"),
-        "series_id": query.get("series_id", "0"),
-        "encrypt_did": query.get("encrypt_did", ""),
-        "performance_optimization": "1",
-        "share_type": query.get("share_type", "11"),
-        "video_id": query.get("video_id", ""),
-        "actor_id": query.get("actor_id", ""),
-        "post_id": query.get("post_id", ""),
-        "book_id": query.get("book_id") or book_id,
-        "pos_info_str": "undefined:undefined:undefined:undefined:undefined:undefined",
-    }
-    headers = dict(BROWSER_HEADERS)
-    headers.update({"Referer": "https://changdunovel.com/", "x-xs-from-web": "1", "Content-Type": "application/json"})
+    查询参数 = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(最终地址).query, keep_blank_values=True))
+    参数 = {'aid': 查询参数.get('aid', '1967'), 'series_id': 查询参数.get('series_id', '0'), 'encrypt_did': 查询参数.get('encrypt_did', ''), 'performance_optimization': '1', 'share_type': 查询参数.get('share_type', '11'), 'video_id': 查询参数.get('video_id', ''), 'actor_id': 查询参数.get('actor_id', ''), 'post_id': 查询参数.get('post_id', ''), 'book_id': 查询参数.get('book_id') or 书籍编号, 'pos_info_str': 'undefined:undefined:undefined:undefined:undefined:undefined'}
+    请求头 = dict(浏览器请求头)
+    请求头.update({'Referer': 'https://changdunovel.com/', 'x-xs-from-web': '1', 'Content-Type': 'application/json'})
     try:
-        async with session.get(LANDING_URL, params=params, headers=headers, timeout=20) as response:
-            payload = await response.json(content_type=None)
-    except Exception as exc:
-        logger.debug(f"fanqie landing meta failed: book_id={book_id}, error={exc}")
-        return extract_meta_from_page_text(page_text)
+        async with 会话.get(落地页接口地址, params=参数, headers=请求头, timeout=20) as 响应:
+            响应数据 = await 响应.json(content_type=None)
+    except Exception as 异常:
+        logger.debug(f'fanqie landing meta failed: book_id={书籍编号}, error={异常}')
+        return 从网页文本提取书籍信息(网页文本)
+    数据 = 读取路径(响应数据, ('data', 'book_data'))
+    if not isinstance(数据, dict):
+        return 从网页文本提取书籍信息(网页文本)
+    作者 = 数据.get('author')
+    if isinstance(作者, dict):
+        作者 = 作者.get('name')
+    return {'title': 清理文本(数据.get('title')), 'author': 清理文本(作者), 'intro': 清理文本(数据.get('intro')), 'word_count': 格式化字数(数据.get('word_count') or 数据.get('preview_word_count')), 'status': 规范化状态(数据.get('creation_status'), ''), 'chapter_count': 安全整数(数据.get('chapter_count') or 数据.get('chapter_num') or 数据.get('all_chapter_num') or 数据.get('latest_chapter_index'))}
 
-    data = read_path(payload, ("data", "book_data"))
-    if not isinstance(data, dict):
-        return extract_meta_from_page_text(page_text)
-    author = data.get("author")
-    if isinstance(author, dict):
-        author = author.get("name")
-    return {
-        "title": clean_text(data.get("title")),
-        "author": clean_text(author),
-        "intro": clean_text(data.get("intro")),
-        "word_count": format_word_count(data.get("word_count") or data.get("preview_word_count")),
-        "status": normalize_status(data.get("creation_status"), ""),
-        "chapter_count": safe_int(data.get("chapter_count") or data.get("chapter_num") or data.get("all_chapter_num") or data.get("latest_chapter_index")),
-    }
-
-
-async def fetch_web_meta(session: aiohttp.ClientSession, book_id: str) -> dict[str, Any]:
+async def 获取网页书籍信息(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
     try:
-        async with session.get(f"https://fanqienovel.com/page/{book_id}", timeout=20) as response:
-            if response.status >= 400:
+        async with 会话.get(f'https://fanqienovel.com/page/{书籍编号}', timeout=20) as 响应:
+            if 响应.status >= 400:
                 return {}
-            page_text = await response.text()
-    except Exception as exc:
-        logger.debug(f"fanqie page meta failed: book_id={book_id}, error={exc}")
+            网页文本 = await 响应.text()
+    except Exception as 异常:
+        logger.debug(f'fanqie page meta failed: book_id={书籍编号}, error={异常}')
         return {}
-    return merge_meta(extract_meta_from_page_text(page_text), extract_meta_from_state(extract_initial_state(page_text)))
+    return 合并书籍信息(从网页文本提取书籍信息(网页文本), 从状态提取书籍信息(提取初始状态(网页文本)))
 
+async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> list[dict[str, Any]]:
+    响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'chapters', '')
+    目录 = 提取章节目录(响应数据.get('data') if isinstance(响应数据, dict) else 响应数据)
+    if not 目录 and isinstance(响应数据, dict):
+        目录 = 提取章节目录(响应数据.get('message'))
+    logger.info(f'番茄小说目录获取完成：book_id={书籍编号}, chapters={len(目录)}')
+    return 目录
 
-async def fetch_catalog(session: aiohttp.ClientSession, book_id: str, api_key: str) -> list[dict[str, Any]]:
-    payload = await request_fqread(session, book_id, api_key, "chapters", "")
-    catalog = extract_catalog(payload.get("data") if isinstance(payload, dict) else payload)
-    if not catalog and isinstance(payload, dict):
-        catalog = extract_catalog(payload.get("message"))
-    logger.info(f"\u756a\u8304\u5c0f\u8bf4\u76ee\u5f55\u83b7\u53d6\u5b8c\u6210\uff1abook_id={book_id}, chapters={len(catalog)}")
-    return catalog
+async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], 接口key: str, 总字数: int) -> list[dict[str, Any]]:
+    总数 = len(目录)
+    已完成 = 0
+    成功数 = 0
+    失败数 = 0
+    上一进度段 = 0
+    结果列表: list[dict[str, Any]] = []
+    logger.info(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%')
 
-
-async def download_all_chapters(
-    session: aiohttp.ClientSession,
-    book_id: str,
-    catalog: list[dict[str, Any]],
-    api_key: str,
-    total_words: int,
-) -> list[dict[str, Any]]:
-    total = len(catalog)
-    finished = 0
-    success = 0
-    failed = 0
-    last_step = 0
-    results: list[dict[str, Any]] = []
-    logger.info(f"\u756a\u8304\u5c0f\u8bf4\u7ae0\u8282\u8fdb\u5ea6\uff1abook_id={book_id}, progress=0/{total}, percent=0%")
-
-    def log_progress(batch_results: list[dict[str, Any]]) -> None:
-        nonlocal finished, success, failed, last_step
-        finished += len(batch_results)
-        success += sum(1 for item in batch_results if item.get("success"))
-        failed += sum(1 for item in batch_results if not item.get("success"))
-        step = PROGRESS_STEPS if finished >= total else int(finished * PROGRESS_STEPS / total)
-        if step <= last_step and finished < total:
+    def 记录进度(批次结果: list[dict[str, Any]]) -> None:
+        nonlocal 已完成, 成功数, 失败数, 上一进度段
+        已完成 += len(批次结果)
+        成功数 += sum((1 for 项目 in 批次结果 if 项目.get('success')))
+        失败数 += sum((1 for 项目 in 批次结果 if not 项目.get('success')))
+        进度段 = 进度分段数 if 已完成 >= 总数 else int(已完成 * 进度分段数 / 总数)
+        if 进度段 <= 上一进度段 and 已完成 < 总数:
             return
-        last_step = step
-        percent = int(finished * 100 / total) if total else 100
-        logger.info(
-            f"\u756a\u8304\u5c0f\u8bf4\u7ae0\u8282\u8fdb\u5ea6\uff1abook_id={book_id}, "
-            f"progress={finished}/{total}, percent={percent}%, success={success}, failed={failed}"
-        )
+        上一进度段 = 进度段
+        百分比 = int(已完成 * 100 / 总数) if 总数 else 100
+        logger.info(f'番茄小说章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}')
+    for 分段 in 拆分章节目录(目录, 总字数):
+        批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 分段)
+        记录进度(批次结果)
+        结果列表.extend(批次结果)
+    return 结果列表
 
-    for chunk in split_catalog(catalog, total_words):
-        chunk_results = await download_chapter_batch(session, book_id, api_key, chunk)
-        log_progress(chunk_results)
-        results.extend(chunk_results)
-    return results
-
-
-async def download_chapter_batch(
-    session: aiohttp.ClientSession,
-    book_id: str,
-    api_key: str,
-    batch: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
-        return await request_and_map_chapter_batch(session, book_id, api_key, batch)
-    except Exception as exc:
-        if len(batch) <= 1:
-            chapter = batch[0]
-            logger.warning(
-                f"\u756a\u8304\u5c0f\u8bf4\u7ae0\u8282\u4e0b\u8f7d\u5931\u8d25\uff1abook_id={book_id}, "
-                f"chapter={chapter.get('index')}, chapter_id={chapter.get('id')}, error={exc}"
-            )
-            return [{**chapter, "content": "\u3010\u4e0b\u8f7d\u5931\u8d25\u3011", "success": False}]
-        mid = max(1, len(batch) // 2)
-        logger.warning(
-            f"\u756a\u8304\u5c0f\u8bf4\u8303\u56f4\u8bf7\u6c42\u5931\u8d25\uff0c\u62c6\u5206\u91cd\u8bd5\uff1abook_id={book_id}, "
-            f"range={batch[0].get('index')}-{batch[-1].get('index')}, error={exc}"
-        )
-        left = await download_chapter_batch(session, book_id, api_key, batch[:mid])
-        right = await download_chapter_batch(session, book_id, api_key, batch[mid:])
-        return left + right
+        return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
+    except Exception as 异常:
+        if len(批次) <= 1:
+            章节 = 批次[0]
+            logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, chapter_id={章节.get('id')}, error={异常}")
+            return [{**章节, 'content': '【下载失败】', 'success': False}]
+        中点 = max(1, len(批次) // 2)
+        logger.warning(f"番茄小说范围请求失败，拆分重试：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
+        左侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[:中点])
+        右侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[中点:])
+        return 左侧结果 + 右侧结果
 
+async def 请求并映射章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    开始章 = min((int(章节.get('index') or 0) for 章节 in 批次))
+    结束章 = max((int(章节.get('index') or 0) for 章节 in 批次))
+    章节参数 = str(开始章) if 开始章 == 结束章 else f'{开始章}-{结束章}'
+    响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'chapter', 章节参数)
+    原始章节项 = 规范化响应章节(响应数据.get('data') if isinstance(响应数据, dict) else 响应数据)
+    if not 原始章节项 and isinstance(响应数据, dict):
+        原始章节项 = 规范化响应章节(响应数据.get('message'))
+    if not 原始章节项:
+        raise RuntimeError('章节正文接口没有返回章节数据')
+    结果列表 = 映射章节响应(批次, 原始章节项)
+    匹配数 = sum((1 for 项目 in 结果列表 if 项目.get('success')))
+    if 匹配数 < len(批次):
+        raise RuntimeError(f'章节返回不完整：matched={匹配数}/{len(批次)}')
+    return 结果列表
 
-async def request_and_map_chapter_batch(
-    session: aiohttp.ClientSession,
-    book_id: str,
-    api_key: str,
-    batch: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    start = min(int(chapter.get("index") or 0) for chapter in batch)
-    end = max(int(chapter.get("index") or 0) for chapter in batch)
-    chapter_arg = str(start) if start == end else f"{start}-{end}"
-    payload = await request_fqread(session, book_id, api_key, "chapter", chapter_arg)
-    raw_items = normalize_response_chapters(payload.get("data") if isinstance(payload, dict) else payload)
-    if not raw_items and isinstance(payload, dict):
-        raw_items = normalize_response_chapters(payload.get("message"))
-    if not raw_items:
-        raise RuntimeError("\u7ae0\u8282\u6b63\u6587\u63a5\u53e3\u6ca1\u6709\u8fd4\u56de\u7ae0\u8282\u6570\u636e")
-
-    results = map_chapter_response(batch, raw_items)
-    matched = sum(1 for item in results if item.get("success"))
-    if matched < len(batch):
-        raise RuntimeError(f"\u7ae0\u8282\u8fd4\u56de\u4e0d\u5b8c\u6574\uff1amatched={matched}/{len(batch)}")
-    return results
-
-
-async def request_fqread(
-    session: aiohttp.ClientSession,
-    book_id: str,
-    api_key: str,
-    method: str,
-    chapter_arg: str,
-) -> dict[str, Any]:
-    params = {"id": book_id, "book_id": book_id, "method": method, "key": api_key, "type": "json"}
-    if chapter_arg:
-        params["chapter"] = chapter_arg
-    async with session.get(API_URL, params=params, timeout=90) as response:
-        text = await response.text()
-        if response.status >= 400:
-            raise RuntimeError(f"OIAPI HTTP {response.status}: {limit_text(text, 120)}")
+async def 请求FqRead(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 方法: str, 章节参数: str) -> dict[str, Any]:
+    参数 = {'id': 书籍编号, 'book_id': 书籍编号, 'method': 方法, 'key': 接口key, 'type': 'json'}
+    if 章节参数:
+        参数['chapter'] = 章节参数
+    async with 会话.get(OIAPI地址, params=参数, timeout=90) as 响应:
+        文本 = await 响应.text()
+        if 响应.status >= 400:
+            raise RuntimeError(f'OIAPI HTTP {响应.status}: {限制文本长度(文本, 120)}')
         try:
-            payload = json.loads(text)
-        except Exception as exc:
-            raise RuntimeError(f"OIAPI JSON\u89e3\u6790\u5931\u8d25\uff1a{limit_text(text, 120)}") from exc
+            响应数据 = json.loads(文本)
+        except Exception as 异常:
+            raise RuntimeError(f'OIAPI JSON解析失败：{限制文本长度(文本, 120)}') from 异常
+    if not isinstance(响应数据, dict):
+        raise RuntimeError('OIAPI 返回格式不是对象')
+    返回码 = 响应数据.get('code')
+    if str(返回码) not in ('1', '200'):
+        消息 = 响应数据.get('message') or 响应数据.get('msg') or 响应数据.get('error') or '接口返回失败'
+        raise RuntimeError(f'OIAPI返回失败：code={返回码}, message={限制文本长度(消息, 200)}')
+    return 响应数据
 
-    if not isinstance(payload, dict):
-        raise RuntimeError("OIAPI \u8fd4\u56de\u683c\u5f0f\u4e0d\u662f\u5bf9\u8c61")
-    code = payload.get("code")
-    if str(code) not in ("1", "200"):
-        message = payload.get("message") or payload.get("msg") or payload.get("error") or "\u63a5\u53e3\u8fd4\u56de\u5931\u8d25"
-        raise RuntimeError(f"OIAPI\u8fd4\u56de\u5931\u8d25\uff1acode={code}, message={limit_text(message, 200)}")
-    return payload
+def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
+    项目列表: list[dict[str, Any]] = []
 
-
-def extract_catalog(data: Any) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, list):
-            for item in value:
-                walk(item)
+    def 遍历(值: Any) -> None:
+        if isinstance(值, list):
+            for 项目 in 值:
+                遍历(项目)
             return
-        if not isinstance(value, dict):
+        if not isinstance(值, dict):
             return
-        title = clean_text(read_any(value, ("title", "chapter_title", "name")))
-        chapter_id = clean_text(read_any(value, ("chapter_id", "chapterId", "item_id", "itemId", "id")))
-        index = safe_int(read_any(value, ("chapter", "index", "order", "chapter_index", "chapterIndex", "realChapterOrder")))
-        if (title or chapter_id) and (chapter_id or index):
-            items.append({"id": chapter_id or str(index), "title": title or f"\u7b2c{index or len(items) + 1}\u7ae0", "index": index or len(items) + 1})
+        书名 = 清理文本(读取任意字段(值, ('title', 'chapter_title', 'name')))
+        章节编号 = 清理文本(读取任意字段(值, ('chapter_id', 'chapterId', 'item_id', 'itemId', 'id')))
+        序号 = 安全整数(读取任意字段(值, ('chapter', 'index', 'order', 'chapter_index', 'chapterIndex', 'realChapterOrder')))
+        if (书名 or 章节编号) and (章节编号 or 序号):
+            项目列表.append({'id': 章节编号 or str(序号), 'title': 书名 or f'第{序号 or len(项目列表) + 1}章', 'index': 序号 or len(项目列表) + 1})
             return
-        for child in value.values():
-            if isinstance(child, (dict, list)):
-                walk(child)
-
-    walk(data)
-    deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, int]] = set()
-    for pos, item in enumerate(items, start=1):
-        item["index"] = safe_int(item.get("index")) or pos
-        key = (str(item.get("id") or ""), int(item.get("index") or 0))
-        if key in seen:
+        for 子项 in 值.values():
+            if isinstance(子项, (dict, list)):
+                遍历(子项)
+    遍历(数据)
+    去重结果: list[dict[str, Any]] = []
+    已见集合: set[tuple[str, int]] = set()
+    for 位置, 项目 in enumerate(项目列表, start=1):
+        项目['index'] = 安全整数(项目.get('index')) or 位置
+        键 = (str(项目.get('id') or ''), int(项目.get('index') or 0))
+        if 键 in 已见集合:
             continue
-        seen.add(key)
-        deduped.append(item)
-    return sorted(deduped, key=lambda item: int(item.get("index") or 0))
+        已见集合.add(键)
+        去重结果.append(项目)
+    return sorted(去重结果, key=lambda 项目: int(项目.get('index') or 0))
 
+def 规范化响应章节(数据: Any) -> list[dict[str, Any]]:
+    结果列表: list[dict[str, Any]] = []
 
-
-def normalize_response_chapters(data: Any) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, list):
-            for item in value:
-                walk(item)
+    def 遍历(值: Any) -> None:
+        if isinstance(值, list):
+            for 项目 in 值:
+                遍历(项目)
             return
-        if not isinstance(value, dict):
+        if not isinstance(值, dict):
             return
-        if extract_content(value):
-            results.append(value)
+        if 提取正文(值):
+            结果列表.append(值)
             return
-        for child in value.values():
-            if isinstance(child, (dict, list)):
-                walk(child)
+        for 子项 in 值.values():
+            if isinstance(子项, (dict, list)):
+                遍历(子项)
+    遍历(数据)
+    return 结果列表
 
-    walk(data)
-    return results
+def 映射章节响应(批次: list[dict[str, Any]], 原始章节项: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    按编号索引 = {清理文本(读取任意字段(项目, ('chapter_id', 'chapterId', 'item_id', 'itemId', 'id'))): 项目 for 项目 in 原始章节项}
+    按序号索引 = {str(安全整数(读取任意字段(项目, ('chapter', 'index', 'order', 'chapter_index', 'chapterIndex')))): 项目 for 项目 in 原始章节项}
+    使用顺序 = len(原始章节项) == len(批次)
+    结果列表: list[dict[str, Any]] = []
+    for 位置, 章节 in enumerate(批次):
+        原始项 = 按编号索引.get(str(章节.get('id') or '')) or 按序号索引.get(str(章节.get('index') or ''))
+        if 原始项 is None and 使用顺序:
+            原始项 = 原始章节项[位置]
+        正文 = 清理正文(提取正文(原始项) if 原始项 else '')
+        书名 = 清理文本(读取任意字段(原始项 or {}, ('title', 'chapter_title', 'name'))) or str(章节.get('title') or f"第{章节.get('index')}章")
+        结果列表.append({**章节, 'title': 书名, 'content': 正文 or '【下载失败】', 'success': bool(正文)})
+    return 结果列表
 
+def 提取正文(章节: dict[str, Any] | None) -> str:
+    if not isinstance(章节, dict):
+        return ''
+    return 清理文本(读取任意字段(章节, ('content', 'chapter_content', 'text', 'body')))
 
-def map_chapter_response(batch: list[dict[str, Any]], raw_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_id = {clean_text(read_any(item, ("chapter_id", "chapterId", "item_id", "itemId", "id"))): item for item in raw_items}
-    by_index = {str(safe_int(read_any(item, ("chapter", "index", "order", "chapter_index", "chapterIndex")))): item for item in raw_items}
-    use_order = len(raw_items) == len(batch)
-    results: list[dict[str, Any]] = []
-    for pos, chapter in enumerate(batch):
-        raw = by_id.get(str(chapter.get("id") or "")) or by_index.get(str(chapter.get("index") or ""))
-        if raw is None and use_order:
-            raw = raw_items[pos]
-        content = clean_content(extract_content(raw) if raw else "")
-        title = clean_text(read_any(raw or {}, ("title", "chapter_title", "name"))) or str(chapter.get("title") or f"\u7b2c{chapter.get('index')}\u7ae0")
-        results.append({**chapter, "title": title, "content": content or "\u3010\u4e0b\u8f7d\u5931\u8d25\u3011", "success": bool(content)})
-    return results
-
-
-def extract_content(chapter: dict[str, Any] | None) -> str:
-    if not isinstance(chapter, dict):
-        return ""
-    return clean_text(read_any(chapter, ("content", "chapter_content", "text", "body")))
-
-
-def split_catalog(catalog: list[dict[str, Any]], total_words: int) -> list[list[dict[str, Any]]]:
-    if not catalog:
+def 拆分章节目录(目录: list[dict[str, Any]], 总字数: int) -> list[list[dict[str, Any]]]:
+    if not 目录:
         return []
-    split_count = max(1, math.ceil(total_words / MAX_WORDS_PER_RANGE)) if total_words > 0 else 1
-    chunk_size = max(1, math.ceil(len(catalog) / split_count))
-    return [catalog[start:start + chunk_size] for start in range(0, len(catalog), chunk_size)]
+    拆分数 = max(1, math.ceil(总字数 / 每段最大字数)) if 总字数 > 0 else 1
+    分段大小 = max(1, math.ceil(len(目录) / 拆分数))
+    return [目录[开始章:开始章 + 分段大小] for 开始章 in range(0, len(目录), 分段大小)]
 
-
-def build_index_catalog(chapter_count: int) -> list[dict[str, Any]]:
-    if chapter_count <= 0:
+def 构造序号目录(章节数: int) -> list[dict[str, Any]]:
+    if 章节数 <= 0:
         return []
-    return [{"id": str(index), "title": f"\u7b2c{index}\u7ae0", "index": index} for index in range(1, chapter_count + 1)]
+    return [{'id': str(序号), 'title': f'第{序号}章', 'index': 序号} for 序号 in range(1, 章节数 + 1)]
 
+def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 目录: list[dict[str, Any]], 章节结果列表: list[dict[str, Any]]) -> tuple[str, bytes]:
+    文件名 = 构造文件名(书籍编号, 书籍信息)
+    行列表 = [免责声明, '', f"名称：{书籍信息.get('title') or f'番茄小说{书籍编号}'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f"字数：{书籍信息.get('word_count') or '未知'}", f"简介：{书籍信息.get('intro') or '暂无简介'}", f'书籍ID：{书籍编号}', f'章节数：{len(目录)}', '']
+    for 章节 in 章节结果列表:
+        行列表.append(str(章节.get('title') or f"第{章节.get('index')}章"))
+        行列表.append('')
+        行列表.append(str(章节.get('content') or '【下载失败】').strip())
+        行列表.append('')
+    return (文件名, '\n'.join(行列表).encode('utf-8'))
 
-def build_txt_file(
-    book_id: str,
-    meta: dict[str, Any],
-    catalog: list[dict[str, Any]],
-    chapter_results: list[dict[str, Any]],
-) -> tuple[str, bytes]:
-    file_name = build_file_name(book_id, meta)
-    lines = [
-        DISCLAIMER,
-        "",
-        f"\u540d\u79f0\uff1a{meta.get('title') or f'\u756a\u8304\u5c0f\u8bf4{book_id}'}",
-        f"\u4f5c\u8005\uff1a{meta.get('author') or '\u672a\u77e5'}",
-        f"\u72b6\u6001\uff1a{status_text(meta)}",
-        f"\u5b57\u6570\uff1a{meta.get('word_count') or '\u672a\u77e5'}",
-        f"\u7b80\u4ecb\uff1a{meta.get('intro') or '\u6682\u65e0\u7b80\u4ecb'}",
-        f"\u4e66\u7c4dID\uff1a{book_id}",
-        f"\u7ae0\u8282\u6570\uff1a{len(catalog)}",
-        "",
-    ]
-    for chapter in chapter_results:
-        lines.append(str(chapter.get("title") or f"\u7b2c{chapter.get('index')}\u7ae0"))
-        lines.append("")
-        lines.append(str(chapter.get("content") or "\u3010\u4e0b\u8f7d\u5931\u8d25\u3011").strip())
-        lines.append("")
-    return file_name, "\n".join(lines).encode("utf-8")
+def 构造文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
+    书名 = 清理文件名(书籍信息.get('title') or f'番茄小说{书籍编号}')
+    作者 = 清理文件名(书籍信息.get('author') or '未知')
+    return f'[{状态文本(书籍信息)}]书名：{书名} 作者：{作者}.txt'
 
+def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
+    简介 = 限制文本长度(书籍信息.get('intro') or '暂无简介', 160)
+    return '\n'.join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f'章节：{章节数} 章', f"字数：{书籍信息.get('word_count') or '未知'}", f'简介：{简介}', '', '正在下载中请稍等.....'])
 
-def build_file_name(book_id: str, meta: dict[str, Any]) -> str:
-    title = clean_file_name(meta.get("title") or f"\u756a\u8304\u5c0f\u8bf4{book_id}")
-    author = clean_file_name(meta.get("author") or "\u672a\u77e5")
-    return f"[{status_text(meta)}]\u4e66\u540d\uff1a{title} \u4f5c\u8005\uff1a{author}.txt"
-
-
-def format_download_notice(meta: dict[str, Any], chapter_count: int) -> str:
-    intro = limit_text(meta.get("intro") or "\u6682\u65e0\u7b80\u4ecb", 160)
-    return "\n".join([
-        f"\u4e66\u540d\uff1a{meta.get('title') or '\u672a\u77e5'}",
-        f"\u4f5c\u8005\uff1a{meta.get('author') or '\u672a\u77e5'}",
-        f"\u72b6\u6001\uff1a{status_text(meta)}",
-        f"\u7ae0\u8282\uff1a{chapter_count} \u7ae0",
-        f"\u5b57\u6570\uff1a{meta.get('word_count') or '\u672a\u77e5'}",
-        f"\u7b80\u4ecb\uff1a{intro}",
-        "",
-        "\u6b63\u5728\u4e0b\u8f7d\u4e2d\u8bf7\u7a0d\u7b49.....",
-    ])
-
-
-async def prepare_text_file_send(event: Any, file_name: str, file_content: bytes) -> dict[str, Any]:
-    group_id = get_group_id(event)
-    user_id = get_user_id(event)
-    logger.info(f"\u756a\u8304\u5c0f\u8bf4\u51c6\u5907\u53d1\u9001\u6587\u4ef6\uff1afile={file_name}, size={len(file_content)}, group_id={group_id}, user_id={user_id}")
-    cache_path = write_cache_file(file_name, file_content)
-    logger.info(f"\u756a\u8304\u5c0f\u8bf4\u5199\u5165\u4e0b\u8f7d\u7f13\u5b58\uff1afile={cache_path}, size={len(file_content)}")
-
-    if Comp is not None and hasattr(event, "chain_result"):
+async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes) -> dict[str, Any]:
+    群号 = 获取群号(事件)
+    用户QQ = 获取用户QQ(事件)
+    logger.info(f'番茄小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户QQ}')
+    缓存路径 = 写入缓存文件(文件名, 文件内容)
+    logger.info(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
+    if 消息组件 is not None and hasattr(事件, 'chain_result'):
         try:
-            chain_result = event.chain_result([Comp.File(name=file_name, file=str(cache_path))])
-            logger.info(f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u4f7f\u7528 AstrBot File \u7ec4\u4ef6\u53d1\u9001\uff1afile={file_name}, path={cache_path}")
-            return {"sent": True, "chain_result": chain_result, "cache_path": cache_path, "error": ""}
-        except Exception as exc:
-            logger.warning(f"\u756a\u8304\u5c0f\u8bf4 AstrBot File \u7ec4\u4ef6\u6784\u5efa\u5931\u8d25\uff1afile={file_name}, error={exc}")
+            链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(缓存路径))])
+            logger.info(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={缓存路径}')
+            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 缓存路径, 'error': ''}
+        except Exception as 异常:
+            logger.warning(f'番茄小说 AstrBot File 组件构建失败：file={文件名}, error={异常}')
+    机器人 = getattr(事件, 'bot', None)
+    接口 = getattr(机器人, 'api', None)
+    调用动作 = getattr(接口, 'call_action', None)
+    if callable(调用动作):
+        已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(缓存路径)), ('file_uri', 缓存路径.as_uri())])
+        删除缓存文件(缓存路径)
+        return {'sent': 已发送, 'chain_result': None, 'cache_path': None, 'error': 错误}
+    删除缓存文件(缓存路径)
+    return {'sent': False, 'chain_result': None, 'cache_path': None, 'error': '当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件'}
 
-    bot = getattr(event, "bot", None)
-    api = getattr(bot, "api", None)
-    call_action = getattr(api, "call_action", None)
-    if callable(call_action):
-        sent, error = await send_file_candidates(call_action, group_id, user_id, file_name, [("path", str(cache_path)), ("file_uri", cache_path.as_uri())])
-        delete_cache_file(cache_path)
-        return {"sent": sent, "chain_result": None, "cache_path": None, "error": error}
-
-    delete_cache_file(cache_path)
-    return {"sent": False, "chain_result": None, "cache_path": None, "error": "\u5f53\u524d bot \u6ca1\u6709 api.call_action \u63a5\u53e3\uff0c\u4e5f\u65e0\u6cd5\u4f7f\u7528 AstrBot File \u7ec4\u4ef6"}
-
-
-def schedule_delete_cache_file(cache_path: Any, delay_seconds: int = FILE_COMPONENT_CACHE_DELETE_DELAY) -> None:
-    if not cache_path:
+def 延迟删除缓存文件(缓存路径: Any, 延迟秒数: int=文件组件缓存删除延迟) -> None:
+    if not 缓存路径:
         return
 
-    async def delete_later() -> None:
-        await asyncio.sleep(delay_seconds)
-        delete_cache_file(cache_path)
-
+    async def 稍后删除() -> None:
+        await asyncio.sleep(延迟秒数)
+        删除缓存文件(缓存路径)
     try:
-        asyncio.create_task(delete_later())
+        asyncio.create_task(稍后删除())
     except RuntimeError:
-        delete_cache_file(cache_path)
+        删除缓存文件(缓存路径)
 
-
-def delete_cache_file(cache_path: Any) -> None:
-    if not cache_path:
+def 删除缓存文件(缓存路径: Any) -> None:
+    if not 缓存路径:
         return
     try:
-        Path(cache_path).unlink(missing_ok=True)
-        logger.info(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5df2\u5220\u9664\uff1afile={cache_path}")
-    except Exception as exc:
-        logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u4e0b\u8f7d\u7f13\u5b58\u6587\u4ef6\u5220\u9664\u5931\u8d25\uff1afile={cache_path}, error={exc}")
+        Path(缓存路径).unlink(missing_ok=True)
+        logger.info(f'番茄小说下载缓存文件已删除：file={缓存路径}')
+    except Exception as 异常:
+        logger.warning(f'番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}')
 
-
-async def send_file_candidates(
-    call_action: Any,
-    group_id: str,
-    user_id: str,
-    file_name: str,
-    candidates: list[tuple[str, str]],
-) -> tuple[bool, str]:
-    if not group_id and not user_id:
-        return False, "\u6ca1\u6709\u83b7\u53d6\u5230\u7fa4\u53f7\u6216\u7528\u6237\u53f7"
-
-    errors = []
-    for method_name, file_arg in candidates:
+async def 尝试发送文件候选(调用动作: Any, 群号: str, 用户QQ: str, 文件名: str, 候选列表: list[tuple[str, str]]) -> tuple[bool, str]:
+    if not 群号 and (not 用户QQ):
+        return (False, '没有获取到群号或用户号')
+    错误列表 = []
+    for 方法名, 文件参数 in 候选列表:
         try:
-            if group_id:
-                await call_action("upload_group_file", group_id=group_id, file=file_arg, name=file_name)
-                logger.info(f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u53d1\u9001\u6210\u529f\uff1amethod={method_name}, target=group, file={file_name}, group_id={group_id}")
-                return True, ""
-            await call_action("upload_private_file", user_id=user_id, file=file_arg, name=file_name)
-            logger.info(f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u53d1\u9001\u6210\u529f\uff1amethod={method_name}, target=private, file={file_name}, user_id={user_id}")
-            return True, ""
-        except Exception as exc:
-            errors.append(f"{method_name}: {exc}")
-            logger.warning(f"\u756a\u8304\u5c0f\u8bf4\u6587\u4ef6\u53d1\u9001\u5019\u9009\u5931\u8d25\uff1amethod={method_name}, file={file_name}, error={exc}")
-    return False, "\uff1b".join(errors)
+            if 群号:
+                await 调用动作('upload_group_file', group_id=群号, file=文件参数, name=文件名)
+                logger.info(f'番茄小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}')
+                return (True, '')
+            await 调用动作('upload_private_file', user_id=用户QQ, file=文件参数, name=文件名)
+            logger.info(f'番茄小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户QQ}')
+            return (True, '')
+        except Exception as 异常:
+            错误列表.append(f'{方法名}: {异常}')
+            logger.warning(f'番茄小说文件发送候选失败：method={方法名}, file={文件名}, error={异常}')
+    return (False, '；'.join(错误列表))
 
+def 写入缓存文件(文件名: str, 文件内容: bytes) -> Path:
+    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    缓存路径 = 获取唯一缓存路径(文件名)
+    缓存路径.write_bytes(文件内容)
+    return 缓存路径
 
-def write_cache_file(file_name: str, file_content: bytes) -> Path:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = unique_cache_path(file_name)
-    cache_path.write_bytes(file_content)
-    return cache_path
+def 获取唯一缓存路径(文件名: str) -> Path:
+    安全名称 = Path(清理文件名(文件名)).name or '番茄小说.txt'
+    if not 安全名称.lower().endswith('.txt'):
+        安全名称 = f'{安全名称}.txt'
+    缓存路径 = 下载缓存目录 / 安全名称
+    if not 缓存路径.exists():
+        return 缓存路径
+    后缀 = 缓存路径.suffix
+    主文件名 = 缓存路径.stem
+    for 序号 in range(1, 1000):
+        候选路径 = 下载缓存目录 / f'{主文件名}_{序号}{后缀}'
+        if not 候选路径.exists():
+            return 候选路径
+    raise RuntimeError('下载缓存目录中同名文件过多')
 
-
-def unique_cache_path(file_name: str) -> Path:
-    safe_name = Path(clean_file_name(file_name)).name or "\u756a\u8304\u5c0f\u8bf4.txt"
-    if not safe_name.lower().endswith(".txt"):
-        safe_name = f"{safe_name}.txt"
-    cache_path = CACHE_DIR / safe_name
-    if not cache_path.exists():
-        return cache_path
-    suffix = cache_path.suffix
-    stem = cache_path.stem
-    for index in range(1, 1000):
-        candidate = CACHE_DIR / f"{stem}_{index}{suffix}"
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError("\u4e0b\u8f7d\u7f13\u5b58\u76ee\u5f55\u4e2d\u540c\u540d\u6587\u4ef6\u8fc7\u591a")
-
-
-
-def extract_direct_source(command_text: str) -> str | None:
-    text = str(command_text or "").strip()
-    if not text:
+def 提取直接来源(命令文本: str) -> str | None:
+    文本 = str(命令文本 or '').strip()
+    if not 文本:
         return None
-    if re.fullmatch(r"\d{15,25}", text):
-        return text
-    return extract_source(text) or None
+    if re.fullmatch('\\d{15,25}', 文本):
+        return 文本
+    return 提取番茄来源(文本) or None
 
-
-def extract_event_source(event: Any) -> str | None:
-    message_obj = getattr(event, "message_obj", None)
-    for obj in (event, message_obj):
-        if obj is None:
+def 提取事件来源(事件: Any) -> str | None:
+    消息对象 = getattr(事件, 'message_obj', None)
+    for 对象 in (事件, 消息对象):
+        if 对象 is None:
             continue
-        for field in ("message_str", "raw_message", "message"):
-            source = extract_source(read_field(obj, field))
-            if source:
-                return source
+        for 字段名 in ('message_str', 'raw_message', 'message'):
+            来源 = 提取番茄来源(读取字段(对象, 字段名))
+            if 来源:
+                return 来源
     return None
 
+def 提取番茄来源(值: Any) -> str:
+    if 值 is None:
+        return ''
+    if isinstance(值, (list, tuple, set)):
+        for 项目 in 值:
+            来源 = 提取番茄来源(项目)
+            if 来源:
+                return 来源
+        return ''
+    if isinstance(值, dict):
+        for 项目 in 值.values():
+            来源 = 提取番茄来源(项目)
+            if 来源:
+                return 来源
+        return ''
+    原始文本 = str(值 or '')
+    for 文本 in 生成文本变体(原始文本):
+        for 匹配 in 链接正则.finditer(文本):
+            链接 = 匹配.group(0).rstrip('),.;]')
+            if 番茄域名正则.search(链接) and 提取书籍编号(链接):
+                return 链接
+        if 番茄域名正则.search(文本) and 提取书籍编号(文本):
+            return 文本
+        if re.fullmatch('\\d{15,25}', 文本.strip()):
+            return 文本.strip()
+    return ''
 
-def extract_source(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            source = extract_source(item)
-            if source:
-                return source
-        return ""
-    if isinstance(value, dict):
-        for item in value.values():
-            source = extract_source(item)
-            if source:
-                return source
-        return ""
+def 提取书籍编号(文本: str) -> str:
+    for 候选路径 in 生成文本变体(str(文本 or '')):
+        候选路径 = 候选路径.strip()
+        if re.fullmatch('\\d{15,25}', 候选路径):
+            return 候选路径
+        规则列表 = ('(?:book_id|bookid|bookId)=(\\d{15,25})', 'fanqienovel\\.com/(?:page|reader)?/?(\\d{15,25})', 'fanqienovel\\.com/[^\\s?&#]*/(\\d{15,25})', '(?:changdunovel\\.com|fqnovel\\.com|novelfm\\.com).*?(?:book_id|bookid|bookId)=(\\d{15,25})')
+        for 规则 in 规则列表:
+            匹配 = re.search(规则, 候选路径, re.IGNORECASE)
+            if 匹配:
+                return 匹配.group(1)
+    return ''
 
-    raw_text = str(value or "")
-    for text in text_variants(raw_text):
-        for match in URL_RE.finditer(text):
-            url = match.group(0).rstrip("),.;]")
-            if DOMAIN_RE.search(url) and extract_book_id(url):
-                return url
-        if DOMAIN_RE.search(text) and extract_book_id(text):
-            return text
-        if re.fullmatch(r"\d{15,25}", text.strip()):
-            return text.strip()
-    return ""
-
-
-def extract_book_id(text: str) -> str:
-    for candidate in text_variants(str(text or "")):
-        candidate = candidate.strip()
-        if re.fullmatch(r"\d{15,25}", candidate):
-            return candidate
-        patterns = (
-            r"(?:book_id|bookid|bookId)=(\d{15,25})",
-            r"fanqienovel\.com/(?:page|reader)?/?(\d{15,25})",
-            r"fanqienovel\.com/[^\s?&#]*/(\d{15,25})",
-            r"(?:changdunovel\.com|fqnovel\.com|novelfm\.com).*?(?:book_id|bookid|bookId)=(\d{15,25})",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, candidate, re.IGNORECASE)
-            if match:
-                return match.group(1)
-    return ""
-
-
-def text_variants(text: str) -> list[str]:
-    text = html.unescape(str(text or "")).replace("\\/", "/")
-    variants = [text]
+def 生成文本变体(文本: str) -> list[str]:
+    文本 = html.unescape(str(文本 or '')).replace('\\/', '/')
+    变体列表 = [文本]
     for _ in range(2):
-        decoded = urllib.parse.unquote(variants[-1])
-        if decoded == variants[-1]:
+        解码文本 = urllib.parse.unquote(变体列表[-1])
+        if 解码文本 == 变体列表[-1]:
             break
-        variants.append(decoded)
-    return variants
+        变体列表.append(解码文本)
+    return 变体列表
 
+def 获取番茄小说key(配置: Any) -> str:
+    值 = 读取字段(配置, '番茄小说key')
+    return str(值 or '').strip()
 
-def get_fanqie_key(config: Any) -> str:
-    value = read_field(config, "\u756a\u8304\u5c0f\u8bf4key")
-    return str(value or "").strip()
+def 默认书籍信息(书籍编号: str) -> dict[str, Any]:
+    return {'book_id': 书籍编号, 'title': f'番茄小说{书籍编号}', 'author': '未知', 'intro': '', 'status': '未知', 'word_count': '未知', 'chapter_count': 0}
 
-
-def default_meta(book_id: str) -> dict[str, Any]:
-    return {
-        "book_id": book_id,
-        "title": f"\u756a\u8304\u5c0f\u8bf4{book_id}",
-        "author": "\u672a\u77e5",
-        "intro": "",
-        "status": "\u672a\u77e5",
-        "word_count": "\u672a\u77e5",
-        "chapter_count": 0,
-    }
-
-
-def merge_meta(base: dict[str, Any], new_values: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base or {})
-    for key, value in (new_values or {}).items():
-        if value in (None, "", 0):
+def 合并书籍信息(基础信息: dict[str, Any], 新增信息: dict[str, Any]) -> dict[str, Any]:
+    结果 = dict(基础信息 or {})
+    for 键, 值 in (新增信息 or {}).items():
+        if 值 in (None, '', 0):
             continue
-        current = result.get(key)
-        if current in (None, "", 0, "\u672a\u77e5", "\u6682\u65e0\u7b80\u4ecb") or (key == "title" and str(current).startswith("\u756a\u8304\u5c0f\u8bf4")):
-            result[key] = value
-    return result
+        当前值 = 结果.get(键)
+        if 当前值 in (None, '', 0, '未知', '暂无简介') or (键 == 'title' and str(当前值).startswith('番茄小说')):
+            结果[键] = 值
+    return 结果
 
+def 从状态提取书籍信息(状态数据: Any) -> dict[str, Any]:
+    候选列表: list[tuple[int, dict[str, Any]]] = []
 
-def extract_meta_from_state(state: Any) -> dict[str, Any]:
-    candidates: list[tuple[int, dict[str, Any]]] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, list):
-            for item in value:
-                walk(item)
+    def 遍历(值: Any) -> None:
+        if isinstance(值, list):
+            for 项目 in 值:
+                遍历(项目)
             return
-        if not isinstance(value, dict):
+        if not isinstance(值, dict):
             return
-        meta = extract_meta_from_dict(value)
-        score = 0
-        if meta.get("title") and not re.match(r"\u7b2c.+[\u7ae0\u8282\u56de]", str(meta.get("title"))):
-            score += 3
-        if meta.get("author"):
-            score += 3
-        if meta.get("intro"):
-            score += 1
-        if meta.get("word_count") and meta.get("word_count") != "\u672a\u77e5":
-            score += 1
-        if meta.get("chapter_count"):
-            score += 1
-        if score >= 3:
-            candidates.append((score, meta))
-        for item in value.values():
-            if isinstance(item, (dict, list)):
-                walk(item)
-
-    walk(state)
-    if not candidates:
+        书籍信息 = 从字典提取书籍信息(值)
+        分数 = 0
+        if 书籍信息.get('title') and (not re.match('\\u7b2c.+[\\u7ae0\\u8282\\u56de]', str(书籍信息.get('title')))):
+            分数 += 3
+        if 书籍信息.get('author'):
+            分数 += 3
+        if 书籍信息.get('intro'):
+            分数 += 1
+        if 书籍信息.get('word_count') and 书籍信息.get('word_count') != '未知':
+            分数 += 1
+        if 书籍信息.get('chapter_count'):
+            分数 += 1
+        if 分数 >= 3:
+            候选列表.append((分数, 书籍信息))
+        for 项目 in 值.values():
+            if isinstance(项目, (dict, list)):
+                遍历(项目)
+    遍历(状态数据)
+    if not 候选列表:
         return {}
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
+    候选列表.sort(key=lambda 项目: 项目[0], reverse=True)
+    return 候选列表[0][1]
 
+def 从字典提取书籍信息(数据: dict[str, Any]) -> dict[str, Any]:
+    作者 = 读取任意字段(数据, ('author', 'author_name', 'authorName'))
+    if isinstance(作者, dict):
+        作者 = 读取任意字段(作者, ('name', 'author_name', 'authorName'))
+    原始状态 = 读取任意字段(数据, ('creation_status', 'creationStatus', 'status', 'book_status', 'bookStatus'))
+    状态描述 = 清理文本(读取任意字段(数据, ('status_text', 'statusText', 'status_desc', 'statusDesc')))
+    return {'title': 清理文本(读取任意字段(数据, ('book_name', 'bookName', 'bookTitle', 'title', 'name'))), 'author': 清理文本(作者), 'intro': 清理文本(读取任意字段(数据, ('intro', 'abstract', 'description', 'summary', 'bookAbstract'))), 'word_count': 格式化字数(读取任意字段(数据, ('word_count', 'wordCount', 'word_number', 'wordNumber', 'totalWords'))), 'status': 规范化状态(原始状态, 状态描述), 'chapter_count': 安全整数(读取任意字段(数据, ('chapter_count', 'chapterCount', 'chapter_num', 'chapterNum', 'all_chapter_num', 'latest_chapter_index')))}
 
-def extract_meta_from_dict(data: dict[str, Any]) -> dict[str, Any]:
-    author = read_any(data, ("author", "author_name", "authorName"))
-    if isinstance(author, dict):
-        author = read_any(author, ("name", "author_name", "authorName"))
-    status_raw = read_any(data, ("creation_status", "creationStatus", "status", "book_status", "bookStatus"))
-    status_desc = clean_text(read_any(data, ("status_text", "statusText", "status_desc", "statusDesc")))
-    return {
-        "title": clean_text(read_any(data, ("book_name", "bookName", "bookTitle", "title", "name"))),
-        "author": clean_text(author),
-        "intro": clean_text(read_any(data, ("intro", "abstract", "description", "summary", "bookAbstract"))),
-        "word_count": format_word_count(read_any(data, ("word_count", "wordCount", "word_number", "wordNumber", "totalWords"))),
-        "status": normalize_status(status_raw, status_desc),
-        "chapter_count": safe_int(read_any(data, ("chapter_count", "chapterCount", "chapter_num", "chapterNum", "all_chapter_num", "latest_chapter_index"))),
-    }
+def 从网页文本提取书籍信息(网页文本: str) -> dict[str, Any]:
+    文本 = str(网页文本 or '')
+    书名 = 提取HTML字段(文本, ('<meta[^>]+property=["\\\']og:title["\\\'][^>]+content=["\\\']([^"\\\']+)', '<title>(.*?)</title>'))
+    书名 = re.sub('[_-].*\\u756a\\u8304\\u5c0f\\u8bf4.*$', '', 书名).strip()
+    作者 = 提取HTML字段(文本, ('authorName["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)', 'author_name["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)'))
+    简介 = 提取HTML字段(文本, ('<meta[^>]+name=["\\\']description["\\\'][^>]+content=["\\\']([^"\\\']+)', 'intro["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)'))
+    return {'title': 清理文本(书名), 'author': 清理文本(作者), 'intro': 清理文本(简介)}
 
-
-def extract_meta_from_page_text(page_text: str) -> dict[str, Any]:
-    text = str(page_text or "")
-    title = extract_html_field(text, (r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', r"<title>(.*?)</title>"))
-    title = re.sub(r"[_-].*\u756a\u8304\u5c0f\u8bf4.*$", "", title).strip()
-    author = extract_html_field(text, (r'authorName["\']?\s*[:=]\s*["\']([^"\']+)', r'author_name["\']?\s*[:=]\s*["\']([^"\']+)'))
-    intro = extract_html_field(text, (r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)', r'intro["\']?\s*[:=]\s*["\']([^"\']+)'))
-    return {"title": clean_text(title), "author": clean_text(author), "intro": clean_text(intro)}
-
-
-def extract_initial_state(page_text: str) -> dict[str, Any]:
-    match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.+?)</script>", page_text or "", re.DOTALL)
-    if not match:
-        match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.+)", page_text or "", re.DOTALL)
-    if not match:
+def 提取初始状态(网页文本: str) -> dict[str, Any]:
+    匹配 = re.search('window\\.__INITIAL_STATE__\\s*=\\s*(\\{.+?)</script>', 网页文本 or '', re.DOTALL)
+    if not 匹配:
+        匹配 = re.search('window\\.__INITIAL_STATE__\\s*=\\s*(\\{.+)', 网页文本 or '', re.DOTALL)
+    if not 匹配:
         return {}
-    content = match.group(1)
+    正文 = 匹配.group(1)
     balance = 0
-    chunk = []
-    for char in content:
-        chunk.append(char)
-        if char == "{":
+    分段 = []
+    for char in 正文:
+        分段.append(char)
+        if char == '{':
             balance += 1
-        elif char == "}":
+        elif char == '}':
             balance -= 1
             if balance == 0:
                 break
     try:
-        return json.loads("".join(chunk))
+        return json.loads(''.join(分段))
     except Exception:
         return {}
 
+def 提取HTML字段(文本: str, 规则列表: tuple[str, ...]) -> str:
+    for 规则 in 规则列表:
+        匹配 = re.search(规则, 文本, re.IGNORECASE | re.DOTALL)
+        if 匹配:
+            return 清理文本(匹配.group(1))
+    return ''
 
-def extract_html_field(text: str, patterns: tuple[str, ...]) -> str:
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            return clean_text(match.group(1))
-    return ""
+def 规范化状态(原始项: Any, 状态描述: str='') -> str:
+    文本 = f"{原始项 or ''} {状态描述 or ''}".strip().lower()
+    if any((关键词 in 文本 for 关键词 in ('已完结', '完结', '完本', 'finished', 'completed', 'ended'))):
+        return '完结'
+    if any((关键词 in 文本 for 关键词 in ('连载', '更新', 'ongoing', 'serial'))):
+        return '连载'
+    if str(原始项).strip().lower() in ('0', '2'):
+        return '完结'
+    if str(原始项).strip().lower() in ('1', '3', '4'):
+        return '连载'
+    return ''
 
+def 状态文本(书籍信息: dict[str, Any]) -> str:
+    return 规范化状态(书籍信息.get('status'), '') or '连载'
 
-def normalize_status(raw: Any, desc: str = "") -> str:
-    text = f"{raw or ''} {desc or ''}".strip().lower()
-    if any(keyword in text for keyword in ("\u5df2\u5b8c\u7ed3", "\u5b8c\u7ed3", "\u5b8c\u672c", "finished", "completed", "ended")):
-        return "\u5b8c\u7ed3"
-    if any(keyword in text for keyword in ("\u8fde\u8f7d", "\u66f4\u65b0", "ongoing", "serial")):
-        return "\u8fde\u8f7d"
-    if str(raw).strip().lower() in ("0", "2"):
-        return "\u5b8c\u7ed3"
-    if str(raw).strip().lower() in ("1", "3", "4"):
-        return "\u8fde\u8f7d"
-    return ""
+def 格式化字数(值: Any) -> str:
+    文本 = str(值 or '').strip().replace(' ', '')
+    if not 文本:
+        return ''
+    if '字' in 文本:
+        return 文本
+    字数 = 解析字数(文本)
+    if 字数 <= 0:
+        return 文本
+    if 字数 >= 100000000:
+        return f'{round(字数 / 100000000, 1):g}亿字'
+    if 字数 >= 10000:
+        return f'{round(字数 / 10000, 1):g}万字'
+    return f'{字数}字'
 
-
-
-def status_text(meta: dict[str, Any]) -> str:
-    return normalize_status(meta.get("status"), "") or "\u8fde\u8f7d"
-
-
-def format_word_count(value: Any) -> str:
-    text = str(value or "").strip().replace(" ", "")
-    if not text:
-        return ""
-    if "\u5b57" in text:
-        return text
-    count = parse_word_count(text)
-    if count <= 0:
-        return text
-    if count >= 100_000_000:
-        return f"{round(count / 100_000_000, 1):g}\u4ebf\u5b57"
-    if count >= 10_000:
-        return f"{round(count / 10_000, 1):g}\u4e07\u5b57"
-    return f"{count}\u5b57"
-
-
-def parse_word_count(value: Any) -> int:
-    text = str(value or "").strip().replace(" ", "")
-    match = re.search(r"([\d.]+)", text)
-    if not match:
+def 解析字数(值: Any) -> int:
+    文本 = str(值 or '').strip().replace(' ', '')
+    匹配 = re.search('([\\d.]+)', 文本)
+    if not 匹配:
         return 0
-    number = float(match.group(1))
-    if "\u4ebf" in text:
-        number *= 100_000_000
-    elif "\u4e07" in text:
-        number *= 10_000
-    return int(number)
+    数字 = float(匹配.group(1))
+    if '亿' in 文本:
+        数字 *= 100000000
+    elif '万' in 文本:
+        数字 *= 10000
+    return int(数字)
 
+def 清理正文(文本: Any) -> str:
+    文本 = str(文本 or '')
+    文本 = re.sub('<br\\s*/?>', '\n', 文本, flags=re.IGNORECASE)
+    文本 = re.sub('</p>', '\n', 文本, flags=re.IGNORECASE)
+    文本 = 清理文本(文本).replace('\r', '')
+    文本 = re.sub('\\n{3,}', '\n\n', 文本)
+    return 文本.strip()
 
-def clean_content(text: Any) -> str:
-    text = str(text or "")
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
-    text = clean_text(text).replace("\r", "")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+def 清理文本(文本: Any) -> str:
+    文本 = re.sub('<[^>]+>', '', str(文本 or ''))
+    return html.unescape(文本).strip()
 
+def 清理文件名(文件名: Any) -> str:
+    文件名 = re.sub('[\\\\/:*?"<>|]', '_', str(文件名 or '')).strip().rstrip('.')
+    return 文件名[:80] or '番茄小说'
 
-def clean_text(text: Any) -> str:
-    text = re.sub(r"<[^>]+>", "", str(text or ""))
-    return html.unescape(text).strip()
+def 限制文本长度(值: Any, 最大长度: int=2000) -> str:
+    文本 = str(值 or '')
+    if len(文本) > 最大长度:
+        return 文本[:最大长度] + '...'
+    return 文本
 
-
-def clean_file_name(file_name: Any) -> str:
-    file_name = re.sub(r'[\\/:*?"<>|]', "_", str(file_name or "")).strip().rstrip(".")
-    return file_name[:80] or "\u756a\u8304\u5c0f\u8bf4"
-
-
-def limit_text(value: Any, max_length: int = 2000) -> str:
-    text = str(value or "")
-    if len(text) > max_length:
-        return text[:max_length] + "..."
-    return text
-
-
-def safe_int(value: Any) -> int:
-    if value in (None, "") or isinstance(value, bool):
+def 安全整数(值: Any) -> int:
+    if 值 in (None, '') or isinstance(值, bool):
         return 0
     try:
-        return max(0, int(float(str(value).strip())))
+        return max(0, int(float(str(值).strip())))
     except Exception:
-        match = re.search(r"\d+", str(value))
-        return int(match.group(0)) if match else 0
+        匹配 = re.search('\\d+', str(值))
+        return int(匹配.group(0)) if 匹配 else 0
 
-
-def read_any(data: dict[str, Any], fields: tuple[str, ...]) -> Any:
-    if not isinstance(data, dict):
+def 读取任意字段(数据: dict[str, Any], 字段列表: tuple[str, ...]) -> Any:
+    if not isinstance(数据, dict):
         return None
-    for field in fields:
-        value = data.get(field)
-        if value not in (None, ""):
-            return value
+    for 字段名 in 字段列表:
+        值 = 数据.get(字段名)
+        if 值 not in (None, ''):
+            return 值
     return None
 
-
-def read_path(data: Any, path: tuple[str, ...]) -> Any:
-    current = data
-    for field in path:
-        if not isinstance(current, dict):
+def 读取路径(数据: Any, 路径: tuple[str, ...]) -> Any:
+    当前值 = 数据
+    for 字段名 in 路径:
+        if not isinstance(当前值, dict):
             return None
-        current = current.get(field)
-    return current
+        当前值 = 当前值.get(字段名)
+    return 当前值
 
+def 获取群号(事件: Any) -> str:
+    for 方法名 in ('get_group_id', 'get_group'):
+        方法 = getattr(事件, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+    消息对象 = getattr(事件, 'message_obj', None)
+    for 对象 in (事件, 消息对象):
+        值 = 读取字段(对象, 'group_id') or 读取字段(对象, 'group')
+        if isinstance(值, dict):
+            值 = 值.get('group_id') or 值.get('id')
+        if 值:
+            return str(值)
+    return ''
 
-def get_group_id(event: Any) -> str:
-    for method_name in ("get_group_id", "get_group"):
-        method = getattr(event, method_name, None)
-        if callable(method):
-            value = method()
-            if value:
-                return str(value)
-    message_obj = getattr(event, "message_obj", None)
-    for obj in (event, message_obj):
-        value = read_field(obj, "group_id") or read_field(obj, "group")
-        if isinstance(value, dict):
-            value = value.get("group_id") or value.get("id")
-        if value:
-            return str(value)
-    return ""
+def 获取用户QQ(事件: Any) -> str:
+    for 方法名 in ('get_sender_id', 'get_user_id'):
+        方法 = getattr(事件, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+    消息对象 = getattr(事件, 'message_obj', None)
+    for 对象 in (事件, 消息对象):
+        值 = 读取字段(对象, 'sender_id') or 读取字段(对象, 'user_id') or 读取字段(对象, 'sender')
+        if isinstance(值, dict):
+            值 = 值.get('user_id') or 值.get('id')
+        if 值:
+            return str(值)
+    return ''
 
-
-def get_user_id(event: Any) -> str:
-    for method_name in ("get_sender_id", "get_user_id"):
-        method = getattr(event, method_name, None)
-        if callable(method):
-            value = method()
-            if value:
-                return str(value)
-    message_obj = getattr(event, "message_obj", None)
-    for obj in (event, message_obj):
-        value = read_field(obj, "sender_id") or read_field(obj, "user_id") or read_field(obj, "sender")
-        if isinstance(value, dict):
-            value = value.get("user_id") or value.get("id")
-        if value:
-            return str(value)
-    return ""
-
-
-def read_field(obj: Any, field: str) -> Any:
-    if obj is None:
+def 读取字段(对象: Any, 字段名: str) -> Any:
+    if 对象 is None:
         return None
-    if isinstance(obj, dict):
-        return obj.get(field)
-    return getattr(obj, field, None)
-
-
-# main.py \u4f7f\u7528\u4e2d\u6587\u5165\u53e3\uff0c\u5176\u4ed6\u903b\u8f91\u4fdd\u6301\u5728\u672c\u6587\u4ef6\u5185\u3002
-globals()["\u83b7\u53d6\u756a\u8304\u5c0f\u8bf4\u56de\u590d\u6d41"] = get_fanqie_reply_stream
-globals()["\u63d0\u53d6\u4e66\u7c4d\u7f16\u53f7"] = extract_book_id
-globals()["\u63d0\u53d6\u756a\u8304\u6765\u6e90"] = extract_source
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
