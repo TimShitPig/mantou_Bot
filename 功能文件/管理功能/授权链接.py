@@ -27,17 +27,18 @@ from astrbot.api import logger
 
 
 async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = None, 配置: Any = None) -> str | None:
-    手动群号 = 提取授权命令群号(命令文本)
-    if 手动群号 is None:
+    授权参数 = 提取授权命令参数(命令文本)
+    if 授权参数 is None:
         return None
 
     记录授权事件诊断(event)
 
+    手动群号, 手动机器人QQ = 授权参数
     群号 = 手动群号 or await 获取群号(event)
     if not 群号:
         return "授权链接生成失败：没有获取到数字QQ群号，请在目标群里发送“授权”"
 
-    机器人QQ = await 获取机器人QQ(event, 上下文)
+    机器人QQ = 手动机器人QQ or await 获取机器人QQ(event, 上下文)
     if not 机器人QQ:
         return "授权链接生成失败：没有获取到机器人QQ号，当前适配器没有返回 botUin"
 
@@ -55,14 +56,14 @@ async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = Non
     ])
 
 
-def 提取授权命令群号(命令文本: str) -> str | None:
+def 提取授权命令参数(命令文本: str) -> tuple[str, str] | None:
     文本 = str(命令文本 or "").strip()
     if 文本 in 授权命令:
-        return ""
-    匹配 = re.fullmatch(r"授权\s+([1-9]\d{4,11})", 文本)
+        return "", ""
+    匹配 = re.fullmatch(r"授权\s+([1-9]\d{4,11})(?:\s+([1-9]\d{4,11}))?", 文本)
     if not 匹配:
         return None
-    return 匹配.group(1)
+    return 匹配.group(1), 匹配.group(2) or ""
 
 
 def 生成授权链接(群号: str, 机器人QQ: str, 机器人UID: str) -> str:

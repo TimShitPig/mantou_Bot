@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.6.5 |
+| 版本 | v1.6.6 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -22,7 +22,7 @@
 | 管理功能 | 数字撤回 | `连续 9-12 位数字` | 自动撤回符合规则的数字消息 |
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、合并转发和 QQ 闪传消息 |
 | 管理功能 | 群文件清理 | `清理群文件` / `群文件清理` | 仅插件配置白名单 QQ 可用，循环扫描并批量清理当前群群文件 |
-| 管理功能 | 授权链接 | `授权` / `授权 数字群号` | 生成 QQ 群服务授权链接，供群主在安卓/鸿蒙 QQ 打开授权 |
+| 管理功能 | 授权链接 | `授权` / `授权 数字群号` / `授权 数字群号 机器人QQ` | 生成 QQ 群服务授权链接，供群主在安卓/鸿蒙 QQ 打开授权 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫链接，先回复书籍信息再下载并发送到 QQ |
 | oiapi | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 识别番茄小说链接，通过 OIAPI FqRead 下载 txt 并发送到 QQ |
 
@@ -125,7 +125,7 @@ pycryptodome
 
 QQ 官方机器人 `qq_official` 发送文件应走官方富媒体接口，AstrBot `File` 组件会封装 `/v2/users/{openid}/files` 或 `/v2/groups/{group_openid}/files` 上传，并通过 `msg_type=7` 的 `media` 消息发送。官方文档标注群聊 `file_type=4 文件` 为“群场景暂不开放”，如果 QQ 官方群聊拒绝普通 txt 文件，这是平台能力限制；OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
-发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接；如果当前适配器取不到数字群号，可以发送 `授权 数字群号` 手动指定 `groupCode`。插件会动态获取当前群号和机器人 QQ 号，机器人 QQ 会优先读取 AstrBot `context.robot_id`，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发授权命令时会输出一条受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时会输出 `授权链接UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
+发送 `授权` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 授权链接；如果当前适配器取不到数字群号，可以发送 `授权 数字群号` 手动指定 `groupCode`；如果也取不到机器人 QQ，可以发送 `授权 数字群号 机器人QQ` 手动指定 `botUin`。插件会动态获取当前群号和机器人 QQ 号，机器人 QQ 会优先读取 AstrBot `context.robot_id`，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发授权命令时会输出一条受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时会输出 `授权链接UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
 
 ## 参考链接
 
