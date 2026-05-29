@@ -1,5 +1,12 @@
 ﻿# 更新日志
 
+## v1.6.11
+
+### 修复
+
+- 群文件清理在当前事件没有 `api.call_action` 时支持配置 NapCat OneBot HTTP 或 NapCat WebUI 实时调试后备调用，复用 `get_group_root_files`、`get_group_files_by_folder` 和 `delete_group_file` 清理群文件。
+- `qq_official` 只返回 `group_openid` 时不再把它当作数字 QQ 群号，可通过 `清理群文件 数字群号` 或 `group_file_cleanup_group_map` 指定真实群号。
+
 ## v1.6.10
 
 ### 修复

@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.6.10 |
+| 版本 | v1.6.11 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -21,7 +21,7 @@
 | oiapi | 古诗词名句 | `古诗词名句` | 获取名句、作者和作品 |
 | 管理功能 | 数字撤回 | `连续 9-12 位数字` | 自动撤回符合规则的数字消息 |
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、合并转发和 QQ 闪传消息 |
-| 管理功能 | 群文件清理 | `清理群文件` / `群文件清理` | 仅插件配置白名单 QQ 可用，循环扫描并批量清理当前群群文件 |
+| 管理功能 | 群文件清理 | `清理群文件` / `群文件清理` / `清理群文件 数字群号` | 仅插件配置白名单 QQ 可用，循环扫描并批量清理当前群群文件；qq_official 可借用 NapCat OneBot HTTP 或 WebUI 实时调试清理 |
 | 管理功能 | 授权链接 | `授权` / `授权 数字群号` / `授权 数字群号 机器人QQ` | 生成 QQ 群服务授权链接，供群主在安卓/鸿蒙 QQ 打开授权 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫链接，先回复书籍信息再下载并发送到 QQ |
 | oiapi | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 识别番茄小说链接，通过 OIAPI FqRead 下载 txt 并发送到 QQ |
@@ -117,7 +117,14 @@ pycryptodome
 | 配置项 | 说明 |
 | --- | --- |
 | `group_file_cleanup_admin_qq` | 群文件清理功能管理员 QQ 白名单 |
+| `napcat_onebot_http_url` | NapCat OneBot HTTP 地址，用于 qq_official 等没有 `api.call_action` 的适配器后备清理群文件 |
+| `napcat_onebot_access_token` | NapCat OneBot HTTP 的 access_token，没有配置 token 可留空 |
+| `group_file_cleanup_group_map` | qq_official `group_openid=数字QQ群号` 映射，可不配，直接发送 `清理群文件 数字群号` 也能使用 |
+| `napcat_webui_url` | NapCat WebUI 地址，用于复用实时调试接口；未配置 `napcat_onebot_http_url` 时才使用 |
+| `napcat_webui_token` | NapCat WebUI token，用于调用 `/api/Debug/create` 和 `/api/Debug/call` |
 | `番茄小说key` | 调用 `https://oiapi.net/api/FqRead` 的 OIAPI key |
+
+群文件清理优先使用当前适配器的 OneBot 扩展接口 `get_group_root_files`、`get_group_files_by_folder` 和 `delete_group_file`。`qq_official` 事件只返回 `group_openid`，不能直接当作数字 QQ 群号；如果要在官方机器人收到命令时借用 NapCat 清理，优先配置 `napcat_onebot_http_url`，也可以配置 `napcat_webui_url` 复用 NapCat 实时调试接口，并发送 `清理群文件 数字群号`，或在 `group_file_cleanup_group_map` 中配置 `group_openid=数字QQ群号`。
 
 七猫小说下载完成后会临时写入 `功能文件/下载缓存/`，优先通过 AstrBot `File` 组件上传到 QQ，无法使用时再回退 OneBot 本地路径上传。通过 `File` 组件发送时会延迟清理缓存，避免适配器读取前文件被删除；OneBot 回退上传尝试结束后立即删除 txt 文件。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`。txt 文件顶部会写入免责声明，文件发送成功后不再额外发送完成提示，只有发送失败时回复错误原因。
 
