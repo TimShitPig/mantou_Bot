@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from astrbot.api import logger
+from 功能文件.管理功能.权限工具 import 是群文件清理管理员
 
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
@@ -17,9 +18,7 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
     if 命令文本 not in 清理群文件命令:
         return None
 
-    发送者 = 获取发送者QQ(event)
-    管理员列表 = 获取管理员QQ列表(配置)
-    if not 发送者 or 发送者 not in 管理员列表:
+    if not 是群文件清理管理员(event, 配置):
         return "没有权限使用群文件清理"
 
     群号 = 获取群号(event)
@@ -161,36 +160,6 @@ def 获取文件去重键(文件: dict[str, Any]) -> str:
     if not 文件编号:
         return ""
     return f"{文件编号}:{文件.get('busid', '')}"
-
-
-def 获取管理员QQ列表(配置: Any) -> set[str]:
-    if not 配置:
-        return set()
-    值 = 读取字段(配置, "group_file_cleanup_admin_qq") or []
-    if isinstance(值, str):
-        值 = [值]
-    if not isinstance(值, list):
-        return set()
-    return {str(项目).strip() for 项目 in 值 if str(项目).strip()}
-
-
-def 获取发送者QQ(event: Any) -> str:
-    for 方法名 in ("get_sender_id", "get_user_id"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            值 = 方法()
-            if 值:
-                return str(值)
-
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        for 字段名 in ("sender_id", "user_id", "sender"):
-            值 = 读取字段(对象, 字段名)
-            if isinstance(值, dict):
-                值 = 值.get("user_id") or 值.get("id")
-            if 值:
-                return str(值)
-    return ""
 
 
 def 获取群号(event: Any) -> str:

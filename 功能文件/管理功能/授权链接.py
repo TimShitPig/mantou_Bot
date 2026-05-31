@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any
 
 from astrbot.api import logger
+from 功能文件.管理功能.权限工具 import 是群文件清理管理员
 
 
 授权命令 = {"授权"}
@@ -30,6 +31,9 @@ async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = Non
     授权参数 = 提取授权命令参数(命令文本)
     if 授权参数 is None:
         return None
+
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用授权链接"
 
     记录授权事件诊断(event)
 

@@ -196,7 +196,12 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
 def 提取正文(章节: dict[str, Any] | None) -> str:
     if not isinstance(章节, dict):
         return ""
-    return 清理文本(读取任意字段(章节, ("content", "chapter_content", "text", "body")))
+    正文 = 读取任意字段(章节, ("content", "chapter_content", "text", "body"))
+    if 正文 is None:
+        return ""
+    if isinstance(正文, (dict, list)):
+        return json.dumps(正文, ensure_ascii=False)
+    return 解码JSON字符串片段(正文)
 
 
 def 提取书籍编号(文本: str) -> str:
@@ -306,10 +311,17 @@ def 解析字数(值: Any) -> int:
 
 
 def 清理正文(文本: Any) -> str:
-    文本 = str(文本 or "")
+    文本 = 解码JSON字符串片段(文本)
+    文本 = str(文本 or "").replace("\\n", "\n").replace("\\/", "/")
+    文本 = re.sub("<tt-audio\\b.*?</tt-audio>", "", 文本, flags=re.IGNORECASE | re.DOTALL)
+    文本 = re.sub("<script\\b.*?</script>", "", 文本, flags=re.IGNORECASE | re.DOTALL)
+    文本 = re.sub("<style\\b.*?</style>", "", 文本, flags=re.IGNORECASE | re.DOTALL)
     文本 = re.sub("<br\\s*/?>", "\n", 文本, flags=re.IGNORECASE)
-    文本 = re.sub("</p>", "\n", 文本, flags=re.IGNORECASE)
+    文本 = re.sub("</(?:p|div|section|article|h[1-6])>", "\n\n", 文本, flags=re.IGNORECASE)
+    文本 = re.sub("</span>\\s*<span\\b[^>]*>", "", 文本, flags=re.IGNORECASE)
     文本 = 清理文本(文本).replace("\r", "")
+    文本 = re.sub("[ \\t]+\\n", "\n", 文本)
+    文本 = re.sub("\\n[ \\t]+", "\n", 文本)
     文本 = re.sub("\\n{3,}", "\n\n", 文本)
     return 文本.strip()
 

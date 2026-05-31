@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 import aiohttp
 from astrbot.api import logger
+from 功能文件.管理功能.权限工具 import 是群文件清理管理员
 try:
     from astrbot.api import message_components as 消息组件
 except Exception:
@@ -42,10 +43,12 @@ def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> 
     return 生成下载回复流(事件, 来源, 配置)
 
 
-def 处理番茄小说API指令(事件: Any, 命令文本: str) -> str | None:
+def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or '').strip()
     会话键 = 获取API会话键(事件)
     if 文本.lower() == '查看api':
+        if not 是群文件清理管理员(事件, 配置):
+            return '没有权限使用番茄小说API切换'
         待选择API会话[会话键] = time.time()
         当前接口 = 读取当前番茄小说接口()
         return '\n'.join([
@@ -56,6 +59,9 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str) -> str | None:
             f'请在 {API选择等待秒数} 秒内发送 1 或 2 完成切换',
         ])
     if 文本 in API选项 and API选择等待中(会话键):
+        if not 是群文件清理管理员(事件, 配置):
+            待选择API会话.pop(会话键, None)
+            return '没有权限使用番茄小说API切换'
         接口名称 = API选项[文本]
         写入当前番茄小说接口(接口名称)
         待选择API会话.pop(会话键, None)
@@ -383,7 +389,12 @@ def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 目录: lis
         行列表.append('')
         行列表.append(str(章节.get('content') or '【下载失败】').strip())
         行列表.append('')
-    return (文件名, '\n'.join(行列表).encode('utf-8'))
+    return (文件名, 编码TXT内容(行列表))
+
+def 编码TXT内容(行列表: list[str]) -> bytes:
+    文本 = '\n'.join(str(行) for 行 in 行列表)
+    文本 = 文本.replace('\r\n', '\n').replace('\r', '\n')
+    return 文本.replace('\n', '\r\n').encode('utf-8')
 
 def 构造文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
     书名 = 清理文件名(书籍信息.get('title') or f'番茄小说{书籍编号}')
