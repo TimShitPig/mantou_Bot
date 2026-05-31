@@ -37,10 +37,12 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍�
     if not 实际书籍编号:
         return {"success": False, "error": "析API没有识别到书籍ID"}
 
-    详情响应 = await 请求详情(会话, 实际书籍编号)
-    详情数据 = 详情响应.get("data") if isinstance(详情响应, dict) else {}
     书籍信息 = 合并书籍信息(默认书籍信息(实际书籍编号), 基础书籍信息 or {})
-    书籍信息 = 合并书籍信息(书籍信息, 从字典提取书籍信息(详情数据 if isinstance(详情数据, dict) else {}))
+    详情数据: Any = {}
+    if not 有有效书籍详情(书籍信息):
+        详情响应 = await 请求详情(会话, 实际书籍编号)
+        详情数据 = 详情响应.get("data") if isinstance(详情响应, dict) else {}
+        书籍信息 = 合并书籍信息(书籍信息, 从字典提取书籍信息(详情数据 if isinstance(详情数据, dict) else {}))
 
     目录响应 = await 请求目录(会话, 实际书籍编号)
     目录数据 = 目录响应.get("data") if isinstance(目录响应, dict) else 目录响应
@@ -235,6 +237,12 @@ def 生成文本变体(文本: str) -> list[str]:
 
 def 默认书籍信息(书籍编号: str) -> dict[str, Any]:
     return {"book_id": 书籍编号, "title": f"番茄小说{书籍编号}", "author": "未知", "status": "未知", "word_count": "未知", "chapter_count": 0}
+
+
+def 有有效书籍详情(书籍信息: dict[str, Any]) -> bool:
+    标题 = str(书籍信息.get("title") or "")
+    作者 = str(书籍信息.get("author") or "")
+    return bool(标题 and not 标题.startswith("番茄小说") and 作者 and 作者 != "未知")
 
 
 def 合并书籍信息(基础信息: dict[str, Any], 新增信息: dict[str, Any]) -> dict[str, Any]:

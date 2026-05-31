@@ -92,7 +92,8 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     yield '番茄小说下载失败：析API模块不可用'
                     return
                 准备来源 = 解析来源 if 书籍编号 else 来源
-                准备结果 = await 析API番茄小说.准备番茄小说(会话, 准备来源, 书籍编号, {})
+                官方书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源) if 书籍编号 else {}
+                准备结果 = await 析API番茄小说.准备番茄小说(会话, 准备来源, 书籍编号, 官方书籍信息)
                 if not 准备结果.get('success'):
                     yield f"番茄小说下载失败：{限制文本长度(准备结果.get('error') or '析API准备失败', 500)}"
                     return
