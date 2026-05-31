@@ -64,7 +64,7 @@
 ## 功能边界
 
 - 保留 OIAPI 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
-- 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。同一成员在同一个群里成功触发数字撤回 3 次后，调用 OneBot 标准 `set_group_kick` 踢出该成员；只统计数字规则触发，不统计群名片、合并转发、QQ 闪传等其它撤回类型。
+- 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。同一成员在同一个群里被数字撤回模块成功撤回 3 次后，调用 OneBot 标准 `set_group_kick` 踢出该成员；数字、群名片/JSON 卡片、合并转发和 QQ 闪传等本模块处理的撤回类型都计数。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]` 和组件对象字符串中的 `ComponentType.Json`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。
 - 合并转发/聊天记录消息需要撤回当前消息，包括 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward`、`ComponentType.Node`、`ComponentType.Nodes`。

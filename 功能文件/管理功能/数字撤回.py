@@ -21,7 +21,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 数字撤回触发次数: dict[str, int] = {}
-数字撤回模块版本 = "1.9.0"
+数字撤回模块版本 = "1.9.1"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -31,10 +31,9 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
         记录卡片诊断日志(event, 消息文本, 卡片类型)
     if not 是否需要撤回消息(event, 消息文本):
         return False
-    数字触发 = 是否需要撤回数字消息(消息文本)
     撤回成功 = await 尝试撤回当前消息(event)
-    if 撤回成功 and 数字触发:
-        await 记录数字撤回触发并尝试踢出(event)
+    if 撤回成功:
+        await 记录撤回触发并尝试踢出(event)
     return 撤回成功
 
 
@@ -322,7 +321,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
 
-async def 记录数字撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
+async def 记录撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
     if not 是数字ID(群号) or not 是数字ID(用户QQ):
@@ -332,7 +331,7 @@ async def 记录数字撤回触发并尝试踢出(event: AstrMessageEvent) -> No
     计数键 = f"{群号}:{用户QQ}"
     当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
     数字撤回触发次数[计数键] = 当前次数
-    logger.info(f"数字撤回触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}/{数字撤回踢出阈值}")
+    logger.info(f"数字撤回模块触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}/{数字撤回踢出阈值}")
     if 当前次数 < 数字撤回踢出阈值:
         return
 
