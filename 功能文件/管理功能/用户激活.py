@@ -109,6 +109,8 @@ def 解析激活命令(event: Any, 命令文本: str) -> dict[str, Any] | None:
         return {"target_user_id": 被艾特用户, "days": 天数}
 
     目标用户, 天数 = 从命令文本提取用户和天数(文本)
+    if not 目标用户 and 是否只艾特机器人(event):
+        目标用户 = 获取发送者QQ(event)
     return {"target_user_id": 目标用户, "days": 天数}
 
 
@@ -129,35 +131,46 @@ def 从命令文本提取用户和天数(文本: str) -> tuple[str, int]:
 
 def 提取被艾特用户QQ(event: Any) -> str:
     忽略用户 = 获取应忽略At用户(event)
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        消息 = 读取字段(对象, "message")
-        用户 = 从消息段提取At用户(消息, 忽略用户)
-        if 用户:
+    for 用户 in 获取At用户列表(event):
+        if 用户 not in 忽略用户:
             return 用户
     return ""
 
 
-def 从消息段提取At用户(消息: Any, 忽略用户: set[str] | None = None) -> str:
-    忽略用户 = 忽略用户 or set()
+def 是否只艾特机器人(event: Any) -> bool:
+    忽略用户 = 获取应忽略At用户(event)
+    At用户列表 = 获取At用户列表(event)
+    return bool(At用户列表 and 忽略用户 and all(用户 in 忽略用户 for 用户 in At用户列表))
+
+
+def 获取At用户列表(event: Any) -> list[str]:
+    结果: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        消息 = 读取字段(对象, "message")
+        结果.extend(从消息段提取At用户列表(消息))
+        for 字段名 in ("message_str", "raw_message"):
+            结果.extend(从文本提取At用户列表(读取字段(对象, 字段名)))
+    return 去重保序(结果)
+
+
+def 从消息段提取At用户列表(消息: Any) -> list[str]:
     if 消息 is None:
-        return ""
+        return []
     if isinstance(消息, (list, tuple, set)):
+        结果: list[str] = []
         for 消息段 in 消息:
-            用户 = 从消息段提取At用户(消息段, 忽略用户)
-            if 用户:
-                return 用户
-        return ""
+            结果.extend(从消息段提取At用户列表(消息段))
+        return 结果
     if isinstance(消息, dict):
+        结果: list[str] = []
         if 是At类型值(消息.get("type")):
             用户 = 规范化用户编号(消息.get("qq") or 读取字段(消息.get("data"), "qq") or 读取字段(消息.get("data"), "user_id"))
-            if 用户 and 用户 not in 忽略用户:
-                return 用户
-        for 子值 in 消息.values():
-            用户 = 从消息段提取At用户(子值, 忽略用户)
             if 用户:
-                return 用户
-        return ""
+                结果.append(用户)
+        for 子值 in 消息.values():
+            结果.extend(从消息段提取At用户列表(子值))
+        return 结果
     if 是At类型值(读取字段(消息, "type")):
         用户 = 规范化用户编号(
             读取字段(消息, "qq")
@@ -165,9 +178,35 @@ def 从消息段提取At用户(消息: Any, 忽略用户: set[str] | None = None
             or 读取字段(读取字段(消息, "data"), "qq")
             or 读取字段(读取字段(消息, "data"), "user_id")
         )
-        if 用户 and 用户 not in 忽略用户:
-            return 用户
-    return ""
+        return [用户] if 用户 else []
+    return []
+
+
+def 从文本提取At用户列表(文本: Any) -> list[str]:
+    原文 = str(文本 or "")
+    if not 原文:
+        return []
+    结果: list[str] = []
+    for 匹配 in re.finditer(r"\[At:([^\]]+)\]", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    for 匹配 in re.finditer(r"\[CQ:at,[^\]]*qq=([^,\]]+)", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    return 结果
+
+
+def 去重保序(列表: list[str]) -> list[str]:
+    结果: list[str] = []
+    已见: set[str] = set()
+    for 项目 in 列表:
+        if 项目 in 已见:
+            continue
+        已见.add(项目)
+        结果.append(项目)
+    return 结果
 
 
 def 获取应忽略At用户(event: Any) -> set[str]:
