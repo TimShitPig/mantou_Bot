@@ -26,13 +26,14 @@ importlib.invalidate_caches()
 群文件清理功能 = 加载功能模块("功能文件.管理功能.群文件清理")
 七猫小说功能 = 加载功能模块("功能文件.管理功能.七猫小说")
 授权链接功能 = 加载功能模块("功能文件.管理功能.授权链接")
+用户激活功能 = 加载功能模块("功能文件.管理功能.用户激活")
 
 获取古诗词名句回复 = getattr(古诗词名句模块, "获取古诗词名句回复")
 获取疯狂星期四回复 = getattr(疯狂星期四模块, "获取疯狂星期四回复")
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.9.2"
+插件版本 = "1.10.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -49,14 +50,24 @@ class MyPlugin(Star):
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
-        if 命令文本 == "随机英文单词":
-            回复内容 = await 获取随机英文单词回复()
-        elif 命令文本 == "随机一言":
-            回复内容 = await 获取随机一言回复()
-        elif 命令文本 == "疯狂星期四":
-            回复内容 = await 获取疯狂星期四回复()
-        elif 命令文本 == "古诗词名句":
-            回复内容 = await 获取古诗词名句回复()
+        激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config)
+        if 激活回复 is not None:
+            yield event.plain_result(激活回复)
+            event.stop_event()
+            return
+
+        if 用户激活功能.是需激活文本命令(命令文本):
+            激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
+            if 激活拦截 is not None:
+                回复内容 = 激活拦截
+            elif 命令文本 == "随机英文单词":
+                回复内容 = await 获取随机英文单词回复()
+            elif 命令文本 == "随机一言":
+                回复内容 = await 获取随机一言回复()
+            elif 命令文本 == "疯狂星期四":
+                回复内容 = await 获取疯狂星期四回复()
+            elif 命令文本 == "古诗词名句":
+                回复内容 = await 获取古诗词名句回复()
         else:
             回复内容 = 番茄小说模块.处理番茄小说API指令(event, 命令文本, self.config)
             if 回复内容 is None:
@@ -71,6 +82,11 @@ class MyPlugin(Star):
 
                 七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本)
                 if 七猫回复流 is not None:
+                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
+                    if 激活拦截 is not None:
+                        yield event.plain_result(激活拦截)
+                        event.stop_event()
+                        return
                     async for 七猫回复内容 in 七猫回复流:
                         if isinstance(七猫回复内容, str):
                             yield event.plain_result(七猫回复内容)
@@ -81,6 +97,11 @@ class MyPlugin(Star):
 
                 番茄回复流 = 番茄小说模块.获取番茄小说回复流(event, 命令文本, self.config)
                 if 番茄回复流 is not None:
+                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
+                    if 激活拦截 is not None:
+                        yield event.plain_result(激活拦截)
+                        event.stop_event()
+                        return
                     async for 番茄回复内容 in 番茄回复流:
                         if isinstance(番茄回复内容, str):
                             yield event.plain_result(番茄回复内容)

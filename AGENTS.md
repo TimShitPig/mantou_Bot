@@ -64,13 +64,15 @@
 ## 功能边界
 
 - 保留 OIAPI 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
+- 用户激活功能放在 `功能文件/管理功能/用户激活.py`，`main.py` 只负责加载模块并调用 `处理用户激活`、`获取未激活拦截回复`。群文件清理管理员白名单 QQ 可用 `@用户 激活` 或 `@用户 激活 天数` 激活成员，未带天数默认 30 天；激活记录按群和用户保存。未激活用户使用随机英文单词、随机一言、疯狂星期四、古诗词名句、七猫小说下载和番茄小说下载时，只回复 `请查看群公告查看激活方法`。管理员不受激活门禁限制。
+- 用户激活存储默认写入 `功能文件/下载缓存/用户激活.json`；插件配置 `user_activation_database_enabled=true` 时使用 MySQL，连接信息来自 `_conf_schema.json` 里的 `user_activation_database_*` 配置，并自动创建包含 `group_id`、`user_id`、`expires_at`、`updated_at` 的激活记录表。数据库未配置完整或依赖缺失时不能放行未激活用户。
 - 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。同一成员在同一个群里被数字撤回模块成功撤回 3 次后，调用 OneBot 标准 `set_group_kick` 踢出该成员；数字、群名片/JSON 卡片、合并转发和 QQ 闪传等本模块处理的撤回类型都计数。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]` 和组件对象字符串中的 `ComponentType.Json`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。
 - 合并转发/聊天记录消息需要撤回当前消息，包括 OneBot `forward`/`node` 和 AstrBot `ComponentType.Forward`、`ComponentType.Node`、`ComponentType.Nodes`。
 - QQ 闪传消息需要撤回当前消息，只识别展示文本 `QQ闪传` 和 aiocqhttp 显示文本 `该消息类型暂不支持查看`；普通文件、OneBot `file`、`[CQ:file,...]`、AstrBot `ComponentType.File` 不应撤回。
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
-- 群文件清理、授权链接、`查看API` 和 `1` / `2` API 切换只能由插件配置 `group_file_cleanup_admin_qq` 里的 QQ 使用；这是群文件清理管理员白名单，不等同于群管理员。
+- 群文件清理、授权链接、用户激活、`查看API` 和 `1` / `2` API 切换只能由插件配置 `group_file_cleanup_admin_qq` 里的 QQ 使用；这是群文件清理管理员白名单，不等同于群管理员。
 - 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再有限并发逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
 - 群文件清理不连接 NapCat、NapCat WebUI 或其他外部机器人实例；NapCat 实时调试只能作为确认 OneBot action 参数和返回结构的参考。插件只能调用当前 AstrBot 适配器暴露的 `api.call_action`，QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号。
 - 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件。

@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.9.2 |
+| 版本 | v1.10.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -23,6 +23,7 @@
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、合并转发和 QQ 闪传消息 |
 | 管理功能 | 群文件清理 | `清理群文件` / `群文件清理` | 仅群文件清理管理员白名单 QQ 可用，循环扫描并发清理当前群群文件 |
 | 管理功能 | 授权链接 | `授权` / `授权 数字群号` / `授权 数字群号 机器人QQ` | 仅群文件清理管理员白名单 QQ 可用，生成 QQ 群服务授权链接 |
+| 管理功能 | 用户激活 | `@用户 激活` / `@用户 激活 天数` / `激活 @用户` | 仅群文件清理管理员白名单 QQ 可用，未填写天数默认 30 天 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫链接，先回复书籍信息再下载并发送到 QQ |
 | API功能 / OIAPI | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 识别番茄小说链接，按指令手动选择 OIAPI 或析API 下载 |
 | API功能 | 番茄小说API切换 | `查看API` 后发送 `1` / `2` | 仅群文件清理管理员白名单 QQ 可用，查看并切换番茄小说下载 API |
@@ -98,6 +99,7 @@
     └── 管理功能/
         ├── 消息工具.py
         ├── 授权链接.py
+        ├── 用户激活.py
         ├── 七猫小说.py
         ├── 群文件清理.py
         └── 数字撤回.py
@@ -116,14 +118,22 @@
 ```text
 aiohttp
 pycryptodome
+pymysql
 ```
 
 ## 插件配置
 
 | 配置项 | 说明 |
 | --- | --- |
-| `group_file_cleanup_admin_qq` | 群文件清理管理员 QQ 白名单，可使用群文件清理、授权链接和番茄小说API切换 |
+| `group_file_cleanup_admin_qq` | 群文件清理管理员 QQ 白名单，可使用群文件清理、授权链接、番茄小说API切换和用户激活 |
 | `番茄小说key` | 调用 `https://oiapi.net/api/FqRead` 的 OIAPI key |
+| `user_activation_database_enabled` | 是否启用 MySQL 保存用户激活记录，填写 `true` 启用，默认 `false` 使用本地 JSON |
+| `user_activation_database_host` / `user_activation_database_port` | 用户激活 MySQL 地址和端口 |
+| `user_activation_database_user` / `user_activation_database_password` | 用户激活 MySQL 用户名和密码 |
+| `user_activation_database_name` / `user_activation_database_table` | 用户激活 MySQL 数据库名和表名 |
+| `user_activation_local_file` | 未启用数据库时的本地激活记录文件，留空默认使用 `功能文件/下载缓存/用户激活.json` |
+
+群文件清理管理员白名单内的 QQ 可发送 `@用户 激活` 或 `激活 @用户` 激活成员，未填写天数时默认 30 天；也可发送 `@用户 激活 90` 激活 90 天。激活记录按群和用户保存。未激活用户使用随机英文单词、随机一言、疯狂星期四、古诗词名句、七猫小说下载或番茄小说下载时，插件会回复 `请查看群公告查看激活方法`。管理员不受激活门禁限制。数据库启用后插件会连接 MySQL 并自动创建 `group_id`、`user_id`、`expires_at`、`updated_at` 字段的激活记录表；数据库未启用时使用本地 JSON 文件持久化。
 
 群文件清理只调用当前 AstrBot 适配器暴露的 OneBot 扩展接口 `get_group_root_files`、`get_group_files_by_folder` 和 `delete_group_file`，不会连接 NapCat 或 NapCat WebUI。删除阶段使用有限并发逐个调用 `delete_group_file`，默认同时删除 200 个文件；`qq_official` 事件只返回 `group_openid`，不能直接当作数字 QQ 群号；当前适配器没有 `api.call_action` 或返回非数字群号时，插件会输出 `群文件清理事件诊断` 日志用于查看真实事件参数。
 
