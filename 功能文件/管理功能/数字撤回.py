@@ -18,7 +18,10 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     re.IGNORECASE,
 )
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
-数字撤回模块版本 = "1.5.29"
+数字ID规则 = re.compile(r"[1-9]\d{4,11}")
+数字撤回踢出阈值 = 3
+数字撤回触发次数: dict[str, int] = {}
+数字撤回模块版本 = "1.9.0"
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -28,7 +31,11 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
         记录卡片诊断日志(event, 消息文本, 卡片类型)
     if not 是否需要撤回消息(event, 消息文本):
         return False
-    return await 尝试撤回当前消息(event)
+    数字触发 = 是否需要撤回数字消息(消息文本)
+    撤回成功 = await 尝试撤回当前消息(event)
+    if 撤回成功 and 数字触发:
+        await 记录数字撤回触发并尝试踢出(event)
+    return 撤回成功
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -315,6 +322,39 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
 
+async def 记录数字撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
+    群号 = 获取群号(event)
+    用户QQ = 获取发送者QQ(event)
+    if not 是数字ID(群号) or not 是数字ID(用户QQ):
+        logger.info(f"数字撤回踢出跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+        return
+
+    计数键 = f"{群号}:{用户QQ}"
+    当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
+    数字撤回触发次数[计数键] = 当前次数
+    logger.info(f"数字撤回触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}/{数字撤回踢出阈值}")
+    if 当前次数 < 数字撤回踢出阈值:
+        return
+
+    if await 尝试踢出成员(event, 群号, 用户QQ):
+        数字撤回触发次数.pop(计数键, None)
+
+
+async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> bool:
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        logger.warning(f"数字撤回踢出失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
+        return False
+
+    try:
+        await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
+        logger.info(f"数字撤回触发 {数字撤回踢出阈值} 次，已踢出成员：group_id={群号}, user_id={用户QQ}")
+        return True
+    except Exception as exc:
+        logger.warning(f"数字撤回踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
+        return False
+
+
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
@@ -327,6 +367,46 @@ def 获取当前消息编号(event: AstrMessageEvent) -> Any:
         if 消息编号:
             return 消息编号
     return None
+
+
+def 获取群号(event: AstrMessageEvent) -> str:
+    for 方法名 in ("get_group_id", "get_group"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        if isinstance(值, dict):
+            值 = 值.get("group_id") or 值.get("id")
+        if 值:
+            return str(值)
+    return ""
+
+
+def 获取发送者QQ(event: AstrMessageEvent) -> str:
+    for 方法名 in ("get_sender_id", "get_user_id"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "sender_id") or 读取字段(对象, "user_id") or 读取字段(对象, "sender")
+        if isinstance(值, dict):
+            值 = 值.get("user_id") or 值.get("id")
+        if 值:
+            return str(值)
+    return ""
+
+
+def 是数字ID(值: Any) -> bool:
+    return bool(数字ID规则.fullmatch(str(值 or "").strip()))
 
 
 def 读取字段(对象: Any, 字段名: str) -> Any:
@@ -408,3 +488,20 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
         raise RuntimeError("当前 bot 没有 delete_msg 撤回接口")
     await 撤回方法(message_id=消息编号)
     return True
+
+
+async def 使用_set_group_kick踢出(bot: Any, 群号: str, 用户QQ: str) -> bool:
+    群号值 = int(群号)
+    用户QQ值 = int(用户QQ)
+    踢出方法 = getattr(bot, "set_group_kick", None)
+    if callable(踢出方法):
+        await 踢出方法(group_id=群号值, user_id=用户QQ值, reject_add_request=False)
+        return True
+
+    api = getattr(bot, "api", None)
+    调用动作 = getattr(api, "call_action", None)
+    if callable(调用动作):
+        await 调用动作("set_group_kick", group_id=群号值, user_id=用户QQ值, reject_add_request=False)
+        return True
+
+    raise RuntimeError("当前 bot 没有 set_group_kick 踢出接口")
