@@ -71,7 +71,7 @@
 - QQ 闪传消息需要撤回当前消息，只识别展示文本 `QQ闪传` 和 aiocqhttp 显示文本 `该消息类型暂不支持查看`；普通文件、OneBot `file`、`[CQ:file,...]`、AstrBot `ComponentType.File` 不应撤回。
 - OneBot 11 标准撤回接口是单条 `delete_msg`，没有标准批量撤回接口；除非确认适配器支持扩展接口，否则只循环单条撤回，不写臆造的批量接口。
 - 群文件清理只能由插件配置 `group_file_cleanup_admin_qq` 里的 QQ 使用；这是插件管理员白名单，不等同于群管理员。
-- 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
+- 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再有限并发逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
 - 群文件清理不连接 NapCat、NapCat WebUI 或其他外部机器人实例；NapCat 实时调试只能作为确认 OneBot action 参数和返回结构的参考。插件只能调用当前 AstrBot 适配器暴露的 `api.call_action`，QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号。
 - 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件。
 - 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。

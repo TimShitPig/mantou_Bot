@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -9,6 +10,7 @@ from astrbot.api import logger
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
 群文件清理诊断最大长度 = 8000
+群文件删除并发数 = 20
 
 
 async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> str | None:
@@ -49,16 +51,19 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
             if not 待删文件:
                 break
 
-            本轮成功 = 0
-            for 文件 in 待删文件:
-                try:
-                    await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
+            logger.info(
+                f"群文件清理开始并发删除：group_id={群号}, count={len(待删文件)}, concurrency={群文件删除并发数}"
+            )
+            本轮结果 = await 并发删除群文件列表(bot, 群号, 待删文件)
+            本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"])
+            for 结果 in 本轮结果:
+                文件 = 结果["文件"]
+                if 结果["成功"]:
                     删除成功 += 1
-                    本轮成功 += 1
-                except Exception as exc:
-                    删除失败 += 1
-                    已失败文件.add(获取文件去重键(文件))
-                    logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={exc}")
+                    continue
+                删除失败 += 1
+                已失败文件.add(获取文件去重键(文件))
+                logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
 
             if 本轮成功 == 0:
                 break
@@ -67,6 +72,20 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
     except Exception as exc:
         logger.warning(f"群文件清理失败：group_id={群号}, error={exc}")
         return f"群文件清理失败：{exc}"
+
+
+async def 并发删除群文件列表(bot: Any, 群号: Any, 文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    信号量 = asyncio.Semaphore(群文件删除并发数)
+
+    async def 删除单个文件(文件: dict[str, Any]) -> dict[str, Any]:
+        async with 信号量:
+            try:
+                await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
+                return {"文件": 文件, "成功": True, "错误": None}
+            except Exception as exc:
+                return {"文件": 文件, "成功": False, "错误": exc}
+
+    return await asyncio.gather(*(删除单个文件(文件) for 文件 in 文件列表))
 
 
 async def 获取全部群文件(bot: Any, 群号: Any) -> list[dict[str, Any]]:
