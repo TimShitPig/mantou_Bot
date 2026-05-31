@@ -31,9 +31,9 @@
 - 如果没有版本升级，提交信息使用：`更新功能，变更说明`。
 - 删除明显无用的旧代码，避免保留历史撤回、重复文本清理等不再需要的逻辑。
 - `main.py` 只用来调用：只保留插件注册、模块加载和功能分发，不写具体功能实现、消息解析或业务判断。
-- 消息解析与管理功能判断放到 `功能文件/管理功能/` 内，oiapi 请求逻辑放到 `功能文件/oiapi/` 内。
+- 消息解析与管理功能判断放到 `功能文件/管理功能/` 内，API 请求逻辑放到 `功能文件/API功能/` 内；OIAPI 接口放到 `功能文件/API功能/OIAPI/`，析API 备用接口放到 `功能文件/API功能/析API/`。
 - 数字撤回判断只能使用可见文本或 text 消息段，禁止把事件对象、非文本消息段或 ID 字段 `str()` 后参与数字匹配。
-- 插件配置必须使用 AstrBot `_conf_schema.json`；新增配置时同步说明 README、CHANGELOG 和 AGENTS。
+- 插件配置必须使用 AstrBot `_conf_schema.json`；新增配置时同步说明 README、CHANGELOG 和 AGENTS。运行时状态可以写入 `功能文件/下载缓存/`，但不能伪装成插件配置项。
 
 ## 排错原则
 
@@ -63,7 +63,7 @@
 
 ## 功能边界
 
-- 保留 oiapi 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
+- 保留 OIAPI 功能：`随机英文单词`、`随机一言`、`疯狂星期四`、`古诗词名句`。
 - 数字撤回只撤回当前触发消息，不拉取历史消息，不撤回之前的消息。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]` 和组件对象字符串中的 `ComponentType.Json`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。
@@ -74,6 +74,7 @@
 - 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再有限并发逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
 - 群文件清理不连接 NapCat、NapCat WebUI 或其他外部机器人实例；NapCat 实时调试只能作为确认 OneBot action 参数和返回结构的参考。插件只能调用当前 AstrBot 适配器暴露的 `api.call_action`，QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号。
 - 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件。
+- 群文件清理删除阶段默认并发数为 200；如果以后降低或提高并发，必须同步 README 和 CHANGELOG。
 - 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。
 - 授权链接功能放在 `功能文件/管理功能/授权链接.py`，`main.py` 只调用 `处理授权链接`。触发指令固定为 `授权`、`授权 数字群号` 或 `授权 数字群号 机器人QQ`；后两者用于适配器取不到数字 `groupCode` 或数字 `botUin` 时手动指定。只生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...`，JSON 参数必须包含 `page_name=ai_group_service_agreement_pop_page`、数字 `groupCode`、数字 `botUin`、字符串 `botUid`、`screen=1`，再整体 URL 编码。
 - 授权链接的 `groupCode` 和 `botUin` 必须优先从当前事件、AstrBot `context.robot_id`、事件 JSON、消息段 JSON、URL 编码 JSON 和 bot API 动态获取；`botUid` 必须优先从事件 JSON 或通过 `getUidFromUin`、适配器等价扩展接口实时转换，转换返回可能是字符串、纯数字 UID、字典、列表或 QQ 到 UID 映射。取不到 `botUid` 时应明确提示失败，不要生成缺参链接或硬编码 UID。授权命令触发时应保留受控诊断日志 `授权链接事件诊断`，UID 转换接口有返回但无法识别时应保留 `授权链接UID转换响应未识别`，便于按真实响应补规则；授权链接只支持群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
@@ -85,8 +86,9 @@
 - 七猫小说下载必须记录受控日志：开始下载、章节进度、章节完成汇总、发送方式、缓存文件删除结果；章节进度日志不能逐章刷屏，应按约 10% 分段输出。
 - 七猫小说发送文件必须全部走本地缓存文件上传：运行时自动创建 `功能文件/下载缓存/`；QQ 官方群聊直接提示平台限制，其他场景生成 txt 后优先使用 AstrBot `File` 组件；无法使用时再按裸文件路径、`file://` URI 调用 OneBot 上传接口。每个候选失败要写日志，`File` 组件路径延迟清理缓存，OneBot 回退上传尝试结束后必须删除缓存 txt。
 - `shing-yu/7mao-novel-downloader` 已归档且 README 说明 4.0+ 开源部分为 AGPL-3.0、核心模块部分代码私有；本仓库不要直接复制其私有下载逻辑，七猫功能应以本地自测接口结果维护。
-- 番茄小说功能放在 `功能文件/oiapi/番茄小说.py`，只识别番茄明文链接和 JSON 卡片中的链接，不做 `番茄小说 书名` 搜索命令。插件配置项名必须是 `番茄小说key`，只支持单个 key。请求 `https://oiapi.net/api/FqRead` 时必须带 `key` 和 `type=json`。
-- 番茄小说识别 `book_id=数字`、`fanqienovel.com/数字`、`changdunovel.com/...book_id=数字`、`changdunovel.com/t/短码` 和 15-25 位书籍 ID；短链需要先请求一次并从最终地址或页面文本提取 `book_id`。书籍详情优先请求 `https://api.fqnovel.com/novel_ug/share/landing_page`，再用 `https://fanqienovel.com/page/{book_id}` 补齐，最后用 `FqRead method=chapters` 补章节数。不引入 App 签名、Cookie、Argus/Ladon/Gorgon、状态持久化、备用源和 key 轮换逻辑。
+- 番茄小说主功能放在 `功能文件/API功能/OIAPI/番茄小说.py`，析API功能放在 `功能文件/API功能/析API/番茄小说.py`；只识别番茄明文链接和 JSON 卡片中的链接，不做 `番茄小说 书名` 搜索命令。插件配置项名必须是 `番茄小说key`，只支持单个 key。请求 `https://oiapi.net/api/FqRead` 时必须带 `key` 和 `type=json`。
+- 番茄小说 API 通过指令手动切换：发送 `查看API` 列出站点，120 秒内发送 `1` 切换 OIAPI，发送 `2` 切换析API；当前选择写入 `功能文件/下载缓存/番茄小说API.json`。禁止 OIAPI 失败后自动切换析API，当前接口失败时必须直接返回当前接口错误。
+- 番茄小说识别 `book_id=数字`、`fanqienovel.com/数字`、`changdunovel.com/...book_id=数字`、`changdunovel.com/t/短码` 和 15-25 位书籍 ID；短链需要先请求一次并从最终地址或页面文本提取 `book_id`。书籍详情优先请求 `https://api.fqnovel.com/novel_ug/share/landing_page`，再用 `https://fanqienovel.com/page/{book_id}` 补齐，最后用 `FqRead method=chapters` 补章节数；选择析API时使用 `https://biek.top//api/fq.php` 的 `search`、`detail`、`catalog`、`content` 接口下载同一本书。不引入 App 签名、Cookie、Argus/Ladon/Gorgon、状态持久化和 key 轮换逻辑。
 - 番茄小说下载前必须先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，不发封面图片，外部提示不回复简介，但 txt 文件头部必须保留简介。正文优先按章节范围请求 `method=chapter`，超过约 500 万字时分段请求并合并成一个 txt，范围失败时拆成小范围或单章，失败章写 `【下载失败】`。
 - 番茄小说文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`，txt 顶部必须写入与七猫一致的免责声明。发送文件必须走本地缓存：QQ 官方群聊直接提示平台限制，其他场景写入 `功能文件/下载缓存/` 后优先使用 AstrBot `File` 组件发送，无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。`File` 组件路径延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
 - 数字撤回规则：消息中出现独立连续 9 到 12 位数字就触发。

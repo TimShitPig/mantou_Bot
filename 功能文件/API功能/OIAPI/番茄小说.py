@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import re
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -13,13 +14,22 @@ try:
     from astrbot.api import message_components as 消息组件
 except Exception:
     消息组件 = None
+try:
+    from 功能文件.API功能.析API import 番茄小说 as 析API番茄小说
+except Exception as 异常:
+    析API番茄小说 = None
+    logger.warning(f'析API番茄小说模块加载失败：error={异常}')
 OIAPI地址 = 'https://oiapi.net/api/FqRead'
 落地页接口地址 = 'https://api.fqnovel.com/novel_ug/share/landing_page'
-下载缓存目录 = Path(__file__).resolve().parents[1] / '下载缓存'
+下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
+API状态文件 = 下载缓存目录 / '番茄小说API.json'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
 每段最大字数 = 5000000
 进度分段数 = 10
 文件组件缓存删除延迟 = 600
+API选择等待秒数 = 120
+API选项 = {'1': 'OIAPI', '2': '析API'}
+待选择API会话: dict[str, float] = {}
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
 长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
@@ -31,11 +41,31 @@ def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> 
         return None
     return 生成下载回复流(事件, 来源, 配置)
 
+
+def 处理番茄小说API指令(事件: Any, 命令文本: str) -> str | None:
+    文本 = str(命令文本 or '').strip()
+    会话键 = 获取API会话键(事件)
+    if 文本.lower() == '查看api':
+        待选择API会话[会话键] = time.time()
+        当前接口 = 读取当前番茄小说接口()
+        return '\n'.join([
+            f'当前番茄小说API：{当前接口}',
+            '请选择番茄小说API：',
+            '1. OIAPI（oiapi.net，需要配置 番茄小说key）',
+            '2. 析API（biek.top，不需要 番茄小说key）',
+            f'请在 {API选择等待秒数} 秒内发送 1 或 2 完成切换',
+        ])
+    if 文本 in API选项 and API选择等待中(会话键):
+        接口名称 = API选项[文本]
+        写入当前番茄小说接口(接口名称)
+        待选择API会话.pop(会话键, None)
+        return f'番茄小说API已切换为：{接口名称}'
+    return None
+
+
 async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncIterator[str]:
     接口key = 获取番茄小说key(配置)
-    if not 接口key:
-        yield '番茄小说下载失败：缺少插件配置 番茄小说key'
-        return
+    接口来源 = 读取当前番茄小说接口()
     书籍编号 = 提取书籍编号(来源)
     解析来源 = 来源
     章节列表: list[dict[str, Any]] = []
@@ -43,30 +73,55 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
     成功章节列表: list[dict[str, Any]] = []
     文件名 = ''
     书籍信息: dict[str, Any] = {}
+    已发送 = False
+    发送错误 = ''
     try:
         超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=90)
         async with aiohttp.ClientSession(timeout=超时, headers=浏览器请求头) as 会话:
             if not 书籍编号:
                 解析来源 = await 展开番茄短链(会话, 来源)
                 书籍编号 = 提取书籍编号(解析来源)
-            if not 书籍编号:
-                yield '没有识别到番茄小说链接'
-                return
-            书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源)
-            章节列表 = await 获取章节目录(会话, 书籍编号, 接口key)
-            if not 章节列表:
-                章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
-            if not 章节列表:
-                yield '番茄小说下载失败：没有获取到章节目录'
-                return
-            书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
-            logger.info(f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
-            yield 格式化下载提示(书籍信息, len(章节列表))
-            章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
-            成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
-            if not 成功章节列表:
-                yield '番茄小说下载失败：没有获取到可用章节正文'
-                return
+            if 接口来源 == '析API':
+                if 析API番茄小说 is None:
+                    yield '番茄小说下载失败：析API模块不可用'
+                    return
+                准备来源 = 解析来源 if 书籍编号 else 来源
+                准备结果 = await 析API番茄小说.准备番茄小说(会话, 准备来源, 书籍编号, {})
+                if not 准备结果.get('success'):
+                    yield f"番茄小说下载失败：{限制文本长度(准备结果.get('error') or '析API准备失败', 500)}"
+                    return
+                书籍编号 = str(准备结果.get('book_id') or 书籍编号)
+                书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
+                章节列表 = 准备结果.get('chapters') or []
+                logger.info(f"番茄小说开始下载：source=析API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                yield 格式化下载提示(书籍信息, len(章节列表))
+                章节结果列表 = await 析API番茄小说.下载全部章节(会话, 书籍编号, 章节列表)
+                成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+                if not 成功章节列表:
+                    yield '番茄小说下载失败：析API没有获取到可用章节正文'
+                    return
+            else:
+                if not 接口key:
+                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API，请发送“查看API”后选择 2'
+                    return
+                if not 书籍编号:
+                    yield '没有识别到番茄小说链接'
+                    return
+                书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源)
+                章节列表 = await 获取章节目录(会话, 书籍编号, 接口key)
+                if not 章节列表:
+                    章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
+                if not 章节列表:
+                    yield '番茄小说下载失败：OIAPI没有获取到章节目录'
+                    return
+                书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
+                logger.info(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                yield 格式化下载提示(书籍信息, len(章节列表))
+                章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
+                成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+                if not 成功章节列表:
+                    yield '番茄小说下载失败：OIAPI没有获取到可用章节正文'
+                    return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
             logger.info(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
             发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容)
@@ -88,6 +143,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
         return
     书名 = 书籍信息.get('title') or f'番茄小说{书籍编号}'
     yield '\n'.join([f'番茄小说文件发送失败：{书名}', f'章节：成功 {len(成功章节列表)} / 总计 {len(章节列表)}', f'文件：{文件名}', f'原因：{限制文本长度(发送错误, 500)}', '下载缓存文件已删除，没有保存在本地'])
+
 
 async def 获取书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, 来源: str) -> dict[str, Any]:
     书籍信息 = 默认书籍信息(书籍编号)
@@ -496,6 +552,42 @@ def 生成文本变体(文本: str) -> list[str]:
 def 获取番茄小说key(配置: Any) -> str:
     值 = 读取字段(配置, '番茄小说key')
     return str(值 or '').strip()
+
+def API选择等待中(会话键: str) -> bool:
+    开始时间 = 待选择API会话.get(会话键)
+    if not 开始时间:
+        return False
+    if time.time() - 开始时间 <= API选择等待秒数:
+        return True
+    待选择API会话.pop(会话键, None)
+    return False
+
+def 读取当前番茄小说接口() -> str:
+    try:
+        if API状态文件.exists():
+            数据 = json.loads(API状态文件.read_text(encoding='utf-8'))
+            return 规范化番茄小说接口(数据.get('current_api'))
+    except Exception as 异常:
+        logger.warning(f'番茄小说API状态读取失败：file={API状态文件}, error={异常}')
+    return 'OIAPI'
+
+def 写入当前番茄小说接口(接口名称: str) -> None:
+    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    当前接口 = 规范化番茄小说接口(接口名称)
+    数据 = {'current_api': 当前接口, 'updated_at': int(time.time())}
+    API状态文件.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding='utf-8')
+    logger.info(f'番茄小说API已切换：api={当前接口}, file={API状态文件}')
+
+def 规范化番茄小说接口(值: Any) -> str:
+    文本 = str(值 or '').strip().lower()
+    if 文本 in ('析api', 'xiapi', 'xapi', '析', 'xi', '2'):
+        return '析API'
+    return 'OIAPI'
+
+def 获取API会话键(事件: Any) -> str:
+    群号 = 获取群号(事件)
+    用户QQ = 获取用户QQ(事件)
+    return f'{群号 or "private"}:{用户QQ or "unknown"}'
 
 def 默认书籍信息(书籍编号: str) -> dict[str, Any]:
     return {'book_id': 书籍编号, 'title': f'番茄小说{书籍编号}', 'author': '未知', 'status': '未知', 'word_count': '未知', 'chapter_count': 0}

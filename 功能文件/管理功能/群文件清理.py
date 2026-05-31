@@ -10,7 +10,7 @@ from astrbot.api import logger
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
 群文件清理诊断最大长度 = 8000
-群文件删除并发数 = 20
+群文件删除并发数 = 200
 
 
 async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> str | None:
