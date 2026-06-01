@@ -32,42 +32,67 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.14.0"
+群管功能模块版本 = "1.15.0"
 踢出命令集合 = {"踢", "踢了"}
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
-    目标用户 = 解析踢出目标用户(event, 命令文本)
-    if 目标用户 is None:
+    目标用户列表 = 解析踢出目标用户列表(event, 命令文本)
+    if 目标用户列表 is None:
         return None
 
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户踢出"
 
-    if not 目标用户:
+    if not 目标用户列表:
         return "用户踢出失败：请 @ 要踢出的用户"
 
     群号 = 获取群号(event)
     if not 群号:
         return "用户踢出失败：只能在群聊中使用"
-    if not 是数字ID(群号) or not 是数字ID(目标用户):
+    if not 是数字ID(群号) or any(not 是数字ID(目标用户) for 目标用户 in 目标用户列表):
         return "用户踢出失败：当前适配器没有返回数字群号或用户QQ"
 
-    try:
-        await 尝试踢出指定成员(event, 群号, 目标用户)
-    except Exception as exc:
-        logger.warning(f"用户踢出失败：group_id={群号}, user_id={目标用户}, error={exc}")
-        return f"用户踢出失败：{exc}"
+    成功用户: list[str] = []
+    失败用户: list[tuple[str, Exception]] = []
+    for 目标用户 in 目标用户列表:
+        try:
+            await 尝试踢出指定成员(event, 群号, 目标用户)
+            成功用户.append(目标用户)
+            logger.info(f"用户踢出成功：group_id={群号}, user_id={目标用户}")
+        except Exception as exc:
+            失败用户.append((目标用户, exc))
+            logger.warning(f"用户踢出失败：group_id={群号}, user_id={目标用户}, error={exc}")
 
-    logger.info(f"用户踢出成功：group_id={群号}, user_id={目标用户}")
-    return f"已踢出用户：{目标用户}"
+    if len(目标用户列表) == 1:
+        if 成功用户:
+            return f"已踢出用户：{成功用户[0]}"
+        return f"用户踢出失败：{失败用户[0][1]}"
+
+    return 格式化批量踢出结果(成功用户, 失败用户)
 
 
-def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str | None:
+def 解析踢出目标用户列表(event: AstrMessageEvent, 命令文本: str) -> list[str] | None:
     命令 = 提取踢出命令文本(event, 命令文本)
     if 命令 not in 踢出命令集合:
         return None
-    return 提取被艾特用户QQ(event) or ""
+    return 提取被艾特用户QQ列表(event)
+
+
+def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str | None:
+    目标用户列表 = 解析踢出目标用户列表(event, 命令文本)
+    if 目标用户列表 is None:
+        return None
+    return 目标用户列表[0] if 目标用户列表 else ""
+
+
+def 格式化批量踢出结果(成功用户: list[str], 失败用户: list[tuple[str, Exception]]) -> str:
+    行列表 = [f"用户踢出完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
+    if 成功用户:
+        行列表.append(f"已踢出用户：{格式化用户列表(成功用户)}")
+    if 失败用户:
+        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+    return "\n".join(行列表)
 
 
 def 提取踢出命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
@@ -91,12 +116,18 @@ def 提取踢出命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
 
 
 def 提取被艾特用户QQ(event: AstrMessageEvent) -> str:
+    用户列表 = 提取被艾特用户QQ列表(event)
+    return 用户列表[0] if 用户列表 else ""
+
+
+def 提取被艾特用户QQ列表(event: AstrMessageEvent) -> list[str]:
     忽略用户 = 获取应忽略At用户(event)
+    结果: list[str] = []
     for 用户 in 获取At用户列表(event):
         if 用户 in 忽略用户:
             continue
-        return 用户
-    return ""
+        结果.append(用户)
+    return 去重保序(结果)
 
 
 def 获取应忽略At用户(event: AstrMessageEvent) -> set[str]:
@@ -229,6 +260,10 @@ def 去重保序(列表: list[str]) -> list[str]:
         已见.add(项目)
         结果.append(项目)
     return 结果
+
+
+def 格式化用户列表(用户列表: list[str]) -> str:
+    return "、".join(用户列表)
 
 
 def 规范化用户编号(值: Any) -> str:

@@ -28,7 +28,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 最长激活天数 = 3650
 下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
 默认本地激活文件 = 下载缓存目录 / "用户激活.json"
-用户操作命令规则 = re.compile(r"^(?:(?:用户)?(?:激活|重置)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,3}$")
+用户操作命令规则 = re.compile(r"^(?:(?:用户)?(?:激活|重置)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,20}$")
 用户操作命令开头 = ("激活", "用户激活", "重置", "用户重置", "查询时间", "用户查询时间")
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
@@ -48,8 +48,8 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户激活"
 
-    目标用户 = 激活参数.get("target_user_id") or ""
-    if not 目标用户:
+    目标用户列表 = 获取目标用户列表(激活参数)
+    if not 目标用户列表:
         动作名 = "重置" if 操作 == "重置" else "激活"
         return f"用户{动作名}失败：请 @ 要{动作名}的用户"
 
@@ -59,12 +59,20 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
         return f"用户{动作名}失败：只能在群聊中{动作名}用户"
 
     if 操作 == "重置":
-        try:
-            await 删除激活记录(配置, 群号, 目标用户)
-        except Exception as exc:
-            logger.warning(f"用户激活重置失败：group_id={群号}, user_id={目标用户}, error={exc}")
-            return f"用户重置失败：{exc}"
-        return f"已取消用户激活：{目标用户}"
+        成功用户: list[str] = []
+        失败用户: list[tuple[str, Exception]] = []
+        for 目标用户 in 目标用户列表:
+            try:
+                await 删除激活记录(配置, 群号, 目标用户)
+                成功用户.append(目标用户)
+            except Exception as exc:
+                失败用户.append((目标用户, exc))
+                logger.warning(f"用户激活重置失败：group_id={群号}, user_id={目标用户}, error={exc}")
+        if len(目标用户列表) == 1:
+            if 成功用户:
+                return f"已取消用户激活：{成功用户[0]}"
+            return f"用户重置失败：{失败用户[0][1]}"
+        return 格式化批量重置结果(成功用户, 失败用户)
 
     天数 = 安全整数(激活参数.get("days"), 默认激活天数)
     if 天数 <= 0:
@@ -73,34 +81,50 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
         return f"用户激活失败：激活天数不能超过 {最长激活天数} 天"
 
     到期时间 = int(time.time()) + 天数 * 86400
-    try:
-        await 写入激活记录(配置, 群号, 目标用户, 到期时间)
-    except Exception as exc:
-        logger.warning(f"用户激活写入失败：group_id={群号}, user_id={目标用户}, error={exc}")
-        return f"用户激活失败：{exc}"
+    成功用户: list[str] = []
+    失败用户: list[tuple[str, Exception]] = []
+    for 目标用户 in 目标用户列表:
+        try:
+            await 写入激活记录(配置, 群号, 目标用户, 到期时间)
+            成功用户.append(目标用户)
+        except Exception as exc:
+            失败用户.append((目标用户, exc))
+            logger.warning(f"用户激活写入失败：group_id={群号}, user_id={目标用户}, error={exc}")
 
-    return "\n".join(
-        [
-            f"已激活用户：{目标用户}",
-            f"有效期：{天数} 天",
-            f"到期时间：{格式化时间戳(到期时间)}",
-        ]
-    )
+    if len(目标用户列表) == 1:
+        if 成功用户:
+            return "\n".join(
+                [
+                    f"已激活用户：{成功用户[0]}",
+                    f"有效期：{天数} 天",
+                    f"到期时间：{格式化时间戳(到期时间)}",
+                ]
+            )
+        return f"用户激活失败：{失败用户[0][1]}"
+
+    return 格式化批量激活结果(成功用户, 失败用户, 天数, 到期时间)
 
 
 async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: Any) -> str:
     发送者 = 获取发送者QQ(event)
-    目标用户 = str(激活参数.get("target_user_id") or 发送者 or "").strip()
-    if not 目标用户:
+    目标用户列表 = 获取目标用户列表(激活参数)
+    if not 目标用户列表 and 发送者:
+        目标用户列表 = [发送者]
+    if not 目标用户列表:
         return "用户查询失败：没有获取到用户QQ"
 
-    if 目标用户 != 发送者 and not 是群文件清理管理员(event, 配置):
+    if any(目标用户 != 发送者 for 目标用户 in 目标用户列表) and not 是群文件清理管理员(event, 配置):
         return "没有权限查询其他用户激活时间"
 
+    群号 = 获取群号(event) or "private"
+    结果列表 = [await 获取单用户查询时间回复(配置, 群号, 目标用户) for 目标用户 in 目标用户列表]
+    return "\n\n".join(结果列表)
+
+
+async def 获取单用户查询时间回复(配置: Any, 群号: str, 目标用户: str) -> str:
     if 目标用户 in 获取群文件清理管理员QQ列表(配置):
         return "\n".join([f"用户：{目标用户}", "状态：管理员，无需激活"])
 
-    群号 = 获取群号(event) or "private"
     try:
         激活记录 = await 读取激活记录(配置, 群号, 目标用户)
     except Exception as exc:
@@ -122,6 +146,48 @@ async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: A
             f"剩余时间：{格式化剩余时间(剩余秒数)}",
         ]
     )
+
+
+def 获取目标用户列表(激活参数: dict[str, Any]) -> list[str]:
+    目标用户列表 = 激活参数.get("target_user_ids")
+    if isinstance(目标用户列表, list):
+        return 去重保序([str(用户).strip() for 用户 in 目标用户列表 if str(用户).strip()])
+
+    目标用户 = str(激活参数.get("target_user_id") or "").strip()
+    return [目标用户] if 目标用户 else []
+
+
+def 格式化批量激活结果(
+    成功用户: list[str],
+    失败用户: list[tuple[str, Exception]],
+    天数: int,
+    到期时间: int,
+) -> str:
+    行列表 = [f"用户激活完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
+    if 成功用户:
+        行列表.extend(
+            [
+                f"已激活用户：{格式化用户列表(成功用户)}",
+                f"有效期：{天数} 天",
+                f"到期时间：{格式化时间戳(到期时间)}",
+            ]
+        )
+    if 失败用户:
+        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+    return "\n".join(行列表)
+
+
+def 格式化批量重置结果(成功用户: list[str], 失败用户: list[tuple[str, Exception]]) -> str:
+    行列表 = [f"用户重置完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
+    if 成功用户:
+        行列表.append(f"已取消用户激活：{格式化用户列表(成功用户)}")
+    if 失败用户:
+        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+    return "\n".join(行列表)
+
+
+def 格式化用户列表(用户列表: list[str]) -> str:
+    return "、".join(用户列表)
 
 
 async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
@@ -179,18 +245,25 @@ def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> di
         return None
 
     At用户列表 = 获取At用户列表(event)
-    数字列表 = [int(匹配.group(0)) for 匹配 in 数字规则.finditer(文本)]
-    目标用户, 天数 = 从命令文本提取用户和天数(文本)
+    手动用户列表, 天数 = 从命令文本提取用户列表和天数(文本, 操作)
 
-    被艾特用户 = 提取被艾特用户QQ(event, At用户列表, context)
-    if 被艾特用户:
-        return {"action": 操作, "target_user_id": 被艾特用户, "days": 数字列表[0] if 数字列表 else 天数}
-    if 目标用户:
-        return {"action": 操作, "target_user_id": 目标用户, "days": 天数}
-    if At用户列表:
-        return {"action": 操作, "target_user_id": At用户列表[0], "days": 数字列表[0] if 数字列表 else 天数}
+    被艾特用户列表 = 提取被艾特用户QQ列表(event, At用户列表, context)
+    if 被艾特用户列表:
+        return 构造用户操作参数(操作, 被艾特用户列表, 天数)
+    if 手动用户列表:
+        return 构造用户操作参数(操作, 手动用户列表, 天数)
 
-    return {"action": 操作, "target_user_id": 目标用户, "days": 天数}
+    return 构造用户操作参数(操作, [], 天数)
+
+
+def 构造用户操作参数(操作: str, 用户列表: list[str], 天数: int) -> dict[str, Any]:
+    用户列表 = 去重保序([用户 for 用户 in 用户列表 if 用户])
+    return {
+        "action": 操作,
+        "target_user_id": 用户列表[0] if 用户列表 else "",
+        "target_user_ids": 用户列表,
+        "days": 天数,
+    }
 
 
 def 提取用户操作(文本: str) -> str:
@@ -205,29 +278,51 @@ def 提取用户操作(文本: str) -> str:
 
 
 def 从命令文本提取用户和天数(文本: str) -> tuple[str, int]:
+    用户列表, 天数 = 从命令文本提取用户列表和天数(文本, 提取用户操作(文本))
+    return (用户列表[0] if 用户列表 else "", 天数)
+
+
+def 从命令文本提取用户列表和天数(文本: str, 操作: str) -> tuple[list[str], int]:
     项目列表 = 文本.split()
     if len(项目列表) < 2:
-        return "", 默认激活天数
+        return [], 从命令头提取天数(文本)
 
-    目标用户 = str(项目列表[1]).strip()
-    if not 用户编号规则.fullmatch(目标用户):
-        return "", 默认激活天数
+    用户列表: list[str] = []
+    天数 = 从命令头提取天数(文本)
+    for 项目 in 项目列表[1:]:
+        项目 = str(项目).strip()
+        if 用户编号规则.fullmatch(项目):
+            用户列表.append(项目)
+            continue
+        if 操作 == "激活" and 数字规则.fullmatch(项目):
+            天数 = 安全整数(项目, 天数)
+    return 去重保序(用户列表), 天数
 
-    天数 = 默认激活天数
-    if len(项目列表) >= 3:
-        天数 = 安全整数(项目列表[2], 默认激活天数)
-    return 目标用户, 天数
+
+def 从命令头提取天数(文本: str) -> int:
+    头部 = str(文本 or "").split(maxsplit=1)[0]
+    匹配 = re.search(r"(?:用户)?激活(\d+)$", 头部)
+    if 匹配:
+        return 安全整数(匹配.group(1), 默认激活天数)
+    return 默认激活天数
 
 
 def 提取被艾特用户QQ(event: Any, At用户列表: list[str] | None = None, context: Any = None) -> str:
+    用户列表 = 提取被艾特用户QQ列表(event, At用户列表, context)
+    return 用户列表[0] if 用户列表 else ""
+
+
+def 提取被艾特用户QQ列表(event: Any, At用户列表: list[str] | None = None, context: Any = None) -> list[str]:
     用户列表 = At用户列表 or 获取At用户列表(event)
     if not 用户列表:
-        return ""
+        return []
     忽略用户 = 获取应忽略At用户(event, context)
+    结果: list[str] = []
     for 用户 in 用户列表:
-        if 用户 not in 忽略用户:
-            return 用户
-    return ""
+        if 用户 in 忽略用户:
+            continue
+        结果.append(用户)
+    return 去重保序(结果)
 
 
 def 获取At用户列表(event: Any) -> list[str]:
@@ -374,6 +469,7 @@ def 记录用户激活诊断(event: Any, 命令文本: str, 激活参数: dict[s
             f"sender={获取发送者QQ(event)}, "
             f"action={激活参数.get('action')}, "
             f"target={激活参数.get('target_user_id')}, "
+            f"targets={激活参数.get('target_user_ids')}, "
             f"days={激活参数.get('days')}, "
             f"at_users={获取At用户列表(event)}, "
             f"ignored_at={list(获取应忽略At用户(event, context))}, "
