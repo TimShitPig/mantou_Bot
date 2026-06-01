@@ -102,19 +102,22 @@ async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: A
 
     群号 = 获取群号(event) or "private"
     try:
-        到期时间 = await 读取激活到期时间(配置, 群号, 目标用户)
+        激活记录 = await 读取激活记录(配置, 群号, 目标用户)
     except Exception as exc:
         logger.warning(f"用户激活查询失败：group_id={群号}, user_id={目标用户}, error={exc}")
         return f"用户查询失败：{exc}"
 
+    到期时间 = 安全整数(激活记录.get("expires_at") if 激活记录 else 0, 0)
     if 到期时间 <= 0:
         return "\n".join([f"用户：{目标用户}", "状态：未激活"])
 
+    激活时间 = 安全整数(激活记录.get("updated_at"), 0)
     剩余秒数 = max(0, int(到期时间) - int(time.time()))
     return "\n".join(
         [
             f"用户：{目标用户}",
             "状态：已激活",
+            f"激活时间：{格式化时间戳(激活时间) if 激活时间 > 0 else '未知'}",
             f"到期时间：{格式化时间戳(到期时间)}",
             f"剩余时间：{格式化剩余时间(剩余秒数)}",
         ]
@@ -415,9 +418,14 @@ def 是At类型值(值: Any) -> bool:
 
 
 async def 读取激活到期时间(配置: Any, 群号: str, 用户编号: str) -> int:
+    记录 = await 读取激活记录(配置, 群号, 用户编号)
+    return 安全整数(记录.get("expires_at") if 记录 else 0, 0)
+
+
+async def 读取激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
     if 使用数据库存储(配置):
-        return await asyncio.to_thread(读取数据库激活到期时间, 配置, 群号, 用户编号)
-    return 读取本地激活到期时间(配置, 群号, 用户编号)
+        return await asyncio.to_thread(读取数据库激活记录, 配置, 群号, 用户编号)
+    return 读取本地激活记录(配置, 群号, 用户编号)
 
 
 async def 写入激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
@@ -434,15 +442,18 @@ async def 删除激活记录(配置: Any, 群号: str, 用户编号: str) -> Non
     删除本地激活记录(配置, 群号, 用户编号)
 
 
-def 读取本地激活到期时间(配置: Any, 群号: str, 用户编号: str) -> int:
+def 读取本地激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
     数据 = 读取本地激活数据(配置)
     记录 = 数据.get(激活记录键(群号, 用户编号))
     if not isinstance(记录, dict):
-        return 0
+        return {}
     到期时间 = 安全整数(记录.get("expires_at"), 0)
     if 到期时间 < int(time.time()):
-        return 0
-    return 到期时间
+        return {}
+    return {
+        "expires_at": 到期时间,
+        "updated_at": 安全整数(记录.get("updated_at"), 0),
+    }
 
 
 def 写入本地激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
@@ -486,20 +497,25 @@ def 获取本地激活文件路径(配置: Any) -> Path:
     return 默认本地激活文件
 
 
-def 读取数据库激活到期时间(配置: Any, 群号: str, 用户编号: str) -> int:
+def 读取数据库激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
     数据库配置 = 获取数据库配置(配置)
     with 打开数据库连接(数据库配置) as 连接:
         确保数据库表(连接, 数据库配置["table"])
         with 连接.cursor() as 游标:
             游标.execute(
-                f"SELECT expires_at FROM `{数据库配置['table']}` WHERE group_id=%s AND user_id=%s LIMIT 1",
+                f"SELECT expires_at, updated_at FROM `{数据库配置['table']}` WHERE group_id=%s AND user_id=%s LIMIT 1",
                 (str(群号), str(用户编号)),
             )
             记录 = 游标.fetchone()
     if not 记录:
-        return 0
+        return {}
     到期时间 = 安全整数(记录[0], 0)
-    return 到期时间 if 到期时间 >= int(time.time()) else 0
+    if 到期时间 < int(time.time()):
+        return {}
+    return {
+        "expires_at": 到期时间,
+        "updated_at": 安全整数(记录[1] if len(记录) > 1 else 0, 0),
+    }
 
 
 def 写入数据库激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
