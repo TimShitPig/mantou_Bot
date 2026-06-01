@@ -21,7 +21,7 @@ importlib.invalidate_caches()
 权限工具 = 加载功能模块("功能文件.管理功能.权限工具")
 析API番茄小说模块 = 加载功能模块("功能文件.API功能.析API.番茄小说")
 番茄小说模块 = 加载功能模块("功能文件.API功能.OIAPI.番茄小说")
-数字撤回功能 = 加载功能模块("功能文件.管理功能.数字撤回")
+群管功能 = 加载功能模块("功能文件.管理功能.群管功能")
 消息工具 = 加载功能模块("功能文件.管理功能.消息工具")
 群文件清理功能 = 加载功能模块("功能文件.管理功能.群文件清理")
 七猫小说功能 = 加载功能模块("功能文件.管理功能.七猫小说")
@@ -33,7 +33,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.13.0"
+插件版本 = "1.14.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -76,7 +76,10 @@ class MyPlugin(Star):
                 回复内容 = await 授权链接功能.处理授权链接(event, 命令文本, self.context, self.config)
 
             if 回复内容 is None:
-                if await 数字撤回功能.处理数字撤回(event):
+                回复内容 = await 群管功能.处理用户踢出(event, 命令文本, self.config)
+
+            if 回复内容 is None:
+                if await 群管功能.处理数字撤回(event):
                     event.stop_event()
                     return
 

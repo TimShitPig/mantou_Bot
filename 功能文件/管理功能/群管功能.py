@@ -3,8 +3,19 @@
 import re
 from typing import Any
 
-from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent
+try:
+    from astrbot.api import logger
+except Exception:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+try:
+    from astrbot.api.event import AstrMessageEvent
+except Exception:
+    AstrMessageEvent = Any
+
+from 功能文件.管理功能.权限工具 import 是群文件清理管理员
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
@@ -21,7 +32,210 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 数字撤回触发次数: dict[str, int] = {}
-数字撤回模块版本 = "1.9.1"
+群管功能模块版本 = "1.14.0"
+踢出命令集合 = {"踢", "踢了"}
+
+
+async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
+    目标用户 = 解析踢出目标用户(event, 命令文本)
+    if 目标用户 is None:
+        return None
+
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用用户踢出"
+
+    if not 目标用户:
+        return "用户踢出失败：请 @ 要踢出的用户"
+
+    群号 = 获取群号(event)
+    if not 群号:
+        return "用户踢出失败：只能在群聊中使用"
+    if not 是数字ID(群号) or not 是数字ID(目标用户):
+        return "用户踢出失败：当前适配器没有返回数字群号或用户QQ"
+
+    try:
+        await 尝试踢出指定成员(event, 群号, 目标用户)
+    except Exception as exc:
+        logger.warning(f"用户踢出失败：group_id={群号}, user_id={目标用户}, error={exc}")
+        return f"用户踢出失败：{exc}"
+
+    logger.info(f"用户踢出成功：group_id={群号}, user_id={目标用户}")
+    return f"已踢出用户：{目标用户}"
+
+
+def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str | None:
+    命令 = 提取踢出命令文本(event, 命令文本)
+    if 命令 not in 踢出命令集合:
+        return None
+    return 提取被艾特用户QQ(event) or ""
+
+
+def 提取踢出命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
+    候选列表: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    候选列表.append(str(命令文本 or ""))
+    候选列表.extend(获取原始文本候选(event))
+
+    for 候选 in 候选列表:
+        文本 = 清理踢出命令文本(候选)
+        if 文本 in 踢出命令集合:
+            return 文本
+    return ""
+
+
+def 提取被艾特用户QQ(event: AstrMessageEvent) -> str:
+    忽略用户 = 获取应忽略At用户(event)
+    for 用户 in 获取At用户列表(event):
+        if 用户 in 忽略用户:
+            continue
+        return 用户
+    return ""
+
+
+def 获取应忽略At用户(event: AstrMessageEvent) -> set[str]:
+    结果: set[str] = set()
+    消息对象 = getattr(event, "message_obj", None)
+    bot = getattr(event, "bot", None)
+    for 对象 in (event, 消息对象, bot):
+        if 对象 is None:
+            continue
+        for 字段名 in ("self_id", "bot_id", "robot_id", "uin", "qq"):
+            用户 = 规范化用户编号(读取字段(对象, 字段名))
+            if 用户:
+                结果.add(用户)
+    return 结果
+
+
+def 获取At用户列表(event: AstrMessageEvent) -> list[str]:
+    结果: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message", "components", "content"):
+            结果.extend(从消息段提取At用户列表(读取字段(对象, 字段名)))
+        for 字段名 in ("message_str", "raw_message"):
+            结果.extend(从文本提取At用户列表(读取字段(对象, 字段名)))
+    return 去重保序(结果)
+
+
+def 从消息段提取At用户列表(消息: Any) -> list[str]:
+    if 消息 is None:
+        return []
+    if isinstance(消息, (list, tuple, set)):
+        结果: list[str] = []
+        for 消息段 in 消息:
+            结果.extend(从消息段提取At用户列表(消息段))
+        return 结果
+    if isinstance(消息, dict):
+        结果: list[str] = []
+        if 是否At类型值(消息.get("type")):
+            用户 = 规范化用户编号(
+                消息.get("qq")
+                or 读取字段(消息.get("data"), "qq")
+                or 读取字段(消息.get("data"), "user_id")
+            )
+            if 用户:
+                结果.append(用户)
+        for 子值 in 消息.values():
+            结果.extend(从消息段提取At用户列表(子值))
+        return 结果
+    if 是否At类型值(读取字段(消息, "type")):
+        用户 = 规范化用户编号(
+            读取字段(消息, "qq")
+            or 读取字段(消息, "user_id")
+            or 读取字段(读取字段(消息, "data"), "qq")
+            or 读取字段(读取字段(消息, "data"), "user_id")
+        )
+        return [用户] if 用户 else []
+    return []
+
+
+def 从消息段提取非At文本(消息: Any) -> str:
+    if 消息 is None:
+        return ""
+    if isinstance(消息, str):
+        return 消息
+    if isinstance(消息, (list, tuple, set)):
+        return "".join(从消息段提取非At文本(消息段) for 消息段 in 消息)
+    if isinstance(消息, dict):
+        if 是否At类型值(消息.get("type")):
+            return ""
+        消息类型 = str(消息.get("type") or "").strip().lower()
+        if 消息类型 in {"text", "plain"}:
+            数据 = 消息.get("data")
+            if isinstance(数据, dict):
+                return str(数据.get("text") or 数据.get("content") or "")
+            return str(消息.get("text") or 消息.get("content") or "")
+        return ""
+
+    消息类型 = str(读取字段(消息, "type") or "")
+    if 是否At类型值(消息类型):
+        return ""
+    消息类型小写 = 消息类型.lower()
+    if 消息类型小写 in {"text", "plain"} or 消息类型小写.endswith((".plain", ".text")):
+        return str(读取字段(消息, "text") or 读取字段(消息, "content") or "")
+    return ""
+
+
+def 从文本提取At用户列表(文本: Any) -> list[str]:
+    原文 = str(文本 or "")
+    if not 原文:
+        return []
+    结果: list[str] = []
+    for 匹配 in re.finditer(r"\[At:([^\]]+)\]", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    for 匹配 in re.finditer(r"\[CQ:at,[^\]]*qq=([^,\]]+)", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    for 匹配 in re.finditer(r"@[^\s()]{1,80}\(([A-Za-z0-9_-]{5,64})\)", 原文):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    return 结果
+
+
+def 清理踢出命令文本(文本: Any) -> str:
+    结果 = str(文本 or "")
+    结果 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
+    结果 = re.sub(r"\[CQ:at,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
+    结果 = re.sub(r"\[At:[^\]]+\]", "", 结果, flags=re.IGNORECASE)
+    结果 = 结果.replace("＠", "@").strip()
+    while 结果.startswith("@"):
+        新结果 = re.sub(r"^@[^\s]+\s*", "", 结果, count=1)
+        if 新结果 == 结果:
+            break
+        结果 = 新结果.strip()
+    结果 = re.sub(r"\s+", " ", 结果).strip()
+    return 结果
+
+
+def 去重保序(列表: list[str]) -> list[str]:
+    结果: list[str] = []
+    已见: set[str] = set()
+    for 项目 in 列表:
+        if 项目 in 已见:
+            continue
+        已见.add(项目)
+        结果.append(项目)
+    return 结果
+
+
+def 规范化用户编号(值: Any) -> str:
+    文本 = str(值 or "").strip()
+    if not 文本 or 文本.lower() in {"all", "qq_official"}:
+        return ""
+    return 文本 if 数字ID规则.fullmatch(文本) else ""
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
@@ -352,6 +566,13 @@ async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str
     except Exception as exc:
         logger.warning(f"数字撤回踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
         return False
+
+
+async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> None:
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        raise RuntimeError("当前事件缺少 bot 实例")
+    await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
 
 
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
