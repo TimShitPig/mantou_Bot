@@ -28,7 +28,8 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 最长激活天数 = 3650
 下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
 默认本地激活文件 = 下载缓存目录 / "用户激活.json"
-激活命令规则 = re.compile(r"^(?:用户)?激活(?:\d+)?(?:\s+\S+){0,3}$")
+用户操作命令规则 = re.compile(r"^(?:用户)?(?:激活|重置)(?:\d+)?(?:\s+\S+){0,3}$")
+用户操作命令开头 = ("激活", "用户激活", "重置", "用户重置")
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
 数据库表名规则 = re.compile(r"^[A-Za-z0-9_]{1,64}$")
@@ -43,19 +44,30 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户激活"
 
+    操作 = 激活参数.get("action") or "激活"
     目标用户 = 激活参数.get("target_user_id") or ""
     if not 目标用户:
-        return "用户激活失败：请 @ 要激活的用户"
+        动作名 = "重置" if 操作 == "重置" else "激活"
+        return f"用户{动作名}失败：请 @ 要{动作名}的用户"
+
+    群号 = 获取群号(event)
+    if not 群号:
+        动作名 = "重置" if 操作 == "重置" else "激活"
+        return f"用户{动作名}失败：只能在群聊中{动作名}用户"
+
+    if 操作 == "重置":
+        try:
+            await 删除激活记录(配置, 群号, 目标用户)
+        except Exception as exc:
+            logger.warning(f"用户激活重置失败：group_id={群号}, user_id={目标用户}, error={exc}")
+            return f"用户重置失败：{exc}"
+        return f"已取消用户激活：{目标用户}"
 
     天数 = 安全整数(激活参数.get("days"), 默认激活天数)
     if 天数 <= 0:
         return "用户激活失败：激活天数必须是正整数"
     if 天数 > 最长激活天数:
         return f"用户激活失败：激活天数不能超过 {最长激活天数} 天"
-
-    群号 = 获取群号(event)
-    if not 群号:
-        return "用户激活失败：只能在群聊中激活用户"
 
     到期时间 = int(time.time()) + 天数 * 86400
     try:
@@ -113,17 +125,18 @@ def 提取激活命令文本(event: Any, 命令文本: str) -> str:
 
     for 候选 in 候选列表:
         文本 = 清理激活命令文本(候选)
-        if 文本 and (文本.startswith("激活") or 文本.startswith("用户激活")):
+        if 文本 and 文本.startswith(用户操作命令开头):
             return 文本
     return ""
 
 
 def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
     文本 = 提取激活命令文本(event, 命令文本)
-    if not 文本 or not 激活命令规则.fullmatch(文本):
+    if not 文本 or not 用户操作命令规则.fullmatch(文本):
         return None
 
-    if not (文本.startswith("激活") or 文本.startswith("用户激活")):
+    操作 = 提取用户操作(文本)
+    if not 操作:
         return None
 
     At用户列表 = 获取At用户列表(event)
@@ -132,13 +145,22 @@ def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> di
 
     被艾特用户 = 提取被艾特用户QQ(event, At用户列表, context)
     if 被艾特用户:
-        return {"target_user_id": 被艾特用户, "days": 数字列表[0] if 数字列表 else 天数}
+        return {"action": 操作, "target_user_id": 被艾特用户, "days": 数字列表[0] if 数字列表 else 天数}
     if 目标用户:
-        return {"target_user_id": 目标用户, "days": 天数}
+        return {"action": 操作, "target_user_id": 目标用户, "days": 天数}
     if At用户列表:
-        return {"target_user_id": At用户列表[0], "days": 数字列表[0] if 数字列表 else 天数}
+        return {"action": 操作, "target_user_id": At用户列表[0], "days": 数字列表[0] if 数字列表 else 天数}
 
-    return {"target_user_id": 目标用户, "days": 天数}
+    return {"action": 操作, "target_user_id": 目标用户, "days": 天数}
+
+
+def 提取用户操作(文本: str) -> str:
+    头部 = str(文本 or "").split(maxsplit=1)[0]
+    if 头部.startswith("用户激活") or 头部.startswith("激活"):
+        return "激活"
+    if 头部.startswith("用户重置") or 头部.startswith("重置"):
+        return "重置"
+    return ""
 
 
 def 从命令文本提取用户和天数(文本: str) -> tuple[str, int]:
@@ -309,6 +331,7 @@ def 记录用户激活诊断(event: Any, 命令文本: str, 激活参数: dict[s
             "用户激活诊断："
             f"command={限制长度(命令文本, 120)}, "
             f"sender={获取发送者QQ(event)}, "
+            f"action={激活参数.get('action')}, "
             f"target={激活参数.get('target_user_id')}, "
             f"days={激活参数.get('days')}, "
             f"at_users={获取At用户列表(event)}, "
@@ -366,6 +389,13 @@ async def 写入激活记录(配置: Any, 群号: str, 用户编号: str, 到期
     写入本地激活记录(配置, 群号, 用户编号, 到期时间)
 
 
+async def 删除激活记录(配置: Any, 群号: str, 用户编号: str) -> None:
+    if 使用数据库存储(配置):
+        await asyncio.to_thread(删除数据库激活记录, 配置, 群号, 用户编号)
+        return
+    删除本地激活记录(配置, 群号, 用户编号)
+
+
 def 读取本地激活到期时间(配置: Any, 群号: str, 用户编号: str) -> int:
     数据 = 读取本地激活数据(配置)
     记录 = 数据.get(激活记录键(群号, 用户编号))
@@ -387,6 +417,15 @@ def 写入本地激活记录(配置: Any, 群号: str, 用户编号: str, 到期
         "expires_at": int(到期时间),
         "updated_at": int(time.time()),
     }
+    路径.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def 删除本地激活记录(配置: Any, 群号: str, 用户编号: str) -> None:
+    路径 = 获取本地激活文件路径(配置)
+    if not 路径.exists():
+        return
+    数据 = 读取本地激活数据(配置)
+    数据.pop(激活记录键(群号, 用户编号), None)
     路径.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -437,6 +476,18 @@ def 写入数据库激活记录(配置: Any, 群号: str, 用户编号: str, 到
                 ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), updated_at=VALUES(updated_at)
                 """,
                 (str(群号), str(用户编号), int(到期时间), int(time.time())),
+            )
+        连接.commit()
+
+
+def 删除数据库激活记录(配置: Any, 群号: str, 用户编号: str) -> None:
+    数据库配置 = 获取数据库配置(配置)
+    with 打开数据库连接(数据库配置) as 连接:
+        确保数据库表(连接, 数据库配置["table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"DELETE FROM `{数据库配置['table']}` WHERE group_id=%s AND user_id=%s",
+                (str(群号), str(用户编号)),
             )
         连接.commit()
 
