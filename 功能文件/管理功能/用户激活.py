@@ -20,7 +20,7 @@ try:
 except Exception:
     Comp = None
 
-from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 获取发送者QQ
+from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 获取发送者QQ, 获取群文件清理管理员QQ列表
 
 
 未激活提示 = "请查看群公告查看激活方法"
@@ -28,8 +28,8 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 最长激活天数 = 3650
 下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
 默认本地激活文件 = 下载缓存目录 / "用户激活.json"
-用户操作命令规则 = re.compile(r"^(?:用户)?(?:激活|重置)(?:\d+)?(?:\s+\S+){0,3}$")
-用户操作命令开头 = ("激活", "用户激活", "重置", "用户重置")
+用户操作命令规则 = re.compile(r"^(?:(?:用户)?(?:激活|重置)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,3}$")
+用户操作命令开头 = ("激活", "用户激活", "重置", "用户重置", "查询时间", "用户查询时间")
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
 数据库表名规则 = re.compile(r"^[A-Za-z0-9_]{1,64}$")
@@ -41,10 +41,13 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
     if 激活参数 is None:
         return None
     记录用户激活诊断(event, 命令文本, 激活参数, context)
+    操作 = 激活参数.get("action") or "激活"
+    if 操作 == "查询":
+        return await 处理查询时间(event, 激活参数, 配置)
+
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户激活"
 
-    操作 = 激活参数.get("action") or "激活"
     目标用户 = 激活参数.get("target_user_id") or ""
     if not 目标用户:
         动作名 = "重置" if 操作 == "重置" else "激活"
@@ -81,6 +84,39 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
             f"已激活用户：{目标用户}",
             f"有效期：{天数} 天",
             f"到期时间：{格式化时间戳(到期时间)}",
+        ]
+    )
+
+
+async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: Any) -> str:
+    发送者 = 获取发送者QQ(event)
+    目标用户 = str(激活参数.get("target_user_id") or 发送者 or "").strip()
+    if not 目标用户:
+        return "用户查询失败：没有获取到用户QQ"
+
+    if 目标用户 != 发送者 and not 是群文件清理管理员(event, 配置):
+        return "没有权限查询其他用户激活时间"
+
+    if 目标用户 in 获取群文件清理管理员QQ列表(配置):
+        return "\n".join([f"用户：{目标用户}", "状态：管理员，无需激活"])
+
+    群号 = 获取群号(event) or "private"
+    try:
+        到期时间 = await 读取激活到期时间(配置, 群号, 目标用户)
+    except Exception as exc:
+        logger.warning(f"用户激活查询失败：group_id={群号}, user_id={目标用户}, error={exc}")
+        return f"用户查询失败：{exc}"
+
+    if 到期时间 <= 0:
+        return "\n".join([f"用户：{目标用户}", "状态：未激活"])
+
+    剩余秒数 = max(0, int(到期时间) - int(time.time()))
+    return "\n".join(
+        [
+            f"用户：{目标用户}",
+            "状态：已激活",
+            f"到期时间：{格式化时间戳(到期时间)}",
+            f"剩余时间：{格式化剩余时间(剩余秒数)}",
         ]
     )
 
@@ -160,6 +196,8 @@ def 提取用户操作(文本: str) -> str:
         return "激活"
     if 头部.startswith("用户重置") or 头部.startswith("重置"):
         return "重置"
+    if 头部.startswith("用户查询时间") or 头部.startswith("查询时间"):
+        return "查询"
     return ""
 
 
@@ -611,3 +649,18 @@ def 限制长度(值: Any, 最大长度: int = 2000) -> str:
 
 def 格式化时间戳(时间戳: int) -> str:
     return datetime.fromtimestamp(int(时间戳)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def 格式化剩余时间(秒数: int) -> str:
+    秒数 = max(0, int(秒数))
+    天数, 余数 = divmod(秒数, 86400)
+    小时, 余数 = divmod(余数, 3600)
+    分钟, _ = divmod(余数, 60)
+    结果: list[str] = []
+    if 天数:
+        结果.append(f"{天数} 天")
+    if 小时:
+        结果.append(f"{小时} 小时")
+    if 分钟 or not 结果:
+        结果.append(f"{分钟} 分钟")
+    return " ".join(结果)
