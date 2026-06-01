@@ -128,17 +128,16 @@ def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> di
 
     At用户列表 = 获取At用户列表(event)
     数字列表 = [int(匹配.group(0)) for 匹配 in 数字规则.finditer(文本)]
-    if 是否At唤醒激活本人(event, 文本, At用户列表, context):
-        return {"target_user_id": 获取发送者QQ(event), "days": 数字列表[0] if 数字列表 else 默认激活天数}
+    目标用户, 天数 = 从命令文本提取用户和天数(文本)
 
     被艾特用户 = 提取被艾特用户QQ(event, At用户列表, context)
     if 被艾特用户:
-        天数 = 数字列表[0] if 数字列表 else 默认激活天数
-        return {"target_user_id": 被艾特用户, "days": 天数}
+        return {"target_user_id": 被艾特用户, "days": 数字列表[0] if 数字列表 else 天数}
+    if 目标用户:
+        return {"target_user_id": 目标用户, "days": 天数}
+    if At用户列表:
+        return {"target_user_id": At用户列表[0], "days": 数字列表[0] if 数字列表 else 天数}
 
-    目标用户, 天数 = 从命令文本提取用户和天数(文本)
-    if not 目标用户 and 是否只艾特机器人(event, context):
-        目标用户 = 获取发送者QQ(event)
     return {"target_user_id": 目标用户, "days": 天数}
 
 
@@ -158,35 +157,14 @@ def 从命令文本提取用户和天数(文本: str) -> tuple[str, int]:
 
 
 def 提取被艾特用户QQ(event: Any, At用户列表: list[str] | None = None, context: Any = None) -> str:
+    用户列表 = At用户列表 or 获取At用户列表(event)
+    if not 用户列表:
+        return ""
     忽略用户 = 获取应忽略At用户(event, context)
-    for 用户 in (At用户列表 or 获取At用户列表(event)):
+    for 用户 in 用户列表:
         if 用户 not in 忽略用户:
             return 用户
     return ""
-
-
-def 是否At唤醒激活本人(event: Any, 命令文本: str, At用户列表: list[str], context: Any = None) -> bool:
-    if str(命令文本 or "").strip() not in {"激活", "用户激活"}:
-        return False
-    if 读取字段(event, "is_atbot"):
-        return True
-    原始文本 = " ".join(获取原始文本候选(event))
-    if "[At:机器人]" in 原始文本 or "[At:qq_official]" in 原始文本:
-        return True
-    if len(At用户列表) != 1:
-        return False
-    if bool(读取字段(event, "is_at_or_wake_command") or 读取字段(event, "is_wake")):
-        return True
-    忽略用户 = 获取应忽略At用户(event, context)
-    if 忽略用户 and At用户列表[0] in 忽略用户:
-        return True
-    return False
-
-
-def 是否只艾特机器人(event: Any, context: Any = None) -> bool:
-    忽略用户 = 获取应忽略At用户(event, context)
-    At用户列表 = 获取At用户列表(event)
-    return bool(At用户列表 and 忽略用户 and all(用户 in 忽略用户 for 用户 in At用户列表))
 
 
 def 获取At用户列表(event: Any) -> list[str]:
@@ -293,6 +271,10 @@ def 从文本提取At用户列表(文本: Any) -> list[str]:
         if 用户:
             结果.append(用户)
     for 匹配 in re.finditer(r"\[CQ:at,[^\]]*qq=([^,\]]+)", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    for 匹配 in re.finditer(r"@[^\s()]{1,80}\(([A-Za-z0-9_-]{5,64})\)", 原文):
         用户 = 规范化用户编号(匹配.group(1))
         if 用户:
             结果.append(用户)
