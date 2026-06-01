@@ -1,5 +1,13 @@
 ﻿# 更新日志
 
+## v1.10.2
+
+### 修复
+
+- 用户激活 @ 解析对齐旧项目实现，兼容 `message`、`components`、`content` 组件字段和 `message_obj.raw_message` 中的 `[CQ:at]` / `[At:QQ]`。
+- `@机器人 激活` 兼容 `is_atbot`、`is_wake`、`is_at_or_wake_command`、`context.robot_id` 和 `[At:机器人]` 标记，按发送者本人激活。
+- 激活命令触发时输出受控 `用户激活诊断` 日志，便于继续按真实消息段补规则。
+
 ## v1.10.1
 
 ### 修复

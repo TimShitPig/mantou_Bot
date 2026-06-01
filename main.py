@@ -33,7 +33,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.10.1"
+插件版本 = "1.10.2"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -50,7 +50,7 @@ class MyPlugin(Star):
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
-        激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config)
+        激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
         if 激活回复 is not None:
             yield event.plain_result(激活回复)
             event.stop_event()

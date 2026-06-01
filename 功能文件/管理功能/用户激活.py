@@ -15,6 +15,11 @@ except Exception:
 
     logger = logging.getLogger(__name__)
 
+try:
+    from astrbot.api import message_components as Comp
+except Exception:
+    Comp = None
+
 from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 获取发送者QQ
 
 
@@ -30,10 +35,11 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 需激活文本命令 = {"随机英文单词", "随机一言", "疯狂星期四", "古诗词名句"}
 
 
-async def 处理用户激活(event: Any, 命令文本: str, 配置: Any) -> str | None:
-    激活参数 = 解析激活命令(event, 命令文本)
+async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
+    激活参数 = 解析激活命令(event, 命令文本, context)
     if 激活参数 is None:
         return None
+    记录用户激活诊断(event, 命令文本, 激活参数, context)
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户激活"
 
@@ -94,7 +100,7 @@ def 是需激活文本命令(命令文本: str) -> bool:
     return str(命令文本 or "").strip() in 需激活文本命令
 
 
-def 解析激活命令(event: Any, 命令文本: str) -> dict[str, Any] | None:
+def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
     文本 = str(命令文本 or "").strip()
     if not 文本 or not 激活命令规则.fullmatch(文本):
         return None
@@ -102,14 +108,18 @@ def 解析激活命令(event: Any, 命令文本: str) -> dict[str, Any] | None:
     if not (文本.startswith("激活") or 文本.startswith("用户激活")):
         return None
 
-    被艾特用户 = 提取被艾特用户QQ(event)
+    At用户列表 = 获取At用户列表(event)
     数字列表 = [int(匹配.group(0)) for 匹配 in 数字规则.finditer(文本)]
+    if 是否At唤醒激活本人(event, 文本, At用户列表, context):
+        return {"target_user_id": 获取发送者QQ(event), "days": 数字列表[0] if 数字列表 else 默认激活天数}
+
+    被艾特用户 = 提取被艾特用户QQ(event, At用户列表, context)
     if 被艾特用户:
         天数 = 数字列表[0] if 数字列表 else 默认激活天数
         return {"target_user_id": 被艾特用户, "days": 天数}
 
     目标用户, 天数 = 从命令文本提取用户和天数(文本)
-    if not 目标用户 and 是否只艾特机器人(event):
+    if not 目标用户 and 是否只艾特机器人(event, context):
         目标用户 = 获取发送者QQ(event)
     return {"target_user_id": 目标用户, "days": 天数}
 
@@ -129,16 +139,32 @@ def 从命令文本提取用户和天数(文本: str) -> tuple[str, int]:
     return 目标用户, 天数
 
 
-def 提取被艾特用户QQ(event: Any) -> str:
-    忽略用户 = 获取应忽略At用户(event)
-    for 用户 in 获取At用户列表(event):
+def 提取被艾特用户QQ(event: Any, At用户列表: list[str] | None = None, context: Any = None) -> str:
+    忽略用户 = 获取应忽略At用户(event, context)
+    for 用户 in (At用户列表 or 获取At用户列表(event)):
         if 用户 not in 忽略用户:
             return 用户
     return ""
 
 
-def 是否只艾特机器人(event: Any) -> bool:
-    忽略用户 = 获取应忽略At用户(event)
+def 是否At唤醒激活本人(event: Any, 命令文本: str, At用户列表: list[str], context: Any = None) -> bool:
+    if len(At用户列表) != 1:
+        return False
+    if str(命令文本 or "").strip() not in {"激活", "用户激活"}:
+        return False
+    if 读取字段(event, "is_atbot"):
+        return True
+    if bool(读取字段(event, "is_at_or_wake_command") or 读取字段(event, "is_wake")):
+        return True
+    忽略用户 = 获取应忽略At用户(event, context)
+    if 忽略用户 and At用户列表[0] in 忽略用户:
+        return True
+    原始文本 = " ".join(获取原始文本候选(event))
+    return "[At:机器人]" in 原始文本 or "[At:qq_official]" in 原始文本
+
+
+def 是否只艾特机器人(event: Any, context: Any = None) -> bool:
+    忽略用户 = 获取应忽略At用户(event, context)
     At用户列表 = 获取At用户列表(event)
     return bool(At用户列表 and 忽略用户 and all(用户 in 忽略用户 for 用户 in At用户列表))
 
@@ -147,8 +173,8 @@ def 获取At用户列表(event: Any) -> list[str]:
     结果: list[str] = []
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        消息 = 读取字段(对象, "message")
-        结果.extend(从消息段提取At用户列表(消息))
+        for 字段名 in ("message", "components", "content"):
+            结果.extend(从消息段提取At用户列表(读取字段(对象, 字段名)))
         for 字段名 in ("message_str", "raw_message"):
             结果.extend(从文本提取At用户列表(读取字段(对象, 字段名)))
     return 去重保序(结果)
@@ -171,6 +197,13 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
         for 子值 in 消息.values():
             结果.extend(从消息段提取At用户列表(子值))
         return 结果
+    if Comp is not None:
+        try:
+            if isinstance(消息, Comp.At):
+                用户 = 规范化用户编号(getattr(消息, "qq", ""))
+                return [用户] if 用户 else []
+        except Exception:
+            pass
     if 是At类型值(读取字段(消息, "type")):
         用户 = 规范化用户编号(
             读取字段(消息, "qq")
@@ -209,11 +242,41 @@ def 去重保序(列表: list[str]) -> list[str]:
     return 结果
 
 
-def 获取应忽略At用户(event: Any) -> set[str]:
+def 获取原始文本候选(event: Any) -> list[str]:
+    消息对象 = getattr(event, "message_obj", None)
+    结果: list[str] = []
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("raw_message", "message_str"):
+            值 = 读取字段(对象, 字段名)
+            if 值:
+                结果.append(str(值))
+    return 结果
+
+
+def 记录用户激活诊断(event: Any, 命令文本: str, 激活参数: dict[str, Any], context: Any = None) -> None:
+    try:
+        logger.info(
+            "用户激活诊断："
+            f"command={限制长度(命令文本, 120)}, "
+            f"sender={获取发送者QQ(event)}, "
+            f"target={激活参数.get('target_user_id')}, "
+            f"days={激活参数.get('days')}, "
+            f"at_users={获取At用户列表(event)}, "
+            f"ignored_at={list(获取应忽略At用户(event, context))}, "
+            f"is_wake={bool(读取字段(event, 'is_wake'))}, "
+            f"is_at_or_wake_command={bool(读取字段(event, 'is_at_or_wake_command'))}, "
+            f"message_str={限制长度(读取字段(event, 'message_str'), 300)}, "
+            f"raw_message={限制长度(读取字段(event, 'raw_message'), 300)}"
+        )
+    except Exception as exc:
+        logger.warning(f"用户激活诊断失败：error={exc}")
+
+
+def 获取应忽略At用户(event: Any, context: Any = None) -> set[str]:
     结果: set[str] = set()
     消息对象 = getattr(event, "message_obj", None)
     bot = getattr(event, "bot", None)
-    for 对象 in (event, 消息对象, bot):
+    for 对象 in (event, 消息对象, bot, context):
         if 对象 is None:
             continue
         for 字段名 in ("self_id", "bot_id", "robot_id", "uin", "qq"):
@@ -438,6 +501,11 @@ def 安全整数(值: Any, 默认值: int = 0) -> int:
         return int(str(值).strip())
     except Exception:
         return 默认值
+
+
+def 限制长度(值: Any, 最大长度: int = 2000) -> str:
+    文本 = str(值 or "")
+    return 文本 if len(文本) <= 最大长度 else 文本[:最大长度] + "..."
 
 
 def 格式化时间戳(时间戳: int) -> str:
