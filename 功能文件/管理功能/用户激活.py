@@ -100,8 +100,26 @@ def 是需激活文本命令(命令文本: str) -> bool:
     return str(命令文本 or "").strip() in 需激活文本命令
 
 
+def 提取激活命令文本(event: Any, 命令文本: str) -> str:
+    候选列表: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    候选列表.append(str(命令文本 or ""))
+    候选列表.extend(获取原始文本候选(event))
+
+    for 候选 in 候选列表:
+        文本 = 清理激活命令文本(候选)
+        if 文本 and (文本.startswith("激活") or 文本.startswith("用户激活")):
+            return 文本
+    return ""
+
+
 def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
-    文本 = str(命令文本 or "").strip()
+    文本 = 提取激活命令文本(event, 命令文本)
     if not 文本 or not 激活命令规则.fullmatch(文本):
         return None
 
@@ -148,19 +166,21 @@ def 提取被艾特用户QQ(event: Any, At用户列表: list[str] | None = None,
 
 
 def 是否At唤醒激活本人(event: Any, 命令文本: str, At用户列表: list[str], context: Any = None) -> bool:
-    if len(At用户列表) != 1:
-        return False
     if str(命令文本 or "").strip() not in {"激活", "用户激活"}:
         return False
     if 读取字段(event, "is_atbot"):
         return True
+    原始文本 = " ".join(获取原始文本候选(event))
+    if "[At:机器人]" in 原始文本 or "[At:qq_official]" in 原始文本:
+        return True
+    if len(At用户列表) != 1:
+        return False
     if bool(读取字段(event, "is_at_or_wake_command") or 读取字段(event, "is_wake")):
         return True
     忽略用户 = 获取应忽略At用户(event, context)
     if 忽略用户 and At用户列表[0] in 忽略用户:
         return True
-    原始文本 = " ".join(获取原始文本候选(event))
-    return "[At:机器人]" in 原始文本 or "[At:qq_official]" in 原始文本
+    return False
 
 
 def 是否只艾特机器人(event: Any, context: Any = None) -> bool:
@@ -213,6 +233,54 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
         )
         return [用户] if 用户 else []
     return []
+
+
+def 从消息段提取非At文本(消息: Any) -> str:
+    if 消息 is None:
+        return ""
+    if isinstance(消息, str):
+        return 消息
+    if isinstance(消息, (list, tuple, set)):
+        return "".join(从消息段提取非At文本(消息段) for 消息段 in 消息)
+    if isinstance(消息, dict):
+        if 是At类型值(消息.get("type")):
+            return ""
+        消息类型 = str(消息.get("type") or "").strip().lower()
+        if 消息类型 in {"text", "plain"}:
+            数据 = 消息.get("data")
+            if isinstance(数据, dict):
+                return str(数据.get("text") or 数据.get("content") or "")
+            return str(消息.get("text") or 消息.get("content") or "")
+        return ""
+    if Comp is not None:
+        try:
+            if isinstance(消息, Comp.At):
+                return ""
+        except Exception:
+            pass
+
+    消息类型 = str(读取字段(消息, "type") or "")
+    if 是At类型值(消息类型):
+        return ""
+    消息类型小写 = 消息类型.lower()
+    if 消息类型小写 in {"text", "plain"} or 消息类型小写.endswith((".plain", ".text")):
+        return str(读取字段(消息, "text") or 读取字段(消息, "content") or "")
+    return ""
+
+
+def 清理激活命令文本(文本: Any) -> str:
+    结果 = str(文本 or "")
+    结果 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
+    结果 = re.sub(r"\[CQ:at,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
+    结果 = re.sub(r"\[At:[^\]]+\]", "", 结果, flags=re.IGNORECASE)
+    结果 = 结果.replace("＠", "@").strip()
+    while 结果.startswith("@"):
+        新结果 = re.sub(r"^@[^\s]+\s*", "", 结果, count=1)
+        if 新结果 == 结果:
+            break
+        结果 = 新结果.strip()
+    结果 = re.sub(r"\s+", " ", 结果).strip()
+    return 结果
 
 
 def 从文本提取At用户列表(文本: Any) -> list[str]:
