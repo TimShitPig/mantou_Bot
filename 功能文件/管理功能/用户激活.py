@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import secrets
 import string
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 try:
@@ -29,6 +31,9 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 最长激活天数 = 3650
 用户激活数据库表名 = "mantou_user_activation"
 用户激活卡密数据库表名 = "mantou_user_activation_cards"
+下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
+免费额度状态文件 = 下载缓存目录 / "用户免费额度.json"
+免费额度配置项 = "user_activation_daily_free_quota"
 用户操作命令规则 = re.compile(
     r"^(?:(?:用户)?(?:激活增加|激活减少|激活|重置|增加|减少)(?:\d+)?|(?:用户)?查询时间|(?:用户)?查询)(?:\s+\S+){0,20}$"
 )
@@ -72,6 +77,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户列表翻页状态: dict[str, dict[str, Any]] = {}
 卡密查询翻页状态: dict[str, dict[str, Any]] = {}
 卡密查询选择状态: dict[str, dict[str, Any]] = {}
+免费额度状态锁 = asyncio.Lock()
 
 
 async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
@@ -691,6 +697,8 @@ def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None)
 async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
     if await 用户可使用功能(event, 配置):
         return None
+    if await 尝试消耗每日免费额度(event, 配置):
+        return None
     return 未激活提示
 
 
@@ -709,6 +717,67 @@ async def 用户可使用功能(event: Any, 配置: Any) -> bool:
         logger.warning(f"用户激活读取失败：group_id={群号}, user_id={用户编号}, error={exc}")
         return False
     return 到期时间 >= int(time.time())
+
+
+async def 尝试消耗每日免费额度(event: Any, 配置: Any) -> bool:
+    每日限额 = 获取每日免费额度(配置)
+    if 每日限额 <= 0:
+        return False
+
+    用户编号 = 获取发送者QQ(event)
+    if not 用户编号:
+        return False
+    群号 = 获取群号(event) or "private"
+
+    async with 免费额度状态锁:
+        已放行 = await asyncio.to_thread(消耗每日免费额度记录, 群号, 用户编号, 每日限额)
+    if 已放行:
+        logger.info(f"用户免费额度放行：group_id={群号}, user_id={用户编号}, daily_quota={每日限额}")
+    return 已放行
+
+
+def 获取每日免费额度(配置: Any) -> int:
+    return max(0, 安全整数(读取配置字段(配置, 免费额度配置项), 0))
+
+
+def 消耗每日免费额度记录(群号: str, 用户编号: str, 每日限额: int) -> bool:
+    状态 = 读取免费额度状态()
+    使用记录 = 状态.setdefault("usage", {})
+    记录键 = f"{群号}:{用户编号}"
+    已使用 = 安全整数(使用记录.get(记录键), 0)
+    if 已使用 >= 每日限额:
+        return False
+    使用记录[记录键] = 已使用 + 1
+    写入免费额度状态(状态)
+    return True
+
+
+def 读取免费额度状态() -> dict[str, Any]:
+    今日 = 获取免费额度日期()
+    默认状态 = {"date": 今日, "usage": {}}
+    if not 免费额度状态文件.exists():
+        return 默认状态
+    try:
+        数据 = json.loads(免费额度状态文件.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"用户免费额度状态读取失败：error={exc}")
+        return 默认状态
+    if not isinstance(数据, dict) or str(数据.get("date") or "") != 今日:
+        return 默认状态
+    使用记录 = 数据.get("usage")
+    if not isinstance(使用记录, dict):
+        return 默认状态
+    规范记录 = {str(键): 安全整数(值, 0) for 键, 值 in 使用记录.items() if 安全整数(值, 0) > 0}
+    return {"date": 今日, "usage": 规范记录}
+
+
+def 写入免费额度状态(状态: dict[str, Any]) -> None:
+    免费额度状态文件.parent.mkdir(parents=True, exist_ok=True)
+    免费额度状态文件.write_text(json.dumps(状态, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def 获取免费额度日期() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def 是需激活文本命令(命令文本: str) -> bool:
