@@ -33,9 +33,15 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.16.0"
+群管功能模块版本 = "1.17.0"
 踢出命令集合 = {"踢", "踢了"}
-禁言命令集合 = {"开启禁言", "开启全部禁言"}
+禁言命令配置 = {
+    "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
+    "关闭禁言": {"全部群": False, "启用": False, "操作": "关闭"},
+    "开启全部禁言": {"全部群": True, "启用": True, "操作": "开启"},
+    "关闭全部禁言": {"全部群": True, "启用": False, "操作": "关闭"},
+}
+禁言命令集合 = set(禁言命令配置)
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -82,8 +88,12 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用群禁言"
 
-    if 命令 == "开启全部禁言":
-        return await 处理全部群禁言(event)
+    命令配置 = 禁言命令配置[命令]
+    启用 = bool(命令配置["启用"])
+    操作 = str(命令配置["操作"])
+
+    if 命令配置["全部群"]:
+        return await 处理全部群禁言(event, 启用, 操作)
 
     群号 = 获取群号(event)
     if not 群号:
@@ -92,15 +102,15 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         return "群禁言失败：当前适配器没有返回数字群号"
 
     try:
-        await 尝试设置全员禁言(event, 群号, True)
-        logger.info(f"群禁言开启成功：group_id={群号}")
-        return "已开启全员禁言"
+        await 尝试设置全员禁言(event, 群号, 启用)
+        logger.info(f"群禁言{操作}成功：group_id={群号}")
+        return f"已{操作}全员禁言"
     except Exception as exc:
-        logger.warning(f"群禁言开启失败：group_id={群号}, error={exc}")
+        logger.warning(f"群禁言{操作}失败：group_id={群号}, error={exc}")
         return f"群禁言失败：{exc}"
 
 
-async def 处理全部群禁言(event: AstrMessageEvent) -> str:
+async def 处理全部群禁言(event: AstrMessageEvent, 启用: bool, 操作: str) -> str:
     bot = getattr(event, "bot", None)
     if bot is None:
         return "全部群禁言失败：当前事件缺少 bot 实例"
@@ -115,18 +125,18 @@ async def 处理全部群禁言(event: AstrMessageEvent) -> str:
     失败群: list[tuple[str, Exception]] = []
     for 群号 in 群号列表:
         try:
-            await 使用_set_group_whole_ban禁言(bot, 群号, True)
+            await 使用_set_group_whole_ban禁言(bot, 群号, 启用)
             成功群.append(群号)
-            logger.info(f"全部群禁言开启成功：group_id={群号}")
+            logger.info(f"全部群禁言{操作}成功：group_id={群号}")
         except Exception as exc:
             失败群.append((群号, exc))
-            logger.warning(f"全部群禁言开启失败：group_id={群号}, error={exc}")
+            logger.warning(f"全部群禁言{操作}失败：group_id={群号}, error={exc}")
 
-    return 格式化全部群禁言结果(成功群, 失败群)
+    return 格式化全部群禁言结果(成功群, 失败群, 操作)
 
 
-def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[str, Exception]]) -> str:
-    行列表 = [f"全部群禁言完成：成功 {len(成功群)} 个，失败 {len(失败群)} 个"]
+def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[str, Exception]], 操作: str) -> str:
+    行列表 = [f"全部群禁言{操作}完成：成功 {len(成功群)} 个，失败 {len(失败群)} 个"]
     if 失败群:
         行列表.append("失败群：" + "；".join(f"{群号}：{错误}" for 群号, 错误 in 失败群))
     return "\n".join(行列表)
