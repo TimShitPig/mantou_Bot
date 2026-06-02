@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import inspect
 import re
 from typing import Any
 
@@ -32,8 +33,10 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
+最近消息撤回数量 = 5
+最近消息撤回拉取数量 = 30
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.17.0"
+群管功能模块版本 = "1.18.0"
 踢出命令集合 = {"踢", "踢了"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
@@ -372,6 +375,7 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
         return False
     撤回成功 = await 尝试撤回当前消息(event)
     if 撤回成功:
+        await 尝试撤回触发用户最近消息(event)
         await 记录撤回触发并尝试踢出(event)
     return 撤回成功
 
@@ -660,6 +664,70 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
 
+async def 尝试撤回触发用户最近消息(event: AstrMessageEvent) -> int:
+    群号 = 获取群号(event)
+    用户QQ = 获取发送者QQ(event)
+    if not 是数字ID(群号) or not 是数字ID(用户QQ):
+        logger.info(f"最近消息撤回跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+        return 0
+
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        logger.warning(f"最近消息撤回失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
+        return 0
+
+    try:
+        历史消息 = await 获取群历史消息(bot, 群号, 最近消息撤回拉取数量)
+    except Exception as exc:
+        logger.warning(f"最近消息撤回获取历史失败：group_id={群号}, user_id={用户QQ}, error={exc}")
+        return 0
+
+    当前消息编号 = str(获取当前消息编号(event) or "")
+    目标消息 = 筛选用户最近消息(历史消息, 用户QQ, 当前消息编号, 最近消息撤回数量)
+    成功数量 = 0
+    for 消息 in 目标消息:
+        消息编号 = 消息.get("message_id") if isinstance(消息, dict) else None
+        if not 消息编号:
+            continue
+        try:
+            await 使用_delete_msg撤回(bot, 消息编号)
+            成功数量 += 1
+            logger.info(f"最近消息撤回成功：group_id={群号}, user_id={用户QQ}, message_id={消息编号}")
+        except Exception as exc:
+            logger.warning(f"最近消息撤回失败：group_id={群号}, user_id={用户QQ}, message_id={消息编号}, error={exc}")
+    return 成功数量
+
+
+async def 获取群历史消息(bot: Any, 群号: str, 数量: int) -> list[dict[str, Any]]:
+    响应 = await 调用机器人动作(bot, "get_group_msg_history", group_id=int(群号), count=int(数量))
+    if isinstance(响应, dict):
+        数据 = 响应.get("data") if "data" in 响应 else 响应
+        if isinstance(数据, dict):
+            消息列表 = 数据.get("messages") or 数据.get("message") or []
+        else:
+            消息列表 = 响应.get("messages") or []
+    else:
+        消息列表 = []
+    return [消息 for 消息 in 消息列表 if isinstance(消息, dict)]
+
+
+def 筛选用户最近消息(历史消息: list[dict[str, Any]], 用户QQ: str, 排除消息编号: str = "", 数量: int = 最近消息撤回数量) -> list[dict[str, Any]]:
+    结果: list[dict[str, Any]] = []
+    for 消息 in 历史消息:
+        发送者 = 消息.get("sender") if isinstance(消息, dict) else None
+        发送者QQ = ""
+        if isinstance(发送者, dict):
+            发送者QQ = str(发送者.get("user_id") or "").strip()
+        if 发送者QQ != str(用户QQ):
+            continue
+        消息编号 = str(消息.get("message_id") or "").strip()
+        if 排除消息编号 and 消息编号 == 排除消息编号:
+            continue
+        结果.append(消息)
+    结果.sort(key=lambda 项目: 安全整数(项目.get("time"), 0), reverse=True)
+    return 结果[: max(0, int(数量))]
+
+
 async def 记录撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
@@ -687,10 +755,45 @@ async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str
     try:
         await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
         logger.info(f"数字撤回触发 {数字撤回踢出阈值} 次，已踢出成员：group_id={群号}, user_id={用户QQ}")
+        await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
         return True
     except Exception as exc:
         logger.warning(f"数字撤回踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
         return False
+
+
+async def 尝试踢出其它群同一成员(bot: Any, 当前群号: str, 用户QQ: str) -> None:
+    try:
+        群号列表 = await 获取机器人所在群号列表(bot)
+    except Exception as exc:
+        logger.warning(f"跨群踢出获取群列表失败：user_id={用户QQ}, error={exc}")
+        return
+
+    for 群号 in 群号列表:
+        群号 = str(群号)
+        if 群号 == str(当前群号) or not 是数字ID(群号):
+            continue
+        try:
+            if not await 检查群成员存在(bot, 群号, 用户QQ):
+                continue
+            await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
+            logger.info(f"跨群踢出成功：group_id={群号}, user_id={用户QQ}")
+        except Exception as exc:
+            logger.warning(f"跨群踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
+
+
+async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
+    try:
+        响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(用户QQ), no_cache=True)
+    except Exception:
+        return False
+    if not 响应:
+        return False
+    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
+    if isinstance(数据, dict):
+        返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id")
+        return str(返回用户 or 用户QQ).strip() == str(用户QQ)
+    return True
 
 
 async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> None:
@@ -842,6 +945,25 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
     return True
 
 
+async def 调用机器人动作(bot: Any, 动作名: str, **参数: Any) -> Any:
+    动作方法 = getattr(bot, 动作名, None)
+    if callable(动作方法):
+        return await 等待可能异步结果(动作方法(**参数))
+
+    api = getattr(bot, "api", None)
+    调用动作 = getattr(api, "call_action", None)
+    if callable(调用动作):
+        return await 等待可能异步结果(调用动作(动作名, **参数))
+
+    raise RuntimeError(f"当前 bot 没有 {动作名} 接口")
+
+
+async def 等待可能异步结果(结果: Any) -> Any:
+    if inspect.isawaitable(结果):
+        return await 结果
+    return 结果
+
+
 async def 使用_set_group_kick踢出(bot: Any, 群号: str, 用户QQ: str) -> bool:
     群号值 = int(群号)
     用户QQ值 = int(用户QQ)
@@ -873,3 +995,12 @@ async def 使用_set_group_whole_ban禁言(bot: Any, 群号: str, 启用: bool =
         return True
 
     raise RuntimeError("当前 bot 没有 set_group_whole_ban 全员禁言接口")
+
+
+def 安全整数(值: Any, 默认值: int = 0) -> int:
+    if 值 in (None, "") or isinstance(值, bool):
+        return 默认值
+    try:
+        return int(str(值).strip())
+    except Exception:
+        return 默认值
