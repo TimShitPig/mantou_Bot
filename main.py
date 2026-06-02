@@ -29,13 +29,14 @@ importlib.invalidate_caches()
 授权链接功能 = 加载功能模块("功能文件.管理功能.授权链接")
 用户激活功能 = 加载功能模块("功能文件.管理功能.用户激活")
 帮助功能 = 加载功能模块("功能文件.管理功能.帮助功能")
+小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能开关")
 
 获取古诗词名句回复 = getattr(古诗词名句模块, "获取古诗词名句回复")
 获取疯狂星期四回复 = getattr(疯狂星期四模块, "获取疯狂星期四回复")
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.22.0"
+插件版本 = "1.23.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -73,6 +74,8 @@ class MyPlugin(Star):
         else:
             回复内容 = 番茄小说模块.处理番茄小说API指令(event, 命令文本, self.config)
             if 回复内容 is None:
+                回复内容 = 小说功能开关.处理小说功能开关指令(event, 命令文本, self.config)
+            if 回复内容 is None:
                 回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
             if 回复内容 is None:
                 回复内容 = await 群文件清理功能.处理群文件清理(event, 命令文本, self.config)
@@ -92,6 +95,10 @@ class MyPlugin(Star):
 
                 七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本)
                 if 七猫回复流 is not None:
+                    if not 小说功能开关.小说功能是否开启("七猫"):
+                        yield event.plain_result(小说功能开关.获取小说功能关闭回复("七猫"))
+                        event.stop_event()
+                        return
                     激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
                     if 激活拦截 is not None:
                         yield event.plain_result(激活拦截)
@@ -107,6 +114,10 @@ class MyPlugin(Star):
 
                 番茄回复流 = 番茄小说模块.获取番茄小说回复流(event, 命令文本, self.config)
                 if 番茄回复流 is not None:
+                    if not 小说功能开关.小说功能是否开启("番茄"):
+                        yield event.plain_result(小说功能开关.获取小说功能关闭回复("番茄"))
+                        event.stop_event()
+                        return
                     激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
                     if 激活拦截 is not None:
                         yield event.plain_result(激活拦截)
