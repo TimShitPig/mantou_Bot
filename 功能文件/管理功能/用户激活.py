@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
+import secrets
+import string
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 try:
@@ -26,17 +26,54 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 未激活提示 = "请查看群公告查看激活方法"
 默认激活天数 = 30
 最长激活天数 = 3650
-下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
-默认本地激活文件 = 下载缓存目录 / "用户激活.json"
-用户操作命令规则 = re.compile(r"^(?:(?:用户)?(?:激活|重置)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,20}$")
-用户操作命令开头 = ("激活", "用户激活", "重置", "用户重置", "查询时间", "用户查询时间")
+用户激活数据库表名 = "mantou_user_activation"
+用户激活卡密数据库表名 = "mantou_user_activation_cards"
+用户操作命令规则 = re.compile(
+    r"^(?:(?:用户)?(?:激活增加|激活减少|激活|重置|增加|减少)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,20}$"
+)
+用户操作命令开头 = (
+    "激活增加",
+    "用户激活增加",
+    "增加",
+    "用户增加",
+    "激活减少",
+    "用户激活减少",
+    "减少",
+    "用户减少",
+    "激活",
+    "用户激活",
+    "重置",
+    "用户重置",
+    "查询时间",
+    "用户查询时间",
+)
+用户列表命令 = {"查询用户"}
+用户列表下一页命令 = {"下一页"}
+生成卡密命令规则 = re.compile(r"^生成卡密(?:\s+(\d+))?$")
+查询卡密命令规则 = re.compile(r"^查询卡密(?:\s+\S+){0,20}$")
+卡密规则 = re.compile(r"^(?=.*[A-Z])[A-Z0-9]{12}$")
+卡密字符集 = "".join(字符 for 字符 in string.ascii_uppercase + string.digits if 字符 not in {"0", "1", "I", "O"})
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
-数据库表名规则 = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 需激活文本命令 = {"随机英文单词", "随机一言", "疯狂星期四", "古诗词名句"}
+用户列表每页数量 = 10
+卡密列表每页数量 = 5
+卡密生成最大数量 = 200
+用户列表翻页状态: dict[str, dict[str, Any]] = {}
+卡密查询翻页状态: dict[str, dict[str, Any]] = {}
 
 
 async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
+    卡密回复 = await 处理卡密功能(event, 命令文本, 配置, context)
+    if 卡密回复 is not None:
+        return 卡密回复
+
+    列表命令 = 提取用户列表命令文本(event, 命令文本)
+    if 列表命令 in 用户列表命令 or 列表命令 in 用户列表下一页命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查询激活用户"
+        return await 处理查询用户列表(event, 配置, 下一页=列表命令 in 用户列表下一页命令)
+
     激活参数 = 解析激活命令(event, 命令文本, context)
     if 激活参数 is None:
         return None
@@ -50,12 +87,12 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
 
     目标用户列表 = 获取目标用户列表(激活参数)
     if not 目标用户列表:
-        动作名 = "重置" if 操作 == "重置" else "激活"
+        动作名 = 获取用户操作显示名(操作)
         return f"用户{动作名}失败：请 @ 要{动作名}的用户"
 
     群号 = 获取群号(event)
     if not 群号:
-        动作名 = "重置" if 操作 == "重置" else "激活"
+        动作名 = 获取用户操作显示名(操作)
         return f"用户{动作名}失败：只能在群聊中{动作名}用户"
 
     if 操作 == "重置":
@@ -74,6 +111,14 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
             return f"用户重置失败：{失败用户[0][1]}"
         return 格式化批量重置结果(成功用户, 失败用户)
 
+    if 操作 in {"增加", "减少"}:
+        天数 = 安全整数(激活参数.get("days"), 默认激活天数)
+        if 天数 <= 0:
+            return "用户激活调整失败：天数必须是正整数"
+        if 天数 > 最长激活天数:
+            return f"用户激活调整失败：调整天数不能超过 {最长激活天数} 天"
+        return await 处理激活时间调整(event, 配置, 群号, 目标用户列表, 操作, 天数)
+
     天数 = 安全整数(激活参数.get("days"), 默认激活天数)
     if 天数 <= 0:
         return "用户激活失败：激活天数必须是正整数"
@@ -82,9 +127,14 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
 
     到期时间 = int(time.time()) + 天数 * 86400
     成功用户: list[str] = []
+    已激活用户: list[dict[str, Any]] = []
     失败用户: list[tuple[str, Exception]] = []
     for 目标用户 in 目标用户列表:
         try:
+            原记录 = await 读取激活记录(配置, 群号, 目标用户)
+            if 原记录:
+                已激活用户.append({"user_id": 目标用户, **原记录})
+                continue
             await 写入激活记录(配置, 群号, 目标用户, 到期时间)
             成功用户.append(目标用户)
         except Exception as exc:
@@ -100,9 +150,11 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
                     f"到期时间：{格式化时间戳(到期时间)}",
                 ]
             )
+        if 已激活用户:
+            return 格式化单用户已激活回复(已激活用户[0])
         return f"用户激活失败：{失败用户[0][1]}"
 
-    return 格式化批量激活结果(成功用户, 失败用户, 天数, 到期时间)
+    return 格式化批量激活结果(成功用户, 已激活用户, 失败用户, 天数, 到期时间)
 
 
 async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: Any) -> str:
@@ -148,6 +200,208 @@ async def 获取单用户查询时间回复(配置: Any, 群号: str, 目标用�
     )
 
 
+async def 处理激活时间调整(
+    event: Any,
+    配置: Any,
+    群号: str,
+    目标用户列表: list[str],
+    操作: str,
+    天数: int,
+) -> str:
+    成功用户: list[dict[str, Any]] = []
+    过期用户: list[str] = []
+    失败用户: list[tuple[str, Exception]] = []
+    调整秒数 = 天数 * 86400
+    当前时间 = int(time.time())
+
+    for 目标用户 in 目标用户列表:
+        try:
+            激活记录 = await 读取激活记录(配置, 群号, 目标用户)
+            if not 激活记录:
+                raise RuntimeError("用户未激活，无法调整时间")
+            原到期时间 = 安全整数(激活记录.get("expires_at"), 0)
+            新到期时间 = 原到期时间 + 调整秒数 if 操作 == "增加" else 原到期时间 - 调整秒数
+            if 新到期时间 <= 当前时间:
+                await 删除激活记录(配置, 群号, 目标用户)
+                过期用户.append(目标用户)
+                continue
+            await 写入激活记录(配置, 群号, 目标用户, 新到期时间)
+            成功用户.append({"user_id": 目标用户, "expires_at": 新到期时间})
+        except Exception as exc:
+            失败用户.append((目标用户, exc))
+            logger.warning(f"用户激活时间调整失败：action={操作}, group_id={群号}, user_id={目标用户}, error={exc}")
+
+    if len(目标用户列表) == 1:
+        if 成功用户:
+            目标用户 = 成功用户[0]["user_id"]
+            动作文本 = "增加" if 操作 == "增加" else "减少"
+            return "\n".join(
+                [
+                    f"已{动作文本}用户激活时间：{目标用户}",
+                    f"调整天数：{天数} 天",
+                    f"到期时间：{格式化时间戳(成功用户[0]['expires_at'])}",
+                ]
+            )
+        if 过期用户:
+            return f"已减少用户激活时间：{过期用户[0]}\n调整后已到期，已取消激活"
+        return f"用户激活调整失败：{失败用户[0][1]}"
+
+    return 格式化批量调整结果(操作, 成功用户, 过期用户, 失败用户, 天数)
+
+
+async def 处理查询用户列表(event: Any, 配置: Any, 下一页: bool = False) -> str:
+    群号 = 获取群号(event)
+    if not 群号:
+        return "查询用户失败：只能在群聊中使用"
+
+    状态键 = 获取用户列表翻页状态键(event, 群号)
+    if not 下一页:
+        卡密查询翻页状态.pop(状态键, None)
+    if 下一页 and 状态键 not in 用户列表翻页状态:
+        return "没有可翻页的查询用户结果，请先发送“查询用户”"
+
+    页码 = 安全整数(用户列表翻页状态.get(状态键, {}).get("page"), 1) + 1 if 下一页 else 1
+    用户列表 = await 列出激活用户记录(配置, 群号)
+    if not 用户列表:
+        用户列表翻页状态.pop(状态键, None)
+        return "当前群没有已激活用户"
+
+    总页数 = max(1, (len(用户列表) + 用户列表每页数量 - 1) // 用户列表每页数量)
+    if 页码 > 总页数:
+        页码 = 总页数
+        已最后一页 = True
+    else:
+        已最后一页 = False
+    用户列表翻页状态[状态键] = {"page": 页码}
+    return 格式化激活用户列表(用户列表, 页码, 总页数, 已最后一页)
+
+
+async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
+    卡密文本 = 提取卡密命令文本(event, 命令文本)
+
+    if 卡密文本 in 用户列表下一页命令:
+        群号 = 获取群号(event) or "private"
+        状态键 = 获取用户列表翻页状态键(event, 群号)
+        if 状态键 not in 卡密查询翻页状态:
+            return None
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查询卡密"
+        return await 处理查询卡密(event, 卡密文本, 配置, context, 下一页=True)
+
+    if 卡密文本.startswith("生成卡密"):
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限生成卡密"
+        return await 处理生成卡密(event, 卡密文本, 配置)
+
+    if 卡密文本.startswith("查询卡密"):
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查询卡密"
+        return await 处理查询卡密(event, 卡密文本, 配置, context)
+
+    卡密 = 规范化卡密(卡密文本 or 命令文本)
+    if 卡密:
+        return await 处理使用卡密(event, 配置, 卡密)
+    return None
+
+
+async def 处理生成卡密(event: Any, 命令文本: str, 配置: Any) -> str:
+    匹配 = 生成卡密命令规则.fullmatch(命令文本)
+    if not 匹配:
+        return "卡密生成失败：格式为“生成卡密”或“生成卡密 数量”"
+
+    数量 = 安全整数(匹配.group(1), 1)
+    if 数量 <= 0:
+        return "卡密生成失败：数量必须是正整数"
+    if 数量 > 卡密生成最大数量:
+        return f"卡密生成失败：一次最多生成 {卡密生成最大数量} 个"
+
+    群号 = 获取群号(event) or "private"
+    创建者 = 获取发送者QQ(event)
+    if not 创建者:
+        return "卡密生成失败：没有获取到管理员QQ"
+
+    try:
+        卡密列表 = await 生成并保存卡密列表(配置, 群号, 创建者, 数量, 默认激活天数)
+    except Exception as exc:
+        logger.warning(f"卡密生成失败：group_id={群号}, count={数量}, error={exc}")
+        return f"卡密生成失败：{exc}"
+
+    return "\n".join(
+        [
+            f"已生成卡密：{len(卡密列表)} 个",
+            f"有效期：{默认激活天数} 天",
+            *卡密列表,
+        ]
+    )
+
+
+async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str:
+    用户编号 = 获取发送者QQ(event)
+    if not 用户编号:
+        return "卡密激活失败：没有获取到用户QQ"
+    if 是群文件清理管理员(event, 配置):
+        return "管理员无需激活，不消耗卡密"
+
+    群号 = 获取群号(event) or "private"
+    try:
+        结果 = await asyncio.to_thread(使用数据库卡密激活, 配置, 群号, 用户编号, 卡密)
+    except Exception as exc:
+        logger.warning(f"卡密激活失败：group_id={群号}, user_id={用户编号}, card={卡密}, error={exc}")
+        return f"卡密激活失败：{exc}"
+
+    状态 = 结果.get("status")
+    if 状态 == "invalid":
+        return "卡密无效或已使用"
+    if 状态 == "already":
+        return 格式化单用户已激活回复({"user_id": 用户编号, **结果.get("record", {})})
+    if 状态 == "used":
+        return "\n".join(
+            [
+                "卡密激活成功",
+                f"有效期：{安全整数(结果.get('days'), 默认激活天数)} 天",
+                f"到期时间：{格式化时间戳(安全整数(结果.get('expires_at'), 0))}",
+            ]
+        )
+    return "卡密无效或已使用"
+
+
+async def 处理查询卡密(event: Any, 命令文本: str, 配置: Any, context: Any = None, 下一页: bool = False) -> str:
+    群号 = 获取群号(event) or "private"
+    状态键 = 获取用户列表翻页状态键(event, 群号)
+
+    if 下一页:
+        状态 = 卡密查询翻页状态.get(状态键)
+        if not 状态:
+            return "没有可翻页的卡密查询结果，请先发送“查询卡密”"
+        页码 = 安全整数(状态.get("page"), 1) + 1
+        查询参数 = 状态.get("query") if isinstance(状态.get("query"), dict) else {}
+    else:
+        查询参数 = 解析查询卡密命令(event, 命令文本, context)
+        if 查询参数 is None:
+            return "卡密查询失败：格式为“查询卡密”“查询卡密 已使用”“查询卡密 未使用”“查询卡密 QQ号”或“查询卡密 卡密”"
+        页码 = 1
+        用户列表翻页状态.pop(状态键, None)
+
+    try:
+        卡密列表 = await 列出卡密记录(配置, 群号, 查询参数)
+    except Exception as exc:
+        logger.warning(f"卡密查询失败：group_id={群号}, query={查询参数}, error={exc}")
+        return f"卡密查询失败：{exc}"
+
+    if not 卡密列表:
+        卡密查询翻页状态.pop(状态键, None)
+        return "没有符合条件的卡密"
+
+    总页数 = max(1, (len(卡密列表) + 卡密列表每页数量 - 1) // 卡密列表每页数量)
+    if 页码 > 总页数:
+        页码 = 总页数
+        已最后一页 = True
+    else:
+        已最后一页 = False
+    卡密查询翻页状态[状态键] = {"page": 页码, "query": 查询参数}
+    return 格式化卡密列表(卡密列表, 查询参数, 页码, 总页数, 已最后一页)
+
+
 def 获取目标用户列表(激活参数: dict[str, Any]) -> list[str]:
     目标用户列表 = 激活参数.get("target_user_ids")
     if isinstance(目标用户列表, list):
@@ -157,13 +411,20 @@ def 获取目标用户列表(激活参数: dict[str, Any]) -> list[str]:
     return [目标用户] if 目标用户 else []
 
 
+def 获取用户操作显示名(操作: str) -> str:
+    return {"增加": "激活增加", "减少": "激活减少", "重置": "重置"}.get(操作, "激活")
+
+
 def 格式化批量激活结果(
     成功用户: list[str],
+    已激活用户: list[dict[str, Any]],
     失败用户: list[tuple[str, Exception]],
     天数: int,
     到期时间: int,
 ) -> str:
-    行列表 = [f"用户激活完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
+    行列表 = [
+        f"用户激活完成：成功 {len(成功用户)} 个，已激活 {len(已激活用户)} 个，失败 {len(失败用户)} 个"
+    ]
     if 成功用户:
         行列表.extend(
             [
@@ -172,6 +433,38 @@ def 格式化批量激活结果(
                 f"到期时间：{格式化时间戳(到期时间)}",
             ]
         )
+    if 已激活用户:
+        行列表.append(f"已激活用户（未重复激活）：{格式化用户列表([str(记录['user_id']) for 记录 in 已激活用户])}")
+    if 失败用户:
+        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+    return "\n".join(行列表)
+
+
+def 格式化单用户已激活回复(激活记录: dict[str, Any]) -> str:
+    到期时间 = 安全整数(激活记录.get("expires_at"), 0)
+    return "\n".join(
+        [
+            f"用户已激活：{激活记录.get('user_id')}",
+            "不会重复激活",
+            f"到期时间：{格式化时间戳(到期时间)}",
+        ]
+    )
+
+
+def 格式化批量调整结果(
+    操作: str,
+    成功用户: list[dict[str, Any]],
+    过期用户: list[str],
+    失败用户: list[tuple[str, Exception]],
+    天数: int,
+) -> str:
+    动作文本 = "增加" if 操作 == "增加" else "减少"
+    行列表 = [f"用户激活时间{动作文本}完成：成功 {len(成功用户)} 个，到期取消 {len(过期用户)} 个，失败 {len(失败用户)} 个"]
+    if 成功用户:
+        行列表.append(f"已{动作文本}用户：{格式化用户列表([str(记录['user_id']) for 记录 in 成功用户])}")
+        行列表.append(f"调整天数：{天数} 天")
+    if 过期用户:
+        行列表.append(f"已到期并取消激活：{格式化用户列表(过期用户)}")
     if 失败用户:
         行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
     return "\n".join(行列表)
@@ -188,6 +481,90 @@ def 格式化批量重置结果(成功用户: list[str], 失败用户: list[tupl
 
 def 格式化用户列表(用户列表: list[str]) -> str:
     return "、".join(用户列表)
+
+
+def 获取用户列表翻页状态键(event: Any, 群号: str) -> str:
+    return f"{群号}:{获取发送者QQ(event)}"
+
+
+async def 列出激活用户记录(配置: Any, 群号: str) -> list[dict[str, int | str]]:
+    return await asyncio.to_thread(列出数据库激活用户记录, 配置, 群号)
+
+
+def 格式化激活用户列表(用户列表: list[dict[str, Any]], 页码: int, 总页数: int, 已最后一页: bool = False) -> str:
+    开始 = (页码 - 1) * 用户列表每页数量
+    当前页用户 = 用户列表[开始 : 开始 + 用户列表每页数量]
+    行列表 = [f"已激活用户列表：第 {页码} / {总页数} 页，共 {len(用户列表)} 个"]
+    for 序号, 记录 in enumerate(当前页用户, start=开始 + 1):
+        到期时间 = 安全整数(记录.get("expires_at"), 0)
+        行列表.append(f"{序号}. {记录.get('user_id')} 到期：{格式化时间戳(到期时间)}")
+    if 页码 < 总页数:
+        行列表.append("发送“下一页”查看更多")
+    elif 已最后一页:
+        行列表.append("已经是最后一页")
+    return "\n".join(行列表)
+
+
+def 格式化卡密列表(
+    卡密列表: list[dict[str, Any]],
+    查询参数: dict[str, Any],
+    页码: int,
+    总页数: int,
+    已最后一页: bool = False,
+) -> str:
+    开始 = (页码 - 1) * 卡密列表每页数量
+    当前页卡密 = 卡密列表[开始 : 开始 + 卡密列表每页数量]
+    状态 = 查询参数.get("status")
+    标题 = "已使用卡密列表" if 状态 == "used" else "未使用卡密列表" if 状态 == "unused" else "卡密列表"
+    行列表 = [f"{标题}：第 {页码} / {总页数} 页，共 {len(卡密列表)} 个"]
+    卡密块: list[str] = []
+    for 记录 in 当前页卡密:
+        使用者 = str(记录.get("used_by") or "").strip()
+        卡密块.append("\n".join([str(记录.get("card_key") or ""), 使用者 or "未使用"]))
+    if 卡密块:
+        行列表.append("\n-------\n".join(卡密块))
+    if 页码 < 总页数:
+        行列表.append("发送“下一页”查看更多")
+    elif 已最后一页:
+        行列表.append("已经是最后一页")
+    return "\n".join(行列表)
+
+
+def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
+    if not 查询卡密命令规则.fullmatch(命令文本):
+        return None
+
+    项目列表 = str(命令文本 or "").split()[1:]
+    状态 = ""
+    卡密 = ""
+    用户列表: list[str] = []
+    for 项目 in 项目列表:
+        项目文本 = str(项目 or "").strip()
+        if not 项目文本:
+            continue
+        if 项目文本 in {"已使用", "使用", "已用", "已使用的", "使用的", "已用的", "已使用卡密", "使用的卡密"}:
+            状态 = "used"
+            continue
+        if 项目文本 in {"未使用", "没使用", "未用", "未使用的", "没使用的", "未用的", "未使用卡密", "没使用的卡密"}:
+            状态 = "unused"
+            continue
+        规范卡密 = 规范化卡密(项目文本)
+        if 规范卡密:
+            卡密 = 规范卡密
+            continue
+        用户 = 规范化用户编号(项目文本)
+        if 用户:
+            用户列表.append(用户)
+
+    At用户列表 = 提取被艾特用户QQ列表(event, 获取At用户列表(event), context)
+    if At用户列表:
+        用户列表 = At用户列表
+
+    return {
+        "status": 状态,
+        "card_key": 卡密,
+        "user_ids": 去重保序(用户列表),
+    }
 
 
 async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
@@ -235,6 +612,45 @@ def 提取激活命令文本(event: Any, 命令文本: str) -> str:
     return ""
 
 
+def 提取用户列表命令文本(event: Any, 命令文本: str) -> str:
+    候选列表: list[str] = [str(命令文本 or "")]
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    候选列表.extend(获取原始文本候选(event))
+
+    for 候选 in 候选列表:
+        文本 = 清理激活命令文本(候选)
+        if 文本 in 用户列表命令 or 文本 in 用户列表下一页命令:
+            return 文本
+    return ""
+
+
+def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
+    候选列表: list[str] = [str(命令文本 or "")]
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    候选列表.extend(获取原始文本候选(event))
+
+    for 候选 in 候选列表:
+        文本 = 清理激活命令文本(候选)
+        if (
+            文本 in 用户列表下一页命令
+            or 文本.startswith("生成卡密")
+            or 文本.startswith("查询卡密")
+            or 规范化卡密(文本)
+        ):
+            return 文本
+    return ""
+
+
 def 解析激活命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
     文本 = 提取激活命令文本(event, 命令文本)
     if not 文本 or not 用户操作命令规则.fullmatch(文本):
@@ -268,12 +684,16 @@ def 构造用户操作参数(操作: str, 用户列表: list[str], 天数: int) 
 
 def 提取用户操作(文本: str) -> str:
     头部 = str(文本 or "").split(maxsplit=1)[0]
-    if 头部.startswith("用户激活") or 头部.startswith("激活"):
-        return "激活"
+    if 头部.startswith("用户激活增加") or 头部.startswith("激活增加") or 头部.startswith("用户增加") or 头部.startswith("增加"):
+        return "增加"
+    if 头部.startswith("用户激活减少") or 头部.startswith("激活减少") or 头部.startswith("用户减少") or 头部.startswith("减少"):
+        return "减少"
     if 头部.startswith("用户重置") or 头部.startswith("重置"):
         return "重置"
     if 头部.startswith("用户查询时间") or 头部.startswith("查询时间"):
         return "查询"
+    if 头部.startswith("用户激活") or 头部.startswith("激活"):
+        return "激活"
     return ""
 
 
@@ -294,14 +714,14 @@ def 从命令文本提取用户列表和天数(文本: str, 操作: str) -> tupl
         if 用户编号规则.fullmatch(项目):
             用户列表.append(项目)
             continue
-        if 操作 == "激活" and 数字规则.fullmatch(项目):
+        if 操作 in {"激活", "增加", "减少"} and 数字规则.fullmatch(项目):
             天数 = 安全整数(项目, 天数)
     return 去重保序(用户列表), 天数
 
 
 def 从命令头提取天数(文本: str) -> int:
     头部 = str(文本 or "").split(maxsplit=1)[0]
-    匹配 = re.search(r"(?:用户)?激活(\d+)$", 头部)
+    匹配 = re.search(r"(?:用户)?(?:激活增加|激活减少|激活|增加|减少)(\d+)$", 头部)
     if 匹配:
         return 安全整数(匹配.group(1), 默认激活天数)
     return 默认激活天数
@@ -513,84 +933,54 @@ def 是At类型值(值: Any) -> bool:
     return False
 
 
+def 规范化卡密(值: Any) -> str:
+    文本 = str(值 or "").strip().upper()
+    文本 = re.sub(r"\s+", "", 文本)
+    return 文本 if 卡密规则.fullmatch(文本) else ""
+
+
+def 生成单个卡密() -> str:
+    while True:
+        卡密 = "".join(secrets.choice(卡密字符集) for _ in range(12))
+        if 卡密规则.fullmatch(卡密):
+            return 卡密
+
+
+async def 生成并保存卡密列表(配置: Any, 群号: str, 创建者: str, 数量: int, 天数: int) -> list[str]:
+    return await asyncio.to_thread(生成数据库卡密列表, 配置, 群号, 创建者, 数量, 天数)
+
+
+async def 列出卡密记录(配置: Any, 群号: str, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(列出数据库卡密记录, 配置, 群号, 查询参数)
+
+
+def 规范化卡密记录(记录: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "card_key": str(记录.get("card_key") or "").strip(),
+        "group_id": str(记录.get("group_id") or "").strip(),
+        "days": 安全整数(记录.get("days"), 默认激活天数),
+        "created_at": 安全整数(记录.get("created_at"), 0),
+        "created_by": str(记录.get("created_by") or "").strip(),
+        "used_at": 安全整数(记录.get("used_at"), 0),
+        "used_by": str(记录.get("used_by") or "").strip(),
+    }
+
+
 async def 读取激活到期时间(配置: Any, 群号: str, 用户编号: str) -> int:
     记录 = await 读取激活记录(配置, 群号, 用户编号)
     return 安全整数(记录.get("expires_at") if 记录 else 0, 0)
 
 
 async def 读取激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
-    if 使用数据库存储(配置):
-        return await asyncio.to_thread(读取数据库激活记录, 配置, 群号, 用户编号)
-    return 读取本地激活记录(配置, 群号, 用户编号)
+    return await asyncio.to_thread(读取数据库激活记录, 配置, 群号, 用户编号)
 
 
 async def 写入激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
-    if 使用数据库存储(配置):
-        await asyncio.to_thread(写入数据库激活记录, 配置, 群号, 用户编号, 到期时间)
-        return
-    写入本地激活记录(配置, 群号, 用户编号, 到期时间)
+    await asyncio.to_thread(写入数据库激活记录, 配置, 群号, 用户编号, 到期时间)
 
 
 async def 删除激活记录(配置: Any, 群号: str, 用户编号: str) -> None:
-    if 使用数据库存储(配置):
-        await asyncio.to_thread(删除数据库激活记录, 配置, 群号, 用户编号)
-        return
-    删除本地激活记录(配置, 群号, 用户编号)
-
-
-def 读取本地激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
-    数据 = 读取本地激活数据(配置)
-    记录 = 数据.get(激活记录键(群号, 用户编号))
-    if not isinstance(记录, dict):
-        return {}
-    到期时间 = 安全整数(记录.get("expires_at"), 0)
-    if 到期时间 < int(time.time()):
-        return {}
-    return {
-        "expires_at": 到期时间,
-        "updated_at": 安全整数(记录.get("updated_at"), 0),
-    }
-
-
-def 写入本地激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
-    路径 = 获取本地激活文件路径(配置)
-    路径.parent.mkdir(parents=True, exist_ok=True)
-    数据 = 读取本地激活数据(配置)
-    数据[激活记录键(群号, 用户编号)] = {
-        "group_id": str(群号),
-        "user_id": str(用户编号),
-        "expires_at": int(到期时间),
-        "updated_at": int(time.time()),
-    }
-    路径.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def 删除本地激活记录(配置: Any, 群号: str, 用户编号: str) -> None:
-    路径 = 获取本地激活文件路径(配置)
-    if not 路径.exists():
-        return
-    数据 = 读取本地激活数据(配置)
-    数据.pop(激活记录键(群号, 用户编号), None)
-    路径.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def 读取本地激活数据(配置: Any) -> dict[str, Any]:
-    路径 = 获取本地激活文件路径(配置)
-    if not 路径.exists():
-        return {}
-    try:
-        数据 = json.loads(路径.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning(f"用户激活本地记录读取失败：file={路径}, error={exc}")
-        return {}
-    return 数据 if isinstance(数据, dict) else {}
-
-
-def 获取本地激活文件路径(配置: Any) -> Path:
-    配置路径 = str(读取配置字段(配置, "user_activation_local_file") or "").strip()
-    if 配置路径:
-        return Path(配置路径)
-    return 默认本地激活文件
+    await asyncio.to_thread(删除数据库激活记录, 配置, 群号, 用户编号)
 
 
 def 读取数据库激活记录(配置: Any, 群号: str, 用户编号: str) -> dict[str, int]:
@@ -642,6 +1032,178 @@ def 删除数据库激活记录(配置: Any, 群号: str, 用户编号: str) -> 
         连接.commit()
 
 
+def 列出数据库激活用户记录(配置: Any, 群号: str) -> list[dict[str, int | str]]:
+    数据库配置 = 获取数据库配置(配置)
+    当前时间 = int(time.time())
+    with 打开数据库连接(数据库配置) as 连接:
+        确保数据库表(连接, 数据库配置["table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT user_id, expires_at, updated_at
+                FROM `{数据库配置['table']}`
+                WHERE group_id=%s AND expires_at >= %s
+                ORDER BY expires_at ASC, user_id ASC
+                """,
+                (str(群号), 当前时间),
+            )
+            记录列表 = 游标.fetchall()
+    return [
+        {
+            "user_id": str(记录[0]),
+            "expires_at": 安全整数(记录[1], 0),
+            "updated_at": 安全整数(记录[2] if len(记录) > 2 else 0, 0),
+        }
+        for 记录 in 记录列表
+    ]
+
+
+def 生成数据库卡密列表(配置: Any, 群号: str, 创建者: str, 数量: int, 天数: int) -> list[str]:
+    数据库配置 = 获取数据库配置(配置)
+    当前时间 = int(time.time())
+    结果: list[str] = []
+    尝试次数 = 0
+    with 打开数据库连接(数据库配置) as 连接:
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        with 连接.cursor() as 游标:
+            while len(结果) < 数量 and 尝试次数 < 数量 * 100:
+                尝试次数 += 1
+                卡密 = 生成单个卡密()
+                游标.execute(
+                    f"""
+                    INSERT IGNORE INTO `{数据库配置['card_table']}`
+                    (card_key, group_id, days, created_at, created_by, used_at, used_by)
+                    VALUES (%s, %s, %s, %s, %s, 0, '')
+                    """,
+                    (卡密, str(群号), int(天数), 当前时间, str(创建者)),
+                )
+                if 游标.rowcount:
+                    结果.append(卡密)
+        if len(结果) < 数量:
+            连接.rollback()
+            raise RuntimeError("卡密生成失败，请重试")
+        连接.commit()
+    return 结果
+
+
+def 使用数据库卡密激活(配置: Any, 群号: str, 用户编号: str, 卡密: str) -> dict[str, Any]:
+    数据库配置 = 获取数据库配置(配置)
+    当前时间 = int(time.time())
+    with 打开数据库连接(数据库配置) as 连接:
+        确保数据库表(连接, 数据库配置["table"])
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT days, used_at, used_by
+                FROM `{数据库配置['card_table']}`
+                WHERE card_key=%s AND group_id=%s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (卡密, str(群号)),
+            )
+            卡密记录 = 游标.fetchone()
+            if not 卡密记录:
+                连接.rollback()
+                return {"status": "invalid"}
+            if 安全整数(卡密记录[1], 0) > 0 or str(卡密记录[2] if len(卡密记录) > 2 else "").strip():
+                连接.rollback()
+                return {"status": "invalid"}
+
+            游标.execute(
+                f"""
+                SELECT expires_at, updated_at
+                FROM `{数据库配置['table']}`
+                WHERE group_id=%s AND user_id=%s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (str(群号), str(用户编号)),
+            )
+            激活记录 = 游标.fetchone()
+            if 激活记录 and 安全整数(激活记录[0], 0) >= 当前时间:
+                连接.rollback()
+                return {
+                    "status": "already",
+                    "record": {
+                        "expires_at": 安全整数(激活记录[0], 0),
+                        "updated_at": 安全整数(激活记录[1] if len(激活记录) > 1 else 0, 0),
+                    },
+                }
+
+            天数 = 安全整数(卡密记录[0], 默认激活天数)
+            到期时间 = 当前时间 + 天数 * 86400
+            游标.execute(
+                f"""
+                INSERT INTO `{数据库配置['table']}` (group_id, user_id, expires_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), updated_at=VALUES(updated_at)
+                """,
+                (str(群号), str(用户编号), 到期时间, 当前时间),
+            )
+            游标.execute(
+                f"""
+                UPDATE `{数据库配置['card_table']}`
+                SET used_at=%s, used_by=%s
+                WHERE card_key=%s AND group_id=%s
+                """,
+                (当前时间, str(用户编号), 卡密, str(群号)),
+            )
+        连接.commit()
+    return {"status": "used", "days": 天数, "expires_at": 到期时间}
+
+
+def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
+    数据库配置 = 获取数据库配置(配置)
+    条件列表 = ["group_id=%s"]
+    参数列表: list[Any] = [str(群号)]
+    状态 = 查询参数.get("status")
+    指定卡密 = str(查询参数.get("card_key") or "").strip()
+    用户列表 = [str(用户).strip() for 用户 in 查询参数.get("user_ids", []) if str(用户).strip()]
+    if 状态 == "used":
+        条件列表.append("used_at > 0")
+    elif 状态 == "unused":
+        条件列表.append("used_at = 0")
+    if 指定卡密:
+        条件列表.append("card_key=%s")
+        参数列表.append(指定卡密)
+    if 用户列表:
+        占位符 = ", ".join(["%s"] * len(用户列表))
+        条件列表.append(f"used_by IN ({占位符})")
+        参数列表.extend(用户列表)
+
+    with 打开数据库连接(数据库配置) as 连接:
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT card_key, group_id, days, created_at, created_by, used_at, used_by
+                FROM `{数据库配置['card_table']}`
+                WHERE {' AND '.join(条件列表)}
+                ORDER BY CASE WHEN used_at = 0 THEN 1 ELSE 0 END ASC,
+                         IF(used_at = 0, created_at, used_at) DESC,
+                         card_key ASC
+                """,
+                tuple(参数列表),
+            )
+            记录列表 = 游标.fetchall()
+    return [
+        规范化卡密记录(
+            {
+                "card_key": 记录[0],
+                "group_id": 记录[1],
+                "days": 记录[2],
+                "created_at": 记录[3],
+                "created_by": 记录[4],
+                "used_at": 记录[5],
+                "used_by": 记录[6],
+            }
+        )
+        for 记录 in 记录列表
+    ]
+
+
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
     try:
         import pymysql
@@ -677,32 +1239,41 @@ def 确保数据库表(连接: Any, 表名: str) -> None:
     连接.commit()
 
 
-def 获取数据库配置(配置: Any) -> dict[str, Any]:
-    表名 = str(读取配置字段(配置, "user_activation_database_table") or "mantou_user_activation").strip()
-    if not 数据库表名规则.fullmatch(表名):
-        raise RuntimeError("用户激活数据库表名只能包含字母、数字和下划线")
+def 确保卡密数据库表(连接: Any, 表名: str) -> None:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{表名}` (
+                card_key VARCHAR(32) NOT NULL,
+                group_id VARCHAR(64) NOT NULL,
+                days INT NOT NULL,
+                created_at BIGINT NOT NULL,
+                created_by VARCHAR(64) NOT NULL,
+                used_at BIGINT NOT NULL DEFAULT 0,
+                used_by VARCHAR(64) NOT NULL DEFAULT '',
+                PRIMARY KEY (card_key),
+                KEY idx_group_used (group_id, used_at),
+                KEY idx_group_used_by (group_id, used_by)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+    连接.commit()
 
+
+def 获取数据库配置(配置: Any) -> dict[str, Any]:
     数据库配置 = {
         "host": str(读取配置字段(配置, "user_activation_database_host") or "").strip(),
         "port": 安全整数(读取配置字段(配置, "user_activation_database_port"), 3306),
         "user": str(读取配置字段(配置, "user_activation_database_user") or "").strip(),
         "password": str(读取配置字段(配置, "user_activation_database_password") or ""),
         "database": str(读取配置字段(配置, "user_activation_database_name") or "").strip(),
-        "table": 表名,
+        "table": 用户激活数据库表名,
+        "card_table": 用户激活卡密数据库表名,
     }
     缺少字段 = [键 for 键 in ("host", "user", "database") if not 数据库配置[键]]
     if 缺少字段:
         raise RuntimeError(f"用户激活数据库配置不完整：缺少 {', '.join(缺少字段)}")
     return 数据库配置
-
-
-def 使用数据库存储(配置: Any) -> bool:
-    值 = 读取配置字段(配置, "user_activation_database_enabled")
-    return str(值 or "").strip().lower() in {"1", "true", "yes", "on", "启用", "开启"}
-
-
-def 激活记录键(群号: str, 用户编号: str) -> str:
-    return f"{群号}:{用户编号}"
 
 
 def 获取群号(event: Any) -> str:
