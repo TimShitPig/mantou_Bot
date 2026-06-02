@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import secrets
 import string
@@ -29,7 +30,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户激活数据库表名 = "mantou_user_activation"
 用户激活卡密数据库表名 = "mantou_user_activation_cards"
 用户操作命令规则 = re.compile(
-    r"^(?:(?:用户)?(?:激活增加|激活减少|激活|重置|增加|减少)(?:\d+)?|(?:用户)?查询时间)(?:\s+\S+){0,20}$"
+    r"^(?:(?:用户)?(?:激活增加|激活减少|激活|重置|增加|减少)(?:\d+)?|(?:用户)?查询时间|(?:用户)?查询)(?:\s+\S+){0,20}$"
 )
 用户操作命令开头 = (
     "激活增加",
@@ -44,6 +45,8 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
     "用户激活",
     "重置",
     "用户重置",
+    "查询",
+    "用户查询",
     "查询时间",
     "用户查询时间",
 )
@@ -59,6 +62,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户列表每页数量 = 10
 卡密列表每页数量 = 5
 卡密生成最大数量 = 200
+列表分隔线 = "--------------------"
 用户列表翻页状态: dict[str, dict[str, Any]] = {}
 卡密查询翻页状态: dict[str, dict[str, Any]] = {}
 
@@ -178,26 +182,15 @@ async def 获取单用户查询时间回复(配置: Any, 群号: str, 目标用�
         return "\n".join([f"用户：{目标用户}", "状态：管理员，无需激活"])
 
     try:
-        激活记录 = await 读取激活记录(配置, 群号, 目标用户)
+        激活记录 = await 读取激活查询详情(配置, 群号, 目标用户)
     except Exception as exc:
         logger.warning(f"用户激活查询失败：group_id={群号}, user_id={目标用户}, error={exc}")
         return f"用户查询失败：{exc}"
 
-    到期时间 = 安全整数(激活记录.get("expires_at") if 激活记录 else 0, 0)
-    if 到期时间 <= 0:
+    if not 激活记录 or 安全整数(激活记录.get("expires_at"), 0) <= 0:
         return "\n".join([f"用户：{目标用户}", "状态：未激活"])
 
-    激活时间 = 安全整数(激活记录.get("updated_at"), 0)
-    剩余秒数 = max(0, int(到期时间) - int(time.time()))
-    return "\n".join(
-        [
-            f"用户：{目标用户}",
-            "状态：已激活",
-            f"激活时间：{格式化时间戳(激活时间) if 激活时间 > 0 else '未知'}",
-            f"到期时间：{格式化时间戳(到期时间)}",
-            f"剩余时间：{格式化剩余时间(剩余秒数)}",
-        ]
-    )
+    return 格式化单用户查询回复(目标用户, 激活记录)
 
 
 async def 处理激活时间调整(
@@ -451,6 +444,24 @@ def 格式化单用户已激活回复(激活记录: dict[str, Any]) -> str:
     )
 
 
+def 格式化单用户查询回复(目标用户: str, 激活记录: dict[str, Any]) -> str:
+    激活时间 = 安全整数(激活记录.get("updated_at"), 0)
+    到期时间 = 安全整数(激活记录.get("expires_at"), 0)
+    激活天数 = 安全整数(激活记录.get("days"), 0)
+    剩余秒数 = max(0, 到期时间 - int(time.time()))
+    卡密号 = str(激活记录.get("card_key") or "").strip() or "未知"
+    return "\n".join(
+        [
+            f"QQ号：{目标用户}",
+            f"卡密号：{卡密号}",
+            f"激活时间：{格式化时间戳(激活时间) if 激活时间 > 0 else '未知'}",
+            f"结束时间：{格式化时间戳(到期时间)}",
+            f"激活天数：{激活天数 if 激活天数 > 0 else '未知'} 天",
+            f"剩余时间：{格式化剩余时间(剩余秒数)}",
+        ]
+    )
+
+
 def 格式化批量调整结果(
     操作: str,
     成功用户: list[dict[str, Any]],
@@ -495,9 +506,15 @@ def 格式化激活用户列表(用户列表: list[dict[str, Any]], 页码: int,
     开始 = (页码 - 1) * 用户列表每页数量
     当前页用户 = 用户列表[开始 : 开始 + 用户列表每页数量]
     行列表 = [f"已激活用户列表：第 {页码} / {总页数} 页，共 {len(用户列表)} 个"]
+    用户块: list[str] = []
     for 序号, 记录 in enumerate(当前页用户, start=开始 + 1):
         到期时间 = 安全整数(记录.get("expires_at"), 0)
-        行列表.append(f"{序号}. {记录.get('user_id')} 到期：{格式化时间戳(到期时间)}")
+        用户块.append("\n".join([
+            f"{序号}. QQ：{记录.get('user_id')}",
+            f"到期：{格式化日期(到期时间)}",
+        ]))
+    if 用户块:
+        行列表.append(f"\n{列表分隔线}\n".join(用户块))
     if 页码 < 总页数:
         行列表.append("发送“下一页”查看更多")
     elif 已最后一页:
@@ -520,9 +537,10 @@ def 格式化卡密列表(
     卡密块: list[str] = []
     for 记录 in 当前页卡密:
         使用者 = str(记录.get("used_by") or "").strip()
-        卡密块.append("\n".join([str(记录.get("card_key") or ""), 使用者 or "未使用"]))
+        天数 = 安全整数(记录.get("days"), 默认激活天数)
+        卡密块.append("\n".join([str(记录.get("card_key") or ""), 使用者 or "未使用", f"----{天数}天"]))
     if 卡密块:
-        行列表.append("\n-------\n".join(卡密块))
+        行列表.append(f"\n{列表分隔线}\n".join(卡密块))
     if 页码 < 总页数:
         行列表.append("发送“下一页”查看更多")
     elif 已最后一页:
@@ -535,7 +553,7 @@ def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None)
         return None
 
     项目列表 = str(命令文本 or "").split()[1:]
-    状态 = ""
+    状态 = "unused"
     卡密 = ""
     用户列表: list[str] = []
     for 项目 in 项目列表:
@@ -690,7 +708,7 @@ def 提取用户操作(文本: str) -> str:
         return "减少"
     if 头部.startswith("用户重置") or 头部.startswith("重置"):
         return "重置"
-    if 头部.startswith("用户查询时间") or 头部.startswith("查询时间"):
+    if 头部.startswith("用户查询时间") or 头部.startswith("查询时间") or 头部.startswith("用户查询") or 头部.startswith("查询"):
         return "查询"
     if 头部.startswith("用户激活") or 头部.startswith("激活"):
         return "激活"
@@ -975,6 +993,10 @@ async def 读取激活记录(配置: Any, 群号: str, 用户编号: str) -> dic
     return await asyncio.to_thread(读取数据库激活记录, 配置, 群号, 用户编号)
 
 
+async def 读取激活查询详情(配置: Any, 群号: str, 用户编号: str) -> dict[str, Any]:
+    return await asyncio.to_thread(读取数据库激活查询详情, 配置, 群号, 用户编号)
+
+
 async def 写入激活记录(配置: Any, 群号: str, 用户编号: str, 到期时间: int) -> None:
     await asyncio.to_thread(写入数据库激活记录, 配置, 群号, 用户编号, 到期时间)
 
@@ -1001,6 +1023,58 @@ def 读取数据库激活记录(配置: Any, 群号: str, 用户编号: str) -> 
     return {
         "expires_at": 到期时间,
         "updated_at": 安全整数(记录[1] if len(记录) > 1 else 0, 0),
+    }
+
+
+def 读取数据库激活查询详情(配置: Any, 群号: str, 用户编号: str) -> dict[str, Any]:
+    数据库配置 = 获取数据库配置(配置)
+    当前时间 = int(time.time())
+    with 打开数据库连接(数据库配置) as 连接:
+        确保数据库表(连接, 数据库配置["table"])
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT expires_at, updated_at
+                FROM `{数据库配置['table']}`
+                WHERE group_id=%s AND user_id=%s
+                LIMIT 1
+                """,
+                (str(群号), str(用户编号)),
+            )
+            激活记录 = 游标.fetchone()
+            if not 激活记录:
+                return {}
+
+            到期时间 = 安全整数(激活记录[0], 0)
+            if 到期时间 < 当前时间:
+                return {}
+
+            激活时间 = 安全整数(激活记录[1] if len(激活记录) > 1 else 0, 0)
+            游标.execute(
+                f"""
+                SELECT card_key, days, used_at
+                FROM `{数据库配置['card_table']}`
+                WHERE group_id=%s AND used_by=%s
+                ORDER BY used_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (str(群号), str(用户编号)),
+            )
+            卡密记录 = 游标.fetchone()
+
+    卡密号 = str(卡密记录[0]).strip() if 卡密记录 else ""
+    卡密天数 = 安全整数(卡密记录[1], 0) if 卡密记录 else 0
+    卡密使用时间 = 安全整数(卡密记录[2], 0) if 卡密记录 else 0
+    if 卡密使用时间 > 0:
+        激活时间 = 卡密使用时间
+    if 卡密天数 <= 0 and 激活时间 > 0 and 到期时间 > 激活时间:
+        卡密天数 = max(1, math.ceil((到期时间 - 激活时间) / 86400))
+    return {
+        "expires_at": 到期时间,
+        "updated_at": 激活时间,
+        "card_key": 卡密号,
+        "days": 卡密天数,
     }
 
 
@@ -1332,6 +1406,12 @@ def 限制长度(值: Any, 最大长度: int = 2000) -> str:
 
 def 格式化时间戳(时间戳: int) -> str:
     return datetime.fromtimestamp(int(时间戳)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def 格式化日期(时间戳: int) -> str:
+    if int(时间戳) <= 0:
+        return "未知"
+    return datetime.fromtimestamp(int(时间戳)).strftime("%Y-%m-%d")
 
 
 def 格式化剩余时间(秒数: int) -> str:
