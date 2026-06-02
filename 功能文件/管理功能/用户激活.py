@@ -751,16 +751,16 @@ def 提取用户列表命令文本(event: Any, 命令文本: str) -> str:
 
 
 def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
-    候选列表: list[str] = [str(命令文本 or "")]
+    指令候选列表: list[str] = [str(命令文本 or "")]
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
         for 字段名 in ("message", "components", "content"):
             文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
             if 文本:
-                候选列表.append(文本)
-    候选列表.extend(获取原始文本候选(event))
+                指令候选列表.append(文本)
+    指令候选列表.extend(获取原始文本候选(event))
 
-    for 候选 in 候选列表:
+    for 候选 in 指令候选列表:
         文本 = 清理激活命令文本(候选)
         if (
             文本 in 卡密查询选择命令
@@ -769,8 +769,12 @@ def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
             文本 in 用户列表翻页命令
             or 文本.startswith("生成卡密")
             or 文本.startswith("查询卡密")
-            or 提取卡密候选列表(文本)
         ):
+            return 文本
+
+    for 候选 in 获取卡密可见文本候选(event, 命令文本):
+        文本 = 清理激活命令文本(候选)
+        if 提取卡密候选列表(文本):
             return 文本
     return ""
 
@@ -946,6 +950,52 @@ def 从消息段提取非At文本(消息: Any) -> str:
     if 消息类型小写 in {"text", "plain"} or 消息类型小写.endswith((".plain", ".text")):
         return str(读取字段(消息, "text") or 读取字段(消息, "content") or "")
     return ""
+
+
+def 获取卡密可见文本候选(event: Any, 命令文本: str) -> list[str]:
+    候选列表: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    if not 候选列表 and 是否可按命令文本识别卡密(event):
+        命令文本 = str(命令文本 or "").strip()
+        if 命令文本:
+            候选列表.append(命令文本)
+    return 候选列表
+
+
+def 是否可按命令文本识别卡密(event: Any) -> bool:
+    消息对象 = getattr(event, "message_obj", None)
+    找到消息字段 = False
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("message", "components", "content"):
+            消息 = 读取字段(对象, 字段名)
+            if 消息 is None:
+                continue
+            找到消息字段 = True
+            if not 是否纯文本消息段集合(消息):
+                return False
+    return not 找到消息字段
+
+
+def 是否纯文本消息段集合(消息: Any) -> bool:
+    if 消息 is None:
+        return True
+    if isinstance(消息, str):
+        return True
+    if isinstance(消息, (list, tuple, set)):
+        return all(是否纯文本消息段集合(消息段) for 消息段 in 消息)
+    if isinstance(消息, dict):
+        消息类型 = str(消息.get("type") or "").strip().lower()
+        return 消息类型 in {"text", "plain"} or 是At类型值(消息.get("type"))
+    消息类型 = str(读取字段(消息, "type") or "")
+    if 是At类型值(消息类型):
+        return True
+    消息类型小写 = 消息类型.lower()
+    return 消息类型小写 in {"text", "plain"} or 消息类型小写.endswith((".plain", ".text"))
 
 
 def 清理激活命令文本(文本: Any) -> str:
