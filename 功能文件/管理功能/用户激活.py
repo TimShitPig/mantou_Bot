@@ -51,10 +51,13 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
     "用户查询时间",
 )
 用户列表命令 = {"查询用户"}
-用户列表下一页命令 = {"下一页"}
+用户列表下一页命令 = {"下一页", "下"}
+用户列表上一页命令 = {"上一页", "上"}
+用户列表翻页命令 = 用户列表下一页命令 | 用户列表上一页命令
 生成卡密命令规则 = re.compile(r"^生成卡密(?:\s+(\d+))?$")
 查询卡密命令规则 = re.compile(r"^查询卡密(?:\s+\S+){0,20}$")
 卡密规则 = re.compile(r"^(?=.*[A-Z])[A-Z0-9]{12}$")
+卡密候选规则 = re.compile(r"(?=([A-Z0-9]{12}))")
 卡密字符集 = "".join(字符 for 字符 in string.ascii_uppercase + string.digits if 字符 not in {"0", "1", "I", "O"})
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
@@ -73,10 +76,10 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
         return 卡密回复
 
     列表命令 = 提取用户列表命令文本(event, 命令文本)
-    if 列表命令 in 用户列表命令 or 列表命令 in 用户列表下一页命令:
+    if 列表命令 in 用户列表命令 or 列表命令 in 用户列表翻页命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限查询激活用户"
-        return await 处理查询用户列表(event, 配置, 下一页=列表命令 in 用户列表下一页命令)
+        return await 处理查询用户列表(event, 配置, 翻页方向=获取翻页方向(列表命令))
 
     激活参数 = 解析激活命令(event, 命令文本, context)
     if 激活参数 is None:
@@ -242,44 +245,48 @@ async def 处理激活时间调整(
     return 格式化批量调整结果(操作, 成功用户, 过期用户, 失败用户, 天数)
 
 
-async def 处理查询用户列表(event: Any, 配置: Any, 下一页: bool = False) -> str:
+async def 处理查询用户列表(event: Any, 配置: Any, 下一页: bool = False, 翻页方向: int = 0) -> str:
     群号 = 获取群号(event)
     if not 群号:
         return "查询用户失败：只能在群聊中使用"
 
+    if 下一页 and 翻页方向 == 0:
+        翻页方向 = 1
     状态键 = 获取用户列表翻页状态键(event, 群号)
-    if not 下一页:
+    if 翻页方向 == 0:
         卡密查询翻页状态.pop(状态键, None)
-    if 下一页 and 状态键 not in 用户列表翻页状态:
+    if 翻页方向 != 0 and 状态键 not in 用户列表翻页状态:
         return "没有可翻页的查询用户结果，请先发送“查询用户”"
 
-    页码 = 安全整数(用户列表翻页状态.get(状态键, {}).get("page"), 1) + 1 if 下一页 else 1
+    页码 = 安全整数(用户列表翻页状态.get(状态键, {}).get("page"), 1) + 翻页方向 if 翻页方向 else 1
     用户列表 = await 列出激活用户记录(配置, 群号)
     if not 用户列表:
         用户列表翻页状态.pop(状态键, None)
         return "当前群没有已激活用户"
 
     总页数 = max(1, (len(用户列表) + 用户列表每页数量 - 1) // 用户列表每页数量)
-    if 页码 > 总页数:
+    边界提示 = ""
+    if 页码 < 1:
+        页码 = 1
+        边界提示 = "已经是第一页"
+    elif 页码 > 总页数:
         页码 = 总页数
-        已最后一页 = True
-    else:
-        已最后一页 = False
+        边界提示 = "已经是最后一页"
     用户列表翻页状态[状态键] = {"page": 页码}
-    return 格式化激活用户列表(用户列表, 页码, 总页数, 已最后一页)
+    return 格式化激活用户列表(用户列表, 页码, 总页数, 边界提示)
 
 
 async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
     卡密文本 = 提取卡密命令文本(event, 命令文本)
 
-    if 卡密文本 in 用户列表下一页命令:
+    if 卡密文本 in 用户列表翻页命令:
         群号 = 获取群号(event) or "private"
         状态键 = 获取用户列表翻页状态键(event, 群号)
         if 状态键 not in 卡密查询翻页状态:
             return None
         if not 是群文件清理管理员(event, 配置):
             return "没有权限查询卡密"
-        return await 处理查询卡密(event, 卡密文本, 配置, context, 下一页=True)
+        return await 处理查询卡密(event, 卡密文本, 配置, context, 翻页方向=获取翻页方向(卡密文本))
 
     if 卡密文本.startswith("生成卡密"):
         if not 是群文件清理管理员(event, 配置):
@@ -291,9 +298,9 @@ async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context
             return "没有权限查询卡密"
         return await 处理查询卡密(event, 卡密文本, 配置, context)
 
-    卡密 = 规范化卡密(卡密文本 or 命令文本)
-    if 卡密:
-        return await 处理使用卡密(event, 配置, 卡密)
+    卡密候选列表 = 提取卡密候选列表(卡密文本 or 命令文本)
+    if 卡密候选列表:
+        return await 处理使用卡密候选列表(event, 配置, 卡密候选列表)
     return None
 
 
@@ -329,6 +336,10 @@ async def 处理生成卡密(event: Any, 命令文本: str, 配置: Any) -> str:
 
 
 async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str:
+    return await 处理使用卡密候选列表(event, 配置, [卡密])
+
+
+async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选列表: list[str]) -> str:
     用户编号 = 获取发送者QQ(event)
     if not 用户编号:
         return "卡密激活失败：没有获取到用户QQ"
@@ -336,37 +347,53 @@ async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str:
         return "管理员无需激活，不消耗卡密"
 
     群号 = 获取群号(event) or "private"
-    try:
-        结果 = await asyncio.to_thread(使用数据库卡密激活, 配置, 群号, 用户编号, 卡密)
-    except Exception as exc:
-        logger.warning(f"卡密激活失败：group_id={群号}, user_id={用户编号}, card={卡密}, error={exc}")
-        return f"卡密激活失败：{exc}"
+    卡密候选列表 = 去重保序([规范化卡密(卡密) for 卡密 in 卡密候选列表 if 规范化卡密(卡密)])
+    最后异常: Exception | None = None
+    已收到数据库响应 = False
+    for 卡密 in 卡密候选列表:
+        try:
+            结果 = await asyncio.to_thread(使用数据库卡密激活, 配置, 群号, 用户编号, 卡密)
+        except Exception as exc:
+            最后异常 = exc
+            logger.warning(f"卡密激活失败：group_id={群号}, user_id={用户编号}, card={卡密}, error={exc}")
+            continue
 
-    状态 = 结果.get("status")
-    if 状态 == "invalid":
-        return "卡密无效或已使用"
-    if 状态 == "already":
-        return 格式化单用户已激活回复({"user_id": 用户编号, **结果.get("record", {})})
-    if 状态 == "used":
-        return "\n".join(
-            [
-                "卡密激活成功",
-                f"有效期：{安全整数(结果.get('days'), 默认激活天数)} 天",
-                f"到期时间：{格式化时间戳(安全整数(结果.get('expires_at'), 0))}",
-            ]
-        )
+        已收到数据库响应 = True
+        状态 = 结果.get("status")
+        if 状态 == "already":
+            return 格式化单用户已激活回复({"user_id": 用户编号, **结果.get("record", {})})
+        if 状态 == "used":
+            return "\n".join(
+                [
+                    "卡密激活成功",
+                    f"有效期：{安全整数(结果.get('days'), 默认激活天数)} 天",
+                    f"到期时间：{格式化时间戳(安全整数(结果.get('expires_at'), 0))}",
+                ]
+            )
+
+    if 最后异常 is not None and (len(卡密候选列表) == 1 or not 已收到数据库响应):
+        return f"卡密激活失败：{最后异常}"
     return "卡密无效或已使用"
 
 
-async def 处理查询卡密(event: Any, 命令文本: str, 配置: Any, context: Any = None, 下一页: bool = False) -> str:
+async def 处理查询卡密(
+    event: Any,
+    命令文本: str,
+    配置: Any,
+    context: Any = None,
+    下一页: bool = False,
+    翻页方向: int = 0,
+) -> str:
     群号 = 获取群号(event) or "private"
     状态键 = 获取用户列表翻页状态键(event, 群号)
 
-    if 下一页:
+    if 下一页 and 翻页方向 == 0:
+        翻页方向 = 1
+    if 翻页方向 != 0:
         状态 = 卡密查询翻页状态.get(状态键)
         if not 状态:
             return "没有可翻页的卡密查询结果，请先发送“查询卡密”"
-        页码 = 安全整数(状态.get("page"), 1) + 1
+        页码 = 安全整数(状态.get("page"), 1) + 翻页方向
         查询参数 = 状态.get("query") if isinstance(状态.get("query"), dict) else {}
     else:
         查询参数 = 解析查询卡密命令(event, 命令文本, context)
@@ -386,13 +413,15 @@ async def 处理查询卡密(event: Any, 命令文本: str, 配置: Any, context
         return "没有符合条件的卡密"
 
     总页数 = max(1, (len(卡密列表) + 卡密列表每页数量 - 1) // 卡密列表每页数量)
-    if 页码 > 总页数:
+    边界提示 = ""
+    if 页码 < 1:
+        页码 = 1
+        边界提示 = "已经是第一页"
+    elif 页码 > 总页数:
         页码 = 总页数
-        已最后一页 = True
-    else:
-        已最后一页 = False
+        边界提示 = "已经是最后一页"
     卡密查询翻页状态[状态键] = {"page": 页码, "query": 查询参数}
-    return 格式化卡密列表(卡密列表, 查询参数, 页码, 总页数, 已最后一页)
+    return 格式化卡密列表(卡密列表, 查询参数, 页码, 总页数, 边界提示)
 
 
 def 获取目标用户列表(激活参数: dict[str, Any]) -> list[str]:
@@ -454,10 +483,10 @@ def 格式化单用户查询回复(目标用户: str, 激活记录: dict[str, An
         [
             f"QQ号：{目标用户}",
             f"卡密号：{卡密号}",
-            f"激活时间：{格式化时间戳(激活时间) if 激活时间 > 0 else '未知'}",
-            f"结束时间：{格式化时间戳(到期时间)}",
             f"激活天数：{激活天数 if 激活天数 > 0 else '未知'} 天",
             f"剩余时间：{格式化剩余时间(剩余秒数)}",
+            f"激活时间：{格式化时间戳(激活时间) if 激活时间 > 0 else '未知'}",
+            f"结束时间：{格式化时间戳(到期时间)}",
         ]
     )
 
@@ -498,26 +527,48 @@ def 获取用户列表翻页状态键(event: Any, 群号: str) -> str:
     return f"{群号}:{获取发送者QQ(event)}"
 
 
+def 获取翻页方向(命令文本: str) -> int:
+    文本 = str(命令文本 or "").strip()
+    if 文本 in 用户列表下一页命令:
+        return 1
+    if 文本 in 用户列表上一页命令:
+        return -1
+    return 0
+
+
 async def 列出激活用户记录(配置: Any, 群号: str) -> list[dict[str, int | str]]:
     return await asyncio.to_thread(列出数据库激活用户记录, 配置, 群号)
 
 
-def 格式化激活用户列表(用户列表: list[dict[str, Any]], 页码: int, 总页数: int, 已最后一页: bool = False) -> str:
+def 格式化激活用户列表(用户列表: list[dict[str, Any]], 页码: int, 总页数: int, 边界提示: str | bool = "") -> str:
+    当前时间 = int(time.time())
+    用户列表 = sorted(
+        用户列表,
+        key=lambda 记录: (
+            安全整数(记录.get("expires_at"), 0),
+            str(记录.get("user_id") or ""),
+        ),
+    )
     开始 = (页码 - 1) * 用户列表每页数量
     当前页用户 = 用户列表[开始 : 开始 + 用户列表每页数量]
     行列表 = [f"已激活用户列表：第 {页码} / {总页数} 页，共 {len(用户列表)} 个"]
     用户块: list[str] = []
     for 序号, 记录 in enumerate(当前页用户, start=开始 + 1):
         到期时间 = 安全整数(记录.get("expires_at"), 0)
+        卡密号 = str(记录.get("card_key") or "").strip() or "未知"
+        剩余秒数 = max(0, 到期时间 - 当前时间)
         用户块.append("\n".join([
             f"{序号}. QQ：{记录.get('user_id')}",
-            f"到期：{格式化日期(到期时间)}",
+            f"卡密：{卡密号}",
+            f"剩余时间：{格式化剩余时间(剩余秒数)}",
         ]))
     if 用户块:
         行列表.append(f"\n{列表分隔线}\n".join(用户块))
     if 页码 < 总页数:
-        行列表.append("发送“下一页”查看更多")
-    elif 已最后一页:
+        行列表.append("发送“下一页”或“下”查看更多")
+    if isinstance(边界提示, str) and 边界提示:
+        行列表.append(边界提示)
+    elif 边界提示 is True:
         行列表.append("已经是最后一页")
     return "\n".join(行列表)
 
@@ -527,7 +578,7 @@ def 格式化卡密列表(
     查询参数: dict[str, Any],
     页码: int,
     总页数: int,
-    已最后一页: bool = False,
+    边界提示: str | bool = "",
 ) -> str:
     开始 = (页码 - 1) * 卡密列表每页数量
     当前页卡密 = 卡密列表[开始 : 开始 + 卡密列表每页数量]
@@ -538,12 +589,15 @@ def 格式化卡密列表(
     for 记录 in 当前页卡密:
         使用者 = str(记录.get("used_by") or "").strip()
         天数 = 安全整数(记录.get("days"), 默认激活天数)
-        卡密块.append("\n".join([str(记录.get("card_key") or ""), 使用者 or "未使用", f"----{天数}天"]))
+        使用状态 = 使用者 if 使用者 else "未使用"
+        卡密块.append("\n".join([str(记录.get("card_key") or ""), f"{使用状态}----{天数}天"]))
     if 卡密块:
         行列表.append(f"\n{列表分隔线}\n".join(卡密块))
     if 页码 < 总页数:
-        行列表.append("发送“下一页”查看更多")
-    elif 已最后一页:
+        行列表.append("发送“下一页”或“下”查看更多")
+    if isinstance(边界提示, str) and 边界提示:
+        行列表.append(边界提示)
+    elif 边界提示 is True:
         行列表.append("已经是最后一页")
     return "\n".join(行列表)
 
@@ -642,7 +696,7 @@ def 提取用户列表命令文本(event: Any, 命令文本: str) -> str:
 
     for 候选 in 候选列表:
         文本 = 清理激活命令文本(候选)
-        if 文本 in 用户列表命令 or 文本 in 用户列表下一页命令:
+        if 文本 in 用户列表命令 or 文本 in 用户列表翻页命令:
             return 文本
     return ""
 
@@ -660,10 +714,10 @@ def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
     for 候选 in 候选列表:
         文本 = 清理激活命令文本(候选)
         if (
-            文本 in 用户列表下一页命令
+            文本 in 用户列表翻页命令
             or 文本.startswith("生成卡密")
             or 文本.startswith("查询卡密")
-            or 规范化卡密(文本)
+            or 提取卡密候选列表(文本)
         ):
             return 文本
     return ""
@@ -953,8 +1007,13 @@ def 是At类型值(值: Any) -> bool:
 
 def 规范化卡密(值: Any) -> str:
     文本 = str(值 or "").strip().upper()
-    文本 = re.sub(r"\s+", "", 文本)
     return 文本 if 卡密规则.fullmatch(文本) else ""
+
+
+def 提取卡密候选列表(值: Any) -> list[str]:
+    文本 = str(值 or "").upper()
+    候选列表 = [匹配.group(1) for 匹配 in 卡密候选规则.finditer(文本)]
+    return 去重保序([候选 for 候选 in 候选列表 if 卡密规则.fullmatch(候选)])
 
 
 def 生成单个卡密() -> str:
@@ -1111,13 +1170,24 @@ def 列出数据库激活用户记录(配置: Any, 群号: str) -> list[dict[str
     当前时间 = int(time.time())
     with 打开数据库连接(数据库配置) as 连接:
         确保数据库表(连接, 数据库配置["table"])
+        确保卡密数据库表(连接, 数据库配置["card_table"])
         with 连接.cursor() as 游标:
             游标.execute(
                 f"""
-                SELECT user_id, expires_at, updated_at
-                FROM `{数据库配置['table']}`
-                WHERE group_id=%s AND expires_at >= %s
-                ORDER BY expires_at ASC, user_id ASC
+                SELECT a.user_id,
+                       a.expires_at,
+                       a.updated_at,
+                       (
+                           SELECT c.card_key
+                           FROM `{数据库配置['card_table']}` c
+                           WHERE c.group_id = a.group_id
+                             AND c.used_by = a.user_id
+                           ORDER BY c.used_at DESC, c.created_at DESC, c.card_key ASC
+                           LIMIT 1
+                       ) AS card_key
+                FROM `{数据库配置['table']}` a
+                WHERE a.group_id=%s AND a.expires_at >= %s
+                ORDER BY a.expires_at ASC, a.user_id ASC
                 """,
                 (str(群号), 当前时间),
             )
@@ -1127,6 +1197,7 @@ def 列出数据库激活用户记录(配置: Any, 群号: str) -> list[dict[str
             "user_id": str(记录[0]),
             "expires_at": 安全整数(记录[1], 0),
             "updated_at": 安全整数(记录[2] if len(记录) > 2 else 0, 0),
+            "card_key": str(记录[3] if len(记录) > 3 and 记录[3] else "").strip(),
         }
         for 记录 in 记录列表
     ]
