@@ -801,6 +801,7 @@ async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户Q
     if bot is None:
         raise RuntimeError("当前事件缺少 bot 实例")
     await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
+    await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
 
 
 async def 尝试设置全员禁言(event: AstrMessageEvent, 群号: str, 启用: bool) -> None:
