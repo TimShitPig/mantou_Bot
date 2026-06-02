@@ -16,6 +16,7 @@ except Exception:
     AstrMessageEvent = Any
 
 from 功能文件.管理功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.群列表工具 import 获取机器人所在群号列表
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
@@ -32,8 +33,9 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.15.0"
+群管功能模块版本 = "1.16.0"
 踢出命令集合 = {"踢", "踢了"}
+禁言命令集合 = {"开启禁言", "开启全部禁言"}
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -72,6 +74,64 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
     return 格式化批量踢出结果(成功用户, 失败用户)
 
 
+async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
+    命令 = 提取群禁言命令文本(event, 命令文本)
+    if 命令 not in 禁言命令集合:
+        return None
+
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用群禁言"
+
+    if 命令 == "开启全部禁言":
+        return await 处理全部群禁言(event)
+
+    群号 = 获取群号(event)
+    if not 群号:
+        return "群禁言失败：只能在群聊中使用"
+    if not 是数字ID(群号):
+        return "群禁言失败：当前适配器没有返回数字群号"
+
+    try:
+        await 尝试设置全员禁言(event, 群号, True)
+        logger.info(f"群禁言开启成功：group_id={群号}")
+        return "已开启全员禁言"
+    except Exception as exc:
+        logger.warning(f"群禁言开启失败：group_id={群号}, error={exc}")
+        return f"群禁言失败：{exc}"
+
+
+async def 处理全部群禁言(event: AstrMessageEvent) -> str:
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        return "全部群禁言失败：当前事件缺少 bot 实例"
+
+    try:
+        群号列表 = await 获取机器人所在群号列表(bot)
+    except Exception as exc:
+        logger.warning(f"全部群禁言获取群列表失败：error={exc}")
+        return f"全部群禁言失败：{exc}"
+
+    成功群: list[str] = []
+    失败群: list[tuple[str, Exception]] = []
+    for 群号 in 群号列表:
+        try:
+            await 使用_set_group_whole_ban禁言(bot, 群号, True)
+            成功群.append(群号)
+            logger.info(f"全部群禁言开启成功：group_id={群号}")
+        except Exception as exc:
+            失败群.append((群号, exc))
+            logger.warning(f"全部群禁言开启失败：group_id={群号}, error={exc}")
+
+    return 格式化全部群禁言结果(成功群, 失败群)
+
+
+def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[str, Exception]]) -> str:
+    行列表 = [f"全部群禁言完成：成功 {len(成功群)} 个，失败 {len(失败群)} 个"]
+    if 失败群:
+        行列表.append("失败群：" + "；".join(f"{群号}：{错误}" for 群号, 错误 in 失败群))
+    return "\n".join(行列表)
+
+
 def 解析踢出目标用户列表(event: AstrMessageEvent, 命令文本: str) -> list[str] | None:
     命令 = 提取踢出命令文本(event, 命令文本)
     if 命令 not in 踢出命令集合:
@@ -84,6 +144,26 @@ def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str 
     if 目标用户列表 is None:
         return None
     return 目标用户列表[0] if 目标用户列表 else ""
+
+
+def 提取群禁言命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
+    候选列表: list[str] = []
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("message", "components", "content"):
+            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
+            if 文本:
+                候选列表.append(文本)
+    候选列表.append(str(命令文本 or ""))
+    候选列表.extend(获取原始文本候选(event))
+
+    for 候选 in 候选列表:
+        文本 = 清理踢出命令文本(候选)
+        if 文本 in 禁言命令集合:
+            return 文本
+    return ""
 
 
 def 格式化批量踢出结果(成功用户: list[str], 失败用户: list[tuple[str, Exception]]) -> str:
@@ -610,6 +690,13 @@ async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户Q
     await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
 
 
+async def 尝试设置全员禁言(event: AstrMessageEvent, 群号: str, 启用: bool) -> None:
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        raise RuntimeError("当前事件缺少 bot 实例")
+    await 使用_set_group_whole_ban禁言(bot, 群号, 启用)
+
+
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
@@ -760,3 +847,19 @@ async def 使用_set_group_kick踢出(bot: Any, 群号: str, 用户QQ: str) -> b
         return True
 
     raise RuntimeError("当前 bot 没有 set_group_kick 踢出接口")
+
+
+async def 使用_set_group_whole_ban禁言(bot: Any, 群号: str, 启用: bool = True) -> bool:
+    群号值 = int(群号)
+    禁言方法 = getattr(bot, "set_group_whole_ban", None)
+    if callable(禁言方法):
+        await 禁言方法(group_id=群号值, enable=启用)
+        return True
+
+    api = getattr(bot, "api", None)
+    调用动作 = getattr(api, "call_action", None)
+    if callable(调用动作):
+        await 调用动作("set_group_whole_ban", group_id=群号值, enable=启用)
+        return True
+
+    raise RuntimeError("当前 bot 没有 set_group_whole_ban 全员禁言接口")

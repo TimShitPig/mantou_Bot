@@ -7,19 +7,24 @@ from typing import Any
 
 from astrbot.api import logger
 from 功能文件.管理功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.群列表工具 import 获取机器人所在群号列表
 
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
+清理全部群文件命令 = {"清理全部群文件"}
 群文件清理诊断最大长度 = 8000
 群文件删除并发数 = 200
 
 
 async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> str | None:
-    if 命令文本 not in 清理群文件命令:
+    if 命令文本 not in 清理群文件命令 and 命令文本 not in 清理全部群文件命令:
         return None
 
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用群文件清理"
+
+    if 命令文本 in 清理全部群文件命令:
+        return await 处理全部群文件清理(event)
 
     群号 = 获取群号(event)
     if not 群号:
@@ -40,37 +45,82 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         return "群文件清理失败：当前适配器没有群文件接口，已输出群文件清理事件诊断"
 
     try:
-        删除成功 = 0
-        删除失败 = 0
-        已失败文件: set[str] = set()
-
-        while True:
-            文件列表 = await 获取全部群文件(bot, 群号)
-            待删文件 = [文件 for 文件 in 文件列表 if 获取文件去重键(文件) not in 已失败文件]
-            if not 待删文件:
-                break
-
-            logger.info(
-                f"群文件清理开始并发删除：group_id={群号}, count={len(待删文件)}, concurrency={群文件删除并发数}"
-            )
-            本轮结果 = await 并发删除群文件列表(bot, 群号, 待删文件)
-            本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"])
-            for 结果 in 本轮结果:
-                文件 = 结果["文件"]
-                if 结果["成功"]:
-                    删除成功 += 1
-                    continue
-                删除失败 += 1
-                已失败文件.add(获取文件去重键(文件))
-                logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
-
-            if 本轮成功 == 0:
-                break
-
+        删除成功, 删除失败 = await 清理指定群文件(bot, 群号)
         return f"群文件清理完成：成功 {删除成功} 个，失败 {删除失败} 个"
     except Exception as exc:
         logger.warning(f"群文件清理失败：group_id={群号}, error={exc}")
         return f"群文件清理失败：{exc}"
+
+
+async def 处理全部群文件清理(event: Any) -> str:
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        记录群文件清理事件诊断(event, None, "", "缺少 bot 实例")
+        return "全部群文件清理失败：当前事件缺少 bot 实例"
+
+    if not 支持群文件动作接口(bot):
+        记录群文件清理事件诊断(event, bot, "", "缺少 api.call_action")
+        return "全部群文件清理失败：当前适配器没有群文件接口，已输出群文件清理事件诊断"
+
+    try:
+        群号列表 = await 获取机器人所在群号列表(bot)
+    except Exception as exc:
+        logger.warning(f"全部群文件清理获取群列表失败：error={exc}")
+        return f"全部群文件清理失败：{exc}"
+
+    群成功 = 0
+    群失败 = 0
+    文件成功 = 0
+    文件失败 = 0
+    失败群: list[tuple[str, Exception]] = []
+
+    for 群号 in 群号列表:
+        try:
+            本群文件成功, 本群文件失败 = await 清理指定群文件(bot, 群号)
+            群成功 += 1
+            文件成功 += 本群文件成功
+            文件失败 += 本群文件失败
+            logger.info(f"全部群文件清理完成单群：group_id={群号}, success={本群文件成功}, failed={本群文件失败}")
+        except Exception as exc:
+            群失败 += 1
+            失败群.append((群号, exc))
+            logger.warning(f"全部群文件清理失败单群：group_id={群号}, error={exc}")
+
+    行列表 = [f"全部群文件清理完成：群成功 {群成功} 个，群失败 {群失败} 个", f"文件成功 {文件成功} 个，文件失败 {文件失败} 个"]
+    if 失败群:
+        行列表.append("失败群：" + "；".join(f"{群号}：{错误}" for 群号, 错误 in 失败群))
+    return "\n".join(行列表)
+
+
+async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
+    删除成功 = 0
+    删除失败 = 0
+    已失败文件: set[str] = set()
+
+    while True:
+        文件列表 = await 获取全部群文件(bot, 群号)
+        待删文件 = [文件 for 文件 in 文件列表 if 获取文件去重键(文件) not in 已失败文件]
+        if not 待删文件:
+            break
+
+        logger.info(
+            f"群文件清理开始并发删除：group_id={群号}, count={len(待删文件)}, concurrency={群文件删除并发数}"
+        )
+        本轮结果 = await 并发删除群文件列表(bot, 群号, 待删文件)
+        本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"])
+        for 结果 in 本轮结果:
+            文件 = 结果["文件"]
+            if 结果["成功"]:
+                删除成功 += 1
+                continue
+            删除失败 += 1
+            已失败文件.add(获取文件去重键(文件))
+            logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
+
+        if 本轮成功 == 0:
+            break
+
+    return 删除成功, 删除失败
 
 
 async def 并发删除群文件列表(bot: Any, 群号: Any, 文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
