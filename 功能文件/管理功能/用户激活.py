@@ -56,6 +56,9 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户列表翻页命令 = 用户列表下一页命令 | 用户列表上一页命令
 生成卡密命令规则 = re.compile(r"^生成卡密(?:\s+(\d+))?$")
 查询卡密命令规则 = re.compile(r"^查询卡密(?:\s+\S+){0,20}$")
+查询卡密菜单命令 = "查询卡密"
+卡密查询选择命令 = {"1": "used", "2": "unused"}
+卡密查询返回命令 = {"0"}
 卡密规则 = re.compile(r"^(?=.*[A-Z])[A-Z0-9]{12}$")
 卡密候选规则 = re.compile(r"(?=([A-Z0-9]{12}))")
 卡密字符集 = "".join(字符 for 字符 in string.ascii_uppercase + string.digits if 字符 not in {"0", "1", "I", "O"})
@@ -68,6 +71,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 列表分隔线 = "--------------------"
 用户列表翻页状态: dict[str, dict[str, Any]] = {}
 卡密查询翻页状态: dict[str, dict[str, Any]] = {}
+卡密查询选择状态: dict[str, dict[str, Any]] = {}
 
 
 async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
@@ -255,6 +259,7 @@ async def 处理查询用户列表(event: Any, 配置: Any, 下一页: bool = Fa
     状态键 = 获取用户列表翻页状态键(event, 群号)
     if 翻页方向 == 0:
         卡密查询翻页状态.pop(状态键, None)
+        卡密查询选择状态.pop(状态键, None)
     if 翻页方向 != 0 and 状态键 not in 用户列表翻页状态:
         return "没有可翻页的查询用户结果，请先发送“查询用户”"
 
@@ -279,6 +284,15 @@ async def 处理查询用户列表(event: Any, 配置: Any, 下一页: bool = Fa
 async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
     卡密文本 = 提取卡密命令文本(event, 命令文本)
 
+    if 卡密文本 in 卡密查询选择命令 or 卡密文本 in 卡密查询返回命令:
+        群号 = 获取群号(event) or "private"
+        状态键 = 获取用户列表翻页状态键(event, 群号)
+        if 状态键 not in 卡密查询选择状态:
+            return None
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查询卡密"
+        return await 处理查询卡密菜单选择(event, 卡密文本, 配置, context)
+
     if 卡密文本 in 用户列表翻页命令:
         群号 = 获取群号(event) or "private"
         状态键 = 获取用户列表翻页状态键(event, 群号)
@@ -296,6 +310,8 @@ async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context
     if 卡密文本.startswith("查询卡密"):
         if not 是群文件清理管理员(event, 配置):
             return "没有权限查询卡密"
+        if 卡密文本 == 查询卡密菜单命令:
+            return 打开查询卡密菜单(event)
         return await 处理查询卡密(event, 卡密文本, 配置, context)
 
     卡密候选列表 = 提取卡密候选列表(卡密文本 or 命令文本)
@@ -333,6 +349,38 @@ async def 处理生成卡密(event: Any, 命令文本: str, 配置: Any) -> str:
             *卡密列表,
         ]
     )
+
+
+def 打开查询卡密菜单(event: Any) -> str:
+    群号 = 获取群号(event) or "private"
+    状态键 = 获取用户列表翻页状态键(event, 群号)
+    用户列表翻页状态.pop(状态键, None)
+    卡密查询翻页状态.pop(状态键, None)
+    卡密查询选择状态[状态键] = {"created_at": int(time.time())}
+    return "\n".join(
+        [
+            "查询卡密",
+            "1. 已使用",
+            "2. 未使用",
+            "0. 返回上一步",
+        ]
+    )
+
+
+async def 处理查询卡密菜单选择(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str:
+    群号 = 获取群号(event) or "private"
+    状态键 = 获取用户列表翻页状态键(event, 群号)
+    if 命令文本 in 卡密查询返回命令:
+        卡密查询选择状态.pop(状态键, None)
+        卡密查询翻页状态.pop(状态键, None)
+        return "已返回上一步"
+
+    状态 = 卡密查询选择命令.get(命令文本)
+    if not 状态:
+        return 打开查询卡密菜单(event)
+    卡密查询选择状态.pop(状态键, None)
+    查询文本 = "查询卡密 使用" if 状态 == "used" else "查询卡密 没使用"
+    return await 处理查询卡密(event, 查询文本, 配置, context)
 
 
 async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str:
@@ -401,6 +449,7 @@ async def 处理查询卡密(
             return "卡密查询失败：格式为“查询卡密”“查询卡密 已使用”“查询卡密 未使用”“查询卡密 QQ号”或“查询卡密 卡密”"
         页码 = 1
         用户列表翻页状态.pop(状态键, None)
+        卡密查询选择状态.pop(状态键, None)
 
     try:
         卡密列表 = await 列出卡密记录(配置, 群号, 查询参数)
@@ -714,6 +763,9 @@ def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
     for 候选 in 候选列表:
         文本 = 清理激活命令文本(候选)
         if (
+            文本 in 卡密查询选择命令
+            or 文本 in 卡密查询返回命令
+            or
             文本 in 用户列表翻页命令
             or 文本.startswith("生成卡密")
             or 文本.startswith("查询卡密")
