@@ -1577,12 +1577,14 @@ def 确保卡密数据库表(连接: Any, 表名: str) -> None:
 
 
 def 获取数据库配置(配置: Any) -> dict[str, Any]:
+    用户名 = str(读取配置字段(配置, "user_activation_database_user") or "").strip()
+    数据库名 = str(读取配置字段(配置, "user_activation_database_name") or 用户名).strip()
     数据库配置 = {
         "host": str(读取配置字段(配置, "user_activation_database_host") or "").strip(),
         "port": 安全整数(读取配置字段(配置, "user_activation_database_port"), 3306),
-        "user": str(读取配置字段(配置, "user_activation_database_user") or "").strip(),
+        "user": 用户名,
         "password": str(读取配置字段(配置, "user_activation_database_password") or ""),
-        "database": str(读取配置字段(配置, "user_activation_database_name") or "").strip(),
+        "database": 数据库名,
         "table": 用户激活数据库表名,
         "card_table": 用户激活卡密数据库表名,
     }
