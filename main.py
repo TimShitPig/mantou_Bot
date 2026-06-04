@@ -21,6 +21,7 @@ importlib.invalidate_caches()
 随机一言模块 = 加载功能模块("功能文件.API功能.OIAPI.随机一言")
 随机英文单词模块 = 加载功能模块("功能文件.API功能.OIAPI.随机英文单词")
 权限工具 = 加载功能模块("功能文件.管理功能.权限工具")
+运行状态数据库 = 加载功能模块("功能文件.管理功能.运行状态数据库")
 析API番茄小说模块 = 加载功能模块("功能文件.API功能.析API.番茄小说")
 番茄小说模块 = 加载功能模块("功能文件.API功能.OIAPI.番茄小说")
 群列表工具 = 加载功能模块("功能文件.管理功能.群列表工具")
@@ -38,7 +39,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.27.0"
+插件版本 = "1.28.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -131,7 +132,7 @@ class MyPlugin(Star):
 
                 七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本)
                 if 七猫回复流 is not None:
-                    if not 小说功能开关.小说功能是否开启("七猫"):
+                    if not 小说功能开关.小说功能是否开启("七猫", self.config):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("七猫"))
                         event.stop_event()
                         return
@@ -156,7 +157,7 @@ class MyPlugin(Star):
 
                 番茄回复流 = 番茄小说模块.获取番茄小说回复流(event, 命令文本, self.config)
                 if 番茄回复流 is not None:
-                    if not 小说功能开关.小说功能是否开启("番茄"):
+                    if not 小说功能开关.小说功能是否开启("番茄", self.config):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("番茄"))
                         event.stop_event()
                         return

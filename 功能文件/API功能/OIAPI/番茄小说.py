@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator
 import aiohttp
 from astrbot.api import logger
 from 功能文件.管理功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 try:
     from astrbot.api import message_components as 消息组件
 except Exception:
@@ -23,7 +24,6 @@ except Exception as 异常:
 OIAPI地址 = 'https://oiapi.net/api/FqRead'
 落地页接口地址 = 'https://api.fqnovel.com/novel_ug/share/landing_page'
 下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
-API状态文件 = 下载缓存目录 / '番茄小说API.json'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
 每段最大字数 = 5000000
 进度分段数 = 10
@@ -31,6 +31,8 @@ API状态文件 = 下载缓存目录 / '番茄小说API.json'
 API选择等待秒数 = 120
 API选项 = {'1': 'OIAPI', '2': '析API'}
 待选择API会话: dict[str, float] = {}
+API状态命名空间 = 'fanqie_api'
+API状态键 = 'current_api'
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
 长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
@@ -50,7 +52,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API切换'
         待选择API会话[会话键] = time.time()
-        当前接口 = 读取当前番茄小说接口()
+        当前接口 = 读取当前番茄小说接口(配置)
         return '\n'.join([
             f'当前番茄小说API：{当前接口}',
             '请选择番茄小说API：',
@@ -63,7 +65,11 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             待选择API会话.pop(会话键, None)
             return '没有权限使用番茄小说API切换'
         接口名称 = API选项[文本]
-        写入当前番茄小说接口(接口名称)
+        try:
+            写入当前番茄小说接口(配置, 接口名称)
+        except Exception as 异常:
+            logger.warning(f'番茄小说API切换写入数据库失败：api={接口名称}, error={异常}')
+            return f'番茄小说API切换失败：{异常}'
         待选择API会话.pop(会话键, None)
         return f'番茄小说API已切换为：{接口名称}'
     return None
@@ -71,7 +77,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
 
 async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncIterator[str]:
     接口key = 获取番茄小说key(配置)
-    接口来源 = 读取当前番茄小说接口()
+    接口来源 = 读取当前番茄小说接口(配置)
     书籍编号 = 提取书籍编号(来源)
     解析来源 = 来源
     章节列表: list[dict[str, Any]] = []
@@ -628,21 +634,20 @@ def API选择等待中(会话键: str) -> bool:
     待选择API会话.pop(会话键, None)
     return False
 
-def 读取当前番茄小说接口() -> str:
+def 读取当前番茄小说接口(配置: Any = None) -> str:
+    if 配置 is None:
+        return 'OIAPI'
     try:
-        if API状态文件.exists():
-            数据 = json.loads(API状态文件.read_text(encoding='utf-8'))
-            return 规范化番茄小说接口(数据.get('current_api'))
+        当前接口 = 读取运行状态值(配置, API状态命名空间, API状态键, 'OIAPI')
+        return 规范化番茄小说接口(当前接口)
     except Exception as 异常:
-        logger.warning(f'番茄小说API状态读取失败：file={API状态文件}, error={异常}')
+        logger.warning(f'番茄小说API状态读取数据库失败：error={异常}')
     return 'OIAPI'
 
-def 写入当前番茄小说接口(接口名称: str) -> None:
-    下载缓存目录.mkdir(parents=True, exist_ok=True)
+def 写入当前番茄小说接口(配置: Any, 接口名称: str) -> None:
     当前接口 = 规范化番茄小说接口(接口名称)
-    数据 = {'current_api': 当前接口, 'updated_at': int(time.time())}
-    API状态文件.write_text(json.dumps(数据, ensure_ascii=False, indent=2), encoding='utf-8')
-    logger.info(f'番茄小说API已切换：api={当前接口}, file={API状态文件}')
+    写入运行状态值(配置, API状态命名空间, API状态键, 当前接口)
+    logger.info(f'番茄小说API已切换：api={当前接口}, storage=mysql')
 
 def 规范化番茄小说接口(值: Any) -> str:
     文本 = str(值 or '').strip().lower()

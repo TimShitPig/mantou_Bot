@@ -31,6 +31,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户激活数据库表名 = "mantou_user_activation"
 用户激活卡密数据库表名 = "mantou_user_activation_cards"
 用户免费额度数据库表名 = "mantou_user_free_quota"
+运行状态数据库表名 = "mantou_runtime_state"
 免费额度配置项 = "user_activation_daily_free_quota"
 基础配置分类名 = "basic_settings"
 数据库配置分类名 = "database_settings"
@@ -1905,6 +1906,7 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
         "table": 用户激活数据库表名,
         "card_table": 用户激活卡密数据库表名,
         "free_quota_table": 用户免费额度数据库表名,
+        "runtime_state_table": 运行状态数据库表名,
     }
     缺少字段 = [键 for 键 in ("host", "user", "database") if not 数据库配置[键]]
     if 缺少字段:
