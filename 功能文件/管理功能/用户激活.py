@@ -470,19 +470,30 @@ async def 处理查询卡密菜单选择(event: Any, 命令文本: str, 配置: 
     return await 处理查询卡密(event, 查询文本, 配置, context)
 
 
-async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str:
+async def 处理使用卡密(event: Any, 配置: Any, 卡密: str) -> str | None:
     return await 处理使用卡密候选列表(event, 配置, [卡密])
 
 
-async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选列表: list[str]) -> str:
+async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选列表: list[str]) -> str | None:
     用户编号 = 获取发送者QQ(event)
     if not 用户编号:
         return "卡密激活失败：没有获取到用户QQ"
-    if 是群文件清理管理员(event, 配置):
-        return "管理员无需激活，不消耗卡密"
 
     群号 = 获取群号(event) or "private"
     卡密候选列表 = 去重保序([规范化卡密(卡密) for 卡密 in 卡密候选列表 if 规范化卡密(卡密)])
+    if not 卡密候选列表:
+        return None
+    try:
+        卡密候选列表 = await asyncio.to_thread(筛选存在数据库卡密列表, 配置, 群号, 卡密候选列表)
+    except Exception as exc:
+        logger.warning(f"卡密存在性检查失败：group_id={群号}, user_id={用户编号}, error={exc}")
+        return f"卡密激活失败：{exc}"
+    if not 卡密候选列表:
+        return None
+
+    if 是群文件清理管理员(event, 配置):
+        return "管理员无需激活，不消耗卡密"
+
     最后异常: Exception | None = None
     已收到数据库响应 = False
     for 卡密 in 卡密候选列表:
@@ -1538,6 +1549,28 @@ def 生成数据库卡密列表(配置: Any, 群号: str, 创建者: str, 数量
             raise RuntimeError("卡密生成失败，请重试")
         连接.commit()
     return 结果
+
+
+def 筛选存在数据库卡密列表(配置: Any, 群号: str, 卡密列表: list[str]) -> list[str]:
+    卡密列表 = 去重保序([规范化卡密(卡密) for 卡密 in 卡密列表 if 规范化卡密(卡密)])
+    if not 卡密列表:
+        return []
+    数据库配置 = 获取数据库配置(配置)
+    with 打开数据库连接(数据库配置) as 连接:
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        with 连接.cursor() as 游标:
+            占位符 = ", ".join(["%s"] * len(卡密列表))
+            游标.execute(
+                f"""
+                SELECT card_key
+                FROM `{数据库配置['card_table']}`
+                WHERE group_id=%s AND card_key IN ({占位符})
+                """,
+                tuple([str(群号), *卡密列表]),
+            )
+            记录列表 = 游标.fetchall()
+    存在集合 = {str(记录[0] or "").strip() for 记录 in 记录列表 if str(记录[0] or "").strip()}
+    return [卡密 for 卡密 in 卡密列表 if 卡密 in 存在集合]
 
 
 def 使用数据库卡密激活(配置: Any, 群号: str, 用户编号: str, 卡密: str) -> dict[str, Any]:
