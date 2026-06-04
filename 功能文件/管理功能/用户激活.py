@@ -27,6 +27,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 
 
 未激活提示 = "请查看群公告查看激活方法"
+下载提示标记 = "正在下载中请稍等"
 默认激活天数 = 30
 最长激活天数 = 3650
 用户激活数据库表名 = "mantou_user_activation"
@@ -78,6 +79,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 卡密查询翻页状态: dict[str, dict[str, Any]] = {}
 卡密查询选择状态: dict[str, dict[str, Any]] = {}
 免费额度状态锁 = asyncio.Lock()
+免费额度最近放行: dict[str, dict[str, int | str]] = {}
 
 
 async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
@@ -699,7 +701,7 @@ async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
         return None
     if await 尝试消耗每日免费额度(event, 配置):
         return None
-    return 未激活提示
+    return await 获取免费额度用尽拦截回复(event, 配置)
 
 
 async def 用户可使用功能(event: Any, 配置: Any) -> bool:
@@ -730,26 +732,110 @@ async def 尝试消耗每日免费额度(event: Any, 配置: Any) -> bool:
     群号 = 获取群号(event) or "private"
 
     async with 免费额度状态锁:
-        已放行 = await asyncio.to_thread(消耗每日免费额度记录, 群号, 用户编号, 每日限额)
-    if 已放行:
-        logger.info(f"用户免费额度放行：group_id={群号}, user_id={用户编号}, daily_quota={每日限额}")
-    return 已放行
+        已使用 = await asyncio.to_thread(消耗每日免费额度记录, 群号, 用户编号, 每日限额)
+    if 已使用 <= 0:
+        return False
+
+    免费额度最近放行[获取免费额度记录键(群号, 用户编号)] = {
+        "date": 获取免费额度日期(),
+        "quota": 每日限额,
+        "used": 已使用,
+        "timestamp": int(time.time()),
+    }
+    logger.info(f"用户免费额度放行：group_id={群号}, user_id={用户编号}, daily_quota={每日限额}, used={已使用}")
+    return True
+
+
+async def 获取免费额度用尽拦截回复(event: Any, 配置: Any) -> str:
+    每日限额 = 获取每日免费额度(配置)
+    if 每日限额 <= 0:
+        return 未激活提示
+
+    用户编号 = 获取发送者QQ(event)
+    if not 用户编号:
+        return 未激活提示
+    群号 = 获取群号(event) or "private"
+
+    async with 免费额度状态锁:
+        已使用 = await asyncio.to_thread(读取每日免费额度已使用, 群号, 用户编号)
+    if 已使用 >= 每日限额:
+        return 格式化免费额度用尽提示(每日限额)
+    return 未激活提示
+
+
+async def 获取下载免费额度提示(event: Any, 配置: Any) -> str:
+    每日限额 = 获取每日免费额度(配置)
+    if 每日限额 <= 0:
+        return ""
+
+    用户编号 = 获取发送者QQ(event)
+    if not 用户编号:
+        return ""
+    群号 = 获取群号(event) or "private"
+    记录 = 免费额度最近放行.get(获取免费额度记录键(群号, 用户编号)) or {}
+    if str(记录.get("date") or "") != 获取免费额度日期():
+        return ""
+    if 安全整数(记录.get("quota"), 0) != 每日限额:
+        return ""
+    if int(time.time()) - 安全整数(记录.get("timestamp"), 0) > 300:
+        return ""
+
+    已使用 = 安全整数(记录.get("used"), 0)
+    if 已使用 <= 0:
+        return ""
+    剩余 = max(0, 每日限额 - 已使用)
+    return 格式化下载免费额度提示(剩余)
+
+
+def 附加下载免费额度提示(回复内容: str, 免费额度提示: str) -> str:
+    if not 免费额度提示 or 下载提示标记 not in str(回复内容 or ""):
+        return 回复内容
+    if 免费额度提示 in 回复内容:
+        return 回复内容
+    return f"{str(回复内容).rstrip()}\n{免费额度提示}"
 
 
 def 获取每日免费额度(配置: Any) -> int:
     return max(0, 安全整数(读取配置字段(配置, 免费额度配置项), 0))
 
 
-def 消耗每日免费额度记录(群号: str, 用户编号: str, 每日限额: int) -> bool:
+def 消耗每日免费额度记录(群号: str, 用户编号: str, 每日限额: int) -> int:
     状态 = 读取免费额度状态()
     使用记录 = 状态.setdefault("usage", {})
-    记录键 = f"{群号}:{用户编号}"
+    记录键 = 获取免费额度记录键(群号, 用户编号)
     已使用 = 安全整数(使用记录.get(记录键), 0)
     if 已使用 >= 每日限额:
-        return False
+        return 0
     使用记录[记录键] = 已使用 + 1
     写入免费额度状态(状态)
-    return True
+    return 已使用 + 1
+
+
+def 读取每日免费额度已使用(群号: str, 用户编号: str) -> int:
+    状态 = 读取免费额度状态()
+    使用记录 = 状态.get("usage")
+    if not isinstance(使用记录, dict):
+        return 0
+    return 安全整数(使用记录.get(获取免费额度记录键(群号, 用户编号)), 0)
+
+
+def 获取免费额度记录键(群号: str, 用户编号: str) -> str:
+    return str(用户编号)
+
+
+def 格式化下载免费额度提示(剩余本数: int) -> str:
+    if 剩余本数 <= 0:
+        return "这是你今天的最后一本了\n可以购买VIP进行无限下载"
+    return f"今日免费剩余：{剩余本数} 本"
+
+
+def 格式化免费额度用尽提示(每日限额: int) -> str:
+    return "\n".join(
+        [
+            f"您今日的{每日限额}本免费次数已经下载完了哦",
+            "如果要再下载可以购买VIP请看群公告或者等第二天继续免费下载",
+        ]
+    )
 
 
 def 读取免费额度状态() -> dict[str, Any]:

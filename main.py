@@ -36,7 +36,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.26.1"
+插件版本 = "1.27.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -104,8 +104,14 @@ class MyPlugin(Star):
                         yield event.plain_result(激活拦截)
                         event.stop_event()
                         return
+                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
+                    免费额度提示已发送 = False
                     async for 七猫回复内容 in 七猫回复流:
                         if isinstance(七猫回复内容, str):
+                            if not 免费额度提示已发送:
+                                原回复内容 = 七猫回复内容
+                                七猫回复内容 = 用户激活功能.附加下载免费额度提示(七猫回复内容, 免费额度下载提示)
+                                免费额度提示已发送 = 七猫回复内容 != 原回复内容
                             yield event.plain_result(七猫回复内容)
                         else:
                             yield 七猫回复内容
@@ -123,8 +129,14 @@ class MyPlugin(Star):
                         yield event.plain_result(激活拦截)
                         event.stop_event()
                         return
+                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
+                    免费额度提示已发送 = False
                     async for 番茄回复内容 in 番茄回复流:
                         if isinstance(番茄回复内容, str):
+                            if not 免费额度提示已发送:
+                                原回复内容 = 番茄回复内容
+                                番茄回复内容 = 用户激活功能.附加下载免费额度提示(番茄回复内容, 免费额度下载提示)
+                                免费额度提示已发送 = 番茄回复内容 != 原回复内容
                             yield event.plain_result(番茄回复内容)
                         else:
                             yield 番茄回复内容

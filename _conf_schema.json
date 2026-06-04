@@ -14,7 +14,7 @@
   "user_activation_daily_free_quota": {
     "description": "未激活用户每日免费额度",
     "type": "string",
-    "hint": "未激活用户每天可免费使用受激活门禁保护的功能次数，按群和用户分别计数；填 0 或留空表示不开放免费额度。",
+    "hint": "未激活用户每天可免费使用受激活门禁保护的功能次数，按用户 QQ 计数，不按群区分；填 0 或留空表示不开放免费额度。",
     "default": "0"
   },
   "user_activation_database_host": {
