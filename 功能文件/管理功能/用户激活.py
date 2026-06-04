@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import re
 import secrets
 import string
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 try:
@@ -32,9 +30,36 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 最长激活天数 = 3650
 用户激活数据库表名 = "mantou_user_activation"
 用户激活卡密数据库表名 = "mantou_user_activation_cards"
-下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
-免费额度状态文件 = 下载缓存目录 / "用户免费额度.json"
+用户免费额度数据库表名 = "mantou_user_free_quota"
 免费额度配置项 = "user_activation_daily_free_quota"
+基础配置分类名 = "basic_settings"
+数据库配置分类名 = "database_settings"
+卡密同步配置分类名 = "card_key_sync_settings"
+卡密同步已使用配置项 = "card_key_sync_used_cards"
+卡密同步未使用配置项 = "card_key_sync_unused_cards"
+卡密同步初始化配置项 = "card_key_sync_initialized"
+配置字段分类映射 = {
+    "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
+    "番茄小说key": (基础配置分类名, "基础配置"),
+    "user_activation_daily_free_quota": (基础配置分类名, "基础配置"),
+    "user_activation_database_host": (数据库配置分类名, "数据库配置"),
+    "user_activation_database_port": (数据库配置分类名, "数据库配置"),
+    "user_activation_database_user": (数据库配置分类名, "数据库配置"),
+    "user_activation_database_password": (数据库配置分类名, "数据库配置"),
+    "user_activation_database_name": (数据库配置分类名, "数据库配置"),
+    卡密同步已使用配置项: (卡密同步配置分类名, "卡密同步查看"),
+    卡密同步未使用配置项: (卡密同步配置分类名, "卡密同步查看"),
+    卡密同步初始化配置项: (卡密同步配置分类名, "卡密同步查看"),
+}
+配置字段默认值 = {
+    "group_file_cleanup_admin_qq": [],
+    "番茄小说key": "",
+    "user_activation_daily_free_quota": "0",
+    "user_activation_database_host": "",
+    "user_activation_database_port": "3306",
+    "user_activation_database_user": "",
+    "user_activation_database_password": "",
+}
 用户操作命令规则 = re.compile(
     r"^(?:(?:用户)?(?:激活增加|激活减少|激活|重置|增加|减少)(?:\d+)?|(?:用户)?查询时间|(?:用户)?查询)(?:\s+\S+){0,20}$"
 )
@@ -174,6 +199,59 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
         return f"用户激活失败：{失败用户[0][1]}"
 
     return 格式化批量激活结果(成功用户, 已激活用户, 失败用户, 天数, 到期时间)
+
+
+def 用户激活回复需要同步卡密配置(回复内容: Any) -> bool:
+    文本 = str(回复内容 or "")
+    return any(标记 in 文本 for 标记 in ("已生成卡密", "卡密激活成功", "卡密无效或已使用"))
+
+
+async def 同步卡密配置视图(配置: Any, 允许删除数据库卡密: bool = True) -> bool:
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is None:
+        return False
+    try:
+        记录列表 = await asyncio.to_thread(同步数据库卡密到配置, 配置字典, 允许删除数据库卡密)
+    except RuntimeError as exc:
+        文本 = str(exc)
+        if "用户激活数据库配置不完整" not in 文本 and "缺少 pymysql" not in 文本:
+            logger.warning(f"卡密配置同步失败：error={exc}")
+        return False
+    except Exception as exc:
+        logger.warning(f"卡密配置同步失败：error={exc}")
+        return False
+    return bool(记录列表)
+
+
+def 迁移旧版配置分类(配置: Any) -> bool:
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is None:
+        return False
+
+    已变更 = False
+    for 字段名, 默认值 in 配置字段默认值.items():
+        if 字段名 not in 配置字典:
+            continue
+        旧值 = 配置字典.get(字段名)
+        if 配置值等同默认(旧值, 默认值):
+            continue
+        分类名 = 配置字段分类映射.get(字段名, (基础配置分类名,))[0]
+        分类 = 配置字典.get(分类名)
+        if not isinstance(分类, dict):
+            分类 = {}
+            配置字典[分类名] = 分类
+        当前值 = 分类.get(字段名)
+        if 字段名 in 分类 and not 配置值等同默认(当前值, 默认值):
+            continue
+        分类[字段名] = 旧值
+        已变更 = True
+    return 已变更
+
+
+def 配置值等同默认(值: Any, 默认值: Any) -> bool:
+    if isinstance(默认值, list):
+        return not 值
+    return str(值 if 值 is not None else "").strip() == str(默认值).strip()
 
 
 async def 处理查询时间(event: Any, 激活参数: dict[str, Any], 配置: Any) -> str:
@@ -731,8 +809,12 @@ async def 尝试消耗每日免费额度(event: Any, 配置: Any) -> bool:
         return False
     群号 = 获取群号(event) or "private"
 
-    async with 免费额度状态锁:
-        已使用 = await asyncio.to_thread(消耗每日免费额度记录, 群号, 用户编号, 每日限额)
+    try:
+        async with 免费额度状态锁:
+            已使用 = await asyncio.to_thread(消耗每日免费额度记录, 配置, 群号, 用户编号, 每日限额)
+    except Exception as exc:
+        logger.warning(f"用户免费额度消耗失败：group_id={群号}, user_id={用户编号}, error={exc}")
+        return False
     if 已使用 <= 0:
         return False
 
@@ -756,8 +838,12 @@ async def 获取免费额度用尽拦截回复(event: Any, 配置: Any) -> str:
         return 未激活提示
     群号 = 获取群号(event) or "private"
 
-    async with 免费额度状态锁:
-        已使用 = await asyncio.to_thread(读取每日免费额度已使用, 群号, 用户编号)
+    try:
+        async with 免费额度状态锁:
+            已使用 = await asyncio.to_thread(读取每日免费额度已使用, 配置, 群号, 用户编号)
+    except Exception as exc:
+        logger.warning(f"用户免费额度读取失败：group_id={群号}, user_id={用户编号}, error={exc}")
+        return 未激活提示
     if 已使用 >= 每日限额:
         return 格式化免费额度用尽提示(每日限额)
     return 未激活提示
@@ -799,24 +885,12 @@ def 获取每日免费额度(配置: Any) -> int:
     return max(0, 安全整数(读取配置字段(配置, 免费额度配置项), 0))
 
 
-def 消耗每日免费额度记录(群号: str, 用户编号: str, 每日限额: int) -> int:
-    状态 = 读取免费额度状态()
-    使用记录 = 状态.setdefault("usage", {})
-    记录键 = 获取免费额度记录键(群号, 用户编号)
-    已使用 = 安全整数(使用记录.get(记录键), 0)
-    if 已使用 >= 每日限额:
-        return 0
-    使用记录[记录键] = 已使用 + 1
-    写入免费额度状态(状态)
-    return 已使用 + 1
+def 消耗每日免费额度记录(配置: Any, 群号: str, 用户编号: str, 每日限额: int) -> int:
+    return 消耗数据库每日免费额度记录(配置, 用户编号, 每日限额)
 
 
-def 读取每日免费额度已使用(群号: str, 用户编号: str) -> int:
-    状态 = 读取免费额度状态()
-    使用记录 = 状态.get("usage")
-    if not isinstance(使用记录, dict):
-        return 0
-    return 安全整数(使用记录.get(获取免费额度记录键(群号, 用户编号)), 0)
+def 读取每日免费额度已使用(配置: Any, 群号: str, 用户编号: str) -> int:
+    return 读取数据库每日免费额度已使用(配置, 用户编号)
 
 
 def 获取免费额度记录键(群号: str, 用户编号: str) -> str:
@@ -833,33 +907,10 @@ def 格式化免费额度用尽提示(每日限额: int) -> str:
     return "\n".join(
         [
             f"您今日的{每日限额}本免费次数已经下载完了哦",
-            "如果要再下载可以购买VIP请看群公告或者等第二天继续免费下载",
+            "如果要再下载可以购买VIP请看群公告",
+            "或者等第二天继续免费下载",
         ]
     )
-
-
-def 读取免费额度状态() -> dict[str, Any]:
-    今日 = 获取免费额度日期()
-    默认状态 = {"date": 今日, "usage": {}}
-    if not 免费额度状态文件.exists():
-        return 默认状态
-    try:
-        数据 = json.loads(免费额度状态文件.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning(f"用户免费额度状态读取失败：error={exc}")
-        return 默认状态
-    if not isinstance(数据, dict) or str(数据.get("date") or "") != 今日:
-        return 默认状态
-    使用记录 = 数据.get("usage")
-    if not isinstance(使用记录, dict):
-        return 默认状态
-    规范记录 = {str(键): 安全整数(值, 0) for 键, 值 in 使用记录.items() if 安全整数(值, 0) > 0}
-    return {"date": 今日, "usage": 规范记录}
-
-
-def 写入免费额度状态(状态: dict[str, Any]) -> None:
-    免费额度状态文件.parent.mkdir(parents=True, exist_ok=True)
-    免费额度状态文件.write_text(json.dumps(状态, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def 获取免费额度日期() -> str:
@@ -1606,6 +1657,169 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
     ]
 
 
+def 同步数据库卡密到配置(配置: Any, 允许删除数据库卡密: bool = True) -> bool:
+    数据库配置 = 获取数据库配置(配置)
+    已初始化 = bool(读取配置字段(配置, 卡密同步初始化配置项))
+    配置卡密集合 = 读取配置卡密集合(配置)
+
+    with 打开数据库连接(数据库配置) as 连接:
+        确保卡密数据库表(连接, 数据库配置["card_table"])
+        数据库卡密集合 = 查询全部数据库卡密集合(连接, 数据库配置["card_table"])
+        待删除卡密列表 = sorted(数据库卡密集合 - 配置卡密集合) if 已初始化 and 允许删除数据库卡密 else []
+        if 待删除卡密列表:
+            删除数据库卡密记录列表(连接, 数据库配置["card_table"], 待删除卡密列表)
+        记录列表 = 查询全部数据库卡密记录(连接, 数据库配置["card_table"])
+
+    已使用列表: list[str] = []
+    未使用列表: list[str] = []
+    for 记录 in 记录列表:
+        规范记录 = 规范化卡密记录(记录)
+        卡密 = str(规范记录.get("card_key") or "").strip()
+        if not 卡密:
+            continue
+        if str(规范记录.get("used_by") or "").strip() or 安全整数(规范记录.get("used_at"), 0) > 0:
+            已使用列表.append(格式化配置已使用卡密(规范记录))
+        else:
+            未使用列表.append(格式化配置未使用卡密(规范记录))
+
+    已变更 = False
+    已变更 = 设置配置字段(配置, 卡密同步已使用配置项, 已使用列表) or 已变更
+    已变更 = 设置配置字段(配置, 卡密同步未使用配置项, 未使用列表) or 已变更
+    已变更 = 设置配置字段(配置, 卡密同步初始化配置项, True) or 已变更
+    if 待删除卡密列表:
+        logger.info(f"卡密配置同步删除数据库卡密：count={len(待删除卡密列表)}")
+        已变更 = True
+    return 已变更
+
+
+def 查询全部数据库卡密集合(连接: Any, 表名: str) -> set[str]:
+    with 连接.cursor() as 游标:
+        游标.execute(f"SELECT card_key FROM `{表名}`")
+        记录列表 = 游标.fetchall()
+    return {str(记录[0] or "").strip() for 记录 in 记录列表 if str(记录[0] or "").strip()}
+
+
+def 查询全部数据库卡密记录(连接: Any, 表名: str) -> list[dict[str, Any]]:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            SELECT card_key, group_id, days, created_at, created_by, used_at, used_by
+            FROM `{表名}`
+            ORDER BY CASE WHEN used_at = 0 THEN 1 ELSE 0 END ASC,
+                     IF(used_at = 0, created_at, used_at) DESC,
+                     group_id ASC,
+                     card_key ASC
+            """
+        )
+        记录列表 = 游标.fetchall()
+    return [
+        {
+            "card_key": 记录[0],
+            "group_id": 记录[1],
+            "days": 记录[2],
+            "created_at": 记录[3],
+            "created_by": 记录[4],
+            "used_at": 记录[5],
+            "used_by": 记录[6],
+        }
+        for 记录 in 记录列表
+    ]
+
+
+def 删除数据库卡密记录列表(连接: Any, 表名: str, 卡密列表: list[str]) -> None:
+    if not 卡密列表:
+        return
+    with 连接.cursor() as 游标:
+        for 开始 in range(0, len(卡密列表), 200):
+            当前批次 = 卡密列表[开始 : 开始 + 200]
+            占位符 = ", ".join(["%s"] * len(当前批次))
+            游标.execute(f"DELETE FROM `{表名}` WHERE card_key IN ({占位符})", tuple(当前批次))
+    连接.commit()
+
+
+def 消耗数据库每日免费额度记录(配置: Any, 用户编号: str, 每日限额: int) -> int:
+    数据库配置 = 获取数据库配置(配置)
+    今日 = 获取免费额度日期()
+    当前时间 = int(time.time())
+    with 打开数据库连接(数据库配置) as 连接:
+        确保免费额度数据库表(连接, 数据库配置["free_quota_table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT used_count
+                FROM `{数据库配置['free_quota_table']}`
+                WHERE usage_date=%s AND user_id=%s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (今日, str(用户编号)),
+            )
+            记录 = 游标.fetchone()
+            已使用 = 安全整数(记录[0], 0) if 记录 else 0
+            if 已使用 >= 每日限额:
+                连接.rollback()
+                return 0
+            新次数 = 已使用 + 1
+            游标.execute(
+                f"""
+                INSERT INTO `{数据库配置['free_quota_table']}` (usage_date, user_id, used_count, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE used_count=VALUES(used_count), updated_at=VALUES(updated_at)
+                """,
+                (今日, str(用户编号), 新次数, 当前时间),
+            )
+        连接.commit()
+    return 新次数
+
+
+def 读取数据库每日免费额度已使用(配置: Any, 用户编号: str) -> int:
+    数据库配置 = 获取数据库配置(配置)
+    with 打开数据库连接(数据库配置) as 连接:
+        确保免费额度数据库表(连接, 数据库配置["free_quota_table"])
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT used_count
+                FROM `{数据库配置['free_quota_table']}`
+                WHERE usage_date=%s AND user_id=%s
+                LIMIT 1
+                """,
+                (获取免费额度日期(), str(用户编号)),
+            )
+            记录 = 游标.fetchone()
+    return 安全整数(记录[0], 0) if 记录 else 0
+
+
+def 格式化配置已使用卡密(记录: dict[str, Any]) -> str:
+    卡密 = str(记录.get("card_key") or "").strip()
+    群号 = str(记录.get("group_id") or "").strip()
+    用户 = str(记录.get("used_by") or "").strip() or "未知QQ"
+    天数 = 安全整数(记录.get("days"), 默认激活天数)
+    return f"{卡密}#{群号}#{用户}#{天数}天#已使用"
+
+
+def 格式化配置未使用卡密(记录: dict[str, Any]) -> str:
+    卡密 = str(记录.get("card_key") or "").strip()
+    群号 = str(记录.get("group_id") or "").strip()
+    天数 = 安全整数(记录.get("days"), 默认激活天数)
+    return f"{卡密}#{群号}#{天数}天#未使用"
+
+
+def 读取配置卡密集合(配置: Any) -> set[str]:
+    结果: set[str] = set()
+    for 字段名 in (卡密同步已使用配置项, 卡密同步未使用配置项):
+        值 = 读取配置字段(配置, 字段名)
+        if isinstance(值, str):
+            值 = [值]
+        if not isinstance(值, list):
+            continue
+        for 项目 in 值:
+            卡密列表 = 提取卡密候选列表(项目)
+            if 卡密列表:
+                结果.add(卡密列表[0])
+    return 结果
+
+
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
     try:
         import pymysql
@@ -1662,6 +1876,23 @@ def 确保卡密数据库表(连接: Any, 表名: str) -> None:
     连接.commit()
 
 
+def 确保免费额度数据库表(连接: Any, 表名: str) -> None:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{表名}` (
+                usage_date VARCHAR(16) NOT NULL,
+                user_id VARCHAR(64) NOT NULL,
+                used_count INT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL,
+                PRIMARY KEY (usage_date, user_id),
+                KEY idx_user_date (user_id, usage_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+    连接.commit()
+
+
 def 获取数据库配置(配置: Any) -> dict[str, Any]:
     用户名 = str(读取配置字段(配置, "user_activation_database_user") or "").strip()
     数据库名 = str(读取配置字段(配置, "user_activation_database_name") or 用户名).strip()
@@ -1673,6 +1904,7 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
         "database": 数据库名,
         "table": 用户激活数据库表名,
         "card_table": 用户激活卡密数据库表名,
+        "free_quota_table": 用户免费额度数据库表名,
     }
     缺少字段 = [键 for 键 in ("host", "user", "database") if not 数据库配置[键]]
     if 缺少字段:
@@ -1701,8 +1933,70 @@ def 获取群号(event: Any) -> str:
 def 读取配置字段(配置: Any, 字段名: str) -> Any:
     if 配置 is None:
         return None
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is not None and 配置字典 is not 配置:
+        值 = 读取配置字段(配置字典, 字段名)
+        if 值 is not None:
+            return 值
+
+    值 = 读取字段(配置, 字段名)
+    if 值 is None:
+        值 = 读取旧版配置字段(配置, 字段名)
+    if 值 is not None:
+        return 值
+    for 分类名 in 配置字段分类映射.get(字段名, ()):
+        分类 = 读取字段(配置, 分类名)
+        if 分类 is None:
+            分类 = 读取旧版配置字段(配置, 分类名)
+        if isinstance(分类, dict):
+            值 = 分类.get(字段名)
+            if 值 is not None:
+                return 值
+        elif 分类 is not None:
+            值 = 读取字段(分类, 字段名)
+            if 值 is None:
+                值 = 读取旧版配置字段(分类, 字段名)
+            if 值 is not None:
+                return 值
+    return None
+
+
+def 设置配置字段(配置: Any, 字段名: str, 值: Any) -> bool:
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is None:
+        return False
+    分类名 = 配置字段分类映射.get(字段名, (基础配置分类名,))[0]
+    分类 = 配置字典.get(分类名)
+    if not isinstance(分类, dict):
+        分类 = {}
+        配置字典[分类名] = 分类
+    if 分类.get(字段名) == 值:
+        return False
+    分类[字段名] = 值
+    return True
+
+
+def 获取配置字典(配置: Any) -> dict[str, Any] | None:
+    if 配置 is None:
+        return None
     if isinstance(配置, dict):
-        return 配置.get(字段名)
+        return 配置
+    获取方法 = getattr(配置, "get_config", None)
+    if callable(获取方法):
+        try:
+            数据 = 获取方法()
+            if isinstance(数据, dict):
+                return 数据
+        except Exception:
+            pass
+    for 字段名 in ("data", "obj"):
+        数据 = getattr(配置, 字段名, None)
+        if isinstance(数据, dict):
+            return 数据
+    return None
+
+
+def 读取旧版配置字段(配置: Any, 字段名: str) -> Any:
     获取方法 = getattr(配置, "get", None)
     if callable(获取方法):
         try:

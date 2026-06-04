@@ -1,5 +1,7 @@
 ﻿from pathlib import Path
+import asyncio
 import importlib
+import json
 import sys
 
 from astrbot.api.event import AstrMessageEvent, filter
@@ -46,7 +48,39 @@ class MyPlugin(Star):
         self.config = config
 
     async def initialize(self):
-        pass
+        await self.同步卡密配置视图()
+
+    async def 同步卡密配置视图(self, 允许删除数据库卡密: bool = True):
+        配置已变更 = 用户激活功能.迁移旧版配置分类(self.config)
+        if await 用户激活功能.同步卡密配置视图(self.config, 允许删除数据库卡密):
+            配置已变更 = True
+        if 配置已变更:
+            await self.保存插件配置()
+
+    async def 保存插件配置(self):
+        try:
+            结果 = super().save_config()
+            if asyncio.iscoroutine(结果):
+                await 结果
+        except Exception:
+            pass
+
+        配置数据 = 用户激活功能.获取配置字典(self.config)
+        if 配置数据 is None:
+            return
+
+        for 属性名 in ("_path", "path", "file_path"):
+            值 = getattr(self.config, 属性名, None)
+            if not 值:
+                continue
+            配置路径 = Path(str(值))
+            if not 配置路径.exists():
+                continue
+            try:
+                配置路径.write_text(json.dumps(配置数据, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            return
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
@@ -55,6 +89,8 @@ class MyPlugin(Star):
 
         激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
         if 激活回复 is not None:
+            if 用户激活功能.用户激活回复需要同步卡密配置(激活回复):
+                await self.同步卡密配置视图(允许删除数据库卡密=False)
             yield event.plain_result(激活回复)
             event.stop_event()
             return

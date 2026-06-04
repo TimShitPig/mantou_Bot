@@ -562,8 +562,62 @@ def 生成文本变体(文本: str) -> list[str]:
     return 变体列表
 
 def 获取番茄小说key(配置: Any) -> str:
-    值 = 读取字段(配置, '番茄小说key')
+    值 = 读取配置字段(配置, '番茄小说key')
     return str(值 or '').strip()
+
+def 读取配置字段(配置: Any, 字段名: str) -> Any:
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is not None and 配置字典 is not 配置:
+        值 = 读取配置字段(配置字典, 字段名)
+        if 值 is not None:
+            return 值
+
+    值 = 读取字段(配置, 字段名)
+    if 值 is None:
+        值 = 读取旧版配置字段(配置, 字段名)
+    if 值 is not None:
+        return 值
+    for 分类名 in ('basic_settings', '基础配置'):
+        分类 = 读取字段(配置, 分类名)
+        if 分类 is None:
+            分类 = 读取旧版配置字段(配置, 分类名)
+        if isinstance(分类, dict):
+            值 = 分类.get(字段名)
+            if 值 is not None:
+                return 值
+        elif 分类 is not None:
+            值 = 读取字段(分类, 字段名)
+            if 值 is None:
+                值 = 读取旧版配置字段(分类, 字段名)
+            if 值 is not None:
+                return 值
+    return None
+
+def 获取配置字典(配置: Any) -> dict[str, Any] | None:
+    if isinstance(配置, dict):
+        return 配置
+    获取方法 = getattr(配置, 'get_config', None)
+    if callable(获取方法):
+        try:
+            数据 = 获取方法()
+            if isinstance(数据, dict):
+                return 数据
+        except Exception:
+            pass
+    for 字段名 in ('data', 'obj'):
+        数据 = getattr(配置, 字段名, None)
+        if isinstance(数据, dict):
+            return 数据
+    return None
+
+def 读取旧版配置字段(配置: Any, 字段名: str) -> Any:
+    获取方法 = getattr(配置, 'get', None)
+    if callable(获取方法):
+        try:
+            return 获取方法(字段名)
+        except Exception:
+            pass
+    return getattr(配置, 字段名, None)
 
 def API选择等待中(会话键: str) -> bool:
     开始时间 = 待选择API会话.get(会话键)
