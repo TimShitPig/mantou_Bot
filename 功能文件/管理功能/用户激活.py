@@ -44,7 +44,6 @@ from 功能文件.管理功能.运行状态数据库 import 读取布尔运行�
 卡密同步快照状态键 = "snapshot_v1"
 卡密同步配置创建者 = "config_sync"
 付费开关状态命名空间 = "paid_access"
-付费开关状态键 = "enabled"
 付费开关命令配置 = {
     "开启付费": True,
     "关闭付费": False,
@@ -847,7 +846,7 @@ def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None)
 
 
 async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
-    if not 付费模式是否开启(配置):
+    if not 付费模式是否开启(event, 配置):
         return None
     if await 用户可使用功能(event, 配置):
         return None
@@ -924,7 +923,7 @@ async def 获取免费额度用尽拦截回复(event: Any, 配置: Any) -> str:
 
 
 async def 获取下载免费额度提示(event: Any, 配置: Any) -> str:
-    if not 付费模式是否开启(配置):
+    if not 付费模式是否开启(event, 配置):
         return ""
     每日限额 = 获取每日免费额度(配置)
     if 每日限额 <= 0:
@@ -964,23 +963,35 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用付费开关"
 
+    群号 = 获取群号(event)
+    if not 群号:
+        return "付费开关失败：只能在群聊中使用"
+
     是否开启 = 付费开关命令配置[文本]
+    状态键 = 获取付费开关状态键(群号)
     try:
-        写入布尔运行状态值(配置, 付费开关状态命名空间, 付费开关状态键, 是否开启)
+        写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
     except Exception as exc:
-        logger.warning(f"付费开关写入数据库失败：enabled={是否开启}, error={exc}")
+        logger.warning(f"付费开关写入数据库失败：group_id={群号}, enabled={是否开启}, error={exc}")
         return f"付费开关失败：{exc}"
     if 是否开启:
-        return "已开启付费模式，未激活用户需激活或使用每日免费额度"
-    return "已关闭付费模式，未激活用户可无限制使用"
+        return "已开启本群付费模式，未激活用户需激活或使用每日免费额度"
+    return "已关闭本群付费模式，未激活用户可无限制使用"
 
 
-def 付费模式是否开启(配置: Any) -> bool:
-    try:
-        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 付费开关状态键, True)
-    except Exception as exc:
-        logger.warning(f"付费开关读取数据库失败：error={exc}")
+def 付费模式是否开启(event: Any, 配置: Any) -> bool:
+    群号 = 获取群号(event)
+    if not 群号:
         return True
+    try:
+        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
+    except Exception as exc:
+        logger.warning(f"付费开关读取数据库失败：group_id={群号}, error={exc}")
+        return True
+
+
+def 获取付费开关状态键(群号: str) -> str:
+    return f"group:{str(群号).strip()}"
 
 
 def 获取每日免费额度(配置: Any) -> int:
