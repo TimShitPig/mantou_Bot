@@ -23,6 +23,7 @@ except Exception:
     Comp = None
 
 from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 获取发送者QQ, 获取群文件清理管理员QQ列表
+from 功能文件.管理功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
 
 
 未激活提示 = "请查看群公告查看激活方法"
@@ -42,6 +43,12 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 卡密同步状态命名空间 = "card_key_sync"
 卡密同步快照状态键 = "snapshot_v1"
 卡密同步配置创建者 = "config_sync"
+付费开关状态命名空间 = "paid_access"
+付费开关状态键 = "enabled"
+付费开关命令配置 = {
+    "开启付费": True,
+    "关闭付费": False,
+}
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
     "番茄小说key": (基础配置分类名, "基础配置"),
@@ -115,6 +122,10 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
     卡密回复 = await 处理卡密功能(event, 命令文本, 配置, context)
     if 卡密回复 is not None:
         return 卡密回复
+
+    付费开关回复 = 处理付费开关指令(event, 命令文本, 配置)
+    if 付费开关回复 is not None:
+        return 付费开关回复
 
     列表命令 = 提取用户列表命令文本(event, 命令文本)
     if 列表命令 in 用户列表命令 or 列表命令 in 用户列表翻页命令:
@@ -836,6 +847,8 @@ def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None)
 
 
 async def 获取未激活拦截回复(event: Any, 配置: Any) -> str | None:
+    if not 付费模式是否开启(配置):
+        return None
     if await 用户可使用功能(event, 配置):
         return None
     if await 尝试消耗每日免费额度(event, 配置):
@@ -911,6 +924,8 @@ async def 获取免费额度用尽拦截回复(event: Any, 配置: Any) -> str:
 
 
 async def 获取下载免费额度提示(event: Any, 配置: Any) -> str:
+    if not 付费模式是否开启(配置):
+        return ""
     每日限额 = 获取每日免费额度(配置)
     if 每日限额 <= 0:
         return ""
@@ -940,6 +955,32 @@ def 附加下载免费额度提示(回复内容: str, 免费额度提示: str) -
     if 免费额度提示 in 回复内容:
         return 回复内容
     return f"{str(回复内容).rstrip()}\n{免费额度提示}"
+
+
+def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if 文本 not in 付费开关命令配置:
+        return None
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用付费开关"
+
+    是否开启 = 付费开关命令配置[文本]
+    try:
+        写入布尔运行状态值(配置, 付费开关状态命名空间, 付费开关状态键, 是否开启)
+    except Exception as exc:
+        logger.warning(f"付费开关写入数据库失败：enabled={是否开启}, error={exc}")
+        return f"付费开关失败：{exc}"
+    if 是否开启:
+        return "已开启付费模式，未激活用户需激活或使用每日免费额度"
+    return "已关闭付费模式，未激活用户可无限制使用"
+
+
+def 付费模式是否开启(配置: Any) -> bool:
+    try:
+        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 付费开关状态键, True)
+    except Exception as exc:
+        logger.warning(f"付费开关读取数据库失败：error={exc}")
+        return True
 
 
 def 获取每日免费额度(配置: Any) -> int:
