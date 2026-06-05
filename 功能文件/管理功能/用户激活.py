@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import secrets
@@ -38,6 +39,9 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 卡密同步配置分类名 = "card_key_sync_settings"
 卡密同步已使用配置项 = "card_key_sync_used_cards"
 卡密同步未使用配置项 = "card_key_sync_unused_cards"
+卡密同步状态命名空间 = "card_key_sync"
+卡密同步快照状态键 = "snapshot_v1"
+卡密同步配置创建者 = "config_sync"
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
     "番茄小说key": (基础配置分类名, "基础配置"),
@@ -1691,10 +1695,27 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
 
 def 同步数据库卡密到配置(配置: Any) -> bool:
     数据库配置 = 获取数据库配置(配置)
+    配置卡密记录 = 读取配置卡密记录映射(配置)
+    当前时间 = int(time.time())
 
     with 打开数据库连接(数据库配置) as 连接:
         确保卡密数据库表(连接, 数据库配置["card_table"])
+        确保运行状态数据库表(连接, 数据库配置["runtime_state_table"])
+        快照 = 读取卡密同步快照(连接, 数据库配置["runtime_state_table"])
+        数据库记录映射 = 转换卡密记录映射(查询全部数据库卡密记录(连接, 数据库配置["card_table"]))
+
+        待删除卡密列表 = 获取配置删除卡密列表(配置卡密记录, 数据库记录映射, 快照)
+        if 待删除卡密列表:
+            删除数据库卡密记录列表(连接, 数据库配置["card_table"], 待删除卡密列表)
+            for 卡密 in 待删除卡密列表:
+                数据库记录映射.pop(卡密, None)
+
+        待写入记录列表 = 获取配置新增或修改卡密列表(配置卡密记录, 数据库记录映射, 快照, bool(快照), 当前时间)
+        if 待写入记录列表:
+            写入或更新数据库卡密记录列表(连接, 数据库配置["card_table"], 待写入记录列表)
+
         记录列表 = 查询全部数据库卡密记录(连接, 数据库配置["card_table"])
+        写入卡密同步快照(连接, 数据库配置["runtime_state_table"], 生成卡密同步快照(记录列表))
 
     已使用列表: list[str] = []
     未使用列表: list[str] = []
@@ -1711,7 +1732,241 @@ def 同步数据库卡密到配置(配置: Any) -> bool:
     已变更 = False
     已变更 = 设置配置字段(配置, 卡密同步已使用配置项, 已使用列表) or 已变更
     已变更 = 设置配置字段(配置, 卡密同步未使用配置项, 未使用列表) or 已变更
+    if 待删除卡密列表 or 待写入记录列表:
+        已变更 = True
     return 已变更
+
+
+def 获取配置删除卡密列表(
+    配置卡密记录: dict[str, dict[str, Any]],
+    数据库记录映射: dict[str, dict[str, Any]],
+    快照: dict[str, dict[str, Any]],
+) -> list[str]:
+    结果: list[str] = []
+    for 卡密 in 快照:
+        if 卡密 in 配置卡密记录:
+            continue
+        if 卡密 in 数据库记录映射:
+            结果.append(卡密)
+    return sorted(结果)
+
+
+def 获取配置新增或修改卡密列表(
+    配置卡密记录: dict[str, dict[str, Any]],
+    数据库记录映射: dict[str, dict[str, Any]],
+    快照: dict[str, dict[str, Any]],
+    已有快照: bool,
+    当前时间: int,
+) -> list[dict[str, Any]]:
+    结果: list[dict[str, Any]] = []
+    for 卡密, 配置记录 in 配置卡密记录.items():
+        配置签名 = 获取卡密同步签名(配置记录)
+        快照签名 = 快照.get(卡密)
+        if 快照签名 is not None:
+            if 配置签名 != 快照签名:
+                结果.append(准备配置卡密写入记录(配置记录, 当前时间))
+            continue
+
+        if 卡密 not in 数据库记录映射:
+            结果.append(准备配置卡密写入记录(配置记录, 当前时间))
+            continue
+
+        if 已有快照 and 配置签名 != 获取卡密同步签名(数据库记录映射[卡密]):
+            结果.append(准备配置卡密写入记录(配置记录, 当前时间))
+    return 结果
+
+
+def 准备配置卡密写入记录(记录: dict[str, Any], 当前时间: int) -> dict[str, Any]:
+    规范记录 = 规范化卡密记录(记录)
+    已使用 = bool(str(规范记录.get("used_by") or "").strip() or 安全整数(规范记录.get("used_at"), 0) > 0)
+    return {
+        "card_key": str(规范记录.get("card_key") or "").strip(),
+        "group_id": str(规范记录.get("group_id") or "").strip() or "private",
+        "days": 安全整数(规范记录.get("days"), 默认激活天数),
+        "created_at": 安全整数(规范记录.get("created_at"), 0) or 当前时间,
+        "created_by": str(规范记录.get("created_by") or "").strip() or 卡密同步配置创建者,
+        "used_at": (安全整数(规范记录.get("used_at"), 0) or 当前时间) if 已使用 else 0,
+        "used_by": str(规范记录.get("used_by") or "").strip() if 已使用 else "",
+    }
+
+
+def 读取配置卡密记录映射(配置: Any) -> dict[str, dict[str, Any]]:
+    结果: dict[str, dict[str, Any]] = {}
+    for 字段名, 默认状态 in ((卡密同步已使用配置项, "used"), (卡密同步未使用配置项, "unused")):
+        值 = 读取配置字段(配置, 字段名)
+        if isinstance(值, str):
+            值 = [值]
+        if not isinstance(值, list):
+            continue
+        for 项目 in 值:
+            记录 = 解析配置卡密记录(项目, 默认状态)
+            卡密 = str(记录.get("card_key") or "").strip()
+            if 卡密:
+                结果[卡密] = 记录
+    return 结果
+
+
+def 解析配置卡密记录(项目: Any, 默认状态: str) -> dict[str, Any]:
+    文本 = str(项目 or "").strip()
+    if not 文本:
+        return {}
+    字段列表 = [字段.strip() for 字段 in 文本.split("#")]
+    卡密 = 规范化卡密(字段列表[0] if 字段列表 else "")
+    if not 卡密:
+        候选列表 = 提取卡密候选列表(文本)
+        卡密 = 候选列表[0] if 候选列表 else ""
+    if not 卡密:
+        return {}
+
+    状态文本 = "#".join(字段列表).lower()
+    已使用 = 默认状态 == "used" or "已使用" in 状态文本 or "used" in 状态文本
+    群号 = 字段列表[1] if len(字段列表) > 1 and 字段列表[1] else "private"
+    用户 = ""
+    if 已使用 and len(字段列表) > 2 and not 是配置卡密天数字段(字段列表[2]) and "使用" not in 字段列表[2]:
+        用户 = 字段列表[2].strip()
+    天数 = 提取配置卡密天数(字段列表)
+    return {
+        "card_key": 卡密,
+        "group_id": 群号,
+        "days": 天数,
+        "created_at": 0,
+        "created_by": 卡密同步配置创建者,
+        "used_at": 1 if 已使用 else 0,
+        "used_by": 用户 if 已使用 else "",
+    }
+
+
+def 是配置卡密天数字段(文本: Any) -> bool:
+    return bool(re.fullmatch(r"\d+\s*天?", str(文本 or "").strip()))
+
+
+def 提取配置卡密天数(字段列表: list[str]) -> int:
+    for 字段 in 字段列表:
+        匹配 = re.fullmatch(r"(\d+)\s*天", str(字段 or "").strip())
+        if 匹配:
+            return max(1, 安全整数(匹配.group(1), 默认激活天数))
+    for 字段 in reversed(字段列表[2:]):
+        文本 = str(字段 or "").strip()
+        if 文本.isdigit():
+            数值 = 安全整数(文本, 默认激活天数)
+            if 0 < 数值 <= 最长激活天数:
+                return 数值
+    return 默认激活天数
+
+
+def 转换卡密记录映射(记录列表: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    结果: dict[str, dict[str, Any]] = {}
+    for 记录 in 记录列表:
+        规范记录 = 规范化卡密记录(记录)
+        卡密 = str(规范记录.get("card_key") or "").strip()
+        if 卡密:
+            结果[卡密] = 规范记录
+    return 结果
+
+
+def 生成卡密同步快照(记录列表: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {卡密: 获取卡密同步签名(记录) for 卡密, 记录 in 转换卡密记录映射(记录列表).items()}
+
+
+def 获取卡密同步签名(记录: dict[str, Any]) -> dict[str, Any]:
+    规范记录 = 规范化卡密记录(记录)
+    已使用 = bool(str(规范记录.get("used_by") or "").strip() or 安全整数(规范记录.get("used_at"), 0) > 0)
+    return {
+        "card_key": str(规范记录.get("card_key") or "").strip(),
+        "group_id": str(规范记录.get("group_id") or "").strip(),
+        "days": 安全整数(规范记录.get("days"), 默认激活天数),
+        "status": "used" if 已使用 else "unused",
+        "used_by": str(规范记录.get("used_by") or "").strip() if 已使用 else "",
+    }
+
+
+def 读取卡密同步快照(连接: Any, 表名: str) -> dict[str, dict[str, Any]]:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            SELECT state_value
+            FROM `{表名}`
+            WHERE namespace=%s AND state_key=%s
+            LIMIT 1
+            """,
+            (卡密同步状态命名空间, 卡密同步快照状态键),
+        )
+        记录 = 游标.fetchone()
+    if not 记录:
+        return {}
+    try:
+        数据 = json.loads(str(记录[0] or "{}"))
+    except Exception:
+        return {}
+    if not isinstance(数据, dict):
+        return {}
+    结果: dict[str, dict[str, Any]] = {}
+    for 卡密, 签名 in 数据.items():
+        标准卡密 = 规范化卡密(卡密)
+        if 标准卡密 and isinstance(签名, dict):
+            结果[标准卡密] = 获取卡密同步签名({"card_key": 标准卡密, **签名})
+    return 结果
+
+
+def 写入卡密同步快照(连接: Any, 表名: str, 快照: dict[str, dict[str, Any]]) -> None:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            INSERT INTO `{表名}` (namespace, state_key, state_value, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=VALUES(updated_at)
+            """,
+            (
+                卡密同步状态命名空间,
+                卡密同步快照状态键,
+                json.dumps(快照, ensure_ascii=False, sort_keys=True),
+                int(time.time()),
+            ),
+        )
+    连接.commit()
+
+
+def 写入或更新数据库卡密记录列表(连接: Any, 表名: str, 记录列表: list[dict[str, Any]]) -> None:
+    if not 记录列表:
+        return
+    with 连接.cursor() as 游标:
+        for 记录 in 记录列表:
+            规范记录 = 准备配置卡密写入记录(记录, int(time.time()))
+            if not 规范记录["card_key"]:
+                continue
+            游标.execute(
+                f"""
+                INSERT INTO `{表名}` (card_key, group_id, days, created_at, created_by, used_at, used_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    group_id=VALUES(group_id),
+                    days=VALUES(days),
+                    used_at=VALUES(used_at),
+                    used_by=VALUES(used_by)
+                """,
+                (
+                    规范记录["card_key"],
+                    规范记录["group_id"],
+                    规范记录["days"],
+                    规范记录["created_at"],
+                    规范记录["created_by"],
+                    规范记录["used_at"],
+                    规范记录["used_by"],
+                ),
+            )
+    连接.commit()
+
+
+def 删除数据库卡密记录列表(连接: Any, 表名: str, 卡密列表: list[str]) -> None:
+    卡密列表 = 去重保序([规范化卡密(卡密) for 卡密 in 卡密列表 if 规范化卡密(卡密)])
+    if not 卡密列表:
+        return
+    with 连接.cursor() as 游标:
+        for 开始 in range(0, len(卡密列表), 200):
+            当前批次 = 卡密列表[开始 : 开始 + 200]
+            占位符 = ", ".join(["%s"] * len(当前批次))
+            游标.execute(f"DELETE FROM `{表名}` WHERE card_key IN ({占位符})", tuple(当前批次))
+    连接.commit()
 
 
 def 查询全部数据库卡密记录(连接: Any, 表名: str) -> list[dict[str, Any]]:
@@ -1875,6 +2130,22 @@ def 确保免费额度数据库表(连接: Any, 表名: str) -> None:
                 updated_at BIGINT NOT NULL,
                 PRIMARY KEY (usage_date, user_id),
                 KEY idx_user_date (user_id, usage_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+    连接.commit()
+
+
+def 确保运行状态数据库表(连接: Any, 表名: str) -> None:
+    with 连接.cursor() as 游标:
+        游标.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS `{表名}` (
+                namespace VARCHAR(64) NOT NULL,
+                state_key VARCHAR(128) NOT NULL,
+                state_value TEXT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                PRIMARY KEY (namespace, state_key)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         )
