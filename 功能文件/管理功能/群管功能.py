@@ -33,10 +33,11 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
-最近消息撤回数量 = 5
-最近消息撤回拉取数量 = 30
+最近消息撤回数量 = 8
+最近消息撤回拉取数量 = 100
+踢了消息撤回数量 = 200
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.18.0"
+群管功能模块版本 = "1.19.0"
 踢出命令集合 = {"踢", "踢了"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
@@ -48,9 +49,11 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
-    目标用户列表 = 解析踢出目标用户列表(event, 命令文本)
-    if 目标用户列表 is None:
+    踢出命令 = 提取踢出命令文本(event, 命令文本)
+    if 踢出命令 not in 踢出命令集合:
         return None
+    目标用户列表 = 提取被艾特用户QQ列表(event)
+    需要撤回目标消息 = 踢出命令 == "踢了"
 
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用用户踢出"
@@ -66,9 +69,19 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
 
     成功用户: list[str] = []
     失败用户: list[tuple[str, Exception]] = []
+    撤回数量记录: dict[str, int] = {}
     for 目标用户 in 目标用户列表:
         try:
             await 尝试踢出指定成员(event, 群号, 目标用户)
+            if 需要撤回目标消息:
+                撤回数量记录[目标用户] = await 尝试撤回指定用户最近消息(
+                    event,
+                    群号,
+                    目标用户,
+                    拉取数量=踢了消息撤回数量,
+                    撤回数量=踢了消息撤回数量,
+                    日志名称="踢了消息撤回",
+                )
             成功用户.append(目标用户)
             logger.info(f"用户踢出成功：group_id={群号}, user_id={目标用户}")
         except Exception as exc:
@@ -77,10 +90,13 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
 
     if len(目标用户列表) == 1:
         if 成功用户:
-            return f"已踢出用户：{成功用户[0]}"
+            行列表 = [f"已踢出用户：{成功用户[0]}"]
+            if 需要撤回目标消息:
+                行列表.append(f"已撤回该用户最近消息：{撤回数量记录.get(成功用户[0], 0)} 条")
+            return "\n".join(行列表)
         return f"用户踢出失败：{失败用户[0][1]}"
 
-    return 格式化批量踢出结果(成功用户, 失败用户)
+    return 格式化批量踢出结果(成功用户, 失败用户, 撤回数量记录 if 需要撤回目标消息 else None)
 
 
 async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -179,10 +195,19 @@ def 提取群禁言命令文本(event: AstrMessageEvent, 命令文本: str) -> s
     return ""
 
 
-def 格式化批量踢出结果(成功用户: list[str], 失败用户: list[tuple[str, Exception]]) -> str:
+def 格式化批量踢出结果(
+    成功用户: list[str],
+    失败用户: list[tuple[str, Exception]],
+    撤回数量记录: dict[str, int] | None = None,
+) -> str:
     行列表 = [f"用户踢出完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
     if 成功用户:
         行列表.append(f"已踢出用户：{格式化用户列表(成功用户)}")
+    if 撤回数量记录:
+        行列表.append(
+            "已撤回消息："
+            + "；".join(f"{用户} {撤回数量记录.get(用户, 0)} 条" for 用户 in 成功用户)
+        )
     if 失败用户:
         行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
     return "\n".join(行列表)
@@ -670,20 +695,42 @@ async def 尝试撤回触发用户最近消息(event: AstrMessageEvent) -> int:
     if not 是数字ID(群号) or not 是数字ID(用户QQ):
         logger.info(f"最近消息撤回跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
         return 0
+    当前消息编号 = str(获取当前消息编号(event) or "")
+    return await 尝试撤回指定用户最近消息(
+        event,
+        群号,
+        用户QQ,
+        排除消息编号=当前消息编号,
+        拉取数量=最近消息撤回拉取数量,
+        撤回数量=最近消息撤回数量,
+        日志名称="最近消息撤回",
+    )
 
+
+async def 尝试撤回指定用户最近消息(
+    event: AstrMessageEvent,
+    群号: str,
+    用户QQ: str,
+    排除消息编号: str = "",
+    拉取数量: int = 最近消息撤回拉取数量,
+    撤回数量: int = 最近消息撤回数量,
+    日志名称: str = "最近消息撤回",
+) -> int:
+    if not 是数字ID(群号) or not 是数字ID(用户QQ):
+        logger.info(f"{日志名称}跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+        return 0
     bot = getattr(event, "bot", None)
     if bot is None:
-        logger.warning(f"最近消息撤回失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
+        logger.warning(f"{日志名称}失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
         return 0
 
     try:
-        历史消息 = await 获取群历史消息(bot, 群号, 最近消息撤回拉取数量)
+        历史消息 = await 获取群历史消息(bot, 群号, 拉取数量)
     except Exception as exc:
-        logger.warning(f"最近消息撤回获取历史失败：group_id={群号}, user_id={用户QQ}, error={exc}")
+        logger.warning(f"{日志名称}获取历史失败：group_id={群号}, user_id={用户QQ}, error={exc}")
         return 0
 
-    当前消息编号 = str(获取当前消息编号(event) or "")
-    目标消息 = 筛选用户最近消息(历史消息, 用户QQ, 当前消息编号, 最近消息撤回数量)
+    目标消息 = 筛选用户最近消息(历史消息, 用户QQ, 排除消息编号, 撤回数量)
     成功数量 = 0
     for 消息 in 目标消息:
         消息编号 = 消息.get("message_id") if isinstance(消息, dict) else None
@@ -692,9 +739,9 @@ async def 尝试撤回触发用户最近消息(event: AstrMessageEvent) -> int:
         try:
             await 使用_delete_msg撤回(bot, 消息编号)
             成功数量 += 1
-            logger.info(f"最近消息撤回成功：group_id={群号}, user_id={用户QQ}, message_id={消息编号}")
+            logger.info(f"{日志名称}成功：group_id={群号}, user_id={用户QQ}, message_id={消息编号}")
         except Exception as exc:
-            logger.warning(f"最近消息撤回失败：group_id={群号}, user_id={用户QQ}, message_id={消息编号}, error={exc}")
+            logger.warning(f"{日志名称}失败：group_id={群号}, user_id={用户QQ}, message_id={消息编号}, error={exc}")
     return 成功数量
 
 
