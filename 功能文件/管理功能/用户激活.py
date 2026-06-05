@@ -38,7 +38,6 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 卡密同步配置分类名 = "card_key_sync_settings"
 卡密同步已使用配置项 = "card_key_sync_used_cards"
 卡密同步未使用配置项 = "card_key_sync_unused_cards"
-卡密同步初始化配置项 = "card_key_sync_initialized"
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
     "番茄小说key": (基础配置分类名, "基础配置"),
@@ -50,7 +49,6 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
     "user_activation_database_name": (数据库配置分类名, "数据库配置"),
     卡密同步已使用配置项: (卡密同步配置分类名, "卡密同步查看"),
     卡密同步未使用配置项: (卡密同步配置分类名, "卡密同步查看"),
-    卡密同步初始化配置项: (卡密同步配置分类名, "卡密同步查看"),
 }
 配置字段默认值 = {
     "group_file_cleanup_admin_qq": [],
@@ -207,12 +205,12 @@ def 用户激活回复需要同步卡密配置(回复内容: Any) -> bool:
     return any(标记 in 文本 for 标记 in ("已生成卡密", "卡密激活成功", "卡密无效或已使用"))
 
 
-async def 同步卡密配置视图(配置: Any, 允许删除数据库卡密: bool = True) -> bool:
+async def 同步卡密配置视图(配置: Any) -> bool:
     配置字典 = 获取配置字典(配置)
     if 配置字典 is None:
         return False
     try:
-        记录列表 = await asyncio.to_thread(同步数据库卡密到配置, 配置字典, 允许删除数据库卡密)
+        记录列表 = await asyncio.to_thread(同步数据库卡密到配置, 配置字典)
     except RuntimeError as exc:
         文本 = str(exc)
         if "用户激活数据库配置不完整" not in 文本 and "缺少 pymysql" not in 文本:
@@ -1691,17 +1689,11 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
     ]
 
 
-def 同步数据库卡密到配置(配置: Any, 允许删除数据库卡密: bool = True) -> bool:
+def 同步数据库卡密到配置(配置: Any) -> bool:
     数据库配置 = 获取数据库配置(配置)
-    已初始化 = bool(读取配置字段(配置, 卡密同步初始化配置项))
-    配置卡密集合 = 读取配置卡密集合(配置)
 
     with 打开数据库连接(数据库配置) as 连接:
         确保卡密数据库表(连接, 数据库配置["card_table"])
-        数据库卡密集合 = 查询全部数据库卡密集合(连接, 数据库配置["card_table"])
-        待删除卡密列表 = sorted(数据库卡密集合 - 配置卡密集合) if 已初始化 and 允许删除数据库卡密 else []
-        if 待删除卡密列表:
-            删除数据库卡密记录列表(连接, 数据库配置["card_table"], 待删除卡密列表)
         记录列表 = 查询全部数据库卡密记录(连接, 数据库配置["card_table"])
 
     已使用列表: list[str] = []
@@ -1719,18 +1711,7 @@ def 同步数据库卡密到配置(配置: Any, 允许删除数据库卡密: boo
     已变更 = False
     已变更 = 设置配置字段(配置, 卡密同步已使用配置项, 已使用列表) or 已变更
     已变更 = 设置配置字段(配置, 卡密同步未使用配置项, 未使用列表) or 已变更
-    已变更 = 设置配置字段(配置, 卡密同步初始化配置项, True) or 已变更
-    if 待删除卡密列表:
-        logger.info(f"卡密配置同步删除数据库卡密：count={len(待删除卡密列表)}")
-        已变更 = True
     return 已变更
-
-
-def 查询全部数据库卡密集合(连接: Any, 表名: str) -> set[str]:
-    with 连接.cursor() as 游标:
-        游标.execute(f"SELECT card_key FROM `{表名}`")
-        记录列表 = 游标.fetchall()
-    return {str(记录[0] or "").strip() for 记录 in 记录列表 if str(记录[0] or "").strip()}
 
 
 def 查询全部数据库卡密记录(连接: Any, 表名: str) -> list[dict[str, Any]]:
@@ -1758,18 +1739,6 @@ def 查询全部数据库卡密记录(连接: Any, 表名: str) -> list[dict[str
         }
         for 记录 in 记录列表
     ]
-
-
-def 删除数据库卡密记录列表(连接: Any, 表名: str, 卡密列表: list[str]) -> None:
-    if not 卡密列表:
-        return
-    with 连接.cursor() as 游标:
-        for 开始 in range(0, len(卡密列表), 200):
-            当前批次 = 卡密列表[开始 : 开始 + 200]
-            占位符 = ", ".join(["%s"] * len(当前批次))
-            游标.execute(f"DELETE FROM `{表名}` WHERE card_key IN ({占位符})", tuple(当前批次))
-    连接.commit()
-
 
 def 消耗数据库每日免费额度记录(配置: Any, 用户编号: str, 每日限额: int) -> int:
     数据库配置 = 获取数据库配置(配置)
@@ -1837,21 +1806,6 @@ def 格式化配置未使用卡密(记录: dict[str, Any]) -> str:
     群号 = str(记录.get("group_id") or "").strip()
     天数 = 安全整数(记录.get("days"), 默认激活天数)
     return f"{卡密}#{群号}#{天数}天#未使用"
-
-
-def 读取配置卡密集合(配置: Any) -> set[str]:
-    结果: set[str] = set()
-    for 字段名 in (卡密同步已使用配置项, 卡密同步未使用配置项):
-        值 = 读取配置字段(配置, 字段名)
-        if isinstance(值, str):
-            值 = [值]
-        if not isinstance(值, list):
-            continue
-        for 项目 in 值:
-            卡密列表 = 提取卡密候选列表(项目)
-            if 卡密列表:
-                结果.add(卡密列表[0])
-    return 结果
 
 
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:

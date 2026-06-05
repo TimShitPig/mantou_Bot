@@ -39,7 +39,7 @@ importlib.invalidate_caches()
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.28.1"
+插件版本 = "1.28.2"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -51,9 +51,9 @@ class MyPlugin(Star):
     async def initialize(self):
         await self.同步卡密配置视图()
 
-    async def 同步卡密配置视图(self, 允许删除数据库卡密: bool = True):
+    async def 同步卡密配置视图(self):
         配置已变更 = 用户激活功能.迁移旧版配置分类(self.config)
-        if await 用户激活功能.同步卡密配置视图(self.config, 允许删除数据库卡密):
+        if await 用户激活功能.同步卡密配置视图(self.config):
             配置已变更 = True
         if 配置已变更:
             await self.保存插件配置()
@@ -91,7 +91,7 @@ class MyPlugin(Star):
         激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
         if 激活回复 is not None:
             if 用户激活功能.用户激活回复需要同步卡密配置(激活回复):
-                await self.同步卡密配置视图(允许删除数据库卡密=False)
+                await self.同步卡密配置视图()
             yield event.plain_result(激活回复)
             event.stop_event()
             return
