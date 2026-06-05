@@ -90,6 +90,7 @@ from 功能文件.管理功能.权限工具 import 是群文件清理管理员, 
 用户列表翻页命令 = 用户列表下一页命令 | 用户列表上一页命令
 生成卡密命令规则 = re.compile(r"^生成卡密(?:\s+(\d+))?$")
 查询卡密命令规则 = re.compile(r"^查询卡密(?:\s+\S+){0,20}$")
+复制卡密命令规则 = re.compile(r"^复制(?:\s*(\d+)\s*天?)?$")
 查询卡密菜单命令 = "查询卡密"
 卡密查询选择命令 = {"1": "used", "2": "unused"}
 卡密查询返回命令 = {"0"}
@@ -391,6 +392,15 @@ async def 处理卡密功能(event: Any, 命令文本: str, 配置: Any, context
             return "没有权限查询卡密"
         return await 处理查询卡密(event, 卡密文本, 配置, context, 翻页方向=获取翻页方向(卡密文本))
 
+    if 复制卡密命令规则.fullmatch(卡密文本):
+        群号 = 获取群号(event) or "private"
+        状态键 = 获取用户列表翻页状态键(event, 群号)
+        if 状态键 not in 卡密查询翻页状态:
+            return None
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查询卡密"
+        return await 处理复制卡密(event, 卡密文本, 配置)
+
     if 卡密文本.startswith("生成卡密"):
         if not 是群文件清理管理员(event, 配置):
             return "没有权限生成卡密"
@@ -573,6 +583,28 @@ async def 处理查询卡密(
     return 格式化卡密列表(卡密列表, 查询参数, 页码, 总页数, 边界提示)
 
 
+async def 处理复制卡密(event: Any, 命令文本: str, 配置: Any) -> str:
+    群号 = 获取群号(event) or "private"
+    状态键 = 获取用户列表翻页状态键(event, 群号)
+    状态 = 卡密查询翻页状态.get(状态键)
+    if not 状态:
+        return "没有可复制的卡密查询结果，请先发送“查询卡密”"
+    查询参数 = 状态.get("query") if isinstance(状态.get("query"), dict) else {}
+    匹配 = 复制卡密命令规则.fullmatch(str(命令文本 or "").strip())
+    天数筛选 = 安全整数(匹配.group(1), 0) if 匹配 and 匹配.group(1) else 0
+
+    try:
+        卡密列表 = await 列出卡密记录(配置, 群号, 查询参数)
+    except Exception as exc:
+        logger.warning(f"卡密复制失败：group_id={群号}, query={查询参数}, days={天数筛选}, error={exc}")
+        return f"卡密复制失败：{exc}"
+    if 天数筛选 > 0:
+        卡密列表 = [记录 for 记录 in 卡密列表 if 安全整数(记录.get("days"), 默认激活天数) == 天数筛选]
+    if not 卡密列表:
+        return "没有符合条件的卡密"
+    return 格式化复制卡密列表(卡密列表, 天数筛选)
+
+
 def 获取目标用户列表(激活参数: dict[str, Any]) -> list[str]:
     目标用户列表 = 激活参数.get("target_user_ids")
     if isinstance(目标用户列表, list):
@@ -749,6 +781,21 @@ def 格式化卡密列表(
     elif 边界提示 is True:
         行列表.append("已经是最后一页")
     return "\n".join(行列表)
+
+
+def 格式化复制卡密列表(卡密列表: list[dict[str, Any]], 天数筛选: int = 0) -> str:
+    if 天数筛选 > 0:
+        有效期文本 = f"{天数筛选} 天"
+    else:
+        天数集合 = {安全整数(记录.get("days"), 默认激活天数) for 记录 in 卡密列表}
+        有效期文本 = f"{next(iter(天数集合))} 天" if len(天数集合) == 1 else "全部"
+    return "\n".join(
+        [
+            f"已复制卡密：{len(卡密列表)} 个",
+            f"有效期：{有效期文本}",
+            *[str(记录.get("card_key") or "").strip() for 记录 in 卡密列表 if str(记录.get("card_key") or "").strip()],
+        ]
+    )
 
 
 def 解析查询卡密命令(event: Any, 命令文本: str, context: Any = None) -> dict[str, Any] | None:
@@ -989,6 +1036,7 @@ def 提取卡密命令文本(event: Any, 命令文本: str) -> str:
             文本 in 用户列表翻页命令
             or 文本.startswith("生成卡密")
             or 文本.startswith("查询卡密")
+            or 复制卡密命令规则.fullmatch(文本)
         ):
             return 文本
 
