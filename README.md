@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v1.33.2 |
+| 版本 | v1.33.3 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -148,13 +148,13 @@ pymysql
 
 群文件清理管理员白名单内的 QQ 可发送 `开启番茄` / `关闭番茄` 和 `开启七猫` / `关闭七猫` 开关对应小说下载功能，状态写入 MySQL 的 `mantou_runtime_state` 表，重载后继续生效。关闭后用户发送对应小说链接会直接回复该功能已关闭，不进入下载流程。
 
-插件配置里填写 `uc_pan_cookie` 后，番茄和七猫小说下载完成会先把完整原小说 txt 上传到 UC 网盘，上传目录读取 `uc_pan_upload_dir`，默认 `/小说机器人`，远端同名旧文件会在上传前删除。UC 上传成功后，QQ 收到的仍是和原小说同名的 txt 文件，但文件内容只有 `请复制链接打开UC网盘` 和 `链接：xxx`；UC 上传失败时会回退发送完整原小说 txt。`uc_pan_cookie` 留空时保持原来的 QQ 文件发送方式。
+插件配置里填写 `uc_pan_cookie` 后，番茄和七猫小说下载完成会先把完整原小说 txt 上传到 UC 网盘，上传目录读取 `uc_pan_upload_dir`，默认 `/小说机器人`。上传前不会删除远端同名旧文件；如果 UC 返回同名冲突，插件会改用备用远端文件名上传。UC 上传成功后，QQ 收到的仍是和原小说同名的 txt 文件，但文件内容只有 `请复制链接打开UC网盘` 和 `链接：xxx`；UC 上传失败时会回退发送完整原小说 txt。`uc_pan_cookie` 留空时保持原来的 QQ 文件发送方式。
 
 群文件清理只调用当前 AstrBot 适配器暴露的 OneBot 扩展接口 `get_group_root_files`、`get_group_files_by_folder` 和 `delete_group_file`，不会连接 NapCat 或 NapCat WebUI。删除阶段使用有限并发逐个调用 `delete_group_file`，默认同时删除 200 个文件；发送 `清理全部群文件` 会先调用 `get_group_list` 获取机器人所在群，再逐群执行同一套群文件清理逻辑；`qq_official` 事件只返回 `group_openid`，不能直接当作数字 QQ 群号；当前适配器没有 `api.call_action` 或返回非数字群号时，插件会输出 `群文件清理事件诊断` 日志用于查看真实事件参数。
 
 七猫小说下载完成后会临时写入 `功能文件/下载缓存/`，UC 网盘未启用或上传失败时优先通过 AstrBot `File` 组件上传到 QQ，无法使用时再回退 OneBot 本地路径上传。通过 `File` 组件发送时会延迟清理缓存，避免适配器读取前文件被删除；OneBot 回退上传尝试结束后立即删除 txt 文件。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`。txt 文件顶部会写入免责声明，文件发送成功后不再额外发送完成提示，只有发送失败时回复错误原因。
 
-番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 `changdunovel.com/t/短码` 分享短链和 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，外部提示不显示简介，txt 文件头部会保留简介。群文件清理管理员白名单内的 QQ 发送 `查看API` 会列出番茄小说下载 API，随后发送 `1` 切换到 OIAPI，发送 `2` 切换到析API；当前选择会写入 MySQL 的 `mantou_runtime_state` 表，重载后继续生效。两个接口不会自动互相切换，当前接口失败时会直接返回当前接口的错误。选择析API时，书籍详情仍优先使用番茄官方落地页和官网页面接口，目录和正文使用析API。析API正文会保留段落换行，txt 统一使用 CRLF 换行。文件写入 `功能文件/下载缓存/`，UC 网盘未启用或上传失败时优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。通过 `File` 组件发送时会延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
+番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 `changdunovel.com/t/短码` 分享短链和 JSON 卡片中的链接。下载前会先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，外部提示不显示简介，txt 文件头部会保留简介。群文件清理管理员白名单内的 QQ 发送 `查看API` 会列出番茄小说下载 API，随后发送 `1` 切换到 OIAPI，发送 `2` 切换到析API；当前选择会写入 MySQL 的 `mantou_runtime_state` 表，重载后继续生效。两个接口不会自动互相切换；OIAPI 返回业务失败时只显示接口 `message` 内容，例如 `付费内容不解析`。选择析API时，书籍详情仍优先使用番茄官方落地页和官网页面接口，目录和正文使用析API。析API正文会保留段落换行，txt 统一使用 CRLF 换行。文件写入 `功能文件/下载缓存/`，UC 网盘未启用或上传失败时优先使用 AstrBot `File` 组件发送；无法使用时再尝试裸本地路径和 `file://` URI 的 OneBot 上传接口。通过 `File` 组件发送时会延迟清理缓存，OneBot 回退上传尝试结束后删除缓存 txt，成功时不额外发送完成提示。
 
 QQ 官方机器人 `qq_official` 发送文件应优先走 AstrBot `File` 组件，它会封装官方富媒体接口并发送 `media` 消息；如果 QQ 官方群聊返回 `call inner proxy error`，这是平台富媒体上传限制或临时错误。OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 

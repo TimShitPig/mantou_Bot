@@ -43,6 +43,9 @@ API状态键 = 'current_api'
 长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
 链接正则 = re.compile('https?://[^\\s\'\\"<>\\u3001\\uff0c\\u3002]+', re.IGNORECASE)
 
+class 用户可见错误(RuntimeError):
+    pass
+
 def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> AsyncIterator[str] | None:
     来源 = 提取直接来源(命令文本) or 提取事件来源(事件)
     if 来源 is None:
@@ -155,7 +158,10 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
             发送错误 = str(发送结果.get('error') or '')
     except Exception as 异常:
         logger.warning(f'番茄小说下载失败：source={限制文本长度(解析来源)}, book_id={书籍编号}, error={异常}')
-        yield f'番茄小说下载失败：{异常}'
+        if isinstance(异常, 用户可见错误):
+            yield str(异常)
+        else:
+            yield f'番茄小说下载失败：{异常}'
         return
     if 已发送:
         return
@@ -306,7 +312,7 @@ async def 请求FqRead(会话: aiohttp.ClientSession, 书籍编号: str, 接口k
     返回码 = 响应数据.get('code')
     if str(返回码) not in ('1', '200'):
         消息 = 响应数据.get('message') or 响应数据.get('msg') or 响应数据.get('error') or '接口返回失败'
-        raise RuntimeError(f'OIAPI返回失败：code={返回码}, message={限制文本长度(消息, 200)}')
+        raise 用户可见错误(限制文本长度(消息, 200))
     return 响应数据
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:

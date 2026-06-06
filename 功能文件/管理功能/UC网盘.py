@@ -18,7 +18,7 @@ from astrbot.api import logger
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
 网盘名称 = "UC网盘"
-预上传同名冲突最大重试次数 = 5
+同名冲突备用文件名最大次数 = 5
 浏览器请求头 = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "accept": "application/json, text/plain, */*",
@@ -57,8 +57,23 @@ class UC网盘客户端:
 
     async def 上传文件并创建分享(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
         目录ID = await self.确保目录路径(上传目录)
-        await self.删除同名文件(文件名, 目录ID)
-        文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
+        文件ID = ""
+        最后异常: Exception | None = None
+        for 尝试次数 in range(1, 同名冲突备用文件名最大次数 + 1):
+            远端文件名 = 文件名 if 尝试次数 == 1 else 生成UC备用上传文件名(文件名, 尝试次数)
+            try:
+                文件ID = await self.上传文件(本地路径, 目录ID, 远端文件名)
+                break
+            except Exception as 异常:
+                if not 是UC同名冲突错误(异常) or 尝试次数 >= 同名冲突备用文件名最大次数:
+                    raise
+                最后异常 = 异常
+                logger.warning(
+                    f"UC网盘远端文件名冲突，保留旧文件并改用备用文件名上传："
+                    f"file={文件名}, remote_file={远端文件名}, attempt={尝试次数}/{同名冲突备用文件名最大次数}"
+                )
+        if not 文件ID and 最后异常:
+            raise 最后异常
         if not 文件ID:
             raise RuntimeError("UC网盘上传后没有返回文件ID")
         分享链接 = await self.创建分享(文件ID, 文件名)
@@ -129,30 +144,10 @@ class UC网盘客户端:
             "l_updated_at": 当前毫秒,
             "l_created_at": 当前毫秒,
         }
-        最后异常: Exception | None = None
-        for 尝试次数 in range(1, 预上传同名冲突最大重试次数 + 1):
-            try:
-                预上传数据 = await self.请求JSON("POST", "/file/upload/pre", json_data=预上传载荷)
-            except Exception as 异常:
-                if not 是UC同名冲突错误(异常):
-                    raise
-                最后异常 = 异常
-            else:
-                if str(预上传数据.get("code")) == "0" or not 是UC同名冲突错误(预上传数据):
-                    return 预上传数据
-                最后异常 = RuntimeError(f"UC网盘预上传同名冲突：{限制文本长度(预上传数据)}")
-
-            if 尝试次数 >= 预上传同名冲突最大重试次数:
-                break
-            logger.warning(
-                f"UC网盘预上传同名冲突，重新删除同名文件后重试："
-                f"file={文件名}, attempt={尝试次数}/{预上传同名冲突最大重试次数}"
-            )
-            await self.删除同名文件(文件名, 目标目录ID)
-            await asyncio.sleep(min(尝试次数 * 2, 8))
-        if 最后异常:
-            raise 最后异常
-        raise RuntimeError("UC网盘预上传失败：未知同名冲突")
+        预上传数据 = await self.请求JSON("POST", "/file/upload/pre", json_data=预上传载荷)
+        if str(预上传数据.get("code")) != "0" and 是UC同名冲突错误(预上传数据):
+            raise RuntimeError(f"UC网盘预上传同名冲突：{限制文本长度(预上传数据)}")
+        return 预上传数据
 
     async def 上传文件(self, 本地路径: str | Path, 目标目录ID: str = "0", 文件名: str | None = None) -> str:
         路径 = Path(本地路径)
@@ -445,6 +440,14 @@ def 是UC同名冲突错误(值: Any) -> bool:
         or "file is doloading" in 文本
         or "file is downloading" in 文本
     )
+
+
+def 生成UC备用上传文件名(文件名: str, 序号: int) -> str:
+    路径 = Path(str(文件名 or "小说.txt"))
+    后缀 = 路径.suffix or ".txt"
+    主名 = 路径.stem or "小说"
+    时间戳 = int(time.time() * 1000)
+    return f"{主名}_UC上传_{时间戳}_{序号}{后缀}"
 
 
 def 清理Cookie(cookie: Any) -> str:
