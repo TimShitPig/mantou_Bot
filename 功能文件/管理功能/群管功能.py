@@ -38,8 +38,9 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.19.1"
+群管功能模块版本 = "1.20.0"
 踢出命令集合 = {"踢", "踢了"}
+QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
     "关闭禁言": {"全部群": False, "启用": False, "操作": "关闭"},
@@ -394,16 +395,67 @@ def 规范化用户编号(值: Any) -> str:
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
+    if not 是否需要撤回消息(event, 消息文本):
+        return False
+    if await 是否发送者为QQ群主或管理员(event):
+        logger.info(
+            "数字撤回跳过：QQ群主/管理员消息不撤回，"
+            f"group_id={获取群号(event)}, user_id={获取发送者QQ(event)}"
+        )
+        return False
     卡片类型 = 获取卡片撤回类型(event)
     if 卡片类型:
         记录卡片诊断日志(event, 消息文本, 卡片类型)
-    if not 是否需要撤回消息(event, 消息文本):
-        return False
     撤回成功 = await 尝试撤回当前消息(event)
     if 撤回成功:
         await 尝试撤回触发用户最近消息(event)
         await 记录撤回触发并尝试踢出(event)
     return 撤回成功
+
+
+async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
+    事件角色 = 提取事件发送者群角色(event)
+    if 是QQ群管理角色(事件角色):
+        return True
+    if 事件角色:
+        return False
+
+    群号 = 获取群号(event)
+    用户QQ = 获取发送者QQ(event)
+    if not 是数字ID(群号) or not 是数字ID(用户QQ):
+        return False
+
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        return False
+
+    try:
+        响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(用户QQ), no_cache=True)
+    except Exception as exc:
+        logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
+        return False
+
+    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
+    if isinstance(数据, dict):
+        return 是QQ群管理角色(数据.get("role"))
+    return False
+
+
+def 提取事件发送者群角色(event: AstrMessageEvent) -> str:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        角色 = 读取字段(对象, "role")
+        if 角色:
+            return str(角色).strip()
+        发送者 = 读取字段(对象, "sender")
+        角色 = 读取字段(发送者, "role")
+        if 角色:
+            return str(角色).strip()
+    return ""
+
+
+def 是QQ群管理角色(角色: Any) -> bool:
+    return str(角色 or "").strip().lower() in QQ群管理角色集合
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
