@@ -97,19 +97,52 @@ class UC网盘客户端:
         return 当前目录ID
 
     async def 确保文件夹(self, 目录名: str, 父目录ID: str = "0") -> str:
-        数据 = await self.请求JSON("GET", "/file/sort", params={"pdir_fid": 父目录ID, "_size": 100})
-        项目列表 = 读取路径(数据, ("data", "list")) or []
-        for 项目 in 项目列表:
-            if isinstance(项目, dict) and 项目.get("file_name") == 目录名 and str(项目.get("dir")) == "1":
-                文件ID = str(项目.get("fid") or "")
-                if 文件ID:
-                    return 文件ID
+        文件ID = await self.查找文件夹ID(目录名, 父目录ID)
+        if 文件ID:
+            return 文件ID
 
-        创建数据 = await self.请求JSON("POST", "/file", json_data={"pdir_fid": str(父目录ID), "file_name": 目录名})
+        创建数据: dict[str, Any] | None = None
+        for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
+            try:
+                创建数据 = await self.请求JSON("POST", "/file", json_data={"pdir_fid": str(父目录ID), "file_name": 目录名})
+                break
+            except Exception as 异常:
+                if not 是UC同名冲突错误(异常):
+                    raise
+                文件ID = await self.查找文件夹ID(目录名, 父目录ID)
+                if 文件ID:
+                    logger.warning(
+                        f"UC网盘创建目录返回同名冲突，已重新找到已有目录："
+                        f"folder={目录名}, fid={文件ID}, parent_id={父目录ID}"
+                    )
+                    return 文件ID
+                if 尝试次数 >= 上传完成文件可见重试次数:
+                    raise
+                logger.warning(
+                    f"UC网盘创建目录返回同名冲突，等待目录列表刷新："
+                    f"folder={目录名}, attempt={尝试次数}/{上传完成文件可见重试次数}, error={异常}"
+                )
+                await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
+
+        if 创建数据 is None:
+            raise RuntimeError(f"UC网盘创建目录没有返回数据：folder={目录名}")
         文件ID = str(读取路径(创建数据, ("data", "fid")) or "")
         if not 文件ID:
             raise RuntimeError(f"UC网盘创建目录失败：{限制文本长度(创建数据)}")
         return 文件ID
+
+    async def 查找文件夹ID(self, 目录名: str, 父目录ID: str = "0") -> str:
+        数据 = await self.请求JSON可等待("GET", "/file/sort", params={"pdir_fid": 父目录ID, "_size": 200})
+        项目列表 = 读取路径(数据, ("data", "list")) or []
+        for 项目 in 项目列表:
+            if not isinstance(项目, dict):
+                continue
+            if 项目.get("file_name") != 目录名 or not 是UC文件夹项目(项目):
+                continue
+            文件ID = str(项目.get("fid") or "")
+            if 文件ID:
+                return 文件ID
+        return ""
 
     async def 请求预上传数据(
         self,
@@ -604,6 +637,19 @@ def UC文件大小匹配(项目: dict[str, Any], 文件大小: int) -> bool:
         except Exception:
             continue
     return True
+
+
+def 是UC文件夹项目(项目: dict[str, Any]) -> bool:
+    值 = 项目.get("dir")
+    if isinstance(值, bool):
+        return 值
+    try:
+        if int(值) == 1:
+            return True
+    except Exception:
+        pass
+    文本 = str(值 or "").strip().lower()
+    return 文本 in ("true", "yes", "folder", "dir")
 
 
 def 清理Cookie(cookie: Any) -> str:
