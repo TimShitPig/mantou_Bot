@@ -21,8 +21,8 @@ from astrbot.api import logger
 同名冲突备用文件名最大次数 = 5
 上传完成重试次数 = 6
 上传完成重试基础间隔秒 = 2
-上传完成文件可见重试次数 = 6
-上传完成文件可见基础间隔秒 = 2
+上传完成文件可见重试次数 = 12
+上传完成文件可见基础间隔秒 = 3
 浏览器请求头 = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "accept": "application/json, text/plain, */*",
@@ -31,6 +31,10 @@ from astrbot.api import logger
     "pr": "UCBrowser",
     "fr": "pc",
 }
+
+
+class UC网盘处理中错误(RuntimeError):
+    pass
 
 
 class UC网盘客户端:
@@ -226,11 +230,18 @@ class UC网盘客户端:
         }
         await self.请求OSS("POST", 完成地址, data=XML内容.encode(), headers=完成头)
 
+        预上传文件ID = str(数据.get("fid") or "")
         try:
             完成数据 = await self.完成上传任务(任务ID, 对象键)
         except Exception as 异常:
             if 是UC同名冲突错误(异常):
-                文件ID = await self.等待上传文件可用(目标目录ID, 文件名, 文件大小, str(数据.get("fid") or ""))
+                if 预上传文件ID:
+                    logger.warning(
+                        f"UC网盘上传完成接口仍返回处理中，沿用预上传文件ID继续创建分享："
+                        f"file={文件名}, fid={预上传文件ID}, error={异常}"
+                    )
+                    return 预上传文件ID
+                文件ID = await self.等待上传文件可用(目标目录ID, 文件名, 文件大小, 预上传文件ID)
                 if 文件ID:
                     return 文件ID
             raise
@@ -335,7 +346,7 @@ class UC网盘客户端:
 
             if str(分享数据.get("code")) != "0" and 是UC同名冲突错误(分享数据):
                 if 尝试次数 >= 上传完成文件可见重试次数:
-                    break
+                    raise UC网盘处理中错误(f"UC网盘创建分享重试后文件仍在处理中：{限制文本长度(分享数据)}")
                 logger.warning(
                     f"UC网盘创建分享返回文件处理中，等待后重试："
                     f"fid={文件ID}, attempt={尝试次数}/{上传完成文件可见重试次数}, response={限制文本长度(分享数据)}"
@@ -354,7 +365,7 @@ class UC网盘客户端:
         分享ID = ""
         for 重试序号 in range(15):
             await asyncio.sleep(0.5)
-            任务数据 = await self.请求JSON("GET", "/task", params={"task_id": 任务ID, "retry_index": 重试序号})
+            任务数据 = await self.请求JSON可等待("GET", "/task", params={"task_id": 任务ID, "retry_index": 重试序号})
             任务详情 = 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
             if str(任务详情.get("status")) == "2":
                 分享ID = str(任务详情.get("share_id") or "")
@@ -362,7 +373,7 @@ class UC网盘客户端:
         if not 分享ID:
             raise RuntimeError("UC网盘分享任务超时")
 
-        链接数据 = await self.请求JSON("POST", "/share/password", json_data={"share_id": 分享ID})
+        链接数据 = await self.请求JSON可等待("POST", "/share/password", json_data={"share_id": 分享ID})
         if str(链接数据.get("code")) != "0":
             raise RuntimeError(f"UC网盘获取分享链接失败：{限制文本长度(链接数据)}")
         分享链接 = str(读取路径(链接数据, ("data", "share_url")) or "")
@@ -387,7 +398,16 @@ class UC网盘客户端:
             文本 = await 响应.text()
             self.合并响应Cookie(响应.cookies)
             if 响应.status >= 400:
-                raise RuntimeError(f"UC网盘HTTP {响应.status}: {限制文本长度(文本, 200)}")
+                try:
+                    错误数据 = json.loads(文本)
+                except Exception:
+                    错误数据 = None
+                if isinstance(错误数据, dict) and 是UC同名冲突错误(错误数据):
+                    raise UC网盘处理中错误(
+                        f"UC网盘HTTP {响应.status}({路径})：{提取UC错误消息(错误数据) or 限制文本长度(错误数据, 200)}"
+                    )
+                错误文本 = 提取UC错误消息(错误数据) if isinstance(错误数据, dict) else ""
+                raise RuntimeError(f"UC网盘HTTP {响应.status}({路径})：{错误文本 or 限制文本长度(文本, 200)}")
             try:
                 数据 = json.loads(文本)
             except Exception as 异常:
@@ -395,6 +415,26 @@ class UC网盘客户端:
         if not isinstance(数据, dict):
             raise RuntimeError("UC网盘返回格式不是对象")
         return 数据
+
+    async def 请求JSON可等待(
+        self,
+        方法: str,
+        路径: str,
+        params: dict[str, Any] | None = None,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
+            try:
+                return await self.请求JSON(方法, 路径, params=params, json_data=json_data)
+            except Exception as 异常:
+                if not 是UC同名冲突错误(异常) or 尝试次数 >= 上传完成文件可见重试次数:
+                    raise
+                logger.warning(
+                    f"UC网盘接口返回文件处理中，等待后重试："
+                    f"path={路径}, attempt={尝试次数}/{上传完成文件可见重试次数}, error={异常}"
+                )
+                await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
+        raise RuntimeError(f"UC网盘接口重试后仍无返回：{路径}")
 
     async def 请求OSS(self, 方法: str, 地址: str, data: bytes, headers: dict[str, str]) -> dict[str, str]:
         会话 = self.获取会话()
@@ -526,6 +566,16 @@ def 是UC同名冲突错误(值: Any) -> bool:
         or "file is doloading" in 文本
         or "file is downloading" in 文本
     )
+
+
+def 提取UC错误消息(值: Any) -> str:
+    if not isinstance(值, dict):
+        return ""
+    for 字段名 in ("message", "msg", "error"):
+        消息 = str(值.get(字段名) or "").strip()
+        if 消息:
+            return 消息
+    return ""
 
 
 def 生成UC备用上传文件名(文件名: str, 序号: int) -> str:
