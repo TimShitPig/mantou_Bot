@@ -59,6 +59,30 @@
       }
     }
   },
+  "baidu_pan_settings": {
+    "description": "百度网盘设置",
+    "type": "object",
+    "items": {
+      "baidu_pan_cookie": {
+        "description": "百度网盘浏览器 Cookie",
+        "type": "string",
+        "hint": "从已登录百度网盘的浏览器复制 Cookie。填写后番茄/七猫小说生成完整原小说 txt 后会后台上传到百度网盘，上传前删除目标目录下同名普通文件；不生成分享链接，也不影响 QQ 原有发送逻辑。留空表示不启用百度网盘后台上传。",
+        "default": ""
+      },
+      "baidu_pan_upload_dir": {
+        "description": "百度网盘上传目录",
+        "type": "string",
+        "hint": "小说 txt 上传到百度网盘的目录，插件会自动逐级创建。默认 /小说机器人。",
+        "default": "/小说机器人"
+      },
+      "baidu_pan_upload_status": {
+        "description": "百度网盘上传书籍状态",
+        "type": "string",
+        "hint": "控制百度网盘后台上传哪些小说，可填 完结、连载 或 全部；默认只上传完结。",
+        "default": "完结"
+      }
+    }
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",
