@@ -18,6 +18,7 @@ from astrbot.api import logger
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
 网盘名称 = "UC网盘"
+预上传同名冲突最大重试次数 = 5
 浏览器请求头 = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "accept": "application/json, text/plain, */*",
@@ -110,6 +111,49 @@ class UC网盘客户端:
         )
         return str(数据.get("code")) in ("0", "200")
 
+    async def 请求预上传数据(
+        self,
+        目标目录ID: str,
+        文件名: str,
+        文件大小: int,
+        媒体类型: str,
+        当前毫秒: int,
+    ) -> dict[str, Any]:
+        预上传载荷 = {
+            "pdir_fid": str(目标目录ID),
+            "file_name": 文件名,
+            "size": 文件大小,
+            "format_type": 媒体类型,
+            "ccp_hash_update": True,
+            "parallel_upload": True,
+            "l_updated_at": 当前毫秒,
+            "l_created_at": 当前毫秒,
+        }
+        最后异常: Exception | None = None
+        for 尝试次数 in range(1, 预上传同名冲突最大重试次数 + 1):
+            try:
+                预上传数据 = await self.请求JSON("POST", "/file/upload/pre", json_data=预上传载荷)
+            except Exception as 异常:
+                if not 是UC同名冲突错误(异常):
+                    raise
+                最后异常 = 异常
+            else:
+                if str(预上传数据.get("code")) == "0" or not 是UC同名冲突错误(预上传数据):
+                    return 预上传数据
+                最后异常 = RuntimeError(f"UC网盘预上传同名冲突：{限制文本长度(预上传数据)}")
+
+            if 尝试次数 >= 预上传同名冲突最大重试次数:
+                break
+            logger.warning(
+                f"UC网盘预上传同名冲突，重新删除同名文件后重试："
+                f"file={文件名}, attempt={尝试次数}/{预上传同名冲突最大重试次数}"
+            )
+            await self.删除同名文件(文件名, 目标目录ID)
+            await asyncio.sleep(min(尝试次数 * 2, 8))
+        if 最后异常:
+            raise 最后异常
+        raise RuntimeError("UC网盘预上传失败：未知同名冲突")
+
     async def 上传文件(self, 本地路径: str | Path, 目标目录ID: str = "0", 文件名: str | None = None) -> str:
         路径 = Path(本地路径)
         if not 路径.exists():
@@ -120,20 +164,7 @@ class UC网盘客户端:
         内容SHA1, 内容MD5 = 计算文件哈希(路径)
         当前毫秒 = int(time.time() * 1000)
 
-        预上传数据 = await self.请求JSON(
-            "POST",
-            "/file/upload/pre",
-            json_data={
-                "pdir_fid": str(目标目录ID),
-                "file_name": 文件名,
-                "size": 文件大小,
-                "format_type": 媒体类型,
-                "ccp_hash_update": True,
-                "parallel_upload": True,
-                "l_updated_at": 当前毫秒,
-                "l_created_at": 当前毫秒,
-            },
-        )
+        预上传数据 = await self.请求预上传数据(目标目录ID, 文件名, 文件大小, 媒体类型, 当前毫秒)
         if str(预上传数据.get("code")) != "0":
             raise RuntimeError(f"UC网盘预上传失败：{限制文本长度(预上传数据)}")
 
@@ -400,6 +431,20 @@ def 提取OSS响应ETag(响应头: Any) -> str:
             if str(字段名).lower() == "etag" and 值:
                 return str(值).strip().strip('"')
     return ""
+
+
+def 是UC同名冲突错误(值: Any) -> bool:
+    if isinstance(值, dict):
+        错误码 = str(值.get("code") or "")
+        消息 = str(值.get("message") or 值.get("msg") or 值)
+        return 错误码 == "23008" or 是UC同名冲突错误(消息)
+    文本 = str(值 or "").lower()
+    return (
+        "23008" in 文本
+        or "同名冲突" in 文本
+        or "file is doloading" in 文本
+        or "file is downloading" in 文本
+    )
 
 
 def 清理Cookie(cookie: Any) -> str:
