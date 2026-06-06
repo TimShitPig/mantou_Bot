@@ -10,19 +10,19 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 import aiohttp
 from astrbot.api import logger
-from 功能文件.管理功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 try:
     from astrbot.api import message_components as 消息组件
 except Exception:
     消息组件 = None
 try:
-    from 功能文件.管理功能 import UC网盘
+    from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception as 异常:
     UC网盘 = None
     logger.warning(f'UC网盘模块加载失败：error={异常}')
 try:
-    from 功能文件.管理功能 import 百度网盘
+    from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as 异常:
     百度网盘 = None
     logger.warning(f'百度网盘模块加载失败：error={异常}')

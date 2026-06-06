@@ -16,8 +16,8 @@ try:
 except Exception:
     AstrMessageEvent = Any
 
-from 功能文件.管理功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.群列表工具 import 获取机器人所在群号列表
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")

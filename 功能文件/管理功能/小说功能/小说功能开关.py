@@ -9,8 +9,8 @@ except Exception:
 
     logger = logging.getLogger(__name__)
 
-from 功能文件.管理功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
 
 
 默认状态 = {"番茄": True, "七猫": True}

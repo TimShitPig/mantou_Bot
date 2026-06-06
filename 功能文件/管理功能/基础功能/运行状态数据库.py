@@ -86,4 +86,4 @@ def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
 
 
 def 获取用户激活模块() -> Any:
-    return importlib.import_module("功能文件.管理功能.用户激活")
+    return importlib.import_module("功能文件.管理功能.基础功能.用户激活")

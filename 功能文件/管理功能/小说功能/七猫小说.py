@@ -18,13 +18,13 @@ except Exception:
     Comp = None
 
 try:
-    from 功能文件.管理功能 import UC网盘
+    from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception as exc:
     UC网盘 = None
     logger.warning(f"UC网盘模块加载失败：error={exc}")
 
 try:
-    from 功能文件.管理功能 import 百度网盘
+    from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={exc}")
@@ -46,7 +46,7 @@ except Exception:
 解密密钥 = bytes.fromhex("32343263636238323330643730396531")
 下载并发数 = 20
 进度日志分段数 = 10
-下载缓存目录 = Path(__file__).resolve().parents[1] / "下载缓存"
+下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
 文件组件缓存清理延迟 = 600
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 

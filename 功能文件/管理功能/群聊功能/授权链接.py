@@ -6,7 +6,7 @@ import urllib.parse
 from typing import Any
 
 from astrbot.api import logger
-from 功能文件.管理功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 
 
 授权命令 = {"授权"}
