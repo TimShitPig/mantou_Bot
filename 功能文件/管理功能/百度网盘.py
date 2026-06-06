@@ -60,6 +60,12 @@ class 百度网盘客户端:
     async def 上传文件并删除同名旧文件(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
         远端目录 = 规范化目录路径(上传目录)
         await self.确保目录路径(远端目录)
+        if 提取文件名状态(文件名) == "完结":
+            已有文件 = await self.查找同名普通文件列表(文件名, 远端目录)
+            if 已有文件:
+                文件ID = 提取百度文件ID(已有文件[0]) or str(已有文件[0].get("path") or "")
+                logger.info(f"百度网盘完结小说已存在，跳过重复上传：file={文件名}, file_id={文件ID}, dir={远端目录}")
+                return 文件ID
         await self.删除同名普通文件(文件名, 远端目录)
         文件ID = await self.上传文件(本地路径, 远端目录, 文件名)
         if not 文件ID:
@@ -127,11 +133,7 @@ class 百度网盘客户端:
 
     async def 删除同名普通文件(self, 文件名: str, 远端目录: str) -> int:
         删除路径列表: list[str] = []
-        for 项目 in await self.列出目录(远端目录):
-            if 是百度文件夹项目(项目):
-                continue
-            if str(项目.get("server_filename") or "") != 文件名:
-                continue
+        for 项目 in await self.查找同名普通文件列表(文件名, 远端目录):
             远端路径 = str(项目.get("path") or "")
             if not 远端路径:
                 远端路径 = 拼接远端路径(远端目录, 文件名)
@@ -143,6 +145,15 @@ class 百度网盘客户端:
             raise RuntimeError(f"百度网盘删除同名旧文件失败：paths={删除路径列表}, response={限制文本长度(数据)}")
         logger.info(f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}")
         return len(删除路径列表)
+
+    async def 查找同名普通文件列表(self, 文件名: str, 远端目录: str) -> list[dict[str, Any]]:
+        结果列表: list[dict[str, Any]] = []
+        for 项目 in await self.列出目录(远端目录):
+            if 是百度文件夹项目(项目):
+                continue
+            if str(项目.get("server_filename") or "") == 文件名:
+                结果列表.append(项目)
+        return 结果列表
 
     async def 删除文件(self, 文件路径列表: list[str]) -> dict[str, Any]:
         参数 = {
@@ -354,6 +365,14 @@ def 是百度文件夹项目(项目: dict[str, Any]) -> bool:
         return int(项目.get("isdir") or 0) == 1
     except Exception:
         return str(项目.get("isdir") or "").strip().lower() in ("true", "yes", "folder", "dir")
+
+
+def 提取百度文件ID(项目: dict[str, Any]) -> str:
+    for 字段名 in ("fs_id", "fid", "file_id"):
+        值 = 项目.get(字段名)
+        if 值 not in (None, ""):
+            return str(值)
+    return ""
 
 
 def 清理Cookie(cookie: Any) -> str:
