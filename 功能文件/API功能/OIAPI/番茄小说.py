@@ -22,6 +22,11 @@ except Exception as 异常:
     UC网盘 = None
     logger.warning(f'UC网盘模块加载失败：error={异常}')
 try:
+    from 功能文件.管理功能 import 百度网盘
+except Exception as 异常:
+    百度网盘 = None
+    logger.warning(f'百度网盘模块加载失败：error={异常}')
+try:
     from 功能文件.API功能.析API import 番茄小说 as 析API番茄小说
 except Exception as 异常:
     析API番茄小说 = None
@@ -429,14 +434,25 @@ async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: by
     缓存路径 = 写入缓存文件(文件名, 文件内容)
     logger.info(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
     发送缓存路径 = 缓存路径
+    原小说缓存待删除 = False
     if UC网盘 is not None:
         UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入缓存文件)
         if UC结果.get('success') and UC结果.get('cache_path'):
             发送缓存路径 = UC结果.get('cache_path')
-            删除缓存文件(缓存路径)
+            原小说缓存待删除 = True
             logger.info(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
         elif UC结果.get('enabled'):
             logger.warning(f"番茄小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
+    if 百度网盘 is not None:
+        百度结果 = await 百度网盘.后台上传小说文件(配置, 缓存路径, 文件名)
+        if 百度结果.get('success'):
+            logger.info(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+        elif 百度结果.get('skipped'):
+            logger.info(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
+        elif 百度结果.get('enabled'):
+            logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+    if 原小说缓存待删除:
+        删除缓存文件(缓存路径)
     if 消息组件 is not None and hasattr(事件, 'chain_result'):
         try:
             链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(发送缓存路径))])

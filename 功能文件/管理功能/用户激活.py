@@ -46,7 +46,9 @@ from 功能文件.管理功能.运行状态数据库 import 读取布尔运行�
 付费开关状态命名空间 = "paid_access"
 付费开关命令配置 = {
     "开启付费": True,
+    "开启收费": True,
     "关闭付费": False,
+    "关闭收费": False,
 }
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
