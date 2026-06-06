@@ -65,6 +65,7 @@ class UC网盘客户端:
 
     async def 上传文件并创建分享(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
         目录ID = await self.确保目录路径(上传目录)
+        await self.删除同名普通文件(文件名, 目录ID)
         文件ID = ""
         最后异常: Exception | None = None
         for 尝试次数 in range(1, 同名冲突备用文件名最大次数 + 1):
@@ -143,6 +144,45 @@ class UC网盘客户端:
             if 文件ID:
                 return 文件ID
         return ""
+
+    async def 删除同名普通文件(self, 文件名: str, 父目录ID: str = "0") -> int:
+        删除数量 = 0
+        for _ in range(3):
+            文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
+            if not 文件ID列表:
+                break
+            for 文件ID in 文件ID列表:
+                await self.删除文件(文件ID)
+                删除数量 += 1
+        if 删除数量:
+            logger.info(f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
+        return 删除数量
+
+    async def 查找同名普通文件ID列表(self, 文件名: str, 父目录ID: str = "0") -> list[str]:
+        数据 = await self.请求JSON可等待("GET", "/file/sort", params={"pdir_fid": str(父目录ID), "_size": 200})
+        项目列表 = 读取路径(数据, ("data", "list")) or []
+        文件ID列表: list[str] = []
+        for 项目 in 项目列表:
+            if not isinstance(项目, dict):
+                continue
+            if 项目.get("file_name") != 文件名 or 是UC文件夹项目(项目):
+                continue
+            文件ID = str(项目.get("fid") or "")
+            if 文件ID:
+                文件ID列表.append(文件ID)
+        return 文件ID列表
+
+    async def 删除文件(self, 文件ID: str) -> bool:
+        if not 文件ID:
+            return False
+        数据 = await self.请求JSON可等待(
+            "POST",
+            "/file/delete",
+            json_data={"action_type": 2, "filelist": [str(文件ID)], "exclude_fids": []},
+        )
+        if str(数据.get("code")) not in ("0", "200"):
+            raise RuntimeError(f"UC网盘删除文件失败：{限制文本长度(数据)}")
+        return True
 
     async def 请求预上传数据(
         self,
