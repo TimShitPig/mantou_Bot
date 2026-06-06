@@ -41,6 +41,24 @@
       }
     }
   },
+  "uc_pan_settings": {
+    "description": "UC网盘设置",
+    "type": "object",
+    "items": {
+      "uc_pan_cookie": {
+        "description": "UC网盘浏览器 Cookie",
+        "type": "string",
+        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。填写后番茄/七猫小说会先上传原小说 txt 到 UC 网盘，上传成功则向 QQ 发送同名链接 txt；上传失败则回退发送原小说 txt。留空表示不启用 UC 网盘。",
+        "default": ""
+      },
+      "uc_pan_upload_dir": {
+        "description": "UC网盘上传目录",
+        "type": "string",
+        "hint": "小说 txt 上传到 UC 网盘的目录，插件会自动逐级创建。默认 /小说机器人。",
+        "default": "/小说机器人"
+      }
+    }
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",

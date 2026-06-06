@@ -18,6 +18,12 @@ except Exception:
     Comp = None
 
 try:
+    from 功能文件.管理功能 import UC网盘
+except Exception as exc:
+    UC网盘 = None
+    logger.warning(f"UC网盘模块加载失败：error={exc}")
+
+try:
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import unpad
 except Exception:
@@ -39,17 +45,17 @@ except Exception:
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
 
-def 获取七猫小说回复流(event: Any, 命令文本: str) -> AsyncIterator[str] | None:
+def 获取七猫小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
     下载关键词 = (
         提取直接七猫链接参数(命令文本)
         or 提取事件七猫链接(event)
     )
     if 下载关键词 is None:
         return None
-    return 生成下载回复流(event, 下载关键词)
+    return 生成下载回复流(event, 下载关键词, 配置)
 
 
-async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str]:
+async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) -> AsyncIterator[str]:
     if not 关键词:
         yield "没有识别到七猫小说链接"
         return
@@ -87,7 +93,7 @@ async def 生成下载回复流(event: Any, 关键词: str) -> AsyncIterator[str
                 f"七猫小说章节下载完成：book_id={书籍编号}, "
                 f"title={详情.get('title')}, success={len(成功章节)}, total={len(目录)}, file_size={len(文件内容)}"
             )
-            发送结果 = await 准备发送文本文件给当前会话(event, 文件名, 文件内容)
+            发送结果 = await 准备发送文本文件给当前会话(event, 文件名, 文件内容, 配置)
             文件发送结果 = 发送结果.get("chain_result")
             if 文件发送结果 is not None:
                 try:
@@ -356,19 +362,28 @@ def 格式化字数(字数: Any) -> str:
 
 
 
-async def 准备发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes) -> dict[str, Any]:
+async def 准备发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
     群号 = 获取群号(event)
     用户号 = 获取发送者QQ(event)
     logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
 
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
+    发送缓存路径 = 缓存路径
+    if UC网盘 is not None:
+        UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入下载缓存文件)
+        if UC结果.get("success") and UC结果.get("cache_path"):
+            发送缓存路径 = UC结果.get("cache_path")
+            删除下载缓存文件(缓存路径)
+            logger.info(f"七猫小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
+        elif UC结果.get("enabled"):
+            logger.warning(f"七猫小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
 
     if Comp is not None and hasattr(event, "chain_result"):
         try:
-            文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(缓存路径))])
-            logger.info(f"七猫小说文件使用 AstrBot File 组件发送：file={文件名}, path={缓存路径}")
-            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 缓存路径, "error": ""}
+            文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(发送缓存路径))])
+            logger.info(f"七猫小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}")
+            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "error": ""}
         except Exception as exc:
             logger.warning(f"七猫小说 AstrBot File 组件构建失败：file={文件名}, error={exc}")
 
@@ -376,14 +391,14 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
     api = getattr(bot, "api", None)
     调用方法 = getattr(api, "call_action", None)
     if not callable(调用方法):
-        删除下载缓存文件(缓存路径)
+        删除下载缓存文件(发送缓存路径)
         return {"sent": False, "chain_result": None, "cache_path": None, "error": "当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件"}
 
     try:
-        发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 缓存路径)
+        发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 发送缓存路径)
         return {"sent": 发送成功, "chain_result": None, "cache_path": None, "error": 发送错误}
     finally:
-        删除下载缓存文件(缓存路径)
+        删除下载缓存文件(发送缓存路径)
 
 
 def 删除下载缓存文件(缓存路径: Any) -> None:

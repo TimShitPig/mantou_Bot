@@ -17,6 +17,11 @@ try:
 except Exception:
     消息组件 = None
 try:
+    from 功能文件.管理功能 import UC网盘
+except Exception as 异常:
+    UC网盘 = None
+    logger.warning(f'UC网盘模块加载失败：error={异常}')
+try:
     from 功能文件.API功能.析API import 番茄小说 as 析API番茄小说
 except Exception as 异常:
     析API番茄小说 = None
@@ -137,7 +142,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
             logger.info(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
-            发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容)
+            发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容, 配置)
             缓存路径 = 发送结果.get('cache_path')
             链式结果 = 发送结果.get('chain_result')
             if 链式结果 is not None:
@@ -411,27 +416,36 @@ def 构造文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
 def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
     return '\n'.join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f'章节：{章节数} 章', f"字数：{书籍信息.get('word_count') or '未知'}", '', '正在下载中请稍等.....'])
 
-async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes) -> dict[str, Any]:
+async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
     群号 = 获取群号(事件)
     用户QQ = 获取用户QQ(事件)
     logger.info(f'番茄小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户QQ}')
     缓存路径 = 写入缓存文件(文件名, 文件内容)
     logger.info(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
+    发送缓存路径 = 缓存路径
+    if UC网盘 is not None:
+        UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入缓存文件)
+        if UC结果.get('success') and UC结果.get('cache_path'):
+            发送缓存路径 = UC结果.get('cache_path')
+            删除缓存文件(缓存路径)
+            logger.info(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
+        elif UC结果.get('enabled'):
+            logger.warning(f"番茄小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
     if 消息组件 is not None and hasattr(事件, 'chain_result'):
         try:
-            链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(缓存路径))])
-            logger.info(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={缓存路径}')
-            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 缓存路径, 'error': ''}
+            链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(发送缓存路径))])
+            logger.info(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}')
+            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 发送缓存路径, 'error': ''}
         except Exception as 异常:
             logger.warning(f'番茄小说 AstrBot File 组件构建失败：file={文件名}, error={异常}')
     机器人 = getattr(事件, 'bot', None)
     接口 = getattr(机器人, 'api', None)
     调用动作 = getattr(接口, 'call_action', None)
     if callable(调用动作):
-        已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(缓存路径)), ('file_uri', 缓存路径.as_uri())])
-        删除缓存文件(缓存路径)
+        已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(发送缓存路径)), ('file_uri', 发送缓存路径.as_uri())])
+        删除缓存文件(发送缓存路径)
         return {'sent': 已发送, 'chain_result': None, 'cache_path': None, 'error': 错误}
-    删除缓存文件(缓存路径)
+    删除缓存文件(发送缓存路径)
     return {'sent': False, 'chain_result': None, 'cache_path': None, 'error': '当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件'}
 
 def 延迟删除缓存文件(缓存路径: Any, 延迟秒数: int=文件组件缓存删除延迟) -> None:
