@@ -38,7 +38,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.20.0"
+群管功能模块版本 = "1.20.1"
 踢出命令集合 = {"踢", "踢了"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
@@ -415,30 +415,26 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
 
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
     事件角色 = 提取事件发送者群角色(event)
-    if 是QQ群管理角色(事件角色):
-        return True
-    if 事件角色:
-        return False
 
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
     if not 是数字ID(群号) or not 是数字ID(用户QQ):
-        return False
+        return 是QQ群管理角色(事件角色)
 
     bot = getattr(event, "bot", None)
     if bot is None:
-        return False
+        return 是QQ群管理角色(事件角色)
 
     try:
         响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(用户QQ), no_cache=True)
     except Exception as exc:
         logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
-        return False
+        return 是QQ群管理角色(事件角色)
 
     数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
     if isinstance(数据, dict):
         return 是QQ群管理角色(数据.get("role"))
-    return False
+    return 是QQ群管理角色(事件角色)
 
 
 def 提取事件发送者群角色(event: AstrMessageEvent) -> str:
