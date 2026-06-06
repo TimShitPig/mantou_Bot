@@ -172,13 +172,14 @@ class UC网盘客户端:
             "content-type": 媒体类型,
         }
         OSS响应头 = await self.请求OSS("PUT", OSS地址, data=路径.read_bytes(), headers=OSS头)
-        ETag = str(OSS响应头.get("etag") or OSS响应头.get("ETag") or "").strip('"')
+        响应ETag = 提取OSS响应ETag(OSS响应头)
+        ETag = 响应ETag or 内容MD5
+        if not 响应ETag:
+            logger.warning(f"UC网盘OSS上传未返回ETag，使用本地MD5作为单分片ETag：file={文件名}")
 
         await self.请求JSON("POST", "/file/update/hash", json_data={"task_id": 任务ID, "md5": 内容MD5, "sha1": 内容SHA1})
 
         回调数据 = 数据.get("callback") if isinstance(数据.get("callback"), dict) else {}
-        if not ETag:
-            raise RuntimeError("UC网盘OSS上传没有返回ETag")
         回调JSON = json.dumps(
             {"callbackUrl": 回调数据.get("callbackUrl", ""), "callbackBody": 回调数据.get("callbackBody", "")},
             ensure_ascii=False,
@@ -383,6 +384,22 @@ def 计算文件哈希(路径: Path) -> tuple[str, str]:
             sha1.update(数据)
             md5.update(数据)
     return sha1.hexdigest().lower(), md5.hexdigest().lower()
+
+
+def 提取OSS响应ETag(响应头: Any) -> str:
+    if not 响应头:
+        return ""
+    获取方法 = getattr(响应头, "get", None)
+    if callable(获取方法):
+        for 字段名 in ("etag", "ETag", "Etag"):
+            值 = 获取方法(字段名)
+            if 值:
+                return str(值).strip().strip('"')
+    if isinstance(响应头, dict):
+        for 字段名, 值 in 响应头.items():
+            if str(字段名).lower() == "etag" and 值:
+                return str(值).strip().strip('"')
+    return ""
 
 
 def 清理Cookie(cookie: Any) -> str:
