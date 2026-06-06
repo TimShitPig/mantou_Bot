@@ -19,6 +19,8 @@ from astrbot.api import logger
 默认上传目录 = "/小说机器人"
 网盘名称 = "UC网盘"
 同名冲突备用文件名最大次数 = 5
+上传完成重试次数 = 6
+上传完成重试基础间隔秒 = 2
 浏览器请求头 = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "accept": "application/json, text/plain, */*",
@@ -72,6 +74,7 @@ class UC网盘客户端:
                     f"UC网盘远端文件名冲突，保留旧文件并改用备用文件名上传："
                     f"file={文件名}, remote_file={远端文件名}, attempt={尝试次数}/{同名冲突备用文件名最大次数}"
                 )
+                await asyncio.sleep(min(尝试次数 * 上传完成重试基础间隔秒, 10))
         if not 文件ID and 最后异常:
             raise 最后异常
         if not 文件ID:
@@ -101,30 +104,6 @@ class UC网盘客户端:
         if not 文件ID:
             raise RuntimeError(f"UC网盘创建目录失败：{限制文本长度(创建数据)}")
         return 文件ID
-
-    async def 删除同名文件(self, 文件名: str, 父目录ID: str = "0") -> int:
-        数据 = await self.请求JSON("GET", "/file/sort", params={"pdir_fid": 父目录ID, "_size": 100})
-        项目列表 = 读取路径(数据, ("data", "list")) or []
-        删除数量 = 0
-        for 项目 in 项目列表:
-            if not isinstance(项目, dict) or 项目.get("file_name") != 文件名:
-                continue
-            文件ID = str(项目.get("fid") or "")
-            if 文件ID and await self.删除文件(文件ID):
-                删除数量 += 1
-        if 删除数量:
-            logger.info(f"UC网盘已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
-        return 删除数量
-
-    async def 删除文件(self, 文件ID: str) -> bool:
-        if not 文件ID:
-            return False
-        数据 = await self.请求JSON(
-            "POST",
-            "/file/delete",
-            json_data={"action_type": 2, "filelist": [str(文件ID)], "exclude_fids": []},
-        )
-        return str(数据.get("code")) in ("0", "200")
 
     async def 请求预上传数据(
         self,
@@ -245,13 +224,52 @@ class UC网盘客户端:
         }
         await self.请求OSS("POST", 完成地址, data=XML内容.encode(), headers=完成头)
 
-        完成数据 = await self.请求JSON("POST", "/file/upload/finish", json_data={"task_id": 任务ID, "obj_key": 对象键})
+        完成数据 = await self.完成上传任务(任务ID, 对象键)
         文件ID = str(读取路径(完成数据, ("data", "fid")) or 数据.get("fid") or "")
         if not 文件ID and str(完成数据.get("code")) == "0":
             文件ID = str(数据.get("fid") or "")
         if not 文件ID:
             raise RuntimeError(f"UC网盘上传完成后没有返回文件ID：{限制文本长度(完成数据)}")
         return 文件ID
+
+    async def 完成上传任务(self, 任务ID: str, 对象键: str) -> dict[str, Any]:
+        最后异常: Exception | None = None
+        最后冲突响应: Any = None
+        for 尝试次数 in range(1, 上传完成重试次数 + 1):
+            try:
+                完成数据 = await self.请求JSON(
+                    "POST",
+                    "/file/upload/finish",
+                    json_data={"task_id": 任务ID, "obj_key": 对象键},
+                )
+            except Exception as 异常:
+                if not 是UC同名冲突错误(异常) or 尝试次数 >= 上传完成重试次数:
+                    raise
+                最后异常 = 异常
+                logger.warning(
+                    f"UC网盘上传完成仍在处理中，等待后重试："
+                    f"task_id={任务ID}, attempt={尝试次数}/{上传完成重试次数}, error={异常}"
+                )
+                await asyncio.sleep(计算UC重试等待秒数(尝试次数))
+                continue
+
+            if str(完成数据.get("code")) != "0" and 是UC同名冲突错误(完成数据):
+                最后冲突响应 = 完成数据
+                if 尝试次数 >= 上传完成重试次数:
+                    break
+                logger.warning(
+                    f"UC网盘上传完成返回处理中，等待后重试："
+                    f"task_id={任务ID}, attempt={尝试次数}/{上传完成重试次数}, response={限制文本长度(完成数据)}"
+                )
+                await asyncio.sleep(计算UC重试等待秒数(尝试次数))
+                continue
+            return 完成数据
+
+        if 最后异常:
+            raise 最后异常
+        if 最后冲突响应 is not None:
+            raise RuntimeError(f"UC网盘上传完成重试后仍返回同名冲突：{限制文本长度(最后冲突响应)}")
+        raise RuntimeError("UC网盘上传完成重试后仍未成功")
 
     async def 创建分享(self, 文件ID: str, 标题: str) -> str:
         分享数据 = await self.请求JSON(
@@ -448,6 +466,10 @@ def 生成UC备用上传文件名(文件名: str, 序号: int) -> str:
     主名 = 路径.stem or "小说"
     时间戳 = int(time.time() * 1000)
     return f"{主名}_UC上传_{时间戳}_{序号}{后缀}"
+
+
+def 计算UC重试等待秒数(尝试次数: int) -> int:
+    return min(max(尝试次数, 1) * 上传完成重试基础间隔秒, 10)
 
 
 def 清理Cookie(cookie: Any) -> str:
