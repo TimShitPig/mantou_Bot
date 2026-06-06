@@ -78,6 +78,11 @@
       "baidu_pan_upload_status": {
         "description": "百度网盘上传书籍状态",
         "type": "string",
+        "options": [
+          "完结",
+          "连载",
+          "全部"
+        ],
         "hint": "控制百度网盘后台上传哪些小说，可填 完结、连载 或 全部；默认只上传完结。",
         "default": "完结"
       }
