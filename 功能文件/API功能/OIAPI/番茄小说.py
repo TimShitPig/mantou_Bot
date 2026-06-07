@@ -317,8 +317,15 @@ async def 请求FqRead(会话: aiohttp.ClientSession, 书籍编号: str, 接口k
     返回码 = 响应数据.get('code')
     if str(返回码) not in ('1', '200'):
         消息 = 响应数据.get('message') or 响应数据.get('msg') or 响应数据.get('error') or '接口返回失败'
-        raise 用户可见错误(限制文本长度(消息, 200))
+        raise 用户可见错误(格式化OIAPI失败提示(消息))
     return 响应数据
+
+
+def 格式化OIAPI失败提示(消息: Any) -> str:
+    文本 = 限制文本长度(消息, 200)
+    if 'Key注册失败' in 文本 and '请等待10分钟再下载' not in 文本:
+        return f'{文本}\n请等待10分钟再下载'
+    return 文本
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     项目列表: list[dict[str, Any]] = []
