@@ -13,7 +13,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 清理群文件命令 = {"清理群文件", "群文件清理"}
 清理全部群文件命令 = {"清理全部群文件"}
 群文件清理诊断最大长度 = 8000
-群文件删除并发数 = 200
+群文件删除并发数 = 20
 
 
 async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> str | None:
@@ -107,10 +107,13 @@ async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
             f"群文件清理开始并发删除：group_id={群号}, count={len(待删文件)}, concurrency={群文件删除并发数}"
         )
         本轮结果 = await 并发删除群文件列表(bot, 群号, 待删文件)
-        本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"])
+        本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"] and not 结果.get("跳过"))
         for 结果 in 本轮结果:
             文件 = 结果["文件"]
             if 结果["成功"]:
+                if 结果.get("跳过"):
+                    logger.info(f"群文件清理跳过失效记录：group_id={群号}, file={文件}, reason={结果.get('说明', '')}")
+                    continue
                 删除成功 += 1
                 continue
             删除失败 += 1
@@ -125,14 +128,50 @@ async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
 
 async def 并发删除群文件列表(bot: Any, 群号: Any, 文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
     信号量 = asyncio.Semaphore(群文件删除并发数)
+    刷新锁 = asyncio.Lock()
+    刷新文件列表: list[dict[str, Any]] | None = None
+
+    async def 获取刷新文件列表() -> list[dict[str, Any]]:
+        nonlocal 刷新文件列表
+        async with 刷新锁:
+            if 刷新文件列表 is None:
+                await asyncio.sleep(0.5)
+                刷新文件列表 = await 获取全部群文件(bot, 群号)
+            return 刷新文件列表
 
     async def 删除单个文件(文件: dict[str, Any]) -> dict[str, Any]:
         async with 信号量:
             try:
                 await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
-                return {"文件": 文件, "成功": True, "错误": None}
+                return {"文件": 文件, "成功": True, "跳过": False, "错误": None}
             except Exception as exc:
-                return {"文件": 文件, "成功": False, "错误": exc}
+                if not 是文件ID无效错误(exc):
+                    return {"文件": 文件, "成功": False, "错误": exc}
+
+                try:
+                    新文件列表 = await 获取刷新文件列表()
+                except Exception as refresh_exc:
+                    return {"文件": 文件, "成功": False, "错误": refresh_exc}
+                新文件 = 查找同一个群文件(文件, 新文件列表)
+                if 新文件 is None:
+                    return {
+                        "文件": 文件,
+                        "成功": True,
+                        "跳过": True,
+                        "错误": None,
+                        "说明": "文件ID失效且重新扫描后文件已不存在",
+                    }
+
+                logger.info(
+                    "群文件ID失效后使用重新扫描记录重试删除："
+                    f"group_id={群号}, file_name={文件.get('file_name')}, "
+                    f"old_file_id={文件.get('file_id')}, new_file_id={新文件.get('file_id')}, busid={新文件.get('busid')}"
+                )
+                try:
+                    await 删除群文件(bot, 群号, 新文件["file_id"], 新文件.get("busid"))
+                    return {"文件": 新文件, "成功": True, "跳过": False, "错误": None}
+                except Exception as retry_exc:
+                    return {"文件": 新文件, "成功": False, "错误": retry_exc}
 
     return await asyncio.gather(*(删除单个文件(文件) for 文件 in 文件列表))
 
@@ -210,6 +249,60 @@ def 获取文件去重键(文件: dict[str, Any]) -> str:
     if not 文件编号:
         return ""
     return f"{文件编号}:{文件.get('busid', '')}"
+
+
+def 是文件ID无效错误(exc: Exception) -> bool:
+    文本列表 = [str(exc)]
+    for 字段名 in ("retcode", "message", "wording", "status"):
+        值 = getattr(exc, 字段名, None)
+        if 值 is not None:
+            if 字段名 == "retcode" and str(值) == "1200":
+                return True
+            文本列表.append(str(值))
+    文本 = " ".join(文本列表)
+    return "Invalid file_id" in 文本 or "retcode=1200" in 文本
+
+
+def 查找同一个群文件(原文件: dict[str, Any], 文件列表: list[dict[str, Any]]) -> dict[str, Any] | None:
+    原键 = 获取文件去重键(原文件)
+    for 文件 in 文件列表:
+        if 原键 and 获取文件去重键(文件) == 原键:
+            return 文件
+
+    for 文件 in 文件列表:
+        if 是同一个群文件(原文件, 文件):
+            return 文件
+    return None
+
+
+def 是同一个群文件(原文件: dict[str, Any], 新文件: dict[str, Any]) -> bool:
+    if 原文件.get("file_name") != 新文件.get("file_name"):
+        return False
+
+    for 字段名 in ("busid", "uploader"):
+        原值 = 原文件.get(字段名)
+        新值 = 新文件.get(字段名)
+        if 原值 is not None and 新值 is not None and str(原值) != str(新值):
+            return False
+
+    原大小 = 获取群文件大小(原文件)
+    新大小 = 获取群文件大小(新文件)
+    if 原大小 is not None and 新大小 is not None and 原大小 != 新大小:
+        return False
+
+    return True
+
+
+def 获取群文件大小(文件: dict[str, Any]) -> int | None:
+    for 字段名 in ("size", "file_size"):
+        值 = 文件.get(字段名)
+        if 值 is None:
+            continue
+        try:
+            return int(值)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def 获取群号(event: Any) -> str:
