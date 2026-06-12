@@ -13,6 +13,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 清理群文件命令 = {"清理群文件", "群文件清理"}
 清理全部群文件命令 = {"清理全部群文件"}
 群文件清理诊断最大长度 = 8000
+群文件删除并发数 = 8
 群文件ID失效重试次数 = 3
 
 
@@ -103,19 +104,26 @@ async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
         if not 待删文件:
             break
 
-        logger.info(f"群文件清理开始逐个删除：group_id={群号}, remaining={len(待删文件)}")
-        结果 = await 删除单个群文件并处理失效ID(bot, 群号, 待删文件[0])
-        文件 = 结果["文件"]
-        if 结果["成功"]:
-            if 结果.get("跳过"):
-                logger.info(f"群文件清理跳过失效记录：group_id={群号}, file={文件}, reason={结果.get('说明', '')}")
-            else:
-                删除成功 += 1
-            continue
+        待删批次 = 待删文件[:群文件删除并发数]
+        logger.info(
+            f"群文件清理开始并发删除：group_id={群号}, batch={len(待删批次)}, "
+            f"remaining={len(待删文件)}, concurrency={群文件删除并发数}"
+        )
+        本轮结果 = await asyncio.gather(
+            *(删除单个群文件并处理失效ID(bot, 群号, 文件) for 文件 in 待删批次)
+        )
+        for 结果 in 本轮结果:
+            文件 = 结果["文件"]
+            if 结果["成功"]:
+                if 结果.get("跳过"):
+                    logger.info(f"群文件清理跳过失效记录：group_id={群号}, file={文件}, reason={结果.get('说明', '')}")
+                else:
+                    删除成功 += 1
+                continue
 
-        删除失败 += 1
-        已失败文件.add(获取文件稳定键(文件))
-        logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
+            删除失败 += 1
+            已失败文件.add(获取文件稳定键(文件))
+            logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
 
     return 删除成功, 删除失败
 
