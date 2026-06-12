@@ -14,6 +14,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 清理全部群文件命令 = {"清理全部群文件"}
 群文件清理诊断最大长度 = 8000
 群文件删除并发数 = 20
+群文件ID失效重试次数 = 3
 
 
 async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> str | None:
@@ -129,49 +130,53 @@ async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
 async def 并发删除群文件列表(bot: Any, 群号: Any, 文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
     信号量 = asyncio.Semaphore(群文件删除并发数)
     刷新锁 = asyncio.Lock()
-    刷新文件列表: list[dict[str, Any]] | None = None
+    刷新文件列表缓存: dict[int, list[dict[str, Any]]] = {}
 
-    async def 获取刷新文件列表() -> list[dict[str, Any]]:
-        nonlocal 刷新文件列表
+    async def 获取刷新文件列表(重试轮次: int) -> list[dict[str, Any]]:
         async with 刷新锁:
-            if 刷新文件列表 is None:
-                await asyncio.sleep(0.5)
-                刷新文件列表 = await 获取全部群文件(bot, 群号)
-            return 刷新文件列表
+            if 重试轮次 not in 刷新文件列表缓存:
+                await asyncio.sleep(min(0.5 * 重试轮次, 2.0))
+                刷新文件列表缓存[重试轮次] = await 获取全部群文件(bot, 群号)
+            return 刷新文件列表缓存[重试轮次]
 
     async def 删除单个文件(文件: dict[str, Any]) -> dict[str, Any]:
         async with 信号量:
-            try:
-                await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
-                return {"文件": 文件, "成功": True, "跳过": False, "错误": None}
-            except Exception as exc:
-                if not 是文件ID无效错误(exc):
-                    return {"文件": 文件, "成功": False, "错误": exc}
-
+            当前文件 = 文件
+            最后错误: Exception | None = None
+            for 重试轮次 in range(0, 群文件ID失效重试次数 + 1):
                 try:
-                    新文件列表 = await 获取刷新文件列表()
-                except Exception as refresh_exc:
-                    return {"文件": 文件, "成功": False, "错误": refresh_exc}
-                新文件 = 查找同一个群文件(文件, 新文件列表)
-                if 新文件 is None:
-                    return {
-                        "文件": 文件,
-                        "成功": True,
-                        "跳过": True,
-                        "错误": None,
-                        "说明": "文件ID失效且重新扫描后文件已不存在",
-                    }
+                    await 删除群文件(bot, 群号, 当前文件["file_id"], 当前文件.get("busid"))
+                    return {"文件": 当前文件, "成功": True, "跳过": False, "错误": None}
+                except Exception as exc:
+                    最后错误 = exc
+                    if not 是文件ID无效错误(exc):
+                        return {"文件": 当前文件, "成功": False, "错误": exc}
+                    if 重试轮次 >= 群文件ID失效重试次数:
+                        break
 
-                logger.info(
-                    "群文件ID失效后使用重新扫描记录重试删除："
-                    f"group_id={群号}, file_name={文件.get('file_name')}, "
-                    f"old_file_id={文件.get('file_id')}, new_file_id={新文件.get('file_id')}, busid={新文件.get('busid')}"
-                )
-                try:
-                    await 删除群文件(bot, 群号, 新文件["file_id"], 新文件.get("busid"))
-                    return {"文件": 新文件, "成功": True, "跳过": False, "错误": None}
-                except Exception as retry_exc:
-                    return {"文件": 新文件, "成功": False, "错误": retry_exc}
+                    try:
+                        新文件列表 = await 获取刷新文件列表(重试轮次 + 1)
+                    except Exception as refresh_exc:
+                        return {"文件": 当前文件, "成功": False, "错误": refresh_exc}
+                    新文件 = 查找同一个群文件(文件, 新文件列表)
+                    if 新文件 is None:
+                        return {
+                            "文件": 当前文件,
+                            "成功": True,
+                            "跳过": True,
+                            "错误": None,
+                            "说明": f"文件ID失效且第 {重试轮次 + 1} 次重新扫描后文件已不存在",
+                        }
+
+                    logger.info(
+                        "群文件ID失效后使用重新扫描记录重试删除："
+                        f"group_id={群号}, file_name={文件.get('file_name')}, retry={重试轮次 + 1}, "
+                        f"old_file_id={当前文件.get('file_id')}, new_file_id={新文件.get('file_id')}, "
+                        f"busid={新文件.get('busid')}"
+                    )
+                    当前文件 = 新文件
+
+            return {"文件": 当前文件, "成功": False, "错误": 最后错误}
 
     return await asyncio.gather(*(删除单个文件(文件) for 文件 in 文件列表))
 

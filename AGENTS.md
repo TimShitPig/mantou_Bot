@@ -80,7 +80,7 @@
 - 群文件批量清理使用适配器扩展接口 `get_group_root_files`、`get_group_files_by_folder` 枚举文件，再有限并发逐个调用 `delete_group_file` 删除；不要把消息撤回接口当成群文件删除接口。
 - `清理全部群文件` 先调用 `get_group_list` 获取机器人所在数字 QQ 群，再逐群复用群文件清理逻辑；发送命令的群不限制执行范围，只要机器人在的群都会被尝试清理。
 - 群文件清理不连接 NapCat、NapCat WebUI 或其他外部机器人实例；NapCat 实时调试只能作为确认 OneBot action 参数和返回结构的参考。插件只能调用当前 AstrBot 适配器暴露的 `api.call_action`，QQ 官方事件返回的 `group_openid` 不能当作数字 QQ 群号。
-- 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件；遇到 `Invalid file_id` 时必须重新扫描当前群文件，找到同名文件后用新的 `file_id` 重试一次，重新扫描后文件不存在则按失效记录跳过。
+- 群文件清理不设置数量上限；必须递归扫描所有文件夹并去重后逐个删除。适配器单次枚举可能只返回前 50 个文件，删除一轮后必须重新扫描并继续删除，直到接口不再返回可删除文件；遇到 `Invalid file_id` 时必须分轮重新扫描当前群文件，找到同名文件后用新的 `file_id` 最多重试 3 次，重新扫描后文件不存在则按失效记录跳过。
 - 群文件清理删除阶段默认并发数为 20；如果以后降低或提高并发，必须同步 README 和 CHANGELOG。
 - 目前未确认 go-cqhttp/NapCat 有单接口批量删除多个群文件的 API；如果以后要改成真正批量接口，必须先联网查到明确接口名和参数。
 - 授权链接功能放在 `功能文件/管理功能/群聊功能/授权链接.py`，`main.py` 只调用 `处理授权链接`。触发指令固定为 `授权`、`授权 数字群号` 或 `授权 数字群号 机器人QQ`，仅群文件清理管理员白名单 QQ 可用；后两者用于适配器取不到数字 `groupCode` 或数字 `botUin` 时手动指定。只生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...`，JSON 参数必须包含 `page_name=ai_group_service_agreement_pop_page`、数字 `groupCode`、数字 `botUin`、字符串 `botUid`、`screen=1`，再整体 URL 编码。
