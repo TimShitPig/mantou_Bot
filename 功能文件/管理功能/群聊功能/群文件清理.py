@@ -13,7 +13,6 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 清理群文件命令 = {"清理群文件", "群文件清理"}
 清理全部群文件命令 = {"清理全部群文件"}
 群文件清理诊断最大长度 = 8000
-群文件删除并发数 = 20
 群文件ID失效重试次数 = 3
 
 
@@ -100,85 +99,80 @@ async def 清理指定群文件(bot: Any, 群号: Any) -> tuple[int, int]:
 
     while True:
         文件列表 = await 获取全部群文件(bot, 群号)
-        待删文件 = [文件 for 文件 in 文件列表 if 获取文件去重键(文件) not in 已失败文件]
+        待删文件 = [文件 for 文件 in 文件列表 if 获取文件稳定键(文件) not in 已失败文件]
         if not 待删文件:
             break
 
-        logger.info(
-            f"群文件清理开始并发删除：group_id={群号}, count={len(待删文件)}, concurrency={群文件删除并发数}"
-        )
-        本轮结果 = await 并发删除群文件列表(bot, 群号, 待删文件)
-        本轮成功 = sum(1 for 结果 in 本轮结果 if 结果["成功"] and not 结果.get("跳过"))
-        for 结果 in 本轮结果:
-            文件 = 结果["文件"]
-            if 结果["成功"]:
-                if 结果.get("跳过"):
-                    logger.info(f"群文件清理跳过失效记录：group_id={群号}, file={文件}, reason={结果.get('说明', '')}")
-                    continue
+        logger.info(f"群文件清理开始逐个删除：group_id={群号}, remaining={len(待删文件)}")
+        结果 = await 删除单个群文件并处理失效ID(bot, 群号, 待删文件[0])
+        文件 = 结果["文件"]
+        if 结果["成功"]:
+            if 结果.get("跳过"):
+                logger.info(f"群文件清理跳过失效记录：group_id={群号}, file={文件}, reason={结果.get('说明', '')}")
+            else:
                 删除成功 += 1
-                continue
-            删除失败 += 1
-            已失败文件.add(获取文件去重键(文件))
-            logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
+            continue
 
-        if 本轮成功 == 0:
-            break
+        删除失败 += 1
+        已失败文件.add(获取文件稳定键(文件))
+        logger.warning(f"群文件删除失败：group_id={群号}, file={文件}, error={结果['错误']}")
 
     return 删除成功, 删除失败
 
 
-async def 并发删除群文件列表(bot: Any, 群号: Any, 文件列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    信号量 = asyncio.Semaphore(群文件删除并发数)
-    刷新锁 = asyncio.Lock()
-    刷新文件列表缓存: dict[int, list[dict[str, Any]]] = {}
+async def 删除单个群文件并处理失效ID(bot: Any, 群号: Any, 文件: dict[str, Any]) -> dict[str, Any]:
+    当前文件 = 文件
+    最后错误: Exception | None = None
 
-    async def 获取刷新文件列表(重试轮次: int) -> list[dict[str, Any]]:
-        async with 刷新锁:
-            if 重试轮次 not in 刷新文件列表缓存:
-                await asyncio.sleep(min(0.5 * 重试轮次, 2.0))
-                刷新文件列表缓存[重试轮次] = await 获取全部群文件(bot, 群号)
-            return 刷新文件列表缓存[重试轮次]
+    for 重试轮次 in range(0, 群文件ID失效重试次数 + 1):
+        try:
+            await 删除群文件记录(bot, 群号, 当前文件)
+            return {"文件": 当前文件, "成功": True, "跳过": False, "错误": None}
+        except Exception as exc:
+            最后错误 = exc
+            if not 是文件ID无效错误(exc):
+                return {"文件": 当前文件, "成功": False, "错误": exc}
+            if 重试轮次 >= 群文件ID失效重试次数:
+                break
 
-    async def 删除单个文件(文件: dict[str, Any]) -> dict[str, Any]:
-        async with 信号量:
-            当前文件 = 文件
-            最后错误: Exception | None = None
-            for 重试轮次 in range(0, 群文件ID失效重试次数 + 1):
-                try:
-                    await 删除群文件(bot, 群号, 当前文件["file_id"], 当前文件.get("busid"))
-                    return {"文件": 当前文件, "成功": True, "跳过": False, "错误": None}
-                except Exception as exc:
-                    最后错误 = exc
-                    if not 是文件ID无效错误(exc):
-                        return {"文件": 当前文件, "成功": False, "错误": exc}
-                    if 重试轮次 >= 群文件ID失效重试次数:
-                        break
+            try:
+                await asyncio.sleep(min(0.5 * (重试轮次 + 1), 2.0))
+                新文件列表 = await 获取全部群文件(bot, 群号)
+            except Exception as refresh_exc:
+                return {"文件": 当前文件, "成功": False, "错误": refresh_exc}
 
-                    try:
-                        新文件列表 = await 获取刷新文件列表(重试轮次 + 1)
-                    except Exception as refresh_exc:
-                        return {"文件": 当前文件, "成功": False, "错误": refresh_exc}
-                    新文件 = 查找同一个群文件(文件, 新文件列表)
-                    if 新文件 is None:
-                        return {
-                            "文件": 当前文件,
-                            "成功": True,
-                            "跳过": True,
-                            "错误": None,
-                            "说明": f"文件ID失效且第 {重试轮次 + 1} 次重新扫描后文件已不存在",
-                        }
+            新文件 = 查找同一个群文件(文件, 新文件列表)
+            if 新文件 is None:
+                return {
+                    "文件": 当前文件,
+                    "成功": True,
+                    "跳过": True,
+                    "错误": None,
+                    "说明": f"文件ID失效且第 {重试轮次 + 1} 次重新扫描后文件已不存在",
+                }
 
-                    logger.info(
-                        "群文件ID失效后使用重新扫描记录重试删除："
-                        f"group_id={群号}, file_name={文件.get('file_name')}, retry={重试轮次 + 1}, "
-                        f"old_file_id={当前文件.get('file_id')}, new_file_id={新文件.get('file_id')}, "
-                        f"busid={新文件.get('busid')}"
-                    )
-                    当前文件 = 新文件
+            logger.info(
+                "群文件ID失效后使用重新扫描记录重试删除："
+                f"group_id={群号}, file_name={文件.get('file_name')}, retry={重试轮次 + 1}, "
+                f"old_file_id={当前文件.get('file_id')}, new_file_id={新文件.get('file_id')}, "
+                f"busid={新文件.get('busid')}"
+            )
+            当前文件 = 新文件
 
-            return {"文件": 当前文件, "成功": False, "错误": 最后错误}
+    return {"文件": 当前文件, "成功": False, "错误": 最后错误}
 
-    return await asyncio.gather(*(删除单个文件(文件) for 文件 in 文件列表))
+
+async def 删除群文件记录(bot: Any, 群号: Any, 文件: dict[str, Any]) -> None:
+    try:
+        await 删除群文件(bot, 群号, 文件["file_id"], 文件.get("busid"))
+    except Exception as exc:
+        if 文件.get("busid") is None or not 是文件ID无效错误(exc):
+            raise
+        logger.info(
+            "群文件删除携带busid失败，尝试不带busid重试："
+            f"group_id={群号}, file_name={文件.get('file_name')}, file_id={文件.get('file_id')}, busid={文件.get('busid')}"
+        )
+        await 删除群文件(bot, 群号, 文件["file_id"], None)
 
 
 async def 获取全部群文件(bot: Any, 群号: Any) -> list[dict[str, Any]]:
@@ -254,6 +248,17 @@ def 获取文件去重键(文件: dict[str, Any]) -> str:
     if not 文件编号:
         return ""
     return f"{文件编号}:{文件.get('busid', '')}"
+
+
+def 获取文件稳定键(文件: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(文件.get("file_name") or ""),
+            str(获取群文件大小(文件) or ""),
+            str(文件.get("uploader") or ""),
+            str(文件.get("busid") or ""),
+        ]
+    )
 
 
 def 是文件ID无效错误(exc: Exception) -> bool:
