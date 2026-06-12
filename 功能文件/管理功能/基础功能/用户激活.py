@@ -50,6 +50,12 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
     "关闭付费": False,
     "关闭收费": False,
 }
+私聊付费开关命令配置 = {
+    "开启私聊付费": True,
+    "开启私聊收费": True,
+    "关闭私聊付费": False,
+    "关闭私聊收费": False,
+}
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
     "番茄小说key": (基础配置分类名, "基础配置"),
@@ -960,10 +966,22 @@ def 附加下载免费额度提示(回复内容: str, 免费额度提示: str) -
 
 def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 not in 付费开关命令配置:
+    if 文本 not in 付费开关命令配置 and 文本 not in 私聊付费开关命令配置:
         return None
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用付费开关"
+
+    if 文本 in 私聊付费开关命令配置:
+        是否开启 = 私聊付费开关命令配置[文本]
+        状态键 = 获取私聊付费开关状态键()
+        try:
+            写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
+        except Exception as exc:
+            logger.warning(f"私聊付费开关写入数据库失败：enabled={是否开启}, error={exc}")
+            return f"私聊付费开关失败：{exc}"
+        if 是否开启:
+            return "已开启私聊收费模式，私聊未激活用户需激活或使用每日免费额度"
+        return "已关闭私聊收费模式，私聊未激活用户可无限制使用"
 
     群号 = 获取群号(event)
     if not 群号:
@@ -984,7 +1002,11 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
     群号 = 获取群号(event)
     if not 群号:
-        return True
+        try:
+            return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), True)
+        except Exception as exc:
+            logger.warning(f"私聊付费开关读取数据库失败：error={exc}")
+            return True
     try:
         return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
     except Exception as exc:
@@ -994,6 +1016,10 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
 
 def 获取付费开关状态键(群号: str) -> str:
     return f"group:{str(群号).strip()}"
+
+
+def 获取私聊付费开关状态键() -> str:
+    return "private"
 
 
 def 获取每日免费额度(配置: Any) -> int:
