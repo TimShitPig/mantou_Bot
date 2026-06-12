@@ -14,6 +14,8 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 
 
 模块加载时间 = time.time()
+上次进程CPU采样: tuple[float, float] | None = (time.monotonic(), time.process_time())
+上次系统CPU采样: tuple[int, int] | None = None
 番茄API状态命名空间 = "fanqie_api"
 番茄API状态键 = "current_api"
 小说功能状态命名空间 = "novel_feature_switch"
@@ -50,7 +52,12 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"运行系统：{platform.platform()}",
             f"Python：{platform.python_version()}",
             f"CPU核心：{os.cpu_count() or '未知'}",
+            f"运行内存：{格式化运行内存()}",
+            f"运行CPU：{格式化运行CPU()}",
+            f"系统内存：{格式化系统内存()}",
+            f"系统CPU：{格式化系统CPU()}",
             f"磁盘剩余：{格式化磁盘信息()}",
+            f"系统运行：{格式化系统运行时间()}",
             f"插件运行：{格式化时长(int(time.time() - 模块加载时间))}",
             "",
             "功能状态",
@@ -228,6 +235,294 @@ def 格式化磁盘信息() -> str:
     return f"{格式化字节(用量.free)} / {格式化字节(用量.total)}"
 
 
+def 格式化运行内存() -> str:
+    字节数 = 读取当前进程内存()
+    if 字节数 is None:
+        return "未知"
+    return 格式化字节(字节数)
+
+
+def 格式化运行CPU() -> str:
+    global 上次进程CPU采样
+
+    当前时间 = time.monotonic()
+    当前CPU时间 = time.process_time()
+    累计文本 = f"累计{当前CPU时间:.2f}秒"
+    if 上次进程CPU采样 is None:
+        上次进程CPU采样 = (当前时间, 当前CPU时间)
+        return f"采样中（{累计文本}）"
+
+    上次时间, 上次CPU时间 = 上次进程CPU采样
+    上次进程CPU采样 = (当前时间, 当前CPU时间)
+    间隔 = 当前时间 - 上次时间
+    if 间隔 <= 0:
+        return f"采样中（{累计文本}）"
+    核心数 = max(1, os.cpu_count() or 1)
+    百分比 = max(0.0, (当前CPU时间 - 上次CPU时间) / 间隔 / 核心数 * 100)
+    return f"{百分比:.1f}%（{累计文本}）"
+
+
+def 格式化系统内存() -> str:
+    内存 = 读取系统内存()
+    if 内存 is None:
+        return "未知"
+    已用, 总计 = 内存
+    return f"{格式化字节(已用)} / {格式化字节(总计)}"
+
+
+def 格式化系统CPU() -> str:
+    global 上次系统CPU采样
+
+    当前采样 = 读取系统CPU计数器()
+    if 当前采样 is None:
+        return "未知"
+    if 上次系统CPU采样 is None:
+        上次系统CPU采样 = 当前采样
+        return "0.0%"
+    上次空闲, 上次总计 = 上次系统CPU采样
+    当前空闲, 当前总计 = 当前采样
+    上次系统CPU采样 = 当前采样
+    总增量 = 当前总计 - 上次总计
+    空闲增量 = 当前空闲 - 上次空闲
+    if 总增量 <= 0:
+        return "0.0%"
+    百分比 = max(0.0, min(100.0, (1 - 空闲增量 / 总增量) * 100))
+    return f"{百分比:.1f}%"
+
+
+def 格式化系统运行时间() -> str:
+    秒数 = 读取系统运行秒数()
+    if 秒数 is None:
+        return "未知"
+    return 格式化时长(int(秒数))
+
+
+def 读取系统运行秒数() -> float | None:
+    系统名 = platform.system().lower()
+    if 系统名 == "windows":
+        return 读取Windows系统运行秒数()
+    if 系统名 == "linux":
+        return 读取Linux系统运行秒数()
+    return None
+
+
+def 读取Linux系统运行秒数() -> float | None:
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as 文件:
+            内容 = 文件.read().strip().split()
+        if 内容:
+            return float(内容[0])
+    except Exception:
+        return None
+    return None
+
+
+def 读取Windows系统运行秒数() -> float | None:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetTickCount64.restype = ctypes.c_ulonglong
+        毫秒 = kernel32.GetTickCount64()
+        if 毫秒 >= 0:
+            return float(毫秒) / 1000
+    except Exception:
+        return None
+    return None
+
+
+def 读取当前进程内存() -> int | None:
+    系统名 = platform.system().lower()
+    if 系统名 == "windows":
+        return 读取Windows进程内存()
+    if 系统名 == "linux":
+        return 读取Linux进程内存()
+    return 读取Resource进程内存()
+
+
+def 读取Linux进程内存() -> int | None:
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as 文件:
+            for 行 in 文件:
+                if 行.startswith("VmRSS:"):
+                    项目 = 行.split()
+                    if len(项目) >= 2:
+                        return int(项目[1]) * 1024
+    except Exception:
+        return None
+    return None
+
+
+def 读取Windows进程内存() -> int | None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        计数器 = PROCESS_MEMORY_COUNTERS()
+        计数器.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        句柄 = kernel32.GetCurrentProcess()
+        成功 = psapi.GetProcessMemoryInfo(句柄, ctypes.byref(计数器), 计数器.cb)
+        if 成功:
+            return int(计数器.WorkingSetSize)
+    except Exception:
+        return None
+    return None
+
+
+def 读取Resource进程内存() -> int | None:
+    try:
+        import resource
+
+        最大常驻 = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if 最大常驻 <= 0:
+            return None
+        if platform.system().lower() == "darwin":
+            return 最大常驻
+        return 最大常驻 * 1024
+    except Exception:
+        return None
+
+
+def 读取系统内存() -> tuple[int, int] | None:
+    系统名 = platform.system().lower()
+    if 系统名 == "windows":
+        return 读取Windows系统内存()
+    if 系统名 == "linux":
+        return 读取Linux系统内存()
+    return None
+
+
+def 读取Linux系统内存() -> tuple[int, int] | None:
+    try:
+        数据: dict[str, int] = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as 文件:
+            for 行 in 文件:
+                if ":" not in 行:
+                    continue
+                键, 值 = 行.split(":", 1)
+                项目 = 值.split()
+                if 项目:
+                    数据[键] = int(项目[0]) * 1024
+        总计 = 数据.get("MemTotal")
+        可用 = 数据.get("MemAvailable")
+        if 总计 and 可用 is not None:
+            return max(0, 总计 - 可用), 总计
+    except Exception:
+        return None
+    return None
+
+
+def 读取Windows系统内存() -> tuple[int, int] | None:
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        状态 = MEMORYSTATUSEX()
+        状态.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(状态)):
+            总计 = int(状态.ullTotalPhys)
+            可用 = int(状态.ullAvailPhys)
+            return max(0, 总计 - 可用), 总计
+    except Exception:
+        return None
+    return None
+
+
+def 读取系统CPU计数器() -> tuple[int, int] | None:
+    系统名 = platform.system().lower()
+    if 系统名 == "windows":
+        return 读取Windows系统CPU计数器()
+    if 系统名 == "linux":
+        return 读取Linux系统CPU计数器()
+    return None
+
+
+def 读取Linux系统CPU计数器() -> tuple[int, int] | None:
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as 文件:
+            第一行 = 文件.readline()
+        项目 = 第一行.split()
+        if not 项目 or 项目[0] != "cpu":
+            return None
+        数值 = [int(值) for 值 in 项目[1:]]
+        if len(数值) < 4:
+            return None
+        空闲 = 数值[3] + (数值[4] if len(数值) > 4 else 0)
+        总计 = sum(数值)
+        return 空闲, 总计
+    except Exception:
+        return None
+
+
+def 读取Windows系统CPU计数器() -> tuple[int, int] | None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [
+                ("dwLowDateTime", wintypes.DWORD),
+                ("dwHighDateTime", wintypes.DWORD),
+            ]
+
+        空闲 = FILETIME()
+        内核 = FILETIME()
+        用户 = FILETIME()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetSystemTimes.argtypes = [
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+        ]
+        kernel32.GetSystemTimes.restype = wintypes.BOOL
+        if not kernel32.GetSystemTimes(ctypes.byref(空闲), ctypes.byref(内核), ctypes.byref(用户)):
+            return None
+
+        def 转整数(值: FILETIME) -> int:
+            return (int(值.dwHighDateTime) << 32) + int(值.dwLowDateTime)
+
+        空闲值 = 转整数(空闲)
+        总计值 = 转整数(内核) + 转整数(用户)
+        return 空闲值, 总计值
+    except Exception:
+        return None
+
+
 def 格式化字节(字节数: int) -> str:
     数值 = float(字节数)
     for 单位 in ("B", "KB", "MB", "GB", "TB"):
@@ -252,3 +547,6 @@ def 格式化时长(秒数: int) -> str:
     if not 项目:
         项目.append(f"{秒}秒")
     return "".join(项目)
+
+
+上次系统CPU采样 = 读取系统CPU计数器()
