@@ -45,6 +45,12 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         记录群文件清理事件诊断(event, bot, 群号, "缺少 api.call_action")
         return "群文件清理失败：当前适配器没有群文件接口，已输出群文件清理事件诊断"
 
+    if not await 机器人是群管理员(bot, 群号):
+        logger.info(f"群文件清理跳过非管理群：group_id={群号}")
+        return None
+
+    await 发送清理开始提示(event, "正在清理群文件")
+
     try:
         删除成功, 删除失败 = await 清理指定群文件(bot, 群号)
         return f"群文件清理完成：成功 {删除成功} 个，失败 {删除失败} 个"
@@ -69,6 +75,8 @@ async def 处理全部群文件清理(event: Any) -> str:
         logger.warning(f"全部群文件清理获取群列表失败：error={exc}")
         return f"全部群文件清理失败：{exc}"
 
+    await 发送清理开始提示(event, "正在清理群文件（全部）")
+
     群成功 = 0
     群失败 = 0
     文件成功 = 0
@@ -76,6 +84,9 @@ async def 处理全部群文件清理(event: Any) -> str:
     失败群: list[tuple[str, Exception]] = []
 
     for 群号 in 群号列表:
+        if not await 机器人是群管理员(bot, 群号):
+            logger.info(f"全部群文件清理跳过非管理群：group_id={群号}")
+            continue
         try:
             本群文件成功, 本群文件失败 = await 清理指定群文件(bot, 群号)
             群成功 += 1
@@ -214,6 +225,51 @@ async def 调用动作(bot: Any, 动作: str, **参数: Any) -> Any:
     if not callable(调用方法):
         raise RuntimeError("当前 bot 没有 api.call_action 接口")
     return await 调用方法(动作, **参数)
+
+
+async def 发送清理开始提示(event: Any, 文本: str) -> None:
+    try:
+        发送方法 = getattr(event, "send", None)
+        if not callable(发送方法):
+            return
+        结果对象 = 文本
+        plain_result = getattr(event, "plain_result", None)
+        if callable(plain_result):
+            结果对象 = plain_result(文本)
+        结果 = 发送方法(结果对象)
+        if asyncio.iscoroutine(结果) or hasattr(结果, "__await__"):
+            await 结果
+    except Exception as exc:
+        logger.warning(f"群文件清理开始提示发送失败：error={exc}")
+
+
+async def 机器人是群管理员(bot: Any, 群号: Any) -> bool:
+    机器人QQ = 获取机器人QQ(bot)
+    if not 机器人QQ:
+        logger.info(f"群文件清理跳过管理身份检查：group_id={群号}, reason=缺少机器人QQ")
+        return True
+    try:
+        响应 = await 调用动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(机器人QQ), no_cache=True)
+    except Exception as exc:
+        logger.info(f"群文件清理跳过管理身份检查：group_id={群号}, bot_qq={机器人QQ}, error={exc}")
+        return True
+
+    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
+    角色 = 数据.get("role") if isinstance(数据, dict) else None
+    return 是群管理角色(角色)
+
+
+def 获取机器人QQ(bot: Any) -> str:
+    for 字段名 in ("self_id", "bot_id", "robot_id", "uin", "qq", "user_id"):
+        值 = 读取字段(bot, 字段名)
+        文本 = str(值 or "").strip()
+        if re.fullmatch(r"[1-9]\d{4,11}", 文本):
+            return 文本
+    return ""
+
+
+def 是群管理角色(角色: Any) -> bool:
+    return str(角色 or "").strip().lower() in {"owner", "admin"}
 
 
 def 支持群文件动作接口(bot: Any) -> bool:
