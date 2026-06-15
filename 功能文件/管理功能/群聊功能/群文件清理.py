@@ -246,13 +246,13 @@ async def 发送清理开始提示(event: Any, 文本: str) -> None:
 async def 机器人是群管理员(bot: Any, 群号: Any) -> bool:
     机器人QQ = 获取机器人QQ(bot)
     if not 机器人QQ:
-        logger.info(f"群文件清理跳过管理身份检查：group_id={群号}, reason=缺少机器人QQ")
-        return True
+        logger.info(f"群文件清理跳过非管理群：group_id={群号}, reason=缺少机器人QQ，无法确认机器人是QQ群管理员")
+        return False
     try:
         响应 = await 调用动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(机器人QQ), no_cache=True)
     except Exception as exc:
-        logger.info(f"群文件清理跳过管理身份检查：group_id={群号}, bot_qq={机器人QQ}, error={exc}")
-        return True
+        logger.info(f"群文件清理跳过非管理群：group_id={群号}, bot_qq={机器人QQ}, error={exc}")
+        return False
 
     数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
     角色 = 数据.get("role") if isinstance(数据, dict) else None
