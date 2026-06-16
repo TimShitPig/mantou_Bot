@@ -45,7 +45,7 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         记录群文件清理事件诊断(event, bot, 群号, "缺少 api.call_action")
         return "群文件清理失败：当前适配器没有群文件接口，已输出群文件清理事件诊断"
 
-    if not await 机器人是群管理员(bot, 群号):
+    if not await 机器人是群管理员(bot, 群号, event):
         logger.info(f"群文件清理跳过非管理群：group_id={群号}")
         return None
 
@@ -84,7 +84,7 @@ async def 处理全部群文件清理(event: Any) -> str:
     失败群: list[tuple[str, Exception]] = []
 
     for 群号 in 群号列表:
-        if not await 机器人是群管理员(bot, 群号):
+        if not await 机器人是群管理员(bot, 群号, event):
             logger.info(f"全部群文件清理跳过非管理群：group_id={群号}")
             continue
         try:
@@ -243,8 +243,10 @@ async def 发送清理开始提示(event: Any, 文本: str) -> None:
         logger.warning(f"群文件清理开始提示发送失败：error={exc}")
 
 
-async def 机器人是群管理员(bot: Any, 群号: Any) -> bool:
-    机器人QQ = 获取机器人QQ(bot)
+async def 机器人是群管理员(bot: Any, 群号: Any, event: Any = None) -> bool:
+    机器人QQ = 获取机器人QQ(bot, event)
+    if not 机器人QQ:
+        机器人QQ = await 从登录信息获取机器人QQ(bot)
     if not 机器人QQ:
         logger.info(f"群文件清理跳过非管理群：group_id={群号}, reason=缺少机器人QQ，无法确认机器人是QQ群管理员")
         return False
@@ -259,9 +261,47 @@ async def 机器人是群管理员(bot: Any, 群号: Any) -> bool:
     return 是群管理角色(角色)
 
 
-def 获取机器人QQ(bot: Any) -> str:
+async def 从登录信息获取机器人QQ(bot: Any) -> str:
+    try:
+        响应 = await 调用动作(bot, "get_login_info")
+    except Exception as exc:
+        logger.info(f"群文件清理获取机器人登录信息失败：error={exc}")
+        return ""
+    return 提取数字QQ(响应)
+
+
+def 获取机器人QQ(bot: Any, event: Any = None) -> str:
+    消息对象 = getattr(event, "message_obj", None) if event is not None else None
+    候选对象 = [
+        event,
+        消息对象,
+        bot,
+        getattr(bot, "api", None),
+        getattr(bot, "account", None),
+        getattr(bot, "client", None),
+        getattr(bot, "adapter", None),
+    ]
+    for 对象 in 候选对象:
+        QQ = 提取数字QQ(对象)
+        if QQ:
+            return QQ
+    return ""
+
+
+def 提取数字QQ(对象: Any) -> str:
+    if 对象 is None:
+        return ""
+    if isinstance(对象, (str, int)):
+        文本 = str(对象 or "").strip()
+        return 文本 if re.fullmatch(r"[1-9]\d{4,11}", 文本) else ""
+    if isinstance(对象, dict):
+        数据 = 对象.get("data") if isinstance(对象.get("data"), dict) else None
+        if 数据:
+            QQ = 提取数字QQ(数据)
+            if QQ:
+                return QQ
     for 字段名 in ("self_id", "bot_id", "robot_id", "uin", "qq", "user_id"):
-        值 = 读取字段(bot, 字段名)
+        值 = 读取字段(对象, 字段名)
         文本 = str(值 or "").strip()
         if re.fullmatch(r"[1-9]\d{4,11}", 文本):
             return 文本
