@@ -48,6 +48,7 @@ API选项 = {'1': 'OIAPI', '2': '析API', '3': '崩溃API'}
 待选择API会话: dict[str, float] = {}
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
+崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
 长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
@@ -114,14 +115,16 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 书籍编号 = 提取书籍编号(解析来源)
             if 接口来源 == '崩溃API':
                 if 崩溃API番茄小说 is None:
-                    yield '番茄小说下载失败：崩溃API模块不可用'
+                    logger.warning('番茄小说崩溃API下载失败：崩溃API模块不可用')
+                    yield 崩溃API下载失败提示
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
                     return
                 准备结果 = await 崩溃API番茄小说.准备番茄小说(会话, 书籍编号)
                 if not 准备结果.get('success'):
-                    yield f"番茄小说下载失败：{限制文本长度(准备结果.get('error') or '崩溃API准备失败', 500)}"
+                    logger.warning(f"番茄小说崩溃API准备失败：book_id={书籍编号}, error={限制文本长度(准备结果.get('error') or '崩溃API准备失败', 500)}")
+                    yield 崩溃API下载失败提示
                     return
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
@@ -129,14 +132,16 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 yield 格式化下载提示(书籍信息, len(章节列表))
                 下载结果 = await 崩溃API番茄小说.下载完整小说(会话, 书籍编号, 书籍信息, 章节列表)
                 if not 下载结果.get('success'):
-                    yield f"番茄小说下载失败：{限制文本长度(下载结果.get('error') or '崩溃API下载失败', 500)}"
+                    logger.warning(f"番茄小说崩溃API下载失败：book_id={书籍编号}, error={限制文本长度(下载结果.get('error') or '崩溃API下载失败', 500)}")
+                    yield 崩溃API下载失败提示
                     return
                 书籍信息 = 下载结果.get('book_info') or 书籍信息
                 章节列表 = 下载结果.get('chapters') or 章节列表
                 章节结果列表 = 下载结果.get('chapter_results') or []
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：崩溃API没有获取到可用章节正文'
+                    logger.warning(f"番茄小说崩溃API下载失败：book_id={书籍编号}, error=没有获取到可用章节正文")
+                    yield 崩溃API下载失败提示
                     return
             elif 接口来源 == '析API':
                 if 析API番茄小说 is None:
@@ -195,7 +200,9 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
             发送错误 = str(发送结果.get('error') or '')
     except Exception as 异常:
         logger.warning(f'番茄小说下载失败：source={限制文本长度(解析来源)}, book_id={书籍编号}, error={异常}')
-        if isinstance(异常, 用户可见错误):
+        if 接口来源 == '崩溃API':
+            yield 崩溃API下载失败提示
+        elif isinstance(异常, 用户可见错误):
             yield str(异常)
         else:
             yield f'番茄小说下载失败：{异常}'
