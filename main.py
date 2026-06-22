@@ -98,13 +98,25 @@ class MyPlugin(Star):
             event.stop_event()
             return
 
-        激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
-        if 激活回复 is not None:
-            if 用户激活功能.用户激活回复需要同步卡密配置(激活回复):
-                await self.同步卡密配置视图()
-            yield event.plain_result(激活回复)
-            event.stop_event()
-            return
+        是广告消息 = (
+            群管功能.是否闪传消息(event)
+            or 群管功能.是否群名片消息(event)
+            or 群管功能.是否合并转发消息(event)
+        )
+
+        if 是广告消息:
+            if await 群管功能.处理数字撤回(event):
+                event.stop_event()
+                return
+
+        if not 是广告消息:
+            激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
+            if 激活回复 is not None:
+                if 用户激活功能.用户激活回复需要同步卡密配置(激活回复):
+                    await self.同步卡密配置视图()
+                yield event.plain_result(激活回复)
+                event.stop_event()
+                return
 
         if 用户激活功能.是需激活文本命令(命令文本):
             激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
