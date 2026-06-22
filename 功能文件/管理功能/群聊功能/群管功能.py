@@ -24,13 +24,13 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
-卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),", re.IGNORECASE)
+卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
 合并转发规则 = re.compile(
-    r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息",
+    r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息|\[合并转发消息\]",
     re.IGNORECASE,
 )
-闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看", re.IGNORECASE)
+闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看|\[闪传消息\]", re.IGNORECASE)
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 最近消息撤回数量 = 8
@@ -562,7 +562,8 @@ def 记录卡片诊断日志(event: AstrMessageEvent, 消息文本: str, 卡片�
 
 def 是否At消息(event: AstrMessageEvent) -> bool:
     for 文本 in 获取原始文本候选(event):
-        if At消息规则.search(文本):
+        去除At机器人文本 = re.sub(r"\[At:qq_official\]", "", 文本)
+        if At消息规则.search(去除At机器人文本):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
@@ -724,7 +725,7 @@ def 获取消息文本(event: AstrMessageEvent) -> str:
 
 async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
     if 是否At消息(event):
-        logger.info("数字撤回跳过：普通@消息不撤回")
+        logger.info("数字撤回跳过：普通@消息不撤回（@机器人除外）")
         return False
 
     消息编号 = 获取当前消息编号(event)
