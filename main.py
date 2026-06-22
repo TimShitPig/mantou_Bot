@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+﻿﻿from pathlib import Path
 import asyncio
 import importlib
 import json
@@ -91,6 +91,12 @@ class MyPlugin(Star):
     async def on_all_message(self, event: AstrMessageEvent):
         命令文本 = 获取命令文本(event)
         回复内容 = None
+
+        付费开关回复 = 用户激活功能.处理付费开关指令(event, 命令文本, self.config)
+        if 付费开关回复 is not None:
+            yield event.plain_result(付费开关回复)
+            event.stop_event()
+            return
 
         激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
         if 激活回复 is not None:

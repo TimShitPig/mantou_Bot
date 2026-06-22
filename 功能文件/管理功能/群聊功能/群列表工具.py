@@ -60,4 +60,9 @@ def 提取单个群号(值: Any) -> str:
     if isinstance(值, dict):
         值 = 值.get("group_id") or 值.get("group") or 值.get("id")
     文本 = str(值 or "").strip()
-    return 文本 if 数字群号规则.fullmatch(文本) else ""
+    if not 文本:
+        return ""
+    if 数字群号规则.fullmatch(文本):
+        return 文本
+    # QQ 官方机器人返回 group_openid，非数字群号也接受
+    return 文本

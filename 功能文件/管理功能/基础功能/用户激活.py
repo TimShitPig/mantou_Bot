@@ -126,13 +126,19 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 
 
 async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context: Any = None) -> str | None:
-    卡密回复 = await 处理卡密功能(event, 命令文本, 配置, context)
-    if 卡密回复 is not None:
-        return 卡密回复
+    try:
+        卡密回复 = await 处理卡密功能(event, 命令文本, 配置, context)
+        if 卡密回复 is not None:
+            return 卡密回复
+    except Exception as exc:
+        logger.warning(f"处理卡密功能异常：error={exc}")
 
-    付费开关回复 = 处理付费开关指令(event, 命令文本, 配置)
-    if 付费开关回复 is not None:
-        return 付费开关回复
+    try:
+        付费开关回复 = 处理付费开关指令(event, 命令文本, 配置)
+        if 付费开关回复 is not None:
+            return 付费开关回复
+    except Exception as exc:
+        logger.warning(f"处理付费开关指令异常：error={exc}")
 
     列表命令 = 提取用户列表命令文本(event, 命令文本)
     if 列表命令 in 用户列表命令 or 列表命令 in 用户列表翻页命令:
@@ -971,9 +977,20 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用付费开关"
 
+    数据库可用 = True
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 获取数据库配置 as 获取运行状态数据库配置
+        获取运行状态数据库配置(配置)
+    except Exception:
+        数据库可用 = False
+
     if 文本 in 私聊付费开关命令配置:
         是否开启 = 私聊付费开关命令配置[文本]
         状态键 = 获取私聊付费开关状态键()
+        if not 数据库可用:
+            if 是否开启:
+                return "私聊收费模式开启失败：数据库未配置，请先在插件配置中填写数据库信息"
+            return "私聊收费模式关闭失败：数据库未配置，请先在插件配置中填写数据库信息"
         try:
             写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
         except Exception as exc:
@@ -989,6 +1006,10 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
     是否开启 = 付费开关命令配置[文本]
     状态键 = 获取付费开关状态键(群号)
+    if not 数据库可用:
+        if 是否开启:
+            return "本群付费模式开启失败：数据库未配置，请先在插件配置中填写数据库信息"
+        return "本群付费模式关闭失败：数据库未配置，请先在插件配置中填写数据库信息"
     try:
         写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
     except Exception as exc:
@@ -1004,11 +1025,17 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
     if not 群号:
         try:
             return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), True)
+        except RuntimeError:
+            logger.info("私聊付费开关读取跳过：数据库未配置，默认开启收费模式")
+            return True
         except Exception as exc:
             logger.warning(f"私聊付费开关读取数据库失败：error={exc}")
             return True
     try:
         return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
+    except RuntimeError:
+        logger.info(f"付费开关读取跳过：数据库未配置，默认开启收费模式，group_id={群号}")
+        return True
     except Exception as exc:
         logger.warning(f"付费开关读取数据库失败：group_id={群号}, error={exc}")
         return True

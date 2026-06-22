@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+﻿﻿﻿﻿from __future__ import annotations
 
 import inspect
 import re
@@ -16,7 +16,7 @@ try:
 except Exception:
     AstrMessageEvent = Any
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
@@ -66,7 +66,7 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
     群号 = 获取群号(event)
     if not 群号:
         return "用户踢出失败：只能在群聊中使用"
-    if not 是数字ID(群号) or any(not 是数字ID(目标用户) for 目标用户 in 目标用户列表):
+    if not 是QQ官方机器人(event) and (not 是数字ID(群号) or any(not 是数字ID(目标用户) for 目标用户 in 目标用户列表)):
         return "用户踢出失败：当前适配器没有返回数字群号或用户QQ"
 
     成功用户: list[str] = []
@@ -119,7 +119,7 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
     群号 = 获取群号(event)
     if not 群号:
         return "群禁言失败：只能在群聊中使用"
-    if not 是数字ID(群号):
+    if not 是QQ官方机器人(event) and not 是数字ID(群号):
         return "群禁言失败：当前适配器没有返回数字群号"
 
     try:
@@ -879,17 +879,40 @@ async def 尝试踢出其它群同一成员(bot: Any, 当前群号: str, 用户Q
 
 
 async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
+    是否数字 = True
     try:
-        响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(用户QQ), no_cache=True)
+        群号值 = int(群号)
+        用户QQ值 = int(用户QQ)
+    except (ValueError, TypeError):
+        是否数字 = False
+        群号值 = 群号
+        用户QQ值 = 用户QQ
+
+    try:
+        if 是否数字:
+            try:
+                响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=群号值, user_id=用户QQ值, no_cache=True)
+                if 响应:
+                    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
+                    if isinstance(数据, dict):
+                        返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id")
+                        if str(返回用户 or 用户QQ).strip() == str(用户QQ):
+                            return True
+            except Exception:
+                pass
+        try:
+            响应 = await 调用机器人动作(bot, "get_group_member_info", group_openid=群号值, user_openid=用户QQ值, no_cache=True)
+            if 响应:
+                数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
+                if isinstance(数据, dict):
+                    返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id") or 数据.get("user_openid")
+                    if str(返回用户 or 用户QQ).strip() == str(用户QQ):
+                        return True
+        except Exception:
+            pass
     except Exception:
         return False
-    if not 响应:
-        return False
-    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
-    if isinstance(数据, dict):
-        返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id")
-        return str(返回用户 or 用户QQ).strip() == str(用户QQ)
-    return True
+    return False
 
 
 async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> None:
@@ -1062,33 +1085,95 @@ async def 等待可能异步结果(结果: Any) -> Any:
 
 
 async def 使用_set_group_kick踢出(bot: Any, 群号: str, 用户QQ: str) -> bool:
-    群号值 = int(群号)
-    用户QQ值 = int(用户QQ)
+    是否数字 = True
+    try:
+        群号值 = int(群号)
+        用户QQ值 = int(用户QQ)
+    except (ValueError, TypeError):
+        是否数字 = False
+        群号值 = 群号
+        用户QQ值 = 用户QQ
+
     踢出方法 = getattr(bot, "set_group_kick", None)
     if callable(踢出方法):
-        await 踢出方法(group_id=群号值, user_id=用户QQ值, reject_add_request=False)
-        return True
+        if 是否数字:
+            try:
+                await 踢出方法(group_id=群号值, user_id=用户QQ值, reject_add_request=False)
+                return True
+            except Exception:
+                pass
+        try:
+            await 踢出方法(group_openid=群号值, user_openid=用户QQ值, reject_add_request=False)
+            return True
+        except Exception:
+            pass
+        if 是否数字:
+            raise RuntimeError("set_group_kick 踢出失败")
+        raise RuntimeError("set_group_kick 踢出失败，可能不支持 openid 参数")
 
     api = getattr(bot, "api", None)
     调用动作 = getattr(api, "call_action", None)
     if callable(调用动作):
-        await 调用动作("set_group_kick", group_id=群号值, user_id=用户QQ值, reject_add_request=False)
-        return True
+        if 是否数字:
+            try:
+                await 调用动作("set_group_kick", group_id=群号值, user_id=用户QQ值, reject_add_request=False)
+                return True
+            except Exception:
+                pass
+        try:
+            await 调用动作("set_group_kick", group_openid=群号值, user_openid=用户QQ值, reject_add_request=False)
+            return True
+        except Exception:
+            pass
+        if 是否数字:
+            raise RuntimeError("set_group_kick 踢出失败")
+        raise RuntimeError("set_group_kick 踢出失败，可能不支持 openid 参数")
 
     raise RuntimeError("当前 bot 没有 set_group_kick 踢出接口")
 
 
 async def 使用_set_group_whole_ban禁言(bot: Any, 群号: str, 启用: bool = True) -> bool:
-    群号值 = int(群号)
+    是否数字 = True
+    try:
+        群号值 = int(群号)
+    except (ValueError, TypeError):
+        是否数字 = False
+        群号值 = 群号
+
     禁言方法 = getattr(bot, "set_group_whole_ban", None)
     if callable(禁言方法):
-        await 禁言方法(group_id=群号值, enable=启用)
-        return True
+        if 是否数字:
+            try:
+                await 禁言方法(group_id=群号值, enable=启用)
+                return True
+            except Exception:
+                pass
+        try:
+            await 禁言方法(group_openid=群号值, enable=启用)
+            return True
+        except Exception:
+            pass
+        if 是否数字:
+            raise RuntimeError("set_group_whole_ban 禁言失败")
+        raise RuntimeError("set_group_whole_ban 禁言失败，可能不支持 openid 参数")
 
     api = getattr(bot, "api", None)
     调用动作 = getattr(api, "call_action", None)
     if callable(调用动作):
-        await 调用动作("set_group_whole_ban", group_id=群号值, enable=启用)
+        if 是否数字:
+            try:
+                await 调用动作("set_group_whole_ban", group_id=群号值, enable=启用)
+                return True
+            except Exception:
+                pass
+        try:
+            await 调用动作("set_group_whole_ban", group_openid=群号值, enable=启用)
+            return True
+        except Exception:
+            pass
+        if 是否数字:
+            raise RuntimeError("set_group_whole_ban 禁言失败")
+        raise RuntimeError("set_group_whole_ban 禁言失败，可能不支持 openid 参数")
         return True
 
     raise RuntimeError("当前 bot 没有 set_group_whole_ban 全员禁言接口")

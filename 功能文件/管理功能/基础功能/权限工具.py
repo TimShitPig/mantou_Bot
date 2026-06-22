@@ -102,3 +102,40 @@ def 读取字段(对象: Any, 字段名: str) -> Any:
     if isinstance(对象, dict):
         return 对象.get(字段名)
     return getattr(对象, 字段名, None)
+
+
+def 获取适配器名称(event: Any) -> str:
+    for 方法名 in ("get_platform_name", "get_adapter_name"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            try:
+                return str(方法()).lower()
+            except Exception:
+                pass
+
+    bot = getattr(event, "bot", None)
+    if bot is not None:
+        for 字段名 in ("platform", "adapter_name", "adapter"):
+            值 = 读取字段(bot, 字段名)
+            if 值:
+                return str(值).lower()
+        for 字段名 in ("platform_name", "platform_type"):
+            值 = 读取字段(bot, 字段名)
+            if 值:
+                return str(值).lower()
+
+    return ""
+
+
+def 是QQ官方机器人(event: Any) -> bool:
+    适配器 = 获取适配器名称(event)
+    if not 适配器:
+        return False
+    return any(关键词 in 适配器 for 关键词 in ("qq_official", "qqofficial", "q官方", "qq官方", "official"))
+
+
+def 是OneBot适配器(event: Any) -> bool:
+    适配器 = 获取适配器名称(event)
+    if not 适配器:
+        return True
+    return any(关键词 in 适配器 for 关键词 in ("aiocqhttp", "onebot", "cqhttp", "napcat", "llonebot"))
