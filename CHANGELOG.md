@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.41.7
+
+### 修复
+
+- QQ官方机器人撤回消息：通过 `api._http` 底层 HTTP 客户端直接调用 `/v2/groups/{group_openid}/messages/{message_id}` 接口完成群消息撤回。
+
 ## v1.41.6
 
 ### 修复

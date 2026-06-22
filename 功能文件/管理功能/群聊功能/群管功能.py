@@ -1204,6 +1204,24 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                         _logger.info(f"api.{方法名}(message_id={消息编号}, group_openid={群号}) 异常: {type(e).__name__}: {e}")
                 raise RuntimeError(f"api.{方法名} 撤回失败")
 
+    if api is not None and 群号:
+        _http = getattr(api, "_http", None)
+        if _http is not None:
+            _logger.info(f"撤回诊断: _http类型={type(_http).__name__}, _http方法={[n for n in dir(_http) if not n.startswith('_')]}")
+            for 方法名 in ("delete", "request"):
+                方法 = getattr(_http, 方法名, None)
+                if callable(方法):
+                    try:
+                        url = f"/v2/groups/{群号}/messages/{消息编号}"
+                        if 方法名 == "delete":
+                            await 方法(url)
+                        else:
+                            await 方法("DELETE", url)
+                        _logger.info(f"_http.{方法名}({url}) 成功")
+                        return True
+                    except Exception as e:
+                        _logger.info(f"_http.{方法名}({url}) 异常: {type(e).__name__}: {e}")
+
     raise RuntimeError("当前 bot 没有可用的撤回接口")
 
 
