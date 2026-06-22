@@ -393,7 +393,7 @@ def 规范化用户编号(值: Any) -> str:
     return 文本 if 数字ID规则.fullmatch(文本) else ""
 
 
-async def 处理数字撤回(event: AstrMessageEvent) -> bool | str:
+async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
         logger.info(
@@ -420,16 +420,7 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool | str:
     if 撤回成功:
         await 尝试撤回触发用户最近消息(event)
         await 记录撤回触发并尝试踢出(event)
-        return True
-
-    if 是QQ官方机器人(event):
-        logger.info(
-            f"官方机器人撤回失败，将发送提示消息："
-            f"group_id={获取群号(event)}, message_id={获取当前消息编号(event)}"
-        )
-        return "⚠️ 检测到广告消息，但机器人无管理员权限无法撤回，请联系群主设置机器人为管理员"
-
-    return False
+    return 撤回成功
 
 
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
