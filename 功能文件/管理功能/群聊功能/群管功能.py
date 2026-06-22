@@ -1182,6 +1182,15 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
         _http = getattr(api, "_http", None)
         if _http is not None:
             _logger.info(f"撤回: 尝试通过 api._http 底层HTTP客户端撤回群消息, _http类型={type(_http).__name__}")
+            try:
+                import inspect
+                for 方法名 in ("delete", "request"):
+                    方法 = getattr(_http, 方法名, None)
+                    if callable(方法):
+                        sig = inspect.signature(方法)
+                        _logger.info(f"撤回诊断: _http.{方法名} 签名={sig}")
+            except Exception as e:
+                _logger.info(f"撤回诊断: inspect 异常: {e}")
             for 方法名 in ("delete", "request"):
                 方法 = getattr(_http, 方法名, None)
                 if callable(方法):
