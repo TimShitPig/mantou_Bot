@@ -1076,6 +1076,19 @@ def 描述消息段(消息段: Any) -> str:
 
 
 async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "") -> bool:
+    try:
+        from astrbot.api import logger as _logger
+    except Exception:
+        import logging
+        _logger = logging.getLogger(__name__)
+
+    _logger.info(
+        f"撤回诊断: bot类型={type(bot).__name__}, "
+        f"bot方法={[n for n in dir(bot) if not n.startswith('_') and 'msg' in n.lower() or 'delete' in n.lower() or 'recall' in n.lower() or 'message' in n.lower()]}, "
+        f"api类型={type(getattr(bot, 'api', None)).__name__}, "
+        f"api方法={[n for n in dir(getattr(bot, 'api', None)) if not n.startswith('_') and ('msg' in n.lower() or 'delete' in n.lower() or 'recall' in n.lower() or 'message' in n.lower())] if getattr(bot, 'api', None) else '无'}"
+    )
+
     撤回方法 = getattr(bot, "delete_msg", None)
     if callable(撤回方法):
         try:
@@ -1127,7 +1140,7 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 pass
         raise RuntimeError("call_action delete_msg 撤回失败")
 
-    for 方法名 in ("recall_msg", "delete_message", "recall_message"):
+    for 方法名 in ("recall_msg", "delete_message", "recall_message", "msg_recall", "message_recall"):
         方法 = getattr(bot, 方法名, None)
         if callable(方法):
             try:
@@ -1147,6 +1160,28 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 except Exception:
                     pass
             raise RuntimeError(f"{方法名} 撤回失败")
+
+    if api is not None:
+        for 方法名 in ("recall_msg", "delete_message", "recall_message", "msg_recall", "message_recall", "delete_msg"):
+            方法 = getattr(api, 方法名, None)
+            if callable(方法):
+                try:
+                    await 方法(message_id=消息编号)
+                    return True
+                except Exception:
+                    pass
+                if 群号:
+                    try:
+                        await 方法(message_id=消息编号, channel_id=群号)
+                        return True
+                    except Exception:
+                        pass
+                    try:
+                        await 方法(message_id=消息编号, group_openid=群号)
+                        return True
+                    except Exception:
+                        pass
+                raise RuntimeError(f"api.{方法名} 撤回失败")
 
     raise RuntimeError("当前 bot 没有可用的撤回接口")
 
