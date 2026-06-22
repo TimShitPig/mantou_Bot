@@ -1172,7 +1172,17 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                     pass
                 if 群号:
                     try:
+                        await 方法(channel_id=群号, message_id=消息编号)
+                        return True
+                    except Exception:
+                        pass
+                    try:
                         await 方法(message_id=消息编号, channel_id=群号)
+                        return True
+                    except Exception:
+                        pass
+                    try:
+                        await 方法(群号, 消息编号)
                         return True
                     except Exception:
                         pass
