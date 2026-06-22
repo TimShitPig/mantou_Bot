@@ -1082,23 +1082,7 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
         import logging
         _logger = logging.getLogger(__name__)
 
-    _logger.info(
-        f"撤回诊断: bot类型={type(bot).__name__}, "
-        f"bot方法={[n for n in dir(bot) if not n.startswith('_') and 'msg' in n.lower() or 'delete' in n.lower() or 'recall' in n.lower() or 'message' in n.lower()]}, "
-        f"api类型={type(getattr(bot, 'api', None)).__name__}, "
-        f"api方法={[n for n in dir(getattr(bot, 'api', None)) if not n.startswith('_') and ('msg' in n.lower() or 'delete' in n.lower() or 'recall' in n.lower() or 'message' in n.lower())] if getattr(bot, 'api', None) else '无'}"
-    )
     api = getattr(bot, "api", None)
-    if api is not None:
-        _logger.info(
-            f"撤回诊断: api全部非私有方法={[n for n in dir(api) if not n.startswith('_')]}"
-        )
-        _logger.info(
-            f"撤回诊断: api私有方法={[n for n in dir(api) if n.startswith('_') and not n.startswith('__')]}"
-        )
-        _logger.info(
-            f"撤回诊断: bot私有方法={[n for n in dir(bot) if n.startswith('_') and not n.startswith('__')]}"
-        )
 
     撤回方法 = getattr(bot, "delete_msg", None)
     if callable(撤回方法):
@@ -1123,10 +1107,8 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 return True
             except Exception:
                 pass
-        raise RuntimeError("delete_msg 撤回失败")
 
-    api = getattr(bot, "api", None)
-    调用动作 = getattr(api, "call_action", None)
+    调用动作 = getattr(getattr(api, "call_action", None), "__call__", None) if api else None
     if callable(调用动作):
         try:
             await 调用动作("delete_msg", message_id=消息编号)
@@ -1149,7 +1131,6 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 return True
             except Exception:
                 pass
-        raise RuntimeError("call_action delete_msg 撤回失败")
 
     for 方法名 in ("recall_msg", "delete_message", "recall_message", "msg_recall", "message_recall"):
         方法 = getattr(bot, 方法名, None)
@@ -1170,7 +1151,6 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                     return True
                 except Exception:
                     pass
-            raise RuntimeError(f"{方法名} 撤回失败")
 
     if api is not None:
         for 方法名 in ("recall_msg", "delete_message", "recall_message", "msg_recall", "message_recall", "delete_msg"):
@@ -1179,35 +1159,29 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 try:
                     await 方法(message_id=消息编号)
                     return True
-                except Exception as e:
-                    _logger.debug(f"api.{方法名}(message_id=...) 异常: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
                 if 群号:
                     try:
                         await 方法(channel_id=群号, message_id=消息编号)
                         return True
-                    except Exception as e:
-                        _logger.info(f"api.{方法名}(channel_id={群号}, message_id={消息编号}) 异常: {type(e).__name__}: {e}")
+                    except Exception:
+                        pass
                     try:
                         await 方法(message_id=消息编号, channel_id=群号)
-                        _logger.info(f"api.{方法名}(message_id={消息编号}, channel_id={群号}) 未报错但未返回True")
-                    except Exception as e:
-                        _logger.info(f"api.{方法名}(message_id={消息编号}, channel_id={群号}) 异常: {type(e).__name__}: {e}")
+                        return True
+                    except Exception:
+                        pass
                     try:
                         await 方法(群号, 消息编号)
-                        _logger.info(f"api.{方法名}(群号, 消息编号) 未报错但未返回True")
-                    except Exception as e:
-                        _logger.info(f"api.{方法名}(群号, 消息编号) 异常: {type(e).__name__}: {e}")
-                    try:
-                        await 方法(message_id=消息编号, group_openid=群号)
-                        _logger.info(f"api.{方法名}(message_id={消息编号}, group_openid={群号}) 未报错但未返回True")
-                    except Exception as e:
-                        _logger.info(f"api.{方法名}(message_id={消息编号}, group_openid={群号}) 异常: {type(e).__name__}: {e}")
-                raise RuntimeError(f"api.{方法名} 撤回失败")
+                        return True
+                    except Exception:
+                        pass
 
     if api is not None and 群号:
         _http = getattr(api, "_http", None)
         if _http is not None:
-            _logger.info(f"撤回诊断: _http类型={type(_http).__name__}, _http方法={[n for n in dir(_http) if not n.startswith('_')]}")
+            _logger.info(f"撤回: 尝试通过 api._http 底层HTTP客户端撤回群消息, _http类型={type(_http).__name__}")
             for 方法名 in ("delete", "request"):
                 方法 = getattr(_http, 方法名, None)
                 if callable(方法):
@@ -1217,10 +1191,10 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                             await 方法(url)
                         else:
                             await 方法("DELETE", url)
-                        _logger.info(f"_http.{方法名}({url}) 成功")
+                        _logger.info(f"撤回成功: _http.{方法名}({url})")
                         return True
                     except Exception as e:
-                        _logger.info(f"_http.{方法名}({url}) 异常: {type(e).__name__}: {e}")
+                        _logger.info(f"撤回: _http.{方法名} 异常: {type(e).__name__}: {e}")
 
     raise RuntimeError("当前 bot 没有可用的撤回接口")
 

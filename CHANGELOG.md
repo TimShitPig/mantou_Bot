@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.41.8
+
+### 修复
+
+- QQ官方机器人撤回消息：修复 `api.recall_message` 失败后直接 raise 导致 `_http` fallback 未执行的问题，现在会正确 fallback 到底层 HTTP 客户端调用群消息撤回接口。
+
 ## v1.41.7
 
 ### 修复
