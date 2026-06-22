@@ -30,7 +30,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
     r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息|\[合并转发消息\]",
     re.IGNORECASE,
 )
-闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看|\[闪传消息\]", re.IGNORECASE)
+闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看|\[闪传(?:消息)?\]", re.IGNORECASE)
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 数字撤回踢出阈值 = 3
 最近消息撤回数量 = 8
@@ -396,6 +396,16 @@ def 规范化用户编号(值: Any) -> str:
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
+        logger.info(
+            f"撤回检查跳过: 消息文本={限制长度(消息文本)}, "
+            f"白名单={是否白名单消息(event, 消息文本)}, "
+            f"At消息={是否At消息(event)}, "
+            f"群名片={是否群名片消息(event)}, "
+            f"合并转发={是否合并转发消息(event)}, "
+            f"闪传={是否闪传消息(event)}, "
+            f"数字={是否需要撤回数字消息(消息文本)}, "
+            f"原始文本={获取原始文本候选(event)}"
+        )
         return False
     if await 是否发送者为QQ群主或管理员(event):
         logger.info(
