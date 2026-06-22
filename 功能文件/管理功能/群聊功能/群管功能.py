@@ -1168,29 +1168,29 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
                 try:
                     await 方法(message_id=消息编号)
                     return True
-                except Exception:
-                    pass
+                except Exception as e:
+                    _logger.debug(f"api.{方法名}(message_id=...) 异常: {type(e).__name__}: {e}")
                 if 群号:
                     try:
                         await 方法(channel_id=群号, message_id=消息编号)
                         return True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _logger.info(f"api.{方法名}(channel_id={群号}, message_id={消息编号}) 异常: {type(e).__name__}: {e}")
                     try:
                         await 方法(message_id=消息编号, channel_id=群号)
-                        return True
-                    except Exception:
-                        pass
+                        _logger.info(f"api.{方法名}(message_id={消息编号}, channel_id={群号}) 未报错但未返回True")
+                    except Exception as e:
+                        _logger.info(f"api.{方法名}(message_id={消息编号}, channel_id={群号}) 异常: {type(e).__name__}: {e}")
                     try:
                         await 方法(群号, 消息编号)
-                        return True
-                    except Exception:
-                        pass
+                        _logger.info(f"api.{方法名}(群号, 消息编号) 未报错但未返回True")
+                    except Exception as e:
+                        _logger.info(f"api.{方法名}(群号, 消息编号) 异常: {type(e).__name__}: {e}")
                     try:
                         await 方法(message_id=消息编号, group_openid=群号)
-                        return True
-                    except Exception:
-                        pass
+                        _logger.info(f"api.{方法名}(message_id={消息编号}, group_openid={群号}) 未报错但未返回True")
+                    except Exception as e:
+                        _logger.info(f"api.{方法名}(message_id={消息编号}, group_openid={群号}) 异常: {type(e).__name__}: {e}")
                 raise RuntimeError(f"api.{方法名} 撤回失败")
 
     raise RuntimeError("当前 bot 没有可用的撤回接口")
