@@ -1093,6 +1093,12 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
         _logger.info(
             f"撤回诊断: api全部非私有方法={[n for n in dir(api) if not n.startswith('_')]}"
         )
+        _logger.info(
+            f"撤回诊断: api私有方法={[n for n in dir(api) if n.startswith('_') and not n.startswith('__')]}"
+        )
+        _logger.info(
+            f"撤回诊断: bot私有方法={[n for n in dir(bot) if n.startswith('_') and not n.startswith('__')]}"
+        )
 
     撤回方法 = getattr(bot, "delete_msg", None)
     if callable(撤回方法):
