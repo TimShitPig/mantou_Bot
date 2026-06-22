@@ -438,11 +438,15 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
     if not 群号 or not 用户QQ:
-        return 是QQ群管理角色(事件角色)
+        结果 = 是QQ群管理角色(事件角色)
+        logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(缺少群号或用户QQ)")
+        return 结果
 
     bot = getattr(event, "bot", None)
     if bot is None:
-        return 是QQ群管理角色(事件角色)
+        结果 = 是QQ群管理角色(事件角色)
+        logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(缺少bot)")
+        return 结果
 
     try:
         群号值 = int(群号)
@@ -452,16 +456,23 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
         try:
             响应 = await 调用机器人动作(bot, "get_group_member_info", group_openid=群号, user_openid=用户QQ, no_cache=True)
         except Exception as exc:
-            logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
-            return 是QQ群管理角色(事件角色)
+            结果 = 是QQ群管理角色(事件角色)
+            logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(openid查询异常: {exc})")
+            return 结果
     except Exception as exc:
-        logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
-        return 是QQ群管理角色(事件角色)
+        结果 = 是QQ群管理角色(事件角色)
+        logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(数字ID查询异常: {exc})")
+        return 结果
 
     数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
     if isinstance(数据, dict):
-        return 是QQ群管理角色(数据.get("role"))
-    return 是QQ群管理角色(事件角色)
+        角色 = 数据.get("role")
+        结果 = 是QQ群管理角色(角色)
+        logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, API角色={角色!r}, 结果={结果}")
+        return 结果
+    结果 = 是QQ群管理角色(事件角色)
+    logger.info(f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(API返回非dict)")
+    return 结果
 
 
 def 提取事件发送者群角色(event: AstrMessageEvent) -> str:
@@ -748,6 +759,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
     消息编号 = 获取当前消息编号(event)
+    群号 = 获取群号(event)
     if not 消息编号:
         logger.warning("数字撤回失败：当前事件缺少 message_id")
         return False
@@ -757,8 +769,10 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         logger.warning(f"数字撤回失败：当前事件缺少 bot 实例，message_id={消息编号}")
         return False
 
+    logger.info(f"尝试撤回: message_id={消息编号}, group_id={群号}, 是官方机器人={是QQ官方机器人(event)}, bot类型={type(bot).__name__}")
+
     try:
-        await 使用_delete_msg撤回(bot, 消息编号, 获取群号(event))
+        await 使用_delete_msg撤回(bot, 消息编号, 群号)
         logger.info(f"数字撤回成功：message_id={消息编号}")
         return True
     except Exception as exc:
