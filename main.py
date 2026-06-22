@@ -105,7 +105,12 @@ class MyPlugin(Star):
         )
 
         if 是广告消息:
-            if await 群管功能.处理数字撤回(event):
+            撤回结果 = await 群管功能.处理数字撤回(event)
+            if 撤回结果 is True:
+                event.stop_event()
+                return
+            elif isinstance(撤回结果, str):
+                yield event.plain_result(撤回结果)
                 event.stop_event()
                 return
 
@@ -150,7 +155,12 @@ class MyPlugin(Star):
                 回复内容 = await 群管功能.处理群禁言(event, 命令文本, self.config)
 
             if 回复内容 is None:
-                if await 群管功能.处理数字撤回(event):
+                撤回结果 = await 群管功能.处理数字撤回(event)
+                if 撤回结果 is True:
+                    event.stop_event()
+                    return
+                elif isinstance(撤回结果, str):
+                    yield event.plain_result(撤回结果)
                     event.stop_event()
                     return
 
