@@ -418,7 +418,7 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
 
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
-    if not 是数字ID(群号) or not 是数字ID(用户QQ):
+    if not 群号 or not 用户QQ:
         return 是QQ群管理角色(事件角色)
 
     bot = getattr(event, "bot", None)
@@ -426,7 +426,15 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
         return 是QQ群管理角色(事件角色)
 
     try:
-        响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=int(群号), user_id=int(用户QQ), no_cache=True)
+        群号值 = int(群号)
+        用户QQ值 = int(用户QQ)
+        响应 = await 调用机器人动作(bot, "get_group_member_info", group_id=群号值, user_id=用户QQ值, no_cache=True)
+    except (ValueError, TypeError):
+        try:
+            响应 = await 调用机器人动作(bot, "get_group_member_info", group_openid=群号, user_openid=用户QQ, no_cache=True)
+        except Exception as exc:
+            logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
+            return 是QQ群管理角色(事件角色)
     except Exception as exc:
         logger.info(f"QQ群管理身份检查跳过：group_id={群号}, user_id={用户QQ}, error={exc}")
         return 是QQ群管理角色(事件角色)
@@ -730,7 +738,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
     try:
-        await 使用_delete_msg撤回(bot, 消息编号)
+        await 使用_delete_msg撤回(bot, 消息编号, 获取群号(event))
         logger.info(f"数字撤回成功：message_id={消息编号}")
         return True
     except Exception as exc:
@@ -741,8 +749,8 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
 async def 尝试撤回触发用户最近消息(event: AstrMessageEvent) -> int:
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
-    if not 是数字ID(群号) or not 是数字ID(用户QQ):
-        logger.info(f"最近消息撤回跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+    if not 群号 or not 用户QQ:
+        logger.info(f"最近消息撤回跳过：缺少群号或用户QQ，group_id={群号}, user_id={用户QQ}")
         return 0
     当前消息编号 = str(获取当前消息编号(event) or "")
     return await 尝试撤回指定用户最近消息(
@@ -765,8 +773,8 @@ async def 尝试撤回指定用户最近消息(
     撤回数量: int = 最近消息撤回数量,
     日志名称: str = "最近消息撤回",
 ) -> int:
-    if not 是数字ID(群号) or not 是数字ID(用户QQ):
-        logger.info(f"{日志名称}跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+    if not 群号 or not 用户QQ:
+        logger.info(f"{日志名称}跳过：缺少群号或用户QQ，group_id={群号}, user_id={用户QQ}")
         return 0
     bot = getattr(event, "bot", None)
     if bot is None:
@@ -786,7 +794,7 @@ async def 尝试撤回指定用户最近消息(
         if not 消息编号:
             continue
         try:
-            await 使用_delete_msg撤回(bot, 消息编号)
+            await 使用_delete_msg撤回(bot, 消息编号, 群号)
             成功数量 += 1
             logger.info(f"{日志名称}成功：group_id={群号}, user_id={用户QQ}, message_id={消息编号}")
         except Exception as exc:
@@ -795,7 +803,17 @@ async def 尝试撤回指定用户最近消息(
 
 
 async def 获取群历史消息(bot: Any, 群号: str, 数量: int) -> list[dict[str, Any]]:
-    响应 = await 调用机器人动作(bot, "get_group_msg_history", group_id=int(群号), count=int(数量))
+    try:
+        群号值 = int(群号)
+        响应 = await 调用机器人动作(bot, "get_group_msg_history", group_id=群号值, count=int(数量))
+    except (ValueError, TypeError):
+        try:
+            响应 = await 调用机器人动作(bot, "get_group_msg_history", group_openid=群号, count=int(数量))
+        except Exception:
+            try:
+                响应 = await 调用机器人动作(bot, "get_group_msg_history", channel_id=群号, count=int(数量))
+            except Exception:
+                响应 = None
     if isinstance(响应, dict):
         数据 = 响应.get("data") if "data" in 响应 else 响应
         if isinstance(数据, dict):
@@ -945,7 +963,7 @@ def 获取当前消息编号(event: AstrMessageEvent) -> Any:
 
 
 def 获取群号(event: AstrMessageEvent) -> str:
-    for 方法名 in ("get_group_id", "get_group"):
+    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             值 = 方法()
@@ -954,9 +972,9 @@ def 获取群号(event: AstrMessageEvent) -> str:
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
         if isinstance(值, dict):
-            值 = 值.get("group_id") or 值.get("id")
+            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
         if 值:
             return str(值)
     return ""
@@ -1057,12 +1075,80 @@ def 描述消息段(消息段: Any) -> str:
     )
 
 
-async def 使用_delete_msg撤回(bot: Any, 消息编号: Any) -> bool:
+async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "") -> bool:
     撤回方法 = getattr(bot, "delete_msg", None)
-    if not callable(撤回方法):
-        raise RuntimeError("当前 bot 没有 delete_msg 撤回接口")
-    await 撤回方法(message_id=消息编号)
-    return True
+    if callable(撤回方法):
+        try:
+            await 撤回方法(message_id=消息编号)
+            return True
+        except Exception:
+            pass
+        if 群号:
+            try:
+                await 撤回方法(message_id=消息编号, channel_id=群号)
+                return True
+            except Exception:
+                pass
+            try:
+                await 撤回方法(message_id=消息编号, group_openid=群号)
+                return True
+            except Exception:
+                pass
+            try:
+                await 撤回方法(message_id=消息编号, openid=群号)
+                return True
+            except Exception:
+                pass
+        raise RuntimeError("delete_msg 撤回失败")
+
+    api = getattr(bot, "api", None)
+    调用动作 = getattr(api, "call_action", None)
+    if callable(调用动作):
+        try:
+            await 调用动作("delete_msg", message_id=消息编号)
+            return True
+        except Exception:
+            pass
+        if 群号:
+            try:
+                await 调用动作("delete_msg", message_id=消息编号, channel_id=群号)
+                return True
+            except Exception:
+                pass
+            try:
+                await 调用动作("delete_msg", message_id=消息编号, group_openid=群号)
+                return True
+            except Exception:
+                pass
+            try:
+                await 调用动作("delete_msg", message_id=消息编号, openid=群号)
+                return True
+            except Exception:
+                pass
+        raise RuntimeError("call_action delete_msg 撤回失败")
+
+    for 方法名 in ("recall_msg", "delete_message", "recall_message"):
+        方法 = getattr(bot, 方法名, None)
+        if callable(方法):
+            try:
+                await 方法(message_id=消息编号)
+                return True
+            except Exception:
+                pass
+            if 群号:
+                try:
+                    await 方法(message_id=消息编号, channel_id=群号)
+                    return True
+                except Exception:
+                    pass
+                try:
+                    await 方法(message_id=消息编号, group_openid=群号)
+                    return True
+                except Exception:
+                    pass
+            raise RuntimeError(f"{方法名} 撤回失败")
+
+    raise RuntimeError("当前 bot 没有可用的撤回接口")
 
 
 async def 调用机器人动作(bot: Any, 动作名: str, **参数: Any) -> Any:

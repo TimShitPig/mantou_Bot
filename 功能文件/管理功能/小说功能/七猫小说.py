@@ -631,7 +631,7 @@ def 读取字段路径(数据: Any, 路径: tuple[str, ...]) -> Any:
 
 
 def 获取群号(event: Any) -> str:
-    for 方法名 in ("get_group_id", "get_group"):
+    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             值 = 方法()
@@ -639,9 +639,9 @@ def 获取群号(event: Any) -> str:
                 return str(值)
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
         if isinstance(值, dict):
-            值 = 值.get("group_id") or 值.get("id")
+            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
         if 值:
             return str(值)
     return ""

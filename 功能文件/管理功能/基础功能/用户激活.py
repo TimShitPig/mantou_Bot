@@ -1022,9 +1022,17 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
     群号 = 获取群号(event)
+    适配器 = ""
+    try:
+        from 功能文件.管理功能.基础功能.权限工具 import 获取适配器名称 as _获取适配器
+        适配器 = _获取适配器(event)
+    except Exception:
+        pass
     if not 群号:
         try:
-            return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), True)
+            结果 = 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), True)
+            logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费={结果}")
+            return 结果
         except RuntimeError:
             logger.info("私聊付费开关读取跳过：数据库未配置，默认开启收费模式")
             return True
@@ -1032,7 +1040,9 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
             logger.warning(f"私聊付费开关读取数据库失败：error={exc}")
             return True
     try:
-        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
+        结果 = 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
+        logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 付费={结果}")
+        return 结果
     except RuntimeError:
         logger.info(f"付费开关读取跳过：数据库未配置，默认开启收费模式，group_id={群号}")
         return True
@@ -2328,20 +2338,25 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
 
 
 def 获取群号(event: Any) -> str:
-    for 方法名 in ("get_group_id", "get_group"):
+    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             值 = 方法()
             if 值:
-                return str(值)
+                结果 = str(值)
+                logger.info(f"获取群号诊断: 方法={方法名}, 返回值={结果}")
+                return 结果
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
         if isinstance(值, dict):
-            值 = 值.get("group_id") or 值.get("id")
+            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
         if 值:
-            return str(值)
+            结果 = str(值)
+            logger.info(f"获取群号诊断: 对象字段, 返回值={结果}")
+            return 结果
+    logger.info(f"获取群号诊断: 未找到群号, 返回空字符串")
     return ""
 
 

@@ -1,5 +1,14 @@
 ﻿# 更新日志
 
+## v1.41.1
+
+### 修复
+
+- 修复 `获取群号` 函数对 QQ 官方机器人未读取 `group_openid` 导致付费开关 key 不一致的问题。
+- 撤回消息（delete_msg）兼容 QQ 官方机器人 API，自动尝试 `channel_id`/`group_openid`/`openid` 参数，并保留 OneBot 原有 `message_id` 撤回接口。
+- `get_group_msg_history` 和 `get_group_member_info` 自动适配 QQ 官方机器人的 `group_openid`/`user_openid` 参数。
+- 付费开关增加诊断日志，方便排查问题。
+
 ## v1.41.0
 
 ### 修复
