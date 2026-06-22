@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.42.0
+
+### 修复
+
+- QQ官方机器人撤回消息：使用 `botpy.http.Route("DELETE", path)` 构造正确的 Route 对象调用 `_http.request`，完成群消息撤回。
+
 ## v1.41.9
 
 ### 修复

@@ -1183,27 +1183,20 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
         if _http is not None:
             _logger.info(f"撤回: 尝试通过 api._http 底层HTTP客户端撤回群消息, _http类型={type(_http).__name__}")
             try:
-                import inspect
-                for 方法名 in ("delete", "request"):
-                    方法 = getattr(_http, 方法名, None)
-                    if callable(方法):
-                        sig = inspect.signature(方法)
-                        _logger.info(f"撤回诊断: _http.{方法名} 签名={sig}")
-            except Exception as e:
-                _logger.info(f"撤回诊断: inspect 异常: {e}")
-            for 方法名 in ("delete", "request"):
-                方法 = getattr(_http, 方法名, None)
-                if callable(方法):
-                    try:
-                        url = f"/v2/groups/{群号}/messages/{消息编号}"
-                        if 方法名 == "delete":
-                            await 方法(url)
-                        else:
-                            await 方法("DELETE", url)
-                        _logger.info(f"撤回成功: _http.{方法名}({url})")
-                        return True
-                    except Exception as e:
-                        _logger.info(f"撤回: _http.{方法名} 异常: {type(e).__name__}: {e}")
+                import botpy.http as _botpy_http
+                Route = _botpy_http.Route
+            except Exception:
+                Route = None
+            if Route is not None:
+                try:
+                    route = Route("DELETE", f"/v2/groups/{群号}/messages/{消息编号}")
+                    await _http.request(route)
+                    _logger.info(f"撤回成功: _http.request(Route(DELETE, /v2/groups/{群号}/messages/...))")
+                    return True
+                except Exception as e:
+                    _logger.info(f"撤回: _http.request(Route) 异常: {type(e).__name__}: {e}")
+            else:
+                _logger.info("撤回: 无法导入 botpy.http.Route，跳过底层HTTP撤回")
 
     raise RuntimeError("当前 bot 没有可用的撤回接口")
 
