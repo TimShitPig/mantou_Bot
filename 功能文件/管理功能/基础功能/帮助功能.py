@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Any
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人, 获取发送者QQ, 读取字段
+
+logger = logging.getLogger(__name__)
 
 
 帮助选择等待秒数 = 120
@@ -460,12 +463,14 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     api = getattr(bot, "api", None) if bot else None
     _http = getattr(api, "_http", None) if api else None
     if _http is None:
+        logger.warning(f"[帮助MD键盘] 无法获取 _http，bot={type(bot).__name__ if bot else None}，api={type(api).__name__ if api else None}")
         return False
 
     try:
         import botpy.http as _botpy_http
         Route = _botpy_http.Route
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[帮助MD键盘] 导入 botpy.http 失败: {e}")
         Route = None
     if Route is None:
         return False
@@ -490,14 +495,19 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     群号 = 获取群号(event)
     if 群号:
         route = Route("POST", f"/v2/groups/{群号}/messages")
+        logger.info(f"[帮助MD键盘] 群聊发送，群号={群号}，消息ID={消息ID}，按钮数={len(键盘.get('rows', [])) if 键盘 else 0}")
     else:
         用户号 = 获取发送者QQ(event)
         if not 用户号:
+            logger.warning("[帮助MD键盘] 无法获取群号和用户号")
             return False
         route = Route("POST", f"/v2/users/{用户号}/messages")
+        logger.info(f"[帮助MD键盘] 私聊发送，用户号={用户号}")
 
     try:
-        await _http.request(route, json=消息体)
+        响应 = await _http.request(route, json=消息体)
+        logger.info(f"[帮助MD键盘] 发送成功，响应={响应}")
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}")
         return False
