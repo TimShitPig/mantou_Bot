@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 获取发送者QQ, 读取字段
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人, 获取发送者QQ, 读取字段
 
 
 帮助选择等待秒数 = 120
@@ -240,3 +241,263 @@ def 获取群号(event: Any) -> str:
         if 值:
             return str(值)
     return ""
+
+
+def 格式化帮助大类MD() -> str:
+    行列表 = ["## 请选择帮助大类\n"]
+    for 序号, 大类 in enumerate(帮助大类, start=1):
+        行列表.append(f"**{序号}.** {大类['名称']}")
+    行列表.append(f"\n请在 {帮助选择等待秒数} 秒内发送数字查看小类，例如 `1`")
+    行列表.append("也可以直接发送：`帮助 1`")
+    return "\n".join(行列表)
+
+
+def 格式化帮助小类MD(大类序号: int) -> str:
+    大类 = 帮助大类[大类序号]
+    行列表 = [f"## {大类['名称']}\n"]
+    for 序号, 小类 in enumerate(大类["小类"], start=1):
+        行列表.append(f"**{序号}.** {小类['名称']}")
+    行列表.append("\n**0.** 返回上一步")
+    return "\n".join(行列表)
+
+
+def 格式化触发项列表MD(大类序号: int, 小类序号: int) -> str:
+    小类 = 帮助大类[大类序号]["小类"][小类序号]
+    行列表 = [f"## {小类['名称']}\n"]
+    for 序号, 触发项 in enumerate(小类["触发项"], start=1):
+        行列表.append(f"**{序号}.** `{触发项['触发']}`")
+    行列表.append("\n**0.** 返回上一步")
+    return "\n".join(行列表)
+
+
+def 格式化帮助详情MD(大类序号: int, 小类序号: int, 触发编号文本: str) -> str:
+    触发编号 = int(触发编号文本)
+    触发项列表 = 帮助大类[大类序号]["小类"][小类序号]["触发项"]
+    if 触发编号 < 1 or 触发编号 > len(触发项列表):
+        return f"帮助编号无效，请发送 1-{len(触发项列表)} 或 0 返回上一步"
+
+    触发项 = 触发项列表[触发编号 - 1]
+    return "\n".join([
+        f"## {触发项['名称']}\n",
+        f"**触发：** `{触发项['触发']}`\n",
+        触发项["详情"],
+        "\n**0.** 返回上一步",
+    ])
+
+
+def 进入帮助小类MD(会话键: str, 编号文本: str) -> str:
+    编号 = int(编号文本)
+    if 编号 < 1 or 编号 > len(帮助大类):
+        return f"帮助编号无效，请发送 1-{len(帮助大类)}"
+    设置帮助状态(会话键, "小类", 编号 - 1)
+    return 格式化帮助小类MD(编号 - 1)
+
+
+def 进入触发项列表MD(会话键: str, 大类序号: int, 小类编号文本: str) -> str:
+    小类编号 = int(小类编号文本)
+    小类列表 = 帮助大类[大类序号]["小类"]
+    if 小类编号 < 1 or 小类编号 > len(小类列表):
+        return f"帮助编号无效，请发送 1-{len(小类列表)} 或 0 返回上一步"
+    小类序号 = 小类编号 - 1
+    设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
+    return 格式化触发项列表MD(大类序号, 小类序号)
+
+
+def 处理帮助数字选择MD(会话键: str, 帮助状态: dict[str, Any], 编号文本: str) -> str:
+    层级 = 帮助状态.get("层级")
+    大类序号 = 帮助状态.get("大类序号")
+    小类序号 = 帮助状态.get("小类序号")
+
+    if 编号文本 == "0":
+        return 返回帮助上一层MD(会话键, 层级, 大类序号, 小类序号)
+
+    if 层级 == "大类":
+        return 进入帮助小类MD(会话键, 编号文本)
+
+    if 层级 == "小类" and isinstance(大类序号, int):
+        return 进入触发项列表MD(会话键, 大类序号, 编号文本)
+
+    if 层级 in {"触发项", "详情"} and isinstance(大类序号, int) and isinstance(小类序号, int):
+        设置帮助状态(会话键, "详情", 大类序号, 小类序号)
+        return 格式化帮助详情MD(大类序号, 小类序号, 编号文本)
+
+    设置帮助状态(会话键, "大类")
+    return 格式化帮助大类MD()
+
+
+def 返回帮助上一层MD(会话键: str, 层级: str, 大类序号: Any, 小类序号: Any) -> str:
+    if 层级 == "详情" and isinstance(大类序号, int) and isinstance(小类序号, int):
+        设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
+        return 格式化触发项列表MD(大类序号, 小类序号)
+    if 层级 == "触发项" and isinstance(大类序号, int):
+        设置帮助状态(会话键, "小类", 大类序号)
+        return 格式化帮助小类MD(大类序号)
+    if 层级 == "小类":
+        设置帮助状态(会话键, "大类")
+        return 格式化帮助大类MD()
+    待选择帮助会话.pop(会话键, None)
+    return "已退出帮助菜单"
+
+
+def 处理帮助指令MD(event: Any, 命令文本: str, 配置: Any) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if not 文本:
+        return None
+
+    会话键 = 获取帮助会话键(event)
+    帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
+    if 帮助匹配:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用帮助"
+        编号 = 帮助匹配.group(1)
+        if 编号:
+            return 进入帮助小类MD(会话键, 编号)
+        设置帮助状态(会话键, "大类")
+        return 格式化帮助大类MD()
+
+    帮助状态 = 获取有效帮助状态(会话键)
+    if re.fullmatch(r"\d{1,2}", 文本) and 帮助状态 is not None:
+        if not 是群文件清理管理员(event, 配置):
+            待选择帮助会话.pop(会话键, None)
+            return "没有权限使用帮助"
+        return 处理帮助数字选择MD(会话键, 帮助状态, 文本)
+
+    return None
+
+
+def 生成按钮(编号: str, 标签: str, 点击后标签: str = "") -> dict[str, Any]:
+    return {
+        "id": 编号,
+        "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
+        "action": {"type": 2, "permission": {"type": 0}, "data": 编号},
+    }
+
+
+def 生成返回按钮() -> dict[str, Any]:
+    return 生成按钮("0", "返回上一步", "已返回")
+
+
+def 生成帮助大类键盘() -> dict[str, Any]:
+    行列表 = []
+    for 序号, 大类 in enumerate(帮助大类, start=1):
+        行列表.append({"buttons": [生成按钮(str(序号), 大类["名称"])]})
+    return {"rows": 行列表}
+
+
+def 生成帮助小类键盘(大类序号: int) -> dict[str, Any]:
+    大类 = 帮助大类[大类序号]
+    行列表 = []
+    for 序号, 小类 in enumerate(大类["小类"], start=1):
+        行列表.append({"buttons": [生成按钮(str(序号), 小类["名称"])]})
+    行列表.append({"buttons": [生成返回按钮()]})
+    return {"rows": 行列表}
+
+
+def 生成触发项列表键盘(大类序号: int, 小类序号: int) -> dict[str, Any]:
+    小类 = 帮助大类[大类序号]["小类"][小类序号]
+    行列表 = []
+    for 序号, 触发项 in enumerate(小类["触发项"], start=1):
+        行列表.append({"buttons": [生成按钮(str(序号), 触发项["名称"])]})
+    行列表.append({"buttons": [生成返回按钮()]})
+    return {"rows": 行列表}
+
+
+def 生成帮助详情键盘() -> dict[str, Any]:
+    return {"rows": [{"buttons": [生成返回按钮()]}]}
+
+
+def 获取帮助键盘(会话键: str) -> dict[str, Any] | None:
+    帮助状态 = 获取有效帮助状态(会话键)
+    if 帮助状态 is None:
+        return None
+    层级 = 帮助状态.get("层级")
+    大类序号 = 帮助状态.get("大类序号")
+    小类序号 = 帮助状态.get("小类序号")
+    if 层级 == "大类":
+        return 生成帮助大类键盘()
+    if 层级 == "小类" and isinstance(大类序号, int):
+        return 生成帮助小类键盘(大类序号)
+    if 层级 == "触发项" and isinstance(大类序号, int) and isinstance(小类序号, int):
+        return 生成触发项列表键盘(大类序号, 小类序号)
+    if 层级 == "详情":
+        return 生成帮助详情键盘()
+    return None
+
+
+def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) -> tuple[str | None, dict[str, Any] | None]:
+    文本 = str(命令文本 or "").strip()
+    if not 文本:
+        return None, None
+
+    会话键 = 获取帮助会话键(event)
+    帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
+    if 帮助匹配:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用帮助", None
+        编号 = 帮助匹配.group(1)
+        if 编号:
+            md文本 = 进入帮助小类MD(会话键, 编号)
+        else:
+            设置帮助状态(会话键, "大类")
+            md文本 = 格式化帮助大类MD()
+        键盘 = 获取帮助键盘(会话键)
+        return md文本, 键盘
+
+    帮助状态 = 获取有效帮助状态(会话键)
+    if re.fullmatch(r"\d{1,2}", 文本) and 帮助状态 is not None:
+        if not 是群文件清理管理员(event, 配置):
+            待选择帮助会话.pop(会话键, None)
+            return "没有权限使用帮助", None
+        md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
+        键盘 = 获取帮助键盘(会话键)
+        return md文本, 键盘
+
+    return None, None
+
+
+async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str, Any] | None) -> bool:
+    bot = getattr(event, "bot", None)
+    api = getattr(bot, "api", None) if bot else None
+    _http = getattr(api, "_http", None) if api else None
+    if _http is None:
+        return False
+
+    try:
+        import botpy.http as _botpy_http
+        Route = _botpy_http.Route
+    except Exception:
+        Route = None
+    if Route is None:
+        return False
+
+    消息对象 = getattr(event, "message_obj", None)
+    消息ID = ""
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "message_id") or 读取字段(对象, "id") or 读取字段(对象, "msg_id")
+        if 值:
+            消息ID = str(值)
+            break
+
+    消息体: dict[str, Any] = {
+        "content": "",
+        "msg_type": 2,
+        "markdown": {"content": md文本},
+        "msg_id": 消息ID,
+    }
+    if 键盘 is not None:
+        消息体["keyboard"] = 键盘
+
+    群号 = 获取群号(event)
+    if 群号:
+        route = Route("POST", f"/v2/groups/{群号}/messages")
+    else:
+        用户号 = 获取发送者QQ(event)
+        if not 用户号:
+            return False
+        route = Route("POST", f"/v2/users/{用户号}/messages")
+
+    try:
+        await _http.request(route, json=消息体)
+        return True
+    except Exception:
+        return False

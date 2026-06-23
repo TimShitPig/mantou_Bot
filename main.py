@@ -137,6 +137,14 @@ class MyPlugin(Star):
             if 回复内容 is None:
                 回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
             if 回复内容 is None:
+                if 权限工具.是QQ官方机器人(event):
+                    md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
+                    if md文本 is not None:
+                        发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                        if not 发送成功:
+                            yield event.plain_result(md文本)
+                        event.stop_event()
+                        return
                 回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
             if 回复内容 is None:
                 回复内容 = await 群文件清理功能.处理群文件清理(event, 命令文本, self.config)
