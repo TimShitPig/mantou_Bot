@@ -96,11 +96,13 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         return 格式化帮助大类()
 
     帮助状态 = 获取有效帮助状态(会话键)
-    if re.fullmatch(r"\d{1,2}", 文本) and 帮助状态 is not None:
+    if 帮助状态 is not None:
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助"
-        return 处理帮助数字选择(会话键, 帮助状态, 文本)
+        编号文本 = 文本 if re.fullmatch(r"\d{1,2}", 文本) else 名字转编号(文本, 帮助状态)
+        if 编号文本:
+            return 处理帮助数字选择(会话键, 帮助状态, 编号文本)
 
     return None
 
@@ -109,7 +111,8 @@ def 格式化帮助大类() -> str:
     行列表 = ["请选择帮助大类："]
     for 序号, 大类 in enumerate(帮助大类, start=1):
         行列表.append(f"{序号}. {大类['名称']}")
-    行列表.append(f"请在 {帮助选择等待秒数} 秒内发送数字查看小类，例如 1")
+    行列表.append(f"请在 {帮助选择等待秒数} 秒内发送数字或名称查看小类")
+    行列表.append("例如：1 或 主动触发")
     行列表.append("也可以直接发送：帮助 1")
     return "\n".join(行列表)
 
@@ -288,7 +291,7 @@ def 格式化帮助大类MD() -> str:
     行列表 = ["## 请选择帮助大类\n"]
     for 序号, 大类 in enumerate(帮助大类, start=1):
         行列表.append(f"**{序号}.** {大类['名称']}")
-    行列表.append(f"\n请在 {帮助选择等待秒数} 秒内发送数字查看小类，例如 `1`")
+    行列表.append(f"\n请在 {帮助选择等待秒数} 秒内发送数字或名称查看小类，例如 `1` 或 `主动触发`")
     行列表.append("也可以直接发送：`帮助 1`")
     return "\n".join(行列表)
 
@@ -378,32 +381,6 @@ def 返回帮助上一层MD(会话键: str, 层级: str, 大类序号: Any, 小�
         return 格式化帮助大类MD()
     待选择帮助会话.pop(会话键, None)
     return "已退出帮助菜单"
-
-
-def 处理帮助指令MD(event: Any, 命令文本: str, 配置: Any) -> str | None:
-    文本 = str(命令文本 or "").strip()
-    if not 文本:
-        return None
-
-    会话键 = 获取帮助会话键(event)
-    帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
-    if 帮助匹配:
-        if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用帮助"
-        编号 = 帮助匹配.group(1)
-        if 编号:
-            return 进入帮助小类MD(会话键, 编号)
-        设置帮助状态(会话键, "大类")
-        return 格式化帮助大类MD()
-
-    帮助状态 = 获取有效帮助状态(会话键)
-    if re.fullmatch(r"\d{1,2}", 文本) and 帮助状态 is not None:
-        if not 是群文件清理管理员(event, 配置):
-            待选择帮助会话.pop(会话键, None)
-            return "没有权限使用帮助"
-        return 处理帮助数字选择MD(会话键, 帮助状态, 文本)
-
-    return None
 
 
 def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发送: bool = False, data为标签: bool = True) -> dict[str, Any]:
