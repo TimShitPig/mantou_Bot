@@ -1444,6 +1444,7 @@ def 清理激活命令文本(文本: Any) -> str:
     结果 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
     结果 = re.sub(r"\[CQ:at,[^\]]*\]", "", 结果, flags=re.IGNORECASE)
     结果 = re.sub(r"\[At:[^\]]+\]", "", 结果, flags=re.IGNORECASE)
+    结果 = re.sub(r"<@!?[A-Za-z0-9_-]{5,64}>", "", 结果)
     结果 = 结果.replace("＠", "@").strip()
     while 结果.startswith("@"):
         新结果 = re.sub(r"^@[^\s]+\s*", "", 结果, count=1)
@@ -1464,6 +1465,10 @@ def 从文本提取At用户列表(文本: Any) -> list[str]:
         if 用户:
             结果.append(用户)
     for 匹配 in re.finditer(r"\[CQ:at,[^\]]*qq=([^,\]]+)", 原文, re.IGNORECASE):
+        用户 = 规范化用户编号(匹配.group(1))
+        if 用户:
+            结果.append(用户)
+    for 匹配 in re.finditer(r"<@!?([A-Za-z0-9_-]{5,64})>", 原文):
         用户 = 规范化用户编号(匹配.group(1))
         if 用户:
             结果.append(用户)
