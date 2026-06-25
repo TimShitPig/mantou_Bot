@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.45.2
+
+### 修复
+
+- 修复帮助功能 Markdown + Keyboard 在 QQ 官方机器人下按钮不显示的问题：获取群号改为读取 `group_openid`，私聊新增 `获取用户openid` 读取 `user_openid`；Route 改用占位符方式；补充 `msg_seq` 参数。
+
 ## v1.45.1
 
 ### 修复

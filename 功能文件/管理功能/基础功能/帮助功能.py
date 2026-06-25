@@ -229,7 +229,7 @@ def 获取帮助会话键(event: Any) -> str:
 
 
 def 获取群号(event: Any) -> str:
-    for 方法名 in ("get_group_id", "get_group"):
+    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             值 = 方法()
@@ -238,9 +238,24 @@ def 获取群号(event: Any) -> str:
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
         if isinstance(值, dict):
-            值 = 值.get("group_id") or 值.get("id")
+            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
+        if 值:
+            return str(值)
+    return ""
+
+
+def 获取用户openid(event: Any) -> str:
+    for 方法名 in ("get_user_openid", "get_openid"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "user_openid") or 读取字段(对象, "openid")
         if 值:
             return str(值)
     return ""
@@ -476,11 +491,10 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
 
     try:
         import botpy.http as _botpy_http
+        import random as _random
         Route = _botpy_http.Route
     except Exception as e:
         logger.warning(f"[帮助MD键盘] 导入 botpy.http 失败: {e}")
-        Route = None
-    if Route is None:
         return False
 
     消息对象 = getattr(event, "message_obj", None)
@@ -495,22 +509,24 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         "content": "",
         "msg_type": 2,
         "markdown": {"content": md文本},
-        "msg_id": 消息ID,
+        "msg_seq": _random.randint(1, 10000),
     }
+    if 消息ID:
+        消息体["msg_id"] = 消息ID
     if 键盘 is not None:
         消息体["keyboard"] = {"content": 键盘}
 
-    群号 = 获取群号(event)
-    if 群号:
-        route = Route("POST", f"/v2/groups/{群号}/messages")
-        logger.info(f"[帮助MD键盘] 群聊发送，群号={群号}，消息ID={消息ID}，按钮数={len(键盘.get('rows', [])) if 键盘 else 0}")
+    群openid = 获取群号(event)
+    if 群openid:
+        route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
+        logger.info(f"[帮助MD键盘] 群聊发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     else:
-        用户号 = 获取发送者QQ(event)
-        if not 用户号:
-            logger.warning("[帮助MD键盘] 无法获取群号和用户号")
+        用户openid = 获取用户openid(event)
+        if not 用户openid:
+            logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
             return False
-        route = Route("POST", f"/v2/users/{用户号}/messages")
-        logger.info(f"[帮助MD键盘] 私聊发送，用户号={用户号}")
+        route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
+        logger.info(f"[帮助MD键盘] 私聊发送，user_openid={用户openid}")
 
     try:
         响应 = await _http.request(route, json=消息体)
