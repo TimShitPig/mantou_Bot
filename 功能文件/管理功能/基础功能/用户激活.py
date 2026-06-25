@@ -917,7 +917,7 @@ async def 尝试消耗每日免费额度(event: Any, 配置: Any) -> bool:
         "used": 已使用,
         "timestamp": int(time.time()),
     }
-    logger.info(f"用户免费额度放行：group_id={群号}, user_id={用户编号}, daily_quota={每日限额}, used={已使用}")
+    logger.debug(f"用户免费额度放行：group_id={群号}, user_id={用户编号}, daily_quota={每日限额}, used={已使用}")
     return True
 
 
@@ -1060,9 +1060,9 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
             私聊开关文本 = 读取运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), "").strip().lower()
             if 私聊开关文本:
                 私聊付费 = 私聊开关文本 in {"1", "true", "yes", "on", "开启"}
-                logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费已设置, 私聊付费={私聊付费}")
+                logger.debug(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费已设置, 私聊付费={私聊付费}")
                 return 私聊付费
-            logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费未设置, 全局={全局模式}")
+            logger.debug(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费未设置, 全局={全局模式}")
             return 全局模式 != "off"
         except RuntimeError:
             logger.info("私聊付费开关读取跳过：数据库未配置，默认开启收费模式")
@@ -1075,9 +1075,9 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
         群聊开关文本 = 读取运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), "").strip().lower()
         if 群聊开关文本:
             群聊付费 = 群聊开关文本 in {"1", "true", "yes", "on", "开启"}
-            logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费已设置, 付费={群聊付费}")
+            logger.debug(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费已设置, 付费={群聊付费}")
             return 群聊付费
-        logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费未设置, 全局={全局模式}")
+        logger.debug(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费未设置, 全局={全局模式}")
         return 全局模式 != "off"
     except RuntimeError:
         logger.info(f"付费开关读取跳过：数据库未配置，默认开启收费模式，group_id={群号}")
@@ -2400,7 +2400,7 @@ def 获取群号(event: Any) -> str:
             值 = 方法()
             if 值:
                 结果 = str(值)
-                logger.info(f"获取群号诊断: 方法={方法名}, 返回值={结果}")
+                logger.debug(f"获取群号诊断: 方法={方法名}, 返回值={结果}")
                 return 结果
 
     消息对象 = getattr(event, "message_obj", None)
@@ -2410,9 +2410,9 @@ def 获取群号(event: Any) -> str:
             值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
         if 值:
             结果 = str(值)
-            logger.info(f"获取群号诊断: 对象字段, 返回值={结果}")
+            logger.debug(f"获取群号诊断: 对象字段, 返回值={结果}")
             return 结果
-    logger.info(f"获取群号诊断: 未找到群号, 返回空字符串")
+    logger.debug(f"获取群号诊断: 未找到群号, 返回空字符串")
     return ""
 
 

@@ -64,7 +64,7 @@ class 百度网盘客户端:
             已有文件 = await self.查找同名普通文件列表(文件名, 远端目录)
             if 已有文件:
                 文件ID = 提取百度文件ID(已有文件[0]) or str(已有文件[0].get("path") or "")
-                logger.info(f"百度网盘完结小说已存在，跳过重复上传：file={文件名}, file_id={文件ID}, dir={远端目录}")
+                logger.debug(f"百度网盘完结小说已存在，跳过重复上传：file={文件名}, file_id={文件ID}, dir={远端目录}")
                 return 文件ID
         await self.删除同名普通文件(文件名, 远端目录)
         文件ID = await self.上传文件(本地路径, 远端目录, 文件名)
@@ -143,7 +143,7 @@ class 百度网盘客户端:
         数据 = await self.删除文件(删除路径列表)
         if str(数据.get("errno")) != "0":
             raise RuntimeError(f"百度网盘删除同名旧文件失败：paths={删除路径列表}, response={限制文本长度(数据)}")
-        logger.info(f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}")
+        logger.debug(f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}")
         return len(删除路径列表)
 
     async def 查找同名普通文件列表(self, 文件名: str, 远端目录: str) -> list[dict[str, Any]]:
@@ -176,7 +176,7 @@ class 百度网盘客户端:
         远端目录 = 规范化目录路径(远端目录)
         远端路径 = 拼接远端路径(远端目录, 文件名)
         文件大小 = 路径.stat().st_size
-        logger.info(f"百度网盘开始上传：file={文件名}, remote_path={远端路径}, size={文件大小}")
+        logger.debug(f"百度网盘开始上传：file={文件名}, remote_path={远端路径}, size={文件大小}")
 
         预创建数据 = await self.请求预创建数据(远端路径, 文件大小)
         if str(预创建数据.get("errno")) not in ("0", "2"):
@@ -190,7 +190,7 @@ class 百度网盘客户端:
         if str(完成数据.get("errno")) != "0":
             raise RuntimeError(f"百度网盘提交上传失败：{限制文本长度(完成数据)}")
         文件ID = str(完成数据.get("fs_id") or "")
-        logger.info(f"百度网盘上传完成：file={文件名}, remote_path={远端路径}, fs_id={文件ID}")
+        logger.debug(f"百度网盘上传完成：file={文件名}, remote_path={远端路径}, fs_id={文件ID}")
         return 文件ID
 
     async def 请求预创建数据(self, 远端路径: str, 文件大小: int) -> dict[str, Any]:
@@ -292,7 +292,7 @@ async def 后台上传小说文件(配置: Any, 源缓存路径: str | Path, 文
         return {"enabled": False, "success": False, "skipped": False, "file_id": "", "error": ""}
     上传状态 = 读取百度上传状态(配置)
     if not 百度上传状态允许(文件名, 上传状态):
-        logger.info(f"百度网盘后台上传已跳过：file={文件名}, rule={上传状态}")
+        logger.debug(f"百度网盘后台上传已跳过：file={文件名}, rule={上传状态}")
         return {"enabled": True, "success": False, "skipped": True, "file_id": "", "error": ""}
     源路径 = Path(源缓存路径)
     Cookie = 读取百度网盘Cookie(配置)
@@ -300,7 +300,7 @@ async def 后台上传小说文件(配置: Any, 源缓存路径: str | Path, 文
     try:
         async with 百度网盘客户端(Cookie) as 客户端:
             文件ID = await 客户端.上传文件并删除同名旧文件(源路径, 文件名, 上传目录)
-        logger.info(f"百度网盘后台上传成功：file={文件名}, remote_dir={上传目录}, fs_id={文件ID}")
+        logger.debug(f"百度网盘后台上传成功：file={文件名}, remote_dir={上传目录}, fs_id={文件ID}")
         return {"enabled": True, "success": True, "skipped": False, "file_id": 文件ID, "error": ""}
     except Exception as 异常:
         logger.warning(f"百度网盘后台上传失败：file={文件名}, error={异常}")

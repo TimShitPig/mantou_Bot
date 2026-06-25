@@ -128,7 +128,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
-                logger.info(f"番茄小说开始下载：source=崩溃API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                logger.debug(f"番茄小说开始下载：source=崩溃API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
                 yield 格式化下载提示(书籍信息, len(章节列表))
                 下载结果 = await 崩溃API番茄小说.下载完整小说(会话, 书籍编号, 书籍信息, 章节列表)
                 if not 下载结果.get('success'):
@@ -156,7 +156,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 书籍编号 = str(准备结果.get('book_id') or 书籍编号)
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
-                logger.info(f"番茄小说开始下载：source=析API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                logger.debug(f"番茄小说开始下载：source=析API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
                 yield 格式化下载提示(书籍信息, len(章节列表))
                 章节结果列表 = await 析API番茄小说.下载全部章节(会话, 书籍编号, 章节列表)
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
@@ -178,7 +178,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     yield '番茄小说下载失败：OIAPI没有获取到章节目录'
                     return
                 书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
-                logger.info(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                logger.debug(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
                 yield 格式化下载提示(书籍信息, len(章节列表))
                 章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
@@ -186,7 +186,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     yield '番茄小说下载失败：OIAPI没有获取到可用章节正文'
                     return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
-            logger.info(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
+            logger.debug(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
             发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容, 配置)
             缓存路径 = 发送结果.get('cache_path')
             链式结果 = 发送结果.get('chain_result')
@@ -268,10 +268,10 @@ async def 展开番茄短链(会话: aiohttp.ClientSession, 来源: str) -> str:
         logger.debug(f'番茄小说短链展开失败：source={限制文本长度(来源)}, error={异常}')
         return 来源
     if 提取书籍编号(最终地址):
-        logger.info(f'番茄小说短链已展开：source={来源}, target={最终地址}')
-        return 最终地址
+        logger.debug(f'番茄小说短链已展开：source={来源}, target={最终地址}')
+    return 最终地址
     if 提取书籍编号(网页文本):
-        logger.info(f'番茄小说短链页面包含书籍ID：source={来源}')
+        logger.debug(f'番茄小说短链页面包含书籍ID：source={来源}')
         return 网页文本
     return 最终地址 or 来源
 
@@ -280,7 +280,7 @@ async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, �
     目录 = 提取章节目录(响应数据.get('data') if isinstance(响应数据, dict) else 响应数据)
     if not 目录 and isinstance(响应数据, dict):
         目录 = 提取章节目录(响应数据.get('message'))
-    logger.info(f'番茄小说目录获取完成：book_id={书籍编号}, chapters={len(目录)}')
+    logger.debug(f'番茄小说目录获取完成：book_id={书籍编号}, chapters={len(目录)}')
     return 目录
 
 async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], 接口key: str, 总字数: int) -> list[dict[str, Any]]:
@@ -290,7 +290,7 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
     失败数 = 0
     上一进度段 = 0
     结果列表: list[dict[str, Any]] = []
-    logger.info(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%')
+    logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%')
 
     def 记录进度(批次结果: list[dict[str, Any]]) -> None:
         nonlocal 已完成, 成功数, 失败数, 上一进度段
@@ -302,7 +302,7 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
             return
         上一进度段 = 进度段
         百分比 = int(已完成 * 100 / 总数) if 总数 else 100
-        logger.info(f'番茄小说章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}')
+        logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}')
     for 分段 in 拆分章节目录(目录, 总字数):
         批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 分段)
         记录进度(批次结果)
@@ -476,9 +476,9 @@ def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
 async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
     群号 = 获取群号(事件)
     用户QQ = 获取用户QQ(事件)
-    logger.info(f'番茄小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户QQ}')
+    logger.debug(f'番茄小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户QQ}')
     缓存路径 = 写入缓存文件(文件名, 文件内容)
-    logger.info(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
+    logger.debug(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
     发送缓存路径 = 缓存路径
     原小说缓存待删除 = False
     if UC网盘 is not None:
@@ -486,15 +486,15 @@ async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: by
         if UC结果.get('success') and UC结果.get('cache_path'):
             发送缓存路径 = UC结果.get('cache_path')
             原小说缓存待删除 = True
-            logger.info(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
+            logger.debug(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
         elif UC结果.get('enabled'):
             logger.warning(f"番茄小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
     if 百度网盘 is not None:
         百度结果 = await 百度网盘.后台上传小说文件(配置, 缓存路径, 文件名)
         if 百度结果.get('success'):
-            logger.info(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+            logger.debug(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
         elif 百度结果.get('skipped'):
-            logger.info(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
+            logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
         elif 百度结果.get('enabled'):
             logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
     if 原小说缓存待删除:
@@ -502,7 +502,7 @@ async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: by
     if 消息组件 is not None and hasattr(事件, 'chain_result'):
         try:
             链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(发送缓存路径))])
-            logger.info(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}')
+            logger.debug(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}')
             return {'sent': True, 'chain_result': 链式结果, 'cache_path': 发送缓存路径, 'error': ''}
         except Exception as 异常:
             logger.warning(f'番茄小说 AstrBot File 组件构建失败：file={文件名}, error={异常}')
@@ -533,7 +533,7 @@ def 删除缓存文件(缓存路径: Any) -> None:
         return
     try:
         Path(缓存路径).unlink(missing_ok=True)
-        logger.info(f'番茄小说下载缓存文件已删除：file={缓存路径}')
+        logger.debug(f'番茄小说下载缓存文件已删除：file={缓存路径}')
     except Exception as 异常:
         logger.warning(f'番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}')
 
@@ -545,10 +545,10 @@ async def 尝试发送文件候选(调用动作: Any, 群号: str, 用户QQ: str
         try:
             if 群号:
                 await 调用动作('upload_group_file', group_id=群号, file=文件参数, name=文件名)
-                logger.info(f'番茄小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}')
+                logger.debug(f'番茄小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}')
                 return (True, '')
             await 调用动作('upload_private_file', user_id=用户QQ, file=文件参数, name=文件名)
-            logger.info(f'番茄小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户QQ}')
+            logger.debug(f'番茄小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户QQ}')
             return (True, '')
         except Exception as 异常:
             错误列表.append(f'{方法名}: {异常}')
@@ -729,7 +729,7 @@ def 读取当前番茄小说接口(配置: Any = None) -> str:
 def 写入当前番茄小说接口(配置: Any, 接口名称: str) -> None:
     当前接口 = 规范化番茄小说接口(接口名称)
     写入运行状态值(配置, API状态命名空间, API状态键, 当前接口)
-    logger.info(f'番茄小说API已切换：api={当前接口}, storage=mysql')
+    logger.debug(f'番茄小说API已切换：api={当前接口}, storage=mysql')
 
 def 规范化番茄小说接口(值: Any) -> str:
     文本 = str(值 or '').strip().lower()
