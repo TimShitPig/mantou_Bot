@@ -396,16 +396,7 @@ def 规范化用户编号(值: Any) -> str:
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
-        logger.info(
-            f"撤回检查跳过: 消息文本={限制长度(消息文本)}, "
-            f"白名单={是否白名单消息(event, 消息文本)}, "
-            f"At消息={是否At消息(event)}, "
-            f"群名片={是否群名片消息(event)}, "
-            f"合并转发={是否合并转发消息(event)}, "
-            f"闪传={是否闪传消息(event)}, "
-            f"数字={是否需要撤回数字消息(消息文本)}, "
-            f"原始文本={获取原始文本候选(event)}"
-        )
+        logger.debug(f"撤回检查跳过: 消息文本={限制长度(消息文本)}")
         return False
     if await 是否发送者为QQ群主或管理员(event):
         logger.info(
