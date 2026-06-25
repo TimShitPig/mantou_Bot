@@ -2,12 +2,17 @@
 网页接口版群文件清理（pan.qun.qq.com）
 
 通过 QQ 群文件网页接口批量删除群文件，需要管理员手动登录 QQ 网页拿 Cookie。
-与适配器扩展接口版的 群文件清理.py 相互独立，指令不冲突。
+v2.0.0 起统一承担群文件清理职责，删除适配器扩展接口版 群文件清理.py。
 
 指令（仅群文件清理管理员白名单 QQ 可用）：
 - 登录群文件：返回 QQ 登录链接，引导用户去浏览器登录拿 Cookie
 - 群文件登录cookie <cookie>：保存当前管理员的群文件 Cookie，31 天有效
-- 清空群文件 <群号>：清空指定群的所有根目录文件
+- 清理群文件 / 群文件清理：用网页接口清理当前群根目录文件
+- 清理全部群文件：用网页接口清理「添加群聊」里添加的全部目标群
+- 清空群文件 <群号>：用网页接口清理指定群根目录文件
+- 添加群聊 群号 [群号...]：添加一个或多个群号到待清理列表
+- 删除群聊 群号 [群号...]：从待清理列表移除群号
+- 查看群聊：列出当前已添加的待清理目标群
 """
 from __future__ import annotations
 
@@ -31,6 +36,7 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 获取发送者QQ
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 
 
 # ---------- 配置 ----------
@@ -42,6 +48,9 @@ COOKIE文件路径 = 状态目录 / "网页群文件Cookie.json"
 登录群文件命令 = "登录群文件"
 群文件登录cookie规则 = re.compile(r"^群文件登录\s*cookie\s+(.+)$", re.IGNORECASE)
 清空群文件规则 = re.compile(r"^清空群文件\s+(\d+)$")
+
+清理群文件命令 = {"清理群文件", "群文件清理"}
+清理全部群文件命令 = {"清理全部群文件"}
 
 COOKIE有效期秒数 = 31 * 24 * 3600
 列表每页数量 = 50
@@ -56,6 +65,14 @@ COOKIE有效期秒数 = 31 * 24 * 3600
     "&s_url=https://qun.qq.com/#/login&daid=761&hide_close_icon=0"
 )
 
+# 群聊管理
+待清理群命名空间 = "cleanup_groups"
+待清理群状态键 = "group_list"
+数字群号规则 = re.compile(r"[1-9]\d{4,11}")
+添加群聊规则 = re.compile(r"^添加群聊\s+(.+)$")
+删除群聊规则 = re.compile(r"^删除群聊\s+(.+)$")
+查看群聊命令 = "查看群聊"
+
 
 # ---------- 入口分发 ----------
 
@@ -64,6 +81,10 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     文本 = str(命令文本 or "").strip()
     if not 文本:
         return None
+
+    群聊管理回复 = 处理群聊管理指令(event, 文本, 配置)
+    if 群聊管理回复 is not None:
+        return 群聊管理回复
 
     if 文本 == 登录群文件命令:
         if not 是群文件清理管理员(event, 配置):
@@ -75,6 +96,19 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用网页群文件清理"
         return await 保存用户Cookie(event, cookie匹配.group(1).strip())
+
+    if 文本 in 清理群文件命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群文件清理"
+        群号 = 获取群号(event)
+        if not 群号:
+            return "群文件清理只能在群聊中使用"
+        return await 清空指定群文件(event, 群号, 配置)
+
+    if 文本 in 清理全部群文件命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群文件清理"
+        return await 清理全部已添加群(event, 配置)
 
     清空匹配 = 清空群文件规则.fullmatch(文本)
     if 清空匹配:
@@ -92,6 +126,140 @@ def 生成登录提示() -> str:
         "授权完后复制浏览器 Cookie，发送：\n"
         "群文件登录cookie 你的cookie"
     )
+
+
+# ---------- 群聊管理（待清理目标群列表） ----------
+
+
+def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if not 文本:
+        return None
+
+    if 文本 == 查看群聊命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return 格式化待清理群列表(配置)
+
+    添加匹配 = 添加群聊规则.fullmatch(文本)
+    if 添加匹配:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return 添加群聊(配置, 添加匹配.group(1))
+
+    删除匹配 = 删除群聊规则.fullmatch(文本)
+    if 删除匹配:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return 删除群聊(配置, 删除匹配.group(1))
+
+    return None
+
+
+def 读取待清理群列表(配置: Any) -> list[str]:
+    文本 = 读取运行状态值(配置, 待清理群命名空间, 待清理群状态键, "")
+    if not 文本:
+        return []
+    try:
+        数据 = json.loads(文本)
+    except Exception:
+        return []
+    if not isinstance(数据, list):
+        return []
+    结果: list[str] = []
+    已见: set[str] = set()
+    for 群号 in 数据:
+        文本群号 = str(群号).strip()
+        if not 文本群号 or 文本群号 in 已见:
+            continue
+        已见.add(文本群号)
+        结果.append(文本群号)
+    return 结果
+
+
+def 写入待清理群列表(配置: Any, 群号列表: list[str]) -> None:
+    写入运行状态值(配置, 待清理群命名空间, 待清理群状态键, json.dumps(群号列表, ensure_ascii=False))
+
+
+def 添加群聊(配置: Any, 参数文本: str) -> str:
+    解析群号 = 解析群号参数(参数文本)
+    if not 解析群号:
+        return "请提供要添加的群号，例如：添加群聊 123456789"
+
+    当前列表 = 读取待清理群列表(配置)
+    已见 = set(当前列表)
+    新增 = [群号 for 群号 in 解析群号 if 群号 not in 已见]
+    已存在 = [群号 for 群号 in 解析群号 if 群号 in 已见]
+
+    if 新增:
+        当前列表.extend(新增)
+        try:
+            写入待清理群列表(配置, 当前列表)
+        except Exception as exc:
+            logger.warning(f"添加群聊写入失败：error={exc}")
+            return f"添加群聊失败：{exc}"
+
+    行列表 = []
+    if 新增:
+        行列表.append("已添加：" + "、".join(新增))
+    if 已存在:
+        行列表.append("已存在跳过：" + "、".join(已存在))
+    行列表.append(f"当前共 {len(当前列表)} 个待清理群")
+    return "\n".join(行列表)
+
+
+def 删除群聊(配置: Any, 参数文本: str) -> str:
+    解析群号 = 解析群号参数(参数文本)
+    if not 解析群号:
+        return "请提供要删除的群号，例如：删除群聊 123456789"
+
+    当前列表 = 读取待清理群列表(配置)
+    当前集合 = set(当前列表)
+    待删集合 = set(解析群号)
+    新列表 = [群号 for 群号 in 当前列表 if 群号 not in 待删集合]
+    已删除 = [群号 for 群号 in 解析群号 if 群号 in 当前集合]
+    不存在 = [群号 for 群号 in 解析群号 if 群号 not in 当前集合]
+
+    if 新列表 != 当前列表:
+        try:
+            写入待清理群列表(配置, 新列表)
+        except Exception as exc:
+            logger.warning(f"删除群聊写入失败：error={exc}")
+            return f"删除群聊失败：{exc}"
+
+    行列表 = []
+    if 已删除:
+        行列表.append("已删除：" + "、".join(已删除))
+    if 不存在:
+        行列表.append("列表中没有：" + "、".join(不存在))
+    行列表.append(f"当前共 {len(新列表)} 个待清理群")
+    return "\n".join(行列表)
+
+
+def 格式化待清理群列表(配置: Any) -> str:
+    当前列表 = 读取待清理群列表(配置)
+    if not 当前列表:
+        return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
+    行列表 = [f"当前共 {len(当前列表)} 个待清理群："]
+    for 序号, 群号 in enumerate(当前列表, start=1):
+        行列表.append(f"{序号}. {群号}")
+    行列表.append("\n发送「删除群聊 群号」可移除")
+    return "\n".join(行列表)
+
+
+def 解析群号参数(参数文本: str) -> list[str]:
+    候选 = 参数文本.replace(",", " ").replace("、", " ").split()
+    结果: list[str] = []
+    已见: set[str] = set()
+    for 候选项 in 候选:
+        文本 = 候选项.strip()
+        if not 文本 or not 数字群号规则.fullmatch(文本):
+            continue
+        if 文本 in 已见:
+            continue
+        已见.add(文本)
+        结果.append(文本)
+    return 结果
 
 
 # ---------- Cookie 管理 ----------
@@ -182,6 +350,49 @@ async def 安全解析JSON(响应文本: str) -> dict | None:
         return 结果 if isinstance(结果, dict) else None
     except Exception:
         return None
+
+
+def 读取字段(对象: Any, 字段名: str) -> Any:
+    if 对象 is None:
+        return None
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
+
+
+def 获取群号(event: Any) -> str:
+    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
+        方法 = getattr(event, 方法名, None)
+        if callable(方法):
+            值 = 方法()
+            if 值:
+                return str(值)
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("group_openid", "group_id", "group"):
+            值 = 读取字段(对象, 字段名)
+            if isinstance(值, dict):
+                值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
+            if 值:
+                return str(值)
+    return ""
+
+
+async def 发送清理开始提示(event: Any, 文本: str) -> None:
+    try:
+        发送方法 = getattr(event, "send", None)
+        if not callable(发送方法):
+            return
+        结果对象 = 文本
+        plain_result = getattr(event, "plain_result", None)
+        if callable(plain_result):
+            结果对象 = plain_result(文本)
+        结果 = 发送方法(结果对象)
+        if asyncio.iscoroutine(结果) or hasattr(结果, "__await__"):
+            await 结果
+    except Exception as exc:
+        logger.warning(f"群文件清理开始提示发送失败：error={exc}")
 
 
 # ---------- API ----------
@@ -316,6 +527,46 @@ async def 删除文件批次(
 # ---------- 清理主流程 ----------
 
 
+async def 执行网页清理(
+    session: Any,
+    群号: str,
+    cookie文本: str,
+) -> tuple[int, int, str | None]:
+    """核心清理，返回 (成功文件数, 失败文件数, 错误信息或None)。"""
+    skey = 提取skey(cookie文本)
+    if not skey:
+        return 0, 0, "Cookie 缺少 skey，请重新发送「登录群文件」重新登录"
+
+    bkn = 计算bkn(skey)
+    logger.info(f"[网页群文件] 开始清理 群号={群号} bkn={bkn}")
+
+    全部文件 = await 拉取全部文件(session, 群号, bkn, cookie文本)
+    if 全部文件 is None:
+        return 0, 0, "Cookie 已失效或接口错误，请重新发送「登录群文件」重新登录"
+    if not 全部文件:
+        return 0, 0, None
+
+    总数 = len(全部文件)
+    批次列表 = [全部文件[开始:开始 + 每批删除数量] for 开始 in range(0, 总数, 每批删除数量)]
+    logger.info(
+        f"[网页群文件] 群 {群号} 共 {总数} 个文件 分 {len(批次列表)} 批删除（每批 {每批删除数量} 个）"
+    )
+
+    结果列表 = await asyncio.gather(
+        *(删除文件批次(session, 群号, cookie文本, 批次) for 批次 in 批次列表)
+    )
+    成功批次数 = sum(1 for 结果 in 结果列表 if 结果)
+    成功文件数 = sum(
+        len(批次列表[序号])
+        for 序号, 结果 in enumerate(结果列表)
+        if 结果
+    )
+    logger.info(
+        f"[网页群文件] 群 {群号} 删除完成 成功 {成功批次数}/{len(批次列表)} 批"
+    )
+    return 成功文件数, 总数 - 成功文件数, None
+
+
 async def 清空指定群文件(event: Any, 群号: str, 配置: Any) -> str:
     用户QQ = 获取发送者QQ(event)
     if not 用户QQ:
@@ -325,44 +576,70 @@ async def 清空指定群文件(event: Any, 群号: str, 配置: Any) -> str:
     if not cookie文本:
         return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
 
-    skey = 提取skey(cookie文本)
-    if not skey:
-        return "Cookie 缺少 skey，请重新发送「登录群文件」重新登录"
+    if aiohttp is None:
+        return "缺少 aiohttp 依赖，无法清理群文件"
+
+    async with aiohttp.ClientSession() as session:
+        成功, 失败, 错误 = await 执行网页清理(session, 群号, cookie文本)
+
+    if 错误:
+        return 错误
+    if 成功 == 0 and 失败 == 0:
+        return f"清理完成（群 {群号} 没有群文件）"
+    return (
+        f"清理完成，群 {群号} 共处理 {成功 + 失败} 个文件，"
+        f"成功 {成功} 个，失败 {失败} 个"
+    )
+
+
+async def 清理全部已添加群(event: Any, 配置: Any) -> str:
+    用户QQ = 获取发送者QQ(event)
+    if not 用户QQ:
+        return "没有获取到管理员QQ"
+
+    cookie文本 = 读取用户Cookie(用户QQ)
+    if not cookie文本:
+        return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
+
+    群号列表 = 读取待清理群列表(配置)
+    if not 群号列表:
+        return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群后再使用清理全部群文件"
 
     if aiohttp is None:
         return "缺少 aiohttp 依赖，无法清理群文件"
 
-    bkn = 计算bkn(skey)
-    logger.info(f"[网页群文件] 开始清理 群号={群号} bkn={bkn}")
+    await 发送清理开始提示(event, "正在清理群文件（全部）")
+
+    成功群 = 0
+    失败群 = 0
+    文件成功 = 0
+    文件失败 = 0
+    失败详情: list[str] = []
 
     async with aiohttp.ClientSession() as session:
-        全部文件 = await 拉取全部文件(session, 群号, bkn, cookie文本)
-        if 全部文件 is None:
-            return "Cookie 已失效或接口错误，请重新发送「登录群文件」重新登录"
-        if not 全部文件:
-            return f"清理完成（群 {群号} 没有群文件）"
+        for 群号 in 群号列表:
+            try:
+                成功, 失败, 错误 = await 执行网页清理(session, 群号, cookie文本)
+                if 错误:
+                    失败群 += 1
+                    失败详情.append(f"{群号}：{错误}")
+                    logger.warning(f"[网页群文件] 全部清理单群失败：group_id={群号}, error={错误}")
+                else:
+                    成功群 += 1
+                    文件成功 += 成功
+                    文件失败 += 失败
+                    logger.info(
+                        f"[网页群文件] 全部清理单群完成：group_id={群号}, success={成功}, failed={失败}"
+                    )
+            except Exception as exc:
+                失败群 += 1
+                失败详情.append(f"{群号}：{exc}")
+                logger.warning(f"[网页群文件] 全部清理单群异常：group_id={群号}, error={exc}")
 
-        总数 = len(全部文件)
-        批次列表 = [全部文件[开始:开始 + 每批删除数量] for 开始 in range(0, 总数, 每批删除数量)]
-        logger.info(
-            f"[网页群文件] 群 {群号} 共 {总数} 个文件 分 {len(批次列表)} 批删除（每批 {每批删除数量} 个）"
-        )
-
-        任务列表 = [
-            删除文件批次(session, 群号, cookie文本, 批次) for 批次 in 批次列表
-        ]
-        结果列表 = await asyncio.gather(*任务列表)
-        成功批次数 = sum(1 for 结果 in 结果列表 if 结果)
-        成功文件数 = sum(
-            len(批次列表[序号])
-            for 序号, 结果 in enumerate(结果列表)
-            if 结果
-        )
-        logger.info(
-            f"[网页群文件] 群 {群号} 删除完成 成功 {成功批次数}/{len(批次列表)} 批"
-        )
-
-    return (
-        f"清理完成，群 {群号} 共处理 {总数} 个文件，"
-        f"成功 {成功文件数} 个，失败 {总数 - 成功文件数} 个"
-    )
+    行列表 = [
+        f"全部群文件清理完成：群成功 {成功群} 个，群失败 {失败群} 个",
+        f"文件成功 {文件成功} 个，文件失败 {文件失败} 个",
+    ]
+    if 失败详情:
+        行列表.append("失败群：" + "；".join(失败详情))
+    return "\n".join(行列表)
