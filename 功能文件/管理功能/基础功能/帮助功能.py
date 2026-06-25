@@ -423,7 +423,7 @@ def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发�
 
 
 def 生成返回按钮(自动发送: bool = False) -> dict[str, Any]:
-    return 生成按钮("0", "返回上一步", "已返回", 自动发送)
+    return 生成按钮("0", "返回", "已返回", 自动发送)
 
 
 def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 5) -> list[dict[str, Any]]:
