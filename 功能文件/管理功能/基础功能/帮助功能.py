@@ -430,7 +430,7 @@ def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 5) -> l
     return [{"buttons": 按钮列表[开始:开始 + 每行最多]} for 开始 in range(0, len(按钮列表), 每行最多)]
 
 
-def 按钮分行带返回(按钮列表: list[dict[str, Any]], 返回按钮: dict[str, Any], 每行最多: int = 5) -> list[dict[str, Any]]:
+def 按钮分行带返回(按钮列表: list[dict[str, Any]], 返回按钮: dict[str, Any], 每行最多: int = 2) -> list[dict[str, Any]]:
     行 = 按钮分行(按钮列表, 每行最多)
     行.append({"buttons": [返回按钮]})
     return 行
