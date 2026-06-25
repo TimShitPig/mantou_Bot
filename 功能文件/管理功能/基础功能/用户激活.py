@@ -23,7 +23,7 @@ except Exception:
     Comp = None
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 获取发送者QQ, 获取群文件清理管理员QQ列表
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值, 读取运行状态值, 写入运行状态值
 
 
 未激活提示 = "请查看群公告查看激活方法"
@@ -998,12 +998,12 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
                 return "全局收费模式开启失败：数据库未配置，请先在插件配置中填写数据库信息"
             return "全局收费模式关闭失败：数据库未配置，请先在插件配置中填写数据库信息"
         try:
-            写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
+            写入运行状态值(配置, 付费开关状态命名空间, 状态键, "on" if 是否开启 else "off")
         except Exception as exc:
             logger.warning(f"全局付费开关写入数据库失败：enabled={是否开启}, error={exc}")
             return f"全局付费开关失败：{exc}"
         if 是否开启:
-            return "已开启全局收费模式，将按各群聊和私聊原有收费开关判断"
+            return "已开启全局收费模式，群聊和私聊未激活用户均需激活或使用每日免费额度"
         return "已关闭全局收费模式，群聊和私聊未激活用户均可无限制使用"
 
     if 文本 in 私聊付费开关命令配置:
@@ -1043,8 +1043,11 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
-    if not 全局付费模式是否开启(配置):
+    全局模式 = 获取全局付费模式(配置)
+    if 全局模式 == "off":
         return False
+    if 全局模式 == "on":
+        return True
     群号 = 获取群号(event)
     适配器 = ""
     try:
@@ -1075,15 +1078,20 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
         return True
 
 
-def 全局付费模式是否开启(配置: Any) -> bool:
+def 获取全局付费模式(配置: Any) -> str:
     try:
-        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取全局付费开关状态键(), True)
+        文本 = 读取运行状态值(配置, 付费开关状态命名空间, 获取全局付费开关状态键(), "").strip().lower()
     except RuntimeError:
-        logger.info("全局付费开关读取跳过：数据库未配置，默认开启收费模式")
-        return True
+        logger.info("全局付费开关读取跳过：数据库未配置，默认使用群聊/私聊独立收费模式")
+        return ""
     except Exception as exc:
         logger.warning(f"全局付费开关读取数据库失败：error={exc}")
-        return True
+        return ""
+    if 文本 in {"on", "1", "true", "yes", "开启"}:
+        return "on"
+    if 文本 in {"off", "0", "false", "no", "关闭"}:
+        return "off"
+    return ""
 
 
 def 获取全局付费开关状态键() -> str:

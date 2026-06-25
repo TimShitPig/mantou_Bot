@@ -78,9 +78,15 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
 
 
 def 读取全局收费状态(配置: Any) -> str:
-    return 格式化开关(
-        安全读取("全局收费", lambda: 读取布尔运行状态值(配置, 付费开关状态命名空间, "global", True), True)
-    )
+    def 读取状态() -> str:
+        文本 = 读取运行状态值(配置, 付费开关状态命名空间, "global", "").strip().lower()
+        if 文本 in {"on", "1", "true", "yes", "开启"}:
+            return "开启（强制全部收费）"
+        if 文本 in {"off", "0", "false", "no", "关闭"}:
+            return "关闭（全部免费）"
+        return "按群聊/私聊独立开关"
+
+    return 安全读取("全局收费", 读取状态, "按群聊/私聊独立开关")
 
 
 def 读取当前群收费状态(event: Any, 配置: Any) -> str:
