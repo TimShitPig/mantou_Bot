@@ -1044,10 +1044,9 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
     全局模式 = 获取全局付费模式(配置)
-    if 全局模式 == "off":
-        return False
     if 全局模式 == "on":
         return True
+
     群号 = 获取群号(event)
     适配器 = ""
     try:
@@ -1055,21 +1054,31 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
         适配器 = _获取适配器(event)
     except Exception:
         pass
+
     if not 群号:
         try:
-            结果 = 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), True)
-            logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费={结果}")
-            return 结果
+            私聊开关文本 = 读取运行状态值(配置, 付费开关状态命名空间, 获取私聊付费开关状态键(), "").strip().lower()
+            if 私聊开关文本:
+                私聊付费 = 私聊开关文本 in {"1", "true", "yes", "on", "开启"}
+                logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费已设置, 私聊付费={私聊付费}")
+                return 私聊付费
+            logger.info(f"付费开关诊断(私聊): 适配器={适配器}, 群号为空, 私聊付费未设置, 全局={全局模式}")
+            return 全局模式 != "off"
         except RuntimeError:
             logger.info("私聊付费开关读取跳过：数据库未配置，默认开启收费模式")
             return True
         except Exception as exc:
             logger.warning(f"私聊付费开关读取数据库失败：error={exc}")
             return True
+
     try:
-        结果 = 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), True)
-        logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 付费={结果}")
-        return 结果
+        群聊开关文本 = 读取运行状态值(配置, 付费开关状态命名空间, 获取付费开关状态键(群号), "").strip().lower()
+        if 群聊开关文本:
+            群聊付费 = 群聊开关文本 in {"1", "true", "yes", "on", "开启"}
+            logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费已设置, 付费={群聊付费}")
+            return 群聊付费
+        logger.info(f"付费开关诊断(群聊): 适配器={适配器}, 群号={群号}, 群聊付费未设置, 全局={全局模式}")
+        return 全局模式 != "off"
     except RuntimeError:
         logger.info(f"付费开关读取跳过：数据库未配置，默认开启收费模式，group_id={群号}")
         return True
