@@ -100,13 +100,11 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助"
-        大类编号 = 匹配大类名称(文本)
-        if 大类编号:
-            设置帮助状态(会话键, "大类")
-            return 进入帮助小类(会话键, 大类编号)
-        编号文本 = 文本 if re.fullmatch(r"\d{1,2}", 文本) else 名字转编号(文本, 帮助状态)
-        if 编号文本:
-            return 处理帮助数字选择(会话键, 帮助状态, 编号文本)
+        if re.fullmatch(r"\d{1,2}", 文本):
+            return 处理帮助数字选择(会话键, 帮助状态, 文本)
+        目标 = 匹配任意层级名称(文本)
+        if 目标 is not None:
+            return 跳转到目标(会话键, 目标)
 
     return None
 
@@ -457,31 +455,51 @@ def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, 
     return None
 
 
-def 匹配大类名称(文本: str) -> str | None:
-    for 序号, 大类 in enumerate(帮助大类, start=1):
+def 匹配任意层级名称(文本: str) -> tuple[str, int, int | None, int | None] | None:
+    """跨层级匹配名称，返回 (目标层级, 大类序号(0-based), 小类序号或None, 触发项序号或None) 或 None"""
+    for 序号, 大类 in enumerate(帮助大类):
         if 大类["名称"] == 文本:
-            return str(序号)
-    return None
-
-
-def 名字转编号(文本: str, 帮助状态: dict[str, Any]) -> str | None:
-    层级 = 帮助状态.get("层级")
-    if 层级 == "大类":
-        for 序号, 大类 in enumerate(帮助大类, start=1):
-            if 大类["名称"] == 文本:
-                return str(序号)
-    elif 层级 == "小类" and isinstance(帮助状态.get("大类序号"), int):
-        大类序号 = 帮助状态["大类序号"]
-        for 序号, 小类 in enumerate(帮助大类[大类序号]["小类"], start=1):
+            return ("小类", 序号, None, None)
+    for 大类序号, 大类 in enumerate(帮助大类):
+        for 序号, 小类 in enumerate(大类["小类"]):
             if 小类["名称"] == 文本:
-                return str(序号)
-    elif 层级 == "触发项" and isinstance(帮助状态.get("大类序号"), int) and isinstance(帮助状态.get("小类序号"), int):
-        大类序号 = 帮助状态["大类序号"]
-        小类序号 = 帮助状态["小类序号"]
-        for 序号, 触发项 in enumerate(帮助大类[大类序号]["小类"][小类序号]["触发项"], start=1):
-            if 触发项["名称"] == 文本:
-                return str(序号)
+                return ("触发项", 大类序号, 序号, None)
+    for 大类序号, 大类 in enumerate(帮助大类):
+        for 小类序号, 小类 in enumerate(大类["小类"]):
+            for 序号, 触发项 in enumerate(小类["触发项"]):
+                if 触发项["名称"] == 文本:
+                    return ("详情", 大类序号, 小类序号, 序号)
     return None
+
+
+def 跳转到目标(会话键: str, 目标: tuple[str, int, int | None, int | None]) -> str:
+    层级, 大类序号, 小类序号, 项目序号 = 目标
+    if 层级 == "小类":
+        设置帮助状态(会话键, "小类", 大类序号)
+        return 格式化帮助小类(大类序号)
+    if 层级 == "触发项":
+        设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
+        return 格式化触发项列表(大类序号, 小类序号)
+    if 层级 == "详情":
+        设置帮助状态(会话键, "详情", 大类序号, 小类序号)
+        return 格式化帮助详情(大类序号, 小类序号, str(项目序号 + 1))
+    设置帮助状态(会话键, "大类")
+    return 格式化帮助大类()
+
+
+def 跳转到目标MD(会话键: str, 目标: tuple[str, int, int | None, int | None]) -> str:
+    层级, 大类序号, 小类序号, 项目序号 = 目标
+    if 层级 == "小类":
+        设置帮助状态(会话键, "小类", 大类序号)
+        return 格式化帮助小类MD(大类序号)
+    if 层级 == "触发项":
+        设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
+        return 格式化触发项列表MD(大类序号, 小类序号)
+    if 层级 == "详情":
+        设置帮助状态(会话键, "详情", 大类序号, 小类序号)
+        return 格式化帮助详情MD(大类序号, 小类序号, str(项目序号 + 1))
+    设置帮助状态(会话键, "大类")
+    return 格式化帮助大类MD()
 
 
 def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) -> tuple[str | None, dict[str, Any] | None]:
@@ -509,19 +527,13 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助", None
-        大类编号 = 匹配大类名称(文本)
-        if 大类编号:
-            设置帮助状态(会话键, "大类")
-            md文本 = 进入帮助小类MD(会话键, 大类编号)
+        if re.fullmatch(r"\d{1,2}", 文本):
+            md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
             键盘 = 获取帮助键盘(会话键, 自动发送)
             return md文本, 键盘
-        编号文本 = None
-        if re.fullmatch(r"\d{1,2}", 文本):
-            编号文本 = 文本
-        else:
-            编号文本 = 名字转编号(文本, 帮助状态)
-        if 编号文本:
-            md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
+        目标 = 匹配任意层级名称(文本)
+        if 目标 is not None:
+            md文本 = 跳转到目标MD(会话键, 目标)
             键盘 = 获取帮助键盘(会话键, 自动发送)
             return md文本, 键盘
 
