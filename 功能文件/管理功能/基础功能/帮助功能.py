@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
                     {"名称": "群文件清理", "触发": "清理群文件 / 群文件清理 / 清理全部群文件", "详情": "扫描并发删除当前群或机器人所在全部群的群文件。"},
                     {"名称": "授权链接", "触发": "授权 / 授权 数字群号 / 授权 数字群号 机器人QQ", "详情": "生成 QQ 群服务授权链接。"},
                     {"名称": "小说开关", "触发": "开启番茄 / 关闭番茄 / 开启七猫 / 关闭七猫", "详情": "管理员可开关番茄小说和七猫小说下载功能。"},
-                    {"名称": "付费开关", "触发": "开启收费 / 关闭收费 / 开启群聊收费 / 关闭群聊收费 / 开启私聊收费 / 关闭私聊收费", "详情": "关闭收费会让群聊和私聊全部免费，开启收费会强制全部收费；群聊和私聊命令分别开关对应范围。"},
+                    {"名称": "付费开关", "触发": "开启收费 / 关闭收费 / 开启群聊收费 / 关闭群聊收费 / 开启私聊收费 / 关闭私聊收费", "详情": "关闭收费让未单独设置开关的范围免费，已单独开启收费的群聊/私聊仍收费；开启收费强制全部收费。"},
                     {"名称": "状态", "触发": "状态", "详情": "查看系统信息、插件版本、小说功能开关、当前番茄 API、收费开关和网盘启用状态。"},
                     {"名称": "帮助", "触发": "帮助 / 帮助 数字 / 0", "详情": "查看帮助菜单，数字选择下一层，0 返回上一层。"},
                 ],
@@ -368,48 +368,55 @@ def 处理帮助指令MD(event: Any, 命令文本: str, 配置: Any) -> str | No
     return None
 
 
-def 生成按钮(编号: str, 标签: str, 点击后标签: str = "") -> dict[str, Any]:
+def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发送: bool = False) -> dict[str, Any]:
+    动作: dict[str, Any] = {
+        "type": 2,
+        "permission": {"type": 2},
+        "data": 编号,
+        "unsupport_tips": "请发送对应数字",
+    }
+    if 自动发送:
+        动作["enter"] = True
     return {
         "id": 编号,
         "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
-        "action": {"type": 2, "permission": {"type": 0}, "data": 编号},
+        "action": 动作,
     }
 
 
-def 生成返回按钮() -> dict[str, Any]:
-    return 生成按钮("0", "返回上一步", "已返回")
+def 生成返回按钮(自动发送: bool = False) -> dict[str, Any]:
+    return 生成按钮("0", "返回上一步", "已返回", 自动发送)
 
 
-def 生成帮助大类键盘() -> dict[str, Any]:
-    行列表 = []
-    for 序号, 大类 in enumerate(帮助大类, start=1):
-        行列表.append({"buttons": [生成按钮(str(序号), 大类["名称"])]})
-    return {"rows": 行列表}
+def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 5) -> list[dict[str, Any]]:
+    return [{"buttons": 按钮列表[开始:开始 + 每行最多]} for 开始 in range(0, len(按钮列表), 每行最多)]
 
 
-def 生成帮助小类键盘(大类序号: int) -> dict[str, Any]:
+def 生成帮助大类键盘(自动发送: bool = False) -> dict[str, Any]:
+    按钮列表 = [生成按钮(str(序号), 大类["名称"], 自动发送=自动发送) for 序号, 大类 in enumerate(帮助大类, start=1)]
+    按钮列表.append(生成返回按钮(自动发送))
+    return {"rows": 按钮分行(按钮列表)}
+
+
+def 生成帮助小类键盘(大类序号: int, 自动发送: bool = False) -> dict[str, Any]:
     大类 = 帮助大类[大类序号]
-    行列表 = []
-    for 序号, 小类 in enumerate(大类["小类"], start=1):
-        行列表.append({"buttons": [生成按钮(str(序号), 小类["名称"])]})
-    行列表.append({"buttons": [生成返回按钮()]})
-    return {"rows": 行列表}
+    按钮列表 = [生成按钮(str(序号), 小类["名称"], 自动发送=自动发送) for 序号, 小类 in enumerate(大类["小类"], start=1)]
+    按钮列表.append(生成返回按钮(自动发送))
+    return {"rows": 按钮分行(按钮列表)}
 
 
-def 生成触发项列表键盘(大类序号: int, 小类序号: int) -> dict[str, Any]:
+def 生成触发项列表键盘(大类序号: int, 小类序号: int, 自动发送: bool = False) -> dict[str, Any]:
     小类 = 帮助大类[大类序号]["小类"][小类序号]
-    行列表 = []
-    for 序号, 触发项 in enumerate(小类["触发项"], start=1):
-        行列表.append({"buttons": [生成按钮(str(序号), 触发项["名称"])]})
-    行列表.append({"buttons": [生成返回按钮()]})
-    return {"rows": 行列表}
+    按钮列表 = [生成按钮(str(序号), 触发项["名称"], 自动发送=自动发送) for 序号, 触发项 in enumerate(小类["触发项"], start=1)]
+    按钮列表.append(生成返回按钮(自动发送))
+    return {"rows": 按钮分行(按钮列表)}
 
 
-def 生成帮助详情键盘() -> dict[str, Any]:
-    return {"rows": [{"buttons": [生成返回按钮()]}]}
+def 生成帮助详情键盘(自动发送: bool = False) -> dict[str, Any]:
+    return {"rows": [{"buttons": [生成返回按钮(自动发送)]}]}
 
 
-def 获取帮助键盘(会话键: str) -> dict[str, Any] | None:
+def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, Any] | None:
     帮助状态 = 获取有效帮助状态(会话键)
     if 帮助状态 is None:
         return None
@@ -417,13 +424,13 @@ def 获取帮助键盘(会话键: str) -> dict[str, Any] | None:
     大类序号 = 帮助状态.get("大类序号")
     小类序号 = 帮助状态.get("小类序号")
     if 层级 == "大类":
-        return 生成帮助大类键盘()
+        return 生成帮助大类键盘(自动发送)
     if 层级 == "小类" and isinstance(大类序号, int):
-        return 生成帮助小类键盘(大类序号)
+        return 生成帮助小类键盘(大类序号, 自动发送)
     if 层级 == "触发项" and isinstance(大类序号, int) and isinstance(小类序号, int):
-        return 生成触发项列表键盘(大类序号, 小类序号)
+        return 生成触发项列表键盘(大类序号, 小类序号, 自动发送)
     if 层级 == "详情":
-        return 生成帮助详情键盘()
+        return 生成帮助详情键盘(自动发送)
     return None
 
 
@@ -433,6 +440,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         return None, None
 
     会话键 = 获取帮助会话键(event)
+    自动发送 = not 获取群号(event)
     帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
     if 帮助匹配:
         if not 是群文件清理管理员(event, 配置):
@@ -443,7 +451,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         else:
             设置帮助状态(会话键, "大类")
             md文本 = 格式化帮助大类MD()
-        键盘 = 获取帮助键盘(会话键)
+        键盘 = 获取帮助键盘(会话键, 自动发送)
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
@@ -452,7 +460,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助", None
         md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
-        键盘 = 获取帮助键盘(会话键)
+        键盘 = 获取帮助键盘(会话键, 自动发送)
         return md文本, 键盘
 
     return None, None
