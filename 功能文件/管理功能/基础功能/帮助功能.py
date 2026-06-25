@@ -401,28 +401,12 @@ def 生成帮助大类键盘(自动发送: bool = False) -> dict[str, Any]:
 
 
 def 生成大类触发项键盘(大类序号: int, 自动发送: bool = False) -> dict[str, Any]:
-    大类 = 帮助大类[大类序号]
-    行列表: list[dict[str, Any]] = []
-    全局序号 = 0
-    for 小类序号, 小类 in enumerate(大类["小类"]):
-        标题按钮 = {
-            "id": f"_title_{大类序号}_{小类序号}",
-            "render_data": {"label": f"【{小类['名称']}】", "visited_label": f"【{小类['名称']}】"},
-            "action": {
-                "type": 2,
-                "permission": {"type": 2},
-                "data": f"帮助 {大类序号 + 1}",
-                "unsupport_tips": "请发送对应文字",
-            },
-        }
-        行列表.append({"buttons": [标题按钮]})
-        小类按钮列表: list[dict[str, Any]] = []
-        for 触发项 in 小类["触发项"]:
-            全局序号 += 1
-            小类按钮列表.append(生成按钮(str(全局序号), 触发项["名称"], 自动发送=自动发送, data为标签=False))
-        行列表.extend(按钮分行(小类按钮列表, 每行最多=2))
-    行列表.append({"buttons": [生成返回按钮(自动发送)]})
-    return {"rows": 行列表}
+    触发项列表 = 枚举大类触发项(大类序号)
+    按钮列表 = [
+        生成按钮(str(序号), 触发项["名称"], 自动发送=自动发送, data为标签=False)
+        for 序号, (_, _, 触发项) in enumerate(触发项列表, start=1)
+    ]
+    return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送), 每行最多=4)}
 
 
 def 生成帮助详情键盘(触发项: dict[str, Any] | None = None, 自动发送: bool = False) -> dict[str, Any]:
@@ -445,7 +429,12 @@ def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, 
     if 层级 == "大类":
         return 生成帮助大类键盘(自动发送)
     if 层级 == "触发项" and isinstance(大类序号, int):
-        return 生成大类触发项键盘(大类序号, 自动发送)
+        键盘 = 生成大类触发项键盘(大类序号, 自动发送)
+        # QQ 官方限制：单条消息 keyboard 最多 5 行按钮，超限降级为不发按钮（只发 markdown 文本）
+        if len(键盘.get("rows", [])) > 5:
+            logger.info(f"[帮助键盘] 大类{大类序号 + 1} 触发项按钮行数={len(键盘.get('rows', []))} 超过 QQ 官方 5 行限制，降级为无按钮 markdown")
+            return None
+        return 键盘
     if 层级 == "详情":
         触发项序号 = 帮助状态.get("触发项序号")
         触发项 = None
