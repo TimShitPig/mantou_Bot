@@ -1919,6 +1919,29 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
     ]
 
 
+def 获取卡密天数列表(配置: Any, 群号: str) -> list[int]:
+    """同步查询数据库获取当前群所有卡密的不同天数，从低到高排序。"""
+    数据库配置 = 获取数据库配置(配置)
+    try:
+        with 打开数据库连接(数据库配置) as 连接:
+            确保卡密数据库表(连接, 数据库配置["card_table"])
+            with 连接.cursor() as 游标:
+                游标.execute(
+                    f"""
+                    SELECT DISTINCT days
+                    FROM `{数据库配置['card_table']}`
+                    WHERE group_id=%s
+                    ORDER BY days ASC
+                    """,
+                    (str(群号),),
+                )
+                行列表 = 游标.fetchall()
+    except Exception as 异常:
+        logger.warning(f"获取卡密天数列表失败：group_id={群号}, error={异常}")
+        return []
+    return [安全整数(行[0], 0) for 行 in 行列表 if 安全整数(行[0], 0) > 0]
+
+
 def 同步数据库卡密到配置(配置: Any) -> bool:
     数据库配置 = 获取数据库配置(配置)
     配置卡密记录 = 读取配置卡密记录映射(配置)

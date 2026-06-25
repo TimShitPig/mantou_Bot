@@ -8,6 +8,7 @@ from typing import Any
 from astrbot.api import logger
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人, 获取发送者QQ, 读取字段
+from 功能文件.管理功能.基础功能.用户激活 import 获取卡密天数列表
 
 
 帮助选择等待秒数 = 120
@@ -397,25 +398,37 @@ def 生成小类触发项键盘(大类序号: int, 小类序号: int, 自动发�
     return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送))}
 
 
-def 生成帮助详情键盘(触发项: dict[str, Any] | None = None, 自动发送: bool = False) -> dict[str, Any]:
+def 生成帮助详情键盘(触发项: dict[str, Any] | None = None, 自动发送: bool = False, 配置: Any = None, 群号: str = "") -> dict[str, Any]:
     快捷命令 = 触发项.get("快捷命令") if isinstance(触发项, dict) else None
     if not 快捷命令:
         return {"rows": [{"buttons": [生成返回按钮(自动发送)]}]}
-    按钮列表 = []
-    for 命令 in 快捷命令:
-        if isinstance(命令, dict):
-            data值 = str(命令.get("data") or "")
-            标签 = str(命令.get("label") or data值)
-            按钮列表.append(生成按钮(data值, 标签, 自动发送=自动发送, data为标签=False))
-        else:
-            按钮列表.append(生成按钮(命令, 命令, 自动发送=自动发送))
-    返回按钮 = 生成返回按钮(自动发送)
-    行 = 按钮分行(按钮列表, 每行最多=每行按钮数)
-    行.append({"buttons": [返回按钮]})
+    # 卡密查询触发项：动态生成"复制 N"按钮（按数据库实际天数，从低到高）
+    动态天数列表: list[int] = []
+    if 触发项.get("名称") == "卡密查询" and 配置 is not None:
+        动态天数列表 = 获取卡密天数列表(配置, 群号)
+    # 静态快捷命令：去除"复制"，保留"查询卡密 使用/查询卡密 没使用"等
+    静态命令 = [命令 for 命令 in 快捷命令 if not (isinstance(命令, str) and 命令 == "复制")]
+    行: list[dict[str, Any]] = []
+    # 静态按钮按每行 每行按钮数(2) 排列
+    if 静态命令:
+        静态按钮列表 = []
+        for 命令 in 静态命令:
+            if isinstance(命令, dict):
+                data值 = str(命令.get("data") or "")
+                标签 = str(命令.get("label") or data值)
+                静态按钮列表.append(生成按钮(data值, 标签, 自动发送=自动发送, data为标签=False))
+            else:
+                静态按钮列表.append(生成按钮(命令, 命令, 自动发送=自动发送))
+        行.extend(按钮分行(静态按钮列表, 每行最多=每行按钮数))
+    # 动态"复制 N"按钮按每行 3 个排列（从低到高）
+    if 动态天数列表:
+        动态按钮列表 = [生成按钮(f"复制 {天数}", f"复制 {天数}", 自动发送=自动发送) for 天数 in 动态天数列表]
+        行.extend(按钮分行(动态按钮列表, 每行最多=3))
+    行.append({"buttons": [生成返回按钮(自动发送)]})
     return {"rows": 行}
 
 
-def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, Any] | None:
+def 获取帮助键盘(会话键: str, 自动发送: bool = False, 配置: Any = None, 群号: str = "") -> dict[str, Any] | None:
     帮助状态 = 获取有效帮助状态(会话键)
     if 帮助状态 is None:
         return None
@@ -437,7 +450,8 @@ def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, 
             小类 = 帮助大类[大类序号]["小类"][小类序号]
             if 0 <= 触发项序号 < len(小类["触发项"]):
                 触发项 = 小类["触发项"][触发项序号]
-        return 生成帮助详情键盘(触发项, 自动发送)
+        键盘 = 生成帮助详情键盘(触发项, 自动发送, 配置, 群号)
+        return 检查键盘行数(键盘, 大类序号, 小类序号)
     return None
 
 
@@ -510,7 +524,8 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         return None, None
 
     会话键 = 获取帮助会话键(event)
-    自动发送 = not 获取群号(event)
+    群号 = 获取群号(event)
+    自动发送 = not 群号
     帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
     if 帮助匹配:
         if not 是群文件清理管理员(event, 配置):
@@ -521,7 +536,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         else:
             设置帮助状态(会话键, "大类")
             md文本 = 格式化帮助大类MD()
-        键盘 = 获取帮助键盘(会话键, 自动发送)
+        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
@@ -532,7 +547,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
             return "没有权限使用帮助", None
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
         md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
-        键盘 = 获取帮助键盘(会话键, 自动发送)
+        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
         return md文本, 键盘
     目标 = 匹配任意层级名称(文本)
     if 目标 is not None:
@@ -542,7 +557,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
                 return "没有权限使用帮助", None
             return None, None
         md文本 = 跳转到目标MD(会话键, 目标)
-        键盘 = 获取帮助键盘(会话键, 自动发送)
+        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
         return md文本, 键盘
 
     return None, None
