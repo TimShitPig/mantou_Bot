@@ -51,7 +51,7 @@ API状态键 = 'current_api'
 崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
-长读短链正则 = re.compile('https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?', re.IGNORECASE)
+长读短链正则 = re.compile('https?://(?:www\\.)?(?:changdunovel\\.com/t|m\\.novelfm\\.com/s)/[A-Za-z0-9_-]+/?', re.IGNORECASE)
 链接正则 = re.compile('https?://[^\\s\'\\"<>\\u3001\\uff0c\\u3002]+', re.IGNORECASE)
 
 class 用户可见错误(RuntimeError):
@@ -613,7 +613,7 @@ def 提取番茄来源(值: Any) -> str:
     原始文本 = str(值 or '')
     for 文本 in 生成文本变体(原始文本):
         for 匹配 in 链接正则.finditer(文本):
-            链接 = 匹配.group(0).rstrip('),.;]')
+            链接 = 匹配.group(0).rstrip('),.;]`')
             if 长读短链正则.search(链接):
                 return 链接
             if 番茄域名正则.search(链接) and 提取书籍编号(链接):

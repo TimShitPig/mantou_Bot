@@ -16,7 +16,7 @@ from astrbot.api import logger
 进度分段数 = 10
 
 番茄域名正则 = re.compile("fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com", re.IGNORECASE)
-长读短链正则 = re.compile("https?://(?:www\\.)?changdunovel\\.com/t/[A-Za-z0-9_-]+/?", re.IGNORECASE)
+长读短链正则 = re.compile("https?://(?:www\\.)?(?:changdunovel\\.com/t|m\\.novelfm\\.com/s)/[A-Za-z0-9_-]+/?", re.IGNORECASE)
 
 
 async def 下载番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str = "", 基础书籍信息: dict[str, Any] | None = None) -> dict[str, Any]:
