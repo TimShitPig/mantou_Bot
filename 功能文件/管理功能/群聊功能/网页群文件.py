@@ -19,7 +19,6 @@ import asyncio
 import json
 import re
 import time
-from pathlib import Path
 from typing import Any
 
 try:
@@ -40,10 +39,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 
 # ---------- 配置 ----------
 
-插件目录 = Path(__file__).resolve().parent.parent.parent.parent
-状态目录 = 插件目录 / "功能文件" / "下载缓存"
-COOKIE文件路径 = 状态目录 / "网页群文件Cookie.json"
-
 登录群文件命令 = "登录群文件"
 群文件登录cookie规则 = re.compile(r"^群文件登录\s*cookie\s+(.+)$", re.IGNORECASE)
 
@@ -56,6 +51,9 @@ COOKIE有效期秒数 = 31 * 24 * 3600
 删除最大重试次数 = 3
 请求超时秒数 = 30
 清理选择等待秒数 = 120
+
+# Cookie 存 MySQL mantou_runtime_state：namespace=web_group_file_cookie，state_key=管理员QQ
+COOKIE命名空间 = "web_group_file_cookie"
 
 # 清理群文件选择等待状态：key=会话标识，value=(过期时间戳, 群号列表)
 清理等待状态: dict[str, tuple[float, list[str]]] = {}
@@ -101,7 +99,7 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     if cookie匹配:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用网页群文件清理"
-        return await 保存用户Cookie(event, cookie匹配.group(1).strip())
+        return await 保存用户Cookie(event, cookie匹配.group(1).strip(), 配置)
 
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
@@ -316,7 +314,7 @@ def 解析群号参数(参数文本: str) -> list[str]:
 # ---------- Cookie 管理 ----------
 
 
-async def 保存用户Cookie(event: Any, cookie文本: str) -> str:
+async def 保存用户Cookie(event: Any, cookie文本: str, 配置: Any) -> str:
     if "skey=" not in cookie文本:
         return "Cookie 无效，缺少 skey 字段"
 
@@ -324,52 +322,35 @@ async def 保存用户Cookie(event: Any, cookie文本: str) -> str:
     if not 用户QQ:
         return "没有获取到管理员QQ，无法保存 Cookie"
 
-    cookies = 读取Cookie文件()
-    cookies[用户QQ] = {
-        "cookie": cookie文本,
-        "expire": int(time.time()) + COOKIE有效期秒数,
-    }
-    写入Cookie文件(cookies)
+    过期时间 = int(time.time()) + COOKIE有效期秒数
+    状态值 = json.dumps({"cookie": cookie文本, "expire": 过期时间}, ensure_ascii=False)
+    try:
+        写入运行状态值(配置, COOKIE命名空间, 用户QQ, 状态值)
+    except Exception as exc:
+        logger.warning(f"网页群文件 Cookie 写入数据库失败：user_id={用户QQ}, error={exc}")
+        return f"Cookie 保存失败：{exc}"
     logger.info(f"网页群文件 Cookie 已更新：user_id={用户QQ}")
     return f"Cookie 已保存，{COOKIE有效期秒数 // 86400} 天内有效"
 
 
-def 读取用户Cookie(用户QQ: str) -> str | None:
-    cookies = 读取Cookie文件()
-    信息 = cookies.get(用户QQ)
-    if not 信息:
+def 读取用户Cookie(用户QQ: str, 配置: Any) -> str | None:
+    状态值 = 读取运行状态值(配置, COOKIE命名空间, 用户QQ, "")
+    if not 状态值:
+        return None
+    try:
+        信息 = json.loads(状态值)
+    except Exception:
+        return None
+    if not isinstance(信息, dict):
         return None
     if 安全整数(信息.get("expire"), 0) <= int(time.time()):
+        try:
+            写入运行状态值(配置, COOKIE命名空间, 用户QQ, "")
+        except Exception:
+            pass
         return None
-    return str(信息.get("cookie") or "").strip() or None
-
-
-def 读取Cookie文件() -> dict[str, dict[str, Any]]:
-    if not COOKIE文件路径.exists():
-        return {}
-    try:
-        数据 = json.loads(COOKIE文件路径.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(数据, dict):
-        return {}
-    当前时间 = int(time.time())
-    有效数据 = {
-        str(用户QQ): 信息
-        for 用户QQ, 信息 in 数据.items()
-        if isinstance(信息, dict) and 安全整数(信息.get("expire"), 0) > 当前时间
-    }
-    if len(有效数据) != len(数据):
-        写入Cookie文件(有效数据)
-    return 有效数据
-
-
-def 写入Cookie文件(cookies: dict[str, dict[str, Any]]) -> None:
-    状态目录.mkdir(parents=True, exist_ok=True)
-    COOKIE文件路径.write_text(
-        json.dumps(cookies, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    cookie文本 = str(信息.get("cookie") or "").strip()
+    return cookie文本 or None
 
 
 # ---------- 工具 ----------
@@ -623,7 +604,7 @@ async def 清空指定群文件(event: Any, 群号: str, 配置: Any) -> str:
     if not 用户QQ:
         return "没有获取到管理员QQ"
 
-    cookie文本 = 读取用户Cookie(用户QQ)
+    cookie文本 = 读取用户Cookie(用户QQ, 配置)
     if not cookie文本:
         return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
 
@@ -648,7 +629,7 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
     if not 用户QQ:
         return "没有获取到管理员QQ"
 
-    cookie文本 = 读取用户Cookie(用户QQ)
+    cookie文本 = 读取用户Cookie(用户QQ, 配置)
     if not cookie文本:
         return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
 

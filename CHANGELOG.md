@@ -1,5 +1,14 @@
 ﻿# 更新日志
 
+## v2.0.2
+
+### 调整
+
+- 网页群文件清理 Cookie 改为存 MySQL `mantou_runtime_state`（namespace=`web_group_file_cookie`，state_key=管理员QQ，state_value 为 JSON `{cookie, expire}`），不再写本地 JSON 文件。
+- 读取时检查 expire，过期自动清空对应记录并视为未登录。
+- 删除 `功能文件/下载缓存/网页群文件Cookie.json` 相关读写逻辑，移除不再使用的 `pathlib.Path` 导入。
+- Cookie 仍按管理员 QQ 隔离，31 天有效，不暴露到 `状态` 命令。
+
 ## v2.0.1
 
 ### 调整
