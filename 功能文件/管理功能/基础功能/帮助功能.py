@@ -406,24 +406,25 @@ def 处理帮助指令MD(event: Any, 命令文本: str, 配置: Any) -> str | No
     return None
 
 
-def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发送: bool = False) -> dict[str, Any]:
+def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发送: bool = False, data为标签: bool = True) -> dict[str, Any]:
+    data值 = 标签 if data为标签 else 编号
     动作: dict[str, Any] = {
         "type": 2,
         "permission": {"type": 2},
-        "data": 编号,
-        "unsupport_tips": "请发送对应数字",
+        "data": data值,
+        "unsupport_tips": "请发送对应文字",
     }
     if 自动发送:
         动作["enter"] = True
     return {
-        "id": 编号,
+        "id": data值,
         "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
         "action": 动作,
     }
 
 
 def 生成返回按钮(自动发送: bool = False) -> dict[str, Any]:
-    return 生成按钮("0", "返回上一步", "已返回", 自动发送)
+    return 生成按钮("0", "返回上一步", "已返回", 自动发送, data为标签=False)
 
 
 def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 5) -> list[dict[str, Any]]:
@@ -475,6 +476,26 @@ def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, 
     return None
 
 
+def 名字转编号(文本: str, 帮助状态: dict[str, Any]) -> str | None:
+    层级 = 帮助状态.get("层级")
+    if 层级 == "大类":
+        for 序号, 大类 in enumerate(帮助大类, start=1):
+            if 大类["名称"] == 文本:
+                return str(序号)
+    elif 层级 == "小类" and isinstance(帮助状态.get("大类序号"), int):
+        大类序号 = 帮助状态["大类序号"]
+        for 序号, 小类 in enumerate(帮助大类[大类序号]["小类"], start=1):
+            if 小类["名称"] == 文本:
+                return str(序号)
+    elif 层级 == "触发项" and isinstance(帮助状态.get("大类序号"), int) and isinstance(帮助状态.get("小类序号"), int):
+        大类序号 = 帮助状态["大类序号"]
+        小类序号 = 帮助状态["小类序号"]
+        for 序号, 触发项 in enumerate(帮助大类[大类序号]["小类"][小类序号]["触发项"], start=1):
+            if 触发项["名称"] == 文本:
+                return str(序号)
+    return None
+
+
 def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) -> tuple[str | None, dict[str, Any] | None]:
     文本 = str(命令文本 or "").strip()
     if not 文本:
@@ -496,13 +517,19 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
-    if re.fullmatch(r"\d{1,2}", 文本) and 帮助状态 is not None:
+    if 帮助状态 is not None:
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助", None
-        md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
-        键盘 = 获取帮助键盘(会话键, 自动发送)
-        return md文本, 键盘
+        编号文本 = None
+        if re.fullmatch(r"\d{1,2}", 文本):
+            编号文本 = 文本
+        else:
+            编号文本 = 名字转编号(文本, 帮助状态)
+        if 编号文本:
+            md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
+            键盘 = 获取帮助键盘(会话键, 自动发送)
+            return md文本, 键盘
 
     return None, None
 
