@@ -100,6 +100,10 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助"
+        大类编号 = 匹配大类名称(文本)
+        if 大类编号:
+            设置帮助状态(会话键, "大类")
+            return 进入帮助小类(会话键, 大类编号)
         编号文本 = 文本 if re.fullmatch(r"\d{1,2}", 文本) else 名字转编号(文本, 帮助状态)
         if 编号文本:
             return 处理帮助数字选择(会话键, 帮助状态, 编号文本)
@@ -453,6 +457,13 @@ def 获取帮助键盘(会话键: str, 自动发送: bool = False) -> dict[str, 
     return None
 
 
+def 匹配大类名称(文本: str) -> str | None:
+    for 序号, 大类 in enumerate(帮助大类, start=1):
+        if 大类["名称"] == 文本:
+            return str(序号)
+    return None
+
+
 def 名字转编号(文本: str, 帮助状态: dict[str, Any]) -> str | None:
     层级 = 帮助状态.get("层级")
     if 层级 == "大类":
@@ -498,6 +509,12 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         if not 是群文件清理管理员(event, 配置):
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助", None
+        大类编号 = 匹配大类名称(文本)
+        if 大类编号:
+            设置帮助状态(会话键, "大类")
+            md文本 = 进入帮助小类MD(会话键, 大类编号)
+            键盘 = 获取帮助键盘(会话键, 自动发送)
+            return md文本, 键盘
         编号文本 = None
         if re.fullmatch(r"\d{1,2}", 文本):
             编号文本 = 文本
