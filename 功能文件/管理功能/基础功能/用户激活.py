@@ -154,7 +154,6 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
 
     激活参数 = 解析激活命令(event, 命令文本, context)
     if 激活参数 is None:
-        记录激活入口诊断(event, 命令文本, context)
         return None
     记录用户激活诊断(event, 命令文本, 激活参数, context)
     操作 = 激活参数.get("action") or "激活"
@@ -1521,28 +1520,6 @@ def 记录用户激活诊断(event: Any, 命令文本: str, 激活参数: dict[s
         )
     except Exception as exc:
         logger.warning(f"用户激活诊断失败：error={exc}")
-
-
-def 记录激活入口诊断(event: Any, 命令文本: str, context: Any = None) -> None:
-    try:
-        消息对象 = getattr(event, "message_obj", None)
-        段概览 = ""
-        for 字段名 in ("message", "components", "content"):
-            段 = 读取字段(消息对象, 字段名) or 读取字段(event, 字段名)
-            if 段:
-                段概览 = f"{字段名}={限制长度(str(段), 300)}"
-                break
-        logger.info(
-            "用户激活入口诊断(未识别激活命令)："
-            f"command={限制长度(命令文本, 120)}, "
-            f"extracted={限制长度(提取激活命令文本(event, 命令文本), 60)}, "
-            f"sender={获取发送者QQ(event)}, "
-            f"message_str={限制长度(读取字段(event, 'message_str'), 200)}, "
-            f"raw_message={限制长度(读取字段(event, 'raw_message'), 200)}, "
-            f"segments={段概览}"
-        )
-    except Exception as exc:
-        logger.warning(f"用户激活入口诊断失败：error={exc}")
 
 
 def 获取应忽略At用户(event: Any, context: Any = None) -> set[str]:
