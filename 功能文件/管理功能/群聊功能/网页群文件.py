@@ -7,9 +7,8 @@ v2.0.0 起统一承担群文件清理职责，删除适配器扩展接口版 群
 指令（仅群文件清理管理员白名单 QQ 可用）：
 - 登录群文件：返回 QQ 登录链接，引导用户去浏览器登录拿 Cookie
 - 群文件登录cookie <cookie>：保存当前管理员的群文件 Cookie，31 天有效
-- 清理群文件 / 群文件清理：用网页接口清理当前群根目录文件
+- 清理群文件 / 群文件清理：列出「添加群聊」里的目标群，发送编号清理对应群（120 秒内有效，发送 0 取消）
 - 清理全部群文件：用网页接口清理「添加群聊」里添加的全部目标群
-- 清空群文件 <群号>：用网页接口清理指定群根目录文件
 - 添加群聊 群号 [群号...]：添加一个或多个群号到待清理列表
 - 删除群聊 群号 [群号...]：从待清理列表移除群号
 - 查看群聊：列出当前已添加的待清理目标群
@@ -47,7 +46,6 @@ COOKIE文件路径 = 状态目录 / "网页群文件Cookie.json"
 
 登录群文件命令 = "登录群文件"
 群文件登录cookie规则 = re.compile(r"^群文件登录\s*cookie\s+(.+)$", re.IGNORECASE)
-清空群文件规则 = re.compile(r"^清空群文件\s+(\d+)$")
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
 清理全部群文件命令 = {"清理全部群文件"}
@@ -57,6 +55,10 @@ COOKIE有效期秒数 = 31 * 24 * 3600
 每批删除数量 = 20
 删除最大重试次数 = 3
 请求超时秒数 = 30
+清理选择等待秒数 = 120
+
+# 清理群文件选择等待状态：key=会话标识，value=(过期时间戳, 群号列表)
+清理等待状态: dict[str, tuple[float, list[str]]] = {}
 
 文件列表接口 = "https://pan.qun.qq.com/cgi-bin/group_file/get_file_list"
 删除文件接口 = "https://pan.qun.qq.com/cgi-bin/group_file/delete_file"
@@ -82,6 +84,10 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     if not 文本:
         return None
 
+    选择回复 = await 处理清理选择回复(event, 文本, 配置)
+    if 选择回复 is not None:
+        return 选择回复
+
     群聊管理回复 = 处理群聊管理指令(event, 文本, 配置)
     if 群聊管理回复 is not None:
         return 群聊管理回复
@@ -100,23 +106,68 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群文件清理"
-        群号 = 获取群号(event)
-        if not 群号:
-            return "群文件清理只能在群聊中使用"
-        return await 清空指定群文件(event, 群号, 配置)
+        return 列出待清理群供选择(event, 配置)
 
     if 文本 in 清理全部群文件命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群文件清理"
         return await 清理全部已添加群(event, 配置)
 
-    清空匹配 = 清空群文件规则.fullmatch(文本)
-    if 清空匹配:
-        if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用网页群文件清理"
-        return await 清空指定群文件(event, 清空匹配.group(1), 配置)
-
     return None
+
+
+async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str | None:
+    标识 = 获取会话标识(event)
+    状态 = 清理等待状态.get(标识)
+    if 状态 is None:
+        return None
+    过期时间, 群号列表 = 状态
+    if 过期时间 <= time.time():
+        清理等待状态.pop(标识, None)
+        return None
+
+    if 文本 == "0":
+        清理等待状态.pop(标识, None)
+        return "已取消清理群文件选择"
+
+    if not 文本.isdigit():
+        return None
+    if not 是群文件清理管理员(event, 配置):
+        清理等待状态.pop(标识, None)
+        return "没有权限使用群文件清理"
+
+    序号 = int(文本)
+    if 序号 < 1 or 序号 > len(群号列表):
+        return f"编号无效，请发送 1-{len(群号列表)} 的数字，或发送 0 取消"
+
+    清理等待状态.pop(标识, None)
+    目标群号 = 群号列表[序号 - 1]
+    return f"已选择群 {目标群号}，开始清理\n" + await 清空指定群文件(event, 目标群号, 配置)
+
+
+def 列出待清理群供选择(event: Any, 配置: Any) -> str:
+    群号列表 = 读取待清理群列表(配置)
+    if not 群号列表:
+        return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群"
+
+    写入清理等待状态(event, 群号列表)
+    行列表 = [f"请发送编号清理对应群（{清理选择等待秒数} 秒内有效）："]
+    for 序号, 群号 in enumerate(群号列表, start=1):
+        行列表.append(f"{序号}. {群号}")
+    行列表.append("发送 0 取消")
+    return "\n".join(行列表)
+
+
+def 获取会话标识(event: Any) -> str:
+    发送者 = 获取发送者QQ(event) or ""
+    群号 = 获取群号(event)
+    if 群号:
+        return f"group:{群号}:{发送者}"
+    return f"private:{发送者}"
+
+
+def 写入清理等待状态(event: Any, 群号列表: list[str]) -> None:
+    清理等待状态[获取会话标识(event)] = (time.time() + 清理选择等待秒数, 群号列表)
 
 
 def 生成登录提示() -> str:
