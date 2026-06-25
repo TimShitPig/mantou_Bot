@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.45.6
+
+### 修复
+
+- 修复 qq_official 适配器下 group_openid 获取失败：经查 AstrBot 源码确认 `group_openid` 被存入 `group_id` 字段（`get_group_id()` 同步返回），`get_group` 是基类空实现且 qq_official 未重写；用户 openid 通过 `get_sender_id()` 获取。改用正确字段路径，移除异步获取和临时诊断日志。
+
 ## v1.45.5
 
 ### 修复

@@ -228,7 +228,7 @@ def 获取帮助会话键(event: Any) -> str:
 
 
 def 获取群号(event: Any) -> str:
-    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
+    for 方法名 in ("get_group_id",):
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             try:
@@ -242,71 +242,45 @@ def 获取群号(event: Any) -> str:
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
+        值 = 读取字段(对象, "group_id")
+        if hasattr(值, "group_id"):
+            值 = 值.group_id
         if isinstance(值, dict):
-            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
+            值 = 值.get("group_id") or 值.get("group_openid") or 值.get("id")
         if 值:
             return str(值)
     return ""
 
 
-async def 获取群openid异步(event: Any) -> str:
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_openid")
-        if 值:
-            return str(值)
-    for 方法名 in ("get_group_openid", "get_group"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            try:
-                值 = 方法()
-                if hasattr(值, "__await__"):
-                    值 = await 值
-                if 值:
-                    return str(值)
-            except Exception:
-                pass
-    return ""
+def 获取群openid同步(event: Any) -> str:
+    return 获取群号(event)
 
 
-def 获取用户openid(event: Any) -> str:
-    for 方法名 in ("get_user_openid", "get_openid"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            try:
-                值 = 方法()
-            except Exception:
-                continue
+def 获取用户openid同步(event: Any) -> str:
+    方法 = getattr(event, "get_sender_id", None)
+    if callable(方法):
+        try:
+            值 = 方法()
             if hasattr(值, "__await__"):
-                continue
+                值 = None
             if 值:
                 return str(值)
+        except Exception:
+            pass
+
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
+        值 = 读取字段(对象, "sender")
+        if 值:
+            if hasattr(值, "user_id"):
+                值 = 值.user_id
+            elif isinstance(值, dict):
+                值 = 值.get("user_id") or 值.get("user_openid") or 值.get("member_openid")
+            if 值:
+                return str(值)
         值 = 读取字段(对象, "user_openid") or 读取字段(对象, "openid")
         if 值:
             return str(值)
-    return ""
-
-
-async def 获取用户openid异步(event: Any) -> str:
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "user_openid") or 读取字段(对象, "openid")
-        if 值:
-            return str(值)
-    for 方法名 in ("get_user_openid", "get_openid"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            try:
-                值 = 方法()
-                if hasattr(值, "__await__"):
-                    值 = await 值
-                if 值:
-                    return str(值)
-            except Exception:
-                pass
     return ""
 
 
@@ -565,12 +539,12 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     if 键盘 is not None:
         消息体["keyboard"] = {"content": 键盘}
 
-    群openid = await 获取群openid异步(event)
+    群openid = 获取群openid同步(event)
     if 群openid:
         route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
         logger.info(f"[帮助MD键盘] 群聊发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     else:
-        用户openid = await 获取用户openid异步(event)
+        用户openid = 获取用户openid同步(event)
         if not 用户openid:
             logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
             return False

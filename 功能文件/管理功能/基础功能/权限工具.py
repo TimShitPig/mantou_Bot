@@ -148,39 +148,6 @@ def 是QQ官方机器人(event: Any) -> bool:
     return any(关键词 in 适配器 for 关键词 in ("qq_official", "qqofficial", "q官方", "qq官方", "official"))
 
 
-def 诊断适配器信息(event: Any) -> None:
-    """临时诊断函数：输出事件对象上所有可能的适配器字段值，用于排查是QQ官方机器人判断失败。"""
-    from astrbot.api import logger
-    收集 = {}
-    for 方法名 in ("get_platform_name", "get_adapter_name"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            try:
-                收集[方法名] = str(方法())
-            except Exception as e:
-                收集[方法名] = f"异常: {e}"
-    消息对象 = getattr(event, "message_obj", None)
-    for 键 in ("platform_meta", "platform", "adapter", "adapter_name"):
-        值 = 读取字段(event, 键)
-        if 值 is not None:
-            收集[f"event.{键}"] = str(值)[:200]
-    if 消息对象:
-        for 键 in ("platform_meta", "platform", "adapter", "adapter_name"):
-            值 = 读取字段(消息对象, 键)
-            if 值 is not None:
-                收集[f"message_obj.{键}"] = str(值)[:200]
-    bot = getattr(event, "bot", None)
-    if bot:
-        for 键 in ("platform", "adapter_name", "adapter", "platform_name", "platform_type"):
-            值 = 读取字段(bot, 键)
-            if 值 is not None:
-                收集[f"bot.{键}"] = str(值)[:200]
-        platform_meta = 读取字段(bot, "platform_meta")
-        if platform_meta is not None:
-            收集["bot.platform_meta"] = str(platform_meta)[:200]
-    logger.info(f"[适配器诊断] 适配器名称={获取适配器名称(event)!r} 字段={收集}")
-
-
 def 是OneBot适配器(event: Any) -> bool:
     适配器 = 获取适配器名称(event)
     if not 适配器:
