@@ -423,31 +423,34 @@ def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发�
 
 
 def 生成返回按钮(自动发送: bool = False) -> dict[str, Any]:
-    return 生成按钮("0", "返回", "已返回", 自动发送)
+    return 生成按钮("0", "返回上一步", "已返回", 自动发送)
 
 
 def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 5) -> list[dict[str, Any]]:
     return [{"buttons": 按钮列表[开始:开始 + 每行最多]} for 开始 in range(0, len(按钮列表), 每行最多)]
 
 
+def 按钮分行带返回(按钮列表: list[dict[str, Any]], 返回按钮: dict[str, Any], 每行最多: int = 5) -> list[dict[str, Any]]:
+    行 = 按钮分行(按钮列表, 每行最多)
+    行.append({"buttons": [返回按钮]})
+    return 行
+
+
 def 生成帮助大类键盘(自动发送: bool = False) -> dict[str, Any]:
     按钮列表 = [生成按钮(str(序号), 大类["名称"], 自动发送=自动发送) for 序号, 大类 in enumerate(帮助大类, start=1)]
-    按钮列表.append(生成返回按钮(自动发送))
-    return {"rows": 按钮分行(按钮列表)}
+    return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送))}
 
 
 def 生成帮助小类键盘(大类序号: int, 自动发送: bool = False) -> dict[str, Any]:
     大类 = 帮助大类[大类序号]
     按钮列表 = [生成按钮(str(序号), 小类["名称"], 自动发送=自动发送) for 序号, 小类 in enumerate(大类["小类"], start=1)]
-    按钮列表.append(生成返回按钮(自动发送))
-    return {"rows": 按钮分行(按钮列表)}
+    return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送))}
 
 
 def 生成触发项列表键盘(大类序号: int, 小类序号: int, 自动发送: bool = False) -> dict[str, Any]:
     小类 = 帮助大类[大类序号]["小类"][小类序号]
     按钮列表 = [生成按钮(str(序号), 触发项["名称"], 自动发送=自动发送) for 序号, 触发项 in enumerate(小类["触发项"], start=1)]
-    按钮列表.append(生成返回按钮(自动发送))
-    return {"rows": 按钮分行(按钮列表)}
+    return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送))}
 
 
 def 生成帮助详情键盘(自动发送: bool = False) -> dict[str, Any]:
