@@ -44,11 +44,17 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 卡密同步快照状态键 = "snapshot_v1"
 卡密同步配置创建者 = "config_sync"
 付费开关状态命名空间 = "paid_access"
-付费开关命令配置 = {
+全局付费开关命令配置 = {
     "开启付费": True,
     "开启收费": True,
     "关闭付费": False,
     "关闭收费": False,
+}
+群聊付费开关命令配置 = {
+    "开启群聊付费": True,
+    "开启群聊收费": True,
+    "关闭群聊付费": False,
+    "关闭群聊收费": False,
 }
 私聊付费开关命令配置 = {
     "开启私聊付费": True,
@@ -972,7 +978,7 @@ def 附加下载免费额度提示(回复内容: str, 免费额度提示: str) -
 
 def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 not in 付费开关命令配置 and 文本 not in 私聊付费开关命令配置:
+    if 文本 not in 全局付费开关命令配置 and 文本 not in 群聊付费开关命令配置 and 文本 not in 私聊付费开关命令配置:
         return None
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用付费开关"
@@ -983,6 +989,22 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
         获取运行状态数据库配置(配置)
     except Exception:
         数据库可用 = False
+
+    if 文本 in 全局付费开关命令配置:
+        是否开启 = 全局付费开关命令配置[文本]
+        状态键 = 获取全局付费开关状态键()
+        if not 数据库可用:
+            if 是否开启:
+                return "全局收费模式开启失败：数据库未配置，请先在插件配置中填写数据库信息"
+            return "全局收费模式关闭失败：数据库未配置，请先在插件配置中填写数据库信息"
+        try:
+            写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
+        except Exception as exc:
+            logger.warning(f"全局付费开关写入数据库失败：enabled={是否开启}, error={exc}")
+            return f"全局付费开关失败：{exc}"
+        if 是否开启:
+            return "已开启全局收费模式，将按各群聊和私聊原有收费开关判断"
+        return "已关闭全局收费模式，群聊和私聊未激活用户均可无限制使用"
 
     if 文本 in 私聊付费开关命令配置:
         是否开启 = 私聊付费开关命令配置[文本]
@@ -1004,7 +1026,7 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
     if not 群号:
         return "付费开关失败：只能在群聊中使用"
 
-    是否开启 = 付费开关命令配置[文本]
+    是否开启 = 群聊付费开关命令配置[文本]
     状态键 = 获取付费开关状态键(群号)
     if not 数据库可用:
         if 是否开启:
@@ -1021,6 +1043,8 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
+    if not 全局付费模式是否开启(配置):
+        return False
     群号 = 获取群号(event)
     适配器 = ""
     try:
@@ -1049,6 +1073,21 @@ def 付费模式是否开启(event: Any, 配置: Any) -> bool:
     except Exception as exc:
         logger.warning(f"付费开关读取数据库失败：group_id={群号}, error={exc}")
         return True
+
+
+def 全局付费模式是否开启(配置: Any) -> bool:
+    try:
+        return 读取布尔运行状态值(配置, 付费开关状态命名空间, 获取全局付费开关状态键(), True)
+    except RuntimeError:
+        logger.info("全局付费开关读取跳过：数据库未配置，默认开启收费模式")
+        return True
+    except Exception as exc:
+        logger.warning(f"全局付费开关读取数据库失败：error={exc}")
+        return True
+
+
+def 获取全局付费开关状态键() -> str:
+    return "global"
 
 
 def 获取付费开关状态键(群号: str) -> str:
