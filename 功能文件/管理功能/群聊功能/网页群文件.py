@@ -11,7 +11,12 @@ v2.0.0 起统一承担群文件清理职责，删除适配器扩展接口版 群
 - 清理全部群文件：用网页接口清理「添加群聊」里添加的全部目标群
 - 添加群聊 群号 [群号...]：添加一个或多个群号到待清理列表
 - 删除群聊 群号 [群号...]：从待清理列表移除群号
-- 查看群聊：列出当前已添加的待清理目标群
+- 查看群聊：列出当前已添加的待清理目标群（含备注）
+- 删除群聊：进入删除模式，点群号按钮直接删除
+- 关闭删除群聊：退出删除模式，回到普通查看列表
+- 更改备注：列出群号按钮选择要修改备注的群
+- 更改备注 群号：进入备注等待（60 秒），下条消息作为该群备注保存
+- 取消备注：取消备注等待
 """
 from __future__ import annotations
 
@@ -75,8 +80,16 @@ COOKIE命名空间 = "web_group_file_cookie"
 查看群聊命令 = "查看群聊"
 进入删除模式命令 = "删除群聊"
 退出删除模式命令 = "关闭删除群聊"
+更改备注命令 = "更改备注"
+取消备注命令 = "取消备注"
+更改备注规则 = re.compile(r"^更改备注\s+(\d{5,12})$")
+备注等待秒数 = 60
+备注状态键前缀 = "remark:"
 按钮每行数 = 2
 按钮最大行数 = 5
+
+# 备注等待状态：key=会话标识，value=(过期时间戳, 群号)
+备注等待状态: dict[str, tuple[float, str]] = {}
 
 
 # ---------- 入口分发 ----------
@@ -90,6 +103,10 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
         return 选择回复
+
+    备注回复 = await 处理备注等待回复(event, 文本, 配置)
+    if 备注回复 is not None:
+        return 备注回复
 
     群聊管理回复 = await 处理群聊管理指令(event, 文本, 配置)
     if 群聊管理回复 is not None:
@@ -157,10 +174,10 @@ async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
     if 是QQ官方机器人(event):
         md = 格式化清理选择markdown(群号列表)
         群按钮 = [
-            生成按钮(str(序号), 群号, 自动发送=True)
+            生成按钮(str(序号), 群号, 自动发送=True, data为标签=False)
             for 序号, 群号 in enumerate(群号列表, start=1)
         ]
-        取消按钮 = 生成按钮("0", "取消", 自动发送=True)
+        取消按钮 = 生成按钮("0", "取消", 自动发送=True, data为标签=False)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
         行.append({"buttons": [取消按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
@@ -232,21 +249,38 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
         删除结果 = 删除群聊(配置, 删除匹配.group(1))
         return await 显示删除结果带刷新(event, 配置, 删除结果)
 
+    if 文本 == 更改备注命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return await 显示更改备注选群(event, 配置)
+
+    更改备注匹配 = 更改备注规则.fullmatch(文本)
+    if 更改备注匹配:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return await 进入备注等待(event, 配置, 更改备注匹配.group(1))
+
+    if 文本 == 取消备注命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用群聊管理"
+        return "当前没有进行中的备注修改"
+
     return None
 
 
 async def 显示群列表查看(event: Any, 配置: Any) -> str:
-    """查看群聊：QQ 官方发 markdown + 删除群聊按钮；普通机器人纯文本。"""
+    """查看群聊：QQ 官方发 markdown + 删除/更改备注按钮；普通机器人纯文本。"""
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
         return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
     if 是QQ官方机器人(event):
-        md = 格式化群列表markdown(群号列表, "待清理群列表")
-        删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True)
-        键盘 = {"rows": [{"buttons": [删除按钮]}]}
+        md = 格式化群列表markdown(群号列表, 配置, "待清理群列表")
+        删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True, data为标签=False)
+        更改备注按钮 = 生成按钮(更改备注命令, "更改备注", 自动发送=True, data为标签=False)
+        键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
-    return 格式化待清理群列表文本(群号列表, "发送「删除群聊」可逐个删除")
+    return 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊」可逐个删除")
 
 
 async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str) -> str:
@@ -257,18 +291,18 @@ async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str
             return 前缀文本 + "\n已没有待清理群了"
         return "当前没有待清理群，请先发送「添加群聊 群号」添加"
     if 是QQ官方机器人(event):
-        md = 格式化群列表markdown(群号列表, "点击群号删除" if not 前缀文本 else 前缀文本)
+        md = 格式化群列表markdown(群号列表, 配置, "点击群号删除" if not 前缀文本 else 前缀文本)
         群按钮 = [
             生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=True, data为标签=False)
             for 群号 in 群号列表
         ]
-        返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True)
+        返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True, data为标签=False)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
         行.append({"buttons": [返回按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
-    return 格式化待清理群列表文本(群号列表, "发送「删除群聊 群号」删除，发送「关闭删除群聊」退出")
+    return 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊 群号」删除，发送「关闭删除群聊」退出")
 
 
 async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文本: str) -> str:
@@ -279,19 +313,88 @@ async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文�
         键盘 = None
         if 群号列表:
             md += "\n\n剩余待清理群，点击删除："
-            for 序号, 群号 in enumerate(群号列表, start=1):
-                md += f"\n{序号}. {群号}"
+            for 行文本 in 格式化群列表行(群号列表, 配置):
+                md += f"\n{行文本}"
             群按钮 = [
                 生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=True, data为标签=False)
                 for 群号 in 群号列表
             ]
-            返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True)
+            返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True, data为标签=False)
             行 = 按钮分行(群按钮, 每行最多=按钮每行数)
             行.append({"buttons": [返回按钮]})
             键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     return 删除结果文本 + "\n" + 格式化待清理群列表(配置)
+
+
+async def 显示更改备注选群(event: Any, 配置: Any) -> str:
+    """更改备注选群：QQ 官方发群按钮 + 返回按钮；普通机器人纯文本。"""
+    群号列表 = 读取待清理群列表(配置)
+    if not 群号列表:
+        return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群"
+    if 是QQ官方机器人(event):
+        md = 格式化群列表markdown(群号列表, 配置, "选择要修改备注的群")
+        群按钮 = [
+            生成按钮(f"{更改备注命令} {群号}", 群号, 自动发送=True, data为标签=False)
+            for 群号 in 群号列表
+        ]
+        返回按钮 = 生成按钮(查看群聊命令, "返回上一步", 自动发送=True, data为标签=False)
+        行 = 按钮分行(群按钮, 每行最多=按钮每行数)
+        行.append({"buttons": [返回按钮]})
+        键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
+        if await 发送Markdown键盘消息(event, md, 键盘):
+            return ""
+    return 格式化待清理群列表文本(群号列表, 配置, "发送「更改备注 群号」修改备注")
+
+
+async def 进入备注等待(event: Any, 配置: Any, 群号: str) -> str:
+    """进入备注等待状态：60 秒内下条消息作为备注。"""
+    群号列表 = 读取待清理群列表(配置)
+    if 群号 not in 群号列表:
+        return f"群 {群号} 不在待清理列表中"
+    当前备注 = 读取群备注(配置, 群号)
+    备注等待状态[获取会话标识(event)] = (time.time() + 备注等待秒数, 群号)
+    提示 = f"请在 {备注等待秒数} 秒内发送群 {群号} 的新备注"
+    if 当前备注:
+        提示 += f"\n当前备注：{当前备注}"
+    提示 += "\n发送「取消备注」取消"
+    if 是QQ官方机器人(event):
+        取消按钮 = 生成按钮(取消备注命令, "取消备注", 自动发送=True, data为标签=False)
+        键盘 = {"rows": [{"buttons": [取消按钮]}]}
+        if await 发送Markdown键盘消息(event, 提示, 键盘):
+            return ""
+    return 提示
+
+
+async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str | None:
+    """命中备注等待状态时：取消备注命令取消，否则下条消息作为备注保存。"""
+    标识 = 获取会话标识(event)
+    状态 = 备注等待状态.get(标识)
+    if 状态 is None:
+        return None
+    过期时间, 群号 = 状态
+    if 过期时间 <= time.time():
+        备注等待状态.pop(标识, None)
+        return None
+
+    if 文本 == 取消备注命令:
+        备注等待状态.pop(标识, None)
+        return "已取消修改备注"
+
+    if not 是群文件清理管理员(event, 配置):
+        备注等待状态.pop(标识, None)
+        return "没有权限修改备注"
+
+    备注 = 文本.strip()
+    try:
+        写入群备注(配置, 群号, 备注)
+    except Exception as exc:
+        备注等待状态.pop(标识, None)
+        logger.warning(f"群备注写入失败：group={群号}, error={exc}")
+        return f"备注保存失败：{exc}"
+    备注等待状态.pop(标识, None)
+    return f"已保存群 {群号} 的备注：{备注}"
 
 
 def 读取待清理群列表(配置: Any) -> list[str]:
@@ -361,6 +464,11 @@ def 删除群聊(配置: Any, 参数文本: str) -> str:
     if 新列表 != 当前列表:
         try:
             写入待清理群列表(配置, 新列表)
+            for 群号 in 已删除:
+                try:
+                    写入群备注(配置, 群号, "")
+                except Exception:
+                    pass
         except Exception as exc:
             logger.warning(f"删除群聊写入失败：error={exc}")
             return f"删除群聊失败：{exc}"
@@ -378,23 +486,42 @@ def 格式化待清理群列表(配置: Any) -> str:
     当前列表 = 读取待清理群列表(配置)
     if not 当前列表:
         return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
-    return 格式化待清理群列表文本(当前列表, "发送「删除群聊 群号」可移除")
+    return 格式化待清理群列表文本(当前列表, 配置, "发送「删除群聊 群号」可移除")
 
 
-def 格式化待清理群列表文本(群号列表: list[str], 尾部提示: str) -> str:
+def 格式化待清理群列表文本(群号列表: list[str], 配置: Any, 尾部提示: str) -> str:
     行列表 = [f"当前共 {len(群号列表)} 个待清理群："]
-    for 序号, 群号 in enumerate(群号列表, start=1):
-        行列表.append(f"{序号}. {群号}")
+    for 行文本 in 格式化群列表行(群号列表, 配置):
+        行列表.append(行文本)
     if 尾部提示:
         行列表.append(f"\n{尾部提示}")
     return "\n".join(行列表)
 
 
-def 格式化群列表markdown(群号列表: list[str], 标题: str) -> str:
+def 格式化群列表markdown(群号列表: list[str], 配置: Any, 标题: str) -> str:
     行列表 = [f"**{标题}**", f"共 {len(群号列表)} 个待清理群："]
-    for 序号, 群号 in enumerate(群号列表, start=1):
-        行列表.append(f"{序号}. {群号}")
+    for 行文本 in 格式化群列表行(群号列表, 配置):
+        行列表.append(行文本)
     return "\n".join(行列表)
+
+
+def 格式化群列表行(群号列表: list[str], 配置: Any) -> list[str]:
+    结果: list[str] = []
+    for 序号, 群号 in enumerate(群号列表, start=1):
+        备注 = 读取群备注(配置, 群号)
+        if 备注:
+            结果.append(f"{序号}. {群号}（{备注}）")
+        else:
+            结果.append(f"{序号}. {群号}")
+    return 结果
+
+
+def 读取群备注(配置: Any, 群号: str) -> str:
+    return str(读取运行状态值(配置, 待清理群命名空间, f"{备注状态键前缀}{群号}", "") or "")
+
+
+def 写入群备注(配置: Any, 群号: str, 备注: str) -> None:
+    写入运行状态值(配置, 待清理群命名空间, f"{备注状态键前缀}{群号}", 备注)
 
 
 def 解析群号参数(参数文本: str) -> list[str]:
