@@ -96,15 +96,20 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         return 格式化帮助大类()
 
     帮助状态 = 获取有效帮助状态(会话键)
-    if 帮助状态 is not None:
-        if not 是群文件清理管理员(event, 配置):
+    是管理员 = 是群文件清理管理员(event, 配置)
+    if 帮助状态 is not None and re.fullmatch(r"\d{1,2}", 文本):
+        if not 是管理员:
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助"
-        if re.fullmatch(r"\d{1,2}", 文本):
-            return 处理帮助数字选择(会话键, 帮助状态, 文本)
-        目标 = 匹配任意层级名称(文本)
-        if 目标 is not None:
-            return 跳转到目标(会话键, 目标)
+        return 处理帮助数字选择(会话键, 帮助状态, 文本)
+    目标 = 匹配任意层级名称(文本)
+    if 目标 is not None:
+        if not 是管理员:
+            if 帮助状态 is not None:
+                待选择帮助会话.pop(会话键, None)
+                return "没有权限使用帮助"
+            return None
+        return 跳转到目标(会话键, 目标)
 
     return None
 
@@ -523,19 +528,24 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
-    if 帮助状态 is not None:
-        if not 是群文件清理管理员(event, 配置):
+    是管理员 = 是群文件清理管理员(event, 配置)
+    if 帮助状态 is not None and re.fullmatch(r"\d{1,2}", 文本):
+        if not 是管理员:
             待选择帮助会话.pop(会话键, None)
             return "没有权限使用帮助", None
-        if re.fullmatch(r"\d{1,2}", 文本):
-            md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
-            键盘 = 获取帮助键盘(会话键, 自动发送)
-            return md文本, 键盘
-        目标 = 匹配任意层级名称(文本)
-        if 目标 is not None:
-            md文本 = 跳转到目标MD(会话键, 目标)
-            键盘 = 获取帮助键盘(会话键, 自动发送)
-            return md文本, 键盘
+        md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 文本)
+        键盘 = 获取帮助键盘(会话键, 自动发送)
+        return md文本, 键盘
+    目标 = 匹配任意层级名称(文本)
+    if 目标 is not None:
+        if not 是管理员:
+            if 帮助状态 is not None:
+                待选择帮助会话.pop(会话键, None)
+                return "没有权限使用帮助", None
+            return None, None
+        md文本 = 跳转到目标MD(会话键, 目标)
+        键盘 = 获取帮助键盘(会话键, 自动发送)
+        return md文本, 键盘
 
     return None, None
 
