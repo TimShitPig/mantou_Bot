@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.45.3
+
+### 修复
+
+- 修复 `是QQ官方机器人` 判断失败导致帮助按钮不显示：`获取适配器名称` 新增读取 `platform_meta` 的 `name`/`id`/`platform`/`adapter_name`/`platform_name` 字段，兼容 qq_official 适配器；新增临时 `诊断适配器信息` 日志用于排查。
+
 ## v1.45.2
 
 ### 修复
