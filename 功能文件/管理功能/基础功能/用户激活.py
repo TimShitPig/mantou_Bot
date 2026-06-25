@@ -30,6 +30,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 下载提示标记 = "正在下载中请稍等"
 默认激活天数 = 30
 最长激活天数 = 3650
+卡密全局群标识 = "global"
 用户激活数据库表名 = "mantou_user_activation"
 用户激活卡密数据库表名 = "mantou_user_activation_cards"
 用户免费额度数据库表名 = "mantou_user_free_quota"
@@ -460,15 +461,14 @@ async def 处理生成卡密(event: Any, 命令文本: str, 配置: Any) -> str:
     if 数量 > 卡密生成最大数量:
         return f"卡密生成失败：一次最多生成 {卡密生成最大数量} 个"
 
-    群号 = 获取群号(event) or "private"
     创建者 = 获取发送者QQ(event)
     if not 创建者:
         return "卡密生成失败：没有获取到管理员QQ"
 
     try:
-        卡密列表 = await 生成并保存卡密列表(配置, 群号, 创建者, 数量, 默认激活天数)
+        卡密列表 = await 生成并保存卡密列表(配置, 创建者, 数量, 默认激活天数)
     except Exception as exc:
-        logger.warning(f"卡密生成失败：group_id={群号}, count={数量}, error={exc}")
+        logger.warning(f"卡密生成失败：count={数量}, error={exc}")
         return f"卡密生成失败：{exc}"
 
     return "\n".join(
@@ -526,9 +526,9 @@ async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选�
     if not 卡密候选列表:
         return None
     try:
-        卡密候选列表 = await asyncio.to_thread(筛选存在数据库卡密列表, 配置, 群号, 卡密候选列表)
+        卡密候选列表 = await asyncio.to_thread(筛选存在数据库卡密列表, 配置, 卡密候选列表)
     except Exception as exc:
-        logger.warning(f"卡密存在性检查失败：group_id={群号}, user_id={用户编号}, error={exc}")
+        logger.warning(f"卡密存在性检查失败：user_id={用户编号}, error={exc}")
         return f"卡密激活失败：{exc}"
     if not 卡密候选列表:
         return None
@@ -592,9 +592,9 @@ async def 处理查询卡密(
         卡密查询选择状态.pop(状态键, None)
 
     try:
-        卡密列表 = await 列出卡密记录(配置, 群号, 查询参数)
+        卡密列表 = await 列出卡密记录(配置, 查询参数)
     except Exception as exc:
-        logger.warning(f"卡密查询失败：group_id={群号}, query={查询参数}, error={exc}")
+        logger.warning(f"卡密查询失败：query={查询参数}, error={exc}")
         return f"卡密查询失败：{exc}"
 
     if not 卡密列表:
@@ -624,9 +624,9 @@ async def 处理复制卡密(event: Any, 命令文本: str, 配置: Any) -> str:
     天数筛选 = 安全整数(匹配.group(1), 0) if 匹配 and 匹配.group(1) else 0
 
     try:
-        卡密列表 = await 列出卡密记录(配置, 群号, 查询参数)
+        卡密列表 = await 列出卡密记录(配置, 查询参数)
     except Exception as exc:
-        logger.warning(f"卡密复制失败：group_id={群号}, query={查询参数}, days={天数筛选}, error={exc}")
+        logger.warning(f"卡密复制失败：query={查询参数}, days={天数筛选}, error={exc}")
         return f"卡密复制失败：{exc}"
     if 天数筛选 > 0:
         卡密列表 = [记录 for 记录 in 卡密列表 if 安全整数(记录.get("days"), 默认激活天数) == 天数筛选]
@@ -1571,12 +1571,12 @@ def 生成单个卡密() -> str:
             return 卡密
 
 
-async def 生成并保存卡密列表(配置: Any, 群号: str, 创建者: str, 数量: int, 天数: int) -> list[str]:
-    return await asyncio.to_thread(生成数据库卡密列表, 配置, 群号, 创建者, 数量, 天数)
+async def 生成并保存卡密列表(配置: Any, 创建者: str, 数量: int, 天数: int) -> list[str]:
+    return await asyncio.to_thread(生成数据库卡密列表, 配置, 创建者, 数量, 天数)
 
 
-async def 列出卡密记录(配置: Any, 群号: str, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(列出数据库卡密记录, 配置, 群号, 查询参数)
+async def 列出卡密记录(配置: Any, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(列出数据库卡密记录, 配置, 查询参数)
 
 
 def 规范化卡密记录(记录: dict[str, Any]) -> dict[str, Any]:
@@ -1751,7 +1751,7 @@ def 列出数据库激活用户记录(配置: Any, 群号: str) -> list[dict[str
     ]
 
 
-def 生成数据库卡密列表(配置: Any, 群号: str, 创建者: str, 数量: int, 天数: int) -> list[str]:
+def 生成数据库卡密列表(配置: Any, 创建者: str, 数量: int, 天数: int) -> list[str]:
     数据库配置 = 获取数据库配置(配置)
     当前时间 = int(time.time())
     结果: list[str] = []
@@ -1768,7 +1768,7 @@ def 生成数据库卡密列表(配置: Any, 群号: str, 创建者: str, 数量
                     (card_key, group_id, days, created_at, created_by, used_at, used_by)
                     VALUES (%s, %s, %s, %s, %s, 0, '')
                     """,
-                    (卡密, str(群号), int(天数), 当前时间, str(创建者)),
+                    (卡密, 卡密全局群标识, int(天数), 当前时间, str(创建者)),
                 )
                 if 游标.rowcount:
                     结果.append(卡密)
@@ -1779,7 +1779,7 @@ def 生成数据库卡密列表(配置: Any, 群号: str, 创建者: str, 数量
     return 结果
 
 
-def 筛选存在数据库卡密列表(配置: Any, 群号: str, 卡密列表: list[str]) -> list[str]:
+def 筛选存在数据库卡密列表(配置: Any, 卡密列表: list[str]) -> list[str]:
     卡密列表 = 去重保序([规范化卡密(卡密) for 卡密 in 卡密列表 if 规范化卡密(卡密)])
     if not 卡密列表:
         return []
@@ -1792,9 +1792,9 @@ def 筛选存在数据库卡密列表(配置: Any, 群号: str, 卡密列表: li
                 f"""
                 SELECT card_key
                 FROM `{数据库配置['card_table']}`
-                WHERE group_id=%s AND card_key IN ({占位符})
+                WHERE card_key IN ({占位符})
                 """,
-                tuple([str(群号), *卡密列表]),
+                tuple(卡密列表),
             )
             记录列表 = 游标.fetchall()
     存在集合 = {str(记录[0] or "").strip() for 记录 in 记录列表 if str(记录[0] or "").strip()}
@@ -1812,11 +1812,11 @@ def 使用数据库卡密激活(配置: Any, 群号: str, 用户编号: str, 卡
                 f"""
                 SELECT days, used_at, used_by
                 FROM `{数据库配置['card_table']}`
-                WHERE card_key=%s AND group_id=%s
+                WHERE card_key=%s
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (卡密, str(群号)),
+                (卡密,),
             )
             卡密记录 = 游标.fetchone()
             if not 卡密记录:
@@ -1861,18 +1861,18 @@ def 使用数据库卡密激活(配置: Any, 群号: str, 用户编号: str, 卡
                 f"""
                 UPDATE `{数据库配置['card_table']}`
                 SET used_at=%s, used_by=%s
-                WHERE card_key=%s AND group_id=%s
+                WHERE card_key=%s
                 """,
-                (当前时间, str(用户编号), 卡密, str(群号)),
+                (当前时间, str(用户编号), 卡密),
             )
         连接.commit()
     return {"status": "used", "days": 天数, "expires_at": 到期时间}
 
 
-def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
+def 列出数据库卡密记录(配置: Any, 查询参数: dict[str, Any]) -> list[dict[str, Any]]:
     数据库配置 = 获取数据库配置(配置)
-    条件列表 = ["group_id=%s"]
-    参数列表: list[Any] = [str(群号)]
+    条件列表: list[str] = []
+    参数列表: list[Any] = []
     状态 = 查询参数.get("status")
     指定卡密 = str(查询参数.get("card_key") or "").strip()
     用户列表 = [str(用户).strip() for 用户 in 查询参数.get("user_ids", []) if str(用户).strip()]
@@ -1891,17 +1891,28 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
     with 打开数据库连接(数据库配置) as 连接:
         确保卡密数据库表(连接, 数据库配置["card_table"])
         with 连接.cursor() as 游标:
-            游标.execute(
-                f"""
-                SELECT card_key, group_id, days, created_at, created_by, used_at, used_by
-                FROM `{数据库配置['card_table']}`
-                WHERE {' AND '.join(条件列表)}
-                ORDER BY CASE WHEN used_at = 0 THEN 1 ELSE 0 END ASC,
-                         IF(used_at = 0, created_at, used_at) DESC,
-                         card_key ASC
-                """,
-                tuple(参数列表),
-            )
+            if 条件列表:
+                游标.execute(
+                    f"""
+                    SELECT card_key, group_id, days, created_at, created_by, used_at, used_by
+                    FROM `{数据库配置['card_table']}`
+                    WHERE {' AND '.join(条件列表)}
+                    ORDER BY CASE WHEN used_at = 0 THEN 1 ELSE 0 END ASC,
+                             IF(used_at = 0, created_at, used_at) DESC,
+                             card_key ASC
+                    """,
+                    tuple(参数列表),
+                )
+            else:
+                游标.execute(
+                    f"""
+                    SELECT card_key, group_id, days, created_at, created_by, used_at, used_by
+                    FROM `{数据库配置['card_table']}`
+                    ORDER BY CASE WHEN used_at = 0 THEN 1 ELSE 0 END ASC,
+                             IF(used_at = 0, created_at, used_at) DESC,
+                             card_key ASC
+                    """
+                )
             记录列表 = 游标.fetchall()
     return [
         规范化卡密记录(
@@ -1919,8 +1930,8 @@ def 列出数据库卡密记录(配置: Any, 群号: str, 查询参数: dict[str
     ]
 
 
-def 获取卡密天数列表(配置: Any, 群号: str) -> list[int]:
-    """同步查询数据库获取当前群所有卡密的不同天数，从低到高排序。"""
+def 获取卡密天数列表(配置: Any) -> list[int]:
+    """同步查询数据库获取所有卡密的不同天数，从低到高排序。"""
     数据库配置 = 获取数据库配置(配置)
     try:
         with 打开数据库连接(数据库配置) as 连接:
@@ -1930,14 +1941,12 @@ def 获取卡密天数列表(配置: Any, 群号: str) -> list[int]:
                     f"""
                     SELECT DISTINCT days
                     FROM `{数据库配置['card_table']}`
-                    WHERE group_id=%s
                     ORDER BY days ASC
-                    """,
-                    (str(群号),),
+                    """
                 )
                 行列表 = 游标.fetchall()
     except Exception as 异常:
-        logger.warning(f"获取卡密天数列表失败：group_id={群号}, error={异常}")
+        logger.warning(f"获取卡密天数列表失败：error={异常}")
         return []
     return [安全整数(行[0], 0) for 行 in 行列表 if 安全整数(行[0], 0) > 0]
 
@@ -2030,7 +2039,7 @@ def 准备配置卡密写入记录(记录: dict[str, Any], 当前时间: int) ->
     已使用 = bool(str(规范记录.get("used_by") or "").strip() or 安全整数(规范记录.get("used_at"), 0) > 0)
     return {
         "card_key": str(规范记录.get("card_key") or "").strip(),
-        "group_id": str(规范记录.get("group_id") or "").strip() or "private",
+        "group_id": 卡密全局群标识,
         "days": 安全整数(规范记录.get("days"), 默认激活天数),
         "created_at": 安全整数(规范记录.get("created_at"), 0) or 当前时间,
         "created_by": str(规范记录.get("created_by") or "").strip() or 卡密同步配置创建者,
@@ -2069,14 +2078,13 @@ def 解析配置卡密记录(项目: Any, 默认状态: str) -> dict[str, Any]:
 
     状态文本 = "#".join(字段列表).lower()
     已使用 = 默认状态 == "used" or "已使用" in 状态文本 or "used" in 状态文本
-    群号 = 字段列表[1] if len(字段列表) > 1 and 字段列表[1] else "private"
     用户 = ""
     if 已使用 and len(字段列表) > 2 and not 是配置卡密天数字段(字段列表[2]) and "使用" not in 字段列表[2]:
         用户 = 字段列表[2].strip()
     天数 = 提取配置卡密天数(字段列表)
     return {
         "card_key": 卡密,
-        "group_id": 群号,
+        "group_id": 卡密全局群标识,
         "days": 天数,
         "created_at": 0,
         "created_by": 卡密同步配置创建者,
