@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.45.4
+
+### 修复
+
+- 修复帮助功能日志不可见：原使用 `logging.getLogger` 不被 AstrBot 日志系统显示，改为 `from astrbot.api import logger`，现在能看到 `[帮助MD键盘]` 发送成功/失败的真实原因。
+
 ## v1.45.3
 
 ### 修复
