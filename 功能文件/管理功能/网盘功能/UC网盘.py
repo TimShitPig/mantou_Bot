@@ -155,7 +155,7 @@ class UC网盘客户端:
                 await self.删除文件(文件ID)
                 删除数量 += 1
         if 删除数量:
-            logger.info(f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
+            logger.debug(f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
         return 删除数量
 
     async def 查找同名普通文件ID列表(self, 文件名: str, 父目录ID: str = "0") -> list[str]:
