@@ -7,7 +7,7 @@ from typing import Any
 
 from astrbot.api import logger
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
+from 功能文件.管理功能.群聊功能.群聊管理 import 读取待清理群列表
 
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
@@ -25,7 +25,7 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         return "没有权限使用群文件清理"
 
     if 命令文本 in 清理全部群文件命令:
-        return await 处理全部群文件清理(event)
+        return await 处理全部群文件清理(event, 配置)
 
     群号 = 获取群号(event)
     if not 群号:
@@ -59,7 +59,7 @@ async def 处理群文件清理(event: Any, 命令文本: str, 配置: Any) -> s
         return f"群文件清理失败：{exc}"
 
 
-async def 处理全部群文件清理(event: Any) -> str:
+async def 处理全部群文件清理(event: Any, 配置: Any) -> str:
     bot = getattr(event, "bot", None)
     if bot is None:
         记录群文件清理事件诊断(event, None, "", "缺少 bot 实例")
@@ -69,11 +69,9 @@ async def 处理全部群文件清理(event: Any) -> str:
         记录群文件清理事件诊断(event, bot, "", "缺少 api.call_action")
         return "全部群文件清理失败：当前适配器没有群文件接口，已输出群文件清理事件诊断"
 
-    try:
-        群号列表 = await 获取机器人所在群号列表(bot)
-    except Exception as exc:
-        logger.warning(f"全部群文件清理获取群列表失败：error={exc}")
-        return f"全部群文件清理失败：{exc}"
+    群号列表 = 读取待清理群列表(配置)
+    if not 群号列表:
+        return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群后再使用清理全部群文件"
 
     await 发送清理开始提示(event, "正在清理群文件（全部）")
 
