@@ -7,6 +7,13 @@ import sys
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
+try:
+    from astrbot.api import logger
+except Exception:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
 插件目录 = Path(__file__).resolve().parent
 if str(插件目录) not in sys.path:
     sys.path.insert(0, str(插件目录))
@@ -43,7 +50,7 @@ UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "1.45.20"
+插件版本 = "1.45.21"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -53,6 +60,7 @@ class MyPlugin(Star):
         self.config = config
 
     async def initialize(self):
+        logger.info(f"Plugin 馒头bot (v{插件版本}) 已加载，源码路径={__file__}")
         await self.同步卡密配置视图()
 
     async def 同步卡密配置视图(self):
