@@ -401,12 +401,28 @@ def 生成帮助大类键盘(自动发送: bool = False) -> dict[str, Any]:
 
 
 def 生成大类触发项键盘(大类序号: int, 自动发送: bool = False) -> dict[str, Any]:
-    触发项列表 = 枚举大类触发项(大类序号)
-    按钮列表 = [
-        生成按钮(str(序号), 触发项["名称"], 自动发送=自动发送, data为标签=False)
-        for 序号, (_, _, 触发项) in enumerate(触发项列表, start=1)
-    ]
-    return {"rows": 按钮分行带返回(按钮列表, 生成返回按钮(自动发送))}
+    大类 = 帮助大类[大类序号]
+    行列表: list[dict[str, Any]] = []
+    全局序号 = 0
+    for 小类序号, 小类 in enumerate(大类["小类"]):
+        标题按钮 = {
+            "id": f"_title_{大类序号}_{小类序号}",
+            "render_data": {"label": f"【{小类['名称']}】", "visited_label": f"【{小类['名称']}】"},
+            "action": {
+                "type": 2,
+                "permission": {"type": 2},
+                "data": f"帮助 {大类序号 + 1}",
+                "unsupport_tips": "请发送对应文字",
+            },
+        }
+        行列表.append({"buttons": [标题按钮]})
+        小类按钮列表: list[dict[str, Any]] = []
+        for 触发项 in 小类["触发项"]:
+            全局序号 += 1
+            小类按钮列表.append(生成按钮(str(全局序号), 触发项["名称"], 自动发送=自动发送, data为标签=False))
+        行列表.extend(按钮分行(小类按钮列表, 每行最多=5))
+    行列表.append({"buttons": [生成返回按钮(自动发送)]})
+    return {"rows": 行列表}
 
 
 def 生成帮助详情键盘(触发项: dict[str, Any] | None = None, 自动发送: bool = False) -> dict[str, Any]:
