@@ -109,7 +109,7 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群文件清理"
-        return 列出待清理群供选择(event, 配置)
+        return await 列出待清理群供选择(event, 配置)
 
     if 文本 in 清理全部群文件命令:
         if not 是群文件清理管理员(event, 配置):
@@ -148,16 +148,35 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
     return f"已选择群 {目标群号}，开始清理\n" + await 清空指定群文件(event, 目标群号, 配置)
 
 
-def 列出待清理群供选择(event: Any, 配置: Any) -> str:
+async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
         return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群"
 
     写入清理等待状态(event, 群号列表)
+    if 是QQ官方机器人(event):
+        md = 格式化清理选择markdown(群号列表)
+        群按钮 = [
+            生成按钮(str(序号), 群号, 自动发送=True)
+            for 序号, 群号 in enumerate(群号列表, start=1)
+        ]
+        取消按钮 = 生成按钮("0", "取消", 自动发送=True)
+        行 = 按钮分行(群按钮, 每行最多=按钮每行数)
+        行.append({"buttons": [取消按钮]})
+        键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
+        if await 发送Markdown键盘消息(event, md, 键盘):
+            return ""
     行列表 = [f"请发送编号清理对应群（{清理选择等待秒数} 秒内有效）："]
     for 序号, 群号 in enumerate(群号列表, start=1):
         行列表.append(f"{序号}. {群号}")
     行列表.append("发送 0 取消")
+    return "\n".join(行列表)
+
+
+def 格式化清理选择markdown(群号列表: list[str]) -> str:
+    行列表 = [f"**选择要清理的群**", f"点击群号按钮清理对应群（{清理选择等待秒数} 秒内有效）："]
+    for 序号, 群号 in enumerate(群号列表, start=1):
+        行列表.append(f"{序号}. {群号}")
     return "\n".join(行列表)
 
 
@@ -223,8 +242,7 @@ async def 显示群列表查看(event: Any, 配置: Any) -> str:
         return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
     if 是QQ官方机器人(event):
         md = 格式化群列表markdown(群号列表, "待清理群列表")
-        自动发送 = not 获取群号(event)
-        删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=自动发送)
+        删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True)
         键盘 = {"rows": [{"buttons": [删除按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
@@ -232,7 +250,7 @@ async def 显示群列表查看(event: Any, 配置: Any) -> str:
 
 
 async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str) -> str:
-    """删除模式：QQ 官方发群按钮 + 关闭按钮；普通机器人纯文本编号列表。"""
+    """删除模式：QQ 官方发群按钮 + 返回按钮；普通机器人纯文本编号列表。"""
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
         if 前缀文本:
@@ -240,14 +258,13 @@ async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str
         return "当前没有待清理群，请先发送「添加群聊 群号」添加"
     if 是QQ官方机器人(event):
         md = 格式化群列表markdown(群号列表, "点击群号删除" if not 前缀文本 else 前缀文本)
-        自动发送 = not 获取群号(event)
         群按钮 = [
-            生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=自动发送, data为标签=False)
+            生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=True, data为标签=False)
             for 群号 in 群号列表
         ]
-        关闭按钮 = 生成按钮(退出删除模式命令, "关闭删除群聊", 自动发送=自动发送)
+        返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
-        行.append({"buttons": [关闭按钮]})
+        行.append({"buttons": [返回按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
@@ -264,14 +281,13 @@ async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文�
             md += "\n\n剩余待清理群，点击删除："
             for 序号, 群号 in enumerate(群号列表, start=1):
                 md += f"\n{序号}. {群号}"
-            自动发送 = not 获取群号(event)
             群按钮 = [
-                生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=自动发送, data为标签=False)
+                生成按钮(f"{进入删除模式命令} {群号}", 群号, 自动发送=True, data为标签=False)
                 for 群号 in 群号列表
             ]
-            关闭按钮 = 生成按钮(退出删除模式命令, "关闭删除群聊", 自动发送=自动发送)
+            返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True)
             行 = 按钮分行(群按钮, 每行最多=按钮每行数)
-            行.append({"buttons": [关闭按钮]})
+            行.append({"buttons": [返回按钮]})
             键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
