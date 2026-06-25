@@ -16,6 +16,11 @@ try:
 except Exception:
     AstrMessageEvent = Any
 
+try:
+    from astrbot.api import message_components as Comp
+except Exception:
+    Comp = None
+
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
@@ -32,6 +37,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 )
 闪传消息规则 = re.compile(r"QQ闪传|该消息类型暂不支持查看|\[闪传(?:消息)?\]", re.IGNORECASE)
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
+用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
 数字撤回踢出阈值 = 3
 最近消息撤回数量 = 8
 最近消息撤回拉取数量 = 100
@@ -298,6 +304,13 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
         for 子值 in 消息.values():
             结果.extend(从消息段提取At用户列表(子值))
         return 结果
+    if Comp is not None:
+        try:
+            if isinstance(消息, Comp.At):
+                用户 = 规范化用户编号(getattr(消息, "qq", ""))
+                return [用户] if 用户 else []
+        except Exception:
+            pass
     if 是否At类型值(读取字段(消息, "type")):
         用户 = 规范化用户编号(
             读取字段(消息, "qq")
@@ -390,7 +403,7 @@ def 规范化用户编号(值: Any) -> str:
     文本 = str(值 or "").strip()
     if not 文本 or 文本.lower() in {"all", "qq_official"}:
         return ""
-    return 文本 if 数字ID规则.fullmatch(文本) else ""
+    return 文本 if 用户编号规则.fullmatch(文本) else ""
 
 
 async def 处理数字撤回(event: AstrMessageEvent) -> bool:
