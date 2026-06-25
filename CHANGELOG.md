@@ -1,5 +1,11 @@
 ﻿# 更新日志
 
+## v1.45.5
+
+### 修复
+
+- 修复 qq_official 适配器 `get_group` 返回协程对象导致 `group_openid` 为 `<coroutine object>` 的问题：`获取群号` 和 `获取用户openid` 跳过协程对象；新增 `获取群openid异步` 和 `获取用户openid异步` 正确 await 协程；移除临时诊断日志。
+
 ## v1.45.4
 
 ### 修复
