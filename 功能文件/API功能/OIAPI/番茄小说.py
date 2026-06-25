@@ -45,6 +45,7 @@ OIAPI地址 = 'https://oiapi.net/api/FqRead'
 文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
 API选项 = {'1': 'OIAPI', '2': '析API', '3': '崩溃API'}
+API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API'}
 待选择API会话: dict[str, float] = {}
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
@@ -92,6 +93,16 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             return f'番茄小说API切换失败：{异常}'
         待选择API会话.pop(会话键, None)
         return f'番茄小说API已切换为：{接口名称}'
+    直接切换 = API直接切换.get(文本.lower())
+    if 直接切换 is not None:
+        if not 是群文件清理管理员(事件, 配置):
+            return '没有权限使用番茄小说API切换'
+        try:
+            写入当前番茄小说接口(配置, 直接切换)
+        except Exception as 异常:
+            logger.warning(f'番茄小说API切换写入数据库失败：api={直接切换}, error={异常}')
+            return f'番茄小说API切换失败：{异常}'
+        return f'番茄小说API已切换为：{直接切换}'
     return None
 
 
