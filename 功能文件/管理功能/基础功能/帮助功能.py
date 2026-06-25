@@ -498,7 +498,7 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         "msg_id": 消息ID,
     }
     if 键盘 is not None:
-        消息体["keyboard"] = 键盘
+        消息体["keyboard"] = {"content": 键盘}
 
     群号 = 获取群号(event)
     if 群号:
