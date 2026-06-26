@@ -138,8 +138,10 @@ def 需要优先处理返回(event: Any) -> bool:
 
 
 async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
-    """删除模式下收到「返回上一步」：退出删除模式并回到查看群聊列表。"""
-    if 文本 != 返回上一步命令 or not 处于删除模式(event):
+    """删除模式下收到「返回上一步」或「关闭删除群聊」：退出删除模式并回到查看群聊列表。"""
+    if not 处于删除模式(event):
+        return None
+    if 文本 != 返回上一步命令 and 文本 != 退出删除模式命令:
         return None
     退出删除模式(event)
     if not 是群文件清理管理员(event, 配置):
