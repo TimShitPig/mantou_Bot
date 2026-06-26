@@ -652,6 +652,12 @@ def 获取群号(event: Any) -> str:
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             值 = 方法()
+            # AstrMessageEvent 的 get_group 等可能是 async 方法，同步调用返回协程对象
+            # 协程对象 str() 会变成 <coroutine object ... at 0x...>，污染会话标识
+            if asyncio.iscoroutine(值):
+                # 避免未 await 的协程被 GC 时打印 warning，主动 close
+                值.close()
+                continue
             if 值:
                 return str(值)
 
