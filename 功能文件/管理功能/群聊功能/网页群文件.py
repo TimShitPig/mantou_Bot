@@ -100,6 +100,14 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
     if not 文本:
         return None
 
+    try:
+        return await _处理网页群文件清理内部(event, 文本, 配置)
+    except Exception as exc:
+        logger.warning(f"[网页群文件诊断] 命令={文本!r} 异常={type(exc).__name__}: {exc}", exc_info=True)
+        return f"网页群文件处理异常：{type(exc).__name__}: {exc}"
+
+
+async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
         return 选择回复
