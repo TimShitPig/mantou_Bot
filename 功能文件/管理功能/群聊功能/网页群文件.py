@@ -249,7 +249,7 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
     if 添加匹配:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群聊管理"
-        return 添加群聊(配置, 添加匹配.group(1))
+        return await 添加群聊(event, 配置, 添加匹配.group(1))
 
     删除匹配 = 删除群聊规则.fullmatch(文本)
     if 删除匹配:
@@ -439,7 +439,7 @@ def 写入待清理群列表(配置: Any, 群号列表: list[str]) -> None:
     写入运行状态值(配置, 待清理群命名空间, 待清理群状态键, json.dumps(群号列表, ensure_ascii=False))
 
 
-def 添加群聊(配置: Any, 参数文本: str) -> str:
+async def 添加群聊(event: Any, 配置: Any, 参数文本: str) -> str:
     解析群号 = 解析群号参数(参数文本)
     if not 解析群号:
         return "请提供要添加的群号，例如：添加群聊 123456789"
@@ -463,7 +463,7 @@ def 添加群聊(配置: Any, 参数文本: str) -> str:
     if 已存在:
         行列表.append("已存在跳过：" + "、".join(已存在))
     行列表.append(f"当前共 {len(当前列表)} 个待清理群")
-    return "\n".join(行列表)
+    return await 显示群列表查看(event, 配置, 前缀文本="\n".join(行列表))
 
 
 def 删除群聊(配置: Any, 参数文本: str) -> str:
