@@ -280,7 +280,7 @@ async def 显示群列表查看(event: Any, 配置: Any, 前缀文本: str = "")
         md = 格式化群列表markdown(群号列表, 配置, 标题)
         删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True, data为标签=False)
         更改备注按钮 = 生成按钮(更改备注命令, "更改备注", 自动发送=True, data为标签=False)
-        返回按钮 = 生成按钮("帮助", "返回上一步", 自动发送=True, data为标签=False)
+        返回按钮 = 生成按钮("返回上一步", "返回上一步", 自动发送=True, data为标签=True)
         键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}, {"buttons": [返回按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
