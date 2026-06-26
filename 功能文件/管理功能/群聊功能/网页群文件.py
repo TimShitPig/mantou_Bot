@@ -90,12 +90,16 @@ COOKIE命名空间 = "web_group_file_cookie"
 按钮每行数 = 2
 按钮最大行数 = 5
 删除模式等待秒数 = 300
+查看群聊等待秒数 = 300
 
 # 备注等待状态：key=会话标识，value=(过期时间戳, 群号)
 备注等待状态: dict[str, tuple[float, str]] = {}
 
 # 删除模式状态：key=会话标识，value=过期时间戳；进入删除模式后按钮发「返回上一步」退出
 删除模式状态: dict[str, float] = {}
+
+# 查看群聊状态：key=会话标识，value=过期时间戳；查看群聊时按钮发「返回上一步」回到群文件清理详情页
+查看群聊状态: dict[str, float] = {}
 
 
 # ---------- 删除模式状态管理 ----------
@@ -133,8 +137,39 @@ def 处于清理等待状态(event: Any) -> bool:
 
 
 def 需要优先处理返回(event: Any) -> bool:
-    """删除模式或清理等待状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
-    return 处于删除模式(event) or 处于清理等待状态(event)
+    """删除模式、清理等待或查看群聊状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
+    return 处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event)
+
+
+def 进入查看群聊(event: Any) -> None:
+    查看群聊状态[获取会话标识(event)] = time.time() + 查看群聊等待秒数
+
+
+def 退出查看群聊(event: Any) -> None:
+    查看群聊状态.pop(获取会话标识(event), None)
+
+
+def 处于查看群聊状态(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    过期时间 = 查看群聊状态.get(标识)
+    if 过期时间 is None:
+        return False
+    if 过期时间 <= time.time():
+        查看群聊状态.pop(标识, None)
+        return False
+    return True
+
+
+async def 处理查看群聊返回(event: Any, 文本: str, 配置: Any) -> str | None:
+    """查看群聊状态下收到「返回上一步」：退出查看群聊状态，返回提示（由帮助功能继续处理回退）。
+
+    返回 None 表示交回主流程（帮助功能处理回退）；返回字符串表示已处理。
+    """
+    if 文本 != 返回上一步命令 or not 处于查看群聊状态(event):
+        return None
+    退出查看群聊(event)
+    # 返回 None，让帮助功能按状态机回退一层
+    return None
 
 
 async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
@@ -166,6 +201,10 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
     logger.info(f"[网页群文件诊断] 收到命令 文本={文本!r} 是管理员={是群文件清理管理员(event, 配置)}")
+    查看返回 = await 处理查看群聊返回(event, 文本, 配置)
+    if 查看返回 is not None:
+        return 查看返回
+
     删除模式回复 = await 处理删除模式返回(event, 文本, 配置)
     if 删除模式回复 is not None:
         return 删除模式回复
@@ -387,12 +426,13 @@ async def 显示群列表查看(event: Any, 配置: Any, 前缀文本: str = "")
         if 前缀文本:
             return 前缀文本 + "\n当前没有添加待清理群，请发送「添加群聊 群号」添加"
         return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
+    进入查看群聊(event)
     if 是QQ官方机器人(event):
         标题 = (前缀文本 + "\n\n" if 前缀文本 else "") + "待清理群列表"
         md = 格式化群列表markdown(群号列表, 配置, 标题)
         删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True, data为标签=False)
         更改备注按钮 = 生成按钮(更改备注命令, "更改备注", 自动发送=True, data为标签=False)
-        返回按钮 = 生成按钮(群文件清理触发项名称, "返回上一步", 自动发送=True, data为标签=False)
+        返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
         键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}, {"buttons": [返回按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
