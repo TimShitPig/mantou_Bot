@@ -211,24 +211,40 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
     过期时间, 群号列表 = 状态
     if 过期时间 <= time.time():
         清理等待状态.pop(标识, None)
+        # 状态过期：数字或返回上一步返回提示，避免落到帮助菜单误进其他功能（如全员禁言详情）
+        if 文本.isdigit() or 文本 == 返回上一步命令:
+            return "清理群文件选择已过期，请重新发送「清理群文件」"
         return None
+
+    logger.info(f"[网页群文件诊断] 清理选择回复 文本={文本!r} 标识={标识!r} 群号列表={群号列表}")
 
     if 文本 == "0" or 文本 == 返回上一步命令:
         清理等待状态.pop(标识, None)
         return "已取消清理群文件选择"
 
-    if not 文本.isdigit():
-        return None
     if not 是群文件清理管理员(event, 配置):
         清理等待状态.pop(标识, None)
         return "没有权限使用群文件清理"
 
-    序号 = int(文本)
-    if 序号 < 1 or 序号 > len(群号列表):
-        return f"编号无效，请发送 1-{len(群号列表)} 的数字，或发送 0 取消"
+    目标群号 = None
+    # 先匹配编号（1,2,3...）
+    if 文本.isdigit():
+        序号 = int(文本)
+        if 1 <= 序号 <= len(群号列表):
+            目标群号 = 群号列表[序号 - 1]
+    # 再匹配群号或备注（按钮可能发送的是按钮文字而非编号）
+    if 目标群号 is None:
+        for 群号 in 群号列表:
+            if 文本 == 群号 or 文本 == 读取群备注(配置, 群号):
+                目标群号 = 群号
+                break
+
+    if 目标群号 is None:
+        if 文本.isdigit():
+            return f"编号无效，请发送 1-{len(群号列表)} 的数字，或发送 0 取消"
+        return None
 
     清理等待状态.pop(标识, None)
-    目标群号 = 群号列表[序号 - 1]
     return f"已选择群 {目标群号}，开始清理\n" + await 清空指定群文件(event, 目标群号, 配置)
 
 
