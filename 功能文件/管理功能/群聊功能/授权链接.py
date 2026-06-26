@@ -6,10 +6,15 @@ import urllib.parse
 from typing import Any
 
 from astrbot.api import logger
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
+from 功能文件.管理功能.基础功能.帮助功能 import (
+    发送Markdown键盘消息,
+    生成返回按钮,
+)
 
 
 授权命令 = {"授权"}
+授权链接触发项名称 = "授权链接"
 页面名 = "ai_group_service_agreement_pop_page"
 跳转地址 = "https://club.vip.qq.com/transfer?open_kuikly_info="
 取UID动作名列表 = (
@@ -40,24 +45,70 @@ async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = Non
     手动群号, 手动机器人QQ = 授权参数
     群号 = 手动群号 or await 获取群号(event)
     if not 群号:
-        return "授权链接生成失败：没有获取到数字QQ群号，请在目标群里发送“授权”"
+        提示 = "授权链接生成失败：没有获取到数字QQ群号，请在目标群里发送\u201c授权\u201d"
+        if 是QQ官方机器人(event):
+            return await 发送授权MD消息(event, 提示)
+        return 提示
 
     机器人QQ = 手动机器人QQ or await 获取机器人QQ(event, 上下文)
     if not 机器人QQ:
-        return "授权链接生成失败：没有获取到机器人QQ号，当前适配器没有返回 botUin"
+        提示 = "授权链接生成失败：没有获取到机器人QQ号，当前适配器没有返回 botUin"
+        if 是QQ官方机器人(event):
+            return await 发送授权MD消息(event, 提示)
+        return 提示
 
     机器人UID = await 获取机器人UID(event, 机器人QQ)
     if not 机器人UID:
-        return f"授权链接生成失败：没有获取到机器人UID，当前适配器不支持 getUidFromUin({机器人QQ})"
+        提示 = f"授权链接生成失败：没有获取到机器人UID，当前适配器不支持 getUidFromUin({机器人QQ})"
+        if 是QQ官方机器人(event):
+            return await 发送授权MD消息(event, 提示)
+        return 提示
 
     链接 = 生成授权链接(群号, 机器人QQ, 机器人UID)
     logger.info(f"授权链接已生成：groupCode={群号}, botUin={机器人QQ}, botUid={机器人UID}")
-    return "\n".join([
+    纯文本 = "\n".join([
         "授权链接：",
         链接,
         "",
         "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。",
     ])
+    if 是QQ官方机器人(event):
+        md文本 = "\n".join([
+            "## 🔗 授权群聊\n",
+            f"**群号：** {群号}",
+            f"**机器人QQ：** {机器人QQ}",
+            "",
+            "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上点击下方按钮授权，iOS 暂不支持。",
+        ])
+        授权按钮 = 生成链接按钮("🌐 点击授权", 链接, "已打开授权页")
+        返回按钮 = 生成返回按钮(自动发送=True)
+        键盘 = {"rows": [{"buttons": [授权按钮]}, {"buttons": [返回按钮]}]}
+        if await 发送Markdown键盘消息(event, md文本, 键盘):
+            return ""
+    return 纯文本
+
+
+async def 发送授权MD消息(event: Any, 文本: str) -> str:
+    """发送带返回按钮的MD消息，用于错误提示。"""
+    md文本 = f"## 🔗 授权群聊\n\n{文本}"
+    返回按钮 = 生成返回按钮(自动发送=True)
+    键盘 = {"rows": [{"buttons": [返回按钮]}]}
+    if await 发送Markdown键盘消息(event, md文本, 键盘):
+        return ""
+    return 文本
+
+
+def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = "") -> dict[str, Any]:
+    return {
+        "id": f"link_{跳转链接}",
+        "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
+        "action": {
+            "type": 0,
+            "permission": {"type": 2},
+            "data": 跳转链接,
+            "unsupport_tips": "请手动复制链接到浏览器打开",
+        },
+    }
 
 
 def 提取授权命令参数(命令文本: str) -> tuple[str, str] | None:

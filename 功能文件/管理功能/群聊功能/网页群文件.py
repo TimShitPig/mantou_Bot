@@ -125,6 +125,31 @@ COOKIE命名空间 = "web_group_file_cookie"
 # 查看群聊状态：key=会话标识，value=过期时间戳；查看群聊时按钮发「返回上一步」回到群文件清理详情页
 查看群聊状态: dict[str, float] = {}
 
+# 登录页面状态：key=会话标识，value=过期时间戳；登录群文件页面发「返回上一步」回到群文件清理详情页
+登录页面状态: dict[str, float] = {}
+
+
+# ---------- 登录页面状态管理 ----------
+
+
+def 进入登录页面(event: Any) -> None:
+    登录页面状态[获取会话标识(event)] = time.time() + 查看群聊等待秒数
+
+
+def 退出登录页面(event: Any) -> None:
+    登录页面状态.pop(获取会话标识(event), None)
+
+
+def 处于登录页面(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    过期时间 = 登录页面状态.get(标识)
+    if 过期时间 is None:
+        return False
+    if 过期时间 <= time.time():
+        登录页面状态.pop(标识, None)
+        return False
+    return True
+
 
 # ---------- 删除模式状态管理 ----------
 
@@ -161,8 +186,8 @@ def 处于清理等待状态(event: Any) -> bool:
 
 
 def 需要优先处理返回(event: Any) -> bool:
-    """删除模式、清理等待或查看群聊状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
-    return 处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event)
+    """删除模式、清理等待、查看群聊、登录页面状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
+    return 处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event) or 处于登录页面(event) or bool(备注等待状态.get(获取会话标识(event)))
 
 
 def 进入查看群聊(event: Any) -> None:
@@ -200,10 +225,10 @@ async def 处理查看群聊返回(event: Any, 文本: str, 配置: Any) -> str 
 
 async def 显示群文件清理详情页(event: Any, 配置: Any) -> str:
     """跳转回「群文件清理」触发项详情页（帮助菜单层级），避免越级。"""
+    退出登录页面(event)
     会话键 = 获取帮助会话键(event)
     目标 = 匹配任意层级名称(群文件清理触发项名称)
     if 目标 is None:
-        # 找不到触发项时回帮助大类兜底
         设置帮助状态(会话键, "大类")
         md = 格式化帮助大类MD()
     else:
@@ -214,6 +239,16 @@ async def 显示群文件清理详情页(event: Any, 配置: Any) -> str:
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     return md
+
+
+async def 处理登录页面返回(event: Any, 文本: str, 配置: Any) -> str | None:
+    """登录页面下收到「返回上一步」：退出登录页面状态并回到群文件清理详情页。"""
+    if 文本 != 返回上一步命令 or not 处于登录页面(event):
+        return None
+    退出登录页面(event)
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用群聊管理"
+    return await 显示群文件清理详情页(event, 配置)
 
 
 async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
@@ -245,9 +280,17 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
     logger.info(f"[网页群文件诊断] 收到命令 文本={文本!r} 是管理员={是群文件清理管理员(event, 配置)}")
+    备注回复 = await 处理备注等待回复(event, 文本, 配置)
+    if 备注回复 is not None:
+        return 备注回复
+
     查看返回 = await 处理查看群聊返回(event, 文本, 配置)
     if 查看返回 is not None:
         return 查看返回
+
+    登录返回 = await 处理登录页面返回(event, 文本, 配置)
+    if 登录返回 is not None:
+        return 登录返回
 
     删除模式回复 = await 处理删除模式返回(event, 文本, 配置)
     if 删除模式回复 is not None:
@@ -256,10 +299,6 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
         return 选择回复
-
-    备注回复 = await 处理备注等待回复(event, 文本, 配置)
-    if 备注回复 is not None:
-        return 备注回复
 
     群聊管理回复 = await 处理群聊管理指令(event, 文本, 配置)
     if 群聊管理回复 is not None:
@@ -411,6 +450,7 @@ async def 生成登录提示(event: Any) -> str:
     )
     if not 是QQ官方机器人(event):
         return 纯文本
+    进入登录页面(event)
     md文本 = (
         "## 🔑 登录群文件\n\n"
         "点击下方按钮在浏览器中打开 QQ 登录页面，\n"
@@ -422,6 +462,7 @@ async def 生成登录提示(event: Any) -> str:
     键盘 = {"rows": [{"buttons": [登录按钮]}, {"buttons": [返回按钮]}]}
     if await 发送Markdown键盘消息(event, md文本, 键盘):
         return ""
+    退出登录页面(event)
     return 纯文本
 
 
@@ -502,9 +543,14 @@ async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str
     """删除模式：QQ 官方发群按钮 + 返回按钮；普通机器人纯文本编号列表。"""
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
-        if 前缀文本:
-            return 前缀文本 + "\n已没有待清理群了"
-        return "当前没有待清理群，请先发送「添加群聊 群号」添加"
+        提示文本 = (前缀文本 + "\n" if 前缀文本 else "") + "已没有待清理群了"
+        if 是QQ官方机器人(event):
+            返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
+            md文本 = "## 删除群聊\n\n" + 提示文本
+            键盘 = {"rows": [{"buttons": [返回按钮]}]}
+            if await 发送Markdown键盘消息(event, md文本, 键盘):
+                return ""
+        return 提示文本
     if 是QQ官方机器人(event):
         md = 格式化群列表markdown(群号列表, 配置, "点击群号删除" if not 前缀文本 else 前缀文本)
         群按钮 = [
@@ -526,7 +572,7 @@ async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文�
     if 是QQ官方机器人(event):
         群号列表 = 读取待清理群列表(配置)
         md = 删除结果文本
-        键盘 = None
+        行: list[dict[str, Any]] = []
         if 群号列表:
             md += "\n\n剩余待清理群，点击删除："
             for 行文本 in 格式化群列表行(群号列表, 配置):
@@ -535,10 +581,10 @@ async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文�
                 生成按钮(f"{进入删除模式命令} {群号}", 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
                 for 群号 in 群号列表
             ]
-            返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
-            行 = 按钮分行(群按钮, 每行最多=按钮每行数)
-            行.append({"buttons": [返回按钮]})
-            键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
+            行.extend(按钮分行(群按钮, 每行最多=按钮每行数))
+        返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
+        行.append({"buttons": [返回按钮]})
+        键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     return 删除结果文本 + "\n" + 格式化待清理群列表(配置)
@@ -580,7 +626,7 @@ async def 进入备注等待(event: Any, 配置: Any, 群号: str) -> str:
 
 
 async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str | None:
-    """命中备注等待状态时：下条消息作为备注保存，超时自动取消。"""
+    """命中备注等待状态时：下条消息作为备注保存，超时自动取消，「返回上一步」取消并回到查看群聊列表。"""
     标识 = 获取会话标识(event)
     状态 = 备注等待状态.get(标识)
     logger.info(f"[网页群文件诊断] 处理备注回复 文本={文本!r} 标识={标识!r} 状态={'有' if 状态 else '无'}")
@@ -591,8 +637,10 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
         备注等待状态.pop(标识, None)
         return None
 
-    if 文本 == 取消备注命令:
+    if 文本 == 取消备注命令 or 文本 == 返回上一步命令:
         备注等待状态.pop(标识, None)
+        if 文本 == 返回上一步命令 and 是群文件清理管理员(event, 配置):
+            return await 显示群列表查看(event, 配置)
         return "已取消修改备注"
 
     if not 是群文件清理管理员(event, 配置):
@@ -781,7 +829,10 @@ async def 保存用户Cookie(event: Any, cookie文本: str, 配置: Any) -> str:
         logger.warning(f"网页群文件 Cookie 写入数据库失败：user_id={用户QQ}, error={exc}")
         return f"Cookie 保存失败：{exc}"
     logger.info(f"网页群文件 Cookie 已更新：user_id={用户QQ}")
-    return f"Cookie 已保存，{COOKIE有效期秒数 // 86400} 天内有效"
+    成功提示 = f"Cookie 已保存，{COOKIE有效期秒数 // 86400} 天内有效"
+    if 是QQ官方机器人(event):
+        return await 显示群文件清理详情页(event, 配置)
+    return 成功提示
 
 
 def 读取用户Cookie(用户QQ: str, 配置: Any) -> str | None:
