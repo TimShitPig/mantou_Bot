@@ -362,8 +362,21 @@ def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发�
     }
 
 
+def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = "") -> dict[str, Any]:
+    return {
+        "id": f"link_{跳转链接}",
+        "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
+        "action": {
+            "type": 0,
+            "permission": {"type": 2},
+            "data": 跳转链接,
+            "unsupport_tips": "请手动复制链接到浏览器打开",
+        },
+    }
+
+
 def 生成返回按钮(自动发送: bool = False) -> dict[str, Any]:
-    return 生成按钮("返回上一步", "返回上一步", "已返回", 自动发送)
+    return 生成按钮("返回上一步", "返回上一步", "已返回", 自动发送, data为标签=False)
 
 
 def 按钮分行(按钮列表: list[dict[str, Any]], 每行最多: int = 每行按钮数) -> list[dict[str, Any]]:

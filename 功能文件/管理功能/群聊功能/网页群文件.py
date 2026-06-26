@@ -42,6 +42,8 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 from 功能文件.管理功能.基础功能.帮助功能 import (
     发送Markdown键盘消息,
     生成按钮,
+    生成链接按钮,
+    生成返回按钮,
     按钮分行,
     获取帮助会话键,
     获取有效帮助状态,
@@ -254,7 +256,7 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
     if 文本 == 登录群文件命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用网页群文件清理"
-        return 生成登录提示()
+        return await 生成登录提示(event)
 
     cookie匹配 = 群文件登录cookie规则.fullmatch(文本)
     if cookie匹配:
@@ -388,13 +390,27 @@ def 写入清理等待状态(event: Any, 群号列表: list[str]) -> None:
     清理等待状态[获取会话标识(event)] = (time.time() + 清理选择等待秒数, 群号列表)
 
 
-def 生成登录提示() -> str:
-    return (
+async def 生成登录提示(event: Any) -> str:
+    纯文本 = (
         "请在浏览器打开以下链接登录 QQ：\n"
         f"{登录链接}\n"
         "授权完后复制浏览器 Cookie，发送：\n"
         "群文件登录cookie 你的cookie"
     )
+    if not 是QQ官方机器人(event):
+        return 纯文本
+    md文本 = (
+        "## 🔑 登录群文件\n\n"
+        "点击下方按钮在浏览器中打开 QQ 登录页面，\n"
+        "授权完成后复制浏览器 Cookie，发送：\n"
+        "**群文件登录cookie 你的cookie**"
+    )
+    登录按钮 = 生成链接按钮("🌐 点击登录", 登录链接, "已打开登录页")
+    返回按钮 = 生成返回按钮(自动发送=True)
+    键盘 = {"rows": [{"buttons": [登录按钮]}, {"buttons": [返回按钮]}]}
+    if await 发送Markdown键盘消息(event, md文本, 键盘):
+        return ""
+    return 纯文本
 
 
 # ---------- 群聊管理（待清理目标群列表） ----------
