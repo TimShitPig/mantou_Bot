@@ -42,7 +42,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 from 功能文件.管理功能.基础功能.帮助功能 import (
     发送Markdown键盘消息,
     生成按钮,
-    生成链接按钮,
     生成返回按钮,
     按钮分行,
     获取帮助会话键,
@@ -53,6 +52,19 @@ from 功能文件.管理功能.基础功能.帮助功能 import (
     获取帮助键盘,
     格式化帮助大类MD,
 )
+
+
+def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = "") -> dict[str, Any]:
+    return {
+        "id": f"link_{跳转链接}",
+        "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
+        "action": {
+            "type": 0,
+            "permission": {"type": 2},
+            "data": 跳转链接,
+            "unsupport_tips": "请手动复制链接到浏览器打开",
+        },
+    }
 
 
 # ---------- 配置 ----------
