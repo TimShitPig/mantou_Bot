@@ -108,6 +108,7 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
 
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
+    logger.info(f"[网页群文件诊断] 收到命令 文本={文本!r} 是管理员={是群文件清理管理员(event, 配置)}")
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
         return 选择回复
@@ -367,7 +368,9 @@ async def 进入备注等待(event: Any, 配置: Any, 群号: str) -> str:
     if 群号 not in 群号列表:
         return f"群 {群号} 不在待清理列表中"
     当前备注 = 读取群备注(配置, 群号)
-    备注等待状态[获取会话标识(event)] = (time.time() + 备注等待秒数, 群号)
+    标识 = 获取会话标识(event)
+    备注等待状态[标识] = (time.time() + 备注等待秒数, 群号)
+    logger.info(f"[网页群文件诊断] 进入备注等待 标识={标识!r} 群号={群号!r} 当前备注={当前备注!r}")
     提示 = f"请在 {备注等待秒数} 秒内发送群 {群号} 的新备注"
     if 当前备注:
         提示 += f"\n当前备注：{当前备注}"
@@ -384,6 +387,7 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
     """命中备注等待状态时：取消备注命令取消，否则下条消息作为备注保存。"""
     标识 = 获取会话标识(event)
     状态 = 备注等待状态.get(标识)
+    logger.info(f"[网页群文件诊断] 处理备注回复 文本={文本!r} 标识={标识!r} 状态={'有' if 状态 else '无'}")
     if 状态 is None:
         return None
     过期时间, 群号 = 状态
