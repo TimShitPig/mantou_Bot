@@ -196,7 +196,7 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
         清理等待状态.pop(标识, None)
         return None
 
-    if 文本 == "0":
+    if 文本 == "0" or 文本 == 返回上一步命令:
         清理等待状态.pop(标识, None)
         return "已取消清理群文件选择"
 
@@ -227,7 +227,7 @@ async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
             生成按钮(str(序号), 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
             for 序号, 群号 in enumerate(群号列表, start=1)
         ]
-        取消按钮 = 生成按钮("0", "取消", 自动发送=True, data为标签=False)
+        取消按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
         行.append({"buttons": [取消按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
