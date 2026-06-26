@@ -296,7 +296,7 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
 
     if 文本 == 返回上一步命令:
         清理等待状态.pop(标识, None)
-        return await 显示群列表查看(event, 配置)
+        return await 显示群文件清理详情页(event, 配置)
 
     if not 是群文件清理管理员(event, 配置):
         清理等待状态.pop(标识, None)
