@@ -43,7 +43,7 @@ UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.2.10"
+插件版本 = "2.2.11"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -137,17 +137,20 @@ class MyPlugin(Star):
             if 回复内容 is None:
                 回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
             if 回复内容 is None:
-                回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
+                if 网页群文件功能.需要优先处理返回(event):
+                    回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
+                if 回复内容 is None:
+                    if 权限工具.是QQ官方机器人(event):
+                        md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
+                        if md文本 is not None:
+                            发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                            if not 发送成功:
+                                yield event.plain_result(md文本)
+                            event.stop_event()
+                            return
+                    回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
             if 回复内容 is None:
-                if 权限工具.是QQ官方机器人(event):
-                    md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
-                    if md文本 is not None:
-                        发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                        if not 发送成功:
-                            yield event.plain_result(md文本)
-                        event.stop_event()
-                        return
-                回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
+                回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
             if 回复内容 is None:
                 回复内容 = await 授权链接功能.处理授权链接(event, 命令文本, self.context, self.config)
 

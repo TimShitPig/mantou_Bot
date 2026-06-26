@@ -119,6 +119,23 @@ def 处于删除模式(event: Any) -> bool:
     return True
 
 
+def 处于清理等待状态(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    状态 = 清理等待状态.get(标识)
+    if 状态 is None:
+        return False
+    过期时间, _ = 状态
+    if 过期时间 <= time.time():
+        清理等待状态.pop(标识, None)
+        return False
+    return True
+
+
+def 需要优先处理返回(event: Any) -> bool:
+    """删除模式或清理等待状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
+    return 处于删除模式(event) or 处于清理等待状态(event)
+
+
 async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
     """删除模式下收到「返回上一步」：退出删除模式并回到查看群聊列表。"""
     if 文本 != 返回上一步命令 or not 处于删除模式(event):
