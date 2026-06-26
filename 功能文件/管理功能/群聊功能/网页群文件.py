@@ -80,6 +80,7 @@ COOKIE命名空间 = "web_group_file_cookie"
 查看群聊命令 = "查看群聊"
 进入删除模式命令 = "删除群聊"
 退出删除模式命令 = "关闭删除群聊"
+返回上一步命令 = "返回上一步"
 更改备注命令 = "更改备注"
 取消备注命令 = "取消备注"
 更改备注规则 = re.compile(r"^更改备注\s+(\d{5,12})$")
@@ -87,9 +88,45 @@ COOKIE命名空间 = "web_group_file_cookie"
 备注状态键前缀 = "remark:"
 按钮每行数 = 2
 按钮最大行数 = 5
+删除模式等待秒数 = 300
 
 # 备注等待状态：key=会话标识，value=(过期时间戳, 群号)
 备注等待状态: dict[str, tuple[float, str]] = {}
+
+# 删除模式状态：key=会话标识，value=过期时间戳；进入删除模式后按钮发「返回上一步」退出
+删除模式状态: dict[str, float] = {}
+
+
+# ---------- 删除模式状态管理 ----------
+
+
+def 进入删除模式(event: Any) -> None:
+    删除模式状态[获取会话标识(event)] = time.time() + 删除模式等待秒数
+
+
+def 退出删除模式(event: Any) -> None:
+    删除模式状态.pop(获取会话标识(event), None)
+
+
+def 处于删除模式(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    过期时间 = 删除模式状态.get(标识)
+    if 过期时间 is None:
+        return False
+    if 过期时间 <= time.time():
+        删除模式状态.pop(标识, None)
+        return False
+    return True
+
+
+async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
+    """删除模式下收到「返回上一步」：退出删除模式并回到查看群聊列表。"""
+    if 文本 != 返回上一步命令 or not 处于删除模式(event):
+        return None
+    退出删除模式(event)
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用群聊管理"
+    return await 显示群列表查看(event, 配置)
 
 
 # ---------- 入口分发 ----------
@@ -109,6 +146,10 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
     logger.info(f"[网页群文件诊断] 收到命令 文本={文本!r} 是管理员={是群文件清理管理员(event, 配置)}")
+    删除模式回复 = await 处理删除模式返回(event, 文本, 配置)
+    if 删除模式回复 is not None:
+        return 删除模式回复
+
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
         return 选择回复
@@ -238,11 +279,13 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
     if 文本 in (查看群聊命令, 退出删除模式命令):
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群聊管理"
+        退出删除模式(event)
         return await 显示群列表查看(event, 配置)
 
     if 文本 == 进入删除模式命令:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群聊管理"
+        进入删除模式(event)
         return await 显示群列表删除模式(event, 配置, 前缀文本="")
 
     添加匹配 = 添加群聊规则.fullmatch(文本)
@@ -310,7 +353,7 @@ async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str
             生成按钮(f"{进入删除模式命令} {群号}", 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
             for 群号 in 群号列表
         ]
-        返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True, data为标签=False)
+        返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
         行.append({"buttons": [返回按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
@@ -321,6 +364,7 @@ async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str
 
 async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文本: str) -> str:
     """删除群号后：QQ 官方刷新剩余群按钮列表（保持删除模式）；普通机器人纯文本。"""
+    进入删除模式(event)
     if 是QQ官方机器人(event):
         群号列表 = 读取待清理群列表(配置)
         md = 删除结果文本
@@ -333,7 +377,7 @@ async def 显示删除结果带刷新(event: Any, 配置: Any, 删除结果文�
                 生成按钮(f"{进入删除模式命令} {群号}", 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
                 for 群号 in 群号列表
             ]
-            返回按钮 = 生成按钮(退出删除模式命令, "返回上一步", 自动发送=True, data为标签=False)
+            返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
             行 = 按钮分行(群按钮, 每行最多=按钮每行数)
             行.append({"buttons": [返回按钮]})
             键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
