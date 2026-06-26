@@ -112,6 +112,11 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
             return "没有权限使用帮助"
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
         return 处理帮助数字选择(会话键, 帮助状态, 编号文本)
+    if 帮助状态 is None and 文本 in 返回上一步别名:
+        if not 是管理员:
+            return "没有权限使用帮助"
+        设置帮助状态(会话键, "大类")
+        return 格式化帮助大类()
     目标 = 匹配任意层级名称(文本)
     if 目标 is not None:
         if not 是管理员:
@@ -547,6 +552,13 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
             return "没有权限使用帮助", None
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
         md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
+        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
+        return md文本, 键盘
+    if 帮助状态 is None and 文本 in 返回上一步别名:
+        if not 是管理员:
+            return "没有权限使用帮助", None
+        设置帮助状态(会话键, "大类")
+        md文本 = 格式化帮助大类MD()
         键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
         return md文本, 键盘
     目标 = 匹配任意层级名称(文本)
