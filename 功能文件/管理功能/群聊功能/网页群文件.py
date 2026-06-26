@@ -108,6 +108,8 @@ COOKIE命名空间 = "web_group_file_cookie"
 群文件清理触发项名称 = "群文件清理"
 更改备注命令 = "更改备注"
 取消备注命令 = "取消备注"
+登录账号命令 = "登录账号"
+Cookie输入等待秒数 = 60
 更改备注规则 = re.compile(r"^更改备注\s+(\d{5,12})$")
 备注等待秒数 = 60
 备注状态键前缀 = "remark:"
@@ -118,6 +120,9 @@ COOKIE命名空间 = "web_group_file_cookie"
 
 # 备注等待状态：key=会话标识，value=(过期时间戳, 群号)
 备注等待状态: dict[str, tuple[float, str]] = {}
+
+# Cookie 输入等待状态：key=会话标识，value=过期时间戳；点击「登录账号」后 60 秒内直接粘贴 Cookie 即可保存，无需前缀
+Cookie输入等待状态: dict[str, float] = {}
 
 # 删除模式状态：key=会话标识，value=过期时间戳；进入删除模式后按钮发「返回上一步」退出
 删除模式状态: dict[str, float] = {}
@@ -176,6 +181,28 @@ def 处于更改备注选群(event: Any) -> bool:
     return True
 
 
+# ---------- Cookie 输入等待状态管理 ----------
+
+
+def 进入Cookie输入等待(event: Any) -> None:
+    Cookie输入等待状态[获取会话标识(event)] = time.time() + Cookie输入等待秒数
+
+
+def 退出Cookie输入等待(event: Any) -> None:
+    Cookie输入等待状态.pop(获取会话标识(event), None)
+
+
+def 处于Cookie输入等待(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    过期时间 = Cookie输入等待状态.get(标识)
+    if 过期时间 is None:
+        return False
+    if 过期时间 <= time.time():
+        Cookie输入等待状态.pop(标识, None)
+        return False
+    return True
+
+
 # ---------- 删除模式状态管理 ----------
 
 
@@ -211,9 +238,9 @@ def 处于清理等待状态(event: Any) -> bool:
 
 
 def 需要优先处理返回(event: Any) -> bool:
-    """删除模式、清理等待、查看群聊、登录页面、更改备注选群、备注等待状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
+    """删除模式、清理等待、查看群聊、登录页面、更改备注选群、备注等待、Cookie输入等待状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
     return (处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event)
-            or 处于登录页面(event) or 处于更改备注选群(event)
+            or 处于登录页面(event) or 处于更改备注选群(event) or 处于Cookie输入等待(event)
             or bool(备注等待状态.get(获取会话标识(event))))
 
 
@@ -256,6 +283,7 @@ async def 显示群文件清理详情页(event: Any, 配置: Any) -> str:
     退出删除模式(event)
     退出查看群聊(event)
     退出更改备注选群(event)
+    退出Cookie输入等待(event)
     备注等待状态.pop(获取会话标识(event), None)
     会话键 = 获取帮助会话键(event)
     目标 = 匹配任意层级名称(群文件清理触发项名称)
@@ -270,6 +298,53 @@ async def 显示群文件清理详情页(event: Any, 配置: Any) -> str:
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     return md
+
+
+async def 显示Cookie输入等待页面(event: Any) -> str:
+    """显示 Cookie 输入等待页面（QQ 官方 MD+Keyboard），提示用户直接粘贴 Cookie。"""
+    if not 是QQ官方机器人(event):
+        进入Cookie输入等待(event)
+        return (
+            f"请在 {Cookie输入等待秒数} 秒内直接粘贴浏览器 Cookie 发送，\n"
+            "无需加「群文件登录cookie」前缀，发送「返回上一步」取消。"
+        )
+    退出登录页面(event)
+    进入Cookie输入等待(event)
+    md文本 = (
+        "## 🔑 输入 Cookie\n\n"
+        f"请在 **{Cookie输入等待秒数} 秒** 内直接粘贴浏览器 Cookie 发送，\n"
+        "无需加「群文件登录cookie」前缀。\n"
+        "发送「返回上一步」取消。"
+    )
+    返回按钮 = 生成返回按钮(自动发送=True)
+    键盘 = {"rows": [{"buttons": [返回按钮]}]}
+    if await 发送Markdown键盘消息(event, md文本, 键盘):
+        return ""
+    return (
+        f"请在 {Cookie输入等待秒数} 秒内直接粘贴浏览器 Cookie 发送，\n"
+        "无需加「群文件登录cookie」前缀，发送「返回上一步」取消。"
+    )
+
+
+async def 处理Cookie输入等待回复(event: Any, 文本: str, 配置: Any) -> str | None:
+    """Cookie 输入等待状态：下条消息作为 Cookie 保存，支持返回上一步取消。"""
+    if not 处于Cookie输入等待(event):
+        return None
+    标识 = 获取会话标识(event)
+
+    if 文本 == 返回上一步命令:
+        退出Cookie输入等待(event)
+        if 是群文件清理管理员(event, 配置):
+            return await 显示群文件清理详情页(event, 配置)
+        return "已取消 Cookie 输入"
+
+    if not 是群文件清理管理员(event, 配置):
+        退出Cookie输入等待(event)
+        return "没有权限使用网页群文件清理"
+
+    退出Cookie输入等待(event)
+    cookie文本 = 文本.strip()
+    return await 保存用户Cookie(event, cookie文本, 配置)
 
 
 async def 处理登录页面返回(event: Any, 文本: str, 配置: Any) -> str | None:
@@ -326,6 +401,10 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
     if 备注回复 is not None:
         return 备注回复
 
+    Cookie输入回复 = await 处理Cookie输入等待回复(event, 文本, 配置)
+    if Cookie输入回复 is not None:
+        return Cookie输入回复
+
     查看返回 = await 处理查看群聊返回(event, 文本, 配置)
     if 查看返回 is not None:
         return 查看返回
@@ -354,6 +433,11 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用网页群文件清理"
         return await 生成登录提示(event)
+
+    if 文本 == 登录账号命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用网页群文件清理"
+        return await 显示Cookie输入等待页面(event)
 
     cookie匹配 = 群文件登录cookie规则.fullmatch(文本)
     if cookie匹配:
@@ -491,25 +575,60 @@ async def 生成登录提示(event: Any) -> str:
     纯文本 = (
         "请在浏览器打开以下链接登录 QQ：\n"
         f"{登录链接}\n"
-        "授权完后复制浏览器 Cookie，发送：\n"
-        "群文件登录cookie 你的cookie"
+        "授权完后复制浏览器 Cookie，发送「群文件登录cookie 你的cookie」，\n"
+        f"或点击下方「登录账号」按钮后 {Cookie输入等待秒数} 秒内直接粘贴 Cookie 发送。"
     )
     if not 是QQ官方机器人(event):
         return 纯文本
     进入登录页面(event)
     md文本 = (
         "## 🔑 登录群文件\n\n"
-        "点击下方按钮在浏览器中打开 QQ 登录页面，\n"
-        "授权完成后复制浏览器 Cookie，发送：\n"
-        "**群文件登录cookie 你的cookie**"
+        "点击下方「打开链接」按钮在浏览器中打开 QQ 登录页面，\n"
+        "授权完成后复制浏览器 Cookie：\n"
+        f"- 点击「登录账号」按钮后 {Cookie输入等待秒数} 秒内直接粘贴 Cookie 发送\n"
+        "- 或发送「群文件登录cookie 你的cookie」"
     )
-    登录按钮 = 生成链接按钮("🌐 点击登录", 登录链接, "已打开登录页")
+    打开链接按钮 = 生成链接按钮("🔗 打开链接", 登录链接, "已打开登录页")
+    登录账号按钮 = 生成按钮(登录账号命令, "登录账号", 自动发送=True, data为标签=True)
     返回按钮 = 生成返回按钮(自动发送=True)
-    键盘 = {"rows": [{"buttons": [登录按钮]}, {"buttons": [返回按钮]}]}
+    键盘 = {"rows": [{"buttons": [打开链接按钮]}, {"buttons": [登录账号按钮]}, {"buttons": [返回按钮]}]}
     if await 发送Markdown键盘消息(event, md文本, 键盘):
         return ""
     退出登录页面(event)
     return 纯文本
+
+
+async def 生成未登录提示(event: Any) -> str:
+    """未登录 Cookie 时的提示：QQ 官方发 MD+Keyboard（打开链接+登录账号+返回按钮），普通机器人纯文本。"""
+    纯文本 = "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
+    if not 是QQ官方机器人(event):
+        return 纯文本
+    进入登录页面(event)
+    md文本 = (
+        "## ⚠️ 未登录群文件\n\n"
+        "你还没有登录群文件，请先登录：\n"
+        "1. 点击「🔗 打开链接」在浏览器中登录 QQ\n"
+        f"2. 复制 Cookie 后点击「登录账号」，{Cookie输入等待秒数} 秒内粘贴发送"
+    )
+    打开链接按钮 = 生成链接按钮("🔗 打开链接", 登录链接, "已打开登录页")
+    登录账号按钮 = 生成按钮(登录账号命令, "登录账号", 自动发送=True, data为标签=True)
+    返回按钮 = 生成返回按钮(自动发送=True)
+    键盘 = {"rows": [{"buttons": [打开链接按钮]}, {"buttons": [登录账号按钮]}, {"buttons": [返回按钮]}]}
+    if await 发送Markdown键盘消息(event, md文本, 键盘):
+        return ""
+    退出登录页面(event)
+    return 纯文本
+
+
+async def 发送带返回按钮的结果(event: Any, 文本: str) -> str:
+    """发送带返回上一步按钮的结果消息（QQ官方用MD+Keyboard，普通机器人纯文本）。"""
+    if not 是QQ官方机器人(event):
+        return 文本
+    返回按钮 = 生成返回按钮(自动发送=True)
+    键盘 = {"rows": [{"buttons": [返回按钮]}]}
+    if await 发送Markdown键盘消息(event, 文本, 键盘):
+        return ""
+    return 文本
 
 
 # ---------- 群聊管理（待清理目标群列表） ----------
@@ -1162,7 +1281,7 @@ async def 清空指定群文件(event: Any, 群号: str, 配置: Any) -> str:
 
     cookie文本 = 读取用户Cookie(用户QQ, 配置)
     if not cookie文本:
-        return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
+        return await 生成未登录提示(event)
 
     if aiohttp is None:
         return "缺少 aiohttp 依赖，无法清理群文件"
@@ -1187,11 +1306,11 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
 
     cookie文本 = 读取用户Cookie(用户QQ, 配置)
     if not cookie文本:
-        return "你还没有登录群文件，请先发送「登录群文件」获取登录链接"
+        return await 生成未登录提示(event)
 
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
-        return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群后再使用清理全部群文件"
+        return await 发送带返回按钮的结果(event, "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群后再使用清理全部群文件")
 
     if aiohttp is None:
         return "缺少 aiohttp 依赖，无法清理群文件"
@@ -1230,4 +1349,4 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
     ]
     if 失败详情:
         行列表.append("失败群：" + "；".join(失败详情))
-    return "\n".join(行列表)
+    return await 发送带返回按钮的结果(event, "\n".join(行列表))
