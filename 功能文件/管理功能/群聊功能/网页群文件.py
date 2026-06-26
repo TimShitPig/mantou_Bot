@@ -128,6 +128,9 @@ COOKIE命名空间 = "web_group_file_cookie"
 # 登录页面状态：key=会话标识，value=过期时间戳；登录群文件页面发「返回上一步」回到群文件清理详情页
 登录页面状态: dict[str, float] = {}
 
+# 更改备注选群状态：key=会话标识，value=过期时间戳；更改备注选群页面发「返回上一步」回到群文件清理详情页
+更改备注选群状态: dict[str, float] = {}
+
 
 # ---------- 登录页面状态管理 ----------
 
@@ -147,6 +150,28 @@ def 处于登录页面(event: Any) -> bool:
         return False
     if 过期时间 <= time.time():
         登录页面状态.pop(标识, None)
+        return False
+    return True
+
+
+# ---------- 更改备注选群状态管理 ----------
+
+
+def 进入更改备注选群(event: Any) -> None:
+    更改备注选群状态[获取会话标识(event)] = time.time() + 查看群聊等待秒数
+
+
+def 退出更改备注选群(event: Any) -> None:
+    更改备注选群状态.pop(获取会话标识(event), None)
+
+
+def 处于更改备注选群(event: Any) -> bool:
+    标识 = 获取会话标识(event)
+    过期时间 = 更改备注选群状态.get(标识)
+    if 过期时间 is None:
+        return False
+    if 过期时间 <= time.time():
+        更改备注选群状态.pop(标识, None)
         return False
     return True
 
@@ -186,8 +211,10 @@ def 处于清理等待状态(event: Any) -> bool:
 
 
 def 需要优先处理返回(event: Any) -> bool:
-    """删除模式、清理等待、查看群聊、登录页面状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
-    return 处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event) or 处于登录页面(event) or bool(备注等待状态.get(获取会话标识(event)))
+    """删除模式、清理等待、查看群聊、登录页面、更改备注选群、备注等待状态下，返回上一步需要由本模块优先处理，避免被帮助功能拦截。"""
+    return (处于删除模式(event) or 处于清理等待状态(event) or 处于查看群聊状态(event)
+            or 处于登录页面(event) or 处于更改备注选群(event)
+            or bool(备注等待状态.get(获取会话标识(event))))
 
 
 def 进入查看群聊(event: Any) -> None:
@@ -224,8 +251,12 @@ async def 处理查看群聊返回(event: Any, 文本: str, 配置: Any) -> str 
 
 
 async def 显示群文件清理详情页(event: Any, 配置: Any) -> str:
-    """跳转回「群文件清理」触发项详情页（帮助菜单层级），避免越级。"""
+    """跳转回「群文件清理」触发项详情页（帮助菜单层级），避免越级。同时清理所有子状态。"""
     退出登录页面(event)
+    退出删除模式(event)
+    退出查看群聊(event)
+    退出更改备注选群(event)
+    备注等待状态.pop(获取会话标识(event), None)
     会话键 = 获取帮助会话键(event)
     目标 = 匹配任意层级名称(群文件清理触发项名称)
     if 目标 is None:
@@ -252,15 +283,26 @@ async def 处理登录页面返回(event: Any, 文本: str, 配置: Any) -> str 
 
 
 async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str | None:
-    """删除模式下收到「返回上一步」或「关闭删除群聊」：退出删除模式并回到查看群聊列表。"""
+    """删除模式下收到「返回上一步」或「关闭删除群聊」：退出删除模式并回到群文件清理详情页。"""
     if not 处于删除模式(event):
         return None
     if 文本 != 返回上一步命令 and 文本 != 退出删除模式命令:
         return None
     退出删除模式(event)
+    退出查看群聊(event)
     if not 是群文件清理管理员(event, 配置):
         return "没有权限使用群聊管理"
-    return await 显示群列表查看(event, 配置)
+    return await 显示群文件清理详情页(event, 配置)
+
+
+async def 处理更改备注选群返回(event: Any, 文本: str, 配置: Any) -> str | None:
+    """更改备注选群页面下收到「返回上一步」：退出选群状态并回到群文件清理详情页。"""
+    if 文本 != 返回上一步命令 or not 处于更改备注选群(event):
+        return None
+    退出更改备注选群(event)
+    if not 是群文件清理管理员(event, 配置):
+        return "没有权限使用群聊管理"
+    return await 显示群文件清理详情页(event, 配置)
 
 
 # ---------- 入口分发 ----------
@@ -295,6 +337,10 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
     删除模式回复 = await 处理删除模式返回(event, 文本, 配置)
     if 删除模式回复 is not None:
         return 删除模式回复
+
+    更改备注选群回复 = await 处理更改备注选群返回(event, 文本, 配置)
+    if 更改备注选群回复 is not None:
+        return 更改备注选群回复
 
     选择回复 = await 处理清理选择回复(event, 文本, 配置)
     if 选择回复 is not None:
@@ -508,6 +554,7 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
     if 更改备注匹配:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用群聊管理"
+        退出更改备注选群(event)
         return await 进入备注等待(event, 配置, 更改备注匹配.group(1))
 
     if 文本 == 取消备注命令:
@@ -519,7 +566,7 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
 
 
 async def 显示群列表查看(event: Any, 配置: Any, 前缀文本: str = "") -> str:
-    """查看群聊：QQ 官方发 markdown + 删除/更改备注/返回上一步按钮；普通机器人纯文本。"""
+    """查看群聊：QQ 官方发 markdown + 返回上一步按钮；普通机器人纯文本。删除群聊/更改备注在群文件清理详情页快捷命令中。"""
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
         if 前缀文本:
@@ -529,14 +576,12 @@ async def 显示群列表查看(event: Any, 配置: Any, 前缀文本: str = "")
     if 是QQ官方机器人(event):
         标题 = (前缀文本 + "\n\n" if 前缀文本 else "") + "待清理群列表"
         md = 格式化群列表markdown(群号列表, 配置, 标题)
-        删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True, data为标签=False)
-        更改备注按钮 = 生成按钮(更改备注命令, "更改备注", 自动发送=True, data为标签=False)
         返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
-        键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}, {"buttons": [返回按钮]}]}
+        键盘 = {"rows": [{"buttons": [返回按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     尾部前缀 = 前缀文本 + "\n" if 前缀文本 else ""
-    return 尾部前缀 + 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊」可逐个删除")
+    return 尾部前缀 + 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊 群号」可移除")
 
 
 async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str) -> str:
@@ -596,12 +641,13 @@ async def 显示更改备注选群(event: Any, 配置: Any) -> str:
     if not 群号列表:
         return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群"
     if 是QQ官方机器人(event):
+        进入更改备注选群(event)
         md = 格式化群列表markdown(群号列表, 配置, "选择要修改备注的群")
         群按钮 = [
             生成按钮(f"{更改备注命令} {群号}", 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
             for 群号 in 群号列表
         ]
-        返回按钮 = 生成按钮(查看群聊命令, "返回上一步", 自动发送=True, data为标签=False)
+        返回按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
         行 = 按钮分行(群按钮, 每行最多=按钮每行数)
         行.append({"buttons": [返回按钮]})
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
@@ -626,7 +672,7 @@ async def 进入备注等待(event: Any, 配置: Any, 群号: str) -> str:
 
 
 async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str | None:
-    """命中备注等待状态时：下条消息作为备注保存，超时自动取消，「返回上一步」取消并回到查看群聊列表。"""
+    """命中备注等待状态时：下条消息作为备注保存，超时自动取消，「返回上一步」取消并回到群文件清理详情页。"""
     标识 = 获取会话标识(event)
     状态 = 备注等待状态.get(标识)
     logger.info(f"[网页群文件诊断] 处理备注回复 文本={文本!r} 标识={标识!r} 状态={'有' if 状态 else '无'}")
@@ -640,7 +686,8 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
     if 文本 == 取消备注命令 or 文本 == 返回上一步命令:
         备注等待状态.pop(标识, None)
         if 文本 == 返回上一步命令 and 是群文件清理管理员(event, 配置):
-            return await 显示群列表查看(event, 配置)
+            退出更改备注选群(event)
+            return await 显示群文件清理详情页(event, 配置)
         return "已取消修改备注"
 
     if not 是群文件清理管理员(event, 配置):
@@ -655,7 +702,8 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
         logger.warning(f"群备注写入失败：group={群号}, error={exc}")
         return f"备注保存失败：{exc}"
     备注等待状态.pop(标识, None)
-    return await 显示群列表查看(event, 配置, 前缀文本=f"已保存群 {群号} 的备注：{备注}")
+    退出更改备注选群(event)
+    return await 显示群文件清理详情页(event, 配置)
 
 
 def 读取待清理群列表(配置: Any) -> list[str]:
