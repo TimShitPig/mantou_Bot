@@ -218,9 +218,13 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
 
     logger.info(f"[网页群文件诊断] 清理选择回复 文本={文本!r} 标识={标识!r} 群号列表={群号列表}")
 
-    if 文本 == "0" or 文本 == 返回上一步命令:
+    if 文本 == "0":
         清理等待状态.pop(标识, None)
         return "已取消清理群文件选择"
+
+    if 文本 == 返回上一步命令:
+        清理等待状态.pop(标识, None)
+        return await 显示群列表查看(event, 配置)
 
     if not 是群文件清理管理员(event, 配置):
         清理等待状态.pop(标识, None)
