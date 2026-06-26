@@ -268,19 +268,24 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
     return None
 
 
-async def 显示群列表查看(event: Any, 配置: Any) -> str:
-    """查看群聊：QQ 官方发 markdown + 删除/更改备注按钮；普通机器人纯文本。"""
+async def 显示群列表查看(event: Any, 配置: Any, 前缀文本: str = "") -> str:
+    """查看群聊：QQ 官方发 markdown + 删除/更改备注/返回上一步按钮；普通机器人纯文本。"""
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
+        if 前缀文本:
+            return 前缀文本 + "\n当前没有添加待清理群，请发送「添加群聊 群号」添加"
         return "当前没有添加待清理群，请发送「添加群聊 群号」添加"
     if 是QQ官方机器人(event):
-        md = 格式化群列表markdown(群号列表, 配置, "待清理群列表")
+        标题 = (前缀文本 + "\n\n" if 前缀文本 else "") + "待清理群列表"
+        md = 格式化群列表markdown(群号列表, 配置, 标题)
         删除按钮 = 生成按钮(进入删除模式命令, "删除群聊", 自动发送=True, data为标签=False)
         更改备注按钮 = 生成按钮(更改备注命令, "更改备注", 自动发送=True, data为标签=False)
-        键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}]}
+        返回按钮 = 生成按钮("帮助", "返回上一步", 自动发送=True, data为标签=False)
+        键盘 = {"rows": [{"buttons": [删除按钮, 更改备注按钮]}, {"buttons": [返回按钮]}]}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
-    return 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊」可逐个删除")
+    尾部前缀 = 前缀文本 + "\n" if 前缀文本 else ""
+    return 尾部前缀 + 格式化待清理群列表文本(群号列表, 配置, "发送「删除群聊」可逐个删除")
 
 
 async def 显示群列表删除模式(event: Any, 配置: Any, 前缀文本: str) -> str:
@@ -394,7 +399,7 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
         logger.warning(f"群备注写入失败：group={群号}, error={exc}")
         return f"备注保存失败：{exc}"
     备注等待状态.pop(标识, None)
-    return f"已保存群 {群号} 的备注：{备注}"
+    return await 显示群列表查看(event, 配置, 前缀文本=f"已保存群 {群号} 的备注：{备注}")
 
 
 def 读取待清理群列表(配置: Any) -> list[str]:
