@@ -250,23 +250,28 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
 
     清理结果 = await 清空指定群文件(event, 目标群号, 配置)
     # 清理成功后保持清理等待状态，允许连续清理多个群；发送「0」或「返回上一步」才退出
+    前缀 = f"已选择群 {目标群号}，开始清理\n{清理结果}"
     剩余群号列表 = 读取待清理群列表(配置)
     if not 剩余群号列表:
         清理等待状态.pop(标识, None)
-        return f"已选择群 {目标群号}，开始清理\n{清理结果}\n已清理完所有待清理群"
-    # 刷新等待状态的群号列表和过期时间，避免连续清理中途过期
-    清理等待状态[标识] = (time.time() + 清理选择等待秒数, 剩余群号列表)
-    return f"已选择群 {目标群号}，开始清理\n{清理结果}\n\n可继续发送编号清理其他群，或发送「返回上一步」结束"
+        return f"{前缀}\n已清理完所有待清理群"
+    # 刷新等待状态的群号列表和过期时间，并重新列出选择列表（带前缀提示）
+    写入清理等待状态(event, 剩余群号列表)
+    return await 发送清理选择列表(event, 配置, 剩余群号列表, 前缀文本=前缀)
 
 
 async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
     群号列表 = 读取待清理群列表(配置)
     if not 群号列表:
         return "还没有添加待清理群，请先发送「添加群聊 群号」添加目标群"
-
     写入清理等待状态(event, 群号列表)
+    return await 发送清理选择列表(event, 配置, 群号列表)
+
+
+async def 发送清理选择列表(event: Any, 配置: Any, 群号列表: list[str], 前缀文本: str = "") -> str:
+    """列出待清理群选择列表（markdown + 按钮 / 纯文本），前缀文本非空时附加在顶部。"""
     if 是QQ官方机器人(event):
-        md = 格式化清理选择markdown(群号列表)
+        md = 格式化清理选择markdown(群号列表, 前缀文本=前缀文本)
         群按钮 = [
             生成按钮(str(序号), 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
             for 序号, 群号 in enumerate(群号列表, start=1)
@@ -277,15 +282,23 @@ async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
         键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
-    行列表 = [f"请发送编号清理对应群（{清理选择等待秒数} 秒内有效）："]
+    行列表 = []
+    if 前缀文本:
+        行列表.append(前缀文本)
+    行列表.append(f"请发送编号清理对应群（{清理选择等待秒数} 秒内有效）：")
     for 序号, 群号 in enumerate(群号列表, start=1):
         行列表.append(f"{序号}. {群号}")
     行列表.append("发送 0 取消")
     return "\n".join(行列表)
 
 
-def 格式化清理选择markdown(群号列表: list[str]) -> str:
-    行列表 = [f"**选择要清理的群**", f"点击群号按钮清理对应群（{清理选择等待秒数} 秒内有效）："]
+def 格式化清理选择markdown(群号列表: list[str], 前缀文本: str = "") -> str:
+    行列表 = []
+    if 前缀文本:
+        行列表.append(前缀文本)
+        行列表.append("")
+    行列表.append("**选择要清理的群**")
+    行列表.append(f"点击群号按钮清理对应群（{清理选择等待秒数} 秒内有效）：")
     for 序号, 群号 in enumerate(群号列表, start=1):
         行列表.append(f"{序号}. {群号}")
     return "\n".join(行列表)
