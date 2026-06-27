@@ -205,28 +205,21 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
                 logger.debug(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
                 yield 格式化下载提示(书籍信息, len(章节列表))
-                章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
-                成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
-                if not 成功章节列表:
-                    失败原因 = ''
-                    需要刷新目录 = False
-                    for 项目 in 章节结果列表:
-                        原因 = str(项目.get('error') or '')
-                        if 是章节选择错误(原因):
-                            需要刷新目录 = True
-                            失败原因 = 原因
-                            break
-                        if 原因 and 是永久性业务错误(原因):
-                            失败原因 = 原因
-                            break
-                    if 需要刷新目录:
-                        logger.info(f'番茄小说OIAPI章节选择错误，用OIAPI chapters刷新目录重试：book_id={书籍编号}')
+                try:
+                    章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
+                except 用户可见错误 as 异常:
+                    if 是章节选择错误(str(异常)):
+                        logger.info(f'番茄小说OIAPI章节选择错误，调用chapters获取章节数重试：book_id={书籍编号}')
                         新章节列表 = await 获取OIAPI章节目录(会话, 书籍编号, 接口key)
                         if 新章节列表:
                             章节列表 = 新章节列表
                             书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
                             章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
-                            成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+                        else:
+                            raise
+                    else:
+                        raise
+                成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
                     失败原因 = ''
                     for 项目 in 章节结果列表:
@@ -592,7 +585,7 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
         return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
     except 用户可见错误 as 异常:
         错误文本 = str(异常)
-        if 是永久性业务错误(错误文本):
+        if 是永久性业务错误(错误文本) or 是章节选择错误(错误文本):
             raise
         if len(批次) <= 1:
             章节 = 批次[0]
