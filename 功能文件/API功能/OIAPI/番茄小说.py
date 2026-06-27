@@ -62,7 +62,17 @@ def 获取番茄小说key():
 def 读取当前API选择(配置: Any = None) -> str:
     if 配置 is None:
         配置 = getattr(主模块, 'config', None) or {}
-    当前选择 = 读取运行状态值(配置, API选择键, 'api', '1')
+    当前选择 = 读取运行状态值(配置, API选择键, 'api', '')
+    if not 当前选择:
+        旧选择 = 读取运行状态值(配置, 'fanqie_api', 'current_api', '')
+        if 旧选择:
+            映射 = {'OIAPI': '1', '析API': '2', '崩溃API': '3'}
+            当前选择 = 映射.get(旧选择, '')
+            if 当前选择:
+                try:
+                    写入运行状态值(配置, API选择键, 'api', 当前选择)
+                except Exception:
+                    pass
     if 当前选择 in ('1', '2', '3', '4'):
         return 当前选择
     return '1'
@@ -236,13 +246,15 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
 
 
 async def 识别番茄小说书籍(链接匹配: re.Match[str]) -> str:
-    书籍编号 = next((编号 for 编号 in 链接匹配.groups()[:7] if 编号), '')
-    短码 = next((编号 for 编号 in 链接匹配.groups()[7:9] if 编号), '')
-    长数字 = 链接匹配.group(9)
-    if 长数字 and 15 <= len(长数字) <= 25:
-        return 长数字
-    if 书籍编号:
-        return 书籍编号
+    所有分组 = 链接匹配.groups()
+    长数字 = 所有分组[9] if len(所有分组) > 9 else ''
+    if 长数字 and 15 <= len(str(长数字)) <= 25 and str(长数字).isdigit():
+        return str(长数字)
+    for 编号 in 所有分组[1:7]:
+        if 编号 and str(编号).isdigit():
+            return str(编号)
+    短码组 = 所有分组[7:9]
+    短码 = next((str(编号) for 编号 in 短码组 if 编号), '')
     if 短码:
         return await 解析番茄短链(短码)
     return ''
