@@ -16,8 +16,8 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 模块加载时间 = time.time()
 上次进程CPU采样: tuple[float, float] | None = (time.monotonic(), time.process_time())
 上次系统CPU采样: tuple[int, int] | None = None
-番茄API状态命名空间 = "fanqie_api"
-番茄API状态键 = "current_api"
+番茄API状态命名空间 = "fq_api_choice"
+番茄API状态键 = "api"
 小说功能状态命名空间 = "novel_feature_switch"
 小说默认状态 = {"番茄": True, "七猫": True}
 付费开关状态命名空间 = "paid_access"
@@ -149,18 +149,22 @@ def 读取小说功能状态(配置: Any) -> dict[str, bool]:
 def 读取当前番茄API(配置: Any) -> str:
     当前接口 = 安全读取(
         "当前番茄API",
-        lambda: 读取运行状态值(配置, 番茄API状态命名空间, 番茄API状态键, "OIAPI"),
-        "OIAPI",
+        lambda: 读取运行状态值(配置, 番茄API状态命名空间, 番茄API状态键, "1"),
+        "1",
     )
     return 规范化番茄API(当前接口)
 
 
 def 规范化番茄API(值: Any) -> str:
     文本 = str(值 or "").strip().lower()
-    if 文本 in ("崩溃api", "崩溃", "bengkuiapi", "bengkui", "crashapi", "crash", "3"):
+    if 文本 in ("4", "自建api", "自建", "zijianapi", "zijian", "selfapi", "self"):
+        return "自建API"
+    if 文本 in ("3", "崩溃api", "崩溃", "bengkuiapi", "bengkui", "crashapi", "crash"):
         return "崩溃API"
-    if 文本 in ("析api", "xiapi", "xapi", "析", "xi", "2"):
+    if 文本 in ("2", "析api", "xiapi", "xapi", "析", "xi"):
         return "析API"
+    if 文本 in ("1", "oiapi", "oi"):
+        return "OIAPI"
     return "OIAPI"
 
 
