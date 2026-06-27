@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v2.4.5 |
+| 版本 | v2.4.6 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航

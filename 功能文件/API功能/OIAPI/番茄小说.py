@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -28,7 +29,9 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 缓存目录.mkdir(parents=True, exist_ok=True)
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'}
-小说链接正则 = re.compile(r'(https?://fanqienovel\.com/page/(\d+)|https?://changdunovel\.com/reader/(\d+)|https?://changdunovel\.com/(?:page|reader)?/.*?(?:\?|&amp;|&)book_id=(\d+)|book_id=(\d+)|fanqienovel\.com/(\d+)|changdunovel\.com/reader/.*?/(\d+)|https?://m\.novelfm\.com/s/([A-Za-z0-9]+)|https?://changdunovel\.com/t/([A-Za-z0-9]+)|([\d]{15,25}))', re.IGNORECASE)
+番茄域名正则 = re.compile(r'fanqienovel\.com|changdunovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com', re.IGNORECASE)
+长读短链正则 = re.compile(r'https?://(?:www\.)?(?:changdunovel\.com/t|m\.novelfm\.com/s)/[A-Za-z0-9_-]+/?', re.IGNORECASE)
+链接正则 = re.compile(r'https?://[^\s\'\"<>、，。；,;`]+', re.IGNORECASE)
 免责声明 = '免责声明：本文内容来源于网络，仅作个人学习交流使用。请支持正版小说。\n\n'
 API选择键 = 'fq_api_choice'
 API等待状态字典: dict[str, str] = {}
@@ -154,19 +157,24 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
 
 
 def 获取番茄小说回复流(事件, 消息文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
-    链接匹配 = 小说链接正则.search(消息文本)
-    if not 链接匹配:
+    来源 = 提取直接来源(消息文本) or 提取事件来源(事件)
+    if 来源 is None:
         return None
-    return 生成番茄下载回复流(事件, 消息文本, 链接匹配, 配置)
+    return 生成番茄下载回复流(事件, 来源, 配置)
 
 
-async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: re.Match[str], 配置: Any = None) -> AsyncIterator[Any]:
-    书籍编号 = await 识别番茄小说书籍(链接匹配)
-    if not 书籍编号:
-        return
+async def 生成番茄下载回复流(事件, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
+    书籍编号 = 提取书籍编号(来源)
+    解析来源 = 来源
     API选择 = 读取当前API选择(配置)
     try:
         async with aiohttp.ClientSession() as 会话:
+            if not 书籍编号:
+                解析来源 = await 展开番茄短链(会话, 来源)
+                书籍编号 = 提取书籍编号(解析来源)
+            if not 书籍编号:
+                yield 事件.plain_result('没有识别到番茄小说链接')
+                return
             if API选择 == '3':
                 yield 事件.plain_result('当前使用崩溃API下载\n正在获取书籍信息...')
                 准备结果 = await 崩溃API番茄小说.准备番茄小说(会话, 书籍编号)
@@ -245,36 +253,131 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
         yield 事件.plain_result(f'获取番茄小说内容失败：{异常}')
 
 
-async def 识别番茄小说书籍(链接匹配: re.Match[str]) -> str:
-    所有分组 = 链接匹配.groups()
-    长数字 = 所有分组[9] if len(所有分组) > 9 else ''
-    if 长数字 and 15 <= len(str(长数字)) <= 25 and str(长数字).isdigit():
-        return str(长数字)
-    for 编号 in 所有分组[1:7]:
-        if 编号 and str(编号).isdigit():
-            return str(编号)
-    短码组 = 所有分组[7:9]
-    短码 = next((str(编号) for 编号 in 短码组 if 编号), '')
-    if 短码:
-        return await 解析番茄短链(短码)
+async def 展开番茄短链(会话: aiohttp.ClientSession, 来源: str) -> str:
+    if not 长读短链正则.search(str(来源 or '')):
+        return str(来源 or '')
+    短链匹配 = 长读短链正则.search(str(来源 or ''))
+    if not 短链匹配:
+        return str(来源 or '')
+    短链地址 = 短链匹配.group(0)
+    for 地址 in [短链地址]:
+        try:
+            async with 会话.get(地址, headers=浏览器请求头, allow_redirects=True, timeout=20) as 响应:
+                最终地址 = str(响应.url)
+                logger.debug(f'番茄小说短链已展开：source={来源}, target={最终地址}')
+                if 'book_id=' in 最终地址:
+                    return 最终地址
+                页面文本 = await 响应.text(errors='ignore')
+                if re.search(r'book_id["\s:=]+(\d{15,25})', 页面文本):
+                    logger.debug(f'番茄小说短链页面包含书籍ID：source={来源}')
+                    替换结果 = re.sub(r'(https?://[^\s\'\"<>、，。；,;`]*)', 最终地址, str(来源 or ''), count=1)
+                    return 替换结果
+        except Exception as 异常:
+            logger.debug(f'番茄小说短链展开失败：source={限制文本长度(来源)}, error={异常}')
+    return str(来源 or '')
+
+
+def 提取书籍编号(文本: str) -> str:
+    for 候选路径 in 生成文本变体(str(文本 or '')):
+        候选路径 = 候选路径.strip()
+        if re.fullmatch(r'\d{15,25}', 候选路径):
+            return 候选路径
+        规则列表 = (
+            r'(?:book_id|bookid|bookId)=(\d{15,25})',
+            r'fanqienovel\.com/(?:page|reader)?/?(\d{15,25})',
+            r'fanqienovel\.com/[^\s?&#]*/(\d{15,25})',
+            r'changdunovel\.com/reader/(\d{15,25})',
+            r'changdunovel\.com/reader/[^/\s?&#]+/(\d{15,25})',
+            r'(?:changdunovel\.com|fqnovel\.com|novelfm\.com).*?(?:book_id|bookid|bookId)=(\d{15,25})',
+        )
+        for 规则 in 规则列表:
+            匹配 = re.search(规则, 候选路径, re.IGNORECASE)
+            if 匹配:
+                return 匹配.group(1)
     return ''
 
 
-async def 解析番茄短链(短码: str) -> str:
-    async with aiohttp.ClientSession() as 会话:
-        for 地址 in [f'https://changdunovel.com/t/{短码}', f'https://m.novelfm.com/s/{短码}']:
-            try:
-                async with 会话.get(地址, headers=浏览器请求头, allow_redirects=True, timeout=20) as 响应:
-                    if 响应.url and 'book_id=' in str(响应.url):
-                        匹配 = re.search(r'book_id=(\d+)', str(响应.url))
-                        if 匹配:
-                            return 匹配.group(1)
-                    页面文本 = await 响应.text()
-                    匹配 = re.search(r'book_id["\s:=]+(\d{15,25})', 页面文本)
-                    if 匹配:
-                        return 匹配.group(1)
-            except Exception as 异常:
-                logger.debug(f'番茄短链解析失败：{地址}，{异常}')
+def 生成文本变体(文本: str) -> list[str]:
+    文本 = html.unescape(str(文本 or '')).replace('\\/', '/')
+    变体列表 = [文本]
+    for _ in range(2):
+        解码文本 = urllib.parse.unquote(变体列表[-1])
+        if 解码文本 == 变体列表[-1]:
+            break
+        变体列表.append(解码文本)
+    return 变体列表
+
+
+def 提取直接来源(文本: str) -> str | None:
+    原始文本 = str(文本 or '')
+    for 变体 in 生成文本变体(原始文本):
+        for 匹配 in 链接正则.finditer(变体):
+            链接 = 匹配.group(0).rstrip('),.;]`')
+            if 长读短链正则.search(链接):
+                return 链接
+            if 番茄域名正则.search(链接) and 提取书籍编号(链接):
+                return 链接
+        短链匹配 = 长读短链正则.search(变体)
+        if 短链匹配:
+            return 短链匹配.group(0)
+        if 提取书籍编号(变体):
+            if 番茄域名正则.search(变体) or re.search(r'book_id=', 变体, re.IGNORECASE):
+                return 变体
+        if re.fullmatch(r'\d{15,25}', 变体.strip()):
+            return 变体.strip()
+        if re.search(r'book_id=(\d{15,25})', 变体, re.IGNORECASE):
+            return 变体
+    return None
+
+
+def 提取事件来源(事件: Any) -> str | None:
+    for 值来源 in (getattr(事件, 'message', None), getattr(事件, 'components', None), getattr(事件, 'content', None)):
+        if 值来源 is None:
+            continue
+        if isinstance(值来源, (list, tuple)):
+            for 项目 in 值来源:
+                来源 = 提取番茄来源(项目)
+                if 来源:
+                    return 来源
+        elif isinstance(值来源, dict):
+            for 项目 in 值来源.values():
+                来源 = 提取番茄来源(项目)
+                if 来源:
+                    return 来源
+        else:
+            来源 = 提取番茄来源(值来源)
+            if 来源:
+                return 来源
+    原始消息 = getattr(事件, 'raw_message', '')
+    if 原始消息:
+        来源 = 提取直接来源(str(原始消息))
+        if 来源:
+            return 来源
+    return None
+
+
+def 提取番茄来源(值: Any) -> str:
+    if 值 is None:
+        return ''
+    if isinstance(值, str):
+        return 提取直接来源(值) or ''
+    if isinstance(值, dict):
+        for 键 in ('url', 'link', 'href', 'data', 'text'):
+            if 键 in 值:
+                来源 = 提取番茄来源(值[键])
+                if 来源:
+                    return 来源
+        if 值.get('type') in ('image', 'video', 'record', 'face', 'reply'):
+            return ''
+        for 项目 in 值.values():
+            来源 = 提取番茄来源(项目)
+            if 来源:
+                return 来源
+    if isinstance(值, (list, tuple)):
+        for 项目 in 值:
+            来源 = 提取番茄来源(项目)
+            if 来源:
+                return 来源
     return ''
 
 
@@ -743,3 +846,8 @@ def 清理简介(文本: Any) -> str:
     简介 = re.sub(r"[ \t]+", " ", 简介)
     简介 = re.sub(r"\n{3,}", "\n\n", 简介)
     return 简介.strip()
+
+
+def 限制文本长度(值: Any, 最大长度: int = 2000) -> str:
+    文本 = str(值 or "")
+    return 文本 if len(文本) <= 最大长度 else 文本[:最大长度] + "..."
