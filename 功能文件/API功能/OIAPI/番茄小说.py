@@ -192,6 +192,11 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     章节列表 = 提取章节目录(章节响应数据)
                     if not 章节列表:
                         章节列表 = 提取章节目录(章节响应数据.get('message'))
+                    if not 章节列表 and not 安全整数(书籍信息.get('chapter_count')):
+                        OIAPI详情数据 = await 请求OIAPI详情(会话, 书籍编号, 接口key)
+                        if OIAPI详情数据:
+                            OIAPI书籍信息 = 从字典提取书籍信息(OIAPI详情数据)
+                            书籍信息 = 合并书籍信息(书籍信息, OIAPI书籍信息)
                     if not 章节列表:
                         章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
                 if not 章节列表:
@@ -448,10 +453,26 @@ async def 展开番茄短链(会话: aiohttp.ClientSession, 来源: str) -> str:
 async def 请求章节目录数据(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> dict[str, Any]:
     try:
         return await 请求FqRead(会话, 书籍编号, 接口key, 'chapters', '')
-    except 用户可见错误:
-        raise
+    except 用户可见错误 as 异常:
+        logger.debug(f'番茄小说OIAPI目录业务错误：book_id={书籍编号}, error={异常}')
+        return {}
     except Exception as 异常:
         logger.debug(f'番茄小说OIAPI目录请求失败：book_id={书籍编号}, error={异常}')
+        return {}
+
+async def 请求OIAPI详情(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> dict[str, Any]:
+    try:
+        响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'detail', '')
+        if isinstance(响应数据, dict):
+            数据 = 响应数据.get('data')
+            if isinstance(数据, dict):
+                return 数据
+        return {}
+    except 用户可见错误 as 异常:
+        logger.debug(f'番茄小说OIAPI详情业务错误：book_id={书籍编号}, error={异常}')
+        return {}
+    except Exception as 异常:
+        logger.debug(f'番茄小说OIAPI详情请求失败：book_id={书籍编号}, error={异常}')
         return {}
 
 def 从响应提取书籍信息(响应数据: Any) -> dict[str, Any]:
@@ -524,6 +545,8 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
 async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
+    except 用户可见错误:
+        raise
     except Exception as 异常:
         if len(批次) <= 1:
             章节 = 批次[0]
