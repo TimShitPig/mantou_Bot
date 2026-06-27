@@ -37,7 +37,10 @@ except Exception as 异常:
     崩溃API番茄小说 = None
     logger.warning(f'崩溃API番茄小说模块加载失败：error={异常}')
 OIAPI地址 = 'https://oiapi.net/api/FqRead'
+App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1'
 落地页接口地址 = 'https://api.fqnovel.com/novel_ug/share/landing_page'
+官方书籍信息地址 = 'https://fanqienovel.com/api/book/info'
+官方章节目录地址 = 'https://fanqienovel.com/api/reader/directory/detail'
 下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
 每段最大字数 = 5000000
@@ -51,6 +54,7 @@ API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
 崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
+App请求头 = {'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://changdunovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
 长读短链正则 = re.compile('https?://(?:www\\.)?(?:changdunovel\\.com/t|m\\.novelfm\\.com/s)/[A-Za-z0-9_-]+/?', re.IGNORECASE)
 链接正则 = re.compile('https?://[^\\s\'\\"<>\\u3001\\uff0c\\u3002]+', re.IGNORECASE)
@@ -176,23 +180,22 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
             else:
                 if not 接口key:
-                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API或崩溃API，请发送“查看API”后选择 2 或 3'
+                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API或崩溃API，请发送"查看API"后选择 2 或 3'
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
                     return
-                章节响应数据 = await 请求章节目录数据(会话, 书籍编号, 接口key)
-                章节列表 = 提取章节目录(章节响应数据)
-                书籍信息 = 默认书籍信息(书籍编号)
-                书籍信息 = 合并书籍信息(书籍信息, 从响应提取书籍信息(章节响应数据))
-                if not 有有效书籍详情(书籍信息):
-                    书籍信息 = 合并书籍信息(书籍信息, await 获取书籍信息(会话, 书籍编号, 解析来源))
+                书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源)
+                章节列表 = await 获取官方章节目录(会话, 书籍编号)
                 if not 章节列表:
-                    章节列表 = 提取章节目录(章节响应数据.get('message'))
+                    章节响应数据 = await 请求章节目录数据(会话, 书籍编号, 接口key)
+                    章节列表 = 提取章节目录(章节响应数据)
+                    if not 章节列表:
+                        章节列表 = 提取章节目录(章节响应数据.get('message'))
+                    if not 章节列表:
+                        章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
                 if not 章节列表:
-                    章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
-                if not 章节列表:
-                    yield '番茄小说下载失败：OIAPI没有获取到章节目录'
+                    yield '番茄小说下载失败：没有获取到章节目录'
                     return
                 书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
                 logger.debug(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
@@ -232,12 +235,144 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
 
 async def 获取书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, 来源: str) -> dict[str, Any]:
     书籍信息 = 默认书籍信息(书籍编号)
+    share_code = 提取share_code(来源)
+    if share_code:
+        app信息 = await 获取App分享书籍信息(会话, 书籍编号, share_code)
+        书籍信息 = 合并书籍信息(书籍信息, app信息)
+        if 有有效书籍详情(书籍信息):
+            return 书籍信息
+    官方信息 = await 获取官方书籍信息(会话, 书籍编号)
+    书籍信息 = 合并书籍信息(书籍信息, 官方信息)
+    if 有有效书籍详情(书籍信息):
+        return 书籍信息
     落地页信息 = await 获取分享落地页信息(会话, 来源, 书籍编号)
     书籍信息 = 合并书籍信息(书籍信息, 落地页信息)
     if 有有效书籍详情(书籍信息):
         return 书籍信息
     书籍信息 = 合并书籍信息(书籍信息, await 获取网页书籍信息(会话, 书籍编号))
     return 书籍信息
+
+def 提取share_code(来源: str) -> str:
+    文本 = str(来源 or '')
+    if not 文本.startswith('http'):
+        return ''
+    for 变体 in 生成文本变体(文本):
+        try:
+            解析结果 = urllib.parse.urlsplit(变体)
+            查询参数 = dict(urllib.parse.parse_qsl(解析结果.query, keep_blank_values=True))
+            code = 查询参数.get('share_code', '')
+            if code:
+                return code
+        except Exception:
+            continue
+    return ''
+
+async def 获取App分享书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, share_code: str) -> dict[str, Any]:
+    try:
+        参数 = {'aid': '1967', 'book_id': 书籍编号, 'share_type': '0', 'share_code': share_code}
+        async with 会话.get(App分享详情地址, params=参数, headers=App请求头, timeout=15) as 响应:
+            if 响应.status >= 400:
+                logger.debug(f'番茄小说App分享详情HTTP错误：book_id={书籍编号}, status={响应.status}')
+                return {}
+            响应数据 = await 响应.json(content_type=None)
+    except Exception as 异常:
+        logger.debug(f'番茄小说App分享详情请求失败：book_id={书籍编号}, error={异常}')
+        return {}
+    if not isinstance(响应数据, dict):
+        return {}
+    if str(响应数据.get('code')) != '0':
+        logger.debug(f'番茄小说App分享详情返回错误：book_id={书籍编号}, code={响应数据.get("code")}, msg={限制文本长度(响应数据.get("message"), 100)}')
+        return {}
+    数据 = 响应数据.get('data')
+    if not isinstance(数据, dict):
+        return {}
+    return {
+        'title': 清理书名(数据.get('book_name') or 数据.get('bookName') or 数据.get('title')),
+        'author': 清理文本(数据.get('author') or 数据.get('authorName')),
+        'word_count': 格式化字数(数据.get('word_number') or 数据.get('wordNumber') or 数据.get('word_count')),
+        'status': 规范化状态(数据.get('creation_status') or 数据.get('status'), ''),
+        'chapter_count': 安全整数(数据.get('serial_count') or 数据.get('chapter_count') or 数据.get('chapterCount')),
+        'intro': 清理简介(数据.get('abstract') or 数据.get('book_abstract_v2') or 数据.get('description')),
+    }
+
+async def 获取官方书籍信息(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
+    try:
+        async with 会话.get(官方书籍信息地址, params={'bookId': 书籍编号}, timeout=15) as 响应:
+            if 响应.status >= 400:
+                logger.debug(f'番茄小说官方书籍信息HTTP错误：book_id={书籍编号}, status={响应.status}')
+                return {}
+            响应数据 = await 响应.json(content_type=None)
+    except Exception as 异常:
+        logger.debug(f'番茄小说官方书籍信息请求失败：book_id={书籍编号}, error={异常}')
+        return {}
+    if not isinstance(响应数据, dict):
+        return {}
+    if str(响应数据.get('code')) not in ('0', '200'):
+        logger.debug(f'番茄小说官方书籍信息返回错误：book_id={书籍编号}, code={响应数据.get("code")}, msg={限制文本长度(响应数据.get("message"), 100)}')
+        return {}
+    数据 = 响应数据.get('data')
+    if not isinstance(数据, dict):
+        return {}
+    作者 = 数据.get('author') or 数据.get('authorName')
+    简介 = 数据.get('abstract') or 数据.get('description')
+    书名 = 数据.get('bookName') or 数据.get('title')
+    return {
+        'title': 清理书名(书名),
+        'author': 清理文本(作者),
+        'word_count': 格式化字数(数据.get('wordNumber') or 数据.get('wordCount') or 数据.get('word_number')),
+        'status': 规范化状态(数据.get('creationStatus') or 数据.get('status'), ''),
+        'chapter_count': 安全整数(数据.get('chapterTotal') or 数据.get('chapterCount') or 数据.get('serialCount')),
+        'intro': 清理简介(简介),
+    }
+
+async def 获取官方章节目录(会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+    try:
+        async with 会话.get(官方章节目录地址, params={'bookId': 书籍编号}, timeout=30) as 响应:
+            if 响应.status >= 400:
+                logger.debug(f'番茄小说官方目录HTTP错误：book_id={书籍编号}, status={响应.status}')
+                return []
+            响应数据 = await 响应.json(content_type=None)
+    except Exception as 异常:
+        logger.debug(f'番茄小说官方目录请求失败：book_id={书籍编号}, error={异常}')
+        return []
+    if not isinstance(响应数据, dict) or str(响应数据.get('code')) not in ('0', '200'):
+        return []
+    数据 = 响应数据.get('data')
+    if not isinstance(数据, dict):
+        return []
+    卷列表 = 数据.get('chapterListWithVolume')
+    章节列表: list[dict[str, Any]] = []
+    if isinstance(卷列表, list):
+        for 卷 in 卷列表:
+            if not isinstance(卷, list):
+                continue
+            for 章 in 卷:
+                if not isinstance(章, dict):
+                    continue
+                章节ID = str(章.get('itemId') or '')
+                标题 = 清理文本(章.get('title') or '')
+                序号 = 安全整数(章.get('realChapterOrder'))
+                if 序号 <= 0:
+                    序号 = len(章节列表) + 1
+                if not 章节ID and not 标题:
+                    continue
+                章节列表.append({'id': 章节ID or str(序号), 'title': 标题 or f'第{序号}章', 'index': 序号})
+    if not 章节列表:
+        all_ids = 数据.get('allItemIds')
+        if isinstance(all_ids, list) and all_ids:
+            for 位置, 章节ID in enumerate(all_ids, start=1):
+                章节列表.append({'id': str(章节ID), 'title': f'第{位置}章', 'index': 位置})
+    去重结果: list[dict[str, Any]] = []
+    已见集合: set[tuple[str, int]] = set()
+    for 位置, 项目 in enumerate(章节列表, start=1):
+        if not int(项目.get('index') or 0):
+            项目['index'] = 位置
+        键 = (str(项目.get('id') or ''), int(项目.get('index') or 0))
+        if 键 in 已见集合:
+            continue
+        已见集合.add(键)
+        去重结果.append(项目)
+    return sorted(去重结果, key=lambda 项目: int(项目.get('index') or 0))
 
 def 有有效书籍详情(书籍信息: dict[str, Any]) -> bool:
     标题 = str(书籍信息.get('title') or '')

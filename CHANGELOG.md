@@ -1,5 +1,25 @@
 # 更新日志
 
+## v2.3.1
+
+### 优化
+
+- 番茄小说书籍详情优先使用App API（`api.fqnovel.com/reading/bookapi/share/detail/v1`）获取：
+  - 当分享链接包含 `share_code` 参数时，优先通过App API获取书籍元数据（书名、作者、字数、状态、章节数、简介）。
+  - App API请求失败或无 `share_code` 时，自动降级到 `fanqienovel.com/api/book/info` 网页API。
+  - 章节目录仍使用 `fanqienovel.com/api/reader/directory/detail` 获取，OIAPI仅负责章节正文。
+
+## v2.3.0
+
+### 重构
+
+- 番茄小说元数据和章节目录改用官方API获取，OIAPI仅用于获取章节正文：
+  - 书籍信息（书名、作者、字数、状态、简介）使用 `fanqienovel.com/api/book/info` 获取，不再请求旧的落地页API和网页HTML解析。
+  - 章节目录（章节ID、标题、序号）使用 `fanqienovel.com/api/reader/directory/detail` 获取，不再通过OIAPI的 `method=chapters` 请求目录。
+  - OIAPI现在只负责获取章节正文内容（`method=chapter`），大幅减少冗余API请求。
+  - 旧的落地页API和网页HTML获取方式保留为降级回退方案。
+- 修复旧官方落地页API（`novel_ug/share/landing_page`）对 `share_type=0` 链接返回500错误导致详情获取失败的问题，新API完全兼容各类分享链接和直接book_id。
+
 ## v2.2.28
 
 ### 修复
