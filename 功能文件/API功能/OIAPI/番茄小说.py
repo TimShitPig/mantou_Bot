@@ -208,7 +208,15 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：OIAPI没有获取到可用章节正文'
+                    失败原因 = ''
+                    for 项目 in 章节结果列表:
+                        原因 = str(项目.get('error') or '')
+                        if 原因 and 是永久性业务错误(原因):
+                            失败原因 = 原因
+                            break
+                    if not 失败原因:
+                        失败原因 = 'OIAPI没有获取到可用章节正文'
+                    yield f'番茄小说下载失败：{失败原因}'
                     return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
             logger.debug(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
@@ -545,13 +553,24 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
 async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
-    except 用户可见错误:
-        raise
+    except 用户可见错误 as 异常:
+        错误文本 = str(异常)
+        if 是永久性业务错误(错误文本):
+            raise
+        if len(批次) <= 1:
+            章节 = 批次[0]
+            logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, chapter_id={章节.get('id')}, error={异常}")
+            return [{**章节, 'content': '【下载失败】', 'success': False, 'error': 错误文本}]
+        中点 = max(1, len(批次) // 2)
+        logger.warning(f"番茄小说业务错误，拆分重试：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={错误文本}")
+        左侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[:中点])
+        右侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[中点:])
+        return 左侧结果 + 右侧结果
     except Exception as 异常:
         if len(批次) <= 1:
             章节 = 批次[0]
             logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, chapter_id={章节.get('id')}, error={异常}")
-            return [{**章节, 'content': '【下载失败】', 'success': False}]
+            return [{**章节, 'content': '【下载失败】', 'success': False, 'error': str(异常)}]
         中点 = max(1, len(批次) // 2)
         logger.warning(f"番茄小说范围请求失败，拆分重试：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
         左侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[:中点])
@@ -600,6 +619,10 @@ def 格式化OIAPI失败提示(消息: Any) -> str:
     if 'Key注册失败' in 文本 and '请等待10分钟再下载' not in 文本:
         return f'{文本}\n请等待10分钟再下载'
     return 文本
+
+def 是永久性业务错误(错误文本: str) -> bool:
+    永久关键词 = ('付费内容', 'Key注册失败', 'key错误', 'Key错误', 'KEY错误', '密钥', '不存在该书籍', '书籍不存在')
+    return any(关键词 in 错误文本 for 关键词 in 永久关键词)
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     项目列表: list[dict[str, Any]] = []
