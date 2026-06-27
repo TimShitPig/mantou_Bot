@@ -44,6 +44,7 @@ App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1
 下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
 每段最大字数 = 5000000
+每段最大章节数 = 50
 进度分段数 = 10
 文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
@@ -187,11 +188,10 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
                 书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源)
                 章节列表 = await 获取官方章节目录(会话, 书籍编号)
+                OIAPI目录已刷新 = False
                 if not 章节列表:
-                    章节响应数据 = await 请求章节目录数据(会话, 书籍编号, 接口key)
-                    章节列表 = 提取章节目录(章节响应数据)
-                    if not 章节列表:
-                        章节列表 = 提取章节目录(章节响应数据.get('message'))
+                    章节列表 = await 获取OIAPI章节目录(会话, 书籍编号, 接口key)
+                    OIAPI目录已刷新 = bool(章节列表)
                     if not 章节列表 and not 安全整数(书籍信息.get('chapter_count')):
                         OIAPI详情数据 = await 请求OIAPI详情(会话, 书籍编号, 接口key)
                         if OIAPI详情数据:
@@ -207,6 +207,24 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 yield 格式化下载提示(书籍信息, len(章节列表))
                 章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+                if not 成功章节列表 and not OIAPI目录已刷新:
+                    失败原因 = ''
+                    for 项目 in 章节结果列表:
+                        原因 = str(项目.get('error') or '')
+                        if 是章节选择错误(原因):
+                            失败原因 = 原因
+                            break
+                        if 原因 and 是永久性业务错误(原因):
+                            失败原因 = 原因
+                            break
+                    if 是章节选择错误(失败原因):
+                        logger.info(f'番茄小说OIAPI章节选择错误，刷新章节列表重试：book_id={书籍编号}')
+                        新章节列表 = await 获取OIAPI章节目录(会话, 书籍编号, 接口key)
+                        if 新章节列表 and len(新章节列表) > 0:
+                            章节列表 = 新章节列表
+                            书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
+                            章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
+                            成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
                     失败原因 = ''
                     for 项目 in 章节结果列表:
@@ -458,16 +476,6 @@ async def 展开番茄短链(会话: aiohttp.ClientSession, 来源: str) -> str:
         return 网页文本
     return 最终地址 or 来源
 
-async def 请求章节目录数据(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> dict[str, Any]:
-    try:
-        return await 请求FqRead(会话, 书籍编号, 接口key, 'chapters', '')
-    except 用户可见错误 as 异常:
-        logger.debug(f'番茄小说OIAPI目录业务错误：book_id={书籍编号}, error={异常}')
-        return {}
-    except Exception as 异常:
-        logger.debug(f'番茄小说OIAPI目录请求失败：book_id={书籍编号}, error={异常}')
-        return {}
-
 async def 请求OIAPI详情(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> dict[str, Any]:
     try:
         响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'detail', '')
@@ -482,6 +490,23 @@ async def 请求OIAPI详情(会话: aiohttp.ClientSession, 书籍编号: str, �
     except Exception as 异常:
         logger.debug(f'番茄小说OIAPI详情请求失败：book_id={书籍编号}, error={异常}')
         return {}
+
+async def 获取OIAPI章节目录(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> list[dict[str, Any]]:
+    try:
+        响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'chapters', '')
+        章节列表 = 提取章节目录(响应数据)
+        if not 章节列表:
+            章节列表 = 提取章节目录(响应数据.get('message') if isinstance(响应数据, dict) else None)
+        return 章节列表
+    except 用户可见错误 as 异常:
+        logger.debug(f'番茄小说OIAPI目录业务错误：book_id={书籍编号}, error={异常}')
+        return []
+    except Exception as 异常:
+        logger.debug(f'番茄小说OIAPI目录请求失败：book_id={书籍编号}, error={异常}')
+        return []
+
+def 是章节选择错误(错误文本: str) -> bool:
+    return '请检测章节选择' in str(错误文本 or '')
 
 def 从响应提取书籍信息(响应数据: Any) -> dict[str, Any]:
     候选列表: list[tuple[int, dict[str, Any]]] = []
@@ -578,9 +603,8 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
         return 左侧结果 + 右侧结果
 
 async def 请求并映射章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    开始章 = min((int(章节.get('index') or 0) for 章节 in 批次))
-    结束章 = max((int(章节.get('index') or 0) for 章节 in 批次))
-    章节参数 = str(开始章) if 开始章 == 结束章 else f'{开始章}-{结束章}'
+    章节序号列表 = [str(int(章节.get('index') or 0)) for 章节 in 批次 if int(章节.get('index') or 0) > 0]
+    章节参数 = ','.join(章节序号列表) if len(章节序号列表) > 1 else (章节序号列表[0] if 章节序号列表 else '')
     响应数据 = await 请求FqRead(会话, 书籍编号, 接口key, 'chapter', 章节参数)
     原始章节项 = 规范化响应章节(响应数据.get('data') if isinstance(响应数据, dict) else 响应数据)
     if not 原始章节项 and isinstance(响应数据, dict):
@@ -696,7 +720,9 @@ def 提取正文(章节: dict[str, Any] | None) -> str:
 def 拆分章节目录(目录: list[dict[str, Any]], 总字数: int) -> list[list[dict[str, Any]]]:
     if not 目录:
         return []
-    拆分数 = max(1, math.ceil(总字数 / 每段最大字数)) if 总字数 > 0 else 1
+    按字数拆分数 = max(1, math.ceil(总字数 / 每段最大字数)) if 总字数 > 0 else 1
+    按章节拆分数 = max(1, math.ceil(len(目录) / 每段最大章节数))
+    拆分数 = max(按字数拆分数, 按章节拆分数)
     分段大小 = max(1, math.ceil(len(目录) / 拆分数))
     return [目录[开始章:开始章 + 分段大小] for 开始章 in range(0, len(目录), 分段大小)]
 
