@@ -7,7 +7,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiohttp
 from astrbot.api import logger
@@ -133,17 +133,14 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
     return None
 
 
-async def 获取番茄小说回复流(事件, 消息文本: str):
-    if not await 小说功能开关.小说功能是否开启('fanqie'):
-        yield 事件.plain_result(小说功能开关.获取小说功能关闭回复('番茄'))
-        return
-    未激活回复 = await 用户激活功能.获取未激活拦截回复(事件)
-    if 未激活回复 is not None:
-        yield 事件.plain_result(未激活回复)
-        return
+def 获取番茄小说回复流(事件, 消息文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
     链接匹配 = 小说链接正则.search(消息文本)
     if not 链接匹配:
-        return
+        return None
+    return 生成番茄下载回复流(事件, 消息文本, 链接匹配, 配置)
+
+
+async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: re.Match[str], 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = await 识别番茄小说书籍(链接匹配)
     if not 书籍编号:
         return
@@ -164,7 +161,6 @@ async def 获取番茄小说回复流(事件, 消息文本: str):
                 return
             书籍信息 = 准备结果['book_info']
             章节目录 = 准备结果['chapters']
-            免费额度提示 = await 用户激活功能.获取下载免费额度提示(事件, 'fanqie')
             信息回复 = [
                 f"书名：{书籍信息['title']}",
                 f"作者：{书籍信息['author']}",
@@ -172,8 +168,6 @@ async def 获取番茄小说回复流(事件, 消息文本: str):
                 f"章节：{书籍信息['chapter_count'] or len(章节目录)}章",
                 f"字数：{书籍信息['word_count'] or '未知'}"
             ]
-            if 免费额度提示:
-                信息回复.append(免费额度提示)
             信息回复.append('正在下载中请稍等.....')
             yield 事件.plain_result('\n'.join(信息回复))
             logger.info(f"番茄小说开始下载：{书籍信息['title']}，共{书籍信息['chapter_count']}章，API={获取API中文名称(API选择)}")
@@ -229,9 +223,6 @@ async def 获取番茄小说回复流(事件, 消息文本: str):
     except Exception as 异常:
         logger.error(f'番茄小说下载失败：{书籍编号}，API={获取API中文名称(API选择)}', exc_info=异常)
         yield 事件.plain_result(f'获取番茄小说内容失败：{异常}')
-    最后一本提示 = await 用户激活功能.检查是否最后一本免费(事件, 'fanqie')
-    if 最后一本提示:
-        yield 事件.plain_result(最后一本提示)
 
 
 async def 识别番茄小说书籍(链接匹配: re.Match[str]) -> str:
