@@ -21,6 +21,7 @@ import main as 主模块
 UC网盘功能 = getattr(主模块, "UC网盘功能")
 百度网盘功能 = getattr(主模块, "百度网盘功能")
 自建API番茄小说 = getattr(主模块, "自建API番茄小说模块")
+权限工具 = getattr(主模块, "权限工具")
 
 缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 缓存目录.mkdir(parents=True, exist_ok=True)
@@ -81,7 +82,7 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
     会话键 = 事件.group_id if hasattr(事件, 'group_id') and 事件.group_id else 'private'
     用户QQ = str(事件.get_sender_id())
     管理员标识 = f'管理:{用户QQ}:{会话键}'
-    if not getattr(事件, 'is_admin_or_owner', False):
+    if not 权限工具.是群文件清理管理员(事件, 配置):
         return None
     消息文本 = str(命令文本 or getattr(事件, 'message_str', '') or '').strip()
     if not 消息文本:
