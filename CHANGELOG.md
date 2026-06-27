@@ -1,5 +1,14 @@
 # 更新日志
 
+## v2.4.5
+
+### 修复
+
+- 修复番茄小说链接识别正则解析bug：`识别番茄小说书籍` 函数错误地将正则第一个捕获组（完整URL字符串如 `https://changdunovel.com/t/xxx`）当作数字 book_id 返回，导致短链 `changdunovel.com/t/xxx` 和 `m.novelfm.com/s/xxx` 无法解析，后续所有API请求（OIAPI/析API/崩溃API/自建API）均因 book_id 为URL而非数字而失败。修复方法：遍历捕获组时跳过非数字的URL分组，仅返回纯数字book_id；长数字捕获组索引从错误的 `group(9)`（实际为短码）修正为 `groups()[9]`（即第10组，15-25位纯数字）；短码正确解析后调用短链展开获取book_id。
+- 修复API选择状态存储键兼容性：v2.3.x 使用 `fanqie_api/current_api` 存储中文值（`OIAPI`/`析API`/`崩溃API`），v2.4.x 改为 `fq_api_choice/api` 存储数字值（`1`/`2`/`3`/`4`），旧数据无法被读取导致API选择默认为OIAPI，且若OIAPI未配置key则提示"番茄小说key为空"。修复方法：读取时兼容旧键，自动迁移中文值到新数字键。
+- 修复自建API章节内容ID匹配失败：自建API `/api/content` 返回的章节数据中，ID字段位于 `novel_data.item_id` 而非顶层 `itemId`/`item_id`，导致批量下载时无法按ID匹配章节与请求，所有章节正文为空。修复方法：`映射章节响应` 增加从 `novel_data` 子对象提取ID的逻辑，并增加按位置顺序对应的降级匹配策略。
+- 修复自建API内容接口双层data解析：`请求并映射批次` 直接取 `响应数据.get('data')`，现改为使用统一的 `解析内层数据` 函数，兼容将来可能出现的双层嵌套响应格式。
+
 ## v2.4.4
 
 ### 修复

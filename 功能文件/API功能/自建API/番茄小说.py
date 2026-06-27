@@ -108,7 +108,9 @@ async def 请求并映射批次(会话: aiohttp.ClientSession, 书籍编号: str
     if str(响应数据.get('code')) not in ('0', '200'):
         消息 = 响应数据.get('message') or 响应数据.get('msg') or '接口返回失败'
         raise RuntimeError(f'自建API内容返回失败：{限制文本长度(str(消息), 200)}')
-    数据 = 响应数据.get('data')
+    数据 = 解析内层数据(响应数据)
+    if not 数据:
+        数据 = 响应数据.get('data')
     章节项列表: list[dict[str, Any]] = []
     if isinstance(数据, dict):
         章节项列表 = 数据.get('chapters') or []
@@ -121,16 +123,38 @@ async def 请求并映射批次(会话: aiohttp.ClientSession, 书籍编号: str
 
 def 映射章节响应(批次: list[dict[str, Any]], 原始章节项: list[dict[str, Any]]) -> list[dict[str, Any]]:
     按编号索引: dict[str, dict[str, Any]] = {}
+    有效章节项: list[dict[str, Any]] = []
     for 项目 in 原始章节项:
         if not isinstance(项目, dict):
             continue
         cid = str(读取任意字段(项目, ('itemId', 'item_id', 'chapter_id', 'id')) or '')
+        if not cid:
+            nd = 项目.get('novel_data')
+            if isinstance(nd, dict):
+                cid = str(读取任意字段(nd, ('itemId', 'item_id', 'chapter_id', 'id', 'group_id')) or '')
         if cid:
             按编号索引[cid] = 项目
+        有效章节项.append(项目)
     结果列表: list[dict[str, Any]] = []
-    for 章节 in 批次:
+    已用原始索引: set[int] = set()
+    for 位置, 章节 in enumerate(批次):
         cid = str(章节.get('id') or '')
         原始项 = 按编号索引.get(cid)
+        if 原始项:
+            原始位置 = 有效章节项.index(原始项) if 原始项 in 有效章节项 else -1
+            if 原始位置 >= 0:
+                已用原始索引.add(原始位置)
+        if not 原始项 and 位置 < len(有效章节项):
+            候选 = 有效章节项[位置]
+            if 位置 not in 已用原始索引:
+                原始项 = 候选
+                已用原始索引.add(位置)
+        if not 原始项:
+            for idx, 项目 in enumerate(有效章节项):
+                if idx not in 已用原始索引:
+                    原始项 = 项目
+                    已用原始索引.add(idx)
+                    break
         正文 = 清理正文(提取正文(原始项) if 原始项 else '')
         标题 = 清理文本(读取任意字段(原始项 or {}, ('title', 'chapter_title', 'name'))) or str(章节.get('title') or f"第{章节.get('index')}章")
         结果列表.append({**章节, 'title': 标题, 'content': 正文 or '【下载失败】', 'success': bool(正文)})
