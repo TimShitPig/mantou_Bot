@@ -11,8 +11,8 @@ from astrbot.api import logger
 
 
 聚合API地址 = "http://101.35.133.34:5000"
-批次大小 = 15
-最大并发批次 = 100
+批次大小 = 50
+最大并发批次 = 10
 进度分段数 = 10
 浏览器请求头 = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
