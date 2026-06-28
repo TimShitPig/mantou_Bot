@@ -36,6 +36,11 @@ try:
 except Exception as 异常:
     崩溃API番茄小说 = None
     logger.warning(f'崩溃API番茄小说模块加载失败：error={异常}')
+try:
+    from 功能文件.API功能.番茄API import 番茄小说 as 番茄API番茄小说
+except Exception as 异常:
+    番茄API番茄小说 = None
+    logger.warning(f'番茄API番茄小说模块加载失败：error={异常}')
 OIAPI地址 = 'https://oiapi.net/api/FqRead'
 App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1'
 落地页接口地址 = 'https://api.fqnovel.com/novel_ug/share/landing_page'
@@ -47,8 +52,8 @@ App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1
 进度分段数 = 10
 文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
-API选项 = {'1': 'OIAPI', '2': '析API', '3': '崩溃API'}
-API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API'}
+API选项 = {'1': 'OIAPI', '2': '析API', '3': '崩溃API', '4': '番茄API'}
+API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API', '番茄api': '番茄API', '新api': '番茄API', 'fanqieapi': '番茄API', 'fqapi': '番茄API'}
 待选择API会话: dict[str, float] = {}
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
@@ -93,7 +98,8 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             '1. OIAPI（oiapi.net，需要配置 番茄小说key）',
             '2. 析API（biek.top，不需要 番茄小说key）',
             '3. 崩溃API（111.170.14.45:2000，下载任务模式）',
-            f'请在 {API选择等待秒数} 秒内发送 1、2 或 3 完成切换',
+            '4. 番茄API（101.35.133.34:5000，独立接口）',
+            f'请在 {API选择等待秒数} 秒内发送 1、2、3 或 4 完成切换',
         ])
     if 文本 in API选项 and API选择等待中(会话键):
         if not 是群文件清理管理员(事件, 配置):
@@ -138,7 +144,27 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
             if not 书籍编号:
                 解析来源 = await 展开番茄短链(会话, 来源)
                 书籍编号 = 提取书籍编号(解析来源)
-            if 接口来源 == '崩溃API':
+            if 接口来源 == '番茄API':
+                if 番茄API番茄小说 is None:
+                    yield '番茄小说下载失败：番茄API模块不可用'
+                    return
+                if not 书籍编号:
+                    yield '没有识别到番茄小说链接'
+                    return
+                准备结果 = await 番茄API番茄小说.准备番茄小说(会话, 书籍编号)
+                if not 准备结果.get('success'):
+                    yield f"番茄小说下载失败：{限制文本长度(准备结果.get('error') or '番茄API准备失败', 500)}"
+                    return
+                书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
+                章节列表 = 准备结果.get('chapters') or []
+                logger.debug(f"番茄小说开始下载：source=番茄API, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
+                yield 格式化下载提示(书籍信息, len(章节列表))
+                章节结果列表 = await 番茄API番茄小说.下载全部章节(会话, 书籍编号, 章节列表)
+                成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
+                if not 成功章节列表:
+                    yield '番茄小说下载失败：番茄API没有获取到可用章节正文'
+                    return
+            elif 接口来源 == '崩溃API':
                 if 崩溃API番茄小说 is None:
                     logger.warning('番茄小说崩溃API下载失败：崩溃API模块不可用')
                     yield 崩溃API下载失败提示
@@ -190,7 +216,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
             else:
                 if not 接口key:
-                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API或崩溃API，请发送"查看API"后选择 2 或 3'
+                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API、崩溃API或番茄API，请发送"查看API"后选择 2、3 或 4'
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
@@ -985,6 +1011,8 @@ def 写入当前番茄小说接口(配置: Any, 接口名称: str) -> None:
 
 def 规范化番茄小说接口(值: Any) -> str:
     文本 = str(值 or '').strip().lower()
+    if 文本 in ('番茄api', '番茄', '新api', 'fanqieapi', 'fqapi', 'fanqie', '4'):
+        return '番茄API'
     if 文本 in ('崩溃api', '崩溃', 'bengkuiapi', 'bengkui', 'crashapi', 'crash', '3'):
         return '崩溃API'
     if 文本 in ('析api', 'xiapi', 'xapi', '析', 'xi', '2'):
