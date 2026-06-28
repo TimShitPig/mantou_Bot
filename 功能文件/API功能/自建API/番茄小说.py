@@ -31,6 +31,10 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
     书籍信息 = 合并书籍信息(默认书籍信息(书籍编号), 从字典提取书籍信息(详情数据))
     章节列表 = 提取章节目录(目录数据)
     if not 章节列表:
+        logger.warning(f"番茄小说自建API /api/book 未获取到章节目录，尝试 /api/directory：book_id={书籍编号}")
+        目录兜底响应 = await 请求JSON(会话, "/api/directory", book_id=书籍编号)
+        章节列表 = 提取章节目录(目录兜底响应.get("data") if isinstance(目录兜底响应, dict) else 目录兜底响应)
+    if not 章节列表:
         return {"success": False, "error": "自建API没有获取到章节目录"}
 
     书籍信息 = 合并书籍信息(书籍信息, {"chapter_count": len(章节列表)})
@@ -195,19 +199,12 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     卷列表 = 数据.get('chapterListWithVolume')
     if isinstance(卷列表, list):
         for 卷 in 卷列表:
-            if not isinstance(卷, list):
-                continue
-            for 章 in 卷:
-                if not isinstance(章, dict):
-                    continue
-                章节ID = str(章.get('itemId') or 章.get('chapter_id') or 章.get('item_id') or '')
-                标题 = 清理文本(章.get('title') or 章.get('name') or '')
-                序号 = 安全整数(章.get('realChapterOrder') or 章.get('order') or 章.get('index'))
-                if not 序号:
-                    序号 = len(结果列表) + 1
-                if not 章节ID and not 标题:
-                    continue
-                结果列表.append({'id': 章节ID or str(序号), 'title': 标题 or f'第{序号}章', 'index': 序号})
+            for 章 in 遍历章节项(卷):
+                添加章节目录项(结果列表, 章)
+
+    if not 结果列表:
+        for 章 in 遍历章节项(data_get(数据, 'lists', 'list', 'chapters', 'chapterList')):
+            添加章节目录项(结果列表, 章)
 
     if not 结果列表:
         all_ids = 数据.get('allItemIds')
@@ -226,6 +223,41 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
         已见集合.add(键)
         去重结果.append(项目)
     return sorted(去重结果, key=lambda 项目: int(项目.get('index') or 0))
+
+
+def 遍历章节项(值: Any):
+    if isinstance(值, list):
+        for 项目 in 值:
+            yield from 遍历章节项(项目)
+    elif isinstance(值, dict):
+        子列表 = data_get(值, 'chapters', 'chapterList', 'items', 'list')
+        if isinstance(子列表, list):
+            yield from 遍历章节项(子列表)
+        elif 读取任意字段(值, ('itemId', 'item_id', 'chapter_id', 'id', 'title', 'name')):
+            yield 值
+
+
+def data_get(数据: dict[str, Any], *键列表: str) -> Any:
+    if not isinstance(数据, dict):
+        return None
+    for 键 in 键列表:
+        值 = 数据.get(键)
+        if 值 is not None:
+            return 值
+    return None
+
+
+def 添加章节目录项(结果列表: list[dict[str, Any]], 章: dict[str, Any]) -> None:
+    if not isinstance(章, dict):
+        return
+    章节ID = str(读取任意字段(章, ('itemId', 'item_id', 'chapter_id', 'id')) or '')
+    标题 = 清理文本(读取任意字段(章, ('title', 'name', 'chapter_title')))
+    序号 = 安全整数(读取任意字段(章, ('realChapterOrder', 'real_chapter_order', 'chapter_index', 'order', 'index')))
+    if not 序号:
+        序号 = len(结果列表) + 1
+    if not 章节ID and not 标题:
+        return
+    结果列表.append({'id': 章节ID or str(序号), 'title': 标题 or f'第{序号}章', 'index': 序号})
 
 
 def 从字典提取书籍信息(数据: dict[str, Any]) -> dict[str, Any]:

@@ -184,13 +184,10 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
     try:
         async with aiohttp.ClientSession() as 会话:
             if API选择 == '3':
-                yield 事件.plain_result('当前使用崩溃API下载\n正在获取书籍信息...')
                 准备结果 = await 崩溃API番茄小说.准备番茄小说(会话, 书籍编号)
             elif API选择 == '4':
-                yield 事件.plain_result('当前使用自建API下载\n正在获取书籍信息...')
                 准备结果 = await 自建API番茄小说.准备番茄小说(会话, 书籍编号)
             elif API选择 == '2':
-                yield 事件.plain_result('当前使用析API下载\n正在获取书籍信息...')
                 官方书籍信息 = {}
                 try:
                     详情结果 = await 获取书籍信息(会话, 书籍编号, 获取番茄小说key())
@@ -200,7 +197,6 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
                     logger.debug(f'番茄小说析API官方详情预取失败：book_id={书籍编号}, error={异常}')
                 准备结果 = await 析API番茄小说.准备番茄小说(会话, 消息文本, 书籍编号, 官方书籍信息)
             else:
-                yield 事件.plain_result(f'当前使用{获取API中文名称(API选择)}下载\n正在获取书籍信息...')
                 准备结果 = await 准备番茄小说(会话, 书籍编号, API选择)
             if not 准备结果.get('success'):
                 yield 事件.plain_result(f'获取番茄小说书籍信息失败：{准备结果.get("error") or "未知错误"}')
