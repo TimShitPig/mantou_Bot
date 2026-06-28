@@ -49,6 +49,7 @@ async def 下载全部章节(
     批次列表 = [目录[i:i + 批次大小] for i in range(0, 总数, 批次大小)]
     并发数 = min(最大并发, len(批次列表))
     信号量 = asyncio.Semaphore(并发数)
+    进度锁 = asyncio.Lock()
     已完成 = 0
     成功数 = 0
     失败数 = 0
@@ -62,7 +63,7 @@ async def 下载全部章节(
             for 重试次数 in range(3):
                 try:
                     批次结果 = await 请求并映射批次(会话, 书籍编号, 批次)
-                    async with asyncio.Lock():
+                    async with 进度锁:
                         已完成 += len(批次)
                         成功数 += sum((1 for 项目 in 批次结果 if 项目.get('success')))
                         失败数 += sum((1 for 项目 in 批次结果 if not 项目.get('success')))
@@ -124,17 +125,32 @@ def 映射章节响应(批次: list[dict[str, Any]], 原始章节项: list[dict[
     for 项目 in 原始章节项:
         if not isinstance(项目, dict):
             continue
-        cid = str(读取任意字段(项目, ('itemId', 'item_id', 'chapter_id', 'id')) or '')
+        cid = 提取章节编号(项目)
         if cid:
             按编号索引[cid] = 项目
     结果列表: list[dict[str, Any]] = []
-    for 章节 in 批次:
+    for 索引, 章节 in enumerate(批次):
         cid = str(章节.get('id') or '')
         原始项 = 按编号索引.get(cid)
+        if 原始项 is None and len(原始章节项) == len(批次) and 索引 < len(原始章节项):
+            候选项 = 原始章节项[索引]
+            原始项 = 候选项 if isinstance(候选项, dict) else None
         正文 = 清理正文(提取正文(原始项) if 原始项 else '')
         标题 = 清理文本(读取任意字段(原始项 or {}, ('title', 'chapter_title', 'name'))) or str(章节.get('title') or f"第{章节.get('index')}章")
         结果列表.append({**章节, 'title': 标题, 'content': 正文 or '【下载失败】', 'success': bool(正文)})
     return 结果列表
+
+
+def 提取章节编号(章节: dict[str, Any]) -> str:
+    编号 = 读取任意字段(章节, ('itemId', 'item_id', 'chapter_id', 'id', 'group_id'))
+    if 编号:
+        return str(编号)
+    小说数据 = 章节.get('novel_data')
+    if isinstance(小说数据, dict):
+        编号 = 读取任意字段(小说数据, ('itemId', 'item_id', 'chapter_id', 'id', 'group_id'))
+        if 编号:
+            return str(编号)
+    return ''
 
 
 def 提取正文(章节: dict[str, Any] | None) -> str:

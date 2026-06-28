@@ -28,7 +28,8 @@ UC网盘功能 = getattr(主模块, "UC网盘功能")
 小说链接正则 = re.compile(r'(https?://fanqienovel\.com/page/(\d+)|https?://changdunovel\.com/reader/(\d+)|https?://changdunovel\.com/(?:page|reader)?/.*?(?:\?|&amp;|&)book_id=(\d+)|book_id=(\d+)|fanqienovel\.com/(\d+)|changdunovel\.com/reader/.*?/(\d+)|https?://m\.novelfm\.com/s/([A-Za-z0-9]+)|https?://changdunovel\.com/t/([A-Za-z0-9]+)|([\d]{15,25}))', re.IGNORECASE)
 免责声明 = '免责声明：本文内容来源于网络，仅作个人学习交流使用。请支持正版小说。\n\n'
 API选择键 = 'fq_api_choice'
-API等待状态字典: dict[str, str] = {}
+API选择等待秒数 = 120
+API等待状态字典: dict[str, float] = {}
 Cookie输入等待状态字典: dict[str, str] = {}
 官方API地址 = 'https://api-novel.snssdk.com/reading/bookapi/multi/detail/v/'
 落地页API地址 = 'https://novel.snssdk.com/api/novel/channel/homepage/book/detail/v/'
@@ -101,6 +102,16 @@ def 获取API中文名称(api选择: str) -> str:
     return 'OIAPI'
 
 
+def API选择等待中(等待状态键: str) -> bool:
+    开始时间 = API等待状态字典.get(等待状态键)
+    if not 开始时间:
+        return False
+    if time.time() - 开始时间 > API选择等待秒数:
+        API等待状态字典.pop(等待状态键, None)
+        return False
+    return True
+
+
 async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: Any = None) -> str | None:
     会话键 = 事件.group_id if hasattr(事件, 'group_id') and 事件.group_id else 'private'
     用户QQ = str(事件.get_sender_id())
@@ -123,7 +134,7 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
         logger.info(f'番茄小说API切换为：{获取API中文名称(API选择)}')
         return f'已切换到：{获取API中文名称(API选择)}'
 
-    if 等待状态键 in API等待状态字典 and 消息文本 in {'1', '2', '3', '4'}:
+    if API选择等待中(等待状态键) and 消息文本 in {'1', '2', '3', '4'}:
         API选择 = 消息文本
         API等待状态字典.pop(等待状态键, None)
         return await 切换API(API选择)
@@ -149,8 +160,9 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
             logger.warning(f'析APICookie保存但测试失败：{异常}')
         return f'析APICookie已保存，当前API为：{获取API中文名称(await 读取当前API选择(配置))}'
     if 消息文本 == '查看API':
-        API等待状态字典[等待状态键] = '1'
-        return '请选择使用的API站点：\n1. OIAPI\n2. 析API\n3. 崩溃API\n4. 自建API\n\n请在120秒内发送 1、2、3 或 4，选择对应API。'
+        API等待状态字典[等待状态键] = time.time()
+        当前API = 获取API中文名称(await 读取当前API选择(配置))
+        return f'当前使用：{当前API}\n请选择使用的API站点：\n1. OIAPI\n2. 析API\n3. 崩溃API\n4. 自建API\n\n请在{API选择等待秒数}秒内发送 1、2、3 或 4，选择对应API。'
     if 消息文本 == '析APICookie':
         Cookie输入等待状态字典[Cookie等待键] = '1'
         return '请直接发送「析APICookie 你的Cookie内容」完成设置，Cookie会保存48小时。'
@@ -177,12 +189,23 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
             elif API选择 == '4':
                 yield 事件.plain_result('当前使用自建API下载\n正在获取书籍信息...')
                 准备结果 = await 自建API番茄小说.准备番茄小说(会话, 书籍编号)
+            elif API选择 == '2':
+                yield 事件.plain_result('当前使用析API下载\n正在获取书籍信息...')
+                官方书籍信息 = {}
+                try:
+                    详情结果 = await 获取书籍信息(会话, 书籍编号, 获取番茄小说key())
+                    if 详情结果.get('success'):
+                        官方书籍信息 = 详情结果.get('book_info') or {}
+                except Exception as 异常:
+                    logger.debug(f'番茄小说析API官方详情预取失败：book_id={书籍编号}, error={异常}')
+                准备结果 = await 析API番茄小说.准备番茄小说(会话, 消息文本, 书籍编号, 官方书籍信息)
             else:
                 yield 事件.plain_result(f'当前使用{获取API中文名称(API选择)}下载\n正在获取书籍信息...')
                 准备结果 = await 准备番茄小说(会话, 书籍编号, API选择)
             if not 准备结果.get('success'):
                 yield 事件.plain_result(f'获取番茄小说书籍信息失败：{准备结果.get("error") or "未知错误"}')
                 return
+            书籍编号 = str(准备结果.get('book_id') or 书籍编号)
             书籍信息 = 准备结果['book_info']
             章节目录 = 准备结果['chapters']
             信息回复 = [
@@ -196,9 +219,17 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
             yield 事件.plain_result('\n'.join(信息回复))
             logger.info(f"番茄小说开始下载：{书籍信息['title']}，共{书籍信息['chapter_count']}章，API={获取API中文名称(API选择)}")
             if API选择 == '3':
-                章节结果 = await 崩溃API番茄小说.下载全部章节(会话, 书籍编号)
+                下载结果 = await 崩溃API番茄小说.下载完整小说(会话, 书籍编号, 书籍信息, 章节目录)
+                if not 下载结果.get('success'):
+                    yield 事件.plain_result('番茄小说下载失败请重新发送链接或者换一本书')
+                    return
+                书籍信息 = 下载结果.get('book_info') or 书籍信息
+                章节目录 = 下载结果.get('chapters') or 章节目录
+                章节结果 = 下载结果.get('chapter_results') or []
             elif API选择 == '4':
                 章节结果 = await 自建API番茄小说.下载全部章节(会话, 书籍编号, 章节目录)
+            elif API选择 == '2':
+                章节结果 = await 析API番茄小说.下载全部章节(会话, 书籍编号, 章节目录)
             else:
                 try:
                     章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
@@ -445,11 +476,13 @@ async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, A
         错误信息 = f'页面目录失败：{异常}'
     if API选择 == '2':
         try:
-            析API结果 = await 析API番茄小说.获取析API目录(会话, 书籍编号)
-            if 析API结果.get('success'):
-                return 析API结果
+            析API响应 = await 析API番茄小说.请求目录(会话, 书籍编号)
+            析API数据 = 析API响应.get('data') if isinstance(析API响应, dict) else 析API响应
+            析API章节列表 = 析API番茄小说.提取章节目录(析API数据)
+            if 析API章节列表:
+                return {"success": True, "chapters": 析API章节列表, "book_info": {"chapter_count": len(析API章节列表)}}
             if not 错误信息:
-                错误信息 = 析API结果.get('error', '析API目录失败')
+                错误信息 = '析API目录失败'
         except Exception as 异常:
             if not 错误信息:
                 错误信息 = f'析API目录失败：{异常}'
@@ -691,7 +724,9 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
             for 重试次数 in range(3):
                 try:
                     if API选择 == '2':
-                        正文结果 = await 析API番茄小说.获取析API章节(会话, 书籍编号, str(章节项['id']))
+                        正文结果 = await 析API番茄小说.下载单章(会话, 书籍编号, 章节项)
+                        if not 正文结果.get('success'):
+                            raise RuntimeError(正文结果.get('error') or '析API章节正文为空')
                     else:
                         正文结果 = await 获取OIAPI单个章节(会话, 书籍编号, str(章节项['id']), 获取番茄小说key())
                     if not 正文结果:
