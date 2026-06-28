@@ -70,16 +70,28 @@ async def 读取当前API选择(配置: Any = None) -> str:
     except Exception as 异常:
         logger.warning(f'番茄小说API状态读取失败，使用默认 OIAPI：error={异常}')
         return '1'
-    if 当前选择 in ('1', '2', '3', '4'):
-        return 当前选择
-    return '1'
+    return 规范化API选择(当前选择)
 
 
 async def 保存当前API选择(api选择: str, 配置: Any = None) -> None:
-    写入运行状态值(获取运行状态配置(配置), API选择键, 'api', api选择)
+    写入运行状态值(获取运行状态配置(配置), API选择键, 'api', 规范化API选择(api选择))
+
+
+def 规范化API选择(值: Any) -> str:
+    文本 = str(值 or '').strip().lower()
+    if 文本 in ('4', '自建api', '自建', 'zijianapi', 'zijian', 'selfapi', 'self'):
+        return '4'
+    if 文本 in ('3', '崩溃api', '崩溃', 'bengkuiapi', 'bengkui', 'crashapi', 'crash'):
+        return '3'
+    if 文本 in ('2', '析api', 'xiapi', 'xapi', '析', 'xi'):
+        return '2'
+    if 文本 in ('1', 'oiapi', 'oi'):
+        return '1'
+    return '1'
 
 
 def 获取API中文名称(api选择: str) -> str:
+    api选择 = 规范化API选择(api选择)
     if api选择 == '2':
         return '析API'
     if api选择 == '3':
