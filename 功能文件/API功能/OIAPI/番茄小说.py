@@ -293,9 +293,9 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
 
 
 async def 识别番茄小说书籍(链接匹配: re.Match[str]) -> str:
-    书籍编号 = next((编号 for 编号 in 链接匹配.groups()[:7] if 编号), '')
-    短码 = next((编号 for 编号 in 链接匹配.groups()[7:9] if 编号), '')
-    长数字 = 链接匹配.group(9)
+    书籍编号 = next((链接匹配.group(组号) for 组号 in (2, 3, 4, 5, 6, 7) if 链接匹配.group(组号)), '')
+    短码 = next((链接匹配.group(组号) for 组号 in (8, 9) if 链接匹配.group(组号)), '')
+    长数字 = 链接匹配.group(10)
     if 长数字 and 15 <= len(长数字) <= 25:
         return 长数字
     if 书籍编号:
