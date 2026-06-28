@@ -10,7 +10,7 @@ import aiohttp
 from astrbot.api import logger
 
 
-番茄API地址 = "http://101.35.133.34:5000"
+聚合API地址 = "http://101.35.133.34:5000"
 批次大小 = 50
 最大并发批次 = 3
 进度分段数 = 10
@@ -22,7 +22,7 @@ from astrbot.api import logger
 
 async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
     if not 书籍编号:
-        return {"success": False, "error": "番茄API没有获取到书籍ID"}
+        return {"success": False, "error": "聚合API没有获取到书籍ID"}
 
     try:
         详情响应, 目录响应 = await asyncio.gather(
@@ -35,7 +35,7 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
     详情数据 = 提取内层数据(详情响应)
     目录数据 = 提取内层数据(目录响应)
     if not 详情数据:
-        错误 = 提取错误消息(详情响应) or "番茄API没有获取到书籍详情"
+        错误 = 提取错误消息(详情响应) or "聚合API没有获取到书籍详情"
         return {"success": False, "error": 错误}
 
     书籍信息 = 合并书籍信息(默认书籍信息(书籍编号), 从字典提取书籍信息(详情数据))
@@ -45,13 +45,13 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
             简化目录响应 = await 请求JSON(会话, "/api/directory", book_id=书籍编号)
             章节列表 = 提取章节目录(简化目录响应.get("data") if isinstance(简化目录响应, dict) else 简化目录响应)
         except Exception as 异常:
-            logger.warning(f"番茄小说番茄API简化目录请求失败：book_id={书籍编号}, error={异常}")
+            logger.warning(f"番茄小说聚合API简化目录请求失败：book_id={书籍编号}, error={异常}")
     if not 章节列表:
-        return {"success": False, "error": "番茄API没有获取到章节目录"}
+        return {"success": False, "error": "聚合API没有获取到章节目录"}
 
     书籍信息 = 合并书籍信息(书籍信息, {"chapter_count": len(章节列表)})
     logger.info(
-        f"番茄小说番茄API准备完成：book_id={书籍编号}, title={书籍信息.get('title')}, chapters={len(章节列表)}"
+        f"番茄小说聚合API准备完成：book_id={书籍编号}, title={书籍信息.get('title')}, chapters={len(章节列表)}"
     )
     return {"success": True, "book_id": 书籍编号, "book_info": 书籍信息, "chapters": 章节列表}
 
@@ -73,7 +73,7 @@ async def 下载全部章节(
     失败数 = 0
     上一进度段 = 0
     logger.info(
-        f"番茄小说番茄API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, batches={len(批次列表)}"
+        f"番茄小说聚合API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, batches={len(批次列表)}"
     )
 
     async def 下载批次(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -83,7 +83,7 @@ async def 下载全部章节(
                 批次结果 = await 请求并映射批次(会话, 书籍编号, 批次)
             except Exception as 异常:
                 logger.warning(
-                    f"番茄小说番茄API批次下载失败：book_id={书籍编号}, "
+                    f"番茄小说聚合API批次下载失败：book_id={书籍编号}, "
                     f"range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}"
                 )
                 批次结果 = [{**章节, "content": "【下载失败】", "success": False} for 章节 in 批次]
@@ -97,7 +97,7 @@ async def 下载全部章节(
                     上一进度段 = 进度段
                     百分比 = int(已完成 * 100 / 总数) if 总数 else 100
                     logger.info(
-                        f"番茄小说番茄API章节进度：book_id={书籍编号}, progress={已完成}/{总数}, "
+                        f"番茄小说聚合API章节进度：book_id={书籍编号}, progress={已完成}/{总数}, "
                         f"percent={百分比}%, success={成功数}, failed={失败数}"
                     )
             return 批次结果
@@ -138,25 +138,25 @@ async def 请求并映射批次(
 
 async def 请求JSON(会话: aiohttp.ClientSession, 路径: str, **参数: Any) -> dict[str, Any]:
     async with 会话.get(
-        f"{番茄API地址}{路径}",
+        f"{聚合API地址}{路径}",
         params={键: 值 for 键, 值 in 参数.items() if 值 not in (None, "")},
         headers=浏览器请求头,
         timeout=120,
     ) as 响应:
         文本 = await 响应.text()
         if 响应.status >= 400:
-            raise RuntimeError(f"番茄API HTTP {响应.status}({路径})：{限制文本长度(文本, 300)}")
+            raise RuntimeError(f"聚合API HTTP {响应.status}({路径})：{限制文本长度(文本, 300)}")
         try:
             响应数据 = json.loads(文本)
         except Exception as 异常:
-            raise RuntimeError(f"番茄API JSON解析失败({路径})：{限制文本长度(文本, 300)}") from 异常
+            raise RuntimeError(f"聚合API JSON解析失败({路径})：{限制文本长度(文本, 300)}") from 异常
 
     if not isinstance(响应数据, dict):
-        raise RuntimeError(f"番茄API返回格式不是对象({路径})")
+        raise RuntimeError(f"聚合API返回格式不是对象({路径})")
     返回码 = 响应数据.get("code")
     if str(返回码) not in ("0", "200"):
         消息 = 提取错误消息(响应数据) or "接口返回失败"
-        raise RuntimeError(f"番茄API返回失败({路径})：{限制文本长度(消息, 300)}")
+        raise RuntimeError(f"聚合API返回失败({路径})：{限制文本长度(消息, 300)}")
     return 响应数据
 
 
