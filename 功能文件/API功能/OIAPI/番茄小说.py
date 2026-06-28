@@ -12,12 +12,12 @@ from typing import Any, AsyncIterator
 import aiohttp
 from astrbot.api import logger
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 
 import main as 主模块
 
 析API番茄小说 = getattr(主模块, "析API番茄小说模块")
 崩溃API番茄小说 = getattr(主模块, "崩溃API番茄小说模块")
-用户激活功能 = getattr(主模块, "用户激活功能")
 UC网盘功能 = getattr(主模块, "UC网盘功能")
 百度网盘功能 = getattr(主模块, "百度网盘功能")
 自建API番茄小说 = getattr(主模块, "自建API番茄小说模块")
@@ -60,15 +60,23 @@ def 获取番茄小说key():
     return ''
 
 
-async def 读取当前API选择() -> str:
-    当前选择 = await 用户激活功能.读取运行状态(API选择键, 'api')
+def 获取运行状态配置(配置: Any = None) -> Any:
+    return 配置 if 配置 is not None else (getattr(主模块, 'config', None) or {})
+
+
+async def 读取当前API选择(配置: Any = None) -> str:
+    try:
+        当前选择 = 读取运行状态值(获取运行状态配置(配置), API选择键, 'api', '1')
+    except Exception as 异常:
+        logger.warning(f'番茄小说API状态读取失败，使用默认 OIAPI：error={异常}')
+        return '1'
     if 当前选择 in ('1', '2', '3', '4'):
         return 当前选择
     return '1'
 
 
-async def 保存当前API选择(api选择: str):
-    await 用户激活功能.保存运行状态(API选择键, 'api', api选择)
+async def 保存当前API选择(api选择: str, 配置: Any = None) -> None:
+    写入运行状态值(获取运行状态配置(配置), API选择键, 'api', api选择)
 
 
 def 获取API中文名称(api选择: str) -> str:
@@ -93,28 +101,28 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
         消息文本 = 消息文本.strip()
     等待状态键 = f'{管理员标识}:api'
     Cookie等待键 = f'{管理员标识}:cookie'
+
+    async def 切换API(API选择: str) -> str:
+        try:
+            await 保存当前API选择(API选择, 配置)
+        except Exception as 异常:
+            logger.warning(f'番茄小说API切换写入数据库失败：api={获取API中文名称(API选择)}, error={异常}')
+            return f'番茄小说API切换失败：{异常}'
+        logger.info(f'番茄小说API切换为：{获取API中文名称(API选择)}')
+        return f'已切换到：{获取API中文名称(API选择)}'
+
     if 等待状态键 in API等待状态字典 and 消息文本 in {'1', '2', '3', '4'}:
         API选择 = 消息文本
         API等待状态字典.pop(等待状态键, None)
-        await 保存当前API选择(API选择)
-        logger.info(f'番茄小说API切换为：{获取API中文名称(API选择)}')
-        return f'已切换到：{获取API中文名称(API选择)}'
+        return await 切换API(API选择)
     if 消息文本.lower() in ('oiapi', 'oi'):
-        await 保存当前API选择('1')
-        logger.info('番茄小说API切换为：OIAPI')
-        return '已切换到：OIAPI'
+        return await 切换API('1')
     if 消息文本.lower() in ('析api', 'xiapi', 'xapi', '析', 'xi'):
-        await 保存当前API选择('2')
-        logger.info('番茄小说API切换为：析API')
-        return '已切换到：析API'
+        return await 切换API('2')
     if 消息文本.lower() in ('崩溃api', '崩溃', 'bengkuiapi', 'bengkui', 'crashapi', 'crash'):
-        await 保存当前API选择('3')
-        logger.info('番茄小说API切换为：崩溃API')
-        return '已切换到：崩溃API'
+        return await 切换API('3')
     if 消息文本.lower() in ('自建api', '自建', 'zijianapi', 'zijian', 'selfapi', 'self'):
-        await 保存当前API选择('4')
-        logger.info('番茄小说API切换为：自建API')
-        return '已切换到：自建API'
+        return await 切换API('4')
     if Cookie等待键 in Cookie输入等待状态字典 and 消息文本.startswith('析APICookie'):
         Cookie内容 = 消息文本.replace('析APICookie', '', 1).strip()
         Cookie输入等待状态字典.pop(Cookie等待键, None)
@@ -127,7 +135,7 @@ async def 处理番茄小说API指令(事件, 命令文本: str = '', 配置: An
             await 析API番茄小说.测试析API(Cookie内容, 0)
         except Exception as 异常:
             logger.warning(f'析APICookie保存但测试失败：{异常}')
-        return f'析APICookie已保存，当前API为：{获取API中文名称(await 读取当前API选择())}'
+        return f'析APICookie已保存，当前API为：{获取API中文名称(await 读取当前API选择(配置))}'
     if 消息文本 == '查看API':
         API等待状态字典[等待状态键] = '1'
         return '请选择使用的API站点：\n1. OIAPI\n2. 析API\n3. 崩溃API\n4. 自建API\n\n请在120秒内发送 1、2、3 或 4，选择对应API。'
@@ -148,7 +156,7 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
     书籍编号 = await 识别番茄小说书籍(链接匹配)
     if not 书籍编号:
         return
-    API选择 = await 读取当前API选择()
+    API选择 = await 读取当前API选择(配置)
     try:
         async with aiohttp.ClientSession() as 会话:
             if API选择 == '3':
