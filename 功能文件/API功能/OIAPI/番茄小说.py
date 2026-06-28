@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator
 
 import aiohttp
 from astrbot.api import logger
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 读取配置字段
 from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 
 import main as 主模块
@@ -50,12 +50,13 @@ class 用户可见错误(RuntimeError):
     pass
 
 
-def 获取番茄小说key():
-    配置 = getattr(主模块, 'config', None) or {}
-    key = 配置.get('番茄小说key')
+def 获取番茄小说key(配置: Any = None):
+    配置 = 配置 if 配置 is not None else (getattr(主模块, 'config', None) or {})
+    key = 读取配置字段(配置, '番茄小说key')
     if key and str(key).strip():
         return str(key).strip()
-    for 候选 in [配置.get('番茄小说Key'), 配置.get('fq_api_key'), 配置.get('oiapi_key')]:
+    for 字段名 in ('番茄小说Key', 'fq_api_key', 'oiapi_key'):
+        候选 = 读取配置字段(配置, 字段名)
         if 候选 and str(候选).strip():
             return str(候选).strip()
     return ''
@@ -190,14 +191,14 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
             elif API选择 == '2':
                 官方书籍信息 = {}
                 try:
-                    详情结果 = await 获取书籍信息(会话, 书籍编号, 获取番茄小说key())
+                    详情结果 = await 获取书籍信息(会话, 书籍编号, 获取番茄小说key(配置))
                     if 详情结果.get('success'):
                         官方书籍信息 = 详情结果.get('book_info') or {}
                 except Exception as 异常:
                     logger.debug(f'番茄小说析API官方详情预取失败：book_id={书籍编号}, error={异常}')
                 准备结果 = await 析API番茄小说.准备番茄小说(会话, 消息文本, 书籍编号, 官方书籍信息)
             else:
-                准备结果 = await 准备番茄小说(会话, 书籍编号, API选择)
+                准备结果 = await 准备番茄小说(会话, 书籍编号, API选择, 配置)
             if not 准备结果.get('success'):
                 yield 事件.plain_result(f'获取番茄小说书籍信息失败：{准备结果.get("error") or "未知错误"}')
                 return
@@ -228,16 +229,16 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
                 章节结果 = await 析API番茄小说.下载全部章节(会话, 书籍编号, 章节目录)
             else:
                 try:
-                    章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
+                    章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择, 配置)
                 except 用户可见错误 as 异常:
                     if API选择 == '1' and 是章节选择错误(str(异常)):
                         logger.info(f'番茄小说OIAPI章节选择错误，调用chapters刷新目录后重试：book_id={书籍编号}')
-                        刷新目录结果 = await 获取OIAPI章节目录(会话, 书籍编号, 获取番茄小说key())
+                        刷新目录结果 = await 获取OIAPI章节目录(会话, 书籍编号, 获取番茄小说key(配置))
                         if not 刷新目录结果.get('success') or not 刷新目录结果.get('chapters'):
                             raise
                         章节目录 = 刷新目录结果['chapters']
                         书籍信息 = 合并书籍信息(书籍信息, {"chapter_count": len(章节目录)})
-                        章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
+                        章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择, 配置)
                     else:
                         raise
             内容列表 = ['\n'.join((免责声明, f"书名：{书籍信息['title']}", f"作者：{书籍信息['author']}", f"状态：{书籍信息['status']}", f"字数：{书籍信息['word_count']}", f"章节：{书籍信息['chapter_count']}章"))]
@@ -322,10 +323,10 @@ async def 解析番茄短链(短码: str) -> str:
     return ''
 
 
-async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str, API选择: str) -> dict[str, Any]:
+async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str, API选择: str, 配置: Any = None) -> dict[str, Any]:
     if not 书籍编号:
         return {"success": False, "error": "没有获取到书籍ID"}
-    OIAPIKey = 获取番茄小说key()
+    OIAPIKey = 获取番茄小说key(配置)
     if not OIAPIKey and API选择 == '1':
         return {"success": False, "error": "番茄小说key为空，请先配置后再试。"}
     书籍信息 = await 获取书籍信息(会话, 书籍编号, OIAPIKey)
@@ -704,7 +705,7 @@ def 格式化OIAPI失败提示(消息: Any) -> str:
     return 文本
 
 
-async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], API选择: str) -> list[dict[str, Any]]:
+async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], API选择: str, 配置: Any = None) -> list[dict[str, Any]]:
     信号量 = asyncio.Semaphore(最大并发请求数)
     结果列表: list[dict] = [None] * len(目录)
     总数 = len(目录)
@@ -724,7 +725,7 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
                         if not 正文结果.get('success'):
                             raise RuntimeError(正文结果.get('error') or '析API章节正文为空')
                     else:
-                        正文结果 = await 获取OIAPI单个章节(会话, 书籍编号, str(章节项['id']), 获取番茄小说key())
+                        正文结果 = await 获取OIAPI单个章节(会话, 书籍编号, str(章节项['id']), 获取番茄小说key(配置))
                     if not 正文结果:
                         raise RuntimeError("正文为空")
                     结果列表[索引] = {"id": 章节项['id'], "title": 章节项.get('title') or 正文结果.get('title') or f"第{章节项['index']}章", "index": 章节项['index'], "content": 清理正文(正文结果.get('content') or ''), "success": True}
