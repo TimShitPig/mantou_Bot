@@ -1,5 +1,12 @@
 # 更新日志
 
+## v2.4.10
+
+### 修复
+
+- 恢复自建API加入前 OIAPI 使用的番茄官方详情和目录接口：优先读取 `fanqienovel.com/api/book/info` 与 `fanqienovel.com/api/reader/directory/detail`，避免当前目录接口拿不到章节时直接报 `没有获取到章节目录`。
+- 兼容详情字段里的 `serialCount`、`chapterTotal`、`all_chapter_num` 等章节数字段，作为 OIAPI 目录兜底依据。
+
 ## v2.4.9
 
 ### 修复

@@ -34,6 +34,8 @@ Cookie输入等待状态字典: dict[str, str] = {}
 官方API地址 = 'https://api-novel.snssdk.com/reading/bookapi/multi/detail/v/'
 落地页API地址 = 'https://novel.snssdk.com/api/novel/channel/homepage/book/detail/v/'
 页面API地址 = 'https://novel.snssdk.com/api/novel/book/directory/list/v1/'
+官方书籍信息地址 = 'https://fanqienovel.com/api/book/info'
+官方章节目录地址 = 'https://fanqienovel.com/api/reader/directory/detail'
 app版本号 = '70690'
 设备标识 = '123456789012345'
 用户UID = '1234567890'
@@ -387,6 +389,16 @@ async def 获取OIAPI书籍信息(会话: aiohttp.ClientSession, 书籍编号: s
 
 async def 获取官方书籍信息(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
     try:
+        async with 会话.get(官方书籍信息地址, params={'bookId': 书籍编号}, headers=浏览器请求头, timeout=15) as 响应:
+            if 响应.status == 200:
+                响应数据 = await 响应.json(content_type=None)
+                if isinstance(响应数据, dict) and str(响应数据.get('code')) in ('0', '200'):
+                    书籍数据 = 从字典提取书籍信息(响应数据.get('data') or {})
+                    if 书籍数据.get('title') or 书籍数据.get('author'):
+                        return 书籍数据
+    except Exception as 异常:
+        logger.debug(f'番茄小说官方书籍信息请求失败：book_id={书籍编号}，{异常}')
+    try:
         响应 = await 会话.post(官方API地址, params={"aid": "1967", "version_code": app版本号}, data={"book_ids": f'[{书籍编号}]'}, headers={"Content-Type": "application/json", "User-Agent": 浏览器请求头["User-Agent"]}, timeout=20)
         响应文本 = await 响应.text()
         if 响应.status != 200:
@@ -456,6 +468,9 @@ async def 获取网页书籍信息(会话: aiohttp.ClientSession, 页面地址: 
 
 async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, APIKey: str, API选择: str, 书籍信息: dict[str, Any]) -> dict[str, Any]:
     错误信息 = ''
+    官方章节列表 = await 获取官方章节目录(会话, 书籍编号)
+    if 官方章节列表:
+        return {"success": True, "chapters": 官方章节列表, "book_info": {"chapter_count": len(官方章节列表)}}
     try:
         async with 会话.get(页面API地址, params={"book_id": 书籍编号, "device_id": 设备标识, "iid": 用户UID, "aid": "1967", "version_code": app版本号, "update_version": app版本号}, headers=浏览器请求头, timeout=20) as 响应:
             if 响应.status == 200:
@@ -503,6 +518,24 @@ async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, A
     if 章节数:
         return {"success": True, "chapters": 构造序号目录(章节数), "book_info": {"chapter_count": 章节数}}
     return {"success": False, "error": 错误信息 or '获取章节目录失败', "chapters": []}
+
+
+async def 获取官方章节目录(会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+    try:
+        async with 会话.get(官方章节目录地址, params={'bookId': 书籍编号}, headers=浏览器请求头, timeout=30) as 响应:
+            if 响应.status != 200:
+                logger.debug(f'番茄小说官方目录HTTP错误：book_id={书籍编号}, status={响应.status}')
+                return []
+            响应数据 = await 响应.json(content_type=None)
+    except Exception as 异常:
+        logger.debug(f'番茄小说官方目录请求失败：book_id={书籍编号}, error={异常}')
+        return []
+    if not isinstance(响应数据, dict) or str(响应数据.get('code')) not in ('0', '200'):
+        return []
+    章节列表 = 提取章节目录(响应数据.get('data') or {})
+    if 章节列表:
+        return 章节列表
+    return []
 
 
 async def 获取OIAPI章节目录(会话: aiohttp.ClientSession, 书籍编号: str, APIKey: str) -> dict[str, Any]:
@@ -611,7 +644,7 @@ def 从字典提取书籍信息(数据: dict[str, Any]) -> dict[str, Any]:
         'author': 清理文本(数据.get('author') or 数据.get('author_name') or data_get(数据, 'author', 'name') or ''),
         'word_count': 格式化字数(数据.get('word_count') or 数据.get('wordCount') or 数据.get('word_number') or 数据.get('total_word_count') or 数据.get('totalWords') or ''),
         'status': 规范化状态(数据.get('creation_status') or 数据.get('creationStatus') or 数据.get('status') or 数据.get('book_status') or ''),
-        'chapter_count': int(数据.get('chapter_count') or 数据.get('chapterCount') or 数据.get('chapter_num') or 数据.get('chapterNum') or 数据.get('serial_count') or 数据.get('latest_chapter_index') or 0) or 0,
+        'chapter_count': int(数据.get('chapter_count') or 数据.get('chapterCount') or 数据.get('chapter_num') or 数据.get('chapterNum') or 数据.get('serial_count') or 数据.get('serialCount') or 数据.get('chapterTotal') or 数据.get('all_chapter_num') or 数据.get('latest_chapter_index') or 0) or 0,
         'intro': 清理简介(数据.get('abstract') or 数据.get('description') or 数据.get('summary') or 数据.get('book_abstract') or 数据.get('intro') or ''),
     }
 
