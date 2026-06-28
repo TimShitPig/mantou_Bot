@@ -45,6 +45,10 @@ app版本号 = '70690'
 限流等待秒数 = 0.3
 
 
+class 用户可见错误(RuntimeError):
+    pass
+
+
 def 获取番茄小说key():
     配置 = getattr(主模块, 'config', None) or {}
     key = 配置.get('番茄小说key')
@@ -176,7 +180,19 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
             elif API选择 == '4':
                 章节结果 = await 自建API番茄小说.下载全部章节(会话, 书籍编号, 章节目录)
             else:
-                章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
+                try:
+                    章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
+                except 用户可见错误 as 异常:
+                    if API选择 == '1' and 是章节选择错误(str(异常)):
+                        logger.info(f'番茄小说OIAPI章节选择错误，调用chapters刷新目录后重试：book_id={书籍编号}')
+                        刷新目录结果 = await 获取OIAPI章节目录(会话, 书籍编号, 获取番茄小说key())
+                        if not 刷新目录结果.get('success') or not 刷新目录结果.get('chapters'):
+                            raise
+                        章节目录 = 刷新目录结果['chapters']
+                        书籍信息 = 合并书籍信息(书籍信息, {"chapter_count": len(章节目录)})
+                        章节结果 = await 下载全部章节(会话, 书籍编号, 章节目录, API选择)
+                    else:
+                        raise
             内容列表 = ['\n'.join((免责声明, f"书名：{书籍信息['title']}", f"作者：{书籍信息['author']}", f"状态：{书籍信息['status']}", f"字数：{书籍信息['word_count']}", f"章节：{书籍信息['chapter_count']}章"))]
             简介文本 = 书籍信息.get('intro')
             if 简介文本:
@@ -220,6 +236,9 @@ async def 生成番茄下载回复流(事件, 消息文本: str, 链接匹配: r
                 except Exception as 异常:
                     logger.warning(f'番茄小说缓存文件删除失败：文件名={文件名}, error={异常}')
                 百度网盘功能.后台上传到百度网盘(str(缓存文件), 文件名, 书籍信息['status'] == '完结')
+    except 用户可见错误 as 异常:
+        logger.warning(f'番茄小说下载业务失败：{书籍编号}，API={获取API中文名称(API选择)}，error={异常}')
+        yield 事件.plain_result(str(异常))
     except Exception as 异常:
         logger.error(f'番茄小说下载失败：{书籍编号}，API={获取API中文名称(API选择)}', exc_info=异常)
         yield 事件.plain_result(f'获取番茄小说内容失败：{异常}')
@@ -262,7 +281,8 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str, A
     OIAPIKey = 获取番茄小说key()
     if not OIAPIKey and API选择 == '1':
         return {"success": False, "error": "番茄小说key为空，请先配置后再试。"}
-    书籍信息, 目录结果 = await asyncio.gather(获取书籍信息(会话, 书籍编号, OIAPIKey), 获取章节目录(会话, 书籍编号, OIAPIKey, API选择, 书籍信息))
+    书籍信息 = await 获取书籍信息(会话, 书籍编号, OIAPIKey)
+    目录结果 = await 获取章节目录(会话, 书籍编号, OIAPIKey, API选择, 书籍信息.get("book_info", {}))
     if not 书籍信息.get("success") and not 目录结果.get("chapters"):
         return {"success": False, "error": 书籍信息.get("error") or 目录结果.get("error") or "获取书籍信息失败"}
     书籍信息 = 书籍信息 if 书籍信息.get("success") else {"book_info": 默认书籍信息(书籍编号)}
@@ -336,7 +356,6 @@ async def 获取官方书籍信息(会话: aiohttp.ClientSession, 书籍编号: 
     except Exception as 异常:
         logger.debug(f'番茄小说官方API详情失败：{书籍编号}，{异常}')
         return {}
-
 
 async def 获取落地页书籍信息(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
     try:
@@ -430,6 +449,9 @@ async def 获取章节目录(会话: aiohttp.ClientSession, 书籍编号: str, A
     章节ID匹配 = await 获取网页章节目录(会话, f'https://fanqienovel.com/reader/{书籍编号}')
     if 章节ID匹配.get('chapters'):
         return 章节ID匹配
+    章节数 = 安全整数((书籍信息 or {}).get('chapter_count'))
+    if 章节数:
+        return {"success": True, "chapters": 构造序号目录(章节数), "book_info": {"chapter_count": 章节数}}
     return {"success": False, "error": 错误信息 or '获取章节目录失败', "chapters": []}
 
 
@@ -442,16 +464,21 @@ async def 获取OIAPI章节目录(会话: aiohttp.ClientSession, 书籍编号: s
             数据 = json.loads(响应文本)
         except Exception:
             return {"success": False, "error": "OIAPI返回非JSON", "chapters": []}
-        if 数据.get('code') != 200:
+        if str(数据.get('code')) not in ('1', '200'):
             return {"success": False, "error": str(数据.get('message') or 'OIAPI目录失败'), "chapters": []}
-        章节列表 = 数据.get('data') or []
-        if not isinstance(章节列表, list):
+        章节列表 = 数据.get('data') or 数据.get('message') or []
+        if isinstance(章节列表, dict):
+            章节列表 = 提取章节目录(章节列表)
+        elif isinstance(章节列表, list):
+            章节列表 = 提取章节目录({"chapterList": 章节列表})
+        else:
             return {"success": False, "error": "OIAPI章节格式错误", "chapters": []}
         结果列表: list[dict[str, Any]] = []
         for 索引, 章节项 in enumerate(章节列表, start=1):
-            章节ID = str(章节项.get('item_id') or 章节项.get('chapter_id') or 索引)
+            序号 = 安全整数(章节项.get('index')) or 索引
+            章节ID = str(章节项.get('id') or 章节项.get('item_id') or 章节项.get('chapter_id') or 序号)
             标题 = 清理文本(章节项.get('title') or 章节项.get('name') or f'第{索引}章')
-            结果列表.append({"id": 章节ID, "title": 标题, "index": 索引})
+            结果列表.append({"id": 章节ID, "title": 标题, "index": 序号})
         return {"success": True, "chapters": 结果列表, "book_info": {}}
 
 
@@ -481,7 +508,7 @@ async def 获取网页章节目录(会话: aiohttp.ClientSession, 页面地址: 
                     for 索引, 章节项 in enumerate(章节容器, start=1):
                         if not isinstance(章节项, dict):
                             continue
-                        章节ID = str(章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
+                        章节ID = str(章节项.get('id') or 章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
                         标题 = 清理文本(章节项.get('title') or 章节项.get('name') or f'第{索引}章')
                         序号 = int(章节项.get('realChapterOrder') or 章节项.get('order') or 索引)
                         结果列表.append({"id": 章节ID, "title": 标题, "index": 序号})
@@ -495,7 +522,6 @@ async def 获取网页章节目录(会话: aiohttp.ClientSession, 页面地址: 
         if ID列表:
             return {"chapters": [{"id": str(章节ID), "title": f"第{索引}章", "index": 索引} for 索引, 章节ID in enumerate(ID列表, start=1)]}
     return {"chapters": []}
-
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     结果列表: list[dict[str, Any]] = []
@@ -513,7 +539,7 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
             for 索引, 章节项 in enumerate(数据[键名], start=1):
                 if not isinstance(章节项, dict):
                     continue
-                章节ID = str(章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
+                章节ID = str(章节项.get('id') or 章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
                 标题 = 清理文本(章节项.get('title') or 章节项.get('name') or f'第{索引}章')
                 序号 = int(章节项.get('realChapterOrder') or 章节项.get('order') or 索引)
                 结果列表.append({"id": 章节ID, "title": 标题, "index": 序号})
@@ -522,7 +548,7 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
         for 索引, 章节项 in enumerate(数据['catalog']['itemList'], start=1):
             if not isinstance(章节项, dict):
                 continue
-            章节ID = str(章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
+            章节ID = str(章节项.get('id') or 章节项.get('itemId') or 章节项.get('item_id') or 章节项.get('chapterId') or 章节项.get('chapter_id') or 索引)
             标题 = 清理文本(章节项.get('title') or 章节项.get('name') or f'第{索引}章')
             序号 = int(章节项.get('realChapterOrder') or 章节项.get('order') or 索引)
             结果列表.append({"id": 章节ID, "title": 标题, "index": 序号})
@@ -532,7 +558,7 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
 def 从字典提取书籍信息(数据: dict[str, Any]) -> dict[str, Any]:
     return {
         'title': 清理书名(数据.get('book_name') or 数据.get('bookName') or 数据.get('title') or 数据.get('name') or ''),
-        'author': 清理文本(数据.get('author') or 数据.get('author_name') or data_get('author', 'name') or ''),
+        'author': 清理文本(数据.get('author') or 数据.get('author_name') or data_get(数据, 'author', 'name') or ''),
         'word_count': 格式化字数(数据.get('word_count') or 数据.get('wordCount') or 数据.get('word_number') or 数据.get('total_word_count') or 数据.get('totalWords') or ''),
         'status': 规范化状态(数据.get('creation_status') or 数据.get('creationStatus') or 数据.get('status') or 数据.get('book_status') or ''),
         'chapter_count': int(数据.get('chapter_count') or 数据.get('chapterCount') or 数据.get('chapter_num') or 数据.get('chapterNum') or 数据.get('serial_count') or 数据.get('latest_chapter_index') or 0) or 0,
@@ -596,14 +622,47 @@ def 格式化字数(值: Any) -> str:
     return f"{数值}字" if 数值 else ""
 
 
+def 安全整数(值: Any) -> int:
+    try:
+        文本 = str(值 or '').strip()
+        if not 文本:
+            return 0
+        匹配 = re.search(r'\d+', 文本.replace(',', ''))
+        return int(匹配.group(0)) if 匹配 else 0
+    except Exception:
+        return 0
+
+
+def 构造序号目录(章节数: int) -> list[dict[str, Any]]:
+    if 章节数 <= 0:
+        return []
+    return [{"id": str(序号), "title": f"第{序号}章", "index": 序号} for 序号 in range(1, 章节数 + 1)]
+
+
+def 是章节选择错误(错误文本: str) -> bool:
+    return '请检测章节选择' in str(错误文本 or '')
+
+
+def 是永久性业务错误(错误文本: str) -> bool:
+    永久关键词 = ('付费内容', 'Key注册失败', 'key错误', 'Key错误', 'KEY错误', '密钥', '不存在该书籍', '书籍不存在')
+    return any(关键词 in str(错误文本 or '') for 关键词 in 永久关键词)
+
+
+def 格式化OIAPI失败提示(消息: Any) -> str:
+    文本 = str(消息 or '接口返回失败').strip()
+    if 'Key注册失败' in 文本 and '请等待10分钟再下载' not in 文本:
+        return f'{文本}\n请等待10分钟再下载'
+    return 文本
+
+
 async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], API选择: str) -> list[dict[str, Any]]:
-    非本地 = globals()
     信号量 = asyncio.Semaphore(最大并发请求数)
     结果列表: list[dict] = [None] * len(目录)
     总数 = len(目录)
     已完成 = 0
     进度分段数 = 10
     上一进度段 = 0
+    进度锁 = asyncio.Lock()
     logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%')
 
     async def 下载单个章节(索引: int, 章节项: dict[str, Any]):
@@ -618,7 +677,7 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
                     if not 正文结果:
                         raise RuntimeError("正文为空")
                     结果列表[索引] = {"id": 章节项['id'], "title": 章节项.get('title') or 正文结果.get('title') or f"第{章节项['index']}章", "index": 章节项['index'], "content": 清理正文(正文结果.get('content') or ''), "success": True}
-                    async with asyncio.Lock():
+                    async with 进度锁:
                         已完成 += 1
                         进度段 = 进度分段数 if 已完成 >= 总数 else int(已完成 * 进度分段数 / 总数)
                         if 进度段 > 上一进度段 or 已完成 >= 总数:
@@ -627,10 +686,19 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
                             logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%')
                     await asyncio.sleep(限流等待秒数)
                     return
+                except 用户可见错误 as 异常:
+                    错误文本 = str(异常)
+                    if 是永久性业务错误(错误文本) or 是章节选择错误(错误文本):
+                        raise
+                    if 重试次数 >= 2:
+                        logger.warning(f"番茄小说章节业务失败：book_id={书籍编号}, chapter_id={章节项['id']}, title={章节项.get('title')}, error={异常}")
+                        结果列表[索引] = {"id": 章节项['id'], "title": 章节项.get('title') or f"第{章节项['index']}章", "index": 章节项['index'], "content": "【下载失败】", "success": False, "error": 错误文本}
+                    else:
+                        await asyncio.sleep(1)
                 except Exception as 异常:
                     if 重试次数 >= 2:
                         logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter_id={章节项['id']}, title={章节项.get('title')}, error={异常}")
-                        结果列表[索引] = {"id": 章节项['id'], "title": 章节项.get('title') or f"第{章节项['index']}章", "index": 章节项['index'], "content": "【下载失败】", "success": False}
+                        结果列表[索引] = {"id": 章节项['id'], "title": 章节项.get('title') or f"第{章节项['index']}章", "index": 章节项['index'], "content": "【下载失败】", "success": False, "error": str(异常)}
                     else:
                         await asyncio.sleep(1)
 
@@ -648,9 +716,11 @@ async def 获取OIAPI单个章节(会话: aiohttp.ClientSession, 书籍编号: s
             数据 = json.loads(响应文本)
         except Exception:
             raise RuntimeError("响应不是JSON")
-        if 数据.get('code') != 200:
-            raise RuntimeError(str(数据.get('message') or '接口返回失败'))
+        if str(数据.get('code')) not in ('1', '200'):
+            raise 用户可见错误(格式化OIAPI失败提示(数据.get('message') or 数据.get('msg') or 数据.get('error') or '接口返回失败'))
         章节数据 = 数据.get('data') or {}
+        if isinstance(章节数据, list):
+            章节数据 = next((项目 for 项目 in 章节数据 if isinstance(项目, dict)), {})
         return {"title": 章节数据.get('title') or '', "content": 章节数据.get('content') or ''}
 
 
