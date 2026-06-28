@@ -18,7 +18,9 @@ from astrbot.api import logger
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
 网盘名称 = "UC网盘"
-同名冲突备用文件名最大次数 = 5
+同名冲突重试次数 = 5
+目录列表每页数量 = 200
+目录列表最大页数 = 20
 上传完成重试次数 = 6
 上传完成重试基础间隔秒 = 2
 上传完成文件可见重试次数 = 12
@@ -65,21 +67,20 @@ class UC网盘客户端:
 
     async def 上传文件并创建分享(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
         目录ID = await self.确保目录路径(上传目录)
-        await self.删除同名普通文件(文件名, 目录ID)
         文件ID = ""
         最后异常: Exception | None = None
-        for 尝试次数 in range(1, 同名冲突备用文件名最大次数 + 1):
-            远端文件名 = 文件名 if 尝试次数 == 1 else 生成UC备用上传文件名(文件名, 尝试次数)
+        for 尝试次数 in range(1, 同名冲突重试次数 + 1):
+            await self.删除同名普通文件(文件名, 目录ID)
             try:
-                文件ID = await self.上传文件(本地路径, 目录ID, 远端文件名)
+                文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
                 break
             except Exception as 异常:
-                if not 是UC同名冲突错误(异常) or 尝试次数 >= 同名冲突备用文件名最大次数:
+                if not 是UC同名冲突错误(异常) or 尝试次数 >= 同名冲突重试次数:
                     raise
                 最后异常 = 异常
                 logger.warning(
-                    f"UC网盘远端文件名冲突，保留旧文件并改用备用文件名上传："
-                    f"file={文件名}, remote_file={远端文件名}, attempt={尝试次数}/{同名冲突备用文件名最大次数}"
+                    f"UC网盘远端文件名冲突，重新删除同名旧文件后继续使用原文件名上传："
+                    f"file={文件名}, attempt={尝试次数}/{同名冲突重试次数}, error={异常}"
                 )
                 await asyncio.sleep(min(尝试次数 * 上传完成重试基础间隔秒, 10))
         if not 文件ID and 最后异常:
@@ -133,44 +134,76 @@ class UC网盘客户端:
         return 文件ID
 
     async def 查找文件夹ID(self, 目录名: str, 父目录ID: str = "0") -> str:
-        数据 = await self.请求JSON可等待("GET", "/file/sort", params={"pdir_fid": 父目录ID, "_size": 200})
-        项目列表 = 读取路径(数据, ("data", "list")) or []
+        项目列表 = await self.列出目录项目(父目录ID)
         for 项目 in 项目列表:
             if not isinstance(项目, dict):
                 continue
-            if 项目.get("file_name") != 目录名 or not 是UC文件夹项目(项目):
+            if 读取UC文件名(项目) != 目录名 or not 是UC文件夹项目(项目):
                 continue
-            文件ID = str(项目.get("fid") or "")
+            文件ID = 读取UC文件ID(项目)
             if 文件ID:
                 return 文件ID
         return ""
 
     async def 删除同名普通文件(self, 文件名: str, 父目录ID: str = "0") -> int:
         删除数量 = 0
-        for _ in range(3):
-            文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
+        已删除ID集合: set[str] = set()
+        for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
+            当前文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
+            文件ID列表 = [文件ID for 文件ID in 当前文件ID列表 if 文件ID not in 已删除ID集合]
             if not 文件ID列表:
+                if 当前文件ID列表 and 尝试次数 < 上传完成文件可见重试次数:
+                    await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
+                    continue
                 break
             for 文件ID in 文件ID列表:
                 await self.删除文件(文件ID)
+                已删除ID集合.add(文件ID)
                 删除数量 += 1
+            if 尝试次数 < 上传完成文件可见重试次数:
+                await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
         if 删除数量:
             logger.debug(f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
         return 删除数量
 
     async def 查找同名普通文件ID列表(self, 文件名: str, 父目录ID: str = "0") -> list[str]:
-        数据 = await self.请求JSON可等待("GET", "/file/sort", params={"pdir_fid": str(父目录ID), "_size": 200})
-        项目列表 = 读取路径(数据, ("data", "list")) or []
+        项目列表 = await self.列出目录项目(父目录ID)
         文件ID列表: list[str] = []
         for 项目 in 项目列表:
             if not isinstance(项目, dict):
                 continue
-            if 项目.get("file_name") != 文件名 or 是UC文件夹项目(项目):
+            if 读取UC文件名(项目) != 文件名 or 是UC文件夹项目(项目):
                 continue
-            文件ID = str(项目.get("fid") or "")
+            文件ID = 读取UC文件ID(项目)
             if 文件ID:
                 文件ID列表.append(文件ID)
         return 文件ID列表
+
+    async def 列出目录项目(self, 父目录ID: str = "0") -> list[dict[str, Any]]:
+        结果列表: list[dict[str, Any]] = []
+        已见标识: set[str] = set()
+        for 页码 in range(1, 目录列表最大页数 + 1):
+            数据 = await self.请求JSON可等待(
+                "GET",
+                "/file/sort",
+                params={"pdir_fid": str(父目录ID), "_size": 目录列表每页数量, "_page": 页码},
+            )
+            项目列表 = 读取UC目录项目列表(数据)
+            if not 项目列表:
+                break
+            新增数量 = 0
+            for 项目 in 项目列表:
+                if not isinstance(项目, dict):
+                    continue
+                标识 = 读取UC文件ID(项目) or json.dumps(项目, ensure_ascii=False, sort_keys=True)
+                if 标识 in 已见标识:
+                    continue
+                已见标识.add(标识)
+                结果列表.append(项目)
+                新增数量 += 1
+            if len(项目列表) < 目录列表每页数量 or 新增数量 == 0:
+                break
+        return 结果列表
 
     async def 删除文件(self, 文件ID: str) -> bool:
         if not 文件ID:
@@ -385,15 +418,14 @@ class UC网盘客户端:
         return ""
 
     async def 查找目录文件ID(self, 目标目录ID: str, 文件名: str, 文件大小: int, 预上传文件ID: str = "") -> str:
-        数据 = await self.请求JSON("GET", "/file/sort", params={"pdir_fid": str(目标目录ID), "_size": 200})
-        项目列表 = 读取路径(数据, ("data", "list")) or []
+        项目列表 = await self.列出目录项目(目标目录ID)
         for 项目 in 项目列表:
             if not isinstance(项目, dict):
                 continue
-            文件ID = str(项目.get("fid") or "")
+            文件ID = 读取UC文件ID(项目)
             if 预上传文件ID and 文件ID == 预上传文件ID:
                 return 文件ID
-            if 项目.get("file_name") != 文件名:
+            if 读取UC文件名(项目) != 文件名:
                 continue
             if not UC文件大小匹配(项目, 文件大小):
                 continue
@@ -651,14 +683,6 @@ def 提取UC错误消息(值: Any) -> str:
     return ""
 
 
-def 生成UC备用上传文件名(文件名: str, 序号: int) -> str:
-    路径 = Path(str(文件名 or "小说.txt"))
-    后缀 = 路径.suffix or ".txt"
-    主名 = 路径.stem or "小说"
-    时间戳 = int(time.time() * 1000)
-    return f"{主名}_UC上传_{时间戳}_{序号}{后缀}"
-
-
 def 计算UC重试等待秒数(尝试次数: int) -> int:
     return min(max(尝试次数, 1) * 上传完成重试基础间隔秒, 10)
 
@@ -690,6 +714,39 @@ def 是UC文件夹项目(项目: dict[str, Any]) -> bool:
         pass
     文本 = str(值 or "").strip().lower()
     return 文本 in ("true", "yes", "folder", "dir")
+
+
+def 读取UC目录项目列表(数据: Any) -> list[Any]:
+    for 路径 in (
+        ("data", "list"),
+        ("data", "file_list"),
+        ("data", "files"),
+        ("data", "items"),
+        ("list",),
+        ("file_list",),
+        ("files",),
+        ("items",),
+    ):
+        值 = 读取路径(数据, 路径)
+        if isinstance(值, list):
+            return 值
+    return []
+
+
+def 读取UC文件ID(项目: dict[str, Any]) -> str:
+    for 字段名 in ("fid", "file_id", "fileId", "id"):
+        值 = 项目.get(字段名)
+        if 值 not in (None, ""):
+            return str(值)
+    return ""
+
+
+def 读取UC文件名(项目: dict[str, Any]) -> str:
+    for 字段名 in ("file_name", "fileName", "name"):
+        值 = 项目.get(字段名)
+        if 值 not in (None, ""):
+            return str(值)
+    return ""
 
 
 def 清理Cookie(cookie: Any) -> str:
