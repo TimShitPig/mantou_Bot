@@ -157,6 +157,8 @@ def 读取当前番茄API(配置: Any) -> str:
 
 def 规范化番茄API(值: Any) -> str:
     文本 = str(值 or "").strip().lower()
+    if 文本 in ("y6api", "y6", "5"):
+        return "Y6api"
     if 文本 in ("聚合api", "4"):
         return "聚合API"
     if 文本 in ("崩溃api", "崩溃", "bengkuiapi", "bengkui", "crashapi", "crash", "3"):
