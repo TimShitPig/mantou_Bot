@@ -73,15 +73,6 @@ class 用户可见错误(RuntimeError):
     pass
 
 
-def 是永久性业务错误(错误文本: str) -> bool:
-    文本 = str(错误文本 or '')
-    return any((关键词 in 文本 for 关键词 in ('付费内容不解析', '付费', '无法解析', '不存在', '找不到')))
-
-
-def 是章节选择错误(错误文本: str) -> bool:
-    文本 = str(错误文本 or '')
-    return '请检测章节选择是否正确' in 文本
-
 def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> AsyncIterator[str] | None:
     来源 = 提取直接来源(命令文本) or 提取事件来源(事件)
     if 来源 is None:
@@ -268,24 +259,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
                 logger.debug(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
                 yield 格式化下载提示(书籍信息, len(章节列表))
-                try:
-                    章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
-                except 用户可见错误 as 异常:
-                    if 是章节选择错误(str(异常)):
-                        logger.warning(f"番茄小说章节选择错误，尝试用OIAPI chapters刷新目录：book_id={书籍编号}")
-                        章节响应数据 = await 请求章节目录数据(会话, 书籍编号, 接口key)
-                        新章节列表 = 提取章节目录(章节响应数据)
-                        if not 新章节列表:
-                            新章节列表 = 提取章节目录(章节响应数据.get('message'))
-                        if 新章节列表:
-                            章节列表 = 新章节列表
-                            书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
-                            logger.debug(f"番茄小说用OIAPI chapters刷新目录成功：book_id={书籍编号}, new_chapters={len(章节列表)}，开始用1-n重试下载")
-                            章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
-                        else:
-                            raise
-                    else:
-                        raise
+                章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
                     yield '番茄小说下载失败：OIAPI没有获取到可用章节正文'
@@ -610,28 +584,11 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
     try:
         return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
     except 用户可见错误 as 异常:
-        错误文本 = str(异常)
-        if 是永久性业务错误(错误文本) or 是章节选择错误(错误文本):
-            raise
-        if len(批次) <= 1:
-            章节 = 批次[0]
-            logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, chapter_id={章节.get('id')}, error={异常}")
-            return [{**章节, 'content': '【下载失败】', 'success': False}]
-        中点 = max(1, len(批次) // 2)
-        logger.warning(f"番茄小说业务错误，拆分重试：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
-        左侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[:中点])
-        右侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[中点:])
-        return 左侧结果 + 右侧结果
+        logger.warning(f"番茄小说业务错误，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
+        raise
     except Exception as 异常:
-        if len(批次) <= 1:
-            章节 = 批次[0]
-            logger.warning(f"番茄小说章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, chapter_id={章节.get('id')}, error={异常}")
-            return [{**章节, 'content': '【下载失败】', 'success': False}]
-        中点 = max(1, len(批次) // 2)
-        logger.warning(f"番茄小说范围请求失败，拆分重试：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
-        左侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[:中点])
-        右侧结果 = await 下载章节批次(会话, 书籍编号, 接口key, 批次[中点:])
-        return 左侧结果 + 右侧结果
+        logger.warning(f"番茄小说范围请求失败，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
+        raise
 
 async def 请求并映射章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     开始章 = min((int(章节.get('index') or 0) for 章节 in 批次))
