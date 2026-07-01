@@ -63,6 +63,7 @@ API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
 崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
+章节选择错误文本 = '请检测章节选择是否正确'
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 App请求头 = {'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://changdunovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
@@ -575,7 +576,25 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
         百分比 = int(已完成 * 100 / 总数) if 总数 else 100
         logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}')
     for 分段 in 拆分章节目录(目录, 总字数):
-        批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 分段)
+        try:
+            批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 分段)
+        except 用户可见错误 as 异常:
+            if not 是章节选择错误(异常):
+                raise
+            logger.warning(f'番茄小说章节选择错误，重取OIAPI目录后单次重试：book_id={书籍编号}, old_total={len(目录)}, error={异常}')
+            OIAPI目录 = await 重取OIAPI章节目录(会话, 书籍编号, 接口key)
+            目录[:] = OIAPI目录
+            总数 = len(目录)
+            已完成 = 0
+            成功数 = 0
+            失败数 = 0
+            上一进度段 = 0
+            结果列表.clear()
+            logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, source=OIAPI目录重试')
+            批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 目录)
+            记录进度(批次结果)
+            结果列表.extend(批次结果)
+            return 结果列表
         记录进度(批次结果)
         结果列表.extend(批次结果)
     return 结果列表
@@ -584,7 +603,7 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
     try:
         return await 请求并映射章节批次(会话, 书籍编号, 接口key, 批次)
     except 用户可见错误 as 异常:
-        logger.warning(f"番茄小说业务错误，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
+        logger.warning(f"番茄小说业务错误：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
         raise
     except Exception as 异常:
         logger.warning(f"番茄小说范围请求失败，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
@@ -605,6 +624,19 @@ async def 请求并映射章节批次(会话: aiohttp.ClientSession, 书籍编�
     if 匹配数 < len(批次):
         raise RuntimeError(f'章节返回不完整：matched={匹配数}/{len(批次)}')
     return 结果列表
+
+async def 重取OIAPI章节目录(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str) -> list[dict[str, Any]]:
+    章节响应数据 = await 请求章节目录数据(会话, 书籍编号, 接口key)
+    章节列表 = 提取章节目录(章节响应数据)
+    if not 章节列表 and isinstance(章节响应数据, dict):
+        章节列表 = 提取章节目录(章节响应数据.get('message'))
+    if not 章节列表:
+        raise RuntimeError('OIAPI重取章节目录失败：没有返回章节目录')
+    logger.debug(f'番茄小说OIAPI目录重取成功：book_id={书籍编号}, chapters={len(章节列表)}')
+    return 章节列表
+
+def 是章节选择错误(异常: Any) -> bool:
+    return 章节选择错误文本 in str(异常 or '')
 
 async def 请求FqRead(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 方法: str, 章节参数: str) -> dict[str, Any]:
     参数 = {'id': 书籍编号, 'book_id': 书籍编号, 'method': 方法, 'key': 接口key, 'type': 'json'}
