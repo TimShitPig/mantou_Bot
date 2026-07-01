@@ -29,7 +29,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
-卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]", re.IGNORECASE)
+卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]|暂不能查看该消息内容", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
 合并转发规则 = re.compile(
     r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息|\[合并转发消息\]",
