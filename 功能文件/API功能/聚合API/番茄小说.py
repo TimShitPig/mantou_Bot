@@ -1,23 +1,44 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
 import re
+import time
 from typing import Any
 
 import aiohttp
 from astrbot.api import logger
 
 
-聚合API地址 = "http://101.35.133.34:5000"
-批次大小 = 50
-最大并发批次 = 10
+聚合API节点列表 = [
+    "https://modtianmingyun-fanqie1.ms.show",
+    "https://modtianmingyun-fanqie2.ms.show",
+    "https://modtianmingyun-fanqie3.ms.show",
+    "https://modtianmingyun-fanqie4.ms.show",
+    "https://modtianmingyun-fanqie5.ms.show",
+    "https://modtianmingyun-fanqie6.ms.show",
+    "https://modtianmingyun-fanqie7.ms.show",
+    "https://modtianmingyun-fanqie8.ms.show",
+    "https://modtianmingyun-fanqie9.ms.show",
+    "https://modtianmingyun-fanqie10.ms.show",
+    "https://fanqieapi.6666633.xyz:9981",
+    "https://fanqieapi.6666633.xyz:9982",
+    "https://fanqieapi.6666633.xyz:9983",
+]
+聚合API地址 = 聚合API节点列表[0]
+API前缀 = "/api/v1"
+批次大小 = 200
+最大并发批次 = 40
+批次最大尝试次数 = 2
+节点缓存有效秒数 = 600
 进度分段数 = 10
 浏览器请求头 = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
 }
+可用节点缓存: dict[str, tuple[float, list[str]]] = {}
 
 
 async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
@@ -25,12 +46,24 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
         return {"success": False, "error": "聚合API没有获取到书籍ID"}
 
     try:
-        详情响应, 目录响应 = await asyncio.gather(
-            请求JSON(会话, "/api/detail", book_id=书籍编号),
-            请求JSON(会话, "/api/book", book_id=书籍编号),
+        节点测速任务 = asyncio.create_task(测速可用节点(会话, 书籍编号))
+        详情响应, 目录响应, 可用节点 = await asyncio.gather(
+            请求任一节点JSON(
+                会话,
+                f"{API前缀}/books/{书籍编号}",
+                验证函数=lambda 响应: bool(提取内层数据(响应)),
+            ),
+            请求任一节点JSON(
+                会话,
+                f"{API前缀}/books/{书籍编号}/directory",
+                验证函数=lambda 响应: bool(提取章节目录(提取内层数据(响应))),
+            ),
+            节点测速任务,
         )
     except Exception as 异常:
         return {"success": False, "error": str(异常)}
+    if 可用节点:
+        写入可用节点缓存(书籍编号, 可用节点)
 
     详情数据 = 提取内层数据(详情响应)
     目录数据 = 提取内层数据(目录响应)
@@ -42,7 +75,7 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
     章节列表 = 提取章节目录(目录数据)
     if not 章节列表:
         try:
-            简化目录响应 = await 请求JSON(会话, "/api/directory", book_id=书籍编号)
+            简化目录响应 = await 请求任一节点JSON(会话, f"{API前缀}/books/{书籍编号}/directory/fanqie")
             章节列表 = 提取章节目录(简化目录响应.get("data") if isinstance(简化目录响应, dict) else 简化目录响应)
         except Exception as 异常:
             logger.warning(f"番茄小说聚合API简化目录请求失败：book_id={书籍编号}, error={异常}")
@@ -66,27 +99,50 @@ async def 下载全部章节(
         return []
 
     批次列表 = [目录[开始:开始 + 批次大小] for 开始 in range(0, 总数, 批次大小)]
+    节点列表 = await 获取下载节点列表(会话, 书籍编号)
     信号量 = asyncio.Semaphore(最大并发批次)
     进度锁 = asyncio.Lock()
+    节点锁 = asyncio.Lock()
+    节点索引 = 0
     已完成 = 0
     成功数 = 0
     失败数 = 0
     上一进度段 = 0
     logger.info(
-        f"番茄小说聚合API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, batches={len(批次列表)}"
+        f"番茄小说聚合API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
+        f"batches={len(批次列表)}, batch_size={批次大小}, concurrency={最大并发批次}, nodes={len(节点列表)}"
     )
+
+    async def 取下一个节点() -> str:
+        nonlocal 节点索引
+        async with 节点锁:
+            节点 = 节点列表[节点索引 % len(节点列表)]
+            节点索引 += 1
+            return 节点
 
     async def 下载批次(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
         nonlocal 已完成, 成功数, 失败数, 上一进度段
         async with 信号量:
-            try:
-                批次结果 = await 请求并映射批次(会话, 书籍编号, 批次)
-            except Exception as 异常:
-                logger.warning(
-                    f"番茄小说聚合API批次下载失败：book_id={书籍编号}, "
-                    f"range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}"
-                )
+            批次结果: list[dict[str, Any]] | None = None
+            最后异常: Exception | None = None
+            for 尝试序号 in range(min(批次最大尝试次数, max(1, len(节点列表)))):
+                节点 = await 取下一个节点()
+                try:
+                    批次结果 = await 请求并映射批次(会话, 书籍编号, 批次, 节点)
+                    break
+                except Exception as 异常:
+                    最后异常 = 异常
+                    logger.warning(
+                        f"番茄小说聚合API批次下载失败：book_id={书籍编号}, node={节点}, "
+                        f"try={尝试序号 + 1}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}"
+                    )
+            if 批次结果 is None:
                 批次结果 = [{**章节, "content": "【下载失败】", "success": False} for 章节 in 批次]
+                if 最后异常 is not None:
+                    logger.warning(
+                        f"番茄小说聚合API批次最终失败：book_id={书籍编号}, "
+                        f"range={批次[0].get('index')}-{批次[-1].get('index')}, error={最后异常}"
+                    )
 
             async with 进度锁:
                 已完成 += len(批次结果)
@@ -113,6 +169,7 @@ async def 请求并映射批次(
     会话: aiohttp.ClientSession,
     书籍编号: str,
     批次: list[dict[str, Any]],
+    节点: str | None = None,
 ) -> list[dict[str, Any]]:
     章节ID列表 = [str(章节.get("id") or "") for 章节 in 批次 if 章节.get("id")]
     if not 章节ID列表:
@@ -120,28 +177,38 @@ async def 请求并映射批次(
 
     响应数据 = await 请求JSON(
         会话,
-        "/api/content",
-        tab="批量",
-        item_ids=",".join(章节ID列表),
-        book_id=书籍编号,
+        f"{API前缀}/chapters/full",
+        基础地址=节点,
+        方法="POST",
+        JSON数据={"book_id": 书籍编号, "item_ids": 章节ID列表},
+        超时=90,
     )
-    数据 = 响应数据.get("data") if isinstance(响应数据, dict) else {}
-    章节项列表 = []
-    if isinstance(数据, dict):
-        章节项列表 = 数据.get("chapters") or 读取路径(数据, ("data", "chapters")) or []
-    elif isinstance(数据, list):
-        章节项列表 = 数据
-    if not isinstance(章节项列表, list):
-        章节项列表 = []
-    return 映射章节响应(批次, 章节项列表)
+    章节项列表 = 提取正文响应章节项(响应数据)
+    结果列表 = 映射章节响应(批次, 章节项列表)
+    成功数 = sum(1 for 项目 in 结果列表 if 项目.get("success"))
+    if 成功数 < len(批次):
+        raise RuntimeError(f"聚合API章节返回不完整：matched={成功数}/{len(批次)}")
+    return 结果列表
 
 
-async def 请求JSON(会话: aiohttp.ClientSession, 路径: str, **参数: Any) -> dict[str, Any]:
-    async with 会话.get(
-        f"{聚合API地址}{路径}",
-        params={键: 值 for 键, 值 in 参数.items() if 值 not in (None, "")},
+async def 请求JSON(
+    会话: aiohttp.ClientSession,
+    路径: str,
+    基础地址: str | None = None,
+    方法: str = "GET",
+    JSON数据: Any = None,
+    超时: float = 30,
+    **参数: Any,
+) -> dict[str, Any]:
+    基础地址 = (基础地址 or 聚合API地址).rstrip("/")
+    请求参数 = {键: 值 for 键, 值 in 参数.items() if 值 not in (None, "")}
+    async with 会话.request(
+        方法.upper(),
+        f"{基础地址}{路径}",
+        params=请求参数 if 方法.upper() == "GET" else None,
+        json=JSON数据 if 方法.upper() != "GET" else None,
         headers=浏览器请求头,
-        timeout=120,
+        timeout=aiohttp.ClientTimeout(total=超时, sock_connect=min(5, 超时), sock_read=超时),
     ) as 响应:
         文本 = await 响应.text()
         if 响应.status >= 400:
@@ -154,10 +221,75 @@ async def 请求JSON(会话: aiohttp.ClientSession, 路径: str, **参数: Any) 
     if not isinstance(响应数据, dict):
         raise RuntimeError(f"聚合API返回格式不是对象({路径})")
     返回码 = 响应数据.get("code")
-    if str(返回码) not in ("0", "200"):
+    成功 = 响应数据.get("success")
+    if 成功 is not True and str(返回码) not in ("0", "200"):
         消息 = 提取错误消息(响应数据) or "接口返回失败"
         raise RuntimeError(f"聚合API返回失败({路径})：{限制文本长度(消息, 300)}")
     return 响应数据
+
+
+async def 请求任一节点JSON(
+    会话: aiohttp.ClientSession,
+    路径: str,
+    验证函数: Any = None,
+    方法: str = "GET",
+    JSON数据: Any = None,
+    **参数: Any,
+) -> dict[str, Any]:
+    任务列表 = [
+        asyncio.create_task(请求JSON(会话, 路径, 基础地址=节点, 方法=方法, JSON数据=JSON数据, **参数))
+        for 节点 in 聚合API节点列表
+    ]
+    错误列表: list[str] = []
+    try:
+        for 已完成任务 in asyncio.as_completed(任务列表):
+            try:
+                响应数据 = await 已完成任务
+                if 验证函数 is None or 验证函数(响应数据):
+                    return 响应数据
+                错误列表.append("响应数据未通过验证")
+            except Exception as 异常:
+                错误列表.append(str(异常))
+        raise RuntimeError("所有聚合API节点请求失败：" + "；".join(错误列表[:3]))
+    finally:
+        for 任务 in 任务列表:
+            if not 任务.done():
+                任务.cancel()
+        for 任务 in 任务列表:
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await 任务
+
+
+async def 测速可用节点(会话: aiohttp.ClientSession, 书籍编号: str) -> list[str]:
+    async def 测试节点(节点: str) -> tuple[str, float] | None:
+        开始时间 = time.perf_counter()
+        try:
+            await 请求JSON(会话, f"{API前缀}/books/{书籍编号}", 基础地址=节点, 超时=4)
+            return 节点, time.perf_counter() - 开始时间
+        except Exception:
+            return None
+
+    结果列表 = await asyncio.gather(*(测试节点(节点) for 节点 in 聚合API节点列表))
+    可用结果 = sorted((结果 for 结果 in 结果列表 if 结果), key=lambda 项目: 项目[1])
+    节点列表 = [节点 for 节点, _ in 可用结果]
+    if 节点列表:
+        logger.info(f"番茄小说聚合API可用节点：book_id={书籍编号}, nodes={len(节点列表)}, fastest={节点列表[0]}")
+    return 节点列表
+
+
+async def 获取下载节点列表(会话: aiohttp.ClientSession, 书籍编号: str) -> list[str]:
+    缓存时间, 缓存节点 = 可用节点缓存.get(str(书籍编号), (0.0, []))
+    if 缓存节点 and time.time() - 缓存时间 <= 节点缓存有效秒数:
+        return 缓存节点
+    节点列表 = await 测速可用节点(会话, 书籍编号)
+    if 节点列表:
+        写入可用节点缓存(书籍编号, 节点列表)
+        return 节点列表
+    return 聚合API节点列表[:10]
+
+
+def 写入可用节点缓存(书籍编号: str, 节点列表: list[str]) -> None:
+    可用节点缓存[str(书籍编号)] = (time.time(), list(节点列表))
 
 
 def 提取内层数据(响应数据: Any) -> dict[str, Any]:
@@ -181,6 +313,24 @@ def 提取错误消息(响应数据: Any) -> str:
     return ""
 
 
+def 提取正文响应章节项(响应数据: Any) -> list[Any] | dict[str, Any]:
+    if not isinstance(响应数据, dict):
+        return []
+    数据 = 响应数据.get("data")
+    if isinstance(数据, dict):
+        item_infos = 数据.get("item_infos")
+        if isinstance(item_infos, dict):
+            return item_infos
+        章节列表 = 数据.get("chapters") or 读取路径(数据, ("data", "chapters"))
+        if isinstance(章节列表, list):
+            return 章节列表
+        if any(isinstance(值, dict) and 提取正文(值) for 值 in 数据.values()):
+            return 数据
+    if isinstance(数据, list):
+        return 数据
+    return []
+
+
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     结果列表: list[dict[str, Any]] = []
 
@@ -199,7 +349,18 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
             结果列表.append({"id": 章节编号 or str(len(结果列表) + 1), "title": 标题 or f"第{序号 or len(结果列表) + 1}章", "index": 序号 or len(结果列表) + 1})
             return
 
-        for 字段名 in ("chapterListWithVolume", "lists", "list", "chapters", "chapterList", "allItemIds"):
+        for 字段名 in (
+            "chapterListWithVolume",
+            "lists",
+            "list",
+            "chapters",
+            "chapterList",
+            "item_data_list",
+            "itemList",
+            "item_list",
+            "item_infos",
+            "allItemIds",
+        ):
             子项 = 值.get(字段名)
             if 子项 is not None:
                 if 字段名 == "allItemIds" and isinstance(子项, list):
@@ -221,21 +382,32 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     return sorted(去重结果, key=lambda 项目: int(项目.get("index") or 0))
 
 
-def 映射章节响应(批次: list[dict[str, Any]], 原始章节项: list[Any]) -> list[dict[str, Any]]:
+def 映射章节响应(批次: list[dict[str, Any]], 原始章节项: Any) -> list[dict[str, Any]]:
     按编号索引: dict[str, dict[str, Any]] = {}
-    for 项目 in 原始章节项:
-        if not isinstance(项目, dict):
-            continue
-        章节编号 = 提取章节编号(项目)
-        if 章节编号:
-            按编号索引[章节编号] = 项目
+    顺序章节项: list[Any] = []
+    if isinstance(原始章节项, dict):
+        for 章节编号, 项目 in 原始章节项.items():
+            if isinstance(项目, dict):
+                按编号索引[str(章节编号)] = 项目
+                内部编号 = 提取章节编号(项目)
+                if 内部编号:
+                    按编号索引[内部编号] = 项目
+                顺序章节项.append(项目)
+    elif isinstance(原始章节项, list):
+        顺序章节项 = 原始章节项
+        for 项目 in 原始章节项:
+            if not isinstance(项目, dict):
+                continue
+            章节编号 = 提取章节编号(项目)
+            if 章节编号:
+                按编号索引[章节编号] = 项目
 
     结果列表: list[dict[str, Any]] = []
     for 索引, 章节 in enumerate(批次):
         章节编号 = str(章节.get("id") or "")
         原始项 = 按编号索引.get(章节编号)
-        if 原始项 is None and len(原始章节项) == len(批次) and isinstance(原始章节项[索引], dict):
-            原始项 = 原始章节项[索引]
+        if 原始项 is None and len(顺序章节项) == len(批次) and isinstance(顺序章节项[索引], dict):
+            原始项 = 顺序章节项[索引]
         正文 = 清理正文(提取正文(原始项) if 原始项 else "")
         标题 = 清理文本(读取任意字段(原始项 or {}, ("title", "chapter_title", "name"))) or str(章节.get("title") or f"第{章节.get('index')}章")
         结果列表.append({**章节, "title": 标题, "content": 正文 or "【下载失败】", "success": bool(正文)})

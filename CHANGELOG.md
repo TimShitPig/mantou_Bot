@@ -1,5 +1,13 @@
 # 更新日志
 
+## v2.7.0
+
+### 新增
+
+- 聚合API改为多节点高速下载：支持 `modtianmingyun-fanqie1` 到 `fanqie10.ms.show` 以及 `fanqieapi.6666633.xyz:9981-9983` 同格式节点，自动测速筛选可用节点。
+- 聚合API请求切换为中文文档里的 `/api/v1/books/{book_id}`、`/api/v1/books/{book_id}/directory` 和 `/api/v1/chapters/full`，正文按每批 200 章、最多 40 个动态并发混合节点下载，并兼容 `data.item_infos` 和章节 ID 映射格式。
+- 实测《超级兵王》8284 章完整下载：准备约 4 秒，正文约 15.5 秒，全部章节成功获取。
+
 ## v2.6.3
 
 ### 修复
