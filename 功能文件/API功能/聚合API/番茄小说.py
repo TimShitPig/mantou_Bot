@@ -34,6 +34,8 @@ API前缀 = "/api/v1"
 降级批次大小列表 = (200, 100, 50)
 正文测速章节数 = 5
 正文测速超时 = 10
+不可下载业务提示 = "该书不存在或已停止合作或付费书籍不支持下载，请去书城阅读新书"
+不可下载业务关键词 = ("该书不存在", "已停止合作", "付费书籍不支持下载")
 节点缓存有效秒数 = 600
 进度分段数 = 10
 浏览器请求头 = {
@@ -41,6 +43,10 @@ API前缀 = "/api/v1"
     "Accept": "application/json, text/plain, */*",
 }
 可用节点缓存: dict[str, tuple[float, list[str]]] = {}
+
+
+class 聚合API业务错误(RuntimeError):
+    pass
 
 
 async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
@@ -135,6 +141,13 @@ async def 下载全部章节(
             try:
                 return await 请求并映射批次(会话, 书籍编号, 批次, 节点)
             except Exception as 异常:
+                业务提示 = 提取聚合API业务提示(str(异常))
+                if 业务提示:
+                    logger.warning(
+                        f"番茄小说聚合API业务错误，停止重试：book_id={书籍编号}, node={节点}, "
+                        f"range={批次[0].get('index')}-{批次[-1].get('index')}, error={业务提示}"
+                    )
+                    raise 聚合API业务错误(业务提示) from 异常
                 最后异常 = 异常
                 logger.warning(
                     f"番茄小说聚合API批次下载失败，换节点重试：book_id={书籍编号}, node={节点}, "
@@ -148,6 +161,8 @@ async def 下载全部章节(
     async def 下载可降级批次(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
         try:
             return await 请求批次直到成功(批次)
+        except 聚合API业务错误:
+            raise
         except Exception as 异常:
             新大小 = 下一级批次大小(len(批次))
             if 新大小 > 0:
@@ -185,6 +200,10 @@ async def 下载全部章节(
     批次结果列表 = await asyncio.gather(*(下载批次(批次) for 批次 in 批次列表), return_exceptions=True)
     异常列表 = [项目 for 项目 in 批次结果列表 if isinstance(项目, Exception)]
     if 异常列表:
+        for 异常 in 异常列表:
+            业务提示 = 提取聚合API业务提示(str(异常))
+            if 业务提示:
+                raise 聚合API业务错误(业务提示) from 异常
         raise RuntimeError(f"聚合API章节下载失败：{异常列表[0]}")
     结果列表: list[dict[str, Any]] = []
     for 批次结果 in 批次结果列表:
@@ -253,6 +272,9 @@ async def 请求JSON(
     成功 = 响应数据.get("success")
     if 成功 is not True and str(返回码) not in ("0", "200"):
         消息 = 提取错误消息(响应数据) or "接口返回失败"
+        业务提示 = 提取聚合API业务提示(消息)
+        if 业务提示:
+            raise 聚合API业务错误(业务提示)
         raise RuntimeError(f"聚合API返回失败({路径})：{限制文本长度(消息, 300)}")
     return 响应数据
 
@@ -278,6 +300,9 @@ async def 请求任一节点JSON(
                     return 响应数据
                 错误列表.append("响应数据未通过验证")
             except Exception as 异常:
+                业务提示 = 提取聚合API业务提示(str(异常))
+                if 业务提示:
+                    raise 聚合API业务错误(业务提示) from 异常
                 错误列表.append(str(异常))
         raise RuntimeError("所有聚合API节点请求失败：" + "；".join(错误列表[:3]))
     finally:
@@ -317,6 +342,8 @@ async def 测速可用节点(
                 if sum(1 for 项目 in 测试结果 if 项目.get("success")) < len(正文测试ID列表):
                     return None
             return 节点, time.perf_counter() - 开始时间
+        except 聚合API业务错误:
+            raise
         except Exception:
             return None
 
@@ -365,6 +392,13 @@ def 提取错误消息(响应数据: Any) -> str:
         值 = 读取路径(响应数据, 路径)
         if 值:
             return str(值)
+    return ""
+
+
+def 提取聚合API业务提示(错误文本: Any) -> str:
+    文本 = str(错误文本 or "")
+    if any(关键词 in 文本 for 关键词 in 不可下载业务关键词):
+        return 不可下载业务提示
     return ""
 
 
