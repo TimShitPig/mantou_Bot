@@ -31,7 +31,9 @@ from astrbot.api import logger
 API前缀 = "/api/v1"
 批次大小 = 200
 最大并发批次 = 40
-批次最大尝试次数 = 2
+降级批次大小列表 = (200, 100, 50)
+正文测速章节数 = 5
+正文测速超时 = 10
 节点缓存有效秒数 = 600
 进度分段数 = 10
 浏览器请求头 = {
@@ -46,8 +48,7 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
         return {"success": False, "error": "聚合API没有获取到书籍ID"}
 
     try:
-        节点测速任务 = asyncio.create_task(测速可用节点(会话, 书籍编号))
-        详情响应, 目录响应, 可用节点 = await asyncio.gather(
+        详情响应, 目录响应 = await asyncio.gather(
             请求任一节点JSON(
                 会话,
                 f"{API前缀}/books/{书籍编号}",
@@ -58,12 +59,9 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
                 f"{API前缀}/books/{书籍编号}/directory",
                 验证函数=lambda 响应: bool(提取章节目录(提取内层数据(响应))),
             ),
-            节点测速任务,
         )
     except Exception as 异常:
         return {"success": False, "error": str(异常)}
-    if 可用节点:
-        写入可用节点缓存(书籍编号, 可用节点)
 
     详情数据 = 提取内层数据(详情响应)
     目录数据 = 提取内层数据(目录响应)
@@ -82,6 +80,10 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 书籍编号: str) -
     if not 章节列表:
         return {"success": False, "error": "聚合API没有获取到章节目录"}
 
+    可用节点 = await 测速可用节点(会话, 书籍编号, 章节列表)
+    if 可用节点:
+        写入可用节点缓存(书籍编号, 可用节点)
+
     书籍信息 = 合并书籍信息(书籍信息, {"chapter_count": len(章节列表)})
     logger.info(
         f"番茄小说聚合API准备完成：book_id={书籍编号}, title={书籍信息.get('title')}, chapters={len(章节列表)}"
@@ -99,7 +101,7 @@ async def 下载全部章节(
         return []
 
     批次列表 = [目录[开始:开始 + 批次大小] for 开始 in range(0, 总数, 批次大小)]
-    节点列表 = await 获取下载节点列表(会话, 书籍编号)
+    节点列表 = await 获取下载节点列表(会话, 书籍编号, 目录)
     信号量 = asyncio.Semaphore(最大并发批次)
     进度锁 = asyncio.Lock()
     节点锁 = asyncio.Lock()
@@ -113,36 +115,58 @@ async def 下载全部章节(
         f"batches={len(批次列表)}, batch_size={批次大小}, concurrency={最大并发批次}, nodes={len(节点列表)}"
     )
 
-    async def 取下一个节点() -> str:
+    async def 取节点尝试顺序() -> list[str]:
         nonlocal 节点索引
         async with 节点锁:
-            节点 = 节点列表[节点索引 % len(节点列表)]
+            开始索引 = 节点索引
             节点索引 += 1
-            return 节点
+            return [节点列表[(开始索引 + 偏移) % len(节点列表)] for 偏移 in range(len(节点列表))]
+
+    def 下一级批次大小(当前数量: int) -> int:
+        for 大小 in 降级批次大小列表:
+            if 当前数量 > 大小:
+                return 大小
+        return 0
+
+    async def 请求批次直到成功(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        最后异常: Exception | None = None
+        节点顺序 = await 取节点尝试顺序()
+        for 尝试序号, 节点 in enumerate(节点顺序, start=1):
+            try:
+                return await 请求并映射批次(会话, 书籍编号, 批次, 节点)
+            except Exception as 异常:
+                最后异常 = 异常
+                logger.warning(
+                    f"番茄小说聚合API批次下载失败，换节点重试：book_id={书籍编号}, node={节点}, "
+                    f"try={尝试序号}/{len(节点顺序)}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}"
+                )
+        raise RuntimeError(
+            f"聚合API章节批次下载失败，已尝试 {len(节点顺序)} 个节点，"
+            f"range={批次[0].get('index')}-{批次[-1].get('index')}，error={最后异常}"
+        )
+
+    async def 下载可降级批次(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        try:
+            return await 请求批次直到成功(批次)
+        except Exception as 异常:
+            新大小 = 下一级批次大小(len(批次))
+            if 新大小 > 0:
+                logger.warning(
+                    f"番茄小说聚合API批次降级重试：book_id={书籍编号}, "
+                    f"range={批次[0].get('index')}-{批次[-1].get('index')}, "
+                    f"old_size={len(批次)}, new_size={新大小}, error={异常}"
+                )
+                结果列表: list[dict[str, Any]] = []
+                子批次列表 = [批次[开始:开始 + 新大小] for 开始 in range(0, len(批次), 新大小)]
+                for 子批次 in 子批次列表:
+                    结果列表.extend(await 下载可降级批次(子批次))
+                return 结果列表
+            raise
 
     async def 下载批次(批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
         nonlocal 已完成, 成功数, 失败数, 上一进度段
         async with 信号量:
-            批次结果: list[dict[str, Any]] | None = None
-            最后异常: Exception | None = None
-            for 尝试序号 in range(min(批次最大尝试次数, max(1, len(节点列表)))):
-                节点 = await 取下一个节点()
-                try:
-                    批次结果 = await 请求并映射批次(会话, 书籍编号, 批次, 节点)
-                    break
-                except Exception as 异常:
-                    最后异常 = 异常
-                    logger.warning(
-                        f"番茄小说聚合API批次下载失败：book_id={书籍编号}, node={节点}, "
-                        f"try={尝试序号 + 1}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}"
-                    )
-            if 批次结果 is None:
-                批次结果 = [{**章节, "content": "【下载失败】", "success": False} for 章节 in 批次]
-                if 最后异常 is not None:
-                    logger.warning(
-                        f"番茄小说聚合API批次最终失败：book_id={书籍编号}, "
-                        f"range={批次[0].get('index')}-{批次[-1].get('index')}, error={最后异常}"
-                    )
+            批次结果 = await 下载可降级批次(批次)
 
             async with 进度锁:
                 已完成 += len(批次结果)
@@ -158,9 +182,14 @@ async def 下载全部章节(
                     )
             return 批次结果
 
-    批次结果列表 = await asyncio.gather(*(下载批次(批次) for 批次 in 批次列表))
+    批次结果列表 = await asyncio.gather(*(下载批次(批次) for 批次 in 批次列表), return_exceptions=True)
+    异常列表 = [项目 for 项目 in 批次结果列表 if isinstance(项目, Exception)]
+    if 异常列表:
+        raise RuntimeError(f"聚合API章节下载失败：{异常列表[0]}")
     结果列表: list[dict[str, Any]] = []
     for 批次结果 in 批次结果列表:
+        if isinstance(批次结果, Exception):
+            continue
         结果列表.extend(批次结果)
     return sorted(结果列表, key=lambda 项目: int(项目.get("index") or 0))
 
@@ -173,7 +202,7 @@ async def 请求并映射批次(
 ) -> list[dict[str, Any]]:
     章节ID列表 = [str(章节.get("id") or "") for 章节 in 批次 if 章节.get("id")]
     if not 章节ID列表:
-        return [{**章节, "content": "【下载失败】", "success": False} for 章节 in 批次]
+        raise RuntimeError("聚合API章节目录缺少章节ID")
 
     响应数据 = await 请求JSON(
         会话,
@@ -260,11 +289,33 @@ async def 请求任一节点JSON(
                 await 任务
 
 
-async def 测速可用节点(会话: aiohttp.ClientSession, 书籍编号: str) -> list[str]:
+async def 测速可用节点(
+    会话: aiohttp.ClientSession,
+    书籍编号: str,
+    目录: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    正文测试ID列表 = [str(章节.get("id") or "") for 章节 in (目录 or []) if 章节.get("id")][:正文测速章节数]
+
     async def 测试节点(节点: str) -> tuple[str, float] | None:
         开始时间 = time.perf_counter()
         try:
             await 请求JSON(会话, f"{API前缀}/books/{书籍编号}", 基础地址=节点, 超时=4)
+            if 正文测试ID列表:
+                响应数据 = await 请求JSON(
+                    会话,
+                    f"{API前缀}/chapters/full",
+                    基础地址=节点,
+                    方法="POST",
+                    JSON数据={"book_id": 书籍编号, "item_ids": 正文测试ID列表},
+                    超时=正文测速超时,
+                )
+                章节项 = 提取正文响应章节项(响应数据)
+                测试结果 = 映射章节响应(
+                    [{"id": 章节ID, "title": f"测速章节{序号}", "index": 序号} for 序号, 章节ID in enumerate(正文测试ID列表, start=1)],
+                    章节项,
+                )
+                if sum(1 for 项目 in 测试结果 if 项目.get("success")) < len(正文测试ID列表):
+                    return None
             return 节点, time.perf_counter() - 开始时间
         except Exception:
             return None
@@ -277,11 +328,15 @@ async def 测速可用节点(会话: aiohttp.ClientSession, 书籍编号: str) -
     return 节点列表
 
 
-async def 获取下载节点列表(会话: aiohttp.ClientSession, 书籍编号: str) -> list[str]:
+async def 获取下载节点列表(
+    会话: aiohttp.ClientSession,
+    书籍编号: str,
+    目录: list[dict[str, Any]] | None = None,
+) -> list[str]:
     缓存时间, 缓存节点 = 可用节点缓存.get(str(书籍编号), (0.0, []))
     if 缓存节点 and time.time() - 缓存时间 <= 节点缓存有效秒数:
         return 缓存节点
-    节点列表 = await 测速可用节点(会话, 书籍编号)
+    节点列表 = await 测速可用节点(会话, 书籍编号, 目录)
     if 节点列表:
         写入可用节点缓存(书籍编号, 节点列表)
         return 节点列表
