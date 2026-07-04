@@ -94,7 +94,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             f'当前番茄小说API：{当前接口}',
             '请选择番茄小说API：',
             '1. OIAPI（oiapi.net，需要配置 番茄小说key）',
-            '2. 析API（biek.top，不需要 番茄小说key）',
+            '2. 析API（multi-content 批量正文，不需要 番茄小说key）',
             '3. 崩溃API（111.170.14.45:2000，下载任务模式）',
             '4. 聚合API（多节点高速接口）',
             '5. Y6api（y68-napi.hf.space，后端打包下载）',
@@ -241,6 +241,9 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
                     yield '番茄小说下载失败：析API没有获取到可用章节正文'
+                    return
+                if len(成功章节列表) < len(章节列表):
+                    yield '番茄小说下载失败：析API章节正文不完整，请重新发送链接重试'
                     return
             else:
                 if not 接口key:

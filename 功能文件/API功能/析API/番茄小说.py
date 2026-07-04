@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import html
 import json
+import os
 import re
 import urllib.parse
 from typing import Any
@@ -11,8 +11,11 @@ import aiohttp
 from astrbot.api import logger
 
 
-析API番茄小说地址 = "https://biek.top//api/fq.php"
-章节并发数 = 200
+析API批量正文地址 = "http://103.40.14.12:27042/multi-content"
+析API批量正文key = os.environ.get("MANTOU_XI_API_KEY", "n48wkONBw8fcTl9VEVA-4ZN5KwRPso4MEDMhXw9myhchPp-OVkIqYr-i5tCBtsRw")
+官方书籍信息地址 = "https://fanqienovel.com/api/book/info"
+官方章节目录地址 = "https://fanqienovel.com/api/reader/directory/detail"
+正文批量章节数 = 1800
 进度分段数 = 10
 
 番茄域名正则 = re.compile("fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com", re.IGNORECASE)
@@ -25,20 +28,24 @@ async def 下载番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍�
         return 准备结果
     实际书籍编号 = str(准备结果.get("book_id") or "")
     章节列表 = 准备结果.get("chapters") or []
-    章节结果列表 = await 下载全部章节(会话, 实际书籍编号, 章节列表)
+    try:
+        章节结果列表 = await 下载全部章节(会话, 实际书籍编号, 章节列表)
+    except Exception as 异常:
+        return {"success": False, "error": str(异常)}
     成功数 = sum(1 for 项目 in 章节结果列表 if 项目.get("success"))
     if 成功数 <= 0:
         return {"success": False, "error": "析API没有获取到可用章节正文"}
+    if 成功数 < len(章节列表):
+        return {"success": False, "error": f"析API章节正文不完整：成功 {成功数}/{len(章节列表)}"}
     return {**准备结果, "chapter_results": 章节结果列表}
 
 
 async def 准备番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str = "", 基础书籍信息: dict[str, Any] | None = None) -> dict[str, Any]:
-    实际书籍编号 = 书籍编号 or 提取书籍编号(来源) or await 搜索书籍编号(会话, 来源)
+    实际书籍编号 = 书籍编号 or 提取书籍编号(来源)
     if not 实际书籍编号:
         return {"success": False, "error": "析API没有识别到书籍ID"}
 
     书籍信息 = 合并书籍信息(默认书籍信息(实际书籍编号), 基础书籍信息 or {})
-    详情数据: Any = {}
     if not 有有效书籍详情(书籍信息):
         详情响应 = await 请求详情(会话, 实际书籍编号)
         详情数据 = 详情响应.get("data") if isinstance(详情响应, dict) else {}
@@ -46,9 +53,7 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍�
 
     目录响应 = await 请求目录(会话, 实际书籍编号)
     目录数据 = 目录响应.get("data") if isinstance(目录响应, dict) else 目录响应
-    章节列表 = 提取章节目录(目录数据)
-    if not 章节列表:
-        章节列表 = 提取章节目录(详情数据)
+    章节列表 = 提取官方章节目录(目录数据)
     if not 章节列表:
         return {"success": False, "error": "析API没有获取到章节目录"}
 
@@ -65,86 +70,111 @@ async def 准备番茄小说(会话: aiohttp.ClientSession, 来源: str, 书籍�
     }
 
 
-async def 搜索书籍编号(会话: aiohttp.ClientSession, 来源: str) -> str:
-    响应数据 = await 请求搜索(会话, 来源)
-    搜索结果 = 读取路径(响应数据, ("data", "ret_data"))
-    if not isinstance(搜索结果, list):
-        return ""
-    for 项目 in 搜索结果:
-        if not isinstance(项目, dict):
-            continue
-        书籍编号 = 清理文本(项目.get("book_id"))
-        if re.fullmatch("\\d{15,25}", 书籍编号):
-            logger.info(f"番茄小说析API搜索命中：book_id={书籍编号}, title={项目.get('title')}")
-            return 书籍编号
-    return ""
-
-
 async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
     总数 = len(目录)
     已完成 = 0
     成功数 = 0
-    失败数 = 0
     上一进度段 = 0
     结果列表: list[dict[str, Any]] = []
-    logger.info(f"番茄小说析API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%")
+    if 总数 <= 0:
+        return []
+    logger.info(
+        f"番茄小说析API章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, batch_size={正文批量章节数}"
+    )
 
     def 记录进度(批次结果: list[dict[str, Any]]) -> None:
-        nonlocal 已完成, 成功数, 失败数, 上一进度段
+        nonlocal 已完成, 成功数, 上一进度段
         已完成 += len(批次结果)
         成功数 += sum(1 for 项目 in 批次结果 if 项目.get("success"))
-        失败数 += sum(1 for 项目 in 批次结果 if not 项目.get("success"))
         进度段 = 进度分段数 if 已完成 >= 总数 else int(已完成 * 进度分段数 / 总数)
         if 进度段 <= 上一进度段 and 已完成 < 总数:
             return
         上一进度段 = 进度段
         百分比 = int(已完成 * 100 / 总数) if 总数 else 100
         logger.info(
-            f"番茄小说析API章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}"
+            f"番茄小说析API章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}"
         )
 
-    for 起点 in range(0, 总数, 章节并发数):
-        批次 = 目录[起点:起点 + 章节并发数]
-        批次结果 = await asyncio.gather(*(下载单章(会话, 书籍编号, 章节) for 章节 in 批次))
+    for 起点 in range(0, 总数, 正文批量章节数):
+        批次 = 目录[起点:起点 + 正文批量章节数]
+        批次结果 = await 下载章节批次(会话, 书籍编号, 批次)
         记录进度(批次结果)
         结果列表.extend(批次结果)
+    if 成功数 != 总数:
+        raise RuntimeError(f"析API章节正文不完整：成功 {成功数}/{总数}")
     return 结果列表
 
 
-async def 下载单章(会话: aiohttp.ClientSession, 书籍编号: str, 章节: dict[str, Any]) -> dict[str, Any]:
-    章节编号 = 清理文本(章节.get("id"))
-    try:
-        响应数据 = await 请求正文(会话, 章节编号)
-        数据 = 响应数据.get("data") if isinstance(响应数据, dict) else {}
-        数据 = 数据 if isinstance(数据, dict) else {}
-        正文 = 清理正文(提取正文(数据))
-        章名 = 清理文本(读取任意字段(数据, ("title", "chapter_title", "name"))) or str(章节.get("title") or f"第{章节.get('index')}章")
-        return {**章节, "title": 章名, "content": 正文 or "【下载失败】", "success": bool(正文)}
-    except Exception as 异常:
-        logger.warning(f"番茄小说析API章节下载失败：book_id={书籍编号}, chapter={章节.get('index')}, item_id={章节编号}, error={异常}")
-        return {**章节, "content": "【下载失败】", "success": False}
+async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    章节编号列表 = [清理文本(章节.get("id")) for 章节 in 批次]
+    缺少编号 = [str(章节.get("index") or 位置 + 1) for 位置, 章节 in enumerate(批次) if not 清理文本(章节.get("id"))]
+    if 缺少编号:
+        raise RuntimeError(f"析API章节目录缺少 item_id：{','.join(缺少编号[:10])}")
+    正文映射 = await 请求批量正文(会话, 章节编号列表)
+    批次结果: list[dict[str, Any]] = []
+    缺失章节: list[str] = []
+    for 章节 in 批次:
+        章节编号 = 清理文本(章节.get("id"))
+        正文 = 清理正文(正文映射.get(章节编号, ""))
+        if not 正文:
+            缺失章节.append(f"{章节.get('index')}:{章节编号}")
+        批次结果.append({
+            **章节,
+            "title": 清理文本(章节.get("title")) or f"第{章节.get('index')}章",
+            "content": 正文,
+            "success": bool(正文),
+        })
+    if 缺失章节:
+        raise RuntimeError(
+            f"析API章节正文不完整：book_id={书籍编号}, missing={限制文本长度(','.join(缺失章节), 300)}"
+        )
+    return 批次结果
 
 
 async def 请求详情(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
-    return await 请求析API(会话, "detail", book_id=书籍编号)
+    try:
+        async with 会话.get(官方书籍信息地址, params={"bookId": 书籍编号}, timeout=20) as 响应:
+            文本 = await 响应.text()
+            if 响应.status >= 400:
+                logger.debug(f"番茄小说析API官方详情HTTP错误：book_id={书籍编号}, status={响应.status}")
+                return {}
+            try:
+                响应数据 = json.loads(文本)
+            except Exception as 异常:
+                logger.debug(f"番茄小说析API官方详情JSON解析失败：book_id={书籍编号}, error={异常}")
+                return {}
+    except Exception as 异常:
+        logger.debug(f"番茄小说析API官方详情请求失败：book_id={书籍编号}, error={异常}")
+        return {}
+    return 响应数据 if isinstance(响应数据, dict) else {}
 
 
 async def 请求目录(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
-    return await 请求析API(会话, "catalog", book_id=书籍编号)
+    try:
+        async with 会话.get(官方章节目录地址, params={"bookId": 书籍编号}, timeout=30) as 响应:
+            文本 = await 响应.text()
+            if 响应.status >= 400:
+                logger.debug(f"番茄小说析API官方目录HTTP错误：book_id={书籍编号}, status={响应.status}")
+                return {}
+            try:
+                响应数据 = json.loads(文本)
+            except Exception as 异常:
+                logger.debug(f"番茄小说析API官方目录JSON解析失败：book_id={书籍编号}, error={异常}")
+                return {}
+    except Exception as 异常:
+        logger.debug(f"番茄小说析API官方目录请求失败：book_id={书籍编号}, error={异常}")
+        return {}
+    return 响应数据 if isinstance(响应数据, dict) else {}
 
 
-async def 请求正文(会话: aiohttp.ClientSession, 章节编号: str) -> dict[str, Any]:
-    return await 请求析API(会话, "content", item_id=章节编号)
-
-
-async def 请求搜索(会话: aiohttp.ClientSession, 关键词: str, 页码: int = 0) -> dict[str, Any]:
-    return await 请求析API(会话, "search", q=关键词, page=页码)
-
-
-async def 请求析API(会话: aiohttp.ClientSession, 动作: str, **参数: Any) -> dict[str, Any]:
-    请求参数 = {"action": 动作}
-    请求参数.update({键: 值 for 键, 值 in 参数.items() if 值 not in (None, "")})
-    async with 会话.get(析API番茄小说地址, params=请求参数, timeout=90) as 响应:
+async def 请求批量正文(会话: aiohttp.ClientSession, 章节编号列表: list[str]) -> dict[str, str]:
+    有效编号列表 = [清理文本(章节编号) for 章节编号 in 章节编号列表 if 清理文本(章节编号)]
+    if not 有效编号列表:
+        return {}
+    if len(有效编号列表) > 正文批量章节数:
+        raise ValueError(f"析API单次最多请求 {正文批量章节数} 章")
+    请求参数 = {"item_ids": ",".join(有效编号列表), "key": 析API批量正文key}
+    async with 会话.get(析API批量正文地址, params=请求参数, timeout=180) as 响应:
         文本 = await 响应.text()
         if 响应.status >= 400:
             raise RuntimeError(f"析API HTTP {响应.status}: {限制文本长度(文本, 120)}")
@@ -152,14 +182,38 @@ async def 请求析API(会话: aiohttp.ClientSession, 动作: str, **参数: Any
             响应数据 = json.loads(文本)
         except Exception as 异常:
             raise RuntimeError(f"析API JSON解析失败：{限制文本长度(文本, 120)}") from 异常
+    正文项目列表 = 提取批量正文项目列表(响应数据)
+    正文映射: dict[str, str] = {}
+    for 项目 in 正文项目列表:
+        if not isinstance(项目, dict):
+            continue
+        章节编号 = 清理文本(读取任意字段(项目, ("item_id", "itemId", "chapter_id", "chapterId", "id")))
+        if not 章节编号:
+            continue
+        正文映射[章节编号] = 提取正文(项目)
+    return 正文映射
+
+
+def 提取批量正文项目列表(响应数据: Any) -> list[Any]:
+    if isinstance(响应数据, list):
+        return 响应数据
     if not isinstance(响应数据, dict):
-        raise RuntimeError("析API 返回格式不是对象")
+        raise RuntimeError("析API返回格式不是数组")
+    for 键 in ("data", "chapters", "list", "items", "result"):
+        值 = 响应数据.get(键)
+        if isinstance(值, list):
+            return 值
+        if isinstance(值, dict):
+            for 子键 in ("chapters", "list", "items"):
+                子值 = 值.get(子键)
+                if isinstance(子值, list):
+                    return 子值
     返回码 = 响应数据.get("code")
     成功 = 响应数据.get("success")
-    if str(返回码) not in ("0", "1", "200") and 成功 is not True:
-        消息 = 响应数据.get("message") or 响应数据.get("msg") or 响应数据.get("error") or "接口返回失败"
-        raise RuntimeError(f"析API返回失败：code={返回码}, message={限制文本长度(消息, 200)}")
-    return 响应数据
+    消息 = 响应数据.get("message") or 响应数据.get("msg") or 响应数据.get("error")
+    if str(返回码) not in ("0", "1", "200", "None") or 成功 is False or 消息:
+        raise RuntimeError(f"析API返回失败：{限制文本长度(消息 or 响应数据, 200)}")
+    raise RuntimeError("析API返回格式缺少正文列表")
 
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
@@ -188,6 +242,44 @@ def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     for 位置, 项目 in enumerate(项目列表, start=1):
         项目["index"] = 安全整数(项目.get("index")) or 位置
         键 = (str(项目.get("id") or ""), int(项目.get("index") or 0))
+        if 键 in 已见集合:
+            continue
+        已见集合.add(键)
+        去重结果.append(项目)
+    return sorted(去重结果, key=lambda 项目: int(项目.get("index") or 0))
+
+
+def 提取官方章节目录(数据: Any) -> list[dict[str, Any]]:
+    if not isinstance(数据, dict):
+        return 提取章节目录(数据)
+    章节列表: list[dict[str, Any]] = []
+    卷列表 = 数据.get("chapterListWithVolume")
+    if isinstance(卷列表, list):
+        for 卷 in 卷列表:
+            if not isinstance(卷, list):
+                continue
+            for 章节 in 卷:
+                if not isinstance(章节, dict):
+                    continue
+                章节编号 = 清理文本(读取任意字段(章节, ("itemId", "item_id", "chapter_id", "chapterId", "id")))
+                标题 = 清理文本(读取任意字段(章节, ("title", "chapter_title", "name")))
+                序号 = 安全整数(读取任意字段(章节, ("realChapterOrder", "chapter", "index", "order", "chapter_index", "chapterIndex")))
+                if 序号 <= 0:
+                    序号 = len(章节列表) + 1
+                if 章节编号 or 标题:
+                    章节列表.append({"id": 章节编号, "title": 标题 or f"第{序号}章", "index": 序号})
+    if not 章节列表:
+        章节列表 = 提取章节目录(数据)
+    if not 章节列表:
+        全部编号 = 数据.get("allItemIds")
+        if isinstance(全部编号, list):
+            for 位置, 章节编号 in enumerate(全部编号, start=1):
+                章节列表.append({"id": 清理文本(章节编号), "title": f"第{位置}章", "index": 位置})
+    去重结果: list[dict[str, Any]] = []
+    已见集合: set[tuple[str, int]] = set()
+    for 位置, 项目 in enumerate(章节列表, start=1):
+        项目["index"] = 安全整数(项目.get("index")) or 位置
+        键 = (清理文本(项目.get("id")), int(项目.get("index") or 0))
         if 键 in 已见集合:
             continue
         已见集合.add(键)
