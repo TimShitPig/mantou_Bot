@@ -54,6 +54,7 @@ App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1
 下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
 每段最大字数 = 5000000
+每段最大章节数 = 2500
 进度分段数 = 10
 文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
@@ -594,9 +595,10 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
             上一进度段 = 0
             结果列表.clear()
             logger.debug(f'番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, source=OIAPI目录重试')
-            批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 目录)
-            记录进度(批次结果)
-            结果列表.extend(批次结果)
+            for 重试分段 in 拆分章节目录(目录, 总字数):
+                批次结果 = await 下载章节批次(会话, 书籍编号, 接口key, 重试分段)
+                记录进度(批次结果)
+                结果列表.extend(批次结果)
             return 结果列表
         记录进度(批次结果)
         结果列表.extend(批次结果)
@@ -740,7 +742,9 @@ def 提取正文(章节: dict[str, Any] | None) -> str:
 def 拆分章节目录(目录: list[dict[str, Any]], 总字数: int) -> list[list[dict[str, Any]]]:
     if not 目录:
         return []
-    拆分数 = max(1, math.ceil(总字数 / 每段最大字数)) if 总字数 > 0 else 1
+    按字数拆分数 = max(1, math.ceil(总字数 / 每段最大字数)) if 总字数 > 0 else 1
+    按章节拆分数 = max(1, math.ceil(len(目录) / 每段最大章节数))
+    拆分数 = max(按字数拆分数, 按章节拆分数)
     分段大小 = max(1, math.ceil(len(目录) / 拆分数))
     return [目录[开始章:开始章 + 分段大小] for 开始章 in range(0, len(目录), 分段大小)]
 
