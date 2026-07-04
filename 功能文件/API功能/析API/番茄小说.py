@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import asyncio
 import json
 import os
 import re
@@ -15,7 +16,9 @@ from astrbot.api import logger
 析API批量正文key = os.environ.get("MANTOU_XI_API_KEY", "n48wkONBw8fcTl9VEVA-4ZN5KwRPso4MEDMhXw9myhchPp-OVkIqYr-i5tCBtsRw")
 官方书籍信息地址 = "https://fanqienovel.com/api/book/info"
 官方章节目录地址 = "https://fanqienovel.com/api/reader/directory/detail"
-正文批量章节数 = 1800
+正文批量章节数 = 800
+正文降级批量章节数 = 200
+正文批次并发数 = 6
 进度分段数 = 10
 
 番茄域名正则 = re.compile("fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com", re.IGNORECASE)
@@ -95,11 +98,27 @@ async def 下载全部章节(会话: aiohttp.ClientSession, 书籍编号: str, �
             f"番茄小说析API章节进度：book_id={书籍编号}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}"
         )
 
-    for 起点 in range(0, 总数, 正文批量章节数):
-        批次 = 目录[起点:起点 + 正文批量章节数]
-        批次结果 = await 下载章节批次(会话, 书籍编号, 批次)
-        记录进度(批次结果)
-        结果列表.extend(批次结果)
+    分批列表 = [(序号, 目录[起点:起点 + 正文批量章节数]) for 序号, 起点 in enumerate(range(0, 总数, 正文批量章节数))]
+    分批结果: dict[int, list[dict[str, Any]]] = {}
+    信号量 = asyncio.Semaphore(正文批次并发数)
+
+    async def 下载分批(序号: int, 批次: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]]]:
+        async with 信号量:
+            return 序号, await 下载章节批次(会话, 书籍编号, 批次)
+
+    任务列表 = [asyncio.create_task(下载分批(序号, 批次)) for 序号, 批次 in 分批列表]
+    try:
+        for 已完成任务 in asyncio.as_completed(任务列表):
+            序号, 批次结果 = await 已完成任务
+            分批结果[序号] = 批次结果
+            记录进度(批次结果)
+    except Exception:
+        for 任务 in 任务列表:
+            if not 任务.done():
+                任务.cancel()
+        raise
+    for 序号, _批次 in 分批列表:
+        结果列表.extend(分批结果.get(序号, []))
     if 成功数 != 总数:
         raise RuntimeError(f"析API章节正文不完整：成功 {成功数}/{总数}")
     return 结果列表
@@ -113,20 +132,47 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
     正文映射 = await 请求批量正文(会话, 章节编号列表)
     批次结果: list[dict[str, Any]] = []
     缺失章节: list[str] = []
+    空正文章节: list[str] = []
     for 章节 in 批次:
         章节编号 = 清理文本(章节.get("id"))
-        正文 = 清理正文(正文映射.get(章节编号, ""))
-        if not 正文:
+        if 章节编号 not in 正文映射:
             缺失章节.append(f"{章节.get('index')}:{章节编号}")
+            正文 = ""
+            成功 = False
+        else:
+            正文 = 清理正文(正文映射.get(章节编号, ""))
+            成功 = True
+            if not 正文:
+                空正文章节.append(f"{章节.get('index')}:{章节编号}")
         批次结果.append({
             **章节,
             "title": 清理文本(章节.get("title")) or f"第{章节.get('index')}章",
             "content": 正文,
-            "success": bool(正文),
+            "success": 成功,
         })
     if 缺失章节:
+        if len(缺失章节) == len(批次) and len(批次) > 正文降级批量章节数:
+            logger.warning(
+                f"番茄小说析API批量正文整批不完整，自动降级小批重试：book_id={书籍编号}, "
+                f"range={批次[0].get('index')}-{批次[-1].get('index')}, "
+                f"batch_size={len(批次)}, fallback_size={正文降级批量章节数}"
+            )
+            降级结果列表: list[dict[str, Any]] = []
+            for 起点 in range(0, len(批次), 正文降级批量章节数):
+                子批次 = 批次[起点:起点 + 正文降级批量章节数]
+                降级结果列表.extend(await 下载章节批次(会话, 书籍编号, 子批次))
+            return 降级结果列表
         raise RuntimeError(
             f"析API章节正文不完整：book_id={书籍编号}, missing={限制文本长度(','.join(缺失章节), 300)}"
+        )
+    if 空正文章节:
+        if len(空正文章节) == len(批次):
+            raise RuntimeError(
+                f"析API章节正文为空：book_id={书籍编号}, empty={限制文本长度(','.join(空正文章节), 300)}"
+            )
+        logger.warning(
+            f"番茄小说析API部分章节正文为空，保留章节标题继续：book_id={书籍编号}, "
+            f"empty={限制文本长度(','.join(空正文章节), 300)}"
         )
     return 批次结果
 
