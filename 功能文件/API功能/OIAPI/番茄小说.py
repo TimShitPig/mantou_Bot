@@ -243,7 +243,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     yield '番茄小说下载失败：析API没有获取到可用章节正文'
                     return
                 if len(成功章节列表) < len(章节列表):
-                    yield '番茄小说下载失败：析API章节正文不完整，请重新发送链接重试'
+                    yield '下载失败'
                     return
             else:
                 if not 接口key:
@@ -292,7 +292,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
         elif isinstance(异常, 用户可见错误):
             yield str(异常)
         else:
-            yield f'番茄小说下载失败：{异常}'
+            yield '下载失败'
         return
     if 已发送:
         return
