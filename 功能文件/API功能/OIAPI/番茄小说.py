@@ -53,8 +53,8 @@ App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1
 官方章节目录地址 = 'https://fanqienovel.com/api/reader/directory/detail'
 下载缓存目录 = Path(__file__).resolve().parents[2] / '下载缓存'
 免责声明 = '声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。'
-每段最大字数 = 5000000
-每段最大章节数 = 2500
+每段最大字数 = 2500000
+每段最大章节数 = 1200
 进度分段数 = 10
 文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
@@ -65,6 +65,7 @@ API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
 崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
 章节选择错误文本 = '请检测章节选择是否正确'
+OIAPI远端超时关键词 = ('Operation timed out', 'Curl.php', 'timed out after 30001')
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
 App请求头 = {'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://changdunovel.com/'}
 番茄域名正则 = re.compile('fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com', re.IGNORECASE)
@@ -614,7 +615,10 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
         logger.warning(f"番茄小说业务错误：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
         raise
     except Exception as 异常:
-        logger.warning(f"番茄小说范围请求失败，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
+        if 是OIAPI远端超时(异常):
+            logger.warning(f"番茄小说OIAPI服务端超时，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={限制文本长度(异常, 200)}")
+        else:
+            logger.warning(f"番茄小说范围请求失败，停止当前下载：book_id={书籍编号}, range={批次[0].get('index')}-{批次[-1].get('index')}, error={异常}")
         raise
 
 async def 请求并映射章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 接口key: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -653,18 +657,29 @@ async def 请求FqRead(会话: aiohttp.ClientSession, 书籍编号: str, 接口k
     async with 会话.get(OIAPI地址, params=参数, timeout=90) as 响应:
         文本 = await 响应.text()
         if 响应.status >= 400:
+            if 是OIAPI远端超时(文本):
+                raise RuntimeError(f'OIAPI服务端超时：{限制文本长度(文本, 120)}')
             raise RuntimeError(f'OIAPI HTTP {响应.status}: {限制文本长度(文本, 120)}')
         try:
             响应数据 = json.loads(文本)
         except Exception as 异常:
+            if 是OIAPI远端超时(文本):
+                raise RuntimeError(f'OIAPI服务端超时：{限制文本长度(文本, 120)}') from 异常
             raise RuntimeError(f'OIAPI JSON解析失败：{限制文本长度(文本, 120)}') from 异常
     if not isinstance(响应数据, dict):
         raise RuntimeError('OIAPI 返回格式不是对象')
     返回码 = 响应数据.get('code')
     if str(返回码) not in ('1', '200'):
         消息 = 响应数据.get('message') or 响应数据.get('msg') or 响应数据.get('error') or '接口返回失败'
+        if 是OIAPI远端超时(消息):
+            raise RuntimeError(f'OIAPI服务端超时：{限制文本长度(消息, 120)}')
         raise 用户可见错误(格式化OIAPI失败提示(消息))
     return 响应数据
+
+
+def 是OIAPI远端超时(值: Any) -> bool:
+    文本 = str(值 or '')
+    return any(关键词 in 文本 for 关键词 in OIAPI远端超时关键词)
 
 
 def 格式化OIAPI失败提示(消息: Any) -> str:

@@ -19,6 +19,7 @@ from astrbot.api import logger
 正文批量章节数 = 800
 正文降级批量章节数 = 200
 正文批次并发数 = 6
+正文缺章补拉批量序列 = (50, 10, 1)
 进度分段数 = 10
 
 番茄域名正则 = re.compile("fanqienovel\\.com|changdunovel\\.com|fqnovel\\.com|novelfm\\.com", re.IGNORECASE)
@@ -162,9 +163,16 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
                 子批次 = 批次[起点:起点 + 正文降级批量章节数]
                 降级结果列表.extend(await 下载章节批次(会话, 书籍编号, 子批次))
             return 降级结果列表
-        raise RuntimeError(
-            f"析API章节正文不完整：book_id={书籍编号}, missing={限制文本长度(','.join(缺失章节), 300)}"
+        logger.warning(
+            f"番茄小说析API部分章节缺失，开始定向补拉：book_id={书籍编号}, "
+            f"missing={限制文本长度(','.join(缺失章节), 300)}"
         )
+        正文映射 = await 补拉缺失章节正文(会话, 书籍编号, 批次, 正文映射)
+        批次结果, 缺失章节, 空正文章节 = 构造析API批次结果(批次, 正文映射)
+        if 缺失章节:
+            raise RuntimeError(
+                f"析API章节正文不完整：book_id={书籍编号}, missing={限制文本长度(','.join(缺失章节), 300)}"
+            )
     if 空正文章节:
         if len(空正文章节) == len(批次):
             raise RuntimeError(
@@ -175,6 +183,70 @@ async def 下载章节批次(会话: aiohttp.ClientSession, 书籍编号: str, �
             f"empty={限制文本长度(','.join(空正文章节), 300)}"
         )
     return 批次结果
+
+
+def 构造析API批次结果(批次: list[dict[str, Any]], 正文映射: dict[str, str]) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    批次结果: list[dict[str, Any]] = []
+    缺失章节: list[str] = []
+    空正文章节: list[str] = []
+    for 章节 in 批次:
+        章节编号 = 清理文本(章节.get("id"))
+        if 章节编号 not in 正文映射:
+            缺失章节.append(f"{章节.get('index')}:{章节编号}")
+            正文 = ""
+            成功 = False
+        else:
+            正文 = 清理正文(正文映射.get(章节编号, ""))
+            成功 = True
+            if not 正文:
+                空正文章节.append(f"{章节.get('index')}:{章节编号}")
+        批次结果.append({
+            **章节,
+            "title": 清理文本(章节.get("title")) or f"第{章节.get('index')}章",
+            "content": 正文,
+            "success": 成功,
+        })
+    return 批次结果, 缺失章节, 空正文章节
+
+
+async def 补拉缺失章节正文(
+    会话: aiohttp.ClientSession,
+    书籍编号: str,
+    批次: list[dict[str, Any]],
+    正文映射: dict[str, str],
+) -> dict[str, str]:
+    合并映射 = dict(正文映射)
+    缺失章节 = [章节 for 章节 in 批次 if 清理文本(章节.get("id")) and 清理文本(章节.get("id")) not in 合并映射]
+    for 轮次, 批量大小 in enumerate(正文缺章补拉批量序列, start=1):
+        if not 缺失章节:
+            break
+        logger.warning(
+            f"番茄小说析API缺章补拉：book_id={书籍编号}, round={轮次}/{len(正文缺章补拉批量序列)}, "
+            f"batch_size={批量大小}, missing={len(缺失章节)}"
+        )
+        本轮仍缺失: list[dict[str, Any]] = []
+        for 起点 in range(0, len(缺失章节), 批量大小):
+            子批次 = 缺失章节[起点:起点 + 批量大小]
+            子编号列表 = [清理文本(章节.get("id")) for 章节 in 子批次 if 清理文本(章节.get("id"))]
+            if not 子编号列表:
+                continue
+            子映射 = await 请求批量正文(会话, 子编号列表)
+            合并映射.update(子映射)
+            for 章节 in 子批次:
+                章节编号 = 清理文本(章节.get("id"))
+                if 章节编号 not in 合并映射:
+                    本轮仍缺失.append(章节)
+        缺失章节 = 本轮仍缺失
+    if 缺失章节:
+        logger.warning(
+            f"番茄小说析API缺章补拉后仍缺失：book_id={书籍编号}, "
+            f"missing={限制文本长度(格式化缺失章节(缺失章节), 300)}"
+        )
+    return 合并映射
+
+
+def 格式化缺失章节(章节列表: list[dict[str, Any]]) -> str:
+    return ",".join(f"{章节.get('index')}:{清理文本(章节.get('id'))}" for 章节 in 章节列表)
 
 
 async def 请求详情(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
