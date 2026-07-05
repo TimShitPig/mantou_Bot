@@ -12,7 +12,7 @@ import aiohttp
 from astrbot.api import logger
 
 
-析API批量正文地址 = "http://103.40.14.12:27042/multi-content"
+析API批量正文地址 = "http://43.248.187.60:27042/multi-content"
 析API批量正文key = os.environ.get("MANTOU_XI_API_KEY", "n48wkONBw8fcTl9VEVA-4ZN5KwRPso4MEDMhXw9myhchPp-OVkIqYr-i5tCBtsRw")
 官方书籍信息地址 = "https://fanqienovel.com/api/book/info"
 官方章节目录地址 = "https://fanqienovel.com/api/reader/directory/detail"
