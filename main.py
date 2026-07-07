@@ -37,6 +37,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 群管功能 = 加载功能模块("功能文件.管理功能.群聊功能.群管功能")
 网页群文件功能 = 加载功能模块("功能文件.管理功能.群聊功能.网页群文件")
 七猫小说功能 = 加载功能模块("功能文件.管理功能.小说功能.七猫小说")
+书旗小说功能 = 加载功能模块("功能文件.管理功能.小说功能.书旗小说")
 授权链接功能 = 加载功能模块("功能文件.管理功能.群聊功能.授权链接")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.小说功能开关")
 
@@ -45,7 +46,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.8.0"
+插件版本 = "2.9.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -164,6 +165,31 @@ class MyPlugin(Star):
 
             if 回复内容 is None:
                 if await 群管功能.处理数字撤回(event):
+                    event.stop_event()
+                    return
+
+                书旗回复流 = 书旗小说功能.获取书旗小说回复流(event, 命令文本, self.config)
+                if 书旗回复流 is not None:
+                    if not 小说功能开关.小说功能是否开启("书旗", self.config):
+                        yield event.plain_result(小说功能开关.获取小说功能关闭回复("书旗"))
+                        event.stop_event()
+                        return
+                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
+                    if 激活拦截 is not None:
+                        yield event.plain_result(激活拦截)
+                        event.stop_event()
+                        return
+                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
+                    免费额度提示已发送 = False
+                    async for 书旗回复内容 in 书旗回复流:
+                        if isinstance(书旗回复内容, str):
+                            if not 免费额度提示已发送:
+                                原回复内容 = 书旗回复内容
+                                书旗回复内容 = 用户激活功能.附加下载免费额度提示(书旗回复内容, 免费额度下载提示)
+                                免费额度提示已发送 = 书旗回复内容 != 原回复内容
+                            yield event.plain_result(书旗回复内容)
+                        else:
+                            yield 书旗回复内容
                     event.stop_event()
                     return
 

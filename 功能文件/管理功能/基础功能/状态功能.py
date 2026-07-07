@@ -19,7 +19,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 番茄API状态命名空间 = "fanqie_api"
 番茄API状态键 = "current_api"
 小说功能状态命名空间 = "novel_feature_switch"
-小说默认状态 = {"番茄": True, "七猫": True}
+小说默认状态 = {"番茄": True, "七猫": True, "书旗": True}
 付费开关状态命名空间 = "paid_access"
 默认上传目录 = "/小说机器人"
 
@@ -64,6 +64,7 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             "功能状态",
             f"番茄小说：{格式化开关(bool(功能状态.get('番茄', True)))}",
             f"七猫小说：{格式化开关(bool(功能状态.get('七猫', True)))}",
+            f"书旗小说：{格式化开关(bool(功能状态.get('书旗', True)))}",
             f"当前番茄API：{当前API}",
             f"全局收费：{全局收费}",
             f"当前群收费：{当前群收费}",
