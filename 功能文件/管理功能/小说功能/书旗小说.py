@@ -80,6 +80,9 @@ class Book:
     book_name: str
     author_name: str
     chapter_num: int
+    word_count: int
+    intro: str
+    status_text: str
     free_prefix: str
     short_prefix: str
     charge_prefix: str
@@ -174,6 +177,9 @@ async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否
         book_name=清理网页文本(data.get("bookName") or f"书旗小说{书籍编号}"),
         author_name=清理网页文本(data.get("authorName") or "未知"),
         chapter_num=安全整数(data.get("chapterNum"), len(chapters)),
+        word_count=获取书旗原始字数(data, chapters),
+        intro=获取书旗简介(data),
+        status_text=解析书旗状态(data),
         free_prefix=str(data.get("freeContUrlPrefix") or ""),
         short_prefix=str(data.get("shortContUrlPrefix") or ""),
         charge_prefix=str(data.get("chargeContUrlPrefix") or ""),
@@ -442,7 +448,20 @@ def 清理正文(decoded_html: str) -> str:
 
 def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -> tuple[str, bytes]:
     文件名 = 生成小说文件名(书籍)
-    内容列表 = [文件声明, "", f"名称：{书籍.book_name}", f"作者：{书籍.author_name or '未知'}", f"书旗 bookId：{书籍.book_id}", f"章节数：{len(书籍.chapters)}", ""]
+    简介 = 获取书旗简介(书籍.raw) or 书籍.intro
+    内容列表 = [
+        文件声明,
+        "",
+        f"名称：{书籍.book_name}",
+        f"作者：{书籍.author_name or '未知'}",
+        f"状态：{获取状态文本(书籍)}",
+        f"字数：{格式化字数(获取书旗总字数(书籍))}",
+        f"书籍ID：{书籍.book_id}",
+        f"章节数：{len(书籍.chapters)}",
+        "",
+    ]
+    if 简介:
+        内容列表.extend(["简介：", 简介, ""])
     for 章节 in 章节内容:
         if not 章节.get("content"):
             continue
@@ -461,14 +480,60 @@ def 生成小说文件名(书籍: Book) -> str:
 
 
 def 格式化下载提示(书籍: Book) -> str:
-    return "\n".join([f"书名：{书籍.book_name or '未知'}", f"作者：{书籍.author_name or '未知'}", f"状态：{获取状态文本(书籍)}", f"章节：{len(书籍.chapters)} 章", f"字数：{格式化字数(sum(章.word_count for 章 in 书籍.chapters))}", "", "正在下载中请稍等....."])
+    return "\n".join([f"书名：{书籍.book_name or '未知'}", f"作者：{书籍.author_name or '未知'}", f"状态：{获取状态文本(书籍)}", f"章节：{len(书籍.chapters)} 章", f"字数：{格式化字数(获取书旗总字数(书籍))}", "", "正在下载中请稍等....."])
 
 
 def 获取状态文本(书籍: Book) -> str:
-    文本 = json.dumps(书籍.raw, ensure_ascii=False)
-    if "完结" in 文本 or '"isOver":true' in 文本 or '"finish"' in 文本:
+    if 书籍.status_text:
+        return 书籍.status_text
+    状态文本 = 解析书旗状态(书籍.raw)
+    if 状态文本:
+        return 状态文本
+    文本 = json.dumps(书籍.raw, ensure_ascii=False).lower()
+    if "完结" in 文本 or '"isover":true' in 文本 or '"finish"' in 文本:
         return "完结"
     return "连载"
+
+
+def 获取书旗总字数(书籍: Book) -> int:
+    return 书籍.word_count or 获取书旗原始字数(书籍.raw, 书籍.chapters)
+
+
+def 获取书旗原始字数(data: dict[str, Any], chapters: list[Chapter]) -> int:
+    for 字段名 in ("wordCount", "realTimeWordCount", "words", "word_count", "totalWords", "totalWordCount"):
+        字数 = 安全整数(data.get(字段名), 0)
+        if 字数 > 0:
+            return 字数
+    return sum(章.word_count for 章 in chapters)
+
+
+def 获取书旗简介(data: dict[str, Any]) -> str:
+    for 字段名 in ("intro", "desc", "description", "bookDesc", "summary", "brief", "abstract"):
+        简介 = 清理网页文本(data.get(字段名))
+        if 简介:
+            return 简介
+    return ""
+
+
+def 解析书旗状态(data: dict[str, Any]) -> str:
+    for 字段名 in ("statusText", "statusName", "stateName", "bookStatus", "serialStatus", "updateStatus", "finishStatus"):
+        文本 = 清理网页文本(data.get(字段名))
+        if "完结" in 文本 or "已完" in 文本:
+            return "完结"
+        if "连载" in 文本 or "更新" in 文本:
+            return "连载"
+    for 字段名 in ("isOver", "isFinished", "isFinish", "finish", "finished"):
+        值 = data.get(字段名)
+        if isinstance(值, bool):
+            return "完结" if 值 else "连载"
+        if str(值).lower() in ("1", "true", "yes"):
+            return "完结"
+    状态值 = str(data.get("state") or data.get("status") or data.get("updateType") or "").strip()
+    if 状态值 == "2":
+        return "完结"
+    if 状态值:
+        return "连载"
+    return ""
 
 
 def 格式化字数(字数: int) -> str:
