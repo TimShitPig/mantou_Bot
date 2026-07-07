@@ -23,7 +23,6 @@ except Exception:
     Comp = None
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
@@ -48,9 +47,6 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 数字撤回触发次数: dict[str, int] = {}
 群管功能模块版本 = "1.20.3"
 踢出命令集合 = {"踢", "踢了", "踢人"}
-踢人开关命令配置 = {"开启踢人": True, "关闭踢人": False}
-踢人状态命名空间 = "group_kick"
-踢人状态键 = "enabled"
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
@@ -62,66 +58,7 @@ QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
-    文本 = str(命令文本 or "").strip()
-    if 文本 in 踢人开关命令配置:
-        if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用踢人开关"
-        是否开启 = 踢人开关命令配置[文本]
-        try:
-            写入布尔运行状态值(配置, 踢人状态命名空间, 踢人状态键, 是否开启)
-        except Exception as exc:
-            logger.warning(f"踢人开关写入失败：enabled={是否开启}, error={exc}")
-            return f"踢人开关设置失败：{exc}"
-        return f"踢人功能已{'开启' if 是否开启 else '关闭'}"
-
-    踢出命令 = 提取踢出命令文本(event, 命令文本)
-    if 踢出命令 not in 踢出命令集合:
-        return None
-    目标用户列表 = 提取被艾特用户QQ列表(event)
-    需要撤回目标消息 = True
-
-    if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用用户踢出"
-
-    if not 目标用户列表:
-        return "用户踢出失败：请 @ 要踢出的用户"
-
-    群号 = 获取群号(event)
-    if not 群号:
-        return "用户踢出失败：只能在群聊中使用"
-    if not 是QQ官方机器人(event) and (not 是数字ID(群号) or any(not 是数字ID(目标用户) for 目标用户 in 目标用户列表)):
-        return "用户踢出失败：当前适配器没有返回数字群号或用户QQ"
-
-    成功用户: list[str] = []
-    失败用户: list[tuple[str, Exception]] = []
-    撤回数量记录: dict[str, int] = {}
-    for 目标用户 in 目标用户列表:
-        try:
-            await 尝试踢出指定成员(event, 群号, 目标用户, 配置)
-            if 需要撤回目标消息:
-                撤回数量记录[目标用户] = await 尝试撤回指定用户最近消息(
-                    event,
-                    群号,
-                    目标用户,
-                    拉取数量=踢人消息撤回拉取数量,
-                    撤回数量=踢人消息撤回数量,
-                    日志名称="踢人消息撤回",
-                )
-            成功用户.append(目标用户)
-            logger.info(f"用户踢出成功：group_id={群号}, user_id={目标用户}")
-        except Exception as exc:
-            失败用户.append((目标用户, exc))
-            logger.warning(f"用户踢出失败：group_id={群号}, user_id={目标用户}, error={exc}")
-
-    if len(目标用户列表) == 1:
-        if 成功用户:
-            行列表 = [f"已踢出用户：{成功用户[0]}"]
-            if 需要撤回目标消息:
-                行列表.append(f"已撤回该用户最近消息：{撤回数量记录.get(成功用户[0], 0)} 条")
-            return "\n".join(行列表)
-        return f"用户踢出失败：{失败用户[0][1]}"
-
-    return 格式化批量踢出结果(成功用户, 失败用户, 撤回数量记录 if 需要撤回目标消息 else None)
+    return None
 
 
 async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -187,13 +124,7 @@ def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[s
 
 
 def 踢人功能是否开启(配置: Any = None) -> bool:
-    if 配置 is None:
-        return False
-    try:
-        return 读取布尔运行状态值(配置, 踢人状态命名空间, 踢人状态键, False)
-    except Exception as exc:
-        logger.warning(f"读取踢人开关失败，按关闭处理：error={exc}")
-        return False
+    return False
 
 
 def 解析踢出目标用户列表(event: AstrMessageEvent, 命令文本: str) -> list[str] | None:
@@ -967,21 +898,13 @@ async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
     if not 是数字ID(群号) or not 是数字ID(用户QQ):
-        logger.info(f"数字撤回踢出跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
+        logger.info(f"数字撤回计数跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
         return
 
     计数键 = f"{群号}:{用户QQ}"
     当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
     数字撤回触发次数[计数键] = 当前次数
-    logger.info(f"数字撤回模块触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}/{数字撤回踢出阈值}")
-    if 当前次数 < 数字撤回踢出阈值:
-        return
-    if not 踢人功能是否开启(配置):
-        logger.info(f"数字撤回踢出跳过：踢人功能关闭，仅撤回不提醒，group_id={群号}, user_id={用户QQ}, count={当前次数}")
-        return
-
-    if await 尝试踢出成员(event, 群号, 用户QQ, 配置):
-        数字撤回触发次数.pop(计数键, None)
+    logger.info(f"数字撤回模块触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}，仅撤回不踢人")
 
 
 async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None) -> bool:

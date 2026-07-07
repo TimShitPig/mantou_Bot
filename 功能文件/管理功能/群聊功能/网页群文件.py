@@ -1441,11 +1441,11 @@ async def 执行Cookie自动保活一次(配置: Any, force: bool = False) -> No
 
 async def Cookie自动保活循环(配置: Any) -> None:
     while True:
+        await asyncio.sleep(Cookie保活间隔秒数)
         try:
             await 执行Cookie自动保活一次(配置, force=False)
         except Exception as exc:
             logger.warning(f"网页群文件 Cookie 自动保活任务异常：{exc}")
-        await asyncio.sleep(Cookie保活间隔秒数)
 
 
 def 启动Cookie自动保活(配置: Any) -> None:

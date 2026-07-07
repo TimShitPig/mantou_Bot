@@ -43,7 +43,6 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
     UC状态 = 读取UC网盘状态(配置)
     百度状态 = 读取百度网盘状态(配置)
     群文件Cookie状态 = 读取群文件Cookie状态(event, 配置)
-    踢人状态 = 读取踢人状态(配置)
 
     return "\n".join(
         [
@@ -75,7 +74,6 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"番茄OIAPI key：{格式化已配置(bool(str(读取配置字段(配置, '番茄小说key') or '').strip()))}",
             f"数据库：{数据库状态}",
             f"群文件Cookie：{群文件Cookie状态}",
-            f"踢人功能：{踢人状态}",
             f"UC网盘：{UC状态}",
             f"百度网盘：{百度状态}",
         ]
@@ -122,14 +120,6 @@ def 读取群文件Cookie状态(event: Any, 配置: Any) -> str:
         return 网页群文件.获取Cookie状态摘要(发送者, 配置)
 
     return 安全读取("群文件Cookie", 读取状态, "读取失败")
-
-
-def 读取踢人状态(配置: Any) -> str:
-    def 读取状态() -> bool:
-        from 功能文件.管理功能.群聊功能 import 群管功能
-        return 群管功能.踢人功能是否开启(配置)
-
-    return 格式化开关(安全读取("踢人功能", 读取状态, False))
 
 
 def 读取数据库配置状态(配置: Any) -> str:

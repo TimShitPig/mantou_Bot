@@ -46,7 +46,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.10.0"
+插件版本 = "2.10.1"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -157,9 +157,6 @@ class MyPlugin(Star):
                 回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
             if 回复内容 is None:
                 回复内容 = await 授权链接功能.处理授权链接(event, 命令文本, self.context, self.config)
-
-            if 回复内容 is None:
-                回复内容 = await 群管功能.处理用户踢出(event, 命令文本, self.config)
 
             if 回复内容 is None:
                 回复内容 = await 群管功能.处理群禁言(event, 命令文本, self.config)
