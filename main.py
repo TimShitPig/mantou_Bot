@@ -29,6 +29,7 @@ importlib.invalidate_caches()
 UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC网盘")
 百度网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.百度网盘")
 析API番茄小说模块 = 加载功能模块("功能文件.API功能.析API.番茄小说")
+QQ阅读析API模块 = 加载功能模块("功能文件.API功能.析API.QQ阅读")
 崩溃API番茄小说模块 = 加载功能模块("功能文件.API功能.崩溃API.番茄小说")
 聚合API番茄小说模块 = 加载功能模块("功能文件.API功能.聚合API.番茄小说")
 Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番茄小说")
@@ -46,7 +47,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.10.1"
+插件版本 = "2.11.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -213,6 +214,27 @@ class MyPlugin(Star):
                             yield event.plain_result(七猫回复内容)
                         else:
                             yield 七猫回复内容
+                    event.stop_event()
+                    return
+
+                QQ阅读回复流 = QQ阅读析API模块.获取QQ阅读回复流(event, 命令文本, self.config)
+                if QQ阅读回复流 is not None:
+                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
+                    if 激活拦截 is not None:
+                        yield event.plain_result(激活拦截)
+                        event.stop_event()
+                        return
+                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
+                    免费额度提示已发送 = False
+                    async for QQ阅读回复内容 in QQ阅读回复流:
+                        if isinstance(QQ阅读回复内容, str):
+                            if not 免费额度提示已发送:
+                                原回复内容 = QQ阅读回复内容
+                                QQ阅读回复内容 = 用户激活功能.附加下载免费额度提示(QQ阅读回复内容, 免费额度下载提示)
+                                免费额度提示已发送 = QQ阅读回复内容 != 原回复内容
+                            yield event.plain_result(QQ阅读回复内容)
+                        else:
+                            yield QQ阅读回复内容
                     event.stop_event()
                     return
 

@@ -1,5 +1,13 @@
 # 更新日志
 
+## v2.11.0
+
+### 新增
+
+- 新增 QQ阅读析API下载，支持 `h5.reader.qq.com/9/intro?bid=...`、`ubook.reader.qq.com/api/book/chapter-list?bid=...` 和 `154.12.91.167:7000/content?bookid=...&s=...&e=...` 链接。
+- QQ阅读详情和目录使用官方 reader.qq.com 接口，正文使用析API `/content`，每批 50 章、最多 10 个动态并发下载。
+- QQ阅读下载提示、文件名和 TXT 头部格式对齐番茄小说，并加入卡片撤回白名单。
+
 ## v2.10.1
 
 ### 调整
