@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import re
 from typing import Any
 
@@ -44,7 +45,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.20.2"
+群管功能模块版本 = "1.20.3"
 踢出命令集合 = {"踢", "踢了"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
@@ -478,14 +479,74 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
 def 提取事件发送者群角色(event: AstrMessageEvent) -> str:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        角色 = 读取字段(对象, "role")
+        角色 = 提取对象发送者角色(对象)
         if 角色:
-            return str(角色).strip()
-        发送者 = 读取字段(对象, "sender")
-        角色 = 读取字段(发送者, "role")
-        if 角色:
-            return str(角色).strip()
+            return 角色
     return ""
+
+
+def 提取对象发送者角色(对象: Any) -> str:
+    if 对象 is None:
+        return ""
+    for 字段名 in ("author",):
+        子对象 = 读取字段(对象, 字段名)
+        角色 = 读取首个字段(子对象, ("member_role", "role", "sender_role", "user_role"))
+        if 角色:
+            return str(角色).strip()
+
+    for 字段名 in ("raw_message", "raw", "payload", "data", "event"):
+        原始对象 = 读取字段(对象, 字段名)
+        角色 = 提取原始数据发送者角色(原始对象)
+        if 角色:
+            return 角色
+
+    for 字段名 in ("sender", "member", "user"):
+        子对象 = 读取字段(对象, 字段名)
+        角色 = 读取首个字段(子对象, ("member_role", "role", "sender_role", "user_role"))
+        if 角色:
+            return str(角色).strip()
+
+    直接角色 = 读取首个字段(对象, ("member_role", "role", "sender_role", "user_role"))
+    if 直接角色:
+        return str(直接角色).strip()
+    return ""
+
+
+def 提取原始数据发送者角色(原始对象: Any) -> str:
+    if 原始对象 is None:
+        return ""
+    if isinstance(原始对象, str):
+        文本 = 原始对象.strip()
+        if not (文本.startswith("{") and "role" in 文本):
+            return ""
+        try:
+            原始对象 = json.loads(文本)
+        except Exception:
+            return ""
+    if not isinstance(原始对象, dict):
+        return ""
+    for 字段名 in ("author", "d", "data", "event"):
+        子对象 = 原始对象.get(字段名)
+        角色 = 提取原始数据发送者角色(子对象)
+        if 角色:
+            return 角色
+    for 字段名 in ("sender", "member", "user"):
+        子对象 = 原始对象.get(字段名)
+        角色 = 提取原始数据发送者角色(子对象)
+        if 角色:
+            return 角色
+    直接角色 = 读取首个字段(原始对象, ("member_role", "role", "sender_role", "user_role"))
+    if 直接角色:
+        return str(直接角色).strip()
+    return ""
+
+
+def 读取首个字段(对象: Any, 字段列表: tuple[str, ...]) -> Any:
+    for 字段名 in 字段列表:
+        值 = 读取字段(对象, 字段名)
+        if 值 not in (None, ""):
+            return 值
+    return None
 
 
 def 是QQ群管理角色(角色: Any) -> bool:
