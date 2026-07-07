@@ -407,22 +407,21 @@ def 生成小说文件内容(
 ) -> tuple[str, bytes]:
     标题 = 详情.get("title") or f"七猫小说{书籍编号}"
     文件名 = 生成小说文件名(书籍编号, 详情)
-    标签 = 详情.get("tags") or ""
+    简介 = str(详情.get("intro") or "").strip()
 
     内容列表 = [
         文件声明,
         "",
         f"名称：{标题}",
         f"作者：{详情.get('author') or '未知'}",
-        f"标签：{标签}",
-        f"字数：{详情.get('words_num') or '未知'}",
+        f"状态：{获取状态文本(详情)}",
+        f"字数：{格式化字数(详情.get('words_num'))}",
         f"书籍ID：{书籍编号}",
         f"章节数：{len(目录)}",
         "",
-        "简介：",
-        str(详情.get("intro") or ""),
-        "",
     ]
+    if 简介:
+        内容列表.extend(["简介：", 简介, ""])
 
     for 章节 in 章节内容:
         if not 章节["content"]:
