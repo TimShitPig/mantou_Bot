@@ -94,6 +94,12 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             if not 目录:
                 yield "七猫小说下载失败：没有获取到章节目录"
                 return
+            if not str(详情.get("words_num") or "").strip():
+                目录字数 = sum(安全整数(章节.get("words") or 章节.get("word_count") or 章节.get("chapter_words"), 0) for 章节 in 目录)
+                if 目录字数:
+                    详情["words_num"] = str(目录字数)
+            if not str(详情.get("chapters") or "").strip():
+                详情["chapters"] = str(len(目录))
 
             logger.info(
                 f"七猫小说开始下载：book_id={书籍编号}, "
@@ -205,10 +211,10 @@ async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str, 
         详情 = {**详情.get("book", {}), **详情}
     return {
         "title": 清理网页文本(读取首个字段(详情, ("title", "book_name", "name", "share_title")) or f"七猫小说{书籍编号}"),
-        "author": 清理网页文本(读取首个字段(详情, ("author", "author_name", "pen_name")) or "未知"),
+        "author": 清理网页文本(读取首个字段(详情, ("author", "author_name", "pen_name")) or 读取字段路径(详情, ("author_info", "name")) or "未知"),
         "intro": 清理网页文本(读取首个字段(详情, ("intro", "description", "desc", "book_intro")) or ""),
         "words_num": 读取首个字段(详情, ("words_num", "word_count", "words", "total_words")) or "",
-        "is_over": 读取首个字段(详情, ("is_over", "is_finish", "finish", "completed")) or "",
+        "is_over": 读取首个字段(详情, ("is_over", "is_finish", "finish", "completed")) or ("1" if 是否短篇 else ""),
         "chapters": 读取首个字段(详情, ("chapters", "chapter_count", "chapter_num", "total_chapters")) or "",
         "chapter_list_desc": 清理网页文本(详情.get("chapter_list_desc") or ""),
         "category_over_words": 清理网页文本(详情.get("category_over_words") or ""),
@@ -797,6 +803,12 @@ def 读取首个字段(数据: dict[str, Any], 字段列表: tuple[str, ...]) ->
             return 值
     return None
 
+
+def 安全整数(值: Any, 默认值: int = 0) -> int:
+    try:
+        return int(值)
+    except Exception:
+        return 默认值
 
 def 获取群号(event: Any) -> str:
     for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
