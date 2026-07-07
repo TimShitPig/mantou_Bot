@@ -30,7 +30,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器�
 白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]|暂不能查看该消息内容", re.IGNORECASE)
-At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At", re.IGNORECASE)
+At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5,64}>|ComponentType\.At", re.IGNORECASE)
 合并转发规则 = re.compile(
     r"ComponentType\.(?:Forward|Node|Nodes)|\[CQ:(?:forward|node),|群聊的聊天记录|查看\d+条转发消息|\[合并转发消息\]",
     re.IGNORECASE,
@@ -44,7 +44,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|ComponentType\.At",
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.20.1"
+群管功能模块版本 = "1.20.2"
 踢出命令集合 = {"踢", "踢了"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
@@ -1058,6 +1058,7 @@ def 清理可见文本(文本: str) -> str:
     文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", 文本)
     文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
     文本 = re.sub(r"\[At:[^\]]+\]", "", 文本)
+    文本 = re.sub(r"<@!?[A-Za-z0-9_-]{5,64}>", "", 文本)
     return 文本.strip()
 
 
