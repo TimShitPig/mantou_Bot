@@ -23,6 +23,7 @@ except Exception:
     Comp = None
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
@@ -46,7 +47,10 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
 群管功能模块版本 = "1.20.3"
-踢出命令集合 = {"踢", "踢了"}
+踢出命令集合 = {"踢", "踢了", "踢人"}
+踢人开关命令配置 = {"开启踢人": True, "关闭踢人": False}
+踢人状态命名空间 = "group_kick"
+踢人状态键 = "enabled"
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
@@ -58,6 +62,18 @@ QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
+    文本 = str(命令文本 or "").strip()
+    if 文本 in 踢人开关命令配置:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限使用踢人开关"
+        是否开启 = 踢人开关命令配置[文本]
+        try:
+            写入布尔运行状态值(配置, 踢人状态命名空间, 踢人状态键, 是否开启)
+        except Exception as exc:
+            logger.warning(f"踢人开关写入失败：enabled={是否开启}, error={exc}")
+            return f"踢人开关设置失败：{exc}"
+        return f"踢人功能已{'开启' if 是否开启 else '关闭'}"
+
     踢出命令 = 提取踢出命令文本(event, 命令文本)
     if 踢出命令 not in 踢出命令集合:
         return None
@@ -81,7 +97,7 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
     撤回数量记录: dict[str, int] = {}
     for 目标用户 in 目标用户列表:
         try:
-            await 尝试踢出指定成员(event, 群号, 目标用户)
+            await 尝试踢出指定成员(event, 群号, 目标用户, 配置)
             if 需要撤回目标消息:
                 撤回数量记录[目标用户] = await 尝试撤回指定用户最近消息(
                     event,
@@ -168,6 +184,16 @@ def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[s
     if 失败群:
         行列表.append("失败群：" + "；".join(f"{群号}：{错误}" for 群号, 错误 in 失败群))
     return "\n".join(行列表)
+
+
+def 踢人功能是否开启(配置: Any = None) -> bool:
+    if 配置 is None:
+        return False
+    try:
+        return 读取布尔运行状态值(配置, 踢人状态命名空间, 踢人状态键, False)
+    except Exception as exc:
+        logger.warning(f"读取踢人开关失败，按关闭处理：error={exc}")
+        return False
 
 
 def 解析踢出目标用户列表(event: AstrMessageEvent, 命令文本: str) -> list[str] | None:
@@ -412,7 +438,7 @@ def 规范化用户编号(值: Any) -> str:
     return 文本 if 用户编号规则.fullmatch(文本) else ""
 
 
-async def 处理数字撤回(event: AstrMessageEvent) -> bool:
+async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> bool:
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
         logger.debug(f"撤回检查跳过: 消息文本={限制长度(消息文本)}")
@@ -429,7 +455,7 @@ async def 处理数字撤回(event: AstrMessageEvent) -> bool:
     撤回成功 = await 尝试撤回当前消息(event)
     if 撤回成功:
         await 尝试撤回触发用户最近消息(event)
-        await 记录撤回触发并尝试踢出(event)
+        await 记录撤回触发并尝试踢出(event, 配置)
     return 撤回成功
 
 
@@ -937,7 +963,7 @@ def 筛选用户最近消息(历史消息: list[dict[str, Any]], 用户QQ: str, 
     return 结果[: max(0, int(数量))]
 
 
-async def 记录撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
+async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any = None) -> None:
     群号 = 获取群号(event)
     用户QQ = 获取发送者QQ(event)
     if not 是数字ID(群号) or not 是数字ID(用户QQ):
@@ -950,25 +976,43 @@ async def 记录撤回触发并尝试踢出(event: AstrMessageEvent) -> None:
     logger.info(f"数字撤回模块触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}/{数字撤回踢出阈值}")
     if 当前次数 < 数字撤回踢出阈值:
         return
+    if not 踢人功能是否开启(配置):
+        logger.info(f"数字撤回踢出跳过：踢人功能关闭，仅撤回不提醒，group_id={群号}, user_id={用户QQ}, count={当前次数}")
+        return
 
-    if await 尝试踢出成员(event, 群号, 用户QQ):
+    if await 尝试踢出成员(event, 群号, 用户QQ, 配置):
         数字撤回触发次数.pop(计数键, None)
 
 
-async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> bool:
+async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None) -> bool:
     bot = getattr(event, "bot", None)
     if bot is None:
         logger.warning(f"数字撤回踢出失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
         return False
 
     try:
-        await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
+        await 尝试网页或适配器踢出(event, bot, 群号, 用户QQ, 配置)
         logger.info(f"数字撤回触发 {数字撤回踢出阈值} 次，已踢出成员：group_id={群号}, user_id={用户QQ}")
         await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
         return True
     except Exception as exc:
         logger.warning(f"数字撤回踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
         return False
+
+
+async def 尝试网页或适配器踢出(event: AstrMessageEvent, bot: Any, 群号: str, 用户QQ: str, 配置: Any = None) -> None:
+    管理员QQ = 获取发送者QQ(event)
+    if 配置 is not None and 是数字ID(群号) and 是数字ID(用户QQ) and 管理员QQ:
+        try:
+            from 功能文件.管理功能.群聊功能 import 网页群文件
+            成功, 信息 = await 网页群文件.网页踢出群成员(配置, 管理员QQ, 群号, 用户QQ)
+            if 成功:
+                logger.info(f"网页接口踢出成功：group_id={群号}, user_id={用户QQ}, info={信息}")
+                return
+            logger.warning(f"网页接口踢出失败，回退适配器：group_id={群号}, user_id={用户QQ}, info={信息}")
+        except Exception as exc:
+            logger.warning(f"网页接口踢出异常，回退适配器：group_id={群号}, user_id={用户QQ}, error={exc}")
+    await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
 
 
 async def 尝试踢出其它群同一成员(bot: Any, 当前群号: str, 用户QQ: str) -> None:
@@ -1028,11 +1072,11 @@ async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
     return False
 
 
-async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户QQ: str) -> None:
+async def 尝试踢出指定成员(event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None) -> None:
     bot = getattr(event, "bot", None)
     if bot is None:
         raise RuntimeError("当前事件缺少 bot 实例")
-    await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
+    await 尝试网页或适配器踢出(event, bot, 群号, 用户QQ, 配置)
     await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
 
 

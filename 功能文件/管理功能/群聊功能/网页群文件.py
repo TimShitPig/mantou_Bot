@@ -38,7 +38,7 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人, 获取发送者QQ
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
+from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值, 读取运行状态命名空间
 from 功能文件.管理功能.基础功能.帮助功能 import (
     发送Markdown键盘消息,
     生成按钮,
@@ -71,11 +71,14 @@ def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = ""
 
 登录群文件命令 = "登录群文件"
 群文件登录cookie规则 = re.compile(r"^群文件登录\s*cookie\s+(.+)$", re.IGNORECASE)
+群文件状态命令集合 = {"群文件状态", "群文件cookie状态"}
 
 清理群文件命令 = {"清理群文件", "群文件清理"}
 清理全部群文件命令 = {"清理全部群文件"}
 
 COOKIE有效期秒数 = 31 * 24 * 3600
+Cookie保活间隔秒数 = 3600
+Cookie保活失败阈值 = 3
 列表每页数量 = 50
 每批删除数量 = 20
 删除最大重试次数 = 3
@@ -90,6 +93,7 @@ COOKIE命名空间 = "web_group_file_cookie"
 
 文件列表接口 = "https://pan.qun.qq.com/cgi-bin/group_file/get_file_list"
 删除文件接口 = "https://pan.qun.qq.com/cgi-bin/group_file/delete_file"
+群管理接口根地址 = "https://qun.qq.com/cgi-bin/qun_mgr"
 登录链接 = (
     "https://ui.ptlogin2.qq.com/cgi-bin/login?style=9&appid=1600001573"
     "&s_url=https://qun.qq.com/#/login&daid=761&hide_close_icon=0"
@@ -135,6 +139,7 @@ Cookie输入等待状态: dict[str, float] = {}
 
 # 更改备注选群状态：key=会话标识，value=过期时间戳；更改备注选群页面发「返回上一步」回到群文件清理详情页
 更改备注选群状态: dict[str, float] = {}
+Cookie保活任务: asyncio.Task | None = None
 
 
 # ---------- 登录页面状态管理 ----------
@@ -444,6 +449,11 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
         if not 是群文件清理管理员(event, 配置):
             return "没有权限使用网页群文件清理"
         return await 保存用户Cookie(event, cookie匹配.group(1).strip(), 配置)
+
+    if 文本 in 群文件状态命令集合:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查看群文件状态"
+        return "群文件 Cookie：" + 获取Cookie状态摘要(获取发送者QQ(event), 配置)
 
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
@@ -981,28 +991,44 @@ def 解析群号参数(参数文本: str) -> list[str]:
 
 
 async def 保存用户Cookie(event: Any, cookie文本: str, 配置: Any) -> str:
-    if "skey=" not in cookie文本:
-        return "Cookie 无效，缺少 skey 字段"
+    标准Cookie = 标准化Cookie输入(cookie文本)
+    if not 标准Cookie:
+        return "Cookie 无效，没有识别到有效 Cookie 字段"
+    if not 提取群文件skey(标准Cookie):
+        return "Cookie 无效，缺少 skey 或 p_skey 字段"
 
     用户QQ = 获取发送者QQ(event)
     if not 用户QQ:
         return "没有获取到管理员QQ，无法保存 Cookie"
 
     过期时间 = int(time.time()) + COOKIE有效期秒数
-    状态值 = json.dumps({"cookie": cookie文本, "expire": 过期时间}, ensure_ascii=False)
+    旧信息 = 读取用户Cookie信息(用户QQ, 配置) or {}
+    状态值 = json.dumps({
+        "cookie": 标准Cookie,
+        "expire": 过期时间,
+        "keepalive_enabled": True,
+        "last_keepalive": 旧信息.get("last_keepalive") or 0,
+        "keepalive_fail_count": 0,
+        "invalid": False,
+        "invalid_reason": "",
+    }, ensure_ascii=False)
     try:
         写入运行状态值(配置, COOKIE命名空间, 用户QQ, 状态值)
     except Exception as exc:
         logger.warning(f"网页群文件 Cookie 写入数据库失败：user_id={用户QQ}, error={exc}")
         return f"Cookie 保存失败：{exc}"
     logger.info(f"网页群文件 Cookie 已更新：user_id={用户QQ}")
-    成功提示 = f"Cookie 已保存，{COOKIE有效期秒数 // 86400} 天内有效"
+    启动Cookie自动保活(配置)
+    if 提取skey(标准Cookie):
+        成功提示 = f"Cookie 已保存，已自动开启每 {Cookie保活间隔秒数 // 3600} 小时保活"
+    else:
+        成功提示 = "Cookie 已保存；当前 Cookie 缺少 skey，自动保活不可用"
     if 是QQ官方机器人(event):
         return await 显示群文件清理详情页(event, 配置)
     return 成功提示
 
 
-def 读取用户Cookie(用户QQ: str, 配置: Any) -> str | None:
+def 读取用户Cookie信息(用户QQ: str, 配置: Any) -> dict[str, Any] | None:
     状态值 = 读取运行状态值(配置, COOKIE命名空间, 用户QQ, "")
     if not 状态值:
         return None
@@ -1012,17 +1038,206 @@ def 读取用户Cookie(用户QQ: str, 配置: Any) -> str | None:
         return None
     if not isinstance(信息, dict):
         return None
-    if 安全整数(信息.get("expire"), 0) <= int(time.time()):
+    if 安全整数(信息.get("expire"), 0) and 安全整数(信息.get("expire"), 0) <= int(time.time()):
         try:
             写入运行状态值(配置, COOKIE命名空间, 用户QQ, "")
         except Exception:
             pass
         return None
+    return 信息
+
+
+def 读取用户Cookie(用户QQ: str, 配置: Any) -> str | None:
+    信息 = 读取用户Cookie信息(用户QQ, 配置)
+    if not 信息:
+        return None
     cookie文本 = str(信息.get("cookie") or "").strip()
     return cookie文本 or None
 
 
+def 选择可用Cookie用户(配置: Any, 优先用户: str = "") -> tuple[str, str] | None:
+    if 优先用户:
+        信息 = 读取用户Cookie信息(优先用户, 配置)
+        cookie文本 = str((信息 or {}).get("cookie") or "").strip()
+        if cookie文本 and 提取skey(cookie文本) and not bool((信息 or {}).get("invalid")):
+            return str(优先用户), cookie文本
+    for 用户QQ, 信息 in 读取全部Cookie信息(配置).items():
+        cookie文本 = str(信息.get("cookie") or "").strip()
+        if cookie文本 and 提取skey(cookie文本) and not bool(信息.get("invalid")):
+            return 用户QQ, cookie文本
+    return None
+
+
+def 获取Cookie状态摘要(用户QQ: str, 配置: Any) -> str:
+    信息 = 读取用户Cookie信息(用户QQ, 配置)
+    if not 信息 or not 信息.get("cookie"):
+        return "未保存"
+    has_skey = bool(提取skey(str(信息.get("cookie") or "")))
+    has_pskey = bool(提取p_skey(str(信息.get("cookie") or "")))
+    invalid = bool(信息.get("invalid"))
+    失败次数 = 安全整数(信息.get("keepalive_fail_count"), 0)
+    last = 安全整数(信息.get("last_keepalive"), 0)
+    last_text = "从未" if not last else time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last))
+    expire = 安全整数(信息.get("expire"), 0)
+    expire_text = "未知" if not expire else time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expire))
+    状态 = "疑似失效" if invalid else "已保存"
+    key状态 = []
+    if has_skey:
+        key状态.append("skey")
+    if has_pskey:
+        key状态.append("p_skey")
+    key文本 = "+".join(key状态) if key状态 else "缺少key"
+    原因 = str(信息.get("invalid_reason") or "").strip()
+    if has_skey:
+        保活文本 = f"开启，每 {Cookie保活间隔秒数 // 3600} 小时"
+    else:
+        保活文本 = "不可用（缺少 skey）"
+    详情 = f"{状态}，{key文本}，自动保活：{保活文本}，上次保活：{last_text}，失败：{失败次数} 次，本地到期：{expire_text}"
+    if 原因:
+        详情 += f"，原因：{原因}"
+    return 详情
+
+
+def 读取全部Cookie信息(配置: Any) -> dict[str, dict[str, Any]]:
+    try:
+        原始 = 读取运行状态命名空间(配置, COOKIE命名空间)
+    except Exception as exc:
+        logger.warning(f"读取群文件Cookie命名空间失败：error={exc}")
+        return {}
+    结果: dict[str, dict[str, Any]] = {}
+    for 用户, 文本 in 原始.items():
+        try:
+            信息 = json.loads(文本)
+        except Exception:
+            continue
+        if not isinstance(信息, dict) or not 信息.get("cookie"):
+            continue
+        if 安全整数(信息.get("expire"), 0) and 安全整数(信息.get("expire"), 0) <= int(time.time()):
+            continue
+        if 信息.get("cookie"):
+            结果[str(用户)] = 信息
+    return 结果
+
+
+def 写入用户Cookie信息(配置: Any, 用户QQ: str, 信息: dict[str, Any]) -> None:
+    写入运行状态值(配置, COOKIE命名空间, str(用户QQ), json.dumps(信息, ensure_ascii=False))
+
+
+def 标记Cookie保活成功(配置: Any, 用户QQ: str, 信息: dict[str, Any]) -> None:
+    信息["last_keepalive"] = int(time.time())
+    信息["expire"] = int(time.time()) + COOKIE有效期秒数
+    信息["keepalive_fail_count"] = 0
+    信息["invalid"] = False
+    信息["invalid_reason"] = ""
+    信息.pop("invalid_at", None)
+    写入用户Cookie信息(配置, 用户QQ, 信息)
+
+
+def 标记Cookie保活失败(配置: Any, 用户QQ: str, 信息: dict[str, Any], 原因: str) -> None:
+    失败次数 = 安全整数(信息.get("keepalive_fail_count"), 0) + 1
+    信息["keepalive_fail_count"] = 失败次数
+    信息["last_keepalive"] = int(time.time())
+    if 失败次数 >= Cookie保活失败阈值:
+        信息["invalid"] = True
+        信息["invalid_reason"] = 原因
+        信息["invalid_at"] = int(time.time())
+    写入用户Cookie信息(配置, 用户QQ, 信息)
+
+
 # ---------- 工具 ----------
+
+
+def 是QQ域名(domain: Any) -> bool:
+    文本 = str(domain or "").strip().lower().lstrip(".")
+    return not 文本 or 文本 == "qq.com" or 文本.endswith(".qq.com")
+
+
+def Cookie键值转请求头(pairs: list[tuple[Any, Any]]) -> str:
+    结果: list[str] = []
+    已见: set[str] = set()
+    for 名称, 值 in pairs:
+        名称文本 = str(名称 or "").strip()
+        if not 名称文本 or 名称文本 in 已见:
+            continue
+        if any(ch in 名称文本 for ch in ";\r\n\t "):
+            continue
+        值文本 = "" if 值 is None else str(值).strip().replace("\r", "").replace("\n", "")
+        结果.append(f"{名称文本}={值文本}")
+        已见.add(名称文本)
+    return "; ".join(结果)
+
+
+def 标准化CookieJSON(data: Any) -> str | None:
+    if isinstance(data, dict):
+        for key in ("cookies", "cookie_list", "data"):
+            if isinstance(data.get(key), list):
+                return 标准化CookieJSON(data[key])
+        for key in ("cookie", "Cookie"):
+            if isinstance(data.get(key), str):
+                return 标准化Cookie输入(data[key])
+        if "name" in data and "value" in data and 是QQ域名(data.get("domain")):
+            return Cookie键值转请求头([(data.get("name"), data.get("value"))])
+        pairs = [(name, value) for name, value in data.items() if isinstance(value, (str, int, float))]
+        return Cookie键值转请求头(pairs) if pairs else None
+    if isinstance(data, list):
+        pairs: list[tuple[Any, Any]] = []
+        for item in data:
+            if not isinstance(item, dict) or not 是QQ域名(item.get("domain")):
+                continue
+            if item.get("name") is not None and item.get("value") is not None:
+                pairs.append((item.get("name"), item.get("value")))
+        return Cookie键值转请求头(pairs) if pairs else None
+    return None
+
+
+def 标准化NetscapeCookie文本(文本: str) -> str | None:
+    pairs: list[tuple[str, str]] = []
+    for 行 in str(文本 or "").splitlines():
+        行 = 行.strip()
+        if not 行 or 行.startswith("#"):
+            continue
+        parts = 行.split("\t")
+        if len(parts) < 7:
+            parts = 行.split(None, 6)
+        if len(parts) >= 7 and 是QQ域名(parts[0]):
+            pairs.append((parts[5], parts[6]))
+    return Cookie键值转请求头(pairs) if pairs else None
+
+
+def 标准化Cookie头文本(文本: str) -> str:
+    文本 = str(文本 or "").strip().strip("'\"")
+    文本 = re.sub(r"^\s*Cookie\s*:\s*", "", 文本, flags=re.IGNORECASE).strip()
+    pairs: list[tuple[str, str]] = []
+    for part in 文本.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        名称, 值 = part.split("=", 1)
+        pairs.append((名称, 值))
+    return Cookie键值转请求头(pairs)
+
+
+def 标准化Cookie输入(cookie文本: str) -> str:
+    raw = str(cookie文本 or "").strip()
+    if not raw:
+        return ""
+    header_match = re.search(r"(?im)^\s*Cookie\s*:\s*([^\r\n]+)", raw)
+    if header_match:
+        return 标准化Cookie头文本(header_match.group(1))
+    curl_match = re.search(r'''(?i)(?:-H|--header)\s+['"]\s*Cookie\s*:\s*([^'"\r\n]+)['"]''', raw)
+    if curl_match:
+        return 标准化Cookie头文本(curl_match.group(1))
+    try:
+        parsed = json.loads(raw)
+        normalized = 标准化CookieJSON(parsed)
+        if normalized:
+            return normalized
+    except Exception:
+        pass
+    normalized = 标准化NetscapeCookie文本(raw)
+    if normalized:
+        return normalized
+    return 标准化Cookie头文本(raw)
 
 
 def 安全整数(值: Any, 默认值: int = 0) -> int:
@@ -1033,9 +1248,22 @@ def 安全整数(值: Any, 默认值: int = 0) -> int:
     return 结果 if 结果 >= 0 else 默认值
 
 
+def 是数字群号文本(值: Any) -> bool:
+    return bool(数字群号规则.fullmatch(str(值 or "").strip()))
+
+
 def 提取skey(cookie文本: str) -> str | None:
-    匹配 = re.search(r"skey=([^;]+)", cookie文本)
+    匹配 = re.search(r"(?:^|;\s*)skey=([^;]+)", 标准化Cookie输入(cookie文本))
     return 匹配.group(1) if 匹配 else None
+
+
+def 提取p_skey(cookie文本: str) -> str | None:
+    匹配 = re.search(r"(?:^|;\s*)p_skey=([^;]+)", 标准化Cookie输入(cookie文本))
+    return 匹配.group(1) if 匹配 else None
+
+
+def 提取群文件skey(cookie文本: str) -> str | None:
+    return 提取skey(cookie文本) or 提取p_skey(cookie文本)
 
 
 def 计算bkn(skey: str) -> int:
@@ -1051,6 +1279,185 @@ async def 安全解析JSON(响应文本: str) -> dict | None:
         return 结果 if isinstance(结果, dict) else None
     except Exception:
         return None
+
+
+def 是否Cookie失效响应(数据: dict | None) -> bool:
+    if not isinstance(数据, dict):
+        return False
+    for key in ("ec", "errcode", "retcode", "ret"):
+        try:
+            if int(数据.get(key, -1)) in {4, 10001, 100001, 1000001}:
+                return True
+        except Exception:
+            pass
+    消息 = str(数据.get("em") or 数据.get("msg") or 数据.get("retmsg") or "")
+    return "登录态" in 消息 or ("登录" in 消息 and "失效" in 消息)
+
+
+def 构造群管理接口URL(api: str, bkn: int | str) -> str:
+    return f"{群管理接口根地址}/{str(api).strip('/')}?bkn={bkn}&ts={int(time.time() * 1000)}"
+
+
+async def 请求群管理接口(session: Any, api: str, cookie文本: str, 表单数据: dict[str, Any]) -> dict | None:
+    skey = 提取skey(cookie文本)
+    if not skey:
+        logger.warning(f"qun_mgr/{api} 跳过：Cookie缺少skey")
+        return None
+    bkn = 计算bkn(skey)
+    data = {str(k): str(v) for k, v in 表单数据.items()}
+    data["bkn"] = str(bkn)
+    headers = {
+        "Cookie": cookie文本,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://qun.qq.com/",
+        "Origin": "https://qun.qq.com",
+    }
+    try:
+        async with session.post(
+            构造群管理接口URL(api, bkn),
+            data=data,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=请求超时秒数),
+        ) as resp:
+            文本 = await resp.text()
+            数据 = await 安全解析JSON(文本)
+            if not 数据:
+                logger.warning(f"qun_mgr/{api} 非JSON响应：HTTP {resp.status} {文本[:200]}")
+                return None
+            logger.info(f"qun_mgr/{api}: HTTP {resp.status}, ec={数据.get('ec')}, errcode={数据.get('errcode')}, retcode={数据.get('retcode')}")
+            return 数据
+    except Exception as exc:
+        logger.warning(f"qun_mgr/{api} 请求异常：{exc}")
+        return None
+
+
+async def 账号级Cookie保活(session: Any, cookie文本: str) -> bool:
+    if not 提取skey(cookie文本):
+        return False
+    数据 = await 请求群管理接口(session, "get_group_list", cookie文本, {})
+    if 是否Cookie失效响应(数据):
+        return False
+    return bool(数据) and not 安全整数(数据.get("ec") or 数据.get("errcode") or 数据.get("retcode"), 0)
+
+
+async def 查询群成员(session: Any, 群号: str, 用户QQ: str, cookie文本: str) -> dict | None:
+    return await 请求群管理接口(session, "search_group_members", cookie文本, {
+        "st": 0,
+        "end": 9,
+        "sort": 1,
+        "gc": 群号,
+        "group_id": 群号,
+        "key": 用户QQ,
+    })
+
+
+async def 删除群成员(session: Any, 群号: str, 用户QQ: str, cookie文本: str, flag: int = 0) -> dict | None:
+    skey = 提取skey(cookie文本)
+    if not skey:
+        return None
+    bkn = 计算bkn(skey)
+    return await 请求群管理接口(session, "delete_group_member", cookie文本, {
+        "gc": 群号,
+        "ul": 用户QQ,
+        "flag": flag,
+        "bkn": bkn,
+    })
+
+
+async def 网页踢出群成员(配置: Any, 管理员QQ: str, 群号: str, 用户QQ: str) -> tuple[bool, str]:
+    if not 是数字群号文本(群号) or not 是数字群号文本(用户QQ):
+        return False, "网页版踢人需要数字群号和数字QQ"
+    Cookie用户 = 选择可用Cookie用户(配置, 管理员QQ)
+    if not Cookie用户:
+        return False, "未保存群文件网页 Cookie"
+    Cookie用户QQ, cookie文本 = Cookie用户
+    if not 提取skey(cookie文本):
+        return False, "Cookie 缺少 skey，无法调用群管理踢人接口"
+    if aiohttp is None:
+        return False, "缺少 aiohttp 依赖"
+
+    async with aiohttp.ClientSession() as session:
+        before = await 查询群成员(session, 群号, 用户QQ, cookie文本)
+        if 是否Cookie失效响应(before):
+            信息 = 读取用户Cookie信息(Cookie用户QQ, 配置) or {"cookie": cookie文本}
+            标记Cookie保活失败(配置, Cookie用户QQ, 信息, "qun_mgr 登录态失效")
+            return False, "Cookie 登录态已失效"
+        if not before:
+            return False, "查询成员接口无响应"
+        if 安全整数(before.get("ec") or before.get("errcode"), 0):
+            return False, str(before.get("em") or before.get("msg") or "查询成员失败")
+        mems = before.get("mems") or []
+        if isinstance(mems, list) and mems:
+            target = next((m for m in mems if str(m.get("uin")) == str(用户QQ)), None)
+            if target is None:
+                return True, "成员不在群内，无需移除"
+
+        result = await 删除群成员(session, 群号, 用户QQ, cookie文本, flag=0)
+        if 是否Cookie失效响应(result):
+            信息 = 读取用户Cookie信息(Cookie用户QQ, 配置) or {"cookie": cookie文本}
+            标记Cookie保活失败(配置, Cookie用户QQ, 信息, "qun_mgr 登录态失效")
+            return False, "Cookie 登录态已失效"
+        if not result:
+            return False, "移除接口无响应"
+        if 安全整数(result.get("ec") or result.get("errcode"), 0):
+            return False, str(result.get("em") or result.get("msg") or "移除失败")
+    return True, "已调用网页接口移除"
+
+
+async def 网页批量踢出群成员(配置: Any, 管理员QQ: str, 群号: str, 用户列表: list[str]) -> dict[str, tuple[bool, str]]:
+    结果: dict[str, tuple[bool, str]] = {}
+    for 用户QQ in 用户列表:
+        结果[用户QQ] = await 网页踢出群成员(配置, 管理员QQ, 群号, 用户QQ)
+    return 结果
+
+
+async def 执行Cookie自动保活一次(配置: Any, force: bool = False) -> None:
+    if aiohttp is None:
+        return
+    全部 = 读取全部Cookie信息(配置)
+    if not 全部:
+        return
+    当前 = int(time.time())
+    async with aiohttp.ClientSession() as session:
+        for 用户QQ, 信息 in 全部.items():
+            if 信息.get("keepalive_enabled") is False:
+                continue
+            cookie文本 = str(信息.get("cookie") or "").strip()
+            if not cookie文本:
+                continue
+            if not 提取skey(cookie文本):
+                logger.info(f"网页群文件 Cookie 自动保活跳过：user_id={用户QQ}, reason=缺少skey")
+                continue
+            if not force and 当前 - 安全整数(信息.get("last_keepalive"), 0) < Cookie保活间隔秒数:
+                continue
+            账号成功 = await 账号级Cookie保活(session, cookie文本)
+            if 账号成功:
+                标记Cookie保活成功(配置, 用户QQ, 信息)
+                logger.info(f"网页群文件 Cookie 自动保活成功：user_id={用户QQ}")
+            else:
+                标记Cookie保活失败(配置, 用户QQ, 信息, "自动保活失败，Cookie 可能已失效")
+                logger.warning(f"网页群文件 Cookie 自动保活失败：user_id={用户QQ}")
+
+
+async def Cookie自动保活循环(配置: Any) -> None:
+    while True:
+        try:
+            await 执行Cookie自动保活一次(配置, force=False)
+        except Exception as exc:
+            logger.warning(f"网页群文件 Cookie 自动保活任务异常：{exc}")
+        await asyncio.sleep(Cookie保活间隔秒数)
+
+
+def 启动Cookie自动保活(配置: Any) -> None:
+    global Cookie保活任务
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if Cookie保活任务 is not None and not Cookie保活任务.done():
+        return
+    Cookie保活任务 = loop.create_task(Cookie自动保活循环(配置))
+    logger.info(f"网页群文件 Cookie 自动保活任务已启动：interval={Cookie保活间隔秒数}s")
 
 
 def 读取字段(对象: Any, 字段名: str) -> Any:
