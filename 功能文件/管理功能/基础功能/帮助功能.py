@@ -352,10 +352,9 @@ def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发�
         "type": 2,
         "permission": {"type": 2},
         "data": data值,
+        "enter": True,
         "unsupport_tips": "请发送对应文字",
     }
-    if 自动发送:
-        动作["enter"] = True
     return {
         "id": data值,
         "render_data": {"label": 标签, "visited_label": 点击后标签 or 标签},
@@ -543,7 +542,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
 
     会话键 = 获取帮助会话键(event)
     群号 = 获取群号(event)
-    自动发送 = not 群号
+    自动发送 = True
     帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
     if 帮助匹配:
         if not 是群文件清理管理员(event, 配置):
