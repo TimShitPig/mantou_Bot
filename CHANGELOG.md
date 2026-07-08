@@ -1,5 +1,11 @@
 # 更新日志
 
+## v2.11.7
+
+### 调整
+
+- 撤回 v2.11.4-v2.11.6 中“群聊按钮消息改走私聊接口”的尝试：群聊 Markdown Keyboard 发送恢复使用 `/v2/groups/{group_openid}/messages`，只保留指令按钮 `enter: True` 点击直接发送。
+
 ## v2.11.6
 
 ### 修复
