@@ -689,8 +689,6 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         "markdown": {"content": md文本},
         "msg_seq": _random.randint(1, 10000),
     }
-    if 消息ID:
-        消息体["msg_id"] = 消息ID
     if 键盘 is not None:
         消息体["keyboard"] = {"content": 键盘}
 
@@ -698,9 +696,13 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     群openid = 获取群openid同步(event)
     if 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
-        logger.info(f"[帮助MD键盘] 使用私聊接口发送，user_openid={用户openid}，来源group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
+        if 消息ID and not 群openid:
+            消息体["msg_id"] = 消息ID
+        logger.info(f"[帮助MD键盘] 使用私聊接口发送，user_openid={用户openid}，来源group_openid={群openid}，消息ID={'已省略群消息ID' if 群openid and 消息ID else 消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     elif 群openid:
         route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
+        if 消息ID:
+            消息体["msg_id"] = 消息ID
         logger.info(f"[帮助MD键盘] 未获取到user_openid，回退群聊接口发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     else:
         logger.warning("[帮助MD键盘] 无法获取 user_openid 和 group_openid")
