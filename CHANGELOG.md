@@ -1,5 +1,12 @@
 # 更新日志
 
+## v2.11.2
+
+### 调整
+
+- QQ阅读析API新增识别 `book.qq.com/book-detail/数字` 和 `novel.html5.qq.com/portal/novel-intro?bookid=数字` 链接。
+- 卡片撤回白名单同步加入 `book.qq.com` 和 `novel.html5.qq.com`。
+
 ## v2.11.1
 
 ### 优化

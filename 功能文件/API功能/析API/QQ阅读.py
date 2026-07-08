@@ -23,7 +23,7 @@ QQ阅读正文地址 = "http://154.12.91.167:7000/content"
 QQ阅读正文批量章节数 = 50
 QQ阅读正文并发数 = 10
 进度分段数 = 10
-QQ阅读来源正则 = re.compile("reader\\.qq\\.com|154\\.12\\.91\\.167:7000", re.IGNORECASE)
+QQ阅读来源正则 = re.compile("reader\\.qq\\.com|book\\.qq\\.com|novel\\.html5\\.qq\\.com|154\\.12\\.91\\.167:7000", re.IGNORECASE)
 链接正则 = re.compile("https?://[^\\s'\"<>\\u3001\\uff0c\\u3002]+", re.IGNORECASE)
 
 
@@ -302,6 +302,10 @@ def 解析QQ阅读来源(文本: str) -> dict[str, Any]:
         书籍编号 = 清理文本(查询参数.get("bid") or 查询参数.get("bookid") or 查询参数.get("bookId") or 查询参数.get("book_id"))
         if not 书籍编号:
             匹配 = re.search("(?:bid|bookid|bookId|book_id)=(\\d{5,15})", 候选路径, re.IGNORECASE)
+            if 匹配:
+                书籍编号 = 匹配.group(1)
+        if not 书籍编号:
+            匹配 = re.search("book\\.qq\\.com/book-detail/(\\d{5,15})", 候选路径, re.IGNORECASE)
             if 匹配:
                 书籍编号 = 匹配.group(1)
         if not 书籍编号:
