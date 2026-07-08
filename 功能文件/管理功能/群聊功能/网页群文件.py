@@ -77,7 +77,7 @@ def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = ""
 清理全部群文件命令 = {"清理全部群文件"}
 
 COOKIE有效期秒数 = 31 * 24 * 3600
-Cookie保活间隔秒数 = 3600
+Cookie保活间隔秒数 = 600
 Cookie保活失败阈值 = 3
 列表每页数量 = 50
 每批删除数量 = 20
@@ -453,7 +453,7 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
     if 文本 in 群文件状态命令集合:
         if not 是群文件清理管理员(event, 配置):
             return "没有权限查看群文件状态"
-        return "群文件 Cookie：" + 获取Cookie状态摘要(获取发送者QQ(event), 配置)
+        return "群cookie：" + 获取Cookie状态摘要(获取发送者QQ(event), 配置)
 
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
@@ -1020,7 +1020,7 @@ async def 保存用户Cookie(event: Any, cookie文本: str, 配置: Any) -> str:
     logger.info(f"网页群文件 Cookie 已更新：user_id={用户QQ}")
     启动Cookie自动保活(配置)
     if 提取skey(标准Cookie):
-        成功提示 = f"Cookie 已保存，已自动开启每 {Cookie保活间隔秒数 // 3600} 小时保活"
+        成功提示 = f"Cookie 已保存，已自动开启每 {格式化Cookie保活间隔()}保活"
     else:
         成功提示 = "Cookie 已保存；当前 Cookie 缺少 skey，自动保活不可用"
     if 是QQ官方机器人(event):
@@ -1072,6 +1072,13 @@ def 获取Cookie状态摘要(用户QQ: str, 配置: Any) -> str:
     信息 = 读取用户Cookie信息(用户QQ, 配置)
     if not 信息 or not 信息.get("cookie"):
         return "未保存"
+    return "失效" if bool(信息.get("invalid")) else "生效"
+
+
+def 获取Cookie状态详情(用户QQ: str, 配置: Any) -> str:
+    信息 = 读取用户Cookie信息(用户QQ, 配置)
+    if not 信息 or not 信息.get("cookie"):
+        return "未保存"
     has_skey = bool(提取skey(str(信息.get("cookie") or "")))
     has_pskey = bool(提取p_skey(str(信息.get("cookie") or "")))
     invalid = bool(信息.get("invalid"))
@@ -1089,13 +1096,21 @@ def 获取Cookie状态摘要(用户QQ: str, 配置: Any) -> str:
     key文本 = "+".join(key状态) if key状态 else "缺少key"
     原因 = str(信息.get("invalid_reason") or "").strip()
     if has_skey:
-        保活文本 = f"开启，每 {Cookie保活间隔秒数 // 3600} 小时"
+        保活文本 = f"开启，每 {格式化Cookie保活间隔()}"
     else:
         保活文本 = "不可用（缺少 skey）"
     详情 = f"{状态}，{key文本}，自动保活：{保活文本}，上次保活：{last_text}，失败：{失败次数} 次，本地到期：{expire_text}"
     if 原因:
         详情 += f"，原因：{原因}"
     return 详情
+
+
+def 格式化Cookie保活间隔() -> str:
+    if Cookie保活间隔秒数 % 3600 == 0:
+        return f"{Cookie保活间隔秒数 // 3600} 小时"
+    if Cookie保活间隔秒数 % 60 == 0:
+        return f"{Cookie保活间隔秒数 // 60} 分钟"
+    return f"{Cookie保活间隔秒数} 秒"
 
 
 def 读取全部Cookie信息(配置: Any) -> dict[str, dict[str, Any]]:

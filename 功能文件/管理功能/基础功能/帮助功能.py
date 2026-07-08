@@ -347,6 +347,11 @@ def 返回帮助上一层MD(会话键: str, 层级: str, 大类序号: Any, 小�
 
 
 def 生成按钮(编号: str, 标签: str, 点击后标签: str = "", 自动发送: bool = False, data为标签: bool = True) -> dict[str, Any]:
+    """生成 QQ 官方指令按钮。
+
+    自动发送参数仅保留兼容旧调用；当前群聊和私聊统一使用同一套按钮格式，
+    指令按钮固定 enter=True，点击后直接发送。
+    """
     data值 = 标签 if data为标签 else 编号
     动作: dict[str, Any] = {
         "type": 2,
@@ -541,8 +546,9 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         return None, None
 
     会话键 = 获取帮助会话键(event)
-    群号 = 获取群号(event)
-    自动发送 = True
+    # 群聊和私聊的键盘按钮使用同一套格式，统一按私聊按钮行为直接发送。
+    按钮自动发送 = True
+    键盘群号 = ""
     帮助匹配 = re.fullmatch(r"帮助\s*(\d{1,2})?", 文本, re.IGNORECASE)
     if 帮助匹配:
         if not 是群文件清理管理员(event, 配置):
@@ -553,7 +559,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
         else:
             设置帮助状态(会话键, "大类")
             md文本 = 格式化帮助大类MD()
-        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
+        键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
@@ -564,14 +570,14 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
             return "没有权限使用帮助", None
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
         md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
-        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
+        键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
     if 帮助状态 is None and 文本 in 返回上一步别名:
         if not 是管理员:
             return "没有权限使用帮助", None
         设置帮助状态(会话键, "大类")
         md文本 = 格式化帮助大类MD()
-        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
+        键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
     目标 = 匹配任意层级名称(文本)
     if 目标 is not None:
@@ -581,7 +587,7 @@ def 处理帮助指令MD带键盘(event: Any, 命令文本: str, 配置: Any) ->
                 return "没有权限使用帮助", None
             return None, None
         md文本 = 跳转到目标MD(会话键, 目标)
-        键盘 = 获取帮助键盘(会话键, 自动发送, 配置, 群号)
+        键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
 
     return None, None
@@ -688,17 +694,17 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     if 键盘 is not None:
         消息体["keyboard"] = {"content": 键盘}
 
+    用户openid = 获取用户openid同步(event)
     群openid = 获取群openid同步(event)
-    if 群openid:
-        route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
-        logger.info(f"[帮助MD键盘] 群聊发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
-    else:
-        用户openid = 获取用户openid同步(event)
-        if not 用户openid:
-            logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
-            return False
+    if 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
-        logger.info(f"[帮助MD键盘] 私聊发送，user_openid={用户openid}")
+        logger.info(f"[帮助MD键盘] 使用私聊接口发送，user_openid={用户openid}，来源group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
+    elif 群openid:
+        route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
+        logger.info(f"[帮助MD键盘] 未获取到user_openid，回退群聊接口发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
+    else:
+        logger.warning("[帮助MD键盘] 无法获取 user_openid 和 group_openid")
+        return False
 
     try:
         响应 = await _http.request(route, json=消息体)

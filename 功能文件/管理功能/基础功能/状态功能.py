@@ -73,7 +73,7 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"每日免费额度：{每日免费额度} 次",
             f"番茄OIAPI key：{格式化已配置(bool(str(读取配置字段(配置, '番茄小说key') or '').strip()))}",
             f"数据库：{数据库状态}",
-            f"群文件Cookie：{群文件Cookie状态}",
+            f"群cookie：{群文件Cookie状态}",
             f"UC网盘：{UC状态}",
             f"百度网盘：{百度状态}",
         ]
