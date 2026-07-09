@@ -401,7 +401,6 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
 
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
-    logger.info(f"[网页群文件诊断] 收到命令 文本={文本!r} 是管理员={是群文件清理管理员(event, 配置)}")
     备注回复 = await 处理备注等待回复(event, 文本, 配置)
     if 备注回复 is not None:
         return 备注回复
@@ -804,9 +803,9 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
     """命中备注等待状态时：下条消息作为备注保存，超时自动取消，「返回上一步」取消并回到群文件清理详情页。"""
     标识 = 获取会话标识(event)
     状态 = 备注等待状态.get(标识)
-    logger.info(f"[网页群文件诊断] 处理备注回复 文本={文本!r} 标识={标识!r} 状态={'有' if 状态 else '无'}")
     if 状态 is None:
         return None
+    logger.info(f"[网页群文件诊断] 处理备注回复 文本={文本!r} 标识={标识!r} 状态=有")
     过期时间, 群号 = 状态
     if 过期时间 <= time.time():
         备注等待状态.pop(标识, None)

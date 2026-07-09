@@ -95,7 +95,7 @@ class Book:
 
 
 def 获取书旗小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
-    下载链接 = 提取直接书旗链接参数(命令文本) or 提取事件书旗链接(event)
+    下载链接 = 提取书旗链接(命令文本) or 提取直接书旗链接参数(命令文本) or 提取事件书旗链接(event)
     if 下载链接 is None:
         return None
     return 生成下载回复流(event, 下载链接, 配置)
@@ -103,9 +103,10 @@ def 获取书旗小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> AsyncIterator[str]:
     try:
-        目标 = 解析书旗下载目标(链接)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            解析后链接 = await 解析书旗短链(session, 链接)
+            目标 = 解析书旗下载目标(解析后链接)
             书籍 = await 获取书籍(session, 目标["book_id"], 目标["type"] == "short")
             if not 书籍.chapters:
                 yield "书旗小说下载失败：没有获取到章节目录"
@@ -132,6 +133,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 try:
                     yield 文件发送结果
                 finally:
+                    启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名, 发送结果.get("cache_path"))
                     延迟删除下载缓存文件(发送结果.get("cache_path"))
                 return
             if not 发送结果.get("sent"):
@@ -148,6 +150,30 @@ def 解析书旗下载目标(链接: str) -> dict[str, str]:
     if not 书籍编号:
         raise ShuqiError("没有识别到书旗 bookId")
     return {"book_id": 书籍编号, "type": 类型}
+
+
+async def 解析书旗短链(session: aiohttp.ClientSession, 链接: str) -> str:
+    文本 = str(链接 or "").strip()
+    if not re.search(r"https?://d\.shuqi\.com/[^\s'\"<>，。]+", 文本, re.I):
+        return 文本
+    headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*", "Connection": "close"}
+    最后错误 = ""
+    for 方法 in ("HEAD", "GET"):
+        try:
+            async with session.request(方法, 文本, headers=headers, allow_redirects=True) as resp:
+                最终链接 = str(resp.url)
+                if 最终链接 and 最终链接 != 文本 and 提取书籍编号(最终链接):
+                    logger.info(f"书旗短链解析成功：source={文本}, target={最终链接}")
+                    return 最终链接
+                if 方法 == "GET":
+                    页面文本 = await resp.text(errors="ignore")
+                    页面链接 = 提取书旗链接(页面文本)
+                    if 页面链接 and 提取书籍编号(页面链接):
+                        logger.info(f"书旗短链页面解析成功：source={文本}, target={页面链接}")
+                        return 页面链接
+        except Exception as exc:
+            最后错误 = str(exc)
+    raise ShuqiError(f"书旗短链解析失败：{最后错误 or '未获取到跳转目标'}")
 
 
 async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> Book:
@@ -665,19 +691,11 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
             logger.info(f"书旗小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
         elif UC结果.get("enabled"):
             logger.warning(f"书旗小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
-    if 百度网盘 is not None:
-        百度结果 = await 百度网盘.后台上传小说文件(配置, 缓存路径, 文件名)
-        if 百度结果.get("success"):
-            logger.info(f"书旗小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
-        elif 百度结果.get("enabled"):
-            logger.warning(f"书旗小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
-    if 原小说缓存待删除:
-        删除下载缓存文件(缓存路径)
     if Comp is not None and hasattr(event, "chain_result"):
         try:
             文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(发送缓存路径))])
             logger.info(f"书旗小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}")
-            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "error": ""}
+            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "source_cache_path": 缓存路径, "error": ""}
         except Exception as exc:
             logger.warning(f"书旗小说 AstrBot File 组件构建失败：file={文件名}, error={exc}")
     bot = getattr(event, "bot", None)
@@ -685,12 +703,47 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
     调用方法 = getattr(api, "call_action", None)
     if not callable(调用方法):
         删除下载缓存文件(发送缓存路径)
+        if 原小说缓存待删除:
+            删除下载缓存文件(缓存路径)
         return {"sent": False, "chain_result": None, "cache_path": None, "error": "当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件"}
+    发送成功 = False
+    百度后台已启动 = False
     try:
         发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 发送缓存路径)
+        if 发送成功 and 百度网盘 is not None:
+            百度后台已启动 = True
+            启动百度后台上传并清理源文件(配置, 缓存路径, 文件名, None if str(缓存路径) == str(发送缓存路径) else 发送缓存路径)
         return {"sent": 发送成功, "chain_result": None, "cache_path": None, "error": 发送错误}
     finally:
-        删除下载缓存文件(发送缓存路径)
+        if not (百度后台已启动 and str(缓存路径) == str(发送缓存路径)):
+            删除下载缓存文件(发送缓存路径)
+        if 原小说缓存待删除 and not 百度后台已启动:
+            删除下载缓存文件(缓存路径)
+
+
+def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
+    if not 源缓存路径:
+        return
+    async def 执行上传并清理() -> None:
+        try:
+            if 百度网盘 is not None:
+                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
+                if 百度结果.get("success"):
+                    logger.info(f"书旗小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                elif 百度结果.get("skipped"):
+                    logger.info(f"书旗小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                elif 百度结果.get("enabled"):
+                    logger.warning(f"书旗小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+        except Exception as exc:
+            logger.warning(f"书旗小说百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={exc}")
+        finally:
+            if str(源缓存路径) != str(发送缓存路径 or ""):
+                删除下载缓存文件(源缓存路径)
+    try:
+        asyncio.create_task(执行上传并清理())
+    except RuntimeError:
+        if str(源缓存路径) != str(发送缓存路径 or ""):
+            删除下载缓存文件(源缓存路径)
 
 
 def 删除下载缓存文件(缓存路径: Any) -> None:
@@ -788,7 +841,7 @@ def 提取书旗链接(值: Any) -> str:
                 return 链接
         return ""
     文本 = str(值)
-    for 模式 in (r"https?://(?:www\.)?shuqi\.com/book/\d+\.html[^\s'\"<>，。]*", r"https?://t\.shuqi\.com/(?:catalog|cover)/\d+/?[^\s'\"<>，。]*", r"https?://t\.shuqi\.com/shortNovel/reader/\d+/?[^\s'\"<>，。]*"):
+    for 模式 in (r"https?://d\.shuqi\.com/[^\s'\"<>，。]*", r"https?://(?:www\.)?shuqi\.com/book/\d+\.html[^\s'\"<>，。]*", r"https?://t\.shuqi\.com/(?:catalog|cover)/\d+/?[^\s'\"<>，。]*", r"https?://t\.shuqi\.com/shortNovel/reader/\d+/?[^\s'\"<>，。]*"):
         匹配 = re.search(模式, 文本, flags=re.I)
         if 匹配:
             return 匹配.group(0)
@@ -796,7 +849,7 @@ def 提取书旗链接(值: Any) -> str:
 
 
 def 包含书旗链接(文本: str) -> bool:
-    return bool(re.search(r"shuqi\.com/book/\d+|t\.shuqi\.com/(?:catalog|cover)/\d+|t\.shuqi\.com/shortNovel/reader/\d+", str(文本 or ""), flags=re.I))
+    return bool(re.search(r"d\.shuqi\.com/|shuqi\.com/book/\d+|t\.shuqi\.com/(?:catalog|cover)/\d+|t\.shuqi\.com/shortNovel/reader/\d+", str(文本 or ""), flags=re.I))
 
 
 def 提取书籍编号(文本: str) -> str:

@@ -125,6 +125,7 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                 try:
                     yield 文件发送结果
                 finally:
+                    启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名, 发送结果.get("cache_path"))
                     延迟删除下载缓存文件(发送结果.get("cache_path"))
                 return
             发送成功 = bool(发送结果.get("sent"))
@@ -505,23 +506,11 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
         elif UC结果.get("enabled"):
             logger.warning(f"七猫小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
 
-    if 百度网盘 is not None:
-        百度结果 = await 百度网盘.后台上传小说文件(配置, 缓存路径, 文件名)
-        if 百度结果.get("success"):
-            logger.info(f"七猫小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
-        elif 百度结果.get("skipped"):
-            logger.info(f"七猫小说百度网盘后台上传按状态规则跳过：file={文件名}")
-        elif 百度结果.get("enabled"):
-            logger.warning(f"七猫小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
-
-    if 原小说缓存待删除:
-        删除下载缓存文件(缓存路径)
-
     if Comp is not None and hasattr(event, "chain_result"):
         try:
             文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(发送缓存路径))])
             logger.info(f"七猫小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}")
-            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "error": ""}
+            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "source_cache_path": 缓存路径, "error": ""}
         except Exception as exc:
             logger.warning(f"七猫小说 AstrBot File 组件构建失败：file={文件名}, error={exc}")
 
@@ -530,13 +519,50 @@ async def 准备发送文本文件给当前会话(event: Any, 文件名: str, �
     调用方法 = getattr(api, "call_action", None)
     if not callable(调用方法):
         删除下载缓存文件(发送缓存路径)
+        if 原小说缓存待删除:
+            删除下载缓存文件(缓存路径)
         return {"sent": False, "chain_result": None, "cache_path": None, "error": "当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件"}
 
+    发送成功 = False
+    百度后台已启动 = False
     try:
         发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 发送缓存路径)
+        if 发送成功 and 百度网盘 is not None:
+            百度后台已启动 = True
+            启动百度后台上传并清理源文件(配置, 缓存路径, 文件名, None if str(缓存路径) == str(发送缓存路径) else 发送缓存路径)
         return {"sent": 发送成功, "chain_result": None, "cache_path": None, "error": 发送错误}
     finally:
-        删除下载缓存文件(发送缓存路径)
+        if not (百度后台已启动 and str(缓存路径) == str(发送缓存路径)):
+            删除下载缓存文件(发送缓存路径)
+        if 原小说缓存待删除 and not 百度后台已启动:
+            删除下载缓存文件(缓存路径)
+
+
+def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
+    if not 源缓存路径:
+        return
+
+    async def 执行上传并清理() -> None:
+        try:
+            if 百度网盘 is not None:
+                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
+                if 百度结果.get("success"):
+                    logger.info(f"七猫小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                elif 百度结果.get("skipped"):
+                    logger.info(f"七猫小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                elif 百度结果.get("enabled"):
+                    logger.warning(f"七猫小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+        except Exception as exc:
+            logger.warning(f"七猫小说百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={exc}")
+        finally:
+            if str(源缓存路径) != str(发送缓存路径 or ""):
+                删除下载缓存文件(源缓存路径)
+
+    try:
+        asyncio.create_task(执行上传并清理())
+    except RuntimeError:
+        if str(源缓存路径) != str(发送缓存路径 or ""):
+            删除下载缓存文件(源缓存路径)
 
 
 def 删除下载缓存文件(缓存路径: Any) -> None:

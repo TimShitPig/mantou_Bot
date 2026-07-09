@@ -282,6 +282,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 try:
                     yield 链式结果
                 finally:
+                    启动百度后台上传并清理源文件(配置, 发送结果.get('source_cache_path'), 文件名, 缓存路径)
                     延迟删除缓存文件(缓存路径)
                 return
             已发送 = bool(发送结果.get('sent'))
@@ -813,32 +814,60 @@ async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: by
             logger.debug(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
         elif UC结果.get('enabled'):
             logger.warning(f"番茄小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
-    if 百度网盘 is not None:
-        百度结果 = await 百度网盘.后台上传小说文件(配置, 缓存路径, 文件名)
-        if 百度结果.get('success'):
-            logger.debug(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
-        elif 百度结果.get('skipped'):
-            logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
-        elif 百度结果.get('enabled'):
-            logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
-    if 原小说缓存待删除:
-        删除缓存文件(缓存路径)
     if 消息组件 is not None and hasattr(事件, 'chain_result'):
         try:
             链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(发送缓存路径))])
             logger.debug(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}')
-            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 发送缓存路径, 'error': ''}
+            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 发送缓存路径, 'source_cache_path': 缓存路径, 'error': ''}
         except Exception as 异常:
             logger.warning(f'番茄小说 AstrBot File 组件构建失败：file={文件名}, error={异常}')
     机器人 = getattr(事件, 'bot', None)
     接口 = getattr(机器人, 'api', None)
     调用动作 = getattr(接口, 'call_action', None)
     if callable(调用动作):
-        已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(发送缓存路径)), ('file_uri', 发送缓存路径.as_uri())])
-        删除缓存文件(发送缓存路径)
-        return {'sent': 已发送, 'chain_result': None, 'cache_path': None, 'error': 错误}
+        已发送 = False
+        百度后台已启动 = False
+        try:
+            已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(发送缓存路径)), ('file_uri', 发送缓存路径.as_uri())])
+            if 已发送 and 百度网盘 is not None:
+                百度后台已启动 = True
+                启动百度后台上传并清理源文件(配置, 缓存路径, 文件名, None if str(缓存路径) == str(发送缓存路径) else 发送缓存路径)
+            return {'sent': 已发送, 'chain_result': None, 'cache_path': None, 'error': 错误}
+        finally:
+            if not (百度后台已启动 and str(缓存路径) == str(发送缓存路径)):
+                删除缓存文件(发送缓存路径)
+            if 原小说缓存待删除 and not 百度后台已启动:
+                删除缓存文件(缓存路径)
     删除缓存文件(发送缓存路径)
+    if 原小说缓存待删除:
+        删除缓存文件(缓存路径)
     return {'sent': False, 'chain_result': None, 'cache_path': None, 'error': '当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件'}
+
+def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
+    if not 源缓存路径:
+        return
+
+    async def 执行上传并清理() -> None:
+        try:
+            if 百度网盘 is not None:
+                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
+                if 百度结果.get('success'):
+                    logger.debug(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                elif 百度结果.get('skipped'):
+                    logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                elif 百度结果.get('enabled'):
+                    logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+        except Exception as 异常:
+            logger.warning(f"番茄小说百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={异常}")
+        finally:
+            if str(源缓存路径) != str(发送缓存路径 or ''):
+                删除缓存文件(源缓存路径)
+
+    try:
+        asyncio.create_task(执行上传并清理())
+    except RuntimeError:
+        if str(源缓存路径) != str(发送缓存路径 or ''):
+            删除缓存文件(源缓存路径)
 
 def 延迟删除缓存文件(缓存路径: Any, 延迟秒数: int=文件组件缓存删除延迟) -> None:
     if not 缓存路径:
