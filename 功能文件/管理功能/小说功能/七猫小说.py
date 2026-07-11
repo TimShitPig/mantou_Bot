@@ -129,26 +129,18 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                     延迟删除下载缓存文件(发送结果.get("cache_path"))
                 return
             发送成功 = bool(发送结果.get("sent"))
-            发送错误 = str(发送结果.get("error") or "")
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
-        yield f"七猫小说下载失败：{exc}"
+        yield "下载失败"
         return
 
     if 发送成功:
         return
 
-    标题 = 详情.get("title") or f"七猫小说{书籍编号}"
     失败数量 = len(章节内容) - len(成功章节)
-    回复 = [
-        f"七猫小说文件发送失败：{标题}",
-        f"章节：成功 {len(成功章节)} / 总计 {len(目录)}",
-        f"文件：{文件名}",
-    ]
+    回复 = ["七猫小说文件发送失败，请稍后再试"]
     if 失败数量:
         回复.append(f"失败章节：{失败数量}")
-    回复.append(f"原因：{发送错误}")
-    回复.append("下载缓存文件已删除，没有保存在本地")
     yield "\n".join(回复)
 
 

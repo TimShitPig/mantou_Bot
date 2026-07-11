@@ -21,7 +21,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 小说功能状态命名空间 = "novel_feature_switch"
 小说默认状态 = {"番茄": True, "七猫": True, "书旗": True}
 付费开关状态命名空间 = "paid_access"
-默认上传目录 = "/小说机器人"
 
 
 def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本: str = "") -> str | None:
@@ -127,24 +126,20 @@ def 读取数据库配置状态(配置: Any) -> str:
         数据库配置 = 用户激活.获取数据库配置(配置)
     except Exception:
         return "未配置"
-    主机 = 数据库配置.get("host") or "未知"
-    数据库名 = 数据库配置.get("database") or "未知"
-    return f"已配置（{主机}/{数据库名}）"
+    return "已配置" if 数据库配置 else "未配置"
 
 
 def 读取UC网盘状态(配置: Any) -> str:
     Cookie = 清理带前缀Cookie(读取配置字段(配置, "uc_pan_cookie", ("uc_pan_settings", "UC网盘设置", "basic_settings", "基础配置")), "UC网盘#")
-    目录 = str(读取配置字段(配置, "uc_pan_upload_dir", ("uc_pan_settings", "UC网盘设置", "basic_settings", "基础配置")) or "").strip() or 默认上传目录
-    return f"{格式化开关(bool(Cookie))}，目录：{目录}"
+    return 格式化开关(bool(Cookie))
 
 
 def 读取百度网盘状态(配置: Any) -> str:
     Cookie = 清理带前缀Cookie(读取配置字段(配置, "baidu_pan_cookie", ("baidu_pan_settings", "百度网盘设置", "basic_settings", "基础配置")), "百度网盘#")
-    目录 = str(读取配置字段(配置, "baidu_pan_upload_dir", ("baidu_pan_settings", "百度网盘设置", "basic_settings", "基础配置")) or "").strip() or 默认上传目录
     上传状态 = str(读取配置字段(配置, "baidu_pan_upload_status", ("baidu_pan_settings", "百度网盘设置", "basic_settings", "基础配置")) or "").strip()
     if 上传状态 not in ("完结", "连载", "全部"):
         上传状态 = "完结"
-    return f"{格式化开关(bool(Cookie))}，目录：{目录}，上传：{上传状态}"
+    return f"{格式化开关(bool(Cookie))}，上传：{上传状态}"
 
 
 def 读取小说功能状态(配置: Any) -> dict[str, bool]:

@@ -88,7 +88,7 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         return f"已{操作}全员禁言"
     except Exception as exc:
         logger.warning(f"群禁言{操作}失败：group_id={群号}, error={exc}")
-        return f"群禁言失败：{exc}"
+        return "群禁言失败，请稍后再试"
 
 
 async def 处理全部群禁言(event: AstrMessageEvent, 启用: bool, 操作: str) -> str:
@@ -100,7 +100,7 @@ async def 处理全部群禁言(event: AstrMessageEvent, 启用: bool, 操作: s
         群号列表 = await 获取机器人所在群号列表(bot)
     except Exception as exc:
         logger.warning(f"全部群禁言获取群列表失败：error={exc}")
-        return f"全部群禁言失败：{exc}"
+        return "全部群禁言失败，请稍后再试"
 
     成功群: list[str] = []
     失败群: list[tuple[str, Exception]] = []
@@ -119,7 +119,7 @@ async def 处理全部群禁言(event: AstrMessageEvent, 启用: bool, 操作: s
 def 格式化全部群禁言结果(成功群: list[str], 失败群: list[tuple[str, Exception]], 操作: str) -> str:
     行列表 = [f"全部群禁言{操作}完成：成功 {len(成功群)} 个，失败 {len(失败群)} 个"]
     if 失败群:
-        行列表.append("失败群：" + "；".join(f"{群号}：{错误}" for 群号, 错误 in 失败群))
+        行列表.append("失败群已记录到后台日志")
     return "\n".join(行列表)
 
 

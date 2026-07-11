@@ -397,7 +397,7 @@ async def 处理网页群文件清理(event: Any, 命令文本: str, 配置: Any
         return await _处理网页群文件清理内部(event, 文本, 配置)
     except Exception as exc:
         logger.warning(f"[网页群文件诊断] 命令={文本!r} 异常={type(exc).__name__}: {exc}", exc_info=True)
-        return f"网页群文件处理异常：{type(exc).__name__}: {exc}"
+        return "网页群文件操作失败，请稍后再试"
 
 
 async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: Any) -> str | None:
@@ -828,7 +828,7 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
     except Exception as exc:
         备注等待状态.pop(标识, None)
         logger.warning(f"群备注写入失败：group={群号}, error={exc}")
-        return f"备注保存失败：{exc}"
+        return "备注保存失败，请稍后再试"
     备注等待状态.pop(标识, None)
     退出更改备注选群(event)
     return await 显示群文件清理详情页(event, 配置)
@@ -875,7 +875,7 @@ async def 添加群聊(event: Any, 配置: Any, 参数文本: str) -> str:
             写入待清理群列表(配置, 当前列表)
         except Exception as exc:
             logger.warning(f"添加群聊写入失败：error={exc}")
-            return f"添加群聊失败：{exc}"
+            return "添加群聊失败，请稍后再试"
 
     行列表 = []
     if 新增:
@@ -908,7 +908,7 @@ def 删除群聊(配置: Any, 参数文本: str) -> str:
                     pass
         except Exception as exc:
             logger.warning(f"删除群聊写入失败：error={exc}")
-            return f"删除群聊失败：{exc}"
+            return "删除群聊失败，请稍后再试"
 
     行列表 = []
     if 已删除:
@@ -1015,7 +1015,7 @@ async def 保存用户Cookie(event: Any, cookie文本: str, 配置: Any) -> str:
         写入运行状态值(配置, COOKIE命名空间, 用户QQ, 状态值)
     except Exception as exc:
         logger.warning(f"网页群文件 Cookie 写入数据库失败：user_id={用户QQ}, error={exc}")
-        return f"Cookie 保存失败：{exc}"
+        return "Cookie 保存失败，请稍后再试"
     logger.info(f"网页群文件 Cookie 已更新：user_id={用户QQ}")
     启动Cookie自动保活(配置)
     if 提取skey(标准Cookie):
@@ -1711,7 +1711,10 @@ async def 清空指定群文件(event: Any, 群号: str, 配置: Any) -> str:
         成功, 失败, 错误 = await 执行网页清理(session, 群号, cookie文本)
 
     if 错误:
-        return 错误
+        logger.warning(f"[网页群文件] 清理失败：group_id={群号}, error={错误}")
+        if "Cookie" in str(错误):
+            return "群文件 Cookie 已失效，请重新发送「登录群文件」登录"
+        return "清理群文件失败，请稍后再试"
     if 成功 == 0 and 失败 == 0:
         return f"清理完成（群 {群号} 没有群文件）"
     return (
@@ -1742,7 +1745,6 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
     失败群 = 0
     文件成功 = 0
     文件失败 = 0
-    失败详情: list[str] = []
 
     async with aiohttp.ClientSession() as session:
         for 群号 in 群号列表:
@@ -1750,7 +1752,6 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
                 成功, 失败, 错误 = await 执行网页清理(session, 群号, cookie文本)
                 if 错误:
                     失败群 += 1
-                    失败详情.append(f"{群号}：{错误}")
                     logger.warning(f"[网页群文件] 全部清理单群失败：group_id={群号}, error={错误}")
                 else:
                     成功群 += 1
@@ -1761,13 +1762,10 @@ async def 清理全部已添加群(event: Any, 配置: Any) -> str:
                     )
             except Exception as exc:
                 失败群 += 1
-                失败详情.append(f"{群号}：{exc}")
                 logger.warning(f"[网页群文件] 全部清理单群异常：group_id={群号}, error={exc}")
 
     行列表 = [
         f"全部群文件清理完成：群成功 {成功群} 个，群失败 {失败群} 个",
         f"文件成功 {文件成功} 个，文件失败 {文件失败} 个",
     ]
-    if 失败详情:
-        行列表.append("失败群：" + "；".join(失败详情))
     return await 发送带返回按钮的结果(event, "\n".join(行列表))

@@ -187,7 +187,7 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
         if len(目标用户列表) == 1:
             if 成功用户:
                 return f"已取消用户激活：{成功用户[0]}"
-            return f"用户重置失败：{失败用户[0][1]}"
+            return "用户重置失败，请稍后再试"
         return 格式化批量重置结果(成功用户, 失败用户)
 
     if 操作 in {"增加", "减少"}:
@@ -231,7 +231,7 @@ async def 处理用户激活(event: Any, 命令文本: str, 配置: Any, context
             )
         if 已激活用户:
             return 格式化单用户已激活回复(已激活用户[0])
-        return f"用户激活失败：{失败用户[0][1]}"
+        return "用户激活失败，请稍后再试"
 
     return 格式化批量激活结果(成功用户, 已激活用户, 失败用户, 天数, 到期时间)
 
@@ -313,7 +313,7 @@ async def 获取单用户查询时间回复(配置: Any, 群号: str, 目标用�
         激活记录 = await 读取激活查询详情(配置, 群号, 目标用户)
     except Exception as exc:
         logger.warning(f"用户激活查询失败：group_id={群号}, user_id={目标用户}, error={exc}")
-        return f"用户查询失败：{exc}"
+        return "用户查询失败，请稍后再试"
 
     if not 激活记录 or 安全整数(激活记录.get("expires_at"), 0) <= 0:
         return "\n".join([f"用户：{目标用户}", "状态：未激活"])
@@ -365,7 +365,7 @@ async def 处理激活时间调整(
             )
         if 过期用户:
             return f"已减少用户激活时间：{过期用户[0]}\n调整后已到期，已取消激活"
-        return f"用户激活调整失败：{失败用户[0][1]}"
+        return "用户激活调整失败，请稍后再试"
 
     return 格式化批量调整结果(操作, 成功用户, 过期用户, 失败用户, 天数)
 
@@ -469,7 +469,7 @@ async def 处理生成卡密(event: Any, 命令文本: str, 配置: Any) -> str:
         卡密列表 = await 生成并保存卡密列表(配置, 创建者, 数量, 默认激活天数)
     except Exception as exc:
         logger.warning(f"卡密生成失败：count={数量}, error={exc}")
-        return f"卡密生成失败：{exc}"
+        return "卡密生成失败，请稍后再试"
 
     return "\n".join(
         [
@@ -529,7 +529,7 @@ async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选�
         卡密候选列表 = await asyncio.to_thread(筛选存在数据库卡密列表, 配置, 卡密候选列表)
     except Exception as exc:
         logger.warning(f"卡密存在性检查失败：user_id={用户编号}, error={exc}")
-        return f"卡密激活失败：{exc}"
+        return "卡密激活失败，请稍后再试"
     if not 卡密候选列表:
         return None
 
@@ -560,7 +560,7 @@ async def 处理使用卡密候选列表(event: Any, 配置: Any, 卡密候选�
             )
 
     if 最后异常 is not None and (len(卡密候选列表) == 1 or not 已收到数据库响应):
-        return f"卡密激活失败：{最后异常}"
+        return "卡密激活失败，请稍后再试"
     return "卡密无效或已使用"
 
 
@@ -595,7 +595,7 @@ async def 处理查询卡密(
         卡密列表 = await 列出卡密记录(配置, 查询参数)
     except Exception as exc:
         logger.warning(f"卡密查询失败：query={查询参数}, error={exc}")
-        return f"卡密查询失败：{exc}"
+        return "卡密查询失败，请稍后再试"
 
     if not 卡密列表:
         卡密查询翻页状态.pop(状态键, None)
@@ -627,7 +627,7 @@ async def 处理复制卡密(event: Any, 命令文本: str, 配置: Any) -> str:
         卡密列表 = await 列出卡密记录(配置, 查询参数)
     except Exception as exc:
         logger.warning(f"卡密复制失败：query={查询参数}, days={天数筛选}, error={exc}")
-        return f"卡密复制失败：{exc}"
+        return "卡密复制失败，请稍后再试"
     if 天数筛选 > 0:
         卡密列表 = [记录 for 记录 in 卡密列表 if 安全整数(记录.get("days"), 默认激活天数) == 天数筛选]
     if not 卡密列表:
@@ -669,7 +669,7 @@ def 格式化批量激活结果(
     if 已激活用户:
         行列表.append(f"已激活用户（未重复激活）：{格式化用户列表([str(记录['user_id']) for 记录 in 已激活用户])}")
     if 失败用户:
-        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+        行列表.append(f"失败用户：{len(失败用户)} 个，详细原因已记录到后台日志")
     return "\n".join(行列表)
 
 
@@ -717,7 +717,7 @@ def 格式化批量调整结果(
     if 过期用户:
         行列表.append(f"已到期并取消激活：{格式化用户列表(过期用户)}")
     if 失败用户:
-        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+        行列表.append(f"失败用户：{len(失败用户)} 个，详细原因已记录到后台日志")
     return "\n".join(行列表)
 
 
@@ -726,7 +726,7 @@ def 格式化批量重置结果(成功用户: list[str], 失败用户: list[tupl
     if 成功用户:
         行列表.append(f"已取消用户激活：{格式化用户列表(成功用户)}")
     if 失败用户:
-        行列表.append("失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户))
+        行列表.append(f"失败用户：{len(失败用户)} 个，详细原因已记录到后台日志")
     return "\n".join(行列表)
 
 
@@ -1001,7 +1001,7 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
             写入运行状态值(配置, 付费开关状态命名空间, 状态键, "on" if 是否开启 else "off")
         except Exception as exc:
             logger.warning(f"全局付费开关写入数据库失败：enabled={是否开启}, error={exc}")
-            return f"全局付费开关失败：{exc}"
+            return "全局付费开关失败，请稍后再试"
         if 是否开启:
             return "已开启全局收费模式，群聊和私聊未激活用户均需激活或使用每日免费额度"
         return "已关闭全局收费模式，群聊和私聊未激活用户均可无限制使用"
@@ -1017,7 +1017,7 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
             写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
         except Exception as exc:
             logger.warning(f"私聊付费开关写入数据库失败：enabled={是否开启}, error={exc}")
-            return f"私聊付费开关失败：{exc}"
+            return "私聊付费开关失败，请稍后再试"
         if 是否开启:
             return "已开启私聊收费模式，私聊未激活用户需激活或使用每日免费额度"
         return "已关闭私聊收费模式，私聊未激活用户可无限制使用"
@@ -1036,7 +1036,7 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
         写入布尔运行状态值(配置, 付费开关状态命名空间, 状态键, 是否开启)
     except Exception as exc:
         logger.warning(f"付费开关写入数据库失败：group_id={群号}, enabled={是否开启}, error={exc}")
-        return f"付费开关失败：{exc}"
+        return "付费开关失败，请稍后再试"
     if 是否开启:
         return "已开启本群付费模式，未激活用户需激活或使用每日免费额度"
     return "已关闭本群付费模式，未激活用户可无限制使用"

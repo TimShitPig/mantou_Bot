@@ -51,7 +51,11 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
         async with aiohttp.ClientSession(timeout=超时, headers={"User-Agent": "Mozilla/5.0"}) as 会话:
             准备结果 = await 准备QQ阅读小说(会话, 来源)
             if not 准备结果.get("success"):
-                yield f"QQ阅读下载失败：{限制文本长度(准备结果.get('error') or '析API准备失败', 500)}"
+                logger.warning(
+                    f"QQ阅读析API准备失败：source={限制文本长度(来源)}, "
+                    f"error={限制文本长度(准备结果.get('error') or '析API准备失败', 500)}"
+                )
+                yield "下载失败"
                 return
             书籍编号 = str(准备结果.get("book_id") or "")
             书籍信息 = 准备结果.get("book_info") or QQ阅读默认书籍信息(书籍编号)
@@ -88,14 +92,11 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
         return
     if 已发送:
         return
-    书名 = 书籍信息.get("title") or f"QQ阅读{书籍编号}"
-    yield "\n".join([
-        f"QQ阅读文件发送失败：{书名}",
-        f"章节：成功 {len(成功章节列表)} / 总计 {len(章节列表)}",
-        f"文件：{文件名}",
-        f"原因：{限制文本长度(发送错误, 500)}",
-        "下载缓存文件已删除，没有保存在本地",
-    ])
+    logger.warning(
+        f"QQ阅读文件发送失败：book_id={书籍编号}, file={文件名}, "
+        f"success={len(成功章节列表)}/{len(章节列表)}, error={发送错误}"
+    )
+    yield "QQ阅读文件发送失败，请稍后再试"
 
 
 async def 准备QQ阅读小说(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str = "") -> dict[str, Any]:

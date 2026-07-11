@@ -38,7 +38,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         写入小说功能状态(配置, 功能名, 是否开启)
     except Exception as exc:
         logger.warning(f"小说功能开关写入数据库失败：feature={功能名}, enabled={是否开启}, error={exc}")
-        return f"{功能显示名[功能名]}开关失败：{exc}"
+        return f"{功能显示名[功能名]}开关失败，请稍后再试"
     状态文本 = "开启" if 是否开启 else "关闭"
     return f"{功能显示名[功能名]}已{状态文本}"
 

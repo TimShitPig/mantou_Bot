@@ -137,10 +137,10 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                     延迟删除下载缓存文件(发送结果.get("cache_path"))
                 return
             if not 发送结果.get("sent"):
-                yield f"书旗小说文件发送失败：{发送结果.get('error') or '未知错误'}"
+                yield "书旗小说文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(f"书旗小说下载失败：source={链接}, error={exc}")
-        yield f"书旗小说下载失败：{exc}"
+        yield "下载失败"
 
 
 def 解析书旗下载目标(链接: str) -> dict[str, str]:
