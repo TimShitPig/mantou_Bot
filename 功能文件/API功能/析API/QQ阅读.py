@@ -45,7 +45,8 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
     发送错误 = ""
     try:
         if 番茄输出 is None:
-            yield "QQ阅读下载失败：输出模块不可用"
+            logger.warning("QQ阅读下载失败：番茄输出模块不可用")
+            yield "下载失败"
             return
         超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=120)
         async with aiohttp.ClientSession(timeout=超时, headers={"User-Agent": "Mozilla/5.0"}) as 会话:
@@ -96,7 +97,7 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
         f"QQ阅读文件发送失败：book_id={书籍编号}, file={文件名}, "
         f"success={len(成功章节列表)}/{len(章节列表)}, error={发送错误}"
     )
-    yield "QQ阅读文件发送失败，请稍后再试"
+    yield "文件发送失败，请稍后再试"
 
 
 async def 准备QQ阅读小说(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str = "") -> dict[str, Any]:

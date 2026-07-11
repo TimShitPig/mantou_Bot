@@ -63,8 +63,8 @@ API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API
 待选择API会话: dict[str, float] = {}
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
-崩溃API下载失败提示 = '番茄小说下载失败请重新发送链接或者换一本书'
-番茄小说不可下载提示 = '该书不存在或已停止合作或付费书籍不支持下载，请去书城阅读新书'
+下载失败提示 = '下载失败'
+文件发送失败提示 = '文件发送失败，请稍后再试'
 章节选择错误文本 = '请检测章节选择是否正确'
 OIAPI远端超时关键词 = ('Operation timed out', 'Curl.php', 'timed out after 30001')
 浏览器请求头 = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'Accept': 'application/json, text/plain, */*', 'Referer': 'https://fanqienovel.com/'}
@@ -91,9 +91,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API切换'
         待选择API会话[会话键] = time.time()
-        当前接口 = 读取当前番茄小说接口(配置)
         return '\n'.join([
-            f'当前番茄小说API：{当前接口}',
             '请选择番茄小说API：',
             '1. OIAPI（需要配置 番茄小说key）',
             '2. 析API（批量正文，不需要 番茄小说key）',
@@ -111,9 +109,9 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             写入当前番茄小说接口(配置, 接口名称)
         except Exception as 异常:
             logger.warning(f'番茄小说API切换写入数据库失败：api={接口名称}, error={异常}')
-            return '番茄小说API切换失败，请稍后再试'
+            return '切换失败，请稍后再试'
         待选择API会话.pop(会话键, None)
-        return f'番茄小说API已切换为：{接口名称}'
+        return '番茄接口已切换'
     直接切换 = API直接切换.get(文本.lower())
     if 直接切换 is not None:
         if not 是群文件清理管理员(事件, 配置):
@@ -122,8 +120,8 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             写入当前番茄小说接口(配置, 直接切换)
         except Exception as 异常:
             logger.warning(f'番茄小说API切换写入数据库失败：api={直接切换}, error={异常}')
-            return '番茄小说API切换失败，请稍后再试'
-        return f'番茄小说API已切换为：{直接切换}'
+            return '切换失败，请稍后再试'
+        return '番茄接口已切换'
     return None
 
 
@@ -147,7 +145,8 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 书籍编号 = 提取书籍编号(解析来源)
             if 接口来源 == 'Y6api':
                 if Y6API番茄小说 is None:
-                    yield '番茄小说下载失败：Y6api模块不可用'
+                    logger.warning('番茄小说Y6api下载失败：模块不可用')
+                    yield 下载失败提示
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
@@ -155,7 +154,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 准备结果 = await Y6API番茄小说.准备番茄小说(会话, 书籍编号)
                 if not 准备结果.get('success'):
                     logger.warning(f"番茄小说Y6api准备失败：book_id={书籍编号}, error={限制文本长度(准备结果.get('error') or 'Y6api准备失败', 500)}")
-                    yield 获取番茄外部API失败提示(准备结果.get('error'))
+                    yield 下载失败提示
                     return
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
@@ -164,18 +163,20 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 下载结果 = await Y6API番茄小说.下载完整小说(会话, 书籍编号, 书籍信息, 章节列表)
                 if not 下载结果.get('success'):
                     logger.warning(f"番茄小说Y6api下载失败：book_id={书籍编号}, error={限制文本长度(下载结果.get('error') or 'Y6api下载失败', 500)}")
-                    yield 获取番茄外部API失败提示(下载结果.get('error'))
+                    yield 下载失败提示
                     return
                 书籍信息 = 下载结果.get('book_info') or 书籍信息
                 章节列表 = 下载结果.get('chapters') or 章节列表
                 章节结果列表 = 下载结果.get('chapter_results') or []
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：Y6api没有获取到可用章节正文'
+                    logger.warning(f'番茄小说Y6api下载失败：book_id={书籍编号}, error=没有获取到可用章节正文')
+                    yield 下载失败提示
                     return
             elif 接口来源 == '聚合API':
                 if 聚合API番茄小说 is None:
-                    yield '番茄小说下载失败：聚合API模块不可用'
+                    logger.warning('番茄小说聚合API下载失败：模块不可用')
+                    yield 下载失败提示
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
@@ -183,7 +184,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 准备结果 = await 聚合API番茄小说.准备番茄小说(会话, 书籍编号)
                 if not 准备结果.get('success'):
                     logger.warning(f"番茄小说聚合API准备失败：book_id={书籍编号}, error={限制文本长度(准备结果.get('error') or '聚合API准备失败', 500)}")
-                    yield 获取番茄外部API失败提示(准备结果.get('error'))
+                    yield 下载失败提示
                     return
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
@@ -192,15 +193,17 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 章节结果列表 = await 聚合API番茄小说.下载全部章节(会话, 书籍编号, 章节列表)
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：聚合API没有获取到可用章节正文'
+                    logger.warning(f'番茄小说聚合API下载失败：book_id={书籍编号}, error=没有获取到可用章节正文')
+                    yield 下载失败提示
                     return
                 if len(成功章节列表) < len(章节列表):
-                    yield '番茄小说下载失败：聚合API章节正文不完整，请重新发送链接重试'
+                    logger.warning(f'番茄小说聚合API下载失败：book_id={书籍编号}, error=章节正文不完整')
+                    yield 下载失败提示
                     return
             elif 接口来源 == '崩溃API':
                 if 崩溃API番茄小说 is None:
                     logger.warning('番茄小说崩溃API下载失败：崩溃API模块不可用')
-                    yield 崩溃API下载失败提示
+                    yield 下载失败提示
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
@@ -208,7 +211,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 准备结果 = await 崩溃API番茄小说.准备番茄小说(会话, 书籍编号)
                 if not 准备结果.get('success'):
                     logger.warning(f"番茄小说崩溃API准备失败：book_id={书籍编号}, error={限制文本长度(准备结果.get('error') or '崩溃API准备失败', 500)}")
-                    yield 崩溃API下载失败提示
+                    yield 下载失败提示
                     return
                 书籍信息 = 准备结果.get('book_info') or 默认书籍信息(书籍编号)
                 章节列表 = 准备结果.get('chapters') or []
@@ -217,7 +220,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 下载结果 = await 崩溃API番茄小说.下载完整小说(会话, 书籍编号, 书籍信息, 章节列表)
                 if not 下载结果.get('success'):
                     logger.warning(f"番茄小说崩溃API下载失败：book_id={书籍编号}, error={限制文本长度(下载结果.get('error') or '崩溃API下载失败', 500)}")
-                    yield 崩溃API下载失败提示
+                    yield 下载失败提示
                     return
                 书籍信息 = 下载结果.get('book_info') or 书籍信息
                 章节列表 = 下载结果.get('chapters') or 章节列表
@@ -225,11 +228,12 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
                     logger.warning(f"番茄小说崩溃API下载失败：book_id={书籍编号}, error=没有获取到可用章节正文")
-                    yield 崩溃API下载失败提示
+                    yield 下载失败提示
                     return
             elif 接口来源 == '析API':
                 if 析API番茄小说 is None:
-                    yield '番茄小说下载失败：析API模块不可用'
+                    logger.warning('番茄小说析API下载失败：模块不可用')
+                    yield 下载失败提示
                     return
                 准备来源 = 解析来源 if 书籍编号 else 来源
                 官方书籍信息 = await 获取书籍信息(会话, 书籍编号, 解析来源) if 书籍编号 else {}
@@ -246,14 +250,16 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 章节结果列表 = await 析API番茄小说.下载全部章节(会话, 书籍编号, 章节列表)
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：析API没有获取到可用章节正文'
+                    logger.warning(f'番茄小说析API下载失败：book_id={书籍编号}, error=没有获取到可用章节正文')
+                    yield 下载失败提示
                     return
                 if len(成功章节列表) < len(章节列表):
                     yield '下载失败'
                     return
             else:
                 if not 接口key:
-                    yield '番茄小说下载失败：缺少插件配置 番茄小说key；如需使用析API、崩溃API、聚合API或Y6api，请发送"查看API"后选择 2、3、4 或 5'
+                    logger.warning('番茄小说OIAPI下载失败：缺少番茄小说key配置')
+                    yield 下载失败提示
                     return
                 if not 书籍编号:
                     yield '没有识别到番茄小说链接'
@@ -268,7 +274,8 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     if not 章节列表:
                         章节列表 = 构造序号目录(安全整数(书籍信息.get('chapter_count')))
                 if not 章节列表:
-                    yield '番茄小说下载失败：没有获取到章节目录'
+                    logger.warning(f'番茄小说OIAPI下载失败：book_id={书籍编号}, error=没有获取到章节目录')
+                    yield 下载失败提示
                     return
                 书籍信息 = 合并书籍信息(书籍信息, {'chapter_count': len(章节列表)})
                 logger.debug(f"番茄小说开始下载：source=OIAPI, book_id={书籍编号}, title={书籍信息.get('title')}, author={书籍信息.get('author')}, chapters={len(章节列表)}")
@@ -276,7 +283,8 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                 章节结果列表 = await 下载全部章节(会话, 书籍编号, 章节列表, 接口key, 解析字数(书籍信息.get('word_count')))
                 成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get('success')]
                 if not 成功章节列表:
-                    yield '番茄小说下载失败：OIAPI没有获取到可用章节正文'
+                    logger.warning(f'番茄小说OIAPI下载失败：book_id={书籍编号}, error=没有获取到可用章节正文')
+                    yield 下载失败提示
                     return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
             logger.debug(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
@@ -294,12 +302,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
             发送错误 = str(发送结果.get('error') or '')
     except Exception as 异常:
         logger.warning(f'番茄小说下载失败：source={限制文本长度(解析来源)}, book_id={书籍编号}, error={异常}')
-        if 接口来源 == '崩溃API':
-            yield 崩溃API下载失败提示
-        elif isinstance(异常, 用户可见错误):
-            yield 格式化OIAPI失败提示(异常)
-        else:
-            yield '下载失败'
+        yield 下载失败提示
         return
     if 已发送:
         return
@@ -307,7 +310,7 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
         f"番茄小说文件发送失败：book_id={书籍编号}, file={文件名}, "
         f"success={len(成功章节列表)}/{len(章节列表)}, error={发送错误}"
     )
-    yield '番茄小说文件发送失败，请稍后再试'
+    yield 文件发送失败提示
 
 
 async def 获取书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, 来源: str) -> dict[str, Any]:
@@ -690,25 +693,6 @@ def 是OIAPI远端超时(值: Any) -> bool:
     文本 = str(值 or '')
     return any(关键词 in 文本 for 关键词 in OIAPI远端超时关键词)
 
-
-def 格式化OIAPI失败提示(消息: Any) -> str:
-    文本 = str(消息 or '')
-    if '付费内容不解析' in 文本:
-        return '付费内容不解析'
-    if 'key额度不足' in 文本:
-        return 'key额度不足'
-    if 'Key注册失败' in 文本:
-        return 'Key注册失败\n请等待10分钟再下载'
-    if '该书不存在' in 文本 or '已停止合作' in 文本 or '付费书籍不支持下载' in 文本:
-        return 番茄小说不可下载提示
-    return '下载失败'
-
-
-def 获取番茄外部API失败提示(消息: Any) -> str:
-    文本 = str(消息 or '')
-    if '该书不存在' in 文本 or '已停止合作' in 文本 or '付费书籍不支持下载' in 文本:
-        return 番茄小说不可下载提示
-    return '下载失败'
 
 def 提取章节目录(数据: Any) -> list[dict[str, Any]]:
     项目列表: list[dict[str, Any]] = []

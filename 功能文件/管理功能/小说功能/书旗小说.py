@@ -109,7 +109,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             目标 = 解析书旗下载目标(解析后链接)
             书籍 = await 获取书籍(session, 目标["book_id"], 目标["type"] == "short")
             if not 书籍.chapters:
-                yield "书旗小说下载失败：没有获取到章节目录"
+                logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到章节目录")
+                yield "下载失败"
                 return
             批次 = await 获取下载批次(session, 书籍)
             logger.info(
@@ -120,7 +121,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             章节内容 = await 下载全部章节(session, 书籍, 批次)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
-                yield "书旗小说下载失败：没有获取到可用章节正文"
+                logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到可用章节正文")
+                yield "下载失败"
                 return
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
             logger.info(
@@ -137,7 +139,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                     延迟删除下载缓存文件(发送结果.get("cache_path"))
                 return
             if not 发送结果.get("sent"):
-                yield "书旗小说文件发送失败，请稍后再试"
+                yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(f"书旗小说下载失败：source={链接}, error={exc}")
         yield "下载失败"

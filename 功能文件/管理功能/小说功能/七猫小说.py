@@ -77,7 +77,8 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
         yield "没有识别到七猫小说链接"
         return
     if AES is None or unpad is None:
-        yield "七猫小说下载失败：缺少 pycryptodome 依赖，请先安装 requirements.txt"
+        logger.warning("七猫小说下载失败：缺少 pycryptodome 依赖")
+        yield "下载失败"
         return
 
     try:
@@ -92,7 +93,8 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             详情 = await 获取小说详情(session, 书籍编号, 是否短篇)
             目录 = await 获取小说目录(session, 书籍编号, 是否短篇)
             if not 目录:
-                yield "七猫小说下载失败：没有获取到章节目录"
+                logger.warning(f"七猫小说下载失败：book_id={书籍编号}, error=没有获取到章节目录")
+                yield "下载失败"
                 return
             if not str(详情.get("words_num") or "").strip():
                 目录字数 = sum(安全整数(章节.get("words") or 章节.get("word_count") or 章节.get("chapter_words"), 0) for 章节 in 目录)
@@ -111,7 +113,8 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录, 是否短篇)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
-                yield "七猫小说下载失败：没有获取到可用章节正文"
+                logger.warning(f"七猫小说下载失败：book_id={书籍编号}, error=没有获取到可用章节正文")
+                yield "下载失败"
                 return
 
             文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
@@ -137,11 +140,7 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
     if 发送成功:
         return
 
-    失败数量 = len(章节内容) - len(成功章节)
-    回复 = ["七猫小说文件发送失败，请稍后再试"]
-    if 失败数量:
-        回复.append(f"失败章节：{失败数量}")
-    yield "\n".join(回复)
+    yield "文件发送失败，请稍后再试"
 
 
 async def 搜索小说(session: aiohttp.ClientSession, 关键词: str) -> list[dict[str, Any]]:

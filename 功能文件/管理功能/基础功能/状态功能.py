@@ -16,8 +16,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 模块加载时间 = time.time()
 上次进程CPU采样: tuple[float, float] | None = (time.monotonic(), time.process_time())
 上次系统CPU采样: tuple[int, int] | None = None
-番茄API状态命名空间 = "fanqie_api"
-番茄API状态键 = "current_api"
 小说功能状态命名空间 = "novel_feature_switch"
 小说默认状态 = {"番茄": True, "七猫": True, "书旗": True}
 付费开关状态命名空间 = "paid_access"
@@ -33,7 +31,6 @@ def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本:
 
 def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
     功能状态 = 读取小说功能状态(配置)
-    当前API = 读取当前番茄API(配置)
     全局收费 = 读取全局收费状态(配置)
     当前群收费 = 读取当前群收费状态(event, 配置)
     私聊收费 = 读取私聊收费状态(配置)
@@ -65,12 +62,12 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"番茄小说：{格式化开关(bool(功能状态.get('番茄', True)))}",
             f"七猫小说：{格式化开关(bool(功能状态.get('七猫', True)))}",
             f"书旗小说：{格式化开关(bool(功能状态.get('书旗', True)))}",
-            f"当前番茄API：{当前API}",
+            "番茄接口：已选择",
             f"全局收费：{全局收费}",
             f"当前群收费：{当前群收费}",
             f"私聊收费：{私聊收费}",
             f"每日免费额度：{每日免费额度} 次",
-            f"番茄OIAPI key：{格式化已配置(bool(str(读取配置字段(配置, '番茄小说key') or '').strip()))}",
+            f"番茄接口配置：{格式化已配置(bool(str(读取配置字段(配置, '番茄小说key') or '').strip()))}",
             f"数据库：{数据库状态}",
             f"群cookie：{群文件Cookie状态}",
             f"UC网盘：{UC状态}",
@@ -151,28 +148,6 @@ def 读取小说功能状态(配置: Any) -> dict[str, bool]:
             默认值,
         )
     return 状态
-
-
-def 读取当前番茄API(配置: Any) -> str:
-    当前接口 = 安全读取(
-        "当前番茄API",
-        lambda: 读取运行状态值(配置, 番茄API状态命名空间, 番茄API状态键, "OIAPI"),
-        "OIAPI",
-    )
-    return 规范化番茄API(当前接口)
-
-
-def 规范化番茄API(值: Any) -> str:
-    文本 = str(值 or "").strip().lower()
-    if 文本 in ("y6api", "y6", "5"):
-        return "Y6api"
-    if 文本 in ("聚合api", "4"):
-        return "聚合API"
-    if 文本 in ("崩溃api", "崩溃", "bengkuiapi", "bengkui", "crashapi", "crash", "3"):
-        return "崩溃API"
-    if 文本 in ("析api", "xiapi", "xapi", "析", "xi", "2"):
-        return "析API"
-    return "OIAPI"
 
 
 def 读取配置字段(配置: Any, 字段名: str, 分类列表: tuple[str, ...] = ("basic_settings", "基础配置")) -> Any:
