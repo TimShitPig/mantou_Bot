@@ -20,7 +20,7 @@ except Exception as 异常:
 QQ阅读详情地址 = "https://h5.reader.qq.com/9/intro"
 QQ阅读目录地址 = "https://ubook.reader.qq.com/api/book/chapter-list"
 QQ阅读正文地址 = "http://154.12.91.167:7000/content"
-QQ阅读正文批量章节数 = 50
+QQ阅读正文批量章节数 = 30
 QQ阅读正文并发数 = 10
 QQ阅读正文最大请求次数 = 3
 QQ阅读正文重试基础等待秒数 = 1
