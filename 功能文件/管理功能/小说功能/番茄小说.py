@@ -1,7 +1,7 @@
 """番茄小说下载功能。
 
-本模块仅处理小说链接识别、书籍详情、目录和正文下载、TXT 生成及文件发送。
-不包含上游源码的搜索、音频、视频、新闻、媒体下载、调试或命令行功能。
+仅保留番茄小说 TXT 下载和 QQ 文件发送，正文下载使用番茄畅听接口。
+不包含音频、媒体、搜索、命令行调试和抓包请求逻辑。
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-import zlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -31,6 +30,16 @@ try:
     import aiohttp
 except Exception:
     aiohttp = None
+
+try:
+    from Crypto.Cipher import AES as PYCRYPTODOME_AES
+except Exception:
+    PYCRYPTODOME_AES = None
+
+try:
+    import gmpy2
+except Exception:
+    gmpy2 = None
 
 try:
     from astrbot.api import logger
@@ -61,6 +70,7 @@ NOVELFM_REQUEST_BOOK_ID = os.environ.get(
 ).strip() or "7320841644486446142"
 
 
+# ===== 番茄畅听签名算法 =====
 SIGN_KEY32_3040 = bytes.fromhex("4e54b707757a4c15473ba0ba01740ed1b3eac6088de0441fbaf79d28dee33ddf")
 
 def b64(data: bytes) -> str:
@@ -103,13 +113,17 @@ def proto_key(field_no: int, wire_type: int) -> bytes:
 def proto_field_varint(field_no: int, value: int) -> bytes:
     return proto_key(field_no, 0) + proto_varint(value)
 
-def proto_field_bytes(field_no: int, data: bytes | str) -> bytes:
-    if isinstance(data, str):
-        data = data.encode()
-    return proto_key(field_no, 2) + proto_varint(len(data)) + data
+def proto_field_bytes(field_no: int, value: bytes | str) -> bytes:
+    if isinstance(value, str):
+        value = value.encode()
+    return proto_key(field_no, 2) + proto_varint(len(value)) + value
 
-def proto_field_fixed32(field_no: int, value: int) -> bytes:
-    return proto_key(field_no, 5) + u32le(value)
+
+def proto_field_fixed32(field_no: int, value: int | bytes) -> bytes:
+    raw = value if isinstance(value, bytes) else int(value).to_bytes(4, "little")
+    return proto_key(field_no, 5) + raw
+
+
 
 IV = [
     0x7380166F, 0x4914B2B9, 0x172442D7, 0xDA8A0600,
@@ -170,50 +184,7 @@ def x_argus(khronos: int | None = None) -> str:
         khronos = int(time.time())
     return b64(u32le(khronos))
 
-def _ror64(value: int, count: int) -> int:
-    value &= 0xFFFFFFFFFFFFFFFF
-    count &= 63
-    return ((value >> count) | (value << (64 - count))) & 0xFFFFFFFFFFFFFFFF
 
-def x_helios_3040(khronos: int | None = None, rand32: int | None = None) -> str:
-    """纯 Python 生成番茄畅听 3040 的 X-Helios。
-
-    格式：
-      base64( uint32_le(rand32) || encrypt(pkcs7(f"{khronos}-1532254240-3040")) )
-
-    注意这里的 license/version 常量是 1532254240，不是外部项目里常见的
-    1588093228/1967；已用 out/medusa_oracle_batch.jsonl 的 X-Helios 样本验证。
-    """
-    if khronos is None:
-        khronos = int(time.time())
-    if rand32 is None:
-        rand32 = int.from_bytes(hashlib.sha256(f"{time.time_ns()}".encode()).digest()[:4], "little")
-    rand32 &= 0xFFFFFFFF
-
-    md5 = hashlib.md5(u32le(rand32) + b"3040").digest()
-    hex_table = b"0123456789abcdef"
-    keybuf = bytearray(32)
-    for i, v in enumerate(md5):
-        keybuf[2 * i] = hex_table[v >> 4]
-        keybuf[2 * i + 1] = hex_table[v & 0x0F]
-
-    key_words = [int.from_bytes(keybuf[i:i + 8], "little") for i in range(0, 32, 8)]
-    hash_table = [key_words[0]]
-    b0, b8 = key_words[0], key_words[1]
-    queue = key_words[2:]
-    for i in range(0x22):
-        x = ((_ror64(b8, 8) + b0) ^ i) & 0xFFFFFFFFFFFFFFFF
-        queue.append(x)
-        x = (x ^ _ror64(b0, 61)) & 0xFFFFFFFFFFFFFFFF
-        hash_table.append(x)
-        b0 = x
-        b8 = queue.pop(0)
-
-    raw = f"{int(khronos)}-1532254240-3040".encode("ascii")
-    pad = 16 - (len(raw) % 16)
-    raw += bytes([pad]) * pad
-    enc = b"".join(_helios_encrypt_block(hash_table, raw[i:i + 16]) for i in range(0, len(raw), 16))
-    return b64(u32le(rand32) + enc)
 
 def reverse_xor(reverse_source: bytes, key4: bytes) -> bytes:
     """first_intermediate = reverse(source) xor repeating key4."""
@@ -896,9 +867,6 @@ def medusa3040_raw_legacy_code0() -> bytes:
 def x_medusa_3040_full_mget_legacy_code0() -> str:
     return b64(medusa3040_raw_legacy_code0())
 
-def proto_field_bytes(field: int, value: bytes | str) -> bytes:
-    data = value.encode("utf-8") if isinstance(value, str) else bytes(value)
-    return proto_key(field, 2) + proto_varint(len(data)) + data
 
 def proto_field_fixed32(field: int, value: int | bytes) -> bytes:
     if isinstance(value, bytes):
@@ -1059,7 +1027,6 @@ def medusa_reverse_key4_from_high2(high2: bytes) -> bytes:
 def medusa_reverse_key4_from_d71bc_rand(d71bc_rand: int) -> bytes:
     return medusa_reverse_key4_from_high2(u32le(d71bc_rand)[2:])
 
-gmpy2 = None
 
 orjson = None
 
@@ -1077,38 +1044,8 @@ FULL_MGET_SIGNED_URL = (
     "&rom_version=PQ3A.190605.02261134+release-keys&klink_egdi=AAK_uq0vE8PrXz2HmNU9hVK7t9H-AFvbvPlsZSPYH3E9haMKxm0o-Yqm"
 )
 
-FULL_MGET_SIGN_HEADERS = {
-    "X-Helios": "74q/CeIh3yZcs7mXt06AivkFq2H/qg7fQja9GyQETk+xuNLD",
-    "X-Medusa": "D4pJaifBBqBD/0QpNT/nRijnhTwsdgABSIpiytJLgdYCGMyFOl5YR5nNZujZ1SK8VdWJs4baDoLOlb0xXRI63CF0TmFEFa15/YZan7x4TVd4+ztYLbH3Vj772u+4ngyUU4fNbfXzij0E38b7dOR4uC8Fnc20Bv5hCtpU27Va6DqwKpYMEhCEBg0HT8UpctRHGyyJAwOjfp/xjhaLRrGnQ9iDfqWt5TwczSwPzdc80wt/X9YB6x2zHQUqhg4sTNTezhJlN8Vb5QTSnd3MvbFbb0/pWz/0Xt/SVJ7GpdEJFs+9wZbpiV3nRU4ehGOA632saoYgHAozSaJj6MRQblEVKnGg/GdynuFNs8426q4X9BQIoKJqNE3XZYP3b9mF5diILlPab9fdGj5+ViQsFOia22zM8D07hp2zlwB/Nqq/GjLLpJyvygpNhP+I7D4DhxFJXToGuQ214++G6cP4GjKnox9h+zir8XVBIRiEEPYrDkgwLwrh/yM5bOgufPqdogP72rBqupH93bRQyCwOhGChtU1xX7LhLTSpQ3MRQscSs9MCeOdv9arNsCZPEh5RpCuyJkmr9QguYWnztWGrZKKNkoMV4LcjJMgt241ZzgtHMFeoxKg6FxIkYJwEKrrpGSrPlv3n90jvTiFbUmCQnBSlx3kczl5wVY2i+AUuUhEuQJpiXAHyxcSIrM1LGnRVVkjOcn9sSAmk2yjE8k4izKcAkR1/w9Wgy07lLJcP9iU22pTIi4IMmQmyO9cUVo8mHnAEpDL5P3ipAmcSEf2AgGS1Eo9l/PeVSZoZMothCJv0EoP3K2H/1gEC4xXoiueDjQdpBsXBBrT1AcFKL1VjNIkmNXrjcLoKoTpQeAtWrfEpXt0mBO5yAPn+nsJsR3LwhtLaElC7TYlfrJpchw6UnFudE5wCbGuklPfn0WIqAY4FiqU+NcJF+4gPFH72DBCaSi1E2qtCJ/iiRmO5IhNX0iFON+VcJKywmKbRT/Dg6l6rgyv6ryJAvUYjzYiCmtwSFIRxUwfEHmf2rgos1BkfmZnzQNm8Brdipjx3RhK1SMwN0Edb/ceOnVdmxOejBDjw7K5MKa1EEfG9Emc5B6dvWX5aex6rEtQhTuuOCioOzmNZ6ZXU4jXeQN/W/lZl9SSs+bVi2U8qEcZR0jKWXWFDlpUSfL9SaYz+mnkjycJYg0Xx/bB2l9e3b8cpMihgIiu1jialEu3MvJg4//hPGP/4zlj2Fg==",
-}
 
-APP656_CAPTURED_SIGNED_URL = (
-    "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a"
-    "&_rticket=1783813255257&cdid=728a1bfa-fc3c-46af-922b-8d7c8f8c9960&channel=54157680a&aid=3040"
-    "&app_name=novel_fm&version_code=656&version_name=6.5.6.32&manifest_version_code=656&update_version_code=65632"
-    "&resolution=1440*2560&dpi=640&device_type=SM-G9750&device_brand=samsung&language=zh&os_api=28&os_version=9"
-    "&ac=wifi&device_id=357773596191434&iid=1659597569151059&comment_tag_c=5&vip_state=0&host_abi=arm64-v8a"
-    "&category_style=1&need_personal_recommend=1"
-    "&ab_sdk_version=90111254%2C90975474%2C91016290%2C16797554%2C91847784%2C91986083%2C90126074%2C91068610"
-    "%2C91986082%2C90118821%2C91008840%2C91281044%2C90128754%2C92120672%2C90110758%2C91273322%2C90174492"
-    "%2C5711287%2C17225371%2C15867846%2C90098780%2C92100130%2C91347266%2C90952506%2C91048633%2C91247455"
-    "%2C90614667%2C90116954%2C91801013%2C91763052%2C91763051%2C91763050%2C91619419%2C91787063%2C91832703"
-    "%2C90661280%2C91633046%2C90941890%2C91766414%2C90609513%2C92319500"
-    "&rom_version=PQ3A.190605.02261134+release-keys&klink_egdi=AAL35IhN0D-vvyhlwtGKU6aYry-lUeNh6mJjzSGrk87L-phNqjNKObWV"
-)
 
-APP656_CAPTURED_SIGN_HEADERS = {
-    # 6.5.6.32 真机/模拟器 App 经 Reqable 解密抓到的当前 full/mget 签名族。
-    # 已复测：请求体中的 item_ids/book_id/key 可替换，1/50/175 章均 code=0。
-    "X-SS-STUB": "",
-    "X-SS-Req-Ticket": "1783813255387",
-    "X-Ladon": "GWfzYA==",
-    "X-Khronos": "1783813251",
-    "X-Argus": "g9RSag==",
-    "X-Gorgon": "840480f44081fd9057f0f9b62717a8efe9dd5a4074aedb809caa",
-    "X-Helios": "nW7dKa/8xN3fEOoauuooFyBFgntrHsn6/fQ+Jw9Vmll6oc0Z",
-    "X-Medusa": "htRSaq6fHaDKoV8pvGH8RqG5njwBJQABqsqXqgocAe4CGK8S2Rvxh7VdJufmMrpjIogVUHR13gnhqLOszLNzTSIWrPjluYnRwmRKe/rDpXJlbwmSWiC963cLDwcEIm76IywS12SJ0EvN5MkOlhBsKKtDTpIvFBMKEpxjePNDTqc3BDGwdSQVr6e7MVYGAVuwDTNeH6X7/+Fwtefzcrk3zoYV8uS4p9IIrmcpKYSJyeGP/IeguosXO7TAFgNehxLmbQjrPNEWYyy5+kEzdXDtPbr57FnMuXQMBJQe5QlxTzterfFoThiuVFCiHPCzs06GmZ7oAIV3hwLcEGt7tZOsMi5TEQRS/uSFXOQ1S0C5rzJPtLBWF7kmPoJlGU2SDjAObMxKy6Uww7PgMBPW7m6vBd3vFsAkTSrui37NgnYVXpUNF7+dOd+kAvFNyRJqRanyiYq6cJPbxxIJgB9qSQa+uN7/uJ6VbcQimvJKOJLRjhpdjk+StsnF8uS3uD4L2Od682mc2DOiiWHRVXKYh1zNPmeecZYw1nnKYNntq0E/Ih+ZpwX+DZ4GLtL6imBfDxzk/o9ENfKw2xkj/1NI+rRBRPEHGvOEy+R/4i6MWaXOU+ciAjYOSNN0Np6mei+WzD5e39XadCcthW4Z1fcLtsRRJQcHQLN8Qlt7u3evvyuM9HhAZskKCIaMzFBuV5C+ZbfMm2yzLCFPyINg0oQOPw2xmzjcaOqO8rURaVSPTLDFBFEHW3cSnkhD8hio+sfCTNUxepuzYjRdttckhWeTtSkh89RiOXJLMHYVk2m5cffdXFnNZC65I9TpTvXBLKjsFGZUJ4CwMzRakqs+pQe0m9Py1hrBnREYcWBDXjlAn6JQIYWUxx2eGW18h/wmYTC42W0KU6lAz9rVzSiaQNCe9n2ZhyNP1+2SBUOcdVsTWfXTnCQ2dDPjVaKUHZg662hTCwHPGNwsDAlFEYjocTkRdVie8sJaUhFh6OsIOjhrckvUPG3KMiD2QMH1paTQmDqO0j8GYI87GMKSZhkv4fMiXnDv//GUnxYeMq2bNjO4HsVBw7k1wTakAjvS9+7eMbKpfNl8PMlLhlOnFYhIBkpCebogmygowCwmaZ+OEZD/nPRv6Ar/A86vtl/u+ryTvFukmMiDoGCfylNMetog5T6w5khiaEo77jZ7VgPqSVnxDLVwf2jRlQLIgbO166Po79n2e/agnzoU7CbZ0l409Tj7ZcLBpN1L2I529SvlXntTlD+A5te/Xv/5v15+uchv",
-}
 
 CAPTURED_CODE0_SIGNED_URL = (
     "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a"
@@ -1123,10 +1060,6 @@ CAPTURED_CODE0_SIGNED_URL = (
     "&rom_version=PQ3A.190605.02261134+release-keys"
 )
 
-CAPTURED_CODE0_SIGN_HEADERS = {
-    "X-Helios": "DBTGZE7sXhw4eks4fA20yw3N9OR5HfbMr70FqlazlMF3tCvx",
-    "X-Medusa": "EzYIajt9R6BfQwUpKYOmRjRbxDz2EQABOYo3dgd/gbsGGMp+hrc1ghZj0NktdzsJXKmmgDJ7+fxV9zNX7ikEKrUFE24hGlJ3pzzcPfNX32/veZlA7xfUm+Iu1ZeoloZokQTeB1l9AgUWuCRGH3lZkNWZp2+H0te5zUv3suF6CRJVmiBna1qzYwuP/NtgJZXE3ayC62jOqBeAq2Cwx1PKkxkRaoXCLUUqtSQ0w69YSIbCeTSTnAW5ZT77yyeSoqd+t6ASCr99P6HiAoIGayp2R7e4ZKQfEzXipwPq1zzoVyzCLtRfKsz0OCT4nddQXB8Hxd1XIg9OeOd1j1++9mcijtTOpg4+t5C9gL3Zr5zlhnByph+pCe82/nnDDh31bIV8SXlqHfCB4030JnJRZTNn8b8Y/jDRb7QEd26j8SxieHwp+KONwuJoVNEFo3vMu0gH2qpCaANg54gmxjrQX9t7W+UKoN8EdWErj0OmUAA5BETbAbebAJLmNdelu7+SCTEhuLkFf3/AlM2Isf64gq6gvhJVruqZIsYVFQ0b7qJrR3AhAxPW7Khd+cuLgsib7kYvNcgJcEu05FUHKaCttCJYTLUFmOcdwtGPheHgSIvyPrlnmLWPiHE7Obaukg2nCuEUgrVOeNqTZpkZ/uYOuV4NT/D9w0tGVBzxFZvTmiAOiCND0pROnpAUHOoE0IL4tdxFnCN9Ha7d61TqvNSf+M6VkJbvMEgqF7S8r26oTwPFMDs7mUSYK1aSQI1avJ0HaSnejwoOOGWNy/W61FVFIuHNo3N3emKKUtAtAaniZDtOMsokFhs//BxPutluY7VjOCmMCqIYBje18HLOusppIA6shPdVQrELKZqg9UTlj4wYT7+IIDUOm9h+TwojWYcpu4/eYxl91uDRDd/vDPs34sVXen6lRxbc0aJS/meglIS5Qt/G2n/vHYfz9IDzSpU7p+q2reyUj3HU5UxnnPw8CCXPNdQggmNwgsb2oSVBcFq6Z46PULoCQ9IBa+r+uG8ps3IvqdzCZWDwJA5o5grOOGZ7nOoNH3JmT+/ZMYl7dQZQaJmALwl9x0C5jMwlV/wEuVIsWWHjldfIB/u1aoZZ8CPoqsA/45QieeITY3QzSWU6DBLXVnh+f1IhkHVSobew7fWVecYBknIk80I8s0o8tbXGJym8sXr4GWh7OEJNKmtpmLiYisc7EYHTPh+H9z7zIpG1SBoQMaj6SYhEPyXlYslPIL8iXAr1Dv/9f7L//f7yUB8=",
-}
 
 APP_COMMON_HEADERS = {
     "User-Agent": DEFAULT_UA,
@@ -1145,185 +1078,43 @@ DEFAULT_QUERY = {
     "comment_tag_c": "5", "vip_state": "0", "host_abi": "arm64-v8a", "category_style": "1", "need_personal_recommend": "1",
 }
 
+# ===== 番茄畅听正文加密参数 =====
 DHP = int("ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff", 16)
 
 DHG = 2
 
 DHAES_TOKEN = base64.b64decode("rCXGfd2POMGzeiNIgo4iLg==")
 
-s_box = [
-0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16]
+# ===== AES/CBC 正文解密 =====
 
-inv_s_box = [0]*256
+def _pkcs7_pad(data: bytes) -> bytes:
+    padding = 16 - len(data) % 16
+    return data + bytes([padding]) * padding
 
-for i,v in enumerate(s_box): inv_s_box[v]=i
 
-r_con = [0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
+def _pkcs7_unpad(data: bytes) -> bytes:
+    padding = data[-1]
+    if padding < 1 or padding > 16 or data[-padding:] != bytes([padding]) * padding:
+        raise ValueError("无效的 PKCS7 填充")
+    return data[:-padding]
 
-def _xtime(a:int)->int: return (((a<<1)^0x1b)&0xff) if (a&0x80) else (a<<1)
 
-def _gmul(a:int,b:int)->int:
-    p=0
-    for _ in range(8):
-        if b&1: p^=a
-        hi=a&0x80; a=(a<<1)&0xff
-        if hi: a^=0x1b
-        b>>=1
-    return p
+def aes_cbc_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    if PYCRYPTODOME_AES is None:
+        raise RuntimeError("缺少 PyCryptodome 依赖，无法加密正文请求")
+    return PYCRYPTODOME_AES.new(key, PYCRYPTODOME_AES.MODE_CBC, iv).encrypt(_pkcs7_pad(data))
 
-def _bytes2matrix(text:bytes): return [list(text[i:i+4]) for i in range(0,len(text),4)]
 
-def _matrix2bytes(matrix): return bytes(sum(matrix, []))
+def aes_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    if PYCRYPTODOME_AES is None:
+        raise RuntimeError("缺少 PyCryptodome 依赖，无法解密正文")
+    plaintext = PYCRYPTODOME_AES.new(key, PYCRYPTODOME_AES.MODE_CBC, iv).decrypt(data)
+    return _pkcs7_unpad(plaintext)
 
-def _xor_words(a,b): return [i^j for i,j in zip(a,b)]
 
-def _expand_key(master_key:bytes):
-    key_columns=_bytes2matrix(master_key); iteration_size=len(master_key)//4
-    n_rounds={4:10,6:12,8:14}[iteration_size]
-    i=1
-    while len(key_columns)<(n_rounds+1)*4:
-        word=list(key_columns[-1])
-        if len(key_columns)%iteration_size==0:
-            word.append(word.pop(0)); word=[s_box[b] for b in word]; word[0]^=r_con[i]; i+=1
-        elif iteration_size==8 and len(key_columns)%iteration_size==4:
-            word=[s_box[b] for b in word]
-        word=_xor_words(word,key_columns[-iteration_size]); key_columns.append(word)
-    return [key_columns[4*i:4*(i+1)] for i in range(len(key_columns)//4)]
-
-def _add_round_key(s,k):
-    for i in range(4):
-        for j in range(4): s[i][j]^=k[i][j]
-
-def _sub_bytes(s):
-    for i in range(4):
-        for j in range(4): s[i][j]=s_box[s[i][j]]
-
-def _inv_sub_bytes(s):
-    for i in range(4):
-        for j in range(4): s[i][j]=inv_s_box[s[i][j]]
-
-def _shift_rows(s):
-    s[0][1],s[1][1],s[2][1],s[3][1]=s[1][1],s[2][1],s[3][1],s[0][1]
-    s[0][2],s[1][2],s[2][2],s[3][2]=s[2][2],s[3][2],s[0][2],s[1][2]
-    s[0][3],s[1][3],s[2][3],s[3][3]=s[3][3],s[0][3],s[1][3],s[2][3]
-
-def _inv_shift_rows(s):
-    s[0][1],s[1][1],s[2][1],s[3][1]=s[3][1],s[0][1],s[1][1],s[2][1]
-    s[0][2],s[1][2],s[2][2],s[3][2]=s[2][2],s[3][2],s[0][2],s[1][2]
-    s[0][3],s[1][3],s[2][3],s[3][3]=s[1][3],s[2][3],s[3][3],s[0][3]
-
-def _mix_single_column(a):
-    t=a[0]^a[1]^a[2]^a[3]; u=a[0]
-    a[0]^=t^_xtime(a[0]^a[1]); a[1]^=t^_xtime(a[1]^a[2]); a[2]^=t^_xtime(a[2]^a[3]); a[3]^=t^_xtime(a[3]^u)
-
-def _mix_columns(s):
-    for i in range(4): _mix_single_column(s[i])
-
-def _inv_mix_columns(s):
-    for i in range(4):
-        a=list(s[i]); s[i][0]=_gmul(a[0],14)^_gmul(a[1],11)^_gmul(a[2],13)^_gmul(a[3],9); s[i][1]=_gmul(a[0],9)^_gmul(a[1],14)^_gmul(a[2],11)^_gmul(a[3],13); s[i][2]=_gmul(a[0],13)^_gmul(a[1],9)^_gmul(a[2],14)^_gmul(a[3],11); s[i][3]=_gmul(a[0],11)^_gmul(a[1],13)^_gmul(a[2],9)^_gmul(a[3],14)
-
-def _aes_encrypt_block(block:bytes,key:bytes)->bytes:
-    round_keys=_expand_key(key); n_rounds=len(round_keys)-1; state=_bytes2matrix(block)
-    _add_round_key(state,round_keys[0])
-    for i in range(1,n_rounds): _sub_bytes(state); _shift_rows(state); _mix_columns(state); _add_round_key(state,round_keys[i])
-    _sub_bytes(state); _shift_rows(state); _add_round_key(state,round_keys[-1]); return _matrix2bytes(state)
-
-def _aes_decrypt_block(block:bytes,key:bytes)->bytes:
-    round_keys=_expand_key(key); n_rounds=len(round_keys)-1; state=_bytes2matrix(block)
-    _add_round_key(state,round_keys[-1]); _inv_shift_rows(state); _inv_sub_bytes(state)
-    for i in range(n_rounds-1,0,-1): _add_round_key(state,round_keys[i]); _inv_mix_columns(state); _inv_shift_rows(state); _inv_sub_bytes(state)
-    _add_round_key(state,round_keys[0]); return _matrix2bytes(state)
-
-def _pkcs7_pad(data:bytes)->bytes: n=16-len(data)%16; return data+bytes([n])*n
-
-def _pkcs7_unpad(data:bytes)->bytes:
-    n=data[-1]
-    if n<1 or n>16 or data[-n:]!=bytes([n])*n: raise ValueError('bad pkcs7')
-    return data[:-n]
-
-def aes_cbc_encrypt(data:bytes,key:bytes,iv:bytes)->bytes:
-    data=_pkcs7_pad(data); out=[]; prev=iv
-    for i in range(0,len(data),16):
-        blk=bytes(a^b for a,b in zip(data[i:i+16],prev)); enc=_aes_encrypt_block(blk,key); out.append(enc); prev=enc
-    return b''.join(out)
-
-def aes_cbc_decrypt(data:bytes,key:bytes,iv:bytes)->bytes:
-    out=[]; prev=iv
-    for i in range(0,len(data),16):
-        blk=data[i:i+16]; dec=_aes_decrypt_block(blk,key); out.append(bytes(a^b for a,b in zip(dec,prev))); prev=blk
-    return _pkcs7_unpad(b''.join(out))
-
-_CNG_READY=False
-
-_CNG_ERROR:Optional[str]=None
-
-_CNG_BCRYPT=None
-
-_CNG_ALG=None
-
-_CNG_OBJLEN=0
-
-def _cng_init()->bool:
-    """Windows bcrypt.dll AES-CBC 解密加速；失败时自动回退纯 Python AES。"""
-    global _CNG_READY,_CNG_ERROR,_CNG_BCRYPT,_CNG_ALG,_CNG_OBJLEN
-    if _CNG_READY:
-        return True
-    if _CNG_ERROR is not None:
-        return False
-    if os.name!='nt' or os.environ.get('FANQIE_DISABLE_CNG'):
-        _CNG_ERROR='disabled'
-        return False
-    try:
-        import ctypes
-        import ctypes.wintypes as wt
-        bcrypt=ctypes.WinDLL('bcrypt')
-        alg=wt.HANDLE()
-        def w(s:str):
-            return ctypes.create_unicode_buffer(s)
-        def check(st:int, name:str):
-            if st < 0:
-                raise OSError(f'{name} NTSTATUS 0x{st & 0xffffffff:08x}')
-        check(bcrypt.BCryptOpenAlgorithmProvider(ctypes.byref(alg), w('AES'), None, 0), 'BCryptOpenAlgorithmProvider')
-        mode=w('ChainingModeCBC')
-        check(bcrypt.BCryptSetProperty(alg, w('ChainingMode'), ctypes.cast(mode, ctypes.POINTER(ctypes.c_ubyte)), (len('ChainingModeCBC')+1)*2, 0), 'BCryptSetProperty')
-        cb=wt.ULONG(0); out=(ctypes.c_ubyte*4)()
-        check(bcrypt.BCryptGetProperty(alg, w('ObjectLength'), out, 4, ctypes.byref(cb), 0), 'BCryptGetProperty')
-        _CNG_BCRYPT=bcrypt; _CNG_ALG=alg; _CNG_OBJLEN=int.from_bytes(bytes(out),'little'); _CNG_READY=True
-        return True
-    except Exception as e:
-        _CNG_ERROR=str(e)
-        return False
-
-def aes_cbc_decrypt_fast(data:bytes,key:bytes,iv:bytes)->bytes:
-    if not _cng_init():
-        return aes_cbc_decrypt(data,key,iv)
-    import ctypes
-    import ctypes.wintypes as wt
-    bcrypt=_CNG_BCRYPT; alg=_CNG_ALG; objlen=_CNG_OBJLEN
-    BCRYPT_BLOCK_PADDING=0x00000001
-    kh=wt.HANDLE()
-    keyobj=(ctypes.c_ubyte*objlen)()
-    keybuf=(ctypes.c_ubyte*len(key)).from_buffer_copy(key)
-    inbuf=(ctypes.c_ubyte*len(data)).from_buffer_copy(data)
-    ivbuf=(ctypes.c_ubyte*len(iv)).from_buffer_copy(iv)
-    outlen=wt.ULONG(0)
-    st=bcrypt.BCryptGenerateSymmetricKey(alg, ctypes.byref(kh), keyobj, objlen, keybuf, len(key), 0)
-    if st < 0:
-        return aes_cbc_decrypt(data,key,iv)
-    try:
-        st=bcrypt.BCryptDecrypt(kh, inbuf, len(data), None, ivbuf, len(iv), None, 0, ctypes.byref(outlen), BCRYPT_BLOCK_PADDING)
-        if st < 0:
-            return aes_cbc_decrypt(data,key,iv)
-        out=(ctypes.c_ubyte*outlen.value)()
-        ivbuf2=(ctypes.c_ubyte*len(iv)).from_buffer_copy(iv)
-        st=bcrypt.BCryptDecrypt(kh, inbuf, len(data), None, ivbuf2, len(iv), out, outlen.value, ctypes.byref(outlen), BCRYPT_BLOCK_PADDING)
-        if st < 0:
-            return aes_cbc_decrypt(data,key,iv)
-        return bytes(out[:outlen.value])
-    finally:
-        bcrypt.BCryptDestroyKey(kh)
-
+def aes_cbc_decrypt_fast(data: bytes, key: bytes, iv: bytes) -> bytes:
+    """使用 PyCryptodome 执行 AES/CBC 正文解密。"""
+    return aes_cbc_decrypt(data, key, iv)
 def java_bigint_bytes(n:int)->bytes:
     if n==0: return b'\x00'
     b=n.to_bytes((n.bit_length()+7)//8,'big')
@@ -1364,6 +1155,7 @@ def decrypt_content(content_b64:str, server_y_b64:str, client_x:int)->str:
     plaintext=aes_cbc_decrypt_fast(ciphertext,aes_key,iv)
     return plaintext[16:].decode('utf-8','replace')
 
+# ===== HTTP/2 正文请求 =====
 FULL_MGET_TRANSPORT=os.environ.get('FANQIE_FULL_MGET_TRANSPORT','auto').lower()
 
 if FULL_MGET_TRANSPORT not in {'auto','http1','http2'}:
@@ -1763,24 +1555,16 @@ def make_url(path:str, query:Dict[str,str], *, host:str=API_HOST)->str:
         path='/'+path
     return host+path+'?'+urllib.parse.urlencode(q)
 
-def make_app_headers(url:str, body_bytes:bytes=b'', sign_mode:str='auto')->Dict[str,str]:
-    """Build pure-Python App JSON headers for novelfm RPC endpoints."""
-    mode=(sign_mode or 'auto').lower()
-    headers=dict(APP_COMMON_HEADERS)
-    if mode in {'auto','pure3040'}:
-        # accepted881 is the currently verified pure-Python profile.
-        # Keep khronos fixed until latest dynamic fields are fully recovered.
-        headers.update(build_pure3040_headers(url, body_bytes, khronos=1_783_204_357))
-    elif mode=='legacy3040':
+def make_app_headers(url: str, body_bytes: bytes = b"", sign_mode: str = "auto") -> Dict[str, str]:
+    """构造番茄畅听 App 接口的纯 Python 签名请求头。"""
+    mode = (sign_mode or "auto").lower()
+    if mode not in {"auto", "pure3040", "legacy3040"}:
+        raise ValueError("签名模式必须为 auto、pure3040 或 legacy3040")
+    headers = dict(APP_COMMON_HEADERS)
+    if mode == "legacy3040":
         headers.update(build_pure3040_legacy_headers(url, body_bytes))
-    elif mode=='fixed':
-        headers.update(FULL_MGET_SIGN_HEADERS)
-    elif mode in {'captured','appcaptured'}:
-        cap=load_captured_pool_request()
-        if cap:
-            headers.update(cap[1])
     else:
-        raise ValueError('sign_mode must be auto/fixed/pure3040/legacy3040/captured/appcaptured')
+        headers.update(build_pure3040_headers(url, body_bytes, khronos=1_783_204_357))
     return headers
 
 def signed_app_json(path:str, body:Any=None, query:Optional[Dict[str,str]]=None, *,
@@ -1930,63 +1714,24 @@ def build_pure3040_legacy_headers(url:str, body_bytes:bytes)->Dict[str,str]:
         "X-Medusa": x_medusa_3040_full_mget_legacy_code0(),
     }
 
-def load_captured_pool_requests(limit:int=8, *, include_legacy:bool=True)->List[Tuple[str,Dict[str,str]]]:
-    """返回内置已复测 code=0 的 App full/mget 头池；不读取外部文件。"""
-    out:List[Tuple[str,Dict[str,str]]]=[]
-    if APP656_CAPTURED_SIGNED_URL and APP656_CAPTURED_SIGN_HEADERS:
-        out.append((APP656_CAPTURED_SIGNED_URL, dict(APP656_CAPTURED_SIGN_HEADERS)))
-    if CAPTURED_CODE0_SIGNED_URL and CAPTURED_CODE0_SIGN_HEADERS:
-        if include_legacy:
-            out.append((CAPTURED_CODE0_SIGNED_URL, dict(CAPTURED_CODE0_SIGN_HEADERS)))
-    dedup=[]
-    seen=set()
-    for url,h in out:
-        key=(url,h.get('X-Medusa') or h.get('x-medusa') or '')
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append((url,h))
-        if len(dedup) >= limit:
-            break
-    return dedup
 
-def load_captured_pool_request()->Optional[Tuple[str,Dict[str,str]]]:
-    pool=load_captured_pool_requests(limit=1, include_legacy=False)
-    return pool[0] if pool else None
 
-def full_mget_request_options(body_bytes:bytes, sign_mode:str='auto')->List[Tuple[str,Dict[str,str],str]]:
-    mode=(sign_mode or 'auto').lower()
-    if mode not in {'auto','fixed','pure3040','legacy3040','captured','appcaptured'}:
-        raise ValueError('sign_mode 必须是 auto/fixed/pure3040/legacy3040/captured/appcaptured')
-    out:List[Tuple[str,Dict[str,str],str]]=[]
-    # auto 必须保持“纯 Python、零依赖”：只走本文件内生成的签名链路。
-    # App/抓包头仅在显式指定 appcaptured/captured 时用于调试，不参与默认路径。
-    if mode in {'auto','pure3040'}:
-        epoch_ms=int(time.time()*1000)
-        # Paired accepted881 timestamp.  Current891 can refresh khronos but is
-        # body-bound; accepted881 remains the downloader-safe pure Python path.
-        khronos=1_783_204_357
-        url=build_pure3040_656_url(epoch_ms)
-        headers={**APP_COMMON_HEADERS, **build_pure3040_headers(url,body_bytes,khronos=khronos)}
-        out.append(('pure3040',headers,url))
-    if mode in {'auto','legacy3040','pure3040'}:
-        url=CAPTURED_CODE0_SIGNED_URL
-        headers={**APP_COMMON_HEADERS, **build_pure3040_legacy_headers(url,body_bytes)}
-        out.append(('pure3040-legacy',headers,url))
-    if mode in {'appcaptured'}:
-        cap=load_captured_pool_request()
-        if cap:
-            url,captured_headers=cap
-            headers={**APP_COMMON_HEADERS, **captured_headers}
-            out.append(('app-captured656',headers,url))
-    if mode in {'captured'}:
-        for idx,(url,captured_headers) in enumerate(load_captured_pool_requests(limit=8, include_legacy=True),1):
-            headers={**APP_COMMON_HEADERS, **captured_headers}
-            out.append((f'captured#{idx}',headers,url))
-    if mode in {'fixed'}:
-        headers={**APP_COMMON_HEADERS, **FULL_MGET_SIGN_HEADERS}
-        out.append(('fixed',headers,FULL_MGET_SIGNED_URL))
-    return out
+def full_mget_request_options(body_bytes: bytes, sign_mode: str = "auto") -> List[Tuple[str, Dict[str, str], str]]:
+    """按签名模式生成正文接口请求候选项。"""
+    mode = (sign_mode or "auto").lower()
+    if mode not in {"auto", "pure3040", "legacy3040"}:
+        raise ValueError("签名模式必须为 auto、pure3040 或 legacy3040")
+
+    options: List[Tuple[str, Dict[str, str], str]] = []
+    if mode in {"auto", "pure3040"}:
+        url = build_pure3040_656_url(int(time.time() * 1000))
+        headers = {**APP_COMMON_HEADERS, **build_pure3040_headers(url, body_bytes, khronos=1_783_204_357)}
+        options.append(("畅听3040", headers, url))
+    if mode in {"auto", "legacy3040"}:
+        url = CAPTURED_CODE0_SIGNED_URL
+        headers = {**APP_COMMON_HEADERS, **build_pure3040_legacy_headers(url, body_bytes)}
+        options.append(("畅听旧签名", headers, url))
+    return options
 
 def html_to_text(doc:str)->str:
     doc=re.sub(r'(?is)<(script|style).*?>.*?</\1>','',doc)
@@ -2017,64 +1762,20 @@ def unique_item_ids(ids:Iterable[Any], book_id:str='')->List[str]:
         seen.add(s); out.append(s)
     return out
 
-def read_items_file(path:Path, book_id:str='')->List[str]:
-    """读取手动目录文件：支持一行一个 item_id、逗号/空白分隔、JSON list、chapters.json。"""
-    raw=path.read_text('utf-8').strip()
-    ids:List[Any]=[]
-    if not raw:
-        return []
-    try:
-        obj=json.loads(raw)
-        if isinstance(obj, list):
-            for x in obj:
-                if isinstance(x, dict):
-                    ids.append(x.get('item_id') or x.get('itemId') or x.get('id'))
-                else:
-                    ids.append(x)
-        elif isinstance(obj, dict):
-            arr=obj.get('item_ids') or obj.get('itemIds') or obj.get('chapters') or obj.get('data') or []
-            if isinstance(arr, dict):
-                arr=list(arr.values())
-            if isinstance(arr, list):
-                for x in arr:
-                    if isinstance(x, dict):
-                        ids.append(x.get('item_id') or x.get('itemId') or x.get('id'))
-                    else:
-                        ids.append(x)
-        elif isinstance(obj, (str, int)):
-            ids.append(obj)
-    except Exception:
-        ids=re.findall(r'\d{8,}', raw)
-    if not ids:
-        ids=re.findall(r'\d{8,}', raw)
-    # items-file 是用户/抓包明确提供的 item_id 列表；部分非书籍内容
-    # （例如头条/单条内容）会出现 item_id == book_id，不能在这里过滤掉。
-    return unique_item_ids(ids, '')
 
-def resolve_directory(book_id:str, source:str='app', items_file:Optional[Path]=None)->List[str]:
-    """只通过番茄畅听目录接口获取章节 item_id。"""
-    if source in ('file','auto') and items_file:
-        ids=read_items_file(items_file, book_id)
-        if ids:
-            return ids
-        if source=='file':
-            raise RuntimeError(f'items file has no usable item_id: {items_file}')
-    if source=='file':
-        raise RuntimeError('items file has no usable item_id')
-    if source not in ('app','auto'):
-        raise ValueError('目录只支持番茄畅听接口')
-
-    最后异常: Exception | None = None
-    for 版本 in (2,1):
+def resolve_directory(book_id: str) -> List[str]:
+    """通过番茄畅听目录接口获取章节 ID。"""
+    last_error: Exception | None = None
+    for version in (2, 1):
         try:
-            ids,_raw=app_directory_items(book_id,version=版本,sign_mode='auto')
-            if ids:
-                return ids
-        except Exception as 异常:
-            最后异常 = 异常
-    if 最后异常 is not None:
-        raise RuntimeError('番茄畅听目录接口请求失败') from 最后异常
-    raise RuntimeError('番茄畅听目录接口未返回章节')
+            item_ids, _response = app_directory_items(book_id, version=version, sign_mode="auto")
+            if item_ids:
+                return item_ids
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
+        raise RuntimeError("番茄畅听目录接口请求失败") from last_error
+    raise RuntimeError("番茄畅听目录接口未返回章节")
 
 def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mode:str='auto')->Tuple[List[str],Dict[str,Any]]:
     """Try App directory item_id endpoints and return raw response for comparison."""
@@ -2105,6 +1806,7 @@ def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mo
                         ids.append(it)
     return unique_item_ids(ids, book_id), data if isinstance(data,dict) else {'raw':data}
 
+# ===== 正文下载 =====
 def full_mget(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Tuple[Dict[str, Any], int]:
     """按章节 ID 批量请求正文，使用稳定的畅听请求上下文。"""
     client_x, request_key = make_encrypt_context()
@@ -2296,7 +1998,7 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
         logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={异常}")
 
     try:
-        item_ids = resolve_directory(书籍编号, "app", None)
+        item_ids = resolve_directory(书籍编号)
     except Exception as 异常:
         logger.warning(f"番茄畅听目录获取失败：book_id={书籍编号}, error={异常}")
         raise

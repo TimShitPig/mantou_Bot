@@ -1,3 +1,4 @@
 aiohttp
 pycryptodome
+gmpy2
 pymysql
