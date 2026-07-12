@@ -1065,11 +1065,7 @@ orjson = None
 
 API_HOST = "https://api5-sinfonlinec.novelfm.com"
 
-WEB_PAGE = "https://fanqienovel.com/page/{book_id}"
-
 DEFAULT_UA = "com.xs.fm/656 (Linux; U; Android 9; zh_CN; SM-S9260; Build/PQ3A.190605.02261134;tt-ok/3.12.13.17)"
-
-WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 
 FULL_MGET_SIGNED_URL = (
     "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a&_rticket=1783204359936"
@@ -1761,11 +1757,6 @@ def http_json_bytes(url:str, method='POST', headers:Optional[Dict[str,str]]=None
     if not raw: return {}
     return orjson.loads(raw) if orjson is not None else json.loads(raw.decode('utf-8','replace'))
 
-def http_text(url:str, headers:Optional[Dict[str,str]]=None, timeout=30, retries:int=3)->str:
-    req=urllib.request.Request(url,headers=headers or {},method='GET')
-    raw=_open_with_retries(req,timeout=timeout,retries=retries)
-    return raw.decode('utf-8','replace')
-
 def make_url(path:str, query:Dict[str,str], *, host:str=API_HOST)->str:
     q=dict(DEFAULT_QUERY); q['_rticket']=str(int(time.time()*1000)); q.update(query)
     if not path.startswith('/'):
@@ -2060,38 +2051,30 @@ def read_items_file(path:Path, book_id:str='')->List[str]:
     # （例如头条/单条内容）会出现 item_id == book_id，不能在这里过滤掉。
     return unique_item_ids(ids, '')
 
-def web_directory(book_id:str)->List[str]:
-    page=http_text(WEB_PAGE.format(book_id=book_id),headers={'User-Agent':WEB_UA,'Accept-Encoding':'gzip'})
-    ids=re.findall(r'"itemId"\s*:\s*"(\d+)"',page)
-    if not ids:
-        ids=re.findall(r'/reader/(\d+)',page)
-    # 去重但保序，过滤 book_id 自身
-    out=unique_item_ids(ids, book_id)
-    if not out: raise RuntimeError('未从公开目录页提取到 itemId')
-    return out
-
-def resolve_directory(book_id:str, source:str='auto', items_file:Optional[Path]=None)->List[str]:
-    """Resolve chapter item_id list from file, App directory, or web directory."""
+def resolve_directory(book_id:str, source:str='app', items_file:Optional[Path]=None)->List[str]:
+    """只通过番茄畅听目录接口获取章节 item_id。"""
     if source in ('file','auto') and items_file:
         ids=read_items_file(items_file, book_id)
         if ids:
             return ids
         if source=='file':
             raise RuntimeError(f'items file has no usable item_id: {items_file}')
-    if source in ('app','auto'):
-        for ver in (2,1):
-            try:
-                ids,_raw=app_directory_items(book_id,version=ver,sign_mode='auto')
-                if ids:
-                    return ids
-            except Exception:
-                if source=='app' and ver==1:
-                    raise
-        if source=='app':
-            raise RuntimeError('App directory endpoint returned no item_id')
-    if source in ('web','auto'):
-        return web_directory(book_id)
-    raise RuntimeError('no directory source available; use --directory-source app/web/file or --items-file')
+    if source=='file':
+        raise RuntimeError('items file has no usable item_id')
+    if source not in ('app','auto'):
+        raise ValueError('目录只支持番茄畅听接口')
+
+    最后异常: Exception | None = None
+    for 版本 in (2,1):
+        try:
+            ids,_raw=app_directory_items(book_id,version=版本,sign_mode='auto')
+            if ids:
+                return ids
+        except Exception as 异常:
+            最后异常 = 异常
+    if 最后异常 is not None:
+        raise RuntimeError('番茄畅听目录接口请求失败') from 最后异常
+    raise RuntimeError('番茄畅听目录接口未返回章节')
 
 def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mode:str='auto')->Tuple[List[str],Dict[str,Any]]:
     """Try App directory item_id endpoints and return raw response for comparison."""
@@ -2313,10 +2296,10 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
         logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={异常}")
 
     try:
-        item_ids = resolve_directory(书籍编号, "web", None)
-    except Exception as 网页异常:
-        logger.warning(f"番茄小说网页目录获取失败，改用App目录：book_id={书籍编号}, error={网页异常}")
         item_ids = resolve_directory(书籍编号, "app", None)
+    except Exception as 异常:
+        logger.warning(f"番茄畅听目录获取失败：book_id={书籍编号}, error={异常}")
+        raise
 
     目录 = [
         {"id": str(item_id), "title": f"第{序号}章", "index": 序号}
@@ -2658,7 +2641,7 @@ async def 展开番茄短链(来源: str) -> str:
     if aiohttp is None:
         return 文本
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": WEB_UA}) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": DEFAULT_UA}) as session:
             async with session.get(文本, allow_redirects=True) as 响应:
                 最终链接 = str(响应.url)
                 if 提取番茄书籍编号(最终链接):
