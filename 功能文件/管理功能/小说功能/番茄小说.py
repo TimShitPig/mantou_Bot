@@ -6177,6 +6177,283 @@ def probe_app_content(book_id:str, item_ids:List[str], *, audio_type:Any='short_
         except Exception as e:
             print(f'[all_items_v{ver}] error={e}')
 
+
+# 番茄畅听正文源下线的书，仍可能在番茄小说阅读 App 正文源可读。
+NOVELAPP_API_HOST = 'https://api5-normal-sinfonlinec.fqnovel.com'
+NOVELAPP_DEVICE_ID = '375350790467434'
+NOVELAPP_INSTALL_ID = '375350790471530'
+NOVELAPP_CHANNEL = '43536163a'
+NOVELAPP_VERSION_CODE = '70132'
+NOVELAPP_VERSION_NAME = '7.0.1.32'
+NOVELAPP_DEVICE_TYPE = 'P30'
+NOVELAPP_DEVICE_BRAND = 'realme'
+NOVELAPP_OS_API = '30'
+NOVELAPP_OS_VERSION = '10'
+NOVELAPP_RESOLUTION = '1280*720'
+NOVELAPP_DPI = '240'
+NOVELAPP_ROM_VERSION = 'JZUM.440813.61127057+release-keys'
+NOVELAPP_CDID = 'f4a80914-8137-4604-9e95-18946143c295'
+NOVELAPP_UA = (
+    'com.dragon.read.oversea.gp/70132 (Linux; U; Android 10; zh_CN; P30; '
+    'Build/JZUM.440813.61127057;tt-ok/3.12.13.4-tiktok)'
+)
+NOVELAPP_REGISTER_AES_KEY = bytes.fromhex('ac25c67ddd8f38c1b37a2348828e222e')
+NOVELAPP_ARGUS_AES_KEY = bytes.fromhex('d31e3718288a1027baab59f146a09a9c')
+NOVELAPP_ARGUS_AES_IV = bytes.fromhex('ea180a0336ed352fcd24e4d50018ae54')
+NOVELAPP_ARGUS_MARKER = bytes.fromhex('f2f7fcfff2f7fcff')
+NOVELAPP_ARGUS_MAGIC = bytes.fromhex('a66ead9f7701d00c18')
+NOVELAPP_READER_MAX_ITEMS = 30
+NOVELAPP_REGISTER_KEYS:Dict[int,bytes] = {}
+NOVELAPP_REGISTER_KEY_LOCK = threading.Lock()
+
+
+def _novelapp_urlencode_value(key:str, value:Any)->str:
+    text=str(value)
+    if key in {'book_id', 'device_type', 'resolution', 'rom_version'}:
+        return urllib.parse.quote_plus(text, safe='*')
+    return text
+
+
+def novelapp_query(extra:Iterable[Tuple[str,Any]]=(), *, epoch_ms:Optional[int]=None)->str:
+    if epoch_ms is None:
+        epoch_ms=int(time.time()*1000)
+    pairs:List[Tuple[str,Any]]=[
+        ('iid', NOVELAPP_INSTALL_ID), ('device_id', NOVELAPP_DEVICE_ID), ('ac', 'wifi'),
+        ('channel', NOVELAPP_CHANNEL), ('aid', '1967'), ('app_name', 'novelapp'),
+        ('version_code', NOVELAPP_VERSION_CODE), ('version_name', NOVELAPP_VERSION_NAME),
+        ('device_platform', 'android'), ('os', 'android'), ('ssmix', 'a'),
+        ('device_type', NOVELAPP_DEVICE_TYPE), ('device_brand', NOVELAPP_DEVICE_BRAND),
+        ('language', 'zh'), ('os_api', NOVELAPP_OS_API), ('os_version', NOVELAPP_OS_VERSION),
+        ('manifest_version_code', NOVELAPP_VERSION_CODE), ('resolution', NOVELAPP_RESOLUTION),
+        ('dpi', NOVELAPP_DPI), ('update_version_code', NOVELAPP_VERSION_CODE),
+        ('_rticket', str(int(epoch_ms))), ('host_abi', 'arm64-v8a'),
+        ('dragon_device_type', 'pad'), ('pv_player', NOVELAPP_VERSION_CODE),
+        ('compliance_status', '0'), ('need_personal_recommend', '1'), ('player_so_load', '1'),
+        ('is_android_pad_screen', '1'), ('rom_version', NOVELAPP_ROM_VERSION), ('cdid', NOVELAPP_CDID),
+    ]
+    pairs.extend((str(key), value) for key,value in extra)
+    return '&'.join(f'{key}={_novelapp_urlencode_value(key, value)}' for key,value in pairs)
+
+
+def _novelapp_simon_keys()->List[int]:
+    initial=bytes.fromhex('fc78e0a9657a0c748ce51559903ccf03510e51d3cff232d71343e88a321c5304')
+    mask=0xFFFFFFFFFFFFFFFF
+    keys=[int.from_bytes(initial[i:i+8], 'little') for i in range(0,32,8)]
+    seed=0x03DC94C3A046D678B
+    for index in range(4,72):
+        tmp=_ror64(keys[index-1],3)^keys[index-3]
+        bit_index=(((0xFC if index<0x42 else 0xBE)+index)&0xFF)&63
+        z=((~2 if ((seed>>bit_index)&1) else ~3)&mask)^keys[index-4]
+        keys.append((_ror64(tmp,1)^tmp^z)&mask)
+    return keys
+
+
+NOVELAPP_SIMON_KEYS=_novelapp_simon_keys()
+
+
+def _novelapp_simon_encrypt(data:bytes)->bytes:
+    if len(data)%16:
+        raise ValueError('Simon input must be block aligned')
+    mask=0xFFFFFFFFFFFFFFFF
+    out=bytearray()
+    for offset in range(0,len(data),16):
+        left=int.from_bytes(data[offset:offset+8], 'little')
+        right=int.from_bytes(data[offset+8:offset+16], 'little')
+        for key in NOVELAPP_SIMON_KEYS:
+            left,right=right,(left^_ror64(right,62)^(_ror64(right,56)&_ror64(right,63))^key)&mask
+        out.extend(left.to_bytes(8,'little'))
+        out.extend(right.to_bytes(8,'little'))
+    return bytes(out)
+
+
+def _novelapp_half_reverse_swap(data:bytes)->bytes:
+    out=bytearray(data)
+    half=len(out)//2
+    second_start=len(out)-half
+    for left in range(half):
+        right=second_start+(half-1-left)
+        out[left],out[right]=out[right],out[left]
+    return bytes(out)
+
+
+def novelapp_x_argus(raw_query:str, khronos:int, *, random_value:Optional[int]=None)->str:
+    if random_value is None:
+        random_value=secrets.randbits(31)
+    pv=lambda field,value: proto_key(field,0)+proto_varint(int(value))
+    pb=lambda field,value: proto_field_bytes(field, value)
+    nested=pb(1,NOVELAPP_DEVICE_TYPE)+pb(2,NOVELAPP_OS_VERSION)+pb(3,b'googleplay')+pv(4,0x50000000)
+    payload=b''.join((
+        pv(1,0x40401252), pv(2,2), pv(3,int(random_value)&0x7FFFFFFF),
+        pb(4,b'1967'), pb(5,NOVELAPP_DEVICE_ID.encode()), pb(6,b'1611921764'),
+        pb(7,NOVELAPP_VERSION_NAME.encode()), pb(8,b'v04.04.05-ov-android'),
+        pv(9,0x08080A40), pb(10,b'\x00'*8), pv(11,0), pv(12,int(khronos)*2),
+        pb(13,sm3(b'\x00'*16)[:6]), pb(14,sm3(raw_query.encode())[:6]), pv(20,738), pb(23,nested),
+    ))
+    transformed=_novelapp_simon_encrypt(_pkcs7_pad(payload))
+    xored=bytes(value^NOVELAPP_ARGUS_MARKER[index&7] for index,value in enumerate(transformed))
+    frame=NOVELAPP_ARGUS_MAGIC+_novelapp_half_reverse_swap(NOVELAPP_ARGUS_MARKER+xored)+b'ao'
+    return base64.b64encode(b'\xf2\x81'+aes_cbc_encrypt(frame,NOVELAPP_ARGUS_AES_KEY,NOVELAPP_ARGUS_AES_IV)).decode()
+
+
+def novelapp_x_ladon(khronos:int, *, random_prefix:Optional[bytes]=None)->str:
+    if random_prefix is None:
+        random_prefix=secrets.token_bytes(4)
+    if len(random_prefix)!=4:
+        raise ValueError('novelapp ladon random prefix must be 4 bytes')
+    mask=0xFFFFFFFFFFFFFFFF
+    md5_hex=hashlib.md5(random_prefix+b'1967').hexdigest().encode()
+    table=bytearray(288); table[:32]=md5_hex
+    queue=[int.from_bytes(table[index:index+8], 'little') for index in range(0,32,8)]
+    first,second=queue[0],queue[1]; queue=queue[2:]
+    for index in range(0x22):
+        value=((_ror64(second,8)+first)^index)&mask
+        queue.append(value); value^=_ror64(first,0x3D); value&=mask
+        table[(index+1)*8:(index+2)*8]=value.to_bytes(8,'little')
+        first=value; second=queue.pop(0)
+    raw=_pkcs7_pad(f'{int(khronos)}-1611921764-3019'.encode())
+    encrypted=bytearray()
+    for offset in range(0,len(raw),16):
+        left=int.from_bytes(raw[offset:offset+8], 'little')
+        right=int.from_bytes(raw[offset+8:offset+16], 'little')
+        for index in range(0x22):
+            key=int.from_bytes(table[index*8:index*8+8], 'little')
+            right=(key^(left+_ror64(right,8)))&mask
+            left=(right^_ror64(left,0x3D))&mask
+        encrypted.extend(left.to_bytes(8,'little')); encrypted.extend(right.to_bytes(8,'little'))
+    return base64.b64encode(random_prefix+bytes(encrypted)).decode()
+
+
+def novelapp_headers(raw_query:str, epoch_ms:int, *, content_type:Optional[str]=None)->Dict[str,str]:
+    khronos=int(time.time())
+    headers={
+        'Accept-Encoding':'gzip', 'Accept':'application/json; charset=utf-8,application/x-protobuf',
+        'X-Xs-From-Web':'0', 'X-SS-REQ-TICKET':str(int(epoch_ms)),
+        'X-Reading-Request':f'{int(epoch_ms)}-{secrets.randbelow(2_000_000_000)}',
+        'X-VC-BDTuring-SDK-Version':'3.7.2.cn', 'LC':'101', 'SDK-Version':'2',
+        'Passport-SDK-Version':'50564', 'X-TT-Store-Region':'cn-zj', 'X-TT-Store-Region-Src':'did',
+        'User-Agent':NOVELAPP_UA,
+        'Cookie':f'store-region=cn-zj; store-region-src=did; install_id={NOVELAPP_INSTALL_ID};',
+        'X-Khronos':str(khronos), 'X-Argus':novelapp_x_argus(raw_query,khronos),
+        'X-Ladon':novelapp_x_ladon(khronos), 'X-Helios':novelapp_x_ladon(khronos),
+    }
+    if content_type:
+        headers['Content-Type']=content_type
+    return headers
+
+
+def novelapp_json(path:str, extra:Iterable[Tuple[str,Any]]=(), *, method:str='GET', body:Any=None)->Dict[str,Any]:
+    epoch_ms=int(time.time()*1000)
+    raw_query=novelapp_query(extra,epoch_ms=epoch_ms)
+    url=f'{NOVELAPP_API_HOST}{path}?{raw_query}'
+    data=b'' if body is None else json_body_bytes(body)
+    headers=novelapp_headers(raw_query,epoch_ms,content_type='application/json' if body is not None else None)
+    response=http_json_bytes(url,method,headers,data,timeout=60,retries=2)
+    return response if isinstance(response,dict) else {}
+
+
+def novelapp_register_key(required_version:int=0)->bytes:
+    cache_key=int(required_version or 0)
+    cached=NOVELAPP_REGISTER_KEYS.get(cache_key)
+    if cached is not None:
+        return cached
+    with NOVELAPP_REGISTER_KEY_LOCK:
+        cached=NOVELAPP_REGISTER_KEYS.get(cache_key)
+        if cached is not None:
+            return cached
+        iv=secrets.token_bytes(16)
+        payload=struct.pack('<QQ',int(NOVELAPP_DEVICE_ID),0)
+        content=base64.b64encode(iv+aes_cbc_encrypt(payload,NOVELAPP_REGISTER_AES_KEY,iv)).decode()
+        response=novelapp_json('/reading/crypt/registerkey',method='POST',body={'content':content,'keyver':1})
+        data=response.get('data') or {}
+        if response.get('code')!=0 or not isinstance(data,dict) or not data.get('key'):
+            raise RuntimeError(f'novelapp registerkey error: code={response.get("code")}, message={response.get("message") or response.get("msg")}')
+        raw=base64.b64decode(str(data['key']))
+        if len(raw)<32:
+            raise RuntimeError('novelapp registerkey response is too short')
+        plain=aes_cbc_decrypt_fast(raw[16:],NOVELAPP_REGISTER_AES_KEY,raw[:16])
+        if len(plain)<16:
+            raise RuntimeError('novelapp registerkey plaintext is too short')
+        version=int(data.get('keyver') or 0)
+        key=plain[:16]
+        NOVELAPP_REGISTER_KEYS[cache_key]=key
+        if version:
+            NOVELAPP_REGISTER_KEYS[version]=key
+        return key
+
+
+def novelapp_decrypt_content(content:str, key:bytes)->str:
+    raw=base64.b64decode(content)
+    if len(raw)<32:
+        raise RuntimeError('novelapp chapter ciphertext is too short')
+    plain=aes_cbc_decrypt_fast(raw[16:],key[:16],raw[:16])
+    if plain[:2]==b'\x1f\x8b':
+        plain=gzip.decompress(plain)
+    elif plain[:1]==b'\x78':
+        try:
+            plain=zlib.decompress(plain)
+        except zlib.error:
+            pass
+    return plain.decode('utf-8','replace')
+
+
+def novelapp_reader_full(book_id:str, item_ids:List[str])->Dict[str,Any]:
+    """将番茄小说 App 正文规范为 full/mget 的 item_infos 结构。"""
+    ids=[str(item_id) for item_id in item_ids]
+    if len(ids)>NOVELAPP_READER_MAX_ITEMS:
+        merged:Dict[str,Dict[str,Any]]={}
+        for part in batches(ids,NOVELAPP_READER_MAX_ITEMS):
+            partial=novelapp_reader_full(book_id,part)
+            if partial.get('code')!=0:
+                return partial
+            part_infos=(partial.get('data') or {}).get('item_infos') or {}
+            if not isinstance(part_infos,dict):
+                raise RuntimeError('novelapp batch_full partial data is not an object')
+            merged.update(part_infos)
+        return {'code':0, 'message':'', 'data':{'item_infos':merged}, 'source':'novelapp_reader_batch_full'}
+    response=novelapp_json(
+        '/reading/reader/batch_full/v',
+        (('item_ids',','.join(ids)),('key_register_ts','0'),('book_id',str(book_id)),('req_type','0')),
+    )
+    if response.get('code')!=0:
+        return response
+    raw_items=response.get('data') or {}
+    if not isinstance(raw_items,dict):
+        raise RuntimeError('novelapp batch_full data is not an object')
+    infos:Dict[str,Dict[str,Any]]={}
+    for item_id in ids:
+        item=raw_items.get(item_id)
+        if not isinstance(item,dict):
+            continue
+        cipher=str(item.get('content') or '')
+        if not cipher:
+            continue
+        version=int(item.get('key_version') or 0)
+        info=dict(item)
+        info['content']=novelapp_decrypt_content(cipher,novelapp_register_key(version))
+        info['crypt_status']=0
+        info.setdefault('title',item.get('title') or '')
+        infos[item_id]=info
+    return {
+        'code':0, 'message':response.get('message') or '',
+        'data':{'item_infos':infos}, 'source':'novelapp_reader_batch_full',
+    }
+
+
+def try_novelapp_reader_fallback(book_id:str, item_ids:List[str])->Optional[Dict[str,Any]]:
+    try:
+        response=novelapp_reader_full(book_id,item_ids)
+        infos=(response.get('data') or {}).get('item_infos') or {}
+        if response.get('code')==0 and infos:
+            logger.info(f'番茄小说正文源回退成功：book_id={book_id}, source=reader_app, chapters={len(infos)}/{len(item_ids)}')
+            return response
+        logger.warning(
+            f'番茄小说阅读正文源未返回章节：book_id={book_id}, '
+            f'code={response.get("code")}, error={response.get("message") or response.get("msg") or ""}'
+        )
+    except Exception as 异常:
+        logger.warning(f'番茄小说阅读正文源请求失败：book_id={book_id}, error={异常}')
+    return None
+
 def full_mget(book_id:str,item_ids:List[str],sign_mode:str='auto')->Tuple[Dict[str,Any],int]:
     x,req_key=make_encrypt_context()
     body={'item_ids':[str(i) for i in item_ids],'book_id':str(book_id),'key':req_key,'need_stt':False,'scene':3,'tone_id':91}
@@ -6190,6 +6467,12 @@ def full_mget(book_id:str,item_ids:List[str],sign_mode:str='auto')->Tuple[Dict[s
         if last.get('code')==6000 and idx < len(options)-1 and mode not in {'fixed','pure3040-legacy'}:
             print(f'  [sign] {mode} 返回 6000，继续尝试下一个签名头')
             continue
+        # 1021001 表示番茄畅听正文源下线，不是签名错误；同书可能仍存在于
+        # 番茄小说阅读 App 的独立正文源。
+        if last.get('code')==1021001:
+            fallback=try_novelapp_reader_fallback(book_id,item_ids)
+            if fallback is not None:
+                return fallback,0
         return last,x
     return last,x
 
@@ -6241,6 +6524,24 @@ def verify_full_mget_sign(book_id:str, item_id:str, sign_mode:str='auto')->Dict[
             }
         rows.append(row)
     ok = next((r for r in rows if r.get('code') == 0 and r.get('item_infos', 0) > 0), None)
+    if not ok and any(r.get('code')==1021001 for r in rows):
+        started=time.perf_counter()
+        fallback=try_novelapp_reader_fallback(book_id,[item_id])
+        infos=((fallback or {}).get('data') or {}).get('item_infos') or {}
+        row={
+            'mode':'novelapp-reader-fallback',
+            'code':(fallback or {}).get('code'),
+            'message':(fallback or {}).get('message') or (fallback or {}).get('msg') or '',
+            'item_infos':len(infos),
+            'elapsed_ms':int((time.perf_counter()-started)*1000),
+            'pure_python_generated':True,
+            'x_ss_stub':'',
+            'x_khronos':'dynamic',
+            'url_host':urllib.parse.urlsplit(NOVELAPP_API_HOST).netloc,
+        }
+        rows.append(row)
+        if row['code']==0 and row['item_infos']>0:
+            ok=row
     return {'ok': bool(ok), 'book_id': str(book_id), 'item_id': str(item_id), 'results': rows}
 
 def existing_chapter_file(cdir:Path, index:int)->Optional[Path]:
