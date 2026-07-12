@@ -1916,6 +1916,8 @@ def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
 
 番茄链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 
+番茄短篇详情地址 = "https://api5-normal-sinfonlinec.fqnovel.com/reading/ugc/postdata/detail/v1/"
+
 def 计算番茄正文批量参数(章节总数: int) -> tuple[int, int]:
     章节总数 = max(0, int(章节总数 or 0))
     if 章节总数 <= 0:
@@ -1939,14 +1941,20 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
 
         书籍编号 = 提取番茄书籍编号(解析来源)
-        if not 书籍编号 and 番茄长读短链正则.search(解析来源):
+        短篇编号 = 提取番茄短篇编号(解析来源)
+        if not 书籍编号 and not 短篇编号 and 番茄长读短链正则.search(解析来源):
             解析来源 = await 展开番茄短链(解析来源)
             书籍编号 = 提取番茄书籍编号(解析来源)
-        if not 书籍编号:
+            短篇编号 = 提取番茄短篇编号(解析来源)
+        if not 书籍编号 and not 短篇编号:
             yield "没有识别到番茄小说链接"
             return
 
-        准备结果 = await asyncio.to_thread(准备番茄下载数据同步, 书籍编号)
+        if 短篇编号:
+            准备结果 = await asyncio.to_thread(准备番茄短篇下载数据同步, 解析来源, 短篇编号)
+        else:
+            准备结果 = await asyncio.to_thread(准备番茄下载数据同步, 书籍编号)
+        书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
         书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
         目录 = 准备结果.get("chapters") or []
         if not 目录:
@@ -2010,6 +2018,66 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
     ]
     书籍信息 = 规范化番茄书籍信息(书籍编号, 详情, len(目录))
     return {"book_id": 书籍编号, "book_info": 书籍信息, "chapters": 目录}
+
+
+def 准备番茄短篇下载数据同步(来源: str, 短篇编号: str) -> dict[str, Any]:
+    """读取短篇分享详情，并将关联章节交给统一正文下载链路。"""
+    链接参数 = urllib.parse.parse_qs(urllib.parse.urlsplit(str(来源 or "")).query)
+
+    def 读取参数(名称: str, 默认值: str = "") -> str:
+        值列表 = 链接参数.get(名称) or []
+        return str(值列表[0] if 值列表 else 默认值).strip()
+
+    请求参数 = {
+        "post_id": str(短篇编号),
+        "forum_book_id": 读取参数("forum_book_id", "0"),
+        "service_id": 读取参数("service_id", "0"),
+        "source_type": 读取参数("source_type", "28"),
+        "aid": 读取参数("aid", "1967"),
+        "update_version_code": 读取参数("update_version_code", "72732"),
+    }
+    请求头 = {
+        "User-Agent": DEFAULT_UA,
+        "Accept": "application/json, text/plain, */*",
+    }
+    分享码 = 读取参数("share_code")
+    if 分享码:
+        请求头["share-code"] = 分享码
+    阅读进度 = 读取参数("percent")
+    if 阅读进度:
+        请求头["percent"] = 阅读进度
+
+    响应 = http_json(
+        f"{番茄短篇详情地址}?{urllib.parse.urlencode(请求参数)}",
+        headers=请求头,
+        timeout=30,
+        retries=2,
+    )
+    详情 = (响应 or {}).get("data") if isinstance(响应, dict) else None
+    if not isinstance(详情, dict) or (响应 or {}).get("code") != 0:
+        raise RuntimeError("番茄短篇详情接口未返回可下载内容")
+
+    书籍编号 = str(详情.get("relate_book_id") or "").strip()
+    章节编号 = str(详情.get("relate_item_id") or "").strip()
+    if not re.fullmatch(r"\d{8,}", 书籍编号) or not re.fullmatch(r"\d{8,}", 章节编号):
+        raise RuntimeError("番茄短篇详情未返回关联章节")
+
+    作者信息 = 详情.get("user_info") if isinstance(详情.get("user_info"), dict) else {}
+    标题 = 清理番茄网页文本(详情.get("title") or f"番茄短篇{短篇编号}")
+    书籍信息 = {
+        "book_id": 书籍编号,
+        "title": 标题,
+        "author": 清理番茄网页文本(作者信息.get("user_name") or "未知"),
+        "status": "完结",
+        "word_count": 格式化番茄字数(详情.get("total_word_num") or 详情.get("truncate_word_num") or ""),
+        "chapter_count": 1,
+        "intro": "",
+    }
+    return {
+        "book_id": 书籍编号,
+        "book_info": 书籍信息,
+        "chapters": [{"id": 章节编号, "title": 标题 or "第1章", "index": 1}],
+    }
 
 def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
     item_ids = [str(章节.get("id") or "").strip() for 章节 in 目录 if str(章节.get("id") or "").strip()]
@@ -2346,7 +2414,7 @@ async def 展开番茄短链(来源: str) -> str:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": DEFAULT_UA}) as session:
             async with session.get(文本, allow_redirects=True) as 响应:
                 最终链接 = str(响应.url)
-                if 提取番茄书籍编号(最终链接):
+                if 提取番茄书籍编号(最终链接) or 提取番茄短篇编号(最终链接):
                     return 最终链接
                 页面文本 = await 响应.text(errors="ignore")
                 页面链接 = 提取番茄链接(页面文本)
@@ -2393,9 +2461,11 @@ def 提取番茄链接(值: Any) -> str:
     文本 = str(值)
     for 匹配 in 番茄链接正则.finditer(文本):
         链接 = 匹配.group(0).rstrip("`，。；;、")
-        if 番茄域名正则.search(链接) and (提取番茄书籍编号(链接) or 番茄长读短链正则.search(链接)):
+        if 番茄域名正则.search(链接) and (
+            提取番茄书籍编号(链接) or 提取番茄短篇编号(链接) or 番茄长读短链正则.search(链接)
+        ):
             return 链接
-    if 番茄域名正则.search(文本) and 提取番茄书籍编号(文本):
+    if 番茄域名正则.search(文本) and (提取番茄书籍编号(文本) or 提取番茄短篇编号(文本)):
         return 文本
     if re.fullmatch(r"\d{15,25}", 文本.strip()):
         return 文本.strip()
@@ -2423,6 +2493,14 @@ def 提取番茄书籍编号(文本: Any) -> str:
         if 编号 not in 去重列表:
             去重列表.append(编号)
     return 去重列表[0] if len(去重列表) == 1 else ""
+
+
+def 提取番茄短篇编号(文本: Any) -> str:
+    原文 = str(文本 or "").strip()
+    if not 原文:
+        return ""
+    匹配 = re.search(r"(?:post[_-]?id|postId)=([0-9]{8,})", 原文, re.I)
+    return 匹配.group(1) if 匹配 else ""
 
 def 规范化番茄正文(正文: Any) -> str:
     文本 = str(正文 or "").replace("\r\n", "\n").replace("\r", "\n")
