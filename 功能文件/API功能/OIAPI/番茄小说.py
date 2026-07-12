@@ -63,6 +63,7 @@ API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API
 待选择API会话: dict[str, float] = {}
 API状态命名空间 = 'fanqie_api'
 API状态键 = 'current_api'
+API开关状态键 = 'enabled'
 下载失败提示 = '下载失败'
 文件发送失败提示 = '文件发送失败，请稍后再试'
 章节选择错误文本 = '请检测章节选择是否正确'
@@ -87,7 +88,26 @@ def 获取番茄小说回复流(事件: Any, 命令文本: str, 配置: Any) -> 
 def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or '').strip()
     会话键 = 获取API会话键(事件)
-    if 文本.lower() == '查看api':
+    小写文本 = 文本.lower()
+    if 小写文本 in ('开启番茄api', '开启api'):
+        if not 是群文件清理管理员(事件, 配置):
+            return '没有权限使用番茄小说API开关'
+        try:
+            写入番茄小说API开关(配置, True)
+        except Exception as 异常:
+            logger.warning(f'番茄小说API开关写入数据库失败：enabled=True, error={异常}')
+            return '切换失败，请稍后再试'
+        return '番茄API已开启'
+    if 小写文本 in ('关闭番茄api', '关闭api'):
+        if not 是群文件清理管理员(事件, 配置):
+            return '没有权限使用番茄小说API开关'
+        try:
+            写入番茄小说API开关(配置, False)
+        except Exception as 异常:
+            logger.warning(f'番茄小说API开关写入数据库失败：enabled=False, error={异常}')
+            return '切换失败，请稍后再试'
+        return '番茄API已关闭'
+    if 小写文本 == '查看api':
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API切换'
         待选择API会话[会话键] = time.time()
@@ -112,7 +132,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             return '切换失败，请稍后再试'
         待选择API会话.pop(会话键, None)
         return '番茄接口已切换'
-    直接切换 = API直接切换.get(文本.lower())
+    直接切换 = API直接切换.get(小写文本)
     if 直接切换 is not None:
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API切换'
@@ -1088,6 +1108,20 @@ def 写入当前番茄小说接口(配置: Any, 接口名称: str) -> None:
     当前接口 = 规范化番茄小说接口(接口名称)
     写入运行状态值(配置, API状态命名空间, API状态键, 当前接口)
     logger.debug(f'番茄小说API已切换：api={当前接口}, storage=mysql')
+
+def 番茄小说API是否开启(配置: Any = None) -> bool:
+    if 配置 is None:
+        return False
+    try:
+        状态 = str(读取运行状态值(配置, API状态命名空间, API开关状态键, 'off') or '').strip().lower()
+        return 状态 in ('on', '1', 'true', 'yes', '开启')
+    except Exception as 异常:
+        logger.warning(f'番茄小说API开关读取数据库失败：error={异常}')
+        return False
+
+def 写入番茄小说API开关(配置: Any, 是否开启: bool) -> None:
+    写入运行状态值(配置, API状态命名空间, API开关状态键, 'on' if 是否开启 else 'off')
+    logger.debug(f'番茄小说API开关已更新：enabled={bool(是否开启)}, storage=mysql')
 
 def 规范化番茄小说接口(值: Any) -> str:
     文本 = str(值 or '').strip().lower()
