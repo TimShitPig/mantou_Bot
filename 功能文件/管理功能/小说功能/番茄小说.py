@@ -6247,10 +6247,27 @@ def existing_chapter_file(cdir:Path, index:int)->Optional[Path]:
     hits=sorted(cdir.glob(f'{index:04d}-*.txt'))
     return hits[0] if hits else None
 
+class FullMgetBusinessError(RuntimeError):
+    """full/mget 明确返回业务错误时使用；这类错误拆分重试也不会恢复。"""
+
+    pass
+
+def _full_mget_response_message(resp:Dict[str,Any])->str:
+    return str(resp.get('message') or resp.get('msg') or resp.get('err_msg') or resp.get('error') or '')
+
+def _is_full_mget_non_split_error(resp:Dict[str,Any])->bool:
+    code=resp.get('code')
+    msg=_full_mget_response_message(resp)
+    if code in {1021001, 1021002, 1021003}:
+        return True
+    return any(key in msg for key in ('该书不存在', '停止合作', '付费', '请去书城阅读新书'))
+
 def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mode:str='auto')->List[Tuple[str,Optional[Dict[str,Any]],Optional[int],Optional[BaseException]]]:
     try:
         resp,x=full_mget(book_id,batch,sign_mode)
         if resp.get('code')!=0:
+            if _is_full_mget_non_split_error(resp):
+                raise FullMgetBusinessError(f'full_mget 业务错误: code={resp.get("code")}, message={_full_mget_response_message(resp)}')
             raise RuntimeError(f'full_mget 错误: {resp}')
         infos=(resp.get('data') or {}).get('item_infos') or {}
         if allow_split and len(batch)>1 and len(infos)<len(batch):
@@ -6258,6 +6275,8 @@ def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mod
             return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
         return [(item_id, infos.get(str(item_id)), x, None) for item_id in batch]
     except Exception as e:
+        if isinstance(e, FullMgetBusinessError):
+            return [(item_id, None, None, e) for item_id in batch]
         if allow_split and len(batch)>1:
             mid=max(1,len(batch)//2)
             return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
@@ -6373,12 +6392,14 @@ def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
     t0=time.perf_counter()
     results=download_batch(book_id,batch,allow_split=True,sign_mode=sign_mode)
     ok=sum(1 for _item_id,info,_x,err in results if info and not err)
+    fatal_error=next((err for _item_id,_info,_x,err in results if isinstance(err,FullMgetBusinessError)),None)
     return {
         'batch':bi,
         'start':start_index,
         'end':start_index+len(batch)-1,
         'count':len(batch),
         'ok':ok,
+        'fatal_error':str(fatal_error) if fatal_error else '',
         'elapsed':time.perf_counter()-t0,
         'results':results,
     }
@@ -6877,8 +6898,8 @@ if __name__=='__main__':
 
 # ===== AstrBot 小说功能接入：只开放番茄小说 TXT 下载 =====
 
-番茄正文批量章节数 = 1500
-番茄正文动态并发数 = 6
+番茄正文最大批量章节数 = 1500
+番茄正文最大动态并发数 = 6
 番茄进度日志分段数 = 10
 番茄文件组件缓存删除延迟 = 600
 番茄下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
@@ -6888,6 +6909,16 @@ if __name__=='__main__':
 番茄域名正则 = re.compile(r"fanqienovel\.com|changdunovel\.com|fqnovel\.com|novelfm\.com", re.I)
 番茄长读短链正则 = re.compile(r"https?://(?:www\.)?(?:changdunovel\.com/t|m\.novelfm\.com/s)/[A-Za-z0-9_-]+/?", re.I)
 番茄链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
+
+
+def 计算番茄正文批量参数(章节总数: int) -> tuple[int, int]:
+    章节总数 = max(0, int(章节总数 or 0))
+    if 章节总数 <= 0:
+        return 0, 1
+    批量章节数 = min(章节总数, max(1, 番茄正文最大批量章节数))
+    批次数 = (章节总数 + 批量章节数 - 1) // 批量章节数
+    动态并发数 = max(1, min(番茄正文最大动态并发数, 批次数))
+    return 批量章节数, 动态并发数
 
 
 def 获取番茄小说回复流(event: Any, 命令文本: str, 配置: Any = None):
@@ -6983,29 +7014,35 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
     item_ids = [str(章节.get("id") or "").strip() for 章节 in 目录 if str(章节.get("id") or "").strip()]
     if not item_ids:
         return []
+    总数 = len(item_ids)
+    批量章节数, 动态并发数 = 计算番茄正文批量参数(总数)
     任务列表: list[tuple[int, int, str, list[str], str]] = []
     起始序号 = 1
-    for 批次序号, 批次 in enumerate(batches(item_ids, 番茄正文批量章节数), start=1):
+    for 批次序号, 批次 in enumerate(batches(item_ids, 批量章节数), start=1):
         任务列表.append((批次序号, 起始序号, 书籍编号, list(批次), "auto"))
         起始序号 += len(批次)
 
-    总数 = len(item_ids)
     已完成 = 0
     下次进度 = max(1, 总数 // 番茄进度日志分段数)
     结果按序号: dict[int, dict[str, Any]] = {}
     logger.info(
         f"番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, "
-        f"percent=0%, batches={len(任务列表)}, batch_size={番茄正文批量章节数}, "
-        f"concurrency={番茄正文动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
+        f"percent=0%, batches={len(任务列表)}, batch_size={批量章节数}, "
+        f"concurrency={动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, 番茄正文动态并发数)) as 请求池:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, 动态并发数)) as 请求池:
         future列表 = [请求池.submit(fetch_batch_worker, 任务) for 任务 in 任务列表]
         for future in concurrent.futures.as_completed(future列表):
             批次结果 = future.result()
             批次起始 = int(批次结果.get("start") or 1)
             批次数量 = int(批次结果.get("count") or 0)
             批次成功 = 0
+            if 批次结果.get("fatal_error"):
+                logger.warning(
+                    f"番茄小说正文业务错误，停止拆分重试：book_id={书籍编号}, "
+                    f"range={批次起始}-{批次结果.get('end')}, error={限制番茄日志文本(str(批次结果.get('fatal_error')), 200)}"
+                )
             for 偏移, (item_id, 正文信息, 解密参数, 错误) in enumerate(批次结果.get("results") or []):
                 序号 = 批次起始 + 偏移
                 原章节 = 目录[序号 - 1] if 0 <= 序号 - 1 < len(目录) else {"title": f"第{序号}章"}
