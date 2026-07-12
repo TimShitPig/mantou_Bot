@@ -1960,6 +1960,18 @@ def 获取番茄小说回复流(event: Any, 命令文本: str, 配置: Any = Non
         return None
     return 生成番茄下载回复流(event, 来源, 配置)
 
+
+async def 是否番茄一章短篇来源(命令文本: Any) -> bool:
+    """识别短篇分享；短链需展开后才能区分普通书籍和短篇。"""
+    文本 = str(命令文本 or "")
+    if 提取番茄短篇编号(文本) or re.search(r"short-story-share|一章短篇", 文本, re.I):
+        return True
+    来源 = 提取直接番茄链接参数(文本)
+    if not 来源 or not 番茄长读短链正则.search(来源):
+        return False
+    展开来源 = await 展开番茄短链(来源)
+    return bool(提取番茄短篇编号(展开来源))
+
 async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = None):
     try:
         解析来源 = str(来源 or "").strip()
