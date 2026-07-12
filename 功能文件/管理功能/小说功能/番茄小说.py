@@ -4896,6 +4896,7 @@ import re
 import secrets
 import sys
 import time
+import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -4907,7 +4908,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 gmpy2 = None
 orjson = None
 
-API_HOST = "https://api5.novelfm.com"
+API_HOST = "https://api5-sinfonlinec.novelfm.com"
 WEB_PAGE = "https://fanqienovel.com/page/{book_id}"
 DEFAULT_UA = "com.xs.fm/656 (Linux; U; Android 9; zh_CN; SM-S9260; Build/PQ3A.190605.02261134;tt-ok/3.12.13.17)"
 WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
@@ -4917,7 +4918,7 @@ WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, l
 # 6.5.6.32 / accepted881 纯 Python 生成链路，失败时会自动回退 legacy3040。
 # 运行时不打开 App/adb/frida/so，也不读取其他项目。
 FULL_MGET_SIGNED_URL = (
-    "https://api5.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a&_rticket=1783204359936"
+    "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a&_rticket=1783204359936"
     "&cdid=7634657e-a134-47cf-9ac3-c38ea9923097&channel=54157680a&aid=3040&app_name=novel_fm&version_code=656"
     "&version_name=6.5.6.32&manifest_version_code=656&update_version_code=65632&resolution=1440*2560&dpi=640"
     "&device_type=SM-S9260&device_brand=Samsung&language=zh&os_api=28&os_version=9&ac=wifi&device_id=3001028083774489"
@@ -5213,6 +5214,12 @@ if FULL_MGET_TRANSPORT not in {'auto','http1','http2'}:
     FULL_MGET_TRANSPORT='auto'
 DEFAULT_FULL_MGET_MAX_ITEMS=50
 FULL_MGET_HARD_MAX_ITEMS=3000
+FULL_MGET_HTTP_REUSE=os.environ.get('FANQIE_FULL_MGET_HTTP_REUSE','1').strip().lower() not in {'0','false','off','no'}
+try:
+    FULL_MGET_HTTP_REUSE_MAX_REQUESTS=max(1,int(os.environ.get('FANQIE_FULL_MGET_HTTP_REUSE_MAX_REQUESTS','80')))
+except Exception:
+    FULL_MGET_HTTP_REUSE_MAX_REQUESTS=80
+_H2_THREAD_LOCAL=threading.local()
 
 def set_full_mget_transport(mode:str)->None:
     global FULL_MGET_TRANSPORT
@@ -5357,11 +5364,202 @@ def _http2_post_bytes(url:str, headers:Dict[str,str], data:bytes, timeout:int=60
         elif tcp is not None:
             tcp.close()
 
+class _ReusableHttp2Connection:
+    """线程内复用的简易 HTTP/2 连接，用于分批下载时减少 TLS 握手耗时。"""
+
+    def __init__(self, host:str, port:int, timeout:int=60):
+        self.host=host
+        self.port=port
+        self.sock:Optional[ssl.SSLSocket]=None
+        self.next_stream_id=1
+        self.request_count=0
+        self._connect(timeout)
+
+    @property
+    def key(self)->Tuple[str,int]:
+        return (self.host,self.port)
+
+    @property
+    def closed(self)->bool:
+        return self.sock is None
+
+    def close(self)->None:
+        sock=self.sock
+        self.sock=None
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.close()
+
+    def _connect(self, timeout:int=60)->None:
+        self.close()
+        context=ssl.create_default_context()
+        context.set_alpn_protocols(['h2'])
+        tcp:Optional[socket.socket]=None
+        try:
+            tcp=socket.create_connection((self.host,self.port),timeout=timeout)
+            sock=context.wrap_socket(tcp,server_hostname=self.host)
+            tcp=None
+            sock.settimeout(timeout)
+            if sock.selected_alpn_protocol()!='h2':
+                sock.close()
+                raise RuntimeError('server did not negotiate HTTP/2')
+            h2_window=16*1024*1024
+            sock.sendall(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
+            sock.sendall(_h2_frame(4,0,0,struct.pack('>HI',4,h2_window)))
+            sock.sendall(_h2_frame(8,0,0,struct.pack('>I',h2_window-65535)))
+            self.sock=sock
+            self.next_stream_id=1
+            self.request_count=0
+        finally:
+            if tcp is not None:
+                try:
+                    tcp.close()
+                except Exception:
+                    pass
+
+    def post_bytes(self, url:str, headers:Dict[str,str], data:bytes, timeout:int=60)->bytes:
+        split=urllib.parse.urlsplit(url)
+        if split.scheme!='https' or not split.hostname:
+            raise ValueError('HTTP/2 transport only supports absolute HTTPS URLs')
+        port=split.port or 443
+        if (split.hostname,port)!=self.key:
+            raise ValueError('HTTP/2 reusable connection host changed')
+        if self.closed or self.next_stream_id>=0x7ffffff0:
+            self._connect(timeout)
+        sock=self.sock
+        if sock is None:
+            raise RuntimeError('HTTP/2 reusable connection is closed')
+        sock.settimeout(timeout)
+        stream_id=self.next_stream_id
+        self.next_stream_id+=2
+        self.request_count+=1
+        path=(split.path or '/')+(('?'+split.query) if split.query else '')
+
+        pairs=[
+            (':method','POST'),
+            (':scheme','https'),
+            (':authority',split.netloc),
+            (':path',path),
+        ]
+        seen=set()
+        forbidden={'connection','host','keep-alive','proxy-connection','transfer-encoding','upgrade'}
+        for key,value in headers.items():
+            name=key.lower()
+            if name in forbidden or name.startswith(':'):
+                continue
+            seen.add(name)
+            pairs.append((name,str(value)))
+        if 'content-length' not in seen:
+            pairs.append(('content-length',str(len(data))))
+        block=b''.join(_hpack_literal_header(name,value) for name,value in pairs)
+        if len(block)>16_384:
+            raise ValueError('HTTP/2 header block exceeds supported frame size')
+
+        try:
+            sock.sendall(_h2_frame(1,0x04|(0x01 if not data else 0),stream_id,block))
+            for offset in range(0,len(data),16_384):
+                chunk=data[offset:offset+16_384]
+                flags=0x01 if offset+len(chunk)==len(data) else 0
+                sock.sendall(_h2_frame(0,flags,stream_id,chunk))
+
+            response=bytearray()
+            while True:
+                header=_h2_recv_exact(sock,9)
+                payload_size=int.from_bytes(header[:3],'big')
+                frame_type=header[3]
+                flags=header[4]
+                frame_stream_id=struct.unpack('>I',header[5:9])[0]&0x7fffffff
+                payload=_h2_recv_exact(sock,payload_size)
+                if frame_type==4:  # SETTINGS
+                    if not (flags&0x01):
+                        sock.sendall(_h2_frame(4,0x01,0))
+                    continue
+                if frame_type==6:  # PING
+                    if not (flags&0x01):
+                        sock.sendall(_h2_frame(6,0x01,0,payload))
+                    continue
+                if frame_type==0 and frame_stream_id==stream_id:  # DATA
+                    flow_bytes=len(payload)
+                    if flags&0x08:  # PADDED
+                        if not payload:
+                            raise RuntimeError('invalid padded HTTP/2 DATA frame')
+                        pad_len=payload[0]
+                        if pad_len>=len(payload):
+                            raise RuntimeError('invalid HTTP/2 DATA padding')
+                        payload=payload[1:len(payload)-pad_len]
+                    response.extend(payload)
+                    if flow_bytes:
+                        increment=struct.pack('>I',flow_bytes)
+                        sock.sendall(_h2_frame(8,0,0,increment))
+                        sock.sendall(_h2_frame(8,0,stream_id,increment))
+                    if flags&0x01:
+                        return bytes(response)
+                    continue
+                if frame_type==1 and frame_stream_id==stream_id and (flags&0x01):
+                    return bytes(response)
+                if frame_type==3 and frame_stream_id==stream_id:
+                    code=int.from_bytes(payload[:4],'big') if len(payload)>=4 else -1
+                    raise RuntimeError(f'HTTP/2 RST_STREAM code={code}')
+                if frame_type==7:
+                    raise RuntimeError('HTTP/2 GOAWAY received')
+        except Exception:
+            self.close()
+            raise
+
+def _close_thread_h2_connection()->None:
+    conn=getattr(_H2_THREAD_LOCAL,'conn',None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            delattr(_H2_THREAD_LOCAL,'conn')
+        except Exception:
+            pass
+
+def _get_thread_h2_connection(url:str, timeout:int=60)->_ReusableHttp2Connection:
+    split=urllib.parse.urlsplit(url)
+    if split.scheme!='https' or not split.hostname:
+        raise ValueError('HTTP/2 transport only supports absolute HTTPS URLs')
+    key=(split.hostname,split.port or 443)
+    conn=getattr(_H2_THREAD_LOCAL,'conn',None)
+    if (
+        conn is None
+        or getattr(conn,'closed',True)
+        or getattr(conn,'key',None)!=key
+        or getattr(conn,'request_count',0)>=FULL_MGET_HTTP_REUSE_MAX_REQUESTS
+    ):
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        conn=_ReusableHttp2Connection(key[0],key[1],timeout)
+        _H2_THREAD_LOCAL.conn=conn
+    return conn
+
+def _http2_post_bytes_reused(url:str, headers:Dict[str,str], data:bytes, timeout:int=60)->bytes:
+    last:Optional[BaseException]=None
+    for _attempt in range(2):
+        try:
+            conn=_get_thread_h2_connection(url,timeout)
+            return conn.post_bytes(url,headers,data,timeout)
+        except Exception as e:
+            last=e
+            _close_thread_h2_connection()
+    raise last  # type: ignore[misc]
+
 def full_mget_http_json(url:str, headers:Dict[str,str], data:bytes, timeout:int=60, retries:int=3)->Any:
     """Use HTTP/2 for full/mget when available, then fall back to urllib."""
     if FULL_MGET_TRANSPORT in {'auto','http2'}:
         try:
-            raw=_http2_post_bytes(url,headers,data,timeout)
+            raw=_http2_post_bytes_reused(url,headers,data,timeout) if FULL_MGET_HTTP_REUSE else _http2_post_bytes(url,headers,data,timeout)
             if raw[:2]==b'\x1f\x8b':
                 raw=gzip.decompress(raw)
             if not raw:
@@ -5558,7 +5756,7 @@ def _pure3040_rand31() -> int:
     return secrets.randbelow(0x80000000)
 
 def build_pure3040_656_url(epoch_ms:int)->str:
-    # Use the 6.5.6.32 api5.novelfm.com query profile that matches the
+    # Use the 6.5.6.32 api5-sinfonlinec.novelfm.com query profile that matches the
     # recovered accepted881 Medusa source family. The fully current 891-byte
     # family is body-bound; downloader defaults to this known code=0 profile.
     _ = epoch_ms
@@ -6797,7 +6995,8 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
     结果按序号: dict[int, dict[str, Any]] = {}
     logger.info(
         f"番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, "
-        f"percent=0%, batches={len(任务列表)}, batch_size={番茄正文批量章节数}, concurrency={番茄正文动态并发数}"
+        f"percent=0%, batches={len(任务列表)}, batch_size={番茄正文批量章节数}, "
+        f"concurrency={番茄正文动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, 番茄正文动态并发数)) as 请求池:
