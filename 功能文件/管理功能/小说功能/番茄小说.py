@@ -1868,14 +1868,41 @@ def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mod
 def decrypt_item_worker(args:Tuple[int,str,Dict[str,Any],int])->Dict[str,Any]:
     index,item_id,info,x=args
     try:
-        title=info.get('title') or ((info.get('novel_data') or {}).get('title')) or f'第{index}章'
         content=info.get('content') or ''
         server_key=info.get('key') or ''
         chapter_html=decrypt_content(content,server_key,x) if info.get('crypt_status')==1 and content and server_key and x is not None else content
+        title=获取番茄章节标题(info, index, chapter_html)
         text=html_to_text(chapter_html)
         return {'index':index,'item_id':item_id,'title':title,'text':text,'error':None}
     except Exception as e:
         return {'index':index,'item_id':item_id,'title':f'第{index}章','text':'','error':str(e)}
+
+
+def 获取番茄章节标题(正文信息: Dict[str, Any], 序号: int, 正文HTML: Any = "") -> str:
+    """忽略“目录”等通用响应标题，优先保留真实章节标题。"""
+    小说数据 = 正文信息.get("novel_data") if isinstance(正文信息.get("novel_data"), dict) else {}
+    候选标题 = (
+        正文信息.get("chapter_title"),
+        正文信息.get("chapterTitle"),
+        小说数据.get("chapter_title"),
+        小说数据.get("chapterTitle"),
+        小说数据.get("title"),
+        正文信息.get("title"),
+        正文信息.get("name"),
+        小说数据.get("name"),
+    )
+    通用标题 = {"目录", "章节目录", "正文", "内容"}
+    for 候选标题文本 in 候选标题:
+        标题 = html.unescape(re.sub(r"<[^>]+>", "", str(候选标题文本 or ""))).strip()
+        if 标题 and 标题 not in 通用标题:
+            return 标题
+
+    标题匹配 = re.search(r"(?is)<h[1-3][^>]*>(.*?)</h[1-3]>", str(正文HTML or ""))
+    if 标题匹配:
+        标题 = html.unescape(re.sub(r"<[^>]+>", "", 标题匹配.group(1))).strip()
+        if 标题 and 标题 not in 通用标题:
+            return 标题
+    return f"第{序号}章"
 
 def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
     bi,start_index,book_id,batch,sign_mode=args
