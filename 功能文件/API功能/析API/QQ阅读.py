@@ -22,6 +22,8 @@ QQ阅读目录地址 = "https://ubook.reader.qq.com/api/book/chapter-list"
 QQ阅读正文地址 = "http://154.12.91.167:7000/content"
 QQ阅读正文批量章节数 = 50
 QQ阅读正文并发数 = 10
+QQ阅读正文最大请求次数 = 3
+QQ阅读正文重试基础等待秒数 = 1
 进度分段数 = 10
 QQ阅读来源正则 = re.compile("reader\\.qq\\.com|book\\.qq\\.com|novel\\.html5\\.qq\\.com|154\\.12\\.91\\.167:7000", re.IGNORECASE)
 链接正则 = re.compile("https?://[^\\s'\"<>\\u3001\\uff0c\\u3002]+", re.IGNORECASE)
@@ -184,6 +186,45 @@ async def 下载QQ阅读全部章节(会话: aiohttp.ClientSession, 书籍编号
 async def 下载QQ阅读章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not 批次:
         return []
+    起始章 = 安全整数(批次[0].get("index"))
+    结束章 = 安全整数(批次[-1].get("index"))
+    try:
+        return await 重试下载QQ阅读章节批次(会话, 书籍编号, 批次)
+    except Exception as 异常:
+        if len(批次) <= 1:
+            raise
+        logger.warning(
+            f"QQ阅读析API整批正文失败，改用单章重试：book_id={书籍编号}, "
+            f"range={起始章}-{结束章}, error={异常}"
+        )
+    单章结果: list[dict[str, Any]] = []
+    for 章节 in 批次:
+        单章结果.extend(await 重试下载QQ阅读章节批次(会话, 书籍编号, [章节]))
+    return 单章结果
+
+
+async def 重试下载QQ阅读章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    起始章 = 安全整数(批次[0].get("index"))
+    结束章 = 安全整数(批次[-1].get("index"))
+    最后异常: Exception | None = None
+    for 请求次数 in range(1, QQ阅读正文最大请求次数 + 1):
+        try:
+            return await 下载一次QQ阅读章节批次(会话, 书籍编号, 批次)
+        except Exception as 异常:
+            最后异常 = 异常
+            if 请求次数 >= QQ阅读正文最大请求次数:
+                break
+            等待秒数 = QQ阅读正文重试基础等待秒数 * 请求次数
+            logger.warning(
+                f"QQ阅读析API正文请求失败，准备重试：book_id={书籍编号}, "
+                f"range={起始章}-{结束章}, attempt={请求次数}/{QQ阅读正文最大请求次数}, "
+                f"wait={等待秒数}s, error={异常}"
+            )
+            await asyncio.sleep(等待秒数)
+    raise RuntimeError(f"QQ阅读析API正文请求失败，已重试{QQ阅读正文最大请求次数}次：{最后异常}") from 最后异常
+
+
+async def 下载一次QQ阅读章节批次(会话: aiohttp.ClientSession, 书籍编号: str, 批次: list[dict[str, Any]]) -> list[dict[str, Any]]:
     起始章 = 安全整数(批次[0].get("index"))
     结束章 = 安全整数(批次[-1].get("index"))
     正文列表 = await 请求QQ阅读正文批次(会话, 书籍编号, 起始章, 结束章)
