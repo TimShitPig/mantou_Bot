@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -1777,6 +1778,39 @@ def resolve_directory(book_id: str) -> List[str]:
         raise RuntimeError("番茄畅听目录接口请求失败") from last_error
     raise RuntimeError("番茄畅听目录接口未返回章节")
 
+
+def directory_infos(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Dict[str, Dict[str, Any]]:
+    """通过番茄畅听目录元数据接口批量读取章节标题和状态。"""
+    body = {"book_id": str(book_id), "item_ids": [str(item_id) for item_id in item_ids], "page_scene": 6}
+    data = signed_app_json("/novelfm/bookapi/directory/all_infos/v1/", body, sign_mode=sign_mode)
+    rows = (data.get("data") if isinstance(data, dict) else None) or []
+    return {str(row.get("item_id")): row for row in rows if isinstance(row, dict) and row.get("item_id")}
+
+
+def 读取番茄目录元数据(书籍编号: str, item_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """读取章节元数据；失败只写日志，不影响正文下载。"""
+    元数据: Dict[str, Dict[str, Any]] = {}
+    for 批次 in batches(item_ids, 500):
+        try:
+            元数据.update(directory_infos(书籍编号, list(批次), sign_mode="auto"))
+        except Exception as 异常:
+            logger.warning(
+                f"番茄小说目录元数据获取失败：book_id={书籍编号}, "
+                f"range={len(元数据) + 1}-{len(元数据) + len(批次)}, error={限制番茄日志文本(str(异常), 200)}"
+            )
+            break
+    return 元数据
+
+
+def 获取番茄目录标题(元数据: Dict[str, Any], 序号: int) -> str:
+    """从目录元数据提取真实章节标题，避免全部回退成“第N章”。"""
+    通用标题 = {"目录", "章节目录", "正文", "内容"}
+    for 字段 in ("origin_chapter_title", "chapter_title", "title", "name"):
+        标题 = 清理番茄网页文本(元数据.get(字段) if isinstance(元数据, dict) else "")
+        if 标题 and 标题 not in 通用标题:
+            return 标题
+    return f"第{序号}章"
+
 def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mode:str='auto')->Tuple[List[str],Dict[str,Any]]:
     """Try App directory item_id endpoints and return raw response for comparison."""
     path='/novelfm/bookapi/directory/all_items_v2/v1/' if version==2 else '/novelfm/bookapi/directory/all_items/v1/'
@@ -1805,6 +1839,355 @@ def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mo
                     else:
                         ids.append(it)
     return unique_item_ids(ids, book_id), data if isinstance(data,dict) else {'raw':data}
+
+
+# ===== 番茄阅读正文补拉 =====
+# 番茄畅听正文偶尔会返回 code=0 但单章正文为空；另有部分书在畅听/TTS
+# 记录失效后仍可通过番茄阅读正文接口读取。该补拉只在畅听正文不可用或缺
+# 章节时启用，返回结构会转换成 full/mget 的 item_infos 形态。
+番茄阅读API地址 = "https://api5-normal-sinfonlinec.fqnovel.com"
+番茄阅读请求书籍编号 = os.environ.get("FANQIE_NOVELAPP_REQUEST_BOOK_ID", "7320841644486446142").strip() or "7320841644486446142"
+番茄阅读设备ID = "375350790467434"
+番茄阅读安装ID = "375350790471530"
+番茄阅读渠道 = "43536163a"
+番茄阅读版本号 = "70132"
+番茄阅读版本名 = "7.0.1.32"
+番茄阅读设备型号 = "P30"
+番茄阅读设备品牌 = "realme"
+番茄阅读系统API = "30"
+番茄阅读系统版本 = "10"
+番茄阅读分辨率 = "1280*720"
+番茄阅读DPI = "240"
+番茄阅读ROM版本 = "JZUM.440813.61127057+release-keys"
+番茄阅读CDID = "f4a80914-8137-4604-9e95-18946143c295"
+番茄阅读UA = (
+    "com.dragon.read.oversea.gp/70132 (Linux; U; Android 10; zh_CN; P30; "
+    "Build/JZUM.440813.61127057;tt-ok/3.12.13.4-tiktok)"
+)
+番茄阅读注册AES密钥 = bytes.fromhex("ac25c67ddd8f38c1b37a2348828e222e")
+番茄阅读ArgusAES密钥 = bytes.fromhex("d31e3718288a1027baab59f146a09a9c")
+番茄阅读ArgusAES向量 = bytes.fromhex("ea180a0336ed352fcd24e4d50018ae54")
+番茄阅读Argus掩码 = bytes.fromhex("f2f7fcfff2f7fcff")
+番茄阅读Argus魔数 = bytes.fromhex("a66ead9f7701d00c18")
+番茄阅读正文单次上限 = 30
+番茄阅读注册密钥缓存: Dict[int, bytes] = {}
+
+
+def _番茄阅读URL编码值(键: str, 值: Any) -> str:
+    文本 = str(值)
+    if 键 in {"book_id", "device_type", "resolution", "rom_version"}:
+        return urllib.parse.quote_plus(文本, safe="*")
+    return 文本
+
+
+def 构造番茄阅读查询(额外参数: Iterable[Tuple[str, Any]] = (), *, 毫秒时间戳: Optional[int] = None) -> str:
+    if 毫秒时间戳 is None:
+        毫秒时间戳 = int(time.time() * 1000)
+    参数: List[Tuple[str, Any]] = [
+        ("iid", 番茄阅读安装ID),
+        ("device_id", 番茄阅读设备ID),
+        ("ac", "wifi"),
+        ("channel", 番茄阅读渠道),
+        ("aid", "1967"),
+        ("app_name", "novelapp"),
+        ("version_code", 番茄阅读版本号),
+        ("version_name", 番茄阅读版本名),
+        ("device_platform", "android"),
+        ("os", "android"),
+        ("ssmix", "a"),
+        ("device_type", 番茄阅读设备型号),
+        ("device_brand", 番茄阅读设备品牌),
+        ("language", "zh"),
+        ("os_api", 番茄阅读系统API),
+        ("os_version", 番茄阅读系统版本),
+        ("manifest_version_code", 番茄阅读版本号),
+        ("resolution", 番茄阅读分辨率),
+        ("dpi", 番茄阅读DPI),
+        ("update_version_code", 番茄阅读版本号),
+        ("_rticket", str(int(毫秒时间戳))),
+        ("host_abi", "arm64-v8a"),
+        ("dragon_device_type", "pad"),
+        ("pv_player", 番茄阅读版本号),
+        ("compliance_status", "0"),
+        ("need_personal_recommend", "1"),
+        ("player_so_load", "1"),
+        ("is_android_pad_screen", "1"),
+        ("rom_version", 番茄阅读ROM版本),
+        ("cdid", 番茄阅读CDID),
+    ]
+    参数.extend((str(键), 值) for 键, 值 in 额外参数)
+    return "&".join(f"{键}={_番茄阅读URL编码值(键, 值)}" for 键, 值 in 参数)
+
+
+def _生成番茄阅读Simon密钥() -> List[int]:
+    初始值 = bytes.fromhex(
+        "fc78e0a9657a0c748ce51559903ccf03"
+        "510e51d3cff232d71343e88a321c5304"
+    )
+    掩码 = 0xFFFFFFFFFFFFFFFF
+    密钥 = [int.from_bytes(初始值[i:i + 8], "little") for i in range(0, 32, 8)]
+    种子 = 0x03DC94C3A046D678B
+    for 序号 in range(4, 72):
+        临时值 = _ror64(密钥[序号 - 1], 3) ^ 密钥[序号 - 3]
+        位序号 = (((0xFC if 序号 < 0x42 else 0xBE) + 序号) & 0xFF) & 63
+        z值 = ((~2 if ((种子 >> 位序号) & 1) else ~3) & 掩码) ^ 密钥[序号 - 4]
+        密钥.append((_ror64(临时值, 1) ^ 临时值 ^ z值) & 掩码)
+    return 密钥
+
+
+番茄阅读Simon密钥 = _生成番茄阅读Simon密钥()
+
+
+def _番茄阅读Simon加密(数据: bytes) -> bytes:
+    if len(数据) % 16:
+        raise ValueError("番茄阅读 Simon 输入必须按 16 字节对齐")
+    掩码 = 0xFFFFFFFFFFFFFFFF
+    输出 = bytearray()
+    for 偏移 in range(0, len(数据), 16):
+        左 = int.from_bytes(数据[偏移:偏移 + 8], "little")
+        右 = int.from_bytes(数据[偏移 + 8:偏移 + 16], "little")
+        for 密钥 in 番茄阅读Simon密钥:
+            左, 右 = 右, (左 ^ _ror64(右, 62) ^ (_ror64(右, 56) & _ror64(右, 63)) ^ 密钥) & 掩码
+        输出.extend(左.to_bytes(8, "little"))
+        输出.extend(右.to_bytes(8, "little"))
+    return bytes(输出)
+
+
+def _番茄阅读半区反转交换(数据: bytes) -> bytes:
+    输出 = bytearray(数据)
+    半长 = len(输出) // 2
+    后半起点 = len(输出) - 半长
+    for 左 in range(半长):
+        右 = 后半起点 + (半长 - 1 - 左)
+        输出[左], 输出[右] = 输出[右], 输出[左]
+    return bytes(输出)
+
+
+def 生成番茄阅读XArgus(原始查询: str, 秒时间戳: int, *, 随机值: Optional[int] = None) -> str:
+    if 随机值 is None:
+        随机值 = secrets.randbits(31)
+    pv = lambda 字段, 值: proto_key(字段, 0) + proto_varint(int(值))
+    pb = lambda 字段, 值: proto_field_bytes(字段, 值)
+    嵌套 = (
+        pb(1, 番茄阅读设备型号)
+        + pb(2, 番茄阅读系统版本)
+        + pb(3, b"googleplay")
+        + pv(4, 0x50000000)
+    )
+    载荷 = b"".join((
+        pv(1, 0x40401252),
+        pv(2, 2),
+        pv(3, int(随机值) & 0x7FFFFFFF),
+        pb(4, b"1967"),
+        pb(5, 番茄阅读设备ID.encode()),
+        pb(6, b"1611921764"),
+        pb(7, 番茄阅读版本名.encode()),
+        pb(8, b"v04.04.05-ov-android"),
+        pv(9, 0x08080A40),
+        pb(10, b"\x00" * 8),
+        pv(11, 0),
+        pv(12, int(秒时间戳) * 2),
+        pb(13, sm3(b"\x00" * 16)[:6]),
+        pb(14, sm3(原始查询.encode())[:6]),
+        pv(20, 738),
+        pb(23, 嵌套),
+    ))
+    加密后 = _番茄阅读Simon加密(_pkcs7_pad(载荷))
+    异或后 = bytes(值 ^ 番茄阅读Argus掩码[序号 & 7] for 序号, 值 in enumerate(加密后))
+    帧 = 番茄阅读Argus魔数 + _番茄阅读半区反转交换(番茄阅读Argus掩码 + 异或后) + b"ao"
+    return base64.b64encode(b"\xf2\x81" + aes_cbc_encrypt(帧, 番茄阅读ArgusAES密钥, 番茄阅读ArgusAES向量)).decode()
+
+
+def 生成番茄阅读Ladon(秒时间戳: int, *, 随机前缀: Optional[bytes] = None) -> str:
+    if 随机前缀 is None:
+        随机前缀 = secrets.token_bytes(4)
+    if len(随机前缀) != 4:
+        raise ValueError("番茄阅读 Ladon 随机前缀必须是 4 字节")
+    掩码 = 0xFFFFFFFFFFFFFFFF
+    md5十六进制 = hashlib.md5(随机前缀 + b"1967").hexdigest().encode()
+    表 = bytearray(288)
+    表[:32] = md5十六进制
+    队列 = [int.from_bytes(表[序号:序号 + 8], "little") for 序号 in range(0, 32, 8)]
+    第一, 第二 = 队列[0], 队列[1]
+    队列 = 队列[2:]
+    for 序号 in range(0x22):
+        值 = ((_ror64(第二, 8) + 第一) ^ 序号) & 掩码
+        队列.append(值)
+        值 ^= _ror64(第一, 0x3D)
+        值 &= 掩码
+        表[(序号 + 1) * 8:(序号 + 2) * 8] = 值.to_bytes(8, "little")
+        第一 = 值
+        第二 = 队列.pop(0)
+    原始 = _pkcs7_pad(f"{int(秒时间戳)}-1611921764-3019".encode())
+    加密结果 = bytearray()
+    for 偏移 in range(0, len(原始), 16):
+        左 = int.from_bytes(原始[偏移:偏移 + 8], "little")
+        右 = int.from_bytes(原始[偏移 + 8:偏移 + 16], "little")
+        for 序号 in range(0x22):
+            密钥 = int.from_bytes(表[序号 * 8:序号 * 8 + 8], "little")
+            右 = (密钥 ^ (左 + _ror64(右, 8))) & 掩码
+            左 = (右 ^ _ror64(左, 0x3D)) & 掩码
+        加密结果.extend(左.to_bytes(8, "little"))
+        加密结果.extend(右.to_bytes(8, "little"))
+    return base64.b64encode(随机前缀 + bytes(加密结果)).decode()
+
+
+def 构造番茄阅读请求头(原始查询: str, 毫秒时间戳: int, *, 内容类型: Optional[str] = None) -> Dict[str, str]:
+    秒时间戳 = int(time.time())
+    请求头 = {
+        "Accept-Encoding": "gzip",
+        "Accept": "application/json; charset=utf-8,application/x-protobuf",
+        "X-Xs-From-Web": "0",
+        "X-SS-REQ-TICKET": str(int(毫秒时间戳)),
+        "X-Reading-Request": f"{int(毫秒时间戳)}-{secrets.randbelow(2_000_000_000)}",
+        "X-VC-BDTuring-SDK-Version": "3.7.2.cn",
+        "LC": "101",
+        "SDK-Version": "2",
+        "Passport-SDK-Version": "50564",
+        "X-TT-Store-Region": "cn-zj",
+        "X-TT-Store-Region-Src": "did",
+        "User-Agent": 番茄阅读UA,
+        "Cookie": f"store-region=cn-zj; store-region-src=did; install_id={番茄阅读安装ID};",
+        "X-Khronos": str(秒时间戳),
+        "X-Argus": 生成番茄阅读XArgus(原始查询, 秒时间戳),
+        "X-Ladon": 生成番茄阅读Ladon(秒时间戳),
+        "X-Helios": 生成番茄阅读Ladon(秒时间戳),
+    }
+    if 内容类型:
+        请求头["Content-Type"] = 内容类型
+    return 请求头
+
+
+def 请求番茄阅读JSON(路径: str, 额外参数: Iterable[Tuple[str, Any]] = (), *, method: str = "GET", body: Any = None) -> Dict[str, Any]:
+    毫秒时间戳 = int(time.time() * 1000)
+    原始查询 = 构造番茄阅读查询(额外参数, 毫秒时间戳=毫秒时间戳)
+    地址 = f"{番茄阅读API地址}{路径}?{原始查询}"
+    请求体 = b"" if body is None else json_body_bytes(body)
+    请求头 = 构造番茄阅读请求头(原始查询, 毫秒时间戳, 内容类型="application/json" if body is not None else None)
+    响应 = http_json_bytes(地址, method, 请求头, 请求体, timeout=60, retries=2)
+    return 响应 if isinstance(响应, dict) else {}
+
+
+def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
+    if 需要版本 and 需要版本 in 番茄阅读注册密钥缓存:
+        return 番茄阅读注册密钥缓存[需要版本]
+    iv = secrets.token_bytes(16)
+    载荷 = struct.pack("<QQ", int(番茄阅读设备ID), 0)
+    content = base64.b64encode(iv + aes_cbc_encrypt(载荷, 番茄阅读注册AES密钥, iv)).decode()
+    响应 = 请求番茄阅读JSON("/reading/crypt/registerkey", method="POST", body={"content": content, "keyver": 1})
+    data = 响应.get("data") or {}
+    if 响应.get("code") != 0 or not isinstance(data, dict) or not data.get("key"):
+        raise RuntimeError(f"番茄阅读注册密钥失败：code={响应.get('code')}, message={响应.get('message') or 响应.get('msg')}")
+    raw = base64.b64decode(str(data["key"]))
+    if len(raw) < 32:
+        raise RuntimeError("番茄阅读注册密钥响应过短")
+    明文 = aes_cbc_decrypt(raw[16:], 番茄阅读注册AES密钥, raw[:16])
+    if len(明文) < 16:
+        raise RuntimeError("番茄阅读注册密钥明文过短")
+    版本 = int(data.get("keyver") or 0)
+    密钥 = 明文[:16]
+    if 版本:
+        番茄阅读注册密钥缓存[版本] = 密钥
+    if 需要版本:
+        番茄阅读注册密钥缓存[需要版本] = 密钥
+    return 密钥
+
+
+def 解密番茄阅读正文(content: str, 密钥: bytes) -> str:
+    raw = base64.b64decode(content)
+    if len(raw) < 32:
+        raise RuntimeError("番茄阅读章节密文过短")
+    明文 = aes_cbc_decrypt(raw[16:], 密钥[:16], raw[:16])
+    if 明文[:2] == b"\x1f\x8b":
+        明文 = gzip.decompress(明文)
+    elif 明文[:1] == b"\x78":
+        try:
+            明文 = zlib.decompress(明文)
+        except zlib.error:
+            pass
+    return 明文.decode("utf-8", "replace")
+
+
+def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str, Any]:
+    """读取番茄阅读正文，并转换成 full/mget 风格响应。"""
+    ids = [str(item_id) for item_id in item_ids]
+    if len(ids) > 番茄阅读正文单次上限:
+        合并: Dict[str, Dict[str, Any]] = {}
+        for 分段 in batches(ids, 番茄阅读正文单次上限):
+            部分响应 = 读取番茄阅读正文(书籍编号, list(分段))
+            if 部分响应.get("code") != 0:
+                return 部分响应
+            部分正文 = (部分响应.get("data") or {}).get("item_infos") or {}
+            if not isinstance(部分正文, dict):
+                raise RuntimeError("番茄阅读正文分段响应格式错误")
+            合并.update(部分正文)
+        return {
+            "code": 0,
+            "message": "",
+            "data": {"item_infos": 合并},
+            "source": "novelapp_reader_batch_full",
+            "request_book_id": 番茄阅读请求书籍编号,
+        }
+
+    响应 = 请求番茄阅读JSON(
+        "/reading/reader/batch_full/v",
+        (
+            ("item_ids", ",".join(ids)),
+            ("key_register_ts", "0"),
+            ("book_id", 番茄阅读请求书籍编号),
+            ("req_type", "0"),
+        ),
+    )
+    if 响应.get("code") != 0:
+        return 响应
+    原始章节 = 响应.get("data") or {}
+    if not isinstance(原始章节, dict):
+        raise RuntimeError("番茄阅读正文响应格式错误")
+    infos: Dict[str, Dict[str, Any]] = {}
+    for item_id in ids:
+        item = 原始章节.get(item_id)
+        if not isinstance(item, dict):
+            continue
+        密文 = str(item.get("content") or "")
+        if not 密文:
+            continue
+        版本 = int(item.get("key_version") or 0)
+        明文 = 解密番茄阅读正文(密文, 获取番茄阅读注册密钥(版本))
+        info = dict(item)
+        info["content"] = 明文
+        info["crypt_status"] = 0
+        info.setdefault("title", item.get("title") or "")
+        infos[item_id] = info
+    return {
+        "code": 0,
+        "message": 响应.get("message") or "",
+        "data": {"item_infos": infos},
+        "source": "novelapp_reader_batch_full",
+        "request_book_id": 番茄阅读请求书籍编号,
+    }
+
+
+def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原因: str) -> Optional[Dict[str, Any]]:
+    try:
+        响应 = 读取番茄阅读正文(书籍编号, item_ids)
+        infos = (响应.get("data") or {}).get("item_infos") or {}
+        if 响应.get("code") == 0 and infos:
+            logger.info(
+                f"番茄小说正文补拉成功：book_id={书籍编号}, reason={原因}, "
+                f"success={len(infos)}/{len(item_ids)}"
+            )
+            return 响应
+        logger.info(
+            f"番茄小说正文补拉无可用章节：book_id={书籍编号}, reason={原因}, "
+            f"code={响应.get('code')}, message={限制番茄日志文本(str(响应.get('message') or 响应.get('msg') or ''), 200)}, "
+            f"success={len(infos)}/{len(item_ids)}"
+        )
+    except Exception as 异常:
+        logger.warning(
+            f"番茄小说正文补拉失败：book_id={书籍编号}, reason={原因}, "
+            f"error={限制番茄日志文本(str(异常), 200)}"
+        )
+    return None
 
 # ===== 正文下载 =====
 def full_mget(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Tuple[Dict[str, Any], int]:
@@ -1850,12 +2233,22 @@ def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mod
         resp,x=full_mget(book_id,batch,sign_mode)
         if resp.get('code')!=0:
             if _is_full_mget_non_split_error(resp):
+                补拉响应 = 尝试番茄阅读正文补拉(book_id, batch, f'full_mget code={resp.get("code")}')
+                if 补拉响应:
+                    补拉正文 = (补拉响应.get('data') or {}).get('item_infos') or {}
+                    return [(item_id, 补拉正文.get(str(item_id)), 0, None) for item_id in batch]
                 raise FullMgetBusinessError(f'full_mget 业务错误: code={resp.get("code")}, message={_full_mget_response_message(resp)}')
             raise RuntimeError(f'full_mget 错误: {resp}')
         infos=(resp.get('data') or {}).get('item_infos') or {}
         if allow_split and len(batch)>1 and len(infos)<len(batch):
             mid=max(1,len(batch)//2)
             return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
+        if len(batch)==1 and len(infos)<len(batch):
+            补拉响应 = 尝试番茄阅读正文补拉(book_id, batch, 'full_mget missing item_info')
+            if 补拉响应:
+                补拉正文 = (补拉响应.get('data') or {}).get('item_infos') or {}
+                if 补拉正文.get(str(batch[0])):
+                    return [(batch[0], 补拉正文.get(str(batch[0])), 0, None)]
         return [(item_id, infos.get(str(item_id)), x, None) for item_id in batch]
     except Exception as e:
         if isinstance(e, FullMgetBusinessError):
@@ -1884,8 +2277,10 @@ def 获取番茄章节标题(正文信息: Dict[str, Any], 序号: int, 正文HT
     候选标题 = (
         正文信息.get("chapter_title"),
         正文信息.get("chapterTitle"),
+        正文信息.get("origin_chapter_title"),
         小说数据.get("chapter_title"),
         小说数据.get("chapterTitle"),
+        小说数据.get("origin_chapter_title"),
         小说数据.get("title"),
         正文信息.get("title"),
         正文信息.get("name"),
@@ -1903,6 +2298,19 @@ def 获取番茄章节标题(正文信息: Dict[str, Any], 序号: int, 正文HT
         if 标题 and 标题 not in 通用标题:
             return 标题
     return f"第{序号}章"
+
+
+def 番茄章节信息返回成功(正文信息: Dict[str, Any]) -> bool:
+    """只要接口明确返回该章节且章节 code 为 0，就视为成功；正文为空可能是审核中章节。"""
+    if not isinstance(正文信息, dict) or not 正文信息:
+        return False
+    章节代码 = 正文信息.get("code")
+    if 章节代码 in (None, "", 0, "0"):
+        return True
+    try:
+        return int(章节代码) == 0
+    except (TypeError, ValueError):
+        return False
 
 def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
     bi,start_index,book_id,batch,sign_mode=args
@@ -2050,8 +2458,9 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
         logger.warning(f"番茄畅听目录获取失败：book_id={书籍编号}, error={异常}")
         raise
 
+    目录元数据 = 读取番茄目录元数据(书籍编号, item_ids)
     目录 = [
-        {"id": str(item_id), "title": f"第{序号}章", "index": 序号}
+        {"id": str(item_id), "title": 获取番茄目录标题(目录元数据.get(str(item_id)) or {}, 序号), "index": 序号}
         for 序号, item_id in enumerate(item_ids, start=1)
         if str(item_id or "").strip()
     ]
@@ -2165,11 +2574,21 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
                     }
                     continue
                 解密结果 = decrypt_item_worker((序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0))
-                标题 = 清理番茄网页文本(解密结果.get("title") or 原章节.get("title") or f"第{序号}章")
+                解密标题 = 清理番茄网页文本(解密结果.get("title") or "")
+                原目录标题 = 清理番茄网页文本(原章节.get("title") or "")
+                if 解密标题 == f"第{序号}章" and 原目录标题 and 原目录标题 != 解密标题:
+                    标题 = 原目录标题
+                else:
+                    标题 = 清理番茄网页文本(解密标题 or 原目录标题 or f"第{序号}章")
                 正文 = 规范化番茄正文(解密结果.get("text") or "")
-                成功 = bool(正文.strip()) and not 解密结果.get("error")
+                成功 = (not 解密结果.get("error")) and 番茄章节信息返回成功(正文信息)
                 if 成功:
                     批次成功 += 1
+                    if not 正文.strip():
+                        logger.info(
+                            f"番茄小说章节正文为空但接口返回成功，保留章节标题：book_id={书籍编号}, "
+                            f"chapter={序号}, chapter_id={item_id}, title={限制番茄日志文本(标题, 80)}"
+                        )
                 结果按序号[序号] = {
                     "index": 序号,
                     "id": item_id,
@@ -2277,12 +2696,13 @@ def 生成番茄小说文件内容(
     if 简介:
         内容列表.extend(["简介：", 简介, ""])
     for 章节 in 章节结果列表:
-        正文 = str(章节.get("content") or "").strip()
-        if not 正文:
+        if not 章节.get("success"):
             continue
+        正文 = str(章节.get("content") or "").strip()
         内容列表.append(str(章节.get("title") or f"第{章节.get('index')}章"))
         内容列表.append("")
-        内容列表.append(正文)
+        if 正文:
+            内容列表.append(正文)
         内容列表.append("")
     return 文件名, 编码番茄TXT内容(内容列表)
 
