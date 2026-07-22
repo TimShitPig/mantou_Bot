@@ -89,7 +89,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
     文本 = str(命令文本 or '').strip()
     会话键 = 获取API会话键(事件)
     小写文本 = 文本.lower()
-    if 小写文本 in ('开启番茄api', '开启api'):
+    if 小写文本 in ('开启番茄api',) or 文本 in ('开启番茄API',):
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API开关'
         try:
@@ -98,7 +98,7 @@ def 处理番茄小说API指令(事件: Any, 命令文本: str, 配置: Any) -> 
             logger.warning(f'番茄小说API开关写入数据库失败：enabled=True, error={异常}')
             return '切换失败，请稍后再试'
         return '番茄API已开启'
-    if 小写文本 in ('关闭番茄api', '关闭api'):
+    if 小写文本 in ('关闭番茄api',) or 文本 in ('关闭番茄API',):
         if not 是群文件清理管理员(事件, 配置):
             return '没有权限使用番茄小说API开关'
         try:

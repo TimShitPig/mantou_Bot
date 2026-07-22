@@ -41,6 +41,11 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
     百度状态 = 读取百度网盘状态(配置)
     群文件Cookie状态 = 读取群文件Cookie状态(event, 配置)
     番茄API状态 = 读取番茄API开关状态(配置)
+    try:
+        from 功能文件.管理功能.小说功能 import QQ阅读 as _qq阅读模块
+        QQ阅读API状态 = "开启" if _qq阅读模块.QQ阅读API是否开启(配置) else "关闭"
+    except Exception:
+        QQ阅读API状态 = "关闭"
 
     return "\n".join(
         [
@@ -66,6 +71,7 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"书旗小说：{格式化开关(bool(功能状态.get('书旗', True)))}",
             f"QQ阅读：{格式化开关(bool(功能状态.get('QQ阅读', True)))}",
             f"番茄API：{番茄API状态}",
+            f"QQ阅读API：{QQ阅读API状态}",
             f"全局收费：{全局收费}",
             f"当前群收费：{当前群收费}",
             f"私聊收费：{私聊收费}",

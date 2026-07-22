@@ -30,7 +30,7 @@ importlib.invalidate_caches()
 UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC网盘")
 百度网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.百度网盘")
 析API番茄小说模块 = 加载功能模块("功能文件.API功能.析API.番茄小说")
-QQ阅读析API模块 = 加载功能模块("功能文件.API功能.析API.QQ阅读")
+QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.QQ阅读")
 崩溃API番茄小说模块 = 加载功能模块("功能文件.API功能.崩溃API.番茄小说")
 聚合API番茄小说模块 = 加载功能模块("功能文件.API功能.聚合API.番茄小说")
 Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番茄小说")
@@ -49,7 +49,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.14.0"
+插件版本 = "2.15.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -140,6 +140,12 @@ class MyPlugin(Star):
         else:
             回复内容 = 番茄小说模块.处理番茄小说API指令(event, 命令文本, self.config)
             if 回复内容 is None:
+                回复内容 = QQ阅读功能.处理QQ阅读API指令(event, 命令文本, self.config)
+            if 回复内容 is None:
+                登录回复 = await QQ阅读功能.处理QQ阅读登录指令(event, 命令文本, self.config)
+                if 登录回复 is not None:
+                    回复内容 = 登录回复
+            if 回复内容 is None:
                 回复内容 = 小说功能开关.处理小说功能开关指令(event, 命令文本, self.config)
             if 回复内容 is None:
                 回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
@@ -219,7 +225,7 @@ class MyPlugin(Star):
                     event.stop_event()
                     return
 
-                QQ阅读回复流 = QQ阅读析API模块.获取QQ阅读回复流(event, 命令文本, self.config)
+                QQ阅读回复流 = QQ阅读功能.获取QQ阅读回复流(event, 命令文本, self.config)
                 if QQ阅读回复流 is not None:
                     if not 小说功能开关.小说功能是否开启("QQ阅读", self.config):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("QQ阅读"))
