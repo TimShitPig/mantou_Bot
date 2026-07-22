@@ -1,5 +1,11 @@
 # 更新日志
 
+## v2.15.3
+
+### 修复
+- QQ阅读手机号登录同步新版 YWLogin 签名、版本号和 okhttp 请求头，修复发短信返回 code=3 的问题。
+- QQ阅读滑块二次发短信补齐 captchaticket/captcharandstr 参数。
+
 ## v2.15.2
 
 ### 修复

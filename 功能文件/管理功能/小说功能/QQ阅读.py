@@ -46,14 +46,16 @@ API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 发短信地址="https://ptlogin.yuewen.com/sdk/sendphonecode"
 验证码登录地址="https://ptlogin.yuewen.com/sdk/phonecodelogin"
 默认UA="QQReaderAndroid/8.5.2.890"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"
-默认YW签名="0F69C1415A21FE8D8D504F4C6C792847"; 默认YW_SDK="401"
+默认YW签名=("oMI3aDG4BEctqSrQUTmYDrBNwDYS744OQHMy9qWjqaf0xAI+9W9wtpd3VpfB "
+"zyQl0baDZNuqwu5iI43zZe9+fXiErR7tkuMWqshGfT09oNnEtpPCrkYNFBwT "
+"k+Faez58Fc442YO4kFw="); 默认YW_SDK="401"
 默认IBEX=("n3Bl6YO_sAraVTVlp6JYHRIznI5tlwdCvgNDxWs6XmJfE3B8Erqx0l-pH-9Tm_b362BPtnuU3t4Pc5j_"
 "MstRVEkFvuZCxW0ukz2AwnwljbDUDpuo81UrYQVIexitiw-UcBgx4YD2BQNiKid-uzBHqQTO94uFsH4Oc_"
 "ZL-0ZkoTbc2KHy5Risa0iuPY4lSBGRzUaGdoG-wWIIKeRa43QW9OhJFK4ALX1V5XiHTyo-Xv-IGgnoZaTa8_"
 "7h1zsHwPf2jIOeiWwYAhbdA5iirmZhwHHkHChmO9yp3n-NFn5q1A9b3hqJMPMacGAjdXKLBIBsIyiPTp-"
 "iiRriFYjSwyXhzVLUdhYg_B5RNxCuXSlDKSF9E6RCOxVl5wAAFfB3vQbAjsHRSVak0KuFPoTHb3x7hVz0P"
 "CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
-默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
+默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"8520888","osversion":f"Android 28 {默认登录版本} 8520888","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
 默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
 正文解密重试次数=6
 FOCK_TOKEN="KNVA76RTD8YZXZ6Z"; FOCK_TOKEN_PWD=b"c9ajudte0zb21ksg"; FOCK_TOKEN_IV=b"58jb6v2lzcspwymg"
@@ -303,7 +305,16 @@ async def http_get_json(session: aiohttp.ClientSession, url: str, headers: Mappi
 
 async def http_post_form_json(session: aiohttp.ClientSession, url: str, params: Mapping[str, Any], timeout: int = 30) -> Any:
     body = urllib.parse.urlencode({k: str(v) for k, v in params.items() if v is not None}, doseq=True).encode("utf-8")
-    headers = {"User-Agent": 默认UA, "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json,text/plain,*/*"}
+    # YWLogin SDK 登录接口对 App 上下文和 okhttp 头敏感；用 QQReaderAndroid UA 会直接 code=3。
+    headers = {
+        "User-Agent": "okhttp/3.12.13",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        "Connection": "Keep-Alive",
+        "referer": "http://android.qidian.com",
+        "Referer": "http://android.qidian.com",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
     async with session.post(url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
         return json.loads(await resp.text())
 
@@ -454,8 +465,13 @@ def 登录默认参数(登录态: Optional[Mapping[str, str]] = None) -> Dict[st
         for k in ("qimei", "qimei36", "ibex", "version", "version_code", "osversion", "devicetype", "source", "fuid"):
             if 登录态.get(k): d[k] = 登录态[k]
     version = d.get("version") or 默认登录版本
-    version_code = d.get("version_code") or "417"
-    params = {"referer":"http://android.qidian.com","appid":"1450000219","areaid":"1","auto":"1","autotime":"30","ticket":"0","format":"json","signature":默认YW签名,"source":d.get("source") or "00000","version":version,"devicetype":d.get("devicetype") or "OnePlus_GM1910","devicename":"GM1910","returnurl":"http://www.qidian.com","osversion":d.get("osversion") or f"Android 28 {version} {version_code}","sdkversion":默认YW_SDK,"ibex":d.get("ibex") or 默认IBEX}
+    version_code = str(d.get("version_code") or "8520888")
+    if version_code in {"", "417", "0888"}:
+        version_code = "8520888"
+    osversion = str(d.get("osversion") or f"Android 28 {version} {version_code}")
+    if osversion.endswith(" 417") or " 417" in osversion:
+        osversion = f"Android 28 {version} {version_code}"
+    params = {"referer":"http://android.qidian.com","appid":"1450000219","areaid":"1","auto":"1","autotime":"30","ticket":"0","format":"json","signature":默认YW签名,"source":d.get("source") or "00000","version":version,"devicetype":d.get("devicetype") or "OnePlus_GM1910","devicename":"GM1910","returnurl":"http://www.qidian.com","osversion":osversion,"sdkversion":默认YW_SDK,"ibex":d.get("ibex") or 默认IBEX}
     qimei = str(d.get("qimei") or ""); qimei36 = str(d.get("qimei36") or "")
     if len(qimei) >= 16: params["qimei"] = qimei
     if len(qimei36) >= 16: params["qimei36"] = qimei36
@@ -491,8 +507,14 @@ def 查找字符串字段(response: Any, *names: str) -> str:
 def 应用滑块参数(params: Dict[str, Any], ticket: str = "", randstr: str = "", session_key: str = "") -> Dict[str, Any]:
     out = dict(params)
     if session_key: out["sessionKey"] = session_key
-    if ticket: out["sig"] = ticket; out["ticket"] = ticket
-    if randstr: out["code"] = randstr; out["randstr"] = randstr
+    if ticket:
+        out["sig"] = ticket
+        out["ticket"] = ticket
+        out["captchaticket"] = ticket
+    if randstr:
+        out["code"] = randstr
+        out["randstr"] = randstr
+        out["captcharandstr"] = randstr
     return out
 
 def 从登录载荷构造登录态(payload: Mapping[str, Any], phone: str = "") -> Dict[str, str]:
