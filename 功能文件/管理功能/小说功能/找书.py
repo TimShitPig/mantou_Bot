@@ -164,7 +164,7 @@ def _格式化数量(数量: int) -> str:
 
 
 def 格式化热度显示(热度值: float, 评分: float = 0.0, 阅读量: int = 0) -> str:
-    """优先展示阅读/订阅热度，其次评分；字数不算热度，不展示。"""
+    """仅内部兼容保留，找书结果不再展示热度。"""
     if 阅读量 > 0:
         return _格式化数量(阅读量)
     if 评分 > 0:
@@ -174,12 +174,165 @@ def 格式化热度显示(热度值: float, 评分: float = 0.0, 阅读量: int 
 
 
 def 计算热度排序值(阅读量: int = 0, 评分: float = 0.0, 字数: int = 0) -> float:
-    """跨平台排序：阅读量 > 评分 > 字数兜底。分档避免字数冒充热度压过评分。"""
+    """平台内热度参考值，仅用于同平台归一化，不直接跨平台比较。"""
     if 阅读量 > 0:
-        return 2_000_000_000_000.0 + float(阅读量) + 评分 * 1000.0
+        return float(阅读量) + 评分 * 1000.0
     if 评分 > 0:
-        return 1_000_000_000_000.0 + 评分 * 1_000_000.0 + (字数 / 100.0)
-    return float(字数)
+        return 评分 * 100000.0 + (字数 / 100.0)
+    return float(字数) / 1000.0
+
+
+def 计算标题相关度(标题: str, 关键词: str) -> float:
+    """搜索相关度：精确书名优先，避免各平台原始阅读量互相碾压。"""
+    原标题 = 清理文本(标题)
+    t = 规范标题(标题)
+    k = 规范标题(关键词)
+    if not k or not t:
+        return 0.0
+    if t == k:
+        return 10000.0
+    去后缀 = t
+    for 后缀 in ("原版小说", "原版", "动漫版", "广播剧", "同人", "后续", "续写", "新书", "大全集", "全集", "完本"):
+        s = 规范标题(后缀)
+        if s and 去后缀.endswith(s) and len(去后缀) > len(s):
+            去后缀 = 去后缀[: -len(s)]
+            break
+    if 去后缀 == k:
+        return 8200.0
+    if t.startswith(k):
+        多余 = len(t) - len(k)
+        分 = 7000.0 - 多余 * 40.0
+        if "：" in 原标题 or ":" in 原标题 or "·" in 原标题:
+            分 -= 500.0
+        return max(分, 4200.0)
+    if k in t:
+        位置 = t.find(k)
+        多余 = len(t) - len(k)
+        分 = 3800.0 - 位置 * 15.0 - 多余 * 25.0
+        if "：" in 原标题 or ":" in 原标题:
+            分 -= 400.0
+        for 词 in ("同人", "衍生", "续写", "后续", "之旅", "系统"):
+            if 词 in 原标题:
+                分 -= 150.0
+        return max(分, 300.0)
+    return 50.0
+
+
+def 排序找书结果(结果: list[dict[str, Any]], 关键词: str) -> list[dict[str, Any]]:
+    """通用找书排序（不写死书名）：
+
+    1) 先选用户最可能要的那本：精确书名 > 近精确 > 前缀/包含；
+       同档内优先「多平台同名同作者共识」，再参考评分与平台内相对热度。
+    2) 再把剩余结果按与第一本的相似度聚拢：同名多平台、同作者、同系列前缀。
+
+    平台原始阅读量不可跨平台比较，只做平台内归一化参考；热度不展示给用户。
+    """
+    if not 结果:
+        return []
+    from collections import Counter
+
+    关键词规范 = 规范标题(关键词)
+    书名作者频次: Counter[tuple[str, str]] = Counter()
+    书名频次: Counter[str] = Counter()
+    精确书名作者频次: Counter[tuple[str, str]] = Counter()
+
+    for 项 in 结果:
+        t0 = 规范标题(项.get("title"))
+        a0 = 规范标题(项.get("author"))
+        书名作者频次[(t0, a0)] += 1
+        书名频次[t0] += 1
+        if 关键词规范 and t0 == 关键词规范:
+            精确书名作者频次[(t0, a0)] += 1
+
+    平台原始: dict[str, list[float]] = {}
+    for 项 in 结果:
+        平台 = str(项.get("platform") or "")
+        平台原始.setdefault(平台, []).append(float(项.get("heat") or 0))
+    平台区间: dict[str, tuple[float, float]] = {
+        平台: ((min(vals), max(vals)) if vals else (0.0, 0.0))
+        for 平台, vals in 平台原始.items()
+    }
+
+    def 平台内相对热度(项: dict[str, Any]) -> float:
+        平台 = str(项.get("platform") or "")
+        lo, hi = 平台区间.get(平台, (0.0, 0.0))
+        raw = float(项.get("heat") or 0)
+        if hi > lo:
+            return (raw - lo) / (hi - lo)
+        return 0.5
+
+    def 标题信息(项: dict[str, Any]) -> tuple[str, str, str]:
+        标题 = str(项.get("title") or "")
+        作者 = str(项.get("author") or "")
+        return 标题, 规范标题(标题), 规范标题(作者)
+
+    def 基础分(项: dict[str, Any]) -> tuple:
+        标题, t1, a1 = 标题信息(项)
+        相关度 = 计算标题相关度(标题, 关键词)
+        共识作者 = 书名作者频次.get((t1, a1), 1)
+        共识书名 = 书名频次.get(t1, 1)
+        精确共识 = 精确书名作者频次.get((t1, a1), 0)
+        # 硬档：精确匹配书名永远压过带后缀/同人
+        if 关键词规范 and t1 == 关键词规范:
+            档 = 3
+            相关度 += 精确共识 * 500.0 + 共识作者 * 200.0 + 共识书名 * 80.0
+        else:
+            档 = 2 if 相关度 >= 8000 else (1 if 相关度 >= 4000 else 0)
+            相关度 += 共识作者 * 90.0 + 共识书名 * 30.0
+        评分 = _安全浮点(项.get("score"))
+        相对热度 = 平台内相对热度(项)
+        有效作者 = 1 if a1 and a1 not in {"未知", "unknown", ""} else 0
+        return (档, 相关度, 精确共识, 共识作者, 有效作者, 评分, 相对热度, -len(t1))
+
+    def 公共前缀长度(a: str, b: str) -> int:
+        n = 0
+        for x, y in zip(a or "", b or ""):
+            if x != y:
+                break
+            n += 1
+        return n
+
+    def 与锚点相似度(项: dict[str, Any], 锚点: dict[str, Any]) -> float:
+        _, t1, a1 = 标题信息(项)
+        _, at, aa = 标题信息(锚点)
+        s = 0.0
+        if a1 and aa and a1 == aa and a1 not in {"", "未知", "unknown"}:
+            s += 6000.0
+        if t1 and at and t1 == at:
+            s += 5500.0
+        if at and t1.startswith(at):
+            s += max(3600.0 - (len(t1) - len(at)) * 40.0, 1400.0)
+        elif t1 and at.startswith(t1):
+            s += 3000.0
+        pre = 公共前缀长度(t1, at)
+        需要 = max(2, min(len(关键词规范), 4) if 关键词规范 else 2)
+        if pre >= 需要:
+            s += pre * 100.0
+        if 关键词规范:
+            if t1 == 关键词规范:
+                s += 2500.0
+            elif t1.startswith(关键词规范):
+                s += 1000.0
+            elif 关键词规范 in t1:
+                s += 350.0
+        s += 平台内相对热度(项) * 60.0
+        s += _安全浮点(项.get("score")) * 15.0
+        return s
+
+    剩余 = list(结果)
+    # 第一本：按“用户意图档位”选，不靠某个平台的绝对阅读量
+    剩余.sort(key=基础分, reverse=True)
+    已选: list[dict[str, Any]] = [剩余.pop(0)]
+
+    while 剩余:
+        def 选取键(项: dict[str, Any]) -> tuple:
+            sim = 与锚点相似度(项, 已选[0]) + 与锚点相似度(项, 已选[-1]) * 0.4
+            b = 基础分(项)
+            return (sim, b[0], b[1], b[2], b[3], b[5], b[6])
+
+        剩余.sort(key=选取键, reverse=True)
+        已选.append(剩余.pop(0))
+    return 已选
 
 
 def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
@@ -460,7 +613,7 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
 
 
 def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """同平台同书去重；不同平台即使同名也分开保留；最终按热度从高到低排序。"""
+    """同平台同书去重；不同平台即使同名也分开保留。排序交给 排序找书结果。"""
     合并: list[dict[str, Any]] = []
     索引: set[str] = set()
     for 列表 in 结果列表:
@@ -475,14 +628,7 @@ def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any
             索引.add(键)
             if "heat" not in 项:
                 项["heat"] = 0
-            if not 项.get("heat_text"):
-                项["heat_text"] = 格式化热度显示(
-                    float(项.get("heat") or 0),
-                    评分=_安全浮点(项.get("score")),
-                    阅读量=_安全整数热度(项.get("read_count")),
-                )
             合并.append(项)
-    合并.sort(key=lambda x: float(x.get("heat") or 0), reverse=True)
     return 合并
 
 
@@ -514,7 +660,7 @@ async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
                 r1, r2, r3 = await asyncio.gather(t1, t2, t3)
                 补结果集合.extend([r1, r2, r3])
             合并 = 去重合并(补结果集合)
-        return 合并
+        return 排序找书结果(合并, 关键词)
 
 
 def 格式化找书结果(会话: dict[str, Any]) -> str:
@@ -534,9 +680,6 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
             行.append(分隔线)
             行.append(f"书名：{项.get('title') or '未知'}")
             行.append(f"作者：{项.get('author') or '未知'}")
-            热度文案 = str(项.get("heat_text") or "").strip()
-            if 热度文案:
-                行.append(f"热度：{热度文案}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     左 = "上一页" if 页码 > 1 else ""
@@ -565,7 +708,7 @@ def _生成指令链(发送文本: str, 外显: str, *, 直接发送: bool) -> s
 
 
 def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
-    """官方机器人 Markdown：书名/作者为指令链蓝字，展示热度，不展示来源/链接/键盘。"""
+    """官方机器人 Markdown：书名/作者为指令链蓝字，不展示热度/来源/链接/键盘。"""
     结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
@@ -582,12 +725,9 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
             书名 = 清理文本(项.get("title") or "未知") or "未知"
             作者 = 清理文本(项.get("author") or "未知") or "未知"
             选书指令 = f"选{序号}"
-            热度文案 = str(项.get("heat_text") or "").strip()
             行.append(分隔线)
             行.append(f"书名：{_生成指令链(选书指令, 书名, 直接发送=直接发送)}")
             行.append(f"作者：{_生成指令链(选书指令, 作者, 直接发送=直接发送)}")
-            if 热度文案:
-                行.append(f"热度：{热度文案}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     翻页: list[str] = []
