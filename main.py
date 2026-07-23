@@ -43,13 +43,14 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 番茄小说功能 = 加载功能模块("功能文件.管理功能.小说功能.番茄小说")
 授权链接功能 = 加载功能模块("功能文件.管理功能.群聊功能.授权链接")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.小说功能开关")
+找书功能 = 加载功能模块("功能文件.管理功能.小说功能.找书")
 
 获取古诗词名句回复 = getattr(古诗词名句模块, "获取古诗词名句回复")
 获取疯狂星期四回复 = getattr(疯狂星期四模块, "获取疯狂星期四回复")
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.16.6"
+插件版本 = "2.17.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -102,6 +103,13 @@ class MyPlugin(Star):
         付费开关回复 = 用户激活功能.处理付费开关指令(event, 命令文本, self.config)
         if 付费开关回复 is not None:
             yield event.plain_result(付费开关回复)
+            event.stop_event()
+            return
+
+        # 找书优先：避免与卡密/用户列表“上一页/下一页”冲突
+        找书回复 = await 找书功能.处理找书指令(event, 命令文本, self.config)
+        if 找书回复 is not None:
+            yield event.plain_result(找书回复)
             event.stop_event()
             return
 
@@ -181,19 +189,8 @@ class MyPlugin(Star):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("书旗"))
                         event.stop_event()
                         return
-                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
-                    if 激活拦截 is not None:
-                        yield event.plain_result(激活拦截)
-                        event.stop_event()
-                        return
-                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
-                    免费额度提示已发送 = False
                     async for 书旗回复内容 in 书旗回复流:
                         if isinstance(书旗回复内容, str):
-                            if not 免费额度提示已发送:
-                                原回复内容 = 书旗回复内容
-                                书旗回复内容 = 用户激活功能.附加下载免费额度提示(书旗回复内容, 免费额度下载提示)
-                                免费额度提示已发送 = 书旗回复内容 != 原回复内容
                             yield event.plain_result(书旗回复内容)
                         else:
                             yield 书旗回复内容
@@ -206,19 +203,8 @@ class MyPlugin(Star):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("七猫"))
                         event.stop_event()
                         return
-                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
-                    if 激活拦截 is not None:
-                        yield event.plain_result(激活拦截)
-                        event.stop_event()
-                        return
-                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
-                    免费额度提示已发送 = False
                     async for 七猫回复内容 in 七猫回复流:
                         if isinstance(七猫回复内容, str):
-                            if not 免费额度提示已发送:
-                                原回复内容 = 七猫回复内容
-                                七猫回复内容 = 用户激活功能.附加下载免费额度提示(七猫回复内容, 免费额度下载提示)
-                                免费额度提示已发送 = 七猫回复内容 != 原回复内容
                             yield event.plain_result(七猫回复内容)
                         else:
                             yield 七猫回复内容
@@ -231,19 +217,8 @@ class MyPlugin(Star):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("QQ阅读"))
                         event.stop_event()
                         return
-                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
-                    if 激活拦截 is not None:
-                        yield event.plain_result(激活拦截)
-                        event.stop_event()
-                        return
-                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
-                    免费额度提示已发送 = False
                     async for QQ阅读回复内容 in QQ阅读回复流:
                         if isinstance(QQ阅读回复内容, str):
-                            if not 免费额度提示已发送:
-                                原回复内容 = QQ阅读回复内容
-                                QQ阅读回复内容 = 用户激活功能.附加下载免费额度提示(QQ阅读回复内容, 免费额度下载提示)
-                                免费额度提示已发送 = QQ阅读回复内容 != 原回复内容
                             yield event.plain_result(QQ阅读回复内容)
                         else:
                             yield QQ阅读回复内容
@@ -274,19 +249,8 @@ class MyPlugin(Star):
                         yield event.plain_result(小说功能开关.获取小说功能关闭回复("番茄"))
                         event.stop_event()
                         return
-                    激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
-                    if 激活拦截 is not None:
-                        yield event.plain_result(激活拦截)
-                        event.stop_event()
-                        return
-                    免费额度下载提示 = await 用户激活功能.获取下载免费额度提示(event, self.config)
-                    免费额度提示已发送 = False
                     async for 番茄回复内容 in 番茄回复流:
                         if isinstance(番茄回复内容, str):
-                            if not 免费额度提示已发送:
-                                原回复内容 = 番茄回复内容
-                                番茄回复内容 = 用户激活功能.附加下载免费额度提示(番茄回复内容, 免费额度下载提示)
-                                免费额度提示已发送 = 番茄回复内容 != 原回复内容
                             yield event.plain_result(番茄回复内容)
                         else:
                             yield 番茄回复内容

@@ -978,6 +978,8 @@ def 附加下载免费额度提示(回复内容: str, 免费额度提示: str) -
 
 def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
+    if 文本 in 全局付费开关命令配置 or 文本 in 群聊付费开关命令配置 or 文本 in 私聊付费开关命令配置:
+        return "当前已全部免费，无需开启或关闭收费"
     if 文本 not in 全局付费开关命令配置 and 文本 not in 群聊付费开关命令配置 and 文本 not in 私聊付费开关命令配置:
         return None
     if not 是群文件清理管理员(event, 配置):
@@ -1043,6 +1045,8 @@ def 处理付费开关指令(event: Any, 命令文本: str, 配置: Any) -> str 
 
 
 def 付费模式是否开启(event: Any, 配置: Any) -> bool:
+    # 全站免费：关闭收费门禁与每日免费额度拦截
+    return False
     全局模式 = 获取全局付费模式(配置)
     if 全局模式 == "on":
         return True
