@@ -37,7 +37,7 @@ except Exception as e:
 
 API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=300; 滑块服务保留秒数=300; 文件组件缓存清理延迟=600
+登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 文件组件缓存清理延迟=600
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
 免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
@@ -64,6 +64,36 @@ QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
 待登录会话: dict[str, dict[str, Any]] = {}
+
+
+def 获取滑块公网主机() -> str:
+    """自动获取服务器可外网访问地址：先公网 IP，再出口 IP。"""
+    for url in (
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://ip.sb",
+        "https://icanhazip.com",
+    ):
+        try:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                ip = resp.read().decode("utf-8", "replace").strip()
+            if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", ip) and not ip.startswith("127."):
+                return ip
+        except Exception:
+            continue
+    try:
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+    return ""
+
+
 
 def 读取字段(对象: Any, 字段名: str) -> Any:
     if 对象 is None: return None
@@ -543,13 +573,17 @@ function start(){{setStatus('busy','验证中…'); try{{const captcha=new Tence
 btn.addEventListener('click',start); retry.addEventListener('click',start); setTimeout(start,400);
 </script></body></html>"""
 
-def 启动滑块本地服务(*, host: str = "127.0.0.1", port: int = 8765, timeout: int = 滑块服务保留秒数) -> Dict[str, Any]:
-    """启动本机滑块页服务，立即返回可点击链接；服务最多保留 timeout 秒后自动关闭。"""
+def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块端口, timeout: int = 滑块服务保留秒数, public_host: str = "") -> Dict[str, Any]:
+    """启动滑块页服务：监听 0.0.0.0，自动获取公网 IP 生成外网链接；最多保留 timeout 秒后自动关闭。"""
     result: Dict[str, Any] = {}
     done = threading.Event()
     closed = threading.Event()
     page_html = ""
     保留秒数 = max(30, int(timeout or 滑块服务保留秒数))
+    绑定主机 = str(host or "0.0.0.0").strip() or "0.0.0.0"
+    访问主机 = str(public_host or "").strip() or 获取滑块公网主机()
+    if not 访问主机 or 访问主机 in {"0.0.0.0", "127.0.0.1", "localhost"}:
+        raise RuntimeError("未能自动获取服务器公网IP")
 
     class 可复用HTTPServer(HTTPServer):
         allow_reuse_address = True
@@ -592,13 +626,13 @@ def 启动滑块本地服务(*, host: str = "127.0.0.1", port: int = 8765, timeo
                 self._send(400, b"bad")
 
     try:
-        httpd = 可复用HTTPServer((host, port), Handler)
+        httpd = 可复用HTTPServer((绑定主机, port), Handler)
     except OSError as e:
-        logger.warning(f"QQ阅读滑块端口占用，自动切换空闲端口：host={host}, port={port}, error={e}")
-        httpd = 可复用HTTPServer((host, 0), Handler)
+        logger.warning(f"QQ阅读滑块端口占用，自动切换空闲端口：host={绑定主机}, port={port}, error={e}")
+        httpd = 可复用HTTPServer((绑定主机, 0), Handler)
 
     actual_port = int(httpd.server_address[1])
-    callback_url = f"http://{host}:{actual_port}/captcha"
+    callback_url = f"http://{访问主机}:{actual_port}/captcha"
     page_html = 生成滑块HTML(callback_url=callback_url)
 
     def _关闭服务() -> None:
@@ -1102,6 +1136,9 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             except Exception as e:
                 logger.warning(f"QQ阅读滑块服务启动失败：error={e}")
                 待登录会话.pop(会话键, None)
+                err = str(e or "")
+                if "公网IP" in err:
+                    return "无法获取服务器公网地址，请检查服务器网络"
                 return 登录失败提示
             会话.update({
                 "step": "captcha_wait",
