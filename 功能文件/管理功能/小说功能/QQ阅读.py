@@ -57,7 +57,7 @@ API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 "CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"8520888","osversion":f"Android 28 {默认登录版本} 8520888","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
 默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
-正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=8
+正文解密重试次数=3; 缺章补拉轮次=2; 缺章补拉并发=10; 批量章节上限=500; 批量并发上限=6
 FOCK_TOKEN="KNVA76RTD8YZXZ6Z"; FOCK_TOKEN_PWD=b"c9ajudte0zb21ksg"; FOCK_TOKEN_IV=b"58jb6v2lzcspwymg"
 _FOCK_TOKEN_BLOB=bytes.fromhex("8f400c5fcec88186569c7c407e35d2895495f9025321cd94976e786a65f18550")
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com|154\.12\.91\.167:7000", re.I)
@@ -1201,22 +1201,21 @@ async def 下载全书批量(
     text_types: Optional[Sequence[int]] = None,
     ad_state: Optional[int] = None,
 ) -> list[dict[str, Any]]:
-    """固定拆成最多 5 批，动态并发请求（有空位就继续发）。纯 App 接口，不混析API。"""
+    """按大批量(默认最多500章/批)拆分，动态并发请求。纯 App 接口，不混析API。"""
     if not 目录:
         return []
     下载态 = 组装本地下载态(登录态)
     类型候选 = [int(x) for x in (text_types or (1, 2))]
     总数 = len(目录)
-    批次数 = min(5, 总数)
-    每批 = (总数 + 批次数 - 1) // 批次数
+    每批 = max(1, min(批量章节上限, 总数))
     分批 = []
-    for i in range(批次数):
-        s = i * 每批
+    i = 0
+    for s in range(0, 总数, 每批):
         e = min(总数, s + 每批)
-        if s >= e:
-            break
         分批.append((i, 目录[s:e]))
-    信号量 = asyncio.Semaphore(5)
+        i += 1
+    并发 = max(1, min(批量并发上限, len(分批)))
+    信号量 = asyncio.Semaphore(并发)
     结果映射: dict[int, list[dict[str, Any]]] = {}
     已完成 = 0
     成功累计 = 0
@@ -1225,7 +1224,7 @@ async def 下载全书批量(
     进度锁 = asyncio.Lock()
     logger.info(
         f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-        f"batches={len(分批)}, concurrency=5"
+        f"batches={len(分批)}, batch_size={每批}, concurrency={并发}"
     )
 
     async def 记录进度(完成增量: int, 成功增量: int) -> None:
@@ -1308,9 +1307,12 @@ async def 下载全书批量(
                         # 完全没有章节文件：当前 text_type/权限下不可下，直接换类型或结束
                         if len(chaps) == 0:
                             break
-                        # 有密文但解不开时重拉（服务端可能轮换密文格式）
+                        # 有密文但解不开时重拉（服务端可能轮换密文形态）
                         if 密文文件 > 0 and 成功数 < 密文文件:
                             continue
+                        # 大部分已成功：留给缺章补拉，不再整批重拉
+                        if 成功数 > 0 and 成功数 + 空文件 >= len(批次) * 0.9:
+                            return 序号, 结果
                         # 已拿齐服务端返回的密文（其余为空/未授权），结束该 text_type
                         break
                     except Exception as e:
@@ -1487,37 +1489,44 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ad_state = 1 if 有账号 else 0
                 模式 = "login" if 有账号 else "device"
             类型候选 = 识别正文类型(详情, 书籍信息)
-            # 无论是否登录，都先探测服务端真正可下发章节。
-            可下编号 = await 探测可下载章节编号(
-                会话, 书籍编号, 目录, 下载态, ad_state=ad_state,
-            )
-            if 可下编号:
-                下载目录 = [
-                    ch for ch in 目录
+            # 免费/广告书：跳过全量探测，直接整本批量下（最快）。
+            # 收费书：只探测前 30 章判断是否仅试读，避免先串行扫完全目录。
+            if 免费或广告:
+                下载目录 = list(目录)
+                logger.debug(
+                    f"QQ阅读跳过探测：book_id={书籍编号}, free_or_ad=True, "
+                    f"download={len(下载目录)}, mode={模式}"
+                )
+            else:
+                样本 = 目录[: min(30, len(目录))]
+                可下编号 = await 探测可下载章节编号(
+                    会话, 书籍编号, 样本, 下载态, ad_state=ad_state,
+                )
+                样本可下 = [
+                    ch for ch in 样本
                     if str(ch.get("cid") or ch.get("id") or ch.get("index") or "") in 可下编号
                 ]
-            else:
-                下载目录 = []
-            logger.debug(
-                f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(可下编号)}, "
-                f"download={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, "
-                f"free_or_ad={免费或广告}, mode={模式}, has_account={有账号}"
-            )
-            if not 下载目录:
-                logger.warning(
-                    f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, "
-                    f"mode={模式}, has_account={有账号}"
+                logger.debug(
+                    f"QQ阅读样本探测：book_id={书籍编号}, sample={len(样本)}, "
+                    f"authorized={len(样本可下)}, maxfree={免费章上限}, mode={模式}, has_account={有账号}"
                 )
-                yield 收费书提示
-                return
-            # 非免费/广告书，但只有部分试读章可下：按收费书处理。
-            if (not 免费或广告) and len(下载目录) < len(目录):
-                logger.warning(
-                    f"QQ阅读本地下载失败：收费/VIP书仅试读可下 book_id={书籍编号}, "
-                    f"authorized={len(下载目录)}, catalog={len(目录)}, has_account={有账号}"
-                )
-                yield 收费书提示
-                return
+                if not 样本可下:
+                    logger.warning(
+                        f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, "
+                        f"mode={模式}, has_account={有账号}"
+                    )
+                    yield 收费书提示
+                    return
+                # 样本都下不全，或可下数明显像试读上限：按收费书处理
+                试读上限 = max(免费章上限, 5)
+                if len(样本可下) < len(样本) or (len(目录) > 试读上限 and len(样本可下) <= 试读上限):
+                    logger.warning(
+                        f"QQ阅读本地下载失败：收费/VIP书仅试读可下 book_id={书籍编号}, "
+                        f"sample_ok={len(样本可下)}, catalog={len(目录)}, has_account={有账号}"
+                    )
+                    yield 收费书提示
+                    return
+                下载目录 = list(目录)
             书籍信息["chapter_count"] = len(目录)
             logger.info(
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
