@@ -1075,10 +1075,13 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
                             最佳结果 = 结果
                         if 成功数 == len(批次):
                             return 序号, 结果
-                        # 有密文但解不开时重拉（服务端可能轮换密文格式，b480 可解 / 1bdccb 暂不可解）
-                        if 密文文件 > 0 and 成功数 < len(批次):
+                        # 完全没有章节文件：当前 text_type/权限下不可下，直接换类型或结束
+                        if len(chaps) == 0:
+                            break
+                        # 有密文但解不开时重拉（服务端可能轮换密文格式）
+                        if 密文文件 > 0 and 成功数 < 密文文件:
                             continue
-                        # 无密文（空包/未授权）直接换 text_type 或结束，不空耗重试
+                        # 已拿齐服务端返回的密文（其余为空/未授权），结束该 text_type
                         break
                     except Exception as e:
                         最后异常 = e
@@ -1134,28 +1137,36 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ch["index"] = 安全整数(ch.get("index")) or i
             有账号 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            下载目录 = 目录
-            # 未登录：不强制账号。设备 fuid+keypool 可解密服务端下发的免费/试读密文；
-            # VIP/付费章服务端不下发正文，需登录有权限账号。
-            if not 有账号:
-                候选 = 目录
-                if (not 书籍信息.get("is_all_free")) and 免费章上限 > 0:
-                    候选 = [ch for ch in 目录 if (安全整数(ch.get("index")) or 0) <= 免费章上限] or 目录[:免费章上限]
-                可下编号 = await 探测可下载章节编号(会话, 书籍编号, 候选, 登录态)
-                if 可下编号:
-                    下载目录 = [ch for ch in 候选 if str(ch.get("cid") or ch.get("id") or ch.get("index") or "") in 可下编号]
-                else:
-                    下载目录 = []
-                logger.info(
-                    f"QQ阅读未登录下载范围：book_id={书籍编号}, candidates={len(候选)}, authorized={len(可下编号)}, "
-                    f"download={len(下载目录)}, maxfree={免费章上限}, catalog={len(目录)}"
+            全书免费 = bool(书籍信息.get("is_all_free"))
+            # 无论是否登录，都先探测服务端真正可下发章节。
+            # 免费账号登录后对 VIP 书通常仍只有少量试读章（如 5 章），不能按整本 200+ 章硬下。
+            可下编号 = await 探测可下载章节编号(会话, 书籍编号, 目录, 登录态)
+            if 可下编号:
+                下载目录 = [
+                    ch for ch in 目录
+                    if str(ch.get("cid") or ch.get("id") or ch.get("index") or "") in 可下编号
+                ]
+            else:
+                下载目录 = []
+            logger.info(
+                f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(可下编号)}, "
+                f"download={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, "
+                f"all_free={全书免费}, has_account={有账号}"
+            )
+            if not 下载目录:
+                logger.warning(
+                    f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, has_account={有账号}"
                 )
-                if not 下载目录:
-                    logger.warning(
-                        f"QQ阅读本地下载失败：收费书无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, authorized={len(可下编号)}"
-                    )
-                    yield 收费书提示
-                    return
+                yield 收费书提示
+                return
+            # 非全免书，但只有部分试读/免费章可下：按收费书处理，避免下 5 章却按 218 章失败。
+            if (not 全书免费) and len(下载目录) < len(目录):
+                logger.warning(
+                    f"QQ阅读本地下载失败：收费/VIP书仅试读可下 book_id={书籍编号}, "
+                    f"authorized={len(下载目录)}, catalog={len(目录)}, has_account={有账号}"
+                )
+                yield 收费书提示
+                return
             书籍信息["chapter_count"] = len(目录)
             logger.info(
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
@@ -1165,7 +1176,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            # 纯本地 App：不和析API混用。免费书/免费章用设备态；账号登录仅用于 VIP/付费可读范围。
+            # 纯本地 App：不和析API混用。免费书用设备态；有 VIP 权限账号才能下付费整本。
             章节结果 = await 下载全书批量(会话, 书籍编号, 下载目录, 登录态)
             成功列表 = [x for x in 章节结果 if x.get("success")]
             if not 成功列表 or len(成功列表) < len(下载目录):
@@ -1173,7 +1184,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
                     f"catalog_total={len(目录)}, has_account={有账号}"
                 )
-                if (not 有账号) and (not 成功列表) and (not 书籍信息.get("is_all_free")):
+                if (not 全书免费) and len(成功列表) < len(目录):
                     yield 收费书提示
                 else:
                     yield 下载失败提示
