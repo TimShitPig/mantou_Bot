@@ -25,7 +25,6 @@ importlib.invalidate_caches()
 运行状态数据库 = 加载功能模块("功能文件.管理功能.基础功能.运行状态数据库")
 消息工具 = 加载功能模块("功能文件.管理功能.基础功能.消息工具")
 帮助功能 = 加载功能模块("功能文件.管理功能.基础功能.帮助功能")
-用户激活功能 = 加载功能模块("功能文件.管理功能.基础功能.用户激活")
 状态功能 = 加载功能模块("功能文件.管理功能.基础功能.状态功能")
 UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC网盘")
 百度网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.百度网盘")
@@ -50,7 +49,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.17.0"
+插件版本 = "2.17.1"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -61,52 +60,27 @@ class MyPlugin(Star):
 
     async def initialize(self):
         网页群文件功能.启动Cookie自动保活(self.config)
-        await self.同步卡密配置视图()
-
-    async def 同步卡密配置视图(self):
-        配置已变更 = 用户激活功能.迁移旧版配置分类(self.config)
-        if await 用户激活功能.同步卡密配置视图(self.config):
-            配置已变更 = True
-        if 配置已变更:
-            await self.保存插件配置()
-
-    async def 保存插件配置(self):
-        try:
-            结果 = super().save_config()
-            if asyncio.iscoroutine(结果):
-                await 结果
-        except Exception:
-            pass
-
-        配置数据 = 用户激活功能.获取配置字典(self.config)
-        if 配置数据 is None:
-            return
-
-        for 属性名 in ("_path", "path", "file_path"):
-            值 = getattr(self.config, 属性名, None)
-            if not 值:
-                continue
-            配置路径 = Path(str(值))
-            if not 配置路径.exists():
-                continue
-            try:
-                配置路径.write_text(json.dumps(配置数据, ensure_ascii=False, indent=2), encoding="utf-8")
-            except Exception:
-                pass
-            return
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
-        付费开关回复 = 用户激活功能.处理付费开关指令(event, 命令文本, self.config)
-        if 付费开关回复 is not None:
-            yield event.plain_result(付费开关回复)
+        # 找书优先：搜索/翻页/数字选择下载
+        找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
+        if isinstance(找书下载, str):
+            yield event.plain_result(找书下载)
+            event.stop_event()
+            return
+        if 找书下载 is not None:
+            async for 找书回复内容 in 找书下载:
+                if isinstance(找书回复内容, str):
+                    yield event.plain_result(找书回复内容)
+                else:
+                    yield 找书回复内容
             event.stop_event()
             return
 
-        # 找书优先：避免与卡密/用户列表“上一页/下一页”冲突
         找书回复 = await 找书功能.处理找书指令(event, 命令文本, self.config)
         if 找书回复 is not None:
             yield event.plain_result(找书回复)
@@ -124,20 +98,8 @@ class MyPlugin(Star):
                 event.stop_event()
                 return
 
-        if not 是广告消息:
-            激活回复 = await 用户激活功能.处理用户激活(event, 命令文本, self.config, self.context)
-            if 激活回复 is not None:
-                if 用户激活功能.用户激活回复需要同步卡密配置(激活回复):
-                    await self.同步卡密配置视图()
-                yield event.plain_result(激活回复)
-                event.stop_event()
-                return
-
-        if 用户激活功能.是需激活文本命令(命令文本):
-            激活拦截 = await 用户激活功能.获取未激活拦截回复(event, self.config)
-            if 激活拦截 is not None:
-                回复内容 = 激活拦截
-            elif 命令文本 == "随机英文单词":
+        if 命令文本 in {"随机英文单词", "随机一言", "疯狂星期四", "古诗词名句"}:
+            if 命令文本 == "随机英文单词":
                 回复内容 = await 获取随机英文单词回复()
             elif 命令文本 == "随机一言":
                 回复内容 = await 获取随机一言回复()

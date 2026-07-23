@@ -6,7 +6,7 @@ import json
 import re
 import time
 import urllib.parse
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiohttp
 
@@ -419,20 +419,67 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
-        for 项 in 当前页:
+        for 序号, 项 in enumerate(当前页, start=1):
             行.append(分隔线)
             行.append(f"书名：{项.get('title') or '未知'}")
             行.append(f"作者：{项.get('author') or '未知'}")
-            行.append(f"来源：{项.get('platform') or '未知'}")
-            行.append(str(项.get("url") or ""))
+            行.append(f"序号：{序号}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     左 = "上一页" if 页码 > 1 else ""
     右 = "下一页" if 页码 < 总页 else ""
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
-    行.append("点击链接即可按当前下载流程开始下载")
+    if 当前页:
+        行.append(f"发送数字 1-{len(当前页)} 开始下载")
     return "\n".join(行)
+
+
+def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, str]]:
+    结果: list[dict[str, str]] = 会话.get("results") or []
+    页码 = max(1, int(会话.get("page") or 1))
+    起始 = (页码 - 1) * 每页数量
+    return 结果[起始:起始 + 每页数量]
+
+
+def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, str] | str | None:
+    """发送 1-5 选择当前页书籍。返回选中项，或错误字符串，或 None。"""
+    清理过期会话()
+    文本 = str(命令文本 or "").strip()
+    if not re.fullmatch(r"[1-5]", 文本):
+        return None
+    会话 = 找书会话.get(获取找书会话键(event))
+    if not 会话:
+        return None
+    会话["ts"] = time.time()
+    当前页 = 获取当前页结果(会话)
+    if not 当前页:
+        return "没有可选书籍"
+    序号 = int(文本)
+    if 序号 < 1 or 序号 > len(当前页):
+        return f"请发送 1-{len(当前页)} 之间的数字"
+    return 当前页[序号 - 1]
+
+
+def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | str | None:
+    选中 = 解析找书选中项(event, 命令文本)
+    if 选中 is None:
+        return None
+    if isinstance(选中, str):
+        return 选中
+    平台 = str(选中.get("platform") or "")
+    链接 = str(选中.get("url") or "")
+    标题 = 选中.get("title") or ""
+    logger.info(f"找书选择下载：platform={平台}, title={标题}, book_id={选中.get('book_id')}")
+    if not 链接:
+        return "下载失败"
+    if 平台 == "番茄" and 番茄小说 is not None:
+        return 番茄小说.生成番茄下载回复流(event, 链接, 配置)
+    if 平台 == "七猫" and 七猫小说 is not None:
+        return 七猫小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "书旗" and 书旗小说 is not None:
+        return 书旗小说.生成下载回复流(event, 链接, 配置)
+    return "下载失败"
 
 
 async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | None:
@@ -457,7 +504,10 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
             return f"没有找到和「{关键词}」相关的书"
         return 格式化找书结果(找书会话[会话键])
 
-    if 文本 not in 翻页命令集合 and 文本 not in {"上", "下", "上一页", "下一页", "上页", "下页"}:
+    # 数字选择留给下载流处理，这里不拦截
+    if re.fullmatch(r"[1-5]", 文本):
+        return None
+    if 文本 not in 翻页命令集合:
         return None
     会话 = 找书会话.get(会话键)
     if not 会话:
