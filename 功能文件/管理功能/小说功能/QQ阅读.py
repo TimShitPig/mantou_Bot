@@ -1040,11 +1040,8 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
     上次日志进度 = 0
     进度锁 = asyncio.Lock()
     logger.info(
-        f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%"
-    )
-    logger.info(
-        f"QQ阅读本地5批并发：book_id={书籍编号}, chapters={总数}, batches={len(分批)}, "
-        f"batch_size~={每批}, concurrency=5, has_account={bool(下载态.get('ywguid') and 下载态.get('ywkey'))}"
+        f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
+        f"batches={len(分批)}, concurrency=5"
     )
 
     async def 记录进度(完成增量: int, 成功增量: int) -> None:
@@ -1113,7 +1110,7 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
                                         f"QQ阅读章节解密失败：book_id={书籍编号}, cid={cid}, note={限制文本长度(note, 80)}"
                                     )
                                 结果.append({**章节, "title": 标题, "content": "", "success": False})
-                        logger.info(
+                        logger.debug(
                             f"QQ阅读批次完成：book_id={书籍编号}, batch={序号+1}/{len(分批)}, range={起始}-{结束}, "
                             f"text_type={text_type}, try={尝试}/{正文解密重试次数}, success={成功数}/{len(批次)}, "
                             f"tar_files={len(chaps)}, empty={空文件}, binary={密文文件}, decrypt_fail={解密失败}"
@@ -1133,8 +1130,9 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
                         break
                     except Exception as e:
                         最后异常 = e
-                        logger.warning(
-                            f"QQ阅读批次失败：book_id={书籍编号}, batch={序号+1}/{len(分批)}, "
+                        # 重试过程中不刷 warning，最终失败再记一次
+                        logger.debug(
+                            f"QQ阅读批次重试：book_id={书籍编号}, batch={序号+1}/{len(分批)}, "
                             f"range={起始}-{结束}, text_type={text_type}, try={尝试}, error={e}"
                         )
                 if 最佳成功 > 0 and 最佳结果 is not None:
@@ -1156,7 +1154,6 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
     logger.info(
         f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, file_ready={成功 == 总数}"
     )
-    logger.info(f"QQ阅读本地5批汇总：book_id={书籍编号}, success={成功}/{总数}")
     return 合并
 
 async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
@@ -1201,7 +1198,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ]
             else:
                 下载目录 = []
-            logger.info(
+            logger.debug(
                 f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(可下编号)}, "
                 f"download={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, "
                 f"all_free={全书免费}, has_account={有账号}"
