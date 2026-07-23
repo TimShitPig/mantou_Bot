@@ -345,18 +345,28 @@ def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict
     return out
 
 
-def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
-    """判断是否可走游客全本下载（免费全本/广告书/限免）。"""
+def 是否全书免费可下(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
+    """是否整本都可下（游客全本）。对所有书通用，不按 book_id 特判。
+
+    规则：
+    - free=1 / is_all_free，且没有“部分免费上限”：整本免费
+    - isAdBook 且 maxfreechapter=0（或不限）：广告全本，可游客整本下
+    - maxfreechapter > 0 且 < 总章数：只是试读/部分免费，不能整本硬下
+    """
     if not isinstance(书籍信息, Mapping):
         return False
-    if 书籍信息.get("is_all_free") or 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free"):
-        return True
-    price = 书籍信息.get("price")
+    total = 安全整数(书籍信息.get("chapter_count"))
     maxfree = 安全整数(书籍信息.get("max_free_chapter"))
-    if price in (0, "0", 0.0) and maxfree <= 0:
-        # price=0 且无试读上限，倾向免费书
+    # 先看部分免费上限，避免 free/isAdBook 误判成全本
+    if maxfree > 0 and total > 0 and maxfree < total:
+        return False
+    if 书籍信息.get("is_all_free"):
         return True
-    # 再扫原始详情兜底
+    if 书籍信息.get("is_limit_free") and (maxfree <= 0 or total <= 0 or maxfree >= total):
+        return True
+    # 广告书仅当没有部分免费上限时，才当作全本可下
+    if 书籍信息.get("is_ad_book") and maxfree <= 0:
+        return True
     nodes: list[Any] = []
     for src in (详情, 书籍信息.get("raw")):
         if isinstance(src, dict):
@@ -368,13 +378,29 @@ def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None
     for b in nodes:
         if not isinstance(b, dict):
             continue
-        if b.get("free") in (1, "1", True) or b.get("isAdBook") in (1, "1", True):
+        total_b = 安全整数(b.get("totalChapters") or b.get("chapterNum") or total)
+        max_b = 安全整数(b.get("maxfreechapter") or b.get("maxFreeChapter") or maxfree)
+        if isinstance(b.get("newmaxfreechapter"), dict):
+            max_b = max(max_b, 安全整数(b["newmaxfreechapter"].get("txt")))
+        if max_b > 0 and total_b > 0 and max_b < total_b:
+            return False
+        if b.get("free") in (1, "1", True):
             return True
-        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"}:
+        if b.get("isAdBook") in (1, "1", True) and max_b <= 0:
             return True
-        if b.get("price") in (0, "0", 0.0) and b.get("maxfreechapter") in (0, "0", None, ""):
-            if b.get("free") in (1, "1", True) or b.get("isAdBook"):
-                return True
+        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"} and max_b <= 0:
+            return True
+    return False
+
+
+def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
+    """兼容旧名：实际表示“可游客下载的免费/广告相关书”，不等价于整本免费。"""
+    if not isinstance(书籍信息, Mapping):
+        return False
+    if 是否全书免费可下(书籍信息, 详情):
+        return True
+    if 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free") or 书籍信息.get("is_all_free"):
+        return True
     return False
 
 
@@ -578,6 +604,7 @@ async def 探测可下载章节编号(
     章节列表: list[dict[str, Any]],
     登录态: Optional[Mapping[str, str]] = None,
     *,
+    text_types: Optional[Sequence[int]] = None,
     ad_state: Optional[int] = None,
 ) -> set[str]:
     """通过 App 批量接口 info.txt 探测当前态下可下发正文的章节（code=0）。"""
@@ -585,6 +612,7 @@ async def 探测可下载章节编号(
         return set()
     可下: set[str] = set()
     下载态 = 组装本地下载态(登录态)
+    类型候选 = [int(x) for x in (text_types or (1, 2))]
     索引列表 = [安全整数(ch.get("index")) or (i + 1) for i, ch in enumerate(章节列表)]
     # 分段探测，避免超长 scids
     段大小 = 50
@@ -593,33 +621,34 @@ async def 探测可下载章节编号(
         if not 段:
             continue
         scids = str(段[0]) if len(段) == 1 else f"{段[0]}-{段[-1]}"
-        try:
-            blob = await 请求批量包(
-                session, bid, scids, 登录态=下载态, text_type=1,
-                useindex=False, usepreview=0, ad_state=ad_state, timeout=60,
-            )
-            if 是否deny(blob):
-                continue
-            for e in 解析tar(blob):
-                if e.name != "info.txt" or not e.data:
+        for text_type in 类型候选:
+            try:
+                blob = await 请求批量包(
+                    session, bid, scids, 登录态=下载态, text_type=text_type,
+                    useindex=False, usepreview=0, ad_state=ad_state, timeout=60,
+                )
+                if 是否deny(blob):
                     continue
-                try:
-                    info = json.loads(解码文本(e.data))
-                except Exception:
-                    continue
-                if not isinstance(info, list):
-                    continue
-                for row in info:
-                    if not isinstance(row, dict):
+                for e in 解析tar(blob):
+                    if e.name != "info.txt" or not e.data:
                         continue
-                    if "book_title" in row:
+                    try:
+                        info = json.loads(解码文本(e.data))
+                    except Exception:
                         continue
-                    code = str(row.get("code") or "")
-                    cid = str(row.get("chapter_id") or row.get("cid") or row.get("uuid") or "")
-                    if code in {"0", "OK", "ok"} and cid:
-                        可下.add(cid)
-        except Exception as e:
-            logger.debug(f"QQ阅读探测可下载章节失败：book_id={bid}, range={scids}, error={e}")
+                    if not isinstance(info, list):
+                        continue
+                    for row in info:
+                        if not isinstance(row, dict):
+                            continue
+                        if "book_title" in row:
+                            continue
+                        code = str(row.get("code") or "")
+                        cid = str(row.get("chapter_id") or row.get("cid") or row.get("uuid") or "")
+                        if code in {"0", "OK", "ok"} and cid:
+                            可下.add(cid)
+            except Exception as e:
+                logger.debug(f"QQ阅读探测可下载章节失败：book_id={bid}, range={scids}, text_type={text_type}, error={e}")
     return 可下
 
 
@@ -1566,10 +1595,10 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ch["index"] = 安全整数(ch.get("index")) or i
             有账号 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            全书免费标记 = bool(书籍信息.get("is_all_free"))
-            免费或广告 = 是否免费或广告书(书籍信息, 详情) or 全书免费标记
-            # 小说大全策略：免费/广告书自动游客（去 Cookie，adState=0），绕过登录广告 5 章闸。
-            if 免费或广告:
+            全书免费 = 是否全书免费可下(书籍信息, 详情) or bool(书籍信息.get("is_all_free"))
+            是广告书 = bool(书籍信息.get("is_ad_book"))
+            # 广告全本/整本免费：游客 adState=0。部分免费广告书也先用游客探测，再决定是否收费。
+            if 全书免费 or 是广告书:
                 下载态 = 组装游客下载态(登录态)
                 ad_state = 0
                 模式 = "guest"
@@ -1578,54 +1607,61 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ad_state = 1 if 有账号 else 0
                 模式 = "login" if 有账号 else "device"
             类型候选 = 识别正文类型(详情, 书籍信息)
-            # 免费/广告书：跳过全量探测，直接整本批量下（最快）。
-            # 收费书：只探测前 30 章判断是否仅试读，避免先串行扫完全目录。
-            if 免费或广告:
+
+            if 全书免费:
+                # 真全免：跳过探测，整本最快下载
                 下载目录 = list(目录)
                 logger.debug(
-                    f"QQ阅读跳过探测：book_id={书籍编号}, free_or_ad=True, "
+                    f"QQ阅读跳过探测：book_id={书籍编号}, all_free=True, "
                     f"download={len(下载目录)}, mode={模式}"
                 )
             else:
-                样本 = 目录[: min(30, len(目录))]
+                # 详情已标明部分免费/试读：所有书统一直接收费，不硬下整本、不空转探测
+                if 免费章上限 > 0 and len(目录) > 0 and 免费章上限 < len(目录):
+                    logger.warning(
+                        f"QQ阅读本地下载失败：详情部分免费 book_id={书籍编号}, "
+                        f"maxfree={免费章上限}, catalog={len(目录)}, mode={模式}, has_account={有账号}"
+                    )
+                    yield 收费书提示
+                    return
+                # 其余非全免（含 VIP）：全量探测实际可下章
                 可下编号 = await 探测可下载章节编号(
-                    会话, 书籍编号, 样本, 下载态, ad_state=ad_state,
+                    会话, 书籍编号, 目录, 下载态, text_types=类型候选, ad_state=ad_state,
                 )
-                样本可下 = [
-                    ch for ch in 样本
+                下载目录 = [
+                    ch for ch in 目录
                     if str(ch.get("cid") or ch.get("id") or ch.get("index") or "") in 可下编号
                 ]
-                logger.debug(
-                    f"QQ阅读样本探测：book_id={书籍编号}, sample={len(样本)}, "
-                    f"authorized={len(样本可下)}, maxfree={免费章上限}, mode={模式}, has_account={有账号}"
+                logger.info(
+                    f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(下载目录)}, "
+                    f"catalog={len(目录)}, maxfree={免费章上限}, mode={模式}, has_account={有账号}"
                 )
-                if not 样本可下:
+                if not 下载目录:
                     logger.warning(
                         f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, "
                         f"mode={模式}, has_account={有账号}"
                     )
                     yield 收费书提示
                     return
-                # 样本都下不全，或可下数明显像试读上限：按收费书处理
-                试读上限 = max(免费章上限, 5)
-                if len(样本可下) < len(样本) or (len(目录) > 试读上限 and len(样本可下) <= 试读上限):
+                # 只能下部分章：按收费书处理，不硬下整本
+                if len(下载目录) < len(目录):
                     logger.warning(
-                        f"QQ阅读本地下载失败：收费/VIP书仅试读可下 book_id={书籍编号}, "
-                        f"sample_ok={len(样本可下)}, catalog={len(目录)}, has_account={有账号}"
+                        f"QQ阅读本地下载失败：收费/VIP书仅部分可下 book_id={书籍编号}, "
+                        f"authorized={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, has_account={有账号}"
                     )
                     yield 收费书提示
                     return
-                下载目录 = list(目录)
+
             书籍信息["chapter_count"] = len(目录)
             logger.info(
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
                 f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
-                f"mode={模式}, text_types={list(类型候选)}, has_account={有账号}"
+                f"mode={模式}, all_free={全书免费}, text_types={list(类型候选)}, has_account={有账号}"
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            # 纯本地 App：不和析API混用。免费/广告书游客；VIP 付费需有权限账号。
+            # 纯本地 App：不和析API混用。全免游客整本；VIP 付费需权限账号。
             章节结果 = await 下载全书批量(
                 会话, 书籍编号, 下载目录, 下载态,
                 text_types=类型候选, ad_state=ad_state,
@@ -1642,7 +1678,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
                     f"catalog_total={len(目录)}, mode={模式}, has_account={有账号}"
                 )
-                if (not 免费或广告) and len(成功列表) < len(目录):
+                if (not 全书免费) and len(成功列表) < len(目录):
                     yield 收费书提示
                 else:
                     yield 下载失败提示
