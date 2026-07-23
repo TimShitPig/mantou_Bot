@@ -57,7 +57,7 @@ API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 "CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"8520888","osversion":f"Android 28 {默认登录版本} 8520888","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
 默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
-正文解密重试次数=3; 缺章补拉轮次=2; 缺章补拉并发=10; 批量章节上限=500; 批量并发上限=6
+正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=12; 批量章节上限=50; 批量并发上限=6
 FOCK_TOKEN="KNVA76RTD8YZXZ6Z"; FOCK_TOKEN_PWD=b"c9ajudte0zb21ksg"; FOCK_TOKEN_IV=b"58jb6v2lzcspwymg"
 _FOCK_TOKEN_BLOB=bytes.fromhex("8f400c5fcec88186569c7c407e35d2895495f9025321cd94976e786a65f18550")
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com|154\.12\.91\.167:7000", re.I)
@@ -1304,26 +1304,24 @@ async def 下载全书批量(
                             最佳结果 = 结果
                         if 成功数 == len(批次):
                             return 序号, 结果
-                        # 完全没有章节文件：当前 text_type/权限下不可下，直接换类型或结束
+                        # 完全没有章节文件：当前 text_type/权限下不可下，直接换类型
                         if len(chaps) == 0:
                             break
-                        # 有密文但解不开时重拉（服务端可能轮换密文形态）
+                        # 有密文但解不开：重拉（服务端密文形态会在 b480/1bdccb 间抖动）
                         if 密文文件 > 0 and 成功数 < 密文文件:
                             continue
-                        # 大部分已成功：留给缺章补拉，不再整批重拉
-                        if 成功数 > 0 and 成功数 + 空文件 >= len(批次) * 0.9:
-                            return 序号, 结果
-                        # 已拿齐服务端返回的密文（其余为空/未授权），结束该 text_type
+                        # 本 text_type 已有部分成功：记录后换下一个 text_type 试更高成功率
+                        # 注意：绝不能在 type=1 只有 1 章成功时就 return，否则会错过 type=2 的 190+ 章
                         break
                     except Exception as e:
                         最后异常 = e
-                        # 重试过程中不刷 warning，最终失败再记一次
                         logger.debug(
                             f"QQ阅读批次重试：book_id={书籍编号}, batch={序号+1}/{len(分批)}, "
                             f"range={起始}-{结束}, text_type={text_type}, try={尝试}, error={e}"
                         )
-                if 最佳成功 > 0 and 最佳结果 is not None:
-                    return 序号, 最佳结果
+            # 所有 text_type 试完后取成功率最高的结果
+            if 最佳成功 > 0 and 最佳结果 is not None:
+                return 序号, 最佳结果
             if 最后异常:
                 logger.warning(f"QQ阅读批次最终失败：book_id={书籍编号}, range={起始}-{结束}, error={最后异常}")
             return 序号, [{**章节, "title": 清理文本(章节.get("title")), "content": "", "success": False} for 章节 in 批次]
@@ -1418,24 +1416,115 @@ async def 补拉缺失章节(
             f"QQ阅读缺章补拉：book_id={书籍编号}, round={轮次}/{缺章补拉轮次}, "
             f"missing={len(缺失索引)}, concurrency={缺章补拉并发}"
         )
-        信号量 = asyncio.Semaphore(缺章补拉并发)
+        # 第 1 轮：把缺失章按连续 index 合成小批（最多 20）重拉，比单章快且更容易拿到可解密密文
+        if 轮次 == 1 and len(缺失索引) > 1:
+            缺失章 = [(i, 合并[i]) for i in 缺失索引]
+            缺失章.sort(key=lambda x: 安全整数(x[1].get("index")) or 0)
+            小批列表: list[list[tuple[int, dict[str, Any]]]] = []
+            当前批: list[tuple[int, dict[str, Any]]] = []
+            上一索引 = None
+            for item in 缺失章:
+                idx = 安全整数(item[1].get("index")) or 0
+                if not 当前批:
+                    当前批 = [item]
+                elif 上一索引 is not None and idx == 上一索引 + 1 and len(当前批) < 20:
+                    当前批.append(item)
+                else:
+                    小批列表.append(当前批)
+                    当前批 = [item]
+                上一索引 = idx
+            if 当前批:
+                小批列表.append(当前批)
+            信号量 = asyncio.Semaphore(min(缺章补拉并发, max(1, len(小批列表))))
 
-        async def 补一章(位置: int) -> tuple[int, dict[str, Any]]:
-            async with 信号量:
-                章节 = 合并[位置]
-                新章 = await 下载单章正文(
-                    session, 书籍编号, 章节, 下载态,
-                    text_types=text_types, ad_state=ad_state,
-                )
-                return 位置, 新章
+            async def 补一小批(组: list[tuple[int, dict[str, Any]]]) -> list[tuple[int, dict[str, Any]]]:
+                async with 信号量:
+                    章节们 = [x[1] for x in 组]
+                    起始 = 安全整数(章节们[0].get("index")) or 0
+                    结束 = 安全整数(章节们[-1].get("index")) or 起始
+                    scids = str(起始) if 起始 == 结束 else f"{起始}-{结束}"
+                    类型候选 = [int(x) for x in (text_types or (1, 2))]
+                    最佳映射: dict[str, dict[str, Any]] = {}
+                    最佳成功 = -1
+                    for text_type in 类型候选:
+                        for 尝试 in range(1, 正文解密重试次数 + 1):
+                            try:
+                                blob = await 请求批量包(
+                                    session, 书籍编号, scids, 登录态=下载态,
+                                    text_type=text_type, useindex=False, usepreview=0,
+                                    ad_state=ad_state, timeout=120,
+                                )
+                                if 是否deny(blob):
+                                    break
+                                chaps = 章节成员(解析tar(blob), 书籍编号)
+                                by_cid = {章节编号(e.name, 书籍编号): e for e in chaps}
+                                映射: dict[str, dict[str, Any]] = {}
+                                成功数 = 0
+                                密文 = 0
+                                for 章节 in 章节们:
+                                    cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
+                                    标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
+                                    e = by_cid.get(cid)
+                                    if e is None and len(chaps) == len(章节们):
+                                        # 按顺序兜底
+                                        pos = 章节们.index(章节)
+                                        e = chaps[pos] if pos < len(chaps) else None
+                                    if e is None or not e.data:
+                                        映射[cid] = {**章节, "title": 标题, "content": "", "success": False}
+                                        continue
+                                    if 是否二进制(e.data):
+                                        密文 += 1
+                                    正文, _note = 解密章节(e.data, 书籍编号, cid, 下载态)
+                                    if 正文:
+                                        成功数 += 1
+                                        映射[cid] = {**章节, "title": 标题, "content": 正文, "success": True}
+                                    else:
+                                        映射[cid] = {**章节, "title": 标题, "content": "", "success": False}
+                                if 成功数 > 最佳成功:
+                                    最佳成功 = 成功数
+                                    最佳映射 = 映射
+                                if 成功数 == len(章节们):
+                                    break
+                                if 密文 > 0 and 成功数 < 密文:
+                                    continue
+                                break
+                            except Exception:
+                                continue
+                        if 最佳成功 == len(章节们):
+                            break
+                    out = []
+                    for 位置, 章节 in 组:
+                        cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
+                        新章 = 最佳映射.get(cid) or {**章节, "content": "", "success": False}
+                        out.append((位置, 新章))
+                    return out
 
-        任务 = [asyncio.create_task(补一章(i)) for i in 缺失索引]
-        本轮成功 = 0
-        for fut in asyncio.as_completed(任务):
-            位置, 新章 = await fut
-            if 新章.get("success") and str(新章.get("content") or "").strip():
-                合并[位置] = 新章
-                本轮成功 += 1
+            任务 = [asyncio.create_task(补一小批(g)) for g in 小批列表]
+            本轮成功 = 0
+            for fut in asyncio.as_completed(任务):
+                for 位置, 新章 in await fut:
+                    if 新章.get("success") and str(新章.get("content") or "").strip():
+                        合并[位置] = 新章
+                        本轮成功 += 1
+        else:
+            信号量 = asyncio.Semaphore(缺章补拉并发)
+
+            async def 补一章(位置: int) -> tuple[int, dict[str, Any]]:
+                async with 信号量:
+                    章节 = 合并[位置]
+                    新章 = await 下载单章正文(
+                        session, 书籍编号, 章节, 下载态,
+                        text_types=text_types, ad_state=ad_state,
+                    )
+                    return 位置, 新章
+
+            任务 = [asyncio.create_task(补一章(i)) for i in 缺失索引]
+            本轮成功 = 0
+            for fut in asyncio.as_completed(任务):
+                位置, 新章 = await fut
+                if 新章.get("success") and str(新章.get("content") or "").strip():
+                    合并[位置] = 新章
+                    本轮成功 += 1
         仍缺 = sum(1 for x in 合并 if not x.get("success") or not str(x.get("content") or "").strip())
         logger.info(
             f"QQ阅读缺章补拉结果：book_id={书籍编号}, round={轮次}/{缺章补拉轮次}, "
