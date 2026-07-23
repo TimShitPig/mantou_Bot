@@ -423,7 +423,6 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
             行.append(分隔线)
             行.append(f"书名：{项.get('title') or '未知'}")
             行.append(f"作者：{项.get('author') or '未知'}")
-            行.append(f"序号：{序号}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     左 = "上一页" if 页码 > 1 else ""
