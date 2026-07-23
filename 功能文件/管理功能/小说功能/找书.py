@@ -48,7 +48,7 @@ except Exception as exc:
 找书会话: dict[str, dict[str, Any]] = {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
-分隔线 = "========================="
+分隔线 = "————————"
 
 
 def 清理文本(值: Any) -> str:
@@ -126,7 +126,63 @@ def 构造书旗链接(书籍编号: str) -> str:
     return f"https://www.shuqi.com/book/{书籍编号}.html"
 
 
-def 提取番茄搜索书(row: Any) -> dict[str, str] | None:
+def _安全浮点(值: Any, 默认: float = 0.0) -> float:
+    try:
+        if 值 is None or 值 == "":
+            return 默认
+        return float(值)
+    except Exception:
+        return 默认
+
+
+def _安全整数热度(值: Any) -> int:
+    try:
+        if 值 is None or 值 == "":
+            return 0
+        if isinstance(值, bool):
+            return 0
+        if isinstance(值, (int, float)):
+            return int(值)
+        文本 = str(值).strip().replace(",", "")
+        if not 文本:
+            return 0
+        if 文本.endswith("亿"):
+            return int(float(文本[:-1]) * 100000000)
+        if 文本.endswith("万"):
+            return int(float(文本[:-1]) * 10000)
+        return int(float(文本))
+    except Exception:
+        return 0
+
+
+def _格式化数量(数量: int) -> str:
+    if 数量 >= 100000000:
+        return f"{数量 / 100000000:.1f}".rstrip("0").rstrip(".") + "亿"
+    if 数量 >= 10000:
+        return f"{数量 / 10000:.1f}".rstrip("0").rstrip(".") + "万"
+    return str(int(数量))
+
+
+def 格式化热度显示(热度值: float, 评分: float = 0.0, 阅读量: int = 0) -> str:
+    """优先展示阅读/订阅热度，其次评分；字数不算热度，不展示。"""
+    if 阅读量 > 0:
+        return _格式化数量(阅读量)
+    if 评分 > 0:
+        文本 = f"{评分:.1f}".rstrip("0").rstrip(".")
+        return f"评分{文本}"
+    return ""
+
+
+def 计算热度排序值(阅读量: int = 0, 评分: float = 0.0, 字数: int = 0) -> float:
+    """跨平台排序：阅读量 > 评分 > 字数兜底。分档避免字数冒充热度压过评分。"""
+    if 阅读量 > 0:
+        return 2_000_000_000_000.0 + float(阅读量) + 评分 * 1000.0
+    if 评分 > 0:
+        return 1_000_000_000_000.0 + 评分 * 1_000_000.0 + (字数 / 100.0)
+    return float(字数)
+
+
+def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
     books = row.get("books")
@@ -140,16 +196,30 @@ def 提取番茄搜索书(row: Any) -> dict[str, str] | None:
     author = 清理文本(book.get("author") or row.get("author") or "未知") or "未知"
     if not book_id or not book_id.isdigit() or not title:
         return None
+    阅读量 = max(
+        _安全整数热度(book.get("read_count")),
+        _安全整数热度(book.get("play_num")),
+        _安全整数热度(book.get("subscribe_num")),
+        _安全整数热度(book.get("collect_num")),
+        _安全整数热度(book.get("search_num")),
+    )
+    评分 = _安全浮点(book.get("score"))
+    字数 = _安全整数热度(book.get("word_number") or book.get("word_count"))
+    热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
     return {
         "platform": "番茄",
         "book_id": book_id,
         "title": title,
         "author": author,
         "url": 构造番茄链接(book_id),
+        "heat": 热度值,
+        "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+        "score": 评分,
+        "read_count": 阅读量,
     }
 
 
-async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, str]]:
+async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
     if 番茄小说 is None:
         return []
     结果: list[dict[str, str]] = []
@@ -184,7 +254,7 @@ async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要
     return 结果[:需要数量]
 
 
-async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, str]]:
+async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
     if 七猫小说 is None:
         return []
     结果: list[dict[str, str]] = []
@@ -222,12 +292,25 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 continue
             reader_type = str(书籍.get("reader_type") or 书籍.get("type") or "")
             是否短篇 = reader_type in {"4", "short"} or "短篇" in str(书籍.get("sub_title") or "")
+            评分 = _安全浮点(书籍.get("score"))
+            字数 = _安全整数热度(书籍.get("words_num") or 书籍.get("word_count") or 书籍.get("words"))
+            # sub_title 里常有「653万字」
+            if 字数 <= 0:
+                副 = str(书籍.get("sub_title") or "")
+                m = re.search(r"([\d.]+)\s*万字", 副)
+                if m:
+                    字数 = int(float(m.group(1)) * 10000)
+            热度值 = 计算热度排序值(评分=评分, 字数=字数)
             结果.append({
                 "platform": "七猫",
                 "book_id": book_id,
                 "title": title,
                 "author": author,
                 "url": 构造七猫链接(book_id, 是否短篇),
+                "heat": 热度值,
+                "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=0),
+                "score": 评分,
+                "read_count": 0,
             })
         if len(书籍列表) < 8:
             break
@@ -235,22 +318,35 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
     return 结果[:需要数量]
 
 
-def 从对象提取书旗书(obj: dict[str, Any]) -> dict[str, str] | None:
+def 从对象提取书旗书(obj: dict[str, Any]) -> dict[str, Any] | None:
     book_id = str(obj.get("bookId") or obj.get("bid") or obj.get("id") or "").strip()
     title = 清理文本(obj.get("bookName") or obj.get("displayBookName") or obj.get("title") or obj.get("name") or "")
     if not book_id.isdigit() or not title:
         return None
     author = 清理文本(obj.get("authorName") or obj.get("author") or "未知") or "未知"
+    评分 = _安全浮点(obj.get("novelScore") or obj.get("score"))
+    字数 = _安全整数热度(obj.get("wordCount") or obj.get("words") or obj.get("word_count"))
+    阅读量 = max(
+        _安全整数热度(obj.get("readCount")),
+        _安全整数热度(obj.get("hotValue")),
+        _安全整数热度(obj.get("hot")),
+        _安全整数热度(obj.get("clickCount")),
+    )
+    热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
     return {
         "platform": "书旗",
         "book_id": book_id,
         "title": title,
         "author": author,
         "url": 构造书旗链接(book_id),
+        "heat": 热度值,
+        "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+        "score": 评分,
+        "read_count": 阅读量,
     }
 
 
-def 遍历书旗搜索结果(obj: Any, out: list[dict[str, str]], seen: set[str]) -> None:
+def 遍历书旗搜索结果(obj: Any, out: list[dict[str, Any]], seen: set[str]) -> None:
     if isinstance(obj, dict):
         item = 从对象提取书旗书(obj)
         if item and item["book_id"] not in seen:
@@ -271,7 +367,7 @@ def 遍历书旗搜索结果(obj: Any, out: list[dict[str, str]], seen: set[str]
             遍历书旗搜索结果(value, out, seen)
 
 
-async def 搜索书旗(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, str]]:
+async def 搜索书旗(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
     if 书旗小说 is None:
         return []
     结果: list[dict[str, str]] = []
@@ -363,9 +459,9 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
     return 建议[:8]
 
 
-def 去重合并(结果列表: list[list[dict[str, str]]]) -> list[dict[str, str]]:
-    """同平台同书去重；不同平台即使同名也分开保留，方便点链下载对应源。"""
-    合并: list[dict[str, str]] = []
+def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """同平台同书去重；不同平台即使同名也分开保留；最终按热度从高到低排序。"""
+    合并: list[dict[str, Any]] = []
     索引: set[str] = set()
     for 列表 in 结果列表:
         for 项 in 列表:
@@ -377,11 +473,20 @@ def 去重合并(结果列表: list[list[dict[str, str]]]) -> list[dict[str, str
             if 键 in 索引:
                 continue
             索引.add(键)
+            if "heat" not in 项:
+                项["heat"] = 0
+            if not 项.get("heat_text"):
+                项["heat_text"] = 格式化热度显示(
+                    float(项.get("heat") or 0),
+                    评分=_安全浮点(项.get("score")),
+                    阅读量=_安全整数热度(项.get("read_count")),
+                )
             合并.append(项)
+    合并.sort(key=lambda x: float(x.get("heat") or 0), reverse=True)
     return 合并
 
 
-async def 聚合搜索(关键词: str) -> list[dict[str, str]]:
+async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         番茄任务 = asyncio.create_task(搜索番茄(session, 关键词))
@@ -401,7 +506,7 @@ async def 聚合搜索(关键词: str) -> list[dict[str, str]]:
                 搜索书旗(session, w, 需要数量=10),
             ] if False else []
             # 并行补搜每个联想词
-            补结果集合: list[list[dict[str, str]]] = [番茄结果, 七猫结果, 书旗结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, 书旗结果]
             for w in 补搜词:
                 t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
@@ -413,7 +518,7 @@ async def 聚合搜索(关键词: str) -> list[dict[str, str]]:
 
 
 def 格式化找书结果(会话: dict[str, Any]) -> str:
-    结果: list[dict[str, str]] = 会话.get("results") or []
+    结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
     if 页码 > 总页:
@@ -425,10 +530,13 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
-        for 序号, 项 in enumerate(当前页, start=1):
+        for 项 in 当前页:
             行.append(分隔线)
             行.append(f"书名：{项.get('title') or '未知'}")
             行.append(f"作者：{项.get('author') or '未知'}")
+            热度文案 = str(项.get("heat_text") or "").strip()
+            if 热度文案:
+                行.append(f"热度：{热度文案}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     左 = "上一页" if 页码 > 1 else ""
@@ -436,17 +544,29 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
     if 当前页:
-        行.append("点击下方书名/作者按钮即可开始下载")
+        行.append("发送 选1～选5 下载当前页对应书籍")
     return "\n".join(行)
 
 
-def _转义Markdown(文本: str) -> str:
-    return str(文本 or "").replace("\\", "\\\\").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[").replace("]", "\\]")
+def _指令链编码(文本: str) -> str:
+    值 = str(文本 or "")
+    if len(值) > 100:
+        值 = 值[:100]
+    return urllib.parse.quote(值, safe="")
 
 
-def 格式化找书结果MD(会话: dict[str, Any]) -> str:
-    """官方机器人 Markdown 文案：正文只展示书名/作者，不展示链接和来源。"""
-    结果: list[dict[str, str]] = 会话.get("results") or []
+def _生成指令链(发送文本: str, 外显: str, *, 直接发送: bool) -> str:
+    """QQ 官方 Markdown 指令链：私聊 enter 直接发送，群聊 input 填入输入框。"""
+    text = _指令链编码(发送文本)
+    show = _指令链编码(外显 or 发送文本)
+    if 直接发送:
+        return f'<qqbot-cmd-enter text="{text}" show="{show}" />'
+    return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
+
+
+def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
+    """官方机器人 Markdown：书名/作者为指令链蓝字，展示热度，不展示来源/链接/键盘。"""
+    结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
     if 页码 > 总页:
@@ -458,67 +578,32 @@ def 格式化找书结果MD(会话: dict[str, Any]) -> str:
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
-        for 项 in 当前页:
-            书名 = _转义Markdown(项.get("title") or "未知")
-            作者 = _转义Markdown(项.get("author") or "未知")
+        for 序号, 项 in enumerate(当前页, start=1):
+            书名 = 清理文本(项.get("title") or "未知") or "未知"
+            作者 = 清理文本(项.get("author") or "未知") or "未知"
+            选书指令 = f"选{序号}"
+            热度文案 = str(项.get("heat_text") or "").strip()
             行.append(分隔线)
-            行.append(f"**书名：** {书名}")
-            行.append(f"**作者：** {作者}")
+            行.append(f"书名：{_生成指令链(选书指令, 书名, 直接发送=直接发送)}")
+            行.append(f"作者：{_生成指令链(选书指令, 作者, 直接发送=直接发送)}")
+            if 热度文案:
+                行.append(f"热度：{热度文案}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
-    行.append("点击下方书名/作者按钮即可开始下载")
+    翻页: list[str] = []
+    if 页码 > 1:
+        翻页.append(_生成指令链("上一页", "上一页", 直接发送=直接发送))
+    if 页码 < 总页:
+        翻页.append(_生成指令链("下一页", "下一页", 直接发送=直接发送))
+    if 翻页:
+        行.append(" ".join(翻页))
+    if 当前页:
+        行.append("点击书名即可开始下载" if 直接发送 else "点击书名填入指令后发送即可下载")
     return "\n".join(行)
 
 
-def _生成指令按钮(data: str, 标签: str, 点击后标签: str = "", 按钮ID: str = "") -> dict[str, Any]:
-    标识 = (按钮ID or f"{data}_{标签}")[:40] or "btn"
-    return {
-        "id": 标识,
-        "render_data": {"label": 标签[:40], "visited_label": (点击后标签 or 标签)[:40]},
-        "action": {
-            "type": 2,
-            "permission": {"type": 2},
-            "data": data,
-            "enter": True,
-            "unsupport_tips": "请发送对应文字",
-        },
-    }
-
-
-def 生成找书键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
-    """每本书两个可点按钮：书名、作者，点击后发送隐藏选书指令开始下载；另附翻页。"""
-    当前页 = 获取当前页结果(会话)
-    if not 当前页:
-        return None
-    结果: list[dict[str, str]] = 会话.get("results") or []
-    页码 = max(1, int(会话.get("page") or 1))
-    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
-    行: list[dict[str, Any]] = []
-    for 序号, 项 in enumerate(当前页, start=1):
-        书名 = 清理文本(项.get("title") or "未知书")
-        作者 = 清理文本(项.get("author") or "未知")
-        书名标签 = 书名 if len(书名) <= 20 else (书名[:19] + "…")
-        作者标签 = 作者 if len(作者) <= 16 else (作者[:15] + "…")
-        选书指令 = f"选{序号}"
-        # 用户侧只见书名/作者按钮，点后直接下载，不展示数字
-        行.append({
-            "buttons": [
-                _生成指令按钮(选书指令, 书名标签, "下载中", 按钮ID=f"t{序号}"),
-                _生成指令按钮(选书指令, 作者标签, "下载中", 按钮ID=f"a{序号}"),
-            ]
-        })
-    翻页按钮: list[dict[str, Any]] = []
-    if 页码 > 1:
-        翻页按钮.append(_生成指令按钮("上一页", "上一页"))
-    if 页码 < 总页:
-        翻页按钮.append(_生成指令按钮("下一页", "下一页"))
-    if 翻页按钮:
-        行.append({"buttons": 翻页按钮})
-    return {"rows": 行}
-
-
-def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, str]]:
-    结果: list[dict[str, str]] = 会话.get("results") or []
+def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
+    结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     起始 = (页码 - 1) * 每页数量
     return 结果[起始:起始 + 每页数量]
@@ -527,8 +612,8 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, str]]:
 选书命令正则 = re.compile(r"^选([1-5])$")
 
 
-def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, str] | str | None:
-    """识别按钮点击发来的选N，映射当前页第 N 本书。"""
+def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str | None:
+    """识别指令链/选N，映射当前页第 N 本书。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     匹配 = 选书命令正则.fullmatch(文本)
@@ -569,7 +654,7 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 
 async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | dict[str, Any] | None:
-    """返回纯文本；官方机器人返回 {md, keyboard, text}。"""
+    """返回纯文本；官方机器人返回 {md, keyboard=None, text}，md 内嵌指令链。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
@@ -617,9 +702,11 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
     if 会话 is None:
         return None
     if 是QQ官方机器人(event):
+        # 回车指令链仅私聊可用；群聊使用 input 指令链
+        直接发送 = not bool(获取群号(event))
         return {
-            "md": 格式化找书结果MD(会话),
-            "keyboard": 生成找书键盘(会话),
+            "md": 格式化找书结果MD(会话, 直接发送=直接发送),
+            "keyboard": None,
             "text": 格式化找书结果(会话),
         }
     return 格式化找书结果(会话)
