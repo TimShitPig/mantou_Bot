@@ -37,7 +37,7 @@ except Exception as e:
 
 API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 文件组件缓存清理延迟=600
+登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 文件组件缓存清理延迟=600
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
 免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
@@ -568,13 +568,13 @@ const APPID={appid_json}; const CB={cb_json};
 const statusEl=document.getElementById('status'); const statusText=document.getElementById('statusText');
 const btn=document.getElementById('btn'); const retry=document.getElementById('retry');
 function setStatus(kind,text){{statusEl.className='status'+(kind?' '+kind:''); statusText.textContent=text; retry.classList.toggle('show',kind==='bad');}}
-function postResult(payload){{fetch(CB,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload||{{}})}}).then(function(){{setStatus((payload&&Number(payload.ret)===0&&payload.ticket)?'ok':'bad',(payload&&Number(payload.ret)===0&&payload.ticket)?'验证成功，正在返回':'验证失败，请重试');}}).catch(function(){{setStatus((payload&&Number(payload.ret)===0&&payload.ticket)?'ok':'bad',(payload&&Number(payload.ret)===0&&payload.ticket)?'验证成功，正在返回':'验证失败，请重试');}});}}
+function postResult(payload){{fetch(CB,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload||{{}})}}).then(function(r){{if(r&&r.ok&&payload&&Number(payload.ret)===0&&payload.ticket){{setStatus('ok','验证成功，请返回QQ发送：完成');}}else{{setStatus('bad','回传失败，请检查端口放行后重试');}}}}).catch(function(){{setStatus('bad','回传失败，请检查端口放行后重试');}});}}
 function start(){{setStatus('busy','验证中…'); try{{const captcha=new TencentCaptcha(APPID,function(res){{const payload={{ret:res&&res.ret,ticket:(res&&res.ticket)||'',randstr:(res&&res.randstr)||'',time:Date.now()/1000}}; if(Number(payload.ret)===0&&payload.ticket){{setStatus('busy','验证中…'); postResult(payload);}} else setStatus('bad','验证失败，请重试');}},{{}}); captcha.show();}}catch(e){{setStatus('bad','验证失败，请重试');}}}}
 btn.addEventListener('click',start); retry.addEventListener('click',start); setTimeout(start,400);
 </script></body></html>"""
 
 def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块端口, timeout: int = 滑块服务保留秒数, public_host: str = "") -> Dict[str, Any]:
-    """启动滑块页服务：监听 0.0.0.0，自动获取公网 IP 生成外网链接；最多保留 timeout 秒后自动关闭。"""
+    """启动滑块页服务：监听 0.0.0.0，自动获取公网 IP；只使用固定端口段，避免跳到未放行随机端口。"""
     result: Dict[str, Any] = {}
     done = threading.Event()
     closed = threading.Event()
@@ -587,6 +587,7 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
 
     class 可复用HTTPServer(HTTPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -606,12 +607,20 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
             self._send(204, b"")
 
         def do_GET(self) -> None:
-            if self.path.startswith("/captcha") or self.path == "/" or self.path.startswith("/?"):
+            path = self.path.split("?", 1)[0]
+            if path in ("/captcha", "/", "/health", "/ping"):
+                if path in ("/health", "/ping"):
+                    self._send(200, b"ok")
+                    return
                 self._send(200, page_html.encode("utf-8"), "text/html; charset=utf-8")
                 return
             self._send(404, b"not found")
 
         def do_POST(self) -> None:
+            path = self.path.split("?", 1)[0]
+            if path not in ("/captcha", "/"):
+                self._send(404, b"not found")
+                return
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length > 0 else b"{}"
             try:
@@ -625,11 +634,29 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
             else:
                 self._send(400, b"bad")
 
-    try:
-        httpd = 可复用HTTPServer((绑定主机, port), Handler)
-    except OSError as e:
-        logger.warning(f"QQ阅读滑块端口占用，自动切换空闲端口：host={绑定主机}, port={port}, error={e}")
-        httpd = 可复用HTTPServer((绑定主机, 0), Handler)
+    端口列表: list[int] = []
+    for p in (port, *滑块备用端口):
+        try:
+            n = int(p)
+        except Exception:
+            continue
+        if n > 0 and n not in 端口列表:
+            端口列表.append(n)
+    if not 端口列表:
+        端口列表 = [默认滑块端口]
+
+    httpd = None
+    last_error: Exception | None = None
+    for 尝试端口 in 端口列表:
+        try:
+            httpd = 可复用HTTPServer((绑定主机, 尝试端口), Handler)
+            break
+        except OSError as e:
+            last_error = e
+            logger.warning(f"QQ阅读滑块端口不可用：host={绑定主机}, port={尝试端口}, error={e}")
+            continue
+    if httpd is None:
+        raise RuntimeError(f"滑块端口都被占用，请释放 {端口列表[0]}-{端口列表[-1]} 后重试: {last_error}")
 
     actual_port = int(httpd.server_address[1])
     callback_url = f"http://{访问主机}:{actual_port}/captcha"
@@ -655,9 +682,12 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
 
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     threading.Thread(target=_自动关闭, daemon=True).start()
-    logger.info(f"QQ阅读滑块本地服务已启动：url={callback_url}, keep={保留秒数}s")
+    logger.info(f"QQ阅读滑块本地服务已启动：bind={绑定主机}:{actual_port}, url={callback_url}, keep={保留秒数}s")
     return {
         "url": callback_url,
+        "bind": f"{绑定主机}:{actual_port}",
+        "port": actual_port,
+        "public_host": 访问主机,
         "result": result,
         "done": done,
         "closed": closed,
@@ -1151,10 +1181,14 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             待登录会话[会话键] = 会话
             链接 = str(滑块.get("url") or "")
             logger.info(f"QQ阅读滑块链接已下发：url={链接}")
+            端口 = str((滑块 or {}).get("port") or 默认滑块端口)
             return (
                 "请点击链接完成安全验证（5分钟内有效）："
                 + chr(10)
                 + 链接
+                + chr(10)
+                + "打不开请放行服务器端口 "
+                + 端口
                 + chr(10)
                 + "完成后发送：完成"
                 + chr(10)
