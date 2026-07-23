@@ -49,7 +49,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.17.2"
+插件版本 = "2.17.3"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -83,7 +83,18 @@ class MyPlugin(Star):
 
         找书回复 = await 找书功能.处理找书指令(event, 命令文本, self.config)
         if 找书回复 is not None:
-            yield event.plain_result(找书回复)
+            if isinstance(找书回复, dict):
+                md文本 = str(找书回复.get("md") or "")
+                键盘 = 找书回复.get("keyboard")
+                纯文本 = str(找书回复.get("text") or md文本)
+                if md文本 and 权限工具.是QQ官方机器人(event):
+                    发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                    if not 发送成功:
+                        yield event.plain_result(纯文本)
+                else:
+                    yield event.plain_result(纯文本)
+            else:
+                yield event.plain_result(找书回复)
             event.stop_event()
             return
 

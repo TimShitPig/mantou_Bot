@@ -19,6 +19,12 @@ except Exception:
 from 功能文件.管理功能.基础功能.权限工具 import 获取发送者QQ, 读取字段
 
 try:
+    from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
+except Exception:
+    def 是QQ官方机器人(event: Any) -> bool:  # type: ignore
+        return False
+
+try:
     from 功能文件.管理功能.小说功能 import 七猫小说
 except Exception as exc:
     七猫小说 = None
@@ -434,6 +440,82 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     return "\n".join(行)
 
 
+def _转义Markdown(文本: str) -> str:
+    return str(文本 or "").replace("\\", "\\\\").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[").replace("]", "\\]")
+
+
+def 格式化找书结果MD(会话: dict[str, Any]) -> str:
+    """官方机器人 Markdown 文案：正文只展示书名/作者，不展示链接和来源。"""
+    结果: list[dict[str, str]] = 会话.get("results") or []
+    页码 = max(1, int(会话.get("page") or 1))
+    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
+    if 页码 > 总页:
+        页码 = 总页
+        会话["page"] = 页码
+    起始 = (页码 - 1) * 每页数量
+    当前页 = 结果[起始:起始 + 每页数量]
+    行: list[str] = ["**找书结果**", ""]
+    if not 当前页:
+        行.append("没有找到相关书籍")
+    else:
+        for 项 in 当前页:
+            书名 = _转义Markdown(项.get("title") or "未知")
+            作者 = _转义Markdown(项.get("author") or "未知")
+            行.append(分隔线)
+            行.append(f"**书名：** {书名}")
+            行.append(f"**作者：** {作者}")
+        行.append(分隔线)
+    行.append(f"当前页数：{页码}/{总页}")
+    行.append("点击下方书名/作者按钮即可开始下载")
+    return "\n".join(行)
+
+
+def _生成指令按钮(data: str, 标签: str, 点击后标签: str = "", 按钮ID: str = "") -> dict[str, Any]:
+    标识 = (按钮ID or f"{data}_{标签}")[:40] or "btn"
+    return {
+        "id": 标识,
+        "render_data": {"label": 标签[:40], "visited_label": (点击后标签 or 标签)[:40]},
+        "action": {
+            "type": 2,
+            "permission": {"type": 2},
+            "data": data,
+            "enter": True,
+            "unsupport_tips": "请发送对应文字",
+        },
+    }
+
+
+def 生成找书键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
+    """每本书两个可点按钮：书名、作者，点击后发送同一序号触发下载；另附翻页。"""
+    当前页 = 获取当前页结果(会话)
+    if not 当前页:
+        return None
+    结果: list[dict[str, str]] = 会话.get("results") or []
+    页码 = max(1, int(会话.get("page") or 1))
+    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
+    行: list[dict[str, Any]] = []
+    for 序号, 项 in enumerate(当前页, start=1):
+        书名 = 清理文本(项.get("title") or "未知书")
+        作者 = 清理文本(项.get("author") or "未知")
+        书名标签 = 书名 if len(书名) <= 20 else (书名[:19] + "…")
+        作者标签 = 作者 if len(作者) <= 16 else (作者[:15] + "…")
+        # 点书名或作者都发同一序号，开始下载
+        行.append({
+            "buttons": [
+                _生成指令按钮(str(序号), 书名标签, "下载中", 按钮ID=f"t{序号}"),
+                _生成指令按钮(str(序号), 作者标签, "下载中", 按钮ID=f"a{序号}"),
+            ]
+        })
+    翻页按钮: list[dict[str, Any]] = []
+    if 页码 > 1:
+        翻页按钮.append(_生成指令按钮("上一页", "上一页"))
+    if 页码 < 总页:
+        翻页按钮.append(_生成指令按钮("下一页", "下一页"))
+    if 翻页按钮:
+        行.append({"buttons": 翻页按钮})
+    return {"rows": 行}
+
+
 def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, str]]:
     结果: list[dict[str, str]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
@@ -481,50 +563,60 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
     return "下载失败"
 
 
-async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | None:
+async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | dict[str, Any] | None:
+    """返回纯文本；官方机器人返回 {md, keyboard, text}。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
     关键词 = 解析找书关键词(文本)
+    会话 = None
     if 关键词 is not None:
         try:
             结果 = await 聚合搜索(关键词)
         except Exception as exc:
             logger.warning(f"找书搜索失败：keyword={关键词}, error={exc}")
             return "搜索失败，请稍后再试"
-        找书会话[会话键] = {
+        会话 = {
             "keyword": 关键词,
             "results": 结果,
             "page": 1,
             "ts": time.time(),
         }
+        找书会话[会话键] = 会话
         logger.info(f"找书搜索完成：keyword={关键词}, total={len(结果)}, session={会话键}")
         if not 结果:
             return f"没有找到和「{关键词}」相关的书"
-        return 格式化找书结果(找书会话[会话键])
+    else:
+        if re.fullmatch(r"[1-5]", 文本):
+            return None
+        if 文本 not in 翻页命令集合:
+            return None
+        会话 = 找书会话.get(会话键)
+        if not 会话:
+            return None
+        会话["ts"] = time.time()
+        页码 = max(1, int(会话.get("page") or 1))
+        总页 = max(1, (len(会话.get("results") or []) + 每页数量 - 1) // 每页数量)
+        if 文本 in {"上一页", "上页", "上"}:
+            if 页码 <= 1:
+                return "已经是第一页了"
+            会话["page"] = 页码 - 1
+        elif 文本 in {"下一页", "下页", "下"}:
+            if 页码 >= 总页:
+                return "已经是最后一页了"
+            会话["page"] = 页码 + 1
+        else:
+            return None
 
-    # 数字选择留给下载流处理，这里不拦截
-    if re.fullmatch(r"[1-5]", 文本):
+    if 会话 is None:
         return None
-    if 文本 not in 翻页命令集合:
-        return None
-    会话 = 找书会话.get(会话键)
-    if not 会话:
-        return None
-    会话["ts"] = time.time()
-    页码 = max(1, int(会话.get("page") or 1))
-    总页 = max(1, (len(会话.get("results") or []) + 每页数量 - 1) // 每页数量)
-    if 文本 in {"上一页", "上页", "上"}:
-        if 页码 <= 1:
-            return "已经是第一页了"
-        会话["page"] = 页码 - 1
-        return 格式化找书结果(会话)
-    if 文本 in {"下一页", "下页", "下"}:
-        if 页码 >= 总页:
-            return "已经是最后一页了"
-        会话["page"] = 页码 + 1
-        return 格式化找书结果(会话)
-    return None
+    if 是QQ官方机器人(event):
+        return {
+            "md": 格式化找书结果MD(会话),
+            "keyboard": 生成找书键盘(会话),
+            "text": 格式化找书结果(会话),
+        }
+    return 格式化找书结果(会话)
 
 
 def 是否找书翻页会话(event: Any) -> bool:
