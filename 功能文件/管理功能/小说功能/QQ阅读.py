@@ -66,31 +66,74 @@ QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq
 待登录会话: dict[str, dict[str, Any]] = {}
 
 
+def _是公网IPv4(ip: str) -> bool:
+    文本 = str(ip or "").strip()
+    if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", 文本):
+        return False
+    a, b, c, d = [int(x) for x in 文本.split(".")]
+    if any(x > 255 for x in (a, b, c, d)):
+        return False
+    if a == 0 or a == 127 or a >= 224:
+        return False
+    if a == 10:
+        return False
+    if a == 169 and b == 254:
+        return False
+    if a == 172 and 16 <= b <= 31:
+        return False
+    if a == 192 and b == 168:
+        return False
+    if a == 100 and 64 <= b <= 127:
+        return False
+    return True
+
+
 def 获取滑块公网主机() -> str:
-    """自动获取服务器可外网访问地址：先公网 IP，再出口 IP。"""
+    """自动获取可外网访问公网 IP；过滤 Docker/局域网私网地址。"""
+    候选: list[str] = []
+
+    def _收录(值: str) -> None:
+        ip = str(值 or "").strip()
+        ip = ip.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+        if _是公网IPv4(ip) and ip not in 候选:
+            候选.append(ip)
+
     for url in (
         "https://api.ipify.org",
+        "http://api.ipify.org",
         "https://ifconfig.me/ip",
         "https://ip.sb",
         "https://icanhazip.com",
+        "https://checkip.amazonaws.com",
+        "https://ipv4.icanhazip.com",
     ):
         try:
             import urllib.request
-            with urllib.request.urlopen(url, timeout=3) as resp:
-                ip = resp.read().decode("utf-8", "replace").strip()
-            if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", ip) and not ip.startswith("127."):
-                return ip
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                _收录(resp.read().decode("utf-8", "replace").strip())
+            if 候选:
+                return 候选[0]
         except Exception:
             continue
+
+    # 环境变量兜底（可选）
+    import os
+    for key in ("QQ_READER_CAPTCHA_PUBLIC_HOST", "MANTOU_CAPTCHA_PUBLIC_HOST", "PUBLIC_IP", "SERVER_PUBLIC_IP"):
+        _收录(os.environ.get(key) or "")
+        if 候选:
+            return 候选[0]
+
+    # 出口 IP 仅当它是公网地址时才用，避免 Docker 172.x
     try:
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
-            ip = sock.getsockname()[0]
-            if ip and not ip.startswith("127."):
-                return ip
+            _收录(sock.getsockname()[0])
     except Exception:
         pass
+    if 候选:
+        return 候选[0]
     return ""
 
 
@@ -631,7 +674,8 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
     保留秒数 = max(30, int(timeout or 滑块服务保留秒数))
     绑定主机 = str(host or "0.0.0.0").strip() or "0.0.0.0"
     访问主机 = str(public_host or "").strip() or 获取滑块公网主机()
-    if not 访问主机 or 访问主机 in {"0.0.0.0", "127.0.0.1", "localhost"}:
+    访问主机 = 访问主机.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
+    if not _是公网IPv4(访问主机):
         raise RuntimeError("未能自动获取服务器公网IP")
 
     class 可复用HTTPServer(HTTPServer):
@@ -1231,12 +1275,23 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             链接 = str(滑块.get("url") or "")
             logger.info(f"QQ阅读滑块链接已下发：url={链接}")
             端口 = str((滑块 or {}).get("port") or 默认滑块端口)
+            主机 = str((滑块 or {}).get("public_host") or "")
+            if not 链接.startswith("http://") and not 链接.startswith("https://"):
+                链接 = "http://" + 链接
+            # 私网地址直接失败，避免发打不开的链接
+            if 主机 and not _是公网IPv4(主机.split(":")[0]):
+                关闭滑块服务(会话=会话)
+                待登录会话.pop(会话键, None)
+                logger.warning(f"QQ阅读滑块公网地址无效：host={主机}")
+                return "无法获取服务器公网地址，请检查服务器网络"
             return (
-                "请点击链接完成安全验证（5分钟内有效）："
+                "请用手机浏览器打开链接完成验证（5分钟内有效）"
                 + chr(10)
                 + 链接
                 + chr(10)
-                + "打不开请放行服务器端口 "
+                + "若QQ内打不开，请复制到浏览器"
+                + chr(10)
+                + "需放行端口 "
                 + 端口
                 + chr(10)
                 + "完成后发送：完成"
