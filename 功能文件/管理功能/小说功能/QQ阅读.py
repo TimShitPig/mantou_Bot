@@ -284,6 +284,10 @@ def 组装URL(base: str, params: Mapping[str, Any]) -> str:
     return f"{base}?{query}" if query else base
 
 def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """对齐小说大全 sanitize(minimal)：登录只带 Cookie/yw*；fuid 放 query。
+
+    多带设备指纹头容易 deny；游客态无 Cookie。
+    """
     src = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
     ywguid = src.get("ywguid") or src.get("login_uin") or src.get("uid") or ""
     ywkey = src.get("ywkey") or src.get("login_key") or ""
@@ -291,13 +295,25 @@ def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, 
     if (not cookie) and ywguid and ywkey:
         cookie = f"ywguid={ywguid}; ywkey={ywkey};"
     fuid = src.get("fuid") or str(默认设备.get("fuid") or "")
-    out = {"User-Agent": src.get("User-Agent") or 默认UA, "Accept": "*/*"}
-    if cookie: out["Cookie"] = cookie
-    if ywguid: out["ywguid"] = ywguid; out["uid"] = ywguid
-    if ywkey: out["ywkey"] = ywkey
+    out = {
+        "User-Agent": src.get("User-Agent") or 默认UA,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
+    if cookie:
+        out["Cookie"] = cookie
+    if ywguid:
+        out["ywguid"] = ywguid
+        out["login_uin"] = ywguid
+        out["uid"] = ywguid
+    if ywkey:
+        out["ywkey"] = ywkey
+        out["login_key"] = ywkey
+    # fuid 主要走 query；header 也带一份给解密侧读取
     if fuid:
         out["fuid"] = fuid
-        out["logid"] = f"{fuid}_{int(time.time() * 1000)}"
+    if src.get("qrsn"):
+        out["qrsn"] = src["qrsn"]
     return out
 
 def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
@@ -310,6 +326,105 @@ def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict
     if not out.get("keypool_b64"):
         out["keypool_b64"] = 默认设备keypool_b64
     return out
+
+
+def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """免费/广告书游客态：去掉登录 Cookie/yw*，保留 fuid+keypool。
+
+    小说大全实测：登录态下广告免费书会被 adBookSeeXChapter=5 卡住；
+    游客 + adState=0 可拿全本授权；VIP 付费章不会因此放行。
+    """
+    基 = 组装本地下载态(登录态)
+    out = {
+        "fuid": str(基.get("fuid") or 默认设备.get("fuid") or ""),
+        "User-Agent": str(基.get("User-Agent") or 默认UA),
+        "keypool_b64": str(基.get("keypool_b64") or 默认设备keypool_b64 or ""),
+    }
+    if 基.get("qrsn"):
+        out["qrsn"] = str(基.get("qrsn"))
+    return out
+
+
+def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
+    """判断是否可走游客全本下载（免费全本/广告书/限免）。"""
+    if not isinstance(书籍信息, Mapping):
+        return False
+    if 书籍信息.get("is_all_free") or 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free"):
+        return True
+    price = 书籍信息.get("price")
+    maxfree = 安全整数(书籍信息.get("max_free_chapter"))
+    if price in (0, "0", 0.0) and maxfree <= 0:
+        # price=0 且无试读上限，倾向免费书
+        return True
+    # 再扫原始详情兜底
+    nodes: list[Any] = []
+    for src in (详情, 书籍信息.get("raw")):
+        if isinstance(src, dict):
+            nodes.append(src)
+            for k in ("data", "bookInfo", "book", "result"):
+                v = src.get(k)
+                if isinstance(v, dict):
+                    nodes.append(v)
+    for b in nodes:
+        if not isinstance(b, dict):
+            continue
+        if b.get("free") in (1, "1", True) or b.get("isAdBook") in (1, "1", True):
+            return True
+        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"}:
+            return True
+        if b.get("price") in (0, "0", 0.0) and b.get("maxfreechapter") in (0, "0", None, ""):
+            if b.get("free") in (1, "1", True) or b.get("isAdBook"):
+                return True
+    return False
+
+
+def 识别正文类型(详情: Any, 书籍信息: Optional[Mapping[str, Any]] = None) -> list[int]:
+    """网文 text_type=1，出版 text_type=2。返回候选顺序。"""
+    blobs: list[Any] = []
+    for src in (详情, (书籍信息 or {}).get("raw") if 书籍信息 else None):
+        if isinstance(src, dict):
+            blobs.append(src)
+            for key in ("data", "bookInfo", "book", "info"):
+                v = src.get(key)
+                if isinstance(v, dict):
+                    blobs.append(v)
+    texts: list[str] = []
+    for b in blobs:
+        if not isinstance(b, dict):
+            continue
+        for k, v in b.items():
+            if v is None:
+                continue
+            kl = str(k).lower()
+            if any(x in kl for x in ("form", "channel", "category", "cata", "type", "source", "pub", "classname")):
+                texts.append(str(v))
+        if b.get("isbn") or b.get("publisher") or b.get("ISBN"):
+            return [2]
+        nm = b.get("newmaxfreechapter") or {}
+        if isinstance(nm, dict) and 安全整数(nm.get("cteb")) > 0 and 安全整数(nm.get("txt")) == 0:
+            return [2]
+        for key in ("form", "bookForm", "book_form", "formType", "form_type", "sourceType", "bookType"):
+            if key in b:
+                try:
+                    val = int(b[key])
+                    if val == 2:
+                        return [2]
+                    if val == 1:
+                        return [1, 2]
+                except Exception:
+                    s = str(b[key])
+                    if "出版" in s:
+                        return [2]
+                    if "网文" in s or "原创" in s:
+                        return [1, 2]
+    joined = " ".join(texts)
+    if any(x in joined for x in ("出版", "纸书", "出版社", "图书", "ISBN", "isbn")):
+        return [2]
+    cat = str((书籍信息 or {}).get("category") or "")
+    if any(x in cat for x in ("出版", "纸书", "图书")):
+        return [2]
+    return [1, 2]
+
 
 def 读取keypool字节(登录态: Optional[Mapping[str, str]] = None) -> bytes:
     src = 登录态 or {}
@@ -396,13 +511,54 @@ async def 请求书籍信息(session: aiohttp.ClientSession, bid: str, 登录态
     data = await http_get_json(session, url, 最小请求头(登录态), timeout=30)
     return data if isinstance(data, dict) else {}
 
-async def 请求批量包(session: aiohttp.ClientSession, bid: str, scids: str, *, 登录态: Optional[Mapping[str, str]] = None, text_type: int = 1, useindex: bool = False, usepreview: int = 0, timeout: int = 300) -> bytes:
+async def 请求批量包(
+    session: aiohttp.ClientSession,
+    bid: str,
+    scids: str,
+    *,
+    登录态: Optional[Mapping[str, str]] = None,
+    text_type: int = 1,
+    useindex: bool = False,
+    usepreview: int = 0,
+    ad_state: Optional[int] = None,
+    noclick: Optional[int] = None,
+    timeout: int = 300,
+) -> bytes:
     headers = 最小请求头(登录态)
     fuid = headers.get("fuid") or str((登录态 or {}).get("fuid") or "")
+    有登录 = bool(headers.get("Cookie") or headers.get("ywguid") or headers.get("ywkey"))
+    if ad_state is None:
+        ad_state = 1 if 有登录 else 0
+    if noclick is None:
+        noclick = 1 if int(ad_state) == 1 else 0
     if fuid:
-        params = {"bookId": bid, "usepreview": usepreview, "type": 0, "tafauth": 1, "scids": scids, "scene": 0, "adState": 1, "fuid": fuid, "noclick": 1, "text_type": int(text_type), "useindex": 1 if useindex else 0}
+        params = {
+            "bookId": bid,
+            "usepreview": int(usepreview),
+            "type": 0,
+            "tafauth": 1,
+            "scids": scids,
+            "scene": 0,
+            "adState": int(ad_state),
+            "fuid": fuid,
+            "noclick": int(noclick),
+            "text_type": int(text_type),
+            "useindex": 1 if useindex else 0,
+        }
     else:
-        params = {"bookId": bid, "scids": scids, "type": 0, "text_type": 0, "useindex": 1 if useindex else 0, "tafauth": 1}
+        # 无 fuid 时尽量仍带 adState=0 游客路径
+        params = {
+            "bookId": bid,
+            "scids": scids,
+            "type": 0,
+            "text_type": int(text_type),
+            "useindex": 1 if useindex else 0,
+            "tafauth": 1,
+            "usepreview": int(usepreview),
+            "scene": 0,
+            "adState": int(ad_state),
+            "noclick": int(noclick),
+        }
     url = 组装URL(批量正文地址, params)
     data, status = await http_get_bytes(session, url, headers, timeout=timeout)
     if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
@@ -416,7 +572,14 @@ async def 请求目录(session: aiohttp.ClientSession, bid: str, 登录态: Opti
     return 解析目录文本(解码文本(ce.data))
 
 
-async def 探测可下载章节编号(session: aiohttp.ClientSession, bid: str, 章节列表: list[dict[str, Any]], 登录态: Optional[Mapping[str, str]] = None) -> set[str]:
+async def 探测可下载章节编号(
+    session: aiohttp.ClientSession,
+    bid: str,
+    章节列表: list[dict[str, Any]],
+    登录态: Optional[Mapping[str, str]] = None,
+    *,
+    ad_state: Optional[int] = None,
+) -> set[str]:
     """通过 App 批量接口 info.txt 探测当前态下可下发正文的章节（code=0）。"""
     if not 章节列表:
         return set()
@@ -431,7 +594,10 @@ async def 探测可下载章节编号(session: aiohttp.ClientSession, bid: str, 
             continue
         scids = str(段[0]) if len(段) == 1 else f"{段[0]}-{段[-1]}"
         try:
-            blob = await 请求批量包(session, bid, scids, 登录态=下载态, text_type=1, useindex=False, usepreview=0, timeout=60)
+            blob = await 请求批量包(
+                session, bid, scids, 登录态=下载态, text_type=1,
+                useindex=False, usepreview=0, ad_state=ad_state, timeout=60,
+            )
             if 是否deny(blob):
                 continue
             for e in 解析tar(blob):
@@ -500,6 +666,11 @@ def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
     maxfree = 安全整数(取("maxfreechapter", "maxFreeChapter", "freeChapter", "freeChapters", default=0))
     free_flag = 取("free", "isFree", "isfree", default=None)
     is_all_free = str(free_flag).strip().lower() in {"1", "true", "yes"}
+    is_ad = 取("isAdBook", "isadbook", "adBook", default=None)
+    is_ad_book = str(is_ad).strip().lower() in {"1", "true", "yes"}
+    limit_free = 取("islimitfreebook", "isLimitFreeBook", default=None)
+    is_limit_free = str(limit_free).strip().lower() in {"1", "true", "yes"}
+    price = 取("price", "bookPrice", default=None)
     return {
         "book_id": str(bid),
         "title": title,
@@ -509,8 +680,12 @@ def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
         "chapter_count": 安全整数(chapters),
         "max_free_chapter": maxfree,
         "is_all_free": is_all_free,
+        "is_ad_book": is_ad_book,
+        "is_limit_free": is_limit_free,
+        "price": price,
         "intro": intro,
         "category": category,
+        "raw": root,
     }
 
 
@@ -1017,11 +1192,20 @@ def 获取QQ阅读回复流(event: Any, 命令文本: str, 配置: Any = None) -
     return 生成本地下载回复流(event, 来源, 配置)
 
 
-async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]], 登录态: dict[str, str]) -> list[dict[str, Any]]:
+async def 下载全书批量(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+    登录态: dict[str, str],
+    *,
+    text_types: Optional[Sequence[int]] = None,
+    ad_state: Optional[int] = None,
+) -> list[dict[str, Any]]:
     """固定拆成最多 5 批，动态并发请求（有空位就继续发）。纯 App 接口，不混析API。"""
     if not 目录:
         return []
     下载态 = 组装本地下载态(登录态)
+    类型候选 = [int(x) for x in (text_types or (1, 2))]
     总数 = len(目录)
     批次数 = min(5, 总数)
     每批 = (总数 + 批次数 - 1) // 批次数
@@ -1068,14 +1252,15 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
             结束 = 安全整数(批次[-1].get("index")) or (起始 + len(批次) - 1)
             scids = str(起始) if 起始 == 结束 else f"{起始}-{结束}"
             最后异常 = None
-            for text_type in (1, 2):
+            for text_type in 类型候选:
                 最佳结果: list[dict[str, Any]] | None = None
                 最佳成功 = -1
                 for 尝试 in range(1, 正文解密重试次数 + 1):
                     try:
                         blob = await 请求批量包(
                             session, 书籍编号, scids, 登录态=下载态,
-                            text_type=text_type, useindex=False, usepreview=0, timeout=180,
+                            text_type=text_type, useindex=False, usepreview=0,
+                            ad_state=ad_state, timeout=180,
                         )
                         if 是否deny(blob):
                             raise RuntimeError("批量接口拒绝")
@@ -1162,8 +1347,11 @@ async def 下载单章正文(
     书籍编号: str,
     章节: dict[str, Any],
     下载态: dict[str, str],
+    *,
+    text_types: Optional[Sequence[int]] = None,
+    ad_state: Optional[int] = None,
 ) -> dict[str, Any]:
-    """缺章定向补拉：单章 scids + text_type 1/2 有限重试。"""
+    """缺章定向补拉：单章 scids + text_type 有限重试。"""
     索引 = 安全整数(章节.get("index")) or 0
     cid = str(章节.get("cid") or 章节.get("id") or 索引 or "")
     标题 = 清理文本(章节.get("title") or f"第{索引}章")
@@ -1171,12 +1359,13 @@ async def 下载单章正文(
         return {**章节, "title": 标题, "content": "", "success": False}
     scids = str(索引) if 索引 else cid
     最佳正文 = ""
-    for text_type in (1, 2):
+    for text_type in [int(x) for x in (text_types or (1, 2))]:
         for 尝试 in range(1, 正文解密重试次数 + 1):
             try:
                 blob = await 请求批量包(
                     session, 书籍编号, scids, 登录态=下载态,
-                    text_type=text_type, useindex=False, usepreview=0, timeout=90,
+                    text_type=text_type, useindex=False, usepreview=0,
+                    ad_state=ad_state, timeout=90,
                 )
                 if 是否deny(blob):
                     break
@@ -1210,6 +1399,9 @@ async def 补拉缺失章节(
     书籍编号: str,
     结果列表: list[dict[str, Any]],
     登录态: dict[str, str],
+    *,
+    text_types: Optional[Sequence[int]] = None,
+    ad_state: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """主批量后对失败章做有限轮次单章补拉，不无限循环。"""
     if not 结果列表:
@@ -1229,7 +1421,10 @@ async def 补拉缺失章节(
         async def 补一章(位置: int) -> tuple[int, dict[str, Any]]:
             async with 信号量:
                 章节 = 合并[位置]
-                新章 = await 下载单章正文(session, 书籍编号, 章节, 下载态)
+                新章 = await 下载单章正文(
+                    session, 书籍编号, 章节, 下载态,
+                    text_types=text_types, ad_state=ad_state,
+                )
                 return 位置, 新章
 
         任务 = [asyncio.create_task(补一章(i)) for i in 缺失索引]
@@ -1280,10 +1475,22 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ch["index"] = 安全整数(ch.get("index")) or i
             有账号 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            全书免费 = bool(书籍信息.get("is_all_free"))
+            全书免费标记 = bool(书籍信息.get("is_all_free"))
+            免费或广告 = 是否免费或广告书(书籍信息, 详情) or 全书免费标记
+            # 小说大全策略：免费/广告书自动游客（去 Cookie，adState=0），绕过登录广告 5 章闸。
+            if 免费或广告:
+                下载态 = 组装游客下载态(登录态)
+                ad_state = 0
+                模式 = "guest"
+            else:
+                下载态 = 组装本地下载态(登录态)
+                ad_state = 1 if 有账号 else 0
+                模式 = "login" if 有账号 else "device"
+            类型候选 = 识别正文类型(详情, 书籍信息)
             # 无论是否登录，都先探测服务端真正可下发章节。
-            # 免费账号登录后对 VIP 书通常仍只有少量试读章（如 5 章），不能按整本 200+ 章硬下。
-            可下编号 = await 探测可下载章节编号(会话, 书籍编号, 目录, 登录态)
+            可下编号 = await 探测可下载章节编号(
+                会话, 书籍编号, 目录, 下载态, ad_state=ad_state,
+            )
             if 可下编号:
                 下载目录 = [
                     ch for ch in 目录
@@ -1294,16 +1501,17 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             logger.debug(
                 f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(可下编号)}, "
                 f"download={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, "
-                f"all_free={全书免费}, has_account={有账号}"
+                f"free_or_ad={免费或广告}, mode={模式}, has_account={有账号}"
             )
             if not 下载目录:
                 logger.warning(
-                    f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, has_account={有账号}"
+                    f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, "
+                    f"mode={模式}, has_account={有账号}"
                 )
                 yield 收费书提示
                 return
-            # 非全免书，但只有部分试读/免费章可下：按收费书处理，避免下 5 章却按 218 章失败。
-            if (not 全书免费) and len(下载目录) < len(目录):
+            # 非免费/广告书，但只有部分试读章可下：按收费书处理。
+            if (not 免费或广告) and len(下载目录) < len(目录):
                 logger.warning(
                     f"QQ阅读本地下载失败：收费/VIP书仅试读可下 book_id={书籍编号}, "
                     f"authorized={len(下载目录)}, catalog={len(目录)}, has_account={有账号}"
@@ -1315,22 +1523,28 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
                 f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
-                f"has_account={有账号}"
+                f"mode={模式}, text_types={list(类型候选)}, has_account={有账号}"
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            # 纯本地 App：不和析API混用。免费书用设备态；有 VIP 权限账号才能下付费整本。
-            章节结果 = await 下载全书批量(会话, 书籍编号, 下载目录, 登录态)
+            # 纯本地 App：不和析API混用。免费/广告书游客；VIP 付费需有权限账号。
+            章节结果 = await 下载全书批量(
+                会话, 书籍编号, 下载目录, 下载态,
+                text_types=类型候选, ad_state=ad_state,
+            )
             缺少数 = sum(1 for x in 章节结果 if not x.get("success") or not str(x.get("content") or "").strip())
             if 缺少数:
-                章节结果 = await 补拉缺失章节(会话, 书籍编号, 章节结果, 登录态)
+                章节结果 = await 补拉缺失章节(
+                    会话, 书籍编号, 章节结果, 下载态,
+                    text_types=类型候选, ad_state=ad_state,
+                )
             成功列表 = [x for x in 章节结果 if x.get("success") and str(x.get("content") or "").strip()]
             if not 成功列表 or len(成功列表) < len(下载目录):
                 logger.warning(
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
-                    f"catalog_total={len(目录)}, has_account={有账号}"
+                    f"catalog_total={len(目录)}, mode={模式}, has_account={有账号}"
                 )
-                if (not 全书免费) and len(成功列表) < len(目录):
+                if (not 免费或广告) and len(成功列表) < len(目录):
                     yield 收费书提示
                 else:
                     yield 下载失败提示
