@@ -436,7 +436,7 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
     if 当前页:
-        行.append(f"发送数字 1-{len(当前页)} 开始下载")
+        行.append("点击下方书名/作者按钮即可开始下载")
     return "\n".join(行)
 
 
@@ -486,7 +486,7 @@ def _生成指令按钮(data: str, 标签: str, 点击后标签: str = "", 按�
 
 
 def 生成找书键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
-    """每本书两个可点按钮：书名、作者，点击后发送同一序号触发下载；另附翻页。"""
+    """每本书两个可点按钮：书名、作者，点击后发送隐藏选书指令开始下载；另附翻页。"""
     当前页 = 获取当前页结果(会话)
     if not 当前页:
         return None
@@ -499,11 +499,12 @@ def 生成找书键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
         作者 = 清理文本(项.get("author") or "未知")
         书名标签 = 书名 if len(书名) <= 20 else (书名[:19] + "…")
         作者标签 = 作者 if len(作者) <= 16 else (作者[:15] + "…")
-        # 点书名或作者都发同一序号，开始下载
+        选书指令 = f"选{序号}"
+        # 用户侧只见书名/作者按钮，点后直接下载，不展示数字
         行.append({
             "buttons": [
-                _生成指令按钮(str(序号), 书名标签, "下载中", 按钮ID=f"t{序号}"),
-                _生成指令按钮(str(序号), 作者标签, "下载中", 按钮ID=f"a{序号}"),
+                _生成指令按钮(选书指令, 书名标签, "下载中", 按钮ID=f"t{序号}"),
+                _生成指令按钮(选书指令, 作者标签, "下载中", 按钮ID=f"a{序号}"),
             ]
         })
     翻页按钮: list[dict[str, Any]] = []
@@ -523,22 +524,26 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, str]]:
     return 结果[起始:起始 + 每页数量]
 
 
+选书命令正则 = re.compile(r"^选([1-5])$")
+
+
 def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, str] | str | None:
-    """发送 1-5 选择当前页书籍。返回选中项，或错误字符串，或 None。"""
+    """识别按钮点击发来的选N，映射当前页第 N 本书。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
-    if not re.fullmatch(r"[1-5]", 文本):
+    匹配 = 选书命令正则.fullmatch(文本)
+    if not 匹配:
         return None
     会话 = 找书会话.get(获取找书会话键(event))
     if not 会话:
-        return None
+        return "找书结果已过期，请重新发送 找 关键词"
     会话["ts"] = time.time()
     当前页 = 获取当前页结果(会话)
     if not 当前页:
         return "没有可选书籍"
-    序号 = int(文本)
+    序号 = int(匹配.group(1))
     if 序号 < 1 or 序号 > len(当前页):
-        return f"请发送 1-{len(当前页)} 之间的数字"
+        return "下载失败"
     return 当前页[序号 - 1]
 
 
@@ -587,7 +592,8 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
         if not 结果:
             return f"没有找到和「{关键词}」相关的书"
     else:
-        if re.fullmatch(r"[1-5]", 文本):
+        # 选书指令由 获取找书下载回复流 处理，这里直接跳过
+        if 选书命令正则.fullmatch(文本):
             return None
         if 文本 not in 翻页命令集合:
             return None
