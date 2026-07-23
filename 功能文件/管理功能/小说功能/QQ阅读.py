@@ -516,9 +516,32 @@ def 遍历JSON对象(value: Any):
 
 def 查找登录载荷(response: Any) -> Optional[Dict[str, Any]]:
     for obj in 遍历JSON对象(response):
-        ywguid = obj.get("ywguid") or obj.get("login_uin") or obj.get("uid")
-        ywkey = obj.get("ywkey") or obj.get("login_key")
-        if ywguid and ywkey: return dict(obj)
+        if not isinstance(obj, dict):
+            continue
+        ywguid = (
+            obj.get("ywGuid")
+            or obj.get("ywguid")
+            or obj.get("login_uin")
+            or obj.get("uid")
+            or obj.get("YWGuid")
+        )
+        ywkey = (
+            obj.get("ywKey")
+            or obj.get("ywkey")
+            or obj.get("login_key")
+            or obj.get("YWKey")
+        )
+        if ywguid and ywkey:
+            清洗 = dict(obj)
+            清洗["ywguid"] = str(ywguid)
+            清洗["ywkey"] = str(ywkey)
+            清洗["ywGuid"] = str(ywguid)
+            清洗["ywKey"] = str(ywkey)
+            if obj.get("ticket") is not None:
+                清洗["ticket"] = str(obj.get("ticket"))
+            if obj.get("autoLoginSessionKey") is not None:
+                清洗["autoLoginSessionKey"] = str(obj.get("autoLoginSessionKey"))
+            return 清洗
     return None
 
 def 查找nextAction(response: Any) -> int:
@@ -548,14 +571,40 @@ def 应用滑块参数(params: Dict[str, Any], ticket: str = "", randstr: str = 
     return out
 
 def 从登录载荷构造登录态(payload: Mapping[str, Any], phone: str = "") -> Dict[str, str]:
-    ywguid = str(payload.get("ywguid") or payload.get("login_uin") or payload.get("uid") or "")
-    ywkey = str(payload.get("ywkey") or payload.get("login_key") or "")
+    ywguid = str(
+        payload.get("ywGuid")
+        or payload.get("ywguid")
+        or payload.get("login_uin")
+        or payload.get("uid")
+        or ""
+    )
+    ywkey = str(
+        payload.get("ywKey")
+        or payload.get("ywkey")
+        or payload.get("login_key")
+        or ""
+    )
     fuid = str(payload.get("fuid") or 默认设备.get("fuid") or "")
-    cookie = str(payload.get("Cookie") or "")
-    if not cookie and ywguid and ywkey: cookie = f"ywguid={ywguid}; ywkey={ywkey};"
-    out = {"User-Agent":默认UA,"login_type":"2","ywguid":ywguid,"ywkey":ywkey,"uid":ywguid,"Cookie":cookie,"fuid":fuid,"qimei":默认设备.get("qimei",""),"qimei36":默认设备.get("qimei36",""),"ibex":默认设备.get("ibex","")}
-    if phone: out["phone"] = phone
-    if payload.get("qrsn"): out["qrsn"] = str(payload.get("qrsn"))
+    cookie = str(payload.get("Cookie") or payload.get("cookie") or "")
+    if not cookie and ywguid and ywkey:
+        cookie = f"ywguid={ywguid}; ywkey={ywkey};"
+    out = {
+        "User-Agent": 默认UA,
+        "login_type": "2",
+        "ywguid": ywguid,
+        "ywkey": ywkey,
+        "uid": ywguid,
+        "Cookie": cookie,
+        "fuid": fuid,
+        "qimei": 默认设备.get("qimei", ""),
+        "qimei36": 默认设备.get("qimei36", ""),
+        "ibex": 默认设备.get("ibex", ""),
+    }
+    if phone:
+        out["phone"] = phone
+    for key in ("ticket", "autoLoginSessionKey", "autoLoginKeepTime", "autoLoginExpiredTime", "ywOpenId", "alk", "alkts", "qrsn"):
+        if payload.get(key) not in (None, ""):
+            out[key] = str(payload.get(key))
     return out
 
 def 生成滑块HTML(appid: str = 滑块AppId, callback_url: str = "http://127.0.0.1:8765/captcha") -> str:
@@ -1233,7 +1282,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             待登录会话.pop(会话键, None)
             return 登录失败提示
         if not 结果.get("success"):
-            logger.warning(f"QQ阅读验证码登录失败：resp={限制文本长度(结果.get('response'),200)}")
+            logger.warning(f"QQ阅读验证码登录失败：code={((结果.get('response') or {}) if isinstance(结果.get('response'), dict) else {}).get('code', '')}, has_payload={bool(结果.get('auth'))}, resp={限制文本长度(结果.get('response'),120)}")
             待登录会话.pop(会话键, None)
             return 登录失败提示
         try:
