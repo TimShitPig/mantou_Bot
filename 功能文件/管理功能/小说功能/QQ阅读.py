@@ -37,7 +37,7 @@ except Exception as e:
 
 API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=180; 文件组件缓存清理延迟=600
+登录会话等待秒数=300; 滑块服务保留秒数=300; 文件组件缓存清理延迟=600
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
 免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
@@ -543,34 +543,152 @@ function start(){{setStatus('busy','验证中…'); try{{const captcha=new Tence
 btn.addEventListener('click',start); retry.addEventListener('click',start); setTimeout(start,400);
 </script></body></html>"""
 
-def 启动滑块本地服务(*, host: str = "127.0.0.1", port: int = 8765, timeout: int = 180) -> Dict[str, str]:
-    result: Dict[str, Any] = {}; done = threading.Event()
-    callback_url = f"http://{host}:{port}/captcha"; page_html = 生成滑块HTML(callback_url=callback_url)
+def 启动滑块本地服务(*, host: str = "127.0.0.1", port: int = 8765, timeout: int = 滑块服务保留秒数) -> Dict[str, Any]:
+    """启动本机滑块页服务，立即返回可点击链接；服务最多保留 timeout 秒后自动关闭。"""
+    result: Dict[str, Any] = {}
+    done = threading.Event()
+    closed = threading.Event()
+    page_html = ""
+    保留秒数 = max(30, int(timeout or 滑块服务保留秒数))
+
+    class 可复用HTTPServer(HTTPServer):
+        allow_reuse_address = True
+
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt: str, *args: Any) -> None: return
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
         def _send(self, code: int, body: bytes, content_type: str = "text/plain; charset=utf-8") -> None:
-            self.send_response(code); self.send_header("Content-Type", content_type)
-            self.send_header("Access-Control-Allow-Origin", "*"); self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
-        def do_OPTIONS(self) -> None: self._send(204, b"")
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_OPTIONS(self) -> None:
+            self._send(204, b"")
+
         def do_GET(self) -> None:
-            if self.path.startswith("/captcha") or self.path == "/" or self.path.startswith("/?"): self._send(200, page_html.encode("utf-8"), "text/html; charset=utf-8"); return
+            if self.path.startswith("/captcha") or self.path == "/" or self.path.startswith("/?"):
+                self._send(200, page_html.encode("utf-8"), "text/html; charset=utf-8")
+                return
             self._send(404, b"not found")
+
         def do_POST(self) -> None:
-            length = int(self.headers.get("Content-Length") or 0); raw = self.rfile.read(length) if length > 0 else b"{}"
-            try: payload = json.loads(raw.decode("utf-8", "replace"))
-            except Exception: payload = {}
-            if isinstance(payload, dict) and payload.get("ticket"): result.update(payload); done.set(); self._send(200, b"ok")
-            else: self._send(400, b"bad")
-    httpd = HTTPServer((host, port), Handler); threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8", "replace"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict) and payload.get("ticket"):
+                result.update(payload)
+                done.set()
+                self._send(200, b"ok")
+            else:
+                self._send(400, b"bad")
+
     try:
-        import webbrowser; webbrowser.open(callback_url)
-    except Exception: pass
-    ok = done.wait(timeout=timeout)
-    try: httpd.shutdown()
-    except Exception: pass
-    if not ok or not result.get("ticket"): raise TimeoutError("滑块验证超时")
-    return {"ticket": str(result.get("ticket") or ""), "randstr": str(result.get("randstr") or "")}
+        httpd = 可复用HTTPServer((host, port), Handler)
+    except OSError as e:
+        logger.warning(f"QQ阅读滑块端口占用，自动切换空闲端口：host={host}, port={port}, error={e}")
+        httpd = 可复用HTTPServer((host, 0), Handler)
+
+    actual_port = int(httpd.server_address[1])
+    callback_url = f"http://{host}:{actual_port}/captcha"
+    page_html = 生成滑块HTML(callback_url=callback_url)
+
+    def _关闭服务() -> None:
+        if closed.is_set():
+            return
+        closed.set()
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        logger.info(f"QQ阅读滑块本地服务已关闭：url={callback_url}")
+
+    def _自动关闭() -> None:
+        done.wait(timeout=保留秒数)
+        _关闭服务()
+
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=_自动关闭, daemon=True).start()
+    logger.info(f"QQ阅读滑块本地服务已启动：url={callback_url}, keep={保留秒数}s")
+    return {
+        "url": callback_url,
+        "result": result,
+        "done": done,
+        "closed": closed,
+        "close": _关闭服务,
+        "expires_at": time.time() + 保留秒数,
+        "ticket": "",
+        "randstr": "",
+    }
+
+
+def 关闭滑块服务(会话: Optional[Mapping[str, Any]] = None, 滑块: Optional[Mapping[str, Any]] = None) -> None:
+    对象 = 滑块 or (会话 or {}).get("captcha") or {}
+    close = 对象.get("close") if isinstance(对象, Mapping) else None
+    if callable(close):
+        try:
+            close()
+        except Exception as e:
+            logger.warning(f"QQ阅读滑块服务关闭失败：error={e}")
+
+
+async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tuple[bool, str]:
+    滑块 = 会话.get("captcha") if isinstance(会话.get("captcha"), dict) else {}
+    done = 滑块.get("done")
+    result = 滑块.get("result") if isinstance(滑块.get("result"), dict) else {}
+    过期时间 = float(滑块.get("expires_at") or 会话.get("expires_at") or 0)
+    链接 = str(滑块.get("url") or "")
+    if 过期时间 and time.time() > 过期时间 and not (isinstance(done, threading.Event) and done.is_set()):
+        关闭滑块服务(会话=会话)
+        return False, "安全验证已过期，请重新发送 登录QQ阅读"
+    if not (isinstance(done, threading.Event) and done.is_set() and result.get("ticket")):
+        if 链接:
+            return False, f"请先点击链接完成安全验证（5分钟内有效）：\n{链接}\n完成后发送：完成\n发送 0 取消"
+        return False, "请先完成安全验证，或发送 0 取消"
+    ticket = str(result.get("ticket") or "")
+    randstr = str(result.get("randstr") or "")
+    滑块["ticket"] = ticket
+    滑块["randstr"] = randstr
+    会话["captcha"] = 滑块
+    try:
+        async with aiohttp.ClientSession() as 会话http:
+            结果 = await 发送手机验证码(
+                会话http,
+                str(会话.get("phone") or ""),
+                ticket=ticket,
+                randstr=randstr,
+                session_key=str(会话.get("session_key") or ""),
+                登录态=读取QQ阅读登录态(配置),
+            )
+    except Exception as e:
+        logger.warning(f"QQ阅读滑块后发短信失败：error={e}")
+        关闭滑块服务(会话=会话)
+        return False, 登录失败提示
+    if not 结果.get("success"):
+        logger.warning(f"QQ阅读滑块后发短信失败：resp={限制文本长度(结果.get('response'), 200)}")
+        关闭滑块服务(会话=会话)
+        return False, 登录失败提示
+    关闭滑块服务(会话=会话)
+    会话.update({
+        "step": "code",
+        "session_key": 结果.get("session_key") or 会话.get("session_key") or "",
+        "phone": 结果.get("phone") or 会话.get("phone"),
+        "ts": time.time(),
+        "captcha": None,
+    })
+    return True, "验证成功，请发送短信验证码\n发送 0 取消"
 
 async def 发送手机验证码(session: aiohttp.ClientSession, phone: str, *, ticket: str = "", randstr: str = "", session_key: str = "", 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     full_phone = 手机号带区号(phone); params = 登录默认参数(登录态)
@@ -936,70 +1054,123 @@ def 处理QQ阅读API指令(event: Any, 命令文本: str, 配置: Any) -> str |
 def 清理过期登录会话() -> None:
     现在 = time.time()
     for k in [k for k, v in 待登录会话.items() if 现在 - float(v.get("ts") or 0) > 登录会话等待秒数]:
+        关闭滑块服务(会话=待登录会话.get(k))
         待登录会话.pop(k, None)
 
 async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if not 文本: return None
-    清理过期登录会话(); 会话键 = 获取会话键(event)
+    if not 文本:
+        return None
+    清理过期登录会话()
+    会话键 = 获取会话键(event)
     if 文本 in ("登录QQ阅读", "qq阅读登录", "QQ阅读登录"):
-        if not 是群文件清理管理员(event, 配置): return "没有权限登录QQ阅读"
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限登录QQ阅读"
+        旧会话 = 待登录会话.pop(会话键, None)
+        关闭滑块服务(会话=旧会话)
         待登录会话[会话键] = {"step": "phone", "ts": time.time()}
-        return "请发送手机号（仅支持中国大陆手机号）\n发送 0 取消"
+        return "请发送手机号（仅支持中国大陆手机号）" + chr(10) + "发送 0 取消"
     会话 = 待登录会话.get(会话键)
-    if not 会话: return None
+    if not 会话:
+        return None
     if not 是群文件清理管理员(event, 配置):
-        待登录会话.pop(会话键, None); return "没有权限登录QQ阅读"
+        关闭滑块服务(会话=会话)
+        待登录会话.pop(会话键, None)
+        return "没有权限登录QQ阅读"
     if 文本 in {"0", "取消", "返回", "返回上一步"}:
-        待登录会话.pop(会话键, None); return "已取消QQ阅读登录"
+        关闭滑块服务(会话=会话)
+        待登录会话.pop(会话键, None)
+        return "已取消QQ阅读登录"
     步骤 = str(会话.get("step") or "")
     if 步骤 == "phone":
         号码 = 文本.replace(" ", "")
-        if 号码.startswith("+86"): 号码 = 号码[3:]
-        if 号码.startswith("86") and len(号码) == 13: 号码 = 号码[2:]
-        if not 手机号正则.fullmatch(号码): return "手机号格式不正确，请重新发送\n发送 0 取消"
+        if 号码.startswith("+86"):
+            号码 = 号码[3:]
+        if 号码.startswith("86") and len(号码) == 13:
+            号码 = 号码[2:]
+        if not 手机号正则.fullmatch(号码):
+            return "手机号格式不正确，请重新发送" + chr(10) + "发送 0 取消"
         try:
             async with aiohttp.ClientSession() as 会话http:
                 结果 = await 发送手机验证码(会话http, 号码, 登录态=读取QQ阅读登录态(配置))
         except Exception as e:
-            logger.warning(f"QQ阅读发短信失败：error={e}"); return 登录失败提示
+            logger.warning(f"QQ阅读发短信失败：error={e}")
+            return 登录失败提示
         if 结果.get("need_captcha"):
-            会话.update({"step": "captcha", "phone": 结果.get("phone") or 号码, "session_key": 结果.get("session_key") or "", "ts": time.time()})
-            待登录会话[会话键] = 会话
             try:
-                滑块 = await asyncio.to_thread(启动滑块本地服务, timeout=180)
-                async with aiohttp.ClientSession() as 会话http:
-                    结果2 = await 发送手机验证码(会话http, 会话["phone"], ticket=滑块.get("ticket") or "", randstr=滑块.get("randstr") or "", session_key=会话.get("session_key") or "", 登录态=读取QQ阅读登录态(配置))
-                if not 结果2.get("success"):
-                    logger.warning(f"QQ阅读滑块后发短信失败：resp={限制文本长度(结果2.get('response'),200)}")
-                    待登录会话.pop(会话键, None); return 登录失败提示
-                会话.update({"step": "code", "session_key": 结果2.get("session_key") or 会话.get("session_key") or "", "phone": 结果2.get("phone") or 会话.get("phone"), "ts": time.time()})
-                待登录会话[会话键] = 会话
-                return "验证成功，请发送短信验证码\n发送 0 取消"
+                滑块 = await asyncio.to_thread(启动滑块本地服务, timeout=滑块服务保留秒数)
             except Exception as e:
-                logger.warning(f"QQ阅读滑块验证失败：error={e}")
+                logger.warning(f"QQ阅读滑块服务启动失败：error={e}")
                 待登录会话.pop(会话键, None)
-                return "需要完成安全验证，请在机器人服务器本机浏览器完成滑块后重试登录"
+                return 登录失败提示
+            会话.update({
+                "step": "captcha_wait",
+                "phone": 结果.get("phone") or 号码,
+                "session_key": 结果.get("session_key") or "",
+                "captcha": 滑块,
+                "expires_at": float(滑块.get("expires_at") or (time.time() + 滑块服务保留秒数)),
+                "ts": time.time(),
+            })
+            待登录会话[会话键] = 会话
+            链接 = str(滑块.get("url") or "")
+            logger.info(f"QQ阅读滑块链接已下发：url={链接}")
+            return (
+                "请点击链接完成安全验证（5分钟内有效）："
+                + chr(10)
+                + 链接
+                + chr(10)
+                + "完成后发送：完成"
+                + chr(10)
+                + "发送 0 取消"
+            )
         if not 结果.get("success"):
             logger.warning(f"QQ阅读发短信失败：resp={限制文本长度(结果.get('response'),200)}")
-            待登录会话.pop(会话键, None); return 登录失败提示
-        会话.update({"step": "code", "phone": 结果.get("phone") or 号码, "session_key": 结果.get("session_key") or "", "ts": time.time()})
+            待登录会话.pop(会话键, None)
+            return 登录失败提示
+        会话.update({
+            "step": "code",
+            "phone": 结果.get("phone") or 号码,
+            "session_key": 结果.get("session_key") or "",
+            "ts": time.time(),
+        })
         待登录会话[会话键] = 会话
-        return "验证码已发送，请发送短信验证码\n发送 0 取消"
+        return "验证码已发送，请发送短信验证码" + chr(10) + "发送 0 取消"
+    if 步骤 in ("captcha_wait", "captcha"):
+        成功, 回复 = await 完成QQ阅读滑块验证(会话, 配置)
+        if 成功:
+            待登录会话[会话键] = 会话
+            return 回复
+        if "已过期" in 回复 or 回复 == 登录失败提示:
+            待登录会话.pop(会话键, None)
+        else:
+            待登录会话[会话键] = 会话
+        return 回复
     if 步骤 == "code":
-        if not 验证码正则.fullmatch(文本): return "验证码格式不正确，请重新发送\n发送 0 取消"
+        if not 验证码正则.fullmatch(文本):
+            return "验证码格式不正确，请重新发送" + chr(10) + "发送 0 取消"
         try:
             async with aiohttp.ClientSession() as 会话http:
-                结果 = await 提交手机验证码(会话http, str(会话.get("phone") or ""), 文本, str(会话.get("session_key") or ""), 登录态=读取QQ阅读登录态(配置))
+                结果 = await 提交手机验证码(
+                    会话http,
+                    str(会话.get("phone") or ""),
+                    文本,
+                    str(会话.get("session_key") or ""),
+                    登录态=读取QQ阅读登录态(配置),
+                )
         except Exception as e:
-            logger.warning(f"QQ阅读验证码登录失败：error={e}"); 待登录会话.pop(会话键, None); return 登录失败提示
+            logger.warning(f"QQ阅读验证码登录失败：error={e}")
+            待登录会话.pop(会话键, None)
+            return 登录失败提示
         if not 结果.get("success"):
             logger.warning(f"QQ阅读验证码登录失败：resp={限制文本长度(结果.get('response'),200)}")
-            待登录会话.pop(会话键, None); return 登录失败提示
-        try: 写入QQ阅读登录态(配置, 结果.get("auth") or {})
+            待登录会话.pop(会话键, None)
+            return 登录失败提示
+        try:
+            写入QQ阅读登录态(配置, 结果.get("auth") or {})
         except Exception as e:
-            logger.warning(f"QQ阅读登录态写入数据库失败：error={e}"); 待登录会话.pop(会话键, None); return 登录失败提示
-        待登录会话.pop(会话键, None); return "QQ阅读登录成功"
-    if 步骤 == "captcha":
-        return "请先完成安全验证，或发送 0 取消"
+            logger.warning(f"QQ阅读登录态写入数据库失败：error={e}")
+            待登录会话.pop(会话键, None)
+            return 登录失败提示
+        待登录会话.pop(会话键, None)
+        return "QQ阅读登录成功"
     return None
