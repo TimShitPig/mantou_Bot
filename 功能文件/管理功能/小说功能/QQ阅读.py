@@ -37,7 +37,7 @@ except Exception as e:
 
 API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 文件组件缓存清理延迟=600
+登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 进度日志分段数=10; 文件组件缓存清理延迟=600
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
 免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
@@ -876,7 +876,15 @@ def 格式化字数(值: Any) -> str:
     return f"{数}字"
 
 def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
-    return "\n".join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f"状态：{书籍信息.get('status') or '未知'}", f"章节：{章节数} 章", f"字数：{格式化字数(书籍信息.get('word_count'))}", "", "正在下载中请稍等....."])
+    return "\n".join([
+        f"书名：{书籍信息.get('title') or '未知'}",
+        f"作者：{书籍信息.get('author') or '未知'}",
+        f"状态：{书籍信息.get('status') or '未知'}",
+        f"章节：{章节数} 章",
+        f"字数：{格式化字数(书籍信息.get('word_count'))}",
+        "",
+        "正在下载中请稍等.....",
+    ])
 
 def 生成小说文件名(书籍信息: dict[str, Any]) -> str:
     状态 = str(书籍信息.get("status") or "")
@@ -887,9 +895,25 @@ def 生成小说文件名(书籍信息: dict[str, Any]) -> str:
 
 def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 章节结果列表: list[dict[str, Any]]) -> tuple[str, bytes]:
     文件名 = 生成小说文件名(书籍信息)
-    行 = [免责声明, "", f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f"状态：{书籍信息.get('status') or '未知'}", f"章节：{len(章节结果列表)} 章", f"字数：{格式化字数(书籍信息.get('word_count'))}", f"来源：QQ阅读 {书籍编号}", ""]
-    for 项目 in 章节结果列表:
-        行.append(清理文本(项目.get("title") or f"第{项目.get('index')}章")); 行.append(""); 行.append(str(项目.get("content") or "").strip()); 行.append("")
+    成功章节 = [项目 for 项目 in 章节结果列表 if str(项目.get("content") or "").strip()]
+    行 = [
+        免责声明,
+        "",
+        f"名称：{书籍信息.get('title') or '未知'}",
+        f"作者：{书籍信息.get('author') or '未知'}",
+        f"状态：{书籍信息.get('status') or '未知'}",
+        f"字数：{格式化字数(书籍信息.get('word_count'))}",
+        f"书籍ID：{书籍编号}",
+        f"章节数：{len(成功章节)}",
+        "",
+    ]
+    for 项目 in 成功章节:
+        标题 = 清理文本(项目.get("title") or f"第{项目.get('index')}章")
+        正文 = str(项目.get("content") or "").strip()
+        行.append(标题)
+        行.append("")
+        行.append(正文)
+        行.append("")
     return 文件名, "\n".join(行).encode("utf-8")
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
@@ -1010,10 +1034,34 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
         分批.append((i, 目录[s:e]))
     信号量 = asyncio.Semaphore(5)
     结果映射: dict[int, list[dict[str, Any]]] = {}
+    已完成 = 0
+    成功累计 = 0
+    失败累计 = 0
+    上次日志进度 = 0
+    进度锁 = asyncio.Lock()
+    logger.info(
+        f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%"
+    )
     logger.info(
         f"QQ阅读本地5批并发：book_id={书籍编号}, chapters={总数}, batches={len(分批)}, "
         f"batch_size~={每批}, concurrency=5, has_account={bool(下载态.get('ywguid') and 下载态.get('ywkey'))}"
     )
+
+    async def 记录进度(完成增量: int, 成功增量: int) -> None:
+        nonlocal 已完成, 成功累计, 失败累计, 上次日志进度
+        async with 进度锁:
+            已完成 += 完成增量
+            成功累计 += 成功增量
+            失败累计 += max(完成增量 - 成功增量, 0)
+            当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
+            if 当前进度 <= 上次日志进度 and 已完成 < 总数:
+                return
+            上次日志进度 = 当前进度
+            百分比 = int(已完成 * 100 / 总数) if 总数 else 100
+            logger.info(
+                f"QQ阅读章节进度：book_id={书籍编号}, "
+                f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
+            )
 
     async def 下载一批(序号: int, 批次: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]]]:
         async with 信号量:
@@ -1099,10 +1147,15 @@ async def 下载全书批量(session: aiohttp.ClientSession, 书籍编号: str, 
     for fut in asyncio.as_completed(任务):
         序号, 数据 = await fut
         结果映射[序号] = 数据
+        成功增量 = sum(1 for x in 数据 if x.get("success"))
+        await 记录进度(len(数据), 成功增量)
     合并: list[dict[str, Any]] = []
     for i, _ in 分批:
         合并.extend(结果映射.get(i) or [])
     成功 = sum(1 for x in 合并 if x.get("success"))
+    logger.info(
+        f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, file_ready={成功 == 总数}"
+    )
     logger.info(f"QQ阅读本地5批汇总：book_id={书籍编号}, success={成功}/{总数}")
     return 合并
 
