@@ -612,22 +612,43 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
     return 建议[:8]
 
 
+def _书籍优劣键(项: dict[str, Any]) -> tuple:
+    """跨平台同书择优：评分 > 热度参考 > 有效作者 > 平台优先级。"""
+    平台优先级 = {"番茄": 3, "七猫": 2, "书旗": 1}
+    作者 = 规范标题(项.get("author"))
+    有效作者 = 1 if 作者 and 作者 not in {"未知", "unknown"} else 0
+    return (
+        _安全浮点(项.get("score")),
+        float(项.get("heat") or 0),
+        有效作者,
+        平台优先级.get(str(项.get("platform") or ""), 0),
+    )
+
+
 def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """同平台同书去重；不同平台即使同名也分开保留。排序交给 排序找书结果。"""
+    """同书去重：同平台同ID去重，跨平台同名同作者只保留最优一本。"""
     合并: list[dict[str, Any]] = []
-    索引: set[str] = set()
+    平台书号索引: set[str] = set()
+    书名作者位置: dict[str, int] = {}
     for 列表 in 结果列表:
         for 项 in 列表:
             平台 = str(项.get("platform") or "")
             标题 = 规范标题(项.get("title"))
             作者 = 规范标题(项.get("author"))
             book_id = str(项.get("book_id") or "")
-            键 = f"{平台}|{book_id}|{标题}|{作者}"
-            if 键 in 索引:
+            平台键 = f"{平台}|{book_id}|{标题}|{作者}"
+            if 平台键 in 平台书号索引:
                 continue
-            索引.add(键)
             if "heat" not in 项:
                 项["heat"] = 0
+            书名键 = f"{标题}|{作者}"
+            if 书名键 in 书名作者位置:
+                旧位 = 书名作者位置[书名键]
+                if _书籍优劣键(项) > _书籍优劣键(合并[旧位]):
+                    合并[旧位] = 项
+                continue
+            平台书号索引.add(平台键)
+            书名作者位置[书名键] = len(合并)
             合并.append(项)
     return 合并
 
@@ -687,7 +708,7 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
     if 当前页:
-        行.append("发送 选1～选5 下载当前页对应书籍")
+        行.append("点击书名后发送即可下载")
     return "\n".join(行)
 
 
@@ -698,17 +719,27 @@ def _指令链编码(文本: str) -> str:
     return urllib.parse.quote(值, safe="")
 
 
-def _生成指令链(发送文本: str, 外显: str, *, 直接发送: bool) -> str:
-    """QQ 官方 Markdown 指令链：私聊 enter 直接发送，群聊 input 填入输入框。"""
+def _生成指令链(发送文本: str, 外显: str = "", *, 直接发送: bool = False, 使用外显: bool = False) -> str:
+    """按官方文档生成 Markdown 指令链。
+
+    - enter: 仅支持 text，点击直接发送；群聊不可用；展示为 /text
+    - input: 支持 text + show，点击后填入输入框；可自定义外显文案
+
+    书名/作者需要显示原名时必须用 input + show；翻页可用 enter（私聊）或 input。
+    """
     text = _指令链编码(发送文本)
-    show = _指令链编码(外显 or 发送文本)
+    if 使用外显:
+        show = _指令链编码(外显 or 发送文本)
+        return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
     if 直接发送:
-        return f'<qqbot-cmd-enter text="{text}" show="{show}" />'
+        # 官方：qqbot-cmd-enter 不支持 show
+        return f'<qqbot-cmd-enter text="{text}" />'
+    show = _指令链编码(外显 or 发送文本)
     return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
 
 
 def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
-    """官方机器人 Markdown：书名/作者为指令链蓝字，不展示热度/来源/链接/键盘。"""
+    """官方机器人 Markdown：书名/作者为指令链（input+show），不展示热度/来源/链接/键盘。"""
     结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
@@ -726,19 +757,20 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
             作者 = 清理文本(项.get("author") or "未知") or "未知"
             选书指令 = f"选{序号}"
             行.append(分隔线)
-            行.append(f"书名：{_生成指令链(选书指令, 书名, 直接发送=直接发送)}")
-            行.append(f"作者：{_生成指令链(选书指令, 作者, 直接发送=直接发送)}")
+            # 官方 enter 不支持 show，自定义书名外显必须用 input
+            行.append(f"书名：{_生成指令链(选书指令, 书名, 使用外显=True)}")
+            行.append(f"作者：{_生成指令链(选书指令, 作者, 使用外显=True)}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     翻页: list[str] = []
     if 页码 > 1:
-        翻页.append(_生成指令链("上一页", "上一页", 直接发送=直接发送))
+        翻页.append(_生成指令链("上一页", "上一页", 直接发送=直接发送, 使用外显=not 直接发送))
     if 页码 < 总页:
-        翻页.append(_生成指令链("下一页", "下一页", 直接发送=直接发送))
+        翻页.append(_生成指令链("下一页", "下一页", 直接发送=直接发送, 使用外显=not 直接发送))
     if 翻页:
         行.append(" ".join(翻页))
     if 当前页:
-        行.append("点击书名即可开始下载" if 直接发送 else "点击书名填入指令后发送即可下载")
+        行.append("点击书名后发送即可下载")
     return "\n".join(行)
 
 
