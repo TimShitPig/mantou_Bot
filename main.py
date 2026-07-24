@@ -49,7 +49,7 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.17.8"
+插件版本 = "2.17.9"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -66,35 +66,49 @@ class MyPlugin(Star):
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
-        # 找书优先：搜索/翻页/指令链选书下载
-        找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
-        if isinstance(找书下载, str):
-            yield event.plain_result(找书下载)
-            event.stop_event()
-            return
-        if 找书下载 is not None:
-            async for 找书回复内容 in 找书下载:
-                if isinstance(找书回复内容, str):
-                    yield event.plain_result(找书回复内容)
-                else:
-                    yield 找书回复内容
-            event.stop_event()
-            return
-
-        找书回复 = await 找书功能.处理找书指令(event, 命令文本, self.config)
-        if 找书回复 is not None:
-            if isinstance(找书回复, dict):
-                md文本 = str(找书回复.get("md") or "")
-                键盘 = 找书回复.get("keyboard")
-                纯文本 = str(找书回复.get("text") or md文本)
+        async def _输出找书结果(找书结果):
+            if 找书结果 is None:
+                return
+            if isinstance(找书结果, str):
+                yield event.plain_result(找书结果)
+                return
+            if isinstance(找书结果, dict):
+                md文本 = str(找书结果.get("md") or "")
+                键盘 = 找书结果.get("keyboard")
+                纯文本 = str(找书结果.get("text") or md文本)
                 if md文本 and 权限工具.是QQ官方机器人(event):
                     发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                     if not 发送成功:
                         yield event.plain_result(纯文本)
                 else:
                     yield event.plain_result(纯文本)
-            else:
-                yield event.plain_result(找书回复)
+                return
+            async for 找书回复内容 in 找书结果:
+                if isinstance(找书回复内容, str):
+                    yield event.plain_result(找书回复内容)
+                else:
+                    yield 找书回复内容
+
+        # 找书回调按钮：点击不在聊天发送消息，只回调后直接下载/翻页
+        找书交互 = await 找书功能.处理找书交互回调(event, self.config)
+        if 找书交互 is not None:
+            async for 片段 in _输出找书结果(找书交互):
+                yield 片段
+            event.stop_event()
+            return
+
+        # 找书优先：搜索/翻页/选N 下载（兼容手动发送选N）
+        找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
+        if 找书下载 is not None:
+            async for 片段 in _输出找书结果(找书下载):
+                yield 片段
+            event.stop_event()
+            return
+
+        找书回复 = await 找书功能.处理找书指令(event, 命令文本, self.config)
+        if 找书回复 is not None:
+            async for 片段 in _输出找书结果(找书回复):
+                yield 片段
             event.stop_event()
             return
 

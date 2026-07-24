@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import html
@@ -716,7 +716,7 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
     if 当前页:
-        行.append("发送 选1～选5 下载当前页对应书籍")
+        行.append("发送 选1～选5 或点击按钮下载")
     return "\n".join(行)
 
 
@@ -734,42 +734,51 @@ def _截断找书按钮标签(文本: str) -> str:
     return 文本[:找书按钮标签最大长度 - 1] + "…"
 
 
-def _生成找书下载按钮(序号: int, 标签: str, 字段: str, 页码: int) -> dict[str, Any]:
-    下载命令 = f"下载 {序号}"
+def _生成找书回调按钮(data: str, 标签: str, *, 按钮ID: str, 点击后: str = "处理中") -> dict[str, Any]:
+    """QQ 官方回调按钮：点击不在聊天里发消息，只回调机器人。
+
+    官方文档：action.type=1 回调按钮，data 传给后台，触发 INTERACTION_CREATE。
+    """
     return {
-        "id": f"find_book_{页码}_{序号}_{字段}",
+        "id": 按钮ID[:40],
         "render_data": {
             "label": _截断找书按钮标签(标签),
-            "visited_label": "正在下载",
+            "visited_label": _截断找书按钮标签(点击后),
+            "style": 1,
         },
         "action": {
-            "type": 2,
+            "type": 1,
             "permission": {"type": 2},
-            "data": 下载命令,
-            "enter": True,
-            "unsupport_tips": "请发送对应下载命令",
+            "data": data,
+            "unsupport_tips": "请发送 选1～选5 下载",
         },
     }
 
 
 def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
-    """生成 QQ 官方找书下载键盘：书名和作者按钮点击后直接发送下载命令。"""
+    """生成 QQ 官方找书回调键盘：点击书名/作者不发消息，直接回调下载。
+
+    每本书 1 行 1 个按钮（书名），最多 5 行；翻页并入最后一行，避免超限。
+    """
     当前页 = 获取当前页结果(会话)
     if not 当前页:
         return None
+    结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
+    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
     行: list[dict[str, Any]] = []
+    总数 = len(当前页)
     for 序号, 项 in enumerate(当前页, start=1):
         书名 = 清理文本(项.get("title") or "未知") or "未知"
-        作者 = 清理文本(项.get("author") or "未知") or "未知"
-        行.append({
-            "buttons": [
-                _生成找书下载按钮(序号, f"书名：{书名}", "title", 页码),
-                _生成找书下载按钮(序号, f"作者：{作者}", "author", 页码),
-            ]
-        })
+        本行 = [_生成找书回调按钮(f"选{序号}", 书名, 按钮ID=f"fb{页码}t{序号}", 点击后="下载中")]
+        if 序号 == 总数:
+            if 页码 > 1:
+                本行.insert(0, _生成找书回调按钮("上一页", "上一页", 按钮ID=f"fb{页码}p", 点击后="翻页中"))
+            if 页码 < 总页:
+                本行.append(_生成找书回调按钮("下一页", "下一页", 按钮ID=f"fb{页码}n", 点击后="翻页中"))
+        行.append({"buttons": 本行})
     if len(行) > 找书按钮最大行数:
-        return None
+        行 = 行[:找书按钮最大行数]
     return {"rows": 行}
 
 
@@ -790,11 +799,9 @@ def _生成指令链(发送文本: str, 外显: str = "", *, 直接发送: bool 
 
 
 def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
-    """官方机器人 Markdown 找书结果。
+    """官方机器人 Markdown 找书结果正文。
 
-    私聊：书名旁附 enter 指令，点击后直接发送 选N，main 里立刻走下载流。
-    群聊：书名/作者用 input+show，点击填入 选N 后发送即可下载。
-    不展示热度/来源/链接/键盘。
+    下载交互走底部回调按钮（不发聊天消息）；正文只展示书名作者，不塞指令链。
     """
     结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
@@ -808,30 +815,16 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
-        for 序号, 项 in enumerate(当前页, start=1):
+        for 项 in 当前页:
             书名 = 清理文本(项.get("title") or "未知") or "未知"
             作者 = 清理文本(项.get("author") or "未知") or "未知"
-            选书指令 = f"选{序号}"
             行.append(分隔线)
-            if 直接发送:
-                # 私聊：enter 点击即发给机器人，获取找书下载回复流直接开下
-                行.append(f"书名：{书名} {_生成指令链(选书指令, 直接发送=True)}")
-                行.append(f"作者：{作者}")
-            else:
-                # 群聊：enter 不可用，input+show 显示书名，点击后发送 选N
-                行.append(f"书名：{_生成指令链(选书指令, 书名, 使用外显=True)}")
-                行.append(f"作者：{_生成指令链(选书指令, 作者, 使用外显=True)}")
+            行.append(f"书名：{书名}")
+            行.append(f"作者：{作者}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
-    翻页: list[str] = []
-    if 页码 > 1:
-        翻页.append(_生成指令链("上一页", "上一页", 直接发送=直接发送, 使用外显=not 直接发送))
-    if 页码 < 总页:
-        翻页.append(_生成指令链("下一页", "下一页", 直接发送=直接发送, 使用外显=not 直接发送))
-    if 翻页:
-        行.append(" ".join(翻页))
     if 当前页:
-        行.append("点击下载指令即可开始下载" if 直接发送 else "点击书名后发送即可下载")
+        行.append("点击下方书名按钮即可下载（不会发送消息）")
     return "\n".join(行)
 
 
@@ -888,7 +881,7 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 
 async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | dict[str, Any] | None:
-    """返回纯文本；官方机器人返回 {md, keyboard=None, text}，md 内嵌指令链。"""
+    """返回纯文本；官方机器人返回 {md, keyboard=回调按钮, text}。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
@@ -936,14 +929,106 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
     if 会话 is None:
         return None
     if 是QQ官方机器人(event):
-        # 回车指令链仅私聊可用；群聊使用 input 指令链
-        直接发送 = not bool(获取群号(event))
         return {
-            "md": 格式化找书结果MD(会话, 直接发送=直接发送),
-            "keyboard": None,
+            "md": 格式化找书结果MD(会话),
+            "keyboard": 生成找书下载键盘(会话),
             "text": 格式化找书结果(会话),
         }
     return 格式化找书结果(会话)
+
+
+def _读取嵌套字段(对象: Any, *路径: str) -> Any:
+    当前 = 对象
+    for 键 in 路径:
+        if 当前 is None:
+            return None
+        if isinstance(当前, dict):
+            当前 = 当前.get(键)
+            continue
+        当前 = getattr(当前, 键, None)
+    return 当前
+
+
+def 提取找书交互数据(event: Any) -> tuple[str, str]:
+    """从 QQ 官方 INTERACTION_CREATE / 适配器事件中提取 (interaction_id, data)。"""
+    候选: list[Any] = [event, getattr(event, "message_obj", None), getattr(event, "raw_message", None)]
+    消息对象 = getattr(event, "message_obj", None)
+    if 消息对象 is not None:
+        候选.append(getattr(消息对象, "raw_message", None))
+        候选.append(getattr(消息对象, "raw", None))
+    for 对象 in list(候选):
+        if 对象 is None:
+            continue
+        if isinstance(对象, str):
+            try:
+                对象 = json.loads(对象)
+                候选.append(对象)
+            except Exception:
+                continue
+        交互ID = (
+            读取字段(对象, "id")
+            or 读取字段(对象, "interaction_id")
+            or _读取嵌套字段(对象, "interaction", "id")
+            or _读取嵌套字段(对象, "d", "id")
+            or _读取嵌套字段(对象, "data", "id")
+        )
+        data = (
+            读取字段(对象, "data")
+            or _读取嵌套字段(对象, "data", "data")
+            or _读取嵌套字段(对象, "data", "resolved", "button_data")
+            or _读取嵌套字段(对象, "data", "button_data")
+            or _读取嵌套字段(对象, "d", "data", "resolved", "button_data")
+            or _读取嵌套字段(对象, "d", "data", "button_data")
+            or _读取嵌套字段(对象, "interaction", "data", "resolved", "button_data")
+            or _读取嵌套字段(对象, "interaction", "data", "button_data")
+        )
+        # 有的适配器把 button data 直接放在 message_str
+        if not data:
+            data = 读取字段(对象, "button_data") or 读取字段(对象, "message_str")
+        文本 = str(data or "").strip()
+        if 文本 and (选书命令正则.fullmatch(文本) or 文本 in 翻页命令集合):
+            return str(交互ID or ""), 文本
+        if 交互ID and 文本:
+            # data 可能是 JSON 字符串
+            if isinstance(data, dict):
+                内 = str(data.get("button_data") or data.get("data") or data.get("id") or "").strip()
+                if 内 and (选书命令正则.fullmatch(内) or 内 in 翻页命令集合):
+                    return str(交互ID), 内
+    return "", ""
+
+
+async def 回应找书交互(event: Any, interaction_id: str, code: int = 0) -> bool:
+    """官方要求：收到回调后 PUT /interactions/{id}，否则客户端一直 loading。"""
+    if not interaction_id:
+        return False
+    bot = getattr(event, "bot", None)
+    api = getattr(bot, "api", None) if bot else None
+    _http = getattr(api, "_http", None) if api else None
+    if _http is None:
+        return False
+    try:
+        import botpy.http as _botpy_http
+        Route = _botpy_http.Route
+        route = Route("PUT", "/interactions/{interaction_id}", interaction_id=str(interaction_id))
+        await _http.request(route, json={"code": int(code)})
+        return True
+    except Exception as exc:
+        logger.warning(f"找书交互回应失败：id={interaction_id}, error={exc}")
+        return False
+
+
+async def 处理找书交互回调(event: Any, 配置: Any = None) -> str | dict[str, Any] | AsyncIterator[Any] | None:
+    """处理回调按钮：聊天不出现点击消息，直接翻页或进入下载流。"""
+    interaction_id, data = 提取找书交互数据(event)
+    if not data:
+        return None
+    await 回应找书交互(event, interaction_id, 0)
+    # 下载
+    下载 = 获取找书下载回复流(event, data, 配置)
+    if 下载 is not None:
+        return 下载
+    # 翻页 / 其它找书指令
+    return await 处理找书指令(event, data, 配置)
 
 
 def 是否找书翻页会话(event: Any) -> bool:
