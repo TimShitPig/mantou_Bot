@@ -67,10 +67,68 @@ def 规范标题(值: Any) -> str:
     return 文本
 
 
+def _收集事件对象(event: Any) -> list[Any]:
+    候选: list[Any] = [event, getattr(event, "message_obj", None), getattr(event, "raw_message", None)]
+    消息对象 = getattr(event, "message_obj", None)
+    if 消息对象 is not None:
+        候选.extend([
+            getattr(消息对象, "raw_message", None),
+            getattr(消息对象, "raw", None),
+            getattr(消息对象, "data", None),
+            getattr(消息对象, "extra", None),
+        ])
+    结果: list[Any] = []
+    for 对象 in 候选:
+        if 对象 is None:
+            continue
+        if isinstance(对象, str):
+            文本 = 对象.strip()
+            if not 文本:
+                continue
+            try:
+                对象 = json.loads(文本)
+            except Exception:
+                continue
+        结果.append(对象)
+        if isinstance(对象, dict):
+            for 键 in ("d", "data", "interaction", "payload", "event", "raw"):
+                内 = 对象.get(键)
+                if 内 is not None:
+                    结果.append(内)
+    return 结果
+
+
 def 获取找书会话键(event: Any) -> str:
     群号 = 获取群号(event)
-    用户 = 获取发送者QQ(event)
+    用户 = 获取找书用户标识(event)
     return f"{群号 or 'private'}:{用户 or 'unknown'}"
+
+
+def 获取找书用户标识(event: Any) -> str:
+    用户 = 获取发送者QQ(event)
+    if 用户:
+        return 用户
+    for 对象 in _收集事件对象(event):
+        for 字段名 in (
+            "user_openid",
+            "group_member_openid",
+            "member_openid",
+            "openid",
+            "user_id",
+            "sender_id",
+        ):
+            值 = 读取字段(对象, 字段名)
+            if isinstance(值, dict):
+                值 = 值.get("user_id") or 值.get("id") or 值.get("openid") or 值.get("user_openid")
+            if 值:
+                return str(值)
+        author = 读取字段(对象, "author") or 读取字段(对象, "user") or 读取字段(对象, "member")
+        if isinstance(author, dict):
+            for 字段名 in ("user_openid", "member_openid", "id", "user_id", "openid"):
+                值 = author.get(字段名)
+                if 值:
+                    return str(值)
+    return ""
 
 
 def 获取群号(event: Any) -> str:
@@ -87,9 +145,14 @@ def 获取群号(event: Any) -> str:
                 return str(值)
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id")
+        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group_openid")
         if 值:
             return str(值)
+    for 对象 in _收集事件对象(event):
+        for 字段名 in ("group_id", "group_openid", "group_open_id"):
+            值 = 读取字段(对象, 字段名)
+            if 值:
+                return str(值)
     return ""
 
 
@@ -949,51 +1012,105 @@ def _读取嵌套字段(对象: Any, *路径: str) -> Any:
     return 当前
 
 
+def _规范找书按钮数据(值: Any) -> str:
+    if 值 is None:
+        return ""
+    if isinstance(值, dict):
+        for 键 in ("button_data", "data", "id", "text", "value", "command"):
+            内 = 值.get(键)
+            if 内 is not None and not isinstance(内, (dict, list)):
+                文本 = str(内).strip()
+                if 文本:
+                    return 文本
+        resolved = 值.get("resolved")
+        if isinstance(resolved, dict):
+            return _规范找书按钮数据(resolved)
+        return ""
+    文本 = str(值).strip()
+    if not 文本:
+        return ""
+    if 文本.startswith("{") and 文本.endswith("}"):
+        try:
+            return _规范找书按钮数据(json.loads(文本))
+        except Exception:
+            return 文本
+    return 文本
+
+
+def _是否找书按钮数据(文本: str) -> bool:
+    文本 = str(文本 or "").strip()
+    return bool(选书命令正则.fullmatch(文本) or 文本 in 翻页命令集合)
+
+
 def 提取找书交互数据(event: Any) -> tuple[str, str]:
     """从 QQ 官方 INTERACTION_CREATE / 适配器事件中提取 (interaction_id, data)。"""
-    候选: list[Any] = [event, getattr(event, "message_obj", None), getattr(event, "raw_message", None)]
+    候选 = _收集事件对象(event)
     消息对象 = getattr(event, "message_obj", None)
-    if 消息对象 is not None:
-        候选.append(getattr(消息对象, "raw_message", None))
-        候选.append(getattr(消息对象, "raw", None))
-    for 对象 in list(候选):
+    候选.extend([event, 消息对象])
+    交互ID候选: list[str] = []
+    按钮候选: list[str] = []
+    疑似交互 = False
+
+    for 对象 in 候选:
         if 对象 is None:
             continue
-        if isinstance(对象, str):
-            try:
-                对象 = json.loads(对象)
-                候选.append(对象)
-            except Exception:
-                continue
-        交互ID = (
-            读取字段(对象, "id")
-            or 读取字段(对象, "interaction_id")
-            or _读取嵌套字段(对象, "interaction", "id")
-            or _读取嵌套字段(对象, "d", "id")
-            or _读取嵌套字段(对象, "data", "id")
+        类型值 = 读取字段(对象, "type") or 读取字段(对象, "event_type") or 读取字段(对象, "t")
+        if 类型值 is not None:
+            类型文本 = str(类型值).upper()
+            if "INTERACTION" in 类型文本 or 类型文本 in {"11", "12", "INTERACTION_CREATE"}:
+                疑似交互 = True
+        if 读取字段(对象, "interaction_id") or 读取字段(对象, "chat_type") is not None:
+            if 读取字段(对象, "data") is not None or 读取字段(对象, "resolved") is not None:
+                疑似交互 = True
+
+        for 路径 in (
+            ("id",),
+            ("interaction_id",),
+            ("interaction", "id"),
+            ("d", "id"),
+            ("data", "id"),
+            ("event_id",),
+        ):
+            值 = _读取嵌套字段(对象, *路径) if len(路径) > 1 else 读取字段(对象, 路径[0])
+            if 值 and not str(值).startswith("ROBOT"):
+                交互ID候选.append(str(值))
+
+        for 路径 in (
+            ("button_data",),
+            ("data",),
+            ("data", "data"),
+            ("data", "resolved"),
+            ("data", "resolved", "button_data"),
+            ("data", "button_data"),
+            ("d", "data"),
+            ("d", "data", "resolved"),
+            ("d", "data", "resolved", "button_data"),
+            ("d", "data", "button_data"),
+            ("interaction", "data"),
+            ("interaction", "data", "resolved"),
+            ("interaction", "data", "resolved", "button_data"),
+            ("resolved", "button_data"),
+            ("message_str",),
+        ):
+            值 = _读取嵌套字段(对象, *路径) if len(路径) > 1 else 读取字段(对象, 路径[0])
+            文本 = _规范找书按钮数据(值)
+            if _是否找书按钮数据(文本):
+                按钮候选.append(文本)
+
+    for 交互ID in 交互ID候选:
+        for 文本 in 按钮候选:
+            if _是否找书按钮数据(文本):
+                return 交互ID, 文本
+
+    for 文本 in 按钮候选:
+        if _是否找书按钮数据(文本):
+            return (交互ID候选[0] if 交互ID候选 else ""), 文本
+
+    if 疑似交互:
+        logger.warning(
+            "找书交互解析失败：疑似 INTERACTION 但未识别按钮 data，"
+            f"session={获取找书会话键(event)}, ids={交互ID候选[:3]}, buttons={按钮候选[:5]}"
         )
-        data = (
-            读取字段(对象, "data")
-            or _读取嵌套字段(对象, "data", "data")
-            or _读取嵌套字段(对象, "data", "resolved", "button_data")
-            or _读取嵌套字段(对象, "data", "button_data")
-            or _读取嵌套字段(对象, "d", "data", "resolved", "button_data")
-            or _读取嵌套字段(对象, "d", "data", "button_data")
-            or _读取嵌套字段(对象, "interaction", "data", "resolved", "button_data")
-            or _读取嵌套字段(对象, "interaction", "data", "button_data")
-        )
-        # 有的适配器把 button data 直接放在 message_str
-        if not data:
-            data = 读取字段(对象, "button_data") or 读取字段(对象, "message_str")
-        文本 = str(data or "").strip()
-        if 文本 and (选书命令正则.fullmatch(文本) or 文本 in 翻页命令集合):
-            return str(交互ID or ""), 文本
-        if 交互ID and 文本:
-            # data 可能是 JSON 字符串
-            if isinstance(data, dict):
-                内 = str(data.get("button_data") or data.get("data") or data.get("id") or "").strip()
-                if 内 and (选书命令正则.fullmatch(内) or 内 in 翻页命令集合):
-                    return str(交互ID), 内
     return "", ""
 
 
@@ -1022,12 +1139,13 @@ async def 处理找书交互回调(event: Any, 配置: Any = None) -> str | dict
     interaction_id, data = 提取找书交互数据(event)
     if not data:
         return None
+    会话键 = 获取找书会话键(event)
+    if interaction_id:
+        logger.info(f"找书交互回调：id={interaction_id}, data={data}, session={会话键}")
     await 回应找书交互(event, interaction_id, 0)
-    # 下载
     下载 = 获取找书下载回复流(event, data, 配置)
     if 下载 is not None:
         return 下载
-    # 翻页 / 其它找书指令
     return await 处理找书指令(event, data, 配置)
 
 
