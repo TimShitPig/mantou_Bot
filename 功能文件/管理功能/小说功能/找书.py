@@ -49,6 +49,9 @@ except Exception as exc:
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
 分隔线 = "————————"
+找书按钮每行数 = 2
+找书按钮最大行数 = 5
+找书按钮标签最大长度 = 12
 
 
 def 清理文本(值: Any) -> str:
@@ -282,7 +285,8 @@ def 排序找书结果(结果: list[dict[str, Any]], 关键词: str) -> list[dic
         评分 = _安全浮点(项.get("score"))
         相对热度 = 平台内相对热度(项)
         有效作者 = 1 if a1 and a1 not in {"未知", "unknown", ""} else 0
-        return (档, 相关度, 精确共识, 共识作者, 有效作者, 评分, 相对热度, -len(t1))
+        平台分 = _平台优先级值(项.get("platform"))
+        return (档, 相关度, 精确共识, 共识作者, 平台分, 有效作者, 评分, 相对热度, -len(t1))
 
     def 公共前缀长度(a: str, b: str) -> int:
         n = 0
@@ -612,16 +616,20 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
     return 建议[:8]
 
 
+def _平台优先级值(平台: Any) -> int:
+    """下载速度优先：番茄 > 七猫 > 书旗。"""
+    return {"番茄": 3, "七猫": 2, "书旗": 1}.get(str(平台 or ""), 0)
+
+
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
-    """跨平台同书择优：评分 > 热度参考 > 有效作者 > 平台优先级。"""
-    平台优先级 = {"番茄": 3, "七猫": 2, "书旗": 1}
+    """跨平台同书择优：平台(番茄>七猫>书旗) > 评分 > 热度参考 > 有效作者。"""
     作者 = 规范标题(项.get("author"))
     有效作者 = 1 if 作者 and 作者 not in {"未知", "unknown"} else 0
     return (
+        _平台优先级值(项.get("platform")),
         _安全浮点(项.get("score")),
         float(项.get("heat") or 0),
         有效作者,
-        平台优先级.get(str(项.get("platform") or ""), 0),
     )
 
 
@@ -708,7 +716,7 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 左 or 右:
         行.append(f"       {左}                           {右}".rstrip())
     if 当前页:
-        行.append("点击书名后发送即可下载")
+        行.append("发送 选1～选5 下载当前页对应书籍")
     return "\n".join(行)
 
 
@@ -719,27 +727,75 @@ def _指令链编码(文本: str) -> str:
     return urllib.parse.quote(值, safe="")
 
 
+def _截断找书按钮标签(文本: str) -> str:
+    文本 = str(文本 or "").strip()
+    if len(文本) <= 找书按钮标签最大长度:
+        return 文本
+    return 文本[:找书按钮标签最大长度 - 1] + "…"
+
+
+def _生成找书下载按钮(序号: int, 标签: str, 字段: str, 页码: int) -> dict[str, Any]:
+    下载命令 = f"下载 {序号}"
+    return {
+        "id": f"find_book_{页码}_{序号}_{字段}",
+        "render_data": {
+            "label": _截断找书按钮标签(标签),
+            "visited_label": "正在下载",
+        },
+        "action": {
+            "type": 2,
+            "permission": {"type": 2},
+            "data": 下载命令,
+            "enter": True,
+            "unsupport_tips": "请发送对应下载命令",
+        },
+    }
+
+
+def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
+    """生成 QQ 官方找书下载键盘：书名和作者按钮点击后直接发送下载命令。"""
+    当前页 = 获取当前页结果(会话)
+    if not 当前页:
+        return None
+    页码 = max(1, int(会话.get("page") or 1))
+    行: list[dict[str, Any]] = []
+    for 序号, 项 in enumerate(当前页, start=1):
+        书名 = 清理文本(项.get("title") or "未知") or "未知"
+        作者 = 清理文本(项.get("author") or "未知") or "未知"
+        行.append({
+            "buttons": [
+                _生成找书下载按钮(序号, f"书名：{书名}", "title", 页码),
+                _生成找书下载按钮(序号, f"作者：{作者}", "author", 页码),
+            ]
+        })
+    if len(行) > 找书按钮最大行数:
+        return None
+    return {"rows": 行}
+
+
 def _生成指令链(发送文本: str, 外显: str = "", *, 直接发送: bool = False, 使用外显: bool = False) -> str:
     """按官方文档生成 Markdown 指令链。
 
-    - enter: 仅支持 text，点击直接发送；群聊不可用；展示为 /text
-    - input: 支持 text + show，点击后填入输入框；可自定义外显文案
+    - enter: 仅 text，点击后直接发给机器人；私聊可用，群聊不可用；不支持 show
+    - input: text + 可选 show，点击后填入输入框，用户再发送
 
-    书名/作者需要显示原名时必须用 input + show；翻页可用 enter（私聊）或 input。
+    私聊下载用 enter 直接发 选N，机器人立刻走下载流。
+    群聊只能用 input；书名外显必须用 input 的 show。
     """
     text = _指令链编码(发送文本)
-    if 使用外显:
-        show = _指令链编码(外显 or 发送文本)
-        return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
-    if 直接发送:
-        # 官方：qqbot-cmd-enter 不支持 show
+    if 直接发送 and not 使用外显:
         return f'<qqbot-cmd-enter text="{text}" />'
     show = _指令链编码(外显 or 发送文本)
     return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
 
 
 def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
-    """官方机器人 Markdown：书名/作者为指令链（input+show），不展示热度/来源/链接/键盘。"""
+    """官方机器人 Markdown 找书结果。
+
+    私聊：书名旁附 enter 指令，点击后直接发送 选N，main 里立刻走下载流。
+    群聊：书名/作者用 input+show，点击填入 选N 后发送即可下载。
+    不展示热度/来源/链接/键盘。
+    """
     结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
@@ -757,9 +813,14 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
             作者 = 清理文本(项.get("author") or "未知") or "未知"
             选书指令 = f"选{序号}"
             行.append(分隔线)
-            # 官方 enter 不支持 show，自定义书名外显必须用 input
-            行.append(f"书名：{_生成指令链(选书指令, 书名, 使用外显=True)}")
-            行.append(f"作者：{_生成指令链(选书指令, 作者, 使用外显=True)}")
+            if 直接发送:
+                # 私聊：enter 点击即发给机器人，获取找书下载回复流直接开下
+                行.append(f"书名：{书名} {_生成指令链(选书指令, 直接发送=True)}")
+                行.append(f"作者：{作者}")
+            else:
+                # 群聊：enter 不可用，input+show 显示书名，点击后发送 选N
+                行.append(f"书名：{_生成指令链(选书指令, 书名, 使用外显=True)}")
+                行.append(f"作者：{_生成指令链(选书指令, 作者, 使用外显=True)}")
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     翻页: list[str] = []
@@ -770,7 +831,7 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
     if 翻页:
         行.append(" ".join(翻页))
     if 当前页:
-        行.append("点击书名后发送即可下载")
+        行.append("点击下载指令即可开始下载" if 直接发送 else "点击书名后发送即可下载")
     return "\n".join(行)
 
 
@@ -785,7 +846,7 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str | None:
-    """识别指令链/选N，映射当前页第 N 本书。"""
+    """识别点击指令链发来的 选N，映射当前页第 N 本并交给下载流。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     匹配 = 选书命令正则.fullmatch(文本)
@@ -805,6 +866,7 @@ def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str
 
 
 def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | str | None:
+    """main 优先调用：用户点击指令链发出 选N 后，这里直接进入各平台下载流。"""
     选中 = 解析找书选中项(event, 命令文本)
     if 选中 is None:
         return None
