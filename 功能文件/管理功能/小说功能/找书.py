@@ -797,10 +797,15 @@ def _截断找书按钮标签(文本: str) -> str:
     return 文本[:找书按钮标签最大长度 - 1] + "…"
 
 
-def _生成找书回调按钮(data: str, 标签: str, *, 按钮ID: str, 点击后: str = "处理中") -> dict[str, Any]:
-    """QQ 官方回调按钮：点击不在聊天里发消息，只回调机器人。
+def _生成找书指令按钮(data: str, 标签: str, *, 按钮ID: str, 点击后: str = "处理中") -> dict[str, Any]:
+    """QQ 官方指令按钮：点击后直接把 data 发给机器人。
 
-    官方文档：action.type=1 回调按钮，data 传给后台，触发 INTERACTION_CREATE。
+    说明：
+    - action.type=1 原生回调依赖 INTERACTION_CREATE。
+    - AstrBot 的 QQ 官方 WebSocket 适配器当前不开启 interaction intent，
+      也不会把该事件送进插件 on_all_message，所以 type=1 点了后端收不到。
+    - 与帮助菜单一致，使用 type=2 + enter=True，走普通消息链路，
+      main 里已有的「选N / 上一页 / 下一页」即可触发下载。
     """
     return {
         "id": 按钮ID[:40],
@@ -810,16 +815,17 @@ def _生成找书回调按钮(data: str, 标签: str, *, 按钮ID: str, 点击�
             "style": 1,
         },
         "action": {
-            "type": 1,
+            "type": 2,
             "permission": {"type": 2},
             "data": data,
+            "enter": True,
             "unsupport_tips": "请发送 选1～选5 下载",
         },
     }
 
 
 def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
-    """生成 QQ 官方找书回调键盘：点击书名/作者不发消息，直接回调下载。
+    """生成 QQ 官方找书指令键盘：点击书名直接发送选N并下载。
 
     每本书 1 行 1 个按钮（书名），最多 5 行；翻页并入最后一行，避免超限。
     """
@@ -833,12 +839,12 @@ def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
     总数 = len(当前页)
     for 序号, 项 in enumerate(当前页, start=1):
         书名 = 清理文本(项.get("title") or "未知") or "未知"
-        本行 = [_生成找书回调按钮(f"选{序号}", 书名, 按钮ID=f"fb{页码}t{序号}", 点击后="下载中")]
+        本行 = [_生成找书指令按钮(f"选{序号}", 书名, 按钮ID=f"fb{页码}t{序号}", 点击后="下载中")]
         if 序号 == 总数:
             if 页码 > 1:
-                本行.insert(0, _生成找书回调按钮("上一页", "上一页", 按钮ID=f"fb{页码}p", 点击后="翻页中"))
+                本行.insert(0, _生成找书指令按钮("上一页", "上一页", 按钮ID=f"fb{页码}p", 点击后="翻页中"))
             if 页码 < 总页:
-                本行.append(_生成找书回调按钮("下一页", "下一页", 按钮ID=f"fb{页码}n", 点击后="翻页中"))
+                本行.append(_生成找书指令按钮("下一页", "下一页", 按钮ID=f"fb{页码}n", 点击后="翻页中"))
         行.append({"buttons": 本行})
     if len(行) > 找书按钮最大行数:
         行 = 行[:找书按钮最大行数]
@@ -887,7 +893,7 @@ def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True
         行.append(分隔线)
     行.append(f"当前页数：{页码}/{总页}")
     if 当前页:
-        行.append("点击下方书名按钮即可下载（不会发送消息）")
+        行.append("点击下方书名按钮即可下载")
     return "\n".join(行)
 
 
