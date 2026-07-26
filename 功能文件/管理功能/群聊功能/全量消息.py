@@ -13,8 +13,7 @@ from 功能文件.管理功能.基础功能.帮助功能 import (
 )
 
 
-授权命令 = {"授权"}
-授权链接触发项名称 = "授权链接"
+全量消息命令 = {"全量消息"}
 页面名 = "ai_group_service_agreement_pop_page"
 跳转地址 = "https://club.vip.qq.com/transfer?open_kuikly_info="
 取UID动作名列表 = (
@@ -29,68 +28,68 @@ from 功能文件.管理功能.基础功能.帮助功能 import (
 群号字段列表 = ("groupCode", "group_code", "group_id", "group", "group_uin")
 机器人QQ字段列表 = ("self_id", "bot_id", "robot_id", "botUin", "bot_uin", "uin", "qq", "user_id")
 机器人UID字段列表 = ("botUid", "bot_uid", "robot_uid", "self_uid")
-授权诊断最大长度 = 8000
+全量消息诊断最大长度 = 8000
 
 
-async def 处理授权链接(event: Any, 命令文本: str, 上下文: Any = None, 配置: Any = None) -> str | None:
-    授权参数 = 提取授权命令参数(命令文本)
-    if 授权参数 is None:
+async def 处理全量消息(event: Any, 命令文本: str, 上下文: Any = None, 配置: Any = None) -> str | None:
+    全量消息参数 = 提取全量消息命令参数(命令文本)
+    if 全量消息参数 is None:
         return None
 
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用授权链接"
+        return "没有权限使用全量消息"
 
-    记录授权事件诊断(event)
+    记录全量消息事件诊断(event)
 
-    手动群号, 手动机器人QQ = 授权参数
+    手动群号, 手动机器人QQ = 全量消息参数
     群号 = 手动群号 or await 获取群号(event)
     if not 群号:
-        提示 = "授权链接生成失败：没有获取到数字QQ群号，请在目标群里发送\u201c授权\u201d"
+        提示 = "全量消息开启链接生成失败：没有获取到数字QQ群号，请在目标群里发送\u201c全量消息\u201d"
         if 是QQ官方机器人(event):
-            return await 发送授权MD消息(event, 提示)
+            return await 发送全量消息MD消息(event, 提示)
         return 提示
 
     机器人QQ = 手动机器人QQ or await 获取机器人QQ(event, 上下文)
     if not 机器人QQ:
-        提示 = "授权链接生成失败：没有获取到机器人QQ号，当前适配器没有返回 botUin"
+        提示 = "全量消息开启链接生成失败：没有获取到机器人QQ号，当前适配器没有返回 botUin"
         if 是QQ官方机器人(event):
-            return await 发送授权MD消息(event, 提示)
+            return await 发送全量消息MD消息(event, 提示)
         return 提示
 
     机器人UID = await 获取机器人UID(event, 机器人QQ)
     if not 机器人UID:
-        提示 = f"授权链接生成失败：没有获取到机器人UID，当前适配器不支持 getUidFromUin({机器人QQ})"
+        提示 = f"全量消息开启链接生成失败：没有获取到机器人UID，当前适配器不支持 getUidFromUin({机器人QQ})"
         if 是QQ官方机器人(event):
-            return await 发送授权MD消息(event, 提示)
+            return await 发送全量消息MD消息(event, 提示)
         return 提示
 
-    链接 = 生成授权链接(群号, 机器人QQ, 机器人UID)
-    logger.info(f"授权链接已生成：groupCode={群号}, botUin={机器人QQ}, botUid={机器人UID}")
+    链接 = 生成全量消息链接(群号, 机器人QQ, 机器人UID)
+    logger.info(f"全量消息开启链接已生成：groupCode={群号}, botUin={机器人QQ}, botUid={机器人UID}")
     纯文本 = "\n".join([
-        "授权链接：",
+        "全量消息开启链接：",
         链接,
         "",
         "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。",
     ])
     if 是QQ官方机器人(event):
         md文本 = "\n".join([
-            "## 🔗 授权群聊\n",
+            "## 🔗 全量消息\n",
             f"**群号：** {群号}",
             f"**机器人QQ：** {机器人QQ}",
             "",
-            "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上点击下方按钮授权，iOS 暂不支持。",
+            "请群主使用安卓/鸿蒙 QQ 9.2.90 及以上点击下方按钮开启全量消息，iOS 暂不支持。",
         ])
-        授权按钮 = 生成链接按钮("🌐 点击授权", 链接, "已打开授权页")
+        全量消息按钮 = 生成链接按钮("🌐 开启全量消息", 链接, "已打开全量消息页")
         返回按钮 = 生成返回按钮(自动发送=True)
-        键盘 = {"rows": [{"buttons": [授权按钮]}, {"buttons": [返回按钮]}]}
+        键盘 = {"rows": [{"buttons": [全量消息按钮]}, {"buttons": [返回按钮]}]}
         if await 发送Markdown键盘消息(event, md文本, 键盘):
             return ""
     return 纯文本
 
 
-async def 发送授权MD消息(event: Any, 文本: str) -> str:
+async def 发送全量消息MD消息(event: Any, 文本: str) -> str:
     """发送带返回按钮的MD消息，用于错误提示。"""
-    md文本 = f"## 🔗 授权群聊\n\n{文本}"
+    md文本 = f"## 🔗 全量消息\n\n{文本}"
     返回按钮 = 生成返回按钮(自动发送=True)
     键盘 = {"rows": [{"buttons": [返回按钮]}]}
     if await 发送Markdown键盘消息(event, md文本, 键盘):
@@ -111,17 +110,17 @@ def 生成链接按钮(标签: str, 跳转链接: str, 点击后标签: str = ""
     }
 
 
-def 提取授权命令参数(命令文本: str) -> tuple[str, str] | None:
+def 提取全量消息命令参数(命令文本: str) -> tuple[str, str] | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 in 授权命令:
+    if 文本 in 全量消息命令:
         return "", ""
-    匹配 = re.fullmatch(r"授权\s+([1-9]\d{4,11})(?:\s+([1-9]\d{4,11}))?", 文本)
+    匹配 = re.fullmatch(r"全量消息\s+([1-9]\d{4,11})(?:\s+([1-9]\d{4,11}))?", 文本)
     if not 匹配:
         return None
     return 匹配.group(1), 匹配.group(2) or ""
 
 
-def 生成授权链接(群号: str, 机器人QQ: str, 机器人UID: str) -> str:
+def 生成全量消息链接(群号: str, 机器人QQ: str, 机器人UID: str) -> str:
     参数 = {
         "page_name": 页面名,
         "groupCode": int(群号),
@@ -184,7 +183,7 @@ async def 获取机器人UID(event: Any, 机器人QQ: str) -> str:
             if 机器人UID:
                 return 机器人UID
             if 响应 not in (None, ""):
-                logger.info(f"授权链接UID转换响应未识别：action={动作名}, params={参数}, response={诊断文本(响应, 2000)}")
+                logger.info(f"全量消息UID转换响应未识别：action={动作名}, params={参数}, response={诊断文本(响应, 2000)}")
     return ""
 
 
@@ -222,7 +221,7 @@ async def 调用机器人动作(bot: Any, 动作名: str, **参数: Any) -> Any:
         try:
             return await 调用动作(动作名, **参数)
         except Exception as exc:
-            logger.debug(f"授权链接动作调用失败：action={动作名}, params={参数}, error={exc}")
+            logger.debug(f"全量消息动作调用失败：action={动作名}, params={参数}, error={exc}")
 
     for 对象 in (bot, api):
         方法 = getattr(对象, 动作名, None)
@@ -236,9 +235,9 @@ async def 调用机器人动作(bot: Any, 动作名: str, **参数: Any) -> Any:
                 调用结果 = 方法(首个参数) if 首个参数 is not None else 方法()
                 return await 等待结果(调用结果)
             except Exception as exc:
-                logger.debug(f"授权链接方法调用失败：method={动作名}, params={参数}, error={exc}")
+                logger.debug(f"全量消息方法调用失败：method={动作名}, params={参数}, error={exc}")
         except Exception as exc:
-            logger.debug(f"授权链接方法调用失败：method={动作名}, params={参数}, error={exc}")
+            logger.debug(f"全量消息方法调用失败：method={动作名}, params={参数}, error={exc}")
     return None
 
 
@@ -428,7 +427,7 @@ def 解析JSON对象(文本: str) -> Any:
     return None
 
 
-def 记录授权事件诊断(event: Any) -> None:
+def 记录全量消息事件诊断(event: Any) -> None:
     try:
         诊断数据 = {
             "event_type": type(event).__name__,
@@ -436,9 +435,9 @@ def 记录授权事件诊断(event: Any) -> None:
             "message_obj": 诊断序列化对象(getattr(event, "message_obj", None)),
         }
         文本 = json.dumps(诊断数据, ensure_ascii=False, default=str)
-        logger.info(f"授权链接事件诊断：{限制文本长度(文本, 授权诊断最大长度)}")
+        logger.info(f"全量消息事件诊断：{限制文本长度(文本, 全量消息诊断最大长度)}")
     except Exception as exc:
-        logger.warning(f"授权链接事件诊断失败：error={exc}")
+        logger.warning(f"全量消息事件诊断失败：error={exc}")
 
 
 def 诊断文本(值: Any, 最大长度: int = 2000) -> str:
