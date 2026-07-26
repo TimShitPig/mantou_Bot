@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v4.4.1 |
+| 版本 | v4.5.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -19,7 +19,7 @@
 | 管理功能 | 帮助功能 | `帮助` 后发送数字 / `帮助 数字` / `0` | 仅群文件清理管理员白名单 QQ 可用，按主动触发和被动触发查看小类、触发指令和详情；QQ 官方帮助按钮全部使用原生回调，点击后静默切换菜单或执行快捷命令 |
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/空间相册分享/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、QQ 官方显示为“暂不能查看该消息内容”的空间相册分享、合并转发和 QQ 闪传消息 |
 | 管理功能 | 群文件清理 | `登录群文件` / `群文件登录cookie` / `群文件状态` / `群文件cookie状态` / `清理群文件` / `群文件清理` / `清理全部群文件` / `添加群聊 群号` / `删除群聊 群号` / `删除群聊` / `关闭删除群聊` / `查看群聊` / `更改备注` / `更改备注 群号` | 仅群文件清理管理员白名单 QQ 可用，通过 QQ 群文件网页接口删除群文件，需先登录拿 Cookie；Cookie 支持普通头、curl、Cookie Editor JSON 和 cookies.txt，存 MySQL，按管理员 QQ 隔离，31 天有效；有 skey 时每 10 分钟账号级自动保活；状态只显示“群cookie：生效/失效”；清理选择每页最多 9 个群号，固定 4 行按钮并支持翻页；网页接口只删根目录文件 |
-| 管理功能 | 全量消息 | `全量消息` / `全量消息 数字群号` / `全量消息 数字群号 机器人QQ` | 仅群文件清理管理员白名单 QQ 可用，生成 QQ 群全量消息开启链接 |
+| 管理功能 | 全量消息 | `全量消息` / `全量消息状态` | 仅群文件清理管理员白名单 QQ 可用；调用 QQ 官方群内状态接口查看“群内全部消息”和“机器人主动在群聊内发言”开关，QQ 官方 Markdown 会提及操作人 |
 | 管理功能 | 小说开关 | `开启番茄` / `关闭番茄` / `开启七猫` / `关闭七猫` / `开启书旗` / `关闭书旗` / `开启QQ阅读` / `关闭QQ阅读` | 仅群文件清理管理员白名单 QQ 可用，开关小说功能里的番茄小说、七猫小说、书旗小说和 QQ阅读下载功能 |
 | 管理功能 | 付费开关 | `开启收费` / `关闭收费` / `开启群聊收费` / `关闭群聊收费` / `开启私聊收费` / `关闭私聊收费` | 仅群文件清理管理员白名单 QQ 可用；关闭收费为未设置独立开关的群聊和私聊免费，已单独开启群聊收费的群仍收费；开启收费强制群聊和私聊全部收费 |
 | 管理功能 | 状态 | `状态` | 仅群文件清理管理员白名单 QQ 可用，查看系统位数、CPU、物理内存、磁盘、进程数、操作系统、框架版本、数据库状态、系统运行时间和当前时间；每次输入时检查一次数据库 |
@@ -132,9 +132,12 @@ pymysql
 
 QQ 官方机器人 `qq_official` 发送文件应优先走 AstrBot `File` 组件，它会封装官方富媒体接口并发送 `media` 消息；如果 QQ 官方群聊返回 `call inner proxy error`，这是平台富媒体上传限制或临时错误。OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
-群文件清理管理员白名单内的 QQ 发送 `全量消息` 会生成 `https://club.vip.qq.com/transfer?open_kuikly_info=...` 全量消息开启链接；如果当前适配器取不到数字群号，可以发送 `全量消息 数字群号` 手动指定 `groupCode`；如果也取不到机器人 QQ，可以发送 `全量消息 数字群号 机器人QQ` 手动指定 `botUin`。插件会动态获取当前群号和机器人 QQ 号，机器人 QQ 会优先读取 AstrBot `context.robot_id`，并会递归读取事件 JSON、消息段 JSON 和 URL 编码 JSON 中的 `groupCode`、`botUin`、`botUid` 等字段；如果适配器不支持 UID 转换，会明确回复缺少机器人 UID。触发全量消息命令时会输出一条受控诊断日志 `全量消息事件诊断`，UID 转换接口有返回但无法识别时会输出 `全量消息UID转换响应未识别`。链接必须由群主在安卓/鸿蒙 QQ 9.2.90 及以上打开，iOS 暂不支持。
+群文件清理管理员白名单内的 QQ 在目标群发送 `全量消息` 或 `全量消息状态`，插件会调用 QQ 官方 `GET /v2/groups/{group_openid}/bot_state` 查询当前机器人的 `recv_msg_setting` 和 `allow_proactive_msg`：仅 `recv_msg_setting=all` 代表已开启“获取群内全部消息”。该官方接口目前标注为内邀开放；接口不可用时不会伪造状态。官方没有提供写入该开关的 REST 接口，群管理员需在机器人资料页中操作群消息接收设置。QQ 官方 Markdown 回复使用 `<@member_openid>` 提及操作人，不使用 QQ 号。
 
 ## 参考链接
 
 - [AstrBot 官方仓库](https://github.com/AstrBotDevs/AstrBot)
 - [AstrBot 插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
+- [QQ 官方：群消息（全量模式）](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)
+- [QQ 官方：获取机器人群内状态](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)
+- [QQ 官方：群聊消息接收开启事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_msg_receive.html)

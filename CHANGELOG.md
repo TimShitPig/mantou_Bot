@@ -1,5 +1,12 @@
 # 更新日志
 
+## v4.5.0
+
+### 调整
+- 全量消息功能完全改为 QQ 官方群内状态接口：`全量消息` / `全量消息状态` 请求 `GET /v2/groups/{group_openid}/bot_state`，读取 `recv_msg_setting` 与 `allow_proactive_msg`。
+- 仅 `recv_msg_setting=all` 显示为“群内全部消息已开启”；接口标注为内邀开放，无法查询时显示状态暂不可查询，不伪造结果。
+- 删除旧的数字群号、机器人 QQ、UID 转换与非官方跳转链接逻辑；官方 Markdown 回复使用 `<@member_openid>` 提及操作人。
+
 ## v4.4.1
 
 ### 修复
