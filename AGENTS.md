@@ -49,7 +49,7 @@
 
 - AstrBot 官方文档说明：代码修改后，在 WebUI 插件管理里点击 `管理` -> `重载插件`。
 - 重载插件只重新加载 AstrBot 运行目录里的当前磁盘文件，不等于自动 `git pull` GitHub 最新代码。
-- 本插件使用 `功能文件...` 这类顶层导入；AstrBot 重载主插件时，Python 可能仍缓存这些子模块。`main.py` 必须显式 `importlib.invalidate_caches()` 并 `reload()` 子模块。
+- 本插件使用 `功能文件...` 这类顶层导入；AstrBot 重载主插件时，Python 可能仍缓存这些子模块。`main.py` 必须显式 `importlib.invalidate_caches()` 并 `reload()` 子模块；存在直接导入关系时必须先重载依赖模块，例如先加载 `运行状态数据库` 再加载 `状态功能`。
 - 如果 GitHub 已更新但日志仍显示旧版本或旧行号，必须先进入 AstrBot 实际插件目录执行 `git pull`，再删除 `.pyc` 和空 `__pycache__`，最后重载插件。
 - 正确加载最新版时，日志必须出现 `Plugin 馒头bot (vX.Y.Z)`；如果仍有缓存疑问，再临时加入启动日志确认版本号和源码路径。
 - 如果 WebUI 重载后仍是旧行号，直接重启 AstrBot 进程或容器；重启前后都要确认 `/AstrBot/data/plugins/馒头bot` 下的文件内容就是最新版本。
