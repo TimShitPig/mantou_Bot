@@ -51,6 +51,12 @@ except Exception as exc:
 找书按钮最大行数 = 5
 找书按钮标签最大长度 = 12
 静默找书按钮前缀 = "找书:"
+# 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
+# 搜索时只预检最可能展示在前面的候选，避免用户点击后才发现没有目录。
+番茄目录预检缓存秒数 = 600
+番茄目录预检并发数 = 4
+番茄目录预检最大候选数 = 8
+番茄目录预检缓存: dict[str, tuple[float, bool | None]] = {}
 
 
 def 清理文本(值: Any) -> str:
@@ -473,6 +479,120 @@ async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要
     return 结果[:需要数量]
 
 
+async def 预检番茄目录(书籍编号: str) -> bool | None:
+    """返回番茄候选的目录状态。
+
+    ``False`` 代表接口明确没有任何章节，应从找书结果中剔除；网络异常则
+    返回 ``None``，保留候选，避免短暂网络波动把本来可下载的书误删。
+    """
+    书籍编号 = str(书籍编号 or "").strip()
+    if not 书籍编号 or 番茄小说 is None:
+        return None
+
+    现在 = time.time()
+    if len(番茄目录预检缓存) >= 512:
+        for 缓存编号, (缓存时间, _缓存状态) in list(番茄目录预检缓存.items()):
+            if 现在 - 缓存时间 >= 番茄目录预检缓存秒数:
+                番茄目录预检缓存.pop(缓存编号, None)
+    缓存 = 番茄目录预检缓存.get(书籍编号)
+    if 缓存 is not None and 现在 - 缓存[0] < 番茄目录预检缓存秒数:
+        return 缓存[1]
+
+    状态: bool | None = None
+    try:
+        目录 = await asyncio.to_thread(番茄小说.resolve_directory, 书籍编号)
+        状态 = bool(目录)
+    except Exception as 异常:
+        错误文本 = str(异常)
+        # 目录接口正常返回、但没有章节，是已下线候选的稳定特征；其余
+        # 网络/签名问题不能据此排除搜索结果。
+        if "未返回章节" in 错误文本:
+            状态 = False
+        else:
+            logger.debug(
+                f"找书番茄目录预检暂不可判断：book_id={书籍编号}, error={错误文本}"
+            )
+    番茄目录预检缓存[书籍编号] = (现在, 状态)
+    return 状态
+
+
+def 获取番茄预检候选(结果: list[dict[str, Any]], 关键词: str, *, 最大数量: int = 番茄目录预检最大候选数) -> list[dict[str, Any]]:
+    """优先预检精确书名，再补足最靠前的番茄搜索结果。"""
+    关键词规范 = 规范标题(关键词)
+    数量上限 = max(1, int(最大数量))
+    已选编号: set[str] = set()
+    候选: list[dict[str, Any]] = []
+
+    def 加入(项: dict[str, Any]) -> None:
+        书籍编号 = str(项.get("book_id") or "").strip()
+        if not 书籍编号 or 书籍编号 in 已选编号:
+            return
+        已选编号.add(书籍编号)
+        候选.append(项)
+
+    # 精确书名即使在搜索接口的后面，也可能被最终排序推到首页。
+    for 项 in 结果:
+        if len(候选) >= 数量上限:
+            break
+        if 关键词规范 and 规范标题(项.get("title")) == 关键词规范:
+            加入(项)
+
+    其余 = sorted(
+        结果,
+        key=lambda 项: (
+            计算标题相关度(str(项.get("title") or ""), 关键词),
+            _安全浮点(项.get("score")),
+            float(项.get("heat") or 0),
+        ),
+        reverse=True,
+    )
+    for 项 in 其余:
+        if len(候选) >= 数量上限:
+            break
+        加入(项)
+    return 候选
+
+
+async def 过滤无目录番茄搜索结果(
+    结果: list[dict[str, Any]],
+    关键词: str,
+    *,
+    最大数量: int = 番茄目录预检最大候选数,
+) -> list[dict[str, Any]]:
+    """过滤已明确无目录的番茄候选，保留网络状态未知的候选。"""
+    if not 结果 or 番茄小说 is None:
+        return 结果
+
+    候选 = 获取番茄预检候选(结果, 关键词, 最大数量=最大数量)
+    if not 候选:
+        return 结果
+
+    限流 = asyncio.Semaphore(番茄目录预检并发数)
+
+    async def 检查(项: dict[str, Any]) -> tuple[str, bool | None]:
+        书籍编号 = str(项.get("book_id") or "").strip()
+        async with 限流:
+            return 书籍编号, await 预检番茄目录(书籍编号)
+
+    预检结果 = await asyncio.gather(*(检查(项) for 项 in 候选), return_exceptions=False)
+    状态表 = {书籍编号: 状态 for 书籍编号, 状态 in 预检结果}
+    筛选后: list[dict[str, Any]] = []
+    for 项 in 结果:
+        书籍编号 = str(项.get("book_id") or "").strip()
+        状态 = 状态表.get(书籍编号)
+        if 状态 is False:
+            logger.info(
+                f"找书跳过无目录番茄候选：book_id={书籍编号}, "
+                f"title={清理文本(项.get('title') or '')}"
+            )
+            continue
+        if 状态 is True:
+            项 = dict(项)
+            项["目录可用"] = True
+        筛选后.append(项)
+    return 筛选后
+
+
 async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
     if 七猫小说 is None:
         return []
@@ -733,6 +853,9 @@ async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
         番茄结果, 七猫结果, 书旗结果, 联想词 = await asyncio.gather(
             番茄任务, 七猫任务, 书旗任务, 联想任务, return_exceptions=False
         )
+        # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
+        # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
+        番茄结果 = await 过滤无目录番茄搜索结果(番茄结果, 关键词)
         合并 = 去重合并([番茄结果, 七猫结果, 书旗结果])
         # 结果太少时，用联想词补搜
         if len(合并) < 每页数量 and 联想词:
@@ -749,6 +872,7 @@ async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
                 t3 = asyncio.create_task(搜索书旗(session, w, 需要数量=10))
                 r1, r2, r3 = await asyncio.gather(t1, t2, t3)
+                r1 = await 过滤无目录番茄搜索结果(r1, w, 最大数量=5)
                 补结果集合.extend([r1, r2, r3])
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词)
