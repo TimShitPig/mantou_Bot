@@ -60,6 +60,8 @@ except Exception as 异常:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败, error={异常}")
 
+from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
 NOVELFM_REQUEST_BOOK_ID = os.environ.get(
     "FANQIE_NOVELFM_REQUEST_BOOK_ID", "7320841644486446142"
@@ -2786,6 +2788,7 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
         return
     try:
         Path(缓存路径).unlink(missing_ok=True)
+        小说缓存工具.解除下载缓存占用(缓存路径)
         logger.info(f"番茄小说下载缓存文件已删除：file={缓存路径}")
     except Exception as 异常:
         logger.warning(f"番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}")
@@ -2794,6 +2797,7 @@ def 写入番茄下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     番茄下载缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突番茄缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
+    小说缓存工具.标记下载缓存正在使用(缓存路径)
     return 缓存路径
 
 def 生成不冲突番茄缓存路径(文件名: str) -> Path:

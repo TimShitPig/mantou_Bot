@@ -25,6 +25,8 @@ except Exception as exc:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
+from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+
 try:
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import unpad
@@ -546,6 +548,7 @@ def 删除下载缓存文件(缓存路径: Any) -> None:
         return
     try:
         Path(缓存路径).unlink(missing_ok=True)
+        小说缓存工具.解除下载缓存占用(缓存路径)
         logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
     except Exception as exc:
         logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
@@ -555,6 +558,7 @@ def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     下载缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
+    小说缓存工具.标记下载缓存正在使用(缓存路径)
     return 缓存路径
 
 

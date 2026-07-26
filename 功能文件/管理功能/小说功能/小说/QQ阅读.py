@@ -19,6 +19,8 @@ except Exception as e:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={e}")
 
+from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+
 import hashlib
 import zlib
 from typing import Callable
@@ -1502,13 +1504,17 @@ def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 章节结�
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     下载缓存目录.mkdir(parents=True, exist_ok=True)
-    路径 = 下载缓存目录 / 文件名; 路径.write_bytes(文件内容); return 路径
+    路径 = 下载缓存目录 / 文件名
+    路径.write_bytes(文件内容)
+    小说缓存工具.标记下载缓存正在使用(路径)
+    return 路径
 
 def 删除QQ阅读缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
     try:
         Path(缓存路径).unlink(missing_ok=True)
+        小说缓存工具.解除下载缓存占用(缓存路径)
         logger.info(f"QQ阅读下载缓存文件已删除：file={缓存路径}")
     except Exception as e:
         logger.warning(f"QQ阅读下载缓存文件删除失败：file={缓存路径}, error={e}")

@@ -594,6 +594,15 @@ async def 上传小说并获取分享链接(
     if not UC网盘是否启用(配置):
         return {"enabled": False, "success": False, "share_url": "", "error": ""}
     源路径 = Path(源缓存路径)
+    源文件存在 = 源路径.is_file()
+    源文件大小 = 源路径.stat().st_size if 源文件存在 else 0
+    logger.info(
+        f"UC网盘上传前缓存检查：file={文件名}, exists={源文件存在}, size={源文件大小}"
+    )
+    if not 源文件存在:
+        错误 = "本地文件不存在"
+        logger.warning(f"UC网盘上传分享失败：file={文件名}, error={错误}")
+        return {"enabled": True, "success": False, "share_url": "", "error": 错误}
     Cookie = 读取UC网盘Cookie(配置)
     上传目录 = 读取UC上传目录(配置)
     try:
