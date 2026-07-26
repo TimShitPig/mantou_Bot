@@ -5,6 +5,12 @@ import re
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
+import json
+import random
+import uuid
+import requests
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
 
 from astrbot.api import logger
 
@@ -20,11 +26,154 @@ except Exception as exc:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
-from 功能文件.管理功能.小说功能 import _点众源码 as 点众源码
-
 下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 章节并发数 = 10
+
+# ===== 点众协议与加解密（原 _点众源码） =====
+
+KEY = b"dz#7gfy)@#ylgz&m"
+IV = b"$#iupdo)8^dcr*pt"
+ST = "l1t5u51n1wk1yfor1ncrypt"
+BASE = "https://asgportal.dianzhong.com/asg-portal/portal/client"  # 使用能工作的域名
+CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+UA = (
+    "Mozilla/5.0 (Linux; Android 12; SM-G9900 Build/V417IR; wv) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+    "Chrome/110.0.5481.154 Safari/537.36"
+)
+DEVICE_FILE = None  # 插件仅使用内存设备态，不生成本地 device.json
+
+# -------------------- 加密/解密工具 --------------------
+def enc(text: str) -> str:
+    return AES.new(KEY, AES.MODE_CBC, IV).encrypt(pad(text.encode("utf-8"), 16)).hex()
+
+def dec(hex_str: str) -> str:
+    return unpad(AES.new(KEY, AES.MODE_CBC, IV).decrypt(bytes.fromhex(hex_str)), 16).decode("utf-8")
+
+def dumps(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+# -------------------- 设备身份管理（完全复用 dz_simple.py） --------------------
+def gen_utdid_tmp(ts_ms=None) -> str:
+    if ts_ms is None:
+        ts_ms = int(time.time() * 1000)
+    date = time.strftime("%Y%m%d%H%M%S", time.localtime(ts_ms / 1000.0))
+    ms = f"{ts_ms % 1000:03d}"
+    rand6 = "".join(random.choice(CHARS) for _ in range(6))
+    return "A" + date + ms + rand6
+
+def make_datas():
+    now = int(time.time() * 1000)
+    sid = str(uuid.uuid4())
+    return {
+        "version": "7.3.0",
+        "pname": "com.dianzhong.reader",
+        "channelCode": "TAXSEO1000000",
+        "utdidTmp": gen_utdid_tmp(now),
+        "token": "",
+        "utdid": "",
+        "os": "android",
+        "osv": 32,
+        "brand": "Samsung",
+        "model": "SM-G9900",
+        "manu": "Samsung",
+        "userId": "",
+        "launch": "third",
+        "mchid": "",
+        "nchid": "TAXSEO1000000",
+        "session1": sid,
+        "session2": sid,
+        "installTime": now,
+        "p": 20,
+        "sex": 1,
+        "launchNum": 1,
+        "visitor": 1,
+        "supportAd": 1,
+        "changeChidDate": now,
+    }
+
+def call_api(api, body, datas, timeout=20):
+    body_plain = dumps(body)
+    datas_plain = dumps(datas)
+    headers = {
+        "User-Agent": "okhttp/4.10.0",
+        "Accept-Encoding": "gzip",
+        "Content-Type": "application/json; charset=utf-8",
+        "st": ST,
+        "datas": enc(datas_plain),
+    }
+    r = requests.post(f"{BASE}/{api}", data=enc(body_plain), headers=headers, timeout=timeout)
+    raw = r.json()
+    data_plain = None
+    data_json = None
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if isinstance(data, str) and data:
+        try:
+            data_plain = dec(data)
+            data_json = json.loads(data_plain)
+        except Exception:
+            data_plain = data
+    return {
+        "http": r.status_code,
+        "body_plain": body_plain,
+        "datas_plain": datas_plain,
+        "datas": datas,
+        "raw": raw,
+        "data_plain": data_plain,
+        "data_json": data_json,
+    }
+
+def save_device(datas, path=DEVICE_FILE):
+    path.write_text(json.dumps(datas, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+def load_device(path=DEVICE_FILE):
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+def init_and_save():
+    datas = make_datas()
+    body = {
+        "oaid": "",
+        "userAgent": UA,
+        "upgradeUserId": "",
+        "requestType": 1,
+        "ocpcSeconds": 0,
+        "lastLeftPage": "",
+    }
+    res = call_api(1001, body, datas)
+    raw = res["raw"] if isinstance(res["raw"], dict) else {}
+    user_id = raw.get("userId")
+    if user_id is None and isinstance(res["data_json"], dict):
+        user_id = res["data_json"].get("userId")
+        if user_id is None:
+            user_id = (res["data_json"].get("userInfoVo") or {}).get("userId")
+    if not user_id:
+        raise RuntimeError(f"init failed: {json.dumps(raw, ensure_ascii=False)[:400]}")
+
+    datas["userId"] = str(user_id)
+    datas["visitor"] = 0
+    if raw.get("changeChidDate"):
+        datas["changeChidDate"] = raw["changeChidDate"]
+    path = save_device(datas)
+    res["userId"] = str(user_id)
+    res["device_file"] = str(path)
+    return datas, res
+
+def get_device(force_init=False):
+    if not force_init:
+        d = load_device()
+        if d and d.get("userId") and d.get("utdidTmp"):
+            return d
+    datas, _ = init_and_save()
+    return datas
+
+# -------------------- 工具函数 --------------------
+
+# ===== 业务封装 =====
+
 进度日志分段数 = 10
 点众域名正则 = re.compile(r"dianzhong\.com|dz\.|点众", re.I)
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
@@ -39,16 +188,16 @@ def _获取设备() -> dict[str, Any]:
     if _设备缓存 and _设备缓存.get("userId"):
         return _设备缓存
     # 不落本地 device.json，内存会话即可
-    datas = 点众源码.make_datas()
+    datas = make_datas()
     body = {
         "oaid": "",
-        "userAgent": 点众源码.UA,
+        "userAgent": UA,
         "upgradeUserId": "",
         "requestType": 1,
         "ocpcSeconds": 0,
         "lastLeftPage": "",
     }
-    res = 点众源码.call_api(1001, body, datas)
+    res = call_api(1001, body, datas)
     raw = res["raw"] if isinstance(res.get("raw"), dict) else {}
     user_id = raw.get("userId")
     if user_id is None and isinstance(res.get("data_json"), dict):
@@ -123,7 +272,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
 
 
 def _获取详情(datas: dict[str, Any], book_id: str) -> dict[str, Any]:
-    res = 点众源码.call_api(1111, {"bookId": str(book_id), "chapterId": ""}, datas)
+    res = call_api(1111, {"bookId": str(book_id), "chapterId": ""}, datas)
     data = res.get("data_json")
     if isinstance(data, dict):
         book = data.get("bookInfo") or data.get("book") or data
@@ -138,7 +287,7 @@ def _获取目录(datas: dict[str, Any], book_id: str) -> list[dict[str, Any]]:
     cur_id = ""
     for _ in range(200):
         body = {"bookId": str(book_id), "chapterIndex": chap_idx, "currentChapterId": cur_id}
-        res = 点众源码.call_api(1304, body, datas)
+        res = call_api(1304, body, datas)
         data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
         items = data.get("chapterList") or data.get("chapters") or data.get("list") or []
         if not isinstance(items, list) or not items:
@@ -198,9 +347,9 @@ def _获取章节正文(datas: dict[str, Any], book_id: str, chapter_id: str, bo
         "preload": "0",
         "noDd100": 1,
         "noDd300": 1,
-        "source": 点众源码.dumps(source),
+        "source": dumps(source),
     }
-    res = 点众源码.call_api(1303, body, datas)
+    res = call_api(1303, body, datas)
     data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
     if data.get("status") == 5 and "orderPageVo" in data:
         order = data.get("orderPageVo") or {}
@@ -210,9 +359,9 @@ def _获取章节正文(datas: dict[str, Any], book_id: str, chapter_id: str, bo
         if not ad_key and isinstance(order.get("exitRetainOperate"), dict):
             ad_key = order["exitRetainOperate"].get("key")
         if ad_key:
-            ad_res = 点众源码.call_api(1518, {"key": ad_key, "advertValue": 0.0}, datas)
+            ad_res = call_api(1518, {"key": ad_key, "advertValue": 0.0}, datas)
             if (ad_res.get("raw") or {}).get("code") == 0:
-                res = 点众源码.call_api(1303, body, datas)
+                res = call_api(1303, body, datas)
                 data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
     for key in ("content", "chapterContent", "text", "txt"):
         val = data.get(key)
@@ -377,7 +526,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         datas = await asyncio.to_thread(_获取设备)
         body = {"keyWord": 关键词, "page": 1, "type": 0}
-        res = await asyncio.to_thread(点众源码.call_api, 1203, body, datas)
+        res = await asyncio.to_thread(call_api, 1203, body, datas)
     except Exception as exc:
         logger.warning(f"点众搜索失败：keyword={关键词}, error={exc}")
         return []
