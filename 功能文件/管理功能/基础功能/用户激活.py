@@ -65,7 +65,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 }
 配置字段分类映射 = {
     "group_file_cleanup_admin_qq": (基础配置分类名, "基础配置"),
-    "番茄小说key": (基础配置分类名, "基础配置"),
     "user_activation_daily_free_quota": (基础配置分类名, "基础配置"),
     "user_activation_database_host": (数据库配置分类名, "数据库配置"),
     "user_activation_database_port": (数据库配置分类名, "数据库配置"),
@@ -77,7 +76,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 }
 配置字段默认值 = {
     "group_file_cleanup_admin_qq": [],
-    "番茄小说key": "",
     "user_activation_daily_free_quota": "0",
     "user_activation_database_host": "",
     "user_activation_database_port": "3306",
@@ -120,7 +118,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 卡密字符集 = "".join(字符 for 字符 in string.ascii_uppercase + string.digits if 字符 not in {"0", "1", "I", "O"})
 数字规则 = re.compile(r"\d+")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
-需激活文本命令 = {"随机英文单词", "随机一言", "疯狂星期四", "古诗词名句"}
 用户列表每页数量 = 10
 卡密列表每页数量 = 5
 卡密生成最大数量 = 200
@@ -1153,10 +1150,6 @@ def 格式化免费额度用尽提示(每日限额: int) -> str:
 
 def 获取免费额度日期() -> str:
     return datetime.now().strftime("%Y-%m-%d")
-
-
-def 是需激活文本命令(命令文本: str) -> bool:
-    return str(命令文本 or "").strip() in 需激活文本命令
 
 
 def 提取激活命令文本(event: Any, 命令文本: str) -> str:

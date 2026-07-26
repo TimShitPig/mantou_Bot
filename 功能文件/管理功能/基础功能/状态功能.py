@@ -19,7 +19,6 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
 小说功能状态命名空间 = "novel_feature_switch"
 小说默认状态 = {"番茄": True, "七猫": True, "书旗": True, "QQ阅读": True}
 付费开关状态命名空间 = "paid_access"
-番茄API状态命名空间 = "fanqie_api"
 
 
 def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本: str = "") -> str | None:
@@ -36,12 +35,6 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
     UC状态 = 读取UC网盘状态(配置)
     百度状态 = 读取百度网盘状态(配置)
     群文件Cookie状态 = 读取群文件Cookie状态(event, 配置)
-    番茄API状态 = 读取番茄API开关状态(配置)
-    try:
-        from 功能文件.管理功能.小说功能 import QQ阅读 as _qq阅读模块
-        QQ阅读API状态 = "开启" if _qq阅读模块.QQ阅读API是否开启(配置) else "关闭"
-    except Exception:
-        QQ阅读API状态 = "关闭"
 
     return "\n".join(
         [
@@ -66,10 +59,7 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"七猫小说：{格式化开关(bool(功能状态.get('七猫', True)))}",
             f"书旗小说：{格式化开关(bool(功能状态.get('书旗', True)))}",
             f"QQ阅读：{格式化开关(bool(功能状态.get('QQ阅读', True)))}",
-            f"番茄API：{番茄API状态}",
-            f"QQ阅读API：{QQ阅读API状态}",
             f"收费模式：已全部免费",
-            f"番茄接口配置：{格式化已配置(bool(str(读取配置字段(配置, '番茄小说key') or '').strip()))}",
             f"数据库：{数据库状态}",
             f"群cookie：{群文件Cookie状态}",
             f"UC网盘：{UC状态}",
@@ -109,14 +99,6 @@ def 读取私聊收费状态(配置: Any) -> str:
         )
 
     return 格式化开关(安全读取("私聊收费", 读取状态, True))
-
-
-def 读取番茄API开关状态(配置: Any) -> str:
-    def 读取状态() -> bool:
-        文本 = str(读取运行状态值(配置, 番茄API状态命名空间, "enabled", "off") or "").strip().lower()
-        return 文本 in {"on", "1", "true", "yes", "开启"}
-
-    return 格式化开关(安全读取("番茄API", 读取状态, False))
 
 
 def 读取群文件Cookie状态(event: Any, 配置: Any) -> str:
@@ -228,10 +210,6 @@ def 安全读取(名称: str, 函数: Callable[[], Any], 默认值: Any) -> Any:
 
 def 格式化开关(是否开启: bool) -> str:
     return "开启" if 是否开启 else "关闭"
-
-
-def 格式化已配置(是否配置: bool) -> str:
-    return "已配置" if 是否配置 else "未配置"
 
 
 def 格式化磁盘信息() -> str:

@@ -25,13 +25,7 @@ try:
 except Exception as e:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={e}")
-try:
-    from 功能文件.API功能.析API import QQ阅读 as 析APIQQ阅读
-except Exception as e:
-    析APIQQ阅读 = None
-    logger.warning(f"QQ阅读析API模块加载失败：error={e}")
 
-API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
 登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 进度日志分段数=10
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
@@ -56,7 +50,7 @@ API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=12; 批量章节上限=50; 批量并发上限=6
 FOCK_TOKEN="KNVA76RTD8YZXZ6Z"; FOCK_TOKEN_PWD=b"c9ajudte0zb21ksg"; FOCK_TOKEN_IV=b"58jb6v2lzcspwymg"
 _FOCK_TOKEN_BLOB=bytes.fromhex("8f400c5fcec88186569c7c407e35d2895495f9025321cd94976e786a65f18550")
-QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com|154\.12\.91\.167:7000", re.I)
+QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
 待登录会话: dict[str, dict[str, Any]] = {}
@@ -159,18 +153,6 @@ def 获取会话键(event: Any) -> str:
     except Exception:
         用户 = str(读取字段(event, "sender_id") or "unknown")
     return f"{群号}:{用户}"
-
-def QQ阅读API是否开启(配置: Any = None) -> bool:
-    if 配置 is None: return False
-    try:
-        状态 = str(读取运行状态值(配置, API状态命名空间, API开关状态键, "off") or "").strip().lower()
-        return 状态 in ("on", "1", "true", "yes", "开启")
-    except Exception as e:
-        logger.warning(f"QQ阅读API开关读取失败：error={e}")
-        return False
-
-def 写入QQ阅读API开关(配置: Any, 是否开启: bool) -> None:
-    写入运行状态值(配置, API状态命名空间, API开关状态键, "on" if 是否开启 else "off")
 
 def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
     try:
@@ -1229,8 +1211,6 @@ def 解析书籍编号(来源: str) -> str:
 def 获取QQ阅读回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
     来源 = 提取直接QQ阅读来源(命令文本) or 提取事件QQ阅读来源(event)
     if 来源 is None: return None
-    if QQ阅读API是否开启(配置) and 析APIQQ阅读 is not None:
-        return 析APIQQ阅读.获取QQ阅读回复流(event, 命令文本, 配置)
     return 生成本地下载回复流(event, 来源, 配置)
 
 
@@ -1243,7 +1223,7 @@ async def 下载全书批量(
     text_types: Optional[Sequence[int]] = None,
     ad_state: Optional[int] = None,
 ) -> list[dict[str, Any]]:
-    """按大批量(默认最多500章/批)拆分，动态并发请求。纯 App 接口，不混析API。"""
+    """按大批量(默认最多500章/批)拆分，动态并发请求。"""
     if not 目录:
         return []
     下载态 = 组装本地下载态(登录态)
@@ -1674,7 +1654,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            # 纯本地 App：不和析API混用。全免游客整本；VIP 付费需权限账号。
+            # 全免游客整本下载；VIP 付费书籍需要登录态。
             章节结果 = await 下载全书批量(
                 会话, 书籍编号, 下载目录, 下载态,
                 text_types=类型候选, ad_state=ad_state,
@@ -1720,22 +1700,6 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield 文件发送失败提示
     except Exception as e:
         logger.warning(f"QQ阅读本地下载失败：book_id={书籍编号}, error={e}"); yield 下载失败提示
-
-def 处理QQ阅读API指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
-    文本 = str(命令文本 or "").strip()
-    if 文本 in ("开启QQ阅读API", "开启qq阅读API", "开启QQ阅读api", "开启qq阅读api"):
-        if not 是群文件清理管理员(event, 配置): return "没有权限使用QQ阅读API开关"
-        try: 写入QQ阅读API开关(配置, True)
-        except Exception as e:
-            logger.warning(f"QQ阅读API开关写入失败：enabled=True, error={e}"); return "切换失败，请稍后再试"
-        return "QQ阅读API已开启"
-    if 文本 in ("关闭QQ阅读API", "关闭qq阅读API", "关闭QQ阅读api", "关闭qq阅读api"):
-        if not 是群文件清理管理员(event, 配置): return "没有权限使用QQ阅读API开关"
-        try: 写入QQ阅读API开关(配置, False)
-        except Exception as e:
-            logger.warning(f"QQ阅读API开关写入失败：enabled=False, error={e}"); return "切换失败，请稍后再试"
-        return "QQ阅读API已关闭"
-    return None
 
 def 清理过期登录会话() -> None:
     现在 = time.time()
