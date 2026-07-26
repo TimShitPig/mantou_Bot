@@ -25,6 +25,7 @@ importlib.invalidate_caches()
 运行状态数据库 = 加载功能模块("功能文件.管理功能.基础功能.运行状态数据库")
 消息工具 = 加载功能模块("功能文件.管理功能.基础功能.消息工具")
 帮助功能 = 加载功能模块("功能文件.管理功能.基础功能.帮助功能")
+QQ官方交互桥 = 加载功能模块("功能文件.管理功能.基础功能.QQ官方交互桥")
 状态功能 = 加载功能模块("功能文件.管理功能.基础功能.状态功能")
 UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC网盘")
 百度网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.百度网盘")
@@ -43,12 +44,13 @@ Y6API番茄小说模块 = 加载功能模块("功能文件.API功能.Y6api.番�
 授权链接功能 = 加载功能模块("功能文件.管理功能.群聊功能.授权链接")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.找书")
+QQ官方交互桥.安装QQ官方帮助交互()
 获取古诗词名句回复 = getattr(古诗词名句模块, "获取古诗词名句回复")
 获取疯狂星期四回复 = getattr(疯狂星期四模块, "获取疯狂星期四回复")
 获取随机一言回复 = getattr(随机一言模块, "获取随机一言回复")
 获取随机英文单词回复 = getattr(随机英文单词模块, "获取随机英文单词回复")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "2.17.16"
+插件版本 = "2.17.17"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -59,6 +61,7 @@ class MyPlugin(Star):
         self.config = config
 
     async def initialize(self):
+        QQ官方交互桥.安装QQ官方帮助交互(self.context)
         网页群文件功能.启动Cookie自动保活(self.config)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -88,6 +91,23 @@ class MyPlugin(Star):
                     yield event.plain_result(找书回复内容)
                 else:
                     yield 找书回复内容
+
+        帮助回调 = 帮助功能.解析帮助回调命令(命令文本)
+        if 帮助回调 is not None:
+            回调类型, 回调命令 = 帮助回调
+            logger.info(f"QQ官方帮助回调分发：type={回调类型}, command={回调命令}")
+            if 回调类型 == "菜单":
+                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 回调命令, self.config)
+                if md文本 is not None:
+                    if 权限工具.是QQ官方机器人(event):
+                        发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                        if not 发送成功:
+                            yield event.plain_result(md文本)
+                    else:
+                        yield event.plain_result(md文本)
+                event.stop_event()
+                return
+            命令文本 = 回调命令
 
         # 找书优先：搜索/翻页/选N 下载（兼容 Markdown 文字指令链和手动发送）
         找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
