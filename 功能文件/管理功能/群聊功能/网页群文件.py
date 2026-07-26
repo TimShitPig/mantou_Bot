@@ -90,6 +90,7 @@ COOKIE命名空间 = "web_group_file_cookie"
 
 # 清理群文件选择等待状态：key=会话标识，value=(过期时间戳, 群号列表)
 清理等待状态: dict[str, tuple[float, list[str]]] = {}
+清理选择页码: dict[str, int] = {}
 
 文件列表接口 = "https://pan.qun.qq.com/cgi-bin/group_file/get_file_list"
 删除文件接口 = "https://pan.qun.qq.com/cgi-bin/group_file/delete_file"
@@ -119,6 +120,11 @@ Cookie输入等待秒数 = 60
 备注状态键前缀 = "remark:"
 按钮每行数 = 2
 按钮最大行数 = 5
+清理选择按钮每行数 = 3
+清理选择最大行数 = 4
+清理选择每页数量 = 清理选择按钮每行数 * (清理选择最大行数 - 1)
+清理选择上一页命令 = "清理上一页"
+清理选择下一页命令 = "清理下一页"
 删除模式等待秒数 = 300
 查看群聊等待秒数 = 300
 
@@ -238,6 +244,7 @@ def 处于清理等待状态(event: Any) -> bool:
     过期时间, _ = 状态
     if 过期时间 <= time.time():
         清理等待状态.pop(标识, None)
+        清理选择页码.pop(标识, None)
         return False
     return True
 
@@ -474,25 +481,33 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
         return None
     过期时间, 群号列表 = 状态
     if 过期时间 <= time.time():
-        清理等待状态.pop(标识, None)
+        清除清理等待状态(event)
         # 状态过期：数字或返回上一步返回提示，避免落到帮助菜单误进其他功能（如全员禁言详情）
-        if 文本.isdigit() or 文本 == 返回上一步命令:
+        if 文本.isdigit() or 文本 in {返回上一步命令, 清理选择上一页命令, 清理选择下一页命令}:
             return "清理群文件选择已过期，请重新发送「清理群文件」"
         return None
 
     logger.info(f"[网页群文件诊断] 清理选择回复 文本={文本!r} 标识={标识!r} 群号列表={群号列表}")
 
     if 文本 == "0":
-        清理等待状态.pop(标识, None)
+        清除清理等待状态(event)
         return "已取消清理群文件选择"
 
     if 文本 == 返回上一步命令:
-        清理等待状态.pop(标识, None)
+        清除清理等待状态(event)
         return await 显示群文件清理详情页(event, 配置)
 
     if not 是群文件清理管理员(event, 配置):
-        清理等待状态.pop(标识, None)
+        清除清理等待状态(event)
         return "没有权限使用群文件清理"
+
+    if 文本 in {清理选择上一页命令, 清理选择下一页命令}:
+        当前页 = 获取清理选择页码(event, 群号列表)
+        总页数 = 获取清理选择总页数(群号列表)
+        目标页 = 当前页 - 1 if 文本 == 清理选择上一页命令 else 当前页 + 1
+        if 1 <= 目标页 <= 总页数:
+            清理选择页码[标识] = 目标页
+        return await 发送清理选择列表(event, 配置, 群号列表)
 
     目标群号 = None
     # 先匹配编号（1,2,3...）
@@ -517,10 +532,10 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
     前缀 = f"已选择群 {目标群号}，开始清理\n{清理结果}"
     剩余群号列表 = 读取待清理群列表(配置)
     if not 剩余群号列表:
-        清理等待状态.pop(标识, None)
+        清除清理等待状态(event)
         return f"{前缀}\n已清理完所有待清理群"
     # 刷新等待状态的群号列表和过期时间，并重新列出选择列表（带前缀提示）
-    写入清理等待状态(event, 剩余群号列表)
+    写入清理等待状态(event, 剩余群号列表, 页码=获取清理选择页码(event, 群号列表))
     return await 发送清理选择列表(event, 配置, 剩余群号列表, 前缀文本=前缀)
 
 
@@ -535,15 +550,30 @@ async def 列出待清理群供选择(event: Any, 配置: Any) -> str:
 async def 发送清理选择列表(event: Any, 配置: Any, 群号列表: list[str], 前缀文本: str = "") -> str:
     """列出待清理群选择列表（markdown + 按钮 / 纯文本），前缀文本非空时附加在顶部。"""
     if 是QQ官方机器人(event):
-        md = 格式化清理选择markdown(群号列表, 前缀文本=前缀文本)
+        当前页 = 获取清理选择页码(event, 群号列表)
+        总页数 = 获取清理选择总页数(群号列表)
+        起始索引 = (当前页 - 1) * 清理选择每页数量
+        本页群号列表 = 群号列表[起始索引:起始索引 + 清理选择每页数量]
+        md = 格式化清理选择markdown(
+            本页群号列表,
+            前缀文本=前缀文本,
+            起始编号=起始索引 + 1,
+            当前页=当前页,
+            总页数=总页数,
+        )
         群按钮 = [
             生成按钮(str(序号), 生成群号按钮标签(群号, 配置), 自动发送=True, data为标签=False)
-            for 序号, 群号 in enumerate(群号列表, start=1)
+            for 序号, 群号 in enumerate(本页群号列表, start=起始索引 + 1)
         ]
-        取消按钮 = 生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=True)
-        行 = 按钮分行(群按钮, 每行最多=按钮每行数)
-        行.append({"buttons": [取消按钮]})
-        键盘 = {"rows": 行} if len(行) <= 按钮最大行数 else None
+        底部按钮 = []
+        if 当前页 > 1:
+            底部按钮.append(生成按钮(清理选择上一页命令, "上一页", 自动发送=True, data为标签=False))
+        if 当前页 < 总页数:
+            底部按钮.append(生成按钮(清理选择下一页命令, "下一页", 自动发送=True, data为标签=False))
+        底部按钮.append(生成按钮(返回上一步命令, "返回上一步", 自动发送=True, data为标签=False))
+        行 = 按钮分行(群按钮, 每行最多=清理选择按钮每行数)
+        行.append({"buttons": 底部按钮})
+        键盘 = {"rows": 行}
         if await 发送Markdown键盘消息(event, md, 键盘):
             return ""
     行列表 = []
@@ -556,14 +586,22 @@ async def 发送清理选择列表(event: Any, 配置: Any, 群号列表: list[s
     return "\n".join(行列表)
 
 
-def 格式化清理选择markdown(群号列表: list[str], 前缀文本: str = "") -> str:
+def 格式化清理选择markdown(
+    群号列表: list[str],
+    前缀文本: str = "",
+    起始编号: int = 1,
+    当前页: int = 1,
+    总页数: int = 1,
+) -> str:
     行列表 = []
     if 前缀文本:
         行列表.append(前缀文本)
         行列表.append("")
     行列表.append("**选择要清理的群**")
     行列表.append(f"点击群号按钮清理对应群（{清理选择等待秒数} 秒内有效）：")
-    for 序号, 群号 in enumerate(群号列表, start=1):
+    if 总页数 > 1:
+        行列表.append(f"当前页：{当前页}/{总页数}")
+    for 序号, 群号 in enumerate(群号列表, start=起始编号):
         行列表.append(f"{序号}. {群号}")
     return "\n".join(行列表)
 
@@ -576,8 +614,32 @@ def 获取会话标识(event: Any) -> str:
     return f"private:{发送者}"
 
 
-def 写入清理等待状态(event: Any, 群号列表: list[str]) -> None:
-    清理等待状态[获取会话标识(event)] = (time.time() + 清理选择等待秒数, 群号列表)
+def 获取清理选择总页数(群号列表: list[str]) -> int:
+    return max(1, (len(群号列表) + 清理选择每页数量 - 1) // 清理选择每页数量)
+
+
+def 获取清理选择页码(event: Any, 群号列表: list[str]) -> int:
+    标识 = 获取会话标识(event)
+    总页数 = 获取清理选择总页数(群号列表)
+    try:
+        页码 = int(清理选择页码.get(标识, 1))
+    except (TypeError, ValueError):
+        页码 = 1
+    页码 = min(max(1, 页码), 总页数)
+    清理选择页码[标识] = 页码
+    return 页码
+
+
+def 清除清理等待状态(event: Any) -> None:
+    标识 = 获取会话标识(event)
+    清理等待状态.pop(标识, None)
+    清理选择页码.pop(标识, None)
+
+
+def 写入清理等待状态(event: Any, 群号列表: list[str], 页码: int = 1) -> None:
+    标识 = 获取会话标识(event)
+    清理等待状态[标识] = (time.time() + 清理选择等待秒数, 群号列表)
+    清理选择页码[标识] = 页码
 
 
 async def 生成登录提示(event: Any) -> str:

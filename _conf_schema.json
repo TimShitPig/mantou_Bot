@@ -6,31 +6,7 @@
       "group_file_cleanup_admin_qq": {
         "description": "群文件清理管理员 QQ 白名单",
         "type": "list",
-        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、授权链接、开启/关闭番茄/七猫/书旗/QQ阅读、用户激活、用户重置、激活增减、查询激活用户、生成卡密、查询卡密、查询其他用户激活信息、群聊/私聊付费开关和禁言指令，支持一次 @ 多个用户或填写 QQ 号批量操作。这里沿用群文件清理的管理员白名单，不是群管理员。",
-        "default": []
-      },
-      "user_activation_daily_free_quota": {
-        "description": "未激活用户每日免费额度",
-        "type": "string",
-        "hint": "未激活用户每天可免费使用受激活门禁保护的功能次数，按用户 QQ 计数，不按群区分；填 0 或留空表示不开放免费额度。",
-        "default": "0"
-      }
-    }
-  },
-  "card_key_sync_settings": {
-    "description": "卡密同步查看",
-    "type": "object",
-    "items": {
-      "card_key_sync_used_cards": {
-        "description": "已使用卡密",
-        "type": "list",
-        "hint": "插件会和 MySQL 双向同步已使用卡密，格式为 卡密#群号#QQ号#天数天#已使用。删除这里的卡密会删除数据库记录；数据库新增或删除后这里也会刷新新增或删除；在这里按格式新增会写入数据库。",
-        "default": []
-      },
-      "card_key_sync_unused_cards": {
-        "description": "未使用卡密",
-        "type": "list",
-        "hint": "插件会和 MySQL 双向同步未使用卡密，格式为 卡密#群号#天数天#未使用。删除这里的卡密会删除数据库记录；数据库新增或删除后这里也会刷新新增或删除；在这里按格式新增会写入数据库。",
+        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、授权链接、开启/关闭小说功能和禁言指令。这里沿用群文件清理的管理员白名单，不是群管理员。",
         "default": []
       }
     }
@@ -86,28 +62,28 @@
     "description": "数据库配置",
     "type": "object",
     "items": {
-      "user_activation_database_host": {
-        "description": "用户激活 MySQL 地址",
+      "database_host": {
+        "description": "MySQL 地址",
         "type": "string",
-        "hint": "例如 127.0.0.1。用户激活和卡密只使用 MySQL 存储，不再使用本地 JSON。",
+        "hint": "例如 127.0.0.1。群文件 Cookie、小说开关和 QQ 阅读登录态使用 MySQL 存储。",
         "default": ""
       },
-      "user_activation_database_port": {
-        "description": "用户激活 MySQL 端口",
+      "database_port": {
+        "description": "MySQL 端口",
         "type": "string",
         "hint": "默认 3306。",
-        "default": "3306"
-      },
-      "user_activation_database_user": {
-        "description": "用户激活 MySQL 用户名和数据库名",
-        "type": "string",
-        "hint": "用于连接保存用户激活记录的数据库；数据库名默认与用户名相同。",
         "default": ""
       },
-      "user_activation_database_password": {
-        "description": "用户激活 MySQL 密码",
+      "database_user": {
+        "description": "MySQL 用户名和数据库名",
         "type": "string",
-        "hint": "用于连接保存用户激活记录的数据库。",
+        "hint": "数据库名默认与用户名相同。",
+        "default": ""
+      },
+      "database_password": {
+        "description": "MySQL 密码",
+        "type": "string",
+        "hint": "用于连接运行状态数据库。",
         "default": ""
       }
     }

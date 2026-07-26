@@ -3,22 +3,16 @@ from __future__ import annotations
 import os
 import platform
 import shutil
-import time
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from 功能文件.管理功能.基础功能 import 用户激活
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 读取字段, 获取发送者QQ
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 读取运行状态值
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 
 
-模块加载时间 = time.time()
-上次进程CPU采样: tuple[float, float] | None = (time.monotonic(), time.process_time())
 上次系统CPU采样: tuple[int, int] | None = None
-小说功能状态命名空间 = "novel_feature_switch"
-小说默认状态 = {"番茄": True, "七猫": True, "书旗": True, "QQ阅读": True}
-付费开关状态命名空间 = "paid_access"
+框架版本缓存: str | None = None
 
 
 def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本: str = "") -> str | None:
@@ -30,224 +24,129 @@ def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本:
 
 
 def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
-    功能状态 = 读取小说功能状态(配置)
-    数据库状态 = 读取数据库配置状态(配置)
-    UC状态 = 读取UC网盘状态(配置)
-    百度状态 = 读取百度网盘状态(配置)
-    群文件Cookie状态 = 读取群文件Cookie状态(event, 配置)
-
-    return "\n".join(
+    del event, 配置, 插件版本
+    return "\n\n".join(
         [
-            "系统状态",
-            "",
-            "系统信息",
-            f"插件版本：v{str(插件版本 or '').lstrip('v') or '未知'}",
-            f"系统时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"运行系统：{platform.platform()}",
-            f"Python：{platform.python_version()}",
-            f"CPU核心：{os.cpu_count() or '未知'}",
-            f"运行内存：{格式化运行内存()}",
-            f"运行CPU：{格式化运行CPU()}",
-            f"系统内存：{格式化系统内存()}",
-            f"系统CPU：{格式化系统CPU()}",
-            f"磁盘剩余：{格式化磁盘信息()}",
-            f"系统运行：{格式化系统运行时间()}",
-            f"插件运行：{格式化时长(int(time.time() - 模块加载时间))}",
-            "",
-            "功能状态",
-            f"番茄小说：{格式化开关(bool(功能状态.get('番茄', True)))}",
-            f"七猫小说：{格式化开关(bool(功能状态.get('七猫', True)))}",
-            f"书旗小说：{格式化开关(bool(功能状态.get('书旗', True)))}",
-            f"QQ阅读：{格式化开关(bool(功能状态.get('QQ阅读', True)))}",
-            f"收费模式：已全部免费",
-            f"数据库：{数据库状态}",
-            f"群cookie：{群文件Cookie状态}",
-            f"UC网盘：{UC状态}",
-            f"百度网盘：{百度状态}",
+            f"系统位数：{获取系统位数()}",
+            f"CPU占用：{格式化系统CPU()}",
+            f"物理内存：{格式化系统内存()}",
+            f"磁盘空间：{格式化磁盘信息()}",
+            f"系统进程：{格式化系统进程数()}",
+            f"操作系统：{获取操作系统名称()}",
+            f"框架版本：{获取框架版本()}",
+            f"运行时间：{格式化系统运行时间()}",
+            f"当前时间：{datetime.now().strftime('%Y年%m月%d日%H时%M分%S秒')}",
         ]
     )
 
 
-def 读取全局收费状态(配置: Any) -> str:
-    def 读取状态() -> str:
-        文本 = 读取运行状态值(配置, 付费开关状态命名空间, "global", "").strip().lower()
-        if 文本 in {"on", "1", "true", "yes", "开启"}:
-            return "开启（强制全部收费）"
-        if 文本 in {"off", "0", "false", "no", "关闭"}:
-            return "关闭（全部免费）"
-        return "按群聊/私聊独立开关"
-
-    return 安全读取("全局收费", 读取状态, "按群聊/私聊独立开关")
+def 获取系统位数() -> str:
+    架构 = f"{platform.architecture()[0]} {platform.machine()}"
+    if "64" in 架构:
+        return "64位"
+    if "32" in 架构:
+        return "32位"
+    return "未知"
 
 
-def 读取当前群收费状态(event: Any, 配置: Any) -> str:
-    群号 = 用户激活.获取群号(event)
-    if not 群号:
-        return "非群聊"
-    return 格式化开关(
-        安全读取("当前群收费", lambda: 读取布尔运行状态值(配置, 付费开关状态命名空间, f"group:{群号}", True), True)
-    )
+def 获取操作系统名称() -> str:
+    if platform.system().lower() == "linux":
+        try:
+            for 行 in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+                if not 行.startswith("PRETTY_NAME="):
+                    continue
+                名称 = 行.split("=", 1)[1].strip().strip('"')
+                if 名称:
+                    return 名称
+        except Exception:
+            pass
+    return platform.platform() or "未知"
 
 
-def 读取私聊收费状态(配置: Any) -> str:
-    def 读取状态() -> bool:
-        return 读取布尔运行状态值(
-            配置,
-            付费开关状态命名空间,
-            "private",
-            True,
-        )
+def 获取框架版本() -> str:
+    global 框架版本缓存
 
-    return 格式化开关(安全读取("私聊收费", 读取状态, True))
+    if 框架版本缓存 is not None:
+        return 框架版本缓存
 
+    for 环境变量 in ("ASTRBOT_GIT_SHA", "ASTRBOT_VERSION", "GIT_COMMIT"):
+        值 = str(os.environ.get(环境变量) or "").strip()
+        if 值:
+            框架版本缓存 = 值[:40]
+            return 框架版本缓存
 
-def 读取群文件Cookie状态(event: Any, 配置: Any) -> str:
-    def 读取状态() -> str:
-        from 功能文件.管理功能.群聊功能 import 网页群文件
-        发送者 = 获取发送者QQ(event)
-        return 网页群文件.获取Cookie状态摘要(发送者, 配置)
-
-    return 安全读取("群文件Cookie", 读取状态, "读取失败")
-
-
-def 读取数据库配置状态(配置: Any) -> str:
     try:
-        数据库配置 = 用户激活.获取数据库配置(配置)
+        import astrbot
     except Exception:
-        return "未配置"
-    return "已配置" if 数据库配置 else "未配置"
+        框架版本缓存 = "未知"
+        return 框架版本缓存
+
+    模块路径 = getattr(astrbot, "__file__", None)
+    if 模块路径:
+        try:
+            起始目录 = Path(模块路径).resolve().parent
+            已检查目录: set[Path] = set()
+            for 目录 in (起始目录, *起始目录.parents):
+                if 目录 in 已检查目录:
+                    continue
+                已检查目录.add(目录)
+                短提交 = 读取Git短提交(目录)
+                if 短提交:
+                    框架版本缓存 = 短提交
+                    return 框架版本缓存
+        except Exception:
+            pass
+
+    for 字段名 in ("__version__", "VERSION", "version"):
+        值 = str(getattr(astrbot, 字段名, "") or "").strip()
+        if 值:
+            框架版本缓存 = 值
+            return 框架版本缓存
+
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            值 = str(version("astrbot") or "").strip()
+        except PackageNotFoundError:
+            值 = ""
+        if 值:
+            框架版本缓存 = 值
+            return 框架版本缓存
+    except Exception:
+        pass
+
+    框架版本缓存 = "未知"
+    return 框架版本缓存
 
 
-def 读取UC网盘状态(配置: Any) -> str:
-    Cookie = 清理带前缀Cookie(读取配置字段(配置, "uc_pan_cookie", ("uc_pan_settings", "UC网盘设置", "basic_settings", "基础配置")), "UC网盘#")
-    return 格式化开关(bool(Cookie))
-
-
-def 读取百度网盘状态(配置: Any) -> str:
-    Cookie = 清理带前缀Cookie(读取配置字段(配置, "baidu_pan_cookie", ("baidu_pan_settings", "百度网盘设置", "basic_settings", "基础配置")), "百度网盘#")
-    上传状态 = str(读取配置字段(配置, "baidu_pan_upload_status", ("baidu_pan_settings", "百度网盘设置", "basic_settings", "基础配置")) or "").strip()
-    if 上传状态 not in ("完结", "连载", "全部"):
-        上传状态 = "完结"
-    return f"{格式化开关(bool(Cookie))}，上传：{上传状态}"
-
-
-def 读取小说功能状态(配置: Any) -> dict[str, bool]:
-    状态 = dict(小说默认状态)
-    for 功能名, 默认值 in 小说默认状态.items():
-        状态[功能名] = 安全读取(
-            f"{功能名}功能状态",
-            lambda 名称=功能名, 默认=默认值: 读取布尔运行状态值(配置, 小说功能状态命名空间, 名称, 默认),
-            默认值,
-        )
-    return 状态
-
-
-def 读取配置字段(配置: Any, 字段名: str, 分类列表: tuple[str, ...] = ("basic_settings", "基础配置")) -> Any:
-    if 配置 is None:
+def 读取Git短提交(目录: Path) -> str | None:
+    if not (目录 / ".git").exists():
         return None
-    配置字典 = 获取配置字典(配置)
-    if 配置字典 is not None and 配置字典 is not 配置:
-        值 = 读取配置字段(配置字典, 字段名, 分类列表)
-        if 值 is not None:
-            return 值
-    值 = 读取字段(配置, 字段名)
-    if 值 is not None:
-        return 值
-    获取方法 = getattr(配置, "get", None)
-    if callable(获取方法):
-        try:
-            值 = 获取方法(字段名)
-            if 值 is not None:
-                return 值
-        except Exception:
-            pass
-    for 分类名 in 分类列表:
-        分类 = 读取字段(配置, 分类名)
-        if 分类 is None and callable(获取方法):
-            try:
-                分类 = 获取方法(分类名)
-            except Exception:
-                分类 = None
-        if isinstance(分类, dict) and 字段名 in 分类:
-            return 分类.get(字段名)
-        值 = 读取字段(分类, 字段名)
-        if 值 is not None:
-            return 值
-    return None
-
-
-def 获取配置字典(配置: Any) -> dict[str, Any] | None:
-    if isinstance(配置, dict):
-        return 配置
-    获取方法 = getattr(配置, "get_config", None)
-    if callable(获取方法):
-        try:
-            数据 = 获取方法()
-            if isinstance(数据, dict):
-                return 数据
-        except Exception:
-            pass
-    for 字段名 in ("data", "obj"):
-        数据 = getattr(配置, 字段名, None)
-        if isinstance(数据, dict):
-            return 数据
-    return None
-
-
-def 清理带前缀Cookie(值: Any, 前缀: str) -> str:
-    文本 = str(值 or "").strip()
-    if 文本.startswith(前缀):
-        文本 = 文本.split("#", 1)[1].strip()
-    return 文本
-
-
-def 安全读取(名称: str, 函数: Callable[[], Any], 默认值: Any) -> Any:
     try:
-        return 函数()
+        结果 = subprocess.run(
+            ["git", "-C", str(目录), "rev-parse", "--short=8", "HEAD"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1,
+        )
     except Exception:
-        return 默认值
-
-
-def 格式化开关(是否开启: bool) -> str:
-    return "开启" if 是否开启 else "关闭"
+        return None
+    短提交 = 结果.stdout.strip()
+    return 短提交 if 结果.returncode == 0 and 短提交 else None
 
 
 def 格式化磁盘信息() -> str:
     try:
-        用量 = shutil.disk_usage(Path(__file__).resolve().anchor or Path.cwd())
+        根目录 = Path(__file__).resolve().anchor or Path.cwd()
+        用量 = shutil.disk_usage(根目录)
     except Exception:
         try:
             用量 = shutil.disk_usage(Path.cwd())
         except Exception:
             return "未知"
-    return f"{格式化字节(用量.free)} / {格式化字节(用量.total)}"
-
-
-def 格式化运行内存() -> str:
-    字节数 = 读取当前进程内存()
-    if 字节数 is None:
-        return "未知"
-    return 格式化字节(字节数)
-
-
-def 格式化运行CPU() -> str:
-    global 上次进程CPU采样
-
-    当前时间 = time.monotonic()
-    当前CPU时间 = time.process_time()
-    累计文本 = f"累计{当前CPU时间:.2f}秒"
-    if 上次进程CPU采样 is None:
-        上次进程CPU采样 = (当前时间, 当前CPU时间)
-        return f"采样中（{累计文本}）"
-
-    上次时间, 上次CPU时间 = 上次进程CPU采样
-    上次进程CPU采样 = (当前时间, 当前CPU时间)
-    间隔 = 当前时间 - 上次时间
-    if 间隔 <= 0:
-        return f"采样中（{累计文本}）"
-    核心数 = max(1, os.cpu_count() or 1)
-    百分比 = max(0.0, (当前CPU时间 - 上次CPU时间) / 间隔 / 核心数 * 100)
-    return f"{百分比:.1f}%（{累计文本}）"
+    return f"{格式化容量(用量.used)}/{格式化容量(用量.total)}"
 
 
 def 格式化系统内存() -> str:
@@ -255,7 +154,7 @@ def 格式化系统内存() -> str:
     if 内存 is None:
         return "未知"
     已用, 总计 = 内存
-    return f"{格式化字节(已用)} / {格式化字节(总计)}"
+    return f"{格式化容量(已用)}/{格式化容量(总计)}"
 
 
 def 格式化系统CPU() -> str:
@@ -278,6 +177,34 @@ def 格式化系统CPU() -> str:
     return f"{百分比:.1f}%"
 
 
+def 格式化系统进程数() -> str:
+    数量 = 读取系统进程数()
+    return f"{数量}个" if 数量 is not None else "未知"
+
+
+def 读取系统进程数() -> int | None:
+    系统名 = platform.system().lower()
+    if 系统名 == "linux":
+        try:
+            return sum(1 for 名称 in os.listdir("/proc") if 名称.isdigit())
+        except Exception:
+            return None
+    if 系统名 == "windows":
+        try:
+            结果 = subprocess.run(
+                ["tasklist", "/NH", "/FO", "CSV"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=3,
+            )
+            if 结果.returncode == 0:
+                return sum(1 for 行 in 结果.stdout.splitlines() if 行.lstrip().startswith('"'))
+        except Exception:
+            return None
+    return None
+
+
 def 格式化系统运行时间() -> str:
     秒数 = 读取系统运行秒数()
     if 秒数 is None:
@@ -296,13 +223,10 @@ def 读取系统运行秒数() -> float | None:
 
 def 读取Linux系统运行秒数() -> float | None:
     try:
-        with open("/proc/uptime", "r", encoding="utf-8") as 文件:
-            内容 = 文件.read().strip().split()
-        if 内容:
-            return float(内容[0])
+        内容 = Path("/proc/uptime").read_text(encoding="utf-8").strip().split()
+        return float(内容[0]) if 内容 else None
     except Exception:
         return None
-    return None
 
 
 def 读取Windows系统运行秒数() -> float | None:
@@ -312,84 +236,7 @@ def 读取Windows系统运行秒数() -> float | None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.GetTickCount64.restype = ctypes.c_ulonglong
         毫秒 = kernel32.GetTickCount64()
-        if 毫秒 >= 0:
-            return float(毫秒) / 1000
-    except Exception:
-        return None
-    return None
-
-
-def 读取当前进程内存() -> int | None:
-    系统名 = platform.system().lower()
-    if 系统名 == "windows":
-        return 读取Windows进程内存()
-    if 系统名 == "linux":
-        return 读取Linux进程内存()
-    return 读取Resource进程内存()
-
-
-def 读取Linux进程内存() -> int | None:
-    try:
-        with open("/proc/self/status", "r", encoding="utf-8") as 文件:
-            for 行 in 文件:
-                if 行.startswith("VmRSS:"):
-                    项目 = 行.split()
-                    if len(项目) >= 2:
-                        return int(项目[1]) * 1024
-    except Exception:
-        return None
-    return None
-
-
-def 读取Windows进程内存() -> int | None:
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
-            _fields_ = [
-                ("cb", wintypes.DWORD),
-                ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t),
-            ]
-
-        计数器 = PROCESS_MEMORY_COUNTERS()
-        计数器.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        psapi = ctypes.WinDLL("psapi", use_last_error=True)
-        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-        psapi.GetProcessMemoryInfo.argtypes = [
-            wintypes.HANDLE,
-            ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
-            wintypes.DWORD,
-        ]
-        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
-        句柄 = kernel32.GetCurrentProcess()
-        成功 = psapi.GetProcessMemoryInfo(句柄, ctypes.byref(计数器), 计数器.cb)
-        if 成功:
-            return int(计数器.WorkingSetSize)
-    except Exception:
-        return None
-    return None
-
-
-def 读取Resource进程内存() -> int | None:
-    try:
-        import resource
-
-        最大常驻 = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        if 最大常驻 <= 0:
-            return None
-        if platform.system().lower() == "darwin":
-            return 最大常驻
-        return 最大常驻 * 1024
+        return float(毫秒) / 1000 if 毫秒 >= 0 else None
     except Exception:
         return None
 
@@ -406,14 +253,13 @@ def 读取系统内存() -> tuple[int, int] | None:
 def 读取Linux系统内存() -> tuple[int, int] | None:
     try:
         数据: dict[str, int] = {}
-        with open("/proc/meminfo", "r", encoding="utf-8") as 文件:
-            for 行 in 文件:
-                if ":" not in 行:
-                    continue
-                键, 值 = 行.split(":", 1)
-                项目 = 值.split()
-                if 项目:
-                    数据[键] = int(项目[0]) * 1024
+        for 行 in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if ":" not in 行:
+                continue
+            键, 值 = 行.split(":", 1)
+            项目 = 值.split()
+            if 项目:
+                数据[键] = int(项目[0]) * 1024
         总计 = 数据.get("MemTotal")
         可用 = 数据.get("MemAvailable")
         if 总计 and 可用 is not None:
@@ -462,8 +308,7 @@ def 读取系统CPU计数器() -> tuple[int, int] | None:
 
 def 读取Linux系统CPU计数器() -> tuple[int, int] | None:
     try:
-        with open("/proc/stat", "r", encoding="utf-8") as 文件:
-            第一行 = 文件.readline()
+        第一行 = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
         项目 = 第一行.split()
         if not 项目 or 项目[0] != "cpu":
             return None
@@ -471,8 +316,7 @@ def 读取Linux系统CPU计数器() -> tuple[int, int] | None:
         if len(数值) < 4:
             return None
         空闲 = 数值[3] + (数值[4] if len(数值) > 4 else 0)
-        总计 = sum(数值)
-        return 空闲, 总计
+        return 空闲, sum(数值)
     except Exception:
         return None
 
@@ -511,13 +355,12 @@ def 读取Windows系统CPU计数器() -> tuple[int, int] | None:
         return None
 
 
-def 格式化字节(字节数: int) -> str:
-    数值 = float(字节数)
-    for 单位 in ("B", "KB", "MB", "GB", "TB"):
-        if 数值 < 1024 or 单位 == "TB":
-            return f"{数值:.1f}{单位}"
-        数值 /= 1024
-    return f"{字节数}B"
+def 格式化容量(字节数: int) -> str:
+    数值 = max(0, int(字节数)) / (1024 ** 3)
+    if 数值 >= 1:
+        return f"{数值:.1f}G"
+    数值 *= 1024
+    return f"{数值:.1f}M"
 
 
 def 格式化时长(秒数: int) -> str:
@@ -528,12 +371,11 @@ def 格式化时长(秒数: int) -> str:
     项目 = []
     if 天:
         项目.append(f"{天}天")
-    if 小时:
+    if 小时 or 项目:
         项目.append(f"{小时}小时")
-    if 分钟:
-        项目.append(f"{分钟}分钟")
-    if not 项目:
-        项目.append(f"{秒}秒")
+    if 分钟 or 项目:
+        项目.append(f"{分钟}分")
+    项目.append(f"{秒}秒")
     return "".join(项目)
 
 

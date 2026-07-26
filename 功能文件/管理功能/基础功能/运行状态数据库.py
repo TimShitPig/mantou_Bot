@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import importlib
 import time
 from typing import Any
 
 
 运行状态数据库表名 = "mantou_runtime_state"
+数据库配置分类名 = "database_settings"
 
 
 def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认值: str = "") -> str:
@@ -99,12 +99,118 @@ def 确保运行状态数据库表(连接: Any, 表名: str) -> None:
 
 
 def 获取数据库配置(配置: Any) -> dict[str, Any]:
-    return 获取用户激活模块().获取数据库配置(配置)
+    """读取通用运行状态数据库配置，并兼容历史配置字段。"""
+    用户名 = str(读取数据库配置值(配置, "database_user", "user_activation_database_user") or "").strip()
+    数据库名 = str(读取数据库配置值(配置, "database_name", "user_activation_database_name") or 用户名).strip()
+    数据库配置 = {
+        "host": str(读取数据库配置值(配置, "database_host", "user_activation_database_host") or "").strip(),
+        "port": 安全整数(读取数据库配置值(配置, "database_port", "user_activation_database_port"), 3306),
+        "user": 用户名,
+        "password": str(读取数据库配置值(配置, "database_password", "user_activation_database_password") or ""),
+        "database": 数据库名,
+        "runtime_state_table": 运行状态数据库表名,
+    }
+    缺少字段 = [字段 for 字段 in ("host", "user", "database") if not 数据库配置[字段]]
+    if 缺少字段:
+        raise RuntimeError(f"数据库配置不完整：缺少 {', '.join(缺少字段)}")
+    return 数据库配置
 
 
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
-    return 获取用户激活模块().打开数据库连接(数据库配置)
+    try:
+        import pymysql
+    except Exception as exc:
+        raise RuntimeError("缺少 pymysql 依赖，请先安装 requirements.txt") from exc
+    return pymysql.connect(
+        host=数据库配置["host"],
+        port=数据库配置["port"],
+        user=数据库配置["user"],
+        password=数据库配置["password"],
+        database=数据库配置["database"],
+        charset="utf8mb4",
+        autocommit=False,
+        connect_timeout=5,
+        read_timeout=10,
+        write_timeout=10,
+    )
 
 
-def 获取用户激活模块() -> Any:
-    return importlib.import_module("功能文件.管理功能.基础功能.用户激活")
+def 读取数据库配置值(配置: Any, *字段列表: str) -> Any:
+    for 字段名 in 字段列表:
+        值 = 读取配置字段(配置, 字段名)
+        if 值 is None:
+            continue
+        if isinstance(值, str) and not 值.strip():
+            continue
+        return 值
+    return None
+
+
+def 读取配置字段(配置: Any, 字段名: str) -> Any:
+    if 配置 is None:
+        return None
+    配置字典 = 获取配置字典(配置)
+    if 配置字典 is not None and 配置字典 is not 配置:
+        值 = 读取配置字段(配置字典, 字段名)
+        if 值 is not None:
+            return 值
+
+    值 = 读取字段(配置, 字段名)
+    if 值 is None:
+        值 = 读取旧版配置字段(配置, 字段名)
+    if 值 is not None:
+        return 值
+
+    for 分类名 in (数据库配置分类名, "数据库配置"):
+        分类 = 读取字段(配置, 分类名)
+        if 分类 is None:
+            分类 = 读取旧版配置字段(配置, 分类名)
+        if 分类 is None:
+            continue
+        值 = 读取字段(分类, 字段名)
+        if 值 is None:
+            值 = 读取旧版配置字段(分类, 字段名)
+        if 值 is not None:
+            return 值
+    return None
+
+
+def 获取配置字典(配置: Any) -> dict[str, Any] | None:
+    if isinstance(配置, dict):
+        return 配置
+    获取方法 = getattr(配置, "get_config", None)
+    if callable(获取方法):
+        try:
+            数据 = 获取方法()
+            if isinstance(数据, dict):
+                return 数据
+        except Exception:
+            pass
+    for 字段名 in ("data", "obj"):
+        数据 = getattr(配置, 字段名, None)
+        if isinstance(数据, dict):
+            return 数据
+    return None
+
+
+def 读取字段(对象: Any, 字段名: str) -> Any:
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
+
+
+def 读取旧版配置字段(配置: Any, 字段名: str) -> Any:
+    获取方法 = getattr(配置, "get", None)
+    if callable(获取方法):
+        try:
+            return 获取方法(字段名)
+        except Exception:
+            pass
+    return None
+
+
+def 安全整数(值: Any, 默认值: int) -> int:
+    try:
+        return int(str(值).strip())
+    except (TypeError, ValueError):
+        return 默认值
