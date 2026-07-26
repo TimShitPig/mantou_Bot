@@ -1027,12 +1027,17 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 选中
     平台 = str(选中.get("platform") or "")
     链接 = str(选中.get("url") or "")
+    书籍编号 = str(选中.get("book_id") or "").strip()
     标题 = 选中.get("title") or ""
-    logger.info(f"找书选择下载：platform={平台}, title={标题}, book_id={选中.get('book_id')}")
+    logger.info(f"找书选择下载：platform={平台}, title={标题}, book_id={书籍编号}")
+    if 平台 == "番茄" and 番茄小说 is not None:
+        # 找书结果直接交给下载器书籍 ID，不再先拼接页面链接后重新解析。
+        # 与用户直接发送可识别书籍 ID 的下载入口共用同一条流程。
+        if not re.fullmatch(r"\d{15,25}", 书籍编号):
+            return "下载失败"
+        return 番茄小说.生成番茄下载回复流(event, 书籍编号, 配置)
     if not 链接:
         return "下载失败"
-    if 平台 == "番茄" and 番茄小说 is not None:
-        return 番茄小说.生成番茄下载回复流(event, 链接, 配置)
     if 平台 == "七猫" and 七猫小说 is not None:
         return 七猫小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "书旗" and 书旗小说 is not None:
