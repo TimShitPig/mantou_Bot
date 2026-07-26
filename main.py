@@ -38,7 +38,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "4.7.0"
+插件版本 = "4.8.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -246,6 +246,12 @@ class MyPlugin(Star):
         if not 回复内容:
             # 空字符串表示 markdown 已自行发送（如群文件清理按钮交互），跳过 plain_result 避免空消息链警告
             return
+
+        if 权限工具.是QQ官方机器人(event):
+            已发送 = await 帮助功能.发送QQ官方提及Markdown(event, str(回复内容))
+            if 已发送:
+                event.stop_event()
+                return
 
         yield event.plain_result(回复内容)
         event.stop_event()

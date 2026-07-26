@@ -17,6 +17,7 @@ from 功能文件.管理功能.基础功能.权限工具 import 是群文件清�
 返回上一步别名 = {"返回上一步", "返回", "上一步", "返回上一级", "上一级"}
 帮助菜单回调前缀 = "帮助回调:菜单:"
 帮助命令回调前缀 = "帮助回调:命令:"
+QQ官方成员OpenID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 
 帮助大类 = [
     {
@@ -650,6 +651,17 @@ def 获取用户openid同步(event: Any) -> str:
         if 值:
             return str(值)
     return ""
+
+
+def 构造QQ官方提及Markdown(event: Any, 文本: str) -> str:
+    成员OpenID = 获取用户openid同步(event)
+    if not 获取群openid同步(event) or not QQ官方成员OpenID规则.fullmatch(成员OpenID):
+        return str(文本)
+    return f"<@{成员OpenID}>\n\n{文本}"
+
+
+async def 发送QQ官方提及Markdown(event: Any, 文本: str) -> bool:
+    return await 发送Markdown键盘消息(event, 构造QQ官方提及Markdown(event, 文本), None)
 
 
 async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str, Any] | None) -> bool:
