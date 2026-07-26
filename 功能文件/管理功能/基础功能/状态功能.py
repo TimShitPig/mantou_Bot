@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.运行状态数据库 import 检查运行状态数据库
 
 
 上次系统CPU采样: tuple[int, int] | None = None
@@ -24,7 +25,8 @@ def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本:
 
 
 def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
-    del event, 配置, 插件版本
+    del event, 插件版本
+    数据库状态 = 检查运行状态数据库(配置)
     return "\n\n".join(
         [
             f"系统位数：{获取系统位数()}",
@@ -34,6 +36,7 @@ def 生成状态回复(event: Any, 配置: Any, 插件版本: str = "") -> str:
             f"系统进程：{格式化系统进程数()}",
             f"操作系统：{获取操作系统名称()}",
             f"框架版本：{获取框架版本()}",
+            f"数据库：{数据库状态}",
             f"运行时间：{格式化系统运行时间()}",
             f"当前时间：{datetime.now().strftime('%Y年%m月%d日%H时%M分%S秒')}",
         ]

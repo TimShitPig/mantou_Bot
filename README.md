@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v4.3.1 |
+| 版本 | v4.3.2 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -22,7 +22,7 @@
 | 管理功能 | 授权链接 | `授权` / `授权 数字群号` / `授权 数字群号 机器人QQ` | 仅群文件清理管理员白名单 QQ 可用，生成 QQ 群服务授权链接 |
 | 管理功能 | 小说开关 | `开启番茄` / `关闭番茄` / `开启七猫` / `关闭七猫` / `开启书旗` / `关闭书旗` / `开启QQ阅读` / `关闭QQ阅读` | 仅群文件清理管理员白名单 QQ 可用，开关小说功能里的番茄小说、七猫小说、书旗小说和 QQ阅读下载功能 |
 | 管理功能 | 付费开关 | `开启收费` / `关闭收费` / `开启群聊收费` / `关闭群聊收费` / `开启私聊收费` / `关闭私聊收费` | 仅群文件清理管理员白名单 QQ 可用；关闭收费为未设置独立开关的群聊和私聊免费，已单独开启群聊收费的群仍收费；开启收费强制群聊和私聊全部收费 |
-| 管理功能 | 状态 | `状态` | 仅群文件清理管理员白名单 QQ 可用，查看系统位数、CPU、物理内存、磁盘、进程数、操作系统、框架版本、系统运行时间和当前时间 |
+| 管理功能 | 状态 | `状态` | 仅群文件清理管理员白名单 QQ 可用，查看系统位数、CPU、物理内存、磁盘、进程数、操作系统、框架版本、数据库状态、系统运行时间和当前时间；每次输入时检查一次数据库 |
 | 管理功能 | 找书 | `找关键词` / `找书 关键词` / `上一页` / `下一页` | 聚合搜索番茄、七猫、书旗，每页 5 条，按用户意图与相似度排序；搜索时跳过已明确没有目录的番茄记录；不显示链接和来源；官方机器人正文中的书名和作者可点，点击后填入下载指令并发送即可下载 |
 | 管理功能 | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 默认使用本地番茄畅听下载；详情、目录和正文均请求畅听接口，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫长篇/短篇链接，正文优先批量下载，完成后上传 UC 并发送“点击打开”按钮 |
@@ -108,11 +108,11 @@ pymysql
 | `card_key_sync_used_cards` / `card_key_sync_unused_cards` | 卡密同步列表，和 MySQL 双向同步已使用和未使用卡密；配置删除会删除数据库记录，数据库新增或删除会刷新配置列表，配置新增会写入数据库 |
 | `uc_pan_settings` | UC 网盘配置分类，包含 `uc_pan_cookie` 和 `uc_pan_upload_dir`；填写 Cookie 后小说 txt 会上传到 UC 网盘，并向 QQ 发送“点击打开”链接按钮 |
 | `baidu_pan_settings` | 百度网盘配置分类，包含 `baidu_pan_cookie`、`baidu_pan_upload_dir` 和 `baidu_pan_upload_status`；填写 Cookie 后小说 txt 会后台上传到百度网盘 |
-| `database_settings` | 数据库配置分类，包含 `user_activation_database_host`、`user_activation_database_port`、`user_activation_database_user`、`user_activation_database_password`；数据库名默认与用户名相同 |
+| `database_settings` | 数据库配置分类，包含 `database_host`、`database_port`、`database_user`、`database_password`；数据库名默认与用户名相同 |
 
-小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。群文件清理管理员白名单 QQ 可直接发送 QQ阅读浏览器 Cookie、curl、Cookie Editor JSON 或 Netscape cookies.txt 保存登录态，也可发送 `QQ阅读cookie状态` 查看是否已保存；消息和状态均不展示 Cookie 原文。
+小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启；Cookie、群列表和手动开关无法持久化。群文件清理管理员白名单 QQ 可直接发送 QQ阅读浏览器 Cookie、curl、Cookie Editor JSON 或 Netscape cookies.txt 保存登录态，也可发送 `QQ阅读cookie状态` 查看是否已保存；消息和状态均不展示 Cookie 原文。
 
-群文件清理管理员白名单内的 QQ 可发送 `状态` 查看系统位数、CPU占用、物理内存、磁盘空间、系统进程、操作系统、框架版本、运行时间和当前时间。状态命令不显示 Cookie、账号、IP、密钥、数据库、功能开关或网盘信息。
+群文件清理管理员白名单内的 QQ 可发送 `状态` 查看系统位数、CPU占用、物理内存、磁盘空间、系统进程、操作系统、框架版本、数据库状态、运行时间和当前时间。每次输入 `状态` 时只执行一次数据库连通性检查，仅显示 `正常`、`未配置` 或 `异常`，不显示 Cookie、账号、IP、密钥、数据库地址、功能开关或网盘信息。
 
 群文件清理管理员白名单内的 QQ 可发送 `帮助` 查看 `主动触发` / `被动触发` 大类，随后在 120 秒内发送数字进入小类，再发送数字查看触发指令列表，再发送数字查看详情；发送 `0` 返回上一层。也可直接发送 `帮助 1` 查看指定大类。QQ 官方 Markdown Keyboard 的帮助菜单、返回和详情快捷命令按钮均使用原生 `action.type=1` 回调：点击后不会向聊天发送指令，互动桥会投递到后端完成菜单切换或执行快捷命令；群聊仍走 `/v2/groups/{group_openid}/messages` 群消息接口。普通成员无法触发帮助功能。
 
@@ -122,7 +122,7 @@ pymysql
 
 插件配置里填写 `baidu_pan_cookie` 后，小说生成完整原小说 txt 后会后台上传到百度网盘，上传目录读取 `baidu_pan_upload_dir`，默认 `/小说机器人`。如果目录不存在会自动逐级创建；完结小说在目标目录已有同名普通文件时会直接跳过重复上传，连载小说仍会删除目标目录下同名普通文件后重新上传，不删除同名文件夹。`baidu_pan_upload_status` 控制上传书籍状态，可选择 `完结`、`连载` 或 `全部`，默认只上传完结。百度网盘只做后台备份，不创建分享链接；完成按钮或降级链接消息发出后才后台上传并清理源缓存，避免百度上传阻塞用户收到结果。
 
-群文件清理统一走 QQ 群文件网页接口 `pan.qun.qq.com/cgi-bin/group_file/get_file_list` 和 `delete_file`，不再使用 OneBot 适配器扩展接口，也不连接 NapCat 或 NapCat WebUI。管理员需先发送 `登录群文件` 获取登录链接，在浏览器登录后复制 Cookie，发送 `群文件登录cookie <cookie>` 保存；Cookie 支持普通 Cookie 头、`Cookie:` 头、curl `-H "Cookie: ..."`、Cookie Editor JSON 和 Netscape cookies.txt；Cookie 存 MySQL `mantou_runtime_state`（namespace=`web_group_file_cookie`，state_key=管理员QQ），按管理员 QQ 隔离，31 天有效，重载后继续生效。保存后自动开启后台保活，每 10 分钟用 `skey` 调用 qun.qq.com 账号级接口；只有 `p_skey` 时可保存用于群文件接口，但不会走保活回退。管理员可发送 `群文件状态` / `群文件cookie状态` 查看 `群cookie：生效/失效`；`状态` 命令同样只显示 `群cookie：生效/失效`，不显示 Cookie 原文、上次保活和失败次数。发送 `清理群文件` / `群文件清理` 时，插件列出「添加群聊」里的目标群列表，同一会话同一发送者 120 秒内发送编号清理对应群，发送 `0` 取消；列表为空时会提示先发送 `添加群聊 群号` 添加目标群。发送 `清理全部群文件` 会先发送 `正在清理群文件（全部）`，再读取「添加群聊」添加的目标群列表，复用同一个 aiohttp session 逐群走网页接口清理，并汇总成功/失败的群数与文件数。群聊管理指令 `添加群聊 群号 [群号...]`、`删除群聊 群号 [群号...]`、`查看群聊` 仅群文件清理管理员白名单 QQ 可用，群号列表写入 MySQL `mantou_runtime_state`（namespace=`cleanup_groups`），重载后继续生效。网页接口从 Cookie 提取 `skey` 或 `p_skey` 后用 hash 算法计算 `bkn` 鉴权，文件列表每页 50 个并发拉取，删除每批 20 个并发提交，失败自动重试 3 次；当前实现只删根目录文件，不递归子文件夹；遇到 `ec != 0` 或 HTTP 非 200 时按接口错误提示重新登录。
+群文件清理统一走 QQ 群文件网页接口 `pan.qun.qq.com/cgi-bin/group_file/get_file_list` 和 `delete_file`，不再使用 OneBot 适配器扩展接口，也不连接 NapCat 或 NapCat WebUI。管理员需先发送 `登录群文件` 获取登录链接，在浏览器登录后复制 Cookie，发送 `群文件登录cookie <cookie>` 保存；Cookie 支持普通 Cookie 头、`Cookie:` 头、curl `-H "Cookie: ..."`、Cookie Editor JSON 和 Netscape cookies.txt；Cookie 存 MySQL `mantou_runtime_state`（namespace=`web_group_file_cookie`，state_key=管理员QQ），按管理员 QQ 隔离，31 天有效，重载后继续生效。保存后自动开启后台保活，每 10 分钟用 `skey` 调用 qun.qq.com 账号级接口；插件启动或重载时不读取数据库启动保活。只有 `p_skey` 时可保存用于群文件接口，但不会走保活回退。管理员可发送 `群文件状态` / `群文件cookie状态` 查看 `群cookie：生效/失效`；`状态` 命令同样只显示 `群cookie：生效/失效`，不显示 Cookie 原文、上次保活和失败次数。发送 `清理群文件` / `群文件清理` 时，插件列出「添加群聊」里的目标群列表，同一会话同一发送者 120 秒内发送编号清理对应群，发送 `0` 取消；列表为空时会提示先发送 `添加群聊 群号` 添加目标群。发送 `清理全部群文件` 会先发送 `正在清理群文件（全部）`，再读取「添加群聊」添加的目标群列表，复用同一个 aiohttp session 逐群走网页接口清理，并汇总成功/失败的群数与文件数。群聊管理指令 `添加群聊 群号 [群号...]`、`删除群聊 群号 [群号...]`、`查看群聊` 仅群文件清理管理员白名单 QQ 可用，群号列表写入 MySQL `mantou_runtime_state`（namespace=`cleanup_groups`），重载后继续生效。网页接口从 Cookie 提取 `skey` 或 `p_skey` 后用 hash 算法计算 `bkn` 鉴权，文件列表每页 50 个并发拉取，删除每批 20 个并发提交，失败自动重试 3 次；当前实现只删根目录文件，不递归子文件夹；遇到 `ec != 0` 或 HTTP 非 200 时按接口错误提示重新登录。
 
 七猫小说支持长篇链接和短篇分享链接，正文优先使用 App 批量接口下载（默认每批 500 章、最多 4 个批次并发），短篇会走短篇详情/目录和 `reader_agent=1` 正文接口。书旗小说支持 `shuqi.com/book/数字.html`、`t.shuqi.com/catalog/数字/`、`t.shuqi.com/cover/数字`、`t.shuqi.com/shortNovel/reader/数字` 和 `d.shuqi.com/短码`，会先请求官方批量下载接口获取约 30 章一组的批次和包 URL；如果批量包已解锁则直接解析批量包正文，如果游客/账号态返回 `downloadUnlocked=false` 或 `url` 为空，则回退最多 80 个动态并发拉取可读章节正文，单章网络断流会重试 3 次，短篇非免费章节会保存预览正文。下载完成后会临时写入 `功能文件/下载缓存/` 供 UC 和百度后台上传；QQ 不再接收 txt 文件，成功时收到 UC 的“点击打开”按钮，失败时只收到固定短提示。插件每次启动或重载都会删除该目录遗留的小说 txt。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`，txt 文件顶部会写入免责声明。
 

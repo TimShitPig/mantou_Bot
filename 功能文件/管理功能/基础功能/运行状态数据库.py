@@ -9,6 +9,8 @@ from typing import Any
 
 
 def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认值: str = "") -> str:
+    if not 已配置运行状态数据库(配置):
+        return 默认值
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
@@ -48,6 +50,8 @@ def 写入运行状态值(配置: Any, 命名空间: str, 状态键: str, 状态
 
 
 def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, str]:
+    if not 已配置运行状态数据库(配置):
+        return {}
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
@@ -114,6 +118,29 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
     if 缺少字段:
         raise RuntimeError(f"数据库配置不完整：缺少 {', '.join(缺少字段)}")
     return 数据库配置
+
+
+def 已配置运行状态数据库(配置: Any) -> bool:
+    """只判断配置是否完整；未配置时读取状态不应尝试连接 MySQL。"""
+    用户名 = str(读取数据库配置值(配置, "database_user", "user_activation_database_user") or "").strip()
+    数据库名 = str(读取数据库配置值(配置, "database_name", "user_activation_database_name") or 用户名).strip()
+    主机 = str(读取数据库配置值(配置, "database_host", "user_activation_database_host") or "").strip()
+    return bool(主机 and 用户名 and 数据库名)
+
+
+def 检查运行状态数据库(配置: Any) -> str:
+    """按需执行一次数据库连通性检查，不返回连接参数或异常原文。"""
+    if not 已配置运行状态数据库(配置):
+        return "未配置"
+    try:
+        数据库配置 = 获取数据库配置(配置)
+        with 打开数据库连接(数据库配置) as 连接:
+            with 连接.cursor() as 游标:
+                游标.execute("SELECT 1")
+                游标.fetchone()
+        return "正常"
+    except Exception:
+        return "异常"
 
 
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
