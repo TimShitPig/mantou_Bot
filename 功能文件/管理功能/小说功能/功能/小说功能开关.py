@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 try:
@@ -29,15 +30,42 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
     "开启点众": ("点众", True),
     "关闭点众": ("点众", False),
 }
+开关命令配置.update(
+    {
+        f"开{功能名}": (功能名, True)
+        for 功能名 in 默认状态
+    }
+)
+小说状态命令 = {"小说", "小说列表"}
+测试模式命令配置 = {
+    "开测试": True,
+    "开启测试": True,
+    "关测试": False,
+    "关闭测试": False,
+}
 状态命名空间 = "novel_feature_switch"
+管理员测试模式状态键 = "管理员测试模式"
 
 
 def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 not in 开关命令配置:
+    文本 = re.sub(r"(?i)qq(?=阅读)", "QQ", 文本)
+    if 文本 not in 开关命令配置 and 文本 not in 小说状态命令 and 文本 not in 测试模式命令配置:
         return None
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用小说功能开关"
+        return None
+
+    if 文本 in 小说状态命令:
+        return 格式化小说功能状态(读取小说功能状态(配置))
+    if 文本 in 测试模式命令配置:
+        是否开启 = 测试模式命令配置[文本]
+        try:
+            写入布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, 是否开启)
+        except Exception as exc:
+            logger.warning(f"管理员测试模式写入数据库失败：enabled={是否开启}, error={exc}")
+            return "测试模式切换失败，请稍后再试"
+        状态文本 = "开启" if 是否开启 else "关闭"
+        return f"管理员测试模式已{状态文本}"
 
     功能名, 是否开启 = 开关命令配置[文本]
     try:
@@ -54,8 +82,33 @@ def 小说功能是否开启(功能名: str, 配置: Any = None) -> bool:
     return bool(状态.get(功能名, True))
 
 
+def 管理员测试模式是否开启(配置: Any = None) -> bool:
+    try:
+        return 读取布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, False)
+    except Exception as exc:
+        logger.warning(f"管理员测试模式读取数据库失败：error={exc}")
+        return False
+
+
+def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = None) -> bool:
+    if 小说功能是否开启(功能名, 配置):
+        return True
+    return bool(
+        是群文件清理管理员(event, 配置)
+        and 管理员测试模式是否开启(配置)
+    )
+
+
 def 获取小说功能关闭回复(功能名: str) -> str:
     return f"{功能显示名.get(功能名, 功能名)}功能已关闭"
+
+
+def 格式化小说功能状态(状态: dict[str, bool]) -> str:
+    行列表 = ["📚 本群小说功能列表"]
+    for 功能名 in 默认状态:
+        状态文本 = "已开启" if 状态.get(功能名, True) else "已关闭"
+        行列表.append(f"{功能显示名[功能名]}：{状态文本}")
+    return "\n".join(行列表)
 
 
 def 写入小说功能状态(配置: Any, 功能名: str, 是否开启: bool) -> None:

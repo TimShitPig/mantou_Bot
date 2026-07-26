@@ -38,7 +38,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "4.5.0"
+插件版本 = "4.7.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -160,7 +160,7 @@ class MyPlugin(Star):
 
             书旗回复流 = 书旗小说功能.获取书旗小说回复流(event, 命令文本, self.config)
             if 书旗回复流 is not None:
-                if not 小说功能开关.小说功能是否开启("书旗", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "书旗", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("书旗"))
                     event.stop_event()
                     return
@@ -174,7 +174,7 @@ class MyPlugin(Star):
 
             七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本, self.config)
             if 七猫回复流 is not None:
-                if not 小说功能开关.小说功能是否开启("七猫", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "七猫", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("七猫"))
                     event.stop_event()
                     return
@@ -188,7 +188,7 @@ class MyPlugin(Star):
 
             QQ阅读回复流 = QQ阅读功能.获取QQ阅读回复流(event, 命令文本, self.config)
             if QQ阅读回复流 is not None:
-                if not 小说功能开关.小说功能是否开启("QQ阅读", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "QQ阅读", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("QQ阅读"))
                     event.stop_event()
                     return
@@ -202,7 +202,7 @@ class MyPlugin(Star):
 
             得间回复流 = 得间小说功能.获取得间小说回复流(event, 命令文本, self.config)
             if 得间回复流 is not None:
-                if not 小说功能开关.小说功能是否开启("得间", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "得间", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("得间"))
                     event.stop_event()
                     return
@@ -216,7 +216,7 @@ class MyPlugin(Star):
 
             点众回复流 = 点众小说功能.获取点众小说回复流(event, 命令文本, self.config)
             if 点众回复流 is not None:
-                if not 小说功能开关.小说功能是否开启("点众", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "点众", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("点众"))
                     event.stop_event()
                     return
@@ -231,7 +231,7 @@ class MyPlugin(Star):
             番茄回复流 = 番茄小说功能.获取番茄小说回复流(event, 命令文本, self.config)
             if 番茄回复流 is not None:
                 logger.info("番茄小说分发：使用本地下载链路")
-                if not 小说功能开关.小说功能是否开启("番茄", self.config):
+                if not 小说功能开关.当前事件可使用小说功能(event, "番茄", self.config):
                     yield event.plain_result(小说功能开关.获取小说功能关闭回复("番茄"))
                     event.stop_event()
                     return

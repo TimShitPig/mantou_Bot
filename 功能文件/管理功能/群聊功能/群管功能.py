@@ -67,7 +67,7 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         return None
 
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用群禁言"
+        return None
 
     命令配置 = 禁言命令配置[命令]
     启用 = bool(命令配置["启用"])

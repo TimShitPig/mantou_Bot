@@ -2125,7 +2125,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
     是直接Cookie = 是QQ阅读Cookie文本(文本)
     if Cookie匹配 or 是直接Cookie:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限保存QQ阅读Cookie"
+            return None
         原始Cookie = Cookie匹配.group(1) if Cookie匹配 else 文本
         登录态 = 解析QQ阅读Cookie(原始Cookie)
         if not 是QQ阅读Cookie文本(原始Cookie):
@@ -2142,12 +2142,12 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
         return "QQ阅读Cookie已保存"
     if 文本 in QQ阅读Cookie状态命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限查看QQ阅读Cookie状态"
+            return None
         登录态 = 读取QQ阅读登录态(配置)
         return "QQ阅读Cookie：已保存" if 是QQ阅读Cookie文本(登录态.get("Cookie") or "") else "QQ阅读Cookie：未保存"
     if 文本 in ("登录QQ阅读", "qq阅读登录", "QQ阅读登录"):
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限登录QQ阅读"
+            return None
         旧会话 = 待登录会话.pop(会话键, None)
         关闭滑块服务(会话=旧会话)
         待登录会话[会话键] = {"step": "phone", "ts": time.time()}
@@ -2158,7 +2158,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
     if not 是群文件清理管理员(event, 配置):
         关闭滑块服务(会话=会话)
         待登录会话.pop(会话键, None)
-        return "没有权限登录QQ阅读"
+        return None
     if 文本 in {"0", "取消", "返回", "返回上一步"}:
         关闭滑块服务(会话=会话)
         待登录会话.pop(会话键, None)

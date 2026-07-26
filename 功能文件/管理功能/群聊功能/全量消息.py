@@ -18,7 +18,7 @@ async def 处理全量消息(event: Any, 命令文本: str, 上下文: Any = Non
     if str(命令文本 or "").strip() not in 全量消息状态命令:
         return None
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用全量消息状态"
+        return None
 
     群OpenID = await 获取群OpenID(event)
     状态 = await 查询官方群机器人状态(event, 群OpenID)

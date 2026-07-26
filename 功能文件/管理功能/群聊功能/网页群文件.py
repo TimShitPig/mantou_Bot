@@ -285,7 +285,7 @@ async def 处理查看群聊返回(event: Any, 文本: str, 配置: Any) -> str 
         return None
     退出查看群聊(event)
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用群聊管理"
+        return None
     return await 显示群文件清理详情页(event, 配置)
 
 
@@ -352,7 +352,7 @@ async def 处理Cookie输入等待回复(event: Any, 文本: str, 配置: Any) -
 
     if not 是群文件清理管理员(event, 配置):
         退出Cookie输入等待(event)
-        return "没有权限使用网页群文件清理"
+        return None
 
     退出Cookie输入等待(event)
     cookie文本 = 文本.strip()
@@ -365,7 +365,7 @@ async def 处理登录页面返回(event: Any, 文本: str, 配置: Any) -> str 
         return None
     退出登录页面(event)
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用群聊管理"
+        return None
     return await 显示群文件清理详情页(event, 配置)
 
 
@@ -378,7 +378,7 @@ async def 处理删除模式返回(event: Any, 文本: str, 配置: Any) -> str 
     退出删除模式(event)
     退出查看群聊(event)
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用群聊管理"
+        return None
     return await 显示群文件清理详情页(event, 配置)
 
 
@@ -388,7 +388,7 @@ async def 处理更改备注选群返回(event: Any, 文本: str, 配置: Any) -
         return None
     退出更改备注选群(event)
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限使用群聊管理"
+        return None
     return await 显示群文件清理详情页(event, 配置)
 
 
@@ -442,33 +442,33 @@ async def _处理网页群文件清理内部(event: Any, 文本: str, 配置: An
 
     if 文本 == 登录群文件命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用网页群文件清理"
+            return None
         return await 生成登录提示(event)
 
     if 文本 == 登录账号命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用网页群文件清理"
+            return None
         return await 显示Cookie输入等待页面(event)
 
     cookie匹配 = 群文件登录cookie规则.fullmatch(文本)
     if cookie匹配:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用网页群文件清理"
+            return None
         return await 保存用户Cookie(event, cookie匹配.group(1).strip(), 配置)
 
     if 文本 in 群文件状态命令集合:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限查看群文件状态"
+            return None
         return "群cookie：" + 获取Cookie状态摘要(获取发送者QQ(event), 配置)
 
     if 文本 in 清理群文件命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群文件清理"
+            return None
         return await 列出待清理群供选择(event, 配置)
 
     if 文本 in 清理全部群文件命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群文件清理"
+            return None
         return await 清理全部已添加群(event, 配置)
 
     return None
@@ -499,7 +499,7 @@ async def 处理清理选择回复(event: Any, 文本: str, 配置: Any) -> str 
 
     if not 是群文件清理管理员(event, 配置):
         清除清理等待状态(event)
-        return "没有权限使用群文件清理"
+        return None
 
     if 文本 in {清理选择上一页命令, 清理选择下一页命令}:
         当前页 = 获取清理选择页码(event, 群号列表)
@@ -712,44 +712,44 @@ async def 处理群聊管理指令(event: Any, 命令文本: str, 配置: Any) -
 
     if 文本 in (查看群聊命令, 退出删除模式命令):
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         退出删除模式(event)
         return await 显示群列表查看(event, 配置)
 
     if 文本 == 进入删除模式命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         进入删除模式(event)
         return await 显示群列表删除模式(event, 配置, 前缀文本="")
 
     添加匹配 = 添加群聊规则.fullmatch(文本)
     if 添加匹配:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         return await 添加群聊(event, 配置, 添加匹配.group(1))
 
     删除匹配 = 删除群聊规则.fullmatch(文本)
     if 删除匹配:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         删除结果 = 删除群聊(配置, 删除匹配.group(1))
         return await 显示删除结果带刷新(event, 配置, 删除结果)
 
     if 文本 == 更改备注命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         return await 显示更改备注选群(event, 配置)
 
     更改备注匹配 = 更改备注规则.fullmatch(文本)
     if 更改备注匹配:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         退出更改备注选群(event)
         return await 进入备注等待(event, 配置, 更改备注匹配.group(1))
 
     if 文本 == 取消备注命令:
         if not 是群文件清理管理员(event, 配置):
-            return "没有权限使用群聊管理"
+            return None
         return "当前没有进行中的备注修改"
 
     return None
@@ -882,7 +882,7 @@ async def 处理备注等待回复(event: Any, 文本: str, 配置: Any) -> str 
 
     if not 是群文件清理管理员(event, 配置):
         备注等待状态.pop(标识, None)
-        return "没有权限修改备注"
+        return None
 
     备注 = 文本.strip()
     try:

@@ -20,7 +20,7 @@ def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本:
     if str(命令文本 or "").strip() != "状态":
         return None
     if not 是群文件清理管理员(event, 配置):
-        return "没有权限查看状态"
+        return None
     return 生成状态回复(event, 配置, 插件版本)
 
 
