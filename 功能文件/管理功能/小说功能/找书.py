@@ -5,7 +5,6 @@ import html
 import json
 import re
 import time
-import urllib.parse
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -49,9 +48,9 @@ except Exception as exc:
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
 分隔线 = "————————"
-找书按钮每行数 = 2
 找书按钮最大行数 = 5
 找书按钮标签最大长度 = 12
+静默找书按钮前缀 = "找书:"
 
 
 def 清理文本(值: Any) -> str:
@@ -783,13 +782,6 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     return "\n".join(行)
 
 
-def _指令链编码(文本: str) -> str:
-    值 = str(文本 or "")
-    if len(值) > 100:
-        值 = 值[:100]
-    return urllib.parse.quote(值, safe="")
-
-
 def _截断找书按钮标签(文本: str) -> str:
     文本 = str(文本 or "").strip()
     if len(文本) <= 找书按钮标签最大长度:
@@ -798,15 +790,7 @@ def _截断找书按钮标签(文本: str) -> str:
 
 
 def _生成找书指令按钮(data: str, 标签: str, *, 按钮ID: str, 点击后: str = "处理中") -> dict[str, Any]:
-    """QQ 官方指令按钮：点击后直接把 data 发给机器人。
-
-    说明：
-    - action.type=1 原生回调依赖 INTERACTION_CREATE。
-    - AstrBot 的 QQ 官方 WebSocket 适配器当前不开启 interaction intent，
-      也不会把该事件送进插件 on_all_message，所以 type=1 点了后端收不到。
-    - 与帮助菜单一致，使用 type=2 + enter=True，走普通消息链路，
-      main 里已有的「选N / 上一页 / 下一页」即可触发下载。
-    """
+    """QQ 官方原生回调按钮：点击后静默回调后端，不往聊天里发送指令。"""
     return {
         "id": 按钮ID[:40],
         "render_data": {
@@ -815,17 +799,16 @@ def _生成找书指令按钮(data: str, 标签: str, *, 按钮ID: str, 点击�
             "style": 1,
         },
         "action": {
-            "type": 2,
+            "type": 1,
             "permission": {"type": 2},
-            "data": data,
-            "enter": True,
-            "unsupport_tips": "请发送 选1～选5 下载",
+            "data": 静默找书按钮前缀 + data,
+            "unsupport_tips": "当前客户端暂不支持该操作",
         },
     }
 
 
 def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
-    """生成 QQ 官方找书指令键盘：点击书名直接发送选N并下载。
+    """生成 QQ 官方找书回调键盘：点击书名后静默开始下载。
 
     每本书 1 行 1 个按钮（书名），最多 5 行；翻页并入最后一行，避免超限。
     """
@@ -851,23 +834,7 @@ def 生成找书下载键盘(会话: dict[str, Any]) -> dict[str, Any] | None:
     return {"rows": 行}
 
 
-def _生成指令链(发送文本: str, 外显: str = "", *, 直接发送: bool = False, 使用外显: bool = False) -> str:
-    """按官方文档生成 Markdown 指令链。
-
-    - enter: 仅 text，点击后直接发给机器人；私聊可用，群聊不可用；不支持 show
-    - input: text + 可选 show，点击后填入输入框，用户再发送
-
-    私聊下载用 enter 直接发 选N，机器人立刻走下载流。
-    群聊只能用 input；书名外显必须用 input 的 show。
-    """
-    text = _指令链编码(发送文本)
-    if 直接发送 and not 使用外显:
-        return f'<qqbot-cmd-enter text="{text}" />'
-    show = _指令链编码(外显 or 发送文本)
-    return f'<qqbot-cmd-input text="{text}" show="{show}" reference="false" />'
-
-
-def 格式化找书结果MD(会话: dict[str, Any], *, 直接发送: bool = True) -> str:
+def 格式化找书结果MD(会话: dict[str, Any]) -> str:
     """官方机器人 Markdown 找书结果正文。
 
     下载交互走底部回调按钮（不发聊天消息）；正文只展示书名作者，不塞指令链。
@@ -1040,6 +1007,8 @@ def _规范找书按钮数据(值: Any) -> str:
             return _规范找书按钮数据(json.loads(文本))
         except Exception:
             return 文本
+    if 文本.startswith(静默找书按钮前缀):
+        return 文本[len(静默找书按钮前缀):].strip()
     return 文本
 
 
@@ -1048,8 +1017,17 @@ def _是否找书按钮数据(文本: str) -> bool:
     return bool(选书命令正则.fullmatch(文本) or 文本 in 翻页命令集合)
 
 
+def _是否静默找书桥事件(event: Any) -> bool:
+    """桥接后的互动已回应过 QQ，后续按普通选书命令处理即可。"""
+    for 对象 in _收集事件对象(event):
+        原始数据 = 读取字段(对象, "raw_data")
+        if isinstance(原始数据, dict) and 原始数据.get("mantou_silent_findbook") is True:
+            return True
+    return False
+
+
 def 提取找书交互数据(event: Any) -> tuple[str, str]:
-    """从 QQ 官方 INTERACTION_CREATE / 适配器事件中提取 (interaction_id, data)。"""
+    """从 QQ 官方 INTERACTION_CREATE / 适配器事件中提取 (interaction_id, 找书命令)。"""
     候选 = _收集事件对象(event)
     消息对象 = getattr(event, "message_obj", None)
     候选.extend([event, 消息对象])
@@ -1141,7 +1119,9 @@ async def 回应找书交互(event: Any, interaction_id: str, code: int = 0) -> 
 
 
 async def 处理找书交互回调(event: Any, 配置: Any = None) -> str | dict[str, Any] | AsyncIterator[Any] | None:
-    """处理回调按钮：聊天不出现点击消息，直接翻页或进入下载流。"""
+    """处理原生回调按钮：聊天不出现点击消息，直接翻页或进入下载流。"""
+    if _是否静默找书桥事件(event):
+        return None
     interaction_id, data = 提取找书交互数据(event)
     if not data:
         return None
