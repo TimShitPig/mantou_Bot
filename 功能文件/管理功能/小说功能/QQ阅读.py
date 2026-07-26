@@ -9,6 +9,10 @@ from astrbot.api import logger
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 try:
+    from 功能文件.管理功能.小说功能 import _qq阅读解密 as qq解密
+except Exception:
+    qq解密 = None
+try:
     from Crypto.Cipher import AES, DES
     from Crypto.Util.Padding import unpad as _unpad
     _有加密库 = True
@@ -215,41 +219,66 @@ def 解码文本(data: bytes) -> str:
     return data.decode("utf-8", "replace")
 
 def 解密章节密文(cipher: bytes, *, bid: str, cid: str, fuid: str, keypool: bytes = b"") -> Tuple[Optional[bytes], str]:
-    if not cipher: return None, "empty"
-    if not 是否二进制(cipher): return cipher, "plain"
+    if not cipher:
+        return None, "empty"
+    if not 是否二进制(cipher):
+        return cipher, "plain"
     if cipher[:2] == b"\x1f\x8b":
-        try: return gzip.decompress(cipher), "gzip"
-        except Exception: pass
-    if not _有加密库: return None, "no_crypto"
-    if not keypool: return None, "missing_keypool"
+        try:
+            return gzip.decompress(cipher), "gzip"
+        except Exception:
+            pass
+    if not _有加密库:
+        return None, "no_crypto"
+    if not keypool:
+        return None, "missing_keypool"
+    stt = f"{bid}_{cid}_s"
+    if qq解密 is not None:
+        try:
+            text = qq解密.try_decrypt_chapter(cipher, stt, fuid, keypool)
+            if text is not None:
+                return text.encode("utf-8"), "fock_multi"
+        except Exception as e:
+            logger.debug(f"QQ阅读多模式解密失败：bid={bid}, cid={cid}, error={e}")
     try:
-        fuid_b = fuid.encode("utf-8"); ak_b = f"{bid}_{cid}_s".encode("utf-8"); tok = fock_token().encode("ascii")
+        fuid_b = fuid.encode("utf-8")
+        ak_b = f"{bid}_{cid}_s".encode("utf-8")
+        tok = fock_token().encode("ascii")
         key1 = hashlib.sha256(fuid_b + tok).digest()
         hdr = AES.new(key1, AES.MODE_CBC, iv=key1[:16]).decrypt(cipher[:0x100])
         ids = 解密keypool_ids(keypool, fuid, tok.decode("ascii")) or 解析keypool_ids(keypool)
-        if not ids: return None, "no_pool_ids"
+        if not ids:
+            return None, "no_pool_ids"
         bodies = []
-        body80 = hdr[0x80:0x100] + cipher[0x100:]; n = len(body80)//16*16
-        if n >= 16: bodies.append(body80[:n])
-        body100 = cipher[0x100:]; n2 = len(body100)//16*16
-        if n2 >= 16: bodies.append(body100[:n2])
+        body80 = hdr[0x80:0x100] + cipher[0x100:]
+        n = len(body80) // 16 * 16
+        if n >= 16:
+            bodies.append(body80[:n])
+        body100 = cipher[0x100:]
+        n2 = len(body100) // 16 * 16
+        if n2 >= 16:
+            bodies.append(body100[:n2])
         for pid in ids:
             key2 = hashlib.sha256(pid.encode("ascii") + fuid_b + ak_b).digest()
             for body in bodies:
                 try:
                     mid = AES.new(key2, AES.MODE_CBC, iv=key2[:16]).decrypt(body)
                     mid = _unpad_pkcs7(mid, 16)
-                    m = len(mid)//8*8
-                    if m < 8: continue
+                    m = len(mid) // 8 * 8
+                    if m < 8:
+                        continue
                     gz = DES.new(key2[:8], DES.MODE_CBC, iv=key2[:8]).decrypt(mid[:m])
                     gz = _unpad_pkcs7(gz, 8)
-                    if gz[:2] != b"\x1f\x8b": continue
+                    if gz[:2] != b"\x1f\x8b":
+                        continue
                     return gzip.decompress(gz), f"fock_uk:{pid}"
                 except Exception:
                     continue
         return None, "decrypt_fail"
     except Exception as e:
         return None, f"decrypt_error:{e}"
+
+
 
 @dataclass
 class Tar成员:

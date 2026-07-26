@@ -42,6 +42,18 @@ except Exception as exc:
     番茄小说 = None
     logger.warning(f"找书加载番茄失败：error={exc}")
 
+try:
+    from 功能文件.管理功能.小说功能 import 得间小说
+except Exception as exc:
+    得间小说 = None
+    logger.warning(f"找书加载得间失败：error={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能 import 点众小说
+except Exception as exc:
+    点众小说 = None
+    logger.warning(f"找书加载点众失败：error={exc}")
+
 
 每页数量 = 5
 会话等待秒数 = 300
@@ -797,8 +809,8 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
 
 
 def _平台优先级值(平台: Any) -> int:
-    """下载速度优先：番茄 > 七猫 > 书旗。"""
-    return {"番茄": 3, "七猫": 2, "书旗": 1}.get(str(平台 or ""), 0)
+    """下载速度优先：番茄 > 七猫 > 书旗 > 得间 > 点众。"""
+    return {"番茄": 5, "七猫": 4, "书旗": 3, "得间": 2, "点众": 1}.get(str(平台 or ""), 0)
 
 
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
@@ -841,20 +853,43 @@ def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any
     return 合并
 
 
+
+async def 搜索得间(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 得间小说 is None:
+        return []
+    try:
+        return await 得间小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书得间搜索失败：keyword={关键词}, error={exc}")
+        return []
+
+
+async def 搜索点众(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 点众小说 is None:
+        return []
+    try:
+        return await 点众小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书点众搜索失败：keyword={关键词}, error={exc}")
+        return []
+
+
 async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         番茄任务 = asyncio.create_task(搜索番茄(session, 关键词))
         七猫任务 = asyncio.create_task(搜索七猫(session, 关键词))
         书旗任务 = asyncio.create_task(搜索书旗(session, 关键词))
+        得间任务 = asyncio.create_task(搜索得间(关键词))
+        点众任务 = asyncio.create_task(搜索点众(关键词))
         联想任务 = asyncio.create_task(搜索书旗联想(session, 关键词))
-        番茄结果, 七猫结果, 书旗结果, 联想词 = await asyncio.gather(
-            番茄任务, 七猫任务, 书旗任务, 联想任务, return_exceptions=False
+        番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果, 联想词 = await asyncio.gather(
+            番茄任务, 七猫任务, 书旗任务, 得间任务, 点众任务, 联想任务, return_exceptions=False
         )
         # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
         # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
         番茄结果 = await 过滤无目录番茄搜索结果(番茄结果, 关键词)
-        合并 = 去重合并([番茄结果, 七猫结果, 书旗结果])
+        合并 = 去重合并([番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果])
         # 结果太少时，用联想词补搜
         if len(合并) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
@@ -864,7 +899,7 @@ async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
                 搜索书旗(session, w, 需要数量=10),
             ] if False else []
             # 并行补搜每个联想词
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, 书旗结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果]
             for w in 补搜词:
                 t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
@@ -1011,6 +1046,10 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 七猫小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "书旗" and 书旗小说 is not None:
         return 书旗小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "得间" and 得间小说 is not None:
+        return 得间小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "点众" and 点众小说 is not None:
+        return 点众小说.生成下载回复流(event, 链接, 配置)
     return "下载失败"
 
 
