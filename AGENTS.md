@@ -65,7 +65,7 @@
 ## 功能边界
 
 - 不保留用户激活、卡密、收费、付费或每日免费额度功能；所有小说下载均免费。运行状态只使用 MySQL 的 `mantou_runtime_state` 表，不再创建或读取激活、卡密和免费额度表。
-- 数据库连接信息来自 `_conf_schema.json` 的 `database_settings`，运行状态仅用于群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；代码兼容读取历史数据库字段，方便旧配置无感迁移。
+- 数据库连接信息来自 `_conf_schema.json` 的 `database_settings`，运行状态仅用于群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；代码兼容读取历史数据库字段，方便旧配置无感迁移。群文件清理管理员白名单 QQ 可直接发送 QQ阅读浏览器 Cookie、curl、Cookie Editor JSON 或 Netscape cookies.txt 保存登录态，使用 `QQ阅读cookie状态` 仅查看是否已保存；用户侧和日志不得输出 Cookie 原文、账号、Key、Token 或响应内容。
 - 群管功能保留数字撤回逻辑：命中自动撤回规则后，必须先判断发送者 QQ 群身份，QQ群主和管理员发送的消息不撤回、不撤回最近消息、不累计三次踢出计数；只要能拿到数字群号和 QQ，就必须通过 OneBot `get_group_member_info` 查询真实 QQ 群成员角色，并以查询结果为准，不能因为事件里是 `member` 就跳过查询，也不能把插件配置管理员当作 QQ 群管理员；只有查不到接口、缺少数字群号或缺少 QQ 时，才使用事件或 sender 里的 `role` 兜底；`owner` 和 `admin` 都视为保护身份。普通成员先撤回当前触发消息，撤回成功后通过 OneBot `get_group_msg_history` 拉取最近 100 条群历史，筛选该用户最近消息并逐条调用 `delete_msg` 撤回，默认最多撤回 8 条；不要写臆造批量撤回接口。数字撤回模块只撤回当前消息和最近消息，不再自动踢人；数字、群名片/JSON 卡片、合并转发和 QQ 闪传等本模块处理的撤回类型都计数。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]`、组件对象字符串中的 `ComponentType.Json`，以及 QQ 官方机器人空间相册分享等卡片降级展示文本 `暂不能查看该消息内容`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com`、`qimao.com`、`app-share.wtzw.com`、`shuqi.com`、`shuqireader.com`、`reader.qq.com`、`book.qq.com`、`novel.html5.qq.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。

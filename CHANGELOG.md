@@ -1,5 +1,14 @@
 # 更新日志
 
+## v4.2.0
+
+### 新增
+- QQ阅读支持直接识别并保存管理员发送的浏览器 Cookie、curl、Cookie Editor JSON 和 Netscape cookies.txt，无需命令前缀。
+- 新增 `QQ阅读cookie状态`，仅显示登录 Cookie 是否已保存。
+
+### 修复
+- 支持识别 Netscape `#HttpOnly_` 格式的 QQ阅读 Cookie。
+
 ## v4.1.2
 
 ### 调整

@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v4.1.2 |
+| 版本 | v4.2.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -27,7 +27,7 @@
 | 管理功能 | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 默认使用本地番茄畅听下载；详情、目录和正文均请求畅听接口，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫长篇/短篇链接，正文优先批量下载，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 书旗小说 | 书旗链接/书旗分享卡片 | 识别书旗长篇/短篇/短链链接，优先使用 30 章批量包，未解锁时回退 80 动态并发单章下载，完成后上传 UC 并发送“点击打开”按钮 |
-| 管理功能 | QQ阅读 | QQ阅读详情/目录链接、`book.qq.com/book-detail/数字` 或 `novel.html5.qq.com/portal/novel-intro?bookid=数字` | 使用 QQ阅读本地 App 批量下载，完成后上传 UC 并发送“点击打开”按钮 |
+| 管理功能 | QQ阅读 | QQ阅读详情/目录链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、直接发送 QQ阅读 Cookie、`QQ阅读cookie状态` | 使用 QQ阅读本地 App 批量下载，完成后上传 UC 并发送“点击打开”按钮；管理员直接发送浏览器 Cookie、curl、Cookie Editor JSON 或 cookies.txt 可保存登录态 |
 
 <details>
 <summary>查看群管功能</summary>
@@ -105,7 +105,7 @@ pymysql
 | `baidu_pan_settings` | 百度网盘配置分类，包含 `baidu_pan_cookie`、`baidu_pan_upload_dir` 和 `baidu_pan_upload_status`；填写 Cookie 后小说 txt 会后台上传到百度网盘 |
 | `database_settings` | 数据库配置分类，包含 `user_activation_database_host`、`user_activation_database_port`、`user_activation_database_user`、`user_activation_database_password`；数据库名默认与用户名相同 |
 
-小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。
+小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、待清理群列表、小说功能开关和 QQ 阅读登录态；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。群文件清理管理员白名单 QQ 可直接发送 QQ阅读浏览器 Cookie、curl、Cookie Editor JSON 或 Netscape cookies.txt 保存登录态，也可发送 `QQ阅读cookie状态` 查看是否已保存；消息和状态均不展示 Cookie 原文。
 
 群文件清理管理员白名单内的 QQ 可发送 `状态` 查看系统位数、CPU占用、物理内存、磁盘空间、系统进程、操作系统、框架版本、运行时间和当前时间。状态命令不显示 Cookie、账号、IP、密钥、数据库、功能开关或网盘信息。
 

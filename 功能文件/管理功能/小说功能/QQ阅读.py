@@ -56,6 +56,8 @@ except Exception as e:
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
+QQ阅读Cookie命令正则 = re.compile(r"^(?:QQ阅读|qq阅读)(?:登录)?cookie\s+(.+)$", re.I | re.S)
+QQ阅读Cookie状态命令 = {"QQ阅读cookie状态", "qq阅读cookie状态", "QQ阅读登录状态", "qq阅读登录状态"}
 待登录会话: dict[str, dict[str, Any]] = {}
 
 # ===== 一、基础工具 =====
@@ -157,19 +159,126 @@ def 获取会话键(event: Any) -> str:
 
 # ===== 二、登录态读写 =====
 
+def 提取Cookie键值对(原始Cookie: Any) -> list[tuple[str, str]]:
+    """兼容浏览器 Cookie、curl、Cookie Editor JSON 与 Netscape cookies.txt。"""
+    文本 = str(原始Cookie or "").strip()
+    if not 文本:
+        return []
+
+    键值对: list[tuple[str, str]] = []
+    try:
+        对象 = json.loads(文本)
+    except Exception:
+        对象 = None
+    if isinstance(对象, dict):
+        对象 = 对象.get("cookies") or 对象.get("Cookies") or 对象
+    if isinstance(对象, list):
+        for 项 in 对象:
+            if isinstance(项, dict):
+                名称 = str(项.get("name") or 项.get("Name") or "").strip()
+                值 = str(项.get("value") or 项.get("Value") or "")
+                if 名称:
+                    键值对.append((名称, 值))
+        if 键值对:
+            return 键值对
+
+    匹配 = re.search(r"(?:^|\s)(?:-H|--header)\s+['\"]?Cookie\s*:\s*([^'\"]+)", 文本, re.I)
+    if 匹配:
+        文本 = 匹配.group(1).strip()
+    文本 = re.sub(r"^\s*Cookie\s*:\s*", "", 文本, flags=re.I).strip().strip("'\"")
+
+    # Netscape cookies.txt：domain / flag / path / secure / expire / name / value
+    for 行 in 文本.splitlines():
+        行 = 行.strip()
+        if not 行 or (行.startswith("#") and not 行.startswith("#HttpOnly_")):
+            continue
+        列 = 行.split("\t")
+        if len(列) >= 7:
+            名称, 值 = 列[-2].strip(), 列[-1].strip()
+            if 名称:
+                键值对.append((名称, 值))
+    if 键值对:
+        return 键值对
+
+    for 项 in re.split(r";\s*", 文本.replace("\r", "").replace("\n", ";")):
+        if "=" not in 项:
+            continue
+        名称, 值 = 项.split("=", 1)
+        名称, 值 = 名称.strip(), 值.strip()
+        if 名称:
+            键值对.append((名称, 值))
+    return 键值对
+
+
+def 解析QQ阅读Cookie(原始Cookie: Any) -> dict[str, str]:
+    """把外部 Cookie 统一成下载链路使用的登录态字段。"""
+    键值对 = 提取Cookie键值对(原始Cookie)
+    if not 键值对:
+        return {}
+    去重键值: dict[str, tuple[str, str]] = {}
+    for 名称, 值 in 键值对:
+        去重键值[名称.lower()] = (名称, 值)
+    Cookie = "; ".join(f"{名称}={值}" for 名称, 值 in 去重键值.values())
+    if Cookie:
+        Cookie += ";"
+    字段映射 = {
+        "ywguid": "ywguid",
+        "ywkey": "ywkey",
+        "qrsn": "qrsn",
+        "fuid": "fuid",
+        "uid": "uid",
+        "login_uin": "login_uin",
+        "login_key": "login_key",
+        "ticket": "ticket",
+        "autologinsessionkey": "autoLoginSessionKey",
+    }
+    结果 = {"Cookie": Cookie}
+    for Cookie名, 字段名 in 字段映射.items():
+        项 = 去重键值.get(Cookie名)
+        if 项 and 项[1]:
+            结果[字段名] = 项[1]
+    if not 结果.get("uid") and 结果.get("ywguid"):
+        结果["uid"] = 结果["ywguid"]
+    if not 结果.get("login_uin") and 结果.get("ywguid"):
+        结果["login_uin"] = 结果["ywguid"]
+    if not 结果.get("login_key") and 结果.get("ywkey"):
+        结果["login_key"] = 结果["ywkey"]
+    return 结果
+
+
+def 是QQ阅读Cookie文本(原始Cookie: Any) -> bool:
+    """判断消息是否为可直接保存的 QQ 阅读登录 Cookie。"""
+    登录态 = 解析QQ阅读Cookie(原始Cookie)
+    有YW登录态 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
+    有通用登录态 = bool(登录态.get("login_uin") and 登录态.get("login_key"))
+    return 有YW登录态 or 有通用登录态
+
+
+def 补齐QQ阅读登录态(登录态: Mapping[str, Any] | None) -> dict[str, str]:
+    结果 = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
+    Cookie登录态 = 解析QQ阅读Cookie(结果.get("Cookie") or 结果.get("cookie") or "")
+    for 键, 值 in Cookie登录态.items():
+        结果.setdefault(键, 值)
+    if 结果.get("ywguid") and not 结果.get("uid"):
+        结果["uid"] = 结果["ywguid"]
+    if 结果.get("ywkey") and not 结果.get("login_key"):
+        结果["login_key"] = 结果["ywkey"]
+    return 结果
+
+
 def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
     try:
         文本 = 读取运行状态值(配置, 登录态命名空间, 登录态状态键, "")
         if not 文本: return {}
         数据 = json.loads(文本)
         if isinstance(数据, dict):
-            return {str(k): str(v) for k, v in 数据.items() if v not in (None, "")}
+            return 补齐QQ阅读登录态(数据)
     except Exception as e:
         logger.warning(f"QQ阅读登录态读取失败：error={e}")
     return {}
 
 def 写入QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
-    清洗 = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
+    清洗 = 补齐QQ阅读登录态(登录态)
     写入运行状态值(配置, 登录态命名空间, 登录态状态键, json.dumps(清洗, ensure_ascii=False))
     logger.info("QQ阅读登录态已保存到数据库")
 
@@ -2006,6 +2115,30 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
         return None
     清理过期登录会话()
     会话键 = 获取会话键(event)
+    Cookie匹配 = QQ阅读Cookie命令正则.fullmatch(文本)
+    是直接Cookie = 是QQ阅读Cookie文本(文本)
+    if Cookie匹配 or 是直接Cookie:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限保存QQ阅读Cookie"
+        原始Cookie = Cookie匹配.group(1) if Cookie匹配 else 文本
+        登录态 = 解析QQ阅读Cookie(原始Cookie)
+        if not 是QQ阅读Cookie文本(原始Cookie):
+            return "QQ阅读Cookie格式不正确"
+        try:
+            写入QQ阅读登录态(配置, 登录态)
+        except Exception as e:
+            logger.warning(f"QQ阅读Cookie写入数据库失败：error={e}")
+            return 登录失败提示
+        旧会话 = 待登录会话.pop(会话键, None)
+        关闭滑块服务(会话=旧会话)
+        字段名 = ",".join(sorted(k for k in 登录态 if k != "Cookie"))
+        logger.info(f"QQ阅读Cookie已识别并保存：fields={字段名}")
+        return "QQ阅读Cookie已保存"
+    if 文本 in QQ阅读Cookie状态命令:
+        if not 是群文件清理管理员(event, 配置):
+            return "没有权限查看QQ阅读Cookie状态"
+        登录态 = 读取QQ阅读登录态(配置)
+        return "QQ阅读Cookie：已保存" if 是QQ阅读Cookie文本(登录态.get("Cookie") or "") else "QQ阅读Cookie：未保存"
     if 文本 in ("登录QQ阅读", "qq阅读登录", "QQ阅读登录"):
         if not 是群文件清理管理员(event, 配置):
             return "没有权限登录QQ阅读"
