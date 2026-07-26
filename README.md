@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v4.2.0 |
+| 版本 | v4.3.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -119,7 +119,7 @@ pymysql
 
 群文件清理统一走 QQ 群文件网页接口 `pan.qun.qq.com/cgi-bin/group_file/get_file_list` 和 `delete_file`，不再使用 OneBot 适配器扩展接口，也不连接 NapCat 或 NapCat WebUI。管理员需先发送 `登录群文件` 获取登录链接，在浏览器登录后复制 Cookie，发送 `群文件登录cookie <cookie>` 保存；Cookie 支持普通 Cookie 头、`Cookie:` 头、curl `-H "Cookie: ..."`、Cookie Editor JSON 和 Netscape cookies.txt；Cookie 存 MySQL `mantou_runtime_state`（namespace=`web_group_file_cookie`，state_key=管理员QQ），按管理员 QQ 隔离，31 天有效，重载后继续生效。保存后自动开启后台保活，每 10 分钟用 `skey` 调用 qun.qq.com 账号级接口；只有 `p_skey` 时可保存用于群文件接口，但不会走保活回退。管理员可发送 `群文件状态` / `群文件cookie状态` 查看 `群cookie：生效/失效`；`状态` 命令同样只显示 `群cookie：生效/失效`，不显示 Cookie 原文、上次保活和失败次数。发送 `清理群文件` / `群文件清理` 时，插件列出「添加群聊」里的目标群列表，同一会话同一发送者 120 秒内发送编号清理对应群，发送 `0` 取消；列表为空时会提示先发送 `添加群聊 群号` 添加目标群。发送 `清理全部群文件` 会先发送 `正在清理群文件（全部）`，再读取「添加群聊」添加的目标群列表，复用同一个 aiohttp session 逐群走网页接口清理，并汇总成功/失败的群数与文件数。群聊管理指令 `添加群聊 群号 [群号...]`、`删除群聊 群号 [群号...]`、`查看群聊` 仅群文件清理管理员白名单 QQ 可用，群号列表写入 MySQL `mantou_runtime_state`（namespace=`cleanup_groups`），重载后继续生效。网页接口从 Cookie 提取 `skey` 或 `p_skey` 后用 hash 算法计算 `bkn` 鉴权，文件列表每页 50 个并发拉取，删除每批 20 个并发提交，失败自动重试 3 次；当前实现只删根目录文件，不递归子文件夹；遇到 `ec != 0` 或 HTTP 非 200 时按接口错误提示重新登录。
 
-七猫小说支持长篇链接和短篇分享链接，正文优先使用 App 批量接口下载（默认每批 500 章、最多 4 个批次并发），短篇会走短篇详情/目录和 `reader_agent=1` 正文接口。书旗小说支持 `shuqi.com/book/数字.html`、`t.shuqi.com/catalog/数字/`、`t.shuqi.com/cover/数字`、`t.shuqi.com/shortNovel/reader/数字` 和 `d.shuqi.com/短码`，会先请求官方批量下载接口获取约 30 章一组的批次和包 URL；如果批量包已解锁则直接解析批量包正文，如果游客/账号态返回 `downloadUnlocked=false` 或 `url` 为空，则回退最多 80 个动态并发拉取可读章节正文，单章网络断流会重试 3 次，短篇非免费章节会保存预览正文。下载完成后会临时写入 `功能文件/下载缓存/` 供 UC 和百度后台上传；QQ 不再接收 txt 文件，成功时收到 UC 的“点击打开”按钮，失败时只收到固定短提示。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`，txt 文件顶部会写入免责声明。
+七猫小说支持长篇链接和短篇分享链接，正文优先使用 App 批量接口下载（默认每批 500 章、最多 4 个批次并发），短篇会走短篇详情/目录和 `reader_agent=1` 正文接口。书旗小说支持 `shuqi.com/book/数字.html`、`t.shuqi.com/catalog/数字/`、`t.shuqi.com/cover/数字`、`t.shuqi.com/shortNovel/reader/数字` 和 `d.shuqi.com/短码`，会先请求官方批量下载接口获取约 30 章一组的批次和包 URL；如果批量包已解锁则直接解析批量包正文，如果游客/账号态返回 `downloadUnlocked=false` 或 `url` 为空，则回退最多 80 个动态并发拉取可读章节正文，单章网络断流会重试 3 次，短篇非免费章节会保存预览正文。下载完成后会临时写入 `功能文件/下载缓存/` 供 UC 和百度后台上传；QQ 不再接收 txt 文件，成功时收到 UC 的“点击打开”按钮，失败时只收到固定短提示。插件每次启动或重载都会删除该目录遗留的小说 txt。发送文件名格式为 `[完结]书名：xxx 作者：xxx.txt` 或 `[连载]书名：xxx 作者：xxx.txt`，txt 文件顶部会写入免责声明。
 
 番茄小说识别 `fanqienovel.com`、`changdunovel.com`、`fqnovel.com` 和 `novelfm.com` 链接，支持 `changdunovel.com/t/短码` 分享短链和 JSON 卡片中的链接。默认走小说功能内置的番茄畅听下载逻辑：先获取书籍详情和公开目录，再使用 App 正文批量接口并发拉取小说正文，只生成 TXT，不接入音频、媒体下载、探测或命令行调试功能。下载前会先回复书名、作者、状态、章节、字数和 `正在下载中请稍等.....`，外部提示不显示简介，txt 文件头部保留简介，文件名格式与七猫一致。
 
