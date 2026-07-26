@@ -43,8 +43,6 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
     章节结果列表: list[dict[str, Any]] = []
     成功章节列表: list[dict[str, Any]] = []
     文件名 = ""
-    已发送 = False
-    发送错误 = ""
     try:
         if 番茄输出 is None:
             logger.warning("QQ阅读下载失败：番茄输出模块不可用")
@@ -78,30 +76,34 @@ async def 生成QQ阅读下载回复流(event: Any, 来源: str, 配置: Any = N
                 f"QQ阅读章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}"
             )
-            发送结果 = await 番茄输出.准备发送文本文件(event, 文件名, 文件内容, 配置)
-            缓存路径 = 发送结果.get("cache_path")
-            链式结果 = 发送结果.get("chain_result")
-            if 链式结果 is not None:
-                try:
-                    yield 链式结果
-                finally:
-                    番茄输出.延迟删除缓存文件(缓存路径)
+            发送结果 = await 番茄输出.准备发送文本文件(
+                event,
+                文件名,
+                文件内容,
+                配置,
+                书名=书籍信息.get("title"),
+                作者=书籍信息.get("author"),
+            )
+            if 发送结果.get("sent"):
+                番茄输出.启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
                 return
-            已发送 = bool(发送结果.get("sent"))
-            发送错误 = str(发送结果.get("error") or "")
+            降级文本 = str(发送结果.get("fallback_text") or "")
+            if 降级文本:
+                try:
+                    yield 降级文本
+                finally:
+                    番茄输出.启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                return
+            logger.warning(
+                f"QQ阅读文件完成消息发送失败：book_id={书籍编号}, file={文件名}, "
+                f"success={len(成功章节列表)}/{len(章节列表)}, error={发送结果.get('error')}"
+            )
+            yield "文件发送失败，请稍后再试"
+            return
     except Exception as 异常:
         logger.warning(f"QQ阅读下载失败：source={限制文本长度(来源)}, book_id={书籍编号}, error={异常}")
         yield "下载失败"
         return
-    if 已发送:
-        return
-    logger.warning(
-        f"QQ阅读文件发送失败：book_id={书籍编号}, file={文件名}, "
-        f"success={len(成功章节列表)}/{len(章节列表)}, error={发送错误}"
-    )
-    yield "文件发送失败，请稍后再试"
-
-
 async def 准备QQ阅读小说(会话: aiohttp.ClientSession, 来源: str, 书籍编号: str = "") -> dict[str, Any]:
     来源信息 = 解析QQ阅读来源(来源)
     实际书籍编号 = 清理文本(书籍编号) or 来源信息.get("book_id", "")

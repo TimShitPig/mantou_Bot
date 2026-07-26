@@ -9,10 +9,6 @@ from astrbot.api import logger
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 try:
-    from astrbot.api import message_components as Comp
-except Exception:
-    Comp = None
-try:
     from Crypto.Cipher import AES, DES
     from Crypto.Util.Padding import unpad as _unpad
     _有加密库 = True
@@ -37,7 +33,7 @@ except Exception as e:
 
 API状态命名空间="qq_reader_api"; API开关状态键="enabled"
 登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 进度日志分段数=10; 文件组件缓存清理延迟=600
+登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 进度日志分段数=10
 下载缓存目录=Path(__file__).resolve().parents[2]/"下载缓存"
 免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
@@ -1124,57 +1120,74 @@ def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     下载缓存目录.mkdir(parents=True, exist_ok=True)
     路径 = 下载缓存目录 / 文件名; 路径.write_bytes(文件内容); return 路径
 
-def 延迟删除缓存文件(缓存路径: Any, 延迟秒数: int = 文件组件缓存清理延迟) -> None:
-    if not 缓存路径: return
-    async def _删除() -> None:
-        await asyncio.sleep(max(1, 延迟秒数))
-        try: Path(缓存路径).unlink(missing_ok=True)
-        except Exception: pass
-    try: asyncio.get_running_loop().create_task(_删除())
-    except Exception: pass
-
-async def 准备发送文本文件(event: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
-    缓存路径 = 写入下载缓存文件(文件名, 文件内容); 发送路径 = 缓存路径; 发送文件名 = 文件名
-    if UC网盘 is not None:
-        try:
-            UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入下载缓存文件)
-            if UC结果 and UC结果.get("success") and UC结果.get("path"):
-                发送路径 = Path(UC结果["path"]); 发送文件名 = str(UC结果.get("file_name") or 文件名)
-                logger.info(f"QQ阅读UC网盘上传成功，改发同名链接文件：file={发送文件名}")
-        except Exception as e:
-            logger.warning(f"QQ阅读UC网盘上传失败：error={e}")
-    链式结果 = None
-    if Comp is not None:
-        try: 链式结果 = event.chain_result([Comp.File(file=str(发送路径), name=发送文件名)])
-        except Exception as e: logger.warning(f"QQ阅读 File 组件构造失败：error={e}")
-    if 百度网盘 is not None:
-        try:
-            启动百度 = getattr(百度网盘, "启动百度后台上传并清理源文件", None)
-            if callable(启动百度):
-                if 链式结果 is not None:
-                    def _后台() -> None:
-                        try: 启动百度(配置, 缓存路径, 文件名, 发送路径 if 发送路径 != 缓存路径 else None)
-                        except Exception as exc: logger.warning(f"QQ阅读百度网盘后台上传失败：error={exc}")
-                    asyncio.get_running_loop().call_later(1.0, _后台)
-                else:
-                    启动百度(配置, 缓存路径, 文件名, None)
-        except Exception as e:
-            logger.warning(f"QQ阅读百度网盘处理失败：error={e}")
-    if 链式结果 is not None: return {"sent": False, "chain_result": 链式结果, "cache_path": 发送路径}
+def 删除QQ阅读缓存文件(缓存路径: Any) -> None:
+    if not 缓存路径:
+        return
     try:
-        client = getattr(event, "bot", None) or getattr(event, "client", None)
-        group_id = 读取字段(event, "group_id") or 读取字段(getattr(event, "message_obj", None), "group_id")
-        user_id = None
-        try:
-            if callable(getattr(event, "get_sender_id", None)): user_id = event.get_sender_id()
-        except Exception: pass
-        if client is not None and group_id and hasattr(client, "upload_group_file"):
-            await client.upload_group_file(group_id=group_id, file=str(发送路径), name=发送文件名); return {"sent": True, "cache_path": 发送路径}
-        if client is not None and user_id and hasattr(client, "upload_private_file"):
-            await client.upload_private_file(user_id=user_id, file=str(发送路径), name=发送文件名); return {"sent": True, "cache_path": 发送路径}
+        Path(缓存路径).unlink(missing_ok=True)
+        logger.info(f"QQ阅读下载缓存文件已删除：file={缓存路径}")
     except Exception as e:
-        return {"sent": False, "error": str(e), "cache_path": 发送路径}
-    return {"sent": False, "error": "当前适配器无法发送文件", "cache_path": 发送路径}
+        logger.warning(f"QQ阅读下载缓存文件删除失败：file={缓存路径}, error={e}")
+
+
+def 启动QQ阅读百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
+    if not 源缓存路径:
+        return
+
+    async def 执行上传并清理() -> None:
+        try:
+            if 百度网盘 is not None:
+                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
+                if 百度结果.get("success"):
+                    logger.info(f"QQ阅读百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                elif 百度结果.get("skipped"):
+                    logger.info(f"QQ阅读百度网盘后台上传按状态规则跳过：file={文件名}")
+                elif 百度结果.get("enabled"):
+                    logger.warning(f"QQ阅读百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+        except Exception as e:
+            logger.warning(f"QQ阅读百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={e}")
+        finally:
+            删除QQ阅读缓存文件(源缓存路径)
+
+    try:
+        asyncio.create_task(执行上传并清理())
+    except RuntimeError:
+        删除QQ阅读缓存文件(源缓存路径)
+
+
+async def 准备发送文本文件(
+    event: Any,
+    文件名: str,
+    文件内容: bytes,
+    配置: Any = None,
+    *,
+    书名: Any = "",
+    作者: Any = "",
+) -> dict[str, Any]:
+    缓存路径 = 写入下载缓存文件(文件名, 文件内容)
+    logger.info(f"QQ阅读准备上传：file={文件名}, size={len(文件内容)}")
+    if UC网盘 is None:
+        删除QQ阅读缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
+    try:
+        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
+        if not UC结果.get("success"):
+            logger.warning(f"QQ阅读UC网盘上传失败：file={文件名}, error={UC结果.get('error')}")
+            删除QQ阅读缓存文件(缓存路径)
+            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
+        完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
+        if 完成结果.get("sent"):
+            logger.info(f"QQ阅读UC网盘上传并发送完成按钮成功：file={文件名}")
+            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+        降级文本 = str(完成结果.get("fallback_text") or "")
+        if 降级文本:
+            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+        删除QQ阅读缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
+    except Exception as e:
+        logger.warning(f"QQ阅读UC网盘上传或完成消息发送失败：file={文件名}, error={e}")
+        删除QQ阅读缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(e)}
 
 def 提取QQ阅读来源(值: Any) -> str:
     if 值 is None: return ""
@@ -1685,13 +1698,24 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节结果)
             logger.info(f"QQ阅读章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功列表)}, total={len(目录)}, file_size={len(文件内容)}")
-            发送结果 = await 准备发送文本文件(event, 文件名, 文件内容, 配置)
-            缓存路径 = 发送结果.get("cache_path"); 链式结果 = 发送结果.get("chain_result")
-            if 链式结果 is not None:
-                try: yield 链式结果
-                finally: 延迟删除缓存文件(缓存路径)
+            发送结果 = await 准备发送文本文件(
+                event,
+                文件名,
+                文件内容,
+                配置,
+                书名=书籍信息.get("title"),
+                作者=书籍信息.get("author"),
+            )
+            if 发送结果.get("sent"):
+                启动QQ阅读百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
                 return
-            if 发送结果.get("sent"): 延迟删除缓存文件(缓存路径); return
+            降级文本 = str(发送结果.get("fallback_text") or "")
+            if 降级文本:
+                try:
+                    yield 降级文本
+                finally:
+                    启动QQ阅读百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                return
             logger.warning(f"QQ阅读文件发送失败：book_id={书籍编号}, file={文件名}, error={发送结果.get('error')}")
             yield 文件发送失败提示
     except Exception as e:

@@ -48,7 +48,7 @@
       "uc_pan_cookie": {
         "description": "UC网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。填写后番茄/七猫小说会先上传原小说 txt 到 UC 网盘，上传成功则向 QQ 发送同名链接 txt；上传失败则回退发送原小说 txt。留空表示不启用 UC 网盘。",
+        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。填写后小说会先上传完整 txt 到 UC 网盘，成功后向 QQ 发送“点击打开”链接按钮；留空或上传失败时只提示文件发送失败，不再发送 txt。",
         "default": ""
       },
       "uc_pan_upload_dir": {

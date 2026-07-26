@@ -13,10 +13,6 @@ from astrbot.api import logger
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
 try:
-    from astrbot.api import message_components as 消息组件
-except Exception:
-    消息组件 = None
-try:
     from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception as 异常:
     UC网盘 = None
@@ -56,7 +52,6 @@ App分享详情地址 = 'https://api.fqnovel.com/reading/bookapi/share/detail/v1
 每段最大字数 = 2500000
 每段最大章节数 = 1200
 进度分段数 = 10
-文件组件缓存删除延迟 = 600
 API选择等待秒数 = 120
 API选项 = {'1': 'OIAPI', '2': '析API', '3': '崩溃API', '4': '聚合API', '5': 'Y6api'}
 API直接切换 = {'oiapi': 'OIAPI', '析api': '析API', '崩溃api': '崩溃API', '聚合api': '聚合API', 'y6api': 'Y6api', 'y6': 'Y6api'}
@@ -308,31 +303,34 @@ async def 生成下载回复流(事件: Any, 来源: str, 配置: Any) -> AsyncI
                     return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节列表, 章节结果列表)
             logger.debug(f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功章节列表)}, total={len(章节列表)}, file_size={len(文件内容)}")
-            发送结果 = await 准备发送文本文件(事件, 文件名, 文件内容, 配置)
-            缓存路径 = 发送结果.get('cache_path')
-            链式结果 = 发送结果.get('chain_result')
-            if 链式结果 is not None:
-                try:
-                    yield 链式结果
-                finally:
-                    启动百度后台上传并清理源文件(配置, 发送结果.get('source_cache_path'), 文件名, 缓存路径)
-                    延迟删除缓存文件(缓存路径)
+            发送结果 = await 准备发送文本文件(
+                事件,
+                文件名,
+                文件内容,
+                配置,
+                书名=书籍信息.get('title'),
+                作者=书籍信息.get('author'),
+            )
+            if 发送结果.get('sent'):
+                启动百度后台上传并清理源文件(配置, 发送结果.get('source_cache_path'), 文件名)
                 return
-            已发送 = bool(发送结果.get('sent'))
-            发送错误 = str(发送结果.get('error') or '')
+            降级文本 = str(发送结果.get('fallback_text') or '')
+            if 降级文本:
+                try:
+                    yield 降级文本
+                finally:
+                    启动百度后台上传并清理源文件(配置, 发送结果.get('source_cache_path'), 文件名)
+                return
+            logger.warning(
+                f"番茄小说文件完成消息发送失败：book_id={书籍编号}, file={文件名}, "
+                f"success={len(成功章节列表)}/{len(章节列表)}, error={发送结果.get('error')}"
+            )
+            yield 文件发送失败提示
+            return
     except Exception as 异常:
         logger.warning(f'番茄小说下载失败：source={限制文本长度(解析来源)}, book_id={书籍编号}, error={异常}')
         yield 下载失败提示
         return
-    if 已发送:
-        return
-    logger.warning(
-        f"番茄小说文件发送失败：book_id={书籍编号}, file={文件名}, "
-        f"success={len(成功章节列表)}/{len(章节列表)}, error={发送错误}"
-    )
-    yield 文件发送失败提示
-
-
 async def 获取书籍信息(会话: aiohttp.ClientSession, 书籍编号: str, 来源: str) -> dict[str, Any]:
     书籍信息 = 默认书籍信息(书籍编号)
     share_code = 提取share_code(来源)
@@ -823,50 +821,40 @@ def 构造文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
 def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
     return '\n'.join([f"书名：{书籍信息.get('title') or '未知'}", f"作者：{书籍信息.get('author') or '未知'}", f'状态：{状态文本(书籍信息)}', f'章节：{章节数} 章', f"字数：{书籍信息.get('word_count') or '未知'}", '', '正在下载中请稍等.....'])
 
-async def 准备发送文本文件(事件: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
-    群号 = 获取群号(事件)
-    用户QQ = 获取用户QQ(事件)
-    logger.debug(f'番茄小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户QQ}')
+async def 准备发送文本文件(
+    事件: Any,
+    文件名: str,
+    文件内容: bytes,
+    配置: Any = None,
+    *,
+    书名: Any = '',
+    作者: Any = '',
+) -> dict[str, Any]:
+    logger.debug(f'番茄小说准备上传：file={文件名}, size={len(文件内容)}')
     缓存路径 = 写入缓存文件(文件名, 文件内容)
     logger.debug(f'番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}')
-    发送缓存路径 = 缓存路径
-    原小说缓存待删除 = False
-    if UC网盘 is not None:
-        UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入缓存文件)
-        if UC结果.get('success') and UC结果.get('cache_path'):
-            发送缓存路径 = UC结果.get('cache_path')
-            原小说缓存待删除 = True
-            logger.debug(f"番茄小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
-        elif UC结果.get('enabled'):
-            logger.warning(f"番茄小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
-    if 消息组件 is not None and hasattr(事件, 'chain_result'):
-        try:
-            链式结果 = 事件.chain_result([消息组件.File(name=文件名, file=str(发送缓存路径))])
-            logger.debug(f'番茄小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}')
-            return {'sent': True, 'chain_result': 链式结果, 'cache_path': 发送缓存路径, 'source_cache_path': 缓存路径, 'error': ''}
-        except Exception as 异常:
-            logger.warning(f'番茄小说 AstrBot File 组件构建失败：file={文件名}, error={异常}')
-    机器人 = getattr(事件, 'bot', None)
-    接口 = getattr(机器人, 'api', None)
-    调用动作 = getattr(接口, 'call_action', None)
-    if callable(调用动作):
-        已发送 = False
-        百度后台已启动 = False
-        try:
-            已发送, 错误 = await 尝试发送文件候选(调用动作, 群号, 用户QQ, 文件名, [('path', str(发送缓存路径)), ('file_uri', 发送缓存路径.as_uri())])
-            if 已发送 and 百度网盘 is not None:
-                百度后台已启动 = True
-                启动百度后台上传并清理源文件(配置, 缓存路径, 文件名, None if str(缓存路径) == str(发送缓存路径) else 发送缓存路径)
-            return {'sent': 已发送, 'chain_result': None, 'cache_path': None, 'error': 错误}
-        finally:
-            if not (百度后台已启动 and str(缓存路径) == str(发送缓存路径)):
-                删除缓存文件(发送缓存路径)
-            if 原小说缓存待删除 and not 百度后台已启动:
-                删除缓存文件(缓存路径)
-    删除缓存文件(发送缓存路径)
-    if 原小说缓存待删除:
+    if UC网盘 is None:
         删除缓存文件(缓存路径)
-    return {'sent': False, 'chain_result': None, 'cache_path': None, 'error': '当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件'}
+        return {'sent': False, 'fallback_text': '', 'source_cache_path': None, 'error': 'UC网盘模块未加载'}
+    try:
+        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
+        if not UC结果.get('success'):
+            logger.warning(f"番茄小说UC网盘上传失败：file={文件名}, error={UC结果.get('error')}")
+            删除缓存文件(缓存路径)
+            return {'sent': False, 'fallback_text': '', 'source_cache_path': None, 'error': str(UC结果.get('error') or 'UC网盘未启用')}
+        完成结果 = await UC网盘.发送小说下载完成链接(事件, 书名, 作者, str(UC结果.get('share_url') or ''))
+        if 完成结果.get('sent'):
+            logger.debug(f'番茄小说UC网盘上传并发送完成按钮成功：file={文件名}')
+            return {'sent': True, 'fallback_text': '', 'source_cache_path': 缓存路径, 'error': ''}
+        降级文本 = str(完成结果.get('fallback_text') or '')
+        if 降级文本:
+            return {'sent': False, 'fallback_text': 降级文本, 'source_cache_path': 缓存路径, 'error': str(完成结果.get('error') or '')}
+        删除缓存文件(缓存路径)
+        return {'sent': False, 'fallback_text': '', 'source_cache_path': None, 'error': str(完成结果.get('error') or '完成按钮发送失败')}
+    except Exception as 异常:
+        logger.warning(f'番茄小说UC网盘上传或完成消息发送失败：file={文件名}, error={异常}')
+        删除缓存文件(缓存路径)
+        return {'sent': False, 'fallback_text': '', 'source_cache_path': None, 'error': str(异常)}
 
 def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
     if not 源缓存路径:
@@ -894,18 +882,6 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
         if str(源缓存路径) != str(发送缓存路径 or ''):
             删除缓存文件(源缓存路径)
 
-def 延迟删除缓存文件(缓存路径: Any, 延迟秒数: int=文件组件缓存删除延迟) -> None:
-    if not 缓存路径:
-        return
-
-    async def 稍后删除() -> None:
-        await asyncio.sleep(延迟秒数)
-        删除缓存文件(缓存路径)
-    try:
-        asyncio.create_task(稍后删除())
-    except RuntimeError:
-        删除缓存文件(缓存路径)
-
 def 删除缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
@@ -914,24 +890,6 @@ def 删除缓存文件(缓存路径: Any) -> None:
         logger.debug(f'番茄小说下载缓存文件已删除：file={缓存路径}')
     except Exception as 异常:
         logger.warning(f'番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}')
-
-async def 尝试发送文件候选(调用动作: Any, 群号: str, 用户QQ: str, 文件名: str, 候选列表: list[tuple[str, str]]) -> tuple[bool, str]:
-    if not 群号 and (not 用户QQ):
-        return (False, '没有获取到群号或用户号')
-    错误列表 = []
-    for 方法名, 文件参数 in 候选列表:
-        try:
-            if 群号:
-                await 调用动作('upload_group_file', group_id=群号, file=文件参数, name=文件名)
-                logger.debug(f'番茄小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}')
-                return (True, '')
-            await 调用动作('upload_private_file', user_id=用户QQ, file=文件参数, name=文件名)
-            logger.debug(f'番茄小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户QQ}')
-            return (True, '')
-        except Exception as 异常:
-            错误列表.append(f'{方法名}: {异常}')
-            logger.warning(f'番茄小说文件发送候选失败：method={方法名}, file={文件名}, error={异常}')
-    return (False, '；'.join(错误列表))
 
 def 写入缓存文件(文件名: str, 文件内容: bytes) -> Path:
     下载缓存目录.mkdir(parents=True, exist_ok=True)

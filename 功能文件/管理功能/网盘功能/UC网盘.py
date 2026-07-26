@@ -9,7 +9,7 @@ import re
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import aiohttp
 from astrbot.api import logger
@@ -585,26 +585,83 @@ class UC网盘客户端:
         return self.session
 
 
-async def 准备小说分享链接文件(
+async def 上传小说并获取分享链接(
     配置: Any,
     源缓存路径: str | Path,
     文件名: str,
-    写入缓存文件函数: Callable[[str, bytes], Path],
 ) -> dict[str, Any]:
+    """上传小说源文件并返回 UC 分享链接，不生成链接 TXT 文件。"""
     if not UC网盘是否启用(配置):
-        return {"enabled": False, "success": False, "cache_path": None, "share_url": "", "error": ""}
+        return {"enabled": False, "success": False, "share_url": "", "error": ""}
     源路径 = Path(源缓存路径)
     Cookie = 读取UC网盘Cookie(配置)
     上传目录 = 读取UC上传目录(配置)
     try:
         async with UC网盘客户端(Cookie) as 客户端:
             分享链接 = await 客户端.上传文件并创建分享(源路径, 文件名, 上传目录)
-        链接文件内容 = 生成分享链接文件内容(分享链接)
-        链接缓存路径 = 写入缓存文件函数(文件名, 链接文件内容)
-        return {"enabled": True, "success": True, "cache_path": 链接缓存路径, "share_url": 分享链接, "error": ""}
+        return {"enabled": True, "success": True, "share_url": 分享链接, "error": ""}
     except Exception as 异常:
-        logger.warning(f"UC网盘上传分享失败，回退发送源文件：file={文件名}, error={异常}")
-        return {"enabled": True, "success": False, "cache_path": None, "share_url": "", "error": str(异常)}
+        logger.warning(f"UC网盘上传分享失败：file={文件名}, error={异常}")
+        return {"enabled": True, "success": False, "share_url": "", "error": str(异常)}
+
+
+def 构造小说下载完成文本(书名: Any, 作者: Any) -> str:
+    """构造用户可见的小说下载完成提示，避免标题破坏 Markdown 行结构。"""
+    安全书名 = re.sub(r"[\r\n]+", " ", str(书名 or "")).strip() or "未知"
+    安全作者 = re.sub(r"[\r\n]+", " ", str(作者 or "")).strip() or "未知"
+    return "\n".join(("您的", f"书名：{安全书名}", f"作者：{安全作者}", "已经下载完成"))
+
+
+def 构造小说下载完成键盘(分享链接: str) -> dict[str, Any]:
+    """QQ 官方机器人链接按钮。链接仅保存在按钮 data 中，不写入消息正文。"""
+    按钮编号 = hashlib.sha1(str(分享链接).encode("utf-8")).hexdigest()[:24]
+    return {
+        "rows": [
+            {
+                "buttons": [
+                    {
+                        "id": f"novel_uc_{按钮编号}",
+                        "render_data": {"label": "点击打开", "visited_label": "点击打开"},
+                        "action": {
+                            "type": 0,
+                            "permission": {"type": 2},
+                            "data": str(分享链接),
+                            "unsupport_tips": "请使用新版 QQ 打开",
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+
+
+async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, 分享链接: str) -> dict[str, Any]:
+    """优先发送 QQ 官方链接按钮；其他适配器只降级为文本链接。"""
+    完成文本 = 构造小说下载完成文本(书名, 作者)
+    链接 = str(分享链接 or "").strip()
+    if not 链接:
+        return {"sent": False, "fallback_text": "", "error": "分享链接为空"}
+
+    是官方机器人 = False
+    try:
+        from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
+
+        是官方机器人 = bool(是QQ官方机器人(event))
+        if 是官方机器人:
+            from 功能文件.管理功能.基础功能.帮助功能 import 发送Markdown键盘消息
+
+            已发送 = await 发送Markdown键盘消息(event, 完成文本, 构造小说下载完成键盘(链接))
+            if 已发送:
+                return {"sent": True, "fallback_text": "", "error": ""}
+            logger.warning("小说完成链接按钮发送失败")
+    except Exception as 异常:
+        logger.warning(f"小说完成链接按钮构建或发送失败：error={异常}")
+
+    # QQ 官方机器人不能将分享链接回退到可见正文，链接仅允许留在按钮 data 中。
+    if 是官方机器人:
+        return {"sent": False, "fallback_text": "", "error": "链接按钮发送失败"}
+
+    return {"sent": False, "fallback_text": f"{完成文本}\n链接：{链接}", "error": "链接按钮发送失败"}
 
 
 def UC网盘是否启用(配置: Any) -> bool:
@@ -618,11 +675,6 @@ def 读取UC网盘Cookie(配置: Any) -> str:
 def 读取UC上传目录(配置: Any) -> str:
     目录 = str(读取配置字段(配置, "uc_pan_upload_dir") or "").strip()
     return 目录 or 默认上传目录
-
-
-def 生成分享链接文件内容(分享链接: str) -> bytes:
-    文本 = f"请复制链接打开{网盘名称}\r\n链接：{str(分享链接 or '').strip()}\r\n"
-    return 文本.encode("utf-8")
 
 
 def 拆分上传目录(上传目录: str) -> list[str]:

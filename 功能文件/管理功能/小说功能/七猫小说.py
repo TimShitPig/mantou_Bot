@@ -14,11 +14,6 @@ import aiohttp
 from astrbot.api import logger
 
 try:
-    from astrbot.api import message_components as Comp
-except Exception:
-    Comp = None
-
-try:
     from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception as exc:
     UC网盘 = None
@@ -48,7 +43,6 @@ except Exception:
 批量下载并发数 = 4
 进度日志分段数 = 10
 下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
-文件组件缓存清理延迟 = 600
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 QM参数字符映射 = {
     "+": "P", "/": "X", "0": "M", "1": "U", "2": "l", "3": "E", "4": "r", "5": "Y",
@@ -122,26 +116,31 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                 f"七猫小说章节下载完成：book_id={书籍编号}, "
                 f"title={详情.get('title')}, success={len(成功章节)}, total={len(目录)}, file_size={len(文件内容)}"
             )
-            发送结果 = await 准备发送文本文件给当前会话(event, 文件名, 文件内容, 配置)
-            文件发送结果 = 发送结果.get("chain_result")
-            if 文件发送结果 is not None:
-                try:
-                    yield 文件发送结果
-                finally:
-                    启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名, 发送结果.get("cache_path"))
-                    延迟删除下载缓存文件(发送结果.get("cache_path"))
+            发送结果 = await 准备发送文本文件给当前会话(
+                event,
+                文件名,
+                文件内容,
+                配置,
+                书名=详情.get("title"),
+                作者=详情.get("author"),
+            )
+            if 发送结果.get("sent"):
+                启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
                 return
-            发送成功 = bool(发送结果.get("sent"))
+            降级文本 = str(发送结果.get("fallback_text") or "")
+            if 降级文本:
+                try:
+                    yield 降级文本
+                finally:
+                    启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                return
+            logger.warning(f"七猫小说完成消息发送失败：book_id={书籍编号}, file={文件名}, error={发送结果.get('error')}")
+            yield "文件发送失败，请稍后再试"
+            return
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
         yield "下载失败"
         return
-
-    if 发送成功:
-        return
-
-    yield "文件发送失败，请稍后再试"
-
 
 async def 搜索小说(session: aiohttp.ClientSession, 关键词: str) -> list[dict[str, Any]]:
     参数 = 签名参数({
@@ -479,54 +478,40 @@ def 格式化字数(字数: Any) -> str:
 
 
 
-async def 准备发送文本文件给当前会话(event: Any, 文件名: str, 文件内容: bytes, 配置: Any = None) -> dict[str, Any]:
-    群号 = 获取群号(event)
-    用户号 = 获取发送者QQ(event)
-    logger.info(f"七猫小说准备发送文件：file={文件名}, size={len(文件内容)}, group_id={群号}, user_id={用户号}")
-
+async def 准备发送文本文件给当前会话(
+    event: Any,
+    文件名: str,
+    文件内容: bytes,
+    配置: Any = None,
+    *,
+    书名: Any = "",
+    作者: Any = "",
+) -> dict[str, Any]:
+    logger.info(f"七猫小说准备上传：file={文件名}, size={len(文件内容)}")
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
-    发送缓存路径 = 缓存路径
-    原小说缓存待删除 = False
-    if UC网盘 is not None:
-        UC结果 = await UC网盘.准备小说分享链接文件(配置, 缓存路径, 文件名, 写入下载缓存文件)
-        if UC结果.get("success") and UC结果.get("cache_path"):
-            发送缓存路径 = UC结果.get("cache_path")
-            原小说缓存待删除 = True
-            logger.info(f"七猫小说UC网盘上传成功，改发同名链接文件：file={文件名}, share_url={UC结果.get('share_url')}")
-        elif UC结果.get("enabled"):
-            logger.warning(f"七猫小说UC网盘上传失败，回退发送源文件：file={文件名}, error={UC结果.get('error')}")
-
-    if Comp is not None and hasattr(event, "chain_result"):
-        try:
-            文件发送结果 = event.chain_result([Comp.File(name=文件名, file=str(发送缓存路径))])
-            logger.info(f"七猫小说文件使用 AstrBot File 组件发送：file={文件名}, path={发送缓存路径}")
-            return {"sent": True, "chain_result": 文件发送结果, "cache_path": 发送缓存路径, "source_cache_path": 缓存路径, "error": ""}
-        except Exception as exc:
-            logger.warning(f"七猫小说 AstrBot File 组件构建失败：file={文件名}, error={exc}")
-
-    bot = getattr(event, "bot", None)
-    api = getattr(bot, "api", None)
-    调用方法 = getattr(api, "call_action", None)
-    if not callable(调用方法):
-        删除下载缓存文件(发送缓存路径)
-        if 原小说缓存待删除:
-            删除下载缓存文件(缓存路径)
-        return {"sent": False, "chain_result": None, "cache_path": None, "error": "当前 bot 没有 api.call_action 接口，也无法使用 AstrBot File 组件"}
-
-    发送成功 = False
-    百度后台已启动 = False
+    if UC网盘 is None:
+        删除下载缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
     try:
-        发送成功, 发送错误 = await 尝试发送缓存文件(调用方法, 群号, 用户号, 文件名, 发送缓存路径)
-        if 发送成功 and 百度网盘 is not None:
-            百度后台已启动 = True
-            启动百度后台上传并清理源文件(配置, 缓存路径, 文件名, None if str(缓存路径) == str(发送缓存路径) else 发送缓存路径)
-        return {"sent": 发送成功, "chain_result": None, "cache_path": None, "error": 发送错误}
-    finally:
-        if not (百度后台已启动 and str(缓存路径) == str(发送缓存路径)):
-            删除下载缓存文件(发送缓存路径)
-        if 原小说缓存待删除 and not 百度后台已启动:
+        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
+        if not UC结果.get("success"):
+            logger.warning(f"七猫小说UC网盘上传失败：file={文件名}, error={UC结果.get('error')}")
             删除下载缓存文件(缓存路径)
+            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
+        完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
+        if 完成结果.get("sent"):
+            logger.info(f"七猫小说UC网盘上传并发送完成按钮成功：file={文件名}")
+            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+        降级文本 = str(完成结果.get("fallback_text") or "")
+        if 降级文本:
+            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+        删除下载缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
+    except Exception as exc:
+        logger.warning(f"七猫小说UC网盘上传或完成消息发送失败：file={文件名}, error={exc}")
+        删除下载缓存文件(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
 
 
 def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
@@ -564,61 +549,6 @@ def 删除下载缓存文件(缓存路径: Any) -> None:
         logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
     except Exception as exc:
         logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
-
-
-def 延迟删除下载缓存文件(缓存路径: Any, 延迟秒数: int = 文件组件缓存清理延迟) -> None:
-    if not 缓存路径:
-        return
-
-    async def 执行删除() -> None:
-        await asyncio.sleep(延迟秒数)
-        删除下载缓存文件(缓存路径)
-
-    try:
-        asyncio.create_task(执行删除())
-    except RuntimeError:
-        删除下载缓存文件(缓存路径)
-
-async def 尝试发送缓存文件(
-    调用方法: Any,
-    群号: str,
-    用户号: str,
-    文件名: str,
-    缓存路径: Path,
-) -> tuple[bool, str]:
-    候选列表 = [("path", str(缓存路径)), ("file_uri", 缓存路径.as_uri())]
-    成功, 错误 = await 按候选发送文件(调用方法, 群号, 用户号, 文件名, 候选列表)
-    if 成功:
-        return True, ""
-    logger.warning(f"七猫小说下载缓存文件发送失败：file={缓存路径}, error={错误}")
-    return False, 错误
-
-
-async def 按候选发送文件(
-    调用方法: Any,
-    群号: str,
-    用户号: str,
-    文件名: str,
-    候选列表: list[tuple[str, str]],
-) -> tuple[bool, str]:
-    if not 群号 and not 用户号:
-        return False, "没有获取到群号或用户号"
-
-    错误列表 = []
-    for 方法名, 文件参数 in 候选列表:
-        try:
-            if 群号:
-                await 调用方法("upload_group_file", group_id=群号, file=文件参数, name=文件名)
-                logger.info(f"七猫小说文件发送成功：method={方法名}, target=group, file={文件名}, group_id={群号}")
-                return True, ""
-            await 调用方法("upload_private_file", user_id=用户号, file=文件参数, name=文件名)
-            logger.info(f"七猫小说文件发送成功：method={方法名}, target=private, file={文件名}, user_id={用户号}")
-            return True, ""
-        except Exception as exc:
-            错误文本 = f"{方法名}: {exc}"
-            错误列表.append(错误文本)
-            logger.warning(f"七猫小说文件发送候选失败：method={方法名}, file={文件名}, error={exc}")
-    return False, "；".join(错误列表)
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
@@ -825,40 +755,6 @@ def 安全整数(值: Any, 默认值: int = 0) -> int:
         return int(值)
     except Exception:
         return 默认值
-
-def 获取群号(event: Any) -> str:
-    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            值 = 方法()
-            if 值:
-                return str(值)
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
-        if isinstance(值, dict):
-            值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
-        if 值:
-            return str(值)
-    return ""
-
-
-def 获取发送者QQ(event: Any) -> str:
-    for 方法名 in ("get_sender_id", "get_user_id"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
-            值 = 方法()
-            if 值:
-                return str(值)
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "sender_id") or 读取字段(对象, "user_id") or 读取字段(对象, "sender")
-        if isinstance(值, dict):
-            值 = 值.get("user_id") or 值.get("id")
-        if 值:
-            return str(值)
-    return ""
-
 
 def 读取字段(对象: Any, 字段名: str) -> Any:
     if 对象 is None:
