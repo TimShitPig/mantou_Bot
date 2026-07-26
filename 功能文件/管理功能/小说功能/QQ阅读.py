@@ -13,13 +13,6 @@ try:
 except Exception:
     qq解密 = None
 try:
-    from Crypto.Cipher import AES, DES
-    from Crypto.Util.Padding import unpad as _unpad
-    _有加密库 = True
-except Exception:
-    AES = DES = _unpad = None
-    _有加密库 = False
-try:
     from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception as e:
     UC网盘 = None
@@ -52,13 +45,12 @@ except Exception as e:
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"8520888","osversion":f"Android 28 {默认登录版本} 8520888","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
 默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
 正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=12; 批量章节上限=50; 批量并发上限=6
-FOCK_TOKEN="KNVA76RTD8YZXZ6Z"; FOCK_TOKEN_PWD=b"c9ajudte0zb21ksg"; FOCK_TOKEN_IV=b"58jb6v2lzcspwymg"
-_FOCK_TOKEN_BLOB=bytes.fromhex("8f400c5fcec88186569c7c407e35d2895495f9025321cd94976e786a65f18550")
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
 待登录会话: dict[str, dict[str, Any]] = {}
 
+# ===== 一、基础工具 =====
 
 def _是公网IPv4(ip: str) -> bool:
     文本 = str(ip or "").strip()
@@ -80,7 +72,6 @@ def _是公网IPv4(ip: str) -> bool:
     if a == 100 and 64 <= b <= 127:
         return False
     return True
-
 
 def 获取滑块公网主机() -> str:
     """自动获取可外网访问公网 IP；过滤 Docker/局域网私网地址。"""
@@ -130,8 +121,6 @@ def 获取滑块公网主机() -> str:
         return 候选[0]
     return ""
 
-
-
 def 读取字段(对象: Any, 字段名: str) -> Any:
     if 对象 is None: return None
     if isinstance(对象, dict): return 对象.get(字段名)
@@ -158,6 +147,8 @@ def 获取会话键(event: Any) -> str:
         用户 = str(读取字段(event, "sender_id") or "unknown")
     return f"{群号}:{用户}"
 
+# ===== 二、登录态读写 =====
+
 def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
     try:
         文本 = 读取运行状态值(配置, 登录态命名空间, 登录态状态键, "")
@@ -174,38 +165,7 @@ def 写入QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
     写入运行状态值(配置, 登录态命名空间, 登录态状态键, json.dumps(清洗, ensure_ascii=False))
     logger.info("QQ阅读登录态已保存到数据库")
 
-def _unpad_pkcs7(data: bytes, block: int) -> bytes:
-    if _有加密库 and _unpad is not None:
-        return _unpad(data, block)
-    if not data: raise ValueError("empty")
-    pad = data[-1]
-    if pad < 1 or pad > block or data[-pad:] != bytes([pad]) * pad:
-        raise ValueError("bad pkcs7")
-    return data[:-pad]
-
-def fock_token() -> str:
-    if not _有加密库: return FOCK_TOKEN
-    try:
-        pt = AES.new(FOCK_TOKEN_PWD, AES.MODE_CBC, iv=FOCK_TOKEN_IV).decrypt(_FOCK_TOKEN_BLOB)
-        tok = _unpad_pkcs7(pt, 16).decode("ascii")
-        if tok: return tok
-    except Exception:
-        pass
-    return FOCK_TOKEN
-
-def 解析keypool_ids(keypool_plain: bytes) -> List[str]:
-    return re.findall(r"[0-9a-fA-F]{16}", keypool_plain.decode("ascii", "ignore"))
-
-def 解密keypool_ids(keypool: bytes, fuid: str, token: str = "") -> List[str]:
-    if not _有加密库: return 解析keypool_ids(keypool)
-    fuid_b = fuid.encode("utf-8"); tok = (token or fock_token()).encode("ascii")
-    key1 = hashlib.sha256(fuid_b + tok).digest()
-    if len(keypool) % 16: keypool = keypool[:len(keypool)//16*16]
-    if len(keypool) < 16: return []
-    pt = AES.new(key1, AES.MODE_CBC, iv=key1[:16]).decrypt(keypool)
-    try: pt = _unpad_pkcs7(pt, 16)
-    except Exception: pt = pt.rstrip(b"\r\n")
-    return 解析keypool_ids(pt)
+# ===== 三、正文解密算法 =====
 
 def 是否二进制(data: bytes) -> bool:
     if not data: return False
@@ -218,73 +178,105 @@ def 解码文本(data: bytes) -> str:
         except UnicodeDecodeError: pass
     return data.decode("utf-8", "replace")
 
+def 读取keypool字节(登录态: Optional[Mapping[str, str]] = None) -> bytes:
+    src = 登录态 or {}
+    b64 = str(src.get("keypool_b64") or 默认设备keypool_b64 or "")
+    if not b64:
+        return b""
+    try:
+        return base64.b64decode(b64 + "===")
+    except Exception:
+        return b""
+
 def 解密章节密文(cipher: bytes, *, bid: str, cid: str, fuid: str, keypool: bytes = b"") -> Tuple[Optional[bytes], str]:
+    """仅使用 _qq阅读解密 多模式 libfock，不再走旧算法。"""
     if not cipher:
         return None, "empty"
     if not 是否二进制(cipher):
         return cipher, "plain"
-    if cipher[:2] == b"\x1f\x8b":
+    if cipher[:2] == bytes([0x1f, 0x8b]):
         try:
             return gzip.decompress(cipher), "gzip"
         except Exception:
             pass
-    if not _有加密库:
-        return None, "no_crypto"
+    if qq解密 is None:
+        return None, "no_decrypt_module"
     if not keypool:
         return None, "missing_keypool"
     stt = f"{bid}_{cid}_s"
-    if qq解密 is not None:
-        try:
-            text = qq解密.try_decrypt_chapter(cipher, stt, fuid, keypool)
-            if text is not None:
-                return text.encode("utf-8"), "fock_multi"
-        except Exception as e:
-            logger.debug(f"QQ阅读多模式解密失败：bid={bid}, cid={cid}, error={e}")
     try:
-        fuid_b = fuid.encode("utf-8")
-        ak_b = f"{bid}_{cid}_s".encode("utf-8")
-        tok = fock_token().encode("ascii")
-        key1 = hashlib.sha256(fuid_b + tok).digest()
-        hdr = AES.new(key1, AES.MODE_CBC, iv=key1[:16]).decrypt(cipher[:0x100])
-        ids = 解密keypool_ids(keypool, fuid, tok.decode("ascii")) or 解析keypool_ids(keypool)
-        if not ids:
-            return None, "no_pool_ids"
-        bodies = []
-        body80 = hdr[0x80:0x100] + cipher[0x100:]
-        n = len(body80) // 16 * 16
-        if n >= 16:
-            bodies.append(body80[:n])
-        body100 = cipher[0x100:]
-        n2 = len(body100) // 16 * 16
-        if n2 >= 16:
-            bodies.append(body100[:n2])
-        for pid in ids:
-            key2 = hashlib.sha256(pid.encode("ascii") + fuid_b + ak_b).digest()
-            for body in bodies:
-                try:
-                    mid = AES.new(key2, AES.MODE_CBC, iv=key2[:16]).decrypt(body)
-                    mid = _unpad_pkcs7(mid, 16)
-                    m = len(mid) // 8 * 8
-                    if m < 8:
-                        continue
-                    gz = DES.new(key2[:8], DES.MODE_CBC, iv=key2[:8]).decrypt(mid[:m])
-                    gz = _unpad_pkcs7(gz, 8)
-                    if gz[:2] != b"\x1f\x8b":
-                        continue
-                    return gzip.decompress(gz), f"fock_uk:{pid}"
-                except Exception:
-                    continue
-        return None, "decrypt_fail"
+        text = qq解密.try_decrypt_chapter(cipher, stt, fuid, keypool)
+        if text is None:
+            return None, "decrypt_fail"
+        return text.encode("utf-8"), "fock_multi"
     except Exception as e:
         return None, f"decrypt_error:{e}"
 
+def 解密章节(cipher: bytes, bid: str, cid: str, 登录态: Mapping[str, str]) -> Tuple[Optional[str], str]:
+    fuid = str(登录态.get("fuid") or 默认设备.get("fuid") or "")
+    keypool = 读取keypool字节(登录态)
+    plain, note = 解密章节密文(cipher, bid=bid, cid=cid, fuid=fuid, keypool=keypool)
+    if plain is None:
+        if not 是否二进制(cipher):
+            return 解码文本(cipher).strip(), "plain"
+        return None, note
+    return 解码文本(plain).strip(), note
 
+# ===== 四、章节包与目录解析 =====
 
 @dataclass
 class Tar成员:
     name: str
     size: int
     data: bytes
+
+def 是否deny(data: bytes) -> bool:
+    if not data or data[:1] != b"{": return False
+    try: obj = json.loads(data.decode("utf-8", "replace"))
+    except Exception: return False
+    return isinstance(obj, dict) and str(obj.get("code")) in {"-1", "401", "403"} and "deny" in str(obj.get("msg", "")).lower()
+
+def 解析tar(blob: bytes) -> List[Tar成员]:
+    if 是否deny(blob): raise RuntimeError("接口拒绝访问")
+    if not blob or blob[:1] == b"{": raise RuntimeError("返回不是章节包")
+    out: List[Tar成员] = []
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as tf:
+        for m in tf.getmembers():
+            if not m.isfile(): continue
+            f = tf.extractfile(m)
+            data = f.read() if f else b""
+            out.append(Tar成员(name=m.name, size=len(data), data=data))
+    return out
+
+def 解析目录文本(text: str) -> List[Dict[str, Any]]:
+    chapters: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line: continue
+        parts = line.split(",")
+        if len(parts) < 2: continue
+        cid = parts[0].strip(); title = parts[1].strip() or f"第{cid}章"
+        chapters.append({"cid": cid, "id": cid, "title": title, "index": len(chapters) + 1})
+    return chapters
+
+def 找目录成员(entries: Sequence[Tar成员], bid: str) -> Optional[Tar成员]:
+    names = {f"{bid}_ALL_o", f"{bid}_ALL_s"}
+    for e in entries:
+        if e.name in names or e.name.endswith("_ALL_o") or e.name.endswith("_ALL_s"):
+            return e
+    return None
+
+def 章节成员(entries: Sequence[Tar成员], bid: str) -> List[Tar成员]:
+    prefix = f"{bid}_"
+    return [e for e in entries if e.name.startswith(prefix) and e.name.endswith("_s") and "_ALL_" not in e.name]
+
+def 章节编号(name: str, bid: str) -> str:
+    mid = name
+    if mid.startswith(f"{bid}_"): mid = mid[len(bid)+1:]
+    if mid.endswith("_s"): mid = mid[:-2]
+    return mid
+
+# ===== 五、请求头与下载态 =====
 
 def 组装URL(base: str, params: Mapping[str, Any]) -> str:
     query = urllib.parse.urlencode({k: str(v) for k, v in params.items() if v is not None}, doseq=True)
@@ -334,7 +326,6 @@ def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict
         out["keypool_b64"] = 默认设备keypool_b64
     return out
 
-
 def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     """免费/广告书游客态：去掉登录 Cookie/yw*，保留 fuid+keypool。
 
@@ -351,169 +342,7 @@ def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict
         out["qrsn"] = str(基.get("qrsn"))
     return out
 
-
-def 是否全书免费可下(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
-    """是否整本都可下（游客全本）。对所有书通用，不按 book_id 特判。
-
-    规则：
-    - free=1 / is_all_free，且没有“部分免费上限”：整本免费
-    - isAdBook 且 maxfreechapter=0（或不限）：广告全本，可游客整本下
-    - maxfreechapter > 0 且 < 总章数：只是试读/部分免费，不能整本硬下
-    """
-    if not isinstance(书籍信息, Mapping):
-        return False
-    total = 安全整数(书籍信息.get("chapter_count"))
-    maxfree = 安全整数(书籍信息.get("max_free_chapter"))
-    # 先看部分免费上限，避免 free/isAdBook 误判成全本
-    if maxfree > 0 and total > 0 and maxfree < total:
-        return False
-    if 书籍信息.get("is_all_free"):
-        return True
-    if 书籍信息.get("is_limit_free") and (maxfree <= 0 or total <= 0 or maxfree >= total):
-        return True
-    # 广告书仅当没有部分免费上限时，才当作全本可下
-    if 书籍信息.get("is_ad_book") and maxfree <= 0:
-        return True
-    nodes: list[Any] = []
-    for src in (详情, 书籍信息.get("raw")):
-        if isinstance(src, dict):
-            nodes.append(src)
-            for k in ("data", "bookInfo", "book", "result"):
-                v = src.get(k)
-                if isinstance(v, dict):
-                    nodes.append(v)
-    for b in nodes:
-        if not isinstance(b, dict):
-            continue
-        total_b = 安全整数(b.get("totalChapters") or b.get("chapterNum") or total)
-        max_b = 安全整数(b.get("maxfreechapter") or b.get("maxFreeChapter") or maxfree)
-        if isinstance(b.get("newmaxfreechapter"), dict):
-            max_b = max(max_b, 安全整数(b["newmaxfreechapter"].get("txt")))
-        if max_b > 0 and total_b > 0 and max_b < total_b:
-            return False
-        if b.get("free") in (1, "1", True):
-            return True
-        if b.get("isAdBook") in (1, "1", True) and max_b <= 0:
-            return True
-        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"} and max_b <= 0:
-            return True
-    return False
-
-
-def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
-    """兼容旧名：实际表示“可游客下载的免费/广告相关书”，不等价于整本免费。"""
-    if not isinstance(书籍信息, Mapping):
-        return False
-    if 是否全书免费可下(书籍信息, 详情):
-        return True
-    if 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free") or 书籍信息.get("is_all_free"):
-        return True
-    return False
-
-
-def 识别正文类型(详情: Any, 书籍信息: Optional[Mapping[str, Any]] = None) -> list[int]:
-    """网文 text_type=1，出版 text_type=2。返回候选顺序。"""
-    blobs: list[Any] = []
-    for src in (详情, (书籍信息 or {}).get("raw") if 书籍信息 else None):
-        if isinstance(src, dict):
-            blobs.append(src)
-            for key in ("data", "bookInfo", "book", "info"):
-                v = src.get(key)
-                if isinstance(v, dict):
-                    blobs.append(v)
-    texts: list[str] = []
-    for b in blobs:
-        if not isinstance(b, dict):
-            continue
-        for k, v in b.items():
-            if v is None:
-                continue
-            kl = str(k).lower()
-            if any(x in kl for x in ("form", "channel", "category", "cata", "type", "source", "pub", "classname")):
-                texts.append(str(v))
-        if b.get("isbn") or b.get("publisher") or b.get("ISBN"):
-            return [2]
-        nm = b.get("newmaxfreechapter") or {}
-        if isinstance(nm, dict) and 安全整数(nm.get("cteb")) > 0 and 安全整数(nm.get("txt")) == 0:
-            return [2]
-        for key in ("form", "bookForm", "book_form", "formType", "form_type", "sourceType", "bookType"):
-            if key in b:
-                try:
-                    val = int(b[key])
-                    if val == 2:
-                        return [2]
-                    if val == 1:
-                        return [1, 2]
-                except Exception:
-                    s = str(b[key])
-                    if "出版" in s:
-                        return [2]
-                    if "网文" in s or "原创" in s:
-                        return [1, 2]
-    joined = " ".join(texts)
-    if any(x in joined for x in ("出版", "纸书", "出版社", "图书", "ISBN", "isbn")):
-        return [2]
-    cat = str((书籍信息 or {}).get("category") or "")
-    if any(x in cat for x in ("出版", "纸书", "图书")):
-        return [2]
-    return [1, 2]
-
-
-def 读取keypool字节(登录态: Optional[Mapping[str, str]] = None) -> bytes:
-    src = 登录态 or {}
-    b64 = str(src.get("keypool_b64") or 默认设备keypool_b64 or "")
-    if not b64:
-        return b""
-    try:
-        return base64.b64decode(b64 + "===")
-    except Exception:
-        return b""
-
-def 是否deny(data: bytes) -> bool:
-    if not data or data[:1] != b"{": return False
-    try: obj = json.loads(data.decode("utf-8", "replace"))
-    except Exception: return False
-    return isinstance(obj, dict) and str(obj.get("code")) in {"-1", "401", "403"} and "deny" in str(obj.get("msg", "")).lower()
-
-def 解析tar(blob: bytes) -> List[Tar成员]:
-    if 是否deny(blob): raise RuntimeError("接口拒绝访问")
-    if not blob or blob[:1] == b"{": raise RuntimeError("返回不是章节包")
-    out: List[Tar成员] = []
-    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as tf:
-        for m in tf.getmembers():
-            if not m.isfile(): continue
-            f = tf.extractfile(m)
-            data = f.read() if f else b""
-            out.append(Tar成员(name=m.name, size=len(data), data=data))
-    return out
-
-def 解析目录文本(text: str) -> List[Dict[str, Any]]:
-    chapters: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line: continue
-        parts = line.split(",")
-        if len(parts) < 2: continue
-        cid = parts[0].strip(); title = parts[1].strip() or f"第{cid}章"
-        chapters.append({"cid": cid, "id": cid, "title": title, "index": len(chapters) + 1})
-    return chapters
-
-def 找目录成员(entries: Sequence[Tar成员], bid: str) -> Optional[Tar成员]:
-    names = {f"{bid}_ALL_o", f"{bid}_ALL_s"}
-    for e in entries:
-        if e.name in names or e.name.endswith("_ALL_o") or e.name.endswith("_ALL_s"):
-            return e
-    return None
-
-def 章节成员(entries: Sequence[Tar成员], bid: str) -> List[Tar成员]:
-    prefix = f"{bid}_"
-    return [e for e in entries if e.name.startswith(prefix) and e.name.endswith("_s") and "_ALL_" not in e.name]
-
-def 章节编号(name: str, bid: str) -> str:
-    mid = name
-    if mid.startswith(f"{bid}_"): mid = mid[len(bid)+1:]
-    if mid.endswith("_s"): mid = mid[:-2]
-    return mid
+# ===== 六、HTTP 与接口请求 =====
 
 async def http_get_bytes(session: aiohttp.ClientSession, url: str, headers: Mapping[str, str], timeout: int = 60) -> Tuple[bytes, int]:
     async with session.get(url, headers=dict(headers), timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
@@ -604,7 +433,6 @@ async def 请求目录(session: aiohttp.ClientSession, bid: str, 登录态: Opti
     if not ce: return []
     return 解析目录文本(解码文本(ce.data))
 
-
 async def 探测可下载章节编号(
     session: aiohttp.ClientSession,
     bid: str,
@@ -657,7 +485,6 @@ async def 探测可下载章节编号(
             except Exception as e:
                 logger.debug(f"QQ阅读探测可下载章节失败：book_id={bid}, range={scids}, text_type={text_type}, error={e}")
     return 可下
-
 
 def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
     root = data if isinstance(data, dict) else {}
@@ -724,16 +551,113 @@ def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
         "raw": root,
     }
 
+# ===== 七、书籍可下判断 =====
 
-def 解密章节(cipher: bytes, bid: str, cid: str, 登录态: Mapping[str, str]) -> Tuple[Optional[str], str]:
-    fuid = str(登录态.get("fuid") or 默认设备.get("fuid") or "")
-    keypool = 读取keypool字节(登录态)
-    plain, note = 解密章节密文(cipher, bid=bid, cid=cid, fuid=fuid, keypool=keypool)
-    if plain is None:
-        if not 是否二进制(cipher):
-            return 解码文本(cipher).strip(), "plain"
-        return None, note
-    return 解码文本(plain).strip(), note
+def 是否全书免费可下(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
+    """是否整本都可下（游客全本）。对所有书通用，不按 book_id 特判。
+
+    规则：
+    - free=1 / is_all_free，且没有“部分免费上限”：整本免费
+    - isAdBook 且 maxfreechapter=0（或不限）：广告全本，可游客整本下
+    - maxfreechapter > 0 且 < 总章数：只是试读/部分免费，不能整本硬下
+    """
+    if not isinstance(书籍信息, Mapping):
+        return False
+    total = 安全整数(书籍信息.get("chapter_count"))
+    maxfree = 安全整数(书籍信息.get("max_free_chapter"))
+    # 先看部分免费上限，避免 free/isAdBook 误判成全本
+    if maxfree > 0 and total > 0 and maxfree < total:
+        return False
+    if 书籍信息.get("is_all_free"):
+        return True
+    if 书籍信息.get("is_limit_free") and (maxfree <= 0 or total <= 0 or maxfree >= total):
+        return True
+    # 广告书仅当没有部分免费上限时，才当作全本可下
+    if 书籍信息.get("is_ad_book") and maxfree <= 0:
+        return True
+    nodes: list[Any] = []
+    for src in (详情, 书籍信息.get("raw")):
+        if isinstance(src, dict):
+            nodes.append(src)
+            for k in ("data", "bookInfo", "book", "result"):
+                v = src.get(k)
+                if isinstance(v, dict):
+                    nodes.append(v)
+    for b in nodes:
+        if not isinstance(b, dict):
+            continue
+        total_b = 安全整数(b.get("totalChapters") or b.get("chapterNum") or total)
+        max_b = 安全整数(b.get("maxfreechapter") or b.get("maxFreeChapter") or maxfree)
+        if isinstance(b.get("newmaxfreechapter"), dict):
+            max_b = max(max_b, 安全整数(b["newmaxfreechapter"].get("txt")))
+        if max_b > 0 and total_b > 0 and max_b < total_b:
+            return False
+        if b.get("free") in (1, "1", True):
+            return True
+        if b.get("isAdBook") in (1, "1", True) and max_b <= 0:
+            return True
+        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"} and max_b <= 0:
+            return True
+    return False
+
+def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
+    """兼容旧名：实际表示“可游客下载的免费/广告相关书”，不等价于整本免费。"""
+    if not isinstance(书籍信息, Mapping):
+        return False
+    if 是否全书免费可下(书籍信息, 详情):
+        return True
+    if 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free") or 书籍信息.get("is_all_free"):
+        return True
+    return False
+
+def 识别正文类型(详情: Any, 书籍信息: Optional[Mapping[str, Any]] = None) -> list[int]:
+    """网文 text_type=1，出版 text_type=2。返回候选顺序。"""
+    blobs: list[Any] = []
+    for src in (详情, (书籍信息 or {}).get("raw") if 书籍信息 else None):
+        if isinstance(src, dict):
+            blobs.append(src)
+            for key in ("data", "bookInfo", "book", "info"):
+                v = src.get(key)
+                if isinstance(v, dict):
+                    blobs.append(v)
+    texts: list[str] = []
+    for b in blobs:
+        if not isinstance(b, dict):
+            continue
+        for k, v in b.items():
+            if v is None:
+                continue
+            kl = str(k).lower()
+            if any(x in kl for x in ("form", "channel", "category", "cata", "type", "source", "pub", "classname")):
+                texts.append(str(v))
+        if b.get("isbn") or b.get("publisher") or b.get("ISBN"):
+            return [2]
+        nm = b.get("newmaxfreechapter") or {}
+        if isinstance(nm, dict) and 安全整数(nm.get("cteb")) > 0 and 安全整数(nm.get("txt")) == 0:
+            return [2]
+        for key in ("form", "bookForm", "book_form", "formType", "form_type", "sourceType", "bookType"):
+            if key in b:
+                try:
+                    val = int(b[key])
+                    if val == 2:
+                        return [2]
+                    if val == 1:
+                        return [1, 2]
+                except Exception:
+                    s = str(b[key])
+                    if "出版" in s:
+                        return [2]
+                    if "网文" in s or "原创" in s:
+                        return [1, 2]
+    joined = " ".join(texts)
+    if any(x in joined for x in ("出版", "纸书", "出版社", "图书", "ISBN", "isbn")):
+        return [2]
+    cat = str((书籍信息 or {}).get("category") or "")
+    if any(x in cat for x in ("出版", "纸书", "图书")):
+        return [2]
+    return [1, 2]
+
+# ===== 八、登录与滑块 =====
 
 def 手机号带区号(phone: str, area: str = "+86") -> str:
     value = re.sub(r"[\s\-()]+", "", str(phone or ""))
@@ -1001,7 +925,6 @@ def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块�
         "randstr": "",
     }
 
-
 def 关闭滑块服务(会话: Optional[Mapping[str, Any]] = None, 滑块: Optional[Mapping[str, Any]] = None) -> None:
     对象 = 滑块 or (会话 or {}).get("captcha") or {}
     close = 对象.get("close") if isinstance(对象, Mapping) else None
@@ -1010,7 +933,6 @@ def 关闭滑块服务(会话: Optional[Mapping[str, Any]] = None, 滑块: Optio
             close()
         except Exception as e:
             logger.warning(f"QQ阅读滑块服务关闭失败：error={e}")
-
 
 async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tuple[bool, str]:
     滑块 = 会话.get("captcha") if isinstance(会话.get("captcha"), dict) else {}
@@ -1073,6 +995,8 @@ async def 提交手机验证码(session: aiohttp.ClientSession, phone: str, code
     payload = 查找登录载荷(response)
     if not payload: return {"success": False, "response": response}
     return {"success": True, "auth": 从登录载荷构造登录态(payload, phone=full_phone), "response": response}
+
+# ===== 九、文件生成与发送 =====
 
 def 格式化字数(值: Any) -> str:
     if isinstance(值, (int, float)): 数 = int(值)
@@ -1140,7 +1064,6 @@ def 删除QQ阅读缓存文件(缓存路径: Any) -> None:
     except Exception as e:
         logger.warning(f"QQ阅读下载缓存文件删除失败：file={缓存路径}, error={e}")
 
-
 def 启动QQ阅读百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
     if not 源缓存路径:
         return
@@ -1164,7 +1087,6 @@ def 启动QQ阅读百度后台上传并清理源文件(配置: Any, 源缓存路
         asyncio.create_task(执行上传并清理())
     except RuntimeError:
         删除QQ阅读缓存文件(源缓存路径)
-
 
 async def 准备发送文本文件(
     event: Any,
@@ -1199,6 +1121,8 @@ async def 准备发送文本文件(
         logger.warning(f"QQ阅读UC网盘上传或完成消息发送失败：file={文件名}, error={e}")
         删除QQ阅读缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(e)}
+
+# ===== 十、链接识别与入口 =====
 
 def 提取QQ阅读来源(值: Any) -> str:
     if 值 is None: return ""
@@ -1242,6 +1166,7 @@ def 获取QQ阅读回复流(event: Any, 命令文本: str, 配置: Any = None) -
     if 来源 is None: return None
     return 生成本地下载回复流(event, 来源, 配置)
 
+# ===== 十一、章节下载流程 =====
 
 async def 下载全书批量(
     session: aiohttp.ClientSession,
@@ -1392,7 +1317,6 @@ async def 下载全书批量(
     )
     return 合并
 
-
 async def 下载单章正文(
     session: aiohttp.ClientSession,
     书籍编号: str,
@@ -1443,7 +1367,6 @@ async def 下载单章正文(
                     f"text_type={text_type}, try={尝试}, error={e}"
                 )
     return {**章节, "title": 标题, "content": 最佳正文, "success": bool(最佳正文)}
-
 
 async def 补拉缺失章节(
     session: aiohttp.ClientSession,
@@ -1584,7 +1507,6 @@ async def 补拉缺失章节(
         if 仍缺 == 0 or 本轮成功 == 0:
             break
     return 合并
-
 
 async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 解析书籍编号(来源)
@@ -1730,6 +1652,8 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
     except Exception as e:
         logger.warning(f"QQ阅读本地下载失败：book_id={书籍编号}, error={e}"); yield 下载失败提示
 
+# ===== 十二、登录指令 =====
+
 def 清理过期登录会话() -> None:
     现在 = time.time()
     for k in [k for k, v in 待登录会话.items() if 现在 - float(v.get("ts") or 0) > 登录会话等待秒数]:
@@ -1871,3 +1795,4 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
         待登录会话.pop(会话键, None)
         return "QQ阅读登录成功"
     return None
+
