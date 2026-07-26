@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, base64, gzip, hashlib, io, json, re, tarfile, threading, time, urllib.parse
+import asyncio, base64, gzip, io, json, re, tarfile, threading, time, urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
