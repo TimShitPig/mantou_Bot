@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 
-下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
+下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 
 
 def 清理残留下载缓存(缓存目录: str | Path | None = None) -> int:

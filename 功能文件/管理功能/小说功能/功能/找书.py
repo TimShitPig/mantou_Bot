@@ -25,31 +25,31 @@ except Exception:
         return False
 
 try:
-    from 功能文件.管理功能.小说功能 import 七猫小说
+    from 功能文件.管理功能.小说功能.小说 import 七猫小说
 except Exception as exc:
     七猫小说 = None
     logger.warning(f"找书加载七猫失败：error={exc}")
 
 try:
-    from 功能文件.管理功能.小说功能 import 书旗小说
+    from 功能文件.管理功能.小说功能.小说 import 书旗小说
 except Exception as exc:
     书旗小说 = None
     logger.warning(f"找书加载书旗失败：error={exc}")
 
 try:
-    from 功能文件.管理功能.小说功能 import 番茄小说
+    from 功能文件.管理功能.小说功能.小说 import 番茄小说
 except Exception as exc:
     番茄小说 = None
     logger.warning(f"找书加载番茄失败：error={exc}")
 
 try:
-    from 功能文件.管理功能.小说功能 import 得间小说
+    from 功能文件.管理功能.小说功能.小说 import 得间小说
 except Exception as exc:
     得间小说 = None
     logger.warning(f"找书加载得间失败：error={exc}")
 
 try:
-    from 功能文件.管理功能.小说功能 import 点众小说
+    from 功能文件.管理功能.小说功能.小说 import 点众小说
 except Exception as exc:
     点众小说 = None
     logger.warning(f"找书加载点众失败：error={exc}")

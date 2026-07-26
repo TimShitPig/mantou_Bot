@@ -31,7 +31,7 @@ except Exception as exc:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
-下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
+下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 章节并发数 = 8
 

@@ -2331,7 +2331,7 @@ def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
 番茄进度日志分段数 = 10
 
 
-番茄下载缓存目录 = Path(__file__).resolve().parents[2] / "下载缓存"
+番茄下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 
 番茄文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
