@@ -30,6 +30,15 @@ def _提取按钮数据(交互: Any) -> str:
     return str(值 or "").strip()
 
 
+def _获取最近可回复消息ID(平台: Any, 会话标识: str) -> str | None:
+    """互动 ID 不是消息 ID；只复用本会话最近一条真实消息 ID。"""
+    缓存 = _读取字段(平台, "_session_last_message_id", {})
+    if not isinstance(缓存, dict):
+        return None
+    消息ID = str(缓存.get(会话标识) or "").strip()
+    return 消息ID or None
+
+
 def _是否找书交互(数据: str) -> bool:
     if not 数据.startswith(静默找书按钮前缀):
         return False
@@ -99,6 +108,7 @@ async def _投递找书交互(客户端: Any, 交互: Any, 命令: str, 适配�
             force_group_mention=True,
         )
         解析结果.session_id = 群号
+        解析结果.message_id = _获取最近可回复消息ID(平台, 群号)
         记录场景 = getattr(平台, "remember_session_scene", None)
         if callable(记录场景):
             记录场景(群号, "group")
@@ -114,6 +124,8 @@ async def _投递找书交互(客户端: Any, 交互: Any, 命令: str, 适配�
             消息类型.FRIEND_MESSAGE,
         )
         解析结果.session_id = 用户
+        # C2C 主动发送支持不带 msg_id；绝不把 interaction_id 当作 msg_id 重试。
+        解析结果.message_id = None
         记录场景 = getattr(平台, "remember_session_scene", None)
         if callable(记录场景):
             记录场景(用户, "friend")
