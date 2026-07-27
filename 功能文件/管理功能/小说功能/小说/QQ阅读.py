@@ -42,7 +42,7 @@ except Exception as e:
 批量正文地址="https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 发短信地址="https://ptlogin.yuewen.com/sdk/sendphonecode"
 验证码登录地址="https://ptlogin.yuewen.com/sdk/phonecodelogin"
-默认UA="QQReaderAndroid/8.5.2.890"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"
+默认UA="QQReaderAndroid/8.5.2.890"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"; 登录协议版本号="8520888"
 默认YW签名=("oMI3aDG4BEctqSrQUTmYDrBNwDYS744OQHMy9qWjqaf0xAI+9W9wtpd3VpfB "
 "zyQl0baDZNuqwu5iI43zZe9+fXiErR7tkuMWqshGfT09oNnEtpPCrkYNFBwT "
 "k+Faez58Fc442YO4kFw="); 默认YW_SDK="401"
@@ -1133,8 +1133,14 @@ def 登录默认参数(登录态: Optional[Mapping[str, str]] = None) -> Dict[st
         for k in ("qimei", "qimei36", "ibex", "version", "version_code", "osversion", "devicetype", "source", "fuid"):
             if 登录态.get(k): d[k] = 登录态[k]
     version = d.get("version") or 默认登录版本
-    version_code = str(d.get("version_code") or "417")
+    # 短信登录沿用解密算法调整前已验证的 YWLogin SDK 客户端标识。
+    # 正文下载仍使用默认设备态；这里不改变下载或解密参数。
+    version_code = str(d.get("version_code") or 登录协议版本号)
+    if version_code in {"", "417", "0888"}:
+        version_code = 登录协议版本号
     osversion = str(d.get("osversion") or f"Android 28 {version} {version_code}")
+    if osversion.endswith(" 417") or " 417" in osversion:
+        osversion = f"Android 28 {version} {version_code}"
     params = {"referer":"http://android.qidian.com","appid":"1450000219","areaid":"1","auto":"1","autotime":"30","ticket":"0","format":"json","signature":默认YW签名,"source":d.get("source") or "00000","version":version,"devicetype":d.get("devicetype") or "OnePlus_GM1910","devicename":"GM1910","returnurl":"http://www.qidian.com","osversion":osversion,"sdkversion":默认YW_SDK,"ibex":d.get("ibex") or 默认IBEX}
     qimei = str(d.get("qimei") or ""); qimei36 = str(d.get("qimei36") or "")
     if len(qimei) >= 16: params["qimei"] = qimei
