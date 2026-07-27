@@ -52,7 +52,7 @@ except Exception as e:
 "7h1zsHwPf2jIOeiWwYAhbdA5iirmZhwHHkHChmO9yp3n-NFn5q1A9b3hqJMPMacGAjdXKLBIBsIyiPTp-"
 "iiRriFYjSwyXhzVLUdhYg_B5RNxCuXSlDKSF9E6RCOxVl5wAAFfB3vQbAjsHRSVak0KuFPoTHb3x7hVz0P"
 "CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
-默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"8520888","osversion":f"Android 28 {默认登录版本} 8520888","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d3857d"}
+默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d"}
 默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
 正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=12; 批量章节上限=50; 批量并发上限=6
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
@@ -1133,12 +1133,8 @@ def 登录默认参数(登录态: Optional[Mapping[str, str]] = None) -> Dict[st
         for k in ("qimei", "qimei36", "ibex", "version", "version_code", "osversion", "devicetype", "source", "fuid"):
             if 登录态.get(k): d[k] = 登录态[k]
     version = d.get("version") or 默认登录版本
-    version_code = str(d.get("version_code") or "8520888")
-    if version_code in {"", "417", "0888"}:
-        version_code = "8520888"
+    version_code = str(d.get("version_code") or "417")
     osversion = str(d.get("osversion") or f"Android 28 {version} {version_code}")
-    if osversion.endswith(" 417") or " 417" in osversion:
-        osversion = f"Android 28 {version} {version_code}"
     params = {"referer":"http://android.qidian.com","appid":"1450000219","areaid":"1","auto":"1","autotime":"30","ticket":"0","format":"json","signature":默认YW签名,"source":d.get("source") or "00000","version":version,"devicetype":d.get("devicetype") or "OnePlus_GM1910","devicename":"GM1910","returnurl":"http://www.qidian.com","osversion":osversion,"sdkversion":默认YW_SDK,"ibex":d.get("ibex") or 默认IBEX}
     qimei = str(d.get("qimei") or ""); qimei36 = str(d.get("qimei36") or "")
     if len(qimei) >= 16: params["qimei"] = qimei
