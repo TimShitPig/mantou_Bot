@@ -1416,7 +1416,7 @@ async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tup
                 ticket=ticket,
                 randstr=randstr,
                 session_key=str(会话.get("session_key") or ""),
-                登录态=读取QQ阅读登录态(配置),
+                登录态=None,
             )
     except Exception as e:
         logger.warning(f"QQ阅读滑块后发短信失败：error={e}")
@@ -2186,7 +2186,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             return "手机号格式不正确，请重新发送" + chr(10) + "发送 0 取消"
         try:
             async with aiohttp.ClientSession() as 会话http:
-                结果 = await 发送手机验证码(会话http, 号码, 登录态=读取QQ阅读登录态(配置))
+                结果 = await 发送手机验证码(会话http, 号码, 登录态=None)
         except Exception as e:
             logger.warning(f"QQ阅读发短信失败：error={e}")
             return 登录失败提示
@@ -2267,7 +2267,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
                     str(会话.get("phone") or ""),
                     文本,
                     str(会话.get("session_key") or ""),
-                    登录态=读取QQ阅读登录态(配置),
+                    登录态=None,
                 )
         except Exception as e:
             logger.warning(f"QQ阅读验证码登录失败：error={e}")
