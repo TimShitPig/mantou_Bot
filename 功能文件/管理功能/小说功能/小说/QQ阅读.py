@@ -816,6 +816,15 @@ async def http_post_form_json(session: aiohttp.ClientSession, url: str, params: 
         "Referer": "http://android.qidian.com",
         "Content-Type": "application/x-www-form-urlencoded",
     }
+    ywguid = str(params.get("ywguid") or "").strip()
+    ywkey = str(params.get("ywkey") or "").strip()
+    if ywguid or ywkey:
+        Cookie片段 = []
+        if ywguid:
+            Cookie片段.append(f"ywguid={ywguid}")
+        if ywkey:
+            Cookie片段.append(f"ywkey={ywkey}")
+        headers["Cookie"] = "; ".join(Cookie片段) + ";"
     async with session.post(url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
         return json.loads(await resp.text())
 
@@ -1432,8 +1441,15 @@ async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tup
     return True, "验证成功，请发送短信验证码\n发送 0 取消"
 
 async def 发送手机验证码(session: aiohttp.ClientSession, phone: str, *, ticket: str = "", randstr: str = "", session_key: str = "", 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    full_phone = 手机号带区号(phone); params = 登录默认参数(登录态)
+    完整登录态 = 补齐QQ阅读登录态(登录态)
+    full_phone = 手机号带区号(phone); params = 登录默认参数(完整登录态)
     params.update({"type": "1", "needRegister": "1", "phone": full_phone})
+    ywguid = str(完整登录态.get("ywguid") or 完整登录态.get("login_uin") or "").strip()
+    ywkey = str(完整登录态.get("ywkey") or 完整登录态.get("login_key") or "").strip()
+    if ywguid:
+        params["ywguid"] = ywguid
+    if ywkey:
+        params["ywkey"] = ywkey
     if ticket or randstr or session_key: params = 应用滑块参数(params, ticket=ticket, randstr=randstr, session_key=session_key)
     response = await http_post_form_json(session, 发短信地址, params, timeout=30)
     next_action = 查找nextAction(response); key = 查找字符串字段(response, "sessionKey", "sessionkey", "phonekey")
