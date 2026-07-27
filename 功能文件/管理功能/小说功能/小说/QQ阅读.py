@@ -1197,6 +1197,38 @@ def 查找字符串字段(response: Any, *names: str) -> str:
             if str(k).lower() in wanted and v not in (None, ""): return str(v)
     return ""
 
+
+def 构造安全登录诊断(阶段: str, 参数: Mapping[str, Any], 响应: Any) -> str:
+    """只记录协议排查所需的非敏感摘要，绝不写入手机号、凭证或响应原文。"""
+    敏感字段 = {
+        "phone", "phonecode", "phonekey", "sessionkey", "ticket", "sig",
+        "captchaticket", "randstr", "captcharandstr", "ywguid", "ywkey", "signature",
+    }
+    字段名 = sorted(
+        str(k) for k, v in 参数.items()
+        if v not in (None, "") and str(k).lower() not in 敏感字段
+    )
+
+    def 指纹(字段名: str) -> str:
+        值 = str(参数.get(字段名) or "")
+        if not 值:
+            return "0"
+        摘要 = hashlib.sha256(值.encode("utf-8", "ignore")).hexdigest()[:12]
+        return f"{len(值)}:{摘要}"
+
+    响应码 = 查找字符串字段(响应, "code") or "-"
+    下一步 = 查找nextAction(响应)
+    有会话键 = bool(查找字符串字段(响应, "sessionKey", "sessionkey", "phonekey"))
+    有登录态 = bool(参数.get("ywguid") or 参数.get("ywkey"))
+    return (
+        f"stage={阶段}, code={响应码}, next_action={下一步}, session_key={'yes' if 有会话键 else 'no'}, "
+        f"has_auth={'yes' if 有登录态 else 'no'}, fields={','.join(字段名)}, "
+        f"version={参数.get('version') or '-'}, osversion={参数.get('osversion') or '-'}, "
+        f"source={参数.get('source') or '-'}, qimei={指纹('qimei')}, "
+        f"qimei36={指纹('qimei36')}, ibex={指纹('ibex')}"
+    )
+
+
 def 应用滑块参数(params: Dict[str, Any], ticket: str = "", randstr: str = "", session_key: str = "") -> Dict[str, Any]:
     out = dict(params)
     if session_key: out["sessionKey"] = session_key
@@ -1429,7 +1461,7 @@ async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tup
         关闭滑块服务(会话=会话)
         return False, 登录失败提示
     if not 结果.get("success"):
-        logger.warning(f"QQ阅读滑块后发短信失败：resp={限制文本长度(结果.get('response'), 200)}")
+        logger.warning(f"QQ阅读滑块后发短信失败：{结果.get('diagnostic') or '未生成受控诊断'}")
         关闭滑块服务(会话=会话)
         return False, 登录失败提示
     关闭滑块服务(会话=会话)
@@ -1455,15 +1487,29 @@ async def 发送手机验证码(session: aiohttp.ClientSession, phone: str, *, t
     if ticket or randstr or session_key: params = 应用滑块参数(params, ticket=ticket, randstr=randstr, session_key=session_key)
     response = await http_post_form_json(session, 发短信地址, params, timeout=30)
     next_action = 查找nextAction(response); key = 查找字符串字段(response, "sessionKey", "sessionkey", "phonekey")
-    return {"response": response, "next_action": next_action, "session_key": key, "phone": full_phone, "success": bool(key) and next_action != 11, "need_captcha": next_action == 11}
+    return {
+        "response": response,
+        "next_action": next_action,
+        "session_key": key,
+        "phone": full_phone,
+        "success": bool(key) and next_action != 11,
+        "need_captcha": next_action == 11,
+        "diagnostic": 构造安全登录诊断("send_phone", params, response),
+    }
 
 async def 提交手机验证码(session: aiohttp.ClientSession, phone: str, code: str, session_key: str, *, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     full_phone = 手机号带区号(phone); params = 登录默认参数(登录态)
     params.update({"phonekey": session_key, "phonecode": str(code).strip(), "phone": urllib.parse.quote_plus(full_phone)})
     response = await http_post_form_json(session, 验证码登录地址, params, timeout=30)
+    诊断 = 构造安全登录诊断("verify_code", params, response)
     payload = 查找登录载荷(response)
-    if not payload: return {"success": False, "response": response}
-    return {"success": True, "auth": 从登录载荷构造登录态(payload, phone=full_phone), "response": response}
+    if not payload: return {"success": False, "response": response, "diagnostic": 诊断}
+    return {
+        "success": True,
+        "auth": 从登录载荷构造登录态(payload, phone=full_phone),
+        "response": response,
+        "diagnostic": 诊断,
+    }
 
 # ===== 九、文件生成与发送 =====
 
@@ -2242,7 +2288,7 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
                 + "发送 0 取消"
             )
         if not 结果.get("success"):
-            logger.warning(f"QQ阅读发短信失败：resp={限制文本长度(结果.get('response'),200)}")
+            logger.warning(f"QQ阅读发短信失败：{结果.get('diagnostic') or '未生成受控诊断'}")
             待登录会话.pop(会话键, None)
             return 登录失败提示
         会话.update({
@@ -2280,7 +2326,10 @@ async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any)
             待登录会话.pop(会话键, None)
             return 登录失败提示
         if not 结果.get("success"):
-            logger.warning(f"QQ阅读验证码登录失败：code={((结果.get('response') or {}) if isinstance(结果.get('response'), dict) else {}).get('code', '')}, has_payload={bool(结果.get('auth'))}, resp={限制文本长度(结果.get('response'),120)}")
+            logger.warning(
+                f"QQ阅读验证码登录失败：has_payload={bool(结果.get('auth'))}, "
+                f"{结果.get('diagnostic') or '未生成受控诊断'}"
+            )
             待登录会话.pop(会话键, None)
             return 登录失败提示
         try:
