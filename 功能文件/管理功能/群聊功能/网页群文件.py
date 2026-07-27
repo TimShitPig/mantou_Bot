@@ -1571,6 +1571,8 @@ def 获取群号(event: Any) -> str:
 
 async def 发送清理开始提示(event: Any, 文本: str) -> None:
     try:
+        if 是QQ官方机器人(event) and await 发送Markdown键盘消息(event, 文本, None):
+            return
         发送方法 = getattr(event, "send", None)
         if not callable(发送方法):
             return

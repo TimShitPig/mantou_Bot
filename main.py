@@ -38,7 +38,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "4.8.0"
+插件版本 = "4.9.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -59,11 +59,27 @@ class MyPlugin(Star):
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
+        async def _输出文本回复(文本):
+            """QQ 官方群聊统一使用 Markdown 并提及发起人，其他适配器保持原回复。"""
+            if 权限工具.是QQ官方机器人(event):
+                if await 帮助功能.发送QQ官方提及Markdown(event, str(文本)):
+                    return
+            yield event.plain_result(文本)
+
+        async def _输出回复流(回复流):
+            async for 流回复内容 in 回复流:
+                if isinstance(流回复内容, str):
+                    async for 输出内容 in _输出文本回复(流回复内容):
+                        yield 输出内容
+                else:
+                    yield 流回复内容
+
         async def _输出找书结果(找书结果):
             if 找书结果 is None:
                 return
             if isinstance(找书结果, str):
-                yield event.plain_result(找书结果)
+                async for 输出内容 in _输出文本回复(找书结果):
+                    yield 输出内容
                 return
             if isinstance(找书结果, dict):
                 md文本 = str(找书结果.get("md") or "")
@@ -72,13 +88,16 @@ class MyPlugin(Star):
                 if md文本 and 权限工具.是QQ官方机器人(event):
                     发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                     if not 发送成功:
-                        yield event.plain_result(纯文本)
+                        async for 输出内容 in _输出文本回复(纯文本):
+                            yield 输出内容
                 else:
-                    yield event.plain_result(纯文本)
+                    async for 输出内容 in _输出文本回复(纯文本):
+                        yield 输出内容
                 return
             async for 找书回复内容 in 找书结果:
                 if isinstance(找书回复内容, str):
-                    yield event.plain_result(找书回复内容)
+                    async for 输出内容 in _输出文本回复(找书回复内容):
+                        yield 输出内容
                 else:
                     yield 找书回复内容
 
@@ -92,9 +111,11 @@ class MyPlugin(Star):
                     if 权限工具.是QQ官方机器人(event):
                         发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                         if not 发送成功:
-                            yield event.plain_result(md文本)
+                            async for 输出内容 in _输出文本回复(md文本):
+                                yield 输出内容
                     else:
-                        yield event.plain_result(md文本)
+                        async for 输出内容 in _输出文本回复(md文本):
+                            yield 输出内容
                 event.stop_event()
                 return
             命令文本 = 回调命令
@@ -141,7 +162,8 @@ class MyPlugin(Star):
                     if md文本 is not None:
                         发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                         if not 发送成功:
-                            yield event.plain_result(md文本)
+                            async for 输出内容 in _输出文本回复(md文本):
+                                yield 输出内容
                         event.stop_event()
                         return
                 回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
@@ -161,70 +183,60 @@ class MyPlugin(Star):
             书旗回复流 = 书旗小说功能.获取书旗小说回复流(event, 命令文本, self.config)
             if 书旗回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "书旗", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("书旗"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("书旗")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for 书旗回复内容 in 书旗回复流:
-                    if isinstance(书旗回复内容, str):
-                        yield event.plain_result(书旗回复内容)
-                    else:
-                        yield 书旗回复内容
+                async for 输出内容 in _输出回复流(书旗回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
             七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本, self.config)
             if 七猫回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "七猫", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("七猫"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("七猫")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for 七猫回复内容 in 七猫回复流:
-                    if isinstance(七猫回复内容, str):
-                        yield event.plain_result(七猫回复内容)
-                    else:
-                        yield 七猫回复内容
+                async for 输出内容 in _输出回复流(七猫回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
             QQ阅读回复流 = QQ阅读功能.获取QQ阅读回复流(event, 命令文本, self.config)
             if QQ阅读回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "QQ阅读", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("QQ阅读"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("QQ阅读")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for QQ阅读回复内容 in QQ阅读回复流:
-                    if isinstance(QQ阅读回复内容, str):
-                        yield event.plain_result(QQ阅读回复内容)
-                    else:
-                        yield QQ阅读回复内容
+                async for 输出内容 in _输出回复流(QQ阅读回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
             得间回复流 = 得间小说功能.获取得间小说回复流(event, 命令文本, self.config)
             if 得间回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "得间", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("得间"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("得间")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for 得间回复内容 in 得间回复流:
-                    if isinstance(得间回复内容, str):
-                        yield event.plain_result(得间回复内容)
-                    else:
-                        yield 得间回复内容
+                async for 输出内容 in _输出回复流(得间回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
             点众回复流 = 点众小说功能.获取点众小说回复流(event, 命令文本, self.config)
             if 点众回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "点众", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("点众"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("点众")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for 点众回复内容 in 点众回复流:
-                    if isinstance(点众回复内容, str):
-                        yield event.plain_result(点众回复内容)
-                    else:
-                        yield 点众回复内容
+                async for 输出内容 in _输出回复流(点众回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
@@ -232,14 +244,12 @@ class MyPlugin(Star):
             if 番茄回复流 is not None:
                 logger.info("番茄小说分发：使用本地下载链路")
                 if not 小说功能开关.当前事件可使用小说功能(event, "番茄", self.config):
-                    yield event.plain_result(小说功能开关.获取小说功能关闭回复("番茄"))
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("番茄")):
+                        yield 输出内容
                     event.stop_event()
                     return
-                async for 番茄回复内容 in 番茄回复流:
-                    if isinstance(番茄回复内容, str):
-                        yield event.plain_result(番茄回复内容)
-                    else:
-                        yield 番茄回复内容
+                async for 输出内容 in _输出回复流(番茄回复流):
+                    yield 输出内容
                 event.stop_event()
                 return
 
@@ -247,13 +257,8 @@ class MyPlugin(Star):
             # 空字符串表示 markdown 已自行发送（如群文件清理按钮交互），跳过 plain_result 避免空消息链警告
             return
 
-        if 权限工具.是QQ官方机器人(event):
-            已发送 = await 帮助功能.发送QQ官方提及Markdown(event, str(回复内容))
-            if 已发送:
-                event.stop_event()
-                return
-
-        yield event.plain_result(回复内容)
+        async for 输出内容 in _输出文本回复(回复内容):
+            yield 输出内容
         event.stop_event()
 
     async def terminate(self):
