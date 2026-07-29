@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, base64, gzip, io, json, re, tarfile, threading, time, urllib.parse
+import asyncio, base64, gzip, io, json, re, secrets, tarfile, threading, time, urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -42,7 +42,7 @@ except Exception as e:
 批量正文地址="https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 发短信地址="https://ptlogin.yuewen.com/sdk/sendphonecode"
 验证码登录地址="https://ptlogin.yuewen.com/sdk/phonecodelogin"
-默认UA="QQReaderAndroid/8.5.2.890"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"; 登录协议版本号="8520888"
+默认UA="QQReaderAndroid/8.5.2.890"; App默认UA="okhttp/3.12.13"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"; 登录协议版本号="8520888"
 默认YW签名=("oMI3aDG4BEctqSrQUTmYDrBNwDYS744OQHMy9qWjqaf0xAI+9W9wtpd3VpfB "
 "zyQl0baDZNuqwu5iI43zZe9+fXiErR7tkuMWqshGfT09oNnEtpPCrkYNFBwT "
 "k+Faez58Fc442YO4kFw="); 默认YW_SDK="401"
@@ -52,9 +52,15 @@ except Exception as e:
 "7h1zsHwPf2jIOeiWwYAhbdA5iirmZhwHHkHChmO9yp3n-NFn5q1A9b3hqJMPMacGAjdXKLBIBsIyiPTp-"
 "iiRriFYjSwyXhzVLUdhYg_B5RNxCuXSlDKSF9E6RCOxVl5wAAFfB3vQbAjsHRSVak0KuFPoTHb3x7hVz0P"
 "CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
-默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":"89306811035542cd868d49def7d"}
-默认设备keypool_b64="s8ik23/eJ4Px+8RF/ZULIhnfLfrV7M6GiLA0eMhguCZiSm9os7KTYOBcPiJL9LvNoeTB8ne1q3QD/tMoY0LMDInFIfOSU545mz92K+VzsU/tK88BS0h4dHOxkYuisAZLszM2h+fRnmCnwupLxZIglp5Ntlkas9cHpfsWAZ6X2wnstj6ACzw2Onv0e+uYtRA5sjoYMfvmb2ziqwLhgU6sGpmk2tK7Q3hdLjOCV9UZ1oF6BPycMigZ3n2SB4szP3fq8CFvYn4Stty0u9H2/llIgA1vEd838DJvxLsvtliUNfUWAy8Y58GbHU0/gxbcO/PYNVfkkeLl64kbTqCUfvIjkGBXVd0kVd254oS9kv0YNPZbztQe0drh5EifeAXQ/VBOidwyzQZZayuPNgkD4h3bC1LcgGVozVSGwutVBRTP/ZnFjPzZ2wmcUmn5ogfhHIzP6v3k4kWv9FuAZxny/8sDfA=="
-正文解密重试次数=6; 缺章补拉轮次=3; 缺章补拉并发=12; 批量章节上限=50; 批量并发上限=6
+默认App请求身份={
+    "loginType":"50", "c_platform":"android", "c_version":"qqreader_8.3.3.0888_android",
+    "channel":"10005136", "qrsn":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b",
+    "usid":"yw9GVpCYd7Lx", "uid":"900071413951", "fuid":"89306811035542cd868d49def7d3857d",
+}
+App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
+内存密钥池缓存: dict[str, tuple[float, str]] = {}
+默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
+正文解密重试次数=4; 缺章补拉轮次=3; 缺章补拉并发=8; 批量章节上限=31; 批量并发上限=4
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
@@ -226,6 +232,8 @@ def 解析QQ阅读Cookie(原始Cookie: Any) -> dict[str, str]:
     字段映射 = {
         "ywguid": "ywguid",
         "ywkey": "ywkey",
+        "yw_guid": "ywguid",
+        "yw_key": "ywkey",
         "qrsn": "qrsn",
         "fuid": "fuid",
         "uid": "uid",
@@ -281,6 +289,8 @@ def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
 
 def 写入QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
     清洗 = 补齐QQ阅读登录态(登录态)
+    for 字段名 in ("phone", "ticket", "autoLoginSessionKey", "autoLoginKeepTime", "autoLoginExpiredTime", "alk", "alkts"):
+        清洗.pop(字段名, None)
     写入运行状态值(配置, 登录态命名空间, 登录态状态键, json.dumps(清洗, ensure_ascii=False))
     logger.info("QQ阅读登录态已保存到数据库")
 
@@ -616,6 +626,354 @@ def try_decrypt_chapter(
     except Exception:
         return None
 
+# === csigs ===
+"""Csigs: bcrypt-like csigs algorithm ported from com.qq.reader.api.Csigs."""
+
+
+MASK32 = 0xFFFFFFFF
+BCRYPT_ALPHABET = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+DEC_TABLE = [-1] * 128
+for _i, _ch in enumerate(BCRYPT_ALPHABET):
+    DEC_TABLE[ord(_ch)] = _i
+
+P_INIT = [
+    608135816, -2052912941, 320440878, 57701188, -1542899678, 698298832, 137296536, -330404727, 1160258022, 953160567, -1101764913, 887688300,
+    -1062458953, -914599715, 1065670069, -1253635817, -1843997223, -1988494565
+]
+
+S_INIT = [
+    -785314906, -1730169428, 805139163, -803545161, -1193168915, 1780907670, -1166241723, -248741991, 614570311, -1282315017, 134345442, -2054226922,
+    1667834072, 1901547113, -1537671517, -191677058, 227898511, 1921955416, 1904987480, -2112533778, 2069144605, -1034266187, -1674521287, 720527379,
+    -976113629, 677414384, -901678824, -1193592593, -1904616272, 1614419982, 1822297739, -1340175810, -686458943, -1120842969, 2024746970, 1432378464,
+    -430627341, -1437226092, 1464375394, 1676153920, 1439316330, 715854006, -1261675468, 289532110, -1588296017, 2087905683, -1276242927, 1668267050,
+    732546397, 1947742710, -832815594, -1685613794, -1344882125, 1814351708, 2050118529, 680887927, 999245976, 1800124847, -994056165, 1713906067,
+    1641548236, -81679983, 1216130144, 1575780402, -276538019, -377129551, -601480446, -345695352, 596196993, -745100091, 258830323, -2081144263,
+    772490370, -1534844924, 1774776394, -1642095778, 566650946, -152474470, 1728879713, -1412200208, 1783734482, -665571480, -1777359064, -1420741725,
+    1861159788, 326777828, -1170476976, 2130389656, -1578015459, 967770486, 1724537150, -2109534584, -1930525159, 1164943284, 2105845187, 998989502,
+    -529566248, -2050940813, 1075463327, 1455516326, 1322494562, 910128902, 469688178, 1117454909, 936433444, -804646328, -619713837, 1240580251,
+    122909385, -2137449605, 634681816, -152510729, -469872614, -1233564613, -1754472259, 79693498, -1045868618, 1084186820, 1583128258, 426386531,
+    1761308591, 1047286709, 322548459, 995290223, 1845252383, -1691314900, -863943356, -1352745719, -1092366332, -567063811, 1712269319, 422464435,
+    -1060394921, 1170764815, -771006663, -1177289765, 1434042557, 442511882, -694091578, 1076654713, 1738483198, -81812532, -1901729288, -617471240,
+    1014306527, -43947243, 793779912, -1392160085, 842905082, -48003232, 1395751752, 1040244610, -1638115397, -898659168, 445077038, -552113701,
+    -717051658, 679411651, -1402522938, -1940957837, 1767581616, -1144366904, -503340195, -1192226400, 284835224, -48135240, 1258075500, 768725851,
+    -1705778055, -1225243291, -762426948, 1274779536, -505548070, -1530167757, 1660621633, -823867672, -283063590, 913787905, -797008130, 737222580,
+    -1780753843, -1366257256, -357724559, 1804850592, -795946544, -1345903136, -1908647121, -1904896841, -1879645445, -233690268, -2004305902, -1878134756,
+    1336762016, 1754252060, -774901359, -1280786003, 791618072, -1106372745, -361419266, -1962795103, -442446833, -1250986776, 413987798, -829824359,
+    -1264037920, -49028937, 2093235073, -760370983, 375366246, -2137688315, -1815317740, 555357303, -424861595, 2008414854, -950779147, -73583153,
+    -338841844, 2067696032, -700376109, -1373733303, 2428461, 544322398, 577241275, 1471733935, 610547355, -267798242, 1432588573, 1507829418,
+    2025931657, -648391809, 545086370, 48609733, -2094660746, 1653985193, 298326376, 1316178497, -1287180854, 2064951626, 458293330, -1705826027,
+    -703637697, -1130641692, 727753846, -2115603456, 146436021, 1461446943, -224990101, 705550613, -1235000031, -407242314, -13368018, -981117340,
+    1404054877, -1449160799, 146425753, 1854211946, 1266315497, -1246549692, -613086930, -1004984797, -1385257296, 1235738493, -1662099272, -1880247706,
+    -324367247, 1771706367, 1449415276, -1028546847, 422970021, 1963543593, -1604775104, -468174274, 1062508698, 1531092325, 1804592342, -1711849514,
+    -1580033017, -269995787, 1294809318, -265986623, 1289560198, -2072974554, 1669523910, 35572830, 157838143, 1052438473, 1016535060, 1802137761,
+    1753167236, 1386275462, -1214491899, -1437595849, 1040679964, 2145300060, -1904392980, 1461121720, -1338320329, -263189491, -266592508, 33600511,
+    -1374882534, 1018524850, 629373528, -603381315, -779021319, 2091462646, -1808644237, 586499841, 988145025, 935516892, -927631820, -1695294041,
+    -1455136442, 265290510, -322386114, -1535828415, -499593831, 1005194799, 847297441, 406762289, 1314163512, 1332590856, 1866599683, -167115585,
+    750260880, 613907577, 1450815602, -1129346641, -560302305, -644675568, -1282691566, -590397650, 1427272223, 778793252, 1343938022, -1618686585,
+    2052605720, 1946737175, -1130390852, -380928628, -327488454, -612033030, 1661551462, -1000029230, -283371449, 840292616, -582796489, 616741398,
+    312560963, 711312465, 1351876610, 322626781, 1910503582, 271666773, -2119403562, 1594956187, 70604529, -677132437, 1007753275, 1495573769,
+    -225450259, -1745748998, -1631928532, 504708206, -2031925904, -353800271, -2045878774, 1514023603, 1998579484, 1312622330, 694541497, -1712906993,
+    -2143385130, 1382467621, 776784248, -1676627094, -971698502, -1797068168, -1510196141, 503983604, -218673497, 907881277, 423175695, 432175456,
+    1378068232, -149744970, -340918674, -356311194, -474200683, -1501837181, -1317062703, 26017576, -1020076561, -1100195163, 1700274565, 1756076034,
+    -288447217, -617638597, 720338349, 1533947780, 354530856, 688349552, -321042571, 1637815568, 332179504, -345916010, 53804574, -1442618417,
+    -1250730864, 1282449977, -711025141, -877994476, -288586052, 1617046695, -1666491221, -1292663698, 1686838959, 431878346, -1608291911, 1700445008,
+    1080580658, 1009431731, 832498133, -1071531785, -1688990951, -2023776103, -1778935426, 1648197032, -130578278, -1746719369, 300782431, 375919233,
+    238389289, -941219882, -1763778655, 2019080857, 1475708069, 455242339, -1685863425, 448939670, -843904277, 1395535956, -1881585436, 1841049896,
+    1491858159, 885456874, -30872223, -293847949, 1565136089, -396052509, 1108368660, 540939232, 1173283510, -1549095958, -613658859, -87339056,
+    -951913406, -278217803, 1699691293, 1103962373, -669091426, -2038084153, -464828566, 1031889488, -815619598, 1535977030, -58162272, -1043876189,
+    2132092099, 1774941330, 1199868427, 1452454533, 157007616, -1390851939, 342012276, 595725824, 1480756522, 206960106, 497939518, 591360097,
+    863170706, -1919713727, -698356495, 1814182875, 2094937945, -873565088, 1082520231, -831049106, -1509457788, 435703966, -386934699, 1641649973,
+    -1452693590, -989067582, 1510255612, -2146710820, -1639679442, -1018874748, -36346107, 236887753, -613164077, 274041037, 1734335097, -479771840,
+    -976997275, 1899903192, 1026095262, -244449504, 356393447, -1884275382, -421290197, -612127241, -381855128, -1803468553, -162781668, -1805047500,
+    1091903735, 1979897079, -1124832466, -727580568, -737663887, 857797738, 1136121015, 1342202287, 507115054, -1759230650, 337727348, -1081374656,
+    1301675037, -1766485585, 1895095763, 1721773893, -1078195732, 62756741, 2142006736, 835421444, -1762973773, 1442658625, -635090970, -1412822374,
+    676362277, 1392781812, 170690266, -373920261, 1759253602, -683120384, 1745797284, 664899054, 1329594018, -393761396, -1249058810, 2062866102,
+    -1429332356, -751345684, -830954599, 1080764994, 553557557, -638351943, -298199125, 991055499, 499776247, 1265440854, 648242737, -354183246,
+    980351604, -581221582, 1749149687, -898096901, -83167922, -654396521, 1161844396, -1169648345, 1431517754, 545492359, -26498633, -795437749,
+    1437099964, -1592419752, -861329053, -1713251533, -1507177898, 1060185593, 1593081372, -1876348548, -34019326, 69676912, -2135222948, 86519011,
+    -1782508216, -456757982, 1220612927, -955283748, 133810670, 1090789135, 1078426020, 1569222167, 845107691, -711212847, -222510705, 1091646820,
+    628848692, 1613405280, -537335645, 526609435, 236106946, 48312990, -1352249391, -892239595, 1797494240, 859738849, 992217954, -289490654,
+    -2051890674, -424014439, -562951028, 765654824, -804095931, -1783130883, 1685915746, -405998096, 1414112111, -2021832454, -1013056217, -214004450,
+    172450625, -1724973196, 980381355, -185008841, -1475158944, -1578377736, -1726226100, -613520627, -964995824, 1835478071, 660984891, -590288892,
+    -248967737, -872349789, -1254551662, 1762651403, 1719377915, -824476260, -1601057013, -652910941, -1156370552, 1364962596, 2073328063, 1983633131,
+    926494387, -871278215, -2144935273, -198299347, 1749200295, -966120645, 309677260, 2016342300, 1779581495, -1215147545, 111262694, 1274766160,
+    443224088, 298511866, 1025883608, -488520759, 1145181785, 168956806, -653464466, -710153686, 1689216846, -628709281, -1094719096, 1692713982,
+    -1648590761, -252198778, 1618508792, 1610833997, -771914938, -164094032, 2001055236, -684262196, -2092799181, -266425487, -1333771897, 1006657119,
+    2006996926, -1108824540, 1430667929, -1084739999, 1314452623, -220332638, -193663176, -2021016126, 1399257539, -927756684, -1267338667, 1190975929,
+    2062231137, -1960976508, -2073424263, -1856006686, 1181637006, 548689776, -1932175983, -922558900, -1190417183, -1149106736, 296247880, 1970579870,
+    -1216407114, -525738999, 1714227617, -1003338189, -396747006, 166772364, 1251581989, 493813264, 448347421, 195405023, -1584991729, 677966185,
+    -591930749, 1463355134, -1578971493, 1338867538, 1343315457, -1492745222, -1610435132, 233230375, -1694987225, 2000651841, -1017099258, 1638401717,
+    -266896856, -1057650976, 6314154, 819756386, 300326615, 590932579, 1405279636, -1027467724, -1144263082, -1866680610, -335774303, -833020554,
+    1862657033, 1266418056, 963775037, 2089974820, -2031914401, 1917689273, 448879540, -744572676, -313240200, 150775221, -667058989, 1303187396,
+    508620638, -1318983944, -1568336679, 1817252668, 1876281319, 1457606340, 908771278, -574175177, -677760460, -1838972398, 1729034894, 1080033504,
+    976866871, -738527793, -1413318857, 1522871579, 1555064734, 1336096578, -746444992, -1715692610, -720269667, -1089506539, -701686658, -956251013,
+    -1215554709, 564236357, -1301368386, 1781952180, 1464380207, -1131123079, -962365742, 1699332808, 1393555694, 1183702653, -713881059, 1288719814,
+    691649499, -1447410096, -1399511320, -1101077756, -1577396752, 1781354906, 1676643554, -1702433246, -1064713544, 1126444790, -1524759638, -1661808476,
+    -2084544070, -1679201715, -1880812208, -1167828010, 673620729, -1489356063, 1269405062, -279616791, -953159725, -145557542, 1057255273, 2012875353,
+    -2132498155, -2018474495, -1693849939, 993977747, -376373926, -1640704105, 753973209, 36408145, -1764381638, 25011837, -774947114, 2088578344,
+    530523599, -1376601957, 1524020338, 1518925132, -534139791, -535190042, 1202760957, -309069157, -388774771, 674977740, -120232407, 2031300136,
+    2019492241, -311074731, -141160892, -472686964, 352677332, -1997247046, 60907813, 90501309, -1007968747, 1016092578, -1759044884, -1455814870,
+    457141659, 509813237, -174299397, 652014361, 1966332200, -1319764491, 55981186, -1967506245, 676427537, -1039476232, -1412673177, -861040033,
+    1307055953, 942726286, 933058658, -1826555503, -361066302, -79791154, 1361170020, 2001714738, -1464409218, -1020707514, 1222529897, 1679025792,
+    -1565652976, -580013532, 1770335741, 151462246, -1281735158, 1682292957, 1483529935, 471910574, 1539241949, 458788160, -858652289, 1807016891,
+    -576558466, 978976581, 1043663428, -1129001515, 1927990952, -94075717, -1922690386, -1086558393, -761535389, 1412390302, -1362987237, -162634896,
+    1947078029, -413461673, -126740879, -1353482915, 1077988104, 1320477388, 886195818, 18198404, -508558296, -1785185763, 112762804, -831610808,
+    1866414978, 891333506, 18488651, 661792760, 1628790961, -409780260, -1153795797, 876946877, -1601685023, 1372485963, 791857591, -1608533303,
+    -534984578, -1127755274, -822013501, -1578587449, 445679433, -732971622, -790962485, -720709064, 54117162, -963561881, -1913048708, -525259953,
+    -140617289, 1140177722, -220915201, 668550556, -1080614356, 367459370, 261225585, -1684794075, -85617823, -826893077, -1029151655, 314222801,
+    -1228863650, -486184436, 282218597, -888953790, -521376242, 379116347, 1285071038, 846784868, -1625320142, -523005217, -744475605, -1989021154,
+    453669953, 1268987020, -977374944, -1015663912, -550133875, -1684459730, -435458233, 266596637, -447948204, 517658769, -832407089, -851542417,
+    370717030, -47440635, -2070949179, -151313767, -182193321, -1506642397, -1817692879, 1456262402, -1393524382, 1517677493, 1846949527, -1999473716,
+    -560569710, -2118563376, 1280348187, 1908823572, -423180355, 846861322, 1172426758, -1007518822, -911584259, 1655181056, -1155153950, 901632758,
+    1897031941, -1308360158, -1228157060, -847864789, 1393639104, 373351379, 950779232, 625454576, -1170726756, -146354570, 2007998917, 544563296,
+    -2050228658, -1964470824, 2058025392, 1291430526, 424198748, 50039436, 29584100, -689184263, -1865090967, -1503863136, 1057563949, -1039604065,
+    -1219600078, -831004069, 1469046755, 985887462
+]
+
+CIHAI_INIT = [
+    1332899944, 1700884034, 1701343084, 1684370003, 1668446532, 1869963892
+]
+
+def _u32(x: int) -> int:
+    return x & MASK32
+
+
+def _i32(x: int) -> int:
+    x &= MASK32
+    return x if x < 0x80000000 else x - 0x100000000
+
+
+def sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def to_hex(data: bytes) -> str:
+    return data.hex()
+
+
+def generate_salt(rounds: int = 4, random_bytes: Optional[bytes] = None) -> str:
+    if rounds < 4 or rounds > 30:
+        raise ValueError("log_rounds exceeds maximum (30)")
+    salt_bytes = random_bytes if random_bytes is not None else secrets.token_bytes(16)
+    if len(salt_bytes) != 16:
+        raise ValueError("salt must be 16 bytes")
+    salt_b64 = magic_b64_encode(salt_bytes, len(salt_bytes))
+    return f"$2a${rounds:02d}${salt_b64}"
+
+
+def magic_b64_decode(s: str, max_len: int) -> bytes:
+    L = len(s)
+    tmp = bytearray(max_len)
+    out_len = 0
+    i = 0
+    while i < L - 1 and out_len < max_len:
+        c1 = s[i]
+        c2 = s[i + 1]
+        if ord(c1) >= 0x80 or ord(c2) >= 0x80:
+            break
+        b1 = DEC_TABLE[ord(c1)]
+        b2 = DEC_TABLE[ord(c2)]
+        if b1 == -1 or b2 == -1:
+            break
+        tmp[out_len] = ((b1 << 2) | ((b2 & 0x30) >> 4)) & 0xFF
+        out_len += 1
+        if out_len >= max_len or i + 2 >= L:
+            break
+        c3 = s[i + 2]
+        if ord(c3) >= 0x80:
+            break
+        b3 = DEC_TABLE[ord(c3)]
+        if b3 == -1:
+            break
+        tmp[out_len] = (((b2 & 0xF) << 4) | ((b3 & 0x3C) >> 2)) & 0xFF
+        out_len += 1
+        if out_len >= max_len or i + 3 >= L:
+            break
+        c4 = s[i + 3]
+        if ord(c4) >= 0x80:
+            break
+        b4 = DEC_TABLE[ord(c4)]
+        if b4 == -1:
+            break
+        tmp[out_len] = (((b3 & 3) << 6) | b4) & 0xFF
+        out_len += 1
+        i += 4
+    return bytes(tmp[:out_len])
+
+
+def magic_b64_encode(b: bytes, length: int) -> str:
+    sb = []
+    i = 0
+    while i < length:
+        c1 = b[i] & 0xFF
+        sb.append(BCRYPT_ALPHABET[(c1 >> 2) & 0x3F])
+        c1 = (c1 & 3) << 4
+        i += 1
+        if i >= length:
+            sb.append(BCRYPT_ALPHABET[c1 & 0x3F])
+            break
+        c2 = b[i] & 0xFF
+        sb.append(BCRYPT_ALPHABET[(c1 | ((c2 >> 4) & 0xF)) & 0x3F])
+        c1 = (c2 & 0xF) << 2
+        i += 1
+        if i >= length:
+            sb.append(BCRYPT_ALPHABET[c1 & 0x3F])
+            break
+        c3 = b[i] & 0xFF
+        sb.append(BCRYPT_ALPHABET[(c1 | ((c3 >> 6) & 3)) & 0x3F])
+        sb.append(BCRYPT_ALPHABET[c3 & 0x3F])
+        i += 1
+    return "".join(sb)
+
+
+def stream_to_word(data: bytes, idx_ref: List[int]) -> int:
+    if not data:
+        return 0
+    idx = idx_ref[0]
+    w = 0
+    for _ in range(4):
+        w = ((w << 8) | (data[idx] & 0xFF)) & MASK32
+        idx = (idx + 1) % len(data)
+    idx_ref[0] = idx
+    return w
+
+
+def blowfish_encrypt_block(P: List[int], S: List[int], l: int, r: int):
+    i3 = _u32(l)
+    i5 = _u32(r)
+    i6 = 0
+    i7 = _u32(P[0])
+    while True:
+        i3 = _u32(i3 ^ i7)
+        if i6 > 14:
+            l_out = _u32(i5 ^ P[17])
+            r_out = i3
+            return l_out, r_out
+        s0 = S[(i3 >> 24) & 0xFF]
+        s1 = S[((i3 >> 16) & 0xFF) | 0x100]
+        s2 = S[((i3 >> 8) & 0xFF) | 0x200]
+        s3 = S[(i3 & 0xFF) | 0x300]
+        f = _u32((_u32(s0 + s1) ^ s2) + s3)
+        i9 = i6 + 1
+        i6 = i9 + 1
+        i5 = _u32(i5 ^ _u32(f ^ P[i9]))
+        s0 = S[(i5 >> 24) & 0xFF]
+        s1 = S[((i5 >> 16) & 0xFF) | 0x100]
+        s2 = S[((i5 >> 8) & 0xFF) | 0x200]
+        s3 = S[(i5 & 0xFF) | 0x300]
+        f2 = _u32((_u32(s0 + s1) ^ s2) + s3)
+        i7 = _u32(P[i6] ^ f2)
+
+
+def expand_with_key(P: List[int], S: List[int], key_bytes: bytes) -> None:
+    idx_ref = [0]
+    for i in range(len(P)):
+        P[i] = _i32(P[i] ^ stream_to_word(key_bytes, idx_ref))
+    block_l = 0
+    block_r = 0
+    for i in range(0, len(P), 2):
+        block_l, block_r = blowfish_encrypt_block(P, S, block_l, block_r)
+        P[i] = _i32(block_l)
+        P[i + 1] = _i32(block_r)
+    for i in range(0, len(S), 2):
+        block_l, block_r = blowfish_encrypt_block(P, S, block_l, block_r)
+        S[i] = _i32(block_l)
+        S[i + 1] = _i32(block_r)
+
+
+def expand_with_salt_and_key(P: List[int], S: List[int], salt: bytes, key: bytes) -> None:
+    idx_key = [0]
+    idx_salt = [0]
+    for i in range(len(P)):
+        P[i] = _i32(P[i] ^ stream_to_word(key, idx_key))
+    block_l = 0
+    block_r = 0
+    for i in range(0, len(P), 2):
+        block_l = _u32(block_l ^ stream_to_word(salt, idx_salt))
+        block_r = _u32(block_r ^ stream_to_word(salt, idx_salt))
+        block_l, block_r = blowfish_encrypt_block(P, S, block_l, block_r)
+        P[i] = _i32(block_l)
+        P[i + 1] = _i32(block_r)
+    for i in range(0, len(S), 2):
+        block_l = _u32(block_l ^ stream_to_word(salt, idx_salt))
+        block_r = _u32(block_r ^ stream_to_word(salt, idx_salt))
+        block_l, block_r = blowfish_encrypt_block(P, S, block_l, block_r)
+        S[i] = _i32(block_l)
+        S[i + 1] = _i32(block_r)
+
+
+def magic_search_final(password_bytes: bytes, salt_bytes: bytes, rounds_log2: int, cihai_init: List[int]) -> bytes:
+    if rounds_log2 < 4 or rounds_log2 > 30:
+        raise ValueError("Bad number of rounds")
+    if len(salt_bytes) != 16:
+        raise ValueError("Bad salt length")
+    P = list(P_INIT)
+    S = list(S_INIT)
+    i_arr = list(cihai_init)
+    expand_with_salt_and_key(P, S, salt_bytes, password_bytes)
+    loops = 1 << rounds_log2
+    for _ in range(loops):
+        expand_with_key(P, S, password_bytes)
+        expand_with_key(P, S, salt_bytes)
+    half_len = len(i_arr) >> 1
+    for _round in range(64):
+        for j in range(half_len):
+            idx = j * 2
+            l = i_arr[idx]
+            r = i_arr[idx + 1]
+            lr0, lr1 = blowfish_encrypt_block(P, S, l, r)
+            i_arr[idx] = _i32(lr0)
+            i_arr[idx + 1] = _i32(lr1)
+    out = bytearray(len(i_arr) * 4)
+    k = 0
+    for v in i_arr:
+        vv = _u32(v)
+        out[k] = (vv >> 24) & 0xFF
+        out[k + 1] = (vv >> 16) & 0xFF
+        out[k + 2] = (vv >> 8) & 0xFF
+        out[k + 3] = vv & 0xFF
+        k += 4
+    return bytes(out)
+
+
+def search(password: str, salt_str: Optional[str] = None) -> str:
+    if salt_str is None:
+        salt_str = generate_salt(4)
+    if len(salt_str) < 4 or salt_str[0] != "$" or salt_str[1] != "2":
+        raise ValueError("Invalid salt version")
+    c_rev = "\x00"
+    i2 = 3
+    if salt_str[2] != "$":
+        c_rev = salt_str[2]
+        if c_rev != "a" or salt_str[3] != "$":
+            raise ValueError("Invalid salt revision")
+        i2 = 4
+    i3 = i2 + 2
+    if salt_str[i3] != "$":
+        raise ValueError("Missing salt rounds")
+    rounds_log2 = int(salt_str[i2:i3])
+    salt_b64 = salt_str[i2 + 3 : i2 + 25]
+    if len(salt_b64) != 22:
+        raise ValueError("Bad bcrypt-like salt length")
+    pwd_bytes = password.encode("utf-8")
+    if c_rev >= "a":
+        pwd_bytes = password.encode("utf-8") + b"\x00"
+    salt_bytes = magic_b64_decode(salt_b64, 16)
+    out_bytes = magic_search_final(pwd_bytes, salt_bytes, rounds_log2, CIHAI_INIT)
+    sb = ["$2"]
+    if c_rev >= "a":
+        sb.append(c_rev)
+    sb.append("$")
+    if rounds_log2 < 10:
+        sb.append("0")
+    if rounds_log2 > 30:
+        raise ValueError("rounds exceeds maximum (30)")
+    sb.append(str(rounds_log2))
+    sb.append("$")
+    sb.append(magic_b64_encode(salt_bytes, len(salt_bytes)))
+    sb.append(magic_b64_encode(out_bytes, len(CIHAI_INIT) * 4 - 1))
+    return "".join(sb)
+
 # --- 业务侧封装 ---
 
 def 是否二进制(data: bytes) -> bool:
@@ -631,7 +989,7 @@ def 解码文本(data: bytes) -> str:
 
 def 读取keypool字节(登录态: Optional[Mapping[str, str]] = None) -> bytes:
     src = 登录态 or {}
-    b64 = str(src.get("keypool_b64") or 默认设备keypool_b64 or "")
+    b64 = str(src.get("keypool_b64") or "")
     if not b64:
         return b""
     try:
@@ -733,64 +1091,86 @@ def 组装URL(base: str, params: Mapping[str, Any]) -> str:
     query = urllib.parse.urlencode({k: str(v) for k, v in params.items() if v is not None}, doseq=True)
     return f"{base}?{query}" if query else base
 
-def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """对齐小说大全 sanitize(minimal)：登录只带 Cookie/yw*；fuid 放 query。
-
-    多带设备指纹头容易 deny；游客态无 Cookie。
-    """
+def 构建App请求头(登录态: Optional[Mapping[str, str]] = None, *, 时间毫秒: Optional[int] = None) -> Dict[str, str]:
+    """使用 QQ 阅读 App 的身份字段和 csigs 签名构造请求头。"""
     src = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
-    ywguid = src.get("ywguid") or src.get("login_uin") or src.get("uid") or ""
+    app = dict(默认App请求身份)
+    for 键 in ("loginType", "c_platform", "c_version", "channel", "qrsn", "fuid"):
+        if src.get(键):
+            app[键] = src[键]
+    if src.get("app_uid"):
+        app["uid"] = src["app_uid"]
+    if src.get("app_usid"):
+        app["usid"] = src["app_usid"]
+    时间毫秒 = int(时间毫秒 or time.time() * 1000)
+    签名原文 = (
+        f"{app['loginType']}|||{app['c_version']}|{app['c_platform']}|{app['channel']}|"
+        f"{app['qrsn']}|{app['qrsn']}||||0|{时间毫秒}|{App签名尾部}"
+    )
+    try:
+        csigs = search(sha256_hex(签名原文), generate_salt())
+    except Exception as e:
+        raise RuntimeError("App请求签名生成失败") from e
+
+    ywguid = src.get("ywguid") or src.get("login_uin") or ""
     ywkey = src.get("ywkey") or src.get("login_key") or ""
     cookie = src.get("Cookie") or src.get("cookie") or ""
     if (not cookie) and ywguid and ywkey:
         cookie = f"ywguid={ywguid}; ywkey={ywkey};"
-    fuid = src.get("fuid") or str(默认设备.get("fuid") or "")
     out = {
-        "User-Agent": src.get("User-Agent") or 默认UA,
+        "User-Agent": src.get("User-Agent") or App默认UA,
         "Accept": "*/*",
         "Accept-Encoding": "identity",
+        "loginType": app["loginType"],
+        "c_platform": app["c_platform"],
+        "c_version": app["c_version"],
+        "channel": app["channel"],
+        "qrsn": app["qrsn"],
+        "qrsn_new": app["qrsn"],
+        "usid": app["usid"],
+        "uid": app["uid"],
+        "youngerMode": "0",
+        "ttime": str(时间毫秒),
+        "csigs": csigs,
+        "fuid": app["fuid"],
     }
     if cookie:
         out["Cookie"] = cookie
     if ywguid:
         out["ywguid"] = ywguid
         out["login_uin"] = ywguid
-        out["uid"] = ywguid
     if ywkey:
         out["ywkey"] = ywkey
         out["login_key"] = ywkey
-    # fuid 主要走 query；header 也带一份给解密侧读取
-    if fuid:
-        out["fuid"] = fuid
-    if src.get("qrsn"):
-        out["qrsn"] = src["qrsn"]
     return out
 
+
+def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """兼容旧调用：正文和详情统一使用 App 签名请求头。"""
+    return 构建App请求头(登录态)
+
+
 def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """App 设备态 + 可选账号登录态。免费书只靠设备 fuid/keypool，不强制账号登录。"""
-    out = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
+    """App 设备态加可选数据库登录态；密钥池只在内存中刷新。"""
+    out = dict(默认App请求身份)
+    out.update({str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")})
+    if not (登录态 or {}).get("app_uid"):
+        out["uid"] = 默认App请求身份["uid"]
+    if not (登录态 or {}).get("app_usid"):
+        out["usid"] = 默认App请求身份["usid"]
     if not out.get("fuid"):
-        out["fuid"] = str(默认设备.get("fuid") or "")
+        out["fuid"] = 默认App请求身份["fuid"]
     if not out.get("User-Agent"):
-        out["User-Agent"] = 默认UA
-    if not out.get("keypool_b64"):
-        out["keypool_b64"] = 默认设备keypool_b64
+        out["User-Agent"] = App默认UA
     return out
 
 def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """免费/广告书游客态：去掉登录 Cookie/yw*，保留 fuid+keypool。
-
-    小说大全实测：登录态下广告免费书会被 adBookSeeXChapter=5 卡住；
-    游客 + adState=0 可拿全本授权；VIP 付费章不会因此放行。
-    """
+    """游客正文请求只保留 App 身份、fuid 和当前内存密钥池。"""
     基 = 组装本地下载态(登录态)
-    out = {
-        "fuid": str(基.get("fuid") or 默认设备.get("fuid") or ""),
-        "User-Agent": str(基.get("User-Agent") or 默认UA),
-        "keypool_b64": str(基.get("keypool_b64") or 默认设备keypool_b64 or ""),
-    }
-    if 基.get("qrsn"):
-        out["qrsn"] = str(基.get("qrsn"))
+    out = {键: str(基.get(键) or 默认App请求身份.get(键) or "") for 键 in 默认App请求身份}
+    out["User-Agent"] = str(基.get("User-Agent") or App默认UA)
+    if 基.get("keypool_b64"):
+        out["keypool_b64"] = str(基["keypool_b64"])
     return out
 
 # ===== 六、HTTP 与接口请求 =====
@@ -828,6 +1208,42 @@ async def http_post_form_json(session: aiohttp.ClientSession, url: str, params: 
     async with session.post(url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
         return json.loads(await resp.text())
 
+
+async def 请求动态密钥池(session: aiohttp.ClientSession, 下载态: Mapping[str, str]) -> str:
+    """从 App 密钥池接口取当前 fuid 对应的解密令牌，仅保留进程内短缓存。"""
+    fuid = str(下载态.get("fuid") or 默认App请求身份["fuid"])
+    已缓存 = 内存密钥池缓存.get(fuid)
+    当前时间 = time.monotonic()
+    if 已缓存 and 当前时间 - 已缓存[0] < 密钥池缓存秒数:
+        return 已缓存[1]
+
+    地址 = 组装URL("https://newminerva-tgw.reader.qq.com/sk", {"fuid": fuid})
+    请求头 = {"User-Agent": App默认UA, "Accept": "*/*", "Accept-Encoding": "identity"}
+    响应 = await http_get_json(session, 地址, 请求头, timeout=30)
+    密钥池 = str(响应.get("pool") or "").strip() if isinstance(响应, dict) else ""
+    if not 密钥池:
+        raise RuntimeError("App密钥池为空")
+    try:
+        令牌列表 = decrypt_keypool(base64.b64decode(密钥池), master_key(fuid))
+    except Exception as e:
+        raise RuntimeError("App密钥池校验失败") from e
+    if not 令牌列表:
+        raise RuntimeError("App密钥池无可用令牌")
+    内存密钥池缓存[fuid] = (当前时间, 密钥池)
+    return 密钥池
+
+
+async def 准备App下载态(session: aiohttp.ClientSession, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """下载开始前统一准备 App 身份和动态密钥池，不落地到文件或数据库。"""
+    下载态 = 组装本地下载态(登录态)
+    try:
+        下载态["keypool_b64"] = await 请求动态密钥池(session, 下载态)
+    except Exception:
+        if not 下载态.get("keypool_b64"):
+            raise
+    return 下载态
+
+
 async def 请求书籍信息(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     url = 组装URL(详情地址, {"bid": bid, "types": "1,2,3,4,5"})
     data = await http_get_json(session, url, 最小请求头(登录态), timeout=30)
@@ -841,110 +1257,32 @@ async def 请求批量包(
     登录态: Optional[Mapping[str, str]] = None,
     text_type: int = 1,
     useindex: bool = False,
-    usepreview: int = 0,
-    ad_state: Optional[int] = None,
-    noclick: Optional[int] = None,
     timeout: int = 300,
 ) -> bytes:
-    headers = 最小请求头(登录态)
-    fuid = headers.get("fuid") or str((登录态 or {}).get("fuid") or "")
-    有登录 = bool(headers.get("Cookie") or headers.get("ywguid") or headers.get("ywkey"))
-    if ad_state is None:
-        ad_state = 1 if 有登录 else 0
-    if noclick is None:
-        noclick = 1 if int(ad_state) == 1 else 0
-    if fuid:
-        params = {
-            "bookId": bid,
-            "usepreview": int(usepreview),
-            "type": 0,
-            "tafauth": 1,
-            "scids": scids,
-            "scene": 0,
-            "adState": int(ad_state),
-            "fuid": fuid,
-            "noclick": int(noclick),
-            "text_type": int(text_type),
-            "useindex": 1 if useindex else 0,
-        }
-    else:
-        # 无 fuid 时尽量仍带 adState=0 游客路径
-        params = {
-            "bookId": bid,
-            "scids": scids,
-            "type": 0,
-            "text_type": int(text_type),
-            "useindex": 1 if useindex else 0,
-            "tafauth": 1,
-            "usepreview": int(usepreview),
-            "scene": 0,
-            "adState": int(ad_state),
-            "noclick": int(noclick),
-        }
+    请求态 = 组装本地下载态(登录态)
+    headers = 构建App请求头(请求态)
+    fuid = str(请求态.get("fuid") or 默认App请求身份["fuid"])
+    # 外部源码验证的 App 请求形态：type=2 + App 签名；不混入网页正文参数。
+    params = {
+        "bookId": bid,
+        "type": 2,
+        "scids": scids,
+        "fuid": fuid,
+        "text_type": int(text_type),
+    }
+    if useindex:
+        params["useindex"] = 1
     url = 组装URL(批量正文地址, params)
     data, status = await http_get_bytes(session, url, headers, timeout=timeout)
     if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
     return data
 
 async def 请求目录(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
-    blob = await 请求批量包(session, bid, "0", 登录态=登录态, text_type=0, useindex=True, usepreview=0, timeout=60)
+    blob = await 请求批量包(session, bid, "0", 登录态=登录态, text_type=0, useindex=True, timeout=60)
     entries = 解析tar(blob)
     ce = 找目录成员(entries, bid)
     if not ce: return []
     return 解析目录文本(解码文本(ce.data))
-
-async def 探测可下载章节编号(
-    session: aiohttp.ClientSession,
-    bid: str,
-    章节列表: list[dict[str, Any]],
-    登录态: Optional[Mapping[str, str]] = None,
-    *,
-    text_types: Optional[Sequence[int]] = None,
-    ad_state: Optional[int] = None,
-) -> set[str]:
-    """通过 App 批量接口 info.txt 探测当前态下可下发正文的章节（code=0）。"""
-    if not 章节列表:
-        return set()
-    可下: set[str] = set()
-    下载态 = 组装本地下载态(登录态)
-    类型候选 = [int(x) for x in (text_types or (1, 2))]
-    索引列表 = [安全整数(ch.get("index")) or (i + 1) for i, ch in enumerate(章节列表)]
-    # 分段探测，避免超长 scids
-    段大小 = 50
-    for i in range(0, len(索引列表), 段大小):
-        段 = 索引列表[i:i + 段大小]
-        if not 段:
-            continue
-        scids = str(段[0]) if len(段) == 1 else f"{段[0]}-{段[-1]}"
-        for text_type in 类型候选:
-            try:
-                blob = await 请求批量包(
-                    session, bid, scids, 登录态=下载态, text_type=text_type,
-                    useindex=False, usepreview=0, ad_state=ad_state, timeout=60,
-                )
-                if 是否deny(blob):
-                    continue
-                for e in 解析tar(blob):
-                    if e.name != "info.txt" or not e.data:
-                        continue
-                    try:
-                        info = json.loads(解码文本(e.data))
-                    except Exception:
-                        continue
-                    if not isinstance(info, list):
-                        continue
-                    for row in info:
-                        if not isinstance(row, dict):
-                            continue
-                        if "book_title" in row:
-                            continue
-                        code = str(row.get("code") or "")
-                        cid = str(row.get("chapter_id") or row.get("cid") or row.get("uuid") or "")
-                        if code in {"0", "OK", "ok"} and cid:
-                            可下.add(cid)
-            except Exception as e:
-                logger.debug(f"QQ阅读探测可下载章节失败：book_id={bid}, range={scids}, text_type={text_type}, error={e}")
-    return 可下
 
 def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
     root = data if isinstance(data, dict) else {}
@@ -1058,16 +1396,6 @@ def 是否全书免费可下(书籍信息: Mapping[str, Any], 详情: Any = None
             return True
         if str(b.get("islimitfreebook") or "").lower() in {"1", "true"} and max_b <= 0:
             return True
-    return False
-
-def 是否免费或广告书(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
-    """兼容旧名：实际表示“可游客下载的免费/广告相关书”，不等价于整本免费。"""
-    if not isinstance(书籍信息, Mapping):
-        return False
-    if 是否全书免费可下(书籍信息, 详情):
-        return True
-    if 书籍信息.get("is_ad_book") or 书籍信息.get("is_limit_free") or 书籍信息.get("is_all_free"):
-        return True
     return False
 
 def 识别正文类型(详情: Any, 书籍信息: Optional[Mapping[str, Any]] = None) -> list[int]:
@@ -1242,7 +1570,7 @@ def 应用滑块参数(params: Dict[str, Any], ticket: str = "", randstr: str = 
         out["captcharandstr"] = randstr
     return out
 
-def 从登录载荷构造登录态(payload: Mapping[str, Any], phone: str = "") -> Dict[str, str]:
+def 从登录载荷构造登录态(payload: Mapping[str, Any]) -> Dict[str, str]:
     ywguid = str(
         payload.get("ywGuid")
         or payload.get("ywguid")
@@ -1265,16 +1593,14 @@ def 从登录载荷构造登录态(payload: Mapping[str, Any], phone: str = "") 
         "login_type": "2",
         "ywguid": ywguid,
         "ywkey": ywkey,
-        "uid": ywguid,
+        "account_uid": ywguid,
         "Cookie": cookie,
         "fuid": fuid,
         "qimei": 默认设备.get("qimei", ""),
         "qimei36": 默认设备.get("qimei36", ""),
         "ibex": 默认设备.get("ibex", ""),
     }
-    if phone:
-        out["phone"] = phone
-    for key in ("ticket", "autoLoginSessionKey", "autoLoginKeepTime", "autoLoginExpiredTime", "ywOpenId", "alk", "alkts", "qrsn"):
+    for key in ("ywOpenId", "qrsn"):
         if payload.get(key) not in (None, ""):
             out[key] = str(payload.get(key))
     return out
@@ -1506,7 +1832,7 @@ async def 提交手机验证码(session: aiohttp.ClientSession, phone: str, code
     if not payload: return {"success": False, "response": response, "diagnostic": 诊断}
     return {
         "success": True,
-        "auth": 从登录载荷构造登录态(payload, phone=full_phone),
+        "auth": 从登录载荷构造登录态(payload),
         "response": response,
         "diagnostic": 诊断,
     }
@@ -1694,9 +2020,8 @@ async def 下载全书批量(
     登录态: dict[str, str],
     *,
     text_types: Optional[Sequence[int]] = None,
-    ad_state: Optional[int] = None,
 ) -> list[dict[str, Any]]:
-    """按大批量(默认最多500章/批)拆分，动态并发请求。"""
+    """按 App 已验证的 31 章批次拆分，并发请求正文。"""
     if not 目录:
         return []
     下载态 = 组装本地下载态(登录态)
@@ -1753,8 +2078,7 @@ async def 下载全书批量(
                     try:
                         blob = await 请求批量包(
                             session, 书籍编号, scids, 登录态=下载态,
-                            text_type=text_type, useindex=False, usepreview=0,
-                            ad_state=ad_state, timeout=180,
+                            text_type=text_type, useindex=False, timeout=180,
                         )
                         if 是否deny(blob):
                             raise RuntimeError("批量接口拒绝")
@@ -1843,7 +2167,6 @@ async def 下载单章正文(
     下载态: dict[str, str],
     *,
     text_types: Optional[Sequence[int]] = None,
-    ad_state: Optional[int] = None,
 ) -> dict[str, Any]:
     """缺章定向补拉：单章 scids + text_type 有限重试。"""
     索引 = 安全整数(章节.get("index")) or 0
@@ -1858,8 +2181,7 @@ async def 下载单章正文(
             try:
                 blob = await 请求批量包(
                     session, 书籍编号, scids, 登录态=下载态,
-                    text_type=text_type, useindex=False, usepreview=0,
-                    ad_state=ad_state, timeout=90,
+                    text_type=text_type, useindex=False, timeout=90,
                 )
                 if 是否deny(blob):
                     break
@@ -1894,7 +2216,6 @@ async def 补拉缺失章节(
     登录态: dict[str, str],
     *,
     text_types: Optional[Sequence[int]] = None,
-    ad_state: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """主批量后对失败章做有限轮次单章补拉，不无限循环。"""
     if not 结果列表:
@@ -1944,8 +2265,7 @@ async def 补拉缺失章节(
                             try:
                                 blob = await 请求批量包(
                                     session, 书籍编号, scids, 登录态=下载态,
-                                    text_type=text_type, useindex=False, usepreview=0,
-                                    ad_state=ad_state, timeout=120,
+                                    text_type=text_type, useindex=False, timeout=120,
                                 )
                                 if 是否deny(blob):
                                     break
@@ -2007,7 +2327,7 @@ async def 补拉缺失章节(
                     章节 = 合并[位置]
                     新章 = await 下载单章正文(
                         session, 书籍编号, 章节, 下载态,
-                        text_types=text_types, ad_state=ad_state,
+                        text_types=text_types,
                     )
                     return 位置, 新章
 
@@ -2032,11 +2352,12 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
     if not 书籍编号:
         logger.warning(f"QQ阅读本地下载失败：未识别书籍ID source={限制文本长度(来源)}")
         yield 下载失败提示; return
-    登录态 = 组装本地下载态(读取QQ阅读登录态(配置))
+    已保存登录态 = 读取QQ阅读登录态(配置)
     超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=300)
     try:
         async with aiohttp.ClientSession(timeout=超时) as 会话:
-            # 详情/目录走 App 接口；正文用设备 fuid，不强制账号登录
+            # 整个下载链路均使用 App 身份、App 签名和动态密钥池。
+            登录态 = await 准备App下载态(会话, 已保存登录态)
             try:
                 详情 = await 请求书籍信息(会话, 书籍编号, 登录态)
             except Exception as e:
@@ -2049,71 +2370,19 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 logger.warning(f"QQ阅读目录失败：book_id={书籍编号}, error={e}")
                 目录 = []
             if not 目录:
-                总数 = 安全整数(书籍信息.get("chapter_count"))
-                if 总数 > 0:
-                    目录 = [{"cid": str(i), "id": str(i), "title": f"第{i}章", "index": i} for i in range(1, 总数 + 1)]
-            if not 目录:
                 logger.warning(f"QQ阅读本地下载失败：无目录 book_id={书籍编号}"); yield 下载失败提示; return
             for i, ch in enumerate(目录, start=1):
                 ch["index"] = 安全整数(ch.get("index")) or i
             有账号 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
             全书免费 = 是否全书免费可下(书籍信息, 详情) or bool(书籍信息.get("is_all_free"))
-            是广告书 = bool(书籍信息.get("is_ad_book"))
-            # 广告全本/整本免费：游客 adState=0。部分免费广告书也先用游客探测，再决定是否收费。
-            if 全书免费 or 是广告书:
+            # 未登录时使用游客 App 设备态；已保存的 Cookie 则直接叠加到 App 请求。
+            if not 有账号:
                 下载态 = 组装游客下载态(登录态)
-                ad_state = 0
-                模式 = "guest"
-            else:
-                下载态 = 组装本地下载态(登录态)
-                ad_state = 1 if 有账号 else 0
-                模式 = "login" if 有账号 else "device"
+            模式 = "login" if 有账号 else "guest"
             类型候选 = 识别正文类型(详情, 书籍信息)
-
-            if 全书免费:
-                # 真全免：跳过探测，整本最快下载
-                下载目录 = list(目录)
-                logger.debug(
-                    f"QQ阅读跳过探测：book_id={书籍编号}, all_free=True, "
-                    f"download={len(下载目录)}, mode={模式}"
-                )
-            else:
-                # 详情已标明部分免费/试读：所有书统一直接收费，不硬下整本、不空转探测
-                if 免费章上限 > 0 and len(目录) > 0 and 免费章上限 < len(目录):
-                    logger.warning(
-                        f"QQ阅读本地下载失败：详情部分免费 book_id={书籍编号}, "
-                        f"maxfree={免费章上限}, catalog={len(目录)}, mode={模式}, has_account={有账号}"
-                    )
-                    yield 收费书提示
-                    return
-                # 其余非全免（含 VIP）：全量探测实际可下章
-                可下编号 = await 探测可下载章节编号(
-                    会话, 书籍编号, 目录, 下载态, text_types=类型候选, ad_state=ad_state,
-                )
-                下载目录 = [
-                    ch for ch in 目录
-                    if str(ch.get("cid") or ch.get("id") or ch.get("index") or "") in 可下编号
-                ]
-                logger.info(
-                    f"QQ阅读可下载探测：book_id={书籍编号}, authorized={len(下载目录)}, "
-                    f"catalog={len(目录)}, maxfree={免费章上限}, mode={模式}, has_account={有账号}"
-                )
-                if not 下载目录:
-                    logger.warning(
-                        f"QQ阅读本地下载失败：无可下载章节 book_id={书籍编号}, maxfree={免费章上限}, "
-                        f"mode={模式}, has_account={有账号}"
-                    )
-                    yield 收费书提示
-                    return
-                # 只能下部分章：按收费书处理，不硬下整本
-                if len(下载目录) < len(目录):
-                    logger.warning(
-                        f"QQ阅读本地下载失败：收费/VIP书仅部分可下 book_id={书籍编号}, "
-                        f"authorized={len(下载目录)}, catalog={len(目录)}, maxfree={免费章上限}, has_account={有账号}"
-                    )
-                    yield 收费书提示
-                    return
+            下载目录 = list(目录)
+            疑似收费 = 免费章上限 > 0 and 免费章上限 < len(目录)
 
             书籍信息["chapter_count"] = len(目录)
             logger.info(
@@ -2124,16 +2393,15 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            # 全免游客整本下载；VIP 付费书籍需要登录态。
             章节结果 = await 下载全书批量(
                 会话, 书籍编号, 下载目录, 下载态,
-                text_types=类型候选, ad_state=ad_state,
+                text_types=类型候选,
             )
             缺少数 = sum(1 for x in 章节结果 if not x.get("success") or not str(x.get("content") or "").strip())
             if 缺少数:
                 章节结果 = await 补拉缺失章节(
                     会话, 书籍编号, 章节结果, 下载态,
-                    text_types=类型候选, ad_state=ad_state,
+                    text_types=类型候选,
                 )
             成功列表 = [x for x in 章节结果 if x.get("success") and str(x.get("content") or "").strip()]
             if not 成功列表 or len(成功列表) < len(下载目录):
@@ -2141,7 +2409,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
                     f"catalog_total={len(目录)}, mode={模式}, has_account={有账号}"
                 )
-                if (not 全书免费) and len(成功列表) < len(目录):
+                if 疑似收费 or (成功列表 and len(成功列表) < len(目录)):
                     yield 收费书提示
                 else:
                     yield 下载失败提示
