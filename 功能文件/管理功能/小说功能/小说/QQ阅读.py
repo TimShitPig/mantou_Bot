@@ -60,7 +60,7 @@ except Exception as e:
 App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
 内存密钥池缓存: dict[str, tuple[float, str]] = {}
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
-正文解密重试次数=4; 缺章补拉轮次=3; 缺章补拉并发=8; 批量章节上限=31; 批量并发上限=4
+正文解密重试次数=4; 缺章补拉轮次=3; 缺章补拉并发=8; 批量章节上限=500; 批量并发上限=4
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
@@ -1277,8 +1277,30 @@ async def 请求批量包(
     if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
     return data
 
+
+async def 请求目录包(session: aiohttp.ClientSession, bid: str, *, timeout: int = 60) -> bytes:
+    """目录必须使用 App 的 type=0 授权包，不能混用正文 type=2 参数。"""
+    params = {
+        "bookId": bid,
+        "type": 0,
+        "tafauth": 1,
+        "scids": "0",
+        "text_type": 0,
+        "useindex": 1,
+    }
+    headers = {
+        "User-Agent": 默认UA,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
+    data, status = await http_get_bytes(session, 组装URL(批量正文地址, params), headers, timeout=timeout)
+    if status >= 400:
+        raise RuntimeError(f"目录接口 HTTP {status}")
+    return data
+
+
 async def 请求目录(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
-    blob = await 请求批量包(session, bid, "0", 登录态=登录态, text_type=0, useindex=True, timeout=60)
+    blob = await 请求目录包(session, bid, timeout=60)
     entries = 解析tar(blob)
     ce = 找目录成员(entries, bid)
     if not ce: return []
@@ -2021,7 +2043,7 @@ async def 下载全书批量(
     *,
     text_types: Optional[Sequence[int]] = None,
 ) -> list[dict[str, Any]]:
-    """按 App 已验证的 31 章批次拆分，并发请求正文。"""
+    """按 App 可接受的最多 500 章范围拆分，并发请求正文。"""
     if not 目录:
         return []
     下载态 = 组装本地下载态(登录态)
