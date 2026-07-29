@@ -23,7 +23,6 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 
 import hashlib
 import zlib
-from typing import Callable
 try:
     from Crypto.Cipher import AES, DES
     from Crypto.Hash import MD2, MD4, MD5
@@ -60,7 +59,7 @@ except Exception as e:
 App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
 内存密钥池缓存: dict[str, tuple[float, str]] = {}
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
-正文解密重试次数=4; 缺章补拉轮次=3; 缺章补拉并发=8; 批量章节上限=500; 批量并发上限=4
+批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
@@ -1039,6 +1038,12 @@ class Tar成员:
     size: int
     data: bytes
 
+
+@dataclass
+class 章节下载汇总:
+    章节: list[dict[str, Any]]
+    请求被拒绝: bool = False
+
 def 是否deny(data: bytes) -> bool:
     if not data or data[:1] != b"{": return False
     try: obj = json.loads(data.decode("utf-8", "replace"))
@@ -1092,16 +1097,10 @@ def 组装URL(base: str, params: Mapping[str, Any]) -> str:
     return f"{base}?{query}" if query else base
 
 def 构建App请求头(登录态: Optional[Mapping[str, str]] = None, *, 时间毫秒: Optional[int] = None) -> Dict[str, str]:
-    """使用 QQ 阅读 App 的身份字段和 csigs 签名构造请求头。"""
-    src = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
-    app = dict(默认App请求身份)
-    for 键 in ("loginType", "c_platform", "c_version", "channel", "qrsn", "fuid"):
-        if src.get(键):
-            app[键] = src[键]
-    if src.get("app_uid"):
-        app["uid"] = src["app_uid"]
-    if src.get("app_usid"):
-        app["usid"] = src["app_usid"]
+    """严格使用本地 QQ 阅读项目验证过的正文 App 签名请求头。"""
+    # 正文接口会拒绝混入浏览器 Cookie、登录字段、fuid 或 text_type 的请求。
+    # 登录态仍只用于数据库保存和登录流程，不参与免费正文下载请求。
+    app = 默认App请求身份
     时间毫秒 = int(时间毫秒 or time.time() * 1000)
     签名原文 = (
         f"{app['loginType']}|||{app['c_version']}|{app['c_platform']}|{app['channel']}|"
@@ -1112,15 +1111,8 @@ def 构建App请求头(登录态: Optional[Mapping[str, str]] = None, *, 时间�
     except Exception as e:
         raise RuntimeError("App请求签名生成失败") from e
 
-    ywguid = src.get("ywguid") or src.get("login_uin") or ""
-    ywkey = src.get("ywkey") or src.get("login_key") or ""
-    cookie = src.get("Cookie") or src.get("cookie") or ""
-    if (not cookie) and ywguid and ywkey:
-        cookie = f"ywguid={ywguid}; ywkey={ywkey};"
-    out = {
-        "User-Agent": src.get("User-Agent") or App默认UA,
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
+    return {
+        "User-Agent": App默认UA,
         "loginType": app["loginType"],
         "c_platform": app["c_platform"],
         "c_version": app["c_version"],
@@ -1132,45 +1124,20 @@ def 构建App请求头(登录态: Optional[Mapping[str, str]] = None, *, 时间�
         "youngerMode": "0",
         "ttime": str(时间毫秒),
         "csigs": csigs,
-        "fuid": app["fuid"],
     }
-    if cookie:
-        out["Cookie"] = cookie
-    if ywguid:
-        out["ywguid"] = ywguid
-        out["login_uin"] = ywguid
-    if ywkey:
-        out["ywkey"] = ywkey
-        out["login_key"] = ywkey
-    return out
 
 
 def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """兼容旧调用：正文和详情统一使用 App 签名请求头。"""
+    """兼容旧调用：返回源项目的固定 App 正文请求头。"""
     return 构建App请求头(登录态)
 
 
 def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """App 设备态加可选数据库登录态；密钥池只在内存中刷新。"""
+    """正文下载保持源项目固定设备身份，仅传递进程内动态密钥池。"""
     out = dict(默认App请求身份)
-    out.update({str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")})
-    if not (登录态 or {}).get("app_uid"):
-        out["uid"] = 默认App请求身份["uid"]
-    if not (登录态 or {}).get("app_usid"):
-        out["usid"] = 默认App请求身份["usid"]
-    if not out.get("fuid"):
-        out["fuid"] = 默认App请求身份["fuid"]
-    if not out.get("User-Agent"):
-        out["User-Agent"] = App默认UA
-    return out
-
-def 组装游客下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """游客正文请求只保留 App 身份、fuid 和当前内存密钥池。"""
-    基 = 组装本地下载态(登录态)
-    out = {键: str(基.get(键) or 默认App请求身份.get(键) or "") for 键 in 默认App请求身份}
-    out["User-Agent"] = str(基.get("User-Agent") or App默认UA)
-    if 基.get("keypool_b64"):
-        out["keypool_b64"] = str(基["keypool_b64"])
+    if 登录态 and 登录态.get("keypool_b64"):
+        out["keypool_b64"] = str(登录态["keypool_b64"])
+    out["User-Agent"] = App默认UA
     return out
 
 # ===== 六、HTTP 与接口请求 =====
@@ -1261,23 +1228,18 @@ async def 请求批量包(
     scids: str,
     *,
     登录态: Optional[Mapping[str, str]] = None,
-    text_type: int = 1,
-    useindex: bool = False,
     timeout: int = 300,
 ) -> bytes:
     请求态 = 组装本地下载态(登录态)
     headers = 构建App请求头(请求态)
     fuid = str(请求态.get("fuid") or 默认App请求身份["fuid"])
-    # 外部源码验证的 App 请求形态：type=2 + App 签名；不混入网页正文参数。
+    # 与本地 QQ 阅读项目一致：仅保留 type=2、scids 和固定 fuid。
     params = {
         "bookId": bid,
         "type": 2,
         "scids": scids,
         "fuid": fuid,
-        "text_type": int(text_type),
     }
-    if useindex:
-        params["useindex"] = 1
     url = 组装URL(批量正文地址, params)
     data, status = await http_get_bytes(session, url, headers, timeout=timeout)
     if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
@@ -1378,100 +1340,6 @@ def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
     }
 
 # ===== 七、书籍可下判断 =====
-
-def 是否全书免费可下(书籍信息: Mapping[str, Any], 详情: Any = None) -> bool:
-    """是否整本都可下（游客全本）。对所有书通用，不按 book_id 特判。
-
-    规则：
-    - free=1 / is_all_free，且没有“部分免费上限”：整本免费
-    - isAdBook 且 maxfreechapter=0（或不限）：广告全本，可游客整本下
-    - maxfreechapter > 0 且 < 总章数：只是试读/部分免费，不能整本硬下
-    """
-    if not isinstance(书籍信息, Mapping):
-        return False
-    total = 安全整数(书籍信息.get("chapter_count"))
-    maxfree = 安全整数(书籍信息.get("max_free_chapter"))
-    # 先看部分免费上限，避免 free/isAdBook 误判成全本
-    if maxfree > 0 and total > 0 and maxfree < total:
-        return False
-    if 书籍信息.get("is_all_free"):
-        return True
-    if 书籍信息.get("is_limit_free") and (maxfree <= 0 or total <= 0 or maxfree >= total):
-        return True
-    # 广告书仅当没有部分免费上限时，才当作全本可下
-    if 书籍信息.get("is_ad_book") and maxfree <= 0:
-        return True
-    nodes: list[Any] = []
-    for src in (详情, 书籍信息.get("raw")):
-        if isinstance(src, dict):
-            nodes.append(src)
-            for k in ("data", "bookInfo", "book", "result"):
-                v = src.get(k)
-                if isinstance(v, dict):
-                    nodes.append(v)
-    for b in nodes:
-        if not isinstance(b, dict):
-            continue
-        total_b = 安全整数(b.get("totalChapters") or b.get("chapterNum") or total)
-        max_b = 安全整数(b.get("maxfreechapter") or b.get("maxFreeChapter") or maxfree)
-        if isinstance(b.get("newmaxfreechapter"), dict):
-            max_b = max(max_b, 安全整数(b["newmaxfreechapter"].get("txt")))
-        if max_b > 0 and total_b > 0 and max_b < total_b:
-            return False
-        if b.get("free") in (1, "1", True):
-            return True
-        if b.get("isAdBook") in (1, "1", True) and max_b <= 0:
-            return True
-        if str(b.get("islimitfreebook") or "").lower() in {"1", "true"} and max_b <= 0:
-            return True
-    return False
-
-def 识别正文类型(详情: Any, 书籍信息: Optional[Mapping[str, Any]] = None) -> list[int]:
-    """网文 text_type=1，出版 text_type=2。返回候选顺序。"""
-    blobs: list[Any] = []
-    for src in (详情, (书籍信息 or {}).get("raw") if 书籍信息 else None):
-        if isinstance(src, dict):
-            blobs.append(src)
-            for key in ("data", "bookInfo", "book", "info"):
-                v = src.get(key)
-                if isinstance(v, dict):
-                    blobs.append(v)
-    texts: list[str] = []
-    for b in blobs:
-        if not isinstance(b, dict):
-            continue
-        for k, v in b.items():
-            if v is None:
-                continue
-            kl = str(k).lower()
-            if any(x in kl for x in ("form", "channel", "category", "cata", "type", "source", "pub", "classname")):
-                texts.append(str(v))
-        if b.get("isbn") or b.get("publisher") or b.get("ISBN"):
-            return [2]
-        nm = b.get("newmaxfreechapter") or {}
-        if isinstance(nm, dict) and 安全整数(nm.get("cteb")) > 0 and 安全整数(nm.get("txt")) == 0:
-            return [2]
-        for key in ("form", "bookForm", "book_form", "formType", "form_type", "sourceType", "bookType"):
-            if key in b:
-                try:
-                    val = int(b[key])
-                    if val == 2:
-                        return [2]
-                    if val == 1:
-                        return [1, 2]
-                except Exception:
-                    s = str(b[key])
-                    if "出版" in s:
-                        return [2]
-                    if "网文" in s or "原创" in s:
-                        return [1, 2]
-    joined = " ".join(texts)
-    if any(x in joined for x in ("出版", "纸书", "出版社", "图书", "ISBN", "isbn")):
-        return [2]
-    cat = str((书籍信息 or {}).get("category") or "")
-    if any(x in cat for x in ("出版", "纸书", "图书")):
-        return [2]
-    return [1, 2]
 
 # ===== 八、登录与滑块 =====
 
@@ -2046,34 +1914,36 @@ async def 下载全书批量(
     书籍编号: str,
     目录: list[dict[str, Any]],
     登录态: dict[str, str],
-    *,
-    text_types: Optional[Sequence[int]] = None,
-) -> list[dict[str, Any]]:
-    """按 App 可接受的最多 500 章范围拆分，并发请求正文。"""
+) -> 章节下载汇总:
+    """按已实测可用的 500 章一批、最多 4 并发拉取 App 正文包。"""
     if not 目录:
-        return []
+        return 章节下载汇总([])
+
     下载态 = 组装本地下载态(登录态)
-    类型候选 = [int(x) for x in (text_types or (1, 2))]
     总数 = len(目录)
     每批 = max(1, min(批量章节上限, 总数))
-    分批 = []
-    i = 0
-    for s in range(0, 总数, 每批):
-        e = min(总数, s + 每批)
-        分批.append((i, 目录[s:e]))
-        i += 1
+    分批 = [(序号, 目录[起点:min(起点 + 每批, 总数)]) for 序号, 起点 in enumerate(range(0, 总数, 每批))]
     并发 = max(1, min(批量并发上限, len(分批)))
     信号量 = asyncio.Semaphore(并发)
     结果映射: dict[int, list[dict[str, Any]]] = {}
-    已完成 = 0
-    成功累计 = 0
-    失败累计 = 0
-    上次日志进度 = 0
+    已完成 = 成功累计 = 失败累计 = 上次日志进度 = 0
     进度锁 = asyncio.Lock()
+
     logger.info(
         f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
         f"batches={len(分批)}, batch_size={每批}, concurrency={并发}"
     )
+
+    def 失败结果(批次: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                **章节,
+                "title": 清理文本(章节.get("title") or f"第{章节.get('index')}章"),
+                "content": "",
+                "success": False,
+            }
+            for 章节 in 批次
+        ]
 
     async def 记录进度(完成增量: int, 成功增量: int) -> None:
         nonlocal 已完成, 成功累计, 失败累计, 上次日志进度
@@ -2091,289 +1961,91 @@ async def 下载全书批量(
                 f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
             )
 
-    async def 下载一批(序号: int, 批次: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]]]:
+    async def 下载一批(序号: int, 批次: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]], bool]:
         async with 信号量:
             if not 批次:
-                return 序号, []
+                return 序号, [], False
             起始 = 安全整数(批次[0].get("index")) or (序号 * 每批 + 1)
             结束 = 安全整数(批次[-1].get("index")) or (起始 + len(批次) - 1)
             scids = str(起始) if 起始 == 结束 else f"{起始}-{结束}"
-            最后异常 = None
-            for text_type in 类型候选:
-                最佳结果: list[dict[str, Any]] | None = None
-                最佳成功 = -1
-                for 尝试 in range(1, 正文解密重试次数 + 1):
-                    try:
-                        blob = await 请求批量包(
-                            session, 书籍编号, scids, 登录态=下载态,
-                            text_type=text_type, useindex=False, timeout=180,
-                        )
-                        if 是否deny(blob):
-                            raise RuntimeError("批量接口拒绝")
-                        entries = 解析tar(blob)
-                        chaps = 章节成员(entries, 书籍编号)
-                        by_cid = {章节编号(e.name, 书籍编号): e for e in chaps}
-                        结果: list[dict[str, Any]] = []
-                        成功数 = 0
-                        空文件 = 0
-                        密文文件 = 0
-                        解密失败 = 0
-                        for j, 章节 in enumerate(批次):
-                            cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
-                            标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
-                            e = by_cid.get(cid)
-                            if e is None and len(chaps) == len(批次):
-                                e = chaps[j]
-                            if e is None or not e.data:
-                                空文件 += 1
-                                结果.append({**章节, "title": 标题, "content": "", "success": False})
-                                continue
-                            if 是否二进制(e.data):
-                                密文文件 += 1
-                            正文, note = 解密章节(e.data, 书籍编号, cid, 下载态)
-                            if 正文:
-                                成功数 += 1
-                                结果.append({**章节, "title": 标题, "content": 正文, "success": True})
-                            else:
-                                解密失败 += 1
-                                if 尝试 == 正文解密重试次数:
-                                    logger.debug(
-                                        f"QQ阅读章节解密失败：book_id={书籍编号}, cid={cid}, note={限制文本长度(note, 80)}"
-                                    )
-                                结果.append({**章节, "title": 标题, "content": "", "success": False})
-                        logger.debug(
-                            f"QQ阅读批次完成：book_id={书籍编号}, batch={序号+1}/{len(分批)}, range={起始}-{结束}, "
-                            f"text_type={text_type}, try={尝试}/{正文解密重试次数}, success={成功数}/{len(批次)}, "
-                            f"tar_files={len(chaps)}, empty={空文件}, binary={密文文件}, decrypt_fail={解密失败}"
-                        )
-                        if 成功数 > 最佳成功:
-                            最佳成功 = 成功数
-                            最佳结果 = 结果
-                        if 成功数 == len(批次):
-                            return 序号, 结果
-                        # 完全没有章节文件：当前 text_type/权限下不可下，直接换类型
-                        if len(chaps) == 0:
-                            break
-                        # 有密文但解不开：重拉（服务端密文形态会在 b480/1bdccb 间抖动）
-                        if 密文文件 > 0 and 成功数 < 密文文件:
-                            continue
-                        # 本 text_type 已有部分成功：记录后换下一个 text_type 试更高成功率
-                        # 注意：绝不能在 type=1 只有 1 章成功时就 return，否则会错过 type=2 的 190+ 章
-                        break
-                    except Exception as e:
-                        最后异常 = e
-                        logger.debug(
-                            f"QQ阅读批次重试：book_id={书籍编号}, batch={序号+1}/{len(分批)}, "
-                            f"range={起始}-{结束}, text_type={text_type}, try={尝试}, error={e}"
-                        )
-            # 所有 text_type 试完后取成功率最高的结果
-            if 最佳成功 > 0 and 最佳结果 is not None:
-                return 序号, 最佳结果
-            if 最后异常:
-                logger.warning(f"QQ阅读批次最终失败：book_id={书籍编号}, range={起始}-{结束}, error={最后异常}")
-            return 序号, [{**章节, "title": 清理文本(章节.get("title")), "content": "", "success": False} for 章节 in 批次]
+            最后异常: Exception | None = None
 
-    任务 = [asyncio.create_task(下载一批(i, batch)) for i, batch in 分批]
-    for fut in asyncio.as_completed(任务):
-        序号, 数据 = await fut
-        结果映射[序号] = 数据
-        成功增量 = sum(1 for x in 数据 if x.get("success"))
-        await 记录进度(len(数据), 成功增量)
-    合并: list[dict[str, Any]] = []
-    for i, _ in 分批:
-        合并.extend(结果映射.get(i) or [])
-    成功 = sum(1 for x in 合并 if x.get("success"))
-    logger.info(
-        f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, file_ready={成功 == 总数}"
-    )
-    return 合并
-
-async def 下载单章正文(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    章节: dict[str, Any],
-    下载态: dict[str, str],
-    *,
-    text_types: Optional[Sequence[int]] = None,
-) -> dict[str, Any]:
-    """缺章定向补拉：单章 scids + text_type 有限重试。"""
-    索引 = 安全整数(章节.get("index")) or 0
-    cid = str(章节.get("cid") or 章节.get("id") or 索引 or "")
-    标题 = 清理文本(章节.get("title") or f"第{索引}章")
-    if not 索引 and not cid:
-        return {**章节, "title": 标题, "content": "", "success": False}
-    scids = str(索引) if 索引 else cid
-    最佳正文 = ""
-    for text_type in [int(x) for x in (text_types or (1, 2))]:
-        for 尝试 in range(1, 正文解密重试次数 + 1):
-            try:
-                blob = await 请求批量包(
-                    session, 书籍编号, scids, 登录态=下载态,
-                    text_type=text_type, useindex=False, timeout=90,
-                )
-                if 是否deny(blob):
-                    break
-                entries = 解析tar(blob)
-                chaps = 章节成员(entries, 书籍编号)
-                e = None
-                by_cid = {章节编号(x.name, 书籍编号): x for x in chaps}
-                if cid:
-                    e = by_cid.get(cid)
-                if e is None and chaps:
-                    e = chaps[0]
-                if e is None or not e.data:
-                    continue
-                正文, note = 解密章节(e.data, 书籍编号, cid or 章节编号(e.name, 书籍编号), 下载态)
-                if 正文:
-                    return {**章节, "title": 标题, "content": 正文, "success": True}
-                logger.debug(
-                    f"QQ阅读缺章补拉解密失败：book_id={书籍编号}, index={索引}, cid={cid}, "
-                    f"text_type={text_type}, try={尝试}, note={限制文本长度(note, 60)}"
-                )
-            except Exception as e:
-                logger.debug(
-                    f"QQ阅读缺章补拉重试：book_id={书籍编号}, index={索引}, cid={cid}, "
-                    f"text_type={text_type}, try={尝试}, error={e}"
-                )
-    return {**章节, "title": 标题, "content": 最佳正文, "success": bool(最佳正文)}
-
-async def 补拉缺失章节(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    结果列表: list[dict[str, Any]],
-    登录态: dict[str, str],
-    *,
-    text_types: Optional[Sequence[int]] = None,
-) -> list[dict[str, Any]]:
-    """主批量后对失败章做有限轮次单章补拉，不无限循环。"""
-    if not 结果列表:
-        return 结果列表
-    下载态 = 组装本地下载态(登录态)
-    合并 = list(结果列表)
-    for 轮次 in range(1, 缺章补拉轮次 + 1):
-        缺失索引 = [i for i, x in enumerate(合并) if not x.get("success") or not str(x.get("content") or "").strip()]
-        if not 缺失索引:
-            break
-        logger.info(
-            f"QQ阅读缺章补拉：book_id={书籍编号}, round={轮次}/{缺章补拉轮次}, "
-            f"missing={len(缺失索引)}, concurrency={缺章补拉并发}"
-        )
-        # 第 1 轮：把缺失章按连续 index 合成小批（最多 20）重拉，比单章快且更容易拿到可解密密文
-        if 轮次 == 1 and len(缺失索引) > 1:
-            缺失章 = [(i, 合并[i]) for i in 缺失索引]
-            缺失章.sort(key=lambda x: 安全整数(x[1].get("index")) or 0)
-            小批列表: list[list[tuple[int, dict[str, Any]]]] = []
-            当前批: list[tuple[int, dict[str, Any]]] = []
-            上一索引 = None
-            for item in 缺失章:
-                idx = 安全整数(item[1].get("index")) or 0
-                if not 当前批:
-                    当前批 = [item]
-                elif 上一索引 is not None and idx == 上一索引 + 1 and len(当前批) < 20:
-                    当前批.append(item)
-                else:
-                    小批列表.append(当前批)
-                    当前批 = [item]
-                上一索引 = idx
-            if 当前批:
-                小批列表.append(当前批)
-            信号量 = asyncio.Semaphore(min(缺章补拉并发, max(1, len(小批列表))))
-
-            async def 补一小批(组: list[tuple[int, dict[str, Any]]]) -> list[tuple[int, dict[str, Any]]]:
-                async with 信号量:
-                    章节们 = [x[1] for x in 组]
-                    起始 = 安全整数(章节们[0].get("index")) or 0
-                    结束 = 安全整数(章节们[-1].get("index")) or 起始
-                    scids = str(起始) if 起始 == 结束 else f"{起始}-{结束}"
-                    类型候选 = [int(x) for x in (text_types or (1, 2))]
-                    最佳映射: dict[str, dict[str, Any]] = {}
-                    最佳成功 = -1
-                    for text_type in 类型候选:
-                        for 尝试 in range(1, 正文解密重试次数 + 1):
-                            try:
-                                blob = await 请求批量包(
-                                    session, 书籍编号, scids, 登录态=下载态,
-                                    text_type=text_type, useindex=False, timeout=120,
-                                )
-                                if 是否deny(blob):
-                                    break
-                                chaps = 章节成员(解析tar(blob), 书籍编号)
-                                by_cid = {章节编号(e.name, 书籍编号): e for e in chaps}
-                                映射: dict[str, dict[str, Any]] = {}
-                                成功数 = 0
-                                密文 = 0
-                                for 章节 in 章节们:
-                                    cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
-                                    标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
-                                    e = by_cid.get(cid)
-                                    if e is None and len(chaps) == len(章节们):
-                                        # 按顺序兜底
-                                        pos = 章节们.index(章节)
-                                        e = chaps[pos] if pos < len(chaps) else None
-                                    if e is None or not e.data:
-                                        映射[cid] = {**章节, "title": 标题, "content": "", "success": False}
-                                        continue
-                                    if 是否二进制(e.data):
-                                        密文 += 1
-                                    正文, _note = 解密章节(e.data, 书籍编号, cid, 下载态)
-                                    if 正文:
-                                        成功数 += 1
-                                        映射[cid] = {**章节, "title": 标题, "content": 正文, "success": True}
-                                    else:
-                                        映射[cid] = {**章节, "title": 标题, "content": "", "success": False}
-                                if 成功数 > 最佳成功:
-                                    最佳成功 = 成功数
-                                    最佳映射 = 映射
-                                if 成功数 == len(章节们):
-                                    break
-                                if 密文 > 0 and 成功数 < 密文:
-                                    continue
-                                break
-                            except Exception:
-                                continue
-                        if 最佳成功 == len(章节们):
-                            break
-                    out = []
-                    for 位置, 章节 in 组:
-                        cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
-                        新章 = 最佳映射.get(cid) or {**章节, "content": "", "success": False}
-                        out.append((位置, 新章))
-                    return out
-
-            任务 = [asyncio.create_task(补一小批(g)) for g in 小批列表]
-            本轮成功 = 0
-            for fut in asyncio.as_completed(任务):
-                for 位置, 新章 in await fut:
-                    if 新章.get("success") and str(新章.get("content") or "").strip():
-                        合并[位置] = 新章
-                        本轮成功 += 1
-        else:
-            信号量 = asyncio.Semaphore(缺章补拉并发)
-
-            async def 补一章(位置: int) -> tuple[int, dict[str, Any]]:
-                async with 信号量:
-                    章节 = 合并[位置]
-                    新章 = await 下载单章正文(
-                        session, 书籍编号, 章节, 下载态,
-                        text_types=text_types,
+            for 尝试 in range(1, 批量网络重试次数 + 1):
+                try:
+                    blob = await 请求批量包(
+                        session,
+                        书籍编号,
+                        scids,
+                        登录态=下载态,
+                        timeout=180,
                     )
-                    return 位置, 新章
+                    if 是否deny(blob):
+                        logger.warning(
+                            f"QQ阅读批量接口拒绝：book_id={书籍编号}, range={起始}-{结束}"
+                        )
+                        return 序号, 失败结果(批次), True
 
-            任务 = [asyncio.create_task(补一章(i)) for i in 缺失索引]
-            本轮成功 = 0
-            for fut in asyncio.as_completed(任务):
-                位置, 新章 = await fut
-                if 新章.get("success") and str(新章.get("content") or "").strip():
-                    合并[位置] = 新章
-                    本轮成功 += 1
-        仍缺 = sum(1 for x in 合并 if not x.get("success") or not str(x.get("content") or "").strip())
-        logger.info(
-            f"QQ阅读缺章补拉结果：book_id={书籍编号}, round={轮次}/{缺章补拉轮次}, "
-            f"recovered={本轮成功}, still_missing={仍缺}"
-        )
-        if 仍缺 == 0 or 本轮成功 == 0:
-            break
-    return 合并
+                    entries = 解析tar(blob)
+                    chaps = 章节成员(entries, 书籍编号)
+                    by_cid = {章节编号(entry.name, 书籍编号): entry for entry in chaps}
+                    结果: list[dict[str, Any]] = []
+                    成功数 = 0
+
+                    for 位置, 章节 in enumerate(批次):
+                        cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
+                        标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
+                        entry = by_cid.get(cid)
+                        if entry is None and len(chaps) == len(批次):
+                            entry = chaps[位置]
+                        if entry is None or not entry.data:
+                            结果.append({**章节, "title": 标题, "content": "", "success": False})
+                            continue
+
+                        正文, note = 解密章节(entry.data, 书籍编号, cid or 章节编号(entry.name, 书籍编号), 下载态)
+                        if 正文:
+                            成功数 += 1
+                            结果.append({**章节, "title": 标题, "content": 正文, "success": True})
+                        else:
+                            logger.debug(
+                                f"QQ阅读章节解密失败：book_id={书籍编号}, cid={cid}, "
+                                f"note={限制文本长度(note, 80)}"
+                            )
+                            结果.append({**章节, "title": 标题, "content": "", "success": False})
+
+                    logger.debug(
+                        f"QQ阅读批次完成：book_id={书籍编号}, batch={序号 + 1}/{len(分批)}, "
+                        f"range={起始}-{结束}, success={成功数}/{len(批次)}, tar_files={len(chaps)}"
+                    )
+                    return 序号, 结果, False
+                except Exception as e:
+                    最后异常 = e
+                    if 尝试 < 批量网络重试次数:
+                        await asyncio.sleep(0.2 * 尝试)
+
+            logger.warning(
+                f"QQ阅读批量接口失败：book_id={书籍编号}, range={起始}-{结束}, "
+                f"error={最后异常}"
+            )
+            return 序号, 失败结果(批次), False
+
+    任务 = [asyncio.create_task(下载一批(序号, 批次)) for 序号, 批次 in 分批]
+    请求被拒绝 = False
+    for future in asyncio.as_completed(任务):
+        序号, 数据, 本批拒绝 = await future
+        结果映射[序号] = 数据
+        请求被拒绝 = 请求被拒绝 or 本批拒绝
+        await 记录进度(len(数据), sum(1 for 章节 in 数据 if 章节.get("success")))
+
+    合并: list[dict[str, Any]] = []
+    for 序号, _批次 in 分批:
+        合并.extend(结果映射.get(序号) or [])
+    成功 = sum(1 for 章节 in 合并 if 章节.get("success"))
+    logger.info(
+        f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
+        f"file_ready={成功 == 总数}, request_denied={请求被拒绝}"
+    )
+    return 章节下载汇总(合并, 请求被拒绝=请求被拒绝)
+
 
 async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 解析书籍编号(来源)
@@ -2401,15 +2073,9 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 logger.warning(f"QQ阅读本地下载失败：无目录 book_id={书籍编号}"); yield 下载失败提示; return
             for i, ch in enumerate(目录, start=1):
                 ch["index"] = 安全整数(ch.get("index")) or i
-            有账号 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            全书免费 = 是否全书免费可下(书籍信息, 详情) or bool(书籍信息.get("is_all_free"))
-            # 未登录时使用游客 App 设备态；已保存的 Cookie 则直接叠加到 App 请求。
-            下载态 = dict(登录态)
-            if not 有账号:
-                下载态 = 组装游客下载态(登录态)
-            模式 = "login" if 有账号 else "guest"
-            类型候选 = 识别正文类型(详情, 书籍信息)
+            # 正文请求始终使用已实测的固定 App 身份；数据库登录态不混入请求头。
+            下载态 = 组装本地下载态(登录态)
             下载目录 = list(目录)
             疑似收费 = 免费章上限 > 0 and 免费章上限 < len(目录)
 
@@ -2418,25 +2084,17 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
                 f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
-                f"mode={模式}, all_free={全书免费}, text_types={list(类型候选)}, has_account={有账号}"
+                f"batch_size={批量章节上限}, concurrency={批量并发上限}"
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
-            章节结果 = await 下载全书批量(
-                会话, 书籍编号, 下载目录, 下载态,
-                text_types=类型候选,
-            )
-            缺少数 = sum(1 for x in 章节结果 if not x.get("success") or not str(x.get("content") or "").strip())
-            if 缺少数:
-                章节结果 = await 补拉缺失章节(
-                    会话, 书籍编号, 章节结果, 下载态,
-                    text_types=类型候选,
-                )
+            下载汇总 = await 下载全书批量(会话, 书籍编号, 下载目录, 下载态)
+            章节结果 = 下载汇总.章节
             成功列表 = [x for x in 章节结果 if x.get("success") and str(x.get("content") or "").strip()]
             if not 成功列表 or len(成功列表) < len(下载目录):
                 logger.warning(
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
-                    f"catalog_total={len(目录)}, mode={模式}, has_account={有账号}"
+                    f"catalog_total={len(目录)}, request_denied={下载汇总.请求被拒绝}"
                 )
                 if 疑似收费 or (成功列表 and len(成功列表) < len(目录)):
                     yield 收费书提示
