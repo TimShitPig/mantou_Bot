@@ -275,6 +275,14 @@ def 补齐QQ阅读登录态(登录态: Mapping[str, Any] | None) -> dict[str, st
     return 结果
 
 
+def 有效QQ阅读登录态(登录态: Mapping[str, Any] | None) -> bool:
+    完整登录态 = 补齐QQ阅读登录态(登录态)
+    return bool(
+        (完整登录态.get("ywguid") or 完整登录态.get("login_uin"))
+        and (完整登录态.get("ywkey") or 完整登录态.get("login_key"))
+    )
+
+
 def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
     try:
         文本 = 读取运行状态值(配置, 登录态命名空间, 登录态状态键, "")
@@ -1132,12 +1140,46 @@ def 最小请求头(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, 
     return 构建App请求头(登录态)
 
 
+def 构建登录正文请求头(登录态: Mapping[str, Any]) -> Dict[str, str]:
+    """使用 QQ 阅读 App 登录态的最小正文请求头，避免混入游客签名字段。"""
+    完整登录态 = 补齐QQ阅读登录态(登录态)
+    ywguid = str(完整登录态.get("ywguid") or 完整登录态.get("login_uin") or "").strip()
+    ywkey = str(完整登录态.get("ywkey") or 完整登录态.get("login_key") or "").strip()
+    cookie = str(完整登录态.get("Cookie") or 完整登录态.get("cookie") or "").strip()
+    if not cookie and ywguid and ywkey:
+        cookie = f"ywguid={ywguid}; ywkey={ywkey};"
+
+    headers = {
+        "User-Agent": str(完整登录态.get("User-Agent") or 默认UA),
+        "Accept": "*/*",
+        "Cookie": cookie,
+        "ywguid": ywguid,
+        "login_uin": ywguid,
+        "uid": ywguid,
+        "ywkey": ywkey,
+        "login_key": ywkey,
+        "ckey": "".join("1" if 字符.isupper() else "0" for 字符 in ywkey),
+    }
+    登录类型 = str(完整登录态.get("loginType") or 完整登录态.get("login_type") or "").strip()
+    if 登录类型:
+        headers["loginType"] = 登录类型
+    return {键: 值 for 键, 值 in headers.items() if 值}
+
+
 def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """正文下载保持源项目固定设备身份，仅传递进程内动态密钥池。"""
+    """正文下载保持固定 App 设备身份；登录态只在登录专用请求中使用。"""
     out = dict(默认App请求身份)
-    if 登录态 and 登录态.get("keypool_b64"):
-        out["keypool_b64"] = str(登录态["keypool_b64"])
-    out["User-Agent"] = App默认UA
+    完整登录态 = 补齐QQ阅读登录态(登录态)
+    已登录 = 有效QQ阅读登录态(完整登录态)
+    if 已登录:
+        for 键 in ("ywguid", "ywkey", "login_uin", "login_key", "Cookie", "cookie", "loginType", "login_type"):
+            if 完整登录态.get(键):
+                out[键] = str(完整登录态[键])
+        if 完整登录态.get("fuid"):
+            out["fuid"] = str(完整登录态["fuid"])
+    if 完整登录态.get("keypool_b64"):
+        out["keypool_b64"] = str(完整登录态["keypool_b64"])
+    out["User-Agent"] = str(完整登录态.get("User-Agent") or (默认UA if 已登录 else App默认UA))
     return out
 
 # ===== 六、HTTP 与接口请求 =====
@@ -1213,12 +1255,15 @@ async def 准备App下载态(session: aiohttp.ClientSession, 登录态: Optional
 
 async def 请求书籍信息(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     url = 组装URL(详情地址, {"bid": bid, "types": "1,2,3,4,5"})
-    # 详情接口使用独立的 App 请求形态；混入正文签名字段会返回空详情。
-    headers = {
-        "User-Agent": 默认UA,
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
-    }
+    # 登录态只走最小 Cookie 头；游客详情保持独立 App 形态。
+    if 有效QQ阅读登录态(登录态):
+        headers = 构建登录正文请求头(登录态 or {})
+    else:
+        headers = {
+            "User-Agent": 默认UA,
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+        }
     data = await http_get_json(session, url, headers, timeout=30)
     return data if isinstance(data, dict) else {}
 
@@ -1231,15 +1276,32 @@ async def 请求批量包(
     timeout: int = 300,
 ) -> bytes:
     请求态 = 组装本地下载态(登录态)
-    headers = 构建App请求头(请求态)
     fuid = str(请求态.get("fuid") or 默认App请求身份["fuid"])
-    # 与本地 QQ 阅读项目一致：仅保留 type=2、scids 和固定 fuid。
-    params = {
-        "bookId": bid,
-        "type": 2,
-        "scids": scids,
-        "fuid": fuid,
-    }
+    if 有效QQ阅读登录态(请求态):
+        # 已登录正文路径：与本地项目实测的最小登录头和 App 授权参数一致。
+        headers = 构建登录正文请求头(请求态)
+        params = {
+            "bookId": bid,
+            "usepreview": 0,
+            "type": 0,
+            "tafauth": 1,
+            "scids": scids,
+            "scene": 0,
+            "adState": 1,
+            "fuid": fuid,
+            "noclick": 1,
+            "text_type": 1,
+            "useindex": 0,
+        }
+    else:
+        # 游客路径：源项目的固定 App 签名正文请求。
+        headers = 构建App请求头(请求态)
+        params = {
+            "bookId": bid,
+            "type": 2,
+            "scids": scids,
+            "fuid": fuid,
+        }
     url = 组装URL(批量正文地址, params)
     data, status = await http_get_bytes(session, url, headers, timeout=timeout)
     if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
@@ -1338,6 +1400,23 @@ def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
         "category": category,
         "raw": root,
     }
+
+
+def 提取QQ阅读授权摘要(data: Any) -> tuple[str, str]:
+    """仅供后端定位登录态是否被服务端认可，不返回账号或凭证。"""
+    登录状态 = "unknown"
+    会员状态 = "unknown"
+    for obj in 遍历JSON对象(data):
+        if not isinstance(obj, Mapping):
+            continue
+        for key in ("islogin", "isLogin"):
+            if key in obj:
+                登录状态 = "yes" if str(obj.get(key)).lower() in {"1", "true", "yes"} else "no"
+        for key in ("isVip", "isvip", "vipStatus", "vipstatus"):
+            if key in obj:
+                value = obj.get(key)
+                会员状态 = "yes" if str(value).lower() in {"1", "true", "yes", "2"} or value is True else "no"
+    return 登录状态, 会员状态
 
 # ===== 七、书籍可下判断 =====
 
@@ -2074,8 +2153,10 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             for i, ch in enumerate(目录, start=1):
                 ch["index"] = 安全整数(ch.get("index")) or i
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            # 正文请求始终使用已实测的固定 App 身份；数据库登录态不混入请求头。
+            # 保存的登录态走专用最小登录头，游客仍走固定 App 签名请求。
             下载态 = 组装本地下载态(登录态)
+            使用登录态 = 有效QQ阅读登录态(下载态)
+            服务端登录, 服务端会员 = 提取QQ阅读授权摘要(详情)
             下载目录 = list(目录)
             疑似收费 = 免费章上限 > 0 and 免费章上限 < len(目录)
 
@@ -2084,7 +2165,8 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
                 f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
-                f"batch_size={批量章节上限}, concurrency={批量并发上限}"
+                f"mode={'login' if 使用登录态 else 'guest'}, service_login={服务端登录}, "
+                f"service_vip={服务端会员}, batch_size={批量章节上限}, concurrency={批量并发上限}"
             )
             yield 格式化下载提示(书籍信息, len(目录))
 
