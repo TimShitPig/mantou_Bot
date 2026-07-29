@@ -1246,7 +1246,13 @@ async def 准备App下载态(session: aiohttp.ClientSession, 登录态: Optional
 
 async def 请求书籍信息(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     url = 组装URL(详情地址, {"bid": bid, "types": "1,2,3,4,5"})
-    data = await http_get_json(session, url, 最小请求头(登录态), timeout=30)
+    # 详情接口使用独立的 App 请求形态；混入正文签名字段会返回空详情。
+    headers = {
+        "User-Agent": 默认UA,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
+    data = await http_get_json(session, url, headers, timeout=30)
     return data if isinstance(data, dict) else {}
 
 async def 请求批量包(
@@ -2399,6 +2405,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
             全书免费 = 是否全书免费可下(书籍信息, 详情) or bool(书籍信息.get("is_all_free"))
             # 未登录时使用游客 App 设备态；已保存的 Cookie 则直接叠加到 App 请求。
+            下载态 = dict(登录态)
             if not 有账号:
                 下载态 = 组装游客下载态(登录态)
             模式 = "login" if 有账号 else "guest"
