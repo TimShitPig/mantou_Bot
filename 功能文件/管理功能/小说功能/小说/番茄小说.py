@@ -2105,6 +2105,48 @@ def 解密番茄阅读正文(content: str, 密钥: bytes) -> str:
     return 明文.decode("utf-8", "replace")
 
 
+def 请求番茄阅读原始正文(item_ids: List[str]) -> Dict[str, Any]:
+    """使用固定阅读 App 书籍上下文读取原始章节响应。"""
+    ids = [str(item_id).strip() for item_id in item_ids if str(item_id).strip()]
+    if len(ids) > 番茄阅读正文单次上限:
+        raise ValueError("番茄阅读原始正文请求超过单次章节上限")
+    if not ids:
+        return {"code": 0, "message": "", "data": {}}
+    return 请求番茄阅读JSON(
+        "/reading/reader/batch_full/v",
+        (
+            ("item_ids", ",".join(ids)),
+            ("key_register_ts", "0"),
+            ("book_id", 番茄阅读请求书籍编号),
+            ("req_type", "0"),
+        ),
+    )
+
+
+def 解析番茄阅读章节书籍编号(章节编号: str) -> Tuple[str, Dict[str, Any]]:
+    """将 /reader/ 中的章节 ID 解析为真实书籍 ID，仅走阅读 App 正文接口。"""
+    候选章节编号 = str(章节编号 or "").strip()
+    if not re.fullmatch(r"\d{8,}", 候选章节编号):
+        raise RuntimeError("番茄阅读章节编号无效")
+
+    响应 = 请求番茄阅读原始正文([候选章节编号])
+    if 响应.get("code") != 0:
+        raise RuntimeError("番茄阅读正文接口未返回章节")
+    原始章节 = 响应.get("data") or {}
+    if not isinstance(原始章节, dict):
+        raise RuntimeError("番茄阅读正文响应格式错误")
+    章节信息 = 原始章节.get(候选章节编号)
+    if not isinstance(章节信息, dict):
+        raise RuntimeError("番茄阅读正文未返回目标章节")
+    书籍元数据 = 章节信息.get("novel_data")
+    if not isinstance(书籍元数据, dict):
+        raise RuntimeError("番茄阅读正文未返回书籍信息")
+    真实书籍编号 = str(书籍元数据.get("book_id") or "").strip()
+    if not re.fullmatch(r"\d{8,}", 真实书籍编号):
+        raise RuntimeError("番茄阅读正文未返回有效书籍编号")
+    return 真实书籍编号, 书籍元数据
+
+
 def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str, Any]:
     """读取番茄阅读正文，并转换成 full/mget 风格响应。"""
     ids = [str(item_id) for item_id in item_ids]
@@ -2126,15 +2168,7 @@ def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str
             "request_book_id": 番茄阅读请求书籍编号,
         }
 
-    响应 = 请求番茄阅读JSON(
-        "/reading/reader/batch_full/v",
-        (
-            ("item_ids", ",".join(ids)),
-            ("key_register_ts", "0"),
-            ("book_id", 番茄阅读请求书籍编号),
-            ("req_type", "0"),
-        ),
-    )
+    响应 = 请求番茄阅读原始正文(ids)
     if 响应.get("code") != 0:
         return 响应
     原始章节 = 响应.get("data") or {}
@@ -2451,17 +2485,35 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
         yield 番茄下载失败提示
 
 def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
+    原始书籍编号 = str(书籍编号 or "").strip()
+    直接正文书籍元数据: dict[str, Any] = {}
+    try:
+        item_ids = resolve_directory(原始书籍编号)
+    except Exception as 目录异常:
+        try:
+            真实书籍编号, 直接正文书籍元数据 = 解析番茄阅读章节书籍编号(原始书籍编号)
+            if 真实书籍编号 == 原始书籍编号:
+                raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
+            item_ids = resolve_directory(真实书籍编号)
+            书籍编号 = 真实书籍编号
+            logger.info(
+                f"番茄小说目录回退成功：source=reader_item, chapters={len(item_ids)}"
+            )
+        except Exception as 直接正文异常:
+            logger.warning(
+                f"番茄畅听目录获取失败：book_id={原始书籍编号}, "
+                f"error={限制番茄日志文本(str(目录异常), 200)}, "
+                f"direct_app_error={限制番茄日志文本(str(直接正文异常), 200)}"
+            )
+            raise 目录异常 from 直接正文异常
+
     详情: dict[str, Any] = {}
     try:
         详情 = book_detail(书籍编号)
     except Exception as 异常:
         logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={异常}")
-
-    try:
-        item_ids = resolve_directory(书籍编号)
-    except Exception as 异常:
-        logger.warning(f"番茄畅听目录获取失败：book_id={书籍编号}, error={异常}")
-        raise
+    if not 详情 and 直接正文书籍元数据:
+        详情 = 直接正文书籍元数据
 
     目录元数据 = 读取番茄目录元数据(书籍编号, item_ids)
     目录 = [
