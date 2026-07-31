@@ -596,7 +596,7 @@ async def 上传小说并获取分享链接(
     源路径 = Path(源缓存路径)
     源文件存在 = 源路径.is_file()
     源文件大小 = 源路径.stat().st_size if 源文件存在 else 0
-    logger.info(
+    logger.debug(
         f"UC网盘上传前缓存检查：file={文件名}, exists={源文件存在}, size={源文件大小}"
     )
     if not 源文件存在:

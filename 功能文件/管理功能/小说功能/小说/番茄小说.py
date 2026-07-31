@@ -2203,12 +2203,12 @@ def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原�
         响应 = 读取番茄阅读正文(书籍编号, item_ids)
         infos = (响应.get("data") or {}).get("item_infos") or {}
         if 响应.get("code") == 0 and infos:
-            logger.info(
+            logger.debug(
                 f"番茄小说正文补拉成功：book_id={书籍编号}, reason={原因}, "
                 f"success={len(infos)}/{len(item_ids)}"
             )
             return 响应
-        logger.info(
+        logger.debug(
             f"番茄小说正文补拉无可用章节：book_id={书籍编号}, reason={原因}, "
             f"code={响应.get('code')}, message={限制番茄日志文本(str(响应.get('message') or 响应.get('msg') or ''), 200)}, "
             f"success={len(infos)}/{len(item_ids)}"
@@ -2239,7 +2239,7 @@ def full_mget(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Tup
         data = full_mget_http_json(url, headers, body_bytes, timeout=60)
         last_response = data if isinstance(data, dict) else {}
         if last_response.get("code") == 6000 and index < len(request_options) - 1 and mode not in {"fixed", "pure3040-legacy"}:
-            logger.info("番茄小说正文签名已失效，继续尝试下一个内置签名")
+            logger.debug("番茄小说正文签名已失效，继续尝试下一个内置签名")
             continue
         return last_response, client_x
     return last_response, client_x
@@ -2439,7 +2439,7 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield 番茄下载失败提示
             return
 
-        logger.info(
+        logger.debug(
             f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, "
             f"author={书籍信息.get('author')}, chapters={len(目录)}"
         )
@@ -2456,7 +2456,7 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
 
         文件名, 文件内容 = 生成番茄小说文件内容(书籍编号, 书籍信息, 目录, 章节结果列表)
-        logger.info(
+        logger.debug(
             f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, "
             f"success={len(成功章节列表)}, total={len(目录)}, file_size={len(文件内容)}"
         )
@@ -2496,7 +2496,7 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
             item_ids = resolve_directory(真实书籍编号)
             书籍编号 = 真实书籍编号
-            logger.info(
+            logger.debug(
                 f"番茄小说目录回退成功：source=reader_item, chapters={len(item_ids)}"
             )
         except Exception as 直接正文异常:
@@ -2599,7 +2599,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
     已完成 = 0
     下次进度 = max(1, 总数 // 番茄进度日志分段数)
     结果按序号: dict[int, dict[str, Any]] = {}
-    logger.info(
+    logger.debug(
         f"番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, "
         f"percent=0%, batches={len(任务列表)}, batch_size={批量章节数}, "
         f"concurrency={动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
@@ -2642,7 +2642,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
                 if 成功:
                     批次成功 += 1
                     if not 正文.strip():
-                        logger.info(
+                        logger.debug(
                             f"番茄小说章节正文为空但接口返回成功，保留章节标题：book_id={书籍编号}, "
                             f"chapter={序号}, chapter_id={item_id}, title={限制番茄日志文本(标题, 80)}"
                         )
@@ -2658,7 +2658,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
             if 已完成 >= 下次进度 or 已完成 >= 总数:
                 百分比 = int(min(100, 已完成 * 100 / max(1, 总数)))
                 当前成功 = sum(1 for 项目 in 结果按序号.values() if 项目.get("success"))
-                logger.info(
+                logger.debug(
                     f"番茄小说章节进度：book_id={书籍编号}, progress={min(已完成, 总数)}/{总数}, "
                     f"percent={百分比}%, success={当前成功}, last_batch_ok={批次成功}/{批次数量}"
                 )
@@ -2783,9 +2783,9 @@ async def 准备发送番茄文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    logger.info(f"番茄小说准备上传：file={文件名}, size={len(文件内容)}")
+    logger.debug(f"番茄小说准备上传：file={文件名}, size={len(文件内容)}")
     缓存路径 = 写入番茄下载缓存文件(文件名, 文件内容)
-    logger.info(f"番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
+    logger.debug(f"番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
     if UC网盘 is None:
         删除番茄缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
@@ -2797,7 +2797,7 @@ async def 准备发送番茄文本文件(
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
         完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
         if 完成结果.get("sent"):
-            logger.info(f"番茄小说UC网盘上传并发送完成按钮成功：file={文件名}")
+            logger.debug(f"番茄小说UC网盘上传并发送完成按钮成功：file={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -2818,9 +2818,9 @@ def 启动番茄百度后台上传并清理源文件(配置: Any, 源缓存路�
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.info(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                    logger.debug(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
                 elif 百度结果.get("skipped"):
-                    logger.info(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                    logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
                 elif 百度结果.get("enabled"):
                     logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
         except Exception as 异常:
@@ -2841,7 +2841,7 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
     try:
         Path(缓存路径).unlink(missing_ok=True)
         小说缓存工具.解除下载缓存占用(缓存路径)
-        logger.info(f"番茄小说下载缓存文件已删除：file={缓存路径}")
+        logger.debug(f"番茄小说下载缓存文件已删除：file={缓存路径}")
     except Exception as 异常:
         logger.warning(f"番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}")
 

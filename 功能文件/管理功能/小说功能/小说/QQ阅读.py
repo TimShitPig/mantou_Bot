@@ -1126,9 +1126,11 @@ def 解包出版书Zip条目(data: bytes, 密码: bytes) -> list[tuple[str, byte
             break
         if 签名 != 0x04034B50:
             break
-        _, 标志, 压缩方式, _, _, _, 压缩大小, _, 名称长度, 扩展长度 = struct.unpack_from("<HHHHHIIIHH", data, 位置 + 4)
+        _, 标志, 压缩方式, 修改时间, _, CRC, 压缩大小, 原始大小, 名称长度, 扩展长度 = struct.unpack_from("<HHHHHIIIHH", data, 位置 + 4)
         名称原文 = data[位置 + 30:位置 + 30 + 名称长度]
         数据起点 = 位置 + 30 + 名称长度 + 扩展长度
+        if 数据起点 + 压缩大小 > len(data):
+            raise ValueError("出版书条目数据不完整")
         负载 = data[数据起点:数据起点 + 压缩大小]
         位置 = 数据起点 + 压缩大小
         if 标志 & 0x8 and 位置 + 16 <= len(data) and data[位置:位置 + 4] == b"PK\x07\x08":
@@ -1137,7 +1139,11 @@ def 解包出版书Zip条目(data: bytes, 密码: bytes) -> list[tuple[str, byte
         if 标志 & 1:
             if len(负载) < 12:
                 raise ValueError("出版书加密条目过短")
-            内容 = 出版书ZipCrypto(密码).解密(负载)[12:]
+            解密负载 = 出版书ZipCrypto(密码).解密(负载)
+            校验字节 = (修改时间 >> 8) & 0xFF if 标志 & 0x8 else (CRC >> 24) & 0xFF
+            if 解密负载[11] != 校验字节:
+                raise ValueError("出版书密码校验失败")
+            内容 = 解密负载[12:]
         else:
             内容 = 负载
         if 压缩方式 == 0:
@@ -1146,6 +1152,10 @@ def 解包出版书Zip条目(data: bytes, 密码: bytes) -> list[tuple[str, byte
             明文 = zlib.decompress(内容, -15)
         else:
             raise ValueError(f"出版书不支持的压缩方式：{压缩方式}")
+        if 原始大小 and len(明文) != 原始大小:
+            raise ValueError("出版书条目长度校验失败")
+        if CRC and (zlib.crc32(明文) & 0xFFFFFFFF) != CRC:
+            raise ValueError("出版书条目校验失败")
         结果.append((名称, 明文))
     if not 结果:
         raise ValueError("出版书章节包没有可读条目")
@@ -1170,6 +1180,21 @@ def 出版书HTML转文本(data: bytes) -> str:
     return re.sub(r"\n{3,}", "\n\n", html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")).strip()
 
 
+def 出版书正文数据可信(名称: str, data: bytes) -> bool:
+    """拒绝控制字符或大量替换符组成的异常正文，避免写入乱码 TXT。"""
+    原始文本 = data.decode("utf-8", "replace")
+    if not 原始文本.strip():
+        return False
+    if 原始文本.count("\ufffd") * 20 > max(1, len(原始文本)):
+        return False
+    控制字符数 = sum(1 for 字符 in 原始文本 if ord(字符) < 32 and 字符 not in "\r\n\t")
+    if 控制字符数 > max(2, len(原始文本) // 100):
+        return False
+    lower = 名称.lower()
+    正文 = 出版书HTML转文本(data) if lower.endswith((".xhtml", ".html", ".htm")) else 原始文本.strip()
+    return any(字符.isalnum() or "\u4e00" <= 字符 <= "\u9fff" for 字符 in 正文)
+
+
 def 选择出版书正文条目(条目: Sequence[tuple[str, bytes]]) -> tuple[str, bytes]:
     候选: list[tuple[int, str, bytes]] = []
     for 名称, data in 条目:
@@ -1186,8 +1211,10 @@ def 选择出版书正文条目(条目: Sequence[tuple[str, bytes]]) -> tuple[st
         候选.append((分数, 名称, data))
     if not 候选:
         raise ValueError("出版书章节没有正文条目")
-    _, 名称, data = max(候选, key=lambda item: item[0])
-    return 名称, data
+    for _, 名称, data in sorted(候选, key=lambda item: item[0], reverse=True):
+        if 出版书正文数据可信(名称, data):
+            return 名称, data
+    raise ValueError("出版书正文校验失败")
 
 @dataclass
 class Tar成员:
@@ -1598,10 +1625,8 @@ async def 请求出版书章节包(
 ) -> bytes:
     请求态 = 组装本地下载态(登录态)
     fuid = str(请求态.get("fuid") or 默认App请求身份["fuid"])
-    if 有效QQ阅读登录态(请求态):
-        headers = 构建登录正文请求头(请求态)
-    else:
-        headers = 构建App请求头(请求态)
+    # ChapBat 的出版书资源目录固定使用 App 签名；浏览器 Cookie 仅用于后续 auth 密码请求。
+    headers = 构建App请求头(请求态)
     headers["Accept-Encoding"] = "identity"
     headers["text_type"] = "1"
     params = {
@@ -2215,7 +2240,7 @@ def 删除QQ阅读缓存文件(缓存路径: Any) -> None:
     try:
         Path(缓存路径).unlink(missing_ok=True)
         小说缓存工具.解除下载缓存占用(缓存路径)
-        logger.info(f"QQ阅读下载缓存文件已删除：file={缓存路径}")
+        logger.debug(f"QQ阅读下载缓存文件已删除：file={缓存路径}")
     except Exception as e:
         logger.warning(f"QQ阅读下载缓存文件删除失败：file={缓存路径}, error={e}")
 
@@ -2228,9 +2253,9 @@ def 启动QQ阅读百度后台上传并清理源文件(配置: Any, 源缓存路
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.info(f"QQ阅读百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                    logger.debug(f"QQ阅读百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
                 elif 百度结果.get("skipped"):
-                    logger.info(f"QQ阅读百度网盘后台上传按状态规则跳过：file={文件名}")
+                    logger.debug(f"QQ阅读百度网盘后台上传按状态规则跳过：file={文件名}")
                 elif 百度结果.get("enabled"):
                     logger.warning(f"QQ阅读百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
         except Exception as e:
@@ -2253,7 +2278,7 @@ async def 准备发送文本文件(
     作者: Any = "",
 ) -> dict[str, Any]:
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
-    logger.info(f"QQ阅读准备上传：file={文件名}, size={len(文件内容)}")
+    logger.debug(f"QQ阅读准备上传：file={文件名}, size={len(文件内容)}")
     if UC网盘 is None:
         删除QQ阅读缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
@@ -2265,7 +2290,7 @@ async def 准备发送文本文件(
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
         完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
         if 完成结果.get("sent"):
-            logger.info(f"QQ阅读UC网盘上传并发送完成按钮成功：file={文件名}")
+            logger.debug(f"QQ阅读UC网盘上传并发送完成按钮成功：file={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -2375,7 +2400,7 @@ async def 下载全书批量(
     已完成 = 成功累计 = 失败累计 = 上次日志进度 = 0
     进度锁 = asyncio.Lock()
 
-    logger.info(
+    logger.debug(
         f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
         f"batches={len(分批)}, batch_size={每批}, concurrency={并发}"
     )
@@ -2402,7 +2427,7 @@ async def 下载全书批量(
                 return
             上次日志进度 = 当前进度
             百分比 = int(已完成 * 100 / 总数) if 总数 else 100
-            logger.info(
+            logger.debug(
                 f"QQ阅读章节进度：book_id={书籍编号}, "
                 f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
             )
@@ -2491,7 +2516,7 @@ async def 下载全书批量(
     for 序号, _批次 in 分批:
         合并.extend(结果映射.get(序号) or [])
     成功 = sum(1 for 章节 in 合并 if 章节.get("success"))
-    logger.info(
+    logger.debug(
         f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
         f"file_ready={成功 == 总数}, request_denied={请求被拒绝}"
     )
@@ -2582,7 +2607,7 @@ async def 请求出版书访问密码(
             密码, 授权状态 = 解析出版书授权数据(data, 身份候选)
             最后授权状态 = 授权状态
             if 密码:
-                logger.info(
+                logger.debug(
                     f"QQ阅读出版书授权诊断：book_id={书籍编号}, attempts={尝试次数}, status={status}, "
                     f"header_mode={请求头模式}, qrsn_source={认证来源}, auth_code={授权状态}, has_pwd=yes"
                 )
@@ -2707,7 +2732,7 @@ async def 补齐出版书章节资源(
             结果[位置] = {**结果[位置], "resource_url": 资源地址}
             单章恢复数 += 1
     恢复数 = 批量恢复数 + 单章恢复数
-    logger.info(
+    logger.debug(
         f"QQ阅读出版书资源补齐：book_id={书籍编号}, missing={len(缺少资源位置)}, "
         f"batches={len(窗口批次)}, bulk_recovered={批量恢复数}, fallback={len(剩余位置)}, "
         f"fallback_recovered={单章恢复数}, recovered={恢复数}, "
@@ -2749,7 +2774,7 @@ async def 下载出版书全书(
     信号量 = asyncio.Semaphore(并发)
     已完成 = 成功累计 = 失败累计 = 上次日志进度 = 0
     进度锁 = asyncio.Lock()
-    logger.info(
+    logger.debug(
         f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
         f"batches=1, batch_size={总数}, concurrency={并发}, book_type=published"
     )
@@ -2765,7 +2790,7 @@ async def 下载出版书全书(
                 return
             上次日志进度 = 当前进度
             百分比 = int(已完成 * 100 / 总数) if 总数 else 100
-            logger.info(
+            logger.debug(
                 f"QQ阅读章节进度：book_id={书籍编号}, "
                 f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
             )
@@ -2814,7 +2839,7 @@ async def 下载出版书全书(
     await asyncio.gather(*(执行(位置, 章节) for 位置, 章节 in enumerate(目录)))
     成功 = sum(1 for 章节 in 结果 if 章节正文有效(章节))
     缺少资源 = sum(1 for 章节 in 目录 if not str(章节.get("resource_url") or "").strip())
-    logger.info(
+    logger.debug(
         f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
         f"file_ready={成功 == 总数}, request_denied={bool(缺少资源)}"
     )
@@ -2857,7 +2882,7 @@ async def 补拉少量缺失章节(
     初始缺章位置 = 获取可补拉章节位置(合并, 请求被拒绝)
     if not 初始缺章位置:
         return 合并
-    logger.info(
+    logger.debug(
         f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(初始缺章位置)}, "
         f"rounds={缺章定向补拉轮数}, window_size={App章节窗口上限}, "
         f"concurrency={min(缺章定向补拉并发, len(初始缺章位置))}"
@@ -2931,7 +2956,7 @@ async def 补拉少量缺失章节(
                     本轮恢复数 += 1
         总恢复数 += 本轮恢复数
         仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
-        logger.info(
+        logger.debug(
             f"QQ阅读少量缺章补拉结果：book_id={书籍编号}, round={轮次}/{缺章定向补拉轮数}, "
             f"recovered={本轮恢复数}, still_missing={仍缺}"
         )
@@ -2940,7 +2965,7 @@ async def 补拉少量缺失章节(
         if 轮次 < 缺章定向补拉轮数:
             await asyncio.sleep(0.2 * 轮次)
 
-    logger.info(
+    logger.debug(
         f"QQ阅读少量缺章补拉汇总：book_id={书籍编号}, recovered={总恢复数}, "
         f"still_missing={sum(1 for 章节 in 合并 if not 章节正文有效(章节))}"
     )
@@ -2991,7 +3016,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             疑似收费 = 免费章上限 > 0 and 免费章上限 < len(目录)
 
             书籍信息["chapter_count"] = len(目录)
-            logger.info(
+            logger.debug(
                 f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
                 f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
                 f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
@@ -3034,7 +3059,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
                     yield 下载失败提示
                 return
             文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节结果)
-            logger.info(f"QQ阅读章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功列表)}, total={len(目录)}, file_size={len(文件内容)}")
+            logger.debug(f"QQ阅读章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功列表)}, total={len(目录)}, file_size={len(文件内容)}")
             发送结果 = await 准备发送文本文件(
                 event,
                 文件名,
