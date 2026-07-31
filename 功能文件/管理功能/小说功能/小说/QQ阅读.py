@@ -60,6 +60,7 @@ App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
 内存密钥池缓存: dict[str, tuple[float, str]] = {}
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
 批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2
+缺章定向补拉上限=20; 缺章定向补拉并发=4; 缺章定向补拉正文类型=(1,2)
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
@@ -1218,12 +1219,17 @@ async def http_post_form_json(session: aiohttp.ClientSession, url: str, params: 
         return json.loads(await resp.text())
 
 
-async def 请求动态密钥池(session: aiohttp.ClientSession, 下载态: Mapping[str, str]) -> str:
+async def 请求动态密钥池(
+    session: aiohttp.ClientSession,
+    下载态: Mapping[str, str],
+    *,
+    强制刷新: bool = False,
+) -> str:
     """从 App 密钥池接口取当前 fuid 对应的解密令牌，仅保留进程内短缓存。"""
     fuid = str(下载态.get("fuid") or 默认App请求身份["fuid"])
     已缓存 = 内存密钥池缓存.get(fuid)
     当前时间 = time.monotonic()
-    if 已缓存 and 当前时间 - 已缓存[0] < 密钥池缓存秒数:
+    if not 强制刷新 and 已缓存 and 当前时间 - 已缓存[0] < 密钥池缓存秒数:
         return 已缓存[1]
 
     地址 = 组装URL("https://newminerva-tgw.reader.qq.com/sk", {"fuid": fuid})
@@ -1273,6 +1279,7 @@ async def 请求批量包(
     scids: str,
     *,
     登录态: Optional[Mapping[str, str]] = None,
+    正文类型: int = 1,
     timeout: int = 300,
 ) -> bytes:
     请求态 = 组装本地下载态(登录态)
@@ -1290,7 +1297,7 @@ async def 请求批量包(
             "adState": 1,
             "fuid": fuid,
             "noclick": 1,
-            "text_type": 1,
+            "text_type": int(正文类型),
             "useindex": 0,
         }
     else:
@@ -2126,6 +2133,103 @@ async def 下载全书批量(
     return 章节下载汇总(合并, 请求被拒绝=请求被拒绝)
 
 
+def 章节正文有效(章节: Mapping[str, Any]) -> bool:
+    return bool(章节.get("success") and str(章节.get("content") or "").strip())
+
+
+def 获取可补拉章节位置(
+    章节列表: Sequence[Mapping[str, Any]],
+    请求被拒绝: bool,
+) -> list[int]:
+    """只恢复少量传输或解密缺章，避免收费书触发大规模无效请求。"""
+    if 请求被拒绝:
+        return []
+    缺章位置 = [位置 for 位置, 章节 in enumerate(章节列表) if not 章节正文有效(章节)]
+    if 0 < len(缺章位置) <= 缺章定向补拉上限:
+        return 缺章位置
+    return []
+
+
+async def 补拉少量缺失章节(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    章节列表: list[dict[str, Any]],
+    下载态: Mapping[str, str],
+    *,
+    请求被拒绝: bool = False,
+) -> list[dict[str, Any]]:
+    """按参考 App 的密钥池刷新策略，只补拉少量失败章节。"""
+    缺章位置 = 获取可补拉章节位置(章节列表, 请求被拒绝)
+    if not 缺章位置:
+        return 章节列表
+
+    补拉下载态 = 组装本地下载态(下载态)
+    try:
+        补拉下载态["keypool_b64"] = await 请求动态密钥池(session, 补拉下载态, 强制刷新=True)
+    except Exception as 异常:
+        logger.debug(f"QQ阅读少量缺章刷新密钥池失败：book_id={书籍编号}, error={type(异常).__name__}")
+
+    logger.info(
+        f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(缺章位置)}, "
+        f"concurrency={min(缺章定向补拉并发, len(缺章位置))}"
+    )
+    合并 = list(章节列表)
+    信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(缺章位置)))
+
+    async def 补拉一章(位置: int) -> tuple[int, dict[str, Any]]:
+        原章节 = 合并[位置]
+        索引 = 安全整数(原章节.get("index"))
+        cid = str(原章节.get("cid") or 原章节.get("id") or 索引 or "")
+        标题 = 清理文本(原章节.get("title") or f"第{索引}章")
+        scids = str(索引 or cid)
+        if not scids:
+            return 位置, 原章节
+
+        async with 信号量:
+            for 正文类型 in 缺章定向补拉正文类型:
+                try:
+                    blob = await 请求批量包(
+                        session,
+                        书籍编号,
+                        scids,
+                        登录态=补拉下载态,
+                        正文类型=正文类型,
+                        timeout=120,
+                    )
+                    if 是否deny(blob):
+                        break
+                    章节成员列表 = 章节成员(解析tar(blob), 书籍编号)
+                    章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 章节成员列表}
+                    成员 = 章节映射.get(cid)
+                    if 成员 is None and len(章节成员列表) == 1:
+                        成员 = 章节成员列表[0]
+                    if 成员 is None or not 成员.data:
+                        continue
+                    正文, _ = 解密章节(成员.data, 书籍编号, cid or 章节编号(成员.name, 书籍编号), 补拉下载态)
+                    if 正文:
+                        return 位置, {**原章节, "title": 标题, "content": 正文, "success": True}
+                except Exception as 异常:
+                    logger.debug(
+                        f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, index={索引}, "
+                        f"text_type={正文类型}, error={type(异常).__name__}"
+                    )
+        return 位置, 原章节
+
+    任务 = [asyncio.create_task(补拉一章(位置)) for 位置 in 缺章位置]
+    恢复数 = 0
+    for 任务结果 in asyncio.as_completed(任务):
+        位置, 新章节 = await 任务结果
+        if 章节正文有效(新章节):
+            合并[位置] = 新章节
+            恢复数 += 1
+
+    仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
+    logger.info(
+        f"QQ阅读少量缺章补拉结果：book_id={书籍编号}, recovered={恢复数}, still_missing={仍缺}"
+    )
+    return 合并
+
+
 async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 解析书籍编号(来源)
     if not 书籍编号:
@@ -2172,13 +2276,21 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
 
             下载汇总 = await 下载全书批量(会话, 书籍编号, 下载目录, 下载态)
             章节结果 = 下载汇总.章节
-            成功列表 = [x for x in 章节结果 if x.get("success") and str(x.get("content") or "").strip()]
+            章节结果 = await 补拉少量缺失章节(
+                会话,
+                书籍编号,
+                章节结果,
+                下载态,
+                请求被拒绝=下载汇总.请求被拒绝,
+            )
+            成功列表 = [x for x in 章节结果 if 章节正文有效(x)]
             if not 成功列表 or len(成功列表) < len(下载目录):
                 logger.warning(
                     f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
                     f"catalog_total={len(目录)}, request_denied={下载汇总.请求被拒绝}"
                 )
-                if 疑似收费 or (成功列表 and len(成功列表) < len(目录)):
+                成功比例 = len(成功列表) / len(下载目录) if 下载目录 else 0
+                if 疑似收费 and 服务端会员 != "yes" and (下载汇总.请求被拒绝 or 成功比例 < 0.95):
                     yield 收费书提示
                 else:
                     yield 下载失败提示
