@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v4.10.11 |
+| 版本 | v4.10.12 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -26,7 +26,7 @@
 | 管理功能 | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 默认使用本地番茄畅听下载；详情、目录和正文均请求畅听接口，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫长篇/短篇链接，正文优先批量下载，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 书旗小说 | 书旗链接/书旗分享卡片 | 识别书旗长篇/短篇/短链链接，优先使用 30 章批量包，未解锁时回退 80 动态并发单章下载，完成后上传 UC 并发送“点击打开”按钮 |
-| 管理功能 | QQ阅读 | QQ阅读详情/目录链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、`QQ阅读登录`、直接发送 QQ阅读 Cookie、`QQ阅读cookie状态` | 详情、目录和正文统一使用 QQ阅读 App 签名接口与动态密钥池解密，完成后上传 UC 并发送“点击打开”按钮；管理员可用手机号登录或直接发送浏览器 Cookie、curl、Cookie Editor JSON、cookies.txt 保存登录态到 MySQL；新登录成功后覆盖旧登录态，失败时保留旧登录态 |
+| 管理功能 | QQ阅读 | QQ阅读详情/目录链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、`QQ阅读登录`、直接发送 QQ阅读 Cookie、`QQ阅读cookie状态` | 详情、目录和正文固定使用 QQ阅读 App 身份、签名与动态密钥池；每 500 章一个业务批次、最多 4 批并发，批内按 31 章 App 窗口请求；浏览器登录态不覆盖正文签名或解密身份，仅用于出版书授权；完成后上传 UC 并发送“点击打开”按钮。管理员可用手机号登录或直接发送浏览器 Cookie、curl、Cookie Editor JSON、cookies.txt 保存登录态到 MySQL；新登录成功后覆盖旧登录态，失败时保留旧登录态 |
 
 <details>
 <summary>查看群管功能</summary>

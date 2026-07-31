@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import struct
 import sys
@@ -7,6 +8,7 @@ import types
 import unittest
 import zlib
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 
@@ -146,6 +148,182 @@ class QQ阅读出版书测试(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["uid"], "app-id")
         self.assertNotIn("Cookie", headers)
         self.assertEqual(headers["text_type"], "1")
+
+    async def test_批量正文忽略浏览器登录态并固定使用_app_签名(self):
+        captured: dict[str, object] = {}
+
+        async def fake_http_get_bytes(session, url, headers, timeout=60):
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            return b"chapter-package", 200
+
+        browser_login = {
+            "ywguid": "browser-id",
+            "ywkey": "browser-key",
+            "Cookie": "ywguid=browser-id; ywkey=browser-key;",
+            "fuid": "browser-fuid",
+        }
+        app_headers = {"User-Agent": "app", "uid": "app-id"}
+        with patch.object(QQ阅读, "构建App请求头", return_value=app_headers) as build_headers:
+            with patch.object(QQ阅读, "http_get_bytes", side_effect=fake_http_get_bytes):
+                result = await QQ阅读.请求批量包(
+                    object(),
+                    "book-id",
+                    "1-31",
+                    登录态=browser_login,
+                )
+
+        self.assertEqual(result, b"chapter-package")
+        build_headers.assert_called_once()
+        headers = captured["headers"]
+        self.assertEqual(headers, app_headers)
+        self.assertNotIn("Cookie", headers)
+        query = parse_qs(urlparse(str(captured["url"])).query)
+        self.assertEqual(query["type"], ["2"])
+        self.assertEqual(query["scids"], ["1-31"])
+        self.assertEqual(query["fuid"], [QQ阅读.默认App请求身份["fuid"]])
+        self.assertNotIn("text_type", query)
+
+    async def test_目录包使用_app_签名请求头(self):
+        captured: dict[str, object] = {}
+
+        async def fake_http_get_bytes(session, url, headers, timeout=60):
+            captured["headers"] = dict(headers)
+            return b"catalog-package", 200
+
+        app_headers = {"User-Agent": "app", "uid": "app-id"}
+        with patch.object(QQ阅读, "构建App请求头", return_value=app_headers) as build_headers:
+            with patch.object(QQ阅读, "http_get_bytes", side_effect=fake_http_get_bytes):
+                result = await QQ阅读.请求目录包(object(), "book-id")
+
+        self.assertEqual(result, b"catalog-package")
+        build_headers.assert_called_once()
+        self.assertEqual(captured["headers"], app_headers)
+
+    async def test_书籍详情忽略浏览器_cookie_并使用_app_签名(self):
+        captured: dict[str, object] = {}
+
+        async def fake_http_get_json(session, url, headers, timeout=30):
+            captured["headers"] = dict(headers)
+            return {"title": "book"}
+
+        browser_login = {
+            "ywguid": "browser-id",
+            "ywkey": "browser-key",
+            "Cookie": "ywguid=browser-id; ywkey=browser-key;",
+        }
+        app_headers = {"User-Agent": "app", "uid": "app-id"}
+        with patch.object(QQ阅读, "构建App请求头", return_value=app_headers) as build_headers:
+            with patch.object(QQ阅读, "http_get_json", side_effect=fake_http_get_json):
+                result = await QQ阅读.请求书籍信息(object(), "book-id", browser_login)
+
+        self.assertEqual(result, {"title": "book"})
+        build_headers.assert_called_once()
+        self.assertEqual(captured["headers"], app_headers)
+        self.assertNotIn("Cookie", captured["headers"])
+
+    async def test_动态密钥池固定使用_app_fuid(self):
+        captured: dict[str, object] = {}
+
+        async def fake_http_get_json(session, url, headers, timeout=30):
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            return {"pool": "cG9vbA=="}
+
+        QQ阅读.内存密钥池缓存.clear()
+        with patch.object(QQ阅读, "http_get_json", side_effect=fake_http_get_json):
+            with patch.object(QQ阅读, "decrypt_keypool", return_value=["token"]) as decrypt_pool:
+                result = await QQ阅读.请求动态密钥池(object(), {"fuid": "browser-fuid"})
+
+        self.assertEqual(result, "cG9vbA==")
+        query = parse_qs(urlparse(str(captured["url"])).query)
+        self.assertEqual(query["fuid"], [QQ阅读.默认App请求身份["fuid"]])
+        self.assertNotIn("Cookie", captured["headers"])
+        self.assertEqual(decrypt_pool.call_args.args[1], QQ阅读.master_key(QQ阅读.默认App请求身份["fuid"]))
+
+    def test_浏览器登录态不能覆盖_app_加密身份(self):
+        下载态 = QQ阅读.组装本地下载态(
+            {
+                "ywguid": "browser-id",
+                "ywkey": "browser-key",
+                "fuid": "browser-fuid",
+            }
+        )
+
+        self.assertEqual(下载态["fuid"], QQ阅读.默认App请求身份["fuid"])
+
+    def test_章节解密始终使用_app_加密身份(self):
+        with patch.object(QQ阅读, "解密章节密文", return_value=(b"chapter", "ok")) as decrypt:
+            text, note = QQ阅读.解密章节(
+                b"cipher",
+                "book-id",
+                "chapter-id",
+                {"fuid": "browser-fuid", "keypool_b64": "a2V5cG9vbA=="},
+            )
+
+        self.assertEqual((text, note), ("chapter", "ok"))
+        self.assertEqual(decrypt.call_args.kwargs["fuid"], QQ阅读.默认App请求身份["fuid"])
+
+    async def test_五百章业务批次按三十一章_app_窗口请求(self):
+        requests: list[str] = []
+        目录 = [
+            {"cid": str(index), "id": str(index), "index": index, "title": f"第{index}章"}
+            for index in range(1, 501)
+        ]
+
+        async def fake_request(session, bid, scids, **kwargs):
+            requests.append(scids)
+            return scids.encode("ascii")
+
+        def fake_parse(blob):
+            start_text, end_text = blob.decode("ascii").split("-", 1)
+            return [
+                QQ阅读.Tar成员(f"book-id_{index}_s", len(b"chapter"), b"chapter")
+                for index in range(int(start_text), int(end_text) + 1)
+            ]
+
+        with patch.object(QQ阅读, "请求批量包", side_effect=fake_request):
+            with patch.object(QQ阅读, "解析tar", side_effect=fake_parse):
+                result = await QQ阅读.下载全书批量(object(), "book-id", 目录, {})
+
+        expected = [
+            f"{start}-{min(start + QQ阅读.App章节窗口上限 - 1, 500)}"
+            for start in range(1, 501, QQ阅读.App章节窗口上限)
+        ]
+        self.assertEqual(requests, expected)
+        self.assertEqual(len(result.章节), 500)
+        self.assertTrue(all(chapter["success"] for chapter in result.章节))
+
+    async def test_多业务批次的_app_请求并发不超过四(self):
+        active = 0
+        peak = 0
+        目录 = [
+            {"cid": str(index), "id": str(index), "index": index, "title": f"第{index}章"}
+            for index in range(1, 2501)
+        ]
+
+        async def fake_request(session, bid, scids, **kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.001)
+            active -= 1
+            return scids.encode("ascii")
+
+        def fake_parse(blob):
+            start_text, end_text = blob.decode("ascii").split("-", 1)
+            return [
+                QQ阅读.Tar成员(f"book-id_{index}_s", len(b"chapter"), b"chapter")
+                for index in range(int(start_text), int(end_text) + 1)
+            ]
+
+        with patch.object(QQ阅读, "请求批量包", side_effect=fake_request):
+            with patch.object(QQ阅读, "解析tar", side_effect=fake_parse):
+                result = await QQ阅读.下载全书批量(object(), "book-id", 目录, {})
+
+        self.assertEqual(peak, QQ阅读.批量并发上限)
+        self.assertEqual(len(result.章节), 2500)
+        self.assertTrue(all(chapter["success"] for chapter in result.章节))
 
 
 if __name__ == "__main__":
