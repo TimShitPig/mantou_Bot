@@ -60,7 +60,7 @@ except Exception as e:
 App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
 内存密钥池缓存: dict[str, tuple[float, str]] = {}
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
-批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2
+批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2; App章节窗口上限=31
 缺章定向补拉最小上限=20; 缺章定向补拉最大上限=120; 缺章定向补拉比例百分数=2; 缺章定向补拉轮数=3; 缺章定向补拉并发=4; 缺章定向补拉正文类型=(1,2)
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
@@ -1294,6 +1294,34 @@ def 章节编号(name: str, bid: str) -> str:
     if mid.endswith("_s"): mid = mid[:-2]
     return mid
 
+
+def 构建索引补拉窗口(
+    章节列表: Sequence[Mapping[str, Any]],
+    位置列表: Sequence[int],
+    *,
+    window_size: int = App章节窗口上限,
+) -> list[tuple[str, list[int]]]:
+    """将稀疏缺章归并为 App 已验证的连续章节窗口。"""
+    总数 = len(章节列表)
+    大小 = max(1, int(window_size or App章节窗口上限))
+    分组: dict[tuple[int, int], list[int]] = {}
+    有效位置: set[int] = set()
+    for 项 in 位置列表:
+        try:
+            位置 = int(项)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= 位置 < 总数:
+            有效位置.add(位置)
+    for 位置 in sorted(有效位置):
+        章节 = 章节列表[位置]
+        索引 = 安全整数(章节.get("index")) or 位置 + 1
+        索引 = max(1, min(索引, 总数))
+        起始 = ((索引 - 1) // 大小) * 大小 + 1
+        结束 = min(起始 + 大小 - 1, 总数)
+        分组.setdefault((起始, 结束), []).append(位置)
+    return [(f"{起始}-{结束}", 位置) for (起始, 结束), 位置 in sorted(分组.items())]
+
 # ===== 五、请求头与下载态 =====
 
 def 组装URL(base: str, params: Mapping[str, Any]) -> str:
@@ -2407,32 +2435,37 @@ async def 下载全书批量(
                     chaps = 章节成员(entries, 书籍编号)
                     by_cid = {章节编号(entry.name, 书籍编号): entry for entry in chaps}
                     结果: list[dict[str, Any]] = []
-                    成功数 = 0
+                    成功数 = 缺少成员数 = 解密失败数 = 0
 
                     for 位置, 章节 in enumerate(批次):
                         cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
+                        索引 = 安全整数(章节.get("index")) or (起始 + 位置)
                         标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
-                        entry = by_cid.get(cid)
+                        entry = by_cid.get(cid) or by_cid.get(str(索引))
                         if entry is None and len(chaps) == len(批次):
                             entry = chaps[位置]
                         if entry is None or not entry.data:
+                            缺少成员数 += 1
                             结果.append({**章节, "title": 标题, "content": "", "success": False})
                             continue
 
-                        正文, note = 解密章节(entry.data, 书籍编号, cid or 章节编号(entry.name, 书籍编号), 下载态)
+                        成员章节号 = 章节编号(entry.name, 书籍编号)
+                        正文, note = 解密章节(entry.data, 书籍编号, 成员章节号 or cid, 下载态)
                         if 正文:
                             成功数 += 1
                             结果.append({**章节, "title": 标题, "content": 正文, "success": True})
                         else:
+                            解密失败数 += 1
                             logger.debug(
-                                f"QQ阅读章节解密失败：book_id={书籍编号}, cid={cid}, "
+                                f"QQ阅读章节解密失败：book_id={书籍编号}, cid={成员章节号 or cid}, "
                                 f"note={限制文本长度(note, 80)}"
                             )
                             结果.append({**章节, "title": 标题, "content": "", "success": False})
 
                     logger.debug(
                         f"QQ阅读批次完成：book_id={书籍编号}, batch={序号 + 1}/{len(分批)}, "
-                        f"range={起始}-{结束}, success={成功数}/{len(批次)}, tar_files={len(chaps)}"
+                        f"range={起始}-{结束}, success={成功数}/{len(批次)}, tar_files={len(chaps)}, "
+                        f"missing_entry={缺少成员数}, decrypt_failed={解密失败数}"
                     )
                     return 序号, 结果, False
                 except Exception as e:
@@ -2569,7 +2602,7 @@ async def 补齐出版书章节资源(
     目录: list[dict[str, Any]],
     登录态: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    """出版书目录批量响应可能只携带试读资源；授权成功后按缺失章节补齐资源地址。"""
+    """先按 App 章节窗口补资源，只对窗口仍缺的章节单章兜底。"""
     缺少资源位置 = [
         位置 for 位置, 章节 in enumerate(目录)
         if not str(章节.get("resource_url") or "").strip()
@@ -2578,7 +2611,60 @@ async def 补齐出版书章节资源(
         return 目录
 
     结果 = list(目录)
-    信号量 = asyncio.Semaphore(min(批量并发上限, len(缺少资源位置)))
+    开始时间 = time.monotonic()
+    窗口批次 = 构建索引补拉窗口(结果, 缺少资源位置)
+    信号量 = asyncio.Semaphore(min(批量并发上限, len(窗口批次)))
+
+    def 匹配窗口资源(
+        候选目录: Sequence[Mapping[str, Any]],
+        目标位置: Sequence[int],
+    ) -> list[tuple[int, str]]:
+        候选映射 = {
+            str(章节.get("cid") or ""): str(章节.get("resource_url") or "").strip()
+            for 章节 in 候选目录
+            if str(章节.get("cid") or "").strip() and str(章节.get("resource_url") or "").strip()
+        }
+        return [
+            (位置, 候选映射.get(str(结果[位置].get("cid") or 结果[位置].get("id") or ""), ""))
+            for 位置 in 目标位置
+            if 候选映射.get(str(结果[位置].get("cid") or 结果[位置].get("id") or ""), "")
+        ]
+
+    async def 补齐一窗口(scids: str, 目标位置: list[int]) -> list[tuple[int, str]]:
+        已恢复: dict[int, str] = {}
+        async with 信号量:
+            for 尝试 in range(1, 批量网络重试次数 + 1):
+                try:
+                    blob = await 请求出版书章节包(session, 书籍编号, scids, 登录态, timeout=120)
+                    候选目录 = 解析出版书目录(解析出版书信息包(blob))
+                    for 位置, 资源地址 in 匹配窗口资源(候选目录, 目标位置):
+                        已恢复[位置] = 资源地址
+                    if len(已恢复) == len(目标位置):
+                        break
+                except Exception as 异常:
+                    logger.debug(
+                        f"QQ阅读出版书窗口资源补齐失败：book_id={书籍编号}, range={scids}, "
+                        f"error={type(异常).__name__}"
+                    )
+                if 尝试 < 批量网络重试次数:
+                    await asyncio.sleep(0.2 * 尝试)
+        return list(已恢复.items())
+
+    窗口结果 = await asyncio.gather(*(补齐一窗口(scids, 位置) for scids, 位置 in 窗口批次))
+    批量恢复数 = 0
+    for 批次结果 in 窗口结果:
+        for 位置, 资源地址 in 批次结果:
+            if not 资源地址 or str(结果[位置].get("resource_url") or "").strip():
+                continue
+            结果[位置] = {**结果[位置], "resource_url": 资源地址}
+            批量恢复数 += 1
+
+    剩余位置 = [
+        位置 for 位置, 章节 in enumerate(结果)
+        if not str(章节.get("resource_url") or "").strip()
+    ]
+    单章恢复数 = 0
+    单章信号量 = asyncio.Semaphore(max(1, min(批量并发上限, len(剩余位置))))
 
     async def 补齐一章(位置: int) -> tuple[int, str]:
         原章节 = 结果[位置]
@@ -2590,7 +2676,7 @@ async def 补齐出版书章节资源(
         if not 候选章节号:
             return 位置, ""
 
-        async with 信号量:
+        async with 单章信号量:
             for 尝试 in range(1, 批量网络重试次数 + 1):
                 for scids in 候选章节号:
                     try:
@@ -2613,16 +2699,20 @@ async def 补齐出版书章节资源(
                     await asyncio.sleep(0.2 * 尝试)
         return 位置, ""
 
-    补齐结果 = await asyncio.gather(*(补齐一章(位置) for 位置 in 缺少资源位置))
-    恢复数 = 0
-    for 位置, 资源地址 in 补齐结果:
-        if not 资源地址:
-            continue
-        结果[位置] = {**结果[位置], "resource_url": 资源地址}
-        恢复数 += 1
+    if 剩余位置:
+        补齐结果 = await asyncio.gather(*(补齐一章(位置) for 位置 in 剩余位置))
+        for 位置, 资源地址 in 补齐结果:
+            if not 资源地址:
+                continue
+            结果[位置] = {**结果[位置], "resource_url": 资源地址}
+            单章恢复数 += 1
+    恢复数 = 批量恢复数 + 单章恢复数
     logger.info(
         f"QQ阅读出版书资源补齐：book_id={书籍编号}, missing={len(缺少资源位置)}, "
-        f"recovered={恢复数}, still_missing={len(缺少资源位置) - 恢复数}"
+        f"batches={len(窗口批次)}, bulk_recovered={批量恢复数}, fallback={len(剩余位置)}, "
+        f"fallback_recovered={单章恢复数}, recovered={恢复数}, "
+        f"still_missing={len(缺少资源位置) - 恢复数}, "
+        f"elapsed_ms={int((time.monotonic() - 开始时间) * 1000)}"
     )
     return 结果
 
@@ -2769,7 +2859,8 @@ async def 补拉少量缺失章节(
         return 合并
     logger.info(
         f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(初始缺章位置)}, "
-        f"rounds={缺章定向补拉轮数}, concurrency={min(缺章定向补拉并发, len(初始缺章位置))}"
+        f"rounds={缺章定向补拉轮数}, window_size={App章节窗口上限}, "
+        f"concurrency={min(缺章定向补拉并发, len(初始缺章位置))}"
     )
 
     总恢复数 = 0
@@ -2783,57 +2874,61 @@ async def 补拉少量缺失章节(
             补拉下载态["keypool_b64"] = await 请求动态密钥池(session, 补拉下载态, 强制刷新=True)
         except Exception as 异常:
             logger.debug(f"QQ阅读少量缺章刷新密钥池失败：book_id={书籍编号}, error={type(异常).__name__}")
-        信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(缺章位置)))
+        窗口批次 = 构建索引补拉窗口(合并, 缺章位置)
+        信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(窗口批次)))
 
-        async def 补拉一章(位置: int) -> tuple[int, dict[str, Any]]:
-            原章节 = 合并[位置]
-            索引 = 安全整数(原章节.get("index"))
-            cid = str(原章节.get("cid") or 原章节.get("id") or 索引 or "")
-            标题 = 清理文本(原章节.get("title") or f"第{索引}章")
-            请求章节号 = [str(索引)] if 索引 else []
-            if cid and cid not in 请求章节号:
-                请求章节号.append(cid)
-            if not 请求章节号:
-                return 位置, 原章节
-
+        async def 补拉一窗口(scids: str, 目标位置: list[int]) -> list[tuple[int, dict[str, Any]]]:
+            已恢复: dict[int, dict[str, Any]] = {}
             async with 信号量:
                 for 正文类型 in 缺章定向补拉正文类型:
-                    for scids in 请求章节号:
-                        try:
-                            blob = await 请求批量包(
-                                session,
-                                书籍编号,
-                                scids,
-                                登录态=补拉下载态,
-                                正文类型=正文类型,
-                                timeout=120,
-                            )
-                            if 是否deny(blob):
-                                return 位置, 原章节
-                            章节成员列表 = 章节成员(解析tar(blob), 书籍编号)
-                            章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 章节成员列表}
-                            成员 = 章节映射.get(cid)
-                            if 成员 is None and len(章节成员列表) == 1:
-                                成员 = 章节成员列表[0]
+                    try:
+                        blob = await 请求批量包(
+                            session,
+                            书籍编号,
+                            scids,
+                            登录态=补拉下载态,
+                            正文类型=正文类型,
+                            timeout=120,
+                        )
+                        if 是否deny(blob):
+                            return list(已恢复.items())
+                        成员列表 = 章节成员(解析tar(blob), 书籍编号)
+                        章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 成员列表}
+                        for 位置 in 目标位置:
+                            if 位置 in 已恢复:
+                                continue
+                            原章节 = 合并[位置]
+                            索引 = 安全整数(原章节.get("index")) or 位置 + 1
+                            cid = str(原章节.get("cid") or 原章节.get("id") or 索引)
+                            标题 = 清理文本(原章节.get("title") or f"第{索引}章")
+                            成员 = 章节映射.get(str(索引)) or 章节映射.get(cid)
                             if 成员 is None or not 成员.data:
                                 continue
-                            正文, _ = 解密章节(成员.data, 书籍编号, cid or 章节编号(成员.name, 书籍编号), 补拉下载态)
+                            成员章节号 = 章节编号(成员.name, 书籍编号)
+                            正文, note = 解密章节(成员.data, 书籍编号, 成员章节号 or cid, 补拉下载态)
                             if 正文:
-                                return 位置, {**原章节, "title": 标题, "content": 正文, "success": True}
-                        except Exception as 异常:
-                            logger.debug(
-                                f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, index={索引}, "
-                                f"round={轮次}, text_type={正文类型}, error={type(异常).__name__}"
-                            )
-            return 位置, 原章节
+                                已恢复[位置] = {**原章节, "title": 标题, "content": 正文, "success": True}
+                            else:
+                                logger.debug(
+                                    f"QQ阅读少量缺章解密失败：book_id={书籍编号}, cid={成员章节号 or cid}, "
+                                    f"round={轮次}, text_type={正文类型}, note={限制文本长度(note, 80)}"
+                                )
+                        if len(已恢复) == len(目标位置):
+                            break
+                    except Exception as 异常:
+                        logger.debug(
+                            f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, range={scids}, "
+                            f"round={轮次}, text_type={正文类型}, error={type(异常).__name__}"
+                        )
+            return list(已恢复.items())
 
-        任务 = [asyncio.create_task(补拉一章(位置)) for 位置 in 缺章位置]
+        任务 = [asyncio.create_task(补拉一窗口(scids, 位置)) for scids, 位置 in 窗口批次]
         本轮恢复数 = 0
         for 任务结果 in asyncio.as_completed(任务):
-            位置, 新章节 = await 任务结果
-            if 章节正文有效(新章节):
-                合并[位置] = 新章节
-                本轮恢复数 += 1
+            for 位置, 新章节 in await 任务结果:
+                if 章节正文有效(新章节):
+                    合并[位置] = 新章节
+                    本轮恢复数 += 1
         总恢复数 += 本轮恢复数
         仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
         logger.info(
