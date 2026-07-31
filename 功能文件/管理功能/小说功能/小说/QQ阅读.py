@@ -61,7 +61,7 @@ App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
 内存密钥池缓存: dict[str, tuple[float, str]] = {}
 默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
 批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2
-缺章定向补拉最小上限=20; 缺章定向补拉最大上限=120; 缺章定向补拉比例百分数=2; 缺章定向补拉并发=4; 缺章定向补拉正文类型=(1,2)
+缺章定向补拉最小上限=20; 缺章定向补拉最大上限=120; 缺章定向补拉比例百分数=2; 缺章定向补拉轮数=3; 缺章定向补拉并发=4; 缺章定向补拉正文类型=(1,2)
 QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
 链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
 手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
@@ -1362,13 +1362,42 @@ def 构建登录正文请求头(登录态: Mapping[str, Any]) -> Dict[str, str]:
     return {键: 值 for 键, 值 in headers.items() if 值}
 
 
+def 构建出版书授权请求头(登录态: Mapping[str, Any], *, 使用登录态: bool) -> Dict[str, str]:
+    """出版书 auth 沿用 App 基础身份，登录时只覆盖官方所需 Cookie 与 yw 字段。"""
+    应用身份 = 默认App请求身份
+    headers = {
+        "User-Agent": App默认UA,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        "Cookie": f"ywguid={应用身份['uid']}; ywkey={应用身份['usid']};",
+        "ywguid": str(应用身份["uid"]),
+        "ywkey": str(应用身份["usid"]),
+    }
+    if not 使用登录态:
+        return headers
+
+    完整登录态 = 补齐QQ阅读登录态(登录态)
+    ywguid = str(完整登录态.get("ywguid") or 完整登录态.get("login_uin") or "").strip()
+    ywkey = str(完整登录态.get("ywkey") or 完整登录态.get("login_key") or "").strip()
+    cookie = str(完整登录态.get("Cookie") or 完整登录态.get("cookie") or "").strip()
+    if cookie:
+        headers["Cookie"] = cookie
+    elif ywguid and ywkey:
+        headers["Cookie"] = f"ywguid={ywguid}; ywkey={ywkey};"
+    if ywguid:
+        headers["ywguid"] = ywguid
+    if ywkey:
+        headers["ywkey"] = ywkey
+    return headers
+
+
 def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     """正文下载保持固定 App 设备身份；登录态只在登录专用请求中使用。"""
     out = dict(默认App请求身份)
     完整登录态 = 补齐QQ阅读登录态(登录态)
     已登录 = 有效QQ阅读登录态(完整登录态)
     if 已登录:
-        for 键 in ("ywguid", "ywkey", "login_uin", "login_key", "Cookie", "cookie", "loginType", "login_type"):
+        for 键 in ("ywguid", "ywkey", "login_uin", "login_key", "Cookie", "cookie", "loginType", "login_type", "qrsn"):
             if 完整登录态.get(键):
                 out[键] = str(完整登录态[键])
         if 完整登录态.get("fuid"):
@@ -2252,6 +2281,32 @@ def 提取事件QQ阅读来源(event: Any) -> str | None:
             if 来源: return 来源
     return None
 
+
+def 规范QQ阅读认证信息(值: Any) -> str:
+    """分享卡片的 qrsn 是 Base64 包装的 App 认证值，统一还原为接口所需十六进制。"""
+    原文 = urllib.parse.unquote(str(值 or "")).strip()
+    候选 = [原文]
+    if 原文:
+        try:
+            补位 = "=" * (-len(原文) % 4)
+            解码 = base64.b64decode(原文.replace("-", "+").replace("_", "/") + 补位, validate=True)
+            候选.append(解码.decode("ascii").strip())
+        except Exception:
+            pass
+    for 认证信息 in 候选:
+        if re.fullmatch(r"[0-9a-fA-F]{32,128}", 认证信息):
+            return 认证信息.lower()
+    return ""
+
+
+def 提取QQ阅读分享认证信息(来源: str) -> str:
+    try:
+        参数 = urllib.parse.parse_qs(urllib.parse.urlsplit(str(来源 or "")).query)
+    except Exception:
+        return ""
+    return 规范QQ阅读认证信息((参数.get("qrsn") or [""])[0])
+
+
 def 解析书籍编号(来源: str) -> str:
     文本 = str(来源 or "")
     for 模式 in (r"[?&]bid=(\d+)", r"[?&]bookid=(\d+)", r"/book-detail/(\d+)", r"/intro\?bid=(\d+)", r"bid%3D(\d+)", r"/(\d{5,})"):
@@ -2410,51 +2465,166 @@ async def 下载全书批量(
     return 章节下载汇总(合并, 请求被拒绝=请求被拒绝)
 
 
+def 解析出版书授权数据(data: bytes, 身份候选: Sequence[str]) -> tuple[bytes, str]:
+    """解析 App auth 的加密载荷，仅返回资源密码和受控状态码。"""
+    明文候选: list[bytes] = []
+    if data.lstrip().startswith(b"{"):
+        明文候选.append(data)
+    for 身份 in dict.fromkeys(str(值).strip() for 值 in 身份候选 if 值):
+        try:
+            明文候选.append(出版书TEA解密(data, 出版书TEA密钥整数(身份)).split(b"\x00", 1)[0])
+        except Exception:
+            continue
+
+    最后状态 = "decrypt_fail"
+    for 明文 in 明文候选:
+        try:
+            载荷 = json.loads(明文.decode("utf-8"))
+        except Exception:
+            continue
+        if not isinstance(载荷, Mapping):
+            continue
+        状态原文 = 载荷.get("code", 载荷.get("ret", 载荷.get("retcode", 载荷.get("errCode", "none"))))
+        状态 = re.sub(r"[^0-9A-Za-z_-]", "", str(状态原文))[:24] or "none"
+        最后状态 = 状态
+        for 对象 in 遍历JSON对象(载荷):
+            if not isinstance(对象, Mapping):
+                continue
+            密码 = str(对象.get("pwd") or "").strip()
+            if 密码:
+                return 密码.encode("utf-8"), 状态
+    return b"", 最后状态
+
+
+def 获取出版书认证候选(登录态: Mapping[str, str], 分享认证信息: str = "") -> list[tuple[str, str]]:
+    应用认证信息 = 规范QQ阅读认证信息(默认App请求身份["qrsn"])
+    登录认证信息 = 规范QQ阅读认证信息(登录态.get("qrsn"))
+    分享认证信息 = 规范QQ阅读认证信息(分享认证信息)
+    候选: list[tuple[str, str]] = []
+    for 来源, 认证信息 in (("login", 登录认证信息), ("share", 分享认证信息), ("app", 应用认证信息)):
+        if 认证信息 and all(已有认证 != 认证信息 for _, 已有认证 in 候选):
+            候选.append((来源, 认证信息))
+    return 候选
+
+
 async def 请求出版书访问密码(
     session: aiohttp.ClientSession,
     书籍编号: str,
     登录态: Mapping[str, str],
+    *,
+    分享认证信息: str = "",
 ) -> bytes:
     请求态 = 组装本地下载态(登录态)
-    if 有效QQ阅读登录态(请求态):
-        headers = 构建登录正文请求头(请求态)
-        解密身份 = str(
-            请求态.get("ywguid")
-            or 请求态.get("login_uin")
-            or 请求态.get("uid")
-            or ""
-        )
-    else:
-        解密身份 = str(默认App请求身份["uid"])
-        headers = {
-            "User-Agent": App默认UA,
-            "Accept": "*/*",
-            "Cookie": f"ywguid={解密身份}; ywkey={默认App请求身份['usid']};",
-            "ywguid": 解密身份,
-            "ywkey": str(默认App请求身份["usid"]),
-        }
-    headers["Accept-Encoding"] = "identity"
-    auth_info = str(请求态.get("qrsn") or 默认App请求身份["qrsn"])
-    data, status = await http_get_bytes(
-        session,
-        组装URL(出版书授权地址, {"bookid": 书籍编号, "authInfo": auth_info, "onlytrial": 1}),
-        headers,
-        timeout=30,
-    )
-    if status >= 400 or not data:
-        raise RuntimeError("出版书授权请求失败")
+    使用登录态 = 有效QQ阅读登录态(请求态)
+    授权头候选: list[tuple[str, Dict[str, str]]] = []
+    if 使用登录态:
+        授权头候选.append(("login", 构建出版书授权请求头(请求态, 使用登录态=True)))
+    授权头候选.append(("app", 构建出版书授权请求头(请求态, 使用登录态=False)))
+    身份候选 = [
+        str(默认App请求身份["uid"]),
+        str(请求态.get("ywguid") or 请求态.get("login_uin") or ""),
+        str(请求态.get("uid") or ""),
+    ]
 
-    候选身份 = [解密身份, str(默认App请求身份["uid"])]
-    for 身份 in dict.fromkeys(值 for 值 in 候选身份 if 值):
-        try:
-            明文 = 出版书TEA解密(data, 出版书TEA密钥整数(身份)).split(b"\x00", 1)[0]
-            载荷 = json.loads(明文.decode("utf-8"))
-            密码 = str(载荷.get("pwd") or "").strip()
+    尝试次数 = 0
+    最后状态码 = 0
+    最后请求头模式 = "app"
+    最后认证来源 = "app"
+    最后授权状态 = "not_requested"
+    for 请求头模式, headers in 授权头候选:
+        for 认证来源, 认证信息 in 获取出版书认证候选(请求态, 分享认证信息):
+            尝试次数 += 1
+            最后请求头模式 = 请求头模式
+            最后认证来源 = 认证来源
+            data, status = await http_get_bytes(
+                session,
+                组装URL(出版书授权地址, {"bookid": 书籍编号, "authInfo": 认证信息, "onlytrial": 1}),
+                headers,
+                timeout=30,
+            )
+            最后状态码 = status
+            if status >= 400 or not data:
+                最后授权状态 = f"http_{status}" if status >= 400 else "empty"
+                continue
+            密码, 授权状态 = 解析出版书授权数据(data, 身份候选)
+            最后授权状态 = 授权状态
             if 密码:
-                return 密码.encode("utf-8")
-        except Exception:
-            continue
+                logger.info(
+                    f"QQ阅读出版书授权诊断：book_id={书籍编号}, attempts={尝试次数}, status={status}, "
+                    f"header_mode={请求头模式}, qrsn_source={认证来源}, auth_code={授权状态}, has_pwd=yes"
+                )
+                return 密码
+
+    logger.warning(
+        f"QQ阅读出版书授权诊断：book_id={书籍编号}, attempts={尝试次数}, status={最后状态码}, "
+        f"header_mode={最后请求头模式}, qrsn_source={最后认证来源}, "
+        f"auth_code={最后授权状态}, has_pwd=no"
+    )
     raise RuntimeError("出版书授权数据无可用密码")
+
+
+async def 补齐出版书章节资源(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+    登录态: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """出版书目录批量响应可能只携带试读资源；授权成功后按缺失章节补齐资源地址。"""
+    缺少资源位置 = [
+        位置 for 位置, 章节 in enumerate(目录)
+        if not str(章节.get("resource_url") or "").strip()
+    ]
+    if not 缺少资源位置:
+        return 目录
+
+    结果 = list(目录)
+    信号量 = asyncio.Semaphore(min(批量并发上限, len(缺少资源位置)))
+
+    async def 补齐一章(位置: int) -> tuple[int, str]:
+        原章节 = 结果[位置]
+        cid = str(原章节.get("cid") or 原章节.get("id") or "").strip()
+        索引 = 安全整数(原章节.get("index"))
+        候选章节号 = [cid] if cid else []
+        if 索引 and str(索引) not in 候选章节号:
+            候选章节号.append(str(索引))
+        if not 候选章节号:
+            return 位置, ""
+
+        async with 信号量:
+            for 尝试 in range(1, 批量网络重试次数 + 1):
+                for scids in 候选章节号:
+                    try:
+                        blob = await 请求出版书章节包(session, 书籍编号, scids, 登录态, timeout=120)
+                        候选目录 = 解析出版书目录(解析出版书信息包(blob))
+                        匹配章节 = next(
+                            (章节 for 章节 in 候选目录 if str(章节.get("cid") or "") == cid and 章节.get("resource_url")),
+                            None,
+                        )
+                        if 匹配章节 is None:
+                            匹配章节 = next((章节 for 章节 in 候选目录 if 章节.get("resource_url")), None)
+                        if 匹配章节:
+                            return 位置, str(匹配章节.get("resource_url") or "").strip()
+                    except Exception as 异常:
+                        logger.debug(
+                            f"QQ阅读出版书资源补齐失败：book_id={书籍编号}, index={索引}, "
+                            f"error={type(异常).__name__}"
+                        )
+                if 尝试 < 批量网络重试次数:
+                    await asyncio.sleep(0.2 * 尝试)
+        return 位置, ""
+
+    补齐结果 = await asyncio.gather(*(补齐一章(位置) for 位置 in 缺少资源位置))
+    恢复数 = 0
+    for 位置, 资源地址 in 补齐结果:
+        if not 资源地址:
+            continue
+        结果[位置] = {**结果[位置], "resource_url": 资源地址}
+        恢复数 += 1
+    logger.info(
+        f"QQ阅读出版书资源补齐：book_id={书籍编号}, missing={len(缺少资源位置)}, "
+        f"recovered={恢复数}, still_missing={len(缺少资源位置) - 恢复数}"
+    )
+    return 结果
 
 
 async def 下载出版书全书(
@@ -2462,6 +2632,8 @@ async def 下载出版书全书(
     书籍编号: str,
     目录: list[dict[str, Any]],
     登录态: Mapping[str, str],
+    *,
+    分享认证信息: str = "",
 ) -> 章节下载汇总:
     """出版书由 App 返回章节资源地址后并发下载，资源授权仍使用当前登录态。"""
     if not 目录:
@@ -2469,13 +2641,19 @@ async def 下载出版书全书(
     总数 = len(目录)
     下载态 = 组装本地下载态(登录态)
     try:
-        访问密码 = await 请求出版书访问密码(session, 书籍编号, 下载态)
-    except Exception as e:
-        logger.warning(f"QQ阅读出版书授权失败：book_id={书籍编号}, error={type(e).__name__}")
+        访问密码 = await 请求出版书访问密码(
+            session,
+            书籍编号,
+            下载态,
+            分享认证信息=分享认证信息,
+        )
+    except Exception:
         return 章节下载汇总([
             {**章节, "content": "", "success": False}
             for 章节 in 目录
         ], 请求被拒绝=True)
+
+    目录 = await 补齐出版书章节资源(session, 书籍编号, 目录, 下载态)
 
     并发 = max(1, min(批量并发上限, 总数))
     信号量 = asyncio.Semaphore(并发)
@@ -2585,74 +2763,91 @@ async def 补拉少量缺失章节(
     *,
     请求被拒绝: bool = False,
 ) -> list[dict[str, Any]]:
-    """按参考 App 的密钥池刷新策略，只补拉少量失败章节。"""
-    缺章位置 = 获取可补拉章节位置(章节列表, 请求被拒绝)
-    if not 缺章位置:
-        return 章节列表
-
-    补拉下载态 = 组装本地下载态(下载态)
-    try:
-        补拉下载态["keypool_b64"] = await 请求动态密钥池(session, 补拉下载态, 强制刷新=True)
-    except Exception as 异常:
-        logger.debug(f"QQ阅读少量缺章刷新密钥池失败：book_id={书籍编号}, error={type(异常).__name__}")
-
-    logger.info(
-        f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(缺章位置)}, "
-        f"concurrency={min(缺章定向补拉并发, len(缺章位置))}"
-    )
     合并 = list(章节列表)
-    信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(缺章位置)))
+    初始缺章位置 = 获取可补拉章节位置(合并, 请求被拒绝)
+    if not 初始缺章位置:
+        return 合并
+    logger.info(
+        f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(初始缺章位置)}, "
+        f"rounds={缺章定向补拉轮数}, concurrency={min(缺章定向补拉并发, len(初始缺章位置))}"
+    )
 
-    async def 补拉一章(位置: int) -> tuple[int, dict[str, Any]]:
-        原章节 = 合并[位置]
-        索引 = 安全整数(原章节.get("index"))
-        cid = str(原章节.get("cid") or 原章节.get("id") or 索引 or "")
-        标题 = 清理文本(原章节.get("title") or f"第{索引}章")
-        scids = str(索引 or cid)
-        if not scids:
+    总恢复数 = 0
+    for 轮次 in range(1, 缺章定向补拉轮数 + 1):
+        缺章位置 = 获取可补拉章节位置(合并, 请求被拒绝)
+        if not 缺章位置:
+            break
+
+        补拉下载态 = 组装本地下载态(下载态)
+        try:
+            补拉下载态["keypool_b64"] = await 请求动态密钥池(session, 补拉下载态, 强制刷新=True)
+        except Exception as 异常:
+            logger.debug(f"QQ阅读少量缺章刷新密钥池失败：book_id={书籍编号}, error={type(异常).__name__}")
+        信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(缺章位置)))
+
+        async def 补拉一章(位置: int) -> tuple[int, dict[str, Any]]:
+            原章节 = 合并[位置]
+            索引 = 安全整数(原章节.get("index"))
+            cid = str(原章节.get("cid") or 原章节.get("id") or 索引 or "")
+            标题 = 清理文本(原章节.get("title") or f"第{索引}章")
+            请求章节号 = [str(索引)] if 索引 else []
+            if cid and cid not in 请求章节号:
+                请求章节号.append(cid)
+            if not 请求章节号:
+                return 位置, 原章节
+
+            async with 信号量:
+                for 正文类型 in 缺章定向补拉正文类型:
+                    for scids in 请求章节号:
+                        try:
+                            blob = await 请求批量包(
+                                session,
+                                书籍编号,
+                                scids,
+                                登录态=补拉下载态,
+                                正文类型=正文类型,
+                                timeout=120,
+                            )
+                            if 是否deny(blob):
+                                return 位置, 原章节
+                            章节成员列表 = 章节成员(解析tar(blob), 书籍编号)
+                            章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 章节成员列表}
+                            成员 = 章节映射.get(cid)
+                            if 成员 is None and len(章节成员列表) == 1:
+                                成员 = 章节成员列表[0]
+                            if 成员 is None or not 成员.data:
+                                continue
+                            正文, _ = 解密章节(成员.data, 书籍编号, cid or 章节编号(成员.name, 书籍编号), 补拉下载态)
+                            if 正文:
+                                return 位置, {**原章节, "title": 标题, "content": 正文, "success": True}
+                        except Exception as 异常:
+                            logger.debug(
+                                f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, index={索引}, "
+                                f"round={轮次}, text_type={正文类型}, error={type(异常).__name__}"
+                            )
             return 位置, 原章节
 
-        async with 信号量:
-            for 正文类型 in 缺章定向补拉正文类型:
-                try:
-                    blob = await 请求批量包(
-                        session,
-                        书籍编号,
-                        scids,
-                        登录态=补拉下载态,
-                        正文类型=正文类型,
-                        timeout=120,
-                    )
-                    if 是否deny(blob):
-                        break
-                    章节成员列表 = 章节成员(解析tar(blob), 书籍编号)
-                    章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 章节成员列表}
-                    成员 = 章节映射.get(cid)
-                    if 成员 is None and len(章节成员列表) == 1:
-                        成员 = 章节成员列表[0]
-                    if 成员 is None or not 成员.data:
-                        continue
-                    正文, _ = 解密章节(成员.data, 书籍编号, cid or 章节编号(成员.name, 书籍编号), 补拉下载态)
-                    if 正文:
-                        return 位置, {**原章节, "title": 标题, "content": 正文, "success": True}
-                except Exception as 异常:
-                    logger.debug(
-                        f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, index={索引}, "
-                        f"text_type={正文类型}, error={type(异常).__name__}"
-                    )
-        return 位置, 原章节
+        任务 = [asyncio.create_task(补拉一章(位置)) for 位置 in 缺章位置]
+        本轮恢复数 = 0
+        for 任务结果 in asyncio.as_completed(任务):
+            位置, 新章节 = await 任务结果
+            if 章节正文有效(新章节):
+                合并[位置] = 新章节
+                本轮恢复数 += 1
+        总恢复数 += 本轮恢复数
+        仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
+        logger.info(
+            f"QQ阅读少量缺章补拉结果：book_id={书籍编号}, round={轮次}/{缺章定向补拉轮数}, "
+            f"recovered={本轮恢复数}, still_missing={仍缺}"
+        )
+        if not 仍缺:
+            break
+        if 轮次 < 缺章定向补拉轮数:
+            await asyncio.sleep(0.2 * 轮次)
 
-    任务 = [asyncio.create_task(补拉一章(位置)) for 位置 in 缺章位置]
-    恢复数 = 0
-    for 任务结果 in asyncio.as_completed(任务):
-        位置, 新章节 = await 任务结果
-        if 章节正文有效(新章节):
-            合并[位置] = 新章节
-            恢复数 += 1
-
-    仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
     logger.info(
-        f"QQ阅读少量缺章补拉结果：book_id={书籍编号}, recovered={恢复数}, still_missing={仍缺}"
+        f"QQ阅读少量缺章补拉汇总：book_id={书籍编号}, recovered={总恢复数}, "
+        f"still_missing={sum(1 for 章节 in 合并 if not 章节正文有效(章节))}"
     )
     return 合并
 
@@ -2664,6 +2859,7 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
         yield 下载失败提示; return
     已保存登录态 = 读取QQ阅读登录态(配置)
     出版书 = 解析QQ阅读来源站点(来源) == 4
+    分享认证信息 = 提取QQ阅读分享认证信息(来源)
     超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=300)
     try:
         async with aiohttp.ClientSession(timeout=超时) as 会话:
@@ -2711,7 +2907,13 @@ async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield 格式化下载提示(书籍信息, len(目录))
 
             下载汇总 = (
-                await 下载出版书全书(会话, 书籍编号, 下载目录, 下载态)
+                await 下载出版书全书(
+                    会话,
+                    书籍编号,
+                    下载目录,
+                    下载态,
+                    分享认证信息=分享认证信息,
+                )
                 if 出版书
                 else await 下载全书批量(会话, 书籍编号, 下载目录, 下载态)
             )

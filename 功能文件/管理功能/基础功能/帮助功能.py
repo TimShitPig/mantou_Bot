@@ -708,19 +708,16 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
         if 消息ID:
             消息体["msg_id"] = 消息ID
-        logger.info(f"[帮助MD键盘] 群聊发送，group_openid={群openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     elif 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
         if 消息ID:
             消息体["msg_id"] = 消息ID
-        logger.info(f"[帮助MD键盘] 私聊发送，user_openid={用户openid}，消息ID={消息ID}，按钮行数={len(键盘.get('rows', [])) if 键盘 else 0}")
     else:
         logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
         return False
 
     try:
-        响应 = await _http.request(route, json=消息体)
-        logger.info(f"[帮助MD键盘] 发送成功，响应={响应}")
+        await _http.request(route, json=消息体)
         return True
     except Exception as e:
         if not 消息ID:
@@ -732,8 +729,7 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         主动消息体 = dict(消息体)
         主动消息体.pop("msg_id", None)
         try:
-            响应 = await _http.request(route, json=主动消息体)
-            logger.info(f"[帮助MD键盘] 主动发送成功，响应={响应}")
+            await _http.request(route, json=主动消息体)
             return True
         except Exception as 主动异常:
             logger.warning(
