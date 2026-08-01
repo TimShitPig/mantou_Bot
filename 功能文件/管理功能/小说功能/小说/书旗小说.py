@@ -111,6 +111,14 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到章节目录")
                 yield "下载失败"
                 return
+            可读章节数 = 获取目录可读章节数(书籍)
+            if 可读章节数 != len(书籍.chapters):
+                logger.warning(
+                    f"书旗小说下载失败：book_id={书籍.book_id}, error=目录授权不完整，"
+                    f"readable={可读章节数}, total={len(书籍.chapters)}"
+                )
+                yield "下载失败"
+                return
             logger.info(
                 f"书旗小说开始下载：book_id={书籍.book_id}, type={'short' if 书籍.is_short else 'book'}, "
                 f"title={书籍.book_name}, author={书籍.author_name}, chapters={len(书籍.chapters)}, source=catalog_single"
@@ -118,8 +126,11 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             yield 格式化下载提示(书籍)
             章节内容 = await 下载全部章节(session, 书籍, user_id=用户ID)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
-            if not 成功章节:
-                logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到可用章节正文")
+            if len(成功章节) != len(书籍.chapters):
+                logger.warning(
+                    f"书旗小说下载失败：book_id={书籍.book_id}, error=章节正文不完整，"
+                    f"success={len(成功章节)}, total={len(书籍.chapters)}"
+                )
                 yield "下载失败"
                 return
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
@@ -231,6 +242,14 @@ async def 获取书籍(
         chapters=chapters,
         raw=data,
         is_short=是否短篇,
+    )
+
+
+def 获取目录可读章节数(书籍: Book) -> int:
+    return sum(
+        1
+        for 章节 in 书籍.chapters
+        if 获取章节正文URL(书籍, 章节, include_preview=书籍.is_short)[0]
     )
 
 
