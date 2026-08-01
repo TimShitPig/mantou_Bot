@@ -2439,7 +2439,7 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield 番茄下载失败提示
             return
 
-        logger.debug(
+        logger.info(
             f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, "
             f"author={书籍信息.get('author')}, chapters={len(目录)}"
         )
@@ -2456,7 +2456,7 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
 
         文件名, 文件内容 = 生成番茄小说文件内容(书籍编号, 书籍信息, 目录, 章节结果列表)
-        logger.debug(
+        logger.info(
             f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, "
             f"success={len(成功章节列表)}, total={len(目录)}, file_size={len(文件内容)}"
         )
@@ -2599,7 +2599,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
     已完成 = 0
     下次进度 = max(1, 总数 // 番茄进度日志分段数)
     结果按序号: dict[int, dict[str, Any]] = {}
-    logger.debug(
+    logger.info(
         f"番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, "
         f"percent=0%, batches={len(任务列表)}, batch_size={批量章节数}, "
         f"concurrency={动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
@@ -2658,7 +2658,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
             if 已完成 >= 下次进度 or 已完成 >= 总数:
                 百分比 = int(min(100, 已完成 * 100 / max(1, 总数)))
                 当前成功 = sum(1 for 项目 in 结果按序号.values() if 项目.get("success"))
-                logger.debug(
+                logger.info(
                     f"番茄小说章节进度：book_id={书籍编号}, progress={min(已完成, 总数)}/{总数}, "
                     f"percent={百分比}%, success={当前成功}, last_batch_ok={批次成功}/{批次数量}"
                 )

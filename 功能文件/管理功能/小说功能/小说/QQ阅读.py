@@ -891,6 +891,8 @@ def load_config_once() -> None:
 
 UA = "okhttp/3.12.13"
 SIGN_TAIL = "B74H5a2Yh73gfu8F"
+QQ阅读批量章节数 = 500
+QQ阅读批量最大动态并发数 = 5
 
 
 class _SSLAdapter(HTTPAdapter):
@@ -968,25 +970,74 @@ class Fetcher:
         end_chapter: Optional[str],
     ) -> Optional[List[Any]]:
         expected = abs(int(end_chapter or start_chapter)) - abs(int(start_chapter)) + 1
-        latest: Optional[List[Any]] = None
-        for attempt in range(1, 4):
-            latest = self._get_chapter(book_id, start_chapter, end_chapter)
-            if self._chapter_window_complete(latest, expected):
-                return latest
-            if attempt < 3:
-                time.sleep(0.2 * attempt)
-        return latest
 
-    def get_chapter(self, book_id: str, start_chapter: str, end_chapter: Optional[str] = None) -> Optional[List[Any]]:
+        def is_valid(item: Any) -> bool:
+            text = str(item or "").strip()
+            return bool(text) and text != "章节解密失败"
+
+        if expected == 1:
+            latest: Optional[List[Any]] = None
+            for attempt in range(1, 4):
+                latest = self._get_chapter(book_id, start_chapter, end_chapter)
+                if self._chapter_window_complete(latest, 1):
+                    return latest
+                if attempt < 3:
+                    time.sleep(0.2 * attempt)
+            return latest
+
+        batch = self._get_chapter(book_id, start_chapter, end_chapter)
+        if not isinstance(batch, list) or len(batch) != expected:
+            return batch
+        first = abs(int(start_chapter))
+        for index, item in enumerate(batch):
+            if is_valid(item):
+                continue
+            chapter_id = str(first + index)
+            single = self._get_chapter_with_retry(book_id, chapter_id, chapter_id)
+            if isinstance(single, list) and single and is_valid(single[0]):
+                batch[index] = single[0]
+        return batch
+
+    def get_chapter(
+        self,
+        book_id: str,
+        start_chapter: str,
+        end_chapter: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> Optional[List[Any]]:
+        def report_progress(completed: int, success: int) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(completed, success)
+            except Exception:
+                pass
+
         if end_chapter is None:
-            return self._get_chapter_with_retry(book_id, start_chapter, None)
+            result = self._get_chapter_with_retry(book_id, start_chapter, None)
+            success = sum(
+                1
+                for item in result or []
+                if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
+            )
+            report_progress(1, min(success, 1))
+            return result
         s = abs(int(start_chapter))
         e = abs(int(end_chapter))
-        batch_size = 31
-        if e - s + 1 <= batch_size:
-            return self._get_chapter_with_retry(book_id, start_chapter, end_chapter)
+        total = e - s + 1
+        batch_size = QQ阅读批量章节数
+        if total <= batch_size:
+            result = self._get_chapter_with_retry(book_id, start_chapter, end_chapter)
+            success = sum(
+                1
+                for item in result or []
+                if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
+            )
+            report_progress(total, min(success, total))
+            return result
         logger.debug(
-            f"QQ阅读参考正文分窗：chapters={e - s + 1}, window={batch_size}, concurrency=4"
+            f"QQ阅读参考正文分批：chapters={total}, batch_size={batch_size}, "
+            f"concurrency={min(QQ阅读批量最大动态并发数, (total + batch_size - 1) // batch_size)}"
         )
         all_results: List[Any] = []
         ranges = []
@@ -995,19 +1046,31 @@ class Fetcher:
             be = min(batch_start + batch_size - 1, e)
             ranges.append((str(batch_start), str(be)))
             batch_start += batch_size
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futs = [
-                (a, b, pool.submit(self._get_chapter_with_retry, book_id, a, b))
+        concurrency = max(1, min(QQ阅读批量最大动态并发数, len(ranges)))
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            future_map = {
+                pool.submit(self._get_chapter_with_retry, book_id, a, b): (a, b)
                 for a, b in ranges
-            ]
+            }
             batch_map = {}
-            for a, b, fut in futs:
+            completed = 0
+            success = 0
+            for fut in as_completed(future_map):
+                a, b = future_map[fut]
+                expected = int(b) - int(a) + 1
                 try:
                     r = fut.result()
                     if r:
                         batch_map[(int(a), int(b))] = r
+                        success += sum(
+                            1
+                            for item in r
+                            if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
+                        )
                 except Exception:
                     pass
+                completed += expected
+                report_progress(min(completed, total), min(success, total))
             for a, b in ranges:
                 part = batch_map.get((int(a), int(b)))
                 if part:
@@ -1045,7 +1108,8 @@ class Fetcher:
                 if e2 - s > 10000:
                     return None
             else:
-                int(start_chapter)
+                s = abs(int(start_chapter))
+                e2 = s
                 end_chapter = start_chapter
         except Exception as e:
             logger.debug(f"QQ阅读参考正文范围无效：error={type(e).__name__}")
@@ -1087,10 +1151,22 @@ class Fetcher:
                     m[key] = "章节解密失败"
             for k in remove_keys:
                 m.pop(k, None)
-            items = [(k, v) for k, v in m.items() if k not in ("code",)]
-            items.sort(key=lambda kv: self.extract_mid_number(kv[0]))
-            sorted_list = [v for _, v in items]
-            return sorted_list or None
+            chapter_map: Dict[int, Any] = {}
+            for key, value in m.items():
+                try:
+                    chapter_number = self.extract_mid_number(key)
+                except (TypeError, ValueError):
+                    continue
+                if s <= chapter_number <= e2:
+                    current = chapter_map.get(chapter_number)
+                    if current is None or current == "章节解密失败":
+                        chapter_map[chapter_number] = value
+            if not chapter_map:
+                return None
+            return [
+                chapter_map.get(chapter_number, "章节解密失败")
+                for chapter_number in range(s, e2 + 1)
+            ]
         except Exception as e5:
             logger.debug(f"QQ阅读参考正文请求失败：error={type(e5).__name__}")
             return None
@@ -1287,6 +1363,7 @@ def _parse_teb_info_blob(blob: bytes) -> list[dict]:
 
 QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
+QQ阅读进度日志分段数 = 10
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com", "novel.html5.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"
@@ -1661,6 +1738,29 @@ async def 获取参考书籍目录(book_id: str) -> list[dict[str, Any]]:
     return await asyncio.to_thread(_请求参考书籍目录, book_id)
 
 
+async def 获取参考兼容目录(
+    book_id: str,
+    chapter_count: int,
+    published: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    total = max(0, int(chapter_count or 0))
+    if published:
+        return await 获取参考出版书目录(book_id, total), True
+
+    catalog: list[dict[str, Any]] = []
+    try:
+        catalog = await 获取参考书籍目录(book_id)
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        if getattr(response, "status_code", None) != 400:
+            raise
+    if catalog or total <= 0:
+        return catalog, False
+
+    fallback = await 获取参考出版书目录(book_id, total)
+    return fallback, bool(fallback)
+
+
 def _出版书资源地址(item: dict[str, Any]) -> str:
     for key in (
         "ctebchaptercosurl",
@@ -1820,6 +1920,11 @@ def _下载参考出版书正文同步(
     book_id: str,
     catalog: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    total = len(catalog)
+    completed = 0
+    success = 0
+    last_segment = 0
+    logger.info(f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%")
     password = _获取参考出版书密码(book_id)
     results: dict[int, str] = {}
     failures: list[int] = []
@@ -1832,8 +1937,22 @@ def _下载参考出版书正文同步(
             index = futures[future]
             try:
                 results[index] = future.result()
+                success += 1
             except Exception:
                 failures.append(index)
+            completed += 1
+            segment = (
+                QQ阅读进度日志分段数
+                if completed >= total
+                else int(completed * QQ阅读进度日志分段数 / max(1, total))
+            )
+            if segment > last_segment or completed >= total:
+                last_segment = segment
+                percent = int(completed * 100 / max(1, total))
+                logger.info(
+                    f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
+                    f"percent={percent}%, success={success}, failed={completed - success}"
+                )
     if failures or len(results) != len(catalog):
         raise RuntimeError("章节不完整")
     return [
@@ -1857,29 +1976,60 @@ async def 下载参考正文(book_id: str, catalog: list[dict[str, Any]]) -> lis
         return []
     await asyncio.to_thread(初始化参考核心)
     fetcher = Fetcher()
+    total = len(catalog)
+    last_segment = 0
+    last_completed = 0
+    last_success = -1
+    batch_count = (total + QQ阅读批量章节数 - 1) // QQ阅读批量章节数
+    concurrency = max(1, min(QQ阅读批量最大动态并发数, batch_count))
+    logger.info(
+        f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%, "
+        f"batches={batch_count}, batch_size={QQ阅读批量章节数}, concurrency={concurrency}"
+    )
+
+    def report_progress(completed: int, success: int) -> None:
+        nonlocal last_segment, last_completed, last_success
+        completed = min(max(0, int(completed)), total)
+        success = min(max(0, int(success)), completed)
+        segment = (
+            QQ阅读进度日志分段数
+            if completed >= total
+            else int(completed * QQ阅读进度日志分段数 / max(1, total))
+        )
+        if segment <= last_segment and completed < total:
+            return
+        if completed >= total and completed == last_completed and success == last_success:
+            return
+        last_segment = max(last_segment, segment)
+        last_completed = completed
+        last_success = success
+        percent = int(completed * 100 / max(1, total))
+        logger.info(
+            f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
+            f"percent={percent}%, success={success}, failed={completed - success}"
+        )
+
     try:
-        for attempt in range(1, 4):
-            raw_chapters = await asyncio.to_thread(
-                fetcher.get_chapter,
-                book_id,
-                "1",
-                str(len(catalog)),
-            )
-            if isinstance(raw_chapters, list) and len(raw_chapters) == len(catalog):
-                chapters: list[dict[str, Any]] = []
-                for catalog_item, content in zip(catalog, raw_chapters):
-                    if isinstance(content, bytes):
-                        text = content.decode("utf-8", "replace").strip()
-                    else:
-                        text = str(content or "").strip()
-                    if not text or text == "章节解密失败":
-                        chapters = []
-                        break
-                    chapters.append({**catalog_item, "content": text})
-                if len(chapters) == len(catalog):
-                    return chapters
-            if attempt < 3:
-                await asyncio.sleep(0.2 * attempt)
+        raw_chapters = await asyncio.to_thread(
+            fetcher.get_chapter,
+            book_id,
+            "1",
+            str(total),
+            report_progress,
+        )
+        if isinstance(raw_chapters, list) and len(raw_chapters) == total:
+            chapters: list[dict[str, Any]] = []
+            for catalog_item, content in zip(catalog, raw_chapters):
+                if isinstance(content, bytes):
+                    text = content.decode("utf-8", "replace").strip()
+                else:
+                    text = str(content or "").strip()
+                if not text or text == "章节解密失败":
+                    chapters = []
+                    break
+                chapters.append({**catalog_item, "content": text})
+            if len(chapters) == total:
+                return chapters
         raise RuntimeError("章节不完整")
     finally:
         fetcher._session.close()
@@ -2117,14 +2267,19 @@ async def 生成下载回复流(
             }
 
         stage = "catalog"
-        catalog = (
-            await 获取参考出版书目录(book_id, _安全整数(details.get("chapters")))
-            if published
-            else await 获取参考书籍目录(book_id)
+        catalog, published = await 获取参考兼容目录(
+            book_id,
+            _安全整数(details.get("chapters")),
+            published,
         )
         if not catalog:
             raise RuntimeError("目录为空")
         details["chapters"] = len(catalog)
+        logger.info(
+            f"QQ阅读开始下载：book_id={book_id}, title={details.get('title')}, "
+            f"author={details.get('author')}, chapters={len(catalog)}, "
+            f"book_type={'published' if published else 'novel'}"
+        )
         yield 格式化下载提示(details, len(catalog))
 
         stage = "content"
@@ -2134,6 +2289,10 @@ async def 生成下载回复流(
             else await 下载参考正文(book_id, catalog)
         )
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
+        logger.info(
+            f"QQ阅读章节下载完成：book_id={book_id}, title={details.get('title')}, "
+            f"success={len(chapters)}, total={len(catalog)}, file_size={len(content)}"
+        )
 
         stage = "upload"
         result = await 准备发送文本文件(
