@@ -65,7 +65,7 @@
       "database_host": {
         "description": "MySQL 地址",
         "type": "string",
-        "hint": "例如 127.0.0.1。群文件 Cookie、小说开关和 QQ 阅读登录态使用 MySQL 存储。",
+        "hint": "例如 127.0.0.1。群文件 Cookie、待清理群列表和小说开关使用 MySQL 存储。",
         "default": ""
       },
       "database_port": {

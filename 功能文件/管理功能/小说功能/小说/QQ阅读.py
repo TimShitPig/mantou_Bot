@@ -1,312 +1,94 @@
+# -*- coding: utf-8 -*-
+"""QQ阅读参考核心及 AstrBot 下载适配。
+
+依赖: requests, pycryptodome
+账号配置: 文件内 CONFIG 字典（仅鉴权必要字段）
+"""
 from __future__ import annotations
-import asyncio, base64, gzip, html, io, json, re, secrets, struct, tarfile, threading, time, urllib.parse
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import asyncio
+import base64
+import gzip
+import html
+import hashlib
+import io
+import json
+import re
+import secrets
+import ssl
+import struct
+import tarfile
+import threading
+import time
+import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
-import aiohttp
+from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, List, Optional, Union
+from urllib.parse import parse_qs, urlsplit
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
+
 from astrbot.api import logger
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
+
 try:
     from 功能文件.管理功能.网盘功能 import UC网盘
-except Exception as e:
+except Exception:
     UC网盘 = None
-    logger.warning(f"UC网盘模块加载失败：error={e}")
+
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
-except Exception as e:
+except Exception:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：error={e}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 
-import hashlib
-import zlib
+from Crypto.Cipher import AES, DES
+from Crypto.Util import Counter
+from Crypto.Util.Padding import unpad
+
 try:
-    from Crypto.Cipher import AES, DES
-    from Crypto.Hash import MD2, MD4, MD5
-    from Crypto.Util import Counter
-    from Crypto.Util.Padding import unpad
-except Exception as e:
-    AES = DES = MD2 = MD4 = MD5 = Counter = unpad = None
-    logger.warning(f"QQ阅读解密依赖加载失败：error={e}")
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
 
-登录态命名空间="qq_reader_auth"; 登录态状态键="login_state"
-登录会话等待秒数=300; 滑块服务保留秒数=300; 默认滑块端口=8765; 滑块备用端口=(8765,8766,8767,8768,8769,8770); 进度日志分段数=10
-下载缓存目录=Path(__file__).resolve().parents[3]/"下载缓存"
-免责声明="声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-下载失败提示="下载失败"; 收费书提示="收费书籍不支持下载\n请下载VIP或者免费书"; 文件发送失败提示="文件发送失败，请稍后再试"; 登录失败提示="登录失败，请稍后再试"
-详情地址="https://commontgw.reader.qq.com/book/queryBookInfo"
-批量正文地址="https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
-出版书授权地址="https://bookcommon.reader.qq.com/auth"
-发短信地址="https://ptlogin.yuewen.com/sdk/sendphonecode"
-验证码登录地址="https://ptlogin.yuewen.com/sdk/phonecodelogin"
-默认UA="QQReaderAndroid/8.5.2.890"; App默认UA="okhttp/3.12.13"; 滑块AppId="1600000770"; 默认登录版本="8.5.2.890"; 登录协议版本号="8520888"
-默认YW签名=("oMI3aDG4BEctqSrQUTmYDrBNwDYS744OQHMy9qWjqaf0xAI+9W9wtpd3VpfB "
-"zyQl0baDZNuqwu5iI43zZe9+fXiErR7tkuMWqshGfT09oNnEtpPCrkYNFBwT "
-"k+Faez58Fc442YO4kFw="); 默认YW_SDK="401"
-默认IBEX=("n3Bl6YO_sAraVTVlp6JYHRIznI5tlwdCvgNDxWs6XmJfE3B8Erqx0l-pH-9Tm_b362BPtnuU3t4Pc5j_"
-"MstRVEkFvuZCxW0ukz2AwnwljbDUDpuo81UrYQVIexitiw-UcBgx4YD2BQNiKid-uzBHqQTO94uFsH4Oc_"
-"ZL-0ZkoTbc2KHy5Risa0iuPY4lSBGRzUaGdoG-wWIIKeRa43QW9OhJFK4ALX1V5XiHTyo-Xv-IGgnoZaTa8_"
-"7h1zsHwPf2jIOeiWwYAhbdA5iirmZhwHHkHChmO9yp3n-NFn5q1A9b3hqJMPMacGAjdXKLBIBsIyiPTp-"
-"iiRriFYjSwyXhzVLUdhYg_B5RNxCuXSlDKSF9E6RCOxVl5wAAFfB3vQbAjsHRSVak0KuFPoTHb3x7hVz0P"
-"CupP82oZGMwZjU2NzJhYWI0ZGEwZTZjMjM2NDkyNDI5MThiMmY=")
-默认App请求身份={
-    "loginType":"50", "c_platform":"android", "c_version":"qqreader_8.3.3.0888_android",
-    "channel":"10005136", "qrsn":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b",
-    "usid":"yw9GVpCYd7Lx", "uid":"900071413951", "fuid":"89306811035542cd868d49def7d3857d",
-}
-App签名尾部="B74H5a2Yh73gfu8F"; 密钥池缓存秒数=20 * 60
-内存密钥池缓存: dict[str, tuple[float, str]] = {}
-默认设备={"qimei":"0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b","qimei36":"104a6cc03680b90a518e73db10001f31a706","source":"00000","version":默认登录版本,"version_code":"417","osversion":f"Android 28 {默认登录版本} 417","devicetype":"OnePlus_GM1910","ibex":默认IBEX,"sdkversion":默认YW_SDK,"fuid":默认App请求身份["fuid"]}
-批量章节上限=500; 批量并发上限=4; 批量网络重试次数=2; App章节窗口上限=31
-缺章定向补拉最小上限=20; 缺章定向补拉最大上限=120; 缺章定向补拉比例百分数=2; 缺章定向补拉轮数=3; 缺章定向补拉并发=4
-QQ阅读来源正则=re.compile(r"reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com", re.I)
-链接正则=re.compile(r"https?://[^\s'\"<>\u3001\uff0c\u3002]+", re.I)
-手机号正则=re.compile(r"^1\d{10}$"); 验证码正则=re.compile(r"^\d{4,8}$")
-QQ阅读Cookie命令正则 = re.compile(r"^(?:QQ阅读|qq阅读)(?:登录)?cookie\s+(.+)$", re.I | re.S)
-QQ阅读Cookie状态命令 = {"QQ阅读cookie状态", "qq阅读cookie状态", "QQ阅读登录状态", "qq阅读登录状态"}
-待登录会话: dict[str, dict[str, Any]] = {}
+# === decrypt ===
+"""Pure-Python QQRead chapter decrypt (libfock algorithm recovery).
 
-# ===== 一、基础工具 =====
+Wire format:
+  enc = header_cipher(256) || body_cipher
+  body = header_plain[128:256] || enc[256:]
 
-def _是公网IPv4(ip: str) -> bool:
-    文本 = str(ip or "").strip()
-    if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", 文本):
-        return False
-    a, b, c, d = [int(x) for x in 文本.split(".")]
-    if any(x > 255 for x in (a, b, c, d)):
-        return False
-    if a == 0 or a == 127 or a >= 224:
-        return False
-    if a == 10:
-        return False
-    if a == 169 and b == 254:
-        return False
-    if a == 172 and 16 <= b <= 31:
-        return False
-    if a == 192 and b == 168:
-        return False
-    if a == 100 and 64 <= b <= 127:
-        return False
-    return True
+Key schedule:
+  knva = AES-128-CBC(key=c9ajudte0zb21ksg, iv=58jb6v2lzcspwymg).decrypt(embedded_ct)
+  master = SHA256(fuid || knva)
+  header / keypool = AES-256-CBC(master, iv=master[:16])
+  token_index = int(mode_digit_string) % len(tokens)
+  content_key = SHA256(token_ascii || fuid || stt)
 
-def 获取滑块公网主机() -> str:
-    """自动获取可外网访问公网 IP；过滤 Docker/局域网私网地址。"""
-    候选: list[str] = []
+Mode id = int(header mode string first 8 decimal digits). Content chains:
 
-    def _收录(值: str) -> None:
-        ip = str(值 or "").strip()
-        ip = ip.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
-        if _是公网IPv4(ip) and ip not in 候选:
-            候选.append(ip)
+  21123123 AES-CBC -> AES-CBC
+  21132184 DES-CBC -> AES-CBC
+  29344484 AES-CTR -> DES-CBC
+  29859828 AES-CBC -> AES-CTR
+  31344423 DES-CBC -> AES-CTR
+  31932881 AES-CBC -> DES-CBC
+  34232881 AES-CTR -> AES-CTR
+  34941028 DES-CBC -> DES-CBC
+  94859123 AES-CTR -> AES-CBC
 
-    for url in (
-        "https://api.ipify.org",
-        "http://api.ipify.org",
-        "https://ifconfig.me/ip",
-        "https://ip.sb",
-        "https://icanhazip.com",
-        "https://checkip.amazonaws.com",
-        "https://ipv4.icanhazip.com",
-    ):
-        try:
-            import urllib.request
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                _收录(resp.read().decode("utf-8", "replace").strip())
-            if 候选:
-                return 候选[0]
-        except Exception:
-            continue
+AES-CTR: nonce=content_key[:12], BE32 counter starts at 2 (GCM data style).
 
-    # 环境变量兜底（可选）
-    import os
-    for key in ("QQ_READER_CAPTCHA_PUBLIC_HOST", "MANTOU_CAPTCHA_PUBLIC_HOST", "PUBLIC_IP", "SERVER_PUBLIC_IP"):
-        _收录(os.environ.get(key) or "")
-        if 候选:
-            return 候选[0]
-
-    # 出口 IP 仅当它是公网地址时才用，避免 Docker 172.x
-    try:
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            _收录(sock.getsockname()[0])
-    except Exception:
-        pass
-    if 候选:
-        return 候选[0]
-    return ""
-
-def 读取字段(对象: Any, 字段名: str) -> Any:
-    if 对象 is None: return None
-    if isinstance(对象, dict): return 对象.get(字段名)
-    return getattr(对象, 字段名, None)
-
-def 清理文本(文本: Any) -> str:
-    return re.sub(r"\s+", " ", str(文本 or "")).strip()
-
-def 限制文本长度(值: Any, 最大长度: int = 200) -> str:
-    文本 = str(值 or "")
-    return 文本 if len(文本) <= 最大长度 else 文本[:最大长度] + "..."
-
-def 安全整数(值: Any) -> int:
-    try: return int(str(值).strip())
-    except Exception: return 0
-
-def 获取会话键(event: Any) -> str:
-    群号 = 读取字段(event, "group_id") or 读取字段(getattr(event, "message_obj", None), "group_id") or "private"
-    用户 = "unknown"
-    try:
-        if callable(getattr(event, "get_sender_id", None)):
-            用户 = str(event.get_sender_id() or "unknown")
-    except Exception:
-        用户 = str(读取字段(event, "sender_id") or "unknown")
-    return f"{群号}:{用户}"
-
-# ===== 二、登录态读写 =====
-
-def 提取Cookie键值对(原始Cookie: Any) -> list[tuple[str, str]]:
-    """兼容浏览器 Cookie、curl、Cookie Editor JSON 与 Netscape cookies.txt。"""
-    文本 = str(原始Cookie or "").strip()
-    if not 文本:
-        return []
-
-    键值对: list[tuple[str, str]] = []
-    try:
-        对象 = json.loads(文本)
-    except Exception:
-        对象 = None
-    if isinstance(对象, dict):
-        对象 = 对象.get("cookies") or 对象.get("Cookies") or 对象
-    if isinstance(对象, list):
-        for 项 in 对象:
-            if isinstance(项, dict):
-                名称 = str(项.get("name") or 项.get("Name") or "").strip()
-                值 = str(项.get("value") or 项.get("Value") or "")
-                if 名称:
-                    键值对.append((名称, 值))
-        if 键值对:
-            return 键值对
-
-    匹配 = re.search(r"(?:^|\s)(?:-H|--header)\s+['\"]?Cookie\s*:\s*([^'\"]+)", 文本, re.I)
-    if 匹配:
-        文本 = 匹配.group(1).strip()
-    文本 = re.sub(r"^\s*Cookie\s*:\s*", "", 文本, flags=re.I).strip().strip("'\"")
-
-    # Netscape cookies.txt：domain / flag / path / secure / expire / name / value
-    for 行 in 文本.splitlines():
-        行 = 行.strip()
-        if not 行 or (行.startswith("#") and not 行.startswith("#HttpOnly_")):
-            continue
-        列 = 行.split("\t")
-        if len(列) >= 7:
-            名称, 值 = 列[-2].strip(), 列[-1].strip()
-            if 名称:
-                键值对.append((名称, 值))
-    if 键值对:
-        return 键值对
-
-    for 项 in re.split(r";\s*", 文本.replace("\r", "").replace("\n", ";")):
-        if "=" not in 项:
-            continue
-        名称, 值 = 项.split("=", 1)
-        名称, 值 = 名称.strip(), 值.strip()
-        if 名称:
-            键值对.append((名称, 值))
-    return 键值对
+"""
 
 
-def 解析QQ阅读Cookie(原始Cookie: Any) -> dict[str, str]:
-    """把外部 Cookie 统一成下载链路使用的登录态字段。"""
-    键值对 = 提取Cookie键值对(原始Cookie)
-    if not 键值对:
-        return {}
-    去重键值: dict[str, tuple[str, str]] = {}
-    for 名称, 值 in 键值对:
-        去重键值[名称.lower()] = (名称, 值)
-    Cookie = "; ".join(f"{名称}={值}" for 名称, 值 in 去重键值.values())
-    if Cookie:
-        Cookie += ";"
-    字段映射 = {
-        "ywguid": "ywguid",
-        "ywkey": "ywkey",
-        "yw_guid": "ywguid",
-        "yw_key": "ywkey",
-        "qrsn": "qrsn",
-        "fuid": "fuid",
-        "uid": "uid",
-        "login_uin": "login_uin",
-        "login_key": "login_key",
-        "ticket": "ticket",
-        "autologinsessionkey": "autoLoginSessionKey",
-    }
-    结果 = {"Cookie": Cookie}
-    for Cookie名, 字段名 in 字段映射.items():
-        项 = 去重键值.get(Cookie名)
-        if 项 and 项[1]:
-            结果[字段名] = 项[1]
-    if not 结果.get("uid") and 结果.get("ywguid"):
-        结果["uid"] = 结果["ywguid"]
-    if not 结果.get("login_uin") and 结果.get("ywguid"):
-        结果["login_uin"] = 结果["ywguid"]
-    if not 结果.get("login_key") and 结果.get("ywkey"):
-        结果["login_key"] = 结果["ywkey"]
-    return 结果
 
-
-def 是QQ阅读Cookie文本(原始Cookie: Any) -> bool:
-    """判断消息是否为可直接保存的 QQ 阅读登录 Cookie。"""
-    登录态 = 解析QQ阅读Cookie(原始Cookie)
-    有YW登录态 = bool(登录态.get("ywguid") and 登录态.get("ywkey"))
-    有通用登录态 = bool(登录态.get("login_uin") and 登录态.get("login_key"))
-    return 有YW登录态 or 有通用登录态
-
-
-def 补齐QQ阅读登录态(登录态: Mapping[str, Any] | None) -> dict[str, str]:
-    结果 = {str(k): str(v) for k, v in (登录态 or {}).items() if v not in (None, "")}
-    Cookie登录态 = 解析QQ阅读Cookie(结果.get("Cookie") or 结果.get("cookie") or "")
-    for 键, 值 in Cookie登录态.items():
-        结果.setdefault(键, 值)
-    if 结果.get("ywguid") and not 结果.get("uid"):
-        结果["uid"] = 结果["ywguid"]
-    if 结果.get("ywkey") and not 结果.get("login_key"):
-        结果["login_key"] = 结果["ywkey"]
-    return 结果
-
-
-def 有效QQ阅读登录态(登录态: Mapping[str, Any] | None) -> bool:
-    完整登录态 = 补齐QQ阅读登录态(登录态)
-    return bool(
-        (完整登录态.get("ywguid") or 完整登录态.get("login_uin"))
-        and (完整登录态.get("ywkey") or 完整登录态.get("login_key"))
-    )
-
-
-def 读取QQ阅读登录态(配置: Any) -> dict[str, str]:
-    try:
-        文本 = 读取运行状态值(配置, 登录态命名空间, 登录态状态键, "")
-        if not 文本: return {}
-        数据 = json.loads(文本)
-        if isinstance(数据, dict):
-            return 补齐QQ阅读登录态(数据)
-    except Exception as e:
-        logger.warning(f"QQ阅读登录态读取失败：error={e}")
-    return {}
-
-def 写入QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
-    清洗 = 补齐QQ阅读登录态(登录态)
-    for 字段名 in ("phone", "ticket", "autoLoginSessionKey", "autoLoginKeepTime", "autoLoginExpiredTime", "alk", "alkts"):
-        清洗.pop(字段名, None)
-    写入运行状态值(配置, 登录态命名空间, 登录态状态键, json.dumps(清洗, ensure_ascii=False))
-    logger.info("QQ阅读登录态已保存到数据库")
-
-# ===== 三、正文解密算法 =====
-
-# --- libfock 多模式解密（原 _qq阅读解密） ---
-
+# knva is NOT plaintext in libfock.so; real_dec builds:
+#   master_material = fuid || AES128-CBC_decrypt(KNVA_CT)
+# Embedded pool at runtime get_master (0x1200ca48):
 KNVA_AES_KEY = b"c9ajudte0zb21ksg"
 KNVA_AES_IV = b"58jb6v2lzcspwymg"
 # 32B ciphertext @ SO/runtime file offset 0x15cf0
@@ -326,10 +108,6 @@ MODE_AES_DES = 31932881
 MODE_CTR_CTR = 34232881
 MODE_DES_DES = 34941028
 MODE_CTR_AES = 94859123
-
-# fock_sn hash table order (runtime 0x1201efc8)
-_SN_HASHES = (MD2, MD4, MD5)
-
 
 def derive_knva(
     ciphertext: bytes = KNVA_CIPHERTEXT,
@@ -551,43 +329,6 @@ def select_token(tokens: list[str], index: int = 11) -> str:
     return tokens[index]
 
 
-def fock_sn(data: bytes | str, length: int | None = None) -> str:
-    """Pure-Python fock_sn (ELF VA 0x6dd0 / runtime 0x1200bdd0).
-
-    Native flow:
-      n = strlen(data)                 # used only for table index
-      h1 = table[n % 3]
-      h2 = table[(n >> 8) % 3]
-      a = h1(data, length_arg)         # length_arg is JNI len (usually == n)
-      b = h2(a, 16)
-      c = h2(b, 16)
-      return hex_encode(c)             # 32 lowercase hex chars + NUL
-
-    table order (runtime GOT @ 0x1201efc8): MD2, MD4, MD5.
-    """
-    if isinstance(data, str):
-        data_b = data.encode("utf-8")
-    else:
-        data_b = data
-    if not data_b:
-        raise ValueError("fock_sn: empty input")
-    n = data_b.find(b"\x00")
-    if n < 0:
-        n = len(data_b)
-    if n == 0:
-        raise ValueError("fock_sn: empty C-string")
-    if length is None:
-        payload = data_b[:n]
-    else:
-        payload = data_b[:length]
-    h_first = _SN_HASHES[n % 3]
-    h_rest = _SN_HASHES[(n >> 8) % 3]
-    a = h_first.new(payload).digest()
-    b = h_rest.new(a).digest()
-    c = h_rest.new(b).digest()
-    return c.hex()
-
-
 def decrypt_chapter(
     enc: bytes,
     stt: str | bytes,
@@ -634,7 +375,6 @@ def try_decrypt_chapter(
         return decrypt_chapter(enc, stt, fuid, keypool, knva)
     except Exception:
         return None
-
 # === csigs ===
 """Csigs: bcrypt-like csigs algorithm ported from com.qq.reader.api.Csigs."""
 
@@ -754,10 +494,6 @@ def _i32(x: int) -> int:
 
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-
-def to_hex(data: bytes) -> str:
-    return data.hex()
 
 
 def generate_salt(rounds: int = 4, random_bytes: Optional[bytes] = None) -> str:
@@ -982,2239 +718,1301 @@ def search(password: str, salt_str: Optional[str] = None) -> str:
     sb.append(magic_b64_encode(salt_bytes, len(salt_bytes)))
     sb.append(magic_b64_encode(out_bytes, len(CIHAI_INIT) * 4 - 1))
     return "".join(sb)
+# === tar ===
+"""Tar stream reader (response body is tar of encrypted chapter blobs)."""
 
-# --- 业务侧封装 ---
 
-def 是否二进制(data: bytes) -> bool:
-    if not data: return False
-    sample = data[:256]
-    return b"\x00" in sample or sum(1 for b in sample if b < 9 or (13 < b < 32)) > 10
 
-def 解码文本(data: bytes) -> str:
-    for enc in ("utf-8", "gb18030", "gbk"):
-        try: return data.decode(enc)
-        except UnicodeDecodeError: pass
-    return data.decode("utf-8", "replace")
-
-def 读取keypool字节(登录态: Optional[Mapping[str, str]] = None) -> bytes:
-    src = 登录态 or {}
-    b64 = str(src.get("keypool_b64") or "")
-    if not b64:
-        return b""
+def tar_decrypt(stream: Union[BinaryIO, bytes]) -> Dict[str, object]:
+    """Port of TarDecompressor.decrypt. Returns map of filename -> bytes, plus code."""
+    result: Dict[str, object] = {}
     try:
-        return base64.b64decode(b64 + "===")
-    except Exception:
-        return b""
-
-def 解密章节密文(cipher: bytes, *, bid: str, cid: str, fuid: str, keypool: bytes = b"") -> Tuple[Optional[bytes], str]:
-    """多模式 libfock 解密。"""
-    if not cipher:
-        return None, "empty"
-    if not 是否二进制(cipher):
-        return cipher, "plain"
-    if cipher[:2] == bytes([0x1f, 0x8b]):
-        try:
-            return gzip.decompress(cipher), "gzip"
-        except Exception:
-            pass
-    if AES is None or unpad is None:
-        return None, "no_crypto"
-    if not keypool:
-        return None, "missing_keypool"
-    stt = f"{bid}_{cid}_s"
-    try:
-        text = try_decrypt_chapter(cipher, stt, fuid, keypool)
-        if text is None:
-            return None, "decrypt_fail"
-        return text.encode("utf-8"), "fock_multi"
+        if isinstance(stream, (bytes, bytearray)):
+            bio = io.BytesIO(stream)
+        else:
+            data = stream.read()
+            bio = io.BytesIO(data)
+        with tarfile.open(fileobj=bio, mode="r|*") as tar:
+            for member in tar:
+                if member.isdir():
+                    continue
+                f = tar.extractfile(member)
+                if f is None:
+                    continue
+                result[member.name] = f.read()
+        result["code"] = 0
+        return result
     except Exception as e:
-        return None, f"decrypt_error:{e}"
-
-def 解密章节(cipher: bytes, bid: str, cid: str, 登录态: Mapping[str, str]) -> Tuple[Optional[str], str]:
-    fuid = str(默认App请求身份["fuid"])
-    keypool = 读取keypool字节(登录态)
-    plain, note = 解密章节密文(cipher, bid=bid, cid=cid, fuid=fuid, keypool=keypool)
-    if plain is None:
-        if not 是否二进制(cipher):
-            return 解码文本(cipher).strip(), "plain"
-        return None, note
-    return 解码文本(plain).strip(), note
-
-# ===== 四、出版书章节包与目录解析 =====
-
-出版书TEA密钥 = "*#_!U@!#.)xDK02L"
-
-
-def 出版书TEA密钥整数(设备标识: str) -> list[int]:
-    摘要 = hashlib.md5((str(设备标识) + 出版书TEA密钥).encode("utf-8")).digest()
-    return list(struct.unpack("<iiii", 摘要))
+        logger.debug(f"QQ阅读参考 tar 解析失败：error={type(e).__name__}")
+        result["code"] = -1
+        return result
+# === config (embedded, minimal) ===
+# Account / client identity used by chapter API + csigs.
+# knva is derived from SO constants (derive_knva), not configured.
+# The dynamic key pool is cached only in this process.
+CONFIG: Dict[str, str] = {
+    "loginType": "50",
+    "c_platform": "android",
+    "c_version": "qqreader_8.3.3.0888_android",
+    "channel": "10005136",
+    "qrsn": "0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b",
+    "usid": "ywIWoPGBmOeI",
+    "uid": "855131499808",
+    "fuid": "89306811035542cd868d49def7d3857d"
+}
 
 
-def 出版书TEA块解密(块: bytes, 密钥整数: Sequence[int], 轮数: int = 16) -> bytes:
-    v0, v1 = struct.unpack("<ii", 块)
-    k0, k1, k2, k3 = [_i32(x) for x in 密钥整数]
-    累计 = _i32(轮数 * (-1640531527))
-    for _ in range(轮数):
-        v1 = _i32(v1 - _i32(_i32(_i32(v0 << 4) + k2) ^ _i32(v0 + 累计) ^ _i32(_i32(v0 >> 5) + k3)))
-        v0 = _i32(v0 - _i32(_i32(_i32(v1 << 4) + k0) ^ _i32(v1 + 累计) ^ _i32(_i32(v1 >> 5) + k1)))
-        累计 = _i32(累计 - (-1640531527))
+class ConfigManager:
+    _instance: Optional["ConfigManager"] = None
+    _lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self.login_type = "50"
+        self.c_platform = "android"
+        self.c_version = ""
+        self.channel = ""
+        self.qrsn = ""
+        self.usid = ""
+        self.uid = ""
+        self.fuid = ""
+        self.key_pool: Optional[str] = None
+
+    @classmethod
+    def get_instance(cls) -> "ConfigManager":
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = ConfigManager()
+            return cls._instance
+
+    def _knva_bytes(self) -> bytes:
+        return derive_knva()
+
+    def _cache_valid(self, pool_b64: str) -> bool:
+        if not pool_b64 or not self.fuid:
+            return False
+        try:
+            raw = base64.b64decode(pool_b64)
+            tokens = decrypt_keypool(raw, master_key(self.fuid, self._knva_bytes()))
+            return bool(tokens)
+        except Exception:
+            return False
+
+    def _load_key_pool_cache(self) -> Optional[str]:
+        return self.key_pool
+
+    def _save_key_pool_cache(self, pool_b64: str) -> None:
+        self.key_pool = pool_b64
+
+    def fetch_key_pool(self) -> bool:
+        if not self.fuid:
+            logger.debug("QQ阅读参考核心未配置 fuid")
+            return False
+        url = f"https://newminerva-tgw.reader.qq.com/sk?fuid={self.fuid}"
+        try:
+            with make_session() as sess:
+                resp = sess.get(url, timeout=20)
+                resp.raise_for_status()
+                data = resp.json()
+            pool = str(data.get("pool", "") or "").strip()
+            if not pool:
+                logger.debug("QQ阅读参考核心密钥池响应为空")
+                return False
+            if not self._cache_valid(pool):
+                logger.debug("QQ阅读参考核心密钥池校验失败")
+                return False
+            self.key_pool = pool
+            self._save_key_pool_cache(pool)
+            return True
+        except Exception as e:
+            logger.debug(f"QQ阅读参考核心密钥池获取失败：error={type(e).__name__}")
+            return False
+
+    def set_key_pool(self, force: bool = False) -> None:
+        if not self.fuid:
+            logger.debug("QQ阅读参考核心未配置 fuid")
+            return
+        if not force:
+            cached = self._load_key_pool_cache()
+            if cached and self._cache_valid(cached):
+                self.key_pool = cached
+                return
+        if self.fetch_key_pool():
+            return
+        cached = self._load_key_pool_cache()
+        self.key_pool = cached or self.key_pool or ""
+
+    def refresh_key_pool(self) -> bool:
+        return self.fetch_key_pool()
+
+    def apply(self, m: Dict[str, Any]) -> None:
+        if "loginType" in m:
+            self.login_type = str(m["loginType"])
+        if "c_platform" in m:
+            self.c_platform = str(m["c_platform"])
+        if "c_version" in m:
+            self.c_version = str(m["c_version"])
+        if "channel" in m:
+            self.channel = str(m["channel"])
+        if "qrsn" in m:
+            self.qrsn = str(m["qrsn"])
+        if "usid" in m:
+            self.usid = str(m["usid"])
+        if "uid" in m:
+            self.uid = str(m["uid"])
+        if "fuid" in m:
+            self.fuid = str(m["fuid"])
+        self.set_key_pool()
+
+
+def load_config_once() -> None:
+    cfg = ConfigManager.get_instance()
+    cfg.apply(CONFIG)
+# === fetcher ===
+"""Fetcher: book info / list / toc / content / sign / manju."""
+
+
+
+
+UA = "okhttp/3.12.13"
+SIGN_TAIL = "B74H5a2Yh73gfu8F"
+
+
+class _SSLAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+def make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"User-Agent": UA})
+    s.verify = False
+    s.mount("https://", _SSLAdapter())
+    try:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception:
+        pass
+    return s
+
+
+class Fetcher:
+    def __init__(self) -> None:
+        self._session = make_session()
+
+    def extract_mid_number(self, s: str) -> int:
+        a = s.find("_")
+        b = s.find("_", a + 1)
+        return int(s[a + 1 : b])
+
+    def _cfg(self) -> ConfigManager:
+        return ConfigManager.get_instance()
+
+    def _pwd(self, timestamp_ms: int) -> str:
+        c = self._cfg()
+        return (
+            f"{c.login_type}|||{c.c_version}|{c.c_platform}|{c.channel}|"
+            f"{c.qrsn}|{c.qrsn}||||0|{timestamp_ms}|{SIGN_TAIL}"
+        )
+
+    def _auth_headers(self, timestamp_ms: int) -> Dict[str, str]:
+        c = self._cfg()
+        pwd = self._pwd(timestamp_ms)
+        csigs_val = search(sha256_hex(pwd), generate_salt())
+        return {
+            "User-Agent": UA,
+            "loginType": c.login_type,
+            "c_platform": c.c_platform,
+            "c_version": c.c_version,
+            "channel": c.channel,
+            "qrsn": c.qrsn,
+            "usid": c.usid,
+            "uid": c.uid,
+            "youngerMode": "0",
+            "qrsn_new": c.qrsn,
+            "ttime": str(timestamp_ms),
+            "csigs": csigs_val,
+        }
+
+    @staticmethod
+    def _chapter_window_complete(result: Any, expected: int) -> bool:
+        if not isinstance(result, list) or len(result) != expected:
+            return False
+        return all(
+            bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
+            for item in result
+        )
+
+    def _get_chapter_with_retry(
+        self,
+        book_id: str,
+        start_chapter: str,
+        end_chapter: Optional[str],
+    ) -> Optional[List[Any]]:
+        expected = abs(int(end_chapter or start_chapter)) - abs(int(start_chapter)) + 1
+        latest: Optional[List[Any]] = None
+        for attempt in range(1, 4):
+            latest = self._get_chapter(book_id, start_chapter, end_chapter)
+            if self._chapter_window_complete(latest, expected):
+                return latest
+            if attempt < 3:
+                time.sleep(0.2 * attempt)
+        return latest
+
+    def get_chapter(self, book_id: str, start_chapter: str, end_chapter: Optional[str] = None) -> Optional[List[Any]]:
+        if end_chapter is None:
+            return self._get_chapter_with_retry(book_id, start_chapter, None)
+        s = abs(int(start_chapter))
+        e = abs(int(end_chapter))
+        batch_size = 31
+        if e - s + 1 <= batch_size:
+            return self._get_chapter_with_retry(book_id, start_chapter, end_chapter)
+        logger.debug(
+            f"QQ阅读参考正文分窗：chapters={e - s + 1}, window={batch_size}, concurrency=4"
+        )
+        all_results: List[Any] = []
+        ranges = []
+        batch_start = s
+        while batch_start <= e:
+            be = min(batch_start + batch_size - 1, e)
+            ranges.append((str(batch_start), str(be)))
+            batch_start += batch_size
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = [
+                (a, b, pool.submit(self._get_chapter_with_retry, book_id, a, b))
+                for a, b in ranges
+            ]
+            batch_map = {}
+            for a, b, fut in futs:
+                try:
+                    r = fut.result()
+                    if r:
+                        batch_map[(int(a), int(b))] = r
+                except Exception:
+                    pass
+            for a, b in ranges:
+                part = batch_map.get((int(a), int(b)))
+                if part:
+                    all_results.extend(part)
+        return all_results or None
+
+    def _decrypt_bytes(self, data: bytes, stt: str | bytes, allow_refresh: bool = True) -> Optional[str]:
+        c = self._cfg()
+        knva = c._knva_bytes()
+
+        def _try() -> Optional[str]:
+            if not c.key_pool:
+                return None
+            try:
+                kp = base64.b64decode(c.key_pool)
+            except Exception:
+                return None
+            return try_decrypt_chapter(data, stt, c.fuid, kp, knva)
+
+        text = _try()
+        if text is not None:
+            return text
+        if allow_refresh and c.refresh_key_pool():
+            return _try()
+        return None
+
+    def _get_chapter(self, book_id: str, start_chapter: str, end_chapter: Optional[str]) -> Optional[List[Any]]:
+        try:
+            if end_chapter is not None:
+                s = abs(int(start_chapter))
+                e2 = abs(int(end_chapter))
+                if s > e2:
+                    end_chapter = start_chapter
+                    e2 = s
+                if e2 - s > 10000:
+                    return None
+            else:
+                int(start_chapter)
+                end_chapter = start_chapter
+        except Exception as e:
+            logger.debug(f"QQ阅读参考正文范围无效：error={type(e).__name__}")
+            return None
+
+        ts = int(time.time() * 1000)
+        c = self._cfg()
+        url = (
+            f"https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
+            f"?bookId={book_id}&type=2&scids={start_chapter}-{end_chapter}&fuid={c.fuid}"
+        )
+        headers = self._auth_headers(ts)
+        try:
+            r = self._session.get(url, headers=headers, timeout=60)
+            m = tar_decrypt(r.content)
+            remove_keys = []
+            for key, value in list(m.items()):
+                try:
+                    if key in ("code", "info.txt"):
+                        remove_keys.append(key)
+                        continue
+                    if not isinstance(value, (bytes, bytearray)):
+                        # already text / other
+                        if not isinstance(value, str):
+                            m[key] = str(value)
+                        continue
+                    content = None
+                    try:
+                        content = self._decrypt_bytes(bytes(value), key, allow_refresh=True)
+                    except Exception as e_pure:
+                        logger.debug(
+                            f"QQ阅读参考正文解密失败：error={type(e_pure).__name__}"
+                        )
+                    m[key] = content if content else "章节解密失败"
+                except Exception as e4:
+                    logger.debug(
+                        f"QQ阅读参考正文成员处理失败：error={type(e4).__name__}"
+                    )
+                    m[key] = "章节解密失败"
+            for k in remove_keys:
+                m.pop(k, None)
+            items = [(k, v) for k, v in m.items() if k not in ("code",)]
+            items.sort(key=lambda kv: self.extract_mid_number(kv[0]))
+            sorted_list = [v for _, v in items]
+            return sorted_list or None
+        except Exception as e5:
+            logger.debug(f"QQ阅读参考正文请求失败：error={type(e5).__name__}")
+            return None
+
+
+
+# === published TEB/eqct ===
+TEA_KEY_STR = "*#_!U@!#.)xDK02L"
+API_AUTH = "https://bookcommon.reader.qq.com/auth"
+
+
+def tea_key_ints(device: str, tea_key: str = TEA_KEY_STR) -> list[int]:
+    dig = hashlib.md5((device + tea_key).encode("utf-8")).digest()
+    return list(struct.unpack("<iiii", dig))
+
+
+def tea_key_default(tea_key: str = TEA_KEY_STR) -> list[int]:
+    b = tea_key.encode("utf-8")
+    if len(b) < 16:
+        b = b.ljust(16, b"\0")
+    return list(struct.unpack("<iiii", b[:16]))
+
+
+def tea_decrypt_block(block: bytes, key_ints, rounds: int = 16) -> bytes:
+    v0, v1 = struct.unpack("<ii", block)
+    k0, k1, k2, k3 = [_i32(x) for x in key_ints]
+    summ = _i32(rounds * (-1640531527))
+    for _ in range(rounds):
+        v1 = _i32(v1 - _i32(_i32(_i32(v0 << 4) + k2) ^ _i32(v0 + summ) ^ _i32(_i32(v0 >> 5) + k3)))
+        v0 = _i32(v0 - _i32(_i32(_i32(v1 << 4) + k0) ^ _i32(v1 + summ) ^ _i32(_i32(v1 >> 5) + k1)))
+        summ = _i32(summ - (-1640531527))
     return struct.pack("<ii", v0, v1)
 
 
-def 出版书TEA解密(data: bytes, 密钥整数: Sequence[int]) -> bytes:
-    if not data:
-        return b""
-    补位 = (-len(data)) % 8
-    缓冲 = bytearray(data + (b"\x00" * 补位))
-    for offset in range(0, len(缓冲), 8):
-        缓冲[offset:offset + 8] = 出版书TEA块解密(bytes(缓冲[offset:offset + 8]), 密钥整数)
-    return bytes(缓冲[:len(data)])
+def tea_decrypt_bytes(data: bytes, key_ints) -> bytes:
+    padn = len(data) % 8
+    total = len(data) + (8 - padn if padn else 0)
+    buf = bytearray(total)
+    buf[: len(data)] = data
+    for i in range(0, total, 8):
+        buf[i : i + 8] = tea_decrypt_block(bytes(buf[i : i + 8]), key_ints)
+    return bytes(buf[: len(data)])
 
 
-def 去除出版书尾部(data: bytes) -> bytes:
+def tea_decrypt_head128(data: bytes, key_ints=None) -> bytes:
+    if key_ints is None:
+        key_ints = tea_key_default()
+    n = min(128, len(data))
+    head = bytearray(data[:n])
+    if len(head) % 8:
+        head += b"\0" * (8 - (len(head) % 8))
+    out = bytearray(len(head))
+    for off in range(0, len(head), 8):
+        out[off : off + 8] = tea_decrypt_block(bytes(head[off : off + 8]), key_ints)
+    return bytes(out[:n]) + data[n:]
+
+
+def strip_epu_trailer(data: bytes) -> bytes:
     eocd = data.rfind(b"PK\x05\x06")
-    if eocd < 0 or eocd + 22 > len(data):
+    if eocd < 0:
         return data
-    注释长度 = struct.unpack_from("<H", data, eocd + 20)[0]
-    终点 = eocd + 22 + 注释长度
-    return data[:终点] if 终点 <= len(data) else data
+    comment_len = struct.unpack_from("<H", data, eocd + 20)[0]
+    return data[: eocd + 22 + comment_len]
 
 
-出版书CRC表: list[int] = []
-for _出版书索引 in range(256):
-    _出版书CRC = _出版书索引
+_CRCTAB = []
+for _i in range(256):
+    _c = _i
     for _ in range(8):
-        _出版书CRC = (_出版书CRC >> 1) ^ 0xEDB88320 if _出版书CRC & 1 else _出版书CRC >> 1
-    出版书CRC表.append(_出版书CRC)
+        _c = (_c >> 1) ^ 0xEDB88320 if (_c & 1) else (_c >> 1)
+    _CRCTAB.append(_c)
 
 
-def 出版书CRC更新(crc: int, 字节: int) -> int:
-    return (出版书CRC表[(crc ^ (字节 & 0xFF)) & 0xFF] ^ (crc >> 8)) & 0xFFFFFFFF
+def _crc32_byte(crc: int, b: int) -> int:
+    return (_CRCTAB[(crc ^ (b & 0xFF)) & 0xFF] ^ (crc >> 8)) & 0xFFFFFFFF
 
 
-class 出版书ZipCrypto:
-    def __init__(self, 密码: bytes):
-        self.密钥 = [305419896, 591751049, 878082192]
-        for 字节 in 密码:
-            self.更新(字节)
+class ZipCrypto:
+    def __init__(self, pwd: bytes):
+        self.k = [305419896, 591751049, 878082192]
+        for x in pwd:
+            self.update(x)
 
-    def 更新(self, 字节: int) -> None:
-        self.密钥[0] = 出版书CRC更新(self.密钥[0], 字节)
-        self.密钥[1] = (self.密钥[1] + (self.密钥[0] & 0xFF)) & 0xFFFFFFFF
-        self.密钥[1] = (self.密钥[1] * 134775813 + 1) & 0xFFFFFFFF
-        self.密钥[2] = 出版书CRC更新(self.密钥[2], (self.密钥[1] >> 24) & 0xFF)
+    def update(self, b: int) -> None:
+        self.k[0] = _crc32_byte(self.k[0], b)
+        self.k[1] = (self.k[1] + (self.k[0] & 0xFF)) & 0xFFFFFFFF
+        self.k[1] = (self.k[1] * 134775813 + 1) & 0xFFFFFFFF
+        self.k[2] = _crc32_byte(self.k[2], (self.k[1] >> 24) & 0xFF)
 
-    def 解密字节(self) -> int:
-        t = (self.密钥[2] | 2) & 0xFFFFFFFF
+    def dec_byte(self) -> int:
+        t = (self.k[2] | 2) & 0xFFFFFFFF
         return ((t * (t ^ 1)) >> 8) & 0xFF
 
-    def 解密(self, data: bytes) -> bytes:
+    def decrypt(self, data: bytes) -> bytes:
         out = bytearray(len(data))
-        for 位置, 密文 in enumerate(data):
-            明文 = 密文 ^ self.解密字节()
-            self.更新(明文)
-            out[位置] = 明文
+        for i, c in enumerate(data):
+            p = c ^ self.dec_byte()
+            self.update(p)
+            out[i] = p
         return bytes(out)
 
 
-def 解包出版书Zip条目(data: bytes, 密码: bytes) -> list[tuple[str, bytes]]:
-    结果: list[tuple[str, bytes]] = []
-    位置 = 0
-    while 位置 + 30 <= len(data):
-        签名 = struct.unpack_from("<I", data, 位置)[0]
-        if 签名 in (0x02014B50, 0x06054B50):
+def extract_zip_entries_manual(zdata: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
+    out: list[tuple[str, bytes]] = []
+    pos = 0
+    while pos + 30 <= len(zdata):
+        sig = struct.unpack_from("<I", zdata, pos)[0]
+        if sig in (0x02014B50, 0x06054B50):
             break
-        if 签名 != 0x04034B50:
+        if sig != 0x04034B50:
             break
-        _, 标志, 压缩方式, 修改时间, _, CRC, 压缩大小, 原始大小, 名称长度, 扩展长度 = struct.unpack_from("<HHHHHIIIHH", data, 位置 + 4)
-        名称原文 = data[位置 + 30:位置 + 30 + 名称长度]
-        数据起点 = 位置 + 30 + 名称长度 + 扩展长度
-        if 数据起点 + 压缩大小 > len(data):
-            raise ValueError("出版书条目数据不完整")
-        负载 = data[数据起点:数据起点 + 压缩大小]
-        位置 = 数据起点 + 压缩大小
-        if 标志 & 0x8 and 位置 + 16 <= len(data) and data[位置:位置 + 4] == b"PK\x07\x08":
-            位置 += 16
-        名称 = 名称原文.decode("utf-8", "replace")
-        if 标志 & 1:
-            if len(负载) < 12:
-                raise ValueError("出版书加密条目过短")
-            解密负载 = 出版书ZipCrypto(密码).解密(负载)
-            校验字节 = (修改时间 >> 8) & 0xFF if 标志 & 0x8 else (CRC >> 24) & 0xFF
-            if 解密负载[11] != 校验字节:
-                raise ValueError("出版书密码校验失败")
-            内容 = 解密负载[12:]
+        _ver, flag, method, _t, _d, _crc, csize, _usize, nlen, xlen = struct.unpack_from(
+            "<HHHHHIIIHH", zdata, pos + 4
+        )
+        name = zdata[pos + 30 : pos + 30 + nlen]
+        data_off = pos + 30 + nlen + xlen
+        payload = zdata[data_off : data_off + csize]
+        pos = data_off + csize
+        if flag & 0x8 and pos + 16 <= len(zdata) and zdata[pos : pos + 4] == b"PK\x07\x08":
+            pos += 16
+        name_s = name.decode("utf-8", "replace")
+        if flag & 1:
+            if len(payload) < 12:
+                raise ValueError(f"encrypted entry too short: {name_s}")
+            body = ZipCrypto(pwd).decrypt(payload)[12:]
         else:
-            内容 = 负载
-        if 压缩方式 == 0:
-            明文 = 内容
-        elif 压缩方式 == 8:
-            明文 = zlib.decompress(内容, -15)
+            body = payload
+        if method == 0:
+            plain = body
+        elif method == 8:
+            plain = zlib.decompress(body, -15)
         else:
-            raise ValueError(f"出版书不支持的压缩方式：{压缩方式}")
-        if 原始大小 and len(明文) != 原始大小:
-            raise ValueError("出版书条目长度校验失败")
-        if CRC and (zlib.crc32(明文) & 0xFFFFFFFF) != CRC:
-            raise ValueError("出版书条目校验失败")
-        结果.append((名称, 明文))
-    if not 结果:
-        raise ValueError("出版书章节包没有可读条目")
-    return 结果
+            raise ValueError(f"unsupported method {method}")
+        out.append((name_s, plain))
+    if not out:
+        raise ValueError("no local zip entries")
+    return out
 
 
-def 解包出版书章节(data: bytes, 密码: bytes) -> list[tuple[str, bytes]]:
-    默认密钥 = list(struct.unpack("<iiii", 出版书TEA密钥.encode("utf-8")))
-    zip数据 = 去除出版书尾部(出版书TEA解密(data[:128], 默认密钥) + data[128:])
-    if not zip数据.startswith(b"PK"):
-        raise ValueError("出版书章节包头校验失败")
-    return 解包出版书Zip条目(zip数据, 密码)
+def extract_eqct(eqct: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
+    zdata = strip_epu_trailer(tea_decrypt_head128(eqct))
+    if zdata[:2] != b"PK":
+        raise ValueError(f"TEA head decrypt failed head={zdata[:8].hex()}")
+    return extract_zip_entries_manual(zdata, pwd)
 
 
-def 出版书HTML转文本(data: bytes) -> str:
+def xhtml_to_text(data: bytes) -> str:
     text = data.decode("utf-8", "replace")
     text = re.sub(r"(?is)<script[^>]*>.*?</script>", "", text)
     text = re.sub(r"(?is)<style[^>]*>.*?</style>", "", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</(?:p|div)\s*>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n", text)
+    text = re.sub(r"(?i)</div\s*>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", "", text)
-    return re.sub(r"\n{3,}", "\n\n", html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")).strip()
+    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def 出版书正文数据可信(名称: str, data: bytes) -> bool:
-    """拒绝控制字符或大量替换符组成的异常正文，避免写入乱码 TXT。"""
-    原始文本 = data.decode("utf-8", "replace")
-    if not 原始文本.strip():
-        return False
-    if 原始文本.count("\ufffd") * 20 > max(1, len(原始文本)):
-        return False
-    控制字符数 = sum(1 for 字符 in 原始文本 if ord(字符) < 32 and 字符 not in "\r\n\t")
-    if 控制字符数 > max(2, len(原始文本) // 100):
-        return False
-    lower = 名称.lower()
-    正文 = 出版书HTML转文本(data) if lower.endswith((".xhtml", ".html", ".htm")) else 原始文本.strip()
-    return any(字符.isalnum() or "\u4e00" <= 字符 <= "\u9fff" for 字符 in 正文)
-
-
-def 选择出版书正文条目(条目: Sequence[tuple[str, bytes]]) -> tuple[str, bytes]:
-    候选: list[tuple[int, str, bytes]] = []
-    for 名称, data in 条目:
-        lower = 名称.lower().replace("\\", "/")
-        分数 = len(data)
+def pick_best_entry(files: list[tuple[str, bytes]]) -> tuple[str, bytes]:
+    scored = []
+    for name, data in files:
+        lower = name.lower().replace("\\", "/")
+        score = len(data)
         if lower.endswith((".xhtml", ".html", ".htm", ".txt")):
-            分数 += 5_000_000
+            score += 5_000_000
         if "/text/" in lower:
-            分数 += 1_000_000
+            score += 1_000_000
         if "cover" in lower:
-            分数 -= 2_000_000
+            score -= 2_000_000
         if lower.endswith((".jpg", ".png", ".css", ".ncx", ".opf", ".ttf")):
-            分数 -= 4_000_000
-        候选.append((分数, 名称, data))
-    if not 候选:
-        raise ValueError("出版书章节没有正文条目")
-    for _, 名称, data in sorted(候选, key=lambda item: item[0], reverse=True):
-        if 出版书正文数据可信(名称, data):
-            return 名称, data
-    raise ValueError("出版书正文校验失败")
-
-@dataclass
-class Tar成员:
-    name: str
-    size: int
-    data: bytes
+            score -= 4_000_000
+        scored.append((score, name, data))
+    scored.sort(reverse=True)
+    return scored[0][1], scored[0][2]
 
 
-@dataclass
-class 章节下载汇总:
-    章节: list[dict[str, Any]]
-    请求被拒绝: bool = False
-
-def 是否deny(data: bytes) -> bool:
-    if not data or data[:1] != b"{": return False
-    try: obj = json.loads(data.decode("utf-8", "replace"))
-    except Exception: return False
-    return isinstance(obj, dict) and str(obj.get("code")) in {"-1", "401", "403"} and "deny" in str(obj.get("msg", "")).lower()
-
-def 解析tar(blob: bytes) -> List[Tar成员]:
-    if 是否deny(blob): raise RuntimeError("接口拒绝访问")
-    if not blob or blob[:1] == b"{": raise RuntimeError("返回不是章节包")
-    out: List[Tar成员] = []
+def _parse_teb_info_blob(blob: bytes) -> list[dict]:
+    if not blob:
+        return []
+    if blob[:1] == b"{":
+        obj = json.loads(blob.decode("utf-8", "replace"))
+        raise RuntimeError(f"TEB error: {obj}")
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as tf:
-        for m in tf.getmembers():
-            if not m.isfile(): continue
-            f = tf.extractfile(m)
-            data = f.read() if f else b""
-            out.append(Tar成员(name=m.name, size=len(data), data=data))
-    return out
-
-def 解析目录文本(text: str) -> List[Dict[str, Any]]:
-    chapters: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line: continue
-        parts = line.split(",")
-        if len(parts) < 2: continue
-        cid = parts[0].strip(); title = parts[1].strip() or f"第{cid}章"
-        chapters.append({"cid": cid, "id": cid, "title": title, "index": len(chapters) + 1})
-    return chapters
-
-
-def 解析出版书信息包(blob: bytes) -> list[dict[str, Any]]:
-    for 成员 in 解析tar(blob):
-        if 成员.name == "info.txt" or 成员.name.endswith("/info.txt"):
-            try:
-                数据 = json.loads(解码文本(成员.data))
-            except Exception as e:
-                raise RuntimeError("出版书信息包解析失败") from e
-            if isinstance(数据, list):
-                return [项目 for 项目 in 数据 if isinstance(项目, dict)]
-            if isinstance(数据, dict):
-                return [数据]
-            return []
+        raw = tf.extractfile(tf.getmember("info.txt")).read()
+    info = json.loads(raw.decode("utf-8"))
+    if isinstance(info, list):
+        return [x for x in info if isinstance(x, dict)]
+    if isinstance(info, dict):
+        return [info]
     return []
 
 
-def 解析出版书目录(信息项: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    章节映射: dict[str, dict[str, Any]] = {}
-    for 项目 in 信息项:
-        cid = str(项目.get("chapter_id") or 项目.get("cid") or 项目.get("scid") or "").strip()
-        if not cid:
-            continue
-        标题 = 清理文本(项目.get("chapter_title") or 项目.get("title") or f"第{cid}章")
-        资源地址 = str(
-            项目.get("ctebchaptercosurl")
-            or 项目.get("chaptercosurl")
-            or 项目.get("epubResourceUrl")
-            or 项目.get("epubPureUrl")
-            or ""
-        ).strip()
-        已有 = 章节映射.get(cid)
-        if 已有 is not None and 已有.get("resource_url") and not 资源地址:
-            continue
-        章节映射[cid] = {
-            "cid": cid,
-            "id": cid,
-            "title": 标题,
-            "resource_url": 资源地址,
-            "published": True,
-        }
-    章节 = list(章节映射.values())
-    章节.sort(key=lambda 项目: (安全整数(项目.get("cid")) == 0, 安全整数(项目.get("cid")), str(项目.get("cid") or "")))
-    for 索引, 项目 in enumerate(章节, start=1):
-        项目["index"] = 索引
-    return 章节
+# === AstrBot adapter ===
+
+QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
+QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
+QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
+QQ阅读允许域名 = ("reader.qq.com", "book.qq.com", "novel.html5.qq.com")
+下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
+文件声明 = (
+    "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
+    "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
+    "如喜欢本书，请支持正版。"
+)
+下载失败提示 = "下载失败"
+文件发送失败提示 = "文件发送失败，请稍后再试"
 
 
-def 找目录成员(entries: Sequence[Tar成员], bid: str) -> Optional[Tar成员]:
-    names = {f"{bid}_ALL_o", f"{bid}_ALL_s"}
-    for e in entries:
-        if e.name in names or e.name.endswith("_ALL_o") or e.name.endswith("_ALL_s"):
-            return e
-    return None
-
-def 章节成员(entries: Sequence[Tar成员], bid: str) -> List[Tar成员]:
-    prefix = f"{bid}_"
-    return [e for e in entries if e.name.startswith(prefix) and e.name.endswith("_s") and "_ALL_" not in e.name]
-
-def 章节编号(name: str, bid: str) -> str:
-    mid = name
-    if mid.startswith(f"{bid}_"): mid = mid[len(bid)+1:]
-    if mid.endswith("_s"): mid = mid[:-2]
-    return mid
+def _是QQ阅读域名(hostname: str) -> bool:
+    host = str(hostname or "").lower().strip(".")
+    return any(host == domain or host.endswith(f".{domain}") for domain in QQ阅读允许域名)
 
 
-def 构建索引补拉窗口(
-    章节列表: Sequence[Mapping[str, Any]],
-    位置列表: Sequence[int],
-    *,
-    window_size: int = App章节窗口上限,
-) -> list[tuple[str, list[int]]]:
-    """将稀疏缺章归并为 App 已验证的连续章节窗口。"""
-    总数 = len(章节列表)
-    大小 = max(1, int(window_size or App章节窗口上限))
-    分组: dict[tuple[int, int], list[int]] = {}
-    有效位置: set[int] = set()
-    for 项 in 位置列表:
+def 提取QQ阅读链接(文本: Any) -> str | None:
+    for match in QQ阅读链接正则.finditer(str(文本 or "")):
+        link = match.group(0).rstrip(")]}>，。；;！!")
         try:
-            位置 = int(项)
-        except (TypeError, ValueError):
+            if _是QQ阅读域名(urlsplit(link).hostname or ""):
+                return link
+        except ValueError:
             continue
-        if 0 <= 位置 < 总数:
-            有效位置.add(位置)
-    for 位置 in sorted(有效位置):
-        章节 = 章节列表[位置]
-        索引 = 安全整数(章节.get("index")) or 位置 + 1
-        索引 = max(1, min(索引, 总数))
-        起始 = ((索引 - 1) // 大小) * 大小 + 1
-        结束 = min(起始 + 大小 - 1, 总数)
-        分组.setdefault((起始, 结束), []).append(位置)
-    return [(f"{起始}-{结束}", 位置) for (起始, 结束), 位置 in sorted(分组.items())]
-
-# ===== 五、请求头与下载态 =====
-
-def 组装URL(base: str, params: Mapping[str, Any]) -> str:
-    query = urllib.parse.urlencode({k: str(v) for k, v in params.items() if v is not None}, doseq=True)
-    return f"{base}?{query}" if query else base
-
-def 构建App请求头(登录态: Optional[Mapping[str, str]] = None, *, 时间毫秒: Optional[int] = None) -> Dict[str, str]:
-    """严格使用本地 QQ 阅读项目验证过的正文 App 签名请求头。"""
-    # 正文接口会拒绝混入浏览器 Cookie、登录字段、fuid 或 text_type 的请求。
-    # 登录态仍只用于数据库保存和登录流程，不参与免费正文下载请求。
-    app = 默认App请求身份
-    时间毫秒 = int(时间毫秒 or time.time() * 1000)
-    签名原文 = (
-        f"{app['loginType']}|||{app['c_version']}|{app['c_platform']}|{app['channel']}|"
-        f"{app['qrsn']}|{app['qrsn']}||||0|{时间毫秒}|{App签名尾部}"
-    )
-    try:
-        csigs = search(sha256_hex(签名原文), generate_salt())
-    except Exception as e:
-        raise RuntimeError("App请求签名生成失败") from e
-
-    return {
-        "User-Agent": App默认UA,
-        "loginType": app["loginType"],
-        "c_platform": app["c_platform"],
-        "c_version": app["c_version"],
-        "channel": app["channel"],
-        "qrsn": app["qrsn"],
-        "qrsn_new": app["qrsn"],
-        "usid": app["usid"],
-        "uid": app["uid"],
-        "youngerMode": "0",
-        "ttime": str(时间毫秒),
-        "csigs": csigs,
-    }
-
-
-def 构建App接口请求(
-    地址: str,
-    参数: Optional[Mapping[str, Any]] = None,
-    *,
-    使用签名: bool = True,
-    额外请求头: Optional[Mapping[str, str]] = None,
-) -> tuple[str, Dict[str, str]]:
-    """按参考项目的固定 App 身份构造请求，禁止登录态覆盖正文加密身份。"""
-    请求参数 = dict(参数 or {})
-    if "fuid" in 请求参数:
-        请求参数["fuid"] = 默认App请求身份["fuid"]
-    请求头 = dict(构建App请求头() if 使用签名 else {"User-Agent": App默认UA})
-    if 额外请求头:
-        请求头.update({str(键): str(值) for 键, 值 in 额外请求头.items() if 值 is not None})
-    return 组装URL(地址, 请求参数), 请求头
-
-
-def 构建出版书授权请求头(登录态: Mapping[str, Any], *, 使用登录态: bool) -> Dict[str, str]:
-    """出版书 auth 沿用 App 基础身份，登录时只覆盖官方所需 Cookie 与 yw 字段。"""
-    应用身份 = 默认App请求身份
-    headers = {
-        "User-Agent": App默认UA,
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
-        "Cookie": f"ywguid={应用身份['uid']}; ywkey={应用身份['usid']};",
-        "ywguid": str(应用身份["uid"]),
-        "ywkey": str(应用身份["usid"]),
-    }
-    if not 使用登录态:
-        return headers
-
-    完整登录态 = 补齐QQ阅读登录态(登录态)
-    ywguid = str(完整登录态.get("ywguid") or 完整登录态.get("login_uin") or "").strip()
-    ywkey = str(完整登录态.get("ywkey") or 完整登录态.get("login_key") or "").strip()
-    cookie = str(完整登录态.get("Cookie") or 完整登录态.get("cookie") or "").strip()
-    if cookie:
-        headers["Cookie"] = cookie
-    elif ywguid and ywkey:
-        headers["Cookie"] = f"ywguid={ywguid}; ywkey={ywkey};"
-    if ywguid:
-        headers["ywguid"] = ywguid
-    if ywkey:
-        headers["ywkey"] = ywkey
-    return headers
-
-
-def 组装本地下载态(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """正文与解密固定使用参考项目 App 身份，账号字段仅供出版书授权。"""
-    out = dict(默认App请求身份)
-    完整登录态 = 补齐QQ阅读登录态(登录态)
-    已登录 = 有效QQ阅读登录态(完整登录态)
-    if 已登录:
-        for 键 in ("ywguid", "ywkey", "login_uin", "login_key", "Cookie", "cookie", "loginType", "login_type", "qrsn"):
-            if 完整登录态.get(键):
-                out[键] = str(完整登录态[键])
-    if (
-        完整登录态.get("keypool_b64")
-        and str(完整登录态.get("fuid") or "") == 默认App请求身份["fuid"]
-    ):
-        out["keypool_b64"] = str(完整登录态["keypool_b64"])
-    out["User-Agent"] = str(完整登录态.get("User-Agent") or (默认UA if 已登录 else App默认UA))
-    return out
-
-# ===== 六、HTTP 与接口请求 =====
-
-async def http_get_bytes(session: aiohttp.ClientSession, url: str, headers: Mapping[str, str], timeout: int = 60) -> Tuple[bytes, int]:
-    async with session.get(url, headers=dict(headers), timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-        return await resp.read(), resp.status
-
-async def http_get_json(session: aiohttp.ClientSession, url: str, headers: Mapping[str, str], timeout: int = 30) -> Any:
-    data, status = await http_get_bytes(session, url, headers, timeout=timeout)
-    if status >= 400: raise RuntimeError(f"HTTP {status}")
-    return json.loads(data.decode("utf-8", "replace"))
-
-async def http_post_form_json(session: aiohttp.ClientSession, url: str, params: Mapping[str, Any], timeout: int = 30) -> Any:
-    body = urllib.parse.urlencode({k: str(v) for k, v in params.items() if v is not None}, doseq=True).encode("utf-8")
-    # YWLogin SDK 登录接口对 App 上下文和 okhttp 头敏感；用 QQReaderAndroid UA 会直接 code=3。
-    headers = {
-        "User-Agent": "okhttp/3.12.13",
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
-        "Connection": "Keep-Alive",
-        "referer": "http://android.qidian.com",
-        "Referer": "http://android.qidian.com",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    ywguid = str(params.get("ywguid") or "").strip()
-    ywkey = str(params.get("ywkey") or "").strip()
-    if ywguid or ywkey:
-        Cookie片段 = []
-        if ywguid:
-            Cookie片段.append(f"ywguid={ywguid}")
-        if ywkey:
-            Cookie片段.append(f"ywkey={ywkey}")
-        headers["Cookie"] = "; ".join(Cookie片段) + ";"
-    async with session.post(url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-        return json.loads(await resp.text())
-
-
-async def 请求动态密钥池(
-    session: aiohttp.ClientSession,
-    下载态: Mapping[str, str],
-    *,
-    强制刷新: bool = False,
-) -> str:
-    """从 App 密钥池接口取当前 fuid 对应的解密令牌，仅保留进程内短缓存。"""
-    fuid = str(默认App请求身份["fuid"])
-    已缓存 = 内存密钥池缓存.get(fuid)
-    当前时间 = time.monotonic()
-    if not 强制刷新 and 已缓存 and 当前时间 - 已缓存[0] < 密钥池缓存秒数:
-        return 已缓存[1]
-
-    地址, 请求头 = 构建App接口请求(
-        "https://newminerva-tgw.reader.qq.com/sk",
-        {"fuid": fuid},
-        使用签名=False,
-    )
-    响应 = await http_get_json(session, 地址, 请求头, timeout=30)
-    密钥池 = str(响应.get("pool") or "").strip() if isinstance(响应, dict) else ""
-    if not 密钥池:
-        raise RuntimeError("App密钥池为空")
-    try:
-        令牌列表 = decrypt_keypool(base64.b64decode(密钥池), master_key(fuid))
-    except Exception as e:
-        raise RuntimeError("App密钥池校验失败") from e
-    if not 令牌列表:
-        raise RuntimeError("App密钥池无可用令牌")
-    内存密钥池缓存[fuid] = (当前时间, 密钥池)
-    return 密钥池
-
-
-async def 准备App下载态(session: aiohttp.ClientSession, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """下载开始前统一准备 App 身份和动态密钥池，不落地到文件或数据库。"""
-    下载态 = 组装本地下载态(登录态)
-    try:
-        下载态["keypool_b64"] = await 请求动态密钥池(session, 下载态)
-    except Exception:
-        if not 下载态.get("keypool_b64"):
-            raise
-    return 下载态
-
-
-async def 请求书籍信息(session: aiohttp.ClientSession, bid: str, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    url, headers = 构建App接口请求(详情地址, {"bid": bid, "types": "1,2,3,4,5"})
-    data = await http_get_json(session, url, headers, timeout=30)
-    return data if isinstance(data, dict) else {}
-
-async def 请求批量包(
-    session: aiohttp.ClientSession,
-    bid: str,
-    scids: str,
-    *,
-    登录态: Optional[Mapping[str, str]] = None,
-    timeout: int = 300,
-) -> bytes:
-    url, headers = 构建App接口请求(
-        批量正文地址,
-        {
-            "bookId": bid,
-            "type": 2,
-            "scids": scids,
-            "fuid": 默认App请求身份["fuid"],
-        },
-    )
-    data, status = await http_get_bytes(session, url, headers, timeout=timeout)
-    if status >= 400: raise RuntimeError(f"批量接口 HTTP {status}")
-    return data
-
-
-async def 请求目录包(session: aiohttp.ClientSession, bid: str, *, timeout: int = 60) -> bytes:
-    """目录必须使用 App 的 type=0 授权包，不能混用正文 type=2 参数。"""
-    params = {
-        "bookId": bid,
-        "type": 0,
-        "tafauth": 1,
-        "scids": "0",
-        "text_type": 0,
-        "useindex": 1,
-    }
-    url, headers = 构建App接口请求(批量正文地址, params)
-    data, status = await http_get_bytes(session, url, headers, timeout=timeout)
-    if status >= 400:
-        raise RuntimeError(f"目录接口 HTTP {status}")
-    return data
-
-
-async def 请求出版书章节包(
-    session: aiohttp.ClientSession,
-    bid: str,
-    scids: str,
-    登录态: Optional[Mapping[str, str]] = None,
-    *,
-    timeout: int = 120,
-) -> bytes:
-    # ChapBat 的出版书资源目录固定使用 App 签名；浏览器 Cookie 仅用于后续 auth 密码请求。
-    params = {
-        "bookId": bid,
-        "type": 0,
-        "tafauth": 1,
-        "cidType": 1,
-        "restype": 4,
-        "epubFlag": 1,
-        "scids": scids,
-        "scene": 0,
-        "adState": 1,
-        "fuid": 默认App请求身份["fuid"],
-        "noclick": 1,
-    }
-    url, headers = 构建App接口请求(
-        批量正文地址,
-        params,
-        额外请求头={"Accept-Encoding": "identity", "text_type": "1"},
-    )
-    data, status = await http_get_bytes(session, url, headers, timeout=timeout)
-    if status >= 400:
-        raise RuntimeError(f"出版书目录接口 HTTP {status}")
-    return data
-
-
-async def 请求出版书目录(
-    session: aiohttp.ClientSession,
-    bid: str,
-    章节总数: int,
-    登录态: Optional[Mapping[str, str]] = None,
-) -> list[dict[str, Any]]:
-    总数 = max(0, int(章节总数 or 0))
-    if not 总数:
-        return []
-    编号列表 = [str(序号) for 序号 in range(1, 总数 + 1)]
-    分批 = [
-        ",".join(编号列表[起点:起点 + 批量章节上限])
-        for 起点 in range(0, len(编号列表), 批量章节上限)
-    ]
-    信号量 = asyncio.Semaphore(max(1, min(批量并发上限, len(分批))))
-
-    async def 拉取一批(scids: str) -> list[dict[str, Any]]:
-        async with 信号量:
-            blob = await 请求出版书章节包(session, bid, scids, 登录态, timeout=120)
-            return 解析出版书信息包(blob)
-
-    信息批次 = await asyncio.gather(*(拉取一批(scids) for scids in 分批))
-    信息项 = [项目 for 批次 in 信息批次 for 项目 in 批次]
-    return 解析出版书目录(信息项)
-
-
-async def 请求目录(
-    session: aiohttp.ClientSession,
-    bid: str,
-    登录态: Optional[Mapping[str, str]] = None,
-    *,
-    章节总数: int = 0,
-    出版书: bool = False,
-) -> List[Dict[str, Any]]:
-    if 出版书:
-        return await 请求出版书目录(session, bid, 章节总数, 登录态)
-    try:
-        blob = await 请求目录包(session, bid, timeout=60)
-        entries = 解析tar(blob)
-        ce = 找目录成员(entries, bid)
-        目录 = 解析目录文本(解码文本(ce.data)) if ce else []
-        if 目录 or not 章节总数:
-            return 目录
-    except RuntimeError as e:
-        if "HTTP 400" not in str(e) or not 章节总数:
-            raise
-    return await 请求出版书目录(session, bid, 章节总数, 登录态)
-
-def 从详情提取书籍(data: Any, bid: str) -> Dict[str, Any]:
-    root = data if isinstance(data, dict) else {}
-    # queryBookInfo 多数字段在根层；兼容 data/bookInfo 嵌套
-    candidates = []
-    if isinstance(root, dict):
-        candidates.append(root)
-        if isinstance(root.get("data"), dict):
-            candidates.append(root["data"])
-            if isinstance(root["data"].get("bookInfo"), dict):
-                candidates.append(root["data"]["bookInfo"])
-        if isinstance(root.get("bookInfo"), dict):
-            candidates.append(root["bookInfo"])
-        if isinstance(root.get("book"), dict):
-            candidates.append(root["book"])
-
-    def 取(*keys, default=""):
-        for obj in candidates:
-            for k in keys:
-                if k in obj and obj.get(k) not in (None, ""):
-                    return obj.get(k)
-        return default
-
-    title = str(取("title", "bookName", "book_name", default=f"QQ阅读{bid}") or f"QQ阅读{bid}")
-    author = str(取("author", "authorName", "author_name", default="未知") or "未知")
-    status_raw = 取("isfinished", "finished", "finishstate", "status", "isFinished", default="")
-    status_text = str(status_raw).strip().lower()
-    if status_text in {"1", "完结", "完本", "true", "yes"}:
-        status = "完结"
-    elif status_text in {"0", "连载", "false", "no"}:
-        status = "连载"
-    else:
-        status = str(status_raw or "未知")
-    words = 取("wordscount", "wordCount", "words", "allwords", "totalWords", "word_count", default="未知")
-    chapters = 取("totalChapters", "chapterNum", "chapters", "totalChapter", "chapter_count", default=0)
-    # newtotalchapters.txt 兼容
-    ntc = 取("newtotalchapters", default=None)
-    if isinstance(ntc, dict) and chapters in (0, "0", "", None):
-        chapters = ntc.get("txt") or ntc.get("epub") or chapters
-    intro = str(取("intro", "desc", "summary", "description", default="") or "")
-    category = str(取("categoryName", "category", "categoryInfoV4SlaveName", default="") or "")
-    maxfree = 安全整数(取("maxfreechapter", "maxFreeChapter", "freeChapter", "freeChapters", default=0))
-    free_flag = 取("free", "isFree", "isfree", default=None)
-    is_all_free = str(free_flag).strip().lower() in {"1", "true", "yes"}
-    is_ad = 取("isAdBook", "isadbook", "adBook", default=None)
-    is_ad_book = str(is_ad).strip().lower() in {"1", "true", "yes"}
-    limit_free = 取("islimitfreebook", "isLimitFreeBook", default=None)
-    is_limit_free = str(limit_free).strip().lower() in {"1", "true", "yes"}
-    price = 取("price", "bookPrice", default=None)
-    return {
-        "book_id": str(bid),
-        "title": title,
-        "author": author,
-        "status": status,
-        "word_count": words if words not in (None, "") else "未知",
-        "chapter_count": 安全整数(chapters),
-        "max_free_chapter": maxfree,
-        "is_all_free": is_all_free,
-        "is_ad_book": is_ad_book,
-        "is_limit_free": is_limit_free,
-        "price": price,
-        "intro": intro,
-        "category": category,
-        "raw": root,
-    }
-
-
-def 提取QQ阅读授权摘要(data: Any) -> tuple[str, str]:
-    """仅供后端定位登录态是否被服务端认可，不返回账号或凭证。"""
-    登录状态 = "unknown"
-    会员状态 = "unknown"
-    for obj in 遍历JSON对象(data):
-        if not isinstance(obj, Mapping):
-            continue
-        for key in ("islogin", "isLogin"):
-            if key in obj:
-                登录状态 = "yes" if str(obj.get(key)).lower() in {"1", "true", "yes"} else "no"
-        for key in ("isVip", "isvip", "vipStatus", "vipstatus"):
-            if key in obj:
-                value = obj.get(key)
-                会员状态 = "yes" if str(value).lower() in {"1", "true", "yes", "2"} or value is True else "no"
-    return 登录状态, 会员状态
-
-# ===== 七、书籍可下判断 =====
-
-# ===== 八、登录与滑块 =====
-
-def 手机号带区号(phone: str, area: str = "+86") -> str:
-    value = re.sub(r"[\s\-()]+", "", str(phone or ""))
-    if not value: raise ValueError("手机号不能为空")
-    if value.startswith("+"): return value
-    if value.startswith("86") and len(value) == 13: return f"+{value}"
-    if not re.fullmatch(r"1\d{10}", value): raise ValueError("手机号格式不正确")
-    return f"{area}{value}"
-
-def 登录默认参数(登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    d = dict(默认设备)
-    if 登录态:
-        for k in ("qimei", "qimei36", "ibex", "version", "version_code", "osversion", "devicetype", "source", "fuid"):
-            if 登录态.get(k): d[k] = 登录态[k]
-    version = d.get("version") or 默认登录版本
-    # 短信登录沿用解密算法调整前已验证的 YWLogin SDK 客户端标识。
-    # 正文下载仍使用默认设备态；这里不改变下载或解密参数。
-    version_code = str(d.get("version_code") or 登录协议版本号)
-    if version_code in {"", "417", "0888"}:
-        version_code = 登录协议版本号
-    osversion = str(d.get("osversion") or f"Android 28 {version} {version_code}")
-    if osversion.endswith(" 417") or " 417" in osversion:
-        osversion = f"Android 28 {version} {version_code}"
-    params = {"referer":"http://android.qidian.com","appid":"1450000219","areaid":"1","auto":"1","autotime":"30","ticket":"0","format":"json","signature":默认YW签名,"source":d.get("source") or "00000","version":version,"devicetype":d.get("devicetype") or "OnePlus_GM1910","devicename":"GM1910","returnurl":"http://www.qidian.com","osversion":osversion,"sdkversion":默认YW_SDK,"ibex":d.get("ibex") or 默认IBEX}
-    qimei = str(d.get("qimei") or ""); qimei36 = str(d.get("qimei36") or "")
-    if len(qimei) >= 16: params["qimei"] = qimei
-    if len(qimei36) >= 16: params["qimei36"] = qimei36
-    return params
-
-def 遍历JSON对象(value: Any):
-    if isinstance(value, dict):
-        yield value
-        for v in value.values(): yield from 遍历JSON对象(v)
-    elif isinstance(value, list):
-        for item in value: yield from 遍历JSON对象(item)
-
-def 查找登录载荷(response: Any) -> Optional[Dict[str, Any]]:
-    for obj in 遍历JSON对象(response):
-        if not isinstance(obj, dict):
-            continue
-        ywguid = (
-            obj.get("ywGuid")
-            or obj.get("ywguid")
-            or obj.get("login_uin")
-            or obj.get("uid")
-            or obj.get("YWGuid")
-        )
-        ywkey = (
-            obj.get("ywKey")
-            or obj.get("ywkey")
-            or obj.get("login_key")
-            or obj.get("YWKey")
-        )
-        if ywguid and ywkey:
-            清洗 = dict(obj)
-            清洗["ywguid"] = str(ywguid)
-            清洗["ywkey"] = str(ywkey)
-            清洗["ywGuid"] = str(ywguid)
-            清洗["ywKey"] = str(ywkey)
-            if obj.get("ticket") is not None:
-                清洗["ticket"] = str(obj.get("ticket"))
-            if obj.get("autoLoginSessionKey") is not None:
-                清洗["autoLoginSessionKey"] = str(obj.get("autoLoginSessionKey"))
-            return 清洗
     return None
 
-def 查找nextAction(response: Any) -> int:
-    for obj in 遍历JSON对象(response):
-        v = obj.get("nextAction")
-        if v is not None and str(v).isdigit(): return int(v)
-    return 0
 
-def 查找字符串字段(response: Any, *names: str) -> str:
-    wanted = {n.lower() for n in names}
-    for obj in 遍历JSON对象(response):
-        for k, v in obj.items():
-            if str(k).lower() in wanted and v not in (None, ""): return str(v)
+def 解析书籍编号(来源: Any) -> str:
+    link = 提取QQ阅读链接(来源) or str(来源 or "").strip()
+    try:
+        parsed = urlsplit(link)
+        query = parse_qs(parsed.query)
+        for key in ("bid", "bookid", "bookId", "book_id"):
+            for value in query.get(key, []):
+                if str(value).isdigit():
+                    return str(value)
+        path = parsed.path
+    except ValueError:
+        path = link
+    for pattern in (
+        r"/book-detail/(\d+)(?:/|$)",
+        r"/book/(\d+)(?:\.html)?(?:/|$)",
+        r"/(\d+)(?:\.html)?(?:/|$)",
+    ):
+        match = re.search(pattern, path, re.I)
+        if match:
+            return match.group(1)
     return ""
 
 
-def 构造安全登录诊断(阶段: str, 参数: Mapping[str, Any], 响应: Any) -> str:
-    """只记录协议排查所需的非敏感摘要，绝不写入手机号、凭证或响应原文。"""
-    敏感字段 = {
-        "phone", "phonecode", "phonekey", "sessionkey", "ticket", "sig",
-        "captchaticket", "randstr", "captcharandstr", "ywguid", "ywkey", "signature",
-    }
-    字段名 = sorted(
-        str(k) for k, v in 参数.items()
-        if v not in (None, "") and str(k).lower() not in 敏感字段
-    )
-
-    def 指纹(字段名: str) -> str:
-        值 = str(参数.get(字段名) or "")
-        if not 值:
-            return "0"
-        摘要 = hashlib.sha256(值.encode("utf-8", "ignore")).hexdigest()[:12]
-        return f"{len(值)}:{摘要}"
-
-    响应码 = 查找字符串字段(响应, "code") or "-"
-    下一步 = 查找nextAction(响应)
-    有会话键 = bool(查找字符串字段(响应, "sessionKey", "sessionkey", "phonekey"))
-    有登录态 = bool(参数.get("ywguid") or 参数.get("ywkey"))
-    return (
-        f"stage={阶段}, code={响应码}, next_action={下一步}, session_key={'yes' if 有会话键 else 'no'}, "
-        f"has_auth={'yes' if 有登录态 else 'no'}, fields={','.join(字段名)}, "
-        f"version={参数.get('version') or '-'}, osversion={参数.get('osversion') or '-'}, "
-        f"source={参数.get('source') or '-'}, qimei={指纹('qimei')}, "
-        f"qimei36={指纹('qimei36')}, ibex={指纹('ibex')}"
-    )
-
-
-def 应用滑块参数(params: Dict[str, Any], ticket: str = "", randstr: str = "", session_key: str = "") -> Dict[str, Any]:
-    out = dict(params)
-    if session_key: out["sessionKey"] = session_key
-    if ticket:
-        out["sig"] = ticket
-        out["ticket"] = ticket
-        out["captchaticket"] = ticket
-    if randstr:
-        out["code"] = randstr
-        out["randstr"] = randstr
-        out["captcharandstr"] = randstr
-    return out
-
-def 从登录载荷构造登录态(payload: Mapping[str, Any]) -> Dict[str, str]:
-    ywguid = str(
-        payload.get("ywGuid")
-        or payload.get("ywguid")
-        or payload.get("login_uin")
-        or payload.get("uid")
-        or ""
-    )
-    ywkey = str(
-        payload.get("ywKey")
-        or payload.get("ywkey")
-        or payload.get("login_key")
-        or ""
-    )
-    fuid = str(payload.get("fuid") or 默认设备.get("fuid") or "")
-    cookie = str(payload.get("Cookie") or payload.get("cookie") or "")
-    if not cookie and ywguid and ywkey:
-        cookie = f"ywguid={ywguid}; ywkey={ywkey};"
-    out = {
-        "User-Agent": 默认UA,
-        "login_type": "2",
-        "ywguid": ywguid,
-        "ywkey": ywkey,
-        "account_uid": ywguid,
-        "Cookie": cookie,
-        "fuid": fuid,
-        "qimei": 默认设备.get("qimei", ""),
-        "qimei36": 默认设备.get("qimei36", ""),
-        "ibex": 默认设备.get("ibex", ""),
-    }
-    for key in ("ywOpenId", "qrsn"):
-        if payload.get(key) not in (None, ""):
-            out[key] = str(payload.get(key))
-    return out
-
-def 生成滑块HTML(appid: str = 滑块AppId, callback_url: str = "http://127.0.0.1:8765/captcha") -> str:
-    appid_json = json.dumps(str(appid)); cb_json = json.dumps(str(callback_url))
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/><title>QQ阅读登录</title><script src="https://turing.captcha.qcloud.com/TCaptcha.js"></script>
-<style>:root{{--bg:#F7F5F2;--card:#fff;--title:#1F2329;--muted:#8A8F98;--primary:#FF6A00;--ok:#18A058;--bad:#E34D59;--shadow:0 12px 40px rgba(31,35,41,.08)}}*{{box-sizing:border-box}}html,body{{height:100%;margin:0}}body{{font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:var(--title);background:radial-gradient(1200px 480px at 50% -120px,rgba(255,106,0,.16),transparent 60%),var(--bg);display:flex;align-items:center;justify-content:center;padding:24px 16px}}.shell{{width:100%;max-width:420px}}.brand{{display:flex;align-items:center;gap:10px;margin-bottom:16px}}.logo{{width:36px;height:36px;border-radius:10px;background:linear-gradient(145deg,#FF8A33,#FF6A00);color:#fff;display:grid;place-items:center;font-weight:700}}.card{{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:28px 22px 22px;text-align:center}}h1{{margin:0 0 8px;font-size:24px}}.desc{{margin:0 0 22px;color:var(--muted);font-size:14px}}.status{{min-height:52px;margin:8px 0 18px;border-radius:14px;background:#FAF8F6;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);font-size:14px;padding:12px}}.status.ok{{color:var(--ok);background:rgba(24,160,88,.08)}}.status.bad{{color:var(--bad);background:rgba(227,77,89,.08)}}.status.busy{{color:var(--primary);background:rgba(255,106,0,.08)}}.dot{{width:8px;height:8px;border-radius:50%;background:currentColor}}.btn{{width:100%;border:0;border-radius:999px;padding:14px 18px;font-size:16px;font-weight:600}}.btn-primary{{background:var(--primary);color:#fff}}.btn-ghost{{margin-top:10px;background:transparent;color:var(--muted);border:1px solid #E8E4DE;display:none}}.btn-ghost.show{{display:block}}.foot{{margin-top:16px;color:var(--muted);font-size:12px}}</style></head>
-<body><div class="shell"><div class="brand"><div class="logo">QQ</div><div>QQ阅读登录</div></div><div class="card"><h1>安全验证</h1><p class="desc">完成滑动验证后继续登录</p><div id="status" class="status"><span class="dot"></span><span id="statusText">等待验证</span></div><button id="btn" class="btn btn-primary" type="button">开始验证</button><button id="retry" class="btn btn-ghost" type="button">重新验证</button><div class="foot">验证完成后请返回 QQ 继续输入短信验证码</div></div></div>
-<script>
-const APPID={appid_json}; const CB={cb_json};
-const statusEl=document.getElementById('status'); const statusText=document.getElementById('statusText');
-const btn=document.getElementById('btn'); const retry=document.getElementById('retry');
-function setStatus(kind,text){{statusEl.className='status'+(kind?' '+kind:''); statusText.textContent=text; retry.classList.toggle('show',kind==='bad');}}
-function postResult(payload){{fetch(CB,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload||{{}})}}).then(function(r){{if(r&&r.ok&&payload&&Number(payload.ret)===0&&payload.ticket){{setStatus('ok','验证成功，请返回QQ发送：完成');}}else{{setStatus('bad','回传失败，请检查端口放行后重试');}}}}).catch(function(){{setStatus('bad','回传失败，请检查端口放行后重试');}});}}
-function start(){{setStatus('busy','验证中…'); try{{const captcha=new TencentCaptcha(APPID,function(res){{const payload={{ret:res&&res.ret,ticket:(res&&res.ticket)||'',randstr:(res&&res.randstr)||'',time:Date.now()/1000}}; if(Number(payload.ret)===0&&payload.ticket){{setStatus('busy','验证中…'); postResult(payload);}} else setStatus('bad','验证失败，请重试');}},{{}}); captcha.show();}}catch(e){{setStatus('bad','验证失败，请重试');}}}}
-btn.addEventListener('click',start); retry.addEventListener('click',start); setTimeout(start,400);
-</script></body></html>"""
-
-def 启动滑块本地服务(*, host: str = "0.0.0.0", port: int = 默认滑块端口, timeout: int = 滑块服务保留秒数, public_host: str = "") -> Dict[str, Any]:
-    """启动滑块页服务：监听 0.0.0.0，自动获取公网 IP；只使用固定端口段，避免跳到未放行随机端口。"""
-    result: Dict[str, Any] = {}
-    done = threading.Event()
-    closed = threading.Event()
-    page_html = ""
-    保留秒数 = max(30, int(timeout or 滑块服务保留秒数))
-    绑定主机 = str(host or "0.0.0.0").strip() or "0.0.0.0"
-    访问主机 = str(public_host or "").strip() or 获取滑块公网主机()
-    访问主机 = 访问主机.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0].strip()
-    if not _是公网IPv4(访问主机):
-        raise RuntimeError("未能自动获取服务器公网IP")
-
-    class 可复用HTTPServer(HTTPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt: str, *args: Any) -> None:
-            return
-
-        def _send(self, code: int, body: bytes, content_type: str = "text/plain; charset=utf-8") -> None:
-            self.send_response(code)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_OPTIONS(self) -> None:
-            self._send(204, b"")
-
-        def do_GET(self) -> None:
-            path = self.path.split("?", 1)[0]
-            if path in ("/captcha", "/", "/health", "/ping"):
-                if path in ("/health", "/ping"):
-                    self._send(200, b"ok")
-                    return
-                self._send(200, page_html.encode("utf-8"), "text/html; charset=utf-8")
-                return
-            self._send(404, b"not found")
-
-        def do_POST(self) -> None:
-            path = self.path.split("?", 1)[0]
-            if path not in ("/captcha", "/"):
-                self._send(404, b"not found")
-                return
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length > 0 else b"{}"
-            try:
-                payload = json.loads(raw.decode("utf-8", "replace"))
-            except Exception:
-                payload = {}
-            if isinstance(payload, dict) and payload.get("ticket"):
-                result.update(payload)
-                done.set()
-                self._send(200, b"ok")
-            else:
-                self._send(400, b"bad")
-
-    端口列表: list[int] = []
-    for p in (port, *滑块备用端口):
-        try:
-            n = int(p)
-        except Exception:
-            continue
-        if n > 0 and n not in 端口列表:
-            端口列表.append(n)
-    if not 端口列表:
-        端口列表 = [默认滑块端口]
-
-    httpd = None
-    last_error: Exception | None = None
-    for 尝试端口 in 端口列表:
-        try:
-            httpd = 可复用HTTPServer((绑定主机, 尝试端口), Handler)
-            break
-        except OSError as e:
-            last_error = e
-            logger.warning(f"QQ阅读滑块端口不可用：host={绑定主机}, port={尝试端口}, error={e}")
-            continue
-    if httpd is None:
-        raise RuntimeError(f"滑块端口都被占用，请释放 {端口列表[0]}-{端口列表[-1]} 后重试: {last_error}")
-
-    actual_port = int(httpd.server_address[1])
-    callback_url = f"http://{访问主机}:{actual_port}/captcha"
-    page_html = 生成滑块HTML(callback_url=callback_url)
-
-    def _关闭服务() -> None:
-        if closed.is_set():
-            return
-        closed.set()
-        try:
-            httpd.shutdown()
-        except Exception:
-            pass
-        try:
-            httpd.server_close()
-        except Exception:
-            pass
-        logger.info(f"QQ阅读滑块本地服务已关闭：url={callback_url}")
-
-    def _自动关闭() -> None:
-        done.wait(timeout=保留秒数)
-        _关闭服务()
-
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    threading.Thread(target=_自动关闭, daemon=True).start()
-    logger.info(f"QQ阅读滑块本地服务已启动：bind={绑定主机}:{actual_port}, url={callback_url}, keep={保留秒数}s")
-    return {
-        "url": callback_url,
-        "bind": f"{绑定主机}:{actual_port}",
-        "port": actual_port,
-        "public_host": 访问主机,
-        "result": result,
-        "done": done,
-        "closed": closed,
-        "close": _关闭服务,
-        "expires_at": time.time() + 保留秒数,
-        "ticket": "",
-        "randstr": "",
-    }
-
-def 关闭滑块服务(会话: Optional[Mapping[str, Any]] = None, 滑块: Optional[Mapping[str, Any]] = None) -> None:
-    对象 = 滑块 or (会话 or {}).get("captcha") or {}
-    close = 对象.get("close") if isinstance(对象, Mapping) else None
-    if callable(close):
-        try:
-            close()
-        except Exception as e:
-            logger.warning(f"QQ阅读滑块服务关闭失败：error={e}")
-
-async def 完成QQ阅读滑块验证(会话: dict[str, Any], 配置: Any) -> Tuple[bool, str]:
-    滑块 = 会话.get("captcha") if isinstance(会话.get("captcha"), dict) else {}
-    done = 滑块.get("done")
-    result = 滑块.get("result") if isinstance(滑块.get("result"), dict) else {}
-    过期时间 = float(滑块.get("expires_at") or 会话.get("expires_at") or 0)
-    链接 = str(滑块.get("url") or "")
-    if 过期时间 and time.time() > 过期时间 and not (isinstance(done, threading.Event) and done.is_set()):
-        关闭滑块服务(会话=会话)
-        return False, "安全验证已过期，请重新发送 登录QQ阅读"
-    if not (isinstance(done, threading.Event) and done.is_set() and result.get("ticket")):
-        if 链接:
-            return False, f"请先点击链接完成安全验证（5分钟内有效）：\n{链接}\n完成后发送：完成\n发送 0 取消"
-        return False, "请先完成安全验证，或发送 0 取消"
-    ticket = str(result.get("ticket") or "")
-    randstr = str(result.get("randstr") or "")
-    滑块["ticket"] = ticket
-    滑块["randstr"] = randstr
-    会话["captcha"] = 滑块
+def 解析来源站点(来源: Any) -> str:
+    link = 提取QQ阅读链接(来源) or str(来源 or "").strip()
     try:
-        async with aiohttp.ClientSession() as 会话http:
-            结果 = await 发送手机验证码(
-                会话http,
-                str(会话.get("phone") or ""),
-                ticket=ticket,
-                randstr=randstr,
-                session_key=str(会话.get("session_key") or ""),
-                登录态=None,
+        values = parse_qs(urlsplit(link).query).get("site", [])
+    except ValueError:
+        return ""
+    return str(values[0]).strip() if values else ""
+
+
+def 初始化参考核心() -> ConfigManager:
+    load_config_once()
+    return ConfigManager.get_instance()
+
+
+def _遍历详情对象(data: Any) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    stack = [data]
+    seen: set[int] = set()
+    while stack:
+        item = stack.pop(0)
+        if isinstance(item, dict):
+            marker = id(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            result.append(item)
+            stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
+        elif isinstance(item, list):
+            stack.extend(item)
+    return result
+
+
+def _读取详情字段(objects: list[dict[str, Any]], *names: str, default: Any = "") -> Any:
+    for item in objects:
+        for name in names:
+            value = item.get(name)
+            if value not in (None, ""):
+                return value
+    return default
+
+
+def _安全整数(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _规范状态(value: Any) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if text in {"完结", "完本"} or "完结" in text or lowered in {"1", "true", "yes"}:
+        return "完结"
+    if text in {"连载"} or "连载" in text or lowered in {"0", "false", "no"}:
+        return "连载"
+    return "连载"
+
+
+def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
+    objects = _遍历详情对象(data)
+    status = _规范状态(
+        _读取详情字段(
+            objects,
+            "isfinished",
+            "isFinished",
+            "finished",
+            "finishstate",
+            "status",
+        )
+    )
+    chapters = _读取详情字段(
+        objects,
+        "totalChapters",
+        "chapterNum",
+        "chapters",
+        "totalChapter",
+        "chapter_count",
+        default=0,
+    )
+    return {
+        "title": str(
+            _读取详情字段(objects, "title", "bookName", "book_name", default=f"QQ阅读{book_id}")
+            or f"QQ阅读{book_id}"
+        ).strip(),
+        "author": str(
+            _读取详情字段(objects, "author", "authorName", "author_name", default="未知")
+            or "未知"
+        ).strip(),
+        "status": status,
+        "words_num": str(
+            _读取详情字段(
+                objects,
+                "wordscount",
+                "wordCount",
+                "words",
+                "allwords",
+                "totalWords",
+                "word_count",
+                default="",
             )
-    except Exception as e:
-        logger.warning(f"QQ阅读滑块后发短信失败：error={e}")
-        关闭滑块服务(会话=会话)
-        return False, 登录失败提示
-    if not 结果.get("success"):
-        logger.warning(f"QQ阅读滑块后发短信失败：{结果.get('diagnostic') or '未生成受控诊断'}")
-        关闭滑块服务(会话=会话)
-        return False, 登录失败提示
-    关闭滑块服务(会话=会话)
-    会话.update({
-        "step": "code",
-        "session_key": 结果.get("session_key") or 会话.get("session_key") or "",
-        "phone": 结果.get("phone") or 会话.get("phone"),
-        "ts": time.time(),
-        "captcha": None,
-    })
-    return True, "验证成功，请发送短信验证码\n发送 0 取消"
-
-async def 发送手机验证码(session: aiohttp.ClientSession, phone: str, *, ticket: str = "", randstr: str = "", session_key: str = "", 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    完整登录态 = 补齐QQ阅读登录态(登录态)
-    full_phone = 手机号带区号(phone); params = 登录默认参数(完整登录态)
-    params.update({"type": "1", "needRegister": "1", "phone": full_phone})
-    ywguid = str(完整登录态.get("ywguid") or 完整登录态.get("login_uin") or "").strip()
-    ywkey = str(完整登录态.get("ywkey") or 完整登录态.get("login_key") or "").strip()
-    if ywguid:
-        params["ywguid"] = ywguid
-    if ywkey:
-        params["ywkey"] = ywkey
-    if ticket or randstr or session_key: params = 应用滑块参数(params, ticket=ticket, randstr=randstr, session_key=session_key)
-    response = await http_post_form_json(session, 发短信地址, params, timeout=30)
-    next_action = 查找nextAction(response); key = 查找字符串字段(response, "sessionKey", "sessionkey", "phonekey")
-    return {
-        "response": response,
-        "next_action": next_action,
-        "session_key": key,
-        "phone": full_phone,
-        "success": bool(key) and next_action != 11,
-        "need_captcha": next_action == 11,
-        "diagnostic": 构造安全登录诊断("send_phone", params, response),
+            or ""
+        ).strip(),
+        "chapters": _安全整数(chapters),
+        "intro": str(
+            _读取详情字段(objects, "intro", "desc", "summary", "description", default="")
+            or ""
+        ).strip(),
     }
 
-async def 提交手机验证码(session: aiohttp.ClientSession, phone: str, code: str, session_key: str, *, 登录态: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    full_phone = 手机号带区号(phone); params = 登录默认参数(登录态)
-    params.update({"phonekey": session_key, "phonecode": str(code).strip(), "phone": urllib.parse.quote_plus(full_phone)})
-    response = await http_post_form_json(session, 验证码登录地址, params, timeout=30)
-    诊断 = 构造安全登录诊断("verify_code", params, response)
-    payload = 查找登录载荷(response)
-    if not payload: return {"success": False, "response": response, "diagnostic": 诊断}
-    return {
-        "success": True,
-        "auth": 从登录载荷构造登录态(payload),
-        "response": response,
-        "diagnostic": 诊断,
-    }
 
-# ===== 九、文件生成与发送 =====
+def _请求参考书籍详情(book_id: str) -> dict[str, Any]:
+    初始化参考核心()
+    fetcher = Fetcher()
+    try:
+        response = fetcher._session.get(
+            QQ阅读详情地址,
+            params={"bid": book_id, "types": "1,2,3,4,5"},
+            headers=fetcher._auth_headers(int(time.time() * 1000)),
+            timeout=30,
+        )
+        response.raise_for_status()
+        return 解析参考书籍详情(response.json(), book_id)
+    finally:
+        fetcher._session.close()
 
-def 格式化字数(值: Any) -> str:
-    if isinstance(值, (int, float)): 数 = int(值)
-    else:
-        文本 = str(值 or "").strip()
-        if not 文本 or 文本 == "未知": return "未知"
-        m = re.search(r"([\d.]+)\s*万", 文本)
-        if m: return f"{m.group(1)}万字"
-        try: 数 = int(float(文本))
-        except Exception: return 文本 if "字" in 文本 else f"{文本}字"
-    if 数 >= 10000: return f"{数/10000:.1f}万字".replace(".0万", "万")
-    return f"{数}字"
 
-def 格式化下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
-    return "\n".join([
-        f"书名：{书籍信息.get('title') or '未知'}",
-        f"作者：{书籍信息.get('author') or '未知'}",
-        f"状态：{书籍信息.get('status') or '未知'}",
-        f"章节：{章节数} 章",
-        f"字数：{格式化字数(书籍信息.get('word_count'))}",
+async def 获取参考书籍详情(book_id: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_请求参考书籍详情, book_id)
+
+
+def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
+    members = tar_decrypt(package)
+    candidates: list[tuple[str, bytes]] = []
+    for name, data in members.items():
+        if name == "code" or not isinstance(data, (bytes, bytearray)):
+            continue
+        candidates.append((str(name), bytes(data)))
+    if not candidates:
+        return []
+    candidates.sort(
+        key=lambda item: (
+            item[0] == f"{book_id}_ALL_s",
+            item[0].endswith("_ALL_s"),
+            len(item[1]),
+        ),
+        reverse=True,
+    )
+    text = candidates[0][1].decode("utf-8", "replace")
+    rows: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
+        if not line:
+            continue
+        parts = line.split(",")
+        cid = parts[0].strip() if parts else ""
+        if not cid.isdigit():
+            continue
+        if len(parts) >= 15:
+            title = ",".join(parts[1:-13]).strip()
+        else:
+            title = parts[1].strip() if len(parts) > 1 else ""
+        rows.append({"cid": cid, "title": title or f"第{cid}章"})
+    rows.sort(key=lambda row: int(row["cid"]))
+    return [
+        {"cid": row["cid"], "index": index, "title": row["title"]}
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
+def _请求参考书籍目录(book_id: str) -> list[dict[str, Any]]:
+    初始化参考核心()
+    fetcher = Fetcher()
+    try:
+        response = fetcher._session.get(
+            QQ阅读目录地址,
+            params={
+                "bookId": book_id,
+                "type": "0",
+                "tafauth": "1",
+                "scids": "0",
+                "text_type": "0",
+                "useindex": "1",
+            },
+            headers=fetcher._auth_headers(int(time.time() * 1000)),
+            timeout=60,
+        )
+        response.raise_for_status()
+        return 解析参考目录包(response.content, book_id)
+    finally:
+        fetcher._session.close()
+
+
+async def 获取参考书籍目录(book_id: str) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_请求参考书籍目录, book_id)
+
+
+def _出版书资源地址(item: dict[str, Any]) -> str:
+    for key in (
+        "ctebchaptercosurl",
+        "chaptercosurl",
+        "epubPureUrl",
+        "epubResourceUrl",
+    ):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def 解析参考出版书目录(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cid = str(item.get("chapter_id") or item.get("cid") or item.get("scid") or "").strip()
+        if not cid.isdigit():
+            continue
+        resource_url = _出版书资源地址(item)
+        if not resource_url:
+            continue
+        title = str(item.get("chapter_title") or item.get("title") or f"第{cid}章").strip()
+        candidate = {
+            "cid": cid,
+            "title": title or f"第{cid}章",
+            "resource_url": resource_url,
+            "published": True,
+        }
+        current = selected.get(cid)
+        if current is None:
+            selected[cid] = candidate
+            continue
+        current_url = str(current.get("resource_url") or "")
+        if "epubPure" in resource_url and "epubPure" not in current_url:
+            selected[cid] = candidate
+    rows = sorted(selected.values(), key=lambda row: int(row["cid"]))
+    return [
+        {
+            "cid": row["cid"],
+            "index": index,
+            "title": row["title"],
+            "resource_url": row["resource_url"],
+            "published": True,
+        }
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
+def _请求参考出版书目录(book_id: str, chapter_count: int) -> list[dict[str, Any]]:
+    total = max(0, int(chapter_count or 0))
+    if total <= 0:
+        return []
+    初始化参考核心()
+    fetcher = Fetcher()
+    try:
+        all_items: list[dict[str, Any]] = []
+        chapter_ids = [str(index) for index in range(1, total + 1)]
+        for start in range(0, len(chapter_ids), 200):
+            batch = chapter_ids[start : start + 200]
+            headers = fetcher._auth_headers(int(time.time() * 1000))
+            headers["text_type"] = "1"
+            response = fetcher._session.get(
+                QQ阅读目录地址,
+                params={
+                    "bookId": book_id,
+                    "type": "0",
+                    "tafauth": "1",
+                    "cidType": "1",
+                    "restype": "4",
+                    "epubFlag": "1",
+                    "scids": ",".join(batch),
+                    "scene": "0",
+                    "adState": "1",
+                    "fuid": ConfigManager.get_instance().fuid,
+                    "noclick": "1",
+                },
+                headers=headers,
+                timeout=60,
+            )
+            response.raise_for_status()
+            all_items.extend(_parse_teb_info_blob(response.content))
+        catalog = 解析参考出版书目录(all_items)
+        if len(catalog) != total:
+            raise RuntimeError("章节不完整")
+        return catalog
+    finally:
+        fetcher._session.close()
+
+
+async def 获取参考出版书目录(book_id: str, chapter_count: int) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_请求参考出版书目录, book_id, chapter_count)
+
+
+def _获取参考出版书密码(book_id: str) -> bytes:
+    config = ConfigManager.get_instance()
+    fetcher = Fetcher()
+    try:
+        response = fetcher._session.get(
+            API_AUTH,
+            params={"bookid": book_id, "authInfo": config.qrsn, "onlytrial": "1"},
+            headers={
+                "User-Agent": UA,
+                "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
+                "ywguid": config.uid,
+                "ywkey": config.usid,
+                "Accept": "*/*",
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        plain = tea_decrypt_bytes(response.content, tea_key_ints(config.uid))
+        payload = json.loads(plain.split(b"\x00", 1)[0].decode("utf-8"))
+        password = str(payload.get("pwd") or "").encode("utf-8")
+        if not password:
+            raise RuntimeError("出版书授权失败")
+        return password
+    finally:
+        fetcher._session.close()
+
+
+def _下载参考出版书章节(item: dict[str, Any], password: bytes) -> str:
+    resource_url = str(item.get("resource_url") or "").strip()
+    if not resource_url:
+        raise RuntimeError("出版书资源为空")
+    latest_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            with make_session() as session:
+                response = session.get(resource_url, headers={"User-Agent": UA}, timeout=30)
+                response.raise_for_status()
+                files = extract_eqct(response.content, password)
+            if not files:
+                raise RuntimeError("出版书资源解包为空")
+            name, data = pick_best_entry(files)
+            lowered = name.lower()
+            if lowered.endswith((".xhtml", ".html", ".htm")):
+                text = xhtml_to_text(data)
+            elif lowered.endswith(".txt"):
+                text = data.decode("utf-8", "replace")
+            else:
+                raise RuntimeError("出版书正文资源缺失")
+            text = text.strip()
+            if not text:
+                raise RuntimeError("出版书正文为空")
+            return text
+        except Exception as exc:
+            latest_error = exc
+            if attempt < 3:
+                time.sleep(0.3 * attempt)
+    raise RuntimeError("出版书章节下载失败") from latest_error
+
+
+def _下载参考出版书正文同步(
+    book_id: str,
+    catalog: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    password = _获取参考出版书密码(book_id)
+    results: dict[int, str] = {}
+    failures: list[int] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_下载参考出版书章节, item, password): index
+            for index, item in enumerate(catalog)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                results[index] = future.result()
+            except Exception:
+                failures.append(index)
+    if failures or len(results) != len(catalog):
+        raise RuntimeError("章节不完整")
+    return [
+        {**item, "content": results[index]}
+        for index, item in enumerate(catalog)
+    ]
+
+
+async def 下载参考出版书正文(
+    book_id: str,
+    catalog: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not catalog:
+        return []
+    await asyncio.to_thread(初始化参考核心)
+    return await asyncio.to_thread(_下载参考出版书正文同步, book_id, catalog)
+
+
+async def 下载参考正文(book_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not catalog:
+        return []
+    await asyncio.to_thread(初始化参考核心)
+    fetcher = Fetcher()
+    try:
+        for attempt in range(1, 4):
+            raw_chapters = await asyncio.to_thread(
+                fetcher.get_chapter,
+                book_id,
+                "1",
+                str(len(catalog)),
+            )
+            if isinstance(raw_chapters, list) and len(raw_chapters) == len(catalog):
+                chapters: list[dict[str, Any]] = []
+                for catalog_item, content in zip(catalog, raw_chapters):
+                    if isinstance(content, bytes):
+                        text = content.decode("utf-8", "replace").strip()
+                    else:
+                        text = str(content or "").strip()
+                    if not text or text == "章节解密失败":
+                        chapters = []
+                        break
+                    chapters.append({**catalog_item, "content": text})
+                if len(chapters) == len(catalog):
+                    return chapters
+            if attempt < 3:
+                await asyncio.sleep(0.2 * attempt)
+        raise RuntimeError("章节不完整")
+    finally:
+        fetcher._session.close()
+
+
+def 清理文件名(value: Any) -> str:
+    text = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", str(value or "").strip())
+    return text.strip(" .") or "未知"
+
+
+def 格式化字数(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "未知"
+    if "字" in text:
+        return text
+    number = _安全整数(text, -1)
+    if number < 0:
+        return text
+    if number >= 10000:
+        formatted = f"{number / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{formatted}万字"
+    return f"{number}字"
+
+
+def 生成小说文件名(book_id: str, details: dict[str, Any]) -> str:
+    status = "完结" if "完" in str(details.get("status") or "") else "连载"
+    title = 清理文件名(details.get("title") or f"QQ阅读{book_id}")
+    author = 清理文件名(details.get("author") or "未知")
+    return f"[{status}]书名：{title} 作者：{author}.txt"
+
+
+def 生成小说文件内容(
+    book_id: str,
+    details: dict[str, Any],
+    catalog: list[dict[str, Any]],
+    chapters: list[dict[str, Any]],
+) -> tuple[str, bytes]:
+    filename = 生成小说文件名(book_id, details)
+    lines = [
+        文件声明,
         "",
-        "正在下载中请稍等.....",
-    ])
-
-def 生成小说文件名(书籍信息: dict[str, Any]) -> str:
-    状态 = str(书籍信息.get("status") or "")
-    前缀 = "[完结]" if "完结" in 状态 or "完本" in 状态 else "[连载]"
-    书名 = re.sub(r'[\\/:*?"<>|]', "_", str(书籍信息.get("title") or "未知书名"))
-    作者 = re.sub(r'[\\/:*?"<>|]', "_", str(书籍信息.get("author") or "未知"))
-    return f"{前缀}书名：{书名} 作者：{作者}.txt"
-
-def 构造TXT文件(书籍编号: str, 书籍信息: dict[str, Any], 章节结果列表: list[dict[str, Any]]) -> tuple[str, bytes]:
-    文件名 = 生成小说文件名(书籍信息)
-    成功章节 = [项目 for 项目 in 章节结果列表 if str(项目.get("content") or "").strip()]
-    行 = [
-        免责声明,
-        "",
-        f"名称：{书籍信息.get('title') or '未知'}",
-        f"作者：{书籍信息.get('author') or '未知'}",
-        f"状态：{书籍信息.get('status') or '未知'}",
-        f"字数：{格式化字数(书籍信息.get('word_count'))}",
-        f"书籍ID：{书籍编号}",
-        f"章节数：{len(成功章节)}",
+        f"名称：{details.get('title') or f'QQ阅读{book_id}'}",
+        f"作者：{details.get('author') or '未知'}",
+        f"状态：{details.get('status') or '连载'}",
+        f"字数：{格式化字数(details.get('words_num'))}",
+        f"书籍ID：{book_id}",
+        f"章节数：{len(catalog)}",
         "",
     ]
-    for 项目 in 成功章节:
-        标题 = 清理文本(项目.get("title") or f"第{项目.get('index')}章")
-        正文 = str(项目.get("content") or "").strip()
-        行.append(标题)
-        行.append("")
-        行.append(正文)
-        行.append("")
-    return 文件名, "\n".join(行).encode("utf-8")
+    intro = str(details.get("intro") or "").strip()
+    if intro:
+        lines.extend(["简介：", intro, ""])
+    for index, chapter in enumerate(chapters, start=1):
+        title = str(chapter.get("title") or f"第{index}章").strip()
+        content = str(chapter.get("content") or "").strip()
+        lines.extend([title, "", content, ""])
+    text = "\n".join(lines).replace("\r\n", "\n").replace("\r", "\n")
+    return filename, text.replace("\n", "\r\n").encode("utf-8")
 
-def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
+
+def 格式化下载提示(details: dict[str, Any], catalog_count: int) -> str:
+    return "\n".join(
+        [
+            f"书名：{details.get('title') or '未知'}",
+            f"作者：{details.get('author') or '未知'}",
+            f"状态：{details.get('status') or '连载'}",
+            f"章节：{catalog_count} 章",
+            f"字数：{格式化字数(details.get('words_num'))}",
+            "",
+            "正在下载中请稍等.....",
+        ]
+    )
+
+
+def 生成不冲突缓存路径(filename: str) -> Path:
     下载缓存目录.mkdir(parents=True, exist_ok=True)
-    路径 = 下载缓存目录 / 文件名
-    路径.write_bytes(文件内容)
-    小说缓存工具.标记下载缓存正在使用(路径)
-    return 路径
+    safe_name = Path(清理文件名(filename)).name
+    if not safe_name.lower().endswith(".txt"):
+        safe_name = f"{safe_name}.txt"
+    candidate = 下载缓存目录 / safe_name
+    if not candidate.exists():
+        return candidate
+    for index in range(1, 1000):
+        candidate = 下载缓存目录 / f"{Path(safe_name).stem}_{index}.txt"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("下载缓存同名文件过多")
 
-def 删除QQ阅读缓存文件(缓存路径: Any) -> None:
-    if not 缓存路径:
+
+def 写入下载缓存文件(filename: str, content: bytes) -> Path:
+    path = 生成不冲突缓存路径(filename)
+    path.write_bytes(content)
+    小说缓存工具.标记下载缓存正在使用(path)
+    return path
+
+
+def 删除下载缓存文件(path: Any) -> None:
+    if not path:
         return
     try:
-        Path(缓存路径).unlink(missing_ok=True)
-        小说缓存工具.解除下载缓存占用(缓存路径)
-        logger.debug(f"QQ阅读下载缓存文件已删除：file={缓存路径}")
-    except Exception as e:
-        logger.warning(f"QQ阅读下载缓存文件删除失败：file={缓存路径}, error={e}")
+        Path(path).unlink(missing_ok=True)
+    finally:
+        小说缓存工具.解除下载缓存占用(path)
 
-def 启动QQ阅读百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
-    if not 源缓存路径:
-        return
-
-    async def 执行上传并清理() -> None:
-        try:
-            if 百度网盘 is not None:
-                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
-                if 百度结果.get("success"):
-                    logger.debug(f"QQ阅读百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
-                elif 百度结果.get("skipped"):
-                    logger.debug(f"QQ阅读百度网盘后台上传按状态规则跳过：file={文件名}")
-                elif 百度结果.get("enabled"):
-                    logger.warning(f"QQ阅读百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
-        except Exception as e:
-            logger.warning(f"QQ阅读百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={e}")
-        finally:
-            删除QQ阅读缓存文件(源缓存路径)
-
-    try:
-        asyncio.create_task(执行上传并清理())
-    except RuntimeError:
-        删除QQ阅读缓存文件(源缓存路径)
 
 async def 准备发送文本文件(
     event: Any,
-    文件名: str,
-    文件内容: bytes,
-    配置: Any = None,
+    filename: str,
+    content: bytes,
+    config: Any = None,
     *,
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    缓存路径 = 写入下载缓存文件(文件名, 文件内容)
-    logger.debug(f"QQ阅读准备上传：file={文件名}, size={len(文件内容)}")
+    cache_path = 写入下载缓存文件(filename, content)
     if UC网盘 is None:
-        删除QQ阅读缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
-    try:
-        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
-        if not UC结果.get("success"):
-            logger.warning(f"QQ阅读UC网盘上传失败：file={文件名}, error={UC结果.get('error')}")
-            删除QQ阅读缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
-        完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
-        if 完成结果.get("sent"):
-            logger.debug(f"QQ阅读UC网盘上传并发送完成按钮成功：file={文件名}")
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
-        降级文本 = str(完成结果.get("fallback_text") or "")
-        if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
-        删除QQ阅读缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
-    except Exception as e:
-        logger.warning(f"QQ阅读UC网盘上传或完成消息发送失败：file={文件名}, error={e}")
-        删除QQ阅读缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(e)}
-
-# ===== 十、链接识别与入口 =====
-
-def 提取QQ阅读来源(值: Any) -> str:
-    if 值 is None: return ""
-    if isinstance(值, (list, tuple, set)):
-        for 项目 in 值:
-            来源 = 提取QQ阅读来源(项目)
-            if 来源: return 来源
-        return ""
-    if isinstance(值, dict):
-        for 项目 in 值.values():
-            来源 = 提取QQ阅读来源(项目)
-            if 来源: return 来源
-        return ""
-    文本 = str(值)
-    if not QQ阅读来源正则.search(文本): return ""
-    for 匹配 in 链接正则.findall(文本):
-        if QQ阅读来源正则.search(匹配): return 匹配.rstrip(")，。；;,]")
-    return 文本 if QQ阅读来源正则.search(文本) else ""
-
-def 提取直接QQ阅读来源(命令文本: str) -> str | None:
-    文本 = str(命令文本 or "").strip(); return 提取QQ阅读来源(文本) or None if 文本 else None
-
-def 提取事件QQ阅读来源(event: Any) -> str | None:
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        if 对象 is None: continue
-        for 字段名 in ("message_str", "raw_message", "message"):
-            来源 = 提取QQ阅读来源(读取字段(对象, 字段名))
-            if 来源: return 来源
-    return None
-
-
-def 规范QQ阅读认证信息(值: Any) -> str:
-    """分享卡片的 qrsn 是 Base64 包装的 App 认证值，统一还原为接口所需十六进制。"""
-    原文 = urllib.parse.unquote(str(值 or "")).strip()
-    候选 = [原文]
-    if 原文:
-        try:
-            补位 = "=" * (-len(原文) % 4)
-            解码 = base64.b64decode(原文.replace("-", "+").replace("_", "/") + 补位, validate=True)
-            候选.append(解码.decode("ascii").strip())
-        except Exception:
-            pass
-    for 认证信息 in 候选:
-        if re.fullmatch(r"[0-9a-fA-F]{32,128}", 认证信息):
-            return 认证信息.lower()
-    return ""
-
-
-def 提取QQ阅读分享认证信息(来源: str) -> str:
-    try:
-        参数 = urllib.parse.parse_qs(urllib.parse.urlsplit(str(来源 or "")).query)
-    except Exception:
-        return ""
-    return 规范QQ阅读认证信息((参数.get("qrsn") or [""])[0])
-
-
-def 解析书籍编号(来源: str) -> str:
-    文本 = str(来源 or "")
-    for 模式 in (r"[?&]bid=(\d+)", r"[?&]bookid=(\d+)", r"/book-detail/(\d+)", r"/intro\?bid=(\d+)", r"bid%3D(\d+)", r"/(\d{5,})"):
-        m = re.search(模式, 文本, re.I)
-        if m: return m.group(1)
-    m = re.search(r"(\d{5,})", 文本); return m.group(1) if m else ""
-
-def 解析QQ阅读来源站点(来源: str) -> int:
-    文本 = urllib.parse.unquote(str(来源 or ""))
-    匹配 = re.search(r"[?&]site=(\d+)", 文本, re.I)
-    return 安全整数(匹配.group(1)) if 匹配 else 0
-
-
-def 获取QQ阅读回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
-    来源 = 提取直接QQ阅读来源(命令文本) or 提取事件QQ阅读来源(event)
-    if 来源 is None: return None
-    return 生成本地下载回复流(event, 来源, 配置)
-
-# ===== 十一、章节下载流程 =====
-
-async def 下载全书批量(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    目录: list[dict[str, Any]],
-    登录态: dict[str, str],
-) -> 章节下载汇总:
-    """按已实测可用的 500 章一批、最多 4 并发拉取 App 正文包。"""
-    if not 目录:
-        return 章节下载汇总([])
-
-    下载态 = 组装本地下载态(登录态)
-    总数 = len(目录)
-    每批 = max(1, min(批量章节上限, 总数))
-    分批 = [(序号, 目录[起点:min(起点 + 每批, 总数)]) for 序号, 起点 in enumerate(range(0, 总数, 每批))]
-    并发 = max(1, min(批量并发上限, len(分批)))
-    信号量 = asyncio.Semaphore(并发)
-    结果映射: dict[int, list[dict[str, Any]]] = {}
-    已完成 = 成功累计 = 失败累计 = 上次日志进度 = 0
-    进度锁 = asyncio.Lock()
-
-    logger.debug(
-        f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-        f"batches={len(分批)}, batch_size={每批}, concurrency={并发}"
-    )
-
-    def 失败结果(批次: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            {
-                **章节,
-                "title": 清理文本(章节.get("title") or f"第{章节.get('index')}章"),
-                "content": "",
-                "success": False,
-            }
-            for 章节 in 批次
-        ]
-
-    async def 记录进度(完成增量: int, 成功增量: int) -> None:
-        nonlocal 已完成, 成功累计, 失败累计, 上次日志进度
-        async with 进度锁:
-            已完成 += 完成增量
-            成功累计 += 成功增量
-            失败累计 += max(完成增量 - 成功增量, 0)
-            当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
-            if 当前进度 <= 上次日志进度 and 已完成 < 总数:
-                return
-            上次日志进度 = 当前进度
-            百分比 = int(已完成 * 100 / 总数) if 总数 else 100
-            logger.debug(
-                f"QQ阅读章节进度：book_id={书籍编号}, "
-                f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
-            )
-
-    async def 下载一批(序号: int, 批次: list[dict[str, Any]]) -> tuple[int, list[dict[str, Any]], bool]:
-        async with 信号量:
-            if not 批次:
-                return 序号, [], False
-            批次起始 = 安全整数(批次[0].get("index")) or (序号 * 每批 + 1)
-            批次结束 = 安全整数(批次[-1].get("index")) or (批次起始 + len(批次) - 1)
-            结果: list[dict[str, Any]] = []
-            成功数 = 缺少成员数 = 解密失败数 = tar文件数 = 失败窗口数 = 0
-            最后异常: Exception | None = None
-
-            for 窗口起点 in range(0, len(批次), App章节窗口上限):
-                窗口 = 批次[窗口起点:窗口起点 + App章节窗口上限]
-                起始 = 安全整数(窗口[0].get("index")) or (批次起始 + 窗口起点)
-                结束 = 安全整数(窗口[-1].get("index")) or (起始 + len(窗口) - 1)
-                scids = f"{起始}-{结束}"
-                窗口结果: list[dict[str, Any]] | None = None
-
-                for 尝试 in range(1, 批量网络重试次数 + 1):
-                    try:
-                        blob = await 请求批量包(
-                            session,
-                            书籍编号,
-                            scids,
-                            登录态=下载态,
-                            timeout=180,
-                        )
-                        if 是否deny(blob):
-                            logger.warning(
-                                f"QQ阅读批量接口拒绝：book_id={书籍编号}, range={起始}-{结束}"
-                            )
-                            return 序号, 失败结果(批次), True
-
-                        chaps = 章节成员(解析tar(blob), 书籍编号)
-                        tar文件数 += len(chaps)
-                        by_cid = {章节编号(entry.name, 书籍编号): entry for entry in chaps}
-                        窗口结果 = []
-                        for 位置, 章节 in enumerate(窗口):
-                            cid = str(章节.get("cid") or 章节.get("id") or 章节.get("index") or "")
-                            索引 = 安全整数(章节.get("index")) or (起始 + 位置)
-                            标题 = 清理文本(章节.get("title") or f"第{索引}章")
-                            entry = by_cid.get(cid) or by_cid.get(str(索引))
-                            if entry is None and len(chaps) == len(窗口):
-                                entry = chaps[位置]
-                            if entry is None or not entry.data:
-                                缺少成员数 += 1
-                                窗口结果.append({**章节, "title": 标题, "content": "", "success": False})
-                                continue
-
-                            成员章节号 = 章节编号(entry.name, 书籍编号)
-                            正文, note = 解密章节(entry.data, 书籍编号, 成员章节号 or cid, 下载态)
-                            if 正文:
-                                成功数 += 1
-                                窗口结果.append({**章节, "title": 标题, "content": 正文, "success": True})
-                            else:
-                                解密失败数 += 1
-                                logger.debug(
-                                    f"QQ阅读章节解密失败：book_id={书籍编号}, cid={成员章节号 or cid}, "
-                                    f"note={限制文本长度(note, 80)}"
-                                )
-                                窗口结果.append({**章节, "title": 标题, "content": "", "success": False})
-                        break
-                    except Exception as e:
-                        最后异常 = e
-                        窗口结果 = None
-                        if 尝试 < 批量网络重试次数:
-                            await asyncio.sleep(0.2 * 尝试)
-
-                if 窗口结果 is None:
-                    失败窗口数 += 1
-                    结果.extend(失败结果(窗口))
-                else:
-                    结果.extend(窗口结果)
-
-            if 失败窗口数:
-                logger.warning(
-                    f"QQ阅读批量接口失败：book_id={书籍编号}, range={批次起始}-{批次结束}, "
-                    f"failed_windows={失败窗口数}, error={type(最后异常).__name__ if 最后异常 else 'unknown'}"
-                )
-            logger.debug(
-                f"QQ阅读批次完成：book_id={书籍编号}, batch={序号 + 1}/{len(分批)}, "
-                f"range={批次起始}-{批次结束}, success={成功数}/{len(批次)}, tar_files={tar文件数}, "
-                f"missing_entry={缺少成员数}, decrypt_failed={解密失败数}, failed_windows={失败窗口数}"
-            )
-            return 序号, 结果, False
-
-    任务 = [asyncio.create_task(下载一批(序号, 批次)) for 序号, 批次 in 分批]
-    请求被拒绝 = False
-    for future in asyncio.as_completed(任务):
-        序号, 数据, 本批拒绝 = await future
-        结果映射[序号] = 数据
-        请求被拒绝 = 请求被拒绝 or 本批拒绝
-        await 记录进度(len(数据), sum(1 for 章节 in 数据 if 章节.get("success")))
-
-    合并: list[dict[str, Any]] = []
-    for 序号, _批次 in 分批:
-        合并.extend(结果映射.get(序号) or [])
-    成功 = sum(1 for 章节 in 合并 if 章节.get("success"))
-    logger.debug(
-        f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
-        f"file_ready={成功 == 总数}, request_denied={请求被拒绝}"
-    )
-    return 章节下载汇总(合并, 请求被拒绝=请求被拒绝)
-
-
-def 解析出版书授权数据(data: bytes, 身份候选: Sequence[str]) -> tuple[bytes, str]:
-    """解析 App auth 的加密载荷，仅返回资源密码和受控状态码。"""
-    明文候选: list[bytes] = []
-    if data.lstrip().startswith(b"{"):
-        明文候选.append(data)
-    for 身份 in dict.fromkeys(str(值).strip() for 值 in 身份候选 if 值):
-        try:
-            明文候选.append(出版书TEA解密(data, 出版书TEA密钥整数(身份)).split(b"\x00", 1)[0])
-        except Exception:
-            continue
-
-    最后状态 = "decrypt_fail"
-    for 明文 in 明文候选:
-        try:
-            载荷 = json.loads(明文.decode("utf-8"))
-        except Exception:
-            continue
-        if not isinstance(载荷, Mapping):
-            continue
-        状态原文 = 载荷.get("code", 载荷.get("ret", 载荷.get("retcode", 载荷.get("errCode", "none"))))
-        状态 = re.sub(r"[^0-9A-Za-z_-]", "", str(状态原文))[:24] or "none"
-        最后状态 = 状态
-        for 对象 in 遍历JSON对象(载荷):
-            if not isinstance(对象, Mapping):
-                continue
-            密码 = str(对象.get("pwd") or "").strip()
-            if 密码:
-                return 密码.encode("utf-8"), 状态
-    return b"", 最后状态
-
-
-def 获取出版书认证候选(登录态: Mapping[str, str], 分享认证信息: str = "") -> list[tuple[str, str]]:
-    应用认证信息 = 规范QQ阅读认证信息(默认App请求身份["qrsn"])
-    登录认证信息 = 规范QQ阅读认证信息(登录态.get("qrsn"))
-    分享认证信息 = 规范QQ阅读认证信息(分享认证信息)
-    候选: list[tuple[str, str]] = []
-    for 来源, 认证信息 in (("login", 登录认证信息), ("share", 分享认证信息), ("app", 应用认证信息)):
-        if 认证信息 and all(已有认证 != 认证信息 for _, 已有认证 in 候选):
-            候选.append((来源, 认证信息))
-    return 候选
-
-
-async def 请求出版书访问密码(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    登录态: Mapping[str, str],
-    *,
-    分享认证信息: str = "",
-) -> bytes:
-    请求态 = 组装本地下载态(登录态)
-    使用登录态 = 有效QQ阅读登录态(请求态)
-    授权头候选: list[tuple[str, Dict[str, str]]] = []
-    if 使用登录态:
-        授权头候选.append(("login", 构建出版书授权请求头(请求态, 使用登录态=True)))
-    授权头候选.append(("app", 构建出版书授权请求头(请求态, 使用登录态=False)))
-    身份候选 = [
-        str(默认App请求身份["uid"]),
-        str(请求态.get("ywguid") or 请求态.get("login_uin") or ""),
-        str(请求态.get("uid") or ""),
-    ]
-
-    尝试次数 = 0
-    最后状态码 = 0
-    最后请求头模式 = "app"
-    最后认证来源 = "app"
-    最后授权状态 = "not_requested"
-    for 请求头模式, headers in 授权头候选:
-        for 认证来源, 认证信息 in 获取出版书认证候选(请求态, 分享认证信息):
-            尝试次数 += 1
-            最后请求头模式 = 请求头模式
-            最后认证来源 = 认证来源
-            data, status = await http_get_bytes(
-                session,
-                组装URL(出版书授权地址, {"bookid": 书籍编号, "authInfo": 认证信息, "onlytrial": 1}),
-                headers,
-                timeout=30,
-            )
-            最后状态码 = status
-            if status >= 400 or not data:
-                最后授权状态 = f"http_{status}" if status >= 400 else "empty"
-                continue
-            密码, 授权状态 = 解析出版书授权数据(data, 身份候选)
-            最后授权状态 = 授权状态
-            if 密码:
-                logger.debug(
-                    f"QQ阅读出版书授权诊断：book_id={书籍编号}, attempts={尝试次数}, status={status}, "
-                    f"header_mode={请求头模式}, qrsn_source={认证来源}, auth_code={授权状态}, has_pwd=yes"
-                )
-                return 密码
-
-    logger.warning(
-        f"QQ阅读出版书授权诊断：book_id={书籍编号}, attempts={尝试次数}, status={最后状态码}, "
-        f"header_mode={最后请求头模式}, qrsn_source={最后认证来源}, "
-        f"auth_code={最后授权状态}, has_pwd=no"
-    )
-    raise RuntimeError("出版书授权数据无可用密码")
-
-
-async def 补齐出版书章节资源(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    目录: list[dict[str, Any]],
-    登录态: Mapping[str, str],
-) -> list[dict[str, Any]]:
-    """先按 App 章节窗口补资源，只对窗口仍缺的章节单章兜底。"""
-    缺少资源位置 = [
-        位置 for 位置, 章节 in enumerate(目录)
-        if not str(章节.get("resource_url") or "").strip()
-    ]
-    if not 缺少资源位置:
-        return 目录
-
-    结果 = list(目录)
-    开始时间 = time.monotonic()
-    窗口批次 = 构建索引补拉窗口(结果, 缺少资源位置)
-    信号量 = asyncio.Semaphore(min(批量并发上限, len(窗口批次)))
-
-    def 匹配窗口资源(
-        候选目录: Sequence[Mapping[str, Any]],
-        目标位置: Sequence[int],
-    ) -> list[tuple[int, str]]:
-        候选映射 = {
-            str(章节.get("cid") or ""): str(章节.get("resource_url") or "").strip()
-            for 章节 in 候选目录
-            if str(章节.get("cid") or "").strip() and str(章节.get("resource_url") or "").strip()
+        删除下载缓存文件(cache_path)
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "UC模块未加载",
         }
-        return [
-            (位置, 候选映射.get(str(结果[位置].get("cid") or 结果[位置].get("id") or ""), ""))
-            for 位置 in 目标位置
-            if 候选映射.get(str(结果[位置].get("cid") or 结果[位置].get("id") or ""), "")
-        ]
-
-    async def 补齐一窗口(scids: str, 目标位置: list[int]) -> list[tuple[int, str]]:
-        已恢复: dict[int, str] = {}
-        async with 信号量:
-            for 尝试 in range(1, 批量网络重试次数 + 1):
-                try:
-                    blob = await 请求出版书章节包(session, 书籍编号, scids, 登录态, timeout=120)
-                    候选目录 = 解析出版书目录(解析出版书信息包(blob))
-                    for 位置, 资源地址 in 匹配窗口资源(候选目录, 目标位置):
-                        已恢复[位置] = 资源地址
-                    if len(已恢复) == len(目标位置):
-                        break
-                except Exception as 异常:
-                    logger.debug(
-                        f"QQ阅读出版书窗口资源补齐失败：book_id={书籍编号}, range={scids}, "
-                        f"error={type(异常).__name__}"
-                    )
-                if 尝试 < 批量网络重试次数:
-                    await asyncio.sleep(0.2 * 尝试)
-        return list(已恢复.items())
-
-    窗口结果 = await asyncio.gather(*(补齐一窗口(scids, 位置) for scids, 位置 in 窗口批次))
-    批量恢复数 = 0
-    for 批次结果 in 窗口结果:
-        for 位置, 资源地址 in 批次结果:
-            if not 资源地址 or str(结果[位置].get("resource_url") or "").strip():
-                continue
-            结果[位置] = {**结果[位置], "resource_url": 资源地址}
-            批量恢复数 += 1
-
-    剩余位置 = [
-        位置 for 位置, 章节 in enumerate(结果)
-        if not str(章节.get("resource_url") or "").strip()
-    ]
-    单章恢复数 = 0
-    单章信号量 = asyncio.Semaphore(max(1, min(批量并发上限, len(剩余位置))))
-
-    async def 补齐一章(位置: int) -> tuple[int, str]:
-        原章节 = 结果[位置]
-        cid = str(原章节.get("cid") or 原章节.get("id") or "").strip()
-        索引 = 安全整数(原章节.get("index"))
-        候选章节号 = [cid] if cid else []
-        if 索引 and str(索引) not in 候选章节号:
-            候选章节号.append(str(索引))
-        if not 候选章节号:
-            return 位置, ""
-
-        async with 单章信号量:
-            for 尝试 in range(1, 批量网络重试次数 + 1):
-                for scids in 候选章节号:
-                    try:
-                        blob = await 请求出版书章节包(session, 书籍编号, scids, 登录态, timeout=120)
-                        候选目录 = 解析出版书目录(解析出版书信息包(blob))
-                        匹配章节 = next(
-                            (章节 for 章节 in 候选目录 if str(章节.get("cid") or "") == cid and 章节.get("resource_url")),
-                            None,
-                        )
-                        if 匹配章节 is None:
-                            匹配章节 = next((章节 for 章节 in 候选目录 if 章节.get("resource_url")), None)
-                        if 匹配章节:
-                            return 位置, str(匹配章节.get("resource_url") or "").strip()
-                    except Exception as 异常:
-                        logger.debug(
-                            f"QQ阅读出版书资源补齐失败：book_id={书籍编号}, index={索引}, "
-                            f"error={type(异常).__name__}"
-                        )
-                if 尝试 < 批量网络重试次数:
-                    await asyncio.sleep(0.2 * 尝试)
-        return 位置, ""
-
-    if 剩余位置:
-        补齐结果 = await asyncio.gather(*(补齐一章(位置) for 位置 in 剩余位置))
-        for 位置, 资源地址 in 补齐结果:
-            if not 资源地址:
-                continue
-            结果[位置] = {**结果[位置], "resource_url": 资源地址}
-            单章恢复数 += 1
-    恢复数 = 批量恢复数 + 单章恢复数
-    logger.debug(
-        f"QQ阅读出版书资源补齐：book_id={书籍编号}, missing={len(缺少资源位置)}, "
-        f"batches={len(窗口批次)}, bulk_recovered={批量恢复数}, fallback={len(剩余位置)}, "
-        f"fallback_recovered={单章恢复数}, recovered={恢复数}, "
-        f"still_missing={len(缺少资源位置) - 恢复数}, "
-        f"elapsed_ms={int((time.monotonic() - 开始时间) * 1000)}"
-    )
-    return 结果
-
-
-async def 下载出版书全书(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    目录: list[dict[str, Any]],
-    登录态: Mapping[str, str],
-    *,
-    分享认证信息: str = "",
-) -> 章节下载汇总:
-    """出版书由 App 返回章节资源地址后并发下载，资源授权仍使用当前登录态。"""
-    if not 目录:
-        return 章节下载汇总([])
-    总数 = len(目录)
-    下载态 = 组装本地下载态(登录态)
     try:
-        访问密码 = await 请求出版书访问密码(
-            session,
-            书籍编号,
-            下载态,
-            分享认证信息=分享认证信息,
+        upload = await UC网盘.上传小说并获取分享链接(config, cache_path, filename)
+        if not upload.get("success"):
+            删除下载缓存文件(cache_path)
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": "UC上传失败",
+            }
+        completed = await UC网盘.发送小说下载完成链接(
+            event,
+            书名,
+            作者,
+            str(upload.get("share_url") or ""),
         )
-    except Exception:
-        return 章节下载汇总([
-            {**章节, "content": "", "success": False}
-            for 章节 in 目录
-        ], 请求被拒绝=True)
-
-    目录 = await 补齐出版书章节资源(session, 书籍编号, 目录, 下载态)
-
-    并发 = max(1, min(批量并发上限, 总数))
-    信号量 = asyncio.Semaphore(并发)
-    已完成 = 成功累计 = 失败累计 = 上次日志进度 = 0
-    进度锁 = asyncio.Lock()
-    logger.debug(
-        f"QQ阅读章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-        f"batches=1, batch_size={总数}, concurrency={并发}, book_type=published"
-    )
-
-    async def 记录进度(成功: bool) -> None:
-        nonlocal 已完成, 成功累计, 失败累计, 上次日志进度
-        async with 进度锁:
-            已完成 += 1
-            成功累计 += int(成功)
-            失败累计 += int(not 成功)
-            当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
-            if 当前进度 <= 上次日志进度 and 已完成 < 总数:
-                return
-            上次日志进度 = 当前进度
-            百分比 = int(已完成 * 100 / 总数) if 总数 else 100
-            logger.debug(
-                f"QQ阅读章节进度：book_id={书籍编号}, "
-                f"progress={已完成}/{总数}, percent={百分比}%, success={成功累计}, failed={失败累计}"
-            )
-
-    async def 下载一章(章节: dict[str, Any]) -> dict[str, Any]:
-        标题 = 清理文本(章节.get("title") or f"第{章节.get('index')}章")
-        资源地址 = str(章节.get("resource_url") or "").strip()
-        if not 资源地址:
-            return {**章节, "title": 标题, "content": "", "success": False}
-        async with 信号量:
-            for 尝试 in range(1, 批量网络重试次数 + 1):
-                try:
-                    data, status = await http_get_bytes(
-                        session,
-                        资源地址,
-                        {"User-Agent": str(下载态.get("User-Agent") or App默认UA), "Accept-Encoding": "identity"},
-                        timeout=120,
-                    )
-                    if status >= 400 or not data:
-                        raise RuntimeError("出版书资源请求失败")
-                    名称, 正文数据 = 选择出版书正文条目(解包出版书章节(data, 访问密码))
-                    正文 = (
-                        出版书HTML转文本(正文数据)
-                        if 名称.lower().endswith((".xhtml", ".html", ".htm"))
-                        else 解码文本(正文数据).strip()
-                    )
-                    if 正文:
-                        return {**章节, "title": 标题, "content": 正文, "success": True}
-                except Exception as e:
-                    if 尝试 == 批量网络重试次数:
-                        logger.debug(
-                            f"QQ阅读出版书章节失败：book_id={书籍编号}, index={章节.get('index')}, "
-                            f"error={type(e).__name__}"
-                        )
-                    elif 尝试 < 批量网络重试次数:
-                        await asyncio.sleep(0.2 * 尝试)
-        return {**章节, "title": 标题, "content": "", "success": False}
-
-    结果: list[dict[str, Any]] = [dict() for _ in 目录]
-
-    async def 执行(位置: int, 章节: dict[str, Any]) -> None:
-        下载结果 = await 下载一章(章节)
-        结果[位置] = 下载结果
-        await 记录进度(章节正文有效(下载结果))
-
-    await asyncio.gather(*(执行(位置, 章节) for 位置, 章节 in enumerate(目录)))
-    成功 = sum(1 for 章节 in 结果 if 章节正文有效(章节))
-    缺少资源 = sum(1 for 章节 in 目录 if not str(章节.get("resource_url") or "").strip())
-    logger.debug(
-        f"QQ阅读章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
-        f"file_ready={成功 == 总数}, request_denied={bool(缺少资源)}"
-    )
-    return 章节下载汇总(结果, 请求被拒绝=bool(缺少资源))
+        if completed.get("sent"):
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": cache_path,
+                "error": "",
+            }
+        fallback_text = str(completed.get("fallback_text") or "")
+        if fallback_text:
+            return {
+                "sent": False,
+                "fallback_text": fallback_text,
+                "source_cache_path": cache_path,
+                "error": "",
+            }
+        删除下载缓存文件(cache_path)
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "完成消息发送失败",
+        }
+    except Exception as exc:
+        删除下载缓存文件(cache_path)
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": type(exc).__name__,
+        }
 
 
-def 章节正文有效(章节: Mapping[str, Any]) -> bool:
-    return bool(章节.get("success") and str(章节.get("content") or "").strip())
+def 启动百度后台上传并清理源文件(config: Any, source_path: Any, filename: str) -> None:
+    if not source_path:
+        return
 
-
-def 获取缺章定向补拉上限(章节总数: int) -> int:
-    """按书籍总量允许低比例补拉，避免收费或鉴权失败时放大请求。"""
-    总数 = max(0, int(章节总数 or 0))
-    比例上限 = (总数 * 缺章定向补拉比例百分数 + 99) // 100
-    return max(缺章定向补拉最小上限, min(缺章定向补拉最大上限, 比例上限))
-
-
-def 获取可补拉章节位置(
-    章节列表: Sequence[Mapping[str, Any]],
-    请求被拒绝: bool,
-) -> list[int]:
-    """只恢复少量传输或解密缺章，避免收费书触发大规模无效请求。"""
-    if 请求被拒绝:
-        return []
-    缺章位置 = [位置 for 位置, 章节 in enumerate(章节列表) if not 章节正文有效(章节)]
-    if 0 < len(缺章位置) <= 获取缺章定向补拉上限(len(章节列表)):
-        return 缺章位置
-    return []
-
-
-async def 补拉少量缺失章节(
-    session: aiohttp.ClientSession,
-    书籍编号: str,
-    章节列表: list[dict[str, Any]],
-    下载态: Mapping[str, str],
-    *,
-    请求被拒绝: bool = False,
-) -> list[dict[str, Any]]:
-    合并 = list(章节列表)
-    初始缺章位置 = 获取可补拉章节位置(合并, 请求被拒绝)
-    if not 初始缺章位置:
-        return 合并
-    logger.debug(
-        f"QQ阅读少量缺章补拉：book_id={书籍编号}, missing={len(初始缺章位置)}, "
-        f"rounds={缺章定向补拉轮数}, window_size={App章节窗口上限}, "
-        f"concurrency={min(缺章定向补拉并发, len(初始缺章位置))}"
-    )
-
-    总恢复数 = 0
-    for 轮次 in range(1, 缺章定向补拉轮数 + 1):
-        缺章位置 = 获取可补拉章节位置(合并, 请求被拒绝)
-        if not 缺章位置:
-            break
-
-        补拉下载态 = 组装本地下载态(下载态)
+    async def upload_and_cleanup() -> None:
         try:
-            补拉下载态["keypool_b64"] = await 请求动态密钥池(session, 补拉下载态, 强制刷新=True)
-        except Exception as 异常:
-            logger.debug(f"QQ阅读少量缺章刷新密钥池失败：book_id={书籍编号}, error={type(异常).__name__}")
-        窗口批次 = 构建索引补拉窗口(合并, 缺章位置)
-        信号量 = asyncio.Semaphore(min(缺章定向补拉并发, len(窗口批次)))
-
-        async def 补拉一窗口(scids: str, 目标位置: list[int]) -> list[tuple[int, dict[str, Any]]]:
-            已恢复: dict[int, dict[str, Any]] = {}
-            async with 信号量:
-                try:
-                    blob = await 请求批量包(
-                        session,
-                        书籍编号,
-                        scids,
-                        登录态=补拉下载态,
-                        timeout=120,
+            if 百度网盘 is not None:
+                result = await 百度网盘.后台上传小说文件(config, source_path, filename)
+                if result.get("enabled") and not (result.get("success") or result.get("skipped")):
+                    logger.warning(
+                        f"QQ阅读百度网盘后台上传失败：file={filename}, error=UploadFailed"
                     )
-                    if 是否deny(blob):
-                        return []
-                    成员列表 = 章节成员(解析tar(blob), 书籍编号)
-                    章节映射 = {章节编号(成员.name, 书籍编号): 成员 for 成员 in 成员列表}
-                    for 位置 in 目标位置:
-                        原章节 = 合并[位置]
-                        索引 = 安全整数(原章节.get("index")) or 位置 + 1
-                        cid = str(原章节.get("cid") or 原章节.get("id") or 索引)
-                        标题 = 清理文本(原章节.get("title") or f"第{索引}章")
-                        成员 = 章节映射.get(str(索引)) or 章节映射.get(cid)
-                        if 成员 is None or not 成员.data:
-                            continue
-                        成员章节号 = 章节编号(成员.name, 书籍编号)
-                        正文, note = 解密章节(成员.data, 书籍编号, 成员章节号 or cid, 补拉下载态)
-                        if 正文:
-                            已恢复[位置] = {**原章节, "title": 标题, "content": 正文, "success": True}
-                        else:
-                            logger.debug(
-                                f"QQ阅读少量缺章解密失败：book_id={书籍编号}, cid={成员章节号 or cid}, "
-                                f"round={轮次}, note={限制文本长度(note, 80)}"
-                            )
-                except Exception as 异常:
-                    logger.debug(
-                        f"QQ阅读少量缺章补拉失败：book_id={书籍编号}, range={scids}, "
-                        f"round={轮次}, error={type(异常).__name__}"
-                    )
-            return list(已恢复.items())
-
-        任务 = [asyncio.create_task(补拉一窗口(scids, 位置)) for scids, 位置 in 窗口批次]
-        本轮恢复数 = 0
-        for 任务结果 in asyncio.as_completed(任务):
-            for 位置, 新章节 in await 任务结果:
-                if 章节正文有效(新章节):
-                    合并[位置] = 新章节
-                    本轮恢复数 += 1
-        总恢复数 += 本轮恢复数
-        仍缺 = sum(1 for 章节 in 合并 if not 章节正文有效(章节))
-        logger.debug(
-            f"QQ阅读少量缺章补拉结果：book_id={书籍编号}, round={轮次}/{缺章定向补拉轮数}, "
-            f"recovered={本轮恢复数}, still_missing={仍缺}"
-        )
-        if not 仍缺:
-            break
-        if 轮次 < 缺章定向补拉轮数:
-            await asyncio.sleep(0.2 * 轮次)
-
-    logger.debug(
-        f"QQ阅读少量缺章补拉汇总：book_id={书籍编号}, recovered={总恢复数}, "
-        f"still_missing={sum(1 for 章节 in 合并 if not 章节正文有效(章节))}"
-    )
-    return 合并
-
-
-async def 生成本地下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
-    书籍编号 = 解析书籍编号(来源)
-    if not 书籍编号:
-        logger.warning(f"QQ阅读本地下载失败：未识别书籍ID source={限制文本长度(来源)}")
-        yield 下载失败提示; return
-    已保存登录态 = 读取QQ阅读登录态(配置)
-    出版书 = 解析QQ阅读来源站点(来源) == 4
-    分享认证信息 = 提取QQ阅读分享认证信息(来源)
-    超时 = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=300)
-    try:
-        async with aiohttp.ClientSession(timeout=超时) as 会话:
-            # 整个下载链路均使用 App 身份、App 签名和动态密钥池。
-            登录态 = await 准备App下载态(会话, 已保存登录态)
-            try:
-                详情 = await 请求书籍信息(会话, 书籍编号, 登录态)
-            except Exception as e:
-                logger.warning(f"QQ阅读详情失败：book_id={书籍编号}, error={e}")
-                详情 = {}
-            书籍信息 = 从详情提取书籍(详情, 书籍编号)
-            try:
-                目录 = await 请求目录(
-                    会话,
-                    书籍编号,
-                    登录态,
-                    章节总数=安全整数(书籍信息.get("chapter_count")),
-                    出版书=出版书,
-                )
-            except Exception as e:
-                logger.warning(f"QQ阅读目录失败：book_id={书籍编号}, error={e}")
-                目录 = []
-            if not 目录:
-                logger.warning(f"QQ阅读本地下载失败：无目录 book_id={书籍编号}"); yield 下载失败提示; return
-            出版书 = 出版书 or any(bool(章节.get("published")) for 章节 in 目录)
-            for i, ch in enumerate(目录, start=1):
-                ch["index"] = 安全整数(ch.get("index")) or i
-            免费章上限 = 安全整数(书籍信息.get("max_free_chapter"))
-            # 正文始终使用固定 App 身份；保存的账号只用于出版书授权。
-            下载态 = 组装本地下载态(登录态)
-            使用账号授权 = 有效QQ阅读登录态(下载态)
-            服务端登录, 服务端会员 = 提取QQ阅读授权摘要(详情)
-            下载目录 = list(目录)
-            疑似收费 = 免费章上限 > 0 and 免费章上限 < len(目录)
-
-            书籍信息["chapter_count"] = len(目录)
-            logger.debug(
-                f"QQ阅读开始下载：source=local, book_id={书籍编号}, title={书籍信息.get('title')}, "
-                f"author={书籍信息.get('author')}, status={书籍信息.get('status')}, "
-                f"words={书籍信息.get('word_count')}, chapters={len(目录)}, download_chapters={len(下载目录)}, "
-                f"mode=app, account_auth={'yes' if 使用账号授权 else 'no'}, service_login={服务端登录}, "
-                f"service_vip={服务端会员}, batch_size={批量章节上限}, concurrency={批量并发上限}, "
-                f"book_type={'published' if 出版书 else 'novel'}"
-            )
-            yield 格式化下载提示(书籍信息, len(目录))
-
-            下载汇总 = (
-                await 下载出版书全书(
-                    会话,
-                    书籍编号,
-                    下载目录,
-                    下载态,
-                    分享认证信息=分享认证信息,
-                )
-                if 出版书
-                else await 下载全书批量(会话, 书籍编号, 下载目录, 下载态)
-            )
-            章节结果 = 下载汇总.章节
-            if not 出版书:
-                章节结果 = await 补拉少量缺失章节(
-                    会话,
-                    书籍编号,
-                    章节结果,
-                    下载态,
-                    请求被拒绝=下载汇总.请求被拒绝,
-                )
-            成功列表 = [x for x in 章节结果 if 章节正文有效(x)]
-            if not 成功列表 or len(成功列表) < len(下载目录):
-                logger.warning(
-                    f"QQ阅读本地下载失败：book_id={书籍编号}, success={len(成功列表)}, total={len(下载目录)}, "
-                    f"catalog_total={len(目录)}, request_denied={下载汇总.请求被拒绝}"
-                )
-                成功比例 = len(成功列表) / len(下载目录) if 下载目录 else 0
-                if 疑似收费 and 服务端会员 != "yes" and (下载汇总.请求被拒绝 or 成功比例 < 0.95):
-                    yield 收费书提示
-                else:
-                    yield 下载失败提示
-                return
-            文件名, 文件内容 = 构造TXT文件(书籍编号, 书籍信息, 章节结果)
-            logger.debug(f"QQ阅读章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, success={len(成功列表)}, total={len(目录)}, file_size={len(文件内容)}")
-            发送结果 = await 准备发送文本文件(
-                event,
-                文件名,
-                文件内容,
-                配置,
-                书名=书籍信息.get("title"),
-                作者=书籍信息.get("author"),
-            )
-            if 发送结果.get("sent"):
-                启动QQ阅读百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
-                return
-            降级文本 = str(发送结果.get("fallback_text") or "")
-            if 降级文本:
-                try:
-                    yield 降级文本
-                finally:
-                    启动QQ阅读百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
-                return
-            logger.warning(f"QQ阅读文件发送失败：book_id={书籍编号}, file={文件名}, error={发送结果.get('error')}")
-            yield 文件发送失败提示
-    except Exception as e:
-        logger.warning(f"QQ阅读本地下载失败：book_id={书籍编号}, error={e}"); yield 下载失败提示
-
-# ===== 十二、登录指令 =====
-
-def 清理过期登录会话() -> None:
-    现在 = time.time()
-    for k in [k for k, v in 待登录会话.items() if 现在 - float(v.get("ts") or 0) > 登录会话等待秒数]:
-        关闭滑块服务(会话=待登录会话.get(k))
-        待登录会话.pop(k, None)
-
-async def 处理QQ阅读登录指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
-    文本 = str(命令文本 or "").strip()
-    if not 文本:
-        return None
-    清理过期登录会话()
-    会话键 = 获取会话键(event)
-    Cookie匹配 = QQ阅读Cookie命令正则.fullmatch(文本)
-    是直接Cookie = 是QQ阅读Cookie文本(文本)
-    if Cookie匹配 or 是直接Cookie:
-        if not 是群文件清理管理员(event, 配置):
-            return None
-        原始Cookie = Cookie匹配.group(1) if Cookie匹配 else 文本
-        登录态 = 解析QQ阅读Cookie(原始Cookie)
-        if not 是QQ阅读Cookie文本(原始Cookie):
-            return "QQ阅读Cookie格式不正确"
-        try:
-            写入QQ阅读登录态(配置, 登录态)
-        except Exception as e:
-            logger.warning(f"QQ阅读Cookie写入数据库失败：error={e}")
-            return 登录失败提示
-        旧会话 = 待登录会话.pop(会话键, None)
-        关闭滑块服务(会话=旧会话)
-        字段名 = ",".join(sorted(k for k in 登录态 if k != "Cookie"))
-        logger.info(f"QQ阅读Cookie已识别并保存：fields={字段名}")
-        return "QQ阅读Cookie已保存"
-    if 文本 in QQ阅读Cookie状态命令:
-        if not 是群文件清理管理员(event, 配置):
-            return None
-        登录态 = 读取QQ阅读登录态(配置)
-        return "QQ阅读Cookie：已保存" if 是QQ阅读Cookie文本(登录态.get("Cookie") or "") else "QQ阅读Cookie：未保存"
-    if 文本 in ("登录QQ阅读", "qq阅读登录", "QQ阅读登录"):
-        if not 是群文件清理管理员(event, 配置):
-            return None
-        旧会话 = 待登录会话.pop(会话键, None)
-        关闭滑块服务(会话=旧会话)
-        待登录会话[会话键] = {"step": "phone", "ts": time.time()}
-        return "请发送手机号（仅支持中国大陆手机号）" + chr(10) + "发送 0 取消"
-    会话 = 待登录会话.get(会话键)
-    if not 会话:
-        return None
-    if not 是群文件清理管理员(event, 配置):
-        关闭滑块服务(会话=会话)
-        待登录会话.pop(会话键, None)
-        return None
-    if 文本 in {"0", "取消", "返回", "返回上一步"}:
-        关闭滑块服务(会话=会话)
-        待登录会话.pop(会话键, None)
-        return "已取消QQ阅读登录"
-    步骤 = str(会话.get("step") or "")
-    if 步骤 == "phone":
-        号码 = 文本.replace(" ", "")
-        if 号码.startswith("+86"):
-            号码 = 号码[3:]
-        if 号码.startswith("86") and len(号码) == 13:
-            号码 = 号码[2:]
-        if not 手机号正则.fullmatch(号码):
-            return "手机号格式不正确，请重新发送" + chr(10) + "发送 0 取消"
-        try:
-            async with aiohttp.ClientSession() as 会话http:
-                结果 = await 发送手机验证码(会话http, 号码, 登录态=None)
-        except Exception as e:
-            logger.warning(f"QQ阅读发短信失败：error={e}")
-            return 登录失败提示
-        if 结果.get("need_captcha"):
-            try:
-                滑块 = await asyncio.to_thread(启动滑块本地服务, timeout=滑块服务保留秒数)
-            except Exception as e:
-                logger.warning(f"QQ阅读滑块服务启动失败：error={e}")
-                待登录会话.pop(会话键, None)
-                err = str(e or "")
-                if "公网IP" in err:
-                    return "无法获取服务器公网地址，请检查服务器网络"
-                return 登录失败提示
-            会话.update({
-                "step": "captcha_wait",
-                "phone": 结果.get("phone") or 号码,
-                "session_key": 结果.get("session_key") or "",
-                "captcha": 滑块,
-                "expires_at": float(滑块.get("expires_at") or (time.time() + 滑块服务保留秒数)),
-                "ts": time.time(),
-            })
-            待登录会话[会话键] = 会话
-            链接 = str(滑块.get("url") or "")
-            logger.info(f"QQ阅读滑块链接已下发：url={链接}")
-            端口 = str((滑块 or {}).get("port") or 默认滑块端口)
-            主机 = str((滑块 or {}).get("public_host") or "")
-            if not 链接.startswith("http://") and not 链接.startswith("https://"):
-                链接 = "http://" + 链接
-            # 私网地址直接失败，避免发打不开的链接
-            if 主机 and not _是公网IPv4(主机.split(":")[0]):
-                关闭滑块服务(会话=会话)
-                待登录会话.pop(会话键, None)
-                logger.warning(f"QQ阅读滑块公网地址无效：host={主机}")
-                return "无法获取服务器公网地址，请检查服务器网络"
-            return (
-                "请用手机浏览器打开链接完成验证（5分钟内有效）"
-                + chr(10)
-                + 链接
-                + chr(10)
-                + "若QQ内打不开，请复制到浏览器"
-                + chr(10)
-                + "需放行端口 "
-                + 端口
-                + chr(10)
-                + "完成后发送：完成"
-                + chr(10)
-                + "发送 0 取消"
-            )
-        if not 结果.get("success"):
-            logger.warning(f"QQ阅读发短信失败：{结果.get('diagnostic') or '未生成受控诊断'}")
-            待登录会话.pop(会话键, None)
-            return 登录失败提示
-        会话.update({
-            "step": "code",
-            "phone": 结果.get("phone") or 号码,
-            "session_key": 结果.get("session_key") or "",
-            "ts": time.time(),
-        })
-        待登录会话[会话键] = 会话
-        return "验证码已发送，请发送短信验证码" + chr(10) + "发送 0 取消"
-    if 步骤 in ("captcha_wait", "captcha"):
-        成功, 回复 = await 完成QQ阅读滑块验证(会话, 配置)
-        if 成功:
-            待登录会话[会话键] = 会话
-            return 回复
-        if "已过期" in 回复 or 回复 == 登录失败提示:
-            待登录会话.pop(会话键, None)
-        else:
-            待登录会话[会话键] = 会话
-        return 回复
-    if 步骤 == "code":
-        if not 验证码正则.fullmatch(文本):
-            return "验证码格式不正确，请重新发送" + chr(10) + "发送 0 取消"
-        try:
-            async with aiohttp.ClientSession() as 会话http:
-                结果 = await 提交手机验证码(
-                    会话http,
-                    str(会话.get("phone") or ""),
-                    文本,
-                    str(会话.get("session_key") or ""),
-                    登录态=None,
-                )
-        except Exception as e:
-            logger.warning(f"QQ阅读验证码登录失败：error={e}")
-            待登录会话.pop(会话键, None)
-            return 登录失败提示
-        if not 结果.get("success"):
+        except Exception as exc:
             logger.warning(
-                f"QQ阅读验证码登录失败：has_payload={bool(结果.get('auth'))}, "
-                f"{结果.get('diagnostic') or '未生成受控诊断'}"
+                f"QQ阅读百度网盘后台上传异常：file={filename}, error={type(exc).__name__}"
             )
-            待登录会话.pop(会话键, None)
-            return 登录失败提示
-        try:
-            写入QQ阅读登录态(配置, 结果.get("auth") or {})
-        except Exception as e:
-            logger.warning(f"QQ阅读登录态写入数据库失败：error={e}")
-            待登录会话.pop(会话键, None)
-            return 登录失败提示
-        待登录会话.pop(会话键, None)
-        return "QQ阅读登录成功"
-    return None
+        finally:
+            删除下载缓存文件(source_path)
 
+    try:
+        asyncio.create_task(upload_and_cleanup())
+    except RuntimeError:
+        删除下载缓存文件(source_path)
+
+
+def 获取QQ阅读回复流(
+    event: Any,
+    命令文本: str,
+    配置: Any = None,
+) -> AsyncIterator[Any] | None:
+    link = 提取QQ阅读链接(命令文本)
+    if link is None:
+        return None
+    return 生成下载回复流(event, link, 配置)
+
+
+async def 生成下载回复流(
+    event: Any,
+    来源: str,
+    配置: Any = None,
+) -> AsyncIterator[Any]:
+    book_id = 解析书籍编号(来源)
+    if not book_id:
+        yield 下载失败提示
+        return
+
+    published = 解析来源站点(来源) == "4"
+    stage = "details"
+    try:
+        try:
+            details = await 获取参考书籍详情(book_id)
+        except Exception as exc:
+            logger.debug(f"QQ阅读参考详情获取失败：error={type(exc).__name__}")
+            details = {
+                "title": f"QQ阅读{book_id}",
+                "author": "未知",
+                "status": "连载",
+                "words_num": "",
+                "chapters": 0,
+                "intro": "",
+            }
+
+        stage = "catalog"
+        catalog = (
+            await 获取参考出版书目录(book_id, _安全整数(details.get("chapters")))
+            if published
+            else await 获取参考书籍目录(book_id)
+        )
+        if not catalog:
+            raise RuntimeError("目录为空")
+        details["chapters"] = len(catalog)
+        yield 格式化下载提示(details, len(catalog))
+
+        stage = "content"
+        chapters = (
+            await 下载参考出版书正文(book_id, catalog)
+            if published
+            else await 下载参考正文(book_id, catalog)
+        )
+        filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
+
+        stage = "upload"
+        result = await 准备发送文本文件(
+            event,
+            filename,
+            content,
+            配置,
+            书名=details.get("title"),
+            作者=details.get("author"),
+        )
+        source_path = result.get("source_cache_path")
+        if result.get("sent"):
+            启动百度后台上传并清理源文件(配置, source_path, filename)
+            return
+        fallback_text = str(result.get("fallback_text") or "")
+        if fallback_text:
+            try:
+                yield fallback_text
+            finally:
+                启动百度后台上传并清理源文件(配置, source_path, filename)
+            return
+        yield 文件发送失败提示
+    except Exception as exc:
+        logger.warning(
+            f"QQ阅读参考下载失败：book_id={book_id}, stage={stage}, error={type(exc).__name__}"
+        )
+        yield 下载失败提示
