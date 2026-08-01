@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.0.0 |
+| 版本 | v5.1.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -26,7 +26,7 @@
 | 管理功能 | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 默认使用本地番茄畅听下载；详情、目录和正文均请求畅听接口，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫长篇/短篇链接，正文优先批量下载，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 书旗小说 | 书旗链接/书旗分享卡片 | 识别书旗长篇/短篇/短链链接，优先使用 30 章批量包，未解锁时回退 80 动态并发单章下载，完成后上传 UC 并发送“点击打开”按钮 |
-| 管理功能 | QQ阅读 | QQ阅读详情/目录/分享链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字` | 旧 QQ阅读实现已整体替换为本地参考项目核心；固定使用参考 App 身份、csigs 签名、动态密钥池、libfock 解密与 Fetcher 31 章窗口/4 线程下载；`site=4` 出版书批量读取 CTEB 与 EPUB 加密资源并使用同一参考核心解包；完整合成 TXT 后上传 UC 并发送“点击打开”按钮；不再提供手机号登录、浏览器 Cookie 或数据库登录态功能 |
+| 管理功能 | QQ阅读 | QQ阅读详情/目录/分享链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、直接粘贴含 `ywguid` / `ywkey` 的 Cookie | 使用参考 App 核心、csigs 签名、动态密钥池、libfock 解密与 Fetcher 31 章窗口/4 线程下载；管理员直接发送普通 Cookie、Cookie 头、curl、Cookie Editor JSON 或 cookies.txt 即可保存登录态，新 Cookie 覆盖旧值；下载时优先加载数据库登录态并覆盖固定 `uid/usid`；`site=4` 出版书批量读取 CTEB 与 EPUB 加密资源；完整合成 TXT 后上传 UC 并发送“点击打开”按钮 |
 
 <details>
 <summary>查看群管功能</summary>
@@ -101,12 +101,12 @@ pymysql
 
 | 配置项 | 说明 |
 | --- | --- |
-| `group_file_cleanup_admin_qq` | 群文件清理管理员 QQ 白名单，可使用帮助、状态、群文件清理、全部群文件清理、群文件状态、全量消息、番茄/七猫/书旗/QQ阅读小说开关、开启/关闭禁言和开启/关闭全部禁言 |
+| `group_file_cleanup_admin_qq` | 群文件清理管理员 QQ 白名单，可使用帮助、状态、群文件清理、全部群文件清理、群文件状态、全量消息、保存 QQ阅读 Cookie、番茄/七猫/书旗/QQ阅读小说开关、开启/关闭禁言和开启/关闭全部禁言 |
 | `uc_pan_settings` | UC 网盘配置分类，包含 `uc_pan_cookie` 和 `uc_pan_upload_dir`；填写 Cookie 后小说 txt 会上传到 UC 网盘，并向 QQ 发送“点击打开”链接按钮及备用文字链接 |
 | `baidu_pan_settings` | 百度网盘配置分类，包含 `baidu_pan_cookie`、`baidu_pan_upload_dir` 和 `baidu_pan_upload_status`；填写 Cookie 后小说 txt 会后台上传到百度网盘 |
 | `database_settings` | 数据库配置分类，包含 `database_host`、`database_port`、`database_user`、`database_password`；数据库名默认与用户名相同 |
 
-小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、待清理群列表和小说功能开关；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启；Cookie、群列表和手动开关无法持久化。QQ阅读固定使用模块内参考 App 身份，动态密钥池只保存在当前进程内，不读取或写入数据库及本地 `keypool.cache`。
+小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。运行状态仅使用 MySQL 的 `mantou_runtime_state` 表保存群文件 Cookie、QQ阅读登录态、待清理群列表和小说功能开关；数据库配置在插件配置最下面的 `database_settings` 分类内，数据库名默认与用户名相同。未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启，相关运行状态无法持久化。群文件清理管理员白名单内的 QQ 可直接发送含 `ywguid` 和 `ywkey` 的 QQ阅读 Cookie，无需命令前缀；插件只保存这两个必要字段，新 Cookie 通过同一状态键覆盖旧值，下载时读取最新值覆盖模块固定 `uid/usid`。动态密钥池仍只保存在当前进程内，不写入本地 `keypool.cache`。
 
 群文件清理管理员白名单内的 QQ 可发送 `状态` 查看系统位数、CPU占用、物理内存、磁盘空间、系统进程、操作系统、框架版本、数据库状态、运行时间和当前时间。每次输入 `状态` 时只执行一次数据库连通性检查，仅显示 `正常`、`未配置` 或 `异常`，不显示 Cookie、账号、IP、密钥、数据库地址、功能开关或网盘信息。
 

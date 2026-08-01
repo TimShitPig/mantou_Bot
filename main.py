@@ -38,7 +38,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.0.0"
+插件版本 = "5.1.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -100,6 +100,18 @@ class MyPlugin(Star):
                         yield 输出内容
                 else:
                     yield 找书回复内容
+
+        QQ阅读Cookie回复 = await QQ阅读功能.处理QQ阅读Cookie指令(
+            event,
+            命令文本,
+            self.config,
+        )
+        if QQ阅读Cookie回复 is not None:
+            if QQ阅读Cookie回复:
+                async for 输出内容 in _输出文本回复(QQ阅读Cookie回复):
+                    yield 输出内容
+            event.stop_event()
+            return
 
         帮助回调 = 帮助功能.解析帮助回调命令(命令文本)
         if 帮助回调 is not None:

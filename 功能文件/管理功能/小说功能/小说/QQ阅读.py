@@ -32,6 +32,13 @@ from urllib3.util.ssl_ import create_urllib3_context
 
 from astrbot.api import logger
 
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.运行状态数据库 import (
+    已配置运行状态数据库,
+    读取运行状态值,
+    写入运行状态值,
+)
+
 try:
     from 功能文件.管理功能.网盘功能 import UC网盘
 except Exception:
@@ -761,6 +768,9 @@ CONFIG: Dict[str, str] = {
     "fuid": "89306811035542cd868d49def7d3857d"
 }
 
+_固定配置已加载 = False
+_固定配置加载锁 = threading.Lock()
+
 
 class ConfigManager:
     _instance: Optional["ConfigManager"] = None
@@ -865,8 +875,14 @@ class ConfigManager:
 
 
 def load_config_once() -> None:
-    cfg = ConfigManager.get_instance()
-    cfg.apply(CONFIG)
+    global _固定配置已加载
+    if _固定配置已加载:
+        return
+    with _固定配置加载锁:
+        if _固定配置已加载:
+            return
+        ConfigManager.get_instance().apply(CONFIG)
+        _固定配置已加载 = True
 # === fetcher ===
 """Fetcher: book info / list / toc / content / sign / manju."""
 
@@ -1273,6 +1289,8 @@ QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com", "novel.html5.qq.com")
+QQ阅读登录态命名空间 = "qq_reader_auth"
+QQ阅读登录态状态键 = "login_state"
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
@@ -1297,6 +1315,58 @@ def 提取QQ阅读链接(文本: Any) -> str | None:
         except ValueError:
             continue
     return None
+
+
+def 识别QQ阅读Cookie文本(文本: Any) -> bool:
+    return bool(re.search(r"\byw(?:guid|key)\b", str(文本 or ""), re.I))
+
+
+def _从CookieJSON提取(data: Any, result: dict[str, str]) -> None:
+    if isinstance(data, list):
+        for item in data:
+            _从CookieJSON提取(item, result)
+        return
+    if not isinstance(data, dict):
+        return
+    name = str(data.get("name") or "").strip().lower()
+    if name in {"ywguid", "ywkey"} and data.get("value") is not None:
+        result[name] = str(data["value"]).strip()
+    for key, value in data.items():
+        lowered = str(key).strip().lower()
+        if lowered in {"ywguid", "ywkey"} and isinstance(value, (str, int)):
+            result[lowered] = str(value).strip()
+        elif isinstance(value, (dict, list)):
+            _从CookieJSON提取(value, result)
+
+
+def 解析QQ阅读Cookie(文本: Any) -> dict[str, str] | None:
+    raw = str(文本 or "").strip()
+    if not raw:
+        return None
+    result: dict[str, str] = {}
+    try:
+        _从CookieJSON提取(json.loads(raw), result)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    for line in raw.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) >= 7 and parts[5].strip().lower() in {"ywguid", "ywkey"}:
+            result[parts[5].strip().lower()] = parts[6].strip()
+    for name in ("ywguid", "ywkey"):
+        match = re.search(
+            rf"(?:^|[;\s'\"`]){name}\s*=\s*([^;\s'\"`]+)",
+            raw,
+            re.I,
+        )
+        if match:
+            result[name] = match.group(1).strip()
+    ywguid = result.get("ywguid", "")
+    ywkey = result.get("ywkey", "")
+    if not re.fullmatch(r"\d{6,32}", ywguid):
+        return None
+    if not re.fullmatch(r"[^\s;,\"']{6,256}", ywkey):
+        return None
+    return {"ywguid": ywguid, "ywkey": ywkey}
 
 
 def 解析书籍编号(来源: Any) -> str:
@@ -1334,6 +1404,79 @@ def 解析来源站点(来源: Any) -> str:
 def 初始化参考核心() -> ConfigManager:
     load_config_once()
     return ConfigManager.get_instance()
+
+
+def _应用QQ阅读登录态(登录态: dict[str, str]) -> None:
+    config = 初始化参考核心()
+    config.uid = 登录态["ywguid"]
+    config.usid = 登录态["ywkey"]
+
+
+def _读取QQ阅读登录态(配置: Any) -> dict[str, str] | None:
+    raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return 解析QQ阅读Cookie(
+        f"ywguid={data.get('ywguid') or data.get('uid') or ''};"
+        f"ywkey={data.get('ywkey') or data.get('usid') or ''};"
+    )
+
+
+def _保存QQ阅读登录态(配置: Any, 登录态: dict[str, str]) -> None:
+    payload = json.dumps(
+        {
+            "ywguid": 登录态["ywguid"],
+            "ywkey": 登录态["ywkey"],
+            "updated_at": int(time.time()),
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    写入运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, payload)
+
+
+async def 加载保存的QQ阅读登录态(配置: Any) -> bool:
+    await asyncio.to_thread(初始化参考核心)
+    if not 已配置运行状态数据库(配置):
+        return False
+    try:
+        登录态 = await asyncio.to_thread(_读取QQ阅读登录态, 配置)
+    except Exception as exc:
+        logger.warning(f"QQ阅读登录态读取失败：error={type(exc).__name__}")
+        return False
+    if not 登录态:
+        return False
+    await asyncio.to_thread(_应用QQ阅读登录态, 登录态)
+    return True
+
+
+async def 处理QQ阅读Cookie指令(
+    event: Any,
+    命令文本: str,
+    配置: Any = None,
+) -> str | None:
+    if not 识别QQ阅读Cookie文本(命令文本):
+        return None
+    if not 是群文件清理管理员(event, 配置):
+        return ""
+    登录态 = 解析QQ阅读Cookie(命令文本)
+    if 登录态 is None:
+        return "QQ阅读Cookie无效，请同时提供有效的ywguid和ywkey"
+    if not 已配置运行状态数据库(配置):
+        return "数据库未配置，QQ阅读Cookie未保存"
+    try:
+        await asyncio.to_thread(_保存QQ阅读登录态, 配置, 登录态)
+        await asyncio.to_thread(_应用QQ阅读登录态, 登录态)
+    except Exception as exc:
+        logger.warning(f"QQ阅读Cookie保存失败：error={type(exc).__name__}")
+        return "QQ阅读Cookie保存失败，请稍后再试"
+    return "QQ阅读Cookie已保存并覆盖原登录态"
 
 
 def _遍历详情对象(data: Any) -> list[dict[str, Any]]:
@@ -1954,6 +2097,8 @@ async def 生成下载回复流(
     if not book_id:
         yield 下载失败提示
         return
+
+    await 加载保存的QQ阅读登录态(配置)
 
     published = 解析来源站点(来源) == "4"
     stage = "details"

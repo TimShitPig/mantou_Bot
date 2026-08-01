@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.1.0
+
+- QQ阅读新增无前缀 Cookie 识别：群文件清理管理员可直接粘贴普通 Cookie、Cookie 头、curl、Cookie Editor JSON 或 cookies.txt，插件提取并校验 `ywguid/ywkey`。
+- QQ阅读登录态写入 MySQL `mantou_runtime_state`（namespace=`qq_reader_auth`，state_key=`login_state`）；同一状态键使用数据库 UPSERT 覆盖旧值，下载开始时读取最新值覆盖固定 `uid/usid`，不改动固定 `fuid/qrsn`。
+- QQ阅读固定 CONFIG 改为每次模块加载只初始化一次，避免后续详情、目录或正文请求把数据库登录态重置；Cookie 分发提前到数字撤回之前，未授权用户命中时静默处理。
+- 不恢复手机号、验证码、滑块或本地登录态文件，动态密钥池继续仅存当前进程；同步更新帮助、配置提示和使用说明。
+
 ## v5.0.0
 
 - 删除原有 QQ阅读模块并整文件替换为本地 `source-code-master/QQ阅读/qq阅读.py` 参考核心；CONFIG、App `csigs` 签名、动态密钥池、libfock 多模式解密及 Fetcher 均直接来自新核心，不保留旧批量器、旧解密路径或旧算法兜底。
