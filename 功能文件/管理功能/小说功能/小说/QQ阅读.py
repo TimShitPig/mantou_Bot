@@ -896,6 +896,8 @@ UA = "okhttp/3.12.13"
 SIGN_TAIL = "B74H5a2Yh73gfu8F"
 QQ阅读批量章节数 = 500
 QQ阅读批量最大动态并发数 = 5
+QQ阅读失败章节重试窗口 = 31
+QQ阅读失败章节重试轮数 = 3
 
 
 class _SSLAdapter(HTTPAdapter):
@@ -958,48 +960,23 @@ class Fetcher:
         }
 
     @staticmethod
-    def _chapter_window_complete(result: Any, expected: int) -> bool:
-        if not isinstance(result, list) or len(result) != expected:
-            return False
-        return all(
-            bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
-            for item in result
-        )
+    def _chapter_valid(item: Any) -> bool:
+        text = str(item or "").strip()
+        return bool(text) and text != "章节解密失败"
 
-    def _get_chapter_with_retry(
-        self,
-        book_id: str,
-        start_chapter: str,
-        end_chapter: Optional[str],
-    ) -> Optional[List[Any]]:
-        expected = abs(int(end_chapter or start_chapter)) - abs(int(start_chapter)) + 1
-
-        def is_valid(item: Any) -> bool:
-            text = str(item or "").strip()
-            return bool(text) and text != "章节解密失败"
-
-        if expected == 1:
-            latest: Optional[List[Any]] = None
-            for attempt in range(1, 4):
-                latest = self._get_chapter(book_id, start_chapter, end_chapter)
-                if self._chapter_window_complete(latest, 1):
-                    return latest
-                if attempt < 3:
-                    time.sleep(0.2 * attempt)
-            return latest
-
-        batch = self._get_chapter(book_id, start_chapter, end_chapter)
-        if not isinstance(batch, list) or len(batch) != expected:
-            return batch
-        first = abs(int(start_chapter))
-        for index, item in enumerate(batch):
-            if is_valid(item):
+    @staticmethod
+    def _failed_chapter_windows(chapter_numbers: list[int]) -> list[tuple[int, int]]:
+        windows: list[tuple[int, int]] = []
+        for chapter_number in sorted(set(chapter_numbers)):
+            if not windows:
+                windows.append((chapter_number, chapter_number))
                 continue
-            chapter_id = str(first + index)
-            single = self._get_chapter_with_retry(book_id, chapter_id, chapter_id)
-            if isinstance(single, list) and single and is_valid(single[0]):
-                batch[index] = single[0]
-        return batch
+            start, end = windows[-1]
+            if chapter_number == end + 1 and chapter_number - start < QQ阅读失败章节重试窗口:
+                windows[-1] = (start, chapter_number)
+            else:
+                windows.append((chapter_number, chapter_number))
+        return windows
 
     def get_chapter(
         self,
@@ -1016,69 +993,90 @@ class Fetcher:
             except Exception:
                 pass
 
-        if end_chapter is None:
-            result = self._get_chapter_with_retry(book_id, start_chapter, None)
-            success = sum(
-                1
-                for item in result or []
-                if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
-            )
-            report_progress(1, min(success, 1))
-            return result
-        s = abs(int(start_chapter))
-        e = abs(int(end_chapter))
+        try:
+            s = abs(int(start_chapter))
+            e = abs(int(end_chapter or start_chapter))
+        except (TypeError, ValueError):
+            return None
+        if s > e:
+            e = s
         total = e - s + 1
         batch_size = QQ阅读批量章节数
-        if total <= batch_size:
-            result = self._get_chapter_with_retry(book_id, start_chapter, end_chapter)
-            success = sum(
-                1
-                for item in result or []
-                if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
-            )
-            report_progress(total, min(success, total))
-            return result
-        logger.debug(
-            f"QQ阅读参考正文分批：chapters={total}, batch_size={batch_size}, "
-            f"concurrency={min(QQ阅读批量最大动态并发数, (total + batch_size - 1) // batch_size)}"
-        )
-        all_results: List[Any] = []
-        ranges = []
+        results: List[Any] = [None] * total
+        ranges: list[tuple[int, int]] = []
         batch_start = s
         while batch_start <= e:
             be = min(batch_start + batch_size - 1, e)
-            ranges.append((str(batch_start), str(be)))
+            ranges.append((batch_start, be))
             batch_start += batch_size
+
+        def merge_result(first: int, last: int, part: Any) -> int:
+            if not isinstance(part, list):
+                return 0
+            recovered = 0
+            expected = last - first + 1
+            for offset, item in enumerate(part[:expected]):
+                chapter_number = first + offset
+                target_index = chapter_number - s
+                if not self._chapter_valid(item) or self._chapter_valid(results[target_index]):
+                    continue
+                results[target_index] = item
+                recovered += 1
+            return recovered
+
         concurrency = max(1, min(QQ阅读批量最大动态并发数, len(ranges)))
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             future_map = {
-                pool.submit(self._get_chapter_with_retry, book_id, a, b): (a, b)
+                pool.submit(self._get_chapter, book_id, str(a), str(b)): (a, b)
                 for a, b in ranges
             }
-            batch_map = {}
             completed = 0
             success = 0
             for fut in as_completed(future_map):
                 a, b = future_map[fut]
-                expected = int(b) - int(a) + 1
+                expected = b - a + 1
                 try:
-                    r = fut.result()
-                    if r:
-                        batch_map[(int(a), int(b))] = r
-                        success += sum(
-                            1
-                            for item in r
-                            if bool(str(item or "").strip()) and str(item).strip() != "章节解密失败"
-                        )
+                    success += merge_result(a, b, fut.result())
                 except Exception:
                     pass
                 completed += expected
                 report_progress(min(completed, total), min(success, total))
-            for a, b in ranges:
-                part = batch_map.get((int(a), int(b)))
-                if part:
-                    all_results.extend(part)
-        return all_results or None
+
+        for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
+            missing = [s + index for index, item in enumerate(results) if not self._chapter_valid(item)]
+            if not missing:
+                break
+            retry_windows = self._failed_chapter_windows(missing)
+            retry_concurrency = max(1, min(QQ阅读批量最大动态并发数, len(retry_windows)))
+            logger.debug(
+                f"QQ阅读失败章节重试：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
+                f"missing={len(missing)}, windows={len(retry_windows)}, concurrency={retry_concurrency}"
+            )
+            recovered = 0
+            with ThreadPoolExecutor(max_workers=retry_concurrency) as pool:
+                future_map = {
+                    pool.submit(self._get_chapter, book_id, str(a), str(b)): (a, b)
+                    for a, b in retry_windows
+                }
+                for fut in as_completed(future_map):
+                    a, b = future_map[fut]
+                    try:
+                        recovered += merge_result(a, b, fut.result())
+                    except Exception:
+                        pass
+            success = sum(1 for item in results if self._chapter_valid(item))
+            report_progress(total, success)
+            logger.debug(
+                f"QQ阅读失败章节重试结果：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
+                f"recovered={recovered}, still_missing={total - success}"
+            )
+            if success >= total:
+                break
+            if recovered <= 0:
+                break
+            if round_index < QQ阅读失败章节重试轮数:
+                time.sleep(0.2 * round_index)
+        return results if any(self._chapter_valid(item) for item in results) else None
 
     def _decrypt_bytes(self, data: bytes, stt: str | bytes, allow_refresh: bool = True) -> Optional[str]:
         c = self._cfg()
