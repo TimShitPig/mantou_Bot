@@ -1472,15 +1472,6 @@ def 解析书籍编号(来源: Any) -> str:
     return ""
 
 
-def 解析来源站点(来源: Any) -> str:
-    link = 提取QQ阅读链接(来源) or str(来源 or "").strip()
-    try:
-        values = parse_qs(urlsplit(link).query).get("site", [])
-    except ValueError:
-        return ""
-    return str(values[0]).strip() if values else ""
-
-
 def 初始化参考核心() -> ConfigManager:
     load_config_once()
     return ConfigManager.get_instance()
@@ -1744,12 +1735,8 @@ async def 获取参考书籍目录(book_id: str) -> list[dict[str, Any]]:
 async def 获取参考兼容目录(
     book_id: str,
     chapter_count: int,
-    published: bool,
 ) -> tuple[list[dict[str, Any]], bool]:
     total = max(0, int(chapter_count or 0))
-    if published:
-        return await 获取参考出版书目录(book_id, total), True
-
     catalog: list[dict[str, Any]] = []
     try:
         catalog = await 获取参考书籍目录(book_id)
@@ -2253,7 +2240,6 @@ async def 生成下载回复流(
 
     await 加载保存的QQ阅读登录态(配置)
 
-    published = 解析来源站点(来源) == "4"
     stage = "details"
     try:
         try:
@@ -2273,7 +2259,6 @@ async def 生成下载回复流(
         catalog, published = await 获取参考兼容目录(
             book_id,
             _安全整数(details.get("chapters")),
-            published,
         )
         if not catalog:
             raise RuntimeError("目录为空")
