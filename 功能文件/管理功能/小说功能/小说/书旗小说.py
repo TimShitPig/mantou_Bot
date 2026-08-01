@@ -43,12 +43,19 @@ APP_VERSION_NAME = "12.6.4.262"
 APP_VERSION_CODE = "260609"
 APP_SUB_VERSION = "sqrelease"
 APP_SOFT_ID = "1"
-DEFAULT_USER_ID = "8000000"
+UID发现游客ID = "8000000"
 APP_GATEWAY_SIGN_KEY = "467694bd8912441cae8498b3c7e4282c"
 APP_CHAPTERLIST_URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
 APP_DOWNLOAD_BATCH_INDEX_URL = "https://ocean.shuqireader.com/api/jspend/api/downloadbatch/index"
 APP_BOOK_FREEDOWNURL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/freedownurl"
+APP_SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
+APP_BOOK_COMMENT_LIST_URL = "https://ocean.shuqireader.com/api/interact/comment/book/list"
 APP_NO_SIGN_KEYS = {"sign", "key", "_public", "_reqid", "_beta", "_", "X-NEBULAXMLHTTPREQUEST", "callbackUrl"}
+UID自动搜索词 = ("剑来", "凡人修仙传", "斗破苍穹")
+UID兜底书籍 = ("7106468",)
+UID候选书上限 = 8
+UID评论最大页数 = 3
+UID评论每页数量 = 50
 下载并发数 = 80
 批量URL并发数 = 20
 单章重试次数 = 3
@@ -103,18 +110,19 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
         async with aiohttp.ClientSession(timeout=timeout) as session:
             解析后链接 = await 解析书旗短链(session, 链接)
             目标 = 解析书旗下载目标(解析后链接)
-            书籍 = await 获取书籍(session, 目标["book_id"], 目标["type"] == "short")
+            用户ID = await 自动获取用户ID(session)
+            书籍 = await 获取书籍(session, 目标["book_id"], 目标["type"] == "short", user_id=用户ID)
             if not 书籍.chapters:
                 logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到章节目录")
                 yield "下载失败"
                 return
-            批次 = await 获取下载批次(session, 书籍)
+            批次 = await 获取下载批次(session, 书籍, user_id=用户ID)
             logger.info(
                 f"书旗小说开始下载：book_id={书籍.book_id}, type={'short' if 书籍.is_short else 'book'}, "
                 f"title={书籍.book_name}, author={书籍.author_name}, chapters={len(书籍.chapters)}, batches={len(批次)}"
             )
             yield 格式化下载提示(书籍)
-            章节内容 = await 下载全部章节(session, 书籍, 批次)
+            章节内容 = await 下载全部章节(session, 书籍, 批次, user_id=用户ID)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
                 logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到可用章节正文")
@@ -184,8 +192,14 @@ async def 解析书旗短链(session: aiohttp.ClientSession, 链接: str) -> str
     raise ShuqiError(f"书旗短链解析失败：{最后错误 or '未获取到跳转目标'}")
 
 
-async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> Book:
-    数据 = await 请求书旗POST(session, APP_CHAPTERLIST_URL, 构造目录参数(书籍编号))
+async def 获取书籍(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    是否短篇: bool = False,
+    *,
+    user_id: str,
+) -> Book:
+    数据 = await 请求书旗POST(session, APP_CHAPTERLIST_URL, 构造目录参数(书籍编号), user_id=user_id)
     state = str(数据.get("state") or 数据.get("status"))
     if state != "200":
         raise ShuqiError(f"目录接口异常：state={state}, message={数据.get('message')}")
@@ -226,16 +240,134 @@ async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否
     )
 
 
-async def 获取下载批次(session: aiohttp.ClientSession, 书籍: Book) -> list[dict[str, Any]]:
+async def 自动获取用户ID(session: aiohttp.ClientSession) -> str:
+    候选书 = await 获取UID候选书(session)
+    错误列表: list[str] = []
+    for 书籍编号 in 候选书:
+        try:
+            书籍 = await 获取书籍(session, 书籍编号, user_id=UID发现游客ID)
+            用户ID = await 从书评获取年费VIP用户ID(session, 书籍)
+            if 用户ID:
+                logger.info(f"书旗自动获取UID成功：source_book={书籍编号}, user_id={用户ID}")
+                return 用户ID
+        except Exception as exc:
+            错误列表.append(f"{书籍编号}:{exc}")
+    raise ShuqiError(f"自动获取书旗UID失败：{'; '.join(错误列表) or '没有找到有效年费VIP用户'}")
+
+
+async def 获取UID候选书(session: aiohttp.ClientSession) -> list[str]:
+    候选书: list[str] = []
+    已记录: set[str] = set()
+
+    def 添加候选(书籍编号: Any) -> None:
+        编号 = str(书籍编号 or "").strip()
+        if not re.fullmatch(r"\d+", 编号) or 编号 in 已记录 or len(候选书) >= UID候选书上限:
+            return
+        已记录.add(编号)
+        候选书.append(编号)
+
+    for 关键词 in UID自动搜索词:
+        if len(候选书) >= UID候选书上限:
+            break
+        try:
+            参数 = {
+                "page": "searchResultV3",
+                "query": 关键词,
+                "fromSug": "0",
+                "kind": "",
+                "relatedBid": "",
+                "showMore": "0",
+                "showPost": "0",
+                "showTypes": "",
+                "pagination": json.dumps({"page": 1, "pageSize": UID候选书上限}, ensure_ascii=False),
+            }
+            数据 = await 请求书旗公共POST(session, APP_SEARCH_URL, 参数, user_id=UID发现游客ID)
+            if str(数据.get("status") or 数据.get("state")) != "200":
+                continue
+            for 书籍编号 in 提取搜索书籍编号(数据, UID候选书上限):
+                添加候选(书籍编号)
+        except Exception:
+            continue
+
+    for 书籍编号 in UID兜底书籍:
+        if 书籍编号 not in 已记录 and len(候选书) >= UID候选书上限:
+            已移除 = 候选书.pop()
+            已记录.discard(已移除)
+        添加候选(书籍编号)
+    return 候选书
+
+
+def 提取搜索书籍编号(数据: Any, 上限: int) -> list[str]:
+    结果: list[str] = []
+    已记录: set[str] = set()
+
+    def 遍历(对象: Any) -> None:
+        if len(结果) >= 上限:
+            return
+        if isinstance(对象, dict):
+            书籍编号 = str(对象.get("bookId") or 对象.get("bid") or 对象.get("id") or "").strip()
+            标题 = 对象.get("bookName") or 对象.get("displayBookName") or 对象.get("title") or 对象.get("name")
+            if 标题 and re.fullmatch(r"\d+", 书籍编号) and 书籍编号 not in 已记录:
+                已记录.add(书籍编号)
+                结果.append(书籍编号)
+            for 值 in 对象.values():
+                遍历(值)
+        elif isinstance(对象, list):
+            for 值 in 对象:
+                遍历(值)
+
+    遍历(数据.get("data", 数据) if isinstance(数据, dict) else 数据)
+    return 结果
+
+
+async def 从书评获取年费VIP用户ID(session: aiohttp.ClientSession, 书籍: Book) -> str:
+    item_index = 0
+    for _ in range(UID评论最大页数):
+        参数 = {
+            "userId": UID发现游客ID,
+            "authorId": 书籍.raw.get("authorId") or "",
+            "bookId": 书籍.book_id,
+            "chapterId": "",
+            "paragraphId": "",
+            "itemIndex": str(item_index),
+            "size": str(UID评论每页数量),
+            "sort": "1",
+            "type": "1",
+            "filterCommentIds": "",
+        }
+        数据 = await 请求书旗POST(session, APP_BOOK_COMMENT_LIST_URL, 参数, user_id=UID发现游客ID)
+        state = str(数据.get("status") or 数据.get("state"))
+        if state != "200":
+            raise ShuqiError(f"书评接口异常：state={state}, message={数据.get('message')}")
+        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+        for 评论 in 返回数据.get("commentList") or []:
+            if not isinstance(评论, dict):
+                continue
+            VIP状态 = 评论.get("vipStatus")
+            if not isinstance(VIP状态, dict):
+                continue
+            if 安全整数(VIP状态.get("status")) != 2 or 安全整数(VIP状态.get("annualVipStatus")) != 1:
+                continue
+            用户ID = str(评论.get("userId") or 评论.get("uid") or "").strip()
+            if re.fullmatch(r"\d+", 用户ID) and 用户ID != "0":
+                return 用户ID
+        next_index = 安全整数(返回数据.get("nextItemIndex"), item_index + UID评论每页数量)
+        if not 返回数据.get("hasMore") or next_index == item_index:
+            break
+        item_index = next_index
+    return ""
+
+
+async def 获取下载批次(session: aiohttp.ClientSession, 书籍: Book, *, user_id: str) -> list[dict[str, Any]]:
     try:
         参数 = {
-            "userId": DEFAULT_USER_ID,
+            "userId": user_id,
             "bookId": 书籍.book_id,
             "timestamp": str(int(time.time())),
             "platform": "an",
-            "_public": 构造公共参数(platform="an"),
+            "_public": 构造公共参数(user_id=user_id, platform="an"),
         }
-        数据 = await 请求书旗POST(session, APP_DOWNLOAD_BATCH_INDEX_URL, 参数)
+        数据 = await 请求书旗POST(session, APP_DOWNLOAD_BATCH_INDEX_URL, 参数, user_id=user_id)
         state = str(数据.get("state") or 数据.get("status"))
         if state != "200":
             logger.warning(f"书旗小说批量接口不可用：book_id={书籍.book_id}, state={state}, message={数据.get('message')}")
@@ -244,7 +376,7 @@ async def 获取下载批次(session: aiohttp.ClientSession, 书籍: Book) -> li
         free_info = batch_info.get("freeInfo") if isinstance(batch_info, dict) else []
         if not isinstance(free_info, list):
             return []
-        await 补全批量下载URL(session, 书籍, free_info)
+        await 补全批量下载URL(session, 书籍, free_info, user_id=user_id)
         logger.info(f"书旗小说批量接口返回：book_id={书籍.book_id}, batches={len(free_info)}")
         return [项目 for 项目 in free_info if isinstance(项目, dict)]
     except Exception as exc:
@@ -252,7 +384,7 @@ async def 获取下载批次(session: aiohttp.ClientSession, 书籍: Book) -> li
         return []
 
 
-async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, 批次: list[Any]) -> None:
+async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, 批次: list[Any], *, user_id: str) -> None:
     有效批次 = [项目 for 项目 in 批次 if isinstance(项目, dict)]
     if not 有效批次:
         return
@@ -263,7 +395,7 @@ async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, �
         last_cid = str(项目.get("lastChapterId") or 项目.get("endCid") or (章节列表[-1] if 章节列表 else first_cid))
         first_index = 章节位置.get(first_cid, 0)
         last_index = 章节位置.get(last_cid, first_index)
-        return f"{DEFAULT_USER_ID}_{书籍.book_id}_{first_index}_{last_index}_{first_cid}_{last_cid}"
+        return f"{user_id}_{书籍.book_id}_{first_index}_{last_index}_{first_cid}_{last_cid}"
     batch_map = {批次键(项目): {"startCid": str(项目.get("firstChapterId") or 项目.get("startCid") or ""), "endCid": str(项目.get("lastChapterId") or 项目.get("endCid") or "")} for 项目 in 有效批次}
     参数 = {
         "bookId": 书籍.book_id,
@@ -271,15 +403,15 @@ async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, �
         "type": "4",
         "batchDown": "1",
         "batchChapterIds": json.dumps(batch_map, ensure_ascii=False, separators=(",", ":")),
-        "user_id": DEFAULT_USER_ID,
+        "user_id": user_id,
         "newDownload": "1",
         "platform": "an",
         "reqEncryptType": "-1",
         "reqEncryptParam": "",
         "resEncryptType": "-1",
-        "_public": 构造公共参数(platform="an"),
+        "_public": 构造公共参数(user_id=user_id, platform="an"),
     }
-    数据 = await 请求书旗POST(session, APP_BOOK_FREEDOWNURL, 参数)
+    数据 = await 请求书旗POST(session, APP_BOOK_FREEDOWNURL, 参数, user_id=user_id)
     返回数据 = 数据.get("data") if isinstance(数据, dict) else {}
     if isinstance(返回数据, str):
         try:
@@ -305,14 +437,20 @@ async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, �
     logger.info(f"书旗小说批量包URL返回：book_id={书籍.book_id}, unlocked={unlocked}/{len(有效批次)}")
 
 
-async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book, 批次: list[dict[str, Any]] | None = None) -> list[dict[str, str]]:
+async def 下载全部章节(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    批次: list[dict[str, Any]] | None = None,
+    *,
+    user_id: str,
+) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
     已完成 = 0
     成功数 = 0
     失败数 = 0
     上次日志进度 = 0
     进度锁 = asyncio.Lock()
-    批量结果 = await 下载批量包章节(session, 书籍, 批次 or [])
+    批量结果 = await 下载批量包章节(session, 书籍, 批次 or [], user_id=user_id)
     if 批量结果:
         logger.info(
             f"书旗小说批量包正文命中：book_id={书籍.book_id}, "
@@ -373,7 +511,13 @@ async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book, 批�
     return [合并结果.get(章节.chapter_id, {"id": 章节.chapter_id, "title": 章节.name, "content": ""}) for 章节 in 书籍.chapters]
 
 
-async def 下载批量包章节(session: aiohttp.ClientSession, 书籍: Book, 批次: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+async def 下载批量包章节(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    批次: list[dict[str, Any]],
+    *,
+    user_id: str,
+) -> dict[str, dict[str, str]]:
     可用批次 = [项目 for 项目 in 批次 if isinstance(项目, dict) and 项目.get("url")]
     if not 可用批次:
         return {}
@@ -385,7 +529,7 @@ async def 下载批量包章节(session: aiohttp.ClientSession, 书籍: Book, �
         async with 信号量:
             url = str(批次项.get("url") or "")
             数据 = await 请求字节(session, url, referer=APP_CHAPTERLIST_URL)
-            return 解析书旗批量包(数据, user_id=DEFAULT_USER_ID)
+            return 解析书旗批量包(数据, user_id=user_id)
 
     任务列表 = [asyncio.create_task(下载一个批次(批次项)) for 批次项 in 可用批次]
     try:
@@ -407,12 +551,14 @@ async def 下载批量包章节(session: aiohttp.ClientSession, 书籍: Book, �
     return 结果
 
 
-def 解析书旗批量包(包数据: bytes, user_id: str = DEFAULT_USER_ID) -> dict[str, str]:
+def 解析书旗批量包(包数据: bytes, user_id: str) -> dict[str, str]:
     if not 包数据:
         return {}
     if not zipfile.is_zipfile(io.BytesIO(包数据)):
         raise ShuqiError("书旗批量包不是 ZIP/SQB 格式")
-    key = ord(str(user_id or DEFAULT_USER_ID)[-1]) & 0xFF
+    if not str(user_id or ""):
+        raise ShuqiError("书旗批量包缺少用户ID")
+    key = ord(str(user_id)[-1]) & 0xFF
     结果: dict[str, str] = {}
     with zipfile.ZipFile(io.BytesIO(包数据)) as 压缩包:
         文件名列表 = sorted((名称 for 名称 in 压缩包.namelist() if 名称.lower().endswith(".sqc")), key=章节包排序键)
@@ -487,13 +633,43 @@ async def 请求字节(session: aiohttp.ClientSession, url: str, referer: str = 
         return data
 
 
-async def 请求书旗POST(session: aiohttp.ClientSession, url: str, 参数: dict[str, Any]) -> dict[str, Any]:
-    完整参数 = 构造公共参数字典(platform="0")
+async def 请求书旗POST(
+    session: aiohttp.ClientSession,
+    url: str,
+    参数: dict[str, Any],
+    *,
+    user_id: str,
+) -> dict[str, Any]:
+    完整参数 = 构造公共参数字典(user_id=user_id, platform="0")
     完整参数.update({str(k): "" if v is None else str(v) for k, v in 参数.items()})
     完整参数["isTeenMode"] = "0"
     data = 签名参数(完整参数)
     headers = {"User-Agent": APP_USER_AGENT, "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json,*/*", "Accept-Encoding": "identity", "Connection": "close"}
     async with session.post(url, data=data, headers=headers) as resp:
+        text = await resp.text()
+        if resp.status >= 400:
+            raise ShuqiError(f"HTTP {resp.status}: {text[:120]}")
+        try:
+            payload = json.loads(text)
+        except Exception as exc:
+            raise ShuqiError(f"JSON解析失败：{text[:120]}") from exc
+        return payload if isinstance(payload, dict) else {}
+
+
+async def 请求书旗公共POST(
+    session: aiohttp.ClientSession,
+    url: str,
+    参数: dict[str, Any],
+    *,
+    user_id: str,
+    platform: str = "an",
+) -> dict[str, Any]:
+    完整参数: dict[str, Any] = {"_public": 构造公共参数(user_id=user_id, platform=platform)}
+    完整参数.update({str(k): "" if v is None else str(v) for k, v in 参数.items()})
+    完整参数["isTeenMode"] = "0"
+    data = 签名参数(完整参数, add_reqid=False)
+    headers = {"User-Agent": APP_USER_AGENT, "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json,*/*", "Accept-Encoding": "identity", "Connection": "close"}
+    async with session.post(追加请求ID(url), data=data, headers=headers) as resp:
         text = await resp.text()
         if resp.status >= 400:
             raise ShuqiError(f"HTTP {resp.status}: {text[:120]}")
@@ -529,6 +705,11 @@ def 请求ID() -> str:
     return hashlib.md5(seed.encode("utf-8")).hexdigest()[:10]
 
 
+def 追加请求ID(url: str) -> str:
+    分隔符 = "&" if "?" in url else "?"
+    return f"{url}{分隔符}_reqid={urllib.parse.quote(请求ID(), safe='')}"
+
+
 def app_enc_value() -> str:
     value = str(int(time.time() * 1000))[:13]
     picked = value[1] + value[3] + value[5] + value[8] + value[6]
@@ -536,7 +717,7 @@ def app_enc_value() -> str:
     return str(product)[-5:] + value
 
 
-def 构造公共参数字典(user_id: str = DEFAULT_USER_ID, platform: str = "0") -> dict[str, str]:
+def 构造公共参数字典(user_id: str, platform: str = "0") -> dict[str, str]:
     return {
         "soft_id": APP_SOFT_ID, "user_id": user_id, "userId": user_id, "ver": APP_VERSION_CODE, "subVer": APP_SUB_VERSION,
         "appVer": APP_VERSION_NAME, "theme": "day", "platform": platform, "placeid": "", "sdk": "", "cpu": "", "pkg_cpu": "",
@@ -546,7 +727,7 @@ def 构造公共参数字典(user_id: str = DEFAULT_USER_ID, platform: str = "0"
     }
 
 
-def 构造公共参数(user_id: str = DEFAULT_USER_ID, platform: str = "an") -> str:
+def 构造公共参数(user_id: str, platform: str = "an") -> str:
     params = {
         "soft_id": APP_SOFT_ID, "user_id": user_id, "userId": user_id, "ver": APP_VERSION_CODE, "subVer": APP_SUB_VERSION,
         "appVer": APP_VERSION_NAME, "theme": "day", "platform": platform, "placeid": "", "sdk": "", "cpu": "", "pkg_cpu": "",
