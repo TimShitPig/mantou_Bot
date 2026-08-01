@@ -7,7 +7,7 @@ from astrbot.api import logger
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
-from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘
+from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 网盘Cookie
 from 功能文件.管理功能.网盘功能 import 百度网盘
 
 
@@ -25,6 +25,10 @@ from 功能文件.管理功能.网盘功能 import 百度网盘
     "换百度": "百度",
 }
 状态命令 = {"网盘", "网盘状态", "当前网盘"}
+
+
+async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
+    return await 网盘Cookie.处理网盘Cookie指令(event, 命令文本, 配置)
 
 
 def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str | None:

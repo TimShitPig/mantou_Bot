@@ -13,6 +13,8 @@ from typing import Any
 import aiohttp
 from astrbot.api import logger
 
+from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie, 持久化刷新后的网盘Cookie
+
 
 基础接口地址 = "https://drive-pc.quark.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -38,6 +40,7 @@ class 夸克网盘客户端:
     def __init__(self, cookie: str):
         self.cookie = 清理Cookie(cookie)
         self.ctoken = 提取Cookie字段(self.cookie, "ctoken")
+        self.ctoken_checked = bool(self.ctoken)
         self.session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> "夸克网盘客户端":
@@ -367,6 +370,7 @@ class 夸克网盘客户端:
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        await self.确保CToken()
         会话 = self.获取会话()
         请求参数 = {"pr": "ucpro", "fr": "pc"}
         请求参数.update(params or {})
@@ -386,15 +390,37 @@ class 夸克网盘客户端:
                 raise RuntimeError("夸克网盘返回格式不是对象")
             return 数据
 
+    async def 确保CToken(self) -> None:
+        if self.ctoken or self.ctoken_checked:
+            return
+        self.ctoken_checked = True
+        会话 = self.获取会话()
+        try:
+            async with 会话.get(
+                "https://pan.quark.cn/",
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as 响应:
+                await 响应.text()
+                self.刷新会话Cookie(响应)
+        except Exception as 异常:
+            logger.debug(f"夸克网盘ctoken探测失败：error={type(异常).__name__}")
+        self.ctoken = self.ctoken or 提取Cookie字段(self.cookie, "ctoken")
+
     def 刷新会话Cookie(self, 响应: aiohttp.ClientResponse) -> None:
-        新值 = 响应.cookies.get("__puus")
-        if not 新值:
-            return
-        值 = str(getattr(新值, "value", 新值) or "").strip()
-        if not 值:
-            return
-        self.cookie = 更新Cookie字段(self.cookie, "__puus", 值)
-        self.获取会话().headers["cookie"] = self.cookie
+        已更新 = False
+        for 名称 in ("__puus", "ctoken"):
+            新值 = 响应.cookies.get(名称)
+            if not 新值:
+                continue
+            值 = str(getattr(新值, "value", 新值) or "").strip()
+            if not 值:
+                continue
+            self.cookie = 更新Cookie字段(self.cookie, 名称, 值)
+            if 名称 == "ctoken":
+                self.ctoken = 值
+            已更新 = True
+        if 已更新:
+            self.获取会话().headers["cookie"] = self.cookie
 
     def 获取会话(self) -> aiohttp.ClientSession:
         if self.session is None:
@@ -409,13 +435,17 @@ async def 上传小说并获取分享链接(配置: Any, 源缓存路径: str | 
     if not 路径.is_file():
         logger.warning(f"夸克网盘上传分享失败：file={文件名}, error=本地文件不存在")
         return {"enabled": True, "success": False, "share_url": "", "provider": "夸克网盘", "error": "本地文件不存在"}
+    Cookie = 读取夸克网盘Cookie(配置)
+    客户端 = 夸克网盘客户端(Cookie)
     try:
-        async with 夸克网盘客户端(读取夸克网盘Cookie(配置)) as 客户端:
+        async with 客户端:
             分享链接 = await 客户端.上传文件并创建分享(路径, 文件名, 读取夸克上传目录(配置))
         return {"enabled": True, "success": True, "share_url": 分享链接, "provider": "夸克网盘", "error": ""}
     except Exception as 异常:
         logger.warning(f"夸克网盘上传分享失败：file={文件名}, error={异常}")
         return {"enabled": True, "success": False, "share_url": "", "provider": "夸克网盘", "error": str(异常)}
+    finally:
+        await asyncio.to_thread(持久化刷新后的网盘Cookie, 配置, "夸克", Cookie, 客户端.cookie)
 
 
 def 夸克网盘是否启用(配置: Any) -> bool:
@@ -423,7 +453,8 @@ def 夸克网盘是否启用(配置: Any) -> bool:
 
 
 def 读取夸克网盘Cookie(配置: Any) -> str:
-    return 清理Cookie(读取配置字段(配置, "quark_pan_cookie") or "")
+    配置Cookie = 清理Cookie(读取配置字段(配置, "quark_pan_cookie") or "")
+    return 读取网盘Cookie(配置, "夸克", 配置Cookie)
 
 
 def 读取夸克上传目录(配置: Any) -> str:

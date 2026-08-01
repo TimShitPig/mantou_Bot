@@ -1,5 +1,12 @@
 # 更新日志
 
+## v5.3.0
+
+- 新增 UC、夸克和百度三种网盘的聊天 Cookie 登录：群文件清理管理员白名单 QQ 可直接粘贴普通 Cookie、`Cookie:` 请求头、curl、Cookie Editor JSON 或 Netscape cookies.txt，无需先进入插件配置。
+- 自动按关键字段识别平台：UC 使用 `UDRIVE_TRANSFER_SESS`，夸克使用 `b-user-id` / `__uid` 与 `__puus`，百度使用 `BDUSS` 与 `STOKEN`；也支持 `UC Cookie:`、`夸克 Cookie:`、`百度 Cookie:` 前缀明确指定平台。夸克 Cookie 未携带 `ctoken` 时会先访问网盘主页尝试补全。
+- 网盘登录态写入 MySQL `mantou_runtime_state` 的 `novel_pan_auth` 命名空间，状态键分别为 `uc`、`quark`、`baidu`；新 Cookie 覆盖旧登录态，上传时数据库登录态优先于插件配置，未保存时继续使用原配置 Cookie。
+- UC 与夸克请求期间刷新 Cookie 后会在原数据库登录态未被并发替换的前提下回写最新值；Cookie 原文不写入插件日志，白名单外发送 Cookie 继续静默处理。
+
 ## v5.2.1
 
 - 修复书旗单章链路在目录只返回部分可读章节时仍可能生成不完整 TXT 的问题：自动 UID 请求目录后，只有目录的可读章节数与总章节数一致才开始下载；正文下载后再次校验完整性。

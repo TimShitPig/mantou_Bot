@@ -14,6 +14,8 @@ from typing import Any
 import aiohttp
 from astrbot.api import logger
 
+from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie, 持久化刷新后的网盘Cookie
+
 
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -605,13 +607,16 @@ async def 上传小说并获取分享链接(
         return {"enabled": True, "success": False, "share_url": "", "error": 错误}
     Cookie = 读取UC网盘Cookie(配置)
     上传目录 = 读取UC上传目录(配置)
+    客户端 = UC网盘客户端(Cookie)
     try:
-        async with UC网盘客户端(Cookie) as 客户端:
+        async with 客户端:
             分享链接 = await 客户端.上传文件并创建分享(源路径, 文件名, 上传目录)
         return {"enabled": True, "success": True, "share_url": 分享链接, "error": ""}
     except Exception as 异常:
         logger.warning(f"UC网盘上传分享失败：file={文件名}, error={异常}")
         return {"enabled": True, "success": False, "share_url": "", "error": str(异常)}
+    finally:
+        await asyncio.to_thread(持久化刷新后的网盘Cookie, 配置, "UC", Cookie, 客户端.cookie)
 
 
 def 构造小说下载完成文本(书名: Any, 作者: Any) -> str:
@@ -692,7 +697,8 @@ def UC网盘是否启用(配置: Any) -> bool:
 
 
 def 读取UC网盘Cookie(配置: Any) -> str:
-    return 清理Cookie(读取配置字段(配置, "uc_pan_cookie") or "")
+    配置Cookie = 清理Cookie(读取配置字段(配置, "uc_pan_cookie") or "")
+    return 读取网盘Cookie(配置, "UC", 配置Cookie)
 
 
 def 读取UC上传目录(配置: Any) -> str:

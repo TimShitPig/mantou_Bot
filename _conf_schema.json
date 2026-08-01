@@ -6,7 +6,7 @@
       "group_file_cleanup_admin_qq": {
         "description": "群文件清理管理员 QQ 白名单",
         "type": "list",
-        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、全量消息、保存 QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和禁言指令。这里沿用群文件清理的管理员白名单，不是群管理员。",
+        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、全量消息、保存 UC/夸克/百度/QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和禁言指令。这里沿用群文件清理的管理员白名单，不是群管理员。",
         "default": []
       }
     }
@@ -18,7 +18,7 @@
       "uc_pan_cookie": {
         "description": "UC网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。发送“换UC”后，小说会上传完整 txt 到 UC 网盘并发送分享链接；留空或上传失败时只提示文件发送失败。",
+        "hint": "可在此填写已登录 UC 网盘的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。发送“换UC”后作为主分享网盘。",
         "default": ""
       },
       "uc_pan_upload_dir": {
@@ -36,7 +36,7 @@
       "quark_pan_cookie": {
         "description": "夸克网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录夸克网盘的浏览器请求头复制完整 Cookie，通常包含 b-user-id、__puus、ctoken 等字段。发送“换夸克”后，小说会上传完整 txt 到夸克网盘并发送分享链接。",
+        "hint": "可在此填写已登录夸克网盘的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。发送“换夸克”后作为主分享网盘。",
         "default": ""
       },
       "quark_pan_upload_dir": {
@@ -54,7 +54,7 @@
       "baidu_pan_cookie": {
         "description": "百度网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录百度网盘的浏览器复制 Cookie。发送“换百度”后，百度网盘作为小说主分享网盘；选择其他主网盘时，百度仍可按上传状态做后台备份。留空表示不启用。",
+        "hint": "可在此填写已登录百度网盘且包含 BDUSS/STOKEN 的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。",
         "default": ""
       },
       "baidu_pan_upload_dir": {
