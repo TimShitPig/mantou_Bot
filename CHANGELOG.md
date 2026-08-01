@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.1.1
+
+- 修复 QQ阅读直接登录态识别：除标准 `ywguid=值; ywkey=值` Cookie 外，现在也接受聊天中常见的 `ywkey: 值` / `ywguid: 值` 两行文本，并继续覆盖 MySQL 中同一登录态记录。
+
 ## v5.1.0
 
 - QQ阅读新增无前缀 Cookie 识别：群文件清理管理员可直接粘贴普通 Cookie、Cookie 头、curl、Cookie Editor JSON 或 cookies.txt，插件提取并校验 `ywguid/ywkey`。

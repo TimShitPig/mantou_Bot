@@ -1354,7 +1354,7 @@ def 解析QQ阅读Cookie(文本: Any) -> dict[str, str] | None:
             result[parts[5].strip().lower()] = parts[6].strip()
     for name in ("ywguid", "ywkey"):
         match = re.search(
-            rf"(?:^|[;\s'\"`]){name}\s*=\s*([^;\s'\"`]+)",
+            rf"(?:^|[;\s'\"`]){name}\s*[:=]\s*([^;\s'\"`]+)",
             raw,
             re.I,
         )

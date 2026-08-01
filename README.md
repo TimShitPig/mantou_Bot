@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.1.0 |
+| 版本 | v5.1.1 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -26,7 +26,7 @@
 | 管理功能 | 番茄小说 | 番茄链接/番茄 JSON 分享卡片 | 默认使用本地番茄畅听下载；详情、目录和正文均请求畅听接口，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 七猫小说 | 七猫链接/七猫分享卡片 | 识别七猫长篇/短篇链接，正文优先批量下载，完成后上传 UC 并发送“点击打开”按钮 |
 | 管理功能 | 书旗小说 | 书旗链接/书旗分享卡片 | 识别书旗长篇/短篇/短链链接，优先使用 30 章批量包，未解锁时回退 80 动态并发单章下载，完成后上传 UC 并发送“点击打开”按钮 |
-| 管理功能 | QQ阅读 | QQ阅读详情/目录/分享链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、直接粘贴含 `ywguid` / `ywkey` 的 Cookie | 使用参考 App 核心、csigs 签名、动态密钥池、libfock 解密与 Fetcher 31 章窗口/4 线程下载；管理员直接发送普通 Cookie、Cookie 头、curl、Cookie Editor JSON 或 cookies.txt 即可保存登录态，新 Cookie 覆盖旧值；下载时优先加载数据库登录态并覆盖固定 `uid/usid`；`site=4` 出版书批量读取 CTEB 与 EPUB 加密资源；完整合成 TXT 后上传 UC 并发送“点击打开”按钮 |
+| 管理功能 | QQ阅读 | QQ阅读详情/目录/分享链接、`book.qq.com/book-detail/数字`、`novel.html5.qq.com/portal/novel-intro?bookid=数字`、直接粘贴含 `ywguid` / `ywkey` 的 Cookie | 使用参考 App 核心、csigs 签名、动态密钥池、libfock 解密与 Fetcher 31 章窗口/4 线程下载；管理员直接发送普通 Cookie、`ywkey: 值` / `ywguid: 值` 两行文本、Cookie 头、curl、Cookie Editor JSON 或 cookies.txt 即可保存登录态，新 Cookie 覆盖旧值；下载时优先加载数据库登录态并覆盖固定 `uid/usid`；`site=4` 出版书批量读取 CTEB 与 EPUB 加密资源；完整合成 TXT 后上传 UC 并发送“点击打开”按钮 |
 
 <details>
 <summary>查看群管功能</summary>
