@@ -4,13 +4,11 @@ import asyncio
 import base64
 import hashlib
 import html
-import io
 import json
 import random
 import re
 import time
 import urllib.parse
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -24,10 +22,10 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 try:
-    from 功能文件.管理功能.网盘功能 import UC网盘
+    from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
-    UC网盘 = None
-    logger.warning(f"UC网盘模块加载失败：error={exc}")
+    小说网盘 = None
+    logger.warning(f"小说网盘模块加载失败：error={exc}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
@@ -46,8 +44,6 @@ APP_SOFT_ID = "1"
 UID发现游客ID = "8000000"
 APP_GATEWAY_SIGN_KEY = "467694bd8912441cae8498b3c7e4282c"
 APP_CHAPTERLIST_URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
-APP_DOWNLOAD_BATCH_INDEX_URL = "https://ocean.shuqireader.com/api/jspend/api/downloadbatch/index"
-APP_BOOK_FREEDOWNURL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/freedownurl"
 APP_SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
 APP_BOOK_COMMENT_LIST_URL = "https://ocean.shuqireader.com/api/interact/comment/book/list"
 APP_NO_SIGN_KEYS = {"sign", "key", "_public", "_reqid", "_beta", "_", "X-NEBULAXMLHTTPREQUEST", "callbackUrl"}
@@ -57,7 +53,6 @@ UID候选书上限 = 8
 UID评论最大页数 = 3
 UID评论每页数量 = 50
 下载并发数 = 80
-批量URL并发数 = 20
 单章重试次数 = 3
 进度日志分段数 = 10
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
@@ -116,13 +111,12 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到章节目录")
                 yield "下载失败"
                 return
-            批次 = await 获取下载批次(session, 书籍, user_id=用户ID)
             logger.info(
                 f"书旗小说开始下载：book_id={书籍.book_id}, type={'short' if 书籍.is_short else 'book'}, "
-                f"title={书籍.book_name}, author={书籍.author_name}, chapters={len(书籍.chapters)}, batches={len(批次)}"
+                f"title={书籍.book_name}, author={书籍.author_name}, chapters={len(书籍.chapters)}, source=catalog_single"
             )
             yield 格式化下载提示(书籍)
-            章节内容 = await 下载全部章节(session, 书籍, 批次, user_id=用户ID)
+            章节内容 = await 下载全部章节(session, 书籍, user_id=用户ID)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
                 logger.warning(f"书旗小说下载失败：book_id={书籍.book_id}, error=没有获取到可用章节正文")
@@ -217,8 +211,8 @@ async def 获取书籍(
                 index=len(chapters) + 1,
                 chapter_id=str(item.get("chapterId") or ""),
                 name=清理网页文本(item.get("chapterName") or f"第{len(chapters) + 1}章"),
-                is_free=bool(item.get("isFreeRead")),
-                is_buy=bool(item.get("isBuy")),
+                is_free=解析布尔值(item.get("isFreeRead")),
+                is_buy=解析布尔值(item.get("isBuy")),
                 cont_url_suffix=html.unescape(str(item.get("contUrlSuffix") or "")),
                 short_url_suffix=html.unescape(str(item.get("shortContUrlSuffix") or "")),
                 word_count=安全整数(item.get("wordCount") or item.get("chapterWordCount"), 0),
@@ -358,115 +352,24 @@ async def 从书评获取年费VIP用户ID(session: aiohttp.ClientSession, 书�
     return ""
 
 
-async def 获取下载批次(session: aiohttp.ClientSession, 书籍: Book, *, user_id: str) -> list[dict[str, Any]]:
-    try:
-        参数 = {
-            "userId": user_id,
-            "bookId": 书籍.book_id,
-            "timestamp": str(int(time.time())),
-            "platform": "an",
-            "_public": 构造公共参数(user_id=user_id, platform="an"),
-        }
-        数据 = await 请求书旗POST(session, APP_DOWNLOAD_BATCH_INDEX_URL, 参数, user_id=user_id)
-        state = str(数据.get("state") or 数据.get("status"))
-        if state != "200":
-            logger.warning(f"书旗小说批量接口不可用：book_id={书籍.book_id}, state={state}, message={数据.get('message')}")
-            return []
-        batch_info = ((数据.get("data") or {}).get("batchInfo") or {}) if isinstance(数据.get("data"), dict) else {}
-        free_info = batch_info.get("freeInfo") if isinstance(batch_info, dict) else []
-        if not isinstance(free_info, list):
-            return []
-        await 补全批量下载URL(session, 书籍, free_info, user_id=user_id)
-        logger.info(f"书旗小说批量接口返回：book_id={书籍.book_id}, batches={len(free_info)}")
-        return [项目 for 项目 in free_info if isinstance(项目, dict)]
-    except Exception as exc:
-        logger.warning(f"书旗小说批量接口请求失败，回退章节并发：book_id={书籍.book_id}, error={exc}")
-        return []
-
-
-async def 补全批量下载URL(session: aiohttp.ClientSession, 书籍: Book, 批次: list[Any], *, user_id: str) -> None:
-    有效批次 = [项目 for 项目 in 批次 if isinstance(项目, dict)]
-    if not 有效批次:
-        return
-    章节位置 = {章节.chapter_id: idx for idx, 章节 in enumerate(书籍.chapters)}
-    def 批次键(项目: dict[str, Any]) -> str:
-        章节列表 = [str(v) for v in (项目.get("chapterIds") or []) if str(v)]
-        first_cid = str(项目.get("firstChapterId") or 项目.get("startCid") or (章节列表[0] if 章节列表 else ""))
-        last_cid = str(项目.get("lastChapterId") or 项目.get("endCid") or (章节列表[-1] if 章节列表 else first_cid))
-        first_index = 章节位置.get(first_cid, 0)
-        last_index = 章节位置.get(last_cid, first_index)
-        return f"{user_id}_{书籍.book_id}_{first_index}_{last_index}_{first_cid}_{last_cid}"
-    batch_map = {批次键(项目): {"startCid": str(项目.get("firstChapterId") or 项目.get("startCid") or ""), "endCid": str(项目.get("lastChapterId") or 项目.get("endCid") or "")} for 项目 in 有效批次}
-    参数 = {
-        "bookId": 书籍.book_id,
-        "timestamp": str(int(time.time())),
-        "type": "4",
-        "batchDown": "1",
-        "batchChapterIds": json.dumps(batch_map, ensure_ascii=False, separators=(",", ":")),
-        "user_id": user_id,
-        "newDownload": "1",
-        "platform": "an",
-        "reqEncryptType": "-1",
-        "reqEncryptParam": "",
-        "resEncryptType": "-1",
-        "_public": 构造公共参数(user_id=user_id, platform="an"),
-    }
-    数据 = await 请求书旗POST(session, APP_BOOK_FREEDOWNURL, 参数, user_id=user_id)
-    返回数据 = 数据.get("data") if isinstance(数据, dict) else {}
-    if isinstance(返回数据, str):
-        try:
-            返回数据 = json.loads(返回数据)
-        except Exception:
-            返回数据 = {}
-    if not isinstance(返回数据, dict):
-        return
-    unlocked = 0
-    for 项目 in 有效批次:
-        key = 批次键(项目)
-        info = 返回数据.get(key)
-        if isinstance(info, str):
-            try:
-                info = json.loads(info)
-            except Exception:
-                info = {}
-        if isinstance(info, dict):
-            项目["downloadUnlocked"] = info.get("downloadUnlocked")
-            项目["url"] = info.get("url") or ""
-            if 项目["url"]:
-                unlocked += 1
-    logger.info(f"书旗小说批量包URL返回：book_id={书籍.book_id}, unlocked={unlocked}/{len(有效批次)}")
-
-
 async def 下载全部章节(
     session: aiohttp.ClientSession,
     书籍: Book,
-    批次: list[dict[str, Any]] | None = None,
     *,
     user_id: str,
 ) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
+    if not 总数:
+        return []
     已完成 = 0
     成功数 = 0
     失败数 = 0
     上次日志进度 = 0
     进度锁 = asyncio.Lock()
-    批量结果 = await 下载批量包章节(session, 书籍, 批次 or [], user_id=user_id)
-    if 批量结果:
-        logger.info(
-            f"书旗小说批量包正文命中：book_id={书籍.book_id}, "
-            f"success={len(批量结果)}/{总数}, batches={len([项目 for 项目 in (批次 or []) if 项目.get('url')])}"
-        )
-    elif 批次:
-        logger.info(f"书旗小说批量包URL不可用，回退单章动态并发：book_id={书籍.book_id}, batches={len(批次)}")
-
-    待单章下载 = [章节 for 章节 in 书籍.chapters if 章节.chapter_id not in 批量结果]
-    if not 待单章下载:
-        return [批量结果.get(章节.chapter_id, {"id": 章节.chapter_id, "title": 章节.name, "content": ""}) for 章节 in 书籍.chapters]
-
     信号量 = asyncio.Semaphore(下载并发数)
     logger.info(
-        f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{len(待单章下载)}, "
-        f"percent=0%, concurrency={下载并发数}, batch_hit={len(批量结果)}"
+        f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{总数}, "
+        f"percent=0%, concurrency={下载并发数}, source=catalog_single, uid_bound={bool(user_id)}"
     )
 
     async def 记录进度(成功: bool) -> None:
@@ -490,12 +393,14 @@ async def 下载全部章节(
             for 尝试次数 in range(1, 单章重试次数 + 1):
                 try:
                     模式, 正文 = await 获取章节正文(session, 书籍, 章节, include_preview=书籍.is_short)
+                    if not str(正文 or "").strip():
+                        raise ShuqiError("章节正文为空")
                     await 记录进度(bool(正文))
                     标题 = 章节.name + ("（预览）" if 模式 == "preview" else "")
                     return {"id": 章节.chapter_id, "title": 标题, "content": 正文}
                 except Exception as exc:
                     最后异常 = exc
-                    logger.warning(
+                    logger.debug(
                         f"书旗章节下载失败，准备重试：book_id={书籍.book_id}, "
                         f"chapter_id={章节.chapter_id}, try={尝试次数}/{单章重试次数}, error={exc}"
                     )
@@ -505,81 +410,8 @@ async def 下载全部章节(
             await 记录进度(False)
             return {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
 
-    单章结果列表 = await asyncio.gather(*(下载单章(章节) for 章节 in 待单章下载))
-    合并结果 = dict(批量结果)
-    合并结果.update({项目["id"]: 项目 for 项目 in 单章结果列表})
-    return [合并结果.get(章节.chapter_id, {"id": 章节.chapter_id, "title": 章节.name, "content": ""}) for 章节 in 书籍.chapters]
-
-
-async def 下载批量包章节(
-    session: aiohttp.ClientSession,
-    书籍: Book,
-    批次: list[dict[str, Any]],
-    *,
-    user_id: str,
-) -> dict[str, dict[str, str]]:
-    可用批次 = [项目 for 项目 in 批次 if isinstance(项目, dict) and 项目.get("url")]
-    if not 可用批次:
-        return {}
-    信号量 = asyncio.Semaphore(批量URL并发数)
-    章节映射 = {章节.chapter_id: 章节 for 章节 in 书籍.chapters}
-    结果: dict[str, dict[str, str]] = {}
-
-    async def 下载一个批次(批次项: dict[str, Any]) -> dict[str, str]:
-        async with 信号量:
-            url = str(批次项.get("url") or "")
-            数据 = await 请求字节(session, url, referer=APP_CHAPTERLIST_URL)
-            return 解析书旗批量包(数据, user_id=user_id)
-
-    任务列表 = [asyncio.create_task(下载一个批次(批次项)) for 批次项 in 可用批次]
-    try:
-        for 已完成任务 in asyncio.as_completed(任务列表):
-            try:
-                正文映射 = await 已完成任务
-            except Exception as exc:
-                logger.warning(f"书旗批量包下载失败，后续回退单章：book_id={书籍.book_id}, error={exc}")
-                continue
-            for 章节编号, 正文 in 正文映射.items():
-                章节 = 章节映射.get(str(章节编号))
-                if not 章节 or not 正文:
-                    continue
-                结果[章节.chapter_id] = {"id": 章节.chapter_id, "title": 章节.name, "content": 正文}
-    finally:
-        for 任务 in 任务列表:
-            if not 任务.done():
-                任务.cancel()
-    return 结果
-
-
-def 解析书旗批量包(包数据: bytes, user_id: str) -> dict[str, str]:
-    if not 包数据:
-        return {}
-    if not zipfile.is_zipfile(io.BytesIO(包数据)):
-        raise ShuqiError("书旗批量包不是 ZIP/SQB 格式")
-    if not str(user_id or ""):
-        raise ShuqiError("书旗批量包缺少用户ID")
-    key = ord(str(user_id)[-1]) & 0xFF
-    结果: dict[str, str] = {}
-    with zipfile.ZipFile(io.BytesIO(包数据)) as 压缩包:
-        文件名列表 = sorted((名称 for 名称 in 压缩包.namelist() if 名称.lower().endswith(".sqc")), key=章节包排序键)
-        if not 文件名列表:
-            raise ShuqiError("书旗批量包没有 sqc 章节文件")
-        for 名称 in 文件名列表:
-            原始 = 压缩包.read(名称)
-            明文 = bytes((字节 ^ key) for 字节 in 原始).decode("utf-8", "replace")
-            章节编号 = Path(名称).stem
-            正文 = 清理正文(明文)
-            if 正文:
-                结果[str(章节编号)] = 正文
-    return 结果
-
-
-def 章节包排序键(名称: str) -> tuple[int, str]:
-    文件名 = Path(名称).stem
-    try:
-        return int(文件名), 名称
-    except Exception:
-        return 10**18, 名称
+    单章结果列表 = await asyncio.gather(*(下载单章(章节) for 章节 in 书籍.chapters))
+    return list(单章结果列表)
 
 
 async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章节: Chapter, include_preview: bool = False) -> tuple[str, str]:
@@ -600,11 +432,25 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
 
 
 def 获取章节正文URL(书籍: Book, 章节: Chapter, include_preview: bool = False) -> tuple[str | None, str]:
-    if (章节.is_free or 章节.is_buy) and 章节.cont_url_suffix:
-        return 书籍.free_prefix + 章节.cont_url_suffix, "full"
+    if 章节.is_free and 章节.cont_url_suffix:
+        return 拼接章节URL(书籍.free_prefix, 章节.cont_url_suffix), "full"
+    if 章节.is_buy and 章节.cont_url_suffix:
+        return 拼接章节URL(书籍.charge_prefix or 书籍.free_prefix, 章节.cont_url_suffix), "full"
     if include_preview and 章节.short_url_suffix:
-        return 书籍.short_prefix + 章节.short_url_suffix, "preview"
+        return 拼接章节URL(书籍.short_prefix, 章节.short_url_suffix), "preview"
     return None, "skip"
+
+
+def 拼接章节URL(前缀: str, 后缀: str) -> str | None:
+    前缀文本 = html.unescape(str(前缀 or "")).strip()
+    后缀文本 = html.unescape(str(后缀 or "")).strip()
+    if not 后缀文本:
+        return None
+    if re.match(r"^https?://", 后缀文本, re.I):
+        return 后缀文本
+    if not 前缀文本:
+        return None
+    return urllib.parse.urljoin(前缀文本, 后缀文本)
 
 
 async def 请求GETJSON(session: aiohttp.ClientSession, url: str, referer: str = "") -> dict[str, Any]:
@@ -620,17 +466,6 @@ async def 请求GETJSON(session: aiohttp.ClientSession, url: str, referer: str =
         except Exception as exc:
             raise ShuqiError(f"JSON解析失败：{text[:120]}") from exc
         return data if isinstance(data, dict) else {}
-
-
-async def 请求字节(session: aiohttp.ClientSession, url: str, referer: str = "") -> bytes:
-    headers = {"User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Encoding": "identity", "Connection": "close"}
-    if referer:
-        headers["Referer"] = referer
-    async with session.get(url, headers=headers) as resp:
-        data = await resp.read()
-        if resp.status >= 400:
-            raise ShuqiError(f"HTTP {resp.status}: {data[:120]!r}")
-        return data
 
 
 async def 请求书旗POST(
@@ -876,18 +711,19 @@ async def 准备发送文本文件给当前会话(
     logger.info(f"书旗小说准备上传：file={文件名}, size={len(文件内容)}")
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     logger.info(f"书旗小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
-    if UC网盘 is None:
+    if 小说网盘 is None:
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
     try:
-        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
-        if not UC结果.get("success"):
-            logger.warning(f"书旗小说UC网盘上传失败：file={文件名}, error={UC结果.get('error')}")
+        网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
+        网盘名称 = str(网盘结果.get("provider") or "小说网盘")
+        if not 网盘结果.get("success"):
+            logger.warning(f"书旗小说主网盘上传失败：provider={网盘名称}, file={文件名}, error={网盘结果.get('error')}")
             删除下载缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
-        完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
+            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
+        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
         if 完成结果.get("sent"):
-            logger.info(f"书旗小说UC网盘上传并发送完成按钮成功：file={文件名}")
+            logger.info(f"书旗小说主网盘上传并发送完成按钮成功：provider={网盘名称}, file={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -895,7 +731,7 @@ async def 准备发送文本文件给当前会话(
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
     except Exception as exc:
-        logger.warning(f"书旗小说UC网盘上传或完成消息发送失败：file={文件名}, error={exc}")
+        logger.warning(f"书旗小说主网盘上传或完成消息发送失败：file={文件名}, error={exc}")
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
 
@@ -1028,6 +864,12 @@ def 安全整数(值: Any, 默认值: int = 0) -> int:
         return int(值)
     except Exception:
         return 默认值
+
+
+def 解析布尔值(值: Any) -> bool:
+    if isinstance(值, str):
+        return 值.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(值)
 
 
 def 读取字段(对象: Any, 字段名: str) -> Any:

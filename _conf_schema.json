@@ -6,7 +6,7 @@
       "group_file_cleanup_admin_qq": {
         "description": "群文件清理管理员 QQ 白名单",
         "type": "list",
-        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、全量消息、保存 QQ阅读 Cookie、开启/关闭小说功能和禁言指令。这里沿用群文件清理的管理员白名单，不是群管理员。",
+        "hint": "只有这里填写的 QQ 号可以使用帮助、状态、群文件清理、全量消息、保存 QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和禁言指令。这里沿用群文件清理的管理员白名单，不是群管理员。",
         "default": []
       }
     }
@@ -18,13 +18,31 @@
       "uc_pan_cookie": {
         "description": "UC网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。填写后小说会先上传完整 txt 到 UC 网盘，成功后向 QQ 发送“点击打开”链接按钮；留空或上传失败时只提示文件发送失败，不再发送 txt。",
+        "hint": "从已登录 UC 网盘的浏览器复制 Cookie。发送“换UC”后，小说会上传完整 txt 到 UC 网盘并发送分享链接；留空或上传失败时只提示文件发送失败。",
         "default": ""
       },
       "uc_pan_upload_dir": {
         "description": "UC网盘上传目录",
         "type": "string",
         "hint": "小说 txt 上传到 UC 网盘的目录，插件会自动逐级创建。默认 /小说机器人。",
+        "default": "/小说机器人"
+      }
+    }
+  },
+  "quark_pan_settings": {
+    "description": "夸克网盘设置",
+    "type": "object",
+    "items": {
+      "quark_pan_cookie": {
+        "description": "夸克网盘浏览器 Cookie",
+        "type": "string",
+        "hint": "从已登录夸克网盘的浏览器请求头复制完整 Cookie，通常包含 b-user-id、__puus、ctoken 等字段。发送“换夸克”后，小说会上传完整 txt 到夸克网盘并发送分享链接。",
+        "default": ""
+      },
+      "quark_pan_upload_dir": {
+        "description": "夸克网盘上传目录",
+        "type": "string",
+        "hint": "小说 txt 上传到夸克网盘的目录，插件会自动逐级创建。默认 /小说机器人。",
         "default": "/小说机器人"
       }
     }
@@ -36,7 +54,7 @@
       "baidu_pan_cookie": {
         "description": "百度网盘浏览器 Cookie",
         "type": "string",
-        "hint": "从已登录百度网盘的浏览器复制 Cookie。填写后番茄/七猫小说生成完整原小说 txt 后会后台上传到百度网盘；完结同名文件已存在时跳过重复上传，连载会删除旧同名文件后重传；不生成分享链接，也不影响 QQ 原有发送逻辑。留空表示不启用百度网盘后台上传。",
+        "hint": "从已登录百度网盘的浏览器复制 Cookie。发送“换百度”后，百度网盘作为小说主分享网盘；选择其他主网盘时，百度仍可按上传状态做后台备份。留空表示不启用。",
         "default": ""
       },
       "baidu_pan_upload_dir": {
@@ -53,7 +71,7 @@
           "连载",
           "全部"
         ],
-        "hint": "控制百度网盘后台上传哪些小说，可填 完结、连载 或 全部；默认只上传完结。",
+        "hint": "仅控制百度作为后台备份时上传哪些小说，可选 完结、连载 或 全部；百度作为当前主分享网盘时不受此项限制。默认只后台备份完结。",
         "default": "完结"
       }
     }

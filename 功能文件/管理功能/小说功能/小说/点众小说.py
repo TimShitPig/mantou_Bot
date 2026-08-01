@@ -15,10 +15,10 @@ from Crypto.Util.Padding import pad, unpad
 from astrbot.api import logger
 
 try:
-    from 功能文件.管理功能.网盘功能 import UC网盘
+    from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
-    UC网盘 = None
-    logger.warning(f"UC网盘模块加载失败：error={exc}")
+    小说网盘 = None
+    logger.warning(f"小说网盘模块加载失败：error={exc}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
@@ -421,18 +421,22 @@ def 生成小说文件(书籍编号: str, 书名: str, 作者: str, 状态: str,
 
 async def 准备发送文本文件(event: Any, 文件名: str, 文件内容: bytes, 配置: Any = None, *, 书名: Any = "", 作者: Any = "") -> dict[str, Any]:
     缓存路径 = 写入缓存(文件名, 文件内容)
-    if UC网盘 is None:
+    if 小说网盘 is None:
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "UC网盘模块未加载"}
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
     try:
-        UC结果 = await UC网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
-        if not UC结果.get("success"):
+        网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
+        if not 网盘结果.get("success"):
             删除缓存(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(UC结果.get("error") or "UC网盘未启用")}
-        完成结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, str(UC结果.get("share_url") or ""))
-        if 完成结果:
+            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
+        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
+        if 完成结果.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
-        return {"sent": False, "fallback_text": "", "source_cache_path": 缓存路径, "error": "完成消息发送失败"}
+        降级文本 = str(完成结果.get("fallback_text") or "")
+        if 降级文本:
+            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+        删除缓存(缓存路径)
+        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成消息发送失败")}
     except Exception as exc:
         删除缓存(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}

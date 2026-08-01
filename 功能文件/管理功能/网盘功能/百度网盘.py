@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
+import string
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +196,39 @@ class 百度网盘客户端:
         logger.debug(f"百度网盘上传完成：file={文件名}, remote_path={远端路径}, fs_id={文件ID}")
         return 文件ID
 
+    async def 创建分享(self, 文件ID: str) -> str:
+        文件ID文本 = str(文件ID or "").strip()
+        if not 文件ID文本.isdigit():
+            raise RuntimeError("百度网盘分享文件ID无效")
+        if not self.bdstoken:
+            raise RuntimeError("百度网盘缺少分享鉴权")
+        提取码字符 = string.ascii_lowercase + string.digits
+        提取码 = "".join(secrets.choice(提取码字符) for _ in range(4))
+        参数 = {
+            "channel": "chunlei",
+            "clienttype": 0,
+            "web": 1,
+            "app_id": 250528,
+            "bdstoken": self.bdstoken,
+        }
+        表单 = {
+            "fid_list": json.dumps([int(文件ID文本)]),
+            "schannel": 4,
+            "channel_list": "[]",
+            "period": 0,
+            "private": 1,
+            "pwd": 提取码,
+            "bdstoken": self.bdstoken,
+            "eflag_disable": "true",
+        }
+        数据 = await self.请求JSON("POST", "/share/set", params=参数, data=表单)
+        if str(数据.get("errno")) != "0":
+            raise RuntimeError(f"百度网盘创建分享失败：{限制文本长度(数据)}")
+        分享链接 = 提取百度分享链接(数据)
+        if not 分享链接:
+            raise RuntimeError("百度网盘创建分享后没有返回链接")
+        return 拼接百度分享提取码(分享链接, 提取码)
+
     async def 请求预创建数据(self, 远端路径: str, 文件大小: int) -> dict[str, Any]:
         参数 = {
             "method": "precreate",
@@ -287,9 +323,60 @@ class 百度网盘客户端:
         return self.session
 
 
+async def 上传小说并获取分享链接(
+    配置: Any,
+    源缓存路径: str | Path,
+    文件名: str,
+) -> dict[str, Any]:
+    if not 百度网盘是否启用(配置):
+        return {
+            "enabled": False,
+            "success": False,
+            "share_url": "",
+            "provider": "百度网盘",
+            "error": "",
+        }
+    源路径 = Path(源缓存路径)
+    if not 源路径.is_file():
+        logger.warning(f"百度网盘上传分享失败：file={文件名}, error=本地文件不存在")
+        return {
+            "enabled": True,
+            "success": False,
+            "share_url": "",
+            "provider": "百度网盘",
+            "error": "本地文件不存在",
+        }
+    try:
+        async with 百度网盘客户端(读取百度网盘Cookie(配置)) as 客户端:
+            文件ID = await 客户端.上传文件并删除同名旧文件(
+                源路径,
+                文件名,
+                读取百度上传目录(配置),
+            )
+            分享链接 = await 客户端.创建分享(文件ID)
+        return {
+            "enabled": True,
+            "success": True,
+            "share_url": 分享链接,
+            "provider": "百度网盘",
+            "error": "",
+        }
+    except Exception as 异常:
+        logger.warning(f"百度网盘上传分享失败：file={文件名}, error={异常}")
+        return {
+            "enabled": True,
+            "success": False,
+            "share_url": "",
+            "provider": "百度网盘",
+            "error": str(异常),
+        }
+
+
 async def 后台上传小说文件(配置: Any, 源缓存路径: str | Path, 文件名: str) -> dict[str, Any]:
     if not 百度网盘是否启用(配置):
         return {"enabled": False, "success": False, "skipped": False, "file_id": "", "error": ""}
+    if 百度当前为主分享网盘(配置):
+        return {"enabled": True, "success": False, "skipped": True, "file_id": "", "error": ""}
     上传状态 = 读取百度上传状态(配置)
     if not 百度上传状态允许(文件名, 上传状态):
         logger.debug(f"百度网盘后台上传已跳过：file={文件名}, rule={上传状态}")
@@ -309,6 +396,15 @@ async def 后台上传小说文件(配置: Any, 源缓存路径: str | Path, 文
 
 def 百度网盘是否启用(配置: Any) -> bool:
     return bool(读取百度网盘Cookie(配置))
+
+
+def 百度当前为主分享网盘(配置: Any) -> bool:
+    try:
+        from 功能文件.管理功能.网盘功能 import 小说网盘
+
+        return 小说网盘.获取当前主网盘(配置) == "百度"
+    except Exception:
+        return False
 
 
 def 读取百度网盘Cookie(配置: Any) -> str:
@@ -373,6 +469,44 @@ def 提取百度文件ID(项目: dict[str, Any]) -> str:
         if 值 not in (None, ""):
             return str(值)
     return ""
+
+
+def 提取百度分享链接(数据: Any) -> str:
+    if isinstance(数据, dict):
+        for 字段名 in ("link", "shorturl", "short_url", "share_url", "url"):
+            值 = str(数据.get(字段名) or "").strip()
+            if re.match(r"^https?://", 值, re.I):
+                return 值
+        for 值 in 数据.values():
+            链接 = 提取百度分享链接(值)
+            if 链接:
+                return 链接
+    elif isinstance(数据, list):
+        for 值 in 数据:
+            链接 = 提取百度分享链接(值)
+            if 链接:
+                return 链接
+    return ""
+
+
+def 拼接百度分享提取码(分享链接: str, 提取码: str) -> str:
+    链接 = str(分享链接 or "").strip()
+    密码 = str(提取码 or "").strip()
+    if not 链接 or not 密码:
+        return 链接
+    解析结果 = urllib.parse.urlsplit(链接)
+    查询参数 = urllib.parse.parse_qsl(解析结果.query, keep_blank_values=True)
+    查询参数 = [(键, 值) for 键, 值 in 查询参数 if 键.lower() != "pwd"]
+    查询参数.append(("pwd", 密码))
+    return urllib.parse.urlunsplit(
+        (
+            解析结果.scheme,
+            解析结果.netloc,
+            解析结果.path,
+            urllib.parse.urlencode(查询参数),
+            解析结果.fragment,
+        )
+    )
 
 
 def 清理Cookie(cookie: Any) -> str:

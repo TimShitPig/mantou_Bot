@@ -40,9 +40,9 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
 )
 
 try:
-    from 功能文件.管理功能.网盘功能 import UC网盘
+    from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception:
-    UC网盘 = None
+    小说网盘 = None
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
@@ -2134,25 +2134,25 @@ async def 准备发送文本文件(
     作者: Any = "",
 ) -> dict[str, Any]:
     cache_path = 写入下载缓存文件(filename, content)
-    if UC网盘 is None:
+    if 小说网盘 is None:
         删除下载缓存文件(cache_path)
         return {
             "sent": False,
             "fallback_text": "",
             "source_cache_path": None,
-            "error": "UC模块未加载",
+            "error": "小说网盘模块未加载",
         }
     try:
-        upload = await UC网盘.上传小说并获取分享链接(config, cache_path, filename)
+        upload = await 小说网盘.上传小说并获取分享链接(config, cache_path, filename)
         if not upload.get("success"):
             删除下载缓存文件(cache_path)
             return {
                 "sent": False,
                 "fallback_text": "",
                 "source_cache_path": None,
-                "error": "UC上传失败",
+                "error": str(upload.get("error") or "小说网盘上传失败"),
             }
-        completed = await UC网盘.发送小说下载完成链接(
+        completed = await 小说网盘.发送小说下载完成链接(
             event,
             书名,
             作者,
