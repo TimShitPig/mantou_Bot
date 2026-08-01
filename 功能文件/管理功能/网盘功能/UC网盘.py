@@ -658,7 +658,7 @@ def 构造小说下载完成文字链接(分享链接: str) -> str:
 
 
 async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, 分享链接: str) -> dict[str, Any]:
-    """QQ 官方发送链接按钮及备用文字链接；其他适配器降级为文本链接。"""
+    """QQ 官方在同一消息发送链接按钮及备用文字链接；其他适配器降级为文本链接。"""
     完成文本 = 构造小说下载完成文本(书名, 作者)
     链接 = str(分享链接 or "").strip()
     文字链接 = 构造小说下载完成文字链接(链接)
@@ -673,11 +673,9 @@ async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, �
         if 是官方机器人:
             from 功能文件.管理功能.基础功能.帮助功能 import 发送Markdown键盘消息
 
-            按钮已发送 = await 发送Markdown键盘消息(event, 完成文本, 构造小说下载完成键盘(链接))
+            完整文本 = f"{完成文本}\n\n{文字链接}"
+            按钮已发送 = await 发送Markdown键盘消息(event, 完整文本, 构造小说下载完成键盘(链接))
             if 按钮已发送:
-                文字链接已发送 = await 发送Markdown键盘消息(event, 文字链接, None)
-                if not 文字链接已发送:
-                    logger.warning("小说完成备用文字链接发送失败")
                 return {"sent": True, "fallback_text": "", "error": ""}
             logger.warning("小说完成链接按钮发送失败")
     except Exception as 异常:
