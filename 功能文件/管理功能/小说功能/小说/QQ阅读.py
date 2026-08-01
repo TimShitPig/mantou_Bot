@@ -198,7 +198,10 @@ def _gunzip_loose(data: bytes) -> bytes:
 
 
 def _body(enc: bytes, header_plain: bytes) -> bytes:
-    return header_plain[128:256] + enc[256:]
+    inline_body = header_plain[128:256]
+    if not any(inline_body):
+        return enc[256:]
+    return inline_body + enc[256:]
 
 
 def _aes_cbc(data: bytes, key32: bytes) -> bytes:
