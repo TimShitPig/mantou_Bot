@@ -5,6 +5,7 @@ import io
 import json
 import re
 import time
+import uuid
 from typing import Any
 
 import aiohttp
@@ -31,11 +32,22 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
 )
 Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码登录命令 = {"夸克登录", "登录夸克", "刷新夸克Cookie"}
-夸克扫码客户端ID = "532"
+夸克扫码客户端ID = 532
+夸克扫码协议版本 = "1.2"
 夸克二维码Token地址 = "https://uop.quark.cn/cas/ajax/getTokenForQrcodeLogin"
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
+
+
+def _生成夸克扫码请求参数(**附加参数: Any) -> dict[str, Any]:
+    参数: dict[str, Any] = {
+        "client_id": 夸克扫码客户端ID,
+        "v": 夸克扫码协议版本,
+        "request_id": str(uuid.uuid4()),
+    }
+    参数.update(附加参数)
+    return 参数
 
 
 class 夸克扫码登录异常(RuntimeError):
@@ -56,6 +68,7 @@ class 夸克扫码登录客户端:
                 cookie_jar=aiohttp.CookieJar(unsafe=True),
                 headers={
                     "accept": "application/json, text/plain, */*",
+                    "content-type": "application/x-www-form-urlencoded",
                     "referer": "https://pan.quark.cn/",
                     "user-agent": (
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -70,11 +83,7 @@ class 夸克扫码登录客户端:
         try:
             async with self._获取会话().get(
                 夸克二维码Token地址,
-                params={"_": str(time.time_ns())},
-                headers={
-                    "cache-control": "no-cache, no-store, max-age=0",
-                    "pragma": "no-cache",
-                },
+                params=_生成夸克扫码请求参数(),
             ) as 响应:
                 数据 = await 响应.json(content_type=None)
         except Exception as 异常:
@@ -104,7 +113,7 @@ class 夸克扫码登录客户端:
             try:
                 async with self._获取会话().get(
                     夸克扫码状态地址,
-                    params={"token": Token},
+                    params=_生成夸克扫码请求参数(token=Token),
                 ) as 响应:
                     数据 = await 响应.json(content_type=None)
             except Exception as 异常:
