@@ -68,7 +68,14 @@ class 夸克扫码登录客户端:
 
     async def 获取登录二维码(self) -> tuple[str, str]:
         try:
-            async with self._获取会话().get(夸克二维码Token地址) as 响应:
+            async with self._获取会话().get(
+                夸克二维码Token地址,
+                params={"_": str(time.time_ns())},
+                headers={
+                    "cache-control": "no-cache, no-store, max-age=0",
+                    "pragma": "no-cache",
+                },
+            ) as 响应:
                 数据 = await 响应.json(content_type=None)
         except Exception as 异常:
             raise 夸克扫码登录异常("token", type(异常).__name__) from 异常
@@ -484,6 +491,7 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
         旧任务 = 夸克扫码任务.pop(发送者标识, None)
         if 旧任务 is not None and not 旧任务.done():
             旧任务.cancel()
+            await asyncio.gather(旧任务, return_exceptions=True)
         客户端 = 夸克扫码登录客户端()
         try:
             Token, 登录地址 = await 客户端.获取登录二维码()
@@ -503,7 +511,7 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
         夸克扫码任务[发送者标识] = 任务
         return event.chain_result(
             [
-                Plain("请使用夸克网盘App扫码登录，二维码5分钟内有效。"),
+                Plain("已重新获取新的夸克登录二维码，请使用夸克网盘App扫码，5分钟内有效。"),
                 Image.fromBytes(二维码),
             ]
         )
