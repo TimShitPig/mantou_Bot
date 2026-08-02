@@ -1364,6 +1364,7 @@ def _parse_teb_info_blob(blob: bytes) -> list[dict]:
 
 QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
+QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
 QQ阅读进度日志分段数 = 10
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com", "novel.html5.qq.com")
@@ -1669,6 +1670,64 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
             or ""
         ).strip(),
     }
+
+
+def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
+    """把 QQ 阅读 App 搜索卡片归一为找书可用字段。"""
+    if not isinstance(data, dict):
+        return []
+    cards = data.get("cardlist") or data.get("cardList") or []
+    if not isinstance(cards, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        info = card.get("info") if isinstance(card.get("info"), dict) else {}
+        book_id = str(info.get("bid") or card.get("bid") or card.get("id") or "").strip()
+        title = str(
+            info.get("title") or info.get("bookName") or card.get("title") or ""
+        ).strip()
+        if not book_id.isdigit() or not title:
+            continue
+        result.append(
+            {
+                "platform": "QQ阅读",
+                "book_id": book_id,
+                "title": title,
+                "author": str(info.get("author") or card.get("author") or "未知").strip() or "未知",
+                "url": f"https://book.qq.com/book-detail/{book_id}",
+                "score": card.get("book_score") or info.get("score") or 0,
+                "word_count": info.get("allwords") or card.get("allwords") or 0,
+                "read_count": 0,
+            }
+        )
+    return result
+
+
+def _请求QQ阅读搜索(关键词: str, 需要数量: int) -> list[dict[str, Any]]:
+    keyword = str(关键词 or "").strip()
+    if not keyword:
+        return []
+    初始化参考核心()
+    fetcher = Fetcher()
+    try:
+        size = max(1, min(int(需要数量 or 20), 30))
+        response = fetcher._session.get(
+            QQ阅读搜索地址,
+            params={"key": keyword, "start": 0, "size": size},
+            headers=fetcher._auth_headers(int(time.time() * 1000)),
+            timeout=30,
+        )
+        response.raise_for_status()
+        return 解析QQ阅读搜索结果(response.json())[:size]
+    finally:
+        fetcher._session.close()
+
+
+async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    """使用 QQ 阅读 App 搜索接口获取找书候选。"""
+    return await asyncio.to_thread(_请求QQ阅读搜索, 关键词, 需要数量)
 
 
 def _请求参考书籍详情(book_id: str) -> dict[str, Any]:

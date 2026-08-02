@@ -56,6 +56,12 @@ except Exception as exc:
     点众小说 = None
     logger.warning(f"找书加载点众失败：error={exc}")
 
+try:
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读 as QQ阅读小说
+except Exception as exc:
+    QQ阅读小说 = None
+    logger.warning(f"找书加载QQ阅读失败：error={exc}")
+
 
 每页数量 = 5
 会话等待秒数 = 300
@@ -74,6 +80,11 @@ except Exception as exc:
 番茄目录预检并发数 = 4
 番茄目录预检最大候选数 = 8
 番茄目录预检缓存: dict[str, tuple[float, bool | None]] = {}
+# QQ 阅读找书不展示章节单独付费书籍。搜索候选必须先完成详情与目录
+# 预检；网络状态未知也不保留，避免用户点选后才得知不支持下载。
+QQ阅读预检缓存秒数 = 600
+QQ阅读预检并发数 = 5
+QQ阅读预检缓存: dict[str, tuple[float, bool]] = {}
 
 
 def 清理文本(值: Any) -> str:
@@ -233,6 +244,10 @@ def 构造七猫链接(书籍编号: str, 是否短篇: bool = False) -> str:
 
 def 构造书旗链接(书籍编号: str) -> str:
     return f"https://www.shuqi.com/book/{书籍编号}.html"
+
+
+def 构造QQ阅读链接(书籍编号: str) -> str:
+    return f"https://book.qq.com/book-detail/{书籍编号}"
 
 
 def _安全浮点(值: Any, 默认: float = 0.0) -> float:
@@ -821,9 +836,109 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
         return []
 
 
+async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if QQ阅读小说 is None:
+        return []
+    try:
+        原始结果 = await QQ阅读小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书QQ阅读搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        return []
+
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        book_id = str(书籍.get("book_id") or "").strip()
+        title = 清理文本(书籍.get("title"))
+        if not book_id.isdigit() or not title:
+            continue
+        author = 清理文本(书籍.get("author") or "未知") or "未知"
+        评分 = _安全浮点(书籍.get("score"))
+        if 评分 > 10:
+            评分 /= 10
+        字数 = _安全整数热度(书籍.get("word_count"))
+        阅读量 = _安全整数热度(书籍.get("read_count"))
+        热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
+        结果.append({
+            "platform": "QQ阅读",
+            "book_id": book_id,
+            "title": title,
+            "author": author,
+            "url": str(书籍.get("url") or 构造QQ阅读链接(book_id)),
+            "heat": 热度值,
+            "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+            "score": 评分,
+            "read_count": 阅读量,
+            "word_count": 书籍.get("word_count") or 0,
+        })
+    return 结果[:需要数量]
+
+
+def _清理QQ阅读预检缓存() -> None:
+    现在 = time.time()
+    if len(QQ阅读预检缓存) < 512:
+        return
+    for book_id, (缓存时间, _状态) in list(QQ阅读预检缓存.items()):
+        if 现在 - 缓存时间 >= QQ阅读预检缓存秒数:
+            QQ阅读预检缓存.pop(book_id, None)
+
+
+async def 预检QQ阅读候选(book_id: str) -> bool:
+    """仅确认免费或会员免费的完整 QQ 阅读候选可以进入找书结果。"""
+    书籍编号 = str(book_id or "").strip()
+    if not 书籍编号.isdigit() or QQ阅读小说 is None:
+        return False
+    _清理QQ阅读预检缓存()
+    现在 = time.time()
+    缓存 = QQ阅读预检缓存.get(书籍编号)
+    if 缓存 is not None and 现在 - 缓存[0] < QQ阅读预检缓存秒数:
+        return 缓存[1]
+    try:
+        details = await QQ阅读小说.获取参考书籍详情(书籍编号)
+        chapter_count = _安全整数热度(details.get("chapters"))
+        catalog, _published = await QQ阅读小说.获取参考兼容目录(
+            书籍编号,
+            chapter_count,
+        )
+        # 目录必须完整，避免搜索页保留最终无法合成完整 TXT 的候选。
+        available = bool(catalog) and (
+            chapter_count <= 0 or len(catalog) == chapter_count
+        )
+        allowed = available and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+    except Exception as exc:
+        logger.debug(
+            f"找书QQ阅读候选预检失败：book_id={书籍编号}, error={type(exc).__name__}"
+        )
+        allowed = False
+    QQ阅读预检缓存[书籍编号] = (现在, allowed)
+    return allowed
+
+
+async def 过滤章节单独付费QQ阅读搜索结果(
+    结果: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """找书只保留全免费、或详情明确标记会员免费的 QQ 阅读书籍。"""
+    if not 结果 or QQ阅读小说 is None:
+        return []
+    限流 = asyncio.Semaphore(QQ阅读预检并发数)
+
+    async def 检查(项: dict[str, Any]) -> tuple[str, bool]:
+        书籍编号 = str(项.get("book_id") or "").strip()
+        async with 限流:
+            return 书籍编号, await 预检QQ阅读候选(书籍编号)
+
+    检查结果 = await asyncio.gather(*(检查(项) for 项 in 结果))
+    可用书籍编号 = {book_id for book_id, allowed in 检查结果 if allowed}
+    return [
+        项 for 项 in 结果
+        if str(项.get("book_id") or "").strip() in 可用书籍编号
+    ]
+
+
 def _平台优先级值(平台: Any) -> int:
-    """下载速度优先：番茄 > 七猫 > 书旗 > 得间 > 点众。"""
-    return {"番茄": 5, "七猫": 4, "书旗": 3, "得间": 2, "点众": 1}.get(str(平台 or ""), 0)
+    """下载速度优先：番茄 > 七猫 > QQ阅读 > 书旗 > 得间 > 点众。"""
+    return {"番茄": 6, "七猫": 5, "QQ阅读": 4, "书旗": 3, "得间": 2, "点众": 1}.get(str(平台 or ""), 0)
 
 
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
@@ -902,11 +1017,12 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
         番茄任务 = asyncio.create_task(搜索番茄(session, 关键词))
         七猫任务 = asyncio.create_task(搜索七猫(session, 关键词))
         书旗任务 = asyncio.create_task(搜索书旗(session, 关键词))
+        QQ阅读任务 = asyncio.create_task(搜索QQ阅读(关键词))
         得间任务 = asyncio.create_task(搜索得间(关键词))
         点众任务 = asyncio.create_task(搜索点众(关键词))
         联想任务 = asyncio.create_task(搜索书旗联想(session, 关键词))
-        番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果, 联想词 = await asyncio.gather(
-            番茄任务, 七猫任务, 书旗任务, 得间任务, 点众任务, 联想任务, return_exceptions=False
+        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 联想词 = await asyncio.gather(
+            番茄任务, 七猫任务, 书旗任务, QQ阅读任务, 得间任务, 点众任务, 联想任务, return_exceptions=False
         )
         # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
         # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
@@ -915,24 +1031,27 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
             关键词,
             搜索类型=搜索类型,
         )
-        合并 = 去重合并([番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果])
+        QQ阅读结果 = await 过滤章节单独付费QQ阅读搜索结果(QQ阅读结果)
+        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果])
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果]
             for w in 补搜词:
                 t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
                 t3 = asyncio.create_task(搜索书旗(session, w, 需要数量=10))
-                r1, r2, r3 = await asyncio.gather(t1, t2, t3)
+                t4 = asyncio.create_task(搜索QQ阅读(w, 需要数量=10))
+                r1, r2, r3, r4 = await asyncio.gather(t1, t2, t3, t4)
                 r1 = await 过滤无目录番茄搜索结果(
                     r1,
                     关键词,
                     搜索类型=搜索类型,
                     最大数量=5,
                 )
-                补结果集合.extend([r1, r2, r3])
+                r4 = await 过滤章节单独付费QQ阅读搜索结果(r4)
+                补结果集合.extend([r1, r2, r3, r4])
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词, 搜索类型)
 
@@ -1077,6 +1196,8 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 七猫小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "书旗" and 书旗小说 is not None:
         return 书旗小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "QQ阅读" and QQ阅读小说 is not None:
+        return QQ阅读小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "得间" and 得间小说 is not None:
         return 得间小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "点众" and 点众小说 is not None:
