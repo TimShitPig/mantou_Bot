@@ -2410,7 +2410,12 @@ async def 是否番茄一章短篇来源(命令文本: Any) -> bool:
     展开来源 = await 展开番茄短链(来源)
     return bool(提取番茄短篇编号(展开来源))
 
-async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = None):
+async def 生成番茄下载回复流(
+    event: Any,
+    来源: str,
+    配置: Any = None,
+    找书候选: dict[str, Any] | None = None,
+):
     try:
         解析来源 = str(来源 or "").strip()
         if not 解析来源:
@@ -2430,7 +2435,7 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
         if 短篇编号:
             准备结果 = await asyncio.to_thread(准备番茄短篇下载数据同步, 解析来源, 短篇编号)
         else:
-            准备结果 = await asyncio.to_thread(准备番茄下载数据同步, 书籍编号)
+            准备结果 = await asyncio.to_thread(准备番茄下载数据同步, 书籍编号, 找书候选)
         书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
         书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
         目录 = 准备结果.get("chapters") or []
@@ -2484,7 +2489,10 @@ async def 生成番茄下载回复流(event: Any, 来源: str, 配置: Any = Non
         logger.warning(f"番茄小说下载失败：source={限制番茄日志文本(来源, 300)}, error={异常}")
         yield 番茄下载失败提示
 
-def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
+def 准备番茄下载数据同步(
+    书籍编号: str,
+    找书候选: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     原始书籍编号 = str(书籍编号 or "").strip()
     直接正文书籍元数据: dict[str, Any] = {}
     try:
@@ -2522,6 +2530,19 @@ def 准备番茄下载数据同步(书籍编号: str) -> dict[str, Any]:
         if str(item_id or "").strip()
     ]
     书籍信息 = 规范化番茄书籍信息(书籍编号, 详情, len(目录))
+    候选信息 = 找书候选 if isinstance(找书候选, dict) else {}
+    详情字数 = 提取有效番茄字数(书籍信息.get("word_count"))
+    候选字数 = 提取有效番茄字数(
+        候选信息.get("word_count"),
+        候选信息.get("word_number"),
+        候选信息.get("words"),
+    )
+    if 详情字数 <= 0 and 候选字数 > 0:
+        书籍信息["word_count"] = 格式化番茄字数(候选字数)
+    elif 详情字数 <= 0:
+        估算字数 = 估算番茄书籍字数(书籍编号, item_ids)
+        if 估算字数 > 0:
+            书籍信息["word_count"] = f"约{格式化番茄字数(估算字数)}"
     return {"book_id": 书籍编号, "book_info": 书籍信息, "chapters": 目录}
 
 
@@ -2679,14 +2700,98 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
         章节结果列表.append(结果)
     return 章节结果列表
 
+def 提取有效番茄字数(*候选值: Any) -> int:
+    """返回正整数总字数；空值、零值和异常展示值统一视为缺失。"""
+    for 候选 in 候选值:
+        文本 = str(候选 or "").strip().replace(",", "").replace(" ", "")
+        if not 文本:
+            continue
+        匹配 = re.fullmatch(r"(?:约)?(\d+(?:\.\d+)?)([万亿]?)(?:字)?", 文本)
+        if not 匹配:
+            continue
+        try:
+            数值 = float(匹配.group(1))
+        except (TypeError, ValueError):
+            continue
+        单位 = 匹配.group(2)
+        倍率 = 100000000 if 单位 == "亿" else 10000 if 单位 == "万" else 1
+        字数 = int(数值 * 倍率)
+        if 字数 > 0:
+            return 字数
+    return 0
+
+
+def 获取番茄字数估算样本章节(章节编号列表: list[str]) -> list[str]:
+    """取分布均匀的正文样本，避开首章偶发的异常短正文。"""
+    总数 = len(章节编号列表)
+    if 总数 <= 0:
+        return []
+    样本位置 = (0.10, 0.30, 0.50, 0.70, 0.90)
+    样本: list[str] = []
+    for 比例 in 样本位置:
+        位置 = min(总数 - 1, max(0, round((总数 - 1) * 比例)))
+        编号 = str(章节编号列表[位置] or "").strip()
+        if 编号 and 编号 not in 样本:
+            样本.append(编号)
+    return 样本
+
+
+def 估算番茄书籍字数(书籍编号: str, 章节编号列表: list[str]) -> int:
+    """详情没有有效字数时，以多个章节正文长度中位数给出约数。"""
+    样本章节 = 获取番茄字数估算样本章节(章节编号列表)
+    if len(样本章节) < 2:
+        return 0
+    try:
+        样本结果 = download_batch(书籍编号, 样本章节, allow_split=False)
+    except Exception as 异常:
+        logger.debug(
+            f"番茄小说字数估算失败：book_id={书籍编号}, "
+            f"error={限制番茄日志文本(str(异常), 160)}"
+        )
+        return 0
+
+    样本文字数: list[int] = []
+    for 序号, (章节编号, 正文信息, 解密密钥, 异常) in enumerate(样本结果, start=1):
+        if 异常 is not None or not isinstance(正文信息, dict):
+            continue
+        解密结果 = decrypt_item_worker((序号, 章节编号, 正文信息, 解密密钥))
+        if 解密结果.get("error"):
+            continue
+        正文 = 规范化番茄正文(解密结果.get("text") or "")
+        章节字数 = len(re.sub(r"\s+", "", 正文))
+        if 章节字数 >= 200:
+            样本文字数.append(章节字数)
+    if len(样本文字数) < 2:
+        return 0
+
+    样本文字数.sort()
+    中间 = len(样本文字数) // 2
+    中位数 = (
+        样本文字数[中间]
+        if len(样本文字数) % 2
+        else (样本文字数[中间 - 1] + 样本文字数[中间]) / 2
+    )
+    估算字数 = max(0, int(中位数 * len(章节编号列表)))
+    logger.debug(
+        f"番茄小说字数估算完成：book_id={书籍编号}, "
+        f"samples={len(样本文字数)}, estimate={估算字数}"
+    )
+    return 估算字数
+
+
 def 规范化番茄书籍信息(书籍编号: str, 详情: dict[str, Any], 章节数: int) -> dict[str, Any]:
     详情 = 详情 if isinstance(详情, dict) else {}
+    字数 = 提取有效番茄字数(
+        详情.get("word_number"),
+        详情.get("word_count"),
+        详情.get("words"),
+    )
     return {
         "book_id": 书籍编号,
         "title": 清理番茄网页文本(详情.get("book_name") or 详情.get("title") or f"番茄小说{书籍编号}"),
         "author": 清理番茄网页文本(详情.get("author") or 详情.get("author_name") or "未知"),
         "status": 获取番茄状态文本(详情),
-        "word_count": 格式化番茄字数(详情.get("word_number") or 详情.get("word_count") or 详情.get("words") or ""),
+        "word_count": 格式化番茄字数(字数),
         "chapter_count": 安全番茄整数(详情.get("chapter_number") or 详情.get("serial_count") or 章节数, 章节数),
         "intro": 清理番茄网页文本(详情.get("abstract") or 详情.get("sub_abstract") or 详情.get("description") or ""),
     }
@@ -2970,15 +3075,9 @@ def 规范化番茄正文(正文: Any) -> str:
     return 文本
 
 def 格式化番茄字数(值: Any) -> str:
-    文本 = str(值 or "").strip().replace(" ", "")
-    if not 文本:
+    字数 = 提取有效番茄字数(值)
+    if 字数 <= 0:
         return "未知"
-    if "字" in 文本:
-        return 文本
-    try:
-        字数 = int(float(文本))
-    except Exception:
-        return 文本
     if 字数 >= 100000000:
         return f"{round(字数 / 100000000, 1):g}亿字"
     if 字数 >= 10000:

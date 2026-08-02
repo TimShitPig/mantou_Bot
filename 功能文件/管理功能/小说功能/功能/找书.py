@@ -559,7 +559,8 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
         _安全整数热度(book.get("search_num")),
     )
     评分 = _安全浮点(book.get("score"))
-    字数 = _安全整数热度(book.get("word_number") or book.get("word_count"))
+    原始字数 = book.get("word_number") or book.get("word_count")
+    字数 = _安全整数热度(原始字数)
     热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
     return {
         "platform": "番茄",
@@ -571,6 +572,7 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
         "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
         "score": 评分,
         "read_count": 阅读量,
+        "word_count": 原始字数,
     }
 
 
@@ -1063,7 +1065,12 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         # 与用户直接发送可识别书籍 ID 的下载入口共用同一条流程。
         if not re.fullmatch(r"\d{15,25}", 书籍编号):
             return "下载失败"
-        return 番茄小说.生成番茄下载回复流(event, 书籍编号, 配置)
+        return 番茄小说.生成番茄下载回复流(
+            event,
+            书籍编号,
+            配置,
+            找书候选=选中,
+        )
     if not 链接:
         return "下载失败"
     if 平台 == "七猫" and 七猫小说 is not None:

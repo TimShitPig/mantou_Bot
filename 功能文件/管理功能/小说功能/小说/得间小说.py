@@ -35,7 +35,9 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-章节并发数 = 8
+得间批量章节数 = 7
+得间正文最大动态并发数 = 24
+得间批量重试次数 = 3
 
 # ===== 得间协议与解密（原 _得间源码） =====
 
@@ -199,15 +201,36 @@ class DejianClient:
             "downloadCount": _to_int(body.get("downloadCount")),
         }
 
-    def drm_auth_chapter(self, bid: str, chapter_id: int) -> Any:
+    def drm_batch_chapter(self, bid: str, chapter_ids: List[int]) -> Any:
+        ids = ",".join(str(int(chapter_id)) for chapter_id in chapter_ids if int(chapter_id) > 0)
+        if not ids:
+            raise ValueError("empty chapter ids")
         body = {
             "bookId": str(bid),
-            "chapterId": str(chapter_id),
+            "chapterIds": ids,
             "devId": self.session.get("devId", ""),
             "usrName": self.session.get("usr", ""),
         }
         signed = self.sign_params(body)
-        signed.update({"type": "0", "fid": "72"})
+        return self.post("/dj_drm/djdrm/getBatchChapter", signed, need_common_url=True)
+
+    def drm_auth_chapter(
+        self,
+        bid: str,
+        chapter_id: int,
+        auth_type: int = 0,
+        vip_code: str = "",
+    ) -> Any:
+        body = {
+            "bookId": str(bid),
+            "chapterId": str(int(chapter_id)),
+            "devId": self.session.get("devId", ""),
+            "usrName": self.session.get("usr", ""),
+        }
+        signed = self.sign_params(body)
+        signed.update({"type": str(max(0, _to_int(auth_type))), "fid": "72"})
+        if vip_code:
+            signed["vipCode"] = str(vip_code)
         return self.post("/dj_drm/djdrm/getAuthChapter", signed, need_common_url=True)
 
     def download(self, url: str) -> bytes:
@@ -216,59 +239,7 @@ class DejianClient:
         return r.content
 
 
-def chap_list_safe(client: DejianClient, bid: str, start: int = 1, end: int = 0, limit: int = 0) -> List[Dict[str, Any]]:
-    base_url = client.batch_download_manifest(bid)["downUrl"]
-    rows: List[Dict[str, Any]] = []
-    cur = max(1, int(start or 1))
-    end = int(end or 0)
-    limit = int(limit or 0)
-    while True:
-        sep = "&" if "?" in base_url else "?"
-        r = client.s.get(base_url + sep + urllib.parse.urlencode({"startChapID": cur}), timeout=client.timeout)
-        r.raise_for_status()
-        j = r.json() if r.content else {}
-        body = j.get("body") if isinstance(j, dict) else None
-        if not isinstance(body, dict):
-            break
-        items = body.get("downInfo") or []
-        if not isinstance(items, list):
-            break
-        added = 0
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            cid = int(it.get("chapterId") or 0)
-            if not cid or (end > 0 and cid > end):
-                continue
-            rows.append(it)
-            added += 1
-            if limit > 0 and len(rows) >= limit:
-                return rows
-        if body.get("end") or not items or added == 0:
-            break
-        last_cid = int((items[-1] or {}).get("chapterId") or 0)
-        if last_cid <= 0:
-            break
-        cur = last_cid + 1
-        if end > 0 and cur > end:
-            break
-    return rows
-
-
-def find_chapter_item(client: DejianClient, bid: str, chapter_id: int) -> Dict[str, Any]:
-    chapter_id = int(chapter_id)
-    for start, end, limit in (
-        (max(1, chapter_id - 3), chapter_id + 3, 50),
-        (chapter_id, chapter_id + 10, 20),
-        (1, chapter_id, 0),
-    ):
-        for it in chap_list_safe(client, bid, start=start, end=end, limit=limit):
-            if int(it.get("chapterId") or 0) == chapter_id:
-                return it
-    raise RuntimeError("chapter not found")
-
-
-def extract_token_b64(auth: Any, chapter_id: int) -> str:
+def extract_chapter_auth(auth: Any, chapter_id: int) -> Dict[str, Any]:
     if not isinstance(auth, dict):
         raise RuntimeError("auth error")
     body = auth.get("body")
@@ -276,14 +247,11 @@ def extract_token_b64(auth: Any, chapter_id: int) -> str:
         raise RuntimeError("no auth body")
     key = f"chapter_{chapter_id}"
     node = body.get(key)
-    if isinstance(node, dict) and node.get("token"):
-        return str(node["token"])
+    if isinstance(node, dict):
+        return dict(node)
     if body.get("token"):
-        return str(body["token"])
-    for v in body.values():
-        if isinstance(v, dict) and v.get("token"):
-            return str(v["token"])
-    raise RuntimeError("no token")
+        return dict(body)
+    raise RuntimeError("no chapter auth")
 
 
 def _rol3(x: int) -> int:
@@ -492,23 +460,89 @@ def decrypt_epub_text(epub_data: bytes, key: bytes) -> str:
     return text
 
 
-def get_chapter_text(bid: str, chapter_id: int) -> str:
-    client = DejianClient()
-    sess = client.session
-    usr = str(sess.get("usr") or "")
-    dev = str(sess.get("devId") or "")
-    if not usr or not dev:
-        raise RuntimeError("bad session")
+def 获取得间批量章节信息(client: DejianClient, 下载目录地址: str, 起始章节: int) -> List[Dict[str, Any]]:
+    分隔符 = "&" if "?" in 下载目录地址 else "?"
+    响应 = client.s.get(
+        下载目录地址 + 分隔符 + urllib.parse.urlencode({"startChapID": int(起始章节)}),
+        timeout=client.timeout,
+    )
+    响应.raise_for_status()
+    数据 = 响应.json() if 响应.content else {}
+    正文 = 数据.get("body") if isinstance(数据, dict) else None
+    章节列表 = 正文.get("downInfo") if isinstance(正文, dict) else None
+    if not isinstance(章节列表, list):
+        raise RuntimeError("batch downInfo missing")
+    return [章节 for 章节 in 章节列表 if isinstance(章节, dict)]
 
-    item = find_chapter_item(client, bid, chapter_id)
-    url = item.get("url") or item.get("downUrl") or item.get("downloadUrl") or ""
-    if not url:
-        raise RuntimeError("no chapter url")
 
-    auth = client.drm_auth_chapter(bid, chapter_id)
-    raw_token = native_rsa_unwrap(base64.b64decode(extract_token_b64(auth, chapter_id)))
-    stage1 = derive_stage1_key(raw_token, usr, dev)
-    return decrypt_epub_text(client.download(str(url)), stage1)
+def 下载得间批量章节正文(
+    书籍编号: str,
+    下载目录地址: str,
+    起始章节: int,
+    目标章节编号: List[int],
+) -> Dict[int, str]:
+    """每个任务请求一组 7 章直链和 DRM 授权，随后复用该 App 会话完成解密。"""
+    目标集合 = {int(章节编号) for 章节编号 in 目标章节编号 if int(章节编号) > 0}
+    已完成: Dict[int, str] = {}
+    if not 目标集合:
+        return 已完成
+
+    for 重试轮次 in range(1, 得间批量重试次数 + 1):
+        待下载 = 目标集合.difference(已完成)
+        if not 待下载:
+            break
+        client = DejianClient()
+        try:
+            章节信息 = 获取得间批量章节信息(client, 下载目录地址, 起始章节)
+            地址表 = {
+                _to_int(章节.get("chapterId")): str(
+                    章节.get("url") or 章节.get("downUrl") or 章节.get("downloadUrl") or ""
+                ).strip()
+                for 章节 in 章节信息
+                if _to_int(章节.get("chapterId")) in 待下载
+            }
+            授权章节 = [章节编号 for 章节编号 in sorted(待下载) if 地址表.get(章节编号)]
+            if not 授权章节:
+                continue
+            授权结果 = client.drm_batch_chapter(书籍编号, 授权章节)
+            用户名 = str(client.session.get("usr") or "")
+            设备号 = str(client.session.get("devId") or "")
+            if not 用户名 or not 设备号:
+                raise RuntimeError("batch session missing")
+        except Exception as exc:
+            logger.debug(
+                f"得间批量章节下载重试：book_id={书籍编号}, start={起始章节}, "
+                f"round={重试轮次}, error={type(exc).__name__}"
+            )
+            continue
+
+        for 章节编号 in 授权章节:
+            try:
+                授权信息 = extract_chapter_auth(授权结果, 章节编号)
+                授权类型 = _to_int(授权信息.get("type"))
+                初始令牌 = str(授权信息.get("token") or "").strip()
+                if 授权类型 != 3 or not 初始令牌:
+                    最终授权 = client.drm_auth_chapter(
+                        书籍编号,
+                        章节编号,
+                        授权类型,
+                        str(授权信息.get("vipCode") or ""),
+                    )
+                    授权信息 = extract_chapter_auth(最终授权, 章节编号)
+                令牌 = str(授权信息.get("token") or "").strip()
+                if not 令牌:
+                    raise RuntimeError("no token")
+                原始令牌 = native_rsa_unwrap(base64.b64decode(令牌))
+                密钥 = derive_stage1_key(原始令牌, 用户名, 设备号)
+                正文 = decrypt_epub_text(client.download(地址表[章节编号]), 密钥).strip()
+                if 正文:
+                    已完成[章节编号] = 正文
+            except Exception as exc:
+                logger.debug(
+                    f"得间章节下载重试：book_id={书籍编号}, chapter_id={章节编号}, "
+                    f"round={重试轮次}, error={type(exc).__name__}"
+                )
+    return 已完成
 
 
 
@@ -714,6 +748,7 @@ def get_chapter_catalog(bid: str) -> Dict[str, Any]:
         "raw": xml_text,
     }
 
+
 # ===== 业务封装 =====
 
 进度日志分段数 = 10
@@ -721,6 +756,10 @@ def get_chapter_catalog(bid: str) -> Dict[str, Any]:
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
 书籍编号正则 = re.compile(r"(?:bid|book[_-]?id|bookId)=(\d{5,})", re.I)
 路径编号正则 = re.compile(r"/(?:book|detail|books?)/(\d{5,})", re.I)
+
+
+def 计算得间正文动态并发数(批次总数: int) -> int:
+    return max(1, min(得间正文最大动态并发数, int(批次总数 or 0)))
 
 
 def 获取得间小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
@@ -766,8 +805,10 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
 
         章节结果 = await 下载全部章节(书籍编号, 目录)
         成功 = [x for x in 章节结果 if x.get("content")]
-        if not 成功:
-            logger.warning(f"得间小说下载失败：book_id={书籍编号}, success=0, total={len(目录)}")
+        if len(成功) != len(目录):
+            logger.warning(
+                f"得间小说下载失败：book_id={书籍编号}, success={len(成功)}, total={len(目录)}"
+            )
             yield "下载失败"
             return
 
@@ -793,34 +834,98 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
 async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, str]]:
     总数 = len(目录)
     结果: list[dict[str, str] | None] = [None] * 总数
-    信号量 = asyncio.Semaphore(章节并发数)
-    完成 = 0
-    成功 = 0
+    章节下标表: Dict[int, List[int]] = {}
+    无效章节下标: List[int] = []
+    for 下标, 章节 in enumerate(目录):
+        章节编号 = _to_int(章节.get("id") or 章节.get("chapter_id"))
+        if 章节编号 > 0:
+            章节下标表.setdefault(章节编号, []).append(下标)
+        else:
+            无效章节下标.append(下标)
+    if not 章节下标表:
+        return []
+    try:
+        下载目录 = await asyncio.to_thread(DejianClient().batch_download_manifest, 书籍编号)
+    except Exception as exc:
+        logger.warning(
+            f"得间批量下载目录获取失败：book_id={书籍编号}, error={type(exc).__name__}"
+        )
+        return []
+    下载目录地址 = str(下载目录.get("downUrl") or "").strip()
+    if not 下载目录地址:
+        logger.warning(f"得间批量下载目录为空：book_id={书籍编号}")
+        return []
 
-    async def 拉一章(下标: int, 章: dict[str, Any]) -> None:
-        nonlocal 完成, 成功
-        cid = int(章.get("id") or 章.get("chapter_id") or 0)
-        标题 = str(章.get("title") or 章.get("cn") or f"第{cid}章")
-        正文 = ""
-        async with 信号量:
-            if cid > 0:
-                try:
-                    正文 = await asyncio.to_thread(get_chapter_text, 书籍编号, cid)
-                except Exception as exc:
-                    logger.warning(f"得间章节下载失败：book_id={书籍编号}, chapter_id={cid}, error={exc}")
-                    正文 = ""
-        结果[下标] = {"title": 标题, "content": str(正文 or "").strip(), "id": str(cid)}
-        完成 += 1
-        if 正文:
-            成功 += 1
-        if 完成 == 1 or 完成 == 总数 or 完成 % max(1, 总数 // 进度日志分段数) == 0:
+    最大章节编号 = max(章节下标表)
+    批次任务 = [
+        (起始章节, [章节编号 for 章节编号 in range(起始章节, 起始章节 + 得间批量章节数) if 章节编号 in 章节下标表])
+        for 起始章节 in range(1, 最大章节编号 + 1, 得间批量章节数)
+    ]
+    批次任务 = [任务 for 任务 in 批次任务 if 任务[1]]
+    动态并发数 = 计算得间正文动态并发数(len(批次任务))
+    完成 = len(无效章节下标)
+    成功 = 0
+    下一个任务 = 0
+    上次日志百分比 = 0
+    分配锁 = asyncio.Lock()
+    logger.info(
+        f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
+        f"batches={len(批次任务)}, batch_size={得间批量章节数}, concurrency={动态并发数}"
+    )
+
+    async def 拉一批(起始章节: int, 章节编号列表: List[int]) -> None:
+        nonlocal 完成, 成功, 上次日志百分比
+        正文表 = await asyncio.to_thread(
+            下载得间批量章节正文,
+            书籍编号,
+            下载目录地址,
+            起始章节,
+            章节编号列表,
+        )
+        for 章节编号 in 章节编号列表:
+            正文 = str(正文表.get(章节编号) or "").strip()
+            for 下标 in 章节下标表[章节编号]:
+                章 = 目录[下标]
+                标题 = str(章.get("title") or 章.get("cn") or f"第{章节编号}章")
+                结果[下标] = {"title": 标题, "content": 正文, "id": str(章节编号)}
+                完成 += 1
+                if 正文:
+                    成功 += 1
+        当前百分比 = int(完成 * 100 / max(总数, 1))
+        if 完成 == 总数 or 当前百分比 >= min(100, 上次日志百分比 + 进度日志分段数):
             logger.info(
                 f"得间小说章节进度：book_id={书籍编号}, progress={完成}/{总数}, "
-                f"percent={int(完成 * 100 / max(总数, 1))}%, success={成功}, failed={完成 - 成功}"
+                f"percent={当前百分比}%, success={成功}, failed={完成 - 成功}"
             )
+            上次日志百分比 = 当前百分比
 
-    await asyncio.gather(*(拉一章(i, 章) for i, 章 in enumerate(目录)))
-    return [x for x in 结果 if x is not None]
+    async def 工作者() -> None:
+        nonlocal 下一个任务
+        while True:
+            async with 分配锁:
+                if 下一个任务 >= len(批次任务):
+                    return
+                当前任务 = 批次任务[下一个任务]
+                下一个任务 += 1
+            await 拉一批(*当前任务)
+
+    await asyncio.gather(*(工作者() for _ in range(动态并发数)))
+    输出: list[dict[str, str]] = []
+    for 下标, 章 in enumerate(目录):
+        已下载 = 结果[下标]
+        if 已下载 is None:
+            章节编号 = _to_int(章.get("id") or 章.get("chapter_id"))
+            已下载 = {
+                "title": str(章.get("title") or 章.get("cn") or f"第{章节编号}章"),
+                "content": "",
+                "id": str(章节编号),
+            }
+        输出.append(已下载)
+    logger.info(
+        f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
+        f"batches={len(批次任务)}, batch_size={得间批量章节数}, concurrency={动态并发数}"
+    )
+    return 输出
 
 
 def 生成小说文件(书籍编号: str, 书名: str, 作者: str, 状态: str, 字数: str, 章节结果: list[dict[str, str]]) -> tuple[str, bytes]:
