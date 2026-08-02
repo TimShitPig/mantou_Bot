@@ -1377,6 +1377,7 @@ QQ阅读登录态状态键 = "login_state"
 )
 下载失败提示 = "下载失败"
 文件发送失败提示 = "文件发送失败，请稍后再试"
+章节单独付费提示 = "不支持章节单独付费的书籍\n只支持免费书籍和vip书籍"
 
 
 def _是QQ阅读域名(hostname: str) -> bool:
@@ -1582,6 +1583,31 @@ def _安全整数(value: Any, default: int = 0) -> int:
         return default
 
 
+def _是真值(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _详情支持VIP免费(objects: list[dict[str, Any]]) -> bool:
+    vip_free = _读取详情字段(
+        objects,
+        "vipFree",
+        "vip_free",
+        "isVipFree",
+        "is_vip_free",
+        default=False,
+    )
+    if _是真值(vip_free):
+        return True
+    message = str(
+        _读取详情字段(objects, "vipFreeMsg", "vip_free_msg", default="") or ""
+    ).strip()
+    return "会员免费" in message or ("vip" in message.lower() and "免费" in message)
+
+
 def _规范状态(value: Any) -> str:
     text = str(value or "").strip()
     lowered = text.lower()
@@ -1637,6 +1663,7 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
             or ""
         ).strip(),
         "chapters": _安全整数(chapters),
+        "vip_free": _详情支持VIP免费(objects),
         "intro": str(
             _读取详情字段(objects, "intro", "desc", "summary", "description", default="")
             or ""
@@ -1695,12 +1722,35 @@ def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
             title = ",".join(parts[1:-13]).strip()
         else:
             title = parts[1].strip() if len(parts) > 1 else ""
-        rows.append({"cid": cid, "title": title or f"第{cid}章"})
+        metadata = parts[-13:] if len(parts) >= 15 else []
+        chapter_fee = (
+            max(_安全整数(metadata[1]), _安全整数(metadata[3]))
+            if len(metadata) == 13
+            else 0
+        )
+        rows.append(
+            {
+                "cid": cid,
+                "title": title or f"第{cid}章",
+                "chapter_fee": chapter_fee,
+            }
+        )
     rows.sort(key=lambda row: int(row["cid"]))
     return [
-        {"cid": row["cid"], "index": index, "title": row["title"]}
+        {
+            "cid": row["cid"],
+            "index": index,
+            "title": row["title"],
+            "chapter_fee": row["chapter_fee"],
+        }
         for index, row in enumerate(rows, start=1)
     ]
+
+
+def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
+    if _是真值(details.get("vip_free")):
+        return False
+    return any(_安全整数(item.get("chapter_fee")) > 0 for item in catalog)
 
 
 def _请求参考书籍目录(book_id: str) -> list[dict[str, Any]]:
@@ -2261,6 +2311,9 @@ async def 生成下载回复流(
         if not catalog:
             raise RuntimeError("目录为空")
         details["chapters"] = len(catalog)
+        if 是章节单独付费书籍(details, catalog):
+            yield 章节单独付费提示
+            return
         logger.info(
             f"QQ阅读开始下载：book_id={book_id}, title={details.get('title')}, "
             f"author={details.get('author')}, chapters={len(catalog)}, "
