@@ -5,7 +5,6 @@ import io
 import json
 import re
 import time
-import uuid
 from typing import Any
 
 import aiohttp
@@ -39,6 +38,13 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
 
 
+class 夸克扫码登录异常(RuntimeError):
+    def __init__(self, 阶段: str, 状态: Any = ""):
+        super().__init__(f"夸克扫码登录失败：{阶段}")
+        self.阶段 = str(阶段 or "unknown")
+        self.状态 = str(状态 or "unknown")
+
+
 class 夸克扫码登录客户端:
     def __init__(self, session: Any = None):
         self.session = session
@@ -61,20 +67,22 @@ class 夸克扫码登录客户端:
         return self.session
 
     async def 获取登录二维码(self) -> tuple[str, str]:
-        请求ID = str(uuid.uuid4())
-        async with self._获取会话().get(
-            夸克二维码Token地址,
-            params={"client_id": 夸克扫码客户端ID, "v": "1.2", "request_id": 请求ID},
-        ) as 响应:
-            数据 = await 响应.json(content_type=None)
+        try:
+            async with self._获取会话().get(夸克二维码Token地址) as 响应:
+                数据 = await 响应.json(content_type=None)
+        except Exception as 异常:
+            raise 夸克扫码登录异常("token", type(异常).__name__) from 异常
+        if not isinstance(数据, dict):
+            raise 夸克扫码登录异常("token", "invalid_response")
         Token = str((((数据.get("data") or {}).get("members") or {}).get("token") or "")).strip()
         if 响应.status != 200 or 数据.get("status") != 2000000 or not Token:
-            raise RuntimeError("夸克扫码二维码获取失败")
+            raise 夸克扫码登录异常("token", 数据.get("status") or 响应.status)
         登录地址 = (
             "https://su.quark.cn/4_eMHBJ"
             f"?token={Token}&client_id={夸克扫码客户端ID}"
             "&ssb=weblogin&uc_param_str="
-            "&uc_biz_str=S%3Acustom%7CC%3Atitlebar_fix"
+            "&uc_biz_str=S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401"
+            "%7COPT%3ABACK_BTN_STYLE%400"
         )
         return Token, 登录地址
 
@@ -86,16 +94,16 @@ class 夸克扫码登录客户端:
     ) -> str:
         截止时间 = time.monotonic() + max(float(timeout), 0.1)
         while time.monotonic() < 截止时间:
-            async with self._获取会话().get(
-                夸克扫码状态地址,
-                params={
-                    "client_id": 夸克扫码客户端ID,
-                    "v": "1.2",
-                    "token": Token,
-                    "request_id": str(uuid.uuid4()),
-                },
-            ) as 响应:
-                数据 = await 响应.json(content_type=None)
+            try:
+                async with self._获取会话().get(
+                    夸克扫码状态地址,
+                    params={"token": Token},
+                ) as 响应:
+                    数据 = await 响应.json(content_type=None)
+            except Exception as 异常:
+                raise 夸克扫码登录异常("poll", type(异常).__name__) from 异常
+            if not isinstance(数据, dict):
+                raise 夸克扫码登录异常("poll", "invalid_response")
             状态 = 数据.get("status")
             if 响应.status == 200 and 状态 == 2000000:
                 票据 = str(
@@ -103,21 +111,39 @@ class 夸克扫码登录客户端:
                 ).strip()
                 if 票据:
                     return await self._使用票据获取Cookie(票据)
-            elif 状态 != 50004001:
-                raise RuntimeError("夸克扫码登录状态异常")
+                raise 夸克扫码登录异常("poll", "missing_service_ticket")
             if interval > 0:
                 await asyncio.sleep(interval)
         raise TimeoutError("夸克扫码登录超时")
 
     async def _使用票据获取Cookie(self, 票据: str) -> str:
-        async with self._获取会话().get(
-            夸克扫码换取Cookie地址,
-            params={"st": 票据, "lw": "scan"},
-            allow_redirects=True,
-        ) as 响应:
-            await 响应.text()
+        try:
+            async with self._获取会话().get(
+                夸克扫码换取Cookie地址,
+                params={
+                    "st": 票据,
+                    "lw": "scan",
+                    "fr": "pc",
+                    "platform": "pc",
+                },
+                allow_redirects=True,
+            ) as 响应:
+                数据 = await 响应.json(content_type=None)
+        except Exception as 异常:
+            raise 夸克扫码登录异常("auth", type(异常).__name__) from 异常
+        if 响应.status != 200 or not isinstance(数据, dict) or not 数据.get("success"):
+            状态 = 数据.get("code") if isinstance(数据, dict) else ""
+            raise 夸克扫码登录异常("auth", 状态 or 响应.status)
         Cookie字段: dict[str, str] = {}
-        for 地址 in ("https://pan.quark.cn/", "https://drive-pc.quark.cn/"):
+        for 名称, Morsel in getattr(响应, "cookies", {}).items():
+            值 = str(getattr(Morsel, "value", Morsel) or "").strip()
+            if 值:
+                Cookie字段[str(名称)] = 值
+        for 地址 in (
+            "https://pan.quark.cn/",
+            "https://pan.quark.cn/account/info",
+            "https://drive-pc.quark.cn/",
+        ):
             for 名称, Morsel in self._获取会话().cookie_jar.filter_cookies(URL(地址)).items():
                 值 = str(getattr(Morsel, "value", Morsel) or "").strip()
                 if 值:
@@ -125,7 +151,7 @@ class 夸克扫码登录客户端:
         Cookie = "; ".join(f"{名称}={值}" for 名称, 值 in Cookie字段.items())
         解析结果 = 解析网盘Cookie(f"夸克 Cookie: {Cookie}")
         if not 解析结果 or not 解析结果[1]:
-            raise RuntimeError("夸克扫码登录未返回完整Cookie")
+            raise 夸克扫码登录异常("cookie", "missing_required_fields")
         return 解析结果[1]
 
     async def 关闭(self) -> None:
@@ -190,6 +216,9 @@ def _从CookieJSON提取(数据: Any, 字段: dict[str, tuple[str, str]], 域名
                 "b-user-id",
                 "__puus",
                 "__uid",
+                "__kps",
+                "__kp",
+                "__ktd",
                 "ctoken",
                 "udrive_transfer_sess",
             }:
@@ -272,7 +301,7 @@ def _识别平台(
     ):
         return "UC"
     if (
-        {"b-user-id", "__puus"}.issubset(名称集合)
+        ("__puus" in 名称集合 and bool({"b-user-id", "__uid", "__kps"} & 名称集合))
         or {"ctoken", "__puus"}.issubset(名称集合)
         or "quark.cn" in 域名文本
         or "pan.quark.cn" in 原文小写
@@ -289,7 +318,7 @@ def _Cookie字段完整(平台: str, 字段: dict[str, tuple[str, str]]) -> bool
             {"ctoken", "__puus", "__uid"} & 名称集合
         )
     if 平台 == "夸克":
-        return "__puus" in 名称集合 and bool({"b-user-id", "__uid"} & 名称集合)
+        return "__puus" in 名称集合 and bool({"b-user-id", "__uid", "__kps"} & 名称集合)
     if 平台 == "百度":
         return {"bduss", "stoken"}.issubset(名称集合)
     return False
@@ -420,7 +449,11 @@ async def _等待夸克扫码并保存(
     except TimeoutError:
         await _发送扫码结果(event, "夸克网盘登录超时，请重新发送夸克登录")
     except Exception as 异常:
-        logger.warning(f"夸克扫码登录失败：error={type(异常).__name__}")
+        阶段 = str(getattr(异常, "阶段", "unknown") or "unknown")
+        状态 = str(getattr(异常, "状态", "unknown") or "unknown")
+        logger.warning(
+            f"夸克扫码登录失败：stage={阶段}, status={状态}, error={type(异常).__name__}"
+        )
         await _发送扫码结果(event, "夸克网盘登录失败，请稍后再试")
     finally:
         await 客户端.关闭()
@@ -457,7 +490,12 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
             二维码 = 生成夸克登录二维码(登录地址)
         except Exception as 异常:
             await 客户端.关闭()
-            logger.warning(f"夸克扫码二维码生成失败：error={type(异常).__name__}")
+            阶段 = str(getattr(异常, "阶段", "token") or "token")
+            状态 = str(getattr(异常, "状态", "unknown") or "unknown")
+            logger.warning(
+                f"夸克扫码二维码生成失败：stage={阶段}, status={状态}, "
+                f"error={type(异常).__name__}"
+            )
             return "夸克网盘登录失败，请稍后再试"
         任务 = asyncio.create_task(
             _等待夸克扫码并保存(event, 配置, 发送者标识, 客户端, Token)
