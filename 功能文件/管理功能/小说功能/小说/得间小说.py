@@ -475,6 +475,7 @@ class 得间异步下载通道:
     刷新次数: int = 0
     会话参数: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _刷新锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _授权锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.名称 = self.名称 if self.名称 in 得间客户端配置 else "normal"
@@ -647,24 +648,26 @@ async def 异步下载得间批量章节正文(
         当前下载目录地址 = ""
         需要刷新目录 = False
         try:
-            当前下载目录地址 = await 下载通道.获取下载目录地址(HTTP会话, 书籍编号)
-            章节信息 = await 下载通道.获取批量章节信息(HTTP会话, 当前下载目录地址, 起始章节)
-            地址表 = {
-                _to_int(章节.get("chapterId")): str(
-                    章节.get("url") or 章节.get("downUrl") or 章节.get("downloadUrl") or ""
-                ).strip()
-                for 章节 in 章节信息
-                if _to_int(章节.get("chapterId")) in 待下载
-            }
-            授权章节 = [章节编号 for 章节编号 in sorted(待下载) if 地址表.get(章节编号)]
-            需要刷新目录 = bool(待下载.difference(地址表))
-            if not 授权章节:
-                raise RuntimeError("batch chapter url missing")
-            授权结果 = await 下载通道.请求批量授权(HTTP会话, 书籍编号, 授权章节)
-            用户名 = str(下载通道.会话参数.get("usr") or "")
-            设备号 = str(下载通道.会话参数.get("devId") or "")
-            if not 用户名 or not 设备号:
-                raise RuntimeError("batch session missing")
+            # 同一个 App 会话并发授权会返回空 token；正文下载仍在锁外并行。
+            async with 下载通道._授权锁:
+                当前下载目录地址 = await 下载通道.获取下载目录地址(HTTP会话, 书籍编号)
+                章节信息 = await 下载通道.获取批量章节信息(HTTP会话, 当前下载目录地址, 起始章节)
+                地址表 = {
+                    _to_int(章节.get("chapterId")): str(
+                        章节.get("url") or 章节.get("downUrl") or 章节.get("downloadUrl") or ""
+                    ).strip()
+                    for 章节 in 章节信息
+                    if _to_int(章节.get("chapterId")) in 待下载
+                }
+                授权章节 = [章节编号 for 章节编号 in sorted(待下载) if 地址表.get(章节编号)]
+                需要刷新目录 = bool(待下载.difference(地址表))
+                if not 授权章节:
+                    raise RuntimeError("batch chapter url missing")
+                授权结果 = await 下载通道.请求批量授权(HTTP会话, 书籍编号, 授权章节)
+                用户名 = str(下载通道.会话参数.get("usr") or "")
+                设备号 = str(下载通道.会话参数.get("devId") or "")
+                if not 用户名 or not 设备号:
+                    raise RuntimeError("batch session missing")
         except Exception as 异常:
             logger.debug(
                 f"得间批量章节下载重试：book_id={书籍编号}, start={起始章节}, "
@@ -678,13 +681,14 @@ async def 异步下载得间批量章节正文(
                     授权类型 = _to_int(授权信息.get("type"))
                     初始令牌 = str(授权信息.get("token") or "").strip()
                     if 授权类型 != 3 or not 初始令牌:
-                        最终授权 = await 下载通道.请求单章授权(
-                            HTTP会话,
-                            书籍编号,
-                            章节编号,
-                            授权类型,
-                            str(授权信息.get("vipCode") or ""),
-                        )
+                        async with 下载通道._授权锁:
+                            最终授权 = await 下载通道.请求单章授权(
+                                HTTP会话,
+                                书籍编号,
+                                章节编号,
+                                授权类型,
+                                str(授权信息.get("vipCode") or ""),
+                            )
                         授权信息 = extract_chapter_auth(最终授权, 章节编号)
                     授权令牌 = str(授权信息.get("token") or "").strip()
                     if not 授权令牌:
@@ -1083,7 +1087,8 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
         logger.info(
             f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
             f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-            f"concurrency={动态并发数}, workers={批次工作者数}, decrypt_concurrency={解密并发数}"
+            f"concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
+            f"decrypt_concurrency={解密并发数}"
         )
 
         async def 拉一批(下载通道: 得间异步下载通道, 起始章节: int, 章节编号列表: List[int]) -> None:
@@ -1139,7 +1144,8 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
     logger.info(
         f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
         f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-        f"concurrency={动态并发数}, workers={批次工作者数}, decrypt_concurrency={解密并发数}, manifest_refreshes="
+        f"concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
+        f"decrypt_concurrency={解密并发数}, manifest_refreshes="
         f"{','.join(f'{通道.名称}:{通道.刷新次数}' for 通道 in 可用通道)}"
     )
     return 输出
