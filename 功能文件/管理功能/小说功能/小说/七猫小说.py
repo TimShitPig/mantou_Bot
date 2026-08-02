@@ -78,7 +78,14 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
         return
 
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)) as session:
+        connector = aiohttp.TCPConnector(
+            limit=下载并发数,
+            limit_per_host=下载并发数,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             下载目标 = await 解析七猫下载目标(session, 关键词)
             书籍编号 = 下载目标.get("book_id", "")
             if not 书籍编号:
@@ -469,12 +476,14 @@ def 格式化字数(字数: Any) -> str:
     文本 = str(字数 or "").strip()
     if not 文本:
         return "未知"
-    if "字" in 文本:
-        return 文本
-    if 文本.isdigit():
-        数值 = int(文本)
+    数字文本 = re.sub(r"[\s,，]", "", 文本)
+    if 数字文本.endswith("字"):
+        数字文本 = 数字文本[:-1]
+    if 数字文本.isdigit():
+        数值 = int(数字文本)
         if 数值 >= 10000:
-            return f"{round(数值 / 10000)}万字"
+            万字 = f"{数值 / 10000:.1f}".rstrip("0").rstrip(".")
+            return f"{万字}万字"
         return f"{数值}字"
     return 文本
 

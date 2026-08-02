@@ -1,4 +1,5 @@
 aiohttp
+httpx[http2]
 requests
 pycryptodome
 gmpy2

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import concurrent.futures
+from contextlib import AsyncExitStack
 import gzip
 import hashlib
 import html
@@ -31,6 +31,11 @@ try:
     import aiohttp
 except Exception:
     aiohttp = None
+
+try:
+    import httpx
+except Exception:
+    httpx = None
 
 try:
     from Crypto.Cipher import AES as PYCRYPTODOME_AES
@@ -1583,6 +1588,47 @@ def signed_app_json(path:str, body:Any=None, query:Optional[Dict[str,str]]=None,
             return http_json(url, method, h, None, timeout=timeout)
         return http_json_bytes(url, method, h, body_bytes, timeout=timeout)
 
+
+async def 异步签名番茄JSON(
+    client: Any,
+    path: str,
+    body: Any = None,
+    query: Optional[Dict[str, str]] = None,
+    *,
+    method: str = "POST",
+    sign_mode: str = "auto",
+    unsigned_fallback: bool = True,
+) -> Dict[str, Any]:
+    """使用复用异步会话请求番茄 App RPC，并保留必要的无签名兼容分支。"""
+    url = make_url(path, query or {})
+    method = method.upper()
+    body_bytes = b"" if body is None else json_body_bytes(body)
+    try:
+        return await 异步番茄JSON请求(
+            client,
+            url,
+            method=method,
+            headers=make_app_headers(url, body_bytes, sign_mode),
+            content=body_bytes,
+            retries=2,
+        )
+    except Exception:
+        if not unsigned_fallback:
+            raise
+        headers = {
+            key: value
+            for key, value in APP_COMMON_HEADERS.items()
+            if method != "GET" or key.lower() != "content-type"
+        }
+        return await 异步番茄JSON请求(
+            client,
+            url,
+            method=method,
+            headers=headers,
+            content=body_bytes,
+            retries=2,
+        )
+
 def resolve_book_id(value:str)->str:
     """从 book_id、番茄小说链接、App schema/share 文本中提取 book_id。
 
@@ -1731,6 +1777,96 @@ def full_mget_request_options(body_bytes: bytes, sign_mode: str = "auto") -> Lis
         options.append(("畅听旧签名", headers, url))
     return options
 
+
+def 创建番茄正文HTTP客户端(并发数: int) -> Any:
+    """创建支持 HTTP/2 多路复用的正文会话。"""
+    if httpx is None:
+        raise RuntimeError("番茄小说缺少 httpx 依赖")
+    并发数 = max(1, int(并发数 or 1))
+    return httpx.AsyncClient(
+        http2=FULL_MGET_TRANSPORT != "http1",
+        follow_redirects=True,
+        limits=httpx.Limits(
+            max_connections=并发数,
+            max_keepalive_connections=并发数,
+            keepalive_expiry=30.0,
+        ),
+        timeout=httpx.Timeout(60.0, connect=15.0),
+    )
+
+
+async def 异步番茄JSON请求(
+    client: Any,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    content: bytes = b"",
+    retries: int = 2,
+) -> Dict[str, Any]:
+    """在复用会话中请求并解析 JSON，网络重试不占用解密线程。"""
+    latest_error: BaseException | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            response = await client.request(
+                method,
+                url,
+                headers=headers,
+                content=content if content else None,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            latest_error = exc
+            if attempt < max(1, retries):
+                await asyncio.sleep(0.2 * attempt)
+    raise RuntimeError("番茄小说正文请求失败") from latest_error
+
+
+async def 异步full_mget(
+    client: Any,
+    book_id: str,
+    item_ids: List[str],
+    sign_mode: str = "auto",
+) -> Tuple[Dict[str, Any], int]:
+    """使用 HTTP/2 异步会话拉取一批畅听正文。"""
+    client_x, request_key = await asyncio.to_thread(make_encrypt_context)
+    request_body = {
+        "item_ids": [str(item_id) for item_id in item_ids],
+        "book_id": NOVELFM_REQUEST_BOOK_ID,
+        "key": request_key,
+        "need_stt": False,
+        "scene": 3,
+        "tone_id": 91,
+    }
+    body_bytes = json_body_bytes(request_body)
+    last_response: Dict[str, Any] = {}
+    request_options = await asyncio.to_thread(
+        full_mget_request_options,
+        body_bytes,
+        sign_mode,
+    )
+    for index, (mode, headers, url) in enumerate(request_options):
+        data = await 异步番茄JSON请求(
+            client,
+            url,
+            method="POST",
+            headers=headers,
+            content=body_bytes,
+            retries=2,
+        )
+        last_response = data if isinstance(data, dict) else {}
+        if (
+            last_response.get("code") == 6000
+            and index < len(request_options) - 1
+            and mode not in {"fixed", "pure3040-legacy"}
+        ):
+            logger.debug("番茄小说正文签名已失效，继续尝试下一个内置签名")
+            continue
+        return last_response, client_x
+    return last_response, client_x
+
 def html_to_text(doc:str)->str:
     doc=re.sub(r'(?is)<(script|style).*?>.*?</\1>','',doc)
     paras=re.findall(r'(?is)<p\b[^>]*>(.*?)</p>',doc)
@@ -1749,6 +1885,17 @@ def batches(xs:List[str], n:int):
 def book_detail(book_id:str)->Dict[str,Any]:
     data=http_json(make_url('/novelfm/bookapi/detail/v1/',{'book_id':book_id}),headers={'User-Agent':DEFAULT_UA,'Accept-Encoding':'gzip'})
     return data.get('data') or {}
+
+
+async def 异步获取番茄书籍详情(client: Any, book_id: str) -> Dict[str, Any]:
+    data = await 异步番茄JSON请求(
+        client,
+        make_url("/novelfm/bookapi/detail/v1/", {"book_id": str(book_id)}),
+        headers={"User-Agent": DEFAULT_UA, "Accept-Encoding": "gzip"},
+        retries=2,
+    )
+    detail = data.get("data") if isinstance(data, dict) else None
+    return detail if isinstance(detail, dict) else {}
 
 
 def 标准化番茄书籍比对文本(值: Any) -> str:
@@ -1847,6 +1994,81 @@ def 获取番茄同书精确字数(
     return 0
 
 
+async def 异步获取番茄同书精确字数(
+    client: Any,
+    书籍编号: str,
+    详情: Dict[str, Any],
+    章节数: int = 0,
+) -> int:
+    if 提取有效番茄字数(
+        详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
+    ) > 0:
+        return 0
+    title = str(详情.get("book_name") or 详情.get("title") or "").strip()
+    author = str(详情.get("author") or 详情.get("author_name") or "").strip()
+    normalized_title = 标准化番茄书籍比对文本(title)
+    normalized_author = 标准化番茄书籍比对文本(author)
+    target_count = max(0, int(章节数 or 0))
+    if not normalized_title or not normalized_author:
+        return 0
+    try:
+        response = await 异步签名番茄JSON(
+            client,
+            "/novelfm/bookmall/search/page/v1/",
+            {"query": title, "offset": 0, "limit": 20},
+            method="POST",
+        )
+    except Exception as exc:
+        logger.debug(
+            f"番茄小说精确字数补查失败：book_id={书籍编号}, error={type(exc).__name__}"
+        )
+        return 0
+    data = response.get("data") if isinstance(response, dict) else None
+    rows = data.get("search_data") if isinstance(data, dict) else None
+    candidates: list[tuple[int, str, int]] = []
+    for row in rows if isinstance(rows, list) else []:
+        for candidate in 提取番茄搜索书籍行(row):
+            candidate_id = str(candidate.get("book_id") or candidate.get("id") or "").strip()
+            word_count = 提取有效番茄字数(
+                candidate.get("word_number"), candidate.get("word_count"), candidate.get("words")
+            )
+            if not candidate_id or candidate_id == str(书籍编号) or word_count <= 0:
+                continue
+            if 标准化番茄书籍比对文本(candidate.get("book_name") or candidate.get("title")) != normalized_title:
+                continue
+            if 标准化番茄书籍比对文本(candidate.get("author") or candidate.get("author_name")) != normalized_author:
+                continue
+            candidate_chapters = 安全番茄整数(
+                candidate.get("serial_count") or candidate.get("chapter_number"), 0
+            )
+            difference = abs(candidate_chapters - target_count) if candidate_chapters and target_count else 0
+            if candidate_chapters and target_count and difference > 1:
+                continue
+            candidates.append((difference, candidate_id, word_count))
+    for _difference, candidate_id, expected_words in sorted(candidates):
+        try:
+            candidate_detail = await 异步获取番茄书籍详情(client, candidate_id)
+        except Exception as exc:
+            logger.debug(
+                f"番茄小说规范字数详情失败：book_id={书籍编号}, candidate_id={candidate_id}, "
+                f"error={type(exc).__name__}"
+            )
+            continue
+        if 标准化番茄书籍比对文本(candidate_detail.get("book_name") or candidate_detail.get("title")) != normalized_title:
+            continue
+        if 标准化番茄书籍比对文本(candidate_detail.get("author") or candidate_detail.get("author_name")) != normalized_author:
+            continue
+        actual_words = 提取有效番茄字数(
+            candidate_detail.get("word_number"), candidate_detail.get("word_count"), candidate_detail.get("words")
+        )
+        if actual_words == expected_words:
+            logger.debug(
+                f"番茄小说精确字数补查成功：book_id={书籍编号}, candidate_id={candidate_id}"
+            )
+            return actual_words
+    return 0
+
+
 def unique_item_ids(ids:Iterable[Any], book_id:str='')->List[str]:
     out=[]; seen=set()
     for x in ids:
@@ -1935,6 +2157,106 @@ def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mo
     return unique_item_ids(ids, book_id), data if isinstance(data,dict) else {'raw':data}
 
 
+def 解析番茄目录项目(data: Any, book_id: str) -> List[str]:
+    ids: List[Any] = []
+    if isinstance(data, dict):
+        payload = data.get("data")
+        candidates = [payload, data]
+        for obj in candidates:
+            if isinstance(obj, dict):
+                for key in ("item_ids", "itemIds", "chapter_ids", "chapterIds", "ids"):
+                    value = obj.get(key)
+                    if isinstance(value, list):
+                        ids.extend(value)
+                for key in ("items", "chapters", "list", "chapter_list", "item_data_list", "item_list", "data_list"):
+                    value = obj.get(key)
+                    if not isinstance(value, list):
+                        continue
+                    for item in value:
+                        if isinstance(item, dict):
+                            ids.append(item.get("item_id") or item.get("itemId") or item.get("id"))
+            elif isinstance(obj, list):
+                for item in obj:
+                    ids.append(
+                        (item.get("item_id") or item.get("itemId") or item.get("id"))
+                        if isinstance(item, dict)
+                        else item
+                    )
+    return unique_item_ids(ids, book_id)
+
+
+async def 异步获取番茄目录项目(
+    client: Any,
+    book_id: str,
+    *,
+    page_scene: int = 6,
+    version: int = 2,
+    sign_mode: str = "auto",
+) -> Tuple[List[str], Dict[str, Any]]:
+    path = "/novelfm/bookapi/directory/all_items_v2/v1/" if version == 2 else "/novelfm/bookapi/directory/all_items/v1/"
+    data = await 异步签名番茄JSON(
+        client,
+        path,
+        None,
+        {"book_id": str(book_id), "page_scene": str(page_scene)},
+        method="GET",
+        sign_mode=sign_mode,
+    )
+    return 解析番茄目录项目(data, book_id), data if isinstance(data, dict) else {"raw": data}
+
+
+async def 异步解析番茄目录(
+    client: Any,
+    book_id: str,
+) -> List[str]:
+    latest_error: BaseException | None = None
+    for version in (2, 1):
+        try:
+            item_ids, _response = await 异步获取番茄目录项目(client, book_id, version=version)
+            if item_ids:
+                return item_ids
+        except Exception as exc:
+            latest_error = exc
+    if latest_error is not None:
+        raise RuntimeError("番茄畅听目录接口请求失败") from latest_error
+    raise RuntimeError("番茄畅听目录接口未返回章节")
+
+
+async def 异步读取番茄目录元数据(
+    client: Any,
+    book_id: str,
+    item_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    chunks = [list(chunk) for chunk in batches(item_ids, 500)]
+    gate = asyncio.Semaphore(max(1, min(番茄正文最大动态并发数, len(chunks))))
+
+    async def 请求一批(chunk: List[str]) -> Dict[str, Dict[str, Any]]:
+        async with gate:
+            data = await 异步签名番茄JSON(
+                client,
+                "/novelfm/bookapi/directory/all_infos/v1/",
+                {"book_id": str(book_id), "item_ids": [str(item_id) for item_id in chunk], "page_scene": 6},
+            )
+        rows = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return {}
+        return {
+            str(row.get("item_id")): row
+            for row in rows if isinstance(row, dict) and row.get("item_id")
+        }
+
+    metadata: Dict[str, Dict[str, Any]] = {}
+    for index, result in enumerate(await asyncio.gather(*(请求一批(chunk) for chunk in chunks), return_exceptions=True)):
+        if isinstance(result, Exception):
+            logger.warning(
+                f"番茄小说目录元数据获取失败：book_id={book_id}, batch={index + 1}, "
+                f"error={type(result).__name__}"
+            )
+            continue
+        metadata.update(result)
+    return metadata
+
+
 # ===== 番茄阅读正文补拉 =====
 # 番茄畅听正文偶尔会返回 code=0 但单章正文为空；另有部分书在畅听/TTS
 # 记录失效后仍可通过番茄阅读正文接口读取。该补拉只在畅听正文不可用或缺
@@ -1965,6 +2287,7 @@ def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mo
 番茄阅读Argus魔数 = bytes.fromhex("a66ead9f7701d00c18")
 番茄阅读正文单次上限 = 30
 番茄阅读注册密钥缓存: Dict[int, bytes] = {}
+番茄阅读注册密钥异步锁: asyncio.Lock | None = None
 
 
 def _番茄阅读URL编码值(键: str, 值: Any) -> str:
@@ -2162,6 +2485,40 @@ def 请求番茄阅读JSON(路径: str, 额外参数: Iterable[Tuple[str, Any]] 
     return 响应 if isinstance(响应, dict) else {}
 
 
+def _获取番茄阅读注册密钥异步锁() -> asyncio.Lock:
+    global 番茄阅读注册密钥异步锁
+    if 番茄阅读注册密钥异步锁 is None:
+        番茄阅读注册密钥异步锁 = asyncio.Lock()
+    return 番茄阅读注册密钥异步锁
+
+
+async def 异步请求番茄阅读JSON(
+    client: Any,
+    路径: str,
+    额外参数: Iterable[Tuple[str, Any]] = (),
+    *,
+    method: str = "GET",
+    body: Any = None,
+) -> Dict[str, Any]:
+    毫秒时间戳 = int(time.time() * 1000)
+    原始查询 = 构造番茄阅读查询(额外参数, 毫秒时间戳=毫秒时间戳)
+    地址 = f"{番茄阅读API地址}{路径}?{原始查询}"
+    请求体 = b"" if body is None else json_body_bytes(body)
+    请求头 = 构造番茄阅读请求头(
+        原始查询,
+        毫秒时间戳,
+        内容类型="application/json" if body is not None else None,
+    )
+    return await 异步番茄JSON请求(
+        client,
+        地址,
+        method=method,
+        headers=请求头,
+        content=请求体,
+        retries=2,
+    )
+
+
 def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
     if 需要版本 and 需要版本 in 番茄阅读注册密钥缓存:
         return 番茄阅读注册密钥缓存[需要版本]
@@ -2185,6 +2542,45 @@ def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
     if 需要版本:
         番茄阅读注册密钥缓存[需要版本] = 密钥
     return 密钥
+
+
+async def 异步获取番茄阅读注册密钥(client: Any, 需要版本: int = 0) -> bytes:
+    if 需要版本 and 需要版本 in 番茄阅读注册密钥缓存:
+        return 番茄阅读注册密钥缓存[需要版本]
+    async with _获取番茄阅读注册密钥异步锁():
+        if 需要版本 and 需要版本 in 番茄阅读注册密钥缓存:
+            return 番茄阅读注册密钥缓存[需要版本]
+        iv = secrets.token_bytes(16)
+        payload = struct.pack("<QQ", int(番茄阅读设备ID), 0)
+        encrypted = aes_cbc_encrypt(payload, 番茄阅读注册AES密钥, iv)
+        content = base64.b64encode(iv + encrypted).decode()
+        response = await 异步请求番茄阅读JSON(
+            client,
+            "/reading/crypt/registerkey",
+            method="POST",
+            body={"content": content, "keyver": 1},
+        )
+        data = response.get("data") or {}
+        if response.get("code") != 0 or not isinstance(data, dict) or not data.get("key"):
+            raise RuntimeError("番茄阅读注册密钥失败")
+        raw = base64.b64decode(str(data["key"]))
+        if len(raw) < 32:
+            raise RuntimeError("番茄阅读注册密钥响应过短")
+        plaintext = await asyncio.to_thread(
+            aes_cbc_decrypt,
+            raw[16:],
+            番茄阅读注册AES密钥,
+            raw[:16],
+        )
+        if len(plaintext) < 16:
+            raise RuntimeError("番茄阅读注册密钥明文过短")
+        version = int(data.get("keyver") or 0)
+        key = plaintext[:16]
+        if version:
+            番茄阅读注册密钥缓存[version] = key
+        if 需要版本:
+            番茄阅读注册密钥缓存[需要版本] = key
+        return key
 
 
 def 解密番茄阅读正文(content: str, 密钥: bytes) -> str:
@@ -2220,6 +2616,25 @@ def 请求番茄阅读原始正文(item_ids: List[str]) -> Dict[str, Any]:
     )
 
 
+async def 异步请求番茄阅读原始正文(client: Any, item_ids: List[str]) -> Dict[str, Any]:
+    """通过当前 HTTP/2 会话请求阅读 App 的缺章补拉接口。"""
+    ids = [str(item_id).strip() for item_id in item_ids if str(item_id).strip()]
+    if len(ids) > 番茄阅读正文单次上限:
+        raise ValueError("番茄阅读原始正文请求超过单次章节上限")
+    if not ids:
+        return {"code": 0, "message": "", "data": {}}
+    return await 异步请求番茄阅读JSON(
+        client,
+        "/reading/reader/batch_full/v",
+        (
+            ("item_ids", ",".join(ids)),
+            ("key_register_ts", "0"),
+            ("book_id", 番茄阅读请求书籍编号),
+            ("req_type", "0"),
+        ),
+    )
+
+
 def 解析番茄阅读章节书籍编号(章节编号: str) -> Tuple[str, Dict[str, Any]]:
     """将 /reader/ 中的章节 ID 解析为真实书籍 ID，仅走阅读 App 正文接口。"""
     候选章节编号 = str(章节编号 or "").strip()
@@ -2242,6 +2657,31 @@ def 解析番茄阅读章节书籍编号(章节编号: str) -> Tuple[str, Dict[s
     if not re.fullmatch(r"\d{8,}", 真实书籍编号):
         raise RuntimeError("番茄阅读正文未返回有效书籍编号")
     return 真实书籍编号, 书籍元数据
+
+
+async def 异步解析番茄阅读章节书籍编号(
+    client: Any,
+    章节编号: str,
+) -> Tuple[str, Dict[str, Any]]:
+    candidate_id = str(章节编号 or "").strip()
+    if not re.fullmatch(r"\d{8,}", candidate_id):
+        raise RuntimeError("番茄阅读章节编号无效")
+    response = await 异步请求番茄阅读原始正文(client, [candidate_id])
+    if response.get("code") != 0:
+        raise RuntimeError("番茄阅读正文接口未返回章节")
+    raw_items = response.get("data") or {}
+    if not isinstance(raw_items, dict):
+        raise RuntimeError("番茄阅读正文响应格式错误")
+    item = raw_items.get(candidate_id)
+    if not isinstance(item, dict):
+        raise RuntimeError("番茄阅读正文未返回目标章节")
+    metadata = item.get("novel_data")
+    if not isinstance(metadata, dict):
+        raise RuntimeError("番茄阅读正文未返回书籍信息")
+    book_id = str(metadata.get("book_id") or "").strip()
+    if not re.fullmatch(r"\d{8,}", book_id):
+        raise RuntimeError("番茄阅读正文未返回有效书籍编号")
+    return book_id, metadata
 
 
 def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str, Any]:
@@ -2295,6 +2735,75 @@ def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str
     }
 
 
+async def 异步读取番茄阅读正文(
+    client: Any,
+    书籍编号: str,
+    item_ids: List[str],
+) -> Dict[str, Any]:
+    """异步读取阅读 App 正文，并用 PyCryptodome 的 AES-CBC 解密补拉内容。"""
+    ids = [str(item_id) for item_id in item_ids]
+    if len(ids) > 番茄阅读正文单次上限:
+        merged: Dict[str, Dict[str, Any]] = {}
+        parts = [list(part) for part in batches(ids, 番茄阅读正文单次上限)]
+        gate = asyncio.Semaphore(min(番茄正文最大动态并发数, len(parts)))
+
+        async def 读取分段(part: List[str]) -> Dict[str, Any]:
+            async with gate:
+                return await 异步读取番茄阅读正文(client, 书籍编号, part)
+
+        for partial in await asyncio.gather(*(读取分段(part) for part in parts)):
+            if partial.get("code") != 0:
+                return partial
+            item_infos = (partial.get("data") or {}).get("item_infos") or {}
+            if not isinstance(item_infos, dict):
+                raise RuntimeError("番茄阅读正文分段响应格式错误")
+            merged.update(item_infos)
+        return {
+            "code": 0,
+            "message": "",
+            "data": {"item_infos": merged},
+            "source": "novelapp_reader_batch_full",
+            "request_book_id": 番茄阅读请求书籍编号,
+        }
+
+    response = await 异步请求番茄阅读原始正文(client, ids)
+    if response.get("code") != 0:
+        return response
+    raw_items = response.get("data") or {}
+    if not isinstance(raw_items, dict):
+        raise RuntimeError("番茄阅读正文响应格式错误")
+    decrypt_gate = asyncio.Semaphore(max(1, min(64, (os.cpu_count() or 4) * 2)))
+
+    async def 解密章节(item_id: str) -> tuple[str, Dict[str, Any] | None]:
+        item = raw_items.get(item_id)
+        if not isinstance(item, dict):
+            return item_id, None
+        ciphertext = str(item.get("content") or "")
+        if not ciphertext:
+            return item_id, None
+        version = int(item.get("key_version") or 0)
+        key = await 异步获取番茄阅读注册密钥(client, version)
+        async with decrypt_gate:
+            plaintext = await asyncio.to_thread(解密番茄阅读正文, ciphertext, key)
+        info = dict(item)
+        info["content"] = plaintext
+        info["crypt_status"] = 0
+        info.setdefault("title", item.get("title") or "")
+        return item_id, info
+
+    infos: Dict[str, Dict[str, Any]] = {}
+    for item_id, item in await asyncio.gather(*(解密章节(item_id) for item_id in ids)):
+        if item is not None:
+            infos[item_id] = item
+    return {
+        "code": 0,
+        "message": response.get("message") or "",
+        "data": {"item_infos": infos},
+        "source": "novelapp_reader_batch_full",
+        "request_book_id": 番茄阅读请求书籍编号,
+    }
+
+
 def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原因: str) -> Optional[Dict[str, Any]]:
     try:
         响应 = 读取番茄阅读正文(书籍编号, item_ids)
@@ -2314,6 +2823,33 @@ def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原�
         logger.warning(
             f"番茄小说正文补拉失败：book_id={书籍编号}, reason={原因}, "
             f"error={限制番茄日志文本(str(异常), 200)}"
+        )
+    return None
+
+
+async def 异步尝试番茄阅读正文补拉(
+    client: Any,
+    书籍编号: str,
+    item_ids: List[str],
+    原因: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        response = await 异步读取番茄阅读正文(client, 书籍编号, item_ids)
+        infos = (response.get("data") or {}).get("item_infos") or {}
+        if response.get("code") == 0 and infos:
+            logger.debug(
+                f"番茄小说正文补拉成功：book_id={书籍编号}, reason={原因}, "
+                f"success={len(infos)}/{len(item_ids)}"
+            )
+            return response
+        logger.debug(
+            f"番茄小说正文补拉无可用章节：book_id={书籍编号}, reason={原因}, "
+            f"code={response.get('code')}, success={len(infos)}/{len(item_ids)}"
+        )
+    except Exception as exc:
+        logger.warning(
+            f"番茄小说正文补拉失败：book_id={书籍编号}, reason={原因}, "
+            f"error={type(exc).__name__}"
         )
     return None
 
@@ -2385,6 +2921,77 @@ def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mod
             mid=max(1,len(batch)//2)
             return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
         return [(item_id, None, None, e) for item_id in batch]
+
+
+async def 异步下载番茄正文批次(
+    client: Any,
+    request_gate: asyncio.Semaphore,
+    book_id: str,
+    batch: List[str],
+    *,
+    allow_split: bool = True,
+    sign_mode: str = "auto",
+) -> List[Tuple[str, Optional[Dict[str, Any]], Optional[int], Optional[BaseException]]]:
+    """异步拉取正文；缺章时只拆分失败范围并继续复用同一 HTTP/2 会话。"""
+    try:
+        async with request_gate:
+            response, client_x = await 异步full_mget(client, book_id, batch, sign_mode)
+        if response.get("code") != 0:
+            if _is_full_mget_non_split_error(response):
+                fallback = await 异步尝试番茄阅读正文补拉(
+                    client,
+                    book_id,
+                    batch,
+                    f"full_mget code={response.get('code')}",
+                )
+                if fallback:
+                    infos = (fallback.get("data") or {}).get("item_infos") or {}
+                    return [(item_id, infos.get(str(item_id)), 0, None) for item_id in batch]
+                raise FullMgetBusinessError(
+                    f"full_mget 业务错误: code={response.get('code')}, "
+                    f"message={_full_mget_response_message(response)}"
+                )
+            raise RuntimeError("full_mget 响应失败")
+
+        infos = (response.get("data") or {}).get("item_infos") or {}
+        if allow_split and len(batch) > 1 and len(infos) < len(batch):
+            midpoint = max(1, len(batch) // 2)
+            first, second = await asyncio.gather(
+                异步下载番茄正文批次(
+                    client, request_gate, book_id, batch[:midpoint], sign_mode=sign_mode
+                ),
+                异步下载番茄正文批次(
+                    client, request_gate, book_id, batch[midpoint:], sign_mode=sign_mode
+                ),
+            )
+            return first + second
+        if len(batch) == 1 and len(infos) < 1:
+            fallback = await 异步尝试番茄阅读正文补拉(
+                client,
+                book_id,
+                batch,
+                "full_mget missing item_info",
+            )
+            if fallback:
+                infos = (fallback.get("data") or {}).get("item_infos") or {}
+                if infos.get(str(batch[0])):
+                    return [(batch[0], infos.get(str(batch[0])), 0, None)]
+        return [(item_id, infos.get(str(item_id)), client_x, None) for item_id in batch]
+    except Exception as exc:
+        if isinstance(exc, FullMgetBusinessError):
+            return [(item_id, None, None, exc) for item_id in batch]
+        if allow_split and len(batch) > 1:
+            midpoint = max(1, len(batch) // 2)
+            first, second = await asyncio.gather(
+                异步下载番茄正文批次(
+                    client, request_gate, book_id, batch[:midpoint], sign_mode=sign_mode
+                ),
+                异步下载番茄正文批次(
+                    client, request_gate, book_id, batch[midpoint:], sign_mode=sign_mode
+                ),
+            )
+            return first + second
+        return [(item_id, None, None, exc) for item_id in batch]
 
 def decrypt_item_worker(args:Tuple[int,str,Dict[str,Any],int])->Dict[str,Any]:
     index,item_id,info,x=args
@@ -2529,10 +3136,15 @@ async def 生成番茄下载回复流(
             yield "没有识别到番茄小说链接"
             return
 
-        if 短篇编号:
-            准备结果 = await asyncio.to_thread(准备番茄短篇下载数据同步, 解析来源, 短篇编号)
-        else:
-            准备结果 = await asyncio.to_thread(准备番茄下载数据同步, 书籍编号, 找书候选)
+        async with 创建番茄正文HTTP客户端(番茄正文最大动态并发数) as HTTP客户端:
+            if 短篇编号:
+                准备结果 = await 异步准备番茄短篇下载数据(
+                    HTTP客户端, 解析来源, 短篇编号
+                )
+            else:
+                准备结果 = await 异步准备番茄下载数据(
+                    HTTP客户端, 书籍编号, 找书候选
+                )
         书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
         书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
         目录 = 准备结果.get("chapters") or []
@@ -2547,7 +3159,7 @@ async def 生成番茄下载回复流(
         )
         yield 格式化番茄下载提示(书籍信息, len(目录))
 
-        章节结果列表 = await asyncio.to_thread(下载番茄全部章节同步, 书籍编号, 目录)
+        章节结果列表 = await 异步下载番茄全部章节(书籍编号, 目录)
         成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get("success")]
         if len(成功章节列表) < len(目录):
             logger.warning(
@@ -2703,7 +3315,127 @@ def 准备番茄短篇下载数据同步(来源: str, 短篇编号: str) -> dict
         "chapters": [{"id": 章节编号, "title": 标题 or "第1章", "index": 1}],
     }
 
-def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
+
+async def 异步准备番茄下载数据(
+    client: Any,
+    书籍编号: str,
+    找书候选: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    original_id = str(书籍编号 or "").strip()
+    reader_metadata: dict[str, Any] = {}
+    try:
+        item_ids = await 异步解析番茄目录(client, original_id)
+    except Exception as directory_error:
+        try:
+            real_book_id, reader_metadata = await 异步解析番茄阅读章节书籍编号(client, original_id)
+            if real_book_id == original_id:
+                raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
+            item_ids = await 异步解析番茄目录(client, real_book_id)
+            书籍编号 = real_book_id
+            logger.debug(f"番茄小说目录回退成功：source=reader_item, chapters={len(item_ids)}")
+        except Exception as reader_error:
+            logger.warning(
+                f"番茄畅听目录获取失败：book_id={original_id}, "
+                f"error={type(directory_error).__name__}, direct_app_error={type(reader_error).__name__}"
+            )
+            raise directory_error from reader_error
+
+    detail: dict[str, Any] = {}
+    try:
+        detail = await 异步获取番茄书籍详情(client, str(书籍编号))
+    except Exception as exc:
+        logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={type(exc).__name__}")
+    if not detail and reader_metadata:
+        detail = reader_metadata
+
+    metadata = await 异步读取番茄目录元数据(client, str(书籍编号), item_ids)
+    catalog = [
+        {
+            "id": str(item_id),
+            "title": 获取番茄目录标题(metadata.get(str(item_id)) or {}, index),
+            "index": index,
+        }
+        for index, item_id in enumerate(item_ids, start=1)
+        if str(item_id or "").strip()
+    ]
+    book_info = 规范化番茄书籍信息(str(书籍编号), detail, len(catalog))
+    candidate = 找书候选 if isinstance(找书候选, dict) else {}
+    detail_words = 提取有效番茄字数(book_info.get("word_count"))
+    candidate_words = 提取有效番茄字数(
+        candidate.get("word_count"), candidate.get("word_number"), candidate.get("words")
+    )
+    if detail_words <= 0 and candidate_words > 0:
+        book_info["word_count"] = 格式化番茄字数(candidate_words)
+        detail_words = candidate_words
+    if detail_words <= 0:
+        exact_words = await 异步获取番茄同书精确字数(
+            client, str(书籍编号), detail, len(catalog)
+        )
+        if exact_words > 0:
+            book_info["word_count"] = 格式化番茄字数(exact_words)
+    return {"book_id": str(书籍编号), "book_info": book_info, "chapters": catalog}
+
+
+async def 异步准备番茄短篇下载数据(
+    client: Any,
+    来源: str,
+    短篇编号: str,
+) -> dict[str, Any]:
+    link_params = urllib.parse.parse_qs(urllib.parse.urlsplit(str(来源 or "")).query)
+
+    def 读取参数(name: str, default: str = "") -> str:
+        values = link_params.get(name) or []
+        return str(values[0] if values else default).strip()
+
+    params = {
+        "post_id": str(短篇编号),
+        "forum_book_id": 读取参数("forum_book_id", "0"),
+        "service_id": 读取参数("service_id", "0"),
+        "source_type": 读取参数("source_type", "28"),
+        "aid": 读取参数("aid", "1967"),
+        "update_version_code": 读取参数("update_version_code", "72732"),
+    }
+    headers = {"User-Agent": DEFAULT_UA, "Accept": "application/json, text/plain, */*"}
+    share_code = 读取参数("share_code")
+    if share_code:
+        headers["share-code"] = share_code
+    percent = 读取参数("percent")
+    if percent:
+        headers["percent"] = percent
+    response = await 异步番茄JSON请求(
+        client,
+        f"{番茄短篇详情地址}?{urllib.parse.urlencode(params)}",
+        headers=headers,
+        retries=2,
+    )
+    detail = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(detail, dict) or response.get("code") != 0:
+        raise RuntimeError("番茄短篇详情接口未返回可下载内容")
+    book_id = str(detail.get("relate_book_id") or "").strip()
+    chapter_id = str(detail.get("relate_item_id") or "").strip()
+    if not re.fullmatch(r"\d{8,}", book_id) or not re.fullmatch(r"\d{8,}", chapter_id):
+        raise RuntimeError("番茄短篇详情未返回关联章节")
+    author_info = detail.get("user_info") if isinstance(detail.get("user_info"), dict) else {}
+    title = 清理番茄网页文本(detail.get("title") or f"番茄短篇{短篇编号}")
+    return {
+        "book_id": book_id,
+        "book_info": {
+            "book_id": book_id,
+            "title": title,
+            "author": 清理番茄网页文本(author_info.get("user_name") or "未知"),
+            "status": "完结",
+            "word_count": 格式化番茄字数(detail.get("total_word_num") or detail.get("truncate_word_num") or ""),
+            "chapter_count": 1,
+            "intro": "",
+        },
+        "chapters": [{"id": chapter_id, "title": title or "第1章", "index": 1}],
+    }
+
+async def 异步下载番茄全部章节(
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+    HTTP客户端: Any = None,
+) -> list[dict[str, Any]]:
     item_ids = [str(章节.get("id") or "").strip() for 章节 in 目录 if str(章节.get("id") or "").strip()]
     if not item_ids:
         return []
@@ -2724,10 +3456,45 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
         f"concurrency={动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, 动态并发数)) as 请求池:
-        future列表 = [请求池.submit(fetch_batch_worker, 任务) for 任务 in 任务列表]
-        for future in concurrent.futures.as_completed(future列表):
-            批次结果 = future.result()
+    请求信号量 = asyncio.Semaphore(max(1, 动态并发数))
+    解密信号量 = asyncio.Semaphore(max(1, min(64, (os.cpu_count() or 4) * 2)))
+
+    async def 请求批次(任务: tuple[int, int, str, list[str], str]) -> dict[str, Any]:
+        批次序号, 起始序号, 请求书籍编号, 批次章节, 签名模式 = 任务
+        started_at = time.perf_counter()
+        results = await 异步下载番茄正文批次(
+            HTTP客户端,
+            请求信号量,
+            请求书籍编号,
+            批次章节,
+            allow_split=True,
+            sign_mode=签名模式,
+        )
+        ok = sum(1 for _item_id, info, _x, error in results if info and not error)
+        fatal_error = next(
+            (error for _item_id, _info, _x, error in results if isinstance(error, FullMgetBusinessError)),
+            None,
+        )
+        return {
+            "batch": 批次序号,
+            "start": 起始序号,
+            "end": 起始序号 + len(批次章节) - 1,
+            "count": len(批次章节),
+            "ok": ok,
+            "fatal_error": str(fatal_error) if fatal_error else "",
+            "elapsed": time.perf_counter() - started_at,
+            "results": results,
+        }
+
+    async def 解密章节(参数: tuple[int, str, dict[str, Any], int]) -> dict[str, Any]:
+        async with 解密信号量:
+            return await asyncio.to_thread(decrypt_item_worker, 参数)
+
+    async with AsyncExitStack() as stack:
+        if HTTP客户端 is None:
+            HTTP客户端 = await stack.enter_async_context(创建番茄正文HTTP客户端(动态并发数))
+        for 任务协程 in asyncio.as_completed([请求批次(任务) for 任务 in 任务列表]):
+            批次结果 = await 任务协程
             批次起始 = int(批次结果.get("start") or 1)
             批次数量 = int(批次结果.get("count") or 0)
             批次成功 = 0
@@ -2736,7 +3503,19 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
                     f"番茄小说正文业务错误，停止拆分重试：book_id={书籍编号}, "
                     f"range={批次起始}-{批次结果.get('end')}, error={限制番茄日志文本(str(批次结果.get('fatal_error')), 200)}"
                 )
-            for 偏移, (item_id, 正文信息, 解密参数, 错误) in enumerate(批次结果.get("results") or []):
+            原始结果 = list(批次结果.get("results") or [])
+            解密输入: list[tuple[int, str, dict[str, Any], int] | None] = []
+            for 偏移, (item_id, 正文信息, 解密参数, 错误) in enumerate(原始结果):
+                序号 = 批次起始 + 偏移
+                if 错误 or not 正文信息:
+                    解密输入.append(None)
+                    continue
+                解密输入.append((序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0))
+            解密结果列表 = await asyncio.gather(*(
+                解密章节(参数) for 参数 in 解密输入 if 参数 is not None
+            ))
+            解密结果迭代器 = iter(解密结果列表)
+            for 偏移, (item_id, 正文信息, _解密参数, 错误) in enumerate(原始结果):
                 序号 = 批次起始 + 偏移
                 原章节 = 目录[序号 - 1] if 0 <= 序号 - 1 < len(目录) else {"title": f"第{序号}章"}
                 if 错误 or not 正文信息:
@@ -2749,7 +3528,7 @@ def 下载番茄全部章节同步(书籍编号: str, 目录: list[dict[str, Any
                         "error": str(错误 or "no item_info"),
                     }
                     continue
-                解密结果 = decrypt_item_worker((序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0))
+                解密结果 = next(解密结果迭代器)
                 解密标题 = 清理番茄网页文本(解密结果.get("title") or "")
                 原目录标题 = 清理番茄网页文本(原章节.get("title") or "")
                 if 解密标题 == f"第{序号}章" and 原目录标题 and 原目录标题 != 解密标题:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """QQ阅读参考核心及 AstrBot 下载适配。
 
-依赖: requests, pycryptodome
+依赖: aiohttp, pycryptodome
 账号配置: 文件内 CONFIG 字典（仅鉴权必要字段）
 """
 from __future__ import annotations
@@ -13,22 +13,19 @@ import html
 import hashlib
 import io
 import json
+import os
 import re
 import secrets
-import ssl
 import struct
 import tarfile
 import threading
 import time
 import zlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, List, Optional, Union
 from urllib.parse import parse_qs, urlsplit
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
+import aiohttp
 
 from astrbot.api import logger
 
@@ -54,12 +51,6 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from Crypto.Cipher import AES, DES
 from Crypto.Util import Counter
 from Crypto.Util.Padding import unpad
-
-try:
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-except Exception:
-    pass
 
 # === decrypt ===
 """Pure-Python QQRead chapter decrypt (libfock algorithm recovery).
@@ -816,47 +807,6 @@ class ConfigManager:
     def _save_key_pool_cache(self, pool_b64: str) -> None:
         self.key_pool = pool_b64
 
-    def fetch_key_pool(self) -> bool:
-        if not self.fuid:
-            logger.debug("QQ阅读参考核心未配置 fuid")
-            return False
-        url = f"https://newminerva-tgw.reader.qq.com/sk?fuid={self.fuid}"
-        try:
-            with make_session() as sess:
-                resp = sess.get(url, timeout=20)
-                resp.raise_for_status()
-                data = resp.json()
-            pool = str(data.get("pool", "") or "").strip()
-            if not pool:
-                logger.debug("QQ阅读参考核心密钥池响应为空")
-                return False
-            if not self._cache_valid(pool):
-                logger.debug("QQ阅读参考核心密钥池校验失败")
-                return False
-            self.key_pool = pool
-            self._save_key_pool_cache(pool)
-            return True
-        except Exception as e:
-            logger.debug(f"QQ阅读参考核心密钥池获取失败：error={type(e).__name__}")
-            return False
-
-    def set_key_pool(self, force: bool = False) -> None:
-        if not self.fuid:
-            logger.debug("QQ阅读参考核心未配置 fuid")
-            return
-        if not force:
-            cached = self._load_key_pool_cache()
-            if cached and self._cache_valid(cached):
-                self.key_pool = cached
-                return
-        if self.fetch_key_pool():
-            return
-        cached = self._load_key_pool_cache()
-        self.key_pool = cached or self.key_pool or ""
-
-    def refresh_key_pool(self) -> bool:
-        return self.fetch_key_pool()
-
     def apply(self, m: Dict[str, Any]) -> None:
         if "loginType" in m:
             self.login_type = str(m["loginType"])
@@ -874,7 +824,6 @@ class ConfigManager:
             self.uid = str(m["uid"])
         if "fuid" in m:
             self.fuid = str(m["fuid"])
-        self.set_key_pool()
 
 
 def load_config_once() -> None:
@@ -898,280 +847,162 @@ QQ阅读批量章节数 = 500
 QQ阅读批量最大动态并发数 = 5
 QQ阅读失败章节重试窗口 = 31
 QQ阅读失败章节重试轮数 = 3
+QQ阅读解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
+QQ阅读出版书最大动态并发数 = 16
+_QQ阅读密钥池异步锁: asyncio.Lock | None = None
 
 
-class _SSLAdapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
+def 创建QQ阅读HTTP会话(*, concurrency: int = QQ阅读批量最大动态并发数) -> aiohttp.ClientSession:
+    """创建下载期间复用的异步连接池。"""
+    limit = max(1, int(concurrency or 1))
+    connector = aiohttp.TCPConnector(
+        limit=limit,
+        limit_per_host=limit,
+        ttl_dns_cache=300,
+        keepalive_timeout=30,
+    )
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=90)
+    return aiohttp.ClientSession(
+        headers={"User-Agent": UA},
+        timeout=timeout,
+        connector=connector,
+    )
 
 
-def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": UA})
-    s.verify = False
-    s.mount("https://", _SSLAdapter())
-    try:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except Exception:
-        pass
-    return s
+def _获取QQ阅读密钥池异步锁() -> asyncio.Lock:
+    global _QQ阅读密钥池异步锁
+    if _QQ阅读密钥池异步锁 is None:
+        _QQ阅读密钥池异步锁 = asyncio.Lock()
+    return _QQ阅读密钥池异步锁
 
 
-class Fetcher:
-    def __init__(self) -> None:
-        self._session = make_session()
+async def 确保QQ阅读密钥池(
+    session: aiohttp.ClientSession,
+    *,
+    force: bool = False,
+) -> bool:
+    """异步刷新正文解密所需密钥池，避免在解密线程中发起网络请求。"""
+    load_config_once()
+    config = ConfigManager.get_instance()
+    if not config.fuid:
+        return False
+    if not force and config.key_pool and config._cache_valid(config.key_pool):
+        return True
 
-    def extract_mid_number(self, s: str) -> int:
-        a = s.find("_")
-        b = s.find("_", a + 1)
-        return int(s[a + 1 : b])
-
-    def _cfg(self) -> ConfigManager:
-        return ConfigManager.get_instance()
-
-    def _pwd(self, timestamp_ms: int) -> str:
-        c = self._cfg()
-        return (
-            f"{c.login_type}|||{c.c_version}|{c.c_platform}|{c.channel}|"
-            f"{c.qrsn}|{c.qrsn}||||0|{timestamp_ms}|{SIGN_TAIL}"
-        )
-
-    def _auth_headers(self, timestamp_ms: int) -> Dict[str, str]:
-        c = self._cfg()
-        pwd = self._pwd(timestamp_ms)
-        csigs_val = search(sha256_hex(pwd), generate_salt())
-        return {
-            "User-Agent": UA,
-            "loginType": c.login_type,
-            "c_platform": c.c_platform,
-            "c_version": c.c_version,
-            "channel": c.channel,
-            "qrsn": c.qrsn,
-            "usid": c.usid,
-            "uid": c.uid,
-            "youngerMode": "0",
-            "qrsn_new": c.qrsn,
-            "ttime": str(timestamp_ms),
-            "csigs": csigs_val,
-        }
-
-    @staticmethod
-    def _chapter_valid(item: Any) -> bool:
-        text = str(item or "").strip()
-        return bool(text) and text != "章节解密失败"
-
-    @staticmethod
-    def _failed_chapter_windows(chapter_numbers: list[int]) -> list[tuple[int, int]]:
-        windows: list[tuple[int, int]] = []
-        for chapter_number in sorted(set(chapter_numbers)):
-            if not windows:
-                windows.append((chapter_number, chapter_number))
-                continue
-            start, end = windows[-1]
-            if chapter_number == end + 1 and chapter_number - start < QQ阅读失败章节重试窗口:
-                windows[-1] = (start, chapter_number)
-            else:
-                windows.append((chapter_number, chapter_number))
-        return windows
-
-    def get_chapter(
-        self,
-        book_id: str,
-        start_chapter: str,
-        end_chapter: Optional[str] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> Optional[List[Any]]:
-        def report_progress(completed: int, success: int) -> None:
-            if progress_callback is None:
-                return
-            try:
-                progress_callback(completed, success)
-            except Exception:
-                pass
-
+    async with _获取QQ阅读密钥池异步锁():
+        if not force and config.key_pool and config._cache_valid(config.key_pool):
+            return True
         try:
-            s = abs(int(start_chapter))
-            e = abs(int(end_chapter or start_chapter))
+            async with session.get(
+                "https://newminerva-tgw.reader.qq.com/sk",
+                params={"fuid": config.fuid},
+            ) as response:
+                response.raise_for_status()
+                data = await response.json(content_type=None)
+        except Exception as exc:
+            logger.debug(f"QQ阅读密钥池获取失败：error={type(exc).__name__}")
+            return False
+        pool = str((data or {}).get("pool") or "").strip() if isinstance(data, dict) else ""
+        if not pool or not config._cache_valid(pool):
+            logger.debug("QQ阅读密钥池响应无效")
+            return False
+        config.key_pool = pool
+        config._save_key_pool_cache(pool)
+        return True
+
+
+def 构造QQ阅读鉴权请求头(timestamp_ms: int) -> Dict[str, str]:
+    config = ConfigManager.get_instance()
+    pwd = (
+        f"{config.login_type}|||{config.c_version}|{config.c_platform}|{config.channel}|"
+        f"{config.qrsn}|{config.qrsn}||||0|{timestamp_ms}|{SIGN_TAIL}"
+    )
+    return {
+        "User-Agent": UA,
+        "loginType": config.login_type,
+        "c_platform": config.c_platform,
+        "c_version": config.c_version,
+        "channel": config.channel,
+        "qrsn": config.qrsn,
+        "usid": config.usid,
+        "uid": config.uid,
+        "youngerMode": "0",
+        "qrsn_new": config.qrsn,
+        "ttime": str(timestamp_ms),
+        "csigs": search(sha256_hex(pwd), generate_salt()),
+    }
+
+
+def _提取QQ阅读章节号(value: str) -> int:
+    first = value.find("_")
+    second = value.find("_", first + 1)
+    if first < 0 or second < 0:
+        raise ValueError("章节文件名无效")
+    return int(value[first + 1 : second])
+
+
+def 解密QQ阅读章节数据(data: bytes, stt: str | bytes, *, allow_refresh: bool = True) -> Optional[str]:
+    config = ConfigManager.get_instance()
+    knva = config._knva_bytes()
+
+    def 尝试解密() -> Optional[str]:
+        if not config.key_pool:
+            return None
+        try:
+            key_pool = base64.b64decode(config.key_pool)
+        except Exception:
+            return None
+        return try_decrypt_chapter(data, stt, config.fuid, key_pool, knva)
+
+    text = 尝试解密()
+    if text is None and allow_refresh:
+        # 网络刷新由异步下载调度器统一处理，避免解密工作线程阻塞在 HTTP 请求上。
+        logger.debug("QQ阅读章节解密未命中当前密钥池")
+    return text
+
+
+def 解析QQ阅读正文批次(package: bytes, start_chapter: int, end_chapter: int) -> list[Any]:
+    members = tar_decrypt(package)
+    chapter_map: Dict[int, Any] = {}
+    for key, value in list(members.items()):
+        if key in ("code", "info.txt"):
+            continue
+        try:
+            chapter_number = _提取QQ阅读章节号(str(key))
         except (TypeError, ValueError):
-            return None
-        if s > e:
-            e = s
-        total = e - s + 1
-        batch_size = QQ阅读批量章节数
-        results: List[Any] = [None] * total
-        ranges: list[tuple[int, int]] = []
-        batch_start = s
-        while batch_start <= e:
-            be = min(batch_start + batch_size - 1, e)
-            ranges.append((batch_start, be))
-            batch_start += batch_size
-
-        def merge_result(first: int, last: int, part: Any) -> int:
-            if not isinstance(part, list):
-                return 0
-            recovered = 0
-            expected = last - first + 1
-            for offset, item in enumerate(part[:expected]):
-                chapter_number = first + offset
-                target_index = chapter_number - s
-                if not self._chapter_valid(item) or self._chapter_valid(results[target_index]):
-                    continue
-                results[target_index] = item
-                recovered += 1
-            return recovered
-
-        concurrency = max(1, min(QQ阅读批量最大动态并发数, len(ranges)))
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            future_map = {
-                pool.submit(self._get_chapter, book_id, str(a), str(b)): (a, b)
-                for a, b in ranges
-            }
-            completed = 0
-            success = 0
-            for fut in as_completed(future_map):
-                a, b = future_map[fut]
-                expected = b - a + 1
-                try:
-                    success += merge_result(a, b, fut.result())
-                except Exception:
-                    pass
-                completed += expected
-                report_progress(min(completed, total), min(success, total))
-
-        for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
-            missing = [s + index for index, item in enumerate(results) if not self._chapter_valid(item)]
-            if not missing:
-                break
-            retry_windows = self._failed_chapter_windows(missing)
-            retry_concurrency = max(1, min(QQ阅读批量最大动态并发数, len(retry_windows)))
-            logger.debug(
-                f"QQ阅读失败章节重试：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-                f"missing={len(missing)}, windows={len(retry_windows)}, concurrency={retry_concurrency}"
-            )
-            recovered = 0
-            with ThreadPoolExecutor(max_workers=retry_concurrency) as pool:
-                future_map = {
-                    pool.submit(self._get_chapter, book_id, str(a), str(b)): (a, b)
-                    for a, b in retry_windows
-                }
-                for fut in as_completed(future_map):
-                    a, b = future_map[fut]
-                    try:
-                        recovered += merge_result(a, b, fut.result())
-                    except Exception:
-                        pass
-            success = sum(1 for item in results if self._chapter_valid(item))
-            report_progress(total, success)
-            logger.debug(
-                f"QQ阅读失败章节重试结果：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-                f"recovered={recovered}, still_missing={total - success}"
-            )
-            if success >= total:
-                break
-            if recovered <= 0:
-                break
-            if round_index < QQ阅读失败章节重试轮数:
-                time.sleep(0.2 * round_index)
-        return results if any(self._chapter_valid(item) for item in results) else None
-
-    def _decrypt_bytes(self, data: bytes, stt: str | bytes, allow_refresh: bool = True) -> Optional[str]:
-        c = self._cfg()
-        knva = c._knva_bytes()
-
-        def _try() -> Optional[str]:
-            if not c.key_pool:
-                return None
+            continue
+        if chapter_number < start_chapter or chapter_number > end_chapter:
+            continue
+        if isinstance(value, (bytes, bytearray)):
             try:
-                kp = base64.b64decode(c.key_pool)
-            except Exception:
-                return None
-            return try_decrypt_chapter(data, stt, c.fuid, kp, knva)
+                text = 解密QQ阅读章节数据(bytes(value), str(key), allow_refresh=False)
+            except Exception as exc:
+                logger.debug(f"QQ阅读参考正文解密失败：error={type(exc).__name__}")
+                text = None
+            value = text if text else "章节解密失败"
+        elif not isinstance(value, str):
+            value = str(value)
+        current = chapter_map.get(chapter_number)
+        if current is None or current == "章节解密失败":
+            chapter_map[chapter_number] = value
+    return [
+        chapter_map.get(chapter_number, "章节解密失败")
+        for chapter_number in range(start_chapter, end_chapter + 1)
+    ]
 
-        text = _try()
-        if text is not None:
-            return text
-        if allow_refresh and c.refresh_key_pool():
-            return _try()
-        return None
 
-    def _get_chapter(self, book_id: str, start_chapter: str, end_chapter: Optional[str]) -> Optional[List[Any]]:
-        try:
-            if end_chapter is not None:
-                s = abs(int(start_chapter))
-                e2 = abs(int(end_chapter))
-                if s > e2:
-                    end_chapter = start_chapter
-                    e2 = s
-                if e2 - s > 10000:
-                    return None
-            else:
-                s = abs(int(start_chapter))
-                e2 = s
-                end_chapter = start_chapter
-        except Exception as e:
-            logger.debug(f"QQ阅读参考正文范围无效：error={type(e).__name__}")
-            return None
-
-        ts = int(time.time() * 1000)
-        c = self._cfg()
-        url = (
-            f"https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
-            f"?bookId={book_id}&type=2&scids={start_chapter}-{end_chapter}&fuid={c.fuid}"
-        )
-        headers = self._auth_headers(ts)
-        try:
-            r = self._session.get(url, headers=headers, timeout=60)
-            m = tar_decrypt(r.content)
-            remove_keys = []
-            for key, value in list(m.items()):
-                try:
-                    if key in ("code", "info.txt"):
-                        remove_keys.append(key)
-                        continue
-                    if not isinstance(value, (bytes, bytearray)):
-                        # already text / other
-                        if not isinstance(value, str):
-                            m[key] = str(value)
-                        continue
-                    content = None
-                    try:
-                        content = self._decrypt_bytes(bytes(value), key, allow_refresh=True)
-                    except Exception as e_pure:
-                        logger.debug(
-                            f"QQ阅读参考正文解密失败：error={type(e_pure).__name__}"
-                        )
-                    m[key] = content if content else "章节解密失败"
-                except Exception as e4:
-                    logger.debug(
-                        f"QQ阅读参考正文成员处理失败：error={type(e4).__name__}"
-                    )
-                    m[key] = "章节解密失败"
-            for k in remove_keys:
-                m.pop(k, None)
-            chapter_map: Dict[int, Any] = {}
-            for key, value in m.items():
-                try:
-                    chapter_number = self.extract_mid_number(key)
-                except (TypeError, ValueError):
-                    continue
-                if s <= chapter_number <= e2:
-                    current = chapter_map.get(chapter_number)
-                    if current is None or current == "章节解密失败":
-                        chapter_map[chapter_number] = value
-            if not chapter_map:
-                return None
-            return [
-                chapter_map.get(chapter_number, "章节解密失败")
-                for chapter_number in range(s, e2 + 1)
-            ]
-        except Exception as e5:
-            logger.debug(f"QQ阅读参考正文请求失败：error={type(e5).__name__}")
-            return None
-
+def QQ阅读失败章节窗口(chapter_numbers: list[int]) -> list[tuple[int, int]]:
+    windows: list[tuple[int, int]] = []
+    for chapter_number in sorted(set(chapter_numbers)):
+        if not windows:
+            windows.append((chapter_number, chapter_number))
+            continue
+        start, end = windows[-1]
+        if chapter_number == end + 1 and chapter_number - start < QQ阅读失败章节重试窗口:
+            windows[-1] = (start, chapter_number)
+        else:
+            windows.append((chapter_number, chapter_number))
+    return windows
 
 
 # === published TEB/eqct ===
@@ -1705,49 +1536,40 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _请求QQ阅读搜索(关键词: str, 需要数量: int) -> list[dict[str, Any]]:
+async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    """使用 QQ 阅读 App 搜索接口获取找书候选。"""
     keyword = str(关键词 or "").strip()
     if not keyword:
         return []
-    初始化参考核心()
-    fetcher = Fetcher()
-    try:
-        size = max(1, min(int(需要数量 or 20), 30))
-        response = fetcher._session.get(
+    size = max(1, min(int(需要数量 or 20), 30))
+    async with 创建QQ阅读HTTP会话(concurrency=2) as session:
+        await 确保QQ阅读密钥池(session)
+        async with session.get(
             QQ阅读搜索地址,
             params={"key": keyword, "start": 0, "size": size},
-            headers=fetcher._auth_headers(int(time.time() * 1000)),
-            timeout=30,
-        )
+            headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+        ) as response:
+            response.raise_for_status()
+            data = await response.json(content_type=None)
+    return 解析QQ阅读搜索结果(data)[:size]
+
+
+async def 获取参考书籍详情(
+    book_id: str,
+    session: aiohttp.ClientSession | None = None,
+) -> dict[str, Any]:
+    if session is None:
+        async with 创建QQ阅读HTTP会话(concurrency=2) as local_session:
+            return await 获取参考书籍详情(book_id, local_session)
+    await 确保QQ阅读密钥池(session)
+    async with session.get(
+        QQ阅读详情地址,
+        params={"bid": book_id, "types": "1,2,3,4,5"},
+        headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+    ) as response:
         response.raise_for_status()
-        return 解析QQ阅读搜索结果(response.json())[:size]
-    finally:
-        fetcher._session.close()
-
-
-async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
-    """使用 QQ 阅读 App 搜索接口获取找书候选。"""
-    return await asyncio.to_thread(_请求QQ阅读搜索, 关键词, 需要数量)
-
-
-def _请求参考书籍详情(book_id: str) -> dict[str, Any]:
-    初始化参考核心()
-    fetcher = Fetcher()
-    try:
-        response = fetcher._session.get(
-            QQ阅读详情地址,
-            params={"bid": book_id, "types": "1,2,3,4,5"},
-            headers=fetcher._auth_headers(int(time.time() * 1000)),
-            timeout=30,
-        )
-        response.raise_for_status()
-        return 解析参考书籍详情(response.json(), book_id)
-    finally:
-        fetcher._session.close()
-
-
-async def 获取参考书籍详情(book_id: str) -> dict[str, Any]:
-    return await asyncio.to_thread(_请求参考书籍详情, book_id)
+        data = await response.json(content_type=None)
+    return 解析参考书籍详情(data, book_id)
 
 
 def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
@@ -1812,49 +1634,47 @@ def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str,
     return any(_安全整数(item.get("chapter_fee")) > 0 for item in catalog)
 
 
-def _请求参考书籍目录(book_id: str) -> list[dict[str, Any]]:
-    初始化参考核心()
-    fetcher = Fetcher()
-    try:
-        response = fetcher._session.get(
-            QQ阅读目录地址,
-            params={
-                "bookId": book_id,
-                "type": "0",
-                "tafauth": "1",
-                "scids": "0",
-                "text_type": "0",
-                "useindex": "1",
-            },
-            headers=fetcher._auth_headers(int(time.time() * 1000)),
-            timeout=60,
-        )
+async def 获取参考书籍目录(
+    book_id: str,
+    session: aiohttp.ClientSession | None = None,
+) -> list[dict[str, Any]]:
+    if session is None:
+        async with 创建QQ阅读HTTP会话(concurrency=2) as local_session:
+            return await 获取参考书籍目录(book_id, local_session)
+    await 确保QQ阅读密钥池(session)
+    async with session.get(
+        QQ阅读目录地址,
+        params={
+            "bookId": book_id,
+            "type": "0",
+            "tafauth": "1",
+            "scids": "0",
+            "text_type": "0",
+            "useindex": "1",
+        },
+        headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+    ) as response:
         response.raise_for_status()
-        return 解析参考目录包(response.content, book_id)
-    finally:
-        fetcher._session.close()
-
-
-async def 获取参考书籍目录(book_id: str) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(_请求参考书籍目录, book_id)
+        package = await response.read()
+    return await asyncio.to_thread(解析参考目录包, package, book_id)
 
 
 async def 获取参考兼容目录(
     book_id: str,
     chapter_count: int,
+    session: aiohttp.ClientSession | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     total = max(0, int(chapter_count or 0))
     catalog: list[dict[str, Any]] = []
     try:
-        catalog = await 获取参考书籍目录(book_id)
-    except requests.HTTPError as exc:
-        response = getattr(exc, "response", None)
-        if getattr(response, "status_code", None) != 400:
+        catalog = await 获取参考书籍目录(book_id, session)
+    except aiohttp.ClientResponseError as exc:
+        if exc.status != 400:
             raise
     if catalog or total <= 0:
         return catalog, False
 
-    fallback = await 获取参考出版书目录(book_id, total)
+    fallback = await 获取参考出版书目录(book_id, total, session)
     return fallback, bool(fallback)
 
 
@@ -1909,20 +1729,29 @@ def 解析参考出版书目录(items: list[dict[str, Any]]) -> list[dict[str, A
     ]
 
 
-def _请求参考出版书目录(book_id: str, chapter_count: int) -> list[dict[str, Any]]:
+async def 获取参考出版书目录(
+    book_id: str,
+    chapter_count: int,
+    session: aiohttp.ClientSession | None = None,
+) -> list[dict[str, Any]]:
     total = max(0, int(chapter_count or 0))
     if total <= 0:
         return []
-    初始化参考核心()
-    fetcher = Fetcher()
-    try:
-        all_items: list[dict[str, Any]] = []
-        chapter_ids = [str(index) for index in range(1, total + 1)]
-        for start in range(0, len(chapter_ids), 200):
-            batch = chapter_ids[start : start + 200]
-            headers = fetcher._auth_headers(int(time.time() * 1000))
-            headers["text_type"] = "1"
-            response = fetcher._session.get(
+    if session is None:
+        concurrency = max(1, min(QQ阅读批量最大动态并发数, (total + 199) // 200))
+        async with 创建QQ阅读HTTP会话(concurrency=concurrency) as local_session:
+            return await 获取参考出版书目录(book_id, total, local_session)
+    await 确保QQ阅读密钥池(session)
+    config = ConfigManager.get_instance()
+    chapter_ids = [str(index) for index in range(1, total + 1)]
+    batches = [chapter_ids[start : start + 200] for start in range(0, total, 200)]
+    semaphore = asyncio.Semaphore(max(1, min(QQ阅读批量最大动态并发数, len(batches))))
+
+    async def 请求目录批次(batch: list[str]) -> list[dict[str, Any]]:
+        headers = 构造QQ阅读鉴权请求头(int(time.time() * 1000))
+        headers["text_type"] = "1"
+        async with semaphore:
+            async with session.get(
                 QQ阅读目录地址,
                 params={
                     "bookId": book_id,
@@ -1934,145 +1763,182 @@ def _请求参考出版书目录(book_id: str, chapter_count: int) -> list[dict[
                     "scids": ",".join(batch),
                     "scene": "0",
                     "adState": "1",
-                    "fuid": ConfigManager.get_instance().fuid,
+                    "fuid": config.fuid,
                     "noclick": "1",
                 },
                 headers=headers,
-                timeout=60,
-            )
-            response.raise_for_status()
-            all_items.extend(_parse_teb_info_blob(response.content))
-        catalog = 解析参考出版书目录(all_items)
-        if len(catalog) != total:
-            raise RuntimeError("章节不完整")
-        return catalog
-    finally:
-        fetcher._session.close()
-
-
-async def 获取参考出版书目录(book_id: str, chapter_count: int) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(_请求参考出版书目录, book_id, chapter_count)
-
-
-def _获取参考出版书密码(book_id: str) -> bytes:
-    config = ConfigManager.get_instance()
-    fetcher = Fetcher()
-    try:
-        response = fetcher._session.get(
-            API_AUTH,
-            params={"bookid": book_id, "authInfo": config.qrsn, "onlytrial": "1"},
-            headers={
-                "User-Agent": UA,
-                "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
-                "ywguid": config.uid,
-                "ywkey": config.usid,
-                "Accept": "*/*",
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        plain = tea_decrypt_bytes(response.content, tea_key_ints(config.uid))
-        payload = json.loads(plain.split(b"\x00", 1)[0].decode("utf-8"))
-        password = str(payload.get("pwd") or "").encode("utf-8")
-        if not password:
-            raise RuntimeError("出版书授权失败")
-        return password
-    finally:
-        fetcher._session.close()
-
-
-def _下载参考出版书章节(item: dict[str, Any], password: bytes) -> str:
-    resource_url = str(item.get("resource_url") or "").strip()
-    if not resource_url:
-        raise RuntimeError("出版书资源为空")
-    latest_error: Exception | None = None
-    for attempt in range(1, 4):
-        try:
-            with make_session() as session:
-                response = session.get(resource_url, headers={"User-Agent": UA}, timeout=30)
+            ) as response:
                 response.raise_for_status()
-                files = extract_eqct(response.content, password)
-            if not files:
-                raise RuntimeError("出版书资源解包为空")
-            name, data = pick_best_entry(files)
-            lowered = name.lower()
-            if lowered.endswith((".xhtml", ".html", ".htm")):
-                text = xhtml_to_text(data)
-            elif lowered.endswith(".txt"):
-                text = data.decode("utf-8", "replace")
-            else:
-                raise RuntimeError("出版书正文资源缺失")
-            text = text.strip()
-            if not text:
-                raise RuntimeError("出版书正文为空")
-            return text
-        except Exception as exc:
-            latest_error = exc
-            if attempt < 3:
-                time.sleep(0.3 * attempt)
-    raise RuntimeError("出版书章节下载失败") from latest_error
+                package = await response.read()
+        return await asyncio.to_thread(_parse_teb_info_blob, package)
 
-
-def _下载参考出版书正文同步(
-    book_id: str,
-    catalog: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    total = len(catalog)
-    completed = 0
-    success = 0
-    last_segment = 0
-    logger.info(f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%")
-    password = _获取参考出版书密码(book_id)
-    results: dict[int, str] = {}
-    failures: list[int] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {
-            pool.submit(_下载参考出版书章节, item, password): index
-            for index, item in enumerate(catalog)
-        }
-        for future in as_completed(futures):
-            index = futures[future]
-            try:
-                results[index] = future.result()
-                success += 1
-            except Exception:
-                failures.append(index)
-            completed += 1
-            segment = (
-                QQ阅读进度日志分段数
-                if completed >= total
-                else int(completed * QQ阅读进度日志分段数 / max(1, total))
-            )
-            if segment > last_segment or completed >= total:
-                last_segment = segment
-                percent = int(completed * 100 / max(1, total))
-                logger.info(
-                    f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
-                    f"percent={percent}%, success={success}, failed={completed - success}"
-                )
-    if failures or len(results) != len(catalog):
+    all_items: list[dict[str, Any]] = []
+    for items in await asyncio.gather(*(请求目录批次(batch) for batch in batches)):
+        all_items.extend(items)
+    catalog = 解析参考出版书目录(all_items)
+    if len(catalog) != total:
         raise RuntimeError("章节不完整")
-    return [
-        {**item, "content": results[index]}
-        for index, item in enumerate(catalog)
-    ]
+    return catalog
+
+
+async def 获取参考出版书密码(
+    book_id: str,
+    session: aiohttp.ClientSession,
+) -> bytes:
+    config = ConfigManager.get_instance()
+    async with session.get(
+        API_AUTH,
+        params={"bookid": book_id, "authInfo": config.qrsn, "onlytrial": "1"},
+        headers={
+            "User-Agent": UA,
+            "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
+            "ywguid": config.uid,
+            "ywkey": config.usid,
+            "Accept": "*/*",
+        },
+    ) as response:
+        response.raise_for_status()
+        encrypted = await response.read()
+    plain = await asyncio.to_thread(tea_decrypt_bytes, encrypted, tea_key_ints(config.uid))
+    payload = json.loads(plain.split(b"\x00", 1)[0].decode("utf-8"))
+    password = str(payload.get("pwd") or "").encode("utf-8")
+    if not password:
+        raise RuntimeError("出版书授权失败")
+    return password
+
+
+def 解析参考出版书章节(package: bytes, password: bytes) -> str:
+    files = extract_eqct(package, password)
+    if not files:
+        raise RuntimeError("出版书资源解包为空")
+    name, data = pick_best_entry(files)
+    lowered = name.lower()
+    if lowered.endswith((".xhtml", ".html", ".htm")):
+        text = xhtml_to_text(data)
+    elif lowered.endswith(".txt"):
+        text = data.decode("utf-8", "replace")
+    else:
+        raise RuntimeError("出版书正文资源缺失")
+    text = text.strip()
+    if not text:
+        raise RuntimeError("出版书正文为空")
+    return text
 
 
 async def 下载参考出版书正文(
     book_id: str,
     catalog: list[dict[str, Any]],
+    session: aiohttp.ClientSession | None = None,
 ) -> list[dict[str, Any]]:
     if not catalog:
         return []
-    await asyncio.to_thread(初始化参考核心)
-    return await asyncio.to_thread(_下载参考出版书正文同步, book_id, catalog)
+    if session is None:
+        concurrency = max(1, min(QQ阅读出版书最大动态并发数, len(catalog)))
+        async with 创建QQ阅读HTTP会话(concurrency=concurrency) as local_session:
+            return await 下载参考出版书正文(book_id, catalog, local_session)
+
+    password = await 获取参考出版书密码(book_id, session)
+    total = len(catalog)
+    concurrency = max(1, min(QQ阅读出版书最大动态并发数, total))
+    request_semaphore = asyncio.Semaphore(concurrency)
+    decrypt_semaphore = asyncio.Semaphore(max(1, min(QQ阅读解密最大动态并发数, total)))
+    logger.info(
+        f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%, "
+        f"concurrency={concurrency}"
+    )
+
+    async def 下载章节(index: int, item: dict[str, Any]) -> tuple[int, str | None]:
+        resource_url = str(item.get("resource_url") or "").strip()
+        if not resource_url:
+            return index, None
+        for attempt in range(1, 4):
+            try:
+                async with request_semaphore:
+                    async with session.get(resource_url, headers={"User-Agent": UA}) as response:
+                        response.raise_for_status()
+                        package = await response.read()
+                async with decrypt_semaphore:
+                    text = await asyncio.to_thread(解析参考出版书章节, package, password)
+                return index, text
+            except Exception as exc:
+                if attempt >= 3:
+                    logger.debug(
+                        f"QQ阅读出版书章节请求失败：book_id={book_id}, index={index + 1}, "
+                        f"error={type(exc).__name__}"
+                    )
+                    break
+                await asyncio.sleep(0.3 * attempt)
+        return index, None
+
+    results: dict[int, str] = {}
+    completed = 0
+    last_segment = 0
+    for task in asyncio.as_completed(
+        [下载章节(index, item) for index, item in enumerate(catalog)]
+    ):
+        index, text = await task
+        if text:
+            results[index] = text
+        completed += 1
+        segment = (
+            QQ阅读进度日志分段数
+            if completed >= total
+            else int(completed * QQ阅读进度日志分段数 / max(1, total))
+        )
+        if segment > last_segment or completed >= total:
+            last_segment = segment
+            success = len(results)
+            percent = int(completed * 100 / max(1, total))
+            logger.info(
+                f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
+                f"percent={percent}%, success={success}, failed={completed - success}"
+            )
+    if len(results) != total:
+        raise RuntimeError("章节不完整")
+    return [{**item, "content": results[index]} for index, item in enumerate(catalog)]
 
 
-async def 下载参考正文(book_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def 异步获取QQ阅读正文批次(
+    session: aiohttp.ClientSession,
+    book_id: str,
+    start_chapter: int,
+    end_chapter: int,
+    解密信号量: asyncio.Semaphore,
+) -> list[Any]:
+    config = ConfigManager.get_instance()
+    headers = 构造QQ阅读鉴权请求头(int(time.time() * 1000))
+    params = {
+        "bookId": str(book_id),
+        "type": "2",
+        "scids": f"{start_chapter}-{end_chapter}",
+        "fuid": config.fuid,
+    }
+    async with session.get(QQ阅读目录地址, params=params, headers=headers) as response:
+        response.raise_for_status()
+        package = await response.read()
+    async with 解密信号量:
+        return await asyncio.to_thread(
+            解析QQ阅读正文批次,
+            package,
+            start_chapter,
+            end_chapter,
+        )
+
+
+async def 下载参考正文(
+    book_id: str,
+    catalog: list[dict[str, Any]],
+    session: aiohttp.ClientSession | None = None,
+) -> list[dict[str, Any]]:
     if not catalog:
         return []
-    await asyncio.to_thread(初始化参考核心)
-    fetcher = Fetcher()
+    if session is None:
+        batch_count = (len(catalog) + QQ阅读批量章节数 - 1) // QQ阅读批量章节数
+        concurrency = max(1, min(QQ阅读批量最大动态并发数, batch_count))
+        async with 创建QQ阅读HTTP会话(concurrency=concurrency) as local_session:
+            return await 下载参考正文(book_id, catalog, local_session)
+    初始化参考核心()
+    await 确保QQ阅读密钥池(session)
     total = len(catalog)
     last_segment = 0
     last_completed = 0
@@ -2084,7 +1950,22 @@ async def 下载参考正文(book_id: str, catalog: list[dict[str, Any]]) -> lis
         f"batches={batch_count}, batch_size={QQ阅读批量章节数}, concurrency={concurrency}"
     )
 
-    def report_progress(completed: int, success: int) -> None:
+    def 合并批次(first: int, last: int, part: Any, results: list[Any]) -> int:
+        if not isinstance(part, list):
+            return 0
+        recovered = 0
+        expected = last - first + 1
+        for offset, item in enumerate(part[:expected]):
+            target_index = first + offset - 1
+            if target_index < 0 or target_index >= len(results):
+                continue
+            if item in (None, "", "章节解密失败") or results[target_index] not in (None, "", "章节解密失败"):
+                continue
+            results[target_index] = item
+            recovered += 1
+        return recovered
+
+    def 汇报进度(completed: int, success: int) -> None:
         nonlocal last_segment, last_completed, last_success
         completed = min(max(0, int(completed)), total)
         success = min(max(0, int(success)), completed)
@@ -2106,30 +1987,78 @@ async def 下载参考正文(book_id: str, catalog: list[dict[str, Any]]) -> lis
             f"percent={percent}%, success={success}, failed={completed - success}"
         )
 
-    try:
-        raw_chapters = await asyncio.to_thread(
-            fetcher.get_chapter,
-            book_id,
-            "1",
-            str(total),
-            report_progress,
+    ranges = [
+        (start, min(start + QQ阅读批量章节数 - 1, total))
+        for start in range(1, total + 1, QQ阅读批量章节数)
+    ]
+    results: list[Any] = [None] * total
+    completed = 0
+    success = 0
+    请求信号量 = asyncio.Semaphore(concurrency)
+    decrypt_concurrency = max(1, min(QQ阅读解密最大动态并发数, total))
+    解密信号量 = asyncio.Semaphore(decrypt_concurrency)
+
+    async def 请求批次(first: int, last: int) -> tuple[int, int, list[Any] | None]:
+        try:
+            async with 请求信号量:
+                part = await 异步获取QQ阅读正文批次(
+                    session, book_id, first, last, 解密信号量
+                )
+            return first, last, part
+        except Exception as exc:
+            logger.debug(
+                f"QQ阅读批量正文请求失败：book_id={book_id}, range={first}-{last}, "
+                f"error={type(exc).__name__}"
+            )
+            return first, last, None
+
+    for task in asyncio.as_completed([请求批次(a, b) for a, b in ranges]):
+        first, last, part = await task
+        expected = last - first + 1
+        success += 合并批次(first, last, part, results)
+        completed += expected
+        汇报进度(completed, success)
+
+    for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
+        missing = [index + 1 for index, item in enumerate(results) if item in (None, "", "章节解密失败")]
+        if not missing:
+            break
+        if round_index == 1:
+            await 确保QQ阅读密钥池(session, force=True)
+        retry_ranges = QQ阅读失败章节窗口(missing)
+        retry_concurrency = max(1, min(QQ阅读批量最大动态并发数, len(retry_ranges)))
+        logger.debug(
+            f"QQ阅读失败章节重试：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
+            f"missing={len(missing)}, windows={len(retry_ranges)}, concurrency={retry_concurrency}"
         )
-        if isinstance(raw_chapters, list) and len(raw_chapters) == total:
-            chapters: list[dict[str, Any]] = []
-            for catalog_item, content in zip(catalog, raw_chapters):
-                if isinstance(content, bytes):
-                    text = content.decode("utf-8", "replace").strip()
-                else:
-                    text = str(content or "").strip()
-                if not text or text == "章节解密失败":
-                    chapters = []
-                    break
-                chapters.append({**catalog_item, "content": text})
-            if len(chapters) == total:
-                return chapters
-        raise RuntimeError("章节不完整")
-    finally:
-        fetcher._session.close()
+        recovered = 0
+        retry_semaphore = asyncio.Semaphore(retry_concurrency)
+
+        async def 重试批次(first: int, last: int) -> tuple[int, int, list[Any] | None]:
+            async with retry_semaphore:
+                return await 请求批次(first, last)
+
+        for task in asyncio.as_completed([重试批次(a, b) for a, b in retry_ranges]):
+            first, last, part = await task
+            recovered += 合并批次(first, last, part, results)
+        success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
+        汇报进度(total, success)
+        logger.debug(
+            f"QQ阅读失败章节重试结果：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
+            f"recovered={recovered}, still_missing={total - success}"
+        )
+        if success >= total or recovered <= 0:
+            break
+        if round_index < QQ阅读失败章节重试轮数:
+            await asyncio.sleep(0.2 * round_index)
+
+    chapters: list[dict[str, Any]] = []
+    for catalog_item, content in zip(catalog, results):
+        text = content.decode("utf-8", "replace").strip() if isinstance(content, bytes) else str(content or "").strip()
+        if not text or text == "章节解密失败":
+            raise RuntimeError("章节不完整")
+        chapters.append({**catalog_item, "content": text})
+    return chapters
 
 
 def 清理文件名(value: Any) -> str:
@@ -2141,9 +2070,10 @@ def 格式化字数(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return "未知"
-    if "字" in text:
-        return text
-    number = _安全整数(text, -1)
+    normalized = re.sub(r"[\s,，]", "", text)
+    if normalized.endswith("字"):
+        normalized = normalized[:-1]
+    number = _安全整数(normalized, -1)
     if number < 0:
         return text
     if number >= 10000:
@@ -2349,43 +2279,47 @@ async def 生成下载回复流(
 
     stage = "details"
     try:
-        try:
-            details = await 获取参考书籍详情(book_id)
-        except Exception as exc:
-            logger.debug(f"QQ阅读参考详情获取失败：error={type(exc).__name__}")
-            details = {
-                "title": f"QQ阅读{book_id}",
-                "author": "未知",
-                "status": "连载",
-                "words_num": "",
-                "chapters": 0,
-                "intro": "",
-            }
+        async with 创建QQ阅读HTTP会话(
+            concurrency=QQ阅读出版书最大动态并发数
+        ) as session:
+            try:
+                details = await 获取参考书籍详情(book_id, session)
+            except Exception as exc:
+                logger.debug(f"QQ阅读参考详情获取失败：error={type(exc).__name__}")
+                details = {
+                    "title": f"QQ阅读{book_id}",
+                    "author": "未知",
+                    "status": "连载",
+                    "words_num": "",
+                    "chapters": 0,
+                    "intro": "",
+                }
 
-        stage = "catalog"
-        catalog, published = await 获取参考兼容目录(
-            book_id,
-            _安全整数(details.get("chapters")),
-        )
-        if not catalog:
-            raise RuntimeError("目录为空")
-        details["chapters"] = len(catalog)
-        if 是章节单独付费书籍(details, catalog):
-            yield 章节单独付费提示
-            return
-        logger.info(
-            f"QQ阅读开始下载：book_id={book_id}, title={details.get('title')}, "
-            f"author={details.get('author')}, chapters={len(catalog)}, "
-            f"book_type={'published' if published else 'novel'}"
-        )
-        yield 格式化下载提示(details, len(catalog))
+            stage = "catalog"
+            catalog, published = await 获取参考兼容目录(
+                book_id,
+                _安全整数(details.get("chapters")),
+                session,
+            )
+            if not catalog:
+                raise RuntimeError("目录为空")
+            details["chapters"] = len(catalog)
+            if 是章节单独付费书籍(details, catalog):
+                yield 章节单独付费提示
+                return
+            logger.info(
+                f"QQ阅读开始下载：book_id={book_id}, title={details.get('title')}, "
+                f"author={details.get('author')}, chapters={len(catalog)}, "
+                f"book_type={'published' if published else 'novel'}"
+            )
+            yield 格式化下载提示(details, len(catalog))
 
-        stage = "content"
-        chapters = (
-            await 下载参考出版书正文(book_id, catalog)
-            if published
-            else await 下载参考正文(book_id, catalog)
-        )
+            stage = "content"
+            chapters = (
+                await 下载参考出版书正文(book_id, catalog, session)
+                if published
+                else await 下载参考正文(book_id, catalog, session)
+            )
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
         logger.info(
             f"QQ阅读章节下载完成：book_id={book_id}, title={details.get('title')}, "
