@@ -30,9 +30,13 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-最大章节并发数 = 700
-最大目录并发数 = 20
+最大章节并发数 = 60
+最大目录并发数 = 700
 失败章节重试轮数 = 3
+最小章节并发数 = 4
+初始章节并发数 = 16
+每通道章节窗口 = 6
+通道初始化并发数 = 4
 
 # ===== 点众协议与加解密（原 _点众源码） =====
 
@@ -180,6 +184,31 @@ def 计算动态章节并发数(章节数: int) -> int:
     return min(最大章节并发数, max(1, int(章节数 or 0)))
 
 
+def 计算起始章节并发数(章节数: int, *, 重试: bool = False) -> int:
+    上限 = 计算动态章节并发数(章节数)
+    if 上限 <= 最小章节并发数:
+        return 上限
+    if 重试:
+        return min(上限, max(最小章节并发数, 初始章节并发数 // 2))
+    if 上限 <= 初始章节并发数:
+        return 上限
+    return 初始章节并发数
+
+
+def 计算下一窗口并发数(当前并发: int, 成功数: int, 总数: int) -> int:
+    if 总数 <= 0:
+        return 当前并发
+    成功率 = 成功数 / 总数
+    if 成功率 >= 0.98:
+        增量 = 16 if 当前并发 < 32 else 8
+        return min(最大章节并发数, 当前并发 + 增量)
+    if 成功率 >= 0.92:
+        return min(最大章节并发数, 当前并发 + 4)
+    if 成功率 >= 0.80:
+        return max(最小章节并发数, 当前并发 - 4)
+    return max(最小章节并发数, 当前并发 // 2)
+
+
 def 获取点众小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
     来源 = 提取直接点众来源(命令文本) or 提取事件点众来源(event)
     if 来源 is None:
@@ -194,8 +223,8 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         return
     try:
         连接器 = aiohttp.TCPConnector(
-            limit=最大章节并发数,
-            limit_per_host=最大章节并发数,
+            limit=最大目录并发数,
+            limit_per_host=最大目录并发数,
             ttl_dns_cache=300,
             keepalive_timeout=30,
         )
@@ -234,7 +263,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 "",
                 "正在下载中请稍等.....",
             ])
-            章节结果 = await 异步下载全部章节(session, datas, 书籍编号, 目录, 书名)
+            章节结果 = await 异步下载全部章节(书籍编号, 目录, 书名)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
@@ -420,26 +449,57 @@ async def 异步获取章节正文(
     return _提取正文(data)
 
 
+async def 异步新建下载通道() -> tuple[aiohttp.ClientSession, dict[str, Any]] | None:
+    for 尝试次数 in range(1, 4):
+        连接器 = aiohttp.TCPConnector(
+            limit=1,
+            limit_per_host=1,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        超时 = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=60)
+        会话 = aiohttp.ClientSession(timeout=超时, connector=连接器)
+        try:
+            return 会话, await 初始化设备(会话)
+        except asyncio.CancelledError:
+            await 会话.close()
+            raise
+        except Exception as exc:
+            await 会话.close()
+            logger.debug(
+                f"点众下载通道初始化失败：attempt={尝试次数}/3, "
+                f"error={type(exc).__name__}"
+            )
+            if 尝试次数 < 3:
+                await asyncio.sleep(0.2 * 尝试次数)
+    return None
+
+
 async def 异步执行章节下载轮(
-    session: aiohttp.ClientSession,
-    datas: dict[str, Any],
     任务: list[tuple[int, dict[str, Any]]],
     书籍编号: str,
     书名: str,
     进度回调: Any = None,
+    *,
+    起始并发: int | None = None,
 ) -> list[tuple[int, dict[str, str]]]:
     if not 任务:
         return []
-    并发数 = 计算动态章节并发数(len(任务))
-    信号量 = asyncio.Semaphore(并发数)
 
-    async def 下载单章(下标: int, 章: dict[str, Any]) -> tuple[int, dict[str, str]]:
+    async def 下载单章(
+        会话: aiohttp.ClientSession,
+        身份: dict[str, Any],
+        下标: int,
+        章: dict[str, Any],
+    ) -> tuple[int, dict[str, str]]:
         cid = str(章.get("id") or "")
         标题 = str(章.get("title") or f"章节{cid}")
         正文 = ""
         try:
-            async with 信号量:
-                正文 = await 异步获取章节正文(session, datas, 书籍编号, cid, 书名)
+            # 同一 App 身份只在本通道内串行使用，避免广告解锁状态交叉覆盖。
+            正文 = await 异步获取章节正文(会话, 身份, 书籍编号, cid, 书名)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.debug(
                 f"点众章节请求失败：book_id={书籍编号}, chapter_id={cid}, "
@@ -449,12 +509,91 @@ async def 异步执行章节下载轮(
             await 进度回调(bool(正文))
         return 下标, {"title": 标题, "content": 正文, "id": cid}
 
-    return list(await asyncio.gather(*(下载单章(下标, 章) for 下标, 章 in 任务)))
+    async def 执行通道(
+        通道: tuple[aiohttp.ClientSession, dict[str, Any]],
+        通道任务: list[tuple[int, dict[str, Any]]],
+    ) -> list[tuple[int, dict[str, str]]]:
+        会话, 身份 = 通道
+        return [
+            await 下载单章(会话, 身份, 下标, 章)
+            for 下标, 章 in 通道任务
+        ]
+
+    通道池: list[tuple[aiohttp.ClientSession, dict[str, Any]]] = []
+    结果: list[tuple[int, dict[str, str]]] = []
+    待处理 = list(任务)
+    当前并发 = min(
+        计算动态章节并发数(len(待处理)),
+        max(1, int(起始并发 or 计算起始章节并发数(len(待处理)))),
+    )
+
+    async def 扩容至(目标并发: int) -> None:
+        待创建 = max(0, 目标并发 - len(通道池))
+        if not 待创建:
+            return
+        信号量 = asyncio.Semaphore(min(通道初始化并发数, 待创建))
+
+        async def 创建一个通道() -> tuple[aiohttp.ClientSession, dict[str, Any]] | None:
+            async with 信号量:
+                return await 异步新建下载通道()
+
+        新通道 = await asyncio.gather(*(创建一个通道() for _ in range(待创建)))
+        通道池.extend(通道 for 通道 in 新通道 if 通道 is not None)
+
+    async def 收缩至(目标并发: int) -> None:
+        if len(通道池) <= 目标并发:
+            return
+        待关闭 = 通道池[目标并发:]
+        del 通道池[目标并发:]
+        await asyncio.gather(*(会话.close() for 会话, _ in 待关闭), return_exceptions=True)
+
+    try:
+        while 待处理:
+            目标窗口并发 = min(当前并发, len(待处理))
+            await 扩容至(目标窗口并发)
+            活跃通道 = 通道池[:min(目标窗口并发, len(通道池))]
+            if not 活跃通道:
+                for 下标, 章 in 待处理:
+                    cid = str(章.get("id") or "")
+                    标题 = str(章.get("title") or f"章节{cid}")
+                    if callable(进度回调):
+                        await 进度回调(False)
+                    结果.append((下标, {"title": 标题, "content": "", "id": cid}))
+                break
+
+            窗口任务数 = min(len(待处理), len(活跃通道) * 每通道章节窗口)
+            当前窗口 = 待处理[:窗口任务数]
+            del 待处理[:窗口任务数]
+            通道任务 = [[] for _ in 活跃通道]
+            for 序号, 项 in enumerate(当前窗口):
+                通道任务[序号 % len(活跃通道)].append(项)
+
+            窗口结果 = await asyncio.gather(
+                *(
+                    执行通道(通道, 分配任务)
+                    for 通道, 分配任务 in zip(活跃通道, 通道任务)
+                    if 分配任务
+                )
+            )
+            扁平结果 = [项 for 通道结果 in 窗口结果 for 项 in 通道结果]
+            结果.extend(扁平结果)
+            窗口成功数 = sum(1 for _, 项 in 扁平结果 if 项.get("content"))
+            原并发 = 当前并发
+            当前并发 = 计算下一窗口并发数(当前并发, 窗口成功数, len(扁平结果))
+            logger.debug(
+                f"点众章节动态并发：book_id={书籍编号}, window={len(扁平结果)}, "
+                f"success={窗口成功数}, concurrency={原并发}->{当前并发}"
+            )
+            if 窗口成功数 / max(len(扁平结果), 1) < 0.8:
+                await 收缩至(当前并发)
+                await asyncio.sleep(0.3)
+    finally:
+        await asyncio.gather(*(会话.close() for 会话, _ in 通道池), return_exceptions=True)
+
+    return 结果
 
 
 async def 异步下载全部章节(
-    session: aiohttp.ClientSession,
-    datas: dict[str, Any],
     书籍编号: str,
     目录: list[dict[str, Any]],
     书名: str,
@@ -481,12 +620,13 @@ async def 异步下载全部章节(
                     f"percent={百分比}%, success={成功}, failed={完成 - 成功}"
                 )
 
+    首轮并发 = 计算起始章节并发数(总数)
     logger.info(
         f"点众小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-        f"concurrency={计算动态章节并发数(总数)}"
+        f"concurrency={首轮并发}, max_concurrency={最大章节并发数}, session_reuse=per_lane"
     )
     首轮结果 = await 异步执行章节下载轮(
-        session, datas, list(enumerate(目录)), 书籍编号, 书名, 记录进度
+        list(enumerate(目录)), 书籍编号, 书名, 记录进度, 起始并发=首轮并发
     )
     for 下标, 章节结果 in 首轮结果:
         结果[下标] = 章节结果
@@ -497,10 +637,13 @@ async def 异步下载全部章节(
             break
         logger.debug(
             f"点众失败章节重试：book_id={书籍编号}, round={轮次}/{失败章节重试轮数}, "
-            f"missing={len(缺失任务)}, concurrency={计算动态章节并发数(len(缺失任务))}"
+            f"missing={len(缺失任务)}, concurrency={计算起始章节并发数(len(缺失任务), 重试=True)}"
         )
         重试结果 = await 异步执行章节下载轮(
-            session, datas, 缺失任务, 书籍编号, 书名
+            缺失任务,
+            书籍编号,
+            书名,
+            起始并发=计算起始章节并发数(len(缺失任务), 重试=True),
         )
         恢复数 = 0
         for 下标, 章节结果 in 重试结果:
