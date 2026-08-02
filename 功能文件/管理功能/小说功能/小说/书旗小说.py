@@ -5,7 +5,6 @@ import base64
 import hashlib
 import html
 import json
-import math
 import re
 import secrets
 import time
@@ -53,7 +52,7 @@ SEARCH_NO_SIGN_KEYS = {
     "sign", "key", "_public", "_reqid", "_beta", "_",
     "X-NEBULAXMLHTTPREQUEST", "callbackUrl",
 }
-最大下载并发数 = 64
+最大下载并发数 = 700
 单章最大尝试次数 = 3
 进度日志分段数 = 10
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
@@ -163,20 +162,15 @@ def shuqi_detail_sign(book_id: str, timestamp: str, user_id: str, encrypt_key: s
     return hashlib.md5(sign_str.encode()).hexdigest()
 
 
+书旗正文转换表 = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
+)
+
+
 def p_func(s: str) -> str:
-    result: list[str] = []
-    for ch in str(s or ""):
-        if ch.isalpha():
-            c = 0 if ch.isupper() else 1
-            lower = ch.lower()
-            code = ord(lower)
-            k = (code - 83) % 26
-            if k == 0:
-                k = 26
-            result.append(chr(k + (64 if c == 0 else 96)))
-        else:
-            result.append(ch)
-    return "".join(result)
+    """书旗正文的 ROT13 字符变换，交给 CPython 的转换表实现。"""
+    return str(s or "").translate(书旗正文转换表)
 
 
 def _搜索请求ID() -> str:
@@ -470,7 +464,7 @@ def 计算动态并发(章节数: int, 最大并发: int = 最大下载并发数
     数量 = max(0, int(章节数 or 0))
     if 数量 <= 0:
         return 0
-    return min(max(1, int(最大并发 or 1)), 数量, max(1, math.ceil(数量 / 2)))
+    return min(max(1, int(最大并发 or 1)), 数量)
 
 
 async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book) -> list[dict[str, str]]:
