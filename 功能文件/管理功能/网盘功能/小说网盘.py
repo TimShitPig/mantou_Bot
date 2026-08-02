@@ -27,8 +27,12 @@ from 功能文件.管理功能.网盘功能 import 百度网盘
 状态命令 = {"网盘", "网盘状态", "当前网盘"}
 
 
-async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
+async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -> Any | None:
     return await 网盘Cookie.处理网盘Cookie指令(event, 命令文本, 配置)
+
+
+async def 停止网盘后台任务() -> None:
+    await 网盘Cookie.停止全部夸克扫码登录任务()
 
 
 def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str | None:

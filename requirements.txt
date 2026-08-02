@@ -3,3 +3,4 @@ requests
 pycryptodome
 gmpy2
 pymysql
+qrcode[pil]

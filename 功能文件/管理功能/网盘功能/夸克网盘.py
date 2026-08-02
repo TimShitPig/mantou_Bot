@@ -4,8 +4,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import mimetypes
 import re
-import time
 from email.utils import formatdate
 from pathlib import Path
 from typing import Any
@@ -28,8 +28,7 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
     "content-type": "application/json",
     "user-agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 "
-        "Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
+        "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
     ),
     "origin": "https://pan.quark.cn",
     "referer": "https://pan.quark.cn/",
@@ -39,8 +38,6 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 class 夸克网盘客户端:
     def __init__(self, cookie: str):
         self.cookie = 清理Cookie(cookie)
-        self.ctoken = 提取Cookie字段(self.cookie, "ctoken")
-        self.ctoken_checked = bool(self.ctoken)
         self.session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> "夸克网盘客户端":
@@ -88,7 +85,12 @@ class 夸克网盘客户端:
         数据 = await self.请求JSON(
             "POST",
             "/file",
-            json_data={"file_name": 目录名, "pdir_fid": str(父目录ID), "dir_init_lock": False},
+            json_data={
+                "pdir_fid": str(父目录ID),
+                "file_name": 目录名,
+                "dir_path": "",
+                "dir_init_lock": False,
+            },
         )
         if not 接口成功(数据):
             raise RuntimeError(f"夸克网盘创建目录失败：{限制文本长度(数据)}")
@@ -119,10 +121,17 @@ class 夸克网盘客户端:
         数据 = await self.请求JSON(
             "POST",
             "/file/delete",
-            json_data={"filelist": 文件ID列表, "action_type": 2},
+            json_data={"action_type": 2, "filelist": 文件ID列表, "exclude_fids": []},
         )
         if not 接口成功(数据):
             raise RuntimeError(f"夸克网盘删除同名旧文件失败：{限制文本长度(数据)}")
+        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+        任务ID = str(返回数据.get("task_id") or "")
+        if 任务ID:
+            任务数据 = await self.轮询任务(任务ID)
+            任务结果 = 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            if 安全整数(任务结果.get("status"), -1) != 2:
+                raise RuntimeError("夸克网盘删除同名旧文件任务未完成")
         logger.debug(f"夸克网盘上传前已删除同名旧文件：file={文件名}, count={len(文件ID列表)}")
 
     async def 列出目录全部项目(self, 父目录ID: str) -> list[dict[str, Any]]:
@@ -138,6 +147,8 @@ class 夸克网盘客户端:
                     "_fetch_total": 1,
                     "_fetch_sub_dirs": 0,
                     "_sort": "file_type:asc,updated_at:desc",
+                    "fetch_all_file": 1,
+                    "fetch_risk_file_name": 1,
                 },
             )
             if not 接口成功(数据):
@@ -154,16 +165,21 @@ class 夸克网盘客户端:
             raise RuntimeError("夸克网盘上传文件不存在")
         MD5, SHA1 = 计算文件哈希(路径)
         文件大小 = 路径.stat().st_size
+        文件状态 = 路径.stat()
+        内容类型 = mimetypes.guess_type(文件名)[0] or "application/octet-stream"
         预上传数据 = await self.请求JSON(
             "POST",
             "/file/upload/pre",
             json_data={
-                "file_name": 文件名,
+                "ccp_hash_update": True,
+                "parallel_upload": True,
                 "pdir_fid": str(父目录ID),
+                "dir_name": "",
                 "size": 文件大小,
-                "format_type": 路径.suffix.lower().lstrip("."),
-                "md5": MD5,
-                "sha1": SHA1,
+                "file_name": 文件名,
+                "format_type": 内容类型,
+                "l_updated_at": int(文件状态.st_mtime * 1000),
+                "l_created_at": int(文件状态.st_ctime * 1000),
             },
         )
         if not 接口成功(预上传数据):
@@ -179,7 +195,7 @@ class 夸克网盘客户端:
         秒传数据 = await self.请求JSON(
             "POST",
             "/file/update/hash",
-            json_data={"task_id": 任务ID, "md5": MD5, "sha1": SHA1, "size": 文件大小},
+            json_data={"task_id": 任务ID, "md5": MD5, "sha1": SHA1},
         )
         秒传结果 = 秒传数据.get("data") if isinstance(秒传数据.get("data"), dict) else {}
         if 接口成功(秒传数据) and 解析布尔值(秒传结果.get("finish")):
@@ -204,8 +220,8 @@ class 夸克网盘客户端:
         对象键 = str(上传参数.get("obj_key") or "")
         上传ID = str(上传参数.get("upload_id") or "")
         PDS编号 = str(上传参数.get("pds_id") or PDS_ID)
-        OSS用户代理 = "oss-pc-client"
-        内容类型 = "application/octet-stream"
+        OSS用户代理 = "aliyun-sdk-js/1.0.0 Chrome 150.0.0.0 on Windows 10 64-bit"
+        内容类型 = mimetypes.guess_type(路径.name)[0] or "application/octet-stream"
         鉴权元数据 = (
             f"PUT\n\n{内容类型}\n{当前时间}\n"
             f"x-oss-date:{当前时间}\n"
@@ -216,7 +232,6 @@ class 夸克网盘客户端:
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?partNumber=1&uploadId={上传ID}"
         请求头 = {
             "authorization": 鉴权键,
-            "date": 当前时间,
             "x-oss-date": 当前时间,
             "x-oss-user-agent": OSS用户代理,
             "content-type": 内容类型,
@@ -235,11 +250,25 @@ class 夸克网盘客户端:
         对象键 = str(上传参数.get("obj_key") or "")
         上传ID = str(上传参数.get("upload_id") or "")
         PDS编号 = str(上传参数.get("pds_id") or PDS_ID)
-        OSS用户代理 = "oss-pc-client"
+        OSS用户代理 = "aliyun-sdk-js/1.0.0 Chrome 150.0.0.0 on Windows 10 64-bit"
         回调文本 = 规范化回调文本(上传参数.get("callback"))
         回调编码 = base64.b64encode(回调文本.encode("utf-8")).decode("ascii")
+        规范ETag = str(ETag or "").strip().strip('"')
+        if re.fullmatch(r"[0-9a-fA-F]{32}", 规范ETag):
+            规范ETag = 规范ETag.upper()
+        XML正文 = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            "<CompleteMultipartUpload>\n"
+            "<Part>\n"
+            "<PartNumber>1</PartNumber>\n"
+            f'<ETag>"{规范ETag}"</ETag>\n'
+            "</Part>\n"
+            "</CompleteMultipartUpload>"
+        )
+        XML字节 = XML正文.encode("utf-8")
+        内容MD5 = base64.b64encode(hashlib.md5(XML字节).digest()).decode("ascii")
         鉴权元数据 = (
-            f"POST\n\n\n{当前时间}\n"
+            f"POST\n{内容MD5}\napplication/xml\n{当前时间}\n"
             f"x-oss-callback:{回调编码}\n"
             f"x-oss-date:{当前时间}\n"
             f"x-oss-user-agent:{OSS用户代理}\n"
@@ -249,20 +278,16 @@ class 夸克网盘客户端:
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?uploadId={上传ID}"
         请求头 = {
             "authorization": 鉴权键,
-            "date": 当前时间,
+            "content-md5": 内容MD5,
+            "content-type": "application/xml",
             "x-oss-date": 当前时间,
             "x-oss-user-agent": OSS用户代理,
             "x-oss-callback": 回调编码,
         }
-        XML正文 = (
-            "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber>"
-            f"<ETag>{ETag}</ETag></Part></CompleteMultipartUpload>"
-        )
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
-            skip_auto_headers={"Content-Type"},
         ) as 会话:
-            async with 会话.post(地址, data=XML正文.encode("utf-8"), headers=请求头) as 响应:
+            async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
                 响应文本 = await 响应.text()
                 if 响应.status not in (200, 201):
                     raise RuntimeError(f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}")
@@ -333,7 +358,7 @@ class 夸克网盘客户端:
             最后数据 = await self.请求JSON(
                 "GET",
                 "/task",
-                params={"task_id": 任务ID, "retry_index": 尝试次数, "__t": int(time.time() * 1000)},
+                params={"task_id": 任务ID, "retry_index": 尝试次数},
             )
             任务数据 = 最后数据.get("data") if isinstance(最后数据.get("data"), dict) else {}
             if 安全整数(任务数据.get("status"), -1) == 2:
@@ -346,7 +371,14 @@ class 夸克网盘客户端:
             数据 = await self.请求JSON(
                 "GET",
                 "/share/mypage/detail",
-                params={"_page": 1, "_size": 50, "_sort": "created_at:desc"},
+                params={
+                    "_page": 1,
+                    "_size": 50,
+                    "_order_field": "created_at",
+                    "_order_type": "desc",
+                    "_fetch_total": 1,
+                    "_fetch_notify_follow": 1,
+                },
             )
             if 接口成功(数据):
                 for 项目 in 读取列表(数据, ("data", "list")):
@@ -370,12 +402,9 @@ class 夸克网盘客户端:
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        await self.确保CToken()
         会话 = self.获取会话()
-        请求参数 = {"pr": "ucpro", "fr": "pc"}
+        请求参数 = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         请求参数.update(params or {})
-        if self.ctoken and "ctoken" not in 请求参数:
-            请求参数["ctoken"] = self.ctoken
         地址 = 路径 if 路径.startswith("http") else f"{基础接口地址}{路径}"
         async with 会话.request(方法, 地址, params=请求参数, json=json_data) as 响应:
             文本 = await 响应.text()
@@ -390,25 +419,9 @@ class 夸克网盘客户端:
                 raise RuntimeError("夸克网盘返回格式不是对象")
             return 数据
 
-    async def 确保CToken(self) -> None:
-        if self.ctoken or self.ctoken_checked:
-            return
-        self.ctoken_checked = True
-        会话 = self.获取会话()
-        try:
-            async with 会话.get(
-                "https://pan.quark.cn/",
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as 响应:
-                await 响应.text()
-                self.刷新会话Cookie(响应)
-        except Exception as 异常:
-            logger.debug(f"夸克网盘ctoken探测失败：error={type(异常).__name__}")
-        self.ctoken = self.ctoken or 提取Cookie字段(self.cookie, "ctoken")
-
     def 刷新会话Cookie(self, 响应: aiohttp.ClientResponse) -> None:
         已更新 = False
-        for 名称 in ("__puus", "ctoken"):
+        for 名称 in ("__puus",):
             新值 = 响应.cookies.get(名称)
             if not 新值:
                 continue
@@ -416,8 +429,6 @@ class 夸克网盘客户端:
             if not 值:
                 continue
             self.cookie = 更新Cookie字段(self.cookie, 名称, 值)
-            if 名称 == "ctoken":
-                self.ctoken = 值
             已更新 = True
         if 已更新:
             self.获取会话().headers["cookie"] = self.cookie
@@ -596,16 +607,6 @@ def 清理Cookie(cookie: Any) -> str:
     if 文本.lower().startswith("cookie:"):
         文本 = 文本.split(":", 1)[1].strip()
     return 文本
-
-
-def 提取Cookie字段(cookie: str, 字段名: str) -> str:
-    for 片段 in re.split(r";\s*", str(cookie or "")):
-        if "=" not in 片段:
-            continue
-        名称, 值 = 片段.split("=", 1)
-        if 名称.strip() == 字段名:
-            return 值.strip()
-    return ""
 
 
 def 更新Cookie字段(cookie: str, 字段名: str, 值: str) -> str:
