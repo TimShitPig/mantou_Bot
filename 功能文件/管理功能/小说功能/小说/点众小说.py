@@ -212,7 +212,14 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         作者 = str(详情.get("author") or 详情.get("authorName") or "未知")
         状态原文 = str(详情.get("status") or 详情.get("serialStatus") or "")
         状态 = "完结" if ("完" in 状态原文 or str(详情.get("isEnd") or "") in {"1", "true", "True"}) else "连载"
-        字数 = 格式化字数(详情.get("wordCount") or 详情.get("words") or 详情.get("wordNum"))
+        字数 = 格式化字数(
+            详情.get("wordCount")
+            or 详情.get("words")
+            or 详情.get("totalWordSize")
+            or 详情.get("totalWords")
+            or 详情.get("wordSize")
+            or 详情.get("wordNum")
+        )
         动态并发 = 计算动态章节并发数(len(目录))
         logger.info(
             f"点众小说开始下载：book_id={书籍编号}, title={书名}, author={作者}, "
