@@ -6,6 +6,8 @@ import json
 import re
 import time
 import urllib.parse
+from collections import Counter
+from difflib import SequenceMatcher
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -59,6 +61,11 @@ except Exception as exc:
 会话等待秒数 = 300
 找书会话: dict[str, dict[str, Any]] = {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
+找书名命令正则 = re.compile(r"^找(?:书名|小说名)\s*[:：]?\s*(.+)$")
+找作者命令正则 = re.compile(r"^找(?:作者|作家)\s*[:：]?\s*(.+)$")
+空找书模式正则 = re.compile(r"^找(?:书名|小说名|作者|作家)\s*[:：]?\s*$")
+查询书名模式正则 = re.compile(r"^(?:书名|小说名)\s*[:：]?\s*(.+)$")
+查询作者模式正则 = re.compile(r"^(?:作者|作家)\s*[:：]?\s*(.+)$")
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
 分隔线 = "————————"
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
@@ -177,20 +184,41 @@ def 清理过期会话() -> None:
         找书会话.pop(键, None)
 
 
-def 解析找书关键词(命令文本: str) -> str | None:
+def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     文本 = str(命令文本 or "").strip()
     if not 文本:
         return None
-    匹配 = 找书命令正则.match(文本)
+    if 空找书模式正则.fullmatch(文本):
+        return None
+    搜索类型 = "auto"
+    匹配 = 找书名命令正则.match(文本)
+    if 匹配:
+        搜索类型 = "title"
+    else:
+        匹配 = 找作者命令正则.match(文本)
+        if 匹配:
+            搜索类型 = "author"
+        else:
+            匹配 = 找书命令正则.match(文本)
     if not 匹配:
         return None
     关键词 = 清理文本(匹配.group(1))
+    if 搜索类型 == "auto":
+        类型匹配 = 查询书名模式正则.match(关键词)
+        if 类型匹配:
+            搜索类型 = "title"
+            关键词 = 清理文本(类型匹配.group(1))
+        else:
+            类型匹配 = 查询作者模式正则.match(关键词)
+            if 类型匹配:
+                搜索类型 = "author"
+                关键词 = 清理文本(类型匹配.group(1))
     if not 关键词 or 关键词 in 翻页命令集合:
         return None
     # 避免误伤其他「找」开头命令
     if 关键词.startswith(("书登录", "书状态", "书清理")):
         return None
-    return 关键词
+    return {"keyword": 关键词, "type": 搜索类型}
 
 
 def 构造番茄链接(书籍编号: str) -> str:
@@ -263,158 +291,250 @@ def 计算热度排序值(阅读量: int = 0, 评分: float = 0.0, 字数: int =
     return float(字数) / 1000.0
 
 
+书名噪声后缀 = (
+    "原版小说", "原版", "动漫版", "广播剧", "同人", "后续", "续写",
+    "新书", "大全集", "全集", "完本",
+)
+无效作者名称 = {"", "未知", "unknown", "佚名", "匿名"}
+
+
+def 计算匹配字数(候选文本: Any, 关键词: Any) -> int:
+    候选 = 规范标题(候选文本)
+    查询 = 规范标题(关键词)
+    if not 候选 or not 查询:
+        return 0
+    return sum((Counter(候选) & Counter(查询)).values())
+
+
+def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型: str) -> dict[str, Any]:
+    原文 = 清理文本(候选文本)
+    候选 = 规范标题(原文)
+    查询 = 规范标题(关键词)
+    if not 候选 or not 查询:
+        return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
+    if 字段类型 == "author" and 候选 in 无效作者名称:
+        return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
+
+    匹配字数 = 计算匹配字数(候选, 查询)
+    覆盖率 = 匹配字数 / max(len(查询), 1)
+    相似度 = SequenceMatcher(None, 查询, 候选).ratio()
+
+    if 候选 == 查询:
+        return {"tier": 6, "score": 10000.0, "chars": 匹配字数, "coverage": 1.0, "ratio": 1.0}
+
+    if 字段类型 == "title":
+        去后缀 = 候选
+        for 后缀 in 书名噪声后缀:
+            规范后缀 = 规范标题(后缀)
+            if 规范后缀 and 去后缀.endswith(规范后缀) and len(去后缀) > len(规范后缀):
+                去后缀 = 去后缀[: -len(规范后缀)]
+                break
+        if 去后缀 == 查询:
+            return {"tier": 5, "score": 9000.0, "chars": 匹配字数, "coverage": 覆盖率, "ratio": 相似度}
+
+    if 候选.startswith(查询):
+        多余 = len(候选) - len(查询)
+        基础分 = 7800.0 if 字段类型 == "author" else 7600.0
+        return {
+            "tier": 4,
+            "score": max(基础分 - 多余 * 35.0, 5200.0),
+            "chars": 匹配字数,
+            "coverage": 覆盖率,
+            "ratio": 相似度,
+        }
+    if 查询 in 候选:
+        位置 = 候选.find(查询)
+        多余 = len(候选) - len(查询)
+        基础分 = 7000.0 if 字段类型 == "author" else 6200.0
+        return {
+            "tier": 3,
+            "score": max(基础分 - 位置 * 20.0 - 多余 * 20.0, 4300.0),
+            "chars": 匹配字数,
+            "coverage": 覆盖率,
+            "ratio": 相似度,
+        }
+
+    最少反向长度 = max(3 if 字段类型 == "title" else 2, (len(查询) * 2 + 2) // 3)
+    if 候选 in 查询 and len(候选) >= 最少反向长度:
+        return {
+            "tier": 2,
+            "score": 4800.0 + 覆盖率 * 600.0,
+            "chars": 匹配字数,
+            "coverage": 覆盖率,
+            "ratio": 相似度,
+        }
+
+    if 字段类型 == "author":
+        最少匹配字数 = max(2, (len(查询) * 3 + 3) // 4)
+        可模糊 = len(查询) >= 3 and 匹配字数 >= 最少匹配字数 and 覆盖率 >= 0.75 and 相似度 >= 0.78
+    else:
+        最少匹配字数 = max(2, (len(查询) * 65 + 99) // 100)
+        可模糊 = len(查询) >= 3 and 匹配字数 >= 最少匹配字数 and 覆盖率 >= 0.65 and 相似度 >= 0.68
+    if 可模糊:
+        return {
+            "tier": 1,
+            "score": 1800.0 + 匹配字数 * 260.0 + 覆盖率 * 700.0 + 相似度 * 700.0,
+            "chars": 匹配字数,
+            "coverage": 覆盖率,
+            "ratio": 相似度,
+        }
+    return {"tier": 0, "score": 0.0, "chars": 匹配字数, "coverage": 覆盖率, "ratio": 相似度}
+
+
 def 计算标题相关度(标题: str, 关键词: str) -> float:
-    """搜索相关度：精确书名优先，避免各平台原始阅读量互相碾压。"""
-    原标题 = 清理文本(标题)
-    t = 规范标题(标题)
-    k = 规范标题(关键词)
-    if not k or not t:
-        return 0.0
-    if t == k:
-        return 10000.0
-    去后缀 = t
-    for 后缀 in ("原版小说", "原版", "动漫版", "广播剧", "同人", "后续", "续写", "新书", "大全集", "全集", "完本"):
-        s = 规范标题(后缀)
-        if s and 去后缀.endswith(s) and len(去后缀) > len(s):
-            去后缀 = 去后缀[: -len(s)]
-            break
-    if 去后缀 == k:
-        return 8200.0
-    if t.startswith(k):
-        多余 = len(t) - len(k)
-        分 = 7000.0 - 多余 * 40.0
-        if "：" in 原标题 or ":" in 原标题 or "·" in 原标题:
-            分 -= 500.0
-        return max(分, 4200.0)
-    if k in t:
-        位置 = t.find(k)
-        多余 = len(t) - len(k)
-        分 = 3800.0 - 位置 * 15.0 - 多余 * 25.0
-        if "：" in 原标题 or ":" in 原标题:
-            分 -= 400.0
-        for 词 in ("同人", "衍生", "续写", "后续", "之旅", "系统"):
-            if 词 in 原标题:
-                分 -= 150.0
-        return max(分, 300.0)
-    return 50.0
+    return float(_计算文本匹配详情(标题, 关键词, 字段类型="title")["score"])
 
 
-def 排序找书结果(结果: list[dict[str, Any]], 关键词: str) -> list[dict[str, Any]]:
-    """通用找书排序（不写死书名）：
+def 计算作者相关度(作者: str, 关键词: str) -> float:
+    return float(_计算文本匹配详情(作者, 关键词, 字段类型="author")["score"])
 
-    1) 先选用户最可能要的那本：精确书名 > 近精确 > 前缀/包含；
-       同档内优先「多平台同名同作者共识」，再参考评分与平台内相对热度。
-    2) 再把剩余结果按与第一本的相似度聚拢：同名多平台、同作者、同系列前缀。
 
-    平台原始阅读量不可跨平台比较，只做平台内归一化参考；热度不展示给用户。
-    """
+def _拆分查询词(关键词: str) -> list[str]:
+    结果: list[str] = []
+    for 文本 in re.split(r"[\s,，;；/|]+", 清理文本(关键词)):
+        规范词 = 规范标题(文本)
+        if 规范词 and 规范词 not in 结果:
+            结果.append(规范词)
+    return 结果 or ([规范标题(关键词)] if 规范标题(关键词) else [])
+
+
+def _评估找书项(项: dict[str, Any], 关键词: str) -> dict[str, Any]:
+    标题 = 清理文本(项.get("title") or "")
+    作者 = 清理文本(项.get("author") or "")
+    标题匹配 = _计算文本匹配详情(标题, 关键词, 字段类型="title")
+    作者匹配 = _计算文本匹配详情(作者, 关键词, 字段类型="author")
+    查询词 = _拆分查询词(关键词)
+    标题词全匹配 = bool(查询词) and all(
+        _计算文本匹配详情(标题, 词, 字段类型="title")["score"] > 0 for 词 in 查询词
+    )
+    作者词全匹配 = bool(查询词) and all(
+        _计算文本匹配详情(作者, 词, 字段类型="author")["score"] > 0 for 词 in 查询词
+    )
+    混合词详情 = [
+        max(
+            _计算文本匹配详情(标题, 词, 字段类型="title"),
+            _计算文本匹配详情(作者, 词, 字段类型="author"),
+            key=lambda 详情: (详情["tier"], 详情["chars"], 详情["score"]),
+        )
+        for 词 in 查询词
+    ]
+    混合词全匹配 = bool(查询词) and all(详情["score"] > 0 for 详情 in 混合词详情)
+    return {
+        "title": 标题匹配,
+        "author": 作者匹配,
+        "tokens": 查询词,
+        "title_all": 标题词全匹配,
+        "author_all": 作者词全匹配,
+        "mixed_all": 混合词全匹配,
+        "mixed_chars": sum(int(详情["chars"]) for 详情 in 混合词详情),
+        "mixed_score": sum(float(详情["score"]) for 详情 in 混合词详情),
+    }
+
+
+def _推断找书搜索类型(评估结果: list[dict[str, Any]], 搜索类型: str) -> str:
+    if 搜索类型 in {"title", "author"}:
+        return 搜索类型
+    if not 评估结果:
+        return "title"
+    if any(len(详情["tokens"]) > 1 and 详情["mixed_all"] for 详情 in 评估结果):
+        return "mixed"
+    精确书名 = sum(1 for 详情 in 评估结果 if 详情["title"]["tier"] == 6)
+    精确作者 = sum(1 for 详情 in 评估结果 if 详情["author"]["tier"] == 6)
+    if 精确作者 > 精确书名:
+        return "author"
+    if 精确书名 > 0:
+        return "title"
+    if 精确作者 > 0:
+        return "author"
+    书名命中 = [详情 for 详情 in 评估结果 if 详情["title"]["score"] > 0]
+    作者命中 = [详情 for 详情 in 评估结果 if 详情["author"]["score"] > 0]
+    最高书名分 = max((float(详情["title"]["score"]) for 详情 in 书名命中), default=0.0)
+    最高作者分 = max((float(详情["author"]["score"]) for 详情 in 作者命中), default=0.0)
+    if 作者命中 and (len(作者命中) > len(书名命中) or 最高作者分 > 最高书名分):
+        return "author"
+    return "title"
+
+
+def _选择主匹配(详情: dict[str, Any], 搜索类型: str) -> dict[str, Any]:
+    if 搜索类型 == "author":
+        return 详情["author"]
+    if 搜索类型 == "mixed" and len(详情["tokens"]) > 1:
+        if not 详情["mixed_all"]:
+            return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
+        总字数 = sum(len(词) for 词 in 详情["tokens"])
+        return {
+            "tier": 7,
+            "score": 12000.0 + float(详情["mixed_score"]),
+            "chars": int(详情["mixed_chars"]),
+            "coverage": min(1.0, int(详情["mixed_chars"]) / max(总字数, 1)),
+            "ratio": 1.0,
+        }
+    return 详情["title"]
+
+
+def 排序找书结果(
+    结果: list[dict[str, Any]],
+    关键词: str,
+    搜索类型: str = "auto",
+) -> list[dict[str, Any]]:
+    """按书名/作者意图、匹配字数和覆盖率过滤排序，无直接关系的候选不展示。"""
     if not 结果:
         return []
-    from collections import Counter
-
-    关键词规范 = 规范标题(关键词)
-    书名作者频次: Counter[tuple[str, str]] = Counter()
-    书名频次: Counter[str] = Counter()
-    精确书名作者频次: Counter[tuple[str, str]] = Counter()
-
-    for 项 in 结果:
-        t0 = 规范标题(项.get("title"))
-        a0 = 规范标题(项.get("author"))
-        书名作者频次[(t0, a0)] += 1
-        书名频次[t0] += 1
-        if 关键词规范 and t0 == 关键词规范:
-            精确书名作者频次[(t0, a0)] += 1
+    全部评估 = [_评估找书项(项, 关键词) for 项 in 结果]
+    实际类型 = _推断找书搜索类型(全部评估, 搜索类型)
+    筛选后: list[dict[str, Any]] = []
+    for 原项, 详情 in zip(结果, 全部评估):
+        主匹配 = _选择主匹配(详情, 实际类型)
+        if 实际类型 == "title" and len(详情["tokens"]) > 1 and not 详情["title_all"]:
+            continue
+        if 实际类型 == "author" and len(详情["tokens"]) > 1 and not 详情["author_all"]:
+            continue
+        if float(主匹配["score"]) <= 0:
+            continue
+        项 = dict(原项)
+        项["_match_type"] = 实际类型
+        项["_match_tier"] = int(主匹配["tier"])
+        项["_match_chars"] = int(主匹配["chars"])
+        项["_match_coverage"] = float(主匹配["coverage"])
+        项["_match_score"] = float(主匹配["score"])
+        筛选后.append(项)
+    if not 筛选后:
+        return []
 
     平台原始: dict[str, list[float]] = {}
-    for 项 in 结果:
-        平台 = str(项.get("platform") or "")
-        平台原始.setdefault(平台, []).append(float(项.get("heat") or 0))
-    平台区间: dict[str, tuple[float, float]] = {
-        平台: ((min(vals), max(vals)) if vals else (0.0, 0.0))
-        for 平台, vals in 平台原始.items()
+    for 项 in 筛选后:
+        平台原始.setdefault(str(项.get("platform") or ""), []).append(float(项.get("heat") or 0))
+    平台区间 = {
+        平台: (min(值列表), max(值列表)) if 值列表 else (0.0, 0.0)
+        for 平台, 值列表 in 平台原始.items()
     }
 
     def 平台内相对热度(项: dict[str, Any]) -> float:
-        平台 = str(项.get("platform") or "")
-        lo, hi = 平台区间.get(平台, (0.0, 0.0))
-        raw = float(项.get("heat") or 0)
-        if hi > lo:
-            return (raw - lo) / (hi - lo)
-        return 0.5
+        下限, 上限 = 平台区间.get(str(项.get("platform") or ""), (0.0, 0.0))
+        当前值 = float(项.get("heat") or 0)
+        return (当前值 - 下限) / (上限 - 下限) if 上限 > 下限 else 0.5
 
-    def 标题信息(项: dict[str, Any]) -> tuple[str, str, str]:
-        标题 = str(项.get("title") or "")
-        作者 = str(项.get("author") or "")
-        return 标题, 规范标题(标题), 规范标题(作者)
+    def 排序键(项: dict[str, Any]) -> tuple:
+        标题规范 = 规范标题(项.get("title"))
+        作者规范 = 规范标题(项.get("author"))
+        共识平台数 = max(1, int(项.get("_source_count") or 1))
+        有效作者 = 1 if 作者规范 not in 无效作者名称 else 0
+        return (
+            int(项.get("_match_tier") or 0),
+            int(项.get("_match_chars") or 0),
+            float(项.get("_match_coverage") or 0),
+            float(项.get("_match_score") or 0),
+            共识平台数,
+            1 if 项.get("目录可用") else 0,
+            _安全浮点(项.get("score")),
+            平台内相对热度(项),
+            _平台优先级值(项.get("platform")),
+            有效作者,
+            -len(标题规范),
+        )
 
-    def 基础分(项: dict[str, Any]) -> tuple:
-        标题, t1, a1 = 标题信息(项)
-        相关度 = 计算标题相关度(标题, 关键词)
-        共识作者 = 书名作者频次.get((t1, a1), 1)
-        共识书名 = 书名频次.get(t1, 1)
-        精确共识 = 精确书名作者频次.get((t1, a1), 0)
-        # 硬档：精确匹配书名永远压过带后缀/同人
-        if 关键词规范 and t1 == 关键词规范:
-            档 = 3
-            相关度 += 精确共识 * 500.0 + 共识作者 * 200.0 + 共识书名 * 80.0
-        else:
-            档 = 2 if 相关度 >= 8000 else (1 if 相关度 >= 4000 else 0)
-            相关度 += 共识作者 * 90.0 + 共识书名 * 30.0
-        评分 = _安全浮点(项.get("score"))
-        相对热度 = 平台内相对热度(项)
-        有效作者 = 1 if a1 and a1 not in {"未知", "unknown", ""} else 0
-        平台分 = _平台优先级值(项.get("platform"))
-        return (档, 相关度, 精确共识, 共识作者, 平台分, 有效作者, 评分, 相对热度, -len(t1))
-
-    def 公共前缀长度(a: str, b: str) -> int:
-        n = 0
-        for x, y in zip(a or "", b or ""):
-            if x != y:
-                break
-            n += 1
-        return n
-
-    def 与锚点相似度(项: dict[str, Any], 锚点: dict[str, Any]) -> float:
-        _, t1, a1 = 标题信息(项)
-        _, at, aa = 标题信息(锚点)
-        s = 0.0
-        if a1 and aa and a1 == aa and a1 not in {"", "未知", "unknown"}:
-            s += 6000.0
-        if t1 and at and t1 == at:
-            s += 5500.0
-        if at and t1.startswith(at):
-            s += max(3600.0 - (len(t1) - len(at)) * 40.0, 1400.0)
-        elif t1 and at.startswith(t1):
-            s += 3000.0
-        pre = 公共前缀长度(t1, at)
-        需要 = max(2, min(len(关键词规范), 4) if 关键词规范 else 2)
-        if pre >= 需要:
-            s += pre * 100.0
-        if 关键词规范:
-            if t1 == 关键词规范:
-                s += 2500.0
-            elif t1.startswith(关键词规范):
-                s += 1000.0
-            elif 关键词规范 in t1:
-                s += 350.0
-        s += 平台内相对热度(项) * 60.0
-        s += _安全浮点(项.get("score")) * 15.0
-        return s
-
-    剩余 = list(结果)
-    # 第一本：按“用户意图档位”选，不靠某个平台的绝对阅读量
-    剩余.sort(key=基础分, reverse=True)
-    已选: list[dict[str, Any]] = [剩余.pop(0)]
-
-    while 剩余:
-        def 选取键(项: dict[str, Any]) -> tuple:
-            sim = 与锚点相似度(项, 已选[0]) + 与锚点相似度(项, 已选[-1]) * 0.4
-            b = 基础分(项)
-            return (sim, b[0], b[1], b[2], b[3], b[5], b[6])
-
-        剩余.sort(key=选取键, reverse=True)
-        已选.append(剩余.pop(0))
-    return 已选
+    筛选后.sort(key=排序键, reverse=True)
+    return 筛选后
 
 
 def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
@@ -526,54 +646,35 @@ async def 预检番茄目录(书籍编号: str) -> bool | None:
     return 状态
 
 
-def 获取番茄预检候选(结果: list[dict[str, Any]], 关键词: str, *, 最大数量: int = 番茄目录预检最大候选数) -> list[dict[str, Any]]:
-    """优先预检精确书名，再补足最靠前的番茄搜索结果。"""
-    关键词规范 = 规范标题(关键词)
+def 获取番茄预检候选(
+    结果: list[dict[str, Any]],
+    关键词: str,
+    *,
+    搜索类型: str = "auto",
+    最大数量: int = 番茄目录预检最大候选数,
+) -> list[dict[str, Any]]:
+    """只预检与书名或作者相关、且最终最可能展示的番茄候选。"""
     数量上限 = max(1, int(最大数量))
-    已选编号: set[str] = set()
-    候选: list[dict[str, Any]] = []
-
-    def 加入(项: dict[str, Any]) -> None:
-        书籍编号 = str(项.get("book_id") or "").strip()
-        if not 书籍编号 or 书籍编号 in 已选编号:
-            return
-        已选编号.add(书籍编号)
-        候选.append(项)
-
-    # 精确书名即使在搜索接口的后面，也可能被最终排序推到首页。
-    for 项 in 结果:
-        if len(候选) >= 数量上限:
-            break
-        if 关键词规范 and 规范标题(项.get("title")) == 关键词规范:
-            加入(项)
-
-    其余 = sorted(
-        结果,
-        key=lambda 项: (
-            计算标题相关度(str(项.get("title") or ""), 关键词),
-            _安全浮点(项.get("score")),
-            float(项.get("heat") or 0),
-        ),
-        reverse=True,
-    )
-    for 项 in 其余:
-        if len(候选) >= 数量上限:
-            break
-        加入(项)
-    return 候选
+    return 排序找书结果(结果, 关键词, 搜索类型)[:数量上限]
 
 
 async def 过滤无目录番茄搜索结果(
     结果: list[dict[str, Any]],
     关键词: str,
     *,
+    搜索类型: str = "auto",
     最大数量: int = 番茄目录预检最大候选数,
 ) -> list[dict[str, Any]]:
     """过滤已明确无目录的番茄候选，保留网络状态未知的候选。"""
     if not 结果 or 番茄小说 is None:
         return 结果
 
-    候选 = 获取番茄预检候选(结果, 关键词, 最大数量=最大数量)
+    候选 = 获取番茄预检候选(
+        结果,
+        关键词,
+        搜索类型=搜索类型,
+        最大数量=最大数量,
+    )
     if not 候选:
         return 结果
 
@@ -814,7 +915,7 @@ def _平台优先级值(平台: Any) -> int:
 
 
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
-    """跨平台同书择优：平台(番茄>七猫>书旗) > 评分 > 热度参考 > 有效作者。"""
+    """跨平台同书择优：平台优先级 > 评分 > 热度参考 > 有效作者。"""
     作者 = 规范标题(项.get("author"))
     有效作者 = 1 if 作者 and 作者 not in {"未知", "unknown"} else 0
     return (
@@ -826,28 +927,38 @@ def _书籍优劣键(项: dict[str, Any]) -> tuple:
 
 
 def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """同书去重：同平台同ID去重，跨平台同名同作者只保留最优一本。"""
+    """同书去重并保留跨平台共识数量，供推荐排序使用。"""
     合并: list[dict[str, Any]] = []
     平台书号索引: set[str] = set()
     书名作者位置: dict[str, int] = {}
     for 列表 in 结果列表:
-        for 项 in 列表:
+        for 原项 in 列表:
+            项 = dict(原项)
             平台 = str(项.get("platform") or "")
             标题 = 规范标题(项.get("title"))
             作者 = 规范标题(项.get("author"))
             book_id = str(项.get("book_id") or "")
+            if not 标题:
+                continue
             平台键 = f"{平台}|{book_id}|{标题}|{作者}"
             if 平台键 in 平台书号索引:
                 continue
+            平台书号索引.add(平台键)
             if "heat" not in 项:
                 项["heat"] = 0
+            项["_source_platforms"] = [平台] if 平台 else []
+            项["_source_count"] = max(1, len(项["_source_platforms"]))
             书名键 = f"{标题}|{作者}"
             if 书名键 in 书名作者位置:
                 旧位 = 书名作者位置[书名键]
-                if _书籍优劣键(项) > _书籍优劣键(合并[旧位]):
-                    合并[旧位] = 项
+                旧项 = 合并[旧位]
+                共识平台 = set(旧项.get("_source_platforms") or []) | set(项.get("_source_platforms") or [])
+                胜出项 = 项 if _书籍优劣键(项) > _书籍优劣键(旧项) else 旧项
+                胜出项 = dict(胜出项)
+                胜出项["_source_platforms"] = sorted(平台名 for 平台名 in 共识平台 if 平台名)
+                胜出项["_source_count"] = max(1, len(胜出项["_source_platforms"]))
+                合并[旧位] = 胜出项
                 continue
-            平台书号索引.add(平台键)
             书名作者位置[书名键] = len(合并)
             合并.append(项)
     return 合并
@@ -874,7 +985,7 @@ async def 搜索点众(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
-async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
+async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         番茄任务 = asyncio.create_task(搜索番茄(session, 关键词))
@@ -888,27 +999,31 @@ async def 聚合搜索(关键词: str) -> list[dict[str, Any]]:
         )
         # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
         # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
-        番茄结果 = await 过滤无目录番茄搜索结果(番茄结果, 关键词)
+        番茄结果 = await 过滤无目录番茄搜索结果(
+            番茄结果,
+            关键词,
+            搜索类型=搜索类型,
+        )
         合并 = 去重合并([番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果])
-        # 结果太少时，用联想词补搜
-        if len(合并) < 每页数量 and 联想词:
+        初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
+        # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
+        if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补任务 = [
-                搜索番茄(session, w, 需要数量=10),
-                搜索七猫(session, w, 需要数量=10),
-                搜索书旗(session, w, 需要数量=10),
-            ] if False else []
-            # 并行补搜每个联想词
             补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, 书旗结果, 得间结果, 点众结果]
             for w in 补搜词:
                 t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
                 t3 = asyncio.create_task(搜索书旗(session, w, 需要数量=10))
                 r1, r2, r3 = await asyncio.gather(t1, t2, t3)
-                r1 = await 过滤无目录番茄搜索结果(r1, w, 最大数量=5)
+                r1 = await 过滤无目录番茄搜索结果(
+                    r1,
+                    关键词,
+                    搜索类型=搜索类型,
+                    最大数量=5,
+                )
                 补结果集合.extend([r1, r2, r3])
             合并 = 去重合并(补结果集合)
-        return 排序找书结果(合并, 关键词)
+        return 排序找书结果(合并, 关键词, 搜索类型)
 
 
 def 格式化找书结果(会话: dict[str, Any]) -> str:
@@ -1058,22 +1173,28 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
-    关键词 = 解析找书关键词(文本)
+    查询 = 解析找书查询(文本)
     会话 = None
-    if 关键词 is not None:
+    if 查询 is not None:
+        关键词 = 查询["keyword"]
+        搜索类型 = 查询["type"]
         try:
-            结果 = await 聚合搜索(关键词)
+            结果 = await 聚合搜索(关键词, 搜索类型)
         except Exception as exc:
-            logger.warning(f"找书搜索失败：keyword={关键词}, error={exc}")
+            logger.warning(f"找书搜索失败：keyword={关键词}, type={搜索类型}, error={exc}")
             return "搜索失败，请稍后再试"
         会话 = {
             "keyword": 关键词,
+            "search_type": 搜索类型,
             "results": 结果,
             "page": 1,
             "ts": time.time(),
         }
         找书会话[会话键] = 会话
-        logger.info(f"找书搜索完成：keyword={关键词}, total={len(结果)}, session={会话键}")
+        logger.info(
+            f"找书搜索完成：keyword={关键词}, type={搜索类型}, "
+            f"total={len(结果)}, session={会话键}"
+        )
         if not 结果:
             return f"没有找到和「{关键词}」相关的书"
     else:
