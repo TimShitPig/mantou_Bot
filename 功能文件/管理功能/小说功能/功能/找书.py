@@ -768,96 +768,44 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
     return 结果[:需要数量]
 
 
-def 从对象提取书旗书(obj: dict[str, Any]) -> dict[str, Any] | None:
-    book_id = str(obj.get("bookId") or obj.get("bid") or obj.get("id") or "").strip()
-    title = 清理文本(obj.get("bookName") or obj.get("displayBookName") or obj.get("title") or obj.get("name") or "")
-    if not book_id.isdigit() or not title:
-        return None
-    author = 清理文本(obj.get("authorName") or obj.get("author") or "未知") or "未知"
-    评分 = _安全浮点(obj.get("novelScore") or obj.get("score"))
-    字数 = _安全整数热度(obj.get("wordCount") or obj.get("words") or obj.get("word_count"))
-    阅读量 = max(
-        _安全整数热度(obj.get("readCount")),
-        _安全整数热度(obj.get("hotValue")),
-        _安全整数热度(obj.get("hot")),
-        _安全整数热度(obj.get("clickCount")),
-    )
-    热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
-    return {
-        "platform": "书旗",
-        "book_id": book_id,
-        "title": title,
-        "author": author,
-        "url": 构造书旗链接(book_id),
-        "heat": 热度值,
-        "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
-        "score": 评分,
-        "read_count": 阅读量,
-    }
-
-
-def 遍历书旗搜索结果(obj: Any, out: list[dict[str, Any]], seen: set[str]) -> None:
-    if isinstance(obj, dict):
-        item = 从对象提取书旗书(obj)
-        if item and item["book_id"] not in seen:
-            # 优先 book 节点
-            if any(k in obj for k in ("bookId", "bookName", "displayBookName", "authorName")) or "book" in obj:
-                if "book" in obj and isinstance(obj["book"], dict):
-                    item2 = 从对象提取书旗书(obj["book"])
-                    if item2 and item2["book_id"] not in seen:
-                        seen.add(item2["book_id"])
-                        out.append(item2)
-                elif item["book_id"] not in seen and (obj.get("bookId") or obj.get("bookName") or obj.get("displayBookName")):
-                    seen.add(item["book_id"])
-                    out.append(item)
-        for value in obj.values():
-            遍历书旗搜索结果(value, out, seen)
-    elif isinstance(obj, list):
-        for value in obj:
-            遍历书旗搜索结果(value, out, seen)
-
-
-async def 搜索书旗(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
+async def 搜索书旗(
+    session: aiohttp.ClientSession,
+    关键词: str,
+    *,
+    需要数量: int = 30,
+) -> list[dict[str, Any]]:
     if 书旗小说 is None:
         return []
-    结果: list[dict[str, str]] = []
-    seen: set[str] = set()
-    页码 = 1
-    while len(结果) < 需要数量 and 页码 <= 5:
-        try:
-            params = {
-                "_public": 书旗小说.构造公共参数(书旗小说.DEFAULT_USER_ID, "an"),
-                "page": "searchResultV3",
-                "query": 关键词,
-                "fromSug": "0",
-                "kind": "",
-                "relatedBid": "",
-                "showMore": "0",
-                "showPost": "0",
-                "showTypes": "",
-                "pagination": json.dumps({"page": 页码, "pageSize": 20}, ensure_ascii=False),
-                "isTeenMode": "0",
-            }
-            signed = 书旗小说.签名参数(params, add_reqid=False)
-            url = f"https://ocean.shuqireader.com/sqan/render/render/search/native_v3?_reqid={书旗小说.请求ID()}"
-            headers = {
-                "User-Agent": 书旗小说.APP_USER_AGENT,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            }
-            async with session.post(url, data=signed, headers=headers) as resp:
-                文本 = await resp.text(errors="ignore")
-            data = json.loads(文本) if 文本 else {}
-        except Exception as exc:
-            logger.warning(f"找书书旗搜索失败：keyword={关键词}, page={页码}, error={exc}")
-            break
-        if str(data.get("status") or data.get("state") or "") not in {"200", "0"}:
-            break
-        before = len(结果)
-        遍历书旗搜索结果(data.get("data", data), 结果, seen)
-        if len(结果) == before:
-            break
-        页码 += 1
+    try:
+        原始结果 = await 书旗小说.搜索小说(session, 关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书书旗搜索失败：keyword={关键词}, error={exc}")
+        return []
+
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        book_id = str(书籍.get("book_id") or "").strip()
+        title = 清理文本(书籍.get("title"))
+        if not book_id.isdigit() or not title:
+            continue
+        author = 清理文本(书籍.get("author") or "未知") or "未知"
+        评分 = _安全浮点(书籍.get("score"))
+        字数 = _安全整数热度(书籍.get("word_count"))
+        阅读量 = _安全整数热度(书籍.get("read_count"))
+        热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
+        结果.append({
+            "platform": "书旗",
+            "book_id": book_id,
+            "title": title,
+            "author": author,
+            "url": str(书籍.get("url") or 构造书旗链接(book_id)),
+            "heat": 热度值,
+            "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+            "score": 评分,
+            "read_count": 阅读量,
+        })
     return 结果[:需要数量]
 
 
@@ -865,48 +813,10 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
     if 书旗小说 is None:
         return []
     try:
-        params = {
-            "_public": 书旗小说.构造公共参数(书旗小说.DEFAULT_USER_ID, "an"),
-            "query": 关键词,
-            "isTeenMode": "0",
-        }
-        signed = 书旗小说.签名参数(params, add_reqid=False)
-        url = f"https://ocean.shuqireader.com/sqan/render/render/search/findSuggest?_reqid={书旗小说.请求ID()}"
-        headers = {
-            "User-Agent": 书旗小说.APP_USER_AGENT,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
-        async with session.post(url, data=signed, headers=headers) as resp:
-            文本 = await resp.text(errors="ignore")
-        data = json.loads(文本) if 文本 else {}
+        return await 书旗小说.搜索联想(session, 关键词)
     except Exception as exc:
         logger.debug(f"找书书旗联想失败：keyword={关键词}, error={exc}")
         return []
-    建议: list[str] = []
-    seen: set[str] = set()
-
-    def walk(obj: Any) -> None:
-        if isinstance(obj, dict):
-            for key in ("query", "word", "keyword", "title", "name", "sug", "suggest"):
-                val = 清理文本(obj.get(key))
-                if val and val not in seen and val != 关键词:
-                    seen.add(val)
-                    建议.append(val)
-            for value in obj.values():
-                walk(value)
-        elif isinstance(obj, list):
-            for value in obj:
-                if isinstance(value, str):
-                    val = 清理文本(value)
-                    if val and val not in seen and val != 关键词:
-                        seen.add(val)
-                        建议.append(val)
-                else:
-                    walk(value)
-
-    walk(data.get("data", data))
-    return 建议[:8]
 
 
 def _平台优先级值(平台: Any) -> int:
@@ -962,7 +872,6 @@ def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any
             书名作者位置[书名键] = len(合并)
             合并.append(项)
     return 合并
-
 
 
 async def 搜索得间(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
