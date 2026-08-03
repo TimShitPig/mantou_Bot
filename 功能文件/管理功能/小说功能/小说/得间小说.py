@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
 import base64
 import hashlib
 import json
@@ -14,9 +14,8 @@ import struct
 import time
 import zlib
 import aiohttp
-from Crypto.Hash import SHA1
-from Crypto.PublicKey import RSA
-from Crypto.Signature import pkcs1_15
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 from astrbot.api import logger
 
@@ -36,9 +35,8 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-得间批量章节数 = 7
-得间正文最大动态并发数 = 700
-得间批量重试次数 = 3
+得间单章最大并发数 = 700
+得间单章重试次数 = 3
 得间解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
 
 # ===== 得间协议与解密（原 _得间源码） =====
@@ -56,37 +54,8 @@ EMBEDDED_KEY_PK8_B64 = (
     "MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAMXGjyS3p+3AVnlBJe5VQ6tC9inh8tVBve4r+yBjC5HQD6th2n3tSyuNVYaNRAFSEq+OENwnwwhjbYUnjLWb+qZscB43K1+4/WlKdvfgwQVXm0ZQ2+jMBf+165UBEEuuWT2WqXeKkkUqPQta5lrt4eFfbo53JcOO4D5fDSGQS5bZAgMBAAECgYAor4I/AXEQXeLsKtTMxMmY77uIPi0gZdfWqUGOFhIJOw4eKZEzGp++I+MWPPVieCnT55vcTmm2zg13uP0fVykmukWqZszG/ZNpPKYleOqnZOqQj7O3au8Ywz18F/pqD++PsUzxRVeXxSOOwmjQ0D2Pe/9yutz62pyiFGAzDsaI6QJBAMn8DeBT3AtcWuONdiHL3yC4NkGJDdyBbMOaWyvrcvUUZr13uS9mZO6pLTN6v9tkmPUdvYxcPTJ9wdGR7NcNPDsCQQD6qluGI2VAlz4s5UoDnelFKrwDPeiruE3I6wsrasK6h37DsAE6OrQgx2dm4yH7ntJHUlJCZ5ay1EBNfEexgQv7AkA1r2vUwxVKY7q4nqHWa8SbgrrRAmePw0qwVreC3erJHyoLk+XBpnqPQKIF+8tAueU5yTTXOLD/WZOJazrDEf5/AkBpwG+Ggu5Xtrcbd8ynA/sDHElf0MGVmNbwOgFnWs42pa1cX6fU6ilOXvIH3TFcF6A9SMS9kThpz9QlHJaek4P7AkAavQillA/wnrha9GsK5UFmzmwNfkjLLW4psAUsXOsqFXWMoxTd0xWuSbuVOzERpbFMBl1VoZQmD9BLSVOTNe+v"
 )
 
-# 普通版和极速版使用独立 App 身份，各自维护下载目录与短时令牌。
 DEFAULT_SESSION: Dict[str, str] = {
-    "usr": "",
-    "rgt": "",
-    "p1": "",
-    "zyeid": "",
-    "pc": "10",
-    "p2": "133001",
     "p3": "25272056",
-    "p4": "501656",
-    "p5": "19",
-    "p7": "",
-    "p9": "0",
-    "p12": "",
-    "p16": "SM-G9750",
-    "p21": "31303",
-    "p22": "9",
-    "p25": "25272156",
-    "p26": "28",
-    "p28": "",
-    "p29": "zy8f2e24",
-    "p30": "",
-    "p31": "",
-    "p34": "samsung",
-    "firm": "samsung",
-    "devId": "",
-}
-
-得间客户端配置: Dict[str, Dict[str, str]] = {
-    "normal": {"p33": PACKAGE, "d1": "5.5.9.2"},
-    "speed": {"p33": f"{PACKAGE}.speed", "d1": "5.7.4.1"},
 }
 
 TOKEN_KEY_BASE0 = bytes.fromhex("5a0b1252b41e6bf509dd542a66d25a47")
@@ -118,10 +87,8 @@ def p7_encrypt(s: str) -> str:
     return "".join(out)
 
 
-def load_session(profile: str = "normal") -> Dict[str, str]:
-    profile = profile if profile in 得间客户端配置 else "normal"
+def load_session() -> Dict[str, str]:
     data = DEFAULT_SESSION.copy()
-    data.update(得间客户端配置[profile])
     # 生成 8 位随机数字作为 usr
     data["usr"] = str(random.randint(10000000, 99999999))
     # 补全必要的派生字段（这些是算法必须的，不补会出错）
@@ -153,8 +120,8 @@ def app_sign(sorted_s: str) -> str:
     global _SIGN_KEY
     if _SIGN_KEY is None:
         raw = base64.b64decode(EMBEDDED_KEY_PK8_B64)
-        _SIGN_KEY = RSA.import_key(raw)
-    sig = pkcs1_15.new(_SIGN_KEY).sign(SHA1.new(sorted_s.encode("utf-8")))
+        _SIGN_KEY = serialization.load_der_private_key(raw, password=None)
+    sig = _SIGN_KEY.sign(sorted_s.encode("utf-8"), padding.PKCS1v15(), hashes.SHA1())
     return base64.b64encode(sig).decode("ascii")
 
 
@@ -166,7 +133,7 @@ def _to_int(v: Any, default: int = 0) -> int:
         return int(m.group(0)) if m else default
 
 
-def extract_chapter_auth(auth: Any, chapter_id: int) -> Dict[str, Any]:
+def extract_token_b64(auth: Any, chapter_id: int) -> str:
     if not isinstance(auth, dict):
         raise RuntimeError("auth error")
     body = auth.get("body")
@@ -174,11 +141,14 @@ def extract_chapter_auth(auth: Any, chapter_id: int) -> Dict[str, Any]:
         raise RuntimeError("no auth body")
     key = f"chapter_{chapter_id}"
     node = body.get(key)
-    if isinstance(node, dict):
-        return dict(node)
+    if isinstance(node, dict) and node.get("token"):
+        return str(node["token"])
     if body.get("token"):
-        return dict(body)
-    raise RuntimeError("no chapter auth")
+        return str(body["token"])
+    for value in body.values():
+        if isinstance(value, dict) and value.get("token"):
+            return str(value["token"])
+    raise RuntimeError("no token")
 
 
 def _rol3(x: int) -> int:
@@ -229,10 +199,13 @@ def _native_key_schedule(key: bytes) -> List[int]:
     return [x & 0xffffffff for x in words]
 
 
-def _native_block_with_round_keys(round_keys: List[int], block16: bytes | bytearray) -> bytes:
+def _native_block(key: bytes, block16: bytes) -> bytes:
+    if len(key) != 16:
+        raise ValueError("bad key")
     if len(block16) != 16:
         raise ValueError("bad block")
     t0, t1, t2, t3 = _NATIVE_T
+    round_keys = _native_key_schedule(key)
     s0 = round_keys[0] ^ int.from_bytes(block16[0:4], "big")
     s1 = round_keys[1] ^ int.from_bytes(block16[4:8], "big")
     s2 = round_keys[2] ^ int.from_bytes(block16[8:12], "big")
@@ -256,26 +229,15 @@ def _native_block_with_round_keys(round_keys: List[int], block16: bytes | bytear
     return bytes(out)
 
 
-def _native_block(key: bytes, block16: bytes) -> bytes:
-    if len(key) != 16:
-        raise ValueError("bad key")
-    return _native_block_with_round_keys(_native_key_schedule(key), block16)
-
-
-_NATIVE_CTR_BYTE_TRANSFORM = bytes((~_rol3(value)) & 0xff for value in range(256))
-
-
 def zhangyue_native_ctr(data: bytes, key: bytes, iv: bytes) -> bytes:
     if len(key) != 16 or len(iv) != 16:
         raise ValueError("bad ctr args")
     counter = bytearray(iv)
-    round_keys = _native_key_schedule(key)
-    out = bytearray(len(data))
+    out = bytearray()
     for off in range(0, len(data), 16):
-        ks = _native_block_with_round_keys(round_keys, counter)
-        end = min(off + 16, len(data))
-        for index in range(off, end):
-            out[index] = _NATIVE_CTR_BYTE_TRANSFORM[data[index] ^ ks[index - off]]
+        ks = _native_block(key, bytes(counter))
+        for value, key_byte in zip(data[off:off + 16], ks):
+            out.append((~_rol3(value ^ key_byte)) & 0xff)
         for idx in (13, 12, 11, 10):
             counter[idx] = (counter[idx] + 1) & 0xff
             if counter[idx]:
@@ -467,22 +429,15 @@ async def 异步下载得间字节(
         return await 请求()
 
 
-@dataclass
-class 得间异步下载通道:
-    名称: str
-    请求信号量: Optional[asyncio.Semaphore] = field(default=None, repr=False)
-    下载目录地址: str = ""
-    刷新次数: int = 0
-    会话参数: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
-    _刷新锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _授权锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _批次锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
+class 得间单章异步客户端:
+    """参考得间.py 的 DejianClient，仅将 requests 会话替换为共享 aiohttp 会话。"""
 
-    def __post_init__(self) -> None:
-        self.名称 = self.名称 if self.名称 in 得间客户端配置 else "normal"
-        self.会话参数 = load_session(self.名称)
+    def __init__(self, HTTP会话: aiohttp.ClientSession, 请求信号量: asyncio.Semaphore) -> None:
+        self.HTTP会话 = HTTP会话
+        self.请求信号量 = 请求信号量
+        self.会话参数 = load_session()
 
-    def _账号参数(self) -> Dict[str, str]:
+    def 账号参数(self) -> Dict[str, str]:
         参数: Dict[str, str] = {}
         for 键 in ("zyeid", "usr", "rgt", "p1"):
             值 = self.会话参数.get(键, "")
@@ -492,7 +447,7 @@ class 得间异步下载通道:
             参数["ku"] = self.会话参数["usr"]
         return 参数
 
-    def _设备参数(self) -> Dict[str, str]:
+    def 设备参数(self) -> Dict[str, str]:
         键列表 = (
             "pc", "p2", "p3", "p4", "p5", "p7", "p9", "p12", "p16",
             "p21", "p22", "p25", "p26", "p28", "p29", "p30", "p31",
@@ -500,242 +455,181 @@ class 得间异步下载通道:
         )
         return {键: self.会话参数.get(键, "") for 键 in 键列表 if 键 in self.会话参数}
 
-    def _附加参数(self, 参数: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def 附加参数(self, 参数: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         结果: Dict[str, Any] = {}
-        结果.update(self._账号参数())
-        结果.update(self._设备参数())
+        结果.update(self.账号参数())
+        结果.update(self.设备参数())
         if 参数:
             结果.update(参数)
         return 结果
 
-    def _签名参数(self, 参数: Dict[str, Any]) -> Dict[str, Any]:
+    def 签名参数(self, 参数: Dict[str, Any]) -> Dict[str, Any]:
         结果 = dict(参数)
         结果["timestamp"] = str(int(time.time() * 1000))
         结果["sign"] = app_sign(sorted_param_str(结果))
         return 结果
 
-    async def 获取下载目录地址(
+    async def 获取JSON(
         self,
-        HTTP会话: aiohttp.ClientSession,
-        书籍编号: str,
+        路径或地址: str,
+        参数: Optional[Dict[str, Any]] = None,
         *,
-        强制刷新: bool = False,
-        预期旧地址: str = "",
-    ) -> str:
-        async with self._刷新锁:
-            if self.下载目录地址 and not 强制刷新:
-                return self.下载目录地址
-            if (
-                强制刷新
-                and 预期旧地址
-                and self.下载目录地址
-                and self.下载目录地址 != 预期旧地址
-            ):
-                return self.下载目录地址
-            信息 = await 异步请求得间JSON(
-                HTTP会话,
-                "GET",
-                f"{BASE}/zybook3/u/p/api.php",
-                参数=self._附加参数({"Act": "batchDownloadChapteres", "bid": str(书籍编号)}),
-                请求信号量=self.请求信号量,
-            )
-            正文 = 信息.get("body") if isinstance(信息, dict) else None
-            地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
-            if not 地址:
-                raise RuntimeError("batch downUrl missing")
-            self.下载目录地址 = 地址
-            self.刷新次数 += 1
-            return 地址
-
-    async def 获取批量章节信息(
-        self,
-        HTTP会话: aiohttp.ClientSession,
-        下载目录地址: str,
-        起始章节: int,
-    ) -> List[Dict[str, Any]]:
-        信息 = await 异步请求得间JSON(
-            HTTP会话,
+        需要公共参数: bool = True,
+    ) -> Any:
+        地址 = 路径或地址 if 路径或地址.startswith("http") else f"{BASE}{路径或地址}"
+        查询参数 = self.附加参数(参数) if 需要公共参数 else dict(参数 or {})
+        return await 异步请求得间JSON(
+            self.HTTP会话,
             "GET",
-            下载目录地址,
-            参数={"startChapID": int(起始章节)},
+            地址,
+            参数=查询参数,
             请求信号量=self.请求信号量,
         )
-        正文 = 信息.get("body") if isinstance(信息, dict) else None
-        章节列表 = 正文.get("downInfo") if isinstance(正文, dict) else None
-        if not isinstance(章节列表, list):
-            raise RuntimeError("batch downInfo missing")
-        return [章节 for 章节 in 章节列表 if isinstance(章节, dict)]
 
-    async def 请求批量授权(
-        self,
-        HTTP会话: aiohttp.ClientSession,
-        书籍编号: str,
-        章节编号列表: List[int],
-    ) -> Any:
-        编号文本 = ",".join(str(int(章节编号)) for 章节编号 in 章节编号列表 if int(章节编号) > 0)
-        if not 编号文本:
-            raise ValueError("empty chapter ids")
-        表单 = self._签名参数(
-            {
-                "bookId": str(书籍编号),
-                "chapterIds": 编号文本,
-                "devId": self.会话参数.get("devId", ""),
-                "usrName": self.会话参数.get("usr", ""),
-            }
-        )
+    async def 提交JSON(self, 路径或地址: str, 表单: Dict[str, Any]) -> Any:
+        地址 = 路径或地址 if 路径或地址.startswith("http") else f"{BASE}{路径或地址}"
         return await 异步请求得间JSON(
-            HTTP会话,
+            self.HTTP会话,
             "POST",
-            f"{BASE}/dj_drm/djdrm/getBatchChapter",
-            参数=self._附加参数(),
+            地址,
+            参数=self.附加参数({}),
             表单=表单,
             请求信号量=self.请求信号量,
         )
 
-    async def 请求单章授权(
+    async def 下载(self, 地址: str) -> bytes:
+        return await 异步下载得间字节(self.HTTP会话, 地址, self.请求信号量)
+
+    async def 获取批量下载清单(self, 书籍编号: str) -> Dict[str, Any]:
+        信息 = await self.获取JSON(
+            "/zybook3/u/p/api.php",
+            {"Act": "batchDownloadChapteres", "bid": str(书籍编号)},
+        )
+        正文 = 信息.get("body") if isinstance(信息, dict) else None
+        地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
+        if not 地址:
+            raise RuntimeError("no downUrl")
+        return {
+            "bookId": str(书籍编号),
+            "downUrl": 地址,
+            "maxChapId": _to_int(正文.get("maxChapId")),
+            "downloadCount": _to_int(正文.get("downloadCount")),
+        }
+
+    async def 安全章节列表(
         self,
-        HTTP会话: aiohttp.ClientSession,
         书籍编号: str,
-        章节编号: int,
-        授权类型: int = 0,
-        会员代码: str = "",
-    ) -> Any:
-        表单 = self._签名参数(
+        start: int = 1,
+        end: int = 0,
+        limit: int = 0,
+    ) -> List[Dict[str, Any]]:
+        基础地址 = str((await self.获取批量下载清单(书籍编号))["downUrl"])
+        结果: List[Dict[str, Any]] = []
+        当前章节 = max(1, int(start or 1))
+        结束章节 = int(end or 0)
+        最大数量 = int(limit or 0)
+        while True:
+            分隔符 = "&" if "?" in 基础地址 else "?"
+            地址 = f"{基础地址}{分隔符}{urllib.parse.urlencode({'startChapID': 当前章节})}"
+            信息 = await self.获取JSON(地址, 需要公共参数=False)
+            正文 = 信息.get("body") if isinstance(信息, dict) else None
+            if not isinstance(正文, dict):
+                break
+            章节列表 = 正文.get("downInfo") or []
+            if not isinstance(章节列表, list):
+                break
+            已增加 = 0
+            for 项 in 章节列表:
+                if not isinstance(项, dict):
+                    continue
+                章节编号 = _to_int(项.get("chapterId"))
+                if not 章节编号 or (结束章节 > 0 and 章节编号 > 结束章节):
+                    continue
+                结果.append(项)
+                已增加 += 1
+                if 最大数量 > 0 and len(结果) >= 最大数量:
+                    return 结果
+            if 正文.get("end") or not 章节列表 or 已增加 == 0:
+                break
+            最后章节 = _to_int((章节列表[-1] or {}).get("chapterId"))
+            if 最后章节 <= 0:
+                break
+            当前章节 = 最后章节 + 1
+            if 结束章节 > 0 and 当前章节 > 结束章节:
+                break
+        return 结果
+
+    async def 查找章节(self, 书籍编号: str, 章节编号: int) -> Dict[str, Any]:
+        章节编号 = int(章节编号)
+        for start, end, limit in (
+            (max(1, 章节编号 - 3), 章节编号 + 3, 50),
+            (章节编号, 章节编号 + 10, 20),
+            (1, 章节编号, 0),
+        ):
+            for 项 in await self.安全章节列表(书籍编号, start=start, end=end, limit=limit):
+                if _to_int(项.get("chapterId")) == 章节编号:
+                    return 项
+        raise RuntimeError("chapter not found")
+
+    async def 单章授权(self, 书籍编号: str, 章节编号: int) -> Any:
+        表单 = self.签名参数(
             {
                 "bookId": str(书籍编号),
                 "chapterId": str(int(章节编号)),
                 "devId": self.会话参数.get("devId", ""),
                 "usrName": self.会话参数.get("usr", ""),
-                "type": str(max(0, _to_int(授权类型))),
-                "fid": "72",
             }
         )
-        if 会员代码:
-            表单["vipCode"] = str(会员代码)
-        return await 异步请求得间JSON(
-            HTTP会话,
-            "POST",
-            f"{BASE}/dj_drm/djdrm/getAuthChapter",
-            参数=self._附加参数(),
-            表单=表单,
-            请求信号量=self.请求信号量,
-        )
+        表单.update({"type": "0", "fid": "72"})
+        return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单)
 
 
-def 解密得间下载正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
+def 解密得间单章正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
     原始令牌 = native_rsa_unwrap(base64.b64decode(授权令牌))
     密钥 = derive_stage1_key(原始令牌, 用户名, 设备号)
     return decrypt_epub_text(正文数据, 密钥).strip()
 
 
-async def 异步下载得间批量章节正文(
+async def 异步下载得间单章正文(
     HTTP会话: aiohttp.ClientSession,
     书籍编号: str,
-    下载通道: 得间异步下载通道,
-    起始章节: int,
-    目标章节编号: List[int],
+    章节编号: int,
+    请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
-) -> Dict[int, str]:
-    """通过复用 HTTP 会话下载 7 章块；授权或目录失效时按通道刷新重试。"""
-    目标集合 = {int(章节编号) for 章节编号 in 目标章节编号 if int(章节编号) > 0}
-    已完成: Dict[int, str] = {}
-    if not 目标集合:
-        return 已完成
-
-    for 重试轮次 in range(1, 得间批量重试次数 + 1):
-        待下载 = 目标集合.difference(已完成)
-        if not 待下载:
-            break
-        当前下载目录地址 = ""
-        需要刷新目录 = False
+) -> str:
+    """与参考 get_chapter_text 相同的单章顺序，网络请求改为共享异步会话。"""
+    for 重试轮次 in range(1, 得间单章重试次数 + 1):
+        客户端 = 得间单章异步客户端(HTTP会话, 请求信号量)
         try:
-            # 同一个 App 会话并发授权会返回空 token；正文下载仍在锁外并行。
-            async with 下载通道._授权锁:
-                当前下载目录地址 = await 下载通道.获取下载目录地址(HTTP会话, 书籍编号)
-                章节信息 = await 下载通道.获取批量章节信息(HTTP会话, 当前下载目录地址, 起始章节)
-                地址表 = {
-                    _to_int(章节.get("chapterId")): str(
-                        章节.get("url") or 章节.get("downUrl") or 章节.get("downloadUrl") or ""
-                    ).strip()
-                    for 章节 in 章节信息
-                    if _to_int(章节.get("chapterId")) in 待下载
-                }
-                授权章节 = [章节编号 for 章节编号 in sorted(待下载) if 地址表.get(章节编号)]
-                需要刷新目录 = bool(待下载.difference(地址表))
-                if not 授权章节:
-                    raise RuntimeError("batch chapter url missing")
-                授权结果 = await 下载通道.请求批量授权(HTTP会话, 书籍编号, 授权章节)
-                用户名 = str(下载通道.会话参数.get("usr") or "")
-                设备号 = str(下载通道.会话参数.get("devId") or "")
-                if not 用户名 or not 设备号:
-                    raise RuntimeError("batch session missing")
+            用户名 = str(客户端.会话参数.get("usr") or "")
+            设备号 = str(客户端.会话参数.get("devId") or "")
+            if not 用户名 or not 设备号:
+                raise RuntimeError("bad session")
+            章节项 = await 客户端.查找章节(书籍编号, 章节编号)
+            正文地址 = str(
+                章节项.get("url") or 章节项.get("downUrl") or 章节项.get("downloadUrl") or ""
+            ).strip()
+            if not 正文地址:
+                raise RuntimeError("no chapter url")
+            授权结果 = await 客户端.单章授权(书籍编号, 章节编号)
+            授权令牌 = extract_token_b64(授权结果, 章节编号)
+            正文数据 = await 客户端.下载(正文地址)
+            async with 解密信号量:
+                return await asyncio.to_thread(
+                    解密得间单章正文,
+                    正文数据,
+                    授权令牌,
+                    用户名,
+                    设备号,
+                )
         except Exception as 异常:
             logger.debug(
-                f"得间批量章节下载重试：book_id={书籍编号}, start={起始章节}, "
-                f"lane={下载通道.名称}, round={重试轮次}, error={type(异常).__name__}"
+                f"得间单章下载重试：book_id={书籍编号}, chapter_id={章节编号}, "
+                f"round={重试轮次}, error={type(异常).__name__}"
             )
-            需要刷新目录 = True
-        else:
-            async def 下载单章(章节编号: int) -> tuple[int, str]:
-                try:
-                    授权信息 = extract_chapter_auth(授权结果, 章节编号)
-                    授权类型 = _to_int(授权信息.get("type"))
-                    初始令牌 = str(授权信息.get("token") or "").strip()
-                    if 授权类型 != 3 or not 初始令牌:
-                        async with 下载通道._授权锁:
-                            最终授权 = await 下载通道.请求单章授权(
-                                HTTP会话,
-                                书籍编号,
-                                章节编号,
-                                授权类型,
-                                str(授权信息.get("vipCode") or ""),
-                            )
-                        授权信息 = extract_chapter_auth(最终授权, 章节编号)
-                    授权令牌 = str(授权信息.get("token") or "").strip()
-                    if not 授权令牌:
-                        raise RuntimeError("no token")
-                    正文数据 = await 异步下载得间字节(
-                        HTTP会话,
-                        地址表[章节编号],
-                        下载通道.请求信号量,
-                    )
-                    async with 解密信号量:
-                        正文 = await asyncio.to_thread(
-                            解密得间下载正文,
-                            正文数据,
-                            授权令牌,
-                            用户名,
-                            设备号,
-                        )
-                    return 章节编号, 正文
-                except Exception as 异常:
-                    logger.debug(
-                        f"得间章节下载重试：book_id={书籍编号}, chapter_id={章节编号}, "
-                        f"lane={下载通道.名称}, round={重试轮次}, error={type(异常).__name__}"
-                    )
-                    return 章节编号, ""
-
-            for 章节编号, 正文 in await asyncio.gather(
-                *(下载单章(章节编号) for 章节编号 in 授权章节)
-            ):
-                if 正文:
-                    已完成[章节编号] = 正文
-                else:
-                    需要刷新目录 = True
-        if 目标集合.difference(已完成) and 重试轮次 < 得间批量重试次数 and 需要刷新目录:
-            try:
-                await 下载通道.获取下载目录地址(
-                    HTTP会话,
-                    书籍编号,
-                    强制刷新=True,
-                    预期旧地址=当前下载目录地址,
-                )
-            except Exception as 异常:
-                logger.debug(
-                    f"得间批量目录刷新失败：book_id={书籍编号}, start={起始章节}, "
-                    f"lane={下载通道.名称}, round={重试轮次}, error={type(异常).__name__}"
-                )
-    return 已完成
+            if 重试轮次 < 得间单章重试次数:
+                await asyncio.sleep(0.05 * 重试轮次)
+    return ""
 
 
 
@@ -945,8 +839,8 @@ async def 异步获取得间章节目录(
 路径编号正则 = re.compile(r"/(?:book|detail|books?)/(\d{5,})", re.I)
 
 
-def 计算得间正文动态并发数(批次总数: int) -> int:
-    return max(1, min(得间正文最大动态并发数, int(批次总数 or 0)))
+def 计算得间单章并发数(章节总数: int) -> int:
+    return max(1, min(得间单章最大并发数, int(章节总数 or 0)))
 
 
 def 获取得间小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
@@ -1035,107 +929,52 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
     if not 章节下标表:
         return []
 
-    最大章节编号 = max(章节下标表)
-    批次任务 = [
-        (起始章节, [章节编号 for 章节编号 in range(起始章节, 起始章节 + 得间批量章节数) if 章节编号 in 章节下标表])
-        for 起始章节 in range(1, 最大章节编号 + 1, 得间批量章节数)
-    ]
-    批次任务 = [任务 for 任务 in 批次任务 if 任务[1]]
-    动态并发数 = 计算得间正文动态并发数(总数)
-    最大正文并发数 = max(1, min(动态并发数, len(得间客户端配置) * 得间批量章节数))
-    每通道连接数 = max(1, min(得间批量章节数 + 1, 动态并发数))
-    批次工作者数 = 0
-    实际正文并发数 = 0
-    解密并发数 = 0
-    通道名称 = ""
-    可用通道: List[Tuple[得间异步下载通道, aiohttp.ClientSession]] = []
+    实际正文并发数 = 计算得间单章并发数(len(章节下标表))
+    解密并发数 = max(1, min(实际正文并发数, 得间解密最大动态并发数))
     完成 = len(无效章节下标)
     成功 = 0
-    下一个任务 = 0
     上次日志百分比 = 0
-    分配锁 = asyncio.Lock()
-    请求信号量 = asyncio.Semaphore(最大正文并发数)
-    async with (
-        创建得间HTTP会话(每通道连接数) as 普通HTTP会话,
-        创建得间HTTP会话(每通道连接数) as 极速HTTP会话,
-    ):
-        候选通道 = [
-            (得间异步下载通道("normal", 请求信号量), 普通HTTP会话),
-            (得间异步下载通道("speed", 请求信号量), 极速HTTP会话),
-        ]
-        通道初始化结果 = await asyncio.gather(
-            *(通道.获取下载目录地址(HTTP会话, 书籍编号, 强制刷新=True) for 通道, HTTP会话 in 候选通道),
-            return_exceptions=True,
-        )
-        for (通道, HTTP会话), 初始化结果 in zip(候选通道, 通道初始化结果):
-            if isinstance(初始化结果, Exception):
-                logger.warning(
-                    f"得间下载通道初始化失败：book_id={书籍编号}, lane={通道.名称}, "
-                    f"error={type(初始化结果).__name__}"
-                )
-                continue
-            可用通道.append((通道, HTTP会话))
-        if not 可用通道:
-            logger.warning(f"得间批量下载目录获取失败：book_id={书籍编号}")
-            return []
-
-        通道名称 = ",".join(通道.名称 for 通道, _ in 可用通道)
-        批次工作者数 = min(len(批次任务), len(可用通道))
-        实际正文并发数 = min(最大正文并发数, len(可用通道) * 得间批量章节数)
-        解密并发数 = max(1, min(实际正文并发数, 得间解密最大动态并发数))
-        解密信号量 = asyncio.Semaphore(解密并发数)
+    进度锁 = asyncio.Lock()
+    请求信号量 = asyncio.Semaphore(实际正文并发数)
+    解密信号量 = asyncio.Semaphore(解密并发数)
+    async with 创建得间HTTP会话(实际正文并发数) as HTTP会话:
         logger.info(
             f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-            f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-            f"concurrency={实际正文并发数}, max_concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
-            f"decrypt_concurrency={解密并发数}"
+            f"mode=single_chapter, concurrency={实际正文并发数}, "
+            f"max_concurrency={得间单章最大并发数}, session_reuse=on, "
+            f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
         )
 
-        async def 拉一批(
-            下载通道: 得间异步下载通道,
-            HTTP会话: aiohttp.ClientSession,
-            起始章节: int,
-            章节编号列表: List[int],
-        ) -> None:
+        async def 下载一章(章节编号: int, 下标列表: List[int]) -> None:
             nonlocal 完成, 成功, 上次日志百分比
-            # 同一 App 身份的下一批授权必须等本批正文消费完毕，令牌才不会被覆盖。
-            async with 下载通道._批次锁:
-                正文表 = await 异步下载得间批量章节正文(
+            正文 = (
+                await 异步下载得间单章正文(
                     HTTP会话,
                     书籍编号,
-                    下载通道,
-                    起始章节,
-                    章节编号列表,
+                    章节编号,
+                    请求信号量,
                     解密信号量,
                 )
-            for 章节编号 in 章节编号列表:
-                正文 = str(正文表.get(章节编号) or "").strip()
-                for 下标 in 章节下标表[章节编号]:
-                    章 = 目录[下标]
-                    标题 = str(章.get("title") or 章.get("cn") or f"第{章节编号}章")
-                    结果[下标] = {"title": 标题, "content": 正文, "id": str(章节编号)}
-                    完成 += 1
-                    if 正文:
-                        成功 += 1
-            当前百分比 = int(完成 * 100 / max(总数, 1))
-            if 完成 == 总数 or 当前百分比 >= min(100, 上次日志百分比 + 进度日志分段数):
-                logger.info(
-                    f"得间小说章节进度：book_id={书籍编号}, progress={完成}/{总数}, "
-                    f"percent={当前百分比}%, success={成功}, failed={完成 - 成功}"
-                )
-                上次日志百分比 = 当前百分比
+            ).strip()
+            for 下标 in 下标列表:
+                章 = 目录[下标]
+                标题 = str(章.get("title") or 章.get("cn") or f"第{章节编号}章")
+                结果[下标] = {"title": 标题, "content": 正文, "id": str(章节编号)}
+            async with 进度锁:
+                完成 += len(下标列表)
+                if 正文:
+                    成功 += len(下标列表)
+                当前百分比 = int(完成 * 100 / max(总数, 1))
+                if 完成 == 总数 or 当前百分比 >= min(100, 上次日志百分比 + 进度日志分段数):
+                    logger.info(
+                        f"得间小说章节进度：book_id={书籍编号}, progress={完成}/{总数}, "
+                        f"percent={当前百分比}%, success={成功}, failed={完成 - 成功}"
+                    )
+                    上次日志百分比 = 当前百分比
 
-        async def 工作者(下载通道: 得间异步下载通道, HTTP会话: aiohttp.ClientSession) -> None:
-            nonlocal 下一个任务
-            while True:
-                async with 分配锁:
-                    if 下一个任务 >= len(批次任务):
-                        return
-                    当前任务 = 批次任务[下一个任务]
-                    下一个任务 += 1
-                await 拉一批(下载通道, HTTP会话, *当前任务)
-
-        await asyncio.gather(*(工作者(下载通道, HTTP会话) for 下载通道, HTTP会话 in 可用通道))
+        await asyncio.gather(
+            *(下载一章(章节编号, 下标列表) for 章节编号, 下标列表 in 章节下标表.items())
+        )
     输出: list[dict[str, str]] = []
     for 下标, 章 in enumerate(目录):
         已下载 = 结果[下标]
@@ -1149,10 +988,9 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
         输出.append(已下载)
     logger.info(
         f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
-        f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-        f"concurrency={实际正文并发数}, max_concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
-        f"decrypt_concurrency={解密并发数}, manifest_refreshes="
-        f"{','.join(f'{通道.名称}:{通道.刷新次数}' for 通道, _ in 可用通道)}"
+        f"mode=single_chapter, concurrency={实际正文并发数}, "
+        f"max_concurrency={得间单章最大并发数}, session_reuse=on, "
+        f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
     )
     return 输出
 
