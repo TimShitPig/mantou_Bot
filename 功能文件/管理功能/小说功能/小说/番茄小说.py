@@ -3900,7 +3900,10 @@ def 格式化番茄字数(值: Any) -> str:
     字数 = 提取有效番茄字数(值)
     if 字数 <= 0:
         return "未知"
-    return f"{字数:,}字"
+    if 字数 >= 10000:
+        万字 = f"{字数 / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{万字}万字"
+    return f"{字数}字"
 
 def 清理番茄网页文本(文本: Any) -> str:
     文本 = re.sub(r"<[^>]+>", "", str(文本 or ""))
