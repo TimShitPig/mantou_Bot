@@ -14,6 +14,7 @@ except Exception:
 帮助回调前缀 = "帮助回调:"
 欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
+群与C2C事件意图位 = 1 << 25
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -149,6 +150,28 @@ def _开启互动事件(平台实例: Any) -> bool:
         return False
 
 
+def _群成员加入意图已启用(意图: Any, 客户端: Any) -> bool:
+    if bool(_读取字段(意图, "public_messages", False)):
+        return True
+    for 值 in (_读取字段(意图, "value"), _读取字段(客户端, "intents")):
+        try:
+            if int(值) & 群与C2C事件意图位:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _写入群成员加入解析器(容器: Any, 解析器: Any) -> bool:
+    已写入 = False
+    for 字段名 in ("parsers", "parser", "_parsers", "_parser"):
+        解析器表 = _读取字段(容器, 字段名)
+        if isinstance(解析器表, dict):
+            解析器表["group_member_add"] = 解析器
+            已写入 = True
+    return 已写入
+
+
 def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None) -> bool:
     """补齐旧版 qq-botpy 未内置的 GROUP_MEMBER_ADD 网关解析器。"""
     连接状态类 = _读取字段(适配器模块, "ConnectionState")
@@ -176,30 +199,43 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
     if 客户端 is None:
         return True
 
-    已同步 = False
     连接容器 = _读取字段(客户端, "_connection")
-    候选连接 = (连接容器, _读取字段(连接容器, "state"))
-    for 连接状态 in 候选连接:
-        解析器表 = _读取字段(连接状态, "parsers")
-        解析器 = getattr(连接状态, "parse_group_member_add", None)
-        if isinstance(解析器表, dict) and callable(解析器):
-            解析器表["group_member_add"] = 解析器
-            已同步 = True
-    return 已同步 or 连接容器 is None
+    if 连接容器 is None:
+        return True
+
+    连接状态 = _读取字段(连接容器, "state")
+    解析器 = getattr(连接状态, "parse_group_member_add", None)
+    if not callable(解析器):
+        解析器 = getattr(连接容器, "parse_group_member_add", None)
+    if not callable(解析器):
+        return False
+
+    已同步 = _写入群成员加入解析器(连接容器, 解析器)
+    已同步 = _写入群成员加入解析器(连接状态, 解析器) or 已同步
+    return 已同步
 
 
 def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> bool:
-    """同步已启用的官方群消息订阅与 GROUP_MEMBER_ADD 解析器。"""
+    """同步 GROUP_MEMBER_ADD 解析器，并记录网关订阅是否实际开启。"""
     意图 = _读取字段(平台实例, "intents")
     客户端 = _读取字段(平台实例, "client")
     if 意图 is None or 客户端 is None:
         return False
     try:
-        # GROUP_MEMBER_ADD 与官方群消息共用 GROUP_AND_C2C_EVENT Intent。
-        # 未开启群消息接收的适配器保持原配置，不由插件代为改变平台订阅范围。
-        if not bool(_读取字段(意图, "public_messages", False)):
-            return False
-        return _注册群成员加入解析器(适配器模块, 客户端)
+        解析器已注册 = _注册群成员加入解析器(适配器模块, 客户端)
+        意图已开启 = _群成员加入意图已启用(意图, 客户端)
+        logger.info(
+            "QQ官方群成员欢迎监听状态：group_c2c_intent=%s, parser_registered=%s, connected=%s",
+            意图已开启,
+            解析器已注册,
+            _读取字段(客户端, "_connection") is not None,
+        )
+        if not 意图已开启:
+            logger.warning(
+                "QQ官方群成员欢迎未订阅：QQ官方适配器未开启 GROUP_AND_C2C_EVENT，"
+                "请启用群/C2C消息接收后重启适配器"
+            )
+        return 意图已开启 and 解析器已注册
     except Exception as 异常:
         logger.warning(f"QQ官方群成员加入事件同步失败：error={异常}")
         return False
@@ -358,6 +394,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             _开启群成员加入事件(self, 适配器模块)
 
         async def 新成员加入回调(self: Any, 原始事件: Any) -> Any:
+            logger.info("QQ官方群成员加入网关事件已收到")
             try:
                 await _投递群成员加入事件(self, 原始事件, 适配器模块)
             except Exception as 异常:
