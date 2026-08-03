@@ -4,6 +4,8 @@ import asyncio
 import os
 import re
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import base64
@@ -14,6 +16,8 @@ import struct
 import time
 import zlib
 import aiohttp
+import gmpy2
+from Crypto.Util.strxor import strxor
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
@@ -37,7 +41,11 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 得间单章最大并发数 = 700
 得间单章重试次数 = 3
-得间解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
+得间解密最大动态并发数 = 200
+得间解密执行器 = ThreadPoolExecutor(
+    max_workers=得间解密最大动态并发数,
+    thread_name_prefix="dejian-decrypt",
+)
 
 # ===== 得间协议与解密（原 _得间源码） =====
 
@@ -155,6 +163,9 @@ def _rol3(x: int) -> int:
     return (((x << 3) & 0xff) | (x >> 5)) & 0xff
 
 
+ZHANGYUE_CTR_POST_XOR = bytes((~_rol3(value)) & 0xff for value in range(256))
+
+
 def _gf_xtime(a: int) -> int:
     return (((a << 1) & 0xff) ^ (0x1b if a & 0x80 else 0)) & 0xff
 
@@ -181,7 +192,8 @@ def _native_t_tables() -> Tuple[List[int], List[int], List[int], List[int]]:
 _NATIVE_T = _native_t_tables()
 
 
-def _native_key_schedule(key: bytes) -> List[int]:
+@lru_cache(maxsize=512)
+def _native_key_schedule(key: bytes) -> Tuple[int, ...]:
     if len(key) != 16:
         raise ValueError("bad key")
     words = [int.from_bytes(key[i:i + 4], "big") for i in range(0, 16, 4)]
@@ -196,16 +208,13 @@ def _native_key_schedule(key: bytes) -> List[int]:
         words.append(words[-4] ^ words[-1])
         words.append(words[-4] ^ words[-1])
         words.append(words[-4] ^ words[-1])
-    return [x & 0xffffffff for x in words]
+    return tuple(x & 0xffffffff for x in words)
 
 
-def _native_block(key: bytes, block16: bytes) -> bytes:
-    if len(key) != 16:
-        raise ValueError("bad key")
+def _native_block(round_keys: Tuple[int, ...], block16: bytes) -> bytes:
     if len(block16) != 16:
         raise ValueError("bad block")
     t0, t1, t2, t3 = _NATIVE_T
-    round_keys = _native_key_schedule(key)
     s0 = round_keys[0] ^ int.from_bytes(block16[0:4], "big")
     s1 = round_keys[1] ^ int.from_bytes(block16[4:8], "big")
     s2 = round_keys[2] ^ int.from_bytes(block16[8:12], "big")
@@ -232,23 +241,25 @@ def _native_block(key: bytes, block16: bytes) -> bytes:
 def zhangyue_native_ctr(data: bytes, key: bytes, iv: bytes) -> bytes:
     if len(key) != 16 or len(iv) != 16:
         raise ValueError("bad ctr args")
+    if not data:
+        return b""
     counter = bytearray(iv)
-    out = bytearray()
+    key_stream = bytearray(len(data))
+    round_keys = _native_key_schedule(key)
     for off in range(0, len(data), 16):
-        ks = _native_block(key, bytes(counter))
-        for value, key_byte in zip(data[off:off + 16], ks):
-            out.append((~_rol3(value ^ key_byte)) & 0xff)
+        end = min(off + 16, len(data))
+        key_stream[off:end] = _native_block(round_keys, bytes(counter))[:end - off]
         for idx in (13, 12, 11, 10):
             counter[idx] = (counter[idx] + 1) & 0xff
             if counter[idx]:
                 break
-    return bytes(out)
+    return strxor(data, key_stream).translate(ZHANGYUE_CTR_POST_XOR)
 
 
 def native_rsa_unwrap(cipher: bytes) -> bytes:
     if len(cipher) != 128:
         raise ValueError("bad token length")
-    m = pow(int.from_bytes(cipher, "big"), NATIVE_RSA_E, NATIVE_RSA_N).to_bytes(128, "big")
+    m = int(gmpy2.powmod(int.from_bytes(cipher, "big"), NATIVE_RSA_E, NATIVE_RSA_N)).to_bytes(128, "big")
     if not m.startswith(b"\x00\x01"):
         raise ValueError("bad token padding")
     sep = m.find(b"\x00", 2)
@@ -615,7 +626,8 @@ async def 异步下载得间单章正文(
             授权令牌 = extract_token_b64(授权结果, 章节编号)
             正文数据 = await 客户端.下载(正文地址)
             async with 解密信号量:
-                return await asyncio.to_thread(
+                return await asyncio.get_running_loop().run_in_executor(
+                    得间解密执行器,
                     解密得间单章正文,
                     正文数据,
                     授权令牌,
