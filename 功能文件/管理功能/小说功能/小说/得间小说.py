@@ -476,6 +476,7 @@ class 得间异步下载通道:
     会话参数: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _刷新锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
     _授权锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _批次锁: Any = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.名称 = self.名称 if self.名称 in 得间客户端配置 else "normal"
@@ -1041,66 +1042,72 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
     ]
     批次任务 = [任务 for 任务 in 批次任务 if 任务[1]]
     动态并发数 = 计算得间正文动态并发数(总数)
-    批次工作者数 = max(1, min(len(批次任务), 动态并发数))
-    解密并发数 = max(1, min(动态并发数, 得间解密最大动态并发数))
+    最大正文并发数 = max(1, min(动态并发数, len(得间客户端配置) * 得间批量章节数))
+    每通道连接数 = max(1, min(得间批量章节数 + 1, 动态并发数))
+    批次工作者数 = 0
+    实际正文并发数 = 0
+    解密并发数 = 0
+    通道名称 = ""
+    可用通道: List[Tuple[得间异步下载通道, aiohttp.ClientSession]] = []
     完成 = len(无效章节下标)
     成功 = 0
     下一个任务 = 0
     上次日志百分比 = 0
     分配锁 = asyncio.Lock()
-    请求信号量 = asyncio.Semaphore(动态并发数)
-    连接器 = aiohttp.TCPConnector(
-        limit=动态并发数,
-        limit_per_host=动态并发数,
-        keepalive_timeout=30,
-        ttl_dns_cache=300,
-    )
-    超时 = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120)
-    async with aiohttp.ClientSession(
-        timeout=超时,
-        connector=连接器,
-        headers={"User-Agent": APP_UA, "Accept": "application/json,text/plain,*/*"},
-    ) as HTTP会话:
+    请求信号量 = asyncio.Semaphore(最大正文并发数)
+    async with (
+        创建得间HTTP会话(每通道连接数) as 普通HTTP会话,
+        创建得间HTTP会话(每通道连接数) as 极速HTTP会话,
+    ):
         候选通道 = [
-            得间异步下载通道("normal", 请求信号量),
-            得间异步下载通道("speed", 请求信号量),
+            (得间异步下载通道("normal", 请求信号量), 普通HTTP会话),
+            (得间异步下载通道("speed", 请求信号量), 极速HTTP会话),
         ]
         通道初始化结果 = await asyncio.gather(
-            *(通道.获取下载目录地址(HTTP会话, 书籍编号, 强制刷新=True) for 通道 in 候选通道),
+            *(通道.获取下载目录地址(HTTP会话, 书籍编号, 强制刷新=True) for 通道, HTTP会话 in 候选通道),
             return_exceptions=True,
         )
-        可用通道: List[得间异步下载通道] = []
-        for 通道, 初始化结果 in zip(候选通道, 通道初始化结果):
+        for (通道, HTTP会话), 初始化结果 in zip(候选通道, 通道初始化结果):
             if isinstance(初始化结果, Exception):
                 logger.warning(
                     f"得间下载通道初始化失败：book_id={书籍编号}, lane={通道.名称}, "
                     f"error={type(初始化结果).__name__}"
                 )
                 continue
-            可用通道.append(通道)
+            可用通道.append((通道, HTTP会话))
         if not 可用通道:
             logger.warning(f"得间批量下载目录获取失败：book_id={书籍编号}")
             return []
 
-        通道名称 = ",".join(通道.名称 for 通道 in 可用通道)
+        通道名称 = ",".join(通道.名称 for 通道, _ in 可用通道)
+        批次工作者数 = min(len(批次任务), len(可用通道))
+        实际正文并发数 = min(最大正文并发数, len(可用通道) * 得间批量章节数)
+        解密并发数 = max(1, min(实际正文并发数, 得间解密最大动态并发数))
         解密信号量 = asyncio.Semaphore(解密并发数)
         logger.info(
             f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
             f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-            f"concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
+            f"concurrency={实际正文并发数}, max_concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
             f"decrypt_concurrency={解密并发数}"
         )
 
-        async def 拉一批(下载通道: 得间异步下载通道, 起始章节: int, 章节编号列表: List[int]) -> None:
+        async def 拉一批(
+            下载通道: 得间异步下载通道,
+            HTTP会话: aiohttp.ClientSession,
+            起始章节: int,
+            章节编号列表: List[int],
+        ) -> None:
             nonlocal 完成, 成功, 上次日志百分比
-            正文表 = await 异步下载得间批量章节正文(
-                HTTP会话,
-                书籍编号,
-                下载通道,
-                起始章节,
-                章节编号列表,
-                解密信号量,
-            )
+            # 同一 App 身份的下一批授权必须等本批正文消费完毕，令牌才不会被覆盖。
+            async with 下载通道._批次锁:
+                正文表 = await 异步下载得间批量章节正文(
+                    HTTP会话,
+                    书籍编号,
+                    下载通道,
+                    起始章节,
+                    章节编号列表,
+                    解密信号量,
+                )
             for 章节编号 in 章节编号列表:
                 正文 = str(正文表.get(章节编号) or "").strip()
                 for 下标 in 章节下标表[章节编号]:
@@ -1118,7 +1125,7 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
                 )
                 上次日志百分比 = 当前百分比
 
-        async def 工作者(下载通道: 得间异步下载通道) -> None:
+        async def 工作者(下载通道: 得间异步下载通道, HTTP会话: aiohttp.ClientSession) -> None:
             nonlocal 下一个任务
             while True:
                 async with 分配锁:
@@ -1126,10 +1133,9 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
                         return
                     当前任务 = 批次任务[下一个任务]
                     下一个任务 += 1
-                await 拉一批(下载通道, *当前任务)
+                await 拉一批(下载通道, HTTP会话, *当前任务)
 
-        工作通道 = [可用通道[下标 % len(可用通道)] for 下标 in range(批次工作者数)]
-        await asyncio.gather(*(工作者(下载通道) for 下载通道 in 工作通道))
+        await asyncio.gather(*(工作者(下载通道, HTTP会话) for 下载通道, HTTP会话 in 可用通道))
     输出: list[dict[str, str]] = []
     for 下标, 章 in enumerate(目录):
         已下载 = 结果[下标]
@@ -1144,9 +1150,9 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
     logger.info(
         f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
         f"batches={len(批次任务)}, batch_size={得间批量章节数}, lanes={通道名称}, "
-        f"concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
+        f"concurrency={实际正文并发数}, max_concurrency={动态并发数}, workers={批次工作者数}, auth_concurrency={len(可用通道)}, "
         f"decrypt_concurrency={解密并发数}, manifest_refreshes="
-        f"{','.join(f'{通道.名称}:{通道.刷新次数}' for 通道 in 可用通道)}"
+        f"{','.join(f'{通道.名称}:{通道.刷新次数}' for 通道, _ in 可用通道)}"
     )
     return 输出
 
