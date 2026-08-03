@@ -670,8 +670,16 @@ async def 发送QQ官方提及Markdown(event: Any, 文本: str) -> bool:
     return await 发送Markdown键盘消息(event, 文本, None)
 
 
-async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str, Any] | None) -> bool:
-    md文本 = 构造QQ官方提及Markdown(event, md文本)
+async def 发送Markdown键盘消息(
+    event: Any,
+    md文本: str,
+    键盘: dict[str, Any] | None,
+    *,
+    主动发送: bool = False,
+    自动提及: bool = True,
+) -> bool:
+    if 自动提及:
+        md文本 = 构造QQ官方提及Markdown(event, md文本)
     bot = getattr(event, "bot", None)
     api = getattr(bot, "api", None) if bot else None
     _http = getattr(api, "_http", None) if api else None
@@ -708,11 +716,11 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
     用户openid = 获取用户openid同步(event)
     if 群openid:
         route = Route("POST", "/v2/groups/{group_openid}/messages", group_openid=群openid)
-        if 消息ID:
+        if 消息ID and not 主动发送:
             消息体["msg_id"] = 消息ID
     elif 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
-        if 消息ID:
+        if 消息ID and not 主动发送:
             消息体["msg_id"] = 消息ID
     else:
         logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
@@ -722,7 +730,7 @@ async def 发送Markdown键盘消息(event: Any, md文本: str, 键盘: dict[str
         await _http.request(route, json=消息体)
         return True
     except Exception as e:
-        if not 消息ID:
+        if not 消息ID or 主动发送:
             logger.warning(f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}")
             return False
 

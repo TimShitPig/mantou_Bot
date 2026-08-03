@@ -12,6 +12,7 @@ except Exception:
 
 
 帮助回调前缀 = "帮助回调:"
+欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 
 
@@ -33,6 +34,11 @@ def _提取按钮数据(交互: Any) -> str:
 def _是否帮助回调(数据: str) -> bool:
     数据 = str(数据 or "").strip()
     return 数据.startswith(帮助回调前缀) and len(数据) > len(帮助回调前缀)
+
+
+def _是否欢迎回调(数据: str) -> bool:
+    数据 = str(数据 or "").strip()
+    return 数据.startswith(欢迎回调前缀) and len(数据) > len(欢迎回调前缀)
 
 
 def _获取最近可回复消息ID(平台: Any, 会话标识: str) -> str | None:
@@ -321,7 +327,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
 
         async def 新互动回调(self: Any, 交互: Any) -> Any:
             数据 = _提取按钮数据(交互)
-            if not _是否帮助回调(数据):
+            if not (_是否帮助回调(数据) or _是否欢迎回调(数据)):
                 if callable(原互动回调):
                     结果 = 原互动回调(self, 交互)
                     if inspect.isawaitable(结果):
@@ -332,9 +338,9 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             await _回应交互(self, 交互, 0)
             try:
                 await _投递帮助回调(self, 交互, 数据, 适配器模块)
-                logger.info(f"QQ官方帮助回调已投递：data={数据}")
+                logger.info(f"QQ官方互动回调已投递：data={数据}")
             except Exception as 异常:
-                logger.warning(f"QQ官方帮助回调投递失败：data={数据}, error={异常}")
+                logger.warning(f"QQ官方互动回调投递失败：data={数据}, error={异常}")
             return None
 
         适配器类.__init__ = 新初始化
