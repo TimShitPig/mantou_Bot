@@ -47,6 +47,7 @@ except Exception:
     百度网盘 = None
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 from Crypto.Cipher import AES, DES
 from Crypto.Util import Counter
@@ -2112,7 +2113,7 @@ def 生成小说文件内容(
         lines.extend(["简介：", intro, ""])
     for index, chapter in enumerate(chapters, start=1):
         title = str(chapter.get("title") or f"第{index}章").strip()
-        content = str(chapter.get("content") or "").strip()
+        content = 去除章节正文重复标题(title, chapter.get("content"))
         lines.extend([title, "", content, ""])
     text = "\n".join(lines).replace("\r\n", "\n").replace("\r", "\n")
     return filename, text.replace("\n", "\r\n").encode("utf-8")

@@ -66,6 +66,7 @@ except Exception as 异常:
     logger.warning(f"百度网盘模块加载失败, error={异常}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
 NOVELFM_REQUEST_BOOK_ID = os.environ.get(
@@ -3682,8 +3683,9 @@ def 生成番茄小说文件内容(
     for 章节 in 章节结果列表:
         if not 章节.get("success"):
             continue
-        正文 = str(章节.get("content") or "").strip()
-        内容列表.append(str(章节.get("title") or f"第{章节.get('index')}章"))
+        标题 = str(章节.get("title") or f"第{章节.get('index')}章")
+        正文 = 去除章节正文重复标题(标题, 章节.get("content"))
+        内容列表.append(标题)
         内容列表.append("")
         if 正文:
             内容列表.append(正文)

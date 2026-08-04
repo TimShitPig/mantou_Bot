@@ -35,6 +35,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 
 ENCRYPT_KEY = "37e81a9d8f02596e1b895d07c171d5c9"
@@ -599,10 +600,12 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     if 书籍.intro:
         内容列表.extend(["简介：", 书籍.intro, ""])
     for 章节 in 章节内容:
+        标题 = str(章节.get("title") or "")
+        正文 = 去除章节正文重复标题(标题, 章节.get("content"))
         内容列表.extend([
-            str(章节.get("title") or ""),
+            标题,
             "",
-            str(章节.get("content") or "").strip(),
+            正文,
             "",
         ])
     return 文件名, "\r\n".join(内容列表).encode("utf-8")

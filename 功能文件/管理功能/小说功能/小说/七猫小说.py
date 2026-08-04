@@ -26,6 +26,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 try:
     from Crypto.Cipher import AES
@@ -428,7 +429,7 @@ def 生成小说文件内容(
             continue
         内容列表.append(章节["title"])
         内容列表.append("")
-        内容列表.append(章节["content"].strip())
+        内容列表.append(去除章节正文重复标题(章节["title"], 章节["content"]))
         内容列表.append("")
 
     return 文件名, "\n".join(内容列表).encode("utf-8")

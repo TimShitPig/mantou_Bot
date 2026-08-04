@@ -36,6 +36,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：error={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -1094,7 +1095,9 @@ def 生成小说文件(书籍编号: str, 书名: str, 作者: str, 状态: str,
     for 章 in 章节结果:
         if not 章.get("content"):
             continue
-        行.extend([章.get("title") or "章节", "", 章["content"], ""])
+        标题 = str(章.get("title") or "章节")
+        正文 = 去除章节正文重复标题(标题, 章.get("content"))
+        行.extend([标题, "", 正文, ""])
     return 文件名, "\n".join(行).encode("utf-8")
 
 
