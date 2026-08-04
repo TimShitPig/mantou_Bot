@@ -22,7 +22,7 @@ import threading
 import time
 import zlib
 from pathlib import Path
-from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, Iterator, List, Optional, Union
 from urllib.parse import parse_qs, urlsplit
 
 import aiohttp
@@ -1219,13 +1219,89 @@ def _是QQ阅读域名(hostname: str) -> bool:
 
 
 def 提取QQ阅读链接(文本: Any) -> str | None:
-    for match in QQ阅读链接正则.finditer(str(文本 or "")):
+    文本值 = html.unescape(str(文本 or "")).replace("\\/", "/")
+    for match in QQ阅读链接正则.finditer(文本值):
         link = match.group(0).rstrip(")]}>，。；;！!")
         try:
             if _是QQ阅读域名(urlsplit(link).hostname or ""):
                 return link
         except ValueError:
             continue
+    return None
+
+
+def _读取QQ阅读字段(对象: Any, 字段名: str) -> Any:
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
+
+
+def _遍历QQ阅读卡片数据(根对象: Any) -> Iterator[str]:
+    """只遍历消息原始数据和卡片常见嵌套字段，避免把对象 repr 当作消息文本。"""
+    待处理: list[tuple[Any, int]] = [(根对象, 0)]
+    已访问: set[int] = set()
+    处理数量 = 0
+    while 待处理 and 处理数量 < 2048:
+        当前, 深度 = 待处理.pop()
+        if 当前 is None or 深度 > 8:
+            continue
+        if isinstance(当前, (dict, list, tuple)) or not isinstance(当前, (str, bytes, int, float, bool)):
+            对象编号 = id(当前)
+            if 对象编号 in 已访问:
+                continue
+            已访问.add(对象编号)
+        处理数量 += 1
+
+        if isinstance(当前, str):
+            yield 当前
+            文本 = 当前.strip()
+            if 文本[:1] in {"{", "["}:
+                try:
+                    待处理.append((json.loads(文本), 深度 + 1))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            continue
+        if isinstance(当前, bytes):
+            continue
+        if isinstance(当前, dict):
+            for 值 in 当前.values():
+                待处理.append((值, 深度 + 1))
+            continue
+        if isinstance(当前, (list, tuple)):
+            for 值 in 当前:
+                待处理.append((值, 深度 + 1))
+            continue
+
+        for 字段名 in (
+            "raw_data",
+            "msg_elements",
+            "raw_message",
+            "message",
+            "data",
+            "payload",
+            "event",
+            "content",
+            "extra",
+        ):
+            值 = _读取QQ阅读字段(当前, 字段名)
+            if 值 is not None:
+                待处理.append((值, 深度 + 1))
+
+
+def 提取QQ阅读事件链接(event: Any) -> str | None:
+    候选对象 = [
+        event,
+        _读取QQ阅读字段(event, "message_obj"),
+        _读取QQ阅读字段(event, "raw_message"),
+        _读取QQ阅读字段(event, "message"),
+    ]
+    for 对象 in 候选对象:
+        if 对象 is None:
+            continue
+        for 值 in _遍历QQ阅读卡片数据(对象):
+            link = 提取QQ阅读链接(值)
+            if link is not None:
+                return link
     return None
 
 
@@ -2260,7 +2336,7 @@ def 获取QQ阅读回复流(
     命令文本: str,
     配置: Any = None,
 ) -> AsyncIterator[Any] | None:
-    link = 提取QQ阅读链接(命令文本)
+    link = 提取QQ阅读链接(命令文本) or 提取QQ阅读事件链接(event)
     if link is None:
         return None
     return 生成下载回复流(event, link, 配置)
