@@ -1512,9 +1512,35 @@ def _详情支持VIP免费(objects: list[dict[str, Any]]) -> bool:
     if _是真值(vip_free):
         return True
     message = str(
-        _读取详情字段(objects, "vipFreeMsg", "vip_free_msg", default="") or ""
+        _读取详情字段(
+            objects,
+            "vipFreeMsg",
+            "vip_free_msg",
+            "vipTips",
+            "vip_tips",
+            "vipdisc",
+            "vipDisc",
+            default="",
+        )
+        or ""
     ).strip()
-    return "会员免费" in message or ("vip" in message.lower() and "免费" in message)
+    lowered = message.lower()
+    has_vip_marker = "vip" in lowered or "会员" in message or "包月" in message
+    has_free_marker = (
+        "免费" in message
+        or "专享" in message
+        or "开通" in message
+    )
+    if has_vip_marker and has_free_marker:
+        return True
+
+    need_open_vip = _读取详情字段(
+        objects,
+        "needOpenVip",
+        "need_open_vip",
+        default=False,
+    )
+    return _是真值(need_open_vip) and has_vip_marker
 
 
 def _规范状态(value: Any) -> str:
