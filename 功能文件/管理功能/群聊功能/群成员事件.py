@@ -137,6 +137,14 @@ async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
     )
 
 
+async def 发送群成员加入欢迎(event: Any, 成员openid: str) -> bool:
+    """发送入群欢迎消息，供 QQ 官方网关桥直接调用。"""
+    成员 = str(成员openid or "").strip()
+    if not 成员:
+        return False
+    return await _发送欢迎消息(event, 成员)
+
+
 async def 处理群成员加入事件(event: Any) -> bool:
     """消费 QQ 官方 GROUP_MEMBER_ADD 内部事件并发送欢迎消息。"""
     事件数据 = _提取群成员加入数据(event)

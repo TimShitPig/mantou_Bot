@@ -15,6 +15,7 @@ except Exception:
 欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群与C2C事件意图位 = 1 << 25
+群成员加入桥版本 = 2
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -330,7 +331,13 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
     记录场景 = getattr(平台, "remember_session_scene", None)
     if callable(记录场景):
         记录场景(群号, "group")
-    平台.commit_event(平台.create_event(解析结果))
+    内部事件 = 平台.create_event(解析结果)
+    from 功能文件.管理功能.群聊功能 import 群成员事件
+
+    发送成功 = await 群成员事件.发送群成员加入欢迎(内部事件, 成员)
+    if not 发送成功:
+        raise RuntimeError("欢迎消息发送失败")
+    logger.info("QQ官方群成员欢迎消息已发送：group_openid=%s", 群号)
 
 
 def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
@@ -384,9 +391,11 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         适配器类._mantou_帮助互动已安装 = True
         logger.info("QQ官方帮助回调桥已安装：已订阅 INTERACTION 事件")
 
-    if not getattr(适配器类, "_mantou_群成员加入已安装", False):
+    if getattr(适配器类, "_mantou_群成员加入桥版本", 0) != 群成员加入桥版本:
         原初始化 = 适配器类.__init__
         原成员加入回调 = getattr(客户端类, "on_group_member_add", None)
+        if getattr(原成员加入回调, "__module__", "") == __name__:
+            原成员加入回调 = None
 
         def 新成员加入初始化(self: Any, *参数: Any, **关键字: Any) -> None:
             _注册群成员加入解析器(适配器模块)
@@ -409,6 +418,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         适配器类.__init__ = 新成员加入初始化
         客户端类.on_group_member_add = 新成员加入回调
         适配器类._mantou_群成员加入已安装 = True
+        适配器类._mantou_群成员加入桥版本 = 群成员加入桥版本
         logger.info("QQ官方群成员加入桥已安装：已接入 GROUP_MEMBER_ADD")
 
     已启用帮助数量 = 0
