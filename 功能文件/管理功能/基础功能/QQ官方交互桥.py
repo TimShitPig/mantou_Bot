@@ -15,7 +15,7 @@ except Exception:
 欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群与C2C事件意图位 = 1 << 25
-群成员加入桥版本 = 2
+群成员加入桥版本 = 3
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -163,18 +163,18 @@ def _群成员加入意图已启用(意图: Any, 客户端: Any) -> bool:
     return False
 
 
-def _写入群成员加入解析器(容器: Any, 解析器: Any) -> bool:
+def _写入群聊事件解析器(容器: Any, 解析器名称: str, 解析器: Any) -> bool:
     已写入 = False
     for 字段名 in ("parsers", "parser", "_parsers", "_parser"):
         解析器表 = _读取字段(容器, 字段名)
         if isinstance(解析器表, dict):
-            解析器表["group_member_add"] = 解析器
+            解析器表[解析器名称] = 解析器
             已写入 = True
     return 已写入
 
 
 def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None) -> bool:
-    """补齐旧版 qq-botpy 未内置的 GROUP_MEMBER_ADD 网关解析器。"""
+    """补齐旧版 qq-botpy 未内置的官方群聊事件解析器。"""
     连接状态类 = _读取字段(适配器模块, "ConnectionState")
     if 连接状态类 is None:
         try:
@@ -183,8 +183,12 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
             logger.warning(f"QQ官方群成员加入解析器加载失败：error={异常}")
             return False
 
-    if not callable(getattr(连接状态类, "parse_group_member_add", None)):
-        def 解析群成员加入(self: Any, 负载: Any) -> None:
+    def 安装解析器(解析器名称: str) -> None:
+        方法名 = "parse_" + 解析器名称
+        if callable(getattr(连接状态类, 方法名, None)):
+            return
+
+        def 解析官方群聊事件(self: Any, 负载: Any) -> None:
             外层数据 = 负载 if isinstance(负载, dict) else {}
             事件数据 = 外层数据.get("d", {})
             if not isinstance(事件数据, dict):
@@ -193,9 +197,13 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
             事件编号 = 外层数据.get("id")
             if 事件编号 is not None:
                 已整理数据["_mantou_event_id"] = 事件编号
-            self._dispatch("group_member_add", 已整理数据)
+            self._dispatch(解析器名称, 已整理数据)
 
-        setattr(连接状态类, "parse_group_member_add", 解析群成员加入)
+        setattr(连接状态类, 方法名, 解析官方群聊事件)
+
+    # QQ 官方文档中的事件名，分别覆盖普通成员加入和机器人被加入群聊。
+    安装解析器("group_member_add")
+    安装解析器("group_add_robot")
 
     if 客户端 is None:
         return True
@@ -205,14 +213,15 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
         return True
 
     连接状态 = _读取字段(连接容器, "state")
-    解析器 = getattr(连接状态, "parse_group_member_add", None)
-    if not callable(解析器):
-        解析器 = getattr(连接容器, "parse_group_member_add", None)
-    if not callable(解析器):
-        return False
-
-    已同步 = _写入群成员加入解析器(连接容器, 解析器)
-    已同步 = _写入群成员加入解析器(连接状态, 解析器) or 已同步
+    已同步 = False
+    for 解析器名称 in ("group_member_add", "group_add_robot"):
+        解析器 = getattr(连接状态, "parse_" + 解析器名称, None)
+        if not callable(解析器):
+            解析器 = getattr(连接容器, "parse_" + 解析器名称, None)
+        if not callable(解析器):
+            continue
+        已同步 = _写入群聊事件解析器(连接容器, 解析器名称, 解析器) or 已同步
+        已同步 = _写入群聊事件解析器(连接状态, 解析器名称, 解析器) or 已同步
     return 已同步
 
 
@@ -263,7 +272,14 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             展开数据.append(内层数据)
 
     结果: dict[str, Any] = {}
-    for 字段名 in ("timestamp", "group_openid", "member_openid", "user_openid", "_mantou_event_id"):
+    for 字段名 in (
+        "timestamp",
+        "group_openid",
+        "member_openid",
+        "op_member_openid",
+        "user_openid",
+        "_mantou_event_id",
+    ):
         for 数据 in 展开数据:
             值 = 数据.get(字段名)
             if 值 is not None and str(值).strip():
@@ -284,7 +300,11 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
 
     事件数据 = _提取群成员加入数据(原始事件)
     群号 = str(事件数据.get("group_openid") or "").strip()
-    成员 = str(事件数据.get("member_openid") or "").strip()
+    成员 = str(
+        事件数据.get("member_openid")
+        or 事件数据.get("op_member_openid")
+        or ""
+    ).strip()
     用户 = str(事件数据.get("user_openid") or "").strip()
     if not 群号 or not 成员:
         logger.warning(
@@ -394,8 +414,11 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     if getattr(适配器类, "_mantou_群成员加入桥版本", 0) != 群成员加入桥版本:
         原初始化 = 适配器类.__init__
         原成员加入回调 = getattr(客户端类, "on_group_member_add", None)
+        原机器人入群回调 = getattr(客户端类, "on_group_add_robot", None)
         if getattr(原成员加入回调, "__module__", "") == __name__:
             原成员加入回调 = None
+        if getattr(原机器人入群回调, "__module__", "") == __name__:
+            原机器人入群回调 = None
 
         def 新成员加入初始化(self: Any, *参数: Any, **关键字: Any) -> None:
             _注册群成员加入解析器(适配器模块)
@@ -415,8 +438,22 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 return 结果
             return None
 
+        async def 新机器人入群回调(self: Any, 原始事件: Any) -> Any:
+            logger.info("QQ官方机器人入群网关事件已收到")
+            try:
+                await _投递群成员加入事件(self, 原始事件, 适配器模块)
+            except Exception as 异常:
+                logger.warning(f"QQ官方机器人入群欢迎投递失败：error={异常}")
+            if callable(原机器人入群回调):
+                结果 = 原机器人入群回调(self, 原始事件)
+                if inspect.isawaitable(结果):
+                    return await 结果
+                return 结果
+            return None
+
         适配器类.__init__ = 新成员加入初始化
         客户端类.on_group_member_add = 新成员加入回调
+        客户端类.on_group_add_robot = 新机器人入群回调
         适配器类._mantou_群成员加入已安装 = True
         适配器类._mantou_群成员加入桥版本 = 群成员加入桥版本
         logger.info("QQ官方群成员加入桥已安装：已接入 GROUP_MEMBER_ADD")
