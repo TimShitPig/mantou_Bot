@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from typing import Any
@@ -21,12 +22,43 @@ except Exception:
 群成员加入桥版本 = 5
 欢迎诊断事件名 = {"group_member_add", "group_add_robot"}
 当前插件上下文: Any = None
+平台同步任务: asyncio.Task | None = None
+平台同步已完成 = False
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
     if isinstance(对象, dict):
         return 对象.get(字段名, 默认值)
     return getattr(对象, 字段名, 默认值)
+
+
+def _获取平台实例列表(上下文: Any) -> list[Any]:
+    平台管理器 = _读取字段(上下文, "platform_manager") if 上下文 is not None else None
+    平台列表 = _读取字段(平台管理器, "platform_insts", None)
+    if isinstance(平台列表, (list, tuple)):
+        return list(平台列表)
+    获取实例 = getattr(平台管理器, "get_insts", None)
+    if not callable(获取实例):
+        return []
+    try:
+        平台列表 = 获取实例()
+    except Exception:
+        return []
+    return list(平台列表) if isinstance(平台列表, (list, tuple)) else []
+
+
+def _是QQ官方平台(平台实例: Any) -> bool:
+    try:
+        元信息 = 平台实例.meta()
+        名称 = str(_读取字段(元信息, "name") or "")
+        标识 = str(_读取字段(元信息, "id") or "")
+        return "QQ 机器人官方" in 名称 or "qq_official" in 标识
+    except Exception:
+        return False
+
+
+def _已加载QQ官方平台(上下文: Any) -> bool:
+    return any(_是QQ官方平台(平台实例) for 平台实例 in _获取平台实例列表(上下文))
 
 
 def _提取按钮数据(交互: Any) -> str:
@@ -720,18 +752,9 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     已启用帮助数量 = 0
     已启用成员加入数量 = 0
     找到官方适配器 = False
-    平台管理器 = _读取字段(上下文, "platform_manager") if 上下文 is not None else None
-    平台列表 = _读取字段(平台管理器, "platform_insts", None)
-    if not isinstance(平台列表, list):
-        获取实例 = getattr(平台管理器, "get_insts", None)
-        平台列表 = 获取实例() if callable(获取实例) else []
-    平台列表 = 平台列表 or []
-    for 平台实例 in 平台列表:
+    for 平台实例 in _获取平台实例列表(上下文):
         try:
-            元信息 = 平台实例.meta()
-            名称 = str(_读取字段(元信息, "name") or "")
-            标识 = str(_读取字段(元信息, "id") or "")
-            if "QQ 机器人官方" not in 名称 and "qq_official" not in 标识:
+            if not _是QQ官方平台(平台实例):
                 continue
             找到官方适配器 = True
             if _开启互动事件(平台实例):
@@ -744,6 +767,8 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 type(异常).__name__,
             )
             continue
+    global 平台同步已完成
+    平台同步已完成 = 找到官方适配器
     if 上下文 is not None and not 找到官方适配器:
         logger.warning("QQ官方群欢迎诊断：stage=platform_sync, qq_official_found=False")
     if 已启用帮助数量 or 已启用成员加入数量:
@@ -751,7 +776,48 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             "QQ官方群事件桥已同步运行中适配器："
             f"interaction={已启用帮助数量}, group_member_add={已启用成员加入数量}",
         )
+    if 上下文 is not None and not 找到官方适配器:
+        _安排平台加载后同步(上下文)
     return True
+
+
+async def _等待QQ官方平台加载(上下文: Any) -> None:
+    """兼容未触发 OnPlatformLoadedEvent 的运行时，等待平台实例出现后同步。"""
+    try:
+        for _ in range(120):
+            if 平台同步已完成:
+                return
+            if _已加载QQ官方平台(上下文):
+                logger.info(
+                    "QQ官方群欢迎诊断：stage=platform_poll, qq_official_found=True",
+                )
+                安装QQ官方帮助交互(上下文)
+                return
+            await asyncio.sleep(0.5)
+        logger.warning(
+            "QQ官方群欢迎诊断：stage=platform_poll, qq_official_found=False",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as 异常:
+        logger.warning(
+            "QQ官方群欢迎诊断：stage=platform_poll, success=False, error_type=%s",
+            type(异常).__name__,
+        )
+
+
+def _安排平台加载后同步(上下文: Any) -> None:
+    global 平台同步任务
+    if 平台同步已完成 or 上下文 is None:
+        return
+    if 平台同步任务 is not None and not 平台同步任务.done():
+        return
+    try:
+        事件循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        平台同步任务 = None
+        return
+    平台同步任务 = 事件循环.create_task(_等待QQ官方平台加载(上下文))
 
 
 if astrbot_filter is not None:
