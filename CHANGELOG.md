@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.10.9
+
+- 修复 QQ 官方群成员欢迎只检测 `GROUP_AND_C2C_EVENT` 但没有实际打开订阅位的问题；适配器初始化和登录前会同步平台与客户端 intent，确保新连接能收到 `GROUP_MEMBER_ADD`。
+
 ## v5.10.8
 
 - 增加入群欢迎诊断：记录 QQ 官方 `GROUP_MEMBER_ADD` / `GROUP_ADD_ROBOT` 是否到达 WebSocket、是否命中 parser、是否进入回调和欢迎消息发送结果；补齐连接建立后的 parser 同步，便于定位未订阅、未下发和发送失败。

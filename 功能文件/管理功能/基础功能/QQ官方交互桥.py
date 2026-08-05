@@ -165,6 +165,26 @@ def _群成员加入意图已启用(意图: Any, 客户端: Any) -> bool:
     return False
 
 
+def _启用群成员加入意图(意图: Any, 客户端: Any) -> tuple[bool, int | None, int | None]:
+    """确保登录前后的客户端都带上 GROUP_AND_C2C_EVENT。"""
+    原意图值 = _读取字段(意图, "value")
+    if 原意图值 is None:
+        原意图值 = _读取字段(客户端, "intents")
+    try:
+        原值 = int(原意图值 or 0)
+    except (TypeError, ValueError):
+        return False, None, None
+    目标值 = 原值 | 群与C2C事件意图位
+    try:
+        if 意图 is not None:
+            意图.value = 目标值
+        if 客户端 is not None:
+            客户端.intents = 目标值
+    except (AttributeError, TypeError, ValueError):
+        return False, 原值, None
+    return True, 原值, 目标值
+
+
 def _解析器表包含(容器: Any, 解析器名称: str) -> bool:
     for 字段名 in ("parsers", "parser", "_parsers", "_parser"):
         解析器表 = _读取字段(容器, 字段名)
@@ -301,7 +321,23 @@ def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> boo
         return False
     try:
         解析器已注册 = _注册群成员加入解析器(适配器模块, 客户端)
-        意图已开启 = _群成员加入意图已启用(意图, 客户端)
+        try:
+            平台意图值 = int(_读取字段(意图, "value") or 0)
+        except (TypeError, ValueError):
+            平台意图值 = 0
+        if not (平台意图值 & 群与C2C事件意图位):
+            已启用, 原意图值, 新意图值 = _启用群成员加入意图(意图, 客户端)
+            意图已开启 = 已启用
+            logger.info(
+                "QQ官方群欢迎诊断：stage=intent_enable, success=%s, before=%s, after=%s, "
+                "restart_required=%s",
+                意图已开启,
+                原意图值 if 原意图值 is not None else "None",
+                新意图值 if 新意图值 is not None else "None",
+                _读取字段(客户端, "_connection") is not None,
+            )
+        else:
+            意图已开启 = _群成员加入意图已启用(意图, 客户端)
         _记录群成员加入诊断(
             "listener_sync",
             适配器模块,
@@ -458,6 +494,8 @@ def _安装登录后解析器同步(客户端类: Any, 适配器模块: Any) -> 
 
     async def 新登录方法(self: Any, *参数: Any, **关键字: Any) -> Any:
         try:
+            平台 = _读取字段(self, "platform")
+            _启用群成员加入意图(_读取字段(平台, "intents"), self)
             结果 = 原登录方法(self, *参数, **关键字)
             if inspect.isawaitable(结果):
                 结果 = await 结果
