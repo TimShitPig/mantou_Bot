@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.10.10
+
+- 修复 QQ 官方平台晚于插件初始化时欢迎桥同步过早的问题；接入 AstrBot `OnPlatformLoadedEvent`，平台实例加载后重新同步 intent、parser 和欢迎回调。
+
 ## v5.10.9
 
 - 修复 QQ 官方群成员欢迎只检测 `GROUP_AND_C2C_EVENT` 但没有实际打开订阅位的问题；适配器初始化和登录前会同步平台与客户端 intent，确保新连接能收到 `GROUP_MEMBER_ADD`。

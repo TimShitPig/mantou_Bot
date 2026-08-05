@@ -6,18 +6,21 @@ from typing import Any
 
 try:
     from astrbot.api import logger
+    from astrbot.api.event import filter as astrbot_filter
 except Exception:
     import logging
 
     logger = logging.getLogger(__name__)
+    astrbot_filter = None
 
 
 帮助回调前缀 = "帮助回调:"
 欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群与C2C事件意图位 = 1 << 25
-群成员加入桥版本 = 4
+群成员加入桥版本 = 5
 欢迎诊断事件名 = {"group_member_add", "group_add_robot"}
+当前插件上下文: Any = None
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -600,6 +603,9 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     与旧版 qq-botpy 都不会完整转发该事件和 `GROUP_MEMBER_ADD`，因此在此转入
     现有插件消息流水线。
     """
+    global 当前插件上下文
+    if 上下文 is not None:
+        当前插件上下文 = 上下文
     try:
         from astrbot.core.platform.sources.qqofficial import qqofficial_platform_adapter as 适配器模块
     except Exception as 异常:
@@ -715,7 +721,11 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     已启用成员加入数量 = 0
     找到官方适配器 = False
     平台管理器 = _读取字段(上下文, "platform_manager") if 上下文 is not None else None
-    平台列表 = _读取字段(平台管理器, "platform_insts", []) or []
+    平台列表 = _读取字段(平台管理器, "platform_insts", None)
+    if not isinstance(平台列表, list):
+        获取实例 = getattr(平台管理器, "get_insts", None)
+        平台列表 = 获取实例() if callable(获取实例) else []
+    平台列表 = 平台列表 or []
     for 平台实例 in 平台列表:
         try:
             元信息 = 平台实例.meta()
@@ -742,3 +752,14 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             f"interaction={已启用帮助数量}, group_member_add={已启用成员加入数量}",
         )
     return True
+
+
+if astrbot_filter is not None:
+    平台加载钩子 = getattr(astrbot_filter, "on_platform_loaded", None)
+    if callable(平台加载钩子):
+
+        @平台加载钩子()
+        async def _QQ官方平台加载后同步() -> None:
+            """平台实例加入管理器后再同步一次，覆盖插件先于平台初始化的情况。"""
+            logger.info("QQ官方群欢迎诊断：stage=platform_loaded_hook, begin=True")
+            安装QQ官方帮助交互(当前插件上下文)
