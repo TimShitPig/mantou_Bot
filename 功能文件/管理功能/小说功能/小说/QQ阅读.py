@@ -1574,6 +1574,8 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
         "chapter_count",
         default=0,
     )
+    free_value = _读取详情字段(objects, "free", default=None)
+    free = None if free_value in (None, "") else _安全整数(free_value, default=-1)
     return {
         "title": str(
             _读取详情字段(objects, "title", "bookName", "book_name", default=f"QQ阅读{book_id}")
@@ -1598,6 +1600,7 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
             or ""
         ).strip(),
         "chapters": _安全整数(chapters),
+        "free": free if free >= 0 else None,
         "vip_free": _详情支持VIP免费(objects),
         "intro": str(
             _读取详情字段(objects, "intro", "desc", "summary", "description", default="")
@@ -1734,7 +1737,25 @@ def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
     if _是真值(details.get("vip_free")):
         return False
+    if details.get("free") == 0:
+        return not any(_安全整数(item.get("chapter_fee")) <= 0 for item in catalog)
     return any(_安全整数(item.get("chapter_fee")) > 0 for item in catalog)
+
+
+def 获取QQ阅读可下载目录(
+    details: dict[str, Any], catalog: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """章节单独付费书只保留目录中标记为免费的章节。"""
+    if details.get("free") != 0:
+        return list(catalog)
+    free_catalog = [
+        dict(item)
+        for item in catalog
+        if _安全整数(item.get("chapter_fee")) <= 0
+    ]
+    for index, item in enumerate(free_catalog, start=1):
+        item["index"] = index
+    return free_catalog
 
 
 async def 获取参考书籍目录(
@@ -2395,6 +2416,7 @@ async def 生成下载回复流(
                     "status": "连载",
                     "words_num": "",
                     "chapters": 0,
+                    "free": None,
                     "intro": "",
                 }
 
@@ -2406,6 +2428,10 @@ async def 生成下载回复流(
             )
             if not catalog:
                 raise RuntimeError("目录为空")
+            catalog = 获取QQ阅读可下载目录(details, catalog)
+            if not catalog:
+                yield 章节单独付费提示
+                return
             details["chapters"] = len(catalog)
             if 是章节单独付费书籍(details, catalog):
                 yield 章节单独付费提示

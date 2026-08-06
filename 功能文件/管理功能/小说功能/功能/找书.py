@@ -905,7 +905,8 @@ async def 预检QQ阅读候选(book_id: str) -> bool:
         available = bool(catalog) and (
             chapter_count <= 0 or len(catalog) == chapter_count
         )
-        allowed = available and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+        catalog = QQ阅读小说.获取QQ阅读可下载目录(details, catalog)
+        allowed = available and bool(catalog) and not QQ阅读小说.是章节单独付费书籍(details, catalog)
     except Exception as exc:
         logger.debug(
             f"找书QQ阅读候选预检失败：book_id={书籍编号}, error={type(exc).__name__}"
