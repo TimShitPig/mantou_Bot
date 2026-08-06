@@ -7,12 +7,10 @@ from typing import Any
 
 try:
     from astrbot.api import logger
-    from astrbot.api.event import filter as astrbot_filter
 except Exception:
     import logging
 
     logger = logging.getLogger(__name__)
-    astrbot_filter = None
 
 
 帮助回调前缀 = "帮助回调:"
@@ -784,7 +782,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
 async def _等待QQ官方平台加载(上下文: Any) -> None:
     """兼容未触发 OnPlatformLoadedEvent 的运行时，等待平台实例出现后同步。"""
     try:
-        for _ in range(120):
+        for _ in range(360):
             if 平台同步已完成:
                 return
             if _已加载QQ官方平台(上下文):
@@ -794,7 +792,7 @@ async def _等待QQ官方平台加载(上下文: Any) -> None:
                 安装QQ官方帮助交互(上下文)
                 return
             await asyncio.sleep(0.5)
-        logger.warning(
+        logger.debug(
             "QQ官方群欢迎诊断：stage=platform_poll, qq_official_found=False",
         )
     except asyncio.CancelledError:
@@ -820,12 +818,7 @@ def _安排平台加载后同步(上下文: Any) -> None:
     平台同步任务 = 事件循环.create_task(_等待QQ官方平台加载(上下文))
 
 
-if astrbot_filter is not None:
-    平台加载钩子 = getattr(astrbot_filter, "on_platform_loaded", None)
-    if callable(平台加载钩子):
-
-        @平台加载钩子()
-        async def _QQ官方平台加载后同步() -> None:
-            """平台实例加入管理器后再同步一次，覆盖插件先于平台初始化的情况。"""
-            logger.info("QQ官方群欢迎诊断：stage=platform_loaded_hook, begin=True")
-            安装QQ官方帮助交互(当前插件上下文)
+async def QQ官方平台加载后同步(上下文: Any) -> None:
+    """由插件主模块接收平台生命周期事件，避免子模块 handler 无法归属插件。"""
+    logger.info("QQ官方群欢迎诊断：stage=platform_loaded_hook, begin=True")
+    安装QQ官方帮助交互(上下文)
