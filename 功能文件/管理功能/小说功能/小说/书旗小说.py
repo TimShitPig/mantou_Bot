@@ -4,11 +4,13 @@ import asyncio
 import base64
 import hashlib
 import html
+import io
 import json
 import re
 import secrets
 import time
 import urllib.parse
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -38,9 +40,11 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 
-ENCRYPT_KEY = "37e81a9d8f02596e1b895d07c171d5c9"
 USER_ID = "6226157280"
-CATALOG_URL = "http://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
+整本下载UID = "28382828"
+整本下载盐值 = "37e81a9d8f02596e1b895d07c171d5c9"
+整本下载目录URL = "https://ocean.shuqireader.com/api/bcspub/openapi/book/chapterlist"
+整本下载地址URL = "https://ocean.shuqireader.com/api/bcspub/qsandapi/chapter/downurl"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
 SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
 SUGGEST_URL = "https://ocean.shuqireader.com/sqan/render/render/search/findSuggest"
@@ -53,9 +57,6 @@ SEARCH_NO_SIGN_KEYS = {
     "sign", "key", "_public", "_reqid", "_beta", "_",
     "X-NEBULAXMLHTTPREQUEST", "callbackUrl",
 }
-最大下载并发数 = 700
-单章最大尝试次数 = 3
-进度日志分段数 = 10
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -96,10 +97,10 @@ def 获取书旗小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> AsyncIterator[str]:
     try:
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=20)
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=60)
         connector = aiohttp.TCPConnector(
-            limit=最大下载并发数,
-            limit_per_host=最大下载并发数,
+            limit=16,
+            limit_per_host=16,
             ttl_dns_cache=300,
             keepalive_timeout=30,
         )
@@ -112,11 +113,10 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             if 书籍.chapter_num and len(书籍.chapters) != 书籍.chapter_num:
                 raise ShuqiError(f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}")
 
-            并发数 = 计算动态并发(len(书籍.chapters))
             logger.info(
                 f"书旗小说开始下载：book_id={书籍.book_id}, "
                 f"title={书籍.book_name}, author={书籍.author_name}, "
-                f"chapters={len(书籍.chapters)}, concurrency={并发数}, source=content_single"
+                f"chapters={len(书籍.chapters)}, mode=archive, requests=2, source=download_shuqi.php"
             )
             yield 格式化下载提示(书籍)
 
@@ -156,22 +156,6 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
     except Exception as exc:
         logger.warning(f"书旗小说下载失败：error={exc}")
         yield "下载失败"
-
-
-def shuqi_detail_sign(book_id: str, timestamp: str, user_id: str, encrypt_key: str) -> str:
-    sign_str = str(book_id) + str(timestamp) + str(user_id) + str(encrypt_key)
-    return hashlib.md5(sign_str.encode()).hexdigest()
-
-
-书旗正文转换表 = str.maketrans(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
-)
-
-
-def p_func(s: str) -> str:
-    """书旗正文的 ROT13 字符变换，交给 CPython 的转换表实现。"""
-    return str(s or "").translate(书旗正文转换表)
 
 
 def _搜索请求ID() -> str:
@@ -367,36 +351,40 @@ async def 搜索联想(session: aiohttp.ClientSession, 关键词: str) -> list[s
     return 建议[:8]
 
 
-def 构造目录参数(书籍编号: str, 章节编号: str = "") -> dict[str, str]:
-    timestamp_ms = str(int(time.time() * 1000))
-    参数 = {
-        "bookId": str(书籍编号),
-        "user_id": USER_ID,
-        "sign": shuqi_detail_sign(str(书籍编号), timestamp_ms, USER_ID, ENCRYPT_KEY),
-        "timestamp": timestamp_ms,
-        "resEncryptType": "-1",
-    }
-    if 章节编号:
-        参数["chapterId"] = str(章节编号)
-    return 参数
-
-
 async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> Book:
-    响应 = await 请求JSON(session, CATALOG_URL, params=构造目录参数(书籍编号))
-    return 解析目录响应(书籍编号, 响应, 是否短篇)
+    时间戳 = str(int(time.time()))
+    目录任务 = 请求JSON(
+        session,
+        整本下载目录URL,
+        params={
+            "platform": "0",
+            "user_id": 整本下载UID,
+            "bookId": str(书籍编号),
+            "timestamp": 时间戳,
+            "sign": hashlib.md5(
+                f"{书籍编号}{时间戳}{整本下载UID}{整本下载盐值}".encode()
+            ).hexdigest(),
+        },
+    )
+    下载地址任务 = 获取整本下载地址(session, str(书籍编号), 时间戳)
+    响应, 下载地址 = await asyncio.gather(目录任务, 下载地址任务)
+    书籍 = 解析目录响应(书籍编号, 响应, 是否短篇)
+    书籍.raw["_archive_url"] = re.sub(
+        r"try_\d+",
+        f"try_{书籍.chapter_num or len(书籍.chapters)}",
+        下载地址,
+        flags=re.I,
+    )
+    return 书籍
 
 
 def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: bool = False) -> Book:
     状态 = str(响应.get("state") or 响应.get("status") or "")
-    if 状态 not in {"200", "0"}:
+    if 状态 and 状态 not in {"200", "0"}:
         raise ShuqiError(f"目录接口异常：state={状态}")
     数据 = 响应.get("data") if isinstance(响应.get("data"), dict) else {}
     if not 数据:
         raise ShuqiError("目录接口 data 为空")
-    前缀 = html.unescape(str(数据.get("freeContUrlPrefix") or "")).strip()
-    if not 前缀:
-        raise ShuqiError("目录未返回正文地址前缀")
-
     章节列表: list[Chapter] = []
     for 分卷 in 数据.get("chapterList") or []:
         if not isinstance(分卷, dict):
@@ -407,17 +395,16 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
             章节编号 = str(项.get("chapterId") or "").strip()
             if not 章节编号:
                 continue
-            后缀 = html.unescape(str(项.get("contUrlSuffix") or "")).strip()
             章节列表.append(Chapter(
                 index=len(章节列表) + 1,
                 chapter_id=章节编号,
                 name=清理网页文本(项.get("chapterName") or f"第{len(章节列表) + 1}章"),
-                content_url=拼接正文URL(前缀, 后缀),
+                content_url="",
                 word_count=安全整数(项.get("wordCount") or 项.get("chapterWordCount"), 0),
             ))
 
-    if any(not 章节.content_url for 章节 in 章节列表):
-        raise ShuqiError("目录存在缺少正文地址的章节")
+    if not 章节列表:
+        raise ShuqiError("目录章节为空")
     目录章节数 = 安全整数(数据.get("chapterNum"), len(章节列表)) or len(章节列表)
     return Book(
         book_id=str(书籍编号),
@@ -433,133 +420,180 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
     )
 
 
-def 拼接正文URL(前缀: str, 后缀: str) -> str:
-    前缀 = str(前缀 or "").strip()
-    后缀 = str(后缀 or "").strip()
-    if not 前缀 or not 后缀:
-        return ""
-    if re.match(r"^https?://", 后缀, re.I):
-        return 后缀
-    if 后缀.startswith("?"):
-        return 前缀.rstrip("/") + 后缀
-    return 前缀.rstrip("/") + "/" + 后缀.lstrip("/")
-
-
-async def 获取章节正文(session: aiohttp.ClientSession, 章节: Chapter) -> str:
-    数据 = await 请求JSON(session, 章节.content_url)
-    加密正文 = str(数据.get("ChapterContent") or "")
-    if not 加密正文:
-        raise ShuqiError("无正文内容")
-    try:
-        decoded = base64.b64decode(p_func(加密正文)).decode("utf-8", errors="ignore")
-    except Exception as exc:
-        raise ShuqiError("正文解码失败") from exc
-    正文 = decoded.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n")
-    正文 = html.unescape(正文).replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not 正文:
-        raise ShuqiError("正文为空")
-    return 正文
-
-
-def 计算动态并发(章节数: int, 最大并发: int = 最大下载并发数) -> int:
-    数量 = max(0, int(章节数 or 0))
-    if 数量 <= 0:
-        return 0
-    return min(max(1, int(最大并发 or 1)), 数量)
-
-
 async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
-    if not 总数:
+    下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
+    if not 总数 or not 下载地址:
         return []
-    结果 = [
-        {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
-        for 章节 in 书籍.chapters
-    ]
-    待处理 = list(range(总数))
-    已完成 = 0
-    成功数 = 0
-    失败数 = 0
-    上次日志进度 = 0
-    进度锁 = asyncio.Lock()
-    首轮并发 = 计算动态并发(总数)
     logger.info(
         f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{总数}, "
-        f"percent=0%, concurrency={首轮并发}"
+        "percent=0%, mode=archive, requests=1"
     )
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Encoding": "gzip",
+    }
+    try:
+        async with session.get(下载地址, headers=headers, allow_redirects=True) as resp:
+            if resp.status >= 400:
+                raise ShuqiError(f"整本下载 HTTP {resp.status}")
+            压缩包 = await resp.read()
+    except ShuqiError:
+        raise
+    except Exception as exc:
+        raise ShuqiError("整本下载请求失败") from exc
 
-    async def 记录首轮进度(成功: bool) -> None:
-        nonlocal 已完成, 成功数, 失败数, 上次日志进度
-        async with 进度锁:
-            已完成 += 1
-            if 成功:
-                成功数 += 1
-            else:
-                失败数 += 1
-            当前分段 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
-            if 当前分段 <= 上次日志进度 and 已完成 < 总数:
-                return
-            上次日志进度 = 当前分段
-            百分比 = int(已完成 * 100 / 总数)
-            logger.info(
-                f"书旗小说章节进度：book_id={书籍.book_id}, progress={已完成}/{总数}, "
-                f"percent={百分比}%, success={成功数}, failed={失败数}"
-            )
-
-    for 尝试次数 in range(1, 单章最大尝试次数 + 1):
-        if not 待处理:
-            break
-        本轮上限 = max(1, 最大下载并发数 // (2 ** (尝试次数 - 1)))
-        本轮并发 = min(计算动态并发(len(待处理)), 本轮上限)
-        本轮结果 = await _下载章节一轮(
-            session,
-            书籍,
-            待处理,
-            本轮并发,
-            记录首轮进度 if 尝试次数 == 1 else None,
-        )
-        下轮待处理: list[int] = []
-        for 索引, 正文, 错误 in 本轮结果:
-            if 正文:
-                结果[索引]["content"] = 正文
-            else:
-                下轮待处理.append(索引)
-                logger.debug(
-                    f"书旗章节下载失败，准备重试：book_id={书籍.book_id}, "
-                    f"chapter_id={书籍.chapters[索引].chapter_id}, "
-                    f"try={尝试次数}/{单章最大尝试次数}, error={错误}"
-                )
-        待处理 = 下轮待处理
-        if 待处理 and 尝试次数 < 单章最大尝试次数:
-            await asyncio.sleep(min(1.0, 0.25 * 尝试次数))
-
-    if 待处理:
-        logger.debug(f"书旗失败章节重试结束：book_id={书籍.book_id}, missing={len(待处理)}")
-    return 结果
+    章节内容 = await asyncio.to_thread(解析书旗压缩包, 压缩包, 书籍)
+    logger.info(
+        f"书旗小说章节进度：book_id={书籍.book_id}, progress={总数}/{总数}, "
+        f"percent=100%, success={总数}, failed=0"
+    )
+    return 章节内容
 
 
-async def _下载章节一轮(
+def m9en(明文: str) -> bytes:
+    密钥 = b"20c60107f6363a18"
+    随机头 = secrets.token_bytes(4)
+    头部 = list(随机头)
+    加法表 = 头部 + [
+        (头部[0] + 87) & 255,
+        (头部[1] + 29) & 255,
+        (头部[2] + 171) & 255,
+        (头部[3] + 148) & 255,
+    ]
+    状态 = list(密钥[:8])
+    输出 = bytearray(b"m90" + bytes([1]) + 随机头)
+    校验 = 0
+    明文字节 = str(明文).encode()
+    for 索引, 字节 in enumerate(明文字节):
+        位置 = 索引 & 7
+        if 位置 == 0:
+            状态 = [
+                (状态[i] + 密钥[i + 8] + 加法表[i]) & 255
+                for i in range(8)
+            ]
+        加密字节 = 字节 ^ 状态[位置]
+        输出.append(加密字节)
+        校验 ^= 字节
+    输出.extend((校验 ^ 状态[0], 校验 ^ 状态[1]))
+    return bytes(输出)
+
+
+def m9de(密文: bytes, 密钥: bytes) -> bytes | None:
+    if len(密文) <= 9 or not 密文.startswith(b"m90") or len(密钥) < 16:
+        return None
+    头部 = list(密文[4:8])
+    加法表 = 头部 + [
+        (头部[0] + 87) & 255,
+        (头部[1] + 29) & 255,
+        (头部[2] + 171) & 255,
+        (头部[3] + 148) & 255,
+    ]
+    状态 = list(密钥[:8])
+    输出 = bytearray()
+    校验 = 0
+    for 索引, 字节 in enumerate(密文[8:-2]):
+        位置 = 索引 & 7
+        if 位置 == 0:
+            状态 = [
+                (状态[i] + 密钥[i + 8] + 加法表[i]) & 255
+                for i in range(8)
+            ]
+        明文字节 = 字节 ^ 状态[位置]
+        输出.append(明文字节)
+        校验 ^= 明文字节
+    if 密文[-2:] != bytes((校验 ^ 状态[0], 校验 ^ 状态[1])):
+        return None
+    return bytes(输出)
+
+
+def m9r(密文: bytes) -> bytes | None:
+    if 密文.startswith(b"m90"):
+        for 密钥 in (b"aa171021f9438cb2", b"e19237a3a933f7eb"):
+            解密结果 = m9de(密文, 密钥)
+            if 解密结果 is not None:
+                return 解密结果
+        return None
+    if len(密文) < 2:
+        return None
+    状态 = (238, 185, 233, 179, 129, 142, 151, 167)
+    输出 = bytearray()
+    校验 = 0
+    for 索引, 字节 in enumerate(密文[:-2]):
+        明文字节 = 字节 ^ 状态[索引 & 7]
+        输出.append(明文字节)
+        校验 ^= 明文字节
+    if 密文[-2:] != bytes((校验 ^ 状态[0], 校验 ^ 状态[1])):
+        return None
+    return bytes(输出)
+
+
+async def 获取整本下载地址(
     session: aiohttp.ClientSession,
-    书籍: Book,
-    索引列表: list[int],
-    并发数: int,
-    进度回调: Any = None,
-) -> list[tuple[int, str, str]]:
-    信号量 = asyncio.Semaphore(max(1, 并发数))
+    书籍编号: str,
+    时间戳: str,
+) -> str:
+    uid = 整本下载UID
+    参数 = {
+        "bookId": base64.b64encode(m9en(书籍编号)).decode(),
+        "timestamp": 时间戳,
+        "sign": hashlib.md5(f"{书籍编号}{时间戳}1{uid}{整本下载盐值}".encode()).hexdigest(),
+        "user_id": base64.b64encode(m9en(uid)).decode(),
+        "type": "1",
+        "reqEncryptType": "1",
+        "reqEncryptParam": "bookId:user_id",
+        "resEncryptType": "1",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; U; Android 12; zh-CN) AppleWebKit/537.36 UCBrowser/18.10.2.1528 Mobile Safari/537.36",
+        "Accept-Encoding": "gzip",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    async with session.post(整本下载地址URL, data=参数, headers=headers) as resp:
+        if resp.status >= 400:
+            raise ShuqiError(f"整本下载地址 HTTP {resp.status}")
+        响应 = await resp.read()
+    解密结果 = m9r(响应)
+    if 解密结果 is None:
+        raise ShuqiError("整本下载地址解密失败")
+    try:
+        数据 = json.loads(解密结果.decode("utf-8"))
+    except Exception as exc:
+        raise ShuqiError("整本下载地址格式异常") from exc
+    下载地址 = str((数据.get("data") or {}).get("url") or "").strip()
+    if not 下载地址:
+        raise ShuqiError("整本下载地址为空")
+    return 下载地址
 
-    async def 下载单章(索引: int) -> tuple[int, str, str]:
-        async with 信号量:
-            try:
-                正文 = await 获取章节正文(session, 书籍.chapters[索引])
-                if 进度回调 is not None:
-                    await 进度回调(True)
-                return 索引, 正文, ""
-            except Exception as exc:
-                if 进度回调 is not None:
-                    await 进度回调(False)
-                return 索引, "", str(exc)
 
-    return list(await asyncio.gather(*(下载单章(索引) for 索引 in 索引列表)))
+def 解析书旗压缩包(压缩包: bytes, 书籍: Book) -> list[dict[str, str]]:
+    内容按章节: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(压缩包)) as 压缩文件:
+            for 信息 in 压缩文件.infolist():
+                if not re.fullmatch(r"\d+\.sqc", 信息.filename, flags=re.I):
+                    continue
+                原文 = 压缩文件.read(信息)
+                解密正文 = bytes(字节 ^ 0x38 for 字节 in 原文)
+                正文 = 解密正文.decode("utf-8", errors="ignore")
+                正文 = 正文.replace("<br/>", "\n")
+                正文 = html.unescape(正文).replace("\r\n", "\n").replace("\r", "\n")
+                正文 = "\n".join(行.lstrip(" \u3000") for 行 in 正文.split("\n")).strip()
+                if 正文:
+                    内容按章节[信息.filename[:-4]] = 正文
+    except zipfile.BadZipFile as exc:
+        raise ShuqiError("整本下载包格式异常") from exc
+
+    结果: list[dict[str, str]] = []
+    缺失章节: list[str] = []
+    for 章节 in 书籍.chapters:
+        正文 = 内容按章节.get(章节.chapter_id, "")
+        if not 正文:
+            缺失章节.append(章节.chapter_id)
+        结果.append({"id": 章节.chapter_id, "title": 章节.name, "content": 正文})
+    if 缺失章节:
+        raise ShuqiError(f"整本下载包缺少章节：missing={len(缺失章节)}")
+    return 结果
 
 
 async def 请求JSON(
