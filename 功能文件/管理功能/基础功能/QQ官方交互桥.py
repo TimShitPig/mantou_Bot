@@ -17,7 +17,7 @@ except Exception:
 欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群与C2C事件意图位 = 1 << 25
-群成员加入桥版本 = 5
+群成员加入桥版本 = 6
 欢迎诊断事件名 = {"group_member_add", "group_add_robot"}
 当前插件上下文: Any = None
 平台同步任务: asyncio.Task | None = None
@@ -658,12 +658,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     _记录群成员加入诊断("bridge_install", 适配器模块)
 
     if not getattr(适配器类, "_mantou_帮助互动已安装", False):
-        原初始化 = 适配器类.__init__
         原互动回调 = getattr(客户端类, "on_interaction_create", None)
-
-        def 新初始化(self: Any, *参数: Any, **关键字: Any) -> None:
-            原初始化(self, *参数, **关键字)
-            _开启互动事件(self)
 
         async def 新互动回调(self: Any, 交互: Any) -> Any:
             数据 = _提取按钮数据(交互)
@@ -683,24 +678,17 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 logger.warning(f"QQ官方互动回调投递失败：data={数据}, error={异常}")
             return None
 
-        适配器类.__init__ = 新初始化
         客户端类.on_interaction_create = 新互动回调
         适配器类._mantou_帮助互动已安装 = True
         logger.info("QQ官方帮助回调桥已安装：已订阅 INTERACTION 事件")
 
     if getattr(适配器类, "_mantou_群成员加入桥版本", 0) != 群成员加入桥版本:
-        原初始化 = 适配器类.__init__
         原成员加入回调 = getattr(客户端类, "on_group_member_add", None)
         原机器人入群回调 = getattr(客户端类, "on_group_add_robot", None)
         if getattr(原成员加入回调, "__module__", "") == __name__:
             原成员加入回调 = None
         if getattr(原机器人入群回调, "__module__", "") == __name__:
             原机器人入群回调 = None
-
-        def 新成员加入初始化(self: Any, *参数: Any, **关键字: Any) -> None:
-            _注册群成员加入解析器(适配器模块)
-            原初始化(self, *参数, **关键字)
-            _开启群成员加入事件(self, 适配器模块)
 
         async def 新成员加入回调(self: Any, 原始事件: Any) -> Any:
             logger.info(
@@ -740,7 +728,6 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 return 结果
             return None
 
-        适配器类.__init__ = 新成员加入初始化
         客户端类.on_group_member_add = 新成员加入回调
         客户端类.on_group_add_robot = 新机器人入群回调
         适配器类._mantou_群成员加入已安装 = True
