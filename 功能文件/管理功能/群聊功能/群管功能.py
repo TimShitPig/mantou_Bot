@@ -23,11 +23,7 @@ try:
 except Exception:
     Comp = None
 
-from 功能文件.管理功能.基础功能.权限工具 import (
-    是群文件清理管理员,
-    是QQ官方机器人,
-    获取群文件清理管理员QQ列表,
-)
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
@@ -421,18 +417,31 @@ def 获取撤回通知内容(event: AstrMessageEvent, 消息文本: str, 卡片�
     return 内容[:120] + ("..." if len(内容) > 120 else "")
 
 
-def 获取撤回通知管理员提及(event: AstrMessageEvent, 配置: Any) -> str:
-    管理员列表 = sorted(获取群文件清理管理员QQ列表(配置))
+def 获取撤回发送者标识(event: AstrMessageEvent) -> str:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("sender", "author", "member", "user"):
+            发送者 = 读取字段(对象, 字段名)
+            for 标识字段 in ("member_openid", "user_openid", "openid", "user_id", "id"):
+                标识 = str(读取字段(发送者, 标识字段) or "").strip()
+                if 标识:
+                    return 标识
+        for 字段名 in ("member_openid", "user_openid", "openid", "sender_id", "user_id"):
+            标识 = str(读取字段(对象, 字段名) or "").strip()
+            if 标识:
+                return 标识
+    return ""
+
+
+def 获取撤回发送者提及(event: AstrMessageEvent) -> str:
+    发送者标识 = 获取撤回发送者标识(event)
     if 是QQ官方机器人(event):
-        # QQ 官方 Markdown 只接受群成员 OpenID，配置中的纯数字 QQ 号不能直接转换。
-        OpenID列表 = [
-            用户
-            for 用户 in 管理员列表
-            if not 用户.isdigit() and 用户编号规则.fullmatch(用户)
-        ]
-        return "\n".join(f"<@{用户}>" for 用户 in OpenID列表) or "管理员请查看"
-    At列表 = [f"[CQ:at,qq={用户}]" for 用户 in 管理员列表 if 用户]
-    return " ".join(At列表) or "管理员请查看"
+        return (
+            f"<@{发送者标识}>"
+            if 发送者标识 and not 发送者标识.isdigit() and 用户编号规则.fullmatch(发送者标识)
+            else "发送者请查看"
+        )
+    return f"[CQ:at,qq={发送者标识}]" if 发送者标识 else "发送者请查看"
 
 
 async def 发送撤回通知(
@@ -453,7 +462,7 @@ async def 发送撤回通知(
     发送者名称 = 获取撤回发送者名称(event)
     撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
     文本 = (
-        f"{获取撤回通知管理员提及(event, 配置)}\n\n"
+        f"{获取撤回发送者提及(event)}\n\n"
         f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
         "请查看"
     )
