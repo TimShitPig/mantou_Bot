@@ -32,7 +32,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 最大章节并发数 = 60
-最大目录并发数 = 700
+最大目录并发数 = 500
 失败章节重试轮数 = 3
 最小章节并发数 = 4
 初始章节并发数 = 16
@@ -253,7 +253,8 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             动态并发 = 计算动态章节并发数(len(目录))
             logger.info(
                 f"点众小说开始下载：book_id={书籍编号}, title={书名}, author={作者}, "
-                f"chapters={len(目录)}, concurrency={动态并发}"
+                f"chapters={len(目录)}, catalog_concurrency={最大目录并发数}, "
+                f"content_max_concurrency={动态并发}"
             )
             yield "\n".join([
                 f"书名：{书名}",
@@ -372,6 +373,7 @@ async def 异步获取目录(
                 {
                     "id": cid,
                     "title": str(it.get("chapterName") or it.get("title") or it.get("name") or f"章节{cid}"),
+                    "has_lock": it.get("hasLock") is True or str(it.get("hasLock") or "").lower() in {"1", "true"},
                 },
             )
     结果 = [章节 for _, 章节 in sorted(章节映射.values(), key=lambda 项: 项[0])]
@@ -395,13 +397,13 @@ def _提取正文(data: dict[str, Any]) -> str:
     return ""
 
 
-async def 异步获取章节正文(
+async def 异步获取章节正文结果(
     session: aiohttp.ClientSession,
     datas: dict[str, Any],
     book_id: str,
     chapter_id: str,
     book_name: str = "",
-) -> str:
+) -> tuple[str, str]:
     source = {
         "origin": "ssym",
         "originName": "搜索页面",
@@ -435,19 +437,38 @@ async def 异步获取章节正文(
     }
     res = await 异步调用接口(session, 1303, body, datas)
     data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
-    if data.get("status") == 5 and "orderPageVo" in data:
-        order = data.get("orderPageVo") or {}
+    if str(data.get("status")) == "5" and "orderPageVo" in data:
+        order = data.get("orderPageVo")
+        if not isinstance(order, dict):
+            order = {}
         ad_key = None
         if isinstance(order.get("unlockOperate"), dict):
             ad_key = order["unlockOperate"].get("key")
         if not ad_key and isinstance(order.get("exitRetainOperate"), dict):
             ad_key = order["exitRetainOperate"].get("key")
+        有广告解锁入口 = bool(ad_key)
         if ad_key:
             ad_res = await 异步调用接口(session, 1518, {"key": ad_key, "advertValue": 0.0}, datas)
-            if (ad_res.get("raw") or {}).get("code") == 0:
+            if str((ad_res.get("raw") or {}).get("code")) == "0":
                 res = await 异步调用接口(session, 1303, body, datas)
                 data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
-    return _提取正文(data)
+        content = _提取正文(data)
+        if content:
+            return content, "ok"
+        return "", "empty" if 有广告解锁入口 else "member_required"
+    content = _提取正文(data)
+    return content, "ok" if content else "empty"
+
+
+async def 异步获取章节正文(
+    session: aiohttp.ClientSession,
+    datas: dict[str, Any],
+    book_id: str,
+    chapter_id: str,
+    book_name: str = "",
+) -> str:
+    正文, _ = await 异步获取章节正文结果(session, datas, book_id, chapter_id, book_name)
+    return 正文
 
 
 async def 异步新建下载通道() -> tuple[aiohttp.ClientSession, dict[str, Any]] | None:
@@ -496,9 +517,12 @@ async def 异步执行章节下载轮(
         cid = str(章.get("id") or "")
         标题 = str(章.get("title") or f"章节{cid}")
         正文 = ""
+        访问状态 = "error"
         try:
             # 同一 App 身份只在本通道内串行使用，避免广告解锁状态交叉覆盖。
-            正文 = await 异步获取章节正文(会话, 身份, 书籍编号, cid, 书名)
+            正文, 访问状态 = await 异步获取章节正文结果(
+                会话, 身份, 书籍编号, cid, 书名
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -508,7 +532,7 @@ async def 异步执行章节下载轮(
             )
         if callable(进度回调):
             await 进度回调(bool(正文))
-        return 下标, {"title": 标题, "content": 正文, "id": cid}
+        return 下标, {"title": 标题, "content": 正文, "id": cid, "access": 访问状态}
 
     async def 执行通道(
         通道: tuple[aiohttp.ClientSession, dict[str, Any]],
@@ -633,7 +657,15 @@ async def 异步下载全部章节(
         结果[下标] = 章节结果
 
     for 轮次 in range(1, 失败章节重试轮数 + 1):
-        缺失任务 = [(i, 目录[i]) for i, 项 in enumerate(结果) if not 项 or not 项.get("content")]
+        缺失任务 = [
+            (i, 目录[i])
+            for i, 项 in enumerate(结果)
+            if not 项
+            or (
+                not 项.get("content")
+                and 项.get("access") != "member_required"
+            )
+        ]
         if not 缺失任务:
             break
         logger.debug(
@@ -661,10 +693,16 @@ async def 异步下载全部章节(
             "title": str(目录[i].get("title") or f"章节{目录[i].get('id') or ''}"),
             "content": "",
             "id": str(目录[i].get("id") or ""),
+            "access": "missing",
         }
         for i, 项 in enumerate(结果)
     ]
     最终成功 = sum(1 for 项 in 完整结果 if 项.get("content"))
+    会员锁定 = sum(1 for 项 in 完整结果 if 项.get("access") == "member_required")
+    if 会员锁定:
+        logger.warning(
+            f"点众小说章节需要会员：book_id={书籍编号}, locked={会员锁定}, total={总数}"
+        )
     logger.info(
         f"点众小说章节下载完成：book_id={书籍编号}, success={最终成功}, total={总数}, "
         f"file_ready={最终成功 == 总数}"
