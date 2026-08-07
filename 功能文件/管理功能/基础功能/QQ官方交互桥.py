@@ -551,6 +551,46 @@ def _安装登录后解析器同步(客户端类: Any, 适配器模块: Any) -> 
     客户端类._mantou_群成员登录同步已安装 = True
 
 
+def _安装网关鉴权订阅(适配器模块: Any) -> None:
+    """在每条新 WebSocket 会话发送 IDENTIFY 前校正群成员事件订阅位。"""
+    网关类 = _读取字段(适配器模块, "ManagedBotWebSocket")
+    if 网关类 is None:
+        网关类 = _读取字段(适配器模块, "BotWebSocket")
+    if 网关类 is None:
+        logger.warning("QQ官方群欢迎诊断：stage=ws_identify_hook, installed=False")
+        return
+    if getattr(网关类, "_mantou_群成员鉴权订阅已安装", False):
+        return
+    原鉴权方法 = getattr(网关类, "ws_identify", None)
+    if not callable(原鉴权方法):
+        logger.warning("QQ官方群欢迎诊断：stage=ws_identify_hook, installed=False")
+        return
+
+    async def 新鉴权方法(self: Any, *参数: Any, **关键字: Any) -> Any:
+        会话 = _读取字段(self, "_session")
+        原意图值 = _读取字段(会话, "intent") if isinstance(会话, dict) else None
+        try:
+            原值 = int(原意图值 or 0)
+        except (TypeError, ValueError):
+            原值 = 0
+        新值 = 原值 | 群与C2C事件意图位
+        if isinstance(会话, dict):
+            会话["intent"] = 新值
+        logger.info(
+            "QQ官方群欢迎诊断：stage=ws_identify, group_c2c=%s, intent=%s",
+            bool(新值 & 群与C2C事件意图位),
+            新值,
+        )
+        结果 = 原鉴权方法(self, *参数, **关键字)
+        if inspect.isawaitable(结果):
+            return await 结果
+        return 结果
+
+    网关类.ws_identify = 新鉴权方法
+    网关类._mantou_群成员鉴权订阅已安装 = True
+    logger.info("QQ官方群欢迎诊断：stage=ws_identify_hook, installed=True")
+
+
 def _安装网关接收诊断(适配器模块: Any) -> None:
     """记录事件是否到达 WebSocket 及其 parser 命中状态。"""
     网关类 = _读取字段(适配器模块, "ManagedBotWebSocket")
@@ -653,6 +693,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
 
     _注册群成员加入解析器(适配器模块)
     _安装登录后解析器同步(客户端类, 适配器模块)
+    _安装网关鉴权订阅(适配器模块)
     _安装网关接收诊断(适配器模块)
     _安装网关分发诊断(客户端类)
     _记录群成员加入诊断("bridge_install", 适配器模块)
