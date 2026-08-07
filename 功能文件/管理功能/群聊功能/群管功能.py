@@ -1206,48 +1206,56 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
     撤回方法 = getattr(bot, "delete_msg", None)
     if callable(撤回方法):
         try:
-            await 撤回方法(message_id=消息编号)
-            return True
+            响应 = await 撤回方法(message_id=消息编号)
+            if 撤回响应成功(响应):
+                return True
         except Exception:
             pass
         if 群号:
             try:
-                await 撤回方法(message_id=消息编号, channel_id=群号)
-                return True
+                响应 = await 撤回方法(message_id=消息编号, channel_id=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
             try:
-                await 撤回方法(message_id=消息编号, group_openid=群号)
-                return True
+                响应 = await 撤回方法(message_id=消息编号, group_openid=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
             try:
-                await 撤回方法(message_id=消息编号, openid=群号)
-                return True
+                响应 = await 撤回方法(message_id=消息编号, openid=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
 
     调用动作 = getattr(getattr(api, "call_action", None), "__call__", None) if api else None
     if callable(调用动作):
         try:
-            await 调用动作("delete_msg", message_id=消息编号)
-            return True
+            响应 = await 调用动作("delete_msg", message_id=消息编号)
+            if 撤回响应成功(响应):
+                return True
         except Exception:
             pass
         if 群号:
             try:
-                await 调用动作("delete_msg", message_id=消息编号, channel_id=群号)
-                return True
+                响应 = await 调用动作("delete_msg", message_id=消息编号, channel_id=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
             try:
-                await 调用动作("delete_msg", message_id=消息编号, group_openid=群号)
-                return True
+                响应 = await 调用动作("delete_msg", message_id=消息编号, group_openid=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
             try:
-                await 调用动作("delete_msg", message_id=消息编号, openid=群号)
-                return True
+                响应 = await 调用动作("delete_msg", message_id=消息编号, openid=群号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
 
@@ -1255,19 +1263,22 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
         方法 = getattr(bot, 方法名, None)
         if callable(方法):
             try:
-                await 方法(message_id=消息编号)
-                return True
+                响应 = await 方法(message_id=消息编号)
+                if 撤回响应成功(响应):
+                    return True
             except Exception:
                 pass
             if 群号:
                 try:
-                    await 方法(message_id=消息编号, channel_id=群号)
-                    return True
+                    响应 = await 方法(message_id=消息编号, channel_id=群号)
+                    if 撤回响应成功(响应):
+                        return True
                 except Exception:
                     pass
                 try:
-                    await 方法(message_id=消息编号, group_openid=群号)
-                    return True
+                    响应 = await 方法(message_id=消息编号, group_openid=群号)
+                    if 撤回响应成功(响应):
+                        return True
                 except Exception:
                     pass
 
@@ -1276,24 +1287,28 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
             方法 = getattr(api, 方法名, None)
             if callable(方法):
                 try:
-                    await 方法(message_id=消息编号)
-                    return True
+                    响应 = await 方法(message_id=消息编号)
+                    if 撤回响应成功(响应):
+                        return True
                 except Exception:
                     pass
                 if 群号:
                     try:
-                        await 方法(channel_id=群号, message_id=消息编号)
-                        return True
+                        响应 = await 方法(channel_id=群号, message_id=消息编号)
+                        if 撤回响应成功(响应):
+                            return True
                     except Exception:
                         pass
                     try:
-                        await 方法(message_id=消息编号, channel_id=群号)
-                        return True
+                        响应 = await 方法(message_id=消息编号, channel_id=群号)
+                        if 撤回响应成功(响应):
+                            return True
                     except Exception:
                         pass
                     try:
-                        await 方法(群号, 消息编号)
-                        return True
+                        响应 = await 方法(群号, 消息编号)
+                        if 撤回响应成功(响应):
+                            return True
                     except Exception:
                         pass
 
@@ -1309,15 +1324,46 @@ async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "")
             if Route is not None:
                 try:
                     route = Route("DELETE", f"/v2/groups/{群号}/messages/{消息编号}")
-                    await _http.request(route)
-                    _logger.info(f"撤回成功: _http.request(Route(DELETE, /v2/groups/{群号}/messages/...))")
-                    return True
+                    响应 = await _http.request(route)
+                    if 撤回响应成功(响应):
+                        _logger.info("撤回成功: 已收到确认响应")
+                        return True
                 except Exception as e:
                     _logger.info(f"撤回: _http.request(Route) 异常: {type(e).__name__}: {e}")
             else:
                 _logger.info("撤回: 无法导入 botpy.http.Route，跳过底层HTTP撤回")
 
     raise RuntimeError("当前 bot 没有可用的撤回接口")
+
+
+def 撤回响应成功(响应: Any) -> bool:
+    """只把明确成功或无返回值的撤回响应视为成功。"""
+    if 响应 is None:
+        return True
+    if isinstance(响应, bool):
+        return 响应
+    if isinstance(响应, dict):
+        状态 = str(响应.get("status") or "").strip().lower()
+        if 状态 in {"failed", "failure", "error", "async"}:
+            return False
+
+        返回码 = 响应.get("retcode")
+        if 返回码 is not None:
+            try:
+                return int(返回码) == 0
+            except (TypeError, ValueError):
+                return False
+
+        成功字段 = 响应.get("success")
+        if isinstance(成功字段, bool):
+            return 成功字段
+        if "code" in 响应:
+            try:
+                return int(响应.get("code")) == 0
+            except (TypeError, ValueError):
+                return False
+        return 状态 in {"", "ok", "success"}
+    return 响应 is not False
 
 
 async def 调用机器人动作(bot: Any, 动作名: str, **参数: Any) -> Any:

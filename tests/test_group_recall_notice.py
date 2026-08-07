@@ -78,6 +78,38 @@ class 撤回通知提及测试(unittest.TestCase):
         asyncio.run(场景())
         self.assertEqual(发送次数, 1)
 
+    def test_撤回失败时不发送通知(self):
+        发送次数 = 0
+
+        async def 场景():
+            nonlocal 发送次数
+
+            async def 撤回(**_参数):
+                return {"status": "failed", "retcode": 10001}
+
+            async def 发送(_结果):
+                nonlocal 发送次数
+                发送次数 += 1
+
+            event = types.SimpleNamespace(
+                get_group_id=lambda: "123456789",
+                get_platform_name=lambda: "aiocqhttp",
+                get_sender_id=lambda: "987654321",
+                message_str="123456789",
+                message_obj={
+                    "message_id": "message-01",
+                    "sender": {"user_id": "987654321", "role": "member"},
+                },
+                bot=types.SimpleNamespace(delete_msg=撤回),
+                plain_result=lambda text: text,
+                send=发送,
+            )
+
+            self.assertFalse(await 群管功能.处理数字撤回(event))
+
+        asyncio.run(场景())
+        self.assertEqual(发送次数, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
