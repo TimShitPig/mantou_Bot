@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import asyncio
 from pathlib import Path
 
 
@@ -47,6 +48,35 @@ class 撤回通知提及测试(unittest.TestCase):
             群管功能.获取撤回发送者提及(event),
             "[CQ:at,qq=123456789]",
         )
+
+    def test_同群并发撤回通知只发送一条(self):
+        群管功能.撤回通知最近发送时间.clear()
+        发送次数 = 0
+
+        async def 场景():
+            nonlocal 发送次数
+
+            async def 发送(_结果):
+                nonlocal 发送次数
+                发送次数 += 1
+                await asyncio.sleep(0)
+
+            event = types.SimpleNamespace(
+                get_group_id=lambda: "group-01",
+                get_platform_name=lambda: "aiocqhttp",
+                get_sender_id=lambda: "123456789",
+                plain_result=lambda text: text,
+                send=发送,
+                message_obj={"sender": {"user_id": "123456789", "nickname": "发送者"}},
+            )
+            tasks = [
+                asyncio.create_task(群管功能.发送撤回通知(event, None, "违规消息")),
+                asyncio.create_task(群管功能.发送撤回通知(event, None, "违规消息")),
+            ]
+            await asyncio.gather(*tasks)
+
+        asyncio.run(场景())
+        self.assertEqual(发送次数, 1)
 
 
 if __name__ == "__main__":

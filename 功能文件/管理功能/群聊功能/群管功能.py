@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
 import json
 import re
 import time
@@ -48,6 +49,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 数字撤回触发次数: dict[str, int] = {}
 撤回通知间隔秒 = 300
 撤回通知最近发送时间: dict[str, float] = {}
+撤回通知群锁: dict[str, asyncio.Lock] = {}
 群管功能模块版本 = "1.20.3"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
@@ -453,44 +455,46 @@ async def 发送撤回通知(
     群号 = 获取群号(event)
     if not 群号:
         return False
-    当前时间 = time.monotonic()
-    上次发送 = 撤回通知最近发送时间.get(群号)
-    if 上次发送 is not None and 当前时间 - 上次发送 < 撤回通知间隔秒:
-        logger.debug("撤回通知限频跳过：group_id=%s", 群号)
+    锁 = 撤回通知群锁.setdefault(群号, asyncio.Lock())
+    async with 锁:
+        当前时间 = time.monotonic()
+        上次发送 = 撤回通知最近发送时间.get(群号)
+        if 上次发送 is not None and 当前时间 - 上次发送 < 撤回通知间隔秒:
+            logger.debug("撤回通知限频跳过：group_id=%s", 群号)
+            return False
+
+        发送者名称 = 获取撤回发送者名称(event)
+        撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
+        文本 = (
+            f"{获取撤回发送者提及(event)}\n\n"
+            f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
+            "请查看"
+        )
+        try:
+            if 是QQ官方机器人(event):
+                from 功能文件.管理功能.基础功能 import 帮助功能
+
+                发送成功 = await 帮助功能.发送Markdown键盘消息(
+                    event,
+                    文本,
+                    None,
+                    主动发送=True,
+                    自动提及=False,
+                )
+            else:
+                发送方法 = getattr(event, "send", None)
+                if not callable(发送方法):
+                    return False
+                发送结果 = 发送方法(event.plain_result(文本))
+                发送成功 = await 等待可能异步结果(发送结果)
+                发送成功 = 发送成功 is not False
+            if 发送成功:
+                撤回通知最近发送时间[群号] = 当前时间
+                logger.info("撤回通知已发送：group_id=%s", 群号)
+                return True
+        except Exception as exc:
+            logger.warning("撤回通知发送失败：group_id=%s, error_type=%s", 群号, type(exc).__name__)
         return False
-
-    发送者名称 = 获取撤回发送者名称(event)
-    撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
-    文本 = (
-        f"{获取撤回发送者提及(event)}\n\n"
-        f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
-        "请查看"
-    )
-    try:
-        if 是QQ官方机器人(event):
-            from 功能文件.管理功能.基础功能 import 帮助功能
-
-            发送成功 = await 帮助功能.发送Markdown键盘消息(
-                event,
-                文本,
-                None,
-                主动发送=True,
-                自动提及=False,
-            )
-        else:
-            发送方法 = getattr(event, "send", None)
-            if not callable(发送方法):
-                return False
-            发送结果 = 发送方法(event.plain_result(文本))
-            发送成功 = await 等待可能异步结果(发送结果)
-            发送成功 = 发送成功 is not False
-        if 发送成功:
-            撤回通知最近发送时间[群号] = 当前时间
-            logger.info("撤回通知已发送：group_id=%s", 群号)
-            return True
-    except Exception as exc:
-        logger.warning("撤回通知发送失败：group_id=%s, error_type=%s", 群号, type(exc).__name__)
-    return False
 
 
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
