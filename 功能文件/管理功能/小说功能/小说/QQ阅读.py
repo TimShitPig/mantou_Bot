@@ -942,6 +942,34 @@ def _提取QQ阅读章节号(value: str) -> int:
     return int(value[first + 1 : second])
 
 
+def 获取QQ阅读正文章节ID列表(
+    catalog: list[dict[str, Any]],
+    start_chapter: int,
+    end_chapter: int,
+) -> list[str]:
+    """把过滤后的目录位置转换回正文接口需要的真实 cid。"""
+    start = max(1, int(start_chapter))
+    end = max(start, int(end_chapter))
+    chapter_ids: list[str] = []
+    for position in range(start, end + 1):
+        item = catalog[position - 1] if position <= len(catalog) else {}
+        chapter_id = str(item.get("cid") or position).strip()
+        chapter_ids.append(chapter_id if chapter_id.isdigit() else str(position))
+    return chapter_ids
+
+
+def 构造QQ阅读正文章节参数(chapter_ids: list[str]) -> str:
+    normalized = [str(chapter_id).strip() for chapter_id in chapter_ids if str(chapter_id).strip()]
+    if not normalized:
+        return ""
+    numbers = [int(chapter_id) for chapter_id in normalized if chapter_id.isdigit()]
+    if len(numbers) == len(normalized) and all(
+        current == numbers[0] + offset for offset, current in enumerate(numbers)
+    ):
+        return f"{numbers[0]}-{numbers[-1]}"
+    return ",".join(normalized)
+
+
 def 解密QQ阅读章节数据(data: bytes, stt: str | bytes, *, allow_refresh: bool = True) -> Optional[str]:
     config = ConfigManager.get_instance()
     knva = config._knva_bytes()
@@ -962,8 +990,13 @@ def 解密QQ阅读章节数据(data: bytes, stt: str | bytes, *, allow_refresh: 
     return text
 
 
-def 解析QQ阅读正文批次(package: bytes, start_chapter: int, end_chapter: int) -> list[Any]:
+def 解析QQ阅读正文批次(
+    package: bytes,
+    chapter_ids: list[str],
+) -> list[Any]:
     members = tar_decrypt(package)
+    requested_ids = [int(chapter_id) for chapter_id in chapter_ids if str(chapter_id).isdigit()]
+    requested_set = set(requested_ids)
     chapter_map: Dict[int, Any] = {}
     for key, value in list(members.items()):
         if key in ("code", "info.txt"):
@@ -972,7 +1005,7 @@ def 解析QQ阅读正文批次(package: bytes, start_chapter: int, end_chapter: 
             chapter_number = _提取QQ阅读章节号(str(key))
         except (TypeError, ValueError):
             continue
-        if chapter_number < start_chapter or chapter_number > end_chapter:
+        if chapter_number not in requested_set:
             continue
         if isinstance(value, (bytes, bytearray)):
             try:
@@ -988,7 +1021,7 @@ def 解析QQ阅读正文批次(package: bytes, start_chapter: int, end_chapter: 
             chapter_map[chapter_number] = value
     return [
         chapter_map.get(chapter_number, "章节解密失败")
-        for chapter_number in range(start_chapter, end_chapter + 1)
+        for chapter_number in requested_ids
     ]
 
 
@@ -2025,8 +2058,7 @@ async def 下载参考出版书正文(
 async def 异步获取QQ阅读正文批次(
     session: aiohttp.ClientSession,
     book_id: str,
-    start_chapter: int,
-    end_chapter: int,
+    chapter_ids: list[str],
     解密信号量: asyncio.Semaphore,
 ) -> list[Any]:
     config = ConfigManager.get_instance()
@@ -2034,7 +2066,7 @@ async def 异步获取QQ阅读正文批次(
     params = {
         "bookId": str(book_id),
         "type": "2",
-        "scids": f"{start_chapter}-{end_chapter}",
+        "scids": 构造QQ阅读正文章节参数(chapter_ids),
         "fuid": config.fuid,
     }
     async with session.get(QQ阅读目录地址, params=params, headers=headers) as response:
@@ -2044,8 +2076,7 @@ async def 异步获取QQ阅读正文批次(
         return await asyncio.to_thread(
             解析QQ阅读正文批次,
             package,
-            start_chapter,
-            end_chapter,
+            chapter_ids,
         )
 
 
@@ -2124,9 +2155,10 @@ async def 下载参考正文(
 
     async def 请求批次(first: int, last: int) -> tuple[int, int, list[Any] | None]:
         try:
+            chapter_ids = 获取QQ阅读正文章节ID列表(catalog, first, last)
             async with 请求信号量:
                 part = await 异步获取QQ阅读正文批次(
-                    session, book_id, first, last, 解密信号量
+                    session, book_id, chapter_ids, 解密信号量
                 )
             return first, last, part
         except Exception as exc:
