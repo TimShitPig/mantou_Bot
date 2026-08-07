@@ -29,7 +29,6 @@ UC网盘功能 = 加载功能模块("功能文件.管理功能.网盘功能.UC�
 QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.QQ阅读")
 群列表工具 = 加载功能模块("功能文件.管理功能.群聊功能.群列表工具")
 群管功能 = 加载功能模块("功能文件.管理功能.群聊功能.群管功能")
-群成员事件 = 加载功能模块("功能文件.管理功能.群聊功能.群成员事件")
 网页群文件功能 = 加载功能模块("功能文件.管理功能.群聊功能.网页群文件")
 七猫小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.七猫小说")
 书旗小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.书旗小说")
@@ -42,7 +41,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.10.16"
+插件版本 = "5.10.17"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -65,10 +64,6 @@ class MyPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
-        if await 群成员事件.处理群成员加入事件(event):
-            event.stop_event()
-            return
-
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
@@ -113,21 +108,6 @@ class MyPlugin(Star):
                         yield 输出内容
                 else:
                     yield 找书回复内容
-
-        欢迎回调内容 = 群成员事件.获取欢迎回调内容(命令文本)
-        if 欢迎回调内容 is not None:
-            md文本, 键盘 = 欢迎回调内容
-            logger.info("QQ官方群欢迎回调分发")
-            if 权限工具.是QQ官方机器人(event):
-                发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                if not 发送成功:
-                    async for 输出内容 in _输出文本回复(md文本):
-                        yield 输出内容
-            else:
-                async for 输出内容 in _输出文本回复(md文本):
-                    yield 输出内容
-            event.stop_event()
-            return
 
         网盘Cookie回复 = await 小说网盘功能.处理网盘Cookie指令(
             event,

@@ -14,7 +14,6 @@ except Exception:
 
 
 帮助回调前缀 = "帮助回调:"
-欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群与C2C事件意图位 = 1 << 25
 群成员加入桥版本 = 6
@@ -71,11 +70,6 @@ def _提取按钮数据(交互: Any) -> str:
 def _是否帮助回调(数据: str) -> bool:
     数据 = str(数据 or "").strip()
     return 数据.startswith(帮助回调前缀) and len(数据) > len(帮助回调前缀)
-
-
-def _是否欢迎回调(数据: str) -> bool:
-    数据 = str(数据 or "").strip()
-    return 数据.startswith(欢迎回调前缀) and len(数据) > len(欢迎回调前缀)
 
 
 def _获取最近可回复消息ID(平台: Any, 会话标识: str) -> str | None:
@@ -666,12 +660,33 @@ def _安装网关分发诊断(客户端类: Any) -> None:
     客户端类._mantou_群成员网关诊断已安装 = True
 
 
+def _移除旧群成员欢迎回调(客户端类: Any, 适配器类: Any) -> None:
+    """热重载时清除旧版本注入的新人欢迎回调。"""
+    已移除 = False
+    for 回调名称 in ("on_group_member_add", "on_group_add_robot"):
+        回调 = getattr(客户端类, 回调名称, None)
+        if getattr(回调, "__module__", "") != __name__:
+            continue
+        try:
+            delattr(客户端类, 回调名称)
+            已移除 = True
+        except AttributeError:
+            pass
+    if getattr(适配器类, "_mantou_群成员加入已安装", False):
+        try:
+            delattr(适配器类, "_mantou_群成员加入已安装")
+            已移除 = True
+        except AttributeError:
+            pass
+    if 已移除:
+        logger.info("QQ官方旧版新人欢迎回调已移除")
+
+
 def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
-    """为 QQ 官方 WebSocket 适配器补齐原生交互和群成员加入事件。
+    """为 QQ 官方 WebSocket 适配器补齐原生帮助交互。
 
     QQ 官方 `action.type=1` 通过 `INTERACTION_CREATE` 投递；AstrBot 默认适配器
-    与旧版 qq-botpy 都不会完整转发该事件和 `GROUP_MEMBER_ADD`，因此在此转入
-    现有插件消息流水线。
+    与旧版 qq-botpy 的回调需要在此转入现有插件消息流水线。
     """
     global 当前插件上下文
     if 上下文 is not None:
@@ -679,31 +694,22 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     try:
         from astrbot.core.platform.sources.qqofficial import qqofficial_platform_adapter as 适配器模块
     except Exception as 异常:
-        logger.warning(
-            "QQ官方群欢迎桥加载失败：error_type=%s",
-            type(异常).__name__,
-        )
+        logger.warning("QQ官方帮助回调桥加载失败：error_type=%s", type(异常).__name__)
         return False
 
     适配器类 = getattr(适配器模块, "QQOfficialPlatformAdapter", None)
     客户端类 = getattr(适配器模块, "botClient", None)
     if 适配器类 is None or 客户端类 is None:
-        logger.warning("QQ官方群欢迎桥加载失败：适配器类或客户端类不存在")
+        logger.warning("QQ官方帮助回调桥加载失败：适配器类或客户端类不存在")
         return False
 
-    _注册群成员加入解析器(适配器模块)
-    _安装登录后解析器同步(客户端类, 适配器模块)
-    _安装网关鉴权订阅(适配器模块)
-    _安装网关接收诊断(适配器模块)
-    _安装网关分发诊断(客户端类)
-    _记录群成员加入诊断("bridge_install", 适配器模块)
-
+    _移除旧群成员欢迎回调(客户端类, 适配器类)
     if not getattr(适配器类, "_mantou_帮助互动已安装", False):
         原互动回调 = getattr(客户端类, "on_interaction_create", None)
 
         async def 新互动回调(self: Any, 交互: Any) -> Any:
             数据 = _提取按钮数据(交互)
-            if not (_是否帮助回调(数据) or _是否欢迎回调(数据)):
+            if not _是否帮助回调(数据):
                 if callable(原互动回调):
                     结果 = 原互动回调(self, 交互)
                     if inspect.isawaitable(结果):
@@ -723,60 +729,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         适配器类._mantou_帮助互动已安装 = True
         logger.info("QQ官方帮助回调桥已安装：已订阅 INTERACTION 事件")
 
-    if getattr(适配器类, "_mantou_群成员加入桥版本", 0) != 群成员加入桥版本:
-        原成员加入回调 = getattr(客户端类, "on_group_member_add", None)
-        原机器人入群回调 = getattr(客户端类, "on_group_add_robot", None)
-        if getattr(原成员加入回调, "__module__", "") == __name__:
-            原成员加入回调 = None
-        if getattr(原机器人入群回调, "__module__", "") == __name__:
-            原机器人入群回调 = None
-
-        async def 新成员加入回调(self: Any, 原始事件: Any) -> Any:
-            logger.info(
-                "QQ官方群欢迎诊断：stage=callback_enter, event=GROUP_MEMBER_ADD, %s",
-                _事件字段状态(原始事件),
-            )
-            try:
-                await _投递群成员加入事件(self, 原始事件, 适配器模块)
-            except Exception as 异常:
-                logger.warning(
-                    "QQ官方群成员加入事件投递失败：error_type=%s",
-                    type(异常).__name__,
-                )
-            if callable(原成员加入回调):
-                结果 = 原成员加入回调(self, 原始事件)
-                if inspect.isawaitable(结果):
-                    return await 结果
-                return 结果
-            return None
-
-        async def 新机器人入群回调(self: Any, 原始事件: Any) -> Any:
-            logger.info(
-                "QQ官方群欢迎诊断：stage=callback_enter, event=GROUP_ADD_ROBOT, %s",
-                _事件字段状态(原始事件),
-            )
-            try:
-                await _投递群成员加入事件(self, 原始事件, 适配器模块)
-            except Exception as 异常:
-                logger.warning(
-                    "QQ官方机器人入群欢迎投递失败：error_type=%s",
-                    type(异常).__name__,
-                )
-            if callable(原机器人入群回调):
-                结果 = 原机器人入群回调(self, 原始事件)
-                if inspect.isawaitable(结果):
-                    return await 结果
-                return 结果
-            return None
-
-        客户端类.on_group_member_add = 新成员加入回调
-        客户端类.on_group_add_robot = 新机器人入群回调
-        适配器类._mantou_群成员加入已安装 = True
-        适配器类._mantou_群成员加入桥版本 = 群成员加入桥版本
-        logger.info("QQ官方群成员加入桥已安装：已接入 GROUP_MEMBER_ADD")
-
     已启用帮助数量 = 0
-    已启用成员加入数量 = 0
     找到官方适配器 = False
     for 平台实例 in _获取平台实例列表(上下文):
         try:
@@ -785,22 +738,20 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             找到官方适配器 = True
             if _开启互动事件(平台实例):
                 已启用帮助数量 += 1
-            if _开启群成员加入事件(平台实例, 适配器模块):
-                已启用成员加入数量 += 1
         except Exception as 异常:
             logger.warning(
-                "QQ官方群欢迎诊断：stage=platform_sync, success=False, error_type=%s",
+                "QQ官方帮助桥诊断：stage=platform_sync, success=False, error_type=%s",
                 type(异常).__name__,
             )
             continue
     global 平台同步已完成
     平台同步已完成 = 找到官方适配器
     if 上下文 is not None and not 找到官方适配器:
-        logger.warning("QQ官方群欢迎诊断：stage=platform_sync, qq_official_found=False")
-    if 已启用帮助数量 or 已启用成员加入数量:
+        logger.warning("QQ官方帮助桥诊断：stage=platform_sync, qq_official_found=False")
+    if 已启用帮助数量:
         logger.info(
-            "QQ官方群事件桥已同步运行中适配器："
-            f"interaction={已启用帮助数量}, group_member_add={已启用成员加入数量}",
+            "QQ官方帮助回调桥已同步运行中适配器："
+            f"interaction={已启用帮助数量}",
         )
     if 上下文 is not None and not 找到官方适配器:
         _安排平台加载后同步(上下文)
@@ -808,26 +759,26 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
 
 
 async def _等待QQ官方平台加载(上下文: Any) -> None:
-    """兼容未触发 OnPlatformLoadedEvent 的运行时，等待平台实例出现后同步。"""
+    """兼容未触发 OnPlatformLoadedEvent 的运行时，等待官方平台实例出现后同步帮助桥。"""
     try:
         for _ in range(360):
             if 平台同步已完成:
                 return
             if _已加载QQ官方平台(上下文):
                 logger.info(
-                    "QQ官方群欢迎诊断：stage=platform_poll, qq_official_found=True",
+                    "QQ官方帮助桥诊断：stage=platform_poll, qq_official_found=True",
                 )
                 安装QQ官方帮助交互(上下文)
                 return
             await asyncio.sleep(0.5)
         logger.debug(
-            "QQ官方群欢迎诊断：stage=platform_poll, qq_official_found=False",
+            "QQ官方帮助桥诊断：stage=platform_poll, qq_official_found=False",
         )
     except asyncio.CancelledError:
         raise
     except Exception as 异常:
         logger.warning(
-            "QQ官方群欢迎诊断：stage=platform_poll, success=False, error_type=%s",
+            "QQ官方帮助桥诊断：stage=platform_poll, success=False, error_type=%s",
             type(异常).__name__,
         )
 
@@ -848,5 +799,5 @@ def _安排平台加载后同步(上下文: Any) -> None:
 
 async def QQ官方平台加载后同步(上下文: Any) -> None:
     """由插件主模块接收平台生命周期事件，避免子模块 handler 无法归属插件。"""
-    logger.info("QQ官方群欢迎诊断：stage=platform_loaded_hook, begin=True")
+    logger.info("QQ官方帮助桥诊断：stage=platform_loaded_hook, begin=True")
     安装QQ官方帮助交互(上下文)

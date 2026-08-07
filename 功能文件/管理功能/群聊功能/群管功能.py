@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import time
 from typing import Any
 
 try:
@@ -22,7 +23,11 @@ try:
 except Exception:
     Comp = None
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人
+from 功能文件.管理功能.基础功能.权限工具 import (
+    是群文件清理管理员,
+    是QQ官方机器人,
+    获取群文件清理管理员QQ列表,
+)
 from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
 
 
@@ -45,6 +50,8 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
 数字撤回触发次数: dict[str, int] = {}
+撤回通知间隔秒 = 300
+撤回通知最近发送时间: dict[str, float] = {}
 群管功能模块版本 = "1.20.3"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
@@ -387,7 +394,94 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
     if 撤回成功:
         await 尝试撤回触发用户最近消息(event)
         await 记录撤回触发并尝试踢出(event, 配置)
+        await 发送撤回通知(event, 配置, 消息文本, 卡片类型)
     return 撤回成功
+
+
+def 获取撤回发送者名称(event: AstrMessageEvent) -> str:
+    """优先使用 QQ 官方消息中的 author.username，避免额外请求成员资料。"""
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("sender", "author", "member", "user"):
+            发送者 = 读取字段(对象, 字段名)
+            for 名称字段 in ("nickname", "username", "card", "name"):
+                名称 = str(读取字段(发送者, 名称字段) or "").strip()
+                if 名称:
+                    return re.sub(r"\s+", " ", 名称)[:40]
+    用户QQ = 获取发送者QQ(event)
+    return 用户QQ or "成员"
+
+
+def 获取撤回通知内容(event: AstrMessageEvent, 消息文本: str, 卡片类型: str) -> str:
+    内容 = re.sub(r"\s+", " ", str(消息文本 or "")).strip()
+    if not 内容:
+        内容 = 卡片类型 or "该消息"
+    return 内容[:120] + ("..." if len(内容) > 120 else "")
+
+
+def 获取撤回通知管理员提及(event: AstrMessageEvent, 配置: Any) -> str:
+    管理员列表 = sorted(获取群文件清理管理员QQ列表(配置))
+    if 是QQ官方机器人(event):
+        # QQ 官方 Markdown 只接受群成员 OpenID，配置中的纯数字 QQ 号不能直接转换。
+        OpenID列表 = [
+            用户
+            for 用户 in 管理员列表
+            if not 用户.isdigit() and 用户编号规则.fullmatch(用户)
+        ]
+        return "\n".join(f"<@{用户}>" for 用户 in OpenID列表) or "管理员请查看"
+    At列表 = [f"[CQ:at,qq={用户}]" for 用户 in 管理员列表 if 用户]
+    return " ".join(At列表) or "管理员请查看"
+
+
+async def 发送撤回通知(
+    event: AstrMessageEvent,
+    配置: Any,
+    消息文本: str,
+    卡片类型: str = "",
+) -> bool:
+    群号 = 获取群号(event)
+    if not 群号:
+        return False
+    当前时间 = time.monotonic()
+    上次发送 = 撤回通知最近发送时间.get(群号)
+    if 上次发送 is not None and 当前时间 - 上次发送 < 撤回通知间隔秒:
+        logger.debug("撤回通知限频跳过：group_id=%s", 群号)
+        return False
+
+    发送者名称 = 获取撤回发送者名称(event)
+    撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
+    文本 = (
+        f"{获取撤回通知管理员提及(event, 配置)}\n\n"
+        f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
+        "请查看"
+    )
+    try:
+        if 是QQ官方机器人(event):
+            from 功能文件.管理功能.基础功能 import 帮助功能
+
+            发送成功 = await 帮助功能.发送Markdown键盘消息(
+                event,
+                文本,
+                None,
+                主动发送=True,
+                自动提及=False,
+            )
+        else:
+            发送方法 = getattr(event, "send", None)
+            if not callable(发送方法):
+                return False
+            发送结果 = 发送方法(event.plain_result(文本))
+            发送成功 = await 等待可能异步结果(发送结果)
+            发送成功 = 发送成功 is not False
+        if 发送成功:
+            撤回通知最近发送时间[群号] = 当前时间
+            logger.info("撤回通知已发送：group_id=%s", 群号)
+            return True
+    except Exception as exc:
+        logger.warning("撤回通知发送失败：group_id=%s, error_type=%s", 群号, type(exc).__name__)
+    return False
 
 
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
