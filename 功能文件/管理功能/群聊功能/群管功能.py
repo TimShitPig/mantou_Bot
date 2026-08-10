@@ -454,6 +454,26 @@ def 获取撤回管理员提及(event: AstrMessageEvent, 配置: Any) -> str:
     return "管理员"
 
 
+def 获取撤回发送者提及(event: AstrMessageEvent) -> str:
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段名 in ("sender", "author", "member", "user"):
+            发送者 = 读取字段(对象, 字段名)
+            for 标识字段 in ("member_openid", "user_openid", "openid", "user_id", "id"):
+                标识 = str(读取字段(发送者, 标识字段) or "").strip()
+                if 标识:
+                    if 是QQ官方机器人(event):
+                        return f"<@{标识}>" if not 标识.isdigit() and 用户编号规则.fullmatch(标识) else "发送者"
+                    return f"[CQ:at,qq={标识}]" if 管理员QQ规则.fullmatch(标识) else "发送者"
+        for 字段名 in ("member_openid", "user_openid", "openid", "sender_id", "user_id"):
+            标识 = str(读取字段(对象, 字段名) or "").strip()
+            if 标识:
+                if 是QQ官方机器人(event):
+                    return f"<@{标识}>" if not 标识.isdigit() and 用户编号规则.fullmatch(标识) else "发送者"
+                return f"[CQ:at,qq={标识}]" if 管理员QQ规则.fullmatch(标识) else "发送者"
+    return "发送者"
+
+
 async def 发送撤回通知(
     event: AstrMessageEvent,
     配置: Any,
@@ -474,7 +494,7 @@ async def 发送撤回通知(
         发送者名称 = 获取撤回发送者名称(event)
         撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
         文本 = (
-            f"{获取撤回管理员提及(event, 配置)}\n\n"
+            f"{获取撤回管理员提及(event, 配置)} {获取撤回发送者提及(event)}\n\n"
             f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
             "请查看"
         )
