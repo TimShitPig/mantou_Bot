@@ -338,6 +338,9 @@ class 塔读会话状态:
     sessionid: str = ""
     token: str = ""
     refresh_token: str = ""
+    expire: Any = None
+    early_time: Any = None
+    expire_time: Any = None
 
 
 _塔读会话 = 塔读会话状态()
@@ -689,27 +692,92 @@ async def _请求塔读接口(
     return payload
 
 
+def _更新塔读会话(data: Mapping[str, Any]) -> None:
+    """吸收注册/续期响应，仅把游客登录态保存在当前进程内。"""
+    _塔读会话.sessionid = str(data.get("sessionId") or data.get("sessionid") or _塔读会话.sessionid or "")
+    _塔读会话.token = str(data.get("token") or _塔读会话.token or "")
+    _塔读会话.refresh_token = str(
+        data.get("refreshToken") or data.get("refresh_token") or _塔读会话.refresh_token or ""
+    )
+    if data.get("expire") not in (None, ""):
+        _塔读会话.expire = data.get("expire")
+    if data.get("earlyTime") not in (None, ""):
+        _塔读会话.early_time = data.get("earlyTime")
+    if data.get("expireTime") not in (None, ""):
+        _塔读会话.expire_time = data.get("expireTime")
+    try:
+        expire_seconds = int(data.get("expire") or 0)
+    except (TypeError, ValueError):
+        expire_seconds = 0
+    if expire_seconds > 0:
+        _塔读会话.expire_time = _当前毫秒() + expire_seconds * 1000
+
+
+def _塔读会话需要续期() -> bool:
+    if not _塔读会话.sessionid or not _塔读会话.token:
+        return False
+    try:
+        expire_time = int(_塔读会话.expire_time)
+    except (TypeError, ValueError):
+        # 旧进程内状态没有有效期时，先走 token/get，失败再重新注册。
+        return True
+    try:
+        early_time = max(0, int(_塔读会话.early_time or 0))
+    except (TypeError, ValueError):
+        early_time = 0
+    return _当前毫秒() >= expire_time - early_time * 1000
+
+
+def _应用塔读Token响应(response: Mapping[str, Any] | None) -> bool:
+    if not isinstance(response, Mapping) or not _接口成功(response):
+        return False
+    data = response.get("data")
+    if not isinstance(data, Mapping):
+        data = response
+    token = data.get("token")
+    if not token:
+        return False
+    _更新塔读会话(data)
+    return True
+
+
+async def _注册塔读会话(session: aiohttp.ClientSession) -> None:
+    response = await _请求塔读接口(
+        session,
+        "POST",
+        "/user/api/register",
+        form={"readType": 0},
+        ensure_session=False,
+    )
+    data = _数据对象(response)
+    if not _接口成功(response) or not data:
+        raise RuntimeError("塔读游客会话初始化失败")
+    _更新塔读会话(data)
+    if not _塔读会话.sessionid or not _塔读会话.token:
+        raise RuntimeError("塔读游客会话字段不完整")
+
+
 async def 确保塔读会话(session: aiohttp.ClientSession) -> None:
-    if _塔读会话.sessionid and _塔读会话.token:
+    if _塔读会话.sessionid and _塔读会话.token and not _塔读会话需要续期():
         return
     async with _塔读会话锁:
-        if _塔读会话.sessionid and _塔读会话.token:
+        if _塔读会话.sessionid and _塔读会话.token and not _塔读会话需要续期():
             return
-        response = await _请求塔读接口(
-            session,
-            "POST",
-            "/user/api/register",
-            form={"readType": 0},
-            ensure_session=False,
-        )
-        data = _数据对象(response)
-        if not _接口成功(response) or not data:
-            raise RuntimeError("塔读游客会话初始化失败")
-        _塔读会话.sessionid = str(data.get("sessionId") or data.get("sessionid") or "")
-        _塔读会话.token = str(data.get("token") or "")
-        _塔读会话.refresh_token = str(data.get("refreshToken") or "")
         if not _塔读会话.sessionid or not _塔读会话.token:
-            raise RuntimeError("塔读游客会话字段不完整")
+            await _注册塔读会话(session)
+            return
+        try:
+            response = await _请求塔读接口(
+                session,
+                "GET",
+                "/user/api/token/get",
+                ensure_session=False,
+            )
+            if _应用塔读Token响应(response):
+                return
+        except Exception as exc:
+            logger.debug("塔读游客Token续期失败：stage=refresh, error_type=%s", type(exc).__name__)
+        await _注册塔读会话(session)
 
 
 async def _获取详情(session: aiohttp.ClientSession, book_id: str) -> dict[str, Any]:

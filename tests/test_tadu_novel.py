@@ -1,5 +1,6 @@
 import gzip
 import unittest
+from unittest.mock import patch
 
 
 from 功能文件.管理功能.小说功能.小说 import 塔读小说
@@ -65,6 +66,61 @@ class 塔读小说基础行为测试(unittest.TestCase):
         self.assertIn("塔读", 小说功能开关.默认状态)
         self.assertIn("开启塔读", 小说功能开关.开关命令配置)
         self.assertEqual(找书.构造塔读链接("123456"), "https://reader.tadu.com/book/123456")
+
+
+class 塔读Token自动更新测试(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.旧会话 = 塔读小说._塔读会话
+        self.旧锁 = 塔读小说._塔读会话锁
+        塔读小说._塔读会话 = 塔读小说.塔读会话状态(
+            sessionid="session-old",
+            token="token-old",
+            refresh_token="refresh-old",
+            expire_time=0,
+            early_time=0,
+        )
+        塔读小说._塔读会话锁 = __import__("asyncio").Lock()
+
+    async def asyncTearDown(self):
+        塔读小说._塔读会话 = self.旧会话
+        塔读小说._塔读会话锁 = self.旧锁
+
+    async def test_过期token先自动刷新(self):
+        请求路径 = []
+
+        async def fake_request(session, method, path, **kwargs):
+            请求路径.append((method, path, kwargs.get("ensure_session", True)))
+            return {"code": 100, "data": {"token": "token-new", "expire": 3600}}
+
+        with patch.object(塔读小说, "_请求塔读接口", side_effect=fake_request):
+            await 塔读小说.确保塔读会话(object())
+
+        self.assertEqual(塔读小说._塔读会话.token, "token-new")
+        self.assertEqual(请求路径, [("GET", "/user/api/token/get", False)])
+
+    async def test_续期失败自动重新注册(self):
+        请求路径 = []
+
+        async def fake_request(session, method, path, **kwargs):
+            请求路径.append(path)
+            if path == "/user/api/token/get":
+                return {"code": 401, "data": {}}
+            return {
+                "code": 100,
+                "data": {
+                    "sessionId": "session-new",
+                    "token": "token-new",
+                    "refreshToken": "refresh-new",
+                    "expire": 3600,
+                },
+            }
+
+        with patch.object(塔读小说, "_请求塔读接口", side_effect=fake_request):
+            await 塔读小说.确保塔读会话(object())
+
+        self.assertEqual(请求路径, ["/user/api/token/get", "/user/api/register"])
+        self.assertEqual(塔读小说._塔读会话.sessionid, "session-new")
+        self.assertEqual(塔读小说._塔读会话.token, "token-new")
 
 
 if __name__ == "__main__":
