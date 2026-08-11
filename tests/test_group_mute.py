@@ -186,26 +186,9 @@ class 群禁言测试(unittest.TestCase):
         self.assertEqual(kwargs["json"]["members"][0]["member_openid"], "MemberOpenID_01")
         self.assertTrue(kwargs["json"]["members"][0]["mute_expire_at"].endswith("+08:00"))
 
-    def test_全员禁言别名仍映射当前群(self):
-        self.assertEqual(
-            群管功能.禁言命令集合,
-            {
-                "开启禁言",
-                "关闭禁言",
-                "开启全员禁言",
-                "关闭全员禁言",
-                "开启全部禁言",
-                "关闭全部禁言",
-                "禁全体",
-                "禁言全体",
-                "全体禁",
-                "全体禁言",
-                "解全体",
-                "解禁全体",
-                "全体解禁",
-                "全体解",
-            },
-        )
+    def test_全体禁言入口已移除(self):
+        self.assertFalse(hasattr(群管功能, "禁言命令集合"))
+        self.assertFalse(hasattr(群管功能, "使用_set_group_whole_ban禁言"))
 
     def test_禁言成功回复会提及被禁言成员(self):
         self.assertEqual(
