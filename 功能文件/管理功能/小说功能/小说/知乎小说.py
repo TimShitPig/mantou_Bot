@@ -1079,10 +1079,7 @@ def 写入缓存(文件名: str, 文件内容: bytes) -> Path:
 def 删除缓存(路径: Any) -> None:
     if not 路径:
         return
-    try:
-        Path(路径).unlink(missing_ok=True)
-    finally:
-        小说缓存工具.解除下载缓存占用(路径)
+    小说缓存工具.删除下载缓存文件(路径)
 
 
 def 清理文件名(值: Any) -> str:

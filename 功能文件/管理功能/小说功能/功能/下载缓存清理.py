@@ -1,18 +1,137 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 上传占用标记后缀 = ".uploading"
+上传任务目录名 = ".upload_jobs"
+上传任务状态 = {"primary_pending", "primary_done", "backup_pending"}
 
 
 def 获取下载缓存占用标记路径(缓存路径: str | Path) -> Path:
     路径 = Path(缓存路径)
     return 路径.with_name(f"{路径.name}{上传占用标记后缀}")
+
+
+def 获取上传任务目录(缓存目录: str | Path | None = None) -> Path:
+    目录 = Path(缓存目录) if 缓存目录 is not None else 下载缓存目录
+    return 目录 / 上传任务目录名
+
+
+def 获取上传任务路径(缓存路径: str | Path) -> Path:
+    路径 = Path(缓存路径)
+    标识 = str(路径.absolute()).encode("utf-8", errors="replace")
+    文件名 = hashlib.sha256(标识).hexdigest() + ".json"
+    return 获取上传任务目录(路径.parent) / 文件名
+
+
+def _原子写入JSON(路径: Path, 数据: dict[str, Any]) -> None:
+    路径.parent.mkdir(parents=True, exist_ok=True)
+    临时路径 = 路径.with_name(f"{路径.name}.{os.getpid()}.tmp")
+    临时路径.write_text(
+        json.dumps(数据, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    临时路径.replace(路径)
+
+
+def 读取上传任务(缓存路径: str | Path) -> dict[str, Any] | None:
+    任务路径 = 获取上传任务路径(缓存路径)
+    if not 任务路径.is_file():
+        return None
+    try:
+        数据 = json.loads(任务路径.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return 数据 if isinstance(数据, dict) else None
+
+
+def 登记上传任务(缓存路径: str | Path, 文件名: str, 网盘名称: str = "") -> Path:
+    路径 = Path(缓存路径)
+    任务路径 = 获取上传任务路径(路径)
+    旧任务 = 读取上传任务(路径) or {}
+    当前时间 = int(time.time())
+    数据 = {
+        "version": 1,
+        "cache_path": str(路径.absolute()),
+        "file_name": str(文件名 or 路径.name),
+        "provider": str(网盘名称 or 旧任务.get("provider") or ""),
+        "state": str(旧任务.get("state") or "primary_pending"),
+        "created_at": int(旧任务.get("created_at") or 当前时间),
+        "updated_at": 当前时间,
+        "retry_count": int(旧任务.get("retry_count") or 0),
+        "last_error": str(旧任务.get("last_error") or ""),
+    }
+    if 数据["state"] not in 上传任务状态:
+        数据["state"] = "primary_pending"
+    _原子写入JSON(任务路径, 数据)
+    return 任务路径
+
+
+def 更新上传任务(缓存路径: str | Path, 状态: str | None = None, **字段: Any) -> Path | None:
+    任务路径 = 获取上传任务路径(缓存路径)
+    数据 = 读取上传任务(缓存路径)
+    if 数据 is None:
+        return None
+    if 状态 is not None:
+        数据["state"] = str(状态)
+    数据.update(字段)
+    数据["updated_at"] = int(time.time())
+    _原子写入JSON(任务路径, 数据)
+    return 任务路径
+
+
+def 上传任务待续传(缓存路径: str | Path) -> bool:
+    数据 = 读取上传任务(缓存路径)
+    return bool(数据 and str(数据.get("state") or "") in 上传任务状态)
+
+
+def 完成上传任务(缓存路径: str | Path) -> None:
+    获取上传任务路径(缓存路径).unlink(missing_ok=True)
+
+
+def 删除下载缓存文件(缓存路径: str | Path | None) -> bool:
+    """删除缓存；主上传尚未成功时保留文件，等待下次重载恢复。"""
+    if not 缓存路径:
+        return False
+    路径 = Path(缓存路径)
+    任务 = 读取上传任务(路径)
+    状态 = str(任务.get("state") or "") if 任务 else ""
+    if 状态 in {"primary_pending", "backup_pending"}:
+        return False
+    try:
+        路径.unlink(missing_ok=True)
+        完成上传任务(路径)
+        解除下载缓存占用(路径)
+        return True
+    except OSError:
+        return False
+
+
+def 获取待续传上传任务(缓存目录: str | Path | None = None) -> list[dict[str, Any]]:
+    任务目录 = 获取上传任务目录(缓存目录)
+    if not 任务目录.is_dir():
+        return []
+    结果: list[dict[str, Any]] = []
+    for 任务路径 in sorted(任务目录.glob("*.json")):
+        try:
+            数据 = json.loads(任务路径.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(数据, dict) or str(数据.get("state") or "") not in 上传任务状态:
+            continue
+        缓存路径 = Path(str(数据.get("cache_path") or ""))
+        if 缓存路径.is_file():
+            结果.append(数据)
+        else:
+            任务路径.unlink(missing_ok=True)
+    return 结果
 
 
 def 标记下载缓存正在使用(缓存路径: str | Path) -> Path:
@@ -71,7 +190,7 @@ def 清理残留下载缓存(缓存目录: str | Path | None = None) -> int:
         if not 路径.is_file():
             continue
         标记路径 = 获取下载缓存占用标记路径(路径)
-        if 下载缓存正在使用(路径):
+        if 上传任务待续传(路径) or 下载缓存正在使用(路径):
             continue
         try:
             路径.unlink()

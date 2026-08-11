@@ -557,9 +557,10 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
 def 删除下载缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
+    if not 小说缓存工具.删除下载缓存文件(缓存路径):
+        logger.debug(f"七猫小说下载缓存仍在等待续传：file={缓存路径}")
+        return
     try:
-        Path(缓存路径).unlink(missing_ok=True)
-        小说缓存工具.解除下载缓存占用(缓存路径)
         logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
     except Exception as exc:
         logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")

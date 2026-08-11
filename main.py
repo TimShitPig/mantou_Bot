@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 import importlib
 import sys
 
@@ -43,7 +44,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.17.1"
+插件版本 = "5.18.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -59,6 +60,16 @@ class MyPlugin(Star):
         已清理缓存数 = 小说缓存清理.清理残留下载缓存()
         if 已清理缓存数:
             logger.info(f"插件重载清理小说下载缓存：count={已清理缓存数}")
+
+        async def _恢复小说上传任务():
+            try:
+                恢复数量 = await 小说网盘功能.恢复待续传上传任务(self.config)
+                if 恢复数量:
+                    logger.info("插件重载恢复小说上传任务：count=%s", 恢复数量)
+            except Exception as 异常:
+                logger.warning("插件重载恢复小说上传任务异常：error=%s", 异常)
+
+        asyncio.create_task(_恢复小说上传任务())
 
     @filter.on_platform_loaded()
     async def _QQ官方平台加载后同步(self):

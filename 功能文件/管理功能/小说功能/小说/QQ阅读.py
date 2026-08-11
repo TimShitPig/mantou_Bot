@@ -2313,10 +2313,7 @@ def 写入下载缓存文件(filename: str, content: bytes) -> Path:
 def 删除下载缓存文件(path: Any) -> None:
     if not path:
         return
-    try:
-        Path(path).unlink(missing_ok=True)
-    finally:
-        小说缓存工具.解除下载缓存占用(path)
+    小说缓存工具.删除下载缓存文件(path)
 
 
 async def 准备发送文本文件(

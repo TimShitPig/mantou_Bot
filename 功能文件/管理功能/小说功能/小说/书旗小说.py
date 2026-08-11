@@ -782,9 +782,10 @@ def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
 def 删除下载缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
+    if not 小说缓存工具.删除下载缓存文件(缓存路径):
+        logger.debug(f"书旗小说下载缓存仍在等待续传：file={缓存路径}")
+        return
     try:
-        Path(缓存路径).unlink(missing_ok=True)
-        小说缓存工具.解除下载缓存占用(缓存路径)
         logger.info(f"书旗小说下载缓存文件已删除：file={缓存路径}")
     except Exception as exc:
         logger.warning(f"书旗小说下载缓存文件删除失败：file={缓存路径}, error={exc}")

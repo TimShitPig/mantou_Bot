@@ -1154,12 +1154,9 @@ def 写入缓存(文件名: str, 文件内容: bytes) -> Path:
 
 
 def 删除缓存(缓存路径: Any) -> None:
-    try:
-        if 缓存路径:
-            Path(缓存路径).unlink(missing_ok=True)
-            小说缓存工具.解除下载缓存占用(缓存路径)
-    except Exception:
-        pass
+    if not 缓存路径:
+        return
+    小说缓存工具.删除下载缓存文件(缓存路径)
 
 
 def 提取直接得间来源(命令文本: str) -> str | None:

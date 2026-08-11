@@ -1013,12 +1013,9 @@ def _写入缓存(file_name: str, content: bytes) -> Path:
 
 
 def _删除缓存(path: Any) -> None:
-    try:
-        if path:
-            Path(path).unlink(missing_ok=True)
-            小说缓存工具.解除下载缓存占用(path)
-    except Exception:
-        pass
+    if not path:
+        return
+    小说缓存工具.删除下载缓存文件(path)
 
 
 async def _准备发送文本文件(event: Any, file_name: str, content: bytes, config: Any, *, title: str, author: str) -> dict[str, Any]:
