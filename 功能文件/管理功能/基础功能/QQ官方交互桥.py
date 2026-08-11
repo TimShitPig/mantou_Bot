@@ -14,6 +14,7 @@ except Exception:
 
 
 帮助回调前缀 = "帮助回调:"
+欢迎回调前缀 = "欢迎回调:"
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群成员加入桥版本 = 7
@@ -77,6 +78,11 @@ def _提取按钮数据(交互: Any) -> str:
 def _是否帮助回调(数据: str) -> bool:
     数据 = str(数据 or "").strip()
     return 数据.startswith(帮助回调前缀) and len(数据) > len(帮助回调前缀)
+
+
+def _是否欢迎回调(数据: str) -> bool:
+    数据 = str(数据 or "").strip()
+    return 数据.startswith(欢迎回调前缀) and len(数据) > len(欢迎回调前缀)
 
 
 def _获取最近可回复消息ID(平台: Any, 会话标识: str) -> str | None:
@@ -714,7 +720,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
 
         async def 新互动回调(self: Any, 交互: Any) -> Any:
             数据 = _提取按钮数据(交互)
-            if not _是否帮助回调(数据):
+            if not (_是否帮助回调(数据) or _是否欢迎回调(数据)):
                 if callable(原互动回调):
                     结果 = 原互动回调(self, 交互)
                     if inspect.isawaitable(结果):
@@ -735,6 +741,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         logger.info("QQ官方帮助回调桥已安装：已订阅 INTERACTION 事件")
 
     已启用帮助数量 = 0
+    已启用成员加入数量 = 0
     找到官方适配器 = False
     for 平台实例 in _获取平台实例列表(上下文):
         try:
@@ -743,6 +750,8 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             找到官方适配器 = True
             if _开启互动事件(平台实例):
                 已启用帮助数量 += 1
+            if _开启群成员加入事件(平台实例, 适配器模块):
+                已启用成员加入数量 += 1
         except Exception as 异常:
             logger.warning(
                 "QQ官方帮助桥诊断：stage=platform_sync, success=False, error_type=%s",
@@ -753,10 +762,11 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     平台同步已完成 = 找到官方适配器
     if 上下文 is not None and not 找到官方适配器:
         logger.warning("QQ官方帮助桥诊断：stage=platform_sync, qq_official_found=False")
-    if 已启用帮助数量:
+    if 已启用帮助数量 or 已启用成员加入数量:
         logger.info(
-            "QQ官方帮助回调桥已同步运行中适配器："
-            f"interaction={已启用帮助数量}",
+            "QQ官方群事件桥已同步运行中适配器："
+            f"interaction={已启用帮助数量}, "
+            f"group_member_add={已启用成员加入数量}",
         )
     if 上下文 is not None and not 找到官方适配器:
         _安排平台加载后同步(上下文)
