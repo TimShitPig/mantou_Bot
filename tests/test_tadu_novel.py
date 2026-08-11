@@ -19,6 +19,16 @@ class 塔读小说基础行为测试(unittest.TestCase):
         self.assertEqual(塔读小说.提取塔读直接来源(来源), 来源)
         self.assertIsNone(塔读小说.提取塔读直接来源("https://example.com/book/123456"))
 
+    def test_番茄长读分享链接不会被塔读抢先识别(self):
+        来源 = (
+            "https://changdunovel.com/wap/share-v2.html?aid=1967&"
+            "book_id=7257063392484002871&share_type=0"
+        )
+        self.assertIsNone(塔读小说.提取塔读直接来源(来源))
+
+        其他平台来源 = "https://example.com/read?book_id=7257063392484002871"
+        self.assertIsNone(塔读小说.提取塔读直接来源(其他平台来源))
+
     def test_解析搜索和批量章节地址(self):
         搜索结果 = 塔读小说.解析塔读搜索书籍({
             "code": 100,

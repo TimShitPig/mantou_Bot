@@ -323,6 +323,10 @@ OAUTH_SECRET_1 = "cd2yj5352pu927mrsn5kmut0saloniy"
 OAUTH_HMAC_KEY = b"1a8154132fg4a784fad101661z1854181ac1qed7"
 
 塔读域名规则 = re.compile(r"(?:^|[./])tadu\.com(?:$|[/:?])|塔读", re.IGNORECASE)
+非塔读小说域名规则 = re.compile(
+    r"(?:^|[./])(?:fanqienovel|changdunovel|fqnovel|novelfm)\.com(?:$|[/:?])",
+    re.IGNORECASE,
+)
 链接规则 = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 书籍编号规则 = re.compile(r"(?:bookId|book_id|bookid|bid)=(\d{4,})", re.IGNORECASE)
 路径编号规则 = re.compile(r"/(?:book|read|reader|detail)/([0-9]{4,})(?:[./?]|$)", re.IGNORECASE)
@@ -609,10 +613,15 @@ def 提取塔读直接来源(text: str) -> str | None:
     value = str(text or "").strip()
     if not value:
         return None
+    match = 链接规则.search(value)
+    if match:
+        link = match.group(0)
+        if 非塔读小说域名规则.search(link) or not 塔读域名规则.search(link):
+            return None
+        return link
     if not 塔读域名规则.search(value) and not 书籍编号规则.search(value):
         return None
-    match = 链接规则.search(value)
-    return match.group(0) if match else value
+    return value
 
 
 def 提取塔读书籍编号(source: str) -> str:
