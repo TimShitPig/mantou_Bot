@@ -182,7 +182,31 @@ class 群禁言测试(unittest.TestCase):
                 "关闭全员禁言",
                 "开启全部禁言",
                 "关闭全部禁言",
+                "禁全体",
+                "禁言全体",
+                "全体禁",
+                "全体禁言",
+                "解全体",
+                "解禁全体",
+                "全体解禁",
+                "全体解",
             },
+        )
+
+    def test_禁言成功回复会提及被禁言成员(self):
+        self.assertEqual(
+            群管功能.构造成员禁言成功回复(
+                types.SimpleNamespace(get_platform_name=lambda: "qq_official"),
+                ["MemberOpenID_01"],
+            ),
+            "<@MemberOpenID_01> 你已经被禁言，请联系群主说明情况",
+        )
+        self.assertEqual(
+            群管功能.构造成员禁言成功回复(
+                types.SimpleNamespace(get_platform_name=lambda: "onebot"),
+                ["987654321"],
+            ),
+            "[CQ:at,qq=987654321] 你已经被禁言，请联系群主说明情况",
         )
 
 
