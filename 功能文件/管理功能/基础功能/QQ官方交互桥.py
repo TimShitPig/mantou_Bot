@@ -689,6 +689,12 @@ def _移除旧群成员欢迎回调(客户端类: Any, 适配器类: Any) -> Non
             已移除 = True
         except AttributeError:
             pass
+    if getattr(适配器类, "_mantou_群成员加入桥版本", 0):
+        try:
+            delattr(适配器类, "_mantou_群成员加入桥版本")
+            已移除 = True
+        except AttributeError:
+            pass
     if 已移除:
         logger.info("QQ官方旧版新人欢迎回调已移除")
 
