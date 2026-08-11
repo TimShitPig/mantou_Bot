@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.18.2
+
+- 修复 QQ 官方帮助桥始终识别不到已加载平台的问题：兼容 AstrBot 当前适配器返回的 `meta().name="qq_official"`。
+
 ## v5.18.1
 
 - 修复 QQ 官方新人欢迎订阅位错误：由 `GROUP_AND_C2C_EVENT (1<<25)` 改为官方 `GROUP_MEMBER_EVENT (1<<24)`。

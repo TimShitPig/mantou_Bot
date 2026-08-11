@@ -47,9 +47,16 @@ def _获取平台实例列表(上下文: Any) -> list[Any]:
 def _是QQ官方平台(平台实例: Any) -> bool:
     try:
         元信息 = 平台实例.meta()
-        名称 = str(_读取字段(元信息, "name") or "")
-        标识 = str(_读取字段(元信息, "id") or "")
-        return "QQ 机器人官方" in 名称 or "qq_official" in 标识
+        名称 = str(_读取字段(元信息, "name") or "").strip().casefold()
+        标识 = str(_读取字段(元信息, "id") or "").strip().casefold()
+        配置 = _读取字段(平台实例, "config")
+        类型 = str(_读取字段(配置, "type") or "").strip().casefold()
+        return (
+            名称 == "qq_official"
+            or 标识 == "qq_official"
+            or 类型 == "qq_official"
+            or "qq 机器人官方" in 名称
+        )
     except Exception:
         return False
 
