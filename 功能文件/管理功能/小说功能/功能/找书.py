@@ -62,6 +62,12 @@ except Exception as exc:
     QQ阅读小说 = None
     logger.warning(f"找书加载QQ阅读失败：error={exc}")
 
+try:
+    from 功能文件.管理功能.小说功能.小说 import 塔读小说
+except Exception as exc:
+    塔读小说 = None
+    logger.warning(f"找书加载塔读失败：error={exc}")
+
 
 每页数量 = 5
 会话等待秒数 = 300
@@ -248,6 +254,10 @@ def 构造书旗链接(书籍编号: str) -> str:
 
 def 构造QQ阅读链接(书籍编号: str) -> str:
     return f"https://book.qq.com/book-detail/{书籍编号}"
+
+
+def 构造塔读链接(书籍编号: str) -> str:
+    return f"https://reader.tadu.com/book/{书籍编号}"
 
 
 def _安全浮点(值: Any, 默认: float = 0.0) -> float:
@@ -938,8 +948,8 @@ async def 过滤章节单独付费QQ阅读搜索结果(
 
 
 def _平台优先级值(平台: Any) -> int:
-    """下载速度优先：番茄 > 七猫 > QQ阅读 > 书旗 > 得间 > 点众。"""
-    return {"番茄": 6, "七猫": 5, "QQ阅读": 4, "书旗": 3, "得间": 2, "点众": 1}.get(str(平台 or ""), 0)
+    """下载速度优先：番茄 > 七猫 > QQ阅读 > 书旗 > 得间 > 点众 > 塔读。"""
+    return {"番茄": 7, "七猫": 6, "QQ阅读": 5, "书旗": 4, "得间": 3, "点众": 2, "塔读": 1}.get(str(平台 or ""), 0)
 
 
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
@@ -1012,6 +1022,16 @@ async def 搜索点众(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索塔读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 塔读小说 is None:
+        return []
+    try:
+        return await 塔读小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书塔读搜索失败：keyword={关键词}, error={exc}")
+        return []
+
+
 async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1021,9 +1041,10 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
         QQ阅读任务 = asyncio.create_task(搜索QQ阅读(关键词))
         得间任务 = asyncio.create_task(搜索得间(关键词))
         点众任务 = asyncio.create_task(搜索点众(关键词))
+        塔读任务 = asyncio.create_task(搜索塔读(关键词))
         联想任务 = asyncio.create_task(搜索书旗联想(session, 关键词))
-        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 联想词 = await asyncio.gather(
-            番茄任务, 七猫任务, 书旗任务, QQ阅读任务, 得间任务, 点众任务, 联想任务, return_exceptions=False
+        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果, 联想词 = await asyncio.gather(
+            番茄任务, 七猫任务, 书旗任务, QQ阅读任务, 得间任务, 点众任务, 塔读任务, 联想任务, return_exceptions=False
         )
         # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
         # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
@@ -1033,18 +1054,19 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
             搜索类型=搜索类型,
         )
         QQ阅读结果 = await 过滤章节单独付费QQ阅读搜索结果(QQ阅读结果)
-        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果])
+        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果, 塔读结果])
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果, 塔读结果]
             for w in 补搜词:
                 t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
                 t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
                 t3 = asyncio.create_task(搜索书旗(session, w, 需要数量=10))
                 t4 = asyncio.create_task(搜索QQ阅读(w, 需要数量=10))
-                r1, r2, r3, r4 = await asyncio.gather(t1, t2, t3, t4)
+                t5 = asyncio.create_task(搜索塔读(w, 需要数量=10))
+                r1, r2, r3, r4, r5 = await asyncio.gather(t1, t2, t3, t4, t5)
                 r1 = await 过滤无目录番茄搜索结果(
                     r1,
                     关键词,
@@ -1052,7 +1074,7 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
                     最大数量=5,
                 )
                 r4 = await 过滤章节单独付费QQ阅读搜索结果(r4)
-                补结果集合.extend([r1, r2, r3, r4])
+                补结果集合.extend([r1, r2, r3, r4, r5])
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词, 搜索类型)
 
@@ -1203,6 +1225,8 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 得间小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "点众" and 点众小说 is not None:
         return 点众小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "塔读" and 塔读小说 is not None:
+        return 塔读小说.生成塔读下载回复流(event, 链接, 配置)
     return "下载失败"
 
 
