@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -65,10 +66,18 @@ QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 禁言命令配置 = {
     "开启禁言": {"全部群": False, "启用": True, "操作": "开启"},
     "关闭禁言": {"全部群": False, "启用": False, "操作": "关闭"},
+    "开启全员禁言": {"全部群": False, "启用": True, "操作": "开启"},
+    "关闭全员禁言": {"全部群": False, "启用": False, "操作": "关闭"},
     "开启全部禁言": {"全部群": True, "启用": True, "操作": "开启"},
     "关闭全部禁言": {"全部群": True, "启用": False, "操作": "关闭"},
 }
 禁言命令集合 = set(禁言命令配置)
+单用户禁言前缀 = ("解除禁言", "解禁", "解", "禁言用户", "单独禁言", "禁言", "禁")
+单用户禁言默认秒数 = 7 * 86400
+单用户禁言时长规则 = re.compile(
+    r"(?<!\d)(\d{1,8})\s*(秒钟|秒|分钟|分|小时|时|天|s|m|h|d)?(?!\w)",
+    re.IGNORECASE,
+)
 
 
 async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -76,6 +85,50 @@ async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置:
 
 
 async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
+    单用户参数 = 解析单用户禁言参数(event, 命令文本)
+    if 单用户参数 is not None:
+        if not 是群文件清理管理员(event, 配置):
+            return None
+
+        群号 = 获取群号(event)
+        目标列表 = list(单用户参数.get("targets") or [])
+        if not 群号:
+            return "成员禁言失败：只能在群聊中使用"
+        if not 目标列表:
+            return "成员禁言失败：请@要操作的成员"
+
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return "成员禁言失败，请稍后再试"
+
+        操作 = str(单用户参数.get("operation") or "add")
+        秒数 = 单用户参数.get("seconds")
+        成功数量 = 0
+        for 用户 in 目标列表:
+            try:
+                await 使用_set_group_ban禁言(
+                    bot,
+                    群号,
+                    用户,
+                    int(秒数 or 0),
+                    操作,
+                )
+                成功数量 += 1
+            except Exception as exc:
+                logger.warning(
+                    "成员禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
+                    群号,
+                    用户,
+                    操作,
+                    type(exc).__name__,
+                )
+
+        if 成功数量 != len(目标列表):
+            return "成员禁言失败，请稍后再试"
+        if 操作 == "del":
+            return f"已解除 {成功数量} 个成员的禁言"
+        return f"已禁言 {成功数量} 个成员"
+
     命令 = 提取群禁言命令文本(event, 命令文本)
     if 命令 not in 禁言命令集合:
         return None
@@ -156,6 +209,14 @@ def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str 
 
 
 def 提取群禁言命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
+    for 候选 in 获取群禁言候选文本(event, 命令文本):
+        文本 = 清理踢出命令文本(候选)
+        if 文本 in 禁言命令集合:
+            return 文本
+    return ""
+
+
+def 获取群禁言候选文本(event: AstrMessageEvent, 命令文本: str) -> list[str]:
     候选列表: list[str] = []
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
@@ -167,12 +228,57 @@ def 提取群禁言命令文本(event: AstrMessageEvent, 命令文本: str) -> s
                 候选列表.append(文本)
     候选列表.append(str(命令文本 or ""))
     候选列表.extend(获取原始文本候选(event))
+    return 候选列表
 
-    for 候选 in 候选列表:
+
+def 解析单用户禁言参数(event: AstrMessageEvent, 命令文本: str) -> dict[str, Any] | None:
+    """解析「禁言/禁 @成员 [时长]」和「解除禁言/解 @成员」。"""
+    for 候选 in 获取群禁言候选文本(event, 命令文本):
         文本 = 清理踢出命令文本(候选)
-        if 文本 in 禁言命令集合:
-            return 文本
-    return ""
+        if not 文本:
+            continue
+
+        命令前缀 = next(
+            (前缀 for 前缀 in sorted(单用户禁言前缀, key=len, reverse=True)
+             if 文本 == 前缀 or 文本.startswith(前缀 + " ")),
+            None,
+        )
+        if 命令前缀 is None:
+            continue
+
+        操作 = "del" if 命令前缀 in {"解除禁言", "解禁", "解"} else "add"
+        参数文本 = 文本[len(命令前缀):].strip()
+        秒数: int | None = None
+        if 操作 != "del":
+            匹配 = 单用户禁言时长规则.search(参数文本)
+            if 匹配:
+                数值 = int(匹配.group(1))
+                单位 = (匹配.group(2) or "天").lower()
+                倍数 = {
+                    "秒钟": 1,
+                    "秒": 1,
+                    "s": 1,
+                    "分钟": 60,
+                    "分": 60,
+                    "m": 60,
+                    "小时": 3600,
+                    "时": 3600,
+                    "h": 3600,
+                    "天": 86400,
+                    "d": 86400,
+                }.get(单位, 60)
+                秒数 = max(1, 数值 * 倍数)
+            else:
+                秒数 = 单用户禁言默认秒数
+
+        return {
+            "targets": 提取被艾特用户QQ列表(event),
+            "seconds": 秒数,
+            "operation": 操作,
+            "command": 命令前缀,
+        }
+
+    return None
 
 
 def 格式化批量踢出结果(
@@ -270,6 +376,9 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
                 消息.get("qq")
                 or 读取字段(消息.get("data"), "qq")
                 or 读取字段(消息.get("data"), "user_id")
+                or 读取字段(消息.get("data"), "member_openid")
+                or 读取字段(消息.get("data"), "user_openid")
+                or 读取字段(消息.get("data"), "openid")
             )
             if 用户:
                 结果.append(用户)
@@ -279,7 +388,12 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
     if Comp is not None:
         try:
             if isinstance(消息, Comp.At):
-                用户 = 规范化用户编号(getattr(消息, "qq", ""))
+                用户 = 规范化用户编号(
+                    getattr(消息, "qq", "")
+                    or getattr(消息, "member_openid", "")
+                    or getattr(消息, "user_openid", "")
+                    or getattr(消息, "openid", "")
+                )
                 return [用户] if 用户 else []
         except Exception:
             pass
@@ -287,8 +401,14 @@ def 从消息段提取At用户列表(消息: Any) -> list[str]:
         用户 = 规范化用户编号(
             读取字段(消息, "qq")
             or 读取字段(消息, "user_id")
+            or 读取字段(消息, "member_openid")
+            or 读取字段(消息, "user_openid")
+            or 读取字段(消息, "openid")
             or 读取字段(读取字段(消息, "data"), "qq")
             or 读取字段(读取字段(消息, "data"), "user_id")
+            or 读取字段(读取字段(消息, "data"), "member_openid")
+            or 读取字段(读取字段(消息, "data"), "user_openid")
+            or 读取字段(读取字段(消息, "data"), "openid")
         )
         return [用户] if 用户 else []
     return []
@@ -1506,6 +1626,143 @@ async def 使用_set_group_whole_ban禁言(bot: Any, 群号: str, 启用: bool =
         return True
 
     raise RuntimeError("当前 bot 没有 set_group_whole_ban 全员禁言接口")
+
+
+def 构造QQ官方成员禁言请求体(
+    用户列表: list[str],
+    操作: str,
+    禁言到期时间: str | None = None,
+) -> dict[str, Any]:
+    if 操作 not in {"add", "update", "del"}:
+        raise ValueError("不支持的成员禁言操作")
+
+    成员列表: list[dict[str, str]] = []
+    for 用户 in 去重保序([规范化用户编号(项目) for 项目 in 用户列表]):
+        if not 用户:
+            continue
+        成员: dict[str, str] = {"op": 操作, "member_openid": 用户}
+        if 操作 in {"add", "update"} and 禁言到期时间:
+            成员["mute_expire_at"] = 禁言到期时间
+        成员列表.append(成员)
+    return {"members": 成员列表}
+
+
+def 生成QQ官方禁言到期时间(秒数: int) -> str:
+    北京时区 = timezone(timedelta(hours=8))
+    到期时间 = datetime.now(北京时区) + timedelta(seconds=max(1, int(秒数)))
+    return 到期时间.isoformat(timespec="seconds")
+
+
+def 官方禁言响应成功(响应: Any) -> bool:
+    if 响应 is None:
+        return True
+    if isinstance(响应, bool):
+        return 响应
+    if isinstance(响应, dict):
+        状态 = str(响应.get("status") or "").strip().lower()
+        if 状态 in {"failed", "failure", "error"}:
+            return False
+        for 字段名 in ("retcode", "code", "errcode"):
+            if 字段名 in 响应 and 响应.get(字段名) not in (None, ""):
+                try:
+                    return int(响应.get(字段名)) == 0
+                except (TypeError, ValueError):
+                    return False
+        return True
+    return 响应 is not False
+
+
+async def 使用QQ官方成员禁言接口(
+    bot: Any,
+    群OpenID: str,
+    用户OpenID: str,
+    秒数: int,
+    操作: str,
+) -> bool:
+    api = getattr(bot, "api", None)
+    http客户端 = getattr(api, "_http", None) if api else None
+    if http客户端 is None:
+        raise RuntimeError("当前 bot 没有 QQ 官方 HTTP 客户端")
+
+    from botpy.http import Route
+
+    到期时间 = None if 操作 == "del" else 生成QQ官方禁言到期时间(秒数)
+    请求体 = 构造QQ官方成员禁言请求体([用户OpenID], 操作, 到期时间)
+    路由 = Route(
+        "POST",
+        "/v2/groups/{group_openid}/restrict_chat_setting",
+        group_openid=群OpenID,
+    )
+    响应 = await http客户端.request(路由, json=请求体)
+    if not 官方禁言响应成功(响应):
+        raise RuntimeError("QQ 官方成员禁言接口返回失败")
+    return True
+
+
+async def 使用_set_group_ban禁言(
+    bot: Any,
+    群号: str,
+    用户QQ: str,
+    秒数: int,
+    操作: str = "add",
+) -> bool:
+    """兼容 OneBot set_group_ban 与 QQ 官方成员禁言接口。"""
+    群号文本 = str(群号 or "").strip()
+    用户文本 = str(用户QQ or "").strip()
+    是否数字 = bool(管理员QQ规则.fullmatch(群号文本) and 管理员QQ规则.fullmatch(用户文本))
+
+    if not 是否数字:
+        try:
+            return await 使用QQ官方成员禁言接口(
+                bot,
+                群号文本,
+                用户文本,
+                秒数,
+                操作,
+            )
+        except Exception:
+            pass
+
+    群号值: Any = int(群号文本) if 是否数字 else 群号文本
+    用户值: Any = int(用户文本) if 是否数字 else 用户文本
+    时长 = 0 if 操作 == "del" else max(1, int(秒数))
+
+    禁言方法 = getattr(bot, "set_group_ban", None)
+    if callable(禁言方法):
+        if 是否数字:
+            await 等待可能异步结果(
+                禁言方法(group_id=群号值, user_id=用户值, duration=时长)
+            )
+            return True
+        await 等待可能异步结果(
+            禁言方法(group_openid=群号值, user_openid=用户值, duration=时长)
+        )
+        return True
+
+    api = getattr(bot, "api", None)
+    调用动作 = getattr(api, "call_action", None)
+    if callable(调用动作):
+        if 是否数字:
+            await 等待可能异步结果(
+                调用动作(
+                    "set_group_ban",
+                    group_id=群号值,
+                    user_id=用户值,
+                    duration=时长,
+                )
+            )
+            return True
+        await 等待可能异步结果(
+            调用动作(
+                "set_group_ban",
+                group_openid=群号值,
+                user_openid=用户值,
+                duration=时长,
+            )
+        )
+        return True
+
+    raise RuntimeError("当前 bot 没有成员禁言接口")
 
 
 def 安全整数(值: Any, 默认值: int = 0) -> int:
