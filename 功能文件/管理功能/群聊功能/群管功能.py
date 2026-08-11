@@ -248,7 +248,15 @@ def 解析单用户禁言参数(event: AstrMessageEvent, 命令文本: str) -> d
 
         命令前缀 = next(
             (前缀 for 前缀 in sorted(单用户禁言前缀, key=len, reverse=True)
-             if 文本 == 前缀 or 文本.startswith(前缀 + " ")),
+             if (
+                 文本 == 前缀
+                 or 文本.startswith(前缀 + " ")
+                 or (
+                     文本.startswith(前缀)
+                     and len(文本) > len(前缀)
+                     and 文本[len(前缀)].isdigit()
+                 )
+             )),
             None,
         )
         if 命令前缀 is None:

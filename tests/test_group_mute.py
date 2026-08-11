@@ -83,6 +83,20 @@ class 群禁言测试(unittest.TestCase):
         参数 = 群管功能.解析单用户禁言参数(event, "禁 1")
         self.assertEqual(参数["seconds"], 86400)
 
+    def test_解析禁后直接跟数字按天计算(self):
+        event = types.SimpleNamespace(
+            message_obj={
+                "message": [
+                    {"type": "text", "data": {"text": "禁30"}},
+                    {"type": "at", "data": {"member_openid": "MemberOpenID_01"}},
+                ]
+            }
+        )
+        参数 = 群管功能.解析单用户禁言参数(event, "禁30")
+        self.assertEqual(参数["targets"], ["MemberOpenID_01"])
+        self.assertEqual(参数["seconds"], 30 * 86400)
+        self.assertEqual(参数["operation"], "add")
+
     def test_解析解和解禁都为解除(self):
         for 命令 in ("解", "解禁"):
             event = types.SimpleNamespace(
