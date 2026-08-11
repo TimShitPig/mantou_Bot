@@ -740,6 +740,58 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         适配器类._mantou_帮助互动已安装 = True
         logger.info("QQ官方帮助回调桥已安装：已订阅 INTERACTION 事件")
 
+    if getattr(适配器类, "_mantou_群成员加入桥版本", 0) != 群成员加入桥版本:
+        原成员加入回调 = getattr(客户端类, "on_group_member_add", None)
+        原机器人入群回调 = getattr(客户端类, "on_group_add_robot", None)
+        if getattr(原成员加入回调, "__module__", "") == __name__:
+            原成员加入回调 = None
+        if getattr(原机器人入群回调, "__module__", "") == __name__:
+            原机器人入群回调 = None
+
+        async def 新成员加入回调(self: Any, 原始事件: Any) -> Any:
+            logger.info(
+                "QQ官方群欢迎诊断：stage=callback_enter, event=GROUP_MEMBER_ADD, %s",
+                _事件字段状态(原始事件),
+            )
+            try:
+                await _投递群成员加入事件(self, 原始事件, 适配器模块)
+            except Exception as 异常:
+                logger.warning(
+                    "QQ官方群成员加入事件投递失败：error_type=%s",
+                    type(异常).__name__,
+                )
+            if callable(原成员加入回调):
+                结果 = 原成员加入回调(self, 原始事件)
+                if inspect.isawaitable(结果):
+                    return await 结果
+                return 结果
+            return None
+
+        async def 新机器人入群回调(self: Any, 原始事件: Any) -> Any:
+            logger.info(
+                "QQ官方群欢迎诊断：stage=callback_enter, event=GROUP_ADD_ROBOT, %s",
+                _事件字段状态(原始事件),
+            )
+            try:
+                await _投递群成员加入事件(self, 原始事件, 适配器模块)
+            except Exception as 异常:
+                logger.warning(
+                    "QQ官方机器人入群欢迎投递失败：error_type=%s",
+                    type(异常).__name__,
+                )
+            if callable(原机器人入群回调):
+                结果 = 原机器人入群回调(self, 原始事件)
+                if inspect.isawaitable(结果):
+                    return await 结果
+                return 结果
+            return None
+
+        客户端类.on_group_member_add = 新成员加入回调
+        客户端类.on_group_add_robot = 新机器人入群回调
+        适配器类._mantou_群成员加入已安装 = True
+        适配器类._mantou_群成员加入桥版本 = 群成员加入桥版本
+        logger.info("QQ官方群成员加入桥已安装：已接入 GROUP_MEMBER_ADD")
+
     已启用帮助数量 = 0
     已启用成员加入数量 = 0
     找到官方适配器 = False
