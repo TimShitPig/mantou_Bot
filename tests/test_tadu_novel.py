@@ -59,6 +59,18 @@ class 塔读小说基础行为测试(unittest.TestCase):
         self.assertEqual(章节[0]["chapter_id"], "7")
         self.assertEqual(章节[0]["url"], "http://media.tadu.com/chapter/7.tdz")
 
+    def test_解析塔读详情使用实际作者和字数字段(self):
+        详情 = 塔读小说.解析塔读书籍详情({
+            "bookName": "绝色天医弃妃",
+            "bookAuthor": "蓝绮儿",
+            "bookTotalSize": 219279,
+            "isSerial": False,
+        })
+        self.assertEqual(详情["title"], "绝色天医弃妃")
+        self.assertEqual(详情["author"], "蓝绮儿")
+        self.assertEqual(详情["word_count"], "21.9万字")
+        self.assertEqual(详情["status"], "连载")
+
     def test_使用库解析_tadu_容器正文(self):
         内容 = "第一章\r这是正文"
         压缩正文 = gzip.compress(内容.encode("utf-16le"))

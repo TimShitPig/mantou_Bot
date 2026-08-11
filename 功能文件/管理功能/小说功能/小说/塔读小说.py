@@ -951,6 +951,32 @@ def _详情字段(detail: Mapping[str, Any], *keys: str) -> Any:
     return ""
 
 
+def 解析塔读书籍详情(detail: Mapping[str, Any] | None) -> dict[str, str]:
+    """统一解析塔读 titlePage 返回的书名、作者、状态和真实字数。"""
+    data = detail if isinstance(detail, Mapping) else {}
+    title = str(_详情字段(data, "bookName", "bookTitle", "title", "name") or "未知")
+    author = str(_详情字段(data, "bookAuthor", "authorName", "author", "writer") or "未知")
+    status_text = str(_详情字段(data, "status", "serialStatus", "bookStatus") or "")
+    is_end = str(_详情字段(data, "isEnd", "isFinished", "finish") or "").lower()
+    status = "完结" if "完" in status_text or is_end in {"1", "true", "yes"} else "连载"
+    word_count = _格式化字数(_详情字段(
+        data,
+        "bookTotalSize",
+        "wordCount",
+        "bookWordCount",
+        "wordNum",
+        "totalWordCount",
+        "totalWords",
+        "words",
+    ))
+    return {
+        "title": title,
+        "author": author,
+        "status": status,
+        "word_count": word_count,
+    }
+
+
 def _生成小说文件(book_id: str, title: str, author: str, status: str, word_count: str, chapters: list[dict[str, Any]]) -> tuple[str, bytes]:
     file_name = f"[{status}]书名：{_清理文件名(title)} 作者：{_清理文件名(author)}.txt"
     lines = [
@@ -1058,12 +1084,11 @@ async def 生成塔读下载回复流(event: Any, 来源: str, 配置: Any = Non
                 logger.warning("塔读小说目录不完整：book_id=%s, chapters=%s", book_id, len(chapters))
                 yield "下载失败"
                 return
-            title = str(_详情字段(detail, "bookName", "bookTitle", "title", "name") or "未知")
-            author = str(_详情字段(detail, "authorName", "author", "writer") or "未知")
-            status_text = str(_详情字段(detail, "status", "serialStatus", "bookStatus") or "")
-            is_end = str(_详情字段(detail, "isEnd", "isFinished", "finish") or "").lower()
-            status = "完结" if "完" in status_text or is_end in {"1", "true", "yes"} else "连载"
-            word_count = _格式化字数(_详情字段(detail, "wordCount", "wordNum", "totalWordCount", "totalWords", "words"))
+            详情 = 解析塔读书籍详情(detail)
+            title = 详情["title"]
+            author = 详情["author"]
+            status = 详情["status"]
+            word_count = 详情["word_count"]
             concurrency = 计算塔读章节并发数(len(chapters))
             logger.info(
                 "塔读小说开始下载：book_id=%s, title=%s, author=%s, chapters=%s, "
