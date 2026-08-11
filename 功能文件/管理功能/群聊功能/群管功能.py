@@ -56,6 +56,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 最近消息撤回拉取数量 = 100
 踢人消息撤回数量 = 50
 踢人消息撤回拉取数量 = 100
+广告撤回禁言时长表 = (3 * 60, 10 * 60, 30 * 60, 86400, 30 * 86400)
 数字撤回触发次数: dict[str, int] = {}
 撤回通知间隔秒 = 300
 撤回通知最近发送时间: dict[str, float] = {}
@@ -548,9 +549,114 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
     撤回成功 = await 尝试撤回当前消息(event)
     if 撤回成功:
         await 尝试撤回触发用户最近消息(event)
-        await 记录撤回触发并尝试踢出(event, 配置)
+        触发次数 = await 记录撤回触发并尝试踢出(event, 配置)
+        if 触发次数:
+            禁言秒数 = 计算广告撤回禁言秒数(触发次数)
+            await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
+            await 发送撤回广告提醒(event)
         await 发送撤回通知(event, 配置, 消息文本, 卡片类型)
     return 撤回成功
+
+
+def 计算广告撤回禁言秒数(触发次数: int) -> int:
+    """按同一群同一成员的撤回次数递增禁言时长，超过第五次保持 30 天。"""
+    次数 = max(1, int(触发次数 or 1))
+    return 广告撤回禁言时长表[min(次数, len(广告撤回禁言时长表)) - 1]
+
+
+def 获取撤回发送者标识(event: AstrMessageEvent) -> str:
+    """读取 OneBot user_id 或 QQ 官方 author.member_openid。"""
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        for 字段名 in ("sender", "author", "member", "user"):
+            发送者 = 读取字段(对象, 字段名)
+            for 标识字段 in (
+                "member_openid",
+                "user_openid",
+                "openid",
+                "user_id",
+                "qq",
+                "id",
+            ):
+                标识 = 规范化用户编号(读取字段(发送者, 标识字段))
+                if 标识:
+                    return 标识
+        for 标识字段 in (
+            "member_openid",
+            "user_openid",
+            "openid",
+            "sender_id",
+            "user_id",
+            "qq",
+        ):
+            标识 = 规范化用户编号(读取字段(对象, 标识字段))
+            if 标识:
+                return 标识
+    return ""
+
+
+async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发次数: int) -> bool:
+    群号 = 获取群号(event)
+    用户标识 = 获取撤回发送者标识(event)
+    bot = getattr(event, "bot", None)
+    if not 群号 or not 用户标识 or bot is None:
+        logger.warning(
+            "广告撤回自动禁言跳过：缺少群或成员标识，count=%s",
+            触发次数,
+        )
+        return False
+    try:
+        await 使用_set_group_ban禁言(bot, 群号, 用户标识, 秒数, "add")
+        logger.info(
+            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s",
+            群号,
+            用户标识,
+            触发次数,
+            秒数,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "广告撤回自动禁言失败：group_id=%s, user_id=%s, count=%s, error_type=%s",
+            群号,
+            用户标识,
+            触发次数,
+            type(exc).__name__,
+        )
+        return False
+
+
+def 构造撤回广告提醒(event: AstrMessageEvent) -> str:
+    return f"{获取撤回发送者提及(event)} 请勿再发送此类消息"
+
+
+async def 发送撤回广告提醒(event: AstrMessageEvent) -> bool:
+    文本 = 构造撤回广告提醒(event)
+    try:
+        if 是QQ官方机器人(event):
+            from 功能文件.管理功能.基础功能 import 帮助功能
+
+            return bool(await 帮助功能.发送Markdown键盘消息(
+                event,
+                文本,
+                None,
+                主动发送=True,
+                自动提及=False,
+            ))
+        发送方法 = getattr(event, "send", None)
+        if not callable(发送方法):
+            return False
+        发送结果 = 发送方法(event.plain_result(文本))
+        await 等待可能异步结果(发送结果)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "广告撤回提醒发送失败：error_type=%s",
+            type(exc).__name__,
+        )
+        return False
 
 
 def 获取撤回发送者名称(event: AstrMessageEvent) -> str:
@@ -1163,17 +1269,23 @@ def 筛选用户最近消息(历史消息: list[dict[str, Any]], 用户QQ: str, 
     return 结果[: max(0, int(数量))]
 
 
-async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any = None) -> None:
+async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any = None) -> int:
     群号 = 获取群号(event)
-    用户QQ = 获取发送者QQ(event)
-    if not 是数字ID(群号) or not 是数字ID(用户QQ):
-        logger.info(f"数字撤回计数跳过：缺少数字群号或用户QQ，group_id={群号}, user_id={用户QQ}")
-        return
+    用户QQ = 获取撤回发送者标识(event)
+    if not 群号 or not 用户QQ:
+        logger.info("数字撤回计数跳过：缺少群或成员标识")
+        return 0
 
     计数键 = f"{群号}:{用户QQ}"
     当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
     数字撤回触发次数[计数键] = 当前次数
-    logger.info(f"数字撤回模块触发计数：group_id={群号}, user_id={用户QQ}, count={当前次数}，仅撤回不踢人")
+    logger.info(
+        "数字撤回模块触发计数：group_id=%s, user_id=%s, count=%s",
+        群号,
+        用户QQ,
+        当前次数,
+    )
+    return 当前次数
 
 
 async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None) -> bool:

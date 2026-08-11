@@ -223,6 +223,45 @@ class 群禁言测试(unittest.TestCase):
             "[CQ:at,qq=987654321] 你已经被禁言，请联系群主说明情况",
         )
 
+    def test_广告撤回禁言时长按次数递增并封顶(self):
+        self.assertEqual(
+            [群管功能.计算广告撤回禁言秒数(次数) for 次数 in range(1, 7)],
+            [180, 600, 1800, 86400, 30 * 86400, 30 * 86400],
+        )
+
+    def test_撤回广告提醒提及QQ官方发送者(self):
+        event = types.SimpleNamespace(
+            get_platform_name=lambda: "qq_official",
+            message_obj={"author": {"member_openid": "MemberOpenID_01"}},
+        )
+        self.assertEqual(
+            群管功能.获取撤回发送者标识(event),
+            "MemberOpenID_01",
+        )
+        self.assertEqual(
+            群管功能.构造撤回广告提醒(event),
+            "<@MemberOpenID_01> 请勿再发送此类消息",
+        )
+
+    def test_撤回广告自动禁言调用OneBot时长(self):
+        calls = []
+
+        async def set_group_ban(**kwargs):
+            calls.append(kwargs)
+
+        event = types.SimpleNamespace(
+            message_obj={
+                "group_id": "123456789",
+                "sender": {"user_id": "987654321"},
+            },
+            bot=types.SimpleNamespace(set_group_ban=set_group_ban),
+        )
+        self.assertTrue(asyncio.run(群管功能.尝试广告撤回禁言(event, 180, 1)))
+        self.assertEqual(
+            calls,
+            [{"group_id": 123456789, "user_id": 987654321, "duration": 180}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
