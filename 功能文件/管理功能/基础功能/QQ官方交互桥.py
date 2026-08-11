@@ -15,8 +15,8 @@ except Exception:
 
 帮助回调前缀 = "帮助回调:"
 群成员加入事件标记 = "mantou_group_member_add"
-群与C2C事件意图位 = 1 << 25
-群成员加入桥版本 = 6
+群成员事件意图位 = 1 << 24
+群成员加入桥版本 = 7
 欢迎诊断事件名 = {"group_member_add", "group_add_robot"}
 当前插件上下文: Any = None
 平台同步任务: asyncio.Task | None = None
@@ -181,11 +181,9 @@ def _开启互动事件(平台实例: Any) -> bool:
 
 
 def _群成员加入意图已启用(意图: Any, 客户端: Any) -> bool:
-    if bool(_读取字段(意图, "public_messages", False)):
-        return True
     for 值 in (_读取字段(意图, "value"), _读取字段(客户端, "intents")):
         try:
-            if int(值) & 群与C2C事件意图位:
+            if int(值) & 群成员事件意图位:
                 return True
         except (TypeError, ValueError):
             continue
@@ -193,7 +191,7 @@ def _群成员加入意图已启用(意图: Any, 客户端: Any) -> bool:
 
 
 def _启用群成员加入意图(意图: Any, 客户端: Any) -> tuple[bool, int | None, int | None]:
-    """确保登录前后的客户端都带上 GROUP_AND_C2C_EVENT。"""
+    """确保登录前后的客户端都带上官方 GROUP_MEMBER_EVENT。"""
     原意图值 = _读取字段(意图, "value")
     if 原意图值 is None:
         原意图值 = _读取字段(客户端, "intents")
@@ -201,7 +199,7 @@ def _启用群成员加入意图(意图: Any, 客户端: Any) -> tuple[bool, int
         原值 = int(原意图值 or 0)
     except (TypeError, ValueError):
         return False, None, None
-    目标值 = 原值 | 群与C2C事件意图位
+    目标值 = 原值 | 群成员事件意图位
     try:
         if 意图 is not None:
             意图.value = 目标值
@@ -245,7 +243,7 @@ def _记录群成员加入诊断(
         意图值文本 = "invalid"
         客户端意图文本 = "invalid"
     logger.info(
-        "QQ官方群欢迎诊断：stage=%s, group_c2c=%s, intent_value=%s, "
+        "QQ官方群欢迎诊断：stage=%s, group_member_event=%s, intent_value=%s, "
         "client_intents=%s, connection=%s, parser_class=%s, "
         "parser_state=%s, parser_connection=%s, member_callback=%s, "
         "robot_callback=%s",
@@ -352,7 +350,7 @@ def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> boo
             平台意图值 = int(_读取字段(意图, "value") or 0)
         except (TypeError, ValueError):
             平台意图值 = 0
-        if not (平台意图值 & 群与C2C事件意图位):
+        if not (平台意图值 & 群成员事件意图位):
             已启用, 原意图值, 新意图值 = _启用群成员加入意图(意图, 客户端)
             意图已开启 = 已启用
             logger.info(
@@ -372,15 +370,15 @@ def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> boo
             客户端,
         )
         logger.info(
-            "QQ官方群成员欢迎监听状态：group_c2c_intent=%s, parser_registered=%s, connected=%s",
+            "QQ官方群成员欢迎监听状态：group_member_event=%s, parser_registered=%s, connected=%s",
             意图已开启,
             解析器已注册,
             _读取字段(客户端, "_connection") is not None,
         )
         if not 意图已开启:
             logger.warning(
-                "QQ官方群成员欢迎未订阅：QQ官方适配器未开启 GROUP_AND_C2C_EVENT，"
-                "请启用群/C2C消息接收后重启适配器"
+                "QQ官方群成员欢迎未订阅：QQ官方适配器未开启 GROUP_MEMBER_EVENT，"
+                "请启用群成员事件接收后重启适配器"
             )
         return 意图已开启 and 解析器已注册
     except Exception as 异常:
@@ -567,12 +565,12 @@ def _安装网关鉴权订阅(适配器模块: Any) -> None:
             原值 = int(原意图值 or 0)
         except (TypeError, ValueError):
             原值 = 0
-        新值 = 原值 | 群与C2C事件意图位
+        新值 = 原值 | 群成员事件意图位
         if isinstance(会话, dict):
             会话["intent"] = 新值
         logger.info(
-            "QQ官方群欢迎诊断：stage=ws_identify, group_c2c=%s, intent=%s",
-            bool(新值 & 群与C2C事件意图位),
+            "QQ官方群欢迎诊断：stage=ws_identify, group_member_event=%s, intent=%s",
+            bool(新值 & 群成员事件意图位),
             新值,
         )
         结果 = 原鉴权方法(self, *参数, **关键字)
@@ -614,15 +612,15 @@ def _安装网关接收诊断(适配器模块: Any) -> None:
                 会话 = _读取字段(self, "_session", {})
                 意图值 = _读取字段(会话, "intent")
                 try:
-                    群与C2C已订阅 = bool(int(意图值) & 群与C2C事件意图位)
+                    群成员事件已订阅 = bool(int(意图值) & 群成员事件意图位)
                 except (TypeError, ValueError):
-                    群与C2C已订阅 = False
+                    群成员事件已订阅 = False
                 logger.info(
                     "QQ官方群欢迎诊断：stage=ws_receive, event=%s, parser=%s, "
-                    "group_c2c=%s, connection_parser=%s, intent=%s",
+                    "group_member_event=%s, connection_parser=%s, intent=%s",
                     事件名,
                     isinstance(解析器表, dict) and callable(解析器表.get(事件名)),
-                    群与C2C已订阅,
+                    群成员事件已订阅,
                     isinstance(_读取字段(连接, "parser"), dict),
                     意图值 if 意图值 is not None else "None",
                 )
