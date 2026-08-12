@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 群管功能 = importlib.import_module("功能文件.管理功能.群聊功能.群管功能")
@@ -43,6 +43,10 @@ class 跨群禁言测试(unittest.TestCase):
 
         with patch.object(群管功能, "获取机器人所在群号列表", new=获取群列表), patch.object(
             群管功能, "检查群成员存在", new=检查成员
+        ), patch.object(
+            群管功能,
+            "QQ官方机器人具备群管权限",
+            new=AsyncMock(return_value=True),
         ), patch.object(群管功能, "使用_set_group_ban禁言", new=执行禁言):
             成功数, 失败数 = asyncio.run(
                 群管功能.同步成员禁言到其它群(
@@ -71,6 +75,10 @@ class 跨群禁言测试(unittest.TestCase):
             群管功能,
             "获取机器人所在群号列表",
             new=获取群列表,
+        ), patch.object(
+            群管功能,
+            "QQ官方机器人具备群管权限",
+            new=AsyncMock(return_value=True),
         ), patch.object(群管功能, "使用_set_group_ban禁言", new=执行禁言):
             成功数, 失败数 = asyncio.run(
                 群管功能.同步成员禁言到其它群(

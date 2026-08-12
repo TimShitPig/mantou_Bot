@@ -4,6 +4,7 @@ import inspect
 import asyncio
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -55,9 +56,12 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 踢人消息撤回拉取数量 = 100
 广告撤回禁言时长表 = (3 * 60, 10 * 60, 30 * 60, 86400, 30 * 86400)
 数字撤回触发次数: dict[str, int] = {}
-群管功能模块版本 = "1.23.0"
+群管功能模块版本 = "1.24.0"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
+QQ官方机器人权限缓存秒数 = 30.0
+QQ官方机器人权限缓存: dict[tuple[int, str], tuple[float, bool]] = {}
+QQ官方机器人权限锁: asyncio.Lock | None = None
 单用户禁言前缀 = ("解除禁言", "解禁", "解", "禁言用户", "单独禁言", "禁言", "禁")
 单用户禁言默认秒数 = 7 * 86400
 单用户禁言时长规则 = re.compile(
@@ -86,6 +90,9 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         bot = getattr(event, "bot", None)
         if bot is None:
             return "成员禁言失败，请稍后再试"
+        if not await QQ官方机器人具备群管权限(bot, 群号):
+            logger.info("群禁言跳过：QQ官方机器人不是群管理员，group_id=%s", 群号)
+            return None
 
         操作 = str(单用户参数.get("operation") or "add")
         秒数 = 单用户参数.get("seconds")
@@ -468,6 +475,11 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
             f"group_id={获取群号(event)}, user_id={获取发送者QQ(event)}"
         )
         return False
+    bot = getattr(event, "bot", None)
+    群号 = 获取群号(event)
+    if bot is None or not await QQ官方机器人具备群管权限(bot, 群号):
+        logger.info("撤回跳过：QQ官方机器人不是群管理员，group_id=%s", 群号)
+        return False
     卡片类型 = 获取卡片撤回类型(event)
     if 卡片类型:
         logger.debug(f"卡片撤回规则命中：类型={卡片类型}")
@@ -736,6 +748,91 @@ def 读取首个字段(对象: Any, 字段列表: tuple[str, ...]) -> Any:
 
 def 是QQ群管理角色(角色: Any) -> bool:
     return str(角色 or "").strip().lower() in QQ群管理角色集合
+
+
+def 提取QQ官方机器人群角色(响应: Any) -> str:
+    """提取 QQ 官方 bot_state 返回的 member_role。"""
+    数据 = 响应
+    if isinstance(响应, dict) and "data" in 响应:
+        数据 = 响应.get("data")
+    if isinstance(数据, dict):
+        角色 = 数据.get("member_role") or 数据.get("role")
+    else:
+        角色 = getattr(数据, "member_role", None) or getattr(数据, "role", None)
+    return str(角色 or "").strip().lower()
+
+
+async def 获取QQ官方机器人群角色(bot: Any, 群号: str) -> str:
+    """请求 QQ 官方群 bot_state；非官方数字群不走该接口。"""
+    群号文本 = str(群号 or "").strip()
+    if not 群号文本 or 群号文本.isdigit():
+        return ""
+    api = getattr(bot, "api", None)
+    http客户端 = getattr(api, "_http", None) if api else None
+    if http客户端 is None:
+        raise RuntimeError("当前 bot 没有 QQ 官方 HTTP 客户端")
+
+    from botpy.http import Route
+
+    路由 = Route(
+        "GET",
+        "/v2/groups/{group_openid}/bot_state",
+        group_openid=群号文本,
+    )
+    响应 = await http客户端.request(路由)
+    角色 = 提取QQ官方机器人群角色(响应)
+    if not 角色:
+        raise RuntimeError("QQ 官方 bot_state 未返回 member_role")
+    return 角色
+
+
+async def QQ官方机器人具备群管权限(
+    bot: Any,
+    群号: str,
+    *,
+    未缓存时允许: bool = False,
+) -> bool:
+    """只有 QQ 官方机器人为群主/管理员时才允许撤回和禁言。"""
+    群号文本 = str(群号 or "").strip()
+    if not 群号文本 or 群号文本.isdigit():
+        return True
+
+    global QQ官方机器人权限锁
+    if QQ官方机器人权限锁 is None:
+        QQ官方机器人权限锁 = asyncio.Lock()
+
+    缓存键 = (id(bot), 群号文本)
+    当前时间 = time.monotonic()
+    缓存 = QQ官方机器人权限缓存.get(缓存键)
+    if 缓存 and 当前时间 - 缓存[0] < QQ官方机器人权限缓存秒数:
+        return 缓存[1]
+    if 未缓存时允许:
+        return True
+
+    async with QQ官方机器人权限锁:
+        当前时间 = time.monotonic()
+        缓存 = QQ官方机器人权限缓存.get(缓存键)
+        if 缓存 and 当前时间 - 缓存[0] < QQ官方机器人权限缓存秒数:
+            return 缓存[1]
+        try:
+            角色 = await 获取QQ官方机器人群角色(bot, 群号文本)
+            允许 = 角色 in {"owner", "admin"}
+        except Exception as exc:
+            允许 = False
+            logger.warning(
+                "QQ官方机器人群权限获取失败：group_id=%s, error_type=%s",
+                群号文本,
+                type(exc).__name__,
+            )
+            角色 = "unknown"
+        QQ官方机器人权限缓存[缓存键] = (time.monotonic(), 允许)
+        if not 允许:
+            logger.info(
+                "QQ官方机器人群管权限不足：group_id=%s, member_role=%s",
+                群号文本,
+                角色,
+            )
+        return 允许
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -1046,6 +1143,9 @@ async def 尝试撤回指定用户最近消息(
     if bot is None:
         logger.warning(f"{日志名称}失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}")
         return 0
+    if not await QQ官方机器人具备群管权限(bot, 群号):
+        logger.info("%s跳过：QQ官方机器人不是群管理员，group_id=%s", 日志名称, 群号)
+        return 0
 
     try:
         历史消息 = await 获取群历史消息(bot, 群号, 拉取数量)
@@ -1200,6 +1300,13 @@ async def 同步成员禁言到其它群(
     async def 同步单群(群号: str) -> tuple[int, int]:
         async with 信号量:
             try:
+                if not await QQ官方机器人具备群管权限(
+                    bot,
+                    群号,
+                    未缓存时允许=True,
+                ):
+                    logger.info("跨群禁言跳过：QQ官方机器人不是目标群管理员，group_id=%s", 群号)
+                    return 0, 0
                 if 是数字ID(群号) and 是数字ID(用户QQ):
                     if not await 检查群成员存在(bot, 群号, 用户QQ):
                         return 0, 0
