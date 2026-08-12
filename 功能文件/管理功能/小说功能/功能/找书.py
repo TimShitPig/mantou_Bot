@@ -8,7 +8,7 @@ import time
 import urllib.parse
 from collections import Counter
 from difflib import SequenceMatcher
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable
 
 import aiohttp
 
@@ -71,7 +71,13 @@ except Exception as exc:
 
 每页数量 = 5
 会话等待秒数 = 300
+找书搜索候选数量 = 15
+找书单平台超时秒数 = 12.0
+找书联想超时秒数 = 5.0
+找书结果缓存秒数 = 60.0
+找书结果缓存上限 = 128
 找书会话: dict[str, dict[str, Any]] = {}
+找书结果缓存: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 找书名命令正则 = re.compile(r"^找(?:书名|小说名)\s*[:：]?\s*(.+)$")
 找作者命令正则 = re.compile(r"^找(?:作者|作家)\s*[:：]?\s*(.+)$")
@@ -921,7 +927,10 @@ def _清理QQ阅读预检缓存() -> None:
             QQ阅读预检缓存.pop(book_id, None)
 
 
-async def 预检QQ阅读候选(book_id: str) -> bool:
+async def 预检QQ阅读候选(
+    book_id: str,
+    session: aiohttp.ClientSession | None = None,
+) -> bool:
     """仅确认免费或会员免费的完整 QQ 阅读候选可以进入找书结果。"""
     书籍编号 = str(book_id or "").strip()
     if not 书籍编号.isdigit() or QQ阅读小说 is None:
@@ -931,19 +940,26 @@ async def 预检QQ阅读候选(book_id: str) -> bool:
     缓存 = QQ阅读预检缓存.get(书籍编号)
     if 缓存 is not None and 现在 - 缓存[0] < QQ阅读预检缓存秒数:
         return 缓存[1]
-    try:
-        details = await QQ阅读小说.获取参考书籍详情(书籍编号)
+    async def _检查(有效会话: aiohttp.ClientSession | None) -> bool:
+        details = await QQ阅读小说.获取参考书籍详情(书籍编号, 有效会话)
         chapter_count = _安全整数热度(details.get("chapters"))
         catalog, _published = await QQ阅读小说.获取参考兼容目录(
             书籍编号,
             chapter_count,
+            有效会话,
         )
         # 目录必须完整，避免搜索页保留最终无法合成完整 TXT 的候选。
         available = bool(catalog) and (
             chapter_count <= 0 or len(catalog) == chapter_count
         )
         catalog = QQ阅读小说.获取QQ阅读可下载目录(details, catalog)
-        allowed = available and bool(catalog) and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+        return available and bool(catalog) and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+
+    try:
+        if session is not None:
+            allowed = await _检查(session)
+        else:
+            allowed = await _检查(None)
     except Exception as exc:
         logger.debug(
             f"找书QQ阅读候选预检失败：book_id={书籍编号}, error={type(exc).__name__}"
@@ -961,12 +977,28 @@ async def 过滤章节单独付费QQ阅读搜索结果(
         return []
     限流 = asyncio.Semaphore(QQ阅读预检并发数)
 
-    async def 检查(项: dict[str, Any]) -> tuple[str, bool]:
+    async def 检查(
+        项: dict[str, Any],
+        session: aiohttp.ClientSession | None = None,
+    ) -> tuple[str, bool]:
         书籍编号 = str(项.get("book_id") or "").strip()
         async with 限流:
-            return 书籍编号, await 预检QQ阅读候选(书籍编号)
+            try:
+                allowed = await asyncio.wait_for(
+                    预检QQ阅读候选(书籍编号, session),
+                    timeout=12.0,
+                )
+            except asyncio.TimeoutError:
+                logger.debug(f"找书QQ阅读候选预检超时：book_id={书籍编号}")
+                allowed = False
+            return 书籍编号, allowed
 
-    检查结果 = await asyncio.gather(*(检查(项) for 项 in 结果))
+    创建会话 = getattr(QQ阅读小说, "创建QQ阅读HTTP会话", None)
+    if callable(创建会话):
+        async with 创建会话(concurrency=QQ阅读预检并发数) as session:
+            检查结果 = await asyncio.gather(*(检查(项, session) for 项 in 结果))
+    else:
+        检查结果 = await asyncio.gather(*(检查(项) for 项 in 结果))
     可用书籍编号 = {book_id for book_id, allowed in 检查结果 if allowed}
     return [
         项 for 项 in 结果
@@ -1065,19 +1097,38 @@ async def 搜索塔读(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
-async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
+async def _限时搜索(
+    平台: str,
+    任务: Awaitable[list[Any]],
+    超时秒数: float = 找书单平台超时秒数,
+) -> list[Any]:
+    """限制单个平台的等待时间，避免一个慢源拖住全部找书结果。"""
+    try:
+        结果 = await asyncio.wait_for(任务, timeout=max(1.0, float(超时秒数)))
+        return 结果 if isinstance(结果, list) else []
+    except asyncio.TimeoutError:
+        logger.debug(f"找书平台搜索超时：platform={平台}")
+    except Exception as exc:
+        logger.debug(f"找书平台搜索异常：platform={平台}, error={type(exc).__name__}")
+    return []
+
+
+async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        番茄任务 = asyncio.create_task(搜索番茄(session, 关键词))
-        七猫任务 = asyncio.create_task(搜索七猫(session, 关键词))
-        书旗任务 = asyncio.create_task(搜索书旗(session, 关键词))
-        QQ阅读任务 = asyncio.create_task(搜索QQ阅读(关键词))
-        得间任务 = asyncio.create_task(搜索得间(关键词))
-        点众任务 = asyncio.create_task(搜索点众(关键词))
-        塔读任务 = asyncio.create_task(搜索塔读(关键词))
-        联想任务 = asyncio.create_task(搜索书旗联想(session, 关键词))
-        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果, 联想词 = await asyncio.gather(
-            番茄任务, 七猫任务, 书旗任务, QQ阅读任务, 得间任务, 点众任务, 塔读任务, 联想任务, return_exceptions=False
+        数量 = 找书搜索候选数量
+        搜索任务 = (
+            _限时搜索("番茄", 搜索番茄(session, 关键词, 需要数量=数量)),
+            _限时搜索("七猫", 搜索七猫(session, 关键词, 需要数量=数量)),
+            _限时搜索("书旗", 搜索书旗(session, 关键词, 需要数量=数量)),
+            _限时搜索("QQ阅读", 搜索QQ阅读(关键词, 需要数量=数量)),
+            _限时搜索("得间", 搜索得间(关键词, 需要数量=数量)),
+            _限时搜索("点众", 搜索点众(关键词, 需要数量=数量)),
+            _限时搜索("塔读", 搜索塔读(关键词, 需要数量=数量)),
+        )
+        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果 = await asyncio.gather(
+            *搜索任务,
+            return_exceptions=False,
         )
         for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果):
             for 排名, 项 in enumerate(平台结果):
@@ -1094,16 +1145,26 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
         合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果, 塔读结果])
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
+        if len(初步结果) < 每页数量:
+            联想词 = await _限时搜索(
+                "书旗联想",
+                搜索书旗联想(session, 关键词),
+                找书联想超时秒数,
+            )
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
             补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, 书旗结果, 得间结果, 点众结果, 塔读结果]
-            for w in 补搜词:
-                t1 = asyncio.create_task(搜索番茄(session, w, 需要数量=10))
-                t2 = asyncio.create_task(搜索七猫(session, w, 需要数量=10))
-                t3 = asyncio.create_task(搜索书旗(session, w, 需要数量=10))
-                t4 = asyncio.create_task(搜索QQ阅读(w, 需要数量=10))
-                t5 = asyncio.create_task(搜索塔读(w, 需要数量=10))
-                r1, r2, r3, r4, r5 = await asyncio.gather(t1, t2, t3, t4, t5)
+            async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
+                return await asyncio.gather(
+                    _限时搜索("番茄联想", 搜索番茄(session, w, 需要数量=10)),
+                    _限时搜索("七猫联想", 搜索七猫(session, w, 需要数量=10)),
+                    _限时搜索("书旗联想结果", 搜索书旗(session, w, 需要数量=10)),
+                    _限时搜索("QQ阅读联想", 搜索QQ阅读(w, 需要数量=10)),
+                    _限时搜索("塔读联想", 搜索塔读(w, 需要数量=10)),
+                )
+
+            补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
+            for r1, r2, r3, r4, r5 in 补搜结果:
                 for 平台结果 in (r1, r2, r3, r4, r5):
                     for 排名, 项 in enumerate(平台结果):
                         if isinstance(项, dict):
@@ -1118,6 +1179,27 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
                 补结果集合.extend([r1, r2, r3, r4, r5])
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词, 搜索类型)
+
+
+async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
+    """搜索结果短缓存，避免重复查询反复等待所有平台响应。"""
+    缓存键 = (规范标题(关键词), str(搜索类型 or "auto"))
+    if not 缓存键[0]:
+        return []
+    现在 = time.monotonic()
+    缓存 = 找书结果缓存.get(缓存键)
+    if 缓存 is not None:
+        缓存时间, 缓存结果 = 缓存
+        if 现在 - 缓存时间 < 找书结果缓存秒数:
+            return [dict(项) for 项 in 缓存结果]
+        找书结果缓存.pop(缓存键, None)
+
+    结果 = await _聚合搜索未缓存(关键词, 搜索类型)
+    找书结果缓存[缓存键] = (time.monotonic(), [dict(项) for 项 in 结果])
+    if len(找书结果缓存) > 找书结果缓存上限:
+        最旧键 = min(找书结果缓存, key=lambda key: 找书结果缓存[key][0])
+        找书结果缓存.pop(最旧键, None)
+    return [dict(项) for 项 in 结果]
 
 
 def 格式化找书结果(会话: dict[str, Any]) -> str:
