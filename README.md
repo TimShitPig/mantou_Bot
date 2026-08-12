@@ -8,7 +8,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.19.2 |
+| 版本 | v5.20.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 功能导航
@@ -18,7 +18,6 @@
 | 管理功能 | 群管功能 | `连续 9-12 位数字` / 群名片 / 空间相册分享 / 合并转发 / QQ 闪传 / `禁言 @成员` / `禁 @成员 1` / `解除禁言 @成员` / `解 @成员` | QQ 群主和管理员发送的消息不会被自动撤回；普通成员触发撤回后拉取 100 条群历史并最多撤回该用户最近 8 条消息；广告消息撤回并成功禁言后只发送一条“@发送者 / 请勿发送此类消息 / 如果是小说请联系群主”提醒；单成员禁言成功后会 @被禁言成员并提示联系群主；支持 OneBot 与 QQ 官方群；暂不提供踢人和全体禁言功能 |
 | 管理功能 | 帮助功能 | `帮助` 后发送数字 / `帮助 数字` / `0` | 仅群文件清理管理员白名单 QQ 可用，按主动触发和被动触发查看小类、触发指令和详情；QQ 官方帮助按钮全部使用原生回调，点击后静默切换菜单或执行快捷命令 |
 | 管理功能 | 卡片撤回 | 群名片/群分享/JSON 卡片/空间相册分享/合并转发/QQ 闪传 | 自动撤回群名片、JSON 卡片、QQ 官方显示为“暂不能查看该消息内容”的空间相册分享、合并转发和 QQ 闪传消息 |
-| 管理功能 | 全量消息 | `全量消息` / `全量消息状态` | 仅群文件清理管理员白名单 QQ 可用；只能查询 QQ 官方群消息接收状态，不能通过插件直接开启或关闭；开关需在 QQ 机器人资料页的群消息接收设置中操作 |
 | 管理功能 | 小说开关 | `小说` / `小说列表` / `开番茄` / `关番茄` / `开七猫` / `关七猫` / `开书旗` / `关书旗` / `开QQ阅读` / `关QQ阅读` / `开得间` / `关得间` / `开点众` / `关点众` / `开知乎` / `关知乎` / `开塔读` / `关塔读` / `开启/关闭对应功能` / `开测试` / `关测试` | 仅群文件清理管理员白名单 QQ 可用；`小说`、`小说列表`显示全部小说功能开启/关闭状态；管理员开启测试模式后可继续测试已关闭的小说平台，普通用户仍按平台开关处理 |
 | 管理功能 | 小说网盘 | `网盘` / `网盘状态` / `当前网盘` / `换UC` / `换夸克` / `换百度` / `夸克登录` / 直接粘贴三种网盘 Cookie | 仅群文件清理管理员白名单 QQ 可用；查看或切换主分享网盘；私聊发送 `夸克登录` 可按夸克网页当前扫码协议获取并保存网页 Cookie，也可直接粘贴 UC、夸克或百度 Cookie 覆盖 MySQL 登录态；插件重载时保留待上传 TXT，自动恢复未完成的主网盘上传，完成后再清理缓存 |
 | 管理功能 | 状态 | `状态` | 仅群文件清理管理员白名单 QQ 可用，查看系统位数、CPU、物理内存、磁盘、进程数、操作系统、框架版本、数据库状态、系统运行时间和当前时间；每次输入时检查一次数据库 |
@@ -84,7 +83,6 @@
         │   ├── 网盘Cookie.py
         │   └── 小说网盘.py
         └── 群聊功能/
-            ├── 全量消息.py
             ├── 群列表工具.py
             └── 群管功能.py
 ```
@@ -110,7 +108,7 @@ qrcode[pil]
 
 | 配置项 | 说明 |
 | --- | --- |
-| `group_file_cleanup_admin_qq` | 管理员 QQ 白名单，可使用帮助、状态、全量消息状态、小说网盘切换、保存三种网盘与 QQ阅读 Cookie、小说开关和群管指令 |
+| `group_file_cleanup_admin_qq` | 管理员 QQ 白名单，可使用帮助、状态、小说网盘切换、保存三种网盘与 QQ阅读 Cookie、小说开关和群管指令 |
 | `uc_pan_settings` | UC 网盘配置分类，包含 `uc_pan_cookie` 和 `uc_pan_upload_dir`；发送 `换UC` 后作为小说主分享网盘 |
 | `quark_pan_settings` | 夸克网盘配置分类，包含 `quark_pan_cookie` 和 `quark_pan_upload_dir`；发送 `换夸克` 后作为小说主分享网盘 |
 | `baidu_pan_settings` | 百度网盘配置分类，包含 `baidu_pan_cookie`、`baidu_pan_upload_dir` 和 `baidu_pan_upload_status`；发送 `换百度` 后作为主分享网盘，选择其他主网盘时仍可按状态后台备份 |
@@ -151,12 +149,7 @@ UC Cookie 可继续填写到 `uc_pan_cookie`，也可由管理员直接粘贴包
 
 QQ 官方机器人 `qq_official` 发送文件应优先走 AstrBot `File` 组件，它会封装官方富媒体接口并发送 `media` 消息；如果 QQ 官方群聊返回 `call inner proxy error`，这是平台富媒体上传限制或临时错误。OneBot 的 `upload_group_file`/`upload_private_file` 只适用于 OneBot 适配器回退。
 
-管理员白名单内的 QQ 在目标群发送 `全量消息` 或 `全量消息状态`，插件会调用 QQ 官方 `GET /v2/groups/{group_openid}/bot_state` 查询当前机器人的 `recv_msg_setting` 和 `allow_proactive_msg`：仅 `recv_msg_setting=all` 代表已开启“获取群内全部消息”。该命令只能查询，不能直接开关；需要在 QQ 机器人资料页的群消息接收设置中手动选择“群内全部消息”或其他接收范围。该官方接口目前标注为内邀开放，接口不可用时不会伪造状态。QQ 官方 Markdown 回复使用 `<@member_openid>` 提及操作人，不使用 QQ 号。
-
 ## 参考链接
 
 - [AstrBot 官方仓库](https://github.com/AstrBotDevs/AstrBot)
 - [AstrBot 插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [QQ 官方：群消息（全量模式）](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)
-- [QQ 官方：获取机器人群内状态](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)
-- [QQ 官方：群聊消息接收开启事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_msg_receive.html)
