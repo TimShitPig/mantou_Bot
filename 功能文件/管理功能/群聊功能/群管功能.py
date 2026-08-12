@@ -99,7 +99,11 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         成功数量 = 0
         for 用户 in 目标列表:
             try:
-                if not await 检查群成员存在(bot, 群号, 用户):
+                # QQ 官方群只能从当前 @ 消息拿到目标成员 OpenID；官方没有
+                # 通用的“查询指定成员是否在群内”接口。当前命令既然能解析
+                # 出有效的群内 @，直接交给官方禁言接口处理，避免把接口不
+                # 支持误判成“成员不在群内”，导致“解”无法执行。
+                if str(群号).strip().isdigit() and not await 检查群成员存在(bot, 群号, 用户):
                     logger.info(
                         "群禁言跳过：目标成员不在群内，group_id=%s, user_id=%s",
                         群号,
