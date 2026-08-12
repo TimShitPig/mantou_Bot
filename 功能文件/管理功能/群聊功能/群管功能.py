@@ -1310,7 +1310,7 @@ async def 同步成员禁言到其它群(
                 ):
                     logger.info("跨群禁言跳过：QQ官方机器人不是目标群管理员，group_id=%s", 群号)
                     return 0, 0
-                if not await 检查群成员存在(bot, 群号, 用户QQ):
+                if 是数字ID(群号) and not await 检查群成员存在(bot, 群号, 用户QQ):
                     logger.info(
                         "跨群禁言跳过：目标成员不在群内，group_id=%s, user_id=%s",
                         群号,
@@ -1326,13 +1326,22 @@ async def 同步成员禁言到其它群(
                 )
                 return 1, 0
             except Exception as exc:
-                logger.warning(
-                    "跨群禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
-                    群号,
-                    用户QQ,
-                    操作,
-                    type(exc).__name__,
-                )
+                if not 是数字ID(群号):
+                    logger.info(
+                        "跨群禁言跳过：QQ官方接口未接受目标成员，group_id=%s, user_id=%s, operation=%s, error_type=%s",
+                        群号,
+                        用户QQ,
+                        操作,
+                        type(exc).__name__,
+                    )
+                else:
+                    logger.warning(
+                        "跨群禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
+                        群号,
+                        用户QQ,
+                        操作,
+                        type(exc).__name__,
+                    )
                 return 0, 1
 
     结果 = await asyncio.gather(*(同步单群(群号) for 群号 in 其它群列表))
