@@ -4,9 +4,9 @@
     "type": "object",
     "items": {
       "group_file_cleanup_admin_qq": {
-        "description": "群文件清理管理员 QQ 白名单",
+        "description": "插件管理员 QQ 白名单",
         "type": "list",
-        "hint": "只有这里填写的账号可以使用帮助、状态、群文件清理、全量消息、保存 UC/夸克/百度/QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和禁言指令。普通 QQ/OneBot 适配器填写 QQ 号；QQ 官方群如需被 Markdown 实际 @，请填写对应群成员 OpenID。这里沿用群文件清理的管理员白名单，不是群管理员。",
+        "hint": "只有这里填写的账号可以使用帮助、状态、全量消息状态、保存 UC/夸克/百度/QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和群管指令。普通 QQ/OneBot 适配器填写 QQ 号；QQ 官方群如需被 Markdown 实际 @，请填写对应群成员 OpenID。这里是插件管理员白名单，不是群管理员。",
         "default": []
       }
     }
@@ -83,7 +83,7 @@
       "database_host": {
         "description": "MySQL 地址",
         "type": "string",
-        "hint": "例如 127.0.0.1。群文件 Cookie、QQ阅读登录态、待清理群列表和小说开关使用 MySQL 存储。",
+        "hint": "例如 127.0.0.1。三种网盘 Cookie、QQ阅读登录态和小说开关使用 MySQL 存储。",
         "default": ""
       },
       "database_port": {

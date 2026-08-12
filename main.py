@@ -31,7 +31,6 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 群列表工具 = 加载功能模块("功能文件.管理功能.群聊功能.群列表工具")
 群管功能 = 加载功能模块("功能文件.管理功能.群聊功能.群管功能")
 群成员事件 = 加载功能模块("功能文件.管理功能.群聊功能.群成员事件")
-网页群文件功能 = 加载功能模块("功能文件.管理功能.群聊功能.网页群文件")
 七猫小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.七猫小说")
 书旗小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.书旗小说")
 番茄小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.番茄小说")
@@ -45,7 +44,7 @@ QQ阅读功能 = 加载功能模块("功能文件.管理功能.小说功能.小�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.18.6"
+插件版本 = "5.19.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -78,6 +77,7 @@ class MyPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
+        群管功能.获取群号(event)
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
@@ -215,21 +215,16 @@ class MyPlugin(Star):
         if 回复内容 is None:
             回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
         if 回复内容 is None:
-            if 网页群文件功能.需要优先处理返回(event):
-                回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
-            if 回复内容 is None:
-                if 权限工具.是QQ官方机器人(event):
-                    md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
-                    if md文本 is not None:
-                        发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                        if not 发送成功:
-                            async for 输出内容 in _输出文本回复(md文本):
-                                yield 输出内容
-                        event.stop_event()
-                        return
-                回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
-        if 回复内容 is None:
-            回复内容 = await 网页群文件功能.处理网页群文件清理(event, 命令文本, self.config)
+            if 权限工具.是QQ官方机器人(event):
+                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
+                if md文本 is not None:
+                    发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                    if not 发送成功:
+                        async for 输出内容 in _输出文本回复(md文本):
+                            yield 输出内容
+                    event.stop_event()
+                    return
+            回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
         if 回复内容 is None:
             回复内容 = await 全量消息功能.处理全量消息(event, 命令文本, self.context, self.config)
 
@@ -339,7 +334,7 @@ class MyPlugin(Star):
                 return
 
         if not 回复内容:
-            # 空字符串表示 markdown 已自行发送（如群文件清理按钮交互），跳过 plain_result 避免空消息链警告
+            # 空字符串表示 markdown 已自行发送，跳过 plain_result 避免空消息链警告
             return
 
         async for 输出内容 in _输出文本回复(回复内容):

@@ -6,13 +6,32 @@ from typing import Any
 
 
 数字群号规则 = re.compile(r"[1-9]\d{4,11}")
+已知机器人群号集合: set[str] = set()
+
+
+def 记录机器人所在群号(群号: Any) -> None:
+    """记录当前进程见过的群号，供没有群列表接口的官方适配器跨群操作使用。"""
+    文本 = str(群号 or "").strip()
+    if 文本:
+        已知机器人群号集合.add(文本)
+
+
+def 获取已知机器人群号列表() -> list[str]:
+    return sorted(已知机器人群号集合)
 
 
 async def 获取机器人所在群号列表(bot: Any) -> list[str]:
-    响应 = await 调用群列表接口(bot)
-    群号列表 = 提取群号列表(响应)
+    try:
+        响应 = await 调用群列表接口(bot)
+        群号列表 = 提取群号列表(响应)
+        if 群号列表:
+            已知机器人群号集合.update(群号列表)
+            return 群号列表
+    except Exception:
+        pass
+    群号列表 = 获取已知机器人群号列表()
     if not 群号列表:
-        raise RuntimeError("没有获取到机器人所在的数字群号")
+        raise RuntimeError("没有获取到机器人所在的群号")
     return 群号列表
 
 
@@ -58,7 +77,13 @@ def 提取群号列表(响应: Any) -> list[str]:
 
 def 提取单个群号(值: Any) -> str:
     if isinstance(值, dict):
-        值 = 值.get("group_id") or 值.get("group") or 值.get("id")
+        值 = (
+            值.get("group_id")
+            or 值.get("group_openid")
+            or 值.get("groupOpenid")
+            or 值.get("group")
+            or 值.get("id")
+        )
     文本 = str(值 or "").strip()
     if not 文本:
         return ""

@@ -30,7 +30,10 @@ from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
     获取群文件清理管理员QQ列表,
 )
-from 功能文件.管理功能.群聊功能.群列表工具 import 获取机器人所在群号列表
+from 功能文件.管理功能.群聊功能.群列表工具 import (
+    获取机器人所在群号列表,
+    记录机器人所在群号,
+)
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
@@ -61,7 +64,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 撤回通知间隔秒 = 300
 撤回通知最近发送时间: dict[str, float] = {}
 撤回通知群锁: dict[str, asyncio.Lock] = {}
-群管功能模块版本 = "1.21.0"
+群管功能模块版本 = "1.22.0"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 单用户禁言前缀 = ("解除禁言", "解禁", "解", "禁言用户", "单独禁言", "禁言", "禁")
@@ -96,6 +99,8 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         操作 = str(单用户参数.get("operation") or "add")
         秒数 = 单用户参数.get("seconds")
         成功数量 = 0
+        跨群成功群数 = 0
+        跨群失败群数 = 0
         for 用户 in 目标列表:
             try:
                 await 使用_set_group_ban禁言(
@@ -106,6 +111,15 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
                     操作,
                 )
                 成功数量 += 1
+                同步成功数, 同步失败数 = await 同步成员禁言到其它群(
+                    bot,
+                    群号,
+                    用户,
+                    int(秒数 or 0),
+                    操作,
+                )
+                跨群成功群数 += 同步成功数
+                跨群失败群数 += 同步失败数
             except Exception as exc:
                 logger.warning(
                     "成员禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
@@ -118,8 +132,14 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         if 成功数量 != len(目标列表):
             return "成员禁言失败，请稍后再试"
         if 操作 == "del":
-            return f"已解除 {成功数量} 个成员的禁言"
-        return 构造成员禁言成功回复(event, 目标列表)
+            动作说明 = f"已解除 {成功数量} 个成员的禁言"
+        else:
+            动作说明 = 构造成员禁言成功回复(event, 目标列表)
+        if 跨群成功群数:
+            动作说明 += f"\n已同步到其他 {跨群成功群数} 个群"
+        if 跨群失败群数:
+            动作说明 += f"\n有 {跨群失败群数} 个群同步失败"
+        return 动作说明
 
 def 踢人功能是否开启(配置: Any = None) -> bool:
     return False
@@ -523,12 +543,22 @@ async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发�
         return False
     try:
         await 使用_set_group_ban禁言(bot, 群号, 用户标识, 秒数, "add")
+        同步成功数, 同步失败数 = await 同步成员禁言到其它群(
+            bot,
+            群号,
+            用户标识,
+            秒数,
+            "add",
+        )
         logger.info(
-            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s",
+            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s, "
+            "cross_group_success=%s, cross_group_failed=%s",
             群号,
             用户标识,
             触发次数,
             秒数,
+            同步成功数,
+            同步失败数,
         )
         return True
     except Exception as exc:
@@ -1219,17 +1249,6 @@ async def 尝试踢出成员(event: AstrMessageEvent, 群号: str, 用户QQ: str
 
 
 async def 尝试网页或适配器踢出(event: AstrMessageEvent, bot: Any, 群号: str, 用户QQ: str, 配置: Any = None) -> None:
-    管理员QQ = 获取发送者QQ(event)
-    if 配置 is not None and 是数字ID(群号) and 是数字ID(用户QQ) and 管理员QQ:
-        try:
-            from 功能文件.管理功能.群聊功能 import 网页群文件
-            成功, 信息 = await 网页群文件.网页踢出群成员(配置, 管理员QQ, 群号, 用户QQ)
-            if 成功:
-                logger.info(f"网页接口踢出成功：group_id={群号}, user_id={用户QQ}, info={信息}")
-                return
-            logger.warning(f"网页接口踢出失败，回退适配器：group_id={群号}, user_id={用户QQ}, info={信息}")
-        except Exception as exc:
-            logger.warning(f"网页接口踢出异常，回退适配器：group_id={群号}, user_id={用户QQ}, error={exc}")
     await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
 
 
@@ -1251,6 +1270,64 @@ async def 尝试踢出其它群同一成员(bot: Any, 当前群号: str, 用户Q
             logger.info(f"跨群踢出成功：group_id={群号}, user_id={用户QQ}")
         except Exception as exc:
             logger.warning(f"跨群踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}")
+
+
+async def 同步成员禁言到其它群(
+    bot: Any,
+    当前群号: str,
+    用户QQ: str,
+    秒数: int,
+    操作: str,
+) -> tuple[int, int]:
+    """把当前群的成员禁言/解禁同步到机器人所在的其它群。"""
+    try:
+        群号列表 = await 获取机器人所在群号列表(bot)
+    except Exception as exc:
+        logger.warning(
+            "跨群禁言获取群列表失败：user_id=%s, error_type=%s",
+            用户QQ,
+            type(exc).__name__,
+        )
+        return 0, 0
+
+    其它群列表 = 去重保序(
+        [
+            str(群号).strip()
+            for 群号 in 群号列表
+            if str(群号).strip() and str(群号).strip() != str(当前群号).strip()
+        ]
+    )
+    if not 其它群列表:
+        return 0, 0
+
+    信号量 = asyncio.Semaphore(8)
+
+    async def 同步单群(群号: str) -> tuple[int, int]:
+        async with 信号量:
+            try:
+                if 是数字ID(群号) and 是数字ID(用户QQ):
+                    if not await 检查群成员存在(bot, 群号, 用户QQ):
+                        return 0, 0
+                await 使用_set_group_ban禁言(bot, 群号, 用户QQ, 秒数, 操作)
+                logger.info(
+                    "跨群禁言成功：group_id=%s, user_id=%s, operation=%s",
+                    群号,
+                    用户QQ,
+                    操作,
+                )
+                return 1, 0
+            except Exception as exc:
+                logger.warning(
+                    "跨群禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
+                    群号,
+                    用户QQ,
+                    操作,
+                    type(exc).__name__,
+                )
+                return 0, 1
+
+    结果 = await asyncio.gather(*(同步单群(群号) for 群号 in 其它群列表))
+    return sum(项目[0] for 项目 in 结果), sum(项目[1] for 项目 in 结果)
 
 
 async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
@@ -1318,7 +1395,9 @@ def 获取群号(event: AstrMessageEvent) -> str:
         if callable(方法):
             值 = 方法()
             if 值:
-                return str(值)
+                群号 = str(值)
+                记录机器人所在群号(群号)
+                return 群号
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
@@ -1326,7 +1405,9 @@ def 获取群号(event: AstrMessageEvent) -> str:
         if isinstance(值, dict):
             值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
         if 值:
-            return str(值)
+            群号 = str(值)
+            记录机器人所在群号(群号)
+            return 群号
     return ""
 
 
