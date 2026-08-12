@@ -1889,14 +1889,31 @@ def book_detail(book_id:str)->Dict[str,Any]:
 
 
 async def 异步获取番茄书籍详情(client: Any, book_id: str) -> Dict[str, Any]:
-    data = await 异步番茄JSON请求(
-        client,
-        make_url("/novelfm/bookapi/detail/v1/", {"book_id": str(book_id)}),
-        headers={"User-Agent": DEFAULT_UA, "Accept-Encoding": "gzip"},
-        retries=2,
-    )
-    detail = data.get("data") if isinstance(data, dict) else None
-    return detail if isinstance(detail, dict) else {}
+    url = make_url("/novelfm/bookapi/detail/v1/", {"book_id": str(book_id)})
+    latest_error: BaseException | None = None
+    for attempt in range(1, 4):
+        try:
+            data = await 异步番茄JSON请求(
+                client,
+                url,
+                headers={"User-Agent": DEFAULT_UA, "Accept-Encoding": "gzip"},
+                retries=1,
+            )
+            detail = data.get("data") if isinstance(data, dict) else None
+            code = data.get("code") if isinstance(data, dict) else None
+            if (
+                code in (None, 0, "0")
+                and isinstance(detail, dict)
+                and (detail.get("book_name") or detail.get("title"))
+            ):
+                if detail.get("author") or detail.get("author_name"):
+                    return detail
+            latest_error = RuntimeError(f"详情业务响应无效：code={code}")
+        except Exception as exc:
+            latest_error = exc
+        if attempt < 3:
+            await asyncio.sleep(0.2 * attempt)
+    raise RuntimeError("番茄小说详情请求失败") from latest_error
 
 
 def 标准化番茄书籍比对文本(值: Any) -> str:
@@ -3348,6 +3365,11 @@ async def 异步准备番茄下载数据(
         logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={type(exc).__name__}")
     if not detail and reader_metadata:
         detail = reader_metadata
+    if not detail or not (detail.get("book_name") or detail.get("title")) or not (
+        detail.get("author") or detail.get("author_name")
+    ):
+        logger.warning(f"番茄小说详情不完整：book_id={书籍编号}")
+        raise RuntimeError("番茄小说详情不完整")
 
     metadata = await 异步读取番茄目录元数据(client, str(书籍编号), item_ids)
     catalog = [
