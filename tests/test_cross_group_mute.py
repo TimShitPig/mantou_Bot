@@ -11,17 +11,14 @@ from unittest.mock import patch
 
 
 class 跨群禁言测试(unittest.TestCase):
-    def test_撤回通知首行提示小说联系群主(self) -> None:
-        with patch.object(群管功能, "获取撤回管理员提及", return_value="@管理员"), patch.object(
-            群管功能, "获取撤回发送者提及", return_value="@发送者"
-        ), patch.object(群管功能, "获取撤回发送者名称", return_value="发送者"), patch.object(
-            群管功能, "获取撤回通知内容", return_value="卡片消息"
-        ):
-            文本 = 群管功能.构造撤回通知文本(object(), {}, "", "json")
+    def test_撤回禁言只发送一条发送者提醒(self) -> None:
+        with patch.object(群管功能, "获取撤回发送者提及", return_value="@发送者"):
+            文本 = 群管功能.构造撤回广告提醒(object())
 
-        self.assertTrue(文本.startswith("如果是小说请联系群主\n"))
-        self.assertIn("@管理员 @发送者", 文本)
-        self.assertNotIn("请勿再发送此类消息", 文本)
+        self.assertEqual(
+            文本,
+            "@发送者\n请勿发送此类消息\n如果是小说请联系群主",
+        )
 
     def test_提取QQ官方群openid列表(self) -> None:
         self.assertEqual(
