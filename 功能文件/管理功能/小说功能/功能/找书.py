@@ -460,29 +460,38 @@ def _推断找书搜索类型(评估结果: list[dict[str, Any]], 搜索类型: 
     if 搜索类型 in {"title", "author"}:
         return 搜索类型
     if not 评估结果:
-        return "title"
+        return "auto"
     if any(len(详情["tokens"]) > 1 and 详情["mixed_all"] for 详情 in 评估结果):
         return "mixed"
-    精确书名 = sum(1 for 详情 in 评估结果 if 详情["title"]["tier"] == 6)
-    精确作者 = sum(1 for 详情 in 评估结果 if 详情["author"]["tier"] == 6)
-    if 精确作者 > 精确书名:
-        return "author"
-    if 精确书名 > 0:
-        return "title"
-    if 精确作者 > 0:
-        return "author"
-    书名命中 = [详情 for 详情 in 评估结果 if 详情["title"]["score"] > 0]
-    作者命中 = [详情 for 详情 in 评估结果 if 详情["author"]["score"] > 0]
-    最高书名分 = max((float(详情["title"]["score"]) for 详情 in 书名命中), default=0.0)
-    最高作者分 = max((float(详情["author"]["score"]) for 详情 in 作者命中), default=0.0)
-    if 作者命中 and (len(作者命中) > len(书名命中) or 最高作者分 > 最高书名分):
-        return "author"
-    return "title"
+    # 自动搜索不再先把整批结果强行判定为书名或作者；每本候选单独
+    # 比较书名和作者的命中字数，避免“赵心姚”只能搜作者或“斗破”只能搜书名。
+    return "auto"
 
 
 def _选择主匹配(详情: dict[str, Any], 搜索类型: str) -> dict[str, Any]:
     if 搜索类型 == "author":
         return 详情["author"]
+    if 搜索类型 == "auto":
+        if len(详情["tokens"]) > 1:
+            if not 详情["mixed_all"]:
+                return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
+            总字数 = sum(len(词) for 词 in 详情["tokens"])
+            return {
+                "tier": 7,
+                "score": 12000.0 + float(详情["mixed_score"]),
+                "chars": int(详情["mixed_chars"]),
+                "coverage": min(1.0, int(详情["mixed_chars"]) / max(总字数, 1)),
+                "ratio": 1.0,
+            }
+        return max(
+            (详情["title"], 详情["author"]),
+            key=lambda 匹配: (
+                int(匹配["chars"]),
+                float(匹配["coverage"]),
+                int(匹配["tier"]),
+                float(匹配["score"]),
+            ),
+        )
     if 搜索类型 == "mixed" and len(详情["tokens"]) > 1:
         if not 详情["mixed_all"]:
             return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
@@ -544,6 +553,23 @@ def 排序找书结果(
         作者规范 = 规范标题(项.get("author"))
         共识平台数 = max(1, int(项.get("_source_count") or 1))
         有效作者 = 1 if 作者规范 not in 无效作者名称 else 0
+        if 实际类型 == "auto":
+            # 自动搜索的第一排序依据是实际命中的字符数；番茄等平台
+            # 返回的原始顺序只作为同等匹配结果的稳定兜底。
+            return (
+                int(项.get("_match_chars") or 0),
+                float(项.get("_match_coverage") or 0),
+                int(项.get("_match_tier") or 0),
+                float(项.get("_match_score") or 0),
+                共识平台数,
+                1 if 项.get("目录可用") else 0,
+                _平台优先级值(项.get("platform")),
+                -int(项.get("_platform_rank") or 0),
+                _安全浮点(项.get("score")),
+                平台内相对热度(项),
+                有效作者,
+                -len(标题规范),
+            )
         return (
             int(项.get("_match_tier") or 0),
             int(项.get("_match_chars") or 0),
@@ -1046,6 +1072,10 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
         番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果, 联想词 = await asyncio.gather(
             番茄任务, 七猫任务, 书旗任务, QQ阅读任务, 得间任务, 点众任务, 塔读任务, 联想任务, return_exceptions=False
         )
+        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, 得间结果, 点众结果, 塔读结果):
+            for 排名, 项 in enumerate(平台结果):
+                if isinstance(项, dict):
+                    项.setdefault("_platform_rank", 排名)
         # 先筛掉搜索接口仍会返回、但畅听目录已为空的番茄记录；必须在
         # 跨平台去重前处理，才能让同书的七猫/书旗候选正常补位。
         番茄结果 = await 过滤无目录番茄搜索结果(
@@ -1067,6 +1097,10 @@ async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[
                 t4 = asyncio.create_task(搜索QQ阅读(w, 需要数量=10))
                 t5 = asyncio.create_task(搜索塔读(w, 需要数量=10))
                 r1, r2, r3, r4, r5 = await asyncio.gather(t1, t2, t3, t4, t5)
+                for 平台结果 in (r1, r2, r3, r4, r5):
+                    for 排名, 项 in enumerate(平台结果):
+                        if isinstance(项, dict):
+                            项.setdefault("_platform_rank", 排名)
                 r1 = await 过滤无目录番茄搜索结果(
                     r1,
                     关键词,
