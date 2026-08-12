@@ -56,6 +56,10 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 踢人消息撤回拉取数量 = 100
 广告撤回禁言时长表 = (3 * 60, 10 * 60, 30 * 60, 86400, 30 * 86400)
 数字撤回触发次数: dict[str, int] = {}
+数字撤回处理锁: asyncio.Lock | None = None
+数字撤回处理中: set[str] = set()
+数字撤回完成时间: dict[str, float] = {}
+数字撤回去重缓存秒数 = 120.0
 群管功能模块版本 = "1.24.0"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
@@ -470,30 +474,76 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
     if not 是否需要撤回消息(event, 消息文本):
         logger.debug("撤回检查跳过")
         return False
-    if await 是否发送者为QQ群主或管理员(event):
+    去重键 = await 开始数字撤回去重(event)
+    if 去重键 == "":
         logger.info(
-            "数字撤回跳过：QQ群主/管理员消息不撤回，"
-            f"group_id={获取群号(event)}, user_id={获取发送者QQ(event)}"
+            "数字撤回去重跳过：消息正在处理或已处理，group_id=%s, message_id=%s",
+            获取群号(event),
+            获取当前消息编号(event),
         )
         return False
-    bot = getattr(event, "bot", None)
-    群号 = 获取群号(event)
-    if bot is None or not await QQ官方机器人具备群管权限(bot, 群号):
-        logger.info("撤回跳过：QQ官方机器人不是群管理员，group_id=%s", 群号)
-        return False
-    卡片类型 = 获取卡片撤回类型(event)
-    if 卡片类型:
-        logger.debug(f"卡片撤回规则命中：类型={卡片类型}")
-    撤回成功 = await 尝试撤回当前消息(event)
-    if 撤回成功:
-        await 尝试撤回触发用户最近消息(event)
-        触发次数 = await 记录撤回触发并尝试踢出(event, 配置)
-        if 触发次数:
-            禁言秒数 = 计算广告撤回禁言秒数(触发次数)
-            禁言成功 = await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
-            if 禁言成功:
-                await 发送撤回广告提醒(event)
-    return 撤回成功
+
+    撤回成功 = False
+    try:
+        if await 是否发送者为QQ群主或管理员(event):
+            logger.info(
+                "数字撤回跳过：QQ群主/管理员消息不撤回，"
+                f"group_id={获取群号(event)}, user_id={获取发送者QQ(event)}"
+            )
+            return False
+        bot = getattr(event, "bot", None)
+        群号 = 获取群号(event)
+        if bot is None or not await QQ官方机器人具备群管权限(bot, 群号):
+            logger.info("撤回跳过：QQ官方机器人不是群管理员，group_id=%s", 群号)
+            return False
+        卡片类型 = 获取卡片撤回类型(event)
+        if 卡片类型:
+            logger.debug(f"卡片撤回规则命中：类型={卡片类型}")
+        撤回成功 = await 尝试撤回当前消息(event)
+        if 撤回成功:
+            await 尝试撤回触发用户最近消息(event)
+            触发次数 = await 记录撤回触发并尝试踢出(event, 配置)
+            if 触发次数:
+                禁言秒数 = 计算广告撤回禁言秒数(触发次数)
+                禁言成功 = await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
+                if 禁言成功:
+                    await 发送撤回广告提醒(event)
+        return 撤回成功
+    finally:
+        await 结束数字撤回去重(去重键, 撤回成功)
+
+
+async def 开始数字撤回去重(event: AstrMessageEvent) -> str | None:
+    消息编号 = str(获取当前消息编号(event) or "").strip()
+    if not 消息编号:
+        return None
+    群号 = str(获取群号(event) or "").strip()
+    去重键 = f"{群号}:{消息编号}"
+
+    global 数字撤回处理锁
+    if 数字撤回处理锁 is None:
+        数字撤回处理锁 = asyncio.Lock()
+    当前时间 = time.monotonic()
+    async with 数字撤回处理锁:
+        for 键, 时间戳 in list(数字撤回完成时间.items()):
+            if 当前时间 - 时间戳 >= 数字撤回去重缓存秒数:
+                数字撤回完成时间.pop(键, None)
+        if 去重键 in 数字撤回处理中 or 去重键 in 数字撤回完成时间:
+            return ""
+        数字撤回处理中.add(去重键)
+    return 去重键
+
+
+async def 结束数字撤回去重(去重键: str | None, 成功: bool) -> None:
+    if not 去重键:
+        return
+    global 数字撤回处理锁
+    if 数字撤回处理锁 is None:
+        数字撤回处理锁 = asyncio.Lock()
+    async with 数字撤回处理锁:
+        数字撤回处理中.discard(去重键)
+        if 成功:
+            数字撤回完成时间[去重键] = time.monotonic()
 
 
 def 计算广告撤回禁言秒数(触发次数: int) -> int:
