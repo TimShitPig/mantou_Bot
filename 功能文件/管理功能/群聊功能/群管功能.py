@@ -487,7 +487,6 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
         if 触发次数:
             禁言秒数 = 计算广告撤回禁言秒数(触发次数)
             await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
-            await 发送撤回广告提醒(event)
         await 发送撤回通知(event, 配置, 消息文本, 卡片类型)
     return 撤回成功
 
@@ -572,37 +571,6 @@ async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发�
         return False
 
 
-def 构造撤回广告提醒(event: AstrMessageEvent) -> str:
-    return f"{获取撤回发送者提及(event)} 请勿再发送此类消息"
-
-
-async def 发送撤回广告提醒(event: AstrMessageEvent) -> bool:
-    文本 = 构造撤回广告提醒(event)
-    try:
-        if 是QQ官方机器人(event):
-            from 功能文件.管理功能.基础功能 import 帮助功能
-
-            return bool(await 帮助功能.发送Markdown键盘消息(
-                event,
-                文本,
-                None,
-                主动发送=True,
-                自动提及=False,
-            ))
-        发送方法 = getattr(event, "send", None)
-        if not callable(发送方法):
-            return False
-        发送结果 = 发送方法(event.plain_result(文本))
-        await 等待可能异步结果(发送结果)
-        return True
-    except Exception as exc:
-        logger.warning(
-            "广告撤回提醒发送失败：error_type=%s",
-            type(exc).__name__,
-        )
-        return False
-
-
 def 获取撤回发送者名称(event: AstrMessageEvent) -> str:
     """优先使用 QQ 官方消息中的 author.username，避免额外请求成员资料。"""
     消息对象 = getattr(event, "message_obj", None)
@@ -672,6 +640,22 @@ def 获取撤回发送者提及(event: AstrMessageEvent) -> str:
     return "发送者"
 
 
+def 构造撤回通知文本(
+    event: AstrMessageEvent,
+    配置: Any,
+    消息文本: str,
+    卡片类型: str = "",
+) -> str:
+    发送者名称 = 获取撤回发送者名称(event)
+    撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
+    return (
+        "如果是小说请联系群主\n"
+        f"{获取撤回管理员提及(event, 配置)} {获取撤回发送者提及(event)}\n\n"
+        f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
+        "请查看"
+    )
+
+
 async def 发送撤回通知(
     event: AstrMessageEvent,
     配置: Any,
@@ -689,13 +673,7 @@ async def 发送撤回通知(
             logger.debug("撤回通知限频跳过：group_id=%s", 群号)
             return False
 
-        发送者名称 = 获取撤回发送者名称(event)
-        撤回内容 = 获取撤回通知内容(event, 消息文本, 卡片类型)
-        文本 = (
-            f"{获取撤回管理员提及(event, 配置)} {获取撤回发送者提及(event)}\n\n"
-            f"{发送者名称}发送了「{撤回内容}」消息已撤回\n"
-            "请查看"
-        )
+        文本 = 构造撤回通知文本(event, 配置, 消息文本, 卡片类型)
         try:
             if 是QQ官方机器人(event):
                 from 功能文件.管理功能.基础功能 import 帮助功能
