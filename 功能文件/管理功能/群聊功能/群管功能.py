@@ -97,8 +97,6 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         操作 = str(单用户参数.get("operation") or "add")
         秒数 = 单用户参数.get("seconds")
         成功数量 = 0
-        跨群成功群数 = 0
-        跨群失败群数 = 0
         for 用户 in 目标列表:
             try:
                 if not await 检查群成员存在(bot, 群号, 用户):
@@ -116,15 +114,13 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
                     操作,
                 )
                 成功数量 += 1
-                同步成功数, 同步失败数 = await 同步成员禁言到其它群(
+                await 同步成员禁言到其它群(
                     bot,
                     群号,
                     用户,
                     int(秒数 or 0),
                     操作,
                 )
-                跨群成功群数 += 同步成功数
-                跨群失败群数 += 同步失败数
             except Exception as exc:
                 logger.warning(
                     "成员禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
@@ -140,10 +136,6 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
             动作说明 = f"已解除 {成功数量} 个成员的禁言"
         else:
             动作说明 = 构造成员禁言成功回复(event, 目标列表)
-        if 跨群成功群数:
-            动作说明 += f"\n已同步到其他 {跨群成功群数} 个群"
-        if 跨群失败群数:
-            动作说明 += f"\n有 {跨群失败群数} 个群同步失败"
         return 动作说明
 
 def 踢人功能是否开启(配置: Any = None) -> bool:
