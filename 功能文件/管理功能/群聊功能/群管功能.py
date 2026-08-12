@@ -101,6 +101,13 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         跨群失败群数 = 0
         for 用户 in 目标列表:
             try:
+                if not await 检查群成员存在(bot, 群号, 用户):
+                    logger.info(
+                        "群禁言跳过：目标成员不在群内，group_id=%s, user_id=%s",
+                        群号,
+                        用户,
+                    )
+                    continue
                 await 使用_set_group_ban禁言(
                     bot,
                     群号,
@@ -1307,9 +1314,13 @@ async def 同步成员禁言到其它群(
                 ):
                     logger.info("跨群禁言跳过：QQ官方机器人不是目标群管理员，group_id=%s", 群号)
                     return 0, 0
-                if 是数字ID(群号) and 是数字ID(用户QQ):
-                    if not await 检查群成员存在(bot, 群号, 用户QQ):
-                        return 0, 0
+                if not await 检查群成员存在(bot, 群号, 用户QQ):
+                    logger.info(
+                        "跨群禁言跳过：目标成员不在群内，group_id=%s, user_id=%s",
+                        群号,
+                        用户QQ,
+                    )
+                    return 0, 0
                 await 使用_set_group_ban禁言(bot, 群号, 用户QQ, 秒数, 操作)
                 logger.info(
                     "跨群禁言成功：group_id=%s, user_id=%s, operation=%s",
@@ -1349,8 +1360,14 @@ async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
                 if 响应:
                     数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
                     if isinstance(数据, dict):
-                        返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id")
-                        if str(返回用户 or 用户QQ).strip() == str(用户QQ):
+                        返回用户 = (
+                            数据.get("user_id")
+                            or 数据.get("qq")
+                            or 数据.get("id")
+                            or 数据.get("user_openid")
+                            or 数据.get("member_openid")
+                        )
+                        if 返回用户 is not None and str(返回用户).strip() == str(用户QQ):
                             return True
             except Exception:
                 pass
@@ -1359,8 +1376,14 @@ async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
             if 响应:
                 数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
                 if isinstance(数据, dict):
-                    返回用户 = 数据.get("user_id") or 数据.get("qq") or 数据.get("id") or 数据.get("user_openid")
-                    if str(返回用户 or 用户QQ).strip() == str(用户QQ):
+                    返回用户 = (
+                        数据.get("user_id")
+                        or 数据.get("qq")
+                        or 数据.get("id")
+                        or 数据.get("user_openid")
+                        or 数据.get("member_openid")
+                    )
+                    if 返回用户 is not None and str(返回用户).strip() == str(用户QQ):
                         return True
         except Exception:
             pass
