@@ -134,13 +134,11 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
                     type(exc).__name__,
                 )
 
+        if 操作 == "del":
+            return None
         if 成功数量 != len(目标列表):
             return "成员禁言失败，请稍后再试"
-        if 操作 == "del":
-            动作说明 = f"已解除 {成功数量} 个成员的禁言"
-        else:
-            动作说明 = 构造成员禁言成功回复(event, 目标列表)
-        return 动作说明
+        return 构造成员禁言成功回复(event, 目标列表)
 
 def 踢人功能是否开启(配置: Any = None) -> bool:
     return False
