@@ -563,8 +563,8 @@ def 排序找书结果(
                 float(项.get("_match_score") or 0),
                 共识平台数,
                 1 if 项.get("目录可用") else 0,
+                _平台原始排序信号(项),
                 _平台优先级值(项.get("platform")),
-                -int(项.get("_platform_rank") or 0),
                 _安全浮点(项.get("score")),
                 平台内相对热度(项),
                 有效作者,
@@ -577,6 +577,7 @@ def 排序找书结果(
             float(项.get("_match_score") or 0),
             共识平台数,
             1 if 项.get("目录可用") else 0,
+            _平台原始排序信号(项),
             _安全浮点(项.get("score")),
             平台内相对热度(项),
             _平台优先级值(项.get("platform")),
@@ -976,6 +977,12 @@ async def 过滤章节单独付费QQ阅读搜索结果(
 def _平台优先级值(平台: Any) -> int:
     """下载速度优先：番茄 > 七猫 > QQ阅读 > 书旗 > 得间 > 点众 > 塔读。"""
     return {"番茄": 7, "七猫": 6, "QQ阅读": 5, "书旗": 4, "得间": 3, "点众": 2, "塔读": 1}.get(str(平台 or ""), 0)
+
+
+def _平台原始排序信号(项: dict[str, Any]) -> float:
+    """保留各平台搜索接口的原始位次，作为相关性之后的弱排序信号。"""
+    位次 = max(0, int(项.get("_platform_rank") or 0))
+    return 1.0 / (位次 + 1.0)
 
 
 def _书籍优劣键(项: dict[str, Any]) -> tuple:
