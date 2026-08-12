@@ -1065,18 +1065,17 @@ def 包含卡片标记(值: Any) -> bool:
 
 
 def 获取消息文本(event: AstrMessageEvent) -> str:
+    候选文本: list[str] = []
     事件文本 = 清理可见文本(str(getattr(event, "message_str", "") or ""))
     if 事件文本:
-        return 事件文本
-
+        候选文本.append(事件文本)
     消息对象 = getattr(event, "message_obj", None)
-    候选文本 = []
-    for 对象 in (消息对象,):
+    for 对象 in (event, 消息对象):
         if 对象 is None:
             continue
-        for 字段名 in ("message",):
+        for 字段名 in ("message", "content"):
             文本 = 转成文本(读取字段(对象, 字段名))
-            if 文本:
+            if 文本 and 文本 not in 候选文本:
                 候选文本.append(文本)
 
     for 文本 in 候选文本:
