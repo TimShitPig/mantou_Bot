@@ -608,6 +608,7 @@ async def 创建得间正文地址预取任务表(
     HTTP会话: aiohttp.ClientSession,
     书籍编号: str,
     章节编号列表: List[int],
+    批量清单: Optional[Dict[str, Any]] = None,
 ) -> Dict[int, asyncio.Task]:
     目标集合 = {_to_int(章节编号) for 章节编号 in 章节编号列表}
     目标集合.discard(0)
@@ -617,11 +618,13 @@ async def 创建得间正文地址预取任务表(
 
     窗口信号量 = asyncio.Semaphore(计算得间目录并发数(len(目标章节)))
     目录客户端 = 得间单章异步客户端(HTTP会话, 窗口信号量)
-    try:
-        基础地址 = str((await 目录客户端.获取批量下载清单(书籍编号)).get("downUrl") or "").strip()
-    except Exception as 异常:
-        logger.debug(f"得间正文地址预取失败：book_id={书籍编号}, error={type(异常).__name__}")
-        return {}
+    if 批量清单 is None:
+        try:
+            批量清单 = await 目录客户端.获取批量下载清单(书籍编号)
+        except Exception as 异常:
+            logger.debug(f"得间正文地址预取失败：book_id={书籍编号}, error={type(异常).__name__}")
+            return {}
+    基础地址 = str(批量清单.get("downUrl") or "").strip()
     if not 基础地址:
         return {}
 
@@ -853,6 +856,22 @@ async def 异步获取得间书籍详情(
     return 解析得间书籍详情(data, bid)
 
 
+async def 异步获取得间批量下载清单(
+    HTTP会话: aiohttp.ClientSession,
+    bid: str,
+) -> Dict[str, Any]:
+    """下载前读取实际可访问章节范围，避免把购买章节当作网络失败反复重试。"""
+    try:
+        客户端 = 得间单章异步客户端(HTTP会话, asyncio.Semaphore(2))
+        return await 客户端.获取批量下载清单(bid)
+    except Exception as 异常:
+        logger.debug(
+            f"得间可下载章节范围获取失败：book_id={bid}, "
+            f"error={type(异常).__name__}"
+        )
+        return {}
+
+
 def 解析得间章节目录(xml_text: str) -> Dict[str, Any]:
     if not xml_text or "<cp>" not in xml_text:
         return {"success": False, "count": 0, "chapters": [], "raw": xml_text}
@@ -926,6 +945,25 @@ def 计算得间单章并发数(章节总数: int) -> int:
     return max(1, min(得间单章最大并发数, int(章节总数 or 0)))
 
 
+def 得间存在未购买章节(目录: list[dict[str, Any]], 批量清单: Dict[str, Any]) -> bool:
+    """根据 App 清单判断整本是否含当前会话不可访问的章节。"""
+    if not 批量清单 or not 目录:
+        return False
+    总章节数 = len(目录)
+    可下载章节数 = _to_int(批量清单.get("downloadCount"))
+    最大可下载章节号 = _to_int(批量清单.get("maxChapId"))
+    目录章节号 = [
+        _to_int(章节.get("id") or 章节.get("chapter_id"))
+        for 章节 in 目录
+    ]
+    有效章节号 = [章节号 for 章节号 in 目录章节号 if 章节号 > 0]
+    if 可下载章节数 > 0 and 可下载章节数 < 总章节数:
+        return True
+    if 最大可下载章节号 > 0 and 有效章节号:
+        return 最大可下载章节号 < max(有效章节号)
+    return False
+
+
 def 获取得间小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
     来源 = 提取直接得间来源(命令文本) or 提取事件得间来源(event)
     if 来源 is None:
@@ -940,9 +978,10 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         return
     try:
         async with 创建得间HTTP会话(2) as HTTP会话:
-            详情包, 目录包 = await asyncio.gather(
+            详情包, 目录包, 批量清单 = await asyncio.gather(
                 异步获取得间书籍详情(HTTP会话, 书籍编号),
                 异步获取得间章节目录(HTTP会话, 书籍编号),
+                异步获取得间批量下载清单(HTTP会话, 书籍编号),
             )
         if not 详情包.get("success"):
             logger.warning(f"得间小说详情失败：book_id={书籍编号}")
@@ -953,6 +992,15 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         if not 目录:
             logger.warning(f"得间小说目录失败：book_id={书籍编号}")
             yield "下载失败"
+            return
+
+        if 得间存在未购买章节(目录, 批量清单):
+            可下载章节数 = _to_int(批量清单.get("downloadCount"))
+            logger.warning(
+                f"得间小说包含未购买章节：book_id={书籍编号}, "
+                f"available={可下载章节数}, total={len(目录)}"
+            )
+            yield "该书包含未购买章节，暂不支持下载"
             return
 
         书名 = str(详情.get("title") or "未知")
@@ -970,7 +1018,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             "正在下载中请稍等.....",
         ])
 
-        章节结果 = await 下载全部章节(书籍编号, 目录)
+        章节结果 = await 下载全部章节(书籍编号, 目录, 批量清单=批量清单)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
@@ -998,7 +1046,12 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         yield "下载失败"
 
 
-async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, str]]:
+async def 下载全部章节(
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+    *,
+    批量清单: Optional[Dict[str, Any]] = None,
+) -> list[dict[str, str]]:
     总数 = len(目录)
     结果: list[dict[str, str] | None] = [None] * 总数
     章节下标表: Dict[int, List[int]] = {}
@@ -1032,6 +1085,7 @@ async def 下载全部章节(书籍编号: str, 目录: list[dict[str, Any]]) ->
             HTTP会话,
             书籍编号,
             list(章节下标表),
+            批量清单,
         )
 
         async def 下载一章(章节编号: int, 下标列表: List[int]) -> None:
