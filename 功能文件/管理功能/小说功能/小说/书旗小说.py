@@ -865,6 +865,7 @@ def 提取书旗链接(值: Any) -> str:
     模式列表 = (
         r"https?://d\.shuqi\.com/[^\s'\"<>，。]*",
         r"https?://(?:www\.)?shuqi\.com/book/\d+\.html[^\s'\"<>，。]*",
+        r"https?://t\.shuqi\.com/book/\d+/?[^\s'\"<>，。]*",
         r"https?://t\.shuqi\.com/(?:catalog|cover)/\d+/?[^\s'\"<>，。]*",
         r"https?://t\.shuqi\.com/shortNovel/reader/\d+/?[^\s'\"<>，。]*",
     )
