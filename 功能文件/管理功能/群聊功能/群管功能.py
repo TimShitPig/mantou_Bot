@@ -30,8 +30,12 @@ from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
 )
 from 功能文件.管理功能.群聊功能.群列表工具 import (
+    删除官方群成员映射,
+    获取官方群成员标识,
+    获取官方群用户标识,
     获取机器人所在群号列表,
     记录机器人所在群号,
+    记录官方群成员映射,
 )
 
 
@@ -60,7 +64,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 数字撤回处理中: set[str] = set()
 数字撤回完成时间: dict[str, float] = {}
 数字撤回去重缓存秒数 = 120.0
-群管功能模块版本 = "1.24.0"
+群管功能模块版本 = "1.25.0"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 QQ官方机器人权限缓存秒数 = 30.0
@@ -585,9 +589,88 @@ def 获取撤回发送者标识(event: AstrMessageEvent) -> str:
     return ""
 
 
+def 获取撤回发送者统一标识(event: AstrMessageEvent) -> str:
+    """读取可跨 QQ 官方群复用的 user_openid，OneBot 场景返回 QQ 号。"""
+    官方 = 是QQ官方机器人(event)
+    消息对象 = getattr(event, "message_obj", None)
+    对象列表 = (event, 消息对象)
+    if 官方:
+        标识字段 = ("user_openid", "openid")
+    else:
+        标识字段 = ("user_id", "qq", "openid")
+    for 对象 in 对象列表:
+        if 对象 is None:
+            continue
+        for 字段名 in ("sender", "author", "member", "user"):
+            发送者 = 读取字段(对象, 字段名)
+            for 标识字段名 in 标识字段:
+                标识 = 规范化用户编号(读取字段(发送者, 标识字段名))
+                if 标识:
+                    return 标识
+        for 标识字段名 in 标识字段:
+            标识 = 规范化用户编号(读取字段(对象, 标识字段名))
+            if 标识:
+                return 标识
+    return ""
+
+
+def 记录当前群成员映射(event: AstrMessageEvent, 群号: str) -> None:
+    """从当前官方群消息记录 user_openid 与本群 member_openid。"""
+    群号文本 = str(群号 or "").strip()
+    if not 群号文本 or 是数字ID(群号文本):
+        return
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        if 对象 is None:
+            continue
+        候选对象 = [对象]
+        for 字段名 in ("sender", "author", "member", "user"):
+            候选对象.append(读取字段(对象, 字段名))
+        for 候选 in 候选对象:
+            if 候选 is None:
+                continue
+            成员 = 规范化用户编号(读取字段(候选, "member_openid"))
+            用户 = 规范化用户编号(
+                读取字段(候选, "user_openid") or 读取字段(候选, "openid")
+            )
+            if 成员 and 用户:
+                记录官方群成员映射(群号文本, 用户, 成员)
+                break
+        for 字段名 in ("message", "components", "content", "raw_message"):
+            记录消息段成员映射(读取字段(对象, 字段名), 群号文本)
+
+
+def 记录消息段成员映射(消息: Any, 群号: str) -> None:
+    if 消息 is None or not 群号:
+        return
+    if isinstance(消息, (list, tuple, set)):
+        for 消息段 in 消息:
+            记录消息段成员映射(消息段, 群号)
+        return
+    if isinstance(消息, dict):
+        数据 = 消息.get("data") if isinstance(消息.get("data"), dict) else 消息
+        成员 = 规范化用户编号(数据.get("member_openid"))
+        用户 = 规范化用户编号(
+            数据.get("user_openid") or 数据.get("openid")
+        )
+        if 成员 and 用户:
+            记录官方群成员映射(群号, 用户, 成员)
+        for 子值 in 消息.values():
+            if isinstance(子值, (dict, list, tuple, set)):
+                记录消息段成员映射(子值, 群号)
+        return
+    成员 = 规范化用户编号(getattr(消息, "member_openid", None))
+    用户 = 规范化用户编号(
+        getattr(消息, "user_openid", None) or getattr(消息, "openid", None)
+    )
+    if 成员 and 用户:
+        记录官方群成员映射(群号, 用户, 成员)
+
+
 async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发次数: int) -> bool:
     群号 = 获取群号(event)
     用户标识 = 获取撤回发送者标识(event)
+    跨群用户标识 = 获取撤回发送者统一标识(event)
     bot = getattr(event, "bot", None)
     if not 群号 or not 用户标识 or bot is None:
         logger.warning(
@@ -603,6 +686,7 @@ async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发�
             用户标识,
             秒数,
             "add",
+            跨群用户标识=跨群用户标识,
         )
         logger.info(
             "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s, "
@@ -870,7 +954,7 @@ async def QQ官方机器人具备群管权限(
             允许 = 角色 in {"owner", "admin"}
         except Exception as exc:
             允许 = False
-            logger.warning(
+            logger.debug(
                 "QQ官方机器人群权限获取失败：group_id=%s, error_type=%s",
                 群号文本,
                 type(exc).__name__,
@@ -878,7 +962,7 @@ async def QQ官方机器人具备群管权限(
             角色 = "unknown"
         QQ官方机器人权限缓存[缓存键] = (time.monotonic(), 允许)
         if not 允许:
-            logger.info(
+            logger.debug(
                 "QQ官方机器人群管权限不足：group_id=%s, member_role=%s",
                 群号文本,
                 角色,
@@ -1323,6 +1407,7 @@ async def 同步成员禁言到其它群(
     用户QQ: str,
     秒数: int,
     操作: str,
+    跨群用户标识: str = "",
 ) -> tuple[int, int]:
     """把当前群的成员禁言/解禁同步到机器人所在的其它群。"""
     try:
@@ -1345,50 +1430,49 @@ async def 同步成员禁言到其它群(
     if not 其它群列表:
         return 0, 0
 
+    稳定用户标识 = 规范化用户编号(跨群用户标识)
+    if not 稳定用户标识 and not 是数字ID(当前群号):
+        稳定用户标识 = 获取官方群用户标识(当前群号, 用户QQ)
+
     信号量 = asyncio.Semaphore(8)
 
     async def 同步单群(群号: str) -> tuple[int, int]:
         async with 信号量:
             try:
+                目标用户标识 = 用户QQ
+                if 是数字ID(群号):
+                    if not await 检查群成员存在(bot, 群号, 用户QQ):
+                        return 0, 0
+                else:
+                    if not 稳定用户标识:
+                        return 0, 0
+                    目标用户标识 = 获取官方群成员标识(群号, 稳定用户标识)
+                    if not 目标用户标识:
+                        return 0, 0
+
                 if not await QQ官方机器人具备群管权限(
                     bot,
                     群号,
-                    未缓存时允许=True,
+                    未缓存时允许=False,
                 ):
-                    logger.info("跨群禁言跳过：QQ官方机器人不是目标群管理员，group_id=%s", 群号)
                     return 0, 0
-                if 是数字ID(群号) and not await 检查群成员存在(bot, 群号, 用户QQ):
-                    logger.info(
-                        "跨群禁言跳过：目标成员不在群内，group_id=%s, user_id=%s",
-                        群号,
-                        用户QQ,
-                    )
-                    return 0, 0
-                await 使用_set_group_ban禁言(bot, 群号, 用户QQ, 秒数, 操作)
+                await 使用_set_group_ban禁言(bot, 群号, 目标用户标识, 秒数, 操作)
                 logger.info(
                     "跨群禁言成功：group_id=%s, user_id=%s, operation=%s",
                     群号,
-                    用户QQ,
+                    目标用户标识,
                     操作,
                 )
                 return 1, 0
             except Exception as exc:
                 if not 是数字ID(群号):
-                    logger.info(
-                        "跨群禁言跳过：QQ官方接口未接受目标成员，group_id=%s, user_id=%s, operation=%s, error_type=%s",
-                        群号,
-                        用户QQ,
-                        操作,
-                        type(exc).__name__,
-                    )
-                else:
-                    logger.warning(
-                        "跨群禁言失败：group_id=%s, user_id=%s, operation=%s, error_type=%s",
-                        群号,
-                        用户QQ,
-                        操作,
-                        type(exc).__name__,
-                    )
+                    删除官方群成员映射(群号, 稳定用户标识)
+                logger.debug(
+                    "跨群禁言请求未完成：group_id=%s, operation=%s, error_type=%s",
+                    群号,
+                    操作,
+                    type(exc).__name__,
+                )
                 return 0, 1
 
     结果 = await asyncio.gather(*(同步单群(群号) for 群号 in 其它群列表))
@@ -1467,13 +1551,24 @@ def 获取当前消息编号(event: AstrMessageEvent) -> Any:
 
 
 def 获取群号(event: AstrMessageEvent) -> str:
-    for 方法名 in ("get_group_id", "get_group", "get_group_openid"):
-        方法 = getattr(event, 方法名, None)
-        if callable(方法):
+    方法 = getattr(event, "get_group_id", None)
+    if callable(方法):
+        try:
             值 = 方法()
-            if 值:
-                群号 = str(值)
+        except Exception:
+            值 = None
+        if inspect.isawaitable(值):
+            if inspect.iscoroutine(值):
+                try:
+                    值.close()
+                except Exception:
+                    pass
+            值 = None
+        if 值:
+            群号 = 提取安全群号(值)
+            if 群号:
                 记录机器人所在群号(群号)
+                记录当前群成员映射(event, 群号)
                 return 群号
 
     消息对象 = getattr(event, "message_obj", None)
@@ -1481,11 +1576,30 @@ def 获取群号(event: AstrMessageEvent) -> str:
         值 = 读取字段(对象, "group_openid") or 读取字段(对象, "group_id") or 读取字段(对象, "group")
         if isinstance(值, dict):
             值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
-        if 值:
-            群号 = str(值)
+        群号 = 提取安全群号(值)
+        if 群号:
             记录机器人所在群号(群号)
+            记录当前群成员映射(event, 群号)
             return 群号
     return ""
+
+
+def 提取安全群号(值: Any) -> str:
+    if inspect.isawaitable(值):
+        if inspect.iscoroutine(值):
+            try:
+                值.close()
+            except Exception:
+                pass
+        return ""
+    if callable(值):
+        return ""
+    文本 = str(值 or "").strip()
+    if not 文本 or "coroutine object" in 文本.lower() or "generator object" in 文本.lower():
+        return ""
+    if re.search(r"<[^>]+ object at 0x[0-9a-f]+>", 文本, re.IGNORECASE):
+        return ""
+    return 文本
 
 
 def 获取发送者QQ(event: AstrMessageEvent) -> str:
@@ -1870,16 +1984,13 @@ async def 使用_set_group_ban禁言(
     是否数字 = bool(管理员QQ规则.fullmatch(群号文本) and 管理员QQ规则.fullmatch(用户文本))
 
     if not 是否数字:
-        try:
-            return await 使用QQ官方成员禁言接口(
-                bot,
-                群号文本,
-                用户文本,
-                秒数,
-                操作,
-            )
-        except Exception:
-            pass
+        return await 使用QQ官方成员禁言接口(
+            bot,
+            群号文本,
+            用户文本,
+            秒数,
+            操作,
+        )
 
     群号值: Any = int(群号文本) if 是否数字 else 群号文本
     用户值: Any = int(用户文本) if 是否数字 else 用户文本

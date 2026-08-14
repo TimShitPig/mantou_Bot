@@ -470,6 +470,18 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
         )
         return
 
+    if 用户:
+        try:
+            from 功能文件.管理功能.群聊功能.群列表工具 import 记录机器人所在群号, 记录官方群成员映射
+
+            记录机器人所在群号(群号)
+            记录官方群成员映射(群号, 用户, 成员)
+        except Exception as 异常:
+            logger.debug(
+                "QQ官方群成员映射记录跳过：error_type=%s",
+                type(异常).__name__,
+            )
+
     时间戳 = str(事件数据.get("timestamp") or "")
     事件编号 = str(事件数据.get("_mantou_event_id") or "").strip()
     消息编号 = 事件编号 or f"group-member-add:{时间戳}:{成员}"
