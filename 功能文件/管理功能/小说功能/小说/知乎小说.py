@@ -889,8 +889,6 @@ async def _准备知乎分享章节书籍(session: aiohttp.ClientSession, 来源
         "chapters": [{"id": 起始章节编号, "title": 分享章节标题}],
         "column_id": 业务编号,
         "section_id": 起始章节编号,
-        "share_section_title": 分享章节标题,
-        "download_scope": "当前分享内容",
         "declared_total": 1,
         "catalog_source": "share_section",
     }
@@ -952,11 +950,11 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 f"chapters={len(目录)}, declared_total={书籍.get('declared_total')}, "
                 f"catalog_source={书籍.get('catalog_source') or 'catalog'}"
             )
-            yield 格式化下载提示(书籍)
             书籍 = await _下载知乎分享章节(session, 来源, 书籍)
             章节 = list(书籍.get("chapters") or [])
             if len(章节) != len(目录) or any(not 项目.get("content") for 项目 in 章节):
                 raise RuntimeError("知乎章节正文不完整")
+            yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
                 f"知乎小说章节下载完成：business_id={书籍.get('column_id')}, "
@@ -1009,15 +1007,6 @@ def 生成小说文件内容(书籍: dict[str, Any]) -> tuple[str, bytes]:
         f"章节数：{len(章节)}",
         "",
     ]
-    分享章节标题 = str(书籍.get("share_section_title") or "").strip()
-    下载范围 = str(书籍.get("download_scope") or "").strip()
-    元数据行: list[str] = []
-    if 分享章节标题 and 分享章节标题 != 书名:
-        元数据行.append(f"分享章节：{分享章节标题}")
-    if 下载范围:
-        元数据行.append(f"下载范围：{下载范围}")
-    if 元数据行:
-        行列表[8:8] = 元数据行
     简介 = str(书籍.get("intro") or "").strip()
     if 简介:
         行列表.extend(["简介：", 简介, ""])
@@ -1039,21 +1028,13 @@ def 生成小说文件名(书籍: dict[str, Any]) -> str:
 def 格式化下载提示(书籍: dict[str, Any]) -> str:
     行列表 = [
         f"书名：{书籍.get('title') or '未知'}",
-    ]
-    分享章节标题 = str(书籍.get("share_section_title") or "").strip()
-    下载范围 = str(书籍.get("download_scope") or "").strip()
-    if 分享章节标题 and 分享章节标题 != str(书籍.get("title") or "").strip():
-        行列表.append(f"分享章节：{分享章节标题}")
-    if 下载范围:
-        行列表.append(f"下载范围：{下载范围}")
-    行列表.extend([
         f"作者：{书籍.get('author') or '未知'}",
         f"状态：{书籍.get('status') or '完结'}",
         f"章节：{len(书籍.get('chapters') or [])} 章",
         f"字数：{格式化字数(书籍.get('word_count'))}",
         "",
         "正在下载中请稍等.....",
-    ])
+    ]
     return "\n".join(行列表)
 
 
@@ -1061,9 +1042,7 @@ def 格式化字数(值: Any) -> str:
     数值 = 解析字数(值)
     if 数值 <= 0:
         return "未知"
-    if 数值 >= 10000:
-        return f"{数值 / 10000:.1f}".rstrip("0").rstrip(".") + "万字"
-    return f"{数值}字"
+    return f"{数值:,}字"
 
 
 async def 准备发送文本文件(
