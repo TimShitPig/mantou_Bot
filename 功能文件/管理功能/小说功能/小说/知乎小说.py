@@ -874,35 +874,48 @@ async def 下载知乎全部章节(
     return [项目 for 项目 in 结果列表 if 项目 is not None]
 
 
-async def _准备知乎书籍(session: aiohttp.ClientSession, 来源: str) -> dict[str, Any]:
+async def _准备知乎分享章节书籍(session: aiohttp.ClientSession, 来源: str) -> dict[str, Any]:
     业务编号, 起始章节编号 = 解析知乎编号(来源)
     if not 业务编号 or not 起始章节编号:
         raise RuntimeError("知乎链接参数不完整")
-    目录数据 = await 获取知乎目录(session, 业务编号, 起始章节编号)
-    目录 = 目录数据.get("chapters") or []
-    if not 目录:
-        raise RuntimeError("知乎目录为空")
-    分享章节标题 = next(
-        (
-            清理正文(章节.get("title"))
-            for 章节 in 目录
-            if str(章节.get("id") or "").strip() == str(起始章节编号)
-        ),
-        "",
-    )
+    详情 = await _请求知乎章节详情(session, 业务编号, 起始章节编号)
+    分享章节标题 = 清理正文(详情.get("title")) or "知乎章节"
     return {
-        "title": 目录数据.get("title") or "知乎专栏",
-        "author": 目录数据.get("author") or "未知",
-        "intro": 目录数据.get("intro") or "",
-        "status": "完结" if 目录数据.get("complete") else "连载",
-        "word_count": int(目录数据.get("word_count") or 0),
-        "chapters": 目录,
+        "title": 分享章节标题,
+        "author": 详情.get("author") or "未知",
+        "intro": 详情.get("intro") or "",
+        "status": "完结",
+        "word_count": 0,
+        "chapters": [{"id": 起始章节编号, "title": 分享章节标题}],
         "column_id": 业务编号,
         "section_id": 起始章节编号,
         "share_section_title": 分享章节标题,
-        "declared_total": 目录数据.get("declared_total") or len(目录),
-        "catalog_source": 目录数据.get("source") or "catalog",
+        "download_scope": "当前分享内容",
+        "declared_total": 1,
+        "catalog_source": "share_section",
     }
+
+
+async def _下载知乎分享章节(
+    session: aiohttp.ClientSession,
+    来源: str,
+    书籍: dict[str, Any],
+) -> dict[str, Any]:
+    章节目录 = list(书籍.get("chapters") or [])
+    if len(章节目录) != 1:
+        raise RuntimeError("知乎分享章节数量异常")
+    章节 = await _获取单章正文(
+        session,
+        来源,
+        str(书籍.get("column_id") or ""),
+        章节目录[0],
+    )
+    if not str(章节.get("content") or "").strip():
+        raise RuntimeError("知乎分享章节正文为空")
+    书籍["title"] = str(章节.get("title") or 书籍.get("title") or "知乎章节")
+    书籍["chapters"] = [章节]
+    书籍["word_count"] = len(re.sub(r"\s+", "", str(章节.get("content") or "")))
+    return 书籍
 
 
 def _创建知乎会话() -> aiohttp.ClientSession:
@@ -917,21 +930,8 @@ def _创建知乎会话() -> aiohttp.ClientSession:
 
 async def 获取知乎正文(来源: str) -> dict[str, Any]:
     async with _创建知乎会话() as session:
-        书籍 = await _准备知乎书籍(session, 来源)
-        章节正文 = await 下载知乎全部章节(
-            session,
-            来源,
-            str(书籍["column_id"]),
-            list(书籍["chapters"]),
-        )
-        if len(章节正文) != len(书籍["chapters"]) or any(not 项目.get("content") for 项目 in 章节正文):
-            raise RuntimeError("知乎章节正文不完整")
-        书籍["chapters"] = 章节正文
-        书籍["word_count"] = sum(
-            len(re.sub(r"\s+", "", str(项目.get("content") or "")))
-            for 项目 in 章节正文
-        )
-        return 书籍
+        书籍 = await _准备知乎分享章节书籍(session, 来源)
+        return await _下载知乎分享章节(session, 来源, 书籍)
 
 
 def 获取知乎小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
@@ -944,7 +944,7 @@ def 获取知乎小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[str]:
     try:
         async with _创建知乎会话() as session:
-            书籍 = await _准备知乎书籍(session, 来源)
+            书籍 = await _准备知乎分享章节书籍(session, 来源)
             目录 = list(书籍.get("chapters") or [])
             logger.info(
                 f"知乎小说开始下载：business_id={书籍.get('column_id')}, "
@@ -953,19 +953,10 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 f"catalog_source={书籍.get('catalog_source') or 'catalog'}"
             )
             yield 格式化下载提示(书籍)
-            章节 = await 下载知乎全部章节(
-                session,
-                来源,
-                str(书籍.get("column_id") or ""),
-                目录,
-            )
+            书籍 = await _下载知乎分享章节(session, 来源, 书籍)
+            章节 = list(书籍.get("chapters") or [])
             if len(章节) != len(目录) or any(not 项目.get("content") for 项目 in 章节):
                 raise RuntimeError("知乎章节正文不完整")
-            书籍["chapters"] = 章节
-            书籍["word_count"] = sum(
-                len(re.sub(r"\s+", "", str(项目.get("content") or "")))
-                for 项目 in 章节
-            )
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
                 f"知乎小说章节下载完成：business_id={书籍.get('column_id')}, "
@@ -1019,8 +1010,14 @@ def 生成小说文件内容(书籍: dict[str, Any]) -> tuple[str, bytes]:
         "",
     ]
     分享章节标题 = str(书籍.get("share_section_title") or "").strip()
-    if 分享章节标题:
-        行列表[8:8] = [f"分享章节：{分享章节标题}", "下载范围：整本专栏"]
+    下载范围 = str(书籍.get("download_scope") or "").strip()
+    元数据行: list[str] = []
+    if 分享章节标题 and 分享章节标题 != 书名:
+        元数据行.append(f"分享章节：{分享章节标题}")
+    if 下载范围:
+        元数据行.append(f"下载范围：{下载范围}")
+    if 元数据行:
+        行列表[8:8] = 元数据行
     简介 = str(书籍.get("intro") or "").strip()
     if 简介:
         行列表.extend(["简介：", 简介, ""])
@@ -1044,8 +1041,11 @@ def 格式化下载提示(书籍: dict[str, Any]) -> str:
         f"书名：{书籍.get('title') or '未知'}",
     ]
     分享章节标题 = str(书籍.get("share_section_title") or "").strip()
-    if 分享章节标题:
-        行列表.extend([f"分享章节：{分享章节标题}", "下载范围：整本专栏"])
+    下载范围 = str(书籍.get("download_scope") or "").strip()
+    if 分享章节标题 and 分享章节标题 != str(书籍.get("title") or "").strip():
+        行列表.append(f"分享章节：{分享章节标题}")
+    if 下载范围:
+        行列表.append(f"下载范围：{下载范围}")
     行列表.extend([
         f"作者：{书籍.get('author') or '未知'}",
         f"状态：{书籍.get('status') or '完结'}",
