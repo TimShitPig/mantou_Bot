@@ -656,11 +656,46 @@ def 解析知乎章节正文(原始: bytes, 默认标题: str = "") -> dict[str,
         正文 = 清理正文(根对象)
     if len(正文) < 2:
         raise RuntimeError("知乎章节正文为空")
-    标题 = 清理正文(_字段值(根对象, 标题键))
-    if 标题 in {"链接查阅", "文章详情", "知乎文章"}:
-        标题 = ""
-    标题 = 标题 or 清理正文(默认标题) or "知乎章节"
-    return {"title": 标题, "content": 正文}
+    来源标题 = 清理正文(_字段值(根对象, 标题键))
+    if 来源标题 in {"链接查阅", "文章详情", "知乎文章"}:
+        来源标题 = ""
+    标题 = 来源标题 or 清理正文(默认标题) or "知乎章节"
+    return {"title": 标题, "content": 正文, "source_title": 来源标题}
+
+
+def _规范知乎章节标题(值: Any) -> str:
+    """用于校验正文来源标题，忽略空白和常见标题分隔符。"""
+    文本 = 清理正文(值)
+    return re.sub(r"[\s\W_]+", "", 文本, flags=re.UNICODE).lower()
+
+
+def _知乎章节标题候选(值: Any) -> set[str]:
+    标题 = _规范知乎章节标题(值)
+    if not 标题:
+        return set()
+    候选 = {标题}
+    去序号 = re.sub(r"^(?:第)?\d+(?:章|节|篇)?", "", 标题)
+    if 去序号:
+        候选.add(去序号)
+    return 候选
+
+
+def 知乎章节标题一致(期望标题: Any, 来源标题: Any) -> bool:
+    """判断提取结果显式标题是否仍指向目录中的同一章节。"""
+    期望候选 = _知乎章节标题候选(期望标题)
+    来源候选 = _知乎章节标题候选(来源标题)
+    return bool(期望候选 and 来源候选 and 期望候选 & 来源候选)
+
+
+def _校验并固定知乎章节标题(结果: dict[str, str], 章节标题: str) -> dict[str, str]:
+    """拒绝标题明确错配的正文，并始终使用官方目录标题写入 TXT。"""
+    来源标题 = 清理正文(结果.pop("source_title", ""))
+    目录标题 = 清理正文(章节标题)
+    if 来源标题 and 目录标题 and not 知乎章节标题一致(目录标题, 来源标题):
+        raise RuntimeError("知乎章节正文标题不匹配")
+    if 目录标题:
+        结果["title"] = 目录标题
+    return 结果
 
 
 async def _请求外部提取(session: aiohttp.ClientSession, 业务编号: str, 章节编号: str) -> bytes:
@@ -734,7 +769,10 @@ async def _获取单章正文(
     for 尝试次数 in range(正文重试次数):
         try:
             原始 = await _请求外部提取(session, 业务编号, 章节编号)
-            结果 = 解析知乎章节正文(原始, 章节标题)
+            结果 = _校验并固定知乎章节标题(
+                解析知乎章节正文(原始, 章节标题),
+                章节标题,
+            )
             结果["section_id"] = 章节编号
             return 结果
         except Exception as exc:
@@ -749,7 +787,10 @@ async def _获取单章正文(
     try:
         章节来源 = _构造知乎章节来源(来源, 业务编号, 章节编号)
         原始 = await _本地恢复(章节来源)
-        结果 = 解析知乎章节正文(原始, 章节标题)
+        结果 = _校验并固定知乎章节标题(
+            解析知乎章节正文(原始, 章节标题),
+            章节标题,
+        )
         结果["section_id"] = 章节编号
         return 结果
     except Exception as exc:
@@ -841,6 +882,14 @@ async def _准备知乎书籍(session: aiohttp.ClientSession, 来源: str) -> di
     目录 = 目录数据.get("chapters") or []
     if not 目录:
         raise RuntimeError("知乎目录为空")
+    分享章节标题 = next(
+        (
+            清理正文(章节.get("title"))
+            for 章节 in 目录
+            if str(章节.get("id") or "").strip() == str(起始章节编号)
+        ),
+        "",
+    )
     return {
         "title": 目录数据.get("title") or "知乎专栏",
         "author": 目录数据.get("author") or "未知",
@@ -850,6 +899,7 @@ async def _准备知乎书籍(session: aiohttp.ClientSession, 来源: str) -> di
         "chapters": 目录,
         "column_id": 业务编号,
         "section_id": 起始章节编号,
+        "share_section_title": 分享章节标题,
         "declared_total": 目录数据.get("declared_total") or len(目录),
         "catalog_source": 目录数据.get("source") or "catalog",
     }
@@ -968,6 +1018,9 @@ def 生成小说文件内容(书籍: dict[str, Any]) -> tuple[str, bytes]:
         f"章节数：{len(章节)}",
         "",
     ]
+    分享章节标题 = str(书籍.get("share_section_title") or "").strip()
+    if 分享章节标题:
+        行列表[8:8] = [f"分享章节：{分享章节标题}", "下载范围：整本专栏"]
     简介 = str(书籍.get("intro") or "").strip()
     if 简介:
         行列表.extend(["简介：", 简介, ""])
@@ -987,8 +1040,13 @@ def 生成小说文件名(书籍: dict[str, Any]) -> str:
 
 
 def 格式化下载提示(书籍: dict[str, Any]) -> str:
-    return "\n".join([
+    行列表 = [
         f"书名：{书籍.get('title') or '未知'}",
+    ]
+    分享章节标题 = str(书籍.get("share_section_title") or "").strip()
+    if 分享章节标题:
+        行列表.extend([f"分享章节：{分享章节标题}", "下载范围：整本专栏"])
+    行列表.extend([
         f"作者：{书籍.get('author') or '未知'}",
         f"状态：{书籍.get('status') or '完结'}",
         f"章节：{len(书籍.get('chapters') or [])} 章",
@@ -996,6 +1054,7 @@ def 格式化下载提示(书籍: dict[str, Any]) -> str:
         "",
         "正在下载中请稍等.....",
     ])
+    return "\n".join(行列表)
 
 
 def 格式化字数(值: Any) -> str:
