@@ -1002,8 +1002,7 @@ def 生成小说文件内容(书籍: dict[str, Any]) -> tuple[str, bytes]:
         f"作者：{作者}",
         f"状态：{书籍.get('status') or '完结'}",
         f"字数：{格式化字数(书籍.get('word_count'))}",
-        f"知乎专栏ID：{书籍.get('column_id') or 书籍.get('question_id') or '未知'}",
-        f"起始章节ID：{书籍.get('section_id') or 书籍.get('answer_id') or '未知'}",
+        f"书籍ID：{书籍.get('column_id') or 书籍.get('question_id') or '未知'}",
         f"章节数：{len(章节)}",
         "",
     ]
@@ -1044,8 +1043,8 @@ def 格式化字数(值: Any) -> str:
         return "未知"
     if 数值 >= 10000:
         万字 = f"{数值 / 10000:.1f}".rstrip("0").rstrip(".")
-        return f"{万字}万字（{数值:,}字）"
-    return f"{数值:,}字"
+        return f"{万字}万字"
+    return f"{数值}字"
 
 
 async def 准备发送文本文件(
