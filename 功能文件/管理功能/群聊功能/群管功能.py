@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote
 
 try:
     from astrbot.api import logger
@@ -40,8 +41,8 @@ from 功能文件.管理功能.群聊功能.群列表工具 import (
 
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
-链接规则 = re.compile(r"https?://|https?%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
-白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|novel\.html5\.qq\.com|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com", re.IGNORECASE)
+链接规则 = re.compile(r"https?://|https?%3A%2F%2F|qb://|qb%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
+白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]|暂不能查看该消息内容", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5,64}>|ComponentType\.At", re.IGNORECASE)
@@ -985,16 +986,22 @@ def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") ->
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
     文本 = str(消息文本 or "").strip()
-    if 链接规则.search(文本):
-        return False
+    当前文本 = 文本
+    for _ in range(3):
+        if 链接规则.search(当前文本):
+            return False
+        解码文本 = unquote(当前文本)
+        if 解码文本 == 当前文本:
+            break
+        当前文本 = 解码文本
     return bool(数字撤回规则.search(文本))
 
 
 def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
-    if 白名单域名规则.search(str(消息文本 or "")):
+    if 包含白名单域名(消息文本):
         return True
     for 文本 in 获取原始文本候选(event):
-        if 白名单域名规则.search(文本):
+        if 包含白名单域名(文本):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
@@ -1148,7 +1155,16 @@ def 包含白名单域名(值: Any) -> bool:
         return any(包含白名单域名(子值) for 子值 in 值)
     if isinstance(值, dict):
         return any(包含白名单域名(子值) for 子值 in 值.values())
-    return bool(白名单域名规则.search(str(值)))
+    当前文本 = str(值).replace("\\/", "/")
+    for _ in range(3):
+        if 白名单域名规则.search(当前文本):
+            return True
+        解码文本 = unquote(当前文本)
+        if 解码文本 == 当前文本:
+            break
+        当前文本 = 解码文本
+    数据 = 读取字段(值, "data")
+    return 数据 is not None and 数据 is not 值 and 包含白名单域名(数据)
 
 
 def 是否At类型值(值: Any) -> bool:
