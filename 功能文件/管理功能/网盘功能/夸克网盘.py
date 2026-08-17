@@ -289,6 +289,9 @@ class 夸克网盘客户端:
         ) as 会话:
             async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
                 响应文本 = await 响应.text()
+                if 响应.status == 203 and "CallbackFailed" in 响应文本:
+                    logger.warning("夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s", 响应.status)
+                    return
                 if 响应.status not in (200, 201):
                     raise RuntimeError(f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}")
 
@@ -626,8 +629,24 @@ def 更新Cookie字段(cookie: str, 字段名: str, 值: str) -> str:
 
 def 规范化回调文本(值: Any) -> str:
     if isinstance(值, str):
+        if 是回调JSON对象(值):
+            return 值
+        try:
+            已解码文本 = base64.b64decode(值.strip().encode("ascii"), validate=True).decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return 值
+        if 是回调JSON对象(已解码文本):
+            return 已解码文本
         return 值
     return json.dumps(值 or {}, ensure_ascii=False, separators=(",", ":"))
+
+
+def 是回调JSON对象(文本: str) -> bool:
+    try:
+        数据 = json.loads(文本)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(数据, dict) and bool(数据.get("callbackUrl") or 数据.get("callback_url"))
 
 
 def 提取ETag(响应头: Any) -> str:
