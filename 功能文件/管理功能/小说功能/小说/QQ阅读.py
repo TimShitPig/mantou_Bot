@@ -20,10 +20,11 @@ import struct
 import tarfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, Iterator, List, Optional, Union
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 import aiohttp
 
@@ -50,6 +51,7 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 from Crypto.Cipher import AES, DES
+from Crypto.Hash import MD2, MD4
 from Crypto.Util import Counter
 from Crypto.Util.Padding import unpad
 
@@ -894,9 +896,15 @@ async def 确保QQ阅读密钥池(
         if not force and config.key_pool and config._cache_valid(config.key_pool):
             return True
         try:
+            params = {"fuid": config.fuid, "type": "1"}
+            request_url = _构造QQ阅读请求地址(
+                "https://newminerva-tgw.reader.qq.com/sk",
+                params,
+            )
             async with session.get(
                 "https://newminerva-tgw.reader.qq.com/sk",
-                params={"fuid": config.fuid},
+                params=params,
+                headers=构造QQ阅读鉴权请求头(int(time.time() * 1000), request_url),
             ) as response:
                 response.raise_for_status()
                 data = await response.json(content_type=None)
@@ -912,13 +920,152 @@ async def 确保QQ阅读密钥池(
         return True
 
 
-def 构造QQ阅读鉴权请求头(timestamp_ms: int) -> Dict[str, str]:
+QQ阅读网关签名版本 = "1"
+QQ阅读网关设备标识 = "0"
+QQ阅读可信标识盐 = ").#@!U_*#@DxL09V"
+QQ阅读网关MD5密钥编码 = bytes(
+    (
+        0xBF, 0xB8, 0xB5, 0xD6, 0xB7, 0xC3, 0xC9, 0xBC,
+        0xB5, 0xD6, 0xD2, 0xEE, 0xDA, 0xA6, 0xAF, 0xC0,
+    )
+)
+
+
+def _QQ阅读网关MD5密钥() -> str:
+    return bytes(value ^ 0x96 for value in QQ阅读网关MD5密钥编码).decode("ascii")
+
+
+def _QQ阅读网关摘要(data: bytes, index: int) -> bytes:
+    if index == 0:
+        return MD2.new(data).digest()
+    if index == 1:
+        return MD4.new(data).digest()
+    return hashlib.md5(data).digest()
+
+
+def 计算QQ阅读SSign(规范参数: str) -> str:
+    """按 QQ 阅读网关规则计算随请求变化的 ssign。"""
+    payload = 规范参数.encode("utf-8")
+    checksum = zlib.crc32(payload) & 0xFFFFFFFF
+    first = _QQ阅读网关摘要(payload, checksum % 3)
+    index = (checksum >> 8) % 3
+    return _QQ阅读网关摘要(_QQ阅读网关摘要(first, index), index).hex()
+
+
+def _构造QQ阅读网关规范参数(request_url: str, headers: dict[str, str]) -> str:
+    items: dict[str, str] = {}
+    try:
+        pairs = parse_qsl(urlsplit(request_url).query, keep_blank_values=True)
+    except ValueError:
+        pairs = []
+    for key, value in pairs:
+        items.setdefault(str(key), str(value))
+    items["qrsn"] = str(headers.get("qrsn") or "")
+    items["c_version"] = str(headers.get("c_version") or "")
+    items["ttime"] = str(headers.get("ttime") or "")
+    return "&".join(f"{key}={items[key]}" for key in sorted(items))
+
+
+def _构造QQ阅读请求地址(url: str, params: dict[str, Any]) -> str:
+    query = urlencode(params, doseq=True)
+    if not query:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{query}"
+
+
+def _生成QQ阅读YWToken(value: str) -> str:
+    raw = str(value or "").encode("utf-8")
+    padding = 8 - len(raw) % 8
+    padded = raw + bytes([padding]) * padding
+    return DES.new(b"1R8SH560", DES.MODE_ECB).encrypt(padded).hex().upper()
+
+
+def _稳定QQ阅读随机标识(seed: str, length: int) -> str:
+    value = str(seed or "").strip() or secrets.token_hex(16)
+    result = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    while len(result) < length:
+        result += hashlib.sha256((result + value).encode("utf-8")).hexdigest()
+    return result[:length]
+
+
+def _补充QQ阅读网关签名(
+    headers: dict[str, str],
+    request_url: str,
+) -> dict[str, str]:
+    """为 /sk、目录和正文网关请求补齐动态签名字段。"""
+    signed = dict(headers)
+    timestamp_ms = str(signed.get("ttime") or int(time.time() * 1000))
+    signed["ttime"] = timestamp_ms
+    signed["qrtm"] = str(int(timestamp_ms) // 1000)
+
+    config = ConfigManager.get_instance()
+    if not signed.get("qrsn"):
+        signed["qrsn"] = _稳定QQ阅读随机标识(
+            "|".join((config.channel, config.c_version, config.login_type, config.uid, config.usid)),
+            16,
+        )
+    if not signed.get("qrsn_new"):
+        signed["qrsn_new"] = _稳定QQ阅读随机标识(
+            "|".join((signed["qrsn"], config.c_platform, config.uid, config.usid)),
+            36,
+        )
+
+    try:
+        fuid = next(iter(parse_qs(urlsplit(request_url).query).get("fuid", [])), "")
+    except ValueError:
+        fuid = ""
+    signed["logid"] = f"{fuid}_{timestamp_ms}" if fuid else f"{secrets.token_hex(16)}_{timestamp_ms}"
+
+    login_uin = str(signed.get("uid") or "").strip()
+    channel = str(signed.get("channel") or "").strip()
+    c_version = str(signed.get("c_version") or "").strip()
+    qrtm = signed["qrtm"]
+    if login_uin and channel and c_version:
+        safe_source = "|".join(
+            (c_version, channel, login_uin, _QQ阅读网关MD5密钥(), qrtm, QQ阅读网关设备标识)
+        )
+        signed["safekey"] = hashlib.md5(safe_source.encode("utf-8")).hexdigest().upper()
+
+    qrsn = str(signed.get("qrsn") or "").strip()
+    if login_uin and channel and c_version and qrsn:
+        existing_trustedid = str(signed.get("trustedid") or "").strip()
+        suffix = existing_trustedid[-1:] if len(existing_trustedid) >= 33 else "1"
+        trusted_source = "|".join(
+            (
+                login_uin,
+                qrsn,
+                QQ阅读网关设备标识,
+                c_version,
+                channel,
+                qrtm,
+                QQ阅读可信标识盐,
+                "",
+            )
+        )
+        signed["trustedid"] = hashlib.md5(trusted_source.encode("utf-8")).hexdigest().upper() + suffix
+
+    login_type = str(signed.get("loginType") or "")
+    login_key = str(signed.get("usid") or "")
+    if login_type not in {"50", "52"}:
+        login_key = str(signed.get("ywkey") or login_key)
+    if login_key:
+        signed["ywtoken"] = _生成QQ阅读YWToken(login_key)
+
+    signed["ssign"] = 计算QQ阅读SSign(_构造QQ阅读网关规范参数(request_url, signed))
+    signed["ssign_version"] = QQ阅读网关签名版本
+    return signed
+
+
+def 构造QQ阅读鉴权请求头(
+    timestamp_ms: int,
+    request_url: str | None = None,
+) -> Dict[str, str]:
     config = ConfigManager.get_instance()
     pwd = (
         f"{config.login_type}|||{config.c_version}|{config.c_platform}|{config.channel}|"
         f"{config.qrsn}|{config.qrsn}||||0|{timestamp_ms}|{SIGN_TAIL}"
     )
-    return {
+    headers = {
         "User-Agent": UA,
         "loginType": config.login_type,
         "c_platform": config.c_platform,
@@ -927,11 +1074,15 @@ def 构造QQ阅读鉴权请求头(timestamp_ms: int) -> Dict[str, str]:
         "qrsn": config.qrsn,
         "usid": config.usid,
         "uid": config.uid,
+        "qqnum": config.uid,
         "youngerMode": "0",
         "qrsn_new": config.qrsn,
         "ttime": str(timestamp_ms),
         "csigs": search(sha256_hex(pwd), generate_salt()),
     }
+    if request_url:
+        return _补充QQ阅读网关签名(headers, request_url)
+    return headers
 
 
 def _提取QQ阅读章节号(value: str) -> int:
@@ -990,38 +1141,120 @@ def 解密QQ阅读章节数据(data: bytes, stt: str | bytes, *, allow_refresh: 
     return text
 
 
+def _展开QQ阅读正文信息(value: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(value, list):
+        for item in value:
+            yield from _展开QQ阅读正文信息(item)
+        return
+    if not isinstance(value, dict):
+        return
+    if any(key in value for key in ("chapter_id", "chapterId", "cid", "scid")):
+        yield value
+    for key in ("items", "data", "list", "chapters"):
+        nested = value.get(key)
+        if isinstance(nested, (dict, list)):
+            yield from _展开QQ阅读正文信息(nested)
+
+
+def _解析QQ阅读正文信息(members: dict[str, object]) -> dict[str, str]:
+    """从正文包 info 文件建立真实章节 ID 与 UUID 的映射。"""
+    mapping: dict[str, str] = {}
+    for name, raw in members.items():
+        normalized_name = str(name).replace("\\", "/").lower()
+        if not normalized_name.endswith(("info.txt", "info.json")):
+            continue
+        if not isinstance(raw, (bytes, bytearray)):
+            continue
+        try:
+            payload = json.loads(bytes(raw).decode("utf-8-sig", "replace"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for item in _展开QQ阅读正文信息(payload):
+            chapter_id = str(
+                item.get("chapter_id")
+                or item.get("chapterId")
+                or item.get("cid")
+                or item.get("scid")
+                or ""
+            ).strip()
+            if not chapter_id:
+                continue
+            for key in (
+                chapter_id,
+                item.get("chapter_uuid"),
+                item.get("chapterUuid"),
+                item.get("uuid"),
+            ):
+                normalized_key = str(key or "").strip()
+                if normalized_key:
+                    mapping[normalized_key] = chapter_id
+    return mapping
+
+
+def _QQ阅读章节文件候选键(name: str) -> list[str]:
+    normalized = str(name).replace("\\", "/").rsplit("/", 1)[-1]
+    values = [normalized]
+    if normalized.endswith("_s"):
+        stem = normalized[:-2]
+        values.append(stem)
+        if "_" in stem:
+            values.append(stem.rsplit("_", 1)[-1])
+    return values
+
+
+def _匹配QQ阅读正文章节文件(
+    members: dict[str, object],
+    requested_ids: list[str],
+) -> dict[str, tuple[str, object]]:
+    requested_set = set(requested_ids)
+    info_mapping = _解析QQ阅读正文信息(members)
+    matched: dict[str, tuple[str, object]] = {}
+
+    for name, value in members.items():
+        normalized_name = str(name).replace("\\", "/").lower()
+        if normalized_name.endswith(("info.txt", "info.json")) or name == "code":
+            continue
+        chapter_id = ""
+        for candidate in _QQ阅读章节文件候选键(str(name)):
+            target = info_mapping.get(candidate) or (candidate if candidate in requested_set else "")
+            if target in requested_set:
+                chapter_id = target
+                break
+        if not chapter_id:
+            try:
+                legacy_id = str(_提取QQ阅读章节号(str(name)))
+            except (TypeError, ValueError):
+                legacy_id = ""
+            if legacy_id in requested_set:
+                chapter_id = legacy_id
+        if chapter_id and chapter_id not in matched:
+            matched[chapter_id] = (str(name), value)
+    return matched
+
+
 def 解析QQ阅读正文批次(
     package: bytes,
     chapter_ids: list[str],
 ) -> list[Any]:
     members = tar_decrypt(package)
-    requested_ids = [int(chapter_id) for chapter_id in chapter_ids if str(chapter_id).isdigit()]
-    requested_set = set(requested_ids)
-    chapter_map: Dict[int, Any] = {}
-    for key, value in list(members.items()):
-        if key in ("code", "info.txt"):
-            continue
-        try:
-            chapter_number = _提取QQ阅读章节号(str(key))
-        except (TypeError, ValueError):
-            continue
-        if chapter_number not in requested_set:
-            continue
+    requested_ids = [str(chapter_id).strip() for chapter_id in chapter_ids if str(chapter_id).strip()]
+    chapter_map: Dict[str, Any] = {}
+    for chapter_id, (name, value) in _匹配QQ阅读正文章节文件(members, requested_ids).items():
         if isinstance(value, (bytes, bytearray)):
             try:
-                text = 解密QQ阅读章节数据(bytes(value), str(key), allow_refresh=False)
+                text = 解密QQ阅读章节数据(bytes(value), name, allow_refresh=False)
             except Exception as exc:
                 logger.debug(f"QQ阅读参考正文解密失败：error={type(exc).__name__}")
                 text = None
             value = text if text else "章节解密失败"
         elif not isinstance(value, str):
             value = str(value)
-        current = chapter_map.get(chapter_number)
+        current = chapter_map.get(chapter_id)
         if current is None or current == "章节解密失败":
-            chapter_map[chapter_number] = value
+            chapter_map[chapter_id] = value
     return [
-        chapter_map.get(chapter_number, "章节解密失败")
-        for chapter_number in requested_ids
+        chapter_map.get(chapter_id, "章节解密失败")
+        for chapter_id in requested_ids
     ]
 
 
@@ -1135,6 +1368,15 @@ class ZipCrypto:
         return bytes(out)
 
 
+def _查找下一个ZIP标记(data: bytes, start: int) -> int:
+    positions = [
+        data.find(signature, start)
+        for signature in (b"PK\x03\x04", b"PK\x01\x02", b"PK\x05\x06")
+    ]
+    valid = [position for position in positions if position >= 0]
+    return min(valid) if valid else -1
+
+
 def extract_zip_entries_manual(zdata: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
     out: list[tuple[str, bytes]] = []
     pos = 0
@@ -1149,10 +1391,21 @@ def extract_zip_entries_manual(zdata: bytes, pwd: bytes) -> list[tuple[str, byte
         )
         name = zdata[pos + 30 : pos + 30 + nlen]
         data_off = pos + 30 + nlen + xlen
-        payload = zdata[data_off : data_off + csize]
-        pos = data_off + csize
-        if flag & 0x8 and pos + 16 <= len(zdata) and zdata[pos : pos + 4] == b"PK\x07\x08":
-            pos += 16
+        if data_off > len(zdata):
+            break
+        data_end = data_off + csize
+        if csize == 0 or data_end > len(zdata):
+            next_pos = _查找下一个ZIP标记(zdata, data_off)
+            if next_pos < data_off:
+                break
+            data_end = next_pos
+        payload = zdata[data_off:data_end]
+        pos = data_end
+        if csize and flag & 0x8:
+            if zdata[pos : pos + 4] == b"PK\x07\x08":
+                pos += 16
+            elif pos + 12 <= len(zdata):
+                pos += 12
         name_s = name.decode("utf-8", "replace")
         if flag & 1:
             if len(payload) < 12:
@@ -1173,9 +1426,15 @@ def extract_zip_entries_manual(zdata: bytes, pwd: bytes) -> list[tuple[str, byte
 
 
 def extract_eqct(eqct: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
-    zdata = strip_epu_trailer(tea_decrypt_head128(eqct))
-    if zdata[:2] != b"PK":
-        raise ValueError(f"TEA head decrypt failed head={zdata[:8].hex()}")
+    if len(eqct) < 128:
+        raise ValueError("TEA head decrypt failed: QTEB resource too short")
+    decrypted = tea_decrypt_head128(eqct)
+    if len(decrypted) >= 168:
+        decrypted = decrypted[:-40]
+    start = decrypted.find(b"PK\x03\x04")
+    if start < 0:
+        raise ValueError(f"TEA head decrypt failed head={decrypted[:8].hex()}")
+    zdata = strip_epu_trailer(decrypted[start:])
     return extract_zip_entries_manual(zdata, pwd)
 
 
@@ -1191,22 +1450,106 @@ def xhtml_to_text(data: bytes) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def pick_best_entry(files: list[tuple[str, bytes]]) -> tuple[str, bytes]:
-    scored = []
-    for name, data in files:
-        lower = name.lower().replace("\\", "/")
-        score = len(data)
-        if lower.endswith((".xhtml", ".html", ".htm", ".txt")):
-            score += 5_000_000
-        if "/text/" in lower:
-            score += 1_000_000
-        if "cover" in lower:
-            score -= 2_000_000
-        if lower.endswith((".jpg", ".png", ".css", ".ncx", ".opf", ".ttf")):
-            score -= 4_000_000
-        scored.append((score, name, data))
-    scored.sort(reverse=True)
-    return scored[0][1], scored[0][2]
+def _规范出版书资源路径(path: str) -> str:
+    segments: list[str] = []
+    for segment in str(path or "").replace("\\", "/").split("/"):
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    return "/".join(segments)
+
+
+def _查找出版书资源(
+    resources: dict[str, tuple[str, bytes]],
+    target: str,
+) -> tuple[str, bytes] | None:
+    normalized_target = _规范出版书资源路径(target)
+    if normalized_target in resources:
+        return resources[normalized_target]
+    for name, resource in resources.items():
+        if name.endswith(f"/{normalized_target}") or normalized_target.endswith(f"/{name}"):
+            return resource
+    return None
+
+
+def _获取出版书OPF顺序(files: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    resources = {
+        _规范出版书资源路径(name): (name, data)
+        for name, data in files
+        if _规范出版书资源路径(name)
+    }
+    container = next(
+        (resource for name, resource in resources.items() if name.lower() == "meta-inf/container.xml"),
+        None,
+    )
+    if container is None:
+        return []
+    try:
+        container_root = ET.fromstring(container[1])
+        rootfile = next(
+            (
+                element.attrib.get("full-path", "")
+                for element in container_root.iter()
+                if element.tag.rsplit("}", 1)[-1].lower() == "rootfile"
+            ),
+            "",
+        )
+        opf_resource = _查找出版书资源(resources, rootfile)
+        if opf_resource is None:
+            return []
+        opf_path = _规范出版书资源路径(rootfile)
+        opf_root = ET.fromstring(opf_resource[1])
+    except (ET.ParseError, ValueError, TypeError):
+        return []
+
+    manifest: dict[str, str] = {}
+    spine_ids: list[str] = []
+    for element in opf_root.iter():
+        tag = element.tag.rsplit("}", 1)[-1].lower()
+        if tag == "item":
+            item_id = str(element.attrib.get("id") or "").strip()
+            href = str(element.attrib.get("href") or "").strip()
+            if item_id and href:
+                parent = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
+                manifest[item_id] = _规范出版书资源路径(f"{parent}/{href}")
+        elif tag == "itemref":
+            item_id = str(element.attrib.get("idref") or "").strip()
+            if item_id:
+                spine_ids.append(item_id)
+
+    ordered: list[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    for item_id in spine_ids:
+        resource = _查找出版书资源(resources, manifest.get(item_id, ""))
+        if resource is None:
+            continue
+        normalized = _规范出版书资源路径(resource[0])
+        if normalized not in seen:
+            seen.add(normalized)
+            ordered.append(resource)
+    return ordered
+
+
+def 合并参考出版书正文(files: list[tuple[str, bytes]]) -> str:
+    ordered = _获取出版书OPF顺序(files)
+    if not ordered:
+        ordered = sorted(files, key=lambda item: _规范出版书资源路径(item[0]).lower())
+    texts: list[str] = []
+    for name, data in ordered:
+        lower = _规范出版书资源路径(name).lower()
+        if lower.endswith((".xhtml", ".html", ".htm")):
+            text = xhtml_to_text(data)
+        elif lower.endswith(".txt"):
+            text = data.decode("utf-8", "replace").strip()
+        else:
+            continue
+        if text:
+            texts.append(text)
+    return "\n\n".join(texts)
 
 
 def _parse_teb_info_blob(blob: bytes) -> list[dict]:
@@ -1587,6 +1930,8 @@ def _规范状态(value: Any) -> str:
 
 
 def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
+    if isinstance(data, dict) and "retCode" in data and _安全整数(data.get("retCode"), 0) != 0:
+        raise RuntimeError("书籍详情不可用")
     objects = _遍历详情对象(data)
     status = _规范状态(
         _读取详情字段(
@@ -1608,7 +1953,11 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
         default=0,
     )
     free_value = _读取详情字段(objects, "free", default=None)
-    free = None if free_value in (None, "") else _安全整数(free_value, default=-1)
+    free = None
+    if free_value not in (None, ""):
+        parsed_free = _安全整数(free_value, default=-1)
+        if parsed_free >= 0:
+            free = parsed_free
     return {
         "title": str(
             _读取详情字段(objects, "title", "bookName", "book_name", default=f"QQ阅读{book_id}")
@@ -1633,7 +1982,7 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
             or ""
         ).strip(),
         "chapters": _安全整数(chapters),
-        "free": free if free >= 0 else None,
+        "free": free,
         "vip_free": _详情支持VIP免费(objects),
         "intro": str(
             _读取详情字段(objects, "intro", "desc", "summary", "description", default="")
@@ -1799,17 +2148,21 @@ async def 获取参考书籍目录(
         async with 创建QQ阅读HTTP会话(concurrency=2) as local_session:
             return await 获取参考书籍目录(book_id, local_session)
     await 确保QQ阅读密钥池(session)
+    params = {
+        "bookId": book_id,
+        "type": "0",
+        "tafauth": "1",
+        "scids": "0",
+        "text_type": "0",
+        "useindex": "1",
+    }
     async with session.get(
         QQ阅读目录地址,
-        params={
-            "bookId": book_id,
-            "type": "0",
-            "tafauth": "1",
-            "scids": "0",
-            "text_type": "0",
-            "useindex": "1",
-        },
-        headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+        params=params,
+        headers=构造QQ阅读鉴权请求头(
+            int(time.time() * 1000),
+            _构造QQ阅读请求地址(QQ阅读目录地址, params),
+        ),
     ) as response:
         response.raise_for_status()
         package = await response.read()
@@ -1905,24 +2258,28 @@ async def 获取参考出版书目录(
     semaphore = asyncio.Semaphore(max(1, min(QQ阅读批量最大动态并发数, len(batches))))
 
     async def 请求目录批次(batch: list[str]) -> list[dict[str, Any]]:
-        headers = 构造QQ阅读鉴权请求头(int(time.time() * 1000))
+        params = {
+            "bookId": book_id,
+            "type": "0",
+            "tafauth": "1",
+            "cidType": "1",
+            "restype": "4",
+            "epubFlag": "1",
+            "scids": ",".join(batch),
+            "scene": "0",
+            "adState": "1",
+            "fuid": config.fuid,
+            "noclick": "1",
+        }
+        headers = 构造QQ阅读鉴权请求头(
+            int(time.time() * 1000),
+            _构造QQ阅读请求地址(QQ阅读目录地址, params),
+        )
         headers["text_type"] = "1"
         async with semaphore:
             async with session.get(
                 QQ阅读目录地址,
-                params={
-                    "bookId": book_id,
-                    "type": "0",
-                    "tafauth": "1",
-                    "cidType": "1",
-                    "restype": "4",
-                    "epubFlag": "1",
-                    "scids": ",".join(batch),
-                    "scene": "0",
-                    "adState": "1",
-                    "fuid": config.fuid,
-                    "noclick": "1",
-                },
+                params=params,
                 headers=headers,
             ) as response:
                 response.raise_for_status()
@@ -1943,16 +2300,24 @@ async def 获取参考出版书密码(
     session: aiohttp.ClientSession,
 ) -> bytes:
     config = ConfigManager.get_instance()
+    params = {
+        "bookid": book_id,
+        "authInfo": config.qrsn[:16],
+        "onlytrial": "1",
+        "onlycteb": "1",
+    }
+    # /auth 使用独立的 App 登录包格式；混入网关签名会改变响应封装。
+    headers = {
+        "User-Agent": UA,
+        "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
+        "ywguid": config.uid,
+        "ywkey": config.usid,
+        "Accept": "*/*",
+    }
     async with session.get(
         API_AUTH,
-        params={"bookid": book_id, "authInfo": config.qrsn, "onlytrial": "1"},
-        headers={
-            "User-Agent": UA,
-            "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
-            "ywguid": config.uid,
-            "ywkey": config.usid,
-            "Accept": "*/*",
-        },
+        params=params,
+        headers=headers,
     ) as response:
         response.raise_for_status()
         encrypted = await response.read()
@@ -1968,15 +2333,7 @@ def 解析参考出版书章节(package: bytes, password: bytes) -> str:
     files = extract_eqct(package, password)
     if not files:
         raise RuntimeError("出版书资源解包为空")
-    name, data = pick_best_entry(files)
-    lowered = name.lower()
-    if lowered.endswith((".xhtml", ".html", ".htm")):
-        text = xhtml_to_text(data)
-    elif lowered.endswith(".txt"):
-        text = data.decode("utf-8", "replace")
-    else:
-        raise RuntimeError("出版书正文资源缺失")
-    text = text.strip()
+    text = 合并参考出版书正文(files).strip()
     if not text:
         raise RuntimeError("出版书正文为空")
     return text
@@ -2062,13 +2419,16 @@ async def 异步获取QQ阅读正文批次(
     解密信号量: asyncio.Semaphore,
 ) -> list[Any]:
     config = ConfigManager.get_instance()
-    headers = 构造QQ阅读鉴权请求头(int(time.time() * 1000))
     params = {
         "bookId": str(book_id),
         "type": "2",
         "scids": 构造QQ阅读正文章节参数(chapter_ids),
         "fuid": config.fuid,
     }
+    headers = 构造QQ阅读鉴权请求头(
+        int(time.time() * 1000),
+        _构造QQ阅读请求地址(QQ阅读目录地址, params),
+    )
     async with session.get(QQ阅读目录地址, params=params, headers=headers) as response:
         response.raise_for_status()
         package = await response.read()
