@@ -3163,21 +3163,21 @@ async def 生成番茄下载回复流(
                 准备结果 = await 异步准备番茄下载数据(
                     HTTP客户端, 书籍编号, 找书候选
                 )
-        书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
-        书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
-        目录 = 准备结果.get("chapters") or []
-        if not 目录:
-            logger.warning(f"番茄小说下载失败：book_id={书籍编号}, error=没有获取到章节目录")
-            yield 番茄下载失败提示
-            return
+            书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
+            书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
+            目录 = 准备结果.get("chapters") or []
+            if not 目录:
+                logger.warning(f"番茄小说下载失败：book_id={书籍编号}, error=没有获取到章节目录")
+                yield 番茄下载失败提示
+                return
 
-        logger.info(
-            f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, "
-            f"author={书籍信息.get('author')}, chapters={len(目录)}"
-        )
-        yield 格式化番茄下载提示(书籍信息, len(目录))
+            logger.info(
+                f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, "
+                f"author={书籍信息.get('author')}, chapters={len(目录)}"
+            )
+            yield 格式化番茄下载提示(书籍信息, len(目录))
 
-        章节结果列表 = await 异步下载番茄全部章节(书籍编号, 目录)
+            章节结果列表 = await 异步下载番茄全部章节(书籍编号, 目录, HTTP客户端)
         成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get("success")]
         if len(成功章节列表) < len(目录):
             logger.warning(
