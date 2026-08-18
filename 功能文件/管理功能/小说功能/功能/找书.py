@@ -1375,6 +1375,11 @@ def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str
 
 def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | str | None:
     """main 优先调用：用户点击指令链发出 选N 后，这里直接进入各平台下载流。"""
+    文本 = str(命令文本 or "").strip()
+    if not 选书命令正则.fullmatch(文本):
+        return None
+    if not 小说功能开关.小说总开关是否开启(配置):
+        return 小说功能开关.获取小说功能关闭回复("", 配置)
     选中 = 解析找书选中项(event, 命令文本)
     if 选中 is None:
         return None
@@ -1384,6 +1389,8 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
     链接 = str(选中.get("url") or "")
     书籍编号 = str(选中.get("book_id") or "").strip()
     标题 = 选中.get("title") or ""
+    if not 小说功能开关.当前事件可使用小说功能(event, 平台, 配置):
+        return 小说功能开关.获取小说功能关闭回复(平台, 配置)
     logger.info(f"找书选择下载：platform={平台}, title={标题}, book_id={书籍编号}")
     if 平台 == "番茄" and 番茄小说 is not None:
         # 找书结果直接交给下载器书籍 ID，不再先拼接页面链接后重新解析。
@@ -1405,8 +1412,6 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
     if 平台 == "QQ阅读" and QQ阅读小说 is not None:
         return QQ阅读小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "QQ浏览器" and QQ浏览器小说 is not None:
-        if not 小说功能开关.当前事件可使用小说功能(event, "QQ浏览器", 配置):
-            return 小说功能开关.获取小说功能关闭回复("QQ浏览器")
         return QQ浏览器小说.生成QQ浏览器下载回复流(event, 链接, 配置)
     if 平台 == "得间" and 得间小说 is not None:
         return 得间小说.生成下载回复流(event, 链接, 配置)
@@ -1423,6 +1428,9 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
     查询 = 解析找书查询(文本)
+    是当前会话翻页 = 文本 in 翻页命令集合 and 会话键 in 找书会话
+    if (查询 is not None or 是当前会话翻页) and not 小说功能开关.小说总开关是否开启(配置):
+        return 小说功能开关.获取小说功能关闭回复("", 配置)
     会话 = None
     if 查询 is not None:
         关键词 = 查询["keyword"]

@@ -42,6 +42,12 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
     }
 )
 小说状态命令 = {"小说", "小说列表"}
+小说总开关命令配置 = {
+    "开小说": True,
+    "开启小说": True,
+    "关小说": False,
+    "关闭小说": False,
+}
 测试模式命令配置 = {
     "开测试": True,
     "开启测试": True,
@@ -49,19 +55,34 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
     "关闭测试": False,
 }
 状态命名空间 = "novel_feature_switch"
+小说总开关状态键 = "全部小说"
 管理员测试模式状态键 = "管理员测试模式"
 
 
 def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
     文本 = re.sub(r"(?i)qq(?=阅读)", "QQ", 文本)
-    if 文本 not in 开关命令配置 and 文本 not in 小说状态命令 and 文本 not in 测试模式命令配置:
+    if (
+        文本 not in 开关命令配置
+        and 文本 not in 小说状态命令
+        and 文本 not in 小说总开关命令配置
+        and 文本 not in 测试模式命令配置
+    ):
         return None
     if not 是群文件清理管理员(event, 配置):
         return None
 
     if 文本 in 小说状态命令:
-        return 格式化小说功能状态(读取小说功能状态(配置))
+        return 格式化小说功能状态(读取小说功能状态(配置), 小说总开关是否开启(配置))
+    if 文本 in 小说总开关命令配置:
+        是否开启 = 小说总开关命令配置[文本]
+        try:
+            写入布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, 是否开启)
+        except Exception as exc:
+            logger.warning(f"全局小说功能开关写入数据库失败：enabled={是否开启}, error={exc}")
+            return "小说功能开关失败，请稍后再试"
+        状态文本 = "开启" if 是否开启 else "关闭"
+        return f"全局小说功能已{状态文本}"
     if 文本 in 测试模式命令配置:
         是否开启 = 测试模式命令配置[文本]
         try:
@@ -87,6 +108,14 @@ def 小说功能是否开启(功能名: str, 配置: Any = None) -> bool:
     return bool(状态.get(功能名, True))
 
 
+def 小说总开关是否开启(配置: Any = None) -> bool:
+    try:
+        return 读取布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, True)
+    except Exception as exc:
+        logger.warning(f"全局小说功能开关读取数据库失败：error={exc}")
+        return True
+
+
 def 管理员测试模式是否开启(配置: Any = None) -> bool:
     try:
         return 读取布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, False)
@@ -96,6 +125,8 @@ def 管理员测试模式是否开启(配置: Any = None) -> bool:
 
 
 def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = None) -> bool:
+    if not 小说总开关是否开启(配置):
+        return False
     if 小说功能是否开启(功能名, 配置):
         return True
     return bool(
@@ -104,12 +135,15 @@ def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = 
     )
 
 
-def 获取小说功能关闭回复(功能名: str) -> str:
+def 获取小说功能关闭回复(功能名: str, 配置: Any = None) -> str:
+    if not 小说总开关是否开启(配置):
+        return "小说功能已关闭"
     return f"{功能显示名.get(功能名, 功能名)}功能已关闭"
 
 
-def 格式化小说功能状态(状态: dict[str, bool]) -> str:
-    行列表 = ["📚 本群小说功能列表"]
+def 格式化小说功能状态(状态: dict[str, bool], 总开关是否开启: bool) -> str:
+    总开关状态文本 = "已开启" if 总开关是否开启 else "已关闭"
+    行列表 = [f"📚 全局小说功能：{总开关状态文本}"]
     for 功能名 in 默认状态:
         状态文本 = "已开启" if 状态.get(功能名, True) else "已关闭"
         行列表.append(f"{功能显示名[功能名]}：{状态文本}")
