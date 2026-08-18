@@ -43,6 +43,11 @@ from 功能文件.管理功能.群聊功能.群列表工具 import (
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|qb://|qb%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
 白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com", re.IGNORECASE)
+QQ阅读小程序白名单规则 = re.compile(
+    r"(?:微信小程序|小程序).{0,2000}(?:source|来源)\s*[:：=]\s*[\"']?QQ阅读"
+    r"|(?:source|来源)\s*[:：=]\s*[\"']?QQ阅读.{0,2000}(?:微信小程序|小程序)",
+    re.IGNORECASE | re.DOTALL,
+)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]|暂不能查看该消息内容", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5,64}>|ComponentType\.At", re.IGNORECASE)
@@ -65,7 +70,7 @@ At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5
 数字撤回处理中: set[str] = set()
 数字撤回完成时间: dict[str, float] = {}
 数字撤回去重缓存秒数 = 120.0
-群管功能模块版本 = "1.25.0"
+群管功能模块版本 = "1.25.1"
 踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 QQ官方机器人权限缓存秒数 = 30.0
@@ -998,15 +1003,21 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
 
 
 def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if 包含QQ阅读小程序白名单(消息文本):
+        return True
     if 包含白名单域名(消息文本):
         return True
     for 文本 in 获取原始文本候选(event):
+        if 包含QQ阅读小程序白名单(文本):
+            return True
         if 包含白名单域名(文本):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
+        if 包含QQ阅读小程序白名单(消息):
+            return True
         if 包含白名单域名(消息):
             return True
     return False
@@ -1165,6 +1176,49 @@ def 包含白名单域名(值: Any) -> bool:
         当前文本 = 解码文本
     数据 = 读取字段(值, "data")
     return 数据 is not None and 数据 is not 值 and 包含白名单域名(数据)
+
+
+def 包含QQ阅读小程序白名单(值: Any) -> bool:
+    """放行来源明确为 QQ 阅读的小程序/卡片分享，避免误伤正常书籍分享。"""
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含QQ阅读小程序白名单(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        小写字段 = {str(键).lower(): 子值 for 键, 子值 in 值.items()}
+        来源值 = next(
+            (
+                小写字段.get(键)
+                for 键 in ("source", "来源", "source_name", "app_source", "provider")
+                if 小写字段.get(键) is not None
+            ),
+            None,
+        )
+        来源文本 = re.sub(r"\s+", "", str(来源值 or "")).strip("\"'")
+        if 来源文本 == "QQ阅读":
+            卡片字段文本 = " ".join(
+                str(小写字段.get(键) or "")
+                for 键 in (
+                    "type",
+                    "tag",
+                    "title",
+                    "summary",
+                    "description",
+                    "content",
+                    "name",
+                    "app_name",
+                    "appname",
+                )
+            ).lower()
+            if (
+                "小程序" in 卡片字段文本
+                or "miniapp" in 卡片字段文本
+                or "wechat" in 卡片字段文本
+                or str(小写字段.get("type") or "").lower() in {"json", "share"}
+            ):
+                return True
+        return any(包含QQ阅读小程序白名单(子值) for 子值 in 值.values())
+    return bool(QQ阅读小程序白名单规则.search(str(值)))
 
 
 def 是否At类型值(值: Any) -> bool:
