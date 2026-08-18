@@ -39,12 +39,14 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 点众小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.点众小说")
 知乎小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.知乎小说")
 塔读小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.塔读小说")
+百度小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.百度小说")
+小米小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.小米小说")
 小说缓存清理 = 加载功能模块("功能文件.管理功能.小说功能.功能.下载缓存清理")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.25.0"
+插件版本 = "5.26.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -338,6 +340,30 @@ class MyPlugin(Star):
                     event.stop_event()
                     return
                 async for 输出内容 in _输出回复流(番茄回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            百度回复流 = 百度小说功能.获取百度小说回复流(event, 命令文本, self.config)
+            if 百度回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "百度", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("百度", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(百度回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            小米回复流 = 小米小说功能.获取小米小说回复流(event, 命令文本, self.config)
+            if 小米回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "小米", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("小米", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(小米回复流):
                     yield 输出内容
                 event.stop_event()
                 return

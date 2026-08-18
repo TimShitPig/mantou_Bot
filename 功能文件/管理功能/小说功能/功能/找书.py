@@ -75,6 +75,18 @@ except Exception as exc:
     塔读小说 = None
     logger.warning(f"找书加载塔读失败：error={exc}")
 
+try:
+    from 功能文件.管理功能.小说功能.小说 import 百度小说
+except Exception as exc:
+    百度小说 = None
+    logger.warning(f"找书加载百度失败：error={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 小米小说
+except Exception as exc:
+    小米小说 = None
+    logger.warning(f"找书加载小米失败：error={exc}")
+
 
 每页数量 = 5
 会话等待秒数 = 300
@@ -275,6 +287,14 @@ def 构造QQ浏览器链接(书籍编号: str) -> str:
 
 def 构造塔读链接(书籍编号: str) -> str:
     return f"https://reader.tadu.com/book/{书籍编号}"
+
+
+def 构造百度链接(书籍编号: str) -> str:
+    return f"https://boxnovel.baidu.com/boxnovel/reader?gid={书籍编号}"
+
+
+def 构造小米链接(书籍编号: str) -> str:
+    return f"https://reader.browser.miui.com/#page=book&id={书籍编号}"
 
 
 def _安全浮点(值: Any, 默认: float = 0.0) -> float:
@@ -968,6 +988,76 @@ async def 搜索QQ浏览器(关键词: str, *, 需要数量: int = 20) -> list[d
     return 结果[:需要数量]
 
 
+async def 搜索百度(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 百度小说 is None:
+        return []
+    try:
+        原始结果 = await 百度小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书百度搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        return []
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        book_id = str(书籍.get("book_id") or "").strip()
+        title = 清理文本(书籍.get("title"))
+        if not book_id.isdigit() or not title:
+            continue
+        评分 = _安全浮点(书籍.get("score"))
+        字数 = _安全整数热度(书籍.get("word_count"))
+        结果.append(
+            {
+                "platform": "百度",
+                "book_id": book_id,
+                "title": title,
+                "author": 清理文本(书籍.get("author") or "未知") or "未知",
+                "url": str(书籍.get("url") or 构造百度链接(book_id)),
+                "heat": 计算热度排序值(评分=评分, 字数=字数),
+                "heat_text": "",
+                "score": 评分,
+                "read_count": 0,
+                "word_count": 字数,
+            }
+        )
+    return 结果[:需要数量]
+
+
+async def 搜索小米(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 小米小说 is None:
+        return []
+    try:
+        原始结果 = await 小米小说.搜索小说(关键词, 需要数量=需要数量)
+    except Exception as exc:
+        logger.warning(f"找书小米搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        return []
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        book_id = str(书籍.get("book_id") or "").strip()
+        title = 清理文本(书籍.get("title"))
+        if not book_id.isdigit() or not title:
+            continue
+        评分 = _安全浮点(书籍.get("score"))
+        热度 = _安全整数热度(书籍.get("heat"))
+        结果.append(
+            {
+                "platform": "小米",
+                "book_id": book_id,
+                "title": title,
+                "author": 清理文本(书籍.get("author") or "未知") or "未知",
+                "url": str(书籍.get("url") or 构造小米链接(book_id)),
+                "heat": 热度 or 计算热度排序值(评分=评分),
+                "heat_text": "",
+                "score": 评分,
+                "read_count": 热度,
+                "word_count": 书籍.get("word_count") or 0,
+            }
+        )
+    return 结果[:需要数量]
+
+
 def _清理QQ阅读预检缓存() -> None:
     现在 = time.time()
     if len(QQ阅读预检缓存) < 512:
@@ -1057,15 +1147,18 @@ async def 过滤章节单独付费QQ阅读搜索结果(
 
 
 def _平台优先级值(平台: Any) -> int:
-    """跨平台同书优先：番茄 > 七猫 > QQ阅读 > 书旗 > 得间 > 点众 > 塔读。"""
+    """跨平台同书优先：主流平台优先，新增平台作为后置候选。"""
     return {
-        "番茄": 7,
-        "七猫": 6,
-        "QQ阅读": 5,
-        "书旗": 4,
-        "得间": 3,
-        "点众": 2,
-        "塔读": 1,
+        "番茄": 11,
+        "七猫": 10,
+        "QQ阅读": 9,
+        "书旗": 8,
+        "得间": 7,
+        "点众": 6,
+        "QQ浏览器": 5,
+        "塔读": 4,
+        "百度": 3,
+        "小米": 2,
     }.get(str(平台 or ""), 0)
 
 
@@ -1184,12 +1277,14 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             _限时搜索("得间", 搜索得间(关键词, 需要数量=数量)),
             _限时搜索("点众", 搜索点众(关键词, 需要数量=数量)),
             _限时搜索("塔读", 搜索塔读(关键词, 需要数量=数量)),
+            _限时搜索("百度", 搜索百度(关键词, 需要数量=数量)),
+            _限时搜索("小米", 搜索小米(关键词, 需要数量=数量)),
         )
-        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果 = await asyncio.gather(
+        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果 = await asyncio.gather(
             *搜索任务,
             return_exceptions=False,
         )
-        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果):
+        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果):
             for 排名, 项 in enumerate(平台结果):
                 if isinstance(项, dict):
                     项.setdefault("_platform_rank", 排名)
@@ -1201,7 +1296,7 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             搜索类型=搜索类型,
         )
         QQ阅读结果 = await 过滤章节单独付费QQ阅读搜索结果(QQ阅读结果)
-        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果])
+        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果])
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
         if len(初步结果) < 每页数量:
@@ -1212,7 +1307,7 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             )
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果]
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
                 return await asyncio.gather(
                     _限时搜索("番茄联想", 搜索番茄(session, w, 需要数量=10)),
@@ -1221,11 +1316,13 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
                     _限时搜索("QQ阅读联想", 搜索QQ阅读(w, 需要数量=10)),
                     _限时搜索("QQ浏览器联想", 搜索QQ浏览器(w, 需要数量=10)),
                     _限时搜索("塔读联想", 搜索塔读(w, 需要数量=10)),
+                    _限时搜索("百度联想", 搜索百度(w, 需要数量=10)),
+                    _限时搜索("小米联想", 搜索小米(w, 需要数量=10)),
                 )
 
             补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
-            for r1, r2, r3, r4, r5, r6 in 补搜结果:
-                for 平台结果 in (r1, r2, r3, r4, r5, r6):
+            for r1, r2, r3, r4, r5, r6, r7, r8 in 补搜结果:
+                for 平台结果 in (r1, r2, r3, r4, r5, r6, r7, r8):
                     for 排名, 项 in enumerate(平台结果):
                         if isinstance(项, dict):
                             项.setdefault("_platform_rank", 排名)
@@ -1236,7 +1333,7 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
                     最大数量=5,
                 )
                 r4 = await 过滤章节单独付费QQ阅读搜索结果(r4)
-                补结果集合.extend([r1, r2, r3, r4, r5, r6])
+                补结果集合.extend([r1, r2, r3, r4, r5, r6, r7, r8])
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词, 搜索类型)
 
@@ -1419,6 +1516,10 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 点众小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "塔读" and 塔读小说 is not None:
         return 塔读小说.生成塔读下载回复流(event, 链接, 配置)
+    if 平台 == "百度" and 百度小说 is not None:
+        return 百度小说.生成百度下载回复流(event, 链接, 配置)
+    if 平台 == "小米" and 小米小说 is not None:
+        return 小米小说.生成小米下载回复流(event, 链接, 配置)
     return "下载失败"
 
 
