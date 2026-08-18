@@ -846,8 +846,8 @@ def load_config_once() -> None:
 
 UA = "okhttp/3.12.13"
 SIGN_TAIL = "B74H5a2Yh73gfu8F"
-QQ阅读批量章节数 = 500
-QQ阅读批量最大动态并发数 = 5
+QQ阅读批量章节数 = 30
+QQ阅读批量最大动态并发数 = 300
 QQ阅读失败章节重试窗口 = 31
 QQ阅读失败章节重试轮数 = 3
 QQ阅读解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
@@ -2793,7 +2793,10 @@ async def 生成下载回复流(
     stage = "details"
     try:
         async with 创建QQ阅读HTTP会话(
-            concurrency=QQ阅读出版书最大动态并发数
+            concurrency=max(
+                QQ阅读批量最大动态并发数,
+                QQ阅读出版书最大动态并发数,
+            )
         ) as session:
             try:
                 details = await 获取参考书籍详情(book_id, session)

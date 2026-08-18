@@ -3082,7 +3082,7 @@ def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
         'results':results,
     }
 
-番茄正文最大批量章节数 = 1500
+番茄正文最大批量章节数 = 300
 
 番茄正文最大动态并发数 = 6
 
