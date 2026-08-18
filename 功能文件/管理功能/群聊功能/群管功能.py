@@ -42,7 +42,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import (
 
 数字撤回规则 = re.compile(r"(?<!\d)\d{9,12}(?!\d)")
 链接规则 = re.compile(r"https?://|https?%3A%2F%2F|qb://|qb%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE)
-白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com", re.IGNORECASE)
+白名单域名规则 = re.compile(r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com", re.IGNORECASE)
 群名片规则 = re.compile(r"\[CQ:contact,[^\]]*(?:type=group|type=qq_group)[^\]]*\]")
 卡片消息规则 = re.compile(r"ComponentType\.(?:Json|Share|Contact)|\[CQ:(?:json|contact),|\[卡片消息\]|暂不能查看该消息内容", re.IGNORECASE)
 At消息规则 = re.compile(r"\[CQ:at,[^\]]*\]|\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5,64}>|ComponentType\.At", re.IGNORECASE)

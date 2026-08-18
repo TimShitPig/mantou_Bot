@@ -7,7 +7,9 @@ import base64
 import html
 import json
 import re
+import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -34,25 +36,44 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 
-# 当前小米阅读网页使用 /api/v2/search；旧版 /search/word 已返回 404。
-小米搜索地址 = "https://reader.browser.miui.com/api/v2/search"
+# 小米阅读网页的旧 /api/v2/search 目前只返回固定推荐项；搜索改用当前 dushu
+# 网页的 onebox 接口。旧 reader.browser 接口仍保留，用于兼容用户已有的分享链接。
+小米搜索地址 = "https://dushu.xiaomi.com/store/v0/lib/query/onebox"
+小米新接口主机 = "dushu.xiaomi.com"
+小米新接口详情地址 = "https://dushu.xiaomi.com/hs/v0/android/fiction/book"
+小米新接口目录地址 = "https://dushu.xiaomi.com/store/v0/fiction/detail"
+小米新接口正文链接地址 = "https://dushu.xiaomi.com/drm/v0/fiction/link"
 小米详情地址 = "https://reader.browser.miui.com/api/v2/book"
 小米目录地址 = "https://reader.browser.miui.com/api/v2/chapter/list"
 小米正文地址 = "https://reader.browser.miui.com/api/v2/chapter/content"
-小米允许域名 = {"reader.browser.miui.com", "reader.miui.com", "novel.browser.miui.com"}
+小米允许域名 = {
+    "reader.browser.miui.com",
+    "reader.miui.com",
+    "novel.browser.miui.com",
+    "dushu.xiaomi.com",
+    "www.dushu.xiaomi.com",
+}
 小米链接正则 = re.compile(
-    r"https?://(?:reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com)" r"[^\s<>\"']*",
+    r"https?://(?:reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com|www\.dushu\.xiaomi\.com)"
+    r"[^\s<>\"']*",
     re.IGNORECASE,
 )
 小米卡片编号正则 = re.compile(
-    r"[\"'`]?\b(?:book[_-]?id|resource[_-]?id|fiction[_-]?id|id)[\"'`]?\s*[:=]\s*[\"'`]?([0-9]{1,30})",
+    r"[\"'`]?\b(?:book[_-]?id|resource[_-]?id|fiction[_-]?id|source[_-]?id|id)[\"'`]?\s*[:=]\s*[\"'`]?([0-9]{1,30})",
+    re.IGNORECASE,
+)
+小米卡片来源编号正则 = re.compile(
+    r"[\"'`]?\bsource[_-]?id[\"'`]?\s*[:=]\s*[\"'`]?([0-9]{1,30})",
     re.IGNORECASE,
 )
 小米请求头 = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://reader.browser.miui.com/",
+    "Referer": "https://dushu.xiaomi.com/",
 }
+小米设备编号 = f"D950{uuid.uuid4().hex[:12].upper()}"
+小米目录每批数量 = 150
+小米目录最大批次 = 200
 小米最大并发数 = 10
 小米请求重试次数 = 3
 小米下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
@@ -97,7 +118,7 @@ def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0
         文本 = str(值)
     except Exception:
         文本 = ""
-    if "miui.com" in 文本.lower() or "小米" in 文本:
+    if "miui.com" in 文本.lower() or "dushu.xiaomi.com" in 文本.lower() or "小米" in 文本:
         结果.append(文本)
 
 
@@ -118,14 +139,15 @@ def 提取小米来源(event: Any, 命令文本: Any) -> str | None:
     for 文本 in 候选:
         if "小米" not in 文本 and "miui" not in 文本.lower() and "xiaomi" not in 文本.lower():
             continue
-        匹配 = 小米卡片编号正则.search(urllib.parse.unquote(文本))
+        解码文本 = urllib.parse.unquote(文本)
+        匹配 = 小米卡片来源编号正则.search(解码文本) or 小米卡片编号正则.search(解码文本)
         if 匹配:
             return 构造小米链接(匹配.group(1))
     return None
 
 
 def _数字文本(值: Any) -> str:
-    文本 = str(值 or "").strip()
+    文本 = "" if 值 is None else str(值).strip()
     return 文本 if re.fullmatch(r"\d{1,30}", 文本) else ""
 
 
@@ -137,6 +159,7 @@ def 解析小米书籍编号(来源: Any) -> str:
         return ""
     if (解析.hostname or "").lower() not in 小米允许域名:
         return ""
+    新接口 = (解析.hostname or "").lower() in {小米新接口主机, "www." + 小米新接口主机}
     查询: dict[str, list[str]] = {}
     for 部分 in (解析.query, urllib.parse.unquote(解析.fragment).lstrip("#?")):
         try:
@@ -144,27 +167,70 @@ def 解析小米书籍编号(来源: Any) -> str:
                 查询.setdefault(键.lower(), []).extend(值)
         except Exception:
             continue
+    新接口 = 新接口 or bool(查询.get("source_id"))
+    if 新接口:
+        for 值 in 查询.get("source_id", []):
+            编号 = _数字文本(值)
+            if 编号:
+                return f"dushu:{编号}"
     for 键 in ("id", "bookid", "book_id", "resourceid"):
         for 值 in 查询.get(键, []):
             编号 = _数字文本(值)
             if 编号:
-                return 编号
+                return f"dushu:{编号}" if 新接口 else 编号
     匹配 = re.search(r"(?:book|novel|detail)[^0-9]{0,20}(\d{1,30})", 解析.path, re.IGNORECASE)
     if 匹配:
-        return 匹配.group(1)
+        编号 = 匹配.group(1)
+        return f"dushu:{编号}" if 新接口 else 编号
     匹配 = re.search(r"(?:^|[=&])(?:id|bookId|book_id)[=:]?\s*(\d{1,30})", 文本, re.IGNORECASE)
-    return 匹配.group(1) if 匹配 else ""
+    if not 匹配:
+        return ""
+    编号 = 匹配.group(1)
+    return f"dushu:{编号}" if 新接口 else 编号
 
 
 def 构造小米链接(书籍编号: Any) -> str:
-    return f"https://reader.browser.miui.com/#page=book&id={书籍编号}"
+    文本 = str(书籍编号 or "").strip()
+    if 文本.lower().startswith("dushu:"):
+        文本 = 文本.split(":", 1)[1]
+    编号 = _数字文本(文本)
+    return f"https://reader.browser.miui.com/#page=book&id={编号}&source_id={编号}&source=2"
+
+
+def _拆分小米书籍编号(书籍编号: Any) -> tuple[bool, str]:
+    文本 = str(书籍编号 or "").strip()
+    if 文本.lower().startswith("dushu:"):
+        return True, 文本.split(":", 1)[1]
+    return False, 文本
+
+
+def _小米设备参数() -> dict[str, Any]:
+    """复用 dushu 网页生成的动态设备参数；不落盘保存设备或登录状态。"""
+    时间戳 = int(time.time())
+    校验和 = 0
+    for 字符 in f"{小米设备编号}&{时间戳}":
+        校验和 = (131 * 校验和 + ord(字符)) % 65536
+    return {
+        "app_id": "mi_wap",
+        "build": "8888",
+        "channel": "",
+        "device_id": 小米设备编号,
+        "user_type": "2",
+        "_t": 时间戳,
+        "_c": 校验和,
+    }
 
 
 def 创建小米HTTP会话(并发数: int = 小米最大并发数) -> aiohttp.ClientSession:
     并发数 = max(1, int(并发数 or 1))
     超时 = aiohttp.ClientTimeout(total=90, sock_connect=15, sock_read=60)
     连接器 = aiohttp.TCPConnector(limit=并发数, limit_per_host=并发数, ttl_dns_cache=300)
-    return aiohttp.ClientSession(headers=小米请求头, timeout=超时, connector=连接器)
+    return aiohttp.ClientSession(
+        headers=小米请求头,
+        timeout=超时,
+        connector=连接器,
+        cookies={"device_id": 小米设备编号},
+    )
 
 
 async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[str, Any]) -> dict[str, Any]:
@@ -185,8 +251,7 @@ async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[s
 def _小米业务成功(数据: Any) -> bool:
     if not isinstance(数据, dict):
         return False
-    值 = 数据.get("status")
-    return 值 in (0, "0")
+    return any(数据.get(字段) in (0, "0") for 字段 in ("status", "result", "code"))
 
 
 def _安全整数(值: Any, 默认值: int = 0) -> int:
@@ -204,6 +269,26 @@ def 格式化小米字数(值: Any) -> str:
 
 
 async def 获取小米详情(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
+    新接口, 实际编号 = _拆分小米书籍编号(书籍编号)
+    if 新接口:
+        数据 = await _请求JSON(
+            会话,
+            f"{小米新接口详情地址}/{urllib.parse.quote(实际编号)}",
+            _小米设备参数(),
+        )
+        if not _小米业务成功(数据):
+            return {}
+        信息 = 数据.get("item")
+        if not isinstance(信息, dict) or not str(信息.get("title") or "").strip():
+            return {}
+        return {
+            "title": str(信息.get("title") or "未知").strip(),
+            "author": str(信息.get("authors") or "未知").strip(),
+            "intro": str(信息.get("summary") or 信息.get("content") or "").strip(),
+            "status": "完结" if 信息.get("finish") else "连载",
+            "word_count": 信息.get("word_count") or 0,
+            "chapter_count": _安全整数(信息.get("chapter_count")),
+        }
     数据 = await _请求JSON(会话, f"{小米详情地址}/{urllib.parse.quote(书籍编号)}", {})
     if not _小米业务成功(数据):
         return {}
@@ -225,6 +310,53 @@ async def 获取小米详情(会话: aiohttp.ClientSession, 书籍编号: str) -
 
 
 async def 获取小米目录(会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+    新接口, 实际编号 = _拆分小米书籍编号(书籍编号)
+    if 新接口:
+        目录: list[dict[str, Any]] = []
+        已见: set[str] = set()
+        游标 = 0
+        目标数量 = 0
+        for _ in range(小米目录最大批次):
+            参数 = _小米设备参数()
+            参数.update({"chapter_id": 游标, "count": 小米目录每批数量})
+            数据 = await _请求JSON(
+                会话,
+                f"{小米新接口目录地址}/{urllib.parse.quote(实际编号)}",
+                参数,
+            )
+            if not _小米业务成功(数据):
+                return []
+            信息 = 数据.get("item") if isinstance(数据.get("item"), dict) else {}
+            目标数量 = _安全整数(信息.get("chapter_count"), 目标数量)
+            项目列表 = 信息.get("toc", [])
+            if not isinstance(项目列表, list) or not 项目列表:
+                break
+            本批新增 = 0
+            最大编号 = 游标
+            for 项目 in 项目列表:
+                if not isinstance(项目, dict):
+                    continue
+                编号 = _数字文本(项目.get("chapter_id"))
+                标题 = str(项目.get("title") or "").strip()
+                if not 编号 or not 标题:
+                    continue
+                最大编号 = max(最大编号, _安全整数(编号, 最大编号))
+                if 编号 in 已见:
+                    continue
+                已见.add(编号)
+                目录.append(
+                    {
+                        "id": 编号,
+                        "title": 标题,
+                        "free": bool(项目.get("free")),
+                        "price": _安全整数(项目.get("price")),
+                    }
+                )
+                本批新增 += 1
+            if 本批新增 == 0 or (目标数量 and len(目录) >= 目标数量):
+                break
+            游标 = 最大编号 + 1
+        return 目录 if (not 目标数量 or len(目录) == 目标数量) else []
     数据 = await _请求JSON(会话, f"{小米目录地址}/{urllib.parse.quote(书籍编号)}", {})
     if not _小米业务成功(数据):
         return []
@@ -246,7 +378,7 @@ async def 获取小米目录(会话: aiohttp.ClientSession, 书籍编号: str) -
 
 def _解析旧版正文页面(页面: bytes) -> str:
     文本 = 页面.decode("utf-8", "replace")
-    匹配 = re.search(r"duokan_fiction_chapter_\d+_\d+\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", 文本)
+    匹配 = re.search(r"duokan_fiction_chapter(?:_\d+_\d+)?\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", 文本)
     if not 匹配:
         return ""
     try:
@@ -284,9 +416,32 @@ async def _下载小米章节(
     信号量: asyncio.Semaphore,
 ) -> str:
     编号 = str(章节.get("id") or "")
+    新接口, 实际编号 = _拆分小米书籍编号(书籍编号)
     async with 信号量:
         for 次数 in range(小米请求重试次数):
             try:
+                if 新接口:
+                    参数 = _小米设备参数()
+                    参数.update(
+                        {
+                            "fiction_id": 实际编号,
+                            "chapter_id": 编号,
+                            "format": "jsonp",
+                        }
+                    )
+                    数据 = await _请求JSON(会话, 小米新接口正文链接地址, 参数)
+                    if not _小米业务成功(数据):
+                        raise RuntimeError("chapter unavailable")
+                    内容地址 = str(数据.get("url") or "").strip()
+                    if urllib.parse.urlsplit(内容地址).scheme not in {"http", "https"}:
+                        raise RuntimeError("content url missing")
+                    async with 会话.get(内容地址) as 响应:
+                        响应.raise_for_status()
+                        页面 = await 响应.read()
+                    正文 = await asyncio.to_thread(_解析旧版正文页面, 页面)
+                    if 正文:
+                        return 正文
+                    raise RuntimeError("empty content")
                 数据 = await _请求JSON(
                     会话,
                     f"{小米正文地址}/{urllib.parse.quote(书籍编号)}",
@@ -507,10 +662,22 @@ def _小米搜索结果相关(项目: dict[str, Any], 关键词: str) -> bool:
         return False
     文本 = (
         str(项目.get("title") or "")
-        + str(项目.get("author") or 项目.get("authorName") or "")
+        + _小米搜索作者(项目)
     )
     文本 = re.sub(r"\s+", "", 文本).casefold()
     return all(词 in 文本 for 词 in 查询词)
+
+
+def _小米搜索作者(项目: dict[str, Any]) -> str:
+    作者 = 项目.get("author") or 项目.get("authorName")
+    if 作者:
+        return str(作者).strip()
+    角色 = 项目.get("role")
+    if isinstance(角色, list):
+        for 项 in 角色:
+            if isinstance(项, (list, tuple)) and len(项) >= 2 and str(项[0]).strip() == "作者":
+                return str(项[1]).strip()
+    return "未知"
 
 
 async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
@@ -519,16 +686,21 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
     try:
         async with 创建小米HTTP会话(2) as 会话:
-            数据 = await _请求JSON(会话, 小米搜索地址, {"query": 关键词, "size": max(1, min(50, int(需要数量 or 20)))})
-        项目列表 = 数据.get("related", []) if isinstance(数据, dict) else []
+            数量 = max(1, min(50, int(需要数量 or 20)))
+            数据 = await _请求JSON(
+                会话,
+                小米搜索地址,
+                {"s": 关键词, "start": 0, "count": 数量, "source": "2,5"},
+            )
+        项目列表 = 数据.get("items", []) if isinstance(数据, dict) else []
         结果: list[dict[str, Any]] = []
         for 项目 in 项目列表 if isinstance(项目列表, list) else []:
             if not isinstance(项目, dict):
                 continue
-            # 接口当前可能返回固定推荐项；无标题/作者相关性的候选不能进入找书聚合。
             if not _小米搜索结果相关(项目, 关键词):
                 continue
-            编号 = _数字文本(项目.get("id"))
+            # onebox 的 id 是聚合结果 ID，正文链路必须使用 source_id。
+            编号 = _数字文本(项目.get("source_id") or 项目.get("fiction_id"))
             标题 = str(项目.get("title") or "").strip()
             if not 编号 or not 标题:
                 continue
@@ -536,12 +708,12 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                 {
                     "book_id": 编号,
                     "title": 标题,
-                    "author": str(项目.get("author") or 项目.get("authorName") or "未知").strip(),
-                    "intro": str(项目.get("description") or "").strip(),
+                    "author": _小米搜索作者(项目),
+                    "intro": str(项目.get("intro") or 项目.get("description") or "").strip(),
                     "url": 构造小米链接(编号),
-                    "score": 项目.get("score") or 0,
-                    "heat": _安全整数(项目.get("readerCount") or 项目.get("readCount")),
-                    "word_count": 项目.get("wordCount") or 0,
+                    "score": 项目.get("rate") or 项目.get("score") or 0,
+                    "heat": _安全整数(项目.get("click") or 项目.get("hot")),
+                    "word_count": 项目.get("word_count") or 0,
                 }
             )
         return 结果[: max(1, min(30, int(需要数量 or 20)))]

@@ -45,6 +45,8 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度目录地址 = "https://novelapi.baidu.com/searchbox"
 百度正文地址 = 百度目录地址
 百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com"}
+百度详情页路径 = "/boxnovel/yuedu/wapdetail"
+百度详情页最大响应字节 = 1024 * 1024
 百度链接正则 = re.compile(
     r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com)" r"[^\s<>\"']*",
     re.IGNORECASE,
@@ -54,9 +56,13 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
     re.IGNORECASE,
 )
 百度请求头 = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 10; V1838T Build/QP1A.190711.020; wv) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+        "Chrome/91.0.4472.114 Mobile Safari/537.36 baiduboxapp/12.8.0.10"
+    ),
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://novel.baidu.com/",
+    "Referer": "https://boxnovel.baidu.com/",
 }
 百度固定UID = "juB18g8oHi_-aH88lPHl8g8nHi_ju2avgi25ugi3Sf8R9WMxpiWmuYMaA"
 百度固定UA = "_a-qiyuuvigyNE64I5me6NN0v8oZu-I4_C2Hiyat2iqlC"
@@ -166,7 +172,7 @@ def 解析百度书籍编号(来源: Any) -> str:
                 查询.setdefault(键.lower(), []).extend(值)
         except Exception:
             continue
-    for 键 in ("gid", "bookid", "book_id", "bookgid"):
+    for 键 in ("gid", "bookid", "book_id", "bookgid", "novel_book_id"):
         for 值 in 查询.get(键, []):
             书籍编号 = _数字文本(值)
             if 书籍编号:
@@ -180,7 +186,7 @@ def 解析百度书籍编号(来源: Any) -> str:
         except Exception:
             数据 = None
         if isinstance(数据, dict):
-            for 键 in ("gid", "bookid", "book_id", "bookGid"):
+            for 键 in ("gid", "bookid", "book_id", "bookGid", "novel_book_id", "novelBookId"):
                 书籍编号 = _数字文本(数据.get(键))
                 if 书籍编号:
                     return 书籍编号
@@ -228,6 +234,49 @@ async def _解析短链(会话: aiohttp.ClientSession, 来源: str) -> str:
         return ""
 
 
+def _从百度详情页提取编号(页面: str) -> str:
+    """提取百度阅读 wapdetail 服务端数据中的正式小说编号。"""
+    文本 = html.unescape(str(页面 or ""))
+    for 字段 in ("novel_book_id", "novelBookId", "book_id", "gid"):
+        匹配 = re.search(
+            rf"[\"']{re.escape(字段)}[\"']\s*:\s*[\"']?(\d{{5,30}})",
+            文本,
+            re.IGNORECASE,
+        )
+        if 匹配:
+            return 匹配.group(1)
+    return ""
+
+
+async def _解析百度详情页编号(会话: aiohttp.ClientSession, 来源: str) -> str:
+    try:
+        解析 = urllib.parse.urlsplit(来源)
+        主机 = (解析.hostname or "").lower()
+        路径 = (解析.path or "").rstrip("/").lower()
+        if 主机 not in {"boxnovel.baidu.com", "novel.baidu.com"} or 路径 != 百度详情页路径:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    for 次数 in range(百度请求重试次数):
+        try:
+            async with 会话.get(来源) as 响应:
+                响应.raise_for_status()
+                if 响应.content_length and 响应.content_length > 百度详情页最大响应字节:
+                    return ""
+                页面 = await 响应.content.read(百度详情页最大响应字节 + 1)
+            if len(页面) > 百度详情页最大响应字节:
+                return ""
+            书籍编号 = _从百度详情页提取编号(页面.decode("utf-8", "replace"))
+            if 书籍编号:
+                return 书籍编号
+        except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError):
+            pass
+        if 次数 + 1 < 百度请求重试次数:
+            await asyncio.sleep(0.25 * (次数 + 1))
+    logger.debug("百度小说分享页解析失败：stage=detail_page,error=ParseFailed")
+    return ""
+
+
 async def _异步解析书籍编号(来源: str, 会话: aiohttp.ClientSession) -> str:
     编号 = 解析百度书籍编号(来源)
     if 编号:
@@ -236,7 +285,9 @@ async def _异步解析书籍编号(来源: str, 会话: aiohttp.ClientSession) 
         主机 = (urllib.parse.urlsplit(来源).hostname or "").lower()
     except Exception:
         主机 = ""
-    return await _解析短链(会话, 来源) if 主机 == "mr.baidu.com" else ""
+    if 主机 == "mr.baidu.com":
+        return await _解析短链(会话, 来源)
+    return await _解析百度详情页编号(会话, 来源)
 
 
 def _百度成功(数据: Any) -> bool:
@@ -529,6 +580,16 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
             stage = "详情目录"
             详情, 目录 = await asyncio.gather(获取百度详情(会话, 书籍编号), 获取百度目录(会话, 书籍编号))
             if not 详情 or not 目录:
+                yield 百度下载失败提示
+                return
+            预期章节数 = _安全整数(详情.get("chapter_count"))
+            if 预期章节数 > 0 and len(目录) != 预期章节数:
+                logger.warning(
+                    "百度小说目录不完整：book_id=%s, catalog=%s, expected=%s",
+                    书籍编号,
+                    len(目录),
+                    预期章节数,
+                )
                 yield 百度下载失败提示
                 return
             logger.info("百度小说开始下载：book_id=%s, chapters=%s", 书籍编号, len(目录))
