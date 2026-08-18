@@ -44,8 +44,13 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度详情地址 = 百度搜索地址
 百度目录地址 = "https://novelapi.baidu.com/searchbox"
 百度正文地址 = 百度目录地址
+百度出版详情地址 = "https://appyd.baidu.com/nabook/detail/wap"
+百度出版图书地址 = "https://appyd.baidu.com/nabook/book"
+百度出版目录地址 = "https://appyd.baidu.com/nabook/chapter"
+百度出版正文地址 = "https://appyd.baidu.com/mobile/getbdjson"
 百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com"}
 百度详情页路径 = "/boxnovel/yuedu/wapdetail"
+百度详情页路径集合 = {"/boxnovel/yuedu/wapdetail", "/boxnovel/yuedu/wapcontent"}
 百度详情页最大响应字节 = 1024 * 1024
 百度链接正则 = re.compile(
     r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com)" r"[^\s<>\"']*",
@@ -150,6 +155,38 @@ def _安全解码(文本: str) -> str:
         return urllib.parse.unquote(文本)
     except Exception:
         return 文本
+
+
+def _解析百度出版文档编号(来源: Any) -> str:
+    """提取百度阅读出版源分享页的 doc_id。"""
+    try:
+        解析 = urllib.parse.urlsplit(_清理来源(来源))
+    except (TypeError, ValueError):
+        return ""
+    if (
+        (解析.hostname or "").lower() not in {"boxnovel.baidu.com", "novel.baidu.com"}
+        or (解析.path or "").rstrip("/").lower() not in 百度详情页路径集合
+    ):
+        return ""
+    for 原始数据 in urllib.parse.parse_qs(解析.query, keep_blank_values=True).get("data", []):
+        数据文本 = str(原始数据)
+        for _ in range(2):
+            解码后 = urllib.parse.unquote_plus(数据文本)
+            if 解码后 == 数据文本:
+                break
+            数据文本 = 解码后
+        try:
+            数据 = json.loads(数据文本)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(数据, dict):
+            continue
+        来源类型 = str(数据.get("is_yuedu_source") or "").strip().lower()
+        文档编号 = str(数据.get("doc_id") or "").strip().lower()
+        if 来源类型 not in {"1", "true"} or not re.fullmatch(r"[0-9a-f]{16,64}", 文档编号):
+            continue
+        return 文档编号
+    return ""
 
 
 def _数字文本(值: Any) -> str:
@@ -367,6 +404,241 @@ async def 获取百度目录(会话: aiohttp.ClientSession, 书籍编号: str) -
     return 目录
 
 
+def _百度出版接口成功(数据: Any) -> bool:
+    状态 = 数据.get("status") if isinstance(数据, dict) else None
+    return isinstance(状态, dict) and _安全整数(状态.get("code"), -1) == 0
+
+
+def _取百度出版详情字段(数据: dict[str, Any]) -> dict[str, Any]:
+    节点 = 数据.get("data")
+    if not isinstance(节点, dict):
+        return {}
+    return {
+        "book_id": str(节点.get("novel_book_id") or 节点.get("gid") or "").strip(),
+        "title": str(节点.get("title") or "未知").strip(),
+        "author": str(节点.get("author") or "未知").strip(),
+        "intro": str(节点.get("description") or 节点.get("summary") or "").strip(),
+        "status": str(节点.get("status") or "连载").strip(),
+        "word_count": 节点.get("words_num") or 节点.get("wordCount") or "",
+        "chapter_count": _安全整数(节点.get("chapter_num")),
+    }
+
+
+async def 获取百度出版详情(会话: aiohttp.ClientSession, 文档编号: str) -> dict[str, Any]:
+    数据 = await _请求JSON(
+        会话,
+        百度出版详情地址,
+        {
+            "data": json.dumps({"doc_id": 文档编号}, separators=(",", ":")),
+            "fr": "9",
+        },
+    )
+    if not _百度出版接口成功(数据):
+        return {}
+    return _取百度出版详情字段(数据)
+
+
+def _取百度出版图书数据(数据: dict[str, Any]) -> dict[str, Any]:
+    if not _百度出版接口成功(数据):
+        return {}
+    节点 = 数据.get("data")
+    return 节点 if isinstance(节点, dict) else {}
+
+
+async def 获取百度出版图书(会话: aiohttp.ClientSession, 文档编号: str) -> dict[str, Any]:
+    数据 = await _请求JSON(
+        会话,
+        百度出版图书地址,
+        {"na_uncheck": "1", "opid": "wk_na", "doc_id": 文档编号},
+    )
+    return _取百度出版图书数据(数据)
+
+
+def _从百度出版图书提取目录(图书数据: dict[str, Any]) -> list[dict[str, Any]]:
+    节点 = 图书数据.get("bdjson", {})
+    项目列表 = 节点.get("catalogs", []) if isinstance(节点, dict) else []
+    if not isinstance(项目列表, list):
+        return []
+    目录: list[dict[str, Any]] = []
+    已见: set[str] = set()
+    for 项目 in 项目列表:
+        if not isinstance(项目, dict):
+            continue
+        编号 = str(项目.get("href") or "").strip()
+        标题 = str(项目.get("title") or "").strip()
+        if not 编号 or not 标题 or 编号 in 已见 or not re.fullmatch(r"\d+-\d+", 编号):
+            continue
+        已见.add(编号)
+        目录.append(
+            {
+                "id": 编号,
+                "title": 标题,
+                "source_page": 编号.split("-", 1)[0],
+                "source_cid": 编号,
+            }
+        )
+    return 目录
+
+
+def _获取百度出版版本(图书数据: dict[str, Any]) -> str:
+    详情 = 图书数据.get("docInfo", {})
+    return str(详情.get("version") or "").strip() if isinstance(详情, dict) else ""
+
+
+async def 获取百度出版目录(
+    会话: aiohttp.ClientSession,
+    文档编号: str,
+    图书数据: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    目录 = _从百度出版图书提取目录(图书数据 or {})
+    if 目录:
+        return 目录
+    数据 = await _请求JSON(
+        会话,
+        百度出版目录地址,
+        {
+            "data": json.dumps({"doc_id": 文档编号, "fromsource": "wise"}, separators=(",", ":")),
+            "fr": "9",
+        },
+    )
+    if not _百度出版接口成功(数据):
+        return []
+    项目列表 = 数据.get("data", {}).get("items", [])
+    if not isinstance(项目列表, list):
+        return []
+    目录 = []
+    已见: set[str] = set()
+    for 项目 in 项目列表:
+        if not isinstance(项目, dict):
+            continue
+        编号 = str(项目.get("cid") or "").strip()
+        标题 = str(项目.get("title") or "").strip()
+        if not 编号 or not 标题 or 编号 in 已见:
+            continue
+        已见.add(编号)
+        来源编号 = str(项目.get("ctsrc") or "").strip()
+        目录.append(
+            {
+                "id": 编号,
+                "title": 标题,
+                "source_page": 来源编号.split("-", 1)[0] if "-" in 来源编号 else "",
+                "source_cid": 来源编号,
+            }
+        )
+    return 目录
+
+
+def _百度出版节点文本(值: Any) -> str:
+    if 值 is None:
+        return ""
+    if isinstance(值, str):
+        return html.unescape(值)
+    if isinstance(值, (list, tuple)):
+        return "".join(_百度出版节点文本(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        if 值.get("t") == "br":
+            return "\n"
+        return _百度出版节点文本(值.get("c", 值.get("text", "")))
+    return str(值)
+
+
+def _百度出版标题键(值: Any) -> str:
+    return re.sub(r"\s+", "", html.unescape(str(值 or ""))).strip()
+
+
+def _拆分百度出版页面正文(内容: Any, 页面目录: list[dict[str, Any]]) -> dict[str, str]:
+    if isinstance(内容, dict):
+        区块列表 = 内容.get("c", [])
+    else:
+        区块列表 = []
+    if not isinstance(区块列表, list):
+        return {}
+    区块正文 = [_百度出版节点文本(区块).strip() for 区块 in 区块列表]
+    匹配位置: list[tuple[dict[str, Any], int]] = []
+    游标 = 0
+    for 章节 in 页面目录:
+        标题键 = _百度出版标题键(章节.get("title"))
+        位置 = next(
+            (下标 for 下标 in range(游标, len(区块正文)) if _百度出版标题键(区块正文[下标]) == 标题键),
+            None,
+        )
+        if 位置 is None:
+            continue
+        匹配位置.append((章节, 位置))
+        游标 = 位置 + 1
+    结果: dict[str, str] = {}
+    for 下标, (章节, 起点) in enumerate(匹配位置):
+        终点 = 匹配位置[下标 + 1][1] if 下标 + 1 < len(匹配位置) else len(区块正文)
+        正文 = "\n".join(文本 for 文本 in 区块正文[起点 + 1 : 终点] if 文本)
+        结果[str(章节.get("id") or "")] = 正文.strip()
+    return 结果
+
+
+async def 下载百度出版正文(
+    会话: aiohttp.ClientSession,
+    文档编号: str,
+    目录: list[dict[str, Any]],
+    版本: str,
+) -> list[str | None]:
+    结果: list[str | None] = [None] * len(目录)
+    分组: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for 下标, 章节 in enumerate(目录):
+        页面编号 = str(章节.get("source_page") or "").strip()
+        if 页面编号:
+            分组.setdefault(页面编号, []).append((下标, 章节))
+    信号量 = asyncio.Semaphore(百度最大并发数)
+    页面结果: dict[str, dict[str, str]] = {}
+    页面锁 = asyncio.Lock()
+    页面进度锁 = asyncio.Lock()
+    已完成页面 = 0
+    下次页面日志 = max(1, len(分组) // 10)
+
+    async def 下载页面(页面编号: str, 页面目录: list[tuple[int, dict[str, Any]]]) -> None:
+        nonlocal 已完成页面, 下次页面日志
+        async with 信号量:
+            try:
+                数据 = await _请求JSON(
+                    会话,
+                    百度出版正文地址,
+                    {"cn": 页面编号, "version": 版本, "doc_id": 文档编号},
+                )
+                状态 = 数据.get("status") if isinstance(数据, dict) else None
+                if not isinstance(状态, dict) or _安全整数(状态.get("code"), -1) != 0:
+                    logger.debug("百度出版正文页面获取失败：page=%s, error=BusinessError", 页面编号)
+                    return
+                数据节点 = 数据.get("data")
+                内容 = 数据节点.get("content") if isinstance(数据节点, dict) else None
+                当前目录 = [章节 for _, 章节 in 页面目录]
+                拆分结果 = _拆分百度出版页面正文(内容, 当前目录)
+                async with 页面锁:
+                    页面结果[页面编号] = 拆分结果
+            except Exception as 异常:
+                logger.debug("百度出版正文页面获取失败：page=%s, error=%s", 页面编号, type(异常).__name__)
+            finally:
+                async with 页面进度锁:
+                    已完成页面 += 1
+                    if 已完成页面 >= 下次页面日志 or 已完成页面 == len(分组):
+                        logger.info(
+                            "百度出版正文进度：book_id=%s, progress=%s/%s, success=%s",
+                            文档编号,
+                            已完成页面,
+                            len(分组),
+                            sum(bool(页面结果.get(页面, {})) for 页面 in 分组),
+                        )
+                        下次页面日志 += max(1, len(分组) // 10)
+
+    await asyncio.gather(*(下载页面(页面编号, 项目) for 页面编号, 项目 in 分组.items()))
+    for 页面编号, 页面目录 in 分组.items():
+        当前结果 = 页面结果.get(页面编号)
+        if 当前结果 is None:
+            continue
+        for 下标, 章节 in 页面目录:
+            章节编号 = str(章节.get("id") or "")
+            if 章节编号 in 当前结果:
+                结果[下标] = 当前结果[章节编号]
+    return 结果
+
+
 def _解密百度正文(密文: bytes) -> str:
     if not 密文 or AES is None or unpad is None:
         return ""
@@ -573,15 +845,32 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
     stage = "解析"
     try:
         async with 创建百度HTTP会话() as 会话:
-            书籍编号 = await _异步解析书籍编号(来源, 会话)
-            if not 书籍编号:
-                yield 百度下载失败提示
-                return
-            stage = "详情目录"
-            详情, 目录 = await asyncio.gather(获取百度详情(会话, 书籍编号), 获取百度目录(会话, 书籍编号))
-            if not 详情 or not 目录:
-                yield 百度下载失败提示
-                return
+            出版文档编号 = _解析百度出版文档编号(来源)
+            出版模式 = bool(出版文档编号)
+            if 出版模式:
+                书籍编号 = 出版文档编号
+                stage = "出版详情目录"
+                详情, 图书数据 = await asyncio.gather(
+                    获取百度出版详情(会话, 出版文档编号),
+                    获取百度出版图书(会话, 出版文档编号),
+                )
+                目录 = await 获取百度出版目录(会话, 出版文档编号, 图书数据)
+                正文版本 = _获取百度出版版本(图书数据)
+                if not 详情 or not 目录 or not 正文版本:
+                    yield 百度下载失败提示
+                    return
+                书籍编号 = str(详情.get("book_id") or 书籍编号)
+            else:
+                书籍编号 = await _异步解析书籍编号(来源, 会话)
+                if not 书籍编号:
+                    yield 百度下载失败提示
+                    return
+                stage = "详情目录"
+                详情, 目录 = await asyncio.gather(获取百度详情(会话, 书籍编号), 获取百度目录(会话, 书籍编号))
+                正文版本 = ""
+                if not 详情 or not 目录:
+                    yield 百度下载失败提示
+                    return
             预期章节数 = _安全整数(详情.get("chapter_count"))
             if 预期章节数 > 0 and len(目录) != 预期章节数:
                 logger.warning(
@@ -605,8 +894,14 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
                 ]
             )
             stage = "正文"
-            正文列表 = await 下载百度正文(会话, 书籍编号, 目录)
-        if len(正文列表) != len(目录) or any(not 正文 for 正文 in 正文列表):
+            if 出版模式:
+                出版正文列表 = await 下载百度出版正文(会话, 出版文档编号, 目录, 正文版本)
+                正文缺失 = any(正文 is None for 正文 in 出版正文列表)
+                正文列表 = [正文 or "" for 正文 in 出版正文列表]
+            else:
+                正文列表 = await 下载百度正文(会话, 书籍编号, 目录)
+                正文缺失 = any(not 正文 for 正文 in 正文列表)
+        if len(正文列表) != len(目录) or 正文缺失:
             logger.warning("百度小说正文不完整：book_id=%s, success=%s, total=%s", 书籍编号, sum(bool(x) for x in 正文列表), len(目录))
             yield 百度下载失败提示
             return
