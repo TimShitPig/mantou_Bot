@@ -131,17 +131,27 @@ async def 异步调用接口(
         raise RuntimeError("点众接口未返回JSON") from exc
     if not isinstance(raw, dict):
         raise RuntimeError("点众接口响应格式异常")
+    data_plain = None
     data_json = None
     data = raw.get("data")
     if isinstance(data, str) and data:
         try:
-            data_json = json.loads(dec(data))
+            data_plain = dec(data)
+            data_json = json.loads(data_plain)
         except Exception:
-            pass
+            # 部分错误响应会直接把明文 JSON 放在 data 中，保留参考工具的回退路径。
+            data_plain = data
+            try:
+                明文回退 = json.loads(data)
+            except (TypeError, json.JSONDecodeError):
+                明文回退 = None
+            if isinstance(明文回退, dict):
+                data_json = 明文回退
     return {
         "http": response.status,
         "raw": raw,
         "data_json": data_json,
+        "data_plain": data_plain,
     }
 
 
