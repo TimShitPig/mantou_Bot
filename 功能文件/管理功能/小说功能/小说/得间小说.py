@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -40,20 +39,13 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-得间单章最大并发数 = 700
+得间单章最大并发数 = 500
 得间单章重试次数 = 3
 得间解密最大动态并发数 = 200
-得间目录窗口章节数 = 7
-得间目录最大并发数 = 得间单章最大并发数
 得间解密执行器 = ThreadPoolExecutor(
     max_workers=得间解密最大动态并发数,
     thread_name_prefix="dejian-decrypt",
 )
-
-
-def 计算得间目录并发数(章节总数: int) -> int:
-    窗口总数 = (max(0, int(章节总数 or 0)) + 得间目录窗口章节数 - 1) // 得间目录窗口章节数
-    return max(1, min(得间目录最大并发数, 窗口总数))
 
 
 # ===== 得间协议与解密（原 _得间源码） =====
@@ -452,10 +444,17 @@ async def 异步下载得间字节(
 class 得间单章异步客户端:
     """参考得间.py 的 DejianClient，仅将 requests 会话替换为共享 aiohttp 会话。"""
 
-    def __init__(self, HTTP会话: aiohttp.ClientSession, 请求信号量: asyncio.Semaphore) -> None:
+    def __init__(
+        self,
+        HTTP会话: aiohttp.ClientSession,
+        请求信号量: asyncio.Semaphore,
+        批量清单: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.HTTP会话 = HTTP会话
         self.请求信号量 = 请求信号量
         self.会话参数 = load_session()
+        self._批量清单 = dict(批量清单 or {})
+        self._批量清单锁 = asyncio.Lock()
 
     def 账号参数(self) -> Dict[str, str]:
         参数: Dict[str, str] = {}
@@ -521,20 +520,26 @@ class 得间单章异步客户端:
         return await 异步下载得间字节(self.HTTP会话, 地址, self.请求信号量)
 
     async def 获取批量下载清单(self, 书籍编号: str) -> Dict[str, Any]:
-        信息 = await self.获取JSON(
-            "/zybook3/u/p/api.php",
-            {"Act": "batchDownloadChapteres", "bid": str(书籍编号)},
-        )
-        正文 = 信息.get("body") if isinstance(信息, dict) else None
-        地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
-        if not 地址:
-            raise RuntimeError("no downUrl")
-        return {
-            "bookId": str(书籍编号),
-            "downUrl": 地址,
-            "maxChapId": _to_int(正文.get("maxChapId")),
-            "downloadCount": _to_int(正文.get("downloadCount")),
-        }
+        if self._批量清单.get("downUrl"):
+            return self._批量清单
+        async with self._批量清单锁:
+            if self._批量清单.get("downUrl"):
+                return self._批量清单
+            信息 = await self.获取JSON(
+                "/zybook3/u/p/api.php",
+                {"Act": "batchDownloadChapteres", "bid": str(书籍编号)},
+            )
+            正文 = 信息.get("body") if isinstance(信息, dict) else None
+            地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
+            if not 地址:
+                raise RuntimeError("no downUrl")
+            self._批量清单 = {
+                "bookId": str(书籍编号),
+                "downUrl": 地址,
+                "maxChapId": _to_int(正文.get("maxChapId")),
+                "downloadCount": _to_int(正文.get("downloadCount")),
+            }
+            return self._批量清单
 
     async def 安全章节列表(
         self,
@@ -604,68 +609,6 @@ class 得间单章异步客户端:
         return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单)
 
 
-async def 创建得间正文地址预取任务表(
-    HTTP会话: aiohttp.ClientSession,
-    书籍编号: str,
-    章节编号列表: List[int],
-    批量清单: Optional[Dict[str, Any]] = None,
-) -> Dict[int, asyncio.Task]:
-    目标集合 = {_to_int(章节编号) for 章节编号 in 章节编号列表}
-    目标集合.discard(0)
-    目标章节 = sorted(目标集合)
-    if not 目标章节:
-        return {}
-
-    窗口信号量 = asyncio.Semaphore(计算得间目录并发数(len(目标章节)))
-    目录客户端 = 得间单章异步客户端(HTTP会话, 窗口信号量)
-    if 批量清单 is None:
-        try:
-            批量清单 = await 目录客户端.获取批量下载清单(书籍编号)
-        except Exception as 异常:
-            logger.debug(f"得间正文地址预取失败：book_id={书籍编号}, error={type(异常).__name__}")
-            return {}
-    基础地址 = str(批量清单.get("downUrl") or "").strip()
-    if not 基础地址:
-        return {}
-
-    async def 获取窗口(窗口章节: List[int]) -> Dict[int, str]:
-        起始章节 = 窗口章节[0]
-        try:
-            分隔符 = "&" if "?" in 基础地址 else "?"
-            地址 = f"{基础地址}{分隔符}{urllib.parse.urlencode({'startChapID': 起始章节})}"
-            信息 = await 目录客户端.获取JSON(地址, 需要公共参数=False)
-            正文 = 信息.get("body") if isinstance(信息, dict) else None
-            章节列表 = 正文.get("downInfo") if isinstance(正文, dict) else None
-            if not isinstance(章节列表, list):
-                return {}
-            窗口集合 = set(窗口章节)
-            地址表: Dict[int, str] = {}
-            for 章节 in 章节列表:
-                if not isinstance(章节, dict):
-                    continue
-                章节编号 = _to_int(章节.get("chapterId"))
-                正文地址 = str(
-                    章节.get("url") or 章节.get("downUrl") or 章节.get("downloadUrl") or ""
-                ).strip()
-                if 章节编号 in 窗口集合 and 正文地址:
-                    地址表[章节编号] = 正文地址
-            return 地址表
-        except Exception as 异常:
-            logger.debug(
-                f"得间正文地址窗口预取失败：book_id={书籍编号}, start={起始章节}, "
-                f"error={type(异常).__name__}"
-            )
-            return {}
-
-    任务表: Dict[int, asyncio.Task] = {}
-    for 下标 in range(0, len(目标章节), 得间目录窗口章节数):
-        窗口章节 = 目标章节[下标:下标 + 得间目录窗口章节数]
-        窗口任务 = asyncio.create_task(获取窗口(窗口章节))
-        for 章节编号 in 窗口章节:
-            任务表[章节编号] = 窗口任务
-    return 任务表
-
-
 def 解密得间单章正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
     原始令牌 = native_rsa_unwrap(base64.b64decode(授权令牌))
     密钥 = derive_stage1_key(原始令牌, 用户名, 设备号)
@@ -678,27 +621,25 @@ async def 异步下载得间单章正文(
     章节编号: int,
     请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
-    预取正文地址: str = "",
+    客户端: Optional[得间单章异步客户端] = None,
 ) -> str:
     """与参考 get_chapter_text 相同的单章顺序，网络请求改为共享异步会话。"""
     for 重试轮次 in range(1, 得间单章重试次数 + 1):
-        客户端 = 得间单章异步客户端(HTTP会话, 请求信号量)
+        当前客户端 = 客户端 or 得间单章异步客户端(HTTP会话, 请求信号量)
         try:
-            用户名 = str(客户端.会话参数.get("usr") or "")
-            设备号 = str(客户端.会话参数.get("devId") or "")
+            用户名 = str(当前客户端.会话参数.get("usr") or "")
+            设备号 = str(当前客户端.会话参数.get("devId") or "")
             if not 用户名 or not 设备号:
                 raise RuntimeError("bad session")
-            正文地址 = str(预取正文地址 if 重试轮次 == 1 else "").strip()
-            if not 正文地址:
-                章节项 = await 客户端.查找章节(书籍编号, 章节编号)
-                正文地址 = str(
-                    章节项.get("url") or 章节项.get("downUrl") or 章节项.get("downloadUrl") or ""
-                ).strip()
+            章节项 = await 当前客户端.查找章节(书籍编号, 章节编号)
+            正文地址 = str(
+                章节项.get("url") or 章节项.get("downUrl") or 章节项.get("downloadUrl") or ""
+            ).strip()
             if not 正文地址:
                 raise RuntimeError("no chapter url")
-            授权结果 = await 客户端.单章授权(书籍编号, 章节编号)
+            授权结果 = await 当前客户端.单章授权(书籍编号, 章节编号)
             授权令牌 = extract_token_b64(授权结果, 章节编号)
-            正文数据 = await 客户端.下载(正文地址)
+            正文数据 = await 当前客户端.下载(正文地址)
             async with 解密信号量:
                 return await asyncio.get_running_loop().run_in_executor(
                     得间解密执行器,
@@ -1066,7 +1007,6 @@ async def 下载全部章节(
         return []
 
     实际正文并发数 = 计算得间单章并发数(len(章节下标表))
-    目录并发数 = 计算得间目录并发数(len(章节下标表))
     解密并发数 = max(1, min(实际正文并发数, 得间解密最大动态并发数))
     完成 = len(无效章节下标)
     成功 = 0
@@ -1075,25 +1015,16 @@ async def 下载全部章节(
     请求信号量 = asyncio.Semaphore(实际正文并发数)
     解密信号量 = asyncio.Semaphore(解密并发数)
     async with 创建得间HTTP会话(实际正文并发数) as HTTP会话:
+        客户端 = 得间单章异步客户端(HTTP会话, 请求信号量, 批量清单)
         logger.info(
             f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
             f"mode=single_chapter, concurrency={实际正文并发数}, "
-            f"max_concurrency={得间单章最大并发数}, catalog_concurrency={目录并发数}, session_reuse=on, "
+            f"max_concurrency={得间单章最大并发数}, session_reuse=on, "
             f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
-        )
-        正文地址任务表 = await 创建得间正文地址预取任务表(
-            HTTP会话,
-            书籍编号,
-            list(章节下标表),
-            批量清单,
         )
 
         async def 下载一章(章节编号: int, 下标列表: List[int]) -> None:
             nonlocal 完成, 成功, 上次日志百分比
-            正文地址任务 = 正文地址任务表.get(章节编号)
-            预取正文地址 = ""
-            if 正文地址任务 is not None:
-                预取正文地址 = str((await 正文地址任务).get(章节编号) or "")
             正文 = (
                 await 异步下载得间单章正文(
                     HTTP会话,
@@ -1101,7 +1032,7 @@ async def 下载全部章节(
                     章节编号,
                     请求信号量,
                     解密信号量,
-                    预取正文地址,
+                    客户端,
                 )
             ).strip()
             for 下标 in 下标列表:
