@@ -2619,9 +2619,9 @@ async def 下载参考正文(
 
     logger.debug(
         f"QQ阅读正文首轮汇总：书籍编号={book_id}, 批次数={initial_stats['batches']}, "
-        f"响应章节数={initial_stats['resp开启se_items']}/{total}, "
+        f"响应章节数={initial_stats['response_items']}/{total}, "
         f"有效章节数={initial_stats['valid_items']}, "
-        f"响应缺失={initial_stats['resp开启se_missing']}, "
+        f"响应缺失={initial_stats['response_missing']}, "
         f"解密失败={initial_stats['decrypt_failed']}, "
         f"请求失败={initial_stats['http_failed']}, "
         f"其他失败={initial_stats['other_failed']}"
@@ -2663,9 +2663,9 @@ async def 下载参考正文(
         logger.debug(
             f"QQ阅读失败章节重试结果：书籍编号={book_id}, 轮次={round_index}/{QQ阅读失败章节重试轮数}, "
             f"恢复={recovered}, 仍缺失={total - success}, "
-            f"响应章节数={retry_stats['resp开启se_items']}, "
+            f"响应章节数={retry_stats['response_items']}, "
             f"有效章节数={retry_stats['valid_items']}, "
-            f"响应缺失={retry_stats['resp开启se_missing']}, "
+            f"响应缺失={retry_stats['response_missing']}, "
             f"解密失败={retry_stats['decrypt_failed']}, "
             f"请求失败={retry_stats['http_failed']}, "
             f"其他失败={retry_stats['other_failed']}"
