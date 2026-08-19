@@ -41,12 +41,19 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 塔读小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.塔读小说")
 百度小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.百度小说")
 小米小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.小米小说")
+宜搜小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.宜搜小说")
+米读小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.米读小说")
+猫眼小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.猫眼小说")
+酷我小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.酷我小说")
+酷匠小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.酷匠小说")
+连城小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.连城小说")
+菠萝包小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.菠萝包小说")
 小说缓存清理 = 加载功能模块("功能文件.管理功能.小说功能.功能.下载缓存清理")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.28.0"
+插件版本 = "5.29.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -364,6 +371,90 @@ class MyPlugin(Star):
                     event.stop_event()
                     return
                 async for 输出内容 in _输出回复流(小米回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            宜搜回复流 = 宜搜小说功能.获取宜搜小说回复流(event, 命令文本, self.config)
+            if 宜搜回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "宜搜", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("宜搜", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(宜搜回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            米读回复流 = 米读小说功能.获取米读小说回复流(event, 命令文本, self.config)
+            if 米读回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "米读", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("米读", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(米读回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            猫眼回复流 = 猫眼小说功能.获取猫眼小说回复流(event, 命令文本, self.config)
+            if 猫眼回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "猫眼", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("猫眼", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(猫眼回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            酷我回复流 = 酷我小说功能.获取酷我小说回复流(event, 命令文本, self.config)
+            if 酷我回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "酷我", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("酷我", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(酷我回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            酷匠回复流 = 酷匠小说功能.获取酷匠小说回复流(event, 命令文本, self.config)
+            if 酷匠回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "酷匠", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("酷匠", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(酷匠回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            连城回复流 = 连城小说功能.获取连城小说回复流(event, 命令文本, self.config)
+            if 连城回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "连城", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("连城", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(连城回复流):
+                    yield 输出内容
+                event.stop_event()
+                return
+
+            菠萝包回复流 = 菠萝包小说功能.获取菠萝包小说回复流(event, 命令文本, self.config)
+            if 菠萝包回复流 is not None:
+                if not 小说功能开关.当前事件可使用小说功能(event, "菠萝包", self.config):
+                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("菠萝包", self.config)):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                async for 输出内容 in _输出回复流(菠萝包回复流):
                     yield 输出内容
                 event.stop_event()
                 return

@@ -87,6 +87,48 @@ except Exception as exc:
     小米小说 = None
     logger.warning(f"找书加载小米失败：错误={exc}")
 
+try:
+    from 功能文件.管理功能.小说功能.小说 import 宜搜小说
+except Exception as exc:
+    宜搜小说 = None
+    logger.warning(f"找书加载宜搜失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 米读小说
+except Exception as exc:
+    米读小说 = None
+    logger.warning(f"找书加载米读失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 猫眼小说
+except Exception as exc:
+    猫眼小说 = None
+    logger.warning(f"找书加载猫眼失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 酷我小说
+except Exception as exc:
+    酷我小说 = None
+    logger.warning(f"找书加载酷我失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 酷匠小说
+except Exception as exc:
+    酷匠小说 = None
+    logger.warning(f"找书加载酷匠失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 连城小说
+except Exception as exc:
+    连城小说 = None
+    logger.warning(f"找书加载连城失败：错误={exc}")
+
+try:
+    from 功能文件.管理功能.小说功能.小说 import 菠萝包小说
+except Exception as exc:
+    菠萝包小说 = None
+    logger.warning(f"找书加载菠萝包失败：错误={exc}")
+
 
 每页数量 = 5
 会话等待秒数 = 300
@@ -1058,6 +1100,107 @@ async def 搜索小米(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     return 结果[:需要数量]
 
 
+def _整理新增平台搜索结果(平台: str, 原始结果: Any, 需要数量: int) -> list[dict[str, Any]]:
+    """把各独立平台模块的搜索字段接入统一找书会话。"""
+    if not isinstance(原始结果, list):
+        return []
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        书籍编号 = str(书籍.get("book_id") or "").strip()
+        书名 = 清理文本(书籍.get("title"))
+        if not 书籍编号 or not 书名:
+            continue
+        作者 = 清理文本(书籍.get("author") or "未知") or "未知"
+        评分 = _安全浮点(书籍.get("score"))
+        字数 = _安全整数热度(书籍.get("word_count"))
+        热度 = _安全整数热度(书籍.get("heat"))
+        结果.append({
+            "platform": 平台,
+            "book_id": 书籍编号,
+            "title": 书名,
+            "author": 作者,
+            "url": str(书籍.get("url") or ""),
+            "heat": 热度 or 计算热度排序值(评分=评分, 字数=字数),
+            "heat_text": "",
+            "score": 评分,
+            "read_count": 热度,
+            "word_count": 字数,
+        })
+    return 结果[: max(1, int(需要数量 or 20))]
+
+
+async def 搜索宜搜(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 宜搜小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("宜搜", await 宜搜小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书宜搜搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索米读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 米读小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("米读", await 米读小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书米读搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索猫眼(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 猫眼小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("猫眼", await 猫眼小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书猫眼搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索酷我(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 酷我小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("酷我", await 酷我小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书酷我搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索酷匠(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 酷匠小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("酷匠", await 酷匠小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书酷匠搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索连城(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 连城小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("连城", await 连城小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书连城搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
+async def 搜索菠萝包(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 菠萝包小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果("菠萝包", await 菠萝包小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+    except Exception as exc:
+        logger.debug("找书菠萝包搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
 def _清理QQ阅读预检缓存() -> None:
     现在 = time.time()
     if len(QQ阅读预检缓存) < 512:
@@ -1159,6 +1302,13 @@ def _平台优先级值(平台: Any) -> int:
         "塔读": 4,
         "百度": 3,
         "小米": 2,
+        "宜搜": 1,
+        "米读": 0,
+        "猫眼": -1,
+        "酷我": -2,
+        "酷匠": -3,
+        "连城": -4,
+        "菠萝包": -5,
     }.get(str(平台 or ""), 0)
 
 
@@ -1279,12 +1429,19 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             _限时搜索("塔读", 搜索塔读(关键词, 需要数量=数量)),
             _限时搜索("百度", 搜索百度(关键词, 需要数量=数量)),
             _限时搜索("小米", 搜索小米(关键词, 需要数量=数量)),
+            _限时搜索("宜搜", 搜索宜搜(关键词, 需要数量=数量)),
+            _限时搜索("米读", 搜索米读(关键词, 需要数量=数量)),
+            _限时搜索("猫眼", 搜索猫眼(关键词, 需要数量=数量)),
+            _限时搜索("酷我", 搜索酷我(关键词, 需要数量=数量)),
+            _限时搜索("酷匠", 搜索酷匠(关键词, 需要数量=数量)),
+            _限时搜索("连城", 搜索连城(关键词, 需要数量=数量)),
+            _限时搜索("菠萝包", 搜索菠萝包(关键词, 需要数量=数量)),
         )
-        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果 = await asyncio.gather(
+        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果 = await asyncio.gather(
             *搜索任务,
             return_exceptions=False,
         )
-        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果):
+        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果):
             for 排名, 项 in enumerate(平台结果):
                 if isinstance(项, dict):
                     项.setdefault("_platform_rank", 排名)
@@ -1296,7 +1453,7 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             搜索类型=搜索类型,
         )
         QQ阅读结果 = await 过滤章节单独付费QQ阅读搜索结果(QQ阅读结果)
-        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果])
+        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果])
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
         if len(初步结果) < 每页数量:
@@ -1307,7 +1464,7 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             )
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果]
+            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果]
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
                 return await asyncio.gather(
                     _限时搜索("番茄联想", 搜索番茄(session, w, 需要数量=10)),
@@ -1315,25 +1472,37 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
                     _限时搜索("书旗联想结果", 搜索书旗(session, w, 需要数量=10)),
                     _限时搜索("QQ阅读联想", 搜索QQ阅读(w, 需要数量=10)),
                     _限时搜索("QQ浏览器联想", 搜索QQ浏览器(w, 需要数量=10)),
+                    _限时搜索("得间联想", 搜索得间(w, 需要数量=10)),
+                    _限时搜索("点众联想", 搜索点众(w, 需要数量=10)),
                     _限时搜索("塔读联想", 搜索塔读(w, 需要数量=10)),
                     _限时搜索("百度联想", 搜索百度(w, 需要数量=10)),
                     _限时搜索("小米联想", 搜索小米(w, 需要数量=10)),
+                    _限时搜索("宜搜联想", 搜索宜搜(w, 需要数量=10)),
+                    _限时搜索("米读联想", 搜索米读(w, 需要数量=10)),
+                    _限时搜索("猫眼联想", 搜索猫眼(w, 需要数量=10)),
+                    _限时搜索("酷我联想", 搜索酷我(w, 需要数量=10)),
+                    _限时搜索("酷匠联想", 搜索酷匠(w, 需要数量=10)),
+                    _限时搜索("连城联想", 搜索连城(w, 需要数量=10)),
+                    _限时搜索("菠萝包联想", 搜索菠萝包(w, 需要数量=10)),
                 )
 
             补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
-            for r1, r2, r3, r4, r5, r6, r7, r8 in 补搜结果:
-                for 平台结果 in (r1, r2, r3, r4, r5, r6, r7, r8):
+            for 补搜项 in 补搜结果:
+                补搜项 = list(补搜项)
+                for 平台结果 in 补搜项:
                     for 排名, 项 in enumerate(平台结果):
                         if isinstance(项, dict):
                             项.setdefault("_platform_rank", 排名)
                 r1 = await 过滤无目录番茄搜索结果(
-                    r1,
+                    补搜项[0],
                     关键词,
                     搜索类型=搜索类型,
                     最大数量=5,
                 )
-                r4 = await 过滤章节单独付费QQ阅读搜索结果(r4)
-                补结果集合.extend([r1, r2, r3, r4, r5, r6, r7, r8])
+                r4 = await 过滤章节单独付费QQ阅读搜索结果(补搜项[3])
+                补搜项[0] = r1
+                补搜项[3] = r4
+                补结果集合.extend(补搜项)
             合并 = 去重合并(补结果集合)
         return 排序找书结果(合并, 关键词, 搜索类型)
 
@@ -1520,6 +1689,20 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
         return 百度小说.生成百度下载回复流(event, 链接, 配置)
     if 平台 == "小米" and 小米小说 is not None:
         return 小米小说.生成小米下载回复流(event, 链接, 配置)
+    if 平台 == "宜搜" and 宜搜小说 is not None:
+        return 宜搜小说.生成宜搜下载回复流(event, 链接, 配置)
+    if 平台 == "米读" and 米读小说 is not None:
+        return 米读小说.生成米读下载回复流(event, 链接, 配置)
+    if 平台 == "猫眼" and 猫眼小说 is not None:
+        return 猫眼小说.生成猫眼下载回复流(event, 链接, 配置)
+    if 平台 == "酷我" and 酷我小说 is not None:
+        return 酷我小说.生成酷我下载回复流(event, 链接, 配置)
+    if 平台 == "酷匠" and 酷匠小说 is not None:
+        return 酷匠小说.生成酷匠下载回复流(event, 链接, 配置)
+    if 平台 == "连城" and 连城小说 is not None:
+        return 连城小说.生成连城下载回复流(event, 链接, 配置)
+    if 平台 == "菠萝包" and 菠萝包小说 is not None:
+        return 菠萝包小说.生成菠萝包下载回复流(event, 链接, 配置)
     return "下载失败"
 
 
