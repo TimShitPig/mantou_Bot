@@ -3516,8 +3516,10 @@ async def 异步下载番茄全部章节(
     async with AsyncExitStack() as stack:
         if HTTP客户端 is None:
             HTTP客户端 = await stack.enter_async_context(创建番茄正文HTTP客户端(动态并发数))
-        for 任务协程 in asyncio.as_completed([请求批次(任务) for 任务 in 任务列表]):
-            批次结果 = await 任务协程
+        # 先统一发起并完成所有批次请求，再进入解密和合并阶段，避免
+        # 当前批次的解密处理影响下一批请求的可见执行顺序。
+        批次结果列表 = await asyncio.gather(*(请求批次(任务) for 任务 in 任务列表))
+        for 批次结果 in 批次结果列表:
             批次起始 = int(批次结果.get("start") or 1)
             批次数量 = int(批次结果.get("count") or 0)
             批次成功 = 0
