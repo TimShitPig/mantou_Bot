@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import gzip
 import html
 import hashlib
@@ -53,7 +54,6 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 from Crypto.Cipher import AES, DES
 from Crypto.Hash import MD2, MD4
 from Crypto.Util import Counter
-from Crypto.Util.Padding import unpad
 
 # === decrypt ===
 """Pure-Python QQRead chapter decrypt (libfock algorithm recovery).
@@ -66,8 +66,7 @@ Key schedule:
   knva = AES-128-CBC(key=c9ajudte0zb21ksg, iv=58jb6v2lzcspwymg).decrypt(embedded_ct)
   master = SHA256(fuid || knva)
   header / keypool = AES-256-CBC(master, iv=master[:16])
-  token_index = int(mode_digit_string) % len(tokens)
-  content_key = SHA256(token_ascii || fuid || stt)
+  content_key = SHA256(pool_entry_16_bytes || fuid || additional_key)
 
 Mode id = int(header mode string first 8 decimal digits). Content chains:
 
@@ -118,23 +117,26 @@ def derive_knva(
     """Recover knva from libfock embedded AES-128-CBC blob.
 
     Matches get_master @ runtime 0x1200ca48:
-      key = "c9ajudte0zb21ksg", iv = "58jb6v2lzcspwymg", AES-128-CBC, PKCS7.
+      key = "c9ajudte0zb21ksg", iv = "58jb6v2lzcspwymg", AES-128-CBC.
     """
     if len(ciphertext) % 16:
         raise ValueError("knva ciphertext length must be multiple of 16")
     pt = AES.new(key, AES.MODE_CBC, iv=iv).decrypt(ciphertext)
-    return unpad(pt, 16)
+    return pt[:16]
 
 
-def _pkcs7_unpad(data: bytes) -> bytes:
+def _strip_padding(data: bytes, block_size: int) -> bytes:
+    """按 Go 版 stripPadding 规则移除一个有效的块填充。"""
     if not data:
         return data
     pad = data[-1]
-    if 1 <= pad <= 16 and data.endswith(bytes([pad]) * pad):
+    if 1 <= pad <= block_size and data.endswith(bytes([pad]) * pad):
         return data[:-pad]
-    if data.endswith(b"\r"):
-        return data.rstrip(b"\r")
     return data
+
+
+def _pkcs7_unpad(data: bytes) -> bytes:
+    return _strip_padding(data, 16)
 
 
 def master_key(fuid: str | bytes, knva: bytes | None = None) -> bytes:
@@ -149,46 +151,51 @@ def master_key(fuid: str | bytes, knva: bytes | None = None) -> bytes:
     return hashlib.sha256(fuid_b + knva).digest()
 
 
-def decrypt_keypool(keypool: bytes, master: bytes) -> list[str]:
+def decrypt_keypool(keypool: bytes, aes_key: bytes) -> bytes:
+    """解密 Go 版 DecryptChapter 使用的二进制密钥池。"""
     if len(keypool) % 16:
         raise ValueError("keypool length must be multiple of 16")
-    pt = AES.new(master, AES.MODE_CBC, iv=master[:16]).decrypt(keypool)
-    pt = _pkcs7_unpad(pt)
-    s = pt.decode("ascii", "replace").strip().strip("\r")
-    return [p for p in s.split(",") if p]
+    return _pkcs7_unpad(AES.new(aes_key, AES.MODE_CBC, iv=aes_key[:16]).decrypt(keypool))
 
 
-def decrypt_header(enc: bytes, master: bytes) -> bytes:
+def decrypt_header(enc: bytes, aes_key: bytes) -> bytes:
     if len(enc) < 256:
         raise ValueError("chapter too short")
-    return AES.new(master, AES.MODE_CBC, iv=master[:16]).decrypt(enc[:256])
+    return AES.new(aes_key, AES.MODE_CBC, iv=aes_key[:16]).decrypt(enc[:256])
 
 
-def content_key(token_ascii: str | bytes, fuid: str | bytes, stt: str | bytes) -> bytes:
-    if isinstance(token_ascii, str):
-        token_ascii = token_ascii.encode("ascii")
+def content_key(
+    pool_decrypted: bytes,
+    param: int,
+    fuid: str | bytes,
+    additional_key: str | bytes,
+) -> bytes:
+    """按 Go 版规则从 param 对应的 17 字节密钥槽派生正文密钥。"""
+    offset = int(param) * 17
+    if offset < 0 or offset + 16 > len(pool_decrypted):
+        raise ValueError(
+            f"pool entry index {param} out of range "
+            f"(need offset {offset}+16, pool has {len(pool_decrypted)} bytes)"
+        )
+    pool_entry = pool_decrypted[offset : offset + 16]
     if isinstance(fuid, str):
         fuid = fuid.encode("utf-8")
-    if isinstance(stt, str):
-        stt = stt.encode("utf-8")
-    return hashlib.sha256(token_ascii + fuid + stt).digest()
+    if isinstance(additional_key, str):
+        additional_key = additional_key.encode("utf-8")
+    return hashlib.sha256(pool_entry + fuid + additional_key).digest()
 
 
 def _gunzip_loose(data: bytes) -> bytes:
-    if data[:2] != b"\x1f\x8b":
-        raise ValueError("not gzip")
-    dco = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    """匹配 Go maybeGunzip：允许 gzip 头前存在少量前缀。"""
+    if len(data) < 2:
+        return data
+    start = data.find(b"\x1f\x8b")
+    if start < 0:
+        return data
     try:
-        out = dco.decompress(data)
-        out += dco.flush()
-        return out
-    except zlib.error:
-        for cut in range(len(data), max(len(data) - 64, 16), -1):
-            try:
-                return gzip.decompress(data[:cut])
-            except Exception:
-                continue
-        raise
+        return gzip.decompress(data[start:])
+    except (OSError, EOFError, zlib.error):
+        return data
 
 
 def _body(enc: bytes, header_plain: bytes) -> bytes:
@@ -200,14 +207,20 @@ def _body(enc: bytes, header_plain: bytes) -> bytes:
 
 def _aes_cbc(data: bytes, key32: bytes) -> bytes:
     if len(data) % 16:
-        raise ValueError(f"AES block len {len(data)}")
-    return AES.new(key32, AES.MODE_CBC, iv=key32[:16]).decrypt(data)
+        data += b"\x00" * (16 - len(data) % 16)
+    return _strip_padding(
+        AES.new(key32, AES.MODE_CBC, iv=key32[:16]).decrypt(data),
+        16,
+    )
 
 
 def _des_cbc(data: bytes, key32: bytes) -> bytes:
     if len(data) % 8:
-        raise ValueError(f"DES block len {len(data)}")
-    return DES.new(key32[:8], DES.MODE_CBC, iv=key32[:8]).decrypt(data)
+        data += b"\x00" * (8 - len(data) % 8)
+    return _strip_padding(
+        DES.new(key32[:8], DES.MODE_CBC, iv=key32[:8]).decrypt(data),
+        8,
+    )
 
 
 def _aes_ctr(data: bytes, key32: bytes, initial_value: int = 2) -> bytes:
@@ -220,14 +233,6 @@ def _aes_ctr(data: bytes, key32: bytes, initial_value: int = 2) -> bytes:
     return AES.new(key32, AES.MODE_CTR, counter=ctr).decrypt(data)
 
 
-def _unpad8(data: bytes) -> bytes:
-    return unpad(data, 8)
-
-
-def _unpad16(data: bytes) -> bytes:
-    return unpad(data, 16)
-
-
 def mode_string_from_header(header: bytes) -> str:
     mode = header[:16].split(b"\x00", 1)[0]
     digits = bytes(b for b in mode if 48 <= b <= 57)
@@ -237,79 +242,74 @@ def mode_string_from_header(header: bytes) -> str:
 
 
 def mode_id_from_header(header: bytes) -> int:
-    """Native compares atoi(mode_str[:8])."""
-    digits = mode_string_from_header(header)
-    if len(digits) < 8:
-        return int(digits)
-    return int(digits[:8])
+    """读取 Go 版包头前 8 位 mode 整数。"""
+    return int(mode_string_from_header(header)[:8])
 
 
-def token_index_from_header(header: bytes, token_count: int) -> int:
-    """token_index = int(full_mode_digit_string) % token_count.
+def _parse_header_field(raw: bytes) -> int:
+    """解析以 NUL 结尾的 ASCII 十进制字段。"""
+    field = raw.split(b"\x00", 1)[0].strip()
+    if not field or any(byte < 48 or byte > 57 for byte in field):
+        raise ValueError(f"invalid integer header field: {field!r}")
+    return int(field)
 
-    Verified on samples c1-c15 (20-token pools):
-      3193288111 % 20 = 11
-      3134442310 % 20 = 10
-      349410281  % 20 = 1
-      9485912317 % 20 = 17
-    """
-    if token_count <= 0:
-        raise ValueError("empty keypool tokens")
-    return int(mode_string_from_header(header)) % token_count
+
+def _is_all_zeros(data: bytes) -> bool:
+    return not any(data)
 
 
 def decrypt_mode_aes_aes(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
     mid = _aes_cbc(_aes_cbc(body, key32), key32)
-    return _gunzip_loose(mid)
+    return mid
 
 
 def decrypt_mode_des_aes(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
     mid = _aes_cbc(_des_cbc(body, key32), key32)
-    return _gunzip_loose(mid)
+    return mid
 
 
 def decrypt_mode_ctr_des(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
     mid = _des_cbc(_aes_ctr(body, key32), key32)
-    return _gunzip_loose(mid)
+    return mid
 
 
 def decrypt_mode_aes_ctr(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
-    mid = _aes_ctr(_unpad16(_aes_cbc(body, key32)), key32)
-    return _gunzip_loose(mid)
+    mid = _aes_ctr(_aes_cbc(body, key32), key32)
+    return mid
 
 
 def decrypt_mode_des_ctr(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
-    mid = _aes_ctr(_unpad8(_des_cbc(body, key32)), key32)
-    return _gunzip_loose(mid)
+    mid = _aes_ctr(_des_cbc(body, key32), key32)
+    return mid
 
 
 def decrypt_mode_aes_des(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
     mid = _des_cbc(_aes_cbc(body, key32), key32)
-    return _gunzip_loose(mid)
+    return mid
 
 
 def decrypt_mode_ctr_ctr(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
     mid = _aes_ctr(_aes_ctr(body, key32), key32)
-    return _gunzip_loose(mid)
+    return mid
 
 
 def decrypt_mode_des_des(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
-    mid = _unpad8(_des_cbc(_unpad8(_des_cbc(body, key32)), key32))
-    return _gunzip_loose(mid)
+    mid = _des_cbc(_des_cbc(body, key32), key32)
+    return mid
 
 
 def decrypt_mode_ctr_aes(enc: bytes, key32: bytes, header_plain: bytes) -> bytes:
     body = _body(enc, header_plain)
-    mid = _unpad16(_aes_cbc(_aes_ctr(body, key32), key32))
-    return _gunzip_loose(mid)
+    mid = _aes_cbc(_aes_ctr(body, key32), key32)
+    return mid
 
 
 _MODE_HANDLERS: dict[int, Callable[[bytes, bytes, bytes], bytes]] = {
@@ -325,58 +325,68 @@ _MODE_HANDLERS: dict[int, Callable[[bytes, bytes, bytes], bytes]] = {
 }
 
 
-def select_token(tokens: list[str], index: int = 11) -> str:
-    if not tokens:
-        raise ValueError("empty keypool tokens")
-    if index < 0 or index >= len(tokens):
-        return tokens[-1]
-    return tokens[index]
-
-
 def decrypt_chapter(
     enc: bytes,
-    stt: str | bytes,
+    additional_key: str | bytes,
     fuid: str | bytes,
-    keypool: bytes,
+    pool_base64: str,
     knva: bytes | None = None,
-    token_index: Optional[int] = None,
-) -> str:
+) -> bytes:
+    """移植 qqread/crypto.go 的 DecryptChapter，返回解压前后的正文字节。"""
+    if isinstance(fuid, bytes):
+        fuid_text = fuid.decode("utf-8", "replace")
+    else:
+        fuid_text = str(fuid)
+    if not fuid_text:
+        raise ValueError("FUID not set")
+    if len(enc) < 256:
+        raise ValueError(f"cipher data too small: {len(enc)}")
+    if not pool_base64:
+        raise ValueError("pool_base64 is required")
     if knva is None:
         knva = derive_knva()
-    master = master_key(fuid, knva)
-    tokens = decrypt_keypool(keypool, master)
-    header = decrypt_header(enc, master)
-    mid = mode_id_from_header(header)
-    handler = _MODE_HANDLERS.get(mid)
+
+    aes_key = master_key(fuid_text, knva)
+    header = decrypt_header(enc, aes_key)
+    key1 = header[:128]
+    key2 = header[128:256]
+    mode = _parse_header_field(key1[:8])
+    param = _parse_header_field(key1[8:16])
+    content_hash = key1[27:43]
+    fuid_hash = key1[43:59]
+
+    if not _is_all_zeros(fuid_hash):
+        expected = hashlib.md5(fuid_text.encode("utf-8")).digest()
+        if expected != fuid_hash:
+            raise ValueError("FUID hash mismatch")
+
+    try:
+        pool_bytes = base64.b64decode(pool_base64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("invalid pool base64") from exc
+    pool_decrypted = decrypt_keypool(pool_bytes, aes_key)
+    key32 = content_key(pool_decrypted, param, fuid_text, additional_key)
+
+    handler = _MODE_HANDLERS.get(mode)
     if handler is None:
-        mode = header[:16].split(b"\x00", 1)[0]
-        raise NotImplementedError(f"mode id {mid} ({mode!r}) not supported")
-
-    if token_index is None:
-        token_index = token_index_from_header(header, len(tokens))
-
-    last_err: Optional[Exception] = None
-    order = [token_index] + [i for i in range(len(tokens)) if i != token_index]
-    for ti in order:
-        try:
-            key32 = content_key(select_token(tokens, ti), fuid, stt)
-            raw = handler(enc, key32, header)
-            return raw.decode("utf-8", errors="replace")
-        except Exception as e:
-            last_err = e
-            continue
-    raise ValueError(f"decrypt failed for mode id {mid}: {last_err}")
+        raise NotImplementedError(f"unsupported encryption mode: {mode}")
+    step2 = handler(enc, key32, header)
+    if not _is_all_zeros(content_hash):
+        expected = hashlib.md5(step2).digest()
+        if expected != content_hash:
+            raise ValueError("content hash mismatch")
+    return _gunzip_loose(step2)
 
 
 def try_decrypt_chapter(
     enc: bytes,
-    stt: str | bytes,
+    additional_key: str | bytes,
     fuid: str | bytes,
-    keypool: bytes,
+    pool_base64: str,
     knva: bytes | None = None,
-) -> Optional[str]:
+) -> Optional[bytes]:
     try:
-        return decrypt_chapter(enc, stt, fuid, keypool, knva)
+        return decrypt_chapter(enc, additional_key, fuid, pool_base64, knva)
     except Exception:
         return None
 # === csigs ===
@@ -799,8 +809,8 @@ class ConfigManager:
             return False
         try:
             raw = base64.b64decode(pool_b64)
-            tokens = decrypt_keypool(raw, master_key(self.fuid, self._knva_bytes()))
-            return bool(tokens)
+            pool = decrypt_keypool(raw, master_key(self.fuid, self._knva_bytes()))
+            return len(pool) >= 16
         except Exception:
             return False
 
@@ -1138,22 +1148,19 @@ def 构造QQ阅读正文章节参数(chapter_ids: list[str]) -> str:
 
 def 解密QQ阅读章节数据(data: bytes, stt: str | bytes, *, allow_refresh: bool = True) -> Optional[str]:
     config = ConfigManager.get_instance()
-    knva = config._knva_bytes()
-
-    def 尝试解密() -> Optional[str]:
-        if not config.key_pool:
-            return None
-        try:
-            key_pool = base64.b64decode(config.key_pool)
-        except Exception:
-            return None
-        return try_decrypt_chapter(data, stt, config.fuid, key_pool, knva)
-
-    text = 尝试解密()
+    if not config.key_pool:
+        return None
+    text = try_decrypt_chapter(
+        data,
+        stt,
+        config.fuid,
+        config.key_pool,
+        config._knva_bytes(),
+    )
     if text is None and allow_refresh:
         # 网络刷新由异步下载调度器统一处理，避免解密工作线程阻塞在 HTTP 请求上。
         logger.debug("QQ阅读章节解密未命中当前密钥池")
-    return text
+    return text.decode("utf-8", "replace") if text else None
 
 
 def _展开QQ阅读正文信息(value: Any) -> Iterator[dict[str, Any]]:

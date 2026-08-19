@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.30.2
+
+- QQ阅读正文解密替换为 `D:\\Tencent\\Downloads\\qqread\\qqread` 中 `DecryptChapter` 的完整逻辑，按参考实现处理二进制密钥池、FUID/正文校验、AES/DES/CTR 组合、宽松分块填充和 gzip 正文。
+
 ## v5.30.1
 
 - QQ阅读普通正文调整为每批 30 章、最多 100 路动态请求并发，继续复用同一个异步 HTTP 会话；正文解密仍使用受限 CPU 并发，不创建 100 个解密线程。
