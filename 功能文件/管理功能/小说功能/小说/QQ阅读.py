@@ -846,13 +846,29 @@ def load_config_once() -> None:
 
 UA = "okhttp/3.12.13"
 SIGN_TAIL = "B74H5a2Yh73gfu8F"
-QQ阅读批量章节数 = 30
-QQ阅读批量最大动态并发数 = 300
+QQ阅读批量章节数 = 200
+QQ阅读批量最大动态并发数 = 5
+# QQ 阅读网关会对同一登录态的突发批量请求返回空包或部分包。
+# 正文请求固定不超过 5 路，失败重试会继续按实际窗口数降并发。
+QQ阅读批量请求安全并发数 = 5
 QQ阅读失败章节重试窗口 = 31
 QQ阅读失败章节重试轮数 = 3
 QQ阅读解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
 QQ阅读出版书最大动态并发数 = 16
 _QQ阅读密钥池异步锁: asyncio.Lock | None = None
+
+
+def 计算QQ阅读批量并发数(批次数量: int) -> int:
+    """按批次数量和网关限流上限计算实际请求并发。"""
+    count = max(1, int(批次数量 or 1))
+    return max(
+        1,
+        min(
+            QQ阅读批量最大动态并发数,
+            QQ阅读批量请求安全并发数,
+            count,
+        ),
+    )
 
 
 def 创建QQ阅读HTTP会话(*, concurrency: int = QQ阅读批量最大动态并发数) -> aiohttp.ClientSession:
@@ -1236,6 +1252,15 @@ def 解析QQ阅读正文批次(
     package: bytes,
     chapter_ids: list[str],
 ) -> list[Any]:
+    result, _, _ = 解析QQ阅读正文批次带统计(package, chapter_ids)
+    return result
+
+
+def 解析QQ阅读正文批次带统计(
+    package: bytes,
+    chapter_ids: list[str],
+) -> tuple[list[Any], int, int]:
+    """解析正文包，并返回实际匹配数和解密失败数。"""
     members = tar_decrypt(package)
     requested_ids = [str(chapter_id).strip() for chapter_id in chapter_ids if str(chapter_id).strip()]
     chapter_map: Dict[str, Any] = {}
@@ -1252,10 +1277,14 @@ def 解析QQ阅读正文批次(
         current = chapter_map.get(chapter_id)
         if current is None or current == "章节解密失败":
             chapter_map[chapter_id] = value
-    return [
+    result = [
         chapter_map.get(chapter_id, "章节解密失败")
         for chapter_id in requested_ids
     ]
+    decrypt_failed = sum(
+        1 for value in chapter_map.values() if value == "章节解密失败"
+    )
+    return result, len(chapter_map), decrypt_failed
 
 
 def QQ阅读失败章节窗口(chapter_numbers: list[int]) -> list[tuple[int, int]]:
@@ -2417,7 +2446,7 @@ async def 异步获取QQ阅读正文批次(
     book_id: str,
     chapter_ids: list[str],
     解密信号量: asyncio.Semaphore,
-) -> list[Any]:
+) -> tuple[list[Any], int, int]:
     config = ConfigManager.get_instance()
     params = {
         "bookId": str(book_id),
@@ -2434,7 +2463,7 @@ async def 异步获取QQ阅读正文批次(
         package = await response.read()
     async with 解密信号量:
         return await asyncio.to_thread(
-            解析QQ阅读正文批次,
+            解析QQ阅读正文批次带统计,
             package,
             chapter_ids,
         )
@@ -2449,7 +2478,7 @@ async def 下载参考正文(
         return []
     if session is None:
         batch_count = (len(catalog) + QQ阅读批量章节数 - 1) // QQ阅读批量章节数
-        concurrency = max(1, min(QQ阅读批量最大动态并发数, batch_count))
+        concurrency = 计算QQ阅读批量并发数(batch_count)
         async with 创建QQ阅读HTTP会话(concurrency=concurrency) as local_session:
             return await 下载参考正文(book_id, catalog, local_session)
     初始化参考核心()
@@ -2459,10 +2488,11 @@ async def 下载参考正文(
     last_completed = 0
     last_success = -1
     batch_count = (total + QQ阅读批量章节数 - 1) // QQ阅读批量章节数
-    concurrency = max(1, min(QQ阅读批量最大动态并发数, batch_count))
+    concurrency = 计算QQ阅读批量并发数(batch_count)
     logger.info(
         f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%, "
-        f"batches={batch_count}, batch_size={QQ阅读批量章节数}, concurrency={concurrency}"
+        f"batches={batch_count}, batch_size={QQ阅读批量章节数}, concurrency={concurrency}, "
+        f"max_concurrency={QQ阅读批量最大动态并发数}"
     )
 
     def 合并批次(first: int, last: int, part: Any, results: list[Any]) -> int:
@@ -2513,55 +2543,132 @@ async def 下载参考正文(
     decrypt_concurrency = max(1, min(QQ阅读解密最大动态并发数, total))
     解密信号量 = asyncio.Semaphore(decrypt_concurrency)
 
-    async def 请求批次(first: int, last: int) -> tuple[int, int, list[Any] | None]:
+    def 新建请求统计() -> dict[str, int]:
+        return {
+            "batches": 0,
+            "response_items": 0,
+            "valid_items": 0,
+            "response_missing": 0,
+            "decrypt_failed": 0,
+            "http_failed": 0,
+            "other_failed": 0,
+        }
+
+    def 合并请求统计(target: dict[str, int], source: dict[str, int]) -> None:
+        for key in target:
+            target[key] += int(source.get(key, 0) or 0)
+
+    def 格式化失败范围(numbers: list[int]) -> str:
+        return ",".join(
+            f"{start}-{end}" if start != end else str(start)
+            for start, end in QQ阅读失败章节窗口(numbers)
+        )
+
+    async def 请求批次(
+        first: int,
+        last: int,
+    ) -> tuple[int, int, list[Any] | None, dict[str, int]]:
+        expected = last - first + 1
+        stats = 新建请求统计()
+        stats["batches"] = 1
         try:
             chapter_ids = 获取QQ阅读正文章节ID列表(catalog, first, last)
             async with 请求信号量:
                 part = await 异步获取QQ阅读正文批次(
                     session, book_id, chapter_ids, 解密信号量
                 )
-            return first, last, part
+            if isinstance(part, tuple) and len(part) == 3:
+                part, response_items, decrypt_failed = part
+                stats["response_items"] = int(response_items or 0)
+                stats["decrypt_failed"] = int(decrypt_failed or 0)
+            else:
+                stats["response_items"] = len(part) if isinstance(part, list) else 0
+            stats["valid_items"] = sum(
+                1
+                for item in part[:expected]
+                if item not in (None, "", "章节解密失败")
+            ) if isinstance(part, list) else 0
+            stats["response_missing"] = max(
+                0,
+                expected - stats["response_items"] - stats["decrypt_failed"],
+            )
+            return first, last, part, stats
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            stats["http_failed"] = 1
+            logger.debug(
+                f"QQ阅读批量正文请求失败：book_id={book_id}, range={first}-{last}, "
+                "stage=http"
+            )
+            return first, last, None, stats
         except Exception as exc:
+            stats["other_failed"] = 1
             logger.debug(
                 f"QQ阅读批量正文请求失败：book_id={book_id}, range={first}-{last}, "
                 f"error={type(exc).__name__}"
             )
-            return first, last, None
+            return first, last, None, stats
 
+    initial_stats = 新建请求统计()
     for task in asyncio.as_completed([请求批次(a, b) for a, b in ranges]):
-        first, last, part = await task
+        first, last, part, stats = await task
         expected = last - first + 1
         success += 合并批次(first, last, part, results)
+        合并请求统计(initial_stats, stats)
         completed += expected
         汇报进度(completed, success)
+
+    logger.debug(
+        f"QQ阅读正文首轮汇总：book_id={book_id}, batches={initial_stats['batches']}, "
+        f"response_items={initial_stats['response_items']}/{total}, "
+        f"valid_items={initial_stats['valid_items']}, "
+        f"response_missing={initial_stats['response_missing']}, "
+        f"decrypt_failed={initial_stats['decrypt_failed']}, "
+        f"http_failed={initial_stats['http_failed']}, "
+        f"other_failed={initial_stats['other_failed']}"
+    )
 
     for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
         missing = [index + 1 for index, item in enumerate(results) if item in (None, "", "章节解密失败")]
         if not missing:
             break
         if round_index == 1:
-            await 确保QQ阅读密钥池(session, force=True)
+            refreshed = await 确保QQ阅读密钥池(session, force=True)
+            logger.debug(
+                f"QQ阅读正文密钥池刷新：book_id={book_id}, success={int(bool(refreshed))}"
+            )
         retry_ranges = QQ阅读失败章节窗口(missing)
-        retry_concurrency = max(1, min(QQ阅读批量最大动态并发数, len(retry_ranges)))
+        retry_concurrency = 计算QQ阅读批量并发数(len(retry_ranges))
         logger.debug(
             f"QQ阅读失败章节重试：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-            f"missing={len(missing)}, windows={len(retry_ranges)}, concurrency={retry_concurrency}"
+            f"missing={len(missing)}, ranges={格式化失败范围(missing)}, "
+            f"windows={len(retry_ranges)}, concurrency={retry_concurrency}"
         )
         recovered = 0
         retry_semaphore = asyncio.Semaphore(retry_concurrency)
 
-        async def 重试批次(first: int, last: int) -> tuple[int, int, list[Any] | None]:
+        async def 重试批次(
+            first: int,
+            last: int,
+        ) -> tuple[int, int, list[Any] | None, dict[str, int]]:
             async with retry_semaphore:
                 return await 请求批次(first, last)
 
+        retry_stats = 新建请求统计()
         for task in asyncio.as_completed([重试批次(a, b) for a, b in retry_ranges]):
-            first, last, part = await task
+            first, last, part, stats = await task
             recovered += 合并批次(first, last, part, results)
+            合并请求统计(retry_stats, stats)
         success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
         汇报进度(total, success)
         logger.debug(
             f"QQ阅读失败章节重试结果：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-            f"recovered={recovered}, still_missing={total - success}"
+            f"recovered={recovered}, still_missing={total - success}, "
+            f"response_items={retry_stats['response_items']}, "
+            f"valid_items={retry_stats['valid_items']}, "
+            f"response_missing={retry_stats['response_missing']}, "
+            f"decrypt_failed={retry_stats['decrypt_failed']}, "
+            f"http_failed={retry_stats['http_failed']}, "
+            f"other_failed={retry_stats['other_failed']}"
         )
         if success >= total or recovered <= 0:
             break
