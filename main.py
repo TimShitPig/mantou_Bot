@@ -51,9 +51,10 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说缓存清理 = 加载功能模块("功能文件.管理功能.小说功能.功能.下载缓存清理")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
+小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.29.3"
+插件版本 = "5.30.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -96,14 +97,6 @@ class MyPlugin(Star):
                 if await 帮助功能.发送QQ官方提及Markdown(event, str(文本)):
                     return
             yield event.plain_result(文本)
-
-        async def _输出回复流(回复流):
-            async for 流回复内容 in 回复流:
-                if isinstance(流回复内容, str):
-                    async for 输出内容 in _输出文本回复(流回复内容):
-                        yield 输出内容
-                else:
-                    yield 流回复内容
 
         async def _输出找书结果(找书结果):
             if 找书结果 is None:
@@ -195,8 +188,13 @@ class MyPlugin(Star):
         # 找书优先：搜索/翻页/选N 下载（兼容 Markdown 文字指令链和手动发送）
         找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
         if 找书下载 is not None:
-            async for 片段 in _输出找书结果(找书下载):
-                yield 片段
+            if hasattr(找书下载, "__aiter__"):
+                小说下载任务.启动小说回复流任务(
+                    event, 找书下载, 帮助功能, 权限工具
+                )
+            else:
+                async for 片段 in _输出找书结果(找书下载):
+                    yield 片段
             event.stop_event()
             return
 
@@ -249,8 +247,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(书旗回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 书旗回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -261,8 +260,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(七猫回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 七猫回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -273,8 +273,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(QQ浏览器回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, QQ浏览器回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -285,8 +286,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(QQ阅读回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, QQ阅读回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -297,8 +299,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(得间回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 得间回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -309,8 +312,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(点众回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 点众回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -321,8 +325,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(知乎回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 知乎回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -333,8 +338,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(塔读回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 塔读回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -346,8 +352,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(番茄回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 番茄回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -358,8 +365,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(百度回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 百度回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -370,8 +378,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(小米回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 小米回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -382,8 +391,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(宜搜回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 宜搜回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -394,8 +404,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(米读回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 米读回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -406,8 +417,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(猫眼回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 猫眼回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -418,8 +430,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(酷我回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 酷我回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -430,8 +443,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(酷匠回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 酷匠回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -442,8 +456,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(连城回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 连城回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -454,8 +469,9 @@ class MyPlugin(Star):
                         yield 输出内容
                     event.stop_event()
                     return
-                async for 输出内容 in _输出回复流(菠萝包回复流):
-                    yield 输出内容
+                小说下载任务.启动小说回复流任务(
+                    event, 菠萝包回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
@@ -468,5 +484,6 @@ class MyPlugin(Star):
         event.stop_event()
 
     async def terminate(self):
+        await 小说下载任务.停止小说下载任务()
         塔读小说功能.关闭塔读资源()
         await 小说网盘功能.停止网盘后台任务()
