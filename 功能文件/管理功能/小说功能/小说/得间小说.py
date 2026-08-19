@@ -26,27 +26,26 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning(f"小说网盘模块加载失败：error={exc}")
+    logger.warning(f"小说网盘模块加载失败：错误类型={type(exc).__name__}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：error={exc}")
+    logger.warning(f"百度网盘模块加载失败：错误类型={type(exc).__name__}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-得间单章最大并发数 = 500
-得间单章重试次数 = 3
+得间正文最大并发数 = 500
+得间正文重试次数 = 3
 得间解密最大动态并发数 = 200
 得间解密执行器 = ThreadPoolExecutor(
     max_workers=得间解密最大动态并发数,
     thread_name_prefix="dejian-decrypt",
 )
-
 
 # ===== 得间协议与解密（原 _得间源码） =====
 
@@ -442,7 +441,7 @@ async def 异步下载得间字节(
         return await 请求()
 
 
-class 得间单章异步客户端:
+class 得间异步客户端:
     """参考得间.py 的 DejianClient，仅将 requests 会话替换为共享 aiohttp 会话。"""
 
     def __init__(
@@ -533,18 +532,18 @@ class 得间单章异步客户端:
             "downloadCount": _to_int(正文.get("downloadCount")),
         }
 
-    async def 安全章节列表(
+    async def 获取批量章节清单(
         self,
         书籍编号: str,
-        start: int = 1,
-        end: int = 0,
-        limit: int = 0,
+        批量下载清单: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        基础地址 = str((await self.获取批量下载清单(书籍编号))["downUrl"])
+        """使用 batchDownloadChapteres 返回的地址一次读取整本正文地址清单。"""
+        清单 = 批量下载清单 or await self.获取批量下载清单(书籍编号)
+        基础地址 = str(清单.get("downUrl") or "").strip()
+        if not 基础地址:
+            raise RuntimeError("no batch downUrl")
         结果: List[Dict[str, Any]] = []
-        当前章节 = max(1, int(start or 1))
-        结束章节 = int(end or 0)
-        最大数量 = int(limit or 0)
+        当前章节 = 1
         while True:
             分隔符 = "&" if "?" in 基础地址 else "?"
             地址 = f"{基础地址}{分隔符}{urllib.parse.urlencode({'startChapID': 当前章节})}"
@@ -555,40 +554,24 @@ class 得间单章异步客户端:
             章节列表 = 正文.get("downInfo") or []
             if not isinstance(章节列表, list):
                 break
-            已增加 = 0
             for 项 in 章节列表:
                 if not isinstance(项, dict):
                     continue
                 章节编号 = _to_int(项.get("chapterId"))
-                if not 章节编号 or (结束章节 > 0 and 章节编号 > 结束章节):
+                if not 章节编号:
                     continue
                 结果.append(项)
-                已增加 += 1
-                if 最大数量 > 0 and len(结果) >= 最大数量:
-                    return 结果
-            if 正文.get("end") or not 章节列表 or 已增加 == 0:
+            if 正文.get("end") or not 章节列表:
                 break
             最后章节 = _to_int((章节列表[-1] or {}).get("chapterId"))
             if 最后章节 <= 0:
                 break
             当前章节 = 最后章节 + 1
-            if 结束章节 > 0 and 当前章节 > 结束章节:
+            if 清单.get("maxChapId") and 当前章节 > _to_int(清单.get("maxChapId")):
                 break
         return 结果
 
-    async def 查找章节(self, 书籍编号: str, 章节编号: int) -> Dict[str, Any]:
-        章节编号 = int(章节编号)
-        for start, end, limit in (
-            (max(1, 章节编号 - 3), 章节编号 + 3, 50),
-            (章节编号, 章节编号 + 10, 20),
-            (1, 章节编号, 0),
-        ):
-            for 项 in await self.安全章节列表(书籍编号, start=start, end=end, limit=limit):
-                if _to_int(项.get("chapterId")) == 章节编号:
-                    return 项
-        raise RuntimeError("chapter not found")
-
-    async def 单章授权(self, 书籍编号: str, 章节编号: int) -> Any:
+    async def 获取章节授权(self, 书籍编号: str, 章节编号: int) -> Any:
         表单 = self.签名参数(
             {
                 "bookId": str(书籍编号),
@@ -601,40 +584,40 @@ class 得间单章异步客户端:
         return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单)
 
 
-def 解密得间单章正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
+def 解密得间正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
     原始令牌 = native_rsa_unwrap(base64.b64decode(授权令牌))
     密钥 = derive_stage1_key(原始令牌, 用户名, 设备号)
     return decrypt_epub_text(正文数据, 密钥).strip()
 
 
-async def 异步下载得间单章正文(
+async def 异步下载得间章节正文(
     HTTP会话: aiohttp.ClientSession,
     书籍编号: str,
     章节编号: int,
+    章节项: Dict[str, Any],
     请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
 ) -> str:
-    """与参考 get_chapter_text 相同的单章顺序，网络请求改为共享异步会话。"""
-    当前客户端 = 得间单章异步客户端(HTTP会话, 请求信号量)
-    for 重试轮次 in range(1, 得间单章重试次数 + 1):
+    """使用批量清单中的正文地址；授权接口仍按平台协议为每章签发密钥。"""
+    当前客户端 = 得间异步客户端(HTTP会话, 请求信号量)
+    for 重试轮次 in range(1, 得间正文重试次数 + 1):
         try:
             用户名 = str(当前客户端.会话参数.get("usr") or "")
             设备号 = str(当前客户端.会话参数.get("devId") or "")
             if not 用户名 or not 设备号:
                 raise RuntimeError("bad session")
-            章节项 = await 当前客户端.查找章节(书籍编号, 章节编号)
             正文地址 = str(
                 章节项.get("url") or 章节项.get("downUrl") or 章节项.get("downloadUrl") or ""
             ).strip()
             if not 正文地址:
                 raise RuntimeError("no chapter url")
-            授权结果 = await 当前客户端.单章授权(书籍编号, 章节编号)
+            授权结果 = await 当前客户端.获取章节授权(书籍编号, 章节编号)
             授权令牌 = extract_token_b64(授权结果, 章节编号)
             正文数据 = await 当前客户端.下载(正文地址)
             async with 解密信号量:
                 return await asyncio.get_running_loop().run_in_executor(
                     得间解密执行器,
-                    解密得间单章正文,
+                    解密得间正文,
                     正文数据,
                     授权令牌,
                     用户名,
@@ -642,10 +625,10 @@ async def 异步下载得间单章正文(
                 )
         except Exception as 异常:
             logger.debug(
-                f"得间单章下载重试：book_id={书籍编号}, chapter_id={章节编号}, "
-                f"round={重试轮次}, error={type(异常).__name__}"
+                f"得间章节下载重试：书籍编号={书籍编号}, 章节编号={章节编号}, "
+                f"轮次={重试轮次}, 错误类型={type(异常).__name__}"
             )
-            if 重试轮次 < 得间单章重试次数:
+            if 重试轮次 < 得间正文重试次数:
                 await asyncio.sleep(0.05 * 重试轮次)
     return ""
 
@@ -792,14 +775,16 @@ async def 异步获取得间批量下载清单(
     HTTP会话: aiohttp.ClientSession,
     bid: str,
 ) -> Dict[str, Any]:
-    """下载前读取实际可访问章节范围，避免把购买章节当作网络失败反复重试。"""
+    """下载前读取批量正文地址，避免按章节重复请求批量清单。"""
     try:
-        客户端 = 得间单章异步客户端(HTTP会话, asyncio.Semaphore(2))
-        return await 客户端.获取批量下载清单(bid)
+        客户端 = 得间异步客户端(HTTP会话, asyncio.Semaphore(2))
+        清单 = await 客户端.获取批量下载清单(bid)
+        清单["chapters"] = await 客户端.获取批量章节清单(bid, 清单)
+        return 清单
     except Exception as 异常:
         logger.debug(
-            f"得间可下载章节范围获取失败：book_id={bid}, "
-            f"error={type(异常).__name__}"
+            f"得间可下载章节范围获取失败：书籍编号={bid}, "
+            f"错误类型={type(异常).__name__}"
         )
         return {}
 
@@ -873,8 +858,8 @@ async def 异步获取得间章节目录(
 路径编号正则 = re.compile(r"/(?:book|detail|books?)/(\d{5,})", re.I)
 
 
-def 计算得间单章并发数(章节总数: int) -> int:
-    return max(1, min(得间单章最大并发数, int(章节总数 or 0)))
+def 计算得间正文并发数(章节总数: int) -> int:
+    return max(1, min(得间正文最大并发数, int(章节总数 or 0)))
 
 
 def 得间存在未购买章节(目录: list[dict[str, Any]], 批量清单: Dict[str, Any]) -> bool:
@@ -916,21 +901,25 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 异步获取得间批量下载清单(HTTP会话, 书籍编号),
             )
         if not 详情包.get("success"):
-            logger.warning(f"得间小说详情失败：book_id={书籍编号}")
+            logger.warning(f"得间小说详情失败：书籍编号={书籍编号}")
             yield "下载失败"
             return
         详情 = 详情包.get("detail") or {}
         目录 = 目录包.get("chapters") or []
         if not 目录:
-            logger.warning(f"得间小说目录失败：book_id={书籍编号}")
+            logger.warning(f"得间小说目录失败：书籍编号={书籍编号}")
+            yield "下载失败"
+            return
+        if not isinstance(批量清单, dict) or not isinstance(批量清单.get("chapters"), list):
+            logger.warning(f"得间小说批量章节地址获取失败：书籍编号={书籍编号}")
             yield "下载失败"
             return
 
         if 得间存在未购买章节(目录, 批量清单):
             可下载章节数 = _to_int(批量清单.get("downloadCount"))
             logger.warning(
-                f"得间小说包含未购买章节：book_id={书籍编号}, "
-                f"available={可下载章节数}, total={len(目录)}"
+                f"得间小说包含未购买章节：书籍编号={书籍编号}, "
+                f"可下载章节数={可下载章节数}, 总章节数={len(目录)}"
             )
             yield "该书包含未购买章节，暂不支持下载"
             return
@@ -939,7 +928,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         作者 = str(详情.get("author") or "未知")
         状态 = "完结" if "完结" in str(详情.get("status") or "") else "连载"
         字数 = 格式化字数(详情.get("word_count"))
-        logger.info(f"得间小说开始下载：book_id={书籍编号}, title={书名}, author={作者}, chapters={len(目录)}")
+        logger.info(f"得间小说开始下载：书籍编号={书籍编号}, 书名={书名}, 作者={作者}, 章节数={len(目录)}")
         yield "\n".join([
             f"书名：{书名}",
             f"作者：{作者}",
@@ -950,11 +939,11 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             "正在下载中请稍等.....",
         ])
 
-        章节结果 = await 下载全部章节(书籍编号, 目录)
+        章节结果 = await 下载全部章节(书籍编号, 目录, 批量清单)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
-                f"得间小说下载失败：book_id={书籍编号}, success={len(成功)}, total={len(目录)}"
+                f"得间小说下载失败：书籍编号={书籍编号}, 成功={len(成功)}, 总数={len(目录)}"
             )
             yield "下载失败"
             return
@@ -971,16 +960,17 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             finally:
                 启动百度后台上传并清理(配置, 发送结果.get("source_cache_path"), 文件名)
             return
-        logger.warning(f"得间小说完成消息发送失败：book_id={书籍编号}, error={发送结果.get('error')}")
+        logger.warning(f"得间小说完成消息发送失败：书籍编号={书籍编号}, 错误={发送结果.get('error')}")
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning(f"得间小说下载失败：source={来源}, error={exc}")
+        logger.warning(f"得间小说下载失败：来源={来源}, 错误类型={type(exc).__name__}")
         yield "下载失败"
 
 
 async def 下载全部章节(
     书籍编号: str,
     目录: list[dict[str, Any]],
+    批量清单: Dict[str, Any],
 ) -> list[dict[str, str]]:
     总数 = len(目录)
     结果: list[dict[str, str] | None] = [None] * 总数
@@ -992,10 +982,34 @@ async def 下载全部章节(
             章节下标表.setdefault(章节编号, []).append(下标)
         else:
             无效章节下标.append(下标)
-    if not 章节下标表:
+    if 无效章节下标 or not 章节下标表 or len(章节下标表) != 总数:
+        logger.warning(
+            f"得间小说目录章节编号无效或重复：书籍编号={书籍编号}, "
+            f"无效数={len(无效章节下标)}, 唯一章节数={len(章节下标表)}, 总章节数={总数}"
+        )
         return []
 
-    实际正文并发数 = 计算得间单章并发数(len(章节下标表))
+    批量章节 = 批量清单.get("chapters") if isinstance(批量清单, dict) else None
+    if not isinstance(批量章节, list):
+        logger.warning(f"得间小说批量章节地址缺失：书籍编号={书籍编号}")
+        return []
+    批量章节表: Dict[int, Dict[str, Any]] = {}
+    for 项 in 批量章节:
+        if not isinstance(项, dict):
+            continue
+        章节编号 = _to_int(项.get("chapterId") or 项.get("chapter_id"))
+        正文地址 = str(项.get("url") or 项.get("downUrl") or 项.get("downloadUrl") or "").strip()
+        if 章节编号 > 0 and 正文地址:
+            批量章节表[章节编号] = 项
+    缺失章节 = sorted(章节编号 for 章节编号 in 章节下标表 if 章节编号 not in 批量章节表)
+    if 缺失章节 or len(批量章节表) != len(章节下标表):
+        logger.warning(
+            f"得间小说批量章节地址不完整：书籍编号={书籍编号}, "
+            f"目录章节数={len(章节下标表)}, 批量地址数={len(批量章节表)}, 缺失数={len(缺失章节)}"
+        )
+        return []
+
+    实际正文并发数 = 计算得间正文并发数(len(章节下标表))
     解密并发数 = max(1, min(实际正文并发数, 得间解密最大动态并发数))
     完成 = len(无效章节下标)
     成功 = 0
@@ -1005,19 +1019,19 @@ async def 下载全部章节(
     解密信号量 = asyncio.Semaphore(解密并发数)
     async with 创建得间HTTP会话(实际正文并发数) as HTTP会话:
         logger.info(
-            f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-            f"mode=single_chapter, concurrency={实际正文并发数}, "
-            f"max_concurrency={得间单章最大并发数}, session_reuse=on, logical_client_per_chapter=on, "
-            f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
+            f"得间小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, 百分比=0%, "
+            f"模式=批量地址, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
+            f"HTTP会话复用=开启, 每章授权=开启, 解密并发数={解密并发数}, 重试次数={得间正文重试次数}"
         )
 
         async def 下载一章(章节编号: int, 下标列表: List[int]) -> None:
             nonlocal 完成, 成功, 上次日志百分比
             正文 = (
-                await 异步下载得间单章正文(
+                await 异步下载得间章节正文(
                     HTTP会话,
                     书籍编号,
                     章节编号,
+                    批量章节表[章节编号],
                     请求信号量,
                     解密信号量,
                 )
@@ -1033,8 +1047,8 @@ async def 下载全部章节(
                 当前百分比 = int(完成 * 100 / max(总数, 1))
                 if 完成 == 总数 or 当前百分比 >= min(100, 上次日志百分比 + 进度日志分段数):
                     logger.info(
-                        f"得间小说章节进度：book_id={书籍编号}, progress={完成}/{总数}, "
-                        f"percent={当前百分比}%, success={成功}, failed={完成 - 成功}"
+                        f"得间小说章节进度：书籍编号={书籍编号}, 进度={完成}/{总数}, "
+                        f"百分比={当前百分比}%, 成功={成功}, 失败={完成 - 成功}"
                     )
                     上次日志百分比 = 当前百分比
 
@@ -1053,10 +1067,9 @@ async def 下载全部章节(
             }
         输出.append(已下载)
     logger.info(
-        f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
-        f"mode=single_chapter, concurrency={实际正文并发数}, "
-        f"max_concurrency={得间单章最大并发数}, session_reuse=on, logical_client_per_chapter=on, "
-        f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
+        f"得间小说章节下载完成：书籍编号={书籍编号}, 成功={成功}, 总数={总数}, "
+        f"模式=批量地址, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
+        f"HTTP会话复用=开启, 每章授权=开启, 解密并发数={解密并发数}, 重试次数={得间正文重试次数}"
     )
     return 输出
 
@@ -1102,7 +1115,7 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
             if 百度网盘 is not None and 源缓存路径:
                 await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
         except Exception as exc:
-            logger.warning(f"得间小说百度后台上传异常：file={文件名}, error={exc}")
+            logger.warning(f"得间小说百度后台上传异常：文件={文件名}, 错误={exc}")
         finally:
             删除缓存(源缓存路径)
 
@@ -1182,7 +1195,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         async with 创建得间HTTP会话(2) as HTTP会话:
             数据 = await 异步搜索得间书籍(HTTP会话, 关键词, 1, max(需要数量, 20))
     except Exception as exc:
-        logger.warning(f"得间搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"得间搜索失败：关键词={关键词}, 错误={exc}")
         return []
     结果 = []
     for item in 数据.get("results") or []:

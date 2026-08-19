@@ -17,13 +17,13 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning(f"小说网盘模块加载失败：error={exc}")
+    logger.warning(f"小说网盘模块加载失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：error={exc}")
+    logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -97,7 +97,7 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             详情 = await 获取小说详情(session, 书籍编号, 是否短篇)
             目录 = await 获取小说目录(session, 书籍编号, 是否短篇)
             if not 目录:
-                logger.warning(f"七猫小说下载失败：book_id={书籍编号}, error=没有获取到章节目录")
+                logger.warning(f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录")
                 yield "下载失败"
                 return
             if not str(详情.get("words_num") or "").strip():
@@ -108,23 +108,23 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                 详情["chapters"] = str(len(目录))
 
             logger.info(
-                f"七猫小说开始下载：book_id={书籍编号}, "
-                f"type={'short' if 是否短篇 else 'book'}, "
-                f"title={详情.get('title')}, author={详情.get('author')}, chapters={len(目录)}"
+                f"七猫小说开始下载：书籍编号={书籍编号}, "
+                f"类型={'短篇' if 是否短篇 else '整本'}, "
+                f"书名={详情.get('title')}, 作者={详情.get('author')}, 章节数={len(目录)}"
             )
             yield 格式化下载提示(详情, len(目录))
 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录, 是否短篇)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
-                logger.warning(f"七猫小说下载失败：book_id={书籍编号}, error=没有获取到可用章节正文")
+                logger.warning(f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到可用章节正文")
                 yield "下载失败"
                 return
 
             文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
             logger.info(
-                f"七猫小说章节下载完成：book_id={书籍编号}, "
-                f"title={详情.get('title')}, success={len(成功章节)}, total={len(目录)}, file_size={len(文件内容)}"
+                f"七猫小说章节下载完成：书籍编号={书籍编号}, "
+                f"书名={详情.get('title')}, 成功={len(成功章节)}, 总数={len(目录)}, 文件大小={len(文件内容)}"
             )
             发送结果 = await 准备发送文本文件给当前会话(
                 event,
@@ -144,11 +144,11 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                 finally:
                     启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
                 return
-            logger.warning(f"七猫小说完成消息发送失败：book_id={书籍编号}, file={文件名}, error={发送结果.get('error')}")
+            logger.warning(f"七猫小说完成消息发送失败：书籍编号={书籍编号}, 文件={文件名}, 错误={发送结果.get('error')}")
             yield "文件发送失败，请稍后再试"
             return
     except Exception as exc:
-        logger.warning(f"七猫小说下载失败：keyword={关键词}, error={exc}")
+        logger.warning(f"七猫小说下载失败：关键词={关键词}, 错误={exc}")
         yield "下载失败"
         return
 
@@ -254,7 +254,7 @@ async def 下载全部章节(
     上次日志进度 = 0
     进度锁 = asyncio.Lock()
 
-    logger.info(f"七猫小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%")
+    logger.info(f"七猫小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, 百分比=0%")
 
     async def 记录进度(完成增量: int, 成功增量: int) -> None:
         nonlocal 已完成, 成功数, 失败数, 上次日志进度
@@ -269,8 +269,8 @@ async def 下载全部章节(
             上次日志进度 = 当前进度
             百分比 = int(已完成 * 100 / 总数) if 总数 else 100
             logger.info(
-                f"七猫小说章节进度：book_id={书籍编号}, "
-                f"progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}"
+                f"七猫小说章节进度：书籍编号={书籍编号}, "
+                f"进度={已完成}/{总数}, 百分比={百分比}%, 成功={成功数}, 失败={失败数}"
             )
 
     async def 下载单章(章节: dict[str, Any]) -> dict[str, str]:
@@ -282,7 +282,7 @@ async def 下载全部章节(
                 await 记录进度(1, 1 if 正文 else 0)
                 return {"id": 章节编号, "title": 标题, "content": 正文}
             except Exception as exc:
-                logger.warning(f"七猫章节下载失败：book_id={书籍编号}, chapter_id={章节编号}, error={exc}")
+                logger.warning(f"七猫章节下载失败：书籍编号={书籍编号}, 章节编号={章节编号}, 错误={exc}")
                 await 记录进度(1, 0)
                 return {"id": 章节编号, "title": 标题, "content": ""}
 
@@ -304,14 +304,14 @@ async def 下载全部章节(
                 if 成功增量 < len(批次目录):
                     缺失数量 = len(批次目录) - 成功增量
                     logger.warning(
-                        f"七猫小说批量正文缺失：book_id={书籍编号}, batch={批次序号}/{批次数量}, "
-                        f"missing={缺失数量}, batch_size={len(批次目录)}"
+                        f"七猫小说批量正文缺失：书籍编号={书籍编号}, 批次={批次序号}/{批次数量}, "
+                        f"缺失={缺失数量}, 批量章节数={len(批次目录)}"
                     )
                 return 结果列表
             except Exception as exc:
                 logger.warning(
-                    f"七猫小说批量章节下载失败，回退单章：book_id={书籍编号}, "
-                    f"batch={批次序号}/{批次数量}, batch_size={len(批次目录)}, error={exc}"
+                    f"七猫小说批量章节下载失败，回退单章：书籍编号={书籍编号}, "
+                    f"批次={批次序号}/{批次数量}, 批量章节数={len(批次目录)}, 错误={exc}"
                 )
         return await asyncio.gather(*(下载单章(章节) for 章节 in 批次目录))
 
@@ -499,9 +499,9 @@ async def 准备发送文本文件给当前会话(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    logger.info(f"七猫小说准备上传：file={文件名}, size={len(文件内容)}")
+    logger.info(f"七猫小说准备上传：文件={文件名}, 大小={len(文件内容)}")
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
-    logger.info(f"七猫小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
+    logger.info(f"七猫小说写入下载缓存：文件={缓存路径}, 大小={len(文件内容)}")
     if 小说网盘 is None:
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
@@ -509,12 +509,12 @@ async def 准备发送文本文件给当前会话(
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
         if not 网盘结果.get("success"):
-            logger.warning(f"七猫小说主网盘上传失败：provider={网盘名称}, file={文件名}, error={网盘结果.get('error')}")
+            logger.warning(f"七猫小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}")
             删除下载缓存文件(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
         完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
         if 完成结果.get("sent"):
-            logger.info(f"七猫小说主网盘上传并发送完成按钮成功：provider={网盘名称}, file={文件名}")
+            logger.info(f"七猫小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -522,7 +522,7 @@ async def 准备发送文本文件给当前会话(
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
     except Exception as exc:
-        logger.warning(f"七猫小说主网盘上传或完成消息发送失败：file={文件名}, error={exc}")
+        logger.warning(f"七猫小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}")
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
 
@@ -536,13 +536,13 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.info(f"七猫小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                    logger.info(f"七猫小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}")
                 elif 百度结果.get("skipped"):
-                    logger.info(f"七猫小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                    logger.info(f"七猫小说百度网盘后台上传按状态规则跳过：文件={文件名}")
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"七猫小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+                    logger.warning(f"七猫小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}")
         except Exception as exc:
-            logger.warning(f"七猫小说百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={exc}")
+            logger.warning(f"七猫小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={exc}")
         finally:
             if str(源缓存路径) != str(发送缓存路径 or ""):
                 删除下载缓存文件(源缓存路径)
@@ -558,12 +558,12 @@ def 删除下载缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
     if not 小说缓存工具.删除下载缓存文件(缓存路径):
-        logger.debug(f"七猫小说下载缓存仍在等待续传：file={缓存路径}")
+        logger.debug(f"七猫小说下载缓存仍在等待续传：文件={缓存路径}")
         return
     try:
-        logger.info(f"七猫小说下载缓存文件已删除：file={缓存路径}")
+        logger.info(f"七猫小说下载缓存文件已删除：文件={缓存路径}")
     except Exception as exc:
-        logger.warning(f"七猫小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
+        logger.warning(f"七猫小说下载缓存文件删除失败：文件={缓存路径}, 错误={exc}")
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:

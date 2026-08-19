@@ -285,13 +285,13 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning("塔读小说网盘模块加载失败：error_type=%s", type(exc).__name__)
+    logger.warning("塔读小说网盘模块加载失败：错误类型=%s", type(exc).__name__)
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
-    logger.warning("塔读小说百度网盘模块加载失败：error_type=%s", type(exc).__name__)
+    logger.warning("塔读小说百度网盘模块加载失败：错误类型=%s", type(exc).__name__)
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -785,7 +785,7 @@ async def 确保塔读会话(session: aiohttp.ClientSession) -> None:
             if _应用塔读Token响应(response):
                 return
         except Exception as exc:
-            logger.debug("塔读游客Token续期失败：stage=refresh, error_type=%s", type(exc).__name__)
+            logger.debug("塔读游客Token续期失败：阶段=refresh, 错误类型=%s", type(exc).__name__)
         await _注册塔读会话(session)
 
 
@@ -876,9 +876,9 @@ async def _下载全部章节(
     success = 0
     last_percent = 0
     logger.info(
-        "塔读小说章节进度：book_id=%s, progress=0/%s, percent=0%%, "
-        "mode=batch_url, concurrency=%s, max_concurrency=%s, session_reuse=on, "
-        "decrypt=library, decrypt_concurrency=%s, retries=%s",
+        "塔读小说章节进度：书籍编号=%s, 进度=0/%s, 百分比=0%%, "
+        "模式=批量地址, 并发数=%s, 最大并发数=%s, 会话复用=开启, "
+        "解密方式=库, 解密并发数=%s, 重试次数=%s",
         book_id,
         total,
         concurrency,
@@ -906,7 +906,7 @@ async def _下载全部章节(
                 break
             except Exception as exc:
                 logger.debug(
-                    "塔读单章失败：book_id=%s, index=%s, round=%s, error_type=%s",
+                    "塔读单章失败：书籍编号=%s, 序号=%s, 轮次=%s, 错误类型=%s",
                     book_id,
                     index + 1,
                     attempt,
@@ -922,7 +922,7 @@ async def _下载全部章节(
             percent = int(completed * 100 / max(total, 1))
             if completed == total or percent >= min(100, last_percent + 进度日志分段数):
                 logger.info(
-                    "塔读小说章节进度：book_id=%s, progress=%s/%s, percent=%s%%, success=%s, failed=%s",
+                    "塔读小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 失败=%s",
                     book_id,
                     completed,
                     total,
@@ -1037,7 +1037,7 @@ async def _准备发送文本文件(event: Any, file_name: str, content: bytes, 
         _删除缓存(cache_path)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "完成消息发送失败"}
     except Exception as exc:
-        logger.warning("塔读小说网盘处理失败：file=%s, error_type=%s", file_name, type(exc).__name__)
+        logger.warning("塔读小说网盘处理失败：文件=%s, 错误类型=%s", file_name, type(exc).__name__)
         _删除缓存(cache_path)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "网盘处理失败"}
 
@@ -1048,7 +1048,7 @@ def _启动百度后台上传并清理(config: Any, cache_path: Any, file_name: 
             if 百度网盘 is not None and cache_path:
                 await 百度网盘.后台上传小说文件(config, cache_path, file_name)
         except Exception as exc:
-            logger.warning("塔读小说百度后台上传异常：file=%s, error_type=%s", file_name, type(exc).__name__)
+            logger.warning("塔读小说百度后台上传异常：文件=%s, 错误类型=%s", file_name, type(exc).__name__)
         finally:
             _删除缓存(cache_path)
 
@@ -1078,7 +1078,7 @@ async def 生成塔读下载回复流(event: Any, 来源: str, 配置: Any = Non
                 _获取目录(session, book_id),
             )
             if not chapters or not all(chapter.get("url") for chapter in chapters):
-                logger.warning("塔读小说目录不完整：book_id=%s, chapters=%s", book_id, len(chapters))
+                logger.warning("塔读小说目录不完整：书籍编号=%s, 章节数=%s", book_id, len(chapters))
                 yield "下载失败"
                 return
             详情 = 解析塔读书籍详情(detail)
@@ -1088,8 +1088,8 @@ async def 生成塔读下载回复流(event: Any, 来源: str, 配置: Any = Non
             word_count = 详情["word_count"]
             concurrency = 计算塔读章节并发数(len(chapters))
             logger.info(
-                "塔读小说开始下载：book_id=%s, title=%s, author=%s, chapters=%s, "
-                "catalog_concurrency=%s, content_concurrency=%s, session_reuse=on, decrypt=library",
+                "塔读小说开始下载：书籍编号=%s, 书名=%s, 作者=%s, 章节数=%s, "
+                "目录并发数=%s, 正文并发数=%s, 会话复用=开启, 解密方式=库",
                 book_id,
                 title,
                 author,
@@ -1110,7 +1110,7 @@ async def 生成塔读下载回复流(event: Any, 来源: str, 配置: Any = Non
 
         success = [chapter for chapter in chapter_results if chapter.get("content")]
         if len(success) != len(chapters):
-            logger.warning("塔读小说下载失败：book_id=%s, success=%s, total=%s", book_id, len(success), len(chapters))
+            logger.warning("塔读小说下载失败：书籍编号=%s, 成功=%s, 总数=%s", book_id, len(success), len(chapters))
             yield "下载失败"
             return
         file_name, content = _生成小说文件(book_id, title, author, status, word_count, chapter_results)
@@ -1127,7 +1127,7 @@ async def 生成塔读下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning("塔读小说下载失败：book_id=%s, error_type=%s", book_id, type(exc).__name__)
+        logger.warning("塔读小说下载失败：书籍编号=%s, 错误类型=%s", book_id, type(exc).__name__)
         yield "下载失败"
 
 
@@ -1152,7 +1152,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             )
         return 解析塔读搜索书籍(response)[: max(1, int(需要数量 or 1))]
     except Exception as exc:
-        logger.warning("塔读小说搜索失败：keyword=%s, error_type=%s", 关键词, type(exc).__name__)
+        logger.warning("塔读小说搜索失败：关键词=%s, 错误类型=%s", 关键词, type(exc).__name__)
         return []
 
 

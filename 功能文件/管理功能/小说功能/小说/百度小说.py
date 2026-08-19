@@ -310,7 +310,7 @@ async def _解析百度详情页编号(会话: aiohttp.ClientSession, 来源: st
             pass
         if 次数 + 1 < 百度请求重试次数:
             await asyncio.sleep(0.25 * (次数 + 1))
-    logger.debug("百度小说分享页解析失败：stage=detail_page,error=ParseFailed")
+    logger.debug("百度小说分享页解析失败：阶段=detail_page,错误=ParseFailed")
     return ""
 
 
@@ -604,7 +604,7 @@ async def 下载百度出版正文(
                 )
                 状态 = 数据.get("status") if isinstance(数据, dict) else None
                 if not isinstance(状态, dict) or _安全整数(状态.get("code"), -1) != 0:
-                    logger.debug("百度出版正文页面获取失败：page=%s, error=BusinessError", 页面编号)
+                    logger.debug("百度出版正文页面获取失败：页码=%s, 错误=BusinessError", 页面编号)
                     return
                 数据节点 = 数据.get("data")
                 内容 = 数据节点.get("content") if isinstance(数据节点, dict) else None
@@ -613,13 +613,13 @@ async def 下载百度出版正文(
                 async with 页面锁:
                     页面结果[页面编号] = 拆分结果
             except Exception as 异常:
-                logger.debug("百度出版正文页面获取失败：page=%s, error=%s", 页面编号, type(异常).__name__)
+                logger.debug("百度出版正文页面获取失败：页码=%s, 错误=%s", 页面编号, type(异常).__name__)
             finally:
                 async with 页面进度锁:
                     已完成页面 += 1
                     if 已完成页面 >= 下次页面日志 or 已完成页面 == len(分组):
                         logger.info(
-                            "百度出版正文进度：book_id=%s, progress=%s/%s, success=%s",
+                            "百度出版正文进度：书籍编号=%s, 进度=%s/%s, 成功=%s",
                             文档编号,
                             已完成页面,
                             len(分组),
@@ -691,7 +691,7 @@ async def _下载百度章节(
                     return 正文
                 raise RuntimeError("empty content")
             except Exception as 异常:
-                logger.debug("百度小说章节获取失败：chapter=%s, error=%s", 编号, type(异常).__name__)
+                logger.debug("百度小说章节获取失败：章节=%s, 错误=%s", 编号, type(异常).__name__)
                 if 次数 + 1 < 百度请求重试次数:
                     await asyncio.sleep(0.25 * (次数 + 1))
     return ""
@@ -715,7 +715,7 @@ async def 下载百度正文(
             已完成 += 1
             if 已完成 >= 下次日志 or 已完成 == len(目录):
                 logger.info(
-                    "百度小说章节进度：book_id=%s, progress=%s/%s, success=%s",
+                    "百度小说章节进度：书籍编号=%s, 进度=%s/%s, 成功=%s",
                     书籍编号,
                     已完成,
                     len(目录),
@@ -802,7 +802,7 @@ async def _准备发送文本文件(event: Any, 文件名: str, 内容: bytes, �
         删除百度缓存文件(路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None}
     except Exception as 异常:
-        logger.warning("百度小说文件发送失败：error=%s", type(异常).__name__)
+        logger.warning("百度小说文件发送失败：错误=%s", type(异常).__name__)
         删除百度缓存文件(路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None}
 
@@ -820,10 +820,10 @@ def 启动百度后台上传并清理源文件(配置: Any, 路径: Any, 文件�
                     结果.get("enabled") and not (结果.get("success") or 结果.get("skipped"))
                 ):
                     备份完成 = False
-                    logger.warning("百度小说后台备份失败：file=%s, error=UploadFailed", 文件名)
+                    logger.warning("百度小说后台备份失败：文件=%s, 错误=UploadFailed", 文件名)
         except Exception as 异常:
             备份完成 = False
-            logger.warning("百度小说后台备份异常：error=%s", type(异常).__name__)
+            logger.warning("百度小说后台备份异常：错误=%s", type(异常).__name__)
         finally:
             if not 备份完成:
                 小说缓存工具.更新上传任务(
@@ -874,14 +874,14 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
             预期章节数 = _安全整数(详情.get("chapter_count"))
             if 预期章节数 > 0 and len(目录) != 预期章节数:
                 logger.warning(
-                    "百度小说目录不完整：book_id=%s, catalog=%s, expected=%s",
+                    "百度小说目录不完整：书籍编号=%s, 目录=%s, 预期=%s",
                     书籍编号,
                     len(目录),
                     预期章节数,
                 )
                 yield 百度下载失败提示
                 return
-            logger.info("百度小说开始下载：book_id=%s, chapters=%s", 书籍编号, len(目录))
+            logger.info("百度小说开始下载：书籍编号=%s, 章节数=%s", 书籍编号, len(目录))
             yield "\n".join(
                 [
                     f"书名：{详情.get('title') or '未知'}",
@@ -902,7 +902,7 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
                 正文列表 = await 下载百度正文(会话, 书籍编号, 目录)
                 正文缺失 = any(not 正文 for 正文 in 正文列表)
         if len(正文列表) != len(目录) or 正文缺失:
-            logger.warning("百度小说正文不完整：book_id=%s, success=%s, total=%s", 书籍编号, sum(bool(x) for x in 正文列表), len(目录))
+            logger.warning("百度小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s", 书籍编号, sum(bool(x) for x in 正文列表), len(目录))
             yield 百度下载失败提示
             return
         文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
@@ -920,7 +920,7 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
         yield 百度文件发送失败提示
     except Exception as 异常:
-        logger.warning("百度小说下载失败：stage=%s, error=%s", stage, type(异常).__name__)
+        logger.warning("百度小说下载失败：阶段=%s, 错误=%s", stage, type(异常).__name__)
         yield 百度下载失败提示
 
 
@@ -971,5 +971,5 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             )
         return 结果[: max(1, min(30, int(需要数量 or 20)))]
     except Exception as 异常:
-        logger.debug("百度小说搜索失败：error=%s", type(异常).__name__)
+        logger.debug("百度小说搜索失败：错误=%s", type(异常).__name__)
         return []

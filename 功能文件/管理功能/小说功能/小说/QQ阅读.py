@@ -747,7 +747,7 @@ def tar_decrypt(stream: Union[BinaryIO, bytes]) -> Dict[str, object]:
         result["code"] = 0
         return result
     except Exception as e:
-        logger.debug(f"QQ阅读参考 tar 解析失败：error={type(e).__name__}")
+        logger.debug(f"QQ阅读参考 tar 解析失败：错误={type(e).__name__}")
         result["code"] = -1
         return result
 # === config (embedded, minimal) ===
@@ -925,7 +925,7 @@ async def 确保QQ阅读密钥池(
                 response.raise_for_status()
                 data = await response.json(content_type=None)
         except Exception as exc:
-            logger.debug(f"QQ阅读密钥池获取失败：error={type(exc).__name__}")
+            logger.debug(f"QQ阅读密钥池获取失败：错误={type(exc).__name__}")
             return False
         pool = str((data or {}).get("pool") or "").strip() if isinstance(data, dict) else ""
         if not pool or not config._cache_valid(pool):
@@ -1269,7 +1269,7 @@ def 解析QQ阅读正文批次带统计(
             try:
                 text = 解密QQ阅读章节数据(bytes(value), name, allow_refresh=False)
             except Exception as exc:
-                logger.debug(f"QQ阅读参考正文解密失败：error={type(exc).__name__}")
+                logger.debug(f"QQ阅读参考正文解密失败：错误={type(exc).__name__}")
                 text = None
             value = text if text else "章节解密失败"
         elif not isinstance(value, str):
@@ -1832,7 +1832,7 @@ async def 加载保存的QQ阅读登录态(配置: Any) -> bool:
     try:
         登录态 = await asyncio.to_thread(_读取QQ阅读登录态, 配置)
     except Exception as exc:
-        logger.warning(f"QQ阅读登录态读取失败：error={type(exc).__name__}")
+        logger.warning(f"QQ阅读登录态读取失败：错误={type(exc).__name__}")
         return False
     if not 登录态:
         return False
@@ -1858,7 +1858,7 @@ async def 处理QQ阅读Cookie指令(
         await asyncio.to_thread(_保存QQ阅读登录态, 配置, 登录态)
         await asyncio.to_thread(_应用QQ阅读登录态, 登录态)
     except Exception as exc:
-        logger.warning(f"QQ阅读Cookie保存失败：error={type(exc).__name__}")
+        logger.warning(f"QQ阅读Cookie保存失败：错误={type(exc).__name__}")
         return "QQ阅读Cookie保存失败，请稍后再试"
     return "QQ阅读Cookie已保存并覆盖原登录态"
 
@@ -2386,8 +2386,8 @@ async def 下载参考出版书正文(
     request_semaphore = asyncio.Semaphore(concurrency)
     decrypt_semaphore = asyncio.Semaphore(max(1, min(QQ阅读解密最大动态并发数, total)))
     logger.info(
-        f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%, "
-        f"concurrency={concurrency}"
+        f"QQ阅读章节进度：书籍编号={book_id}, 进度=0/{total}, 百分比=0%, "
+        f"并发数={concurrency}"
     )
 
     async def 下载章节(index: int, item: dict[str, Any]) -> tuple[int, str | None]:
@@ -2406,8 +2406,8 @@ async def 下载参考出版书正文(
             except Exception as exc:
                 if attempt >= 3:
                     logger.debug(
-                        f"QQ阅读出版书章节请求失败：book_id={book_id}, index={index + 1}, "
-                        f"error={type(exc).__name__}"
+                        f"QQ阅读出版书章节请求失败：书籍编号={book_id}, 序号={index + 1}, "
+                        f"错误={type(exc).__name__}"
                     )
                     break
                 await asyncio.sleep(0.3 * attempt)
@@ -2433,8 +2433,8 @@ async def 下载参考出版书正文(
             success = len(results)
             percent = int(completed * 100 / max(1, total))
             logger.info(
-                f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
-                f"percent={percent}%, success={success}, failed={completed - success}"
+                f"QQ阅读章节进度：书籍编号={book_id}, 进度={completed}/{total}, "
+                f"百分比={percent}%, 成功={success}, 失败={completed - success}"
             )
     if len(results) != total:
         raise RuntimeError("章节不完整")
@@ -2490,9 +2490,9 @@ async def 下载参考正文(
     batch_count = (total + QQ阅读批量章节数 - 1) // QQ阅读批量章节数
     concurrency = 计算QQ阅读批量并发数(batch_count)
     logger.info(
-        f"QQ阅读章节进度：book_id={book_id}, progress=0/{total}, percent=0%, "
-        f"batches={batch_count}, batch_size={QQ阅读批量章节数}, concurrency={concurrency}, "
-        f"max_concurrency={QQ阅读批量最大动态并发数}"
+        f"QQ阅读章节进度：书籍编号={book_id}, 进度=0/{total}, 百分比=0%, "
+        f"批次数={batch_count}, 批量章节数={QQ阅读批量章节数}, 并发数={concurrency}, "
+        f"最大并发数={QQ阅读批量最大动态并发数}"
     )
 
     def 合并批次(first: int, last: int, part: Any, results: list[Any]) -> int:
@@ -2528,8 +2528,8 @@ async def 下载参考正文(
         last_success = success
         percent = int(completed * 100 / max(1, total))
         logger.info(
-            f"QQ阅读章节进度：book_id={book_id}, progress={completed}/{total}, "
-            f"percent={percent}%, success={success}, failed={completed - success}"
+            f"QQ阅读章节进度：书籍编号={book_id}, 进度={completed}/{total}, "
+            f"百分比={percent}%, 成功={success}, 失败={completed - success}"
         )
 
     ranges = [
@@ -2596,15 +2596,15 @@ async def 下载参考正文(
         except (aiohttp.ClientError, asyncio.TimeoutError):
             stats["http_failed"] = 1
             logger.debug(
-                f"QQ阅读批量正文请求失败：book_id={book_id}, range={first}-{last}, "
-                "stage=http"
+                f"QQ阅读批量正文请求失败：书籍编号={book_id}, 范围={first}-{last}, "
+                "阶段=请求"
             )
             return first, last, None, stats
         except Exception as exc:
             stats["other_failed"] = 1
             logger.debug(
-                f"QQ阅读批量正文请求失败：book_id={book_id}, range={first}-{last}, "
-                f"error={type(exc).__name__}"
+                f"QQ阅读批量正文请求失败：书籍编号={book_id}, 范围={first}-{last}, "
+                f"错误={type(exc).__name__}"
             )
             return first, last, None, stats
 
@@ -2618,13 +2618,13 @@ async def 下载参考正文(
         汇报进度(completed, success)
 
     logger.debug(
-        f"QQ阅读正文首轮汇总：book_id={book_id}, batches={initial_stats['batches']}, "
-        f"response_items={initial_stats['response_items']}/{total}, "
-        f"valid_items={initial_stats['valid_items']}, "
-        f"response_missing={initial_stats['response_missing']}, "
-        f"decrypt_failed={initial_stats['decrypt_failed']}, "
-        f"http_failed={initial_stats['http_failed']}, "
-        f"other_failed={initial_stats['other_failed']}"
+        f"QQ阅读正文首轮汇总：书籍编号={book_id}, 批次数={initial_stats['batches']}, "
+        f"响应章节数={initial_stats['resp开启se_items']}/{total}, "
+        f"有效章节数={initial_stats['valid_items']}, "
+        f"响应缺失={initial_stats['resp开启se_missing']}, "
+        f"解密失败={initial_stats['decrypt_failed']}, "
+        f"请求失败={initial_stats['http_failed']}, "
+        f"其他失败={initial_stats['other_failed']}"
     )
 
     for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
@@ -2634,14 +2634,14 @@ async def 下载参考正文(
         if round_index == 1:
             refreshed = await 确保QQ阅读密钥池(session, force=True)
             logger.debug(
-                f"QQ阅读正文密钥池刷新：book_id={book_id}, success={int(bool(refreshed))}"
+                f"QQ阅读正文密钥池刷新：书籍编号={book_id}, 成功={int(bool(refreshed))}"
             )
         retry_ranges = QQ阅读失败章节窗口(missing)
         retry_concurrency = 计算QQ阅读批量并发数(len(retry_ranges))
         logger.debug(
-            f"QQ阅读失败章节重试：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-            f"missing={len(missing)}, ranges={格式化失败范围(missing)}, "
-            f"windows={len(retry_ranges)}, concurrency={retry_concurrency}"
+            f"QQ阅读失败章节重试：书籍编号={book_id}, 轮次={round_index}/{QQ阅读失败章节重试轮数}, "
+            f"缺失={len(missing)}, 范围={格式化失败范围(missing)}, "
+            f"窗口数={len(retry_ranges)}, 并发数={retry_concurrency}"
         )
         recovered = 0
         retry_semaphore = asyncio.Semaphore(retry_concurrency)
@@ -2661,14 +2661,14 @@ async def 下载参考正文(
         success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
         汇报进度(total, success)
         logger.debug(
-            f"QQ阅读失败章节重试结果：book_id={book_id}, round={round_index}/{QQ阅读失败章节重试轮数}, "
-            f"recovered={recovered}, still_missing={total - success}, "
-            f"response_items={retry_stats['response_items']}, "
-            f"valid_items={retry_stats['valid_items']}, "
-            f"response_missing={retry_stats['response_missing']}, "
-            f"decrypt_failed={retry_stats['decrypt_failed']}, "
-            f"http_failed={retry_stats['http_failed']}, "
-            f"other_failed={retry_stats['other_failed']}"
+            f"QQ阅读失败章节重试结果：书籍编号={book_id}, 轮次={round_index}/{QQ阅读失败章节重试轮数}, "
+            f"恢复={recovered}, 仍缺失={total - success}, "
+            f"响应章节数={retry_stats['resp开启se_items']}, "
+            f"有效章节数={retry_stats['valid_items']}, "
+            f"响应缺失={retry_stats['resp开启se_missing']}, "
+            f"解密失败={retry_stats['decrypt_failed']}, "
+            f"请求失败={retry_stats['http_failed']}, "
+            f"其他失败={retry_stats['other_failed']}"
         )
         if success >= total or recovered <= 0:
             break
@@ -2859,11 +2859,11 @@ def 启动百度后台上传并清理源文件(config: Any, source_path: Any, fi
                 result = await 百度网盘.后台上传小说文件(config, source_path, filename)
                 if result.get("enabled") and not (result.get("success") or result.get("skipped")):
                     logger.warning(
-                        f"QQ阅读百度网盘后台上传失败：file={filename}, error=UploadFailed"
+                        f"QQ阅读百度网盘后台上传失败：文件={filename}, 错误=UploadFailed"
                     )
         except Exception as exc:
             logger.warning(
-                f"QQ阅读百度网盘后台上传异常：file={filename}, error={type(exc).__name__}"
+                f"QQ阅读百度网盘后台上传异常：文件={filename}, 错误={type(exc).__name__}"
             )
         finally:
             删除下载缓存文件(source_path)
@@ -2908,7 +2908,7 @@ async def 生成下载回复流(
             try:
                 details = await 获取参考书籍详情(book_id, session)
             except Exception as exc:
-                logger.debug(f"QQ阅读参考详情获取失败：error={type(exc).__name__}")
+                logger.debug(f"QQ阅读参考详情获取失败：错误={type(exc).__name__}")
                 details = {
                     "title": f"QQ阅读{book_id}",
                     "author": "未知",
@@ -2936,9 +2936,9 @@ async def 生成下载回复流(
                 yield 章节单独付费提示
                 return
             logger.info(
-                f"QQ阅读开始下载：book_id={book_id}, title={details.get('title')}, "
-                f"author={details.get('author')}, chapters={len(catalog)}, "
-                f"book_type={'published' if published else 'novel'}"
+                f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
+                f"作者={details.get('author')}, 章节数={len(catalog)}, "
+                f"书籍类型={'published' if published else 'novel'}"
             )
             yield 格式化下载提示(details, len(catalog))
 
@@ -2950,8 +2950,8 @@ async def 生成下载回复流(
             )
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
         logger.info(
-            f"QQ阅读章节下载完成：book_id={book_id}, title={details.get('title')}, "
-            f"success={len(chapters)}, total={len(catalog)}, file_size={len(content)}"
+            f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
+            f"成功={len(chapters)}, 总数={len(catalog)}, 文件大小={len(content)}"
         )
 
         stage = "upload"
@@ -2977,6 +2977,6 @@ async def 生成下载回复流(
         yield 文件发送失败提示
     except Exception as exc:
         logger.warning(
-            f"QQ阅读参考下载失败：book_id={book_id}, stage={stage}, error={type(exc).__name__}"
+            f"QQ阅读参考下载失败：书籍编号={book_id}, 阶段={stage}, 错误={type(exc).__name__}"
         )
         yield 下载失败提示

@@ -23,7 +23,7 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning("QQ浏览器小说网盘模块加载失败：error=%s", type(exc).__name__)
+    logger.warning("QQ浏览器小说网盘模块加载失败：错误=%s", type(exc).__name__)
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -341,7 +341,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             )
         return 解析QQ浏览器搜索结果(数据)[: max(1, min(QQ浏览器搜索数量上限, int(需要数量 or 20)))]
     except Exception as 异常:
-        logger.warning("QQ浏览器小说搜索失败：error=%s", type(异常).__name__)
+        logger.warning("QQ浏览器小说搜索失败：错误=%s", type(异常).__name__)
         return []
 
 
@@ -510,7 +510,7 @@ async def 下载QQ浏览器全部章节(
     已成功 = 0
     下次进度 = max(1, len(目录) // QQ浏览器进度日志分段数)
     logger.info(
-        "QQ浏览器小说章节进度：book_id=%s, progress=0/%s, percent=0%%, batches=%s, concurrency=%s",
+        "QQ浏览器小说章节进度：书籍编号=%s, 进度=0/%s, 百分比=0%%, 批次数=%s, 并发数=%s",
         书籍编号,
         len(目录),
         len(批次),
@@ -539,7 +539,7 @@ async def 下载QQ浏览器全部章节(
             当前百分比 = int(已完成 * 100 / max(1, len(目录)))
             if 已完成 == len(目录) or 已完成 >= 下次进度:
                 logger.info(
-                    "QQ浏览器小说章节进度：book_id=%s, progress=%s/%s, percent=%s%%, success=%s, failed=%s",
+                    "QQ浏览器小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 失败=%s",
                     书籍编号,
                     已完成,
                     len(目录),
@@ -562,7 +562,7 @@ async def 下载QQ浏览器全部章节(
             }
         输出.append(项目)
     logger.info(
-        "QQ浏览器小说章节下载完成：book_id=%s, success=%s, total=%s",
+        "QQ浏览器小说章节下载完成：书籍编号=%s, 成功=%s, 总数=%s",
         书籍编号,
         sum(1 for 项目 in 输出 if 项目.get("success")),
         len(输出),
@@ -677,7 +677,7 @@ async def 准备发送QQ浏览器文本文件(
         删除QQ浏览器缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "完成消息发送失败"}
     except Exception as 异常:
-        logger.warning("QQ浏览器小说文件发送失败：error=%s", type(异常).__name__)
+        logger.warning("QQ浏览器小说文件发送失败：错误=%s", type(异常).__name__)
         删除QQ浏览器缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说文件发送失败"}
 
@@ -698,13 +698,13 @@ async def 生成QQ浏览器下载回复流(
                 获取QQ浏览器章节目录(HTTP会话, 书籍编号),
             )
             if not 详情 or not 目录:
-                logger.warning("QQ浏览器小说详情或目录为空：book_id=%s", 书籍编号)
+                logger.warning("QQ浏览器小说详情或目录为空：书籍编号=%s", 书籍编号)
                 yield QQ浏览器下载失败提示
                 return
             书名 = str(详情.get("title") or "未知")
             作者 = str(详情.get("author") or "未知")
             logger.info(
-                "QQ浏览器小说开始下载：book_id=%s, title=%s, author=%s, chapters=%s",
+                "QQ浏览器小说开始下载：书籍编号=%s, 书名=%s, 作者=%s, 章节数=%s",
                 书籍编号,
                 书名,
                 作者,
@@ -724,7 +724,7 @@ async def 生成QQ浏览器下载回复流(
             章节结果 = await 下载QQ浏览器全部章节(HTTP会话, 书籍编号, 目录)
         if len(章节结果) != len(目录) or any(not 项目.get("success") for 项目 in 章节结果):
             logger.warning(
-                "QQ浏览器小说正文不完整：book_id=%s, success=%s, total=%s",
+                "QQ浏览器小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
                 书籍编号,
                 sum(1 for 项目 in 章节结果 if 项目.get("success")),
                 len(目录),
@@ -752,7 +752,7 @@ async def 生成QQ浏览器下载回复流(
             return
         yield QQ浏览器文件发送失败提示
     except Exception as 异常:
-        logger.warning("QQ浏览器小说下载失败：error=%s", type(异常).__name__)
+        logger.warning("QQ浏览器小说下载失败：错误=%s", type(异常).__name__)
         yield QQ浏览器下载失败提示
 
 

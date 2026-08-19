@@ -91,7 +91,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         try:
             写入布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, 是否开启)
         except Exception as exc:
-            logger.warning(f"全局小说功能开关写入数据库失败：enabled={是否开启}, error={exc}")
+            logger.warning(f"全局小说功能开关写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}")
             return "小说功能开关失败，请稍后再试"
         状态文本 = "开启" if 是否开启 else "关闭"
         return f"全局小说功能已{状态文本}"
@@ -100,7 +100,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         try:
             写入布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, 是否开启)
         except Exception as exc:
-            logger.warning(f"管理员测试模式写入数据库失败：enabled={是否开启}, error={exc}")
+            logger.warning(f"管理员测试模式写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}")
             return "测试模式切换失败，请稍后再试"
         状态文本 = "开启" if 是否开启 else "关闭"
         return f"管理员测试模式已{状态文本}"
@@ -109,7 +109,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
     try:
         写入小说功能状态(配置, 功能名, 是否开启)
     except Exception as exc:
-        logger.warning(f"小说功能开关写入数据库失败：feature={功能名}, enabled={是否开启}, error={exc}")
+        logger.warning(f"小说功能开关写入数据库失败：功能={功能名}, 是否开启={是否开启}, 错误={type(exc).__name__}")
         return f"{功能显示名[功能名]}开关失败，请稍后再试"
     状态文本 = "开启" if 是否开启 else "关闭"
     return f"{功能显示名[功能名]}已{状态文本}"
@@ -124,7 +124,7 @@ def 小说总开关是否开启(配置: Any = None) -> bool:
     try:
         return 读取布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, True)
     except Exception as exc:
-        logger.warning(f"全局小说功能开关读取数据库失败：error={exc}")
+        logger.warning(f"全局小说功能开关读取数据库失败：错误={type(exc).__name__}")
         return True
 
 
@@ -132,7 +132,7 @@ def 管理员测试模式是否开启(配置: Any = None) -> bool:
     try:
         return 读取布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, False)
     except Exception as exc:
-        logger.warning(f"管理员测试模式读取数据库失败：error={exc}")
+        logger.warning(f"管理员测试模式读取数据库失败：错误={type(exc).__name__}")
         return False
 
 
@@ -176,6 +176,6 @@ def 读取小说功能状态(配置: Any = None) -> dict[str, bool]:
         try:
             状态[功能名] = 读取布尔运行状态值(配置, 状态命名空间, 功能名, 默认值)
         except Exception as exc:
-            logger.warning(f"小说功能开关读取数据库失败：feature={功能名}, error={exc}")
+            logger.warning(f"小说功能开关读取数据库失败：功能={功能名}, 错误={type(exc).__name__}")
             状态[功能名] = 默认值
     return 状态

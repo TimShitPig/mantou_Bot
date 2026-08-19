@@ -46,7 +46,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.27.2"
+插件版本 = "5.28.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -58,18 +58,18 @@ class MyPlugin(Star):
 
     async def initialize(self):
         QQ官方交互桥.安装QQ官方帮助交互(self.context)
-        logger.info("馒头bot加载完成：version=%s, source=%s", 插件版本, 插件目录)
+        logger.info("馒头bot加载完成：版本=%s, 源码目录=%s", 插件版本, 插件目录)
         已清理缓存数 = 小说缓存清理.清理残留下载缓存()
         if 已清理缓存数:
-            logger.info(f"插件重载清理小说下载缓存：count={已清理缓存数}")
+            logger.info(f"插件重载清理小说下载缓存：数量={已清理缓存数}")
 
         async def _恢复小说上传任务():
             try:
                 恢复数量 = await 小说网盘功能.恢复待续传上传任务(self.config)
                 if 恢复数量:
-                    logger.info("插件重载恢复小说上传任务：count=%s", 恢复数量)
+                    logger.info("插件重载恢复小说上传任务：数量=%s", 恢复数量)
             except Exception as 异常:
-                logger.warning("插件重载恢复小说上传任务异常：error=%s", 异常)
+                logger.warning("插件重载恢复小说上传任务异常：错误类型=%s", type(异常).__name__)
 
         asyncio.create_task(_恢复小说上传任务())
 
@@ -169,7 +169,7 @@ class MyPlugin(Star):
 
         if 帮助回调 is not None:
             回调类型, 回调命令 = 帮助回调
-            logger.info(f"QQ官方帮助回调分发：type={回调类型}, command={回调命令}")
+            logger.info(f"QQ官方帮助回调分发：类型={回调类型}, 命令={回调命令}")
             if 回调类型 == "菜单":
                 md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 回调命令, self.config)
                 if md文本 is not None:

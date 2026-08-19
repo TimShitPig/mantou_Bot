@@ -57,13 +57,13 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as 异常:
     小说网盘 = None
-    logger.warning(f"小说网盘模块加载失败, error={异常}")
+    logger.warning(f"小说网盘模块加载失败, 错误={异常}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as 异常:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败, error={异常}")
+    logger.warning(f"百度网盘模块加载失败, 错误={异常}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -1960,8 +1960,8 @@ def 获取番茄同书精确字数(
         )
     except Exception as 异常:
         logger.debug(
-            f"番茄小说精确字数补查失败：book_id={书籍编号}, "
-            f"error={限制番茄日志文本(str(异常), 160)}"
+            f"番茄小说精确字数补查失败：书籍编号={书籍编号}, "
+            f"错误={限制番茄日志文本(str(异常), 160)}"
         )
         return 0
 
@@ -1993,8 +1993,8 @@ def 获取番茄同书精确字数(
             候选详情 = book_detail(候选编号)
         except Exception as 异常:
             logger.debug(
-                f"番茄小说规范字数详情失败：book_id={书籍编号}, "
-                f"candidate_id={候选编号}, error={限制番茄日志文本(str(异常), 160)}"
+                f"番茄小说规范字数详情失败：书籍编号={书籍编号}, "
+                f"候选编号={候选编号}, 错误={限制番茄日志文本(str(异常), 160)}"
             )
             continue
         if 标准化番茄书籍比对文本(候选详情.get("book_name") or 候选详情.get("title")) != 标准标题:
@@ -2006,7 +2006,7 @@ def 获取番茄同书精确字数(
         )
         if 详情字数 == 搜索字数:
             logger.debug(
-                f"番茄小说精确字数补查成功：book_id={书籍编号}, candidate_id={候选编号}"
+                f"番茄小说精确字数补查成功：书籍编号={书籍编号}, 候选编号={候选编号}"
             )
             return 详情字数
     return 0
@@ -2038,7 +2038,7 @@ async def 异步获取番茄同书精确字数(
         )
     except Exception as exc:
         logger.debug(
-            f"番茄小说精确字数补查失败：book_id={书籍编号}, error={type(exc).__name__}"
+            f"番茄小说精确字数补查失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
         )
         return 0
     data = response.get("data") if isinstance(response, dict) else None
@@ -2068,8 +2068,8 @@ async def 异步获取番茄同书精确字数(
             candidate_detail = await 异步获取番茄书籍详情(client, candidate_id)
         except Exception as exc:
             logger.debug(
-                f"番茄小说规范字数详情失败：book_id={书籍编号}, candidate_id={candidate_id}, "
-                f"error={type(exc).__name__}"
+                f"番茄小说规范字数详情失败：书籍编号={书籍编号}, 候选编号={candidate_id}, "
+                f"错误={type(exc).__name__}"
             )
             continue
         if 标准化番茄书籍比对文本(candidate_detail.get("book_name") or candidate_detail.get("title")) != normalized_title:
@@ -2081,7 +2081,7 @@ async def 异步获取番茄同书精确字数(
         )
         if actual_words == expected_words:
             logger.debug(
-                f"番茄小说精确字数补查成功：book_id={书籍编号}, candidate_id={candidate_id}"
+                f"番茄小说精确字数补查成功：书籍编号={书籍编号}, 候选编号={candidate_id}"
             )
             return actual_words
     return 0
@@ -2129,8 +2129,8 @@ def 读取番茄目录元数据(书籍编号: str, item_ids: List[str]) -> Dict[
             元数据.update(directory_infos(书籍编号, list(批次), sign_mode="auto"))
         except Exception as 异常:
             logger.warning(
-                f"番茄小说目录元数据获取失败：book_id={书籍编号}, "
-                f"range={len(元数据) + 1}-{len(元数据) + len(批次)}, error={限制番茄日志文本(str(异常), 200)}"
+                f"番茄小说目录元数据获取失败：书籍编号={书籍编号}, "
+                f"范围={len(元数据) + 1}-{len(元数据) + len(批次)}, 错误={限制番茄日志文本(str(异常), 200)}"
             )
             break
     return 元数据
@@ -2267,8 +2267,8 @@ async def 异步读取番茄目录元数据(
     for index, result in enumerate(await asyncio.gather(*(请求一批(chunk) for chunk in chunks), return_exceptions=True)):
         if isinstance(result, Exception):
             logger.warning(
-                f"番茄小说目录元数据获取失败：book_id={book_id}, batch={index + 1}, "
-                f"error={type(result).__name__}"
+                f"番茄小说目录元数据获取失败：书籍编号={book_id}, 批次={index + 1}, "
+                f"错误={type(result).__name__}"
             )
             continue
         metadata.update(result)
@@ -2828,19 +2828,19 @@ def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原�
         infos = (响应.get("data") or {}).get("item_infos") or {}
         if 响应.get("code") == 0 and infos:
             logger.debug(
-                f"番茄小说正文补拉成功：book_id={书籍编号}, reason={原因}, "
-                f"success={len(infos)}/{len(item_ids)}"
+                f"番茄小说正文补拉成功：书籍编号={书籍编号}, 原因={原因}, "
+                f"成功={len(infos)}/{len(item_ids)}"
             )
             return 响应
         logger.debug(
-            f"番茄小说正文补拉无可用章节：book_id={书籍编号}, reason={原因}, "
-            f"code={响应.get('code')}, message={限制番茄日志文本(str(响应.get('message') or 响应.get('msg') or ''), 200)}, "
-            f"success={len(infos)}/{len(item_ids)}"
+            f"番茄小说正文补拉无可用章节：书籍编号={书籍编号}, 原因={原因}, "
+            f"业务代码={响应.get('code')}, 消息={限制番茄日志文本(str(响应.get('message') or 响应.get('msg') or ''), 200)}, "
+            f"成功={len(infos)}/{len(item_ids)}"
         )
     except Exception as 异常:
         logger.warning(
-            f"番茄小说正文补拉失败：book_id={书籍编号}, reason={原因}, "
-            f"error={限制番茄日志文本(str(异常), 200)}"
+            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 原因={原因}, "
+            f"错误={限制番茄日志文本(str(异常), 200)}"
         )
     return None
 
@@ -2856,18 +2856,18 @@ async def 异步尝试番茄阅读正文补拉(
         infos = (response.get("data") or {}).get("item_infos") or {}
         if response.get("code") == 0 and infos:
             logger.debug(
-                f"番茄小说正文补拉成功：book_id={书籍编号}, reason={原因}, "
-                f"success={len(infos)}/{len(item_ids)}"
+                f"番茄小说正文补拉成功：书籍编号={书籍编号}, 原因={原因}, "
+                f"成功={len(infos)}/{len(item_ids)}"
             )
             return response
         logger.debug(
-            f"番茄小说正文补拉无可用章节：book_id={书籍编号}, reason={原因}, "
-            f"code={response.get('code')}, success={len(infos)}/{len(item_ids)}"
+            f"番茄小说正文补拉无可用章节：书籍编号={书籍编号}, 原因={原因}, "
+            f"业务代码={response.get('code')}, 成功={len(infos)}/{len(item_ids)}"
         )
     except Exception as exc:
         logger.warning(
-            f"番茄小说正文补拉失败：book_id={书籍编号}, reason={原因}, "
-            f"error={type(exc).__name__}"
+            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 原因={原因}, "
+            f"错误={type(exc).__name__}"
         )
     return None
 
@@ -3167,13 +3167,13 @@ async def 生成番茄下载回复流(
             书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
             目录 = 准备结果.get("chapters") or []
             if not 目录:
-                logger.warning(f"番茄小说下载失败：book_id={书籍编号}, error=没有获取到章节目录")
+                logger.warning(f"番茄小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录")
                 yield 番茄下载失败提示
                 return
 
             logger.info(
-                f"番茄小说开始下载：book_id={书籍编号}, title={书籍信息.get('title')}, "
-                f"author={书籍信息.get('author')}, chapters={len(目录)}"
+                f"番茄小说开始下载：书籍编号={书籍编号}, 书名={书籍信息.get('title')}, "
+                f"作者={书籍信息.get('author')}, 章节数={len(目录)}"
             )
             yield 格式化番茄下载提示(书籍信息, len(目录))
 
@@ -3181,16 +3181,16 @@ async def 生成番茄下载回复流(
         成功章节列表 = [项目 for 项目 in 章节结果列表 if 项目.get("success")]
         if len(成功章节列表) < len(目录):
             logger.warning(
-                f"番茄小说下载失败：book_id={书籍编号}, "
-                f"success={len(成功章节列表)}, total={len(目录)}, error=章节正文不完整"
+                f"番茄小说下载失败：书籍编号={书籍编号}, "
+                f"成功={len(成功章节列表)}, 总数={len(目录)}, 错误=章节正文不完整"
             )
             yield 番茄下载失败提示
             return
 
         文件名, 文件内容 = 生成番茄小说文件内容(书籍编号, 书籍信息, 目录, 章节结果列表)
         logger.info(
-            f"番茄小说章节下载完成：book_id={书籍编号}, title={书籍信息.get('title')}, "
-            f"success={len(成功章节列表)}, total={len(目录)}, file_size={len(文件内容)}"
+            f"番茄小说章节下载完成：书籍编号={书籍编号}, 书名={书籍信息.get('title')}, "
+            f"成功={len(成功章节列表)}, 总数={len(目录)}, 文件大小={len(文件内容)}"
         )
         发送结果 = await 准备发送番茄文本文件(
             event,
@@ -3213,7 +3213,7 @@ async def 生成番茄下载回复流(
         if not 发送结果.get("sent"):
             yield 番茄文件发送失败提示
     except Exception as 异常:
-        logger.warning(f"番茄小说下载失败：source={限制番茄日志文本(来源, 300)}, error={异常}")
+        logger.warning(f"番茄小说下载失败：来源={限制番茄日志文本(来源, 300)}, 错误={异常}")
         yield 番茄下载失败提示
 
 def 准备番茄下载数据同步(
@@ -3232,13 +3232,13 @@ def 准备番茄下载数据同步(
             item_ids = resolve_directory(真实书籍编号)
             书籍编号 = 真实书籍编号
             logger.debug(
-                f"番茄小说目录回退成功：source=reader_item, chapters={len(item_ids)}"
+                f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}"
             )
         except Exception as 直接正文异常:
             logger.warning(
-                f"番茄畅听目录获取失败：book_id={原始书籍编号}, "
-                f"error={限制番茄日志文本(str(目录异常), 200)}, "
-                f"direct_app_error={限制番茄日志文本(str(直接正文异常), 200)}"
+                f"番茄畅听目录获取失败：书籍编号={原始书籍编号}, "
+                f"错误={限制番茄日志文本(str(目录异常), 200)}, "
+                f"直接正文错误={限制番茄日志文本(str(直接正文异常), 200)}"
             )
             raise 目录异常 from 直接正文异常
 
@@ -3246,7 +3246,7 @@ def 准备番茄下载数据同步(
     try:
         详情 = book_detail(书籍编号)
     except Exception as 异常:
-        logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={异常}")
+        logger.warning(f"番茄小说详情请求失败：书籍编号={书籍编号}, 错误={异常}")
     if not 详情 and 直接正文书籍元数据:
         详情 = 直接正文书籍元数据
 
@@ -3350,11 +3350,11 @@ async def 异步准备番茄下载数据(
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
             item_ids = await 异步解析番茄目录(client, real_book_id)
             书籍编号 = real_book_id
-            logger.debug(f"番茄小说目录回退成功：source=reader_item, chapters={len(item_ids)}")
+            logger.debug(f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}")
         except Exception as reader_error:
             logger.warning(
-                f"番茄畅听目录获取失败：book_id={original_id}, "
-                f"error={type(directory_error).__name__}, direct_app_error={type(reader_error).__name__}"
+                f"番茄畅听目录获取失败：书籍编号={original_id}, "
+                f"错误={type(directory_error).__name__}, 直接正文错误={type(reader_error).__name__}"
             )
             raise directory_error from reader_error
 
@@ -3362,13 +3362,13 @@ async def 异步准备番茄下载数据(
     try:
         detail = await 异步获取番茄书籍详情(client, str(书籍编号))
     except Exception as exc:
-        logger.warning(f"番茄小说详情请求失败：book_id={书籍编号}, error={type(exc).__name__}")
+        logger.warning(f"番茄小说详情请求失败：书籍编号={书籍编号}, 错误={type(exc).__name__}")
     if not detail and reader_metadata:
         detail = reader_metadata
     if not detail or not (detail.get("book_name") or detail.get("title")) or not (
         detail.get("author") or detail.get("author_name")
     ):
-        logger.warning(f"番茄小说详情不完整：book_id={书籍编号}")
+        logger.warning(f"番茄小说详情不完整：书籍编号={书籍编号}")
         raise RuntimeError("番茄小说详情不完整")
 
     metadata = await 异步读取番茄目录元数据(client, str(书籍编号), item_ids)
@@ -3474,9 +3474,9 @@ async def 异步下载番茄全部章节(
     下次进度 = max(1, 总数 // 番茄进度日志分段数)
     结果按序号: dict[int, dict[str, Any]] = {}
     logger.info(
-        f"番茄小说章节进度：book_id={书籍编号}, progress=0/{总数}, "
-        f"percent=0%, batches={len(任务列表)}, batch_size={批量章节数}, "
-        f"concurrency={动态并发数}, http_reuse={'on' if FULL_MGET_HTTP_REUSE else 'off'}"
+        f"番茄小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, "
+        f"百分比=0%, 批次数={len(任务列表)}, 批量章节数={批量章节数}, "
+        f"并发数={动态并发数}, HTTP会话复用={'开启' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
 
     请求信号量 = asyncio.Semaphore(max(1, 动态并发数))
@@ -3523,8 +3523,8 @@ async def 异步下载番茄全部章节(
             批次成功 = 0
             if 批次结果.get("fatal_error"):
                 logger.warning(
-                    f"番茄小说正文业务错误，停止拆分重试：book_id={书籍编号}, "
-                    f"range={批次起始}-{批次结果.get('end')}, error={限制番茄日志文本(str(批次结果.get('fatal_error')), 200)}"
+                    f"番茄小说正文业务错误，停止拆分重试：书籍编号={书籍编号}, "
+                    f"范围={批次起始}-{批次结果.get('end')}, 错误={限制番茄日志文本(str(批次结果.get('fatal_error')), 200)}"
                 )
             原始结果 = list(批次结果.get("results") or [])
             解密输入: list[tuple[int, str, dict[str, Any], int] | None] = []
@@ -3564,8 +3564,8 @@ async def 异步下载番茄全部章节(
                     批次成功 += 1
                     if not 正文.strip():
                         logger.debug(
-                            f"番茄小说章节正文为空但接口返回成功，保留章节标题：book_id={书籍编号}, "
-                            f"chapter={序号}, chapter_id={item_id}, title={限制番茄日志文本(标题, 80)}"
+                            f"番茄小说章节正文为空但接口返回成功，保留章节标题：书籍编号={书籍编号}, "
+                            f"章节={序号}, 章节编号={item_id}, 书名={限制番茄日志文本(标题, 80)}"
                         )
                 结果按序号[序号] = {
                     "index": 序号,
@@ -3580,8 +3580,8 @@ async def 异步下载番茄全部章节(
                 百分比 = int(min(100, 已完成 * 100 / max(1, 总数)))
                 当前成功 = sum(1 for 项目 in 结果按序号.values() if 项目.get("success"))
                 logger.info(
-                    f"番茄小说章节进度：book_id={书籍编号}, progress={min(已完成, 总数)}/{总数}, "
-                    f"percent={百分比}%, success={当前成功}, last_batch_ok={批次成功}/{批次数量}"
+                    f"番茄小说章节进度：书籍编号={书籍编号}, 进度={min(已完成, 总数)}/{总数}, "
+                    f"百分比={百分比}%, 成功={当前成功}, 本批成功={批次成功}/{批次数量}"
                 )
                 下次进度 += max(1, 总数 // 番茄进度日志分段数)
 
@@ -3734,9 +3734,9 @@ async def 准备发送番茄文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    logger.debug(f"番茄小说准备上传：file={文件名}, size={len(文件内容)}")
+    logger.debug(f"番茄小说准备上传：文件={文件名}, 大小={len(文件内容)}")
     缓存路径 = 写入番茄下载缓存文件(文件名, 文件内容)
-    logger.debug(f"番茄小说写入下载缓存：file={缓存路径}, size={len(文件内容)}")
+    logger.debug(f"番茄小说写入下载缓存：文件={缓存路径}, 大小={len(文件内容)}")
     if 小说网盘 is None:
         删除番茄缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
@@ -3744,12 +3744,12 @@ async def 准备发送番茄文本文件(
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
         if not 网盘结果.get("success"):
-            logger.warning(f"番茄小说主网盘上传失败：provider={网盘名称}, file={文件名}, error={网盘结果.get('error')}")
+            logger.warning(f"番茄小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}")
             删除番茄缓存文件(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
         完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
         if 完成结果.get("sent"):
-            logger.debug(f"番茄小说主网盘上传并发送完成按钮成功：provider={网盘名称}, file={文件名}")
+            logger.debug(f"番茄小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -3757,7 +3757,7 @@ async def 准备发送番茄文本文件(
         删除番茄缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
     except Exception as 异常:
-        logger.warning(f"番茄小说主网盘上传或完成消息发送失败：file={文件名}, error={异常}")
+        logger.warning(f"番茄小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={异常}")
         删除番茄缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(异常)}
 
@@ -3770,13 +3770,13 @@ def 启动番茄百度后台上传并清理源文件(配置: Any, 源缓存路�
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.debug(f"番茄小说百度网盘后台上传成功：file={文件名}, fs_id={百度结果.get('file_id')}")
+                    logger.debug(f"番茄小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}")
                 elif 百度结果.get("skipped"):
-                    logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                    logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：文件={文件名}")
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：file={文件名}, error={百度结果.get('error')}")
+                    logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}")
         except Exception as 异常:
-            logger.warning(f"番茄小说百度网盘后台上传异常，不影响QQ发送：file={文件名}, error={异常}")
+            logger.warning(f"番茄小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={异常}")
         finally:
             if str(源缓存路径) != str(发送缓存路径 or ""):
                 删除番茄缓存文件(源缓存路径)
@@ -3791,12 +3791,12 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
     if not 小说缓存工具.删除下载缓存文件(缓存路径):
-        logger.debug(f"番茄小说下载缓存仍在等待续传：file={缓存路径}")
+        logger.debug(f"番茄小说下载缓存仍在等待续传：文件={缓存路径}")
         return
     try:
-        logger.debug(f"番茄小说下载缓存文件已删除：file={缓存路径}")
+        logger.debug(f"番茄小说下载缓存文件已删除：文件={缓存路径}")
     except Exception as 异常:
-        logger.warning(f"番茄小说下载缓存文件删除失败：file={缓存路径}, error={异常}")
+        logger.warning(f"番茄小说下载缓存文件删除失败：文件={缓存路径}, 错误={异常}")
 
 def 写入番茄下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     番茄下载缓存目录.mkdir(parents=True, exist_ok=True)
@@ -3835,7 +3835,7 @@ async def 展开番茄短链(来源: str) -> str:
                 if 页面链接:
                     return 页面链接
     except Exception as 异常:
-        logger.warning(f"番茄短链解析失败：source={限制番茄日志文本(文本, 200)}, error={异常}")
+        logger.warning(f"番茄短链解析失败：来源={限制番茄日志文本(文本, 200)}, 错误={异常}")
     return 文本
 
 def 提取直接番茄链接参数(命令文本: str) -> str | None:

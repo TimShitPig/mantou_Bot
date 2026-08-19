@@ -18,13 +18,13 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning(f"小说网盘模块加载失败：error={exc}")
+    logger.warning(f"小说网盘模块加载失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：error={exc}")
+    logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -245,7 +245,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             详情 = await 异步获取详情(session, datas, 书籍编号)
             目录 = await 异步获取目录(session, datas, 书籍编号)
             if not 目录:
-                logger.warning(f"点众小说目录失败：book_id={书籍编号}")
+                logger.warning(f"点众小说目录失败：书籍编号={书籍编号}")
                 yield "下载失败"
                 return
             书名 = str(详情.get("title") or 详情.get("bookName") or "未知")
@@ -262,9 +262,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             )
             动态并发 = 计算动态章节并发数(len(目录))
             logger.info(
-                f"点众小说开始下载：book_id={书籍编号}, title={书名}, author={作者}, "
-                f"chapters={len(目录)}, catalog_concurrency={最大目录并发数}, "
-                f"content_max_concurrency={动态并发}"
+                f"点众小说开始下载：书籍编号={书籍编号}, 书名={书名}, 作者={作者}, "
+                f"章节数={len(目录)}, 目录并发数={最大目录并发数}, "
+                f"content_最大并发数={动态并发}"
             )
             yield "\n".join([
                 f"书名：{书名}",
@@ -279,7 +279,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
-                f"点众小说下载失败：book_id={书籍编号}, success={len(成功)}, total={len(目录)}"
+                f"点众小说下载失败：书籍编号={书籍编号}, 成功={len(成功)}, 总数={len(目录)}"
             )
             yield "下载失败"
             return
@@ -297,7 +297,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             return
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning(f"点众小说下载失败：book_id={书籍编号}, error={type(exc).__name__}")
+        logger.warning(f"点众小说下载失败：书籍编号={书籍编号}, 错误={type(exc).__name__}")
         yield "下载失败"
 
 
@@ -355,8 +355,8 @@ async def 异步获取目录(
                 return items if isinstance(items, list) else []
             except Exception as exc:
                 logger.debug(
-                    f"点众目录窗口请求失败：book_id={book_id}, index={下标}, "
-                    f"error={type(exc).__name__}"
+                    f"点众目录窗口请求失败：书籍编号={book_id}, 序号={下标}, "
+                    f"错误={type(exc).__name__}"
                 )
                 return []
 
@@ -388,7 +388,7 @@ async def 异步获取目录(
             )
     结果 = [章节 for _, 章节 in sorted(章节映射.values(), key=lambda 项: 项[0])]
     if 目录总数 and len(结果) != 目录总数:
-        logger.warning(f"点众小说目录不完整：book_id={book_id}, success={len(结果)}, total={目录总数}")
+        logger.warning(f"点众小说目录不完整：书籍编号={book_id}, 成功={len(结果)}, 总数={目录总数}")
         return []
     return 结果
 
@@ -499,8 +499,8 @@ async def 异步新建下载通道() -> tuple[aiohttp.ClientSession, dict[str, A
         except Exception as exc:
             await 会话.close()
             logger.debug(
-                f"点众下载通道初始化失败：attempt={尝试次数}/3, "
-                f"error={type(exc).__name__}"
+                f"点众下载通道初始化失败：尝试次数={尝试次数}/3, "
+                f"错误={type(exc).__name__}"
             )
             if 尝试次数 < 3:
                 await asyncio.sleep(0.2 * 尝试次数)
@@ -537,8 +537,8 @@ async def 异步执行章节下载轮(
             raise
         except Exception as exc:
             logger.debug(
-                f"点众章节请求失败：book_id={书籍编号}, chapter_id={cid}, "
-                f"error={type(exc).__name__}"
+                f"点众章节请求失败：书籍编号={书籍编号}, 章节编号={cid}, "
+                f"错误={type(exc).__name__}"
             )
         if callable(进度回调):
             await 进度回调(bool(正文))
@@ -616,8 +616,8 @@ async def 异步执行章节下载轮(
             原并发 = 当前并发
             当前并发 = 计算下一窗口并发数(当前并发, 窗口成功数, len(扁平结果))
             logger.debug(
-                f"点众章节动态并发：book_id={书籍编号}, window={len(扁平结果)}, "
-                f"success={窗口成功数}, concurrency={原并发}->{当前并发}"
+                f"点众章节动态并发：书籍编号={书籍编号}, 窗口={len(扁平结果)}, "
+                f"成功={窗口成功数}, 并发数={原并发}->{当前并发}"
             )
             if 窗口成功数 / max(len(扁平结果), 1) < 0.8:
                 await 收缩至(当前并发)
@@ -651,14 +651,14 @@ async def 异步下载全部章节(
                 while 下次进度 <= 百分比:
                     下次进度 += max(1, 100 // 进度日志分段数)
                 logger.info(
-                    f"点众小说章节进度：book_id={书籍编号}, progress={完成}/{总数}, "
-                    f"percent={百分比}%, success={成功}, failed={完成 - 成功}"
+                    f"点众小说章节进度：书籍编号={书籍编号}, 进度={完成}/{总数}, "
+                    f"百分比={百分比}%, 成功={成功}, 失败={完成 - 成功}"
                 )
 
     首轮并发 = 计算起始章节并发数(总数)
     logger.info(
-        f"点众小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
-        f"concurrency={首轮并发}, max_concurrency={最大章节并发数}, session_reuse=per_lane"
+        f"点众小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, 百分比=0%, "
+        f"并发数={首轮并发}, 最大并发数={最大章节并发数}, 会话复用=分路"
     )
     首轮结果 = await 异步执行章节下载轮(
         list(enumerate(目录)), 书籍编号, 书名, 记录进度, 起始并发=首轮并发
@@ -679,8 +679,8 @@ async def 异步下载全部章节(
         if not 缺失任务:
             break
         logger.debug(
-            f"点众失败章节重试：book_id={书籍编号}, round={轮次}/{失败章节重试轮数}, "
-            f"missing={len(缺失任务)}, concurrency={计算起始章节并发数(len(缺失任务), 重试=True)}"
+            f"点众失败章节重试：书籍编号={书籍编号}, 轮次={轮次}/{失败章节重试轮数}, "
+            f"缺失={len(缺失任务)}, 并发数={计算起始章节并发数(len(缺失任务), 重试=True)}"
         )
         重试结果 = await 异步执行章节下载轮(
             缺失任务,
@@ -694,8 +694,8 @@ async def 异步下载全部章节(
                 结果[下标] = 章节结果
                 恢复数 += 1
         logger.debug(
-            f"点众失败章节重试结果：book_id={书籍编号}, round={轮次}/{失败章节重试轮数}, "
-            f"recovered={恢复数}, still_missing={len(缺失任务) - 恢复数}"
+            f"点众失败章节重试结果：书籍编号={书籍编号}, 轮次={轮次}/{失败章节重试轮数}, "
+            f"恢复={恢复数}, 仍缺失={len(缺失任务) - 恢复数}"
         )
 
     完整结果 = [
@@ -711,11 +711,11 @@ async def 异步下载全部章节(
     会员锁定 = sum(1 for 项 in 完整结果 if 项.get("access") == "member_required")
     if 会员锁定:
         logger.warning(
-            f"点众小说章节需要会员：book_id={书籍编号}, locked={会员锁定}, total={总数}"
+            f"点众小说章节需要会员：书籍编号={书籍编号}, 会员锁定={会员锁定}, 总数={总数}"
         )
     logger.info(
-        f"点众小说章节下载完成：book_id={书籍编号}, success={最终成功}, total={总数}, "
-        f"file_ready={最终成功 == 总数}"
+        f"点众小说章节下载完成：书籍编号={书籍编号}, 成功={最终成功}, 总数={总数}, "
+        f"文件就绪={最终成功 == 总数}"
     )
     return 完整结果
 
@@ -761,7 +761,7 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
             if 百度网盘 is not None and 源缓存路径:
                 await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
         except Exception as exc:
-            logger.warning(f"点众小说百度后台上传异常：file={文件名}, error={exc}")
+            logger.warning(f"点众小说百度后台上传异常：文件={文件名}, 错误={exc}")
         finally:
             删除缓存(源缓存路径)
     try:
@@ -850,7 +850,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             body = {"keyWord": 关键词, "page": 1, "type": 0}
             res = await 异步调用接口(session, 1203, body, datas)
     except Exception as exc:
-        logger.warning(f"点众搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"点众搜索失败：关键词={关键词}, 错误={exc}")
         return []
     data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
     rows = data.get("bookList") or data.get("list") or data.get("books") or []

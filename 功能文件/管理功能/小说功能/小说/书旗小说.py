@@ -28,13 +28,13 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 except Exception as exc:
     小说网盘 = None
-    logger.warning(f"小说网盘模块加载失败：error={exc}")
+    logger.warning(f"小说网盘模块加载失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.网盘功能 import 百度网盘
 except Exception as exc:
     百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：error={exc}")
+    logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
@@ -114,9 +114,9 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 raise ShuqiError(f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}")
 
             logger.info(
-                f"书旗小说开始下载：book_id={书籍.book_id}, "
-                f"title={书籍.book_name}, author={书籍.author_name}, "
-                f"chapters={len(书籍.chapters)}, mode=archive, requests=2, source=download_shuqi.php"
+                f"书旗小说开始下载：书籍编号={书籍.book_id}, "
+                f"书名={书籍.book_name}, 作者={书籍.author_name}, "
+                f"章节数={len(书籍.chapters)}, 模式=整本压缩包, 请求次数=2, 来源=download_shuqi.php"
             )
             yield 格式化下载提示(书籍)
 
@@ -126,8 +126,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 raise ShuqiError(f"章节正文不完整：success={成功数}, total={len(书籍.chapters)}")
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
             logger.info(
-                f"书旗小说章节下载完成：book_id={书籍.book_id}, "
-                f"success={成功数}, total={len(书籍.chapters)}, file_size={len(文件内容)}"
+                f"书旗小说章节下载完成：书籍编号={书籍.book_id}, "
+                f"成功={成功数}, 总数={len(书籍.chapters)}, 文件大小={len(文件内容)}"
             )
 
         发送结果 = await 准备发送文本文件给当前会话(
@@ -149,12 +149,12 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
             return
         logger.warning(
-            f"书旗小说完成消息发送失败：book_id={书籍.book_id}, "
-            f"file={文件名}, error={发送结果.get('error')}"
+            f"书旗小说完成消息发送失败：书籍编号={书籍.book_id}, "
+            f"文件={文件名}, 错误={发送结果.get('error')}"
         )
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning(f"书旗小说下载失败：error={exc}")
+        logger.warning(f"书旗小说下载失败：错误={exc}")
         yield "下载失败"
 
 
@@ -426,8 +426,8 @@ async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book) -> li
     if not 总数 or not 下载地址:
         return []
     logger.info(
-        f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{总数}, "
-        "percent=0%, mode=archive, requests=1"
+        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度=0/{总数}, "
+        "百分比=0%, 模式=整本压缩包, 请求次数=1"
     )
     headers = {
         "User-Agent": USER_AGENT,
@@ -445,8 +445,8 @@ async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book) -> li
 
     章节内容 = await asyncio.to_thread(解析书旗压缩包, 压缩包, 书籍)
     logger.info(
-        f"书旗小说章节进度：book_id={书籍.book_id}, progress={总数}/{总数}, "
-        f"percent=100%, success={总数}, failed=0"
+        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度={总数}/{总数}, "
+        f"百分比=100%, 成功={总数}, 失败=0"
     )
     return 章节内容
 
@@ -711,7 +711,7 @@ async def 准备发送文本文件给当前会话(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    logger.info(f"书旗小说准备上传：file={文件名}, size={len(文件内容)}")
+    logger.info(f"书旗小说准备上传：文件={文件名}, 大小={len(文件内容)}")
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     if 小说网盘 is None:
         删除下载缓存文件(缓存路径)
@@ -721,8 +721,8 @@ async def 准备发送文本文件给当前会话(
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
         if not 网盘结果.get("success"):
             logger.warning(
-                f"书旗小说主网盘上传失败：provider={网盘名称}, "
-                f"file={文件名}, error={网盘结果.get('error')}"
+                f"书旗小说主网盘上传失败：网盘={网盘名称}, "
+                f"文件={文件名}, 错误={网盘结果.get('error')}"
             )
             删除下载缓存文件(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
@@ -733,7 +733,7 @@ async def 准备发送文本文件给当前会话(
             str(网盘结果.get("share_url") or ""),
         )
         if 完成结果.get("sent"):
-            logger.info(f"书旗小说主网盘上传并发送完成按钮成功：provider={网盘名称}, file={文件名}")
+            logger.info(f"书旗小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
@@ -741,7 +741,7 @@ async def 准备发送文本文件给当前会话(
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
     except Exception as exc:
-        logger.warning(f"书旗小说主网盘上传或完成消息发送失败：file={文件名}, error={exc}")
+        logger.warning(f"书旗小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}")
         删除下载缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
 
@@ -755,13 +755,13 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.info(f"书旗小说百度网盘后台上传成功：file={文件名}")
+                    logger.info(f"书旗小说百度网盘后台上传成功：文件={文件名}")
                 elif 百度结果.get("skipped"):
-                    logger.info(f"书旗小说百度网盘后台上传按状态规则跳过：file={文件名}")
+                    logger.info(f"书旗小说百度网盘后台上传按状态规则跳过：文件={文件名}")
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"书旗小说百度网盘后台上传失败，不影响主分享：file={文件名}, error={百度结果.get('error')}")
+                    logger.warning(f"书旗小说百度网盘后台上传失败，不影响主分享：文件={文件名}, 错误={百度结果.get('error')}")
         except Exception as exc:
-            logger.warning(f"书旗小说百度网盘后台上传异常，不影响主分享：file={文件名}, error={exc}")
+            logger.warning(f"书旗小说百度网盘后台上传异常，不影响主分享：文件={文件名}, 错误={exc}")
         finally:
             删除下载缓存文件(源缓存路径)
 
@@ -783,12 +783,12 @@ def 删除下载缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
     if not 小说缓存工具.删除下载缓存文件(缓存路径):
-        logger.debug(f"书旗小说下载缓存仍在等待续传：file={缓存路径}")
+        logger.debug(f"书旗小说下载缓存仍在等待续传：文件={缓存路径}")
         return
     try:
-        logger.info(f"书旗小说下载缓存文件已删除：file={缓存路径}")
+        logger.info(f"书旗小说下载缓存文件已删除：文件={缓存路径}")
     except Exception as exc:
-        logger.warning(f"书旗小说下载缓存文件删除失败：file={缓存路径}, error={exc}")
+        logger.warning(f"书旗小说下载缓存文件删除失败：文件={缓存路径}, 错误={exc}")
 
 
 def 生成不冲突缓存路径(文件名: str) -> Path:
@@ -830,7 +830,7 @@ async def 解析书旗短链(session: aiohttp.ClientSession, 链接: str) -> str
                     if 提取书籍编号(页面链接):
                         return 页面链接
         except Exception as exc:
-            logger.debug(f"书旗短链解析重试：method={方法}, error={exc}")
+            logger.debug(f"书旗短链解析重试：方法={方法}, 错误={exc}")
     raise ShuqiError("书旗短链解析失败")
 
 

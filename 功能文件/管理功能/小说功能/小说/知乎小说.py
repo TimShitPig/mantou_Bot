@@ -444,7 +444,7 @@ async def _获取知乎目录接口(
         详情 = await _请求知乎章节详情(session, 业务编号, 起始章节编号)
         详情作者 = str(详情.get("author") or "")
     except Exception as exc:
-        logger.debug(f"知乎章节详情补充元数据失败：stage=header, error={type(exc).__name__}")
+        logger.debug(f"知乎章节详情补充元数据失败：阶段=header, 错误={type(exc).__name__}")
     作者 = _解析知乎作者(作者信息) or 详情作者 or "未知"
     专栏标题 = 清理正文(父级信息.get("title") or "") or "知乎专栏"
     子标题 = 清理正文(父级信息.get("sub_title") or "")
@@ -470,7 +470,7 @@ async def 获取知乎目录(
     try:
         return await _获取知乎目录接口(session, 业务编号, 起始章节编号)
     except _知乎目录接口异常 as exc:
-        logger.debug(f"知乎分页目录不可用，回退章节详情链：error={type(exc).__name__}")
+        logger.debug(f"知乎分页目录不可用，回退章节详情链：错误={type(exc).__name__}")
         return await _获取知乎目录头部链(session, 业务编号, 起始章节编号)
 
 
@@ -739,7 +739,7 @@ async def _本地恢复(来源: str) -> bytes:
                     continue
                 break
         except Exception as exc:
-            logger.debug(f"知乎本地恢复失败：stage=restore, error={type(exc).__name__}")
+            logger.debug(f"知乎本地恢复失败：阶段=restore, 错误={type(exc).__name__}")
     raise RuntimeError("本地恢复失败")
 
 
@@ -778,8 +778,8 @@ async def _获取单章正文(
         except Exception as exc:
             最后异常 = exc
             logger.debug(
-                f"知乎章节提取失败：section_id={章节编号}, "
-                f"round={尝试次数 + 1}/{正文重试次数}, error={type(exc).__name__}"
+                f"知乎章节提取失败：章节编号={章节编号}, "
+                f"轮次={尝试次数 + 1}/{正文重试次数}, 错误={type(exc).__name__}"
             )
             if 尝试次数 + 1 < 正文重试次数:
                 await asyncio.sleep(min(1.5, 0.25 * (尝试次数 + 1)))
@@ -796,7 +796,7 @@ async def _获取单章正文(
     except Exception as exc:
         最后异常 = exc
         logger.debug(
-            f"知乎章节本地恢复失败：section_id={章节编号}, error={type(exc).__name__}"
+            f"知乎章节本地恢复失败：章节编号={章节编号}, 错误={type(exc).__name__}"
         )
     raise RuntimeError("知乎章节正文获取失败") from 最后异常
 
@@ -815,8 +815,8 @@ async def 下载知乎全部章节(
     待重试 = set(range(总数))
     上次进度桶 = -1
     logger.info(
-        f"知乎小说章节进度：business_id={业务编号}, progress=0/{总数}, "
-        f"percent=0%, concurrency={动态并发数}, retries={正文重试次数}"
+        f"知乎小说章节进度：业务编号={业务编号}, 进度=0/{总数}, "
+        f"百分比=0%, 并发数={动态并发数}, 重试次数={正文重试次数}"
     )
 
     async def 记录进度(轮次: int) -> None:
@@ -831,8 +831,8 @@ async def 下载知乎全部章节(
         上次进度桶 = 进度桶
         百分比 = int(成功数 * 100 / 总数)
         logger.info(
-            f"知乎小说章节进度：business_id={业务编号}, progress={成功数}/{总数}, "
-            f"percent={百分比}%, success={成功数}, failed={失败数}, round={轮次}"
+            f"知乎小说章节进度：业务编号={业务编号}, 进度={成功数}/{总数}, "
+            f"百分比={百分比}%, 成功={成功数}, 失败={失败数}, 轮次={轮次}"
         )
 
     for 轮次 in range(1, 正文重试次数 + 1):
@@ -847,8 +847,8 @@ async def 下载知乎全部章节(
                     return 序号, await _获取单章正文(session, 来源, 业务编号, 目录[序号])
                 except Exception as exc:
                     logger.debug(
-                        f"知乎章节下载失败：section_id={目录[序号].get('id')}, "
-                        f"round={轮次}, error={type(exc).__name__}"
+                        f"知乎章节下载失败：章节编号={目录[序号].get('id')}, "
+                        f"轮次={轮次}, 错误={type(exc).__name__}"
                     )
                     return 序号, None
 
@@ -862,8 +862,8 @@ async def 下载知乎全部章节(
 
         if 待重试 and 轮次 < 正文重试次数:
             logger.debug(
-                f"知乎小说失败章节重试：business_id={业务编号}, "
-                f"round={轮次 + 1}, count={len(待重试)}"
+                f"知乎小说失败章节重试：业务编号={业务编号}, "
+                f"轮次={轮次 + 1}, 数量={len(待重试)}"
             )
             await asyncio.sleep(0.4)
 
@@ -945,10 +945,10 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             书籍 = await _准备知乎分享章节书籍(session, 来源)
             目录 = list(书籍.get("chapters") or [])
             logger.info(
-                f"知乎小说开始下载：business_id={书籍.get('column_id')}, "
-                f"title={书籍.get('title')}, author={书籍.get('author')}, "
-                f"chapters={len(目录)}, declared_total={书籍.get('declared_total')}, "
-                f"catalog_source={书籍.get('catalog_source') or 'catalog'}"
+                f"知乎小说开始下载：业务编号={书籍.get('column_id')}, "
+                f"书名={书籍.get('title')}, 作者={书籍.get('author')}, "
+                f"章节数={len(目录)}, declared_总数={书籍.get('declared_total')}, "
+                f"catalog_来源={书籍.get('catalog_source') or 'catalog'}"
             )
             书籍 = await _下载知乎分享章节(session, 来源, 书籍)
             章节 = list(书籍.get("chapters") or [])
@@ -957,9 +957,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
-                f"知乎小说章节下载完成：business_id={书籍.get('column_id')}, "
-                f"success={len(章节)}, total={len(目录)}, word_count={书籍.get('word_count')}, "
-                f"file_size={len(文件内容)}"
+                f"知乎小说章节下载完成：业务编号={书籍.get('column_id')}, "
+                f"成功={len(章节)}, 总数={len(目录)}, 字数={书籍.get('word_count')}, "
+                f"文件大小={len(文件内容)}"
             )
             发送结果 = await 准备发送文本文件(
                 event,
@@ -983,8 +983,8 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(
-            f"知乎小说下载失败：stage=restore_or_upload, "
-            f"error={type(exc).__name__}"
+            f"知乎小说下载失败：阶段=restore_or_upload, "
+            f"错误={type(exc).__name__}"
         )
         yield "下载失败"
 
@@ -1063,7 +1063,7 @@ async def 准备发送文本文件(
     try:
         上传结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         if not 上传结果.get("success"):
-            logger.warning(f"知乎小说主网盘上传失败：file={文件名}, error={type(上传结果.get('error')).__name__}")
+            logger.warning(f"知乎小说主网盘上传失败：文件={文件名}, 错误={type(上传结果.get('error')).__name__}")
             删除缓存(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传失败"}
         完成结果 = await 小说网盘.发送小说下载完成链接(
@@ -1077,7 +1077,7 @@ async def 准备发送文本文件(
         删除缓存(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "发送失败"}
     except Exception as exc:
-        logger.warning(f"知乎小说主网盘上传异常：file={文件名}, error={type(exc).__name__}")
+        logger.warning(f"知乎小说主网盘上传异常：文件={文件名}, 错误={type(exc).__name__}")
         删除缓存(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传异常"}
 
@@ -1091,7 +1091,7 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
             if 百度网盘 is not None:
                 await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
         except Exception as exc:
-            logger.warning(f"知乎小说百度后台上传异常：file={文件名}, error={type(exc).__name__}")
+            logger.warning(f"知乎小说百度后台上传异常：文件={文件名}, 错误={type(exc).__name__}")
         finally:
             删除缓存(源缓存路径)
 

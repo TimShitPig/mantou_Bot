@@ -31,61 +31,61 @@ try:
     from 功能文件.管理功能.小说功能.小说 import 七猫小说
 except Exception as exc:
     七猫小说 = None
-    logger.warning(f"找书加载七猫失败：error={exc}")
+    logger.warning(f"找书加载七猫失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 书旗小说
 except Exception as exc:
     书旗小说 = None
-    logger.warning(f"找书加载书旗失败：error={exc}")
+    logger.warning(f"找书加载书旗失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 番茄小说
 except Exception as exc:
     番茄小说 = None
-    logger.warning(f"找书加载番茄失败：error={exc}")
+    logger.warning(f"找书加载番茄失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 得间小说
 except Exception as exc:
     得间小说 = None
-    logger.warning(f"找书加载得间失败：error={exc}")
+    logger.warning(f"找书加载得间失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 点众小说
 except Exception as exc:
     点众小说 = None
-    logger.warning(f"找书加载点众失败：error={exc}")
+    logger.warning(f"找书加载点众失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import QQ阅读 as QQ阅读小说
 except Exception as exc:
     QQ阅读小说 = None
-    logger.warning(f"找书加载QQ阅读失败：error={exc}")
+    logger.warning(f"找书加载QQ阅读失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import QQ浏览器小说
 except Exception as exc:
     QQ浏览器小说 = None
-    logger.warning(f"找书加载QQ浏览器失败：error={exc}")
+    logger.warning(f"找书加载QQ浏览器失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 塔读小说
 except Exception as exc:
     塔读小说 = None
-    logger.warning(f"找书加载塔读失败：error={exc}")
+    logger.warning(f"找书加载塔读失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 百度小说
 except Exception as exc:
     百度小说 = None
-    logger.warning(f"找书加载百度失败：error={exc}")
+    logger.warning(f"找书加载百度失败：错误={exc}")
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 小米小说
 except Exception as exc:
     小米小说 = None
-    logger.warning(f"找书加载小米失败：error={exc}")
+    logger.warning(f"找书加载小米失败：错误={exc}")
 
 
 每页数量 = 5
@@ -680,7 +680,7 @@ async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 method="POST",
             )
         except Exception as exc:
-            logger.warning(f"找书番茄搜索失败：keyword={关键词}, offset={偏移}, error={exc}")
+            logger.warning(f"找书番茄搜索失败：关键词={关键词}, 偏移={偏移}, 错误={exc}")
             break
         if not isinstance(data, dict) or data.get("code") not in (0, "0", None):
             break
@@ -731,7 +731,7 @@ async def 预检番茄目录(书籍编号: str) -> bool | None:
             状态 = False
         else:
             logger.debug(
-                f"找书番茄目录预检暂不可判断：book_id={书籍编号}, error={错误文本}"
+                f"找书番茄目录预检暂不可判断：书籍编号={书籍编号}, 错误={错误文本}"
             )
     番茄目录预检缓存[书籍编号] = (现在, 状态)
     return 状态
@@ -784,8 +784,8 @@ async def 过滤无目录番茄搜索结果(
         状态 = 状态表.get(书籍编号)
         if 状态 is False:
             logger.info(
-                f"找书跳过无目录番茄候选：book_id={书籍编号}, "
-                f"title={清理文本(项.get('title') or '')}"
+                f"找书跳过无目录番茄候选：书籍编号={书籍编号}, "
+                f"书名={清理文本(项.get('title') or '')}"
             )
             continue
         if 状态 is True:
@@ -818,7 +818,7 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 七猫小说.生成请求头("00000000", "api-bc.wtzw.com"),
             )
         except Exception as exc:
-            logger.warning(f"找书七猫搜索失败：keyword={关键词}, page={页码}, error={exc}")
+            logger.warning(f"找书七猫搜索失败：关键词={关键词}, 页码={页码}, 错误={exc}")
             break
         书籍列表 = 七猫小说.读取字段路径(数据, ("data", "books")) if hasattr(七猫小说, "读取字段路径") else ((数据 or {}).get("data") or {}).get("books")
         if not isinstance(书籍列表, list) or not 书籍列表:
@@ -870,7 +870,7 @@ async def 搜索书旗(
     try:
         原始结果 = await 书旗小说.搜索小说(session, 关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书书旗搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"找书书旗搜索失败：关键词={关键词}, 错误={exc}")
         return []
 
     结果: list[dict[str, Any]] = []
@@ -906,7 +906,7 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
     try:
         return await 书旗小说.搜索联想(session, 关键词)
     except Exception as exc:
-        logger.debug(f"找书书旗联想失败：keyword={关键词}, error={exc}")
+        logger.debug(f"找书书旗联想失败：关键词={关键词}, 错误={exc}")
         return []
 
 
@@ -916,7 +916,7 @@ async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict
     try:
         原始结果 = await QQ阅读小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书QQ阅读搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        logger.warning(f"找书QQ阅读搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
         return []
 
     结果: list[dict[str, Any]] = []
@@ -955,7 +955,7 @@ async def 搜索QQ浏览器(关键词: str, *, 需要数量: int = 20) -> list[d
     try:
         原始结果 = await QQ浏览器小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书QQ浏览器搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        logger.warning(f"找书QQ浏览器搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
         return []
 
     结果: list[dict[str, Any]] = []
@@ -994,7 +994,7 @@ async def 搜索百度(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         原始结果 = await 百度小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书百度搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        logger.warning(f"找书百度搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
         return []
     结果: list[dict[str, Any]] = []
     for 书籍 in 原始结果:
@@ -1029,7 +1029,7 @@ async def 搜索小米(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         原始结果 = await 小米小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书小米搜索失败：keyword={关键词}, error={type(exc).__name__}")
+        logger.warning(f"找书小米搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
         return []
     结果: list[dict[str, Any]] = []
     for 书籍 in 原始结果:
@@ -1102,7 +1102,7 @@ async def 预检QQ阅读候选(
             allowed = await _检查(None)
     except Exception as exc:
         logger.debug(
-            f"找书QQ阅读候选预检失败：book_id={书籍编号}, error={type(exc).__name__}"
+            f"找书QQ阅读候选预检失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
         )
         allowed = False
     QQ阅读预检缓存[书籍编号] = (现在, allowed)
@@ -1129,7 +1129,7 @@ async def 过滤章节单独付费QQ阅读搜索结果(
                     timeout=12.0,
                 )
             except asyncio.TimeoutError:
-                logger.debug(f"找书QQ阅读候选预检超时：book_id={书籍编号}")
+                logger.debug(f"找书QQ阅读候选预检超时：书籍编号={书籍编号}")
                 allowed = False
             return 书籍编号, allowed
 
@@ -1224,7 +1224,7 @@ async def 搜索得间(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         return await 得间小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书得间搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"找书得间搜索失败：关键词={关键词}, 错误={exc}")
         return []
 
 
@@ -1234,7 +1234,7 @@ async def 搜索点众(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         return await 点众小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书点众搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"找书点众搜索失败：关键词={关键词}, 错误={exc}")
         return []
 
 
@@ -1244,7 +1244,7 @@ async def 搜索塔读(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         return await 塔读小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书塔读搜索失败：keyword={关键词}, error={exc}")
+        logger.warning(f"找书塔读搜索失败：关键词={关键词}, 错误={exc}")
         return []
 
 
@@ -1258,9 +1258,9 @@ async def _限时搜索(
         结果 = await asyncio.wait_for(任务, timeout=max(1.0, float(超时秒数)))
         return 结果 if isinstance(结果, list) else []
     except asyncio.TimeoutError:
-        logger.debug(f"找书平台搜索超时：platform={平台}")
+        logger.debug(f"找书平台搜索超时：平台={平台}")
     except Exception as exc:
-        logger.debug(f"找书平台搜索异常：platform={平台}, error={type(exc).__name__}")
+        logger.debug(f"找书平台搜索异常：平台={平台}, 错误={type(exc).__name__}")
     return []
 
 
@@ -1488,7 +1488,7 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
     标题 = 选中.get("title") or ""
     if not 小说功能开关.当前事件可使用小说功能(event, 平台, 配置):
         return 小说功能开关.获取小说功能关闭回复(平台, 配置)
-    logger.info(f"找书选择下载：platform={平台}, title={标题}, book_id={书籍编号}")
+    logger.info(f"找书选择下载：平台={平台}, 书名={标题}, 书籍编号={书籍编号}")
     if 平台 == "番茄" and 番茄小说 is not None:
         # 找书结果直接交给下载器书籍 ID，不再先拼接页面链接后重新解析。
         # 与用户直接发送可识别书籍 ID 的下载入口共用同一条流程。
@@ -1539,7 +1539,7 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
         try:
             结果 = await 聚合搜索(关键词, 搜索类型)
         except Exception as exc:
-            logger.warning(f"找书搜索失败：keyword={关键词}, type={搜索类型}, error={exc}")
+            logger.warning(f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}")
             return "搜索失败，请稍后再试"
         会话 = {
             "keyword": 关键词,
@@ -1550,8 +1550,8 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
         }
         找书会话[会话键] = 会话
         logger.info(
-            f"找书搜索完成：keyword={关键词}, type={搜索类型}, "
-            f"total={len(结果)}, session={会话键}"
+            f"找书搜索完成：关键词={关键词}, 类型={搜索类型}, "
+            f"总数={len(结果)}, 会话={会话键}"
         )
         if not 结果:
             return f"没有找到和「{关键词}」相关的书"
