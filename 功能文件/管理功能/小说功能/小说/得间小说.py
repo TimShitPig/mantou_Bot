@@ -378,6 +378,7 @@ def 创建得间HTTP会话(并发数: int) -> aiohttp.ClientSession:
         limit_per_host=并发数,
         keepalive_timeout=30,
         ttl_dns_cache=300,
+        ssl=False,
     )
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120)
     return aiohttp.ClientSession(
@@ -448,13 +449,10 @@ class 得间单章异步客户端:
         self,
         HTTP会话: aiohttp.ClientSession,
         请求信号量: asyncio.Semaphore,
-        批量清单: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.HTTP会话 = HTTP会话
         self.请求信号量 = 请求信号量
         self.会话参数 = load_session()
-        self._批量清单 = dict(批量清单 or {})
-        self._批量清单锁 = asyncio.Lock()
 
     def 账号参数(self) -> Dict[str, str]:
         参数: Dict[str, str] = {}
@@ -520,26 +518,20 @@ class 得间单章异步客户端:
         return await 异步下载得间字节(self.HTTP会话, 地址, self.请求信号量)
 
     async def 获取批量下载清单(self, 书籍编号: str) -> Dict[str, Any]:
-        if self._批量清单.get("downUrl"):
-            return self._批量清单
-        async with self._批量清单锁:
-            if self._批量清单.get("downUrl"):
-                return self._批量清单
-            信息 = await self.获取JSON(
-                "/zybook3/u/p/api.php",
-                {"Act": "batchDownloadChapteres", "bid": str(书籍编号)},
-            )
-            正文 = 信息.get("body") if isinstance(信息, dict) else None
-            地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
-            if not 地址:
-                raise RuntimeError("no downUrl")
-            self._批量清单 = {
-                "bookId": str(书籍编号),
-                "downUrl": 地址,
-                "maxChapId": _to_int(正文.get("maxChapId")),
-                "downloadCount": _to_int(正文.get("downloadCount")),
-            }
-            return self._批量清单
+        信息 = await self.获取JSON(
+            "/zybook3/u/p/api.php",
+            {"Act": "batchDownloadChapteres", "bid": str(书籍编号)},
+        )
+        正文 = 信息.get("body") if isinstance(信息, dict) else None
+        地址 = str(正文.get("downUrl") or "").strip() if isinstance(正文, dict) else ""
+        if not 地址:
+            raise RuntimeError("no downUrl")
+        return {
+            "bookId": str(书籍编号),
+            "downUrl": 地址,
+            "maxChapId": _to_int(正文.get("maxChapId")),
+            "downloadCount": _to_int(正文.get("downloadCount")),
+        }
 
     async def 安全章节列表(
         self,
@@ -621,11 +613,10 @@ async def 异步下载得间单章正文(
     章节编号: int,
     请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
-    客户端: Optional[得间单章异步客户端] = None,
 ) -> str:
     """与参考 get_chapter_text 相同的单章顺序，网络请求改为共享异步会话。"""
+    当前客户端 = 得间单章异步客户端(HTTP会话, 请求信号量)
     for 重试轮次 in range(1, 得间单章重试次数 + 1):
-        当前客户端 = 客户端 or 得间单章异步客户端(HTTP会话, 请求信号量)
         try:
             用户名 = str(当前客户端.会话参数.get("usr") or "")
             设备号 = str(当前客户端.会话参数.get("devId") or "")
@@ -959,7 +950,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             "正在下载中请稍等.....",
         ])
 
-        章节结果 = await 下载全部章节(书籍编号, 目录, 批量清单=批量清单)
+        章节结果 = await 下载全部章节(书籍编号, 目录)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
@@ -990,8 +981,6 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
 async def 下载全部章节(
     书籍编号: str,
     目录: list[dict[str, Any]],
-    *,
-    批量清单: Optional[Dict[str, Any]] = None,
 ) -> list[dict[str, str]]:
     总数 = len(目录)
     结果: list[dict[str, str] | None] = [None] * 总数
@@ -1015,11 +1004,10 @@ async def 下载全部章节(
     请求信号量 = asyncio.Semaphore(实际正文并发数)
     解密信号量 = asyncio.Semaphore(解密并发数)
     async with 创建得间HTTP会话(实际正文并发数) as HTTP会话:
-        客户端 = 得间单章异步客户端(HTTP会话, 请求信号量, 批量清单)
         logger.info(
             f"得间小说章节进度：book_id={书籍编号}, progress=0/{总数}, percent=0%, "
             f"mode=single_chapter, concurrency={实际正文并发数}, "
-            f"max_concurrency={得间单章最大并发数}, session_reuse=on, "
+            f"max_concurrency={得间单章最大并发数}, session_reuse=on, logical_client_per_chapter=on, "
             f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
         )
 
@@ -1032,7 +1020,6 @@ async def 下载全部章节(
                     章节编号,
                     请求信号量,
                     解密信号量,
-                    客户端,
                 )
             ).strip()
             for 下标 in 下标列表:
@@ -1068,7 +1055,7 @@ async def 下载全部章节(
     logger.info(
         f"得间小说章节下载完成：book_id={书籍编号}, success={成功}, total={总数}, "
         f"mode=single_chapter, concurrency={实际正文并发数}, "
-        f"max_concurrency={得间单章最大并发数}, session_reuse=on, "
+        f"max_concurrency={得间单章最大并发数}, session_reuse=on, logical_client_per_chapter=on, "
         f"decrypt_concurrency={解密并发数}, retries={得间单章重试次数}"
     )
     return 输出
