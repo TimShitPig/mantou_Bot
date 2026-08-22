@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.32.1-2ea44f)
+![version](https://img.shields.io/badge/version-v5.32.2-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.32.1 |
+| 版本 | v5.32.2 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -80,7 +80,7 @@ qrcode[pil]
 | QQ浏览器小说 | 链接 / `qb://ext/novelreader` | 公开搜索、详情、目录和正文接口 |
 | 得间小说 | 链接 / 分享卡片 | 自定义 CTR 协议，最高 500 路并发 |
 | 点众小说 | 链接 / 分享卡片 | 独立 App 会话，最高 60 路并发 |
-| 知乎 | `story.zhihu.com` 付费专栏分享链接 | 只处理当前分享章节 |
+| 盐言小说 | `story.zhihu.com` 付费专栏分享链接 | 只处理当前分享章节 |
 | 塔读小说 | `reader.tadu.com` 书籍链接 | TDZ/AES/DES 解密，最高 400 路并发 |
 | 百度小说 | 百度链接 / 分享卡片 | 出版源和 AES 普通源 |
 | 小米小说 | 小米链接 / 分享卡片 | 兼容 `reader.browser.miui.com` 旧链接 |
@@ -137,7 +137,7 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
 - QQ阅读：动态网关签名、动态密钥池和 libfock 解密；普通正文每批 200 章、最多 100 路并发；支持 Cookie 登录态写入数据库。
 - 得间：按参考源码执行单章授权、下载和解密，动态调度最高 500 路并发。
 - 点众：每路正文任务使用独立 App 身份和 HTTP Session，最高 60 路并发。
-- 知乎：只下载一条分享链接对应的当前章节。
+- 盐言小说：只下载一条分享链接对应的当前章节。
 - 塔读：TDZ/AES/DES 与 UTF-16LE 正文解析合并到单文件，最高 400 路动态并发。
 - 百度：出版源使用 `doc_id` 接口，普通源使用 AES 正文接口。
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
@@ -198,8 +198,7 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
         │   │   ├── 猫眼小说.py
         │   │   ├── 番茄小说.py
         │   │   ├── 百度小说.py
-        │   │   ├── 知乎分享恢复客户端.py
-        │   │   ├── 知乎小说.py
+        │   │   ├── 盐言小说.py
         │   │   ├── 米读小说.py
         │   │   ├── 菠萝包小说.py
         │   │   ├── 连城小说.py
