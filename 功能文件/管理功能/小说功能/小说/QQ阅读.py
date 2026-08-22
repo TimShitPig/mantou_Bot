@@ -3611,6 +3611,7 @@ async def 异步获取QQ阅读正文批次(
         int(time.time() * 1000),
         _构造QQ阅读请求地址(QQ阅读目录地址, params),
     )
+    request_started = time.perf_counter()
     if 请求信号量 is None:
         请求上下文 = session.get(QQ阅读目录地址, params=params, headers=headers)
         async with 请求上下文 as response:
@@ -3623,13 +3624,25 @@ async def 异步获取QQ阅读正文批次(
             ) as response:
                 response.raise_for_status()
                 package = await response.read()
+    request_elapsed = time.perf_counter() - request_started
+    decrypt_started = time.perf_counter()
     async with 解密信号量:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             解析QQ阅读正文批次带统计,
             package,
             chapter_ids,
             解密材料,
         )
+    decrypt_elapsed = time.perf_counter() - decrypt_started
+    chapter_span = (
+        f"{chapter_ids[0]}-{chapter_ids[-1]}" if chapter_ids else ""
+    )
+    logger.debug(
+        f"QQ阅读批次耗时：章节范围={chapter_span}, 章节数={len(chapter_ids)}, "
+        f"响应字节={len(package)}, 请求={request_elapsed:.3f}s, "
+        f"解包解密={decrypt_elapsed:.3f}s"
+    )
+    return result
 
 
 async def 下载参考正文(
