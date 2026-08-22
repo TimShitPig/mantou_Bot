@@ -56,7 +56,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.32.3"
+插件版本 = "5.33.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -65,13 +65,27 @@ class MyPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
+        self._小说缓存清理任务 = None
 
     async def initialize(self):
         QQ官方交互桥.安装QQ官方帮助交互(self.context)
         logger.info("馒头bot加载完成：版本=%s, 源码目录=%s", 插件版本, 插件目录)
-        已清理缓存数 = 小说缓存清理.清理残留下载缓存()
-        if 已清理缓存数:
-            logger.info(f"插件重载清理小说下载缓存：数量={已清理缓存数}")
+        await 小说缓存清理.停止每日下载缓存清理任务(self._小说缓存清理任务)
+        self._小说缓存清理任务 = None
+        已清理残留数 = 小说缓存清理.清理残留下载缓存()
+        已清理过期数 = 小说缓存清理.清理过期下载缓存()
+        if 已清理残留数:
+            logger.info(f"插件重载清理小说下载缓存：数量={已清理残留数}")
+        if 已清理过期数:
+            logger.info(f"插件加载清理过期小说下载缓存：数量={已清理过期数}")
+
+        def _记录每日缓存清理(清理数量):
+            if 清理数量:
+                logger.info("每日零点清理小说下载缓存：数量=%s", 清理数量)
+
+        self._小说缓存清理任务 = 小说缓存清理.启动每日下载缓存清理任务(
+            清理完成回调=_记录每日缓存清理,
+        )
 
         async def _恢复小说上传任务():
             try:
@@ -517,6 +531,8 @@ class MyPlugin(Star):
         event.stop_event()
 
     async def terminate(self):
+        await 小说缓存清理.停止每日下载缓存清理任务(self._小说缓存清理任务)
+        self._小说缓存清理任务 = None
         await 小说下载任务.停止小说下载任务()
         塔读小说功能.关闭塔读资源()
         await 小说网盘功能.停止网盘后台任务()

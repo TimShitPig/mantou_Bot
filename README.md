@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.32.3-2ea44f)
+![version](https://img.shields.io/badge/version-v5.33.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.32.3 |
+| 版本 | v5.33.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -125,7 +125,7 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
 <details>
 <summary>小说下载与文件出口</summary>
 
-所有小说模块都复用统一的 TXT 合成和网盘出口。正文写入 `功能文件/下载缓存/`，仅用于当前主分享网盘和百度后台备份，不直接通过 QQ 发送 txt 文件。
+所有小说模块都复用统一的 TXT 合成和网盘出口。正文写入 `功能文件/下载缓存/`，仅用于当前主分享网盘和百度后台备份，不直接通过 QQ 发送 txt 文件。插件启动或重载时会清理上次运行遗留的非占用缓存；运行期间每天按服务器本地时间零点清理文件日期早于当天的小说 TXT，当天文件和仍在上传或等待续传的文件会保留。
 
 主网盘上传成功后，QQ 官方机器人会发送“点击打开”链接按钮；当前主网盘未配置或上传失败时只回复 `文件发送失败，请稍后再试`。
 

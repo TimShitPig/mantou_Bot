@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any
 
+日志 = logging.getLogger(__name__)
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 上传占用标记后缀 = ".uploading"
 上传任务目录名 = ".upload_jobs"
@@ -184,6 +188,31 @@ def 下载缓存正在使用(缓存路径: str | Path) -> bool:
     return _进程仍在运行(进程号)
 
 
+def _转换为本地日期(值: date | datetime | None = None) -> date:
+    if isinstance(值, datetime):
+        return 值.date()
+    if isinstance(值, date):
+        return 值
+    return datetime.now().date()
+
+
+def _获取文件本地日期(路径: Path) -> date | None:
+    try:
+        return datetime.fromtimestamp(路径.stat().st_mtime).date()
+    except OSError:
+        return None
+
+
+def _清理孤立占用标记(目录: Path) -> None:
+    for 标记路径 in 目录.glob(f"*.txt{上传占用标记后缀}"):
+        缓存路径 = 标记路径.with_name(标记路径.name.removesuffix(上传占用标记后缀))
+        if not 缓存路径.exists() and not 下载缓存正在使用(缓存路径):
+            try:
+                标记路径.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
 def 清理残留下载缓存(缓存目录: str | Path | None = None) -> int:
     """删除上次运行遗留的小说 TXT，跳过当前仍在上传的缓存。"""
     目录 = Path(缓存目录) if 缓存目录 is not None else 下载缓存目录
@@ -193,17 +222,86 @@ def 清理残留下载缓存(缓存目录: str | Path | None = None) -> int:
     for 路径 in 目录.glob("*.txt"):
         if not 路径.is_file():
             continue
-        标记路径 = 获取下载缓存占用标记路径(路径)
         if 上传任务待续传(路径) or 下载缓存正在使用(路径):
             continue
-        try:
-            路径.unlink()
-            标记路径.unlink(missing_ok=True)
+        if 删除下载缓存文件(路径):
             已清理 += 1
-        except OSError:
-            continue
-    for 标记路径 in 目录.glob(f"*.txt{上传占用标记后缀}"):
-        缓存路径 = 标记路径.with_name(标记路径.name.removesuffix(上传占用标记后缀))
-        if not 缓存路径.exists() and not 下载缓存正在使用(缓存路径):
-            标记路径.unlink(missing_ok=True)
+    _清理孤立占用标记(目录)
     return 已清理
+
+
+def 清理过期下载缓存(
+    缓存目录: str | Path | None = None,
+    当前日期: date | datetime | None = None,
+) -> int:
+    """删除本地日期早于当天的小说 TXT，保留当天及上传中的文件。"""
+    目录 = Path(缓存目录) if 缓存目录 is not None else 下载缓存目录
+    if not 目录.is_dir():
+        return 0
+    日期边界 = _转换为本地日期(当前日期)
+    已清理 = 0
+    for 路径 in 目录.glob("*.txt"):
+        if not 路径.is_file():
+            continue
+        文件日期 = _获取文件本地日期(路径)
+        if 文件日期 is None or 文件日期 >= 日期边界:
+            continue
+        if 上传任务待续传(路径) or 下载缓存正在使用(路径):
+            continue
+        if not 删除下载缓存文件(路径):
+            continue
+        已清理 += 1
+    _清理孤立占用标记(目录)
+    return 已清理
+
+
+def 计算下次本地零点等待秒数(现在: datetime | None = None) -> float:
+    """计算距离下一次本地零点的秒数，兼容测试传入的时间。"""
+    当前时间 = 现在 or datetime.now().astimezone()
+    if 当前时间.tzinfo is None:
+        当前时间 = 当前时间.astimezone()
+    下一天 = 当前时间.date() + timedelta(days=1)
+    下次零点 = datetime.combine(
+        下一天,
+        datetime_time.min,
+        tzinfo=当前时间.tzinfo,
+    )
+    return max((下次零点 - 当前时间).total_seconds(), 0.1)
+
+
+async def 每日下载缓存清理任务(
+    缓存目录: str | Path | None = None,
+    清理完成回调: Any = None,
+) -> None:
+    """持续等待本地每日零点并清理前一日及更早的小说 TXT。"""
+    while True:
+        await asyncio.sleep(计算下次本地零点等待秒数())
+        try:
+            已清理 = 清理过期下载缓存(缓存目录)
+            if 清理完成回调 is not None:
+                清理完成回调(已清理)
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            日志.warning(
+                "每日零点清理小说下载缓存异常：错误类型=%s",
+                type(异常).__name__,
+            )
+            continue
+
+
+def 启动每日下载缓存清理任务(
+    缓存目录: str | Path | None = None,
+    清理完成回调: Any = None,
+) -> asyncio.Task[Any]:
+    return asyncio.create_task(
+        每日下载缓存清理任务(缓存目录, 清理完成回调),
+        name="小说缓存每日清理",
+    )
+
+
+async def 停止每日下载缓存清理任务(任务: asyncio.Task[Any] | None) -> None:
+    if 任务 is None or 任务.done():
+        return
+    任务.cancel()
+    await asyncio.gather(任务, return_exceptions=True)
