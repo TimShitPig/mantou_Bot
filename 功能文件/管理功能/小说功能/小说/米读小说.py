@@ -161,9 +161,7 @@ async def _下载章节(session: aiohttp.ClientSession, book_id: str, chapter: d
                 values = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), list) else data
                 lines = []
                 if isinstance(values, list):
-                    for item in values:
-                        if isinstance(item, dict) and "content" in item:
-                            lines.append(_文本(item.get("content")))
+                    lines.extend(_文本(item.get("content")) for item in values if isinstance(item, dict) and "content" in item)
                 content = "\n".join(item for item in lines if item).strip()
                 if content:
                     return content

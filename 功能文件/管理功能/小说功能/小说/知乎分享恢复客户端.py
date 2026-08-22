@@ -320,9 +320,7 @@ def calculate_body(share_url: str) -> tuple[bytes, str]:
     return plaintext, base64.b64encode(final_bytes).decode("ascii")
 
 
-import argparse
 import datetime as dt
-import json
 import os
 import random
 import urllib.error

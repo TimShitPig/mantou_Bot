@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import time
 from typing import Any
 
 from astrbot.api import logger
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 是QQ官方机器人, 获取发送者QQ, 读取字段
+from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员, 获取发送者QQ, 读取字段
 
 
 帮助选择等待秒数 = 120

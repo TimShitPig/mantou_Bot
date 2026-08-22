@@ -732,10 +732,7 @@ def 解析得间书籍详情(data: Any, bid: str) -> Dict[str, Any]:
     cats = info.get("categorys") or []
     if not isinstance(cats, list):
         cats = []
-    cat_names = []
-    for c in cats:
-        if isinstance(c, dict) and c.get("name"):
-            cat_names.append(str(c["name"]))
+    cat_names = [str(c["name"]) for c in cats if isinstance(c, dict) and c.get("name")]
 
     price = info.get("priceInfo") or {}
     if not isinstance(price, dict):
@@ -798,20 +795,19 @@ def 解析得间章节目录(xml_text: str) -> Dict[str, Any]:
     if m_total:
         total_record = int(m_total.group(1))
 
-    chapters: List[Dict[str, Any]] = []
-    for m in re.finditer(
-        r"<cp>\s*<id>(\d+)</id>\s*<cs>(\d+)</cs>\s*<wc>(\d+)</wc>.*?<cn>(.*?)</cn>",
-        xml_text,
-        flags=re.S,
-    ):
-        chapters.append(
-            {
-                "chapter_id": int(m.group(1)),
-                "cs": int(m.group(2)),
-                "word_count": int(m.group(3)),
-                "title": re.sub(r"\s+", " ", m.group(4)).strip(),
-            }
+    chapters: List[Dict[str, Any]] = [
+        {
+            "chapter_id": int(m.group(1)),
+            "cs": int(m.group(2)),
+            "word_count": int(m.group(3)),
+            "title": re.sub(r"\s+", " ", m.group(4)).strip(),
+        }
+        for m in re.finditer(
+            r"<cp>\s*<id>(\d+)</id>\s*<cs>(\d+)</cs>\s*<wc>(\d+)</wc>.*?<cn>(.*?)</cn>",
+            xml_text,
+            flags=re.S,
         )
+    ]
 
     if not chapters:
         ids = re.findall(r"<cp>\s*<id>(\d+)</id>", xml_text)

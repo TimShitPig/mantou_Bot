@@ -123,11 +123,6 @@ def proto_field_bytes(field_no: int, value: bytes | str) -> bytes:
     return proto_key(field_no, 2) + proto_varint(len(value)) + value
 
 
-def proto_field_fixed32(field_no: int, value: int | bytes) -> bytes:
-    raw = value if isinstance(value, bytes) else int(value).to_bytes(4, "little")
-    return proto_key(field_no, 5) + raw
-
-
 
 IV = [
     0x7380166F, 0x4914B2B9, 0x172442D7, 0xDA8A0600,
@@ -2163,15 +2158,9 @@ def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mo
                 for key in ('items','chapters','list','chapter_list','item_data_list','item_list','data_list'):
                     v=obj.get(key)
                     if isinstance(v,list):
-                        for it in v:
-                            if isinstance(it,dict):
-                                ids.append(it.get('item_id') or it.get('itemId') or it.get('id'))
+                        ids.extend(it.get('item_id') or it.get('itemId') or it.get('id') for it in v if isinstance(it,dict))
             elif isinstance(obj,list):
-                for it in obj:
-                    if isinstance(it,dict):
-                        ids.append(it.get('item_id') or it.get('itemId') or it.get('id'))
-                    else:
-                        ids.append(it)
+                ids.extend((it.get('item_id') or it.get('itemId') or it.get('id')) if isinstance(it,dict) else it for it in obj)
     return unique_item_ids(ids, book_id), data if isinstance(data,dict) else {'raw':data}
 
 
@@ -2190,16 +2179,9 @@ def 解析番茄目录项目(data: Any, book_id: str) -> List[str]:
                     value = obj.get(key)
                     if not isinstance(value, list):
                         continue
-                    for item in value:
-                        if isinstance(item, dict):
-                            ids.append(item.get("item_id") or item.get("itemId") or item.get("id"))
+                    ids.extend(item.get("item_id") or item.get("itemId") or item.get("id") for item in value if isinstance(item, dict))
             elif isinstance(obj, list):
-                for item in obj:
-                    ids.append(
-                        (item.get("item_id") or item.get("itemId") or item.get("id"))
-                        if isinstance(item, dict)
-                        else item
-                    )
+                ids.extend((item.get("item_id") or item.get("itemId") or item.get("id")) if isinstance(item, dict) else item for item in obj)
     return unique_item_ids(ids, book_id)
 
 
@@ -2809,10 +2791,11 @@ async def 异步读取番茄阅读正文(
         info.setdefault("title", item.get("title") or "")
         return item_id, info
 
-    infos: Dict[str, Dict[str, Any]] = {}
-    for item_id, item in await asyncio.gather(*(解密章节(item_id) for item_id in ids)):
-        if item is not None:
-            infos[item_id] = item
+    infos: Dict[str, Dict[str, Any]] = {
+        item_id: item
+        for item_id, item in await asyncio.gather(*(解密章节(item_id) for item_id in ids))
+        if item is not None
+    }
     return {
         "code": 0,
         "message": response.get("message") or "",

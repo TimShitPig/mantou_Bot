@@ -629,9 +629,7 @@ def 记录当前群成员映射(event: AstrMessageEvent, 群号: str) -> None:
     for 对象 in (event, 消息对象):
         if 对象 is None:
             continue
-        候选对象 = [对象]
-        for 字段名 in ("sender", "author", "member", "user"):
-            候选对象.append(读取字段(对象, 字段名))
+        候选对象 = [对象] + [读取字段(对象, 字段名) for 字段名 in ("sender", "author", "member", "user")]
         for 候选 in 候选对象:
             if 候选 is None:
                 continue

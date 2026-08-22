@@ -349,7 +349,6 @@ def decrypt_chapter(
     aes_key = master_key(fuid_text, knva)
     header = decrypt_header(enc, aes_key)
     key1 = header[:128]
-    key2 = header[128:256]
     mode = _parse_header_field(key1[:8])
     param = _parse_header_field(key1[8:16])
     content_hash = key1[27:43]
@@ -1675,12 +1674,10 @@ def _遍历QQ阅读卡片数据(根对象: Any) -> Iterator[str]:
         if isinstance(当前, bytes):
             continue
         if isinstance(当前, dict):
-            for 值 in 当前.values():
-                待处理.append((值, 深度 + 1))
+            待处理.extend((值, 深度 + 1) for 值 in 当前.values())
             continue
         if isinstance(当前, (list, tuple)):
-            for 值 in 当前:
-                待处理.append((值, 深度 + 1))
+            待处理.extend((值, 深度 + 1) for 值 in 当前)
             continue
 
         for 字段名 in (

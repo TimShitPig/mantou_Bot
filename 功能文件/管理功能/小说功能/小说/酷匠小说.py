@@ -143,9 +143,11 @@ async def 获取酷匠详情(session: aiohttp.ClientSession, book_id: str) -> tu
     for volume in volumes if isinstance(volumes, list) else []:
         if not isinstance(volume, dict):
             continue
-        for chapter in volume.get("chapters") if isinstance(volume.get("chapters"), list) else []:
-            if isinstance(chapter, dict) and str(chapter.get("chapter") or ""):
-                chapters.append({"id": str(chapter.get("chapter")), "title": _文本(chapter.get("v_chapter") or "章节")})
+        chapters.extend(
+            {"id": str(chapter.get("chapter")), "title": _文本(chapter.get("v_chapter") or "章节")}
+            for chapter in (volume.get("chapters") if isinstance(volume.get("chapters"), list) else [])
+            if isinstance(chapter, dict) and str(chapter.get("chapter") or "")
+        )
     detail_info = {"title": _文本(info.get("v_book")), "author": _文本(info.get("penname") or "未知"), "intro": _文本(info.get("intro")), "status": "完结" if str(info.get("status") or "").lower() in {"1", "finish", "完结"} else "连载", "word_count": info.get("public_size") or info.get("word_count") or 0}
     return detail_info, chapters
 

@@ -129,9 +129,11 @@ async def 获取连城详情(session: aiohttp.ClientSession, book_id: str) -> tu
     for volume in catalog.get("BOOKCATA") if isinstance(catalog.get("BOOKCATA"), list) else []:
         if not isinstance(volume, dict):
             continue
-        for chapter in volume.get("CHAPTERS") if isinstance(volume.get("CHAPTERS"), list) else []:
-            if isinstance(chapter, dict) and str(chapter.get("CID") or ""):
-                chapters.append({"id": str(chapter.get("CID")), "title": _文本(chapter.get("CNAME") or "章节")})
+        chapters.extend(
+            {"id": str(chapter.get("CID")), "title": _文本(chapter.get("CNAME") or "章节")}
+            for chapter in (volume.get("CHAPTERS") if isinstance(volume.get("CHAPTERS"), list) else [])
+            if isinstance(chapter, dict) and str(chapter.get("CID") or "")
+        )
     detail_info = {"title": _文本(info.get("BOOKNAME")), "author": _文本(info.get("AUTHORNAME") or "未知"), "intro": _文本(info.get("CONTENT")), "status": "完结" if str(info.get("STATE") or "").lower() in {"1", "finish", "完结"} else "连载", "word_count": info.get("WORDNUM") or 0}
     return detail_info, chapters
 
