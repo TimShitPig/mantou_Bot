@@ -342,6 +342,9 @@ def decrypt_chapter(
     fuid: str | bytes,
     pool_base64: str,
     knva: bytes | None = None,
+    *,
+    aes_key: bytes | None = None,
+    pool_decrypted: bytes | None = None,
 ) -> bytes:
     """移植 qqread/crypto.go 的 DecryptChapter，返回解压前后的正文字节。"""
     if isinstance(fuid, bytes):
@@ -352,12 +355,13 @@ def decrypt_chapter(
         raise ValueError("FUID not set")
     if len(enc) < 256:
         raise ValueError(f"cipher data too small: {len(enc)}")
-    if not pool_base64:
+    if pool_decrypted is None and not pool_base64:
         raise ValueError("pool_base64 is required")
     if knva is None:
         knva = derive_knva()
 
-    aes_key = master_key(fuid_text, knva)
+    if aes_key is None:
+        aes_key = master_key(fuid_text, knva)
     header = decrypt_header(enc, aes_key)
     key1 = header[:128]
     mode = _parse_header_field(key1[:8])
@@ -370,11 +374,12 @@ def decrypt_chapter(
         if expected != fuid_hash:
             raise ValueError("FUID hash mismatch")
 
-    try:
-        pool_bytes = base64.b64decode(pool_base64, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError("invalid pool base64") from exc
-    pool_decrypted = decrypt_keypool(pool_bytes, aes_key)
+    if pool_decrypted is None:
+        try:
+            pool_bytes = base64.b64decode(pool_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("invalid pool base64") from exc
+        pool_decrypted = decrypt_keypool(pool_bytes, aes_key)
     key32 = content_key(pool_decrypted, param, fuid_text, additional_key)
 
     handler = _MODE_HANDLERS.get(mode)
@@ -394,9 +399,20 @@ def try_decrypt_chapter(
     fuid: str | bytes,
     pool_base64: str,
     knva: bytes | None = None,
+    *,
+    aes_key: bytes | None = None,
+    pool_decrypted: bytes | None = None,
 ) -> Optional[bytes]:
     try:
-        return decrypt_chapter(enc, additional_key, fuid, pool_base64, knva)
+        return decrypt_chapter(
+            enc,
+            additional_key,
+            fuid,
+            pool_base64,
+            knva,
+            aes_key=aes_key,
+            pool_decrypted=pool_decrypted,
+        )
     except Exception:
         return None
 
@@ -1765,6 +1781,9 @@ class ConfigManager:
         self.uid = ""
         self.fuid = ""
         self.key_pool: Optional[str] = None
+        self._knva_cache: bytes | None = None
+        self._decryption_cache: tuple[str, str, bytes, bytes, bytes] | None = None
+        self._decryption_cache_lock = threading.RLock()
 
     @classmethod
     def get_instance(cls) -> "ConfigManager":
@@ -1774,14 +1793,44 @@ class ConfigManager:
             return cls._instance
 
     def _knva_bytes(self) -> bytes:
-        return derive_knva()
+        with self._decryption_cache_lock:
+            if self._knva_cache is None:
+                self._knva_cache = derive_knva()
+            return self._knva_cache
+
+    def 获取解密材料(self) -> tuple[bytes, bytes, bytes]:
+        """按当前 fuid 和密钥池缓存 KNVA、主密钥及已解密密钥池。"""
+        with self._decryption_cache_lock:
+            fuid = str(self.fuid or "")
+            pool_b64 = str(self.key_pool or "")
+            if not fuid or not pool_b64:
+                raise ValueError("QQ阅读解密材料不完整")
+            cached = self._decryption_cache
+            if cached is not None and cached[0] == fuid and cached[1] == pool_b64:
+                return cached[2], cached[3], cached[4]
+            knva = self._knva_bytes()
+            aes_key = master_key(fuid, knva)
+            try:
+                pool_bytes = base64.b64decode(pool_b64, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("invalid pool base64") from exc
+            pool_decrypted = decrypt_keypool(pool_bytes, aes_key)
+            if len(pool_decrypted) < 16:
+                raise ValueError("QQ阅读解密密钥池为空")
+            self._decryption_cache = (fuid, pool_b64, knva, aes_key, pool_decrypted)
+            return knva, aes_key, pool_decrypted
 
     def _cache_valid(self, pool_b64: str) -> bool:
         if not pool_b64 or not self.fuid:
             return False
         try:
-            raw = base64.b64decode(pool_b64)
-            pool = decrypt_keypool(raw, master_key(self.fuid, self._knva_bytes()))
+            fuid = str(self.fuid)
+            with self._decryption_cache_lock:
+                cached = self._decryption_cache
+                if cached is not None and cached[0] == fuid and cached[1] == str(pool_b64):
+                    return len(cached[4]) >= 16
+            raw = base64.b64decode(pool_b64, validate=True)
+            pool = decrypt_keypool(raw, master_key(fuid, self._knva_bytes()))
             return len(pool) >= 16
         except Exception:
             return False
@@ -1790,7 +1839,14 @@ class ConfigManager:
         return self.key_pool
 
     def _save_key_pool_cache(self, pool_b64: str) -> None:
-        self.key_pool = pool_b64
+        with self._decryption_cache_lock:
+            self.key_pool = pool_b64
+            if not (
+                self._decryption_cache is not None
+                and self._decryption_cache[0] == str(self.fuid or "")
+                and self._decryption_cache[1] == str(pool_b64 or "")
+            ):
+                self._decryption_cache = None
 
     def apply(self, m: Dict[str, Any]) -> None:
         if "loginType" in m:
@@ -1808,7 +1864,13 @@ class ConfigManager:
         if "uid" in m:
             self.uid = str(m["uid"])
         if "fuid" in m:
-            self.fuid = str(m["fuid"])
+            new_fuid = str(m["fuid"])
+            if new_fuid != self.fuid:
+                with self._decryption_cache_lock:
+                    self.fuid = new_fuid
+                    self._decryption_cache = None
+            else:
+                self.fuid = new_fuid
 
 
 def load_config_once() -> None:
@@ -1918,7 +1980,6 @@ async def 确保QQ阅读密钥池(
         if not pool or not config._cache_valid(pool):
             logger.debug("QQ阅读密钥池响应无效")
             return False
-        config.key_pool = pool
         config._save_key_pool_cache(pool)
         return True
 
@@ -2160,18 +2221,30 @@ def 构造QQ阅读正文章节参数(chapter_ids: list[str]) -> str:
 
 
 def 解密QQ阅读章节数据(
-    data: bytes, stt: str | bytes, *, allow_refresh: bool = True
+    data: bytes,
+    stt: str | bytes,
+    *,
+    allow_refresh: bool = True,
+    解密材料: tuple[bytes, bytes, bytes] | None = None,
 ) -> Optional[str]:
     config = ConfigManager.get_instance()
     if not config.key_pool:
         return None
-    text = try_decrypt_chapter(
-        data,
-        stt,
-        config.fuid,
-        config.key_pool,
-        config._knva_bytes(),
-    )
+    try:
+        if 解密材料 is None:
+            解密材料 = config.获取解密材料()
+        knva, aes_key, pool_decrypted = 解密材料
+        text = try_decrypt_chapter(
+            data,
+            stt,
+            config.fuid,
+            config.key_pool,
+            knva,
+            aes_key=aes_key,
+            pool_decrypted=pool_decrypted,
+        )
+    except Exception:
+        text = None
     if text is None and allow_refresh:
         # 网络刷新由异步下载调度器统一处理，避免解密工作线程阻塞在 HTTP 请求上。
         logger.debug("QQ阅读章节解密未命中当前密钥池")
@@ -2282,19 +2355,30 @@ def 解析QQ阅读正文批次(
 def 解析QQ阅读正文批次带统计(
     package: bytes,
     chapter_ids: list[str],
+    解密材料: tuple[bytes, bytes, bytes] | None = None,
 ) -> tuple[list[Any], int, int]:
     """解析正文包，并返回实际匹配数和解密失败数。"""
     members = tar_decrypt(package)
     requested_ids = [
         str(chapter_id).strip() for chapter_id in chapter_ids if str(chapter_id).strip()
     ]
+    if 解密材料 is None:
+        try:
+            解密材料 = ConfigManager.get_instance().获取解密材料()
+        except Exception:
+            解密材料 = None
     chapter_map: Dict[str, Any] = {}
     for chapter_id, (name, value) in _匹配QQ阅读正文章节文件(
         members, requested_ids
     ).items():
         if isinstance(value, (bytes, bytearray)):
             try:
-                text = 解密QQ阅读章节数据(bytes(value), name, allow_refresh=False)
+                text = 解密QQ阅读章节数据(
+                    bytes(value),
+                    name,
+                    allow_refresh=False,
+                    解密材料=解密材料,
+                )
             except Exception as exc:
                 logger.debug(f"QQ阅读参考正文解密失败：错误={type(exc).__name__}")
                 text = None
@@ -3512,6 +3596,9 @@ async def 异步获取QQ阅读正文批次(
     book_id: str,
     chapter_ids: list[str],
     解密信号量: asyncio.Semaphore,
+    *,
+    请求信号量: asyncio.Semaphore | None = None,
+    解密材料: tuple[bytes, bytes, bytes] | None = None,
 ) -> tuple[list[Any], int, int]:
     config = ConfigManager.get_instance()
     params = {
@@ -3524,14 +3611,24 @@ async def 异步获取QQ阅读正文批次(
         int(time.time() * 1000),
         _构造QQ阅读请求地址(QQ阅读目录地址, params),
     )
-    async with session.get(QQ阅读目录地址, params=params, headers=headers) as response:
-        response.raise_for_status()
-        package = await response.read()
+    if 请求信号量 is None:
+        请求上下文 = session.get(QQ阅读目录地址, params=params, headers=headers)
+        async with 请求上下文 as response:
+            response.raise_for_status()
+            package = await response.read()
+    else:
+        async with 请求信号量:
+            async with session.get(
+                QQ阅读目录地址, params=params, headers=headers
+            ) as response:
+                response.raise_for_status()
+                package = await response.read()
     async with 解密信号量:
         return await asyncio.to_thread(
             解析QQ阅读正文批次带统计,
             package,
             chapter_ids,
+            解密材料,
         )
 
 
@@ -3616,6 +3713,11 @@ async def 下载参考正文(
     请求信号量 = asyncio.Semaphore(concurrency)
     decrypt_concurrency = max(1, min(QQ阅读解密最大动态并发数, total))
     解密信号量 = asyncio.Semaphore(decrypt_concurrency)
+    解密材料: tuple[bytes, bytes, bytes] | None = None
+    try:
+        解密材料 = ConfigManager.get_instance().获取解密材料()
+    except Exception:
+        logger.debug("QQ阅读正文解密材料准备失败")
 
     def 新建请求统计() -> dict[str, int]:
         return {
@@ -3647,10 +3749,14 @@ async def 下载参考正文(
         stats["batches"] = 1
         try:
             chapter_ids = 获取QQ阅读正文章节ID列表(catalog, first, last)
-            async with 请求信号量:
-                part = await 异步获取QQ阅读正文批次(
-                    session, book_id, chapter_ids, 解密信号量
-                )
+            part = await 异步获取QQ阅读正文批次(
+                session,
+                book_id,
+                chapter_ids,
+                解密信号量,
+                请求信号量=请求信号量,
+                解密材料=解密材料,
+            )
             if isinstance(part, tuple) and len(part) == 3:
                 part, response_items, decrypt_failed = part
                 stats["response_items"] = int(response_items or 0)
@@ -3715,6 +3821,10 @@ async def 下载参考正文(
             break
         if round_index == 1:
             refreshed = await 确保QQ阅读密钥池(session, force=True)
+            try:
+                解密材料 = ConfigManager.get_instance().获取解密材料()
+            except Exception:
+                解密材料 = None
             logger.debug(
                 f"QQ阅读正文密钥池刷新：书籍编号={book_id}, 成功={int(bool(refreshed))}"
             )
