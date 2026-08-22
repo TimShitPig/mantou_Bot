@@ -577,7 +577,7 @@ async def 结束数字撤回去重(去重键: str | None, 成功: bool) -> None:
 
 
 def 计算广告撤回禁言秒数(触发次数: int) -> int:
-    """按同一群同一成员的撤回次数递增禁言时长，超过第五次保持 30 天。"""
+    """按同一成员跨群累计的撤回次数递增禁言时长，超过第五次保持 30 天。"""
     次数 = max(1, int(触发次数 or 1))
     return 广告撤回禁言时长表[min(次数, len(广告撤回禁言时长表)) - 1]
 
@@ -1512,12 +1512,12 @@ def 筛选用户最近消息(
 
 async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any = None) -> int:
     群号 = 获取群号(event)
-    用户QQ = 获取撤回发送者标识(event)
+    用户QQ = 获取撤回发送者统一标识(event) or 获取撤回发送者标识(event)
     if not 群号 or not 用户QQ:
         logger.info("数字撤回计数跳过：缺少群或成员标识")
         return 0
 
-    计数键 = f"{群号}:{用户QQ}"
+    计数键 = 用户QQ
     当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
     数字撤回触发次数[计数键] = 当前次数
     logger.info(
