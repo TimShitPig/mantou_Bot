@@ -234,7 +234,7 @@ async def 获取菠萝包详情(
         "author": _文本(info.get("authorName") or "未知"),
         "intro": _文本(expand_info.get("intro") or info.get("intro")),
         "status": status,
-        "word_count": info.get("wordCount") or info.get("words") or 0,
+        "word_count": info.get("charCount") or info.get("wordCount") or info.get("words") or 0,
     }, chapters
 
 
