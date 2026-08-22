@@ -124,7 +124,7 @@ def 解析菠萝包书籍编号(source: str) -> str:
                 if re.fullmatch(r"\d{4,}", str(value)):
                     return str(value)
         match = re.search(
-            r"(?:novel|book|detail|read)[^0-9]{0,20}(\d{4,})", parsed.path, re.I
+            r"(?:novel|book|detail|read|/b/)[^0-9]{0,20}(\d{4,})", parsed.path, re.I
         )
         if match:
             return match.group(1)
