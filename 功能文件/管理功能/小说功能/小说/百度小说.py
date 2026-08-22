@@ -39,7 +39,6 @@ except Exception:
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
-
 百度搜索地址 = "https://novelapi.baidu.com/boxnovel/cors"
 百度详情地址 = 百度搜索地址
 百度目录地址 = "https://novelapi.baidu.com/searchbox"
@@ -53,7 +52,8 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度详情页路径集合 = {"/boxnovel/yuedu/wapdetail", "/boxnovel/yuedu/wapcontent"}
 百度详情页最大响应字节 = 1024 * 1024
 百度链接正则 = re.compile(
-    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com)" r"[^\s<>\"']*",
+    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com)"
+    r"[^\s<>\"']*",
     re.IGNORECASE,
 )
 百度卡片编号正则 = re.compile(
@@ -108,7 +108,15 @@ def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0
     if 标识 in 已见:
         return
     已见.add(标识)
-    for 字段 in ("message_str", "message", "raw_message", "message_obj", "text", "content", "data"):
+    for 字段 in (
+        "message_str",
+        "message",
+        "raw_message",
+        "message_obj",
+        "text",
+        "content",
+        "data",
+    ):
         try:
             _文本候选(getattr(值, 字段, None), 结果, 已见, 深度 + 1)
         except Exception:
@@ -163,12 +171,14 @@ def _解析百度出版文档编号(来源: Any) -> str:
         解析 = urllib.parse.urlsplit(_清理来源(来源))
     except (TypeError, ValueError):
         return ""
-    if (
-        (解析.hostname or "").lower() not in {"boxnovel.baidu.com", "novel.baidu.com"}
-        or (解析.path or "").rstrip("/").lower() not in 百度详情页路径集合
-    ):
+    if (解析.hostname or "").lower() not in {
+        "boxnovel.baidu.com",
+        "novel.baidu.com",
+    } or (解析.path or "").rstrip("/").lower() not in 百度详情页路径集合:
         return ""
-    for 原始数据 in urllib.parse.parse_qs(解析.query, keep_blank_values=True).get("data", []):
+    for 原始数据 in urllib.parse.parse_qs(解析.query, keep_blank_values=True).get(
+        "data", []
+    ):
         数据文本 = str(原始数据)
         for _ in range(2):
             解码后 = urllib.parse.unquote_plus(数据文本)
@@ -183,7 +193,9 @@ def _解析百度出版文档编号(来源: Any) -> str:
             continue
         来源类型 = str(数据.get("is_yuedu_source") or "").strip().lower()
         文档编号 = str(数据.get("doc_id") or "").strip().lower()
-        if 来源类型 not in {"1", "true"} or not re.fullmatch(r"[0-9a-f]{16,64}", 文档编号):
+        if 来源类型 not in {"1", "true"} or not re.fullmatch(
+            r"[0-9a-f]{16,64}", 文档编号
+        ):
             continue
         return 文档编号
     return ""
@@ -223,14 +235,25 @@ def 解析百度书籍编号(来源: Any) -> str:
         except Exception:
             数据 = None
         if isinstance(数据, dict):
-            for 键 in ("gid", "bookid", "book_id", "bookGid", "novel_book_id", "novelBookId"):
+            for 键 in (
+                "gid",
+                "bookid",
+                "book_id",
+                "bookGid",
+                "novel_book_id",
+                "novelBookId",
+            ):
                 书籍编号 = _数字文本(数据.get(键))
                 if 书籍编号:
                     return 书籍编号
-    路径匹配 = re.search(r"(?:book|novel|detail|reader)[^0-9]{0,20}(\d{5,30})", 解析.path, re.IGNORECASE)
+    路径匹配 = re.search(
+        r"(?:book|novel|detail|reader)[^0-9]{0,20}(\d{5,30})", 解析.path, re.IGNORECASE
+    )
     if 路径匹配:
         return 路径匹配.group(1)
-    原文匹配 = re.search(r"(?:gid|bookid|book_id)%?3?d%?22?%?3a?%?22?(\d{5,30})", 文本, re.IGNORECASE)
+    原文匹配 = re.search(
+        r"(?:gid|bookid|book_id)%?3?d%?22?%?3a?%?22?(\d{5,30})", 文本, re.IGNORECASE
+    )
     return 原文匹配.group(1) if 原文匹配 else ""
 
 
@@ -241,11 +264,15 @@ def 构造百度链接(书籍编号: Any) -> str:
 def 创建百度HTTP会话(并发数: int = 百度最大并发数) -> aiohttp.ClientSession:
     并发数 = max(1, int(并发数 or 1))
     超时 = aiohttp.ClientTimeout(total=90, sock_connect=15, sock_read=60)
-    连接器 = aiohttp.TCPConnector(limit=并发数, limit_per_host=并发数, ttl_dns_cache=300)
+    连接器 = aiohttp.TCPConnector(
+        limit=并发数, limit_per_host=并发数, ttl_dns_cache=300
+    )
     return aiohttp.ClientSession(headers=百度请求头, timeout=超时, connector=连接器)
 
 
-async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[str, Any]) -> dict[str, Any]:
+async def _请求JSON(
+    会话: aiohttp.ClientSession, 地址: str, 参数: dict[str, Any]
+) -> dict[str, Any]:
     最后异常: Exception | None = None
     for 次数 in range(百度请求重试次数):
         try:
@@ -253,7 +280,11 @@ async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[s
                 响应.raise_for_status()
                 数据 = await 响应.json(content_type=None)
             return 数据 if isinstance(数据, dict) else {}
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as 异常:
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+        ) as 异常:
             最后异常 = 异常
             if 次数 + 1 < 百度请求重试次数:
                 await asyncio.sleep(0.25 * (次数 + 1))
@@ -290,7 +321,10 @@ async def _解析百度详情页编号(会话: aiohttp.ClientSession, 来源: st
         解析 = urllib.parse.urlsplit(来源)
         主机 = (解析.hostname or "").lower()
         路径 = (解析.path or "").rstrip("/").lower()
-        if 主机 not in {"boxnovel.baidu.com", "novel.baidu.com"} or 路径 != 百度详情页路径:
+        if (
+            主机 not in {"boxnovel.baidu.com", "novel.baidu.com"}
+            or 路径 != 百度详情页路径
+        ):
             return ""
     except (TypeError, ValueError):
         return ""
@@ -368,7 +402,9 @@ async def 获取百度详情(会话: aiohttp.ClientSession, 书籍编号: str) -
             "action": "novel",
             "type": "detail",
             "tojsondata": "1",
-            "data": json.dumps({"gid": 书籍编号, "frombox": True}, separators=(",", ":")),
+            "data": json.dumps(
+                {"gid": 书籍编号, "frombox": True}, separators=(",", ":")
+            ),
         },
     )
     if not _百度成功(数据):
@@ -376,7 +412,9 @@ async def 获取百度详情(会话: aiohttp.ClientSession, 书籍编号: str) -
     return _取详情字段(数据)
 
 
-async def 获取百度目录(会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+async def 获取百度目录(
+    会话: aiohttp.ClientSession, 书籍编号: str
+) -> list[dict[str, Any]]:
     数据 = await _请求JSON(
         会话,
         百度目录地址,
@@ -388,7 +426,13 @@ async def 获取百度目录(会话: aiohttp.ClientSession, 书籍编号: str) -
     )
     if not _百度成功(数据):
         return []
-    项目列表 = 数据.get("data", {}).get("novel", {}).get("chapter", {}).get("dataset", {}).get("items", [])
+    项目列表 = (
+        数据.get("data", {})
+        .get("novel", {})
+        .get("chapter", {})
+        .get("dataset", {})
+        .get("items", [])
+    )
     if not isinstance(项目列表, list):
         return []
     目录: list[dict[str, Any]] = []
@@ -424,7 +468,9 @@ def _取百度出版详情字段(数据: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def 获取百度出版详情(会话: aiohttp.ClientSession, 文档编号: str) -> dict[str, Any]:
+async def 获取百度出版详情(
+    会话: aiohttp.ClientSession, 文档编号: str
+) -> dict[str, Any]:
     数据 = await _请求JSON(
         会话,
         百度出版详情地址,
@@ -445,7 +491,9 @@ def _取百度出版图书数据(数据: dict[str, Any]) -> dict[str, Any]:
     return 节点 if isinstance(节点, dict) else {}
 
 
-async def 获取百度出版图书(会话: aiohttp.ClientSession, 文档编号: str) -> dict[str, Any]:
+async def 获取百度出版图书(
+    会话: aiohttp.ClientSession, 文档编号: str
+) -> dict[str, Any]:
     数据 = await _请求JSON(
         会话,
         百度出版图书地址,
@@ -497,7 +545,9 @@ async def 获取百度出版目录(
         会话,
         百度出版目录地址,
         {
-            "data": json.dumps({"doc_id": 文档编号, "fromsource": "wise"}, separators=(",", ":")),
+            "data": json.dumps(
+                {"doc_id": 文档编号, "fromsource": "wise"}, separators=(",", ":")
+            ),
             "fr": "9",
         },
     )
@@ -559,7 +609,11 @@ def _拆分百度出版页面正文(内容: Any, 页面目录: list[dict[str, An
     for 章节 in 页面目录:
         标题键 = _百度出版标题键(章节.get("title"))
         位置 = next(
-            (下标 for 下标 in range(游标, len(区块正文)) if _百度出版标题键(区块正文[下标]) == 标题键),
+            (
+                下标
+                for 下标 in range(游标, len(区块正文))
+                if _百度出版标题键(区块正文[下标]) == 标题键
+            ),
             None,
         )
         if 位置 is None:
@@ -593,7 +647,9 @@ async def 下载百度出版正文(
     已完成页面 = 0
     下次页面日志 = max(1, len(分组) // 10)
 
-    async def 下载页面(页面编号: str, 页面目录: list[tuple[int, dict[str, Any]]]) -> None:
+    async def 下载页面(
+        页面编号: str, 页面目录: list[tuple[int, dict[str, Any]]]
+    ) -> None:
         nonlocal 已完成页面, 下次页面日志
         async with 信号量:
             try:
@@ -604,7 +660,10 @@ async def 下载百度出版正文(
                 )
                 状态 = 数据.get("status") if isinstance(数据, dict) else None
                 if not isinstance(状态, dict) or _安全整数(状态.get("code"), -1) != 0:
-                    logger.debug("百度出版正文页面获取失败：页码=%s, 错误=BusinessError", 页面编号)
+                    logger.debug(
+                        "百度出版正文页面获取失败：页码=%s, 错误=BusinessError",
+                        页面编号,
+                    )
                     return
                 数据节点 = 数据.get("data")
                 内容 = 数据节点.get("content") if isinstance(数据节点, dict) else None
@@ -613,7 +672,11 @@ async def 下载百度出版正文(
                 async with 页面锁:
                     页面结果[页面编号] = 拆分结果
             except Exception as 异常:
-                logger.debug("百度出版正文页面获取失败：页码=%s, 错误=%s", 页面编号, type(异常).__name__)
+                logger.debug(
+                    "百度出版正文页面获取失败：页码=%s, 错误=%s",
+                    页面编号,
+                    type(异常).__name__,
+                )
             finally:
                 async with 页面进度锁:
                     已完成页面 += 1
@@ -643,7 +706,10 @@ def _解密百度正文(密文: bytes) -> str:
     if not 密文 or AES is None or unpad is None:
         return ""
     try:
-        明文 = unpad(AES.new(百度AES密钥, AES.MODE_CBC, 百度AES向量).decrypt(密文), AES.block_size)
+        明文 = unpad(
+            AES.new(百度AES密钥, AES.MODE_CBC, 百度AES向量).decrypt(密文),
+            AES.block_size,
+        )
         return 明文.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").strip()
     except Exception:
         return ""
@@ -669,7 +735,9 @@ async def _下载百度章节(
                         "ua": 百度固定UA,
                         "ctv": "2",
                         "cen": "ua_uid",
-                        "data": json.dumps({"gid": 书籍编号, "cid": 编号}, separators=(",", ":")),
+                        "data": json.dumps(
+                            {"gid": 书籍编号, "cid": 编号}, separators=(",", ":")
+                        ),
                     },
                 )
                 内容地址 = (
@@ -679,7 +747,9 @@ async def _下载百度章节(
                     .get("dataset", {})
                     .get("content_url")
                 )
-                if not isinstance(内容地址, str) or urllib.parse.urlsplit(内容地址).scheme not in {"http", "https"}:
+                if not isinstance(内容地址, str) or urllib.parse.urlsplit(
+                    内容地址
+                ).scheme not in {"http", "https"}:
                     raise RuntimeError("content url missing")
                 async with 会话.get(内容地址) as 响应:
                     响应.raise_for_status()
@@ -691,7 +761,9 @@ async def _下载百度章节(
                     return 正文
                 raise RuntimeError("empty content")
             except Exception as 异常:
-                logger.debug("百度小说章节获取失败：章节=%s, 错误=%s", 编号, type(异常).__name__)
+                logger.debug(
+                    "百度小说章节获取失败：章节=%s, 错误=%s", 编号, type(异常).__name__
+                )
                 if 次数 + 1 < 百度请求重试次数:
                     await asyncio.sleep(0.25 * (次数 + 1))
     return ""
@@ -783,7 +855,9 @@ def 删除百度缓存文件(路径: Any) -> None:
         小说缓存工具.删除下载缓存文件(路径)
 
 
-async def _准备发送文本文件(event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str) -> dict[str, Any]:
+async def _准备发送文本文件(
+    event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str
+) -> dict[str, Any]:
     路径 = 写入百度下载缓存文件(文件名, 内容)
     if 小说网盘 is None:
         删除百度缓存文件(路径)
@@ -793,7 +867,9 @@ async def _准备发送文本文件(event: Any, 文件名: str, 内容: bytes, �
         if not 上传结果.get("success"):
             删除百度缓存文件(路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None}
-        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(上传结果.get("share_url") or ""))
+        完成结果 = await 小说网盘.发送小说下载完成链接(
+            event, 书名, 作者, str(上传结果.get("share_url") or "")
+        )
         if 完成结果.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": 路径}
         降级文本 = str(完成结果.get("fallback_text") or "")
@@ -817,10 +893,13 @@ def 启动百度后台上传并清理源文件(配置: Any, 路径: Any, 文件�
             if 百度网盘 is not None:
                 结果 = await 百度网盘.后台上传小说文件(配置, 路径, 文件名)
                 if not isinstance(结果, dict) or (
-                    结果.get("enabled") and not (结果.get("success") or 结果.get("skipped"))
+                    结果.get("enabled")
+                    and not (结果.get("success") or 结果.get("skipped"))
                 ):
                     备份完成 = False
-                    logger.warning("百度小说后台备份失败：文件=%s, 错误=UploadFailed", 文件名)
+                    logger.warning(
+                        "百度小说后台备份失败：文件=%s, 错误=UploadFailed", 文件名
+                    )
         except Exception as 异常:
             备份完成 = False
             logger.warning("百度小说后台备份异常：错误=%s", type(异常).__name__)
@@ -841,7 +920,9 @@ def 启动百度后台上传并清理源文件(配置: Any, 路径: Any, 文件�
         删除百度缓存文件(路径)
 
 
-async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
+async def 生成百度下载回复流(
+    event: Any, 来源: str, 配置: Any = None
+) -> AsyncIterator[Any]:
     stage = "解析"
     try:
         async with 创建百度HTTP会话() as 会话:
@@ -866,7 +947,9 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
                     yield 百度下载失败提示
                     return
                 stage = "详情目录"
-                详情, 目录 = await asyncio.gather(获取百度详情(会话, 书籍编号), 获取百度目录(会话, 书籍编号))
+                详情, 目录 = await asyncio.gather(
+                    获取百度详情(会话, 书籍编号), 获取百度目录(会话, 书籍编号)
+                )
                 正文版本 = ""
                 if not 详情 or not 目录:
                     yield 百度下载失败提示
@@ -895,18 +978,32 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
             )
             stage = "正文"
             if 出版模式:
-                出版正文列表 = await 下载百度出版正文(会话, 出版文档编号, 目录, 正文版本)
+                出版正文列表 = await 下载百度出版正文(
+                    会话, 出版文档编号, 目录, 正文版本
+                )
                 正文缺失 = any(正文 is None for 正文 in 出版正文列表)
                 正文列表 = [正文 or "" for 正文 in 出版正文列表]
             else:
                 正文列表 = await 下载百度正文(会话, 书籍编号, 目录)
                 正文缺失 = any(not 正文 for 正文 in 正文列表)
         if len(正文列表) != len(目录) or 正文缺失:
-            logger.warning("百度小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s", 书籍编号, sum(bool(x) for x in 正文列表), len(目录))
+            logger.warning(
+                "百度小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
+                书籍编号,
+                sum(bool(x) for x in 正文列表),
+                len(目录),
+            )
             yield 百度下载失败提示
             return
         文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
-        发送结果 = await _准备发送文本文件(event, 文件名, 内容, 配置, str(详情.get("title") or "未知"), str(详情.get("author") or "未知"))
+        发送结果 = await _准备发送文本文件(
+            event,
+            文件名,
+            内容,
+            配置,
+            str(详情.get("title") or "未知"),
+            str(详情.get("author") or "未知"),
+        )
         路径 = 发送结果.get("source_cache_path")
         if 发送结果.get("sent"):
             启动百度后台上传并清理源文件(配置, 路径, 文件名)
@@ -924,7 +1021,9 @@ async def 生成百度下载回复流(event: Any, 来源: str, 配置: Any = Non
         yield 百度下载失败提示
 
 
-def 获取百度小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
+def 获取百度小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[Any] | None:
     来源 = 提取百度来源(event, 命令文本)
     if 来源 is None:
         return None
@@ -944,12 +1043,18 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                     "osname": "bdboxnovelsdk",
                     "action": "novel",
                     "type": "search",
-                    "data": json.dumps({"word": 关键词, "fromaction": "search", "pageNum": 1}, ensure_ascii=False, separators=(",", ":")),
+                    "data": json.dumps(
+                        {"word": 关键词, "fromaction": "search", "pageNum": 1},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 },
             )
         if not _百度成功(数据):
             return []
-        项目列表 = 数据.get("novel", {}).get("search", {}).get("data", {}).get("list", [])
+        项目列表 = (
+            数据.get("novel", {}).get("search", {}).get("data", {}).get("list", [])
+        )
         结果: list[dict[str, Any]] = []
         for 项目 in 项目列表 if isinstance(项目列表, list) else []:
             if not isinstance(项目, dict):

@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
-import random
-import uuid
+
 import aiohttp
+from astrbot.api import logger
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
-
-from astrbot.api import logger
 
 try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
@@ -51,15 +51,22 @@ UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
     "Chrome/110.0.5481.154 Safari/537.36"
 )
+
+
 # -------------------- 加密/解密工具 --------------------
 def enc(text: str) -> str:
     return AES.new(KEY, AES.MODE_CBC, IV).encrypt(pad(text.encode("utf-8"), 16)).hex()
 
+
 def dec(hex_str: str) -> str:
-    return unpad(AES.new(KEY, AES.MODE_CBC, IV).decrypt(bytes.fromhex(hex_str)), 16).decode("utf-8")
+    return unpad(
+        AES.new(KEY, AES.MODE_CBC, IV).decrypt(bytes.fromhex(hex_str)), 16
+    ).decode("utf-8")
+
 
 def dumps(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
 
 # -------------------- 设备身份管理（完全复用 dz_simple.py） --------------------
 def gen_utdid_tmp(ts_ms=None) -> str:
@@ -69,6 +76,7 @@ def gen_utdid_tmp(ts_ms=None) -> str:
     ms = f"{ts_ms % 1000:03d}"
     rand6 = "".join(random.choice(CHARS) for _ in range(6))
     return "A" + date + ms + rand6
+
 
 def make_datas():
     now = int(time.time() * 1000)
@@ -99,6 +107,7 @@ def make_datas():
         "supportAd": 1,
         "changeChidDate": now,
     }
+
 
 async def 异步调用接口(
     session: aiohttp.ClientSession,
@@ -181,6 +190,7 @@ async def 初始化设备(session: aiohttp.ClientSession) -> dict[str, Any]:
         datas["changeChidDate"] = raw["changeChidDate"]
     return datas
 
+
 # -------------------- 工具函数 --------------------
 
 # ===== 业务封装 =====
@@ -190,6 +200,7 @@ async def 初始化设备(session: aiohttp.ClientSession) -> dict[str, Any]:
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
 书籍编号正则 = re.compile(r"(?:bookId|book[_-]?id|bid)=(\d{4,})", re.I)
 路径编号正则 = re.compile(r"/(?:book|detail|chapter)/(\d{4,})", re.I)
+
 
 def 计算动态章节并发数(章节数: int) -> int:
     return min(最大章节并发数, max(1, int(章节数 or 0)))
@@ -220,7 +231,9 @@ def 计算下一窗口并发数(当前并发: int, 成功数: int, 总数: int) 
     return max(最小章节并发数, 当前并发 // 2)
 
 
-def 获取点众小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
+def 获取点众小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[Any] | None:
     来源 = 提取直接点众来源(命令文本) or 提取事件点众来源(event)
     if 来源 is None:
         return None
@@ -251,7 +264,14 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             书名 = str(详情.get("title") or 详情.get("bookName") or "未知")
             作者 = str(详情.get("author") or 详情.get("authorName") or "未知")
             状态原文 = str(详情.get("status") or 详情.get("serialStatus") or "")
-            状态 = "完结" if ("完" in 状态原文 or str(详情.get("isEnd") or "") in {"1", "true", "True"}) else "连载"
+            状态 = (
+                "完结"
+                if (
+                    "完" in 状态原文
+                    or str(详情.get("isEnd") or "") in {"1", "true", "True"}
+                )
+                else "连载"
+            )
             字数 = 格式化字数(
                 详情.get("wordCount")
                 or 详情.get("words")
@@ -266,15 +286,17 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 f"章节数={len(目录)}, 目录并发数={最大目录并发数}, "
                 f"content_最大并发数={动态并发}"
             )
-            yield "\n".join([
-                f"书名：{书名}",
-                f"作者：{作者}",
-                f"状态：{状态}",
-                f"章节：{len(目录)} 章",
-                f"字数：{字数}",
-                "",
-                "正在下载中请稍等.....",
-            ])
+            yield "\n".join(
+                [
+                    f"书名：{书名}",
+                    f"作者：{作者}",
+                    f"状态：{状态}",
+                    f"章节：{len(目录)} 章",
+                    f"字数：{字数}",
+                    "",
+                    "正在下载中请稍等.....",
+                ]
+            )
             章节结果 = await 异步下载全部章节(书籍编号, 目录, 书名)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
@@ -284,7 +306,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "下载失败"
             return
         文件名, 文件内容 = 生成小说文件(书籍编号, 书名, 作者, 状态, 字数, 章节结果)
-        发送结果 = await 准备发送文本文件(event, 文件名, 文件内容, 配置, 书名=书名, 作者=作者)
+        发送结果 = await 准备发送文本文件(
+            event, 文件名, 文件内容, 配置, 书名=书名, 作者=作者
+        )
         if 发送结果.get("sent"):
             启动百度后台上传并清理(配置, 发送结果.get("source_cache_path"), 文件名)
             return
@@ -297,7 +321,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             return
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning(f"点众小说下载失败：书籍编号={书籍编号}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"点众小说下载失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
+        )
         yield "下载失败"
 
 
@@ -306,10 +332,14 @@ async def 异步获取详情(
     datas: dict[str, Any],
     book_id: str,
 ) -> dict[str, Any]:
-    res = await 异步调用接口(session, 1111, {"bookId": str(book_id), "chapterId": ""}, datas)
+    res = await 异步调用接口(
+        session, 1111, {"bookId": str(book_id), "chapterId": ""}, datas
+    )
     data = res.get("data_json")
     if isinstance(data, dict):
-        book = data.get("bookDetail") or data.get("bookInfo") or data.get("book") or data
+        book = (
+            data.get("bookDetail") or data.get("bookInfo") or data.get("book") or data
+        )
         if isinstance(book, dict):
             return book
     return {}
@@ -326,11 +356,20 @@ async def 异步获取目录(
         {"bookId": str(book_id), "chapterIndex": 0, "currentChapterId": ""},
         datas,
     )
-    首页数据 = 首页响应.get("data_json") if isinstance(首页响应.get("data_json"), dict) else {}
-    首页 = 首页数据.get("chapterList") or 首页数据.get("chapters") or 首页数据.get("list") or []
+    首页数据 = (
+        首页响应.get("data_json") if isinstance(首页响应.get("data_json"), dict) else {}
+    )
+    首页 = (
+        首页数据.get("chapterList")
+        or 首页数据.get("chapters")
+        or 首页数据.get("list")
+        or []
+    )
     if not isinstance(首页, list) or not 首页:
         return []
-    book_info = 首页数据.get("bookInfo") if isinstance(首页数据.get("bookInfo"), dict) else {}
+    book_info = (
+        首页数据.get("bookInfo") if isinstance(首页数据.get("bookInfo"), dict) else {}
+    )
     try:
         目录总数 = int(book_info.get("totalChapterNum") or 0)
     except (TypeError, ValueError):
@@ -347,11 +386,24 @@ async def 异步获取目录(
                     res = await 异步调用接口(
                         session,
                         1304,
-                        {"bookId": str(book_id), "chapterIndex": 下标, "currentChapterId": ""},
+                        {
+                            "bookId": str(book_id),
+                            "chapterIndex": 下标,
+                            "currentChapterId": "",
+                        },
                         datas,
                     )
-                data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
-                items = data.get("chapterList") or data.get("chapters") or data.get("list") or []
+                data = (
+                    res.get("data_json")
+                    if isinstance(res.get("data_json"), dict)
+                    else {}
+                )
+                items = (
+                    data.get("chapterList")
+                    or data.get("chapters")
+                    or data.get("list")
+                    or []
+                )
                 return items if isinstance(items, list) else []
             except Exception as exc:
                 logger.debug(
@@ -361,7 +413,9 @@ async def 异步获取目录(
                 return []
 
         所有窗口.extend(
-            窗口 for 窗口 in await asyncio.gather(*(获取窗口(下标) for 下标 in 中心下标)) if 窗口
+            窗口
+            for 窗口 in await asyncio.gather(*(获取窗口(下标) for 下标 in 中心下标))
+            if 窗口
         )
 
     章节映射: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -382,13 +436,21 @@ async def 异步获取目录(
                 排序下标,
                 {
                     "id": cid,
-                    "title": str(it.get("chapterName") or it.get("title") or it.get("name") or f"章节{cid}"),
-                    "has_lock": it.get("hasLock") is True or str(it.get("hasLock") or "").lower() in {"1", "true"},
+                    "title": str(
+                        it.get("chapterName")
+                        or it.get("title")
+                        or it.get("name")
+                        or f"章节{cid}"
+                    ),
+                    "has_lock": it.get("hasLock") is True
+                    or str(it.get("hasLock") or "").lower() in {"1", "true"},
                 },
             )
     结果 = [章节 for _, 章节 in sorted(章节映射.values(), key=lambda 项: 项[0])]
     if 目录总数 and len(结果) != 目录总数:
-        logger.warning(f"点众小说目录不完整：书籍编号={book_id}, 成功={len(结果)}, 总数={目录总数}")
+        logger.warning(
+            f"点众小说目录不完整：书籍编号={book_id}, 成功={len(结果)}, 总数={目录总数}"
+        )
         return []
     return 结果
 
@@ -458,10 +520,16 @@ async def 异步获取章节正文结果(
             ad_key = order["exitRetainOperate"].get("key")
         有广告解锁入口 = bool(ad_key)
         if ad_key:
-            ad_res = await 异步调用接口(session, 1518, {"key": ad_key, "advertValue": 0.0}, datas)
+            ad_res = await 异步调用接口(
+                session, 1518, {"key": ad_key, "advertValue": 0.0}, datas
+            )
             if str((ad_res.get("raw") or {}).get("code")) == "0":
                 res = await 异步调用接口(session, 1303, body, datas)
-                data = res.get("data_json") if isinstance(res.get("data_json"), dict) else {}
+                data = (
+                    res.get("data_json")
+                    if isinstance(res.get("data_json"), dict)
+                    else {}
+                )
         content = _提取正文(data)
         if content:
             return content, "ok"
@@ -530,9 +598,7 @@ async def 异步执行章节下载轮(
         访问状态 = "error"
         try:
             # 同一 App 身份只在本通道内串行使用，避免广告解锁状态交叉覆盖。
-            正文, 访问状态 = await 异步获取章节正文结果(
-                会话, 身份, 书籍编号, cid, 书名
-            )
+            正文, 访问状态 = await 异步获取章节正文结果(会话, 身份, 书籍编号, cid, 书名)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -549,10 +615,7 @@ async def 异步执行章节下载轮(
         通道任务: list[tuple[int, dict[str, Any]]],
     ) -> list[tuple[int, dict[str, str]]]:
         会话, 身份 = 通道
-        return [
-            await 下载单章(会话, 身份, 下标, 章)
-            for 下标, 章 in 通道任务
-        ]
+        return [await 下载单章(会话, 身份, 下标, 章) for 下标, 章 in 通道任务]
 
     通道池: list[tuple[aiohttp.ClientSession, dict[str, Any]]] = []
     结果: list[tuple[int, dict[str, str]]] = []
@@ -580,13 +643,15 @@ async def 异步执行章节下载轮(
             return
         待关闭 = 通道池[目标并发:]
         del 通道池[目标并发:]
-        await asyncio.gather(*(会话.close() for 会话, _ in 待关闭), return_exceptions=True)
+        await asyncio.gather(
+            *(会话.close() for 会话, _ in 待关闭), return_exceptions=True
+        )
 
     try:
         while 待处理:
             目标窗口并发 = min(当前并发, len(待处理))
             await 扩容至(目标窗口并发)
-            活跃通道 = 通道池[:min(目标窗口并发, len(通道池))]
+            活跃通道 = 通道池[: min(目标窗口并发, len(通道池))]
             if not 活跃通道:
                 for 下标, 章 in 待处理:
                     cid = str(章.get("id") or "")
@@ -623,7 +688,9 @@ async def 异步执行章节下载轮(
                 await 收缩至(当前并发)
                 await asyncio.sleep(0.3)
     finally:
-        await asyncio.gather(*(会话.close() for 会话, _ in 通道池), return_exceptions=True)
+        await asyncio.gather(
+            *(会话.close() for 会话, _ in 通道池), return_exceptions=True
+        )
 
     return 结果
 
@@ -671,10 +738,7 @@ async def 异步下载全部章节(
             (i, 目录[i])
             for i, 项 in enumerate(结果)
             if not 项
-            or (
-                not 项.get("content")
-                and 项.get("access") != "member_required"
-            )
+            or (not 项.get("content") and 项.get("access") != "member_required")
         ]
         if not 缺失任务:
             break
@@ -699,7 +763,9 @@ async def 异步下载全部章节(
         )
 
     完整结果 = [
-        项 if 项 is not None else {
+        项
+        if 项 is not None
+        else {
             "title": str(目录[i].get("title") or f"章节{目录[i].get('id') or ''}"),
             "content": "",
             "id": str(目录[i].get("id") or ""),
@@ -720,9 +786,26 @@ async def 异步下载全部章节(
     return 完整结果
 
 
-def 生成小说文件(书籍编号: str, 书名: str, 作者: str, 状态: str, 字数: str, 章节结果: list[dict[str, str]]) -> tuple[str, bytes]:
+def 生成小说文件(
+    书籍编号: str,
+    书名: str,
+    作者: str,
+    状态: str,
+    字数: str,
+    章节结果: list[dict[str, str]],
+) -> tuple[str, bytes]:
     文件名 = f"[{状态}]书名：{清理文件名(书名)} 作者：{清理文件名(作者)}.txt"
-    行 = [文件声明, "", f"名称：{书名}", f"作者：{作者}", f"状态：{状态}", f"字数：{字数}", f"书籍ID：{书籍编号}", f"章节数：{len(章节结果)}", ""]
+    行 = [
+        文件声明,
+        "",
+        f"名称：{书名}",
+        f"作者：{作者}",
+        f"状态：{状态}",
+        f"字数：{字数}",
+        f"书籍ID：{书籍编号}",
+        f"章节数：{len(章节结果)}",
+        "",
+    ]
     for 章 in 章节结果:
         if not 章.get("content"):
             continue
@@ -732,27 +815,67 @@ def 生成小说文件(书籍编号: str, 书名: str, 作者: str, 状态: str,
     return 文件名, "\n".join(行).encode("utf-8")
 
 
-async def 准备发送文本文件(event: Any, 文件名: str, 文件内容: bytes, 配置: Any = None, *, 书名: Any = "", 作者: Any = "") -> dict[str, Any]:
+async def 准备发送文本文件(
+    event: Any,
+    文件名: str,
+    文件内容: bytes,
+    配置: Any = None,
+    *,
+    书名: Any = "",
+    作者: Any = "",
+) -> dict[str, Any]:
     缓存路径 = 写入缓存(文件名, 文件内容)
     if 小说网盘 is None:
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说网盘模块未加载",
+        }
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         if not 网盘结果.get("success"):
             删除缓存(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
-        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": str(网盘结果.get("error") or "小说网盘未启用"),
+            }
+        完成结果 = await 小说网盘.发送小说下载完成链接(
+            event, 书名, 作者, str(网盘结果.get("share_url") or "")
+        )
         if 完成结果.get("sent"):
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": str(完成结果.get("error") or ""),
+            }
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成消息发送失败")}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(完成结果.get("error") or "完成消息发送失败"),
+        }
     except Exception as exc:
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(exc),
+        }
 
 
 def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
@@ -764,6 +887,7 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
             logger.warning(f"点众小说百度后台上传异常：文件={文件名}, 错误={exc}")
         finally:
             删除缓存(源缓存路径)
+
     try:
         asyncio.get_running_loop().create_task(_任务())
     except Exception:
@@ -833,7 +957,7 @@ def 格式化字数(字数: Any) -> str:
             n = int(float(数字文本))
         except Exception:
             return 文本
-        return f"{round(n/10000, 1)}万字" if n >= 10000 else f"{n}字"
+        return f"{round(n / 10000, 1)}万字" if n >= 10000 else f"{n}字"
     return 文本
 
 
@@ -845,7 +969,9 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     try:
         timeout = aiohttp.ClientTimeout(total=30, sock_connect=15, sock_read=20)
         connector = aiohttp.TCPConnector(limit=2, limit_per_host=2, ttl_dns_cache=300)
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout, connector=connector
+        ) as session:
             datas = await 初始化设备(session)
             body = {"keyWord": 关键词, "page": 1, "type": 0}
             res = await 异步调用接口(session, 1203, body, datas)
@@ -864,15 +990,17 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         book_id = str(book.get("bookId") or book.get("id") or "").strip()
         if not book_id:
             continue
-        结果.append({
-            "title": book.get("bookName") or book.get("title") or "未知",
-            "author": book.get("authorName") or book.get("author") or "未知",
-            "book_id": book_id,
-            "platform": "点众",
-            "url": f"https://asgportal.dianzhong.com/book/{book_id}",
-            "heat": 0,
-            "score": 0,
-        })
+        结果.append(
+            {
+                "title": book.get("bookName") or book.get("title") or "未知",
+                "author": book.get("authorName") or book.get("author") or "未知",
+                "book_id": book_id,
+                "platform": "点众",
+                "url": f"https://asgportal.dianzhong.com/book/{book_id}",
+                "heat": 0,
+                "score": 0,
+            }
+        )
         if len(结果) >= 需要数量:
             break
     return 结果

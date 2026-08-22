@@ -35,7 +35,6 @@ except Exception:
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
-
 # 小米阅读网页的旧 /api/v2/search 目前只返回固定推荐项；搜索改用当前 dushu
 # 网页的 onebox 接口。旧 reader.browser 接口仍保留，用于兼容用户已有的分享链接。
 小米搜索地址 = "https://dushu.xiaomi.com/store/v0/lib/query/onebox"
@@ -94,7 +93,11 @@ def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0
     if isinstance(值, dict):
         try:
             序列化 = json.dumps(值, ensure_ascii=False, default=str)
-            if "小米" in 序列化 or "miui" in 序列化.lower() or "xiaomi" in 序列化.lower():
+            if (
+                "小米" in 序列化
+                or "miui" in 序列化.lower()
+                or "xiaomi" in 序列化.lower()
+            ):
                 结果.append(序列化)
         except Exception:
             pass
@@ -109,7 +112,15 @@ def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0
     if 标识 in 已见:
         return
     已见.add(标识)
-    for 字段 in ("message_str", "message", "raw_message", "message_obj", "text", "content", "data"):
+    for 字段 in (
+        "message_str",
+        "message",
+        "raw_message",
+        "message_obj",
+        "text",
+        "content",
+        "data",
+    ):
         try:
             _文本候选(getattr(值, 字段, None), 结果, 已见, 深度 + 1)
         except Exception:
@@ -118,7 +129,11 @@ def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0
         文本 = str(值)
     except Exception:
         文本 = ""
-    if "miui.com" in 文本.lower() or "dushu.xiaomi.com" in 文本.lower() or "小米" in 文本:
+    if (
+        "miui.com" in 文本.lower()
+        or "dushu.xiaomi.com" in 文本.lower()
+        or "小米" in 文本
+    ):
         结果.append(文本)
 
 
@@ -137,10 +152,16 @@ def 提取小米来源(event: Any, 命令文本: Any) -> str | None:
             if 匹配:
                 return _清理来源(匹配.group(0))
     for 文本 in 候选:
-        if "小米" not in 文本 and "miui" not in 文本.lower() and "xiaomi" not in 文本.lower():
+        if (
+            "小米" not in 文本
+            and "miui" not in 文本.lower()
+            and "xiaomi" not in 文本.lower()
+        ):
             continue
         解码文本 = urllib.parse.unquote(文本)
-        匹配 = 小米卡片来源编号正则.search(解码文本) or 小米卡片编号正则.search(解码文本)
+        匹配 = 小米卡片来源编号正则.search(解码文本) or 小米卡片编号正则.search(
+            解码文本
+        )
         if 匹配:
             return 构造小米链接(匹配.group(1))
     return None
@@ -178,11 +199,15 @@ def 解析小米书籍编号(来源: Any) -> str:
             编号 = _数字文本(值)
             if 编号:
                 return f"dushu:{编号}" if 新接口 else 编号
-    匹配 = re.search(r"(?:book|novel|detail)[^0-9]{0,20}(\d{1,30})", 解析.path, re.IGNORECASE)
+    匹配 = re.search(
+        r"(?:book|novel|detail)[^0-9]{0,20}(\d{1,30})", 解析.path, re.IGNORECASE
+    )
     if 匹配:
         编号 = 匹配.group(1)
         return f"dushu:{编号}" if 新接口 else 编号
-    匹配 = re.search(r"(?:^|[=&])(?:id|bookId|book_id)[=:]?\s*(\d{1,30})", 文本, re.IGNORECASE)
+    匹配 = re.search(
+        r"(?:^|[=&])(?:id|bookId|book_id)[=:]?\s*(\d{1,30})", 文本, re.IGNORECASE
+    )
     if not 匹配:
         return ""
     编号 = 匹配.group(1)
@@ -224,7 +249,9 @@ def _小米设备参数() -> dict[str, Any]:
 def 创建小米HTTP会话(并发数: int = 小米最大并发数) -> aiohttp.ClientSession:
     并发数 = max(1, int(并发数 or 1))
     超时 = aiohttp.ClientTimeout(total=90, sock_connect=15, sock_read=60)
-    连接器 = aiohttp.TCPConnector(limit=并发数, limit_per_host=并发数, ttl_dns_cache=300)
+    连接器 = aiohttp.TCPConnector(
+        limit=并发数, limit_per_host=并发数, ttl_dns_cache=300
+    )
     return aiohttp.ClientSession(
         headers=小米请求头,
         timeout=超时,
@@ -233,7 +260,9 @@ def 创建小米HTTP会话(并发数: int = 小米最大并发数) -> aiohttp.Cl
     )
 
 
-async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[str, Any]) -> dict[str, Any]:
+async def _请求JSON(
+    会话: aiohttp.ClientSession, 地址: str, 参数: dict[str, Any]
+) -> dict[str, Any]:
     最后异常: Exception | None = None
     for 次数 in range(小米请求重试次数):
         try:
@@ -241,7 +270,11 @@ async def _请求JSON(会话: aiohttp.ClientSession, 地址: str, 参数: dict[s
                 响应.raise_for_status()
                 数据 = await 响应.json(content_type=None)
             return 数据 if isinstance(数据, dict) else {}
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as 异常:
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+        ) as 异常:
             最后异常 = 异常
             if 次数 + 1 < 小米请求重试次数:
                 await asyncio.sleep(0.25 * (次数 + 1))
@@ -309,7 +342,9 @@ async def 获取小米详情(会话: aiohttp.ClientSession, 书籍编号: str) -
     }
 
 
-async def 获取小米目录(会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+async def 获取小米目录(
+    会话: aiohttp.ClientSession, 书籍编号: str
+) -> list[dict[str, Any]]:
     新接口, 实际编号 = _拆分小米书籍编号(书籍编号)
     if 新接口:
         目录: list[dict[str, Any]] = []
@@ -378,7 +413,9 @@ async def 获取小米目录(会话: aiohttp.ClientSession, 书籍编号: str) -
 
 def _解析旧版正文页面(页面: bytes) -> str:
     文本 = 页面.decode("utf-8", "replace")
-    匹配 = re.search(r"duokan_fiction_chapter(?:_\d+_\d+)?\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", 文本)
+    匹配 = re.search(
+        r"duokan_fiction_chapter(?:_\d+_\d+)?\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", 文本
+    )
     if not 匹配:
         return ""
     try:
@@ -388,17 +425,26 @@ def _解析旧版正文页面(页面: bytes) -> str:
     段落 = 数据.get("p") if isinstance(数据, dict) else None
     if not isinstance(段落, list):
         return ""
-    return "\n".join(str(段落项).strip() for 段落项 in 段落 if str(段落项).strip()).strip()
+    return "\n".join(
+        str(段落项).strip() for 段落项 in 段落 if str(段落项).strip()
+    ).strip()
 
 
 async def _解析小米正文(会话: aiohttp.ClientSession, 数据: dict[str, Any]) -> str:
     内容列表 = 数据.get("data", {}).get("contentList", [])
     if not isinstance(内容列表, list) or not 内容列表:
         return ""
-    文本内容 = [str(项目).strip() for 项目 in 内容列表 if isinstance(项目, str) and str(项目).strip()]
+    文本内容 = [
+        str(项目).strip()
+        for 项目 in 内容列表
+        if isinstance(项目, str) and str(项目).strip()
+    ]
     if not 文本内容:
         return ""
-    if len(文本内容) == 1 and urllib.parse.urlsplit(文本内容[0]).scheme in {"http", "https"}:
+    if len(文本内容) == 1 and urllib.parse.urlsplit(文本内容[0]).scheme in {
+        "http",
+        "https",
+    }:
         try:
             async with 会话.get(文本内容[0]) as 响应:
                 响应.raise_for_status()
@@ -454,13 +500,17 @@ async def _下载小米章节(
                     return 正文
                 raise RuntimeError("empty content")
             except Exception as 异常:
-                logger.debug("小米小说章节获取失败：章节=%s, 错误=%s", 编号, type(异常).__name__)
+                logger.debug(
+                    "小米小说章节获取失败：章节=%s, 错误=%s", 编号, type(异常).__name__
+                )
                 if 次数 + 1 < 小米请求重试次数:
                     await asyncio.sleep(0.25 * (次数 + 1))
     return ""
 
 
-async def 下载小米正文(会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]]) -> list[str]:
+async def 下载小米正文(
+    会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]]
+) -> list[str]:
     结果 = [""] * len(目录)
     信号量 = asyncio.Semaphore(小米最大并发数)
     已完成 = 0
@@ -491,7 +541,9 @@ def _清理文件名(值: Any) -> str:
     return 文本[:80] or "小米小说"
 
 
-def 生成小米小说文件内容(书籍编号: str, 详情: dict[str, Any], 目录: list[dict[str, Any]], 正文列表: list[str]) -> tuple[str, bytes]:
+def 生成小米小说文件内容(
+    书籍编号: str, 详情: dict[str, Any], 目录: list[dict[str, Any]], 正文列表: list[str]
+) -> tuple[str, bytes]:
     状态 = str(详情.get("status") or "连载")
     书名 = _清理文件名(详情.get("title") or f"小米小说{书籍编号}")
     作者 = _清理文件名(详情.get("author") or "未知")
@@ -537,7 +589,9 @@ def 删除小米缓存文件(路径: Any) -> None:
         小说缓存工具.删除下载缓存文件(路径)
 
 
-async def _准备发送文本文件(event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str) -> dict[str, Any]:
+async def _准备发送文本文件(
+    event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str
+) -> dict[str, Any]:
     路径 = 写入小米下载缓存文件(文件名, 内容)
     if 小说网盘 is None:
         删除小米缓存文件(路径)
@@ -547,7 +601,9 @@ async def _准备发送文本文件(event: Any, 文件名: str, 内容: bytes, �
         if not 上传结果.get("success"):
             删除小米缓存文件(路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None}
-        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(上传结果.get("share_url") or ""))
+        完成结果 = await 小说网盘.发送小说下载完成链接(
+            event, 书名, 作者, str(上传结果.get("share_url") or "")
+        )
         if 完成结果.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": 路径}
         降级文本 = str(完成结果.get("fallback_text") or "")
@@ -571,10 +627,13 @@ def 启动小米后台上传并清理源文件(配置: Any, 路径: Any, 文件�
             if 百度网盘 is not None:
                 结果 = await 百度网盘.后台上传小说文件(配置, 路径, 文件名)
                 if not isinstance(结果, dict) or (
-                    结果.get("enabled") and not (结果.get("success") or 结果.get("skipped"))
+                    结果.get("enabled")
+                    and not (结果.get("success") or 结果.get("skipped"))
                 ):
                     备份完成 = False
-                    logger.warning("小米小说后台备份失败：文件=%s, 错误=UploadFailed", 文件名)
+                    logger.warning(
+                        "小米小说后台备份失败：文件=%s, 错误=UploadFailed", 文件名
+                    )
         except Exception as 异常:
             备份完成 = False
             logger.warning("小米小说后台备份异常：错误=%s", type(异常).__name__)
@@ -595,7 +654,9 @@ def 启动小米后台上传并清理源文件(配置: Any, 路径: Any, 文件�
         删除小米缓存文件(路径)
 
 
-async def 生成小米下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
+async def 生成小米下载回复流(
+    event: Any, 来源: str, 配置: Any = None
+) -> AsyncIterator[Any]:
     stage = "解析"
     try:
         书籍编号 = 解析小米书籍编号(来源)
@@ -604,7 +665,9 @@ async def 生成小米下载回复流(event: Any, 来源: str, 配置: Any = Non
             return
         async with 创建小米HTTP会话() as 会话:
             stage = "详情目录"
-            详情, 目录 = await asyncio.gather(获取小米详情(会话, 书籍编号), 获取小米目录(会话, 书籍编号))
+            详情, 目录 = await asyncio.gather(
+                获取小米详情(会话, 书籍编号), 获取小米目录(会话, 书籍编号)
+            )
             if not 详情 or not 目录:
                 yield 小米下载失败提示
                 return
@@ -623,11 +686,23 @@ async def 生成小米下载回复流(event: Any, 来源: str, 配置: Any = Non
             stage = "正文"
             正文列表 = await 下载小米正文(会话, 书籍编号, 目录)
         if len(正文列表) != len(目录) or any(not 正文 for 正文 in 正文列表):
-            logger.warning("小米小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s", 书籍编号, sum(bool(x) for x in 正文列表), len(目录))
+            logger.warning(
+                "小米小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
+                书籍编号,
+                sum(bool(x) for x in 正文列表),
+                len(目录),
+            )
             yield 小米下载失败提示
             return
         文件名, 内容 = 生成小米小说文件内容(书籍编号, 详情, 目录, 正文列表)
-        发送结果 = await _准备发送文本文件(event, 文件名, 内容, 配置, str(详情.get("title") or "未知"), str(详情.get("author") or "未知"))
+        发送结果 = await _准备发送文本文件(
+            event,
+            文件名,
+            内容,
+            配置,
+            str(详情.get("title") or "未知"),
+            str(详情.get("author") or "未知"),
+        )
         路径 = 发送结果.get("source_cache_path")
         if 发送结果.get("sent"):
             启动小米后台上传并清理源文件(配置, 路径, 文件名)
@@ -645,7 +720,9 @@ async def 生成小米下载回复流(event: Any, 来源: str, 配置: Any = Non
         yield 小米下载失败提示
 
 
-def 获取小米小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
+def 获取小米小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[Any] | None:
     来源 = 提取小米来源(event, 命令文本)
     if 来源 is None:
         return None
@@ -660,10 +737,7 @@ def _小米搜索结果相关(项目: dict[str, Any], 关键词: str) -> bool:
     ]
     if not 查询词:
         return False
-    文本 = (
-        str(项目.get("title") or "")
-        + _小米搜索作者(项目)
-    )
+    文本 = str(项目.get("title") or "") + _小米搜索作者(项目)
     文本 = re.sub(r"\s+", "", 文本).casefold()
     return all(词 in 文本 for 词 in 查询词)
 
@@ -675,7 +749,11 @@ def _小米搜索作者(项目: dict[str, Any]) -> str:
     角色 = 项目.get("role")
     if isinstance(角色, list):
         for 项 in 角色:
-            if isinstance(项, (list, tuple)) and len(项) >= 2 and str(项[0]).strip() == "作者":
+            if (
+                isinstance(项, (list, tuple))
+                and len(项) >= 2
+                and str(项[0]).strip() == "作者"
+            ):
                 return str(项[1]).strip()
     return "未知"
 
@@ -709,7 +787,9 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                     "book_id": 编号,
                     "title": 标题,
                     "author": _小米搜索作者(项目),
-                    "intro": str(项目.get("intro") or 项目.get("description") or "").strip(),
+                    "intro": str(
+                        项目.get("intro") or 项目.get("description") or ""
+                    ).strip(),
                     "url": 构造小米链接(编号),
                     "score": 项目.get("rate") or 项目.get("score") or 0,
                     "heat": _安全整数(项目.get("click") or 项目.get("hot")),

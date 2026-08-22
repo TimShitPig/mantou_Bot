@@ -122,7 +122,13 @@ def 获取适配器名称(event: Any) -> str:
                 if 值:
                     return str(值).lower()
             if isinstance(platform_meta, dict):
-                for 字段名 in ("name", "id", "platform", "adapter_name", "platform_name"):
+                for 字段名 in (
+                    "name",
+                    "id",
+                    "platform",
+                    "adapter_name",
+                    "platform_name",
+                ):
                     值 = platform_meta.get(字段名)
                     if 值:
                         return str(值).lower()
@@ -145,11 +151,17 @@ def 是QQ官方机器人(event: Any) -> bool:
     适配器 = 获取适配器名称(event)
     if not 适配器:
         return False
-    return any(关键词 in 适配器 for 关键词 in ("qq_official", "qqofficial", "q官方", "qq官方", "official"))
+    return any(
+        关键词 in 适配器
+        for 关键词 in ("qq_official", "qqofficial", "q官方", "qq官方", "official")
+    )
 
 
 def 是OneBot适配器(event: Any) -> bool:
     适配器 = 获取适配器名称(event)
     if not 适配器:
         return True
-    return any(关键词 in 适配器 for 关键词 in ("aiocqhttp", "onebot", "cqhttp", "napcat", "llonebot"))
+    return any(
+        关键词 in 适配器
+        for 关键词 in ("aiocqhttp", "onebot", "cqhttp", "napcat", "llonebot")
+    )

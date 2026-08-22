@@ -12,7 +12,6 @@ from typing import Any
 
 from astrbot.api import logger
 
-
 _运行中的小说任务: set[asyncio.Task[Any]] = set()
 
 

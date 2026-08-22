@@ -17,11 +17,10 @@ from yarl import URL
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
+    写入运行状态值,
     已配置运行状态数据库,
     读取运行状态值,
-    写入运行状态值,
 )
-
 
 网盘Cookie命名空间 = "novel_pan_auth"
 平台状态键 = {"UC": "uc", "夸克": "quark", "百度": "baidu"}
@@ -90,7 +89,9 @@ class 夸克扫码登录客户端:
             raise 夸克扫码登录异常("token", type(异常).__name__) from 异常
         if not isinstance(数据, dict):
             raise 夸克扫码登录异常("token", "invalid_response")
-        Token = str((((数据.get("data") or {}).get("members") or {}).get("token") or "")).strip()
+        Token = str(
+            (((数据.get("data") or {}).get("members") or {}).get("token") or "")
+        ).strip()
         if 响应.status != 200 or 数据.get("status") != 2000000 or not Token:
             raise 夸克扫码登录异常("token", 数据.get("status") or 响应.status)
         登录地址 = (
@@ -123,7 +124,12 @@ class 夸克扫码登录客户端:
             状态 = 数据.get("status")
             if 响应.status == 200 and 状态 == 2000000:
                 票据 = str(
-                    (((数据.get("data") or {}).get("members") or {}).get("service_ticket") or "")
+                    (
+                        ((数据.get("data") or {}).get("members") or {}).get(
+                            "service_ticket"
+                        )
+                        or ""
+                    )
                 ).strip()
                 if 票据:
                     return await self._使用票据获取Cookie(票据)
@@ -160,7 +166,9 @@ class 夸克扫码登录客户端:
             "https://pan.quark.cn/account/info",
             "https://drive-pc.quark.cn/",
         ):
-            for 名称, Morsel in self._获取会话().cookie_jar.filter_cookies(URL(地址)).items():
+            for 名称, Morsel in (
+                self._获取会话().cookie_jar.filter_cookies(URL(地址)).items()
+            ):
                 值 = str(getattr(Morsel, "value", Morsel) or "").strip()
                 if 值:
                     Cookie字段[str(名称)] = 值
@@ -209,7 +217,9 @@ def _写入Cookie字段(字段: dict[str, tuple[str, str]], 名称: Any, 值: An
     字段[Cookie名称.lower()] = (Cookie名称, Cookie值)
 
 
-def _从CookieJSON提取(数据: Any, 字段: dict[str, tuple[str, str]], 域名: set[str]) -> None:
+def _从CookieJSON提取(
+    数据: Any, 字段: dict[str, tuple[str, str]], 域名: set[str]
+) -> None:
     if isinstance(数据, list):
         for 项目 in 数据:
             _从CookieJSON提取(项目, 字段, 域名)
@@ -249,7 +259,11 @@ def _提取Cookie候选文本(原文: str) -> list[str]:
         re.compile(r"(?:-H|--header)\s*(['\"])Cookie\s*:\s*(.*?)\1", re.I | re.S),
         re.compile(r"(?:-b|--cookie)\s*(['\"])(.*?)\1", re.I | re.S),
     ):
-        候选.extend(匹配.group(2).strip() for 匹配 in 模式.finditer(原文) if 匹配.group(2).strip())
+        候选.extend(
+            匹配.group(2).strip()
+            for 匹配 in 模式.finditer(原文)
+            if 匹配.group(2).strip()
+        )
     for 行 in 原文.splitlines():
         匹配 = re.match(r"^\s*Cookie\s*:\s*(.+)$", 行, re.I)
         if 匹配:
@@ -263,7 +277,7 @@ def _提取Cookie字段(文本: Any) -> tuple[dict[str, tuple[str, str]], set[st
     前缀匹配 = 平台前缀模式.match(原文)
     if 前缀匹配:
         指定平台 = _规范化平台名称(前缀匹配.group(1))
-        原文 = 原文[前缀匹配.end():].strip()
+        原文 = 原文[前缀匹配.end() :].strip()
 
     字段: dict[str, tuple[str, str]] = {}
     域名: set[str] = set()
@@ -277,7 +291,7 @@ def _提取Cookie字段(文本: Any) -> tuple[dict[str, tuple[str, str]], set[st
     for 行 in 原文.splitlines():
         处理行 = 行.strip()
         if 处理行.startswith("#HttpOnly_"):
-            处理行 = 处理行[len("#HttpOnly_"):]
+            处理行 = 处理行[len("#HttpOnly_") :]
         elif 处理行.startswith("#"):
             continue
         分段 = 处理行.split("\t")
@@ -371,7 +385,11 @@ def _读取保存的网盘Cookie(配置: Any, 平台: str) -> str:
         数据 = json.loads(原始值)
     except (TypeError, ValueError, json.JSONDecodeError):
         数据 = None
-    Cookie = str(数据.get("cookie") or "").strip() if isinstance(数据, dict) else str(原始值).strip()
+    Cookie = (
+        str(数据.get("cookie") or "").strip()
+        if isinstance(数据, dict)
+        else str(原始值).strip()
+    )
     解析结果 = 解析网盘Cookie(f"{平台} Cookie: {Cookie}")
     if not 解析结果 or 解析结果[0] != 平台:
         return ""
@@ -386,7 +404,9 @@ def 读取网盘Cookie(配置: Any, 平台: str, 配置Cookie: Any = "") -> str:
             if 保存Cookie:
                 return 保存Cookie
         except Exception as 异常:
-            logger.warning(f"{平台显示名[规范平台]}Cookie读取失败：error={type(异常).__name__}")
+            logger.warning(
+                f"{平台显示名[规范平台]}Cookie读取失败：error={type(异常).__name__}"
+            )
     配置原值 = str(配置Cookie or "").strip()
     if 规范平台 and 配置原值:
         解析结果 = 解析网盘Cookie(f"{规范平台} Cookie: {配置原值}")
@@ -415,7 +435,9 @@ def 持久化刷新后的网盘Cookie(
             return
         _保存网盘Cookie(配置, 规范平台, 解析结果[1])
     except Exception as 异常:
-        logger.warning(f"{平台显示名[规范平台]}Cookie刷新保存失败：error={type(异常).__name__}")
+        logger.warning(
+            f"{平台显示名[规范平台]}Cookie刷新保存失败：error={type(异常).__name__}"
+        )
 
 
 def _事件发送者标识(event: Any) -> str:
@@ -520,7 +542,9 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
         夸克扫码任务[发送者标识] = 任务
         return event.chain_result(
             [
-                Plain("已重新获取新的夸克登录二维码，请使用夸克网盘App扫码，5分钟内有效。"),
+                Plain(
+                    "已重新获取新的夸克登录二维码，请使用夸克网盘App扫码，5分钟内有效。"
+                ),
                 Image.fromBytes(二维码),
             ]
         )

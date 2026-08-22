@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import time
 from pathlib import Path
 from typing import Any
-
 
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 上传占用标记后缀 = ".uploading"
@@ -74,7 +73,9 @@ def 登记上传任务(缓存路径: str | Path, 文件名: str, 网盘名称: s
     return 任务路径
 
 
-def 更新上传任务(缓存路径: str | Path, 状态: str | None = None, **字段: Any) -> Path | None:
+def 更新上传任务(
+    缓存路径: str | Path, 状态: str | None = None, **字段: Any
+) -> Path | None:
     任务路径 = 获取上传任务路径(缓存路径)
     数据 = 读取上传任务(缓存路径)
     if 数据 is None:
@@ -124,7 +125,10 @@ def 获取待续传上传任务(缓存目录: str | Path | None = None) -> list[
             数据 = json.loads(任务路径.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
-        if not isinstance(数据, dict) or str(数据.get("state") or "") not in 上传任务状态:
+        if (
+            not isinstance(数据, dict)
+            or str(数据.get("state") or "") not in 上传任务状态
+        ):
             continue
         缓存路径 = Path(str(数据.get("cache_path") or ""))
         if 缓存路径.is_file():

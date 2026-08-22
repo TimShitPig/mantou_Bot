@@ -11,12 +11,13 @@ from typing import Any
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 检查运行状态数据库
 
-
 上次系统CPU采样: tuple[int, int] | None = None
 框架版本缓存: str | None = None
 
 
-def 处理状态指令(event: Any, 命令文本: str, 配置: Any, 插件版本: str = "") -> str | None:
+def 处理状态指令(
+    event: Any, 命令文本: str, 配置: Any, 插件版本: str = ""
+) -> str | None:
     if str(命令文本 or "").strip() != "状态":
         return None
     if not 是群文件清理管理员(event, 配置):
@@ -202,7 +203,9 @@ def 读取系统进程数() -> int | None:
                 timeout=3,
             )
             if 结果.returncode == 0:
-                return sum(1 for 行 in 结果.stdout.splitlines() if 行.lstrip().startswith('"'))
+                return sum(
+                    1 for 行 in 结果.stdout.splitlines() if 行.lstrip().startswith('"')
+                )
         except Exception:
             return None
     return None
@@ -345,7 +348,9 @@ def 读取Windows系统CPU计数器() -> tuple[int, int] | None:
             ctypes.POINTER(FILETIME),
         ]
         kernel32.GetSystemTimes.restype = wintypes.BOOL
-        if not kernel32.GetSystemTimes(ctypes.byref(空闲), ctypes.byref(内核), ctypes.byref(用户)):
+        if not kernel32.GetSystemTimes(
+            ctypes.byref(空闲), ctypes.byref(内核), ctypes.byref(用户)
+        ):
             return None
 
         def 转整数(值: FILETIME) -> int:
@@ -359,7 +364,7 @@ def 读取Windows系统CPU计数器() -> tuple[int, int] | None:
 
 
 def 格式化容量(字节数: int) -> str:
-    数值 = max(0, int(字节数)) / (1024 ** 3)
+    数值 = max(0, int(字节数)) / (1024**3)
     if 数值 >= 1:
         return f"{数值:.1f}G"
     数值 *= 1024

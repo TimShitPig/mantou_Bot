@@ -39,7 +39,6 @@ except Exception as exc:
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
-
 USER_ID = "6226157280"
 整本下载UID = "28382828"
 整本下载盐值 = "37e81a9d8f02596e1b895d07c171d5c9"
@@ -54,8 +53,14 @@ SEARCH_VERSION_NAME = "12.6.4.262"
 SEARCH_VERSION_CODE = "260609"
 SEARCH_SUB_VERSION = "sqrelease"
 SEARCH_NO_SIGN_KEYS = {
-    "sign", "key", "_public", "_reqid", "_beta", "_",
-    "X-NEBULAXMLHTTPREQUEST", "callbackUrl",
+    "sign",
+    "key",
+    "_public",
+    "_reqid",
+    "_beta",
+    "_",
+    "X-NEBULAXMLHTTPREQUEST",
+    "callbackUrl",
 }
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -88,7 +93,9 @@ class Book:
     is_short: bool = False
 
 
-def 获取书旗小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
+def 获取书旗小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[str] | None:
     链接 = 提取书旗链接(命令文本) or 提取事件书旗链接(event)
     if not 链接:
         return None
@@ -104,14 +111,18 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             ttl_dns_cache=300,
             keepalive_timeout=30,
         )
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout, connector=connector
+        ) as session:
             最终链接 = await 解析书旗短链(session, 链接)
             目标 = 解析书旗下载目标(最终链接)
             书籍 = await 获取书籍(session, 目标["book_id"], 目标["type"] == "short")
             if not 书籍.chapters:
                 raise ShuqiError("没有获取到章节目录")
             if 书籍.chapter_num and len(书籍.chapters) != 书籍.chapter_num:
-                raise ShuqiError(f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}")
+                raise ShuqiError(
+                    f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}"
+                )
 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
@@ -123,7 +134,9 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             章节内容 = await 下载全部章节(session, 书籍)
             成功数 = sum(1 for 项 in 章节内容 if 项.get("content"))
             if 成功数 != len(书籍.chapters):
-                raise ShuqiError(f"章节正文不完整：success={成功数}, total={len(书籍.chapters)}")
+                raise ShuqiError(
+                    f"章节正文不完整：success={成功数}, total={len(书籍.chapters)}"
+                )
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
             logger.info(
                 f"书旗小说章节下载完成：书籍编号={书籍.book_id}, "
@@ -139,14 +152,18 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             作者=书籍.author_name,
         )
         if 发送结果.get("sent"):
-            启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+            启动百度后台上传并清理源文件(
+                配置, 发送结果.get("source_cache_path"), 文件名
+            )
             return
         降级文本 = str(发送结果.get("fallback_text") or "")
         if 降级文本:
             try:
                 yield 降级文本
             finally:
-                启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                启动百度后台上传并清理源文件(
+                    配置, 发送结果.get("source_cache_path"), 文件名
+                )
             return
         logger.warning(
             f"书旗小说完成消息发送失败：书籍编号={书籍.book_id}, "
@@ -211,10 +228,13 @@ def _搜索签名参数(params: dict[str, Any]) -> dict[str, str]:
     结果["sqSv"] = "1.0"
     结果["key"] = "sq_app_gateway"
     待签名 = {键: 值 for 键, 值 in 结果.items() if 键 not in SEARCH_NO_SIGN_KEYS}
-    原文 = "".join(
-        f"{键}={urllib.parse.quote_plus(待签名[键], safe='*-._')}&"
-        for 键 in sorted(待签名)
-    ) + f"skey={SEARCH_GATEWAY_KEY}"
+    原文 = (
+        "".join(
+            f"{键}={urllib.parse.quote_plus(待签名[键], safe='*-._')}&"
+            for 键 in sorted(待签名)
+        )
+        + f"skey={SEARCH_GATEWAY_KEY}"
+    )
     结果["sign"] = hashlib.md5(原文.encode("utf-8")).hexdigest()
     return 结果
 
@@ -231,7 +251,9 @@ async def _请求搜索接口(
         "Accept-Encoding": "identity",
     }
     请求地址 = f"{url}?_reqid={_搜索请求ID()}"
-    async with session.post(请求地址, data=_搜索签名参数(参数), headers=headers) as resp:
+    async with session.post(
+        请求地址, data=_搜索签名参数(参数), headers=headers
+    ) as resp:
         文本 = await resp.text(errors="ignore")
         if resp.status >= 400:
             raise ShuqiError(f"搜索接口 HTTP {resp.status}")
@@ -247,16 +269,23 @@ async def _请求搜索接口(
 def _从搜索对象提取书籍(obj: dict[str, Any]) -> dict[str, Any] | None:
     书籍编号 = str(obj.get("bookId") or obj.get("bid") or obj.get("id") or "").strip()
     标题 = 清理网页文本(
-        obj.get("bookName") or obj.get("displayBookName") or obj.get("title") or obj.get("name")
+        obj.get("bookName")
+        or obj.get("displayBookName")
+        or obj.get("title")
+        or obj.get("name")
     )
     if not 书籍编号.isdigit() or not 标题:
         return None
     return {
         "book_id": 书籍编号,
         "title": 标题,
-        "author": 清理网页文本(obj.get("authorName") or obj.get("author") or "未知") or "未知",
+        "author": 清理网页文本(obj.get("authorName") or obj.get("author") or "未知")
+        or "未知",
         "score": obj.get("novelScore") or obj.get("score") or 0,
-        "word_count": obj.get("wordCount") or obj.get("words") or obj.get("word_count") or 0,
+        "word_count": obj.get("wordCount")
+        or obj.get("words")
+        or obj.get("word_count")
+        or 0,
         "read_count": max(
             安全整数(obj.get("readCount"), 0),
             安全整数(obj.get("hotValue"), 0),
@@ -273,7 +302,8 @@ def _遍历搜索结果(obj: Any, 结果: list[dict[str, Any]], 已记录: set[s
         书籍 = _从搜索对象提取书籍(书籍对象)
         if 书籍 and 书籍["book_id"] not in 已记录:
             if 书籍对象 is not obj or any(
-                键 in obj for 键 in ("bookId", "bookName", "displayBookName", "authorName")
+                键 in obj
+                for 键 in ("bookId", "bookName", "displayBookName", "authorName")
             ):
                 已记录.add(书籍["book_id"])
                 结果.append(书籍)
@@ -304,7 +334,9 @@ async def 搜索小说(
             "showMore": "0",
             "showPost": "0",
             "showTypes": "",
-            "pagination": json.dumps({"page": 页码, "pageSize": 20}, ensure_ascii=False),
+            "pagination": json.dumps(
+                {"page": 页码, "pageSize": 20}, ensure_ascii=False
+            ),
             "isTeenMode": "0",
         }
         数据 = await _请求搜索接口(session, SEARCH_URL, 参数)
@@ -351,7 +383,9 @@ async def 搜索联想(session: aiohttp.ClientSession, 关键词: str) -> list[s
     return 建议[:8]
 
 
-async def 获取书籍(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> Book:
+async def 获取书籍(
+    session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False
+) -> Book:
     时间戳 = str(int(time.time()))
     目录任务 = 请求JSON(
         session,
@@ -395,13 +429,19 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
             章节编号 = str(项.get("chapterId") or "").strip()
             if not 章节编号:
                 continue
-            章节列表.append(Chapter(
-                index=len(章节列表) + 1,
-                chapter_id=章节编号,
-                name=清理网页文本(项.get("chapterName") or f"第{len(章节列表) + 1}章"),
-                content_url="",
-                word_count=安全整数(项.get("wordCount") or 项.get("chapterWordCount"), 0),
-            ))
+            章节列表.append(
+                Chapter(
+                    index=len(章节列表) + 1,
+                    chapter_id=章节编号,
+                    name=清理网页文本(
+                        项.get("chapterName") or f"第{len(章节列表) + 1}章"
+                    ),
+                    content_url="",
+                    word_count=安全整数(
+                        项.get("wordCount") or 项.get("chapterWordCount"), 0
+                    ),
+                )
+            )
 
     if not 章节列表:
         raise ShuqiError("目录章节为空")
@@ -420,7 +460,9 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
     )
 
 
-async def 下载全部章节(session: aiohttp.ClientSession, 书籍: Book) -> list[dict[str, str]]:
+async def 下载全部章节(
+    session: aiohttp.ClientSession, 书籍: Book
+) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
     下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
     if not 总数 or not 下载地址:
@@ -468,10 +510,7 @@ def m9en(明文: str) -> bytes:
     for 索引, 字节 in enumerate(明文字节):
         位置 = 索引 & 7
         if 位置 == 0:
-            状态 = [
-                (状态[i] + 密钥[i + 8] + 加法表[i]) & 255
-                for i in range(8)
-            ]
+            状态 = [(状态[i] + 密钥[i + 8] + 加法表[i]) & 255 for i in range(8)]
         加密字节 = 字节 ^ 状态[位置]
         输出.append(加密字节)
         校验 ^= 字节
@@ -495,10 +534,7 @@ def m9de(密文: bytes, 密钥: bytes) -> bytes | None:
     for 索引, 字节 in enumerate(密文[8:-2]):
         位置 = 索引 & 7
         if 位置 == 0:
-            状态 = [
-                (状态[i] + 密钥[i + 8] + 加法表[i]) & 255
-                for i in range(8)
-            ]
+            状态 = [(状态[i] + 密钥[i + 8] + 加法表[i]) & 255 for i in range(8)]
         明文字节 = 字节 ^ 状态[位置]
         输出.append(明文字节)
         校验 ^= 明文字节
@@ -537,7 +573,9 @@ async def 获取整本下载地址(
     参数 = {
         "bookId": base64.b64encode(m9en(书籍编号)).decode(),
         "timestamp": 时间戳,
-        "sign": hashlib.md5(f"{书籍编号}{时间戳}1{uid}{整本下载盐值}".encode()).hexdigest(),
+        "sign": hashlib.md5(
+            f"{书籍编号}{时间戳}1{uid}{整本下载盐值}".encode()
+        ).hexdigest(),
         "user_id": base64.b64encode(m9en(uid)).decode(),
         "type": "1",
         "reqEncryptType": "1",
@@ -578,7 +616,9 @@ def 解析书旗压缩包(压缩包: bytes, 书籍: Book) -> list[dict[str, str]
                 正文 = 解密正文.decode("utf-8", errors="ignore")
                 正文 = 正文.replace("<br/>", "\n")
                 正文 = html.unescape(正文).replace("\r\n", "\n").replace("\r", "\n")
-                正文 = "\n".join(行.lstrip(" \u3000") for 行 in 正文.split("\n")).strip()
+                正文 = "\n".join(
+                    行.lstrip(" \u3000") for 行 in 正文.split("\n")
+                ).strip()
                 if 正文:
                     内容按章节[信息.filename[:-4]] = 正文
     except zipfile.BadZipFile as exc:
@@ -636,12 +676,14 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     for 章节 in 章节内容:
         标题 = str(章节.get("title") or "")
         正文 = 去除章节正文重复标题(标题, 章节.get("content"))
-        内容列表.extend([
-            标题,
-            "",
-            正文,
-            "",
-        ])
+        内容列表.extend(
+            [
+                标题,
+                "",
+                正文,
+                "",
+            ]
+        )
     return 文件名, "\r\n".join(内容列表).encode("utf-8")
 
 
@@ -652,15 +694,17 @@ def 生成小说文件名(书籍: Book) -> str:
 
 
 def 格式化下载提示(书籍: Book) -> str:
-    return "\n".join([
-        f"书名：{书籍.book_name or '未知'}",
-        f"作者：{书籍.author_name or '未知'}",
-        f"状态：{获取状态文本(书籍)}",
-        f"章节：{len(书籍.chapters)} 章",
-        f"字数：{格式化字数(书籍.word_count)}",
-        "",
-        "正在下载中请稍等.....",
-    ])
+    return "\n".join(
+        [
+            f"书名：{书籍.book_name or '未知'}",
+            f"作者：{书籍.author_name or '未知'}",
+            f"状态：{获取状态文本(书籍)}",
+            f"章节：{len(书籍.chapters)} 章",
+            f"字数：{格式化字数(书籍.word_count)}",
+            "",
+            "正在下载中请稍等.....",
+        ]
+    )
 
 
 def 获取状态文本(书籍: Book) -> str:
@@ -715,7 +759,12 @@ async def 准备发送文本文件给当前会话(
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     if 小说网盘 is None:
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说网盘模块未加载",
+        }
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
@@ -725,7 +774,12 @@ async def 准备发送文本文件给当前会话(
                 f"文件={文件名}, 错误={网盘结果.get('error')}"
             )
             删除下载缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": str(网盘结果.get("error") or "小说网盘未启用"),
+            }
         完成结果 = await 小说网盘.发送小说下载完成链接(
             event,
             书名,
@@ -733,17 +787,41 @@ async def 准备发送文本文件给当前会话(
             str(网盘结果.get("share_url") or ""),
         )
         if 完成结果.get("sent"):
-            logger.info(f"书旗小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            logger.info(
+                f"书旗小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}"
+            )
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": str(完成结果.get("error") or ""),
+            }
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(完成结果.get("error") or "完成按钮发送失败"),
+        }
     except Exception as exc:
-        logger.warning(f"书旗小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}")
+        logger.warning(
+            f"书旗小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}"
+        )
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(exc),
+        }
 
 
 def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
@@ -757,11 +835,17 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
                 if 百度结果.get("success"):
                     logger.info(f"书旗小说百度网盘后台上传成功：文件={文件名}")
                 elif 百度结果.get("skipped"):
-                    logger.info(f"书旗小说百度网盘后台上传按状态规则跳过：文件={文件名}")
+                    logger.info(
+                        f"书旗小说百度网盘后台上传按状态规则跳过：文件={文件名}"
+                    )
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"书旗小说百度网盘后台上传失败，不影响主分享：文件={文件名}, 错误={百度结果.get('error')}")
+                    logger.warning(
+                        f"书旗小说百度网盘后台上传失败，不影响主分享：文件={文件名}, 错误={百度结果.get('error')}"
+                    )
         except Exception as exc:
-            logger.warning(f"书旗小说百度网盘后台上传异常，不影响主分享：文件={文件名}, 错误={exc}")
+            logger.warning(
+                f"书旗小说百度网盘后台上传异常，不影响主分享：文件={文件名}, 错误={exc}"
+            )
         finally:
             删除下载缓存文件(源缓存路径)
 
@@ -818,10 +902,15 @@ async def 解析书旗短链(session: aiohttp.ClientSession, 链接: str) -> str
     文本 = str(链接 or "").strip()
     if not re.search(r"https?://d\.shuqi\.com/[^\s'\"<>，。]+", 文本, re.I):
         return 文本
-    headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*"}
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,*/*",
+    }
     for 方法 in ("HEAD", "GET"):
         try:
-            async with session.request(方法, 文本, headers=headers, allow_redirects=True) as resp:
+            async with session.request(
+                方法, 文本, headers=headers, allow_redirects=True
+            ) as resp:
                 最终链接 = str(resp.url)
                 if 提取书籍编号(最终链接):
                     return 最终链接
@@ -896,7 +985,7 @@ def 清理网页文本(文本: Any) -> str:
 
 
 def 清理文件名(文件名: Any) -> str:
-    return (re.sub(r'[\\/:*?"<>|]', "_", str(文件名 or "")).strip()[:80] or "书旗小说")
+    return re.sub(r'[\\/:*?"<>|]', "_", str(文件名 or "")).strip()[:80] or "书旗小说"
 
 
 def 安全整数(值: Any, 默认值: int = 0) -> int:

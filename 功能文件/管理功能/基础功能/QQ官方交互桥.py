@@ -118,9 +118,7 @@ async def _投递帮助回调(客户端: Any, 交互: Any, 数据: str, 适配�
 
     群号 = str(_读取字段(交互, "group_openid") or "").strip()
     用户 = str(
-        _读取字段(交互, "group_member_openid")
-        or _读取字段(交互, "user_openid")
-        or ""
+        _读取字段(交互, "group_member_openid") or _读取字段(交互, "user_openid") or ""
     ).strip()
     if not 用户:
         raise RuntimeError("互动事件缺少用户标识")
@@ -249,9 +247,7 @@ def _记录群成员加入诊断(
         意图值 = _读取字段(意图, "value")
         客户端意图值 = _读取字段(客户端, "intents")
         意图值文本 = str(int(意图值)) if 意图值 is not None else "None"
-        客户端意图文本 = (
-            str(int(客户端意图值)) if 客户端意图值 is not None else "None"
-        )
+        客户端意图文本 = str(int(客户端意图值)) if 客户端意图值 is not None else "None"
     except (TypeError, ValueError):
         意图值文本 = "invalid"
         客户端意图文本 = "invalid"
@@ -457,9 +453,7 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
     )
     群号 = str(事件数据.get("group_openid") or "").strip()
     成员 = str(
-        事件数据.get("member_openid")
-        or 事件数据.get("op_member_openid")
-        or ""
+        事件数据.get("member_openid") or 事件数据.get("op_member_openid") or ""
     ).strip()
     用户 = str(事件数据.get("user_openid") or "").strip()
     if not 群号 or not 成员:
@@ -472,7 +466,10 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
 
     if 用户:
         try:
-            from 功能文件.管理功能.群聊功能.群列表工具 import 记录机器人所在群号, 记录官方群成员映射
+            from 功能文件.管理功能.群聊功能.群列表工具 import (
+                记录官方群成员映射,
+                记录机器人所在群号,
+            )
 
             记录机器人所在群号(群号)
             记录官方群成员映射(群号, 用户, 成员)
@@ -721,7 +718,9 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:
-        from astrbot.core.platform.sources.qqofficial import qqofficial_platform_adapter as 适配器模块
+        from astrbot.core.platform.sources.qqofficial import (
+            qqofficial_platform_adapter as 适配器模块,
+        )
     except Exception as 异常:
         logger.warning("QQ官方帮助回调桥加载失败：error_type=%s", type(异常).__name__)
         return False

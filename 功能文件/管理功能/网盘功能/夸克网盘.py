@@ -13,8 +13,10 @@ from typing import Any
 import aiohttp
 from astrbot.api import logger
 
-from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie, 持久化刷新后的网盘Cookie
-
+from 功能文件.管理功能.网盘功能.网盘Cookie import (
+    持久化刷新后的网盘Cookie,
+    读取网盘Cookie,
+)
 
 基础接口地址 = "https://drive-pc.quark.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -61,7 +63,9 @@ class 夸克网盘客户端:
             await self.session.close()
             self.session = None
 
-    async def 上传文件并创建分享(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
+    async def 上传文件并创建分享(
+        self, 本地路径: str | Path, 文件名: str, 上传目录: str
+    ) -> str:
         目录ID = await self.确保目录路径(上传目录)
         await self.删除同名普通文件(文件名, 目录ID)
         文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
@@ -114,7 +118,9 @@ class 夸克网盘客户端:
         文件ID列表 = [
             读取文件ID(项目)
             for 项目 in await self.列出目录全部项目(父目录ID)
-            if not 是文件夹项目(项目) and 读取文件名(项目) == 文件名 and 读取文件ID(项目)
+            if not 是文件夹项目(项目)
+            and 读取文件名(项目) == 文件名
+            and 读取文件ID(项目)
         ]
         if not 文件ID列表:
             return
@@ -129,10 +135,14 @@ class 夸克网盘客户端:
         任务ID = str(返回数据.get("task_id") or "")
         if 任务ID:
             任务数据 = await self.轮询任务(任务ID)
-            任务结果 = 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            任务结果 = (
+                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            )
             if 安全整数(任务结果.get("status"), -1) != 2:
                 raise RuntimeError("夸克网盘删除同名旧文件任务未完成")
-        logger.debug(f"夸克网盘上传前已删除同名旧文件：file={文件名}, count={len(文件ID列表)}")
+        logger.debug(
+            f"夸克网盘上传前已删除同名旧文件：file={文件名}, count={len(文件ID列表)}"
+        )
 
     async def 列出目录全部项目(self, 父目录ID: str) -> list[dict[str, Any]]:
         结果: list[dict[str, Any]] = []
@@ -184,7 +194,9 @@ class 夸克网盘客户端:
         )
         if not 接口成功(预上传数据):
             raise RuntimeError(f"夸克网盘预上传失败：{限制文本长度(预上传数据)}")
-        上传参数 = 预上传数据.get("data") if isinstance(预上传数据.get("data"), dict) else {}
+        上传参数 = (
+            预上传数据.get("data") if isinstance(预上传数据.get("data"), dict) else {}
+        )
         任务ID = str(上传参数.get("task_id") or "")
         对象键 = str(上传参数.get("obj_key") or "")
         存储桶 = str(上传参数.get("bucket") or "")
@@ -197,7 +209,9 @@ class 夸克网盘客户端:
             "/file/update/hash",
             json_data={"task_id": 任务ID, "md5": MD5, "sha1": SHA1},
         )
-        秒传结果 = 秒传数据.get("data") if isinstance(秒传数据.get("data"), dict) else {}
+        秒传结果 = (
+            秒传数据.get("data") if isinstance(秒传数据.get("data"), dict) else {}
+        )
         if 接口成功(秒传数据) and 解析布尔值(秒传结果.get("finish")):
             文件ID = 读取文件ID(秒传结果)
             return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
@@ -214,7 +228,9 @@ class 夸克网盘客户端:
         文件ID = 读取文件ID(完成数据.get("data"))
         return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
 
-    async def 上传OSS单分片(self, 路径: Path, MD5: str, 上传参数: dict[str, Any]) -> str:
+    async def 上传OSS单分片(
+        self, 路径: Path, MD5: str, 上传参数: dict[str, Any]
+    ) -> str:
         当前时间 = formatdate(usegmt=True)
         存储桶 = str(上传参数.get("bucket") or "")
         对象键 = str(上传参数.get("obj_key") or "")
@@ -236,12 +252,16 @@ class 夸克网盘客户端:
             "x-oss-user-agent": OSS用户代理,
             "content-type": 内容类型,
         }
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)) as 会话:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
+        ) as 会话:
             with 路径.open("rb") as 文件:
                 async with 会话.put(地址, data=文件, headers=请求头) as 响应:
                     响应文本 = await 响应.text()
                     if 响应.status not in (200, 201):
-                        raise RuntimeError(f"夸克网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}")
+                        raise RuntimeError(
+                            f"夸克网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
+                        )
                     return 提取ETag(响应.headers) or MD5
 
     async def 完成OSS单分片(self, ETag: str, 上传参数: dict[str, Any]) -> None:
@@ -290,10 +310,15 @@ class 夸克网盘客户端:
             async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
                 响应文本 = await 响应.text()
                 if 响应.status == 203 and "CallbackFailed" in 响应文本:
-                    logger.warning("夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s", 响应.status)
+                    logger.warning(
+                        "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
+                        响应.status,
+                    )
                     return
                 if 响应.status not in (200, 201):
-                    raise RuntimeError(f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}")
+                    raise RuntimeError(
+                        f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
+                    )
 
     async def 获取上传鉴权(self, 上传参数: dict[str, Any], 鉴权元数据: str) -> str:
         数据 = await self.请求JSON(
@@ -330,7 +355,12 @@ class 夸克网盘客户端:
             "POST",
             "/share",
             params={"uc_param_str": ""},
-            json_data={"fid_list": [文件ID], "title": 文件名, "url_type": 1, "expired_type": 1},
+            json_data={
+                "fid_list": [文件ID],
+                "title": 文件名,
+                "url_type": 1,
+                "expired_type": 1,
+            },
         )
         if not 接口成功(数据):
             raise RuntimeError(f"夸克网盘创建分享失败：{限制文本长度(数据)}")
@@ -345,13 +375,17 @@ class 夸克网盘客户端:
             直接链接 = 提取分享链接(任务数据)
             if 直接链接:
                 return 直接链接
-            任务结果 = 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            任务结果 = (
+                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            )
             分享ID = str(任务结果.get("share_id") or 分享ID)
         分享链接 = await self.等待分享短链接(分享ID, 文件ID)
         if 分享链接:
             return 分享链接
         if 分享ID:
-            密码数据 = await self.请求JSON("POST", "/share/password", json_data={"share_id": 分享ID})
+            密码数据 = await self.请求JSON(
+                "POST", "/share/password", json_data={"share_id": 分享ID}
+            )
             return 提取分享链接(密码数据)
         return ""
 
@@ -363,7 +397,9 @@ class 夸克网盘客户端:
                 "/task",
                 params={"task_id": 任务ID, "retry_index": 尝试次数},
             )
-            任务数据 = 最后数据.get("data") if isinstance(最后数据.get("data"), dict) else {}
+            任务数据 = (
+                最后数据.get("data") if isinstance(最后数据.get("data"), dict) else {}
+            )
             if 安全整数(任务数据.get("status"), -1) == 2:
                 return 最后数据
             await asyncio.sleep(1)
@@ -390,7 +426,11 @@ class 夸克网盘客户端:
                     当前分享ID = str(项目.get("share_id") or "")
                     首文件ID = str(项目.get("first_fid") or "")
                     文件ID列表 = {str(值) for 值 in (项目.get("fid_list") or [])}
-                    if (分享ID and 当前分享ID == 分享ID) or 文件ID == 首文件ID or 文件ID in 文件ID列表:
+                    if (
+                        (分享ID and 当前分享ID == 分享ID)
+                        or 文件ID == 首文件ID
+                        or 文件ID in 文件ID列表
+                    ):
                         链接 = 提取分享链接(项目)
                         if 链接:
                             return 链接
@@ -413,11 +453,15 @@ class 夸克网盘客户端:
             文本 = await 响应.text()
             self.刷新会话Cookie(响应)
             if 响应.status >= 400:
-                raise RuntimeError(f"夸克网盘HTTP {响应.status}：{限制文本长度(文本, 200)}")
+                raise RuntimeError(
+                    f"夸克网盘HTTP {响应.status}：{限制文本长度(文本, 200)}"
+                )
             try:
                 数据 = json.loads(文本)
             except Exception as 异常:
-                raise RuntimeError(f"夸克网盘JSON解析失败：{限制文本长度(文本, 200)}") from 异常
+                raise RuntimeError(
+                    f"夸克网盘JSON解析失败：{限制文本长度(文本, 200)}"
+                ) from 异常
             if not isinstance(数据, dict):
                 raise RuntimeError("夸克网盘返回格式不是对象")
             return 数据
@@ -442,24 +486,54 @@ class 夸克网盘客户端:
         return self.session
 
 
-async def 上传小说并获取分享链接(配置: Any, 源缓存路径: str | Path, 文件名: str) -> dict[str, Any]:
+async def 上传小说并获取分享链接(
+    配置: Any, 源缓存路径: str | Path, 文件名: str
+) -> dict[str, Any]:
     if not 夸克网盘是否启用(配置):
-        return {"enabled": False, "success": False, "share_url": "", "provider": "夸克网盘", "error": ""}
+        return {
+            "enabled": False,
+            "success": False,
+            "share_url": "",
+            "provider": "夸克网盘",
+            "error": "",
+        }
     路径 = Path(源缓存路径)
     if not 路径.is_file():
         logger.warning(f"夸克网盘上传分享失败：file={文件名}, error=本地文件不存在")
-        return {"enabled": True, "success": False, "share_url": "", "provider": "夸克网盘", "error": "本地文件不存在"}
+        return {
+            "enabled": True,
+            "success": False,
+            "share_url": "",
+            "provider": "夸克网盘",
+            "error": "本地文件不存在",
+        }
     Cookie = 读取夸克网盘Cookie(配置)
     客户端 = 夸克网盘客户端(Cookie)
     try:
         async with 客户端:
-            分享链接 = await 客户端.上传文件并创建分享(路径, 文件名, 读取夸克上传目录(配置))
-        return {"enabled": True, "success": True, "share_url": 分享链接, "provider": "夸克网盘", "error": ""}
+            分享链接 = await 客户端.上传文件并创建分享(
+                路径, 文件名, 读取夸克上传目录(配置)
+            )
+        return {
+            "enabled": True,
+            "success": True,
+            "share_url": 分享链接,
+            "provider": "夸克网盘",
+            "error": "",
+        }
     except Exception as 异常:
         logger.warning(f"夸克网盘上传分享失败：file={文件名}, error={异常}")
-        return {"enabled": True, "success": False, "share_url": "", "provider": "夸克网盘", "error": str(异常)}
+        return {
+            "enabled": True,
+            "success": False,
+            "share_url": "",
+            "provider": "夸克网盘",
+            "error": str(异常),
+        }
     finally:
-        await asyncio.to_thread(持久化刷新后的网盘Cookie, 配置, "夸克", Cookie, 客户端.cookie)
+        await asyncio.to_thread(
+            持久化刷新后的网盘Cookie, 配置, "夸克", Cookie, 客户端.cookie
+        )
 
 
 def 夸克网盘是否启用(配置: Any) -> bool:
@@ -472,7 +546,10 @@ def 读取夸克网盘Cookie(配置: Any) -> str:
 
 
 def 读取夸克上传目录(配置: Any) -> str:
-    return str(读取配置字段(配置, "quark_pan_upload_dir") or 默认上传目录).strip() or 默认上传目录
+    return (
+        str(读取配置字段(配置, "quark_pan_upload_dir") or 默认上传目录).strip()
+        or 默认上传目录
+    )
 
 
 def 读取配置字段(配置: Any, 字段名: str) -> Any:
@@ -523,7 +600,11 @@ def 计算文件哈希(路径: Path) -> tuple[str, str]:
 
 
 def 拆分上传目录(上传目录: str) -> list[str]:
-    return [片段.strip() for 片段 in str(上传目录 or 默认上传目录).replace("\\", "/").split("/") if 片段.strip()]
+    return [
+        片段.strip()
+        for 片段 in str(上传目录 or 默认上传目录).replace("\\", "/").split("/")
+        if 片段.strip()
+    ]
 
 
 def 接口成功(数据: Any) -> bool:
@@ -632,7 +713,9 @@ def 规范化回调文本(值: Any) -> str:
         if 是回调JSON对象(值):
             return 值
         try:
-            已解码文本 = base64.b64decode(值.strip().encode("ascii"), validate=True).decode("utf-8")
+            已解码文本 = base64.b64decode(
+                值.strip().encode("ascii"), validate=True
+            ).decode("utf-8")
         except (UnicodeDecodeError, ValueError):
             return 值
         if 是回调JSON对象(已解码文本):
@@ -646,7 +729,9 @@ def 是回调JSON对象(文本: str) -> bool:
         数据 = json.loads(文本)
     except (TypeError, ValueError):
         return False
-    return isinstance(数据, dict) and bool(数据.get("callbackUrl") or 数据.get("callback_url"))
+    return isinstance(数据, dict) and bool(
+        数据.get("callbackUrl") or 数据.get("callback_url")
+    )
 
 
 def 提取ETag(响应头: Any) -> str:
@@ -663,7 +748,11 @@ def 计算等待秒数(尝试次数: int) -> float:
 
 def 限制文本长度(值: Any, 长度: int = 500) -> str:
     try:
-        文本 = json.dumps(值, ensure_ascii=False) if isinstance(值, (dict, list)) else str(值)
+        文本 = (
+            json.dumps(值, ensure_ascii=False)
+            if isinstance(值, (dict, list))
+            else str(值)
+        )
     except Exception:
         文本 = str(type(值).__name__)
     return 文本[:长度]

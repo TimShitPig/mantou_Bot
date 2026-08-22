@@ -48,28 +48,85 @@ except Exception:
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 QM参数字符映射 = {
-    "+": "P", "/": "X", "0": "M", "1": "U", "2": "l", "3": "E", "4": "r", "5": "Y",
-    "6": "W", "7": "b", "8": "d", "9": "J", "A": "9", "B": "s", "C": "a", "D": "I",
-    "E": "0", "F": "o", "G": "y", "H": "_", "I": "H", "J": "G", "K": "i", "L": "t",
-    "M": "g", "N": "N", "O": "A", "P": "8", "Q": "F", "R": "k", "S": "3", "T": "h",
-    "U": "f", "V": "R", "W": "q", "X": "C", "Y": "4", "Z": "p", "a": "m", "b": "B",
-    "c": "O", "d": "u", "e": "c", "f": "6", "g": "K", "h": "x", "i": "5", "j": "T",
-    "k": "-", "l": "2", "m": "z", "n": "S", "o": "Z", "p": "1", "q": "V", "r": "v",
-    "s": "j", "t": "Q", "u": "7", "v": "D", "w": "w", "x": "n", "y": "L", "z": "e",
+    "+": "P",
+    "/": "X",
+    "0": "M",
+    "1": "U",
+    "2": "l",
+    "3": "E",
+    "4": "r",
+    "5": "Y",
+    "6": "W",
+    "7": "b",
+    "8": "d",
+    "9": "J",
+    "A": "9",
+    "B": "s",
+    "C": "a",
+    "D": "I",
+    "E": "0",
+    "F": "o",
+    "G": "y",
+    "H": "_",
+    "I": "H",
+    "J": "G",
+    "K": "i",
+    "L": "t",
+    "M": "g",
+    "N": "N",
+    "O": "A",
+    "P": "8",
+    "Q": "F",
+    "R": "k",
+    "S": "3",
+    "T": "h",
+    "U": "f",
+    "V": "R",
+    "W": "q",
+    "X": "C",
+    "Y": "4",
+    "Z": "p",
+    "a": "m",
+    "b": "B",
+    "c": "O",
+    "d": "u",
+    "e": "c",
+    "f": "6",
+    "g": "K",
+    "h": "x",
+    "i": "5",
+    "j": "T",
+    "k": "-",
+    "l": "2",
+    "m": "z",
+    "n": "S",
+    "o": "Z",
+    "p": "1",
+    "q": "V",
+    "r": "v",
+    "s": "j",
+    "t": "Q",
+    "u": "7",
+    "v": "D",
+    "w": "w",
+    "x": "n",
+    "y": "L",
+    "z": "e",
 }
 
 
-def 获取七猫小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
-    下载关键词 = (
-        提取直接七猫链接参数(命令文本)
-        or 提取事件七猫链接(event)
-    )
+def 获取七猫小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[str] | None:
+    下载关键词 = 提取直接七猫链接参数(命令文本) or 提取事件七猫链接(event)
     if 下载关键词 is None:
         return None
     return 生成下载回复流(event, 下载关键词, 配置)
 
 
-async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) -> AsyncIterator[str]:
+async def 生成下载回复流(
+    event: Any, 关键词: str, 配置: Any = None
+) -> AsyncIterator[str]:
     if not 关键词:
         yield "没有识别到七猫小说链接"
         return
@@ -86,7 +143,9 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             keepalive_timeout=30,
         )
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout, connector=connector
+        ) as session:
             下载目标 = await 解析七猫下载目标(session, 关键词)
             书籍编号 = 下载目标.get("book_id", "")
             if not 书籍编号:
@@ -97,11 +156,21 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             详情 = await 获取小说详情(session, 书籍编号, 是否短篇)
             目录 = await 获取小说目录(session, 书籍编号, 是否短篇)
             if not 目录:
-                logger.warning(f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录")
+                logger.warning(
+                    f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录"
+                )
                 yield "下载失败"
                 return
             if not str(详情.get("words_num") or "").strip():
-                目录字数 = sum(安全整数(章节.get("words") or 章节.get("word_count") or 章节.get("chapter_words"), 0) for 章节 in 目录)
+                目录字数 = sum(
+                    安全整数(
+                        章节.get("words")
+                        or 章节.get("word_count")
+                        or 章节.get("chapter_words"),
+                        0,
+                    )
+                    for 章节 in 目录
+                )
                 if 目录字数:
                     详情["words_num"] = str(目录字数)
             if not str(详情.get("chapters") or "").strip():
@@ -117,7 +186,9 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录, 是否短篇)
             成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
             if not 成功章节:
-                logger.warning(f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到可用章节正文")
+                logger.warning(
+                    f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到可用章节正文"
+                )
                 yield "下载失败"
                 return
 
@@ -135,16 +206,22 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
                 作者=详情.get("author"),
             )
             if 发送结果.get("sent"):
-                启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                启动百度后台上传并清理源文件(
+                    配置, 发送结果.get("source_cache_path"), 文件名
+                )
                 return
             降级文本 = str(发送结果.get("fallback_text") or "")
             if 降级文本:
                 try:
                     yield 降级文本
                 finally:
-                    启动百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                    启动百度后台上传并清理源文件(
+                        配置, 发送结果.get("source_cache_path"), 文件名
+                    )
                 return
-            logger.warning(f"七猫小说完成消息发送失败：书籍编号={书籍编号}, 文件={文件名}, 错误={发送结果.get('error')}")
+            logger.warning(
+                f"七猫小说完成消息发送失败：书籍编号={书籍编号}, 文件={文件名}, 错误={发送结果.get('error')}"
+            )
             yield "文件发送失败，请稍后再试"
             return
     except Exception as exc:
@@ -152,17 +229,25 @@ async def 生成下载回复流(event: Any, 关键词: str, 配置: Any = None) 
         yield "下载失败"
         return
 
+
 async def 搜索小说(session: aiohttp.ClientSession, 关键词: str) -> list[dict[str, Any]]:
-    参数 = 签名参数({
-        "extend": "",
-        "tab": "0",
-        "gender": "0",
-        "refresh_state": "8",
-        "page": "1",
-        "wd": 关键词,
-        "is_short_story_user": "0",
-    })
-    数据 = await 请求JSON(session, "https://api-bc.wtzw.com/search/v1/words", 参数, 生成请求头("00000000", "api-bc.wtzw.com"))
+    参数 = 签名参数(
+        {
+            "extend": "",
+            "tab": "0",
+            "gender": "0",
+            "refresh_state": "8",
+            "page": "1",
+            "wd": 关键词,
+            "is_short_story_user": "0",
+        }
+    )
+    数据 = await 请求JSON(
+        session,
+        "https://api-bc.wtzw.com/search/v1/words",
+        参数,
+        生成请求头("00000000", "api-bc.wtzw.com"),
+    )
     书籍列表 = 读取字段路径(数据, ("data", "books"))
     return [书籍 for 书籍 in (书籍列表 or []) if isinstance(书籍, dict)]
 
@@ -177,7 +262,9 @@ async def 解析书籍编号(session: aiohttp.ClientSession, 关键词: str) -> 
     return str(搜索结果[0].get("id") or "")
 
 
-async def 解析七猫下载目标(session: aiohttp.ClientSession, 关键词: str) -> dict[str, str]:
+async def 解析七猫下载目标(
+    session: aiohttp.ClientSession, 关键词: str
+) -> dict[str, str]:
     链接类型 = 解析七猫链接类型(关键词)
     链接编号 = 提取书籍编号(关键词)
     if 链接编号:
@@ -188,7 +275,9 @@ async def 解析七猫下载目标(session: aiohttp.ClientSession, 关键词: st
     return {"book_id": str(搜索结果[0].get("id") or ""), "type": 链接类型}
 
 
-async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> dict[str, Any]:
+async def 获取小说详情(
+    session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False
+) -> dict[str, Any]:
     if 是否短篇:
         数据 = await 请求JSON(
             session,
@@ -211,12 +300,28 @@ async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str, 
     if isinstance(详情.get("book"), dict):
         详情 = {**详情.get("book", {}), **详情}
     return {
-        "title": 清理网页文本(读取首个字段(详情, ("title", "book_name", "name", "share_title")) or f"七猫小说{书籍编号}"),
-        "author": 清理网页文本(读取首个字段(详情, ("author", "author_name", "pen_name")) or 读取字段路径(详情, ("author_info", "name")) or "未知"),
-        "intro": 清理网页文本(读取首个字段(详情, ("intro", "description", "desc", "book_intro")) or ""),
-        "words_num": 读取首个字段(详情, ("words_num", "word_count", "words", "total_words")) or "",
-        "is_over": 读取首个字段(详情, ("is_over", "is_finish", "finish", "completed")) or ("1" if 是否短篇 else ""),
-        "chapters": 读取首个字段(详情, ("chapters", "chapter_count", "chapter_num", "total_chapters")) or "",
+        "title": 清理网页文本(
+            读取首个字段(详情, ("title", "book_name", "name", "share_title"))
+            or f"七猫小说{书籍编号}"
+        ),
+        "author": 清理网页文本(
+            读取首个字段(详情, ("author", "author_name", "pen_name"))
+            or 读取字段路径(详情, ("author_info", "name"))
+            or "未知"
+        ),
+        "intro": 清理网页文本(
+            读取首个字段(详情, ("intro", "description", "desc", "book_intro")) or ""
+        ),
+        "words_num": 读取首个字段(
+            详情, ("words_num", "word_count", "words", "total_words")
+        )
+        or "",
+        "is_over": 读取首个字段(详情, ("is_over", "is_finish", "finish", "completed"))
+        or ("1" if 是否短篇 else ""),
+        "chapters": 读取首个字段(
+            详情, ("chapters", "chapter_count", "chapter_num", "total_chapters")
+        )
+        or "",
         "chapter_list_desc": 清理网页文本(详情.get("chapter_list_desc") or ""),
         "category_over_words": 清理网页文本(详情.get("category_over_words") or ""),
         "tags": "、".join(
@@ -227,11 +332,19 @@ async def 获取小说详情(session: aiohttp.ClientSession, 书籍编号: str, 
     }
 
 
-async def 获取小说目录(session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False) -> list[dict[str, Any]]:
+async def 获取小说目录(
+    session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False
+) -> list[dict[str, Any]]:
     数据 = await 请求JSON(
         session,
         "https://api-ks.wtzw.com/api/v1/chapter/chapter-list",
-        签名参数({"chapter_ver": "0", "id": 书籍编号, "reader_type": "4" if 是否短篇 else "0"}),
+        签名参数(
+            {
+                "chapter_ver": "0",
+                "id": 书籍编号,
+                "reader_type": "4" if 是否短篇 else "0",
+            }
+        ),
         生成请求头(书籍编号, "api-ks.wtzw.com"),
     )
     章节列表 = 读取字段路径(数据, ("data", "chapter_lists")) or []
@@ -263,7 +376,11 @@ async def 下载全部章节(
             成功数 += 成功增量
             失败数 += max(完成增量 - 成功增量, 0)
 
-            当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
+            当前进度 = (
+                进度日志分段数
+                if 已完成 >= 总数
+                else int(已完成 * 进度日志分段数 / 总数)
+            )
             if 当前进度 <= 上次日志进度 and 已完成 < 总数:
                 return
             上次日志进度 = 当前进度
@@ -275,26 +392,38 @@ async def 下载全部章节(
 
     async def 下载单章(章节: dict[str, Any]) -> dict[str, str]:
         async with 单章信号量:
-            标题 = 清理网页文本(章节.get("title") or f"第{章节.get('chapter_sort', '')}章")
+            标题 = 清理网页文本(
+                章节.get("title") or f"第{章节.get('chapter_sort', '')}章"
+            )
             章节编号 = str(章节.get("id"))
             try:
                 正文 = await 获取章节正文(session, 书籍编号, 章节编号, 是否短篇)
                 await 记录进度(1, 1 if 正文 else 0)
                 return {"id": 章节编号, "title": 标题, "content": 正文}
             except Exception as exc:
-                logger.warning(f"七猫章节下载失败：书籍编号={书籍编号}, 章节编号={章节编号}, 错误={exc}")
+                logger.warning(
+                    f"七猫章节下载失败：书籍编号={书籍编号}, 章节编号={章节编号}, 错误={exc}"
+                )
                 await 记录进度(1, 0)
                 return {"id": 章节编号, "title": 标题, "content": ""}
 
-    async def 下载批次(批次目录: list[dict[str, Any]], 批次序号: int, 批次数量: int) -> list[dict[str, str]]:
+    async def 下载批次(
+        批次目录: list[dict[str, Any]], 批次序号: int, 批次数量: int
+    ) -> list[dict[str, str]]:
         async with 批量信号量:
             try:
-                章节编号列表 = [str(章节.get("id")) for 章节 in 批次目录 if 章节.get("id")]
-                正文映射 = await 获取批量章节正文(session, 书籍编号, 章节编号列表, 是否短篇)
+                章节编号列表 = [
+                    str(章节.get("id")) for 章节 in 批次目录 if 章节.get("id")
+                ]
+                正文映射 = await 获取批量章节正文(
+                    session, 书籍编号, 章节编号列表, 是否短篇
+                )
                 结果列表 = []
                 成功增量 = 0
                 for 章节 in 批次目录:
-                    标题 = 清理网页文本(章节.get("title") or f"第{章节.get('chapter_sort', '')}章")
+                    标题 = 清理网页文本(
+                        章节.get("title") or f"第{章节.get('chapter_sort', '')}章"
+                    )
                     章节编号 = str(章节.get("id"))
                     正文 = 正文映射.get(章节编号, "")
                     if 正文:
@@ -315,11 +444,12 @@ async def 下载全部章节(
                 )
         return await asyncio.gather(*(下载单章(章节) for 章节 in 批次目录))
 
-    批次列表 = [目录[开始:开始 + 批量章节数] for 开始 in range(0, len(目录), 批量章节数)]
-    批次结果 = await asyncio.gather(*(
-        下载批次(批次, 序号, len(批次列表))
-        for 序号, 批次 in enumerate(批次列表, 1)
-    ))
+    批次列表 = [
+        目录[开始 : 开始 + 批量章节数] for 开始 in range(0, len(目录), 批量章节数)
+    ]
+    批次结果 = await asyncio.gather(
+        *(下载批次(批次, 序号, len(批次列表)) for 序号, 批次 in enumerate(批次列表, 1))
+    )
     return [章节 for 批次 in 批次结果 for 章节 in 批次]
 
 
@@ -356,7 +486,9 @@ async def 获取批量章节正文(
     return 正文映射
 
 
-async def 获取章节正文(session: aiohttp.ClientSession, 书籍编号: str, 章节编号: str, 是否短篇: bool = False) -> str:
+async def 获取章节正文(
+    session: aiohttp.ClientSession, 书籍编号: str, 章节编号: str, 是否短篇: bool = False
+) -> str:
     参数 = {"id": 书籍编号, "chapterId": 章节编号}
     if 是否短篇:
         参数["reader_agent"] = "1"
@@ -383,7 +515,9 @@ async def 请求JSON(
 ) -> dict[str, Any]:
     请求方法 = 方法.upper()
     if 请求方法 == "POST":
-        请求上下文 = session.post(地址, params=参数 or None, data=表单 or {}, headers=请求头)
+        请求上下文 = session.post(
+            地址, params=参数 or None, data=表单 or {}, headers=请求头
+        )
     else:
         请求上下文 = session.get(地址, params=参数 or None, headers=请求头)
     async with 请求上下文 as response:
@@ -395,7 +529,9 @@ async def 请求JSON(
         except Exception as exc:
             raise RuntimeError(f"JSON解析失败：{文本[:120]}") from exc
         if isinstance(数据, dict) and 数据.get("errors"):
-            详情 = 读取字段路径(数据, ("errors", "details")) or 读取字段路径(数据, ("errors", "title"))
+            详情 = 读取字段路径(数据, ("errors", "details")) or 读取字段路径(
+                数据, ("errors", "title")
+            )
             raise RuntimeError(str(详情 or "接口返回错误"))
         return 数据
 
@@ -443,15 +579,17 @@ def 生成小说文件名(书籍编号: str, 详情: dict[str, Any]) -> str:
 
 
 def 格式化下载提示(详情: dict[str, Any], 目录数量: int) -> str:
-    return "\n".join([
-        f"书名：{详情.get('title') or '未知'}",
-        f"作者：{详情.get('author') or '未知'}",
-        f"状态：{获取状态文本(详情)}",
-        f"章节：{获取章节数量文本(详情, 目录数量)}",
-        f"字数：{格式化字数(详情.get('words_num'))}",
-        "",
-        "正在下载中请稍等.....",
-    ])
+    return "\n".join(
+        [
+            f"书名：{详情.get('title') or '未知'}",
+            f"作者：{详情.get('author') or '未知'}",
+            f"状态：{获取状态文本(详情)}",
+            f"章节：{获取章节数量文本(详情, 目录数量)}",
+            f"字数：{格式化字数(详情.get('words_num'))}",
+            "",
+            "正在下载中请稍等.....",
+        ]
+    )
 
 
 def 获取状态文本(详情: dict[str, Any]) -> str:
@@ -489,7 +627,6 @@ def 格式化字数(字数: Any) -> str:
     return 文本
 
 
-
 async def 准备发送文本文件给当前会话(
     event: Any,
     文件名: str,
@@ -504,30 +641,70 @@ async def 准备发送文本文件给当前会话(
     logger.info(f"七猫小说写入下载缓存：文件={缓存路径}, 大小={len(文件内容)}")
     if 小说网盘 is None:
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说网盘模块未加载",
+        }
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
         if not 网盘结果.get("success"):
-            logger.warning(f"七猫小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}")
+            logger.warning(
+                f"七猫小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}"
+            )
             删除下载缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
-        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": str(网盘结果.get("error") or "小说网盘未启用"),
+            }
+        完成结果 = await 小说网盘.发送小说下载完成链接(
+            event, 书名, 作者, str(网盘结果.get("share_url") or "")
+        )
         if 完成结果.get("sent"):
-            logger.info(f"七猫小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            logger.info(
+                f"七猫小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}"
+            )
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": str(完成结果.get("error") or ""),
+            }
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(完成结果.get("error") or "完成按钮发送失败"),
+        }
     except Exception as exc:
-        logger.warning(f"七猫小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}")
+        logger.warning(
+            f"七猫小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}"
+        )
         删除下载缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(exc)}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(exc),
+        }
 
 
-def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
+def 启动百度后台上传并清理源文件(
+    配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None
+) -> None:
     if not 源缓存路径:
         return
 
@@ -536,13 +713,21 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.info(f"七猫小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}")
+                    logger.info(
+                        f"七猫小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}"
+                    )
                 elif 百度结果.get("skipped"):
-                    logger.info(f"七猫小说百度网盘后台上传按状态规则跳过：文件={文件名}")
+                    logger.info(
+                        f"七猫小说百度网盘后台上传按状态规则跳过：文件={文件名}"
+                    )
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"七猫小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}")
+                    logger.warning(
+                        f"七猫小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}"
+                    )
         except Exception as exc:
-            logger.warning(f"七猫小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={exc}")
+            logger.warning(
+                f"七猫小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={exc}"
+            )
         finally:
             if str(源缓存路径) != str(发送缓存路径 or ""):
                 删除下载缓存文件(源缓存路径)
@@ -651,7 +836,12 @@ def 生成QM参数(主机: str = "") -> str:
     if 主机 == "api-bc.wtzw.com":
         参数["refresh-type"] = "0"
     原始 = json.dumps(参数, ensure_ascii=False, separators=(",", ":"))
-    编码 = base64.b64encode(原始.encode("utf-8")).decode("utf-8").replace("+", "-").replace("/", "_")
+    编码 = (
+        base64.b64encode(原始.encode("utf-8"))
+        .decode("utf-8")
+        .replace("+", "-")
+        .replace("/", "_")
+    )
     return "".join(QM参数字符映射.get(字符, 字符) for 字符 in 编码)
 
 
@@ -714,7 +904,9 @@ def 提取七猫链接(值: Any) -> str:
 def 包含七猫链接(文本: str) -> bool:
     return bool(
         re.search(r"qimao\.com/shuku/\d+", 文本)
-        or re.search(r"app-share\.wtzw\.com/.+(?:article-detail|short-story-detail)/\d+", 文本)
+        or re.search(
+            r"app-share\.wtzw\.com/.+(?:article-detail|short-story-detail)/\d+", 文本
+        )
     )
 
 
@@ -771,6 +963,7 @@ def 安全整数(值: Any, 默认值: int = 0) -> int:
         return int(值)
     except Exception:
         return 默认值
+
 
 def 读取字段(对象: Any, 字段名: str) -> Any:
     if 对象 is None:

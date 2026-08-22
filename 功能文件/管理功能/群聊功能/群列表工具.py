@@ -5,7 +5,6 @@ import re
 import time
 from typing import Any
 
-
 数字群号规则 = re.compile(r"[1-9]\d{4,11}")
 已知机器人群号集合: set[str] = set()
 官方群成员映射: dict[str, dict[str, tuple[str, float]]] = {}
@@ -150,7 +149,9 @@ def 提取群号列表(响应: Any) -> list[str]:
     数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
     候选列表: list[Any]
     if isinstance(数据, dict):
-        候选列表 = 数据.get("groups") or 数据.get("group_list") or 数据.get("list") or []
+        候选列表 = (
+            数据.get("groups") or 数据.get("group_list") or 数据.get("list") or []
+        )
     elif isinstance(数据, list):
         候选列表 = 数据
     else:

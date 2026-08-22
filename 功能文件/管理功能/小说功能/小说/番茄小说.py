@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import AsyncExitStack
 import gzip
 import hashlib
 import html
@@ -24,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import zlib
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -51,6 +51,7 @@ try:
     from astrbot.api import logger
 except Exception:
     import logging
+
     logger = logging.getLogger(__name__)
 
 try:
@@ -69,19 +70,25 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
-NOVELFM_REQUEST_BOOK_ID = os.environ.get(
-    "FANQIE_NOVELFM_REQUEST_BOOK_ID", "7320841644486446142"
-).strip() or "7320841644486446142"
+NOVELFM_REQUEST_BOOK_ID = (
+    os.environ.get("FANQIE_NOVELFM_REQUEST_BOOK_ID", "7320841644486446142").strip()
+    or "7320841644486446142"
+)
 
 
 # ===== 番茄畅听签名算法 =====
-SIGN_KEY32_3040 = bytes.fromhex("4e54b707757a4c15473ba0ba01740ed1b3eac6088de0441fbaf79d28dee33ddf")
+SIGN_KEY32_3040 = bytes.fromhex(
+    "4e54b707757a4c15473ba0ba01740ed1b3eac6088de0441fbaf79d28dee33ddf"
+)
+
 
 def b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
+
 def u32le(x: int) -> bytes:
     return struct.pack("<I", x & 0xFFFFFFFF)
+
 
 def proto_varint(n: int) -> bytes:
     n = int(n)
@@ -94,6 +101,7 @@ def proto_varint(n: int) -> bytes:
         else:
             out.append(b)
             return bytes(out)
+
 
 def _proto_read_varint(data: bytes | bytearray, offset: int = 0) -> tuple[int, int]:
     """Read protobuf varint and return `(value, next_offset)`."""
@@ -111,11 +119,14 @@ def _proto_read_varint(data: bytes | bytearray, offset: int = 0) -> tuple[int, i
             raise ValueError("protobuf varint too long")
     raise ValueError("truncated protobuf varint")
 
+
 def proto_key(field_no: int, wire_type: int) -> bytes:
     return proto_varint((field_no << 3) | wire_type)
 
+
 def proto_field_varint(field_no: int, value: int) -> bytes:
     return proto_key(field_no, 0) + proto_varint(value)
+
 
 def proto_field_bytes(field_no: int, value: bytes | str) -> bytes:
     if isinstance(value, str):
@@ -123,21 +134,30 @@ def proto_field_bytes(field_no: int, value: bytes | str) -> bytes:
     return proto_key(field_no, 2) + proto_varint(len(value)) + value
 
 
-
 IV = [
-    0x7380166F, 0x4914B2B9, 0x172442D7, 0xDA8A0600,
-    0xA96F30BC, 0x163138AA, 0xE38DEE4D, 0xB0FB0E4E,
+    0x7380166F,
+    0x4914B2B9,
+    0x172442D7,
+    0xDA8A0600,
+    0xA96F30BC,
+    0x163138AA,
+    0xE38DEE4D,
+    0xB0FB0E4E,
 ]
+
 
 def _rol(x: int, n: int) -> int:
     x &= 0xFFFFFFFF
     return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
 
+
 def _p0(x: int) -> int:
     return x ^ _rol(x, 9) ^ _rol(x, 17)
 
+
 def _p1(x: int) -> int:
     return x ^ _rol(x, 15) ^ _rol(x, 23)
+
 
 def sm3(data: bytes) -> bytes:
     msg = bytearray(data)
@@ -149,11 +169,15 @@ def sm3(data: bytes) -> bytes:
 
     v = IV[:]
     for off in range(0, len(msg), 64):
-        block = msg[off:off+64]
-        w = [int.from_bytes(block[i:i+4], "big") for i in range(0, 64, 4)]
+        block = msg[off : off + 64]
+        w = [int.from_bytes(block[i : i + 4], "big") for i in range(0, 64, 4)]
         for j in range(16, 68):
-            w.append(_p1(w[j-16] ^ w[j-9] ^ _rol(w[j-3], 15)) ^ _rol(w[j-13], 7) ^ w[j-6])
-        w1 = [w[j] ^ w[j+4] for j in range(64)]
+            w.append(
+                _p1(w[j - 16] ^ w[j - 9] ^ _rol(w[j - 3], 15))
+                ^ _rol(w[j - 13], 7)
+                ^ w[j - 6]
+            )
+        w1 = [w[j] ^ w[j + 4] for j in range(64)]
         a, b, c, d, e, f, g, h = v
         for j in range(64):
             tj = 0x79CC4519 if j <= 15 else 0x7A879D8A
@@ -178,11 +202,11 @@ def sm3(data: bytes) -> bytes:
         v = [x ^ y for x, y in zip(v, [a, b, c, d, e, f, g, h])]
     return b"".join(x.to_bytes(4, "big") for x in v)
 
+
 def x_argus(khronos: int | None = None) -> str:
     if khronos is None:
         khronos = int(time.time())
     return b64(u32le(khronos))
-
 
 
 def reverse_xor(reverse_source: bytes, key4: bytes) -> bytes:
@@ -192,6 +216,7 @@ def reverse_xor(reverse_source: bytes, key4: bytes) -> bytes:
     n = len(reverse_source)
     return bytes(reverse_source[n - 1 - i] ^ key4[i & 3] for i in range(n))
 
+
 STAGE34A_FINALIZER_TARGET_BITS = (6, 5, 3, 4, 2, 7, 1, 0)
 
 STAGE34A_FINALIZER_CONTROL_BIT_BY_TARGET = (1, 7, 3, 6, 2, 0, 4, 5)
@@ -200,16 +225,21 @@ MEDUSA3040_F2_BYTE_PER_BIT = (7, 5, 6, 2, 4, 0, 3, 1)
 
 MEDUSA3040_F2_BIT_BASE = (4, 0, 3, 1, 2, 7, 6, 5)
 
+
 def medusa3040_prefix20(khronos: int) -> bytes:
     """3040 X-Medusa raw prefix[0:20] = khronos_le XOR five constants."""
     k = int(khronos) & 0xFFFFFFFF
-    return b"".join(((k ^ item) & 0xFFFFFFFF).to_bytes(4, "little") for item in (
-        0x00000005,
-        0xCA4F4B2D,
-        0x430D7549,
-        0x2CAEB53F,
-        0x56CC6D22,
-    ))
+    return b"".join(
+        ((k ^ item) & 0xFFFFFFFF).to_bytes(4, "little")
+        for item in (
+            0x00000005,
+            0xCA4F4B2D,
+            0x430D7549,
+            0x2CAEB53F,
+            0x56CC6D22,
+        )
+    )
+
 
 def stage34a_finalizer_after_bits_from_control(control: int) -> int:
     value = 0
@@ -218,7 +248,10 @@ def stage34a_finalizer_after_bits_from_control(control: int) -> int:
         value |= ((current >> int(source_bit)) & 1) << target_index
     return value & 0xFF
 
-def apply_stage34a_finalizer_control(chunk8: bytes | bytearray | memoryview, control: int) -> bytes:
+
+def apply_stage34a_finalizer_control(
+    chunk8: bytes | bytearray | memoryview, control: int
+) -> bytes:
     raw = bytearray(bytes(chunk8))
     if len(raw) != 8:
         raise ValueError("stage34a finalizer chunk must be exactly 8 bytes")
@@ -231,7 +264,10 @@ def apply_stage34a_finalizer_control(chunk8: bytes | bytearray | memoryview, con
             raw[index] &= (~mask) & 0xFF
     return bytes(raw)
 
-def stage34a_finalizer_control_from_target_bits(chunk8: bytes | bytearray | memoryview) -> int:
+
+def stage34a_finalizer_control_from_target_bits(
+    chunk8: bytes | bytearray | memoryview,
+) -> int:
     raw = bytes(chunk8)
     if len(raw) != 8:
         raise ValueError("stage34a finalizer chunk must be exactly 8 bytes")
@@ -242,6 +278,7 @@ def stage34a_finalizer_control_from_target_bits(chunk8: bytes | bytearray | memo
     for target_index, source_bit in enumerate(STAGE34A_FINALIZER_CONTROL_BIT_BY_TARGET):
         control |= ((after_bits >> target_index) & 1) << int(source_bit)
     return control & 0xFF
+
 
 def stage34a_prefinalizer_prefix248_from_head9_and_stage33f(
     head9: bytes | bytearray | memoryview,
@@ -255,11 +292,18 @@ def stage34a_prefinalizer_prefix248_from_head9_and_stage33f(
         raise ValueError("stage33f must contain at least 239 bytes")
     return head + source[:239]
 
-def finalizer_copy_source31_from_stage34a_prefix248(prefix248: bytes | bytearray | memoryview) -> bytes:
+
+def finalizer_copy_source31_from_stage34a_prefix248(
+    prefix248: bytes | bytearray | memoryview,
+) -> bytes:
     raw = bytes(prefix248)
     if len(raw) != 31 * 8:
         raise ValueError("stage34a pre-finalizer prefix must be exactly 248 bytes")
-    return bytes(stage34a_finalizer_control_from_target_bits(raw[i:i + 8]) for i in range(0, 31 * 8, 8))
+    return bytes(
+        stage34a_finalizer_control_from_target_bits(raw[i : i + 8])
+        for i in range(0, 31 * 8, 8)
+    )
+
 
 def finalizer_copy_source31_from_head9_and_stage33f(
     head9: bytes | bytearray | memoryview,
@@ -268,6 +312,7 @@ def finalizer_copy_source31_from_head9_and_stage33f(
     return finalizer_copy_source31_from_stage34a_prefix248(
         stage34a_prefinalizer_prefix248_from_head9_and_stage33f(head9, stage33f)
     )
+
 
 def apply_stage34a_finalizer_control31(
     prefix248: bytes | bytearray | memoryview,
@@ -281,8 +326,13 @@ def apply_stage34a_finalizer_control31(
         raise ValueError("stage34a finalizer control must contain at least 31 bytes")
     out = bytearray()
     for index in range(31):
-        out.extend(apply_stage34a_finalizer_control(prefix[index * 8:(index + 1) * 8], control[index]))
+        out.extend(
+            apply_stage34a_finalizer_control(
+                prefix[index * 8 : (index + 1) * 8], control[index]
+            )
+        )
     return bytes(out)
+
 
 def stage34a_tail_fields_from_rand3(rand3: int) -> tuple[int, bytes]:
     high2 = ((int(rand3) >> 16) & 0xFFFF).to_bytes(2, "little")
@@ -291,6 +341,7 @@ def stage34a_tail_fields_from_rand3(rand3: int) -> tuple[int, bytes]:
     # 6.5.6.32 traces show the byte before these two bytes still belongs to
     # stage33f, and the final two bytes are exactly high16(rand3) little-endian.
     return high2[0], high2[1:2]
+
 
 def stage33f_to_stage34a_with_control(
     stage33f: bytes | bytearray | memoryview,
@@ -315,7 +366,12 @@ def stage33f_to_stage34a_with_control(
     finalized_prefix = apply_stage34a_finalizer_control31(prefix248, control31)
     return finalized_prefix + source[239:-1] + bytes([int(tail_marker) & 0xFF]) + suffix
 
-def medusa3040_f2_scatter(pre_slot8: bytes | bytearray | memoryview, slot10: bytes | bytearray | memoryview, count: int = 19) -> bytes:
+
+def medusa3040_f2_scatter(
+    pre_slot8: bytes | bytearray | memoryview,
+    slot10: bytes | bytearray | memoryview,
+    count: int = 19,
+) -> bytes:
     """Pure Python equivalent of the current 3040 late F2 bit scatter."""
     out = bytearray(bytes(pre_slot8))
     source = bytes(slot10)
@@ -329,7 +385,10 @@ def medusa3040_f2_scatter(pre_slot8: bytes | bytearray | memoryview, slot10: byt
             out[dest_byte] = (out[dest_byte] & ~(1 << dest_bit)) | (value << dest_bit)
     return bytes(out)
 
-def medusa3040_f2_recover_slot10(post_slot8: bytes | bytearray | memoryview, count: int = 19) -> bytes:
+
+def medusa3040_f2_recover_slot10(
+    post_slot8: bytes | bytearray | memoryview, count: int = 19
+) -> bytes:
     """Recover the F2 slot10 bytes that are visible in a final X-Medusa body."""
     post = bytes(post_slot8)
     out = bytearray(int(count))
@@ -343,6 +402,7 @@ def medusa3040_f2_recover_slot10(post_slot8: bytes | bytearray | memoryview, cou
             value |= ((post[dest_byte] >> dest_bit) & 1) << source_bit
         out[source_index] = value
     return bytes(out)
+
 
 CONTROL32_SBOX_3892_3040 = bytes.fromhex(
     "38922563e36406d37a24100b7902a028044e218453c2a399199c9d13dc40c55b"
@@ -429,16 +489,29 @@ CONTROL32_FULL_MGET_PROFILES_3040 = {
     },
 }
 
-def _control32_reorder_u32_blocks_3040(block16: bytes, order: tuple[int, int, int, int]) -> bytes:
+
+def _control32_reorder_u32_blocks_3040(
+    block16: bytes, order: tuple[int, int, int, int]
+) -> bytes:
     if len(block16) != 16:
         raise ValueError("block16 must be exactly 16 bytes")
-    return bytes(block16[4 * group + int(order[index])] for group in range(4) for index in range(4))
+    return bytes(
+        block16[4 * group + int(order[index])]
+        for group in range(4)
+        for index in range(4)
+    )
 
-def _control32_subbytes_group_permuted_3040(block16: bytes, sbox: bytes, group_perm: tuple[int, int, int, int]) -> bytes:
+
+def _control32_subbytes_group_permuted_3040(
+    block16: bytes, sbox: bytes, group_perm: tuple[int, int, int, int]
+) -> bytes:
     if len(block16) != 16:
         raise ValueError("block16 must be exactly 16 bytes")
     substituted = bytes(sbox[value] for value in block16)
-    return b"".join(substituted[4 * int(group):4 * int(group) + 4] for group in group_perm)
+    return b"".join(
+        substituted[4 * int(group) : 4 * int(group) + 4] for group in group_perm
+    )
+
 
 def _control32_mix_column(col: list[int]) -> list[int]:
     a0, a1, a2, a3 = [x & 0xFF for x in col]
@@ -449,7 +522,10 @@ def _control32_mix_column(col: list[int]) -> list[int]:
         _gf256_mul_aes(a0, 3) ^ a1 ^ a2 ^ _gf256_mul_aes(a3, 2),
     ]
 
-def _control32_mix_columns_profile_3040(block16: bytes, out_cols: tuple[int, int, int, int]) -> bytes:
+
+def _control32_mix_columns_profile_3040(
+    block16: bytes, out_cols: tuple[int, int, int, int]
+) -> bytes:
     if len(block16) != 16:
         raise ValueError("block16 must be exactly 16 bytes")
     out = bytearray(16)
@@ -459,18 +535,28 @@ def _control32_mix_columns_profile_3040(block16: bytes, out_cols: tuple[int, int
             out[int(out_col) + 4 * row] = val & 0xFF
     return bytes(out)
 
+
 def _xor_same_len(left: bytes, right: bytes) -> bytes:
     if len(left) != len(right):
         raise ValueError("xor inputs must have the same length")
     return bytes(a ^ b for a, b in zip(left, right))
 
+
 def _control32_profile_3040(profile: str):
     name = str(profile or "3892").strip().lower()
-    aliases = {"default": "3892", "current": "d09a", "latest": "d09a", "53290f": "5329", "389225": "3892", "d09a51": "d09a"}
+    aliases = {
+        "default": "3892",
+        "current": "d09a",
+        "latest": "d09a",
+        "53290f": "5329",
+        "389225": "3892",
+        "d09a51": "d09a",
+    }
     name = aliases.get(name, name)
     if name not in CONTROL32_FULL_MGET_PROFILES_3040:
         raise ValueError(f"unknown 3040 control32 profile: {profile!r}")
     return name, CONTROL32_FULL_MGET_PROFILES_3040[name]
+
 
 def _control32_half_transform_profile_3040(block16: bytes, profile_data) -> bytes:
     order = tuple(profile_data["order"])
@@ -486,6 +572,7 @@ def _control32_half_transform_profile_3040(block16: bytes, profile_data) -> byte
     x = bytes(x[index] for index in tuple(profile_data["shift"]))
     x = _xor_same_len(x, b_region)
     return _xor_same_len(x, profile_data["final_xor"])
+
 
 def medusa3040_control32_profile_from_random32(
     random32: bytes | bytearray | memoryview,
@@ -505,6 +592,7 @@ def medusa3040_control32_profile_from_random32(
     second_pre = _xor_same_len(bytes(state[16:32]), first16)
     return first16 + _control32_half_transform_profile_3040(second_pre, profile_data)
 
+
 def medusa3040_control32_3892_from_random32(
     random32: bytes | bytearray | memoryview,
     *,
@@ -515,10 +603,16 @@ def medusa3040_control32_3892_from_random32(
     Current 6.5.6.32 sets byte31 to 1.  The older server-accepted 6.4.4.32
     profile uses the same transform but sets byte31 to 0x41.
     """
-    return medusa3040_control32_profile_from_random32(random32, profile="3892", force_last=force_last)
+    return medusa3040_control32_profile_from_random32(
+        random32, profile="3892", force_last=force_last
+    )
 
-def medusa3040_control32_3892_legacy41_from_random32(random32: bytes | bytearray | memoryview) -> bytes:
+
+def medusa3040_control32_3892_legacy41_from_random32(
+    random32: bytes | bytearray | memoryview,
+) -> bytes:
     return medusa3040_control32_3892_from_random32(random32, force_last=0x41)
+
 
 def medusa3040_head9_from_query_rand4_byte(
     query: bytes | bytearray | memoryview | str,
@@ -532,8 +626,18 @@ def medusa3040_head9_from_query_rand4_byte(
     stable as low6 == 1.
     """
     q = query.encode("ascii") if isinstance(query, str) else bytes(query)
-    suffix = ((0x18 & 0xFF) << 24) | ((sm3(q)[0] & 0x3F) << 14) | ((int(head_byte) & 0x3F) << 8) | 1
-    return b"\x8a" + (int(rand4) & 0xFFFFFFFF).to_bytes(4, "little") + suffix.to_bytes(4, "little")
+    suffix = (
+        ((0x18 & 0xFF) << 24)
+        | ((sm3(q)[0] & 0x3F) << 14)
+        | ((int(head_byte) & 0x3F) << 8)
+        | 1
+    )
+    return (
+        b"\x8a"
+        + (int(rand4) & 0xFFFFFFFF).to_bytes(4, "little")
+        + suffix.to_bytes(4, "little")
+    )
+
 
 SOURCE336_ALLOC_SIZE = 0x400
 
@@ -565,6 +669,7 @@ SOURCE336_3040_HARDWARE = b"qcom"
 
 SOURCE336_3040_FIELD23_SENTINEL = 1_777_775
 
+
 def source336_3040_field15_message(
     *,
     field1: int = 190,
@@ -581,6 +686,7 @@ def source336_3040_field15_message(
         out += proto_field_varint(4, int(field4))
     out += proto_field_varint(5, int(field5))
     return bytes(out)
+
 
 def source336_3040_metrics_json(
     *,
@@ -605,8 +711,10 @@ def source336_3040_metrics_json(
         f'"lp":"{str(lp)}","fl":"{str(fl)}","dyn":"{str(dyn)}","do":{int(do)},"tk":{tk_text}}}'
     ).encode("utf-8")
 
+
 def _bswap32(value: int) -> int:
     return int.from_bytes((int(value) & 0xFFFFFFFF).to_bytes(4, "little"), "big")
+
 
 def source336_3040_metrics_fl_from_words(
     *,
@@ -623,13 +731,31 @@ def source336_3040_metrics_fl_from_words(
         if len(raw) != 4:
             raise ValueError("ladon raw must be exactly 4 bytes")
         last = int.from_bytes(raw, "big")
-    return "|".join(str(x) for x in (0, 0, int(fl2) & 0xFFFFFFFF, _bswap32(fl2), int(fl4) & 0xFFFFFFFF, int(fl5) & 0xFFFFFFFF, int(fl6) & 0xFFFFFFFF, 0, 0, last & 0xFFFFFFFF))
+    return "|".join(
+        str(x)
+        for x in (
+            0,
+            0,
+            int(fl2) & 0xFFFFFFFF,
+            _bswap32(fl2),
+            int(fl4) & 0xFFFFFFFF,
+            int(fl5) & 0xFFFFFFFF,
+            int(fl6) & 0xFFFFFFFF,
+            0,
+            0,
+            last & 0xFFFFFFFF,
+        )
+    )
+
 
 def _query_value_bytes(url: str, key: str, default: str = "") -> bytes:
-    for current_key, current_value in urllib.parse.parse_qsl(urllib.parse.urlsplit(str(url)).query, keep_blank_values=True):
+    for current_key, current_value in urllib.parse.parse_qsl(
+        urllib.parse.urlsplit(str(url)).query, keep_blank_values=True
+    ):
         if current_key == key:
             return current_value.encode("utf-8")
     return default.encode("utf-8")
+
 
 def source336_3040_nested_device_message(
     url: str,
@@ -672,12 +798,25 @@ def source336_3040_nested_device_message(
     out += proto_field_bytes(13, SOURCE336_3040_LOCALE)
     out += proto_field_varint(14, 12)
     out += proto_field_bytes(15, SOURCE336_3040_PHYSICAL_SIZE)
-    for no, val in ((16, field16), (17, field17), (18, field18), (19, field19), (20, field20), (21, field21)):
+    for no, val in (
+        (16, field16),
+        (17, field17),
+        (18, field18),
+        (19, field19),
+        (20, field20),
+        (21, field21),
+    ):
         out += proto_field_fixed32(no, int(val))
     out += proto_field_bytes(22, b"9")
     out += proto_field_varint(23, 204)
     out += proto_field_varint(24, 10)
-    for no, val in ((25, field25), (26, field26), (27, field27), (28, field28), (29, 1)):
+    for no, val in (
+        (25, field25),
+        (26, field26),
+        (27, field27),
+        (28, field28),
+        (29, 1),
+    ):
         out += proto_field_varint(no, int(val))
     out += proto_field_bytes(30, SOURCE336_3040_DEVICE_TYPE)
     out += proto_field_bytes(31, SOURCE336_3040_DEVICE_BRAND)
@@ -690,7 +829,10 @@ def source336_3040_nested_device_message(
     out += proto_field_varint(40, int(field40))
     return bytes(out)
 
-def source336_3040_nested_report_message_accepted881(url: str, timestamp_base: int) -> bytes:
+
+def source336_3040_nested_report_message_accepted881(
+    url: str, timestamp_base: int
+) -> bytes:
     """Build the server-accepted 6.5.6.32 / full/mget 881-byte source report.
 
     This family is recovered by inverting an accepted App request from
@@ -741,6 +883,7 @@ def source336_3040_nested_report_message_accepted881(url: str, timestamp_base: i
     out += proto_field_varint(23, 3_476_936_026)
     return bytes(out)
 
+
 def source336_container_alloc_3040_accepted881(
     url: str,
     *,
@@ -770,12 +913,19 @@ def source336_container_alloc_3040_accepted881(
     out += proto_field_varint(12, timestamp_base)
     out += proto_field_bytes(13, raw13)
     out += proto_field_bytes(14, sm3(query)[:6])
-    out += proto_field_bytes(15, source336_3040_field15_message(field1=1_004, field2=12, field3=2, field5=2_221_243_644))
+    out += proto_field_bytes(
+        15,
+        source336_3040_field15_message(
+            field1=1_004, field2=12, field3=2, field5=2_221_243_644
+        ),
+    )
     out += proto_field_bytes(16, b"A9wc4sIzhYaDXS9btdyBd7QR5")
     out += proto_field_varint(17, timestamp_base)
     out += proto_field_bytes(20, b"none")
     out += proto_field_varint(21, 624)
-    out += proto_field_bytes(23, source336_3040_nested_report_message_accepted881(url, timestamp_base))
+    out += proto_field_bytes(
+        23, source336_3040_nested_report_message_accepted881(url, timestamp_base)
+    )
     out += proto_field_bytes(
         24,
         source336_3040_metrics_json(
@@ -797,6 +947,7 @@ def source336_container_alloc_3040_accepted881(
     if len(out) > SOURCE336_ALLOC_SIZE:
         raise ValueError(f"source336 payload too large: {len(out)}")
     return bytes(out) + (b"\x00" * (SOURCE336_ALLOC_SIZE - len(out))), len(out)
+
 
 def x_medusa_3040_full_mget_accepted881(
     url: str,
@@ -821,15 +972,28 @@ def x_medusa_3040_full_mget_accepted881(
         field13=field13,
         ladon_raw=ladon_raw,
     )
-    stage33f = medusa_source336_to_stage33f(source336, int(rand3), payload_size=payload_size)
+    stage33f = medusa_source336_to_stage33f(
+        source336, int(rand3), payload_size=payload_size
+    )
     query = urllib.parse.urlsplit(str(url)).query
     head9 = medusa3040_head9_from_query_rand4_byte(query, rand4, bytes(field13)[0])
     copy31 = finalizer_copy_source31_from_head9_and_stage33f(head9, stage33f)
     control32 = medusa3040_control32_3892_from_random32(copy31 + b"\x00")
-    stage34a = stage33f_to_stage34a_with_control(stage33f, head9, control32[:31], rand3=int(rand3))
-    post_f2 = medusa3040_f2_scatter(stage34a, medusa3040_f2_recover_slot10(stage34a, 19), 19)
-    raw = medusa3040_prefix20(int(khronos)) + ((int(rand3) & 0xFFFF).to_bytes(2, "little")) + b"\x00\x01" + control32[31:32] + post_f2
+    stage34a = stage33f_to_stage34a_with_control(
+        stage33f, head9, control32[:31], rand3=int(rand3)
+    )
+    post_f2 = medusa3040_f2_scatter(
+        stage34a, medusa3040_f2_recover_slot10(stage34a, 19), 19
+    )
+    raw = (
+        medusa3040_prefix20(int(khronos))
+        + ((int(rand3) & 0xFFFF).to_bytes(2, "little"))
+        + b"\x00\x01"
+        + control32[31:32]
+        + post_f2
+    )
     return b64(raw)
+
 
 LEGACY_CODE0_3040_KHRONOS = 1_778_923_030
 
@@ -840,6 +1004,7 @@ LEGACY_CODE0_3040_HEAD9 = bytes.fromhex("8a3776177f01b90658")
 LEGACY_CODE0_3040_STAGE33F = base64.b64decode(
     "ynaGszWCFmPQ2T13uwlc6aaIInv5/FX3M1f+KYQqtEUzZjEa0nWnPNw941Pfbe55uUDvE1Sb4y7Vn6iWBmiRRN4HWXkCBxe4BEYPeVmS1NmnZ5fW17vMC/e68XqJEFSaAGdrWjNhC8/803AlFcTd7KLjeM6oF4CrQLjXV0qRGRFqhdIpRSi1ZBTDv1jIhsN5FJOMBbllP7vLJ4KiJ3634DICr30/o+MCggZ7KvZHtrhErA8TteCmA+rfLOjXLsJu9FcqyPQ6JLid10BcHwXFnXcqD0r45XTPX772Z6KM1I6mBi6zkL+B/dmnjOUGcHOmH6kJ7zb+ecMOHfVshXxJeWod8IHjTfQmclFlM2fxvxj+MNFvtAR3bqPxLGJ4fCn4o43C4mhU0QWje8y7SAfaqkJoA2DniCbGOtBf23tb5Qqg3wR1YSuPQ6ZQADkERNsBt5sAkuY116W7v5IJMSG4uQV/f8CUzYix/riCrqC+ElWu6pkixhUVDRvuomtHcCEDE9bsqF35y4uCyJvuRi81yAlwS7TkVQcpoK20IlhMtQWY5x3C0Y+F4eBIi/I+uWeYtY+IcTs5tq6SDacK4RSCtU542pNmmRn+5g65Xg1P8P3DS0ZUHPEVm9OaIA6II0PSlE6ekBQc6gTQgvi13EWcI30drt3rVOq81J/4zpWQlu8wSCoXtLyvbqhPA8UwOzuZRJgrVpJAjVq8nQdpKd6PCg44ZY3L9brUVUUi4c2jc3d6YopS0C0BqeJkO04yyiQWGz/8HE+62W5jtWM4KYwKohgGN7Xwcs66ymkgDqyE91VCsQspmqD1ROWPjBhPv4ggNQ6b2H5PCiNZhym7j95jGX3W4NEN3+8M+zfixVd6fqVHFtzRolL+Z6CUhLlC38baf+8dh/P0gPNKlTun6rat7JSPcdTlTGec/DwIJc811CCCY3CCxvahJUFwWrpnjo9QugJD0gFr6v64bymzci+p3MJlYPAkDmjmCs44Znuc6g0fcmZP79kxiXt1BlBomYAvCX3HQLmMzCVX/AS5UixZYeOV18gH+7VqhlnwI+iqwD/jlCJ54hNjdDNJZToMEtdWeH5/UiGQdVKht7Dt9ZV5xgGSciTzQjyzSjy1tcYnKbyxevgZaHs4Qk0qa2mYuJiKxzsRgdM+H4f3PvMikbVIGhAxqPpJiEQ/JeViyU8gvyJcCvUO//1/sv/9/vIA"
 )
+
 
 def medusa3040_raw_legacy_code0() -> bytes:
     """Pure-Python assembly of the server-accepted 3040/full-mget profile."""
@@ -854,7 +1019,9 @@ def medusa3040_raw_legacy_code0() -> bytes:
         control32[:31],
         rand3=LEGACY_CODE0_3040_RAND3,
     )
-    post_f2 = medusa3040_f2_scatter(stage34a, medusa3040_f2_recover_slot10(stage34a, 19), 19)
+    post_f2 = medusa3040_f2_scatter(
+        stage34a, medusa3040_f2_recover_slot10(stage34a, 19), 19
+    )
     return (
         medusa3040_prefix20(LEGACY_CODE0_3040_KHRONOS)
         + (LEGACY_CODE0_3040_RAND3 & 0xFFFF).to_bytes(2, "little")
@@ -862,6 +1029,7 @@ def medusa3040_raw_legacy_code0() -> bytes:
         + control32[31:32]
         + post_f2
     )
+
 
 def x_medusa_3040_full_mget_legacy_code0() -> str:
     return b64(medusa3040_raw_legacy_code0())
@@ -876,6 +1044,7 @@ def proto_field_fixed32(field: int, value: int | bytes) -> bytes:
         data = (value & 0xFFFFFFFF).to_bytes(4, "little")
     return proto_key(field, 5) + data
 
+
 def _gf256_mul_aes(x: int, k: int) -> int:
     x &= 0xFF
     k &= 0xFF
@@ -886,6 +1055,7 @@ def _gf256_mul_aes(x: int, k: int) -> int:
         x = (((x << 1) & 0xFF) ^ (0x1B if x & 0x80 else 0)) & 0xFF
         k >>= 1
     return out & 0xFF
+
 
 def medusa_reverse_source_prefix_from_src_a(src_a: bytes) -> bytes:
     """Return top-level protobuf field 10, used as reverse_source[0:8].
@@ -905,7 +1075,7 @@ def medusa_reverse_source_prefix_from_src_a(src_a: bytes) -> bytes:
             i += 8
         elif wire_type == 2:
             ln, i = _proto_read_varint(src_a, i)
-            value = src_a[i:i + ln]
+            value = src_a[i : i + ln]
             i += ln
             if field_no == 10:
                 if len(value) != 8:
@@ -917,12 +1087,16 @@ def medusa_reverse_source_prefix_from_src_a(src_a: bytes) -> bytes:
             raise ValueError(f"unsupported protobuf wire type {wire_type}")
     raise ValueError("src_a field10 not found")
 
+
 def _rol8(value: int, amount: int) -> int:
     value &= 0xFF
     amount &= 7
     return ((value << amount) & 0xFF) | (value >> (8 - amount))
 
-def medusa_stage336_ring32_from_rand3(rand3: int, sign_key32: bytes = SIGN_KEY32_3040) -> bytes:
+
+def medusa_stage336_ring32_from_rand3(
+    rand3: int, sign_key32: bytes = SIGN_KEY32_3040
+) -> bytes:
     """3040 stage336 slot6 ring.
 
     Verified against live allocation traces: the stage336 first pass consumes
@@ -933,13 +1107,16 @@ def medusa_stage336_ring32_from_rand3(rand3: int, sign_key32: bytes = SIGN_KEY32
         raise ValueError("sign_key32 must be exactly 32 bytes")
     return sm3(sign_key32 + u32le(rand3) + sign_key32)
 
+
 def medusa_stage336_first_pass(
     source336: bytes,
     ring32: bytes,
     *,
     payload_size: int | None = None,
 ) -> bytes:
-    payload_len = len(source336.rstrip(b"\x00")) if payload_size is None else int(payload_size)
+    payload_len = (
+        len(source336.rstrip(b"\x00")) if payload_size is None else int(payload_size)
+    )
     if payload_len <= 0:
         raise ValueError("payload_size must be positive")
     if len(ring32) < 32:
@@ -949,10 +1126,11 @@ def medusa_stage336_first_pass(
         source_a = ring32[(index * 4) & 31]
         source_b = ring32[((index * 4) + 1) & 31]
         proto_mix = _rol8(source336[index], 4)
-        first_mix = (~((((proto_mix + source_a) & 0xFF) ^ source_b))) & 0xFF
-        value = (~((((source_b + _rol8(first_mix, 3)) & 0xFF) ^ source_a))) & 0xFF
+        first_mix = (~(((proto_mix + source_a) & 0xFF) ^ source_b)) & 0xFF
+        value = (~(((source_b + _rol8(first_mix, 3)) & 0xFF) ^ source_a)) & 0xFF
         out[payload_len - 1 - index] = value
     return bytes(out)
+
 
 def medusa_stage336_second_pass(first_pass: bytes) -> bytes:
     raw = bytes(first_pass)
@@ -964,7 +1142,9 @@ def medusa_stage336_second_pass(first_pass: bytes) -> bytes:
     out[0] = (raw[0] + initial_mix) & 0xFF
     out[1] = (((raw[-1] ^ out[0]) ^ 0xFE) + raw[1]) & 0xFF
     for offset in range(2, n - 1):
-        value = (~((_rol8(out[offset - 1], 3) ^ out[offset - 2]) ^ (offset & 0xFF))) & 0xFF
+        value = (
+            ~((_rol8(out[offset - 1], 3) ^ out[offset - 2]) ^ (offset & 0xFF))
+        ) & 0xFF
         out[offset] = (value + raw[offset]) & 0xFF
     out[n - 1] = raw[n - 1] ^ out[n - 2]
     accumulator = (out[0] ^ out[1]) & 0xFF
@@ -973,7 +1153,10 @@ def medusa_stage336_second_pass(first_pass: bytes) -> bytes:
     out[0] = accumulator
     return bytes(out)
 
-def medusa_source336_to_stage33f(src_a: bytes, d71bc_rand: int, payload_size: int | None = None) -> bytes:
+
+def medusa_source336_to_stage33f(
+    src_a: bytes, d71bc_rand: int, payload_size: int | None = None
+) -> bytes:
     """Current 3040 `source336 -> stage33f` transform, pure Python.
 
     This replaces the older `block_d71bc_encode` assumption for NovelFM 3040
@@ -982,15 +1165,20 @@ def medusa_source336_to_stage33f(src_a: bytes, d71bc_rand: int, payload_size: in
       stage33f = reverse(stage33e) xor key4(high16(rand3)) || 00
     """
     src = bytes(src_a)
-    payload_len = len(src.rstrip(b"\x00")) if payload_size is None else int(payload_size)
+    payload_len = (
+        len(src.rstrip(b"\x00")) if payload_size is None else int(payload_size)
+    )
     if payload_len < 0 or payload_len > len(src):
         raise ValueError("payload_size out of source336 buffer range")
     source = src[:payload_len]
     prefix8 = medusa_reverse_source_prefix_from_src_a(source)
     ring32 = medusa_stage336_ring32_from_rand3(d71bc_rand)
-    stage336 = medusa_stage336_second_pass(medusa_stage336_first_pass(source, ring32, payload_size=payload_len))
+    stage336 = medusa_stage336_second_pass(
+        medusa_stage336_first_pass(source, ring32, payload_size=payload_len)
+    )
     key4 = medusa_reverse_key4_from_d71bc_rand(d71bc_rand)
     return reverse_xor(prefix8 + stage336, key4) + b"\x00"
+
 
 def medusa_tail2_hash(tail2: bytes) -> int:
     """还原 tail2 -> helper_ret 的小 VM hash。
@@ -1013,6 +1201,7 @@ def medusa_tail2_hash(tail2: bytes) -> int:
             state = (state ^ t) & 0xFFFFFFFF
     return state
 
+
 def medusa_reverse_key4_from_high2(high2: bytes) -> bytes:
     """Current 3040 reverse-xor key: hash the high 16 bits of d71bc_rand.
 
@@ -1022,6 +1211,7 @@ def medusa_reverse_key4_from_high2(high2: bytes) -> bytes:
     if len(high2) != 2:
         raise ValueError("high2 must be 2 bytes")
     return medusa_tail2_hash(high2).to_bytes(4, "big")
+
 
 def medusa_reverse_key4_from_d71bc_rand(d71bc_rand: int) -> bytes:
     return medusa_reverse_key4_from_high2(u32le(d71bc_rand)[2:])
@@ -1042,8 +1232,6 @@ FULL_MGET_SIGNED_URL = (
     "&ab_sdk_version=90111254%2C90975474%2C16797554%2C91986083%2C90126074%2C91986082%2C91008840%2C91281044%2C92120672%2C90110758%2C90174492%2C5711286%2C16963142%2C17225371%2C90114353%2C90098780%2C92100130%2C91347266%2C90952506%2C90614667%2C91801013%2C91763052%2C91763051%2C91763050%2C91787063%2C90661280%2C91633046%2C90609513%2C92319500"
     "&rom_version=PQ3A.190605.02261134+release-keys&klink_egdi=AAK_uq0vE8PrXz2HmNU9hVK7t9H-AFvbvPlsZSPYH3E9haMKxm0o-Yqm"
 )
-
-
 
 
 CAPTURED_CODE0_SIGNED_URL = (
@@ -1069,22 +1257,46 @@ APP_COMMON_HEADERS = {
 }
 
 DEFAULT_QUERY = {
-    "device_platform": "android", "os": "android", "ssmix": "a", "channel": "54157680a", "aid": "3040",
-    "app_name": "novel_fm", "cdid": "7634657e-a134-47cf-9ac3-c38ea9923097", "version_code": "656",
-    "version_name": "6.5.6.32", "manifest_version_code": "656", "update_version_code": "65632", "resolution": "1440*2560",
-    "dpi": "640", "device_type": "SM-S9260", "device_brand": "Samsung", "language": "zh", "os_api": "28",
-    "os_version": "9", "ac": "wifi", "device_id": "3001028083774489", "iid": "1395712309393850",
-    "comment_tag_c": "5", "vip_state": "0", "host_abi": "arm64-v8a", "category_style": "1", "need_personal_recommend": "1",
+    "device_platform": "android",
+    "os": "android",
+    "ssmix": "a",
+    "channel": "54157680a",
+    "aid": "3040",
+    "app_name": "novel_fm",
+    "cdid": "7634657e-a134-47cf-9ac3-c38ea9923097",
+    "version_code": "656",
+    "version_name": "6.5.6.32",
+    "manifest_version_code": "656",
+    "update_version_code": "65632",
+    "resolution": "1440*2560",
+    "dpi": "640",
+    "device_type": "SM-S9260",
+    "device_brand": "Samsung",
+    "language": "zh",
+    "os_api": "28",
+    "os_version": "9",
+    "ac": "wifi",
+    "device_id": "3001028083774489",
+    "iid": "1395712309393850",
+    "comment_tag_c": "5",
+    "vip_state": "0",
+    "host_abi": "arm64-v8a",
+    "category_style": "1",
+    "need_personal_recommend": "1",
 }
 
 # ===== 番茄畅听正文加密参数 =====
-DHP = int("ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff", 16)
+DHP = int(
+    "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff",
+    16,
+)
 
 DHG = 2
 
 DHAES_TOKEN = base64.b64decode("rCXGfd2POMGzeiNIgo4iLg==")
 
 # ===== AES/CBC 正文解密 =====
+
 
 def _pkcs7_pad(data: bytes) -> bytes:
     padding = 16 - len(data) % 16
@@ -1101,7 +1313,9 @@ def _pkcs7_unpad(data: bytes) -> bytes:
 def aes_cbc_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     if PYCRYPTODOME_AES is None:
         raise RuntimeError("缺少 PyCryptodome 依赖，无法加密正文请求")
-    return PYCRYPTODOME_AES.new(key, PYCRYPTODOME_AES.MODE_CBC, iv).encrypt(_pkcs7_pad(data))
+    return PYCRYPTODOME_AES.new(key, PYCRYPTODOME_AES.MODE_CBC, iv).encrypt(
+        _pkcs7_pad(data)
+    )
 
 
 def aes_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
@@ -1114,18 +1328,26 @@ def aes_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
 def aes_cbc_decrypt_fast(data: bytes, key: bytes, iv: bytes) -> bytes:
     """使用 PyCryptodome 执行 AES/CBC 正文解密。"""
     return aes_cbc_decrypt(data, key, iv)
-def java_bigint_bytes(n:int)->bytes:
-    if n==0: return b'\x00'
-    b=n.to_bytes((n.bit_length()+7)//8,'big')
-    return b'\x00'+b if b[0]&0x80 else b
 
-def strip_leading_zero_to_32(b:bytes)->bytes:
-    i=0
-    while i<len(b) and b[i]==0: i+=1
-    if i+31>=len(b): i=max(0,len(b)-32)
-    key=b[i:i+32]
-    if len(key)!=32: raise ValueError('bad shared key length')
+
+def java_bigint_bytes(n: int) -> bytes:
+    if n == 0:
+        return b"\x00"
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return b"\x00" + b if b[0] & 0x80 else b
+
+
+def strip_leading_zero_to_32(b: bytes) -> bytes:
+    i = 0
+    while i < len(b) and b[i] == 0:
+        i += 1
+    if i + 31 >= len(b):
+        i = max(0, len(b) - 32)
+    key = b[i : i + 32]
+    if len(key) != 32:
+        raise ValueError("bad shared key length")
     return key
+
 
 def _获取DH私钥位数() -> int:
     """限制临时 DH 私钥位数，减少正文请求前的本地幂运算耗时。"""
@@ -1139,194 +1361,229 @@ def _获取DH私钥位数() -> int:
 DH_PRIVATE_BITS = _获取DH私钥位数()
 
 
-def make_encrypt_context()->Tuple[int,str]:
-    x=secrets.randbits(DH_PRIVATE_BITS)|(1<<(DH_PRIVATE_BITS-1))|1
-    y=pow(DHG,x,DHP); yb=java_bigint_bytes(y)
-    iv=os.urandom(16); enc=aes_cbc_encrypt(yb,DHAES_TOKEN,iv)
-    return x, base64.b64encode(iv+enc).decode()
+def make_encrypt_context() -> Tuple[int, str]:
+    x = secrets.randbits(DH_PRIVATE_BITS) | (1 << (DH_PRIVATE_BITS - 1)) | 1
+    y = pow(DHG, x, DHP)
+    yb = java_bigint_bytes(y)
+    iv = os.urandom(16)
+    enc = aes_cbc_encrypt(yb, DHAES_TOKEN, iv)
+    return x, base64.b64encode(iv + enc).decode()
 
-def decrypt_content(content_b64:str, server_y_b64:str, client_x:int)->str:
-    iv=content_b64.encode('utf-8')[:16]
-    ciphertext=base64.b64decode(content_b64)
-    server_y=int.from_bytes(base64.b64decode(server_y_b64),'big')
-    shared=int(gmpy2.powmod(server_y,client_x,DHP)) if gmpy2 is not None else pow(server_y,client_x,DHP)
-    aes_key=strip_leading_zero_to_32(java_bigint_bytes(shared))
-    plaintext=aes_cbc_decrypt_fast(ciphertext,aes_key,iv)
-    return plaintext[16:].decode('utf-8','replace')
+
+def decrypt_content(content_b64: str, server_y_b64: str, client_x: int) -> str:
+    iv = content_b64.encode("utf-8")[:16]
+    ciphertext = base64.b64decode(content_b64)
+    server_y = int.from_bytes(base64.b64decode(server_y_b64), "big")
+    shared = (
+        int(gmpy2.powmod(server_y, client_x, DHP))
+        if gmpy2 is not None
+        else pow(server_y, client_x, DHP)
+    )
+    aes_key = strip_leading_zero_to_32(java_bigint_bytes(shared))
+    plaintext = aes_cbc_decrypt_fast(ciphertext, aes_key, iv)
+    return plaintext[16:].decode("utf-8", "replace")
+
 
 # ===== HTTP/2 正文请求 =====
-FULL_MGET_TRANSPORT=os.environ.get('FANQIE_FULL_MGET_TRANSPORT','auto').lower()
+FULL_MGET_TRANSPORT = os.environ.get("FANQIE_FULL_MGET_TRANSPORT", "auto").lower()
 
-if FULL_MGET_TRANSPORT not in {'auto','http1','http2'}:
-    FULL_MGET_TRANSPORT='auto'
+if FULL_MGET_TRANSPORT not in {"auto", "http1", "http2"}:
+    FULL_MGET_TRANSPORT = "auto"
 
-FULL_MGET_HTTP_REUSE=os.environ.get('FANQIE_FULL_MGET_HTTP_REUSE','1').strip().lower() not in {'0','false','off','no'}
+FULL_MGET_HTTP_REUSE = os.environ.get(
+    "FANQIE_FULL_MGET_HTTP_REUSE", "1"
+).strip().lower() not in {"0", "false", "off", "no"}
 
 try:
-    FULL_MGET_HTTP_REUSE_MAX_REQUESTS=max(1,int(os.environ.get('FANQIE_FULL_MGET_HTTP_REUSE_MAX_REQUESTS','80')))
+    FULL_MGET_HTTP_REUSE_MAX_REQUESTS = max(
+        1, int(os.environ.get("FANQIE_FULL_MGET_HTTP_REUSE_MAX_REQUESTS", "80"))
+    )
 except Exception:
-    FULL_MGET_HTTP_REUSE_MAX_REQUESTS=80
+    FULL_MGET_HTTP_REUSE_MAX_REQUESTS = 80
 
-_H2_THREAD_LOCAL=threading.local()
+_H2_THREAD_LOCAL = threading.local()
 
-def _h2_frame(frame_type:int, flags:int, stream_id:int, payload:bytes=b'')->bytes:
-    return len(payload).to_bytes(3,'big')+bytes([frame_type&0xff,flags&0xff])+struct.pack('>I',stream_id&0x7fffffff)+payload
 
-def _h2_recv_exact(sock:ssl.SSLSocket, size:int)->bytes:
-    parts=[]
+def _h2_frame(
+    frame_type: int, flags: int, stream_id: int, payload: bytes = b""
+) -> bytes:
+    return (
+        len(payload).to_bytes(3, "big")
+        + bytes([frame_type & 0xFF, flags & 0xFF])
+        + struct.pack(">I", stream_id & 0x7FFFFFFF)
+        + payload
+    )
+
+
+def _h2_recv_exact(sock: ssl.SSLSocket, size: int) -> bytes:
+    parts = []
     while size:
-        chunk=sock.recv(size)
+        chunk = sock.recv(size)
         if not chunk:
-            raise EOFError('HTTP/2 connection closed before response completed')
+            raise EOFError("HTTP/2 connection closed before response completed")
         parts.append(chunk)
-        size-=len(chunk)
-    return b''.join(parts)
+        size -= len(chunk)
+    return b"".join(parts)
 
-def _hpack_int(value:int, prefix_bits:int, prefix:int=0)->bytes:
-    limit=(1<<prefix_bits)-1
-    if value<limit:
-        return bytes([prefix|value])
-    out=bytearray([prefix|limit])
-    value-=limit
-    while value>=128:
-        out.append((value&0x7f)|0x80)
-        value>>=7
+
+def _hpack_int(value: int, prefix_bits: int, prefix: int = 0) -> bytes:
+    limit = (1 << prefix_bits) - 1
+    if value < limit:
+        return bytes([prefix | value])
+    out = bytearray([prefix | limit])
+    value -= limit
+    while value >= 128:
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
     out.append(value)
     return bytes(out)
 
-def _hpack_string(value:str|bytes)->bytes:
-    raw=value.encode('utf-8') if isinstance(value,str) else bytes(value)
+
+def _hpack_string(value: str | bytes) -> bytes:
+    raw = value.encode("utf-8") if isinstance(value, str) else bytes(value)
     # High bit remains clear: sending literal strings avoids a Huffman table.
-    return _hpack_int(len(raw),7)+raw
+    return _hpack_int(len(raw), 7) + raw
 
-def _hpack_literal_header(name:str, value:str)->bytes:
+
+def _hpack_literal_header(name: str, value: str) -> bytes:
     # Literal Header Field without Indexing, new-name representation.
-    return _hpack_int(0,4)+_hpack_string(name.lower())+_hpack_string(value)
+    return _hpack_int(0, 4) + _hpack_string(name.lower()) + _hpack_string(value)
 
-def _http2_post_bytes(url:str, headers:Dict[str,str], data:bytes, timeout:int=60)->bytes:
+
+def _http2_post_bytes(
+    url: str, headers: Dict[str, str], data: bytes, timeout: int = 60
+) -> bytes:
     """Issue one HTTPS HTTP/2 POST and return its raw response body."""
-    split=urllib.parse.urlsplit(url)
-    if split.scheme!='https' or not split.hostname:
-        raise ValueError('HTTP/2 transport only supports absolute HTTPS URLs')
-    host=split.hostname
-    port=split.port or 443
-    path=(split.path or '/')+(('?'+split.query) if split.query else '')
-    tcp:Optional[socket.socket]=None
-    sock:Optional[ssl.SSLSocket]=None
+    split = urllib.parse.urlsplit(url)
+    if split.scheme != "https" or not split.hostname:
+        raise ValueError("HTTP/2 transport only supports absolute HTTPS URLs")
+    host = split.hostname
+    port = split.port or 443
+    path = (split.path or "/") + (("?" + split.query) if split.query else "")
+    tcp: Optional[socket.socket] = None
+    sock: Optional[ssl.SSLSocket] = None
     try:
-        context=ssl.create_default_context()
-        context.set_alpn_protocols(['h2'])
-        tcp=socket.create_connection((host,port),timeout=timeout)
-        sock=context.wrap_socket(tcp,server_hostname=host)
-        tcp=None
+        context = ssl.create_default_context()
+        context.set_alpn_protocols(["h2"])
+        tcp = socket.create_connection((host, port), timeout=timeout)
+        sock = context.wrap_socket(tcp, server_hostname=host)
+        tcp = None
         sock.settimeout(timeout)
-        if sock.selected_alpn_protocol()!='h2':
-            raise RuntimeError('server did not negotiate HTTP/2')
+        if sock.selected_alpn_protocol() != "h2":
+            raise RuntimeError("server did not negotiate HTTP/2")
 
-        sock.sendall(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
+        sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
         # A larger per-stream receive window prevents a 64 KiB pause on
         # multi-chapter responses.  HTTP/2 also has a separate connection
         # window; if it stays at the default 65 KiB the server must wait for a
         # round-trip every few DATA frames, which makes 1000+ chapter mget
         # responses look much slower than the App/Cronet capture.  Open both
         # windows up-front, then still replenish credits as frames are read.
-        h2_window=16*1024*1024
-        sock.sendall(_h2_frame(4,0,0,struct.pack('>HI',4,h2_window)))
-        sock.sendall(_h2_frame(8,0,0,struct.pack('>I',h2_window-65535)))
+        h2_window = 16 * 1024 * 1024
+        sock.sendall(_h2_frame(4, 0, 0, struct.pack(">HI", 4, h2_window)))
+        sock.sendall(_h2_frame(8, 0, 0, struct.pack(">I", h2_window - 65535)))
 
-        pairs=[
-            (':method','POST'),
-            (':scheme','https'),
-            (':authority',split.netloc),
-            (':path',path),
+        pairs = [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":authority", split.netloc),
+            (":path", path),
         ]
-        seen=set()
-        forbidden={'connection','host','keep-alive','proxy-connection','transfer-encoding','upgrade'}
-        for key,value in headers.items():
-            name=key.lower()
-            if name in forbidden or name.startswith(':'):
+        seen = set()
+        forbidden = {
+            "connection",
+            "host",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+            "upgrade",
+        }
+        for key, value in headers.items():
+            name = key.lower()
+            if name in forbidden or name.startswith(":"):
                 continue
             seen.add(name)
-            pairs.append((name,str(value)))
-        if 'content-length' not in seen:
-            pairs.append(('content-length',str(len(data))))
-        block=b''.join(_hpack_literal_header(name,value) for name,value in pairs)
-        if len(block)>16_384:
-            raise ValueError('HTTP/2 header block exceeds supported frame size')
-        sock.sendall(_h2_frame(1,0x04|(0x01 if not data else 0),1,block))
-        for offset in range(0,len(data),16_384):
-            chunk=data[offset:offset+16_384]
-            flags=0x01 if offset+len(chunk)==len(data) else 0
-            sock.sendall(_h2_frame(0,flags,1,chunk))
+            pairs.append((name, str(value)))
+        if "content-length" not in seen:
+            pairs.append(("content-length", str(len(data))))
+        block = b"".join(_hpack_literal_header(name, value) for name, value in pairs)
+        if len(block) > 16_384:
+            raise ValueError("HTTP/2 header block exceeds supported frame size")
+        sock.sendall(_h2_frame(1, 0x04 | (0x01 if not data else 0), 1, block))
+        for offset in range(0, len(data), 16_384):
+            chunk = data[offset : offset + 16_384]
+            flags = 0x01 if offset + len(chunk) == len(data) else 0
+            sock.sendall(_h2_frame(0, flags, 1, chunk))
 
-        response=bytearray()
+        response = bytearray()
         while True:
-            header=_h2_recv_exact(sock,9)
-            payload_size=int.from_bytes(header[:3],'big')
-            frame_type=header[3]
-            flags=header[4]
-            stream_id=struct.unpack('>I',header[5:9])[0]&0x7fffffff
-            payload=_h2_recv_exact(sock,payload_size)
-            if frame_type==4:  # SETTINGS
-                if not (flags&0x01):
-                    sock.sendall(_h2_frame(4,0x01,0))
+            header = _h2_recv_exact(sock, 9)
+            payload_size = int.from_bytes(header[:3], "big")
+            frame_type = header[3]
+            flags = header[4]
+            stream_id = struct.unpack(">I", header[5:9])[0] & 0x7FFFFFFF
+            payload = _h2_recv_exact(sock, payload_size)
+            if frame_type == 4:  # SETTINGS
+                if not (flags & 0x01):
+                    sock.sendall(_h2_frame(4, 0x01, 0))
                 continue
-            if frame_type==6:  # PING
-                if not (flags&0x01):
-                    sock.sendall(_h2_frame(6,0x01,0,payload))
+            if frame_type == 6:  # PING
+                if not (flags & 0x01):
+                    sock.sendall(_h2_frame(6, 0x01, 0, payload))
                 continue
-            if frame_type==0 and stream_id==1:  # DATA
-                flow_bytes=len(payload)
-                if flags&0x08:  # PADDED
+            if frame_type == 0 and stream_id == 1:  # DATA
+                flow_bytes = len(payload)
+                if flags & 0x08:  # PADDED
                     if not payload:
-                        raise RuntimeError('invalid padded HTTP/2 DATA frame')
-                    pad_len=payload[0]
-                    if pad_len>=len(payload):
-                        raise RuntimeError('invalid HTTP/2 DATA padding')
-                    payload=payload[1:len(payload)-pad_len]
+                        raise RuntimeError("invalid padded HTTP/2 DATA frame")
+                    pad_len = payload[0]
+                    if pad_len >= len(payload):
+                        raise RuntimeError("invalid HTTP/2 DATA padding")
+                    payload = payload[1 : len(payload) - pad_len]
                 response.extend(payload)
                 if flow_bytes:
-                    increment=struct.pack('>I',flow_bytes)
-                    sock.sendall(_h2_frame(8,0,0,increment))
-                    sock.sendall(_h2_frame(8,0,1,increment))
-                if flags&0x01:
+                    increment = struct.pack(">I", flow_bytes)
+                    sock.sendall(_h2_frame(8, 0, 0, increment))
+                    sock.sendall(_h2_frame(8, 0, 1, increment))
+                if flags & 0x01:
                     return bytes(response)
                 continue
-            if frame_type==1 and stream_id==1 and (flags&0x01):
+            if frame_type == 1 and stream_id == 1 and (flags & 0x01):
                 return bytes(response)
-            if frame_type==3 and stream_id==1:
-                code=int.from_bytes(payload[:4],'big') if len(payload)>=4 else -1
-                raise RuntimeError(f'HTTP/2 RST_STREAM code={code}')
-            if frame_type==7:
-                raise RuntimeError('HTTP/2 GOAWAY received')
+            if frame_type == 3 and stream_id == 1:
+                code = int.from_bytes(payload[:4], "big") if len(payload) >= 4 else -1
+                raise RuntimeError(f"HTTP/2 RST_STREAM code={code}")
+            if frame_type == 7:
+                raise RuntimeError("HTTP/2 GOAWAY received")
     finally:
         if sock is not None:
             sock.close()
         elif tcp is not None:
             tcp.close()
 
+
 class _ReusableHttp2Connection:
     """线程内复用的简易 HTTP/2 连接，用于分批下载时减少 TLS 握手耗时。"""
 
-    def __init__(self, host:str, port:int, timeout:int=60):
-        self.host=host
-        self.port=port
-        self.sock:Optional[ssl.SSLSocket]=None
-        self.next_stream_id=1
-        self.request_count=0
+    def __init__(self, host: str, port: int, timeout: int = 60):
+        self.host = host
+        self.port = port
+        self.sock: Optional[ssl.SSLSocket] = None
+        self.next_stream_id = 1
+        self.request_count = 0
         self._connect(timeout)
 
     @property
-    def key(self)->Tuple[str,int]:
-        return (self.host,self.port)
+    def key(self) -> Tuple[str, int]:
+        return (self.host, self.port)
 
     @property
-    def closed(self)->bool:
+    def closed(self) -> bool:
         return self.sock is None
 
-    def close(self)->None:
-        sock=self.sock
-        self.sock=None
+    def close(self) -> None:
+        sock = self.sock
+        self.sock = None
         if sock is not None:
             try:
                 sock.close()
@@ -1336,26 +1593,26 @@ class _ReusableHttp2Connection:
     def __del__(self):
         self.close()
 
-    def _connect(self, timeout:int=60)->None:
+    def _connect(self, timeout: int = 60) -> None:
         self.close()
-        context=ssl.create_default_context()
-        context.set_alpn_protocols(['h2'])
-        tcp:Optional[socket.socket]=None
+        context = ssl.create_default_context()
+        context.set_alpn_protocols(["h2"])
+        tcp: Optional[socket.socket] = None
         try:
-            tcp=socket.create_connection((self.host,self.port),timeout=timeout)
-            sock=context.wrap_socket(tcp,server_hostname=self.host)
-            tcp=None
+            tcp = socket.create_connection((self.host, self.port), timeout=timeout)
+            sock = context.wrap_socket(tcp, server_hostname=self.host)
+            tcp = None
             sock.settimeout(timeout)
-            if sock.selected_alpn_protocol()!='h2':
+            if sock.selected_alpn_protocol() != "h2":
                 sock.close()
-                raise RuntimeError('server did not negotiate HTTP/2')
-            h2_window=16*1024*1024
-            sock.sendall(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
-            sock.sendall(_h2_frame(4,0,0,struct.pack('>HI',4,h2_window)))
-            sock.sendall(_h2_frame(8,0,0,struct.pack('>I',h2_window-65535)))
-            self.sock=sock
-            self.next_stream_id=1
-            self.request_count=0
+                raise RuntimeError("server did not negotiate HTTP/2")
+            h2_window = 16 * 1024 * 1024
+            sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+            sock.sendall(_h2_frame(4, 0, 0, struct.pack(">HI", 4, h2_window)))
+            sock.sendall(_h2_frame(8, 0, 0, struct.pack(">I", h2_window - 65535)))
+            self.sock = sock
+            self.next_stream_id = 1
+            self.request_count = 0
         finally:
             if tcp is not None:
                 try:
@@ -1363,198 +1620,277 @@ class _ReusableHttp2Connection:
                 except Exception:
                     pass
 
-    def post_bytes(self, url:str, headers:Dict[str,str], data:bytes, timeout:int=60)->bytes:
-        split=urllib.parse.urlsplit(url)
-        if split.scheme!='https' or not split.hostname:
-            raise ValueError('HTTP/2 transport only supports absolute HTTPS URLs')
-        port=split.port or 443
-        if (split.hostname,port)!=self.key:
-            raise ValueError('HTTP/2 reusable connection host changed')
-        if self.closed or self.next_stream_id>=0x7ffffff0:
+    def post_bytes(
+        self, url: str, headers: Dict[str, str], data: bytes, timeout: int = 60
+    ) -> bytes:
+        split = urllib.parse.urlsplit(url)
+        if split.scheme != "https" or not split.hostname:
+            raise ValueError("HTTP/2 transport only supports absolute HTTPS URLs")
+        port = split.port or 443
+        if (split.hostname, port) != self.key:
+            raise ValueError("HTTP/2 reusable connection host changed")
+        if self.closed or self.next_stream_id >= 0x7FFFFFF0:
             self._connect(timeout)
-        sock=self.sock
+        sock = self.sock
         if sock is None:
-            raise RuntimeError('HTTP/2 reusable connection is closed')
+            raise RuntimeError("HTTP/2 reusable connection is closed")
         sock.settimeout(timeout)
-        stream_id=self.next_stream_id
-        self.next_stream_id+=2
-        self.request_count+=1
-        path=(split.path or '/')+(('?'+split.query) if split.query else '')
+        stream_id = self.next_stream_id
+        self.next_stream_id += 2
+        self.request_count += 1
+        path = (split.path or "/") + (("?" + split.query) if split.query else "")
 
-        pairs=[
-            (':method','POST'),
-            (':scheme','https'),
-            (':authority',split.netloc),
-            (':path',path),
+        pairs = [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":authority", split.netloc),
+            (":path", path),
         ]
-        seen=set()
-        forbidden={'connection','host','keep-alive','proxy-connection','transfer-encoding','upgrade'}
-        for key,value in headers.items():
-            name=key.lower()
-            if name in forbidden or name.startswith(':'):
+        seen = set()
+        forbidden = {
+            "connection",
+            "host",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+            "upgrade",
+        }
+        for key, value in headers.items():
+            name = key.lower()
+            if name in forbidden or name.startswith(":"):
                 continue
             seen.add(name)
-            pairs.append((name,str(value)))
-        if 'content-length' not in seen:
-            pairs.append(('content-length',str(len(data))))
-        block=b''.join(_hpack_literal_header(name,value) for name,value in pairs)
-        if len(block)>16_384:
-            raise ValueError('HTTP/2 header block exceeds supported frame size')
+            pairs.append((name, str(value)))
+        if "content-length" not in seen:
+            pairs.append(("content-length", str(len(data))))
+        block = b"".join(_hpack_literal_header(name, value) for name, value in pairs)
+        if len(block) > 16_384:
+            raise ValueError("HTTP/2 header block exceeds supported frame size")
 
         try:
-            sock.sendall(_h2_frame(1,0x04|(0x01 if not data else 0),stream_id,block))
-            for offset in range(0,len(data),16_384):
-                chunk=data[offset:offset+16_384]
-                flags=0x01 if offset+len(chunk)==len(data) else 0
-                sock.sendall(_h2_frame(0,flags,stream_id,chunk))
+            sock.sendall(
+                _h2_frame(1, 0x04 | (0x01 if not data else 0), stream_id, block)
+            )
+            for offset in range(0, len(data), 16_384):
+                chunk = data[offset : offset + 16_384]
+                flags = 0x01 if offset + len(chunk) == len(data) else 0
+                sock.sendall(_h2_frame(0, flags, stream_id, chunk))
 
-            response=bytearray()
+            response = bytearray()
             while True:
-                header=_h2_recv_exact(sock,9)
-                payload_size=int.from_bytes(header[:3],'big')
-                frame_type=header[3]
-                flags=header[4]
-                frame_stream_id=struct.unpack('>I',header[5:9])[0]&0x7fffffff
-                payload=_h2_recv_exact(sock,payload_size)
-                if frame_type==4:  # SETTINGS
-                    if not (flags&0x01):
-                        sock.sendall(_h2_frame(4,0x01,0))
+                header = _h2_recv_exact(sock, 9)
+                payload_size = int.from_bytes(header[:3], "big")
+                frame_type = header[3]
+                flags = header[4]
+                frame_stream_id = struct.unpack(">I", header[5:9])[0] & 0x7FFFFFFF
+                payload = _h2_recv_exact(sock, payload_size)
+                if frame_type == 4:  # SETTINGS
+                    if not (flags & 0x01):
+                        sock.sendall(_h2_frame(4, 0x01, 0))
                     continue
-                if frame_type==6:  # PING
-                    if not (flags&0x01):
-                        sock.sendall(_h2_frame(6,0x01,0,payload))
+                if frame_type == 6:  # PING
+                    if not (flags & 0x01):
+                        sock.sendall(_h2_frame(6, 0x01, 0, payload))
                     continue
-                if frame_type==0 and frame_stream_id==stream_id:  # DATA
-                    flow_bytes=len(payload)
-                    if flags&0x08:  # PADDED
+                if frame_type == 0 and frame_stream_id == stream_id:  # DATA
+                    flow_bytes = len(payload)
+                    if flags & 0x08:  # PADDED
                         if not payload:
-                            raise RuntimeError('invalid padded HTTP/2 DATA frame')
-                        pad_len=payload[0]
-                        if pad_len>=len(payload):
-                            raise RuntimeError('invalid HTTP/2 DATA padding')
-                        payload=payload[1:len(payload)-pad_len]
+                            raise RuntimeError("invalid padded HTTP/2 DATA frame")
+                        pad_len = payload[0]
+                        if pad_len >= len(payload):
+                            raise RuntimeError("invalid HTTP/2 DATA padding")
+                        payload = payload[1 : len(payload) - pad_len]
                     response.extend(payload)
                     if flow_bytes:
-                        increment=struct.pack('>I',flow_bytes)
-                        sock.sendall(_h2_frame(8,0,0,increment))
-                        sock.sendall(_h2_frame(8,0,stream_id,increment))
-                    if flags&0x01:
+                        increment = struct.pack(">I", flow_bytes)
+                        sock.sendall(_h2_frame(8, 0, 0, increment))
+                        sock.sendall(_h2_frame(8, 0, stream_id, increment))
+                    if flags & 0x01:
                         return bytes(response)
                     continue
-                if frame_type==1 and frame_stream_id==stream_id and (flags&0x01):
+                if frame_type == 1 and frame_stream_id == stream_id and (flags & 0x01):
                     return bytes(response)
-                if frame_type==3 and frame_stream_id==stream_id:
-                    code=int.from_bytes(payload[:4],'big') if len(payload)>=4 else -1
-                    raise RuntimeError(f'HTTP/2 RST_STREAM code={code}')
-                if frame_type==7:
-                    raise RuntimeError('HTTP/2 GOAWAY received')
+                if frame_type == 3 and frame_stream_id == stream_id:
+                    code = (
+                        int.from_bytes(payload[:4], "big") if len(payload) >= 4 else -1
+                    )
+                    raise RuntimeError(f"HTTP/2 RST_STREAM code={code}")
+                if frame_type == 7:
+                    raise RuntimeError("HTTP/2 GOAWAY received")
         except Exception:
             self.close()
             raise
 
-def _close_thread_h2_connection()->None:
-    conn=getattr(_H2_THREAD_LOCAL,'conn',None)
+
+def _close_thread_h2_connection() -> None:
+    conn = getattr(_H2_THREAD_LOCAL, "conn", None)
     if conn is not None:
         try:
             conn.close()
         except Exception:
             pass
         try:
-            delattr(_H2_THREAD_LOCAL,'conn')
+            delattr(_H2_THREAD_LOCAL, "conn")
         except Exception:
             pass
 
-def _get_thread_h2_connection(url:str, timeout:int=60)->_ReusableHttp2Connection:
-    split=urllib.parse.urlsplit(url)
-    if split.scheme!='https' or not split.hostname:
-        raise ValueError('HTTP/2 transport only supports absolute HTTPS URLs')
-    key=(split.hostname,split.port or 443)
-    conn=getattr(_H2_THREAD_LOCAL,'conn',None)
+
+def _get_thread_h2_connection(url: str, timeout: int = 60) -> _ReusableHttp2Connection:
+    split = urllib.parse.urlsplit(url)
+    if split.scheme != "https" or not split.hostname:
+        raise ValueError("HTTP/2 transport only supports absolute HTTPS URLs")
+    key = (split.hostname, split.port or 443)
+    conn = getattr(_H2_THREAD_LOCAL, "conn", None)
     if (
         conn is None
-        or getattr(conn,'closed',True)
-        or getattr(conn,'key',None)!=key
-        or getattr(conn,'request_count',0)>=FULL_MGET_HTTP_REUSE_MAX_REQUESTS
+        or getattr(conn, "closed", True)
+        or getattr(conn, "key", None) != key
+        or getattr(conn, "request_count", 0) >= FULL_MGET_HTTP_REUSE_MAX_REQUESTS
     ):
         if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
-        conn=_ReusableHttp2Connection(key[0],key[1],timeout)
-        _H2_THREAD_LOCAL.conn=conn
+        conn = _ReusableHttp2Connection(key[0], key[1], timeout)
+        _H2_THREAD_LOCAL.conn = conn
     return conn
 
-def _http2_post_bytes_reused(url:str, headers:Dict[str,str], data:bytes, timeout:int=60)->bytes:
-    last:Optional[BaseException]=None
+
+def _http2_post_bytes_reused(
+    url: str, headers: Dict[str, str], data: bytes, timeout: int = 60
+) -> bytes:
+    last: Optional[BaseException] = None
     for _attempt in range(2):
         try:
-            conn=_get_thread_h2_connection(url,timeout)
-            return conn.post_bytes(url,headers,data,timeout)
+            conn = _get_thread_h2_connection(url, timeout)
+            return conn.post_bytes(url, headers, data, timeout)
         except Exception as e:
-            last=e
+            last = e
             _close_thread_h2_connection()
     raise last  # type: ignore[misc]
 
-def full_mget_http_json(url:str, headers:Dict[str,str], data:bytes, timeout:int=60, retries:int=3)->Any:
+
+def full_mget_http_json(
+    url: str, headers: Dict[str, str], data: bytes, timeout: int = 60, retries: int = 3
+) -> Any:
     """Use HTTP/2 for full/mget when available, then fall back to urllib."""
-    if FULL_MGET_TRANSPORT in {'auto','http2'}:
+    if FULL_MGET_TRANSPORT in {"auto", "http2"}:
         try:
-            raw=_http2_post_bytes_reused(url,headers,data,timeout) if FULL_MGET_HTTP_REUSE else _http2_post_bytes(url,headers,data,timeout)
-            if raw[:2]==b'\x1f\x8b':
-                raw=gzip.decompress(raw)
+            raw = (
+                _http2_post_bytes_reused(url, headers, data, timeout)
+                if FULL_MGET_HTTP_REUSE
+                else _http2_post_bytes(url, headers, data, timeout)
+            )
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
             if not raw:
                 return {}
-            return orjson.loads(raw) if orjson is not None else json.loads(raw.decode('utf-8','replace'))
+            return (
+                orjson.loads(raw)
+                if orjson is not None
+                else json.loads(raw.decode("utf-8", "replace"))
+            )
         except Exception:
-            if FULL_MGET_TRANSPORT=='http2':
+            if FULL_MGET_TRANSPORT == "http2":
                 raise
-    return http_json_bytes(url,'POST',headers,data,timeout=timeout,retries=retries)
+    return http_json_bytes(url, "POST", headers, data, timeout=timeout, retries=retries)
 
-def _open_with_retries(req:urllib.request.Request, timeout:int=30, retries:int=3, backoff:float=0.8)->bytes:
-    last:Optional[BaseException]=None
-    for attempt in range(1, max(1, retries)+1):
+
+def _open_with_retries(
+    req: urllib.request.Request,
+    timeout: int = 30,
+    retries: int = 3,
+    backoff: float = 0.8,
+) -> bytes:
+    last: Optional[BaseException] = None
+    for attempt in range(1, max(1, retries) + 1):
         try:
-            with urllib.request.urlopen(req,timeout=timeout) as r:
-                raw=r.read()
-                if r.headers.get('Content-Encoding','').lower()=='gzip': raw=gzip.decompress(raw)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding", "").lower() == "gzip":
+                    raw = gzip.decompress(raw)
                 return raw
         except Exception as e:
-            last=e
+            last = e
             if attempt >= max(1, retries):
                 break
             time.sleep(backoff * attempt)
     raise last  # type: ignore[misc]
 
-def http_json(url:str, method='GET', headers:Optional[Dict[str,str]]=None, body:Any=None, timeout=30, retries:int=3)->Any:
-    data=None
-    h=dict(headers or {})
+
+def http_json(
+    url: str,
+    method="GET",
+    headers: Optional[Dict[str, str]] = None,
+    body: Any = None,
+    timeout=30,
+    retries: int = 3,
+) -> Any:
+    data = None
+    h = dict(headers or {})
     if body is not None:
-        data=orjson.dumps(body) if orjson is not None else json.dumps(body,separators=(',',':'),ensure_ascii=False).encode('utf-8')
-        h.setdefault('Content-Type','application/json; charset=utf-8')
-    req=urllib.request.Request(url,data=data,headers=h,method=method)
-    raw=_open_with_retries(req,timeout=timeout,retries=retries)
-    if not raw: return {}
-    return orjson.loads(raw) if orjson is not None else json.loads(raw.decode('utf-8','replace'))
+        data = (
+            orjson.dumps(body)
+            if orjson is not None
+            else json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode(
+                "utf-8"
+            )
+        )
+        h.setdefault("Content-Type", "application/json; charset=utf-8")
+    req = urllib.request.Request(url, data=data, headers=h, method=method)
+    raw = _open_with_retries(req, timeout=timeout, retries=retries)
+    if not raw:
+        return {}
+    return (
+        orjson.loads(raw)
+        if orjson is not None
+        else json.loads(raw.decode("utf-8", "replace"))
+    )
 
-def json_body_bytes(body:Any)->bytes:
-    return orjson.dumps(body) if orjson is not None else json.dumps(body,separators=(',',':'),ensure_ascii=False).encode('utf-8')
 
-def http_json_bytes(url:str, method='POST', headers:Optional[Dict[str,str]]=None, data:bytes=b'', timeout=30, retries:int=3)->Any:
-    h=dict(headers or {})
-    h.setdefault('Content-Type','application/json; charset=utf-8')
-    req=urllib.request.Request(url,data=data,headers=h,method=method)
-    raw=_open_with_retries(req,timeout=timeout,retries=retries)
-    if not raw: return {}
-    return orjson.loads(raw) if orjson is not None else json.loads(raw.decode('utf-8','replace'))
+def json_body_bytes(body: Any) -> bytes:
+    return (
+        orjson.dumps(body)
+        if orjson is not None
+        else json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
 
-def make_url(path:str, query:Dict[str,str], *, host:str=API_HOST)->str:
-    q=dict(DEFAULT_QUERY); q['_rticket']=str(int(time.time()*1000)); q.update(query)
-    if not path.startswith('/'):
-        path='/'+path
-    return host+path+'?'+urllib.parse.urlencode(q)
 
-def make_app_headers(url: str, body_bytes: bytes = b"", sign_mode: str = "auto") -> Dict[str, str]:
+def http_json_bytes(
+    url: str,
+    method="POST",
+    headers: Optional[Dict[str, str]] = None,
+    data: bytes = b"",
+    timeout=30,
+    retries: int = 3,
+) -> Any:
+    h = dict(headers or {})
+    h.setdefault("Content-Type", "application/json; charset=utf-8")
+    req = urllib.request.Request(url, data=data, headers=h, method=method)
+    raw = _open_with_retries(req, timeout=timeout, retries=retries)
+    if not raw:
+        return {}
+    return (
+        orjson.loads(raw)
+        if orjson is not None
+        else json.loads(raw.decode("utf-8", "replace"))
+    )
+
+
+def make_url(path: str, query: Dict[str, str], *, host: str = API_HOST) -> str:
+    q = dict(DEFAULT_QUERY)
+    q["_rticket"] = str(int(time.time() * 1000))
+    q.update(query)
+    if not path.startswith("/"):
+        path = "/" + path
+    return host + path + "?" + urllib.parse.urlencode(q)
+
+
+def make_app_headers(
+    url: str, body_bytes: bytes = b"", sign_mode: str = "auto"
+) -> Dict[str, str]:
     """构造番茄畅听 App 接口的纯 Python 签名请求头。"""
     mode = (sign_mode or "auto").lower()
     if mode not in {"auto", "pure3040", "legacy3040"}:
@@ -1566,20 +1902,39 @@ def make_app_headers(url: str, body_bytes: bytes = b"", sign_mode: str = "auto")
         headers.update(build_pure3040_headers(url, body_bytes, khronos=1_783_204_357))
     return headers
 
-def signed_app_json(path:str, body:Any=None, query:Optional[Dict[str,str]]=None, *,
-                    method:str='POST', sign_mode:str='auto', timeout:int=60,
-                    host:str=API_HOST, unsigned_fallback:bool=True)->Any:
+
+def signed_app_json(
+    path: str,
+    body: Any = None,
+    query: Optional[Dict[str, str]] = None,
+    *,
+    method: str = "POST",
+    sign_mode: str = "auto",
+    timeout: int = 60,
+    host: str = API_HOST,
+    unsigned_fallback: bool = True,
+) -> Any:
     """Request an App RPC JSON endpoint with pure-Python signing."""
-    url=make_url(path, query or {}, host=host)
-    method=method.upper()
-    body_bytes=b'' if body is None else json_body_bytes(body)
+    url = make_url(path, query or {}, host=host)
+    method = method.upper()
+    body_bytes = b"" if body is None else json_body_bytes(body)
     try:
-        return http_json_bytes(url, method, make_app_headers(url, body_bytes, sign_mode), body_bytes, timeout=timeout)
+        return http_json_bytes(
+            url,
+            method,
+            make_app_headers(url, body_bytes, sign_mode),
+            body_bytes,
+            timeout=timeout,
+        )
     except Exception:
         if not unsigned_fallback:
             raise
         # Some business endpoints do not enforce metasec; keep an unsigned fallback.
-        h={k:v for k,v in APP_COMMON_HEADERS.items() if method!='GET' or k.lower()!='content-type'}
+        h = {
+            k: v
+            for k, v in APP_COMMON_HEADERS.items()
+            if method != "GET" or k.lower() != "content-type"
+        }
         if body is None:
             return http_json(url, method, h, None, timeout=timeout)
         return http_json_bytes(url, method, h, body_bytes, timeout=timeout)
@@ -1625,96 +1980,114 @@ async def 异步签名番茄JSON(
             retries=2,
         )
 
-def resolve_book_id(value:str)->str:
+
+def resolve_book_id(value: str) -> str:
     """从 book_id、番茄小说链接、App schema/share 文本中提取 book_id。
 
     现有正文接口本质只需要 book_id + item_id 列表；不同频道（看书/短篇/
     出版物/故事等）只要仍是书籍详情页或 schema 里的 book_id，都走同一套
     full/mget 下载链。
     """
-    text=(value or '').strip()
+    text = (value or "").strip()
     if not text:
-        raise ValueError('empty book id/url')
-    if re.fullmatch(r'\d{8,}', text):
+        raise ValueError("empty book id/url")
+    if re.fullmatch(r"\d{8,}", text):
         return text
     # 常见 App/schema/share 参数：book_id=、bookId=、bookid=
-    m=re.search(r'(?i)(?:book[_-]?id|bookId)=([0-9]{8,})', text)
+    m = re.search(r"(?i)(?:book[_-]?id|bookId)=([0-9]{8,})", text)
     if m:
         return m.group(1)
     # 公开页：https://fanqienovel.com/page/<book_id>
-    m=re.search(r'fanqienovel\.com/(?:page|book)/([0-9]{8,})', text)
+    m = re.search(r"fanqienovel\.com/(?:page|book)/([0-9]{8,})", text)
     if m:
         return m.group(1)
     # 有些分享文本里只暴露 /page/数字 或 aweme schema 内的 page%2F数字
-    m=re.search(r'(?:/|%2[fF])(?:page|book)(?:/|%2[fF])([0-9]{8,})', text)
+    m = re.search(r"(?:/|%2[fF])(?:page|book)(?:/|%2[fF])([0-9]{8,})", text)
     if m:
         return m.group(1)
     # 最后兜底：如果整段文本只有一个长数字，认为是 book_id。
-    ids=re.findall(r'\d{16,}', text)
-    uniq=[]
+    ids = re.findall(r"\d{16,}", text)
+    uniq = []
     for x in ids:
         if x not in uniq:
             uniq.append(x)
-    if len(uniq)==1:
+    if len(uniq) == 1:
         return uniq[0]
-    raise ValueError(f'无法从输入提取 book_id: {value!r}')
+    raise ValueError(f"无法从输入提取 book_id: {value!r}")
 
-def _u32le(n:int)->bytes:
-    return int(n & 0xFFFFFFFF).to_bytes(4,'little')
 
-def _ror64(value:int,count:int)->int:
-    value &= 0xFFFFFFFFFFFFFFFF; count &= 63
-    return ((value>>count)|(value<<(64-count))) & 0xFFFFFFFFFFFFFFFF
+def _u32le(n: int) -> bytes:
+    return int(n & 0xFFFFFFFF).to_bytes(4, "little")
 
-def _helios3040_encrypt_block(hash_table:List[int], block16:bytes)->bytes:
-    data0=int.from_bytes(block16[:8],'little')
-    data1=int.from_bytes(block16[8:],'little')
+
+def _ror64(value: int, count: int) -> int:
+    value &= 0xFFFFFFFFFFFFFFFF
+    count &= 63
+    return ((value >> count) | (value << (64 - count))) & 0xFFFFFFFFFFFFFFFF
+
+
+def _helios3040_encrypt_block(hash_table: List[int], block16: bytes) -> bytes:
+    data0 = int.from_bytes(block16[:8], "little")
+    data1 = int.from_bytes(block16[8:], "little")
     for i in range(0x22):
-        data1=(hash_table[i]^((data0+_ror64(data1,8))&0xFFFFFFFFFFFFFFFF))&0xFFFFFFFFFFFFFFFF
-        data0=(data1^_ror64(data0,61))&0xFFFFFFFFFFFFFFFF
-    return data0.to_bytes(8,'little')+data1.to_bytes(8,'little')
+        data1 = (
+            hash_table[i] ^ ((data0 + _ror64(data1, 8)) & 0xFFFFFFFFFFFFFFFF)
+        ) & 0xFFFFFFFFFFFFFFFF
+        data0 = (data1 ^ _ror64(data0, 61)) & 0xFFFFFFFFFFFFFFFF
+    return data0.to_bytes(8, "little") + data1.to_bytes(8, "little")
 
-def x_helios_3040(khronos:int, rand32:Optional[int]=None)->str:
+
+def x_helios_3040(khronos: int, rand32: Optional[int] = None) -> str:
     """纯 Python 生成 3040 / app 6.5.6.32 的 X-Helios。
 
     已用 out/medusa_oracle_batch.jsonl 八组样本校验：
       base64(uint32_le(rand) || enc(pkcs7(f"{khronos}-1532254240-3040")))
     """
     if rand32 is None:
-        rand32=secrets.randbits(32)
+        rand32 = secrets.randbits(32)
     rand32 &= 0xFFFFFFFF
-    md5=hashlib.md5(_u32le(rand32)+b'3040').digest()
-    hex_table=b'0123456789abcdef'
-    keybuf=bytearray(32)
-    for i,v in enumerate(md5):
-        keybuf[2*i]=hex_table[v>>4]; keybuf[2*i+1]=hex_table[v&15]
-    words=[int.from_bytes(keybuf[i:i+8],'little') for i in range(0,32,8)]
-    hash_table=[words[0]]
-    b0,b8=words[0],words[1]
-    q=words[2:]
+    md5 = hashlib.md5(_u32le(rand32) + b"3040").digest()
+    hex_table = b"0123456789abcdef"
+    keybuf = bytearray(32)
+    for i, v in enumerate(md5):
+        keybuf[2 * i] = hex_table[v >> 4]
+        keybuf[2 * i + 1] = hex_table[v & 15]
+    words = [int.from_bytes(keybuf[i : i + 8], "little") for i in range(0, 32, 8)]
+    hash_table = [words[0]]
+    b0, b8 = words[0], words[1]
+    q = words[2:]
     for i in range(0x22):
-        x=((_ror64(b8,8)+b0)^i)&0xFFFFFFFFFFFFFFFF
+        x = ((_ror64(b8, 8) + b0) ^ i) & 0xFFFFFFFFFFFFFFFF
         q.append(x)
-        x=(x^_ror64(b0,61))&0xFFFFFFFFFFFFFFFF
+        x = (x ^ _ror64(b0, 61)) & 0xFFFFFFFFFFFFFFFF
         hash_table.append(x)
-        b0=x; b8=q.pop(0)
-    raw=f'{int(khronos)}-1532254240-3040'.encode('ascii')
-    pad=16-len(raw)%16
-    raw+=bytes([pad])*pad
-    enc=b''.join(_helios3040_encrypt_block(hash_table,raw[i:i+16]) for i in range(0,len(raw),16))
-    return base64.b64encode(_u32le(rand32)+enc).decode()
+        b0 = x
+        b8 = q.pop(0)
+    raw = f"{int(khronos)}-1532254240-3040".encode("ascii")
+    pad = 16 - len(raw) % 16
+    raw += bytes([pad]) * pad
+    enc = b"".join(
+        _helios3040_encrypt_block(hash_table, raw[i : i + 16])
+        for i in range(0, len(raw), 16)
+    )
+    return base64.b64encode(_u32le(rand32) + enc).decode()
+
 
 def _pure3040_rand31() -> int:
     return secrets.randbelow(0x80000000)
 
-def build_pure3040_656_url(epoch_ms:int)->str:
+
+def build_pure3040_656_url(epoch_ms: int) -> str:
     # Use the 6.5.6.32 api5-sinfonlinec.novelfm.com query profile that matches the
     # recovered accepted881 Medusa source family. The fully current 891-byte
     # family is body-bound; downloader defaults to this known code=0 profile.
     _ = epoch_ms
     return FULL_MGET_SIGNED_URL
 
-def build_pure3040_headers(url:str, body_bytes:bytes, *, khronos:int|None=None)->Dict[str,str]:
+
+def build_pure3040_headers(
+    url: str, body_bytes: bytes, *, khronos: int | None = None
+) -> Dict[str, str]:
     """纯 Python 生成 3040 full/mget metasec 头。
 
     使用本项目内的 stage336 -> stage33f -> stage34a/control32(3892) 管线；
@@ -1723,12 +2096,12 @@ def build_pure3040_headers(url:str, body_bytes:bytes, *, khronos:int|None=None)-
     # 6.5.6.32 / aid=3040 的 accepted881 profile。实测 top_rand 只进入
     # X-Helios；X-Medusa 由 recovered source336 family 在 Python 内生成。
     if khronos is None:
-        khronos=int(time.time())
-    top_rand=_pure3040_rand31()
+        khronos = int(time.time())
+    top_rand = _pure3040_rand31()
     # Server-accepted 6.5.6.32 / full/mget 881-byte Medusa profile.  These
     # values are not copied headers: X-Medusa is assembled in pure Python from
     # the recovered source336 family for the paired URL/khronos profile.
-    ladon_raw=bytes.fromhex("d2da60f1")
+    ladon_raw = bytes.fromhex("d2da60f1")
     return {
         "X-Khronos": str(khronos),
         # App full/mget sends an empty X-SS-STUB for this request family.
@@ -1745,7 +2118,8 @@ def build_pure3040_headers(url:str, body_bytes:bytes, *, khronos:int|None=None)-
         ),
     }
 
-def build_pure3040_legacy_headers(url:str, body_bytes:bytes)->Dict[str,str]:
+
+def build_pure3040_legacy_headers(url: str, body_bytes: bytes) -> Dict[str, str]:
     """旧 6.4.4.32 code=0 profile：保留为可用基线/自动兜底。"""
     return {
         "X-Khronos": str(LEGACY_CODE0_3040_KHRONOS),
@@ -1755,8 +2129,9 @@ def build_pure3040_legacy_headers(url:str, body_bytes:bytes)->Dict[str,str]:
     }
 
 
-
-def full_mget_request_options(body_bytes: bytes, sign_mode: str = "auto") -> List[Tuple[str, Dict[str, str], str]]:
+def full_mget_request_options(
+    body_bytes: bytes, sign_mode: str = "auto"
+) -> List[Tuple[str, Dict[str, str], str]]:
     """按签名模式生成正文接口请求候选项。"""
     mode = (sign_mode or "auto").lower()
     if mode not in {"auto", "pure3040", "legacy3040"}:
@@ -1765,11 +2140,17 @@ def full_mget_request_options(body_bytes: bytes, sign_mode: str = "auto") -> Lis
     options: List[Tuple[str, Dict[str, str], str]] = []
     if mode in {"auto", "pure3040"}:
         url = build_pure3040_656_url(int(time.time() * 1000))
-        headers = {**APP_COMMON_HEADERS, **build_pure3040_headers(url, body_bytes, khronos=1_783_204_357)}
+        headers = {
+            **APP_COMMON_HEADERS,
+            **build_pure3040_headers(url, body_bytes, khronos=1_783_204_357),
+        }
         options.append(("畅听3040", headers, url))
     if mode in {"auto", "legacy3040"}:
         url = CAPTURED_CODE0_SIGNED_URL
-        headers = {**APP_COMMON_HEADERS, **build_pure3040_legacy_headers(url, body_bytes)}
+        headers = {
+            **APP_COMMON_HEADERS,
+            **build_pure3040_legacy_headers(url, body_bytes),
+        }
         options.append(("畅听旧签名", headers, url))
     return options
 
@@ -1863,24 +2244,36 @@ async def 异步full_mget(
         return last_response, client_x
     return last_response, client_x
 
-def html_to_text(doc:str)->str:
-    doc=re.sub(r'(?is)<(script|style).*?>.*?</\1>','',doc)
-    paras=re.findall(r'(?is)<p\b[^>]*>(.*?)</p>',doc)
+
+def html_to_text(doc: str) -> str:
+    doc = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", doc)
+    paras = re.findall(r"(?is)<p\b[^>]*>(.*?)</p>", doc)
     if paras:
-        lines=[]
+        lines = []
         for p in paras:
-            p=re.sub(r'(?is)<br\s*/?>','\n',p); p=re.sub(r'(?is)<[^>]+>','',p); p=html.unescape(p).strip()
-            if p: lines.append(p)
-        return '\n\n'.join(lines).strip()+'\n'
-    text=re.sub(r'(?is)<br\s*/?>','\n',doc); text=re.sub(r'(?is)</p\s*>','\n\n',text); text=re.sub(r'(?is)<[^>]+>','',text)
-    return re.sub(r'\n{3,}','\n\n',html.unescape(text)).strip()+'\n'
+            p = re.sub(r"(?is)<br\s*/?>", "\n", p)
+            p = re.sub(r"(?is)<[^>]+>", "", p)
+            p = html.unescape(p).strip()
+            if p:
+                lines.append(p)
+        return "\n\n".join(lines).strip() + "\n"
+    text = re.sub(r"(?is)<br\s*/?>", "\n", doc)
+    text = re.sub(r"(?is)</p\s*>", "\n\n", text)
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", html.unescape(text)).strip() + "\n"
 
-def batches(xs:List[str], n:int):
-    for i in range(0,len(xs),n): yield xs[i:i+n]
 
-def book_detail(book_id:str)->Dict[str,Any]:
-    data=http_json(make_url('/novelfm/bookapi/detail/v1/',{'book_id':book_id}),headers={'User-Agent':DEFAULT_UA,'Accept-Encoding':'gzip'})
-    return data.get('data') or {}
+def batches(xs: List[str], n: int):
+    for i in range(0, len(xs), n):
+        yield xs[i : i + n]
+
+
+def book_detail(book_id: str) -> Dict[str, Any]:
+    data = http_json(
+        make_url("/novelfm/bookapi/detail/v1/", {"book_id": book_id}),
+        headers={"User-Agent": DEFAULT_UA, "Accept-Encoding": "gzip"},
+    )
+    return data.get("data") or {}
 
 
 async def 异步获取番茄书籍详情(client: Any, book_id: str) -> Dict[str, Any]:
@@ -1913,7 +2306,9 @@ async def 异步获取番茄书籍详情(client: Any, book_id: str) -> Dict[str,
 
 def 标准化番茄书籍比对文本(值: Any) -> str:
     文本 = html.unescape(str(值 or "")).strip().casefold()
-    return re.sub(r"[\s\-_/\\|·•【】\[\]（）()《》<>\"'“”‘’：:，,。.!！?？~～]+", "", 文本)
+    return re.sub(
+        r"[\s\-_/\\|·•【】\[\]（）()《》<>\"'“”‘’：:，,。.!！?？~～]+", "", 文本
+    )
 
 
 def 提取番茄搜索书籍行(行: Any) -> list[Dict[str, Any]]:
@@ -1935,9 +2330,12 @@ def 获取番茄同书精确字数(
     章节数: int = 0,
 ) -> int:
     """为缺少字数的畅听副本查询同书的规范记录，并二次详情确认。"""
-    if 提取有效番茄字数(
-        详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
-    ) > 0:
+    if (
+        提取有效番茄字数(
+            详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
+        )
+        > 0
+    ):
         return 0
     标题 = str(详情.get("book_name") or 详情.get("title") or "").strip()
     作者 = str(详情.get("author") or 详情.get("author_name") or "").strip()
@@ -1971,9 +2369,15 @@ def 获取番茄同书精确字数(
             )
             if not 候选编号 or 候选编号 == str(书籍编号) or 候选字数 <= 0:
                 continue
-            if 标准化番茄书籍比对文本(候选.get("book_name") or 候选.get("title")) != 标准标题:
+            if (
+                标准化番茄书籍比对文本(候选.get("book_name") or 候选.get("title"))
+                != 标准标题
+            ):
                 continue
-            if 标准化番茄书籍比对文本(候选.get("author") or 候选.get("author_name")) != 标准作者:
+            if (
+                标准化番茄书籍比对文本(候选.get("author") or 候选.get("author_name"))
+                != 标准作者
+            ):
                 continue
             候选章节数 = 安全番茄整数(
                 候选.get("serial_count") or 候选.get("chapter_number"), 0
@@ -1992,12 +2396,22 @@ def 获取番茄同书精确字数(
                 f"候选编号={候选编号}, 错误={限制番茄日志文本(str(异常), 160)}"
             )
             continue
-        if 标准化番茄书籍比对文本(候选详情.get("book_name") or 候选详情.get("title")) != 标准标题:
+        if (
+            标准化番茄书籍比对文本(候选详情.get("book_name") or 候选详情.get("title"))
+            != 标准标题
+        ):
             continue
-        if 标准化番茄书籍比对文本(候选详情.get("author") or 候选详情.get("author_name")) != 标准作者:
+        if (
+            标准化番茄书籍比对文本(
+                候选详情.get("author") or 候选详情.get("author_name")
+            )
+            != 标准作者
+        ):
             continue
         详情字数 = 提取有效番茄字数(
-            候选详情.get("word_number"), 候选详情.get("word_count"), 候选详情.get("words")
+            候选详情.get("word_number"),
+            候选详情.get("word_count"),
+            候选详情.get("words"),
         )
         if 详情字数 == 搜索字数:
             logger.debug(
@@ -2013,9 +2427,12 @@ async def 异步获取番茄同书精确字数(
     详情: Dict[str, Any],
     章节数: int = 0,
 ) -> int:
-    if 提取有效番茄字数(
-        详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
-    ) > 0:
+    if (
+        提取有效番茄字数(
+            详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
+        )
+        > 0
+    ):
         return 0
     title = str(详情.get("book_name") or 详情.get("title") or "").strip()
     author = str(详情.get("author") or 详情.get("author_name") or "").strip()
@@ -2041,20 +2458,38 @@ async def 异步获取番茄同书精确字数(
     candidates: list[tuple[int, str, int]] = []
     for row in rows if isinstance(rows, list) else []:
         for candidate in 提取番茄搜索书籍行(row):
-            candidate_id = str(candidate.get("book_id") or candidate.get("id") or "").strip()
+            candidate_id = str(
+                candidate.get("book_id") or candidate.get("id") or ""
+            ).strip()
             word_count = 提取有效番茄字数(
-                candidate.get("word_number"), candidate.get("word_count"), candidate.get("words")
+                candidate.get("word_number"),
+                candidate.get("word_count"),
+                candidate.get("words"),
             )
             if not candidate_id or candidate_id == str(书籍编号) or word_count <= 0:
                 continue
-            if 标准化番茄书籍比对文本(candidate.get("book_name") or candidate.get("title")) != normalized_title:
+            if (
+                标准化番茄书籍比对文本(
+                    candidate.get("book_name") or candidate.get("title")
+                )
+                != normalized_title
+            ):
                 continue
-            if 标准化番茄书籍比对文本(candidate.get("author") or candidate.get("author_name")) != normalized_author:
+            if (
+                标准化番茄书籍比对文本(
+                    candidate.get("author") or candidate.get("author_name")
+                )
+                != normalized_author
+            ):
                 continue
             candidate_chapters = 安全番茄整数(
                 candidate.get("serial_count") or candidate.get("chapter_number"), 0
             )
-            difference = abs(candidate_chapters - target_count) if candidate_chapters and target_count else 0
+            difference = (
+                abs(candidate_chapters - target_count)
+                if candidate_chapters and target_count
+                else 0
+            )
             if candidate_chapters and target_count and difference > 1:
                 continue
             candidates.append((difference, candidate_id, word_count))
@@ -2067,12 +2502,24 @@ async def 异步获取番茄同书精确字数(
                 f"错误={type(exc).__name__}"
             )
             continue
-        if 标准化番茄书籍比对文本(candidate_detail.get("book_name") or candidate_detail.get("title")) != normalized_title:
+        if (
+            标准化番茄书籍比对文本(
+                candidate_detail.get("book_name") or candidate_detail.get("title")
+            )
+            != normalized_title
+        ):
             continue
-        if 标准化番茄书籍比对文本(candidate_detail.get("author") or candidate_detail.get("author_name")) != normalized_author:
+        if (
+            标准化番茄书籍比对文本(
+                candidate_detail.get("author") or candidate_detail.get("author_name")
+            )
+            != normalized_author
+        ):
             continue
         actual_words = 提取有效番茄字数(
-            candidate_detail.get("word_number"), candidate_detail.get("word_count"), candidate_detail.get("words")
+            candidate_detail.get("word_number"),
+            candidate_detail.get("word_count"),
+            candidate_detail.get("words"),
         )
         if actual_words == expected_words:
             logger.debug(
@@ -2082,14 +2529,19 @@ async def 异步获取番茄同书精确字数(
     return 0
 
 
-def unique_item_ids(ids:Iterable[Any], book_id:str='')->List[str]:
-    out=[]; seen=set()
+def unique_item_ids(ids: Iterable[Any], book_id: str = "") -> List[str]:
+    out = []
+    seen = set()
     for x in ids:
-        s=str(x).strip()
-        if not re.fullmatch(r'\d{8,}', s): continue
-        if book_id and s==str(book_id): continue
-        if s in seen: continue
-        seen.add(s); out.append(s)
+        s = str(x).strip()
+        if not re.fullmatch(r"\d{8,}", s):
+            continue
+        if book_id and s == str(book_id):
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
     return out
 
 
@@ -2098,7 +2550,9 @@ def resolve_directory(book_id: str) -> List[str]:
     last_error: Exception | None = None
     for version in (2, 1):
         try:
-            item_ids, _response = app_directory_items(book_id, version=version, sign_mode="auto")
+            item_ids, _response = app_directory_items(
+                book_id, version=version, sign_mode="auto"
+            )
             if item_ids:
                 return item_ids
         except Exception as error:
@@ -2108,12 +2562,24 @@ def resolve_directory(book_id: str) -> List[str]:
     raise RuntimeError("番茄畅听目录接口未返回章节")
 
 
-def directory_infos(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Dict[str, Dict[str, Any]]:
+def directory_infos(
+    book_id: str, item_ids: List[str], sign_mode: str = "auto"
+) -> Dict[str, Dict[str, Any]]:
     """通过番茄畅听目录元数据接口批量读取章节标题和状态。"""
-    body = {"book_id": str(book_id), "item_ids": [str(item_id) for item_id in item_ids], "page_scene": 6}
-    data = signed_app_json("/novelfm/bookapi/directory/all_infos/v1/", body, sign_mode=sign_mode)
+    body = {
+        "book_id": str(book_id),
+        "item_ids": [str(item_id) for item_id in item_ids],
+        "page_scene": 6,
+    }
+    data = signed_app_json(
+        "/novelfm/bookapi/directory/all_infos/v1/", body, sign_mode=sign_mode
+    )
     rows = (data.get("data") if isinstance(data, dict) else None) or []
-    return {str(row.get("item_id")): row for row in rows if isinstance(row, dict) and row.get("item_id")}
+    return {
+        str(row.get("item_id")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("item_id")
+    }
 
 
 def 读取番茄目录元数据(书籍编号: str, item_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -2140,28 +2606,54 @@ def 获取番茄目录标题(元数据: Dict[str, Any], 序号: int) -> str:
             return 标题
     return f"第{序号}章"
 
-def app_directory_items(book_id:str, *, page_scene:int=6, version:int=2, sign_mode:str='auto')->Tuple[List[str],Dict[str,Any]]:
+
+def app_directory_items(
+    book_id: str, *, page_scene: int = 6, version: int = 2, sign_mode: str = "auto"
+) -> Tuple[List[str], Dict[str, Any]]:
     """Try App directory item_id endpoints and return raw response for comparison."""
-    path='/novelfm/bookapi/directory/all_items_v2/v1/' if version==2 else '/novelfm/bookapi/directory/all_items/v1/'
-    query={'book_id':str(book_id),'page_scene':str(page_scene)}
-    data=signed_app_json(path, None, query, method='GET', sign_mode=sign_mode)
-    ids:List[Any]=[]
-    if isinstance(data,dict):
-        d=data.get('data')
-        candidates=[d, data]
+    path = (
+        "/novelfm/bookapi/directory/all_items_v2/v1/"
+        if version == 2
+        else "/novelfm/bookapi/directory/all_items/v1/"
+    )
+    query = {"book_id": str(book_id), "page_scene": str(page_scene)}
+    data = signed_app_json(path, None, query, method="GET", sign_mode=sign_mode)
+    ids: List[Any] = []
+    if isinstance(data, dict):
+        d = data.get("data")
+        candidates = [d, data]
         for obj in candidates:
-            if isinstance(obj,dict):
-                for key in ('item_ids','itemIds','chapter_ids','chapterIds','ids'):
-                    v=obj.get(key)
-                    if isinstance(v,list):
+            if isinstance(obj, dict):
+                for key in ("item_ids", "itemIds", "chapter_ids", "chapterIds", "ids"):
+                    v = obj.get(key)
+                    if isinstance(v, list):
                         ids.extend(v)
-                for key in ('items','chapters','list','chapter_list','item_data_list','item_list','data_list'):
-                    v=obj.get(key)
-                    if isinstance(v,list):
-                        ids.extend(it.get('item_id') or it.get('itemId') or it.get('id') for it in v if isinstance(it,dict))
-            elif isinstance(obj,list):
-                ids.extend((it.get('item_id') or it.get('itemId') or it.get('id')) if isinstance(it,dict) else it for it in obj)
-    return unique_item_ids(ids, book_id), data if isinstance(data,dict) else {'raw':data}
+                for key in (
+                    "items",
+                    "chapters",
+                    "list",
+                    "chapter_list",
+                    "item_data_list",
+                    "item_list",
+                    "data_list",
+                ):
+                    v = obj.get(key)
+                    if isinstance(v, list):
+                        ids.extend(
+                            it.get("item_id") or it.get("itemId") or it.get("id")
+                            for it in v
+                            if isinstance(it, dict)
+                        )
+            elif isinstance(obj, list):
+                ids.extend(
+                    (it.get("item_id") or it.get("itemId") or it.get("id"))
+                    if isinstance(it, dict)
+                    else it
+                    for it in obj
+                )
+    return unique_item_ids(ids, book_id), data if isinstance(data, dict) else {
+        "raw": data
+    }
 
 
 def 解析番茄目录项目(data: Any, book_id: str) -> List[str]:
@@ -2175,13 +2667,30 @@ def 解析番茄目录项目(data: Any, book_id: str) -> List[str]:
                     value = obj.get(key)
                     if isinstance(value, list):
                         ids.extend(value)
-                for key in ("items", "chapters", "list", "chapter_list", "item_data_list", "item_list", "data_list"):
+                for key in (
+                    "items",
+                    "chapters",
+                    "list",
+                    "chapter_list",
+                    "item_data_list",
+                    "item_list",
+                    "data_list",
+                ):
                     value = obj.get(key)
                     if not isinstance(value, list):
                         continue
-                    ids.extend(item.get("item_id") or item.get("itemId") or item.get("id") for item in value if isinstance(item, dict))
+                    ids.extend(
+                        item.get("item_id") or item.get("itemId") or item.get("id")
+                        for item in value
+                        if isinstance(item, dict)
+                    )
             elif isinstance(obj, list):
-                ids.extend((item.get("item_id") or item.get("itemId") or item.get("id")) if isinstance(item, dict) else item for item in obj)
+                ids.extend(
+                    (item.get("item_id") or item.get("itemId") or item.get("id"))
+                    if isinstance(item, dict)
+                    else item
+                    for item in obj
+                )
     return unique_item_ids(ids, book_id)
 
 
@@ -2193,7 +2702,11 @@ async def 异步获取番茄目录项目(
     version: int = 2,
     sign_mode: str = "auto",
 ) -> Tuple[List[str], Dict[str, Any]]:
-    path = "/novelfm/bookapi/directory/all_items_v2/v1/" if version == 2 else "/novelfm/bookapi/directory/all_items/v1/"
+    path = (
+        "/novelfm/bookapi/directory/all_items_v2/v1/"
+        if version == 2
+        else "/novelfm/bookapi/directory/all_items/v1/"
+    )
     data = await 异步签名番茄JSON(
         client,
         path,
@@ -2202,7 +2715,9 @@ async def 异步获取番茄目录项目(
         method="GET",
         sign_mode=sign_mode,
     )
-    return 解析番茄目录项目(data, book_id), data if isinstance(data, dict) else {"raw": data}
+    return 解析番茄目录项目(data, book_id), data if isinstance(data, dict) else {
+        "raw": data
+    }
 
 
 async def 异步解析番茄目录(
@@ -2212,7 +2727,9 @@ async def 异步解析番茄目录(
     latest_error: BaseException | None = None
     for version in (2, 1):
         try:
-            item_ids, _response = await 异步获取番茄目录项目(client, book_id, version=version)
+            item_ids, _response = await 异步获取番茄目录项目(
+                client, book_id, version=version
+            )
             if item_ids:
                 return item_ids
         except Exception as exc:
@@ -2235,18 +2752,27 @@ async def 异步读取番茄目录元数据(
             data = await 异步签名番茄JSON(
                 client,
                 "/novelfm/bookapi/directory/all_infos/v1/",
-                {"book_id": str(book_id), "item_ids": [str(item_id) for item_id in chunk], "page_scene": 6},
+                {
+                    "book_id": str(book_id),
+                    "item_ids": [str(item_id) for item_id in chunk],
+                    "page_scene": 6,
+                },
             )
         rows = data.get("data") if isinstance(data, dict) else None
         if not isinstance(rows, list):
             return {}
         return {
             str(row.get("item_id")): row
-            for row in rows if isinstance(row, dict) and row.get("item_id")
+            for row in rows
+            if isinstance(row, dict) and row.get("item_id")
         }
 
     metadata: Dict[str, Dict[str, Any]] = {}
-    for index, result in enumerate(await asyncio.gather(*(请求一批(chunk) for chunk in chunks), return_exceptions=True)):
+    for index, result in enumerate(
+        await asyncio.gather(
+            *(请求一批(chunk) for chunk in chunks), return_exceptions=True
+        )
+    ):
         if isinstance(result, Exception):
             logger.warning(
                 f"番茄小说目录元数据获取失败：书籍编号={book_id}, 批次={index + 1}, "
@@ -2262,7 +2788,10 @@ async def 异步读取番茄目录元数据(
 # 记录失效后仍可通过番茄阅读正文接口读取。该补拉只在畅听正文不可用或缺
 # 章节时启用，返回结构会转换成 full/mget 的 item_infos 形态。
 番茄阅读API地址 = "https://api5-normal-sinfonlinec.fqnovel.com"
-番茄阅读请求书籍编号 = os.environ.get("FANQIE_NOVELAPP_REQUEST_BOOK_ID", "7320841644486446142").strip() or "7320841644486446142"
+番茄阅读请求书籍编号 = (
+    os.environ.get("FANQIE_NOVELAPP_REQUEST_BOOK_ID", "7320841644486446142").strip()
+    or "7320841644486446142"
+)
 番茄阅读设备ID = "375350790467434"
 番茄阅读安装ID = "375350790471530"
 番茄阅读渠道 = "43536163a"
@@ -2297,7 +2826,9 @@ def _番茄阅读URL编码值(键: str, 值: Any) -> str:
     return 文本
 
 
-def 构造番茄阅读查询(额外参数: Iterable[Tuple[str, Any]] = (), *, 毫秒时间戳: Optional[int] = None) -> str:
+def 构造番茄阅读查询(
+    额外参数: Iterable[Tuple[str, Any]] = (), *, 毫秒时间戳: Optional[int] = None
+) -> str:
     if 毫秒时间戳 is None:
         毫秒时间戳 = int(time.time() * 1000)
     参数: List[Tuple[str, Any]] = [
@@ -2338,11 +2869,10 @@ def 构造番茄阅读查询(额外参数: Iterable[Tuple[str, Any]] = (), *, �
 
 def _生成番茄阅读Simon密钥() -> List[int]:
     初始值 = bytes.fromhex(
-        "fc78e0a9657a0c748ce51559903ccf03"
-        "510e51d3cff232d71343e88a321c5304"
+        "fc78e0a9657a0c748ce51559903ccf03510e51d3cff232d71343e88a321c5304"
     )
     掩码 = 0xFFFFFFFFFFFFFFFF
-    密钥 = [int.from_bytes(初始值[i:i + 8], "little") for i in range(0, 32, 8)]
+    密钥 = [int.from_bytes(初始值[i : i + 8], "little") for i in range(0, 32, 8)]
     种子 = 0x03DC94C3A046D678B
     for 序号 in range(4, 72):
         临时值 = _ror64(密钥[序号 - 1], 3) ^ 密钥[序号 - 3]
@@ -2361,10 +2891,13 @@ def _番茄阅读Simon加密(数据: bytes) -> bytes:
     掩码 = 0xFFFFFFFFFFFFFFFF
     输出 = bytearray()
     for 偏移 in range(0, len(数据), 16):
-        左 = int.from_bytes(数据[偏移:偏移 + 8], "little")
-        右 = int.from_bytes(数据[偏移 + 8:偏移 + 16], "little")
+        左 = int.from_bytes(数据[偏移 : 偏移 + 8], "little")
+        右 = int.from_bytes(数据[偏移 + 8 : 偏移 + 16], "little")
         for 密钥 in 番茄阅读Simon密钥:
-            左, 右 = 右, (左 ^ _ror64(右, 62) ^ (_ror64(右, 56) & _ror64(右, 63)) ^ 密钥) & 掩码
+            左, 右 = (
+                右,
+                (左 ^ _ror64(右, 62) ^ (_ror64(右, 56) & _ror64(右, 63)) ^ 密钥) & 掩码,
+            )
         输出.extend(左.to_bytes(8, "little"))
         输出.extend(右.to_bytes(8, "little"))
     return bytes(输出)
@@ -2380,7 +2913,9 @@ def _番茄阅读半区反转交换(数据: bytes) -> bytes:
     return bytes(输出)
 
 
-def 生成番茄阅读XArgus(原始查询: str, 秒时间戳: int, *, 随机值: Optional[int] = None) -> str:
+def 生成番茄阅读XArgus(
+    原始查询: str, 秒时间戳: int, *, 随机值: Optional[int] = None
+) -> str:
     if 随机值 is None:
         随机值 = secrets.randbits(31)
     pv = lambda 字段, 值: proto_key(字段, 0) + proto_varint(int(值))
@@ -2391,28 +2926,32 @@ def 生成番茄阅读XArgus(原始查询: str, 秒时间戳: int, *, 随机值:
         + pb(3, b"googleplay")
         + pv(4, 0x50000000)
     )
-    载荷 = b"".join((
-        pv(1, 0x40401252),
-        pv(2, 2),
-        pv(3, int(随机值) & 0x7FFFFFFF),
-        pb(4, b"1967"),
-        pb(5, 番茄阅读设备ID.encode()),
-        pb(6, b"1611921764"),
-        pb(7, 番茄阅读版本名.encode()),
-        pb(8, b"v04.04.05-ov-android"),
-        pv(9, 0x08080A40),
-        pb(10, b"\x00" * 8),
-        pv(11, 0),
-        pv(12, int(秒时间戳) * 2),
-        pb(13, sm3(b"\x00" * 16)[:6]),
-        pb(14, sm3(原始查询.encode())[:6]),
-        pv(20, 738),
-        pb(23, 嵌套),
-    ))
+    载荷 = b"".join(
+        (
+            pv(1, 0x40401252),
+            pv(2, 2),
+            pv(3, int(随机值) & 0x7FFFFFFF),
+            pb(4, b"1967"),
+            pb(5, 番茄阅读设备ID.encode()),
+            pb(6, b"1611921764"),
+            pb(7, 番茄阅读版本名.encode()),
+            pb(8, b"v04.04.05-ov-android"),
+            pv(9, 0x08080A40),
+            pb(10, b"\x00" * 8),
+            pv(11, 0),
+            pv(12, int(秒时间戳) * 2),
+            pb(13, sm3(b"\x00" * 16)[:6]),
+            pb(14, sm3(原始查询.encode())[:6]),
+            pv(20, 738),
+            pb(23, 嵌套),
+        )
+    )
     加密后 = _番茄阅读Simon加密(_pkcs7_pad(载荷))
     异或后 = bytes(值 ^ 番茄阅读Argus掩码[序号 & 7] for 序号, 值 in enumerate(加密后))
     帧 = 番茄阅读Argus魔数 + _番茄阅读半区反转交换(番茄阅读Argus掩码 + 异或后) + b"ao"
-    return base64.b64encode(b"\xf2\x81" + aes_cbc_encrypt(帧, 番茄阅读ArgusAES密钥, 番茄阅读ArgusAES向量)).decode()
+    return base64.b64encode(
+        b"\xf2\x81" + aes_cbc_encrypt(帧, 番茄阅读ArgusAES密钥, 番茄阅读ArgusAES向量)
+    ).decode()
 
 
 def 生成番茄阅读Ladon(秒时间戳: int, *, 随机前缀: Optional[bytes] = None) -> str:
@@ -2424,7 +2963,7 @@ def 生成番茄阅读Ladon(秒时间戳: int, *, 随机前缀: Optional[bytes] 
     md5十六进制 = hashlib.md5(随机前缀 + b"1967").hexdigest().encode()
     表 = bytearray(288)
     表[:32] = md5十六进制
-    队列 = [int.from_bytes(表[序号:序号 + 8], "little") for 序号 in range(0, 32, 8)]
+    队列 = [int.from_bytes(表[序号 : 序号 + 8], "little") for 序号 in range(0, 32, 8)]
     第一, 第二 = 队列[0], 队列[1]
     队列 = 队列[2:]
     for 序号 in range(0x22):
@@ -2432,16 +2971,16 @@ def 生成番茄阅读Ladon(秒时间戳: int, *, 随机前缀: Optional[bytes] 
         队列.append(值)
         值 ^= _ror64(第一, 0x3D)
         值 &= 掩码
-        表[(序号 + 1) * 8:(序号 + 2) * 8] = 值.to_bytes(8, "little")
+        表[(序号 + 1) * 8 : (序号 + 2) * 8] = 值.to_bytes(8, "little")
         第一 = 值
         第二 = 队列.pop(0)
     原始 = _pkcs7_pad(f"{int(秒时间戳)}-1611921764-3019".encode())
     加密结果 = bytearray()
     for 偏移 in range(0, len(原始), 16):
-        左 = int.from_bytes(原始[偏移:偏移 + 8], "little")
-        右 = int.from_bytes(原始[偏移 + 8:偏移 + 16], "little")
+        左 = int.from_bytes(原始[偏移 : 偏移 + 8], "little")
+        右 = int.from_bytes(原始[偏移 + 8 : 偏移 + 16], "little")
         for 序号 in range(0x22):
-            密钥 = int.from_bytes(表[序号 * 8:序号 * 8 + 8], "little")
+            密钥 = int.from_bytes(表[序号 * 8 : 序号 * 8 + 8], "little")
             右 = (密钥 ^ (左 + _ror64(右, 8))) & 掩码
             左 = (右 ^ _ror64(左, 0x3D)) & 掩码
         加密结果.extend(左.to_bytes(8, "little"))
@@ -2449,7 +2988,9 @@ def 生成番茄阅读Ladon(秒时间戳: int, *, 随机前缀: Optional[bytes] 
     return base64.b64encode(随机前缀 + bytes(加密结果)).decode()
 
 
-def 构造番茄阅读请求头(原始查询: str, 毫秒时间戳: int, *, 内容类型: Optional[str] = None) -> Dict[str, str]:
+def 构造番茄阅读请求头(
+    原始查询: str, 毫秒时间戳: int, *, 内容类型: Optional[str] = None
+) -> Dict[str, str]:
     秒时间戳 = int(time.time())
     请求头 = {
         "Accept-Encoding": "gzip",
@@ -2475,12 +3016,20 @@ def 构造番茄阅读请求头(原始查询: str, 毫秒时间戳: int, *, 内�
     return 请求头
 
 
-def 请求番茄阅读JSON(路径: str, 额外参数: Iterable[Tuple[str, Any]] = (), *, method: str = "GET", body: Any = None) -> Dict[str, Any]:
+def 请求番茄阅读JSON(
+    路径: str,
+    额外参数: Iterable[Tuple[str, Any]] = (),
+    *,
+    method: str = "GET",
+    body: Any = None,
+) -> Dict[str, Any]:
     毫秒时间戳 = int(time.time() * 1000)
     原始查询 = 构造番茄阅读查询(额外参数, 毫秒时间戳=毫秒时间戳)
     地址 = f"{番茄阅读API地址}{路径}?{原始查询}"
     请求体 = b"" if body is None else json_body_bytes(body)
-    请求头 = 构造番茄阅读请求头(原始查询, 毫秒时间戳, 内容类型="application/json" if body is not None else None)
+    请求头 = 构造番茄阅读请求头(
+        原始查询, 毫秒时间戳, 内容类型="application/json" if body is not None else None
+    )
     响应 = http_json_bytes(地址, method, 请求头, 请求体, timeout=60, retries=2)
     return 响应 if isinstance(响应, dict) else {}
 
@@ -2524,11 +3073,19 @@ def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
         return 番茄阅读注册密钥缓存[需要版本]
     iv = secrets.token_bytes(16)
     载荷 = struct.pack("<QQ", int(番茄阅读设备ID), 0)
-    content = base64.b64encode(iv + aes_cbc_encrypt(载荷, 番茄阅读注册AES密钥, iv)).decode()
-    响应 = 请求番茄阅读JSON("/reading/crypt/registerkey", method="POST", body={"content": content, "keyver": 1})
+    content = base64.b64encode(
+        iv + aes_cbc_encrypt(载荷, 番茄阅读注册AES密钥, iv)
+    ).decode()
+    响应 = 请求番茄阅读JSON(
+        "/reading/crypt/registerkey",
+        method="POST",
+        body={"content": content, "keyver": 1},
+    )
     data = 响应.get("data") or {}
     if 响应.get("code") != 0 or not isinstance(data, dict) or not data.get("key"):
-        raise RuntimeError(f"番茄阅读注册密钥失败：code={响应.get('code')}, message={响应.get('message') or 响应.get('msg')}")
+        raise RuntimeError(
+            f"番茄阅读注册密钥失败：code={响应.get('code')}, message={响应.get('message') or 响应.get('msg')}"
+        )
     raw = base64.b64decode(str(data["key"]))
     if len(raw) < 32:
         raise RuntimeError("番茄阅读注册密钥响应过短")
@@ -2561,7 +3118,11 @@ async def 异步获取番茄阅读注册密钥(client: Any, 需要版本: int = 
             body={"content": content, "keyver": 1},
         )
         data = response.get("data") or {}
-        if response.get("code") != 0 or not isinstance(data, dict) or not data.get("key"):
+        if (
+            response.get("code") != 0
+            or not isinstance(data, dict)
+            or not data.get("key")
+        ):
             raise RuntimeError("番茄阅读注册密钥失败")
         raw = base64.b64decode(str(data["key"]))
         if len(raw) < 32:
@@ -2793,7 +3354,9 @@ async def 异步读取番茄阅读正文(
 
     infos: Dict[str, Dict[str, Any]] = {
         item_id: item
-        for item_id, item in await asyncio.gather(*(解密章节(item_id) for item_id in ids))
+        for item_id, item in await asyncio.gather(
+            *(解密章节(item_id) for item_id in ids)
+        )
         if item is not None
     }
     return {
@@ -2805,7 +3368,9 @@ async def 异步读取番茄阅读正文(
     }
 
 
-def 尝试番茄阅读正文补拉(书籍编号: str, item_ids: List[str], 原因: str) -> Optional[Dict[str, Any]]:
+def 尝试番茄阅读正文补拉(
+    书籍编号: str, item_ids: List[str], 原因: str
+) -> Optional[Dict[str, Any]]:
     try:
         响应 = 读取番茄阅读正文(书籍编号, item_ids)
         infos = (响应.get("data") or {}).get("item_infos") or {}
@@ -2854,8 +3419,11 @@ async def 异步尝试番茄阅读正文补拉(
         )
     return None
 
+
 # ===== 正文下载 =====
-def full_mget(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Tuple[Dict[str, Any], int]:
+def full_mget(
+    book_id: str, item_ids: List[str], sign_mode: str = "auto"
+) -> Tuple[Dict[str, Any], int]:
     """按章节 ID 批量请求正文，使用稳定的畅听请求上下文。"""
     client_x, request_key = make_encrypt_context()
     request_body = {
@@ -2872,55 +3440,86 @@ def full_mget(book_id: str, item_ids: List[str], sign_mode: str = "auto") -> Tup
     for index, (mode, headers, url) in enumerate(request_options):
         data = full_mget_http_json(url, headers, body_bytes, timeout=60)
         last_response = data if isinstance(data, dict) else {}
-        if last_response.get("code") == 6000 and index < len(request_options) - 1 and mode not in {"fixed", "pure3040-legacy"}:
+        if (
+            last_response.get("code") == 6000
+            and index < len(request_options) - 1
+            and mode not in {"fixed", "pure3040-legacy"}
+        ):
             logger.debug("番茄小说正文签名已失效，继续尝试下一个内置签名")
             continue
         return last_response, client_x
     return last_response, client_x
+
 
 class FullMgetBusinessError(RuntimeError):
     """full/mget 明确返回业务错误时使用；这类错误拆分重试也不会恢复。"""
 
     pass
 
-def _full_mget_response_message(resp:Dict[str,Any])->str:
-    return str(resp.get('message') or resp.get('msg') or resp.get('err_msg') or resp.get('error') or '')
 
-def _is_full_mget_non_split_error(resp:Dict[str,Any])->bool:
-    code=resp.get('code')
-    msg=_full_mget_response_message(resp)
+def _full_mget_response_message(resp: Dict[str, Any]) -> str:
+    return str(
+        resp.get("message")
+        or resp.get("msg")
+        or resp.get("err_msg")
+        or resp.get("error")
+        or ""
+    )
+
+
+def _is_full_mget_non_split_error(resp: Dict[str, Any]) -> bool:
+    code = resp.get("code")
+    msg = _full_mget_response_message(resp)
     if code in {1021001, 1021002, 1021003}:
         return True
-    return any(key in msg for key in ('该书不存在', '停止合作', '付费', '请去书城阅读新书'))
+    return any(
+        key in msg for key in ("该书不存在", "停止合作", "付费", "请去书城阅读新书")
+    )
 
-def download_batch(book_id:str, batch:List[str], allow_split:bool=True, sign_mode:str='auto')->List[Tuple[str,Optional[Dict[str,Any]],Optional[int],Optional[BaseException]]]:
+
+def download_batch(
+    book_id: str, batch: List[str], allow_split: bool = True, sign_mode: str = "auto"
+) -> List[Tuple[str, Optional[Dict[str, Any]], Optional[int], Optional[BaseException]]]:
     try:
-        resp,x=full_mget(book_id,batch,sign_mode)
-        if resp.get('code')!=0:
+        resp, x = full_mget(book_id, batch, sign_mode)
+        if resp.get("code") != 0:
             if _is_full_mget_non_split_error(resp):
-                补拉响应 = 尝试番茄阅读正文补拉(book_id, batch, f'full_mget code={resp.get("code")}')
+                补拉响应 = 尝试番茄阅读正文补拉(
+                    book_id, batch, f"full_mget code={resp.get('code')}"
+                )
                 if 补拉响应:
-                    补拉正文 = (补拉响应.get('data') or {}).get('item_infos') or {}
-                    return [(item_id, 补拉正文.get(str(item_id)), 0, None) for item_id in batch]
-                raise FullMgetBusinessError(f'full_mget 业务错误: code={resp.get("code")}, message={_full_mget_response_message(resp)}')
-            raise RuntimeError(f'full_mget 错误: {resp}')
-        infos=(resp.get('data') or {}).get('item_infos') or {}
-        if allow_split and len(batch)>1 and len(infos)<len(batch):
-            mid=max(1,len(batch)//2)
-            return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
-        if len(batch)==1 and len(infos)<len(batch):
-            补拉响应 = 尝试番茄阅读正文补拉(book_id, batch, 'full_mget missing item_info')
+                    补拉正文 = (补拉响应.get("data") or {}).get("item_infos") or {}
+                    return [
+                        (item_id, 补拉正文.get(str(item_id)), 0, None)
+                        for item_id in batch
+                    ]
+                raise FullMgetBusinessError(
+                    f"full_mget 业务错误: code={resp.get('code')}, message={_full_mget_response_message(resp)}"
+                )
+            raise RuntimeError(f"full_mget 错误: {resp}")
+        infos = (resp.get("data") or {}).get("item_infos") or {}
+        if allow_split and len(batch) > 1 and len(infos) < len(batch):
+            mid = max(1, len(batch) // 2)
+            return download_batch(
+                book_id, batch[:mid], True, sign_mode
+            ) + download_batch(book_id, batch[mid:], True, sign_mode)
+        if len(batch) == 1 and len(infos) < len(batch):
+            补拉响应 = 尝试番茄阅读正文补拉(
+                book_id, batch, "full_mget missing item_info"
+            )
             if 补拉响应:
-                补拉正文 = (补拉响应.get('data') or {}).get('item_infos') or {}
+                补拉正文 = (补拉响应.get("data") or {}).get("item_infos") or {}
                 if 补拉正文.get(str(batch[0])):
                     return [(batch[0], 补拉正文.get(str(batch[0])), 0, None)]
         return [(item_id, infos.get(str(item_id)), x, None) for item_id in batch]
     except Exception as e:
         if isinstance(e, FullMgetBusinessError):
             return [(item_id, None, None, e) for item_id in batch]
-        if allow_split and len(batch)>1:
-            mid=max(1,len(batch)//2)
-            return download_batch(book_id,batch[:mid],True,sign_mode)+download_batch(book_id,batch[mid:],True,sign_mode)
+        if allow_split and len(batch) > 1:
+            mid = max(1, len(batch) // 2)
+            return download_batch(
+                book_id, batch[:mid], True, sign_mode
+            ) + download_batch(book_id, batch[mid:], True, sign_mode)
         return [(item_id, None, None, e) for item_id in batch]
 
 
@@ -2947,7 +3546,9 @@ async def 异步下载番茄正文批次(
                 )
                 if fallback:
                     infos = (fallback.get("data") or {}).get("item_infos") or {}
-                    return [(item_id, infos.get(str(item_id)), 0, None) for item_id in batch]
+                    return [
+                        (item_id, infos.get(str(item_id)), 0, None) for item_id in batch
+                    ]
                 raise FullMgetBusinessError(
                     f"full_mget 业务错误: code={response.get('code')}, "
                     f"message={_full_mget_response_message(response)}"
@@ -2994,22 +3595,46 @@ async def 异步下载番茄正文批次(
             return first + second
         return [(item_id, None, None, exc) for item_id in batch]
 
-def decrypt_item_worker(args:Tuple[int,str,Dict[str,Any],int])->Dict[str,Any]:
-    index,item_id,info,x=args
+
+def decrypt_item_worker(args: Tuple[int, str, Dict[str, Any], int]) -> Dict[str, Any]:
+    index, item_id, info, x = args
     try:
-        content=info.get('content') or ''
-        server_key=info.get('key') or ''
-        chapter_html=decrypt_content(content,server_key,x) if info.get('crypt_status')==1 and content and server_key and x is not None else content
-        title=获取番茄章节标题(info, index, chapter_html)
-        text=html_to_text(chapter_html)
-        return {'index':index,'item_id':item_id,'title':title,'text':text,'error':None}
+        content = info.get("content") or ""
+        server_key = info.get("key") or ""
+        chapter_html = (
+            decrypt_content(content, server_key, x)
+            if info.get("crypt_status") == 1
+            and content
+            and server_key
+            and x is not None
+            else content
+        )
+        title = 获取番茄章节标题(info, index, chapter_html)
+        text = html_to_text(chapter_html)
+        return {
+            "index": index,
+            "item_id": item_id,
+            "title": title,
+            "text": text,
+            "error": None,
+        }
     except Exception as e:
-        return {'index':index,'item_id':item_id,'title':f'第{index}章','text':'','error':str(e)}
+        return {
+            "index": index,
+            "item_id": item_id,
+            "title": f"第{index}章",
+            "text": "",
+            "error": str(e),
+        }
 
 
 def 获取番茄章节标题(正文信息: Dict[str, Any], 序号: int, 正文HTML: Any = "") -> str:
     """忽略“目录”等通用响应标题，优先保留真实章节标题。"""
-    小说数据 = 正文信息.get("novel_data") if isinstance(正文信息.get("novel_data"), dict) else {}
+    小说数据 = (
+        正文信息.get("novel_data")
+        if isinstance(正文信息.get("novel_data"), dict)
+        else {}
+    )
     候选标题 = (
         正文信息.get("chapter_title"),
         正文信息.get("chapterTitle"),
@@ -3048,22 +3673,31 @@ def 番茄章节信息返回成功(正文信息: Dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         return False
 
-def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
-    bi,start_index,book_id,batch,sign_mode=args
-    t0=time.perf_counter()
-    results=download_batch(book_id,batch,allow_split=True,sign_mode=sign_mode)
-    ok=sum(1 for _item_id,info,_x,err in results if info and not err)
-    fatal_error=next((err for _item_id,_info,_x,err in results if isinstance(err,FullMgetBusinessError)),None)
+
+def fetch_batch_worker(args: Tuple[int, int, str, List[str], str]) -> Dict[str, Any]:
+    bi, start_index, book_id, batch, sign_mode = args
+    t0 = time.perf_counter()
+    results = download_batch(book_id, batch, allow_split=True, sign_mode=sign_mode)
+    ok = sum(1 for _item_id, info, _x, err in results if info and not err)
+    fatal_error = next(
+        (
+            err
+            for _item_id, _info, _x, err in results
+            if isinstance(err, FullMgetBusinessError)
+        ),
+        None,
+    )
     return {
-        'batch':bi,
-        'start':start_index,
-        'end':start_index+len(batch)-1,
-        'count':len(batch),
-        'ok':ok,
-        'fatal_error':str(fatal_error) if fatal_error else '',
-        'elapsed':time.perf_counter()-t0,
-        'results':results,
+        "batch": bi,
+        "start": start_index,
+        "end": start_index + len(batch) - 1,
+        "count": len(batch),
+        "ok": ok,
+        "fatal_error": str(fatal_error) if fatal_error else "",
+        "elapsed": time.perf_counter() - t0,
+        "results": results,
     }
+
 
 番茄正文最大批量章节数 = 1500
 
@@ -3080,13 +3714,21 @@ def fetch_batch_worker(args:Tuple[int,int,str,List[str],str])->Dict[str,Any]:
 
 番茄文件发送失败提示 = "文件发送失败，请稍后再试"
 
-番茄域名正则 = re.compile(r"fanqienovel\.com|changdunovel\.com|fqnovel\.com|novelfm\.com", re.I)
+番茄域名正则 = re.compile(
+    r"fanqienovel\.com|changdunovel\.com|fqnovel\.com|novelfm\.com", re.I
+)
 
-番茄长读短链正则 = re.compile(r"https?://(?:www\.)?(?:changdunovel\.com/t|m\.novelfm\.com/s)/[A-Za-z0-9_-]+/?", re.I)
+番茄长读短链正则 = re.compile(
+    r"https?://(?:www\.)?(?:changdunovel\.com/t|m\.novelfm\.com/s)/[A-Za-z0-9_-]+/?",
+    re.I,
+)
 
 番茄链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 
-番茄短篇详情地址 = "https://api5-normal-sinfonlinec.fqnovel.com/reading/ugc/postdata/detail/v1/"
+番茄短篇详情地址 = (
+    "https://api5-normal-sinfonlinec.fqnovel.com/reading/ugc/postdata/detail/v1/"
+)
+
 
 def 计算番茄正文批量参数(章节总数: int) -> tuple[int, int]:
     章节总数 = max(0, int(章节总数 or 0))
@@ -3096,6 +3738,7 @@ def 计算番茄正文批量参数(章节总数: int) -> tuple[int, int]:
     批次数 = (章节总数 + 批量章节数 - 1) // 批量章节数
     动态并发数 = max(1, min(番茄正文最大动态并发数, 批次数))
     return 批量章节数, 动态并发数
+
 
 def 获取番茄小说回复流(event: Any, 命令文本: str, 配置: Any = None):
     来源 = 提取直接番茄链接参数(命令文本) or 提取事件番茄链接(event)
@@ -3114,6 +3757,7 @@ async def 是否番茄一章短篇来源(命令文本: Any) -> bool:
         return False
     展开来源 = await 展开番茄短链(来源)
     return bool(提取番茄短篇编号(展开来源))
+
 
 async def 生成番茄下载回复流(
     event: Any,
@@ -3143,14 +3787,14 @@ async def 生成番茄下载回复流(
                     HTTP客户端, 解析来源, 短篇编号
                 )
             else:
-                准备结果 = await 异步准备番茄下载数据(
-                    HTTP客户端, 书籍编号, 找书候选
-                )
+                准备结果 = await 异步准备番茄下载数据(HTTP客户端, 书籍编号, 找书候选)
             书籍编号 = str(准备结果.get("book_id") or 书籍编号 or "")
             书籍信息 = 准备结果.get("book_info") or 默认番茄书籍信息(书籍编号)
             目录 = 准备结果.get("chapters") or []
             if not 目录:
-                logger.warning(f"番茄小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录")
+                logger.warning(
+                    f"番茄小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录"
+                )
                 yield 番茄下载失败提示
                 return
 
@@ -3184,20 +3828,27 @@ async def 生成番茄下载回复流(
             作者=书籍信息.get("author"),
         )
         if 发送结果.get("sent"):
-            启动番茄百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+            启动番茄百度后台上传并清理源文件(
+                配置, 发送结果.get("source_cache_path"), 文件名
+            )
             return
         降级文本 = str(发送结果.get("fallback_text") or "")
         if 降级文本:
             try:
                 yield 降级文本
             finally:
-                启动番茄百度后台上传并清理源文件(配置, 发送结果.get("source_cache_path"), 文件名)
+                启动番茄百度后台上传并清理源文件(
+                    配置, 发送结果.get("source_cache_path"), 文件名
+                )
             return
         if not 发送结果.get("sent"):
             yield 番茄文件发送失败提示
     except Exception as 异常:
-        logger.warning(f"番茄小说下载失败：来源={限制番茄日志文本(来源, 300)}, 错误={异常}")
+        logger.warning(
+            f"番茄小说下载失败：来源={限制番茄日志文本(来源, 300)}, 错误={异常}"
+        )
         yield 番茄下载失败提示
+
 
 def 准备番茄下载数据同步(
     书籍编号: str,
@@ -3214,9 +3865,7 @@ def 准备番茄下载数据同步(
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
             item_ids = resolve_directory(真实书籍编号)
             书籍编号 = 真实书籍编号
-            logger.debug(
-                f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}"
-            )
+            logger.debug(f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}")
         except Exception as 直接正文异常:
             logger.warning(
                 f"番茄畅听目录获取失败：书籍编号={原始书籍编号}, "
@@ -3235,7 +3884,11 @@ def 准备番茄下载数据同步(
 
     目录元数据 = 读取番茄目录元数据(书籍编号, item_ids)
     目录 = [
-        {"id": str(item_id), "title": 获取番茄目录标题(目录元数据.get(str(item_id)) or {}, 序号), "index": 序号}
+        {
+            "id": str(item_id),
+            "title": 获取番茄目录标题(目录元数据.get(str(item_id)) or {}, 序号),
+            "index": 序号,
+        }
         for 序号, item_id in enumerate(item_ids, start=1)
         if str(item_id or "").strip()
     ]
@@ -3306,7 +3959,9 @@ def 准备番茄短篇下载数据同步(来源: str, 短篇编号: str) -> dict
         "title": 标题,
         "author": 清理番茄网页文本(作者信息.get("user_name") or "未知"),
         "status": "完结",
-        "word_count": 格式化番茄字数(详情.get("total_word_num") or 详情.get("truncate_word_num") or ""),
+        "word_count": 格式化番茄字数(
+            详情.get("total_word_num") or 详情.get("truncate_word_num") or ""
+        ),
         "chapter_count": 1,
         "intro": "",
     }
@@ -3328,7 +3983,9 @@ async def 异步准备番茄下载数据(
         item_ids = await 异步解析番茄目录(client, original_id)
     except Exception as directory_error:
         try:
-            real_book_id, reader_metadata = await 异步解析番茄阅读章节书籍编号(client, original_id)
+            real_book_id, reader_metadata = await 异步解析番茄阅读章节书籍编号(
+                client, original_id
+            )
             if real_book_id == original_id:
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
             item_ids = await 异步解析番茄目录(client, real_book_id)
@@ -3345,11 +4002,15 @@ async def 异步准备番茄下载数据(
     try:
         detail = await 异步获取番茄书籍详情(client, str(书籍编号))
     except Exception as exc:
-        logger.warning(f"番茄小说详情请求失败：书籍编号={书籍编号}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"番茄小说详情请求失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
+        )
     if not detail and reader_metadata:
         detail = reader_metadata
-    if not detail or not (detail.get("book_name") or detail.get("title")) or not (
-        detail.get("author") or detail.get("author_name")
+    if (
+        not detail
+        or not (detail.get("book_name") or detail.get("title"))
+        or not (detail.get("author") or detail.get("author_name"))
     ):
         logger.warning(f"番茄小说详情不完整：书籍编号={书籍编号}")
         raise RuntimeError("番茄小说详情不完整")
@@ -3368,7 +4029,9 @@ async def 异步准备番茄下载数据(
     candidate = 找书候选 if isinstance(找书候选, dict) else {}
     detail_words = 提取有效番茄字数(book_info.get("word_count"))
     candidate_words = 提取有效番茄字数(
-        candidate.get("word_count"), candidate.get("word_number"), candidate.get("words")
+        candidate.get("word_count"),
+        candidate.get("word_number"),
+        candidate.get("words"),
     )
     if detail_words <= 0 and candidate_words > 0:
         book_info["word_count"] = 格式化番茄字数(candidate_words)
@@ -3421,7 +4084,9 @@ async def 异步准备番茄短篇下载数据(
     chapter_id = str(detail.get("relate_item_id") or "").strip()
     if not re.fullmatch(r"\d{8,}", book_id) or not re.fullmatch(r"\d{8,}", chapter_id):
         raise RuntimeError("番茄短篇详情未返回关联章节")
-    author_info = detail.get("user_info") if isinstance(detail.get("user_info"), dict) else {}
+    author_info = (
+        detail.get("user_info") if isinstance(detail.get("user_info"), dict) else {}
+    )
     title = 清理番茄网页文本(detail.get("title") or f"番茄短篇{短篇编号}")
     return {
         "book_id": book_id,
@@ -3430,19 +4095,26 @@ async def 异步准备番茄短篇下载数据(
             "title": title,
             "author": 清理番茄网页文本(author_info.get("user_name") or "未知"),
             "status": "完结",
-            "word_count": 格式化番茄字数(detail.get("total_word_num") or detail.get("truncate_word_num") or ""),
+            "word_count": 格式化番茄字数(
+                detail.get("total_word_num") or detail.get("truncate_word_num") or ""
+            ),
             "chapter_count": 1,
             "intro": "",
         },
         "chapters": [{"id": chapter_id, "title": title or "第1章", "index": 1}],
     }
 
+
 async def 异步下载番茄全部章节(
     书籍编号: str,
     目录: list[dict[str, Any]],
     HTTP客户端: Any = None,
 ) -> list[dict[str, Any]]:
-    item_ids = [str(章节.get("id") or "").strip() for 章节 in 目录 if str(章节.get("id") or "").strip()]
+    item_ids = [
+        str(章节.get("id") or "").strip()
+        for 章节 in 目录
+        if str(章节.get("id") or "").strip()
+    ]
     if not item_ids:
         return []
     总数 = len(item_ids)
@@ -3478,7 +4150,11 @@ async def 异步下载番茄全部章节(
         )
         ok = sum(1 for _item_id, info, _x, error in results if info and not error)
         fatal_error = next(
-            (error for _item_id, _info, _x, error in results if isinstance(error, FullMgetBusinessError)),
+            (
+                error
+                for _item_id, _info, _x, error in results
+                if isinstance(error, FullMgetBusinessError)
+            ),
             None,
         )
         return {
@@ -3498,7 +4174,9 @@ async def 异步下载番茄全部章节(
 
     async with AsyncExitStack() as stack:
         if HTTP客户端 is None:
-            HTTP客户端 = await stack.enter_async_context(创建番茄正文HTTP客户端(动态并发数))
+            HTTP客户端 = await stack.enter_async_context(
+                创建番茄正文HTTP客户端(动态并发数)
+            )
         # 先统一发起并完成所有批次请求，再进入解密和合并阶段，避免
         # 当前批次的解密处理影响下一批请求的可见执行顺序。
         批次结果列表 = await asyncio.gather(*(请求批次(任务) for 任务 in 任务列表))
@@ -3518,14 +4196,20 @@ async def 异步下载番茄全部章节(
                 if 错误 or not 正文信息:
                     解密输入.append(None)
                     continue
-                解密输入.append((序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0))
-            解密结果列表 = await asyncio.gather(*(
-                解密章节(参数) for 参数 in 解密输入 if 参数 is not None
-            ))
+                解密输入.append(
+                    (序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0)
+                )
+            解密结果列表 = await asyncio.gather(
+                *(解密章节(参数) for 参数 in 解密输入 if 参数 is not None)
+            )
             解密结果迭代器 = iter(解密结果列表)
             for 偏移, (item_id, 正文信息, _解密参数, 错误) in enumerate(原始结果):
                 序号 = 批次起始 + 偏移
-                原章节 = 目录[序号 - 1] if 0 <= 序号 - 1 < len(目录) else {"title": f"第{序号}章"}
+                原章节 = (
+                    目录[序号 - 1]
+                    if 0 <= 序号 - 1 < len(目录)
+                    else {"title": f"第{序号}章"}
+                )
                 if 错误 or not 正文信息:
                     结果按序号[序号] = {
                         "index": 序号,
@@ -3585,6 +4269,7 @@ async def 异步下载番茄全部章节(
         章节结果列表.append(结果)
     return 章节结果列表
 
+
 def 提取有效番茄字数(*候选值: Any) -> int:
     """只接受接口给出的原始正整数总字数，展示用的“万字”值不作为精确数据。"""
     for 候选 in 候选值:
@@ -3609,7 +4294,9 @@ def 提取有效番茄字数(*候选值: Any) -> int:
     return 0
 
 
-def 规范化番茄书籍信息(书籍编号: str, 详情: dict[str, Any], 章节数: int) -> dict[str, Any]:
+def 规范化番茄书籍信息(
+    书籍编号: str, 详情: dict[str, Any], 章节数: int
+) -> dict[str, Any]:
     详情 = 详情 if isinstance(详情, dict) else {}
     字数 = 提取有效番茄字数(
         详情.get("word_number"),
@@ -3618,13 +4305,25 @@ def 规范化番茄书籍信息(书籍编号: str, 详情: dict[str, Any], 章�
     )
     return {
         "book_id": 书籍编号,
-        "title": 清理番茄网页文本(详情.get("book_name") or 详情.get("title") or f"番茄小说{书籍编号}"),
-        "author": 清理番茄网页文本(详情.get("author") or 详情.get("author_name") or "未知"),
+        "title": 清理番茄网页文本(
+            详情.get("book_name") or 详情.get("title") or f"番茄小说{书籍编号}"
+        ),
+        "author": 清理番茄网页文本(
+            详情.get("author") or 详情.get("author_name") or "未知"
+        ),
         "status": 获取番茄状态文本(详情),
         "word_count": 格式化番茄字数(字数),
-        "chapter_count": 安全番茄整数(详情.get("chapter_number") or 详情.get("serial_count") or 章节数, 章节数),
-        "intro": 清理番茄网页文本(详情.get("abstract") or 详情.get("sub_abstract") or 详情.get("description") or ""),
+        "chapter_count": 安全番茄整数(
+            详情.get("chapter_number") or 详情.get("serial_count") or 章节数, 章节数
+        ),
+        "intro": 清理番茄网页文本(
+            详情.get("abstract")
+            or 详情.get("sub_abstract")
+            or 详情.get("description")
+            or ""
+        ),
     }
+
 
 def 默认番茄书籍信息(书籍编号: str) -> dict[str, Any]:
     return {
@@ -3637,13 +4336,36 @@ def 默认番茄书籍信息(书籍编号: str) -> dict[str, Any]:
         "intro": "",
     }
 
+
 def 获取番茄状态文本(详情: dict[str, Any]) -> str:
-    文本 = " ".join(str(详情.get(字段) or "") for 字段 in ("status", "status_text", "book_status_text", "creation_status_text", "last_chapter_title"))
-    if any(关键词 in 文本 for 关键词 in ("完结", "已完结", "完本", "终章", "大结局", "finished", "completed")):
+    文本 = " ".join(
+        str(详情.get(字段) or "")
+        for 字段 in (
+            "status",
+            "status_text",
+            "book_status_text",
+            "creation_status_text",
+            "last_chapter_title",
+        )
+    )
+    if any(
+        关键词 in 文本
+        for 关键词 in (
+            "完结",
+            "已完结",
+            "完本",
+            "终章",
+            "大结局",
+            "finished",
+            "completed",
+        )
+    ):
         return "完结"
     if any(关键词 in 文本 for 关键词 in ("连载", "更新中", "ongoing", "serial")):
         return "连载"
-    创作状态 = str(详情.get("creation_status") or 详情.get("status") or "").strip().lower()
+    创作状态 = (
+        str(详情.get("creation_status") or 详情.get("status") or "").strip().lower()
+    )
     if 创作状态 in ("0", "2"):
         return "完结"
     if 创作状态 in ("1", "3", "4"):
@@ -3655,16 +4377,20 @@ def 获取番茄状态文本(详情: dict[str, Any]) -> str:
         return "连载"
     return "连载"
 
+
 def 格式化番茄下载提示(书籍信息: dict[str, Any], 章节数: int) -> str:
-    return "\n".join([
-        f"书名：{书籍信息.get('title') or '未知'}",
-        f"作者：{书籍信息.get('author') or '未知'}",
-        f"状态：{书籍信息.get('status') or '连载'}",
-        f"章节：{章节数} 章",
-        f"字数：{书籍信息.get('word_count') or '未知'}",
-        "",
-        "正在下载中请稍等.....",
-    ])
+    return "\n".join(
+        [
+            f"书名：{书籍信息.get('title') or '未知'}",
+            f"作者：{书籍信息.get('author') or '未知'}",
+            f"状态：{书籍信息.get('status') or '连载'}",
+            f"章节：{章节数} 章",
+            f"字数：{书籍信息.get('word_count') or '未知'}",
+            "",
+            "正在下载中请稍等.....",
+        ]
+    )
+
 
 def 生成番茄小说文件内容(
     书籍编号: str,
@@ -3699,16 +4425,19 @@ def 生成番茄小说文件内容(
         内容列表.append("")
     return 文件名, 编码番茄TXT内容(内容列表)
 
+
 def 生成番茄小说文件名(书籍编号: str, 书籍信息: dict[str, Any]) -> str:
     状态 = str(书籍信息.get("status") or "连载")
     书名 = 清理番茄文件名(书籍信息.get("title") or f"番茄小说{书籍编号}")
     作者 = 清理番茄文件名(书籍信息.get("author") or "未知")
     return f"[{状态}]书名：{书名} 作者：{作者}.txt"
 
+
 def 编码番茄TXT内容(内容列表: list[str]) -> bytes:
     文本 = "\n".join(str(行) for 行 in 内容列表)
     文本 = 文本.replace("\r\n", "\n").replace("\r", "\n")
     return 文本.replace("\n", "\r\n").encode("utf-8")
+
 
 async def 准备发送番茄文本文件(
     event: Any,
@@ -3724,29 +4453,70 @@ async def 准备发送番茄文本文件(
     logger.debug(f"番茄小说写入下载缓存：文件={缓存路径}, 大小={len(文件内容)}")
     if 小说网盘 is None:
         删除番茄缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘模块未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说网盘模块未加载",
+        }
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         网盘名称 = str(网盘结果.get("provider") or "小说网盘")
         if not 网盘结果.get("success"):
-            logger.warning(f"番茄小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}")
+            logger.warning(
+                f"番茄小说主网盘上传失败：网盘={网盘名称}, 文件={文件名}, 错误={网盘结果.get('error')}"
+            )
             删除番茄缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(网盘结果.get("error") or "小说网盘未启用")}
-        完成结果 = await 小说网盘.发送小说下载完成链接(event, 书名, 作者, str(网盘结果.get("share_url") or ""))
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": str(网盘结果.get("error") or "小说网盘未启用"),
+            }
+        完成结果 = await 小说网盘.发送小说下载完成链接(
+            event, 书名, 作者, str(网盘结果.get("share_url") or "")
+        )
         if 完成结果.get("sent"):
-            logger.debug(f"番茄小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}")
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            logger.debug(
+                f"番茄小说主网盘上传并发送完成按钮成功：网盘={网盘名称}, 文件={文件名}"
+            )
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": str(完成结果.get("error") or "")}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": str(完成结果.get("error") or ""),
+            }
         删除番茄缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(完成结果.get("error") or "完成按钮发送失败")}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(完成结果.get("error") or "完成按钮发送失败"),
+        }
     except Exception as 异常:
-        logger.warning(f"番茄小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={异常}")
+        logger.warning(
+            f"番茄小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={异常}"
+        )
         删除番茄缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": str(异常)}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": str(异常),
+        }
 
-def 启动番茄百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None) -> None:
+
+def 启动番茄百度后台上传并清理源文件(
+    配置: Any, 源缓存路径: Any, 文件名: str, 发送缓存路径: Any = None
+) -> None:
     if not 源缓存路径:
         return
 
@@ -3755,13 +4525,21 @@ def 启动番茄百度后台上传并清理源文件(配置: Any, 源缓存路�
             if 百度网盘 is not None:
                 百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
                 if 百度结果.get("success"):
-                    logger.debug(f"番茄小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}")
+                    logger.debug(
+                        f"番茄小说百度网盘后台上传成功：文件={文件名}, 文件编号={百度结果.get('file_id')}"
+                    )
                 elif 百度结果.get("skipped"):
-                    logger.debug(f"番茄小说百度网盘后台上传按状态规则跳过：文件={文件名}")
+                    logger.debug(
+                        f"番茄小说百度网盘后台上传按状态规则跳过：文件={文件名}"
+                    )
                 elif 百度结果.get("enabled"):
-                    logger.warning(f"番茄小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}")
+                    logger.warning(
+                        f"番茄小说百度网盘后台上传失败，不影响QQ发送：文件={文件名}, 错误={百度结果.get('error')}"
+                    )
         except Exception as 异常:
-            logger.warning(f"番茄小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={异常}")
+            logger.warning(
+                f"番茄小说百度网盘后台上传异常，不影响QQ发送：文件={文件名}, 错误={异常}"
+            )
         finally:
             if str(源缓存路径) != str(发送缓存路径 or ""):
                 删除番茄缓存文件(源缓存路径)
@@ -3771,6 +4549,7 @@ def 启动番茄百度后台上传并清理源文件(配置: Any, 源缓存路�
     except RuntimeError:
         if str(源缓存路径) != str(发送缓存路径 or ""):
             删除番茄缓存文件(源缓存路径)
+
 
 def 删除番茄缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
@@ -3783,12 +4562,14 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
     except Exception as 异常:
         logger.warning(f"番茄小说下载缓存文件删除失败：文件={缓存路径}, 错误={异常}")
 
+
 def 写入番茄下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
     番茄下载缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突番茄缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
     小说缓存工具.标记下载缓存正在使用(缓存路径)
     return 缓存路径
+
 
 def 生成不冲突番茄缓存路径(文件名: str) -> Path:
     安全文件名 = Path(清理番茄文件名(文件名)).name or "番茄小说.txt"
@@ -3805,12 +4586,15 @@ def 生成不冲突番茄缓存路径(文件名: str) -> Path:
             return 候选路径
     raise RuntimeError("下载缓存目录中同名文件过多")
 
+
 async def 展开番茄短链(来源: str) -> str:
     文本 = str(来源 or "").strip()
     if aiohttp is None:
         return 文本
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": DEFAULT_UA}) as session:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": DEFAULT_UA}
+        ) as session:
             async with session.get(文本, allow_redirects=True) as 响应:
                 最终链接 = str(响应.url)
                 if 提取番茄书籍编号(最终链接) or 提取番茄短篇编号(最终链接):
@@ -3820,8 +4604,11 @@ async def 展开番茄短链(来源: str) -> str:
                 if 页面链接:
                     return 页面链接
     except Exception as 异常:
-        logger.warning(f"番茄短链解析失败：来源={限制番茄日志文本(文本, 200)}, 错误={异常}")
+        logger.warning(
+            f"番茄短链解析失败：来源={限制番茄日志文本(文本, 200)}, 错误={异常}"
+        )
     return 文本
+
 
 def 提取直接番茄链接参数(命令文本: str) -> str | None:
     文本 = str(命令文本 or "").strip()
@@ -3830,6 +4617,7 @@ def 提取直接番茄链接参数(命令文本: str) -> str | None:
     if re.fullmatch(r"\d{15,25}", 文本):
         return 文本
     return 提取番茄链接(文本) or None
+
 
 def 提取事件番茄链接(event: Any) -> str | None:
     消息对象 = getattr(event, "message_obj", None)
@@ -3841,6 +4629,7 @@ def 提取事件番茄链接(event: Any) -> str | None:
             if 链接:
                 return 链接
     return None
+
 
 def 提取番茄链接(值: Any) -> str:
     if 值 is None:
@@ -3861,7 +4650,9 @@ def 提取番茄链接(值: Any) -> str:
     for 匹配 in 番茄链接正则.finditer(文本):
         链接 = 匹配.group(0).rstrip("`，。；;、")
         if 番茄域名正则.search(链接) and (
-            提取番茄书籍编号(链接) or 提取番茄短篇编号(链接) or 番茄长读短链正则.search(链接)
+            提取番茄书籍编号(链接)
+            or 提取番茄短篇编号(链接)
+            or 番茄长读短链正则.search(链接)
         ):
             return 链接
     if 番茄域名正则.search(文本) and (提取番茄书籍编号(文本) or 提取番茄短篇编号(文本)):
@@ -3869,6 +4660,7 @@ def 提取番茄链接(值: Any) -> str:
     if re.fullmatch(r"\d{15,25}", 文本.strip()):
         return 文本.strip()
     return ""
+
 
 def 提取番茄书籍编号(文本: Any) -> str:
     原文 = str(文本 or "").strip()
@@ -3901,10 +4693,12 @@ def 提取番茄短篇编号(文本: Any) -> str:
     匹配 = re.search(r"(?:post[_-]?id|postId)=([0-9]{8,})", 原文, re.I)
     return 匹配.group(1) if 匹配 else ""
 
+
 def 规范化番茄正文(正文: Any) -> str:
     文本 = str(正文 or "").replace("\r\n", "\n").replace("\r", "\n")
     文本 = re.sub(r"\n{3,}", "\n\n", 文本).strip()
     return 文本
+
 
 def 格式化番茄字数(值: Any) -> str:
     字数 = 提取有效番茄字数(值)
@@ -3915,13 +4709,16 @@ def 格式化番茄字数(值: Any) -> str:
         return f"{万字}万字"
     return f"{字数}字"
 
+
 def 清理番茄网页文本(文本: Any) -> str:
     文本 = re.sub(r"<[^>]+>", "", str(文本 or ""))
     return html.unescape(文本).strip()
 
+
 def 清理番茄文件名(文件名: Any) -> str:
     文本 = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", str(文件名 or "")).strip(" .")
     return 文本[:80] or "番茄小说"
+
 
 def 安全番茄整数(值: Any, 默认值: int = 0) -> int:
     try:
@@ -3929,9 +4726,11 @@ def 安全番茄整数(值: Any, 默认值: int = 0) -> int:
     except Exception:
         return 默认值
 
+
 def 限制番茄日志文本(值: Any, 最大长度: int = 300) -> str:
     文本 = str(值 or "")
     return 文本 if len(文本) <= 最大长度 else 文本[:最大长度] + "..."
+
 
 def 读取番茄字段(对象: Any, 字段名: str) -> Any:
     if 对象 is None:

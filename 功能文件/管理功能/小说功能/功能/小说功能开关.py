@@ -11,8 +11,10 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取布尔运行状态值, 写入布尔运行状态值
-
+from 功能文件.管理功能.基础功能.运行状态数据库 import (
+    写入布尔运行状态值,
+    读取布尔运行状态值,
+)
 
 默认状态 = {
     "番茄": True,
@@ -90,7 +92,12 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import 读取�
     {
         f"{前缀}{功能名}": (功能名, 是否开启)
         for 功能名 in 默认状态
-        for 前缀, 是否开启 in (("开", True), ("开启", True), ("关", False), ("关闭", False))
+        for 前缀, 是否开启 in (
+            ("开", True),
+            ("开启", True),
+            ("关", False),
+            ("关闭", False),
+        )
     }
 )
 小说状态命令 = {"小说", "小说列表"}
@@ -131,7 +138,9 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         try:
             写入布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, 是否开启)
         except Exception as exc:
-            logger.warning(f"全局小说功能开关写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}")
+            logger.warning(
+                f"全局小说功能开关写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}"
+            )
             return "小说功能开关失败，请稍后再试"
         状态文本 = "开启" if 是否开启 else "关闭"
         return f"全局小说功能已{状态文本}"
@@ -140,7 +149,9 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         try:
             写入布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, 是否开启)
         except Exception as exc:
-            logger.warning(f"管理员测试模式写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}")
+            logger.warning(
+                f"管理员测试模式写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}"
+            )
             return "测试模式切换失败，请稍后再试"
         状态文本 = "开启" if 是否开启 else "关闭"
         return f"管理员测试模式已{状态文本}"
@@ -149,7 +160,9 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
     try:
         写入小说功能状态(配置, 功能名, 是否开启)
     except Exception as exc:
-        logger.warning(f"小说功能开关写入数据库失败：功能={功能名}, 是否开启={是否开启}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"小说功能开关写入数据库失败：功能={功能名}, 是否开启={是否开启}, 错误={type(exc).__name__}"
+        )
         return f"{功能显示名[功能名]}开关失败，请稍后再试"
     状态文本 = "开启" if 是否开启 else "关闭"
     return f"{功能显示名[功能名]}已{状态文本}"
@@ -181,10 +194,7 @@ def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = 
         return False
     if 小说功能是否开启(功能名, 配置):
         return True
-    return bool(
-        是群文件清理管理员(event, 配置)
-        and 管理员测试模式是否开启(配置)
-    )
+    return bool(是群文件清理管理员(event, 配置) and 管理员测试模式是否开启(配置))
 
 
 def 获取小说功能关闭回复(功能名: str, 配置: Any = None) -> str:
@@ -216,6 +226,8 @@ def 读取小说功能状态(配置: Any = None) -> dict[str, bool]:
         try:
             状态[功能名] = 读取布尔运行状态值(配置, 状态命名空间, 功能名, 默认值)
         except Exception as exc:
-            logger.warning(f"小说功能开关读取数据库失败：功能={功能名}, 错误={type(exc).__name__}")
+            logger.warning(
+                f"小说功能开关读取数据库失败：功能={功能名}, 错误={type(exc).__name__}"
+            )
             状态[功能名] = 默认值
     return 状态

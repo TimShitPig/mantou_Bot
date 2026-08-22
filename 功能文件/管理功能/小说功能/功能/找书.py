@@ -16,6 +16,7 @@ try:
     from astrbot.api import logger
 except Exception:
     import logging
+
     logger = logging.getLogger(__name__)
 
 from 功能文件.管理功能.基础功能.权限工具 import 获取发送者QQ, 读取字段
@@ -24,8 +25,10 @@ from 功能文件.管理功能.小说功能.功能 import 小说功能开关
 try:
     from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
 except Exception:
+
     def 是QQ官方机器人(event: Any) -> bool:  # type: ignore
         return False
+
 
 try:
     from 功能文件.管理功能.小说功能.小说 import 七猫小说
@@ -175,20 +178,28 @@ def 清理文本(值: Any) -> str:
 
 def 规范标题(值: Any) -> str:
     文本 = 清理文本(值).lower()
-    文本 = re.sub(r"[\s\-_/\\|·•·【】\[\]（）()《》<>\"'“”‘’：:，,。.!！?？~～]+", "", 文本)
+    文本 = re.sub(
+        r"[\s\-_/\\|·•·【】\[\]（）()《》<>\"'“”‘’：:，,。.!！?？~～]+", "", 文本
+    )
     return 文本
 
 
 def _收集事件对象(event: Any) -> list[Any]:
-    候选: list[Any] = [event, getattr(event, "message_obj", None), getattr(event, "raw_message", None)]
+    候选: list[Any] = [
+        event,
+        getattr(event, "message_obj", None),
+        getattr(event, "raw_message", None),
+    ]
     消息对象 = getattr(event, "message_obj", None)
     if 消息对象 is not None:
-        候选.extend([
-            getattr(消息对象, "raw_message", None),
-            getattr(消息对象, "raw", None),
-            getattr(消息对象, "data", None),
-            getattr(消息对象, "extra", None),
-        ])
+        候选.extend(
+            [
+                getattr(消息对象, "raw_message", None),
+                getattr(消息对象, "raw", None),
+                getattr(消息对象, "data", None),
+                getattr(消息对象, "extra", None),
+            ]
+        )
     结果: list[Any] = []
     for 对象 in 候选:
         if 对象 is None:
@@ -231,10 +242,19 @@ def 获取找书用户标识(event: Any) -> str:
         ):
             值 = 读取字段(对象, 字段名)
             if isinstance(值, dict):
-                值 = 值.get("user_id") or 值.get("id") or 值.get("openid") or 值.get("user_openid")
+                值 = (
+                    值.get("user_id")
+                    or 值.get("id")
+                    or 值.get("openid")
+                    or 值.get("user_openid")
+                )
             if 值:
                 return str(值)
-        author = 读取字段(对象, "author") or 读取字段(对象, "user") or 读取字段(对象, "member")
+        author = (
+            读取字段(对象, "author")
+            or 读取字段(对象, "user")
+            or 读取字段(对象, "member")
+        )
         if isinstance(author, dict):
             for 字段名 in ("user_openid", "member_openid", "id", "user_id", "openid"):
                 值 = author.get(字段名)
@@ -270,7 +290,9 @@ def 获取群号(event: Any) -> str:
 
 def 清理过期会话() -> None:
     现在 = time.time()
-    for 键 in [k for k, v in 找书会话.items() if 现在 - float(v.get("ts") or 0) > 会话等待秒数]:
+    for 键 in [
+        k for k, v in 找书会话.items() if 现在 - float(v.get("ts") or 0) > 会话等待秒数
+    ]:
         找书会话.pop(键, None)
 
 
@@ -317,7 +339,9 @@ def 构造番茄链接(书籍编号: str) -> str:
 
 def 构造七猫链接(书籍编号: str, 是否短篇: bool = False) -> str:
     if 是否短篇:
-        return f"https://app-share.wtzw.com/app-h5/freebook/short-story-detail/{书籍编号}"
+        return (
+            f"https://app-share.wtzw.com/app-h5/freebook/short-story-detail/{书籍编号}"
+        )
     return f"https://www.qimao.com/shuku/{书籍编号}/"
 
 
@@ -406,8 +430,17 @@ def 计算热度排序值(阅读量: int = 0, 评分: float = 0.0, 字数: int =
 
 
 书名噪声后缀 = (
-    "原版小说", "原版", "动漫版", "广播剧", "同人", "后续", "续写",
-    "新书", "大全集", "全集", "完本",
+    "原版小说",
+    "原版",
+    "动漫版",
+    "广播剧",
+    "同人",
+    "后续",
+    "续写",
+    "新书",
+    "大全集",
+    "全集",
+    "完本",
 )
 无效作者名称 = {"", "未知", "unknown", "佚名", "匿名"}
 
@@ -434,7 +467,13 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
     相似度 = SequenceMatcher(None, 查询, 候选).ratio()
 
     if 候选 == 查询:
-        return {"tier": 6, "score": 10000.0, "chars": 匹配字数, "coverage": 1.0, "ratio": 1.0}
+        return {
+            "tier": 6,
+            "score": 10000.0,
+            "chars": 匹配字数,
+            "coverage": 1.0,
+            "ratio": 1.0,
+        }
 
     if 字段类型 == "title":
         去后缀 = 候选
@@ -444,7 +483,13 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
                 去后缀 = 去后缀[: -len(规范后缀)]
                 break
         if 去后缀 == 查询:
-            return {"tier": 5, "score": 9000.0, "chars": 匹配字数, "coverage": 覆盖率, "ratio": 相似度}
+            return {
+                "tier": 5,
+                "score": 9000.0,
+                "chars": 匹配字数,
+                "coverage": 覆盖率,
+                "ratio": 相似度,
+            }
 
     if 候选.startswith(查询):
         多余 = len(候选) - len(查询)
@@ -480,10 +525,20 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
 
     if 字段类型 == "author":
         最少匹配字数 = max(2, (len(查询) * 3 + 3) // 4)
-        可模糊 = len(查询) >= 3 and 匹配字数 >= 最少匹配字数 and 覆盖率 >= 0.75 and 相似度 >= 0.78
+        可模糊 = (
+            len(查询) >= 3
+            and 匹配字数 >= 最少匹配字数
+            and 覆盖率 >= 0.75
+            and 相似度 >= 0.78
+        )
     else:
         最少匹配字数 = max(2, (len(查询) * 65 + 99) // 100)
-        可模糊 = len(查询) >= 3 and 匹配字数 >= 最少匹配字数 and 覆盖率 >= 0.65 and 相似度 >= 0.68
+        可模糊 = (
+            len(查询) >= 3
+            and 匹配字数 >= 最少匹配字数
+            and 覆盖率 >= 0.65
+            and 相似度 >= 0.68
+        )
     if 可模糊:
         return {
             "tier": 1,
@@ -492,7 +547,13 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
             "coverage": 覆盖率,
             "ratio": 相似度,
         }
-    return {"tier": 0, "score": 0.0, "chars": 匹配字数, "coverage": 覆盖率, "ratio": 相似度}
+    return {
+        "tier": 0,
+        "score": 0.0,
+        "chars": 匹配字数,
+        "coverage": 覆盖率,
+        "ratio": 相似度,
+    }
 
 
 def 计算标题相关度(标题: str, 关键词: str) -> float:
@@ -563,7 +624,13 @@ def _选择主匹配(详情: dict[str, Any], 搜索类型: str) -> dict[str, Any
     if 搜索类型 == "auto":
         if len(详情["tokens"]) > 1:
             if not 详情["mixed_all"]:
-                return {"tier": 0, "score": 0.0, "chars": 0, "coverage": 0.0, "ratio": 0.0}
+                return {
+                    "tier": 0,
+                    "score": 0.0,
+                    "chars": 0,
+                    "coverage": 0.0,
+                    "ratio": 0.0,
+                }
             总字数 = sum(len(词) for 词 in 详情["tokens"])
             return {
                 "tier": 7,
@@ -626,7 +693,9 @@ def 排序找书结果(
 
     平台原始: dict[str, list[float]] = {}
     for 项 in 筛选后:
-        平台原始.setdefault(str(项.get("platform") or ""), []).append(float(项.get("heat") or 0))
+        平台原始.setdefault(str(项.get("platform") or ""), []).append(
+            float(项.get("heat") or 0)
+        )
     平台区间 = {
         平台: (min(值列表), max(值列表)) if 值列表 else (0.0, 0.0)
         for 平台, 值列表 in 平台原始.items()
@@ -682,13 +751,21 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
     books = row.get("books")
-    book = books[0] if isinstance(books, list) and books and isinstance(books[0], dict) else None
+    book = (
+        books[0]
+        if isinstance(books, list) and books and isinstance(books[0], dict)
+        else None
+    )
     if book is None:
         book = row.get("book") or row.get("book_info") or row
     if not isinstance(book, dict):
         return None
-    book_id = str(book.get("book_id") or row.get("book_id") or book.get("id") or "").strip()
-    title = 清理文本(book.get("book_name") or book.get("title") or row.get("title") or "")
+    book_id = str(
+        book.get("book_id") or row.get("book_id") or book.get("id") or ""
+    ).strip()
+    title = 清理文本(
+        book.get("book_name") or book.get("title") or row.get("title") or ""
+    )
     author = 清理文本(book.get("author") or row.get("author") or "未知") or "未知"
     if not book_id or not book_id.isdigit() or not title:
         return None
@@ -717,7 +794,9 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     }
 
 
-async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
+async def 搜索番茄(
+    session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30
+) -> list[dict[str, Any]]:
     if 番茄小说 is None:
         return []
     结果: list[dict[str, str]] = []
@@ -732,7 +811,9 @@ async def 搜索番茄(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 method="POST",
             )
         except Exception as exc:
-            logger.warning(f"找书番茄搜索失败：关键词={关键词}, 偏移={偏移}, 错误={exc}")
+            logger.warning(
+                f"找书番茄搜索失败：关键词={关键词}, 偏移={偏移}, 错误={exc}"
+            )
             break
         if not isinstance(data, dict) or data.get("code") not in (0, "0", None):
             break
@@ -847,22 +928,26 @@ async def 过滤无目录番茄搜索结果(
     return 筛选后
 
 
-async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30) -> list[dict[str, Any]]:
+async def 搜索七猫(
+    session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30
+) -> list[dict[str, Any]]:
     if 七猫小说 is None:
         return []
     结果: list[dict[str, str]] = []
     页码 = 1
     while len(结果) < 需要数量 and 页码 <= 5:
         try:
-            参数 = 七猫小说.签名参数({
-                "extend": "",
-                "tab": "0",
-                "gender": "0",
-                "refresh_state": "8",
-                "page": str(页码),
-                "wd": 关键词,
-                "is_short_story_user": "0",
-            })
+            参数 = 七猫小说.签名参数(
+                {
+                    "extend": "",
+                    "tab": "0",
+                    "gender": "0",
+                    "refresh_state": "8",
+                    "page": str(页码),
+                    "wd": 关键词,
+                    "is_short_story_user": "0",
+                }
+            )
             数据 = await 七猫小说.请求JSON(
                 session,
                 "https://api-bc.wtzw.com/search/v1/words",
@@ -870,9 +955,15 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 七猫小说.生成请求头("00000000", "api-bc.wtzw.com"),
             )
         except Exception as exc:
-            logger.warning(f"找书七猫搜索失败：关键词={关键词}, 页码={页码}, 错误={exc}")
+            logger.warning(
+                f"找书七猫搜索失败：关键词={关键词}, 页码={页码}, 错误={exc}"
+            )
             break
-        书籍列表 = 七猫小说.读取字段路径(数据, ("data", "books")) if hasattr(七猫小说, "读取字段路径") else ((数据 or {}).get("data") or {}).get("books")
+        书籍列表 = (
+            七猫小说.读取字段路径(数据, ("data", "books"))
+            if hasattr(七猫小说, "读取字段路径")
+            else ((数据 or {}).get("data") or {}).get("books")
+        )
         if not isinstance(书籍列表, list) or not 书籍列表:
             break
         for 书籍 in 书籍列表:
@@ -880,13 +971,20 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 continue
             book_id = str(书籍.get("id") or "").strip()
             title = 清理文本(书籍.get("title") or 书籍.get("original_title") or "")
-            author = 清理文本(书籍.get("author") or 书籍.get("original_author") or "未知") or "未知"
+            author = (
+                清理文本(书籍.get("author") or 书籍.get("original_author") or "未知")
+                or "未知"
+            )
             if not book_id or not title:
                 continue
             reader_type = str(书籍.get("reader_type") or 书籍.get("type") or "")
-            是否短篇 = reader_type in {"4", "short"} or "短篇" in str(书籍.get("sub_title") or "")
+            是否短篇 = reader_type in {"4", "short"} or "短篇" in str(
+                书籍.get("sub_title") or ""
+            )
             评分 = _安全浮点(书籍.get("score"))
-            字数 = _安全整数热度(书籍.get("words_num") or 书籍.get("word_count") or 书籍.get("words"))
+            字数 = _安全整数热度(
+                书籍.get("words_num") or 书籍.get("word_count") or 书籍.get("words")
+            )
             # sub_title 里常有「653万字」
             if 字数 <= 0:
                 副 = str(书籍.get("sub_title") or "")
@@ -894,17 +992,19 @@ async def 搜索七猫(session: aiohttp.ClientSession, 关键词: str, *, 需要
                 if m:
                     字数 = int(float(m.group(1)) * 10000)
             热度值 = 计算热度排序值(评分=评分, 字数=字数)
-            结果.append({
-                "platform": "七猫",
-                "book_id": book_id,
-                "title": title,
-                "author": author,
-                "url": 构造七猫链接(book_id, 是否短篇),
-                "heat": 热度值,
-                "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=0),
-                "score": 评分,
-                "read_count": 0,
-            })
+            结果.append(
+                {
+                    "platform": "七猫",
+                    "book_id": book_id,
+                    "title": title,
+                    "author": author,
+                    "url": 构造七猫链接(book_id, 是否短篇),
+                    "heat": 热度值,
+                    "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=0),
+                    "score": 评分,
+                    "read_count": 0,
+                }
+            )
         if len(书籍列表) < 8:
             break
         页码 += 1
@@ -938,17 +1038,19 @@ async def 搜索书旗(
         字数 = _安全整数热度(书籍.get("word_count"))
         阅读量 = _安全整数热度(书籍.get("read_count"))
         热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
-        结果.append({
-            "platform": "书旗",
-            "book_id": book_id,
-            "title": title,
-            "author": author,
-            "url": str(书籍.get("url") or 构造书旗链接(book_id)),
-            "heat": 热度值,
-            "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
-            "score": 评分,
-            "read_count": 阅读量,
-        })
+        结果.append(
+            {
+                "platform": "书旗",
+                "book_id": book_id,
+                "title": title,
+                "author": author,
+                "url": str(书籍.get("url") or 构造书旗链接(book_id)),
+                "heat": 热度值,
+                "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+                "score": 评分,
+                "read_count": 阅读量,
+            }
+        )
     return 结果[:需要数量]
 
 
@@ -968,7 +1070,9 @@ async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict
     try:
         原始结果 = await QQ阅读小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书QQ阅读搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"找书QQ阅读搜索失败：关键词={关键词}, 错误={type(exc).__name__}"
+        )
         return []
 
     结果: list[dict[str, Any]] = []
@@ -986,18 +1090,20 @@ async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict
         字数 = _安全整数热度(书籍.get("word_count"))
         阅读量 = _安全整数热度(书籍.get("read_count"))
         热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
-        结果.append({
-            "platform": "QQ阅读",
-            "book_id": book_id,
-            "title": title,
-            "author": author,
-            "url": str(书籍.get("url") or 构造QQ阅读链接(book_id)),
-            "heat": 热度值,
-            "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
-            "score": 评分,
-            "read_count": 阅读量,
-            "word_count": 书籍.get("word_count") or 0,
-        })
+        结果.append(
+            {
+                "platform": "QQ阅读",
+                "book_id": book_id,
+                "title": title,
+                "author": author,
+                "url": str(书籍.get("url") or 构造QQ阅读链接(book_id)),
+                "heat": 热度值,
+                "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+                "score": 评分,
+                "read_count": 阅读量,
+                "word_count": 书籍.get("word_count") or 0,
+            }
+        )
     return 结果[:需要数量]
 
 
@@ -1007,7 +1113,9 @@ async def 搜索QQ浏览器(关键词: str, *, 需要数量: int = 20) -> list[d
     try:
         原始结果 = await QQ浏览器小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
-        logger.warning(f"找书QQ浏览器搜索失败：关键词={关键词}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"找书QQ浏览器搜索失败：关键词={关键词}, 错误={type(exc).__name__}"
+        )
         return []
 
     结果: list[dict[str, Any]] = []
@@ -1110,7 +1218,9 @@ async def 搜索小米(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     return 结果[:需要数量]
 
 
-def _整理新增平台搜索结果(平台: str, 原始结果: Any, 需要数量: int) -> list[dict[str, Any]]:
+def _整理新增平台搜索结果(
+    平台: str, 原始结果: Any, 需要数量: int
+) -> list[dict[str, Any]]:
     """把各独立平台模块的搜索字段接入统一找书会话。"""
     if not isinstance(原始结果, list):
         return []
@@ -1126,18 +1236,20 @@ def _整理新增平台搜索结果(平台: str, 原始结果: Any, 需要数量
         评分 = _安全浮点(书籍.get("score"))
         字数 = _安全整数热度(书籍.get("word_count"))
         热度 = _安全整数热度(书籍.get("heat"))
-        结果.append({
-            "platform": 平台,
-            "book_id": 书籍编号,
-            "title": 书名,
-            "author": 作者,
-            "url": str(书籍.get("url") or ""),
-            "heat": 热度 or 计算热度排序值(评分=评分, 字数=字数),
-            "heat_text": "",
-            "score": 评分,
-            "read_count": 热度,
-            "word_count": 字数,
-        })
+        结果.append(
+            {
+                "platform": 平台,
+                "book_id": 书籍编号,
+                "title": 书名,
+                "author": 作者,
+                "url": str(书籍.get("url") or ""),
+                "heat": 热度 or 计算热度排序值(评分=评分, 字数=字数),
+                "heat_text": "",
+                "score": 评分,
+                "read_count": 热度,
+                "word_count": 字数,
+            }
+        )
     return 结果[: max(1, int(需要数量 or 20))]
 
 
@@ -1145,7 +1257,9 @@ async def 搜索宜搜(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 宜搜小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("宜搜", await 宜搜小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "宜搜", await 宜搜小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书宜搜搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1155,7 +1269,9 @@ async def 搜索米读(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 米读小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("米读", await 米读小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "米读", await 米读小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书米读搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1165,7 +1281,9 @@ async def 搜索猫眼(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 猫眼小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("猫眼", await 猫眼小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "猫眼", await 猫眼小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书猫眼搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1175,7 +1293,9 @@ async def 搜索酷我(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 酷我小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("酷我", await 酷我小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "酷我", await 酷我小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书酷我搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1185,7 +1305,9 @@ async def 搜索酷匠(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 酷匠小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("酷匠", await 酷匠小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "酷匠", await 酷匠小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书酷匠搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1195,7 +1317,9 @@ async def 搜索连城(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 连城小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("连城", await 连城小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "连城", await 连城小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书连城搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1205,7 +1329,9 @@ async def 搜索菠萝包(关键词: str, *, 需要数量: int = 20) -> list[dic
     if 菠萝包小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("菠萝包", await 菠萝包小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "菠萝包", await 菠萝包小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书菠萝包搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1215,7 +1341,9 @@ async def 搜索晋江(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     if 晋江小说 is None:
         return []
     try:
-        return _整理新增平台搜索结果("晋江", await 晋江小说.搜索小说(关键词, 需要数量=需要数量), 需要数量)
+        return _整理新增平台搜索结果(
+            "晋江", await 晋江小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
+        )
     except Exception as exc:
         logger.debug("找书晋江搜索失败：错误类型=%s", type(exc).__name__)
         return []
@@ -1243,6 +1371,7 @@ async def 预检QQ阅读候选(
     缓存 = QQ阅读预检缓存.get(书籍编号)
     if 缓存 is not None and 现在 - 缓存[0] < QQ阅读预检缓存秒数:
         return 缓存[1]
+
     async def _检查(有效会话: aiohttp.ClientSession | None) -> bool:
         details = await QQ阅读小说.获取参考书籍详情(书籍编号, 有效会话)
         chapter_count = _安全整数热度(details.get("chapters"))
@@ -1256,7 +1385,11 @@ async def 预检QQ阅读候选(
             chapter_count <= 0 or len(catalog) == chapter_count
         )
         catalog = QQ阅读小说.获取QQ阅读可下载目录(details, catalog)
-        return available and bool(catalog) and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+        return (
+            available
+            and bool(catalog)
+            and not QQ阅读小说.是章节单独付费书籍(details, catalog)
+        )
 
     try:
         if session is not None:
@@ -1303,10 +1436,7 @@ async def 过滤章节单独付费QQ阅读搜索结果(
     else:
         检查结果 = await asyncio.gather(*(检查(项) for 项 in 结果))
     可用书籍编号 = {book_id for book_id, allowed in 检查结果 if allowed}
-    return [
-        项 for 项 in 结果
-        if str(项.get("book_id") or "").strip() in 可用书籍编号
-    ]
+    return [项 for 项 in 结果 if str(项.get("book_id") or "").strip() in 可用书籍编号]
 
 
 def _平台优先级值(平台: Any) -> int:
@@ -1377,10 +1507,14 @@ def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any
             if 书名键 in 书名作者位置:
                 旧位 = 书名作者位置[书名键]
                 旧项 = 合并[旧位]
-                共识平台 = set(旧项.get("_source_platforms") or []) | set(项.get("_source_platforms") or [])
+                共识平台 = set(旧项.get("_source_platforms") or []) | set(
+                    项.get("_source_platforms") or []
+                )
                 胜出项 = 项 if _书籍优劣键(项) > _书籍优劣键(旧项) else 旧项
                 胜出项 = dict(胜出项)
-                胜出项["_source_platforms"] = sorted(平台名 for 平台名 in 共识平台 if 平台名)
+                胜出项["_source_platforms"] = sorted(
+                    平台名 for 平台名 in 共识平台 if 平台名
+                )
                 胜出项["_source_count"] = max(1, len(胜出项["_source_platforms"]))
                 合并[旧位] = 胜出项
                 continue
@@ -1459,11 +1593,49 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             _限时搜索("菠萝包", 搜索菠萝包(关键词, 需要数量=数量)),
             _限时搜索("晋江", 搜索晋江(关键词, 需要数量=数量)),
         )
-        番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果, 晋江结果 = await asyncio.gather(
+        (
+            番茄结果,
+            七猫结果,
+            书旗结果,
+            QQ阅读结果,
+            QQ浏览器结果,
+            得间结果,
+            点众结果,
+            塔读结果,
+            百度结果,
+            小米结果,
+            宜搜结果,
+            米读结果,
+            猫眼结果,
+            酷我结果,
+            酷匠结果,
+            连城结果,
+            菠萝包结果,
+            晋江结果,
+        ) = await asyncio.gather(
             *搜索任务,
             return_exceptions=False,
         )
-        for 平台结果 in (番茄结果, 七猫结果, 书旗结果, QQ阅读结果, QQ浏览器结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果, 晋江结果):
+        for 平台结果 in (
+            番茄结果,
+            七猫结果,
+            书旗结果,
+            QQ阅读结果,
+            QQ浏览器结果,
+            得间结果,
+            点众结果,
+            塔读结果,
+            百度结果,
+            小米结果,
+            宜搜结果,
+            米读结果,
+            猫眼结果,
+            酷我结果,
+            酷匠结果,
+            连城结果,
+            菠萝包结果,
+            晋江结果,
+        ):
             for 排名, 项 in enumerate(平台结果):
                 if isinstance(项, dict):
                     项.setdefault("_platform_rank", 排名)
@@ -1475,7 +1647,28 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             搜索类型=搜索类型,
         )
         QQ阅读结果 = await 过滤章节单独付费QQ阅读搜索结果(QQ阅读结果)
-        合并 = 去重合并([番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果, 晋江结果])
+        合并 = 去重合并(
+            [
+                番茄结果,
+                七猫结果,
+                QQ阅读结果,
+                QQ浏览器结果,
+                书旗结果,
+                得间结果,
+                点众结果,
+                塔读结果,
+                百度结果,
+                小米结果,
+                宜搜结果,
+                米读结果,
+                猫眼结果,
+                酷我结果,
+                酷匠结果,
+                连城结果,
+                菠萝包结果,
+                晋江结果,
+            ]
+        )
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
         if len(初步结果) < 每页数量:
@@ -1486,7 +1679,27 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
             )
         if len(初步结果) < 每页数量 and 联想词:
             补搜词 = [w for w in 联想词 if 规范标题(w) != 规范标题(关键词)][:3]
-            补结果集合: list[list[dict[str, Any]]] = [番茄结果, 七猫结果, QQ阅读结果, QQ浏览器结果, 书旗结果, 得间结果, 点众结果, 塔读结果, 百度结果, 小米结果, 宜搜结果, 米读结果, 猫眼结果, 酷我结果, 酷匠结果, 连城结果, 菠萝包结果, 晋江结果]
+            补结果集合: list[list[dict[str, Any]]] = [
+                番茄结果,
+                七猫结果,
+                QQ阅读结果,
+                QQ浏览器结果,
+                书旗结果,
+                得间结果,
+                点众结果,
+                塔读结果,
+                百度结果,
+                小米结果,
+                宜搜结果,
+                米读结果,
+                猫眼结果,
+                酷我结果,
+                酷匠结果,
+                连城结果,
+                菠萝包结果,
+                晋江结果,
+            ]
+
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
                 return await asyncio.gather(
                     _限时搜索("番茄联想", 搜索番茄(session, w, 需要数量=10)),
@@ -1559,7 +1772,7 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
         页码 = 总页
         会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
-    当前页 = 结果[起始:起始 + 每页数量]
+    当前页 = 结果[起始 : 起始 + 每页数量]
     行: list[str] = []
     if not 当前页:
         行.append("没有找到相关书籍")
@@ -1606,7 +1819,7 @@ def 格式化找书结果MD(会话: dict[str, Any]) -> str:
         页码 = 总页
         会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
-    当前页 = 结果[起始:起始 + 每页数量]
+    当前页 = 结果[起始 : 起始 + 每页数量]
     行: list[str] = ["**找书结果**", ""]
     if not 当前页:
         行.append("没有找到相关书籍")
@@ -1636,7 +1849,7 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
     结果: list[dict[str, Any]] = 会话.get("results") or []
     页码 = max(1, int(会话.get("page") or 1))
     起始 = (页码 - 1) * 每页数量
-    return 结果[起始:起始 + 每页数量]
+    return 结果[起始 : 起始 + 每页数量]
 
 
 选书命令正则 = re.compile(r"^选([1-5])$")
@@ -1662,7 +1875,9 @@ def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str
     return 当前页[序号 - 1]
 
 
-def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | str | None:
+def 获取找书下载回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[Any] | str | None:
     """main 优先调用：用户点击指令链发出 选N 后，这里直接进入各平台下载流。"""
     文本 = str(命令文本 or "").strip()
     if not 选书命令正则.fullmatch(文本):
@@ -1731,14 +1946,18 @@ def 获取找书下载回复流(event: Any, 命令文本: str, 配置: Any = Non
     return "下载失败"
 
 
-async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) -> str | dict[str, Any] | None:
+async def 处理找书指令(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> str | dict[str, Any] | None:
     """返回纯文本；官方机器人返回内嵌文字指令链的 Markdown。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
     查询 = 解析找书查询(文本)
     是当前会话翻页 = 文本 in 翻页命令集合 and 会话键 in 找书会话
-    if (查询 is not None or 是当前会话翻页) and not 小说功能开关.小说总开关是否开启(配置):
+    if (查询 is not None or 是当前会话翻页) and not 小说功能开关.小说总开关是否开启(
+        配置
+    ):
         return 小说功能开关.获取小说功能关闭回复("", 配置)
     会话 = None
     if 查询 is not None:
@@ -1747,7 +1966,9 @@ async def 处理找书指令(event: Any, 命令文本: str, 配置: Any = None) 
         try:
             结果 = await 聚合搜索(关键词, 搜索类型)
         except Exception as exc:
-            logger.warning(f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}")
+            logger.warning(
+                f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}"
+            )
             return "搜索失败，请稍后再试"
         会话 = {
             "keyword": 关键词,

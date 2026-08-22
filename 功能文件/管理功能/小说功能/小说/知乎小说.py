@@ -33,7 +33,6 @@ from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 from 功能文件.管理功能.小说功能.小说 import 知乎分享恢复客户端 as 恢复客户端
 
-
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
 目录地址模板 = "https://api.zhihu.com/km-indep-home/catalog/{}"
@@ -56,6 +55,8 @@ from 功能文件.管理功能.小说功能.小说 import 知乎分享恢复客�
 
 class _知乎目录接口异常(RuntimeError):
     pass
+
+
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
@@ -68,23 +69,87 @@ class _知乎目录接口异常(RuntimeError):
 )
 允许主机 = {"story.zhihu.com"}
 正文键 = {
-    "content", "body", "html", "text", "markdown", "richtext", "rich_text",
-    "answercontent", "answer_content", "articlecontent", "article_content",
-    "paidcontent", "paid_content", "正文", "内容", "文章内容", "回答内容",
+    "content",
+    "body",
+    "html",
+    "text",
+    "markdown",
+    "richtext",
+    "rich_text",
+    "answercontent",
+    "answer_content",
+    "articlecontent",
+    "article_content",
+    "paidcontent",
+    "paid_content",
+    "正文",
+    "内容",
+    "文章内容",
+    "回答内容",
 }
 章节列表键 = {"chapters", "articles", "items", "contents", "entries", "章节", "文章"}
 标题键 = {
-    "title", "name", "questiontitle", "question_title", "articletitle", "article_title",
-    "contenttitle", "content_title", "booktitle", "book_title", "columntitle", "column_title",
-    "标题", "名称", "问题标题", "文章标题",
+    "title",
+    "name",
+    "questiontitle",
+    "question_title",
+    "articletitle",
+    "article_title",
+    "contenttitle",
+    "content_title",
+    "booktitle",
+    "book_title",
+    "columntitle",
+    "column_title",
+    "标题",
+    "名称",
+    "问题标题",
+    "文章标题",
 }
 作者键 = {
-    "author", "authorname", "author_name", "creator", "creatorname", "creator_name",
-    "username", "user_name", "penname", "pen_name", "作者", "作者名", "创作者",
+    "author",
+    "authorname",
+    "author_name",
+    "creator",
+    "creatorname",
+    "creator_name",
+    "username",
+    "user_name",
+    "penname",
+    "pen_name",
+    "作者",
+    "作者名",
+    "创作者",
 }
-简介键 = {"intro", "introduction", "description", "desc", "summary", "excerpt", "简介", "摘要"}
-字数键 = {"wordcount", "word_count", "words", "wordnum", "word_num", "charcount", "char_count", "字数"}
-状态键 = {"status", "statustext", "status_text", "isfinished", "is_finished", "finished", "完结"}
+简介键 = {
+    "intro",
+    "introduction",
+    "description",
+    "desc",
+    "summary",
+    "excerpt",
+    "简介",
+    "摘要",
+}
+字数键 = {
+    "wordcount",
+    "word_count",
+    "words",
+    "wordnum",
+    "word_num",
+    "charcount",
+    "char_count",
+    "字数",
+}
+状态键 = {
+    "status",
+    "statustext",
+    "status_text",
+    "isfinished",
+    "is_finished",
+    "finished",
+    "完结",
+}
 
 _令牌缓存: dict[str, str] = {}
 _令牌锁 = asyncio.Lock()
@@ -96,11 +161,34 @@ class _正文HTML解析器(HTMLParser):
         self.片段: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"br", "p", "div", "section", "article", "li", "blockquote", "h1", "h2", "h3", "h4"}:
+        if tag.lower() in {
+            "br",
+            "p",
+            "div",
+            "section",
+            "article",
+            "li",
+            "blockquote",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+        }:
             self.片段.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"p", "div", "section", "article", "li", "blockquote", "h1", "h2", "h3", "h4"}:
+        if tag.lower() in {
+            "p",
+            "div",
+            "section",
+            "article",
+            "li",
+            "blockquote",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+        }:
             self.片段.append("\n")
 
     def handle_data(self, data: str) -> None:
@@ -166,8 +254,17 @@ def _内容值转文本(值: Any, 深度: int = 0) -> str:
         return "\n\n".join(项目 for 项目 in 部分 if 项目).strip()
     if isinstance(值, dict):
         for 键 in (
-            "text", "content", "body", "html", "value", "正文", "内容",
-            "paragraphs", "blocks", "nodes", "children",
+            "text",
+            "content",
+            "body",
+            "html",
+            "value",
+            "正文",
+            "内容",
+            "paragraphs",
+            "blocks",
+            "nodes",
+            "children",
         ):
             if 键 in 值:
                 文本 = _内容值转文本(值.get(键), 深度 + 1)
@@ -263,7 +360,9 @@ def _解析知乎作者(值: Any) -> str:
     return 清理正文(值)
 
 
-def 解析知乎章节详情(原始: bytes | dict[str, Any], 业务编号: str = "", 章节编号: str = "") -> dict[str, Any]:
+def 解析知乎章节详情(
+    原始: bytes | dict[str, Any], 业务编号: str = "", 章节编号: str = ""
+) -> dict[str, Any]:
     数据 = _解析响应对象(原始) if isinstance(原始, bytes) else 原始
     if not isinstance(数据, dict):
         raise RuntimeError("知乎章节详情格式错误")
@@ -283,16 +382,17 @@ def 解析知乎章节详情(原始: bytes | dict[str, Any], 业务编号: str =
     作者 = _解析知乎作者(数据.get("authors"))
     if not 作者:
         作者 = _解析知乎作者(父级.get("authors"))
-    下章 = 数据.get("next_section") if isinstance(数据.get("next_section"), dict) else {}
+    下章 = (
+        数据.get("next_section") if isinstance(数据.get("next_section"), dict) else {}
+    )
     上章 = 数据.get("pre_section") if isinstance(数据.get("pre_section"), dict) else {}
     标题 = 清理正文(数据.get("title") or 基础.get("title") or "")
     专栏标题 = 清理正文(父级.get("title") or "")
-    目录信息 = 数据.get("catalog_info") if isinstance(数据.get("catalog_info"), dict) else {}
+    目录信息 = (
+        数据.get("catalog_info") if isinstance(数据.get("catalog_info"), dict) else {}
+    )
     简介 = 清理正文(
-        父级.get("description")
-        or 父级.get("desc")
-        or 目录信息.get("desc")
-        or ""
+        父级.get("description") or 父级.get("desc") or 目录信息.get("desc") or ""
     )
     return {
         "business_id": 实际业务编号,
@@ -395,7 +495,9 @@ async def _获取知乎目录接口(
             章节编号 = str(项目.get("section_id") or "").strip()
             if not 章节编号 or 章节编号 in 已有章节编号:
                 continue
-            if 项目.get("business_id") and str(项目.get("business_id")) != str(业务编号):
+            if 项目.get("business_id") and str(项目.get("business_id")) != str(
+                业务编号
+            ):
                 raise RuntimeError("知乎目录专栏不匹配")
             try:
                 原始序号 = 项目.get("idx")
@@ -403,7 +505,9 @@ async def _获取知乎目录接口(
             except (TypeError, ValueError):
                 序号 = 0
             if 序号 <= 0:
-                序号匹配 = re.search(r"(\d+)", str(项目.get("serial_number_text") or ""))
+                序号匹配 = re.search(
+                    r"(\d+)", str(项目.get("serial_number_text") or "")
+                )
                 序号 = int(序号匹配.group(1)) if 序号匹配 else len(所有项目) + 1
             所有项目.append(
                 {
@@ -432,11 +536,15 @@ async def _获取知乎目录接口(
 
     if not 所有项目:
         raise RuntimeError("知乎目录为空")
-    所有项目.sort(key=lambda 项目: (int(项目.get("index") or 0), str(项目.get("id") or "")))
+    所有项目.sort(
+        key=lambda 项目: (int(项目.get("index") or 0), str(项目.get("id") or ""))
+    )
     if 声明总数 and len(所有项目) != 声明总数:
         raise RuntimeError("知乎目录章节数量不完整")
     序号列表 = [int(项目.get("index") or 0) for 项目 in 所有项目]
-    if len(set(序号列表)) != len(序号列表) or 序号列表 != list(range(1, len(序号列表) + 1)):
+    if len(set(序号列表)) != len(序号列表) or 序号列表 != list(
+        range(1, len(序号列表) + 1)
+    ):
         raise RuntimeError("知乎目录章节序号不连续")
 
     详情作者 = ""
@@ -444,7 +552,9 @@ async def _获取知乎目录接口(
         详情 = await _请求知乎章节详情(session, 业务编号, 起始章节编号)
         详情作者 = str(详情.get("author") or "")
     except Exception as exc:
-        logger.debug(f"知乎章节详情补充元数据失败：阶段=header, 错误={type(exc).__name__}")
+        logger.debug(
+            f"知乎章节详情补充元数据失败：阶段=header, 错误={type(exc).__name__}"
+        )
     作者 = _解析知乎作者(作者信息) or 详情作者 or "未知"
     专栏标题 = 清理正文(父级信息.get("title") or "") or "知乎专栏"
     子标题 = 清理正文(父级信息.get("sub_title") or "")
@@ -530,9 +640,16 @@ async def _获取知乎目录头部链(
         进度排序 = sorted(进度集合)
         if 进度排序 != list(range(进度排序[0], 进度排序[-1] + 1)):
             raise RuntimeError("知乎目录章节不连续")
-        目录节点.sort(key=lambda 项目: (int(项目.get("index") or 0), str(项目.get("section_id") or "")))
+        目录节点.sort(
+            key=lambda 项目: (
+                int(项目.get("index") or 0),
+                str(项目.get("section_id") or ""),
+            )
+        )
 
-    声明总数 = max((int(项目.get("declared_total") or 0) for 项目 in 目录节点), default=0)
+    声明总数 = max(
+        (int(项目.get("declared_total") or 0) for 项目 in 目录节点), default=0
+    )
     if not 是否循环 and 声明总数 and len(目录节点) < 声明总数:
         raise RuntimeError("知乎目录不完整")
 
@@ -579,7 +696,9 @@ def _提取章节(根: Any) -> list[dict[str, str]]:
     return 结果
 
 
-def 解析知乎恢复结果(原始: bytes, 问题编号: str = "", 回答编号: str = "") -> dict[str, Any]:
+def 解析知乎恢复结果(
+    原始: bytes, 问题编号: str = "", 回答编号: str = ""
+) -> dict[str, Any]:
     根对象 = _解析响应对象(原始)
     if isinstance(根对象, dict) and 根对象.get("error") and not _字段值(根对象, 正文键):
         raise RuntimeError("恢复接口返回错误")
@@ -591,7 +710,10 @@ def 解析知乎恢复结果(原始: bytes, 问题编号: str = "", 回答编号
         if not 正文 and isinstance(根对象, str) and len(根对象.strip()) >= 2:
             正文 = 清理正文(根对象)
         if 正文:
-            标题 = _内容值转文本(_字段值(根对象, 标题键)) or f"知乎文章{回答编号 or 问题编号}"
+            标题 = (
+                _内容值转文本(_字段值(根对象, 标题键))
+                or f"知乎文章{回答编号 or 问题编号}"
+            )
             章节 = [{"title": 标题, "content": 正文}]
     if not 章节:
         raise RuntimeError("恢复结果没有正文")
@@ -612,7 +734,11 @@ def 解析知乎恢复结果(原始: bytes, 问题编号: str = "", 回答编号
     if 字数 <= 0:
         字数 = sum(len(re.sub(r"\s+", "", 项目["content"])) for 项目 in 章节)
     状态值 = 清理正文(_字段值(根对象, 状态键))
-    状态 = "完结" if ("完" in 状态值 or 状态值.lower() in {"true", "1", "finished"}) else "完结"
+    状态 = (
+        "完结"
+        if ("完" in 状态值 or 状态值.lower() in {"true", "1", "finished"})
+        else "完结"
+    )
     return {
         "title": 标题 or f"知乎文章{回答编号 or 问题编号}",
         "author": 作者,
@@ -698,7 +824,9 @@ def _校验并固定知乎章节标题(结果: dict[str, str], 章节标题: str
     return 结果
 
 
-async def _请求外部提取(session: aiohttp.ClientSession, 业务编号: str, 章节编号: str) -> bytes:
+async def _请求外部提取(
+    session: aiohttp.ClientSession, 业务编号: str, 章节编号: str
+) -> bytes:
     async with session.get(
         外部提取地址,
         params={"q": 业务编号, "a": 章节编号},
@@ -750,7 +878,13 @@ def _构造知乎章节来源(来源: str, 业务编号: str, 章节编号: str)
     except ValueError:
         查询参数 = ""
     return urlunsplit(
-        ("https", "story.zhihu.com", f"/manuscript/paid_column/{业务编号}/{章节编号}", 查询参数, "")
+        (
+            "https",
+            "story.zhihu.com",
+            f"/manuscript/paid_column/{业务编号}/{章节编号}",
+            查询参数,
+            "",
+        )
     )
 
 
@@ -844,7 +978,9 @@ async def 下载知乎全部章节(
         async def 下载任务(序号: int) -> tuple[int, dict[str, str] | None]:
             async with 信号量:
                 try:
-                    return 序号, await _获取单章正文(session, 来源, 业务编号, 目录[序号])
+                    return 序号, await _获取单章正文(
+                        session, 来源, 业务编号, 目录[序号]
+                    )
                 except Exception as exc:
                     logger.debug(
                         f"知乎章节下载失败：章节编号={目录[序号].get('id')}, "
@@ -874,7 +1010,9 @@ async def 下载知乎全部章节(
     return [项目 for 项目 in 结果列表 if 项目 is not None]
 
 
-async def _准备知乎分享章节书籍(session: aiohttp.ClientSession, 来源: str) -> dict[str, Any]:
+async def _准备知乎分享章节书籍(
+    session: aiohttp.ClientSession, 来源: str
+) -> dict[str, Any]:
     业务编号, 起始章节编号 = 解析知乎编号(来源)
     if not 业务编号 or not 起始章节编号:
         raise RuntimeError("知乎链接参数不完整")
@@ -932,7 +1070,9 @@ async def 获取知乎正文(来源: str) -> dict[str, Any]:
         return await _下载知乎分享章节(session, 来源, 书籍)
 
 
-def 获取知乎小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[str] | None:
+def 获取知乎小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[str] | None:
     来源 = 提取直接知乎来源(命令文本) or 提取事件知乎来源(event)
     if not 来源:
         return None
@@ -983,8 +1123,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(
-            f"知乎小说下载失败：阶段=restore_or_upload, "
-            f"错误={type(exc).__name__}"
+            f"知乎小说下载失败：阶段=restore_or_upload, 错误={type(exc).__name__}"
         )
         yield "下载失败"
 
@@ -1059,27 +1198,61 @@ async def 准备发送文本文件(
     缓存路径 = 写入缓存(文件名, 文件内容)
     if 小说网盘 is None:
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "网盘模块未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "网盘模块未加载",
+        }
     try:
         上传结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         if not 上传结果.get("success"):
-            logger.warning(f"知乎小说主网盘上传失败：文件={文件名}, 错误={type(上传结果.get('error')).__name__}")
+            logger.warning(
+                f"知乎小说主网盘上传失败：文件={文件名}, 错误={type(上传结果.get('error')).__name__}"
+            )
             删除缓存(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传失败"}
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": "上传失败",
+            }
         完成结果 = await 小说网盘.发送小说下载完成链接(
             event, 书名, 作者, str(上传结果.get("share_url") or "")
         )
         if 完成结果.get("sent"):
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": ""}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "发送失败"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "发送失败",
+        }
     except Exception as exc:
-        logger.warning(f"知乎小说主网盘上传异常：文件={文件名}, 错误={type(exc).__name__}")
+        logger.warning(
+            f"知乎小说主网盘上传异常：文件={文件名}, 错误={type(exc).__name__}"
+        )
         删除缓存(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传异常"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "上传异常",
+        }
 
 
 def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
@@ -1091,7 +1264,9 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
             if 百度网盘 is not None:
                 await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
         except Exception as exc:
-            logger.warning(f"知乎小说百度后台上传异常：文件={文件名}, 错误={type(exc).__name__}")
+            logger.warning(
+                f"知乎小说百度后台上传异常：文件={文件名}, 错误={type(exc).__name__}"
+            )
         finally:
             删除缓存(源缓存路径)
 
@@ -1181,7 +1356,11 @@ def 提取事件知乎来源(event: Any) -> str | None:
         if 对象 is None:
             continue
         for 字段名 in ("message_str", "raw_message", "message", "raw_data", "data"):
-            链接 = 提取知乎链接(getattr(对象, 字段名, None) if not isinstance(对象, dict) else 对象.get(字段名))
+            链接 = 提取知乎链接(
+                getattr(对象, 字段名, None)
+                if not isinstance(对象, dict)
+                else 对象.get(字段名)
+            )
             if 链接:
                 return 链接
     return None

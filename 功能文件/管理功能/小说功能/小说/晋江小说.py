@@ -36,7 +36,6 @@ except Exception:
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
-
 晋江详情地址 = "https://app-cdn.jjwxc.net/androidapi/novelbasicinfo"
 晋江目录地址 = "https://app-cdn.jjwxc.net/androidapi/chapterList"
 晋江正文地址 = "https://app-cdn.jjwxc.net/androidapi/chapterContent"
@@ -82,8 +81,11 @@ def 创建晋江HTTP会话(并发数: int = 晋江请求并发上限) -> aiohttp
 
 
 def _清理来源(值: Any) -> str:
-    return html.unescape(str(值 or "")).replace("\\/", "/").strip().rstrip(
-        "\"'`，。；;]}>）)"
+    return (
+        html.unescape(str(值 or ""))
+        .replace("\\/", "/")
+        .strip()
+        .rstrip("\"'`，。；;]}>）)")
     )
 
 
@@ -159,7 +161,9 @@ def 提取晋江书籍编号(来源: Any) -> str:
     for 值 in 查询.get("novelid", []) + 查询.get("novelId", []):
         if re.fullmatch(r"\d{1,12}", str(值 or "")):
             return str(值)
-    匹配 = re.search(r"/(?:book2|book|novel)/(\d{1,12})(?:[/?#]|$)", 解析.path, re.IGNORECASE)
+    匹配 = re.search(
+        r"/(?:book2|book|novel)/(\d{1,12})(?:[/?#]|$)", 解析.path, re.IGNORECASE
+    )
     if 匹配:
         return 匹配.group(1)
     return ""
@@ -182,7 +186,13 @@ async def 请求晋江JSON(
             if not isinstance(data, dict):
                 raise ValueError("response is not object")
             return data
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, UnicodeError, ValueError) as exc:
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
             最后异常 = exc
             if 次数 + 1 < max(1, int(重试次数 or 1)):
                 await asyncio.sleep(min(1.5, 0.25 * (次数 + 1)))
@@ -237,7 +247,9 @@ async def 获取晋江详情(
         "title": str(data.get("novelName") or f"晋江小说{书籍编号}").strip(),
         "author": str(data.get("authorName") or "未知").strip(),
         "status": "完结" if step == 2 else "连载",
-        "word_count": 格式化晋江字数(data.get("novelSize"), data.get("novelsizeformat")),
+        "word_count": 格式化晋江字数(
+            data.get("novelSize"), data.get("novelsizeformat")
+        ),
         "chapter_count": _安全整数(data.get("novelChapterCount")),
         "intro": _清理正文(data.get("novelIntro") or data.get("novelIntroShort")),
     }
@@ -274,7 +286,9 @@ async def 获取晋江目录(
         result.append(
             {
                 "id": chapter_id,
-                "title": str(item.get("chaptername") or item.get("chapterName") or f"第{index}章").strip(),
+                "title": str(
+                    item.get("chaptername") or item.get("chapterName") or f"第{index}章"
+                ).strip(),
                 "isvip": item.get("isvip"),
                 "islock": item.get("islock"),
                 "point": item.get("point"),
@@ -368,7 +382,9 @@ async def 下载晋江正文(
                 while next_log <= completed:
                     next_log += max(1, total // 晋江进度日志分段数)
 
-    await asyncio.gather(*(下载一章(index, chapter) for index, chapter in enumerate(目录)))
+    await asyncio.gather(
+        *(下载一章(index, chapter) for index, chapter in enumerate(目录))
+    )
     output = [item for item in results if item is not None]
     if len(output) != total or any(not item.get("success") for item in output):
         raise RuntimeError("晋江小说正文不完整")
@@ -483,7 +499,8 @@ def 启动晋江百度后台上传并清理源文件(配置: Any, path: Any, 文
             if 百度网盘 is not None:
                 result = await 百度网盘.后台上传小说文件(配置, path, 文件名)
                 if not isinstance(result, dict) or (
-                    result.get("enabled") and not (result.get("success") or result.get("skipped"))
+                    result.get("enabled")
+                    and not (result.get("success") or result.get("skipped"))
                 ):
                     备份完成 = False
                     logger.warning("晋江小说百度后台备份失败：文件=%s", 文件名)
@@ -492,7 +509,9 @@ def 启动晋江百度后台上传并清理源文件(配置: Any, path: Any, 文
             logger.warning("晋江小说百度后台备份异常：错误类型=%s", type(exc).__name__)
         finally:
             if not 备份完成:
-                小说缓存工具.更新上传任务(path, "backup_pending", last_error="百度网盘后台备份未完成")
+                小说缓存工具.更新上传任务(
+                    path, "backup_pending", last_error="百度网盘后台备份未完成"
+                )
             else:
                 小说缓存工具.更新上传任务(path, "primary_done", last_error="")
             删除晋江缓存文件(path)
@@ -603,8 +622,12 @@ def 解析晋江搜索结果(data: Mapping[str, Any]) -> list[dict[str, Any]]:
     for item in rows if isinstance(rows, list) else []:
         if not isinstance(item, Mapping):
             continue
-        book_id = str(item.get("novelid") or item.get("novelId") or item.get("book_id") or "").strip()
-        title = str(item.get("novelname") or item.get("novelName") or item.get("title") or "").strip()
+        book_id = str(
+            item.get("novelid") or item.get("novelId") or item.get("book_id") or ""
+        ).strip()
+        title = str(
+            item.get("novelname") or item.get("novelName") or item.get("title") or ""
+        ).strip()
         if not book_id.isdigit() or not title:
             continue
         result.append(
@@ -612,7 +635,13 @@ def 解析晋江搜索结果(data: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "platform": "晋江",
                 "book_id": book_id,
                 "title": title,
-                "author": str(item.get("authorname") or item.get("authorName") or item.get("author") or "未知").strip() or "未知",
+                "author": str(
+                    item.get("authorname")
+                    or item.get("authorName")
+                    or item.get("author")
+                    or "未知"
+                ).strip()
+                or "未知",
                 "url": f"https://www.jjwxc.net/onebook.php?novelid={book_id}",
                 "word_count": item.get("novelsize") or item.get("novelSize") or 0,
                 "heat": item.get("novelbefavoritedcount") or item.get("heat") or 0,
@@ -639,7 +668,9 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                     "sortMode": "DESC",
                 },
             )
-        return 解析晋江搜索结果(data)[: max(1, min(int(需要数量 or 20), 晋江搜索数量上限))]
+        return 解析晋江搜索结果(data)[
+            : max(1, min(int(需要数量 or 20), 晋江搜索数量上限))
+        ]
     except Exception as exc:
         logger.debug("晋江小说搜索失败：错误类型=%s", type(exc).__name__)
         return []

@@ -10,7 +10,6 @@ import lzma
 import pickle
 from urllib.parse import unquote, urlsplit
 
-
 MASK = 0xFFFFFFFF
 ARM_CC_AL = 15
 BASE = 0x12000000
@@ -52,7 +51,9 @@ PROGRAM = pickle.loads(lzma.decompress(base64.b64decode(PROGRAM_B64)))
 _module_encoded = bytearray(lzma.decompress(base64.b64decode(MODULE_B64)))
 for _offset in range(4, len(_module_encoded), 4):
     _previous = int.from_bytes(_module_encoded[_offset - 4 : _offset], "little")
-    _current = int.from_bytes(_module_encoded[_offset : _offset + 4], "little") ^ _previous
+    _current = (
+        int.from_bytes(_module_encoded[_offset : _offset + 4], "little") ^ _previous
+    )
     _module_encoded[_offset : _offset + 4] = _current.to_bytes(4, "little")
 MODULE = bytes(_module_encoded)
 
@@ -80,7 +81,9 @@ class Memory:
 
     def write(self, address: int, size: int, value: int) -> None:
         region, offset = self._locate(address, size)
-        region[offset : offset + size] = int(value & ((1 << (size * 8)) - 1)).to_bytes(size, "little")
+        region[offset : offset + size] = int(value & ((1 << (size * 8)) - 1)).to_bytes(
+            size, "little"
+        )
 
 
 def condition_holds(cc: int, flags: dict[str, int]) -> bool:
@@ -136,7 +139,11 @@ def _operand_value(regs: list[int], operand) -> int:
 
 def _address(regs: list[int], memop) -> int:
     base_reg, index_reg, disp, shift_type, shift_value = memop[1:]
-    address = (regs[15] & ~3) if base_reg == 15 else (regs[base_reg] if base_reg >= 0 else regs[15])
+    address = (
+        (regs[15] & ~3)
+        if base_reg == 15
+        else (regs[base_reg] if base_reg >= 0 else regs[15])
+    )
     if index_reg >= 0:
         index = regs[index_reg]
         if shift_type == 3:
@@ -156,12 +163,22 @@ def execute(program, input_block: bytes, iv: bytes) -> bytes:
     regs = [0] * 16
     flags = {"n": 0, "z": 0, "c": 0, "v": 0}
     memory = Memory()
-    memory.write(CORE_KEY_ADDR, len(CORE_KEY_MATERIAL), int.from_bytes(CORE_KEY_MATERIAL, "little"))
+    memory.write(
+        CORE_KEY_ADDR,
+        len(CORE_KEY_MATERIAL),
+        int.from_bytes(CORE_KEY_MATERIAL, "little"),
+    )
     input_region = memory.regions[0x12250000]
     input_offset = CORE_INPUT_ADDR - 0x12250000
-    input_region[input_offset : input_offset + 64] = bytes(a ^ b for a, b in zip(input_block, iv)) + b"\0" * 48
-    memory.regions[0xE4FF0000][CORE_R2_ADDR - 0xE4FF0000 : CORE_R2_ADDR - 0xE4FF0000 + len(CORE_R2_TEMPLATE)] = CORE_R2_TEMPLATE
-    memory.regions[0xE4FF0000][CORE_R3_ADDR - 0xE4FF0000 : CORE_R3_ADDR - 0xE4FF0000 + len(CORE_R3_TEMPLATE)] = CORE_R3_TEMPLATE
+    input_region[input_offset : input_offset + 64] = (
+        bytes(a ^ b for a, b in zip(input_block, iv)) + b"\0" * 48
+    )
+    memory.regions[0xE4FF0000][
+        CORE_R2_ADDR - 0xE4FF0000 : CORE_R2_ADDR - 0xE4FF0000 + len(CORE_R2_TEMPLATE)
+    ] = CORE_R2_TEMPLATE
+    memory.regions[0xE4FF0000][
+        CORE_R3_ADDR - 0xE4FF0000 : CORE_R3_ADDR - 0xE4FF0000 + len(CORE_R3_TEMPLATE)
+    ] = CORE_R3_TEMPLATE
     regs[0], regs[1], regs[2], regs[3], regs[13], regs[14] = (
         CORE_INPUT_ADDR,
         CORE_INPUT_ADDR,
@@ -198,10 +215,16 @@ def execute(program, input_block: bytes, iv: bytes) -> bytes:
             regs[operands[0][1]] = (regs[15] & ~3) + operands[1][1]
             continue
         if name in {"ldr", "ldrb"}:
-            regs[operands[0][1]] = memory.read(_address(regs, operands[1]), 1 if name == "ldrb" else 4)
+            regs[operands[0][1]] = memory.read(
+                _address(regs, operands[1]), 1 if name == "ldrb" else 4
+            )
             continue
         if name in {"str", "strb"}:
-            memory.write(_address(regs, operands[1]), 1 if name == "strb" else 4, regs[operands[0][1]])
+            memory.write(
+                _address(regs, operands[1]),
+                1 if name == "strb" else 4,
+                regs[operands[0][1]],
+            )
             continue
         if name in {"add", "adds", "sub", "subs", "rsb", "mul", "mls", "bics"}:
             dst = operands[0][1]
@@ -211,10 +234,16 @@ def execute(program, input_block: bytes, iv: bytes) -> bytes:
                 left = regs[operands[1][1]]
                 right = _operand_value(regs, operands[2])
                 if operands[2][0] == "r" and operands[2][3]:
-                    shift_kind = {1: "asr", 2: "lsl", 3: "lsr", 4: "ror"}.get(operands[2][2], "lsl")
+                    shift_kind = {1: "asr", 2: "lsl", 3: "lsr", 4: "ror"}.get(
+                        operands[2][2], "lsl"
+                    )
                     if shift_kind == "ror":
                         amount = operands[2][3] & 31
-                        right = ((right >> amount) | (right << (32 - amount))) & MASK if amount else right
+                        right = (
+                            ((right >> amount) | (right << (32 - amount))) & MASK
+                            if amount
+                            else right
+                        )
                     else:
                         right = shift(right, operands[2][3], shift_kind)
             if name.startswith("add"):
@@ -226,7 +255,9 @@ def execute(program, input_block: bytes, iv: bytes) -> bytes:
             elif name == "mul":
                 value = left * right
             elif name == "mls":
-                value = regs[operands[3][1]] - regs[operands[1][1]] * regs[operands[2][1]]
+                value = (
+                    regs[operands[3][1]] - regs[operands[1][1]] * regs[operands[2][1]]
+                )
             else:
                 value = left & ~right
             regs[dst] = value & MASK
@@ -327,8 +358,6 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-
-
 
 ROOT = Path(__file__).resolve().parent
 GUEST_TOKEN_URL = "https://api.zhihu.com/api/account/prod/guests/token"
@@ -444,7 +473,9 @@ def choose_udid(udids: list[str], state: dict, randomize: bool) -> str:
     return udids[index]
 
 
-def restore(share_url: str, udid: str, token: str, request_body: str | None = None) -> tuple[int, bytes]:
+def restore(
+    share_url: str, udid: str, token: str, request_body: str | None = None
+) -> tuple[int, bytes]:
     body = request_body if request_body is not None else calculate_body(share_url)[1]
     return post(
         RESTORE_URL,
@@ -472,7 +503,9 @@ def parse_udids(args: argparse.Namespace) -> list[str]:
             for line in Path(args.udids_file).read_text("utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         )
-    values.extend(x.strip() for x in os.environ.get("ZHIHU_UDIDS", "").split(",") if x.strip())
+    values.extend(
+        x.strip() for x in os.environ.get("ZHIHU_UDIDS", "").split(",") if x.strip()
+    )
     result = list(dict.fromkeys(values))
     return result or list(DEFAULT_UDIDS)
 
@@ -483,8 +516,12 @@ def main() -> None:
     parser.add_argument("--udid", action="append", help="UDID; repeat for a pool")
     parser.add_argument("--udids-file", type=Path)
     parser.add_argument("--cache", type=Path, default=CACHE_PATH)
-    parser.add_argument("--random", action="store_true", help="random selection instead of round-robin")
-    parser.add_argument("--refresh", action="store_true", help="refresh the selected UDID token now")
+    parser.add_argument(
+        "--random", action="store_true", help="random selection instead of round-robin"
+    )
+    parser.add_argument(
+        "--refresh", action="store_true", help="refresh the selected UDID token now"
+    )
     args = parser.parse_args()
 
     share_url = args.share_url or input("share_url> ").strip()

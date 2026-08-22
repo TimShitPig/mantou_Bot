@@ -6,11 +6,9 @@ from typing import Any
 from astrbot.api import logger
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
-from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值, 写入运行状态值
+from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值, 读取运行状态值
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理
-from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 网盘Cookie
-from 功能文件.管理功能.网盘功能 import 百度网盘
-
+from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 百度网盘, 网盘Cookie
 
 状态命名空间 = "novel_share_pan"
 状态键 = "active"
@@ -111,7 +109,10 @@ async def 上传小说并获取分享链接(
             源路径,
             "primary_pending",
             last_error=str(异常),
-            retry_count=int((下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0) + 1,
+            retry_count=int(
+                (下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0
+            )
+            + 1,
         )
         return {
             "enabled": True,
@@ -125,7 +126,10 @@ async def 上传小说并获取分享链接(
             源路径,
             "primary_pending",
             last_error="网盘返回格式错误",
-            retry_count=int((下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0) + 1,
+            retry_count=int(
+                (下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0
+            )
+            + 1,
         )
         return {
             "enabled": True,
@@ -213,7 +217,9 @@ async def _恢复百度后台上传(配置: Any, 路径: Path, 文件名: str) -
     return bool(结果.get("success") or 结果.get("skipped") or not 结果.get("enabled"))
 
 
-async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, 分享链接: str) -> dict[str, Any]:
+async def 发送小说下载完成链接(
+    event: Any, 书名: Any, 作者: Any, 分享链接: str
+) -> dict[str, Any]:
     return await UC网盘.发送小说下载完成链接(event, 书名, 作者, 分享链接)
 
 

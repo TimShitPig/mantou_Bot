@@ -14,7 +14,6 @@ from astrbot.api import logger
 
 from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie
 
-
 基础地址 = "https://pan.baidu.com"
 上传地址 = "https://c.pcs.baidu.com/rest/2.0/pcs/superfile2"
 默认上传目录 = "/小说机器人"
@@ -56,20 +55,30 @@ class 百度网盘客户端:
             self.session = None
 
     async def 获取BDSToken(self) -> str:
-        数据 = await self.请求JSON("GET", "/api/gettemplatevariable", params={"fields": '["bdstoken"]'})
+        数据 = await self.请求JSON(
+            "GET", "/api/gettemplatevariable", params={"fields": '["bdstoken"]'}
+        )
         self.bdstoken = str(读取路径(数据, ("result", "bdstoken")) or "")
         if not self.bdstoken:
-            logger.warning(f"百度网盘没有获取到 bdstoken：response={限制文本长度(数据)}")
+            logger.warning(
+                f"百度网盘没有获取到 bdstoken：response={限制文本长度(数据)}"
+            )
         return self.bdstoken
 
-    async def 上传文件并删除同名旧文件(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
+    async def 上传文件并删除同名旧文件(
+        self, 本地路径: str | Path, 文件名: str, 上传目录: str
+    ) -> str:
         远端目录 = 规范化目录路径(上传目录)
         await self.确保目录路径(远端目录)
         if 提取文件名状态(文件名) == "完结":
             已有文件 = await self.查找同名普通文件列表(文件名, 远端目录)
             if 已有文件:
-                文件ID = 提取百度文件ID(已有文件[0]) or str(已有文件[0].get("path") or "")
-                logger.debug(f"百度网盘完结小说已存在，跳过重复上传：file={文件名}, file_id={文件ID}, dir={远端目录}")
+                文件ID = 提取百度文件ID(已有文件[0]) or str(
+                    已有文件[0].get("path") or ""
+                )
+                logger.debug(
+                    f"百度网盘完结小说已存在，跳过重复上传：file={文件名}, file_id={文件ID}, dir={远端目录}"
+                )
                 return 文件ID
         await self.删除同名普通文件(文件名, 远端目录)
         文件ID = await self.上传文件(本地路径, 远端目录, 文件名)
@@ -86,7 +95,9 @@ class 百度网盘客户端:
             当前路径 = f"{当前路径}/{片段}"
             结果 = await self.创建文件夹(当前路径)
             if str(结果.get("errno")) != "0":
-                raise RuntimeError(f"百度网盘创建目录失败：path={当前路径}, response={限制文本长度(结果)}")
+                raise RuntimeError(
+                    f"百度网盘创建目录失败：path={当前路径}, response={限制文本长度(结果)}"
+                )
         return True
 
     async def 创建文件夹(self, 远端路径: str) -> dict[str, Any]:
@@ -132,7 +143,9 @@ class 百度网盘客户端:
         }
         数据 = await self.请求JSON("GET", "/api/list", params=参数)
         if str(数据.get("errno")) != "0":
-            raise RuntimeError(f"百度网盘目录列表获取失败：dir={远端目录}, response={限制文本长度(数据)}")
+            raise RuntimeError(
+                f"百度网盘目录列表获取失败：dir={远端目录}, response={限制文本长度(数据)}"
+            )
         列表 = 数据.get("list") or []
         return [项目 for 项目 in 列表 if isinstance(项目, dict)]
 
@@ -147,11 +160,17 @@ class 百度网盘客户端:
             return 0
         数据 = await self.删除文件(删除路径列表)
         if str(数据.get("errno")) != "0":
-            raise RuntimeError(f"百度网盘删除同名旧文件失败：paths={删除路径列表}, response={限制文本长度(数据)}")
-        logger.debug(f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}")
+            raise RuntimeError(
+                f"百度网盘删除同名旧文件失败：paths={删除路径列表}, response={限制文本长度(数据)}"
+            )
+        logger.debug(
+            f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}"
+        )
         return len(删除路径列表)
 
-    async def 查找同名普通文件列表(self, 文件名: str, 远端目录: str) -> list[dict[str, Any]]:
+    async def 查找同名普通文件列表(
+        self, 文件名: str, 远端目录: str
+    ) -> list[dict[str, Any]]:
         结果列表: list[dict[str, Any]] = []
         for 项目 in await self.列出目录(远端目录):
             if 是百度文件夹项目(项目):
@@ -173,7 +192,9 @@ class 百度网盘客户端:
         表单 = {"filelist": json.dumps(文件路径列表, ensure_ascii=False)}
         return await self.请求JSON("POST", "/api/filemanager", params=参数, data=表单)
 
-    async def 上传文件(self, 本地路径: str | Path, 远端目录: str = "/", 文件名: str | None = None) -> str:
+    async def 上传文件(
+        self, 本地路径: str | Path, 远端目录: str = "/", 文件名: str | None = None
+    ) -> str:
         路径 = Path(本地路径)
         if not 路径.exists():
             raise RuntimeError(f"本地文件不存在：{路径}")
@@ -181,21 +202,27 @@ class 百度网盘客户端:
         远端目录 = 规范化目录路径(远端目录)
         远端路径 = 拼接远端路径(远端目录, 文件名)
         文件大小 = 路径.stat().st_size
-        logger.debug(f"百度网盘开始上传：file={文件名}, remote_path={远端路径}, size={文件大小}")
+        logger.debug(
+            f"百度网盘开始上传：file={文件名}, remote_path={远端路径}, size={文件大小}"
+        )
 
         预创建数据 = await self.请求预创建数据(远端路径, 文件大小)
         if str(预创建数据.get("errno")) not in ("0", "2"):
             raise RuntimeError(f"百度网盘预创建上传失败：{限制文本长度(预创建数据)}")
         上传ID = str(预创建数据.get("uploadid") or "")
         if not 上传ID:
-            raise RuntimeError(f"百度网盘预创建上传没有返回 uploadid：{限制文本长度(预创建数据)}")
+            raise RuntimeError(
+                f"百度网盘预创建上传没有返回 uploadid：{限制文本长度(预创建数据)}"
+            )
 
         分片MD5 = await self.上传临时分片(路径, 文件名, 远端路径, 上传ID)
         完成数据 = await self.提交上传文件(远端路径, 文件大小, 上传ID, 分片MD5)
         if str(完成数据.get("errno")) != "0":
             raise RuntimeError(f"百度网盘提交上传失败：{限制文本长度(完成数据)}")
         文件ID = str(完成数据.get("fs_id") or "")
-        logger.debug(f"百度网盘上传完成：file={文件名}, remote_path={远端路径}, fs_id={文件ID}")
+        logger.debug(
+            f"百度网盘上传完成：file={文件名}, remote_path={远端路径}, fs_id={文件ID}"
+        )
         return 文件ID
 
     async def 创建分享(self, 文件ID: str) -> str:
@@ -250,7 +277,9 @@ class 百度网盘客户端:
         }
         return await self.请求JSON("POST", "/api/precreate", params=参数, data=表单)
 
-    async def 上传临时分片(self, 本地路径: Path, 文件名: str, 远端路径: str, 上传ID: str) -> str:
+    async def 上传临时分片(
+        self, 本地路径: Path, 文件名: str, 远端路径: str, 上传ID: str
+    ) -> str:
         参数 = {
             "method": "upload",
             "type": "tmpfile",
@@ -262,20 +291,28 @@ class 百度网盘客户端:
         }
         表单 = aiohttp.FormData()
         with 本地路径.open("rb") as 文件:
-            表单.add_field("file", 文件, filename=文件名, content_type="application/octet-stream")
+            表单.add_field(
+                "file", 文件, filename=文件名, content_type="application/octet-stream"
+            )
             数据 = await self.请求JSON(
                 "POST",
                 上传地址,
                 params=参数,
                 data=表单,
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=300),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, sock_connect=30, sock_read=300
+                ),
             )
         分片MD5 = str(数据.get("md5") or "")
         if not 分片MD5:
-            raise RuntimeError(f"百度网盘临时分片上传没有返回 md5：{限制文本长度(数据)}")
+            raise RuntimeError(
+                f"百度网盘临时分片上传没有返回 md5：{限制文本长度(数据)}"
+            )
         return 分片MD5
 
-    async def 提交上传文件(self, 远端路径: str, 文件大小: int, 上传ID: str, 分片MD5: str) -> dict[str, Any]:
+    async def 提交上传文件(
+        self, 远端路径: str, 文件大小: int, 上传ID: str, 分片MD5: str
+    ) -> dict[str, Any]:
         参数 = {
             "a": "commit",
             "app_id": 250528,
@@ -303,18 +340,28 @@ class 百度网盘客户端:
         timeout: aiohttp.ClientTimeout | None = None,
     ) -> dict[str, Any]:
         会话 = self.获取会话()
-        地址 = 路径或地址 if str(路径或地址).startswith("http") else f"{基础地址}{路径或地址}"
+        地址 = (
+            路径或地址
+            if str(路径或地址).startswith("http")
+            else f"{基础地址}{路径或地址}"
+        )
         请求头 = dict(浏览器请求头)
         if self.cookie:
             请求头["Cookie"] = self.cookie
-        async with 会话.request(方法, 地址, params=params, data=data, headers=请求头, timeout=timeout) as 响应:
+        async with 会话.request(
+            方法, 地址, params=params, data=data, headers=请求头, timeout=timeout
+        ) as 响应:
             文本 = await 响应.text()
             if 响应.status >= 400:
-                raise RuntimeError(f"百度网盘HTTP {响应.status}({路径或地址})：{限制文本长度(文本, 200)}")
+                raise RuntimeError(
+                    f"百度网盘HTTP {响应.status}({路径或地址})：{限制文本长度(文本, 200)}"
+                )
             try:
                 数据 = json.loads(文本)
             except Exception as 异常:
-                raise RuntimeError(f"百度网盘JSON解析失败：{限制文本长度(文本, 200)}") from 异常
+                raise RuntimeError(
+                    f"百度网盘JSON解析失败：{限制文本长度(文本, 200)}"
+                ) from 异常
         if not isinstance(数据, dict):
             raise RuntimeError("百度网盘返回格式不是对象")
         return 数据
@@ -374,26 +421,60 @@ async def 上传小说并获取分享链接(
         }
 
 
-async def 后台上传小说文件(配置: Any, 源缓存路径: str | Path, 文件名: str) -> dict[str, Any]:
+async def 后台上传小说文件(
+    配置: Any, 源缓存路径: str | Path, 文件名: str
+) -> dict[str, Any]:
     if not 百度网盘是否启用(配置):
-        return {"enabled": False, "success": False, "skipped": False, "file_id": "", "error": ""}
+        return {
+            "enabled": False,
+            "success": False,
+            "skipped": False,
+            "file_id": "",
+            "error": "",
+        }
     if 百度当前为主分享网盘(配置):
-        return {"enabled": True, "success": False, "skipped": True, "file_id": "", "error": ""}
+        return {
+            "enabled": True,
+            "success": False,
+            "skipped": True,
+            "file_id": "",
+            "error": "",
+        }
     上传状态 = 读取百度上传状态(配置)
     if not 百度上传状态允许(文件名, 上传状态):
         logger.debug(f"百度网盘后台上传已跳过：file={文件名}, rule={上传状态}")
-        return {"enabled": True, "success": False, "skipped": True, "file_id": "", "error": ""}
+        return {
+            "enabled": True,
+            "success": False,
+            "skipped": True,
+            "file_id": "",
+            "error": "",
+        }
     源路径 = Path(源缓存路径)
     Cookie = 读取百度网盘Cookie(配置)
     上传目录 = 读取百度上传目录(配置)
     try:
         async with 百度网盘客户端(Cookie) as 客户端:
             文件ID = await 客户端.上传文件并删除同名旧文件(源路径, 文件名, 上传目录)
-        logger.debug(f"百度网盘后台上传成功：file={文件名}, remote_dir={上传目录}, fs_id={文件ID}")
-        return {"enabled": True, "success": True, "skipped": False, "file_id": 文件ID, "error": ""}
+        logger.debug(
+            f"百度网盘后台上传成功：file={文件名}, remote_dir={上传目录}, fs_id={文件ID}"
+        )
+        return {
+            "enabled": True,
+            "success": True,
+            "skipped": False,
+            "file_id": 文件ID,
+            "error": "",
+        }
     except Exception as 异常:
         logger.warning(f"百度网盘后台上传失败：file={文件名}, error={异常}")
-        return {"enabled": True, "success": False, "skipped": False, "file_id": "", "error": str(异常)}
+        return {
+            "enabled": True,
+            "success": False,
+            "skipped": False,
+            "file_id": "",
+            "error": str(异常),
+        }
 
 
 def 百度网盘是否启用(配置: Any) -> bool:
@@ -448,7 +529,11 @@ def 规范化目录路径(目录: Any) -> str:
 
 
 def 拆分目录路径(目录: Any) -> list[str]:
-    return [片段.strip() for 片段 in str(目录 or "").replace("\\", "/").split("/") if 片段.strip()]
+    return [
+        片段.strip()
+        for 片段 in str(目录 or "").replace("\\", "/").split("/")
+        if 片段.strip()
+    ]
 
 
 def 拼接远端路径(目录: str, 文件名: str) -> str:
@@ -463,7 +548,12 @@ def 是百度文件夹项目(项目: dict[str, Any]) -> bool:
     try:
         return int(项目.get("isdir") or 0) == 1
     except Exception:
-        return str(项目.get("isdir") or "").strip().lower() in ("true", "yes", "folder", "dir")
+        return str(项目.get("isdir") or "").strip().lower() in (
+            "true",
+            "yes",
+            "folder",
+            "dir",
+        )
 
 
 def 提取百度文件ID(项目: dict[str, Any]) -> str:

@@ -1,7 +1,7 @@
-from pathlib import Path
 import asyncio
 import importlib
 import sys
+from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -10,6 +10,7 @@ from astrbot.api.star import Context, Star, register
 插件目录 = Path(__file__).resolve().parent
 if str(插件目录) not in sys.path:
     sys.path.insert(0, str(插件目录))
+
 
 def 加载功能模块(模块路径: str):
     return importlib.reload(importlib.import_module(模块路径))
@@ -78,7 +79,9 @@ class MyPlugin(Star):
                 if 恢复数量:
                     logger.info("插件重载恢复小说上传任务：数量=%s", 恢复数量)
             except Exception as 异常:
-                logger.warning("插件重载恢复小说上传任务异常：错误类型=%s", type(异常).__name__)
+                logger.warning(
+                    "插件重载恢复小说上传任务异常：错误类型=%s", type(异常).__name__
+                )
 
         asyncio.create_task(_恢复小说上传任务())
 
@@ -172,10 +175,14 @@ class MyPlugin(Star):
             回调类型, 回调命令 = 帮助回调
             logger.info(f"QQ官方帮助回调分发：类型={回调类型}, 命令={回调命令}")
             if 回调类型 == "菜单":
-                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 回调命令, self.config)
+                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(
+                    event, 回调命令, self.config
+                )
                 if md文本 is not None:
                     if 权限工具.是QQ官方机器人(event):
-                        发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
+                        发送成功 = await 帮助功能.发送Markdown键盘消息(
+                            event, md文本, 键盘
+                        )
                         if not 发送成功:
                             async for 输出内容 in _输出文本回复(md文本):
                                 yield 输出内容
@@ -190,9 +197,7 @@ class MyPlugin(Star):
         找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
         if 找书下载 is not None:
             if hasattr(找书下载, "__aiter__"):
-                小说下载任务.启动小说回复流任务(
-                    event, 找书下载, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 找书下载, 帮助功能, 权限工具)
             else:
                 async for 片段 in _输出找书结果(找书下载):
                     yield 片段
@@ -224,7 +229,9 @@ class MyPlugin(Star):
             回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
         if 回复内容 is None:
             if 权限工具.是QQ官方机器人(event):
-                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(event, 命令文本, self.config)
+                md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(
+                    event, 命令文本, self.config
+                )
                 if md文本 is not None:
                     发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                     if not 发送成功:
@@ -244,33 +251,39 @@ class MyPlugin(Star):
             书旗回复流 = 书旗小说功能.获取书旗小说回复流(event, 命令文本, self.config)
             if 书旗回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "书旗", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("书旗", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("书旗", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 书旗回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 书旗回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本, self.config)
             if 七猫回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "七猫", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("七猫", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("七猫", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 七猫回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 七猫回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
-            QQ浏览器回复流 = QQ浏览器小说功能.获取QQ浏览器小说回复流(event, 命令文本, self.config)
+            QQ浏览器回复流 = QQ浏览器小说功能.获取QQ浏览器小说回复流(
+                event, 命令文本, self.config
+            )
             if QQ浏览器回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "QQ浏览器", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("QQ浏览器", self.config)):
+                if not 小说功能开关.当前事件可使用小说功能(
+                    event, "QQ浏览器", self.config
+                ):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("QQ浏览器", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
@@ -282,66 +295,68 @@ class MyPlugin(Star):
 
             QQ阅读回复流 = QQ阅读功能.获取QQ阅读回复流(event, 命令文本, self.config)
             if QQ阅读回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "QQ阅读", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("QQ阅读", self.config)):
+                if not 小说功能开关.当前事件可使用小说功能(
+                    event, "QQ阅读", self.config
+                ):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("QQ阅读", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, QQ阅读回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, QQ阅读回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             得间回复流 = 得间小说功能.获取得间小说回复流(event, 命令文本, self.config)
             if 得间回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "得间", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("得间", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("得间", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 得间回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 得间回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             点众回复流 = 点众小说功能.获取点众小说回复流(event, 命令文本, self.config)
             if 点众回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "点众", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("点众", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("点众", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 点众回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 点众回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             知乎回复流 = 知乎小说功能.获取知乎小说回复流(event, 命令文本, self.config)
             if 知乎回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "知乎", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("知乎", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("知乎", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 知乎回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 知乎回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             塔读回复流 = 塔读小说功能.获取塔读小说回复流(event, 命令文本, self.config)
             if 塔读回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "塔读", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("塔读", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("塔读", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 塔读回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 塔读回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
@@ -349,143 +364,147 @@ class MyPlugin(Star):
             if 番茄回复流 is not None:
                 logger.debug("番茄小说分发：使用本地下载链路")
                 if not 小说功能开关.当前事件可使用小说功能(event, "番茄", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("番茄", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("番茄", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 番茄回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 番茄回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             百度回复流 = 百度小说功能.获取百度小说回复流(event, 命令文本, self.config)
             if 百度回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "百度", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("百度", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("百度", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 百度回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 百度回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             小米回复流 = 小米小说功能.获取小米小说回复流(event, 命令文本, self.config)
             if 小米回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "小米", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("小米", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("小米", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 小米回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 小米回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             宜搜回复流 = 宜搜小说功能.获取宜搜小说回复流(event, 命令文本, self.config)
             if 宜搜回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "宜搜", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("宜搜", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("宜搜", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 宜搜回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 宜搜回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             米读回复流 = 米读小说功能.获取米读小说回复流(event, 命令文本, self.config)
             if 米读回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "米读", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("米读", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("米读", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 米读回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 米读回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             猫眼回复流 = 猫眼小说功能.获取猫眼小说回复流(event, 命令文本, self.config)
             if 猫眼回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "猫眼", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("猫眼", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("猫眼", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 猫眼回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 猫眼回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             酷我回复流 = 酷我小说功能.获取酷我小说回复流(event, 命令文本, self.config)
             if 酷我回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "酷我", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("酷我", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("酷我", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 酷我回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 酷我回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             酷匠回复流 = 酷匠小说功能.获取酷匠小说回复流(event, 命令文本, self.config)
             if 酷匠回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "酷匠", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("酷匠", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("酷匠", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 酷匠回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 酷匠回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             连城回复流 = 连城小说功能.获取连城小说回复流(event, 命令文本, self.config)
             if 连城回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "连城", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("连城", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("连城", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 连城回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 连城回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
-            菠萝包回复流 = 菠萝包小说功能.获取菠萝包小说回复流(event, 命令文本, self.config)
+            菠萝包回复流 = 菠萝包小说功能.获取菠萝包小说回复流(
+                event, 命令文本, self.config
+            )
             if 菠萝包回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "菠萝包", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("菠萝包", self.config)):
+                if not 小说功能开关.当前事件可使用小说功能(
+                    event, "菠萝包", self.config
+                ):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("菠萝包", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 菠萝包回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 菠萝包回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 
             晋江回复流 = 晋江小说功能.获取晋江小说回复流(event, 命令文本, self.config)
             if 晋江回复流 is not None:
                 if not 小说功能开关.当前事件可使用小说功能(event, "晋江", self.config):
-                    async for 输出内容 in _输出文本回复(小说功能开关.获取小说功能关闭回复("晋江", self.config)):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("晋江", self.config)
+                    ):
                         yield 输出内容
                     event.stop_event()
                     return
-                小说下载任务.启动小说回复流任务(
-                    event, 晋江回复流, 帮助功能, 权限工具
-                )
+                小说下载任务.启动小说回复流任务(event, 晋江回复流, 帮助功能, 权限工具)
                 event.stop_event()
                 return
 

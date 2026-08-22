@@ -14,8 +14,10 @@ from typing import Any
 import aiohttp
 from astrbot.api import logger
 
-from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie, 持久化刷新后的网盘Cookie
-
+from 功能文件.管理功能.网盘功能.网盘Cookie import (
+    持久化刷新后的网盘Cookie,
+    读取网盘Cookie,
+)
 
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -67,7 +69,9 @@ class UC网盘客户端:
             await self.session.close()
             self.session = None
 
-    async def 上传文件并创建分享(self, 本地路径: str | Path, 文件名: str, 上传目录: str) -> str:
+    async def 上传文件并创建分享(
+        self, 本地路径: str | Path, 文件名: str, 上传目录: str
+    ) -> str:
         目录ID = await self.确保目录路径(上传目录)
         文件ID = ""
         最后异常: Exception | None = None
@@ -108,7 +112,11 @@ class UC网盘客户端:
         创建数据: dict[str, Any] | None = None
         for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
             try:
-                创建数据 = await self.请求JSON("POST", "/file", json_data={"pdir_fid": str(父目录ID), "file_name": 目录名})
+                创建数据 = await self.请求JSON(
+                    "POST",
+                    "/file",
+                    json_data={"pdir_fid": str(父目录ID), "file_name": 目录名},
+                )
                 break
             except Exception as 异常:
                 if not 是UC同名冲突错误(异常):
@@ -152,7 +160,9 @@ class UC网盘客户端:
         已删除ID集合: set[str] = set()
         for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
             当前文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
-            文件ID列表 = [文件ID for 文件ID in 当前文件ID列表 if 文件ID not in 已删除ID集合]
+            文件ID列表 = [
+                文件ID for 文件ID in 当前文件ID列表 if 文件ID not in 已删除ID集合
+            ]
             if not 文件ID列表:
                 if 当前文件ID列表 and 尝试次数 < 上传完成文件可见重试次数:
                     await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
@@ -165,10 +175,14 @@ class UC网盘客户端:
             if 尝试次数 < 上传完成文件可见重试次数:
                 await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
         if 删除数量:
-            logger.debug(f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}")
+            logger.debug(
+                f"UC网盘上传前已删除远端同名旧文件：file={文件名}, count={删除数量}, parent_id={父目录ID}"
+            )
         return 删除数量
 
-    async def 查找同名普通文件ID列表(self, 文件名: str, 父目录ID: str = "0") -> list[str]:
+    async def 查找同名普通文件ID列表(
+        self, 文件名: str, 父目录ID: str = "0"
+    ) -> list[str]:
         项目列表 = await self.列出目录项目(父目录ID)
         文件ID列表: list[str] = []
         for 项目 in 项目列表:
@@ -188,7 +202,11 @@ class UC网盘客户端:
             数据 = await self.请求JSON可等待(
                 "GET",
                 "/file/sort",
-                params={"pdir_fid": str(父目录ID), "_size": 目录列表每页数量, "_page": 页码},
+                params={
+                    "pdir_fid": str(父目录ID),
+                    "_size": 目录列表每页数量,
+                    "_page": 页码,
+                },
             )
             项目列表 = 读取UC目录项目列表(数据)
             if not 项目列表:
@@ -197,7 +215,9 @@ class UC网盘客户端:
             for 项目 in 项目列表:
                 if not isinstance(项目, dict):
                     continue
-                标识 = 读取UC文件ID(项目) or json.dumps(项目, ensure_ascii=False, sort_keys=True)
+                标识 = 读取UC文件ID(项目) or json.dumps(
+                    项目, ensure_ascii=False, sort_keys=True
+                )
                 if 标识 in 已见标识:
                     continue
                 已见标识.add(标识)
@@ -237,12 +257,16 @@ class UC网盘客户端:
             "l_updated_at": 当前毫秒,
             "l_created_at": 当前毫秒,
         }
-        预上传数据 = await self.请求JSON("POST", "/file/upload/pre", json_data=预上传载荷)
+        预上传数据 = await self.请求JSON(
+            "POST", "/file/upload/pre", json_data=预上传载荷
+        )
         if str(预上传数据.get("code")) != "0" and 是UC同名冲突错误(预上传数据):
             raise RuntimeError(f"UC网盘预上传同名冲突：{限制文本长度(预上传数据)}")
         return 预上传数据
 
-    async def 上传文件(self, 本地路径: str | Path, 目标目录ID: str = "0", 文件名: str | None = None) -> str:
+    async def 上传文件(
+        self, 本地路径: str | Path, 目标目录ID: str = "0", 文件名: str | None = None
+    ) -> str:
         路径 = Path(本地路径)
         if not 路径.exists():
             raise RuntimeError(f"本地文件不存在：{路径}")
@@ -252,11 +276,15 @@ class UC网盘客户端:
         内容SHA1, 内容MD5 = 计算文件哈希(路径)
         当前毫秒 = int(time.time() * 1000)
 
-        预上传数据 = await self.请求预上传数据(目标目录ID, 文件名, 文件大小, 媒体类型, 当前毫秒)
+        预上传数据 = await self.请求预上传数据(
+            目标目录ID, 文件名, 文件大小, 媒体类型, 当前毫秒
+        )
         if str(预上传数据.get("code")) != "0":
             raise RuntimeError(f"UC网盘预上传失败：{限制文本长度(预上传数据)}")
 
-        数据 = 预上传数据.get("data") if isinstance(预上传数据.get("data"), dict) else {}
+        数据 = (
+            预上传数据.get("data") if isinstance(预上传数据.get("data"), dict) else {}
+        )
         if 数据.get("finish"):
             文件ID = str(数据.get("fid") or "")
             if 文件ID:
@@ -290,17 +318,30 @@ class UC网盘客户端:
             "x-oss-user-agent": OSS用户代理,
             "content-type": 媒体类型,
         }
-        OSS响应头 = await self.请求OSS("PUT", OSS地址, data=路径.read_bytes(), headers=OSS头)
+        OSS响应头 = await self.请求OSS(
+            "PUT", OSS地址, data=路径.read_bytes(), headers=OSS头
+        )
         响应ETag = 提取OSS响应ETag(OSS响应头)
         ETag = 响应ETag or 内容MD5
         if not 响应ETag:
-            logger.warning(f"UC网盘OSS上传未返回ETag，使用本地MD5作为单分片ETag：file={文件名}")
+            logger.warning(
+                f"UC网盘OSS上传未返回ETag，使用本地MD5作为单分片ETag：file={文件名}"
+            )
 
-        await self.请求JSON("POST", "/file/update/hash", json_data={"task_id": 任务ID, "md5": 内容MD5, "sha1": 内容SHA1})
+        await self.请求JSON(
+            "POST",
+            "/file/update/hash",
+            json_data={"task_id": 任务ID, "md5": 内容MD5, "sha1": 内容SHA1},
+        )
 
-        回调数据 = 数据.get("callback") if isinstance(数据.get("callback"), dict) else {}
+        回调数据 = (
+            数据.get("callback") if isinstance(数据.get("callback"), dict) else {}
+        )
         回调JSON = json.dumps(
-            {"callbackUrl": 回调数据.get("callbackUrl", ""), "callbackBody": 回调数据.get("callbackBody", "")},
+            {
+                "callbackUrl": 回调数据.get("callbackUrl", ""),
+                "callbackBody": 回调数据.get("callbackBody", ""),
+            },
             ensure_ascii=False,
         )
         回调头 = base64.b64encode(回调JSON.encode()).decode()
@@ -317,7 +358,9 @@ class UC网盘客户端:
         完成日期 = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
         完成规范头 = f"x-oss-callback:{回调头}\nx-oss-date:{完成日期}\nx-oss-user-agent:{OSS用户代理}\n"
         完成资源 = f"/{存储桶}/{对象键}?uploadId={上传ID}"
-        完成签名元数据 = f"POST\n{XML_MD5}\napplication/xml\n{完成日期}\n{完成规范头}{完成资源}"
+        完成签名元数据 = (
+            f"POST\n{XML_MD5}\napplication/xml\n{完成日期}\n{完成规范头}{完成资源}"
+        )
         完成授权数据 = await self.请求JSON(
             "POST",
             f"/file/upload/auth?uploadId={urllib.parse.quote(上传ID)}",
@@ -327,9 +370,13 @@ class UC网盘客户端:
         if not 完成授权键:
             raise RuntimeError(f"UC网盘完成上传授权失败：{限制文本长度(完成授权数据)}")
 
-        完成地址 = f"https://{存储桶}.pds.uc.cn/{对象键}?uploadId={urllib.parse.quote(上传ID)}"
+        完成地址 = (
+            f"https://{存储桶}.pds.uc.cn/{对象键}?uploadId={urllib.parse.quote(上传ID)}"
+        )
         完成头 = {
-            "authorization": 完成授权键 if 完成授权键.startswith("OSS ") else f"OSS {完成授权键}",
+            "authorization": 完成授权键
+            if 完成授权键.startswith("OSS ")
+            else f"OSS {完成授权键}",
             "content-md5": XML_MD5,
             "x-oss-date": 完成日期,
             "x-oss-user-agent": OSS用户代理,
@@ -349,7 +396,9 @@ class UC网盘客户端:
                         f"file={文件名}, fid={预上传文件ID}, error={异常}"
                     )
                     return 预上传文件ID
-                文件ID = await self.等待上传文件可用(目标目录ID, 文件名, 文件大小, 预上传文件ID)
+                文件ID = await self.等待上传文件可用(
+                    目标目录ID, 文件名, 文件大小, 预上传文件ID
+                )
                 if 文件ID:
                     return 文件ID
             raise
@@ -357,7 +406,9 @@ class UC网盘客户端:
         if not 文件ID and str(完成数据.get("code")) == "0":
             文件ID = str(数据.get("fid") or "")
         if not 文件ID:
-            raise RuntimeError(f"UC网盘上传完成后没有返回文件ID：{限制文本长度(完成数据)}")
+            raise RuntimeError(
+                f"UC网盘上传完成后没有返回文件ID：{限制文本长度(完成数据)}"
+            )
         return 文件ID
 
     async def 完成上传任务(self, 任务ID: str, 对象键: str) -> dict[str, Any]:
@@ -396,12 +447,18 @@ class UC网盘客户端:
         if 最后异常:
             raise 最后异常
         if 最后冲突响应 is not None:
-            raise RuntimeError(f"UC网盘上传完成重试后仍返回同名冲突：{限制文本长度(最后冲突响应)}")
+            raise RuntimeError(
+                f"UC网盘上传完成重试后仍返回同名冲突：{限制文本长度(最后冲突响应)}"
+            )
         raise RuntimeError("UC网盘上传完成重试后仍未成功")
 
-    async def 等待上传文件可用(self, 目标目录ID: str, 文件名: str, 文件大小: int, 预上传文件ID: str = "") -> str:
+    async def 等待上传文件可用(
+        self, 目标目录ID: str, 文件名: str, 文件大小: int, 预上传文件ID: str = ""
+    ) -> str:
         for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
-            文件ID = await self.查找目录文件ID(目标目录ID, 文件名, 文件大小, 预上传文件ID)
+            文件ID = await self.查找目录文件ID(
+                目标目录ID, 文件名, 文件大小, 预上传文件ID
+            )
             if 文件ID:
                 logger.warning(
                     f"UC网盘上传完成接口仍返回处理中，已从目录列表确认文件可用："
@@ -419,7 +476,9 @@ class UC网盘客户端:
             return 预上传文件ID
         return ""
 
-    async def 查找目录文件ID(self, 目标目录ID: str, 文件名: str, 文件大小: int, 预上传文件ID: str = "") -> str:
+    async def 查找目录文件ID(
+        self, 目标目录ID: str, 文件名: str, 文件大小: int, 预上传文件ID: str = ""
+    ) -> str:
         项目列表 = await self.列出目录项目(目标目录ID)
         for 项目 in 项目列表:
             if not isinstance(项目, dict):
@@ -437,7 +496,13 @@ class UC网盘客户端:
 
     async def 创建分享(self, 文件ID: str, 标题: str) -> str:
         分享数据: dict[str, Any] | None = None
-        分享载荷 = {"fid_list": [str(文件ID)], "title": 标题, "url_type": 1, "expired_type": 1, "public_search": 1}
+        分享载荷 = {
+            "fid_list": [str(文件ID)],
+            "title": 标题,
+            "url_type": 1,
+            "expired_type": 1,
+            "public_search": 1,
+        }
         for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
             try:
                 分享数据 = await self.请求JSON("POST", "/share", json_data=分享载荷)
@@ -453,7 +518,9 @@ class UC网盘客户端:
 
             if str(分享数据.get("code")) != "0" and 是UC同名冲突错误(分享数据):
                 if 尝试次数 >= 上传完成文件可见重试次数:
-                    raise UC网盘处理中错误(f"UC网盘创建分享重试后文件仍在处理中：{限制文本长度(分享数据)}")
+                    raise UC网盘处理中错误(
+                        f"UC网盘创建分享重试后文件仍在处理中：{限制文本长度(分享数据)}"
+                    )
                 logger.warning(
                     f"UC网盘创建分享返回文件处理中，等待后重试："
                     f"fid={文件ID}, attempt={尝试次数}/{上传完成文件可见重试次数}, response={限制文本长度(分享数据)}"
@@ -465,22 +532,30 @@ class UC网盘客户端:
             raise RuntimeError("UC网盘创建分享没有返回数据")
         if str(分享数据.get("code")) != "0":
             raise RuntimeError(f"UC网盘创建分享失败：{限制文本长度(分享数据)}")
-        任务ID = str(分享数据.get("task_id") or 读取路径(分享数据, ("data", "task_id")) or "")
+        任务ID = str(
+            分享数据.get("task_id") or 读取路径(分享数据, ("data", "task_id")) or ""
+        )
         if not 任务ID:
             raise RuntimeError(f"UC网盘分享任务ID为空：{限制文本长度(分享数据)}")
 
         分享ID = ""
         for 重试序号 in range(15):
             await asyncio.sleep(0.5)
-            任务数据 = await self.请求JSON可等待("GET", "/task", params={"task_id": 任务ID, "retry_index": 重试序号})
-            任务详情 = 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            任务数据 = await self.请求JSON可等待(
+                "GET", "/task", params={"task_id": 任务ID, "retry_index": 重试序号}
+            )
+            任务详情 = (
+                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            )
             if str(任务详情.get("status")) == "2":
                 分享ID = str(任务详情.get("share_id") or "")
                 break
         if not 分享ID:
             raise RuntimeError("UC网盘分享任务超时")
 
-        链接数据 = await self.请求JSON可等待("POST", "/share/password", json_data={"share_id": 分享ID})
+        链接数据 = await self.请求JSON可等待(
+            "POST", "/share/password", json_data={"share_id": 分享ID}
+        )
         if str(链接数据.get("code")) != "0":
             raise RuntimeError(f"UC网盘获取分享链接失败：{限制文本长度(链接数据)}")
         分享链接 = str(读取路径(链接数据, ("data", "share_url")) or "")
@@ -501,7 +576,9 @@ class UC网盘客户端:
         请求头["cookie"] = self.cookie
         if 方法.upper() == "POST":
             请求头["content-type"] = "application/json"
-        async with 会话.request(方法, self.构造地址(路径, params), headers=请求头, json=json_data) as 响应:
+        async with 会话.request(
+            方法, self.构造地址(路径, params), headers=请求头, json=json_data
+        ) as 响应:
             文本 = await 响应.text()
             self.合并响应Cookie(响应.cookies)
             if 响应.status >= 400:
@@ -513,12 +590,18 @@ class UC网盘客户端:
                     raise UC网盘处理中错误(
                         f"UC网盘HTTP {响应.status}({路径})：{提取UC错误消息(错误数据) or 限制文本长度(错误数据, 200)}"
                     )
-                错误文本 = 提取UC错误消息(错误数据) if isinstance(错误数据, dict) else ""
-                raise RuntimeError(f"UC网盘HTTP {响应.status}({路径})：{错误文本 or 限制文本长度(文本, 200)}")
+                错误文本 = (
+                    提取UC错误消息(错误数据) if isinstance(错误数据, dict) else ""
+                )
+                raise RuntimeError(
+                    f"UC网盘HTTP {响应.status}({路径})：{错误文本 or 限制文本长度(文本, 200)}"
+                )
             try:
                 数据 = json.loads(文本)
             except Exception as 异常:
-                raise RuntimeError(f"UC网盘JSON解析失败：{限制文本长度(文本, 200)}") from 异常
+                raise RuntimeError(
+                    f"UC网盘JSON解析失败：{限制文本长度(文本, 200)}"
+                ) from 异常
         if not isinstance(数据, dict):
             raise RuntimeError("UC网盘返回格式不是对象")
         return 数据
@@ -532,7 +615,9 @@ class UC网盘客户端:
     ) -> dict[str, Any]:
         for 尝试次数 in range(1, 上传完成文件可见重试次数 + 1):
             try:
-                return await self.请求JSON(方法, 路径, params=params, json_data=json_data)
+                return await self.请求JSON(
+                    方法, 路径, params=params, json_data=json_data
+                )
             except Exception as 异常:
                 if not 是UC同名冲突错误(异常) or 尝试次数 >= 上传完成文件可见重试次数:
                     raise
@@ -543,12 +628,22 @@ class UC网盘客户端:
                 await asyncio.sleep(计算UC文件可见等待秒数(尝试次数))
         raise RuntimeError(f"UC网盘接口重试后仍无返回：{路径}")
 
-    async def 请求OSS(self, 方法: str, 地址: str, data: bytes, headers: dict[str, str]) -> dict[str, str]:
+    async def 请求OSS(
+        self, 方法: str, 地址: str, data: bytes, headers: dict[str, str]
+    ) -> dict[str, str]:
         会话 = self.获取会话()
-        async with 会话.request(方法, 地址, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=300)) as 响应:
+        async with 会话.request(
+            方法,
+            地址,
+            data=data,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=300),
+        ) as 响应:
             文本 = await 响应.text()
             if 响应.status not in (200, 201):
-                raise RuntimeError(f"UC网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(文本, 200)}")
+                raise RuntimeError(
+                    f"UC网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(文本, 200)}"
+                )
             return dict(响应.headers)
 
     async def 确保CToken(self) -> None:
@@ -558,7 +653,11 @@ class UC网盘客户端:
         请求头 = dict(浏览器请求头)
         请求头["cookie"] = self.cookie
         try:
-            async with 会话.get("https://drive.uc.cn/", headers=请求头, timeout=aiohttp.ClientTimeout(total=20)) as 响应:
+            async with 会话.get(
+                "https://drive.uc.cn/",
+                headers=请求头,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as 响应:
                 await 响应.text()
                 self.合并响应Cookie(响应.cookies)
         except Exception as 异常:
@@ -616,14 +715,18 @@ async def 上传小说并获取分享链接(
         logger.warning(f"UC网盘上传分享失败：file={文件名}, error={异常}")
         return {"enabled": True, "success": False, "share_url": "", "error": str(异常)}
     finally:
-        await asyncio.to_thread(持久化刷新后的网盘Cookie, 配置, "UC", Cookie, 客户端.cookie)
+        await asyncio.to_thread(
+            持久化刷新后的网盘Cookie, 配置, "UC", Cookie, 客户端.cookie
+        )
 
 
 def 构造小说下载完成文本(书名: Any, 作者: Any) -> str:
     """构造用户可见的小说下载完成提示，避免标题破坏 Markdown 行结构。"""
     安全书名 = re.sub(r"[\r\n]+", " ", str(书名 or "")).strip() or "未知"
     安全作者 = re.sub(r"[\r\n]+", " ", str(作者 or "")).strip() or "未知"
-    return "\n".join(("宝宝你的", f"书名：{安全书名}", f"作者：{安全作者}", "已经下载完成"))
+    return "\n".join(
+        ("宝宝你的", f"书名：{安全书名}", f"作者：{安全作者}", "已经下载完成")
+    )
 
 
 def 构造小说下载完成键盘(分享链接: str) -> dict[str, Any]:
@@ -635,7 +738,10 @@ def 构造小说下载完成键盘(分享链接: str) -> dict[str, Any]:
                 "buttons": [
                     {
                         "id": f"novel_uc_{按钮编号}",
-                        "render_data": {"label": "点击打开", "visited_label": "点击打开"},
+                        "render_data": {
+                            "label": "点击打开",
+                            "visited_label": "点击打开",
+                        },
                         "action": {
                             "type": 0,
                             "permission": {"type": 2},
@@ -662,7 +768,9 @@ def 构造小说下载完成文字链接(分享链接: str) -> str:
     return f"[点击此文字打开]({安全链接})"
 
 
-async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, 分享链接: str) -> dict[str, Any]:
+async def 发送小说下载完成链接(
+    event: Any, 书名: Any, 作者: Any, 分享链接: str
+) -> dict[str, Any]:
     """QQ 官方在同一消息发送链接按钮及备用文字链接；其他适配器降级为文本链接。"""
     完成文本 = 构造小说下载完成文本(书名, 作者)
     链接 = str(分享链接 or "").strip()
@@ -679,7 +787,9 @@ async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, �
             from 功能文件.管理功能.基础功能.帮助功能 import 发送Markdown键盘消息
 
             完整文本 = f"{完成文本}\n\n{文字链接}"
-            按钮已发送 = await 发送Markdown键盘消息(event, 完整文本, 构造小说下载完成键盘(链接))
+            按钮已发送 = await 发送Markdown键盘消息(
+                event, 完整文本, 构造小说下载完成键盘(链接)
+            )
             if 按钮已发送:
                 return {"sent": True, "fallback_text": "", "error": ""}
             logger.warning("小说完成链接按钮发送失败")
@@ -689,7 +799,11 @@ async def 发送小说下载完成链接(event: Any, 书名: Any, 作者: Any, �
     if 是官方机器人:
         return {"sent": False, "fallback_text": "", "error": "链接按钮发送失败"}
 
-    return {"sent": False, "fallback_text": f"{完成文本}\n{文字链接}", "error": "链接按钮发送失败"}
+    return {
+        "sent": False,
+        "fallback_text": f"{完成文本}\n{文字链接}",
+        "error": "链接按钮发送失败",
+    }
 
 
 def UC网盘是否启用(配置: Any) -> bool:

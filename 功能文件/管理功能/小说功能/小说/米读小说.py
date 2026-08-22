@@ -1,4 +1,5 @@
 """米读小说独立异步下载模块。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,9 +16,10 @@ try:
     from astrbot.api import logger
 except Exception:
     import logging
+
     logger = logging.getLogger(__name__)
 try:
-    from 功能文件.管理功能.网盘功能 import 百度网盘, 小说网盘
+    from 功能文件.管理功能.网盘功能 import 小说网盘, 百度网盘
 except Exception:
     百度网盘 = 小说网盘 = None
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
@@ -25,8 +27,15 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 米读API = "https://api.midureader.com"
 米读CDN = "https://book.midureader.com"
-米读域名 = {"midureader.com", "www.midureader.com", "api.midureader.com", "book.midureader.com"}
-米读链接正则 = re.compile(r"https?://(?:[^\s/<>\"']*\.)?midureader\.com[^\s<>\"']*", re.I)
+米读域名 = {
+    "midureader.com",
+    "www.midureader.com",
+    "api.midureader.com",
+    "book.midureader.com",
+}
+米读链接正则 = re.compile(
+    r"https?://(?:[^\s/<>\"']*\.)?midureader\.com[^\s<>\"']*", re.I
+)
 米读并发数 = 80
 米读重试次数 = 3
 米读缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
@@ -34,7 +43,11 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 
 def _文本(value: Any) -> str:
-    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", html.unescape(re.sub(r"<[^>]+>", "", str(value or "")))).strip()
+    return re.sub(
+        r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]",
+        "",
+        html.unescape(re.sub(r"<[^>]+>", "", str(value or ""))),
+    ).strip()
 
 
 def _收集(value: Any, output: list[str], seen: set[int], depth: int = 0) -> None:
@@ -75,7 +88,11 @@ def 提取米读来源(event: Any, command: Any) -> str | None:
             return match.group(0).rstrip("'\"，。；;]}>）)")
     for value in values:
         if "米读" in value or "midureader" in value.lower():
-            match = re.search(r"(?:book[_-]?id|bookId|novelId)\D{0,8}([A-Za-z0-9_-]{8,128})", value, re.I)
+            match = re.search(
+                r"(?:book[_-]?id|bookId|novelId)\D{0,8}([A-Za-z0-9_-]{8,128})",
+                value,
+                re.I,
+            )
             if match:
                 return 构造米读链接(match.group(1))
     return None
@@ -93,7 +110,9 @@ def 解析米读书籍编号(source: str) -> str:
                     return value
     except Exception:
         pass
-    match = re.search(r"(?:book|detail|fiction)[^A-Za-z0-9_-]{0,10}([A-Za-z0-9_-]{8,128})", text, re.I)
+    match = re.search(
+        r"(?:book|detail|fiction)[^A-Za-z0-9_-]{0,10}([A-Za-z0-9_-]{8,128})", text, re.I
+    )
     return match.group(1) if match else ""
 
 
@@ -103,11 +122,29 @@ def 构造米读链接(book_id: Any) -> str:
 
 def 创建米读HTTP会话(concurrency: int = 米读并发数) -> aiohttp.ClientSession:
     timeout = aiohttp.ClientTimeout(total=90, sock_connect=15, sock_read=60)
-    connector = aiohttp.TCPConnector(limit=max(1, int(concurrency)), limit_per_host=max(1, int(concurrency)), ttl_dns_cache=300)
-    return aiohttp.ClientSession(headers={"User-Agent": "okhttp/3.12.1", "Accept": "application/json, text/plain, */*"}, timeout=timeout, connector=connector)
+    connector = aiohttp.TCPConnector(
+        limit=max(1, int(concurrency)),
+        limit_per_host=max(1, int(concurrency)),
+        ttl_dns_cache=300,
+    )
+    return aiohttp.ClientSession(
+        headers={
+            "User-Agent": "okhttp/3.12.1",
+            "Accept": "application/json, text/plain, */*",
+        },
+        timeout=timeout,
+        connector=connector,
+    )
 
 
-async def _请求(session: aiohttp.ClientSession, method: str, url: str, *, data: dict[str, Any] | None = None, json_response: bool = True) -> Any:
+async def _请求(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str,
+    *,
+    data: dict[str, Any] | None = None,
+    json_response: bool = True,
+) -> Any:
     last: Exception | None = None
     for attempt in range(米读重试次数):
         try:
@@ -128,14 +165,28 @@ def _成功(data: Any) -> bool:
     return isinstance(data, dict) and str(data.get("code", "0")) in {"0", "200"}
 
 
-async def 获取米读详情(session: aiohttp.ClientSession, book_id: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    detail_data = await _请求(session, "POST", f"{米读API}/fiction/book/getDetail", data={"app": "midu", "book_id": book_id, "source": "midu", "token": ""})
+async def 获取米读详情(
+    session: aiohttp.ClientSession, book_id: str
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    detail_data = await _请求(
+        session,
+        "POST",
+        f"{米读API}/fiction/book/getDetail",
+        data={"app": "midu", "book_id": book_id, "source": "midu", "token": ""},
+    )
     if not _成功(detail_data):
         return {}, []
     raw = detail_data.get("data") if isinstance(detail_data.get("data"), dict) else {}
-    catalog_raw = await _请求(session, "GET", f"{米读CDN}/book/chapter_list/100/{urllib.parse.quote(book_id)}.txt", json_response=False)
+    catalog_raw = await _请求(
+        session,
+        "GET",
+        f"{米读CDN}/book/chapter_list/100/{urllib.parse.quote(book_id)}.txt",
+        json_response=False,
+    )
     try:
-        catalog_data = json.loads(catalog_raw.decode("utf-8-sig", "replace").lstrip("\ufeff"))
+        catalog_data = json.loads(
+            catalog_raw.decode("utf-8-sig", "replace").lstrip("\ufeff")
+        )
     except Exception:
         catalog_data = []
     chapters: list[dict[str, str]] = []
@@ -145,40 +196,75 @@ async def 获取米读详情(session: aiohttp.ClientSession, book_id: str) -> tu
                 continue
             chapter_id = str(item.get("chapterId") or "")
             md5 = str(item.get("content_md5") or "")
-            if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", chapter_id) and re.fullmatch(r"[A-Fa-f0-9]{16,128}", md5):
-                chapters.append({"id": f"{chapter_id}/{md5}", "title": _文本(item.get("title") or f"第{len(chapters) + 1}章")})
-    detail = {"title": _文本(raw.get("title") or raw.get("bookName")), "author": _文本(raw.get("author") or "未知"), "intro": _文本(raw.get("description")), "status": "完结" if str(raw.get("status") or "").lower() in {"1", "finish", "完结"} else "连载", "word_count": raw.get("wordCount") or raw.get("words") or 0}
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", chapter_id) and re.fullmatch(
+                r"[A-Fa-f0-9]{16,128}", md5
+            ):
+                chapters.append(
+                    {
+                        "id": f"{chapter_id}/{md5}",
+                        "title": _文本(item.get("title") or f"第{len(chapters) + 1}章"),
+                    }
+                )
+    detail = {
+        "title": _文本(raw.get("title") or raw.get("bookName")),
+        "author": _文本(raw.get("author") or "未知"),
+        "intro": _文本(raw.get("description")),
+        "status": "完结"
+        if str(raw.get("status") or "").lower() in {"1", "finish", "完结"}
+        else "连载",
+        "word_count": raw.get("wordCount") or raw.get("words") or 0,
+    }
     return detail, chapters
 
 
-async def _下载章节(session: aiohttp.ClientSession, book_id: str, chapter: dict[str, str], sem: asyncio.Semaphore) -> str:
+async def _下载章节(
+    session: aiohttp.ClientSession,
+    book_id: str,
+    chapter: dict[str, str],
+    sem: asyncio.Semaphore,
+) -> str:
     chapter_id, md5 = chapter["id"].split("/", 1)
     url = f"{米读CDN}/book/chapter/segment/master/{urllib.parse.quote(book_id)}/{urllib.parse.quote(chapter_id)}/{urllib.parse.quote(md5)}.txt"
     async with sem:
         for attempt in range(米读重试次数):
             try:
                 data = await _请求(session, "GET", url)
-                values = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), list) else data
+                values = (
+                    data.get("data")
+                    if isinstance(data, dict) and isinstance(data.get("data"), list)
+                    else data
+                )
                 lines = []
                 if isinstance(values, list):
-                    lines.extend(_文本(item.get("content")) for item in values if isinstance(item, dict) and "content" in item)
+                    lines.extend(
+                        _文本(item.get("content"))
+                        for item in values
+                        if isinstance(item, dict) and "content" in item
+                    )
                 content = "\n".join(item for item in lines if item).strip()
                 if content:
                     return content
                 raise RuntimeError("正文为空")
             except Exception as exc:
-                logger.debug("米读小说章节获取失败：章节=%s, 错误类型=%s", chapter.get("id"), type(exc).__name__)
+                logger.debug(
+                    "米读小说章节获取失败：章节=%s, 错误类型=%s",
+                    chapter.get("id"),
+                    type(exc).__name__,
+                )
                 if attempt + 1 < 米读重试次数:
                     await asyncio.sleep(0.2 * (attempt + 1))
     return ""
 
 
-async def 下载米读正文(session: aiohttp.ClientSession, book_id: str, chapters: list[dict[str, str]]) -> list[str]:
+async def 下载米读正文(
+    session: aiohttp.ClientSession, book_id: str, chapters: list[dict[str, str]]
+) -> list[str]:
     results = [""] * len(chapters)
     sem = asyncio.Semaphore(max(1, min(米读并发数, len(chapters) or 1)))
     done = 0
     next_log = max(1, len(chapters) // 10)
     lock = asyncio.Lock()
+
     async def one(index: int, chapter: dict[str, str]) -> None:
         nonlocal done, next_log
         results[index] = await _下载章节(session, book_id, chapter, sem)
@@ -186,8 +272,18 @@ async def 下载米读正文(session: aiohttp.ClientSession, book_id: str, chapt
             done += 1
             if done >= next_log or done == len(chapters):
                 success = sum(bool(item) for item in results)
-                logger.info("米读小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 失败=%s, 并发数=%s, 会话复用=开启, 解密方式=无需解密", book_id, done, len(chapters), int(done * 100 / max(1, len(chapters))), success, done - success, 米读并发数)
+                logger.info(
+                    "米读小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 失败=%s, 并发数=%s, 会话复用=开启, 解密方式=无需解密",
+                    book_id,
+                    done,
+                    len(chapters),
+                    int(done * 100 / max(1, len(chapters))),
+                    success,
+                    done - success,
+                    米读并发数,
+                )
                 next_log += max(1, len(chapters) // 10)
+
     await asyncio.gather(*(one(i, chapter) for i, chapter in enumerate(chapters)))
     return results
 
@@ -201,13 +297,34 @@ def _字数(value: Any) -> str:
 
 
 def _文件名(value: Any) -> str:
-    return re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", str(value or "未知")).strip(" .")[:80] or "米读小说"
+    return (
+        re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", str(value or "未知")).strip(" .")[:80]
+        or "米读小说"
+    )
 
 
-def 生成米读文件(book_id: str, detail: dict[str, Any], chapters: list[dict[str, str]], contents: list[str]) -> tuple[str, bytes]:
+def 生成米读文件(
+    book_id: str,
+    detail: dict[str, Any],
+    chapters: list[dict[str, str]],
+    contents: list[str],
+) -> tuple[str, bytes]:
     status = str(detail.get("status") or "连载")
-    title, author = str(detail.get("title") or f"米读小说{book_id}"), str(detail.get("author") or "未知")
-    lines = [米读声明, "", f"名称：{title}", f"作者：{author}", f"状态：{status}", f"字数：{_字数(detail.get('word_count'))}", f"书籍ID：{book_id}", f"章节数：{len(chapters)}", ""]
+    title, author = (
+        str(detail.get("title") or f"米读小说{book_id}"),
+        str(detail.get("author") or "未知"),
+    )
+    lines = [
+        米读声明,
+        "",
+        f"名称：{title}",
+        f"作者：{author}",
+        f"状态：{status}",
+        f"字数：{_字数(detail.get('word_count'))}",
+        f"书籍ID：{book_id}",
+        f"章节数：{len(chapters)}",
+        "",
+    ]
     if detail.get("intro"):
         lines.extend(["简介：", str(detail["intro"]), ""])
     for chapter, content in zip(chapters, contents):
@@ -222,7 +339,9 @@ def _缓存(filename: str, content: bytes) -> Path:
     米读缓存目录.mkdir(parents=True, exist_ok=True)
     path = 米读缓存目录 / Path(filename).name
     for index in range(1000):
-        candidate = path if index == 0 else 米读缓存目录 / f"{Path(filename).stem}_{index}.txt"
+        candidate = (
+            path if index == 0 else 米读缓存目录 / f"{Path(filename).stem}_{index}.txt"
+        )
         if not candidate.exists():
             candidate.write_bytes(content)
             小说缓存工具.标记下载缓存正在使用(candidate)
@@ -230,7 +349,9 @@ def _缓存(filename: str, content: bytes) -> Path:
     raise RuntimeError("缓存文件名冲突")
 
 
-async def _发送(event: Any, filename: str, content: bytes, config: Any, title: str, author: str) -> dict[str, Any]:
+async def _发送(
+    event: Any, filename: str, content: bytes, config: Any, title: str, author: str
+) -> dict[str, Any]:
     path = _缓存(filename, content)
     if 小说网盘 is None:
         小说缓存工具.删除下载缓存文件(path)
@@ -240,8 +361,14 @@ async def _发送(event: Any, filename: str, content: bytes, config: Any, title:
         if not uploaded.get("success"):
             小说缓存工具.删除下载缓存文件(path)
             return {"sent": False, "source_cache_path": None}
-        sent = await 小说网盘.发送小说下载完成链接(event, title, author, str(uploaded.get("share_url") or ""))
-        return {"sent": bool(sent.get("sent")), "fallback_text": str(sent.get("fallback_text") or ""), "source_cache_path": path}
+        sent = await 小说网盘.发送小说下载完成链接(
+            event, title, author, str(uploaded.get("share_url") or "")
+        )
+        return {
+            "sent": bool(sent.get("sent")),
+            "fallback_text": str(sent.get("fallback_text") or ""),
+            "source_cache_path": path,
+        }
     except Exception as exc:
         logger.warning("米读小说文件发送失败：错误类型=%s", type(exc).__name__)
         小说缓存工具.删除下载缓存文件(path)
@@ -251,6 +378,7 @@ async def _发送(event: Any, filename: str, content: bytes, config: Any, title:
 def _后台(config: Any, path: Any, filename: str) -> None:
     if not path:
         return
+
     async def task() -> None:
         try:
             if 百度网盘 is not None:
@@ -259,13 +387,16 @@ def _后台(config: Any, path: Any, filename: str) -> None:
             logger.warning("米读小说百度后台备份异常：错误类型=%s", type(exc).__name__)
         finally:
             小说缓存工具.删除下载缓存文件(path)
+
     try:
         asyncio.create_task(task())
     except RuntimeError:
         小说缓存工具.删除下载缓存文件(path)
 
 
-async def 生成米读下载回复流(event: Any, source: str, config: Any = None) -> AsyncIterator[Any]:
+async def 生成米读下载回复流(
+    event: Any, source: str, config: Any = None
+) -> AsyncIterator[Any]:
     book_id = 解析米读书籍编号(source)
     if not book_id:
         yield "下载失败"
@@ -276,15 +407,32 @@ async def 生成米读下载回复流(event: Any, source: str, config: Any = Non
             if not detail or not chapters:
                 yield "下载失败"
                 return
-            logger.info("米读小说开始下载：书籍编号=%s, 章节数=%s, 并发数=%s, 会话复用=开启, 解密方式=无需解密", book_id, len(chapters), 米读并发数)
+            logger.info(
+                "米读小说开始下载：书籍编号=%s, 章节数=%s, 并发数=%s, 会话复用=开启, 解密方式=无需解密",
+                book_id,
+                len(chapters),
+                米读并发数,
+            )
             yield f"书名：{detail.get('title') or '未知'}\n作者：{detail.get('author') or '未知'}\n状态：{detail.get('status') or '连载'}\n章节：{len(chapters)} 章\n字数：{_字数(detail.get('word_count'))}\n\n正在下载中请稍等....."
             contents = await 下载米读正文(session, book_id, chapters)
         if any(not content for content in contents):
-            logger.warning("米读小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s", book_id, sum(bool(x) for x in contents), len(chapters))
+            logger.warning(
+                "米读小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
+                book_id,
+                sum(bool(x) for x in contents),
+                len(chapters),
+            )
             yield "下载失败"
             return
         filename, content = 生成米读文件(book_id, detail, chapters, contents)
-        result = await _发送(event, filename, content, config, str(detail.get("title") or "未知"), str(detail.get("author") or "未知"))
+        result = await _发送(
+            event,
+            filename,
+            content,
+            config,
+            str(detail.get("title") or "未知"),
+            str(detail.get("author") or "未知"),
+        )
         path = result.get("source_cache_path")
         if result.get("sent"):
             _后台(config, path, filename)
@@ -298,7 +446,9 @@ async def 生成米读下载回复流(event: Any, source: str, config: Any = Non
         yield "下载失败"
 
 
-def 获取米读小说回复流(event: Any, command: str, config: Any = None) -> AsyncIterator[Any] | None:
+def 获取米读小说回复流(
+    event: Any, command: str, config: Any = None
+) -> AsyncIterator[Any] | None:
     source = 提取米读来源(event, command)
     return 生成米读下载回复流(event, source, config) if source else None
 
@@ -309,8 +459,17 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
         return []
     try:
         async with 创建米读HTTP会话(4) as session:
-            data = await _请求(session, "POST", f"{米读API}/fiction/search/searchV2", data={"app": "midu", "keyword": keyword, "page": 0})
-        rows = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), list) else []
+            data = await _请求(
+                session,
+                "POST",
+                f"{米读API}/fiction/search/searchV2",
+                data={"app": "midu", "keyword": keyword, "page": 0},
+            )
+        rows = (
+            data.get("data")
+            if isinstance(data, dict) and isinstance(data.get("data"), list)
+            else []
+        )
         result = []
         for item in rows:
             if not isinstance(item, dict) or not isinstance(item.get("bookData"), dict):
@@ -320,7 +479,19 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
             title = _文本(book.get("title") or book.get("bookName"))
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", book_id) or not title:
                 continue
-            result.append({"book_id": book_id, "title": title, "author": _文本(item.get("emAuthor") or book.get("author") or "未知"), "url": 构造米读链接(book_id), "intro": _文本(book.get("description")), "score": 0, "heat": 0})
+            result.append(
+                {
+                    "book_id": book_id,
+                    "title": title,
+                    "author": _文本(
+                        item.get("emAuthor") or book.get("author") or "未知"
+                    ),
+                    "url": 构造米读链接(book_id),
+                    "intro": _文本(book.get("description")),
+                    "score": 0,
+                    "heat": 0,
+                }
+            )
         return result[: max(1, min(30, int(需要数量 or 20)))]
     except Exception as exc:
         logger.debug("米读小说搜索失败：错误类型=%s", type(exc).__name__)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-
 运行状态数据库表名 = "mantou_runtime_state"
 数据库配置分类名 = "database_settings"
 
@@ -67,12 +66,13 @@ def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, 
             )
             记录列表 = 游标.fetchall()
     return {
-        str(记录[0]): str(记录[1] if 记录[1] is not None else "")
-        for 记录 in 记录列表
+        str(记录[0]): str(记录[1] if 记录[1] is not None else "") for 记录 in 记录列表
     }
 
 
-def 读取布尔运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认值: bool = True) -> bool:
+def 读取布尔运行状态值(
+    配置: Any, 命名空间: str, 状态键: str, 默认值: bool = True
+) -> bool:
     默认文本 = "1" if 默认值 else "0"
     文本 = 读取运行状态值(配置, 命名空间, 状态键, 默认文本).strip().lower()
     if 文本 in {"1", "true", "yes", "on", "开启"}:
@@ -104,13 +104,29 @@ def 确保运行状态数据库表(连接: Any, 表名: str) -> None:
 
 def 获取数据库配置(配置: Any) -> dict[str, Any]:
     """读取通用运行状态数据库配置，并兼容历史配置字段。"""
-    用户名 = str(读取数据库配置值(配置, "database_user", "user_activation_database_user") or "").strip()
-    数据库名 = str(读取数据库配置值(配置, "database_name", "user_activation_database_name") or 用户名).strip()
+    用户名 = str(
+        读取数据库配置值(配置, "database_user", "user_activation_database_user") or ""
+    ).strip()
+    数据库名 = str(
+        读取数据库配置值(配置, "database_name", "user_activation_database_name")
+        or 用户名
+    ).strip()
     数据库配置 = {
-        "host": str(读取数据库配置值(配置, "database_host", "user_activation_database_host") or "").strip(),
-        "port": 安全整数(读取数据库配置值(配置, "database_port", "user_activation_database_port"), 3306),
+        "host": str(
+            读取数据库配置值(配置, "database_host", "user_activation_database_host")
+            or ""
+        ).strip(),
+        "port": 安全整数(
+            读取数据库配置值(配置, "database_port", "user_activation_database_port"),
+            3306,
+        ),
         "user": 用户名,
-        "password": str(读取数据库配置值(配置, "database_password", "user_activation_database_password") or ""),
+        "password": str(
+            读取数据库配置值(
+                配置, "database_password", "user_activation_database_password"
+            )
+            or ""
+        ),
         "database": 数据库名,
         "runtime_state_table": 运行状态数据库表名,
     }
@@ -122,9 +138,16 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
 
 def 已配置运行状态数据库(配置: Any) -> bool:
     """只判断配置是否完整；未配置时读取状态不应尝试连接 MySQL。"""
-    用户名 = str(读取数据库配置值(配置, "database_user", "user_activation_database_user") or "").strip()
-    数据库名 = str(读取数据库配置值(配置, "database_name", "user_activation_database_name") or 用户名).strip()
-    主机 = str(读取数据库配置值(配置, "database_host", "user_activation_database_host") or "").strip()
+    用户名 = str(
+        读取数据库配置值(配置, "database_user", "user_activation_database_user") or ""
+    ).strip()
+    数据库名 = str(
+        读取数据库配置值(配置, "database_name", "user_activation_database_name")
+        or 用户名
+    ).strip()
+    主机 = str(
+        读取数据库配置值(配置, "database_host", "user_activation_database_host") or ""
+    ).strip()
     return bool(主机 and 用户名 and 数据库名)
 
 

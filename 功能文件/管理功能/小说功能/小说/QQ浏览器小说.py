@@ -16,7 +16,6 @@ from typing import Any, AsyncIterator
 from urllib.parse import parse_qs, unquote, urlparse
 
 import aiohttp
-
 from astrbot.api import logger
 
 try:
@@ -27,7 +26,6 @@ except Exception as exc:
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
-
 
 QQ浏览器搜索地址 = "https://so.html5.qq.com/ajax/real/search_result"
 QQ浏览器详情地址 = "https://novel.html5.qq.com/qbread/api/novel/bookInfo"
@@ -102,14 +100,22 @@ async def 请求QQ浏览器JSON(
                 地址,
                 params=参数,
                 json=JSON数据,
-                headers={"Content-Type": "application/json"} if JSON数据 is not None else None,
+                headers={"Content-Type": "application/json"}
+                if JSON数据 is not None
+                else None,
             ) as 响应:
                 响应.raise_for_status()
                 原始内容 = await 响应.read()
             if not 原始内容:
                 raise RuntimeError("empty response")
             return json.loads(原始内容.decode("utf-8-sig", "replace"))
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, UnicodeError, RuntimeError) as 异常:
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+            UnicodeError,
+            RuntimeError,
+        ) as 异常:
             最后异常 = 异常
             if 次数 + 1 < max(1, int(重试次数 or 1)):
                 await asyncio.sleep(min(1.5, 0.25 * (次数 + 1)))
@@ -206,7 +212,11 @@ def _是QQ浏览器链接(值: Any) -> bool:
     主机 = str(解析.hostname or "").lower()
     if 主机 in QQ浏览器域名集合:
         return True
-    return 解析.scheme.lower() == "qb" and 主机 == "ext" and 解析.path.lower().startswith("/novelreader")
+    return (
+        解析.scheme.lower() == "qb"
+        and 主机 == "ext"
+        and 解析.path.lower().startswith("/novelreader")
+    )
 
 
 def 提取QQ浏览器书籍编号(来源: Any) -> str:
@@ -223,11 +233,19 @@ def 提取QQ浏览器书籍编号(来源: Any) -> str:
                     匹配 = re.fullmatch(r"\d{6,}", str(值 or "").strip())
                     if 匹配:
                         return 匹配.group(0)
-        匹配 = re.search(r"(?:bookid|resourceid|book_id)\s*[=:]\s*[\"']?(\d{6,})", 原文, re.IGNORECASE)
+        匹配 = re.search(
+            r"(?:bookid|resourceid|book_id)\s*[=:]\s*[\"']?(\d{6,})",
+            原文,
+            re.IGNORECASE,
+        )
         if 匹配:
             return 匹配.group(1)
         if urlparse(原文).hostname in QQ浏览器域名集合:
-            匹配 = re.search(r"/(?:book|reader|intro)[^\d]{0,20}(\d{6,})(?:\D|$)", urlparse(原文).path, re.IGNORECASE)
+            匹配 = re.search(
+                r"/(?:book|reader|intro)[^\d]{0,20}(\d{6,})(?:\D|$)",
+                urlparse(原文).path,
+                re.IGNORECASE,
+            )
             if 匹配:
                 return 匹配.group(1)
     return ""
@@ -241,7 +259,9 @@ def 提取直接QQ浏览器来源(命令文本: Any) -> str | None:
     return None
 
 
-def _收集QQ浏览器事件文本(值: Any, 候选: list[str], 已见对象: set[int], 深度: int = 0) -> None:
+def _收集QQ浏览器事件文本(
+    值: Any, 候选: list[str], 已见对象: set[int], 深度: int = 0
+) -> None:
     # 分享卡片通常经过 event -> message_obj -> message -> component -> data。
     if 值 is None or 深度 > 8:
         return
@@ -260,7 +280,15 @@ def _收集QQ浏览器事件文本(值: Any, 候选: list[str], 已见对象: se
     if 对象标识 in 已见对象:
         return
     已见对象.add(对象标识)
-    for 字段 in ("message_str", "message", "raw_message", "message_obj", "text", "content", "data"):
+    for 字段 in (
+        "message_str",
+        "message",
+        "raw_message",
+        "message_obj",
+        "text",
+        "content",
+        "data",
+    ):
         try:
             项目 = getattr(值, 字段, None)
         except Exception:
@@ -287,7 +315,9 @@ def 提取事件QQ浏览器来源(event: Any) -> str | None:
 def 解析QQ浏览器搜索结果(数据: Any) -> list[dict[str, Any]]:
     if not _QQ浏览器业务成功(数据, "code"):
         return []
-    状态 = ((数据.get("data") or {}).get("state") if isinstance(数据, dict) else None) or []
+    状态 = (
+        (数据.get("data") or {}).get("state") if isinstance(数据, dict) else None
+    ) or []
     if not isinstance(状态, list):
         return []
     结果: list[dict[str, Any]] = []
@@ -339,7 +369,9 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                 QQ浏览器搜索地址,
                 参数={"tabId": "360", "q": 关键词},
             )
-        return 解析QQ浏览器搜索结果(数据)[: max(1, min(QQ浏览器搜索数量上限, int(需要数量 or 20)))]
+        return 解析QQ浏览器搜索结果(数据)[
+            : max(1, min(QQ浏览器搜索数量上限, int(需要数量 or 20)))
+        ]
     except Exception as 异常:
         logger.warning("QQ浏览器小说搜索失败：错误=%s", type(异常).__name__)
         return []
@@ -348,7 +380,9 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
 def 解析QQ浏览器详情(数据: Any, 书籍编号: str) -> dict[str, Any]:
     if not _QQ浏览器业务成功(数据):
         return {}
-    书籍信息 = (((数据.get("data") or {}).get("bookInfo")) if isinstance(数据, dict) else None) or {}
+    书籍信息 = (
+        ((数据.get("data") or {}).get("bookInfo")) if isinstance(数据, dict) else None
+    ) or {}
     if not isinstance(书籍信息, dict):
         return {}
     标题 = _清理QQ浏览器文本(书籍信息.get("resourceName"))
@@ -366,7 +400,9 @@ def 解析QQ浏览器详情(数据: Any, 书籍编号: str) -> dict[str, Any]:
     }
 
 
-async def 获取QQ浏览器书籍详情(HTTP会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:
+async def 获取QQ浏览器书籍详情(
+    HTTP会话: aiohttp.ClientSession, 书籍编号: str
+) -> dict[str, Any]:
     数据 = await 请求QQ浏览器JSON(
         HTTP会话,
         "GET",
@@ -381,7 +417,9 @@ def 解析QQ浏览器目录(数据: Any) -> list[dict[str, Any]]:
         return []
     行列表: Any = 数据.get("rows") if isinstance(数据, dict) else None
     if not isinstance(行列表, list):
-        行列表 = ((数据.get("data") or {}).get("rows") if isinstance(数据, dict) else None) or []
+        行列表 = (
+            (数据.get("data") or {}).get("rows") if isinstance(数据, dict) else None
+        ) or []
     if not isinstance(行列表, list):
         return []
     目录: list[dict[str, Any]] = []
@@ -392,11 +430,15 @@ def 解析QQ浏览器目录(数据: Any) -> list[dict[str, Any]]:
         if not re.fullmatch(r"\d+", 章节编号):
             continue
         标题 = _清理QQ浏览器文本(行.get("serialName")) or f"第{章节编号}章"
-        目录.append({"id": 章节编号, "title": 标题, "is_free": _QQ浏览器真值(行.get("isFree"))})
+        目录.append(
+            {"id": 章节编号, "title": 标题, "is_free": _QQ浏览器真值(行.get("isFree"))}
+        )
     return 目录
 
 
-async def 获取QQ浏览器章节目录(HTTP会话: aiohttp.ClientSession, 书籍编号: str) -> list[dict[str, Any]]:
+async def 获取QQ浏览器章节目录(
+    HTTP会话: aiohttp.ClientSession, 书籍编号: str
+) -> list[dict[str, Any]]:
     数据 = await 请求QQ浏览器JSON(
         HTTP会话,
         "GET",
@@ -408,7 +450,9 @@ async def 获取QQ浏览器章节目录(HTTP会话: aiohttp.ClientSession, 书�
 
 def _QQ浏览器正文文本(值: Any) -> str:
     if isinstance(值, list):
-        return "\n".join(文本 for 文本 in (_QQ浏览器正文文本(项目) for 项目 in 值) if 文本)
+        return "\n".join(
+            文本 for 文本 in (_QQ浏览器正文文本(项目) for 项目 in 值) if 文本
+        )
     if isinstance(值, dict):
         for 键 in ("Content", "content", "Text", "text", "paragraph"):
             if 键 in 值:
@@ -420,7 +464,9 @@ def _QQ浏览器正文文本(值: Any) -> str:
 def 解析QQ浏览器正文(数据: Any) -> dict[str, str]:
     if not _QQ浏览器业务成功(数据):
         return {}
-    内容列表 = ((数据.get("data") or {}).get("Content") if isinstance(数据, dict) else None) or []
+    内容列表 = (
+        (数据.get("data") or {}).get("Content") if isinstance(数据, dict) else None
+    ) or []
     if not isinstance(内容列表, list):
         return {}
     结果: dict[str, str] = {}
@@ -453,7 +499,13 @@ async def _获取QQ浏览器正文批次(
 ) -> dict[str, str]:
     请求体 = {
         "ContentAnchorBatch": [
-            {"BookID": str(书籍编号), "ChapterSeqNo": [int(编号) if str(编号).isdigit() else str(编号) for 编号 in 章节编号列表]}
+            {
+                "BookID": str(书籍编号),
+                "ChapterSeqNo": [
+                    int(编号) if str(编号).isdigit() else str(编号)
+                    for 编号 in 章节编号列表
+                ],
+            }
         ],
         "Scene": "chapter",
     }
@@ -657,12 +709,22 @@ async def 准备发送QQ浏览器文本文件(
     缓存路径 = 写入QQ浏览器下载缓存文件(文件名, 文件内容)
     if 小说网盘 is None:
         删除QQ浏览器缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘未加载"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说网盘未加载",
+        }
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         if not 网盘结果.get("success"):
             删除QQ浏览器缓存文件(缓存路径)
-            return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说网盘上传失败"}
+            return {
+                "sent": False,
+                "fallback_text": "",
+                "source_cache_path": None,
+                "error": "小说网盘上传失败",
+            }
         完成结果 = await 小说网盘.发送小说下载完成链接(
             event,
             书名,
@@ -670,16 +732,36 @@ async def 准备发送QQ浏览器文本文件(
             str(网盘结果.get("share_url") or ""),
         )
         if 完成结果.get("sent"):
-            return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}
+            return {
+                "sent": True,
+                "fallback_text": "",
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
-            return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": ""}
+            return {
+                "sent": False,
+                "fallback_text": 降级文本,
+                "source_cache_path": 缓存路径,
+                "error": "",
+            }
         删除QQ浏览器缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "完成消息发送失败"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "完成消息发送失败",
+        }
     except Exception as 异常:
         logger.warning("QQ浏览器小说文件发送失败：错误=%s", type(异常).__name__)
         删除QQ浏览器缓存文件(缓存路径)
-        return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "小说文件发送失败"}
+        return {
+            "sent": False,
+            "fallback_text": "",
+            "source_cache_path": None,
+            "error": "小说文件发送失败",
+        }
 
 
 async def 生成QQ浏览器下载回复流(
@@ -722,7 +804,9 @@ async def 生成QQ浏览器下载回复流(
                 ]
             )
             章节结果 = await 下载QQ浏览器全部章节(HTTP会话, 书籍编号, 目录)
-        if len(章节结果) != len(目录) or any(not 项目.get("success") for 项目 in 章节结果):
+        if len(章节结果) != len(目录) or any(
+            not 项目.get("success") for 项目 in 章节结果
+        ):
             logger.warning(
                 "QQ浏览器小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
                 书籍编号,
@@ -756,7 +840,9 @@ async def 生成QQ浏览器下载回复流(
         yield QQ浏览器下载失败提示
 
 
-def 获取QQ浏览器小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
+def 获取QQ浏览器小说回复流(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> AsyncIterator[Any] | None:
     来源 = 提取直接QQ浏览器来源(命令文本) or 提取事件QQ浏览器来源(event)
     if 来源 is None or not 提取QQ浏览器书籍编号(来源):
         return None
