@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import hashlib
 import io
+import inspect
 import json
 import re
+import threading
 import time
 import uuid
 from typing import Any
@@ -15,7 +19,11 @@ from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image, Plain
 from yarl import URL
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import (
+    是群文件清理管理员,
+    获取配置字典,
+    读取配置字段,
+)
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     写入运行状态值,
     已配置运行状态数据库,
@@ -23,7 +31,13 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
 )
 
 网盘Cookie命名空间 = "novel_pan_auth"
+网盘账号选择命名空间 = "novel_pan_account_selection"
 平台状态键 = {"UC": "uc", "夸克": "quark", "百度": "baidu"}
+平台配置Cookie字段 = {
+    "UC": "uc_pan_cookie",
+    "夸克": "quark_pan_cookie",
+    "百度": "baidu_pan_cookie",
+}
 平台显示名 = {"UC": "UC网盘", "夸克": "夸克网盘", "百度": "百度网盘"}
 平台前缀模式 = re.compile(
     r"^\s*(UC|夸克|百度)(?:网盘)?(?:\s*Cookie)?\s*[:：#]\s*",
@@ -37,6 +51,13 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
+当前网盘事件: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "mantou_current_pan_event", default=None
+)
+当前网盘账号覆盖: contextvars.ContextVar[tuple[str, int] | None] = contextvars.ContextVar(
+    "mantou_current_pan_account_override", default=None
+)
+网盘账号写入锁 = threading.RLock()
 
 
 def _生成夸克扫码请求参数(**附加参数: Any) -> dict[str, Any]:
@@ -200,6 +221,95 @@ def _规范化平台名称(平台: Any) -> str:
         return "UC"
     if 文本 in ("夸克", "百度"):
         return 文本
+    return ""
+
+
+def 设置当前网盘事件(event: Any) -> contextvars.Token[Any]:
+    """让后台小说任务沿用触发下载的群聊账号选择。"""
+    return 当前网盘事件.set(event)
+
+
+def 清除当前网盘事件(令牌: contextvars.Token[Any] | None) -> None:
+    if 令牌 is None:
+        return
+    try:
+        当前网盘事件.reset(令牌)
+    except (LookupError, ValueError):
+        pass
+
+
+def 设置网盘账号覆盖(平台: Any, 序号: int) -> contextvars.Token[Any] | None:
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台:
+        return None
+    try:
+        规范序号 = max(1, int(序号))
+    except (TypeError, ValueError):
+        规范序号 = 1
+    return 当前网盘账号覆盖.set((规范平台, 规范序号))
+
+
+def 清除网盘账号覆盖(令牌: contextvars.Token[Any] | None) -> None:
+    if 令牌 is None:
+        return
+    try:
+        当前网盘账号覆盖.reset(令牌)
+    except (LookupError, ValueError):
+        pass
+
+
+def _读取字段(对象: Any, 字段名: str) -> Any:
+    if 对象 is None:
+        return None
+    if isinstance(对象, dict):
+        return 对象.get(字段名)
+    return getattr(对象, 字段名, None)
+
+
+def 获取网盘群标识(event: Any = None) -> str:
+    """提取普通群号或 QQ 官方 group_openid，不把事件对象转成字符串。"""
+    当前事件 = event if event is not None else 当前网盘事件.get()
+    if 当前事件 is None:
+        return ""
+    for 方法名 in ("get_group_id",):
+        方法 = getattr(当前事件, 方法名, None)
+        if callable(方法):
+            try:
+                原始值 = 方法()
+                if inspect.isawaitable(原始值):
+                    close = getattr(原始值, "close", None)
+                    if callable(close):
+                        close()
+                    原始值 = ""
+                值 = str(原始值 or "").strip()
+            except Exception:
+                值 = ""
+            if 值:
+                return 值
+    待检查 = [当前事件]
+    for 属性名 in ("message_obj", "raw_message", "message", "data"):
+        值 = getattr(当前事件, 属性名, None)
+        if 值 is not None:
+            待检查.append(值)
+    字段名列表 = ("group_openid", "group_id", "group_open_id")
+    已检查: set[int] = set()
+    while 待检查:
+        对象 = 待检查.pop(0)
+        标识 = id(对象)
+        if 标识 in 已检查:
+            continue
+        已检查.add(标识)
+        for 字段名 in 字段名列表:
+            值 = _读取字段(对象, 字段名)
+            if isinstance(值, dict):
+                值 = 值.get("group_openid") or 值.get("group_id") or 值.get("id")
+            if 值 is not None and str(值).strip():
+                return str(值).strip()
+        if isinstance(对象, dict):
+            for 字段名 in ("message_obj", "message", "data", "event"):
+                值 = 对象.get(字段名)
+                if isinstance(值, (dict, list, tuple)):
+                    待检查.extend(值 if isinstance(值, (list, tuple)) else [值])
     return ""
 
 
@@ -368,51 +478,194 @@ def 解析网盘Cookie(文本: Any) -> tuple[str, str] | None:
     return 平台, _序列化Cookie字段(字段)
 
 
-def _保存网盘Cookie(配置: Any, 平台: str, Cookie: str) -> None:
+def _解析保存的网盘账号列表(原始值: Any, 平台: str) -> list[str]:
+    文本 = str(原始值 or "").strip()
+    if not 文本:
+        return []
+    try:
+        数据 = json.loads(文本)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        数据 = 文本
+    候选列表: list[Any]
+    if isinstance(数据, dict):
+        账号数据 = 数据.get("accounts")
+        if isinstance(账号数据, list):
+            候选列表 = 账号数据
+        else:
+            候选列表 = [数据.get("cookie") or ""]
+    elif isinstance(数据, list):
+        候选列表 = 数据
+    else:
+        候选列表 = [数据]
+    结果: list[str] = []
+    for 项目 in 候选列表:
+        if isinstance(项目, dict):
+            项目 = 项目.get("cookie") or 项目.get("value") or ""
+        解析结果 = 解析网盘Cookie(f"{平台} Cookie: {项目}")
+        if not 解析结果 or 解析结果[0] != 平台 or not 解析结果[1]:
+            continue
+        Cookie = 解析结果[1]
+        if Cookie not in 结果:
+            结果.append(Cookie)
+    return 结果
+
+
+def _读取保存的网盘账号列表(配置: Any, 平台: str) -> list[str]:
+    原始值 = 读取运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], "")
+    return _解析保存的网盘账号列表(原始值, 平台)
+
+
+def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str]) -> None:
     payload = json.dumps(
-        {"provider": 平台, "cookie": Cookie, "updated_at": int(time.time())},
+        {
+            "provider": 平台,
+            "accounts": [
+                {"index": index, "cookie": Cookie}
+                for index, Cookie in enumerate(账号列表, start=1)
+            ],
+            "updated_at": int(time.time()),
+        },
         ensure_ascii=True,
         separators=(",", ":"),
     )
     写入运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], payload)
 
 
-def _读取保存的网盘Cookie(配置: Any, 平台: str) -> str:
-    原始值 = 读取运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], "")
-    if not 原始值:
-        return ""
+def _读取平台配置Cookie(配置: Any, 平台: str) -> Any:
+    字段名 = 平台配置Cookie字段[平台]
+    值 = 读取配置字段(配置, 字段名)
+    if 值:
+        return 值
+    配置字典 = 获取配置字典(配置)
+    if not isinstance(配置字典, dict):
+        return 值
+    if 配置字典.get(字段名):
+        return 配置字典.get(字段名)
+    分类名 = {
+        "UC": "uc_pan_settings",
+        "夸克": "quark_pan_settings",
+        "百度": "baidu_pan_settings",
+    }[平台]
+    旧分类名 = {"UC": "UC网盘设置", "夸克": "夸克网盘设置", "百度": "百度网盘设置"}[平台]
+    for 名称 in (分类名, 旧分类名):
+        分类 = 配置字典.get(名称)
+        if isinstance(分类, dict) and 分类.get(字段名):
+            return 分类.get(字段名)
+    return 值
+
+
+def _保存网盘Cookie(配置: Any, 平台: str, Cookie: str) -> int:
+    """新增平台账号并返回账号序号；相同 Cookie 不重复占用新序号。"""
+    with 网盘账号写入锁:
+        账号列表 = _读取保存的网盘账号列表(配置, 平台)
+        if not 账号列表:
+            配置Cookie = _读取平台配置Cookie(配置, 平台)
+            配置结果 = 解析网盘Cookie(f"{平台} Cookie: {配置Cookie or ''}")
+            if 配置结果 and 配置结果[1]:
+                账号列表.append(配置结果[1])
+        if Cookie not in 账号列表:
+            账号列表.append(Cookie)
+            _写入网盘账号列表(配置, 平台, 账号列表)
+        return 账号列表.index(Cookie) + 1
+
+
+def _账号选择状态键(平台: str, 群标识: str) -> str:
+    原键 = f"{平台}:{群标识}"
+    if len(原键) <= 128:
+        return 原键
+    摘要 = hashlib.sha256(str(群标识).encode("utf-8", errors="replace")).hexdigest()
+    return f"{平台}:sha256:{摘要}"
+
+
+def _读取网盘账号序号(配置: Any, 平台: str, event: Any = None) -> int:
+    覆盖 = 当前网盘账号覆盖.get()
+    if 覆盖 and 覆盖[0] == 平台:
+        return 覆盖[1]
+    群标识 = 获取网盘群标识(event)
+    if not 群标识 or not 已配置运行状态数据库(配置):
+        return 1
     try:
-        数据 = json.loads(原始值)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        数据 = None
-    Cookie = (
-        str(数据.get("cookie") or "").strip()
-        if isinstance(数据, dict)
-        else str(原始值).strip()
-    )
-    解析结果 = 解析网盘Cookie(f"{平台} Cookie: {Cookie}")
-    if not 解析结果 or 解析结果[0] != 平台:
-        return ""
-    return 解析结果[1]
+        文本 = 读取运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键(平台, 群标识),
+            "1",
+        )
+        序号 = int(str(文本 or "1").strip())
+        return 序号 if 序号 > 0 else 1
+    except Exception:
+        return 1
 
 
-def 读取网盘Cookie(配置: Any, 平台: str, 配置Cookie: Any = "") -> str:
+def 获取网盘账号列表(配置: Any, 平台: str, 配置Cookie: Any = "") -> list[str]:
     规范平台 = _规范化平台名称(平台)
-    if 规范平台 and 已配置运行状态数据库(配置):
+    if not 规范平台:
+        return []
+    if 已配置运行状态数据库(配置):
         try:
-            保存Cookie = _读取保存的网盘Cookie(配置, 规范平台)
-            if 保存Cookie:
-                return 保存Cookie
+            保存列表 = _读取保存的网盘账号列表(配置, 规范平台)
+            if 保存列表:
+                return 保存列表
         except Exception as 异常:
             logger.warning(
-                f"{平台显示名[规范平台]}Cookie读取失败：error={type(异常).__name__}"
+                f"{平台显示名[规范平台]}Cookie列表读取失败：error={type(异常).__name__}"
             )
+    if not 配置Cookie:
+        配置Cookie = _读取平台配置Cookie(配置, 规范平台)
     配置原值 = str(配置Cookie or "").strip()
-    if 规范平台 and 配置原值:
-        解析结果 = 解析网盘Cookie(f"{规范平台} Cookie: {配置原值}")
-        if 解析结果 and 解析结果[1]:
-            return 解析结果[1]
-    return 配置原值
+    if not 配置原值:
+        return []
+    解析结果 = 解析网盘Cookie(f"{规范平台} Cookie: {配置原值}")
+    return [解析结果[1]] if 解析结果 and 解析结果[1] else []
+
+
+def 获取网盘账号数量(配置: Any, 平台: str, 配置Cookie: Any = "") -> int:
+    return len(获取网盘账号列表(配置, 平台, 配置Cookie))
+
+
+def 获取当前网盘账号序号(配置: Any, 平台: str, event: Any = None) -> int:
+    账号列表 = 获取网盘账号列表(配置, 平台)
+    if not 账号列表:
+        return 1
+    return min(_读取网盘账号序号(配置, 平台, event), len(账号列表))
+
+
+def 设置网盘账号序号(
+    配置: Any, 平台: str, 序号: int, event: Any = None
+) -> tuple[bool, str]:
+    规范平台 = _规范化平台名称(平台)
+    群标识 = 获取网盘群标识(event)
+    if not 规范平台 or not 群标识:
+        return False, "请在群聊中使用此指令"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，网盘账号选择未保存"
+    账号数量 = 获取网盘账号数量(配置, 规范平台)
+    if 序号 < 1 or 序号 > 账号数量:
+        return False, f"{平台显示名[规范平台]}只有{账号数量}个账号"
+    try:
+        写入运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键(规范平台, 群标识),
+            str(序号),
+        )
+    except Exception as 异常:
+        logger.warning(
+            f"{平台显示名[规范平台]}群账号选择写入失败：error={type(异常).__name__}"
+        )
+        return False, "网盘账号选择失败，请稍后再试"
+    return True, ""
+
+
+def 读取网盘Cookie(
+    配置: Any, 平台: str, 配置Cookie: Any = "", event: Any = None
+) -> str:
+    规范平台 = _规范化平台名称(平台)
+    账号列表 = 获取网盘账号列表(配置, 规范平台, 配置Cookie)
+    if not 账号列表:
+        return str(配置Cookie or "").strip()
+    序号 = min(_读取网盘账号序号(配置, 规范平台, event), len(账号列表))
+    return 账号列表[序号 - 1]
 
 
 def 持久化刷新后的网盘Cookie(
@@ -427,13 +680,28 @@ def 持久化刷新后的网盘Cookie(
     if not 规范平台 or not 新值 or 新值 == 原值 or not 已配置运行状态数据库(配置):
         return
     try:
-        当前保存值 = _读取保存的网盘Cookie(配置, 规范平台)
-        if not 当前保存值 or 当前保存值 != 原值:
-            return
         解析结果 = 解析网盘Cookie(f"{规范平台} Cookie: {新值}")
         if not 解析结果 or not 解析结果[1]:
             return
-        _保存网盘Cookie(配置, 规范平台, 解析结果[1])
+        with 网盘账号写入锁:
+            账号列表 = _读取保存的网盘账号列表(配置, 规范平台)
+            if not 账号列表 or 原值 not in 账号列表:
+                return
+            原位置 = 账号列表.index(原值)
+            新值 = 解析结果[1]
+            其他位置 = next(
+                (
+                    位置
+                    for 位置, 值 in enumerate(账号列表)
+                    if 值 == 新值 and 位置 != 原位置
+                ),
+                None,
+            )
+            if 其他位置 is None:
+                账号列表[原位置] = 新值
+            else:
+                账号列表.pop(原位置)
+            _写入网盘账号列表(配置, 规范平台, 账号列表)
     except Exception as 异常:
         logger.warning(
             f"{平台显示名[规范平台]}Cookie刷新保存失败：error={type(异常).__name__}"
@@ -453,14 +721,7 @@ def _事件发送者标识(event: Any) -> str:
 
 
 def _事件位于群聊(event: Any) -> bool:
-    获取方法 = getattr(event, "get_group_id", None)
-    if callable(获取方法):
-        try:
-            return bool(str(获取方法() or "").strip())
-        except Exception:
-            pass
-    消息对象 = getattr(event, "message_obj", None)
-    return bool(str(getattr(消息对象, "group_id", "") or "").strip())
+    return bool(获取网盘群标识(event))
 
 
 async def _发送扫码结果(event: Any, 文本: str) -> None:
@@ -480,8 +741,8 @@ async def _等待夸克扫码并保存(
     当前任务 = asyncio.current_task()
     try:
         Cookie = await 客户端.等待登录并获取Cookie(Token, timeout=300, interval=2)
-        await asyncio.to_thread(_保存网盘Cookie, 配置, "夸克", Cookie)
-        await _发送扫码结果(event, "夸克网盘登录成功，Cookie已保存并覆盖原登录态")
+        账号序号 = await asyncio.to_thread(_保存网盘Cookie, 配置, "夸克", Cookie)
+        await _发送扫码结果(event, f"夸克网盘登录成功，已保存为账号{账号序号}")
     except asyncio.CancelledError:
         raise
     except TimeoutError:
@@ -510,6 +771,7 @@ async def 停止全部夸克扫码登录任务() -> None:
 
 
 async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = None) -> Any | None:
+    设置当前网盘事件(event)
     文本 = str(命令文本 or "").strip()
     if 文本 in 夸克扫码登录命令:
         if not 是群文件清理管理员(event, 配置):
@@ -561,8 +823,8 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
     if not 已配置运行状态数据库(配置):
         return f"数据库未配置，{显示名}Cookie未保存"
     try:
-        await asyncio.to_thread(_保存网盘Cookie, 配置, 平台, Cookie)
+        账号序号 = await asyncio.to_thread(_保存网盘Cookie, 配置, 平台, Cookie)
     except Exception as 异常:
         logger.warning(f"{显示名}Cookie保存失败：error={type(异常).__name__}")
         return f"{显示名}Cookie保存失败，请稍后再试"
-    return f"{显示名}Cookie已保存并覆盖原登录态"
+    return f"{显示名}Cookie已保存为账号{账号序号}"

@@ -18,7 +18,7 @@
       "uc_pan_cookie": {
         "description": "UC网盘浏览器 Cookie",
         "type": "string",
-        "hint": "可在此填写已登录 UC 网盘的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。发送“换UC”后作为主分享网盘。",
+        "hint": "可在此填写已登录 UC 网盘的完整 Cookie，作为账号1；也可由白名单管理员直接在聊天粘贴，后续同平台 Cookie 会新增为账号2、账号3……并保存到 MySQL。未设置群选择时默认使用账号1，群内发送“UC换N”选择账号。发送“换UC”后作为主分享网盘。",
         "default": ""
       },
       "uc_pan_upload_dir": {
@@ -36,7 +36,7 @@
       "quark_pan_cookie": {
         "description": "夸克网盘浏览器 Cookie",
         "type": "string",
-        "hint": "可在此填写已登录夸克网盘的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。发送“换夸克”后作为主分享网盘。",
+        "hint": "可在此填写已登录夸克网盘的完整 Cookie，作为账号1；也可由白名单管理员直接在聊天粘贴，后续同平台 Cookie 会新增为账号2、账号3……并保存到 MySQL。未设置群选择时默认使用账号1，群内发送“夸换N”或“夸克换N”选择账号。发送“换夸克”后作为主分享网盘。",
         "default": ""
       },
       "quark_pan_upload_dir": {
@@ -54,7 +54,7 @@
       "baidu_pan_cookie": {
         "description": "百度网盘浏览器 Cookie",
         "type": "string",
-        "hint": "可在此填写已登录百度网盘且包含 BDUSS/STOKEN 的完整 Cookie；也可由白名单管理员直接在聊天粘贴，机器人识别后保存到 MySQL 并优先使用。",
+        "hint": "可在此填写已登录百度网盘且包含 BDUSS/STOKEN 的完整 Cookie，作为账号1；也可由白名单管理员直接在聊天粘贴，后续同平台 Cookie 会新增为账号2、账号3……并保存到 MySQL。未设置群选择时默认使用账号1，群内发送“百换N”或“百度换N”选择账号。",
         "default": ""
       },
       "baidu_pan_upload_dir": {

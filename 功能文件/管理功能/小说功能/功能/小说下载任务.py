@@ -46,6 +46,9 @@ async def _消费小说回复流(
     帮助功能: Any,
     权限工具: Any,
 ) -> None:
+    from 功能文件.管理功能.网盘功能 import 小说网盘
+
+    事件令牌 = 小说网盘.设置当前网盘事件(event)
     try:
         async for 内容 in 回复流:
             try:
@@ -65,6 +68,8 @@ async def _消费小说回复流(
             "小说下载后台任务异常：错误类型=%s",
             type(异常).__name__,
         )
+    finally:
+        小说网盘.清除当前网盘事件(事件令牌)
 
 
 def _任务完成(task: asyncio.Task[Any]) -> None:

@@ -55,7 +55,13 @@ def 读取上传任务(缓存路径: str | Path) -> dict[str, Any] | None:
     return 数据 if isinstance(数据, dict) else None
 
 
-def 登记上传任务(缓存路径: str | Path, 文件名: str, 网盘名称: str = "") -> Path:
+def 登记上传任务(
+    缓存路径: str | Path,
+    文件名: str,
+    网盘名称: str = "",
+    *,
+    账号索引: dict[str, int] | None = None,
+) -> Path:
     路径 = Path(缓存路径)
     任务路径 = 获取上传任务路径(路径)
     旧任务 = 读取上传任务(路径) or {}
@@ -71,6 +77,14 @@ def 登记上传任务(缓存路径: str | Path, 文件名: str, 网盘名称: s
         "retry_count": int(旧任务.get("retry_count") or 0),
         "last_error": str(旧任务.get("last_error") or ""),
     }
+    if isinstance(账号索引, dict):
+        数据["account_indices"] = {
+            str(平台): max(1, int(序号))
+            for 平台, 序号 in 账号索引.items()
+            if str(平台) and str(序号).lstrip("+").isdigit()
+        }
+    elif isinstance(旧任务.get("account_indices"), dict):
+        数据["account_indices"] = dict(旧任务["account_indices"])
     if 数据["state"] not in 上传任务状态:
         数据["state"] = "primary_pending"
     _原子写入JSON(任务路径, 数据)

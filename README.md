@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.33.1-2ea44f)
+![version](https://img.shields.io/badge/version-v5.34.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.33.1 |
+| 版本 | v5.34.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -101,7 +101,7 @@ qrcode[pil]
 | --- | --- | --- |
 | 找书 | `找关键词` / `找书 关键词` / `找书名 关键词` / `找作者 关键词` | 聚合搜索多个平台，每页 5 条 |
 | 小说开关 | `开小说` / `关小说` / `开平台名` / `关平台名` | 管理员可独立控制各平台下载开关 |
-| 小说网盘 | `网盘` / `网盘状态` / `当前网盘` / `换UC` / `换夸克` / `换百度` / `夸克登录` | 查看或切换主分享网盘，保存网盘 Cookie |
+| 小说网盘 | `网盘` / `网盘状态` / `当前网盘` / `换UC` / `换夸克` / `换百度` / `UC换N` / `夸换N` / `百度换N` / `夸克登录` | 查看或切换主分享网盘，保存多账号网盘 Cookie；每个平台和每个群独立选择账号，未设置时默认账号1 |
 | 帮助 | `帮助` / `帮助 数字` / `0` | 管理员查看主动触发和被动触发菜单 |
 | 状态 | `状态` | 查看系统、进程、数据库和运行状态 |
 
@@ -151,13 +151,14 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
 
 网盘登录态和当前主网盘保存在 MySQL `mantou_runtime_state` 表：
 
-- `novel_pan_auth`：UC、夸克、百度 Cookie
+- `novel_pan_auth`：按平台保存 UC、夸克、百度 Cookie 账号列表；插件配置中的 Cookie 是账号1，聊天中再次保存同平台 Cookie 会追加账号
+- `novel_pan_account_selection`：按“平台 + 群标识”保存群内账号选择；UC、夸克、百度互不影响，未设置时默认账号1
 - `qq_reader_auth`：QQ阅读 `ywguid` / `ywkey`
 - `novel_share_pan`：当前主分享网盘
 
 未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启，主网盘默认 UC，相关运行状态无法持久化。
 
-管理员可直接粘贴 UC、夸克、百度或 QQ阅读 Cookie，无需命令前缀；数据库登录态优先于插件配置。
+管理员可直接粘贴 UC、夸克、百度或 QQ阅读 Cookie，无需命令前缀；数据库登录态优先于插件配置。保存多个同平台网盘账号后，在目标群发送 `UC换N`、`夸换N`/`夸克换N` 或 `百换N`/`百度换N`，只改变该群对应平台的账号；例如一群发送 `夸换1`、二群发送 `夸换2`，其他网盘选择保持不变。
 
 </details>
 

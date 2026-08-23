@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,22 @@ from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 百�
     "换百度": "百度",
 }
 状态命令 = {"网盘", "网盘状态", "当前网盘"}
+账号选择前缀 = {
+    "UC": "UC",
+    "uc": "UC",
+    "夸": "夸克",
+    "夸克": "夸克",
+    "百": "百度",
+    "百度": "百度",
+}
+
+
+def 设置当前网盘事件(event: Any) -> Any:
+    return 网盘Cookie.设置当前网盘事件(event)
+
+
+def 清除当前网盘事件(令牌: Any) -> None:
+    网盘Cookie.清除当前网盘事件(令牌)
 
 
 async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -> Any | None:
@@ -36,16 +53,39 @@ async def 停止网盘后台任务() -> None:
 
 def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
-    if 文本 not in 切换命令 and 文本 not in 状态命令:
+    设置当前网盘事件(event)
+    账号匹配 = re.fullmatch(
+        r"(?:换\s*)?(UC|uc|夸|夸克|百|百度)\s*换\s*([1-9]\d*)", 文本
+    )
+    if (
+        账号匹配 is None
+        and 文本 not in 切换命令
+        and 文本 not in 状态命令
+    ):
         return None
     if not 是群文件清理管理员(event, 配置):
         return None
+    if 账号匹配 is not None:
+        平台 = 账号选择前缀[账号匹配.group(1)]
+        序号 = int(账号匹配.group(2))
+        成功, 错误 = 网盘Cookie.设置网盘账号序号(
+            配置, 平台, 序号, event
+        )
+        if not 成功:
+            return 错误
+        return f"当前群已切换到{网盘显示名[平台]}账号{序号}"
     if 文本 in 状态命令:
         当前网盘 = 获取当前主网盘(配置)
         状态列表 = [f"当前小说网盘：{网盘显示名[当前网盘]}"]
         for 网盘名称 in ("UC", "夸克", "百度"):
             配置状态 = "已配置" if 主网盘是否启用(网盘名称, 配置) else "未配置"
-            状态列表.append(f"{网盘显示名[网盘名称]}：{配置状态}")
+            账号数量 = 网盘Cookie.获取网盘账号数量(配置, 网盘名称)
+            当前账号 = 网盘Cookie.获取当前网盘账号序号(
+                配置, 网盘名称, event
+            )
+            状态列表.append(
+                f"{网盘显示名[网盘名称]}：{配置状态}，账号{账号数量}个，当前第{当前账号}个"
+            )
         return "\n".join(状态列表)
     目标网盘 = 切换命令[文本]
     try:
@@ -75,12 +115,13 @@ def 主网盘是否启用(网盘名称: str, 配置: Any) -> bool:
     return False
 
 
-async def 上传小说并获取分享链接(
+async def _上传小说并获取分享链接内部(
     配置: Any,
     源缓存路径: str | Path,
     文件名: str,
     *,
     _指定网盘: str | None = None,
+    _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     当前网盘 = _指定网盘 if _指定网盘 in 网盘模块映射 else 获取当前主网盘(配置)
     网盘模块 = 网盘模块映射[当前网盘]
@@ -101,7 +142,12 @@ async def 上传小说并获取分享链接(
             "provider": 网盘显示名[当前网盘],
             "error": "本地文件不存在",
         }
-    下载缓存清理.登记上传任务(源路径, 文件名, 网盘显示名[当前网盘])
+    下载缓存清理.登记上传任务(
+        源路径,
+        文件名,
+        网盘显示名[当前网盘],
+        账号索引=_账号索引,
+    )
     try:
         结果 = await 网盘模块.上传小说并获取分享链接(配置, 源路径, 文件名)
     except Exception as 异常:
@@ -158,6 +204,45 @@ async def 上传小说并获取分享链接(
     return 结果
 
 
+async def 上传小说并获取分享链接(
+    配置: Any,
+    源缓存路径: str | Path,
+    文件名: str,
+    *,
+    _指定网盘: str | None = None,
+    _账号序号: int | None = None,
+    _账号索引: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    当前网盘 = _指定网盘 if _指定网盘 in 网盘模块映射 else 获取当前主网盘(配置)
+    if _账号索引 is None:
+        _账号索引 = {
+            平台: 网盘Cookie.获取当前网盘账号序号(配置, 平台)
+            for 平台 in 网盘模块映射
+        }
+    else:
+        _账号索引 = {
+            平台: max(1, int(序号))
+            for 平台, 序号 in _账号索引.items()
+            if 平台 in 网盘模块映射
+        }
+    if _账号序号 is None:
+        _账号序号 = _账号索引.get(当前网盘, 1)
+    else:
+        _账号序号 = max(1, int(_账号序号))
+        _账号索引[当前网盘] = _账号序号
+    覆盖令牌 = 网盘Cookie.设置网盘账号覆盖(当前网盘, _账号序号)
+    try:
+        return await _上传小说并获取分享链接内部(
+            配置,
+            源缓存路径,
+            文件名,
+            _指定网盘=当前网盘,
+            _账号索引=_账号索引,
+        )
+    finally:
+        网盘Cookie.清除网盘账号覆盖(覆盖令牌)
+
+
 async def 恢复待续传上传任务(配置: Any) -> int:
     """插件重载后恢复 TXT 上传；没有原会话时只恢复网盘任务并清理缓存。"""
     任务列表 = 下载缓存清理.获取待续传上传任务()
@@ -179,12 +264,21 @@ async def 恢复待续传上传任务(配置: Any) -> int:
                 ),
                 None,
             )
+            账号索引 = 任务.get("account_indices")
+            if not isinstance(账号索引, dict):
+                账号索引 = {}
+            try:
+                任务账号序号 = max(1, int(账号索引.get(任务网盘, 1)))
+            except (TypeError, ValueError):
+                任务账号序号 = 1
             try:
                 结果 = await 上传小说并获取分享链接(
                     配置,
                     路径,
                     文件名,
                     _指定网盘=任务网盘,
+                    _账号序号=任务账号序号,
+                    _账号索引=账号索引,
                 )
             except Exception as 异常:
                 logger.warning(f"重载恢复小说上传失败：file={文件名}, error={异常}")
@@ -192,7 +286,16 @@ async def 恢复待续传上传任务(配置: Any) -> int:
             if not 结果.get("success"):
                 continue
             已处理 += 1
-        if not await _恢复百度后台上传(配置, 路径, 文件名):
+        账号索引 = 任务.get("account_indices")
+        if not isinstance(账号索引, dict):
+            账号索引 = {}
+        try:
+            百度账号序号 = max(1, int(账号索引.get("百度", 1)))
+        except (TypeError, ValueError):
+            百度账号序号 = 1
+        if not await _恢复百度后台上传(
+            配置, 路径, 文件名, _账号序号=百度账号序号
+        ):
             下载缓存清理.更新上传任务(
                 路径,
                 "backup_pending",
@@ -204,14 +307,19 @@ async def 恢复待续传上传任务(配置: Any) -> int:
     return 已处理
 
 
-async def _恢复百度后台上传(配置: Any, 路径: Path, 文件名: str) -> bool:
+async def _恢复百度后台上传(
+    配置: Any, 路径: Path, 文件名: str, *, _账号序号: int = 1
+) -> bool:
     if 百度网盘 is None:
         return True
+    覆盖令牌 = 网盘Cookie.设置网盘账号覆盖("百度", _账号序号)
     try:
         结果 = await 百度网盘.后台上传小说文件(配置, 路径, 文件名)
     except Exception as 异常:
         logger.warning(f"重载恢复百度后台上传异常：file={文件名}, error={异常}")
         return False
+    finally:
+        网盘Cookie.清除网盘账号覆盖(覆盖令牌)
     if not isinstance(结果, dict):
         return False
     return bool(结果.get("success") or 结果.get("skipped") or not 结果.get("enabled"))
