@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import uuid
+from http.cookies import SimpleCookie
 from typing import Any
 
 import aiohttp
@@ -178,14 +179,35 @@ class 夸克扫码登录客户端:
             状态 = 数据.get("code") if isinstance(数据, dict) else ""
             raise 夸克扫码登录异常("auth", 状态 or 响应.status)
         Cookie字段: dict[str, str] = {}
-        for 名称, Morsel in getattr(响应, "cookies", {}).items():
-            值 = str(getattr(Morsel, "value", Morsel) or "").strip()
-            if 值:
-                Cookie字段[str(名称)] = 值
+        响应链 = [*(getattr(响应, "history", ()) or ()), 响应]
+        for 响应项 in 响应链:
+            for 名称, Morsel in getattr(响应项, "cookies", {}).items():
+                值 = str(getattr(Morsel, "value", Morsel) or "").strip()
+                if 值:
+                    Cookie字段[str(名称)] = 值
+            头部 = getattr(响应项, "headers", None)
+            获取全部 = getattr(头部, "getall", None)
+            if not callable(获取全部):
+                continue
+            for 原始Cookie in 获取全部("Set-Cookie", ()):
+                try:
+                    解析Cookie = SimpleCookie()
+                    解析Cookie.load(str(原始Cookie))
+                except Exception:
+                    continue
+                for 名称, Morsel in 解析Cookie.items():
+                    值 = str(getattr(Morsel, "value", Morsel) or "").strip()
+                    if 值:
+                        Cookie字段[str(名称)] = 值
         for 地址 in (
+            "https://uop.quark.cn/",
+            "https://su.quark.cn/",
+            "https://b.quark.cn/",
+            "https://quark.cn/",
             "https://pan.quark.cn/",
             "https://pan.quark.cn/account/info",
             "https://drive-pc.quark.cn/",
+            "https://drive-h.quark.cn/",
         ):
             for 名称, Morsel in (
                 self._获取会话().cookie_jar.filter_cookies(URL(地址)).items()
@@ -193,9 +215,18 @@ class 夸克扫码登录客户端:
                 值 = str(getattr(Morsel, "value", Morsel) or "").strip()
                 if 值:
                     Cookie字段[str(名称)] = 值
+        JSON字段, _, _, _ = _提取Cookie字段(json.dumps(数据, ensure_ascii=False))
+        for _, (名称, 值) in JSON字段.items():
+            Cookie字段[名称] = 值
+        for 名称, 值 in _提取夸克扫码JSONCookie(数据).items():
+            Cookie字段[名称] = 值
         Cookie = "; ".join(f"{名称}={值}" for 名称, 值 in Cookie字段.items())
         解析结果 = 解析网盘Cookie(f"夸克 Cookie: {Cookie}")
         if not 解析结果 or not 解析结果[1]:
+            logger.warning(
+                "夸克扫码登录态字段不完整：stage=cookie, fields=%s",
+                ",".join(sorted(名称.lower() for 名称 in Cookie字段)),
+            )
             raise 夸克扫码登录异常("cookie", "missing_required_fields")
         return 解析结果[1]
 
@@ -418,6 +449,30 @@ def _提取Cookie字段(文本: Any) -> tuple[dict[str, tuple[str, str]], set[st
                 名称, 值 = 片段.split("=", 1)
                 _写入Cookie字段(字段, 名称, 值)
     return 字段, 域名, 指定平台, 原文
+
+
+def _提取夸克扫码JSONCookie(数据: Any) -> dict[str, str]:
+    """兼容账号接口把 Cookie 放在 JSON 字符串字段中的返回格式。"""
+    结果: dict[str, str] = {}
+
+    def 遍历(对象: Any) -> None:
+        if isinstance(对象, dict):
+            for 键, 值 in 对象.items():
+                if isinstance(值, str) and (
+                    "=" in 值
+                    or str(键).lower() in {"cookie", "cookies", "set-cookie"}
+                ):
+                    字段, _, _, _ = _提取Cookie字段(值)
+                    for _, (名称, 字段值) in 字段.items():
+                        结果[名称] = 字段值
+                elif isinstance(值, (dict, list, tuple)):
+                    遍历(值)
+        elif isinstance(对象, (list, tuple)):
+            for 项目 in 对象:
+                遍历(项目)
+
+    遍历(数据)
+    return 结果
 
 
 def _识别平台(
