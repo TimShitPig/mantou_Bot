@@ -22,6 +22,24 @@ from 功能文件.管理功能.基础功能.权限工具 import (
 QQ官方成员OpenID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 QQ官方提及Markdown开头规则 = re.compile(r"^\s*<@[A-Za-z0-9_-]{5,128}>(?:\s|\r|\n)*")
 
+
+def 获取帮助网页地址(配置: Any = None) -> str:
+    """延迟读取帮助网页地址，避免帮助菜单与网页模块循环导入。"""
+    try:
+        from 功能文件.管理功能.基础功能 import 帮助网页
+
+        return 帮助网页.获取帮助网页地址(配置)
+    except Exception as exc:
+        logger.debug("帮助网页地址读取失败：错误类型=%s", type(exc).__name__)
+        return ""
+
+
+def 附加帮助网页地址(文本: str, 配置: Any = None) -> str:
+    地址 = 获取帮助网页地址(配置)
+    if not 地址:
+        return 文本
+    return f"{文本}\n\n网页版帮助：{地址}"
+
 帮助大类 = [
     {
         "名称": "主动触发",
@@ -265,7 +283,7 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         if 编号:
             return 进入大类小类列表(会话键, 编号)
         设置帮助状态(会话键, "大类")
-        return 格式化帮助大类()
+        return 附加帮助网页地址(格式化帮助大类(), 配置)
 
     帮助状态 = 获取有效帮助状态(会话键)
     是管理员 = 是群文件清理管理员(event, 配置)
@@ -276,7 +294,7 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
             待选择帮助会话.pop(会话键, None)
             return None
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
-        return 处理帮助数字选择(会话键, 帮助状态, 编号文本)
+        return 处理帮助数字选择(会话键, 帮助状态, 编号文本, 配置)
     if 帮助状态 is None and 文本 in 返回上一步别名:
         if not 是管理员:
             return None
@@ -380,13 +398,15 @@ def 格式化帮助详情(大类序号: int, 小类序号: int, 触发编号文�
     )
 
 
-def 处理帮助数字选择(会话键: str, 帮助状态: dict[str, Any], 编号文本: str) -> str:
+def 处理帮助数字选择(
+    会话键: str, 帮助状态: dict[str, Any], 编号文本: str, 配置: Any = None
+) -> str:
     层级 = 帮助状态.get("层级")
     大类序号 = 帮助状态.get("大类序号")
     小类序号 = 帮助状态.get("小类序号")
 
     if 编号文本 == "0":
-        return 返回帮助上一层(会话键, 层级, 大类序号, 小类序号)
+        return 返回帮助上一层(会话键, 层级, 大类序号, 小类序号, 配置)
 
     if 层级 == "大类":
         return 进入大类小类列表(会话键, 编号文本)
@@ -409,10 +429,16 @@ def 处理帮助数字选择(会话键: str, 帮助状态: dict[str, Any], 编�
         return 格式化帮助详情(大类序号, 小类序号, 编号文本)
 
     设置帮助状态(会话键, "大类")
-    return 格式化帮助大类()
+    return 附加帮助网页地址(格式化帮助大类(), 配置)
 
 
-def 返回帮助上一层(会话键: str, 层级: str, 大类序号: Any, 小类序号: Any) -> str:
+def 返回帮助上一层(
+    会话键: str,
+    层级: str,
+    大类序号: Any,
+    小类序号: Any,
+    配置: Any = None,
+) -> str:
     if 层级 == "详情" and isinstance(大类序号, int) and isinstance(小类序号, int):
         设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
         return 格式化小类触发项列表(大类序号, 小类序号)
@@ -421,7 +447,7 @@ def 返回帮助上一层(会话键: str, 层级: str, 大类序号: Any, 小类
         return 格式化小类列表(大类序号)
     if 层级 == "小类" and isinstance(大类序号, int):
         设置帮助状态(会话键, "大类")
-        return 格式化帮助大类()
+        return 附加帮助网页地址(格式化帮助大类(), 配置)
     待选择帮助会话.pop(会话键, None)
     return "已退出帮助菜单"
 
@@ -482,13 +508,15 @@ def 格式化帮助详情MD(大类序号: int, 小类序号: int, 触发编号�
     )
 
 
-def 处理帮助数字选择MD(会话键: str, 帮助状态: dict[str, Any], 编号文本: str) -> str:
+def 处理帮助数字选择MD(
+    会话键: str, 帮助状态: dict[str, Any], 编号文本: str, 配置: Any = None
+) -> str:
     层级 = 帮助状态.get("层级")
     大类序号 = 帮助状态.get("大类序号")
     小类序号 = 帮助状态.get("小类序号")
 
     if 编号文本 == "0":
-        return 返回帮助上一层MD(会话键, 层级, 大类序号, 小类序号)
+        return 返回帮助上一层MD(会话键, 层级, 大类序号, 小类序号, 配置)
 
     if 层级 == "大类":
         return 进入大类小类列表MD(会话键, 编号文本)
@@ -511,10 +539,16 @@ def 处理帮助数字选择MD(会话键: str, 帮助状态: dict[str, Any], 编
         return 格式化帮助详情MD(大类序号, 小类序号, 编号文本)
 
     设置帮助状态(会话键, "大类")
-    return 格式化帮助大类MD()
+    return 附加帮助网页地址(格式化帮助大类MD(), 配置)
 
 
-def 返回帮助上一层MD(会话键: str, 层级: str, 大类序号: Any, 小类序号: Any) -> str:
+def 返回帮助上一层MD(
+    会话键: str,
+    层级: str,
+    大类序号: Any,
+    小类序号: Any,
+    配置: Any = None,
+) -> str:
     if 层级 == "详情" and isinstance(大类序号, int) and isinstance(小类序号, int):
         设置帮助状态(会话键, "触发项", 大类序号, 小类序号)
         return 格式化小类触发项列表MD(大类序号, 小类序号)
@@ -523,7 +557,7 @@ def 返回帮助上一层MD(会话键: str, 层级: str, 大类序号: Any, 小�
         return 格式化小类列表MD(大类序号)
     if 层级 == "小类" and isinstance(大类序号, int):
         设置帮助状态(会话键, "大类")
-        return 格式化帮助大类MD()
+        return 附加帮助网页地址(格式化帮助大类MD(), 配置)
     待选择帮助会话.pop(会话键, None)
     return "已退出帮助菜单"
 
@@ -626,11 +660,32 @@ def 按钮分行带返回(
     return 行
 
 
-def 生成帮助大类键盘(自动发送: bool = False) -> dict[str, Any]:
+def 生成帮助网页按钮(配置: Any = None) -> dict[str, Any] | None:
+    地址 = 获取帮助网页地址(配置)
+    if not 地址:
+        return None
+    return {
+        "id": "help_web",
+        "render_data": {"label": "打开网页版帮助", "visited_label": "打开网页版帮助"},
+        "action": {
+            "type": 0,
+            "permission": {"type": 2},
+            "data": 地址,
+            "unsupport_tips": "请复制网页版帮助地址打开",
+        },
+    }
+
+
+def 生成帮助大类键盘(
+    自动发送: bool = False, 配置: Any = None
+) -> dict[str, Any]:
     按钮列表 = [
         生成帮助回调按钮(大类["名称"], 大类["名称"], 自动发送=自动发送)
         for 大类 in 帮助大类
     ]
+    网页按钮 = 生成帮助网页按钮(配置)
+    if 网页按钮 is not None:
+        按钮列表.append(网页按钮)
     return {"rows": 按钮分行带返回(按钮列表, 生成帮助返回回调按钮(自动发送))}
 
 
@@ -707,7 +762,7 @@ def 获取帮助键盘(
     大类序号 = 帮助状态.get("大类序号")
     小类序号 = 帮助状态.get("小类序号")
     if 层级 == "大类":
-        return 生成帮助大类键盘(自动发送)
+        return 生成帮助大类键盘(自动发送, 配置)
     if 层级 == "小类" and isinstance(大类序号, int):
         键盘 = 生成小类键盘(大类序号, 自动发送)
         return 检查键盘行数(键盘, 大类序号, None)
@@ -821,7 +876,7 @@ def 处理帮助指令MD带键盘(
             md文本 = 进入大类小类列表MD(会话键, 编号)
         else:
             设置帮助状态(会话键, "大类")
-            md文本 = 格式化帮助大类MD()
+            md文本 = 附加帮助网页地址(格式化帮助大类MD(), 配置)
         键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
 
@@ -834,14 +889,14 @@ def 处理帮助指令MD带键盘(
             待选择帮助会话.pop(会话键, None)
             return None, None
         编号文本 = "0" if 文本 in 返回上一步别名 else 文本
-        md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本)
+        md文本 = 处理帮助数字选择MD(会话键, 帮助状态, 编号文本, 配置)
         键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
     if 帮助状态 is None and 文本 in 返回上一步别名:
         if not 是管理员:
             return None, None
         设置帮助状态(会话键, "大类")
-        md文本 = 格式化帮助大类MD()
+        md文本 = 附加帮助网页地址(格式化帮助大类MD(), 配置)
         键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
     目标 = 匹配任意层级名称(文本)

@@ -11,6 +11,30 @@
       }
     }
   },
+  "help_web_settings": {
+    "description": "帮助网页设置",
+    "type": "object",
+    "items": {
+      "help_web_domain": {
+        "description": "帮助网页外网地址",
+        "type": "string",
+        "hint": "填写浏览器可访问的完整地址，例如 https://help.example.com/；填写后插件启动网页服务并在帮助菜单显示网页版按钮，留空则不启动。",
+        "default": ""
+      },
+      "help_web_host": {
+        "description": "帮助网页监听地址",
+        "type": "string",
+        "hint": "通常保持 0.0.0.0；如果由反向代理转发到本机，请确保代理目标端口可访问。",
+        "default": "0.0.0.0"
+      },
+      "help_web_port": {
+        "description": "帮助网页监听端口",
+        "type": "string",
+        "hint": "默认 8090；域名需要由反向代理转发到此端口。",
+        "default": "8090"
+      }
+    }
+  },
   "uc_pan_settings": {
     "description": "UC网盘设置",
     "type": "object",

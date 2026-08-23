@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.36.0-2ea44f)
+![version](https://img.shields.io/badge/version-v5.37.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.36.0 |
+| 版本 | v5.37.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -30,6 +30,18 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 ```
 
 安装后到 AstrBot WebUI 的插件管理里重载插件。
+
+### 网页帮助
+
+在 AstrBot 插件配置的“帮助网页设置”中填写外网地址，例如：
+
+```text
+帮助网页外网地址: https://help.example.com/
+帮助网页监听地址: 0.0.0.0
+帮助网页监听端口: 8090
+```
+
+将域名或反向代理转发到该端口后，重载插件并发送 `帮助`。QQ 官方帮助菜单会显示“打开网页版帮助”按钮；其他适配器会在帮助文字中显示网页地址。未填写地址时网页服务不启动，原有帮助功能不受影响。网页使用响应式布局，手机和电脑均可访问。
 
 ### 私有仓库安装
 

@@ -64,6 +64,10 @@
 - 想取消或降低触发概率，应在 AstrBot 配置里调大 `count`、调小 `time`，或把 `strategy` 改成 `discard`；插件内无法清除已经由 AstrBot 核心挂起的会话。
 - 如果已经触发 `stall`，通常只能等待暂停时间结束；想立即恢复应先尝试在 WebUI 禁用/启用对应会话或重载配置，仍无效再重启 AstrBot。
 
+## 帮助网页
+
+- 响应式帮助网页放在 `功能文件/管理功能/基础功能/帮助网页.py`，只读 `帮助功能.帮助大类` 生成分类、触发词和详情，不重复维护命令表。插件配置 `_conf_schema.json` 的 `help_web_settings` 包含 `help_web_domain`、`help_web_host` 和 `help_web_port`；填写有效 HTTP/HTTPS 外网地址后由插件生命周期启动 `aiohttp` 网页服务，帮助顶层菜单显示外链按钮，未填写地址时不启动网页且原有文字/回调帮助保持可用。官方机器人帮助菜单按钮使用 `action.type=1` 回调；仅“打开网页版帮助”外链按钮使用 `action.type=0`。
+
 ## 功能边界
 
 - 不保留用户激活、卡密、收费、付费或每日免费额度功能；所有小说下载均免费。运行状态只使用 MySQL 的 `mantou_runtime_state` 表，不再创建或读取激活、卡密和免费额度表。
