@@ -581,6 +581,18 @@ def 解析网盘Cookie(文本: Any) -> tuple[str, str] | None:
     return 平台, _序列化Cookie字段(字段)
 
 
+def _获取网盘Cookie身份键(平台: str, Cookie: Any) -> str:
+    """返回不随会话刷新变化的账号键；夸克优先使用用户 ID。"""
+    if 平台 != "夸克":
+        return ""
+    字段, _, _, _ = _提取Cookie字段(Cookie)
+    for 名称 in ("__uid", "b-user-id", "__kps"):
+        值 = 字段.get(名称)
+        if 值 and 值[1]:
+            return f"{平台}:{名称}:{值[1]}"
+    return ""
+
+
 def _解析保存的网盘账号列表(原始值: Any, 平台: str) -> list[str]:
     文本 = str(原始值 or "").strip()
     if not 文本:
@@ -658,17 +670,27 @@ def _读取平台配置Cookie(配置: Any, 平台: str) -> Any:
 
 
 def _保存网盘Cookie(配置: Any, 平台: str, Cookie: str) -> int:
-    """新增平台账号并返回账号序号；相同 Cookie 不重复占用新序号。"""
+    """保存平台账号；同一夸克身份刷新 Cookie 时保留原账号序号。"""
+    规范平台 = _规范化平台名称(平台)
+    新身份键 = _获取网盘Cookie身份键(规范平台, Cookie)
     with 网盘账号写入锁:
-        账号列表 = _读取保存的网盘账号列表(配置, 平台)
+        账号列表 = _读取保存的网盘账号列表(配置, 规范平台)
         if not 账号列表:
-            配置Cookie = _读取平台配置Cookie(配置, 平台)
-            配置结果 = 解析网盘Cookie(f"{平台} Cookie: {配置Cookie or ''}")
-            if 配置结果 and 配置结果[1]:
+            配置Cookie = _读取平台配置Cookie(配置, 规范平台)
+            配置结果 = 解析网盘Cookie(f"{规范平台} Cookie: {配置Cookie or ''}")
+            if 配置结果 and 配置结果[0] == 规范平台 and 配置结果[1]:
                 账号列表.append(配置结果[1])
+        if 新身份键:
+            for 位置, 已保存Cookie in enumerate(账号列表):
+                if _获取网盘Cookie身份键(规范平台, 已保存Cookie) != 新身份键:
+                    continue
+                if 已保存Cookie != Cookie:
+                    账号列表[位置] = Cookie
+                    _写入网盘账号列表(配置, 规范平台, 账号列表)
+                return 位置 + 1
         if Cookie not in 账号列表:
             账号列表.append(Cookie)
-            _写入网盘账号列表(配置, 平台, 账号列表)
+            _写入网盘账号列表(配置, 规范平台, 账号列表)
         return 账号列表.index(Cookie) + 1
 
 
