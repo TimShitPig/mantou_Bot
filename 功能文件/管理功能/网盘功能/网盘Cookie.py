@@ -51,6 +51,7 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克二维码Token地址 = "https://uop.quark.cn/cas/ajax/getTokenForQrcodeLogin"
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
+夸克扫码刷新Cookie地址 = "https://drive-pc.quark.cn/1/clouddrive/auth/pc/flush"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
 当前网盘事件: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "mantou_current_pan_event", default=None
@@ -179,26 +180,31 @@ class 夸克扫码登录客户端:
             状态 = 数据.get("code") if isinstance(数据, dict) else ""
             raise 夸克扫码登录异常("auth", 状态 or 响应.status)
         Cookie字段: dict[str, str] = {}
-        响应链 = [*(getattr(响应, "history", ()) or ()), 响应]
-        for 响应项 in 响应链:
-            for 名称, Morsel in getattr(响应项, "cookies", {}).items():
-                值 = str(getattr(Morsel, "value", Morsel) or "").strip()
-                if 值:
-                    Cookie字段[str(名称)] = 值
-            头部 = getattr(响应项, "headers", None)
-            获取全部 = getattr(头部, "getall", None)
-            if not callable(获取全部):
-                continue
-            for 原始Cookie in 获取全部("Set-Cookie", ()):
-                try:
-                    解析Cookie = SimpleCookie()
-                    解析Cookie.load(str(原始Cookie))
-                except Exception:
-                    continue
-                for 名称, Morsel in 解析Cookie.items():
+
+        def 收集响应Cookie(响应链: Any) -> None:
+            for 响应项 in 响应链:
+                for 名称, Morsel in getattr(响应项, "cookies", {}).items():
                     值 = str(getattr(Morsel, "value", Morsel) or "").strip()
                     if 值:
                         Cookie字段[str(名称)] = 值
+                头部 = getattr(响应项, "headers", None)
+                获取全部 = getattr(头部, "getall", None)
+                if not callable(获取全部):
+                    continue
+                for 原始Cookie in 获取全部("Set-Cookie", ()):
+                    try:
+                        解析Cookie = SimpleCookie()
+                        解析Cookie.load(str(原始Cookie))
+                    except Exception:
+                        continue
+                    for 名称, Morsel in 解析Cookie.items():
+                        值 = str(getattr(Morsel, "value", Morsel) or "").strip()
+                        if 值:
+                            Cookie字段[str(名称)] = 值
+
+        响应链 = [*(getattr(响应, "history", ()) or ()), 响应]
+        收集响应Cookie(响应链)
+        刷新响应链: list[Any] = []
         for 地址 in (
             "https://uop.quark.cn/",
             "https://su.quark.cn/",
@@ -215,11 +221,53 @@ class 夸克扫码登录客户端:
                 值 = str(getattr(Morsel, "value", Morsel) or "").strip()
                 if 值:
                     Cookie字段[str(名称)] = 值
+        if "__puus" not in {名称.lower() for 名称 in Cookie字段} and "__pus" in {
+            名称.lower() for 名称 in Cookie字段
+        }:
+            当前Cookie = "; ".join(
+                f"{名称}={值}" for 名称, 值 in Cookie字段.items()
+            )
+            try:
+                async with self._获取会话().get(
+                    夸克扫码刷新Cookie地址,
+                    params={"pr": "ucpro", "fr": "pc", "uc_param_str": ""},
+                    headers={
+                        "Cookie": 当前Cookie,
+                        "Origin": "https://pan.quark.cn",
+                        "Referer": "https://pan.quark.cn/",
+                    },
+                    allow_redirects=True,
+                ) as 刷新响应:
+                    刷新响应链 = [
+                        *(getattr(刷新响应, "history", ()) or ()),
+                        刷新响应,
+                    ]
+                    收集响应Cookie(刷新响应链)
+                    if not 200 <= int(getattr(刷新响应, "status", 0) or 0) < 300:
+                        logger.warning(
+                            "夸克扫码刷新登录态失败：stage=auth, status=%s, error=http_status",
+                            getattr(刷新响应, "status", "unknown"),
+                        )
+                    读取正文 = getattr(刷新响应, "read", None)
+                    if callable(读取正文):
+                        读取结果 = 读取正文()
+                        if inspect.isawaitable(读取结果):
+                            await 读取结果
+            except Exception as 异常:
+                logger.warning(
+                    "夸克扫码刷新登录态失败：stage=auth, status=flush, error=%s",
+                    type(异常).__name__,
+                )
+        if 刷新响应链:
+            收集响应Cookie(刷新响应链)
+
         JSON字段, _, _, _ = _提取Cookie字段(json.dumps(数据, ensure_ascii=False))
         for _, (名称, 值) in JSON字段.items():
             Cookie字段[名称] = 值
         for 名称, 值 in _提取夸克扫码JSONCookie(数据).items():
             Cookie字段[名称] = 值
+        if 刷新响应链:
+            收集响应Cookie(刷新响应链)
         Cookie = "; ".join(f"{名称}={值}" for 名称, 值 in Cookie字段.items())
         解析结果 = 解析网盘Cookie(f"夸克 Cookie: {Cookie}")
         if not 解析结果 or not 解析结果[1]:
