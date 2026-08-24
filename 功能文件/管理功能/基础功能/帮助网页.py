@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.42.0"
+控制台版本 = "5.42.1"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1312,6 +1312,58 @@ _网页头部 = """<!doctype html>
       .summary-card:hover,.shortcut-card:hover,.pan-card:hover,.runtime-item:hover { transform:translateY(-2px); }
       .shortcut-card { cursor:default; }
       .switch:active { animation:switch-feedback .22s ease both; }
+     /* Novel controls use an unframed workspace with compact, real controls. */
+     .novel-console { margin-top:18px; padding:4px 0 0; }
+     .novel-console-head { display:flex; align-items:flex-start; justify-content:space-between; gap:22px; margin-bottom:20px; }
+     .novel-console-head h2 { margin:4px 0 0; font-size:23px; letter-spacing:0; }
+     .novel-console-head .card-subtitle { margin:7px 0 0; max-width:520px; }
+     .novel-overline,.novel-panel-kicker,.novel-platform-overline { color:#9295aa; font-size:10px; font-weight:800; letter-spacing:1.3px; }
+     .novel-state-pill { display:inline-flex; align-items:center; gap:8px; min-height:34px; padding:0 12px; border:1px solid #dbe8df; border-radius:999px; background:#f4fbf7; color:#318260; white-space:nowrap; }
+     .novel-state-pill.is-off { border-color:#e3e4eb; background:#fafafd; color:#838697; }
+     .novel-state-dot { width:7px; height:7px; border-radius:50%; background:#4eb781; box-shadow:0 0 0 4px #e3f6eb; }
+     .novel-state-pill.is-off .novel-state-dot { background:#a7a9b6; box-shadow:0 0 0 4px #eff0f4; }
+     .novel-state-pill strong { font-size:11px; font-weight:750; }
+     .novel-control-grid { display:grid; grid-template-columns:minmax(0,1.42fr) minmax(280px,.92fr); gap:12px; }
+     .novel-master-panel,.novel-test-panel { min-height:178px; padding:20px; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:0 5px 18px rgba(55,59,103,.045); }
+     .novel-master-panel { border-color:#dedcff; background:#fbfaff; }
+     .novel-test-panel { border-color:#f0ded4; background:#fffaf7; }
+     .novel-panel-kicker { display:flex; align-items:center; gap:8px; color:#716cbf; letter-spacing:.7px; }
+     .novel-test-panel .novel-panel-kicker { color:#bf7961; }
+     .novel-panel-icon { width:25px; height:25px; display:grid; place-items:center; border-radius:7px; background:#ecebff; color:#605bd2; font-size:12px; letter-spacing:0; }
+     .novel-test-panel .novel-panel-icon { background:#ffebe2; color:#c5755b; }
+     .novel-master-copy h3,.novel-test-panel h3 { margin:19px 0 4px; font-size:17px; }
+     .novel-master-copy p,.novel-test-panel p { max-width:410px; margin:0; color:#777a8e; font-size:12px; line-height:1.65; }
+     .novel-master-actions,.novel-test-actions { display:flex; align-items:flex-end; justify-content:space-between; gap:15px; margin-top:18px; }
+     .novel-master-state { display:grid; gap:2px; }
+     .novel-master-state strong { color:var(--ink); font-size:12px; }
+     .novel-master-state span,.novel-test-note { color:#9698aa; font-size:11px; }
+     .novel-console .novel-master-panel .switch { width:50px; height:28px; }
+     .novel-console .novel-master-panel .switch span { width:22px; height:22px; }
+     .novel-console .novel-master-panel .switch.on span { transform:translateX(22px); }
+     .novel-test-actions { align-items:center; margin-top:20px; }
+     .novel-test-actions .switch { transform:scale(.95); transform-origin:right center; }
+     .novel-platform-head { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin:29px 0 12px; }
+     .novel-platform-head h3 { margin:4px 0 0; font-size:15px; }
+     .novel-platform-count { color:#76798d; font-size:11px; }
+     .novel-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+     .novel-item { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:78px; padding:14px 16px; border:1px solid #e8e9f1; border-radius:9px; background:#fff; box-shadow:none; transition:border-color .2s ease,background .2s ease,transform .2s ease,box-shadow .2s ease; }
+     .novel-item:hover { border-color:#cfcdf3; background:#fdfdff; transform:translateY(-2px); box-shadow:0 7px 18px rgba(55,59,103,.06); }
+     .novel-item.is-enabled { border-color:#d8e9df; }
+     .novel-item.is-disabled { background:#fcfcfd; }
+     .novel-item-main { display:flex; align-items:center; gap:11px; min-width:0; }
+     .novel-badge { width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border-radius:10px; background:#efeeff; color:#625dd4; font-size:12px; font-weight:800; }
+     .novel-item:nth-child(3n+2) .novel-badge { background:#e8f8ef; color:#35936a; }
+     .novel-item:nth-child(3n) .novel-badge { background:#fff0e9; color:#ca7b5f; }
+     .novel-item-copy { min-width:0; }
+     .novel-item-title { display:flex; align-items:center; gap:8px; min-width:0; }
+     .novel-item-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+     .novel-item-copy small { display:block; margin-top:4px; color:#999bab; font-size:10px; }
+     .novel-item-status { flex:0 0 auto; color:#9a9cad; font-size:10px; }
+     .novel-item.is-enabled .novel-item-status { color:#35936a; }
+     .novel-item .switch { transform:scale(.9); transform-origin:right center; }
+     .novel-item .switch:focus-visible,.novel-master-panel .switch:focus-visible,.novel-test-panel .switch:focus-visible { outline:3px solid #c9c6ff; outline-offset:3px; }
+     @media (max-width:900px) { .novel-control-grid { grid-template-columns:1fr; } }
+     @media (max-width:760px) { .novel-console { margin-top:15px; padding-top:0; } .novel-console-head { display:block; } .novel-state-pill { margin-top:14px; } .novel-master-panel,.novel-test-panel { min-height:0; padding:17px; } .novel-master-copy h3,.novel-test-panel h3 { margin-top:15px; } .novel-platform-head { align-items:flex-start; margin-top:24px; } .novel-platform-head { display:block; } .novel-platform-count { display:block; margin-top:6px; } .novel-grid { grid-template-columns:1fr; } .novel-item { min-height:72px; padding:13px 14px; } }
       @media (prefers-reduced-motion: reduce) {
         *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; }
       }
@@ -1360,7 +1412,15 @@ _网页主体 = """
           <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单和帮助网页账号；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读登录态</h2><p class="card-subtitle">只保存 ywguid 和 ywkey，不显示原值。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>登录凭据</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>只写不读</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
         </section>
 
-        <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="console-card module-card standalone-card"><h2>小说功能</h2><p class="card-subtitle">这里的开关会写入运行状态数据库，关闭后对应平台不会进入下载流程。</p><div class="global-bar"><div class="global-copy"><strong>全部小说功能</strong><span>控制下载、找书和翻页总入口</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div><div class="test-mode global-bar"><div class="global-copy"><strong>管理员测试模式</strong><span>仅管理员可用，不改变普通用户的关闭限制</span></div><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><div class="module-heading"><h3>平台开关</h3><span>逐个平台控制</span></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></article></section>
+        <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="novel-console standalone-card">
+          <header class="novel-console-head"><div><span class="novel-overline">NOVEL CONTROL</span><h2>小说功能</h2><p class="card-subtitle">集中管理小说入口和平台状态，下载逻辑保持不变。</p></div><div id="novel-state-pill" class="novel-state-pill"><span class="novel-state-dot"></span><strong>读取中</strong></div></header>
+          <div class="novel-control-grid">
+            <section class="novel-master-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">全</span><span>GLOBAL ACCESS</span></div><div class="novel-master-copy"><h3>全部小说功能</h3><p>控制下载、找书和翻页的总入口。关闭后所有平台都会暂停响应。</p></div><div class="novel-master-actions"><div class="novel-master-state"><strong id="novel-master-label">读取中</strong><span id="novel-platform-summary">正在读取平台状态</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></section>
+            <section class="novel-test-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">测</span><span>ADMIN MODE</span></div><h3>管理员测试模式</h3><p>只影响管理员测试，不会绕过普通用户的平台开关。</p><div class="novel-test-actions"><span id="novel-test-label" class="novel-test-note">状态读取中</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div></section>
+          </div>
+          <div class="novel-platform-head"><div><span class="novel-platform-overline">PLATFORMS</span><h3>平台开关</h3></div><span id="novel-enabled-count" class="novel-platform-count">-- / -- 已开启</span></div>
+          <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
+        </article></section>
 
         <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">主分享网盘会用于所有小说完成消息。切换后立即保存。</p><div class="pan-note"><span>当前主分享网盘</span><strong id="pan-active-label">--</strong></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
 
@@ -1413,6 +1473,7 @@ _网页脚本 = """
         window.scrollTo({top:0, behavior:'auto'});
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
+      const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
       const categoryOrder = ['basic_settings', 'help_web_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
       const safeFieldValue = (field) => {
         if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\\n') : '';
@@ -1467,7 +1528,16 @@ _网页脚本 = """
         $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`; $('console-version').textContent = `v${data.version || '--'}`;
         $('dashboard-cpu').textContent = server.cpu || '--'; $('dashboard-memory').textContent = server.memory || '--'; $('dashboard-runtime').textContent = server.runtime || '--'; $('dashboard-updated').textContent = '刚刚';
         [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
-        $('novel-grid').innerHTML = (novels.platforms || []).map((item) => `<div class="novel-item"><div class="novel-name"><div class="novel-badge">书</div><div><strong>${esc(item.name)}</strong><small>${item.enabled ? '当前可用' : '已停用'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
+        const platforms = novels.platforms || [];
+        const enabledCount = platforms.filter((item) => item.enabled).length;
+        const totalCount = platforms.length;
+        const novelState = $('novel-state-pill');
+        if (novelState) { novelState.classList.toggle('is-off', !novels.global_enabled); novelState.querySelector('strong').textContent = novels.global_enabled ? '入口已开启' : '入口已关闭'; }
+        if ($('novel-master-label')) $('novel-master-label').textContent = novels.global_enabled ? '下载入口已开启' : '下载入口已关闭';
+        if ($('novel-platform-summary')) $('novel-platform-summary').textContent = `已开启 ${enabledCount} 个平台`;
+        if ($('novel-enabled-count')) $('novel-enabled-count').textContent = `${enabledCount} / ${totalCount} 已开启`;
+        if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
+        $('novel-grid').innerHTML = platforms.map((item) => `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
         $('pan-active-label').textContent = pans.active || '--';
         $('pan-grid').innerHTML = (pans.items || []).map((item) => renderPanCard(item, pans.editable)).join('') || '<div class="empty">没有网盘数据</div>';
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
