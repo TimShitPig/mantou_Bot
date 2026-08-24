@@ -3,7 +3,7 @@ set -euo pipefail
 
 target="${1:-MODIFIED_FILE}"
 baseline_path="${2:-main.py}"
-baseline_commit="${MANTOU_BASELINE_COMMIT:-e44c056059bb0b2c2ead1ca9642b3342aa4ddde5}"
+baseline_commit="${MANTOU_BASELINE_COMMIT:-045434b1ae6d2f5744d3ad5414563613ff7e5646}"
 
 if [[ ! -f "$target" ]]; then
   printf 'ROLLBACK_TARGET_MISSING %s\n' "$target" >&2
