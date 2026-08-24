@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hmac
+import inspect
 import ipaddress
+import json
 import logging
+import re
 import secrets
 import socket
 import time
@@ -20,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.41.1"
+控制台版本 = "5.42.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -41,6 +45,121 @@ class 帮助网页服务:
 网页服务启动状态: bool | None = globals().get("网页服务启动状态")
 当前帮助网页配置: Any = globals().get("当前帮助网页配置")
 控制台会话: dict[str, float] = globals().get("控制台会话") or {}
+
+插件配置字段定义: dict[str, dict[str, Any]] = {
+    "group_file_cleanup_admin_qq": {
+        "category": "basic_settings",
+        "label": "插件管理员白名单",
+        "kind": "admin_list",
+        "secret": False,
+    },
+    "help_web_domain": {
+        "category": "help_web_settings",
+        "label": "帮助网页外网地址",
+        "kind": "text",
+        "secret": False,
+    },
+    "help_web_host": {
+        "category": "help_web_settings",
+        "label": "帮助网页监听地址",
+        "kind": "text",
+        "secret": False,
+    },
+    "help_web_port": {
+        "category": "help_web_settings",
+        "label": "帮助网页监听端口",
+        "kind": "number",
+        "secret": False,
+    },
+    "help_web_admin_username": {
+        "category": "help_web_settings",
+        "label": "帮助网页登录账号",
+        "kind": "text",
+        "secret": False,
+    },
+    "help_web_admin_password": {
+        "category": "help_web_settings",
+        "label": "帮助网页登录密码",
+        "kind": "secret",
+        "secret": True,
+    },
+    "uc_pan_cookie": {
+        "category": "uc_pan_settings",
+        "label": "UC 网盘 Cookie",
+        "kind": "secret",
+        "secret": True,
+    },
+    "uc_pan_upload_dir": {
+        "category": "uc_pan_settings",
+        "label": "UC 上传目录",
+        "kind": "text",
+        "secret": False,
+    },
+    "quark_pan_cookie": {
+        "category": "quark_pan_settings",
+        "label": "夸克网盘 Cookie",
+        "kind": "secret",
+        "secret": True,
+    },
+    "quark_pan_upload_dir": {
+        "category": "quark_pan_settings",
+        "label": "夸克上传目录",
+        "kind": "text",
+        "secret": False,
+    },
+    "baidu_pan_cookie": {
+        "category": "baidu_pan_settings",
+        "label": "百度网盘 Cookie",
+        "kind": "secret",
+        "secret": True,
+    },
+    "baidu_pan_upload_dir": {
+        "category": "baidu_pan_settings",
+        "label": "百度上传目录",
+        "kind": "text",
+        "secret": False,
+    },
+    "baidu_pan_upload_status": {
+        "category": "baidu_pan_settings",
+        "label": "百度后台备份状态",
+        "kind": "select",
+        "secret": False,
+        "options": ["完结", "连载", "全部"],
+    },
+    "database_host": {
+        "category": "database_settings",
+        "label": "数据库地址",
+        "kind": "secret",
+        "secret": True,
+    },
+    "database_port": {
+        "category": "database_settings",
+        "label": "数据库端口",
+        "kind": "secret",
+        "secret": True,
+    },
+    "database_user": {
+        "category": "database_settings",
+        "label": "数据库用户名/名称",
+        "kind": "secret",
+        "secret": True,
+    },
+    "database_password": {
+        "category": "database_settings",
+        "label": "数据库密码",
+        "kind": "secret",
+        "secret": True,
+    },
+}
+
+配置字段分类显示名 = {
+    "basic_settings": "权限设置",
+    "help_web_settings": "帮助网页",
+    "uc_pan_settings": "UC 网盘",
+    "quark_pan_settings": "夸克网盘",
+    "baidu_pan_settings": "百度网盘",
+    "database_settings": "数据库",
+}
 
 
 def _读取帮助网页字段(配置: Any, 字段名: str) -> Any:
@@ -89,6 +208,155 @@ def _读取帮助网页字段(配置: Any, 字段名: str) -> Any:
         return 值
     分类 = getattr(配置, "help_web_settings", None)
     return getattr(分类, 字段名, None) if 分类 is not None else None
+
+
+def _读取插件配置字典(配置: Any) -> dict[str, Any] | None:
+    if isinstance(配置, dict):
+        return 配置
+    for 属性名 in ("data", "obj"):
+        数据 = getattr(配置, 属性名, None)
+        if isinstance(数据, dict):
+            return 数据
+    获取配置方法 = getattr(配置, "get_config", None)
+    if callable(获取配置方法):
+        try:
+            数据 = 获取配置方法()
+            if isinstance(数据, dict):
+                return 数据
+        except Exception:
+            pass
+    return None
+
+
+def _读取插件配置值(配置: Any, 分类名: str, 字段名: str, 默认值: Any = None) -> Any:
+    数据 = _读取插件配置字典(配置)
+    if isinstance(数据, dict):
+        分类 = 数据.get(分类名)
+        if isinstance(分类, dict) and 字段名 in 分类:
+            return 分类.get(字段名)
+        if 字段名 in 数据:
+            return 数据.get(字段名)
+    值 = getattr(配置, 字段名, None)
+    return 默认值 if 值 is None else 值
+
+
+def _设置插件配置值(配置: Any, 分类名: str, 字段名: str, 值: Any) -> None:
+    数据 = _读取插件配置字典(配置)
+    if not isinstance(数据, dict):
+        raise RuntimeError("插件配置对象不可写入")
+    分类 = 数据.get(分类名)
+    if not isinstance(分类, dict):
+        分类 = {}
+        数据[分类名] = 分类
+    分类[字段名] = 值
+
+
+def _插件配置可持久化(配置: Any) -> bool:
+    return callable(getattr(配置, "save_config", None))
+
+
+async def _持久化插件配置() -> None:
+    配置 = 当前帮助网页配置
+    保存方法 = getattr(配置, "save_config", None)
+    if not callable(保存方法):
+        raise RuntimeError("插件配置没有持久化接口")
+    结果 = 保存方法()
+    if inspect.isawaitable(结果):
+        await 结果
+
+
+def _读取插件配置摘要() -> dict[str, Any]:
+    配置 = 当前帮助网页配置
+    字段列表: list[dict[str, Any]] = []
+    for 字段名, 定义 in 插件配置字段定义.items():
+        原值 = _读取插件配置值(
+            配置,
+            str(定义["category"]),
+            字段名,
+            [] if 定义["kind"] == "admin_list" else "",
+        )
+        项目: dict[str, Any] = {
+            "key": 字段名,
+            "category": 定义["category"],
+            "category_name": 配置字段分类显示名.get(
+                str(定义["category"]), str(定义["category"])
+            ),
+            "label": 定义["label"],
+            "kind": 定义["kind"],
+            "secret": bool(定义.get("secret")),
+            "configured": bool(原值),
+        }
+        if 定义.get("options"):
+            项目["options"] = list(定义["options"])
+        if 定义["kind"] == "admin_list":
+            值列表 = 原值 if isinstance(原值, list) else str(原值 or "").split(",")
+            值列表 = [str(值).strip() for 值 in 值列表 if str(值).strip()]
+            项目["count"] = len(值列表)
+            # 管理员标识不是密钥，网页需要能编辑它；其它敏感字段仍只返回摘要。
+            项目["value"] = 值列表
+        elif not 定义.get("secret"):
+            项目["value"] = (
+                list(原值) if isinstance(原值, list) else str(原值 or "")
+            )
+        else:
+            # 敏感值只返回是否已配置。Cookie、密码、数据库凭据和密钥
+            # 即使脱敏后也不应进入网页响应。
+            项目["configured"] = bool(原值)
+        字段列表.append(项目)
+    return {
+        "editable": _插件配置可持久化(配置) or isinstance(配置, dict),
+        "restart_required": True,
+        "fields": 字段列表,
+    }
+
+
+def _校验插件配置字段(字段名: str, 值: Any) -> Any:
+    定义 = 插件配置字段定义.get(字段名)
+    if not 定义:
+        raise ValueError("配置字段不支持")
+    kind = 定义["kind"]
+    if 定义.get("secret"):
+        文本 = str(值 or "").strip()
+        if not 文本:
+            raise ValueError("敏感字段不能为空")
+        if len(文本) > 20000:
+            raise ValueError("配置值过长")
+        if 字段名 == "database_port" and (
+            not 文本.isdigit() or not 1 <= int(文本) <= 65535
+        ):
+            raise ValueError("数据库端口无效")
+        return 文本
+    if kind == "admin_list":
+        原列表 = 值 if isinstance(值, list) else re.split(r"[,，\n\r\s]+", str(值 or ""))
+        结果 = []
+        for 项 in 原列表:
+            文本 = str(项 or "").strip()
+            if 文本 and 文本 not in 结果:
+                if len(文本) > 128:
+                    raise ValueError("管理员标识过长")
+                结果.append(文本)
+        if len(结果) > 200:
+            raise ValueError("管理员白名单过多")
+        return 结果
+    文本 = str(值 or "").strip()
+    if len(文本) > 500:
+        raise ValueError("配置值过长")
+    if 字段名 == "help_web_port":
+        if not 文本.isdigit() or not 1 <= int(文本) <= 65535:
+            raise ValueError("帮助网页端口无效")
+        return 文本
+    if 字段名 == "help_web_domain":
+        if not 文本:
+            return ""
+        地址 = _规范化公开地址(文本)
+        if not 地址:
+            raise ValueError("帮助网页地址无效")
+        return 地址
+    if 字段名 == "baidu_pan_upload_status" and 文本 not in {"完结", "连载", "全部"}:
+        raise ValueError("百度备份状态无效")
+    if 字段名.endswith("_upload_dir") and 文本 and not 文本.startswith("/"):
+        raise ValueError("上传目录必须以 / 开头")
+    return 文本
 
 
 def _规范化公开地址(value: Any) -> str:
@@ -317,6 +585,26 @@ def _读取控制台数据() -> dict[str, Any]:
     配置 = 当前帮助网页配置
     数据库已配置 = 已配置运行状态数据库(配置)
     数据库状态 = 检查运行状态数据库(配置)
+    QQ登录态摘要: dict[str, Any] = {"configured": False}
+    try:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        原值 = QQ阅读._读取QQ阅读登录态(配置)
+        原始状态 = QQ阅读.读取运行状态值(
+            配置,
+            QQ阅读.QQ阅读登录态命名空间,
+            QQ阅读.QQ阅读登录态状态键,
+            "",
+        )
+        更新时间 = 0
+        if 原始状态:
+            try:
+                更新时间 = int((json.loads(原始状态) or {}).get("updated_at") or 0)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                更新时间 = 0
+        QQ登录态摘要 = {"configured": bool(原值), "updated_at": 更新时间}
+    except Exception as exc:
+        logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
     状态 = 小说功能开关.读取小说功能状态(配置)
     平台列表 = [
         {
@@ -350,6 +638,9 @@ def _读取控制台数据() -> dict[str, Any]:
                 "account_summary": 账号摘要,
                 "directory": 目录,
                 "active": 标识 == 当前网盘,
+                "selected_account": int(
+                    网盘Cookie.获取当前网盘账号序号(配置, 标识)
+                ),
             }
         )
 
@@ -384,7 +675,9 @@ def _读取控制台数据() -> dict[str, Any]:
             "help_web_port": port,
             "custom_domain": bool(_规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))),
             "auth_mode": "账号密码 + 会话 Cookie",
+            **_读取插件配置摘要(),
         },
+        "qq_reader": QQ登录态摘要,
     }
 
 
@@ -458,6 +751,261 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台主网盘切换失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(409, "主网盘保存失败，请检查数据库配置")
+
+
+def _规范化网盘平台(平台: Any) -> str:
+    文本 = str(平台 or "").strip()
+    return {"uc": "UC", "UC": "UC", "夸": "夸克", "夸克": "夸克", "百度": "百度"}.get(
+        文本, ""
+    )
+
+
+async def _处理插件配置数据(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    return web.json_response(
+        {"ok": True, **_读取插件配置摘要()},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _处理插件配置写入(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    字段数据 = (数据 or {}).get("fields")
+    if not isinstance(字段数据, dict) or not 字段数据:
+        return _控制台错误(400, "配置参数无效")
+    if 当前帮助网页配置 is None:
+        return _控制台错误(503, "插件配置不可用")
+    配置字典: dict[str, Any] | None = None
+    原配置快照: dict[str, Any] | None = None
+    try:
+        配置字典 = _读取插件配置字典(当前帮助网页配置)
+        原配置快照 = copy.deepcopy(配置字典) if isinstance(配置字典, dict) else None
+        待更新: list[tuple[str, dict[str, Any], Any]] = []
+        for 字段名, 原值 in 字段数据.items():
+            字段名 = str(字段名 or "").strip()
+            定义 = 插件配置字段定义.get(字段名)
+            if not 定义:
+                raise ValueError("配置字段不支持")
+            if 定义.get("secret") and not str(原值 or "").strip():
+                continue
+            值 = _校验插件配置字段(字段名, 原值)
+            待更新.append((字段名, 定义, 值))
+        已更新 = []
+        # 先完整校验，再一次性写入，避免同一请求中后续字段失败时留下半套配置。
+        for 字段名, 定义, 值 in 待更新:
+            _设置插件配置值(
+                当前帮助网页配置,
+                str(定义["category"]),
+                字段名,
+                值,
+            )
+            已更新.append(字段名)
+        if 已更新 and _插件配置可持久化(当前帮助网页配置):
+            await _持久化插件配置()
+        elif 已更新 and not isinstance(当前帮助网页配置, dict):
+            raise RuntimeError("插件配置没有持久化接口")
+        return web.json_response(
+            {
+                "ok": True,
+                "updated": 已更新,
+                "restart_required": bool(已更新),
+                "message": "配置已保存，监听地址、登录账号和网盘目录等变更需重载插件生效",
+            }
+        )
+    except ValueError:
+        return _控制台错误(400, "配置参数无效")
+    except Exception as exc:
+        if isinstance(配置字典, dict) and isinstance(原配置快照, dict):
+            配置字典.clear()
+            配置字典.update(原配置快照)
+        logger.warning("帮助控制台插件配置保存失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "配置保存失败，请稍后重试")
+
+
+async def _处理网盘账号列表(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    平台 = _规范化网盘平台(request.match_info.get("platform"))
+    if not 平台:
+        return _控制台错误(400, "网盘参数无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        if 平台 == "夸克" and request.query.get("refresh") == "1":
+            await 网盘Cookie._刷新夸克账号资料(当前帮助网页配置)
+        摘要 = await asyncio.to_thread(
+            网盘Cookie.获取网盘账号摘要, 当前帮助网页配置, 平台
+        )
+        当前序号 = await asyncio.to_thread(
+            网盘Cookie.获取当前网盘账号序号, 当前帮助网页配置, 平台
+        )
+        return web.json_response(
+            {"ok": True, "platform": 平台, "selected_account": 当前序号, "accounts": 摘要},
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台网盘账号读取失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+        return _控制台错误(500, "网盘账号读取失败")
+
+
+async def _处理网盘账号新增(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    平台 = _规范化网盘平台(request.match_info.get("platform"))
+    数据 = await _读取请求JSON(request)
+    Cookie文本 = str((数据 or {}).get("cookie") or "").strip()
+    if not 平台 or not Cookie文本:
+        return _控制台错误(400, "网盘账号参数无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        解析结果 = 网盘Cookie.解析网盘Cookie(f"{平台} Cookie: {Cookie文本}")
+        if not 解析结果 or 解析结果[0] != 平台 or not 解析结果[1]:
+            return _控制台错误(400, "网盘账号格式无效")
+        名称 = 手机号 = ""
+        if 平台 == "夸克":
+            名称, 手机号 = await 网盘Cookie._获取夸克账号资料(解析结果[1])
+        序号 = await asyncio.to_thread(
+            网盘Cookie._保存网盘Cookie,
+            当前帮助网页配置,
+            平台,
+            解析结果[1],
+            名称=名称,
+            手机号=手机号,
+        )
+        return web.json_response(
+            {"ok": True, "index": 序号, "message": f"{平台}账号已保存"}
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台网盘账号保存失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+        return _控制台错误(409, "网盘账号保存失败，请检查数据库配置")
+
+
+async def _处理网盘账号删除(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    平台 = _规范化网盘平台(request.match_info.get("platform"))
+    数据 = await _读取请求JSON(request)
+    try:
+        序号 = int((数据 or {}).get("index"))
+    except (TypeError, ValueError):
+        序号 = 0
+    if not 平台 or 序号 < 1:
+        return _控制台错误(400, "账号序号无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        成功, _ = await asyncio.to_thread(
+            网盘Cookie._删除网盘账号, 当前帮助网页配置, 平台, 序号
+        )
+        if not 成功:
+            return _控制台错误(409, "账号不能删除，请检查账号序号和数据库配置")
+        return web.json_response({"ok": True, "message": "账号已删除"})
+    except Exception as exc:
+        logger.warning("帮助控制台网盘账号删除失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+        return _控制台错误(409, "网盘账号删除失败")
+
+
+async def _处理网盘账号选择(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    平台 = _规范化网盘平台((数据 or {}).get("platform"))
+    群标识 = str((数据 or {}).get("group_id") or "").strip()
+    try:
+        序号 = int((数据 or {}).get("index"))
+    except (TypeError, ValueError):
+        序号 = 0
+    if not 平台 or not 群标识 or len(群标识) > 128 or 序号 < 1:
+        return _控制台错误(400, "群账号参数无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        成功, _ = await asyncio.to_thread(
+            网盘Cookie.设置网盘账号序号按群标识,
+            当前帮助网页配置,
+            平台,
+            序号,
+            群标识,
+        )
+        if not 成功:
+            return _控制台错误(409, "群账号选择失败，请检查账号和数据库配置")
+        return web.json_response({"ok": True, "message": "群账号选择已保存"})
+    except Exception as exc:
+        logger.warning("帮助控制台群账号选择失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+        return _控制台错误(409, "群账号选择失败")
+
+
+async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    try:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        原值 = QQ阅读._读取QQ阅读登录态(当前帮助网页配置)
+        原始状态 = QQ阅读.读取运行状态值(
+            当前帮助网页配置,
+            QQ阅读.QQ阅读登录态命名空间,
+            QQ阅读.QQ阅读登录态状态键,
+            "",
+        )
+        更新时间 = 0
+        try:
+            更新时间 = int((json.loads(原始状态) or {}).get("updated_at") or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return web.json_response(
+            {"ok": True, "configured": bool(原值), "updated_at": 更新时间}
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, "QQ阅读状态读取失败")
+
+
+async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    文本 = str((数据 or {}).get("cookie") or "").strip()
+    if not 文本:
+        文本 = f"ywguid: {(数据 or {}).get('ywguid') or ''}\nywkey: {(数据 or {}).get('ywkey') or ''}"
+    try:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        登录态 = QQ阅读.解析QQ阅读Cookie(文本)
+        if not 登录态:
+            return _控制台错误(400, "QQ阅读登录态格式无效")
+        if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
+            return _控制台错误(409, "数据库未配置，登录态未保存")
+        await asyncio.to_thread(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, 登录态)
+        await asyncio.to_thread(QQ阅读._应用QQ阅读登录态, 登录态)
+        return web.json_response({"ok": True, "message": "QQ阅读登录态已保存"})
+    except Exception as exc:
+        logger.warning("帮助控制台 QQ阅读登录态保存失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "QQ阅读登录态保存失败")
+
+
+async def _处理QQ阅读登录态删除(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    try:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
+            return _控制台错误(409, "数据库未配置，登录态未删除")
+        QQ阅读.写入运行状态值(
+            当前帮助网页配置,
+            QQ阅读.QQ阅读登录态命名空间,
+            QQ阅读.QQ阅读登录态状态键,
+            "",
+        )
+        return web.json_response({"ok": True, "message": "QQ阅读登录态已清除"})
+    except Exception as exc:
+        logger.warning("帮助控制台 QQ阅读登录态删除失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "QQ阅读登录态清除失败")
 
 
 def _渲染控制台页面() -> str:
@@ -717,6 +1265,34 @@ _网页头部 = """<!doctype html>
      .safe-list span,.settings-row span { color:#65687b; }
      .safe-list strong,.settings-row strong { color:var(--ink); font-weight:600; text-align:right; }
      .settings-row strong { max-width:65%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+     .config-editor { display:grid; gap:18px; }
+     .config-group { padding:16px; border:1px solid #eef0f5; border-radius:8px; background:#fcfcff; }
+     .config-group h3 { margin:0 0 13px; font-size:13px; }
+     .config-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px 15px; }
+     .config-field { display:grid; gap:6px; min-width:0; }
+     .config-field.full { grid-column:1 / -1; }
+     .config-field label { color:#65687b; font-size:11px; font-weight:700; }
+     .config-field input,.config-field textarea,.config-field select,.account-add input,.group-account input { width:100%; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); outline:none; }
+     .config-field textarea { min-height:74px; resize:vertical; }
+     .config-field input:focus,.config-field textarea:focus,.config-field select:focus,.account-add input:focus,.group-account input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
+     .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }
+     .config-actions { display:flex; align-items:center; gap:12px; }
+     .config-actions .primary-button { min-height:38px; }
+     .config-message.ok,.qq-auth-message.ok { color:var(--mint-ink); }
+     .config-message.error,.qq-auth-message.error { color:#c06478; }
+     .account-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:12px; }
+     .account-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; margin-top:13px; }
+     .account-add .outline-button,.group-account .outline-button { min-height:39px; padding:0 11px; }
+     .account-row { min-width:0; }
+     .account-row button { flex:0 0 auto; border:0; background:transparent; color:#c06478; font-size:11px; }
+     .account-row button:hover { color:#a94761; }
+     .group-account { display:grid; grid-template-columns:minmax(0,1fr) 74px auto; gap:7px; margin-top:9px; }
+     .group-account input { min-width:0; }
+     .group-account select { min-height:39px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); }
+     .qq-auth-form { display:grid; gap:11px; max-width:500px; }
+     .qq-auth-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+     .qq-auth-row input { min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); }
+     .qq-auth-actions { display:flex; align-items:center; gap:9px; }
      .settings-hint { margin-top:15px; padding:12px 13px; border-radius:7px; background:#f7f7fd; color:var(--muted); font-size:11px; line-height:1.6; }
      .help-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px; }
      .help-card h3 { margin:0; font-size:14px; }
@@ -739,7 +1315,7 @@ _网页头部 = """<!doctype html>
       @media (prefers-reduced-motion: reduce) {
         *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; }
       }
-      @media (max-width:760px) { .heading-actions { gap:7px; } .updated-label { display:none; } .summary-grid,.page-grid,.runtime-detail,.help-grid { grid-template-columns:1fr; } .shortcut-grid { grid-template-columns:1fr; } .runtime-page-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standalone-card { margin-top:15px; } .safe-list > div,.settings-row { min-height:56px; } }
+     @media (max-width:760px) { .heading-actions { gap:7px; } .updated-label { display:none; } .summary-grid,.page-grid,.runtime-detail,.help-grid { grid-template-columns:1fr; } .shortcut-grid { grid-template-columns:1fr; } .runtime-page-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standalone-card { margin-top:15px; } .safe-list > div,.settings-row { min-height:56px; } .config-fields,.qq-auth-row { grid-template-columns:1fr; } .group-account { grid-template-columns:minmax(0,1fr) 70px; } .group-account .outline-button { grid-column:1 / -1; } }
    </style>
 </head>
 """
@@ -748,7 +1324,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.41.1</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.42.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
@@ -781,7 +1357,7 @@ _网页主体 = """
         </section>
 
         <section id="page-bot" class="page-view" data-page="bot" hidden>
-          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p><div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>登录凭据</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>不返回</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div><div><span>写入方式</span><strong>仅调用已授权接口</strong></div></div></article></div></div>
+          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单和帮助网页账号；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读登录态</h2><p class="card-subtitle">只保存 ywguid 和 ywkey，不显示原值。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>登录凭据</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>只写不读</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
         </section>
 
         <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="console-card module-card standalone-card"><h2>小说功能</h2><p class="card-subtitle">这里的开关会写入运行状态数据库，关闭后对应平台不会进入下载流程。</p><div class="global-bar"><div class="global-copy"><strong>全部小说功能</strong><span>控制下载、找书和翻页总入口</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div><div class="test-mode global-bar"><div class="global-copy"><strong>管理员测试模式</strong><span>仅管理员可用，不改变普通用户的关闭限制</span></div><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><div class="module-heading"><h3>平台开关</h3><span>逐个平台控制</span></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></article></section>
@@ -791,7 +1367,7 @@ _网页主体 = """
         <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
 
         <section id="page-help" class="page-view" data-page="help" hidden><div class="section-head page-view-head"><div><h2>帮助指令</h2><p>这里列出机器人当前支持的聊天指令；网页不代替群聊执行指令。</p></div></div><div class="help-grid"><article class="console-card help-card"><h3>管理与状态</h3><p>需要管理员权限的指令。</p><div class="command-list"><span>帮助</span><span>状态</span><span>小说</span><span>开小说 / 关小说</span><span>开测试 / 关测试</span><span>网盘状态</span><span>换UC / 换夸克 / 换百度</span><span>夸克登录</span></div></article><article class="console-card help-card"><h3>小说入口</h3><p>在群聊或私聊发送链接即可识别。</p><div class="command-list"><span>找关键词</span><span>找书 关键词</span><span>找作者 关键词</span><span>上一页 / 下一页</span><span>小说平台分享链接</span><span>小说分享卡片</span></div></article><article class="console-card help-card"><h3>群聊管理</h3><p>由插件管理员和群身份规则共同决定。</p><div class="command-list"><span>禁言 @成员</span><span>禁 @成员 1</span><span>解 @成员</span><span>数字撤回</span><span>卡片撤回</span><span>合并转发撤回</span></div></article></div></section>
-        <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">当前网页服务的监听和访问策略。配置修改请在 AstrBot 插件配置中完成。</p><div id="settings-list" class="settings-list"><div class="empty">正在读取设置...</div></div></article></section>
+        <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">数据库连接和网页服务设置可直接保存；监听端口等变更需要重载插件。</p><div id="settings-editor" class="config-editor"><div class="empty">正在读取设置...</div></div></article></section>
       </div>
     </main>
   </div>
@@ -812,7 +1388,7 @@ _网页脚本 = """
         pans: ['网盘配置', '管理主分享网盘和账号安全摘要'],
         runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
         help: ['帮助指令', '查看机器人当前支持的聊天指令'],
-        settings: ['系统设置', '查看网页服务设置；修改请回到 AstrBot 配置'],
+         settings: ['系统设置', '直接修改插件配置、网盘目录和数据库连接'],
       };
       let snapshot = null;
       let toastTimer = null;
@@ -837,6 +1413,52 @@ _网页脚本 = """
         window.scrollTo({top:0, behavior:'auto'});
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
+      const categoryOrder = ['basic_settings', 'help_web_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
+      const safeFieldValue = (field) => {
+        if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\\n') : '';
+        return field.secret ? '' : String(field.value ?? '');
+      };
+      const renderConfigEditor = (targetId, fields, editable, filter) => {
+        const node = $(targetId);
+        if (!node) return;
+        const selected = (fields || []).filter((field) => !filter || filter(field));
+        const groups = [];
+        categoryOrder.forEach((category) => {
+          const groupFields = selected.filter((field) => field.category === category);
+          if (groupFields.length) groups.push([category, groupFields]);
+        });
+        selected.filter((field) => !categoryOrder.includes(field.category)).forEach((field) => {
+          let group = groups.find((item) => item[0] === field.category);
+          if (!group) { group = [field.category, []]; groups.push(group); }
+          group[1].push(field);
+        });
+        if (!groups.length) { node.innerHTML = '<div class="empty">暂无可编辑配置</div>'; return; }
+        node.innerHTML = groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
+          const inputId = `cfg-${field.key}`;
+          const label = esc(field.label || field.key);
+          const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : '敏感值只写入，不在页面回显') : '';
+          if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
+          if (field.kind === 'select') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${(field.options || []).map((option) => `<option value="${esc(option)}" ${String(option) === String(field.value ?? '') ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select><small>${hint}</small></div>`;
+          const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
+          return `<div class="config-field"><label for="${inputId}">${label}</label><input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(field.secret ? '留空不修改' : '')}"><small>${hint}</small></div>`;
+        }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button><span class="config-message" data-config-message></span></div>`;
+        node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
+      };
+       const saveConfig = async (editor) => {
+        const fields = {};
+        editor.querySelectorAll('[data-config-field]').forEach((input) => {
+          const value = input.tagName === 'TEXTAREA' ? input.value : input.value;
+          if (input.type === 'password' && !value.trim()) return;
+           if (input.dataset.configField === 'group_file_cleanup_admin_qq') {
+             fields[input.dataset.configField] = value.split(/[\\s,，]+/).filter(Boolean);
+          } else fields[input.dataset.configField] = value;
+        });
+        const message = editor.querySelector('[data-config-message]');
+        try { const result = await api('config', {method:'POST', body:JSON.stringify({fields})}); if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; } toast(result.message || '配置已保存'); await load(); }
+         catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
+      };
+      const panAccountRows = (item, editable) => (item.account_summary || []).map((account) => `<div class="account-row"><div><strong>账号${esc(account.index)}</strong><span>${esc(account.name || '未命名账号')} · ${esc(account.phone || '未获取')}</span></div><button type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(account.index)}" ${editable ? '' : 'disabled'}>删除</button></div>`).join('');
+      const renderPanCard = (item, pansEditable) => `<article class="pan-card ${item.active ? 'active' : ''}"><div class="pan-top"><div class="pan-title"><div class="pan-logo">${esc(item.key.slice(0,1))}</div><strong>${esc(item.name)}</strong></div><div>${item.active ? '<span class="tag active">当前主网盘</span>' : ''}</div></div><div class="pan-meta"><div><span>配置状态</span><strong>${item.configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>'}</strong></div><div><span>账号数量</span><strong>${esc(item.accounts)} 个</strong></div><div><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div><div><span>群账号选择</span><strong>默认账号${esc(item.selected_account || 1)}</strong></div></div><div class="account-list">${panAccountRows(item, pansEditable) || '<div class="empty">暂无账号</div>'}</div><div class="account-add"><input type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 ${esc(item.name)} Cookie" ${pansEditable ? '' : 'disabled'}><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><div class="account-actions"><button class="outline-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'}>刷新资料</button><select class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${item.active ? '当前使用中' : '设为主分享网盘'}</option><option value="${esc(item.key)}">切换到${esc(item.name)}</option></select></div><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号（用于选择账号）" ${pansEditable ? '' : 'disabled'}><select data-pan-group-index="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>${(item.account_summary || []).map((account) => `<option value="${esc(account.index)}" ${Number(account.index) === Number(item.selected_account || 1) ? 'selected' : ''}>账号${esc(account.index)}</option>`).join('') || '<option value="1">账号1</option>'}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>保存群选择</button></div></article>`;
       const render = (data) => {
         snapshot = data;
         const novels = data.novels || {}; const pans = data.pans || {}; const server = data.server || {}; const database = data.database || {};
@@ -847,14 +1469,32 @@ _网页脚本 = """
         [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
         $('novel-grid').innerHTML = (novels.platforms || []).map((item) => `<div class="novel-item"><div class="novel-name"><div class="novel-badge">书</div><div><strong>${esc(item.name)}</strong><small>${item.enabled ? '当前可用' : '已停用'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
         $('pan-active-label').textContent = pans.active || '--';
-        $('pan-grid').innerHTML = (pans.items || []).map((item) => { const accounts = (item.account_summary || []).map((account) => `<div class="account-row"><strong>账号${esc(account.index)}</strong><span>${esc(account.name)} · ${esc(account.phone)}</span></div>`).join(''); return `<article class="pan-card ${item.active ? 'active' : ''}"><div class="pan-top"><div class="pan-title"><div class="pan-logo">${esc(item.key.slice(0,1))}</div><strong>${esc(item.name)}</strong></div><div>${item.active ? '<span class="tag active">当前主网盘</span>' : ''}</div></div><div class="pan-meta"><div><span>配置状态</span><strong>${item.configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>'}</strong></div><div><span>账号数量</span><strong>${esc(item.accounts)} 个</strong></div><div><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div><div><span>账号策略</span><strong>按群独立选择</strong></div></div>${accounts ? `<div class="account-list">${accounts}</div>` : ''}<select class="pan-select" data-pan="${esc(item.key)}" ${pans.editable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${item.active ? '当前使用中' : '设为主分享网盘'}</option><option value="${esc(item.key)}">切换到${esc(item.name)}</option></select></article>`; }).join('') || '<div class="empty">没有网盘数据</div>';
+        $('pan-grid').innerHTML = (pans.items || []).map((item) => renderPanCard(item, pans.editable)).join('') || '<div class="empty">没有网盘数据</div>';
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
-        $('config-list').innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
-        $('settings-list').innerHTML = `<div class="settings-row"><span>监听主机</span><strong>${esc(data.config && data.config.help_web_host || '--')}</strong></div><div class="settings-row"><span>监听端口</span><strong>${esc(data.config && data.config.help_web_port || '--')}</strong></div><div class="settings-row"><span>公开访问地址</span><strong>${esc(server.address || '--')}</strong></div><div class="settings-row"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '--')}</strong></div><div class="settings-hint">账号和密码请在 AstrBot 插件配置的“帮助网页设置”中修改，保存后重载插件；网页不会返回密码原文。</div>`;
+        const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
+        const configFields = data.config && data.config.fields || [];
+        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
+        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
+        renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
+        document.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
+        document.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index)));
+        document.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
+        document.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
       };
+      const renderQQAuthEditor = (auth) => {
+        const node = $('qq-auth-editor'); if (!node) return;
+        node.innerHTML = `<div class="qq-auth-form"><div class="qq-auth-row"><input type="text" id="qq-ywguid" placeholder="ywguid" autocomplete="off"><input type="password" id="qq-ywkey" placeholder="ywkey" autocomplete="off"></div><div class="qq-auth-actions"><button class="primary-button" type="button" id="qq-auth-save">保存登录态</button><button class="outline-button" type="button" id="qq-auth-delete" ${auth.configured ? '' : 'disabled'}>清除登录态</button><span class="qq-auth-message">${auth.configured ? `已配置${auth.updated_at ? ` · ${new Date(auth.updated_at * 1000).toLocaleString()}` : ''}` : '未配置'}</span></div></div>`;
+        $('qq-auth-save').addEventListener('click', saveQQAuth); $('qq-auth-delete').addEventListener('click', deleteQQAuth);
+      };
+       const addPanAccount = async (platform) => { const input = document.querySelector(`[data-pan-cookie="${CSS.escape(platform)}"]`); const button = document.querySelector(`[data-pan-add="${CSS.escape(platform)}"]`); const cookie = input?.value.trim(); if (!cookie) return toast('请先粘贴 Cookie'); if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'POST', body:JSON.stringify({cookie})}); if (input) input.value = ''; toast(`${platform}账号已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
+       const deletePanAccount = async (platform, index, button) => { if (!confirm(`确定删除${platform}账号${index}吗？`)) return; if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'DELETE', body:JSON.stringify({index:Number(index)})}); toast('账号已删除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
+       const refreshPanAccounts = async (platform, button) => { if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}?refresh=1`); toast('账号资料已刷新'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
+       const savePanGroup = async (platform) => { const group = document.querySelector(`[data-pan-group="${CSS.escape(platform)}"]`)?.value.trim(); const select = document.querySelector(`[data-pan-group-index="${CSS.escape(platform)}"]`); if (!group) return toast('请输入QQ群号'); if (!/^\\d+$/.test(group)) return toast('QQ群号格式无效'); try { await api('pan-account-selection', {method:'POST', body:JSON.stringify({platform, index:Number(select?.value || 1), group_id:group})}); toast('群账号选择已保存'); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } };
+       const saveQQAuth = async () => { const ywguid = $('qq-ywguid')?.value.trim(); const ywkey = $('qq-ywkey')?.value.trim(); if (!ywguid || !ywkey) return toast('请填写 ywguid 和 ywkey'); const button = $('qq-auth-save'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'POST', body:JSON.stringify({ywguid, ywkey})}); if ($('qq-ywguid')) $('qq-ywguid').value = ''; if ($('qq-ywkey')) $('qq-ywkey').value = ''; toast('QQ阅读登录态已保存'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
+       const deleteQQAuth = async () => { if (!confirm('确定清除 QQ阅读登录态吗？')) return; const button = $('qq-auth-delete'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'DELETE'}); toast('QQ阅读登录态已清除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
       const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } $('logout').hidden = true; $('refresh').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
@@ -1004,6 +1644,15 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     app.router.add_get("/api/dashboard", _处理控制台数据)
     app.router.add_post("/api/novel-switch", _处理小说开关)
     app.router.add_post("/api/pan-switch", _处理网盘切换)
+    app.router.add_get("/api/config", _处理插件配置数据)
+    app.router.add_post("/api/config", _处理插件配置写入)
+    app.router.add_get("/api/pan-accounts/{platform}", _处理网盘账号列表)
+    app.router.add_post("/api/pan-accounts/{platform}", _处理网盘账号新增)
+    app.router.add_delete("/api/pan-accounts/{platform}", _处理网盘账号删除)
+    app.router.add_post("/api/pan-account-selection", _处理网盘账号选择)
+    app.router.add_get("/api/qq-reader-auth", _处理QQ阅读登录态)
+    app.router.add_post("/api/qq-reader-auth", _处理QQ阅读登录态保存)
+    app.router.add_delete("/api/qq-reader-auth", _处理QQ阅读登录态删除)
     app.router.add_get("/{tail:.*}", _处理帮助网页)
     runner = web.AppRunner(app, access_log=None)
     try:

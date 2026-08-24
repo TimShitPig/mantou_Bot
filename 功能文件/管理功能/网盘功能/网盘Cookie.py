@@ -1198,6 +1198,34 @@ def 设置网盘账号序号(
     return True, ""
 
 
+def 设置网盘账号序号按群标识(
+    配置: Any, 平台: str, 序号: int, 群标识: str
+) -> tuple[bool, str]:
+    """供管理后台使用的群账号选择入口，不依赖伪造事件对象。"""
+    规范平台 = _规范化平台名称(平台)
+    群标识 = str(群标识 or "").strip()
+    if not 规范平台 or not 群标识:
+        return False, "群账号参数无效"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，网盘账号选择未保存"
+    账号数量 = 获取网盘账号数量(配置, 规范平台)
+    if 序号 < 1 or 序号 > 账号数量:
+        return False, f"{平台显示名[规范平台]}只有{账号数量}个账号"
+    try:
+        写入运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键(规范平台, 群标识),
+            str(序号),
+        )
+    except Exception as 异常:
+        logger.warning(
+            f"{平台显示名[规范平台]}群账号选择写入失败：error={type(异常).__name__}"
+        )
+        return False, "网盘账号选择失败，请稍后再试"
+    return True, ""
+
+
 def 读取网盘Cookie(
     配置: Any, 平台: str, 配置Cookie: Any = "", event: Any = None
 ) -> str:

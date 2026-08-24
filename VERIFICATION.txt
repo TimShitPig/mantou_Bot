@@ -1,0 +1,62 @@
+BRANCH: main
+CHANGED_FIELD: 帮助网页控制台配置写入分支（/api/config；basic_settings、help_web_settings、*_pan_settings、database_settings）
+
+ARTIFACTS:
+C:\Users\17818\Desktop\小说机器人\馒头Bot\MODIFIED_FILE
+C:\Users\17818\Desktop\小说机器人\馒头Bot\DIFF_FILE
+C:\Users\17818\Desktop\小说机器人\馒头Bot\VERIFICATION.txt
+C:\Users\17818\Desktop\小说机器人\馒头Bot\ROLLBACK.sh
+
+BASELINE:
+COMMAND: git show "HEAD:<path>" | python -c "import sys; compile(sys.stdin.read(), sys.argv[1], 'exec')" <path>（对 main.py、功能文件/管理功能/基础功能/帮助网页.py、功能文件/管理功能/网盘功能/网盘Cookie.py 各执行一次）
+INPUT: HEAD 版本 v5.41.1 的 3 个 Python 源文件
+OUTPUT:
+BASELINE_COMPILE main.py exit=0
+BASELINE_COMPILE 功能文件/管理功能/基础功能/帮助网页.py exit=0
+BASELINE_COMPILE 功能文件/管理功能/网盘功能/网盘Cookie.py exit=0
+BASELINE_COMPILE_OK 3
+EXIT_STATUS: 0
+
+MODIFIED:
+COMMAND: python -m py_compile main.py '功能文件/管理功能/基础功能/帮助网页.py' '功能文件/管理功能/网盘功能/网盘Cookie.py'
+INPUT: 工作区修改后的 3 个 Python 源文件
+OUTPUT:
+MODIFIED_COMPILE_OK 3
+EXIT_STATUS: 0
+
+FRONTEND:
+COMMAND: python -c "import importlib; s=importlib.import_module('功能文件.管理功能.基础功能.帮助网页')._网页脚本; print(s.split('<script>',1)[1].split('</script>',1)[0])" | node --check -
+INPUT: 控制台内嵌 JavaScript
+OUTPUT: FRONTEND_JS_CHECK_OK
+EXIT_STATUS: 0
+COMMAND: python -c "import importlib; s=importlib.import_module('功能文件.管理功能.基础功能.帮助网页')._渲染登录页面(); print(s.split('<script>',1)[1].split('</script>',1)[0])" | node --check -
+INPUT: 独立登录页内嵌 JavaScript
+OUTPUT: LOGIN_JS_CHECK_OK
+EXIT_STATUS: 0
+
+HTTP_MODIFIED:
+COMMAND: 启动帮助网页服务（127.0.0.1 临时端口）后使用 aiohttp ClientSession(cookie_jar=CookieJar(unsafe=True)) 依次请求 GET /、POST /api/login、GET /api/config、POST /api/config、错误 POST /api/config
+INPUT: admin/pw；help_web_port=临时端口+1、baidu_pan_upload_status=全部；错误输入 help_web_port=bad、baidu_pan_upload_status=invalid
+OUTPUT:
+SERVICE_START_OK True 63646
+HTTP_UNAUTH_LOGIN_ONLY_OK 200
+HTTP_LOGIN_OK 200 COOKIE_COUNT 1
+HTTP_CONFIG_READ_OK 200 17
+HTTP_CONFIG_WRITE_OK 200
+CONFIG_WRITE_ROLLBACK_OK 400
+EXIT_STATUS: 0
+RESULT: 未登录只返回独立登录页；登录后配置读取、写入成功；错误配置返回 400 且已写入端口保持不变。
+
+ROLLBACK:
+COMMAND: chmod +x ROLLBACK.sh && cp MODIFIED_FILE ROLLBACK_TEST_COPY && ./ROLLBACK.sh ROLLBACK_TEST_COPY main.py && 比较 HEAD:main.py、ROLLBACK_TEST_COPY、MODIFIED_FILE 的 SHA-256
+INPUT: 仅回滚副本 ROLLBACK_TEST_COPY，未操作 MODIFIED_FILE
+OUTPUT:
+ROLLBACK_RESTORED target=ROLLBACK_TEST_COPY baseline=main.py
+ROLLBACK_TEST_OK baseline=fb08af123917acbfb998fcc499e9335afb39b805ae717a74ef918a2b03197935 restored=fb08af123917acbfb998fcc499e9335afb39b805ae717a74ef918a2b03197935 modified=01b304fb3afe9d34c10ee4410716031575343c569a0db53e6bc72b4ae2918239
+ROLLBACK_EXIT_STATUS=0
+RESULT: 回滚副本与 HEAD 基线一致，MODIFIED_FILE 仍保持修改状态。
+
+STATIC:
+COMMAND: git diff --check
+OUTPUT: DIFF_CHECK_OK
+EXIT_STATUS: 0

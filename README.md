@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.41.1-2ea44f)
+![version](https://img.shields.io/badge/version-v5.42.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.41.1 |
+| 版本 | v5.42.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -34,6 +34,8 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 ### 网页帮助
 
 无需填写域名。插件默认监听 `0.0.0.0:8090`，启动时自动获取服务器 IPv4；重载插件后发送 `帮助`，菜单会直接显示“打开网页版帮助”按钮，地址格式为 `http://服务器IP:8090`。打开后先进入独立登录页，使用帮助网页设置中的账号密码登录管理员控制台；登录前不会返回侧边栏、功能页或控制台结构，登录后可查看小说开关、网盘摘要、数据库状态和服务器运行状态。
+
+控制台的“机器人配置”和“系统设置”可直接修改插件配置，包括管理员白名单、网页账号密码、三种网盘目录、数据库连接和百度后台备份状态；“网盘配置”可新增、删除账号，刷新夸克账号资料，切换主分享网盘并按群选择账号；QQ阅读登录态也可在网页保存或清除。Cookie、密码、数据库凭据和 QQ阅读密钥只提交给后端，不会回显。
 
 如果使用域名或反向代理，可以在 AstrBot 插件配置的“帮助网页设置”中填写外网地址覆盖自动地址，例如：
 
