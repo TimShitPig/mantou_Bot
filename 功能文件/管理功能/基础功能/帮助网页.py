@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.42.1"
+控制台版本 = "5.42.2"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1064,10 +1064,6 @@ _网页头部 = """<!doctype html>
     .page-kicker { margin:0 0 4px; color:var(--primary); font-size:12px; font-weight:750; }
     .page-heading h1 { margin:0; font-size:25px; letter-spacing:-.2px; }
     .page-heading p { margin:5px 0 0; color:var(--muted); font-size:13px; }
-    .page-tabs { display:flex; gap:26px; margin-top:25px; padding:0 2px; border-bottom:1px solid var(--line); }
-    .page-tabs span { position:relative; padding:0 0 12px; color:#65687b; font-size:13px; cursor:default; user-select:none; }
-    .page-tabs span.active { color:var(--primary-dark); font-weight:700; }
-    .page-tabs span.active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; border-radius:2px; background:var(--primary); }
     .notice { display:none; margin:18px 0; padding:13px 15px; border:1px solid #f1df9b; border-radius:10px; background:var(--yellow); color:#8b681c; }
     .notice.show { display:block; }
     .primary-button { display:inline-flex; align-items:center; gap:7px; min-height:38px; border:0; border-radius:9px; padding:0 15px; background:var(--primary); color:#fff; font-size:12px; font-weight:700; box-shadow:0 6px 16px rgba(107,99,245,.18); }
@@ -1141,7 +1137,7 @@ _网页头部 = """<!doctype html>
     .toast.show { transform:translateY(0); opacity:1; }
     .empty { padding:30px; color:var(--muted); text-align:center; }
     @media (max-width:1050px) { .metrics { grid-template-columns:repeat(2,1fr); } .runtime-grid { grid-template-columns:repeat(3,1fr); } .config-list { grid-template-columns:repeat(2,1fr); } .config-item { border-right:1px solid var(--line); border-bottom:1px solid var(--line); } .config-item:nth-child(2n) { border-right:0; } .config-item:nth-last-child(-n+2) { border-bottom:0; } }
-     @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .page-tabs { gap:20px; margin-top:20px; overflow-x:auto; scrollbar-width:none; } .page-tabs::-webkit-scrollbar { display:none; } .page-tabs span { flex:0 0 auto; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
+     @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
      /* Screenshot-inspired configuration workspace. The data/API contract stays unchanged. */
      .shell { grid-template-columns:222px minmax(0,1fr); grid-template-rows:62px minmax(0,1fr); }
      .topbar { padding:0 30px; }
@@ -1161,8 +1157,6 @@ _网页头部 = """<!doctype html>
      .page-heading h1 { font-size:24px; letter-spacing:0; }
      .page-heading p { margin-top:6px; font-size:13px; }
      .primary-button { min-height:40px; border-radius:7px; padding:0 17px; }
-     .page-tabs { gap:0; margin-top:26px; padding:0 7px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:0 4px 14px rgba(58,60,104,.035); }
-     .page-tabs span { padding:15px 18px 13px; font-size:13px; }
      .notice { margin:14px 0 0; border-radius:7px; }
      .metrics { display:none; }
      .workspace-grid { display:grid; grid-template-columns:minmax(0,1.62fr) minmax(310px,.96fr); align-items:start; gap:16px; margin-top:17px; }
@@ -1216,6 +1210,12 @@ _网页头部 = """<!doctype html>
      .pan-section { margin-top:16px; }
      .pan-section .section-head { margin:0 0 10px; }
      .pan-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+     .pan-console { padding:22px 0 24px; overflow:visible; }
+     .pan-console > h2,.pan-console > .card-subtitle { margin-left:24px; margin-right:24px; }
+     .pan-console .pan-note { margin-left:24px; margin-right:24px; }
+     .pan-console .pan-grid { padding:0 24px; }
+     .pan-console .pan-card { min-width:0; padding:20px; transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease; }
+     .pan-console .pan-card:hover { transform:translateY(-2px); }
      .runtime-grid { display:none; }
      .config-list { grid-template-columns:repeat(2,minmax(0,1fr)); border-radius:7px; box-shadow:none; }
      .config-item { min-height:64px; padding:13px 15px; border-bottom:1px solid var(--line); }
@@ -1224,6 +1224,7 @@ _网页头部 = """<!doctype html>
      .config-section { margin-top:16px; }
      .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
      @media (max-width:1050px) { .workspace-grid { grid-template-columns:minmax(0,1.35fr) minmax(280px,.9fr); } .pan-grid { grid-template-columns:1fr; } }
+     @media (max-width:760px) { .pan-console { padding-top:18px; } .pan-console > h2,.pan-console > .card-subtitle,.pan-console .pan-note { margin-left:17px; margin-right:17px; } .pan-console .pan-grid { padding:0 17px; } }
      @media (max-width:760px) { .content { width:calc(100% - 28px); padding:23px 0 40px; } .workspace-grid { grid-template-columns:1fr; } .workspace-right { order:-1; } .module-card .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .module-card .novel-item { border-right:1px solid var(--line); } .module-card .novel-item:nth-child(2n) { border-right:0; } .module-card .novel-item:nth-last-child(-n+2) { border-bottom:0; } .profile-field { grid-template-columns:92px minmax(0,1fr); gap:10px; } .connection-row strong { max-width:58%; } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
      .page-view[hidden] { display:none !important; }
      .page-view { min-width:0; scroll-margin-top:82px; }
@@ -1376,7 +1377,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.42.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.42.2</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
@@ -1395,7 +1396,6 @@ _网页主体 = """
     <main class="main">
       <div class="content">
         <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="outline-button" id="logout" type="button" hidden>退出登录</button><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
-        <nav class="page-tabs" aria-label="当前页面分区"><span class="page-tab" data-tab="bot">基本信息</span><span class="page-tab" data-tab="novels">小说功能</span><span class="page-tab" data-tab="pans">网盘配置</span><span class="page-tab" data-tab="runtime">运行状态</span><span class="page-tab" data-tab="settings">系统设置</span></nav>
         <div id="notice" class="notice"></div>
         <section id="page-dashboard" class="page-view" data-page="dashboard">
           <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态；页面切换请使用左侧导航。</p></div></div>
@@ -1422,7 +1422,7 @@ _网页主体 = """
           <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
         </article></section>
 
-        <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">主分享网盘会用于所有小说完成消息。切换后立即保存。</p><div class="pan-note"><span>当前主分享网盘</span><strong id="pan-active-label">--</strong></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
+        <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="pan-console console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">三个网盘集中在这里管理，左侧导航负责页面切换。</p><div class="pan-note"><span>当前主分享网盘</span><strong id="pan-active-label">--</strong></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
 
         <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
 
@@ -1468,7 +1468,6 @@ _网页脚本 = """
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
         document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
-        document.querySelectorAll('.page-tabs [data-tab]').forEach((node) => node.classList.toggle('active', node.dataset.tab === next));
         if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
         window.scrollTo({top:0, behavior:'auto'});
       };
