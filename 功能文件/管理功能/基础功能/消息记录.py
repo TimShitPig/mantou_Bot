@@ -136,8 +136,76 @@ def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
     return 文本
 
 
+_表情标签规则 = re.compile(r'<faceType=\d+,faceId="([^"]*)"(?:,ext="([^"]*)")?>')
+_表情JSON规则 = re.compile(r'"text"\s*:\s*"([^"]*)"')
+
+
+def _解码表情文本(标签: str) -> str:
+    """把 QQ 官方表情标签解码成可读文本，如 [？]。"""
+    try:
+        import base64
+        import json as _json
+
+        匹配 = _表情标签规则.search(标签)
+        if not 匹配:
+            return 标签
+        表情ID = 匹配.group(1) or ""
+        编码 = 匹配.group(2) or ""
+        文本 = ""
+        if 编码:
+            try:
+                原文 = base64.b64decode(编码).decode("utf-8", errors="ignore")
+                try:
+                    数据 = _json.loads(原文)
+                    文本 = str(数据.get("text") or "")
+                except Exception:
+                    文本 = _表情JSON规则.search(原文).group(1) if _表情JSON规则.search(原文) else ""
+            except Exception:
+                pass
+        if not 文本 or not 文本.strip():
+            return f"[表情{表情ID}]" if 表情ID else "[表情]"
+        return f"{文本}"
+    except Exception:
+        return 标签
+
+
 def _提取消息文本(内容: Any) -> str:
-    return str(内容 or "").strip()
+    return _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(内容 or "").strip())
+
+
+_REFIDX规则 = re.compile(r"(?:^|[?&])msg_idx=([^&]+)")
+
+
+def _提取REFIDX(消息: Any) -> str:
+    """从消息 message_scene.ext 提取 REFIDX（QQ 官方引用消息专用标识）。"""
+    try:
+        场景 = _读取字段(消息, "message_scene") or {}
+        if isinstance(场景, str):
+            try:
+                import json as _json
+
+                场景 = _json.loads(场景)
+            except Exception:
+                场景 = {}
+        扩展 = 场景.get("ext") if isinstance(场景, dict) else None
+        if isinstance(扩展, str):
+            扩展 = [扩展]
+        if not isinstance(扩展, list):
+            return ""
+        for 项 in 扩展:
+            if not isinstance(项, str):
+                continue
+            匹配 = _REFIDX规则.search(项)
+            if 匹配:
+                try:
+                    from urllib.parse import unquote
+
+                    return unquote(匹配.group(1))
+                except Exception:
+                    return 匹配.group(1)
+    except Exception:
+        pass
+    return ""
 
 
 def _提取附件媒体(消息: Any) -> dict[str, str] | None:
@@ -250,6 +318,7 @@ def 记录收到消息(
         消息引用 = _读取字段(消息, "message_reference")
         if 消息引用:
             引用ID = str(_读取字段(消息引用, "message_id") or "").strip()
+        自身REFIDX = _提取REFIDX(消息)
         _记录成员资料(会话标识, 成员标识, 昵称, 是机器人, 角色)
         会话 = _取得会话缓存(会话标识, 类型, appid)
         if 类型 == "group" and 会话标识 not in 群信息缓存:
@@ -269,6 +338,7 @@ def 记录收到消息(
             "recalled": False,
             "media": _提取媒体字段(内容, 消息),
             "reference_id": 引用ID or "",
+            "refidx": 自身REFIDX or "",
         }
         会话["messages"].append(记录)
         if len(会话["messages"]) > 每会话最大消息数:
@@ -478,13 +548,23 @@ def _缓存文件路径() -> Path:
         return Path(".") / 备注缓存文件名
 
 
-def _读取本地缓存文件() -> dict[str, Any]:
+_本地缓存内存: dict[str, Any] | None = None
+_本地缓存时间: float = 0.0
+
+
+def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
+    global _本地缓存内存, _本地缓存时间
+    now = time.time()
+    if not 强制刷新 and _本地缓存内存 is not None and now - _本地缓存时间 < 5.0:
+        return _本地缓存内存
     try:
         路径 = _缓存文件路径()
         if 路径.exists():
             with open(路径, "r", encoding="utf-8") as f:
                 数据 = json.load(f)
             if isinstance(数据, dict):
+                _本地缓存内存 = 数据
+                _本地缓存时间 = now
                 return 数据
     except Exception as exc:
         logger.warning("消息记录本地缓存读取失败：错误类型=%s", type(exc).__name__)
@@ -499,6 +579,8 @@ def _写入本地缓存文件(数据: dict[str, Any]) -> None:
         with open(临时, "w", encoding="utf-8") as f:
             json.dump(数据, f, ensure_ascii=False, indent=1)
         临时.replace(路径)
+        _本地缓存内存 = 数据
+        _本地缓存时间 = time.time()
     except Exception as exc:
         logger.warning("消息记录本地缓存写入失败：错误类型=%s", type(exc).__name__)
 
@@ -596,16 +678,17 @@ def 获取聊天列表(
     except (TypeError, ValueError):
         页码, 每页 = 1, 50
     聊天列表: list[dict[str, Any]] = []
+    本地备注表 = (_读取本地缓存文件().get("remarks") or {})
     for 会话标识, 会话 in 消息缓存.items():
         类型 = str(会话.get("chat_type") or "group")
         if 过滤 == "group" and 类型 != "group":
             continue
         if 过滤 == "user" and 类型 != "user":
             continue
-        if 过滤 == "remark":
-            备注 = 获取群备注(会话标识)
-            if not 备注:
-                continue
+        会话备注 = 本地备注表.get(会话标识) or {}
+        备注 = str(会话备注.get("remark") or "")
+        if 过滤 == "remark" and not 备注:
+            continue
         if 类型 == "group" and not 群信息缓存.get(会话标识):
             标记群信息待刷新(会话标识)
         显示名 = _聊天显示名(会话标识, 会话)
@@ -619,12 +702,12 @@ def 获取聊天列表(
                 "chat_type": 类型,
                 "appid": str(会话.get("appid") or ""),
                 "nickname": 显示名,
-                "group_qq": 获取群QQ号(会话标识),
-                "last_content": str(最后消息.get("content") or 会话.get("last_content") or ""),
+                "group_qq": str(会话备注.get("group_qq") or ""),
+                "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后消息.get("content") or 会话.get("last_content") or "")),
                 "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
                 "last_ts": int(会话.get("last_ts") or 0),
                 "msg_count": len(消息列表),
-                "remark": 获取群备注(会话标识),
+                "remark": 备注,
                 "in_group": True,
                 "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
             }
@@ -685,6 +768,8 @@ def 获取消息历史(
     for 历史项 in 返回消息:
         if isinstance(历史项, dict) and 历史项.get("raw_message"):
             历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
+        if isinstance(历史项, dict) and 历史项.get("content"):
+            历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
     return {
         "messages": 返回消息,
         "last_msg_id": str(最后消息.get("message_id") or ""),
@@ -878,7 +963,14 @@ async def 发送消息(
     if 事件ID:
         消息体["event_id"] = 事件ID
     if 引用消息ID:
-        消息体["message_reference"] = {"message_id": 引用消息ID}
+        引用目标 = 引用消息ID
+        # QQ 官方引用需优先使用被引用消息自身的 REFIDX，找不到时回退完整消息 ID
+        for 会话记录 in 消息缓存.values():
+            目标 = next((x for x in (会话记录.get("messages") or []) if str(x.get("message_id") or "") == 引用消息ID), None)
+            if 目标 and 目标.get("refidx"):
+                引用目标 = str(目标.get("refidx"))
+                break
+        消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     if 类型 == "markdown":
         消息体["msg_type"] = 2
