@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.5"
+控制台版本 = "5.44.6"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1631,7 +1631,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.5</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.6</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1686,59 +1686,63 @@ _网页主体 = """
 
         <section id="page-messages" class="page-view" data-page="messages" hidden>
           <style>
-            .msg-shell { display:grid; grid-template-columns:300px minmax(0,1fr); gap:16px; min-height:calc(100vh - 190px); align-items:stretch; }
-            .msg-panel { display:flex; flex-direction:column; min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); overflow:hidden; }
-            .msg-list-head { display:flex; flex-direction:column; gap:10px; padding:14px 14px 10px; border-bottom:1px solid var(--line); }
-            .msg-filter { display:flex; gap:5px; }
-            .msg-filter button { flex:1 1 0; min-width:0; min-height:30px; padding:0 6px; border:0; border-radius:7px; background:transparent; color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; transition:all .16s ease; }
-            .msg-filter button.active { background:var(--primary-soft); color:var(--primary-dark); }
+            .msg-shell { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:calc(100vh - 190px); align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
+            .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
+            .chat-list-panel { border-right:1px solid #e8e9ec; background:#fafafa; }
+            .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 12px 8px; border-bottom:1px solid #e8e9ec; background:#fff; }
+            .msg-filter { display:flex; gap:2px; padding:2px; background:#f2f3f5; border-radius:8px; }
+            .msg-filter button { flex:1 1 0; min-width:0; min-height:26px; padding:0 4px; border:0; border-radius:6px; background:transparent; color:#666; font-size:11px; font-weight:600; cursor:pointer; }
+            .msg-filter button.active { background:#fff; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.08); }
             .msg-search { display:flex; gap:6px; }
-            .msg-search input { flex:1 1 0; min-width:0; height:32px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:#fbfbff; color:var(--ink); font-size:12px; outline:none; }
-            .msg-search input:focus { border-color:#c9c2f5; }
-            .msg-search button { height:32px; padding:0 11px; border:0; border-radius:8px; background:var(--primary); color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
-            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:6px; }
-            .msg-chat { display:flex; gap:10px; width:100%; min-height:60px; padding:9px 10px; border:0; border-radius:10px; background:transparent; text-align:left; cursor:pointer; transition:background .15s ease; }
-            .msg-chat:hover { background:#f6f5ff; }
-            .msg-chat.active { background:var(--primary-soft); }
-            .msg-chat-avatar { position:relative; width:38px; height:38px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:13px; font-weight:800; overflow:hidden; }
-            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; }
-            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:13px; font-weight:800; color:#5c58d8; }
+            .msg-search input { flex:1 1 0; min-width:0; height:30px; padding:0 10px; border:1px solid transparent; border-radius:15px; background:#f2f3f5; color:#333; font-size:12px; outline:none; transition:all .15s ease; }
+            .msg-search input:focus { border-color:#12b7f5; background:#fff; }
+            .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
+            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; }
+            .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
+            .msg-chat:hover { background:#ececee; }
+            .msg-chat.active { background:#dbeafd; }
+            .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
+            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
+            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
             .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
-            .msg-chat-main { flex:1 1 0; min-width:0; }
+            .msg-chat-main { flex:1 1 0; min-width:0; align-self:center; }
             .msg-chat-top { display:flex; align-items:center; gap:6px; }
-            .msg-chat-top strong { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-            .msg-chat-top small { margin-left:auto; flex:0 0 auto; color:var(--soft); font-size:10px; }
-            .msg-chat-sub { margin-top:4px; color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-            .msg-chat-meta { margin-top:3px; color:var(--soft); font-size:10px; }
-            .msg-chat-type { display:inline-block; padding:1px 5px; border-radius:5px; background:#f0f0f7; color:var(--muted); font-size:9px; }
-            .msg-empty { padding:26px 14px; color:var(--soft); font-size:12px; text-align:center; }
-            .msg-work { display:flex; flex-direction:column; min-width:0; min-height:0; }
-            .msg-head { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); }
-            .msg-head-name { font-size:14px; font-weight:750; }
-            .msg-head-sub { margin-top:2px; color:var(--muted); font-size:11px; }
+            .msg-chat-top strong { font-size:13px; font-weight:600; color:#222; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-chat-top small { margin-left:auto; flex:0 0 auto; color:#999; font-size:10px; }
+            .msg-chat-sub { margin-top:3px; color:#999; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-chat-type { display:none; }
+            .msg-chat-meta { display:none; }
+            .msg-empty { padding:26px 14px; color:#aaa; font-size:12px; text-align:center; }
+            .msg-work { display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
+            .msg-head { display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #e8e9ec; }
+            .msg-head-name { font-size:15px; font-weight:650; color:#222; }
+            .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
             .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
-            .msg-btn { min-height:30px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); font-size:11px; font-weight:650; cursor:pointer; transition:all .16s ease; }
-            .msg-btn:hover { border-color:#cfc8f0; color:var(--primary-dark); background:#fbfaff; }
-            .msg-btn.primary { border-color:var(--primary); background:var(--primary); color:#fff; }
-            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:16px 16px 10px; background:#fafaff; }
-            .msg-day { margin:8px 0; color:var(--soft); font-size:10px; text-align:center; }
-            .msg-row { display:flex; gap:9px; margin-bottom:13px; }
+            .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }
+            .msg-btn:hover { border-color:#12b7f5; color:#12b7f5; }
+            .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
+            .msg-btn.primary:hover { background:#0ea5e0; }
+            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; }
+            .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
+            .msg-row { display:flex; gap:9px; margin-bottom:14px; }
             .msg-row.self { flex-direction:row-reverse; }
-            .msg-avatar { position:relative; width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:11px; font-weight:800; overflow:hidden; }
-            .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; }
-            .msg-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:11px; font-weight:800; color:#5c58d8; }
+            .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
+            .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
+            .msg-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:12px; font-weight:800; color:#3a7bd5; }
             .msg-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
-            .msg-bubble-wrap { max-width:min(72%,540px); min-width:0; }
+            .msg-bubble-wrap { max-width:min(70%,560px); min-width:0; }
             .msg-row.self .msg-bubble-wrap { display:flex; flex-direction:column; align-items:flex-end; }
-            .msg-bubble-name { margin-bottom:3px; color:var(--muted); font-size:10px; padding-left:2px; }
+            .msg-bubble-name { margin-bottom:3px; color:#999; font-size:10px; padding-left:2px; }
             .msg-row.self .msg-bubble-name { padding-left:0; padding-right:2px; }
-            .msg-bubble { padding:8px 11px; border-radius:4px 11px 11px 11px; background:#fff; border:1px solid var(--line); color:var(--ink); font-size:13px; line-height:1.6; word-break:break-word; white-space:pre-wrap; }
-            .msg-row.self .msg-bubble { border-radius:11px 4px 11px 11px; background:var(--primary-soft); border-color:transparent; }
-            .msg-bubble.recalled { color:var(--soft); font-style:italic; background:#f4f4f8; }
-            .msg-bubble-quote { margin:-2px 0 6px; padding:6px 9px; border-left:3px solid #d6d0f2; border-radius:4px; background:#f6f5fc; color:var(--muted); font-size:11px; }
+            .msg-bubble { padding:8px 12px; border-radius:3px 10px 10px 10px; background:#fff; color:#333; font-size:13px; line-height:1.6; word-break:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+            .msg-row.self .msg-bubble { border-radius:10px 3px 10px 10px; background:#12b7f5; color:#fff; }
+            .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
+            .msg-bubble.recalled { color:#bbb; font-style:italic; background:#eee; }
+            .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
+            .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
             .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; }
-            .msg-meta { margin-top:3px; color:var(--soft); font-size:9px; padding-left:2px; }
+            .msg-meta { margin-top:3px; color:#b0b0b0; font-size:9px; padding-left:2px; }
             .msg-row.self .msg-meta { text-align:right; padding-left:0; padding-right:2px; }
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
             .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
@@ -1748,39 +1752,24 @@ _网页主体 = """
             .msg-tag.recalled { background:#f2f2f5; color:#9a9cb0; }
             .msg-actions { display:flex; gap:5px; margin-top:5px; }
             .msg-row.self .msg-actions { justify-content:flex-end; }
-            .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#eeeef5; color:var(--muted); font-size:10px; cursor:pointer; }
-            .msg-action:hover { background:#e2dff7; color:var(--primary-dark); }
-            .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); font-size:11px; cursor:pointer; }
-            .msg-composer { display:flex; flex-direction:column; gap:8px; padding:10px 14px 12px; border-top:1px solid var(--line); background:#fff; }
+            .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
+            .msg-action:hover { background:#d2e9fb; color:#12b7f5; }
+            .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
+            .msg-composer { display:flex; flex-direction:column; gap:8px; padding:10px 14px 12px; background:#fff; border-top:1px solid #e8e9ec; }
             .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
-            .msg-composer-tabs button { min-height:27px; padding:0 10px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); font-size:11px; font-weight:650; cursor:pointer; }
-            .msg-composer-tabs button.active { border-color:var(--primary); color:var(--primary-dark); background:var(--primary-soft); }
+            .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
+            .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
             .msg-composer-mode { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
-            .msg-composer-mode select { height:30px; padding:0 8px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font-size:11px; }
-            .msg-composer-mode input { height:30px; min-width:120px; padding:0 8px; border:1px solid var(--line); border-radius:7px; background:#fbfbff; color:var(--ink); font-size:11px; outline:none; }
-            .msg-textarea { min-height:74px; max-height:150px; padding:9px 11px; border:1px solid var(--line); border-radius:9px; background:#fbfbff; color:var(--ink); font-size:12px; line-height:1.55; resize:vertical; outline:none; }
-            .msg-textarea:focus { border-color:#c9c2f5; }
+            .msg-composer-mode select { height:28px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#333; font-size:11px; }
+            .msg-composer-mode input { height:28px; min-width:120px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
+            .msg-textarea { min-height:64px; max-height:150px; padding:9px 11px; border:0; border-radius:6px; background:#f2f3f5; color:#333; font-size:12px; line-height:1.55; resize:vertical; outline:none; transition:all .15s ease; }
+            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
             .msg-extra { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
-            .msg-extra input { height:30px; min-width:0; padding:0 8px; border:1px solid var(--line); border-radius:7px; background:#fbfbff; color:var(--ink); font-size:11px; outline:none; }
+            .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
             .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
-            .msg-send-row .msg-btn.primary { min-height:34px; padding:0 22px; }
-            .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:8px; background:#f8f7ff; color:var(--muted); font-size:11px; }
-            .msg-quote-preview b { color:var(--ink); }
-            .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
-            .msg-raw-modal[hidden] { display:none; }
-            .msg-raw-box { width:min(720px,100%); max-height:78vh; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
-            .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid var(--line); }
-            .msg-raw-head strong { font-size:13px; }
-            .msg-raw-head button { border:0; background:transparent; color:var(--muted); font-size:16px; cursor:pointer; }
-            .msg-raw-content { flex:1 1 0; min-height:0; overflow:auto; padding:13px 15px; white-space:pre-wrap; word-break:break-all; color:var(--ink); font:12px/1.6 Consolas,Monaco,monospace; }
-            .msg-mute-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
-            .msg-mute-modal[hidden] { display:none; }
-            .msg-mute-box { width:min(400px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
-            .msg-mute-box h3 { margin:0 0 12px; font-size:14px; }
-            .msg-mute-presets { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
-            .msg-mute-presets button { min-height:30px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); font-size:11px; cursor:pointer; }
-            .msg-mute-presets button.active { border-color:var(--primary); color:var(--primary-dark); background:var(--primary-soft); }
-            .msg-mute-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+            .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
+            .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:8px; background:#f8f7ff; color:#999; font-size:11px; }
+            .msg-quote-preview b { color:#333; }
             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
           </style>
           <div class="msg-shell">
@@ -2027,6 +2016,20 @@ _网页脚本 = """
         if (c.startsWith('[图文卡片]')) return '卡片';
         return '文本';
       };
+      const fmtChatTime = (ts) => {
+        const s = String(ts || '').trim();
+        if (!s) return '';
+        const d = new Date(s.replace('T', ' ').replace(/-/g, '/'));
+        if (isNaN(d.getTime())) return s.slice(5, 16);
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const sameDay = d.toDateString() === now.toDateString();
+        const yest = new Date(now); yest.setDate(now.getDate() - 1);
+        if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        if (d.toDateString() === yest.toDateString()) return '昨天';
+        if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      };
       const renderMsgChats = (data) => {
         const node = $('msg-chats'); const chats = data.chats || [];
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
@@ -2037,7 +2040,7 @@ _网页脚本 = """
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           return `<button type="button" class="msg-chat ${msgState.chatId === chat.chat_id ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
-            <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(chat.last_time||'')}</small></span>
+            <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
             <span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
@@ -2047,6 +2050,27 @@ _网页脚本 = """
       const loadMsgChats = async () => {
         try { const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})}); renderMsgChats(data); }
         catch (error) { if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
+      };
+      const fmtDayLabel = (ts) => {
+        const s = String(ts || '').trim();
+        if (!s) return '';
+        const d = new Date(s.replace('T', ' ').replace(/-/g, '/'));
+        if (isNaN(d.getTime())) return s.slice(0, 10);
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        if (d.toDateString() === now.toDateString()) return '今天';
+        const yest = new Date(now); yest.setDate(now.getDate() - 1);
+        if (d.toDateString() === yest.toDateString()) return '昨天';
+        if (d.getFullYear() === now.getFullYear()) return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+        return s.slice(0, 10);
+      };
+      const fmtMsgTime = (ts) => {
+        const s = String(ts || '').trim();
+        if (!s) return '';
+        const d = new Date(s.replace('T', ' ').replace(/-/g, '/'));
+        if (isNaN(d.getTime())) return s.slice(11, 16);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
       };
       const renderMsgMessages = (data) => {
         const body = $('msg-body'); const msgs = data.messages || [];
@@ -2060,7 +2084,7 @@ _网页脚本 = """
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
         msgs.forEach((m) => {
           const day = String(m.timestamp||'').slice(0,10);
-          if (day !== lastDay && day) { html += `<div class="msg-day">${esc(day)}</div>`; lastDay = day; }
+          if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self);
           const recalled = Boolean(m.recalled);
           const profiles = data.member_profiles || {};
@@ -2083,7 +2107,7 @@ _网页脚本 = """
           };
           const ref = (data.references || {})[m.reference_id];
           const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const media = m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:var(--muted)">${esc(m.media.src)}</span></div>`) : '';
+          const media = m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
           const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
           const actions = [];
           if (!isSelf && !recalled && m.message_id) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
@@ -2095,7 +2119,7 @@ _网页脚本 = """
             <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(m.nickname||'')}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${esc(content)}${media}</div>
-              <div class="msg-meta">${esc(m.timestamp||'')}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
+              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });

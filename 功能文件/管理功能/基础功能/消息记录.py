@@ -583,13 +583,14 @@ def 获取聊天列表(
                 "group_qq": 获取群QQ号(会话标识),
                 "last_content": str(最后消息.get("content") or 会话.get("last_content") or ""),
                 "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
+                "last_ts": int(会话.get("last_ts") or 0),
                 "msg_count": len(消息列表),
                 "remark": 获取群备注(会话标识),
                 "in_group": True,
                 "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
             }
         )
-    聊天列表.sort(key=lambda x: (x.get("last_time") or "", x.get("chat_id") or ""), reverse=True)
+    聊天列表.sort(key=lambda x: (x.get("last_ts") or 0, x.get("chat_id") or ""), reverse=True)
     总数 = len(聊天列表)
     开始 = (页码 - 1) * 每页
     return {
