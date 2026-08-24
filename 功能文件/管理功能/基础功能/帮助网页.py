@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import ipaddress
 import logging
+import socket
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -28,6 +29,8 @@ class 帮助网页服务:
 
 # importlib.reload 会复用原模块字典；保留旧引用，确保重载时可以清理旧端口。
 当前帮助网页服务: 帮助网页服务 | None = globals().get("当前帮助网页服务")
+自动公开地址缓存: str | None = globals().get("自动公开地址缓存")
+网页服务启动状态: bool | None = globals().get("网页服务启动状态")
 
 
 def _读取帮助网页字段(配置: Any, 字段名: str) -> Any:
@@ -107,9 +110,94 @@ def _规范化公开地址(value: Any) -> str:
     return urlunsplit((parsed.scheme.lower(), parsed.netloc, path, "", ""))
 
 
+def _获取服务器IPv4() -> str:
+    """先获取公网 IPv4，再回退到默认出站网卡地址。"""
+    try:
+        from urllib.request import Request, urlopen
+
+        for 地址服务 in (
+            "https://api.ipify.org",
+            "https://ifconfig.me/ip",
+            "https://ip.sb",
+            "https://icanhazip.com",
+        ):
+            try:
+                请求 = Request(地址服务, headers={"User-Agent": "mantou-help-web/1.0"})
+                with urlopen(请求, timeout=2) as 响应:
+                    文本 = 响应.read(64).decode("ascii", "ignore").strip()
+                解析地址 = ipaddress.ip_address(文本)
+                if (
+                    解析地址.version == 4
+                    and not 解析地址.is_loopback
+                    and not 解析地址.is_unspecified
+                    and not 解析地址.is_link_local
+                ):
+                    return 文本
+            except (OSError, ValueError):
+                continue
+
+    except Exception:
+        pass
+
+    候选地址: list[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            候选地址.append(str(sock.getsockname()[0]))
+    except OSError:
+        pass
+
+    for 主机名 in (socket.gethostname(), socket.getfqdn()):
+        try:
+            for 地址 in socket.gethostbyname_ex(主机名)[2]:
+                候选地址.append(str(地址))
+        except OSError:
+            continue
+
+    for 地址 in 候选地址:
+        try:
+            解析地址 = ipaddress.ip_address(地址)
+        except ValueError:
+            continue
+        if 解析地址.version == 4 and not (
+            解析地址.is_loopback
+            or 解析地址.is_unspecified
+            or 解析地址.is_link_local
+        ):
+            return 地址
+    return "127.0.0.1"
+
+
+def _获取自动公开地址(配置: Any = None) -> str:
+    global 自动公开地址缓存
+    主机, 端口 = _读取监听配置(配置)
+    主机文本 = 主机.strip().lower().rstrip(".")
+    if 主机文本 in {"localhost", "127.0.0.1"}:
+        公开主机 = "127.0.0.1"
+    elif 主机文本 not in {"", "0.0.0.0", "::"}:
+        try:
+            公开主机 = str(ipaddress.ip_address(主机文本))
+        except ValueError:
+            公开主机 = _获取服务器IPv4()
+    else:
+        if not 自动公开地址缓存:
+            自动公开地址缓存 = _获取服务器IPv4()
+        公开主机 = 自动公开地址缓存
+    return _规范化公开地址(f"http://{公开主机}:{端口}")
+
+
+def _计算帮助网页地址(配置: Any = None) -> str:
+    手动地址 = _规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))
+    return 手动地址 or _获取自动公开地址(配置)
+
+
 def 获取帮助网页地址(配置: Any = None) -> str:
-    """返回配置中的外网帮助地址；未配置或格式不正确时返回空字符串。"""
-    return _规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))
+    """返回已启动服务地址；服务启动前返回自动候选地址供初始化使用。"""
+    if 当前帮助网页服务 is not None:
+        return 当前帮助网页服务.public_url
+    if 网页服务启动状态 is False:
+        return ""
+    return _计算帮助网页地址(配置)
 
 
 def _读取监听配置(配置: Any) -> tuple[str, int]:
@@ -373,14 +461,12 @@ async def _处理帮助网页(request: web.Request) -> web.Response:
 
 
 async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | None:
-    global 当前帮助网页服务
+    global 当前帮助网页服务, 网页服务启动状态
     await 停止帮助网页服务(当前帮助网页服务)
     当前帮助网页服务 = None
+    网页服务启动状态 = False
 
-    public_url = 获取帮助网页地址(配置)
-    if not public_url:
-        logger.info("帮助网页未启动：未配置有效域名")
-        return None
+    public_url = _计算帮助网页地址(配置)
 
     host, port = _读取监听配置(配置)
     app = web.Application()
@@ -396,12 +482,13 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
         return None
 
     当前帮助网页服务 = 帮助网页服务(runner, public_url, host, port)
-    logger.info("帮助网页已启动：监听端口=%s", port)
+    网页服务启动状态 = True
+    logger.info("帮助网页已启动：监听地址=%s, 监听端口=%s, 访问地址=%s", host, port, public_url)
     return 当前帮助网页服务
 
 
 async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
-    global 当前帮助网页服务
+    global 当前帮助网页服务, 网页服务启动状态
     if 服务 is None:
         return
     try:
@@ -411,3 +498,4 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
     finally:
         if 当前帮助网页服务 is 服务:
             当前帮助网页服务 = None
+            网页服务启动状态 = None
