@@ -217,6 +217,10 @@ def 记录收到消息(
         是机器人 = bool(_读取字段(作者, "bot") or False)
         角色 = str(_读取字段(作者, "member_role") or "").strip()
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
+        引用ID = ""
+        消息引用 = _读取字段(消息, "message_reference")
+        if 消息引用:
+            引用ID = str(_读取字段(消息引用, "message_id") or "").strip()
         _记录成员资料(会话标识, 成员标识, 昵称, 是机器人, 角色)
         会话 = _取得会话缓存(会话标识, 类型, appid)
         if 类型 == "group" and 会话标识 not in 群信息缓存:
@@ -235,6 +239,7 @@ def 记录收到消息(
             "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
             "recalled": False,
             "media": _提取媒体字段(内容),
+            "reference_id": 引用ID or "",
         }
         会话["messages"].append(记录)
         if len(会话["messages"]) > 每会话最大消息数:
@@ -624,6 +629,19 @@ def 获取消息历史(
     原始数量 = len(会话消息)
     返回消息 = 会话消息[-limit:]
     最后消息 = 会话消息[-1] if 会话消息 else {}
+    引用映射: dict[str, dict[str, str]] = {}
+    消息索引 = {str(m.get("message_id") or ""): m for m in 消息列表}
+    for 消息记录项 in 返回消息:
+        引用ID = str(消息记录项.get("reference_id") or "").strip()
+        if not 引用ID or 引用ID in 引用映射:
+            continue
+        被引用 = 消息索引.get(引用ID)
+        if 被引用:
+            引用映射[引用ID] = {
+                "nickname": str(被引用.get("nickname") or ""),
+                "content": str(被引用.get("content") or ""),
+                "timestamp": str(被引用.get("timestamp") or ""),
+            }
     return {
         "messages": 返回消息,
         "last_msg_id": str(最后消息.get("message_id") or ""),
@@ -632,6 +650,7 @@ def 获取消息历史(
         "chat_name": _聊天显示名(会话标识, 会话),
         "group_info": 获取缓存的群信息(会话标识),
         "member_profiles": 成员资料缓存.get(会话标识, {}),
+        "references": 引用映射,
     }
 
 
