@@ -879,6 +879,7 @@ async def _上传媒体(
     文件路径: str = "",
     文件URL: str = "",
     文件类型: int = 1,
+    文件字节: bytes | None = None,
 ) -> str:
     """上传媒体到群/私聊，返回 file_info。"""
     from botpy.http import Route
@@ -886,7 +887,9 @@ async def _上传媒体(
     payload: dict[str, Any] = {"file_type": 文件类型, "srv_send_msg": False}
     地址 = str(文件路径 or "").strip()
     远程 = str(文件URL or "").strip()
-    if 地址 and Path(地址).is_file():
+    if 文件字节:
+        payload["file_data"] = base64.b64encode(文件字节).decode("utf-8")
+    elif 地址 and Path(地址).is_file():
         with open(地址, "rb") as f:
             payload["file_data"] = base64.b64encode(f.read()).decode("utf-8")
     elif 远程.startswith("http://") or 远程.startswith("https://"):
@@ -921,6 +924,7 @@ async def 发送消息(
     自定义ID: str = "",
     引用消息ID: str = "",
     图片路径: str = "",
+    图片数据: str = "",
     媒体路径: str = "",
     媒体URL: str = "",
     媒体文件类型: int = 1,
@@ -971,6 +975,32 @@ async def 发送消息(
                 引用目标 = str(目标.get("refidx"))
                 break
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
+
+    图片字节: bytes | None = None
+    if 图片数据:
+        图片数据 = str(图片数据 or "").strip()
+        try:
+            if 图片数据.startswith("data:") and "," in 图片数据:
+                图片数据 = 图片数据.split(",", 1)[1]
+            图片字节 = base64.b64decode(图片数据)
+        except Exception:
+            return {"ok": False, "message": "图片数据无效"}
+
+    if 图片字节 is not None:
+        file_info = await _上传媒体(
+            _http,
+            会话标识,
+            会话类型 or "group",
+            文件类型=1,
+            文件字节=图片字节,
+        )
+        if not file_info:
+            return {"ok": False, "message": "图片上传失败"}
+        消息体["msg_type"] = 7
+        消息体.pop("content", None)
+        消息体["media"] = {"file_info": file_info}
+        if 内容:
+            消息体["content"] = 内容
 
     if 类型 == "markdown":
         消息体["msg_type"] = 2
