@@ -20,7 +20,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.39.0"
+控制台版本 = "5.39.1"
 
 
 @dataclass
@@ -433,79 +433,106 @@ _网页头部 = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101828">
+  <meta name="theme-color" content="#f8f8ff">
   <title>馒头控制台</title>
   <style>
-    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#e5e7eb; --bg:#f5f7fb; --panel:#fff; --nav:#101828; --nav-2:#182230; --blue:#2563eb; --blue-soft:#eff6ff; --green:#16a34a; --green-soft:#ecfdf3; --red:#dc2626; --amber-soft:#fffbeb; }
+    :root { color-scheme: light; --ink:#24243a; --muted:#7d8096; --soft:#a8abc0; --line:#e8e9f2; --bg:#f7f8fd; --panel:#fff; --primary:#6b63f5; --primary-dark:#574eea; --primary-soft:#f0efff; --mint:#e9fbf3; --mint-ink:#319e6b; --peach:#fff3ed; --peach-ink:#d77755; --yellow:#fff9e5; --yellow-ink:#bd8a23; --pink:#fff0f7; --pink-ink:#c66791; --shadow:0 10px 30px rgba(60,57,112,.06); }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow-x:hidden; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 Inter,"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif; overflow-x:hidden; }
     button,input { font:inherit; }
     button { cursor:pointer; }
-    .shell { min-height:100vh; display:grid; grid-template-columns:248px minmax(0,1fr); }
-    .sidebar { background:var(--nav); color:#d0d5dd; padding:24px 16px; display:flex; flex-direction:column; gap:26px; }
-    .brand { display:flex; align-items:center; gap:11px; padding:0 10px; color:#fff; }
-    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:10px; background:#2563eb; color:#fff; font-weight:800; }
-    .brand strong { display:block; font-size:15px; }
-    .brand small { display:block; margin-top:2px; color:#98a2b3; font-size:11px; }
-    .nav-label { margin:0 10px 8px; color:#667085; font-size:10px; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; }
-    .nav { display:grid; gap:4px; }
-    .nav a { display:flex; align-items:center; gap:10px; padding:10px 11px; border-radius:7px; color:#98a2b3; text-decoration:none; }
-    .nav a:hover,.nav a.active,.nav a[aria-current="true"] { background:var(--nav-2); color:#fff; }
-    .nav-icon { width:18px; color:#98a2b3; text-align:center; font-size:16px; }
-    .nav a:focus-visible,.refresh:focus-visible,.switch:focus-visible,.pan-select:focus-visible { outline:3px solid #93c5fd; outline-offset:2px; }
-    .sidebar-foot { margin-top:auto; padding:13px 12px; border:1px solid #293546; border-radius:8px; color:#98a2b3; font-size:12px; }
-    .sidebar-foot strong { display:block; margin-bottom:3px; color:#e4e7ec; font-size:13px; }
-    .main { min-width:0; }
-    .topbar { height:72px; display:flex; align-items:center; justify-content:space-between; padding:0 34px; background:#fff; border-bottom:1px solid var(--line); }
-    .topbar h1 { margin:0; font-size:20px; }
-    .topbar p { margin:3px 0 0; color:var(--muted); font-size:12px; }
-    .top-actions { display:flex; align-items:center; gap:12px; }
-    .status-dot { display:inline-flex; align-items:center; gap:7px; padding:7px 10px; border:1px solid #d1fadf; border-radius:999px; background:var(--green-soft); color:#15803d; font-size:12px; font-weight:700; }
-    .status-dot::before { content:""; width:7px; height:7px; border-radius:50%; background:#22c55e; }
-    .refresh { border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); padding:7px 11px; }
-    .refresh:hover { border-color:#98a2b3; color:var(--ink); }
-    .content { width:min(1380px,calc(100% - 68px)); margin:0 auto; padding:28px 0 50px; }
-    .notice { display:none; margin-bottom:18px; padding:14px 16px; border:1px solid #fedf89; border-radius:8px; background:var(--amber-soft); color:#92400e; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:224px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); grid-template-areas:"top top" "side main"; }
+    .topbar { grid-area:top; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 30px; background:#fff; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:var(--primary-soft); color:var(--primary); font-size:16px; font-weight:800; }
+    .brand strong { font-size:16px; letter-spacing:.1px; }
+    .version-badge { display:inline-flex; margin-left:7px; padding:3px 8px; border-radius:999px; background:#f3f3f8; color:var(--muted); font-size:11px; font-weight:650; }
+    .top-actions { display:flex; align-items:center; gap:16px; }
+    .status-dot { display:inline-flex; align-items:center; gap:7px; color:var(--mint-ink); font-size:12px; font-weight:650; }
+    .status-dot::before { content:""; width:7px; height:7px; border-radius:50%; background:#4dbb82; box-shadow:0 0 0 4px var(--mint); }
+    .admin-chip { display:flex; align-items:center; gap:8px; color:var(--ink); font-size:13px; font-weight:650; }
+    .admin-avatar { width:28px; height:28px; display:grid; place-items:center; border-radius:50%; background:#f0efff; color:var(--primary); font-size:12px; font-weight:800; }
+    .admin-chevron { color:var(--soft); font-size:13px; }
+    .sidebar { grid-area:side; min-width:0; background:#fff; border-right:1px solid var(--line); padding:24px 14px 18px; display:flex; flex-direction:column; gap:24px; }
+    .profile { display:grid; justify-items:center; gap:7px; padding:4px 0 8px; }
+    .bot-avatar { position:relative; width:72px; height:72px; overflow:hidden; border:5px solid #f3f2ff; border-radius:50%; background:#e9eaff; box-shadow:0 5px 14px rgba(92,87,210,.12); }
+    .bot-avatar::before { content:""; position:absolute; width:62px; height:58px; left:0; top:5px; border-radius:50% 50% 42% 42%; background:#a2a5f7; }
+    .bot-avatar::after { content:"✦"; position:absolute; right:7px; top:4px; color:#fff; font-size:13px; }
+    .avatar-face { position:absolute; left:16px; top:27px; z-index:1; color:#4f50a8; font-size:23px; letter-spacing:5px; }
+    .profile strong { font-size:14px; }
+    .online { display:inline-flex; align-items:center; gap:5px; color:var(--mint-ink); font-size:12px; }
+    .online::before { content:""; width:6px; height:6px; border-radius:50%; background:#4dbb82; }
+    .nav-label { margin:0 10px 8px; color:#afb1c1; font-size:10px; font-weight:800; letter-spacing:1px; text-transform:uppercase; }
+    .nav { display:grid; gap:5px; }
+    .nav a { display:flex; align-items:center; gap:11px; padding:11px 12px; border-radius:9px; color:#55586d; text-decoration:none; transition:background .16s,color .16s; }
+    .nav a:hover,.nav a.active,.nav a[aria-current="true"] { background:var(--primary-soft); color:var(--primary-dark); }
+    .nav-icon { width:18px; color:#777a90; text-align:center; font-size:16px; }
+    .nav a.active .nav-icon,.nav a[aria-current="true"] .nav-icon { color:var(--primary); }
+    .nav a:focus-visible,.refresh:focus-visible,.switch:focus-visible,.pan-select:focus-visible,.page-tabs a:focus-visible { outline:3px solid #c9c6ff; outline-offset:2px; }
+    .sidebar-foot { margin-top:auto; padding:14px 13px; border:1px solid #ebeaf4; border-radius:11px; background:#fbfbff; color:var(--muted); font-size:11px; }
+    .sidebar-foot strong { display:block; margin-bottom:5px; color:var(--ink); font-size:13px; }
+    .sidebar-foot .spark { color:var(--primary); font-size:16px; }
+    .main { grid-area:main; min-width:0; background:var(--bg); }
+    .content { width:min(1180px,calc(100% - 70px)); margin:0 auto; padding:34px 0 60px; }
+    .page-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
+    .page-kicker { margin:0 0 4px; color:var(--primary); font-size:12px; font-weight:750; }
+    .page-heading h1 { margin:0; font-size:25px; letter-spacing:-.2px; }
+    .page-heading p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+    .page-tabs { display:flex; gap:26px; margin-top:25px; padding:0 2px; border-bottom:1px solid var(--line); }
+    .page-tabs a { position:relative; padding:0 0 12px; color:#65687b; text-decoration:none; font-size:13px; }
+    .page-tabs a.active,.page-tabs a[aria-current="true"] { color:var(--primary-dark); font-weight:700; }
+    .page-tabs a.active::after,.page-tabs a[aria-current="true"]::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; border-radius:2px; background:var(--primary); }
+    .notice { display:none; margin:18px 0; padding:13px 15px; border:1px solid #f1df9b; border-radius:10px; background:var(--yellow); color:#8b681c; }
     .notice.show { display:block; }
-    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:28px; }
-    .metric { min-height:118px; padding:18px; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .primary-button { display:inline-flex; align-items:center; gap:7px; min-height:38px; border:0; border-radius:9px; padding:0 15px; background:var(--primary); color:#fff; font-size:12px; font-weight:700; box-shadow:0 6px 16px rgba(107,99,245,.18); }
+    .primary-button:hover { background:var(--primary-dark); }
+    .button-icon { font-size:15px; line-height:1; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:13px; margin:27px 0 30px; }
+    .metric { min-height:104px; padding:17px 18px; background:var(--panel); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow); }
+    .metric:nth-child(1) { background:#fbfaff; }
+    .metric:nth-child(2) { background:#fbfffd; }
+    .metric:nth-child(3) { background:#fffdfa; }
+    .metric:nth-child(4) { background:#fffafd; }
     .metric-label { color:var(--muted); font-size:12px; }
-    .metric-value { margin-top:13px; color:var(--ink); font-size:25px; font-weight:750; }
-    .metric-meta { margin-top:5px; color:var(--muted); font-size:12px; }
-    .section { margin-top:30px; scroll-margin-top:86px; }
-    .section-head { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:12px; }
-    .section-head h2 { margin:0; font-size:16px; }
+    .metric-value { margin-top:11px; color:var(--ink); font-size:22px; font-weight:750; }
+    .metric-meta { margin-top:4px; color:var(--muted); font-size:11px; }
+    .section { margin-top:28px; scroll-margin-top:82px; }
+    .section-head { display:flex; align-items:flex-end; justify-content:space-between; gap:15px; margin-bottom:11px; }
+    .section-head h2 { margin:0; font-size:17px; }
     .section-head p { margin:3px 0 0; color:var(--muted); font-size:12px; }
-    .section-link { color:var(--blue); font-size:12px; text-decoration:none; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-    .global-bar { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:15px 18px; border-bottom:1px solid var(--line); background:#fbfcfe; }
+    .section-link { color:var(--primary); font-size:12px; font-weight:650; text-decoration:none; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow); overflow:hidden; }
+    .global-bar { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:16px 19px; border-bottom:1px solid var(--line); background:#fcfbff; }
     .global-actions { display:flex; align-items:center; gap:18px; flex:0 0 auto; }
     .test-mode { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; white-space:nowrap; }
     .global-copy strong { display:block; font-size:14px; }
     .global-copy span { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
-    .switch { position:relative; width:42px; height:24px; flex:0 0 auto; border:0; border-radius:999px; background:#d0d5dd; transition:background .18s ease; }
+    .switch { position:relative; width:42px; height:24px; flex:0 0 auto; border:0; border-radius:999px; background:#d7d8e4; transition:background .18s ease; }
     .switch span { position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #0002; transition:transform .18s ease; }
-    .switch.on { background:var(--blue); }
+    .switch.on { background:var(--primary); }
     .switch.on span { transform:translateX(18px); }
     .switch:disabled { cursor:not-allowed; opacity:.45; }
     .novel-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
-    .novel-item { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:72px; padding:15px 18px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .novel-item { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:73px; padding:15px 18px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
     .novel-item:nth-child(3n) { border-right:0; }
     .novel-item:nth-last-child(-n+3) { border-bottom:0; }
     .novel-name { display:flex; align-items:center; gap:10px; min-width:0; }
-    .novel-badge { width:28px; height:28px; display:grid; place-items:center; border-radius:7px; background:var(--blue-soft); color:var(--blue); font-size:12px; font-weight:800; }
+    .novel-badge { width:29px; height:29px; display:grid; place-items:center; border-radius:9px; background:var(--primary-soft); color:var(--primary); font-size:12px; font-weight:800; }
+    .novel-item:nth-child(3n+2) .novel-badge { background:var(--mint); color:var(--mint-ink); }
+    .novel-item:nth-child(3n) .novel-badge { background:var(--peach); color:var(--peach-ink); }
     .novel-name strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
     .novel-name small { display:block; margin-top:2px; color:var(--muted); font-size:11px; }
-    .pan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
-    .pan-card { padding:18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-    .pan-card.active { border-color:#93c5fd; box-shadow:0 0 0 1px #bfdbfe inset; }
+    .pan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
+    .pan-card { padding:18px; border:1px solid var(--line); border-radius:11px; background:var(--panel); box-shadow:var(--shadow); }
+    .pan-card.active { border-color:#c4c0ff; box-shadow:0 0 0 2px #eeecff inset, var(--shadow); }
     .pan-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
     .pan-title { display:flex; align-items:center; gap:9px; }
-    .pan-logo { width:30px; height:30px; display:grid; place-items:center; border-radius:7px; background:#f2f4f7; color:#344054; font-weight:800; }
+    .pan-logo { width:31px; height:31px; display:grid; place-items:center; border-radius:9px; background:var(--primary-soft); color:var(--primary); font-weight:800; }
     .pan-title strong { font-size:14px; }
     .tag { display:inline-flex; padding:3px 7px; border-radius:999px; font-size:10px; font-weight:700; }
-    .tag.active { background:var(--blue-soft); color:var(--blue); }
-    .tag.ok { background:var(--green-soft); color:#15803d; }
+    .tag.active { background:var(--primary-soft); color:var(--primary-dark); }
+    .tag.ok { background:var(--mint); color:var(--mint-ink); }
     .tag.off { background:#f2f4f7; color:#667085; }
     .pan-meta { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:20px 0 14px; }
     .pan-meta span { display:block; color:var(--muted); font-size:11px; }
@@ -514,10 +541,10 @@ _网页头部 = """<!doctype html>
     .account-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 9px; border:1px solid #eef0f3; border-radius:6px; background:#fbfcfe; color:var(--muted); font-size:11px; }
     .account-row strong { color:var(--ink); font-size:12px; font-weight:650; }
     .account-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pan-select { width:100%; min-height:40px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); padding:8px 10px; }
+    .pan-select { width:100%; min-height:40px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); padding:8px 10px; }
     .pan-select:disabled { color:#98a2b3; cursor:not-allowed; }
     .runtime-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
-    .runtime-item { padding:14px 15px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+    .runtime-item { padding:14px 15px; border:1px solid var(--line); border-radius:10px; background:var(--panel); box-shadow:var(--shadow); }
     .runtime-item span { display:block; color:var(--muted); font-size:11px; }
     .runtime-item strong { display:block; margin-top:7px; font-size:14px; }
     .config-list { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); }
@@ -525,11 +552,11 @@ _网页头部 = """<!doctype html>
     .config-item:last-child { border-right:0; }
     .config-item span { display:block; color:var(--muted); font-size:11px; }
     .config-item strong { display:block; margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
-    .toast { position:fixed; right:22px; bottom:22px; z-index:10; transform:translateY(12px); opacity:0; pointer-events:none; padding:11px 14px; border-radius:7px; background:#172033; color:#fff; box-shadow:0 8px 25px #1018282b; transition:opacity .2s,transform .2s; }
+    .toast { position:fixed; right:22px; bottom:22px; z-index:10; transform:translateY(12px); opacity:0; pointer-events:none; padding:11px 14px; border-radius:9px; background:#353250; color:#fff; box-shadow:0 8px 25px rgba(48,45,90,.22); transition:opacity .2s,transform .2s; }
     .toast.show { transform:translateY(0); opacity:1; }
     .empty { padding:30px; color:var(--muted); text-align:center; }
     @media (max-width:1050px) { .metrics { grid-template-columns:repeat(2,1fr); } .runtime-grid { grid-template-columns:repeat(3,1fr); } .config-list { grid-template-columns:repeat(2,1fr); } .config-item { border-right:1px solid var(--line); border-bottom:1px solid var(--line); } .config-item:nth-child(2n) { border-right:0; } .config-item:nth-last-child(-n+2) { border-bottom:0; } }
-    @media (max-width:760px) { .shell { display:block; } .sidebar { padding:14px 12px 10px; gap:12px; } .brand { padding:0 6px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .topbar { height:auto; min-height:68px; padding:14px 16px; } .topbar h1 { font-size:18px; } .status-dot { display:none; } .content { width:calc(100% - 28px); padding-top:20px; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
+    @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .page-tabs { gap:20px; margin-top:20px; overflow-x:auto; scrollbar-width:none; } .page-tabs::-webkit-scrollbar { display:none; } .page-tabs a { flex:0 0 auto; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
   </style>
 </head>
 """
@@ -537,14 +564,19 @@ _网页头部 = """<!doctype html>
 _网页主体 = """
 <body>
   <div class="shell">
+    <header class="topbar">
+      <div class="brand"><div class="brand-mark">馒</div><div><strong>馒头Bot 管理台</strong><span class="version-badge" id="console-version">v5.39.1</span></div></div>
+      <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
+    </header>
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">馒</div><div><strong>馒头控制台</strong><small>小说机器人管理中心</small></div></div>
-      <div><div class="nav-label">Workspace</div><nav class="nav" aria-label="控制台导航"><a class="active" aria-current="true" data-nav="overview" href="#overview"><span class="nav-icon">▦</span>总览</a><a data-nav="novels" href="#novels"><span class="nav-icon">▤</span>小说功能</a><a data-nav="pans" href="#pans"><span class="nav-icon">◈</span>网盘配置</a><a data-nav="runtime" href="#runtime"><span class="nav-icon">◒</span>运行状态</a></nav></div>
-      <div class="sidebar-foot"><strong>管理员控制台</strong><span>配置状态仅展示安全摘要，敏感凭据不会显示。</span></div>
+      <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
+      <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航"><a class="active" aria-current="true" data-nav="overview" href="#overview"><span class="nav-icon">⌂</span>总览</a><a data-nav="novels" href="#novels"><span class="nav-icon">✿</span>小说功能</a><a data-nav="pans" href="#pans"><span class="nav-icon">▣</span>网盘配置</a><a data-nav="runtime" href="#runtime"><span class="nav-icon">◒</span>运行状态</a></nav></div>
+      <div class="sidebar-foot"><span class="spark">✦</span><strong>小提示</strong><span>状态和配置只显示安全摘要，敏感凭据不会出现在页面。</span></div>
     </aside>
     <main class="main">
-      <header class="topbar"><div><h1>控制台</h1><p>集中管理小说平台、分享网盘和运行状态</p></div><div class="top-actions"><span class="status-dot">服务在线</span><button class="refresh" id="refresh" type="button">↻ 刷新</button></div></header>
       <div class="content">
+        <div class="page-heading"><div><p class="page-kicker">馒头Bot / 管理台</p><h1>机器人配置</h1><p>管理小说功能、网盘分享和运行状态</p></div><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div>
+        <nav class="page-tabs" aria-label="页面分区"><a class="active" aria-current="true" data-nav="overview" href="#overview">基本信息</a><a data-nav="novels" href="#novels">功能模块</a><a data-nav="pans" href="#pans">网盘配置</a><a data-nav="runtime" href="#runtime">运行状态</a></nav>
         <div id="notice" class="notice"></div>
         <section id="overview" class="metrics"><div class="metric"><div class="metric-label">小说总开关</div><div id="metric-global" class="metric-value">--</div><div id="metric-global-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">当前分享网盘</div><div id="metric-pan" class="metric-value">--</div><div id="metric-pan-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">数据库</div><div id="metric-db" class="metric-value">--</div><div id="metric-db-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">插件版本</div><div id="metric-version" class="metric-value">--</div><div id="metric-version-meta" class="metric-meta">馒头 bot</div></div></section>
         <section id="novels" class="section"><div class="section-head"><div><h2>小说功能</h2><p>单独控制每个平台，关闭后不影响其他平台。</p></div><a class="section-link" href="#novels">管理开关</a></div><div class="panel"><div class="global-bar"><div class="global-copy"><strong>全局小说功能</strong><span>关闭后所有小说下载、找书和翻页入口都会暂停。</span></div><div class="global-actions"><div class="test-mode"><span>管理员测试模式</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></div></section>
@@ -589,6 +621,7 @@ _网页脚本 = """
         $('metric-db').textContent = database.status || '--';
         $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库';
         $('metric-version').textContent = `v${data.version || '--'}`;
+        $('console-version').textContent = `v${data.version || '--'}`;
         [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => {
           const node = $(id);
           node.className = `switch ${enabled ? 'on' : ''}`;
