@@ -1,5 +1,5 @@
 BRANCH: main
-CHANGED_FIELD: 管理台真实管理员身份摘要、网盘页上传目录配置入口和 Cookie 只写不回显说明
+CHANGED_FIELD: 帮助网页.py 网盘配置页：UC、夸克、百度顶部页签与单卡片显示
 
 ARTIFACTS:
 C:\Users\17818\Desktop\小说机器人\馒头Bot\MODIFIED_FILE
@@ -7,45 +7,44 @@ C:\Users\17818\Desktop\小说机器人\馒头Bot\DIFF_FILE
 C:\Users\17818\Desktop\小说机器人\馒头Bot\VERIFICATION.txt
 C:\Users\17818\Desktop\小说机器人\馒头Bot\ROLLBACK.sh
 
+HASHES:
+BASELINE_SOURCE_SHA256=8b288a2cc2825ef7530733054464116fe61587d9d400d13926f4b3e28dd66c40
+MODIFIED_SOURCE_SHA256=0e0f52310128d149615022b2ed761e0e35f680a273b9140490f74614a26d213e
+BASELINE_SOURCE is the HEAD blob for 功能文件/管理功能/基础功能/帮助网页.py; MODIFIED_SOURCE is the working copy after the tab change.
+
 BASELINE:
-COMMAND: $baseline=git rev-parse HEAD; python -c "import subprocess,sys; commit=sys.argv[1]; paths=['main.py','功能文件/管理功能/基础功能/帮助网页.py','功能文件/管理功能/网盘功能/网盘Cookie.py']; [compile(subprocess.check_output(['git','show',f'{commit}:{path}'], text=True), path, 'exec') for path in paths]; print('BASELINE_COMPILE_OK',len(paths))" $baseline
-INPUT: HEAD=045434b1ae6d2f5744d3ad5414563613ff7e5646，提交前版本 v5.42.2 的 3 个 Python 源文件
-OUTPUT: BASELINE_COMPILE_OK 3
+COMMAND: D:\python\python.exe -B -c "import subprocess; paths=['main.py','功能文件/管理功能/基础功能/帮助网页.py']; [compile(subprocess.check_output(['git','show','HEAD:'+p]).decode('utf-8'),p,'exec') for p in paths]; print('BASELINE_COMPILE_OK',len(paths))"
+INPUT: HEAD=eaabab80d34f3ba612ebe8c9271f1bab99353944, two baseline Python source files
+OUTPUT: BASELINE_COMPILE_OK 2
 EXIT_STATUS: 0
 
 MODIFIED:
-COMMAND: python -m py_compile main.py '功能文件/管理功能/基础功能/帮助网页.py' '功能文件/管理功能/网盘功能/网盘Cookie.py'
-INPUT: v5.42.3 工作区的 3 个 Python 源文件
-OUTPUT: MODIFIED_COMPILE_OK 3
+COMMAND: D:\python\python.exe -B -c "paths=['main.py','功能文件/管理功能/基础功能/帮助网页.py']; [compile(open(p,encoding='utf-8').read(),p,'exec') for p in paths]; print('MODIFIED_COMPILE_OK',len(paths))"
+INPUT: working copy at v5.43.0, two modified Python source files
+OUTPUT: MODIFIED_COMPILE_OK 2
 EXIT_STATUS: 0
 
 FRONTEND:
-COMMAND: python -c "import importlib; s=importlib.import_module('功能文件.管理功能.基础功能.帮助网页')._网页脚本; print(s.split('<script>',1)[1].split('</script>',1)[0])" | node --check -
-INPUT: 控制台内嵌 JavaScript
+COMMAND: D:\python\python.exe -B -c "extract _网页脚本" | node --check -
+INPUT: embedded console JavaScript containing the pan tab renderer and handlers
 OUTPUT: FRONTEND_JS_CHECK_OK
 EXIT_STATUS: 0
-COMMAND: 浏览器临时服务登录后打开 ?view=pans；点击管理员账号；保存夸克上传目录；切换 390x844
-INPUT: 虚拟账号 demo-admin、3 个管理员摘要、UC/夸克/百度 3 张网盘卡片；未使用真实 Cookie
-OUTPUT: ADMIN_IDENTITY_OK demo-admin；QUARK_DIRECTORY_SAVE_OK 配置已保存；DESKTOP_PAN_CARDS_OK 3；MOBILE_LAYOUT_OK clientWidth=375 scrollWidth=375；COOKIE_RESPONSE_OK 页面仅显示“已保存（Cookie 不回显）”
-EXIT_STATUS: 0
-
-SECURITY:
-COMMAND: python -c "import importlib; m=importlib.import_module('功能文件.管理功能.基础功能.帮助网页'); ...; print('SECRET_SUMMARY_CHECK_OK')"
-INPUT: 虚拟夸克 Cookie 字段和控制台密码
-OUTPUT: SECRET_SUMMARY_CHECK_OK；敏感字段只有 configured 状态，没有 value 原文
+COMMAND: temporary local fixture at http://127.0.0.1:54555/?view=pans; desktop and 390x844 viewport checks
+INPUT: fixture data with active=夸克 and three UC/夸克/百度 cards; no real Cookie or account data
+OUTPUT: initial selected tab=夸克; after clicking UC visible cards=UC only; after clicking 百度 visible cards=百度 only; mobile width=390, tabs width=311.33, one visible card
 EXIT_STATUS: 0
 
 ROLLBACK:
 COMMAND: Copy-Item MODIFIED_FILE ROLLBACK_TEST_COPY -Force; D:\Git\bin\bash.exe -lc './ROLLBACK.sh ROLLBACK_TEST_COPY main.py'; git hash-object ROLLBACK_TEST_COPY; git rev-parse HEAD:main.py; git hash-object MODIFIED_FILE
-INPUT: 仅回滚副本 ROLLBACK_TEST_COPY；基线提交 045434b1ae6d2f5744d3ad5414563613ff7e5646
+INPUT: rollback副本 ROLLBACK_TEST_COPY；基线提交 eaabab80d34f3ba612ebe8c9271f1bab99353944
 OUTPUT:
-ROLLBACK_RESTORED target=ROLLBACK_TEST_COPY baseline=045434b1ae6d2f5744d3ad5414563613ff7e5646:main.py
-ROLLBACK_EXPECTED=48ae32dc8028370270f9f4fa1e97fea242ba6b79
-ROLLBACK_RESTORED=48ae32dc8028370270f9f4fa1e97fea242ba6b79
-MODIFIED_COPY=d721e246d8aa03c53ea0a81969289bb4075c71c1
+ROLLBACK_RESTORED target=ROLLBACK_TEST_COPY baseline=eaabab80d34f3ba612ebe8c9271f1bab99353944:main.py
+ROLLBACK_EXPECTED=d721e246d8aa03c53ea0a81969289bb4075c71c1
+ROLLBACK_RESTORED=d721e246d8aa03c53ea0a81969289bb4075c71c1
+MODIFIED_COPY=4c55451a9d3327c51f11a886f2f214f07ac4e3a5
 ROLLBACK_TEST_OK
 EXIT_STATUS: 0
-RESULT: 回滚副本恢复到基线，MODIFIED_FILE 保持修改状态；临时副本已清理。
+RESULT: rollback副本已恢复到基线；ROLLBACK_TEST_COPY 已清理；MODIFIED_FILE 保持修改状态。
 
 STATIC:
 COMMAND: git diff --check
