@@ -20,7 +20,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.39.2"
+控制台版本 = "5.40.0"
 
 
 @dataclass
@@ -640,6 +640,59 @@ _网页头部 = """<!doctype html>
      .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
      @media (max-width:1050px) { .workspace-grid { grid-template-columns:minmax(0,1.35fr) minmax(280px,.9fr); } .pan-grid { grid-template-columns:1fr; } }
      @media (max-width:760px) { .content { width:calc(100% - 28px); padding:23px 0 40px; } .workspace-grid { grid-template-columns:1fr; } .workspace-right { order:-1; } .module-card .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .module-card .novel-item { border-right:1px solid var(--line); } .module-card .novel-item:nth-child(2n) { border-right:0; } .module-card .novel-item:nth-last-child(-n+2) { border-bottom:0; } .profile-field { grid-template-columns:92px minmax(0,1fr); gap:10px; } .connection-row strong { max-width:58%; } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
+     .page-view[hidden] { display:none !important; }
+     .page-view { min-width:0; scroll-margin-top:82px; }
+     .heading-actions { display:flex; align-items:center; gap:12px; }
+     .updated-label { color:var(--muted); font-size:11px; white-space:nowrap; }
+     .summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:13px; margin-top:18px; }
+     .summary-card { min-height:168px; display:flex; flex-direction:column; align-items:flex-start; padding:17px 18px; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 5px 18px rgba(55,59,103,.045); }
+     .summary-card > span { color:var(--muted); font-size:12px; }
+     .summary-card > strong { margin-top:12px; color:var(--ink); font-size:21px; }
+     .summary-card > small { min-height:18px; margin-top:4px; color:var(--muted); font-size:11px; }
+     .text-button { margin-top:auto; padding:0; border:0; background:transparent; color:var(--primary); font-size:12px; font-weight:700; text-align:left; }
+     .text-button:hover { color:var(--primary-dark); }
+     .page-grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(280px,.9fr); gap:16px; margin-top:16px; }
+     .page-grid .console-card { min-width:0; }
+     .page-view-head { margin-top:18px; margin-bottom:0; }
+     .shortcut-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+     .shortcut-card { min-height:94px; display:grid; grid-template-columns:30px minmax(0,1fr); grid-template-rows:auto auto; column-gap:10px; align-items:center; padding:13px; border:1px solid #e8e9f2; border-radius:7px; background:#fff; color:var(--ink); text-align:left; }
+     .shortcut-card:hover { border-color:#c9c6ff; background:#fbfaff; }
+     .shortcut-icon { grid-row:1 / span 2; width:30px; height:30px; display:grid; place-items:center; border-radius:8px; background:var(--primary-soft); color:var(--primary); font-size:14px; }
+     .shortcut-card strong { font-size:12px; }
+     .shortcut-card small { color:var(--muted); font-size:10px; line-height:1.45; }
+     .compact-status { margin-top:8px; }
+     .auth-card { max-width:520px; margin:30px auto 0; padding:32px 28px; border:1px solid #f0d992; border-radius:9px; background:#fffdf3; text-align:center; box-shadow:0 6px 18px rgba(104,89,28,.06); }
+     .auth-card[hidden] { display:none; }
+     .auth-icon { width:34px; height:34px; display:grid; place-items:center; margin:0 auto 12px; border-radius:50%; background:#fff1c4; color:#9b7418; font-size:18px; font-weight:800; }
+     .auth-card h2 { margin:0; font-size:17px; }
+     .auth-card p { margin:7px auto 17px; max-width:390px; color:#7e7048; font-size:12px; line-height:1.7; }
+     .outline-button { min-height:36px; padding:0 16px; border:1px solid #c9c6ff; border-radius:7px; background:#fff; color:var(--primary-dark); font-size:12px; font-weight:700; }
+     .outline-button:hover { background:var(--primary-soft); }
+     .standalone-card { margin-top:18px; }
+     .standalone-card > h2 { font-size:18px; }
+     .module-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 0 10px; }
+     .module-heading h3 { margin:0; font-size:13px; }
+     .module-heading span { color:var(--muted); font-size:11px; }
+     .pan-note { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:16px 0; padding:13px 15px; border:1px solid #e9e8f7; border-radius:7px; background:#fbfaff; }
+     .pan-note span { color:var(--muted); font-size:12px; }
+     .pan-note strong { color:var(--primary-dark); font-size:13px; }
+     .runtime-page-grid { display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); margin-top:18px; }
+     .runtime-detail { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:16px; }
+     .runtime-detail .status-item { padding:13px; border:1px solid var(--line); border-radius:7px; background:#fbfcff; }
+     .safe-list,.settings-list { display:grid; gap:0; }
+     .safe-list > div,.settings-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:50px; border-bottom:1px solid #f0f1f5; font-size:12px; }
+     .safe-list > div:last-child,.settings-row:last-child { border-bottom:0; }
+     .safe-list span,.settings-row span { color:#65687b; }
+     .safe-list strong,.settings-row strong { color:var(--ink); font-weight:600; text-align:right; }
+     .settings-row strong { max-width:65%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+     .settings-hint { margin-top:15px; padding:12px 13px; border-radius:7px; background:#f7f7fd; color:var(--muted); font-size:11px; line-height:1.6; }
+     .help-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px; }
+     .help-card h3 { margin:0; font-size:14px; }
+     .help-card > p { margin:4px 0 15px; color:var(--muted); font-size:11px; }
+     .command-list { display:flex; flex-wrap:wrap; gap:7px; }
+     .command-list span { display:inline-flex; min-height:28px; align-items:center; padding:0 9px; border:1px solid #e8e8f1; border-radius:6px; background:#fbfbfe; color:#55586d; font-size:11px; }
+     @media (max-width:1050px) { .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .runtime-page-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+     @media (max-width:760px) { .heading-actions { gap:7px; } .updated-label { display:none; } .summary-grid,.page-grid,.runtime-detail,.help-grid { grid-template-columns:1fr; } .shortcut-grid { grid-template-columns:1fr; } .runtime-page-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standalone-card { margin-top:15px; } .safe-list > div,.settings-row { min-height:56px; } }
    </style>
 </head>
 """
@@ -648,76 +701,52 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.39.2</span></div></div>
+      <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.40.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
       <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
       <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
-        <a href="#overview"><span class="nav-icon">⌂</span>控制台</a>
-        <a class="active" aria-current="true" data-nav="overview" href="#overview"><span class="nav-icon">⚙</span>机器人配置</a>
-        <a data-nav="novels" href="#novels"><span class="nav-icon">☷</span>指令管理</a>
-        <a data-nav="pans" href="#pans"><span class="nav-icon">▣</span>事件订阅</a>
-        <a data-nav="runtime" href="#runtime"><span class="nav-icon">♧</span>群组管理</a>
-        <a data-nav="runtime" href="#runtime"><span class="nav-icon">♙</span>用户管理</a>
-        <a data-nav="runtime" href="#runtime"><span class="nav-icon">▥</span>数据统计</a>
-        <a data-nav="runtime" href="#runtime"><span class="nav-icon">▤</span>日志管理</a>
-        <a data-nav="config" href="#config"><span class="nav-icon">♧</span>扩展插件</a>
-        <a data-nav="config" href="#config"><span class="nav-icon">⚙</span>系统设置</a>
+        <a href="?view=dashboard" data-view="dashboard"><span class="nav-icon">⌂</span>控制台</a>
+        <a href="?view=bot" data-view="bot"><span class="nav-icon">⚙</span>机器人配置</a>
+        <a href="?view=novels" data-view="novels"><span class="nav-icon">☷</span>小说功能</a>
+        <a href="?view=pans" data-view="pans"><span class="nav-icon">▣</span>网盘配置</a>
+        <a href="?view=runtime" data-view="runtime"><span class="nav-icon">◒</span>运行状态</a>
+        <a href="?view=help" data-view="help"><span class="nav-icon">?</span>帮助指令</a>
+        <a href="?view=settings" data-view="settings"><span class="nav-icon">⚙</span>系统设置</a>
       </nav></div>
-      <div class="sidebar-foot"><span class="spark">✦</span><strong>遇到问题？</strong><span>查看帮助说明和安全摘要，敏感凭据不会出现在页面。</span></div>
+      <div class="sidebar-foot"><span class="spark">✦</span><strong>只显示真实功能</strong><span>未接入后端的数据入口不会伪装成可用按钮。</span></div>
     </aside>
     <main class="main">
       <div class="content">
-        <div class="page-heading"><div><h1>机器人配置</h1><p>配置机器人的基本信息、功能模块和响应规则</p></div><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div>
-        <nav class="page-tabs" aria-label="页面分区"><a class="active" aria-current="true" data-nav="overview" href="#overview">基本信息</a><a data-nav="novels" href="#novels">功能模块</a><a data-nav="pans" href="#pans">响应设置</a><a data-nav="runtime" href="#runtime">权限设置</a><a data-nav="config" href="#config">其他设置</a></nav>
+        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
+        <nav class="page-tabs" aria-label="功能页面"><a href="?view=bot" data-view="bot">基本信息</a><a href="?view=novels" data-view="novels">小说功能</a><a href="?view=pans" data-view="pans">网盘配置</a><a href="?view=runtime" data-view="runtime">运行状态</a><a href="?view=settings" data-view="settings">系统设置</a></nav>
         <div id="notice" class="notice"></div>
-        <div class="workspace-grid">
-          <div class="workspace-left">
-            <section id="overview" class="console-card profile-card">
-              <h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p>
-              <div class="profile-fields">
-                <div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div>
-                <div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div>
-                <div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div>
-                <div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div>
-                <div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span><small id="updated">--</small></div></div>
-              </div>
-              <div class="sr-only"><span id="metric-global">--</span><span id="metric-global-meta">--</span><span id="metric-version">--</span><span id="metric-version-meta">--</span></div>
-            </section>
-            <section id="config" class="console-card config-section">
-              <h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p>
-              <div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div>
-            </section>
+        <section id="auth-card" class="auth-card" hidden><div class="auth-icon">!</div><h2>访问令牌无效</h2><p>请从机器人发送的网页版帮助按钮重新打开，或确认链接中的访问令牌没有过期。</p><button id="retry" class="outline-button" type="button">重新验证</button></section>
+
+        <section id="page-dashboard" class="page-view" data-page="dashboard">
+          <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态，点击卡片进入对应页面。</p></div></div>
+          <div class="summary-grid">
+            <article class="summary-card"><span>小说总开关</span><strong id="metric-global">--</strong><small id="metric-global-meta">加载中</small><button class="text-button" data-view="novels" type="button">管理小说功能 →</button></article>
+            <article class="summary-card"><span>当前分享网盘</span><strong id="metric-pan">--</strong><small id="metric-pan-meta">加载中</small><button class="text-button" data-view="pans" type="button">管理网盘 →</button></article>
+            <article class="summary-card"><span>数据库状态</span><strong id="metric-db">--</strong><small id="metric-db-meta">加载中</small><button class="text-button" data-view="settings" type="button">查看连接配置 →</button></article>
+            <article class="summary-card"><span>插件版本</span><strong id="metric-version">--</strong><small id="metric-version-meta">馒头Bot</small><button class="text-button" data-view="runtime" type="button">查看运行状态 →</button></article>
           </div>
-          <div class="workspace-right">
-            <section id="novels" class="console-card module-card">
-              <h2>功能模块</h2><p class="card-subtitle">控制小说平台和管理员测试模式</p>
-              <div class="global-bar"><div class="global-copy"><strong>小说功能</strong><span>关闭后下载、找书和翻页暂停</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div>
-              <div class="test-mode global-bar"><span>管理员测试模式</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div>
-              <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
-            </section>
-            <section id="runtime" class="console-card status-card">
-              <h2>当前状态</h2><p class="card-subtitle">服务器与插件实时摘要</p>
-              <div class="status-list">
-                <div class="status-item"><span>小说总开关</span><strong id="metric-global-state">加载中</strong></div>
-                <div class="status-item"><span>当前分享网盘</span><strong id="metric-pan">--</strong></div>
-                <div class="status-item"><span>数据库</span><strong id="metric-db">--</strong></div>
-                <div class="status-item"><span>CPU 占用</span><strong id="runtime-cpu">--</strong></div>
-                <div class="status-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div>
-                <div class="status-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div>
-                <div class="status-item"><span>版本信息</span><strong id="metric-version-state">--</strong></div>
-              </div>
-              <span id="metric-pan-meta" class="sr-only">--</span><span id="metric-db-meta" class="sr-only">--</span><span id="runtime-disk" class="sr-only">--</span><span id="runtime-os" class="sr-only">--</span>
-            </section>
-            <section class="console-card test-card">
-              <h2>测试面板</h2><p class="card-subtitle">用于确认控制台与机器人服务是否在线</p>
-              <div class="test-bubble"><span class="test-mini-avatar">馒</span><p>控制台已连接。小说开关和网盘切换会立即保存。</p></div>
-              <p class="test-hint">聊天测试请回到机器人所在群聊发送指令。</p>
-            </section>
-          </div>
-        </div>
-        <section id="pans" class="section pan-section"><div class="section-head"><div><h2>网盘配置</h2><p>选择小说完成后的主分享网盘，账号数量和上传目录仅显示摘要。</p></div><a class="section-link" href="#pans">查看配置</a></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></section>
+          <div class="page-grid dashboard-grid"><article class="console-card"><h2>快捷入口</h2><p class="card-subtitle">每个入口对应独立页面和真实接口。</p><div class="shortcut-grid"><button class="shortcut-card" data-view="bot" type="button"><span class="shortcut-icon">⚙</span><strong>机器人配置</strong><small>查看安全摘要与监听配置</small></button><button class="shortcut-card" data-view="novels" type="button"><span class="shortcut-icon">☷</span><strong>小说功能</strong><small>开关平台和管理员测试模式</small></button><button class="shortcut-card" data-view="pans" type="button"><span class="shortcut-icon">▣</span><strong>网盘配置</strong><small>选择主分享网盘和查看账号摘要</small></button><button class="shortcut-card" data-view="runtime" type="button"><span class="shortcut-icon">◒</span><strong>运行状态</strong><small>查看服务器实时指标</small></button></div></article><article class="console-card"><h2>当前状态</h2><p class="card-subtitle">最近一次读取：<span id="dashboard-updated">--</span></p><div class="status-list compact-status"><div class="status-item"><span>CPU 占用</span><strong id="dashboard-cpu">--</strong></div><div class="status-item"><span>物理内存</span><strong id="dashboard-memory">--</strong></div><div class="status-item"><span>系统运行时间</span><strong id="dashboard-runtime">--</strong></div></div></article></div>
+        </section>
+
+        <section id="page-bot" class="page-view" data-page="bot" hidden>
+          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p><div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>Cookie / Token</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>不返回</strong></div><div><span>写入方式</span><strong>仅调用已授权接口</strong></div></div></article></div></div>
+        </section>
+
+        <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="console-card module-card standalone-card"><h2>小说功能</h2><p class="card-subtitle">这里的开关会写入运行状态数据库，关闭后对应平台不会进入下载流程。</p><div class="global-bar"><div class="global-copy"><strong>全部小说功能</strong><span>控制下载、找书和翻页总入口</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div><div class="test-mode global-bar"><div class="global-copy"><strong>管理员测试模式</strong><span>仅管理员可用，不改变普通用户的关闭限制</span></div><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><div class="module-heading"><h3>平台开关</h3><span>逐个平台控制</span></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></article></section>
+
+        <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">主分享网盘会用于所有小说完成消息。切换后立即保存。</p><div class="pan-note"><span>当前主分享网盘</span><strong id="pan-active-label">--</strong></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
+
+        <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
+
+        <section id="page-help" class="page-view" data-page="help" hidden><div class="section-head page-view-head"><div><h2>帮助指令</h2><p>这里列出机器人当前支持的聊天指令；网页不代替群聊执行指令。</p></div></div><div class="help-grid"><article class="console-card help-card"><h3>管理与状态</h3><p>需要管理员权限的指令。</p><div class="command-list"><span>帮助</span><span>状态</span><span>小说</span><span>开小说 / 关小说</span><span>开测试 / 关测试</span><span>网盘状态</span><span>换UC / 换夸克 / 换百度</span><span>夸克登录</span></div></article><article class="console-card help-card"><h3>小说入口</h3><p>在群聊或私聊发送链接即可识别。</p><div class="command-list"><span>找关键词</span><span>找书 关键词</span><span>找作者 关键词</span><span>上一页 / 下一页</span><span>小说平台分享链接</span><span>小说分享卡片</span></div></article><article class="console-card help-card"><h3>群聊管理</h3><p>由插件管理员和群身份规则共同决定。</p><div class="command-list"><span>禁言 @成员</span><span>禁 @成员 1</span><span>解 @成员</span><span>数字撤回</span><span>卡片撤回</span><span>合并转发撤回</span></div></article></div></section>
+        <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">当前网页服务的监听和访问策略。配置修改请在 AstrBot 插件配置中完成。</p><div id="settings-list" class="settings-list"><div class="empty">正在读取设置...</div></div></article></section>
       </div>
     </main>
   </div>
@@ -730,6 +759,15 @@ _网页脚本 = """
       const token = new URLSearchParams(location.search).get('token') || '';
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? '').replace(/[&<>\"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[char]));
+      const views = {
+        dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
+        bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],
+        novels: ['小说功能', '管理全局开关、测试模式和平台开关'],
+        pans: ['网盘配置', '管理主分享网盘和账号安全摘要'],
+        runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
+        help: ['帮助指令', '查看机器人当前支持的聊天指令'],
+        settings: ['系统设置', '查看网页服务设置；修改请回到 AstrBot 配置'],
+      };
       let snapshot = null;
       let toastTimer = null;
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
@@ -738,64 +776,46 @@ _网页脚本 = """
         const query = `?token=${encodeURIComponent(token)}`;
         const response = await fetch(`/api/${path}${query}`, { cache:'no-store', headers:{'Content-Type':'application/json'}, ...options });
         const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
-        if (!response.ok || !data.ok) throw new Error(data.error || '请求失败');
+        if (!response.ok || !data.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; }
         return data;
+      };
+      const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
+      const setView = (view, push = true) => {
+        const next = views[view] ? view : 'dashboard';
+        if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); history.pushState({view:next}, '', `${location.pathname}?${nextParams.toString()}`); }
+        const meta = views[next];
+        $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
+        document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
+        document.querySelectorAll('[data-view]').forEach((node) => { const active = node.dataset.view === next && node.tagName === 'A'; node.classList.toggle('active', active); if (node.tagName === 'A') node.setAttribute('aria-current', active ? 'page' : 'false'); });
+        if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
+        window.scrollTo({top:0, behavior:'auto'});
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const render = (data) => {
         snapshot = data;
-        const novels = data.novels || {};
-        const pans = data.pans || {};
-        const server = data.server || {};
-        const database = data.database || {};
-        $('metric-global').textContent = novels.global_enabled ? '已开启' : '已关闭';
-        $('metric-global-meta').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
-        if ($('metric-global-state')) $('metric-global-state').textContent = novels.global_enabled ? '已开启' : '已关闭';
-        $('metric-pan').textContent = pans.active || '--';
-        const activePan = (pans.items || []).find((item) => item.active);
-        $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
-        $('metric-db').textContent = database.status || '--';
-        $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库';
-        $('metric-version').textContent = `v${data.version || '--'}`;
-        if ($('metric-version-state')) $('metric-version-state').textContent = `v${data.version || '--'}`;
-        $('console-version').textContent = `v${data.version || '--'}`;
-        [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => {
-          const node = $(id);
-          node.className = `switch ${enabled ? 'on' : ''}`;
-          node.dataset.switch = key;
-          node.dataset.enabled = String(Boolean(enabled));
-          node.disabled = !novels.editable;
-          node.setAttribute('aria-label', label);
-          node.setAttribute('aria-pressed', String(Boolean(enabled)));
-        });
+        const novels = data.novels || {}; const pans = data.pans || {}; const server = data.server || {}; const database = data.database || {};
+        $('metric-global').textContent = novels.global_enabled ? '已开启' : '已关闭'; $('metric-global-meta').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
+        $('metric-pan').textContent = pans.active || '--'; const activePan = (pans.items || []).find((item) => item.active); $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
+        $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`; $('console-version').textContent = `v${data.version || '--'}`;
+        $('dashboard-cpu').textContent = server.cpu || '--'; $('dashboard-memory').textContent = server.memory || '--'; $('dashboard-runtime').textContent = server.runtime || '--'; $('dashboard-updated').textContent = '刚刚';
+        [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
         $('novel-grid').innerHTML = (novels.platforms || []).map((item) => `<div class="novel-item"><div class="novel-name"><div class="novel-badge">书</div><div><strong>${esc(item.name)}</strong><small>${item.enabled ? '当前可用' : '已停用'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
+        $('pan-active-label').textContent = pans.active || '--';
         $('pan-grid').innerHTML = (pans.items || []).map((item) => { const accounts = (item.account_summary || []).map((account) => `<div class="account-row"><strong>账号${esc(account.index)}</strong><span>${esc(account.name)} · ${esc(account.phone)}</span></div>`).join(''); return `<article class="pan-card ${item.active ? 'active' : ''}"><div class="pan-top"><div class="pan-title"><div class="pan-logo">${esc(item.key.slice(0,1))}</div><strong>${esc(item.name)}</strong></div><div>${item.active ? '<span class="tag active">当前主网盘</span>' : ''}</div></div><div class="pan-meta"><div><span>配置状态</span><strong>${item.configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>'}</strong></div><div><span>账号数量</span><strong>${esc(item.accounts)} 个</strong></div><div><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div><div><span>账号策略</span><strong>按群独立选择</strong></div></div>${accounts ? `<div class="account-list">${accounts}</div>` : ''}<select class="pan-select" data-pan="${esc(item.key)}" ${pans.editable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${item.active ? '当前使用中' : '设为主分享网盘'}</option><option value="${esc(item.key)}">切换到${esc(item.name)}</option></select></article>`; }).join('') || '<div class="empty">没有网盘数据</div>';
-        $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--';
+        $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         $('config-list').innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>访问令牌</span><strong>${esc(data.config && data.config.token_mode || '自动令牌')}</strong></div>`;
+        $('settings-list').innerHTML = `<div class="settings-row"><span>监听主机</span><strong>${esc(data.config && data.config.help_web_host || '--')}</strong></div><div class="settings-row"><span>监听端口</span><strong>${esc(data.config && data.config.help_web_port || '--')}</strong></div><div class="settings-row"><span>公开访问地址</span><strong>${esc(server.address || '--')}</strong></div><div class="settings-row"><span>令牌模式</span><strong>${esc(data.config && data.config.token_mode || '--')}</strong></div><div class="settings-hint">网页端目前只读取这些安全摘要；端口、域名和访问令牌请在 AstrBot 插件配置中修改。</div>`;
         $('updated').textContent = '刚刚更新';
-        showNotice(!token ? '当前页面没有访问令牌，请从聊天中的“打开网页版帮助”按钮进入控制台。' : '');
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
       };
-      const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; toast(error.message); } };
-      const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); } catch (error) { showNotice(error.message); } };
-      const navLinks = [...document.querySelectorAll('[data-nav]')];
-      const updateNav = () => {
-        let current = 'overview';
-        navLinks.forEach((link) => {
-          const section = $(link.dataset.nav);
-          if (section && section.getBoundingClientRect().top <= 120) current = link.dataset.nav;
-        });
-        navLinks.forEach((link) => {
-          const active = link.dataset.nav === current;
-          link.classList.toggle('active', active);
-          link.setAttribute('aria-current', active ? 'true' : 'false');
-        });
-      };
-      window.addEventListener('scroll', updateNav, {passive:true});
-      navLinks.forEach((link) => link.addEventListener('click', () => setTimeout(updateNav, 0)));
-      $('refresh').addEventListener('click', load); load(); updateNav();
+      const showAuthError = (error) => { document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; }); $('auth-card').hidden = false; showNotice(''); const auth = $('auth-card'); auth.querySelector('h2').textContent = error.status === 401 ? '访问令牌无效' : '控制台数据暂时不可用'; auth.querySelector('p').textContent = error.status === 401 ? '请从机器人发送的网页版帮助按钮重新打开，或确认链接中的访问令牌没有过期。' : '服务暂时没有返回控制台数据，请稍后点击重新验证。'; };
+      const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
+      const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
+      const load = async () => { $('auth-card').hidden = true; try { render(await api('dashboard')); setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
+      window.addEventListener('popstate', () => setView(viewFromUrl(), false));
+      $('refresh').addEventListener('click', load); $('retry').addEventListener('click', load); setView(viewFromUrl(), false); load();
     })();
   </script>
 </body>
