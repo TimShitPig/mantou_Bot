@@ -1042,6 +1042,33 @@ def 获取网盘账号数量(配置: Any, 平台: str, 配置Cookie: Any = "") -
     return len(获取网盘账号列表(配置, 平台, 配置Cookie))
 
 
+def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
+    """返回控制台可展示的账号摘要，不返回 Cookie 或身份令牌。"""
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台:
+        return []
+    try:
+        账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
+    except Exception as 异常:
+        logger.warning(
+            f"{平台显示名.get(规范平台, 规范平台)}账号摘要读取失败：error={type(异常).__name__}"
+        )
+        账号记录 = []
+    摘要列表: list[dict[str, Any]] = []
+    for 序号, 记录 in enumerate(账号记录, start=1):
+        if not str(记录.get("cookie") or "").strip():
+            continue
+        摘要列表.append(
+            {
+                "index": 序号,
+                "name": _清理账号资料文本(记录.get("name")) or "未命名账号",
+                "phone": _脱敏手机号(记录.get("phone")) or "未获取",
+                "configured": True,
+            }
+        )
+    return 摘要列表
+
+
 async def _获取夸克账号资料(Cookie: str) -> tuple[str, str]:
     if not Cookie:
         return "", ""

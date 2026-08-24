@@ -32,6 +32,12 @@
         "type": "string",
         "hint": "默认 8090；留空域名时帮助菜单会使用 http://服务器IP:8090。",
         "default": "8090"
+      },
+      "help_web_admin_token": {
+        "description": "帮助控制台访问令牌",
+        "type": "string",
+        "hint": "可选。留空时插件自动生成随机令牌，并在“帮助”按钮地址中自动携带；填写后重载插件生效。",
+        "default": ""
       }
     }
   },

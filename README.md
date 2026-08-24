@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.38.0-2ea44f)
+![version](https://img.shields.io/badge/version-v5.39.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.38.0 |
+| 版本 | v5.39.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -33,7 +33,7 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 
 ### 网页帮助
 
-无需填写域名。插件默认监听 `0.0.0.0:8090`，启动时自动获取服务器 IPv4；重载插件后发送 `帮助`，菜单会直接显示“打开网页版帮助”按钮，地址格式为 `http://服务器IP:8090`。
+无需填写域名。插件默认监听 `0.0.0.0:8090`，启动时自动获取服务器 IPv4；重载插件后发送 `帮助`，菜单会直接显示“打开网页版帮助”按钮，地址格式为 `http://服务器IP:8090`。打开后是管理员控制台，可查看小说开关、网盘摘要、数据库状态和服务器运行状态。
 
 如果使用域名或反向代理，可以在 AstrBot 插件配置的“帮助网页设置”中填写外网地址覆盖自动地址，例如：
 
@@ -244,7 +244,7 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
 | 配置项 | 说明 |
 | --- | --- |
 | `group_file_cleanup_admin_qq` | 管理员 QQ 白名单 |
-| `help_web_settings` | 自动帮助网页监听地址、端口和可选域名 |
+| `help_web_settings` | 控制台监听地址、端口、可选域名和访问令牌 |
 | `uc_pan_settings` | UC 网盘 Cookie 和上传目录 |
 | `quark_pan_settings` | 夸克网盘 Cookie 和上传目录 |
 | `baidu_pan_settings` | 百度网盘 Cookie、上传目录和后台备份状态 |
