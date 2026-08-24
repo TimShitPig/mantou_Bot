@@ -20,7 +20,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.39.1"
+控制台版本 = "5.39.2"
 
 
 @dataclass
@@ -556,8 +556,91 @@ _网页头部 = """<!doctype html>
     .toast.show { transform:translateY(0); opacity:1; }
     .empty { padding:30px; color:var(--muted); text-align:center; }
     @media (max-width:1050px) { .metrics { grid-template-columns:repeat(2,1fr); } .runtime-grid { grid-template-columns:repeat(3,1fr); } .config-list { grid-template-columns:repeat(2,1fr); } .config-item { border-right:1px solid var(--line); border-bottom:1px solid var(--line); } .config-item:nth-child(2n) { border-right:0; } .config-item:nth-last-child(-n+2) { border-bottom:0; } }
-    @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .page-tabs { gap:20px; margin-top:20px; overflow-x:auto; scrollbar-width:none; } .page-tabs::-webkit-scrollbar { display:none; } .page-tabs a { flex:0 0 auto; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
-  </style>
+     @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .page-tabs { gap:20px; margin-top:20px; overflow-x:auto; scrollbar-width:none; } .page-tabs::-webkit-scrollbar { display:none; } .page-tabs a { flex:0 0 auto; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
+     /* Screenshot-inspired configuration workspace. The data/API contract stays unchanged. */
+     .shell { grid-template-columns:222px minmax(0,1fr); grid-template-rows:62px minmax(0,1fr); }
+     .topbar { padding:0 30px; }
+     .brand-mark { width:36px; height:36px; border-radius:50%; background:#e9e9ff; color:#5d58d8; border:3px solid #f5f4ff; font-size:13px; }
+     .brand strong { font-size:17px; }
+     .sidebar { padding:28px 18px 18px; gap:25px; }
+     .profile { gap:8px; padding-bottom:13px; }
+     .bot-avatar { width:76px; height:76px; }
+     .nav-label { margin:0 12px 8px; font-size:11px; letter-spacing:0; text-transform:none; color:#a0a2b5; }
+     .nav { gap:4px; }
+     .nav a { min-height:40px; padding:10px 12px; border-radius:8px; font-size:13px; }
+     .nav-icon { width:19px; font-size:15px; }
+     .sidebar-foot { border-radius:8px; background:#f5f6fb; padding:15px 13px; line-height:1.65; }
+     .main { background:#f7f8fc; }
+     .content { width:min(1040px,calc(100% - 64px)); padding:38px 0 65px; }
+     .page-kicker { display:none; }
+     .page-heading h1 { font-size:24px; letter-spacing:0; }
+     .page-heading p { margin-top:6px; font-size:13px; }
+     .primary-button { min-height:40px; border-radius:7px; padding:0 17px; }
+     .page-tabs { gap:0; margin-top:26px; padding:0 7px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:0 4px 14px rgba(58,60,104,.035); }
+     .page-tabs a { padding:15px 18px 13px; font-size:13px; }
+     .notice { margin:14px 0 0; border-radius:7px; }
+     .metrics { display:none; }
+     .workspace-grid { display:grid; grid-template-columns:minmax(0,1.62fr) minmax(310px,.96fr); align-items:start; gap:16px; margin-top:17px; }
+     .workspace-left,.workspace-right { display:grid; gap:16px; align-content:start; min-width:0; }
+     .console-card { margin:0; padding:21px 21px 20px; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 5px 18px rgba(55,59,103,.045); scroll-margin-top:80px; }
+     .console-card h2 { margin:0; font-size:15px; }
+     .card-subtitle { margin:4px 0 18px; color:var(--muted); font-size:12px; }
+     .profile-fields { display:grid; gap:0; }
+     .profile-field { display:grid; grid-template-columns:112px minmax(0,1fr); align-items:center; gap:16px; min-height:58px; border-bottom:1px solid #f0f1f5; }
+     .profile-field:last-child { border-bottom:0; }
+     .profile-field > span { color:#55586d; font-size:13px; }
+     .readonly-value { min-height:38px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 11px; border:1px solid #e4e6ee; border-radius:7px; color:var(--ink); background:#fff; }
+     .readonly-value small { color:#a1a4b4; font-size:11px; }
+     .avatar-inline { display:flex; align-items:center; gap:10px; }
+     .avatar-inline .bot-avatar { width:43px; height:43px; border-width:3px; }
+     .avatar-inline .bot-avatar::before { width:37px; height:35px; top:3px; }
+     .avatar-inline .avatar-face { left:9px; top:14px; font-size:13px; letter-spacing:2px; }
+     .avatar-inline .bot-avatar::after { right:3px; top:1px; font-size:9px; }
+     .avatar-inline small { color:var(--muted); font-size:11px; }
+     .state-line { display:flex; align-items:center; gap:10px; }
+     .state-line .online { font-size:12px; }
+     .connection-fields { display:grid; gap:12px; }
+     .connection-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 0; border-bottom:1px solid #f0f1f5; }
+     .connection-row:last-child { border-bottom:0; padding-bottom:0; }
+     .connection-row:first-child { padding-top:0; }
+     .connection-row > span { color:#55586d; font-size:12px; }
+     .connection-row strong { max-width:66%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); font-size:12px; font-weight:600; text-align:right; }
+     .module-card { padding:21px 0 0; overflow:hidden; }
+     .module-card h2,.module-card .card-subtitle { margin-left:21px; margin-right:21px; }
+     .module-card .global-bar { padding:14px 21px; border-top:1px solid #f0f1f5; background:#fcfbff; }
+     .module-card .novel-grid { grid-template-columns:1fr; }
+     .module-card .novel-item { min-height:51px; padding:10px 21px; border-right:0; }
+     .module-card .novel-item:nth-last-child(-n+3) { border-bottom:1px solid var(--line); }
+     .module-card .novel-item:last-child { border-bottom:0; }
+     .module-card .novel-badge { width:26px; height:26px; border-radius:7px; }
+     .module-card .novel-name strong { font-size:12px; }
+     .module-card .novel-name small { font-size:10px; }
+     .module-card .switch { transform:scale(.88); transform-origin:right center; }
+     .status-card { padding-bottom:13px; }
+     .status-card .status-list { display:grid; gap:0; margin-top:10px; }
+     .status-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #f0f1f5; font-size:12px; }
+     .status-item:last-child { border-bottom:0; }
+     .status-item span { color:#65687b; }
+     .status-item strong { color:var(--ink); font-weight:600; text-align:right; }
+     .status-item strong.good { color:var(--mint-ink); }
+     .test-card { padding-bottom:17px; }
+     .test-bubble { display:flex; align-items:flex-start; gap:9px; margin-top:14px; }
+     .test-mini-avatar { width:28px; height:28px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:11px; font-weight:800; }
+     .test-bubble p { margin:0; padding:9px 11px; border-radius:5px 10px 10px 10px; background:#f0f1f7; color:#65687b; font-size:11px; line-height:1.55; }
+     .test-hint { margin:13px 0 0; color:#a0a2b5; font-size:11px; }
+     .pan-section { margin-top:16px; }
+     .pan-section .section-head { margin:0 0 10px; }
+     .pan-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+     .runtime-grid { display:none; }
+     .config-list { grid-template-columns:repeat(2,minmax(0,1fr)); border-radius:7px; box-shadow:none; }
+     .config-item { min-height:64px; padding:13px 15px; border-bottom:1px solid var(--line); }
+     .config-item:nth-child(2n) { border-right:0; }
+     .config-item:nth-last-child(-n+2) { border-bottom:0; }
+     .config-section { margin-top:16px; }
+     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+     @media (max-width:1050px) { .workspace-grid { grid-template-columns:minmax(0,1.35fr) minmax(280px,.9fr); } .pan-grid { grid-template-columns:1fr; } }
+     @media (max-width:760px) { .content { width:calc(100% - 28px); padding:23px 0 40px; } .workspace-grid { grid-template-columns:1fr; } .workspace-right { order:-1; } .module-card .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .module-card .novel-item { border-right:1px solid var(--line); } .module-card .novel-item:nth-child(2n) { border-right:0; } .module-card .novel-item:nth-last-child(-n+2) { border-bottom:0; } .profile-field { grid-template-columns:92px minmax(0,1fr); gap:10px; } .connection-row strong { max-width:58%; } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
+   </style>
 </head>
 """
 
@@ -565,24 +648,76 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><div class="brand-mark">馒</div><div><strong>馒头Bot 管理台</strong><span class="version-badge" id="console-version">v5.39.1</span></div></div>
+      <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.39.2</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
       <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
-      <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航"><a class="active" aria-current="true" data-nav="overview" href="#overview"><span class="nav-icon">⌂</span>总览</a><a data-nav="novels" href="#novels"><span class="nav-icon">✿</span>小说功能</a><a data-nav="pans" href="#pans"><span class="nav-icon">▣</span>网盘配置</a><a data-nav="runtime" href="#runtime"><span class="nav-icon">◒</span>运行状态</a></nav></div>
-      <div class="sidebar-foot"><span class="spark">✦</span><strong>小提示</strong><span>状态和配置只显示安全摘要，敏感凭据不会出现在页面。</span></div>
+      <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
+        <a href="#overview"><span class="nav-icon">⌂</span>控制台</a>
+        <a class="active" aria-current="true" data-nav="overview" href="#overview"><span class="nav-icon">⚙</span>机器人配置</a>
+        <a data-nav="novels" href="#novels"><span class="nav-icon">☷</span>指令管理</a>
+        <a data-nav="pans" href="#pans"><span class="nav-icon">▣</span>事件订阅</a>
+        <a data-nav="runtime" href="#runtime"><span class="nav-icon">♧</span>群组管理</a>
+        <a data-nav="runtime" href="#runtime"><span class="nav-icon">♙</span>用户管理</a>
+        <a data-nav="runtime" href="#runtime"><span class="nav-icon">▥</span>数据统计</a>
+        <a data-nav="runtime" href="#runtime"><span class="nav-icon">▤</span>日志管理</a>
+        <a data-nav="config" href="#config"><span class="nav-icon">♧</span>扩展插件</a>
+        <a data-nav="config" href="#config"><span class="nav-icon">⚙</span>系统设置</a>
+      </nav></div>
+      <div class="sidebar-foot"><span class="spark">✦</span><strong>遇到问题？</strong><span>查看帮助说明和安全摘要，敏感凭据不会出现在页面。</span></div>
     </aside>
     <main class="main">
       <div class="content">
-        <div class="page-heading"><div><p class="page-kicker">馒头Bot / 管理台</p><h1>机器人配置</h1><p>管理小说功能、网盘分享和运行状态</p></div><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div>
-        <nav class="page-tabs" aria-label="页面分区"><a class="active" aria-current="true" data-nav="overview" href="#overview">基本信息</a><a data-nav="novels" href="#novels">功能模块</a><a data-nav="pans" href="#pans">网盘配置</a><a data-nav="runtime" href="#runtime">运行状态</a></nav>
+        <div class="page-heading"><div><h1>机器人配置</h1><p>配置机器人的基本信息、功能模块和响应规则</p></div><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div>
+        <nav class="page-tabs" aria-label="页面分区"><a class="active" aria-current="true" data-nav="overview" href="#overview">基本信息</a><a data-nav="novels" href="#novels">功能模块</a><a data-nav="pans" href="#pans">响应设置</a><a data-nav="runtime" href="#runtime">权限设置</a><a data-nav="config" href="#config">其他设置</a></nav>
         <div id="notice" class="notice"></div>
-        <section id="overview" class="metrics"><div class="metric"><div class="metric-label">小说总开关</div><div id="metric-global" class="metric-value">--</div><div id="metric-global-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">当前分享网盘</div><div id="metric-pan" class="metric-value">--</div><div id="metric-pan-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">数据库</div><div id="metric-db" class="metric-value">--</div><div id="metric-db-meta" class="metric-meta">加载中</div></div><div class="metric"><div class="metric-label">插件版本</div><div id="metric-version" class="metric-value">--</div><div id="metric-version-meta" class="metric-meta">馒头 bot</div></div></section>
-        <section id="novels" class="section"><div class="section-head"><div><h2>小说功能</h2><p>单独控制每个平台，关闭后不影响其他平台。</p></div><a class="section-link" href="#novels">管理开关</a></div><div class="panel"><div class="global-bar"><div class="global-copy"><strong>全局小说功能</strong><span>关闭后所有小说下载、找书和翻页入口都会暂停。</span></div><div class="global-actions"><div class="test-mode"><span>管理员测试模式</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></div></section>
-        <section id="pans" class="section"><div class="section-head"><div><h2>网盘配置</h2><p>选择小说完成后的主分享网盘，账号数量和上传目录仅显示摘要。</p></div><a class="section-link" href="#pans">查看配置</a></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></section>
-        <section id="runtime" class="section"><div class="section-head"><div><h2>运行状态</h2><p>服务器和插件的实时摘要。</p></div><span id="updated" class="section-link">--</span></div><div class="runtime-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div></section>
-        <section class="section"><div class="section-head"><div><h2>当前配置</h2><p>网页监听和控制台访问策略。</p></div></div><div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div></section>
+        <div class="workspace-grid">
+          <div class="workspace-left">
+            <section id="overview" class="console-card profile-card">
+              <h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p>
+              <div class="profile-fields">
+                <div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div>
+                <div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div>
+                <div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div>
+                <div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div>
+                <div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span><small id="updated">--</small></div></div>
+              </div>
+              <div class="sr-only"><span id="metric-global">--</span><span id="metric-global-meta">--</span><span id="metric-version">--</span><span id="metric-version-meta">--</span></div>
+            </section>
+            <section id="config" class="console-card config-section">
+              <h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p>
+              <div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div>
+            </section>
+          </div>
+          <div class="workspace-right">
+            <section id="novels" class="console-card module-card">
+              <h2>功能模块</h2><p class="card-subtitle">控制小说平台和管理员测试模式</p>
+              <div class="global-bar"><div class="global-copy"><strong>小说功能</strong><span>关闭后下载、找书和翻页暂停</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div>
+              <div class="test-mode global-bar"><span>管理员测试模式</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div>
+              <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
+            </section>
+            <section id="runtime" class="console-card status-card">
+              <h2>当前状态</h2><p class="card-subtitle">服务器与插件实时摘要</p>
+              <div class="status-list">
+                <div class="status-item"><span>小说总开关</span><strong id="metric-global-state">加载中</strong></div>
+                <div class="status-item"><span>当前分享网盘</span><strong id="metric-pan">--</strong></div>
+                <div class="status-item"><span>数据库</span><strong id="metric-db">--</strong></div>
+                <div class="status-item"><span>CPU 占用</span><strong id="runtime-cpu">--</strong></div>
+                <div class="status-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div>
+                <div class="status-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div>
+                <div class="status-item"><span>版本信息</span><strong id="metric-version-state">--</strong></div>
+              </div>
+              <span id="metric-pan-meta" class="sr-only">--</span><span id="metric-db-meta" class="sr-only">--</span><span id="runtime-disk" class="sr-only">--</span><span id="runtime-os" class="sr-only">--</span>
+            </section>
+            <section class="console-card test-card">
+              <h2>测试面板</h2><p class="card-subtitle">用于确认控制台与机器人服务是否在线</p>
+              <div class="test-bubble"><span class="test-mini-avatar">馒</span><p>控制台已连接。小说开关和网盘切换会立即保存。</p></div>
+              <p class="test-hint">聊天测试请回到机器人所在群聊发送指令。</p>
+            </section>
+          </div>
+        </div>
+        <section id="pans" class="section pan-section"><div class="section-head"><div><h2>网盘配置</h2><p>选择小说完成后的主分享网盘，账号数量和上传目录仅显示摘要。</p></div><a class="section-link" href="#pans">查看配置</a></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></section>
       </div>
     </main>
   </div>
@@ -615,12 +750,14 @@ _网页脚本 = """
         const database = data.database || {};
         $('metric-global').textContent = novels.global_enabled ? '已开启' : '已关闭';
         $('metric-global-meta').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
+        if ($('metric-global-state')) $('metric-global-state').textContent = novels.global_enabled ? '已开启' : '已关闭';
         $('metric-pan').textContent = pans.active || '--';
         const activePan = (pans.items || []).find((item) => item.active);
         $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
         $('metric-db').textContent = database.status || '--';
         $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库';
         $('metric-version').textContent = `v${data.version || '--'}`;
+        if ($('metric-version-state')) $('metric-version-state').textContent = `v${data.version || '--'}`;
         $('console-version').textContent = `v${data.version || '--'}`;
         [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => {
           const node = $(id);
