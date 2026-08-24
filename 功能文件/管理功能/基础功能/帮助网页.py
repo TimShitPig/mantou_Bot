@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.1"
+控制台版本 = "5.44.2"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1056,6 +1056,10 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         结果 = await asyncio.to_thread(
             消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
         )
+        try:
+            asyncio.create_task(消息记录.刷新待处理群信息())
+        except Exception:
+            pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
         logger.warning("帮助控制台消息列表读取失败：错误类型=%s", type(exc).__name__)
@@ -1081,6 +1085,10 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         结果 = await asyncio.to_thread(
             消息记录.获取消息历史, 会话标识, 类型, before_date, limit
         )
+        try:
+            asyncio.create_task(消息记录.刷新待处理群信息())
+        except Exception:
+            pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
         logger.warning("帮助控制台消息历史读取失败：错误类型=%s", type(exc).__name__)
@@ -1623,7 +1631,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.1</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.2</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1731,6 +1739,7 @@ _网页主体 = """
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
             .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
             .msg-tag.bot { background:#ffeef5; color:#c66791; }
+            .msg-tag.role { background:#eef3ff; color:#5b7bd5; }
             .msg-tag.self { background:#e9fbf3; color:#319e6b; }
             .msg-tag.recalled { background:#f2f2f5; color:#9a9cb0; }
             .msg-actions { display:flex; gap:5px; margin-top:5px; }
@@ -1996,10 +2005,11 @@ _网页脚本 = """
       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
-      const avatarUrl = (openid, type) => {
+      const avatarUrl = (openid, type, appid) => {
         if (!openid) return '';
         if (type === 'group') { const qq = window.msgGroupQQ?.[openid] || ''; return qq ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
-        return `https://q.qlogo.cn/qqapp/${(window.msgAppid||'')}/${openid}/100/`;
+        const aid = appid || window.msgAppid || '';
+        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${openid}/100/` : '';
       };
       const msgTypeName = (m) => {
         const c = String(m.content || '');
@@ -2013,12 +2023,13 @@ _网页脚本 = """
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; return; }
         node.innerHTML = chats.map((chat) => {
-          const av = avatarUrl(chat.chat_id, chat.chat_type);
+          const av = avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
+          if (chat.appid) window.msgAppid = chat.appid;
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           return `<button type="button" class="msg-chat ${msgState.chatId === chat.chat_id ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}">
             <span class="msg-chat-avatar">${av ? `<img src="${av}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(String(chat.nickname||'群').slice(0,1))}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(chat.last_time||'')}</small></span>
-            <span class="msg-chat-sub">${esc(chat.last_content || '（无文本内容）')}</span>
+            <span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
@@ -2043,14 +2054,27 @@ _网页脚本 = """
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(day)}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self);
           const recalled = Boolean(m.recalled);
-          const av = isSelf ? '' : avatarUrl(m.user_id, 'user');
+          const profiles = data.member_profiles || {};
+          const profile = profiles[m.user_id] || {};
+          const av = isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid);
           const tags = [];
           if (isSelf) tags.push('<span class="msg-tag self">我</span>');
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
+          const roleMap = {owner:'群主', admin:'管理', member:'群员'};
+          const roleTag = roleMap[profile.role] || roleMap[String(m.raw_message||'').match(/member_role[^,]*?['\"]([a-z]+)['\"]/)?.[1] || ''];
+          if (!isSelf && roleTag) tags.push(`<span class="msg-tag role">${roleTag}</span>`);
+          const renderText = (text) => {
+            let out = String(text || '');
+            out = out.replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => {
+              const nm = profiles[oid]?.nickname || '';
+              return nm ? `@${nm}` : all;
+            });
+            return out;
+          };
           const quote = m.reference_id ? `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>` : '';
           const media = m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:var(--muted)">${esc(m.media.src)}</span></div>`) : '';
-          const content = recalled ? '（消息已撤回）' : (m.content || '（空消息）');
+          const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
           const actions = [];
           if (!isSelf && !recalled && m.message_id) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
           if (!isSelf && msgState.chatType === 'group' && m.user_id) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id)}" data-msg-name="${esc(m.nickname||'')}" type="button">引用</button>`);

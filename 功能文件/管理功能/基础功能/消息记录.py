@@ -26,6 +26,7 @@ except Exception:
 当前插件上下文: Any = globals().get("当前插件上下文")
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
+群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
@@ -43,12 +44,49 @@ def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
     return getattr(对象, 字段名, 默认值)
 
 
-def _格式化时间戳(时间戳: Any) -> str:
+def _转数字时间戳(时间戳: Any) -> int | None:
+    """把数字秒、ISO 字符串或 datetime 统一转成秒级数字时间戳。"""
+    if 时间戳 is None or 时间戳 == "":
+        return None
+    if isinstance(时间戳, (int, float)):
+        try:
+            数值 = int(时间戳)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if 数值 <= 0:
+            return None
+        if 数值 > 10**12:
+            数值 //= 1000
+        return 数值
+    if hasattr(时间戳, "timestamp"):
+        try:
+            return int(时间戳.timestamp())
+        except Exception:
+            return None
+    文本 = str(时间戳).strip()
+    if not 文本:
+        return None
     try:
-        数值 = int(时间戳 or 0)
+        from datetime import datetime as _日期类
+
+        if len(文本) >= 19 and 文本[4] == "-" and 文本[10] == "T":
+            核心 = 文本[:19]
+            解析 = _日期类.strptime(核心, "%Y-%m-%dT%H:%M:%S")
+            return int(解析.timestamp())
+    except (ValueError, TypeError):
+        pass
+    try:
+        数值 = int(float(文本))
+        if 数值 > 0:
+            return 数值
     except (TypeError, ValueError):
-        return ""
-    if 数值 <= 0:
+        pass
+    return None
+
+
+def _格式化时间戳(时间戳: Any) -> str:
+    数值 = _转数字时间戳(时间戳)
+    if 数值 is None:
         return ""
     try:
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(数值))
@@ -132,16 +170,24 @@ def _提取成员昵称(消息: Any) -> str:
     return str(_读取字段(作者, "username") or "").strip()
 
 
-def _记录成员资料(会话标识: str, 成员标识: str, 昵称: str, 是机器人: bool = False) -> None:
+def _记录成员资料(
+    会话标识: str,
+    成员标识: str,
+    昵称: str,
+    是机器人: bool = False,
+    角色: str = "",
+) -> None:
     if not 成员标识:
         return
     会话资料 = 成员资料缓存.setdefault(会话标识, {})
     if 成员标识 not in 会话资料:
-        会话资料[成员标识] = {"nickname": 昵称 or "", "is_bot": bool(是机器人)}
+        会话资料[成员标识] = {"nickname": 昵称 or "", "is_bot": bool(是机器人), "role": str(角色 or "")}
     else:
         if 昵称:
             会话资料[成员标识]["nickname"] = 昵称
         会话资料[成员标识]["is_bot"] = bool(是机器人)
+        if 角色:
+            会话资料[成员标识]["role"] = str(角色 or "")
 
 
 def 记录收到消息(
@@ -169,9 +215,12 @@ def 记录收到消息(
         昵称 = _提取成员昵称(消息)
         作者 = _读取字段(消息, "author")
         是机器人 = bool(_读取字段(作者, "bot") or False)
+        角色 = str(_读取字段(作者, "member_role") or "").strip()
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
-        _记录成员资料(会话标识, 成员标识, 昵称, 是机器人)
+        _记录成员资料(会话标识, 成员标识, 昵称, 是机器人, 角色)
         会话 = _取得会话缓存(会话标识, 类型, appid)
+        if 类型 == "group" and 会话标识 not in 群信息缓存:
+            标记群信息待刷新(会话标识)
         发送序号 += 1
         记录: dict[str, Any] = {
             "id": 发送序号,
@@ -193,7 +242,7 @@ def 记录收到消息(
         if 内容:
             会话["last_content"] = 内容
             会话["last_nickname"] = 昵称
-        会话["last_ts"] = int(时间戳 or time.time())
+        会话["last_ts"] = _转数字时间戳(时间戳) or int(time.time())
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -410,6 +459,29 @@ def _写入本地缓存文件(数据: dict[str, Any]) -> None:
         logger.warning("消息记录本地缓存写入失败：错误类型=%s", type(exc).__name__)
 
 
+def 标记群信息待刷新(会话标识: str) -> None:
+    会话标识 = str(会话标识 or "").strip()
+    if 会话标识:
+        群信息待刷新.add(会话标识)
+
+
+async def 刷新待处理群信息() -> int:
+    """批量刷新待处理群信息，返回成功数量。"""
+    if not 群信息待刷新:
+        return 0
+    批次 = list(群信息待刷新)[:20]
+    群信息待刷新.clear()
+    成功数 = 0
+    for 会话标识 in 批次:
+        try:
+            结果 = await 刷新群信息(会话标识)
+            if 结果:
+                成功数 += 1
+        except Exception as exc:
+            logger.warning("消息记录群信息后台刷新失败：错误类型=%s", type(exc).__name__)
+    return 成功数
+
+
 async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] | None:
     """调用 QQ 官方接口刷新群基本信息。"""
     通道 = 获取HTTP通道()
@@ -490,6 +562,8 @@ def 获取聊天列表(
             备注 = 获取群备注(会话标识)
             if not 备注:
                 continue
+        if 类型 == "group" and not 群信息缓存.get(会话标识):
+            标记群信息待刷新(会话标识)
         显示名 = _聊天显示名(会话标识, 会话)
         if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
             continue
