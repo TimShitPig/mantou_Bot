@@ -30,6 +30,7 @@ except Exception:
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
+_发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 _媒体占位规则 = re.compile(r"\[(图片|语音|视频|文件|媒体|media)]([^\s]+)")
@@ -1219,12 +1220,86 @@ def _安装消息事件挂钩() -> bool:
     return True
 
 
+def _链提取文本(消息链: Any) -> str:
+    """从 AstrBot MessageChain 提取展示文本（纯文本 + 媒体占位）。"""
+    try:
+        段们 = getattr(消息链, "segments", None) or []
+        文本 = ""
+        for 段 in 段们:
+            类型 = str(getattr(段, "type", "") or "")
+            数据 = getattr(段, "data", None)
+            if 类型 == "Plain":
+                if isinstance(数据, dict):
+                    文本 += str(数据.get("text") or "")
+                else:
+                    文本 += str(数据 or "")
+            elif 类型 == "Image":
+                文本 += "[图片] "
+            elif 类型 == "File":
+                文本 += "[文件] "
+            elif 类型 == "Video":
+                文本 += "[视频] "
+            elif 类型 == "Record":
+                文本 += "[语音] "
+            elif 类型 == "Markdown":
+                if isinstance(数据, dict):
+                    文本 += str(数据.get("content") or "")
+                else:
+                    文本 += str(数据 or "")
+        return 文本.strip()
+    except Exception:
+        return ""
+
+
+def _安装消息发送挂钩() -> bool:
+    """为 QQ 官方平台适配器包装 send_by_session，把机器人发送的消息写入缓存。"""
+    global _发送挂钩已安装
+    if _发送挂钩已安装:
+        return True
+    try:
+        from astrbot.core.platform.sources.qqofficial import (
+            qqofficial_platform_adapter as 适配器模块,
+        )
+    except Exception as 异常:
+        logger.warning("消息记录发送挂钩加载失败：错误类型=%s", type(异常).__name__)
+        return False
+    适配器类 = getattr(适配器模块, "QQOfficialPlatformAdapter", None)
+    if 适配器类 is None:
+        return False
+    原发送 = getattr(适配器类, "send_by_session", None)
+    if 原发送 is None or getattr(原发送, "__module__", "") == __name__:
+        return False
+
+    async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
+        try:
+            appid = str(getattr(self, "appid", "") or "")
+            会话标识 = str(getattr(session, "session_id", "") or "").strip()
+            消息类型 = str(getattr(session, "message_type", "") or "")
+            类型 = "group" if "GROUP" in 消息类型.upper() else "user"
+            内容 = _链提取文本(message_chain)
+            if 会话标识 and 内容:
+                记录发送消息(会话标识, 类型, 内容, appid)
+        except Exception as exc:
+            logger.warning("消息记录发送挂钩失败：错误类型=%s", type(exc).__name__)
+        结果 = 原发送(self, session, message_chain)
+        if asyncio.iscoroutine(结果):
+            return await 结果
+        return 结果
+
+    setattr(适配器类, "send_by_session", 新发送)
+    _发送挂钩已安装 = True
+    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存")
+    return True
+
+
 def 安装消息记录(上下文: Any = None) -> bool:
     global 当前插件上下文
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:
-        return _安装消息事件挂钩()
+        _安装消息事件挂钩()
+        _安装消息发送挂钩()
+        return True
     except Exception as exc:
         logger.warning("消息记录安装失败：错误类型=%s", type(exc).__name__)
         return False

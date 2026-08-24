@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.9"
+控制台版本 = "5.44.10"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1635,7 +1635,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.9</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.10</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -2024,7 +2024,7 @@ _网页脚本 = """
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, pastedImage:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, pastedImage:null, sending:false };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -2214,6 +2214,7 @@ _网页脚本 = """
         catch (error) { toast(error.message); }
       };
       const sendMessage = async () => {
+        if (msgState.sending) return;
         const content = $('msg-textarea').value.trim();
         const customId = $('msg-custom-id').value.trim();
         const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '' };
@@ -2236,10 +2237,11 @@ _网页脚本 = """
           if (!payload.card.title) return toast('请填写卡片标题');
         }
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
+        msgState.sending = true;
         const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
         try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
-        finally { btn.disabled = false; $('msg-send-status').textContent = ''; }
+        finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
       };
       const renderMsgExtra = () => {
         const extra = $('msg-extra'); const type = msgState.sendType;
