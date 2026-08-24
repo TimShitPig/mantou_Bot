@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.2"
+控制台版本 = "5.44.3"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1631,7 +1631,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.2</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.3</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1700,8 +1700,10 @@ _网页主体 = """
             .msg-chat { display:flex; gap:10px; width:100%; min-height:60px; padding:9px 10px; border:0; border-radius:10px; background:transparent; text-align:left; cursor:pointer; transition:background .15s ease; }
             .msg-chat:hover { background:#f6f5ff; }
             .msg-chat.active { background:var(--primary-soft); }
-            .msg-chat-avatar { width:38px; height:38px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:13px; font-weight:800; overflow:hidden; }
-            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; }
+            .msg-chat-avatar { position:relative; width:38px; height:38px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:13px; font-weight:800; overflow:hidden; }
+            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; }
+            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:13px; font-weight:800; color:#5c58d8; }
+            .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
             .msg-chat-main { flex:1 1 0; min-width:0; }
             .msg-chat-top { display:flex; align-items:center; gap:6px; }
             .msg-chat-top strong { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1722,8 +1724,10 @@ _网页主体 = """
             .msg-day { margin:8px 0; color:var(--soft); font-size:10px; text-align:center; }
             .msg-row { display:flex; gap:9px; margin-bottom:13px; }
             .msg-row.self { flex-direction:row-reverse; }
-            .msg-avatar { width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:11px; font-weight:800; overflow:hidden; }
-            .msg-avatar img { width:100%; height:100%; object-fit:cover; }
+            .msg-avatar { position:relative; width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#e9e9ff; color:#5c58d8; font-size:11px; font-weight:800; overflow:hidden; }
+            .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; }
+            .msg-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:11px; font-weight:800; color:#5c58d8; }
+            .msg-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
             .msg-bubble-wrap { max-width:min(72%,540px); min-width:0; }
             .msg-row.self .msg-bubble-wrap { display:flex; flex-direction:column; align-items:flex-end; }
             .msg-bubble-name { margin-bottom:3px; color:var(--muted); font-size:10px; padding-left:2px; }
@@ -2011,6 +2015,11 @@ _网页脚本 = """
         const aid = appid || window.msgAppid || '';
         return aid ? `https://q.qlogo.cn/qqapp/${aid}/${openid}/100/` : '';
       };
+      const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
+      const avatarHtml = (url, letter) => {
+        if (!url) return esc(String(letter || '?').slice(0, 1));
+        return `<span class="avatar-letter">${esc(String(letter || '?').slice(0, 1))}</span>` + avatarImg(url, letter);
+      };
       const msgTypeName = (m) => {
         const c = String(m.content || '');
         if (c.startsWith('[媒体]')) return '媒体';
@@ -2027,7 +2036,7 @@ _网页脚本 = """
           if (chat.appid) window.msgAppid = chat.appid;
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           return `<button type="button" class="msg-chat ${msgState.chatId === chat.chat_id ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}">
-            <span class="msg-chat-avatar">${av ? `<img src="${av}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(String(chat.nickname||'群').slice(0,1))}</span>
+            <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(chat.last_time||'')}</small></span>
             <span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
@@ -2082,7 +2091,7 @@ _网页脚本 = """
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
           html += `<div class="msg-row ${isSelf ? 'self' : ''}">
-            <span class="msg-avatar">${av ? `<img src="${av}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(String(m.nickname||'?').slice(0,1))}</span>
+            <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(m.nickname||'')}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${esc(content)}${media}</div>
               <div class="msg-meta">${esc(m.timestamp||'')}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
