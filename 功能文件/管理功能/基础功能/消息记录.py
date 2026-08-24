@@ -126,19 +126,48 @@ def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict
     return 消息缓存[会话标识]
 
 
-def _序列化原始消息(消息: Any) -> str:
+def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
     try:
-        return str(消息 or "")
+        文本 = str(消息 or "")
     except Exception:
         return ""
+    if 最长 > 0 and len(文本) > 最长:
+        return 文本[:最长] + "...[已截断]"
+    return 文本
 
 
 def _提取消息文本(内容: Any) -> str:
     return str(内容 or "").strip()
 
 
-def _提取媒体字段(内容: str) -> dict[str, str] | None:
-    """从消息原文提取媒体占位或 QQ 富媒体图片链接。"""
+def _提取附件媒体(消息: Any) -> dict[str, str] | None:
+    """从 QQ 官方消息 attachments 提取图片/语音/视频/文件媒体信息。"""
+    try:
+        附件列表 = _读取字段(消息, "attachments")
+        if not isinstance(附件列表, list) or not 附件列表:
+            return None
+        for 附件 in 附件列表:
+            类型 = str(_读取字段(附件, "content_type") or "").lower()
+            地址 = str(_读取字段(附件, "url") or "").strip()
+            if not 地址:
+                continue
+            if 类型.startswith("image/"):
+                return {"type": "图片", "src": 地址, "text": ""}
+            if 类型.startswith("video/"):
+                return {"type": "视频", "src": 地址, "text": ""}
+            if 类型.startswith("audio/"):
+                return {"type": "语音", "src": 地址, "text": ""}
+            return {"type": "文件", "src": 地址, "text": ""}
+    except Exception:
+        pass
+    return None
+
+
+def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, str] | None:
+    """提取媒体信息：优先附件图片，其次消息原文占位或 QQ 富媒体图片链接。"""
+    附件媒体 = _提取附件媒体(消息)
+    if 附件媒体:
+        return 附件媒体
     if not 内容:
         return None
     匹配 = _媒体占位规则.search(内容)
@@ -238,7 +267,7 @@ def 记录收到消息(
             "source": 源,
             "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
             "recalled": False,
-            "media": _提取媒体字段(内容),
+            "media": _提取媒体字段(内容, 消息),
             "reference_id": 引用ID or "",
         }
         会话["messages"].append(记录)
@@ -429,6 +458,16 @@ def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> Non
         现有.pop("group_qq", None)
     备注表[会话标识] = 现有
     _写入本地缓存文件(数据)
+
+
+def 删除群备注(会话标识: str) -> None:
+    """删除某个会话的全部备注与群号信息。"""
+    数据 = _读取本地缓存文件()
+    备注表 = 数据.get("remarks") or {}
+    if 会话标识 in 备注表:
+        del 备注表[会话标识]
+        数据["remarks"] = 备注表
+        _写入本地缓存文件(数据)
 
 
 def _缓存文件路径() -> Path:
@@ -643,6 +682,9 @@ def 获取消息历史(
                 "content": str(被引用.get("content") or ""),
                 "timestamp": str(被引用.get("timestamp") or ""),
             }
+    for 历史项 in 返回消息:
+        if isinstance(历史项, dict) and 历史项.get("raw_message"):
+            历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
     return {
         "messages": 返回消息,
         "last_msg_id": str(最后消息.get("message_id") or ""),
@@ -997,8 +1039,14 @@ async def 禁言群成员(
         )
         return {"ok": True, "message": "禁言成功"}
     except Exception as exc:
+        提示 = "禁言失败，请稍后再试"
+        原文 = str(getattr(exc, "resp", "") or exc)
+        if "not admin" in 原文 or "没有权限" in 原文 or "权限" in 原文:
+            提示 = "机器人不是该群管理员，无法执行禁言"
+        elif "不存在" in 原文 or "无效" in 原文:
+            提示 = "群或成员不存在，无法禁言"
         logger.warning("消息记录禁言失败：错误类型=%s", type(exc).__name__)
-        return {"ok": False, "message": "禁言失败，请稍后再试"}
+        return {"ok": False, "message": 提示}
 
 
 # ---------------------------------------------------------------------------

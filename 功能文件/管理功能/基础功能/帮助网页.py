@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.6"
+控制台版本 = "5.44.7"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1214,6 +1214,9 @@ async def _处理群备注(request: web.Request) -> web.Response:
                 "group_qq": 消息记录.获取群QQ号(会话标识),
             }
             return web.json_response({"ok": True, **结果})
+        if (数据 or {}).get("action") == "delete":
+            await asyncio.to_thread(消息记录.删除群备注, 会话标识)
+            return web.json_response({"ok": True, "message": "备注已删除"})
         备注 = str((数据 or {}).get("remark") or "").strip()
         群QQ = str((数据 or {}).get("group_qq") or "").strip()
         await asyncio.to_thread(消息记录.保存群备注, 会话标识, 备注, 群QQ)
@@ -1631,7 +1634,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.6</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.7</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1770,6 +1773,25 @@ _网页主体 = """
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
             .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:8px; background:#f8f7ff; color:#999; font-size:11px; }
             .msg-quote-preview b { color:#333; }
+            .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-raw-modal[hidden] { display:none; }
+            .msg-raw-box { width:min(720px,100%); max-height:78vh; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid #e8e9ec; }
+            .msg-raw-head strong { font-size:13px; color:#222; }
+            .msg-raw-head button { border:0; background:transparent; color:#999; font-size:16px; cursor:pointer; }
+            .msg-raw-content { flex:1 1 0; min-height:0; overflow:auto; padding:13px 15px; white-space:pre-wrap; word-break:break-all; color:#333; font:12px/1.6 Consolas,Monaco,monospace; }
+            .msg-mute-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-mute-modal[hidden] { display:none; }
+            .msg-mute-box { width:min(400px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-mute-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
+            .msg-mute-presets { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
+            .msg-mute-presets button { min-height:30px; padding:0 12px; border:1px solid #e0e1e5; border-radius:8px; background:#fff; color:#666; font-size:11px; cursor:pointer; }
+            .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
+            .msg-mute-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+            .msg-remark-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-remark-modal[hidden] { display:none; }
+            .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
           </style>
           <div class="msg-shell">
@@ -1830,6 +1852,7 @@ _网页主体 = """
             </div>
           </div>
           <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><button id="msg-raw-close" type="button">×</button></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
+          <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box"><h3>群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
           <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="43200" placeholder="自定义分钟" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
         </section>
       </div>
@@ -1995,14 +2018,14 @@ _网页脚本 = """
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0 };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
         if (!openid) return '';
         if (type === 'group') { const qq = window.msgGroupQQ?.[openid] || ''; return qq ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
         const aid = appid || window.msgAppid || '';
-        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${openid}/100/` : '';
+        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${openid}/0` : '';
       };
       const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
       const avatarHtml = (url, letter) => {
@@ -2131,19 +2154,28 @@ _网页脚本 = """
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
       };
-      const loadMsgHistory = async (older = false) => {
+      const loadMsgHistory = async (older = false, quiet = false) => {
         if (!msgState.chatId) return;
         $('msg-composer').hidden = false;
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, chat_type:msgState.chatType, before_date:before, limit:120})});
-          msgState.messages = older ? [...(data.messages||[]), ...msgState.messages] : (data.messages||[]);
+          const incoming = data.messages || [];
+          if (quiet && !older) {
+            const prevLast = msgState.messages[msgState.messages.length - 1]?.message_id || '';
+            const newLast = incoming[incoming.length - 1]?.message_id || '';
+            if (prevLast === newLast && incoming.length === msgState.messages.length) { return; }
+          }
+          msgState.messages = older ? [...incoming, ...msgState.messages] : incoming;
           renderMsgMessages({...data, messages: msgState.messages});
-          loadGroupRoles();
+          loadGroupRoles(true);
         } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); }
       };
-      const loadGroupRoles = async () => {
+      const loadGroupRoles = async (throttled = false) => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return;
+        const now = Date.now();
+        if (throttled && msgState.lastRolesAt && now - msgState.lastRolesAt < 60000) return;
+        msgState.lastRolesAt = now;
         try { const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); if (data.bot_is_admin) $('msg-head-sub').textContent += ' · 机器人是管理员'; }
         catch (error) { /* 群角色查询失败不影响消息展示 */ }
       };
@@ -2160,11 +2192,19 @@ _网页脚本 = """
       const showRemarkDialog = async () => {
         if (!msgState.chatId) return;
         let data = {}; try { data = await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'get'})}); } catch (error) { data = {}; }
-        const remark = prompt('设置群备注（留空清除）：', data.remark || '');
-        if (remark === null) return;
-        const groupQQ = prompt('填写群号（用于显示群头像，可留空）：', data.group_qq || '');
-        if (groupQQ === null) return;
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); toast('备注已保存'); loadMsgChats(); loadMsgHistory(); }
+        $('msg-remark-name').value = data.remark || '';
+        $('msg-remark-qq').value = data.group_qq || '';
+        $('msg-remark-modal').hidden = false;
+      };
+      const saveRemark = async () => {
+        const remark = $('msg-remark-name').value.trim();
+        const groupQQ = $('msg-remark-qq').value.trim();
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(); loadMsgHistory(); }
+        catch (error) { toast(error.message); }
+      };
+      const deleteRemark = async () => {
+        if (!confirm('确定删除该会话的备注和群号吗？')) return;
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const sendMessage = async () => {
@@ -2222,8 +2262,11 @@ _网页脚本 = """
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));
       $('msg-mute-custom').addEventListener('input', (e) => { const v = Number(e.target.value); if (v >= 1) msgState.muteMinutes = v; });
       $('msg-mute-cancel').addEventListener('click', () => { $('msg-mute-modal').hidden = true; });
+      $('msg-remark-cancel').addEventListener('click', () => { $('msg-remark-modal').hidden = true; });
+      $('msg-remark-save').addEventListener('click', saveRemark);
+      $('msg-remark-delete').addEventListener('click', deleteRemark);
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
-      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); } }, 15000);
+      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(true); } }, 15000);
 
       $('refresh').addEventListener('click', load); setView(viewFromUrl(), false); load();
     })();
