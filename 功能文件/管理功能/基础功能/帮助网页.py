@@ -20,7 +20,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.41.0"
+控制台版本 = "5.41.1"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -275,7 +275,7 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
     密码 = str((数据 or {}).get("password") or "")
     配置用户名, 配置密码 = _读取控制台账号(当前帮助网页配置)
     if not 配置用户名 or not 配置密码:
-        return _控制台错误(503, "请先在插件配置中设置控制台账号和密码")
+        return _控制台错误(503, "登录服务尚未配置")
     if not (
         hmac.compare_digest(用户名, 配置用户名)
         and hmac.compare_digest(密码, 配置密码)
@@ -698,17 +698,6 @@ _网页头部 = """<!doctype html>
      .shortcut-card strong { font-size:12px; }
      .shortcut-card small { color:var(--muted); font-size:10px; line-height:1.45; }
      .compact-status { margin-top:8px; }
-     .auth-card { max-width:520px; margin:30px auto 0; padding:32px 28px; border:1px solid #f0d992; border-radius:9px; background:#fffdf3; text-align:center; box-shadow:0 6px 18px rgba(104,89,28,.06); }
-     .auth-card[hidden] { display:none; }
-     .auth-icon { width:34px; height:34px; display:grid; place-items:center; margin:0 auto 12px; border-radius:50%; background:#fff1c4; color:#9b7418; font-size:18px; font-weight:800; }
-     .auth-card h2 { margin:0; font-size:17px; }
-    .auth-card p { margin:7px auto 17px; max-width:390px; color:#7e7048; font-size:12px; line-height:1.7; }
-    .login-form { display:grid; gap:12px; max-width:310px; margin:0 auto; text-align:left; }
-    .login-form label { display:grid; gap:5px; color:#5f5d72; font-size:12px; font-weight:650; }
-    .login-form input { width:100%; min-height:39px; padding:8px 10px; border:1px solid #ddd9c6; border-radius:7px; background:#fff; color:var(--ink); outline:none; }
-    .login-form input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
-    .login-form .primary-button { justify-content:center; margin-top:4px; }
-    .login-form[hidden] { display:none; }
      .outline-button { min-height:36px; padding:0 16px; border:1px solid #c9c6ff; border-radius:7px; background:#fff; color:var(--primary-dark); font-size:12px; font-weight:700; }
      .outline-button:hover { background:var(--primary-soft); }
      .standalone-card { margin-top:18px; }
@@ -759,7 +748,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.41.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.41.1</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
@@ -780,8 +769,6 @@ _网页主体 = """
         <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="outline-button" id="logout" type="button" hidden>退出登录</button><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
         <nav class="page-tabs" aria-label="当前页面分区"><span class="page-tab" data-tab="bot">基本信息</span><span class="page-tab" data-tab="novels">小说功能</span><span class="page-tab" data-tab="pans">网盘配置</span><span class="page-tab" data-tab="runtime">运行状态</span><span class="page-tab" data-tab="settings">系统设置</span></nav>
         <div id="notice" class="notice"></div>
-        <section id="auth-card" class="auth-card" hidden><div class="auth-icon">锁</div><h2>管理员登录</h2><p id="auth-message">请输入帮助网页配置中的账号和密码。</p><form id="login-form" class="login-form"><label>账号<input id="login-username" name="username" autocomplete="username" required></label><label>密码<input id="login-password" name="password" type="password" autocomplete="current-password" required></label><button class="primary-button" type="submit">登录控制台</button></form><button id="retry" class="outline-button" type="button" hidden>重新验证</button></section>
-
         <section id="page-dashboard" class="page-view" data-page="dashboard">
           <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态；页面切换请使用左侧导航。</p></div></div>
           <div class="summary-grid">
@@ -868,15 +855,120 @@ _网页脚本 = """
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
       };
-      const showAuthError = (error) => { document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; }); $('auth-card').hidden = false; $('logout').hidden = true; $('refresh').hidden = true; showNotice(''); const auth = $('auth-card'); const setupRequired = error.status === 503; const serviceUnavailable = error.status === 500 || !error.status; auth.querySelector('h2').textContent = setupRequired ? '尚未设置控制台账号' : serviceUnavailable ? '控制台数据暂时不可用' : '管理员登录'; $('auth-message').textContent = setupRequired ? '请先在 AstrBot 插件配置中设置帮助网页账号和密码。' : serviceUnavailable ? '服务暂时没有返回控制台数据，请稍后重试。' : '请输入帮助网页配置中的账号和密码。'; $('login-form').hidden = setupRequired || serviceUnavailable; $('retry').hidden = !serviceUnavailable; };
+      const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } $('logout').hidden = true; $('refresh').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); $('auth-card').hidden = true; $('logout').hidden = false; $('refresh').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
-      $('login-form').addEventListener('submit', async (event) => { event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true; try { await api('login', {method:'POST', body:JSON.stringify({username:$('login-username').value, password:$('login-password').value})}); $('login-password').value = ''; await load(); toast('登录成功'); } catch (error) { $('auth-message').textContent = error.message; } finally { button.disabled = false; } });
+      const load = async () => { try { render(await api('dashboard')); $('logout').hidden = false; $('refresh').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
       $('logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('.sidebar [data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
-      $('refresh').addEventListener('click', load); $('retry').addEventListener('click', load); setView(viewFromUrl(), false); load();
+      $('refresh').addEventListener('click', load); setView(viewFromUrl(), false); load();
+    })();
+  </script>
+</body>
+</html>
+"""
+
+
+def _渲染登录页面() -> str:
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fd">
+  <title>馒头助手</title>
+  <style>
+    :root { color-scheme:light; --ink:#292741; --muted:#7d8096; --line:#e8e9f2; --bg:#f7f8fd; --panel:#fff; --primary:#6b63f5; --primary-dark:#574eea; --primary-soft:#f0efff; --mint:#e9fbf3; --mint-ink:#319e6b; }
+    * { box-sizing:border-box; }
+    html,body { min-height:100%; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 Inter,"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif; }
+    button,input { font:inherit; }
+    button { cursor:pointer; }
+    .login-page { min-height:100vh; display:grid; place-items:center; padding:24px; }
+    .login-shell { width:min(850px,100%); display:grid; grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr); overflow:hidden; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:0 18px 48px rgba(60,57,112,.08); animation:login-rise .42s cubic-bezier(.22,.8,.35,1) both; }
+    .login-welcome { display:flex; flex-direction:column; justify-content:center; min-height:510px; padding:54px 50px; background:#fbfaff; border-right:1px solid var(--line); }
+    .login-brand { display:flex; align-items:center; gap:11px; }
+    .login-brand-mark { width:38px; height:38px; display:grid; place-items:center; border:3px solid #f5f4ff; border-radius:50%; background:#e9e9ff; color:#5d58d8; font-size:14px; font-weight:800; }
+    .login-brand strong { display:block; font-size:16px; }
+    .login-brand small { display:block; margin-top:1px; color:var(--muted); font-size:11px; }
+    .login-illustration { position:relative; width:176px; height:176px; display:grid; place-items:center; margin:42px auto 27px; }
+    .login-illustration::before { content:""; position:absolute; inset:13px; border:1px solid #e6e4ff; border-radius:50%; }
+    .login-avatar { position:relative; width:112px; height:112px; overflow:hidden; border:7px solid #f0efff; border-radius:50%; background:#e9eaff; box-shadow:0 10px 22px rgba(92,87,210,.14); animation:login-float 3.4s ease-in-out infinite; }
+    .login-avatar::before { content:""; position:absolute; width:96px; height:91px; left:0; top:7px; border-radius:50% 50% 43% 43%; background:#a2a5f7; }
+    .login-avatar::after { content:"✦"; position:absolute; right:9px; top:5px; color:#fff; font-size:17px; }
+    .login-avatar-face { position:absolute; left:22px; top:43px; z-index:1; color:#4f50a8; font-size:30px; letter-spacing:7px; }
+    .login-star { position:absolute; color:#b4b0ff; font-size:18px; animation:login-twinkle 2.4s ease-in-out infinite; }
+    .login-star.one { left:13px; top:34px; }
+    .login-star.two { right:12px; bottom:31px; animation-delay:.8s; }
+    .login-welcome h1 { margin:0; text-align:center; font-size:25px; letter-spacing:.2px; }
+    .login-welcome p { max-width:290px; margin:8px auto 0; color:var(--muted); font-size:12px; line-height:1.8; text-align:center; }
+    .login-panel { display:flex; flex-direction:column; justify-content:center; padding:54px 50px; }
+    .login-panel h2 { margin:0; font-size:20px; }
+    .login-panel > p { margin:7px 0 25px; color:var(--muted); font-size:12px; }
+    .login-form { display:grid; gap:15px; }
+    .login-form label { display:grid; gap:6px; color:#5f5d72; font-size:12px; font-weight:700; }
+    .login-form input { width:100%; min-height:43px; padding:9px 12px; border:1px solid #dddceb; border-radius:8px; background:#fff; color:var(--ink); outline:none; transition:border-color .18s ease,box-shadow .18s ease; }
+    .login-form input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
+    .login-button { display:flex; align-items:center; justify-content:center; gap:8px; min-height:43px; margin-top:5px; border:0; border-radius:8px; background:var(--primary); color:#fff; font-size:13px; font-weight:750; box-shadow:0 7px 17px rgba(107,99,245,.2); transition:background .18s ease,transform .18s ease; }
+    .login-button:hover { background:var(--primary-dark); transform:translateY(-1px); }
+    .login-button:disabled { cursor:wait; opacity:.65; transform:none; }
+    .login-message { min-height:20px; margin:16px 0 0; color:#c06478; font-size:12px; line-height:1.6; }
+    .login-message:empty { margin-top:8px; }
+    .login-note { display:flex; align-items:center; gap:6px; margin-top:28px; color:#9b9db0; font-size:11px; }
+    .login-note::before { content:""; width:7px; height:7px; border-radius:50%; background:#4dbb82; box-shadow:0 0 0 4px var(--mint); }
+    @keyframes login-rise { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes login-float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5px); } }
+    @keyframes login-twinkle { 0%,100% { opacity:.45; transform:scale(.9); } 50% { opacity:1; transform:scale(1.08); } }
+    @media (max-width:680px) { .login-page { padding:15px; } .login-shell { grid-template-columns:1fr; max-width:430px; } .login-welcome { min-height:0; padding:31px 26px 27px; border-right:0; border-bottom:1px solid var(--line); } .login-illustration { width:130px; height:130px; margin:24px auto 18px; } .login-illustration::before { inset:8px; } .login-avatar { width:82px; height:82px; border-width:5px; } .login-avatar::before { width:72px; height:69px; top:4px; } .login-avatar-face { left:16px; top:31px; font-size:22px; letter-spacing:4px; } .login-avatar::after { right:5px; top:2px; font-size:12px; } .login-star { font-size:14px; } .login-welcome h1 { font-size:21px; } .login-panel { padding:31px 26px 34px; } }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+  </style>
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-welcome" aria-labelledby="login-title">
+      <div class="login-brand"><span class="login-brand-mark">馒</span><div><strong>馒头助手</strong><small>QQ 机器人</small></div></div>
+      <div class="login-illustration" aria-hidden="true"><span class="login-star one">✦</span><div class="login-avatar"><span class="login-avatar-face">•ᴗ•</span></div><span class="login-star two">✦</span></div>
+      <h1 id="login-title">欢迎回来</h1>
+      <p>验证管理身份后继续使用馒头助手。</p>
+    </section>
+    <section class="login-panel" aria-labelledby="login-heading">
+      <h2 id="login-heading">身份验证</h2>
+      <p>请输入登录信息。</p>
+      <form id="login-form" class="login-form">
+        <label for="login-username">账号<input id="login-username" name="username" autocomplete="username" required></label>
+        <label for="login-password">密码<input id="login-password" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="login-button" type="submit"><span>进入</span><span aria-hidden="true">→</span></button>
+      </form>
+      <p id="login-message" class="login-message" role="alert" aria-live="polite"></p>
+      <div class="login-note">登录状态仅保存在当前浏览器会话中</div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const form = document.getElementById('login-form');
+      const username = document.getElementById('login-username');
+      const password = document.getElementById('login-password');
+      const button = form.querySelector('button[type="submit"]');
+      const message = document.getElementById('login-message');
+      const setMessage = (value) => { message.textContent = value; };
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        setMessage('');
+        try {
+          const response = await fetch('/api/login', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:username.value.trim(), password:password.value}) });
+          const data = await response.json().catch(() => ({ok:false}));
+          if (!response.ok || !data.ok) { const error = new Error(); error.status = response.status; throw error; }
+          password.value = '';
+          location.replace(location.pathname + '?view=dashboard');
+        } catch (error) {
+          setMessage(error.status === 401 ? '账号或密码不正确。' : error.status === 503 ? '登录服务暂未启用，请联系管理员。' : '暂时无法登录，请稍后再试。');
+        } finally {
+          button.disabled = false;
+        }
+      });
+      username.focus();
     })();
   </script>
 </body>
@@ -885,9 +977,9 @@ _网页脚本 = """
 
 
 async def _处理帮助网页(request: web.Request) -> web.Response:
-    del request
+    页面 = _渲染控制台页面() if _请求已授权(request) else _渲染登录页面()
     return web.Response(
-        text=_渲染控制台页面(),
+        text=页面,
         content_type="text/html",
         charset="utf-8",
         headers={"Cache-Control": "no-store"},
