@@ -66,7 +66,7 @@
 
 ## 帮助网页
 
-- 帮助网页放在 `功能文件/管理功能/基础功能/帮助网页.py`，使用管理员控制台界面展示小说开关、测试模式、主分享网盘、网盘安全摘要、数据库状态和服务器运行状态；不在网页返回 Cookie、Token、数据库地址、密码或原始响应。插件配置 `_conf_schema.json` 的 `help_web_settings` 包含 `help_web_domain`、`help_web_host`、`help_web_port` 和可选 `help_web_admin_token`；网页默认监听 `0.0.0.0:8090`，自动获取服务器 IPv4 生成访问地址，无需填写域名，填写有效 HTTP/HTTPS 外网地址时可覆盖自动地址。控制台的 `/api/dashboard`、`/api/novel-switch` 和 `/api/pan-switch` 必须校验访问令牌，数据库未配置时写入控件禁用。插件生命周期启动 `aiohttp` 网页服务，帮助顶层菜单显示外链按钮，原有文字/回调帮助保持可用。官方机器人帮助菜单按钮使用 `action.type=1` 回调；仅“打开网页版帮助”外链按钮使用 `action.type=0`。
+- 帮助网页放在 `功能文件/管理功能/基础功能/帮助网页.py`，使用管理员控制台界面展示小说开关、测试模式、主分享网盘、网盘安全摘要、数据库状态和服务器运行状态；不在网页返回 Cookie、账号、密码、会话 Cookie、数据库地址或原始响应。插件配置 `_conf_schema.json` 的 `help_web_settings` 包含 `help_web_domain`、`help_web_host`、`help_web_port`、`help_web_admin_username` 和 `help_web_admin_password`；网页默认监听 `0.0.0.0:8090`，自动获取服务器 IPv4 生成访问地址，无需填写域名，填写有效 HTTP/HTTPS 外网地址时可覆盖自动地址。网页打开后使用配置账号密码登录，后端以 HttpOnly、SameSite=Lax 会话 Cookie 保护 `/api/dashboard`、`/api/novel-switch` 和 `/api/pan-switch`，访问地址不携带登录凭据；数据库未配置时写入控件禁用。账号密码只在 AstrBot 插件配置中修改，不能写入 `mantou_runtime_state`，密码不得写入日志或 API 响应。插件生命周期启动 `aiohttp` 网页服务，帮助顶层菜单显示外链按钮，原有文字/回调帮助保持可用。官方机器人帮助菜单按钮使用 `action.type=1` 回调；仅“打开网页版帮助”外链按钮使用 `action.type=0`。
 
 ## 功能边界
 

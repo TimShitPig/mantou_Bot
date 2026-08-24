@@ -9,7 +9,7 @@ import socket
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import web
 
@@ -20,7 +20,11 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.40.1"
+控制台版本 = "5.41.0"
+默认控制台用户名 = "admin"
+默认控制台密码 = ""
+控制台会话Cookie名 = "mantou_console_session"
+控制台会话有效期 = 12 * 60 * 60
 
 
 @dataclass
@@ -31,12 +35,12 @@ class 帮助网页服务:
     port: int
 
 
-# importlib.reload 会复用原模块字典；保留旧引用，确保重载时可以清理旧端口和令牌。
+# importlib.reload 会复用原模块字典；保留旧引用，确保重载时可以清理旧端口和会话。
 当前帮助网页服务: 帮助网页服务 | None = globals().get("当前帮助网页服务")
 自动公开地址缓存: str | None = globals().get("自动公开地址缓存")
 网页服务启动状态: bool | None = globals().get("网页服务启动状态")
 当前帮助网页配置: Any = globals().get("当前帮助网页配置")
-控制台访问令牌: str = globals().get("控制台访问令牌") or secrets.token_urlsafe(24)
+控制台会话: dict[str, float] = globals().get("控制台会话") or {}
 
 
 def _读取帮助网页字段(配置: Any, 字段名: str) -> Any:
@@ -207,32 +211,23 @@ def _计算帮助网页地址(配置: Any = None) -> str:
     return 手动地址 or _获取自动公开地址(配置)
 
 
-def _读取控制台令牌(配置: Any = None) -> str:
-    配置令牌 = str(_读取帮助网页字段(配置, "help_web_admin_token") or "").strip()
-    return 配置令牌 or 控制台访问令牌
+def _读取控制台账号(配置: Any = None) -> tuple[str, str]:
+    用户名 = str(
+        _读取帮助网页字段(配置, "help_web_admin_username") or 默认控制台用户名
+    ).strip()
+    密码 = str(
+        _读取帮助网页字段(配置, "help_web_admin_password") or 默认控制台密码
+    )
+    return 用户名, 密码
 
 
 def _构造控制台访问地址(基础地址: str, 配置: Any = None) -> str:
-    if not 基础地址:
-        return ""
-    令牌 = _读取控制台令牌(配置)
-    try:
-        parsed = urlsplit(基础地址)
-        return urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                f"token={quote(令牌, safe='')}",
-                "",
-            )
-        )
-    except ValueError:
-        return 基础地址
+    del 配置
+    return 基础地址 or ""
 
 
 def 获取帮助网页地址(配置: Any = None) -> str:
-    """返回带控制台令牌的访问地址；服务启动失败时不暴露失效链接。"""
+    """返回不携带登录凭据的控制台地址；登录在网页内完成。"""
     if 当前帮助网页服务 is not None:
         return 当前帮助网页服务.public_url
     if 网页服务启动状态 is False:
@@ -240,25 +235,74 @@ def 获取帮助网页地址(配置: Any = None) -> str:
     return _构造控制台访问地址(_计算帮助网页地址(配置), 配置)
 
 
-def _取得请求令牌(request: web.Request) -> str:
-    令牌 = str(request.query.get("token") or "").strip()
-    if 令牌:
-        return 令牌
-    令牌 = str(request.headers.get("X-Mantou-Token") or "").strip()
-    if 令牌:
-        return 令牌
-    授权 = str(request.headers.get("Authorization") or "")
-    return 授权[7:].strip() if 授权.lower().startswith("bearer ") else ""
+def _清理控制台会话() -> None:
+    截止时间 = time.time()
+    for 会话值, 到期时间 in list(控制台会话.items()):
+        if 到期时间 <= 截止时间:
+            控制台会话.pop(会话值, None)
+
+
+def _取得请求会话(request: web.Request) -> str:
+    _清理控制台会话()
+    return str(request.cookies.get(控制台会话Cookie名) or "").strip()
 
 
 def _请求已授权(request: web.Request) -> bool:
-    期望令牌 = _读取控制台令牌(当前帮助网页配置)
-    实际令牌 = _取得请求令牌(request)
-    return bool(期望令牌 and 实际令牌 and hmac.compare_digest(实际令牌, 期望令牌))
+    会话值 = _取得请求会话(request)
+    到期时间 = 控制台会话.get(会话值)
+    if not 会话值 or 到期时间 is None or 到期时间 <= time.time():
+        控制台会话.pop(会话值, None)
+        return False
+    控制台会话[会话值] = time.time() + 控制台会话有效期
+    return True
 
 
 def _控制台错误(状态码: int, 文本: str) -> web.Response:
     return web.json_response({"ok": False, "error": 文本}, status=状态码)
+
+
+async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:
+    try:
+        数据 = await request.json()
+    except Exception:
+        return None
+    return 数据 if isinstance(数据, dict) else None
+
+
+async def _处理控制台登录(request: web.Request) -> web.Response:
+    数据 = await _读取请求JSON(request)
+    用户名 = str((数据 or {}).get("username") or "").strip()
+    密码 = str((数据 or {}).get("password") or "")
+    配置用户名, 配置密码 = _读取控制台账号(当前帮助网页配置)
+    if not 配置用户名 or not 配置密码:
+        return _控制台错误(503, "请先在插件配置中设置控制台账号和密码")
+    if not (
+        hmac.compare_digest(用户名, 配置用户名)
+        and hmac.compare_digest(密码, 配置密码)
+    ):
+        return _控制台错误(401, "账号或密码错误")
+
+    _清理控制台会话()
+    会话值 = secrets.token_urlsafe(32)
+    控制台会话[会话值] = time.time() + 控制台会话有效期
+    响应 = web.json_response({"ok": True})
+    响应.set_cookie(
+        控制台会话Cookie名,
+        会话值,
+        max_age=控制台会话有效期,
+        httponly=True,
+        samesite="Lax",
+        secure=request.secure,
+        path="/",
+    )
+    return 响应
+
+
+async def _处理控制台退出(request: web.Request) -> web.Response:
+    控制台会话.pop(_取得请求会话(request), None)
+    响应 = web.json_response({"ok": True})
+    响应.del_cookie(控制台会话Cookie名, path="/")
+    return 响应
 
 
 def _读取控制台数据() -> dict[str, Any]:
@@ -339,14 +383,14 @@ def _读取控制台数据() -> dict[str, Any]:
             "help_web_host": host,
             "help_web_port": port,
             "custom_domain": bool(_规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))),
-            "token_mode": "自定义令牌" if _读取帮助网页字段(配置, "help_web_admin_token") else "自动令牌",
+            "auth_mode": "账号密码 + 会话 Cookie",
         },
     }
 
 
 async def _处理控制台数据(request: web.Request) -> web.Response:
     if not _请求已授权(request):
-        return _控制台错误(401, "访问令牌无效")
+        return _控制台错误(401, "请先登录控制台")
     try:
         数据 = await asyncio.to_thread(_读取控制台数据)
         return web.json_response(数据, headers={"Cache-Control": "no-store"})
@@ -355,17 +399,9 @@ async def _处理控制台数据(request: web.Request) -> web.Response:
         return _控制台错误(500, "控制台数据暂时不可用")
 
 
-async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:
-    try:
-        数据 = await request.json()
-    except Exception:
-        return None
-    return 数据 if isinstance(数据, dict) else None
-
-
 async def _处理小说开关(request: web.Request) -> web.Response:
     if not _请求已授权(request):
-        return _控制台错误(401, "访问令牌无效")
+        return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     if 数据 is None or not isinstance(数据.get("enabled"), bool):
         return _控制台错误(400, "请求参数无效")
@@ -405,7 +441,7 @@ async def _处理小说开关(request: web.Request) -> web.Response:
 
 async def _处理网盘切换(request: web.Request) -> web.Response:
     if not _请求已授权(request):
-        return _控制台错误(401, "访问令牌无效")
+        return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     网盘名 = str((数据 or {}).get("key") or "").strip()
     if 网盘名 not in {"UC", "夸克", "百度"}:
@@ -666,7 +702,13 @@ _网页头部 = """<!doctype html>
      .auth-card[hidden] { display:none; }
      .auth-icon { width:34px; height:34px; display:grid; place-items:center; margin:0 auto 12px; border-radius:50%; background:#fff1c4; color:#9b7418; font-size:18px; font-weight:800; }
      .auth-card h2 { margin:0; font-size:17px; }
-     .auth-card p { margin:7px auto 17px; max-width:390px; color:#7e7048; font-size:12px; line-height:1.7; }
+    .auth-card p { margin:7px auto 17px; max-width:390px; color:#7e7048; font-size:12px; line-height:1.7; }
+    .login-form { display:grid; gap:12px; max-width:310px; margin:0 auto; text-align:left; }
+    .login-form label { display:grid; gap:5px; color:#5f5d72; font-size:12px; font-weight:650; }
+    .login-form input { width:100%; min-height:39px; padding:8px 10px; border:1px solid #ddd9c6; border-radius:7px; background:#fff; color:var(--ink); outline:none; }
+    .login-form input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
+    .login-form .primary-button { justify-content:center; margin-top:4px; }
+    .login-form[hidden] { display:none; }
      .outline-button { min-height:36px; padding:0 16px; border:1px solid #c9c6ff; border-radius:7px; background:#fff; color:var(--primary-dark); font-size:12px; font-weight:700; }
      .outline-button:hover { background:var(--primary-soft); }
      .standalone-card { margin-top:18px; }
@@ -717,7 +759,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.40.1</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.41.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-chip"><span class="admin-avatar">管</span><span>管理员</span><span class="admin-chevron">⌄</span></div></div>
     </header>
     <aside class="sidebar">
@@ -735,10 +777,10 @@ _网页主体 = """
     </aside>
     <main class="main">
       <div class="content">
-        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
+        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="outline-button" id="logout" type="button" hidden>退出登录</button><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
         <nav class="page-tabs" aria-label="当前页面分区"><span class="page-tab" data-tab="bot">基本信息</span><span class="page-tab" data-tab="novels">小说功能</span><span class="page-tab" data-tab="pans">网盘配置</span><span class="page-tab" data-tab="runtime">运行状态</span><span class="page-tab" data-tab="settings">系统设置</span></nav>
         <div id="notice" class="notice"></div>
-        <section id="auth-card" class="auth-card" hidden><div class="auth-icon">!</div><h2>访问令牌无效</h2><p>请从机器人发送的网页版帮助按钮重新打开，或确认链接中的访问令牌没有过期。</p><button id="retry" class="outline-button" type="button">重新验证</button></section>
+        <section id="auth-card" class="auth-card" hidden><div class="auth-icon">锁</div><h2>管理员登录</h2><p id="auth-message">请输入帮助网页配置中的账号和密码。</p><form id="login-form" class="login-form"><label>账号<input id="login-username" name="username" autocomplete="username" required></label><label>密码<input id="login-password" name="password" type="password" autocomplete="current-password" required></label><button class="primary-button" type="submit">登录控制台</button></form><button id="retry" class="outline-button" type="button" hidden>重新验证</button></section>
 
         <section id="page-dashboard" class="page-view" data-page="dashboard">
           <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态；页面切换请使用左侧导航。</p></div></div>
@@ -752,7 +794,7 @@ _网页主体 = """
         </section>
 
         <section id="page-bot" class="page-view" data-page="bot" hidden>
-          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p><div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>Cookie / Token</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>不返回</strong></div><div><span>写入方式</span><strong>仅调用已授权接口</strong></div></div></article></div></div>
+          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>连接配置</h2><p class="card-subtitle">网页监听和数据持久化状态</p><div id="config-list" class="panel config-list"><div class="empty">正在读取配置...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>登录凭据</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>不返回</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div><div><span>写入方式</span><strong>仅调用已授权接口</strong></div></div></article></div></div>
         </section>
 
         <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="console-card module-card standalone-card"><h2>小说功能</h2><p class="card-subtitle">这里的开关会写入运行状态数据库，关闭后对应平台不会进入下载流程。</p><div class="global-bar"><div class="global-copy"><strong>全部小说功能</strong><span>控制下载、找书和翻页总入口</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div><div class="test-mode global-bar"><div class="global-copy"><strong>管理员测试模式</strong><span>仅管理员可用，不改变普通用户的关闭限制</span></div><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div><div class="module-heading"><h3>平台开关</h3><span>逐个平台控制</span></div><div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div></article></section>
@@ -772,7 +814,8 @@ _网页主体 = """
 _网页脚本 = """
   <script>
     (() => {
-      const token = new URLSearchParams(location.search).get('token') || '';
+      const initialParams = new URLSearchParams(location.search);
+      if (initialParams.has('token')) { initialParams.delete('token'); const cleanQuery = initialParams.toString(); history.replaceState({}, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${location.hash}`); }
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? '').replace(/[&<>\"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[char]));
       const views = {
@@ -789,8 +832,7 @@ _网页脚本 = """
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
       const api = async (path, options = {}) => {
-        const query = `?token=${encodeURIComponent(token)}`;
-        const response = await fetch(`/api/${path}${query}`, { cache:'no-store', headers:{'Content-Type':'application/json'}, ...options });
+        const response = await fetch(`/api/${path}`, { cache:'no-store', credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...options });
         const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
         if (!response.ok || !data.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; }
         return data;
@@ -820,16 +862,18 @@ _网页脚本 = """
         $('pan-active-label').textContent = pans.active || '--';
         $('pan-grid').innerHTML = (pans.items || []).map((item) => { const accounts = (item.account_summary || []).map((account) => `<div class="account-row"><strong>账号${esc(account.index)}</strong><span>${esc(account.name)} · ${esc(account.phone)}</span></div>`).join(''); return `<article class="pan-card ${item.active ? 'active' : ''}"><div class="pan-top"><div class="pan-title"><div class="pan-logo">${esc(item.key.slice(0,1))}</div><strong>${esc(item.name)}</strong></div><div>${item.active ? '<span class="tag active">当前主网盘</span>' : ''}</div></div><div class="pan-meta"><div><span>配置状态</span><strong>${item.configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>'}</strong></div><div><span>账号数量</span><strong>${esc(item.accounts)} 个</strong></div><div><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div><div><span>账号策略</span><strong>按群独立选择</strong></div></div>${accounts ? `<div class="account-list">${accounts}</div>` : ''}<select class="pan-select" data-pan="${esc(item.key)}" ${pans.editable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${item.active ? '当前使用中' : '设为主分享网盘'}</option><option value="${esc(item.key)}">切换到${esc(item.name)}</option></select></article>`; }).join('') || '<div class="empty">没有网盘数据</div>';
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
-        $('config-list').innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>访问令牌</span><strong>${esc(data.config && data.config.token_mode || '自动令牌')}</strong></div>`;
-        $('settings-list').innerHTML = `<div class="settings-row"><span>监听主机</span><strong>${esc(data.config && data.config.help_web_host || '--')}</strong></div><div class="settings-row"><span>监听端口</span><strong>${esc(data.config && data.config.help_web_port || '--')}</strong></div><div class="settings-row"><span>公开访问地址</span><strong>${esc(server.address || '--')}</strong></div><div class="settings-row"><span>令牌模式</span><strong>${esc(data.config && data.config.token_mode || '--')}</strong></div><div class="settings-hint">网页端目前只读取这些安全摘要；端口、域名和访问令牌请在 AstrBot 插件配置中修改。</div>`;
+        $('config-list').innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
+        $('settings-list').innerHTML = `<div class="settings-row"><span>监听主机</span><strong>${esc(data.config && data.config.help_web_host || '--')}</strong></div><div class="settings-row"><span>监听端口</span><strong>${esc(data.config && data.config.help_web_port || '--')}</strong></div><div class="settings-row"><span>公开访问地址</span><strong>${esc(server.address || '--')}</strong></div><div class="settings-row"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '--')}</strong></div><div class="settings-hint">账号和密码请在 AstrBot 插件配置的“帮助网页设置”中修改，保存后重载插件；网页不会返回密码原文。</div>`;
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
       };
-      const showAuthError = (error) => { document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; }); $('auth-card').hidden = false; showNotice(''); const auth = $('auth-card'); auth.querySelector('h2').textContent = error.status === 401 ? '访问令牌无效' : '控制台数据暂时不可用'; auth.querySelector('p').textContent = error.status === 401 ? '请从机器人发送的网页版帮助按钮重新打开，或确认链接中的访问令牌没有过期。' : '服务暂时没有返回控制台数据，请稍后点击重新验证。'; };
+      const showAuthError = (error) => { document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; }); $('auth-card').hidden = false; $('logout').hidden = true; $('refresh').hidden = true; showNotice(''); const auth = $('auth-card'); const setupRequired = error.status === 503; const serviceUnavailable = error.status === 500 || !error.status; auth.querySelector('h2').textContent = setupRequired ? '尚未设置控制台账号' : serviceUnavailable ? '控制台数据暂时不可用' : '管理员登录'; $('auth-message').textContent = setupRequired ? '请先在 AstrBot 插件配置中设置帮助网页账号和密码。' : serviceUnavailable ? '服务暂时没有返回控制台数据，请稍后重试。' : '请输入帮助网页配置中的账号和密码。'; $('login-form').hidden = setupRequired || serviceUnavailable; $('retry').hidden = !serviceUnavailable; };
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { $('auth-card').hidden = true; try { render(await api('dashboard')); setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      const load = async () => { try { render(await api('dashboard')); $('auth-card').hidden = true; $('logout').hidden = false; $('refresh').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      $('login-form').addEventListener('submit', async (event) => { event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true; try { await api('login', {method:'POST', body:JSON.stringify({username:$('login-username').value, password:$('login-password').value})}); $('login-password').value = ''; await load(); toast('登录成功'); } catch (error) { $('auth-message').textContent = error.message; } finally { button.disabled = false; } });
+      $('logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('.sidebar [data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
       $('refresh').addEventListener('click', load); $('retry').addEventListener('click', load); setView(viewFromUrl(), false); load();
@@ -856,12 +900,15 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     当前帮助网页服务 = None
     网页服务启动状态 = False
     当前帮助网页配置 = 配置
+    控制台会话.clear()
 
     基础地址 = _计算帮助网页地址(配置)
     public_url = _构造控制台访问地址(基础地址, 配置)
     host, port = _读取监听配置(配置)
     app = web.Application()
     app.router.add_get("/", _处理帮助网页)
+    app.router.add_post("/api/login", _处理控制台登录)
+    app.router.add_post("/api/logout", _处理控制台退出)
     app.router.add_get("/api/dashboard", _处理控制台数据)
     app.router.add_post("/api/novel-switch", _处理小说开关)
     app.router.add_post("/api/pan-switch", _处理网盘切换)
@@ -899,3 +946,4 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
             当前帮助网页服务 = None
             网页服务启动状态 = None
             当前帮助网页配置 = None
+            控制台会话.clear()
