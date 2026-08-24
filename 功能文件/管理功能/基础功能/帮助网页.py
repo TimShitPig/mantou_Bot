@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.3"
+控制台版本 = "5.44.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1631,7 +1631,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.3</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.4</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1831,7 +1831,7 @@ _网页主体 = """
                   <input id="msg-custom-id" type="text" placeholder="自定义 msg_id / 事件 ID" hidden>
                 </div>
                 <div class="msg-extra" id="msg-extra" hidden></div>
-                <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容..." aria-label="消息内容"></textarea>
+                <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
                 <div class="msg-send-row">
                   <span id="msg-send-status" style="color:var(--muted);font-size:11px"></span>
@@ -2182,6 +2182,12 @@ _网页脚本 = """
       $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((el) => el.addEventListener('click', () => { $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x === el)); msgState.sendType = el.dataset.msgType; renderMsgExtra(); }));
       $('msg-send-mode').addEventListener('change', (e) => { msgState.sendMode = e.target.value; $('msg-custom-id').hidden = !(msgState.sendMode === 'custom_msg_id' || msgState.sendMode === 'custom_event_id'); });
       $('msg-send').addEventListener('click', sendMessage);
+      $('msg-textarea').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
       $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
