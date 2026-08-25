@@ -267,6 +267,141 @@ def 读取全部会话标识() -> list[str]:
         _关闭连接(连接)
 
 
+def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
+    """对齐 ElainaBot：单次 GROUP BY 聚合所有会话的最后消息 id/时间与条数。
+
+    等价于 ElainaBot 的 _aggregate_chats_sync（SQLite GROUP BY group_id），
+    这里按 会话标识 聚合，返回每个会话的 last_id/last_ts/msg_count 骨架。
+    """
+    if not _MySQL可用():
+        return []
+    上限 = max(1, min(上限, 500))
+    连接 = _打开连接()
+    if 连接 is None:
+        return []
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT 会话标识, MAX(id) AS last_id, MAX(ts) AS last_ts, COUNT(*) AS n "
+                f"FROM `{消息记录表名}` WHERE 会话标识 != '' GROUP BY 会话标识 ORDER BY last_ts DESC LIMIT %s",
+                (上限,),
+            )
+            行列表 = 游标.fetchall()
+        结果: list[dict[str, Any]] = []
+        for 行 in 行列表:
+            if isinstance(行, dict):
+                会话标识 = str(行.get("会话标识") or "")
+                结果.append(
+                    {
+                        "会话标识": 会话标识,
+                        "last_id": int(行.get("last_id") or 0),
+                        "last_ts": int(行.get("last_ts") or 0),
+                        "msg_count": int(行.get("n") or 0),
+                    }
+                )
+            else:
+                结果.append(
+                    {
+                        "会话标识": str(行[0] or ""),
+                        "last_id": int(行[1] or 0),
+                        "last_ts": int(行[2] or 0),
+                        "msg_count": int(行[3] or 0),
+                    }
+                )
+        return 结果
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 会话聚合失败：错误类型=%s", type(exc).__name__)
+        return []
+    finally:
+        _关闭连接(连接)
+
+
+def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
+    """按 id 批量读取消息，返回 {id: 记录}，分块 500 对齐 ElainaBot 的 last_content 补查。"""
+    结果: dict[int, dict[str, Any]] = {}
+    if not id列表 or not _MySQL可用():
+        return 结果
+    连接 = _打开连接()
+    if 连接 is None:
+        return 结果
+    try:
+        for 起点 in range(0, len(id列表), 500):
+            分块 = id列表[起点 : 起点 + 500]
+            占位 = ",".join(["%s"] * len(分块))
+            with 连接.cursor() as 游标:
+                游标.execute(f"SELECT * FROM `{消息记录表名}` WHERE id IN ({占位})", tuple(分块))
+                for 行 in 游标.fetchall():
+                    记录 = _行转记录(行)
+                    结果[int(记录.get("id") or 0)] = 记录
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 最后消息补查失败：错误类型=%s", type(exc).__name__)
+    finally:
+        _关闭连接(连接)
+    return 结果
+
+
+def 分页读取历史(会话标识: str, before_id: int = 0, 上限: int = 200, before_ts: int = 0) -> list[dict[str, Any]]:
+    """按 id 倒序分页读取某会话历史消息，对齐 ElainaBot 的分页查询。
+
+    before_id > 0 时取 id 更小的更早消息；否则按 before_ts（秒级）过滤更早消息。
+    """
+    if not _MySQL可用():
+        return []
+    会话标识 = str(会话标识 or "")
+    上限 = max(1, min(上限, 2000))
+    before_id = max(0, int(before_id or 0))
+    before_ts = max(0, int(before_ts or 0))
+    连接 = _打开连接()
+    if 连接 is None:
+        return []
+    try:
+        with 连接.cursor() as 游标:
+            if before_id:
+                游标.execute(
+                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND id < %s ORDER BY id DESC LIMIT %s",
+                    (会话标识, before_id, 上限),
+                )
+            elif before_ts:
+                游标.execute(
+                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND ts < %s ORDER BY id DESC LIMIT %s",
+                    (会话标识, before_ts, 上限),
+                )
+            else:
+                游标.execute(
+                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s ORDER BY id DESC LIMIT %s",
+                    (会话标识, 上限),
+                )
+            行列表 = 游标.fetchall()
+        return [_行转记录(行) for 行 in 行列表]
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 历史分页读取失败：错误类型=%s", type(exc).__name__)
+        return []
+    finally:
+        _关闭连接(连接)
+
+
+
+
+def 统计会话消息数(会话标识: str) -> int:
+    """统计某会话在 MySQL 中的消息总数（用于判断是否还有更早历史）。"""
+    if not _MySQL可用():
+        return 0
+    会话标识 = str(会话标识 or "")
+    连接 = _打开连接()
+    if 连接 is None:
+        return 0
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(f"SELECT COUNT(*) FROM `{消息记录表名}` WHERE 会话标识=%s", (会话标识,))
+            行 = 游标.fetchone()
+        return int(行[0] or 0) if 行 else 0
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 会话消息数统计失败：错误类型=%s", type(exc).__name__)
+        return 0
+    finally:
+        _关闭连接(连接)
+
+
 def 裁剪总消息(上限: int) -> None:
     """按 id 顺序删除最旧的超量消息，保持总量不超过上限。"""
     if not _MySQL可用():
@@ -369,10 +504,11 @@ def _行转记录(行: Any) -> dict[str, Any]:
         媒体 = {}
     return {
         "id": int(取值(0, "0") or 0),
+        "_session": 取值(1),
+        "chat_type": 取值(2, "group") or "group",
+        "appid": 取值(3),
         "message_id": 取值(4),
         "user_id": 取值(5),
-        "_session": 取值(1),
-        "appid": 取值(3),
         "nickname": 取值(6),
         "content": 取值(7),
         "timestamp": 取值(8),

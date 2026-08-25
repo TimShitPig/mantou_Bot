@@ -993,6 +993,77 @@ def _补齐数据库会话到内存() -> None:
         logger.debug("消息记录数据库会话补回失败：错误类型=%s", type(exc).__name__)
 
 
+def _数据库聚合聊天项(
+    过滤: str, 搜索: str, 本地数据: dict[str, Any], 置顶顺序: dict[str, int]
+) -> list[dict[str, Any]] | None:
+    """对齐 ElainaBot：单次 MySQL GROUP BY 聚合所有会话，返回聊天列表项；不可用时返回 None。
+
+    等价于 ElainaBot 的 _aggregate_chats_sync（SQLite GROUP BY group_id + 前 200 会话
+    按 id 批量补查 last_content），这里用 MySQL 的 聚合聊天列表 + 批量读取最后消息 实现。
+    """
+    if _消息存储 is None:
+        return None
+    try:
+        骨架 = _消息存储.聚合聊天列表(500)
+        if not 骨架:
+            return None
+        最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
+        最后消息表 = _消息存储.批量读取最后消息(最后id列表) if 最后id列表 else {}
+        本地备注表 = (本地数据.get("remarks") or {})
+        聊天项: list[dict[str, Any]] = []
+        for 项 in 骨架:
+            会话标识 = str(项.get("会话标识") or "")
+            if not 会话标识:
+                continue
+            最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
+            类型 = str(最后记录.get("chat_type") or "group")
+            if 过滤 == "group" and 类型 != "group":
+                continue
+            if 过滤 == "user" and 类型 != "user":
+                continue
+            会话备注 = 本地备注表.get(会话标识) or {}
+            备注 = str(会话备注.get("remark") or "")
+            if 过滤 == "remark" and not 备注:
+                continue
+            if 类型 == "group":
+                缓存群信息 = 群信息缓存.get(会话标识)
+                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                    标记群信息待刷新(会话标识)
+            内存会话 = 消息缓存.get(会话标识) or {}
+            轻量会话 = {
+                "chat_type": 类型,
+                "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
+                "appid": str(最后记录.get("appid") or ""),
+            }
+            显示名 = _聊天显示名(会话标识, 轻量会话)
+            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
+                continue
+            last_ts = int(项.get("last_ts") or 0)
+            聊天项.append(
+                {
+                    "chat_id": 会话标识,
+                    "chat_type": 类型,
+                    "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
+                    "nickname": 显示名,
+                    "group_qq": str(会话备注.get("group_qq") or ""),
+                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or "")),
+                    "last_time": str(最后记录.get("timestamp") or _格式化时间戳(last_ts)),
+                    "last_ts": last_ts,
+                    "msg_count": int(项.get("msg_count") or 0),
+                    "unread": int(内存会话.get("unread") or 0),
+                    "remark": 备注,
+                    "in_group": True,
+                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                }
+            )
+        for 聊天 in 聊天项:
+            聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
+        return 聊天项
+    except Exception as exc:
+        logger.debug("消息记录数据库聊天聚合失败，回退内存：错误类型=%s", type(exc).__name__)
+        return None
+
+
 def 获取聊天列表(
     过滤: str = "all",
     搜索: str = "",
@@ -1006,50 +1077,53 @@ def 获取聊天列表(
         每页 = max(1, min(100, int(每页)))
     except (TypeError, ValueError):
         页码, 每页 = 1, 50
-    聊天列表: list[dict[str, Any]] = []
     本地数据 = _读取本地缓存文件()
     本地备注表 = (本地数据.get("remarks") or {})
-    _补齐数据库会话到内存()
-    for 会话标识, 会话 in 消息缓存.items():
-        类型 = str(会话.get("chat_type") or "group")
-        if 过滤 == "group" and 类型 != "group":
-            continue
-        if 过滤 == "user" and 类型 != "user":
-            continue
-        会话备注 = 本地备注表.get(会话标识) or {}
-        备注 = str(会话备注.get("remark") or "")
-        if 过滤 == "remark" and not 备注:
-            continue
-        if 类型 == "group":
-            缓存群信息 = 群信息缓存.get(会话标识)
-            if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
-                标记群信息待刷新(会话标识)
-        显示名 = _聊天显示名(会话标识, 会话)
-        if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
-            continue
-        消息列表 = 会话.get("messages") or []
-        最后消息 = 消息列表[-1] if 消息列表 else {}
-        聊天列表.append(
-            {
-                "chat_id": 会话标识,
-                "chat_type": 类型,
-                "appid": str(会话.get("appid") or ""),
-                "nickname": 显示名,
-                "group_qq": str(会话备注.get("group_qq") or ""),
-                "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后消息.get("content") or 会话.get("last_content") or "")),
-                "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
-                "last_ts": int(会话.get("last_ts") or 0),
-                "msg_count": len(消息列表),
-                "unread": int(会话.get("unread") or 0),
-                "remark": 备注,
-                "in_group": True,
-                "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
-            }
-        )
     置顶列表 = [str(x) for x in (本地数据.get("pinned") or []) if str(x or "").strip()]
     置顶顺序 = {会话: idx for idx, 会话 in enumerate(置顶列表)}
-    for 聊天 in 聊天列表:
-        聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
+    # 对齐 ElainaBot：数据库 GROUP BY 聚合优先，不可用时回退内存缓存
+    聊天列表: list[dict[str, Any]] | None = _数据库聚合聊天项(过滤, 搜索, 本地数据, 置顶顺序)
+    if 聊天列表 is None:
+        聊天列表 = []
+        _补齐数据库会话到内存()
+        for 会话标识, 会话 in 消息缓存.items():
+            类型 = str(会话.get("chat_type") or "group")
+            if 过滤 == "group" and 类型 != "group":
+                continue
+            if 过滤 == "user" and 类型 != "user":
+                continue
+            会话备注 = 本地备注表.get(会话标识) or {}
+            备注 = str(会话备注.get("remark") or "")
+            if 过滤 == "remark" and not 备注:
+                continue
+            if 类型 == "group":
+                缓存群信息 = 群信息缓存.get(会话标识)
+                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                    标记群信息待刷新(会话标识)
+            显示名 = _聊天显示名(会话标识, 会话)
+            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
+                continue
+            消息列表 = 会话.get("messages") or []
+            最后消息 = 消息列表[-1] if 消息列表 else {}
+            聊天列表.append(
+                {
+                    "chat_id": 会话标识,
+                    "chat_type": 类型,
+                    "appid": str(会话.get("appid") or ""),
+                    "nickname": 显示名,
+                    "group_qq": str(会话备注.get("group_qq") or ""),
+                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后消息.get("content") or 会话.get("last_content") or "")),
+                    "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
+                    "last_ts": int(会话.get("last_ts") or 0),
+                    "msg_count": len(消息列表),
+                    "unread": int(会话.get("unread") or 0),
+                    "remark": 备注,
+                    "in_group": True,
+                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                }
+            )
+        for 聊天 in 聊天列表:
+            聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
     # 置顶会话整体排前，组内按最新消息时间倒序；未置顶按最新消息时间倒序（同 QQ）
     聊天列表.sort(
         key=lambda x: (
@@ -1068,13 +1142,88 @@ def 获取聊天列表(
     }
 
 
+def _数据库历史消息(
+    会话标识: str, 类型: str, before_date: str, limit: int,
+) -> dict[str, Any] | None:
+    """对齐 ElainaBot：从 MySQL 分页读取会话历史；不可用时返回 None 由调用方回退内存。
+
+    等价于 ElainaBot 的 _query_chat_messages_sync（按 id 倒序分页），
+    这里用 MySQL 的 分页读取历史 实现，before_date 转成时间戳过滤更早消息。
+    """
+    if _消息存储 is None:
+        return None
+    try:
+        before_ts = 0
+        if before_date:
+            before_ts = int(_转数字时间戳(before_date) or 0)
+        行列表 = _消息存储.分页读取历史(会话标识, 上限=limit, before_ts=before_ts)
+        if not 行列表:
+            return None
+        会话消息: list[dict[str, Any]] = list(reversed(行列表))
+        原始数量 = len(会话消息)
+        返回消息 = 会话消息[-limit:]
+        最后消息 = 会话消息[-1] if 会话消息 else {}
+        消息索引 = {str(m.get("message_id") or ""): m for m in 会话消息}
+        引用映射: dict[str, dict[str, str]] = {}
+        for 消息记录项 in 返回消息:
+            引用ID = str(消息记录项.get("reference_id") or "").strip()
+            if not 引用ID or 引用ID in 引用映射:
+                continue
+            被引用 = 消息索引.get(引用ID)
+            if 被引用:
+                引用映射[引用ID] = {
+                    "nickname": str(被引用.get("nickname") or ""),
+                    "content": str(被引用.get("content") or ""),
+                    "timestamp": str(被引用.get("timestamp") or ""),
+                }
+        for 历史项 in 返回消息:
+            if isinstance(历史项, dict) and 历史项.get("raw_message"):
+                历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
+            if isinstance(历史项, dict) and 历史项.get("content"):
+                历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
+        总数 = 0
+        try:
+            总数 = int(_消息存储.统计会话消息数(会话标识) or 0)
+        except Exception as exc:
+            logger.debug("消息记录 MySQL 历史总数统计失败：错误类型=%s", type(exc).__name__)
+        内存会话 = 消息缓存.get(会话标识) or {}
+        轻量会话 = {
+            "chat_type": 类型,
+            "last_nickname": str(最后消息.get("nickname") or 内存会话.get("last_nickname") or ""),
+            "appid": str(最后消息.get("appid") or ""),
+        }
+        return {
+            "messages": 返回消息,
+            "last_msg_id": str(最后消息.get("message_id") or ""),
+            "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
+            "has_more": (原始数量 >= limit) and (总数 > limit if not before_date else True),
+            "chat_name": _聊天显示名(会话标识, 轻量会话),
+            "group_info": 获取缓存的群信息(会话标识),
+            "member_profiles": 成员资料缓存.get(会话标识, {}),
+            "references": 引用映射,
+        }
+    except Exception as exc:
+        logger.debug("消息记录数据库历史读取失败，回退内存：错误类型=%s", type(exc).__name__)
+        return None
+
+
 def 获取消息历史(
     会话标识: str,
     类型: str = "group",
     before_date: str = "",
     limit: int = 100,
 ) -> dict[str, Any]:
-    会话 = 消息缓存.get(str(会话标识 or "").strip())
+    会话标识 = str(会话标识 or "").strip()
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit = 100
+    # 对齐 ElainaBot：MySQL 分页查询优先，不可用时回退内存缓存
+    if 类型 in ("group", "user"):
+        数据库结果 = _数据库历史消息(会话标识, 类型, before_date, limit)
+        if 数据库结果 is not None:
+            return 数据库结果
+    会话 = 消息缓存.get(会话标识)
     if not 会话:
         return {
             "messages": [],
@@ -1084,10 +1233,6 @@ def 获取消息历史(
             "chat_name": "",
             "group_info": 获取缓存的群信息(会话标识),
         }
-    try:
-        limit = max(1, min(200, int(limit)))
-    except (TypeError, ValueError):
-        limit = 100
     消息列表 = 会话.get("messages") or []
     会话消息: list[dict[str, Any]] = list(消息列表)
     if before_date:
