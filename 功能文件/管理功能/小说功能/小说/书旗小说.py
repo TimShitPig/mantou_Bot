@@ -957,6 +957,7 @@ def 提取书旗链接(值: Any) -> str:
         r"https?://t\.shuqi\.com/book/\d+/?[^\s'\"<>，。]*",
         r"https?://t\.shuqi\.com/(?:catalog|cover)/\d+/?[^\s'\"<>，。]*",
         r"https?://t\.shuqi\.com/shortNovel/reader/\d+/?[^\s'\"<>，。]*",
+        r"https?://t\.shuqi\.com/v2/query/\d+(?:/\d+)?/?[^\s'\"<>，。]*",
     )
     for 模式 in 模式列表:
         匹配 = re.search(模式, 文本, flags=re.I)
@@ -971,6 +972,7 @@ def 提取书籍编号(文本: str) -> str:
         r"/catalog/(\d+)/?",
         r"/cover/(\d+)/?",
         r"/shortNovel/reader/(\d+)/?",
+        r"/v2/query/(\d+)",
         r"/book/(\d+)",
         r"[?&](?:bid|bookId)=(\d+)",
     ):
