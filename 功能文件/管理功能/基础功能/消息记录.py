@@ -273,7 +273,7 @@ def _提取成员标识(消息: Any, 类型: str) -> str:
 
 
 def _提取成员昵称(消息: Any) -> str:
-    """从 QQ 官方消息提取昵称；事件消息通常不含 username，仅作兜底。"""
+    """从 QQ 官方消息提取昵称（botpy 修补后 author 已带 username）。"""
     作者 = _读取字段(消息, "author") or {}
     for 字段 in ("username", "member_name", "nickname", "user_name", "name"):
         昵称 = str(_读取字段(作者, 字段) or "").strip()
@@ -1495,6 +1495,64 @@ async def 禁言群成员(
 
 
 # ---------------------------------------------------------------------------
+# botpy 昵称修补
+# ---------------------------------------------------------------------------
+
+_昵称修补已安装 = globals().get("_昵称修补已安装", False)
+
+
+def _修补botpy昵称() -> bool:
+    """botpy 解析 QQ 官方事件时丢弃了 author.username，这里包装构造器补回。
+
+    QQ 官方 C2C/群聊事件原始 JSON 的 author 带 username（用户昵称），但
+    botpy 1.2.1 的 C2CMessage._User / GroupMessage._User 只解析 openid。
+    在事件构造后把 username 动态补到 author 对象上，下游即可读取。
+    """
+    global _昵称修补已安装
+    if _昵称修补已安装:
+        return True
+    try:
+        import botpy.message as _botpy消息模块
+    except Exception:
+        return False
+    for 类名 in ("C2CMessage", "GroupMessage"):
+        消息类 = getattr(_botpy消息模块, 类名, None)
+        if 消息类 is None:
+            continue
+        原初始化 = getattr(消息类, "__init__", None)
+        if 原初始化 is None or getattr(原初始化, "__module__", "") == __name__:
+            continue
+
+        def 新初始化(self: Any, *参数: Any, _原=原初始化, **关键字: Any) -> None:
+            _原(self, *参数, **关键字)
+            try:
+                作者 = getattr(self, "author", None)
+                if 作者 is None or getattr(作者, "username", None):
+                    return
+                数据 = None
+                for 项 in 参数:
+                    if isinstance(项, dict) and 项.get("author") is not None:
+                        数据 = 项
+                        break
+                if 数据 is None:
+                    数据 = 关键字.get("data")
+                if not isinstance(数据, dict):
+                    return
+                作者数据 = 数据.get("author") or {}
+                if not isinstance(作者数据, dict):
+                    return
+                昵称 = str(作者数据.get("username") or "").strip()
+                if 昵称:
+                    作者.username = 昵称
+            except Exception:
+                pass
+
+        消息类.__init__ = 新初始化  # type: ignore[method-assign]
+    _昵称修补已安装 = True
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 事件挂钩
 # ---------------------------------------------------------------------------
 
@@ -1607,24 +1665,10 @@ def _会话标识兜底(session: Any) -> str:
     return ""
 
 
-def _安装消息发送挂钩() -> bool:
-    """为 QQ 官方平台适配器包装 send_by_session，把机器人发送的消息写入缓存。"""
-    global _发送挂钩已安装
-    if _发送挂钩已安装:
-        return True
-    try:
-        from astrbot.core.platform.sources.qqofficial import (
-            qqofficial_platform_adapter as 适配器模块,
-        )
-    except Exception as 异常:
-        logger.warning("消息记录发送挂钩加载失败：错误类型=%s", type(异常).__name__)
-        return False
-    适配器类 = getattr(适配器模块, "QQOfficialPlatformAdapter", None)
-    if 适配器类 is None:
-        return False
-    原发送 = getattr(适配器类, "send_by_session", None)
-    if 原发送 is None or getattr(原发送, "__module__", "") == __name__:
-        return False
+def _包装发送方法(发送方法: Any) -> Any:
+    """生成包装后的发送方法：调用前把机器人发送的消息写入缓存。"""
+    if 发送方法 is None or getattr(发送方法, "__module__", "") == __name__:
+        return None
 
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
         try:
@@ -1637,14 +1681,52 @@ def _安装消息发送挂钩() -> bool:
                 记录发送消息(会话标识, 类型, 内容, appid)
         except Exception as exc:
             logger.warning("消息记录发送挂钩失败：错误类型=%s", type(exc).__name__)
-        结果 = 原发送(self, session, message_chain)
+        结果 = 发送方法(self, session, message_chain)
         if asyncio.iscoroutine(结果):
             return await 结果
         return 结果
 
-    setattr(适配器类, "send_by_session", 新发送)
+    return 新发送
+
+
+def _安装消息发送挂钩() -> bool:
+    """包装平台发送入口，把机器人发送的消息写入缓存。
+
+    双保险：优先包装 QQ 官方适配器类，再包装 AstrBot 平台基类，避免
+    适配器版本差异导致漏记。
+    """
+    global _发送挂钩已安装
+    if _发送挂钩已安装:
+        return True
+    已包装 = 0
+    try:
+        from astrbot.core.platform.sources.qqofficial import (
+            qqofficial_platform_adapter as 适配器模块,
+        )
+
+        适配器类 = getattr(适配器模块, "QQOfficialPlatformAdapter", None)
+        if 适配器类 is not None:
+            原发送 = getattr(适配器类, "send_by_session", None)
+            新发送 = _包装发送方法(原发送)
+            if 新发送 is not None:
+                setattr(适配器类, "send_by_session", 新发送)
+                已包装 += 1
+    except Exception as 异常:
+        logger.warning("消息记录发送挂钩（适配器）加载失败：错误类型=%s", type(异常).__name__)
+    try:
+        from astrbot.core.platform.platform import Platform as 平台基类
+
+        原基类发送 = getattr(平台基类, "send_by_session", None)
+        新基类发送 = _包装发送方法(原基类发送)
+        if 新基类发送 is not None:
+            setattr(平台基类, "send_by_session", 新基类发送)
+            已包装 += 1
+    except Exception as 异常:
+        logger.warning("消息记录发送挂钩（基类）加载失败：错误类型=%s", type(异常).__name__)
+    if 已包装 == 0:
+        return False
     _发送挂钩已安装 = True
-    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存")
+    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存（%d 处）", 已包装)
     return True
 
 
@@ -1660,6 +1742,7 @@ def 安装消息记录(上下文: Any = None) -> bool:
                 _从数据库恢复()
             except Exception as 恢复异常:
                 logger.warning("消息记录数据库恢复失败：错误类型=%s", type(恢复异常).__name__)
+        _修补botpy昵称()
         _安装消息事件挂钩()
         _安装消息发送挂钩()
         return True
