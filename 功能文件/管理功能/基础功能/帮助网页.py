@@ -1760,16 +1760,12 @@ _网页主体 = """
             .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
-            .msg-chat-pin-icon { color:#12b7f5; font-size:12px; margin-right:2px; }
             .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
-            .msg-chat-pin-btn { flex:0 0 auto; width:22px; height:22px; display:none; place-items:center; border:0; border-radius:6px; background:#fff; color:#6b6f78; cursor:pointer; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.12); }
-            .msg-chat:hover .msg-chat-pin-btn, .msg-chat.pinned .msg-chat-pin-btn { display:grid; }
-            .msg-chat-pin-btn:hover { color:#12b7f5; }
-            .msg-chat.pinned { background:#f4faff; }
-            .msg-chat.pinned:hover { background:#e8f4ff; }
-            .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
-            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
-            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
+            .msg-chat.pinned { background:#e3ecf7; }
+            .msg-chat.pinned:hover { background:#d6e4f4; }
+            .msg-chat.pinned.active { background:#cfe0f2; }
+            .msg-chat.pinned .msg-chat-top strong { color:#1f5fb0; }
+            .msg-chat.pinned .msg-chat-top small { color:#6f8db8; }
             .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
             .msg-chat-main { flex:1 1 0; min-width:0; align-self:center; }
             .msg-chat-top { display:flex; align-items:center; gap:6px; }
@@ -2207,18 +2203,23 @@ _网页脚本 = """
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${msgState.chatId === chat.chat_id ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" title="${chat.pinned ? '取消置顶' : '置顶'}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
-            <span class="msg-chat-main"><span class="msg-chat-top"><strong>${chat.pinned ? '<span class="msg-chat-pin-icon">📌</span>' : ''}${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
+            <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
             <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>${Number(chat.unread || 0) > 0 ? `<span class="msg-chat-badge">${Number(chat.unread) > 99 ? '99+' : chat.unread}</span>` : ''}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
-            <span class="msg-chat-pin-btn" role="button" title="${chat.pinned ? '取消置顶' : '置顶'}">📌</span>
           </button>`;
         }).join('');
         node.querySelectorAll('[data-msg-chat]').forEach((el) => {
-          el.querySelector('.msg-chat-pin-btn').addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            const chatId = el.dataset.msgChat; const pinned = el.dataset.msgPinned !== '1';
-            try { await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned})}); toast(pinned ? '已置顶' : '已取消置顶'); loadMsgChats(); }
-            catch (error) { toast(error.message || '操作失败'); }
+          el.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const chatId = el.dataset.msgChat; const chatType = el.dataset.msgType; const pinned = el.dataset.msgPinned === '1';
+            const items = [];
+            items.push({label: pinned ? '取消置顶' : '置顶', action: async () => {
+              try { await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(pinned ? '已取消置顶' : '已置顶'); loadMsgChats(); }
+              catch (error) { toast(error.message || '操作失败'); }
+            }});
+            if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(); }).catch((error) => toast(error.message || '刷新失败')); }});
+            if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); markMsgRead(); });
           const markMsgRead = async () => {
