@@ -444,9 +444,16 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
-        会话["messages"].append(记录)
-        if not is_self and not 是机器人:
-            会话["unread"] = int(会话.get("unread") or 0) + 1
+        已存在 = bool(消息ID) and any(
+            str(x.get("message_id") or "") == 消息ID for x in (会话["messages"] or [])
+        )
+        if not 已存在:
+            会话["messages"].append(记录)
+            if not is_self and not 是机器人:
+                会话["unread"] = int(会话.get("unread") or 0) + 1
+        elif not is_self:
+            # 同 message_id 但非回推（如重复事件）：仍追加，避免丢失真实消息
+            会话["messages"].append(记录)
         if _消息存储 is not None:
             try:
                 _消息存储.写入消息(记录)
@@ -454,10 +461,11 @@ def 记录收到消息(
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
-        if 内容:
+        if 内容 and not 已存在:
             会话["last_content"] = 内容
             会话["last_nickname"] = 昵称
-        会话["last_ts"] = _转数字时间戳(时间戳) or int(time.time())
+        新时间戳 = _转数字时间戳(时间戳) or int(time.time())
+        会话["last_ts"] = max(int(会话.get("last_ts") or 0), 新时间戳)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -530,7 +538,7 @@ def 记录发送消息(
         if 内容:
             会话["last_content"] = 内容
             会话["last_nickname"] = "我"
-        会话["last_ts"] = int(time.time())
+        会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(time.time()))
         会话["unread"] = 0
         _裁剪总缓存()
         return 记录
@@ -906,7 +914,7 @@ def _补齐数据库会话到内存() -> None:
             最后 = 消息列表[-1]
             会话["last_content"] = str(最后.get("content") or "")
             会话["last_nickname"] = str(最后.get("nickname") or "")
-            会话["last_ts"] = int(最后.get("ts") or 0)
+            会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(最后.get("ts") or 0))
             已加载 = True
         if 已加载:
             logger.debug("消息记录会话已从数据库补回内存")
@@ -1857,7 +1865,7 @@ def _从数据库恢复() -> None:
             最后 = 消息列表[-1]
             会话["last_content"] = str(最后.get("content") or "")
             会话["last_nickname"] = str(最后.get("nickname") or "")
-            会话["last_ts"] = int(最后.get("ts") or 0)
+            会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(最后.get("ts") or 0))
             for 记录 in 消息列表:
                 最大序号 = max(最大序号, int(记录.get("id") or 0))
             恢复数 += 1
