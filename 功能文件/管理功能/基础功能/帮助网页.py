@@ -1760,7 +1760,7 @@ _网页主体 = """
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
             .msg-chat-pin-icon { color:#12b7f5; font-size:12px; margin-right:2px; }
-            .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; margin-left:auto; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
+            .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
             .msg-chat-pin-btn { flex:0 0 auto; width:22px; height:22px; display:none; place-items:center; border:0; border-radius:6px; background:#fff; color:#6b6f78; cursor:pointer; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.12); }
             .msg-chat:hover .msg-chat-pin-btn, .msg-chat.pinned .msg-chat-pin-btn { display:grid; }
             .msg-chat-pin-btn:hover { color:#12b7f5; }
@@ -1774,7 +1774,8 @@ _网页主体 = """
             .msg-chat-top { display:flex; align-items:center; gap:6px; }
             .msg-chat-top strong { font-size:13px; font-weight:600; color:#222; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .msg-chat-top small { margin-left:auto; flex:0 0 auto; color:#999; font-size:10px; }
-            .msg-chat-sub { margin-top:3px; color:#999; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-chat-sub-row { display:flex; align-items:center; gap:8px; margin-top:3px; min-width:0; }
+            .msg-chat-sub { flex:1 1 0; min-width:0; color:#999; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .msg-chat-type { display:none; }
             .msg-chat-meta { display:none; }
             .msg-empty { padding:26px 14px; color:#aaa; font-size:12px; text-align:center; }
@@ -2206,8 +2207,7 @@ _网页脚本 = """
           return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${msgState.chatId === chat.chat_id ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" title="${chat.pinned ? '取消置顶' : '置顶'}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${chat.pinned ? '<span class="msg-chat-pin-icon">📌</span>' : ''}${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
-            <span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>
-            ${Number(chat.unread || 0) > 0 ? `<span class="msg-chat-badge">${Number(chat.unread) > 99 ? '99+' : chat.unread}</span>` : ''}
+            <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>${Number(chat.unread || 0) > 0 ? `<span class="msg-chat-badge">${Number(chat.unread) > 99 ? '99+' : chat.unread}</span>` : ''}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
             <span class="msg-chat-pin-btn" role="button" title="${chat.pinned ? '取消置顶' : '置顶'}">📌</span>
           </button>`;
