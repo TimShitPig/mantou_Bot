@@ -757,6 +757,7 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
 
 def _写入本地缓存文件(数据: dict[str, Any]) -> None:
     """写入置顶/备注/昵称元数据：仅 MySQL（不产生任何本地文件）。"""
+    global _本地缓存内存, _本地缓存时间
     _本地缓存内存 = 数据
     _本地缓存时间 = time.time()
     if _消息存储 is None:

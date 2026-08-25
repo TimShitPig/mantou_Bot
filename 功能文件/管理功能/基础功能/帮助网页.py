@@ -1766,6 +1766,9 @@ _网页主体 = """
             .msg-chat.pinned.active { background:#cfe0f2; }
             .msg-chat.pinned .msg-chat-top strong { color:#1f5fb0; }
             .msg-chat.pinned .msg-chat-top small { color:#6f8db8; }
+            .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
+            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
+            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
             .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
             .msg-chat-main { flex:1 1 0; min-width:0; align-self:center; }
             .msg-chat-top { display:flex; align-items:center; gap:6px; }
