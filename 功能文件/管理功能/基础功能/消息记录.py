@@ -1190,6 +1190,7 @@ async def 发送消息(
     媒体路径: str = "",
     媒体URL: str = "",
     媒体文件类型: int = 1,
+    媒体文本: str = "",
     ARK模板ID: str = "",
     ARK字段: dict[str, Any] | None = None,
     ARK列表: str = "",
@@ -1255,6 +1256,7 @@ async def 发送消息(
         except Exception:
             return {"ok": False, "message": "图片数据无效"}
 
+    # QQ 官方富媒体消息与文本不能混在同一条：图片和文字分两条发送（先图片后文字）
     if 图片字节 is not None:
         file_info = await _上传媒体(
             _http,
@@ -1268,8 +1270,6 @@ async def 发送消息(
         消息体["msg_type"] = 7
         消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
-        if 内容:
-            消息体["content"] = 内容
 
     if 类型 == "markdown":
         消息体["msg_type"] = 2
@@ -1291,8 +1291,9 @@ async def 发送消息(
         消息体["msg_type"] = 7
         消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
-        if 内容:
-            消息体["content"] = 内容
+        # 媒体说明文本单独补发（QQ 官方不支持图文/媒体混排）
+        if str(媒体文本 or "").strip() and not 内容:
+            内容 = str(媒体文本 or "").strip()
     elif 类型 == "ark":
         kv = _构造ARK数据(ARK模板ID, ARK字段 or {}, ARK列表)
         if not kv:
@@ -1333,6 +1334,21 @@ async def 发送消息(
                 group_openid=会话标识,
             )
         结果 = await _http.request(route, json=消息体)
+        # 图片/媒体+文字：QQ 官方不支持图文混排，先发媒体，再补发一条文本消息
+        if 消息体.get("msg_type") == 7 and 内容:
+            文本消息体 = {
+                "msg_type": 0,
+                "content": 内容,
+                "msg_seq": random.randint(1, 10000),
+            }
+            if 被动ID:
+                文本消息体["msg_id"] = 被动ID
+            if 事件ID:
+                文本消息体["event_id"] = 事件ID
+            try:
+                await _http.request(route, json=文本消息体)
+            except Exception as 文本异常:
+                logger.warning("消息记录图片附带文本发送失败：错误类型=%s", type(文本异常).__name__)
     except Exception as exc:
         import traceback as _traceback
 

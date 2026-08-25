@@ -1138,6 +1138,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片数据=str(数据.get("image_data") or ""),
              媒体路径=str(数据.get("media") or ""),
              媒体URL=str(数据.get("media_url") or ""),
+             媒体文本=str(数据.get("media_text") or ""),
              媒体文件类型=int(数据.get("media_file_type") or 1),
             ARK模板ID=str(数据.get("ark_template_id") or ""),
             ARK字段=数据.get("ark_fields") if isinstance(数据.get("ark_fields"), dict) else None,
@@ -2535,6 +2536,8 @@ _网页脚本 = """
           payload.media_file_type = Number($('msg-media-type')?.value || 1);
           payload.media = $('msg-media-path')?.value.trim() || '';
           payload.media_url = $('msg-media-url')?.value.trim() || '';
+          const mediaText = $('msg-media-text')?.value.trim() || '';
+          if (mediaText) payload.media_text = mediaText;
           if (!payload.media && !payload.media_url && !msgState.pastedImage) return toast('请填写媒体文件路径或 URL');
         }
         if (msgState.pastedImage) { payload.image_data = msgState.pastedImage; }
@@ -2552,7 +2555,7 @@ _网页脚本 = """
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         msgState.sending = true;
         const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
-        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
+        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; loadMsgHistory(); }
         catch (error) { toast(error.message); }
         finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
       };
