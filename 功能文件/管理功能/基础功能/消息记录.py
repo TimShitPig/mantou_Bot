@@ -984,7 +984,7 @@ async def 发送消息(
     # QQ 官方被动消息 msg_id 2 分钟时效：优先用近期收到的消息 ID 被动发送
     本地最近时间 = 获取本地最近消息时效(会话标识)
     近期消息ID = ""
-    if 本地最近时间 and int(time.time()) - 本地最近时间 <= 125:
+    if 本地最近时间 and int(time.time()) - 本地最近时间 <= 100:
         近期消息ID = 获取本地最近消息ID(会话标识)
     if 发送方式 == "active":
         被动ID = ""
@@ -993,7 +993,7 @@ async def 发送消息(
     elif 发送方式 == "custom_event_id":
         被动ID = ""
     elif 发送方式 == "passive":
-        被动ID = 近期消息ID or 最近消息ID
+        被动ID = 近期消息ID or ""
     else:
         # 默认：仅用 2 分钟时效内的近期 msg_id 被动发送；无近期消息时尝试主动推送（全量群可用）
         被动ID = 近期消息ID or ""
@@ -1116,8 +1116,31 @@ async def 发送消息(
             str(exc)[:400],
         )
         错误文本 = str(exc)
+        if 被动ID and any(词 in 错误文本 for 词 in ("过期", "expired", "msg_id")):
+            # msg_id 已过期：去掉后重试一次主动推送（全量消息群可成功）
+            消息体.pop("msg_id", None)
+            try:
+                结果 = await _http.request(route, json=消息体)
+            except Exception as 重试异常:
+                错误文本 = str(重试异常)
+                logger.warning("消息记录主动重试失败：错误类型=%s，错误详情=%s", type(重试异常).__name__, 错误文本[:400])
+            else:
+                if isinstance(结果, dict) and 结果.get("id"):
+                    响应ID = str(结果.get("id") or "")
+                    展示内容 = 内容
+                    if 类型 == "media":
+                        展示内容 = f"[媒体] {展示内容}"
+                    elif 类型 == "ark":
+                        展示内容 = "[ARK卡片] " + 展示内容
+                    elif 类型 == "card":
+                        展示内容 = "[图文卡片] " + 展示内容
+                    记录 = 记录发送消息(会话标识, 会话类型 or "group", 展示内容 or "（空消息）", appid, 消息ID=响应ID, 引用ID=引用消息ID)
+                    return {"ok": True, "message_id": 响应ID, "message": 记录}
+                错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
             return {"ok": False, "message": "私聊发送失败：该用户不在互动窗口内，请先在 QQ 中与该机器人互动一次"}
+        if any(词 in 错误文本 for 词 in ("过期", "expired", "msg_id已过期", "msg_id 已过期")):
+            return {"ok": False, "message": "发送失败：被动消息ID已过期，请先在目标会话发一条新消息后 2 分钟内重试"}
         if any(词 in 错误文本 for 词 in ("403", "Forbidden", "没有权限", "not allowed", "not_admin", "no permission")):
             return {"ok": False, "message": "发送失败：机器人没有该会话的发送权限"}
         if any(词 in 错误文本 for 词 in ("404", "Not Found", "不存在", "invalid", "无效")):
