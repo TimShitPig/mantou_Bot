@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.45.1"
+控制台版本 = "5.45.2"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1265,7 +1265,7 @@ _网页头部 = """<!doctype html>
     body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 Inter,"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif; overflow-x:hidden; }
     button,input { font:inherit; }
     button { cursor:pointer; }
-    .shell { min-height:100vh; display:grid; grid-template-columns:224px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); grid-template-areas:"top top" "side main"; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:252px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); grid-template-areas:"top top" "side main"; }
     .topbar { grid-area:top; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 30px; background:#fff; border-bottom:1px solid var(--line); }
     .brand { display:flex; align-items:center; gap:10px; min-width:0; }
     .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:var(--primary-soft); color:var(--primary); font-size:16px; font-weight:800; }
@@ -1284,6 +1284,8 @@ _网页头部 = """<!doctype html>
     .admin-popover[hidden] { display:none; }
     .admin-popover strong { display:block; font-size:13px; }
     .admin-popover small { display:block; margin-top:5px; color:var(--muted); font-size:11px; line-height:1.45; }
+    .popover-logout { display:block; width:100%; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--danger,#d64545); font-size:12px; cursor:pointer; text-align:center; }
+    .popover-logout:hover { background:#fdf2f2; border-color:#e8b8b8; }
     .sidebar { grid-area:side; min-width:0; background:#fff; border-right:1px solid var(--line); padding:24px 14px 18px; display:flex; flex-direction:column; gap:24px; }
     .profile { display:grid; justify-items:center; gap:7px; padding:4px 0 8px; }
     .bot-avatar { position:relative; width:72px; height:72px; overflow:hidden; border:5px solid #f3f2ff; border-radius:50%; background:#e9eaff; box-shadow:0 5px 14px rgba(92,87,210,.12); }
@@ -1305,7 +1307,7 @@ _网页头部 = """<!doctype html>
     .sidebar-foot strong { display:block; margin-bottom:5px; color:var(--ink); font-size:13px; }
     .sidebar-foot .spark { color:var(--primary); font-size:16px; }
     .main { grid-area:main; min-width:0; background:var(--bg); }
-    .content { width:min(1180px,calc(100% - 70px)); margin:0 auto; padding:34px 0 60px; }
+    .content { width:min(1500px,calc(100% - 50px)); margin:0 auto; padding:34px 0 60px; }
     .page-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
     .page-kicker { margin:0 0 4px; color:var(--primary); font-size:12px; font-weight:750; }
     .page-heading h1 { margin:0; font-size:25px; letter-spacing:-.2px; }
@@ -1385,7 +1387,7 @@ _网页头部 = """<!doctype html>
     @media (max-width:1050px) { .metrics { grid-template-columns:repeat(2,1fr); } .runtime-grid { grid-template-columns:repeat(3,1fr); } .config-list { grid-template-columns:repeat(2,1fr); } .config-item { border-right:1px solid var(--line); border-bottom:1px solid var(--line); } .config-item:nth-child(2n) { border-right:0; } .config-item:nth-last-child(-n+2) { border-bottom:0; } }
      @media (max-width:760px) { .shell { display:block; } .topbar { min-height:62px; padding:12px 15px; } .brand strong { font-size:14px; } .top-actions { gap:8px; } .admin-chip { font-size:12px; } .status-dot { display:none; } .sidebar { padding:10px 12px 8px; border-right:0; border-bottom:1px solid var(--line); gap:10px; } .profile { display:flex; align-items:center; justify-content:flex-start; gap:9px; padding:0 2px; } .bot-avatar { width:38px; height:38px; border-width:3px; } .bot-avatar::before { width:34px; height:32px; top:2px; } .avatar-face { left:8px; top:12px; font-size:12px; letter-spacing:2px; } .bot-avatar::after { right:2px; top:1px; font-size:8px; } .profile strong { font-size:13px; } .online { margin-left:-3px; } .nav-label,.sidebar-foot { display:none; } .nav { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; } .nav::-webkit-scrollbar { display:none; } .nav a { flex:0 0 auto; padding:8px 10px; } .content { width:calc(100% - 28px); padding:23px 0 40px; } .page-heading h1 { font-size:21px; } .page-heading p { font-size:12px; } .primary-button { min-height:34px; padding:0 11px; } .metrics,.pan-grid { grid-template-columns:1fr; } .novel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .novel-item:nth-child(3n) { border-right:1px solid var(--line); } .novel-item:nth-child(2n) { border-right:0; } .novel-item:nth-last-child(-n+3),.novel-item:last-child,.novel-item:nth-last-child(2) { border-bottom:1px solid var(--line); } .global-bar { align-items:flex-start; } .global-actions { gap:10px; } .test-mode span { max-width:68px; white-space:normal; line-height:1.2; } .runtime-grid { grid-template-columns:repeat(2,1fr); } .config-list { grid-template-columns:1fr; } .config-item,.config-item:nth-child(2n) { padding:13px; border-right:0; border-bottom:1px solid var(--line); } .config-item:last-child { border-bottom:0; } }
      /* Screenshot-inspired configuration workspace. The data/API contract stays unchanged. */
-     .shell { grid-template-columns:222px minmax(0,1fr); grid-template-rows:62px minmax(0,1fr); }
+     .shell { grid-template-columns:248px minmax(0,1fr); grid-template-rows:62px minmax(0,1fr); }
      .topbar { padding:0 30px; }
      .brand-mark { width:36px; height:36px; border-radius:50%; background:#e9e9ff; color:#5d58d8; border:3px solid #f5f4ff; font-size:13px; }
      .brand strong { font-size:17px; }
@@ -1398,7 +1400,7 @@ _网页头部 = """<!doctype html>
      .nav-icon { width:19px; font-size:15px; }
      .sidebar-foot { border-radius:8px; background:#f5f6fb; padding:15px 13px; line-height:1.65; }
      .main { background:#f7f8fc; }
-     .content { width:min(1040px,calc(100% - 64px)); padding:38px 0 65px; }
+     .content { width:min(1300px,calc(100% - 44px)); padding:38px 0 65px; }
      .page-kicker { display:none; }
      .page-heading h1 { font-size:24px; letter-spacing:0; }
      .page-heading p { margin-top:6px; font-size:13px; }
@@ -1635,8 +1637,8 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.1</span></div></div>
-      <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.2</span></div></div>
+      <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
       <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
@@ -1654,7 +1656,7 @@ _网页主体 = """
     </aside>
     <main class="main">
       <div class="content">
-        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span><button class="outline-button" id="logout" type="button" hidden>退出登录</button><button class="primary-button" id="refresh" type="button"><span class="button-icon">↻</span>刷新状态</button></div></div>
+        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span></div></div>
         <div id="notice" class="notice"></div>
         <section id="page-dashboard" class="page-view" data-page="dashboard">
           <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态；页面切换请使用左侧导航。</p></div></div>
@@ -1690,7 +1692,7 @@ _网页主体 = """
 
         <section id="page-messages" class="page-view" data-page="messages" hidden>
           <style>
-            .msg-shell { display:grid; grid-template-columns:280px minmax(0,1fr); min-height:calc(100vh - 190px); align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
+            .msg-shell { display:grid; grid-template-columns:330px minmax(0,1fr); min-height:calc(100vh - 130px); align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
             .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
             .chat-list-panel { border-right:1px solid #e8e9ec; background:#fafafa; }
             .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 12px 8px; border-bottom:1px solid #e8e9ec; background:#fff; }
@@ -1798,7 +1800,7 @@ _网页主体 = """
             .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
             .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
             /* ===== QQ PC 风格覆盖 ===== */
-            .msg-shell { grid-template-columns:290px minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+            .msg-shell { grid-template-columns:340px minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
             .chat-list-panel { background:#f7f8fa; }
             .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
             .msg-filter button.active { color:#12b7f5; }
@@ -2067,14 +2069,14 @@ _网页脚本 = """
        const savePanGroup = async (platform) => { const group = document.querySelector(`[data-pan-group="${CSS.escape(platform)}"]`)?.value.trim(); const select = document.querySelector(`[data-pan-group-index="${CSS.escape(platform)}"]`); if (!group) return toast('请输入QQ群号'); if (!/^\\d+$/.test(group)) return toast('QQ群号格式无效'); try { await api('pan-account-selection', {method:'POST', body:JSON.stringify({platform, index:Number(select?.value || 1), group_id:group})}); toast('群账号选择已保存'); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const saveQQAuth = async () => { const ywguid = $('qq-ywguid')?.value.trim(); const ywkey = $('qq-ywkey')?.value.trim(); if (!ywguid || !ywkey) return toast('请填写 ywguid 和 ywkey'); const button = $('qq-auth-save'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'POST', body:JSON.stringify({ywguid, ywkey})}); if ($('qq-ywguid')) $('qq-ywguid').value = ''; if ($('qq-ywkey')) $('qq-ywkey').value = ''; toast('QQ阅读登录态已保存'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const deleteQQAuth = async () => { if (!confirm('确定清除 QQ阅读登录态吗？')) return; const button = $('qq-auth-delete'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'DELETE'}); toast('QQ阅读登录态已清除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
-      const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } $('logout').hidden = true; $('refresh').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
+      const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
       const adminChip = $('admin-chip'); const adminPopover = $('admin-popover');
       adminChip?.addEventListener('click', (event) => { event.stopPropagation(); const expanded = adminChip.getAttribute('aria-expanded') === 'true'; adminChip.setAttribute('aria-expanded', String(!expanded)); if (adminPopover) adminPopover.hidden = expanded; });
       document.addEventListener('click', () => { if (adminChip?.getAttribute('aria-expanded') === 'true') { adminChip.setAttribute('aria-expanded', 'false'); if (adminPopover) adminPopover.hidden = true; } });
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); $('logout').hidden = false; $('refresh').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
-      $('logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
+      const load = async () => { try { render(await api('dashboard')); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      $('popover-logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('.sidebar [data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
@@ -2497,9 +2499,9 @@ _网页脚本 = """
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
-      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(true); } }, 15000);
+      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(false, true); } }, 10000);
 
-      $('refresh').addEventListener('click', load); setView(viewFromUrl(), false); load();
+      setView(viewFromUrl(), false); load();
     })();
   </script>
 </body>
