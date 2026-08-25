@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.45.7"
+控制台版本 = "5.45.8"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1060,6 +1060,13 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
             asyncio.create_task(消息记录.刷新待处理群信息())
         except Exception:
             pass
+        try:
+            if await 消息记录.补查缺失私聊昵称(结果.get("chats") or []):
+                结果 = await asyncio.to_thread(
+                    消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
+                )
+        except Exception:
+            pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
         logger.warning("帮助控制台消息列表读取失败：错误类型=%s", type(exc).__name__)
@@ -1087,6 +1094,13 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         )
         try:
             asyncio.create_task(消息记录.刷新待处理群信息())
+        except Exception:
+            pass
+        try:
+            if 类型 == "user":
+                await 消息记录.补查缺失私聊昵称([
+                    {"chat_id": 会话标识, "chat_type": "user", "appid": str((数据 or {}).get("appid") or "")}
+                ])
         except Exception:
             pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
@@ -1658,7 +1672,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.7</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.8</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">

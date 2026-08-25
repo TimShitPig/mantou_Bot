@@ -298,6 +298,35 @@ def _记录成员资料(
             会话资料[成员标识]["role"] = str(角色 or "")
 
 
+_后台补查任务: list[Any] = []
+
+
+def _昵称需要补查(会话标识: str, 会话: dict[str, Any] | None) -> bool:
+    """私聊会话昵称缺失（空/未知/openid）时需要补查。"""
+    if not 会话:
+        return False
+    昵称 = str(会话.get("last_nickname") or "").strip()
+    if not 昵称 or "未知" in 昵称:
+        return True
+    if 会话标识 and 昵称 == 会话标识:
+        return True
+    return False
+
+
+def _保存本地昵称(会话标识: str, 昵称: str) -> None:
+    """把补查到的昵称持久化到本地缓存，重启后仍可显示。"""
+    if not 会话标识 or not 昵称:
+        return
+    try:
+        数据 = _读取本地缓存文件()
+        昵称表 = 数据.setdefault("nicknames", {})
+        if str(昵称表.get(会话标识) or "") != 昵称:
+            昵称表[会话标识] = 昵称
+            _写入本地缓存文件(数据)
+    except Exception as exc:
+        logger.warning("私聊昵称持久化失败：错误类型=%s", type(exc).__name__)
+
+
 async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str = "") -> None:
     """私聊昵称消息事件不含，调用 QQ 官方用户详情接口补查并回写缓存。"""
     if not 用户标识:
@@ -316,15 +345,15 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
         if not 昵称:
             return
         会话 = 消息缓存.get(str(会话标识 or "").strip())
-        if not 会话:
-            return
-        if not str(会话.get("last_nickname") or "").strip() or "未知" in str(会话.get("last_nickname") or ""):
-            会话["last_nickname"] = 昵称
-        资料 = 成员资料缓存.setdefault(str(会话标识 or "").strip(), {})
-        旧资料 = 资料.get(用户标识) or {}
-        if not str(旧资料.get("nickname") or "").strip():
-            旧资料["nickname"] = 昵称
-            资料[用户标识] = 旧资料
+        if 会话:
+            if _昵称需要补查(会话标识, 会话):
+                会话["last_nickname"] = 昵称
+            资料 = 成员资料缓存.setdefault(str(会话标识 or "").strip(), {})
+            旧资料 = 资料.get(用户标识) or {}
+            if not str(旧资料.get("nickname") or "").strip():
+                旧资料["nickname"] = 昵称
+                资料[用户标识] = 旧资料
+        _保存本地昵称(会话标识, 昵称)
     except Exception as exc:
         logger.warning("私聊昵称补查失败：错误类型=%s", type(exc).__name__)
 
@@ -755,7 +784,40 @@ def _聊天显示名(会话标识: str, 会话: dict[str, Any]) -> str:
     if 群名:
         return 群名
     最近昵称 = str(会话.get("last_nickname") or "")
-    return 最近昵称 or 会话标识
+    if 最近昵称:
+        return 最近昵称
+    if str(会话.get("chat_type") or "") == "user":
+        本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
+        if 本地昵称:
+            return 本地昵称
+    return 会话标识
+
+
+async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int:
+    """对昵称缺失的私聊会话逐个补查昵称（历史会话补查入口）。"""
+    补查数 = 0
+    if not 聊天项列表:
+        return 0
+    try:
+        for 聊天 in 聊天项列表:
+            if str(聊天.get("chat_type") or "") != "user":
+                continue
+            会话标识 = str(聊天.get("chat_id") or "").strip()
+            if not 会话标识:
+                continue
+            会话 = 消息缓存.get(会话标识)
+            if not _昵称需要补查(会话标识, 会话):
+                continue
+            本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
+            if 本地昵称:
+                if 会话:
+                    会话["last_nickname"] = 本地昵称
+                continue
+            await _补查用户昵称(会话标识, 会话标识, str(聊天.get("appid") or ""))
+            补查数 += 1
+    except Exception as exc:
+        logger.warning("私聊昵称批量补查失败：错误类型=%s", type(exc).__name__)
+    return 补查数
 
 
 def 获取聊天列表(
@@ -1362,13 +1424,14 @@ def _安装消息事件挂钩() -> bool:
                 appid = str(_读取字段(_读取字段(self, "platform"), "appid") or "")
                 记录 = 记录收到消息(消息, _类型, appid)
                 if _类型 == "user" and 记录:
-                    from botpy.http import Route as _Route
-
                     用户标识 = str(记录.get("user_id") or "").strip()
                     会话标识 = str(记录.get("_session") or "").strip()
                     if 用户标识 and 会话标识:
                         try:
-                            asyncio.get_event_loop().create_task(_补查用户昵称(会话标识, 用户标识, appid))
+                            try:
+                                _后台补查任务.append(asyncio.create_task(_补查用户昵称(会话标识, 用户标识, appid)))
+                            except RuntimeError:
+                                _后台补查任务.append(asyncio.get_event_loop().create_task(_补查用户昵称(会话标识, 用户标识, appid)))
                         except Exception:
                             pass
             except Exception as exc:
