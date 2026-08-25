@@ -137,18 +137,14 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
 
 
 def 已配置运行状态数据库(配置: Any) -> bool:
-    """只判断配置是否完整；未配置时读取状态不应尝试连接 MySQL。"""
+    """只判断配置是否完整（库名缺省用用户名）；未配置时读取状态不应尝试连接 MySQL。"""
     用户名 = str(
         读取数据库配置值(配置, "database_user", "user_activation_database_user") or ""
-    ).strip()
-    数据库名 = str(
-        读取数据库配置值(配置, "database_name", "user_activation_database_name")
-        or 用户名
     ).strip()
     主机 = str(
         读取数据库配置值(配置, "database_host", "user_activation_database_host") or ""
     ).strip()
-    return bool(主机 and 用户名 and 数据库名)
+    return bool(主机 and 用户名)
 
 
 def 检查运行状态数据库(配置: Any) -> str:
@@ -167,22 +163,66 @@ def 检查运行状态数据库(配置: Any) -> str:
 
 
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
+    """打开 MySQL 连接；目标库不存在时自动创建。"""
     try:
         import pymysql
     except Exception as exc:
         raise RuntimeError("缺少 pymysql 依赖，请先安装 requirements.txt") from exc
-    return pymysql.connect(
-        host=数据库配置["host"],
-        port=数据库配置["port"],
-        user=数据库配置["user"],
-        password=数据库配置["password"],
-        database=数据库配置["database"],
-        charset="utf8mb4",
-        autocommit=False,
-        connect_timeout=5,
-        read_timeout=10,
-        write_timeout=10,
-    )
+    库名 = str(数据库配置.get("database") or "").strip()
+    if not 库名:
+        raise RuntimeError("数据库配置不完整：缺少 database")
+    临时连接 = None
+    try:
+        return pymysql.connect(
+            host=数据库配置["host"],
+            port=数据库配置["port"],
+            user=数据库配置["user"],
+            password=数据库配置["password"],
+            database=库名,
+            charset="utf8mb4",
+            autocommit=False,
+            connect_timeout=5,
+            read_timeout=10,
+            write_timeout=10,
+        )
+    except Exception as 连接异常:
+        # 目标库不存在时先建库再重连
+        try:
+            临时连接 = pymysql.connect(
+                host=数据库配置["host"],
+                port=数据库配置["port"],
+                user=数据库配置["user"],
+                password=数据库配置["password"],
+                charset="utf8mb4",
+                autocommit=False,
+                connect_timeout=5,
+            )
+            with 临时连接.cursor() as 游标:
+                游标.execute(
+                    f"CREATE DATABASE IF NOT EXISTS `{库名}` "
+                    "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                )
+            临时连接.commit()
+            return pymysql.connect(
+                host=数据库配置["host"],
+                port=数据库配置["port"],
+                user=数据库配置["user"],
+                password=数据库配置["password"],
+                database=库名,
+                charset="utf8mb4",
+                autocommit=False,
+                connect_timeout=5,
+                read_timeout=10,
+                write_timeout=10,
+            )
+        except Exception as 建库异常:
+            raise RuntimeError("数据库连接失败") from 建库异常
+        finally:
+            if 临时连接 is not None:
+                try:
+                    临时连接.close()
+                except Exception:
+                    pass
 
 
 def 读取数据库配置值(配置: Any, *字段列表: str) -> Any:

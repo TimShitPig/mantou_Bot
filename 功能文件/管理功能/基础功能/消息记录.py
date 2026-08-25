@@ -28,9 +28,6 @@ except Exception as 导入异常:
 最大会话数 = 200
 每会话最大消息数 = 500
 总消息上限 = 10000
-缓存目录名 = "下载缓存"
-备注缓存文件名 = "消息记录缓存.json"
-
 当前插件上下文: Any = globals().get("当前插件上下文")
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
@@ -736,19 +733,12 @@ def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
     return True
 
 
-def _缓存文件路径() -> Path:
-    try:
-        模块目录 = Path(__file__).resolve().parent
-        return 模块目录.parent.parent / 缓存目录名 / 备注缓存文件名
-    except Exception:
-        return Path(".") / 备注缓存文件名
-
-
 _本地缓存内存: dict[str, Any] | None = None
 _本地缓存时间: float = 0.0
 
 
 def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
+    """读取置顶/备注/昵称元数据：优先 MySQL，未配置数据库时仅内存缓存。"""
     global _本地缓存内存, _本地缓存时间
     now = time.time()
     if not 强制刷新 and _本地缓存内存 is not None and now - _本地缓存时间 < 5.0:
@@ -762,42 +752,20 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
                 return 元数据
     except Exception as exc:
         logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
-    try:
-        路径 = _缓存文件路径()
-        if 路径.exists():
-            with open(路径, "r", encoding="utf-8") as f:
-                数据 = json.load(f)
-            if isinstance(数据, dict):
-                _本地缓存内存 = 数据
-                _本地缓存时间 = now
-                return 数据
-    except Exception as exc:
-        logger.warning("消息记录本地缓存读取失败：错误类型=%s", type(exc).__name__)
-    return {}
+    return dict(_本地缓存内存 or {})
 
 
 def _写入本地缓存文件(数据: dict[str, Any]) -> None:
-    """写入本地缓存：MySQL 可用时逐键写元数据，否则回退 JSON 文件。"""
-    try:
-        if _消息存储 is not None:
-            for 键, 值 in (数据 or {}).items():
-                try:
-                    _消息存储.写入元数据(键, 值)
-                except Exception as 存储异常:
-                    logger.debug("消息记录元数据入库失败：错误类型=%s", type(存储异常).__name__)
-        _本地缓存内存 = 数据
-        _本地缓存时间 = time.time()
-    except Exception as exc:
-        logger.warning("消息记录本地缓存写入失败：错误类型=%s", type(exc).__name__)
-    try:
-        路径 = _缓存文件路径()
-        路径.parent.mkdir(parents=True, exist_ok=True)
-        临时 = 路径.with_suffix(".tmp")
-        with open(临时, "w", encoding="utf-8") as f:
-            json.dump(数据, f, ensure_ascii=False, indent=1)
-        临时.replace(路径)
-    except Exception as exc:
-        logger.warning("消息记录本地缓存文件写入失败：错误类型=%s", type(exc).__name__)
+    """写入置顶/备注/昵称元数据：仅 MySQL（不产生任何本地文件）。"""
+    _本地缓存内存 = 数据
+    _本地缓存时间 = time.time()
+    if _消息存储 is None:
+        return
+    for 键, 值 in (数据 or {}).items():
+        try:
+            _消息存储.写入元数据(键, 值)
+        except Exception as 存储异常:
+            logger.debug("消息记录元数据入库失败：错误类型=%s", type(存储异常).__name__)
 
 
 def 标记群信息待刷新(会话标识: str) -> None:
@@ -1814,28 +1782,60 @@ def _从数据库恢复() -> None:
     """启动/重载时从 MySQL 恢复会话与最近消息，置顶/备注/昵称随元数据恢复。"""
     if _消息存储 is None:
         return
+    元数据 = {}
+    try:
+        元数据 = _消息存储.读取全部元数据() or {}
+    except Exception as exc:
+        logger.debug("消息记录元数据恢复失败：错误类型=%s", type(exc).__name__)
+    if 元数据:
+        global _本地缓存内存, _本地缓存时间
+        _本地缓存内存 = 元数据
+        _本地缓存时间 = time.time()
     会话标识列表 = _消息存储.读取全部会话标识()
-    if not 会话标识列表:
-        return
+    置顶列表 = [str(x) for x in (元数据.get("pinned") or []) if str(x or "").strip()]
     恢复数 = 0
     最大序号 = 0
-    for 会话标识 in 会话标识列表:
+    # 置顶/备注/昵称里出现的会话即使没有消息也要恢复，保证置顶会话不丢
+    元数据会话: set[str] = set()
+    for 键 in ("pinned", "remarks", "nicknames"):
+        值 = 元数据.get(键)
+        if isinstance(值, dict):
+            for 会话 in 值:
+                元数据会话.add(str(会话 or "").strip())
+        elif isinstance(值, list):
+            for 会话 in 值:
+                元数据会话.add(str(会话 or "").strip())
+    for 会话标识 in set(会话标识列表) | 元数据会话:
         会话标识 = str(会话标识 or "").strip()
         if not 会话标识 or 会话标识 in 消息缓存:
             continue
-        消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数)
-        if not 消息列表:
-            continue
-        类型 = str(消息列表[-1].get("chat_type") or "group")
-        会话 = _取得会话缓存(会话标识, 类型, str(消息列表[-1].get("appid") or ""))
-        会话["messages"] = 消息列表
-        最后 = 消息列表[-1]
-        会话["last_content"] = str(最后.get("content") or "")
-        会话["last_nickname"] = str(最后.get("nickname") or "")
-        会话["last_ts"] = int(最后.get("ts") or 0)
-        for 记录 in 消息列表:
-            最大序号 = max(最大序号, int(记录.get("id") or 0))
-        恢复数 += 1
+        消息列表 = []
+        try:
+            消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数) or []
+        except Exception as exc:
+            logger.debug("消息记录会话恢复失败：错误类型=%s", type(exc).__name__)
+        类型 = "group"
+        appid = ""
+        if 消息列表:
+            类型 = str(消息列表[-1].get("chat_type") or "group")
+            appid = str(消息列表[-1].get("appid") or "")
+        elif isinstance(元数据.get("remarks") or {}, dict):
+            备注表 = 元数据.get("remarks") or {}
+            if 会话标识 in 备注表:
+                类型 = "group"
+        会话 = _取得会话缓存(会话标识, 类型, appid)
+        if 消息列表:
+            会话["messages"] = 消息列表
+            最后 = 消息列表[-1]
+            会话["last_content"] = str(最后.get("content") or "")
+            会话["last_nickname"] = str(最后.get("nickname") or "")
+            会话["last_ts"] = int(最后.get("ts") or 0)
+            for 记录 in 消息列表:
+                最大序号 = max(最大序号, int(记录.get("id") or 0))
+            恢复数 += 1
+        elif 会话标识 in 置顶列表:
+            # 无消息但被置顶的会话：保留占位以便显示置顶
+            恢复数 += 1
     global 发送序号
     if 最大序号 > 发送序号:
         发送序号 = 最大序号

@@ -67,7 +67,7 @@ def _关闭连接(连接: Any | None) -> None:
 
 
 def 初始化数据库() -> bool:
-    """建消息记录表；返回是否成功。"""
+    """建消息记录表与元数据表；返回是否成功。"""
     if not _MySQL可用():
         return False
     连接 = _打开连接()
@@ -98,6 +98,17 @@ def 初始化数据库() -> bool:
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_message (message_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            游标.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mantou_runtime_state (
+                    namespace VARCHAR(64) NOT NULL,
+                    state_key VARCHAR(128) NOT NULL,
+                    state_value TEXT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    PRIMARY KEY (namespace, state_key)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
