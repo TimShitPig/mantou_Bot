@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.46.1"
+控制台版本 = "5.47.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1217,6 +1217,23 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
         return _控制台错误(500, "置顶操作失败，请稍后再试")
 
 
+async def _处理消息已读(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    会话标识 = str((数据 or {}).get("chat_id") or "").strip()
+    if not 会话标识:
+        return _控制台错误(400, "参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        消息记录.设置会话已读(会话标识)
+        return web.json_response({"ok": True})
+    except Exception as exc:
+        logger.warning("帮助控制台会话已读失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, "操作失败，请稍后再试")
+
+
 async def _处理群角色(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
@@ -1672,7 +1689,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.46.1</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.47.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1743,6 +1760,7 @@ _网页主体 = """
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
             .msg-chat-pin-icon { color:#12b7f5; font-size:12px; margin-right:2px; }
+            .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; margin-left:auto; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
             .msg-chat-pin-btn { flex:0 0 auto; width:22px; height:22px; display:none; place-items:center; border:0; border-radius:6px; background:#fff; color:#6b6f78; cursor:pointer; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.12); }
             .msg-chat:hover .msg-chat-pin-btn, .msg-chat.pinned .msg-chat-pin-btn { display:grid; }
             .msg-chat-pin-btn:hover { color:#12b7f5; }
@@ -2189,6 +2207,7 @@ _网页脚本 = """
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${chat.pinned ? '<span class="msg-chat-pin-icon">📌</span>' : ''}${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
             <span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）').replace(/<@([A-Za-z0-9_-]{5,128})>/g, (all, oid) => '@' + oid.slice(0, 6) + '…'))}</span>
+            ${Number(chat.unread || 0) > 0 ? `<span class="msg-chat-badge">${Number(chat.unread) > 99 ? '99+' : chat.unread}</span>` : ''}
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
             <span class="msg-chat-pin-btn" role="button" title="${chat.pinned ? '取消置顶' : '置顶'}">📌</span>
           </button>`;
@@ -2200,7 +2219,11 @@ _网页脚本 = """
             try { await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned})}); toast(pinned ? '已置顶' : '已取消置顶'); loadMsgChats(); }
             catch (error) { toast(error.message || '操作失败'); }
           });
-          el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); });
+          el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); markMsgRead(); });
+          const markMsgRead = async () => {
+            if (!msgState.chatId) return;
+            try { await api('message/read', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); loadMsgChats(); } catch (error) {}
+          };
         });
       };
       const loadMsgChats = async () => {
@@ -2760,6 +2783,7 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     app.router.add_post("/api/message/group-member/mute", _处理消息禁言)
     app.router.add_post("/api/message/group-roles", _处理群角色)
     app.router.add_post("/api/message/pin", _处理消息置顶)
+    app.router.add_post("/api/message/read", _处理消息已读)
     app.router.add_post("/api/message/remarks", _处理群备注)
     app.router.add_post("/api/message/group-info/refresh", _处理群信息刷新)
     app.router.add_get("/{tail:.*}", _处理帮助网页)

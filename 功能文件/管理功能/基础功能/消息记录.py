@@ -132,6 +132,7 @@ def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict
             "last_ts": 0,
             "last_content": "",
             "last_nickname": "",
+            "unread": 0,
         }
     return 消息缓存[会话标识]
 
@@ -447,6 +448,8 @@ def 记录收到消息(
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
         会话["messages"].append(记录)
+        if not is_self and not 是机器人:
+            会话["unread"] = int(会话.get("unread") or 0) + 1
         if _消息存储 is not None:
             try:
                 _消息存储.写入消息(记录)
@@ -531,11 +534,24 @@ def 记录发送消息(
             会话["last_content"] = 内容
             会话["last_nickname"] = "我"
         会话["last_ts"] = int(time.time())
+        会话["unread"] = 0
         _裁剪总缓存()
         return 记录
     except Exception as exc:
         logger.warning("消息记录发送缓存写入失败：错误类型=%s", type(exc).__name__)
         return None
+
+
+def 设置会话已读(会话标识: str) -> bool:
+    """打开会话时清零未读数。"""
+    try:
+        会话 = 消息缓存.get(str(会话标识 or "").strip())
+        if not 会话:
+            return False
+        会话["unread"] = 0
+        return True
+    except Exception:
+        return False
 
 
 def 标记撤回(会话标识: str, 消息ID: str) -> bool:
@@ -973,6 +989,7 @@ def 获取聊天列表(
                 "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
                 "last_ts": int(会话.get("last_ts") or 0),
                 "msg_count": len(消息列表),
+                "unread": int(会话.get("unread") or 0),
                 "remark": 备注,
                 "in_group": True,
                 "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
@@ -982,10 +999,10 @@ def 获取聊天列表(
     置顶顺序 = {会话: idx for idx, 会话 in enumerate(置顶列表)}
     for 聊天 in 聊天列表:
         聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
+    # 置顶会话整体排前，组内按最新消息时间倒序；未置顶按最新消息时间倒序（同 QQ）
     聊天列表.sort(
         key=lambda x: (
             0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
-            置顶顺序.get(str(x.get("chat_id") or ""), 0),
             -(x.get("last_ts") or 0),
             str(x.get("chat_id") or ""),
         )
@@ -1665,6 +1682,40 @@ def _会话标识兜底(session: Any) -> str:
     return ""
 
 
+def _包装事件发送(发送方法: Any) -> Any:
+    """包装 QQ 官方事件层的发送入口（_post_send）。
+
+    AstrBot 调度器对插件回复调用 event.send()/send_streaming()，最终都汇入
+    QQOfficialMessageEvent._post_send()；这里在真正发送前把机器人消息写入缓存。
+    """
+    if 发送方法 is None or getattr(发送方法, "__module__", "") == __name__:
+        return None
+
+    async def 新发送(self: Any, stream: Any = None, **关键字: Any) -> Any:
+        try:
+            缓冲 = getattr(self, "send_buffer", None)
+            if 缓冲 is not None:
+                会话标识 = str(getattr(getattr(self, "session", None), "session_id", "") or "").strip()
+                消息类型 = getattr(getattr(self, "session", None), "message_type", None)
+                类型 = "group" if "GROUP" in str(消息类型).upper() else "user"
+                appid = ""
+                try:
+                    appid = str(getattr(getattr(self, "platform_meta", None), "id", "") or "")
+                except Exception:
+                    pass
+                内容 = _链提取文本(缓冲)
+                if 会话标识 and 内容:
+                    记录发送消息(会话标识, 类型, 内容, appid)
+        except Exception as exc:
+            logger.warning("消息记录事件发送挂钩失败：错误类型=%s", type(exc).__name__)
+        结果 = 发送方法(self, stream, **关键字)
+        if asyncio.iscoroutine(结果):
+            return await 结果
+        return 结果
+
+    return 新发送
+
+
 def _包装发送方法(发送方法: Any) -> Any:
     """生成包装后的发送方法：调用前把机器人发送的消息写入缓存。"""
     if 发送方法 is None or getattr(发送方法, "__module__", "") == __name__:
@@ -1701,6 +1752,7 @@ def _安装消息发送挂钩() -> bool:
     已包装 = 0
     try:
         from astrbot.core.platform.sources.qqofficial import (
+            qqofficial_message_event as 事件模块,
             qqofficial_platform_adapter as 适配器模块,
         )
 
@@ -1711,8 +1763,15 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(适配器类, "send_by_session", 新发送)
                 已包装 += 1
+        事件类 = getattr(事件模块, "QQOfficialMessageEvent", None)
+        if 事件类 is not None:
+            原发送 = getattr(事件类, "_post_send", None)
+            新发送 = _包装事件发送(原发送)
+            if 新发送 is not None:
+                setattr(事件类, "_post_send", 新发送)
+                已包装 += 1
     except Exception as 异常:
-        logger.warning("消息记录发送挂钩（适配器）加载失败：错误类型=%s", type(异常).__name__)
+        logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)
     try:
         from astrbot.core.platform.platform import Platform as 平台基类
 
