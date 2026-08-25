@@ -2247,7 +2247,7 @@ _网页脚本 = """
           };
         });
       };
-      $('msg-lightbox-close')?.addEventListener('click', closeMsgLightbox);
+      $('msg-lightbox-close')?.addEventListener('click', () => closeMsgLightbox());
       $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox')) closeMsgLightbox(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
       const loadMsgChats = async () => {
