@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.45.8"
+控制台版本 = "5.45.9"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1672,7 +1672,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.8</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.9</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1815,19 +1815,23 @@ _网页主体 = """
             .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
             .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
-            .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:8px; background:#f8f7ff; color:#999; font-size:11px; }
-        .msg-input-box { position:relative; border:1px solid #d8d9dd; border-radius:8px; background:#fff; transition:border-color .15s; }
+        .msg-input-box { position:relative; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
-        .msg-textarea { width:100%; min-height:74px; max-height:160px; border:0; outline:none; resize:vertical; padding:10px 12px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
-        .msg-img-inline { display:flex; gap:8px; padding:8px 10px 0; flex-wrap:wrap; }
-        .msg-img-chip { position:relative; width:88px; height:88px; border-radius:6px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
+        .msg-textarea { width:100%; min-height:88px; max-height:180px; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
+        .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
+        .msg-img-inline[hidden] { display:none; }
+        .msg-img-chip { position:relative; width:84px; height:84px; border-radius:4px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
         .msg-img-chip img { width:100%; height:100%; object-fit:cover; display:block; }
         .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
         .msg-img-remove:hover { background:rgba(230,67,64,.9); }
-        .msg-toolbar { display:flex; align-items:center; gap:10px; margin-top:8px; }
-        .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:6px; color:#6b6f78; cursor:pointer; }
+        .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:4px; background:#f8f7ff; color:#999; font-size:11px; }
+        .msg-quote-preview[hidden] { display:none; }
+        .msg-quote-preview b { color:#333; }
+        .msg-quote-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .msg-toolbar { display:flex; align-items:center; gap:10px; }
+        .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:4px; color:#6b6f78; cursor:pointer; }
         .msg-tool-btn:hover { background:#f0f7ff; color:#12b7f5; }
-            .msg-quote-preview b { color:#333; }
+        .msg-tool-btn svg { display:block; }
             .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
             .msg-raw-modal[hidden] { display:none; }
             .msg-raw-box { width:min(720px,100%); max-height:78vh; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
@@ -1933,13 +1937,6 @@ _网页主体 = """
               <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
               <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
               <div class="msg-composer" id="msg-composer" hidden>
-                <div class="msg-composer-tabs" id="msg-composer-tabs">
-                  <button type="button" data-msg-type="text" class="active">文本</button>
-                  <button type="button" data-msg-type="markdown">Markdown</button>
-                  <button type="button" data-msg-type="media">媒体</button>
-                  <button type="button" data-msg-type="ark">ARK模板</button>
-                  <button type="button" data-msg-type="card">图文卡片</button>
-                </div>
                 <div class="msg-composer-mode">
                   <select id="msg-send-mode" aria-label="发送方式">
                     <option value="default">默认（全量群主动/其他被动）</option>
@@ -1951,13 +1948,20 @@ _网页主体 = """
                   <input id="msg-custom-id" type="text" placeholder="自定义 msg_id / 事件 ID" hidden>
                 </div>
                 <div class="msg-extra" id="msg-extra" hidden></div>
+                <div class="msg-composer-tabs" id="msg-composer-tabs">
+                  <button type="button" data-msg-type="text" class="active">文本</button>
+                  <button type="button" data-msg-type="markdown">Markdown</button>
+                  <button type="button" data-msg-type="media">媒体</button>
+                  <button type="button" data-msg-type="ark">ARK模板</button>
+                  <button type="button" data-msg-type="card">图文卡片</button>
+                </div>
                 <div class="msg-input-box" id="msg-input-box">
+                  <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
                   <div class="msg-img-inline" id="msg-img-inline" hidden>
                     <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
                   </div>
                   <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 </div>
-                <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
                 <div class="msg-toolbar">
                   <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -2510,7 +2514,7 @@ _网页脚本 = """
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         msgState.sending = true;
         const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
-        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
+        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
         finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
       };
