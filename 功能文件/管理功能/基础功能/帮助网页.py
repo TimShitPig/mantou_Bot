@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.11"
+控制台版本 = "5.44.12"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1635,7 +1635,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.11</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.12</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1797,6 +1797,53 @@ _网页主体 = """
             .msg-remark-modal[hidden] { display:none; }
             .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
             .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
+            /* ===== QQ PC 风格覆盖 ===== */
+            .msg-shell { grid-template-columns:290px minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+            .chat-list-panel { background:#f7f8fa; }
+            .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
+            .msg-filter button.active { color:#12b7f5; }
+            .msg-chats { padding:4px 6px; }
+            .msg-chat { min-height:52px; padding:6px 8px; border-radius:6px; }
+            .msg-chat:hover { background:#eceef1; }
+            .msg-chat.active { background:#d5ebfb; }
+            .msg-chat-avatar { width:38px; height:38px; }
+            .msg-chat-top strong { font-size:12.5px; }
+            .msg-chat-sub { font-size:11px; margin-top:1px; }
+            .msg-work { background:#f5f6f7; }
+            .msg-head { padding:8px 14px; background:#fff; }
+            .msg-body { padding:14px 20px 8px; background:#f5f6f7; }
+            .msg-day { margin:8px 0; color:#b6bcc4; font-size:10px; }
+            .msg-row { gap:10px; margin-bottom:12px; align-items:flex-start; }
+            .msg-avatar { width:38px; height:38px; }
+            .msg-bubble-wrap { max-width:min(62%,560px); }
+            .msg-bubble { padding:9px 12px; border-radius:4px 12px 12px 12px; background:#fff; font-size:13px; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+            .msg-row.self .msg-bubble { border-radius:12px 4px 12px 12px; background:#95ec69; color:#000; }
+            .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
+            .msg-meta { color:#b6bcc4; font-size:9px; }
+            .msg-bubble-name { font-size:10px; }
+            .msg-composer { padding:8px 14px 10px; background:#fff; border-top:1px solid #e5e8ec; }
+            .msg-textarea { background:#f7f8fa; border-radius:4px; }
+            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
+            .msg-send-row .msg-btn.primary { background:#12b7f5; border-color:#12b7f5; }
+
+            /* 右键菜单 */
+            .msg-ctx { position:fixed; z-index:120; min-width:150px; padding:4px; background:#fff; border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.14); user-select:none; }
+            .msg-ctx[hidden] { display:none; }
+            .msg-ctx-item { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:0; border-radius:5px; background:transparent; color:#333; font-size:12px; text-align:left; cursor:pointer; }
+            .msg-ctx-item:hover { background:#f0f7ff; color:#12b7f5; }
+            .msg-ctx-item.danger:hover { background:#fff1f0; color:#e64340; }
+            .msg-ctx-sep { height:1px; margin:4px 8px; background:#eee; }
+
+            /* 多选模式 */
+            .msg-multi-bar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#e8f6fe; border-bottom:1px solid #cfe8fb; font-size:12px; color:#12b7f5; }
+            .msg-multi-bar[hidden] { display:none; }
+            .msg-row.multi-mode { cursor:pointer; }
+            .msg-row.multi-mode .msg-avatar, .msg-row.multi-mode .msg-bubble { opacity:.85; }
+            .msg-row.multi-mode.selected .msg-bubble { outline:2px solid #12b7f5; outline-offset:2px; }
+            .msg-row.multi-mode .msg-multi-check { position:absolute; left:-14px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
+            .msg-row.multi-mode.selected .msg-multi-check { border-color:#12b7f5; background:#12b7f5; }
+            .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
+            .msg-pos { position:relative; }
             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
           </style>
           <div class="msg-shell">
@@ -1827,6 +1874,7 @@ _网页主体 = """
                   <button class="msg-btn" id="msg-reload" type="button">刷新</button>
                 </div>
               </div>
+              <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
               <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
               <div class="msg-composer" id="msg-composer" hidden>
                 <div class="msg-composer-tabs" id="msg-composer-tabs">
@@ -1857,6 +1905,7 @@ _网页主体 = """
               </div>
             </div>
           </div>
+          <div class="msg-ctx" id="msg-ctx" hidden></div>
           <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><button id="msg-raw-close" type="button">×</button></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
           <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box"><h3>群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
           <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="43200" placeholder="自定义分钟" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
@@ -2024,7 +2073,7 @@ _网页脚本 = """
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, pastedImage:null, sending:false };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {

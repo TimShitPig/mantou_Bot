@@ -492,6 +492,38 @@ def 获取最近消息ID(平台实例: Any, 会话标识: str) -> str:
     return str(缓存.get(会话标识) or "").strip()
 
 
+def 获取本地最近消息ID(会话标识: str) -> str:
+    """从进程内消息缓存找最近一条收到的消息 ID 作为被动发送 msg_id 兜底。"""
+    try:
+        会话 = 消息缓存.get(会话标识) or {}
+        消息列表 = 会话.get("messages") or []
+        for 记录 in reversed(消息列表):
+            if bool(记录.get("is_self")):
+                continue
+            消息ID = str(记录.get("message_id") or "").strip()
+            if 消息ID:
+                return 消息ID
+    except Exception:
+        pass
+    return ""
+
+
+def 获取本地最近消息时效(会话标识: str) -> float:
+    """返回最近一条收到的消息的时间戳（秒），无消息时返回 0。"""
+    try:
+        会话 = 消息缓存.get(会话标识) or {}
+        消息列表 = 会话.get("messages") or []
+        for 记录 in reversed(消息列表):
+            if bool(记录.get("is_self")):
+                continue
+            消息ID = str(记录.get("message_id") or "").strip()
+            if 消息ID:
+                return int(_转数字时间戳(记录.get("timestamp")) or 0)
+    except Exception:
+        pass
+    return 0
+
+
 def 获取会话场景(平台实例: Any, 会话标识: str) -> str:
     if 平台实例 is None:
         return ""
@@ -944,8 +976,13 @@ async def 发送消息(
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     api, _http = 通道
-    最近消息ID = 消息ID or 获取最近消息ID(平台实例, 会话标识)
+    最近消息ID = 消息ID or 获取最近消息ID(平台实例, 会话标识) or 获取本地最近消息ID(会话标识)
     场景 = 获取会话场景(平台实例, 会话标识)
+    # QQ 官方被动消息 msg_id 2 分钟时效：优先用近期收到的消息 ID 被动发送
+    本地最近时间 = 获取本地最近消息时效(会话标识)
+    近期消息ID = ""
+    if 本地最近时间 and int(time.time()) - 本地最近时间 <= 125:
+        近期消息ID = 获取本地最近消息ID(会话标识)
     if 发送方式 == "active":
         被动ID = ""
     elif 发送方式 == "custom_msg_id":
@@ -953,10 +990,12 @@ async def 发送消息(
     elif 发送方式 == "custom_event_id":
         被动ID = ""
     elif 发送方式 == "passive":
-        被动ID = 最近消息ID
+        被动ID = 最近消息ID or 近期消息ID
     else:
-        # 默认：群聊全量消息可主动，其他被动
-        被动ID = "" if (类型 == "group" and 场景 == "group" and 最近消息ID) else 最近消息ID
+        # 默认：优先被动发送（带近期 msg_id，普通群可用）；无近期消息时全量群尝试主动推送
+        被动ID = 近期消息ID or 最近消息ID or ""
+    if 类型 == "group" and 发送方式 == "default" and not 被动ID:
+        return {"ok": False, "message": "发送失败：该群最近没有收到新消息，无法主动发送。请先在群里发一条消息后 2 分钟内重试，或确认该群已开启全量消息接收。"}
     事件ID = 自定义ID if 发送方式 == "custom_event_id" else ""
     消息体: dict[str, Any] = {
         "msg_type": 0,
@@ -1066,7 +1105,23 @@ async def 发送消息(
             )
         结果 = await _http.request(route, json=消息体)
     except Exception as exc:
-        logger.warning("消息记录发送失败：错误类型=%s", type(exc).__name__)
+        import traceback as _traceback
+
+        logger.warning(
+            "消息记录发送失败：错误类型=%s，错误详情=%s",
+            type(exc).__name__,
+            str(exc)[:400],
+        )
+        错误文本 = str(exc)
+        if 类型 == "user" and not 被动ID:
+            return {"ok": False, "message": "私聊发送失败：该用户不在互动窗口内，请先在 QQ 中与该机器人互动一次"}
+        if any(词 in 错误文本 for 词 in ("403", "Forbidden", "没有权限", "not allowed", "not_admin", "no permission")):
+            return {"ok": False, "message": "发送失败：机器人没有该会话的发送权限"}
+        if any(词 in 错误文本 for 词 in ("404", "Not Found", "不存在", "invalid", "无效")):
+            return {"ok": False, "message": "发送失败：会话或目标不存在，请刷新会话列表重试"}
+        if "timeout" in 错误文本.lower() or "timed out" in 错误文本.lower():
+            return {"ok": False, "message": "发送失败：请求超时，请稍后重试"}
+        _traceback.print_exc()
         return {"ok": False, "message": "发送失败，请稍后再试"}
 
     响应ID = ""
