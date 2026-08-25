@@ -1793,14 +1793,15 @@ def _安装消息发送挂钩() -> bool:
     return True
 
 
-def 安装消息记录(上下文: Any = None) -> bool:
+def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     global 当前插件上下文
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:
         if _消息存储 is not None:
             try:
-                _消息存储.设置数据库配置(getattr(上下文, "config", None))
+                插件配置 = 配置 if 配置 is not None else getattr(上下文, "config", None)
+                _消息存储.设置数据库配置(插件配置)
                 _消息存储.初始化数据库()
                 _从数据库恢复()
             except Exception as 恢复异常:
