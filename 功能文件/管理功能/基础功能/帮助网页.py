@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.45.0"
+控制台版本 = "5.45.1"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1635,7 +1635,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.1</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1845,6 +1845,8 @@ _网页主体 = """
             .msg-row.multi-mode .msg-multi-check { display:grid; position:absolute; left:-16px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
             .msg-row.multi-mode.selected .msg-multi-check { border-color:#12b7f5; background:#12b7f5; }
             .msg-row.self.multi-mode .msg-multi-check { left:auto; right:-16px; }
+            .msg-row.multi-mode.no-multi { opacity:.55; }
+            .msg-row.multi-mode.no-multi .msg-multi-check { display:none; }
             .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
             .msg-pos { position:relative; }
             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
@@ -1870,6 +1872,7 @@ _网页主体 = """
                 <div style="min-width:0">
                   <div class="msg-head-name" id="msg-head-name">选择一个会话</div>
                   <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>
+                  <span class="msg-admin-tag" id="msg-admin-tag" hidden>· 机器人是管理员</span>
                 </div>
                 <div class="msg-head-actions">
                   <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
@@ -2076,7 +2079,7 @@ _网页脚本 = """
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -2152,6 +2155,11 @@ _网页脚本 = """
         if (isNaN(d.getTime())) return s.slice(11, 16);
         const pad = (n) => String(n).padStart(2, '0');
         return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      };
+      const updateMsgAdminTag = () => {
+        const el = $('msg-admin-tag');
+        if (!el) return;
+        el.hidden = !(msgState.chatType === 'group' && msgState.botIsAdmin);
       };
       const updateMsgHead = (data) => {
         $('msg-head-name').textContent = data.chat_name || '未命名会话';
@@ -2231,6 +2239,7 @@ _网页脚本 = """
         const body = $('msg-body'); const msgs = data.messages || [];
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         updateMsgHead(data);
+        updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
         if (!msgs.length) { body.innerHTML = '<div class="msg-empty">暂无消息记录</div>'; return; }
@@ -2242,6 +2251,7 @@ _网页脚本 = """
           const isSelf = Boolean(m.is_self);
           const recalled = Boolean(m.recalled);
           const profiles = data.member_profiles || {};
+          msgState.profiles = profiles;
           const profile = profiles[m.user_id] || {};
           const av = isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid);
           const tags = [];
@@ -2260,17 +2270,22 @@ _网页脚本 = """
             return out;
           };
           const ref = (data.references || {})[m.reference_id];
-          const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const media = m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
+          // 撤回后隐藏引用与媒体，只显示已撤回
+          const quote = !recalled && m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
+          const media = !recalled && m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
           const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
+          // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
+          const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);
+          const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
           const actions = [];
-          if (!isSelf && !recalled && m.message_id) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
+          if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
           if (!isSelf && msgState.chatType === 'group' && m.user_id) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id)}" data-msg-name="${esc(m.nickname||'')}" type="button">引用</button>`);
-          if (!isSelf && msgState.chatType === 'group' && m.user_id) actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(m.nickname||'')}" type="button">禁言</button>`);
+          if (canMute) actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(m.nickname||'')}" type="button">禁言</button>`);
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
           const isSelected = msgState.selected.has(m.message_id);
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(m.nickname||'')}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-content="${esc(m.content || '')}">
+          const multiEnabled = canRecall;
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(m.nickname||'')}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
@@ -2301,19 +2316,25 @@ _网页脚本 = """
               toggleMsgSelect(row, mid);
               return;
             }
+            const profile = (msgState.profiles || {})[uid] || {};
+            const canMuteRow = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
+            const canRecallRow = Boolean(mid) && !recalled && (isSelf || msgState.botIsAdmin);
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (canMuteRow) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
             if (items.length && !isSelf) items.push({sep:true});
             if (!isSelf && msgState.chatType === 'group' && mid) items.push({label:'引用', action:() => { msgState.quote = {id:mid, text:nick || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${nick} · 引用`; }});
             if (content) items.push({label:'复制', action:() => copyMsgText(content)});
-            if (!isSelf && !recalled && mid) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
+            if (canRecallRow) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
             if (mid) items.push({sep:true});
-            items.push({label:'多选', action:() => { enterMultiMode(); toggleMsgSelect(row, mid); }});
+            items.push({label:'多选', action:() => { enterMultiMode(); if (canRecallRow) toggleMsgSelect(row, mid); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           row.addEventListener('click', (e) => {
-            if (msgState.multi && !e.target.closest('button')) toggleMsgSelect(row, row.dataset.msgMid);
+            if (msgState.multi && !e.target.closest('button')) {
+              const canSel = Boolean(row.dataset.msgMid) && !(row.dataset.msgRecalled === '1') && (row.dataset.msgSelf === '1' || msgState.botIsAdmin);
+              if (canSel) toggleMsgSelect(row, row.dataset.msgMid);
+            }
           });
           row.querySelector('.msg-avatar')?.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -2322,9 +2343,11 @@ _网页脚本 = """
             const nick = row.dataset.msgNick;
             const isSelf = row.dataset.msgSelf === '1';
             if (msgState.multi) return;
+            const profileA = (msgState.profiles || {})[uid] || {};
+            const canMuteAv = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && profileA.role !== 'owner' && profileA.role !== 'admin';
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (canMuteAv) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
         });
@@ -2356,10 +2379,10 @@ _网页脚本 = """
       const loadGroupRoles = async (throttled = false) => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return;
         const now = Date.now();
-        if (throttled && msgState.lastRolesAt && now - msgState.lastRolesAt < 60000) return;
-        msgState.lastRolesAt = now;
-        try { const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); if (data.bot_is_admin) $('msg-head-sub').textContent += ' · 机器人是管理员'; }
-        catch (error) { /* 群角色查询失败不影响消息展示 */ }
+        if (throttled && msgState.lastRolesChatId === msgState.chatId && msgState.lastRolesAt && now - msgState.lastRolesAt < 60000) return;
+        msgState.lastRolesAt = now; msgState.lastRolesChatId = msgState.chatId;
+        try { const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); msgState.botIsAdmin = Boolean(data.bot_is_admin); updateMsgAdminTag(); }
+        catch (error) { msgState.botIsAdmin = false; updateMsgAdminTag(); }
       };
       const recallMessage = async (messageId) => {
         if (!confirm('确定撤回这条消息吗？发送超过 2 分钟的消息不可撤回。')) return;
