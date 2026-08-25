@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.10"
+控制台版本 = "5.44.11"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1635,7 +1635,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.10</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.11</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -2105,7 +2105,11 @@ _网页脚本 = """
         const body = $('msg-body'); const msgs = data.messages || [];
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         $('msg-head-name').textContent = data.chat_name || '未命名会话';
-        $('msg-head-sub').textContent = msgState.chatType === 'group' ? `群聊 · ${esc(msgState.chatId)}` : `私聊 · ${esc(msgState.chatId)}`;
+        const gInfo = data.group_info || {};
+        const gNum = Number(gInfo.member_num || 0);
+        $('msg-head-sub').textContent = msgState.chatType === 'group'
+          ? `群聊 · ${esc(msgState.chatId)}${gNum > 0 ? ` · 群成员 ${gNum} 人` : ''}`
+          : `私聊 · ${esc(msgState.chatId)}`;
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
         if (!msgs.length) { body.innerHTML = '<div class="msg-empty">暂无消息记录</div>'; return; }
@@ -2192,7 +2196,7 @@ _网页脚本 = """
       };
       const refreshGroupInfo = async () => {
         if (!msgState.chatId) return;
-        try { const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); toast(data.group_name ? `群信息已刷新：${data.group_name}` : '群信息已刷新'); loadMsgHistory(); }
+        try { const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); toast(data.group_name ? `群信息已刷新：${data.group_name}${data.member_num ? `（成员 ${data.member_num} 人）` : ''}` : (data.member_num ? `群信息已刷新：成员 ${data.member_num} 人` : '群信息已刷新')); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const showRemarkDialog = async () => {
