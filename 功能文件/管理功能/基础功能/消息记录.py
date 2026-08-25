@@ -1286,6 +1286,7 @@ def _安装消息事件挂钩() -> bool:
 
         async def 新回调(self: Any, 消息: Any, _原=原回调, _类型=类型) -> Any:
             try:
+                _安装消息发送挂钩()
                 appid = str(_读取字段(_读取字段(self, "platform"), "appid") or "")
                 记录收到消息(消息, _类型, appid)
             except Exception as exc:
@@ -1332,6 +1333,28 @@ def _链提取文本(消息链: Any) -> str:
         return ""
 
 
+def _会话标识兜底(session: Any) -> str:
+    """从 AstrBot MessageSession 提取会话标识，优先匹配缓存中已存在的键。"""
+    try:
+        候选 = [
+            str(getattr(session, "session_id", "") or "").strip(),
+            str(getattr(session, "group_id", "") or "").strip(),
+            str(getattr(session, "user_id", "") or "").strip(),
+            str(getattr(session, "target_id", "") or "").strip(),
+            str(getattr(session, "openid", "") or "").strip(),
+            str(getattr(session, "sender_id", "") or "").strip(),
+        ]
+        for 键 in 候选:
+            if 键 and 键 in 消息缓存:
+                return 键
+        for 键 in 候选:
+            if 键:
+                return 键
+    except Exception:
+        pass
+    return ""
+
+
 def _安装消息发送挂钩() -> bool:
     """为 QQ 官方平台适配器包装 send_by_session，把机器人发送的消息写入缓存。"""
     global _发送挂钩已安装
@@ -1354,7 +1377,7 @@ def _安装消息发送挂钩() -> bool:
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
         try:
             appid = str(getattr(self, "appid", "") or "")
-            会话标识 = str(getattr(session, "session_id", "") or "").strip()
+            会话标识 = _会话标识兜底(session)
             消息类型 = str(getattr(session, "message_type", "") or "")
             类型 = "group" if "GROUP" in 消息类型.upper() else "user"
             内容 = _链提取文本(message_chain)

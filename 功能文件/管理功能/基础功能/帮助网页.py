@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.45.4"
+控制台版本 = "5.45.5"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1637,7 +1637,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.4</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.5</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1775,10 +1775,17 @@ _网页主体 = """
             .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
             .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:8px; background:#f8f7ff; color:#999; font-size:11px; }
-        .msg-img-preview { display:flex; align-items:center; gap:8px; margin:6px 0; padding:6px 8px; background:#f7f8fa; border:1px solid #e8e9ec; border-radius:8px; }
-        .msg-img-preview img { width:48px; height:48px; object-fit:cover; border-radius:6px; border:1px solid #dcdde0; }
-        .msg-img-preview span { flex:1; font-size:12px; color:#4a4d54; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .msg-img-preview .msg-action { background:none; border:none; color:#e64340; cursor:pointer; font-size:12px; padding:2px 6px; }
+        .msg-input-box { position:relative; border:1px solid #d8d9dd; border-radius:8px; background:#fff; transition:border-color .15s; }
+        .msg-input-box:focus-within { border-color:#12b7f5; }
+        .msg-textarea { width:100%; min-height:74px; max-height:160px; border:0; outline:none; resize:vertical; padding:10px 12px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
+        .msg-img-inline { display:flex; gap:8px; padding:8px 10px 0; flex-wrap:wrap; }
+        .msg-img-chip { position:relative; width:88px; height:88px; border-radius:6px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
+        .msg-img-chip img { width:100%; height:100%; object-fit:cover; display:block; }
+        .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
+        .msg-img-remove:hover { background:rgba(230,67,64,.9); }
+        .msg-toolbar { display:flex; align-items:center; gap:10px; margin-top:8px; }
+        .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:6px; color:#6b6f78; cursor:pointer; }
+        .msg-tool-btn:hover { background:#f0f7ff; color:#12b7f5; }
             .msg-quote-preview b { color:#333; }
             .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
             .msg-raw-modal[hidden] { display:none; }
@@ -1903,11 +1910,20 @@ _网页主体 = """
                   <input id="msg-custom-id" type="text" placeholder="自定义 msg_id / 事件 ID" hidden>
                 </div>
                 <div class="msg-extra" id="msg-extra" hidden></div>
-                <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
+                <div class="msg-input-box" id="msg-input-box">
+                  <div class="msg-img-inline" id="msg-img-inline" hidden>
+                    <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
+                  </div>
+                  <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
+                </div>
                 <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
-                <div class="msg-img-preview" id="msg-img-preview" hidden><img id="msg-img-thumb" alt="待发送图片"><span id="msg-img-name">图片</span><button class="msg-action" id="msg-img-clear" type="button">移除</button></div>
-                <div class="msg-send-row">
+                <div class="msg-toolbar">
+                  <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                    <input id="msg-img-file" type="file" accept="image/*" hidden>
+                  </label>
                   <span id="msg-send-status" style="color:var(--muted);font-size:11px"></span>
+                  <span style="flex:1"></span>
                   <button class="msg-btn primary" id="msg-send" type="button">发送</button>
                 </div>
               </div>
@@ -2311,6 +2327,7 @@ _网页脚本 = """
         body.querySelectorAll('.msg-row').forEach((row) => {
           row.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             const mid = row.dataset.msgMid;
             const uid = row.dataset.msgUid;
             const nick = row.dataset.msgNick;
@@ -2443,7 +2460,7 @@ _网页脚本 = """
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         msgState.sending = true;
         const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
-        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
+        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); $('msg-quote-preview').hidden = true; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
         finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
       };
@@ -2477,7 +2494,7 @@ _网页脚本 = """
             reader.onload = () => {
               msgState.pastedImage = reader.result;
               $('msg-img-thumb').src = reader.result;
-              $('msg-img-preview').hidden = false;
+              $('msg-img-inline').hidden = false;
               toast('已粘贴图片，可继续输入文字后发送');
             };
             reader.readAsDataURL(file);
@@ -2486,7 +2503,18 @@ _网页脚本 = """
           }
         }
       });
-      $('msg-img-clear').addEventListener('click', () => { msgState.pastedImage = null; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); });
+      const clearMsgImage = () => { msgState.pastedImage = null; $('msg-img-inline').hidden = true; $('msg-img-thumb').removeAttribute('src'); };
+      $('msg-img-clear').addEventListener('click', clearMsgImage);
+      $('msg-img-pick').addEventListener('click', () => $('msg-img-file').click());
+      $('msg-img-file').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) { toast('请选择图片文件'); e.target.value = ''; return; }
+        const reader = new FileReader();
+        reader.onload = () => { msgState.pastedImage = reader.result; $('msg-img-thumb').src = reader.result; $('msg-img-inline').hidden = false; };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+      });
       $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
