@@ -34,6 +34,7 @@ except Exception as 导入异常:
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
+_群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
@@ -828,25 +829,47 @@ def 标记群信息待刷新(会话标识: str) -> None:
 
 
 async def 刷新待处理群信息() -> int:
-    """批量刷新待处理群信息，返回成功数量（限流保护：逐个带间隔）。"""
+    """批量刷新待处理群信息，返回成功数量（加锁防并发，逐个带间隔避免限流）。"""
     if not 群信息待刷新:
         return 0
-    批次 = list(群信息待刷新)[:20]
-    群信息待刷新.clear()
-    成功数 = 0
-    for 会话标识 in 批次:
-        try:
-            结果 = await 刷新群信息(会话标识)
-            if 结果:
-                成功数 += 1
-        except Exception as exc:
-            logger.warning("消息记录群信息后台刷新失败：错误类型=%s", type(exc).__name__)
-        await asyncio.sleep(1.5)
+    async with _群信息刷新锁:
+        if not 群信息待刷新:
+            return 0
+        批次 = list(群信息待刷新)[:10]
+        群信息待刷新.clear()
+        成功数 = 0
+        for 会话标识 in 批次:
+            try:
+                结果 = await 刷新群信息(会话标识)
+                if 结果:
+                    成功数 += 1
+            except Exception as exc:
+                logger.warning("消息记录群信息后台刷新失败：错误类型=%s", type(exc).__name__)
+            await asyncio.sleep(2)
     return 成功数
 
 
+def _群信息冷却秒数(异常: Exception) -> int:
+    """按错误类型返回冷却秒数：已注销群冷却一天，接口限流冷却 5 分钟，其他 60 秒。"""
+    try:
+        文本 = str(异常)
+    except Exception:
+        文本 = ""
+    if "注销" in 文本 or "不存在" in 文本:
+        return 86400
+    if "频率" in 文本 or "限流" in 文本 or "限制" in 文本:
+        return 300
+    return 60
+
+
 async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] | None:
-    """调用 QQ 官方接口刷新群基本信息，失败时冷却 60 秒避免触发限流。"""
+    """调用 QQ 官方接口刷新群基本信息；冷却期内直接跳过，失败按错误类型冷却。"""
+    if not 会话标识:
+        return None
+    现在 = int(time.time())
+    已有 = 群信息缓存.get(会话标识) or {}
+    if int(已有.get("updated_at") or 0) > 现在:
+        return None
     通道 = 获取HTTP通道()
     if 通道 is None:
         return None
@@ -872,8 +895,12 @@ async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] 
         群信息缓存[会话标识] = 摘要
         return 摘要
     except Exception as exc:
-        群信息缓存[会话标识] = {"updated_at": int(time.time()) + 60}
-        logger.warning("消息记录群信息刷新失败：错误类型=%s", type(exc).__name__)
+        冷却秒数 = _群信息冷却秒数(exc)
+        群信息缓存[会话标识] = {"updated_at": int(time.time()) + 冷却秒数}
+        logger.warning(
+            "消息记录群信息刷新失败：错误类型=%s，冷却 %s 秒",
+            type(exc).__name__, 冷却秒数,
+        )
         return None
 
 
