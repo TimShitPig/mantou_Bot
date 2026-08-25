@@ -776,7 +776,7 @@ def 标记群信息待刷新(会话标识: str) -> None:
 
 
 async def 刷新待处理群信息() -> int:
-    """批量刷新待处理群信息，返回成功数量。"""
+    """批量刷新待处理群信息，返回成功数量（限流保护：逐个带间隔）。"""
     if not 群信息待刷新:
         return 0
     批次 = list(群信息待刷新)[:20]
@@ -789,11 +789,12 @@ async def 刷新待处理群信息() -> int:
                 成功数 += 1
         except Exception as exc:
             logger.warning("消息记录群信息后台刷新失败：错误类型=%s", type(exc).__name__)
+        await asyncio.sleep(1.5)
     return 成功数
 
 
 async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] | None:
-    """调用 QQ 官方接口刷新群基本信息。"""
+    """调用 QQ 官方接口刷新群基本信息，失败时冷却 60 秒避免触发限流。"""
     通道 = 获取HTTP通道()
     if 通道 is None:
         return None
@@ -808,6 +809,7 @@ async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] 
         )
         结果 = await _http.request(route)
         if not isinstance(结果, dict):
+            群信息缓存[会话标识] = {"updated_at": int(time.time()) + 60}
             return None
         摘要 = {
             "group_openid": str(结果.get("group_openid") or 会话标识),
@@ -818,6 +820,7 @@ async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] 
         群信息缓存[会话标识] = 摘要
         return 摘要
     except Exception as exc:
+        群信息缓存[会话标识] = {"updated_at": int(time.time()) + 60}
         logger.warning("消息记录群信息刷新失败：错误类型=%s", type(exc).__name__)
         return None
 
@@ -940,7 +943,7 @@ def 获取聊天列表(
             continue
         if 类型 == "group":
             缓存群信息 = 群信息缓存.get(会话标识)
-            if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 300:
+            if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
                 标记群信息待刷新(会话标识)
         显示名 = _聊天显示名(会话标识, 会话)
         if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:

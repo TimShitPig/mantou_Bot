@@ -1,6 +1,6 @@
 name: 馒头bot # 插件唯一识别名
 display_name: 馒头bot # 用于展示的名字
 desc: 适用于 AstrBot 的馒头bot插件。 # 插件简短描述
-version: v5.47.6 # 插件版本号
+version: v5.47.7 # 插件版本号
 author: 馒头 # 作者
 repo: https://github.com/TimShitPig/mantou_Bot # 插件的仓库地址
