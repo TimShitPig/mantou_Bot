@@ -615,6 +615,25 @@ def 删除群备注(会话标识: str) -> None:
         _写入本地缓存文件(数据)
 
 
+def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
+    """置顶或取消置顶会话，置顶顺序持久化到本地缓存。"""
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识:
+        return False
+    数据 = _读取本地缓存文件()
+    置顶列表 = [str(x) for x in (数据.get("pinned") or []) if str(x or "").strip()]
+    已置顶 = 会话标识 in 置顶列表
+    if 置顶 and not 已置顶:
+        置顶列表.insert(0, 会话标识)
+        数据["pinned"] = 置顶列表
+        _写入本地缓存文件(数据)
+    elif not 置顶 and 已置顶:
+        置顶列表 = [x for x in 置顶列表 if x != 会话标识]
+        数据["pinned"] = 置顶列表
+        _写入本地缓存文件(数据)
+    return True
+
+
 def _缓存文件路径() -> Path:
     try:
         模块目录 = Path(__file__).resolve().parent
@@ -753,7 +772,8 @@ def 获取聊天列表(
     except (TypeError, ValueError):
         页码, 每页 = 1, 50
     聊天列表: list[dict[str, Any]] = []
-    本地备注表 = (_读取本地缓存文件().get("remarks") or {})
+    本地数据 = _读取本地缓存文件()
+    本地备注表 = (本地数据.get("remarks") or {})
     for 会话标识, 会话 in 消息缓存.items():
         类型 = str(会话.get("chat_type") or "group")
         if 过滤 == "group" and 类型 != "group":
@@ -789,7 +809,18 @@ def 获取聊天列表(
                 "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
             }
         )
-    聊天列表.sort(key=lambda x: (x.get("last_ts") or 0, x.get("chat_id") or ""), reverse=True)
+    置顶列表 = [str(x) for x in (本地数据.get("pinned") or []) if str(x or "").strip()]
+    置顶顺序 = {会话: idx for idx, 会话 in enumerate(置顶列表)}
+    for 聊天 in 聊天列表:
+        聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
+    聊天列表.sort(
+        key=lambda x: (
+            0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
+            置顶顺序.get(str(x.get("chat_id") or ""), 0),
+            -(x.get("last_ts") or 0),
+            str(x.get("chat_id") or ""),
+        )
+    )
     总数 = len(聊天列表)
     开始 = (页码 - 1) * 每页
     return {
