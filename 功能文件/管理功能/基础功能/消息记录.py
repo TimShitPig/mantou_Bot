@@ -16,6 +16,14 @@ except Exception:
 
     logger = logging.getLogger(__name__)
 
+try:
+    from 功能文件.管理功能.基础功能 import 消息记录存储
+
+    _消息存储 = 消息记录存储
+except Exception as 导入异常:
+    _消息存储 = None
+    logger.warning("消息记录存储模块加载失败：错误类型=%s", type(导入异常).__name__)
+
 消息记录版本 = 1
 最大会话数 = 200
 每会话最大消息数 = 500
@@ -435,8 +443,15 @@ def 记录收到消息(
             "media": _提取媒体字段(内容, 消息),
             "reference_id": 引用ID or "",
             "refidx": 自身REFIDX or "",
+            "chat_type": 类型,
+            "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
         会话["messages"].append(记录)
+        if _消息存储 is not None:
+            try:
+                _消息存储.写入消息(记录)
+            except Exception as 存储异常:
+                logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
         if 内容:
@@ -466,6 +481,11 @@ def _裁剪总缓存() -> None:
             总数 = sum(len(s.get("messages", [])) for s in 消息缓存.values())
     except Exception:
         pass
+    if _消息存储 is not None:
+        try:
+            _消息存储.裁剪总消息(总消息上限 * 2)
+        except Exception:
+            pass
 
 
 def 记录发送消息(
@@ -496,8 +516,15 @@ def 记录发送消息(
             "recalled": False,
             "media": _提取媒体字段(内容),
             "reference_id": 引用ID or "",
+            "chat_type": 类型,
+            "ts": int(time.time()),
         }
         会话["messages"].append(记录)
+        if _消息存储 is not None:
+            try:
+                _消息存储.写入消息(记录)
+            except Exception as 存储异常:
+                logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
         if 内容:
@@ -513,13 +540,19 @@ def 记录发送消息(
 
 def 标记撤回(会话标识: str, 消息ID: str) -> bool:
     会话 = 消息缓存.get(str(会话标识 or "").strip())
-    if not 会话:
-        return False
-    for 记录 in 会话.get("messages", []):
-        if 记录.get("message_id") == 消息ID:
-            记录["recalled"] = True
-            return True
-    return False
+    找到 = False
+    if 会话:
+        for 记录 in 会话.get("messages", []):
+            if 记录.get("message_id") == 消息ID:
+                记录["recalled"] = True
+                找到 = True
+                break
+    if _消息存储 is not None:
+        try:
+            _消息存储.标记消息撤回(会话标识, 消息ID)
+        except Exception:
+            pass
+    return 找到
 
 
 def _读取平台实例列表(上下文: Any) -> list[Any]:
@@ -705,6 +738,15 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
     if not 强制刷新 and _本地缓存内存 is not None and now - _本地缓存时间 < 5.0:
         return _本地缓存内存
     try:
+        if _消息存储 is not None:
+            元数据 = _消息存储.读取全部元数据()
+            if 元数据:
+                _本地缓存内存 = 元数据
+                _本地缓存时间 = now
+                return 元数据
+    except Exception as exc:
+        logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
+    try:
         路径 = _缓存文件路径()
         if 路径.exists():
             with open(路径, "r", encoding="utf-8") as f:
@@ -719,6 +761,18 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
 
 
 def _写入本地缓存文件(数据: dict[str, Any]) -> None:
+    """写入本地缓存：MySQL 可用时逐键写元数据，否则回退 JSON 文件。"""
+    try:
+        if _消息存储 is not None:
+            for 键, 值 in (数据 or {}).items():
+                try:
+                    _消息存储.写入元数据(键, 值)
+                except Exception as 存储异常:
+                    logger.debug("消息记录元数据入库失败：错误类型=%s", type(存储异常).__name__)
+        _本地缓存内存 = 数据
+        _本地缓存时间 = time.time()
+    except Exception as exc:
+        logger.warning("消息记录本地缓存写入失败：错误类型=%s", type(exc).__name__)
     try:
         路径 = _缓存文件路径()
         路径.parent.mkdir(parents=True, exist_ok=True)
@@ -726,10 +780,8 @@ def _写入本地缓存文件(数据: dict[str, Any]) -> None:
         with open(临时, "w", encoding="utf-8") as f:
             json.dump(数据, f, ensure_ascii=False, indent=1)
         临时.replace(路径)
-        _本地缓存内存 = 数据
-        _本地缓存时间 = time.time()
     except Exception as exc:
-        logger.warning("消息记录本地缓存写入失败：错误类型=%s", type(exc).__name__)
+        logger.warning("消息记录本地缓存文件写入失败：错误类型=%s", type(exc).__name__)
 
 
 def 标记群信息待刷新(会话标识: str) -> None:
@@ -847,6 +899,33 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
     return 补查数
 
 
+def _补齐数据库会话到内存() -> None:
+    """把 MySQL 中持久化的会话补回内存，保证置顶/备注会话重启后仍显示。"""
+    if _消息存储 is None:
+        return
+    try:
+        已加载 = False
+        for 会话标识 in _消息存储.读取全部会话标识():
+            会话标识 = str(会话标识 or "").strip()
+            if not 会话标识 or 会话标识 in 消息缓存:
+                continue
+            消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数)
+            if not 消息列表:
+                continue
+            类型 = str(消息列表[-1].get("chat_type") or "group")
+            会话 = _取得会话缓存(会话标识, 类型, str(消息列表[-1].get("appid") or ""))
+            会话["messages"] = 消息列表
+            最后 = 消息列表[-1]
+            会话["last_content"] = str(最后.get("content") or "")
+            会话["last_nickname"] = str(最后.get("nickname") or "")
+            会话["last_ts"] = int(最后.get("ts") or 0)
+            已加载 = True
+        if 已加载:
+            logger.debug("消息记录会话已从数据库补回内存")
+    except Exception as exc:
+        logger.debug("消息记录数据库会话补回失败：错误类型=%s", type(exc).__name__)
+
+
 def 获取聊天列表(
     过滤: str = "all",
     搜索: str = "",
@@ -863,6 +942,7 @@ def 获取聊天列表(
     聊天列表: list[dict[str, Any]] = []
     本地数据 = _读取本地缓存文件()
     本地备注表 = (本地数据.get("remarks") or {})
+    _补齐数据库会话到内存()
     for 会话标识, 会话 in 消息缓存.items():
         类型 = str(会话.get("chat_type") or "group")
         if 过滤 == "group" and 类型 != "group":
@@ -1573,9 +1653,49 @@ def 安装消息记录(上下文: Any = None) -> bool:
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:
+        if _消息存储 is not None:
+            try:
+                _消息存储.设置数据库配置(getattr(上下文, "config", None))
+                _消息存储.初始化数据库()
+                _从数据库恢复()
+            except Exception as 恢复异常:
+                logger.warning("消息记录数据库恢复失败：错误类型=%s", type(恢复异常).__name__)
         _安装消息事件挂钩()
         _安装消息发送挂钩()
         return True
     except Exception as exc:
         logger.warning("消息记录安装失败：错误类型=%s", type(exc).__name__)
         return False
+
+
+def _从数据库恢复() -> None:
+    """启动/重载时从 MySQL 恢复会话与最近消息，置顶/备注/昵称随元数据恢复。"""
+    if _消息存储 is None:
+        return
+    会话标识列表 = _消息存储.读取全部会话标识()
+    if not 会话标识列表:
+        return
+    恢复数 = 0
+    最大序号 = 0
+    for 会话标识 in 会话标识列表:
+        会话标识 = str(会话标识 or "").strip()
+        if not 会话标识 or 会话标识 in 消息缓存:
+            continue
+        消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数)
+        if not 消息列表:
+            continue
+        类型 = str(消息列表[-1].get("chat_type") or "group")
+        会话 = _取得会话缓存(会话标识, 类型, str(消息列表[-1].get("appid") or ""))
+        会话["messages"] = 消息列表
+        最后 = 消息列表[-1]
+        会话["last_content"] = str(最后.get("content") or "")
+        会话["last_nickname"] = str(最后.get("nickname") or "")
+        会话["last_ts"] = int(最后.get("ts") or 0)
+        for 记录 in 消息列表:
+            最大序号 = max(最大序号, int(记录.get("id") or 0))
+        恢复数 += 1
+    global 发送序号
+    if 最大序号 > 发送序号:
+        发送序号 = 最大序号
+    if 恢复数:
+        logger.info("消息记录数据库恢复会话：数量=%s", 恢复数)
