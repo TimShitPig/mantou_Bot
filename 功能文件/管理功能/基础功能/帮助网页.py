@@ -1807,7 +1807,15 @@ _网页主体 = """
             .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
-            .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; }
+            .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; }
+            .msg-media img:hover { transform:scale(1.03); }
+            .msg-lightbox { position:fixed; inset:0; z-index:2000; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; padding:28px; }
+            .msg-lightbox[hidden] { display:none; }
+            .msg-lightbox-inner { position:relative; max-width:100%; max-height:100%; display:flex; flex-direction:column; align-items:center; gap:10px; }
+            .msg-lightbox img { max-width:92vw; max-height:84vh; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.55); object-fit:contain; }
+            .msg-lightbox-close { position:fixed; top:18px; right:22px; width:38px; height:38px; border-radius:50%; border:none; background:rgba(255,255,255,.14); color:#fff; font-size:20px; line-height:38px; text-align:center; cursor:pointer; transition:background .15s ease; }
+            .msg-lightbox-close:hover { background:rgba(255,255,255,.28); }
+            .msg-lightbox-hint { color:rgba(255,255,255,.62); font-size:11px; }
             .msg-meta { margin-top:3px; color:#b0b0b0; font-size:9px; padding-left:2px; }
             .msg-row.self .msg-meta { text-align:right; padding-left:0; padding-right:2px; }
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
@@ -2000,6 +2008,13 @@ _网页主体 = """
       </div>
     </main>
     <div class="msg-ctx" id="msg-ctx" hidden></div>
+    <div class="msg-lightbox" id="msg-lightbox" hidden>
+      <div class="msg-lightbox-inner">
+        <img id="msg-lightbox-img" alt="图片预览" referrerpolicy="no-referrer">
+        <div class="msg-lightbox-hint">点击图片或按 Esc 关闭 · 右键可复制/保存图片</div>
+      </div>
+      <button class="msg-lightbox-close" id="msg-lightbox-close" type="button" title="关闭">&times;</button>
+    </div>
   </div>
   <div id="toast" class="toast" role="status"></div>
 """
@@ -2231,6 +2246,9 @@ _网页脚本 = """
           };
         });
       };
+      $('msg-lightbox-close')?.addEventListener('click', closeMsgLightbox);
+      $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox')) closeMsgLightbox(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
       const loadMsgChats = async () => {
         try { const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})}); renderMsgChats(data); }
         catch (error) { if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
@@ -2268,6 +2286,19 @@ _网页脚本 = """
         $('msg-head-sub').textContent = msgState.chatType === 'group'
           ? `群聊 · ${esc(msgState.chatId)}${gNum > 0 ? ` · 群成员 ${gNum} 人` : ''}`
           : `私聊 · ${esc(msgState.chatId)}`;
+      };
+      const openMsgLightbox = (src) => {
+        if (!src) return;
+        const box = $('msg-lightbox'); const img = $('msg-lightbox-img');
+        img.src = src;
+        box.hidden = false;
+        document.body.style.overflow = 'hidden';
+      };
+      const closeMsgLightbox = () => {
+        const box = $('msg-lightbox'); if (!box || box.hidden) return;
+        box.hidden = true;
+        $('msg-lightbox-img').removeAttribute('src');
+        document.body.style.overflow = '';
       };
       const showMsgCtx = (x, y, items) => {
         const ctx = $('msg-ctx');
@@ -2390,7 +2421,7 @@ _网页脚本 = """
           const ref = (data.references || {})[m.reference_id];
           // 撤回后隐藏引用与媒体，只显示已撤回
           const quote = !recalled && m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const media = !recalled && m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
+          const media = !recalled && m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer" data-lightbox="${esc(m.media.src)}"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
           const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);
@@ -2418,6 +2449,7 @@ _网页脚本 = """
         body.scrollTop = body.scrollHeight;
         body.querySelector('#msg-load-older')?.addEventListener('click', () => loadMsgHistory(true));
         body.querySelectorAll('[data-msg-recall]').forEach((el) => el.addEventListener('click', () => recallMessage(el.dataset.msgRecall)));
+        body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', () => openMsgLightbox(img.dataset.lightbox)));
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => { msgState.quote = {id:el.dataset.msgQuote, text:el.dataset.msgName || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${el.dataset.msgName} · 引用`; }));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));

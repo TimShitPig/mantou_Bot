@@ -112,6 +112,22 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+        # 表结构自修复：旧表可能为 utf8（无法存 emoji）或缺新列，转为 utf8mb4 并补齐
+        try:
+            游标.execute(f"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{消息记录表名}' AND COLUMN_NAME = 'content'")
+            行 = 游标.fetchone()
+            if 行 and str(行[0] or "").lower() != "utf8mb4":
+                游标.execute(f"ALTER TABLE `{消息记录表名}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+                连接.commit()
+                logger.warning("消息记录 MySQL 表已转为 utf8mb4")
+            for 列名, 定义 in (("refidx", "VARCHAR(128) DEFAULT ''"), ("recalled", "TINYINT DEFAULT 0"), ("reference_id", "VARCHAR(128) DEFAULT ''"), ("media", "TEXT"), ("source", "VARCHAR(32) DEFAULT ''")):
+                游标.execute(f"SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{消息记录表名}' AND COLUMN_NAME = '{列名}'")
+                if int(游标.fetchone()[0] or 0) == 0:
+                    游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
+                    连接.commit()
+                    logger.warning("消息记录 MySQL 表已补列 %s", 列名)
+        except Exception as 修复异常:
+            logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
         连接.commit()
         return True
     except Exception as exc:
@@ -150,7 +166,11 @@ def _写入消息记录(记录: dict[str, Any]) -> None:
             )
         连接.commit()
     except Exception as exc:
-        logger.warning("消息记录 MySQL 写入失败：错误类型=%s", type(exc).__name__)
+        logger.warning(
+            "消息记录 MySQL 写入失败：错误类型=%s，详情=%s",
+            type(exc).__name__,
+            str(exc)[:300],
+        )
     finally:
         _关闭连接(连接)
 
@@ -200,7 +220,7 @@ def 读取会话消息(会话标识: str, 上限: int = 500) -> list[dict[str, A
                 (str(会话标识 or ""), 上限),
             )
             行列表 = 游标.fetchall()
-        return [_行转记录(dict(行)) for 行 in 行列表]
+        return [_行转记录(行) for 行 in 行列表]
     except Exception as exc:
         logger.warning("消息记录 MySQL 读取失败：错误类型=%s", type(exc).__name__)
         return []
@@ -217,7 +237,7 @@ def 读取全部会话标识() -> list[str]:
     try:
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT DISTINCT 会话标识 FROM `{消息记录表名}`")
-            return [str(行["会话标识"]) for 行 in 游标.fetchall() if 行["会话标识"]]
+            return [str(行[0]) for 行 in 游标.fetchall() if 行 and 行[0]]
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话列表读取失败：错误类型=%s", type(exc).__name__)
         return []
@@ -235,7 +255,7 @@ def 裁剪总消息(上限: int) -> None:
     try:
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT COUNT(*) AS c FROM `{消息记录表名}`")
-            总数 = int(游标.fetchone()["c"])
+            总数 = int(游标.fetchone()[0])
             if 总数 > 上限:
                 需要删 = 总数 - 上限
                 游标.execute(
@@ -264,7 +284,7 @@ def 读取元数据(key: str, 默认值: Any = None) -> Any:
             )
             行 = 游标.fetchone()
         if 行:
-            return json.loads(str(行["state_value"]))
+            return json.loads(str(行[0]))
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
     finally:
@@ -306,7 +326,7 @@ def 读取全部元数据() -> dict[str, Any]:
                 (元数据命名空间,),
             )
             for 行 in 游标.fetchall():
-                结果[str(行["state_key"])] = json.loads(str(行["state_value"]))
+                结果[str(行[0])] = json.loads(str(行[1]))
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据批量读取失败：错误类型=%s", type(exc).__name__)
     finally:
@@ -314,26 +334,32 @@ def 读取全部元数据() -> dict[str, Any]:
     return 结果
 
 
-def _行转记录(行: dict[str, Any]) -> dict[str, Any]:
+def _行转记录(行: Any) -> dict[str, Any]:
+    """MySQL 行转消息记录；兼容元组游标（默认）与字典游标。列顺序见建表语句。"""
+    def 取值(索引: int, 默认值: str = "") -> str:
+        if isinstance(行, dict):
+            return str(行.get(索引) if 行.get(索引) is not None else 默认值)
+        return str(行[索引] if 索引 < len(行) and 行[索引] is not None else 默认值)
+
     try:
-        媒体 = json.loads(str(行.get("media") or "{}"))
+        媒体 = json.loads(取值(13, "{}"))
     except Exception:
         媒体 = {}
     return {
-        "id": int(行.get("id") or 0),
-        "message_id": str(行.get("message_id") or ""),
-        "user_id": str(行.get("user_id") or ""),
-        "_session": str(行.get("会话标识") or ""),
-        "appid": str(行.get("appid") or ""),
-        "nickname": str(行.get("nickname") or ""),
-        "content": str(行.get("content") or ""),
-        "timestamp": str(行.get("timestamp") or ""),
-        "ts": int(行.get("ts") or 0),
-        "is_self": bool(行.get("is_self")),
-        "source": str(行.get("source") or ""),
-        "recalled": bool(行.get("recalled")),
+        "id": int(取值(0, "0") or 0),
+        "message_id": 取值(4),
+        "user_id": 取值(5),
+        "_session": 取值(1),
+        "appid": 取值(3),
+        "nickname": 取值(6),
+        "content": 取值(7),
+        "timestamp": 取值(8),
+        "ts": int(取值(9, "0") or 0),
+        "is_self": bool(取值(10, "0")),
+        "source": 取值(11),
+        "recalled": bool(取值(12, "0")),
         "media": 媒体 or None,
-        "reference_id": str(行.get("reference_id") or ""),
-        "refidx": str(行.get("refidx") or ""),
-        "raw_message": str(行.get("raw_message") or ""),
+        "reference_id": 取值(14),
+        "refidx": 取值(15),
+        "raw_message": 取值(16),
     }
