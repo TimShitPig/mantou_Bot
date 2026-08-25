@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.44.14"
+控制台版本 = "5.45.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1635,7 +1635,7 @@ _网页主体 = """
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.44.14</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.45.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small></div></div></div>
     </header>
     <aside class="sidebar">
@@ -1840,8 +1840,11 @@ _网页主体 = """
             .msg-row.multi-mode { cursor:pointer; }
             .msg-row.multi-mode .msg-avatar, .msg-row.multi-mode .msg-bubble { opacity:.85; }
             .msg-row.multi-mode.selected .msg-bubble { outline:2px solid #12b7f5; outline-offset:2px; }
-            .msg-row.multi-mode .msg-multi-check { position:absolute; left:-14px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
+            .msg-pos { position:relative; display:inline-flex; flex:0 0 auto; }
+            .msg-multi-check { display:none; }
+            .msg-row.multi-mode .msg-multi-check { display:grid; position:absolute; left:-16px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
             .msg-row.multi-mode.selected .msg-multi-check { border-color:#12b7f5; background:#12b7f5; }
+            .msg-row.self.multi-mode .msg-multi-check { left:auto; right:-16px; }
             .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
             .msg-pos { position:relative; }
             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
@@ -2123,7 +2126,7 @@ _网页脚本 = """
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
-        node.querySelectorAll('[data-msg-chat]').forEach((el) => el.addEventListener('click', () => { msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); renderMsgChats({chats}); }));
+        node.querySelectorAll('[data-msg-chat]').forEach((el) => el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); renderMsgChats({chats}); }));
       };
       const loadMsgChats = async () => {
         try { const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})}); renderMsgChats(data); }
@@ -2157,6 +2160,72 @@ _网页脚本 = """
         $('msg-head-sub').textContent = msgState.chatType === 'group'
           ? `群聊 · ${esc(msgState.chatId)}${gNum > 0 ? ` · 群成员 ${gNum} 人` : ''}`
           : `私聊 · ${esc(msgState.chatId)}`;
+      };
+      const showMsgCtx = (x, y, items) => {
+        const ctx = $('msg-ctx');
+        ctx.innerHTML = items.map((it) => it.sep ? '<div class="msg-ctx-sep"></div>' : `<button class="msg-ctx-item${it.danger ? ' danger' : ''}" type="button">${esc(it.label)}</button>`).join('');
+        ctx.hidden = false;
+        const pad = 8;
+        const rect = ctx.getBoundingClientRect();
+        const left = Math.min(x, window.innerWidth - rect.width - pad);
+        const top = Math.min(y, window.innerHeight - rect.height - pad);
+        ctx.style.left = left + 'px';
+        ctx.style.top = top + 'px';
+        ctx.querySelectorAll('.msg-ctx-item').forEach((btn, idx) => {
+          const item = items.filter((it) => !it.sep)[idx];
+          btn.addEventListener('click', () => { hideMsgCtx(); if (item && item.action) item.action(); });
+        });
+      };
+      const hideMsgCtx = () => { $('msg-ctx').hidden = true; $('msg-ctx').innerHTML = ''; };
+      document.addEventListener('click', (e) => { if (!$('msg-ctx').contains(e.target)) hideMsgCtx(); });
+      document.addEventListener('contextmenu', (e) => { if (!$('msg-ctx').contains(e.target)) hideMsgCtx(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMsgCtx(); });
+      const atMember = (uid, nick) => {
+        if (!uid) return;
+        // QQ 官方群聊提及只支持 Markdown 消息，自动切换到 Markdown 类型
+        if (msgState.sendType !== 'markdown' && msgState.sendType !== 'text') { toast('请先切换到文本或 Markdown 类型再 @ 成员'); return; }
+        if (msgState.sendType !== 'markdown') {
+          msgState.sendType = 'markdown';
+          $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
+          renderMsgExtra();
+        }
+        const ta = $('msg-textarea');
+        ta.focus();
+        const mention = `<@${uid}> `;
+        const start = ta.selectionStart ?? ta.value.length;
+        ta.value = ta.value.slice(0, start) + mention + ta.value.slice(ta.selectionEnd ?? start);
+        ta.selectionStart = ta.selectionEnd = start + mention.length;
+        ta.dispatchEvent(new Event('input'));
+        toast(`已插入 @${nick || uid}（将以 Markdown 发送）`);
+      };
+      const copyMsgText = async (text) => {
+        try { await navigator.clipboard.writeText(text); toast('已复制'); }
+        catch (error) { toast('复制失败：' + error.message); }
+      };
+      const enterMultiMode = () => {
+        msgState.multi = true; msgState.selected.clear();
+        $('msg-multi-bar').hidden = false;
+        $('msg-multi-count').textContent = '已选 0 条';
+        $('msg-body').classList.add('multi-mode');
+        $('msg-body').querySelectorAll('.msg-row').forEach((row) => row.classList.add('multi-mode'));
+      };
+      const exitMultiMode = () => {
+        msgState.multi = false; msgState.selected.clear();
+        $('msg-multi-bar').hidden = true;
+        $('msg-body').classList.remove('multi-mode');
+        $('msg-body').querySelectorAll('.msg-row').forEach((row) => { row.classList.remove('multi-mode'); row.classList.remove('selected'); });
+      };
+      const recallSelected = async () => {
+        const ids = [...msgState.selected];
+        if (!ids.length) return toast('请先选择要撤回的消息');
+        if (!confirm(`确定撤回选中的 ${ids.length} 条消息吗？发送超过 2 分钟的消息不可撤回。`)) return;
+        let okCount = 0; let failCount = 0;
+        for (const id of ids) {
+          try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:id})}); okCount++; }
+          catch (error) { failCount++; }
+        }
+        toast(`撤回完成：成功 ${okCount} 条${failCount ? `，失败 ${failCount} 条` : ''}`);
+        exitMultiMode(); loadMsgHistory();
       };
       const renderMsgMessages = (data) => {
         const body = $('msg-body'); const msgs = data.messages || [];
@@ -2200,8 +2269,12 @@ _网页脚本 = """
           if (!isSelf && msgState.chatType === 'group' && m.user_id) actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(m.nickname||'')}" type="button">禁言</button>`);
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}">
-            <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
+          const isSelected = msgState.selected.has(m.message_id);
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(m.nickname||'')}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-content="${esc(m.content || '')}">
+            <span class="msg-pos">
+              <span class="msg-multi-check"></span>
+              <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
+            </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(m.nickname||'')}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${esc(content)}${media}</div>
               <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
@@ -2215,6 +2288,52 @@ _网页脚本 = """
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => { msgState.quote = {id:el.dataset.msgQuote, text:el.dataset.msgName || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${el.dataset.msgName} · 引用`; }));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
+        body.querySelectorAll('.msg-row').forEach((row) => {
+          row.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const mid = row.dataset.msgMid;
+            const uid = row.dataset.msgUid;
+            const nick = row.dataset.msgNick;
+            const isSelf = row.dataset.msgSelf === '1';
+            const recalled = row.dataset.msgRecalled === '1';
+            const content = row.dataset.msgContent || '';
+            if (msgState.multi) {
+              toggleMsgSelect(row, mid);
+              return;
+            }
+            const items = [];
+            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
+            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (items.length && !isSelf) items.push({sep:true});
+            if (!isSelf && msgState.chatType === 'group' && mid) items.push({label:'引用', action:() => { msgState.quote = {id:mid, text:nick || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${nick} · 引用`; }});
+            if (content) items.push({label:'复制', action:() => copyMsgText(content)});
+            if (!isSelf && !recalled && mid) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
+            if (mid) items.push({sep:true});
+            items.push({label:'多选', action:() => { enterMultiMode(); toggleMsgSelect(row, mid); }});
+            if (items.length) showMsgCtx(e.clientX, e.clientY, items);
+          });
+          row.addEventListener('click', (e) => {
+            if (msgState.multi && !e.target.closest('button')) toggleMsgSelect(row, row.dataset.msgMid);
+          });
+          row.querySelector('.msg-avatar')?.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const uid = row.dataset.msgUid;
+            const nick = row.dataset.msgNick;
+            const isSelf = row.dataset.msgSelf === '1';
+            if (msgState.multi) return;
+            const items = [];
+            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
+            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (items.length) showMsgCtx(e.clientX, e.clientY, items);
+          });
+        });
+      };
+      const toggleMsgSelect = (row, mid) => {
+        if (!mid) return;
+        if (msgState.selected.has(mid)) { msgState.selected.delete(mid); row.classList.remove('selected'); }
+        else { msgState.selected.add(mid); row.classList.add('selected'); }
+        $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
       const loadMsgHistory = async (older = false, quiet = false) => {
         if (!msgState.chatId) return;
@@ -2341,6 +2460,8 @@ _网页脚本 = """
       });
       $('msg-img-clear').addEventListener('click', () => { msgState.pastedImage = null; $('msg-img-preview').hidden = true; $('msg-img-thumb').removeAttribute('src'); });
       $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
+      $('msg-multi-recall').addEventListener('click', recallSelected);
+      $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       $('msg-quote-clear').addEventListener('click', () => { msgState.quote = null; $('msg-quote-preview').hidden = true; });
