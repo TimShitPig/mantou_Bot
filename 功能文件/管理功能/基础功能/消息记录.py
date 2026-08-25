@@ -70,9 +70,10 @@ def _转数字时间戳(时间戳: Any) -> int | None:
     try:
         from datetime import datetime as _日期类
 
-        if len(文本) >= 19 and 文本[4] == "-" and 文本[10] == "T":
+        if len(文本) >= 19 and 文本[4] == "-" and 文本[10] in ("T", " "):
             核心 = 文本[:19]
-            解析 = _日期类.strptime(核心, "%Y-%m-%dT%H:%M:%S")
+            格式 = "%Y-%m-%dT%H:%M:%S" if 文本[10] == "T" else "%Y-%m-%d %H:%M:%S"
+            解析 = _日期类.strptime(核心, 格式)
             return int(解析.timestamp())
     except (ValueError, TypeError):
         pass
@@ -990,10 +991,10 @@ async def 发送消息(
     elif 发送方式 == "custom_event_id":
         被动ID = ""
     elif 发送方式 == "passive":
-        被动ID = 最近消息ID or 近期消息ID
+        被动ID = 近期消息ID or 最近消息ID
     else:
-        # 默认：优先被动发送（带近期 msg_id，普通群可用）；无近期消息时全量群尝试主动推送
-        被动ID = 近期消息ID or 最近消息ID or ""
+        # 默认：仅用 2 分钟时效内的近期 msg_id 被动发送；无近期消息时尝试主动推送（全量群可用）
+        被动ID = 近期消息ID or ""
     if 类型 == "group" and 发送方式 == "default" and not 被动ID:
         return {"ok": False, "message": "发送失败：该群最近没有收到新消息，无法主动发送。请先在群里发一条消息后 2 分钟内重试，或确认该群已开启全量消息接收。"}
     事件ID = 自定义ID if 发送方式 == "custom_event_id" else ""
