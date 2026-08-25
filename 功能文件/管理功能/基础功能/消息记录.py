@@ -1346,7 +1346,11 @@ async def 发送消息(
             if 事件ID:
                 文本消息体["event_id"] = 事件ID
             try:
-                await _http.request(route, json=文本消息体)
+                文本结果 = await _http.request(route, json=文本消息体)
+                文本ID = ""
+                if isinstance(文本结果, dict):
+                    文本ID = str(文本结果.get("id") or "")
+                记录发送消息(会话标识, 会话类型 or "group", 内容, appid, 消息ID=文本ID, 引用ID=引用消息ID)
             except Exception as 文本异常:
                 logger.warning("消息记录图片附带文本发送失败：错误类型=%s", type(文本异常).__name__)
     except Exception as exc:
@@ -1370,8 +1374,10 @@ async def 发送消息(
                 if isinstance(结果, dict) and 结果.get("id"):
                     响应ID = str(结果.get("id") or "")
                     展示内容 = 内容
+                    if 消息体.get("msg_type") == 7 and 图片字节 is not None:
+                        展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
                     if 类型 == "media":
-                        展示内容 = f"[媒体] {展示内容}"
+                        展示内容 = "[媒体]"
                     elif 类型 == "ark":
                         展示内容 = "[ARK卡片] " + 展示内容
                     elif 类型 == "card":
@@ -1398,8 +1404,10 @@ async def 发送消息(
     elif 结果 is not None:
         响应ID = str(getattr(结果, "id", None) or "")
     展示内容 = 内容
+    if 消息体.get("msg_type") == 7 and 图片字节 is not None:
+        展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
     if 类型 == "media":
-        展示内容 = f"[媒体] {展示内容}"
+        展示内容 = "[媒体]"
     elif 类型 == "ark":
         展示内容 = "[ARK卡片] " + 展示内容
     elif 类型 == "card":
