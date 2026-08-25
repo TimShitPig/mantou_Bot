@@ -299,6 +299,7 @@ def _记录成员资料(
 
 
 _后台补查任务: list[Any] = []
+_用户详情接口不可用 = False
 
 
 def _昵称需要补查(会话标识: str, 会话: dict[str, Any] | None) -> bool:
@@ -311,6 +312,19 @@ def _昵称需要补查(会话标识: str, 会话: dict[str, Any] | None) -> boo
     if 会话标识 and 昵称 == 会话标识:
         return True
     return False
+
+
+def _私聊兜底昵称(会话标识: str) -> str:
+    """私聊昵称无法从 QQ 官方事件/接口获取时，用 Elaina 同款可读兜底名。"""
+    try:
+        标识 = str(会话标识 or "").strip()
+        if not 标识:
+            return "未知用户"
+        if len(标识) > 6:
+            return "用户" + 标识[-6:]
+        return "用户" + 标识
+    except Exception:
+        return "未知用户"
 
 
 def _保存本地昵称(会话标识: str, 昵称: str) -> None:
@@ -328,8 +342,13 @@ def _保存本地昵称(会话标识: str, 昵称: str) -> None:
 
 
 async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str = "") -> None:
-    """私聊昵称消息事件不含，调用 QQ 官方用户详情接口补查并回写缓存。"""
-    if not 用户标识:
+    """私聊昵称消息事件不含，尝试调用 QQ 官方用户详情接口补查并回写缓存。
+
+    QQ 官方开放平台目前未提供该接口（路径不存在返回 404），
+    首次失败后标记接口不可用，避免每次收到私聊消息都重复请求。
+    """
+    global _用户详情接口不可用
+    if not 用户标识 or _用户详情接口不可用:
         return
     try:
         from botpy.http import Route
@@ -355,7 +374,12 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
                 资料[用户标识] = 旧资料
         _保存本地昵称(会话标识, 昵称)
     except Exception as exc:
-        logger.warning("私聊昵称补查失败：错误类型=%s", type(exc).__name__)
+        名称 = type(exc).__name__
+        if 名称 in ("NotFoundError", "Not Found", "NotFound"):
+            _用户详情接口不可用 = True
+            logger.info("QQ 官方未提供用户详情接口，私聊昵称改用兜底显示")
+        else:
+            logger.warning("私聊昵称补查失败：错误类型=%s", 名称)
 
 
 def 记录收到消息(
@@ -401,7 +425,7 @@ def 记录收到消息(
             "user_id": 成员标识,
             "_session": 会话标识,
             "appid": str(appid or 会话.get("appid") or ""),
-            "nickname": 昵称 or "未知用户",
+            "nickname": 昵称 or (_私聊兜底昵称(会话标识) if 类型 == "user" else "未知用户"),
             "content": 内容,
             "timestamp": _格式化时间戳(时间戳),
             "is_self": bool(is_self),
@@ -790,6 +814,7 @@ def _聊天显示名(会话标识: str, 会话: dict[str, Any]) -> str:
         本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
         if 本地昵称:
             return 本地昵称
+        return _私聊兜底昵称(会话标识)
     return 会话标识
 
 
@@ -813,7 +838,9 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
                 if 会话:
                     会话["last_nickname"] = 本地昵称
                 continue
-            await _补查用户昵称(会话标识, 会话标识, str(聊天.get("appid") or ""))
+            兜底 = _私聊兜底昵称(会话标识)
+            if 会话 and (not str(会话.get("last_nickname") or "").strip() or "未知" in str(会话.get("last_nickname") or "")):
+                会话["last_nickname"] = 兜底
             补查数 += 1
     except Exception as exc:
         logger.warning("私聊昵称批量补查失败：错误类型=%s", type(exc).__name__)
