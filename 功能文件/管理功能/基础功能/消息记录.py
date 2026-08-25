@@ -265,8 +265,17 @@ def _提取成员标识(消息: Any, 类型: str) -> str:
 
 
 def _提取成员昵称(消息: Any) -> str:
-    作者 = _读取字段(消息, "author")
-    return str(_读取字段(作者, "username") or "").strip()
+    """从 QQ 官方消息提取昵称；事件消息通常不含 username，仅作兜底。"""
+    作者 = _读取字段(消息, "author") or {}
+    for 字段 in ("username", "member_name", "nickname", "user_name", "name"):
+        昵称 = str(_读取字段(作者, 字段) or "").strip()
+        if 昵称:
+            return 昵称
+    for 字段 in ("username", "member_name", "nickname", "dear_remark", "user_name", "name"):
+        昵称 = str(_读取字段(消息, 字段) or "").strip()
+        if 昵称:
+            return 昵称
+    return ""
 
 
 def _记录成员资料(
@@ -287,6 +296,37 @@ def _记录成员资料(
         会话资料[成员标识]["is_bot"] = bool(是机器人)
         if 角色:
             会话资料[成员标识]["role"] = str(角色 or "")
+
+
+async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str = "") -> None:
+    """私聊昵称消息事件不含，调用 QQ 官方用户详情接口补查并回写缓存。"""
+    if not 用户标识:
+        return
+    try:
+        from botpy.http import Route
+
+        平台实例 = 获取QQ官方平台()
+        通道 = 获取HTTP通道(平台实例)
+        if 通道 is None:
+            return
+        _api, _http = 通道
+        结果 = await _http.request(Route("GET", "/v2/users/{openid}", openid=用户标识))
+        数据 = 结果 if isinstance(结果, dict) else (getattr(结果, "data", None) or {})
+        昵称 = str(_读取字段(数据, "username") or "").strip()
+        if not 昵称:
+            return
+        会话 = 消息缓存.get(str(会话标识 or "").strip())
+        if not 会话:
+            return
+        if not str(会话.get("last_nickname") or "").strip() or "未知" in str(会话.get("last_nickname") or ""):
+            会话["last_nickname"] = 昵称
+        资料 = 成员资料缓存.setdefault(str(会话标识 or "").strip(), {})
+        旧资料 = 资料.get(用户标识) or {}
+        if not str(旧资料.get("nickname") or "").strip():
+            旧资料["nickname"] = 昵称
+            资料[用户标识] = 旧资料
+    except Exception as exc:
+        logger.warning("私聊昵称补查失败：错误类型=%s", type(exc).__name__)
 
 
 def 记录收到消息(
@@ -330,6 +370,7 @@ def 记录收到消息(
             "id": 发送序号,
             "message_id": 消息ID,
             "user_id": 成员标识,
+            "_session": 会话标识,
             "appid": str(appid or 会话.get("appid") or ""),
             "nickname": 昵称 or "未知用户",
             "content": 内容,
@@ -1288,7 +1329,17 @@ def _安装消息事件挂钩() -> bool:
             try:
                 _安装消息发送挂钩()
                 appid = str(_读取字段(_读取字段(self, "platform"), "appid") or "")
-                记录收到消息(消息, _类型, appid)
+                记录 = 记录收到消息(消息, _类型, appid)
+                if _类型 == "user" and 记录:
+                    from botpy.http import Route as _Route
+
+                    用户标识 = str(记录.get("user_id") or "").strip()
+                    会话标识 = str(记录.get("_session") or "").strip()
+                    if 用户标识 and 会话标识:
+                        try:
+                            asyncio.get_event_loop().create_task(_补查用户昵称(会话标识, 用户标识, appid))
+                        except Exception:
+                            pass
             except Exception as exc:
                 logger.warning("消息记录事件缓存失败：错误类型=%s", type(exc).__name__)
             结果 = _原(self, 消息)
