@@ -29,6 +29,8 @@ except Exception as 导入异常:
 每会话最大消息数 = 500
 总消息上限 = 10000
 当前插件上下文: Any = globals().get("当前插件上下文")
+当前插件配置: Any = globals().get("当前插件配置")
+自己发送消息ID: dict[str, float] = globals().get("自己发送消息ID") or {}
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
@@ -284,6 +286,19 @@ def _提取成员昵称(消息: Any) -> str:
     return ""
 
 
+def _是管理员本人(成员标识: str) -> bool:
+    """管理员本人在群/私聊发的消息不计未读红点（QQ 号平台可匹配；QQ 官方 openid 无法反查 QQ 号时兜底返回 False）。"""
+    if not 成员标识:
+        return False
+    try:
+        from 功能文件.管理功能.基础功能.权限工具 import 获取群文件清理管理员QQ列表
+
+        管理员列表 = 获取群文件清理管理员QQ列表(当前插件配置)
+        return str(成员标识).strip() in 管理员列表
+    except Exception:
+        return False
+
+
 def _记录成员资料(
     会话标识: str,
     成员标识: str,
@@ -401,6 +416,8 @@ def 记录收到消息(
     try:
         会话标识 = ""
         消息ID = str(_读取字段(消息, "id") or "").strip()
+        回显自己 = bool(消息ID) and 消息ID in 自己发送消息ID
+        is_self = bool(is_self) or 回显自己
         内容 = _提取消息文本(_读取字段(消息, "content"))
         if 类型 == "user":
             会话标识 = _提取成员标识(消息, "user")
@@ -449,7 +466,7 @@ def 记录收到消息(
         )
         if not 已存在:
             会话["messages"].append(记录)
-            if not is_self and not 是机器人:
+            if not is_self and not 是机器人 and not _是管理员本人(成员标识):
                 会话["unread"] = int(会话.get("unread") or 0) + 1
         elif not is_self:
             # 同 message_id 但非回推（如重复事件）：仍追加，避免丢失真实消息
@@ -528,6 +545,14 @@ def 记录发送消息(
             "ts": int(time.time()),
         }
         会话["messages"].append(记录)
+        if 消息ID:
+            自己发送消息ID[str(消息ID)] = time.time()
+            try:
+                if len(自己发送消息ID) > 500:
+                    for 键 in [k for k, v in 自己发送消息ID.items() if time.time() - v > 300]:
+                        自己发送消息ID.pop(键, None)
+            except Exception:
+                pass
         if _消息存储 is not None:
             try:
                 _消息存储.写入消息(记录)
@@ -1801,6 +1826,8 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
         if _消息存储 is not None:
             try:
                 插件配置 = 配置 if 配置 is not None else getattr(上下文, "config", None)
+                global 当前插件配置
+                当前插件配置 = 插件配置
                 _消息存储.设置数据库配置(插件配置)
                 _消息存储.初始化数据库()
                 _从数据库恢复()
