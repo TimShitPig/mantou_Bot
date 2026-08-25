@@ -44,6 +44,12 @@ USER_ID = "6226157280"
 整本下载盐值 = "37e81a9d8f02596e1b895d07c171d5c9"
 整本下载目录URL = "https://ocean.shuqireader.com/api/bcspub/openapi/book/chapterlist"
 整本下载地址URL = "https://ocean.shuqireader.com/api/bcspub/qsandapi/chapter/downurl"
+App目录URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
+App书评列表URL = "https://ocean.shuqireader.com/api/interact/comment/book/list"
+App下载批次URL = "https://ocean.shuqireader.com/api/jspend/api/downloadbatch/index"
+App免费下载URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/freedownurl"
+自动VIP搜索词 = ("剑来", "凡人修仙传", "斗破苍穹")
+自动VIP回退书 = ("7106468",)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
 SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
 SUGGEST_URL = "https://ocean.shuqireader.com/sqan/render/render/search/findSuggest"
@@ -62,6 +68,9 @@ SEARCH_NO_SIGN_KEYS = {
     "X-NEBULAXMLHTTPREQUEST",
     "callbackUrl",
 }
+# 自动获取的年费 VIP 用户 ID 缓存：只在失效时重新扫描书评获取
+_VIP用户ID缓存: dict[str, Any] = {}
+_VIP用户ID锁: asyncio.Lock | None = None
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -127,7 +136,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
-                f"章节数={len(书籍.chapters)}, 模式=整本压缩包, 请求次数=2, 来源=download_shuqi.php"
+                f"章节数={len(书籍.chapters)}, 模式=VIP批量包优先, 回退=整本压缩包"
             )
             yield 格式化下载提示(书籍)
 
@@ -387,7 +396,7 @@ async def 获取书籍(
     session: aiohttp.ClientSession, 书籍编号: str, 是否短篇: bool = False
 ) -> Book:
     时间戳 = str(int(time.time()))
-    目录任务 = 请求JSON(
+    响应 = await 请求JSON(
         session,
         整本下载目录URL,
         params={
@@ -400,15 +409,20 @@ async def 获取书籍(
             ).hexdigest(),
         },
     )
-    下载地址任务 = 获取整本下载地址(session, str(书籍编号), 时间戳)
-    响应, 下载地址 = await asyncio.gather(目录任务, 下载地址任务)
     书籍 = 解析目录响应(书籍编号, 响应, 是否短篇)
-    书籍.raw["_archive_url"] = re.sub(
-        r"try_\d+",
-        f"try_{书籍.chapter_num or len(书籍.chapters)}",
-        下载地址,
-        flags=re.I,
-    )
+    try:
+        下载地址 = await 获取整本下载地址(session, str(书籍编号), 时间戳)
+        书籍.raw["_archive_url"] = re.sub(
+            r"try_\d+",
+            f"try_{书籍.chapter_num or len(书籍.chapters)}",
+            下载地址,
+            flags=re.I,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"书旗整本下载地址获取失败（不影响 VIP 下载）：书籍={书籍编号}, 错误={exc}"
+        )
+        书籍.raw["_archive_url"] = ""
     return 书籍
 
 
@@ -458,39 +472,6 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
         raw=数据,
         is_short=是否短篇,
     )
-
-
-async def 下载全部章节(
-    session: aiohttp.ClientSession, 书籍: Book
-) -> list[dict[str, str]]:
-    总数 = len(书籍.chapters)
-    下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
-    if not 总数 or not 下载地址:
-        return []
-    logger.info(
-        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度=0/{总数}, "
-        "百分比=0%, 模式=整本压缩包, 请求次数=1"
-    )
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept-Encoding": "gzip",
-    }
-    try:
-        async with session.get(下载地址, headers=headers, allow_redirects=True) as resp:
-            if resp.status >= 400:
-                raise ShuqiError(f"整本下载 HTTP {resp.status}")
-            压缩包 = await resp.read()
-    except ShuqiError:
-        raise
-    except Exception as exc:
-        raise ShuqiError("整本下载请求失败") from exc
-
-    章节内容 = await asyncio.to_thread(解析书旗压缩包, 压缩包, 书籍)
-    logger.info(
-        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度={总数}/{总数}, "
-        f"百分比=100%, 成功={总数}, 失败=0"
-    )
-    return 章节内容
 
 
 def m9en(明文: str) -> bytes:
@@ -562,6 +543,515 @@ def m9r(密文: bytes) -> bytes | None:
     if 密文[-2:] != bytes((校验 ^ 状态[0], 校验 ^ 状态[1])):
         return None
     return bytes(输出)
+
+
+
+# ================= 自动获取年费 VIP UID =================
+
+def _获取VIP锁() -> asyncio.Lock:
+    global _VIP用户ID锁
+    if _VIP用户ID锁 is None:
+        _VIP用户ID锁 = asyncio.Lock()
+    return _VIP用户ID锁
+
+
+def 清除书旗VIP用户ID缓存() -> None:
+    _VIP用户ID缓存.pop("uid", None)
+
+
+def _构造App公共参数(user_id: str = USER_ID) -> dict[str, str]:
+    return {
+        "soft_id": "1",
+        "user_id": user_id,
+        "userId": user_id,
+        "ver": SEARCH_VERSION_CODE,
+        "subVer": SEARCH_SUB_VERSION,
+        "appVer": SEARCH_VERSION_NAME,
+        "theme": "day",
+        "platform": "0",
+        "placeid": "",
+        "sdk": "",
+        "cpu": "",
+        "pkg_cpu": "",
+        "wh": "1440x2560",
+        "msv": "3",
+        "enc": _搜索编码值(),
+        "vc": "",
+        "mod": "SM-S9260",
+        "manufacturer": "samsung",
+        "brand": "Samsung",
+        "net_type": "wifi",
+        "net_type_str": "wifi",
+        "first_placeid": "",
+        "aak": "",
+        "utype": "",
+        "net": "4",
+        "net_env": "4",
+        "permissionType": "",
+        "personalized": "1",
+        "contentRecom": "1",
+        "scene_code": "",
+        "rom": "9",
+    }
+
+
+def _构造App公共参数字符串(user_id: str = USER_ID, platform: str = "an") -> str:
+    参数 = _构造App公共参数(user_id)
+    参数["platform"] = platform
+    return urllib.parse.urlencode(参数)
+
+
+async def _请求App签名接口(
+    session: aiohttp.ClientSession,
+    url: str,
+    业务参数: dict[str, Any],
+    *,
+    user_id: str = USER_ID,
+    用公共字段: bool = False,
+    platform: str = "an",
+) -> dict[str, Any]:
+    if 用公共字段:
+        参数: dict[str, Any] = _构造App公共参数(user_id)
+        参数.update({str(k): "" if v is None else str(v) for k, v in 业务参数.items()})
+        参数["isTeenMode"] = "0"
+    else:
+        参数 = {"_public": _构造App公共参数字符串(user_id, platform)}
+        参数.update({str(k): "" if v is None else str(v) for k, v in 业务参数.items()})
+        参数["isTeenMode"] = "0"
+    参数["_reqid"] = _搜索请求ID()
+    headers = {
+        "User-Agent": SEARCH_USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    async with session.post(url, data=_搜索签名参数(参数), headers=headers) as resp:
+        文本 = await resp.text(errors="ignore")
+        if resp.status >= 400:
+            raise ShuqiError(f"App 接口 HTTP {resp.status}")
+    try:
+        数据 = json.loads(文本) if 文本 else {}
+    except Exception as exc:
+        raise ShuqiError("App 接口未返回 JSON") from exc
+    if not isinstance(数据, dict):
+        raise ShuqiError("App 接口数据格式异常")
+    return 数据
+
+
+async def 获取App目录(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    *,
+    user_id: str = USER_ID,
+) -> dict[str, Any]:
+    业务参数 = {
+        "bookId": str(书籍编号),
+        "timestamp": str(int(time.time() * 1000)),
+        "reqEncryptType": "-1",
+        "resEncryptType": "-1",
+        "placeid": "",
+        "apv": SEARCH_VERSION_NAME,
+    }
+    数据 = await _请求App签名接口(
+        session, App目录URL, 业务参数, user_id=user_id, 用公共字段=True
+    )
+    状态 = str(数据.get("state") or 数据.get("status"))
+    if 状态 and 状态 != "200":
+        raise ShuqiError(f"App 目录接口异常：state={状态}")
+    目录 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+    if not 目录:
+        raise ShuqiError("App 目录接口 data 为空")
+    return 目录
+
+
+def _书评页参数(
+    书籍编号: str,
+    *,
+    author_id: str = "",
+    item_index: int = 0,
+    size: int = 50,
+    sort: int = 1,
+) -> dict[str, str]:
+    return {
+        "userId": USER_ID,
+        "authorId": author_id,
+        "bookId": str(书籍编号),
+        "chapterId": "",
+        "paragraphId": "",
+        "itemIndex": str(max(0, item_index)),
+        "size": str(max(1, size)),
+        "sort": str(sort),
+        "type": str(sort),
+        "filterCommentIds": "",
+    }
+
+
+def 从书评提取年费VIP用户ID(评论: list[dict[str, Any]]) -> str:
+    for obj in 评论:
+        if not isinstance(obj, dict):
+            continue
+        vip = obj.get("vipStatus")
+        if not isinstance(vip, dict):
+            continue
+        if 安全整数(vip.get("status"), 0) != 2:
+            continue
+        if 安全整数(vip.get("annualVipStatus"), 0) != 1:
+            continue
+        uid = str(obj.get("userId") or obj.get("uid") or "").strip()
+        if uid and uid != "0":
+            return uid
+    return ""
+
+
+async def 扫描书评获取VIP用户ID(
+    session: aiohttp.ClientSession,
+    书籍编号: str,
+    *,
+    author_id: str = "",
+    max_pages: int = 3,
+    size: int = 50,
+) -> str:
+    if not author_id:
+        try:
+            目录 = await 获取App目录(session, 书籍编号)
+            author_id = str(目录.get("authorId") or "")
+        except Exception as exc:
+            logger.debug(f"书旗 App 目录获取失败：书籍={书籍编号}, 错误={exc}")
+    item_index = 0
+    for _页码 in range(max(1, max_pages)):
+        业务参数 = _书评页参数(书籍编号, author_id=author_id, item_index=item_index, size=size)
+        数据 = await _请求App签名接口(
+            session, App书评列表URL, 业务参数, user_id=USER_ID, 用公共字段=True
+        )
+        状态 = str(数据.get("status") or 数据.get("state"))
+        if 状态 and 状态 != "200":
+            raise ShuqiError(f"书评接口异常：status={状态}")
+        响应数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+        评论 = 响应数据.get("commentList") or []
+        uid = 从书评提取年费VIP用户ID(评论 if isinstance(评论, list) else [])
+        if uid:
+            return uid
+        next_index = 安全整数(响应数据.get("nextItemIndex"), item_index + size)
+        has_more = bool(响应数据.get("hasMore"))
+        if not has_more or next_index <= item_index:
+            break
+        item_index = next_index
+    return ""
+
+
+async def 发现VIP候选书(
+    session: aiohttp.ClientSession,
+    *,
+    max_candidates: int = 8,
+) -> list[dict[str, str]]:
+    候选: list[dict[str, str]] = []
+    已记录: set[str] = set()
+    for 词 in 自动VIP搜索词:
+        if len(候选) >= max_candidates:
+            break
+        try:
+            书籍列表 = await 搜索小说(session, 词, 需要数量=5)
+        except Exception as exc:
+            logger.debug(f"书旗 VIP 候选搜索失败：词={词}, 错误={exc}")
+            continue
+        for 书 in 书籍列表:
+            book_id = str(书.get("book_id") or "").strip()
+            if not book_id or book_id in 已记录 or len(候选) >= max_candidates:
+                continue
+            已记录.add(book_id)
+            候选.append({"bookId": book_id, "bookName": str(书.get("title") or "")})
+    for book_id in 自动VIP回退书:
+        if book_id not in 已记录:
+            已记录.add(book_id)
+            候选.append({"bookId": book_id, "bookName": ""})
+    return 候选
+
+
+async def 自动获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
+    候选 = await 发现VIP候选书(session)
+    for 书 in 候选:
+        book_id = 书["bookId"]
+        try:
+            uid = await 扫描书评获取VIP用户ID(session, book_id)
+            if uid:
+                logger.info(
+                    f"书旗自动获取年费 VIP UID 成功：书籍={book_id}, "
+                    f"书名={书.get('bookName') or ''}, UID尾号={uid[-4:] if len(uid) > 4 else uid}"
+                )
+                return uid
+        except Exception as exc:
+            logger.debug(f"书旗书评扫描失败：书籍={book_id}, 错误={exc}")
+    raise ShuqiError("自动扫描候选书后未找到年费 VIP UID")
+
+
+async def 获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
+    uid = str(_VIP用户ID缓存.get("uid") or "").strip()
+    if uid:
+        return uid
+    async with _获取VIP锁():
+        uid = str(_VIP用户ID缓存.get("uid") or "").strip()
+        if uid:
+            return uid
+        uid = await 自动获取书旗VIP用户ID(session)
+        _VIP用户ID缓存["uid"] = uid
+    return uid
+
+
+# ================= VIP UID 批量下载（downloadbatch + freedownurl） =================
+
+def _批次键(
+    user_id: str,
+    书籍编号: str,
+    first_index: int,
+    first_cid: str,
+    last_index: int,
+    last_cid: str,
+) -> str:
+    return f"{user_id}_{书籍编号}_{first_index}_{last_index}_{first_cid}_{last_cid}"
+
+
+def _批次章节索引(书籍: Book, 项: dict[str, Any]) -> tuple[int, int]:
+    章节位置 = {章节.chapter_id: 章节.index - 1 for 章节 in 书籍.chapters}
+    first_cid = str(项.get("firstChapterId") or (项.get("chapterIds") or [""])[0] or "")
+    last_cid = str(项.get("lastChapterId") or (项.get("chapterIds") or [""])[-1] or first_cid)
+    first_raw = 项.get("firstChapterIndex")
+    last_raw = 项.get("lastChapterIndex")
+    if first_raw is not None and last_raw is not None:
+        try:
+            return int(first_raw), int(last_raw)
+        except (TypeError, ValueError):
+            pass
+    if first_cid in 章节位置 and last_cid in 章节位置:
+        return 章节位置[first_cid], 章节位置[last_cid]
+    数量 = 安全整数(项.get("chapterCount") or len(项.get("chapterIds") or []), 1)
+    return 0, max(0, 数量 - 1)
+
+
+async def 获取下载批次(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    *,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    业务参数 = {
+        "userId": user_id,
+        "bookId": 书籍.book_id,
+        "timestamp": str(int(time.time())),
+        "platform": "an",
+    }
+    数据 = await _请求App签名接口(
+        session, App下载批次URL, 业务参数, user_id=user_id, 用公共字段=False
+    )
+    状态 = str(数据.get("state") or 数据.get("status"))
+    if 状态 and 状态 != "200":
+        raise ShuqiError(f"下载批次接口异常：state={状态}")
+    响应数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+    批次信息 = 响应数据.get("batchInfo") if isinstance(响应数据.get("batchInfo"), dict) else {}
+    免费批次 = 批次信息.get("freeInfo") or []
+    return [项 for 项 in 免费批次 if isinstance(项, dict)]
+
+
+async def 获取批次下载地址(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    批次列表: list[dict[str, Any]],
+    *,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    if not 批次列表:
+        return []
+    批次章节: dict[str, dict[str, str]] = {}
+    键映射: dict[str, dict[str, Any]] = {}
+    for 项 in 批次列表:
+        first_index, last_index = _批次章节索引(书籍, 项)
+        first_cid = str(项.get("firstChapterId") or (项.get("chapterIds") or [""])[0] or "")
+        last_cid = str(项.get("lastChapterId") or (项.get("chapterIds") or [""])[-1] or first_cid)
+        key = _批次键(user_id, 书籍.book_id, first_index, first_cid, last_index, last_cid)
+        批次章节[key] = {"startCid": first_cid, "endCid": last_cid}
+        键映射[key] = 项
+        项["_batch_key"] = key
+    业务参数 = {
+        "bookId": 书籍.book_id,
+        "timestamp": str(int(time.time())),
+        "type": "4",
+        "batchDown": "1",
+        "batchChapterIds": json.dumps(批次章节, ensure_ascii=False, separators=(",", ":")),
+        "user_id": user_id,
+        "newDownload": "1",
+        "platform": "an",
+        "reqEncryptType": "-1",
+        "reqEncryptParam": "",
+        "resEncryptType": "-1",
+    }
+    数据 = await _请求App签名接口(
+        session, App免费下载URL, 业务参数, user_id=user_id, 用公共字段=False
+    )
+    状态 = str(数据.get("state") or 数据.get("status"))
+    if 状态 and 状态 != "200":
+        raise ShuqiError(f"批量下载 URL 接口异常：state={状态}")
+    响应数据 = 数据.get("data") or {}
+    if isinstance(响应数据, str):
+        try:
+            响应数据 = json.loads(响应数据)
+        except Exception:
+            响应数据 = {}
+    if not isinstance(响应数据, dict):
+        响应数据 = {}
+    for key, 项 in 键映射.items():
+        info = 响应数据.get(key)
+        if isinstance(info, str):
+            try:
+                info = json.loads(info)
+            except Exception:
+                info = {}
+        if not isinstance(info, dict):
+            continue
+        项["url"] = str(info.get("url") or "")
+        项["downloadUnlocked"] = bool(info.get("downloadUnlocked"))
+    return 批次列表
+
+
+def 解析书旗压缩包分段(压缩包: bytes) -> dict[str, str]:
+    内容按章节: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(压缩包)) as 压缩文件:
+            for 信息 in 压缩文件.infolist():
+                if not re.fullmatch(r"\d+\.sqc", 信息.filename, flags=re.I):
+                    continue
+                原文 = 压缩文件.read(信息)
+                # downloadbatch 链路的 sqc 使用 XOR 0x36 解密（整本包链路使用 0x38）
+                解密正文 = bytes(字节 ^ 0x36 for 字节 in 原文)
+                正文 = 解密正文.decode("utf-8", errors="ignore")
+                正文 = 正文.replace("<br/>", "\n")
+                正文 = html.unescape(正文).replace("\r\n", "\n").replace("\r", "\n")
+                正文 = "\n".join(
+                    行.lstrip(" \u3000") for 行 in 正文.split("\n")
+                ).strip()
+                if 正文:
+                    内容按章节[信息.filename[:-4]] = 正文
+    except zipfile.BadZipFile as exc:
+        raise ShuqiError("整本下载包格式异常") from exc
+    return 内容按章节
+
+
+async def 下载全部章节VIP(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    *,
+    user_id: str,
+) -> list[dict[str, str]]:
+    总数 = len(书籍.chapters)
+    if not 总数:
+        return []
+    批次列表 = await 获取下载批次(session, 书籍, user_id=user_id)
+    if not 批次列表:
+        raise ShuqiError("下载批次为空")
+    批次列表 = await 获取批次下载地址(session, 书籍, 批次列表, user_id=user_id)
+    已解锁 = [项 for 项 in 批次列表 if 项.get("downloadUnlocked") and str(项.get("url") or "").strip()]
+    if not 已解锁:
+        raise ShuqiError("VIP 用户未解锁下载 URL，UID 可能失效")
+    logger.info(
+        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度=0/{总数}, "
+        f"百分比=0%, 模式=VIP批量包, 批次={len(已解锁)}, UID尾号={user_id[-4:] if len(user_id) > 4 else user_id}"
+    )
+    内容按章节: dict[str, str] = {}
+
+    async def 下载并解析一个批次(项: dict[str, Any]) -> None:
+        url = str(项.get("url") or "").strip()
+        headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+        async with session.get(url, headers=headers, allow_redirects=True) as resp:
+            if resp.status >= 400:
+                raise ShuqiError(f"批次包 HTTP {resp.status}")
+            压缩包 = await resp.read()
+        分段 = await asyncio.to_thread(解析书旗压缩包分段, 压缩包)
+        内容按章节.update(分段)
+
+    并发上限 = 8
+    for 起始 in range(0, len(已解锁), 并发上限):
+        一组 = 已解锁[起始 : 起始 + 并发上限]
+        await asyncio.gather(*(下载并解析一个批次(项) for 项 in 一组))
+        已完成 = 起始 + len(一组)
+        if 已完成 >= 总数 or (已完成 * 10) // 总数 > ((起始) * 10) // 总数:
+            logger.info(
+                f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度={已完成}/{总数}, "
+                f"百分比={已完成 * 100 // 总数}%, 模式=VIP批量包"
+            )
+    结果: list[dict[str, str]] = []
+    缺失章节: list[str] = []
+    for 章节 in 书籍.chapters:
+        正文 = 内容按章节.get(章节.chapter_id, "")
+        if not 正文:
+            缺失章节.append(章节.chapter_id)
+        结果.append({"id": 章节.chapter_id, "title": 章节.name, "content": 正文})
+    if 缺失章节:
+        raise ShuqiError(f"VIP 批量包缺少章节：missing={len(缺失章节)}")
+    return 结果
+
+
+async def 下载全部章节(
+    session: aiohttp.ClientSession, 书籍: Book
+) -> list[dict[str, str]]:
+    总数 = len(书籍.chapters)
+    if not 总数:
+        return []
+    try:
+        uid = await 获取书旗VIP用户ID(session)
+    except Exception as exc:
+        logger.warning(f"书旗自动获取 VIP UID 失败，回退整本下载：错误={exc}")
+        return await 下载全部章节整本包(session, 书籍)
+    try:
+        return await 下载全部章节VIP(session, 书籍, user_id=uid)
+    except ShuqiError as exc:
+        信息 = str(exc)
+        if "未解锁" in 信息 or "失效" in 信息:
+            清除书旗VIP用户ID缓存()
+            logger.warning(f"书旗 VIP UID 失效，清除缓存后重试一次：错误={exc}")
+            try:
+                uid = await 获取书旗VIP用户ID(session)
+                return await 下载全部章节VIP(session, 书籍, user_id=uid)
+            except Exception as 重试异常:
+                logger.warning(
+                    f"书旗 VIP 重试仍失败，回退整本下载：错误={重试异常}"
+                )
+                return await 下载全部章节整本包(session, 书籍)
+        logger.warning(f"书旗 VIP 批量下载失败，回退整本下载：错误={exc}")
+        return await 下载全部章节整本包(session, 书籍)
+    except Exception as exc:
+        logger.warning(f"书旗 VIP 批量下载异常，回退整本下载：错误={exc}")
+        return await 下载全部章节整本包(session, 书籍)
+
+
+async def 下载全部章节整本包(
+    session: aiohttp.ClientSession, 书籍: Book
+) -> list[dict[str, str]]:
+    总数 = len(书籍.chapters)
+    下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
+    if not 总数 or not 下载地址:
+        return []
+    logger.info(
+        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度=0/{总数}, "
+        "百分比=0%, 模式=整本压缩包, 请求次数=1"
+    )
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Encoding": "gzip",
+    }
+    try:
+        async with session.get(下载地址, headers=headers, allow_redirects=True) as resp:
+            if resp.status >= 400:
+                raise ShuqiError(f"整本下载 HTTP {resp.status}")
+            压缩包 = await resp.read()
+    except ShuqiError:
+        raise
+    except Exception as exc:
+        raise ShuqiError("整本下载请求失败") from exc
+
+    章节内容 = await asyncio.to_thread(解析书旗压缩包, 压缩包, 书籍)
+    logger.info(
+        f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度={总数}/{总数}, "
+        f"百分比=100%, 成功={总数}, 失败=0"
+    )
+    return 章节内容
 
 
 async def 获取整本下载地址(
