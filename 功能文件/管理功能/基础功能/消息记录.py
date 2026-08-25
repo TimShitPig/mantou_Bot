@@ -723,8 +723,10 @@ def 获取聊天列表(
         备注 = str(会话备注.get("remark") or "")
         if 过滤 == "remark" and not 备注:
             continue
-        if 类型 == "group" and not 群信息缓存.get(会话标识):
-            标记群信息待刷新(会话标识)
+        if 类型 == "group":
+            缓存群信息 = 群信息缓存.get(会话标识)
+            if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 300:
+                标记群信息待刷新(会话标识)
         显示名 = _聊天显示名(会话标识, 会话)
         if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
             continue
