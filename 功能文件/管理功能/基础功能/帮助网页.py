@@ -1809,6 +1809,7 @@ _网页主体 = """
             .msg-media { margin-top:7px; }
             .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; }
             .msg-media img:hover { transform:scale(1.03); }
+        .msg-media-ph { display:inline-block; padding:8px 14px; background:#f2f3f5; border-radius:8px; font-size:12px; color:#8a8f99; }
             .msg-lightbox { position:fixed; inset:0; z-index:2000; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; padding:28px; }
             .msg-lightbox[hidden] { display:none; }
             .msg-lightbox-inner { position:relative; max-width:100%; max-height:100%; display:flex; flex-direction:column; align-items:center; gap:10px; }
@@ -1861,7 +1862,7 @@ _网页主体 = """
         .msg-tool-btn svg { display:block; }
             .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
             .msg-raw-modal[hidden] { display:none; }
-            .msg-raw-box { width:min(720px,100%); max-height:78vh; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-raw-box { width:min(720px,100%); height:min(640px,78vh); min-height:320px; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
             .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid #e8e9ec; }
             .msg-raw-head strong { font-size:13px; color:#222; }
             .msg-raw-head button { border:0; background:transparent; color:#999; font-size:16px; cursor:pointer; }
@@ -2421,7 +2422,7 @@ _网页脚本 = """
           const ref = (data.references || {})[m.reference_id];
           // 撤回后隐藏引用与媒体，只显示已撤回
           const quote = !recalled && m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const media = !recalled && m.media && m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer" data-lightbox="${esc(m.media.src)}"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : '';
+          const media = !recalled && m.media ? (m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer" data-lightbox="${esc(m.media.src)}"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : `<div class="msg-media"><span class="msg-media-ph" title="图片地址待回显补充">🖼️ 图片</span></div>`) : '';
           const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);

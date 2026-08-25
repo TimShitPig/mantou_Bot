@@ -471,6 +471,24 @@ def 记录收到消息(
         elif not is_self:
             # 同 message_id 但非回推（如重复事件）：仍追加，避免丢失真实消息
             会话["messages"].append(记录)
+        elif 回显自己:
+            # 回推消息：用回推里的真实媒体（如图片 URL）补充发送记录，避免只显示"[图片]"占位文本
+            try:
+                回显媒体 = _提取媒体字段(内容, 消息)
+                目标 = next(
+                    (x for x in (会话["messages"] or []) if str(x.get("message_id") or "") == 消息ID),
+                    None,
+                )
+                if 目标 is not None:
+                    if 回显媒体 and 回显媒体.get("src"):
+                        目标["media"] = 回显媒体
+                    if 回显媒体 and 回显媒体.get("src") and 回显媒体.get("type") == "图片":
+                        目标["content"] = re.sub(r"^\[(?:图片|媒体|media)]\s*", "", 内容 or 目标.get("content") or "").strip()
+                    else:
+                        目标["content"] = 内容 or 目标.get("content") or ""
+                    目标["refidx"] = 自身REFIDX or 目标.get("refidx") or ""
+            except Exception:
+                pass
         if _消息存储 is not None:
             try:
                 _消息存储.写入消息(记录)
@@ -521,6 +539,7 @@ def 记录发送消息(
     *,
     消息ID: str = "",
     引用ID: str = "",
+    媒体: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """把网页发送成功的消息写入缓存，标记为机器人自己发送。"""
     global 发送序号
@@ -539,7 +558,7 @@ def 记录发送消息(
             "source": "web_panel",
             "raw_message": "",
             "recalled": False,
-            "media": _提取媒体字段(内容),
+            "media": 媒体 or _提取媒体字段(内容),
             "reference_id": 引用ID or "",
             "chat_type": 类型,
             "ts": int(time.time()),
@@ -1419,7 +1438,10 @@ async def 发送消息(
                         展示内容 = "[ARK卡片] " + 展示内容
                     elif 类型 == "card":
                         展示内容 = "[图文卡片] " + 展示内容
-                    记录 = 记录发送消息(会话标识, 会话类型 or "group", 展示内容 or "（空消息）", appid, 消息ID=响应ID, 引用ID=引用消息ID)
+                    媒体记录 = None
+                    if 消息体.get("msg_type") == 7 and 图片字节 is not None:
+                        媒体记录 = {"type": "图片", "src": "", "text": 内容}
+                    记录 = 记录发送消息(会话标识, 会话类型 or "group", 展示内容 or "（空消息）", appid, 消息ID=响应ID, 引用ID=引用消息ID, 媒体=媒体记录)
                     return {"ok": True, "message_id": 响应ID, "message": 记录}
                 错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
@@ -1449,6 +1471,9 @@ async def 发送消息(
         展示内容 = "[ARK卡片] " + 展示内容
     elif 类型 == "card":
         展示内容 = "[图文卡片] " + 展示内容
+    媒体记录 = None
+    if 消息体.get("msg_type") == 7 and 图片字节 is not None:
+        媒体记录 = {"type": "图片", "src": "", "text": 内容}
     记录 = 记录发送消息(
         会话标识,
         会话类型 or "group",
@@ -1456,6 +1481,7 @@ async def 发送消息(
         appid,
         消息ID=响应ID,
         引用ID=引用消息ID,
+        媒体=媒体记录,
     )
     return {"ok": True, "message_id": 响应ID, "message": 记录}
 
