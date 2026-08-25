@@ -28,7 +28,8 @@ except Exception:
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
-控制台会话有效期 = 12 * 60 * 60
+控制台会话有效期 = 30 * 24 * 60 * 60
+控制台会话命名空间 = "console_session"
 
 
 @dataclass
@@ -504,12 +505,95 @@ def 获取帮助网页地址(配置: Any = None) -> str:
     return _构造控制台访问地址(_计算帮助网页地址(配置), 配置)
 
 
+def _数据库会话可用() -> bool:
+    """当前帮助网页配置已配置运行状态数据库时才能持久化会话。"""
+    if 当前帮助网页配置 is None:
+        return False
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 已配置运行状态数据库
+        return bool(已配置运行状态数据库(当前帮助网页配置))
+    except Exception:
+        return False
+
+
+def _解析持久会话文本(文本: str) -> tuple[float | None, str]:
+    """解析持久会话值：到期时间戳|用户名；格式异常返回 (None, 管理员)。"""
+    if not 文本:
+        return None, "管理员"
+    try:
+        到期部分, _, 用户名 = str(文本).rpartition("|")
+        return float(到期部分), 用户名 or "管理员"
+    except Exception:
+        return None, "管理员"
+
+
+def _读取持久化控制台会话(会话值: str) -> tuple[float, str] | None:
+    """从 MySQL 恢复会话；返回 (到期时间, 用户名)；无有效会话返回 None。"""
+    if not 会话值 or not _数据库会话可用():
+        return None
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值
+        文本 = 读取运行状态值(当前帮助网页配置, 控制台会话命名空间, 会话值, "")
+        到期时间, 用户名 = _解析持久会话文本(文本)
+        if 到期时间 is None:
+            return None
+        return 到期时间, 用户名
+    except Exception as exc:
+        logger.debug("帮助控制台读取持久会话失败：错误类型=%s", type(exc).__name__)
+        return None
+
+
+def _写入持久化控制台会话(会话值: str, 到期时间: float, 用户名: str) -> None:
+    if not 会话值 or not _数据库会话可用():
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值
+        写入运行状态值(
+            当前帮助网页配置,
+            控制台会话命名空间,
+            会话值,
+            f"{到期时间:.0f}|{用户名}",
+        )
+    except Exception as exc:
+        logger.debug("帮助控制台写入持久会话失败：错误类型=%s", type(exc).__name__)
+
+
+def _删除持久化控制台会话(会话值: str) -> None:
+    if not 会话值 or not _数据库会话可用():
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 删除运行状态值
+        删除运行状态值(当前帮助网页配置, 控制台会话命名空间, 会话值)
+    except Exception as exc:
+        logger.debug("帮助控制台删除持久会话失败：错误类型=%s", type(exc).__name__)
+
+
+def _加载持久化控制台会话() -> None:
+    """启动服务时把数据库中的有效会话恢复到内存，避免重载后同设备重新登录。"""
+    if not _数据库会话可用():
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间
+        记录 = 读取运行状态命名空间(当前帮助网页配置, 控制台会话命名空间)
+        现在 = time.time()
+        for 会话值, 文本 in 记录.items():
+            到期时间, 用户名 = _解析持久会话文本(文本)
+            if 到期时间 is None or 到期时间 <= 现在:
+                _删除持久化控制台会话(会话值)
+                continue
+            控制台会话[会话值] = 到期时间
+            控制台会话身份[会话值] = 用户名
+    except Exception as exc:
+        logger.debug("帮助控制台加载持久会话失败：错误类型=%s", type(exc).__name__)
+
+
 def _清理控制台会话() -> None:
     截止时间 = time.time()
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
             控制台会话.pop(会话值, None)
             控制台会话身份.pop(会话值, None)
+            _删除持久化控制台会话(会话值)
 
 
 def _取得请求会话(request: web.Request) -> str:
@@ -519,11 +603,27 @@ def _取得请求会话(request: web.Request) -> str:
 
 def _请求已授权(request: web.Request) -> bool:
     会话值 = _取得请求会话(request)
-    到期时间 = 控制台会话.get(会话值)
-    if not 会话值 or 到期时间 is None or 到期时间 <= time.time():
-        控制台会话.pop(会话值, None)
+    if not 会话值:
         return False
-    控制台会话[会话值] = time.time() + 控制台会话有效期
+    到期时间 = 控制台会话.get(会话值)
+    需要回写持久会话 = False
+    if 到期时间 is None:
+        # 内存未命中（如插件重载后）：尝试从 MySQL 恢复持久会话
+        持久会话 = _读取持久化控制台会话(会话值)
+        if 持久会话 is not None:
+            到期时间, 用户名 = 持久会话
+            控制台会话[会话值] = 到期时间
+            控制台会话身份[会话值] = 用户名
+            需要回写持久会话 = True
+    if 到期时间 is None or 到期时间 <= time.time():
+        控制台会话.pop(会话值, None)
+        控制台会话身份.pop(会话值, None)
+        return False
+    新到期时间 = time.time() + 控制台会话有效期
+    控制台会话[会话值] = 新到期时间
+    if 需要回写持久会话:
+        # 恢复会话时同步滑动续期到 MySQL，保证长期使用不因插件重载掉线
+        _写入持久化控制台会话(会话值, 新到期时间, 控制台会话身份.get(会话值, "管理员"))
     return True
 
 
@@ -559,8 +659,10 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
 
     _清理控制台会话()
     会话值 = secrets.token_urlsafe(32)
-    控制台会话[会话值] = time.time() + 控制台会话有效期
+    到期时间 = time.time() + 控制台会话有效期
+    控制台会话[会话值] = 到期时间
     控制台会话身份[会话值] = 配置用户名
+    _写入持久化控制台会话(会话值, 到期时间, 配置用户名)
     响应 = web.json_response({"ok": True})
     响应.set_cookie(
         控制台会话Cookie名,
@@ -578,6 +680,7 @@ async def _处理控制台退出(request: web.Request) -> web.Response:
     会话值 = _取得请求会话(request)
     控制台会话.pop(会话值, None)
     控制台会话身份.pop(会话值, None)
+    _删除持久化控制台会话(会话值)
     响应 = web.json_response({"ok": True})
     响应.del_cookie(控制台会话Cookie名, path="/")
     return 响应
@@ -2945,7 +3048,7 @@ def _渲染登录页面() -> str:
         <button class="login-button" type="submit"><span>进入</span><span aria-hidden="true">→</span></button>
       </form>
       <p id="login-message" class="login-message" role="alert" aria-live="polite"></p>
-      <div class="login-note">登录状态仅保存在当前浏览器会话中</div>
+      <div class="login-note">登录状态在本设备保留 30 天，更换设备需重新登录</div>
     </section>
   </main>
   <script>
@@ -2998,6 +3101,7 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     当前帮助网页配置 = 配置
     控制台会话.clear()
     控制台会话身份.clear()
+    _加载持久化控制台会话()
 
     基础地址 = _计算帮助网页地址(配置)
     public_url = _构造控制台访问地址(基础地址, 配置)
