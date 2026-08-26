@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import base64
 import json
 import random
 import re
 import time
+from datetime import datetime as _日期类
+from datetime import timedelta as _时间差
+from datetime import timezone as _时区类
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +51,7 @@ _媒体占位规则 = re.compile(r"\[(图片|语音|视频|文件|媒体|media)]
 _QQ图片域名 = re.compile(
     r"(?:https?://)?[^>\s]*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)[^>\s]*"
 )
+_显示时区 = _时区类(_时间差(hours=8))
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -71,21 +76,23 @@ def _转数字时间戳(时间戳: Any) -> int | None:
         return 数值
     if hasattr(时间戳, "timestamp"):
         try:
-            return int(时间戳.timestamp())
+            日期值 = 时间戳
+            if getattr(日期值, "tzinfo", None) is None:
+                日期值 = 日期值.replace(tzinfo=_显示时区)
+            return int(日期值.timestamp())
         except Exception:
             return None
     文本 = str(时间戳).strip()
     if not 文本:
         return None
     try:
-        from datetime import datetime as _日期类
-
-        if len(文本) >= 19 and 文本[4] == "-" and 文本[10] in ("T", " "):
-            核心 = 文本[:19]
-            格式 = "%Y-%m-%dT%H:%M:%S" if 文本[10] == "T" else "%Y-%m-%d %H:%M:%S"
-            解析 = _日期类.strptime(核心, 格式)
+        if len(文本) >= 10 and 文本[4] == "-" and 文本[7] == "-":
+            解析 = _日期类.fromisoformat(文本.replace("Z", "+00:00"))
+            if 解析.tzinfo is None:
+                # 数据库存储的无时区文本统一视为控制台显示时区，而不是服务器系统时区。
+                解析 = 解析.replace(tzinfo=_显示时区)
             return int(解析.timestamp())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         pass
     try:
         数值 = int(float(文本))
@@ -101,9 +108,61 @@ def _格式化时间戳(时间戳: Any) -> str:
     if 数值 is None:
         return ""
     try:
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(数值))
+        return _日期类.fromtimestamp(数值, _显示时区).strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, OverflowError, OSError):
         return ""
+
+
+def _提取原始消息时间(原始消息: Any) -> Any:
+    """从历史消息的 JSON/字典文本取出 QQ 官方原始 timestamp。"""
+    数据 = 原始消息
+    if isinstance(数据, str):
+        文本 = 数据.strip()
+        if not 文本:
+            return None
+        for 解析器 in (json.loads, ast.literal_eval):
+            try:
+                候选 = 解析器(文本)
+                if isinstance(候选, dict):
+                    数据 = 候选
+                    break
+            except Exception:
+                continue
+    if not isinstance(数据, dict):
+        return None
+    for 字段 in ("timestamp", "time", "created_at"):
+        值 = 数据.get(字段)
+        if 值 not in (None, ""):
+            return 值
+    return None
+
+
+def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
+    """修复旧记录的时区和来源标记，保证历史排序与新消息一致。"""
+    来源 = str(记录.get("source") or "")
+    if 来源.startswith("bot_") or 来源 == "web_panel":
+        记录["is_self"] = True
+        if not str(记录.get("nickname") or "").strip():
+            记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
+    原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
+    try:
+        记录时间 = int(记录.get("ts") or 0)
+    except (TypeError, ValueError):
+        记录时间 = 0
+    标准时间 = 原始时间 or 记录时间 or _转数字时间戳(记录.get("timestamp"))
+    if 标准时间:
+        记录["ts"] = 标准时间
+        记录["timestamp"] = _格式化时间戳(标准时间)
+    return 记录
+
+
+def _历史消息排序键(记录: dict[str, Any]) -> tuple[int, int, str]:
+    _规范化历史消息(记录)
+    try:
+        消息序号 = int(记录.get("id") or 0)
+    except (TypeError, ValueError):
+        消息序号 = 0
+    return int(记录.get("ts") or 0), 消息序号, str(记录.get("message_id") or "")
 
 
 def _规范会话标识(会话: str, 类型: str) -> str:
@@ -1080,7 +1139,8 @@ def _补齐数据库会话到内存() -> None:
             会话标识 = str(会话标识 or "").strip()
             if not 会话标识 or 会话标识 in 消息缓存:
                 continue
-            消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数)
+            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话最大消息数) or [])]
+            消息列表.sort(key=_历史消息排序键)
             if not 消息列表:
                 continue
             类型 = str(消息列表[-1].get("chat_type") or "group")
@@ -1143,7 +1203,8 @@ def _数据库聚合聊天项(
             显示名 = _聊天显示名(会话标识, 轻量会话)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
-            last_ts = int(项.get("last_ts") or 0)
+            _规范化历史消息(最后记录)
+            last_ts = int(_历史消息排序键(最后记录)[0] or 项.get("last_ts") or 0)
             聊天项.append(
                 {
                     "chat_id": 会话标识,
@@ -1152,7 +1213,7 @@ def _数据库聚合聊天项(
                     "nickname": 显示名,
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or "")),
-                    "last_time": str(最后记录.get("timestamp") or _格式化时间戳(last_ts)),
+                    "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
                     "last_ts": last_ts,
                     "msg_count": int(项.get("msg_count") or 0),
                     "unread": int(内存会话.get("unread") or 持久化未读表.get(会话标识, 0)),
@@ -1248,30 +1309,34 @@ def 获取聊天列表(
 
 
 def _数据库历史消息(
-    会话标识: str, 类型: str, before_date: str, limit: int,
+    会话标识: str, 类型: str, before_date: str, limit: int, before_id: int = 0,
 ) -> dict[str, Any] | None:
     """对齐 ElainaBot：从 MySQL 分页读取会话历史；不可用时返回 None 由调用方回退内存。
 
-    等价于 ElainaBot 的 _query_chat_messages_sync（按 id 倒序分页），
-    这里用 MySQL 的 分页读取历史 实现，before_date 转成时间戳过滤更早消息。
+    等价于 ElainaBot 的 _query_chat_messages_sync（按 id 倒序分页）。
+    优先使用 before_id，避免历史记录中的旧时区文本影响分页。
     """
     if _消息存储 is None:
         return None
     try:
-        before_ts = 0
-        if before_date:
-            before_ts = int(_转数字时间戳(before_date) or 0)
-        行列表 = _消息存储.分页读取历史(会话标识, 上限=limit, before_ts=before_ts)
+        before_ts = 0 if before_id else int(_转数字时间戳(before_date) or 0)
+        行列表 = _消息存储.分页读取历史(
+            会话标识,
+            before_id=max(0, int(before_id or 0)),
+            上限=limit,
+            before_ts=before_ts,
+        )
         if not 行列表:
             return None
-        会话消息: list[dict[str, Any]] = list(reversed(行列表))
+        会话消息: list[dict[str, Any]] = [_规范化历史消息(x) for x in reversed(行列表)]
+        会话消息.sort(key=_历史消息排序键)
         原始数量 = len(会话消息)
         返回消息 = 会话消息[-limit:]
         # 发送记录先写入内存再异步/同步落库；数据库已有旧历史时，把尚未出现在
         # 本页的本进程发送记录合并进来，避免“发送成功但控制台仍看不到”。
         内存会话 = 消息缓存.get(会话标识) or {}
         内存发送记录 = [
-            消息项 for 消息项 in (内存会话.get("messages") or [])
+            _规范化历史消息(消息项) for 消息项 in (内存会话.get("messages") or [])
             if 消息项.get("is_self") and str(消息项.get("source") or "") in ("bot_send", "bot_active", "web_panel")
         ]
         已有记录键 = {
@@ -1283,7 +1348,9 @@ def _数据库历史消息(
             for 消息项 in 返回消息
         }
         for 消息项 in 内存发送记录:
-            if before_date and str(消息项.get("timestamp") or "") >= before_date:
+            if before_id and int(消息项.get("id") or 0) >= before_id:
+                continue
+            if not before_id and before_date and int(消息项.get("ts") or 0) >= int(_转数字时间戳(before_date) or 0):
                 continue
             记录键 = (
                 str(消息项.get("message_id") or ""),
@@ -1293,7 +1360,7 @@ def _数据库历史消息(
             if 记录键 not in 已有记录键:
                 返回消息.append(消息项)
                 已有记录键.add(记录键)
-        返回消息.sort(key=lambda 消息项: (int(消息项.get("ts") or 0), str(消息项.get("timestamp") or "")))
+        返回消息.sort(key=_历史消息排序键)
         返回消息 = 返回消息[-limit:]
         最后消息 = 返回消息[-1] if 返回消息 else {}
         消息索引 = {str(m.get("message_id") or ""): m for m in 返回消息 if m.get("message_id")}
@@ -1329,7 +1396,7 @@ def _数据库历史消息(
             "messages": 返回消息,
             "last_msg_id": str(最后消息.get("message_id") or ""),
             "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
-            "has_more": (原始数量 >= limit) and (总数 > limit if not before_date else True),
+            "has_more": (原始数量 >= limit) and (总数 > limit if not before_id and not before_date else True),
             "chat_name": _聊天显示名(会话标识, 轻量会话),
             "group_info": 获取缓存的群信息(会话标识),
             "member_profiles": 成员资料缓存.get(会话标识, {}),
@@ -1345,6 +1412,7 @@ def 获取消息历史(
     类型: str = "group",
     before_date: str = "",
     limit: int = 100,
+    before_id: int = 0,
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     try:
@@ -1353,7 +1421,7 @@ def 获取消息历史(
         limit = 100
     # 对齐 ElainaBot：MySQL 分页查询优先，不可用时回退内存缓存
     if 类型 in ("group", "user"):
-        数据库结果 = _数据库历史消息(会话标识, 类型, before_date, limit)
+        数据库结果 = _数据库历史消息(会话标识, 类型, before_date, limit, before_id)
         if 数据库结果 is not None:
             return 数据库结果
     会话 = 消息缓存.get(会话标识)
@@ -1367,11 +1435,19 @@ def 获取消息历史(
             "group_info": 获取缓存的群信息(会话标识),
         }
     消息列表 = 会话.get("messages") or []
-    会话消息: list[dict[str, Any]] = list(消息列表)
-    if before_date:
+    会话消息: list[dict[str, Any]] = [_规范化历史消息(m) for m in 消息列表]
+    会话消息.sort(key=_历史消息排序键)
+    try:
+        before_id = max(0, int(before_id or 0))
+    except (TypeError, ValueError):
+        before_id = 0
+    if before_id:
+        会话消息 = [m for m in 会话消息 if int(m.get("id") or 0) < before_id]
+    elif before_date:
         before_date = str(before_date or "").strip()
-        if before_date:
-            会话消息 = [m for m in 会话消息 if str(m.get("timestamp") or "") < before_date]
+        before_ts = int(_转数字时间戳(before_date) or 0)
+        if before_ts:
+            会话消息 = [m for m in 会话消息 if int(m.get("ts") or 0) < before_ts]
     原始数量 = len(会话消息)
     返回消息 = 会话消息[-limit:]
     最后消息 = 会话消息[-1] if 会话消息 else {}
@@ -1397,7 +1473,7 @@ def 获取消息历史(
         "messages": 返回消息,
         "last_msg_id": str(最后消息.get("message_id") or ""),
         "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
-        "has_more": 原始数量 > limit,
+        "has_more": 原始数量 > limit or (bool(before_id) and 原始数量 >= limit),
         "chat_name": _聊天显示名(会话标识, 会话),
         "group_info": 获取缓存的群信息(会话标识),
         "member_profiles": 成员资料缓存.get(会话标识, {}),
@@ -2221,7 +2297,8 @@ def _从数据库恢复() -> None:
             continue
         消息列表 = []
         try:
-            消息列表 = _消息存储.读取会话消息(会话标识, 每会话最大消息数) or []
+            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话最大消息数) or [])]
+            消息列表.sort(key=_历史消息排序键)
         except Exception as exc:
             logger.debug("消息记录会话恢复失败：错误类型=%s", type(exc).__name__)
         类型 = "group"

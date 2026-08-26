@@ -1184,6 +1184,10 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     类型 = str((数据 or {}).get("chat_type") or "group")
     before_date = str((数据 or {}).get("before_date") or "")
     try:
+        before_id = max(0, int((数据 or {}).get("before_id") or 0))
+    except (TypeError, ValueError):
+        before_id = 0
+    try:
         limit = int((数据 or {}).get("limit") or 100)
     except (TypeError, ValueError):
         limit = 100
@@ -1193,7 +1197,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         from 功能文件.管理功能.基础功能 import 消息记录
 
         结果 = await asyncio.to_thread(
-            消息记录.获取消息历史, 会话标识, 类型, before_date, limit
+            消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
         )
         try:
             asyncio.create_task(消息记录.刷新待处理群信息())
@@ -2689,7 +2693,7 @@ _网页脚本 = """
         msgs.forEach((m) => {
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
-          const isSelf = Boolean(m.is_self);
+          const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
           const recalled = Boolean(m.recalled);
           const profiles = data.member_profiles || {};
           msgState.profiles = profiles;
@@ -2809,7 +2813,8 @@ _网页脚本 = """
         $('msg-composer').hidden = false;
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
-          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, chat_type:msgState.chatType, before_date:before, limit:120})});
+          const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
+          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, chat_type:msgState.chatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:120})});
           const incoming = data.messages || [];
           if (quiet && !older) {
             updateMsgHead(data);
