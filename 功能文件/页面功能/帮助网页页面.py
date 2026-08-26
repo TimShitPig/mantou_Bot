@@ -1,0 +1,465 @@
+"""馒头控制台页面模板。
+
+页面结构、样式和脚本分别维护，后端只负责把模板作为 HTML 响应返回。
+"""
+
+from .帮助网页样式 import 控制台样式
+from .帮助网页脚本 import 控制台脚本
+
+页面头部前缀 = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f8ff">
+  <title>馒头控制台</title>
+  <style>"""
+页面头部后缀 = """</style>
+</head>
+"""
+页面主体 = """
+<body>
+  <div class="shell">
+    <header class="topbar">
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.52.6</span></div></div>
+      <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
+    </header>
+    <aside class="sidebar">
+      <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
+      <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
+        <a href="?view=dashboard" data-view="dashboard"><span class="nav-icon">⌂</span>控制台</a>
+        <a href="?view=bot" data-view="bot"><span class="nav-icon">⚙</span>机器人配置</a>
+        <a href="?view=novels" data-view="novels"><span class="nav-icon">☷</span>小说功能</a>
+        <a href="?view=pans" data-view="pans"><span class="nav-icon">▣</span>网盘配置</a>
+        <a href="?view=messages" data-view="messages"><span class="nav-icon">✉</span>消息记录</a>
+        <a href="?view=runtime" data-view="runtime"><span class="nav-icon">◒</span>运行状态</a>
+        <a href="?view=help" data-view="help"><span class="nav-icon">?</span>帮助指令</a>
+        <a href="?view=settings" data-view="settings"><span class="nav-icon">⚙</span>系统设置</a>
+      </nav></div>
+      <div class="sidebar-foot"><span class="spark">✦</span><strong>只显示真实功能</strong><span>未接入后端的数据入口不会伪装成可用按钮。</span></div>
+    </aside>
+    <main class="main">
+      <div class="content">
+        <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span></div></div>
+        <div id="notice" class="notice"></div>
+        <section id="page-dashboard" class="page-view" data-page="dashboard">
+          <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态；页面切换请使用左侧导航。</p></div></div>
+          <div class="summary-grid">
+            <article class="summary-card"><span>小说总开关</span><strong id="metric-global">--</strong><small id="metric-global-meta">加载中</small><span class="text-button">管理小说功能</span></article>
+            <article class="summary-card"><span>当前分享网盘</span><strong id="metric-pan">--</strong><small id="metric-pan-meta">加载中</small><span class="text-button">管理网盘</span></article>
+            <article class="summary-card"><span>数据库状态</span><strong id="metric-db">--</strong><small id="metric-db-meta">加载中</small><span class="text-button">查看连接配置</span></article>
+            <article class="summary-card"><span>插件版本</span><strong id="metric-version">--</strong><small id="metric-version-meta">馒头Bot</small><span class="text-button">查看运行状态</span></article>
+          </div>
+          <div class="page-grid dashboard-grid"><article class="console-card"><h2>快捷入口</h2><p class="card-subtitle">各项功能均有独立页面，请从左侧导航打开。</p><div class="shortcut-grid"><article class="shortcut-card"><span class="shortcut-icon">⚙</span><strong>机器人配置</strong><small>查看安全摘要与监听配置</small></article><article class="shortcut-card"><span class="shortcut-icon">☷</span><strong>小说功能</strong><small>开关平台和管理员测试模式</small></article><article class="shortcut-card"><span class="shortcut-icon">▣</span><strong>网盘配置</strong><small>选择主分享网盘和查看账号摘要</small></article><article class="shortcut-card"><span class="shortcut-icon">◒</span><strong>运行状态</strong><small>查看服务器实时指标</small></article></div></article><article class="console-card"><h2>当前状态</h2><p class="card-subtitle">最近一次读取：<span id="dashboard-updated">--</span></p><div class="status-list compact-status"><div class="status-item"><span>CPU 占用</span><strong id="dashboard-cpu">--</strong></div><div class="status-item"><span>物理内存</span><strong id="dashboard-memory">--</strong></div><div class="status-item"><span>系统运行时间</span><strong id="dashboard-runtime">--</strong></div></div></article></div>
+        </section>
+
+        <section id="page-bot" class="page-view" data-page="bot" hidden>
+          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong>馒头助手</strong><small>管理台</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><small>馒头Bot 二次元助手</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单和帮助网页账号；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读登录态</h2><p class="card-subtitle">只保存 ywguid 和 ywkey，不显示原值。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>登录凭据</span><strong>不返回原文</strong></div><div><span>数据库地址</span><strong>只写不读</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
+        </section>
+
+        <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="novel-console standalone-card">
+          <header class="novel-console-head"><div><span class="novel-overline">NOVEL CONTROL</span><h2>小说功能</h2><p class="card-subtitle">集中管理小说入口和平台状态，下载逻辑保持不变。</p></div><div id="novel-state-pill" class="novel-state-pill"><span class="novel-state-dot"></span><strong>读取中</strong></div></header>
+          <div class="novel-control-grid">
+            <section class="novel-master-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">全</span><span>GLOBAL ACCESS</span></div><div class="novel-master-copy"><h3>全部小说功能</h3><p>控制下载、找书和翻页的总入口。关闭后所有平台都会暂停响应。</p></div><div class="novel-master-actions"><div class="novel-master-state"><strong id="novel-master-label">读取中</strong><span id="novel-platform-summary">正在读取平台状态</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></section>
+            <section class="novel-test-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">测</span><span>ADMIN MODE</span></div><h3>管理员测试模式</h3><p>只影响管理员测试，不会绕过普通用户的平台开关。</p><div class="novel-test-actions"><span id="novel-test-label" class="novel-test-note">状态读取中</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div></section>
+          </div>
+          <div class="novel-platform-head"><div><span class="novel-platform-overline">PLATFORMS</span><h3>平台开关</h3></div><span id="novel-enabled-count" class="novel-platform-count">-- / -- 已开启</span></div>
+          <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
+        </article></section>
+
+        <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="pan-console console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">选择一个网盘页面进行管理，左侧导航负责页面切换；Cookie 只写入，不在网页回显。</p><div class="pan-note"><span>当前主分享网盘</span><strong id="pan-active-label">--</strong></div><div class="pan-tabs" role="tablist" aria-label="网盘配置页面"><button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false">UC网盘</button><button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false">夸克网盘</button><button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false">百度网盘</button></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
+
+        <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
+
+        <section id="page-help" class="page-view" data-page="help" hidden><div class="section-head page-view-head"><div><h2>帮助指令</h2><p>这里列出机器人当前支持的聊天指令；网页不代替群聊执行指令。</p></div></div><div class="help-grid"><article class="console-card help-card"><h3>管理与状态</h3><p>需要管理员权限的指令。</p><div class="command-list"><span>帮助</span><span>状态</span><span>小说</span><span>开小说 / 关小说</span><span>开测试 / 关测试</span><span>网盘状态</span><span>换UC / 换夸克 / 换百度</span><span>夸克登录</span></div></article><article class="console-card help-card"><h3>小说入口</h3><p>在群聊或私聊发送链接即可识别。</p><div class="command-list"><span>找关键词</span><span>找书 关键词</span><span>找作者 关键词</span><span>上一页 / 下一页</span><span>小说平台分享链接</span><span>小说分享卡片</span></div></article><article class="console-card help-card"><h3>群聊管理</h3><p>由插件管理员和群身份规则共同决定。</p><div class="command-list"><span>禁言 @成员</span><span>禁 @成员 1</span><span>解 @成员</span><span>数字撤回</span><span>卡片撤回</span><span>合并转发撤回</span></div></article></div></section>
+        <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">数据库连接和网页服务设置可直接保存；监听端口等变更需要重载插件。</p><div id="settings-editor" class="config-editor"><div class="empty">正在读取设置...</div></div></article></section>
+
+        <section id="page-messages" class="page-view" data-page="messages" hidden>
+          <style>
+            .msg-shell { display:grid; grid-template-columns:330px minmax(0,1fr); min-height:calc(100vh - 130px); align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
+            .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
+            .chat-list-panel { border-right:1px solid #e8e9ec; background:#fafafa; }
+            .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 12px 8px; border-bottom:1px solid #e8e9ec; background:#fff; }
+            .msg-filter { display:flex; gap:2px; padding:2px; background:#f2f3f5; border-radius:8px; }
+            .msg-filter button { flex:1 1 0; min-width:0; min-height:26px; padding:0 4px; border:0; border-radius:6px; background:transparent; color:#666; font-size:11px; font-weight:600; cursor:pointer; }
+            .msg-filter button.active { background:#fff; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+            .msg-search { display:flex; gap:6px; }
+            .msg-search input { flex:1 1 0; min-width:0; height:30px; padding:0 10px; border:1px solid transparent; border-radius:15px; background:#f2f3f5; color:#333; font-size:12px; outline:none; transition:all .15s ease; }
+            .msg-search input:focus { border-color:#12b7f5; background:#fff; }
+            .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
+            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; }
+            .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
+            .msg-chat:hover { background:#ececee; }
+            .msg-chat.active { background:#dbeafd; }
+            .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
+            .msg-chat.pinned { background:#e3ecf7; }
+            .msg-chat.pinned:hover { background:#d6e4f4; }
+            .msg-chat.pinned.active { background:#cfe0f2; }
+            .msg-chat.pinned .msg-chat-top strong { color:#1f5fb0; }
+            .msg-chat.pinned .msg-chat-top small { color:#6f8db8; }
+            .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
+            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
+            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
+            .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
+            .msg-chat-main { flex:1 1 0; min-width:0; align-self:center; }
+            .msg-chat-top { display:flex; align-items:center; gap:6px; }
+            .msg-chat-top strong { font-size:13px; font-weight:600; color:#222; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-chat-top small { margin-left:auto; flex:0 0 auto; color:#999; font-size:10px; }
+            .msg-chat-sub-row { display:flex; align-items:center; gap:8px; margin-top:3px; min-width:0; }
+            .msg-chat-sub { flex:1 1 0; min-width:0; color:#999; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-chat-type { display:none; }
+            .msg-chat-meta { display:none; }
+            .msg-empty { padding:26px 14px; color:#aaa; font-size:12px; text-align:center; }
+            .msg-work { display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
+            .msg-head { display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #e8e9ec; }
+            .msg-head-name { font-size:15px; font-weight:650; color:#222; }
+            .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
+            .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+            .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }
+            .msg-btn:hover { border-color:#12b7f5; color:#12b7f5; }
+            .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
+            .msg-btn.primary:hover { background:#0ea5e0; }
+            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; }
+            .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
+            .msg-row { display:flex; gap:9px; margin-bottom:14px; }
+            .msg-row.self { flex-direction:row-reverse; }
+            .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
+            .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
+            .msg-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:12px; font-weight:800; color:#3a7bd5; }
+            .msg-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
+            .msg-bubble-wrap { max-width:min(70%,560px); min-width:0; }
+            .msg-row.self .msg-bubble-wrap { display:flex; flex-direction:column; align-items:flex-end; }
+            .msg-bubble-name { margin-bottom:3px; color:#999; font-size:10px; padding-left:2px; }
+            .msg-row.self .msg-bubble-name { padding-left:0; padding-right:2px; }
+            .msg-bubble { padding:8px 12px; border-radius:3px 10px 10px 10px; background:#fff; color:#333; font-size:13px; line-height:1.6; word-break:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+            .msg-row.self .msg-bubble { border-radius:10px 3px 10px 10px; background:#12b7f5; color:#fff; }
+            .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
+            .msg-bubble.recalled { color:#bbb; font-style:italic; background:#eee; }
+            .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
+            .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
+            .msg-media { margin-top:7px; }
+            .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; }
+            .msg-media img:hover { transform:scale(1.03); }
+        .msg-media-ph { display:inline-block; padding:8px 14px; background:#f2f3f5; border-radius:8px; font-size:12px; color:#8a8f99; }
+            .msg-lightbox { position:fixed; inset:0; z-index:2000; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; padding:28px; }
+            .msg-lightbox[hidden] { display:none; }
+            .msg-lightbox-inner { position:relative; max-width:100%; max-height:100%; display:flex; flex-direction:column; align-items:center; gap:10px; }
+            .msg-lightbox img { max-width:92vw; max-height:84vh; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.55); object-fit:contain; }
+            .msg-lightbox-close { position:fixed; top:18px; right:22px; width:38px; height:38px; border-radius:50%; border:none; background:rgba(255,255,255,.14); color:#fff; font-size:20px; line-height:38px; text-align:center; cursor:pointer; transition:background .15s ease; }
+            .msg-lightbox-close:hover { background:rgba(255,255,255,.28); }
+            .msg-lightbox-hint { color:rgba(255,255,255,.62); font-size:11px; }
+            .msg-meta { margin-top:3px; color:#b0b0b0; font-size:9px; padding-left:2px; }
+            .msg-row.self .msg-meta { text-align:right; padding-left:0; padding-right:2px; }
+            .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
+            .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
+            .msg-tag.bot { background:#ffeef5; color:#c66791; }
+            .msg-tag.role { background:#eef3ff; color:#5b7bd5; }
+            .msg-tag.self { background:#e9fbf3; color:#319e6b; }
+            .msg-tag.recalled { background:#f2f2f5; color:#9a9cb0; }
+            .msg-actions { display:flex; gap:5px; margin-top:5px; }
+            .msg-row.self .msg-actions { justify-content:flex-end; }
+            .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
+            .msg-action:hover { background:#d2e9fb; color:#12b7f5; }
+            .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
+            .msg-composer { display:flex; flex-direction:column; gap:8px; padding:10px 14px 12px; background:#fff; border-top:1px solid #e8e9ec; }
+            .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
+            .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
+            .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
+            .msg-composer-mode { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+            .msg-composer-mode select { height:28px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#333; font-size:11px; }
+            .msg-composer-mode input { height:28px; min-width:120px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
+            .msg-textarea { min-height:64px; max-height:150px; padding:9px 11px; border:0; border-radius:6px; background:#f2f3f5; color:#333; font-size:12px; line-height:1.55; resize:vertical; outline:none; transition:all .15s ease; }
+            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
+            .msg-extra { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+            .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
+            .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
+            .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
+        .msg-input-box { position:relative; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
+        .msg-input-box:focus-within { border-color:#12b7f5; }
+        .msg-textarea { width:100%; min-height:88px; max-height:180px; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
+        .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
+        .msg-img-inline[hidden] { display:none; }
+        .msg-img-chip { position:relative; width:84px; height:84px; border-radius:4px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
+        .msg-img-chip img { width:100%; height:100%; object-fit:cover; display:block; }
+        .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
+        .msg-img-remove:hover { background:rgba(230,67,64,.9); }
+        .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:4px; background:#f8f7ff; color:#999; font-size:11px; }
+        .msg-quote-preview[hidden] { display:none; }
+        .msg-quote-preview b { color:#333; }
+        .msg-quote-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .msg-toolbar { display:flex; align-items:center; gap:10px; }
+        .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:4px; color:#6b6f78; cursor:pointer; }
+        .msg-tool-btn:hover { background:#f0f7ff; color:#12b7f5; }
+        .msg-tool-btn svg { display:block; }
+            .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-raw-modal[hidden] { display:none; }
+            .msg-raw-box { width:min(720px,100%); height:min(640px,78vh); min-height:320px; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid #e8e9ec; }
+            .msg-raw-head strong { font-size:13px; color:#222; }
+            .msg-raw-head button { border:0; background:transparent; color:#999; font-size:16px; cursor:pointer; }
+            .msg-raw-content { flex:1 1 0; min-height:0; overflow:auto; padding:13px 15px; white-space:pre-wrap; word-break:break-all; color:#333; font:12px/1.6 Consolas,Monaco,monospace; }
+            .msg-mute-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-mute-modal[hidden] { display:none; }
+            .msg-mute-box { width:min(400px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-mute-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
+            .msg-mute-presets { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
+            .msg-mute-presets button { min-height:30px; padding:0 12px; border:1px solid #e0e1e5; border-radius:8px; background:#fff; color:#666; font-size:11px; cursor:pointer; }
+            .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
+            .msg-mute-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+            .msg-remark-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
+            .msg-remark-modal[hidden] { display:none; }
+            .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
+            .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
+            /* ===== QQ PC 风格覆盖 ===== */
+            .msg-shell { grid-template-columns:340px minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+            .chat-list-panel { background:#f7f8fa; }
+            .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
+            .msg-filter button.active { color:#12b7f5; }
+            .msg-chats { padding:4px 6px; }
+            .msg-chat { min-height:52px; padding:6px 8px; border-radius:6px; }
+            .msg-chat:hover { background:#eceef1; }
+            .msg-chat.active { background:#d5ebfb; }
+            .msg-chat-avatar { width:38px; height:38px; }
+            .msg-chat-top strong { font-size:12.5px; }
+            .msg-chat-sub { font-size:11px; margin-top:1px; }
+            .msg-work { background:#f5f6f7; }
+            .msg-head { padding:8px 14px; background:#fff; }
+            .msg-body { padding:14px 20px 8px; background:#f5f6f7; }
+            .msg-day { margin:8px 0; color:#b6bcc4; font-size:10px; }
+            .msg-row { gap:10px; margin-bottom:12px; align-items:flex-start; }
+            .msg-avatar { width:38px; height:38px; }
+            .msg-bubble-wrap { max-width:min(62%,560px); }
+            .msg-bubble { padding:9px 12px; border-radius:4px 12px 12px 12px; background:#fff; font-size:13px; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+            .msg-row.self .msg-bubble { border-radius:12px 4px 12px 12px; background:#95ec69; color:#000; }
+            .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
+            .msg-meta { color:#b6bcc4; font-size:9px; }
+            .msg-bubble-name { font-size:10px; }
+            .msg-composer { padding:8px 14px 10px; background:#fff; border-top:1px solid #e5e8ec; }
+            .msg-textarea { background:#f7f8fa; border-radius:4px; }
+            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
+            .msg-send-row .msg-btn.primary { background:#12b7f5; border-color:#12b7f5; }
+
+            /* 右键菜单 */
+            .msg-ctx { position:fixed; z-index:120; min-width:150px; padding:4px; background:#fff; border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.14); user-select:none; }
+            .msg-ctx[hidden] { display:none; }
+            .msg-ctx-item { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:0; border-radius:5px; background:transparent; color:#333; font-size:12px; text-align:left; cursor:pointer; }
+            .msg-ctx-item:hover { background:#f0f7ff; color:#12b7f5; }
+            .msg-ctx-item.danger:hover { background:#fff1f0; color:#e64340; }
+            .msg-ctx-sep { height:1px; margin:4px 8px; background:#eee; }
+
+            /* 多选模式 */
+            .msg-multi-bar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#e8f6fe; border-bottom:1px solid #cfe8fb; font-size:12px; color:#12b7f5; }
+            .msg-multi-bar[hidden] { display:none; }
+            .msg-row.multi-mode { cursor:pointer; }
+            .msg-row.multi-mode .msg-avatar, .msg-row.multi-mode .msg-bubble { opacity:.85; }
+            .msg-row.multi-mode.selected .msg-bubble { outline:2px solid #12b7f5; outline-offset:2px; }
+            .msg-pos { position:relative; display:inline-flex; flex:0 0 auto; }
+            .msg-multi-check { display:none; }
+            .msg-row.multi-mode .msg-multi-check { display:grid; position:absolute; left:-16px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
+            .msg-row.multi-mode.selected .msg-multi-check { border-color:#12b7f5; background:#12b7f5; }
+            .msg-row.self.multi-mode .msg-multi-check { left:auto; right:-16px; }
+            .msg-row.multi-mode.no-multi { opacity:.55; }
+            .msg-row.multi-mode.no-multi .msg-multi-check { display:none; }
+            .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
+            .msg-pos { position:relative; }
+            @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
+
+            /* ===== 深色模式（跟随系统） ===== */
+            @media (prefers-color-scheme: dark) {
+              .msg-shell { background:#1f2330; border-color:var(--line); }
+              .msg-panel { background:#1f2330; }
+              .chat-list-panel { border-right-color:var(--line); background:#1a1e2a; }
+              .msg-list-head { border-bottom-color:var(--line); background:#1f2330; }
+              .msg-filter { background:#161926; }
+              .msg-filter button { color:#9aa0b5; }
+              .msg-filter button.active { background:#1f2330; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.35); }
+              .msg-search input { background:#161926; color:#e8eaf2; }
+              .msg-search input:focus { border-color:#12b7f5; background:#1f2330; }
+              .msg-chat:hover { background:#262b3a; }
+              .msg-chat.active { background:#1d3850; }
+              .msg-chat.pinned { background:#1e2c44; }
+              .msg-chat.pinned:hover { background:#24334e; }
+              .msg-chat.pinned.active { background:#27405e; }
+              .msg-chat.pinned .msg-chat-top strong { color:#6fa8e8; }
+              .msg-chat.pinned .msg-chat-top small { color:#7d96b8; }
+              .msg-chat-top strong { color:#e8eaf2; }
+              .msg-chat-top small,.msg-chat-sub,.msg-bubble-name,.msg-head-sub { color:#8a90a5; }
+              .msg-chat-avatar { background:#23405f; color:#8db9f0; }
+              .msg-chat-avatar .avatar-letter { color:#8db9f0; }
+              .msg-empty { color:#6f7590; }
+              .msg-work { background:#161926; }
+              .msg-head { background:#1f2330; border-bottom-color:var(--line); }
+              .msg-head-name { color:#e8eaf2; }
+              .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+              .msg-body { background:#161926; }
+              .msg-day { color:#6f7590; }
+              .msg-avatar { background:#23405f; color:#8db9f0; }
+              .msg-avatar .avatar-letter { color:#8db9f0; }
+              .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
+              .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
+              .msg-bubble.recalled { color:#6f7590; background:#1a1e2a; }
+              .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
+              .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
+              .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+              .msg-meta { color:#6f7590; }
+              .msg-tag.bot { background:#3a2130; color:#e287ae; }
+              .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
+              .msg-tag.self { background:#16382c; color:#55d8a2; }
+              .msg-tag.recalled { background:#262b38; color:#9aa0b5; }
+              .msg-action { background:#262b38; color:#9aa0b5; }
+              .msg-action:hover { background:#1d3850; color:#12b7f5; }
+              .msg-load-older { border-color:var(--line); background:#1f2330; color:#8a90a5; }
+              .msg-composer { background:#1f2330; border-top-color:var(--line); }
+              .msg-composer-tabs button { border-color:var(--line); background:#1f2330; color:#8a90a5; }
+              .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
+              .msg-composer-mode select { border-color:var(--line); background:#1f2330; color:#e8eaf2; }
+              .msg-composer-mode input { border-color:var(--line); background:#161926; color:#e8eaf2; }
+              .msg-textarea { background:#161926; color:#e8eaf2; }
+              .msg-textarea:focus { background:#1f2330; box-shadow:inset 0 0 0 1px #12b7f5; }
+              .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
+              .msg-input-box { border-color:#2c3044; background:#1f2330; }
+              .msg-img-chip { border-color:#2c3044; background:#161926; }
+              .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
+              .msg-quote-preview b { color:#e8eaf2; }
+              .msg-tool-btn { color:#9aa0b5; }
+              .msg-tool-btn:hover { background:#1d3850; color:#12b7f5; }
+              .msg-raw-box,.msg-mute-box,.msg-remark-box { background:#1f2330; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+              .msg-raw-head { border-bottom-color:var(--line); }
+              .msg-raw-head { border-bottom-color:var(--line); }
+              .msg-raw-head strong,.msg-mute-box h3,.msg-remark-box h3 { color:#e8eaf2; }
+              .msg-raw-head button { color:#8a90a5; }
+              .msg-raw-content { color:#d3d7e4; }
+              .msg-mute-presets button { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+              .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
+              .msg-ctx { background:#1f2330; border-color:var(--line); box-shadow:0 6px 20px rgba(0,0,0,.5); }
+              .msg-ctx-item { color:#e6e8f0; }
+              .msg-ctx-item:hover { background:#1d3850; color:#12b7f5; }
+              .msg-ctx-item.danger:hover { background:#3a2121; color:#f08080; }
+              .msg-ctx-sep { background:#2c3044; }
+              .msg-multi-bar { background:#12344d; border-bottom-color:#1e4a68; color:#42c6ff; }
+              .msg-row.multi-mode.selected .msg-bubble { outline-color:#12b7f5; }
+              .msg-multi-check { border-color:#4a5268; background:#1f2330; }
+              /* QQ PC 覆盖在深色下 */
+              .msg-shell { border-color:#2c3044; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+              .chat-list-panel { background:#1a1e2a; }
+              .msg-list-head { background:#1f2330; border-bottom-color:#2c3044; }
+              .msg-chat:hover { background:#262b3a; }
+              .msg-chat.active { background:#1d3850; }
+              .msg-work { background:#161926; }
+              .msg-head { background:#1f2330; }
+              .msg-body { background:#161926; }
+              .msg-day { color:#6f7590; }
+              .msg-bubble { background:#262b3a; }
+              .msg-row.self .msg-bubble { background:#95ec69; color:#0f1a12; }
+              .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
+              .msg-meta { color:#6f7590; }
+              .msg-composer { background:#1f2330; border-top-color:#2c3044; }
+              .msg-textarea { background:#161926; }
+              .msg-textarea:focus { background:#1f2330; }
+              .msg-multi-bar { border-bottom-color:#1e4a68; }
+            }
+          </style>
+          <div class="msg-shell">
+            <div class="msg-panel chat-list-panel">
+              <div class="msg-list-head">
+                <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
+                  <button type="button" data-msg-filter="all" class="active">全量</button>
+                  <button type="button" data-msg-filter="remark">备注</button>
+                  <button type="button" data-msg-filter="group">群聊</button>
+                  <button type="button" data-msg-filter="user">私聊</button>
+                </div>
+                <div class="msg-search">
+                  <input id="msg-search-input" type="text" placeholder="搜索群名或 openid" aria-label="搜索会话">
+                  <button id="msg-search-btn" type="button">搜索</button>
+                </div>
+              </div>
+              <div class="msg-chats" id="msg-chats"><div class="msg-empty">正在加载会话...</div></div>
+            </div>
+            <div class="msg-panel msg-work">
+              <div class="msg-head">
+                <div style="min-width:0">
+                  <div class="msg-head-name" id="msg-head-name">选择一个会话</div>
+                  <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>
+                  <span class="msg-admin-tag" id="msg-admin-tag" hidden>· 机器人是管理员</span>
+                </div>
+                <div class="msg-head-actions">
+                  <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
+                  <button class="msg-btn" id="msg-remark" type="button" hidden>群备注</button>
+                  <button class="msg-btn" id="msg-reload" type="button">刷新</button>
+                </div>
+              </div>
+              <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
+              <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
+              <div class="msg-composer" id="msg-composer" hidden>
+                <div class="msg-composer-mode">
+                  <select id="msg-send-mode" aria-label="发送方式">
+                    <option value="default">默认（全量群主动/其他被动）</option>
+                    <option value="passive">被动（msg_id）</option>
+                    <option value="active">主动</option>
+                    <option value="custom_msg_id">自定义 msg_id</option>
+                    <option value="custom_event_id">自定义事件 ID</option>
+                  </select>
+                  <input id="msg-custom-id" type="text" placeholder="自定义 msg_id / 事件 ID" hidden>
+                </div>
+                <div class="msg-extra" id="msg-extra" hidden></div>
+                <div class="msg-composer-tabs" id="msg-composer-tabs">
+                  <button type="button" data-msg-type="text" class="active">文本</button>
+                  <button type="button" data-msg-type="markdown">Markdown</button>
+                  <button type="button" data-msg-type="media">媒体</button>
+                  <button type="button" data-msg-type="ark">ARK模板</button>
+                  <button type="button" data-msg-type="card">图文卡片</button>
+                </div>
+                <div class="msg-input-box" id="msg-input-box">
+                  <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
+                  <div class="msg-img-inline" id="msg-img-inline" hidden>
+                    <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
+                  </div>
+                  <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
+                </div>
+                <div class="msg-toolbar">
+                  <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                    <input id="msg-img-file" type="file" accept="image/*" hidden>
+                  </label>
+                  <span id="msg-send-status" style="color:var(--muted);font-size:11px"></span>
+                  <span style="flex:1"></span>
+                  <button class="msg-btn primary" id="msg-send" type="button">发送</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><button id="msg-raw-close" type="button">×</button></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
+          <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box"><h3>群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
+          <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="43200" placeholder="自定义分钟" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
+        </section>
+      </div>
+    </main>
+    <div class="msg-ctx" id="msg-ctx" hidden></div>
+    <div class="msg-lightbox" id="msg-lightbox" hidden>
+      <div class="msg-lightbox-inner">
+        <img id="msg-lightbox-img" alt="图片预览" referrerpolicy="no-referrer">
+        <div class="msg-lightbox-hint">点击图片或按 Esc 关闭 · 右键可复制/保存图片</div>
+      </div>
+      <button class="msg-lightbox-close" id="msg-lightbox-close" type="button" title="关闭">&times;</button>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+"""
+脚本标签前缀 = """
+  <script>"""
+脚本标签后缀 = """</script>
+</body>
+</html>
+"""
+
+
+def 渲染控制台页面() -> str:
+    return (
+        页面头部前缀
+        + 控制台样式
+        + 页面头部后缀
+        + 页面主体
+        + 脚本标签前缀
+        + 控制台脚本
+        + 脚本标签后缀
+    )

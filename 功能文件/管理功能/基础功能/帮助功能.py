@@ -26,7 +26,7 @@ QQ官方提及Markdown开头规则 = re.compile(r"^\s*<@[A-Za-z0-9_-]{5,128}>(?:
 def 获取帮助网页地址(配置: Any = None) -> str:
     """延迟读取帮助网页地址，避免帮助菜单与网页模块循环导入。"""
     try:
-        from 功能文件.管理功能.基础功能 import 帮助网页
+        from 功能文件.页面功能 import 帮助网页
 
         return 帮助网页.获取帮助网页地址(配置)
     except Exception as exc:
