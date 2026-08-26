@@ -5,10 +5,12 @@ import base64
 import hashlib
 import html
 import json
+import os
 import re
 import secrets
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -59,6 +61,9 @@ SEARCH_NO_SIGN_KEYS = {
     "X-NEBULAXMLHTTPREQUEST",
     "callbackUrl",
 }
+书旗正文最大动态并发数 = 400
+书旗正文最大尝试次数 = 3
+书旗解码最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -103,10 +108,11 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
     try:
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=60)
         connector = aiohttp.TCPConnector(
-            limit=16,
-            limit_per_host=16,
+            limit=书旗正文最大动态并发数,
+            limit_per_host=书旗正文最大动态并发数,
             ttl_dns_cache=300,
             keepalive_timeout=30,
+            enable_cleanup_closed=True,
         )
         async with aiohttp.ClientSession(
             timeout=timeout, connector=connector
@@ -124,7 +130,9 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
-                f"章节数={len(书籍.chapters)}, 模式=iOS目录+逐章正文"
+                f"章节数={len(书籍.chapters)}, 模式=iOS目录+逐章正文, "
+                f"会话复用=开启, 最大动态并发数={书旗正文最大动态并发数}, "
+                f"解码方式=标准库, 解码并发数={书旗解码最大动态并发数}"
             )
             yield 格式化下载提示(书籍)
 
@@ -470,13 +478,29 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
     )
 
 
+def _生成书旗字符变换表() -> dict[int, int]:
+    表: dict[int, int] = {}
+    for 字符码 in range(ord("A"), ord("Z") + 1):
+        偏移 = (字符码 + 32 - 83) % 26 or 26
+        表[字符码] = 偏移 + 64
+    for 字符码 in range(ord("a"), ord("z") + 1):
+        偏移 = (字符码 - 83) % 26 or 26
+        表[字符码] = 偏移 + 96
+    return 表
+
+
+书旗字符变换表 = str.maketrans(_生成书旗字符变换表())
+
+
 def _书旗字符变换(密文: str) -> str:
+    文本 = str(密文 or "")
+    if 文本.isascii():
+        return 文本.translate(书旗字符变换表)
     结果: list[str] = []
-    for 字符 in str(密文 or ""):
+    for 字符 in 文本:
         if 字符.isalpha():
             大写 = 字符.isupper()
-            小写字符 = 字符.lower()
-            偏移 = (ord(小写字符) - 83) % 26 or 26
+            偏移 = (ord(字符.lower()) - 83) % 26 or 26
             结果.append(chr(偏移 + (64 if 大写 else 96)))
         else:
             结果.append(字符)
@@ -500,7 +524,10 @@ def _解码书旗正文(密文: str) -> str:
 
 
 async def _请求书旗章节正文(
-    session: aiohttp.ClientSession, 章节: Chapter
+    session: aiohttp.ClientSession,
+    章节: Chapter,
+    解密执行器: ThreadPoolExecutor,
+    解密信号量: asyncio.Semaphore,
 ) -> str:
     if not 章节.content_url:
         raise ShuqiError("章节正文地址为空")
@@ -522,7 +549,21 @@ async def _请求书旗章节正文(
     状态 = str(数据.get("state") or 数据.get("status") or "")
     if 状态 and 状态 not in {"200", "0"}:
         raise ShuqiError(f"章节正文接口异常：state={状态}")
-    return _解码书旗正文(str(数据.get("ChapterContent") or ""))
+    加密正文 = str(数据.get("ChapterContent") or "")
+    if not 加密正文.strip():
+        raise ShuqiError("章节正文为空")
+    async with 解密信号量:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            解密执行器, _解码书旗正文, 加密正文
+        )
+
+
+def 计算书旗正文并发数(章节数: int, 上限: int = 书旗正文最大动态并发数) -> int:
+    数量 = max(0, int(章节数 or 0))
+    if not 数量:
+        return 0
+    return min(max(1, int(上限 or 1)), 数量)
 
 
 async def 下载全部章节(
@@ -532,61 +573,140 @@ async def 下载全部章节(
     总数 = len(书籍.chapters)
     if not 总数:
         return []
-    并发上限 = min(16, 总数)
-    信号量 = asyncio.Semaphore(并发上限)
+    结果: list[dict[str, str]] = [
+        {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
+        for 章节 in 书籍.chapters
+    ]
+    待处理 = list(range(总数))
     进度锁 = asyncio.Lock()
     已完成 = 0
+    成功数 = 0
     下次进度 = 10
+    解密并发数 = min(书旗解码最大动态并发数, 总数)
+    解密执行器 = ThreadPoolExecutor(
+        max_workers=max(1, 解密并发数), thread_name_prefix="shuqi-decode"
+    )
 
     logger.info(
         f"书旗小说章节进度：书籍编号={书籍.book_id}, 进度=0/{总数}, "
-        f"百分比=0%, 模式=iOS逐章正文, 并发数={并发上限}"
+        f"百分比=0%, 模式=iOS逐章正文, 会话复用=开启, "
+        f"动态并发上限={计算书旗正文并发数(总数)}, "
+        f"解码方式=标准库, 解码并发数={解密并发数}"
     )
 
-    async def 下载一章(章节: Chapter) -> dict[str, str]:
-        nonlocal 已完成, 下次进度
-        正文 = ""
-        最后异常: Exception | None = None
-        for _重试 in range(3):
-            try:
-                async with 信号量:
-                    正文 = await _请求书旗章节正文(session, 章节)
-                break
-            except Exception as exc:
-                最后异常 = exc
-                if _重试 < 2:
-                    await asyncio.sleep(0.2 * (_重试 + 1))
-        if not 正文:
-            raise ShuqiError(
-                f"章节正文获取失败：chapter={章节.chapter_id}, "
-                f"error={type(最后异常).__name__ if 最后异常 else 'Unknown'}"
-            )
+    async def 记录首轮进度(成功: bool) -> None:
+        nonlocal 已完成, 成功数, 下次进度
         async with 进度锁:
             已完成 += 1
+            if 成功:
+                成功数 += 1
             百分比 = 已完成 * 100 // 总数
-            if 百分比 >= 下次进度 or 已完成 == 总数:
-                logger.info(
-                    f"书旗小说章节进度：书籍编号={书籍.book_id}, "
-                    f"进度={已完成}/{总数}, 百分比={百分比}%, "
-                    "模式=iOS逐章正文"
-                )
-                while 下次进度 <= 百分比:
-                    下次进度 += 10
-        return {"id": 章节.chapter_id, "title": 章节.name, "content": 正文}
+            if 百分比 < 下次进度 and 已完成 != 总数:
+                return
+            logger.info(
+                f"书旗小说章节进度：书籍编号={书籍.book_id}, "
+                f"进度={已完成}/{总数}, 百分比={百分比}%, "
+                f"成功={成功数}, 失败={已完成 - 成功数}, "
+                "模式=iOS逐章正文, 会话复用=开启"
+            )
+            while 下次进度 <= 百分比:
+                下次进度 += 10
 
-    结果 = await asyncio.gather(
-        *(下载一章(章节) for 章节 in 书籍.chapters), return_exceptions=True
+    try:
+        for 尝试次数 in range(1, 书旗正文最大尝试次数 + 1):
+            if not 待处理:
+                break
+            本轮上限 = max(
+                1, 书旗正文最大动态并发数 // (2 ** (尝试次数 - 1))
+            )
+            本轮并发 = min(
+                计算书旗正文并发数(len(待处理)), 本轮上限
+            )
+            本轮结果 = await _下载章节一轮(
+                session,
+                书籍,
+                待处理,
+                本轮并发,
+                解密执行器,
+                解密并发数,
+                记录首轮进度 if 尝试次数 == 1 else None,
+            )
+            下轮待处理: list[int] = []
+            for 索引, 正文, 错误类型 in 本轮结果:
+                if 正文:
+                    结果[索引]["content"] = 正文
+                else:
+                    下轮待处理.append(索引)
+                    logger.debug(
+                        f"书旗章节下载失败，准备重试：书籍编号={书籍.book_id}, "
+                        f"章节编号={书籍.chapters[索引].chapter_id}, "
+                        f"轮次={尝试次数}/{书旗正文最大尝试次数}, 错误类型={错误类型}"
+                    )
+            待处理 = 下轮待处理
+            if 待处理 and 尝试次数 < 书旗正文最大尝试次数:
+                await asyncio.sleep(min(1.0, 0.25 * 尝试次数))
+    finally:
+        解密执行器.shutdown(wait=False, cancel_futures=True)
+
+    成功总数 = sum(bool(项.get("content")) for 项 in 结果)
+    logger.info(
+        f"书旗小说章节下载汇总：书籍编号={书籍.book_id}, "
+        f"成功={成功总数}, 失败={总数 - 成功总数}, 总数={总数}, "
+        f"动态并发上限={计算书旗正文并发数(总数)}, 解码方式=标准库"
     )
-    章节内容: list[dict[str, str]] = []
-    缺失章节: list[str] = []
-    for 章节, 项 in zip(书籍.chapters, 结果):
-        if isinstance(项, Exception):
-            缺失章节.append(章节.chapter_id)
-            continue
-        章节内容.append(项)
-    if 缺失章节:
-        raise ShuqiError(f"章节正文不完整：missing={len(缺失章节)}")
-    return 章节内容
+    if 待处理:
+        raise ShuqiError(f"章节正文不完整：missing={len(待处理)}")
+    return 结果
+
+
+async def _下载章节一轮(
+    session: aiohttp.ClientSession,
+    书籍: Book,
+    索引列表: list[int],
+    并发数: int,
+    解密执行器: ThreadPoolExecutor,
+    解密并发数: int,
+    进度回调: Any = None,
+) -> list[tuple[int, str, str]]:
+    请求信号量 = asyncio.Semaphore(max(1, 并发数))
+    解密信号量 = asyncio.Semaphore(max(1, 解密并发数))
+
+    async def 下载单章(索引: int) -> tuple[int, str, str]:
+        try:
+            async with 请求信号量:
+                正文 = await _请求书旗章节正文(
+                    session,
+                    书籍.chapters[索引],
+                    解密执行器,
+                    解密信号量,
+                )
+            if 进度回调 is not None:
+                await 进度回调(True)
+            return 索引, 正文, ""
+        except Exception as exc:
+            if 进度回调 is not None:
+                await 进度回调(False)
+            return 索引, "", type(exc).__name__
+
+    结果: list[tuple[int, str, str]] = []
+    待调度 = iter(索引列表)
+    活跃任务: set[asyncio.Task[tuple[int, str, str]]] = set()
+    for _ in range(min(max(1, 并发数), len(索引列表))):
+        try:
+            活跃任务.add(asyncio.create_task(下载单章(next(待调度))))
+        except StopIteration:
+            break
+    while 活跃任务:
+        完成任务, 活跃任务 = await asyncio.wait(
+            活跃任务, return_when=asyncio.FIRST_COMPLETED
+        )
+        for 任务 in 完成任务:
+            结果.append(任务.result())
+            try:
+                活跃任务.add(asyncio.create_task(下载单章(next(待调度))))
+            except StopIteration:
+                pass
+    return 结果
 
 
 async def 请求JSON(
