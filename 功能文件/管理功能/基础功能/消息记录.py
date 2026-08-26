@@ -631,6 +631,14 @@ def 记录发送消息(
             "ts": int(time.time()),
         }
         会话["messages"].append(记录)
+        if 来源.startswith("bot_"):
+            logger.info(
+                "消息记录已捕获机器人发送：会话类型=%s，来源=%s，消息ID=%s，文本长度=%d",
+                类型,
+                来源,
+                str(消息ID or "")[:80],
+                len(str(内容 or "")),
+            )
         if 消息ID:
             自己发送消息ID[str(消息ID)] = time.time()
             try:
@@ -1232,8 +1240,36 @@ def _数据库历史消息(
         会话消息: list[dict[str, Any]] = list(reversed(行列表))
         原始数量 = len(会话消息)
         返回消息 = 会话消息[-limit:]
-        最后消息 = 会话消息[-1] if 会话消息 else {}
-        消息索引 = {str(m.get("message_id") or ""): m for m in 会话消息}
+        # 发送记录先写入内存再异步/同步落库；数据库已有旧历史时，把尚未出现在
+        # 本页的本进程发送记录合并进来，避免“发送成功但控制台仍看不到”。
+        内存会话 = 消息缓存.get(会话标识) or {}
+        内存发送记录 = [
+            消息项 for 消息项 in (内存会话.get("messages") or [])
+            if 消息项.get("is_self") and str(消息项.get("source") or "") in ("bot_send", "bot_active", "web_panel")
+        ]
+        已有记录键 = {
+            (
+                str(消息项.get("message_id") or ""),
+                str(消息项.get("content") or ""),
+                int(消息项.get("ts") or 0),
+            )
+            for 消息项 in 返回消息
+        }
+        for 消息项 in 内存发送记录:
+            if before_date and str(消息项.get("timestamp") or "") >= before_date:
+                continue
+            记录键 = (
+                str(消息项.get("message_id") or ""),
+                str(消息项.get("content") or ""),
+                int(消息项.get("ts") or 0),
+            )
+            if 记录键 not in 已有记录键:
+                返回消息.append(消息项)
+                已有记录键.add(记录键)
+        返回消息.sort(key=lambda 消息项: (int(消息项.get("ts") or 0), str(消息项.get("timestamp") or "")))
+        返回消息 = 返回消息[-limit:]
+        最后消息 = 返回消息[-1] if 返回消息 else {}
+        消息索引 = {str(m.get("message_id") or ""): m for m in 返回消息 if m.get("message_id")}
         引用映射: dict[str, dict[str, str]] = {}
         for 消息记录项 in 返回消息:
             引用ID = str(消息记录项.get("reference_id") or "").strip()
