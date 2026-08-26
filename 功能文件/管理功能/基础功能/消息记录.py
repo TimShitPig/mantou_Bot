@@ -180,8 +180,28 @@ def _读取全部持久化未读数() -> dict[str, int]:
         return {}
 
 
+def _后台执行同步(操作: Any, *参数: Any) -> None:
+    """把可能阻塞的数据库操作移出 AstrBot 事件循环。"""
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            操作(*参数)
+        except Exception as 异常:
+            logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
+        return
+
+    async def _执行() -> None:
+        try:
+            await asyncio.to_thread(操作, *参数)
+        except Exception as 异常:
+            logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
+
+    循环.create_task(_执行())
+
+
 def _持久化未读数(会话标识: str, 未读数: int) -> None:
-    """把会话未读数写入 MySQL，保证重启后红点不丢失；未配置数据库时静默跳过。"""
+    """异步写入未读数，避免 MySQL 往返阻塞消息事件循环。"""
     if not 会话标识:
         return
     try:
@@ -192,8 +212,12 @@ def _持久化未读数(会话标识: str, 未读数: int) -> None:
 
         if not 已配置运行状态数据库(当前插件配置):
             return
-        写入运行状态值(
-            当前插件配置, 未读状态命名空间, str(会话标识), max(0, int(未读数))
+        _后台执行同步(
+            写入运行状态值,
+            当前插件配置,
+            未读状态命名空间,
+            str(会话标识),
+            max(0, int(未读数)),
         )
     except Exception as 异常:
         logger.debug("消息记录未读数持久化失败：错误类型=%s", type(异常).__name__)
@@ -555,7 +579,7 @@ def 记录收到消息(
                 pass
         if _消息存储 is not None:
             try:
-                _消息存储.写入消息(记录)
+                _后台执行同步(_消息存储.写入消息, dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
@@ -649,7 +673,7 @@ def 记录发送消息(
                 pass
         if _消息存储 is not None:
             try:
-                _消息存储.写入消息(记录)
+                _后台执行同步(_消息存储.写入消息, dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
