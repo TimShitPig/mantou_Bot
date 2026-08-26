@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import base64
+import copy
 import json
 import random
 import re
@@ -41,6 +42,8 @@ except Exception as 导入异常:
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
+_后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
+_未读待写: dict[str, int] = globals().get("_未读待写") or {}
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
@@ -193,7 +196,11 @@ def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict
             "last_ts": 0,
             "last_content": "",
             "last_nickname": "",
-            "unread": _读取持久化未读数(会话标识),
+            "unread": (
+                _未读待写[会话标识]
+                if 会话标识 in _未读待写
+                else _读取持久化未读数(会话标识)
+            ),
         }
     return 消息缓存[会话标识]
 
@@ -230,18 +237,21 @@ def _读取全部持久化未读数() -> dict[str, int]:
         if not 已配置运行状态数据库(当前插件配置):
             return {}
         原始 = 读取运行状态命名空间(当前插件配置, 未读状态命名空间) or {}
-        return {
+        结果 = {
             str(会话): max(0, int(值 or 0))
             for 会话, 值 in 原始.items()
             if str(会话 or "").strip()
         }
+        # 同一进程内最新状态可能仍在写库队列中，优先使用待写值，避免旧值回显。
+        结果.update({str(会话): max(0, int(值 or 0)) for 会话, 值 in _未读待写.items()})
+        return 结果
     except Exception as 异常:
         logger.debug("消息记录未读数批量读取失败：错误类型=%s", type(异常).__name__)
         return {}
 
 
-def _后台执行同步(操作: Any, *参数: Any) -> None:
-    """把可能阻塞的数据库操作移出 AstrBot 事件循环。"""
+def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
+    """把可能阻塞的数据库操作移出 AstrBot 事件循环并登记，便于重载前等待。"""
     try:
         循环 = asyncio.get_running_loop()
     except RuntimeError:
@@ -249,23 +259,53 @@ def _后台执行同步(操作: Any, *参数: Any) -> None:
             操作(*参数)
         except Exception as 异常:
             logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
-        return
+        return None
 
-    async def _执行() -> None:
+    async def _执行() -> Any:
         try:
             # 所有后台写库共用一个锁，避免并发 INSERT 按完成先后乱序。
             async with _数据库写入锁:
-                await asyncio.to_thread(操作, *参数)
+                return await asyncio.to_thread(操作, *参数)
         except Exception as 异常:
             logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
+            return None
 
-    循环.create_task(_执行())
+    任务 = 循环.create_task(_执行())
+    _后台写入任务.add(任务)
+    任务.add_done_callback(_后台写入任务.discard)
+    return 任务
+
+
+async def 等待消息记录写入(超时: float = 10.0) -> bool:
+    """等待当前已排队的消息/未读/元数据写入，供网页操作和插件停机调用。"""
+    任务列表 = [任务 for 任务 in list(_后台写入任务) if not 任务.done()]
+    if not 任务列表:
+        return True
+    try:
+        _, 未完成 = await asyncio.wait(任务列表, timeout=max(0.1, float(超时)))
+        if 未完成:
+            logger.warning("消息记录后台写入未在限定时间内完成：剩余=%d", len(未完成))
+            return False
+        return True
+    except Exception as 异常:
+        logger.warning("消息记录后台写入等待失败：错误类型=%s", type(异常).__name__)
+        return False
+
+
+async def 停止消息记录() -> bool:
+    """插件重载/退出前冲刷消息记录写入队列，避免最后几条消息丢失。"""
+    return await 等待消息记录写入(10.0)
 
 
 def _持久化未读数(会话标识: str, 未读数: int) -> None:
     """异步写入未读数，避免 MySQL 往返阻塞消息事件循环。"""
     if not 会话标识:
         return
+    会话标识 = str(会话标识)
+    try:
+        _未读待写[会话标识] = max(0, int(未读数))
+    except (TypeError, ValueError):
+        _未读待写[会话标识] = 0
     try:
         from 功能文件.管理功能.基础功能.运行状态数据库 import (
             已配置运行状态数据库,
@@ -278,8 +318,8 @@ def _持久化未读数(会话标识: str, 未读数: int) -> None:
             写入运行状态值,
             当前插件配置,
             未读状态命名空间,
-            str(会话标识),
-            max(0, int(未读数)),
+            会话标识,
+            _未读待写[会话标识],
         )
     except Exception as 异常:
         logger.debug("消息记录未读数持久化失败：错误类型=%s", type(异常).__name__)
@@ -903,8 +943,8 @@ def 获取群QQ号(会话标识: str) -> str:
     return str((数据.get("remarks") or {}).get(会话标识, {}).get("group_qq") or "")
 
 
-def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> None:
-    数据 = _读取本地缓存文件()
+def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> bool:
+    数据 = copy.deepcopy(_读取本地缓存文件())
     备注表 = 数据.setdefault("remarks", {})
     现有 = 备注表.setdefault(会话标识, {})
     if 备注:
@@ -916,17 +956,18 @@ def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> Non
     elif 群QQ == "":
         现有.pop("group_qq", None)
     备注表[会话标识] = 现有
-    _写入本地缓存文件(数据)
+    return _写入本地缓存文件(数据)
 
 
-def 删除群备注(会话标识: str) -> None:
+def 删除群备注(会话标识: str) -> bool:
     """删除某个会话的全部备注与群号信息。"""
-    数据 = _读取本地缓存文件()
+    数据 = copy.deepcopy(_读取本地缓存文件())
     备注表 = 数据.get("remarks") or {}
     if 会话标识 in 备注表:
         del 备注表[会话标识]
         数据["remarks"] = 备注表
-        _写入本地缓存文件(数据)
+        return _写入本地缓存文件(数据)
+    return True
 
 
 def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
@@ -934,17 +975,18 @@ def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return False
-    数据 = _读取本地缓存文件()
+    # 复制顶层数据，写库失败时不把未持久化的置顶状态留在内存里。
+    数据 = dict(_读取本地缓存文件())
     置顶列表 = [str(x) for x in (数据.get("pinned") or []) if str(x or "").strip()]
     已置顶 = 会话标识 in 置顶列表
     if 置顶 and not 已置顶:
         置顶列表.insert(0, 会话标识)
         数据["pinned"] = 置顶列表
-        _写入本地缓存文件(数据)
+        return _写入本地缓存文件(数据)
     elif not 置顶 and 已置顶:
         置顶列表 = [x for x in 置顶列表 if x != 会话标识]
         数据["pinned"] = 置顶列表
-        _写入本地缓存文件(数据)
+        return _写入本地缓存文件(数据)
     return True
 
 
@@ -970,18 +1012,25 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
     return dict(_本地缓存内存 or {})
 
 
-def _写入本地缓存文件(数据: dict[str, Any]) -> None:
-    """写入置顶/备注/昵称元数据：仅 MySQL（不产生任何本地文件）。"""
+def _写入本地缓存文件(数据: dict[str, Any]) -> bool:
+    """写入置顶/备注/昵称元数据，并返回是否已全部提交到 MySQL。"""
     global _本地缓存内存, _本地缓存时间
-    _本地缓存内存 = 数据
-    _本地缓存时间 = time.time()
     if _消息存储 is None:
-        return
+        _本地缓存内存 = 数据
+        _本地缓存时间 = time.time()
+        return False
+    成功 = True
     for 键, 值 in (数据 or {}).items():
         try:
-            _消息存储.写入元数据(键, 值)
+            if not _消息存储.写入元数据(键, 值):
+                成功 = False
         except Exception as 存储异常:
             logger.debug("消息记录元数据入库失败：错误类型=%s", type(存储异常).__name__)
+            成功 = False
+    if 成功:
+        _本地缓存内存 = 数据
+        _本地缓存时间 = time.time()
+    return 成功
 
 
 def 标记群信息待刷新(会话标识: str) -> None:
@@ -1205,6 +1254,12 @@ def _数据库聚合聊天项(
                 continue
             _规范化历史消息(最后记录)
             last_ts = int(_历史消息排序键(最后记录)[0] or 项.get("last_ts") or 0)
+            if 会话标识 in _未读待写:
+                当前未读数 = _未读待写[会话标识]
+            elif 会话标识 in 持久化未读表:
+                当前未读数 = 持久化未读表[会话标识]
+            else:
+                当前未读数 = int(内存会话.get("unread") or 0)
             聊天项.append(
                 {
                     "chat_id": 会话标识,
@@ -1216,7 +1271,7 @@ def _数据库聚合聊天项(
                     "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
                     "last_ts": last_ts,
                     "msg_count": int(项.get("msg_count") or 0),
-                    "unread": int(内存会话.get("unread") or 持久化未读表.get(会话标识, 0)),
+                    "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
                     "in_group": True,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
@@ -1290,10 +1345,11 @@ def 获取聊天列表(
             )
         for 聊天 in 聊天列表:
             聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
-    # 置顶会话整体排前，组内按最新消息时间倒序；未置顶按最新消息时间倒序（同 QQ）
+    # 手动置顶会话始终在最前；其余会话中未读优先，再按最新消息时间倒序。
     聊天列表.sort(
         key=lambda x: (
             0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
+            0 if int(x.get("unread") or 0) > 0 else 1,
             -(x.get("last_ts") or 0),
             str(x.get("chat_id") or ""),
         )
@@ -2278,6 +2334,14 @@ def _从数据库恢复() -> None:
         _本地缓存内存 = 元数据
         _本地缓存时间 = time.time()
     会话标识列表 = _消息存储.读取全部会话标识()
+    持久化未读表 = _读取全部持久化未读数()
+    # 热重载会保留模块级缓存；每次恢复都用数据库中的最新未读值覆盖旧内存值，
+    # 特别是已读清零的 0 不能再被旧的正数覆盖。
+    for 已有会话标识, 已有会话 in 消息缓存.items():
+        if 已有会话标识 in _未读待写:
+            已有会话["unread"] = _未读待写[已有会话标识]
+        elif 已有会话标识 in 持久化未读表:
+            已有会话["unread"] = 持久化未读表[已有会话标识]
     置顶列表 = [str(x) for x in (元数据.get("pinned") or []) if str(x or "").strip()]
     恢复数 = 0
     最大序号 = 0

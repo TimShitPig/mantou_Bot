@@ -1318,7 +1318,8 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        消息记录.设置会话置顶(会话标识, 置顶)
+        if not 消息记录.设置会话置顶(会话标识, 置顶):
+            return _控制台错误(409, "数据库未保存，会话置顶未生效")
         return web.json_response({"ok": True, "message": "已置顶" if 置顶 else "已取消置顶"})
     except Exception as exc:
         logger.warning("帮助控制台会话置顶失败：错误类型=%s", type(exc).__name__)
@@ -1336,6 +1337,9 @@ async def _处理消息已读(request: web.Request) -> web.Response:
         from 功能文件.管理功能.基础功能 import 消息记录
 
         消息记录.设置会话已读(会话标识)
+        # 清零操作先落库再返回，避免随后刷新列表又读到旧未读值。
+        if not await 消息记录.等待消息记录写入(5.0):
+            return _控制台错误(409, "已读状态保存失败")
         return web.json_response({"ok": True})
     except Exception as exc:
         logger.warning("帮助控制台会话已读失败：错误类型=%s", type(exc).__name__)
@@ -1376,11 +1380,13 @@ async def _处理群备注(request: web.Request) -> web.Response:
             }
             return web.json_response({"ok": True, **结果})
         if (数据 or {}).get("action") == "delete":
-            await asyncio.to_thread(消息记录.删除群备注, 会话标识)
+            if not await asyncio.to_thread(消息记录.删除群备注, 会话标识):
+                return _控制台错误(409, "备注删除失败")
             return web.json_response({"ok": True, "message": "备注已删除"})
         备注 = str((数据 or {}).get("remark") or "").strip()
         群QQ = str((数据 or {}).get("group_qq") or "").strip()
-        await asyncio.to_thread(消息记录.保存群备注, 会话标识, 备注, 群QQ)
+        if not await asyncio.to_thread(消息记录.保存群备注, 会话标识, 备注, 群QQ):
+            return _控制台错误(409, "备注保存失败")
         return web.json_response({"ok": True, "message": "备注已保存"})
     except Exception as exc:
         logger.warning("帮助控制台群备注保存失败：错误类型=%s", type(exc).__name__)

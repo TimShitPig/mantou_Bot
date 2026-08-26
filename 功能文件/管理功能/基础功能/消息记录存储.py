@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
 try:
@@ -37,6 +39,34 @@ _列最大长度: dict[str, int] = {
 }
 
 _数据库配置引用: dict[str, Any] = {}
+
+
+def _运行状态表名() -> str:
+    """返回与运行状态数据库相同的表名，避免消息面板读写另一张表。"""
+    try:
+        from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+        配置 = 运行状态数据库.获取数据库配置(_读取插件配置())
+        表名 = str(配置.get("runtime_state_table") or 运行状态数据库.运行状态数据库表名).strip()
+    except Exception:
+        表名 = "mantou_runtime_state"
+    # 表名不能使用参数占位符，只接受数据库标识符，防止配置值破坏 SQL。
+    if not re.fullmatch(r"[A-Za-z0-9_]+", 表名):
+        return "mantou_runtime_state"
+    return 表名
+
+
+def _行字段(行: Any, 索引: int, *字段名: str, 默认值: Any = None) -> Any:
+    """兼容 PyMySQL 元组游标和 DictCursor，避免字典行按数字索引触发 TypeError。"""
+    if isinstance(行, Mapping):
+        for 字段 in 字段名:
+            if 字段 in 行:
+                return 行.get(字段)
+        return 默认值
+    try:
+        return 行[索引] if 索引 < len(行) else 默认值
+    except (IndexError, KeyError, TypeError):
+        return 默认值
 
 
 def 设置数据库配置(配置: Any) -> None:
@@ -87,6 +117,7 @@ def 初始化数据库() -> bool:
     连接 = _打开连接()
     if 连接 is None:
         return False
+    状态表名 = _运行状态表名()
     try:
         with 连接.cursor() as 游标:
             游标.execute(
@@ -116,8 +147,8 @@ def 初始化数据库() -> bool:
                 """
             )
             游标.execute(
-                """
-                CREATE TABLE IF NOT EXISTS mantou_runtime_state (
+                f"""
+                CREATE TABLE IF NOT EXISTS `{状态表名}` (
                     namespace VARCHAR(64) NOT NULL,
                     state_key VARCHAR(128) NOT NULL,
                     state_value TEXT NOT NULL,
@@ -126,22 +157,46 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
-        # 表结构自修复：旧表可能为 utf8（无法存 emoji）或缺新列，转为 utf8mb4 并补齐
-        try:
-            游标.execute(f"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{消息记录表名}' AND COLUMN_NAME = 'content'")
-            行 = 游标.fetchone()
-            if 行 and str(行[0] or "").lower() != "utf8mb4":
-                游标.execute(f"ALTER TABLE `{消息记录表名}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                连接.commit()
-                logger.warning("消息记录 MySQL 表已转为 utf8mb4")
-            for 列名, 定义 in (("refidx", "VARCHAR(128) DEFAULT ''"), ("recalled", "TINYINT DEFAULT 0"), ("reference_id", "VARCHAR(128) DEFAULT ''"), ("media", "TEXT"), ("source", "VARCHAR(32) DEFAULT ''")):
-                游标.execute(f"SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{消息记录表名}' AND COLUMN_NAME = '{列名}'")
-                if int(游标.fetchone()[0] or 0) == 0:
-                    游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
-                    连接.commit()
-                    logger.warning("消息记录 MySQL 表已补列 %s", 列名)
-        except Exception as 修复异常:
-            logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
+            # 表结构检查必须在游标仍有效时执行。旧实现离开 with 后复用已关闭游标，
+            # 导致字符集和历史列修复被异常吞掉。
+            try:
+                游标.execute(
+                    "SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'content'",
+                    (消息记录表名,),
+                )
+                行 = 游标.fetchone()
+                if str(_行字段(行, 0, "CHARACTER_SET_NAME", 默认值="") or "").lower() != "utf8mb4":
+                    游标.execute(f"ALTER TABLE `{消息记录表名}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+                    logger.warning("消息记录 MySQL 表已转为 utf8mb4")
+                for 列名, 定义 in (
+                    ("refidx", "VARCHAR(128) DEFAULT ''"),
+                    ("recalled", "TINYINT DEFAULT 0"),
+                    ("reference_id", "VARCHAR(128) DEFAULT ''"),
+                    ("media", "TEXT"),
+                    ("source", "VARCHAR(32) DEFAULT ''"),
+                ):
+                    游标.execute(
+                        "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                        (消息记录表名, 列名),
+                    )
+                    if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
+                        游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
+                        logger.warning("消息记录 MySQL 表已补列 %s", 列名)
+                # 旧版本可能把长字段建成 TEXT；原始消息/卡片超过 64KB 时会直接 DataError。
+                for 列名 in ("content", "media", "raw_message"):
+                    游标.execute(
+                        "SELECT DATA_TYPE FROM information_schema.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                        (消息记录表名, 列名),
+                    )
+                    数据类型 = str(_行字段(游标.fetchone(), 0, "DATA_TYPE", 默认值="") or "").lower()
+                    if 数据类型 and 数据类型 not in {"mediumtext", "longtext"}:
+                        游标.execute(f"ALTER TABLE `{消息记录表名}` MODIFY COLUMN `{列名}` MEDIUMTEXT")
+                        logger.warning("消息记录 MySQL 长字段已扩容：列=%s", 列名)
+            except Exception as 修复异常:
+                logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
         连接.commit()
         return True
     except Exception as exc:
@@ -159,10 +214,10 @@ def _按列宽截断(值: Any, 列名: str) -> str:
     return 文本
 
 
-def _写入消息记录(记录: dict[str, Any]) -> None:
+def _写入消息记录(记录: dict[str, Any]) -> bool:
     连接 = _打开连接()
     if 连接 is None:
-        return
+        return False
     try:
         with 连接.cursor() as 游标:
             游标.execute(
@@ -187,33 +242,35 @@ def _写入消息记录(记录: dict[str, Any]) -> None:
                 ),
             )
         连接.commit()
+        return True
     except Exception as exc:
         logger.warning(
             "消息记录 MySQL 写入失败：错误类型=%s，详情=%s",
             type(exc).__name__,
             str(exc)[:600],
         )
+        return False
     finally:
         _关闭连接(连接)
 
 
-def 写入消息(记录: dict[str, Any]) -> None:
-    """写入一条消息记录；MySQL 不可用时静默跳过。"""
+def 写入消息(记录: dict[str, Any]) -> bool:
+    """写入一条消息记录，返回是否已提交。"""
     if not 记录 or not 记录.get("_session"):
-        return
+        return False
     if not _MySQL可用():
-        return
-    _写入消息记录(记录)
+        return False
+    return _写入消息记录(记录)
 
 
-def 标记消息撤回(会话标识: str, message_id: str) -> None:
+def 标记消息撤回(会话标识: str, message_id: str) -> bool:
     会话标识 = str(会话标识 or "")
     message_id = str(message_id or "")
     if not message_id or not _MySQL可用():
-        return
+        return False
     连接 = _打开连接()
     if 连接 is None:
-        return
+        return False
     try:
         with 连接.cursor() as 游标:
             游标.execute(
@@ -221,8 +278,10 @@ def 标记消息撤回(会话标识: str, message_id: str) -> None:
                 (会话标识, message_id),
             )
         连接.commit()
+        return True
     except Exception as exc:
         logger.warning("消息记录 MySQL 撤回标记失败：错误类型=%s", type(exc).__name__)
+        return False
     finally:
         _关闭连接(连接)
 
@@ -259,7 +318,11 @@ def 读取全部会话标识() -> list[str]:
     try:
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT DISTINCT 会话标识 FROM `{消息记录表名}`")
-            return [str(行[0]) for 行 in 游标.fetchall() if 行 and 行[0]]
+            return [
+                str(_行字段(行, 0, "会话标识", 默认值=""))
+                for 行 in 游标.fetchall()
+                if _行字段(行, 0, "会话标识", 默认值="")
+            ]
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话列表读取失败：错误类型=%s", type(exc).__name__)
         return []
@@ -289,23 +352,23 @@ def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
             行列表 = 游标.fetchall()
         结果: list[dict[str, Any]] = []
         for 行 in 行列表:
-            if isinstance(行, dict):
-                会话标识 = str(行.get("会话标识") or "")
+            if isinstance(行, Mapping):
+                会话标识 = str(_行字段(行, 0, "会话标识", 默认值="") or "")
                 结果.append(
                     {
                         "会话标识": 会话标识,
-                        "last_id": int(行.get("last_id") or 0),
-                        "last_ts": int(行.get("last_ts") or 0),
-                        "msg_count": int(行.get("n") or 0),
+                        "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
+                        "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
+                        "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
                     }
                 )
             else:
                 结果.append(
                     {
-                        "会话标识": str(行[0] or ""),
-                        "last_id": int(行[1] or 0),
-                        "last_ts": int(行[2] or 0),
-                        "msg_count": int(行[3] or 0),
+                        "会话标识": str(_行字段(行, 0, "会话标识", 默认值="") or ""),
+                        "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
+                        "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
+                        "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
                     }
                 )
         return 结果
@@ -394,7 +457,7 @@ def 统计会话消息数(会话标识: str) -> int:
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT COUNT(*) FROM `{消息记录表名}` WHERE 会话标识=%s", (会话标识,))
             行 = 游标.fetchone()
-        return int(行[0] or 0) if 行 else 0
+        return int(_行字段(行, 0, "c", "COUNT(*)", 默认值=0) or 0) if 行 else 0
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话消息数统计失败：错误类型=%s", type(exc).__name__)
         return 0
@@ -412,7 +475,7 @@ def 裁剪总消息(上限: int) -> None:
     try:
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT COUNT(*) AS c FROM `{消息记录表名}`")
-            总数 = int(游标.fetchone()[0])
+            总数 = int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0)
             if 总数 > 上限:
                 需要删 = 总数 - 上限
                 游标.execute(
@@ -433,15 +496,16 @@ def 读取元数据(key: str, 默认值: Any = None) -> Any:
     连接 = _打开连接()
     if 连接 is None:
         return 默认值
+    状态表名 = _运行状态表名()
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                "SELECT state_value FROM mantou_runtime_state WHERE namespace=%s AND state_key=%s LIMIT 1",
+                f"SELECT state_value FROM `{状态表名}` WHERE namespace=%s AND state_key=%s LIMIT 1",
                 (元数据命名空间, str(key)),
             )
             行 = 游标.fetchone()
         if 行:
-            return json.loads(str(行[0]))
+            return json.loads(str(_行字段(行, 0, "state_value", 默认值="")))
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
     finally:
@@ -449,22 +513,25 @@ def 读取元数据(key: str, 默认值: Any = None) -> Any:
     return 默认值
 
 
-def 写入元数据(key: str, value: Any) -> None:
+def 写入元数据(key: str, value: Any) -> bool:
     """写入一条元数据（置顶/备注/昵称等）。"""
     if not _MySQL可用():
-        return
+        return False
     连接 = _打开连接()
     if 连接 is None:
-        return
+        return False
+    状态表名 = _运行状态表名()
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                "INSERT INTO mantou_runtime_state (namespace, state_key, state_value, updated_at) VALUES (%s,%s,%s,%s) ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=VALUES(updated_at)",
+                f"INSERT INTO `{状态表名}` (namespace, state_key, state_value, updated_at) VALUES (%s,%s,%s,%s) ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=VALUES(updated_at)",
                 (元数据命名空间, str(key), json.dumps(value, ensure_ascii=False), int(time.time())),
             )
         连接.commit()
+        return True
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据写入失败：错误类型=%s", type(exc).__name__)
+        return False
     finally:
         _关闭连接(连接)
 
@@ -476,14 +543,21 @@ def 读取全部元数据() -> dict[str, Any]:
     连接 = _打开连接()
     if 连接 is None:
         return {}
+    状态表名 = _运行状态表名()
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                "SELECT state_key, state_value FROM mantou_runtime_state WHERE namespace=%s",
+                f"SELECT state_key, state_value FROM `{状态表名}` WHERE namespace=%s",
                 (元数据命名空间,),
             )
             for 行 in 游标.fetchall():
-                结果[str(行[0])] = json.loads(str(行[1]))
+                键 = _行字段(行, 0, "state_key", 默认值="")
+                值 = _行字段(行, 1, "state_value", 默认值="")
+                if 键:
+                    try:
+                        结果[str(键)] = json.loads(str(值))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        logger.debug("消息记录元数据格式无效：键=%s", str(键)[:80])
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据批量读取失败：错误类型=%s", type(exc).__name__)
     finally:
@@ -494,9 +568,27 @@ def 读取全部元数据() -> dict[str, Any]:
 def _行转记录(行: Any) -> dict[str, Any]:
     """MySQL 行转消息记录；兼容元组游标（默认）与字典游标。列顺序见建表语句。"""
     def 取值(索引: int, 默认值: str = "") -> str:
-        if isinstance(行, dict):
-            return str(行.get(索引) if 行.get(索引) is not None else 默认值)
-        return str(行[索引] if 索引 < len(行) and 行[索引] is not None else 默认值)
+        字段映射 = {
+            0: ("id",),
+            1: ("会话标识",),
+            2: ("消息类型",),
+            3: ("appid",),
+            4: ("message_id",),
+            5: ("user_id",),
+            6: ("nickname",),
+            7: ("content",),
+            8: ("timestamp",),
+            9: ("ts",),
+            10: ("is_self",),
+            11: ("source",),
+            12: ("recalled",),
+            13: ("media",),
+            14: ("reference_id",),
+            15: ("refidx",),
+            16: ("raw_message",),
+        }
+        值 = _行字段(行, 索引, *字段映射.get(索引, ()), 默认值=None)
+        return str(值 if 值 is not None else 默认值)
 
     try:
         媒体 = json.loads(取值(13, "{}"))
