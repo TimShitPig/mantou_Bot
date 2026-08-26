@@ -156,7 +156,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], renderedChatId:'', pendingNewMessages:0, historyRequest:0, quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -369,14 +369,35 @@
         toast(`撤回完成：成功 ${okCount} 条${failCount ? `，失败 ${failCount} 条` : ''}`);
         exitMultiMode(); loadMsgHistory();
       };
-      const renderMsgMessages = (data) => {
+      const msgMessageKey = (message) => String(message?.message_id || message?.id || '');
+      const msgBodyNearBottom = (body, threshold = 56) => Boolean(body) && body.scrollHeight - body.scrollTop - body.clientHeight <= threshold;
+      const clearMsgNewMessages = () => {
+        msgState.pendingNewMessages = 0;
+        const button = $('msg-new-messages');
+        if (button) button.hidden = true;
+      };
+      const showMsgNewMessages = (count) => {
+        msgState.pendingNewMessages = Math.max(1, Number(msgState.pendingNewMessages || 0) + Number(count || 0));
+        const button = $('msg-new-messages');
+        const label = $('msg-new-messages-label');
+        if (label) label.textContent = `有 ${msgState.pendingNewMessages} 条新消息`;
+        if (button) button.hidden = false;
+      };
+      const scrollMsgToBottom = (behavior = 'smooth') => {
+        const body = $('msg-body');
+        if (!body) return;
+        if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior});
+        else body.scrollTop = body.scrollHeight;
+        clearMsgNewMessages();
+      };
+      const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body'); const msgs = data.messages || [];
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         updateMsgHead(data);
         updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
-        if (!msgs.length) { body.innerHTML = '<div class="msg-empty">暂无消息记录</div>'; return; }
+        if (!msgs.length) { body.innerHTML = '<div class="msg-empty">暂无消息记录</div>'; msgState.renderedChatId = msgState.chatId; clearMsgNewMessages(); return; }
         let lastDay = ''; let html = '';
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
         msgs.forEach((m) => {
@@ -434,7 +455,15 @@
             </div></div>`;
         });
         body.innerHTML = html;
-        body.scrollTop = body.scrollHeight;
+        if (scroll.prepend) {
+          body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
+        } else if (scroll.toBottom) {
+          body.scrollTop = body.scrollHeight;
+          clearMsgNewMessages();
+        } else {
+          body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
+        }
+        msgState.renderedChatId = msgState.chatId;
         body.querySelector('#msg-load-older')?.addEventListener('click', () => loadMsgHistory(true));
         body.querySelectorAll('[data-msg-recall]').forEach((el) => el.addEventListener('click', () => recallMessage(el.dataset.msgRecall)));
         body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', () => openMsgLightbox(img.dataset.lightbox)));
@@ -500,21 +529,42 @@
       const loadMsgHistory = async (older = false, quiet = false) => {
         if (!msgState.chatId) return;
         $('msg-composer').hidden = false;
+        const requestId = Number(msgState.historyRequest || 0) + 1;
+        msgState.historyRequest = requestId;
+        const requestChatId = msgState.chatId;
+        const requestChatType = msgState.chatType;
+        const body = $('msg-body');
+        const newChat = msgState.renderedChatId !== msgState.chatId;
+        const previousTop = body?.scrollTop || 0;
+        const previousHeight = body?.scrollHeight || 0;
+        const previousLast = !newChat ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, chat_type:msgState.chatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:120})});
+          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:120})});
+          if (requestId !== msgState.historyRequest || requestChatId !== msgState.chatId || requestChatType !== msgState.chatType) return;
           const incoming = data.messages || [];
           if (quiet && !older) {
             updateMsgHead(data);
-            const prevLast = msgState.messages[msgState.messages.length - 1]?.message_id || '';
-            const newLast = incoming[incoming.length - 1]?.message_id || '';
-            if (prevLast === newLast && incoming.length === msgState.messages.length) { return; }
+            const newLast = msgMessageKey(incoming[incoming.length - 1]);
+            if (previousLast === newLast && incoming.length === msgState.messages.length) return;
           }
+          let newCount = 0;
+          if (!older && previousLast) {
+            const previousIndex = incoming.findIndex((message) => msgMessageKey(message) === previousLast);
+            newCount = previousIndex >= 0 ? Math.max(0, incoming.length - previousIndex - 1) : (incoming.length ? 1 : 0);
+          }
+          const renderTop = body?.scrollTop ?? previousTop;
+          const renderHeight = body?.scrollHeight ?? previousHeight;
+          const renderNearBottom = newChat || msgBodyNearBottom(body);
           msgState.messages = older ? [...incoming, ...msgState.messages] : incoming;
-          renderMsgMessages({...data, messages: msgState.messages});
+          renderMsgMessages(
+            {...data, messages: msgState.messages},
+            {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
+          );
+          if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           loadGroupRoles(true);
-        } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); }
+        } catch (error) { if (requestId !== msgState.historyRequest) return; if (error.status === 401) showAuthError(error); else toast(error.message); }
       };
       const loadGroupRoles = async (throttled = false) => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return;
@@ -635,6 +685,8 @@
         reader.readAsDataURL(file);
         e.target.value = '';
       });
+      $('msg-body').addEventListener('scroll', () => { if (msgBodyNearBottom($('msg-body'))) clearMsgNewMessages(); });
+      $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
       $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });

@@ -21,7 +21,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.52.6</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.52.7</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -260,9 +260,15 @@ from .帮助网页脚本 import 控制台脚本
             .msg-row.self.multi-mode .msg-multi-check { left:auto; right:-16px; }
             .msg-row.multi-mode.no-multi { opacity:.55; }
             .msg-row.multi-mode.no-multi .msg-multi-check { display:none; }
-            .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
-            .msg-pos { position:relative; }
-            @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
+             .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
+             .msg-pos { position:relative; }
+             .msg-body-wrap { position:relative; display:flex; flex:1 1 0; min-height:0; overflow:hidden; }
+             .msg-new-messages { position:absolute; right:18px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:0 12px; border:1px solid #b8dff2; border-radius:17px; background:#fff; color:#0b9bd0; box-shadow:0 5px 16px rgba(30,110,160,.18); font-size:11px; font-weight:700; cursor:pointer; transition:opacity .16s ease, transform .16s ease, box-shadow .16s ease; }
+             .msg-new-messages:hover { transform:translateY(-1px); box-shadow:0 7px 18px rgba(30,110,160,.24); }
+             .msg-new-messages[hidden] { display:none; }
+             .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
+             .msg-new-messages-arrow { font-size:15px; line-height:1; }
+             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
 
             /* ===== 深色模式（跟随系统） ===== */
             @media (prefers-color-scheme: dark) {
@@ -291,8 +297,10 @@ from .帮助网页脚本 import 控制台脚本
               .msg-head { background:#1f2330; border-bottom-color:var(--line); }
               .msg-head-name { color:#e8eaf2; }
               .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
-              .msg-body { background:#161926; }
-              .msg-day { color:#6f7590; }
+               .msg-body { background:#161926; }
+               .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }
+               .msg-new-messages-dot { background:#42c6ff; box-shadow:0 0 0 4px #12344d; }
+               .msg-day { color:#6f7590; }
               .msg-avatar { background:#23405f; color:#8db9f0; }
               .msg-avatar .avatar-letter { color:#8db9f0; }
               .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
@@ -389,7 +397,10 @@ from .帮助网页脚本 import 控制台脚本
                 </div>
               </div>
               <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
-              <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
+               <div class="msg-body-wrap" id="msg-body-wrap">
+                 <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
+                 <button class="msg-new-messages" id="msg-new-messages" type="button" hidden title="回到底部查看最新消息"><span class="msg-new-messages-dot" aria-hidden="true"></span><span id="msg-new-messages-label">有新消息</span><span class="msg-new-messages-arrow" aria-hidden="true">↓</span></button>
+               </div>
               <div class="msg-composer" id="msg-composer" hidden>
                 <div class="msg-composer-mode">
                   <select id="msg-send-mode" aria-label="发送方式">
