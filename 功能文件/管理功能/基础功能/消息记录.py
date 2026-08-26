@@ -36,6 +36,7 @@ except Exception as 导入异常:
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
+_数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
@@ -193,7 +194,9 @@ def _后台执行同步(操作: Any, *参数: Any) -> None:
 
     async def _执行() -> None:
         try:
-            await asyncio.to_thread(操作, *参数)
+            # 所有后台写库共用一个锁，避免并发 INSERT 按完成先后乱序。
+            async with _数据库写入锁:
+                await asyncio.to_thread(操作, *参数)
         except Exception as 异常:
             logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
 
