@@ -178,7 +178,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
-                f"章节数={len(书籍.chapters)}, 模式=VIP批量包优先, 回退=整本压缩包"
+                f"章节数={len(书籍.chapters)}, 模式=整本压缩包优先, 回退=VIP批量包"
             )
             yield 格式化下载提示(书籍)
 
@@ -1053,37 +1053,72 @@ async def 下载全部章节VIP(
     return 结果
 
 
+async def _尝试整本下载(
+    session: aiohttp.ClientSession, 书籍: Book
+) -> list[dict[str, str]] | None:
+    """优先尝试整本压缩包（固定 UID 通道）；地址缺失/下载失败返回 None 走 VIP 兜底。"""
+    下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
+    if not 下载地址:
+        # 整本地址可能在获取书籍时瞬时失败，这里重试一次自愈
+        try:
+            时间戳 = str(int(time.time()))
+            重试地址 = await 获取整本下载地址(session, 书籍.book_id, 时间戳)
+            if 重试地址:
+                书籍.raw["_archive_url"] = re.sub(
+                    r"try_d+",
+                    f"try_{书籍.chapter_num or len(书籍.chapters)}",
+                    重试地址,
+                    flags=re.I,
+                )
+                下载地址 = str(书籍.raw.get("_archive_url") or "").strip()
+        except Exception as exc:
+            logger.debug(f"书旗整本下载地址重试失败：书籍={书籍.book_id}, 错误={exc}")
+    if not 下载地址:
+        return None
+    try:
+        return await 下载全部章节整本包(session, 书籍)
+    except Exception as exc:
+        logger.warning(f"书旗整本下载失败，回退 VIP 批量包：书籍={书籍.book_id}, 错误={exc}")
+        return None
+
+
 async def 下载全部章节(
     session: aiohttp.ClientSession, 书籍: Book, 配置: Any = None
 ) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
     if not 总数:
         return []
+    # 整本压缩包优先：固定 UID 通道稳定，多数书可直接成功，避免每次下载都先触发书评借 UID 与换新
+    整本结果 = await _尝试整本下载(session, 书籍)
+    if 整本结果:
+        return 整本结果
+    # 整本不可用（地址缺失/缺章）时回退 VIP 批量包；未解锁不清缓存（书级无权限，非 UID 失效）
     try:
         uid = await 获取书旗VIP用户ID(session, 配置)
     except Exception as exc:
-        logger.warning(f"书旗自动获取 VIP UID 失败，回退整本下载：错误={exc}")
-        return await 下载全部章节整本包(session, 书籍)
+        logger.warning(f"书旗自动获取 VIP UID 失败：错误={exc}")
+        return []
     try:
         return await 下载全部章节VIP(session, 书籍, user_id=uid)
     except ShuqiError as exc:
         信息 = str(exc)
-        if "未解锁" in 信息 or "失效" in 信息:
+        if "未解锁" in 信息:
+            logger.warning(f"书旗 VIP 未解锁本书：书籍={书籍.book_id}, 错误={exc}")
+            return []
+        if "失效" in 信息:
             清除书旗VIP用户ID缓存(配置, uid)
             logger.warning(f"书旗 VIP UID 失效，清除缓存后重试一次：错误={exc}")
             try:
                 uid = await 获取书旗VIP用户ID(session, 配置)
                 return await 下载全部章节VIP(session, 书籍, user_id=uid)
             except Exception as 重试异常:
-                logger.warning(
-                    f"书旗 VIP 重试仍失败，回退整本下载：错误={重试异常}"
-                )
-                return await 下载全部章节整本包(session, 书籍)
-        logger.warning(f"书旗 VIP 批量下载失败，回退整本下载：错误={exc}")
-        return await 下载全部章节整本包(session, 书籍)
+                logger.warning(f"书旗 VIP 重试仍失败：错误={重试异常}")
+                return []
+        logger.warning(f"书旗 VIP 批量下载失败：错误={exc}")
+        return []
     except Exception as exc:
-        logger.warning(f"书旗 VIP 批量下载异常，回退整本下载：错误={exc}")
-        return await 下载全部章节整本包(session, 书籍)
+        logger.warning(f"书旗 VIP 批量下载异常：错误={exc}")
+        return []
 
 
 async def 下载全部章节整本包(
