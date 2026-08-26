@@ -71,6 +71,8 @@ SEARCH_NO_SIGN_KEYS = {
 # 自动获取的年费 VIP 用户 ID 缓存：持久化到 MySQL，新 UID 直接替换旧 UID，插件重载不丢失
 _VIP用户ID缓存: dict[str, Any] = {}
 _VIP用户ID锁: asyncio.Lock | None = None
+# 已失效的 UID 集合：只在失效时记录，重新扫描时跳过，避免拿到同一个失效 UID 白重试
+_已失效书旗VIPUID: set[str] = set()
 书旗VIPUID命名空间 = "shuqi_vip_uid"
 书旗VIPUID状态键 = "uid"
 
@@ -595,9 +597,16 @@ def _获取VIP锁() -> asyncio.Lock:
     return _VIP用户ID锁
 
 
-def 清除书旗VIP用户ID缓存(配置: Any = None) -> None:
+def 清除书旗VIP用户ID缓存(配置: Any = None, 失效UID: str = "") -> None:
     _VIP用户ID缓存.pop("uid", None)
     _删除持久化书旗VIPUID(配置)
+    失效UID = str(失效UID or "").strip()
+    if 失效UID:
+        # 记录已失效 UID，重新扫描时跳过，确保换到下一个不同的 UID
+        _已失效书旗VIPUID.add(失效UID)
+        if len(_已失效书旗VIPUID) > 50:
+            # 只保留最近 50 个失效 UID，防止集合无限增长
+            _已失效书旗VIPUID.pop()
 
 
 def _构造App公共参数(user_id: str = USER_ID) -> dict[str, str]:
@@ -727,7 +736,9 @@ def _书评页参数(
     }
 
 
-def 从书评提取年费VIP用户ID(评论: list[dict[str, Any]]) -> str:
+def 从书评提取年费VIP用户ID(
+    评论: list[dict[str, Any]], 跳过UID: set[str] | None = None
+) -> str:
     for obj in 评论:
         if not isinstance(obj, dict):
             continue
@@ -739,7 +750,7 @@ def 从书评提取年费VIP用户ID(评论: list[dict[str, Any]]) -> str:
         if 安全整数(vip.get("annualVipStatus"), 0) != 1:
             continue
         uid = str(obj.get("userId") or obj.get("uid") or "").strip()
-        if uid and uid != "0":
+        if uid and uid != "0" and (not 跳过UID or uid not in 跳过UID):
             return uid
     return ""
 
@@ -751,6 +762,7 @@ async def 扫描书评获取VIP用户ID(
     author_id: str = "",
     max_pages: int = 3,
     size: int = 50,
+    跳过UID: set[str] | None = None,
 ) -> str:
     if not author_id:
         try:
@@ -769,7 +781,9 @@ async def 扫描书评获取VIP用户ID(
             raise ShuqiError(f"书评接口异常：status={状态}")
         响应数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
         评论 = 响应数据.get("commentList") or []
-        uid = 从书评提取年费VIP用户ID(评论 if isinstance(评论, list) else [])
+        uid = 从书评提取年费VIP用户ID(
+            评论 if isinstance(评论, list) else [], 跳过UID
+        )
         if uid:
             return uid
         next_index = 安全整数(响应数据.get("nextItemIndex"), item_index + size)
@@ -813,7 +827,9 @@ async def 自动获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
     for 书 in 候选:
         book_id = 书["bookId"]
         try:
-            uid = await 扫描书评获取VIP用户ID(session, book_id)
+            uid = await 扫描书评获取VIP用户ID(
+                session, book_id, 跳过UID=_已失效书旗VIPUID
+            )
             if uid:
                 logger.info(
                     f"书旗自动获取年费 VIP UID 成功：书籍={book_id}, "
@@ -1053,7 +1069,7 @@ async def 下载全部章节(
     except ShuqiError as exc:
         信息 = str(exc)
         if "未解锁" in 信息 or "失效" in 信息:
-            清除书旗VIP用户ID缓存(配置)
+            清除书旗VIP用户ID缓存(配置, uid)
             logger.warning(f"书旗 VIP UID 失效，清除缓存后重试一次：错误={exc}")
             try:
                 uid = await 获取书旗VIP用户ID(session, 配置)
