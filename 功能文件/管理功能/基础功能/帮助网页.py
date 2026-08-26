@@ -2696,7 +2696,10 @@ _网页脚本 = """
           const profile = profiles[m.user_id] || {};
           const av = isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid);
           const tags = [];
-          if (isSelf) tags.push('<span class="msg-tag self">我</span>');
+          if (isSelf) {
+            const botMsg = m.nickname === '机器人' || String(m.source || '').indexOf('bot') === 0;
+            tags.push('<span class="msg-tag self">' + (botMsg ? '机器人' : '我') + '</span>');
+          }
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           const roleMap = {owner:'群主', admin:'管理', member:'群员'};

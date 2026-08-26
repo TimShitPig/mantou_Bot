@@ -1064,7 +1064,9 @@ async def 发送Markdown键盘消息(
         return False
 
     try:
-        await _http.request(route, json=消息体)
+        发送结果 = await _http.request(route, json=消息体)
+        响应消息ID = _提取发送响应消息ID(发送结果)
+        _记录MD键盘发送(群openid, 用户openid, md文本, 消息ID=响应消息ID)
         return True
     except Exception as e:
         if not 消息ID or 主动发送:
@@ -1076,7 +1078,8 @@ async def 发送Markdown键盘消息(
         主动消息体 = dict(消息体)
         主动消息体.pop("msg_id", None)
         try:
-            await _http.request(route, json=主动消息体)
+            主动发送结果 = await _http.request(route, json=主动消息体)
+            _记录MD键盘发送(群openid, 用户openid, md文本, 消息ID=_提取发送响应消息ID(主动发送结果))
             return True
         except Exception as 主动异常:
             logger.warning(
@@ -1084,3 +1087,47 @@ async def 发送Markdown键盘消息(
                 f"主动发送也失败: {type(主动异常).__name__}: {主动异常}"
             )
             return False
+
+
+def _记录MD键盘发送(群openid: str, 用户openid: str, md文本: str, appid: str = "", 消息ID: str = "") -> None:
+    """机器人主动发送（MD 键盘/下载完成按钮）成功后写入消息记录，网页可查看。"""
+    try:
+        from 功能文件.管理功能.基础功能.消息记录 import (
+            获取QQ官方平台,
+            记录发送消息,
+        )
+
+        会话标识 = str(群openid or "").strip() or str(用户openid or "").strip()
+        if not 会话标识:
+            return
+        类型 = "group" if str(群openid or "").strip() else "user"
+        展示文本 = str(md文本 or "").strip()
+        if not 展示文本:
+            return
+        if not str(appid or "").strip():
+            try:
+                appid = str(getattr(获取QQ官方平台(), "appid", "") or "")
+            except Exception:
+                pass
+        记录发送消息(
+            会话标识,
+            类型,
+            展示文本,
+            appid,
+            消息ID=str(消息ID or "").strip(),
+            发送者昵称="机器人",
+            来源="bot_active",
+        )
+    except Exception as 异常:
+        logger.debug("帮助MD键盘消息记录失败：错误类型=%s", type(异常).__name__)
+
+
+def _提取发送响应消息ID(发送结果: Any) -> str:
+    """从 QQ 官方发送消息响应中提取消息 ID（兼容 dict 与对象两种形态）。"""
+    try:
+        if isinstance(发送结果, dict):
+            return str(发送结果.get("id") or "")
+        标识 = getattr(发送结果, "id", None)
+        return str(标识 or "") if 标识 is not None else ""
+    except Exception:
+        return ""

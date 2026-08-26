@@ -604,8 +604,10 @@ def 记录发送消息(
     消息ID: str = "",
     引用ID: str = "",
     媒体: dict[str, Any] | None = None,
+    发送者昵称: str = "",
+    来源: str = "",
 ) -> dict[str, Any] | None:
-    """把网页发送成功的消息写入缓存，标记为机器人自己发送。"""
+    """把机器人发送的消息写入缓存（网页手动发送显示"我"，主动发送显示机器人昵称）。"""
     global 发送序号
     try:
         会话 = _取得会话缓存(会话标识, 类型, appid)
@@ -614,12 +616,12 @@ def 记录发送消息(
             "id": 发送序号,
             "message_id": 消息ID,
             "user_id": "",
-            "appid": str(appid or ""),
-            "nickname": "我",
+            "appid": str(appid or 会话.get("appid") or ""),
+            "nickname": 发送者昵称 or "我",
             "content": 内容,
             "timestamp": _格式化时间戳(int(time.time())),
             "is_self": True,
-            "source": "web_panel",
+            "source": 来源 or "web_panel",
             "raw_message": "",
             "recalled": False,
             "media": 媒体 or _提取媒体字段(内容),
@@ -645,7 +647,7 @@ def 记录发送消息(
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
         if 内容:
             会话["last_content"] = 内容
-            会话["last_nickname"] = "我"
+            会话["last_nickname"] = 发送者昵称 or "我"
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(time.time()))
         会话["unread"] = 0
         _持久化未读数(会话标识, 0)
@@ -992,7 +994,8 @@ def _聊天显示名(会话标识: str, 会话: dict[str, Any]) -> str:
     if 群名:
         return 群名
     最近昵称 = str(会话.get("last_nickname") or "")
-    if 最近昵称:
+    # 群会话不把机器人和网页发送昵称当作群名退路，避免群名被"机器人"/"我"污染
+    if 最近昵称 and ((str(会话.get("chat_type") or "") == "user") or 最近昵称 not in ("机器人", "我")):
         return 最近昵称
     if str(会话.get("chat_type") or "") == "user":
         本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
@@ -1923,34 +1926,49 @@ def _安装消息事件挂钩() -> bool:
 
 
 def _链提取文本(消息链: Any) -> str:
-    """从 AstrBot MessageChain 提取展示文本（纯文本 + 媒体占位）。"""
+    """从 AstrBot MessageChain 提取展示文本（纯文本 + 媒体占位）。
+
+    兼容新版 MessageChain.chain（pydantic 组件对象，文本在 text/content 字段，无 data 属性）
+    与旧版 segments（type/data 字典）两种形态，组件类型大小写不敏感。
+    """
     try:
-        段们 = getattr(消息链, "segments", None) or []
+        段们 = getattr(消息链, "chain", None) or getattr(消息链, "segments", None) or []
         文本 = ""
         for 段 in 段们:
-            类型 = str(getattr(段, "type", "") or "")
-            数据 = getattr(段, "data", None)
-            if 类型 == "Plain":
-                if isinstance(数据, dict):
-                    文本 += str(数据.get("text") or "")
-                else:
-                    文本 += str(数据 or "")
-            elif 类型 == "Image":
-                文本 += "[图片] "
-            elif 类型 == "File":
-                文本 += "[文件] "
-            elif 类型 == "Video":
-                文本 += "[视频] "
-            elif 类型 == "Record":
-                文本 += "[语音] "
-            elif 类型 == "Markdown":
-                if isinstance(数据, dict):
-                    文本 += str(数据.get("content") or "")
-                else:
-                    文本 += str(数据 or "")
+            if isinstance(段, dict):
+                类型 = str(段.get("type") or "").strip().lower()
+                数据 = 段.get("data") or {}
+                内容 = _链段取文本(类型, 数据)
+            else:
+                类型 = str(getattr(段, "type", "") or "").strip().lower()
+                数据 = getattr(段, "data", None)
+                内容 = _链段取文本(类型, 数据 if isinstance(数据, dict) else None, 段)
+            if 内容:
+                文本 += 内容
+            elif 类型 in ("image", "img", "图片"):
+                文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[图片] "
+            elif 类型 in ("file", "files", "文件"):
+                文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[文件] "
+            elif 类型 in ("video", "视频"):
+                文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[视频] "
+            elif 类型 in ("record", "recordmusic", "语音"):
+                文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[语音] "
         return 文本.strip()
     except Exception:
         return ""
+
+
+def _链段取文本(类型: str, 数据: dict[str, Any] | None, 段: Any = None) -> str:
+    """取消息链单个段的展示文本（Plain 取 text，Markdown 取 content，兼容新旧形态）。"""
+    if 类型 in ("plain", "text"):
+        if 数据:
+            return str(数据.get("text") or "")
+        return str(getattr(段, "text", "") or "")
+    if 类型 == "markdown":
+        if 数据:
+            return str(数据.get("content") or "")
+        return str(getattr(段, "content", "") or "")
+    return ""
 
 
 def _会话标识兜底(session: Any) -> str:
@@ -1998,7 +2016,7 @@ def _包装事件发送(发送方法: Any) -> Any:
                     pass
                 内容 = _链提取文本(缓冲)
                 if 会话标识 and 内容:
-                    记录发送消息(会话标识, 类型, 内容, appid)
+                    记录发送消息(会话标识, 类型, 内容, appid, 发送者昵称="机器人", 来源="bot_send")
         except Exception as exc:
             logger.warning("消息记录事件发送挂钩失败：错误类型=%s", type(exc).__name__)
         结果 = 发送方法(self, stream, **关键字)
@@ -2022,7 +2040,7 @@ def _包装发送方法(发送方法: Any) -> Any:
             类型 = "group" if "GROUP" in 消息类型.upper() else "user"
             内容 = _链提取文本(message_chain)
             if 会话标识 and 内容:
-                记录发送消息(会话标识, 类型, 内容, appid)
+                记录发送消息(会话标识, 类型, 内容, appid, 发送者昵称="机器人", 来源="bot_send")
         except Exception as exc:
             logger.warning("消息记录发送挂钩失败：错误类型=%s", type(exc).__name__)
         结果 = 发送方法(self, session, message_chain)
