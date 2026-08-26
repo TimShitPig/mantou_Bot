@@ -3881,15 +3881,28 @@ async def 下载参考正文(
             await asyncio.sleep(0.2 * round_index)
 
     chapters: list[dict[str, Any]] = []
-    for catalog_item, content in zip(catalog, results):
+    缺失章节号: list[int] = []
+    缺失分类: dict[str, int] = {}
+    for 序号, (catalog_item, content) in enumerate(zip(catalog, results), start=1):
         text = (
             content.decode("utf-8", "replace").strip()
             if isinstance(content, bytes)
             else str(content or "").strip()
         )
         if not text or text == "章节解密失败":
-            raise RuntimeError("章节不完整")
+            缺失章节号.append(序号)
+            if text == "章节解密失败":
+                缺失分类["解密失败"] = 缺失分类.get("解密失败", 0) + 1
+            else:
+                缺失分类["空正文"] = 缺失分类.get("空正文", 0) + 1
+            continue
         chapters.append({**catalog_item, "content": text})
+    if 缺失章节号:
+        logger.warning(
+            f"QQ阅读正文缺失：书籍编号={book_id}, 缺失章节号={格式化失败范围(缺失章节号)}, "
+            f"数量={len(缺失章节号)}, 分类={缺失分类}"
+        )
+        raise RuntimeError("章节不完整")
     return chapters
 
 

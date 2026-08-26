@@ -68,9 +68,49 @@ SEARCH_NO_SIGN_KEYS = {
     "X-NEBULAXMLHTTPREQUEST",
     "callbackUrl",
 }
-# 自动获取的年费 VIP 用户 ID 缓存：只在失效时重新扫描书评获取
+# 自动获取的年费 VIP 用户 ID 缓存：持久化到 MySQL，新 UID 直接替换旧 UID，插件重载不丢失
 _VIP用户ID缓存: dict[str, Any] = {}
 _VIP用户ID锁: asyncio.Lock | None = None
+书旗VIPUID命名空间 = "shuqi_vip_uid"
+书旗VIPUID状态键 = "uid"
+
+
+def _读取持久化书旗VIPUID(配置: Any) -> str:
+    """从 MySQL 读取已保存的年费 VIP UID；未配置或读取失败返回空串。"""
+    if not 配置:
+        return ""
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值
+        return str(
+            读取运行状态值(配置, 书旗VIPUID命名空间, 书旗VIPUID状态键, "") or ""
+        ).strip()
+    except Exception as exc:
+        logger.debug(f"书旗持久化 UID 读取失败：错误类型={type(exc).__name__}")
+        return ""
+
+
+def _保存持久化书旗VIPUID(配置: Any, uid: str) -> None:
+    """把新获取的 UID 写入 MySQL 替换旧值；未配置或空值不写。"""
+    if not 配置 or not str(uid or "").strip():
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值
+        写入运行状态值(
+            配置, 书旗VIPUID命名空间, 书旗VIPUID状态键, str(uid).strip()
+        )
+    except Exception as exc:
+        logger.debug(f"书旗持久化 UID 写入失败：错误类型={type(exc).__name__}")
+
+
+def _删除持久化书旗VIPUID(配置: Any) -> None:
+    """失效时删除 MySQL 里保存的 UID，下次重新获取新的。"""
+    if not 配置:
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 删除运行状态值
+        删除运行状态值(配置, 书旗VIPUID命名空间, 书旗VIPUID状态键)
+    except Exception as exc:
+        logger.debug(f"书旗持久化 UID 删除失败：错误类型={type(exc).__name__}")
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -140,7 +180,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             )
             yield 格式化下载提示(书籍)
 
-            章节内容 = await 下载全部章节(session, 书籍)
+            章节内容 = await 下载全部章节(session, 书籍, 配置)
             成功数 = sum(1 for 项 in 章节内容 if 项.get("content"))
             if 成功数 != len(书籍.chapters):
                 raise ShuqiError(
@@ -555,8 +595,9 @@ def _获取VIP锁() -> asyncio.Lock:
     return _VIP用户ID锁
 
 
-def 清除书旗VIP用户ID缓存() -> None:
+def 清除书旗VIP用户ID缓存(配置: Any = None) -> None:
     _VIP用户ID缓存.pop("uid", None)
+    _删除持久化书旗VIPUID(配置)
 
 
 def _构造App公共参数(user_id: str = USER_ID) -> dict[str, str]:
@@ -784,7 +825,9 @@ async def 自动获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
     raise ShuqiError("自动扫描候选书后未找到年费 VIP UID")
 
 
-async def 获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
+async def 获取书旗VIP用户ID(
+    session: aiohttp.ClientSession, 配置: Any = None
+) -> str:
     uid = str(_VIP用户ID缓存.get("uid") or "").strip()
     if uid:
         return uid
@@ -792,8 +835,14 @@ async def 获取书旗VIP用户ID(session: aiohttp.ClientSession) -> str:
         uid = str(_VIP用户ID缓存.get("uid") or "").strip()
         if uid:
             return uid
+        uid = _读取持久化书旗VIPUID(配置)
+        if uid:
+            _VIP用户ID缓存["uid"] = uid
+            return uid
         uid = await 自动获取书旗VIP用户ID(session)
-        _VIP用户ID缓存["uid"] = uid
+        if uid:
+            _VIP用户ID缓存["uid"] = uid
+            _保存持久化书旗VIPUID(配置, uid)
     return uid
 
 
@@ -989,13 +1038,13 @@ async def 下载全部章节VIP(
 
 
 async def 下载全部章节(
-    session: aiohttp.ClientSession, 书籍: Book
+    session: aiohttp.ClientSession, 书籍: Book, 配置: Any = None
 ) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
     if not 总数:
         return []
     try:
-        uid = await 获取书旗VIP用户ID(session)
+        uid = await 获取书旗VIP用户ID(session, 配置)
     except Exception as exc:
         logger.warning(f"书旗自动获取 VIP UID 失败，回退整本下载：错误={exc}")
         return await 下载全部章节整本包(session, 书籍)
@@ -1004,10 +1053,10 @@ async def 下载全部章节(
     except ShuqiError as exc:
         信息 = str(exc)
         if "未解锁" in 信息 or "失效" in 信息:
-            清除书旗VIP用户ID缓存()
+            清除书旗VIP用户ID缓存(配置)
             logger.warning(f"书旗 VIP UID 失效，清除缓存后重试一次：错误={exc}")
             try:
-                uid = await 获取书旗VIP用户ID(session)
+                uid = await 获取书旗VIP用户ID(session, 配置)
                 return await 下载全部章节VIP(session, 书籍, user_id=uid)
             except Exception as 重试异常:
                 logger.warning(
