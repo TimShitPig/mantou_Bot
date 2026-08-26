@@ -614,6 +614,7 @@ def 记录发送消息(
         发送序号 += 1
         记录: dict[str, Any] = {
             "id": 发送序号,
+            "_session": str(会话标识 or ""),
             "message_id": 消息ID,
             "user_id": "",
             "appid": str(appid or 会话.get("appid") or ""),
