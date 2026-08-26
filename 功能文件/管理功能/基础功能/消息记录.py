@@ -28,6 +28,7 @@ except Exception as 导入异常:
 最大会话数 = 200
 每会话最大消息数 = 500
 总消息上限 = 10000
+未读状态命名空间 = "msg_console_unread"
 当前插件上下文: Any = globals().get("当前插件上下文")
 当前插件配置: Any = globals().get("当前插件配置")
 自己发送消息ID: dict[str, float] = globals().get("自己发送消息ID") or {}
@@ -132,9 +133,70 @@ def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict
             "last_ts": 0,
             "last_content": "",
             "last_nickname": "",
-            "unread": 0,
+            "unread": _读取持久化未读数(会话标识),
         }
     return 消息缓存[会话标识]
+
+
+def _读取持久化未读数(会话标识: str) -> int:
+    """从 MySQL 读取会话未读数，未配置数据库或异常时返回 0。"""
+    if not 会话标识:
+        return 0
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import (
+            已配置运行状态数据库,
+            读取运行状态值,
+        )
+
+        if not 已配置运行状态数据库(当前插件配置):
+            return 0
+        文本 = 读取运行状态值(
+            当前插件配置, 未读状态命名空间, str(会话标识), "0"
+        )
+        return max(0, int(文本 or 0))
+    except Exception as 异常:
+        logger.debug("消息记录未读数读取失败：错误类型=%s", type(异常).__name__)
+        return 0
+
+
+def _读取全部持久化未读数() -> dict[str, int]:
+    """一次性读取全部会话未读数，避免聊天列表聚合时逐会话查库。"""
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import (
+            已配置运行状态数据库,
+            读取运行状态命名空间,
+        )
+
+        if not 已配置运行状态数据库(当前插件配置):
+            return {}
+        原始 = 读取运行状态命名空间(当前插件配置, 未读状态命名空间) or {}
+        return {
+            str(会话): max(0, int(值 or 0))
+            for 会话, 值 in 原始.items()
+            if str(会话 or "").strip()
+        }
+    except Exception as 异常:
+        logger.debug("消息记录未读数批量读取失败：错误类型=%s", type(异常).__name__)
+        return {}
+
+
+def _持久化未读数(会话标识: str, 未读数: int) -> None:
+    """把会话未读数写入 MySQL，保证重启后红点不丢失；未配置数据库时静默跳过。"""
+    if not 会话标识:
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import (
+            已配置运行状态数据库,
+            写入运行状态值,
+        )
+
+        if not 已配置运行状态数据库(当前插件配置):
+            return
+        写入运行状态值(
+            当前插件配置, 未读状态命名空间, str(会话标识), max(0, int(未读数))
+        )
+    except Exception as 异常:
+        logger.debug("消息记录未读数持久化失败：错误类型=%s", type(异常).__name__)
 
 
 def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
@@ -469,6 +531,7 @@ def 记录收到消息(
             会话["messages"].append(记录)
             if not is_self and not 是机器人 and not _是管理员本人(成员标识):
                 会话["unread"] = int(会话.get("unread") or 0) + 1
+                _持久化未读数(会话标识, 会话["unread"])
         elif not is_self:
             # 同 message_id 但非回推（如重复事件）：仍追加，避免丢失真实消息
             会话["messages"].append(记录)
@@ -585,6 +648,7 @@ def 记录发送消息(
             会话["last_nickname"] = "我"
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(time.time()))
         会话["unread"] = 0
+        _持久化未读数(会话标识, 0)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -593,12 +657,13 @@ def 记录发送消息(
 
 
 def 设置会话已读(会话标识: str) -> bool:
-    """打开会话时清零未读数。"""
+    """打开会话时清零未读数（内存与 MySQL 同步清）。"""
     try:
-        会话 = 消息缓存.get(str(会话标识 or "").strip())
-        if not 会话:
-            return False
-        会话["unread"] = 0
+        会话标识 = str(会话标识 or "").strip()
+        会话 = 消息缓存.get(会话标识)
+        if 会话:
+            会话["unread"] = 0
+        _持久化未读数(会话标识, 0)
         return True
     except Exception:
         return False
@@ -1010,6 +1075,7 @@ def _数据库聚合聊天项(
         最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
         最后消息表 = _消息存储.批量读取最后消息(最后id列表) if 最后id列表 else {}
         本地备注表 = (本地数据.get("remarks") or {})
+        持久化未读表 = _读取全部持久化未读数()
         聊天项: list[dict[str, Any]] = []
         for 项 in 骨架:
             会话标识 = str(项.get("会话标识") or "")
@@ -1050,7 +1116,7 @@ def _数据库聚合聊天项(
                     "last_time": str(最后记录.get("timestamp") or _格式化时间戳(last_ts)),
                     "last_ts": last_ts,
                     "msg_count": int(项.get("msg_count") or 0),
-                    "unread": int(内存会话.get("unread") or 0),
+                    "unread": int(内存会话.get("unread") or 持久化未读表.get(会话标识, 0)),
                     "remark": 备注,
                     "in_group": True,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
