@@ -147,7 +147,9 @@ except Exception as exc:
 找书结果缓存秒数 = 60.0
 找书结果缓存上限 = 128
 找书会话: dict[str, dict[str, Any]] = {}
-找书结果缓存: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+找书结果缓存: dict[
+    tuple[str, str, tuple[str, ...]], tuple[float, list[dict[str, Any]]]
+] = {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 找书名命令正则 = re.compile(r"^找(?:书名|小说名)\s*[:：]?\s*(.+)$")
 找作者命令正则 = re.compile(r"^找(?:作者|作家)\s*[:：]?\s*(.+)$")
@@ -167,6 +169,62 @@ except Exception as exc:
 QQ阅读预检缓存秒数 = 600
 QQ阅读预检并发数 = 5
 QQ阅读预检缓存: dict[str, tuple[float, bool]] = {}
+
+
+def _规范化允许平台(允许平台: Any = None) -> frozenset[str]:
+    """把调用方提供的平台集合规范化；省略时保持旧的全平台搜索行为。"""
+    if 允许平台 is None:
+        return frozenset(小说功能开关.默认状态)
+    if isinstance(允许平台, str):
+        值列表 = [允许平台]
+    else:
+        try:
+            值列表 = list(允许平台)
+        except TypeError:
+            值列表 = []
+    return frozenset(
+        str(值).strip()
+        for 值 in 值列表
+        if str(值).strip() in 小说功能开关.默认状态
+    )
+
+
+def _过滤不可用平台结果(
+    结果: Any, 允许平台: frozenset[str]
+) -> list[dict[str, Any]]:
+    """只保留当前事件允许使用的平台结果，避免旧缓存/会话泄漏关闭平台。"""
+    if not isinstance(结果, list):
+        return []
+    return [
+        项
+        for 项 in 结果
+        if isinstance(项, dict)
+        and str(项.get("platform") or "").strip() in 允许平台
+    ]
+
+
+def _更新会话可用结果(会话: dict[str, Any], 允许平台: frozenset[str]) -> bool:
+    """刷新会话中的平台结果并返回是否因开关变化而移除了项目。"""
+    原结果 = 会话.get("results")
+    新结果 = _过滤不可用平台结果(原结果, 允许平台)
+    会话["results"] = 新结果
+    当前平台快照 = tuple(sorted(允许平台))
+    旧平台快照 = 会话.get("allowed_platforms")
+    平台集合已变化 = (
+        isinstance(旧平台快照, (list, tuple, set, frozenset))
+        and tuple(sorted(str(平台) for 平台 in 旧平台快照)) != 当前平台快照
+    )
+    会话["allowed_platforms"] = 当前平台快照
+    return (
+        平台集合已变化
+        or not isinstance(原结果, list)
+        or len(新结果) != len(原结果)
+    )
+
+
+async def _空搜索结果() -> list[Any]:
+    """占位搜索任务；平台关闭时不创建任何网络请求。"""
+    return []
 
 
 def 清理文本(值: Any) -> str:
@@ -224,18 +282,68 @@ def _收集事件对象(event: Any) -> list[Any]:
 def 获取找书会话键(event: Any) -> str:
     群号 = 获取群号(event)
     用户 = 获取找书用户标识(event)
-    return f"{群号 or 'private'}:{用户 or 'unknown'}"
+    if not 用户:
+        return ""
+    return f"{群号 or 'private'}:{用户}"
 
 
 def 获取找书用户标识(event: Any) -> str:
-    用户 = 获取发送者QQ(event)
-    if 用户:
-        return 用户
-    for 对象 in _收集事件对象(event):
+    群聊 = bool(获取群号(event))
+    # QQ 官方群消息与按钮回调可能分别只提供 user_openid 或
+    # group_member_openid；群聊优先成员 openid，保证两种事件能命中同一会话。
+
+    def 安全用户文本(值: Any) -> str:
+        if 值 is None:
+            return ""
+        文本 = str(值).strip()
+        if not 文本 or re.search(r"<[^>]+ object at 0x[0-9a-f]+>", 文本, re.IGNORECASE):
+            return ""
+        return 文本
+
+    if not 群聊:
+        用户文本 = 安全用户文本(获取发送者QQ(event))
+        if 用户文本:
+            return 用户文本
+    对象列表 = _收集事件对象(event)
+
+    def 读取用户字段(对象: Any, 字段名: str) -> Any:
+        值 = 读取字段(对象, 字段名)
+        if isinstance(值, dict):
+            值 = (
+                值.get("user_id")
+                or 值.get("id")
+                or 值.get("openid")
+                or 值.get("user_openid")
+            )
+        return 值
+
+    if 群聊:
+        # 先扫描所有对象及 sender/author 的成员字段，避免顶层 user_openid
+        # 抢在官方群本群成员标识前面。
+        for 对象 in 对象列表:
+            for 字段名 in ("group_member_openid", "member_openid"):
+                值 = 安全用户文本(读取用户字段(对象, 字段名))
+                if 值:
+                    return 值
+            for 发送者字段 in ("author", "sender", "user", "member"):
+                发送者 = 读取字段(对象, 发送者字段)
+                if 发送者 is not None:
+                    for 字段名 in ("group_member_openid", "member_openid"):
+                        值 = 安全用户文本(读取用户字段(发送者, 字段名))
+                        if 值:
+                            return 值
+            # AstrBot 对部分 QQ 官方普通群消息会把 member_openid 映射为
+            # sender.user_id；在顶层同时存在 user_openid 时仍应优先本群成员。
+            发送者 = 读取字段(对象, "sender")
+            if 发送者 is not None:
+                for 字段名 in ("user_id", "openid"):
+                    值 = 安全用户文本(读取用户字段(发送者, 字段名))
+                    if 值:
+                        return 值
+
+    for 对象 in 对象列表:
         for 字段名 in (
             "user_openid",
-            "group_member_openid",
-            "member_openid",
             "openid",
             "user_id",
             "sender_id",
@@ -248,18 +356,23 @@ def 获取找书用户标识(event: Any) -> str:
                     or 值.get("openid")
                     or 值.get("user_openid")
                 )
-            if 值:
-                return str(值)
-        author = (
-            读取字段(对象, "author")
-            or 读取字段(对象, "user")
-            or 读取字段(对象, "member")
-        )
-        if isinstance(author, dict):
-            for 字段名 in ("user_openid", "member_openid", "id", "user_id", "openid"):
-                值 = author.get(字段名)
+            值文本 = 安全用户文本(值)
+            if 值文本:
+                return 值文本
+        for 发送者字段 in ("author", "sender", "user", "member"):
+            发送者 = 读取字段(对象, 发送者字段)
+            if 发送者 is None:
+                continue
+            for 字段名 in ("user_openid", "id", "user_id", "openid"):
+                值 = 安全用户文本(读取用户字段(发送者, 字段名))
                 if 值:
-                    return str(值)
+                    return 值
+
+    if 群聊:
+        用户 = 获取发送者QQ(event)
+        用户文本 = 安全用户文本(用户)
+        if 用户文本:
+            return 用户文本
     return ""
 
 
@@ -272,17 +385,36 @@ def 获取群号(event: Any) -> str:
             except Exception:
                 continue
             if hasattr(值, "__await__"):
+                关闭方法 = getattr(值, "close", None)
+                if callable(关闭方法):
+                    try:
+                        关闭方法()
+                    except Exception:
+                        pass
                 continue
             if 值:
                 return str(值)
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
-        值 = 读取字段(对象, "group_id") or 读取字段(对象, "group_openid")
-        if 值:
-            return str(值)
-    for 对象 in _收集事件对象(event):
-        for 字段名 in ("group_id", "group_openid", "group_open_id"):
+        for 字段名 in ("group_openid", "group_id", "group_open_id"):
             值 = 读取字段(对象, 字段名)
+            if isinstance(值, dict):
+                值 = (
+                    值.get("group_openid")
+                    or 值.get("group_id")
+                    or 值.get("id")
+                )
+            if 值:
+                return str(值)
+    for 对象 in _收集事件对象(event):
+        for 字段名 in ("group_openid", "group_id", "group_open_id"):
+            值 = 读取字段(对象, 字段名)
+            if isinstance(值, dict):
+                值 = (
+                    值.get("group_openid")
+                    or 值.get("group_id")
+                    or 值.get("id")
+                )
             if 值:
                 return str(值)
     return ""
@@ -1569,29 +1701,44 @@ async def _限时搜索(
     return []
 
 
-async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
+async def _聚合搜索未缓存(
+    关键词: str,
+    搜索类型: str = "auto",
+    允许平台: Any = None,
+) -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         数量 = 找书搜索候选数量
+        允许平台集合 = _规范化允许平台(允许平台)
+
+        def 平台搜索任务(
+            平台: str,
+            工厂: Any,
+            日志平台: str | None = None,
+        ) -> Awaitable[list[Any]]:
+            if 平台 not in 允许平台集合:
+                return _空搜索结果()
+            return _限时搜索(日志平台 or 平台, 工厂())
+
         搜索任务 = (
-            _限时搜索("番茄", 搜索番茄(session, 关键词, 需要数量=数量)),
-            _限时搜索("七猫", 搜索七猫(session, 关键词, 需要数量=数量)),
-            _限时搜索("书旗", 搜索书旗(session, 关键词, 需要数量=数量)),
-            _限时搜索("QQ阅读", 搜索QQ阅读(关键词, 需要数量=数量)),
-            _限时搜索("QQ浏览器", 搜索QQ浏览器(关键词, 需要数量=数量)),
-            _限时搜索("得间", 搜索得间(关键词, 需要数量=数量)),
-            _限时搜索("点众", 搜索点众(关键词, 需要数量=数量)),
-            _限时搜索("塔读", 搜索塔读(关键词, 需要数量=数量)),
-            _限时搜索("百度", 搜索百度(关键词, 需要数量=数量)),
-            _限时搜索("小米", 搜索小米(关键词, 需要数量=数量)),
-            _限时搜索("宜搜", 搜索宜搜(关键词, 需要数量=数量)),
-            _限时搜索("米读", 搜索米读(关键词, 需要数量=数量)),
-            _限时搜索("猫眼", 搜索猫眼(关键词, 需要数量=数量)),
-            _限时搜索("酷我", 搜索酷我(关键词, 需要数量=数量)),
-            _限时搜索("酷匠", 搜索酷匠(关键词, 需要数量=数量)),
-            _限时搜索("连城", 搜索连城(关键词, 需要数量=数量)),
-            _限时搜索("菠萝包", 搜索菠萝包(关键词, 需要数量=数量)),
-            _限时搜索("晋江", 搜索晋江(关键词, 需要数量=数量)),
+            平台搜索任务("番茄", lambda: 搜索番茄(session, 关键词, 需要数量=数量)),
+            平台搜索任务("七猫", lambda: 搜索七猫(session, 关键词, 需要数量=数量)),
+            平台搜索任务("书旗", lambda: 搜索书旗(session, 关键词, 需要数量=数量)),
+            平台搜索任务("QQ阅读", lambda: 搜索QQ阅读(关键词, 需要数量=数量)),
+            平台搜索任务("QQ浏览器", lambda: 搜索QQ浏览器(关键词, 需要数量=数量)),
+            平台搜索任务("得间", lambda: 搜索得间(关键词, 需要数量=数量)),
+            平台搜索任务("点众", lambda: 搜索点众(关键词, 需要数量=数量)),
+            平台搜索任务("塔读", lambda: 搜索塔读(关键词, 需要数量=数量)),
+            平台搜索任务("百度", lambda: 搜索百度(关键词, 需要数量=数量)),
+            平台搜索任务("小米", lambda: 搜索小米(关键词, 需要数量=数量)),
+            平台搜索任务("宜搜", lambda: 搜索宜搜(关键词, 需要数量=数量)),
+            平台搜索任务("米读", lambda: 搜索米读(关键词, 需要数量=数量)),
+            平台搜索任务("猫眼", lambda: 搜索猫眼(关键词, 需要数量=数量)),
+            平台搜索任务("酷我", lambda: 搜索酷我(关键词, 需要数量=数量)),
+            平台搜索任务("酷匠", lambda: 搜索酷匠(关键词, 需要数量=数量)),
+            平台搜索任务("连城", lambda: 搜索连城(关键词, 需要数量=数量)),
+            平台搜索任务("菠萝包", lambda: 搜索菠萝包(关键词, 需要数量=数量)),
+            平台搜索任务("晋江", lambda: 搜索晋江(关键词, 需要数量=数量)),
         )
         (
             番茄结果,
@@ -1671,7 +1818,8 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
         )
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 严格相关结果太少时才用联想词补搜，补回内容仍按原关键词过滤。
-        if len(初步结果) < 每页数量:
+        联想词: list[str] = []
+        if len(初步结果) < 每页数量 and "书旗" in 允许平台集合:
             联想词 = await _限时搜索(
                 "书旗联想",
                 搜索书旗联想(session, 关键词),
@@ -1702,24 +1850,24 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
 
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
                 return await asyncio.gather(
-                    _限时搜索("番茄联想", 搜索番茄(session, w, 需要数量=10)),
-                    _限时搜索("七猫联想", 搜索七猫(session, w, 需要数量=10)),
-                    _限时搜索("书旗联想结果", 搜索书旗(session, w, 需要数量=10)),
-                    _限时搜索("QQ阅读联想", 搜索QQ阅读(w, 需要数量=10)),
-                    _限时搜索("QQ浏览器联想", 搜索QQ浏览器(w, 需要数量=10)),
-                    _限时搜索("得间联想", 搜索得间(w, 需要数量=10)),
-                    _限时搜索("点众联想", 搜索点众(w, 需要数量=10)),
-                    _限时搜索("塔读联想", 搜索塔读(w, 需要数量=10)),
-                    _限时搜索("百度联想", 搜索百度(w, 需要数量=10)),
-                    _限时搜索("小米联想", 搜索小米(w, 需要数量=10)),
-                    _限时搜索("宜搜联想", 搜索宜搜(w, 需要数量=10)),
-                    _限时搜索("米读联想", 搜索米读(w, 需要数量=10)),
-                    _限时搜索("猫眼联想", 搜索猫眼(w, 需要数量=10)),
-                    _限时搜索("酷我联想", 搜索酷我(w, 需要数量=10)),
-                    _限时搜索("酷匠联想", 搜索酷匠(w, 需要数量=10)),
-                    _限时搜索("连城联想", 搜索连城(w, 需要数量=10)),
-                    _限时搜索("菠萝包联想", 搜索菠萝包(w, 需要数量=10)),
-                    _限时搜索("晋江联想", 搜索晋江(w, 需要数量=10)),
+                    平台搜索任务("番茄", lambda: 搜索番茄(session, w, 需要数量=10), "番茄联想"),
+                    平台搜索任务("七猫", lambda: 搜索七猫(session, w, 需要数量=10), "七猫联想"),
+                    平台搜索任务("书旗", lambda: 搜索书旗(session, w, 需要数量=10), "书旗联想结果"),
+                    平台搜索任务("QQ阅读", lambda: 搜索QQ阅读(w, 需要数量=10), "QQ阅读联想"),
+                    平台搜索任务("QQ浏览器", lambda: 搜索QQ浏览器(w, 需要数量=10), "QQ浏览器联想"),
+                    平台搜索任务("得间", lambda: 搜索得间(w, 需要数量=10), "得间联想"),
+                    平台搜索任务("点众", lambda: 搜索点众(w, 需要数量=10), "点众联想"),
+                    平台搜索任务("塔读", lambda: 搜索塔读(w, 需要数量=10), "塔读联想"),
+                    平台搜索任务("百度", lambda: 搜索百度(w, 需要数量=10), "百度联想"),
+                    平台搜索任务("小米", lambda: 搜索小米(w, 需要数量=10), "小米联想"),
+                    平台搜索任务("宜搜", lambda: 搜索宜搜(w, 需要数量=10), "宜搜联想"),
+                    平台搜索任务("米读", lambda: 搜索米读(w, 需要数量=10), "米读联想"),
+                    平台搜索任务("猫眼", lambda: 搜索猫眼(w, 需要数量=10), "猫眼联想"),
+                    平台搜索任务("酷我", lambda: 搜索酷我(w, 需要数量=10), "酷我联想"),
+                    平台搜索任务("酷匠", lambda: 搜索酷匠(w, 需要数量=10), "酷匠联想"),
+                    平台搜索任务("连城", lambda: 搜索连城(w, 需要数量=10), "连城联想"),
+                    平台搜索任务("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10), "菠萝包联想"),
+                    平台搜索任务("晋江", lambda: 搜索晋江(w, 需要数量=10), "晋江联想"),
                 )
 
             补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
@@ -1743,20 +1891,33 @@ async def _聚合搜索未缓存(关键词: str, 搜索类型: str = "auto") -> 
         return 排序找书结果(合并, 关键词, 搜索类型)
 
 
-async def 聚合搜索(关键词: str, 搜索类型: str = "auto") -> list[dict[str, Any]]:
+async def 聚合搜索(
+    关键词: str,
+    搜索类型: str = "auto",
+    允许平台: Any = None,
+) -> list[dict[str, Any]]:
     """搜索结果短缓存，避免重复查询反复等待所有平台响应。"""
     缓存键 = (规范标题(关键词), str(搜索类型 or "auto"))
     if not 缓存键[0]:
         return []
+    允许平台集合 = _规范化允许平台(允许平台)
+    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)))
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
     if 缓存 is not None:
         缓存时间, 缓存结果 = 缓存
         if 现在 - 缓存时间 < 找书结果缓存秒数:
-            return [dict(项) for 项 in 缓存结果]
+            return _过滤不可用平台结果(
+                [dict(项) for 项 in 缓存结果], 允许平台集合
+            )
         找书结果缓存.pop(缓存键, None)
 
-    结果 = await _聚合搜索未缓存(关键词, 搜索类型)
+    结果 = await _聚合搜索未缓存(
+        关键词,
+        搜索类型,
+        允许平台=允许平台集合,
+    )
+    结果 = _过滤不可用平台结果(结果, 允许平台集合)
     找书结果缓存[缓存键] = (time.monotonic(), [dict(项) for 项 in 结果])
     if len(找书结果缓存) > 找书结果缓存上限:
         最旧键 = min(找书结果缓存, key=lambda key: 找书结果缓存[key][0])
@@ -1855,7 +2016,9 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
 选书命令正则 = re.compile(r"^选([1-5])$")
 
 
-def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str | None:
+def 解析找书选中项(
+    event: Any, 命令文本: str, 配置: Any = None
+) -> dict[str, Any] | str | None:
     """识别点击指令链发来的 选N，映射当前页第 N 本并交给下载流。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
@@ -1866,6 +2029,12 @@ def 解析找书选中项(event: Any, 命令文本: str) -> dict[str, Any] | str
     if not 会话:
         return "找书结果已过期，请重新发送 找 关键词"
     会话["ts"] = time.time()
+    允许平台 = _规范化允许平台(
+        小说功能开关.获取当前事件可用小说平台(event, 配置)
+    )
+    if _更新会话可用结果(会话, 允许平台):
+        找书会话.pop(获取找书会话键(event), None)
+        return "找书结果已更新，请重新发送 找 关键词"
     当前页 = 获取当前页结果(会话)
     if not 当前页:
         return "没有可选书籍"
@@ -1883,8 +2052,9 @@ def 获取找书下载回复流(
     if not 选书命令正则.fullmatch(文本):
         return None
     if not 小说功能开关.小说总开关是否开启(配置):
+        找书会话.clear()
         return 小说功能开关.获取小说功能关闭回复("", 配置)
-    选中 = 解析找书选中项(event, 命令文本)
+    选中 = 解析找书选中项(event, 命令文本, 配置)
     if 选中 is None:
         return None
     if isinstance(选中, str):
@@ -1954,46 +2124,66 @@ async def 处理找书指令(
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
     查询 = 解析找书查询(文本)
+    if not 会话键 and 查询 is not None:
+        return "暂时无法识别当前用户，请稍后再试"
     是当前会话翻页 = 文本 in 翻页命令集合 and 会话键 in 找书会话
+    if 查询 is None and not 是当前会话翻页:
+        # 找书处理器会被主分发器对每条消息调用；非找书消息不读取开关状态。
+        return None
     if (查询 is not None or 是当前会话翻页) and not 小说功能开关.小说总开关是否开启(
         配置
     ):
+        找书会话.clear()
         return 小说功能开关.获取小说功能关闭回复("", 配置)
+    允许平台 = _规范化允许平台(
+        小说功能开关.获取当前事件可用小说平台(event, 配置)
+    )
     会话 = None
     if 查询 is not None:
         关键词 = 查询["keyword"]
         搜索类型 = 查询["type"]
         try:
-            结果 = await 聚合搜索(关键词, 搜索类型)
+            结果 = _过滤不可用平台结果(
+                await 聚合搜索(
+                    关键词,
+                    搜索类型,
+                    允许平台=允许平台,
+                ),
+                允许平台,
+            )
         except Exception as exc:
             logger.warning(
                 f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}"
             )
             return "搜索失败，请稍后再试"
-        会话 = {
-            "keyword": 关键词,
-            "search_type": 搜索类型,
-            "results": 结果,
-            "page": 1,
-            "ts": time.time(),
-        }
-        找书会话[会话键] = 会话
         logger.info(
             f"找书搜索完成：关键词={关键词}, 类型={搜索类型}, "
             f"总数={len(结果)}, 会话={会话键}"
         )
         if not 结果:
+            找书会话.pop(会话键, None)
             return f"没有找到和「{关键词}」相关的书"
+        会话 = {
+            "keyword": 关键词,
+            "search_type": 搜索类型,
+            "results": 结果,
+            "allowed_platforms": tuple(sorted(允许平台)),
+            "page": 1,
+            "ts": time.time(),
+        }
+        找书会话[会话键] = 会话
     else:
         # 选书指令由 获取找书下载回复流 处理，这里直接跳过
-        if 选书命令正则.fullmatch(文本):
-            return None
-        if 文本 not in 翻页命令集合:
-            return None
         会话 = 找书会话.get(会话键)
         if not 会话:
             return None
         会话["ts"] = time.time()
+        if _更新会话可用结果(会话, 允许平台):
+            找书会话.pop(会话键, None)
+            return "找书结果已更新，请重新发送 找 关键词"
+        if not 会话["results"]:
+            找书会话.pop(会话键, None)
+            return "没有可用书籍，请重新发送 找 关键词"
         页码 = max(1, int(会话.get("page") or 1))
         总页 = max(1, (len(会话.get("results") or []) + 每页数量 - 1) // 每页数量)
         if 文本 in {"上一页", "上页", "上"}:

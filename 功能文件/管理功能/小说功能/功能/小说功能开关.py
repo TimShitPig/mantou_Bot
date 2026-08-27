@@ -198,6 +198,24 @@ def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = 
     return bool(是群文件清理管理员(event, 配置) and 管理员测试模式是否开启(配置))
 
 
+def 获取当前事件可用小说平台(event: Any, 配置: Any = None) -> set[str]:
+    """返回当前事件可以使用的小说平台，供找书搜索一次性筛选。"""
+    状态 = 读取小说功能控制台状态(配置)
+    if not bool(状态.get("global_enabled")):
+        return set()
+    平台状态 = 状态.get("platforms")
+    if not isinstance(平台状态, dict):
+        平台状态 = {}
+    # 管理员测试模式沿用单平台下载的既有例外：仅插件管理员可测试关闭平台。
+    if bool(状态.get("test_mode")) and 是群文件清理管理员(event, 配置):
+        return set(默认状态)
+    return {
+        功能名
+        for 功能名, 默认值 in 默认状态.items()
+        if bool(平台状态.get(功能名, 默认值))
+    }
+
+
 def 获取小说功能关闭回复(功能名: str, 配置: Any = None) -> str:
     if not 小说总开关是否开启(配置):
         return "小说功能已关闭"
@@ -243,6 +261,9 @@ def 读取小说功能控制台状态(配置: Any = None) -> dict[str, Any]:
         logger.warning(
             f"小说功能开关批量读取数据库失败：错误={type(exc).__name__}"
         )
+        return 结果
+    if not isinstance(状态, dict):
+        logger.warning("小说功能开关批量读取数据库返回格式异常：错误类型=TypeError")
         return 结果
     结果["global_enabled"] = _运行状态转布尔(
         状态.get(小说总开关状态键), True
