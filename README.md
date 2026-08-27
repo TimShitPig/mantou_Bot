@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.52.14-2ea44f)
+![version](https://img.shields.io/badge/version-v5.53.0-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.52.14 |
+| 版本 | v5.53.0 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -173,6 +173,8 @@ QQ 群主和管理员不会被自动撤回；插件优先通过 OneBot `get_grou
 - `novel_pan_account_selection`：按“平台 + 群标识”保存群内账号选择；UC、夸克、百度互不影响，未设置时默认账号1
 - `qq_reader_auth`：QQ阅读 `ywguid` / `ywkey`
 - `novel_share_pan`：当前主分享网盘
+
+消息记录页读取的 QQ 官方群资料保存在 MySQL `mantou_group_infos` 表，重启后直接恢复；资料超过 24 小时才后台更新，网页中的“刷新群信息”会立即请求最新公开资料。
 
 未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启，主网盘默认 UC，相关运行状态无法持久化。
 

@@ -33,6 +33,7 @@ except Exception as 导入异常:
 最大会话数 = 200
 每会话最大消息数 = 500
 总消息上限 = 10000
+群信息刷新间隔秒 = 24 * 60 * 60
 未读状态命名空间 = "msg_console_unread"
 当前插件上下文: Any = globals().get("当前插件上下文")
 当前插件配置: Any = globals().get("当前插件配置")
@@ -1520,6 +1521,32 @@ def 标记群信息待刷新(会话标识: str) -> None:
         群信息待刷新.add(会话标识)
 
 
+def _获取群信息appid(会话标识: str, appid: str = "") -> str:
+    """优先使用调用方提供的 AppID，否则从当前会话恢复。"""
+    appid = str(appid or "").strip()
+    if appid:
+        return appid
+    会话 = 消息缓存.get(str(会话标识 or "").strip()) or {}
+    return str(会话.get("appid") or "").strip()
+
+
+def _群信息需要刷新(信息: dict[str, Any] | None) -> bool:
+    """判断群资料是否需要后台更新；失败冷却期间保留旧资料。"""
+    信息 = 信息 if isinstance(信息, dict) else {}
+    现在 = int(time.time())
+    try:
+        下次刷新 = int(信息.get("next_refresh_at") or 0)
+    except (TypeError, ValueError):
+        下次刷新 = 0
+    if 下次刷新 > 现在:
+        return False
+    try:
+        更新时间 = int(信息.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        更新时间 = 0
+    return 更新时间 <= 0 or 现在 - 更新时间 >= 群信息刷新间隔秒
+
+
 async def 刷新待处理群信息() -> int:
     """批量刷新待处理群信息，返回成功数量（加锁防并发，逐个带间隔避免限流）。"""
     if not 群信息待刷新:
@@ -1554,14 +1581,16 @@ def _群信息冷却秒数(异常: Exception) -> int:
     return 60
 
 
-async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] | None:
-    """调用 QQ 官方接口刷新群基本信息；冷却期内直接跳过，失败按错误类型冷却。"""
+async def 刷新群信息(
+    会话标识: str, appid: str = "", 强制: bool = False
+) -> dict[str, Any] | None:
+    """按需调用 QQ 官方群资料接口；成功结果写入数据库长期保存。"""
     if not 会话标识:
         return None
-    现在 = int(time.time())
     已有 = 群信息缓存.get(会话标识) or {}
-    if int(已有.get("updated_at") or 0) > 现在:
+    if not 强制 and not _群信息需要刷新(已有):
         return None
+    appid = _获取群信息appid(会话标识, appid)
     通道 = 获取HTTP通道()
     if 通道 is None:
         return None
@@ -1575,20 +1604,83 @@ async def 刷新群信息(会话标识: str, appid: str = "") -> dict[str, Any] 
             group_openid=会话标识,
         )
         结果 = await _http.request(route)
-        if not isinstance(结果, dict):
-            群信息缓存[会话标识] = {"updated_at": int(time.time()) + 60}
+        错误码 = 结果.get("code") if isinstance(结果, dict) else None
+        有群资料字段 = isinstance(结果, dict) and any(
+            字段 in 结果
+            for 字段 in (
+                "group_openid",
+                "group_name",
+                "group_finger_memo",
+                "group_class_text",
+                "group_tags",
+                "group_member_num",
+            )
+        )
+        if (
+            not isinstance(结果, dict)
+            or not 有群资料字段
+            or 错误码 not in (None, 0, "0", "")
+        ):
+            失败缓存 = dict(已有)
+            失败缓存.setdefault("group_openid", 会话标识)
+            失败缓存["next_refresh_at"] = int(time.time()) + 60
+            群信息缓存[会话标识] = 失败缓存
             return None
+        标签 = 结果.get("group_tags") if "group_tags" in 结果 else 已有.get("group_tags")
+        if not isinstance(标签, (list, tuple)):
+            标签 = [] if 标签 in (None, "") else [标签]
+        标签 = [str(值).strip() for 值 in 标签 if str(值 or "").strip()]
+        原始成员数 = (
+            结果.get("group_member_num")
+            if "group_member_num" in 结果
+            else 已有.get("member_num")
+        )
+        try:
+            成员数 = max(0, int(原始成员数 or 0))
+        except (TypeError, ValueError):
+            try:
+                成员数 = max(0, int(已有.get("member_num") or 0))
+            except (TypeError, ValueError):
+                成员数 = 0
+        群名 = 结果.get("group_name") if "group_name" in 结果 else 已有.get("group_name")
+        群备注 = (
+            结果.get("group_finger_memo")
+            if "group_finger_memo" in 结果
+            else 已有.get("group_finger_memo")
+        )
+        群分类 = (
+            结果.get("group_class_text")
+            if "group_class_text" in 结果
+            else 已有.get("group_class_text")
+        )
         摘要 = {
             "group_openid": str(结果.get("group_openid") or 会话标识),
-            "group_name": str(结果.get("group_name") or ""),
-            "member_num": int(结果.get("group_member_num") or 0),
+            "appid": appid,
+            "group_name": str(群名 or ""),
+            "group_finger_memo": str(群备注 or ""),
+            "group_class_text": str(群分类 or ""),
+            "group_tags": 标签,
+            "member_num": 成员数,
             "updated_at": int(time.time()),
         }
         群信息缓存[会话标识] = 摘要
+        if _消息存储 is not None:
+            try:
+                写入群信息 = getattr(_消息存储, "写入群信息", None)
+                if callable(写入群信息):
+                    await asyncio.to_thread(写入群信息, 摘要, appid)
+            except Exception as 存储异常:
+                logger.debug(
+                    "消息记录群资料持久化失败：错误类型=%s",
+                    type(存储异常).__name__,
+                )
         return 摘要
     except Exception as exc:
         冷却秒数 = _群信息冷却秒数(exc)
-        群信息缓存[会话标识] = {"updated_at": int(time.time()) + 冷却秒数}
+        失败缓存 = dict(已有)
+        失败缓存.setdefault("group_openid", 会话标识)
+        失败缓存["next_refresh_at"] = int(time.time()) + 冷却秒数
+        群信息缓存[会话标识] = 失败缓存
         logger.warning(
             "消息记录群信息刷新失败：错误类型=%s，冷却 %s 秒",
             type(exc).__name__, 冷却秒数,
@@ -1600,8 +1692,12 @@ def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
     信息 = 群信息缓存.get(会话标识) or {}
     会话 = 消息缓存.get(会话标识) or {}
     返回 = dict(信息)
+    返回.pop("next_refresh_at", None)
     返回.setdefault("group_openid", 会话标识)
     返回.setdefault("group_name", 获取群备注(会话标识) or "")
+    返回.setdefault("group_finger_memo", "")
+    返回.setdefault("group_class_text", "")
+    返回.setdefault("group_tags", [])
     返回.setdefault("member_num", 0)
     return 返回
 
@@ -1727,7 +1823,7 @@ def _数据库聚合聊天项(
                 continue
             if 类型 == "group":
                 缓存群信息 = 群信息缓存.get(会话标识)
-                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
             内存会话 = 消息缓存.get(会话标识) or {}
             内存消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
@@ -1792,7 +1888,7 @@ def _数据库聚合聊天项(
                 continue
             if 类型 == "group":
                 缓存群信息 = 群信息缓存.get(会话标识)
-                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
             显示名 = _聊天显示名(会话标识, 内存会话)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
@@ -1860,7 +1956,7 @@ def 获取聊天列表(
                 continue
             if 类型 == "group":
                 缓存群信息 = 群信息缓存.get(会话标识)
-                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
             显示名 = _聊天显示名(会话标识, 会话)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
@@ -2896,6 +2992,60 @@ def _从数据库恢复() -> None:
     """启动/重载时从 MySQL 恢复会话与最近消息，置顶/备注/昵称随元数据恢复。"""
     if _消息存储 is None:
         return
+    try:
+        读取群信息 = getattr(_消息存储, "读取全部群信息", None)
+        持久化群信息 = 读取群信息() if callable(读取群信息) else []
+        恢复群数 = 0
+        for 原始信息 in 持久化群信息 or []:
+            if not isinstance(原始信息, dict):
+                continue
+            会话标识 = str(原始信息.get("group_openid") or "").strip()
+            if not 会话标识:
+                continue
+            try:
+                成员数 = max(0, int(原始信息.get("member_num") or 0))
+            except (TypeError, ValueError):
+                成员数 = 0
+            标签 = 原始信息.get("group_tags")
+            if not isinstance(标签, list):
+                标签 = [] if 标签 in (None, "") else [标签]
+            资料 = {
+                "group_openid": 会话标识,
+                "appid": str(原始信息.get("appid") or ""),
+                "group_name": str(原始信息.get("group_name") or ""),
+                "group_finger_memo": str(原始信息.get("group_finger_memo") or ""),
+                "group_class_text": str(原始信息.get("group_class_text") or ""),
+                "group_tags": [str(值).strip() for 值 in 标签 if str(值 or "").strip()],
+                "member_num": 成员数,
+                "updated_at": int(原始信息.get("updated_at") or 0),
+            }
+            现有 = 群信息缓存.get(会话标识) or {}
+            try:
+                资料时间 = int(资料.get("updated_at") or 0)
+            except (TypeError, ValueError):
+                资料时间 = 0
+            try:
+                现有时间 = int(现有.get("updated_at") or 0)
+            except (TypeError, ValueError):
+                现有时间 = 0
+            try:
+                现有成员数 = int(现有.get("member_num") or 0)
+            except (TypeError, ValueError):
+                现有成员数 = 0
+            现有有资料 = bool(
+                str(现有.get("group_name") or "").strip()
+                or str(现有.get("group_finger_memo") or "").strip()
+                or str(现有.get("group_class_text") or "").strip()
+                or 现有.get("group_tags")
+                or 现有成员数 > 0
+            )
+            if not 现有 or not 现有有资料 or 资料时间 >= 现有时间:
+                群信息缓存[会话标识] = 资料
+                恢复群数 += 1
+        if 恢复群数:
+            logger.info("消息记录数据库恢复群资料：数量=%s", 恢复群数)
+    except Exception as exc:
+        logger.debug("消息记录群资料恢复失败：错误类型=%s", type(exc).__name__)
     元数据 = {}
     try:
         元数据 = _消息存储.读取全部元数据() or {}

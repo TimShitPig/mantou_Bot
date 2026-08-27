@@ -1530,7 +1530,12 @@ async def _处理群信息刷新(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await 消息记录.刷新群信息(会话标识, str((数据 or {}).get("appid") or ""))
+        # 网页按钮表示管理员明确要求更新，忽略 24 小时缓存和失败冷却。
+        结果 = await 消息记录.刷新群信息(
+            会话标识,
+            str((数据 or {}).get("appid") or ""),
+            强制=True,
+        )
         if 结果 is None:
             return _控制台错误(409, "群信息刷新失败")
         return web.json_response({"ok": True, **结果})

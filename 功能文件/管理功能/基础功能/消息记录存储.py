@@ -2,6 +2,7 @@
 """消息记录 MySQL 持久化层。
 
 - 消息记录写入 mantou_message_records 表（自动建表，带会话/时间与消息 ID 索引）。
+- 群资料写入 mantou_group_infos 表，启动时恢复，避免每次打开控制台都请求官方接口。
 - 置顶/备注/昵称等元数据写入现有 mantou_runtime_state 表（namespace 隔离）。
 - 依赖插件 database_settings 配置；未配置时接口直接返回默认值/空，
   不尝试连接数据库、不刷告警（与运行状态数据库一致）。
@@ -22,6 +23,7 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 消息记录表名 = "mantou_message_records"
+群信息表名 = "mantou_group_infos"
 元数据命名空间 = "message_panel_meta"
 
 _消息写入SQL = (
@@ -118,7 +120,7 @@ def _关闭连接(连接: Any | None) -> None:
 
 
 def 初始化数据库() -> bool:
-    """建消息记录表与元数据表；返回是否成功。"""
+    """建消息记录、群资料与元数据表；返回是否成功。"""
     if not _MySQL可用():
         return False
     连接 = _打开连接()
@@ -150,6 +152,22 @@ def 初始化数据库() -> bool:
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_message (message_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            游标.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{群信息表名}` (
+                    group_openid VARCHAR(128) NOT NULL,
+                    appid VARCHAR(64) DEFAULT '',
+                    group_name VARCHAR(255) DEFAULT '',
+                    group_finger_memo VARCHAR(255) DEFAULT '',
+                    group_class_text VARCHAR(255) DEFAULT '',
+                    group_tags TEXT,
+                    member_num INT DEFAULT 0,
+                    updated_at BIGINT DEFAULT 0,
+                    PRIMARY KEY (group_openid),
+                    KEY idx_group_infos_updated (updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -600,6 +618,117 @@ def 读取全部元数据() -> dict[str, Any]:
     finally:
         _关闭连接(连接)
     return 结果
+
+
+def 写入群信息(信息: dict[str, Any], appid: str = "") -> bool:
+    """持久化一份 QQ 官方群资料；只保存公开群资料，不保存消息或凭据。"""
+    if not _MySQL可用() or not isinstance(信息, dict):
+        return False
+    群OpenID = _按列宽截断(信息.get("group_openid") or "", "会话标识")
+    if not 群OpenID:
+        return False
+    try:
+        成员数 = max(0, int(信息.get("member_num") or 信息.get("group_member_num") or 0))
+    except (TypeError, ValueError):
+        成员数 = 0
+    标签 = 信息.get("group_tags")
+    if not isinstance(标签, (list, tuple)):
+        标签 = [] if 标签 in (None, "") else [标签]
+    标签 = [str(值).strip() for 值 in 标签 if str(值 or "").strip()]
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                INSERT INTO `{群信息表名}` (
+                    group_openid, appid, group_name, group_finger_memo,
+                    group_class_text, group_tags, member_num, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    appid=VALUES(appid),
+                    group_name=VALUES(group_name),
+                    group_finger_memo=VALUES(group_finger_memo),
+                    group_class_text=VALUES(group_class_text),
+                    group_tags=VALUES(group_tags),
+                    member_num=VALUES(member_num),
+                    updated_at=VALUES(updated_at)
+                """,
+                (
+                    群OpenID,
+                    _按列宽截断(appid, "appid"),
+                    str(信息.get("group_name") or "")[:255],
+                    str(信息.get("group_finger_memo") or "")[:255],
+                    str(信息.get("group_class_text") or "")[:255],
+                    json.dumps(标签, ensure_ascii=False),
+                    成员数,
+                    int(信息.get("updated_at") or time.time()),
+                ),
+            )
+        连接.commit()
+        return True
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 群资料写入失败：错误类型=%s", type(exc).__name__)
+        return False
+    finally:
+        _关闭连接(连接)
+
+
+def 读取全部群信息() -> list[dict[str, Any]]:
+    """读取持久化群资料，供插件启动时恢复内存缓存。"""
+    if not _MySQL可用():
+        return []
+    连接 = _打开连接()
+    if 连接 is None:
+        return []
+    结果: list[dict[str, Any]] = []
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"""
+                SELECT group_openid, appid, group_name, group_finger_memo,
+                       group_class_text, group_tags, member_num, updated_at
+                FROM `{群信息表名}`
+                """
+            )
+            for 行 in 游标.fetchall():
+                群OpenID = str(_行字段(行, 0, "group_openid", 默认值="") or "").strip()
+                if not 群OpenID:
+                    continue
+                标签原值 = _行字段(行, 5, "group_tags", 默认值="[]")
+                try:
+                    标签 = json.loads(str(标签原值 or "[]"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    标签 = []
+                if not isinstance(标签, list):
+                    标签 = [str(标签)] if 标签 else []
+                try:
+                    成员数 = max(0, int(_行字段(行, 6, "member_num", 默认值=0) or 0))
+                except (TypeError, ValueError):
+                    成员数 = 0
+                try:
+                    更新时间 = int(_行字段(行, 7, "updated_at", 默认值=0) or 0)
+                except (TypeError, ValueError):
+                    更新时间 = 0
+                结果.append(
+                    {
+                        "group_openid": 群OpenID,
+                        "appid": str(_行字段(行, 1, "appid", 默认值="") or ""),
+                        "group_name": str(_行字段(行, 2, "group_name", 默认值="") or ""),
+                        "group_finger_memo": str(_行字段(行, 3, "group_finger_memo", 默认值="") or ""),
+                        "group_class_text": str(_行字段(行, 4, "group_class_text", 默认值="") or ""),
+                        "group_tags": [str(值) for 值 in 标签 if str(值 or "").strip()],
+                        "member_num": 成员数,
+                        "updated_at": 更新时间,
+                    }
+                )
+        return 结果
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 群资料读取失败：错误类型=%s", type(exc).__name__)
+        return []
+    finally:
+        _关闭连接(连接)
 
 
 def _行转记录(行: Any) -> dict[str, Any]:
