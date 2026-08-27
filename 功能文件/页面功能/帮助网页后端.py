@@ -1297,11 +1297,13 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
         if 队列 is None:
             return web.Response(status=503, text="WebSocket unavailable")
         响应 = web.WebSocketResponse(heartbeat=30.0, compress=False)
-        await 响应.prepare(request)
-        await 响应.send_json({"type": "ready", "data": {}}, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
-        接收任务: asyncio.Task[Any] | None = asyncio.create_task(响应.receive())
-        事件任务: asyncio.Task[Any] | None = asyncio.create_task(队列.get())
+        接收任务: asyncio.Task[Any] | None = None
+        事件任务: asyncio.Task[Any] | None = None
         try:
+            await 响应.prepare(request)
+            await 响应.send_json({"type": "ready", "data": {}}, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
+            接收任务 = asyncio.create_task(响应.receive())
+            事件任务 = asyncio.create_task(队列.get())
             while not 响应.closed:
                 完成任务, _ = await asyncio.wait(
                     {接收任务, 事件任务},
