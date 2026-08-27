@@ -138,9 +138,25 @@ from .帮助网页脚本 import 控制台脚本
             .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
-            .msg-media img { max-width:210px; max-height:210px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; }
+            .msg-image-media { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+            .msg-image-link { display:block; min-width:24px; min-height:24px; }
+            .msg-media img { max-width:240px; max-height:240px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; background:#f2f3f5; }
             .msg-media img:hover { transform:scale(1.03); }
-        .msg-media-ph { display:inline-block; padding:8px 14px; background:#f2f3f5; border-radius:8px; font-size:12px; color:#8a8f99; }
+            .msg-image-link.is-broken { display:none; }
+            .msg-media-open { color:#3a7bd5; font-size:11px; text-decoration:none; }
+            .msg-media-open:hover { text-decoration:underline; }
+            .msg-file-card { display:flex; align-items:center; gap:9px; min-width:190px; max-width:290px; padding:8px 10px; border-radius:8px; background:#f5f8fc; color:#3e4a5a; text-decoration:none; }
+            .msg-file-card:hover { background:#eaf2fc; }
+            .msg-file-card.is-unavailable { color:#8a8f99; }
+            .msg-file-icon { width:28px; height:28px; flex:0 0 28px; display:grid; place-items:center; border-radius:6px; background:#dcecff; color:#3a7bd5; font-size:15px; font-weight:700; }
+            .msg-file-info { min-width:0; flex:1; display:flex; flex-direction:column; gap:1px; }
+            .msg-file-info strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+            .msg-file-info small { color:#8a8f99; font-size:10px; line-height:1.3; }
+            .msg-file-action { flex:0 0 auto; color:#3a7bd5; font-size:10px; }
+            .msg-media-ph { display:inline-block; padding:8px 14px; background:#f2f3f5; border-radius:8px; font-size:12px; color:#8a8f99; }
+            .msg-row.self .msg-file-card { background:rgba(255,255,255,.2); color:#fff; }
+            .msg-row.self .msg-file-card:hover { background:rgba(255,255,255,.3); }
+            .msg-row.self .msg-file-info small,.msg-row.self .msg-file-action { color:rgba(255,255,255,.78); }
             .msg-lightbox { position:fixed; inset:0; z-index:2000; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; padding:28px; }
             .msg-lightbox[hidden] { display:none; }
             .msg-lightbox-inner { position:relative; max-width:100%; max-height:100%; display:flex; flex-direction:column; align-items:center; gap:10px; }
@@ -309,6 +325,11 @@ from .帮助网页脚本 import 控制台脚本
               .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
               .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
               .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+              .msg-file-card { background:#202c3d; color:#dce8f6; }
+              .msg-file-card:hover { background:#263a52; }
+              .msg-file-icon { background:#294b70; color:#9bc9f4; }
+              .msg-file-info small { color:#8a9bb2; }
+              .msg-media-open { color:#6fc8ff; }
               .msg-meta { color:#6f7590; }
               .msg-tag.bot { background:#3a2130; color:#e287ae; }
               .msg-tag.role { background:#1f2a44; color:#8fa8ec; }

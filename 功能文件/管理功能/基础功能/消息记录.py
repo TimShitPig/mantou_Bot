@@ -4,6 +4,7 @@ import asyncio
 import ast
 import base64
 import copy
+import html
 import json
 import random
 import re
@@ -84,7 +85,10 @@ _挂钩已安装 = globals().get("_挂钩已安装", False)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
-_媒体占位规则 = re.compile(r"\[(图片|语音|视频|文件|媒体|media)]([^\s]+)")
+_媒体占位规则 = re.compile(
+    r"\[(图片|语音|视频|文件|媒体|media)]\s*((?:https?:)?//[^\s<>]+)",
+    re.IGNORECASE,
+)
 _QQ图片域名 = re.compile(
     r"(?:https?://)?[^>\s]*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)[^>\s]*"
 )
@@ -217,6 +221,22 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     if 标准时间:
         记录["ts"] = 标准时间
         记录["timestamp"] = _格式化时间戳(标准时间)
+    现有媒体 = 记录.get("media")
+    现有地址 = (
+        str(现有媒体.get("src") or "").strip()
+        if isinstance(现有媒体, dict)
+        else ""
+    )
+    if not 现有地址:
+        原始消息 = _解析消息结构(记录.get("raw_message"))
+        补充媒体 = _提取媒体字段(str(记录.get("content") or ""), 原始消息)
+        if 补充媒体:
+            if isinstance(现有媒体, dict):
+                合并媒体 = dict(现有媒体)
+                合并媒体.update({k: v for k, v in 补充媒体.items() if v not in (None, "")})
+                记录["media"] = 合并媒体
+            else:
+                记录["media"] = 补充媒体
     return 记录
 
 
@@ -245,8 +265,10 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     if isinstance(新媒体, dict) and 新媒体:
         if not isinstance(旧媒体, dict) or not 旧媒体.get("src"):
             已有记录["media"] = dict(新媒体)
-        elif 新媒体.get("text") and not 旧媒体.get("text"):
-            旧媒体["text"] = 新媒体.get("text")
+        else:
+            for 字段 in ("text", "name", "content_type", "size", "width", "height"):
+                if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
+                    旧媒体[字段] = 新媒体[字段]
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
     已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
     try:
@@ -697,6 +719,39 @@ def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
     return 文本
 
 
+def _解析消息结构(对象: Any) -> Any:
+    """把 QQ 原始消息、raw_data 或附件对象转为可读取的结构。"""
+    if isinstance(对象, (dict, list, tuple)):
+        return 对象
+    if isinstance(对象, bytes):
+        try:
+            对象 = 对象.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    for 方法名 in ("model_dump", "dict"):
+        方法 = getattr(对象, 方法名, None)
+        if callable(方法):
+            try:
+                结果 = 方法()
+                if isinstance(结果, (dict, list, tuple)):
+                    return 结果
+            except Exception:
+                pass
+    if not isinstance(对象, str):
+        return None
+    文本 = 对象.strip()
+    if not 文本:
+        return None
+    for 解析器 in (json.loads, ast.literal_eval):
+        try:
+            结果 = 解析器(文本)
+            if isinstance(结果, (dict, list, tuple)):
+                return 结果
+        except Exception:
+            continue
+    return None
+
+
 _表情标签规则 = re.compile(r'<faceType=\d+,faceId="([^"]*)"(?:,ext="([^"]*)")?>')
 _表情JSON规则 = re.compile(r'"text"\s*:\s*"([^"]*)"')
 
@@ -769,31 +824,103 @@ def _提取REFIDX(消息: Any) -> str:
     return ""
 
 
-def _提取附件媒体(消息: Any) -> dict[str, str] | None:
-    """从 QQ 官方消息 attachments 提取图片/语音/视频/文件媒体信息。"""
+def _提取附件列表(消息: Any) -> list[Any]:
+    """兼容 botpy 对象、字典和 raw_data 嵌套结构中的 attachments。"""
+    if 消息 is None:
+        return []
+    来源: list[Any] = []
+    待检查: list[Any] = [消息]
+    已检查: set[int] = set()
+    for _ in range(2):
+        下一层: list[Any] = []
+        for 当前 in 待检查:
+            结构 = _解析消息结构(当前)
+            当前 = 结构 if 结构 is not None else 当前
+            标识 = id(当前)
+            if 标识 in 已检查:
+                continue
+            已检查.add(标识)
+            来源.append(当前)
+            for 字段 in ("raw_data", "data", "payload", "event", "message"):
+                嵌套 = _读取字段(当前, 字段)
+                if 嵌套 not in (None, ""):
+                    解析结果 = _解析消息结构(嵌套)
+                    下一层.append(解析结果 if 解析结果 is not None else 嵌套)
+        待检查 = 下一层
+        if not 待检查:
+            break
+    附件列表: list[Any] = []
+    for 当前 in 来源:
+        for 字段 in ("attachments", "attachment", "files"):
+            值 = _读取字段(当前, 字段)
+            if 值 in (None, ""):
+                continue
+            解析结果 = _解析消息结构(值)
+            值 = 解析结果 if 解析结果 is not None else 值
+            if isinstance(值, (list, tuple)):
+                附件列表.extend(值)
+            elif isinstance(值, dict) and not any(
+                键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type")
+            ):
+                附件列表.extend(值.values())
+            else:
+                附件列表.append(值)
+    return 附件列表
+
+
+def _读取附件字段(附件: Any, *字段名: str) -> Any:
+    for 字段 in 字段名:
+        值 = _读取字段(附件, 字段)
+        if 值 not in (None, ""):
+            return 值
+    return None
+
+
+def _清理媒体地址(地址: Any) -> str:
+    return html.unescape(str(地址 or "").strip()).strip("<>[](){}，。；;、")
+
+
+def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
+    """从 QQ 官方消息 attachments 提取图片/语音/视频/文件及元数据。"""
     try:
-        附件列表 = _读取字段(消息, "attachments")
-        if not isinstance(附件列表, list) or not 附件列表:
-            return None
-        for 附件 in 附件列表:
-            类型 = str(_读取字段(附件, "content_type") or "").lower()
-            地址 = str(_读取字段(附件, "url") or "").strip()
+        for 原附件 in _提取附件列表(消息):
+            附件 = _解析消息结构(原附件) or 原附件
+            类型值 = str(
+                _读取附件字段(附件, "content_type", "mime_type", "type") or ""
+            ).strip().lower()
+            地址 = _清理媒体地址(
+                _读取附件字段(附件, "url", "download_url", "file_url", "src")
+                or (_读取附件字段(附件, "voice_wav_url") if "voice" in 类型值 else "")
+            )
             if not 地址:
                 continue
-            if 类型.startswith("image/"):
-                return {"type": "图片", "src": 地址, "text": ""}
-            if 类型.startswith("video/"):
-                return {"type": "视频", "src": 地址, "text": ""}
-            if 类型.startswith("audio/"):
-                return {"type": "语音", "src": 地址, "text": ""}
-            return {"type": "文件", "src": 地址, "text": ""}
+            if 类型值.startswith("image") or 类型值 in ("img", "图片"):
+                媒体类型 = "图片"
+            elif 类型值.startswith("video") or 类型值 in ("视频",):
+                媒体类型 = "视频"
+            elif 类型值.startswith("audio") or 类型值.startswith("voice") or 类型值 in ("语音",):
+                媒体类型 = "语音"
+            else:
+                媒体类型 = "文件"
+            媒体: dict[str, Any] = {"type": 媒体类型, "src": 地址, "text": ""}
+            名称 = _读取附件字段(附件, "filename", "file_name", "name")
+            if 名称 not in (None, ""):
+                媒体["name"] = str(名称).strip()
+            内容类型 = _读取附件字段(附件, "content_type", "mime_type")
+            if 内容类型 not in (None, ""):
+                媒体["content_type"] = str(内容类型).strip()
+            for 字段 in ("size", "width", "height"):
+                值 = _读取附件字段(附件, 字段)
+                if 值 not in (None, ""):
+                    媒体[字段] = 值
+            return 媒体
     except Exception:
         pass
     return None
 
 
-def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, str] | None:
-    """提取媒体信息：优先附件图片，其次消息原文占位或 QQ 富媒体图片链接。"""
+def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | None:
+    """提取媒体信息：优先附件，其次带 URL 的消息占位或 QQ 富媒体链接。"""
     附件媒体 = _提取附件媒体(消息)
     if 附件媒体:
         return 附件媒体
@@ -802,13 +929,13 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, str] | Non
     匹配 = _媒体占位规则.search(内容)
     if 匹配:
         类型 = 匹配.group(1)
-        地址 = 匹配.group(2)
-        文本 = 内容.replace(匹配.group(0), "").strip()
+        地址 = _清理媒体地址(匹配.group(2))
+        文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
         return {"type": 类型, "src": 地址, "text": 文本}
     匹配 = _QQ图片域名.search(内容)
     if 匹配:
-        地址 = 匹配.group(0).strip("<>")
-        文本 = 内容.replace(匹配.group(0), "").strip()
+        地址 = _清理媒体地址(匹配.group(0))
+        文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
         return {"type": "图片", "src": 地址, "text": 文本}
     return None
 

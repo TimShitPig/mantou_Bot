@@ -551,6 +551,72 @@
         clearMsgNewMessages();
         markMsgRead(undefined, true);
       };
+      const safeMediaUrl = (value) => {
+        const raw = String(value ?? '').trim().replace(/&amp;/gi, '&').replace(/&#0*38;?/gi, '&');
+        if (!raw) return '';
+        try {
+          const url = new URL(raw, location.href);
+          return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+        } catch (_) { return ''; }
+      };
+      const mediaProxyUrl = (src, mode = 'image', name = '') => {
+        const direct = safeMediaUrl(src);
+        if (!direct) return '';
+        try {
+          const host = new URL(direct).hostname.toLowerCase().replace(/\.$/, '');
+          const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qq.com.cn', 'qq.com'];
+          const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+          if (!shouldProxy) return direct;
+          const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
+          if (name) query.set('name', name);
+          return `/api/message/media?${query.toString()}`;
+        } catch (_) { return direct; }
+      };
+      const mediaFileName = (media, src) => {
+        const explicit = String(media?.name || media?.filename || media?.file_name || '').trim();
+        if (explicit) return explicit;
+        try {
+          const part = decodeURIComponent(new URL(src).pathname.split('/').filter(Boolean).pop() || '');
+          return part && !['download', 'file', 'media'].includes(part.toLowerCase()) ? part : '附件文件';
+        } catch (_) { return '附件文件'; }
+      };
+      const mediaSizeLabel = (value) => {
+        const size = Number(value || 0);
+        if (!Number.isFinite(size) || size <= 0) return '';
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+        if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+        return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
+      };
+      const renderMessageMedia = (value) => {
+        if (!value) return '';
+        const items = Array.isArray(value?.items) && value.items.length ? value.items : [value];
+        return items.map((item) => {
+          if (!item || typeof item !== 'object') return '';
+          const type = String(item.type || item.media_type || '文件');
+          const contentType = String(item.content_type || item.mime_type || '').toLowerCase();
+          const src = safeMediaUrl(item.src || item.url || item.download_url);
+          const typeLower = type.toLowerCase();
+          const isImage = ['图片', 'image', 'img'].includes(typeLower) || contentType.startsWith('image/');
+          if (isImage) {
+            if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
+            const preview = mediaProxyUrl(src, 'image');
+            return `<div class="msg-media msg-image-media"><a class="msg-image-link" href="${esc(preview || src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></a><a class="msg-media-open" href="${esc(src)}" target="_blank" rel="noopener noreferrer">打开图片</a></div>`;
+          }
+          const name = mediaFileName(item, src);
+          const size = mediaSizeLabel(item.size);
+          const meta = [type, size].filter(Boolean).join(' · ') || '附件';
+          if (!src) return `<div class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
+          const download = name ? ` download="${esc(name)}"` : '';
+          const fileUrl = mediaProxyUrl(src, 'file', name);
+          return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
+        }).join('');
+      };
+      const stripMediaMarker = (text, media) => {
+        const raw = String(text || '');
+        if (!media) return raw;
+        return raw.replace(/\[(?:图片|语音|视频|文件|媒体|media)\]\s*(?:https?:\/\/[^\s<>]+)?/i, '').trim();
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
@@ -600,8 +666,14 @@
           const ref = (data.references || {})[m.reference_id];
           // 撤回后隐藏引用与媒体，只显示已撤回
           const quote = !recalled && m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const media = !recalled && m.media ? (m.media.src ? (m.media.type === '图片' ? `<div class="msg-media"><img src="${esc(m.media.src)}" alt="图片" loading="lazy" referrerpolicy="no-referrer" data-lightbox="${esc(m.media.src)}"></div>` : `<div class="msg-media"><span class="msg-tag">[${esc(m.media.type)}]</span> <span style="word-break:break-all;font-size:11px;color:#999">${esc(m.media.src)}</span></div>`) : `<div class="msg-media"><span class="msg-media-ph" title="图片地址待回显补充">🖼️ 图片</span></div>`) : '';
-          const content = recalled ? '（消息已撤回）' : renderText(m.content || '（空消息）');
+          const mediaData = !recalled ? m.media : null;
+          const media = renderMessageMedia(mediaData);
+          const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
+          const renderedContent = renderText(m.content || '');
+          let content = recalled ? '（消息已撤回）' : stripMediaMarker(renderedContent, mediaData);
+          if (!recalled && !content && mediaText) content = renderText(mediaText);
+          if (!content && !media) content = recalled ? '（消息已撤回）' : '（空消息）';
+          const contentHtml = content ? esc(content) : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);
           const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
@@ -619,12 +691,25 @@
               <span class="msg-avatar">${avatarHtml(av, m.nickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(m.nickname||'')}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
-              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${esc(content)}${media}</div>
+              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${contentHtml}${media}</div>
               <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });
         body.innerHTML = html;
+        body.querySelectorAll('[data-media-img]').forEach((img) => img.addEventListener('error', () => {
+          const direct = String(img.dataset.mediaDirect || '').trim();
+          if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
+            img.dataset.mediaDirectTried = '1';
+            img.src = direct;
+            img.dataset.lightbox = direct;
+            const link = img.closest('.msg-image-link');
+            if (link) link.href = direct;
+            return;
+          }
+          img.hidden = true;
+          img.closest('.msg-image-link')?.classList.add('is-broken');
+        }));
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (scroll.toBottom) {

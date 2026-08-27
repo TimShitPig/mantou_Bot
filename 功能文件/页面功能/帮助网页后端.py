@@ -5,6 +5,7 @@ import copy
 import hmac
 import inspect
 import ipaddress
+import mimetypes
 import json
 import logging
 import re
@@ -13,9 +14,9 @@ import socket
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-from aiohttp import web
+from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 try:
     from astrbot.api import logger
@@ -24,12 +25,22 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.53.4"
+控制台版本 = "5.53.6"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
 控制台会话有效期 = 30 * 24 * 60 * 60
 控制台会话命名空间 = "console_session"
+媒体代理最大字节数 = 256 * 1024 * 1024
+媒体代理超时秒 = 30
+媒体代理主机后缀 = (
+    "multimedia.nt.qq.com.cn",
+    "qqbot.ugcimg.cn",
+    "gchat.qpic.cn",
+    "qpic.cn",
+    "qq.com.cn",
+    "qq.com",
+)
 
 
 @dataclass
@@ -664,6 +675,144 @@ async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:
     except Exception:
         return None
     return 数据 if isinstance(数据, dict) else None
+
+
+def _允许媒体地址(地址: Any) -> bool:
+    """只允许 QQ 媒体域名进入代理，避免把控制台变成开放 URL 转发器。"""
+    try:
+        解析 = urlsplit(str(地址 or "").strip())
+        主机 = str(解析.hostname or "").rstrip(".").lower()
+        if 解析.scheme.lower() not in {"http", "https"} or not 主机:
+            return False
+        if 解析.username or 解析.password:
+            return False
+        try:
+            IP地址 = ipaddress.ip_address(主机)
+            if not IP地址.is_global:
+                return False
+        except ValueError:
+            pass
+        return any(
+            主机 == 后缀 or 主机.endswith("." + 后缀)
+            for 后缀 in 媒体代理主机后缀
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _媒体文件名(值: Any) -> str:
+    """过滤响应头中的文件名，避免控制字符或路径穿透。"""
+    文本 = unquote(str(值 or "").strip())
+    文本 = re.sub(r"[\x00-\x1f\x7f\\/:*?\"<>|]+", "_", 文本).strip(" .")
+    return 文本[:160] or "附件文件"
+
+
+def _识别媒体类型(响应类型: Any, 前缀: bytes, 地址: str, 模式: str) -> str:
+    """QQ 下载接口偶尔返回 octet-stream，按文件头补出浏览器需要的图片 MIME。"""
+    类型 = str(响应类型 or "").split(";", 1)[0].strip().lower()
+    if 类型 and 类型 != "application/octet-stream":
+        return 类型
+    if 前缀.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if 前缀.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if 前缀.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(前缀) >= 12 and 前缀[:4] == b"RIFF" and 前缀[8:12] == b"WEBP":
+        return "image/webp"
+    if 前缀.lstrip().startswith(b"<svg") or b"<svg" in 前缀[:512].lower():
+        return "image/svg+xml"
+    if 模式 == "image":
+        类型 = mimetypes.guess_type(urlsplit(地址).path)[0] or ""
+        if 类型.startswith("image/"):
+            return 类型
+    return 类型 or "application/octet-stream"
+
+
+async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
+    """在同源会话中转发 QQ 附件，解决签名 URL 的跨域和响应类型问题。"""
+    if not _请求已授权(request):
+        return web.Response(status=401, text="请先登录控制台")
+    地址 = str(request.query.get("src") or "").strip()
+    if len(地址) > 8192 or not _允许媒体地址(地址):
+        return web.Response(status=400, text="媒体地址无效")
+    模式 = str(request.query.get("mode") or "image").strip().lower()
+    if 模式 not in {"image", "file"}:
+        模式 = "file"
+    文件名 = _媒体文件名(request.query.get("name"))
+    try:
+        超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
+        async with ClientSession(timeout=超时, trust_env=False) as 客户端:
+            async with 客户端.get(
+                地址,
+                allow_redirects=True,
+                max_redirects=3,
+                headers={
+                    "Accept": "image/*,application/octet-stream,*/*",
+                    "User-Agent": "MantouBot/console-media",
+                },
+            ) as 上游:
+                最终地址 = str(getattr(上游, "url", 地址) or 地址)
+                if not _允许媒体地址(最终地址):
+                    return web.Response(status=502, text="媒体地址不可用")
+                if 上游.status not in {200, 206}:
+                    return web.Response(status=404, text="媒体暂时不可用")
+                try:
+                    内容长度 = int(上游.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    内容长度 = 0
+                if 内容长度 > 媒体代理最大字节数:
+                    return web.Response(status=413, text="媒体文件过大")
+
+                前缀 = await 上游.content.read(64 * 1024)
+                类型 = _识别媒体类型(
+                    上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
+                )
+                if 模式 == "image" and not 类型.startswith("image/"):
+                    return web.Response(status=415, text="不是可预览的图片")
+                响应头 = {
+                    "Cache-Control": "private, max-age=120",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Type": 类型,
+                }
+                if 内容长度 > 0:
+                    响应头["Content-Length"] = str(内容长度)
+                if 模式 == "image":
+                    响应头["Content-Disposition"] = "inline"
+                else:
+                    响应头["Content-Disposition"] = (
+                        "attachment; filename*=UTF-8''" + quote(文件名, safe="")
+                    )
+                响应 = web.StreamResponse(status=上游.status, headers=响应头)
+                await 响应.prepare(request)
+                已发送 = 0
+                if 前缀:
+                    已发送 = len(前缀)
+                    if 已发送 > 媒体代理最大字节数:
+                        await 响应.write_eof()
+                        return 响应
+                    await 响应.write(前缀)
+                async for 数据块 in 上游.content.iter_chunked(64 * 1024):
+                    if 已发送 + len(数据块) > 媒体代理最大字节数:
+                        logger.warning(
+                            "帮助控制台媒体代理达到大小上限：模式=%s，大小上限=%d",
+                            模式,
+                            媒体代理最大字节数,
+                        )
+                        break
+                    await 响应.write(数据块)
+                    已发送 += len(数据块)
+                await 响应.write_eof()
+                return 响应
+    except asyncio.CancelledError:
+        raise
+    except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
+        logger.warning(
+            "帮助控制台媒体代理失败：模式=%s，错误类型=%s",
+            模式,
+            type(exc).__name__,
+        )
+        return web.Response(status=502, text="媒体暂时不可用")
 
 
 async def _处理控制台登录(request: web.Request) -> web.Response:
