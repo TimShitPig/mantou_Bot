@@ -26,6 +26,11 @@
     .login-welcome h1 { margin:0; text-align:center; font-size:25px; letter-spacing:.2px; }
     .login-welcome p { max-width:290px; margin:8px auto 0; color:var(--muted); font-size:12px; line-height:1.8; text-align:center; }
     .login-panel { display:flex; flex-direction:column; justify-content:center; padding:54px 50px; }
+    .login-theme-control { align-self:flex-end; display:inline-flex; align-items:center; gap:5px; min-height:28px; margin:-18px -8px 20px 0; padding:3px 5px 3px 7px; border:1px solid transparent; border-radius:7px; color:var(--muted); font-size:11px; font-weight:650; transition:background .18s ease,border-color .18s ease; }
+    .login-theme-control:hover,.login-theme-control:focus-within { border-color:#e5e3f7; background:#fbfaff; }
+    .login-theme-control > span { color:var(--primary); font-size:14px; line-height:1; }
+    .login-theme-control select { min-height:23px; padding:1px 17px 1px 2px; border:0; border-radius:4px; background:transparent; color:var(--ink); font-size:11px; font-weight:650; cursor:pointer; outline:none; }
+    .login-theme-control select option { background:var(--panel); color:var(--ink); }
     .login-panel h2 { margin:0; font-size:20px; }
     .login-panel > p { margin:7px 0 25px; color:var(--muted); font-size:12px; }
     .login-form { display:grid; gap:15px; }
@@ -42,25 +47,24 @@
     @keyframes login-rise { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
     @keyframes login-float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5px); } }
     @keyframes login-twinkle { 0%,100% { opacity:.45; transform:scale(.9); } 50% { opacity:1; transform:scale(1.08); } }
-    @media (max-width:680px) { .login-page { padding:15px; } .login-shell { grid-template-columns:1fr; max-width:430px; } .login-welcome { min-height:0; padding:31px 26px 27px; border-right:0; border-bottom:1px solid var(--line); } .login-illustration { width:130px; height:130px; margin:24px auto 18px; } .login-illustration::before { inset:8px; } .login-avatar { width:82px; height:82px; border-width:5px; } .login-avatar::before { width:72px; height:69px; top:4px; } .login-avatar-face { left:16px; top:31px; font-size:22px; letter-spacing:4px; } .login-avatar::after { right:5px; top:2px; font-size:12px; } .login-star { font-size:14px; } .login-welcome h1 { font-size:21px; } .login-panel { padding:31px 26px 34px; } }
+    @media (max-width:680px) { .login-page { padding:15px; } .login-shell { grid-template-columns:1fr; max-width:430px; } .login-welcome { min-height:0; padding:31px 26px 27px; border-right:0; border-bottom:1px solid var(--line); } .login-illustration { width:130px; height:130px; margin:24px auto 18px; } .login-illustration::before { inset:8px; } .login-avatar { width:82px; height:82px; border-width:5px; } .login-avatar::before { width:72px; height:69px; top:4px; } .login-avatar-face { left:16px; top:31px; font-size:22px; letter-spacing:4px; } .login-avatar::after { right:5px; top:2px; font-size:12px; } .login-star { font-size:14px; } .login-welcome h1 { font-size:21px; } .login-panel { padding:31px 26px 34px; } .login-theme-control { margin:-8px -3px 15px 0; } }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
 
-    /* ===== 深色模式（跟随系统） ===== */
-    @media (prefers-color-scheme: dark) {
-      :root { color-scheme:dark; --ink:#e8eaf2; --muted:#9aa0b5; --line:#2c3044; --bg:#171a24; --panel:#1f2330; --primary:#8b85ff; --primary-dark:#a29cff; --primary-soft:#2b2b4c; --mint:#16382c; --mint-ink:#55d8a2; }
-      body { background:var(--bg); color:var(--ink); }
-      .login-shell { box-shadow:0 18px 48px rgba(0,0,0,.35); }
-      .login-welcome { background:#1b1f2c; border-right-color:var(--line); }
-      .login-brand-mark { border-color:#33385a; background:#2b2b4c; color:#a29cff; }
-      .login-illustration::before { border-color:#33385a; }
-      .login-avatar { border-color:#33385a; background:#2b2b4c; box-shadow:0 10px 22px rgba(0,0,0,.4); }
-      .login-avatar::before { background:#4a4e8f; }
-      .login-avatar-face { color:#b9b6ff; }
-      .login-star { color:#6f6fd8; }
-      .login-form label { color:#9aa0b5; }
-      .login-form input { border-color:#333a55; background:#161926; color:var(--ink); }
-      .login-form input:focus { border-color:#8b85ff; box-shadow:0 0 0 3px #262a4c; }
-      .login-button { box-shadow:0 7px 17px rgba(0,0,0,.3); }
-      .login-note { color:#6f7590; }
-    }
+    /* ===== 可选深色模式 ===== */
+    :root[data-theme="dark"] { color-scheme:dark; --ink:#e8eaf2; --muted:#9aa0b5; --line:#2c3044; --bg:#171a24; --panel:#1f2330; --primary:#8b85ff; --primary-dark:#a29cff; --primary-soft:#2b2b4c; --mint:#16382c; --mint-ink:#55d8a2; }
+    :root[data-theme="dark"] body { background:var(--bg); color:var(--ink); }
+    :root[data-theme="dark"] .login-shell { box-shadow:0 18px 48px rgba(0,0,0,.35); }
+    :root[data-theme="dark"] .login-welcome { background:#1b1f2c; border-right-color:var(--line); }
+    :root[data-theme="dark"] .login-brand-mark { border-color:#33385a; background:#2b2b4c; color:#a29cff; }
+    :root[data-theme="dark"] .login-illustration::before { border-color:#33385a; }
+    :root[data-theme="dark"] .login-avatar { border-color:#33385a; background:#2b2b4c; box-shadow:0 10px 22px rgba(0,0,0,.4); }
+    :root[data-theme="dark"] .login-avatar::before { background:#4a4e8f; }
+    :root[data-theme="dark"] .login-avatar-face { color:#b9b6ff; }
+    :root[data-theme="dark"] .login-star { color:#6f6fd8; }
+    :root[data-theme="dark"] .login-theme-control:hover,:root[data-theme="dark"] .login-theme-control:focus-within { border-color:#3a3f58; background:#232838; }
+    :root[data-theme="dark"] .login-form label { color:#9aa0b5; }
+    :root[data-theme="dark"] .login-form input { border-color:#333a55; background:#161926; color:var(--ink); }
+    :root[data-theme="dark"] .login-form input:focus { border-color:#8b85ff; box-shadow:0 0 0 3px #262a4c; }
+    :root[data-theme="dark"] .login-button { box-shadow:0 7px 17px rgba(0,0,0,.3); }
+    :root[data-theme="dark"] .login-note { color:#6f7590; }
   """

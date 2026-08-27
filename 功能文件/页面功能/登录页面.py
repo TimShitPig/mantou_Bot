@@ -10,6 +10,16 @@ from .登录页面脚本 import 登录页脚本
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7f8fd">
   <title>馒头助手</title>
+  <script>
+    (() => {
+      try {
+        const preference = ['light', 'dark', 'system'].includes(localStorage.getItem('mantou-theme')) ? localStorage.getItem('mantou-theme') : 'system';
+        const dark = preference === 'dark' || (preference === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } catch (_) {}
+    })();
+  </script>
   <style>"""
 登录页样式后缀 = """</style>
 </head>
@@ -22,6 +32,7 @@ from .登录页面脚本 import 登录页脚本
       <p>验证管理身份后继续使用馒头助手。</p>
     </section>
     <section class="login-panel" aria-labelledby="login-heading">
+      <label class="login-theme-control" for="login-theme-select"><span aria-hidden="true">◐</span><select id="login-theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label>
       <h2 id="login-heading">身份验证</h2>
       <p>请输入登录信息。</p>
       <form id="login-form" class="login-form">

@@ -13,6 +13,16 @@ from .帮助网页脚本 import 控制台脚本
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f8f8ff">
   <title>馒头控制台</title>
+  <script>
+    (() => {
+      try {
+        const preference = ['light', 'dark', 'system'].includes(localStorage.getItem('mantou-theme')) ? localStorage.getItem('mantou-theme') : 'system';
+        const dark = preference === 'dark' || (preference === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } catch (_) {}
+    })();
+  </script>
   <style>"""
 页面头部后缀 = """</style>
 </head>
@@ -21,8 +31,8 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.52.8</span></div></div>
-      <div class="top-actions"><span class="status-dot">服务在线</span><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.54.0</span></div></div>
+      <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
       <div class="profile"><div class="bot-avatar"><span class="avatar-face">•ᴗ•</span></div><strong>馒头助手</strong><span class="online">在线</span></div>
@@ -287,106 +297,104 @@ from .帮助网页脚本 import 控制台脚本
              @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
 
             /* ===== 深色模式（跟随系统） ===== */
-            @media (prefers-color-scheme: dark) {
-              .msg-shell { background:#1f2330; border-color:var(--line); }
-              .msg-panel { background:#1f2330; }
-              .chat-list-panel { border-right-color:var(--line); background:#1a1e2a; }
-              .msg-list-head { border-bottom-color:var(--line); background:#1f2330; }
-              .msg-filter { background:#161926; }
-              .msg-filter button { color:#9aa0b5; }
-              .msg-filter button.active { background:#1f2330; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.35); }
-              .msg-search input { background:#161926; color:#e8eaf2; }
-              .msg-search input:focus { border-color:#12b7f5; background:#1f2330; }
-              .msg-chat:hover { background:#262b3a; }
-              .msg-chat.active { background:#1d3850; }
-              .msg-chat.pinned { background:#1e2c44; }
-              .msg-chat.pinned:hover { background:#24334e; }
-              .msg-chat.pinned.active { background:#27405e; }
-              .msg-chat.pinned .msg-chat-top strong { color:#6fa8e8; }
-              .msg-chat.pinned .msg-chat-top small { color:#7d96b8; }
-              .msg-chat-top strong { color:#e8eaf2; }
-              .msg-chat-top small,.msg-chat-sub,.msg-bubble-name,.msg-head-sub { color:#8a90a5; }
-              .msg-chat-avatar { background:#23405f; color:#8db9f0; }
-              .msg-chat-avatar .avatar-letter { color:#8db9f0; }
-              .msg-empty { color:#6f7590; }
-              .msg-work { background:#161926; }
-              .msg-head { background:#1f2330; border-bottom-color:var(--line); }
-              .msg-head-name { color:#e8eaf2; }
-              .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
-               .msg-body { background:#161926; }
-               .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }
-               .msg-new-messages-dot { background:#42c6ff; box-shadow:0 0 0 4px #12344d; }
-               .msg-day { color:#6f7590; }
-              .msg-avatar { background:#23405f; color:#8db9f0; }
-              .msg-avatar .avatar-letter { color:#8db9f0; }
-              .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
-              .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
-              .msg-bubble.recalled { color:#6f7590; background:#1a1e2a; }
-              .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
-              .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
-              .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
-              .msg-file-card { background:#202c3d; color:#dce8f6; }
-              .msg-file-card:hover { background:#263a52; }
-              .msg-file-icon { background:#294b70; color:#9bc9f4; }
-              .msg-file-info small { color:#8a9bb2; }
-              .msg-media-open { color:#6fc8ff; }
-              .msg-meta { color:#6f7590; }
-              .msg-tag.bot { background:#3a2130; color:#e287ae; }
-              .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
-              .msg-tag.self { background:#16382c; color:#55d8a2; }
-              .msg-tag.recalled { background:#262b38; color:#9aa0b5; }
-              .msg-action { background:#262b38; color:#9aa0b5; }
-              .msg-action:hover { background:#1d3850; color:#12b7f5; }
-              .msg-load-older { border-color:var(--line); background:#1f2330; color:#8a90a5; }
-              .msg-composer { background:#1f2330; border-top-color:var(--line); }
-              .msg-composer-tabs button { border-color:var(--line); background:#1f2330; color:#8a90a5; }
-              .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
-              .msg-composer-mode select { border-color:var(--line); background:#1f2330; color:#e8eaf2; }
-              .msg-composer-mode input { border-color:var(--line); background:#161926; color:#e8eaf2; }
-              .msg-textarea { background:#161926; color:#e8eaf2; }
-              .msg-textarea:focus { background:#1f2330; box-shadow:inset 0 0 0 1px #12b7f5; }
-              .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
-              .msg-input-box { border-color:#2c3044; background:#1f2330; }
-              .msg-img-chip { border-color:#2c3044; background:#161926; }
-              .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
-              .msg-quote-preview b { color:#e8eaf2; }
-              .msg-tool-btn { color:#9aa0b5; }
-              .msg-tool-btn:hover { background:#1d3850; color:#12b7f5; }
-              .msg-raw-box,.msg-mute-box,.msg-remark-box { background:#1f2330; box-shadow:0 18px 50px rgba(0,0,0,.5); }
-              .msg-raw-head { border-bottom-color:var(--line); }
-              .msg-raw-head { border-bottom-color:var(--line); }
-              .msg-raw-head strong,.msg-mute-box h3,.msg-remark-box h3 { color:#e8eaf2; }
-              .msg-raw-head button { color:#8a90a5; }
-              .msg-raw-content { color:#d3d7e4; }
-              .msg-mute-presets button { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
-              .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
-              .msg-ctx { background:#1f2330; border-color:var(--line); box-shadow:0 6px 20px rgba(0,0,0,.5); }
-              .msg-ctx-item { color:#e6e8f0; }
-              .msg-ctx-item:hover { background:#1d3850; color:#12b7f5; }
-              .msg-ctx-item.danger:hover { background:#3a2121; color:#f08080; }
-              .msg-ctx-sep { background:#2c3044; }
-              .msg-multi-bar { background:#12344d; border-bottom-color:#1e4a68; color:#42c6ff; }
-              .msg-row.multi-mode.selected .msg-bubble { outline-color:#12b7f5; }
-              .msg-multi-check { border-color:#4a5268; background:#1f2330; }
+                          :root[data-theme="dark"] .msg-shell { background:#1f2330; border-color:var(--line); }
+              :root[data-theme="dark"] .msg-panel { background:#1f2330; }
+              :root[data-theme="dark"] .chat-list-panel { border-right-color:var(--line); background:#1a1e2a; }
+              :root[data-theme="dark"] .msg-list-head { border-bottom-color:var(--line); background:#1f2330; }
+              :root[data-theme="dark"] .msg-filter { background:#161926; }
+              :root[data-theme="dark"] .msg-filter button { color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-filter button.active { background:#1f2330; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.35); }
+              :root[data-theme="dark"] .msg-search input { background:#161926; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-search input:focus { border-color:#12b7f5; background:#1f2330; }
+              :root[data-theme="dark"] .msg-chat:hover { background:#262b3a; }
+              :root[data-theme="dark"] .msg-chat.active { background:#1d3850; }
+              :root[data-theme="dark"] .msg-chat.pinned { background:#1e2c44; }
+              :root[data-theme="dark"] .msg-chat.pinned:hover { background:#24334e; }
+              :root[data-theme="dark"] .msg-chat.pinned.active { background:#27405e; }
+              :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong { color:#6fa8e8; }
+              :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top small { color:#7d96b8; }
+              :root[data-theme="dark"] .msg-chat-top strong { color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-chat-top small,:root[data-theme="dark"] .msg-chat-sub,:root[data-theme="dark"] .msg-bubble-name,:root[data-theme="dark"] .msg-head-sub { color:#8a90a5; }
+              :root[data-theme="dark"] .msg-chat-avatar { background:#23405f; color:#8db9f0; }
+              :root[data-theme="dark"] .msg-chat-avatar .avatar-letter { color:#8db9f0; }
+              :root[data-theme="dark"] .msg-empty { color:#6f7590; }
+              :root[data-theme="dark"] .msg-work { background:#161926; }
+              :root[data-theme="dark"] .msg-head { background:#1f2330; border-bottom-color:var(--line); }
+              :root[data-theme="dark"] .msg-head-name { color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+               :root[data-theme="dark"] .msg-body { background:#161926; }
+               :root[data-theme="dark"] .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }
+               :root[data-theme="dark"] .msg-new-messages-dot { background:#42c6ff; box-shadow:0 0 0 4px #12344d; }
+               :root[data-theme="dark"] .msg-day { color:#6f7590; }
+              :root[data-theme="dark"] .msg-avatar { background:#23405f; color:#8db9f0; }
+              :root[data-theme="dark"] .msg-avatar .avatar-letter { color:#8db9f0; }
+              :root[data-theme="dark"] .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
+              :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
+              :root[data-theme="dark"] .msg-bubble.recalled { color:#6f7590; background:#1a1e2a; }
+              :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
+              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
+              :root[data-theme="dark"] .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-file-card { background:#202c3d; color:#dce8f6; }
+              :root[data-theme="dark"] .msg-file-card:hover { background:#263a52; }
+              :root[data-theme="dark"] .msg-file-icon { background:#294b70; color:#9bc9f4; }
+              :root[data-theme="dark"] .msg-file-info small { color:#8a9bb2; }
+              :root[data-theme="dark"] .msg-media-open { color:#6fc8ff; }
+              :root[data-theme="dark"] .msg-meta { color:#6f7590; }
+              :root[data-theme="dark"] .msg-tag.bot { background:#3a2130; color:#e287ae; }
+              :root[data-theme="dark"] .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
+              :root[data-theme="dark"] .msg-tag.self { background:#16382c; color:#55d8a2; }
+              :root[data-theme="dark"] .msg-tag.recalled { background:#262b38; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-action { background:#262b38; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-action:hover { background:#1d3850; color:#12b7f5; }
+              :root[data-theme="dark"] .msg-load-older { border-color:var(--line); background:#1f2330; color:#8a90a5; }
+              :root[data-theme="dark"] .msg-composer { background:#1f2330; border-top-color:var(--line); }
+              :root[data-theme="dark"] .msg-composer-tabs button { border-color:var(--line); background:#1f2330; color:#8a90a5; }
+              :root[data-theme="dark"] .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
+              :root[data-theme="dark"] .msg-composer-mode select { border-color:var(--line); background:#1f2330; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-composer-mode input { border-color:var(--line); background:#161926; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-textarea { background:#161926; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; box-shadow:inset 0 0 0 1px #12b7f5; }
+              :root[data-theme="dark"] .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-input-box { border-color:#2c3044; background:#1f2330; }
+              :root[data-theme="dark"] .msg-img-chip { border-color:#2c3044; background:#161926; }
+              :root[data-theme="dark"] .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
+              :root[data-theme="dark"] .msg-quote-preview b { color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-tool-btn { color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-tool-btn:hover { background:#1d3850; color:#12b7f5; }
+              :root[data-theme="dark"] .msg-raw-box,:root[data-theme="dark"] .msg-mute-box,:root[data-theme="dark"] .msg-remark-box { background:#1f2330; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+              :root[data-theme="dark"] .msg-raw-head { border-bottom-color:var(--line); }
+              :root[data-theme="dark"] .msg-raw-head { border-bottom-color:var(--line); }
+              :root[data-theme="dark"] .msg-raw-head strong,:root[data-theme="dark"] .msg-mute-box h3,:root[data-theme="dark"] .msg-remark-box h3 { color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-raw-head button { color:#8a90a5; }
+              :root[data-theme="dark"] .msg-raw-content { color:#d3d7e4; }
+              :root[data-theme="dark"] .msg-mute-presets button { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
+              :root[data-theme="dark"] .msg-ctx { background:#1f2330; border-color:var(--line); box-shadow:0 6px 20px rgba(0,0,0,.5); }
+              :root[data-theme="dark"] .msg-ctx-item { color:#e6e8f0; }
+              :root[data-theme="dark"] .msg-ctx-item:hover { background:#1d3850; color:#12b7f5; }
+              :root[data-theme="dark"] .msg-ctx-item.danger:hover { background:#3a2121; color:#f08080; }
+              :root[data-theme="dark"] .msg-ctx-sep { background:#2c3044; }
+              :root[data-theme="dark"] .msg-multi-bar { background:#12344d; border-bottom-color:#1e4a68; color:#42c6ff; }
+              :root[data-theme="dark"] .msg-row.multi-mode.selected .msg-bubble { outline-color:#12b7f5; }
+              :root[data-theme="dark"] .msg-multi-check { border-color:#4a5268; background:#1f2330; }
               /* QQ PC 覆盖在深色下 */
-              .msg-shell { border-color:#2c3044; box-shadow:0 1px 4px rgba(0,0,0,.35); }
-              .chat-list-panel { background:#1a1e2a; }
-              .msg-list-head { background:#1f2330; border-bottom-color:#2c3044; }
-              .msg-chat:hover { background:#262b3a; }
-              .msg-chat.active { background:#1d3850; }
-              .msg-work { background:#161926; }
-              .msg-head { background:#1f2330; }
-              .msg-body { background:#161926; }
-              .msg-day { color:#6f7590; }
-              .msg-bubble { background:#262b3a; }
-              .msg-row.self .msg-bubble { background:#95ec69; color:#0f1a12; }
-              .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
-              .msg-meta { color:#6f7590; }
-              .msg-composer { background:#1f2330; border-top-color:#2c3044; }
-              .msg-textarea { background:#161926; }
-              .msg-textarea:focus { background:#1f2330; }
-              .msg-multi-bar { border-bottom-color:#1e4a68; }
-            }
+              :root[data-theme="dark"] .msg-shell { border-color:#2c3044; box-shadow:0 1px 4px rgba(0,0,0,.35); }
+              :root[data-theme="dark"] .chat-list-panel { background:#1a1e2a; }
+              :root[data-theme="dark"] .msg-list-head { background:#1f2330; border-bottom-color:#2c3044; }
+              :root[data-theme="dark"] .msg-chat:hover { background:#262b3a; }
+              :root[data-theme="dark"] .msg-chat.active { background:#1d3850; }
+              :root[data-theme="dark"] .msg-work { background:#161926; }
+              :root[data-theme="dark"] .msg-head { background:#1f2330; }
+              :root[data-theme="dark"] .msg-body { background:#161926; }
+              :root[data-theme="dark"] .msg-day { color:#6f7590; }
+              :root[data-theme="dark"] .msg-bubble { background:#262b3a; }
+              :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#95ec69; color:#0f1a12; }
+              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
+              :root[data-theme="dark"] .msg-meta { color:#6f7590; }
+              :root[data-theme="dark"] .msg-composer { background:#1f2330; border-top-color:#2c3044; }
+              :root[data-theme="dark"] .msg-textarea { background:#161926; }
+              :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; }
+              :root[data-theme="dark"] .msg-multi-bar { border-bottom-color:#1e4a68; }
           </style>
           <div class="msg-shell">
             <div class="msg-panel chat-list-panel">

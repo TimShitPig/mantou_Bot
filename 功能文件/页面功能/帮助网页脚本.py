@@ -6,6 +6,24 @@
       if (initialParams.has('token')) { initialParams.delete('token'); const cleanQuery = initialParams.toString(); history.replaceState({}, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${location.hash}`); }
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+      const themeStorageKey = 'mantou-theme';
+      const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      const readThemePreference = () => { try { const value = localStorage.getItem(themeStorageKey); return ['light','dark','system'].includes(value) ? value : 'system'; } catch (_) { return 'system'; } };
+      const resolvedTheme = (preference) => preference === 'dark' || (preference === 'system' && Boolean(themeMedia?.matches)) ? 'dark' : 'light';
+      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', theme === 'dark' ? '#171a24' : '#f8f8ff'); };
+      const applyTheme = (preference = readThemePreference(), persist = true) => {
+        const next = ['light','dark','system'].includes(preference) ? preference : 'system';
+        const theme = resolvedTheme(next);
+        document.documentElement.dataset.themePreference = next;
+        document.documentElement.dataset.theme = theme;
+        updateThemeMeta(theme);
+        if (persist) { try { localStorage.setItem(themeStorageKey, next); } catch (_) {} }
+        const control = $('theme-select'); if (control && control.value !== next) control.value = next;
+      };
+      const syncSystemTheme = () => { if (document.documentElement.dataset.themePreference === 'system') applyTheme('system', false); };
+      applyTheme(readThemePreference(), false);
+      $('theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
+      if (themeMedia) { if (themeMedia.addEventListener) themeMedia.addEventListener('change', syncSystemTheme); else themeMedia.addListener(syncSystemTheme); }
       const views = {
         dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
         bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],
