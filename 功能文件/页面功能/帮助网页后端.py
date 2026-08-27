@@ -1340,10 +1340,9 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         except Exception:
             pass
         try:
-            if await 消息记录.补查缺失私聊昵称(结果.get("chats") or []):
-                结果 = await asyncio.to_thread(
-                    消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
-                )
+            # 昵称补查只更新内存兜底值；列表聚合已使用同一份缓存，
+            # 无需再次执行完整 GROUP BY 和最后消息查询。
+            await 消息记录.补查缺失私聊昵称(结果.get("chats") or [])
         except Exception:
             pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})

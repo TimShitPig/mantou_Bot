@@ -35,6 +35,7 @@
         messages: ['消息记录', '查看群聊和私聊消息，回复、发送和撤回消息'],
       };
       let snapshot = null;
+      let activeView = null;
       let activePanTab = null;
       let toastTimer = null;
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
@@ -48,13 +49,19 @@
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
       const setView = (view, push = true) => {
         const next = views[view] ? view : 'dashboard';
+        const previousView = activeView;
+        activeView = next;
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); history.pushState({view:next}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
         document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
         if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
-        if (next === 'messages') { connectMsgEvents(); loadMsgChats(); if (msgState.chatId) loadMsgHistory(); }
+        if (next === 'messages') {
+          connectMsgEvents();
+          if (previousView !== 'messages') loadMsgChats();
+          if (previousView !== 'messages' && msgState.chatId) loadMsgHistory();
+        }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
         const scrollContainer = document.querySelector('.main');
         if (scrollContainer) scrollContainer.scrollTop = 0;
@@ -177,7 +184,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, chatListRequest:0, chatListAbort:null, historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -299,10 +306,10 @@
             const chatId = el.dataset.msgChat; const chatType = el.dataset.msgType; const pinned = el.dataset.msgPinned === '1';
             const items = [];
             items.push({label: pinned ? '取消置顶' : '置顶', action: async () => {
-              try { const result = await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(result.pinned ? '已置顶' : '已取消置顶'); await loadMsgChats(); }
+              try { const result = await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(result.pinned ? '已置顶' : '已取消置顶'); await loadMsgChats(true); }
               catch (error) { toast(error.message || '操作失败'); }
             }});
-            if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(); }).catch((error) => toast(error.message || '刷新失败')); }});
+            if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); if (msgState.chatId !== el.dataset.msgChat) cancelMsgRealtimeMessageRender(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; msgState.historyData = null; clearMsgNewMessages(); loadMsgHistory(); markMsgRead(el.dataset.msgChat, true); });
@@ -311,20 +318,43 @@
       $('msg-lightbox-close')?.addEventListener('click', () => closeMsgLightbox());
       $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox')) closeMsgLightbox(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
-      const loadMsgChats = async () => {
+      const loadMsgChats = (force = false) => {
+        const params = {filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50};
+        const paramsKey = JSON.stringify(params);
+        if (!force && msgState.chatListPromise && msgState.chatListKey === paramsKey) return msgState.chatListPromise;
         const requestId = Number(msgState.chatListRequest || 0) + 1;
         msgState.chatListRequest = requestId;
         if (msgState.chatListAbort) msgState.chatListAbort.abort();
         const controller = new AbortController();
         msgState.chatListAbort = controller;
-        try {
-          const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50}), signal:controller.signal});
-          // 搜索、实时刷新或置顶操作可能同时发起请求，只显示最后一次请求的结果。
-          if (requestId !== msgState.chatListRequest) return;
-          renderMsgChats(data);
-        }
-        catch (error) { if (error.name === 'AbortError' || requestId !== msgState.chatListRequest) return; if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
-        finally { if (msgState.chatListAbort === controller) msgState.chatListAbort = null; }
+        let timedOut = false;
+        const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, 18000);
+        let requestPromise;
+        requestPromise = (async () => {
+          try {
+            const data = await api('message/chats', {method:'POST', body:JSON.stringify(params), signal:controller.signal});
+            // 搜索、实时刷新或置顶操作可能同时发起请求，只显示最后一次请求的结果。
+            if (requestId !== msgState.chatListRequest) return data;
+            renderMsgChats(data);
+            return data;
+          }
+          catch (error) {
+            if (requestId !== msgState.chatListRequest) return;
+            if (timedOut) { toast('消息会话加载超时，请稍后重试'); return; }
+            if (error.name === 'AbortError') return;
+            if (error.status === 401) showAuthError(error);
+            else if (!msgState.chats.length) $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`;
+            else toast(error.message || '消息会话加载失败');
+          }
+          finally {
+            clearTimeout(timeoutId);
+            if (msgState.chatListAbort === controller) msgState.chatListAbort = null;
+            if (msgState.chatListPromise === requestPromise) msgState.chatListPromise = null;
+          }
+        })();
+        msgState.chatListKey = paramsKey;
+        msgState.chatListPromise = requestPromise;
+        return requestPromise;
       };
       const closeMsgEvents = () => {
         if (msgState.eventReconnect) { clearTimeout(msgState.eventReconnect); msgState.eventReconnect = null; }
@@ -333,6 +363,8 @@
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
         if (msgState.chatListAbort) { msgState.chatListAbort.abort(); msgState.chatListAbort = null; }
+        msgState.chatListPromise = null;
+        msgState.chatListKey = '';
         if (msgState.historyAbort) { msgState.historyAbort.abort(); msgState.historyAbort = null; }
         const socket = msgState.eventSocket;
         msgState.eventSocket = null;
@@ -965,12 +997,12 @@
       const saveRemark = async () => {
         const remark = $('msg-remark-name').value.trim();
         const groupQQ = $('msg-remark-qq').value.trim();
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(); loadMsgHistory(); }
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const deleteRemark = async () => {
         if (!confirm('确定删除该会话的备注和群号吗？')) return;
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(); loadMsgHistory(); }
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const sendMessage = async () => {
@@ -1012,9 +1044,9 @@
         else if (type === 'card') { extra.hidden = false; extra.innerHTML = `<input id="msg-card-title" type="text" placeholder="卡片标题"><input id="msg-card-desc" type="text" placeholder="卡片描述"><input id="msg-card-pic" type="text" placeholder="图片 URL"><input id="msg-card-url" type="text" placeholder="跳转 URL">`; }
         else { extra.hidden = true; extra.innerHTML = ''; }
       };
-      $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((el) => el.addEventListener('click', () => { $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((x) => x.classList.toggle('active', x === el)); msgState.filter = el.dataset.msgFilter; msgState.page = 1; loadMsgChats(); }));
-      $('msg-search-btn').addEventListener('click', () => { msgState.search = $('msg-search-input').value.trim(); msgState.page = 1; loadMsgChats(); });
-      $('msg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { msgState.search = e.target.value.trim(); msgState.page = 1; loadMsgChats(); } });
+      $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((el) => el.addEventListener('click', () => { $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((x) => x.classList.toggle('active', x === el)); msgState.filter = el.dataset.msgFilter; msgState.page = 1; loadMsgChats(true); }));
+      $('msg-search-btn').addEventListener('click', () => { msgState.search = $('msg-search-input').value.trim(); msgState.page = 1; loadMsgChats(true); });
+      $('msg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { msgState.search = e.target.value.trim(); msgState.page = 1; loadMsgChats(true); } });
       $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((el) => el.addEventListener('click', () => { $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x === el)); msgState.sendType = el.dataset.msgType; renderMsgExtra(); }));
       $('msg-send-mode').addEventListener('change', (e) => { msgState.sendMode = e.target.value; $('msg-custom-id').hidden = !(msgState.sendMode === 'custom_msg_id' || msgState.sendMode === 'custom_event_id'); });
       $('msg-send').addEventListener('click', sendMessage);
@@ -1064,7 +1096,7 @@
         if (shouldRead) markMsgRead(undefined, true);
       });
       $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
-      $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
+      $('msg-reload').addEventListener('click', () => { loadMsgChats(true); if (msgState.chatId) loadMsgHistory(); });
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);

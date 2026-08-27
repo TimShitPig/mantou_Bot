@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.54.2-2ea44f)
+![version](https://img.shields.io/badge/version-v5.54.3-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.54.2 |
+| 版本 | v5.54.3 |
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
 ## 快速开始
@@ -72,6 +72,7 @@ git -C /AstrBot/data/plugins/馒头bot pull
 ```text
 aiohttp
 pycryptodome
+bcrypt>=4.0.1
 pymysql
 qrcode[pil]
 ```

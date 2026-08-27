@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """QQ阅读参考核心及 AstrBot 下载适配。
 
-依赖: aiohttp, pycryptodome
+依赖: aiohttp, pycryptodome, bcrypt
 账号配置: 文件内 CONFIG 字典（仅鉴权必要字段）
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
 import html
@@ -40,6 +41,11 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 import aiohttp
 from astrbot.api import logger
+
+try:
+    import bcrypt as _bcrypt
+except Exception:
+    _bcrypt = None
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
@@ -1696,6 +1702,10 @@ def search(password: str, salt_str: Optional[str] = None) -> str:
     if salt_str[i3] != "$":
         raise ValueError("Missing salt rounds")
     rounds_log2 = int(salt_str[i2:i3])
+    if rounds_log2 < 4:
+        raise ValueError("Bad number of rounds")
+    if rounds_log2 > 30:
+        raise ValueError("rounds exceeds maximum (30)")
     salt_b64 = salt_str[i2 + 3 : i2 + 25]
     if len(salt_b64) != 22:
         raise ValueError("Bad bcrypt-like salt length")
@@ -1703,6 +1713,20 @@ def search(password: str, salt_str: Optional[str] = None) -> str:
     if c_rev >= "a":
         pwd_bytes = password.encode("utf-8") + b"\x00"
     salt_bytes = magic_b64_decode(salt_b64, 16)
+    # QQ 阅读使用 $2a$ 变体；bcrypt C 扩展会自行处理末尾 NUL，
+    # 传入原始密码即可得到与下方兼容实现相同的 csigs。
+    if (
+        _bcrypt is not None
+        and c_rev == "a"
+        and len(password.encode("utf-8")) <= 72
+        and len(salt_bytes) == 16
+    ):
+        try:
+            return _bcrypt.hashpw(
+                password.encode("utf-8"), salt_str.encode("ascii")
+            ).decode("ascii")
+        except (TypeError, ValueError, UnicodeError):
+            pass
     out_bytes = magic_search_final(pwd_bytes, salt_bytes, rounds_log2, CIHAI_INIT)
     sb = ["$2"]
     if c_rev >= "a":
@@ -1899,6 +1923,10 @@ QQ阅读失败章节重试轮数 = 3
 QQ阅读解密最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
 QQ阅读出版书最大动态并发数 = 16
 _QQ阅读密钥池异步锁: asyncio.Lock | None = None
+_QQ阅读签名执行器: ThreadPoolExecutor | None = None
+_QQ阅读签名执行器锁 = threading.Lock()
+_QQ阅读解密执行器: ThreadPoolExecutor | None = None
+_QQ阅读解密执行器锁 = threading.Lock()
 
 
 def 计算QQ阅读批量并发数(批次数量: int) -> int:
@@ -1933,6 +1961,62 @@ def 创建QQ阅读HTTP会话(
     )
 
 
+def _获取QQ阅读签名执行器() -> ThreadPoolExecutor:
+    global _QQ阅读签名执行器
+    with _QQ阅读签名执行器锁:
+        if _QQ阅读签名执行器 is None or getattr(_QQ阅读签名执行器, "_shutdown", False):
+            _QQ阅读签名执行器 = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="qq-reader-sign",
+            )
+        return _QQ阅读签名执行器
+
+
+def _获取QQ阅读解密执行器() -> ThreadPoolExecutor:
+    global _QQ阅读解密执行器
+    with _QQ阅读解密执行器锁:
+        if _QQ阅读解密执行器 is None or getattr(_QQ阅读解密执行器, "_shutdown", False):
+            _QQ阅读解密执行器 = ThreadPoolExecutor(
+                max_workers=max(2, min(8, os.cpu_count() or 4)),
+                thread_name_prefix="qq-reader-decrypt",
+            )
+        return _QQ阅读解密执行器
+
+
+async def _异步QQ阅读CPU函数(函数: Callable[..., Any], *参数: Any) -> Any:
+    """在独立线程池运行正文解包/解密，避免挤占网页与消息线程池。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_获取QQ阅读解密执行器(), 函数, *参数)
+
+
+async def 异步构造QQ阅读鉴权请求头(
+    timestamp_ms: int,
+    request_url: str | None = None,
+) -> Dict[str, str]:
+    """把 csigs/网关签名移出事件循环，避免阻塞网页和消息事件。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _获取QQ阅读签名执行器(),
+        构造QQ阅读鉴权请求头,
+        timestamp_ms,
+        request_url,
+    )
+
+
+def 关闭QQ阅读签名执行器() -> None:
+    global _QQ阅读签名执行器, _QQ阅读解密执行器
+    with _QQ阅读签名执行器锁:
+        executor = _QQ阅读签名执行器
+        _QQ阅读签名执行器 = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+    with _QQ阅读解密执行器锁:
+        decrypt_executor = _QQ阅读解密执行器
+        _QQ阅读解密执行器 = None
+    if decrypt_executor is not None:
+        decrypt_executor.shutdown(wait=False, cancel_futures=True)
+
+
 def _获取QQ阅读密钥池异步锁() -> asyncio.Lock:
     global _QQ阅读密钥池异步锁
     if _QQ阅读密钥池异步锁 is None:
@@ -1965,7 +2049,9 @@ async def 确保QQ阅读密钥池(
             async with session.get(
                 "https://newminerva-tgw.reader.qq.com/sk",
                 params=params,
-                headers=构造QQ阅读鉴权请求头(int(time.time() * 1000), request_url),
+                headers=await 异步构造QQ阅读鉴权请求头(
+                    int(time.time() * 1000), request_url
+                ),
             ) as response:
                 response.raise_for_status()
                 data = await response.json(content_type=None)
@@ -3206,7 +3292,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         async with session.get(
             QQ阅读搜索地址,
             params={"key": keyword, "start": 0, "size": size},
-            headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+            headers=await 异步构造QQ阅读鉴权请求头(int(time.time() * 1000)),
         ) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
@@ -3224,7 +3310,7 @@ async def 获取参考书籍详情(
     async with session.get(
         QQ阅读详情地址,
         params={"bid": book_id, "types": "1,2,3,4,5"},
-        headers=构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+        headers=await 异步构造QQ阅读鉴权请求头(int(time.time() * 1000)),
     ) as response:
         response.raise_for_status()
         data = await response.json(content_type=None)
@@ -3328,14 +3414,14 @@ async def 获取参考书籍目录(
     async with session.get(
         QQ阅读目录地址,
         params=params,
-        headers=构造QQ阅读鉴权请求头(
+        headers=await 异步构造QQ阅读鉴权请求头(
             int(time.time() * 1000),
             _构造QQ阅读请求地址(QQ阅读目录地址, params),
         ),
     ) as response:
         response.raise_for_status()
         package = await response.read()
-    return await asyncio.to_thread(解析参考目录包, package, book_id)
+    return await _异步QQ阅读CPU函数(解析参考目录包, package, book_id)
 
 
 async def 获取参考兼容目录(
@@ -3444,7 +3530,7 @@ async def 获取参考出版书目录(
             "fuid": config.fuid,
             "noclick": "1",
         }
-        headers = 构造QQ阅读鉴权请求头(
+        headers = await 异步构造QQ阅读鉴权请求头(
             int(time.time() * 1000),
             _构造QQ阅读请求地址(QQ阅读目录地址, params),
         )
@@ -3457,7 +3543,7 @@ async def 获取参考出版书目录(
             ) as response:
                 response.raise_for_status()
                 package = await response.read()
-        return await asyncio.to_thread(_parse_teb_info_blob, package)
+        return await _异步QQ阅读CPU函数(_parse_teb_info_blob, package)
 
     all_items: list[dict[str, Any]] = []
     for items in await asyncio.gather(*(请求目录批次(batch) for batch in batches)):
@@ -3494,7 +3580,7 @@ async def 获取参考出版书密码(
     ) as response:
         response.raise_for_status()
         encrypted = await response.read()
-    plain = await asyncio.to_thread(
+    plain = await _异步QQ阅读CPU函数(
         tea_decrypt_bytes, encrypted, tea_key_ints(config.uid)
     )
     payload = json.loads(plain.split(b"\x00", 1)[0].decode("utf-8"))
@@ -3549,7 +3635,7 @@ async def 下载参考出版书正文(
                         response.raise_for_status()
                         package = await response.read()
                 async with decrypt_semaphore:
-                    text = await asyncio.to_thread(
+                    text = await _异步QQ阅读CPU函数(
                         解析参考出版书章节, package, password
                     )
                 return index, text
@@ -3607,7 +3693,7 @@ async def 异步获取QQ阅读正文批次(
         "scids": 构造QQ阅读正文章节参数(chapter_ids),
         "fuid": config.fuid,
     }
-    headers = 构造QQ阅读鉴权请求头(
+    headers = await 异步构造QQ阅读鉴权请求头(
         int(time.time() * 1000),
         _构造QQ阅读请求地址(QQ阅读目录地址, params),
     )
@@ -3627,7 +3713,7 @@ async def 异步获取QQ阅读正文批次(
     request_elapsed = time.perf_counter() - request_started
     decrypt_started = time.perf_counter()
     async with 解密信号量:
-        result = await asyncio.to_thread(
+        result = await _异步QQ阅读CPU函数(
             解析QQ阅读正文批次带统计,
             package,
             chapter_ids,

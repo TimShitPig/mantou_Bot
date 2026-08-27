@@ -4,5 +4,6 @@ httpx[http2]
 requests
 pycryptodome
 gmpy2
+bcrypt>=4.0.1
 pymysql
 qrcode[pil]

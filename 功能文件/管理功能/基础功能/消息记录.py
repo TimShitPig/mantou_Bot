@@ -1681,12 +1681,15 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
         try:
             if _消息存储 is not None:
                 元数据 = _消息存储.读取全部元数据()
-                if 元数据:
-                    _本地缓存内存 = copy.deepcopy(元数据)
-                    _本地缓存时间 = now
-                    return copy.deepcopy(_本地缓存内存)
+                # 空元数据也是有效结果，必须更新时间戳，否则每次会话
+                # 显示名计算都会重新建立数据库连接。
+                _本地缓存内存 = copy.deepcopy(元数据 or {})
+                _本地缓存时间 = now
+                return copy.deepcopy(_本地缓存内存)
         except Exception as exc:
             logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
+            # 失败结果短暂缓存，避免同一请求内的会话循环触发 N+1 重试。
+            _本地缓存时间 = now
         return copy.deepcopy(_本地缓存内存 or {})
 
 
@@ -1921,8 +1924,17 @@ def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
 # 聊天列表与历史
 # ---------------------------------------------------------------------------
 
-def _聊天显示名(会话标识: str, 会话: dict[str, Any]) -> str:
-    备注 = 获取群备注(会话标识)
+def _聊天显示名(
+    会话标识: str,
+    会话: dict[str, Any],
+    备注表: dict[str, Any] | None = None,
+) -> str:
+    if 备注表 is None:
+        备注表 = (_读取本地缓存文件().get("remarks") or {})
+    if not isinstance(备注表, dict):
+        备注表 = {}
+    备注项 = 备注表.get(会话标识) or {}
+    备注 = str(备注项.get("remark") or "")
     if 备注:
         return 备注
     信息 = 群信息缓存.get(会话标识) or {}
@@ -1960,10 +1972,12 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             if 本地昵称:
                 if 会话:
                     会话["last_nickname"] = 本地昵称
+                聊天["nickname"] = 本地昵称
                 continue
             兜底 = _私聊兜底昵称(会话标识)
             if 会话 and (not str(会话.get("last_nickname") or "").strip() or "未知" in str(会话.get("last_nickname") or "")):
                 会话["last_nickname"] = 兜底
+            聊天["nickname"] = 兜底
             补查数 += 1
     except Exception as exc:
         logger.warning("私聊昵称批量补查失败：错误类型=%s", type(exc).__name__)
@@ -2055,7 +2069,7 @@ def _数据库聚合聊天项(
                 "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
                 "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
             }
-            显示名 = _聊天显示名(会话标识, 轻量会话)
+            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             _规范化历史消息(最后记录)
@@ -2105,7 +2119,7 @@ def _数据库聚合聊天项(
                 缓存群信息 = 群信息缓存.get(会话标识)
                 if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
-            显示名 = _聊天显示名(会话标识, 内存会话)
+            显示名 = _聊天显示名(会话标识, 内存会话, 本地备注表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
@@ -2173,7 +2187,7 @@ def 获取聊天列表(
                 缓存群信息 = 群信息缓存.get(会话标识)
                 if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
-            显示名 = _聊天显示名(会话标识, 会话)
+            显示名 = _聊天显示名(会话标识, 会话, 本地备注表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             消息列表 = 会话.get("messages") or []
