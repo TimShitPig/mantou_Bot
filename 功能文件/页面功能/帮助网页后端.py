@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.52.8"
+控制台版本 = "5.52.12"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -627,6 +627,28 @@ def _请求已授权(request: web.Request) -> bool:
     return True
 
 
+def _请求来自同源(request: web.Request) -> bool:
+    """WebSocket 只接受当前控制台页面发起的同源连接。"""
+    来源 = str(request.headers.get("Origin") or "").strip()
+    主机头 = str(request.headers.get("Host") or "").strip()
+    if not 来源 or not 主机头:
+        return False
+    try:
+        来源地址 = urlsplit(来源)
+        请求地址 = urlsplit(f"//{主机头}")
+        代理协议 = str(request.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip().lower()
+        请求协议 = 代理协议 or str(request.scheme or "http").lower()
+        if 来源地址.scheme.lower() not in {"http", "https"} or 来源地址.scheme.lower() != 请求协议:
+            return False
+        if str(来源地址.hostname or "").rstrip(".").lower() != str(请求地址.hostname or "").rstrip(".").lower():
+            return False
+        来源端口 = 来源地址.port or (443 if 来源地址.scheme.lower() == "https" else 80)
+        请求端口 = 请求地址.port or (443 if 请求协议 == "https" else 80)
+        return 来源端口 == 请求端口
+    except (TypeError, ValueError):
+        return False
+
+
 def _读取当前控制台身份(request: web.Request) -> str:
     """返回当前会话的登录账号；身份摘要可以展示，密码和会话值不出接口。"""
     return 控制台会话身份.get(_取得请求会话(request), "管理员") or "管理员"
@@ -1214,6 +1236,109 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台消息历史读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "消息历史暂时不可用")
+
+
+async def _处理消息事件(request: web.Request) -> web.StreamResponse:
+    """向消息记录页推送实时事件，避免等待固定轮询周期。"""
+    if not _请求已授权(request):
+        return web.Response(status=401, text="Unauthorized")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        队列 = 消息记录.订阅消息事件()
+        if 队列 is None:
+            return web.Response(status=503, text="Event stream unavailable")
+        响应 = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache, no-store",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await 响应.prepare(request)
+        await 响应.write(b'data: {"type":"ready","data":{}}\n\n')
+        try:
+            while True:
+                try:
+                    事件 = await asyncio.wait_for(队列.get(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    await 响应.write(b": keepalive\n\n")
+                    continue
+                文本 = json.dumps(事件, ensure_ascii=False, separators=(",", ":"), default=str)
+                await 响应.write(f"data: {文本}\n\n".encode("utf-8"))
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        except Exception as exc:
+            logger.debug("帮助控制台消息事件连接结束：错误类型=%s", type(exc).__name__)
+        finally:
+            消息记录.取消消息事件订阅(队列)
+        return 响应
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("帮助控制台消息事件启动失败：错误类型=%s", type(exc).__name__)
+        return web.Response(status=503, text="Event stream unavailable")
+
+
+async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
+    """消息记录实时主通道；浏览器断线时由前端降级到 SSE。"""
+    if not _请求已授权(request):
+        return web.Response(status=401, text="Unauthorized")
+    if not _请求来自同源(request):
+        return web.Response(status=403, text="Forbidden")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        队列 = 消息记录.订阅消息事件()
+        if 队列 is None:
+            return web.Response(status=503, text="WebSocket unavailable")
+        响应 = web.WebSocketResponse(heartbeat=30.0, compress=False)
+        await 响应.prepare(request)
+        await 响应.send_json({"type": "ready", "data": {}}, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
+        接收任务: asyncio.Task[Any] | None = asyncio.create_task(响应.receive())
+        事件任务: asyncio.Task[Any] | None = asyncio.create_task(队列.get())
+        try:
+            while not 响应.closed:
+                完成任务, _ = await asyncio.wait(
+                    {接收任务, 事件任务},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if 接收任务 in 完成任务:
+                    消息 = 接收任务.result()
+                    if 消息.type in {web.WSMsgType.CLOSE, web.WSMsgType.CLOSED, web.WSMsgType.ERROR}:
+                        break
+                    接收任务 = asyncio.create_task(响应.receive())
+                if 事件任务 in 完成任务:
+                    事件 = 事件任务.result()
+                    await 响应.send_json(事件, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
+                    事件任务 = asyncio.create_task(队列.get())
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        except Exception as exc:
+            logger.debug("帮助控制台消息 WebSocket 连接结束：错误类型=%s", type(exc).__name__)
+        finally:
+            待取消任务 = []
+            for 任务 in (接收任务, 事件任务):
+                if 任务 is not None and not 任务.done():
+                    任务.cancel()
+                    待取消任务.append(任务)
+            if 待取消任务:
+                await asyncio.gather(*待取消任务, return_exceptions=True)
+            消息记录.取消消息事件订阅(队列)
+            if not 响应.closed:
+                await 响应.close()
+        return 响应
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("帮助控制台消息 WebSocket 启动失败：错误类型=%s", type(exc).__name__)
+        return web.Response(status=503, text="WebSocket unavailable")
 
 
 async def _处理消息发送(request: web.Request) -> web.Response:

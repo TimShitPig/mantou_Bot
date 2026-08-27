@@ -36,7 +36,8 @@
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
         document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
         if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
-        if (next === 'messages') { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); }
+        if (next === 'messages') { connectMsgEvents(); loadMsgChats(); if (msgState.chatId) loadMsgHistory(); }
+        else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
         window.scrollTo({top:0, behavior:'auto'});
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
@@ -156,7 +157,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', messages:[], renderedChatId:'', pendingNewMessages:0, historyRequest:0, quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -191,8 +192,64 @@
         if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       };
+      const msgChatMatchesView = (chat) => {
+        const type = String(chat.chat_type || 'group');
+        if (msgState.filter === 'group' && type !== 'group') return false;
+        if (msgState.filter === 'user' && type !== 'user') return false;
+        if (msgState.filter === 'remark' && !chat.remark) return false;
+        const keyword = String(msgState.search || '').trim().toLowerCase();
+        if (!keyword) return true;
+        return [chat.nickname, chat.remark, chat.chat_id].some((value) => String(value || '').toLowerCase().includes(keyword));
+      };
+      const mergeMsgRealtimeChats = (serverChats) => {
+        const byId = new Map((serverChats || []).map((chat) => [String(chat.chat_id || ''), {...chat}]));
+        msgState.realtimeChats.forEach((overlay, chatId) => {
+          const current = byId.get(chatId);
+          if (!current) { if (msgChatMatchesView(overlay)) byId.set(chatId, {...overlay}); return; }
+          const serverTs = Number(current.last_ts || 0);
+          const eventTs = Number(overlay.last_ts || 0);
+          if (serverTs > eventTs) { msgState.realtimeChats.delete(chatId); return; }
+          byId.set(chatId, {
+            ...current,
+            ...overlay,
+            nickname:current.nickname || overlay.nickname,
+            remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
+            group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
+            pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
+            msg_count:Math.max(Number(current.msg_count || 0), Number(overlay.msg_count || 0)),
+          });
+        });
+        return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
+          Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
+          Number(Number(right.unread || 0) > 0) - Number(Number(left.unread || 0) > 0) ||
+          Number(right.last_ts || 0) - Number(left.last_ts || 0)
+        );
+      };
+      const clearMsgChatUnread = (chatId) => {
+        const id = String(chatId || '');
+        if (!id) return false;
+        let changed = false;
+        msgState.chats = msgState.chats.map((chat) => {
+          if (String(chat.chat_id || '') !== id || Number(chat.unread || 0) <= 0) return chat;
+          changed = true;
+          return {...chat, unread:0};
+        });
+        const existing = msgState.realtimeChats.get(id) || msgState.chats.find((chat) => String(chat.chat_id || '') === id);
+        if (existing) msgState.realtimeChats.set(id, {...existing, unread:0});
+        document.querySelectorAll('[data-msg-chat]').forEach((node) => {
+          if (String(node.dataset.msgChat || '') === id) node.querySelector('.msg-chat-badge')?.remove();
+        });
+        return changed;
+      };
+      const markMsgRead = async (chatId = msgState.chatId) => {
+        const id = String(chatId || '');
+        if (!id) return;
+        clearMsgChatUnread(id);
+        try { await api('message/read', {method:'POST', body:JSON.stringify({chat_id:id})}); } catch (_) {}
+      };
       const renderMsgChats = (data) => {
-        const node = $('msg-chats'); const chats = data.chats || [];
+        const node = $('msg-chats'); const chats = mergeMsgRealtimeChats(data.chats || []);
+        msgState.chats = chats;
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; return; }
         node.innerHTML = chats.map((chat) => {
@@ -200,10 +257,9 @@
           if (chat.appid) window.msgAppid = chat.appid;
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           const viewing = msgState.chatId === chat.chat_id;
-          const unread = viewing ? 0 : Number(chat.unread || 0);
-          if (viewing && Number(chat.unread || 0) > 0) {
-            api('message/read', {method:'POST', body:JSON.stringify({chat_id:chat.chat_id})}).catch(() => {});
-          }
+          const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
+          const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
+          if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
           return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" title="${chat.pinned ? '取消置顶' : '置顶'}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
@@ -224,11 +280,7 @@
             if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(); }).catch((error) => toast(error.message || '刷新失败')); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
-          el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; loadMsgHistory(); markMsgRead(); });
-          const markMsgRead = async () => {
-            if (!msgState.chatId) return;
-            try { await api('message/read', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); loadMsgChats(); } catch (error) {}
-          };
+          el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; msgState.historyData = null; clearMsgNewMessages(); loadMsgHistory(); markMsgRead(el.dataset.msgChat); });
         });
       };
       $('msg-lightbox-close')?.addEventListener('click', () => closeMsgLightbox());
@@ -237,6 +289,82 @@
       const loadMsgChats = async () => {
         try { const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})}); renderMsgChats(data); }
         catch (error) { if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
+      };
+      const closeMsgEvents = () => {
+        if (msgState.eventReconnect) { clearTimeout(msgState.eventReconnect); msgState.eventReconnect = null; }
+        const socket = msgState.eventSocket;
+        msgState.eventSocket = null;
+        msgState.eventTransport = '';
+        if (socket) {
+          // 先解除回调，避免切换页面时 close 事件再次触发降级重连。
+          socket.onopen = null; socket.onmessage = null; socket.onerror = null; socket.onclose = null;
+          try { socket.close(); } catch (_) {}
+        }
+        if (msgState.eventSource) {
+          const source = msgState.eventSource;
+          msgState.eventSource = null;
+          source.onopen = null; source.onmessage = null; source.onerror = null;
+          try { source.close(); } catch (_) {}
+        }
+      };
+      const scheduleMsgRealtimeRefresh = () => {
+        if (msgState.eventRefreshTimer) return;
+        msgState.eventRefreshTimer = setTimeout(async () => {
+          msgState.eventRefreshTimer = null;
+          if ($('page-messages')?.hidden) return;
+          await loadMsgChats();
+        }, 1200);
+      };
+      const handleMsgRealtimeData = (raw) => {
+        try {
+          const envelope = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+          if (envelope?.type === 'message') { applyMsgRealtimeEvent(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
+        } catch (_) {}
+      };
+      const scheduleMsgRealtimeReconnect = () => {
+        if (msgState.eventReconnect || $('page-messages')?.hidden) return;
+        msgState.eventReconnect = setTimeout(() => {
+          msgState.eventReconnect = null;
+          if (!$('page-messages')?.hidden) connectMsgEvents();
+        }, 3000);
+      };
+      const connectMsgSse = () => {
+        if (msgState.eventSource || msgState.eventSocket || !window.EventSource || $('page-messages')?.hidden) return;
+        let source;
+        try { source = new EventSource('/api/message/events'); }
+        catch (_) { scheduleMsgRealtimeReconnect(); return; }
+        msgState.eventSource = source;
+        msgState.eventTransport = 'sse';
+        source.onmessage = (event) => handleMsgRealtimeData(event.data);
+        source.onerror = () => {
+          if (msgState.eventSource !== source) return;
+          source.onopen = null; source.onmessage = null; source.onerror = null;
+          try { source.close(); } catch (_) {}
+          msgState.eventSource = null; msgState.eventTransport = '';
+          scheduleMsgRealtimeReconnect();
+        };
+      };
+      const connectMsgEvents = () => {
+        if (msgState.eventSocket || msgState.eventSource || $('page-messages')?.hidden) return;
+        if (!window.WebSocket) { connectMsgSse(); return; }
+        const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let socket;
+        try { socket = new WebSocket(`${wsProtocol}//${location.host}/api/message/ws`); }
+        catch (_) { connectMsgSse(); return; }
+        msgState.eventSocket = socket;
+        msgState.eventTransport = 'websocket';
+        socket.onopen = () => { if (msgState.eventSocket === socket) msgState.eventTransport = 'websocket'; };
+        socket.onmessage = (event) => handleMsgRealtimeData(event.data);
+        socket.onerror = () => {
+          // onclose 负责统一清理并切换 SSE，避免同时保持两条实时连接。
+          try { socket.close(); } catch (_) {}
+        };
+        socket.onclose = () => {
+          if (msgState.eventSocket !== socket) return;
+          msgState.eventSocket = null; msgState.eventTransport = '';
+          connectMsgSse();
+          if (!msgState.eventSource) scheduleMsgRealtimeReconnect();
+        };
       };
       const fmtDayLabel = (ts) => {
         const s = String(ts || '').trim();
@@ -389,9 +517,19 @@
         if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior});
         else body.scrollTop = body.scrollHeight;
         clearMsgNewMessages();
+        markMsgRead();
       };
       const renderMsgMessages = (data, scroll = {}) => {
-        const body = $('msg-body'); const msgs = data.messages || [];
+        const body = $('msg-body');
+        const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
+        data = {
+          ...previousData,
+          ...data,
+          member_profiles:{...(previousData.member_profiles || {}), ...(data.member_profiles || {})},
+          references:{...(previousData.references || {}), ...(data.references || {})},
+        };
+        const msgs = data.messages || [];
+        msgState.historyData = {...data, messages:msgs};
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         updateMsgHead(data);
         updateMsgAdminTag();
@@ -519,6 +657,60 @@
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
         });
+      };
+      const rememberMsgEvent = (chatId, message) => {
+        const fallback = `${message?.ts || message?.timestamp || ''}:${message?.user_id || ''}:${message?.content || ''}`;
+        const key = `${chatId}:${msgMessageKey(message) || fallback}`;
+        if (msgState.eventKeys.has(key)) return false;
+        msgState.eventKeys.add(key);
+        msgState.eventKeyOrder.push(key);
+        while (msgState.eventKeyOrder.length > 1000) msgState.eventKeys.delete(msgState.eventKeyOrder.shift());
+        return true;
+      };
+      const applyMsgRealtimeEvent = (payload) => {
+        const chatId = String(payload.chat_id || '').trim();
+        const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
+        if (!chatId || !message) return;
+        const isNewEvent = rememberMsgEvent(chatId, message);
+        const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
+        const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
+        const eventTs = Number(payload.last_ts || message.ts || 0) || Math.floor(Date.now() / 1000);
+        const isViewing = msgState.chatId === chatId && !$('page-messages')?.hidden;
+        const body = $('msg-body');
+        const followLatest = isViewing && msgState.pendingNewMessages === 0 && msgBodyNearBottom(body);
+        const payloadUnread = Number(payload.unread);
+        const unread = followLatest
+          ? 0
+          : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : Math.max(0, Number(existing.unread || 0) + (message.is_self ? 0 : 1)));
+        const overlay = {
+          ...existing,
+          chat_id:chatId,
+          chat_type:chatType,
+          appid:String(payload.appid || message.appid || existing.appid || ''),
+          nickname:existing.nickname || (chatType === 'user' ? String(payload.last_nickname || message.nickname || chatId) : chatId),
+          last_content:String(payload.last_content || message.content || existing.last_content || ''),
+          last_time:String(message.timestamp || existing.last_time || new Date(eventTs * 1000).toISOString()),
+          last_ts:eventTs,
+          msg_count:Math.max(0, Number(existing.msg_count || 0) + (isNewEvent ? 1 : 0)),
+          unread,
+        };
+        msgState.realtimeChats.set(chatId, overlay);
+        renderMsgChats({chats:msgState.chats});
+        if (!isViewing || !isNewEvent) return;
+        const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
+        const messageKey = msgMessageKey(realtimeMessage);
+        const alreadyRendered = msgState.messages.some((item) => messageKey && msgMessageKey(item) === messageKey);
+        if (!alreadyRendered) {
+          const previousTop = body?.scrollTop || 0;
+          const previousHeight = body?.scrollHeight || 0;
+          msgState.messages = [...msgState.messages, realtimeMessage];
+          renderMsgMessages(
+            {...(msgState.historyData || {}), messages:msgState.messages},
+            {previousTop, previousHeight, toBottom:followLatest},
+          );
+          if (!followLatest) showMsgNewMessages(1);
+        }
+        if (followLatest) markMsgRead(chatId);
       };
       const toggleMsgSelect = (row, mid) => {
         if (!mid) return;
@@ -685,7 +877,13 @@
         reader.readAsDataURL(file);
         e.target.value = '';
       });
-      $('msg-body').addEventListener('scroll', () => { if (msgBodyNearBottom($('msg-body'))) clearMsgNewMessages(); });
+      $('msg-body').addEventListener('scroll', () => {
+        if (!msgBodyNearBottom($('msg-body'))) return;
+        const activeChat = msgState.chats.find((chat) => String(chat.chat_id || '') === String(msgState.chatId || ''));
+        const shouldRead = msgState.pendingNewMessages > 0 || Number(activeChat?.unread || 0) > 0;
+        clearMsgNewMessages();
+        if (shouldRead) markMsgRead();
+      });
       $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
       $('msg-reload').addEventListener('click', () => { loadMsgChats(); if (msgState.chatId) loadMsgHistory(); });
       $('msg-multi-recall').addEventListener('click', recallSelected);
@@ -702,7 +900,7 @@
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
-      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(false, true); } }, 10000);
+      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId) loadMsgHistory(false, true); } }, 30000);
 
       setView(viewFromUrl(), false); load();
     })();

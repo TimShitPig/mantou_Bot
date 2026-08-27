@@ -44,6 +44,36 @@ _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
+_消息持久化队列上限 = 50000
+_消息持久化批量大小 = 200
+_消息持久化聚合秒数 = 0.05
+_消息持久化队列: asyncio.Queue[tuple[str, Any]] = (
+    globals().get("_消息持久化队列") or asyncio.Queue(maxsize=_消息持久化队列上限)
+)
+_消息持久化任务: asyncio.Task[Any] | None = globals().get("_消息持久化任务")
+_消息持久化接收入队 = globals().get("_消息持久化接收入队", True)
+_消息持久化溢出数 = int(globals().get("_消息持久化溢出数", 0) or 0)
+_数据库裁剪进行中 = globals().get("_数据库裁剪进行中", False)
+_上次数据库裁剪排队时间 = float(globals().get("_上次数据库裁剪排队时间", 0.0) or 0.0)
+_数据库裁剪最短间隔 = 300.0
+_消息接收队列上限 = 4096
+_消息接收队列: asyncio.Queue[tuple[Any, Any, str]] = (
+    globals().get("_消息接收队列") or asyncio.Queue(maxsize=_消息接收队列上限)
+)
+_消息接收任务: asyncio.Task[Any] | None = globals().get("_消息接收任务")
+_消息接收入队 = globals().get("_消息接收入队", True)
+_消息接收溢出数 = int(globals().get("_消息接收溢出数", 0) or 0)
+_昵称补查队列上限 = 1024
+_昵称补查工作数 = 2
+_昵称补查队列: asyncio.Queue[tuple[str, str, str]] = (
+    globals().get("_昵称补查队列") or asyncio.Queue(maxsize=_昵称补查队列上限)
+)
+_昵称补查任务: list[asyncio.Task[Any]] = list(globals().get("_昵称补查任务") or [])
+_昵称补查等待中: set[tuple[str, str]] = globals().get("_昵称补查等待中") or set()
+_昵称补查接收入队 = globals().get("_昵称补查接收入队", True)
+_昵称补查溢出数 = int(globals().get("_昵称补查溢出数", 0) or 0)
+_消息事件订阅: dict[asyncio.Queue[Any], asyncio.AbstractEventLoop] = globals().get("_消息事件订阅") or {}
+_消息事件队列上限 = 512
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
@@ -114,6 +144,33 @@ def _格式化时间戳(时间戳: Any) -> str:
         return _日期类.fromtimestamp(数值, _显示时区).strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, OverflowError, OSError):
         return ""
+
+
+def _提取发送响应字段(响应: Any, *字段名: str) -> Any:
+    """兼容 qq-botpy 的对象、字典及嵌套 data 响应。"""
+    候选 = [响应]
+    if isinstance(响应, dict):
+        候选.append(响应.get("data"))
+    else:
+        候选.append(getattr(响应, "data", None))
+    for 对象 in 候选:
+        if 对象 is None:
+            continue
+        for 名称 in 字段名:
+            值 = 对象.get(名称) if isinstance(对象, dict) else getattr(对象, 名称, None)
+            if 值 not in (None, ""):
+                return 值
+    return None
+
+
+def _提取发送响应消息ID(响应: Any) -> str:
+    return str(_提取发送响应字段(响应, "id", "message_id") or "").strip()
+
+
+def _提取发送响应时间(响应: Any) -> int | None:
+    return _转数字时间戳(
+        _提取发送响应字段(响应, "timestamp", "time", "created_at")
+    )
 
 
 def _提取原始消息时间(原始消息: Any) -> Any:
@@ -196,11 +253,9 @@ def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict
             "last_ts": 0,
             "last_content": "",
             "last_nickname": "",
-            "unread": (
-                _未读待写[会话标识]
-                if 会话标识 in _未读待写
-                else _读取持久化未读数(会话标识)
-            ),
+            # 接收事件不能在 AstrBot 事件循环中同步查询 MySQL；启动恢复时
+            # 会一次性载入持久化未读数，新会话则从当前事件开始累计。
+            "unread": max(0, int(_未读待写.get(会话标识, 0) or 0)),
         }
     return 消息缓存[会话标识]
 
@@ -276,13 +331,166 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
     return 任务
 
 
+def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> None:
+    """在线程中批量落库；同一会话的未读值只写本批最后一次状态。"""
+    消息列表: list[dict[str, Any]] = []
+    未读表: dict[str, int] = {}
+    for 类型, 数据 in 项目列表:
+        if 类型 == "message" and isinstance(数据, dict):
+            消息列表.append(数据)
+        elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
+            会话标识, 未读数 = 数据
+            未读表[str(会话标识)] = max(0, int(未读数 or 0))
+
+    if 消息列表 and _消息存储 is not None:
+        批量写入 = getattr(_消息存储, "批量写入消息", None)
+        if callable(批量写入):
+            批量写入(消息列表)
+        else:
+            for 记录 in 消息列表:
+                _消息存储.写入消息(记录)
+
+    if not 未读表:
+        return
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import (
+            已配置运行状态数据库,
+            写入运行状态值,
+        )
+
+        if not 已配置运行状态数据库(当前插件配置):
+            return
+        for 会话标识, 未读数 in 未读表.items():
+            写入运行状态值(
+                当前插件配置,
+                未读状态命名空间,
+                会话标识,
+                未读数,
+            )
+    except Exception as 异常:
+        logger.debug("消息记录未读数批量持久化失败：错误类型=%s", type(异常).__name__)
+
+
+def _准备消息持久化队列() -> asyncio.Queue[tuple[str, Any]]:
+    """确保队列属于当前事件循环；仅在旧循环已结束且队列为空时重建。"""
+    global _消息持久化队列
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return _消息持久化队列
+    队列循环 = getattr(_消息持久化队列, "_loop", None)
+    任务运行中 = _消息持久化任务 is not None and not _消息持久化任务.done()
+    if 队列循环 not in (None, 当前循环) and _消息持久化队列.empty() and not 任务运行中:
+        _消息持久化队列 = asyncio.Queue(maxsize=_消息持久化队列上限)
+    return _消息持久化队列
+
+
+async def _消息持久化工作() -> None:
+    """固定单消费者按时间窗聚合消息，避免每条消息创建一个后台任务。"""
+    global _消息持久化任务
+    队列 = _准备消息持久化队列()
+    try:
+        while True:
+            首项 = await 队列.get()
+            批次 = [首项]
+            截止时间 = asyncio.get_running_loop().time() + _消息持久化聚合秒数
+            while len(批次) < _消息持久化批量大小:
+                try:
+                    批次.append(队列.get_nowait())
+                    continue
+                except asyncio.QueueEmpty:
+                    剩余时间 = 截止时间 - asyncio.get_running_loop().time()
+                    if 剩余时间 <= 0:
+                        break
+                try:
+                    批次.append(await asyncio.wait_for(队列.get(), timeout=剩余时间))
+                except TimeoutError:
+                    break
+            try:
+                async with _数据库写入锁:
+                    await asyncio.to_thread(_执行消息持久化批次, 批次)
+            except asyncio.CancelledError:
+                raise
+            except Exception as 异常:
+                logger.warning(
+                    "消息记录后台批量写入失败：数量=%d，错误类型=%s",
+                    len(批次),
+                    type(异常).__name__,
+                )
+            finally:
+                for _ in 批次:
+                    队列.task_done()
+    except asyncio.CancelledError:
+        raise
+    finally:
+        当前任务 = asyncio.current_task()
+        if _消息持久化任务 is 当前任务:
+            _消息持久化任务 = None
+
+
+def _启动消息持久化任务() -> asyncio.Task[Any] | None:
+    global _消息持久化任务
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if _消息持久化任务 is None or _消息持久化任务.done():
+        _准备消息持久化队列()
+        _消息持久化任务 = 循环.create_task(_消息持久化工作())
+    return _消息持久化任务
+
+
+def _排队消息持久化(类型: str, 数据: Any) -> bool:
+    """非阻塞投递持久化项目；队列上限与 ElainaBot 日志队列一致。"""
+    global _消息持久化溢出数
+    if not _消息持久化接收入队:
+        return False
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            _执行消息持久化批次([(类型, 数据)])
+            return True
+        except Exception as 异常:
+            logger.debug("消息记录同步持久化失败：错误类型=%s", type(异常).__name__)
+            return False
+    队列 = _准备消息持久化队列()
+    try:
+        队列.put_nowait((类型, 数据))
+    except asyncio.QueueFull:
+        _消息持久化溢出数 += 1
+        if _消息持久化溢出数 == 1 or _消息持久化溢出数 % 1000 == 0:
+            logger.warning(
+                "消息记录持久化队列已满：上限=%d，累计未入队=%d",
+                _消息持久化队列上限,
+                _消息持久化溢出数,
+            )
+        return False
+    _启动消息持久化任务()
+    return True
+
+
 async def 等待消息记录写入(超时: float = 10.0) -> bool:
     """等待当前已排队的消息/未读/元数据写入，供网页操作和插件停机调用。"""
+    截止时间 = asyncio.get_running_loop().time() + max(0.1, float(超时))
+    队列 = _准备消息持久化队列()
+    if not 队列.empty():
+        _启动消息持久化任务()
+    try:
+        剩余时间 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
+        await asyncio.wait_for(队列.join(), timeout=剩余时间)
+    except TimeoutError:
+        logger.warning("消息记录持久化队列未在限定时间内冲刷：剩余=%d", 队列.qsize())
+        return False
+    except Exception as 异常:
+        logger.warning("消息记录持久化队列等待失败：错误类型=%s", type(异常).__name__)
+        return False
     任务列表 = [任务 for 任务 in list(_后台写入任务) if not 任务.done()]
     if not 任务列表:
         return True
     try:
-        _, 未完成 = await asyncio.wait(任务列表, timeout=max(0.1, float(超时)))
+        剩余时间 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
+        _, 未完成 = await asyncio.wait(任务列表, timeout=剩余时间)
         if 未完成:
             logger.warning("消息记录后台写入未在限定时间内完成：剩余=%d", len(未完成))
             return False
@@ -293,8 +501,50 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
 
 
 async def 停止消息记录() -> bool:
-    """插件重载/退出前冲刷消息记录写入队列，避免最后几条消息丢失。"""
-    return await 等待消息记录写入(10.0)
+    """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
+    global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
+    global _消息接收任务, _消息持久化任务, _昵称补查任务
+    _消息接收入队 = False
+    截止时间 = asyncio.get_running_loop().time() + 15.0
+    接收队列 = _准备消息接收队列()
+    接收冲刷 = True
+    try:
+        剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
+        await asyncio.wait_for(接收队列.join(), timeout=剩余)
+    except Exception as 异常:
+        接收冲刷 = False
+        logger.warning("消息记录接收队列未在限定时间内冲刷：错误类型=%s，剩余=%d", type(异常).__name__, 接收队列.qsize())
+    接收任务 = _消息接收任务
+    _消息接收任务 = None
+    if 接收任务 is not None and not 接收任务.done():
+        接收任务.cancel()
+        await asyncio.gather(接收任务, return_exceptions=True)
+
+    _昵称补查接收入队 = False
+    昵称队列 = _准备昵称补查队列()
+    昵称冲刷 = True
+    try:
+        剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
+        await asyncio.wait_for(昵称队列.join(), timeout=剩余)
+    except Exception as 异常:
+        昵称冲刷 = False
+        logger.warning("私聊昵称补查队列未在限定时间内冲刷：错误类型=%s，剩余=%d", type(异常).__name__, 昵称队列.qsize())
+    昵称任务列表 = [任务 for 任务 in _昵称补查任务 if not 任务.done()]
+    _昵称补查任务 = []
+    for 任务 in 昵称任务列表:
+        任务.cancel()
+    if 昵称任务列表:
+        await asyncio.gather(*昵称任务列表, return_exceptions=True)
+
+    _消息持久化接收入队 = False
+    剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
+    已冲刷 = 接收冲刷 and 昵称冲刷 and await 等待消息记录写入(剩余)
+    任务 = _消息持久化任务
+    _消息持久化任务 = None
+    if 任务 is not None and not 任务.done():
+        任务.cancel()
+        await asyncio.gather(任务, return_exceptions=True)
+    return 已冲刷
 
 
 def _持久化未读数(会话标识: str, 未读数: int) -> None:
@@ -306,23 +556,79 @@ def _持久化未读数(会话标识: str, 未读数: int) -> None:
         _未读待写[会话标识] = max(0, int(未读数))
     except (TypeError, ValueError):
         _未读待写[会话标识] = 0
-    try:
-        from 功能文件.管理功能.基础功能.运行状态数据库 import (
-            已配置运行状态数据库,
-            写入运行状态值,
-        )
+    _排队消息持久化("unread", (会话标识, _未读待写[会话标识]))
 
-        if not 已配置运行状态数据库(当前插件配置):
-            return
-        _后台执行同步(
-            写入运行状态值,
-            当前插件配置,
-            未读状态命名空间,
-            会话标识,
-            _未读待写[会话标识],
-        )
-    except Exception as 异常:
-        logger.debug("消息记录未读数持久化失败：错误类型=%s", type(异常).__name__)
+
+def 订阅消息事件() -> asyncio.Queue[Any] | None:
+    """注册网页实时消息订阅；队列有界，慢客户端只丢弃最旧事件。"""
+    try:
+        循环 = asyncio.get_running_loop()
+        队列: asyncio.Queue[Any] = asyncio.Queue(maxsize=_消息事件队列上限)
+        _消息事件订阅[队列] = 循环
+        return 队列
+    except RuntimeError:
+        return None
+
+
+def 取消消息事件订阅(队列: asyncio.Queue[Any] | None) -> None:
+    if 队列 is not None:
+        _消息事件订阅.pop(队列, None)
+
+
+def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[str, Any]:
+    """构造控制台实时事件，避免把内部会话键和未处理对象直接推到网页。"""
+    字段 = (
+        "id", "message_id", "user_id", "nickname", "content", "timestamp",
+        "is_self", "source", "recalled", "media", "reference_id", "refidx",
+        "chat_type", "ts", "appid",
+    )
+    消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
+    会话标识 = str(记录.get("_session") or "")
+    return {
+        "chat_id": 会话标识,
+        "chat_type": str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
+        "appid": str(记录.get("appid") or 会话.get("appid") or ""),
+        "unread": max(0, int(会话.get("unread") or 0)),
+        "last_content": str(会话.get("last_content") or ""),
+        "last_nickname": str(会话.get("last_nickname") or ""),
+        "last_ts": int(会话.get("last_ts") or 0),
+        "message": 消息,
+    }
+
+
+def _推送消息事件(记录: dict[str, Any], 会话: dict[str, Any]) -> None:
+    """把已进入内存的消息放入网页队列，不等待网络或数据库。"""
+    if not _消息事件订阅:
+        return
+    载荷 = {"type": "message", "data": _消息事件载荷(记录, 会话)}
+
+    def 投递(队列: asyncio.Queue[Any]) -> None:
+        try:
+            队列.put_nowait(载荷)
+        except asyncio.QueueFull:
+            try:
+                队列.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                队列.put_nowait(载荷)
+            except asyncio.QueueFull:
+                pass
+
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        当前循环 = None
+    for 队列, 循环 in list(_消息事件订阅.items()):
+        if 当前循环 is 循环:
+            投递(队列)
+        elif 循环.is_closed():
+            _消息事件订阅.pop(队列, None)
+        else:
+            try:
+                循环.call_soon_threadsafe(投递, 队列)
+            except RuntimeError:
+                _消息事件订阅.pop(队列, None)
 
 
 def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
@@ -508,7 +814,6 @@ def _记录成员资料(
             会话资料[成员标识]["role"] = str(角色 or "")
 
 
-_后台补查任务: list[Any] = []
 _用户详情接口不可用 = False
 
 
@@ -590,6 +895,82 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
             logger.info("QQ 官方未提供用户详情接口，私聊昵称改用兜底显示")
         else:
             logger.warning("私聊昵称补查失败：错误类型=%s", 名称)
+
+
+def _准备昵称补查队列() -> asyncio.Queue[tuple[str, str, str]]:
+    """热重载切换事件循环后，在旧队列已经清空时重建队列。"""
+    global _昵称补查队列
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return _昵称补查队列
+    队列循环 = getattr(_昵称补查队列, "_loop", None)
+    有效任务 = any(not 任务.done() for 任务 in _昵称补查任务)
+    if 队列循环 not in (None, 当前循环) and _昵称补查队列.empty() and not 有效任务:
+        _昵称补查队列 = asyncio.Queue(maxsize=_昵称补查队列上限)
+    return _昵称补查队列
+
+
+async def _昵称补查工作() -> None:
+    队列 = _准备昵称补查队列()
+    while True:
+        会话标识, 用户标识, appid = await 队列.get()
+        try:
+            await _补查用户昵称(会话标识, 用户标识, appid)
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.warning("私聊昵称补查任务失败：错误类型=%s", type(异常).__name__)
+        finally:
+            _昵称补查等待中.discard((会话标识, 用户标识))
+            队列.task_done()
+
+
+def _启动昵称补查任务() -> None:
+    global _昵称补查任务
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _准备昵称补查队列()
+    当前循环任务 = [
+        任务
+        for 任务 in _昵称补查任务
+        if not 任务.done() and getattr(任务, "get_loop", lambda: None)() is 循环
+    ]
+    while len(当前循环任务) < _昵称补查工作数:
+        当前循环任务.append(循环.create_task(_昵称补查工作()))
+    _昵称补查任务 = 当前循环任务
+
+
+def _排队昵称补查(会话标识: str, 用户标识: str, appid: str = "") -> bool:
+    """同一私聊用户同时最多存在一个补查项目，避免消息洪峰生成无限任务。"""
+    global _昵称补查溢出数
+    if not _昵称补查接收入队 or _用户详情接口不可用:
+        return False
+    会话标识 = str(会话标识 or "").strip()
+    用户标识 = str(用户标识 or "").strip()
+    if not 会话标识 or not 用户标识:
+        return False
+    键 = (会话标识, 用户标识)
+    if 键 in _昵称补查等待中:
+        return True
+    队列 = _准备昵称补查队列()
+    _昵称补查等待中.add(键)
+    try:
+        队列.put_nowait((会话标识, 用户标识, str(appid or "")))
+    except asyncio.QueueFull:
+        _昵称补查等待中.discard(键)
+        _昵称补查溢出数 += 1
+        if _昵称补查溢出数 == 1 or _昵称补查溢出数 % 100 == 0:
+            logger.warning(
+                "私聊昵称补查队列已满：上限=%d，累计未入队=%d",
+                _昵称补查队列上限,
+                _昵称补查溢出数,
+            )
+        return False
+    _启动昵称补查任务()
+    return True
 
 
 def 记录收到消息(
@@ -681,7 +1062,7 @@ def 记录收到消息(
                 pass
         if _消息存储 is not None:
             try:
-                _后台执行同步(_消息存储.写入消息, dict(记录))
+                _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
@@ -691,6 +1072,8 @@ def 记录收到消息(
             会话["last_nickname"] = 昵称
         新时间戳 = _转数字时间戳(时间戳) or int(time.time())
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 新时间戳)
+        # 先通知网页再等待数据库线程；这一步必须保持在事件循环内轻量完成。
+        _推送消息事件(记录, 会话)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -698,7 +1081,88 @@ def 记录收到消息(
         return None
 
 
+def _准备消息接收队列() -> asyncio.Queue[tuple[Any, Any, str]]:
+    """热重载切换事件循环后，在旧队列已经清空时重建队列。"""
+    global _消息接收队列
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return _消息接收队列
+    队列循环 = getattr(_消息接收队列, "_loop", None)
+    任务运行中 = _消息接收任务 is not None and not _消息接收任务.done()
+    if 队列循环 not in (None, 当前循环) and _消息接收队列.empty() and not 任务运行中:
+        _消息接收队列 = asyncio.Queue(maxsize=_消息接收队列上限)
+    return _消息接收队列
+
+
+async def _消息接收工作() -> None:
+    """单 worker 按 QQ 官方到达顺序更新缓存，接收回调不执行解析和写库。"""
+    global _消息接收任务
+    队列 = _准备消息接收队列()
+    try:
+        while True:
+            客户端, 消息, 类型 = await 队列.get()
+            try:
+                appid = str(_读取字段(_读取字段(客户端, "platform"), "appid") or "")
+                记录 = 记录收到消息(消息, 类型, appid)
+                if 类型 == "user" and 记录:
+                    用户标识 = str(记录.get("user_id") or "").strip()
+                    会话标识 = str(记录.get("_session") or "").strip()
+                    if _昵称需要补查(会话标识, 消息缓存.get(会话标识)):
+                        _排队昵称补查(会话标识, 用户标识, appid)
+            except asyncio.CancelledError:
+                raise
+            except Exception as 异常:
+                logger.warning("消息记录接收队列处理失败：错误类型=%s", type(异常).__name__)
+            finally:
+                队列.task_done()
+    except asyncio.CancelledError:
+        raise
+    finally:
+        当前任务 = asyncio.current_task()
+        if _消息接收任务 is 当前任务:
+            _消息接收任务 = None
+
+
+def _启动消息接收任务() -> asyncio.Task[Any] | None:
+    global _消息接收任务
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if (
+        _消息接收任务 is None
+        or _消息接收任务.done()
+        or getattr(_消息接收任务, "get_loop", lambda: None)() is not 循环
+    ):
+        _准备消息接收队列()
+        _消息接收任务 = 循环.create_task(_消息接收工作())
+    return _消息接收任务
+
+
+def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
+    """QQ 官方接收回调只做一次有界队列非阻塞投递。"""
+    global _消息接收溢出数
+    if not _消息接收入队:
+        return False
+    队列 = _准备消息接收队列()
+    try:
+        队列.put_nowait((客户端, 消息, 类型))
+    except asyncio.QueueFull:
+        _消息接收溢出数 += 1
+        if _消息接收溢出数 == 1 or _消息接收溢出数 % 100 == 0:
+            logger.warning(
+                "消息记录接收队列已满：上限=%d，累计未入队=%d",
+                _消息接收队列上限,
+                _消息接收溢出数,
+            )
+        return False
+    _启动消息接收任务()
+    return True
+
+
 def _裁剪总缓存() -> None:
+    global _数据库裁剪进行中, _上次数据库裁剪排队时间
     总数 = sum(len(会话.get("messages", [])) for 会话 in 消息缓存.values())
     if 总数 <= 总消息上限:
         return
@@ -716,8 +1180,22 @@ def _裁剪总缓存() -> None:
         pass
     if _消息存储 is not None:
         try:
-            _消息存储.裁剪总消息(总消息上限 * 2)
+            当前时间 = time.monotonic()
+            if _数据库裁剪进行中 or 当前时间 - _上次数据库裁剪排队时间 < _数据库裁剪最短间隔:
+                return
+            _数据库裁剪进行中 = True
+            _上次数据库裁剪排队时间 = 当前时间
+            任务 = _后台执行同步(_消息存储.裁剪总消息, 总消息上限 * 2)
+            if 任务 is None:
+                _数据库裁剪进行中 = False
+            else:
+                def _裁剪完成(_任务: asyncio.Task[Any]) -> None:
+                    global _数据库裁剪进行中
+                    _数据库裁剪进行中 = False
+
+                任务.add_done_callback(_裁剪完成)
         except Exception:
+            _数据库裁剪进行中 = False
             pass
 
 
@@ -732,11 +1210,13 @@ def 记录发送消息(
     媒体: dict[str, Any] | None = None,
     发送者昵称: str = "",
     来源: str = "",
+    发送时间: Any = None,
 ) -> dict[str, Any] | None:
     """把机器人发送的消息写入缓存（网页手动发送显示"我"，主动发送显示机器人昵称）。"""
     global 发送序号
     try:
         会话 = _取得会话缓存(会话标识, 类型, appid)
+        成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
         发送序号 += 1
         记录: dict[str, Any] = {
             "id": 发送序号,
@@ -746,7 +1226,7 @@ def 记录发送消息(
             "appid": str(appid or 会话.get("appid") or ""),
             "nickname": 发送者昵称 or "我",
             "content": 内容,
-            "timestamp": _格式化时间戳(int(time.time())),
+            "timestamp": _格式化时间戳(成功时间戳),
             "is_self": True,
             "source": 来源 or "web_panel",
             "raw_message": "",
@@ -754,7 +1234,7 @@ def 记录发送消息(
             "media": 媒体 or _提取媒体字段(内容),
             "reference_id": 引用ID or "",
             "chat_type": 类型,
-            "ts": int(time.time()),
+            "ts": 成功时间戳,
         }
         会话["messages"].append(记录)
         if 来源.startswith("bot_"):
@@ -775,7 +1255,7 @@ def 记录发送消息(
                 pass
         if _消息存储 is not None:
             try:
-                _后台执行同步(_消息存储.写入消息, dict(记录))
+                _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
@@ -783,9 +1263,10 @@ def 记录发送消息(
         if 内容:
             会话["last_content"] = 内容
             会话["last_nickname"] = 发送者昵称 or "我"
-        会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(time.time()))
+        会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
         会话["unread"] = 0
         _持久化未读数(会话标识, 0)
+        _推送消息事件(记录, 会话)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -1184,6 +1665,7 @@ def _补齐数据库会话到内存() -> None:
         return
     try:
         已加载 = False
+        持久化未读表 = _读取全部持久化未读数()
         for 会话标识 in _消息存储.读取全部会话标识():
             会话标识 = str(会话标识 or "").strip()
             if not 会话标识 or 会话标识 in 消息缓存:
@@ -1194,6 +1676,8 @@ def _补齐数据库会话到内存() -> None:
                 continue
             类型 = str(消息列表[-1].get("chat_type") or "group")
             会话 = _取得会话缓存(会话标识, 类型, str(消息列表[-1].get("appid") or ""))
+            if 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
+                会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
             会话["messages"] = 消息列表
             最后 = 消息列表[-1]
             会话["last_content"] = str(最后.get("content") or "")
@@ -1225,10 +1709,12 @@ def _数据库聚合聊天项(
         本地备注表 = (本地数据.get("remarks") or {})
         持久化未读表 = _读取全部持久化未读数()
         聊天项: list[dict[str, Any]] = []
+        已有会话标识: set[str] = set()
         for 项 in 骨架:
             会话标识 = str(项.get("会话标识") or "")
             if not 会话标识:
                 continue
+            已有会话标识.add(会话标识)
             最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
             类型 = str(最后记录.get("chat_type") or "group")
             if 过滤 == "group" and 类型 != "group":
@@ -1244,17 +1730,29 @@ def _数据库聚合聊天项(
                 if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
                     标记群信息待刷新(会话标识)
             内存会话 = 消息缓存.get(会话标识) or {}
+            内存消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
+            内存消息列表.sort(key=_历史消息排序键)
+            if 内存消息列表:
+                内存最后记录 = 内存消息列表[-1]
+                数据库最后时间 = int(_历史消息排序键(最后记录)[0] or 0)
+                内存最后时间 = int(_历史消息排序键(内存最后记录)[0] or 0)
+                if 内存最后时间 >= 数据库最后时间:
+                    最后记录 = 内存最后记录
+                    类型 = str(最后记录.get("chat_type") or 类型)
             轻量会话 = {
                 "chat_type": 类型,
                 "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
-                "appid": str(最后记录.get("appid") or ""),
+                "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
             }
             显示名 = _聊天显示名(会话标识, 轻量会话)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             _规范化历史消息(最后记录)
             last_ts = int(_历史消息排序键(最后记录)[0] or 项.get("last_ts") or 0)
-            if 会话标识 in _未读待写:
+            if 会话标识 in 消息缓存:
+                # 内存是当前事件循环刚写入的权威状态，不能被数据库旧值覆盖。
+                当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
+            elif 会话标识 in _未读待写:
                 当前未读数 = _未读待写[会话标识]
             elif 会话标识 in 持久化未读表:
                 当前未读数 = 持久化未读表[会话标识]
@@ -1270,7 +1768,50 @@ def _数据库聚合聊天项(
                     "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or "")),
                     "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
                     "last_ts": last_ts,
-                    "msg_count": int(项.get("msg_count") or 0),
+                    "msg_count": max(int(项.get("msg_count") or 0), len(内存消息列表)),
+                    "unread": max(0, int(当前未读数 or 0)),
+                    "remark": 备注,
+                    "in_group": True,
+                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                }
+            )
+        # 数据库写入线程尚未提交时，GROUP BY 不会包含刚收到的新会话。
+        # 追加内存会话即可让 SSE 触发的列表刷新立即看到消息和红点。
+        for 会话标识, 内存会话 in list(消息缓存.items()):
+            会话标识 = str(会话标识 or "").strip()
+            if not 会话标识 or 会话标识 in 已有会话标识:
+                continue
+            类型 = str(内存会话.get("chat_type") or "group")
+            if 过滤 == "group" and 类型 != "group":
+                continue
+            if 过滤 == "user" and 类型 != "user":
+                continue
+            会话备注 = 本地备注表.get(会话标识) or {}
+            备注 = str(会话备注.get("remark") or "")
+            if 过滤 == "remark" and not 备注:
+                continue
+            if 类型 == "group":
+                缓存群信息 = 群信息缓存.get(会话标识)
+                if not 缓存群信息 or int(time.time()) - int(缓存群信息.get("updated_at") or 0) > 600:
+                    标记群信息待刷新(会话标识)
+            显示名 = _聊天显示名(会话标识, 内存会话)
+            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
+                continue
+            消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
+            消息列表.sort(key=_历史消息排序键)
+            最后记录 = 消息列表[-1] if 消息列表 else {}
+            当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
+            聊天项.append(
+                {
+                    "chat_id": 会话标识,
+                    "chat_type": 类型,
+                    "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
+                    "nickname": 显示名,
+                    "group_qq": str(会话备注.get("group_qq") or ""),
+                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or 内存会话.get("last_content") or "")),
+                    "last_time": _格式化时间戳(内存会话.get("last_ts")) or str(最后记录.get("timestamp") or ""),
+                    "last_ts": int(内存会话.get("last_ts") or 最后记录.get("ts") or 0),
+                    "msg_count": len(消息列表),
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
                     "in_group": True,
@@ -1388,12 +1929,11 @@ def _数据库历史消息(
         会话消息.sort(key=_历史消息排序键)
         原始数量 = len(会话消息)
         返回消息 = 会话消息[-limit:]
-        # 发送记录先写入内存再异步/同步落库；数据库已有旧历史时，把尚未出现在
-        # 本页的本进程发送记录合并进来，避免“发送成功但控制台仍看不到”。
+        # 消息先写入内存再异步落库；数据库查询可能早于写入线程完成，
+        # 因此把本进程尚未出现在本页的接收/发送记录一起合并，避免实时消息延迟。
         内存会话 = 消息缓存.get(会话标识) or {}
-        内存发送记录 = [
+        内存消息记录 = [
             _规范化历史消息(消息项) for 消息项 in (内存会话.get("messages") or [])
-            if 消息项.get("is_self") and str(消息项.get("source") or "") in ("bot_send", "bot_active", "web_panel")
         ]
         已有记录键 = {
             (
@@ -1403,7 +1943,7 @@ def _数据库历史消息(
             )
             for 消息项 in 返回消息
         }
-        for 消息项 in 内存发送记录:
+        for 消息项 in 内存消息记录:
             if before_id and int(消息项.get("id") or 0) >= before_id:
                 continue
             if not before_id and before_date and int(消息项.get("ts") or 0) >= int(_转数字时间戳(before_date) or 0):
@@ -1843,7 +2383,15 @@ async def 发送消息(
                 文本ID = ""
                 if isinstance(文本结果, dict):
                     文本ID = str(文本结果.get("id") or "")
-                记录发送消息(会话标识, 会话类型 or "group", 内容, appid, 消息ID=文本ID, 引用ID=引用消息ID)
+                记录发送消息(
+                    会话标识,
+                    会话类型 or "group",
+                    内容,
+                    appid,
+                    消息ID=文本ID,
+                    引用ID=引用消息ID,
+                    发送时间=_提取发送响应时间(文本结果),
+                )
             except Exception as 文本异常:
                 logger.warning("消息记录图片附带文本发送失败：错误类型=%s", type(文本异常).__name__)
     except Exception as exc:
@@ -1878,7 +2426,16 @@ async def 发送消息(
                     媒体记录 = None
                     if 消息体.get("msg_type") == 7 and 图片字节 is not None:
                         媒体记录 = {"type": "图片", "src": "", "text": 内容}
-                    记录 = 记录发送消息(会话标识, 会话类型 or "group", 展示内容 or "（空消息）", appid, 消息ID=响应ID, 引用ID=引用消息ID, 媒体=媒体记录)
+                    记录 = 记录发送消息(
+                        会话标识,
+                        会话类型 or "group",
+                        展示内容 or "（空消息）",
+                        appid,
+                        消息ID=响应ID,
+                        引用ID=引用消息ID,
+                        媒体=媒体记录,
+                        发送时间=_提取发送响应时间(结果),
+                    )
                     return {"ok": True, "message_id": 响应ID, "message": 记录}
                 错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
@@ -1919,6 +2476,7 @@ async def 发送消息(
         消息ID=响应ID,
         引用ID=引用消息ID,
         媒体=媒体记录,
+        发送时间=_提取发送响应时间(结果),
     )
     return {"ok": True, "message_id": 响应ID, "message": 记录}
 
@@ -2095,21 +2653,11 @@ def _安装消息事件挂钩() -> bool:
         async def 新回调(self: Any, 消息: Any, _原=原回调, _类型=类型) -> Any:
             try:
                 _安装消息发送挂钩()
-                appid = str(_读取字段(_读取字段(self, "platform"), "appid") or "")
-                记录 = 记录收到消息(消息, _类型, appid)
-                if _类型 == "user" and 记录:
-                    用户标识 = str(记录.get("user_id") or "").strip()
-                    会话标识 = str(记录.get("_session") or "").strip()
-                    if 用户标识 and 会话标识:
-                        try:
-                            try:
-                                _后台补查任务.append(asyncio.create_task(_补查用户昵称(会话标识, 用户标识, appid)))
-                            except RuntimeError:
-                                _后台补查任务.append(asyncio.get_event_loop().create_task(_补查用户昵称(会话标识, 用户标识, appid)))
-                        except Exception:
-                            pass
+                # botpy 的事件回调位于网关接收热路径，只做一次非阻塞入队。
+                # 解析、缓存、未读计数、昵称补查和数据库写入由独立 worker 顺序处理。
+                _排队收到消息(self, 消息, _类型)
             except Exception as exc:
-                logger.warning("消息记录事件缓存失败：错误类型=%s", type(exc).__name__)
+                logger.warning("消息记录事件入队失败：错误类型=%s", type(exc).__name__)
             结果 = _原(self, 消息)
             if asyncio.iscoroutine(结果):
                 return await 结果
@@ -2190,68 +2738,99 @@ def _会话标识兜底(session: Any) -> str:
 
 
 def _包装事件发送(发送方法: Any) -> Any:
-    """包装 QQ 官方事件层的发送入口（_post_send）。
-
-    AstrBot 调度器对插件回复调用 event.send()/send_streaming()，最终都汇入
-    QQOfficialMessageEvent._post_send()；这里在真正发送前把机器人消息写入缓存。
-    """
-    if 发送方法 is None or getattr(发送方法, "__module__", "") == __name__:
+    """包装 QQ 官方事件发送入口，只在平台成功返回后记录消息和时间。"""
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
         return None
 
     async def 新发送(self: Any, stream: Any = None, **关键字: Any) -> Any:
+        会话标识 = ""
+        类型 = "user"
+        appid = ""
+        内容 = ""
         try:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
                 会话标识 = str(getattr(getattr(self, "session", None), "session_id", "") or "").strip()
                 消息类型 = getattr(getattr(self, "session", None), "message_type", None)
                 类型 = "group" if "GROUP" in str(消息类型).upper() else "user"
-                appid = ""
                 try:
                     appid = str(getattr(getattr(self, "platform_meta", None), "id", "") or "")
                 except Exception:
                     pass
                 内容 = _链提取文本(缓冲)
-                if 会话标识 and 内容:
-                    记录发送消息(会话标识, 类型, 内容, appid, 发送者昵称="机器人", 来源="bot_send")
         except Exception as exc:
-            logger.warning("消息记录事件发送挂钩失败：错误类型=%s", type(exc).__name__)
+            logger.debug("消息记录事件发送参数提取失败：错误类型=%s", type(exc).__name__)
         结果 = 发送方法(self, stream, **关键字)
         if asyncio.iscoroutine(结果):
-            return await 结果
+            结果 = await 结果
+        try:
+            if 会话标识 and 内容 and 结果 is not None:
+                记录发送消息(
+                    会话标识,
+                    类型,
+                    内容,
+                    appid,
+                    消息ID=_提取发送响应消息ID(结果),
+                    发送者昵称="机器人",
+                    来源="bot_send",
+                    发送时间=_提取发送响应时间(结果),
+                )
+        except Exception as exc:
+            logger.warning("消息记录事件发送成功后记录失败：错误类型=%s", type(exc).__name__)
         return 结果
 
+    setattr(新发送, "__mantou_record_after_send__", True)
     return 新发送
 
 
 def _包装发送方法(发送方法: Any) -> Any:
-    """生成包装后的发送方法：调用前把机器人发送的消息写入缓存。"""
-    if 发送方法 is None or getattr(发送方法, "__module__", "") == __name__:
+    """包装主动会话发送，只在适配器确认发送成功后记录。"""
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
         return None
 
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
+        appid = ""
+        会话标识 = ""
+        类型 = "user"
+        内容 = ""
+        发送前消息ID = ""
         try:
             appid = str(getattr(self, "appid", "") or "")
             会话标识 = _会话标识兜底(session)
             消息类型 = str(getattr(session, "message_type", "") or "")
             类型 = "group" if "GROUP" in 消息类型.upper() else "user"
             内容 = _链提取文本(message_chain)
-            if 会话标识 and 内容:
-                记录发送消息(会话标识, 类型, 内容, appid, 发送者昵称="机器人", 来源="bot_send")
+            发送前消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
         except Exception as exc:
-            logger.warning("消息记录发送挂钩失败：错误类型=%s", type(exc).__name__)
+            logger.debug("消息记录主动发送参数提取失败：错误类型=%s", type(exc).__name__)
         结果 = 发送方法(self, session, message_chain)
         if asyncio.iscoroutine(结果):
-            return await 结果
+            结果 = await 结果
+        try:
+            发送后消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
+            if 会话标识 and 内容 and 发送后消息ID and 发送后消息ID != 发送前消息ID:
+                记录发送消息(
+                    会话标识,
+                    类型,
+                    内容,
+                    appid,
+                    消息ID=发送后消息ID,
+                    发送者昵称="机器人",
+                    来源="bot_send",
+                )
+        except Exception as exc:
+            logger.warning("消息记录主动发送成功后记录失败：错误类型=%s", type(exc).__name__)
         return 结果
 
+    setattr(新发送, "__mantou_record_after_send__", True)
     return 新发送
 
 
 def _安装消息发送挂钩() -> bool:
     """包装平台发送入口，把机器人发送的消息写入缓存。
 
-    双保险：优先包装 QQ 官方适配器类，再包装 AstrBot 平台基类，避免
-    适配器版本差异导致漏记。
+    事件回复和主动会话发送分别包装一次；不再包装 Platform 基类，避免
+    QQOfficialPlatformAdapter 调用基类收尾时把同一条消息重复记录。
     """
     global _发送挂钩已安装
     if _发送挂钩已安装:
@@ -2279,16 +2858,6 @@ def _安装消息发送挂钩() -> bool:
                 已包装 += 1
     except Exception as 异常:
         logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)
-    try:
-        from astrbot.core.platform.platform import Platform as 平台基类
-
-        原基类发送 = getattr(平台基类, "send_by_session", None)
-        新基类发送 = _包装发送方法(原基类发送)
-        if 新基类发送 is not None:
-            setattr(平台基类, "send_by_session", 新基类发送)
-            已包装 += 1
-    except Exception as 异常:
-        logger.warning("消息记录发送挂钩（基类）加载失败：错误类型=%s", type(异常).__name__)
     if 已包装 == 0:
         return False
     _发送挂钩已安装 = True
@@ -2297,7 +2866,10 @@ def _安装消息发送挂钩() -> bool:
 
 
 def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
-    global 当前插件上下文
+    global 当前插件上下文, _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
+    _消息接收入队 = True
+    _昵称补查接收入队 = True
+    _消息持久化接收入队 = True
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:
@@ -2375,6 +2947,8 @@ def _从数据库恢复() -> None:
             if 会话标识 in 备注表:
                 类型 = "group"
         会话 = _取得会话缓存(会话标识, 类型, appid)
+        if 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
+            会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
         if 消息列表:
             会话["messages"] = 消息列表
             最后 = 消息列表[-1]

@@ -24,6 +24,13 @@ except Exception:
 消息记录表名 = "mantou_message_records"
 元数据命名空间 = "message_panel_meta"
 
+_消息写入SQL = (
+    f"INSERT INTO `{消息记录表名}` "
+    "(会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
+    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, raw_message) "
+    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+)
+
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
 _列最大长度: dict[str, int] = {
     "会话标识": 128,
@@ -214,33 +221,34 @@ def _按列宽截断(值: Any, 列名: str) -> str:
     return 文本
 
 
+def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        _按列宽截断(记录.get("_session") or "", "会话标识"),
+        _按列宽截断(记录.get("chat_type") or "group", "消息类型"),
+        _按列宽截断(记录.get("appid") or "", "appid"),
+        _按列宽截断(记录.get("message_id") or "", "message_id"),
+        _按列宽截断(记录.get("user_id") or "", "user_id"),
+        _按列宽截断(记录.get("nickname") or "", "nickname"),
+        str(记录.get("content") or ""),
+        _按列宽截断(记录.get("timestamp") or "", "timestamp"),
+        int(记录.get("ts") or 0),
+        1 if 记录.get("is_self") else 0,
+        _按列宽截断(记录.get("source") or "", "source"),
+        1 if 记录.get("recalled") else 0,
+        json.dumps(记录.get("media") or {}, ensure_ascii=False),
+        _按列宽截断(记录.get("reference_id") or "", "reference_id"),
+        _按列宽截断(记录.get("refidx") or "", "refidx"),
+        str(记录.get("raw_message") or ""),
+    )
+
+
 def _写入消息记录(记录: dict[str, Any]) -> bool:
     连接 = _打开连接()
     if 连接 is None:
         return False
     try:
         with 连接.cursor() as 游标:
-            游标.execute(
-                f"INSERT INTO `{消息记录表名}` (会话标识, 消息类型, appid, message_id, user_id, nickname, content, timestamp, ts, is_self, source, recalled, media, reference_id, refidx, raw_message) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (
-                    _按列宽截断(记录.get("_session") or "", "会话标识"),
-                    _按列宽截断(记录.get("chat_type") or "group", "消息类型"),
-                    _按列宽截断(记录.get("appid") or "", "appid"),
-                    _按列宽截断(记录.get("message_id") or "", "message_id"),
-                    _按列宽截断(记录.get("user_id") or "", "user_id"),
-                    _按列宽截断(记录.get("nickname") or "", "nickname"),
-                    str(记录.get("content") or ""),
-                    _按列宽截断(记录.get("timestamp") or "", "timestamp"),
-                    int(记录.get("ts") or 0),
-                    1 if 记录.get("is_self") else 0,
-                    _按列宽截断(记录.get("source") or "", "source"),
-                    1 if 记录.get("recalled") else 0,
-                    json.dumps(记录.get("media") or {}, ensure_ascii=False),
-                    _按列宽截断(记录.get("reference_id") or "", "reference_id"),
-                    _按列宽截断(记录.get("refidx") or "", "refidx"),
-                    str(记录.get("raw_message") or ""),
-                ),
-            )
+            游标.execute(_消息写入SQL, _消息写入参数(记录))
         连接.commit()
         return True
     except Exception as exc:
@@ -261,6 +269,35 @@ def 写入消息(记录: dict[str, Any]) -> bool:
     if not _MySQL可用():
         return False
     return _写入消息记录(记录)
+
+
+def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
+    """使用单连接、单事务批量写入消息，供异步持久化队列调用。"""
+    有效记录 = [记录 for 记录 in (记录列表 or []) if 记录 and 记录.get("_session")]
+    if not 有效记录 or not _MySQL可用():
+        return False
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        参数列表 = [_消息写入参数(记录) for 记录 in 有效记录]
+        with 连接.cursor() as 游标:
+            游标.executemany(_消息写入SQL, 参数列表)
+        连接.commit()
+        return True
+    except Exception as exc:
+        try:
+            连接.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "消息记录 MySQL 批量写入失败：数量=%d，错误类型=%s",
+            len(有效记录),
+            type(exc).__name__,
+        )
+        return False
+    finally:
+        _关闭连接(连接)
 
 
 def 标记消息撤回(会话标识: str, message_id: str) -> bool:

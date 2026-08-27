@@ -75,6 +75,8 @@ def _注册路由(app: web.Application) -> None:
         ("delete", "/api/qq-reader-auth", 后端._处理QQ阅读登录态删除),
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
+        ("get", "/api/message/ws", 后端._处理消息WebSocket),
+        ("get", "/api/message/events", 后端._处理消息事件),
         ("post", "/api/message/send", 后端._处理消息发送),
         ("post", "/api/message/recall", 后端._处理消息撤回),
         ("post", "/api/message/group-member/mute", 后端._处理消息禁言),
