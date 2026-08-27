@@ -10,7 +10,7 @@
     .shell { min-height:100vh; display:grid; grid-template-columns:252px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); grid-template-areas:"top top" "side main"; }
     .topbar { grid-area:top; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 30px; background:#fff; border-bottom:1px solid var(--line); }
     .brand { display:flex; align-items:center; gap:10px; min-width:0; }
-    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:var(--primary-soft); color:var(--primary); font-size:16px; font-weight:800; }
+    .brand-mark { width:34px; height:34px; flex:0 0 34px; display:grid; place-items:center; border-radius:11px; background:var(--primary-soft); color:var(--primary); font-size:16px; font-weight:800; }
     .brand strong { font-size:16px; letter-spacing:.1px; }
     .version-badge { display:inline-flex; margin-left:7px; padding:3px 8px; border-radius:999px; background:#f3f3f8; color:var(--muted); font-size:11px; font-weight:650; }
     .top-actions { display:flex; align-items:center; gap:16px; }
@@ -377,6 +377,7 @@
       }
       @media (max-width:760px) { .heading-actions { gap:7px; } .updated-label { display:none; } .summary-grid,.page-grid,.runtime-detail,.help-grid { grid-template-columns:1fr; } .shortcut-grid { grid-template-columns:1fr; } .runtime-page-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standalone-card { margin-top:15px; } .safe-list > div,.settings-row { min-height:56px; } .config-fields,.qq-auth-row { grid-template-columns:1fr; } .group-account { grid-template-columns:minmax(0,1fr) 70px; } .group-account .outline-button { grid-column:1 / -1; } }
       @media (max-width:760px) { .theme-control { flex:0 0 auto; gap:2px; padding:3px 4px; } .theme-control-label { display:none; } .theme-control select { width:80px; max-width:80px; padding-right:13px; } }
+      @media (max-width:340px) { .topbar { gap:8px; padding-left:12px; padding-right:12px; } .brand { flex:0 0 auto; gap:7px; } .brand > div { max-width:64px; min-width:0; } .brand strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; } .version-badge { display:none; } .top-actions { min-width:0; gap:5px; } .status-dot { font-size:0; gap:0; } .status-dot::before { width:6px; height:6px; } .theme-control select { width:68px; max-width:68px; } .admin-chip { gap:3px; padding-right:4px; } #admin-name { display:none; } }
 
       /* ===== 可选深色模式 ===== */
       :root[data-theme="dark"] { color-scheme:dark; --ink:#e8eaf2; --muted:#9aa0b5; --soft:#6f7590; --line:#2c3044; --bg:#171a24; --panel:#1f2330; --primary:#8b85ff; --primary-dark:#a29cff; --primary-soft:#2b2b4c; --mint:#16382c; --mint-ink:#55d8a2; --peach:#3a2a22; --peach-ink:#e5977a; --yellow:#38301a; --yellow-ink:#d9ac49; --pink:#38202e; --pink-ink:#e287ae; --shadow:0 10px 30px rgba(0,0,0,.28); }
