@@ -7,6 +7,7 @@ import copy
 import json
 import random
 import re
+import threading
 import time
 from datetime import datetime as _日期类
 from datetime import timedelta as _时间差
@@ -43,6 +44,7 @@ except Exception as 导入异常:
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
+_元数据写入锁 = globals().get("_元数据写入锁") or threading.RLock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
@@ -848,11 +850,12 @@ def _保存本地昵称(会话标识: str, 昵称: str) -> None:
     if not 会话标识 or not 昵称:
         return
     try:
-        数据 = _读取本地缓存文件()
-        昵称表 = 数据.setdefault("nicknames", {})
-        if str(昵称表.get(会话标识) or "") != 昵称:
-            昵称表[会话标识] = 昵称
-            _写入本地缓存文件(数据)
+        with _元数据写入锁:
+            数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
+            昵称表 = 数据.setdefault("nicknames", {})
+            if str(昵称表.get(会话标识) or "") != 昵称:
+                昵称表[会话标识] = 昵称
+                _持久化元数据字段("nicknames", 昵称表, 数据)
     except Exception as exc:
         logger.warning("私聊昵称持久化失败：错误类型=%s", type(exc).__name__)
 
@@ -1425,50 +1428,50 @@ def 获取群QQ号(会话标识: str) -> str:
 
 
 def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> bool:
-    数据 = copy.deepcopy(_读取本地缓存文件())
-    备注表 = 数据.setdefault("remarks", {})
-    现有 = 备注表.setdefault(会话标识, {})
-    if 备注:
-        现有["remark"] = 备注
-    else:
-        现有.pop("remark", None)
-    if 群QQ:
-        现有["group_qq"] = 群QQ
-    elif 群QQ == "":
-        现有.pop("group_qq", None)
-    备注表[会话标识] = 现有
-    return _写入本地缓存文件(数据)
+    with _元数据写入锁:
+        数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
+        备注表 = 数据.setdefault("remarks", {})
+        现有 = 备注表.setdefault(会话标识, {})
+        if 备注:
+            现有["remark"] = 备注
+        else:
+            现有.pop("remark", None)
+        if 群QQ:
+            现有["group_qq"] = 群QQ
+        elif 群QQ == "":
+            现有.pop("group_qq", None)
+        备注表[会话标识] = 现有
+        return _持久化元数据字段("remarks", 备注表, 数据)
 
 
 def 删除群备注(会话标识: str) -> bool:
     """删除某个会话的全部备注与群号信息。"""
-    数据 = copy.deepcopy(_读取本地缓存文件())
-    备注表 = 数据.get("remarks") or {}
-    if 会话标识 in 备注表:
-        del 备注表[会话标识]
-        数据["remarks"] = 备注表
-        return _写入本地缓存文件(数据)
-    return True
+    with _元数据写入锁:
+        数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
+        备注表 = 数据.get("remarks") or {}
+        if 会话标识 in 备注表:
+            del 备注表[会话标识]
+            return _持久化元数据字段("remarks", 备注表, 数据)
+        return True
 
 
 def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
-    """置顶或取消置顶会话，置顶顺序持久化到本地缓存。"""
+    """置顶或取消置顶会话，置顶顺序持久化到元数据存储。"""
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return False
-    # 复制顶层数据，写库失败时不把未持久化的置顶状态留在内存里。
-    数据 = dict(_读取本地缓存文件())
-    置顶列表 = [str(x) for x in (数据.get("pinned") or []) if str(x or "").strip()]
-    已置顶 = 会话标识 in 置顶列表
-    if 置顶 and not 已置顶:
-        置顶列表.insert(0, 会话标识)
-        数据["pinned"] = 置顶列表
-        return _写入本地缓存文件(数据)
-    elif not 置顶 and 已置顶:
-        置顶列表 = [x for x in 置顶列表 if x != 会话标识]
-        数据["pinned"] = 置顶列表
-        return _写入本地缓存文件(数据)
-    return True
+    with _元数据写入锁:
+        # 置顶操作强制读取数据库最新列表，避免网页多开或并发操作使用旧缓存。
+        数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
+        置顶列表 = [str(x) for x in (数据.get("pinned") or []) if str(x or "").strip()]
+        已置顶 = 会话标识 in 置顶列表
+        if 置顶 and not 已置顶:
+            置顶列表.insert(0, 会话标识)
+            return _持久化元数据字段("pinned", 置顶列表, 数据)
+        if not 置顶 and 已置顶:
+            置顶列表 = [x for x in 置顶列表 if x != 会话标识]
+            return _持久化元数据字段("pinned", 置顶列表, 数据)
+        return True
 
 
 _本地缓存内存: dict[str, Any] | None = None
@@ -1478,40 +1481,42 @@ _本地缓存时间: float = 0.0
 def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
     """读取置顶/备注/昵称元数据：优先 MySQL，未配置数据库时仅内存缓存。"""
     global _本地缓存内存, _本地缓存时间
-    now = time.time()
-    if not 强制刷新 and _本地缓存内存 is not None and now - _本地缓存时间 < 5.0:
-        return _本地缓存内存
-    try:
-        if _消息存储 is not None:
-            元数据 = _消息存储.读取全部元数据()
-            if 元数据:
-                _本地缓存内存 = 元数据
-                _本地缓存时间 = now
-                return 元数据
-    except Exception as exc:
-        logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
-    return dict(_本地缓存内存 or {})
+    with _元数据写入锁:
+        now = time.time()
+        if not 强制刷新 and _本地缓存内存 is not None and now - _本地缓存时间 < 5.0:
+            return copy.deepcopy(_本地缓存内存)
+        try:
+            if _消息存储 is not None:
+                元数据 = _消息存储.读取全部元数据()
+                if 元数据:
+                    _本地缓存内存 = copy.deepcopy(元数据)
+                    _本地缓存时间 = now
+                    return copy.deepcopy(_本地缓存内存)
+        except Exception as exc:
+            logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
+        return copy.deepcopy(_本地缓存内存 or {})
 
 
-def _写入本地缓存文件(数据: dict[str, Any]) -> bool:
-    """写入置顶/备注/昵称元数据，并返回是否已全部提交到 MySQL。"""
+def _持久化元数据字段(字段名: str, 值: Any, 当前数据: dict[str, Any] | None = None) -> bool:
+    """只提交一个元数据字段，避免置顶、备注和昵称并发操作互相覆盖。"""
     global _本地缓存内存, _本地缓存时间
     if _消息存储 is None:
+        数据 = copy.deepcopy(当前数据 or _本地缓存内存 or {})
+        数据[字段名] = copy.deepcopy(值)
         _本地缓存内存 = 数据
         _本地缓存时间 = time.time()
         return False
-    成功 = True
-    for 键, 值 in (数据 or {}).items():
-        try:
-            if not _消息存储.写入元数据(键, 值):
-                成功 = False
-        except Exception as 存储异常:
-            logger.debug("消息记录元数据入库失败：错误类型=%s", type(存储异常).__name__)
-            成功 = False
-    if 成功:
-        _本地缓存内存 = 数据
-        _本地缓存时间 = time.time()
-    return 成功
+    try:
+        if not _消息存储.写入元数据(字段名, 值):
+            return False
+    except Exception as 存储异常:
+        logger.debug("消息记录元数据入库失败：字段=%s，错误类型=%s", 字段名, type(存储异常).__name__)
+        return False
+    数据 = copy.deepcopy(当前数据 or _本地缓存内存 or {})
+    数据[字段名] = copy.deepcopy(值)
+    _本地缓存内存 = 数据
+    _本地缓存时间 = time.time()
+    return True
 
 
 def 标记群信息待刷新(会话标识: str) -> None:

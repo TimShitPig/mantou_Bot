@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.52.12"
+控制台版本 = "5.53.2"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1439,15 +1439,23 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
         return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     会话标识 = str((数据 or {}).get("chat_id") or "").strip()
-    置顶 = bool((数据 or {}).get("pinned"))
+    原始置顶 = (数据 or {}).get("pinned")
+    if isinstance(原始置顶, bool):
+        置顶 = 原始置顶
+    elif isinstance(原始置顶, (int, float)):
+        置顶 = bool(原始置顶)
+    else:
+        置顶 = str(原始置顶 or "").strip().lower() in {"1", "true", "yes", "on", "置顶"}
     if not 会话标识:
         return _控制台错误(400, "参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        if not 消息记录.设置会话置顶(会话标识, 置顶):
+        if not await asyncio.to_thread(消息记录.设置会话置顶, 会话标识, 置顶):
             return _控制台错误(409, "数据库未保存，会话置顶未生效")
-        return web.json_response({"ok": True, "message": "已置顶" if 置顶 else "已取消置顶"})
+        return web.json_response(
+            {"ok": True, "pinned": 置顶, "message": "已置顶" if 置顶 else "已取消置顶"}
+        )
     except Exception as exc:
         logger.warning("帮助控制台会话置顶失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "置顶操作失败，请稍后再试")

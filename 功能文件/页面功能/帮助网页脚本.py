@@ -157,7 +157,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, chatListRequest:0, quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -274,7 +274,7 @@
             const chatId = el.dataset.msgChat; const chatType = el.dataset.msgType; const pinned = el.dataset.msgPinned === '1';
             const items = [];
             items.push({label: pinned ? '取消置顶' : '置顶', action: async () => {
-              try { await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(pinned ? '已取消置顶' : '已置顶'); loadMsgChats(); }
+              try { const result = await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(result.pinned ? '已置顶' : '已取消置顶'); await loadMsgChats(); }
               catch (error) { toast(error.message || '操作失败'); }
             }});
             if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(); }).catch((error) => toast(error.message || '刷新失败')); }});
@@ -287,8 +287,15 @@
       $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox')) closeMsgLightbox(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
       const loadMsgChats = async () => {
-        try { const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})}); renderMsgChats(data); }
-        catch (error) { if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
+        const requestId = Number(msgState.chatListRequest || 0) + 1;
+        msgState.chatListRequest = requestId;
+        try {
+          const data = await api('message/chats', {method:'POST', body:JSON.stringify({filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50})});
+          // 搜索、实时刷新或置顶操作可能同时发起请求，只显示最后一次请求的结果。
+          if (requestId !== msgState.chatListRequest) return;
+          renderMsgChats(data);
+        }
+        catch (error) { if (requestId !== msgState.chatListRequest) return; if (error.status === 401) showAuthError(error); else $('msg-chats').innerHTML = `<div class="msg-empty">${esc(error.message)}</div>`; }
       };
       const closeMsgEvents = () => {
         if (msgState.eventReconnect) { clearTimeout(msgState.eventReconnect); msgState.eventReconnect = null; }
