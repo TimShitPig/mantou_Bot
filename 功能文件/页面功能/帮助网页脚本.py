@@ -56,6 +56,8 @@
         if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
         if (next === 'messages') { connectMsgEvents(); loadMsgChats(); if (msgState.chatId) loadMsgHistory(); }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
+        const scrollContainer = document.querySelector('.main');
+        if (scrollContainer) scrollContainer.scrollTop = 0;
         window.scrollTo({top:0, behavior:'auto'});
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;

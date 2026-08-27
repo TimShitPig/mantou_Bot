@@ -379,6 +379,22 @@
       @media (max-width:760px) { .theme-control { flex:0 0 auto; gap:2px; padding:3px 4px; } .theme-control-label { display:none; } .theme-control select { width:80px; max-width:80px; padding-right:13px; } }
       @media (max-width:340px) { .topbar { gap:8px; padding-left:12px; padding-right:12px; } .brand { flex:0 0 auto; gap:7px; } .brand > div { max-width:64px; min-width:0; } .brand strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; } .version-badge { display:none; } .top-actions { min-width:0; gap:5px; } .status-dot { font-size:0; gap:0; } .status-dot::before { width:6px; height:6px; } .theme-control select { width:68px; max-width:68px; } .admin-chip { gap:3px; padding-right:4px; } #admin-name { display:none; } }
 
+      /* 桌面端让右侧内容独立滚动，侧栏保持视口高度，不随页面内容拉伸。 */
+      @media (min-width:761px) {
+        html,body { height:100%; }
+        body { overflow:hidden; }
+        .shell { height:100vh; min-height:100vh; overflow:hidden; }
+        .sidebar { position:sticky; top:0; align-self:start; height:calc(100vh - 62px); min-height:0; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+        .main { min-height:0; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; }
+      }
+      @media (max-width:760px) {
+        html,body { height:auto; min-height:100%; }
+        body { overflow-x:hidden; overflow-y:auto; }
+        .shell { height:auto; min-height:100vh; overflow:visible; }
+        .sidebar { position:static; height:auto; max-height:none; overflow:visible; }
+        .main { min-height:0; overflow:visible; }
+      }
+
       /* ===== 可选深色模式 ===== */
       :root[data-theme="dark"] { color-scheme:dark; --ink:#e8eaf2; --muted:#9aa0b5; --soft:#6f7590; --line:#2c3044; --bg:#171a24; --panel:#1f2330; --primary:#8b85ff; --primary-dark:#a29cff; --primary-soft:#2b2b4c; --mint:#16382c; --mint-ink:#55d8a2; --peach:#3a2a22; --peach-ink:#e5977a; --yellow:#38301a; --yellow-ink:#d9ac49; --pink:#38202e; --pink-ink:#e287ae; --shadow:0 10px 30px rgba(0,0,0,.28); }
       :root[data-theme="dark"] body { background:var(--bg); color:var(--ink); }
