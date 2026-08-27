@@ -266,6 +266,15 @@ def _写入消息记录(记录: dict[str, Any]) -> bool:
         return False
     try:
         with 连接.cursor() as 游标:
+            会话标识 = str(记录.get("_session") or "")
+            消息ID = str(记录.get("message_id") or "")
+            if 消息ID:
+                游标.execute(
+                    f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
+                    (会话标识, 消息ID),
+                )
+                if 游标.fetchone():
+                    return True
             游标.execute(_消息写入SQL, _消息写入参数(记录))
         连接.commit()
         return True
@@ -294,13 +303,34 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     有效记录 = [记录 for 记录 in (记录列表 or []) if 记录 and 记录.get("_session")]
     if not 有效记录 or not _MySQL可用():
         return False
+    去重记录: list[dict[str, Any]] = []
+    已见键: set[tuple[str, str]] = set()
+    for 记录 in 有效记录:
+        消息ID = str(记录.get("message_id") or "")
+        键 = (str(记录.get("_session") or ""), 消息ID)
+        if 消息ID and 键 in 已见键:
+            continue
+        if 消息ID:
+            已见键.add(键)
+        去重记录.append(记录)
     连接 = _打开连接()
     if 连接 is None:
         return False
     try:
-        参数列表 = [_消息写入参数(记录) for 记录 in 有效记录]
         with 连接.cursor() as 游标:
-            游标.executemany(_消息写入SQL, 参数列表)
+            待写入: list[tuple[Any, ...]] = []
+            for 记录 in 去重记录:
+                消息ID = str(记录.get("message_id") or "")
+                if 消息ID:
+                    游标.execute(
+                        f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
+                        (str(记录.get("_session") or ""), 消息ID),
+                    )
+                    if 游标.fetchone():
+                        continue
+                待写入.append(_消息写入参数(记录))
+            if 待写入:
+                游标.executemany(_消息写入SQL, 待写入)
         连接.commit()
         return True
     except Exception as exc:
@@ -310,7 +340,7 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
             pass
         logger.warning(
             "消息记录 MySQL 批量写入失败：数量=%d，错误类型=%s",
-            len(有效记录),
+            len(去重记录),
             type(exc).__name__,
         )
         return False

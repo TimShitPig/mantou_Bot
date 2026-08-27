@@ -228,6 +228,53 @@ def _历史消息排序键(记录: dict[str, Any]) -> tuple[int, int, str]:
     return int(记录.get("ts") or 0), 消息序号, str(记录.get("message_id") or "")
 
 
+def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any]) -> dict[str, Any]:
+    """合并同一 message_id 的重复事件，保留较完整的消息资料。"""
+    if not isinstance(已有记录, dict) or not isinstance(新记录, dict):
+        return 已有记录
+    for 字段 in (
+        "user_id", "nickname", "content", "timestamp", "source", "raw_message",
+        "reference_id", "refidx", "chat_type", "appid",
+    ):
+        新值 = 新记录.get(字段)
+        if 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
+            已有记录[字段] = 新值
+    旧媒体 = 已有记录.get("media")
+    新媒体 = 新记录.get("media")
+    if isinstance(新媒体, dict) and 新媒体:
+        if not isinstance(旧媒体, dict) or not 旧媒体.get("src"):
+            已有记录["media"] = dict(新媒体)
+        elif 新媒体.get("text") and not 旧媒体.get("text"):
+            旧媒体["text"] = 新媒体.get("text")
+    已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
+    已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
+    try:
+        已有记录["ts"] = max(int(已有记录.get("ts") or 0), int(新记录.get("ts") or 0))
+    except (TypeError, ValueError):
+        pass
+    return 已有记录
+
+
+def _去重消息列表(消息列表: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """按会话内 message_id 去重，兼容修复前已经落库的重复记录。"""
+    结果: list[dict[str, Any]] = []
+    索引: dict[str, int] = {}
+    for 消息 in 消息列表 or []:
+        if not isinstance(消息, dict):
+            continue
+        消息ID = str(消息.get("message_id") or "").strip()
+        if not 消息ID:
+            结果.append(消息)
+            continue
+        已有位置 = 索引.get(消息ID)
+        if 已有位置 is None:
+            索引[消息ID] = len(结果)
+            结果.append(消息)
+        else:
+            _合并重复消息(结果[已有位置], 消息)
+    return 结果
+
+
 def _规范会话标识(会话: str, 类型: str) -> str:
     """会话统一使用 openid 作为会话标识。"""
     return str(会话 or "").strip()
@@ -1035,49 +1082,37 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
-        已存在 = bool(消息ID) and any(
-            str(x.get("message_id") or "") == 消息ID for x in (会话["messages"] or [])
+        已有记录 = next(
+            (
+                x for x in reversed(会话["messages"] or [])
+                if 消息ID and str(x.get("message_id") or "") == 消息ID
+            ),
+            None,
         )
-        if not 已存在:
+        新增记录 = 已有记录 is None
+        if 新增记录:
             会话["messages"].append(记录)
             if not is_self and not 是机器人 and not _是管理员本人(成员标识):
                 会话["unread"] = int(会话.get("unread") or 0) + 1
                 _持久化未读数(会话标识, 会话["unread"])
-        elif not is_self:
-            # 同 message_id 但非回推（如重复事件）：仍追加，避免丢失真实消息
-            会话["messages"].append(记录)
-        elif 回显自己:
-            # 回推消息：用回推里的真实媒体（如图片 URL）补充发送记录，避免只显示"[图片]"占位文本
-            try:
-                回显媒体 = _提取媒体字段(内容, 消息)
-                目标 = next(
-                    (x for x in (会话["messages"] or []) if str(x.get("message_id") or "") == 消息ID),
-                    None,
-                )
-                if 目标 is not None:
-                    if 回显媒体 and 回显媒体.get("src"):
-                        目标["media"] = 回显媒体
-                    if 回显媒体 and 回显媒体.get("src") and 回显媒体.get("type") == "图片":
-                        目标["content"] = re.sub(r"^\[(?:图片|媒体|media)]\s*", "", 内容 or 目标.get("content") or "").strip()
-                    else:
-                        目标["content"] = 内容 or 目标.get("content") or ""
-                    目标["refidx"] = 自身REFIDX or 目标.get("refidx") or ""
-            except Exception:
-                pass
-        if _消息存储 is not None:
+        else:
+            # QQ 官方可能同时投递 at/group 两种回调；同一 message_id 只保留一条。
+            记录 = _合并重复消息(已有记录, 记录)
+        if _消息存储 is not None and 新增记录:
             try:
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
-        if 内容 and not 已存在:
+        if 内容 and 新增记录:
             会话["last_content"] = 内容
             会话["last_nickname"] = 昵称
         新时间戳 = _转数字时间戳(时间戳) or int(time.time())
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 新时间戳)
         # 先通知网页再等待数据库线程；这一步必须保持在事件循环内轻量完成。
-        _推送消息事件(记录, 会话)
+        if 新增记录:
+            _推送消息事件(记录, 会话)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -1221,6 +1256,31 @@ def 记录发送消息(
     try:
         会话 = _取得会话缓存(会话标识, 类型, appid)
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
+        if 消息ID:
+            已有记录 = next(
+                (
+                    x for x in reversed(会话["messages"] or [])
+                    if str(x.get("message_id") or "") == str(消息ID)
+                ),
+                None,
+            )
+            if 已有记录 is not None:
+                _合并重复消息(
+                    已有记录,
+                    {
+                        "message_id": str(消息ID),
+                        "content": 内容,
+                        "media": 媒体 or _提取媒体字段(内容),
+                        "reference_id": 引用ID or "",
+                        "is_self": True,
+                        "source": 来源 or "web_panel",
+                        "chat_type": 类型,
+                        "appid": str(appid or ""),
+                        "ts": 成功时间戳,
+                    },
+                )
+                自己发送消息ID[str(消息ID)] = time.time()
+                return 已有记录
         发送序号 += 1
         记录: dict[str, Any] = {
             "id": 发送序号,
@@ -2025,9 +2085,12 @@ def _数据库历史消息(
         )
         if not 行列表:
             return None
-        会话消息: list[dict[str, Any]] = [_规范化历史消息(x) for x in reversed(行列表)]
+        原始会话消息: list[dict[str, Any]] = [
+            _规范化历史消息(x) for x in reversed(行列表)
+        ]
+        原始数量 = len(原始会话消息)
+        会话消息: list[dict[str, Any]] = _去重消息列表(原始会话消息)
         会话消息.sort(key=_历史消息排序键)
-        原始数量 = len(会话消息)
         返回消息 = 会话消息[-limit:]
         # 消息先写入内存再异步落库；数据库查询可能早于写入线程完成，
         # 因此把本进程尚未出现在本页的接收/发送记录一起合并，避免实时消息延迟。
@@ -2056,6 +2119,7 @@ def _数据库历史消息(
             if 记录键 not in 已有记录键:
                 返回消息.append(消息项)
                 已有记录键.add(记录键)
+        返回消息 = _去重消息列表(返回消息)
         返回消息.sort(key=_历史消息排序键)
         返回消息 = 返回消息[-limit:]
         最后消息 = 返回消息[-1] if 返回消息 else {}
@@ -2131,7 +2195,9 @@ def 获取消息历史(
             "group_info": 获取缓存的群信息(会话标识),
         }
     消息列表 = 会话.get("messages") or []
-    会话消息: list[dict[str, Any]] = [_规范化历史消息(m) for m in 消息列表]
+    会话消息: list[dict[str, Any]] = _去重消息列表(
+        [_规范化历史消息(m) for m in 消息列表]
+    )
     会话消息.sort(key=_历史消息排序键)
     try:
         before_id = max(0, int(before_id or 0))
@@ -2148,7 +2214,7 @@ def 获取消息历史(
     返回消息 = 会话消息[-limit:]
     最后消息 = 会话消息[-1] if 会话消息 else {}
     引用映射: dict[str, dict[str, str]] = {}
-    消息索引 = {str(m.get("message_id") or ""): m for m in 消息列表}
+    消息索引 = {str(m.get("message_id") or ""): m for m in 会话消息 if m.get("message_id")}
     for 消息记录项 in 返回消息:
         引用ID = str(消息记录项.get("reference_id") or "").strip()
         if not 引用ID or 引用ID in 引用映射:
@@ -2994,6 +3060,10 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
 
 def _从数据库恢复() -> None:
     """启动/重载时从 MySQL 恢复会话与最近消息，置顶/备注/昵称随元数据恢复。"""
+    # 热重载会保留旧模块的内存缓存，无论是否配置数据库都先清掉旧重复。
+    for 会话 in 消息缓存.values():
+        if isinstance(会话, dict):
+            会话["messages"] = _去重消息列表(会话.get("messages") or [])
     if _消息存储 is None:
         return
     try:
@@ -3087,7 +3157,10 @@ def _从数据库恢复() -> None:
             continue
         消息列表 = []
         try:
-            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话最大消息数) or [])]
+            消息列表 = _去重消息列表([
+                _规范化历史消息(x)
+                for x in (_消息存储.读取会话消息(会话标识, 每会话最大消息数) or [])
+            ])
             消息列表.sort(key=_历史消息排序键)
         except Exception as exc:
             logger.debug("消息记录会话恢复失败：错误类型=%s", type(exc).__name__)

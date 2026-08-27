@@ -505,6 +505,16 @@
         exitMultiMode(); loadMsgHistory();
       };
       const msgMessageKey = (message) => String(message?.message_id || message?.id || '');
+      const dedupeMsgMessages = (messages) => {
+        const seen = new Set();
+        return (Array.isArray(messages) ? messages : []).filter((message) => {
+          const key = msgMessageKey(message);
+          if (!key) return true;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
       const msgBodyNearBottom = (body, threshold = 56) => Boolean(body) && body.scrollHeight - body.scrollTop - body.clientHeight <= threshold;
       const clearMsgNewMessages = () => {
         msgState.pendingNewMessages = 0;
@@ -535,7 +545,7 @@
           member_profiles:{...(previousData.member_profiles || {}), ...(data.member_profiles || {})},
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
-        const msgs = data.messages || [];
+        const msgs = dedupeMsgMessages(data.messages || []);
         msgState.historyData = {...data, messages:msgs};
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         updateMsgHead(data);
@@ -742,7 +752,7 @@
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:120})});
           if (requestId !== msgState.historyRequest || requestChatId !== msgState.chatId || requestChatType !== msgState.chatType) return;
-          const incoming = data.messages || [];
+          const incoming = dedupeMsgMessages(data.messages || []);
           if (quiet && !older) {
             updateMsgHead(data);
             const newLast = msgMessageKey(incoming[incoming.length - 1]);
@@ -756,7 +766,7 @@
           const renderTop = body?.scrollTop ?? previousTop;
           const renderHeight = body?.scrollHeight ?? previousHeight;
           const renderNearBottom = newChat || msgBodyNearBottom(body);
-          msgState.messages = older ? [...incoming, ...msgState.messages] : incoming;
+          msgState.messages = older ? dedupeMsgMessages([...incoming, ...msgState.messages]) : incoming;
           renderMsgMessages(
             {...data, messages: msgState.messages},
             {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
