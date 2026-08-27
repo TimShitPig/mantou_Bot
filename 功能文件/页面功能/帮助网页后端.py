@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import hmac
 import inspect
 import ipaddress
@@ -11,6 +13,7 @@ import logging
 import re
 import secrets
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -25,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.54.2"
+控制台版本 = "5.54.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -58,6 +61,38 @@ class 帮助网页服务:
 当前帮助网页配置: Any = globals().get("当前帮助网页配置")
 控制台会话: dict[str, float] = globals().get("控制台会话") or {}
 控制台会话身份: dict[str, str] = globals().get("控制台会话身份") or {}
+_控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
+_控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
+控制台执行器最大并发数 = 4
+
+
+def _获取控制台执行器() -> ThreadPoolExecutor:
+    """为网页数据库读写提供独立线程池，避免下载任务占满默认执行器。"""
+    global _控制台执行器
+    with _控制台执行器锁:
+        if _控制台执行器 is None or getattr(_控制台执行器, "_shutdown", False):
+            _控制台执行器 = ThreadPoolExecutor(
+                max_workers=控制台执行器最大并发数,
+                thread_name_prefix="mantou-console",
+            )
+        return _控制台执行器
+
+
+async def _控制台线程执行(函数: Any, *参数: Any, **关键字参数: Any) -> Any:
+    """把可能阻塞的控制台操作移出事件循环和下载默认线程池。"""
+    loop = asyncio.get_running_loop()
+    调用 = partial(函数, *参数, **关键字参数)
+    return await loop.run_in_executor(_获取控制台执行器(), 调用)
+
+
+def 关闭控制台执行器() -> None:
+    """停止网页服务时释放独立执行器，重载后重新建立。"""
+    global _控制台执行器
+    with _控制台执行器锁:
+        执行器 = _控制台执行器
+        _控制台执行器 = None
+    if 执行器 is not None:
+        执行器.shutdown(wait=False, cancel_futures=True)
 
 插件配置字段定义: dict[str, dict[str, Any]] = {
     "group_file_cleanup_admin_qq": {
@@ -989,7 +1024,7 @@ async def _处理控制台数据(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
     try:
-        数据 = await asyncio.to_thread(
+        数据 = await _控制台线程执行(
             _读取控制台数据, _读取当前控制台身份(request)
         )
         return web.json_response(数据, headers={"Cache-Control": "no-store"})
@@ -1031,7 +1066,7 @@ async def _处理小说开关(request: web.Request) -> web.Response:
             raise ValueError("unknown feature")
 
     try:
-        await asyncio.to_thread(_写入)
+        await _控制台线程执行(_写入)
         return web.json_response({"ok": True})
     except Exception as exc:
         logger.warning("帮助控制台小说开关写入失败：错误类型=%s", type(exc).__name__)
@@ -1052,7 +1087,7 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
         写入运行状态值(当前帮助网页配置, "novel_share_pan", "active", 网盘名)
 
     try:
-        await asyncio.to_thread(_写入)
+        await _控制台线程执行(_写入)
         return web.json_response({"ok": True})
     except Exception as exc:
         logger.warning("帮助控制台主网盘切换失败：错误类型=%s", type(exc).__name__)
@@ -1142,10 +1177,10 @@ async def _处理网盘账号列表(request: web.Request) -> web.Response:
 
         if 平台 == "夸克" and request.query.get("refresh") == "1":
             await 网盘Cookie._刷新夸克账号资料(当前帮助网页配置)
-        摘要 = await asyncio.to_thread(
+        摘要 = await _控制台线程执行(
             网盘Cookie.获取网盘账号摘要, 当前帮助网页配置, 平台
         )
-        当前序号 = await asyncio.to_thread(
+        当前序号 = await _控制台线程执行(
             网盘Cookie.获取当前网盘账号序号, 当前帮助网页配置, 平台
         )
         return web.json_response(
@@ -1174,7 +1209,7 @@ async def _处理网盘账号新增(request: web.Request) -> web.Response:
         名称 = 手机号 = ""
         if 平台 == "夸克":
             名称, 手机号 = await 网盘Cookie._获取夸克账号资料(解析结果[1])
-        序号 = await asyncio.to_thread(
+        序号 = await _控制台线程执行(
             网盘Cookie._保存网盘Cookie,
             当前帮助网页配置,
             平台,
@@ -1204,7 +1239,7 @@ async def _处理网盘账号删除(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.网盘功能 import 网盘Cookie
 
-        成功, _ = await asyncio.to_thread(
+        成功, _ = await _控制台线程执行(
             网盘Cookie._删除网盘账号, 当前帮助网页配置, 平台, 序号
         )
         if not 成功:
@@ -1230,7 +1265,7 @@ async def _处理网盘账号选择(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.网盘功能 import 网盘Cookie
 
-        成功, _ = await asyncio.to_thread(
+        成功, _ = await _控制台线程执行(
             网盘Cookie.设置网盘账号序号按群标识,
             当前帮助网页配置,
             平台,
@@ -1286,8 +1321,8 @@ async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
             return _控制台错误(400, "QQ阅读登录态格式无效")
         if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
             return _控制台错误(409, "数据库未配置，登录态未保存")
-        await asyncio.to_thread(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, 登录态)
-        await asyncio.to_thread(QQ阅读._应用QQ阅读登录态, 登录态)
+        await _控制台线程执行(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, 登录态)
+        await _控制台线程执行(QQ阅读._应用QQ阅读登录态, 登录态)
         return web.json_response({"ok": True, "message": "QQ阅读登录态已保存"})
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读登录态保存失败：错误类型=%s", type(exc).__name__)
@@ -1332,7 +1367,7 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await asyncio.to_thread(
+        结果 = await _控制台线程执行(
             消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
         )
         try:
@@ -1371,7 +1406,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await asyncio.to_thread(
+        结果 = await _控制台线程执行(
             消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
         )
         try:
@@ -1604,7 +1639,7 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        if not await asyncio.to_thread(消息记录.设置会话置顶, 会话标识, 置顶):
+        if not await _控制台线程执行(消息记录.设置会话置顶, 会话标识, 置顶):
             return _控制台错误(409, "数据库未保存，会话置顶未生效")
         return web.json_response(
             {"ok": True, "pinned": 置顶, "message": "已置顶" if 置顶 else "已取消置顶"}
@@ -1668,12 +1703,12 @@ async def _处理群备注(request: web.Request) -> web.Response:
             }
             return web.json_response({"ok": True, **结果})
         if (数据 or {}).get("action") == "delete":
-            if not await asyncio.to_thread(消息记录.删除群备注, 会话标识):
+            if not await _控制台线程执行(消息记录.删除群备注, 会话标识):
                 return _控制台错误(409, "备注删除失败")
             return web.json_response({"ok": True, "message": "备注已删除"})
         备注 = str((数据 or {}).get("remark") or "").strip()
         群QQ = str((数据 or {}).get("group_qq") or "").strip()
-        if not await asyncio.to_thread(消息记录.保存群备注, 会话标识, 备注, 群QQ):
+        if not await _控制台线程执行(消息记录.保存群备注, 会话标识, 备注, 群QQ):
             return _控制台错误(409, "备注保存失败")
         return web.json_response({"ok": True, "message": "备注已保存"})
     except Exception as exc:

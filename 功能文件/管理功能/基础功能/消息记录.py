@@ -2030,7 +2030,17 @@ def _数据库聚合聊天项(
         if not 骨架:
             return None
         最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
-        最后消息表 = _消息存储.批量读取最后消息(最后id列表) if 最后id列表 else {}
+        # 会话列表只需最后消息的预览和元数据，不把卡片原文/媒体字段整批读回。
+        if 最后id列表:
+            # 热重载期间可能暂时仍持有旧版存储模块，保留完整读取作为兼容退路。
+            读取摘要 = getattr(_消息存储, "批量读取最后消息摘要", None)
+            if not callable(读取摘要):
+                读取摘要 = getattr(_消息存储, "批量读取最后消息", None)
+            if not callable(读取摘要):
+                raise AttributeError("消息存储缺少最后消息读取方法")
+            最后消息表 = 读取摘要(最后id列表)
+        else:
+            最后消息表 = {}
         本地备注表 = (本地数据.get("remarks") or {})
         持久化未读表 = _读取全部持久化未读数()
         聊天项: list[dict[str, Any]] = []

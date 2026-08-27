@@ -151,13 +151,13 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
 async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
     """停止网页服务并清理内存会话。"""
 
-    if 服务 is None:
-        return
     try:
-        await 服务.runner.cleanup()
+        if 服务 is not None:
+            await 服务.runner.cleanup()
     except Exception as exc:
         logger.warning("帮助控制台停止失败：错误类型=%s", type(exc).__name__)
     finally:
+        后端.关闭控制台执行器()
         if 后端.当前帮助网页服务 is 服务:
             后端.当前帮助网页服务 = None
             后端.网页服务启动状态 = None

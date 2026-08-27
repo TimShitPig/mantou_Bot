@@ -501,6 +501,43 @@ def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
     return 结果
 
 
+def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, Any]]:
+    """只读取会话列表需要的最后消息字段。
+
+    会话列表只展示昵称、时间和文本预览，不需要消息原文和媒体 JSON。
+    这里保持与 ``_行转记录`` 相同的列顺序，用空字段替代两个大字段，
+    避免列表请求把历史卡片/原始消息一起从 MySQL 传回 Python。
+    """
+    结果: dict[int, dict[str, Any]] = {}
+    if not id列表 or not _MySQL可用():
+        return 结果
+    连接 = _打开连接()
+    if 连接 is None:
+        return 结果
+    try:
+        for 起点 in range(0, len(id列表), 500):
+            分块 = id列表[起点 : 起点 + 500]
+            占位 = ",".join(["%s"] * len(分块))
+            with 连接.cursor() as 游标:
+                # 列顺序必须与 _行转记录 保持一致；列表预览截取前 4096 个字符，
+                # 完整正文仍由消息历史接口按会话分页读取。
+                游标.execute(
+                    f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
+                    f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
+                    f"'' AS media, reference_id, refidx, '' AS raw_message "
+                    f"FROM `{消息记录表名}` WHERE id IN ({占位})",
+                    tuple(分块),
+                )
+                for 行 in 游标.fetchall():
+                    记录 = _行转记录(行)
+                    结果[int(记录.get("id") or 0)] = 记录
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 最后消息摘要补查失败：错误类型=%s", type(exc).__name__)
+    finally:
+        _关闭连接(连接)
+    return 结果
+
+
 def 分页读取历史(
     会话标识: str,
     before_id: int = 0,
