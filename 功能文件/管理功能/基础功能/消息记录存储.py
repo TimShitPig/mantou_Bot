@@ -504,9 +504,9 @@ def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
 def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, Any]]:
     """只读取会话列表需要的最后消息字段。
 
-    会话列表只展示昵称、时间和文本预览，不需要消息原文和媒体 JSON。
-    这里保持与 ``_行转记录`` 相同的列顺序，用空字段替代两个大字段，
-    避免列表请求把历史卡片/原始消息一起从 MySQL 传回 Python。
+    会话列表只展示昵称、时间和文本预览，不需要完整消息原文和媒体 JSON。
+    这里保持与 ``_行转记录`` 相同的列顺序，用原文首尾摘要保留时间字段，
+    避免列表请求把历史卡片/原始消息整批从 MySQL 传回 Python。
     """
     结果: dict[int, dict[str, Any]] = {}
     if not id列表 or not _MySQL可用():
@@ -520,11 +520,12 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
             占位 = ",".join(["%s"] * len(分块))
             with 连接.cursor() as 游标:
                 # 列顺序必须与 _行转记录 保持一致；列表预览截取前 4096 个字符，
-                # 完整正文仍由消息历史接口按会话分页读取。
+                # 原文只保留首尾字段（含 QQ timestamp），完整消息仍由历史接口分页读取。
                 游标.execute(
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
                     f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
-                    f"'' AS media, reference_id, refidx, '' AS raw_message "
+                    f"'' AS media, reference_id, refidx, "
+                    f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
                     tuple(分块),
                 )

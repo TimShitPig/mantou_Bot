@@ -196,6 +196,17 @@ def _提取原始消息时间(原始消息: Any) -> Any:
                     break
             except Exception:
                 continue
+        # 会话列表只读取原始消息尾部摘要；摘要不是完整 JSON 时，
+        # 直接从 timestamp/time/created_at 字段提取值，继续修正旧记录时区。
+        if isinstance(数据, str):
+            匹配 = re.search(
+                r"(?:['\"])?(?:timestamp|time|created_at)(?:['\"])?\s*:\s*"
+                r"(?:['\"]([^'\"]+)['\"]|([^,}\s]+))",
+                文本,
+                re.IGNORECASE,
+            )
+            if 匹配:
+                return 匹配.group(1) or 匹配.group(2)
     if not isinstance(数据, dict):
         return None
     for 字段 in ("timestamp", "time", "created_at"):
@@ -237,6 +248,27 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
                 记录["media"] = 合并媒体
             else:
                 记录["media"] = 补充媒体
+    return 记录
+
+
+def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
+    """只归一化会话列表摘要的时间和来源，不解析完整媒体/正文。"""
+    if not isinstance(记录, dict):
+        return {}
+    来源 = str(记录.get("source") or "")
+    if 来源.startswith("bot_") or 来源 == "web_panel":
+        记录["is_self"] = True
+        if not str(记录.get("nickname") or "").strip():
+            记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
+    原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
+    try:
+        记录时间 = int(记录.get("ts") or 0)
+    except (TypeError, ValueError):
+        记录时间 = 0
+    标准时间 = 原始时间 or 记录时间 or _转数字时间戳(记录.get("timestamp"))
+    if 标准时间:
+        记录["ts"] = 标准时间
+        记录["timestamp"] = _格式化时间戳(标准时间)
     return 记录
 
 
@@ -1238,10 +1270,18 @@ def 记录收到消息(
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
-        if 内容 and 新增记录:
-            会话["last_content"] = 内容
-            会话["last_nickname"] = 昵称
         新时间戳 = _转数字时间戳(时间戳) or int(time.time())
+        # 摘要按时间维护，纯媒体/空文本消息也要覆盖上一条预览；
+        # 旧消息回补时不能把较新的摘要倒退。
+        try:
+            当前摘要时间 = int(会话.get("last_ts") or 0)
+        except (TypeError, ValueError):
+            当前摘要时间 = 0
+        摘要记录 = 记录 if isinstance(记录, dict) else {}
+        if 新时间戳 >= 当前摘要时间:
+            会话["last_content"] = str(摘要记录.get("content") or "")
+            会话["last_nickname"] = str(摘要记录.get("nickname") or 昵称 or "")
+            会话["last_message_id"] = str(摘要记录.get("message_id") or 消息ID or "")
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 新时间戳)
         # 先通知网页再等待数据库线程；这一步必须保持在事件循环内轻量完成。
         if 新增记录:
@@ -1412,6 +1452,15 @@ def 记录发送消息(
                         "ts": 成功时间戳,
                     },
                 )
+                try:
+                    当前摘要时间 = int(会话.get("last_ts") or 0)
+                except (TypeError, ValueError):
+                    当前摘要时间 = 0
+                if 成功时间戳 >= 当前摘要时间:
+                    会话["last_content"] = str(已有记录.get("content") or "")
+                    会话["last_nickname"] = str(已有记录.get("nickname") or 发送者昵称 or "我")
+                    会话["last_message_id"] = str(已有记录.get("message_id") or 消息ID or "")
+                会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
                 自己发送消息ID[str(消息ID)] = time.time()
                 return 已有记录
         发送序号 += 1
@@ -1457,9 +1506,14 @@ def 记录发送消息(
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
-        if 内容:
-            会话["last_content"] = 内容
+        try:
+            当前摘要时间 = int(会话.get("last_ts") or 0)
+        except (TypeError, ValueError):
+            当前摘要时间 = 0
+        if 成功时间戳 >= 当前摘要时间:
+            会话["last_content"] = str(内容 or "")
             会话["last_nickname"] = 发送者昵称 or "我"
+            会话["last_message_id"] = str(消息ID or "")
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
         # 机器人发送回复不代表管理员已读，未读状态只由设置会话已读清零。
         _推送消息事件(记录, 会话)
@@ -2051,6 +2105,7 @@ def _数据库聚合聊天项(
                 continue
             已有会话标识.add(会话标识)
             最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
+            _规范化聊天摘要(最后记录)
             类型 = str(最后记录.get("chat_type") or "group")
             if 过滤 == "group" and 类型 != "group":
                 continue
@@ -2065,15 +2120,23 @@ def _数据库聚合聊天项(
                 if _群信息需要刷新(缓存群信息):
                     标记群信息待刷新(会话标识)
             内存会话 = 消息缓存.get(会话标识) or {}
-            内存消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
-            内存消息列表.sort(key=_历史消息排序键)
-            if 内存消息列表:
-                内存最后记录 = 内存消息列表[-1]
-                数据库最后时间 = int(_历史消息排序键(最后记录)[0] or 0)
-                内存最后时间 = int(_历史消息排序键(内存最后记录)[0] or 0)
-                if 内存最后时间 >= 数据库最后时间:
-                    最后记录 = 内存最后记录
-                    类型 = str(最后记录.get("chat_type") or 类型)
+            内存消息列表 = 内存会话.get("messages") or []
+            内存最后时间 = int(内存会话.get("last_ts") or 0)
+            数据库最后时间 = max(
+                int(项.get("last_ts") or 0),
+                int(最后记录.get("ts") or 0),
+            )
+            if 内存最后时间 >= 数据库最后时间 and (内存最后时间 or 内存会话.get("last_content")):
+                # 接收路径已经维护会话摘要，列表请求无需遍历和规范化整段内存消息。
+                最后记录 = {
+                    "chat_type": str(内存会话.get("chat_type") or 类型),
+                    "nickname": str(内存会话.get("last_nickname") or ""),
+                    "appid": str(内存会话.get("appid") or ""),
+                    "content": str(内存会话.get("last_content") or ""),
+                    "timestamp": _格式化时间戳(内存最后时间),
+                    "ts": 内存最后时间,
+                }
+                类型 = str(最后记录.get("chat_type") or 类型)
             轻量会话 = {
                 "chat_type": 类型,
                 "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
@@ -2082,11 +2145,19 @@ def _数据库聚合聊天项(
             显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
-            _规范化历史消息(最后记录)
-            last_ts = int(_历史消息排序键(最后记录)[0] or 项.get("last_ts") or 0)
+            last_ts = int(最后记录.get("ts") or 项.get("last_ts") or 0)
             if 会话标识 in 消息缓存:
-                # 内存是当前事件循环刚写入的权威状态，不能被数据库旧值覆盖。
-                当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
+                # 待写值代表当前事件循环的最新状态；没有待写值时，
+                # 合并内存与持久化值，避免重启或多标签页时红点回退。
+                if 会话标识 in _未读待写:
+                    当前未读数 = _未读待写[会话标识]
+                elif 会话标识 in 持久化未读表:
+                    当前未读数 = max(
+                        int(内存会话.get("unread") or 0),
+                        int(持久化未读表.get(会话标识) or 0),
+                    )
+                else:
+                    当前未读数 = int(内存会话.get("unread") or 0)
             elif 会话标识 in _未读待写:
                 当前未读数 = _未读待写[会话标识]
             elif 会话标识 in 持久化未读表:
@@ -2132,9 +2203,10 @@ def _数据库聚合聊天项(
             显示名 = _聊天显示名(会话标识, 内存会话, 本地备注表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
-            消息列表 = [_规范化历史消息(x) for x in (内存会话.get("messages") or [])]
-            消息列表.sort(key=_历史消息排序键)
+            消息列表 = 内存会话.get("messages") or []
             最后记录 = 消息列表[-1] if 消息列表 else {}
+            最后内容 = str(内存会话.get("last_content") or 最后记录.get("content") or "")
+            最后时间 = int(内存会话.get("last_ts") or 最后记录.get("ts") or 0)
             当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
             聊天项.append(
                 {
@@ -2143,9 +2215,9 @@ def _数据库聚合聊天项(
                     "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
                     "nickname": 显示名,
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or 内存会话.get("last_content") or "")),
-                    "last_time": _格式化时间戳(内存会话.get("last_ts")) or str(最后记录.get("timestamp") or ""),
-                    "last_ts": int(内存会话.get("last_ts") or 最后记录.get("ts") or 0),
+                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
+                    "last_time": _格式化时间戳(最后时间) or str(最后记录.get("timestamp") or ""),
+                    "last_ts": 最后时间,
                     "msg_count": len(消息列表),
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
