@@ -91,6 +91,26 @@ def _注册路由(app: web.Application) -> None:
         getattr(app.router, f"add_{方法}")(路径, 处理器)
 
 
+@web.middleware
+async def _压缩控制台响应(request: web.Request, handler: Any) -> web.StreamResponse:
+    """压缩控制台 HTML/JSON，实时事件流和 WebSocket 保持原样。"""
+    响应 = await handler(request)
+    if not isinstance(响应, web.Response):
+        return 响应
+    if 响应.headers.get("Content-Encoding"):
+        return 响应
+    if 响应.content_type not in {"text/html", "application/json"}:
+        return 响应
+    正文 = getattr(响应, "body", None)
+    if not 正文 or len(正文) < 1024:
+        return 响应
+    try:
+        响应.enable_compression()
+    except Exception as exc:
+        logger.debug("帮助控制台响应压缩跳过：错误类型=%s", type(exc).__name__)
+    return 响应
+
+
 async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | None:
     """启动帮助网页并返回可供插件生命周期保存的服务句柄。"""
 
@@ -105,7 +125,7 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     基础地址 = 后端._计算帮助网页地址(配置)
     public_url = 后端._构造控制台访问地址(基础地址, 配置)
     host, port = 后端._读取监听配置(配置)
-    app = web.Application()
+    app = web.Application(middlewares=[_压缩控制台响应])
     _注册路由(app)
     runner = web.AppRunner(app, access_log=None)
     try:

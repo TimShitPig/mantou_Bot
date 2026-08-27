@@ -151,6 +151,7 @@ def 初始化数据库() -> bool:
                     raw_message MEDIUMTEXT,
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
+                    KEY idx_msg_records_session_id (会话标识, id),
                     KEY idx_msg_records_message (message_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
@@ -220,6 +221,18 @@ def 初始化数据库() -> bool:
                     if 数据类型 and 数据类型 not in {"mediumtext", "longtext"}:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` MODIFY COLUMN `{列名}` MEDIUMTEXT")
                         logger.warning("消息记录 MySQL 长字段已扩容：列=%s", 列名)
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
+                    "AND INDEX_NAME = %s",
+                    (消息记录表名, "idx_msg_records_session_id"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{消息记录表名}` "
+                        "ADD KEY idx_msg_records_session_id (会话标识, id)"
+                    )
+                    logger.info("消息记录 MySQL 已补充会话分页索引")
             except Exception as 修复异常:
                 logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
         连接.commit()
@@ -488,7 +501,13 @@ def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
     return 结果
 
 
-def 分页读取历史(会话标识: str, before_id: int = 0, 上限: int = 200, before_ts: int = 0) -> list[dict[str, Any]]:
+def 分页读取历史(
+    会话标识: str,
+    before_id: int = 0,
+    上限: int = 200,
+    before_ts: int = 0,
+    返回额外: bool = False,
+) -> list[dict[str, Any]]:
     """按 id 倒序分页读取某会话历史消息，对齐 ElainaBot 的分页查询。
 
     before_id > 0 时取 id 更小的更早消息；否则按 before_ts（秒级）过滤更早消息。
@@ -497,6 +516,7 @@ def 分页读取历史(会话标识: str, before_id: int = 0, 上限: int = 200,
         return []
     会话标识 = str(会话标识 or "")
     上限 = max(1, min(上限, 2000))
+    查询上限 = min(2001, 上限 + (1 if 返回额外 else 0))
     before_id = max(0, int(before_id or 0))
     before_ts = max(0, int(before_ts or 0))
     连接 = _打开连接()
@@ -507,17 +527,17 @@ def 分页读取历史(会话标识: str, before_id: int = 0, 上限: int = 200,
             if before_id:
                 游标.execute(
                     f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND id < %s ORDER BY id DESC LIMIT %s",
-                    (会话标识, before_id, 上限),
+                    (会话标识, before_id, 查询上限),
                 )
             elif before_ts:
                 游标.execute(
                     f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND ts < %s ORDER BY id DESC LIMIT %s",
-                    (会话标识, before_ts, 上限),
+                    (会话标识, before_ts, 查询上限),
                 )
             else:
                 游标.execute(
                     f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s ORDER BY id DESC LIMIT %s",
-                    (会话标识, 上限),
+                    (会话标识, 查询上限),
                 )
             行列表 = 游标.fetchall()
         return [_行转记录(行) for 行 in 行列表]

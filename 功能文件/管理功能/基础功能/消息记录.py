@@ -43,6 +43,7 @@ except Exception as 导入异常:
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
+_群信息刷新任务: asyncio.Task[Any] | None = globals().get("_群信息刷新任务")
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
 _元数据写入锁 = globals().get("_元数据写入锁") or threading.RLock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
@@ -553,7 +554,12 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
 async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
-    global _消息接收任务, _消息持久化任务, _昵称补查任务
+    global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
+    群信息任务 = _群信息刷新任务
+    _群信息刷新任务 = None
+    if 群信息任务 is not None and not 群信息任务.done():
+        群信息任务.cancel()
+        await asyncio.gather(群信息任务, return_exceptions=True)
     _消息接收入队 = False
     截止时间 = asyncio.get_running_loop().time() + 15.0
     接收队列 = _准备消息接收队列()
@@ -1632,6 +1638,24 @@ async def 刷新待处理群信息() -> int:
     return 成功数
 
 
+def 安排待处理群信息刷新() -> None:
+    """为待刷新群资料复用单个后台任务，避免网页轮询重复排队。"""
+    global _群信息刷新任务
+    if not 群信息待刷新:
+        return
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if (
+        _群信息刷新任务 is not None
+        and not _群信息刷新任务.done()
+        and getattr(_群信息刷新任务, "get_loop", lambda: None)() is 循环
+    ):
+        return
+    _群信息刷新任务 = 循环.create_task(刷新待处理群信息())
+
+
 def _群信息冷却秒数(异常: Exception) -> int:
     """按错误类型返回冷却秒数：已注销群冷却一天，接口限流冷却 5 分钟，其他 60 秒。"""
     try:
@@ -2082,9 +2106,14 @@ def _数据库历史消息(
             before_id=max(0, int(before_id or 0)),
             上限=limit,
             before_ts=before_ts,
+            返回额外=True,
         )
         if not 行列表:
             return None
+        数据库有更多 = len(行列表) > limit
+        if 数据库有更多:
+            # 查询多取一条只用于判断分页，不把探测行返回给网页。
+            行列表 = 行列表[:limit]
         原始会话消息: list[dict[str, Any]] = [
             _规范化历史消息(x) for x in reversed(行列表)
         ]
@@ -2141,11 +2170,6 @@ def _数据库历史消息(
                 历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
             if isinstance(历史项, dict) and 历史项.get("content"):
                 历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
-        总数 = 0
-        try:
-            总数 = int(_消息存储.统计会话消息数(会话标识) or 0)
-        except Exception as exc:
-            logger.debug("消息记录 MySQL 历史总数统计失败：错误类型=%s", type(exc).__name__)
         内存会话 = 消息缓存.get(会话标识) or {}
         轻量会话 = {
             "chat_type": 类型,
@@ -2156,7 +2180,7 @@ def _数据库历史消息(
             "messages": 返回消息,
             "last_msg_id": str(最后消息.get("message_id") or ""),
             "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
-            "has_more": (原始数量 >= limit) and (总数 > limit if not before_id and not before_date else True),
+            "has_more": 数据库有更多,
             "chat_name": _聊天显示名(会话标识, 轻量会话),
             "group_info": 获取缓存的群信息(会话标识),
             "member_profiles": 成员资料缓存.get(会话标识, {}),

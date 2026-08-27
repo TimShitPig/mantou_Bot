@@ -743,9 +743,10 @@ def _解析保存的网盘账号列表(原始值: Any, 平台: str) -> list[str]
     return [记录["cookie"] for 记录 in _解析保存的网盘账号记录(原始值, 平台)]
 
 
-def _读取保存的网盘账号记录(配置: Any, 平台: str) -> list[dict[str, str]]:
-    原始值 = 读取运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], "")
-    账号记录 = _解析保存的网盘账号记录(原始值, 平台)
+def _合并配置网盘账号记录(
+    配置: Any, 平台: str, 账号记录: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    """把插件配置中的账号1合并到已持久化列表，保持数据库优先。"""
     配置Cookie = _读取平台配置Cookie(配置, 平台)
     配置结果 = 解析网盘Cookie(f"{平台} Cookie: {配置Cookie or ''}")
     if not 配置结果 or 配置结果[0] != 平台 or not 配置结果[1]:
@@ -768,6 +769,13 @@ def _读取保存的网盘账号记录(配置: Any, 平台: str) -> list[dict[st
             },
         )
     return 账号记录
+
+
+def _读取保存的网盘账号记录(配置: Any, 平台: str) -> list[dict[str, str]]:
+    原始值 = 读取运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], "")
+    return _合并配置网盘账号记录(
+        配置, 平台, _解析保存的网盘账号记录(原始值, 平台)
+    )
 
 
 def _读取保存的网盘账号列表(配置: Any, 平台: str) -> list[str]:
@@ -1042,18 +1050,7 @@ def 获取网盘账号数量(配置: Any, 平台: str, 配置Cookie: Any = "") -
     return len(获取网盘账号列表(配置, 平台, 配置Cookie))
 
 
-def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
-    """返回控制台可展示的账号摘要，不返回 Cookie 或身份令牌。"""
-    规范平台 = _规范化平台名称(平台)
-    if not 规范平台:
-        return []
-    try:
-        账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
-    except Exception as 异常:
-        logger.warning(
-            f"{平台显示名.get(规范平台, 规范平台)}账号摘要读取失败：error={type(异常).__name__}"
-        )
-        账号记录 = []
+def _网盘账号摘要(账号记录: list[dict[str, str]]) -> list[dict[str, Any]]:
     摘要列表: list[dict[str, Any]] = []
     for 序号, 记录 in enumerate(账号记录, start=1):
         if not str(记录.get("cookie") or "").strip():
@@ -1067,6 +1064,50 @@ def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
             }
         )
     return 摘要列表
+
+
+def 获取网盘账号摘要批量(
+    配置: Any, 平台列表: tuple[str, ...] = ("UC", "夸克", "百度")
+) -> dict[str, list[dict[str, Any]]]:
+    """一次读取网盘账号命名空间，供控制台批量展示账号摘要。"""
+    规范平台列表: list[str] = []
+    for 平台 in 平台列表:
+        规范平台 = _规范化平台名称(平台)
+        if 规范平台 and 规范平台 not in 规范平台列表:
+            规范平台列表.append(规范平台)
+    if not 规范平台列表:
+        return {}
+    状态字典: dict[str, str] = {}
+    if 已配置运行状态数据库(配置):
+        try:
+            状态字典 = 读取运行状态命名空间(配置, 网盘Cookie命名空间)
+        except Exception as 异常:
+            logger.warning(
+                "网盘账号批量读取失败：error=%s", type(异常).__name__
+            )
+    结果: dict[str, list[dict[str, Any]]] = {}
+    for 平台 in 规范平台列表:
+        账号记录 = _解析保存的网盘账号记录(
+            状态字典.get(平台状态键[平台], ""), 平台
+        )
+        账号记录 = _合并配置网盘账号记录(配置, 平台, 账号记录)
+        结果[平台] = _网盘账号摘要(账号记录)
+    return 结果
+
+
+def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
+    """返回控制台可展示的账号摘要，不返回 Cookie 或身份令牌。"""
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台:
+        return []
+    try:
+        账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
+    except Exception as 异常:
+        logger.warning(
+            f"{平台显示名.get(规范平台, 规范平台)}账号摘要读取失败：error={type(异常).__name__}"
+        )
+        账号记录 = []
+    return _网盘账号摘要(账号记录)
 
 
 async def _获取夸克账号资料(Cookie: str) -> tuple[str, str]:

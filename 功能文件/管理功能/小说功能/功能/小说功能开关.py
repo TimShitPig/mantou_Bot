@@ -14,6 +14,7 @@ from 功能文件.管理功能.基础功能.权限工具 import 是群文件清�
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     写入布尔运行状态值,
     读取布尔运行状态值,
+    读取运行状态命名空间,
 )
 
 默认状态 = {
@@ -218,16 +219,42 @@ def 写入小说功能状态(配置: Any, 功能名: str, 是否开启: bool) ->
     写入布尔运行状态值(配置, 状态命名空间, 功能名, bool(是否开启))
 
 
-def 读取小说功能状态(配置: Any = None) -> dict[str, bool]:
-    状态 = dict(默认状态)
+def _运行状态转布尔(值: Any, 默认值: bool) -> bool:
+    文本 = str(值 if 值 is not None else ("1" if 默认值 else "0")).strip().lower()
+    if 文本 in {"1", "true", "yes", "on", "开启"}:
+        return True
+    if 文本 in {"0", "false", "no", "off", "关闭"}:
+        return False
+    return bool(默认值)
+
+
+def 读取小说功能控制台状态(配置: Any = None) -> dict[str, Any]:
+    """一次读取控制台所需的全局、测试模式和全部平台开关。"""
+    结果: dict[str, Any] = {
+        "global_enabled": True,
+        "test_mode": False,
+        "platforms": dict(默认状态),
+    }
     if 配置 is None:
-        return 状态
+        return 结果
+    try:
+        状态 = 读取运行状态命名空间(配置, 状态命名空间)
+    except Exception as exc:
+        logger.warning(
+            f"小说功能开关批量读取数据库失败：错误={type(exc).__name__}"
+        )
+        return 结果
+    结果["global_enabled"] = _运行状态转布尔(
+        状态.get(小说总开关状态键), True
+    )
+    结果["test_mode"] = _运行状态转布尔(
+        状态.get(管理员测试模式状态键), False
+    )
+    平台状态 = 结果["platforms"]
     for 功能名, 默认值 in 默认状态.items():
-        try:
-            状态[功能名] = 读取布尔运行状态值(配置, 状态命名空间, 功能名, 默认值)
-        except Exception as exc:
-            logger.warning(
-                f"小说功能开关读取数据库失败：功能={功能名}, 错误={type(exc).__name__}"
-            )
-            状态[功能名] = 默认值
-    return 状态
+        平台状态[功能名] = _运行状态转布尔(状态.get(功能名), 默认值)
+    return 结果
+
+
+def 读取小说功能状态(配置: Any = None) -> dict[str, bool]:
+    return dict(读取小说功能控制台状态(配置)["platforms"])

@@ -24,7 +24,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.53.2"
+控制台版本 = "5.53.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -740,7 +740,8 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
         QQ登录态摘要 = {"configured": bool(原值), "updated_at": 更新时间}
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
-    状态 = 小说功能开关.读取小说功能状态(配置)
+    小说控制台状态 = 小说功能开关.读取小说功能控制台状态(配置)
+    状态 = 小说控制台状态["platforms"]
     平台列表 = [
         {
             "key": 功能名,
@@ -750,17 +751,22 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
         for 功能名 in 小说功能开关.默认状态
     ]
     网盘定义 = (
-        ("UC", "UC网盘", UC网盘.UC网盘是否启用, UC网盘.读取UC上传目录),
-        ("夸克", "夸克网盘", 夸克网盘.夸克网盘是否启用, 夸克网盘.读取夸克上传目录),
-        ("百度", "百度网盘", 百度网盘.百度网盘是否启用, 百度网盘.读取百度上传目录),
+        ("UC", "UC网盘", UC网盘.读取UC上传目录),
+        ("夸克", "夸克网盘", 夸克网盘.读取夸克上传目录),
+        ("百度", "百度网盘", 百度网盘.读取百度上传目录),
     )
+    try:
+        网盘账号摘要批量 = 网盘Cookie.获取网盘账号摘要批量(配置)
+    except Exception as exc:
+        logger.warning("帮助控制台网盘账号批量读取失败：错误类型=%s", type(exc).__name__)
+        网盘账号摘要批量 = {}
     网盘列表 = []
     当前网盘 = 小说网盘.获取当前主网盘(配置)
-    for 标识, 名称, 是否启用, 读取目录 in 网盘定义:
+    for 标识, 名称, 读取目录 in 网盘定义:
         try:
-            已配置 = bool(是否启用(配置))
-            账号数量 = 网盘Cookie.获取网盘账号数量(配置, 标识)
-            账号摘要 = 网盘Cookie.获取网盘账号摘要(配置, 标识)
+            账号摘要 = list(网盘账号摘要批量.get(标识) or [])
+            账号数量 = len(账号摘要)
+            已配置 = bool(账号摘要)
             目录 = str(读取目录(配置) or "")
         except Exception:
             已配置, 账号数量, 账号摘要, 目录 = False, 0, [], ""
@@ -773,9 +779,8 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
                 "account_summary": 账号摘要,
                 "directory": 目录,
                 "active": 标识 == 当前网盘,
-                "selected_account": int(
-                    网盘Cookie.获取当前网盘账号序号(配置, 标识)
-                ),
+                # 账号选择按群隔离；控制台没有当前群上下文，默认展示账号1。
+                "selected_account": 1,
             }
         )
 
@@ -800,8 +805,8 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
         },
         "database": {"configured": 数据库已配置, "status": 数据库状态},
         "novels": {
-            "global_enabled": 小说功能开关.小说总开关是否开启(配置),
-            "test_mode": 小说功能开关.管理员测试模式是否开启(配置),
+            "global_enabled": bool(小说控制台状态["global_enabled"]),
+            "test_mode": bool(小说控制台状态["test_mode"]),
             "editable": 数据库已配置,
             "platforms": 平台列表,
         },
@@ -1182,7 +1187,7 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
             消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
         )
         try:
-            asyncio.create_task(消息记录.刷新待处理群信息())
+            消息记录.安排待处理群信息刷新()
         except Exception:
             pass
         try:
@@ -1222,7 +1227,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
             消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
         )
         try:
-            asyncio.create_task(消息记录.刷新待处理群信息())
+            消息记录.安排待处理群信息刷新()
         except Exception:
             pass
         try:
