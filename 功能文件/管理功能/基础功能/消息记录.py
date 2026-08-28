@@ -1005,19 +1005,6 @@ def _提取成员昵称(消息: Any) -> str:
     return ""
 
 
-def _是管理员本人(成员标识: str) -> bool:
-    """管理员本人在群/私聊发的消息不计未读红点（QQ 号平台可匹配；QQ 官方 openid 无法反查 QQ 号时兜底返回 False）。"""
-    if not 成员标识:
-        return False
-    try:
-        from 功能文件.管理功能.基础功能.权限工具 import 获取群文件清理管理员QQ列表
-
-        管理员列表 = 获取群文件清理管理员QQ列表(当前插件配置)
-        return str(成员标识).strip() in 管理员列表
-    except Exception:
-        return False
-
-
 def _记录成员资料(
     会话标识: str,
     成员标识: str,
@@ -1268,9 +1255,10 @@ def 记录收到消息(
                 int(会话.get("msg_count") or 0),
                 len(会话["messages"]),
             )
-            if not is_self and not 是机器人 and not _是管理员本人(成员标识):
-                会话["unread"] = int(会话.get("unread") or 0) + 1
-                _持久化未读数(会话标识, 会话["unread"])
+            # 每条首次收到的消息都计入未读数，包括机器人和管理员本人发送的消息；
+            # 重复 message_id 会走下方合并分支，不会重复累计。
+            会话["unread"] = int(会话.get("unread") or 0) + 1
+            _持久化未读数(会话标识, 会话["unread"])
         else:
             # QQ 官方可能同时投递 at/group 两种回调；同一 message_id 只保留一条。
             记录 = _合并重复消息(已有记录, 记录)
@@ -1435,7 +1423,7 @@ def 记录发送消息(
     来源: str = "",
     发送时间: Any = None,
 ) -> dict[str, Any] | None:
-    """把机器人发送的消息写入缓存；发送本身不会改变会话未读状态。"""
+    """把机器人发送的消息写入缓存，并按一条新消息累计未读数。"""
     global 发送序号
     try:
         会话 = _取得会话缓存(会话标识, 类型, appid)
@@ -1498,6 +1486,9 @@ def 记录发送消息(
             int(会话.get("msg_count") or 0),
             len(会话["messages"]),
         )
+        # 网页/机器人主动发送同样是一条新消息，保持未读红点按消息数累计。
+        会话["unread"] = int(会话.get("unread") or 0) + 1
+        _持久化未读数(会话标识, 会话["unread"])
         if 来源.startswith("bot_"):
             logger.info(
                 "消息记录已捕获机器人发送：会话类型=%s，来源=%s，消息ID=%s，文本长度=%d",
@@ -1530,7 +1521,7 @@ def 记录发送消息(
             会话["last_nickname"] = 发送者昵称 or "我"
             会话["last_message_id"] = str(消息ID or "")
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
-        # 机器人发送回复不代表管理员已读，未读状态只由设置会话已读清零。
+        # 机器人发送回复也属于一条新消息；只有设置会话已读才会清零红点。
         _推送消息事件(记录, 会话)
         _裁剪总缓存()
         return 记录
@@ -2321,11 +2312,11 @@ def 获取聊天列表(
             )
         for 聊天 in 聊天列表:
             聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
-    # 手动置顶会话始终在最前；其余会话中未读优先，再按最新消息时间倒序。
+    # 手动置顶会话始终在最前；其余会话只按最新消息时间倒序，
+    # 未读数只显示红点，不改变已读会话的位置。
     聊天列表.sort(
         key=lambda x: (
             0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
-            0 if int(x.get("unread") or 0) > 0 else 1,
             -(x.get("last_ts") or 0),
             str(x.get("chat_id") or ""),
         )

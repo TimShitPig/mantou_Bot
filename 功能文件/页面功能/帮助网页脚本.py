@@ -248,7 +248,6 @@
         });
         return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
-          Number(Number(right.unread || 0) > 0) - Number(Number(left.unread || 0) > 0) ||
           Number(right.last_ts || 0) - Number(left.last_ts || 0)
         );
       };
@@ -964,7 +963,7 @@
         const payloadUnread = Number(payload.unread);
         const unread = followLatest
           ? 0
-          : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : Math.max(0, Number(existing.unread || 0) + (message.is_self ? 0 : 1)));
+          : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : Math.max(0, Number(existing.unread || 0) + 1));
         const overlay = {
           ...existing,
           chat_id:chatId,
