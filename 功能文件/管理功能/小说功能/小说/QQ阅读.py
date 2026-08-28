@@ -3198,6 +3198,21 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
         "chapter_count",
         default=0,
     )
+    max_free_chapter = _读取详情字段(
+        objects,
+        "maxfreechapter",
+        "maxFreeChapter",
+        "max_free_chapter",
+        default=0,
+    )
+    vip_state = _读取详情字段(
+        objects,
+        "isVip",
+        "is_vip",
+        "vipStatus",
+        "vip_status",
+        default=False,
+    )
     free_value = _读取详情字段(objects, "free", default=None)
     free = None
     if free_value not in (None, ""):
@@ -3232,6 +3247,9 @@ def 解析参考书籍详情(data: Any, book_id: str) -> dict[str, Any]:
             or ""
         ).strip(),
         "chapters": _安全整数(chapters),
+        "total_chapters": _安全整数(chapters),
+        "max_free_chapter": _安全整数(max_free_chapter),
+        "is_vip": _是真值(vip_state),
         "free": free,
         "vip_free": _详情支持VIP免费(objects),
         "intro": str(
@@ -3374,21 +3392,29 @@ def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
 
 
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
-    if _是真值(details.get("vip_free")):
+    if _是真值(details.get("is_vip")):
         return False
-    if details.get("free") == 0:
-        return not any(_安全整数(item.get("chapter_fee")) <= 0 for item in catalog)
     return any(_安全整数(item.get("chapter_fee")) > 0 for item in catalog)
 
 
 def 获取QQ阅读可下载目录(
     details: dict[str, Any], catalog: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """章节单独付费书只保留目录中标记为免费的章节。"""
-    if details.get("free") != 0:
+    """非会员只保留免费章节，会员保留完整目录。"""
+    if _是真值(details.get("is_vip")):
         return list(catalog)
+    max_free = _安全整数(details.get("max_free_chapter"))
+    total = max(
+        _安全整数(details.get("total_chapters")),
+        _安全整数(details.get("chapters")),
+        len(catalog),
+    )
+    has_free_limit = max_free > 0 and max_free < total
     free_catalog = [
-        dict(item) for item in catalog if _安全整数(item.get("chapter_fee")) <= 0
+        dict(item)
+        for position, item in enumerate(catalog, start=1)
+        if _安全整数(item.get("chapter_fee")) <= 0
+        and (not has_free_limit or position <= max_free)
     ]
     for index, item in enumerate(free_catalog, start=1):
         item["index"] = index
@@ -4241,10 +4267,10 @@ async def 生成下载回复流(
             if not catalog:
                 yield 章节单独付费提示
                 return
-            details["chapters"] = len(catalog)
             if 是章节单独付费书籍(details, catalog):
                 yield 章节单独付费提示
                 return
+            details["chapters"] = len(catalog)
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
