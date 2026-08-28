@@ -206,6 +206,55 @@
         return nickname && nickname !== id ? nickname : (id ? `${id.slice(0, 8)}…` : '用户');
       };
       const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
+      const decodeMsgToken = (value) => {
+        const raw = String(value ?? '');
+        if (!raw) return '';
+        try { return decodeURIComponent(raw.replace(/\+/g, ' ')); } catch (_) { return raw; }
+      };
+      const msgTagAttribute = (attributes, key) => {
+        const match = String(attributes || '').match(new RegExp(`(?:^|\\s)${key}\\s*=\\s*["']([^"']*)["']`, 'i'));
+        return match ? match[1] : '';
+      };
+      const renderMsgMarkup = (value, profiles = msgState.profiles) => {
+        const commandTokens = [];
+        const commandToken = (kind, command, label) => {
+          const index = commandTokens.push({kind, command, label}) - 1;
+          return `\u0000MANTOU_CMD_${index}\u0000`;
+        };
+        let source = replaceMsgMentions(value, profiles);
+        source = source.replace(/<qqbot-cmd-(input|enter)\b([^>]*)\/?\s*>/gi, (_, kind, attributes) => {
+          const command = decodeMsgToken(msgTagAttribute(attributes, 'text'));
+          if (!command) return '';
+          const label = decodeMsgToken(msgTagAttribute(attributes, 'show')) || command;
+          return commandToken(kind, command, label);
+        });
+        source = source.replace(/<qqbot-at-user\b([^>]*)\/?\s*>/gi, (_, attributes) => {
+          const id = decodeMsgToken(msgTagAttribute(attributes, 'id'));
+          return id ? `@${resolveMentionName(id, profiles)}` : '';
+        });
+        source = source.replace(/<qqbot-at-everyone\s*\/?\s*>/gi, '@全体成员');
+        let html = esc(source);
+        html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/gi, '<a class="msg-inline-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        html = html.replace(/`([^`\n]+)`/g, '<code class="msg-inline-code">$1</code>');
+        html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+        html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!，。！？]|$)/g, '$1<em>$2</em>');
+        html = html.replace(/\n/g, '<br>');
+        return html.replace(/\u0000MANTOU_CMD_(\d+)\u0000/g, (_, index) => {
+          const item = commandTokens[Number(index)];
+          if (!item) return '';
+          return `<button type="button" class="msg-command-chip" data-msg-command="${esc(item.command)}" data-msg-command-kind="${esc(item.kind)}" aria-label="${esc(item.label)}">${esc(item.label)}</button>`;
+        });
+      };
+      const plainMsgPreview = (value, profiles = msgState.profiles) => {
+        let text = replaceMsgMentions(value, profiles);
+        text = text.replace(/<qqbot-cmd-(?:input|enter)\b([^>]*)\/?\s*>/gi, (_, attributes) => decodeMsgToken(msgTagAttribute(attributes, 'show')) || decodeMsgToken(msgTagAttribute(attributes, 'text')));
+        text = text.replace(/<qqbot-at-user\b([^>]*)\/?\s*>/gi, (_, attributes) => {
+          const id = decodeMsgToken(msgTagAttribute(attributes, 'id'));
+          return id ? `@${resolveMentionName(id, profiles)}` : '';
+        }).replace(/<qqbot-at-everyone\s*\/?\s*>/gi, '@全体成员');
+        return text.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
+      };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -315,7 +364,7 @@
           return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" title="${chat.pinned ? '取消置顶' : '置顶'}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
-             <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(String(chat.last_content || '（无文本内容）'))}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread > 99 ? '99+' : unread}</span>` : ''}</span>
+             <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）')}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread > 99 ? '99+' : unread}</span>` : ''}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
@@ -867,7 +916,7 @@
           let content = recalled ? '（消息已撤回）' : stripMediaMarker(renderedContent, mediaData);
           if (!recalled && !content && mediaText) content = renderText(mediaText);
           if (!content && !media) content = recalled ? '（消息已撤回）' : '（空消息）';
-          const contentHtml = content ? esc(content) : '';
+          const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);
           const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
@@ -914,6 +963,15 @@
         body.querySelector('#msg-load-older')?.addEventListener('click', () => loadMsgHistory(true));
         body.querySelectorAll('[data-msg-recall]').forEach((el) => el.addEventListener('click', () => recallMessage(el.dataset.msgRecall)));
         body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
+        body.querySelectorAll('[data-msg-command]').forEach((el) => el.addEventListener('click', () => {
+          const command = String(el.dataset.msgCommand || '').trim();
+          const textarea = $('msg-textarea');
+          if (!command || !textarea) return;
+          textarea.value = command;
+          textarea.dispatchEvent(new Event('input'));
+          textarea.focus();
+          toast(`已填入 ${command}`);
+        }));
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => { msgState.quote = {id:el.dataset.msgQuote, text:el.dataset.msgName || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${el.dataset.msgName} · 引用`; }));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));

@@ -144,6 +144,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-bubble { padding:8px 12px; border-radius:3px 10px 10px 10px; background:#fff; color:#333; font-size:13px; line-height:1.6; word-break:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.05); }
             .msg-row.self .msg-bubble { border-radius:10px 3px 10px 10px; background:#12b7f5; color:#fff; }
             .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
+            .msg-inline-link { color:#1c7ed6; text-decoration:underline; text-underline-offset:2px; }
+            .msg-inline-code { padding:1px 4px; border-radius:4px; background:rgba(0,0,0,.08); font:12px/1.4 Consolas,Monaco,monospace; }
+            .msg-command-chip { display:inline; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed currentColor; background:transparent; color:inherit; font:inherit; line-height:inherit; cursor:pointer; }
+            .msg-command-chip:hover { opacity:.72; }
             .msg-bubble.recalled { color:#bbb; font-style:italic; background:#eee; }
             .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
@@ -327,8 +331,10 @@ from .帮助网页脚本 import 控制台脚本
                :root[data-theme="dark"] .msg-day { color:#6f7590; }
               :root[data-theme="dark"] .msg-avatar { background:#23405f; color:#8db9f0; }
               :root[data-theme="dark"] .msg-avatar .avatar-letter { color:#8db9f0; }
-              :root[data-theme="dark"] .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
-              :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
+            :root[data-theme="dark"] .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }
+            :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
+            :root[data-theme="dark"] .msg-inline-link { color:#77b8f2; }
+            :root[data-theme="dark"] .msg-inline-code { background:rgba(255,255,255,.12); }
               :root[data-theme="dark"] .msg-bubble.recalled { color:#6f7590; background:#1a1e2a; }
               :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
