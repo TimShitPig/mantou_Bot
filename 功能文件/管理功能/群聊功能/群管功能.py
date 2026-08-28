@@ -44,7 +44,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import (
     r"https?://|https?%3A%2F%2F|qb://|qb%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE
 )
 白名单域名规则 = re.compile(
-    r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com|ieasou\.com|easou\.com|midureader\.com|sfacg\.com|kuwo\.cn|kuwo\.com|kujiang\.com|lc1001\.com|jjwxc\.net|jjwxc\.com|soia\.zhihu\.com|story\.zhihu\.com",
+    r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|zhuishushenqi\.com|zhuishuvip\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com|ieasou\.com|easou\.com|midureader\.com|sfacg\.com|kuwo\.cn|kuwo\.com|kujiang\.com|lc1001\.com|jjwxc\.net|jjwxc\.com|soia\.zhihu\.com|story\.zhihu\.com",
     re.IGNORECASE,
 )
 QQ阅读小程序白名单规则 = re.compile(

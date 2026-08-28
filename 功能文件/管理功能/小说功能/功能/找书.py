@@ -43,6 +43,12 @@ except Exception as exc:
     logger.warning(f"找书加载书旗失败：错误={exc}")
 
 try:
+    from 功能文件.管理功能.小说功能.小说 import 追书小说
+except Exception as exc:
+    追书小说 = None
+    logger.warning(f"找书加载追书失败：错误={exc}")
+
+try:
     from 功能文件.管理功能.小说功能.小说 import 番茄小说
 except Exception as exc:
     番茄小说 = None
@@ -479,6 +485,12 @@ def 构造七猫链接(书籍编号: str, 是否短篇: bool = False) -> str:
 
 def 构造书旗链接(书籍编号: str) -> str:
     return f"https://www.shuqi.com/book/{书籍编号}.html"
+
+
+def 构造追书链接(书籍编号: str) -> str:
+    if 追书小说 is not None and hasattr(追书小说, "构造追书链接"):
+        return str(追书小说.构造追书链接(书籍编号))
+    return f"https://m.zhuishushenqi.com/books/{书籍编号}?shareFrom=app"
 
 
 def 构造QQ阅读链接(书籍编号: str) -> str:
@@ -1196,6 +1208,70 @@ async def 搜索书旗联想(session: aiohttp.ClientSession, 关键词: str) -> 
         return []
 
 
+async def 搜索追书(
+    session: aiohttp.ClientSession,
+    关键词: str,
+    *,
+    需要数量: int = 20,
+) -> list[dict[str, Any]]:
+    if 追书小说 is None:
+        return []
+    try:
+        原始结果 = await 追书小说.搜索小说(
+            session,
+            关键词,
+            需要数量=需要数量,
+        )
+    except Exception as exc:
+        logger.debug(
+            "找书追书搜索失败：关键词=%s, 错误类型=%s",
+            关键词,
+            type(exc).__name__,
+        )
+        return []
+    结果: list[dict[str, Any]] = []
+    for 书籍 in 原始结果:
+        if not isinstance(书籍, dict):
+            continue
+        书籍编号 = str(书籍.get("_id") or 书籍.get("id") or "").strip()
+        书名 = 清理文本(书籍.get("title") or 书籍.get("name"))
+        if not 书籍编号 or not 书名:
+            continue
+        # 追书搜索会同时返回不可公开阅读的记录；找书只展示允许免费读取的书。
+        if 书籍.get("allowFree") is False and not 书籍.get("hasCp"):
+            continue
+        作者 = 清理文本(书籍.get("author") or 书籍.get("originalAuthor") or "未知") or "未知"
+        评分 = _安全浮点(
+            书籍.get("rating", {}).get("score")
+            if isinstance(书籍.get("rating"), dict)
+            else 书籍.get("score")
+        )
+        字数 = _安全整数热度(
+            书籍.get("wordCount") or 书籍.get("word_count") or 书籍.get("words")
+        )
+        阅读量 = _安全整数热度(
+            书籍.get("latelyFollower")
+            or 书籍.get("totalFollower")
+            or 书籍.get("dailyLatelyFollower")
+        )
+        热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
+        结果.append(
+            {
+                "platform": "追书",
+                "book_id": 书籍编号,
+                "title": 书名,
+                "author": 作者,
+                "url": 构造追书链接(书籍编号),
+                "heat": 热度值,
+                "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
+                "score": 评分,
+                "read_count": 阅读量,
+                "word_count": 字数,
+            }
+        )
+    return 结果[: max(1, int(需要数量 or 20))]
+
+
 async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
     if QQ阅读小说 is None:
         return []
@@ -1574,6 +1650,7 @@ def _平台优先级值(平台: Any) -> int:
         "七猫": 10,
         "QQ阅读": 9,
         "书旗": 8,
+        "追书": 7,
         "得间": 7,
         "点众": 6,
         "QQ浏览器": 5,
@@ -1735,6 +1812,7 @@ async def _聚合搜索未缓存(
             平台搜索任务("连城", lambda: 搜索连城(关键词, 需要数量=数量)),
             平台搜索任务("菠萝包", lambda: 搜索菠萝包(关键词, 需要数量=数量)),
             平台搜索任务("晋江", lambda: 搜索晋江(关键词, 需要数量=数量)),
+            平台搜索任务("追书", lambda: 搜索追书(session, 关键词, 需要数量=数量)),
         )
         (
             番茄结果,
@@ -1755,6 +1833,7 @@ async def _聚合搜索未缓存(
             连城结果,
             菠萝包结果,
             晋江结果,
+            追书结果,
         ) = await asyncio.gather(
             *搜索任务,
             return_exceptions=False,
@@ -1778,6 +1857,7 @@ async def _聚合搜索未缓存(
             连城结果,
             菠萝包结果,
             晋江结果,
+            追书结果,
         ):
             for 排名, 项 in enumerate(平台结果):
                 if isinstance(项, dict):
@@ -1797,6 +1877,7 @@ async def _聚合搜索未缓存(
                 QQ阅读结果,
                 QQ浏览器结果,
                 书旗结果,
+                追书结果,
                 得间结果,
                 点众结果,
                 塔读结果,
@@ -1842,6 +1923,7 @@ async def _聚合搜索未缓存(
                 连城结果,
                 菠萝包结果,
                 晋江结果,
+                追书结果,
             ]
 
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
@@ -1864,6 +1946,7 @@ async def _聚合搜索未缓存(
                     平台搜索任务("连城", lambda: 搜索连城(w, 需要数量=10), "连城联想"),
                     平台搜索任务("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10), "菠萝包联想"),
                     平台搜索任务("晋江", lambda: 搜索晋江(w, 需要数量=10), "晋江联想"),
+                    平台搜索任务("追书", lambda: 搜索追书(session, w, 需要数量=10), "追书联想"),
                 )
 
             补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
@@ -2079,6 +2162,8 @@ def 获取找书下载回复流(
         return 七猫小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "书旗" and 书旗小说 is not None:
         return 书旗小说.生成下载回复流(event, 链接, 配置)
+    if 平台 == "追书" and 追书小说 is not None:
+        return 追书小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "QQ阅读" and QQ阅读小说 is not None:
         return QQ阅读小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "QQ浏览器" and QQ浏览器小说 is not None:
