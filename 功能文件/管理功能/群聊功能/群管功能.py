@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -29,6 +30,11 @@ except Exception:
 from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
     是群文件清理管理员,
+)
+from 功能文件.管理功能.基础功能.运行状态数据库 import (
+    已配置运行状态数据库,
+    读取布尔运行状态值,
+    写入布尔运行状态值,
 )
 from 功能文件.管理功能.群聊功能.群列表工具 import (
     删除官方群成员映射,
@@ -71,19 +77,25 @@ At消息规则 = re.compile(
 数字ID规则 = re.compile(r"[1-9]\d{4,11}")
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
 管理员QQ规则 = re.compile(r"^\d{5,12}$")
-数字撤回踢出阈值 = 3
-最近消息撤回数量 = 8
-最近消息撤回拉取数量 = 100
-踢人消息撤回数量 = 50
-踢人消息撤回拉取数量 = 100
 广告撤回禁言时长表 = (3 * 60, 10 * 60, 30 * 60, 86400, 30 * 86400)
+广告开关状态命名空间 = "group_ad_protection"
+广告开关状态默认值 = False
+广告开关命令 = {
+    "开广告": True,
+    "开启广告": True,
+    "关广告": False,
+    "关闭广告": False,
+}
+广告状态命令 = {"广告状态"}
+广告开关缓存有效期秒数 = 30.0
+广告开关缓存: dict[tuple[int, str], tuple[float, bool]] = {}
+广告开关缓存锁 = threading.RLock()
 数字撤回触发次数: dict[str, int] = {}
 数字撤回处理锁: asyncio.Lock | None = None
 数字撤回处理中: set[str] = set()
 数字撤回完成时间: dict[str, float] = {}
 数字撤回去重缓存秒数 = 120.0
 群管功能模块版本 = "1.25.1"
-踢出命令集合 = {"踢", "踢了", "踢人"}
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 QQ官方机器人权限缓存秒数 = 30.0
 QQ官方机器人权限缓存: dict[tuple[int, str], tuple[float, bool]] = {}
@@ -96,10 +108,112 @@ QQ官方机器人权限锁: asyncio.Lock | None = None
 )
 
 
-async def 处理用户踢出(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
-    return None
+def 获取群广告状态键(群号: Any) -> str:
+    """把官方群标识转换成运行状态表中的稳定键。"""
+    群号文本 = str(群号 or "").strip()
+    if len(群号文本) <= 120:
+        return 群号文本
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(群号文本.encode("utf-8")).hexdigest()
 
 
+def 群广告开关可持久化(配置: Any = None) -> bool:
+    try:
+        return bool(已配置运行状态数据库(配置))
+    except Exception:
+        return False
+
+
+def 读取群广告开关(配置: Any, 群号: Any) -> bool:
+    """读取指定 QQ 官方群的广告拦截状态；没有记录时默认关闭。"""
+    状态键 = 获取群广告状态键(群号)
+    if not 状态键 or not 群广告开关可持久化(配置):
+        return 广告开关状态默认值
+    缓存键 = (id(配置), 状态键)
+    当前时间 = time.monotonic()
+    with 广告开关缓存锁:
+        缓存项 = 广告开关缓存.get(缓存键)
+        if 缓存项 and 当前时间 - 缓存项[0] < 广告开关缓存有效期秒数:
+            return 缓存项[1]
+    try:
+        状态 = bool(
+            读取布尔运行状态值(
+                配置,
+                广告开关状态命名空间,
+                状态键,
+                广告开关状态默认值,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "群广告开关读取失败：group_id=%s, error_type=%s",
+            群号,
+            type(exc).__name__,
+        )
+        状态 = 广告开关状态默认值
+    with 广告开关缓存锁:
+        广告开关缓存[缓存键] = (time.monotonic(), 状态)
+    return 状态
+
+
+def 写入群广告开关(配置: Any, 群号: Any, 开启: bool) -> bool:
+    """保存指定官方群的广告拦截状态，并立即更新当前进程缓存。"""
+    状态键 = 获取群广告状态键(群号)
+    if not 状态键 or not 群广告开关可持久化(配置):
+        return False
+    try:
+        写入布尔运行状态值(
+            配置,
+            广告开关状态命名空间,
+            状态键,
+            bool(开启),
+        )
+    except Exception as exc:
+        logger.warning(
+            "群广告开关写入失败：group_id=%s, error_type=%s",
+            群号,
+            type(exc).__name__,
+        )
+        return False
+    with 广告开关缓存锁:
+        广告开关缓存[(id(配置), 状态键)] = (time.monotonic(), bool(开启))
+    return True
+
+
+async def 当前群广告拦截是否开启(event: AstrMessageEvent, 配置: Any = None) -> bool:
+    """广告自动处理只对 QQ 官方群启用，状态按群独立读取。"""
+    if not 是QQ官方机器人(event):
+        return False
+    群号 = 获取群号(event)
+    if not 群号:
+        return False
+    return bool(await asyncio.to_thread(读取群广告开关, 配置, 群号))
+
+
+async def 处理广告开关指令(
+    event: AstrMessageEvent, 命令文本: str, 配置: Any = None
+) -> str | None:
+    """处理仅限 QQ 官方群的开关命令。"""
+    文本 = re.sub(r"\s+", "", str(命令文本 or "").strip())
+    if 文本 not in 广告开关命令 and 文本 not in 广告状态命令:
+        return None
+    if not 是QQ官方机器人(event) or not 是群文件清理管理员(event, 配置):
+        return None
+    群号 = 获取群号(event)
+    if not 群号:
+        return "广告开关只能在 QQ 官方群聊中使用"
+    当前状态 = bool(await asyncio.to_thread(读取群广告开关, 配置, 群号))
+    if 文本 in 广告状态命令:
+        if 群广告开关可持久化(配置):
+            return f"本群广告拦截：{'已开启' if 当前状态 else '已关闭'}"
+        return f"本群广告拦截：{'已开启' if 当前状态 else '已关闭'}（数据库未配置，状态不会保存）"
+    目标状态 = bool(广告开关命令[文本])
+    if not 群广告开关可持久化(配置):
+        return "数据库未配置，广告开关无法保存"
+    if not await asyncio.to_thread(写入群广告开关, 配置, 群号, 目标状态):
+        return "广告开关保存失败，请稍后再试"
+    return f"本群广告拦截已{'开启' if 目标状态 else '关闭'}"
 async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
     单用户参数 = 解析单用户禁言参数(event, 命令文本)
     if 单用户参数 is not None:
@@ -167,24 +281,6 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
         if 成功数量 != len(目标列表):
             return "成员禁言失败，请稍后再试"
         return 构造成员禁言成功回复(event, 目标列表)
-
-
-def 踢人功能是否开启(配置: Any = None) -> bool:
-    return False
-
-
-def 解析踢出目标用户列表(event: AstrMessageEvent, 命令文本: str) -> list[str] | None:
-    命令 = 提取踢出命令文本(event, 命令文本)
-    if 命令 not in 踢出命令集合:
-        return None
-    return 提取被艾特用户QQ列表(event)
-
-
-def 解析踢出目标用户(event: AstrMessageEvent, 命令文本: str) -> str | None:
-    目标用户列表 = 解析踢出目标用户列表(event, 命令文本)
-    if 目标用户列表 is None:
-        return None
-    return 目标用户列表[0] if 目标用户列表 else ""
 
 
 def 获取群禁言候选文本(event: AstrMessageEvent, 命令文本: str) -> list[str]:
@@ -273,46 +369,6 @@ def 构造成员禁言成功回复(event: AstrMessageEvent, 用户列表: list[s
             提及 = f"[CQ:at,qq={用户}]"
         行列表.append(f"{提及} 你已经被禁言，请联系群主说明情况")
     return "\n".join(行列表)
-
-
-def 格式化批量踢出结果(
-    成功用户: list[str],
-    失败用户: list[tuple[str, Exception]],
-    撤回数量记录: dict[str, int] | None = None,
-) -> str:
-    行列表 = [f"用户踢出完成：成功 {len(成功用户)} 个，失败 {len(失败用户)} 个"]
-    if 成功用户:
-        行列表.append(f"已踢出用户：{格式化用户列表(成功用户)}")
-    if 撤回数量记录:
-        行列表.append(
-            "已撤回消息："
-            + "；".join(f"{用户} {撤回数量记录.get(用户, 0)} 条" for 用户 in 成功用户)
-        )
-    if 失败用户:
-        行列表.append(
-            "失败用户：" + "；".join(f"{用户}：{错误}" for 用户, 错误 in 失败用户)
-        )
-    return "\n".join(行列表)
-
-
-def 提取踢出命令文本(event: AstrMessageEvent, 命令文本: str) -> str:
-    候选列表: list[str] = []
-    消息对象 = getattr(event, "message_obj", None)
-    for 对象 in (event, 消息对象):
-        if 对象 is None:
-            continue
-        for 字段名 in ("message", "components", "content"):
-            文本 = 从消息段提取非At文本(读取字段(对象, 字段名))
-            if 文本:
-                候选列表.append(文本)
-    候选列表.append(str(命令文本 or ""))
-    候选列表.extend(获取原始文本候选(event))
-
-    for 候选 in 候选列表:
-        文本 = 清理踢出命令文本(候选)
-        if 文本 in 踢出命令集合:
-            return 文本
-    return ""
 
 
 def 提取被艾特用户QQ(event: AstrMessageEvent) -> str:
@@ -488,10 +544,6 @@ def 去重保序(列表: list[str]) -> list[str]:
     return 结果
 
 
-def 格式化用户列表(用户列表: list[str]) -> str:
-    return "、".join(用户列表)
-
-
 def 规范化用户编号(值: Any) -> str:
     文本 = str(值 or "").strip()
     if not 文本 or 文本.lower() in {"all", "qq_official"}:
@@ -500,9 +552,15 @@ def 规范化用户编号(值: Any) -> str:
 
 
 async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> bool:
+    # 自动广告撤回只保留 QQ 官方群实现，OneBot 事件不再进入此分支。
+    if not 是QQ官方机器人(event):
+        return False
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
         logger.debug("撤回检查跳过")
+        return False
+    if not await 当前群广告拦截是否开启(event, 配置):
+        logger.debug("广告撤回跳过：当前 QQ 官方群已关闭广告拦截")
         return False
     去重键 = await 开始数字撤回去重(event)
     if 去重键 == "":
@@ -531,8 +589,7 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
             logger.debug(f"卡片撤回规则命中：类型={卡片类型}")
         撤回成功 = await 尝试撤回当前消息(event)
         if 撤回成功:
-            await 尝试撤回触发用户最近消息(event)
-            触发次数 = await 记录撤回触发并尝试踢出(event, 配置)
+            触发次数 = await 记录撤回触发(event)
             if 触发次数:
                 禁言秒数 = 计算广告撤回禁言秒数(触发次数)
                 禁言成功 = await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
@@ -583,7 +640,7 @@ def 计算广告撤回禁言秒数(触发次数: int) -> int:
 
 
 def 获取撤回发送者标识(event: AstrMessageEvent) -> str:
-    """读取 OneBot user_id 或 QQ 官方 author.member_openid。"""
+    """读取 QQ 官方消息中的成员 OpenID。"""
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
         if 对象 is None:
@@ -616,14 +673,10 @@ def 获取撤回发送者标识(event: AstrMessageEvent) -> str:
 
 
 def 获取撤回发送者统一标识(event: AstrMessageEvent) -> str:
-    """读取可跨 QQ 官方群复用的 user_openid，OneBot 场景返回 QQ 号。"""
-    官方 = 是QQ官方机器人(event)
+    """读取可跨 QQ 官方群复用的 user_openid。"""
     消息对象 = getattr(event, "message_obj", None)
     对象列表 = (event, 消息对象)
-    if 官方:
-        标识字段 = ("user_openid", "openid")
-    else:
-        标识字段 = ("user_id", "qq", "openid")
+    标识字段 = ("user_openid", "openid")
     for 对象 in 对象列表:
         if 对象 is None:
             continue
@@ -694,7 +747,6 @@ def 记录消息段成员映射(消息: Any, 群号: str) -> None:
 async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发次数: int) -> bool:
     群号 = 获取群号(event)
     用户标识 = 获取撤回发送者标识(event)
-    跨群用户标识 = 获取撤回发送者统一标识(event)
     bot = getattr(event, "bot", None)
     if not 群号 or not 用户标识 or bot is None:
         logger.warning(
@@ -703,24 +755,13 @@ async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发�
         )
         return False
     try:
-        await 使用_set_group_ban禁言(bot, 群号, 用户标识, 秒数, "add")
-        同步成功数, 同步失败数 = await 同步成员禁言到其它群(
-            bot,
-            群号,
-            用户标识,
-            秒数,
-            "add",
-            跨群用户标识=跨群用户标识,
-        )
+        await 使用QQ官方成员禁言接口(bot, 群号, 用户标识, 秒数, "add")
         logger.info(
-            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s, "
-            "cross_group_success=%s, cross_group_failed=%s",
+            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s",
             群号,
             用户标识,
             触发次数,
             秒数,
-            同步成功数,
-            同步失败数,
         )
         return True
     except Exception as exc:
@@ -779,26 +820,21 @@ def 构造撤回广告提醒(event: AstrMessageEvent) -> str:
 
 
 async def 发送撤回广告提醒(event: AstrMessageEvent) -> bool:
+    if not 是QQ官方机器人(event):
+        return False
     文本 = 构造撤回广告提醒(event)
     try:
-        if 是QQ官方机器人(event):
-            from 功能文件.管理功能.基础功能 import 帮助功能
+        from 功能文件.管理功能.基础功能 import 帮助功能
 
-            return bool(
-                await 帮助功能.发送Markdown键盘消息(
-                    event,
-                    文本,
-                    None,
-                    主动发送=True,
-                    自动提及=False,
-                )
+        return bool(
+            await 帮助功能.发送Markdown键盘消息(
+                event,
+                文本,
+                None,
+                主动发送=True,
+                自动提及=False,
             )
-        发送方法 = getattr(event, "send", None)
-        if not callable(发送方法):
-            return False
-        发送结果 = 发送方法(event.plain_result(文本))
-        await 等待可能异步结果(发送结果)
-        return True
+        )
     except Exception as exc:
         logger.warning(
             "广告撤回提醒发送失败：error_type=%s",
@@ -808,14 +844,20 @@ async def 发送撤回广告提醒(event: AstrMessageEvent) -> bool:
 
 
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
+    if not 是QQ官方机器人(event):
+        return False
     事件角色 = 提取事件发送者群角色(event)
 
     群号 = 获取群号(event)
-    用户QQ = 获取发送者QQ(event)
-    if not 群号 or not 用户QQ:
+    用户标识 = 获取撤回发送者标识(event)
+    if not 群号 or not 用户标识:
         结果 = 是QQ群管理角色(事件角色)
         logger.info(
-            f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(缺少群号或用户QQ)"
+            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s",
+            群号,
+            用户标识,
+            事件角色,
+            结果,
         )
         return 结果
 
@@ -823,39 +865,31 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
     if bot is None:
         结果 = 是QQ群管理角色(事件角色)
         logger.info(
-            f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(缺少bot)"
+            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s (缺少bot)",
+            群号,
+            用户标识,
+            事件角色,
+            结果,
         )
         return 结果
 
     try:
-        群号值 = int(群号)
-        用户QQ值 = int(用户QQ)
         响应 = await 调用机器人动作(
             bot,
             "get_group_member_info",
-            group_id=群号值,
-            user_id=用户QQ值,
+            group_openid=群号,
+            user_openid=用户标识,
             no_cache=True,
         )
-    except (ValueError, TypeError):
-        try:
-            响应 = await 调用机器人动作(
-                bot,
-                "get_group_member_info",
-                group_openid=群号,
-                user_openid=用户QQ,
-                no_cache=True,
-            )
-        except Exception as exc:
-            结果 = 是QQ群管理角色(事件角色)
-            logger.info(
-                f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(openid查询异常: {exc})"
-            )
-            return 结果
     except Exception as exc:
         结果 = 是QQ群管理角色(事件角色)
         logger.info(
-            f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(数字ID查询异常: {exc})"
+            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s, error_type=%s",
+            群号,
+            用户标识,
+            事件角色,
+            结果,
+            type(exc).__name__,
         )
         return 结果
 
@@ -864,12 +898,21 @@ async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> boo
         角色 = 数据.get("role")
         结果 = 是QQ群管理角色(角色)
         logger.info(
-            f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, API角色={角色!r}, 结果={结果}"
+            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, api_role=%r, result=%s",
+            群号,
+            用户标识,
+            事件角色,
+            角色,
+            结果,
         )
         return 结果
     结果 = 是QQ群管理角色(事件角色)
     logger.info(
-        f"群管理身份检查: 群号={群号}, 用户QQ={用户QQ}, 事件角色={事件角色!r}, 结果={结果}(API返回非dict)"
+        "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s (API返回非dict)",
+        群号,
+        用户标识,
+        事件角色,
+        结果,
     )
     return 结果
 
@@ -1039,6 +1082,8 @@ async def QQ官方机器人具备群管权限(
 
 
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if not 是QQ官方机器人(event):
+        return False
     if 是否白名单消息(event, 消息文本):
         return False
     if 是否At消息(event):
@@ -1380,7 +1425,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
     )
 
     try:
-        await 使用_delete_msg撤回(bot, 消息编号, 群号)
+        await 使用QQ官方消息撤回(bot, 消息编号, 群号)
         logger.info(f"数字撤回成功：message_id={消息编号}")
         return True
     except Exception as exc:
@@ -1388,129 +1433,7 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         return False
 
 
-async def 尝试撤回触发用户最近消息(event: AstrMessageEvent) -> int:
-    群号 = 获取群号(event)
-    用户QQ = 获取发送者QQ(event)
-    if not 群号 or not 用户QQ:
-        logger.info(
-            f"最近消息撤回跳过：缺少群号或用户QQ，group_id={群号}, user_id={用户QQ}"
-        )
-        return 0
-    当前消息编号 = str(获取当前消息编号(event) or "")
-    return await 尝试撤回指定用户最近消息(
-        event,
-        群号,
-        用户QQ,
-        排除消息编号=当前消息编号,
-        拉取数量=最近消息撤回拉取数量,
-        撤回数量=最近消息撤回数量,
-        日志名称="最近消息撤回",
-    )
-
-
-async def 尝试撤回指定用户最近消息(
-    event: AstrMessageEvent,
-    群号: str,
-    用户QQ: str,
-    排除消息编号: str = "",
-    拉取数量: int = 最近消息撤回拉取数量,
-    撤回数量: int = 最近消息撤回数量,
-    日志名称: str = "最近消息撤回",
-) -> int:
-    if not 群号 or not 用户QQ:
-        logger.info(
-            f"{日志名称}跳过：缺少群号或用户QQ，group_id={群号}, user_id={用户QQ}"
-        )
-        return 0
-    bot = getattr(event, "bot", None)
-    if bot is None:
-        logger.warning(
-            f"{日志名称}失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}"
-        )
-        return 0
-    if not await QQ官方机器人具备群管权限(bot, 群号):
-        logger.info("%s跳过：QQ官方机器人不是群管理员，group_id=%s", 日志名称, 群号)
-        return 0
-
-    try:
-        历史消息 = await 获取群历史消息(bot, 群号, 拉取数量)
-    except Exception as exc:
-        logger.warning(
-            f"{日志名称}获取历史失败：group_id={群号}, user_id={用户QQ}, error={exc}"
-        )
-        return 0
-
-    目标消息 = 筛选用户最近消息(历史消息, 用户QQ, 排除消息编号, 撤回数量)
-    成功数量 = 0
-    for 消息 in 目标消息:
-        消息编号 = 消息.get("message_id") if isinstance(消息, dict) else None
-        if not 消息编号:
-            continue
-        try:
-            await 使用_delete_msg撤回(bot, 消息编号, 群号)
-            成功数量 += 1
-            logger.info(
-                f"{日志名称}成功：group_id={群号}, user_id={用户QQ}, message_id={消息编号}"
-            )
-        except Exception as exc:
-            logger.warning(
-                f"{日志名称}失败：group_id={群号}, user_id={用户QQ}, message_id={消息编号}, error={exc}"
-            )
-    return 成功数量
-
-
-async def 获取群历史消息(bot: Any, 群号: str, 数量: int) -> list[dict[str, Any]]:
-    try:
-        群号值 = int(群号)
-        响应 = await 调用机器人动作(
-            bot, "get_group_msg_history", group_id=群号值, count=int(数量)
-        )
-    except (ValueError, TypeError):
-        try:
-            响应 = await 调用机器人动作(
-                bot, "get_group_msg_history", group_openid=群号, count=int(数量)
-            )
-        except Exception:
-            try:
-                响应 = await 调用机器人动作(
-                    bot, "get_group_msg_history", channel_id=群号, count=int(数量)
-                )
-            except Exception:
-                响应 = None
-    if isinstance(响应, dict):
-        数据 = 响应.get("data") if "data" in 响应 else 响应
-        if isinstance(数据, dict):
-            消息列表 = 数据.get("messages") or 数据.get("message") or []
-        else:
-            消息列表 = 响应.get("messages") or []
-    else:
-        消息列表 = []
-    return [消息 for 消息 in 消息列表 if isinstance(消息, dict)]
-
-
-def 筛选用户最近消息(
-    历史消息: list[dict[str, Any]],
-    用户QQ: str,
-    排除消息编号: str = "",
-    数量: int = 最近消息撤回数量,
-) -> list[dict[str, Any]]:
-    结果: list[dict[str, Any]] = []
-    for 消息 in 历史消息:
-        发送者 = 消息.get("sender") if isinstance(消息, dict) else None
-        发送者QQ = ""
-        if isinstance(发送者, dict):
-            发送者QQ = str(发送者.get("user_id") or "").strip()
-        if 发送者QQ != str(用户QQ):
-            continue
-        消息编号 = str(消息.get("message_id") or "").strip()
-        if 排除消息编号 and 消息编号 == 排除消息编号:
-            continue
-        结果.append(消息)
-    结果.sort(key=lambda 项目: 安全整数(项目.get("time"), 0), reverse=True)
-    return 结果[: max(0, int(数量))]
-
-
-async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any = None) -> int:
+async def 记录撤回触发(event: AstrMessageEvent) -> int:
     群号 = 获取群号(event)
     用户QQ = 获取撤回发送者统一标识(event) or 获取撤回发送者标识(event)
     if not 群号 or not 用户QQ:
@@ -1527,58 +1450,6 @@ async def 记录撤回触发并尝试踢出(event: AstrMessageEvent, 配置: Any
         当前次数,
     )
     return 当前次数
-
-
-async def 尝试踢出成员(
-    event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None
-) -> bool:
-    bot = getattr(event, "bot", None)
-    if bot is None:
-        logger.warning(
-            f"数字撤回踢出失败：当前事件缺少 bot 实例，group_id={群号}, user_id={用户QQ}"
-        )
-        return False
-
-    try:
-        await 尝试网页或适配器踢出(event, bot, 群号, 用户QQ, 配置)
-        logger.info(
-            f"数字撤回触发 {数字撤回踢出阈值} 次，已踢出成员：group_id={群号}, user_id={用户QQ}"
-        )
-        await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
-        return True
-    except Exception as exc:
-        logger.warning(
-            f"数字撤回踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}"
-        )
-        return False
-
-
-async def 尝试网页或适配器踢出(
-    event: AstrMessageEvent, bot: Any, 群号: str, 用户QQ: str, 配置: Any = None
-) -> None:
-    await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
-
-
-async def 尝试踢出其它群同一成员(bot: Any, 当前群号: str, 用户QQ: str) -> None:
-    try:
-        群号列表 = await 获取机器人所在群号列表(bot)
-    except Exception as exc:
-        logger.warning(f"跨群踢出获取群列表失败：user_id={用户QQ}, error={exc}")
-        return
-
-    for 群号 in 群号列表:
-        群号 = str(群号)
-        if 群号 == str(当前群号) or not 是数字ID(群号):
-            continue
-        try:
-            if not await 检查群成员存在(bot, 群号, 用户QQ):
-                continue
-            await 使用_set_group_kick踢出(bot, 群号, 用户QQ)
-            logger.info(f"跨群踢出成功：group_id={群号}, user_id={用户QQ}")
-        except Exception as exc:
-            logger.warning(
-                f"跨群踢出失败：group_id={群号}, user_id={用户QQ}, error={exc}"
-            )
 
 
 async def 同步成员禁言到其它群(
@@ -1730,16 +1601,6 @@ async def 检查群成员存在(bot: Any, 群号: str, 用户QQ: str) -> bool:
     return False
 
 
-async def 尝试踢出指定成员(
-    event: AstrMessageEvent, 群号: str, 用户QQ: str, 配置: Any = None
-) -> None:
-    bot = getattr(event, "bot", None)
-    if bot is None:
-        raise RuntimeError("当前事件缺少 bot 实例")
-    await 尝试网页或适配器踢出(event, bot, 群号, 用户QQ, 配置)
-    await 尝试踢出其它群同一成员(bot, 群号, 用户QQ)
-
-
 def 获取当前消息编号(event: AstrMessageEvent) -> Any:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
@@ -1877,171 +1738,30 @@ def 转消息段文本(消息段: Any) -> str:
     return ""
 
 
-async def 使用_delete_msg撤回(bot: Any, 消息编号: Any, 群号: str = "") -> bool:
-    try:
-        from astrbot.api import logger as _logger
-    except Exception:
-        import logging
-
-        _logger = logging.getLogger(__name__)
-
+async def 使用QQ官方消息撤回(bot: Any, 消息编号: Any, 群号: str = "") -> bool:
+    """通过 QQ 官方群消息撤回接口删除单条消息。"""
+    群号文本 = str(群号 or "").strip()
+    消息编号文本 = str(消息编号 or "").strip()
+    if not 群号文本 or not 消息编号文本:
+        raise RuntimeError("QQ 官方撤回参数不完整")
     api = getattr(bot, "api", None)
-
-    撤回方法 = getattr(bot, "delete_msg", None)
-    if callable(撤回方法):
-        try:
-            响应 = await 撤回方法(message_id=消息编号)
-            if 撤回响应成功(响应):
-                return True
-        except Exception:
-            pass
-        if 群号:
-            try:
-                响应 = await 撤回方法(message_id=消息编号, channel_id=群号)
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-            try:
-                响应 = await 撤回方法(message_id=消息编号, group_openid=群号)
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-            try:
-                响应 = await 撤回方法(message_id=消息编号, openid=群号)
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-
-    调用动作 = (
-        getattr(getattr(api, "call_action", None), "__call__", None) if api else None
+    http客户端 = getattr(api, "_http", None) if api is not None else None
+    if http客户端 is None:
+        raise RuntimeError("当前 bot 没有 QQ 官方 HTTP 客户端")
+    try:
+        from botpy.http import Route
+    except Exception as exc:
+        raise RuntimeError("缺少 QQ 官方 HTTP 路由") from exc
+    路由 = Route(
+        "DELETE",
+        "/v2/groups/{group_openid}/messages/{message_id}",
+        group_openid=群号文本,
+        message_id=消息编号文本,
     )
-    if callable(调用动作):
-        try:
-            响应 = await 调用动作("delete_msg", message_id=消息编号)
-            if 撤回响应成功(响应):
-                return True
-        except Exception:
-            pass
-        if 群号:
-            try:
-                响应 = await 调用动作(
-                    "delete_msg", message_id=消息编号, channel_id=群号
-                )
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-            try:
-                响应 = await 调用动作(
-                    "delete_msg", message_id=消息编号, group_openid=群号
-                )
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-            try:
-                响应 = await 调用动作("delete_msg", message_id=消息编号, openid=群号)
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-
-    for 方法名 in (
-        "recall_msg",
-        "delete_message",
-        "recall_message",
-        "msg_recall",
-        "message_recall",
-    ):
-        方法 = getattr(bot, 方法名, None)
-        if callable(方法):
-            try:
-                响应 = await 方法(message_id=消息编号)
-                if 撤回响应成功(响应):
-                    return True
-            except Exception:
-                pass
-            if 群号:
-                try:
-                    响应 = await 方法(message_id=消息编号, channel_id=群号)
-                    if 撤回响应成功(响应):
-                        return True
-                except Exception:
-                    pass
-                try:
-                    响应 = await 方法(message_id=消息编号, group_openid=群号)
-                    if 撤回响应成功(响应):
-                        return True
-                except Exception:
-                    pass
-
-    if api is not None:
-        for 方法名 in (
-            "recall_msg",
-            "delete_message",
-            "recall_message",
-            "msg_recall",
-            "message_recall",
-            "delete_msg",
-        ):
-            方法 = getattr(api, 方法名, None)
-            if callable(方法):
-                try:
-                    响应 = await 方法(message_id=消息编号)
-                    if 撤回响应成功(响应):
-                        return True
-                except Exception:
-                    pass
-                if 群号:
-                    try:
-                        响应 = await 方法(channel_id=群号, message_id=消息编号)
-                        if 撤回响应成功(响应):
-                            return True
-                    except Exception:
-                        pass
-                    try:
-                        响应 = await 方法(message_id=消息编号, channel_id=群号)
-                        if 撤回响应成功(响应):
-                            return True
-                    except Exception:
-                        pass
-                    try:
-                        响应 = await 方法(群号, 消息编号)
-                        if 撤回响应成功(响应):
-                            return True
-                    except Exception:
-                        pass
-
-    if api is not None and 群号:
-        _http = getattr(api, "_http", None)
-        if _http is not None:
-            _logger.info(
-                f"撤回: 尝试通过 api._http 底层HTTP客户端撤回群消息, _http类型={type(_http).__name__}"
-            )
-            try:
-                import botpy.http as _botpy_http
-
-                Route = _botpy_http.Route
-            except Exception:
-                Route = None
-            if Route is not None:
-                try:
-                    route = Route("DELETE", f"/v2/groups/{群号}/messages/{消息编号}")
-                    响应 = await _http.request(route)
-                    if 撤回响应成功(响应):
-                        _logger.info("撤回成功: 已收到确认响应")
-                        return True
-                except Exception as e:
-                    _logger.info(
-                        f"撤回: _http.request(Route) 异常: {type(e).__name__}: {e}"
-                    )
-            else:
-                _logger.info("撤回: 无法导入 botpy.http.Route，跳过底层HTTP撤回")
-
-    raise RuntimeError("当前 bot 没有可用的撤回接口")
+    响应 = await http客户端.request(路由)
+    if not 撤回响应成功(响应):
+        raise RuntimeError("QQ 官方撤回接口返回失败")
+    return True
 
 
 def 撤回响应成功(响应: Any) -> bool:
@@ -2091,68 +1811,6 @@ async def 等待可能异步结果(结果: Any) -> Any:
     if inspect.isawaitable(结果):
         return await 结果
     return 结果
-
-
-async def 使用_set_group_kick踢出(bot: Any, 群号: str, 用户QQ: str) -> bool:
-    是否数字 = True
-    try:
-        群号值 = int(群号)
-        用户QQ值 = int(用户QQ)
-    except (ValueError, TypeError):
-        是否数字 = False
-        群号值 = 群号
-        用户QQ值 = 用户QQ
-
-    踢出方法 = getattr(bot, "set_group_kick", None)
-    if callable(踢出方法):
-        if 是否数字:
-            try:
-                await 踢出方法(
-                    group_id=群号值, user_id=用户QQ值, reject_add_request=False
-                )
-                return True
-            except Exception:
-                pass
-        try:
-            await 踢出方法(
-                group_openid=群号值, user_openid=用户QQ值, reject_add_request=False
-            )
-            return True
-        except Exception:
-            pass
-        if 是否数字:
-            raise RuntimeError("set_group_kick 踢出失败")
-        raise RuntimeError("set_group_kick 踢出失败，可能不支持 openid 参数")
-
-    api = getattr(bot, "api", None)
-    调用动作 = getattr(api, "call_action", None)
-    if callable(调用动作):
-        if 是否数字:
-            try:
-                await 调用动作(
-                    "set_group_kick",
-                    group_id=群号值,
-                    user_id=用户QQ值,
-                    reject_add_request=False,
-                )
-                return True
-            except Exception:
-                pass
-        try:
-            await 调用动作(
-                "set_group_kick",
-                group_openid=群号值,
-                user_openid=用户QQ值,
-                reject_add_request=False,
-            )
-            return True
-        except Exception:
-            pass
-        if 是否数字:
-            raise RuntimeError("set_group_kick 踢出失败")
-        raise RuntimeError("set_group_kick 踢出失败，可能不支持 openid 参数")
-
-    raise RuntimeError("当前 bot 没有 set_group_kick 踢出接口")
 
 
 def 构造QQ官方成员禁言请求体(
@@ -2289,12 +1947,3 @@ async def 使用_set_group_ban禁言(
         return True
 
     raise RuntimeError("当前 bot 没有成员禁言接口")
-
-
-def 安全整数(值: Any, 默认值: int = 0) -> int:
-    if 值 in (None, "") or isinstance(值, bool):
-        return 默认值
-    try:
-        return int(str(值).strip())
-    except Exception:
-        return 默认值

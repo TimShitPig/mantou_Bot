@@ -60,7 +60,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.58.4"
+插件版本 = "5.59.0"
 
 
 @register("馒头bot", "馒头", "适用于 AstrBot 的馒头bot插件。", 插件版本)
@@ -233,7 +233,7 @@ class MyPlugin(Star):
             event.stop_event()
             return
 
-        是广告消息 = (
+        是广告消息 = 权限工具.是QQ官方机器人(event) and (
             群管功能.是否闪传消息(event)
             or 群管功能.是否群名片消息(event)
             or 群管功能.是否合并转发消息(event)
@@ -249,6 +249,10 @@ class MyPlugin(Star):
             回复内容 = 小说网盘功能.处理网盘切换指令(event, 命令文本, self.config)
         if 回复内容 is None:
             回复内容 = 状态功能.处理状态指令(event, 命令文本, self.config, 插件版本)
+        if 回复内容 is None:
+            回复内容 = await 群管功能.处理广告开关指令(
+                event, 命令文本, self.config
+            )
         if 回复内容 is None:
             if 权限工具.是QQ官方机器人(event):
                 md文本, 键盘 = 帮助功能.处理帮助指令MD带键盘(

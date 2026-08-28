@@ -424,6 +424,7 @@ from .帮助网页脚本 import 控制台脚本
                   <span class="msg-admin-tag" id="msg-admin-tag" hidden>· 机器人是管理员</span>
                 </div>
                 <div class="msg-head-actions">
+                  <button class="msg-btn" id="msg-ad-switch" type="button" hidden title="切换当前群的广告拦截">广告拦截</button>
                   <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
                   <button class="msg-btn" id="msg-remark" type="button" hidden>群备注</button>
                   <button class="msg-btn" id="msg-reload" type="button">刷新</button>

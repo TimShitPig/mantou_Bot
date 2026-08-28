@@ -185,7 +185,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = {};
@@ -468,6 +468,7 @@
         msgState.historyOlderLoading = false;
         msgState.chatId = chatId;
         msgState.chatType = String(chat?.chat_type || 'group');
+        resetMsgAdSwitch();
         msgState.profiles = {};
         msgState.historyData = null;
         msgState.messages = [];
@@ -480,6 +481,7 @@
         });
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
+        updateMsgAdSwitch();
         $('msg-composer').hidden = false;
         const body = $('msg-body');
         if (body) {
@@ -490,6 +492,7 @@
           node.classList.toggle('active', String(node.dataset.msgChat || '') === chatId);
         });
         selectedNode?.scrollIntoView({block:'nearest'});
+        if (msgState.chatType === 'group') void loadGroupAdSwitch();
       };
       const scheduleMsgHistoryLoad = (chatId) => {
         const id = String(chatId || '').trim();
@@ -667,6 +670,74 @@
         const el = $('msg-admin-tag');
         if (!el) return;
         el.hidden = !(msgState.chatType === 'group' && msgState.botIsAdmin);
+      };
+      const updateMsgAdSwitch = () => {
+        const button = $('msg-ad-switch');
+        if (!button) return;
+        const visible = msgState.chatType === 'group' && Boolean(msgState.chatId);
+        button.hidden = !visible;
+        if (!visible) return;
+        const pending = Boolean(msgState.adLoading || msgState.adSaving);
+        const enabled = Boolean(msgState.adEnabled);
+        button.disabled = pending || !msgState.adEditable;
+        button.textContent = pending ? '广告拦截：读取中' : (enabled ? '关闭广告' : '开启广告');
+        button.title = pending
+          ? '正在读取当前群的广告拦截状态'
+          : (!msgState.adEditable
+            ? '数据库未配置，广告开关无法保存'
+            : (enabled ? '当前群广告拦截已开启，点击关闭' : '当前群广告拦截已关闭，点击开启'));
+      };
+      const resetMsgAdSwitch = () => {
+        msgState.adChatId = String(msgState.chatId || '');
+        msgState.adEnabled = false;
+        msgState.adEditable = false;
+        msgState.adLoading = msgState.chatType === 'group' && Boolean(msgState.chatId);
+        msgState.adSaving = false;
+        updateMsgAdSwitch();
+      };
+      const loadGroupAdSwitch = async () => {
+        const chatId = String(msgState.chatId || '').trim();
+        if (msgState.chatType !== 'group' || !chatId) return;
+        msgState.adChatId = chatId;
+        msgState.adLoading = true;
+        updateMsgAdSwitch();
+        try {
+          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'group', action:'get'})});
+          if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          msgState.adEnabled = Boolean(data.enabled);
+          msgState.adEditable = Boolean(data.editable);
+        } catch (_) {
+          if (msgState.chatId === chatId && msgState.chatType === 'group') {
+            msgState.adEnabled = false;
+            msgState.adEditable = false;
+          }
+        } finally {
+          if (msgState.chatId === chatId && msgState.chatType === 'group') {
+            msgState.adLoading = false;
+            updateMsgAdSwitch();
+          }
+        }
+      };
+      const toggleGroupAdSwitch = async () => {
+        const chatId = String(msgState.chatId || '').trim();
+        if (msgState.chatType !== 'group' || !chatId || !msgState.adEditable || msgState.adSaving) return;
+        const enabled = !Boolean(msgState.adEnabled);
+        msgState.adSaving = true;
+        updateMsgAdSwitch();
+        try {
+          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'group', action:'set', enabled})});
+          if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          msgState.adEnabled = Boolean(data.enabled);
+          msgState.adEditable = Boolean(data.editable);
+          toast(enabled ? '本群广告拦截已开启' : '本群广告拦截已关闭');
+        } catch (error) {
+          toast(error.message || '广告开关保存失败');
+        } finally {
+          if (msgState.chatId === chatId && msgState.chatType === 'group') {
+            msgState.adSaving = false;
+            updateMsgAdSwitch();
+          }
+        }
       };
       const updateMsgHead = (data) => {
         $('msg-head-name').textContent = data.chat_name || '未命名会话';
@@ -887,6 +958,7 @@
         updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
+        updateMsgAdSwitch();
         if (!msgs.length) { body.innerHTML = '<div class="msg-empty">暂无消息记录</div>'; msgState.renderedChatId = msgState.chatId; clearMsgNewMessages(); return; }
         const profiles = mergeMsgProfiles(
           {...(msgState.profiles || {}), ...(data.member_profiles || {})},
@@ -1340,6 +1412,7 @@
       $('msg-reload').addEventListener('click', () => { loadMsgChats(true); if (msgState.chatId) loadMsgHistory(); });
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
+      $('msg-ad-switch').addEventListener('click', toggleGroupAdSwitch);
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       $('msg-quote-clear').addEventListener('click', () => { msgState.quote = null; $('msg-quote-preview').hidden = true; });

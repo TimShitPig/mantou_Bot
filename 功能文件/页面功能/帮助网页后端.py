@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.55.4"
+控制台版本 = "5.59.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1806,3 +1806,59 @@ async def _处理群信息刷新(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台群信息刷新失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(409, "群信息刷新失败")
+
+
+async def _处理群广告开关(request: web.Request) -> web.Response:
+    """读取或修改单个 QQ 官方群的广告拦截状态。"""
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    数据 = 数据 if isinstance(数据, dict) else {}
+    会话标识 = str(数据.get("chat_id") or "").strip()
+    会话类型 = str(数据.get("chat_type") or "group").strip().lower()
+    if not 会话标识 or len(会话标识) > 200 or 会话类型 != "group":
+        return _控制台错误(400, "只支持 QQ 官方群会话")
+    try:
+        from 功能文件.管理功能.群聊功能 import 群管功能
+
+        if str(数据.get("action") or "get").strip().lower() == "get":
+            开启 = await _控制台线程执行(
+                群管功能.读取群广告开关,
+                当前帮助网页配置,
+                会话标识,
+            )
+            return web.json_response(
+                {
+                    "ok": True,
+                    "enabled": bool(开启),
+                    "editable": bool(群管功能.群广告开关可持久化(当前帮助网页配置)),
+                    "platform": "qq_official",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+
+        原始状态 = 数据.get("enabled")
+        if not isinstance(原始状态, bool):
+            return _控制台错误(400, "广告开关参数无效")
+        if not 群管功能.群广告开关可持久化(当前帮助网页配置):
+            return _控制台错误(409, "数据库未配置，广告开关无法保存")
+        成功 = await _控制台线程执行(
+            群管功能.写入群广告开关,
+            当前帮助网页配置,
+            会话标识,
+            原始状态,
+        )
+        if not 成功:
+            return _控制台错误(409, "广告开关保存失败，请稍后再试")
+        return web.json_response(
+            {
+                "ok": True,
+                "enabled": bool(原始状态),
+                "editable": True,
+                "platform": "qq_official",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台群广告开关失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "广告开关暂时不可用")

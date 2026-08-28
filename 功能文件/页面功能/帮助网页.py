@@ -86,6 +86,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/read", 后端._处理消息已读),
         ("post", "/api/message/remarks", 后端._处理群备注),
         ("post", "/api/message/group-info/refresh", 后端._处理群信息刷新),
+        ("post", "/api/message/group-ad", 后端._处理群广告开关),
         ("get", "/{tail:.*}", _处理帮助网页),
     )
     for 方法, 路径, 处理器 in 路由:
