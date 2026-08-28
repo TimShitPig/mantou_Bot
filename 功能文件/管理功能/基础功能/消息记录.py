@@ -88,6 +88,7 @@ _挂钩已安装 = globals().get("_挂钩已安装", False)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
+_提及规则 = re.compile(r"<@!?([A-Za-z0-9_-]{5,128})>")
 _媒体占位规则 = re.compile(
     r"\[(图片|语音|视频|文件|媒体|media)]\s*((?:https?:)?//[^\s<>]+)",
     re.IGNORECASE,
@@ -226,6 +227,18 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         记录["is_self"] = True
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
+    原始消息 = _解析消息结构(记录.get("raw_message"))
+    _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
+    会话标识 = str(记录.get("_session") or "").strip()
+    作者标识 = str(记录.get("user_id") or "").strip()
+    作者昵称 = str(记录.get("nickname") or "").strip()
+    if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
+        _记录成员资料(
+            会话标识,
+            作者标识,
+            作者昵称,
+            bool(记录.get("is_self")),
+        )
     原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
     try:
         记录时间 = int(记录.get("ts") or 0)
@@ -242,7 +255,6 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         else ""
     )
     if not 现有地址:
-        原始消息 = _解析消息结构(记录.get("raw_message"))
         补充媒体 = _提取媒体字段(str(记录.get("content") or ""), 原始消息)
         if 补充媒体:
             if isinstance(现有媒体, dict):
@@ -263,6 +275,13 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
         记录["is_self"] = True
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
+    原始消息 = _解析消息结构(记录.get("raw_message"))
+    _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
+    会话标识 = str(记录.get("_session") or "").strip()
+    作者标识 = str(记录.get("user_id") or "").strip()
+    作者昵称 = str(记录.get("nickname") or "").strip()
+    if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
+        _记录成员资料(会话标识, 作者标识, 作者昵称, bool(记录.get("is_self")))
     原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
     try:
         记录时间 = int(记录.get("ts") or 0)
@@ -699,6 +718,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
+    成员资料 = copy.deepcopy(成员资料缓存.get(会话标识, {}))
     return {
         "chat_id": 会话标识,
         "chat_type": str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
@@ -708,9 +728,10 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
             len(会话.get("messages") or []),
         ),
         "unread": max(0, int(会话.get("unread") or 0)),
-        "last_content": str(会话.get("last_content") or ""),
+        "last_content": _替换提及名称(会话.get("last_content") or "", 会话标识),
         "last_nickname": str(会话.get("last_nickname") or ""),
         "last_ts": int(会话.get("last_ts") or 0),
+        "member_profiles": 成员资料,
         "message": 消息,
     }
 
@@ -791,6 +812,124 @@ def _解析消息结构(对象: Any) -> Any:
         except Exception:
             continue
     return None
+
+
+def _提取消息提及资料(消息: Any) -> dict[str, str]:
+    """从 botpy 对象、字典和兼容消息段中提取被提及成员昵称。"""
+    if 消息 is None:
+        return {}
+    结果: dict[str, str] = {}
+    待检查: list[tuple[Any, str]] = [(消息, "")]
+    已检查: set[int] = set()
+    提及字段 = ("mentions", "mention", "at_users", "at_list")
+    容器字段 = ("data", "message", "raw_data", "event", "payload")
+    标识字段 = ("member_openid", "user_openid", "openid", "user_id", "id")
+    名称字段 = ("username", "member_name", "nickname", "user_name", "name", "display_name")
+
+    def 加入子项(值: Any, 标识提示: str = "") -> None:
+        if 值 in (None, ""):
+            return
+        if isinstance(值, dict):
+            if any(字段 in 值 for 字段 in (*标识字段, *名称字段)):
+                待检查.append((值, 标识提示))
+                return
+            for 键, 子值 in 值.items():
+                键文本 = str(键 or "").strip()
+                待检查.append((子值, 键文本 if _OPENID规则.fullmatch(键文本) else 标识提示))
+            return
+        if isinstance(值, (list, tuple, set)):
+            待检查.extend((子值, 标识提示) for 子值 in 值)
+            return
+        待检查.append((值, 标识提示))
+
+    while 待检查:
+        当前, 标识提示 = 待检查.pop()
+        结构 = _解析消息结构(当前)
+        当前 = 结构 if 结构 is not None else 当前
+        if isinstance(当前, (dict, list, tuple)):
+            对象键 = id(当前)
+            if 对象键 in 已检查:
+                continue
+            已检查.add(对象键)
+        if isinstance(当前, (list, tuple, set)):
+            待检查.extend((子项, 标识提示) for 子项 in 当前)
+            continue
+        标识 = 标识提示
+        名称 = ""
+        if isinstance(当前, dict):
+            for 字段 in 标识字段:
+                值 = 当前.get(字段)
+                if 值 not in (None, ""):
+                    标识 = str(值).strip()
+                    break
+            for 字段 in 名称字段:
+                值 = 当前.get(字段)
+                if 值 not in (None, ""):
+                    名称 = str(值).strip()
+                    break
+            for 字段 in 提及字段:
+                加入子项(当前.get(字段))
+            for 字段 in 容器字段:
+                if 字段 in 当前:
+                    加入子项(当前.get(字段))
+        elif not isinstance(当前, (str, bytes, int, float, bool)):
+            for 字段 in 标识字段:
+                值 = _读取字段(当前, 字段)
+                if 值 not in (None, ""):
+                    标识 = str(值).strip()
+                    break
+            for 字段 in 名称字段:
+                值 = _读取字段(当前, 字段)
+                if 值 not in (None, ""):
+                    名称 = str(值).strip()
+                    break
+            for 字段 in 提及字段:
+                加入子项(_读取字段(当前, 字段))
+            for 字段 in 容器字段:
+                值 = _读取字段(当前, 字段)
+                if 值 not in (None, ""):
+                    加入子项(值)
+        elif 标识提示 and _OPENID规则.fullmatch(标识提示):
+            名称 = str(当前).strip()
+        if 标识 and _OPENID规则.fullmatch(标识) and 名称 and 名称 != 标识:
+            结果[标识] = 名称
+    return 结果
+
+
+def _更新消息提及资料(记录: dict[str, Any], 消息: Any = None) -> None:
+    """把消息里的被提及成员资料并入当前会话缓存，供正文和列表预览显示。"""
+    if not isinstance(记录, dict):
+        return
+    会话标识 = str(记录.get("_session") or "").strip()
+    if not 会话标识:
+        return
+    原始 = 消息 if 消息 is not None else 记录.get("raw_message")
+    资料 = _提取消息提及资料(原始)
+    if not 资料:
+        return
+    会话资料 = 成员资料缓存.setdefault(会话标识, {})
+    for 成员标识, 昵称 in 资料.items():
+        当前 = 会话资料.setdefault(成员标识, {})
+        当前["nickname"] = 昵称
+        当前.setdefault("is_bot", False)
+        当前.setdefault("role", "")
+
+
+def _替换提及名称(文本: Any, 会话标识: str) -> str:
+    """把会话预览中的 `<@openid>` 替换为已缓存的成员名称。"""
+    原文 = str(文本 or "")
+    资料表 = 成员资料缓存.get(str(会话标识 or "").strip()) or {}
+    if not 资料表 or "<@" not in 原文:
+        return 原文
+    def 取昵称(成员标识: str) -> str:
+        资料 = 资料表.get(成员标识)
+        if isinstance(资料, dict):
+            return str(资料.get("nickname") or 资料.get("username") or "").strip()
+        return str(资料 or "").strip()
+    return _提及规则.sub(
+        lambda 匹配: "@" + (取昵称(匹配.group(1)) or 匹配.group(0)),
+        原文,
+    )
 
 
 _表情标签规则 = re.compile(r'<faceType=\d+,faceId="([^"]*)"(?:,ext="([^"]*)")?>')
@@ -1000,6 +1139,11 @@ def _提取成员昵称(消息: Any) -> str:
             return 昵称
     for 字段 in ("username", "member_name", "nickname", "dear_remark", "user_name", "name"):
         昵称 = str(_读取字段(消息, 字段) or "").strip()
+        if 昵称:
+            return 昵称
+    成员 = _读取字段(消息, "member")
+    for 字段 in ("nick", "nickname", "member_name", "username", "name"):
+        昵称 = str(_读取字段(成员, 字段) or "").strip()
         if 昵称:
             return 昵称
     return ""
@@ -1241,6 +1385,7 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        _更新消息提及资料(记录, 消息)
         已有记录 = next(
             (
                 x for x in reversed(会话["messages"] or [])
@@ -2086,7 +2231,7 @@ def _补齐数据库会话到内存() -> None:
                 会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
             会话["messages"] = 消息列表
             最后 = 消息列表[-1]
-            会话["last_content"] = str(最后.get("content") or "")
+            会话["last_content"] = _替换提及名称(最后.get("content") or "", 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(最后.get("ts") or 0))
             已加载 = True
@@ -2194,7 +2339,13 @@ def _数据库聚合聊天项(
                     "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
                     "nickname": 显示名,
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后记录.get("content") or "")),
+                    "last_content": _替换提及名称(
+                        _表情标签规则.sub(
+                            lambda 匹配: _解码表情文本(匹配.group(0)),
+                            str(最后记录.get("content") or ""),
+                        ),
+                        会话标识,
+                    ),
                     "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
                     "last_ts": last_ts,
                     "msg_count": max(
@@ -2238,7 +2389,10 @@ def _数据库聚合聊天项(
                     "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
                     "nickname": 显示名,
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
+                    "last_content": _替换提及名称(
+                        _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
+                        会话标识,
+                    ),
                     "last_time": _格式化时间戳(最后时间) or str(最后记录.get("timestamp") or ""),
                     "last_ts": 最后时间,
                     "msg_count": max(int(内存会话.get("msg_count") or 0), len(消息列表)),
@@ -2300,7 +2454,13 @@ def 获取聊天列表(
                     "appid": str(会话.get("appid") or ""),
                     "nickname": 显示名,
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(最后消息.get("content") or 会话.get("last_content") or "")),
+                    "last_content": _替换提及名称(
+                        _表情标签规则.sub(
+                            lambda 匹配: _解码表情文本(匹配.group(0)),
+                            str(最后消息.get("content") or 会话.get("last_content") or ""),
+                        ),
+                        会话标识,
+                    ),
                     "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
                     "last_ts": int(会话.get("last_ts") or 0),
                     "msg_count": max(int(会话.get("msg_count") or 0), len(消息列表)),
@@ -2404,7 +2564,7 @@ def _数据库历史消息(
             if 被引用:
                 引用映射[引用ID] = {
                     "nickname": str(被引用.get("nickname") or ""),
-                    "content": str(被引用.get("content") or ""),
+                    "content": _替换提及名称(被引用.get("content") or "", 会话标识),
                     "timestamp": str(被引用.get("timestamp") or ""),
                 }
         for 历史项 in 返回消息:
@@ -2493,7 +2653,7 @@ def 获取消息历史(
         if 被引用:
             引用映射[引用ID] = {
                 "nickname": str(被引用.get("nickname") or ""),
-                "content": str(被引用.get("content") or ""),
+                "content": _替换提及名称(被引用.get("content") or "", 会话标识),
                 "timestamp": str(被引用.get("timestamp") or ""),
             }
     for 历史项 in 返回消息:
@@ -3029,9 +3189,6 @@ def _修补botpy昵称() -> bool:
         def 新初始化(self: Any, *参数: Any, _原=原初始化, **关键字: Any) -> None:
             _原(self, *参数, **关键字)
             try:
-                作者 = getattr(self, "author", None)
-                if 作者 is None or getattr(作者, "username", None):
-                    return
                 数据 = None
                 for 项 in 参数:
                     if isinstance(项, dict) and 项.get("author") is not None:
@@ -3041,12 +3198,45 @@ def _修补botpy昵称() -> bool:
                     数据 = 关键字.get("data")
                 if not isinstance(数据, dict):
                     return
+                作者 = getattr(self, "author", None)
                 作者数据 = 数据.get("author") or {}
-                if not isinstance(作者数据, dict):
-                    return
-                昵称 = str(作者数据.get("username") or "").strip()
-                if 昵称:
-                    作者.username = 昵称
+                if isinstance(作者数据, dict):
+                    昵称 = str(作者数据.get("username") or "").strip()
+                    if 昵称 and 作者 is not None:
+                        作者.username = 昵称
+                原始提及 = 数据.get("mentions") or []
+                已解析提及 = getattr(self, "mentions", None) or []
+                if isinstance(原始提及, dict):
+                    原始提及 = list(原始提及.values())
+                for 原始成员, 解析成员 in zip(原始提及, 已解析提及):
+                    if not isinstance(原始成员, dict):
+                        continue
+                    标识 = str(
+                        原始成员.get("member_openid")
+                        or 原始成员.get("user_openid")
+                        or 原始成员.get("openid")
+                        or 原始成员.get("id")
+                        or ""
+                    ).strip()
+                    if 标识:
+                        for 字段 in ("member_openid", "user_openid", "openid", "id"):
+                            try:
+                                if not getattr(解析成员, 字段, None):
+                                    setattr(解析成员, 字段, 标识)
+                            except Exception:
+                                pass
+                    提及昵称 = str(
+                        原始成员.get("username")
+                        or 原始成员.get("member_name")
+                        or 原始成员.get("nickname")
+                        or 原始成员.get("name")
+                        or ""
+                    ).strip()
+                    if 提及昵称:
+                        try:
+                            解析成员.username = 提及昵称
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -3450,7 +3640,7 @@ def _从数据库恢复() -> None:
             会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
         摘要时间 = int(最后.get("ts") or 项.get("last_ts") or 0)
         if 摘要时间 >= int(会话.get("last_ts") or 0):
-            会话["last_content"] = str(最后.get("content") or "")
+            会话["last_content"] = _替换提及名称(最后.get("content") or "", 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_message_id"] = str(最后.get("message_id") or "")
             会话["last_ts"] = 摘要时间

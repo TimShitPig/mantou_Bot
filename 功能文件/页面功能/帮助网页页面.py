@@ -149,12 +149,11 @@ from .帮助网页脚本 import 控制台脚本
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
             .msg-image-media { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
-            .msg-image-link { display:block; min-width:24px; min-height:24px; }
+            .msg-image-link { display:block; min-width:24px; min-height:24px; padding:0; border:0; background:transparent; text-align:left; line-height:0; cursor:zoom-in; }
+            .msg-image-link:focus-visible { outline:2px solid #12b7f5; outline-offset:3px; }
             .msg-media img { max-width:240px; max-height:240px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; background:#f2f3f5; }
             .msg-media img:hover { transform:scale(1.03); }
             .msg-image-link.is-broken { display:none; }
-            .msg-media-open { color:#3a7bd5; font-size:11px; text-decoration:none; }
-            .msg-media-open:hover { text-decoration:underline; }
             .msg-file-card { display:flex; align-items:center; gap:9px; min-width:190px; max-width:290px; padding:8px 10px; border-radius:8px; background:#f5f8fc; color:#3e4a5a; text-decoration:none; }
             .msg-file-card:hover { background:#eaf2fc; }
             .msg-file-card.is-unavailable { color:#8a8f99; }
@@ -338,7 +337,6 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-file-card:hover { background:#263a52; }
               :root[data-theme="dark"] .msg-file-icon { background:#294b70; color:#9bc9f4; }
               :root[data-theme="dark"] .msg-file-info small { color:#8a9bb2; }
-              :root[data-theme="dark"] .msg-media-open { color:#6fc8ff; }
               :root[data-theme="dark"] .msg-meta { color:#6f7590; }
               :root[data-theme="dark"] .msg-tag.bot { background:#3a2130; color:#e287ae; }
               :root[data-theme="dark"] .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
