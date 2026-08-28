@@ -80,7 +80,7 @@ except Exception:
     "ZhuiShuShenQi/3.45.95 (Android 9; Samsung Marlin / Samsung SM-N9760; "
     "China Mobile GSM)[preload=false;locale=zh_CN;clientidbase=]"
 )
-追书正文最大动态并发数 = 100
+追书正文最大动态并发数 = 400
 追书正文最大尝试次数 = 3
 追书解密并发数 = max(4, min(32, (os.cpu_count() or 4) * 2))
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
@@ -577,6 +577,7 @@ async def _获取单章密钥(
     book_id: str,
     order: int,
     token: str,
+    解密执行器: ThreadPoolExecutor | None = None,
 ) -> bytes:
     参数 = {
         "token": token,
@@ -595,7 +596,15 @@ async def _获取单章密钥(
                 params=参数,
                 headers=_请求头(需要令牌=True),
             )
-            return _解析单章密钥(数据, order)
+            if 解密执行器 is None:
+                return _解析单章密钥(数据, order)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                解密执行器,
+                _解析单章密钥,
+                数据,
+                order,
+            )
         except Exception as exc:
             最后错误 = exc
             if isinstance(exc, ZhuishuError) and "游客会话失效" in str(exc):
@@ -705,6 +714,7 @@ async def _下载章节一轮(
                         书籍.book_id,
                         章节.order,
                         游客令牌,
+                        解密执行器,
                     ),
                     _请求章节数据(session, 章节, 目录),
                     return_exceptions=True,
