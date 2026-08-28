@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.54.4"
+控制台版本 = "5.55.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -64,6 +64,12 @@ class 帮助网页服务:
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
 _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
 控制台执行器最大并发数 = 4
+消息列表缓存秒数 = 3.0
+消息列表缓存最大条目 = 64
+消息列表缓存: dict[tuple[str, str, int, int], tuple[float, dict[str, Any]]] = globals().get("消息列表缓存") or {}
+消息列表缓存锁: dict[tuple[str, str, int, int], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
+消息列表后台刷新: set[tuple[str, str, int, int]] = globals().get("消息列表后台刷新") or set()
+消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
 
 
 def _获取控制台执行器() -> ThreadPoolExecutor:
@@ -93,6 +99,53 @@ def 关闭控制台执行器() -> None:
         _控制台执行器 = None
     if 执行器 is not None:
         执行器.shutdown(wait=False, cancel_futures=True)
+
+
+def 清理消息列表缓存() -> None:
+    """清除网页会话列表缓存，写入/已读/置顶后立即读取最新状态。"""
+    global 消息列表缓存版本
+    消息列表缓存版本 += 1
+    消息列表缓存.clear()
+
+
+def _写入消息列表缓存(
+    缓存键: tuple[str, str, int, int], 结果: dict[str, Any], 缓存版本: int
+) -> None:
+    if 缓存版本 != 消息列表缓存版本:
+        return
+    if 缓存键 not in 消息列表缓存 and len(消息列表缓存) >= 消息列表缓存最大条目:
+        最旧键 = min(消息列表缓存, key=lambda key: 消息列表缓存[key][0])
+        消息列表缓存.pop(最旧键, None)
+    消息列表缓存[缓存键] = (time.monotonic(), copy.deepcopy(结果))
+
+
+async def _构建消息列表(
+    过滤: str, 搜索: str, 页码: int, 每页: int
+) -> dict[str, Any]:
+    from 功能文件.管理功能.基础功能 import 消息记录
+
+    结果 = await _控制台线程执行(
+        消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
+    )
+    try:
+        # 昵称补查只更新内存兜底值；列表聚合已使用同一份缓存。
+        await 消息记录.补查缺失私聊昵称(结果.get("chats") or [])
+    except Exception:
+        pass
+    return 结果
+
+
+async def _后台刷新消息列表(
+    缓存键: tuple[str, str, int, int], 过滤: str, 搜索: str, 页码: int, 每页: int,
+    缓存版本: int,
+) -> None:
+    try:
+        结果 = await _构建消息列表(过滤, 搜索, 页码, 每页)
+        _写入消息列表缓存(缓存键, 结果, 缓存版本)
+    except Exception as exc:
+        logger.debug("帮助控制台消息列表后台刷新失败：错误类型=%s", type(exc).__name__)
+    finally:
+        消息列表后台刷新.discard(缓存键)
 
 插件配置字段定义: dict[str, dict[str, Any]] = {
     "group_file_cleanup_admin_qq": {
@@ -1364,22 +1417,30 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         每页 = int((数据 or {}).get("page_size") or 50)
     except (TypeError, ValueError):
         每页 = 50
-    try:
-        from 功能文件.管理功能.基础功能 import 消息记录
-
-        结果 = await _控制台线程执行(
-            消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
+    页码 = max(1, 页码)
+    每页 = max(1, min(100, 每页))
+    缓存键 = (过滤, 搜索, 页码, 每页)
+    当前时间 = time.monotonic()
+    缓存项 = 消息列表缓存.get(缓存键)
+    if 缓存项:
+        缓存时间, 缓存结果 = 缓存项
+        if 当前时间 - 缓存时间 >= 消息列表缓存秒数 and 缓存键 not in 消息列表后台刷新:
+            消息列表后台刷新.add(缓存键)
+            asyncio.create_task(_后台刷新消息列表(缓存键, 过滤, 搜索, 页码, 每页, 消息列表缓存版本))
+        return web.json_response(
+            {"ok": True, **copy.deepcopy(缓存结果)},
+            headers={"Cache-Control": "no-store"},
         )
-        try:
-            消息记录.安排待处理群信息刷新()
-        except Exception:
-            pass
-        try:
-            # 昵称补查只更新内存兜底值；列表聚合已使用同一份缓存，
-            # 无需再次执行完整 GROUP BY 和最后消息查询。
-            await 消息记录.补查缺失私聊昵称(结果.get("chats") or [])
-        except Exception:
-            pass
+    try:
+        锁 = 消息列表缓存锁.setdefault(缓存键, asyncio.Lock())
+        async with 锁:
+            缓存项 = 消息列表缓存.get(缓存键)
+            if 缓存项:
+                结果 = copy.deepcopy(缓存项[1])
+            else:
+                缓存版本 = 消息列表缓存版本
+                结果 = await _构建消息列表(过滤, 搜索, 页码, 每页)
+                _写入消息列表缓存(缓存键, 结果, 缓存版本)
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
         logger.warning("帮助控制台消息列表读取失败：错误类型=%s", type(exc).__name__)
@@ -1569,6 +1630,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
         )
         if not 结果.get("ok"):
             return _控制台错误(409, str(结果.get("message") or "发送失败"))
+        清理消息列表缓存()
         return web.json_response({"ok": True, **结果})
     except Exception as exc:
         logger.warning("帮助控制台消息发送失败：错误类型=%s", type(exc).__name__)
@@ -1589,6 +1651,7 @@ async def _处理消息撤回(request: web.Request) -> web.Response:
         结果 = await 消息记录.撤回消息(会话标识, 消息ID, str((数据 or {}).get("appid") or ""))
         if not 结果.get("ok"):
             return _控制台错误(409, str(结果.get("message") or "撤回失败"))
+        清理消息列表缓存()
         return web.json_response({"ok": True, "message": "撤回成功"})
     except Exception as exc:
         logger.warning("帮助控制台消息撤回失败：错误类型=%s", type(exc).__name__)
@@ -1641,6 +1704,7 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
 
         if not await _控制台线程执行(消息记录.设置会话置顶, 会话标识, 置顶):
             return _控制台错误(409, "数据库未保存，会话置顶未生效")
+        清理消息列表缓存()
         return web.json_response(
             {"ok": True, "pinned": 置顶, "message": "已置顶" if 置顶 else "已取消置顶"}
         )
@@ -1663,6 +1727,7 @@ async def _处理消息已读(request: web.Request) -> web.Response:
         # 清零操作先落库再返回，避免随后刷新列表又读到旧未读值。
         if not await 消息记录.等待消息记录写入(5.0):
             return _控制台错误(409, "已读状态保存失败")
+        清理消息列表缓存()
         return web.json_response({"ok": True})
     except Exception as exc:
         logger.warning("帮助控制台会话已读失败：错误类型=%s", type(exc).__name__)
@@ -1705,11 +1770,13 @@ async def _处理群备注(request: web.Request) -> web.Response:
         if (数据 or {}).get("action") == "delete":
             if not await _控制台线程执行(消息记录.删除群备注, 会话标识):
                 return _控制台错误(409, "备注删除失败")
+            清理消息列表缓存()
             return web.json_response({"ok": True, "message": "备注已删除"})
         备注 = str((数据 or {}).get("remark") or "").strip()
         群QQ = str((数据 or {}).get("group_qq") or "").strip()
         if not await _控制台线程执行(消息记录.保存群备注, 会话标识, 备注, 群QQ):
             return _控制台错误(409, "备注保存失败")
+        清理消息列表缓存()
         return web.json_response({"ok": True, "message": "备注已保存"})
     except Exception as exc:
         logger.warning("帮助控制台群备注保存失败：错误类型=%s", type(exc).__name__)
@@ -1734,6 +1801,7 @@ async def _处理群信息刷新(request: web.Request) -> web.Response:
         )
         if 结果 is None:
             return _控制台错误(409, "群信息刷新失败")
+        清理消息列表缓存()
         return web.json_response({"ok": True, **结果})
     except Exception as exc:
         logger.warning("帮助控制台群信息刷新失败：错误类型=%s", type(exc).__name__)

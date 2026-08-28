@@ -184,7 +184,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -362,6 +362,7 @@
         if (msgState.chatRenderTimer) { clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null; }
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
+        msgState.historyOlderLoading = false;
         if (msgState.chatListAbort) { msgState.chatListAbort.abort(); msgState.chatListAbort = null; }
         msgState.chatListPromise = null;
         msgState.chatListKey = '';
@@ -927,6 +928,8 @@
       };
       const loadMsgHistory = async (older = false, quiet = false) => {
         if (!msgState.chatId) return;
+        if (older && msgState.historyOlderLoading) return;
+        if (older) msgState.historyOlderLoading = true;
         $('msg-composer').hidden = false;
         const requestId = Number(msgState.historyRequest || 0) + 1;
         msgState.historyRequest = requestId;
@@ -943,7 +946,7 @@
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:120}), signal:controller.signal});
+          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:300}), signal:controller.signal});
           if (requestId !== msgState.historyRequest || requestChatId !== msgState.chatId || requestChatType !== msgState.chatType) return;
           const incoming = dedupeMsgMessages(data.messages || []);
           if (quiet && !older) {
@@ -965,9 +968,13 @@
             {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
           );
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
-          loadGroupRoles(true);
+          // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
+          if (!older) loadGroupRoles(true);
         } catch (error) { if (error.name === 'AbortError' || requestId !== msgState.historyRequest) return; if (error.status === 401) showAuthError(error); else toast(error.message); }
-        finally { if (msgState.historyAbort === controller) msgState.historyAbort = null; }
+        finally {
+          if (msgState.historyAbort === controller) msgState.historyAbort = null;
+          if (older) msgState.historyOlderLoading = false;
+        }
       };
       const loadGroupRoles = async (throttled = false) => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return;
@@ -1088,7 +1095,13 @@
         reader.readAsDataURL(file);
         e.target.value = '';
       });
+      const maybeLoadOlderMessages = () => {
+        const body = $('msg-body');
+        if (!body || body.scrollTop > 20 || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
+        loadMsgHistory(true);
+      };
       $('msg-body').addEventListener('scroll', () => {
+        maybeLoadOlderMessages();
         if (!msgBodyNearBottom($('msg-body'))) return;
         const activeChat = msgState.chats.find((chat) => String(chat.chat_id || '') === String(msgState.chatId || ''));
         const shouldRead = msgState.pendingNewMessages > 0 || Number(activeChat?.unread || 0) > 0;
