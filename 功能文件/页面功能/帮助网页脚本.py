@@ -184,7 +184,7 @@
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
 
       // ---------- 消息记录页 ----------
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -312,8 +312,73 @@
             if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
-          el.addEventListener('click', () => { if (msgState.multi) exitMultiMode(); if (msgState.chatId !== el.dataset.msgChat) cancelMsgRealtimeMessageRender(); msgState.chatId = el.dataset.msgChat; msgState.chatType = el.dataset.msgType; msgState.historyData = null; clearMsgNewMessages(); loadMsgHistory(); markMsgRead(el.dataset.msgChat, true); });
+          el.addEventListener('click', () => {
+            if (msgState.multi) exitMultiMode();
+            const chatId = String(el.dataset.msgChat || '');
+            const chatType = String(el.dataset.msgType || 'group');
+            const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId) || {
+              chat_id: chatId,
+              chat_type: chatType,
+              nickname: chatId,
+            };
+            selectMsgChat(chat, el);
+            scheduleMsgHistoryLoad(chatId);
+            markMsgRead(chatId, true);
+          });
         });
+      };
+      const selectMsgChat = (chat, selectedNode = null) => {
+        const chatId = String(chat?.chat_id || '').trim();
+        if (!chatId) return;
+        if (msgState.chatId !== chatId) cancelMsgRealtimeMessageRender();
+        // 选中会话时立刻使旧历史请求失效，避免旧响应在下一帧前覆盖新会话。
+        if (msgState.historyAbort) {
+          msgState.historyAbort.abort();
+          msgState.historyAbort = null;
+        }
+        msgState.historyRequest = Number(msgState.historyRequest || 0) + 1;
+        msgState.historyOlderLoading = false;
+        msgState.chatId = chatId;
+        msgState.chatType = String(chat?.chat_type || 'group');
+        msgState.historyData = null;
+        msgState.messages = [];
+        msgState.renderedChatId = '';
+        clearMsgNewMessages();
+        // 先更新右侧会话头和蓝色消息区域的加载占位，历史请求异步完成后再替换内容。
+        updateMsgHead({
+          chat_name: chat.remark || chat.group_name || chat.nickname || chatId,
+          group_info: {member_num: chat.member_num || chat.group_member_num || 0},
+        });
+        $('msg-refresh-info').hidden = msgState.chatType !== 'group';
+        $('msg-remark').hidden = msgState.chatType !== 'group';
+        $('msg-composer').hidden = false;
+        const body = $('msg-body');
+        if (body) {
+          body.innerHTML = '<div class="msg-empty msg-loading">正在加载消息...</div>';
+          body.scrollTop = 0;
+        }
+        document.querySelectorAll('[data-msg-chat]').forEach((node) => {
+          node.classList.toggle('active', String(node.dataset.msgChat || '') === chatId);
+        });
+        selectedNode?.scrollIntoView({block:'nearest'});
+      };
+      const scheduleMsgHistoryLoad = (chatId) => {
+        const id = String(chatId || '').trim();
+        if (!id) return;
+        msgState.historyScheduleToken = Number(msgState.historyScheduleToken || 0) + 1;
+        const token = msgState.historyScheduleToken;
+        if (msgState.historyScheduleFrame != null) {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(msgState.historyScheduleFrame);
+          else clearTimeout(msgState.historyScheduleFrame);
+          msgState.historyScheduleFrame = null;
+        }
+        const run = () => {
+          msgState.historyScheduleFrame = null;
+          if (token !== msgState.historyScheduleToken || String(msgState.chatId || '') !== id) return;
+          loadMsgHistory();
+        };
+        if (typeof requestAnimationFrame === 'function') msgState.historyScheduleFrame = requestAnimationFrame(run);
+        else msgState.historyScheduleFrame = setTimeout(run, 0);
       };
       $('msg-lightbox-close')?.addEventListener('click', () => closeMsgLightbox());
       $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox')) closeMsgLightbox(); });
@@ -363,6 +428,12 @@
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
         msgState.historyOlderLoading = false;
+        msgState.historyScheduleToken = Number(msgState.historyScheduleToken || 0) + 1;
+        if (msgState.historyScheduleFrame != null) {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(msgState.historyScheduleFrame);
+          else clearTimeout(msgState.historyScheduleFrame);
+          msgState.historyScheduleFrame = null;
+        }
         if (msgState.chatListAbort) { msgState.chatListAbort.abort(); msgState.chatListAbort = null; }
         msgState.chatListPromise = null;
         msgState.chatListKey = '';
