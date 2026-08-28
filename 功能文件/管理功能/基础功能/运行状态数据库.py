@@ -48,6 +48,37 @@ def 写入运行状态值(配置: Any, 命名空间: str, 状态键: str, 状态
         连接.commit()
 
 
+def 批量写入运行状态值(
+    配置: Any,
+    命名空间: str,
+    状态值: dict[str, Any],
+) -> None:
+    """用单连接单事务写入同一命名空间的多条运行状态。"""
+    if not 状态值 or not 已配置运行状态数据库(配置):
+        return
+    数据库配置 = 获取数据库配置(配置)
+    表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
+    当前时间 = int(time.time())
+    记录列表 = [
+        (str(命名空间), str(状态键), str(状态值项), 当前时间)
+        for 状态键, 状态值项 in 状态值.items()
+    ]
+    if not 记录列表:
+        return
+    with 打开数据库连接(数据库配置) as 连接:
+        确保运行状态数据库表(连接, 表名)
+        with 连接.cursor() as 游标:
+            游标.executemany(
+                f"""
+                INSERT INTO `{表名}` (namespace, state_key, state_value, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE state_value=VALUES(state_value), updated_at=VALUES(updated_at)
+                """,
+                记录列表,
+            )
+        连接.commit()
+
+
 def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, str]:
     if not 已配置运行状态数据库(配置):
         return {}

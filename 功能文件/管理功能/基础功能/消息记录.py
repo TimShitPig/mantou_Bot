@@ -4,8 +4,11 @@ import asyncio
 import ast
 import base64
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import html
 import json
+import os
 import random
 import re
 import threading
@@ -51,6 +54,8 @@ _群信息刷新任务: asyncio.Task[Any] | None = globals().get("_群信息刷�
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
 _元数据写入锁 = globals().get("_元数据写入锁") or threading.RLock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
+_消息记录执行器: ThreadPoolExecutor | None = globals().get("_消息记录执行器")
+_消息记录执行器锁 = threading.Lock()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
 _消息持久化批量大小 = 200
@@ -64,6 +69,14 @@ _消息持久化溢出数 = int(globals().get("_消息持久化溢出数", 0) or
 _数据库裁剪进行中 = globals().get("_数据库裁剪进行中", False)
 _上次数据库裁剪排队时间 = float(globals().get("_上次数据库裁剪排队时间", 0.0) or 0.0)
 _数据库裁剪最短间隔 = 300.0
+_消息缓存总数缓存 = int(globals().get("_消息缓存总数缓存", 0) or 0)
+_消息缓存总数检查时间 = float(globals().get("_消息缓存总数检查时间", 0.0) or 0.0)
+_消息缓存总数检查间隔 = 0.5
+_消息数据库配置缓存: bool | None = globals().get("_消息数据库配置缓存")
+_消息数据库配置缓存时间 = float(
+    globals().get("_消息数据库配置缓存时间", 0.0) or 0.0
+)
+_消息数据库配置缓存间隔 = 2.0
 _消息接收队列上限 = 4096
 _消息接收队列: asyncio.Queue[tuple[Any, Any, str]] = (
     globals().get("_消息接收队列") or asyncio.Queue(maxsize=_消息接收队列上限)
@@ -434,6 +447,58 @@ def _读取全部持久化未读数() -> dict[str, int]:
         return {}
 
 
+def _获取消息记录执行器() -> ThreadPoolExecutor:
+    """为消息记录数据库操作提供独立线程池，避免占用小说下载线程。"""
+    global _消息记录执行器
+    with _消息记录执行器锁:
+        if _消息记录执行器 is None or getattr(_消息记录执行器, "_shutdown", False):
+            _消息记录执行器 = ThreadPoolExecutor(
+                max_workers=max(2, min(4, (os.cpu_count() or 4) // 2 or 2)),
+                thread_name_prefix="mantou-message-db",
+            )
+        return _消息记录执行器
+
+
+async def _异步执行消息记录同步(操作: Any, *参数: Any) -> Any:
+    """在线程池执行可能阻塞的消息记录数据库操作。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _获取消息记录执行器(),
+        partial(操作, *参数),
+    )
+
+
+def 关闭消息记录执行器() -> None:
+    """停止消息记录专用线程池，供插件重载时释放资源。"""
+    global _消息记录执行器
+    with _消息记录执行器锁:
+        执行器 = _消息记录执行器
+        _消息记录执行器 = None
+    if 执行器 is not None:
+        执行器.shutdown(wait=False, cancel_futures=True)
+
+
+def _消息数据库已配置() -> bool:
+    """只判断消息记录是否需要落库，未配置数据库时不启动持久化队列。"""
+    global _消息数据库配置缓存, _消息数据库配置缓存时间
+    if _消息存储 is None:
+        return False
+    当前时间 = time.monotonic()
+    if (
+        _消息数据库配置缓存 is not None
+        and 当前时间 - _消息数据库配置缓存时间 < _消息数据库配置缓存间隔
+    ):
+        return _消息数据库配置缓存
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 已配置运行状态数据库
+
+        _消息数据库配置缓存 = bool(已配置运行状态数据库(当前插件配置))
+    except Exception:
+        _消息数据库配置缓存 = False
+    _消息数据库配置缓存时间 = 当前时间
+    return _消息数据库配置缓存
+
+
 def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
     """把可能阻塞的数据库操作移出 AstrBot 事件循环并登记，便于重载前等待。"""
     try:
@@ -449,7 +514,7 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
         try:
             # 所有后台写库共用一个锁，避免并发 INSERT 按完成先后乱序。
             async with _数据库写入锁:
-                return await asyncio.to_thread(操作, *参数)
+                return await _异步执行消息记录同步(操作, *参数)
         except Exception as 异常:
             logger.debug("消息记录后台数据库操作失败：错误类型=%s", type(异常).__name__)
             return None
@@ -482,20 +547,21 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> None:
     if not 未读表:
         return
     try:
-        from 功能文件.管理功能.基础功能.运行状态数据库 import (
-            已配置运行状态数据库,
-            写入运行状态值,
-        )
+        from 功能文件.管理功能.基础功能 import 运行状态数据库
 
-        if not 已配置运行状态数据库(当前插件配置):
+        if not 运行状态数据库.已配置运行状态数据库(当前插件配置):
             return
-        for 会话标识, 未读数 in 未读表.items():
-            写入运行状态值(
+        批量写入 = getattr(运行状态数据库, "批量写入运行状态值", None)
+        if callable(批量写入):
+            批量写入(
                 当前插件配置,
                 未读状态命名空间,
-                会话标识,
-                未读数,
+                未读表,
             )
+            return
+        写入运行状态值 = 运行状态数据库.写入运行状态值
+        for 会话标识, 未读数 in 未读表.items():
+            写入运行状态值(当前插件配置, 未读状态命名空间, 会话标识, 未读数)
     except Exception as 异常:
         logger.debug("消息记录未读数批量持久化失败：错误类型=%s", type(异常).__name__)
 
@@ -537,7 +603,7 @@ async def _消息持久化工作() -> None:
                     break
             try:
                 async with _数据库写入锁:
-                    await asyncio.to_thread(_执行消息持久化批次, 批次)
+                    await _异步执行消息记录同步(_执行消息持久化批次, 批次)
             except asyncio.CancelledError:
                 raise
             except Exception as 异常:
@@ -678,12 +744,13 @@ async def 停止消息记录() -> bool:
     if 任务 is not None and not 任务.done():
         任务.cancel()
         await asyncio.gather(任务, return_exceptions=True)
+    关闭消息记录执行器()
     return 已冲刷
 
 
 def _持久化未读数(会话标识: str, 未读数: int) -> None:
     """异步写入未读数，避免 MySQL 往返阻塞消息事件循环。"""
-    if not 会话标识:
+    if not 会话标识 or not _消息数据库已配置():
         return
     会话标识 = str(会话标识)
     try:
@@ -1243,7 +1310,7 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
             if not str(旧资料.get("nickname") or "").strip():
                 旧资料["nickname"] = 昵称
                 资料[用户标识] = 旧资料
-        _保存本地昵称(会话标识, 昵称)
+        await _异步执行消息记录同步(_保存本地昵称, 会话标识, 昵称)
     except Exception as exc:
         名称 = type(exc).__name__
         if 名称 in ("NotFoundError", "Not Found", "NotFound"):
@@ -1338,7 +1405,7 @@ def 记录收到消息(
     源: str = "qq_official",
 ) -> dict[str, Any] | None:
     """把一条 QQ 官方消息写入进程内缓存。"""
-    global 发送序号
+    global 发送序号, _消息缓存总数缓存
     try:
         会话标识 = ""
         消息ID = str(_读取字段(消息, "id") or "").strip()
@@ -1396,6 +1463,7 @@ def 记录收到消息(
         新增记录 = 已有记录 is None
         if 新增记录:
             会话["messages"].append(记录)
+            _消息缓存总数缓存 += 1
             会话["msg_count"] = max(
                 int(会话.get("msg_count") or 0),
                 len(会话["messages"]),
@@ -1407,13 +1475,18 @@ def 记录收到消息(
         else:
             # QQ 官方可能同时投递 at/group 两种回调；同一 message_id 只保留一条。
             记录 = _合并重复消息(已有记录, 记录)
-        if _消息存储 is not None and 新增记录:
+        if _消息数据库已配置() and 新增记录:
             try:
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
+            旧数量 = len(会话["messages"])
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
+            _消息缓存总数缓存 = max(
+                0,
+                _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
+            )
         新时间戳 = _转数字时间戳(时间戳) or int(time.time())
         # 摘要按时间维护，纯媒体/空文本消息也要覆盖上一条预览；
         # 旧消息回补时不能把较新的摘要倒退。
@@ -1519,7 +1592,22 @@ def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
 
 def _裁剪总缓存() -> None:
     global _数据库裁剪进行中, _上次数据库裁剪排队时间
-    总数 = sum(len(会话.get("messages", [])) for 会话 in 消息缓存.values())
+    global _消息缓存总数缓存, _消息缓存总数检查时间
+    当前时间 = time.monotonic()
+    需要重新统计 = (
+        _消息缓存总数缓存 <= 0
+        or 当前时间 - _消息缓存总数检查时间 >= _消息缓存总数检查间隔
+    )
+    if not 需要重新统计 and _消息缓存总数缓存 <= 总消息上限:
+        return
+    if 需要重新统计:
+        _消息缓存总数检查时间 = 当前时间
+        总数 = sum(len(会话.get("messages", [])) for 会话 in 消息缓存.values())
+        _消息缓存总数缓存 = 总数
+    else:
+        # 追加和单会话裁剪都会维护计数；超限时直接使用增量值，
+        # 避免消息洪峰期间每条消息都重新遍历全部会话。
+        总数 = _消息缓存总数缓存
     if 总数 <= 总消息上限:
         return
     try:
@@ -1527,14 +1615,25 @@ def _裁剪总缓存() -> None:
             消息缓存.values(),
             key=lambda s: (s.get("last_ts") or 0, s.get("appid") or ""),
         )
+        目标会话数 = max(1, len(会话列表))
+        目标保留数量 = max(
+            1,
+            min(每会话最大消息数 // 2, 总消息上限 // 目标会话数),
+        )
         for 会话 in 会话列表:
             if 总数 <= 总消息上限:
                 break
-            会话["messages"] = 会话["messages"][-(每会话最大消息数 // 2):]
-            总数 = sum(len(s.get("messages", [])) for s in 消息缓存.values())
+            消息列表 = 会话.get("messages") or []
+            保留数量 = 目标保留数量
+            旧数量 = len(消息列表)
+            if 旧数量 <= 保留数量:
+                continue
+            会话["messages"] = 消息列表[-保留数量:]
+            总数 -= 旧数量 - len(会话["messages"])
+        _消息缓存总数缓存 = max(0, 总数)
     except Exception:
-        pass
-    if _消息存储 is not None:
+        _消息缓存总数缓存 = max(0, 总数)
+    if _消息数据库已配置():
         try:
             当前时间 = time.monotonic()
             if _数据库裁剪进行中 or 当前时间 - _上次数据库裁剪排队时间 < _数据库裁剪最短间隔:
@@ -1569,7 +1668,7 @@ def 记录发送消息(
     发送时间: Any = None,
 ) -> dict[str, Any] | None:
     """把机器人发送的消息写入缓存，并按一条新消息累计未读数。"""
-    global 发送序号
+    global 发送序号, _消息缓存总数缓存
     try:
         会话 = _取得会话缓存(会话标识, 类型, appid)
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
@@ -1627,6 +1726,7 @@ def 记录发送消息(
             "ts": 成功时间戳,
         }
         会话["messages"].append(记录)
+        _消息缓存总数缓存 += 1
         会话["msg_count"] = max(
             int(会话.get("msg_count") or 0),
             len(会话["messages"]),
@@ -1635,7 +1735,7 @@ def 记录发送消息(
         会话["unread"] = int(会话.get("unread") or 0) + 1
         _持久化未读数(会话标识, 会话["unread"])
         if 来源.startswith("bot_"):
-            logger.info(
+            logger.debug(
                 "消息记录已捕获机器人发送：会话类型=%s，来源=%s，消息ID=%s，文本长度=%d",
                 类型,
                 来源,
@@ -1650,13 +1750,18 @@ def 记录发送消息(
                         自己发送消息ID.pop(键, None)
             except Exception:
                 pass
-        if _消息存储 is not None:
+        if _消息数据库已配置():
             try:
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
         if len(会话["messages"]) > 每会话最大消息数:
+            旧数量 = len(会话["messages"])
             会话["messages"] = 会话["messages"][-每会话最大消息数:]
+            _消息缓存总数缓存 = max(
+                0,
+                _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
+            )
         try:
             当前摘要时间 = int(会话.get("last_ts") or 0)
         except (TypeError, ValueError):
@@ -2112,7 +2217,7 @@ async def 刷新群信息(
             try:
                 写入群信息 = getattr(_消息存储, "写入群信息", None)
                 if callable(写入群信息):
-                    await asyncio.to_thread(写入群信息, 摘要, appid)
+                    await _异步执行消息记录同步(写入群信息, 摘要, appid)
             except Exception as 存储异常:
                 logger.debug(
                     "消息记录群资料持久化失败：错误类型=%s",
@@ -3493,9 +3598,12 @@ def _安装消息发送挂钩() -> bool:
 
 def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     global 当前插件上下文, _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
+    global _消息数据库配置缓存, _消息数据库配置缓存时间
     _消息接收入队 = True
     _昵称补查接收入队 = True
     _消息持久化接收入队 = True
+    _消息数据库配置缓存 = None
+    _消息数据库配置缓存时间 = 0.0
     # 热重载不沿用旧版本遗留的群资料待刷新队列；新队列只由打开会话产生。
     群信息待刷新.clear()
     if 上下文 is not None:
