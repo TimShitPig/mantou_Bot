@@ -164,8 +164,8 @@ except Exception as exc:
 番茄目录预检并发数 = 4
 番茄目录预检最大候选数 = 8
 番茄目录预检缓存: dict[str, tuple[float, bool | None]] = {}
-# QQ 阅读找书不展示章节单独付费书籍。搜索候选必须先完成详情与目录
-# 预检；网络状态未知也不保留，避免用户点选后才得知不支持下载。
+# QQ 阅读找书会保留有免费章节的 VIP/单章付费书籍；搜索候选必须先完成详情
+# 与完整目录预检，没有可下载免费章节或目录不完整时不保留。
 QQ阅读预检缓存秒数 = 600
 QQ阅读预检并发数 = 5
 QQ阅读预检缓存: dict[str, tuple[float, bool]] = {}
@@ -1494,7 +1494,7 @@ async def 预检QQ阅读候选(
     book_id: str,
     session: aiohttp.ClientSession | None = None,
 ) -> bool:
-    """仅确认免费或会员免费的完整 QQ 阅读候选可以进入找书结果。"""
+    """确认目录完整且至少有一章可下载的 QQ 阅读候选可以进入找书结果。"""
     书籍编号 = str(book_id or "").strip()
     if not 书籍编号.isdigit() or QQ阅读小说 is None:
         return False
@@ -1517,11 +1517,7 @@ async def 预检QQ阅读候选(
             chapter_count <= 0 or len(catalog) == chapter_count
         )
         catalog = QQ阅读小说.获取QQ阅读可下载目录(details, catalog)
-        return (
-            available
-            and bool(catalog)
-            and not QQ阅读小说.是章节单独付费书籍(details, catalog)
-        )
+        return available and bool(catalog)
 
     try:
         if session is not None:
@@ -1540,7 +1536,7 @@ async def 预检QQ阅读候选(
 async def 过滤章节单独付费QQ阅读搜索结果(
     结果: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """找书只保留全免费、或详情明确标记会员免费的 QQ 阅读书籍。"""
+    """找书保留全免费、VIP 或含免费章节的单章付费 QQ 阅读书籍。"""
     if not 结果 or QQ阅读小说 is None:
         return []
     限流 = asyncio.Semaphore(QQ阅读预检并发数)

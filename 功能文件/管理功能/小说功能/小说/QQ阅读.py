@@ -2828,7 +2828,7 @@ QQ阅读登录态状态键 = "login_state"
 )
 下载失败提示 = "下载失败"
 文件发送失败提示 = "文件发送失败，请稍后再试"
-章节单独付费提示 = "不支持章节单独付费的书籍\n只支持免费书籍和vip书籍"
+章节单独付费提示 = "没有可下载的免费章节"
 
 
 def _是QQ阅读域名(hostname: str) -> bool:
@@ -3391,17 +3391,39 @@ def 解析参考目录包(package: bytes, book_id: str) -> list[dict[str, Any]]:
     ]
 
 
+def 获取QQ阅读书籍付费类型(
+    details: dict[str, Any], catalog: list[dict[str, Any]]
+) -> str:
+    """按目录费用和详情标记区分免费、VIP 与单章付费书籍。"""
+    total = max(
+        _安全整数(details.get("total_chapters")),
+        _安全整数(details.get("chapters")),
+        len(catalog),
+    )
+    max_free = _安全整数(details.get("max_free_chapter"))
+    has_free_limit = max_free > 0 and max_free < total
+    has_paid_chapter = any(
+        _安全整数(item.get("chapter_fee")) > 0 for item in catalog
+    )
+    if not has_paid_chapter and not has_free_limit:
+        return "free"
+    if _是真值(details.get("vip_free")):
+        return "vip"
+    return "single"
+
+
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
-    if _是真值(details.get("is_vip")):
-        return False
-    return any(_安全整数(item.get("chapter_fee")) > 0 for item in catalog)
+    return 获取QQ阅读书籍付费类型(details, catalog) == "single"
 
 
 def 获取QQ阅读可下载目录(
     details: dict[str, Any], catalog: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """非会员只保留免费章节，会员保留完整目录。"""
-    if _是真值(details.get("is_vip")):
+    """免费书取全量，VIP 账号只对 VIP 书取全量，单章付费始终只取免费章。"""
+    付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
+    if 付费类型 == "free" or (
+        付费类型 == "vip" and _是真值(details.get("is_vip"))
+    ):
         return list(catalog)
     max_free = _安全整数(details.get("max_free_chapter"))
     total = max(
@@ -4263,17 +4285,17 @@ async def 生成下载回复流(
             )
             if not catalog:
                 raise RuntimeError("目录为空")
+            原始目录数 = len(catalog)
+            付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
             catalog = 获取QQ阅读可下载目录(details, catalog)
             if not catalog:
-                yield 章节单独付费提示
-                return
-            if 是章节单独付费书籍(details, catalog):
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
+                f"原始章节数={原始目录数}, 付费类型={付费类型}, "
                 f"书籍类型={'published' if published else 'novel'}"
             )
             yield 格式化下载提示(details, len(catalog))
