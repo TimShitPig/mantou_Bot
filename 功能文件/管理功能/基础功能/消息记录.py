@@ -2707,7 +2707,7 @@ def 获取消息历史(
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     try:
-        limit = max(1, min(300, int(limit)))
+        limit = max(1, min(100, int(limit)))
     except (TypeError, ValueError):
         limit = 100
     if 类型 == "group" and _群信息需要刷新(群信息缓存.get(会话标识)):
