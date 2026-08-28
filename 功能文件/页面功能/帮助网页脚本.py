@@ -961,9 +961,10 @@
         const body = $('msg-body');
         const followLatest = isViewing && msgState.pendingNewMessages === 0 && msgBodyNearBottom(body);
         const payloadUnread = Number(payload.unread);
+        const fallbackUnread = Math.max(0, Number(existing.unread || 0) + (isNewEvent ? 1 : 0));
         const unread = followLatest
           ? 0
-          : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : Math.max(0, Number(existing.unread || 0) + 1));
+          : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : fallbackUnread);
         const overlay = {
           ...existing,
           chat_id:chatId,
