@@ -228,6 +228,17 @@
           const label = decodeMsgToken(msgTagAttribute(attributes, 'show')) || command;
           return commandToken(kind, command, label);
         });
+        const renderInlineCommand = (target, label = '') => {
+          try {
+            const url = new URL(target);
+            if (url.protocol.toLowerCase() !== 'mqqapi:' || url.hostname.toLowerCase() !== 'aio' || url.pathname.toLowerCase() !== '/inlinecmd') return label;
+            const command = decodeMsgToken(url.searchParams.get('command') || '');
+            return command ? commandToken('inlinecmd', command, label || command) : label;
+          } catch (_) { return label; }
+        };
+        source = source.replace(/\[([^\]\n]+)\]\((mqqapi:\/\/aio\/inlinecmd\?[^)\s]+)\)/gi, (_, label, target) => renderInlineCommand(target, label));
+        source = source.replace(/(\[[^\]\n]+\]\s*[^\]\n]+)\]\((mqqapi:\/\/aio\/inlinecmd\?[^)\s]+)\)/gi, (_, label, target) => renderInlineCommand(target, label));
+        source = source.replace(/mqqapi:\/\/aio\/inlinecmd\?([^\s<>)]*)/gi, (whole, query) => renderInlineCommand(`mqqapi://aio/inlinecmd?${query}`));
         source = source.replace(/<qqbot-at-user\b([^>]*)\/?\s*>/gi, (_, attributes) => {
           const id = decodeMsgToken(msgTagAttribute(attributes, 'id'));
           return id ? `@${resolveMentionName(id, profiles)}` : '';
@@ -248,6 +259,9 @@
       };
       const plainMsgPreview = (value, profiles = msgState.profiles) => {
         let text = replaceMsgMentions(value, profiles);
+        text = text.replace(/\[([^\]\n]+)\]\(mqqapi:\/\/aio\/inlinecmd\?[^)\s]+\)/gi, '$1');
+        text = text.replace(/(\[[^\]\n]+\]\s*[^\]\n]+)\]\(mqqapi:\/\/aio\/inlinecmd\?[^)\s]+\)/gi, '$1');
+        text = text.replace(/mqqapi:\/\/aio\/inlinecmd\?[^\s<>)]*/gi, '');
         text = text.replace(/<qqbot-cmd-(?:input|enter)\b([^>]*)\/?\s*>/gi, (_, attributes) => decodeMsgToken(msgTagAttribute(attributes, 'show')) || decodeMsgToken(msgTagAttribute(attributes, 'text')));
         text = text.replace(/<qqbot-at-user\b([^>]*)\/?\s*>/gi, (_, attributes) => {
           const id = decodeMsgToken(msgTagAttribute(attributes, 'id'));
