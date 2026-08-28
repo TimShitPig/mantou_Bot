@@ -80,6 +80,11 @@ except Exception:
     "ZhuiShuShenQi/3.45.95 (Android 9; Samsung Marlin / Samsung SM-N9760; "
     "China Mobile GSM)[preload=false;locale=zh_CN;clientidbase=]"
 )
+追书来源标记正则 = re.compile(
+    r"(?:https?://(?:[A-Za-z0-9-]+\.)?(?:zhuishushenqi|zhuishuvip)\.com"
+    r"(?::\d+)?(?:[/?:#]|$)|zssq(?:free)?://)",
+    re.I,
+)
 追书正文最大动态并发数 = 400
 追书正文最大尝试次数 = 3
 追书解密并发数 = max(4, min(32, (os.cpu_count() or 4) * 2))
@@ -1170,7 +1175,10 @@ def 提取追书链接(value: Any) -> str:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return match.group(0).rstrip(".,!?！？;；)")
-    if re.search(r"(?:bookId|book_id|book|bid)=", text, flags=re.IGNORECASE):
+    # 查询参数兜底仅适用于明确带有追书域名/协议的消息，避免抢走番茄长读等同样使用 book_id 的链接。
+    if 追书来源标记正则.search(text) and re.search(
+        r"(?:bookId|book_id|book|bid)=", text, flags=re.IGNORECASE
+    ):
         book_id = 提取追书书籍编号(text)
         if book_id:
             return 构造追书链接(book_id)
@@ -1179,6 +1187,8 @@ def 提取追书链接(value: Any) -> str:
 
 def 提取追书书籍编号(文本: Any) -> str:
     value = str(文本 or "").strip()
+    if not 追书来源标记正则.search(value):
+        return ""
     patterns = (
         r"/(?:books?|detail)/([0-9a-f]{16,32})(?:[/?#]|$)",
         r"[?&](?:bookId|book_id|bid|id)=([0-9a-f]{16,32})(?:[&#]|$)",
