@@ -107,6 +107,8 @@ from .帮助网页脚本 import 控制台脚本
             .msg-chat.pinned.active { background:#cfe0f2; }
             .msg-chat.pinned .msg-chat-top strong { color:#1f5fb0; }
             .msg-chat.pinned .msg-chat-top small { color:#6f8db8; }
+            .msg-chat-top strong.admin,
+            .msg-chat.pinned .msg-chat-top strong.admin { color:#dc2626 !important; font-weight:700; }
             .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
             .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
             .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
@@ -123,6 +125,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-work { display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
             .msg-head { display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #e8e9ec; }
             .msg-head-name { font-size:15px; font-weight:650; color:#222; }
+            .msg-head-name.admin { color:#dc2626 !important; font-weight:700; }
             .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
             .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
             .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }
@@ -316,6 +319,8 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-chat.pinned.active { background:#27405e; }
               :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong { color:#6fa8e8; }
               :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top small { color:#7d96b8; }
+              :root[data-theme="dark"] .msg-chat-top strong.admin,
+              :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong.admin { color:#f87171 !important; }
               :root[data-theme="dark"] .msg-chat-top strong { color:#e8eaf2; }
               :root[data-theme="dark"] .msg-chat-top small,:root[data-theme="dark"] .msg-chat-sub,:root[data-theme="dark"] .msg-bubble-name,:root[data-theme="dark"] .msg-head-sub { color:#8a90a5; }
               :root[data-theme="dark"] .msg-chat-avatar { background:#23405f; color:#8db9f0; }
@@ -324,6 +329,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-work { background:#161926; }
               :root[data-theme="dark"] .msg-head { background:#1f2330; border-bottom-color:var(--line); }
               :root[data-theme="dark"] .msg-head-name { color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-head-name.admin { color:#f87171 !important; }
               :root[data-theme="dark"] .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
                :root[data-theme="dark"] .msg-body { background:#161926; }
                :root[data-theme="dark"] .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }

@@ -377,7 +377,7 @@
           if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
           return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" title="${chat.pinned ? '取消置顶' : '置顶'}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
-            <span class="msg-chat-main"><span class="msg-chat-top"><strong>${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
+            <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
              <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）')}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread > 99 ? '99+' : unread}</span>` : ''}</span>
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
@@ -668,8 +668,22 @@
       };
       const updateMsgAdminTag = () => {
         const el = $('msg-admin-tag');
-        if (!el) return;
-        el.hidden = !(msgState.chatType === 'group' && msgState.botIsAdmin);
+        const isAdmin = Boolean(msgState.chatType === 'group' && msgState.botIsAdmin);
+        if (el) el.hidden = !isAdmin;
+        const nameEl = $('msg-head-name');
+        if (nameEl) {
+          if (isAdmin) nameEl.classList.add('admin');
+          else nameEl.classList.remove('admin');
+        }
+        const curChat = (msgState.chats || []).find((c) => c.chat_id === msgState.chatId);
+        if (curChat) {
+          curChat.is_admin = isAdmin;
+          const chatBtn = document.querySelector(`[data-msg-chat="${CSS.escape(msgState.chatId)}"] .msg-chat-top strong`);
+          if (chatBtn) {
+            if (isAdmin) chatBtn.classList.add('admin');
+            else chatBtn.classList.remove('admin');
+          }
+        }
       };
       const updateMsgAdSwitch = () => {
         const button = $('msg-ad-switch');
@@ -740,7 +754,15 @@
         }
       };
       const updateMsgHead = (data) => {
-        $('msg-head-name').textContent = data.chat_name || '未命名会话';
+        const nameEl = $('msg-head-name');
+        nameEl.textContent = data.chat_name || '未命名会话';
+        const curChat = (msgState.chats || []).find((c) => c.chat_id === msgState.chatId);
+        const isAdmin = Boolean(data.is_admin || curChat?.is_admin || msgState.botIsAdmin);
+        if (isAdmin) {
+          nameEl.classList.add('admin');
+        } else {
+          nameEl.classList.remove('admin');
+        }
         const gInfo = data.group_info || {};
         const gNum = Number(gInfo.member_num || 0);
         $('msg-head-sub').textContent = msgState.chatType === 'group'

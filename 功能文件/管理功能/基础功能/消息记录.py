@@ -2202,6 +2202,19 @@ async def 刷新群信息(
             if "group_class_text" in 结果
             else 已有.get("group_class_text")
         )
+        机器人是否管理员 = bool(已有.get("is_admin", False))
+        try:
+            route_bot = Route(
+                "GET",
+                "/v2/groups/{group_openid}/bot_state",
+                group_openid=会话标识,
+            )
+            bot_res = await _http.request(route_bot)
+            if isinstance(bot_res, dict):
+                角色 = str(bot_res.get("member_role") or "")
+                机器人是否管理员 = 角色 in ("owner", "admin")
+        except Exception:
+            pass
         摘要 = {
             "group_openid": str(结果.get("group_openid") or 会话标识),
             "appid": appid,
@@ -2210,6 +2223,7 @@ async def 刷新群信息(
             "group_class_text": str(群分类 or ""),
             "group_tags": 标签,
             "member_num": 成员数,
+            "is_admin": 机器人是否管理员,
             "updated_at": int(time.time()),
         }
         群信息缓存[会话标识] = 摘要
@@ -2235,6 +2249,24 @@ async def 刷新群信息(
             type(exc).__name__, 冷却秒数,
         )
         return None
+
+
+def 群机器人是否管理员(会话标识: str) -> bool:
+    """检查机器人在该群是否具备管理员权限。"""
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识:
+        return False
+    群信息 = 群信息缓存.get(会话标识) or {}
+    if "is_admin" in 群信息:
+        return bool(群信息.get("is_admin"))
+    try:
+        from 功能文件.管理功能.群聊功能 import 群管功能
+        for (_, gid), (_, 允许) in getattr(群管功能, "QQ官方机器人权限缓存", {}).items():
+            if str(gid).strip() == 会话标识:
+                return bool(允许)
+    except Exception:
+        pass
+    return False
 
 
 def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
@@ -2461,6 +2493,7 @@ def _数据库聚合聊天项(
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
                     "in_group": True,
+                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                 }
             )
@@ -2504,6 +2537,7 @@ def _数据库聚合聊天项(
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
                     "in_group": True,
+                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                 }
             )
@@ -2572,6 +2606,7 @@ def 获取聊天列表(
                     "unread": int(会话.get("unread") or 0),
                     "remark": 备注,
                     "in_group": True,
+                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                 }
             )
@@ -2690,6 +2725,7 @@ def _数据库历史消息(
             "has_more": 数据库有更多,
             "chat_name": _聊天显示名(会话标识, 轻量会话),
             "group_info": 获取缓存的群信息(会话标识),
+            "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
             "member_profiles": 成员资料缓存.get(会话标识, {}),
             "references": 引用映射,
         }
@@ -2728,6 +2764,7 @@ def 获取消息历史(
             "has_more": False,
             "chat_name": "",
             "group_info": 获取缓存的群信息(会话标识),
+            "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
         }
     消息列表 = 会话.get("messages") or []
     会话消息: list[dict[str, Any]] = _去重消息列表(
@@ -2773,6 +2810,7 @@ def 获取消息历史(
         "has_more": 原始数量 > limit or (bool(before_id) and 原始数量 >= limit),
         "chat_name": _聊天显示名(会话标识, 会话),
         "group_info": 获取缓存的群信息(会话标识),
+        "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
         "member_profiles": 成员资料缓存.get(会话标识, {}),
         "references": 引用映射,
     }
@@ -2798,6 +2836,10 @@ async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
             if isinstance(结果, dict):
                 机器人角色 = str(结果.get("member_role") or "")
                 机器人是否管理员 = 机器人角色 in ("owner", "admin")
+                if 会话标识 in 群信息缓存:
+                    群信息缓存[会话标识]["is_admin"] = 机器人是否管理员
+                else:
+                    群信息缓存[会话标识] = {"group_openid": 会话标识, "is_admin": 机器人是否管理员}
         except Exception as exc:
             logger.warning("消息记录群角色查询失败：错误类型=%s", type(exc).__name__)
     成员表: dict[str, dict[str, Any]] = {}
