@@ -252,13 +252,14 @@ async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: An
                         用户,
                     )
                     continue
-                await 使用_set_group_ban禁言(
+                await 执行成员禁言(
                     bot,
                     群号,
                     用户,
                     int(秒数 or 0),
                     操作,
                 )
+
                 成功数量 += 1
                 await 同步成员禁言到其它群(
                     bot,
@@ -552,8 +553,8 @@ def 规范化用户编号(值: Any) -> str:
 
 
 async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> bool:
-    # 自动广告撤回只保留 QQ 官方群实现，OneBot 事件不再进入此分支。
     if not 是QQ官方机器人(event):
+
         return False
     消息文本 = 获取消息文本(event)
     if not 是否需要撤回消息(event, 消息文本):
@@ -1507,7 +1508,8 @@ async def 同步成员禁言到其它群(
                     未缓存时允许=False,
                 ):
                     return 0, 0
-                await 使用_set_group_ban禁言(bot, 群号, 目标用户标识, 秒数, 操作)
+                await 执行成员禁言(bot, 群号, 目标用户标识, 秒数, 操作)
+
                 logger.info(
                     "跨群禁言成功：group_id=%s, user_id=%s, operation=%s",
                     群号,
@@ -1884,66 +1886,22 @@ async def 使用QQ官方成员禁言接口(
     return True
 
 
-async def 使用_set_group_ban禁言(
+
+async def 执行成员禁言(
     bot: Any,
     群号: str,
     用户QQ: str,
     秒数: int,
     操作: str = "add",
 ) -> bool:
-    """兼容 OneBot set_group_ban 与 QQ 官方成员禁言接口。"""
+    """只使用 QQ 官方成员禁言接口。"""
     群号文本 = str(群号 or "").strip()
     用户文本 = str(用户QQ or "").strip()
-    是否数字 = bool(
-        管理员QQ规则.fullmatch(群号文本) and 管理员QQ规则.fullmatch(用户文本)
+    return await 使用QQ官方成员禁言接口(
+        bot,
+        群号文本,
+        用户文本,
+        秒数,
+        操作,
     )
 
-    if not 是否数字:
-        return await 使用QQ官方成员禁言接口(
-            bot,
-            群号文本,
-            用户文本,
-            秒数,
-            操作,
-        )
-
-    群号值: Any = int(群号文本) if 是否数字 else 群号文本
-    用户值: Any = int(用户文本) if 是否数字 else 用户文本
-    时长 = 0 if 操作 == "del" else max(1, int(秒数))
-
-    禁言方法 = getattr(bot, "set_group_ban", None)
-    if callable(禁言方法):
-        if 是否数字:
-            await 等待可能异步结果(
-                禁言方法(group_id=群号值, user_id=用户值, duration=时长)
-            )
-            return True
-        await 等待可能异步结果(
-            禁言方法(group_openid=群号值, user_openid=用户值, duration=时长)
-        )
-        return True
-
-    api = getattr(bot, "api", None)
-    调用动作 = getattr(api, "call_action", None)
-    if callable(调用动作):
-        if 是否数字:
-            await 等待可能异步结果(
-                调用动作(
-                    "set_group_ban",
-                    group_id=群号值,
-                    user_id=用户值,
-                    duration=时长,
-                )
-            )
-            return True
-        await 等待可能异步结果(
-            调用动作(
-                "set_group_ban",
-                group_openid=群号值,
-                user_openid=用户值,
-                duration=时长,
-            )
-        )
-        return True
-
-    raise RuntimeError("当前 bot 没有成员禁言接口")
