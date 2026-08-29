@@ -2840,6 +2840,15 @@ async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
                     群信息缓存[会话标识]["is_admin"] = 机器人是否管理员
                 else:
                     群信息缓存[会话标识] = {"group_openid": 会话标识, "is_admin": 机器人是否管理员}
+                if _消息存储 is not None:
+                    try:
+                        写入群信息 = getattr(_消息存储, "写入群信息", None)
+                        if callable(写入群信息):
+                            await _异步执行消息记录同步(
+                                写入群信息, 群信息缓存[会话标识], appid
+                            )
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.warning("消息记录群角色查询失败：错误类型=%s", type(exc).__name__)
     成员表: dict[str, dict[str, Any]] = {}

@@ -362,8 +362,52 @@
         catch (_) {}
         finally { msgState.readInFlight.delete(id); }
       };
+      const getLocalAdminGroups = () => {
+        try { return new Set(JSON.parse(localStorage.getItem('mantou_bot_admin_groups') || '[]')); }
+        catch (_) { return new Set(); }
+      };
+      const saveLocalAdminGroups = (set) => {
+        try { localStorage.setItem('mantou_bot_admin_groups', JSON.stringify(Array.from(set))); }
+        catch (_) {}
+      };
+      let autoScanAdminRunning = false;
+      const autoScanAdminGroups = async () => {
+        if (autoScanAdminRunning) return;
+        autoScanAdminRunning = true;
+        try {
+          const localAdmins = getLocalAdminGroups();
+          const groupsToScan = (msgState.chats || []).filter((c) => c.chat_type === 'group' && c.chat_id && !localAdmins.has(c.chat_id));
+          for (const group of groupsToScan) {
+            try {
+              const res = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:group.chat_id})});
+              if (res && res.bot_is_admin) {
+                localAdmins.add(group.chat_id);
+                saveLocalAdminGroups(localAdmins);
+                group.is_admin = true;
+                const btn = document.querySelector(`[data-msg-chat="${CSS.escape(group.chat_id)}"] .msg-chat-top strong`);
+                if (btn) btn.classList.add('admin');
+                if (msgState.chatId === group.chat_id) {
+                  msgState.botIsAdmin = true;
+                  updateMsgAdminTag();
+                }
+              }
+            } catch (_) {}
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        } finally {
+          autoScanAdminRunning = false;
+        }
+      };
       const renderMsgChats = (data) => {
         const node = $('msg-chats'); const chats = mergeMsgRealtimeChats(data.chats || []);
+        const localAdmins = getLocalAdminGroups();
+        chats.forEach((c) => {
+          if (c.chat_type === 'group') {
+            if (c.is_admin) localAdmins.add(c.chat_id);
+            else if (localAdmins.has(c.chat_id)) c.is_admin = true;
+          }
+        });
+        saveLocalAdminGroups(localAdmins);
         msgState.chats = chats;
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; return; }
@@ -382,6 +426,7 @@
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
+        queueMicrotask(autoScanAdminGroups);
         node.querySelectorAll('[data-msg-chat]').forEach((el) => {
           el.addEventListener('contextmenu', (e) => {
             e.preventDefault();

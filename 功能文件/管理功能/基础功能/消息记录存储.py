@@ -166,6 +166,7 @@ def 初始化数据库() -> bool:
                     group_class_text VARCHAR(255) DEFAULT '',
                     group_tags TEXT,
                     member_num INT DEFAULT 0,
+                    is_admin TINYINT DEFAULT 0,
                     updated_at BIGINT DEFAULT 0,
                     PRIMARY KEY (group_openid),
                     KEY idx_group_infos_updated (updated_at)
@@ -210,6 +211,14 @@ def 初始化数据库() -> bool:
                     if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
                         logger.warning("消息记录 MySQL 表已补列 %s", 列名)
+                游标.execute(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'is_admin'",
+                    (群信息表名,),
+                )
+                if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(f"ALTER TABLE `{群信息表名}` ADD COLUMN `is_admin` TINYINT DEFAULT 0")
+                    logger.info("群信息 MySQL 表已补列 is_admin")
                 # 旧版本可能把长字段建成 TEXT；原始消息/卡片超过 64KB 时会直接 DataError。
                 for 列名 in ("content", "media", "raw_message"):
                     游标.execute(
@@ -732,8 +741,8 @@ def 写入群信息(信息: dict[str, Any], appid: str = "") -> bool:
                 f"""
                 INSERT INTO `{群信息表名}` (
                     group_openid, appid, group_name, group_finger_memo,
-                    group_class_text, group_tags, member_num, updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    group_class_text, group_tags, member_num, is_admin, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON DUPLICATE KEY UPDATE
                     appid=VALUES(appid),
                     group_name=VALUES(group_name),
@@ -741,6 +750,7 @@ def 写入群信息(信息: dict[str, Any], appid: str = "") -> bool:
                     group_class_text=VALUES(group_class_text),
                     group_tags=VALUES(group_tags),
                     member_num=VALUES(member_num),
+                    is_admin=VALUES(is_admin),
                     updated_at=VALUES(updated_at)
                 """,
                 (
@@ -751,6 +761,7 @@ def 写入群信息(信息: dict[str, Any], appid: str = "") -> bool:
                     str(信息.get("group_class_text") or "")[:255],
                     json.dumps(标签, ensure_ascii=False),
                     成员数,
+                    1 if bool(信息.get("is_admin")) else 0,
                     int(信息.get("updated_at") or time.time()),
                 ),
             )
@@ -776,7 +787,7 @@ def 读取全部群信息() -> list[dict[str, Any]]:
             游标.execute(
                 f"""
                 SELECT group_openid, appid, group_name, group_finger_memo,
-                       group_class_text, group_tags, member_num, updated_at
+                       group_class_text, group_tags, member_num, is_admin, updated_at
                 FROM `{群信息表名}`
                 """
             )
@@ -796,7 +807,7 @@ def 读取全部群信息() -> list[dict[str, Any]]:
                 except (TypeError, ValueError):
                     成员数 = 0
                 try:
-                    更新时间 = int(_行字段(行, 7, "updated_at", 默认值=0) or 0)
+                    更新时间 = int(_行字段(行, 8, "updated_at", 默认值=0) or 0)
                 except (TypeError, ValueError):
                     更新时间 = 0
                 结果.append(
@@ -808,6 +819,7 @@ def 读取全部群信息() -> list[dict[str, Any]]:
                         "group_class_text": str(_行字段(行, 4, "group_class_text", 默认值="") or ""),
                         "group_tags": [str(值) for 值 in 标签 if str(值 or "").strip()],
                         "member_num": 成员数,
+                        "is_admin": bool(int(_行字段(行, 7, "is_admin", 默认值=0) or 0) == 1),
                         "updated_at": 更新时间,
                     }
                 )
