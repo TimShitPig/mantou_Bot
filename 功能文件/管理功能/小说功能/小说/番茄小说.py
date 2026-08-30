@@ -4614,8 +4614,7 @@ def 提取直接番茄链接参数(命令文本: str) -> str | None:
     文本 = str(命令文本 or "").strip()
     if not 文本:
         return None
-    if re.fullmatch(r"\d{15,25}", 文本):
-        return 文本
+    # 用户消息只从分享链接或卡片中识别来源；纯数字书籍 ID 仅由找书结果内部传递。
     return 提取番茄链接(文本) or None
 
 
@@ -4657,8 +4656,6 @@ def 提取番茄链接(值: Any) -> str:
             return 链接
     if 番茄域名正则.search(文本) and (提取番茄书籍编号(文本) or 提取番茄短篇编号(文本)):
         return 文本
-    if re.fullmatch(r"\d{15,25}", 文本.strip()):
-        return 文本.strip()
     return ""
 
 
