@@ -633,6 +633,7 @@
                   updateMsgHead({chat_name:group.nickname || chatId, group_info:{membership_status:'removed'}});
                 }
                 msgState.adminByChat.set(chatId, false);
+                localAdmins.delete(chatId);
                 await new Promise((r) => setTimeout(r, 1000));
                 continue;
               }
@@ -1856,6 +1857,12 @@
         msgState.chats = (msgState.chats || []).map((chat) => String(chat.chat_id || '') === chatId
           ? {...chat, membership_status:status, in_group:!removed}
           : chat);
+        if (removed) {
+          const localAdmins = getLocalAdminGroups();
+          localAdmins.delete(chatId);
+          saveLocalAdminGroups(localAdmins);
+          msgState.adminByChat.set(chatId, false);
+        }
         const overlay = msgState.realtimeChats.get(chatId);
         if (overlay) msgState.realtimeChats.set(chatId, {...overlay, membership_status:status, in_group:!removed});
         if (msgState.chatId === chatId && msgState.chatType === 'group') {
