@@ -230,7 +230,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
             .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
-         .msg-input-box { position:relative; display:flex; flex-direction:column; min-height:96px; height:132px; max-height:38vh; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
+         .msg-input-box { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-height:96px; height:auto; max-height:none; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
         .msg-input-box.drag-over { border-color:#12b7f5; background:#f0f9ff; box-shadow:0 0 0 2px rgba(18,183,245,.14); }
          .msg-textarea { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
@@ -397,7 +397,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-body { padding:14px 10px 8px; }
                .msg-bubble-wrap { max-width:82%; }
                .msg-composer { max-height:52vh; padding:7px 10px 8px; }
-               .msg-input-box { max-height:38vh; }
+               .msg-input-box { max-height:none; }
                .msg-textarea { min-height:42px; }
              }
 
