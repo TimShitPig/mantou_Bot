@@ -8,10 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import hashlib
 import html
+import ipaddress
 import json
 import os
 import random
 import re
+import secrets
 import threading
 import time
 from datetime import datetime as _日期类
@@ -119,6 +121,10 @@ _QQ图片域名 = re.compile(
     r"(?:https?://)?[^>\s]*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)[^>\s]*"
 )
 _显示时区 = _时区类(_时间差(hours=8))
+_临时Markdown图片: dict[str, tuple[float, bytes, str]] = globals().get("_临时Markdown图片") or {}
+_临时Markdown图片锁 = globals().get("_临时Markdown图片锁") or threading.RLock()
+_临时Markdown图片有效期秒 = 10 * 60
+_临时Markdown图片最大数量 = 64
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -1179,6 +1185,47 @@ def _读取附件字段(附件: Any, *字段名: str) -> Any:
 
 def _清理媒体地址(地址: Any) -> str:
     return html.unescape(str(地址 or "").strip()).strip("<>[](){}，。；;、")
+
+
+def 注册临时Markdown图片(图片字节: bytes, 内容类型: str = "image/png") -> str:
+    """把网页上传的图片暂存到进程内，供 QQ Markdown 短时转存。"""
+    if not isinstance(图片字节, (bytes, bytearray)) or not 图片字节:
+        return ""
+    类型 = str(内容类型 or "image/png").split(";", 1)[0].strip().lower()
+    if not 类型.startswith("image/"):
+        类型 = "image/png"
+    现在 = time.time()
+    with _临时Markdown图片锁:
+        for 标识, (过期时间, _, _) in list(_临时Markdown图片.items()):
+            if 过期时间 <= 现在:
+                _临时Markdown图片.pop(标识, None)
+        while len(_临时Markdown图片) >= _临时Markdown图片最大数量:
+            最旧标识 = min(_临时Markdown图片, key=lambda 值: _临时Markdown图片[值][0])
+            _临时Markdown图片.pop(最旧标识, None)
+        标识 = secrets.token_urlsafe(24)
+        _临时Markdown图片[标识] = (
+            现在 + _临时Markdown图片有效期秒,
+            bytes(图片字节),
+            类型,
+        )
+        return 标识
+
+
+def 读取临时Markdown图片(标识: str) -> tuple[bytes, str] | None:
+    """读取尚未过期的 Markdown 图片；过期后立即释放进程内字节。"""
+    标识 = str(标识 or "").strip()
+    if not 标识 or len(标识) > 128:
+        return None
+    现在 = time.time()
+    with _临时Markdown图片锁:
+        项 = _临时Markdown图片.get(标识)
+        if not 项:
+            return None
+        过期时间, 图片字节, 内容类型 = 项
+        if 过期时间 <= 现在:
+            _临时Markdown图片.pop(标识, None)
+            return None
+        return 图片字节, 内容类型
 
 
 def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
@@ -3261,133 +3308,6 @@ async def _上传媒体(
     return ""
 
 
-def _富媒体上传路由(会话标识: str, 会话类型: str, 操作: str) -> Any:
-    """构造 QQ 官方富媒体分片接口路由。"""
-    from botpy.http import Route
-
-    if str(会话类型 or "") == "user":
-        return Route(
-            "POST",
-            f"/v2/users/{{user_id}}/{操作}",
-            user_id=str(会话标识),
-        )
-    return Route(
-        "POST",
-        f"/v2/groups/{{group_id}}/{操作}",
-        group_id=str(会话标识),
-    )
-
-
-def _富媒体文件路由(会话标识: str, 会话类型: str) -> Any:
-    """构造 QQ 官方富媒体合并接口路由。"""
-    from botpy.http import Route
-
-    if str(会话类型 or "") == "user":
-        return Route(
-            "POST",
-            "/v2/users/{user_id}/files",
-            user_id=str(会话标识),
-        )
-    return Route(
-        "POST",
-        "/v2/groups/{group_id}/files",
-        group_id=str(会话标识),
-    )
-
-
-async def _尝试分片上传图片(
-    _http: Any,
-    会话标识: str,
-    会话类型: str,
-    图片字节: bytes,
-    文件名: str = "image.png",
-) -> dict[str, str]:
-    """按官方分片流程上传图片，返回 file_info 与短时 raw_url。"""
-    if not 图片字节:
-        return {}
-    try:
-        import aiohttp
-
-        图片大小 = len(图片字节)
-        md5值 = hashlib.md5(图片字节).hexdigest()
-        sha1值 = hashlib.sha1(图片字节).hexdigest()
-        md5前缀 = hashlib.md5(图片字节[:10002432]).hexdigest()
-        准备响应 = await _http.request(
-            _富媒体上传路由(会话标识, 会话类型, "upload_prepare"),
-            json={
-                "file_type": 1,
-                "file_size": str(图片大小),
-                "file_name": str(文件名 or "image.png"),
-                "md5": md5值,
-                "sha1": sha1值,
-                "md5_10m": md5前缀,
-            },
-        )
-        上传ID = str(_提取发送响应字段(准备响应, "upload_id") or "").strip()
-        try:
-            分块大小 = int(_提取发送响应字段(准备响应, "block_size") or 0)
-        except (TypeError, ValueError):
-            分块大小 = 0
-        分块大小 = max(1, 分块大小 or 5 * 1024 * 1024)
-        分块列表 = _提取发送响应字段(准备响应, "parts")
-        if not 上传ID or not isinstance(分块列表, list):
-            return {}
-
-        超时 = aiohttp.ClientTimeout(total=180, connect=15, sock_read=180)
-        async with aiohttp.ClientSession(timeout=超时, trust_env=False) as 客户端:
-            async def 上传分块(分块: Any) -> None:
-                if not isinstance(分块, dict):
-                    raise RuntimeError("分片信息无效")
-                try:
-                    分片序号 = int(分块.get("index") or 0)
-                except (TypeError, ValueError):
-                    分片序号 = 0
-                预签名地址 = str(
-                    分块.get("presigned_url") or 分块.get("url") or ""
-                ).strip()
-                if not 预签名地址:
-                    raise RuntimeError("分片地址缺失")
-                起点 = 分片序号 * 分块大小
-                实际分片 = 图片字节[起点 : 起点 + 分块大小]
-                if not 实际分片:
-                    raise RuntimeError("分片数据为空")
-                async with 客户端.put(预签名地址, data=实际分片) as 上传结果:
-                    if 上传结果.status not in {200, 201, 204}:
-                        raise RuntimeError(f"分片上传状态={上传结果.status}")
-                try:
-                    实际分块大小 = int(分块.get("block_size") or len(实际分片))
-                except (TypeError, ValueError):
-                    实际分块大小 = len(实际分片)
-                await _http.request(
-                    _富媒体上传路由(会话标识, 会话类型, "upload_part_finish"),
-                    json={
-                        "upload_id": 上传ID,
-                        "part_index": 分片序号,
-                        "block_size": str(实际分块大小),
-                        "md5": hashlib.md5(实际分片).hexdigest(),
-                    },
-                )
-
-            await asyncio.gather(*(上传分块(分块) for 分块 in 分块列表))
-        合并响应 = await _http.request(
-            _富媒体文件路由(会话标识, 会话类型),
-            json={
-                "file_type": 1,
-                "srv_send_msg": False,
-                "file_name": str(文件名 or "image.png"),
-                "upload_id": 上传ID,
-            },
-        )
-        文件信息 = str(_提取发送响应字段(合并响应, "file_info") or "").strip()
-        公网地址 = str(_提取发送响应字段(合并响应, "raw_url") or "").strip()
-        if not 文件信息 or not 公网地址:
-            return {}
-        return {"file_info": 文件信息, "raw_url": 公网地址}
-    except Exception as 异常:
-        logger.debug("消息记录图片分片上传失败：错误类型=%s", type(异常).__name__)
-        return {}
-
-
 def _规范化公网图片地址(地址: Any) -> str:
     """Markdown 图片只接受可由 QQ 官方下载的 HTTP(S) 地址。"""
     文本 = str(地址 or "").strip()
@@ -3398,6 +3318,23 @@ def _规范化公网图片地址(地址: Any) -> str:
     if 解析结果.scheme.lower() not in {"http", "https"} or not 解析结果.netloc:
         return ""
     return 文本
+
+
+def _适合QQ转存的公网地址(地址: Any) -> str:
+    """过滤本机/内网地址，避免把不可达地址交给 QQ Markdown。"""
+    文本 = _规范化公网图片地址(地址)
+    if not 文本:
+        return ""
+    try:
+        主机 = str(_解析网址(文本).hostname or "").strip().lower().rstrip(".")
+        if 主机 in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+            return ""
+        try:
+            return 文本 if ipaddress.ip_address(主机).is_global else ""
+        except ValueError:
+            return 文本
+    except (TypeError, ValueError):
+        return ""
 
 
 def _构造Markdown图文内容(
@@ -3435,6 +3372,7 @@ async def 发送消息(
     图片路径: str = "",
     图片数据: str = "",
     图片URL: str = "",
+    图片公开基础地址: str = "",
     图片前文本: str = "",
     图片后文本: str = "",
     媒体路径: str = "",
@@ -3497,6 +3435,7 @@ async def 发送消息(
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
+    图片公开基础地址 = _适合QQ转存的公网地址(图片公开基础地址)
     图片前文本 = str(图片前文本 or "").strip()
     图片后文本 = str(图片后文本 or "").strip()
     图片文件名 = "image.png"
@@ -3525,22 +3464,27 @@ async def 发送消息(
             媒体记录["after_text"] = 图片后文本
         return 媒体记录
 
-    # 官方 Markdown 支持公网图片与文字同条发送；本地图片先走官方分片流程取得 raw_url。
+    # QQ 富媒体上传只返回 file_info，Markdown 图片必须使用公网 URL。
+    # 帮助网页服务为本地图片提供短时内存地址，让 QQ 官方转存后仍只发一条消息。
+    if not 图片公开地址 and 图片字节 is not None and 图片公开基础地址:
+        扩展名 = Path(图片文件名).suffix.lower()
+        内容类型 = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }.get(扩展名, "image/png")
+        临时标识 = 注册临时Markdown图片(图片字节, 内容类型)
+        if 临时标识:
+            图片公开地址 = f"{图片公开基础地址.rstrip('/')}/api/message/markdown-image/{临时标识}"
+
+    # 官方 Markdown 支持公网图片与文字同条发送；本地图片使用帮助网页的短时公网地址。
     图文内容 = (
         _构造Markdown图文内容(内容, 图片公开地址, 图片前文本, 图片后文本)
         if 类型 in ("text", "markdown")
         else ""
     )
-    if not 图文内容 and 内容 and 图片字节 is not None and 类型 in ("text", "markdown"):
-        分片结果 = await _尝试分片上传图片(
-            _http,
-            会话标识,
-            会话类型 or "group",
-            图片字节,
-            图片文件名,
-        )
-        图片公开地址 = _规范化公网图片地址(分片结果.get("raw_url"))
-        图文内容 = _构造Markdown图文内容(内容, 图片公开地址, 图片前文本, 图片后文本)
     if 图文内容:
         消息体["msg_type"] = 2
         消息体.pop("content", None)

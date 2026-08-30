@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.8"
+控制台版本 = "5.62.14"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -899,6 +899,28 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
             type(exc).__name__,
         )
         return web.Response(status=502, text="媒体暂时不可用")
+
+
+async def _处理临时Markdown图片(request: web.Request) -> web.Response:
+    """提供给 QQ 官方短时转存的本地图片，不需要控制台登录 Cookie。"""
+    标识 = str(request.match_info.get("token") or "").strip()
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        结果 = 消息记录.读取临时Markdown图片(标识)
+    except Exception:
+        结果 = None
+    if not 结果:
+        return web.Response(status=404, text="图片暂时不可用")
+    图片字节, 内容类型 = 结果
+    return web.Response(
+        body=图片字节,
+        content_type=str(内容类型 or "image/png"),
+        headers={
+            "Cache-Control": "public, max-age=600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 async def _处理控制台登录(request: web.Request) -> web.Response:
@@ -1795,6 +1817,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片路径=str(数据.get("image") or ""),
              图片数据=str(数据.get("image_data") or ""),
              图片URL=str(数据.get("image_url") or ""),
+             图片公开基础地址=获取帮助网页地址(当前帮助网页配置),
              图片前文本=str(数据.get("image_before") or ""),
              图片后文本=str(数据.get("image_after") or ""),
              媒体路径=str(数据.get("media") or ""),
