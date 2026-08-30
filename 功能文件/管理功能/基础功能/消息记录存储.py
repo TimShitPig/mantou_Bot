@@ -33,6 +33,14 @@ _消息写入SQL = (
     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
 )
 
+# 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
+# 显式列出字段避免 SELECT * 搬运未来新增列；正文与媒体字段保持完整。
+_历史查询字段SQL = (
+    "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
+    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
+    "LEFT(raw_message, 4096) AS raw_message"
+)
+
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
 _列最大长度: dict[str, int] = {
     "会话标识": 128,
@@ -404,7 +412,8 @@ def 读取会话消息(会话标识: str, 上限: int = 500) -> list[dict[str, A
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                f"SELECT * FROM (SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s ORDER BY ts DESC, id DESC LIMIT %s) t ORDER BY ts ASC, id ASC",
+                f"SELECT * FROM (SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
+                "WHERE 会话标识=%s ORDER BY ts DESC, id DESC LIMIT %s) t ORDER BY ts ASC, id ASC",
                 (str(会话标识 or ""), 上限),
             )
             行列表 = 游标.fetchall()
@@ -573,17 +582,20 @@ def 分页读取历史(
         with 连接.cursor() as 游标:
             if before_id:
                 游标.execute(
-                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND id < %s ORDER BY id DESC LIMIT %s",
+                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s AND id < %s "
+                    "ORDER BY id DESC LIMIT %s",
                     (会话标识, before_id, 查询上限),
                 )
             elif before_ts:
                 游标.execute(
-                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s AND ts < %s ORDER BY id DESC LIMIT %s",
+                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s AND ts < %s "
+                    "ORDER BY id DESC LIMIT %s",
                     (会话标识, before_ts, 查询上限),
                 )
             else:
                 游标.execute(
-                    f"SELECT * FROM `{消息记录表名}` WHERE 会话标识=%s ORDER BY id DESC LIMIT %s",
+                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s "
+                    "ORDER BY id DESC LIMIT %s",
                     (会话标识, 查询上限),
                 )
             行列表 = 游标.fetchall()

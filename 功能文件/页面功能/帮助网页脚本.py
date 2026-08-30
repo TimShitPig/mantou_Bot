@@ -185,7 +185,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = {};
@@ -199,6 +199,16 @@
           merged[id] = {...(merged[id] || {}), nickname};
         });
         return merged;
+      };
+      const cacheMsgHistory = (key, data) => {
+        if (!key || !data) return;
+        msgState.historyCache.delete(key);
+        msgState.historyCache.set(key, data);
+        while (msgState.historyCache.size > 12) {
+          const oldest = msgState.historyCache.keys().next().value;
+          if (oldest === undefined) break;
+          msgState.historyCache.delete(oldest);
+        }
       };
       const resolveMentionName = (openid, profiles = msgState.profiles) => {
         const id = String(openid || '').trim();
@@ -320,6 +330,9 @@
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
           if (serverTs > eventTs) { msgState.realtimeChats.delete(chatId); return; }
+          const adminKnown = msgState.adminByChat.has(chatId)
+            ? Boolean(msgState.adminByChat.get(chatId))
+            : Boolean(current.is_admin || overlay.is_admin);
           byId.set(chatId, {
             ...current,
             ...overlay,
@@ -328,6 +341,7 @@
             group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
             pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
             msg_count:Math.max(Number(current.msg_count || 0), Number(overlay.msg_count || 0)),
+            is_admin:adminKnown,
           });
         });
         return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
@@ -376,22 +390,40 @@
         autoScanAdminRunning = true;
         try {
           const localAdmins = getLocalAdminGroups();
-          const groupsToScan = (msgState.chats || []).filter((c) => c.chat_type === 'group' && c.chat_id && !localAdmins.has(c.chat_id));
+          const now = Date.now();
+          const groupsToScan = (msgState.chats || []).filter((c) => {
+            const id = String(c.chat_id || '');
+            const failedAt = Number(msgState.adminScanFailures.get(id) || 0);
+            const retryDue = failedAt > 0 && now - failedAt >= 30000;
+            return c.chat_type === 'group' && id && !localAdmins.has(id)
+              && !msgState.adminByChat.has(id)
+              && (!msgState.adminScanAttempted.has(id) || retryDue);
+          });
           for (const group of groupsToScan) {
+            const chatId = String(group.chat_id || '');
+            msgState.adminScanAttempted.add(chatId);
+            const scanRoleToken = Number(msgState.adminRequestToken || 0);
             try {
-              const res = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:group.chat_id})});
-              if (res && res.bot_is_admin) {
-                localAdmins.add(group.chat_id);
-                saveLocalAdminGroups(localAdmins);
-                group.is_admin = true;
-                const btn = document.querySelector(`[data-msg-chat="${CSS.escape(group.chat_id)}"] .msg-chat-top strong`);
-                if (btn) btn.classList.add('admin');
-                if (msgState.chatId === group.chat_id) {
-                  msgState.botIsAdmin = true;
-                  updateMsgAdminTag();
-                }
+              const res = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:chatId})});
+              const role = String(res?.bot_role || '').trim().toLowerCase();
+              if (!['owner', 'admin', 'member'].includes(role)) throw new Error('群角色结果不完整');
+              const isAdmin = Boolean(res && res.bot_is_admin);
+              msgState.adminByChat.set(chatId, isAdmin);
+              msgState.adminScanFailures.delete(chatId);
+              group.is_admin = isAdmin;
+              if (isAdmin) localAdmins.add(chatId);
+              else localAdmins.delete(chatId);
+              saveLocalAdminGroups(localAdmins);
+              const btn = document.querySelector(`[data-msg-chat="${CSS.escape(chatId)}"] .msg-chat-top strong`);
+              if (btn) btn.classList.toggle('admin', isAdmin);
+              if (msgState.chatId === chatId && msgState.chatType === 'group' && scanRoleToken === Number(msgState.adminRequestToken || 0)) {
+                msgState.botIsAdmin = isAdmin;
+                updateMsgAdminTag();
               }
-            } catch (_) {}
+            } catch (_) {
+              // 接口短暂失败时保留旧颜色，冷却后允许再次尝试，避免永久停留在黑色。
+              msgState.adminScanFailures.set(chatId, Date.now());
+            }
             await new Promise((r) => setTimeout(r, 200));
           }
         } finally {
@@ -403,8 +435,16 @@
         const localAdmins = getLocalAdminGroups();
         chats.forEach((c) => {
           if (c.chat_type === 'group') {
-            if (c.is_admin) localAdmins.add(c.chat_id);
-            else if (localAdmins.has(c.chat_id)) c.is_admin = true;
+            const id = String(c.chat_id || '');
+            if (msgState.adminByChat.has(id)) {
+              c.is_admin = Boolean(msgState.adminByChat.get(id));
+            } else if (c.is_admin) {
+              localAdmins.add(id);
+              msgState.adminByChat.set(id, true);
+            } else if (localAdmins.has(id)) {
+              c.is_admin = true;
+              msgState.adminByChat.set(id, true);
+            }
           }
         });
         saveLocalAdminGroups(localAdmins);
@@ -500,10 +540,18 @@
       const selectMsgChat = (chat, selectedNode = null) => {
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
+        const chatType = String(chat?.chat_type || 'group');
+        const localAdmins = getLocalAdminGroups();
+        const cachedAdmin = msgState.adminByChat.has(chatId)
+          ? Boolean(msgState.adminByChat.get(chatId))
+          : Boolean(chat?.is_admin || localAdmins.has(chatId));
+        if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
         if (msgState.chatId !== chatId) {
           cancelMsgRealtimeMessageRender();
           cancelMsgHistoryPrefetch();
         }
+        // 切换会话时立即失效旧的管理员请求，避免旧群响应把当前群标成红色。
+        msgState.adminRequestToken = Number(msgState.adminRequestToken || 0) + 1;
         // 选中会话时立刻使旧历史请求失效，避免旧响应在下一帧前覆盖新会话。
         if (msgState.historyAbort) {
           msgState.historyAbort.abort();
@@ -512,7 +560,8 @@
         msgState.historyRequest = Number(msgState.historyRequest || 0) + 1;
         msgState.historyOlderLoading = false;
         msgState.chatId = chatId;
-        msgState.chatType = String(chat?.chat_type || 'group');
+        msgState.chatType = chatType;
+        msgState.botIsAdmin = cachedAdmin;
         resetMsgAdSwitch();
         msgState.profiles = {};
         msgState.historyData = null;
@@ -532,6 +581,11 @@
         if (body) {
           body.innerHTML = '<div class="msg-empty msg-loading">正在加载消息...</div>';
           body.scrollTop = 0;
+          const cachedHistory = msgState.historyCache.get(`${chatType}|${chatId}`);
+          if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
+            msgState.messages = dedupeMsgMessages(cachedHistory.messages);
+            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true});
+          }
         }
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
           node.classList.toggle('active', String(node.dataset.msgChat || '') === chatId);
@@ -720,7 +774,7 @@
           if (isAdmin) nameEl.classList.add('admin');
           else nameEl.classList.remove('admin');
         }
-        const curChat = (msgState.chats || []).find((c) => c.chat_id === msgState.chatId);
+        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || ''));
         if (curChat) {
           curChat.is_admin = isAdmin;
           const chatBtn = document.querySelector(`[data-msg-chat="${CSS.escape(msgState.chatId)}"] .msg-chat-top strong`);
@@ -801,8 +855,11 @@
       const updateMsgHead = (data) => {
         const nameEl = $('msg-head-name');
         nameEl.textContent = data.chat_name || '未命名会话';
-        const curChat = (msgState.chats || []).find((c) => c.chat_id === msgState.chatId);
-        const isAdmin = Boolean(data.is_admin || curChat?.is_admin || msgState.botIsAdmin);
+        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || ''));
+        const chatKey = String(msgState.chatId || '');
+        const isAdmin = msgState.adminByChat.has(chatKey)
+          ? Boolean(msgState.adminByChat.get(chatKey))
+          : Boolean(data.is_admin || curChat?.is_admin || msgState.botIsAdmin);
         if (isAdmin) {
           nameEl.classList.add('admin');
         } else {
@@ -1240,6 +1297,7 @@
         const isNewEvent = rememberMsgEvent(chatId, message);
         const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
         const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
+        if (isNewEvent) msgState.historyCache.delete(`${chatType}|${chatId}`);
         const eventTs = Number(payload.last_ts || message.ts || 0) || Math.floor(Date.now() / 1000);
         const isViewing = msgState.chatId === chatId && !$('page-messages')?.hidden;
         const body = $('msg-body');
@@ -1299,6 +1357,7 @@
         const previousTop = body?.scrollTop || 0;
         const previousHeight = body?.scrollHeight || 0;
         const previousLast = !newChat ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
+        const historyCacheKey = `${requestChatType}|${requestChatId}`;
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
@@ -1316,7 +1375,8 @@
             updateMsgHead(data);
             const newLast = msgMessageKey(incoming[incoming.length - 1]);
             if (previousLast === newLast && incoming.length === msgState.messages.length) {
-              prefetchMsgHistory(requestChatId, requestChatType, incoming);
+              cacheMsgHistory(historyCacheKey, {...data, messages:msgState.messages.map((message) => ({...message}))});
+              prefetchMsgHistory(requestChatId, requestChatType, {...data, messages:incoming});
               return;
             }
           }
@@ -1333,7 +1393,11 @@
             {...data, messages: msgState.messages},
             {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
           );
-          prefetchMsgHistory(requestChatId, requestChatType, msgState.messages, data.has_more);
+          cacheMsgHistory(historyCacheKey, {
+            ...data,
+            messages: msgState.messages.map((message) => ({...message})),
+          });
+          prefetchMsgHistory(requestChatId, requestChatType, {...data, messages:msgState.messages});
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
           if (!older) loadGroupRoles(true);
@@ -1345,20 +1409,43 @@
       };
       const loadGroupRoles = async (throttled = false) => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return;
+        const requestChatId = String(msgState.chatId);
+        const requestChatType = String(msgState.chatType);
         const now = Date.now();
-        if (throttled && msgState.lastRolesChatId === msgState.chatId && msgState.lastRolesAt && now - msgState.lastRolesAt < 60000) return;
-        msgState.lastRolesAt = now; msgState.lastRolesChatId = msgState.chatId;
-        try { const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); msgState.botIsAdmin = Boolean(data.bot_is_admin); updateMsgAdminTag(); }
-        catch (error) { msgState.botIsAdmin = false; updateMsgAdminTag(); }
+        if (throttled && msgState.lastRolesChatId === requestChatId && msgState.lastRolesAt && now - msgState.lastRolesAt < 60000) return;
+        const requestToken = Number(msgState.adminRequestToken || 0) + 1;
+        msgState.adminRequestToken = requestToken;
+        msgState.lastRolesAt = now; msgState.lastRolesChatId = requestChatId;
+        try {
+          const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:requestChatId})});
+          if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
+          const role = String(data?.bot_role || '').trim().toLowerCase();
+          if (!['owner', 'admin', 'member'].includes(role)) return;
+          const isAdmin = Boolean(data.bot_is_admin);
+          msgState.adminByChat.set(requestChatId, isAdmin);
+          msgState.adminScanFailures.delete(requestChatId);
+          const localAdmins = getLocalAdminGroups();
+          if (isAdmin) localAdmins.add(requestChatId);
+          else localAdmins.delete(requestChatId);
+          saveLocalAdminGroups(localAdmins);
+          msgState.botIsAdmin = isAdmin;
+          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId);
+          if (current) current.is_admin = isAdmin;
+          updateMsgAdminTag();
+        }
+        catch (error) {
+          if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
+          updateMsgAdminTag();
+        }
       };
       const recallMessage = async (messageId) => {
         if (!confirm('确定撤回这条消息吗？发送超过 2 分钟的消息不可撤回。')) return;
-        try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:messageId})}); toast('撤回成功'); loadMsgHistory(); }
+        try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:messageId})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('撤回成功'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const refreshGroupInfo = async () => {
         if (!msgState.chatId) return;
-        try { const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); toast(data.group_name ? `群信息已刷新：${data.group_name}${data.member_num ? `（成员 ${data.member_num} 人）` : ''}` : (data.member_num ? `群信息已刷新：成员 ${data.member_num} 人` : '群信息已刷新')); loadMsgHistory(); }
+        try { const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast(data.group_name ? `群信息已刷新：${data.group_name}${data.member_num ? `（成员 ${data.member_num} 人）` : ''}` : (data.member_num ? `群信息已刷新：成员 ${data.member_num} 人` : '群信息已刷新')); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const showRemarkDialog = async () => {
@@ -1371,12 +1458,12 @@
       const saveRemark = async () => {
         const remark = $('msg-remark-name').value.trim();
         const groupQQ = $('msg-remark-qq').value.trim();
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const deleteRemark = async () => {
         if (!confirm('确定删除该会话的备注和群号吗？')) return;
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
+        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const sendMessage = async () => {
@@ -1407,7 +1494,7 @@
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         msgState.sending = true;
         const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
-        try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; loadMsgHistory(); }
+          try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; loadMsgHistory(); }
         catch (error) { toast(error.message); }
         finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
       };

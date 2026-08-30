@@ -308,7 +308,7 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
 
 
 def _历史消息排序键(记录: dict[str, Any]) -> tuple[int, int, str]:
-    _规范化历史消息(记录)
+    # 调用方在排序前已经完成规范化；这里仅取排序字段，避免每次比较都重复解析 raw_message。
     try:
         消息序号 = int(记录.get("id") or 0)
     except (TypeError, ValueError):
@@ -3712,6 +3712,7 @@ def _从数据库恢复() -> None:
                 "group_class_text": str(原始信息.get("group_class_text") or ""),
                 "group_tags": [str(值).strip() for 值 in 标签 if str(值 or "").strip()],
                 "member_num": 成员数,
+                "is_admin": bool(原始信息.get("is_admin")),
                 "updated_at": int(原始信息.get("updated_at") or 0),
             }
             现有 = 群信息缓存.get(会话标识) or {}
@@ -3733,6 +3734,7 @@ def _从数据库恢复() -> None:
                 or str(现有.get("group_class_text") or "").strip()
                 or 现有.get("group_tags")
                 or 现有成员数 > 0
+                or bool(现有.get("is_admin"))
             )
             if not 现有 or not 现有有资料 or 资料时间 >= 现有时间:
                 群信息缓存[会话标识] = 资料
