@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.60.4"
+控制台版本 = "5.61.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -219,13 +219,6 @@ async def _后台刷新消息列表(
         "label": "百度上传目录",
         "kind": "text",
         "secret": False,
-    },
-    "baidu_pan_upload_status": {
-        "category": "baidu_pan_settings",
-        "label": "百度后台备份状态",
-        "kind": "select",
-        "secret": False,
-        "options": ["完结", "连载", "全部"],
     },
     "database_host": {
         "category": "database_settings",
@@ -453,8 +446,6 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
         if not 地址:
             raise ValueError("帮助网页地址无效")
         return 地址
-    if 字段名 == "baidu_pan_upload_status" and 文本 not in {"完结", "连载", "全部"}:
-        raise ValueError("百度备份状态无效")
     if 字段名.endswith("_upload_dir") and 文本 and not 文本.startswith("/"):
         raise ValueError("上传目录必须以 / 开头")
     return 文本

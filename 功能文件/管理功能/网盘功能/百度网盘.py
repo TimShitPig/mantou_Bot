@@ -425,70 +425,19 @@ async def 上传小说并获取分享链接(
 async def 后台上传小说文件(
     配置: Any, 源缓存路径: str | Path, 文件名: str
 ) -> dict[str, Any]:
-    if not 百度网盘是否启用(配置):
-        return {
-            "enabled": False,
-            "success": False,
-            "skipped": False,
-            "file_id": "",
-            "error": "",
-        }
-    if 百度当前为主分享网盘(配置):
-        return {
-            "enabled": True,
-            "success": False,
-            "skipped": True,
-            "file_id": "",
-            "error": "",
-        }
-    上传状态 = 读取百度上传状态(配置)
-    if not 百度上传状态允许(文件名, 上传状态):
-        logger.debug(f"百度网盘后台上传已跳过：file={文件名}, rule={上传状态}")
-        return {
-            "enabled": True,
-            "success": False,
-            "skipped": True,
-            "file_id": "",
-            "error": "",
-        }
-    源路径 = Path(源缓存路径)
-    Cookie = 读取百度网盘Cookie(配置)
-    上传目录 = 读取百度上传目录(配置)
-    try:
-        async with 百度网盘客户端(Cookie) as 客户端:
-            文件ID = await 客户端.上传文件并删除同名旧文件(源路径, 文件名, 上传目录)
-        logger.debug(
-            f"百度网盘后台上传成功：file={文件名}, remote_dir={上传目录}, fs_id={文件ID}"
-        )
-        return {
-            "enabled": True,
-            "success": True,
-            "skipped": False,
-            "file_id": 文件ID,
-            "error": "",
-        }
-    except Exception as 异常:
-        logger.warning(f"百度网盘后台上传失败：file={文件名}, error={异常}")
-        return {
-            "enabled": True,
-            "success": False,
-            "skipped": False,
-            "file_id": "",
-            "error": str(异常),
-        }
+    """兼容旧小说模块入口；百度现在只参与主分享，不再后台备份。"""
+    del 配置, 源缓存路径, 文件名
+    return {
+        "enabled": False,
+        "success": False,
+        "skipped": True,
+        "file_id": "",
+        "error": "",
+    }
 
 
 def 百度网盘是否启用(配置: Any) -> bool:
     return 网盘状态.网盘开关是否开启(配置, "百度") and bool(读取百度网盘Cookie(配置))
-
-
-def 百度当前为主分享网盘(配置: Any) -> bool:
-    try:
-        from 功能文件.管理功能.网盘功能 import 小说网盘
-
-        return 小说网盘.获取当前主网盘(配置) == "百度"
-    except Exception:
-        return False
 
 
 def 读取百度网盘Cookie(配置: Any) -> str:
@@ -499,22 +448,6 @@ def 读取百度网盘Cookie(配置: Any) -> str:
 def 读取百度上传目录(配置: Any) -> str:
     目录 = str(读取配置字段(配置, "baidu_pan_upload_dir") or "").strip()
     return 目录 or 默认上传目录
-
-
-def 读取百度上传状态(配置: Any) -> str:
-    状态 = str(读取配置字段(配置, "baidu_pan_upload_status") or "").strip()
-    if 状态 in ("连载", "全部"):
-        return 状态
-    return "完结"
-
-
-def 百度上传状态允许(文件名: str, 上传状态: str) -> bool:
-    if 上传状态 == "全部":
-        return True
-    文件状态 = 提取文件名状态(文件名)
-    if not 文件状态:
-        return 上传状态 == "全部"
-    return 文件状态 == 上传状态
 
 
 def 提取文件名状态(文件名: str) -> str:

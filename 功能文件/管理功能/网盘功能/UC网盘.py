@@ -730,52 +730,105 @@ def 构造小说下载完成文本(书名: Any, 作者: Any) -> str:
     )
 
 
-def 构造小说下载完成键盘(分享链接: str) -> dict[str, Any]:
-    """QQ 官方机器人链接按钮。"""
-    按钮编号 = hashlib.sha1(str(分享链接).encode("utf-8")).hexdigest()[:24]
+def 解析小说分享链接(分享链接: Any) -> list[dict[str, str]]:
+    """解析单个或多网盘分享结果，兼容旧版单 URL。"""
+    候选: Any = 分享链接
+    if isinstance(分享链接, str):
+        文本 = 分享链接.strip()
+        if 文本.startswith(("[", "{")):
+            try:
+                候选 = json.loads(文本)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                候选 = 文本
+    if isinstance(候选, dict):
+        候选 = 候选.get("share_links") or 候选.get("links") or [候选]
+    if isinstance(候选, (str, bytes)):
+        候选 = [候选]
+    if not isinstance(候选, (list, tuple)):
+        return []
+    结果: list[dict[str, str]] = []
+    已有链接: set[str] = set()
+    for 项目 in 候选:
+        if isinstance(项目, dict):
+            链接 = str(
+                项目.get("url")
+                or 项目.get("share_url")
+                or 项目.get("link")
+                or ""
+            ).strip()
+            平台 = str(项目.get("provider") or 项目.get("platform") or "网盘").strip()
+        else:
+            链接 = str(项目 or "").strip()
+            平台 = "网盘"
+        解析结果 = urllib.parse.urlsplit(链接)
+        if (
+            解析结果.scheme.lower() not in {"http", "https"}
+            or not 解析结果.netloc
+            or 链接 in 已有链接
+        ):
+            continue
+        已有链接.add(链接)
+        平台 = re.sub(r"[\r\n\[\](){}<>|]+", "", 平台).strip() or "网盘"
+        结果.append({"provider": 平台[:24], "url": 链接})
+    return 结果
+
+
+def 构造小说下载完成键盘(分享链接: Any) -> dict[str, Any]:
+    """QQ 官方机器人链接按钮；多网盘结果按平台生成多个按钮。"""
+    链接列表 = 解析小说分享链接(分享链接)
+    按钮列表 = []
+    for 项目 in 链接列表:
+        链接 = 项目["url"]
+        平台 = 项目["provider"]
+        按钮编号 = hashlib.sha1(f"{平台}:{链接}".encode("utf-8")).hexdigest()[:24]
+        按钮列表.append(
+            {
+                "id": f"novel_pan_{按钮编号}",
+                "render_data": {
+                    "label": f"打开{平台}",
+                    "visited_label": f"打开{平台}",
+                },
+                "action": {
+                    "type": 0,
+                    "permission": {"type": 2},
+                    "data": 链接,
+                    "unsupport_tips": "请使用新版 QQ 打开",
+                },
+            }
+        )
     return {
         "rows": [
             {
-                "buttons": [
-                    {
-                        "id": f"novel_uc_{按钮编号}",
-                        "render_data": {
-                            "label": "点击打开",
-                            "visited_label": "点击打开",
-                        },
-                        "action": {
-                            "type": 0,
-                            "permission": {"type": 2},
-                            "data": str(分享链接),
-                            "unsupport_tips": "请使用新版 QQ 打开",
-                        },
-                    }
-                ]
+                "buttons": 按钮列表
             }
         ]
     }
 
 
-def 构造小说下载完成文字链接(分享链接: str) -> str:
+def 构造小说下载完成文字链接(分享链接: Any) -> str:
     """构造供不支持 QQ 链接按钮的客户端使用的 Markdown 文字链接。"""
-    链接 = re.sub(r"[\r\n]+", "", str(分享链接 or "")).strip()
-    解析结果 = urllib.parse.urlsplit(链接)
-    if 解析结果.scheme.lower() not in {"http", "https"} or not 解析结果.netloc:
-        return ""
-    安全链接 = urllib.parse.quote(
-        链接,
-        safe=":/?#[]@!$&'*+,;=%~._-",
-    )
-    return f"[点击此文字打开]({安全链接})"
+    链接列表 = 解析小说分享链接(分享链接)
+    结果 = []
+    for 项目 in 链接列表:
+        安全链接 = urllib.parse.quote(
+            项目["url"],
+            safe=":/?#[]@!$&'*+,;=%~._-",
+        )
+        if len(链接列表) == 1:
+            标签 = "点击此文字打开"
+        else:
+            标签 = f"打开{项目['provider']}"
+        结果.append(f"[{标签}]({安全链接})")
+    return "\n".join(结果)
 
 
 async def 发送小说下载完成链接(
-    event: Any, 书名: Any, 作者: Any, 分享链接: str
+    event: Any, 书名: Any, 作者: Any, 分享链接: Any
 ) -> dict[str, Any]:
     """QQ 官方在同一消息发送链接按钮及备用文字链接；其他适配器降级为文本链接。"""
     完成文本 = 构造小说下载完成文本(书名, 作者)
-    链接 = str(分享链接 or "").strip()
-    文字链接 = 构造小说下载完成文字链接(链接)
+    链接列表 = 解析小说分享链接(分享链接)
+    文字链接 = 构造小说下载完成文字链接(链接列表)
     if not 文字链接:
         return {"sent": False, "fallback_text": "", "error": "分享链接为空"}
 
@@ -789,7 +842,7 @@ async def 发送小说下载完成链接(
 
             完整文本 = f"{完成文本}\n\n{文字链接}"
             按钮已发送 = await 发送Markdown键盘消息(
-                event, 完整文本, 构造小说下载完成键盘(链接)
+                event, 完整文本, 构造小说下载完成键盘(链接列表)
             )
             if 按钮已发送:
                 return {"sent": True, "fallback_text": "", "error": ""}

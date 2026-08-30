@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ from 功能文件.管理功能.网盘功能 import 网盘状态
 状态键 = "active"
 默认主网盘 = "UC"
 网盘模块映射 = {"UC": UC网盘, "夸克": 夸克网盘, "百度": 百度网盘}
+网盘顺序 = ("UC", "夸克", "百度")
 网盘显示名 = {"UC": "UC网盘", "夸克": "夸克网盘", "百度": "百度网盘"}
 切换命令 = {
     "换UC": "UC",
@@ -121,6 +124,60 @@ def 主网盘是否启用(网盘名称: str, 配置: Any) -> bool:
     return False
 
 
+def _序列化分享链接(分享列表: list[dict[str, str]]) -> str:
+    """兼容旧调用方：单网盘返回 URL，多网盘返回可解析的 JSON。"""
+    if len(分享列表) == 1:
+        return 分享列表[0]["url"]
+    return json.dumps(分享列表, ensure_ascii=False, separators=(",", ":"))
+
+
+async def _上传单个平台(
+    配置: Any,
+    源路径: Path,
+    文件名: str,
+    平台: str,
+    账号序号: int,
+) -> dict[str, str | bool]:
+    模块 = 网盘模块映射[平台]
+    覆盖令牌 = 网盘Cookie.设置网盘账号覆盖(平台, 账号序号)
+    try:
+        结果 = await 模块.上传小说并获取分享链接(配置, 源路径, 文件名)
+    except Exception as 异常:
+        return {
+            "platform": 平台,
+            "provider": 网盘显示名[平台],
+            "success": False,
+            "url": "",
+            "error": str(异常),
+        }
+    finally:
+        网盘Cookie.清除网盘账号覆盖(覆盖令牌)
+    if not isinstance(结果, dict):
+        return {
+            "platform": 平台,
+            "provider": 网盘显示名[平台],
+            "success": False,
+            "url": "",
+            "error": "网盘返回格式错误",
+        }
+    链接 = str(结果.get("share_url") or "").strip()
+    if not 结果.get("success") or not 链接:
+        return {
+            "platform": 平台,
+            "provider": 网盘显示名[平台],
+            "success": False,
+            "url": "",
+            "error": str(结果.get("error") or "上传失败"),
+        }
+    return {
+        "platform": 平台,
+        "provider": 网盘显示名[平台],
+        "success": True,
+        "url": 链接,
+        "error": "",
+    }
+
+
 async def _上传小说并获取分享链接内部(
     配置: Any,
     源缓存路径: str | Path,
@@ -129,85 +186,91 @@ async def _上传小说并获取分享链接内部(
     _指定网盘: str | None = None,
     _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    当前网盘 = _指定网盘 if _指定网盘 in 网盘模块映射 else 获取当前主网盘(配置)
-    网盘模块 = 网盘模块映射[当前网盘]
-    if not 主网盘是否启用(当前网盘, 配置):
-        return {
-            "enabled": False,
-            "success": False,
-            "share_url": "",
-            "provider": 网盘显示名[当前网盘],
-            "error": "当前网盘未配置",
-        }
     源路径 = Path(源缓存路径)
     if not 源路径.is_file():
         return {
             "enabled": True,
             "success": False,
             "share_url": "",
-            "provider": 网盘显示名[当前网盘],
+            "share_links": [],
+            "provider": "小说网盘",
             "error": "本地文件不存在",
+        }
+    if _指定网盘 in 网盘模块映射:
+        目标平台列表 = [str(_指定网盘)] if 主网盘是否启用(str(_指定网盘), 配置) else []
+    else:
+        目标平台列表 = [
+            平台 for 平台 in 网盘顺序 if 主网盘是否启用(平台, 配置)
+        ]
+    if not 目标平台列表:
+        return {
+            "enabled": False,
+            "success": False,
+            "share_url": "",
+            "share_links": [],
+            "provider": 网盘显示名.get(_指定网盘 or 获取当前主网盘(配置), "小说网盘"),
+            "error": "没有已开启且已配置的网盘",
         }
     下载缓存清理.登记上传任务(
         源路径,
         文件名,
-        网盘显示名[当前网盘],
+        网盘显示名[目标平台列表[0]],
         账号索引=_账号索引,
     )
-    try:
-        结果 = await 网盘模块.上传小说并获取分享链接(配置, 源路径, 文件名)
-    except Exception as 异常:
-        下载缓存清理.更新上传任务(
-            源路径,
-            "primary_pending",
-            last_error=str(异常),
-            retry_count=int(
-                (下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0
+    结果列表 = await asyncio.gather(
+        *(
+            _上传单个平台(
+                配置,
+                源路径,
+                文件名,
+                平台,
+                int((_账号索引 or {}).get(平台, 1) or 1),
             )
-            + 1,
+            for 平台 in 目标平台列表
         )
-        return {
-            "enabled": True,
-            "success": False,
-            "share_url": "",
-            "provider": 网盘显示名[当前网盘],
-            "error": str(异常),
+    )
+    分享列表 = [
+        {
+            "platform": str(结果.get("platform") or ""),
+            "provider": str(结果.get("provider") or ""),
+            "url": str(结果.get("url") or ""),
         }
-    if not isinstance(结果, dict):
-        下载缓存清理.更新上传任务(
-            源路径,
-            "primary_pending",
-            last_error="网盘返回格式错误",
-            retry_count=int(
-                (下载缓存清理.读取上传任务(源路径) or {}).get("retry_count") or 0
-            )
-            + 1,
-        )
-        return {
-            "enabled": True,
-            "success": False,
-            "share_url": "",
-            "provider": 网盘显示名[当前网盘],
-            "error": "网盘返回格式错误",
-        }
-    结果 = dict(结果)
-    if 结果.get("success"):
+        for 结果 in 结果列表
+        if 结果.get("success") and str(结果.get("url") or "").strip()
+    ]
+    if 分享列表:
+        分享链接 = _序列化分享链接(分享列表)
         下载缓存清理.更新上传任务(
             源路径,
             "primary_done",
-            share_url=str(结果.get("share_url") or ""),
+            share_url=分享链接,
             last_error="",
         )
-    else:
-        旧任务 = 下载缓存清理.读取上传任务(源路径) or {}
-        下载缓存清理.更新上传任务(
-            源路径,
-            "primary_pending",
-            last_error=str(结果.get("error") or "上传失败"),
-            retry_count=int(旧任务.get("retry_count") or 0) + 1,
-        )
-    结果["provider"] = 网盘显示名[当前网盘]
-    return 结果
+        return {
+            "enabled": True,
+            "success": True,
+            "share_url": 分享链接,
+            "share_links": 分享列表,
+            "providers": [项目["provider"] for 项目 in 分享列表],
+            "provider": "、".join(项目["provider"] for 项目 in 分享列表),
+            "error": "",
+        }
+    错误列表 = [str(结果.get("error") or "上传失败") for 结果 in 结果列表]
+    旧任务 = 下载缓存清理.读取上传任务(源路径) or {}
+    下载缓存清理.更新上传任务(
+        源路径,
+        "primary_pending",
+        last_error="；".join(错误列表),
+        retry_count=int(旧任务.get("retry_count") or 0) + 1,
+    )
+    return {
+        "enabled": True,
+        "success": False,
+        "share_url": "",
+        "share_links": [],
+        "provider": "、".join(网盘显示名[平台] for 平台 in 目标平台列表),
+        "error": 错误列表[0] if 错误列表 else "上传失败",
+    }
 
 
 async def 上传小说并获取分享链接(
@@ -219,34 +282,26 @@ async def 上传小说并获取分享链接(
     _账号序号: int | None = None,
     _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    当前网盘 = _指定网盘 if _指定网盘 in 网盘模块映射 else 获取当前主网盘(配置)
     if _账号索引 is None:
-        _账号索引 = {
-            平台: 网盘Cookie.获取当前网盘账号序号(配置, 平台)
-            for 平台 in 网盘模块映射
-        }
+        _账号索引 = {平台: 网盘Cookie.获取当前网盘账号序号(配置, 平台) for 平台 in 网盘模块映射}
     else:
         _账号索引 = {
             平台: max(1, int(序号))
             for 平台, 序号 in _账号索引.items()
-            if 平台 in 网盘模块映射
+            if 平台 in 网盘模块映射 and str(序号).lstrip("+").isdigit()
         }
-    if _账号序号 is None:
-        _账号序号 = _账号索引.get(当前网盘, 1)
-    else:
-        _账号序号 = max(1, int(_账号序号))
-        _账号索引[当前网盘] = _账号序号
-    覆盖令牌 = 网盘Cookie.设置网盘账号覆盖(当前网盘, _账号序号)
-    try:
-        return await _上传小说并获取分享链接内部(
-            配置,
-            源缓存路径,
-            文件名,
-            _指定网盘=当前网盘,
-            _账号索引=_账号索引,
-        )
-    finally:
-        网盘Cookie.清除网盘账号覆盖(覆盖令牌)
+    if _指定网盘 in 网盘模块映射 and _账号序号 is not None:
+        try:
+            _账号索引[str(_指定网盘)] = max(1, int(_账号序号))
+        except (TypeError, ValueError):
+            _账号索引[str(_指定网盘)] = 1
+    return await _上传小说并获取分享链接内部(
+        配置,
+        源缓存路径,
+        文件名,
+        _指定网盘=_指定网盘,
+        _账号索引=_账号索引,
+    )
 
 
 async def 恢复待续传上传任务(配置: Any) -> int:
@@ -292,50 +347,19 @@ async def 恢复待续传上传任务(配置: Any) -> int:
             if not 结果.get("success"):
                 continue
             已处理 += 1
-        账号索引 = 任务.get("account_indices")
-        if not isinstance(账号索引, dict):
-            账号索引 = {}
-        try:
-            百度账号序号 = max(1, int(账号索引.get("百度", 1)))
-        except (TypeError, ValueError):
-            百度账号序号 = 1
-        if not await _恢复百度后台上传(
-            配置, 路径, 文件名, _账号序号=百度账号序号
-        ):
-            下载缓存清理.更新上传任务(
-                路径,
-                "backup_pending",
-                last_error="百度网盘后台备份未完成",
-            )
-            continue
+        elif 状态 == "backup_pending":
+            # 旧版本可能留下“百度后台备份”状态；新流程不再做后台备份，直接结束任务。
+            下载缓存清理.更新上传任务(路径, "primary_done", last_error="")
         if 下载缓存清理.删除下载缓存文件(路径):
             logger.info(f"重载恢复小说上传完成：file={文件名}")
     return 已处理
 
 
-async def _恢复百度后台上传(
-    配置: Any, 路径: Path, 文件名: str, *, _账号序号: int = 1
-) -> bool:
-    if 百度网盘 is None:
-        return True
-    覆盖令牌 = 网盘Cookie.设置网盘账号覆盖("百度", _账号序号)
-    try:
-        结果 = await 百度网盘.后台上传小说文件(配置, 路径, 文件名)
-    except Exception as 异常:
-        logger.warning(f"重载恢复百度后台上传异常：file={文件名}, error={异常}")
-        return False
-    finally:
-        网盘Cookie.清除网盘账号覆盖(覆盖令牌)
-    if not isinstance(结果, dict):
-        return False
-    return bool(结果.get("success") or 结果.get("skipped") or not 结果.get("enabled"))
-
-
 async def 发送小说下载完成链接(
-    event: Any, 书名: Any, 作者: Any, 分享链接: str
+    event: Any, 书名: Any, 作者: Any, 分享链接: Any
 ) -> dict[str, Any]:
     return await UC网盘.发送小说下载完成链接(event, 书名, 作者, 分享链接)
 
 
 def 小说分享网盘是否启用(配置: Any) -> bool:
-    return 主网盘是否启用(获取当前主网盘(配置), 配置)
+    return any(主网盘是否启用(平台, 配置) for 平台 in 网盘顺序)
