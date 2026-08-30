@@ -2623,6 +2623,15 @@ def _聊天群成员状态(会话标识: str, 类型: str) -> dict[str, Any]:
     }
 
 
+def _聊天已移除(聊天: dict[str, Any]) -> bool:
+    """返回会话是否已确认机器人被移出群聊。"""
+    if str(聊天.get("chat_type") or "group") != "group":
+        return False
+    状态 = str(聊天.get("membership_status") or "").strip().lower()
+    不在群 = 聊天.get("in_group") is False or str(聊天.get("in_group") or "").strip().lower() == "false"
+    return 状态 == "removed" or 不在群
+
+
 async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int:
     """对昵称缺失的私聊会话逐个补查昵称（历史会话补查入口）。"""
     补查数 = 0
@@ -2919,10 +2928,11 @@ def 获取聊天列表(
             )
         for 聊天 in 聊天列表:
             聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
-    # 手动置顶会话始终在最前；其余会话只按最新消息时间倒序，
+    # 已移除群聊始终放在列表底部；正常会话中手动置顶仍在最前，
     # 未读数只显示红点，不改变已读会话的位置。
     聊天列表.sort(
         key=lambda x: (
+            1 if _聊天已移除(x) else 0,
             0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
             -(x.get("last_ts") or 0),
             str(x.get("chat_id") or ""),

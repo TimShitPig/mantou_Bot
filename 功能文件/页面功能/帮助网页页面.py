@@ -117,6 +117,8 @@ from .帮助网页脚本 import 控制台脚本
             .msg-search input:focus { border-color:#12b7f5; background:#fff; }
             .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
             .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; }
+            .msg-chat-divider { margin:6px 6px 2px; padding:7px 4px 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
+            .msg-chat-divider:first-child { margin-top:0; border-top:0; }
             .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
@@ -466,6 +468,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .chat-list-panel { background:#1a1e2a; }
               :root[data-theme="dark"] .msg-list-head { background:#1f2330; border-bottom-color:#2c3044; }
               :root[data-theme="dark"] .msg-chat:hover { background:#262b3a; }
+              :root[data-theme="dark"] .msg-chat-divider { border-top-color:#2c3044; color:#7f879b; }
               :root[data-theme="dark"] .msg-chat.active { background:#1d3850; }
               :root[data-theme="dark"] .msg-work { background:#161926; }
               :root[data-theme="dark"] .msg-head { background:#1f2330; }

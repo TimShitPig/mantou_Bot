@@ -537,6 +537,8 @@
         if (!keyword) return true;
         return [chat.nickname, chat.remark, chat.chat_id].some((value) => String(value || '').toLowerCase().includes(keyword));
       };
+      const msgChatIsRemoved = (chat) => String(chat?.chat_type || 'group') === 'group'
+        && (String(chat?.membership_status || '').toLowerCase() === 'removed' || chat?.in_group === false);
       const mergeMsgRealtimeChats = (serverChats) => {
         const byId = new Map((serverChats || []).map((chat) => [String(chat.chat_id || ''), {...chat}]));
         msgState.realtimeChats.forEach((overlay, chatId) => {
@@ -560,6 +562,7 @@
           });
         });
         return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
+          Number(msgChatIsRemoved(left)) - Number(msgChatIsRemoved(right)) ||
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
           Number(right.last_ts || 0) - Number(left.last_ts || 0)
         );
@@ -687,17 +690,22 @@
         msgState.chats = chats;
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; return; }
+        let removedSectionShown = false;
         node.innerHTML = chats.map((chat) => {
           const av = avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
           if (chat.appid) window.msgAppid = chat.appid;
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
           const viewing = msgState.chatId === chat.chat_id;
-          const removed = chat.chat_type === 'group' && (chat.membership_status === 'removed' || chat.in_group === false);
+          const removed = msgChatIsRemoved(chat);
+          const removedSection = removed && !removedSectionShown
+            ? '<div class="msg-chat-divider" role="separator">已移除群聊</div>'
+            : '';
+          if (removed) removedSectionShown = true;
           const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
           const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
           if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
           const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
-          return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
+          return `${removedSection}<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
             <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
             <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
              <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread > 99 ? '99+' : unread}</span>` : ''}</span>
