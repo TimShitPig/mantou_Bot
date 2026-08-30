@@ -776,17 +776,19 @@ def 解析小说分享链接(分享链接: Any) -> list[dict[str, str]]:
 def 构造小说下载完成键盘(分享链接: Any) -> dict[str, Any]:
     """QQ 官方机器人链接按钮；多网盘结果按平台生成多个按钮。"""
     链接列表 = 解析小说分享链接(分享链接)
+    单网盘标签 = "点击我打开" if len(链接列表) == 1 else ""
     按钮列表 = []
     for 项目 in 链接列表:
         链接 = 项目["url"]
         平台 = 项目["provider"]
+        按钮标签 = 单网盘标签 or 平台
         按钮编号 = hashlib.sha1(f"{平台}:{链接}".encode("utf-8")).hexdigest()[:24]
         按钮列表.append(
             {
                 "id": f"novel_pan_{按钮编号}",
                 "render_data": {
-                    "label": 平台,
-                    "visited_label": 平台,
+                    "label": 按钮标签,
+                    "visited_label": 按钮标签,
                 },
                 "action": {
                     "type": 0,
@@ -815,7 +817,7 @@ def 构造小说下载完成文字链接(分享链接: Any) -> str:
             safe=":/?#[]@!$&'*+,;=%~._-",
         )
         if len(链接列表) == 1:
-            标签 = "点击此文字打开"
+            标签 = "点击我打开"
         else:
             标签 = f"打开{项目['provider']}"
         结果.append(f"[{标签}]({安全链接})")

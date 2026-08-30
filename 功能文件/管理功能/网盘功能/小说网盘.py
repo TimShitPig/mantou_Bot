@@ -139,6 +139,7 @@ async def _上传单个平台(
     账号序号: int,
 ) -> dict[str, str | bool]:
     模块 = 网盘模块映射[平台]
+    logger.debug("小说网盘并发上传开始：platform=%s", 平台)
     覆盖令牌 = 网盘Cookie.设置网盘账号覆盖(平台, 账号序号)
     try:
         结果 = await 模块.上传小说并获取分享链接(配置, 源路径, 文件名)
@@ -176,6 +177,36 @@ async def _上传单个平台(
         "url": 链接,
         "error": "",
     }
+
+
+async def _并发上传平台列表(
+    配置: Any,
+    源路径: Path,
+    文件名: str,
+    目标平台列表: list[str],
+    账号索引: dict[str, int] | None,
+) -> list[dict[str, str | bool]]:
+    """一次创建所有上传任务，确保各网盘从同一批调度中并行开始。"""
+    任务列表 = [
+        asyncio.create_task(
+            _上传单个平台(
+                配置,
+                源路径,
+                文件名,
+                平台,
+                int((账号索引 or {}).get(平台, 1) or 1),
+            ),
+            name=f"小说网盘上传-{平台}",
+        )
+        for 平台 in 目标平台列表
+    ]
+    if not 任务列表:
+        return []
+    logger.debug(
+        "小说网盘并发上传调度完成：platforms=%s",
+        ",".join(目标平台列表),
+    )
+    return list(await asyncio.gather(*任务列表))
 
 
 async def _上传小说并获取分享链接内部(
@@ -217,17 +248,12 @@ async def _上传小说并获取分享链接内部(
         网盘显示名[目标平台列表[0]],
         账号索引=_账号索引,
     )
-    结果列表 = await asyncio.gather(
-        *(
-            _上传单个平台(
-                配置,
-                源路径,
-                文件名,
-                平台,
-                int((_账号索引 or {}).get(平台, 1) or 1),
-            )
-            for 平台 in 目标平台列表
-        )
+    结果列表 = await _并发上传平台列表(
+        配置,
+        源路径,
+        文件名,
+        目标平台列表,
+        _账号索引,
     )
     分享列表 = [
         {
