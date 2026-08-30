@@ -251,7 +251,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = {};
@@ -1108,6 +1108,7 @@
         const id = `web-${Date.now()}-${++msgState.optimisticSeq}`;
         const content = String(payload.content || '').trim();
         const imageData = String(payload.image_data || '').trim();
+        const imageUrl = safeImageSource(payload.image_url);
         const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
         const message = {
           message_id: id,
@@ -1119,7 +1120,9 @@
           source: 'web_panel',
           is_self: true,
           reference_id: String(payload.quote_message_id || '').trim(),
-          media: imageData ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content} : null,
+          media: imageData
+            ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content}
+            : (imageUrl ? {type:'图片', content_type:'image/*', src:imageUrl, text:content} : null),
         };
         const entry = {
           id,
@@ -1156,6 +1159,7 @@
         if (textarea) textarea.value = '';
         msgState.quote = null;
         msgState.pastedImage = null;
+        msgState.pastedImageSource = '';
         const inline = $('msg-img-inline');
         if (inline) inline.hidden = true;
         const thumb = $('msg-img-thumb');
@@ -1331,9 +1335,20 @@
       const attachDroppedImage = async (source) => {
         const url = safeImageSource(source);
         if (!url) return toast('请拖入图片');
+        if (!url.startsWith('data:')) {
+          msgState.pastedImage = '';
+          msgState.pastedImageSource = url;
+          const thumb = $('msg-img-thumb');
+          if (thumb) thumb.src = mediaProxyUrl(url, 'image') || url;
+          const inline = $('msg-img-inline');
+          if (inline) inline.hidden = false;
+          toast('图片已添加，可继续输入文字后发送');
+          return;
+        }
         try {
           const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
           msgState.pastedImage = dataUrl;
+          msgState.pastedImageSource = url.startsWith('data:') ? '' : url;
           const thumb = $('msg-img-thumb');
           if (thumb) thumb.src = dataUrl;
           const inline = $('msg-img-inline');
@@ -1355,7 +1370,7 @@
           ]);
         });
         img.addEventListener('dragstart', (event) => {
-          const source = img.currentSrc || img.dataset.mediaDirect || img.src;
+          const source = img.dataset.mediaDirect || img.currentSrc || img.src;
           if (!source || !event.dataTransfer) return;
           event.stopPropagation();
           event.dataTransfer.effectAllowed = 'copy';
@@ -1785,7 +1800,7 @@
       const sendMessage = () => {
         const content = $('msg-textarea').value.trim();
         const customId = $('msg-custom-id')?.value.trim() || '';
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:msgState.pastedImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '' };
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:msgState.pastedImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', image_url:msgState.pastedImageSource || '' };
         if (msgState.sendType === 'media') {
           payload.media_file_type = Number($('msg-media-type')?.value || 1);
           payload.media = $('msg-media-path')?.value.trim() || '';
@@ -1806,7 +1821,7 @@
           payload.card = { title: $('msg-card-title')?.value.trim() || '', description: $('msg-card-desc')?.value.trim() || '', pic_url: $('msg-card-pic')?.value.trim() || '', url: $('msg-card-url')?.value.trim() || '' };
           if (!payload.card.title) return toast('请填写卡片标题');
         }
-        if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
+        if (!content && !msgState.pastedImage && !msgState.pastedImageSource && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         const entry = createOptimisticSend(payload);
         // 先完成本地发送事务，输入框立即恢复可用；网络请求在后台运行。
         resetComposer();
@@ -1842,6 +1857,7 @@
             const reader = new FileReader();
             reader.onload = () => {
               msgState.pastedImage = reader.result;
+              msgState.pastedImageSource = '';
               $('msg-img-thumb').src = reader.result;
               $('msg-img-inline').hidden = false;
               toast('已粘贴图片，可继续输入文字后发送');
@@ -1875,7 +1891,7 @@
         const source = String(custom || uri).split(/\r?\n/).map((value) => value.trim()).find((value) => value && !value.startsWith('#')) || '';
         void attachDroppedImage(source);
       });
-      const clearMsgImage = () => { msgState.pastedImage = null; $('msg-img-inline').hidden = true; $('msg-img-thumb').removeAttribute('src'); };
+      const clearMsgImage = () => { msgState.pastedImage = null; msgState.pastedImageSource = ''; $('msg-img-inline').hidden = true; $('msg-img-thumb').removeAttribute('src'); };
       $('msg-img-clear').addEventListener('click', clearMsgImage);
       $('msg-img-pick').addEventListener('click', () => $('msg-img-file').click());
       $('msg-img-file').addEventListener('change', (e) => {
@@ -1883,7 +1899,7 @@
         if (!file) return;
         if (!file.type.startsWith('image/')) { toast('请选择图片文件'); e.target.value = ''; return; }
         const reader = new FileReader();
-        reader.onload = () => { msgState.pastedImage = reader.result; $('msg-img-thumb').src = reader.result; $('msg-img-inline').hidden = false; };
+        reader.onload = () => { msgState.pastedImage = reader.result; msgState.pastedImageSource = ''; $('msg-img-thumb').src = reader.result; $('msg-img-inline').hidden = false; };
         reader.readAsDataURL(file);
         e.target.value = '';
       });
