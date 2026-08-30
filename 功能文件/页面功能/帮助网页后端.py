@@ -1795,6 +1795,8 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片路径=str(数据.get("image") or ""),
              图片数据=str(数据.get("image_data") or ""),
              图片URL=str(数据.get("image_url") or ""),
+             图片前文本=str(数据.get("image_before") or ""),
+             图片后文本=str(数据.get("image_after") or ""),
              媒体路径=str(数据.get("media") or ""),
              媒体URL=str(数据.get("media_url") or ""),
              媒体文本=str(数据.get("media_text") or ""),

@@ -342,7 +342,10 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         if not isinstance(旧媒体, dict) or not 旧媒体.get("src"):
             已有记录["media"] = dict(新媒体)
         else:
-            for 字段 in ("text", "name", "content_type", "size", "width", "height"):
+            for 字段 in (
+                "text", "name", "content_type", "size", "width", "height",
+                "before_text", "after_text",
+            ):
                 if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
                     旧媒体[字段] = 新媒体[字段]
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
@@ -3397,10 +3400,21 @@ def _规范化公网图片地址(地址: Any) -> str:
     return 文本
 
 
-def _构造Markdown图文内容(内容: Any, 图片地址: Any) -> str:
+def _构造Markdown图文内容(
+    内容: Any,
+    图片地址: Any,
+    图片前文本: Any = "",
+    图片后文本: Any = "",
+) -> str:
     """按 QQ 官方 Markdown 图片语法拼接一条图文消息。"""
     文本 = str(内容 or "").strip()
     地址 = _规范化公网图片地址(图片地址)
+    前文本 = str(图片前文本 or "").strip()
+    后文本 = str(图片后文本 or "").strip()
+    if (前文本 or 后文本) and 地址:
+        编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
+        图片标记 = f"![图片 #640px #480px]({编码地址})"
+        return "\n\n".join(值 for 值 in (前文本, 图片标记, 后文本) if 值)
     if not 文本 or not 地址:
         return ""
     编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
@@ -3421,6 +3435,8 @@ async def 发送消息(
     图片路径: str = "",
     图片数据: str = "",
     图片URL: str = "",
+    图片前文本: str = "",
+    图片后文本: str = "",
     媒体路径: str = "",
     媒体URL: str = "",
     媒体文件类型: int = 1,
@@ -3481,6 +3497,8 @@ async def 发送消息(
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
+    图片前文本 = str(图片前文本 or "").strip()
+    图片后文本 = str(图片后文本 or "").strip()
     图片文件名 = "image.png"
     图片字节: bytes | None = None
     if 图片数据:
@@ -3496,9 +3514,20 @@ async def 发送消息(
         except Exception:
             return {"ok": False, "message": "图片数据无效"}
 
+    def _图片媒体记录() -> dict[str, Any]:
+        媒体记录: dict[str, Any] = {
+            "type": "图片",
+            "src": 图片公开地址,
+            "text": 内容,
+        }
+        if 图片前文本 or 图片后文本:
+            媒体记录["before_text"] = 图片前文本
+            媒体记录["after_text"] = 图片后文本
+        return 媒体记录
+
     # 官方 Markdown 支持公网图片与文字同条发送；本地图片先走官方分片流程取得 raw_url。
     图文内容 = (
-        _构造Markdown图文内容(内容, 图片公开地址)
+        _构造Markdown图文内容(内容, 图片公开地址, 图片前文本, 图片后文本)
         if 类型 in ("text", "markdown")
         else ""
     )
@@ -3511,7 +3540,7 @@ async def 发送消息(
             图片文件名,
         )
         图片公开地址 = _规范化公网图片地址(分片结果.get("raw_url"))
-        图文内容 = _构造Markdown图文内容(内容, 图片公开地址)
+        图文内容 = _构造Markdown图文内容(内容, 图片公开地址, 图片前文本, 图片后文本)
     if 图文内容:
         消息体["msg_type"] = 2
         消息体.pop("content", None)
@@ -3656,9 +3685,9 @@ async def 发送消息(
                         展示内容 = "[图文卡片] " + 展示内容
                     媒体记录 = None
                     if 图文内容:
-                        媒体记录 = {"type": "图片", "src": 图片公开地址, "text": 内容}
+                        媒体记录 = _图片媒体记录()
                     elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
-                        媒体记录 = {"type": "图片", "src": 图片公开地址, "text": 内容}
+                        媒体记录 = _图片媒体记录()
                     记录 = 记录发送消息(
                         会话标识,
                         会话类型 or "group",
@@ -3700,9 +3729,9 @@ async def 发送消息(
         展示内容 = "[图文卡片] " + 展示内容
     媒体记录 = None
     if 图文内容:
-        媒体记录 = {"type": "图片", "src": 图片公开地址, "text": 内容}
+        媒体记录 = _图片媒体记录()
     elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
-        媒体记录 = {"type": "图片", "src": 图片公开地址, "text": 内容}
+        媒体记录 = _图片媒体记录()
     记录 = 记录发送消息(
         会话标识,
         会话类型 or "group",

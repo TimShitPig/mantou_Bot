@@ -176,6 +176,8 @@ from .帮助网页脚本 import 控制台脚本
             .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
+            .msg-media-text { white-space:pre-wrap; word-break:break-word; }
+            .msg-media-text-after { margin-top:7px; }
             .msg-image-media { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
             .msg-image-link { display:block; min-width:24px; min-height:24px; padding:0; border:0; background:transparent; text-align:left; line-height:0; cursor:zoom-in; }
             .msg-image-link:focus-visible { outline:2px solid #12b7f5; outline-offset:3px; }
@@ -233,6 +235,9 @@ from .帮助网页脚本 import 控制台脚本
          .msg-input-box { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-height:96px; height:auto; max-height:none; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
         .msg-input-box.drag-over { border-color:#12b7f5; background:#f0f9ff; box-shadow:0 0 0 2px rgba(18,183,245,.14); }
+        .msg-textarea-before[hidden] { display:none; }
+        .msg-input-box.has-inline-image .msg-textarea { min-height:42px; flex:1 1 0; }
+        .msg-input-box.has-inline-image .msg-textarea-before { border-bottom:1px solid #eef0f2; }
          .msg-textarea { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
         .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
         .msg-img-inline[hidden] { display:none; }
@@ -471,6 +476,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
               :root[data-theme="dark"] .msg-input-box { border-color:#2c3044; background:#1f2330; }
               :root[data-theme="dark"] .msg-input-box.drag-over { border-color:#42c6ff; background:#172b39; box-shadow:0 0 0 2px rgba(66,198,255,.16); }
+              :root[data-theme="dark"] .msg-input-box.has-inline-image .msg-textarea-before { border-bottom-color:#2c3044; }
               :root[data-theme="dark"] .msg-img-chip { border-color:#2c3044; background:#161926; }
               :root[data-theme="dark"] .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
               :root[data-theme="dark"] .msg-quote-preview b { color:#e8eaf2; }
@@ -577,6 +583,7 @@ from .帮助网页脚本 import 控制台脚本
                 </div>
                 <div class="msg-input-box" id="msg-input-box">
                   <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
+                  <textarea id="msg-textarea-before" class="msg-textarea msg-textarea-before" placeholder="图片前文字（可选）" aria-label="图片前文字" hidden></textarea>
                   <div class="msg-img-inline" id="msg-img-inline" hidden>
                     <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
                   </div>
