@@ -230,6 +230,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
          .msg-input-box { position:relative; display:flex; flex-direction:column; min-height:96px; height:132px; max-height:38vh; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
+        .msg-input-box.drag-over { border-color:#12b7f5; background:#f0f9ff; box-shadow:0 0 0 2px rgba(18,183,245,.14); }
          .msg-textarea { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
         .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
         .msg-img-inline[hidden] { display:none; }
@@ -429,6 +430,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; box-shadow:inset 0 0 0 1px #12b7f5; }
               :root[data-theme="dark"] .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
               :root[data-theme="dark"] .msg-input-box { border-color:#2c3044; background:#1f2330; }
+              :root[data-theme="dark"] .msg-input-box.drag-over { border-color:#42c6ff; background:#172b39; box-shadow:0 0 0 2px rgba(66,198,255,.16); }
               :root[data-theme="dark"] .msg-img-chip { border-color:#2c3044; background:#161926; }
               :root[data-theme="dark"] .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
               :root[data-theme="dark"] .msg-quote-preview b { color:#e8eaf2; }

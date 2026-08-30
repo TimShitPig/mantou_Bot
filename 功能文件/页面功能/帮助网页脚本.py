@@ -1230,6 +1230,11 @@
           return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
         } catch (_) { return ''; }
       };
+      const safeImageSource = (value) => {
+        const raw = String(value ?? '').trim();
+        if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
+        return safeMediaUrl(raw);
+      };
       const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
@@ -1274,7 +1279,7 @@
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
             const preview = mediaProxyUrl(src, 'image');
-            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
+            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
           }
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
@@ -1284,6 +1289,80 @@
           const fileUrl = mediaProxyUrl(src, 'file', name);
           return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
+      };
+      const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('图片读取失败'));
+        reader.readAsDataURL(blob);
+      });
+      const fetchImageBlob = async (source) => {
+        const url = safeImageSource(source);
+        if (!url) throw new Error('图片地址无效');
+        const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
+        if (!response.ok) throw new Error('图片读取失败');
+        const blob = await response.blob();
+        if (!String(blob.type || '').toLowerCase().startsWith('image/')) throw new Error('不是图片');
+        return blob;
+      };
+      const copyImageToClipboard = async (source, image) => {
+        try {
+          const blob = await fetchImageBlob(source);
+          if (window.isSecureContext && navigator.clipboard?.write && window.ClipboardItem) {
+            const mime = String(blob.type || 'image/png').toLowerCase().startsWith('image/') ? String(blob.type || 'image/png').toLowerCase() : 'image/png';
+            await navigator.clipboard.write([new window.ClipboardItem({[mime]: blob.type === mime ? blob : blob.slice(0, blob.size, mime)})]);
+            toast('图片已复制');
+            return;
+          }
+          // HTTP 控制台没有 Clipboard API 时，复制选中的图片节点作为浏览器兼容回退。
+          const selection = window.getSelection?.();
+          const range = document.createRange();
+          range.selectNode(image);
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          const copied = document.execCommand('copy');
+          selection?.removeAllRanges();
+          if (!copied) throw new Error('浏览器不支持图片复制');
+          toast('图片已复制');
+        } catch (_) {
+          toast('图片复制失败，请重试');
+        }
+      };
+      const attachDroppedImage = async (source) => {
+        const url = safeImageSource(source);
+        if (!url) return toast('请拖入图片');
+        try {
+          const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
+          msgState.pastedImage = dataUrl;
+          const thumb = $('msg-img-thumb');
+          if (thumb) thumb.src = dataUrl;
+          const inline = $('msg-img-inline');
+          if (inline) inline.hidden = false;
+          toast('图片已添加，可继续输入文字后发送');
+        } catch (_) {
+          toast('图片读取失败，请重新拖入');
+        }
+      };
+      const bindImageInteractions = (img) => {
+        if (!img) return;
+        img.draggable = true;
+        img.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const source = img.currentSrc || img.dataset.mediaDirect || img.src;
+          showMsgCtx(event.clientX, event.clientY, [
+            {label:'复制图片', action:() => copyImageToClipboard(source, img)},
+          ]);
+        });
+        img.addEventListener('dragstart', (event) => {
+          const source = img.currentSrc || img.dataset.mediaDirect || img.src;
+          if (!source || !event.dataTransfer) return;
+          event.stopPropagation();
+          event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData('application/x-mantou-image', source);
+          event.dataTransfer.setData('text/uri-list', source);
+          event.dataTransfer.setData('text/plain', source);
+        });
       };
       const stripMediaMarker = (text, media) => {
         const raw = String(text || '');
@@ -1383,17 +1462,20 @@
             </div></div>`;
         });
         body.innerHTML = html;
-        body.querySelectorAll('[data-media-img]').forEach((img) => img.addEventListener('error', () => {
-          const direct = String(img.dataset.mediaDirect || '').trim();
-          if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
-            img.dataset.mediaDirectTried = '1';
-            img.src = direct;
-            img.dataset.lightbox = direct;
-            return;
-          }
-          img.hidden = true;
-          img.closest('.msg-image-link')?.classList.add('is-broken');
-        }));
+        body.querySelectorAll('[data-media-img]').forEach((img) => {
+          bindImageInteractions(img);
+          img.addEventListener('error', () => {
+            const direct = String(img.dataset.mediaDirect || '').trim();
+            if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
+              img.dataset.mediaDirectTried = '1';
+              img.src = direct;
+              img.dataset.lightbox = direct;
+              return;
+            }
+            img.hidden = true;
+            img.closest('.msg-image-link')?.classList.add('is-broken');
+          });
+        });
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (scroll.toBottom) {
@@ -1769,6 +1851,29 @@
             return;
           }
         }
+      });
+      const msgInputBox = $('msg-input-box');
+      msgInputBox?.addEventListener('dragover', (event) => {
+        const types = Array.from(event.dataTransfer?.types || []);
+        if (!types.includes('application/x-mantou-image') && !types.includes('text/uri-list')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'copy';
+        msgInputBox.classList.add('drag-over');
+      });
+      msgInputBox?.addEventListener('dragleave', (event) => {
+        if (event.relatedTarget && msgInputBox.contains(event.relatedTarget)) return;
+        msgInputBox.classList.remove('drag-over');
+      });
+      msgInputBox?.addEventListener('drop', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        msgInputBox.classList.remove('drag-over');
+        const transfer = event.dataTransfer;
+        const custom = transfer?.getData('application/x-mantou-image') || '';
+        const uri = transfer?.getData('text/uri-list') || transfer?.getData('text/plain') || '';
+        const source = String(custom || uri).split(/\r?\n/).map((value) => value.trim()).find((value) => value && !value.startsWith('#')) || '';
+        void attachDroppedImage(source);
       });
       const clearMsgImage = () => { msgState.pastedImage = null; $('msg-img-inline').hidden = true; $('msg-img-thumb').removeAttribute('src'); };
       $('msg-img-clear').addEventListener('click', clearMsgImage);
