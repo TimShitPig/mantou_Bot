@@ -39,6 +39,8 @@
     .bot-avatar::before { content:""; position:absolute; width:62px; height:58px; left:0; top:5px; border-radius:50% 50% 42% 42%; background:#a2a5f7; }
     .bot-avatar::after { content:"✦"; position:absolute; right:7px; top:4px; color:#fff; font-size:13px; }
     .avatar-face { position:absolute; left:16px; top:27px; z-index:1; color:#4f50a8; font-size:23px; letter-spacing:5px; }
+    .bot-avatar.has-image::before,.bot-avatar.has-image::after,.bot-avatar.has-image .avatar-face { display:none; }
+    .bot-avatar-image { position:absolute; inset:0; z-index:1; width:100%; height:100%; border-radius:50%; object-fit:cover; display:block; }
     .profile strong { font-size:14px; }
     .online { display:inline-flex; align-items:center; gap:5px; color:var(--mint-ink); font-size:12px; }
     .online::before { content:""; width:6px; height:6px; border-radius:50%; background:#4dbb82; }

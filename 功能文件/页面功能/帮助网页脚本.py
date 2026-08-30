@@ -244,7 +244,7 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); const item = (snapshot.pans.items || []).find((entry) => entry.key === key); if (item && item.enabled === false) return toast('请先开启该网盘'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      const load = async () => { try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
       $('popover-logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('.sidebar [data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
@@ -357,6 +357,41 @@
       const avatarHtml = (url, letter) => {
         if (!url) return esc(String(letter || '?').slice(0, 1));
         return `<span class="avatar-letter">${esc(String(letter || '?').slice(0, 1))}</span>` + avatarImg(url, letter);
+      };
+      const applyBotProfile = (profile = {}) => {
+        const data = profile && typeof profile === 'object' ? profile : {};
+        const name = String(data.username || data.name || '').trim() || '馒头助手';
+        const avatar = safeMediaUrl(String(data.avatar || data.avatar_url || '').trim());
+        const id = String(data.id || '').trim();
+        window.msgBotProfile = {id, username:name, avatar};
+        document.querySelectorAll('[data-bot-name]').forEach((node) => { node.textContent = name; });
+        document.querySelectorAll('[data-bot-id]').forEach((node) => { node.textContent = id || '由适配器提供'; });
+        document.querySelectorAll('[data-bot-avatar]').forEach((node) => {
+          node.classList.toggle('has-image', Boolean(avatar));
+          if (!avatar) { node.innerHTML = '<span class="avatar-face">•ᴗ•</span>'; return; }
+          node.innerHTML = `<img class="bot-avatar-image" src="${esc(avatar)}" alt="${esc(name)}" loading="lazy" referrerpolicy="no-referrer">`;
+          node.querySelector('img')?.addEventListener('error', () => {
+            node.classList.remove('has-image');
+            node.innerHTML = '<span class="avatar-face">•ᴗ•</span>';
+          }, {once:true});
+        });
+        if (msgState.chatId && msgState.historyData && typeof renderMsgMessages === 'function') {
+          const body = $('msg-body');
+          renderMsgMessages(
+            {...msgState.historyData, messages:msgState.messages},
+            {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+          );
+        }
+      };
+      const loadBotProfile = async () => {
+        if (window.msgBotProfileLoaded) return;
+        window.msgBotProfileLoaded = true;
+        try {
+          const data = await api('bot-profile');
+          applyBotProfile(data.profile || {});
+        } catch (_) {
+          applyBotProfile({});
+        }
       };
       const msgTypeName = (m) => {
         const c = String(m.content || '');
@@ -1415,6 +1450,7 @@
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
+          const botMessage = String(m.source || '').startsWith('bot');
           const recalled = Boolean(m.recalled);
           const optimisticId = String(m.optimistic_id || '').trim();
           const optimisticEntry = optimisticId ? msgState.optimisticSends.get(optimisticId) : null;
@@ -1423,14 +1459,17 @@
           const profile = profiles[m.user_id] || {};
           const rawNickname = String(m.nickname || '').trim();
           const profileNickname = String(profile.nickname || profile.username || '').trim();
+          const botProfileName = String(window.msgBotProfile?.username || '').trim();
+          const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
           const displayNickname = isSelf
-            ? (rawNickname && rawNickname !== '未知用户' ? rawNickname : (String(m.source || '').startsWith('bot') ? '机器人' : '我'))
+            ? (botMessage
+              ? (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : (botProfileName || '机器人'))
+              : (rawNickname && rawNickname !== '未知用户' ? rawNickname : '我'))
             : ((rawNickname && rawNickname !== '未知用户' && rawNickname !== '未知') ? rawNickname : (profileNickname || rawNickname || '未知用户'));
-          const av = isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid);
+          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid));
           const tags = [];
           if (isSelf) {
-            const botMsg = displayNickname === '机器人' || String(m.source || '').indexOf('bot') === 0;
-            tags.push('<span class="msg-tag self">' + (botMsg ? '机器人' : '我') + '</span>');
+            tags.push('<span class="msg-tag self">' + (botMessage ? '机器人' : '我') + '</span>');
           }
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');

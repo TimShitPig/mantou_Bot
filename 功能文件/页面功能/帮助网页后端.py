@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.4"
+控制台版本 = "5.62.5"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1084,6 +1084,26 @@ async def _处理控制台数据(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台数据读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "控制台数据暂时不可用")
+
+
+async def _处理机器人资料(request: web.Request) -> web.Response:
+    """返回 QQ 官方机器人公开资料；失败时返回空资料让页面使用默认头像。"""
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        资料 = await 消息记录.获取机器人资料()
+        return web.json_response(
+            {"ok": True, "profile": 资料 if isinstance(资料, dict) else {}},
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except Exception as exc:
+        logger.debug("帮助控制台机器人资料读取失败：错误类型=%s", type(exc).__name__)
+        return web.json_response(
+            {"ok": True, "profile": {}},
+            headers={"Cache-Control": "private, max-age=60"},
+        )
 
 
 async def _处理小说开关(request: web.Request) -> web.Response:

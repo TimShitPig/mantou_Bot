@@ -69,6 +69,8 @@ _消息持久化队列: asyncio.Queue[tuple[str, Any]] = (
 _消息持久化任务: asyncio.Task[Any] | None = globals().get("_消息持久化任务")
 _消息持久化接收入队 = globals().get("_消息持久化接收入队", True)
 _消息持久化溢出数 = int(globals().get("_消息持久化溢出数", 0) or 0)
+机器人资料缓存: dict[str, tuple[float, dict[str, str]]] = globals().get("机器人资料缓存") or {}
+机器人资料缓存秒数 = 6 * 60 * 60
 _数据库裁剪进行中 = globals().get("_数据库裁剪进行中", False)
 _上次数据库裁剪排队时间 = float(globals().get("_上次数据库裁剪排队时间", 0.0) or 0.0)
 _数据库裁剪最短间隔 = 300.0
@@ -1886,6 +1888,37 @@ def 获取HTTP通道(平台实例: Any = None) -> tuple[Any, Any] | None:
     if _http is None:
         return None
     return api, _http
+
+
+async def 获取机器人资料(appid: str = "") -> dict[str, str]:
+    """按 QQ 官方 /users/@me 接口读取并缓存机器人名称、头像和 ID。"""
+    缓存键 = str(appid or "default").strip() or "default"
+    当前时间 = time.time()
+    已缓存 = 机器人资料缓存.get(缓存键)
+    if 已缓存 and 当前时间 - float(已缓存[0] or 0) < 机器人资料缓存秒数:
+        return dict(已缓存[1])
+    平台实例 = 获取QQ官方平台(appid=appid)
+    通道 = 获取HTTP通道(平台实例)
+    if 通道 is None:
+        return {}
+    _, _http = 通道
+    try:
+        from botpy.http import Route
+
+        响应 = await _http.request(Route("GET", "/users/@me"))
+        资料 = {
+            "id": str(_提取发送响应字段(响应, "id") or "").strip(),
+            "username": str(_提取发送响应字段(响应, "username", "name") or "").strip(),
+            "avatar": str(_提取发送响应字段(响应, "avatar", "avatar_url") or "").strip(),
+        }
+        if not 资料["username"] and not 资料["avatar"]:
+            机器人资料缓存[缓存键] = (当前时间, {})
+            return {}
+        机器人资料缓存[缓存键] = (当前时间, dict(资料))
+        return 资料
+    except Exception as 异常:
+        logger.debug("QQ官方机器人资料读取失败：错误类型=%s", type(异常).__name__)
+        return {}
 
 
 def 获取最近消息ID(平台实例: Any, 会话标识: str) -> str:
