@@ -252,6 +252,120 @@
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgLayout = {listWidth:340, composerHeight:132, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
+      const normalizeMsgLayout = (value = {}) => {
+        const data = value && typeof value === 'object' ? value : {};
+        const width = Number.parseInt(data.list_width ?? data.listWidth, 10);
+        const height = Number.parseInt(data.composer_height ?? data.composerHeight, 10);
+        const bool = (item, fallback = false) => {
+          if (typeof item === 'boolean') return item;
+          if (['1','true','yes','on','开启'].includes(String(item ?? '').trim().toLowerCase())) return true;
+          if (['0','false','no','off','关闭'].includes(String(item ?? '').trim().toLowerCase())) return false;
+          return fallback;
+        };
+        return {
+          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(520, width)) : 340,
+          composerHeight:Number.isFinite(height) ? Math.max(96, Math.min(420, height)) : 132,
+          listCollapsed:bool(data.list_collapsed ?? data.listCollapsed),
+          composerCollapsed:bool(data.composer_collapsed ?? data.composerCollapsed),
+        };
+      };
+      const applyMsgLayout = (value = {}, persist = false) => {
+        const next = normalizeMsgLayout(value);
+        Object.assign(msgLayout, next);
+        const shell = $('msg-shell');
+        if (shell) {
+          shell.style.setProperty('--msg-list-width', `${next.listWidth}px`);
+          shell.classList.toggle('msg-list-collapsed', next.listCollapsed);
+          shell.classList.toggle('msg-composer-collapsed', next.composerCollapsed);
+        }
+        const composer = $('msg-composer');
+        if (composer) composer.style.height = next.composerCollapsed ? '38px' : `${next.composerHeight}px`;
+        const listToggle = $('msg-list-collapse');
+        if (listToggle) {
+          listToggle.textContent = next.listCollapsed ? '›' : '‹';
+          listToggle.setAttribute('aria-expanded', String(!next.listCollapsed));
+          listToggle.setAttribute('aria-label', next.listCollapsed ? '展开会话列表' : '收起会话列表');
+          listToggle.title = next.listCollapsed ? '展开会话列表' : '收起会话列表';
+        }
+        const composerToggle = $('msg-composer-toggle');
+        if (composerToggle) {
+          composerToggle.textContent = next.composerCollapsed ? '⌃' : '⌄';
+          composerToggle.setAttribute('aria-expanded', String(!next.composerCollapsed));
+          composerToggle.setAttribute('aria-label', next.composerCollapsed ? '展开编辑区' : '收起编辑区');
+          composerToggle.title = next.composerCollapsed ? '展开编辑区' : '收起编辑区';
+        }
+        if (persist) queueMsgLayoutSave();
+      };
+      const queueMsgLayoutSave = () => {
+        if (!msgLayout.loaded) return;
+        if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
+        msgLayout.saveTimer = setTimeout(async () => {
+          msgLayout.saveTimer = null;
+          try {
+            const data = await api('message/layout', {method:'POST', body:JSON.stringify({
+              list_width:msgLayout.listWidth,
+              composer_height:msgLayout.composerHeight,
+              list_collapsed:msgLayout.listCollapsed,
+              composer_collapsed:msgLayout.composerCollapsed,
+            })});
+            msgLayout.persisted = Boolean(data.persisted);
+            if (data.layout) applyMsgLayout(data.layout, false);
+          } catch (error) {
+            if (error.status !== 409 && error.status !== 401) toast('消息布局保存失败');
+          }
+        }, 280);
+      };
+      const loadMsgLayout = async () => {
+        applyMsgLayout();
+        try {
+          const data = await api('message/layout');
+          msgLayout.persisted = Boolean(data.persisted);
+          applyMsgLayout(data.layout || {});
+        } catch (_) {}
+        msgLayout.loaded = true;
+      };
+      const bindMsgLayoutControls = () => {
+        const shell = $('msg-shell');
+        const listResizer = $('msg-list-resizer');
+        const composerResizer = $('msg-composer-resizer');
+        const listToggle = $('msg-list-collapse');
+        const composerToggle = $('msg-composer-toggle');
+        if (!shell) return;
+        listToggle?.addEventListener('click', () => { msgLayout.listCollapsed = !msgLayout.listCollapsed; applyMsgLayout(msgLayout, true); });
+        composerToggle?.addEventListener('click', () => { msgLayout.composerCollapsed = !msgLayout.composerCollapsed; applyMsgLayout(msgLayout, true); });
+        const finishPointer = (event, move, end) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const pointerId = event.pointerId;
+          event.currentTarget?.setPointerCapture?.(pointerId);
+          const onMove = (nextEvent) => move(nextEvent);
+          const onEnd = (endEvent) => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onEnd);
+            window.removeEventListener('pointercancel', onEnd);
+            document.body.classList.remove('msg-resizing');
+            end(endEvent);
+          };
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onEnd, {once:true});
+          window.addEventListener('pointercancel', onEnd, {once:true});
+          document.body.classList.add('msg-resizing');
+        };
+        listResizer?.addEventListener('pointerdown', (event) => {
+          if (window.matchMedia?.('(max-width: 900px)').matches) return;
+          const left = shell.getBoundingClientRect().left;
+          finishPointer(event, (nextEvent) => {
+            applyMsgLayout({...msgLayout, listWidth:nextEvent.clientX - left}, false);
+          }, () => queueMsgLayoutSave());
+        });
+        composerResizer?.addEventListener('pointerdown', (event) => {
+          const bottom = shell.getBoundingClientRect().bottom;
+          finishPointer(event, (nextEvent) => {
+            applyMsgLayout({...msgLayout, composerHeight:bottom - nextEvent.clientY, composerCollapsed:false}, false);
+          }, () => queueMsgLayoutSave());
+        });
+      };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = {};
@@ -1972,6 +2086,8 @@
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
+      bindMsgLayoutControls();
+      void loadMsgLayout();
       msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { loadMsgChats(); if (msgState.chatId && !msgState.eventTransport) loadMsgHistory(false, true); } }, 30000);
 
       setView(viewFromUrl(), false); load();

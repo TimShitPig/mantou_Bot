@@ -325,6 +325,7 @@ from .帮助网页脚本 import 控制台脚本
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
              /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
              .msg-list-resizer { position:absolute; z-index:4; top:0; right:-4px; bottom:0; width:9px; padding:0; border:0; background:transparent; cursor:col-resize; }
+             .msg-list-resizer,.msg-composer-resizer { touch-action:none; }
              .msg-list-resizer::before { content:""; position:absolute; top:50%; left:3px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
              .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
              .msg-list-resizer:hover::before,.msg-list-resizer:focus-visible::before { background:#12b7f5; }
@@ -335,6 +336,7 @@ from .帮助网页脚本 import 控制台脚本
              .msg-composer-resizer::before { content:""; position:absolute; top:5px; left:50%; width:42px; height:3px; border-radius:3px; background:#d5dbe2; transform:translateX(-50%); opacity:.7; transition:background .16s ease,opacity .16s ease; }
              .msg-composer-resizer:hover::before,.msg-composer-resizer:focus-visible::before { background:#12b7f5; opacity:1; }
              .msg-composer-toggle { order:-1; margin-right:2px; color:#7a818a; }
+             body.msg-resizing { user-select:none; }
              .msg-toolbar { min-height:30px; }
              .msg-shell.msg-list-collapsed { --msg-list-width:38px; grid-template-columns:38px minmax(0,1fr); }
              .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { visibility:hidden; pointer-events:none; }
@@ -539,7 +541,7 @@ from .帮助网页脚本 import 控制台脚本
                   <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 </div>
                 <div class="msg-toolbar">
-                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区" hidden>⌄</button>
+                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
                   <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                     <input id="msg-img-file" type="file" accept="image/*" hidden>

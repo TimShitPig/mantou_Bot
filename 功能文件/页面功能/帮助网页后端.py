@@ -28,12 +28,19 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.5"
+控制台版本 = "5.62.6"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
 控制台会话有效期 = 30 * 24 * 60 * 60
 控制台会话命名空间 = "console_session"
+消息布局命名空间 = "msg_console_layout"
+消息布局默认值 = {
+    "list_width": 340,
+    "composer_height": 132,
+    "list_collapsed": False,
+    "composer_collapsed": False,
+}
 媒体代理最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
 媒体代理主机后缀 = (
@@ -1084,6 +1091,108 @@ async def _处理控制台数据(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台数据读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "控制台数据暂时不可用")
+
+
+def _解析消息布局布尔值(值: Any, 默认值: bool = False) -> bool:
+    if isinstance(值, bool):
+        return 值
+    if isinstance(值, (int, float)):
+        return bool(值)
+    文本 = str(值 or "").strip().lower()
+    if 文本 in {"1", "true", "yes", "on", "开启"}:
+        return True
+    if 文本 in {"0", "false", "no", "off", "关闭"}:
+        return False
+    return 默认值
+
+
+def _规范化消息布局(布局: Any = None) -> dict[str, Any]:
+    来源 = 布局 if isinstance(布局, dict) else {}
+    try:
+        列表宽度 = int(来源.get("list_width", 消息布局默认值["list_width"]))
+    except (TypeError, ValueError):
+        列表宽度 = int(消息布局默认值["list_width"])
+    try:
+        输入高度 = int(
+            来源.get("composer_height", 消息布局默认值["composer_height"])
+        )
+    except (TypeError, ValueError):
+        输入高度 = int(消息布局默认值["composer_height"])
+    return {
+        "list_width": max(220, min(520, 列表宽度)),
+        "composer_height": max(96, min(420, 输入高度)),
+        "list_collapsed": _解析消息布局布尔值(
+            来源.get("list_collapsed"), bool(消息布局默认值["list_collapsed"])
+        ),
+        "composer_collapsed": _解析消息布局布尔值(
+            来源.get("composer_collapsed"),
+            bool(消息布局默认值["composer_collapsed"]),
+        ),
+    }
+
+
+def _读取消息布局() -> dict[str, Any]:
+    默认布局 = _规范化消息布局(消息布局默认值)
+    if not _数据库会话可用():
+        return 默认布局
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间
+
+        状态 = 读取运行状态命名空间(当前帮助网页配置, 消息布局命名空间)
+        return _规范化消息布局({**默认布局, **状态})
+    except Exception as exc:
+        logger.debug("帮助控制台消息布局读取失败：错误类型=%s", type(exc).__name__)
+        return 默认布局
+
+
+async def _处理消息布局(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if request.method.upper() == "GET":
+        return web.json_response(
+            {
+                "ok": True,
+                "layout": await _控制台线程执行(_读取消息布局),
+                "persisted": _数据库会话可用(),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    数据 = await _读取请求JSON(request)
+    if not isinstance(数据, dict):
+        return _控制台错误(400, "布局参数无效")
+    允许字段 = {
+        "list_width",
+        "composer_height",
+        "list_collapsed",
+        "composer_collapsed",
+    }
+    更新 = {键: 数据[键] for 键 in 允许字段 if 键 in 数据}
+    if not 更新:
+        return _控制台错误(400, "布局参数无效")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，布局无法保存")
+
+    def _写入布局() -> dict[str, Any]:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 批量写入运行状态值
+
+        当前布局 = _读取消息布局()
+        合并布局 = _规范化消息布局({**当前布局, **更新})
+        批量写入运行状态值(
+            当前帮助网页配置,
+            消息布局命名空间,
+            {键: 合并布局[键] for 键 in 允许字段},
+        )
+        return 合并布局
+
+    try:
+        布局 = await _控制台线程执行(_写入布局)
+        return web.json_response(
+            {"ok": True, "layout": 布局, "persisted": True},
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台消息布局保存失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "布局保存失败，请稍后重试")
 
 
 async def _处理机器人资料(request: web.Request) -> web.Response:

@@ -78,6 +78,8 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("get", "/api/message/media", 后端._处理消息媒体),
+        ("get", "/api/message/layout", 后端._处理消息布局),
+        ("post", "/api/message/layout", 后端._处理消息布局),
         ("get", "/api/message/ws", 后端._处理消息WebSocket),
         ("get", "/api/message/events", 后端._处理消息事件),
         ("post", "/api/message/send", 后端._处理消息发送),
