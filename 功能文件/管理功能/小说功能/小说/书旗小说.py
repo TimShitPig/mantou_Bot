@@ -177,7 +177,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(f"书旗小说下载失败：错误={exc}")
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 def _搜索请求ID() -> str:

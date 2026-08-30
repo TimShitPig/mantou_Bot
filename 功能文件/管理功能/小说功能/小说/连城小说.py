@@ -357,13 +357,13 @@ async def 生成连城下载回复流(
 ) -> AsyncIterator[Any]:
     book_id = 解析连城书籍编号(source)
     if not book_id:
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
     try:
         async with 创建连城HTTP会话() as session:
             detail, chapters = await 获取连城详情(session, book_id)
             if not detail or not chapters:
-                yield "下载失败"
+                yield "下载失败 请重试"
                 return
             logger.info(
                 "连城小说开始下载：书籍编号=%s, 章节数=%s, 并发数=%s, 会话复用=开启, 解密方式=无需解密",
@@ -380,7 +380,7 @@ async def 生成连城下载回复流(
                 sum(bool(x) for x in contents),
                 len(chapters),
             )
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
         filename, content = 生成连城文件(book_id, detail, chapters, contents)
         result = await _发送(
@@ -401,7 +401,7 @@ async def 生成连城下载回复流(
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning("连城小说下载失败：错误类型=%s", type(exc).__name__)
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 def 获取连城小说回复流(

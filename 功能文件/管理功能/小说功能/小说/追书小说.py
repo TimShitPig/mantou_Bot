@@ -908,7 +908,7 @@ async def 生成下载回复流(
 ) -> AsyncIterator[str]:
     if AES is None or unpad is None:
         logger.warning("追书小说下载失败：缺少 pycryptodome 依赖")
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
     try:
         书籍编号 = 提取追书书籍编号(链接)
@@ -983,7 +983,7 @@ async def 生成下载回复流(
             提取追书书籍编号(链接) or "unknown",
             type(exc).__name__,
         )
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 def 生成小说文件内容(

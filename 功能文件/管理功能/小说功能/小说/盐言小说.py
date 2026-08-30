@@ -933,7 +933,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         logger.warning(
             f"盐言小说下载失败：阶段=extract_or_upload, 错误={type(exc).__name__}"
         )
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 def 生成小说文件内容(书籍: dict[str, Any]) -> tuple[str, bytes]:

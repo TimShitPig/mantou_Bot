@@ -973,7 +973,7 @@ def 获取得间小说回复流(
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 提取书籍编号(来源)
     if not 书籍编号:
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
     try:
         async with 创建得间HTTP会话(2) as HTTP会话:
@@ -984,19 +984,19 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             )
         if not 详情包.get("success"):
             logger.warning(f"得间小说详情失败：书籍编号={书籍编号}")
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
         详情 = 详情包.get("detail") or {}
         目录 = 目录包.get("chapters") or []
         if not 目录:
             logger.warning(f"得间小说目录失败：书籍编号={书籍编号}")
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
         if not isinstance(批量清单, dict) or not isinstance(
             批量清单.get("chapters"), list
         ):
             logger.warning(f"得间小说批量章节地址获取失败：书籍编号={书籍编号}")
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
 
         if 得间存在未购买章节(目录, 批量清单):
@@ -1033,7 +1033,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             logger.warning(
                 f"得间小说下载失败：书籍编号={书籍编号}, 成功={len(成功)}, 总数={len(目录)}"
             )
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
 
         文件名, 文件内容 = 生成小说文件(书籍编号, 书名, 作者, 状态, 字数, 章节结果)
@@ -1056,7 +1056,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(f"得间小说下载失败：来源={来源}, 错误类型={type(exc).__name__}")
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 async def 下载全部章节(

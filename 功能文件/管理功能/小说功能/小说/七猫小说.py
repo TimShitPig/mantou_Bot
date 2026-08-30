@@ -132,7 +132,7 @@ async def 生成下载回复流(
         return
     if AES is None or unpad is None:
         logger.warning("七猫小说下载失败：缺少 pycryptodome 依赖")
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
 
     try:
@@ -159,7 +159,7 @@ async def 生成下载回复流(
                 logger.warning(
                     f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到章节目录"
                 )
-                yield "下载失败"
+                yield "下载失败 请重试"
                 return
             if not str(详情.get("words_num") or "").strip():
                 目录字数 = sum(
@@ -189,7 +189,7 @@ async def 生成下载回复流(
                 logger.warning(
                     f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到可用章节正文"
                 )
-                yield "下载失败"
+                yield "下载失败 请重试"
                 return
 
             文件名, 文件内容 = 生成小说文件内容(书籍编号, 详情, 目录, 章节内容)
@@ -226,7 +226,7 @@ async def 生成下载回复流(
             return
     except Exception as exc:
         logger.warning(f"七猫小说下载失败：关键词={关键词}, 错误={exc}")
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
 
 

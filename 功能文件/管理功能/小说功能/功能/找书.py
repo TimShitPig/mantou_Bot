@@ -2140,7 +2140,7 @@ def 解析找书选中项(
         return "没有可选书籍"
     序号 = int(匹配.group(1))
     if 序号 < 1 or 序号 > len(当前页):
-        return "下载失败"
+        return "下载失败 请重试"
     return 当前页[序号 - 1]
 
 
@@ -2169,7 +2169,7 @@ def 获取找书下载回复流(
     if 平台 == "番茄" and 番茄小说 is not None:
         # 找书结果只在内部把已校验的书籍 ID 交给下载器，不开放裸 ID 消息入口。
         if not re.fullmatch(r"\d{15,25}", 书籍编号):
-            return "下载失败"
+            return "下载失败 请重试"
         return 番茄小说.生成番茄下载回复流(
             event,
             书籍编号,
@@ -2177,7 +2177,7 @@ def 获取找书下载回复流(
             找书候选=选中,
         )
     if not 链接:
-        return "下载失败"
+        return "下载失败 请重试"
     if 平台 == "七猫" and 七猫小说 is not None:
         return 七猫小说.生成下载回复流(event, 链接, 配置)
     if 平台 == "书旗" and 书旗小说 is not None:
@@ -2214,7 +2214,7 @@ def 获取找书下载回复流(
         return 菠萝包小说.生成菠萝包下载回复流(event, 链接, 配置)
     if 平台 == "晋江" and 晋江小说 is not None:
         return 晋江小说.生成晋江下载回复流(event, 链接, 配置)
-    return "下载失败"
+    return "下载失败 请重试"
 
 
 async def 处理找书指令(

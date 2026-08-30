@@ -243,7 +243,7 @@ def 获取点众小说回复流(
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 提取书籍编号(来源)
     if not 书籍编号:
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
     try:
         连接器 = aiohttp.TCPConnector(
@@ -259,7 +259,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             目录 = await 异步获取目录(session, datas, 书籍编号)
             if not 目录:
                 logger.warning(f"点众小说目录失败：书籍编号={书籍编号}")
-                yield "下载失败"
+                yield "下载失败 请重试"
                 return
             书名 = str(详情.get("title") or 详情.get("bookName") or "未知")
             作者 = str(详情.get("author") or 详情.get("authorName") or "未知")
@@ -303,7 +303,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             logger.warning(
                 f"点众小说下载失败：书籍编号={书籍编号}, 成功={len(成功)}, 总数={len(目录)}"
             )
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
         文件名, 文件内容 = 生成小说文件(书籍编号, 书名, 作者, 状态, 字数, 章节结果)
         发送结果 = await 准备发送文本文件(
@@ -324,7 +324,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         logger.warning(
             f"点众小说下载失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
         )
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 async def 异步获取详情(

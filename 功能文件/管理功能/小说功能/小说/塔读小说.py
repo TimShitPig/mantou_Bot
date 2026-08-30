@@ -1548,7 +1548,7 @@ async def 生成塔读下载回复流(
 ) -> AsyncIterator[Any]:
     book_id = 提取塔读书籍编号(来源)
     if not book_id:
-        yield "下载失败"
+        yield "下载失败 请重试"
         return
     try:
         async with 创建塔读HTTP会话() as session:
@@ -1561,7 +1561,7 @@ async def 生成塔读下载回复流(
                 logger.warning(
                     "塔读小说目录不完整：书籍编号=%s, 章节数=%s", book_id, len(chapters)
                 )
-                yield "下载失败"
+                yield "下载失败 请重试"
                 return
             详情 = 解析塔读书籍详情(detail)
             title = 详情["title"]
@@ -1600,7 +1600,7 @@ async def 生成塔读下载回复流(
                 len(success),
                 len(chapters),
             )
-            yield "下载失败"
+            yield "下载失败 请重试"
             return
         file_name, content = _生成小说文件(
             book_id, title, author, status, word_count, chapter_results
@@ -1627,7 +1627,7 @@ async def 生成塔读下载回复流(
         logger.warning(
             "塔读小说下载失败：书籍编号=%s, 错误类型=%s", book_id, type(exc).__name__
         )
-        yield "下载失败"
+        yield "下载失败 请重试"
 
 
 async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
