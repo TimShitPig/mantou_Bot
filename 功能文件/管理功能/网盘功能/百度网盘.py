@@ -13,6 +13,7 @@ import aiohttp
 from astrbot.api import logger
 
 from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie
+from 功能文件.管理功能.网盘功能 import 网盘状态
 
 基础地址 = "https://pan.baidu.com"
 上传地址 = "https://c.pcs.baidu.com/rest/2.0/pcs/superfile2"
@@ -478,7 +479,7 @@ async def 后台上传小说文件(
 
 
 def 百度网盘是否启用(配置: Any) -> bool:
-    return bool(读取百度网盘Cookie(配置))
+    return 网盘状态.网盘开关是否开启(配置, "百度") and bool(读取百度网盘Cookie(配置))
 
 
 def 百度当前为主分享网盘(配置: Any) -> bool:

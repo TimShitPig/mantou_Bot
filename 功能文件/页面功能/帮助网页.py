@@ -64,6 +64,7 @@ def _注册路由(app: web.Application) -> None:
         ("get", "/api/dashboard", 后端._处理控制台数据),
         ("post", "/api/novel-switch", 后端._处理小说开关),
         ("post", "/api/pan-switch", 后端._处理网盘切换),
+        ("post", "/api/pan-enable", 后端._处理网盘开关),
         ("get", "/api/config", 后端._处理插件配置数据),
         ("post", "/api/config", 后端._处理插件配置写入),
         ("get", "/api/pan-accounts/{platform}", 后端._处理网盘账号列表),

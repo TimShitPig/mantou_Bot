@@ -17,6 +17,7 @@ from 功能文件.管理功能.网盘功能.网盘Cookie import (
     持久化刷新后的网盘Cookie,
     读取网盘Cookie,
 )
+from 功能文件.管理功能.网盘功能 import 网盘状态
 
 基础接口地址 = "https://drive-pc.quark.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -537,7 +538,7 @@ async def 上传小说并获取分享链接(
 
 
 def 夸克网盘是否启用(配置: Any) -> bool:
-    return bool(读取夸克网盘Cookie(配置))
+    return 网盘状态.网盘开关是否开启(配置, "夸克") and bool(读取夸克网盘Cookie(配置))
 
 
 def 读取夸克网盘Cookie(配置: Any) -> str:

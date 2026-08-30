@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.59.0"
+控制台版本 = "5.60.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -951,7 +951,14 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
         已配置运行状态数据库,
         检查运行状态数据库,
     )
-    from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 百度网盘, 网盘Cookie, 小说网盘
+    from 功能文件.管理功能.网盘功能 import (
+        UC网盘,
+        夸克网盘,
+        百度网盘,
+        网盘Cookie,
+        网盘状态,
+        小说网盘,
+    )
     from 功能文件.管理功能.小说功能.功能 import 小说功能开关
 
     配置 = 当前帮助网页配置
@@ -999,6 +1006,7 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
         网盘账号摘要批量 = {}
     网盘列表 = []
     当前网盘 = 小说网盘.获取当前主网盘(配置)
+    网盘启用状态 = 网盘状态.读取网盘开关批量(配置)
     for 标识, 名称, 读取目录 in 网盘定义:
         try:
             账号摘要 = list(网盘账号摘要批量.get(标识) or [])
@@ -1015,6 +1023,7 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
                 "accounts": int(账号数量),
                 "account_summary": 账号摘要,
                 "directory": 目录,
+                "enabled": bool(网盘启用状态.get(标识, True)),
                 "active": 标识 == 当前网盘,
                 # 账号选择按群隔离；控制台没有当前群上下文，默认展示账号1。
                 "selected_account": 1,
@@ -1133,6 +1142,23 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
     网盘名 = str((数据 or {}).get("key") or "").strip()
     if 网盘名 not in {"UC", "夸克", "百度"}:
         return _控制台错误(400, "网盘参数无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘状态
+
+        网盘已开启 = await _控制台线程执行(
+            网盘状态.网盘开关是否开启,
+            当前帮助网页配置,
+            网盘名,
+        )
+        if not 网盘已开启:
+            return _控制台错误(409, "该网盘已关闭，请先开启")
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台主网盘开关读取失败：平台=%s，错误类型=%s",
+            网盘名,
+            type(exc).__name__,
+        )
+        return _控制台错误(409, "网盘状态暂时不可用")
 
     def _写入() -> None:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值
@@ -1145,6 +1171,35 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台主网盘切换失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(409, "主网盘保存失败，请检查数据库配置")
+
+
+async def _处理网盘开关(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    if 数据 is None or not isinstance(数据.get("enabled"), bool):
+        return _控制台错误(400, "请求参数无效")
+    网盘名 = str(数据.get("key") or "").strip()
+    if 网盘名 not in {"UC", "夸克", "百度"}:
+        return _控制台错误(400, "网盘参数无效")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，网盘开关不能保存")
+    启用 = bool(数据["enabled"])
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘状态
+
+        await _控制台线程执行(
+            网盘状态.写入网盘开关,
+            当前帮助网页配置,
+            网盘名,
+            启用,
+        )
+        return web.json_response(
+            {"ok": True, "enabled": 启用, "message": "网盘开关已更新"}
+        )
+    except Exception as exc:
+        logger.warning("帮助控制台网盘开关写入失败：平台=%s，错误类型=%s", 网盘名, type(exc).__name__)
+        return _控制台错误(409, "网盘开关保存失败，请检查数据库配置")
 
 
 def _规范化网盘平台(平台: Any) -> str:
