@@ -252,6 +252,12 @@
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const setMsgMobileChatOpen = (open) => {
+        const shell = $('msg-shell');
+        const back = $('msg-mobile-back');
+        if (shell) shell.classList.toggle('msg-mobile-chat-open', Boolean(open));
+        if (back) back.setAttribute('aria-hidden', String(!open));
+      };
       const msgLayout = {listWidth:340, composerHeight:132, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
         const data = value && typeof value === 'object' ? value : {};
@@ -787,6 +793,7 @@
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
         const chatType = String(chat?.chat_type || 'group');
+        setMsgMobileChatOpen(true);
         msgState.chatRemoved = chatType === 'group' && (chat?.membership_status === 'removed' || chat?.in_group === false);
         const localAdmins = getLocalAdminGroups();
         const cachedAdmin = msgState.adminByChat.has(chatId)
@@ -861,6 +868,7 @@
       $('msg-lightbox-close')?.addEventListener('click', () => closeMsgLightbox());
       $('msg-lightbox')?.addEventListener('click', (e) => { if (e.target === $('msg-lightbox') || e.target === $('msg-lightbox-img')) closeMsgLightbox(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
+      $('msg-mobile-back')?.addEventListener('click', () => setMsgMobileChatOpen(false));
       const loadMsgChats = (force = false) => {
         const params = {filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50};
         const paramsKey = JSON.stringify(params);
