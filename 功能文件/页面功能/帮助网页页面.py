@@ -201,6 +201,8 @@ from .帮助网页脚本 import 控制台脚本
             .msg-lightbox-hint { color:rgba(255,255,255,.62); font-size:11px; }
             .msg-meta { margin-top:3px; color:#b0b0b0; font-size:9px; padding-left:2px; }
             .msg-row.self .msg-meta { text-align:right; padding-left:0; padding-right:2px; }
+            .msg-send-error { width:18px; height:18px; margin-left:7px; padding:0; border:0; border-radius:50%; background:#e64340; color:#fff; font-size:12px; font-weight:800; line-height:18px; text-align:center; vertical-align:-5px; cursor:pointer; box-shadow:0 1px 3px rgba(230,67,64,.25); }
+            .msg-send-error:hover { background:#c92f2c; transform:scale(1.06); }
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
             .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
             .msg-tag.bot { background:#ffeef5; color:#c66791; }
@@ -214,6 +216,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
              .msg-composer { position:relative; display:flex; flex-direction:column; gap:8px; min-height:132px; max-height:52vh; padding:10px 14px 12px; overflow:auto; resize:vertical; background:#fff; border-top:1px solid #e8e9ec; }
             .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
+            .msg-composer-mode[hidden], .msg-composer-tabs[hidden], .msg-composer-toggle[hidden], .msg-composer > .msg-extra[hidden] { display:none !important; }
             .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
             .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
             .msg-composer-mode { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
@@ -408,6 +411,8 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-file-icon { background:#294b70; color:#9bc9f4; }
               :root[data-theme="dark"] .msg-file-info small { color:#8a9bb2; }
               :root[data-theme="dark"] .msg-meta { color:#6f7590; }
+              :root[data-theme="dark"] .msg-send-error { background:#e25555; }
+              :root[data-theme="dark"] .msg-send-error:hover { background:#f06b6b; }
               :root[data-theme="dark"] .msg-tag.bot { background:#3a2130; color:#e287ae; }
               :root[data-theme="dark"] .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
               :root[data-theme="dark"] .msg-tag.self { background:#16382c; color:#55d8a2; }
@@ -473,7 +478,6 @@ from .帮助网页脚本 import 控制台脚本
               <div class="msg-list-head">
                 <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
                   <button type="button" data-msg-filter="all" class="active">全量</button>
-                  <button type="button" data-msg-filter="remark">备注</button>
                   <button type="button" data-msg-filter="group">群聊</button>
                   <button type="button" data-msg-filter="user">私聊</button>
                 </div>
@@ -507,7 +511,7 @@ from .帮助网页脚本 import 控制台脚本
                </div>
               <div class="msg-composer" id="msg-composer" hidden>
                 <button class="msg-composer-resizer" id="msg-composer-resizer" type="button" aria-label="拖动调整编辑区高度" title="拖动调整编辑区高度"><span aria-hidden="true"></span></button>
-                <div class="msg-composer-mode">
+                <div class="msg-composer-mode" hidden>
                   <select id="msg-send-mode" aria-label="发送方式">
                     <option value="default">默认（全量群主动/其他被动）</option>
                     <option value="passive">被动（msg_id）</option>
@@ -518,7 +522,7 @@ from .帮助网页脚本 import 控制台脚本
                   <input id="msg-custom-id" type="text" placeholder="自定义 msg_id / 事件 ID" hidden>
                 </div>
                 <div class="msg-extra" id="msg-extra" hidden></div>
-                <div class="msg-composer-tabs" id="msg-composer-tabs">
+                <div class="msg-composer-tabs" id="msg-composer-tabs" hidden>
                   <button type="button" data-msg-type="text" class="active">文本</button>
                   <button type="button" data-msg-type="markdown">Markdown</button>
                   <button type="button" data-msg-type="media">媒体</button>
@@ -533,12 +537,11 @@ from .帮助网页脚本 import 控制台脚本
                   <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 </div>
                 <div class="msg-toolbar">
-                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
+                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区" hidden>⌄</button>
                   <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                     <input id="msg-img-file" type="file" accept="image/*" hidden>
                   </label>
-                  <span id="msg-send-status" style="color:var(--muted);font-size:11px"></span>
                   <span style="flex:1"></span>
                   <button class="msg-btn primary" id="msg-send" type="button">发送</button>
                 </div>

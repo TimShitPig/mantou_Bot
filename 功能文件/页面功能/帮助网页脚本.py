@@ -1004,16 +1004,10 @@
         if (uid && msgState.chatType === 'group') {
           const ta = $('msg-textarea');
           if (ta && !msgState.pastedImage) {
-            if (msgState.sendType !== 'text' && msgState.sendType !== 'markdown') {
-              msgState.sendType = 'markdown';
-              $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
-              renderMsgExtra();
-            }
-            if (msgState.sendType === 'text') {
-              msgState.sendType = 'markdown';
-              $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
-              renderMsgExtra();
-            }
+            msgState.sendType = 'markdown';
+            const tabs = $('msg-composer-tabs');
+            tabs?.querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
+            renderMsgExtra();
             const mention = `<@${uid}> `;
             const existing = String(ta.value || '');
             if (!existing.startsWith(mention)) {
@@ -1096,11 +1090,116 @@
       };
       const mergeOptimisticMessages = (chatId, messages) => {
         const id = String(chatId || '');
-        const base = Array.isArray(messages) ? messages.slice() : [];
-        const optimistic = Array.from(msgState.optimisticSends?.values?.() || [])
-          .filter((entry) => entry && String(entry.chatId || '') === id && entry.message)
-          .map((entry) => entry.message);
+        const base = dedupeMsgMessages(Array.isArray(messages) ? messages.slice() : []);
+        const serverKeys = new Set(base.map((message) => msgMessageKey(message)).filter(Boolean));
+        const optimistic = [];
+        Array.from(msgState.optimisticSends?.entries?.() || []).forEach(([entryId, entry]) => {
+          if (!entry || String(entry.chatId || '') !== id || !entry.message) return;
+          const remoteId = String(entry.remoteId || '').trim();
+          if (entry.status === 'sent' && remoteId && serverKeys.has(remoteId)) {
+            msgState.optimisticSends.delete(entryId);
+            return;
+          }
+          optimistic.push(entry.message);
+        });
         return dedupeMsgMessages([...base, ...optimistic]);
+      };
+      const createOptimisticSend = (payload) => {
+        const id = `web-${Date.now()}-${++msgState.optimisticSeq}`;
+        const content = String(payload.content || '').trim();
+        const imageData = String(payload.image_data || '').trim();
+        const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
+        const message = {
+          message_id: id,
+          optimistic_id: id,
+          user_id: '',
+          nickname: '我',
+          content,
+          timestamp: new Date().toISOString(),
+          source: 'web_panel',
+          is_self: true,
+          reference_id: String(payload.quote_message_id || '').trim(),
+          media: imageData ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content} : null,
+        };
+        const entry = {
+          id,
+          chatId: String(payload.chat_id || ''),
+          chatType: String(payload.chat_type || 'group'),
+          payload: {...payload},
+          message,
+          status: 'pending',
+          remoteId: '',
+          createdAt: Date.now(),
+        };
+        msgState.optimisticSends.set(id, entry);
+        while (msgState.optimisticSends.size > 100) {
+          const first = msgState.optimisticSends.keys().next().value;
+          if (!first) break;
+          msgState.optimisticSends.delete(first);
+        }
+        return entry;
+      };
+      const renderOptimisticMessages = (chatId) => {
+        if (String(msgState.chatId || '') !== String(chatId || '') || $('page-messages')?.hidden) return;
+        const body = $('msg-body');
+        if (!body) return;
+        const previousTop = body.scrollTop || 0;
+        const previousHeight = body.scrollHeight || 0;
+        const followLatest = msgBodyNearBottom(body) || !msgState.renderedChatId;
+        renderMsgMessages(
+          {...(msgState.historyData || {}), messages:msgState.messages},
+          {previousTop, previousHeight, toBottom:followLatest},
+        );
+      };
+      const resetComposer = () => {
+        const textarea = $('msg-textarea');
+        if (textarea) textarea.value = '';
+        msgState.quote = null;
+        msgState.pastedImage = null;
+        const inline = $('msg-img-inline');
+        if (inline) inline.hidden = true;
+        const thumb = $('msg-img-thumb');
+        if (thumb) thumb.removeAttribute('src');
+        const file = $('msg-img-file');
+        if (file) file.value = '';
+        const quote = $('msg-quote-preview');
+        if (quote) quote.hidden = true;
+      };
+      const finishOptimisticSend = async (entry) => {
+        try {
+          const result = await api('message/send', {method:'POST', body:JSON.stringify(entry.payload)});
+          const remoteId = String(result?.message_id || result?.message?.message_id || result?.message?.id || '').trim();
+          entry.status = 'sent';
+          entry.remoteId = remoteId;
+          entry.message.send_status = 'sent';
+          if (remoteId) entry.message.message_id = remoteId;
+          if (String(msgState.chatId || '') === entry.chatId) {
+            renderOptimisticMessages(entry.chatId);
+            msgState.historyCache.delete(`${entry.chatType}|${entry.chatId}`);
+            void loadMsgHistory(false, true);
+          }
+          void loadMsgChats(true);
+          entry.cleanupTimer = setTimeout(() => {
+            if (entry.status !== 'sent' || !msgState.optimisticSends.has(entry.id)) return;
+            msgState.optimisticSends.delete(entry.id);
+            renderOptimisticMessages(entry.chatId);
+          }, 15000);
+        } catch (error) {
+          entry.status = 'failed';
+          entry.message.send_status = 'failed';
+          entry.error = error;
+          renderOptimisticMessages(entry.chatId);
+          if (String(msgState.chatId || '') === entry.chatId) toast('发送失败，点击感叹号重试');
+        }
+      };
+      const retryOptimisticSend = (id) => {
+        const entry = msgState.optimisticSends.get(String(id || ''));
+        if (!entry || entry.status === 'pending') return;
+        if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+        entry.status = 'pending';
+        entry.message.send_status = 'pending';
+        renderOptimisticMessages(entry.chatId);
+        void finishOptimisticSend(entry);
       };
       const msgBodyNearBottom = (body, threshold = 56) => Boolean(body) && body.scrollHeight - body.scrollTop - body.clientHeight <= threshold;
       const clearMsgNewMessages = () => {
@@ -1200,8 +1299,10 @@
           member_profiles:{...(previousData.member_profiles || {}), ...(data.member_profiles || {})},
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
-        const msgs = dedupeMsgMessages(data.messages || []);
-        msgState.historyData = {...data, messages:msgs};
+        const serverMessages = dedupeMsgMessages(data.messages || []);
+        const msgs = mergeOptimisticMessages(msgState.chatId, serverMessages);
+        // 历史缓存只保存服务器消息；待发送/失败消息由 optimisticSends 单独维护。
+        msgState.historyData = {...data, messages:serverMessages};
         window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
         updateMsgHead(data);
         updateMsgAdminTag();
@@ -1221,6 +1322,10 @@
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
           const recalled = Boolean(m.recalled);
+          const optimisticId = String(m.optimistic_id || '').trim();
+          const optimisticEntry = optimisticId ? msgState.optimisticSends.get(optimisticId) : null;
+          const sendState = String(optimisticEntry?.status || m.send_status || '').trim();
+          const failedSend = Boolean(optimisticEntry) && sendState === 'failed';
           const profile = profiles[m.user_id] || {};
           const rawNickname = String(m.nickname || '').trim();
           const profileNickname = String(profile.nickname || profile.username || '').trim();
@@ -1253,7 +1358,7 @@
           if (!content && !media) content = recalled ? '（消息已撤回）' : '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
-          const canRecall = Boolean(m.message_id) && !recalled && (isSelf || msgState.botIsAdmin);
+          const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || msgState.botIsAdmin);
           const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
           const actions = [];
           if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
@@ -1263,14 +1368,17 @@
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
           const isSelected = msgState.selected.has(m.message_id);
           const multiEnabled = canRecall;
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-content="${esc(m.content || '')}">
+          const sendStateHtml = failedSend
+            ? `<button class="msg-send-error" data-msg-retry="${esc(optimisticId)}" type="button" title="发送失败，点击重试" aria-label="发送失败，点击重试">!</button>`
+            : '';
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${contentHtml}${media}</div>
-              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</div>
+              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}${sendStateHtml}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });
@@ -1297,6 +1405,7 @@
         msgState.renderedChatId = msgState.chatId;
         body.querySelector('#msg-load-older')?.addEventListener('click', () => loadMsgHistory(true));
         body.querySelectorAll('[data-msg-recall]').forEach((el) => el.addEventListener('click', () => recallMessage(el.dataset.msgRecall)));
+        body.querySelectorAll('[data-msg-retry]').forEach((el) => el.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); retryOptimisticSend(el.dataset.msgRetry); }));
         body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
         body.querySelectorAll('[data-msg-command]').forEach((el) => el.addEventListener('click', () => {
           const command = String(el.dataset.msgCommand || '').trim();
@@ -1307,7 +1416,7 @@
           textarea.focus();
           toast(`已填入 ${command}`);
         }));
-        body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => { msgState.quote = {id:el.dataset.msgQuote, text:el.dataset.msgName || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${el.dataset.msgName} · 引用`; }));
+        body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '')));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
@@ -1331,8 +1440,8 @@
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
             if (canMuteRow) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
             if (items.length && !isSelf) items.push({sep:true});
-            if (!isSelf && msgState.chatType === 'group' && mid) items.push({label:'引用', action:() => { msgState.quote = {id:mid, text:nick || '引用消息'}; $('msg-quote-preview').hidden = false; $('msg-quote-text').textContent = `${nick} · 引用`; }});
-            if (content) items.push({label:'复制', action:() => copyMsgText(content)});
+            if (!isSelf && msgState.chatType === 'group' && mid) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content)});
+            if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
             if (canRecallRow) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
             if (mid) items.push({sep:true});
             items.push({label:'多选', action:() => { enterMultiMode(); if (canRecallRow) toggleMsgSelect(row, mid); }});
@@ -1591,11 +1700,10 @@
         try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
-      const sendMessage = async () => {
-        if (msgState.sending) return;
+      const sendMessage = () => {
         const content = $('msg-textarea').value.trim();
-        const customId = $('msg-custom-id').value.trim();
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '' };
+        const customId = $('msg-custom-id')?.value.trim() || '';
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:msgState.pastedImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '' };
         if (msgState.sendType === 'media') {
           payload.media_file_type = Number($('msg-media-type')?.value || 1);
           payload.media = $('msg-media-path')?.value.trim() || '';
@@ -1617,11 +1725,11 @@
           if (!payload.card.title) return toast('请填写卡片标题');
         }
         if (!content && !msgState.pastedImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
-        msgState.sending = true;
-        const btn = $('msg-send'); btn.disabled = true; $('msg-send-status').textContent = '发送中...';
-          try { const result = await api('message/send', {method:'POST', body:JSON.stringify(payload)}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('发送成功'); $('msg-textarea').value = ''; msgState.quote = null; msgState.pastedImage = null; if ($('msg-img-inline')) $('msg-img-inline').hidden = true; if ($('msg-img-thumb')) $('msg-img-thumb').removeAttribute('src'); if ($('msg-quote-preview')) $('msg-quote-preview').hidden = true; loadMsgHistory(); }
-        catch (error) { toast(error.message); }
-        finally { btn.disabled = false; $('msg-send-status').textContent = ''; msgState.sending = false; }
+        const entry = createOptimisticSend(payload);
+        // 先完成本地发送事务，输入框立即恢复可用；网络请求在后台运行。
+        resetComposer();
+        renderOptimisticMessages(entry.chatId);
+        void finishOptimisticSend(entry);
       };
       const renderMsgExtra = () => {
         const extra = $('msg-extra'); const type = msgState.sendType;
