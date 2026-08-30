@@ -785,8 +785,8 @@ def 构造小说下载完成键盘(分享链接: Any) -> dict[str, Any]:
             {
                 "id": f"novel_pan_{按钮编号}",
                 "render_data": {
-                    "label": f"打开{平台}",
-                    "visited_label": f"打开{平台}",
+                    "label": 平台,
+                    "visited_label": 平台,
                 },
                 "action": {
                     "type": 0,
@@ -796,12 +796,12 @@ def 构造小说下载完成键盘(分享链接: Any) -> dict[str, Any]:
                 },
             }
         )
+    行列表 = [
+        {"buttons": 按钮列表[索引 : 索引 + 2]}
+        for 索引 in range(0, len(按钮列表), 2)
+    ]
     return {
-        "rows": [
-            {
-                "buttons": 按钮列表
-            }
-        ]
+        "rows": 行列表
     }
 
 
