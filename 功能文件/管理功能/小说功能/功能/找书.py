@@ -240,6 +240,18 @@ def 清理文本(值: Any) -> str:
     return 文本
 
 
+def 清理搜索关键词(值: Any) -> str:
+    """删除搜索词中的标点和装饰符，只保留文字、数字及必要空格。
+
+    平台搜索接口对书名中的全角标点、引号和分享文案兼容性不一致，
+    统一在请求前净化可以避免同一查询在不同平台得到不一致结果。空白
+    会折叠为单个 ASCII 空格，中文、字母和数字原样保留。
+    """
+    文本 = 清理文本(值)
+    保留字符 = [字符 for 字符 in 文本 if 字符.isspace() or 字符.isalnum()]
+    return re.sub(r"\s+", " ", "".join(保留字符)).strip()
+
+
 def 规范标题(值: Any) -> str:
     文本 = 清理文本(值).lower()
     文本 = re.sub(
@@ -452,6 +464,8 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
             匹配 = 找书命令正则.match(文本)
     if not 匹配:
         return None
+    # 先按原始文本识别「找 书名：」/「找 作者：」前缀，再净化实际查询词；
+    # 直接先删标点会把前缀和关键词粘在一起，导致类型判断失效。
     关键词 = 清理文本(匹配.group(1))
     if 搜索类型 == "auto":
         类型匹配 = 查询书名模式正则.match(关键词)
@@ -463,6 +477,7 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
             if 类型匹配:
                 搜索类型 = "author"
                 关键词 = 清理文本(类型匹配.group(1))
+    关键词 = 清理搜索关键词(关键词)
     if not 关键词 or 关键词 in 翻页命令集合:
         return None
     # 避免误伤其他「找」开头命令
@@ -1780,6 +1795,9 @@ async def _聚合搜索未缓存(
     允许平台: Any = None,
 ) -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
+    关键词 = 清理搜索关键词(关键词)
+    if not 关键词:
+        return []
     async with aiohttp.ClientSession(timeout=timeout) as session:
         数量 = 找书搜索候选数量
         允许平台集合 = _规范化允许平台(允许平台)
@@ -1976,6 +1994,9 @@ async def 聚合搜索(
     允许平台: Any = None,
 ) -> list[dict[str, Any]]:
     """搜索结果短缓存，避免重复查询反复等待所有平台响应。"""
+    关键词 = 清理搜索关键词(关键词)
+    if not 关键词:
+        return []
     缓存键 = (规范标题(关键词), str(搜索类型 or "auto"))
     if not 缓存键[0]:
         return []

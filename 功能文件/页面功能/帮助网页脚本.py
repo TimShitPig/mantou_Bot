@@ -113,13 +113,57 @@
         try { const result = await api('config', {method:'POST', body:JSON.stringify({fields})}); if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; } toast(result.message || '配置已保存'); await load(); }
          catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
       };
-       const panAccountRows = (item, editable) => (item.account_summary || []).map((account) => `<div class="account-row"><div><strong>账号${esc(account.index)}</strong><span>${esc(account.name || '未命名账号')} · ${esc(account.phone || '未获取')}</span></div><button type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(account.index)}" ${editable ? '' : 'disabled'}>删除</button></div>`).join('');
+       const panPlatformGlyph = (key) => ({UC:'U','夸克':'夸','百度':'度'})[key] || String(key || '盘').slice(0, 1);
+       const panAccountRows = (item, editable) => {
+         const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+         return accounts.map((account, position) => {
+           const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
+           const name = account?.name || '未命名账号';
+           const phone = account?.phone || '未获取';
+           return `<div class="account-row pan-account-row"><div class="account-row-main"><strong>账号${esc(index)}</strong><span>${esc(name)} · ${esc(phone)}</span></div><div class="account-row-actions"><span class="tag ok">已保存</span><button type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'} aria-label="删除${esc(item.name)}账号${esc(index)}">删除</button></div></div>`;
+         }).join('');
+       };
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
        const renderPanCard = (item, pansEditable, configEditable) => {
          const directoryField = ({UC:'uc_pan_upload_dir','夸克':'quark_pan_upload_dir','百度':'baidu_pan_upload_dir'})[item.key] || '';
          const enabled = item.enabled !== false;
+         const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+         const accountCount = Number(item.accounts) >= 0 ? Number(item.accounts) : accounts.length;
+         const configured = Boolean(item.configured || accounts.length);
+         const selectedAccount = Number(item.selected_account) > 0 ? Number(item.selected_account) : 1;
          const stateTag = enabled ? '<span class="tag ok">已开启</span>' : '<span class="tag off">已关闭</span>';
-         return `<article id="pan-card-${esc(item.key)}" class="pan-card ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}"><div class="pan-top"><div class="pan-title"><div class="pan-logo">${esc(item.key.slice(0,1))}</div><strong>${esc(item.name)}</strong></div><div class="pan-top-actions">${item.active ? '<span class="tag active">默认主网盘</span>' : ''}<div class="pan-enable"><span>${enabled ? '运行中' : '已停用'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div></div><div class="pan-meta"><div><span>运行状态</span><strong>${stateTag}</strong></div><div><span>配置状态</span><strong>${item.configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>'}</strong></div><div><span>账号数量</span><strong>${esc(item.accounts)} 个</strong></div><div><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div><div><span>群账号选择</span><strong>默认账号${esc(item.selected_account || 1)}</strong></div></div><div class="pan-security-note">登录态：${item.configured ? '已保存（Cookie 不回显）' : '未配置'}${enabled ? '' : ' · 已暂停上传和分享'}${item.key === '夸克' ? ' · 可刷新账号资料' : ''}</div><div class="pan-directory"><input type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'}><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div><div class="account-list">${panAccountRows(item, pansEditable) || '<div class="empty">暂无账号</div>'}</div><div class="account-add"><input type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 ${esc(item.name)} Cookie（只写入）" ${pansEditable ? '' : 'disabled'}><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><div class="account-actions"><button class="outline-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'}>刷新资料</button><select class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${item.active ? '默认使用中' : (enabled ? '设为默认主网盘' : '请先开启网盘')}</option><option value="${esc(item.key)}" ${enabled ? '' : 'disabled'}>切换到${esc(item.name)}</option></select></div><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号（用于选择账号）" ${pansEditable ? '' : 'disabled'}><select data-pan-group-index="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>${(item.account_summary || []).map((account) => `<option value="${esc(account.index)}" ${Number(account.index) === Number(item.selected_account || 1) ? 'selected' : ''}>账号${esc(account.index)}</option>`).join('') || '<option value="1">账号1</option>'}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>保存群选择</button></div></article>`;
+         const configTag = configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>';
+         const groupOptions = accounts.map((account, position) => {
+           const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
+           return `<option value="${esc(index)}" ${index === selectedAccount ? 'selected' : ''}>账号${esc(index)}</option>`;
+         }).join('') || '<option value="1">账号1</option>';
+         const defaultOption = item.active ? '默认使用中' : (enabled ? '设为默认主网盘' : '请先开启网盘');
+         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
+           <header class="pan-card-head pan-top">
+             <div class="pan-card-brand pan-card-identity pan-title"><div class="pan-logo">${esc(panPlatformGlyph(item.key))}</div><div><strong>${esc(item.name)}</strong><small>${enabled ? '参与启用平台的并发分享' : '当前暂停上传和分享'}</small></div></div>
+             <div class="pan-card-head-actions pan-top-actions">${item.active ? '<span class="tag active">默认主网盘</span>' : ''}<div class="pan-enable"><span>${enabled ? '运行中' : '已停用'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div>
+           </header>
+           <div class="pan-card-stats pan-meta">
+             <div class="pan-stat"><span>运行状态</span><strong>${stateTag}</strong></div>
+             <div class="pan-stat"><span>配置状态</span><strong>${configTag}</strong></div>
+             <div class="pan-stat"><span>账号数量</span><strong>${esc(accountCount)} 个</strong></div>
+             <div class="pan-stat"><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div>
+           </div>
+           <div class="pan-security-note pan-card-note">登录态：${configured ? '已保存（Cookie 不回显）' : '未配置'}${enabled ? '' : ' · 已暂停上传和分享'}${item.key === '夸克' ? ' · 可刷新账号资料' : ''}</div>
+           <div class="pan-card-content">
+             <section class="pan-column pan-column-primary">
+               <div class="pan-section-title pan-section-heading"><div><span class="pan-section-kicker">STORAGE PATH</span><h3>上传目录</h3></div><span class="pan-section-hint">文件会按此目录生成分享</span></div>
+               <div class="pan-directory"><input type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div>
+               <div class="pan-section-title pan-section-heading account-heading"><div><span class="pan-section-kicker">ACCOUNTS</span><h3>登录账号</h3></div><span class="pan-section-hint">Cookie 仅写入，不在页面回显</span></div>
+               <div class="account-list pan-account-list">${panAccountRows(item, pansEditable) || '<div class="empty">暂无账号，请添加登录态</div>'}</div>
+               <div class="account-add pan-account-add"><input type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 ${esc(item.name)} Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div>
+             </section>
+             <aside class="pan-column pan-column-secondary">
+               <section class="pan-action-block"><div class="pan-section-title pan-section-heading"><div><span class="pan-section-kicker">SHARE ROUTE</span><h3>分享设置</h3></div><span class="pan-section-hint">完成后生成链接</span></div><label class="pan-field-label" for="pan-select-${esc(item.key)}">默认主网盘</label><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${enabled ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></section>
+               <details class="pan-advanced pan-group-settings"><summary><span>群账号选择</span><small>为不同群使用不同账号</small></summary><div class="pan-advanced-content pan-advanced-body"><p>输入群号后选择该群使用的账号；控制台默认显示账号${esc(selectedAccount)}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>保存</button></div></div></details>
+             </aside>
+           </div>
+         </article>`;
        };
        const applyPanTab = (key) => { const cards = document.querySelectorAll('[data-pan-card]'); const tabs = document.querySelectorAll('[data-pan-tab]'); const available = Array.from(cards).map((node) => node.dataset.panCard); const selected = available.includes(key) ? key : (available[0] || ''); activePanTab = selected || null; try { if (selected) sessionStorage.setItem('mantou-pan-tab', selected); } catch (_) {} tabs.forEach((node) => { const isActive = node.dataset.panTab === selected; node.classList.toggle('active', isActive); node.setAttribute('aria-selected', String(isActive)); node.tabIndex = isActive ? 0 : -1; }); cards.forEach((node) => { const isActive = node.dataset.panCard === selected; node.hidden = !isActive; node.setAttribute('aria-hidden', String(!isActive)); }); };
        const choosePanTab = (key) => { applyPanTab(key); };
@@ -147,8 +191,22 @@
         if ($('novel-enabled-count')) $('novel-enabled-count').textContent = `${enabledCount} / ${totalCount} 已开启`;
         if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('novel-grid').innerHTML = platforms.map((item) => `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
-        $('pan-active-label').textContent = pans.active || '--';
-        $('pan-grid').innerHTML = (pans.items || []).map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
+         const panItems = Array.isArray(pans.items) ? pans.items : [];
+         const panTotal = panItems.length;
+         const panEnabledCount = panItems.filter((item) => item.enabled !== false).length;
+         const panConfiguredCount = panItems.filter((item) => Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
+         const panAccountCount = panItems.reduce((total, item) => {
+           const listed = Array.isArray(item.account_summary) ? item.account_summary.length : 0;
+           const reported = Number(item.accounts);
+           return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
+         }, 0);
+         const panReadyCount = panItems.filter((item) => item.enabled !== false && Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
+         if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
+         if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
+         if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
+         if ($('pan-account-count')) $('pan-account-count').textContent = `${panAccountCount}`;
+         if ($('pan-upload-mode')) $('pan-upload-mode').textContent = panReadyCount ? `${panReadyCount} 个平台并发` : '暂无可用平台';
+         $('pan-grid').innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
         let preferredPanTab = activePanTab; if (!preferredPanTab) { try { preferredPanTab = sessionStorage.getItem('mantou-pan-tab'); } catch (_) {} } applyPanTab(preferredPanTab || pans.active || 'UC');
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
@@ -193,7 +251,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = {};
@@ -932,13 +990,62 @@
         ta.dispatchEvent(new Event('input'));
         toast(`已插入 @${nick || uid}（将以 Markdown 发送）`);
       };
-      const copyMsgText = async (text) => {
+      const setMsgQuote = (messageId, userId, nickname, quotedText = '') => {
+        const id = String(messageId || '').trim();
+        if (!id) return;
+        const uid = String(userId || '').trim();
+        const name = String(nickname || '').trim();
+        msgState.quote = {id, userId:uid, name, text:String(quotedText || name || '引用消息')};
+        const preview = $('msg-quote-preview');
+        const previewText = $('msg-quote-text');
+        if (preview) preview.hidden = false;
+        if (previewText) previewText.textContent = `${name || '引用消息'} · 引用`;
+        // 群聊引用同步插入官方 Markdown 提及；避免重复点击引用时重复插入。
+        if (uid && msgState.chatType === 'group') {
+          const ta = $('msg-textarea');
+          if (ta && !msgState.pastedImage) {
+            if (msgState.sendType !== 'text' && msgState.sendType !== 'markdown') {
+              msgState.sendType = 'markdown';
+              $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
+              renderMsgExtra();
+            }
+            if (msgState.sendType === 'text') {
+              msgState.sendType = 'markdown';
+              $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
+              renderMsgExtra();
+            }
+            const mention = `<@${uid}> `;
+            const existing = String(ta.value || '');
+            if (!existing.startsWith(mention)) {
+              const start = ta.selectionStart ?? existing.length;
+              const end = ta.selectionEnd ?? start;
+              ta.value = existing.slice(0, start) + mention + existing.slice(end);
+              ta.selectionStart = ta.selectionEnd = start + mention.length;
+              ta.dispatchEvent(new Event('input'));
+            }
+          }
+        }
+        $('msg-textarea')?.focus();
+      };
+      const copyMsgText = async (text, row = null) => {
+        let copyText = String(text || '');
+        try {
+          const selection = window.getSelection ? window.getSelection() : null;
+          const selected = selection && !selection.isCollapsed ? String(selection.toString() || '') : '';
+          const selectedInRow = selected && row && selection.anchorNode && selection.focusNode
+            ? row.contains(selection.anchorNode) && row.contains(selection.focusNode)
+            : Boolean(selected && !row);
+          if (selected && selectedInRow) copyText = selected;
+        } catch (_) {}
+        if (!copyText.trim() && row) copyText = String(row.querySelector('.msg-bubble')?.innerText || '');
+        copyText = copyText.trim();
+        if (!copyText) return toast('没有可复制的消息内容');
         try {
           if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(text);
+            await navigator.clipboard.writeText(copyText);
           } else {
             const ta = document.createElement('textarea');
-            ta.value = text;
+            ta.value = copyText;
             ta.style.position = 'fixed';
             ta.style.left = '-9999px';
             document.body.appendChild(ta);
@@ -986,6 +1093,14 @@
           seen.add(key);
           return true;
         });
+      };
+      const mergeOptimisticMessages = (chatId, messages) => {
+        const id = String(chatId || '');
+        const base = Array.isArray(messages) ? messages.slice() : [];
+        const optimistic = Array.from(msgState.optimisticSends?.values?.() || [])
+          .filter((entry) => entry && String(entry.chatId || '') === id && entry.message)
+          .map((entry) => entry.message);
+        return dedupeMsgMessages([...base, ...optimistic]);
       };
       const msgBodyNearBottom = (body, threshold = 56) => Boolean(body) && body.scrollHeight - body.scrollTop - body.clientHeight <= threshold;
       const clearMsgNewMessages = () => {
@@ -1052,7 +1167,9 @@
           if (!item || typeof item !== 'object') return '';
           const type = String(item.type || item.media_type || '文件');
           const contentType = String(item.content_type || item.mime_type || '').toLowerCase();
-          const src = safeMediaUrl(item.src || item.url || item.download_url);
+           const directSrc = item.src || item.url || item.download_url;
+           const inlineSrc = String(item.optimistic_data || '').match(/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i) && String(item.optimistic_data).length <= 12000000 ? String(item.optimistic_data) : '';
+           const src = safeMediaUrl(directSrc) || inlineSrc;
           const typeLower = type.toLowerCase();
           const isImage = ['图片', 'image', 'img'].includes(typeLower) || contentType.startsWith('image/');
           if (isImage) {

@@ -77,7 +77,26 @@ from .帮助网页脚本 import 控制台脚本
           <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
         </article></section>
 
-        <section id="page-pans" class="page-view" data-page="pans" hidden><article id="pans" class="pan-console console-card standalone-card"><h2>网盘配置</h2><p class="card-subtitle">选择一个网盘页面进行管理，可分别开启或关闭上传；Cookie 只写入，不在网页回显。</p><div class="pan-note"><span>默认主网盘</span><strong id="pan-active-label">--</strong></div><div class="pan-tabs" role="tablist" aria-label="网盘配置页面"><button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false">UC网盘</button><button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false">夸克网盘</button><button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false">百度网盘</button></div><div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div></article></section>
+        <section id="page-pans" class="page-view" data-page="pans" hidden>
+          <div id="pans" class="pan-page">
+            <header class="pan-page-head">
+              <div class="pan-heading-copy"><span class="pan-page-overline">网盘管理</span><h2>网盘中心</h2><p>选择一个网盘，管理上传、账号和分享设置。</p></div>
+              <div class="pan-live"><span class="pan-live-dot"></span><div><small>默认分享</small><strong id="pan-active-label">--</strong></div></div>
+            </header>
+            <div class="pan-summary-strip" aria-label="网盘摘要">
+              <div class="pan-summary-item"><span>已启用</span><strong id="pan-enabled-count">--</strong><small>参与小说分享</small></div>
+              <div class="pan-summary-item"><span>已配置</span><strong id="pan-configured-count">--</strong><small>登录态可用</small></div>
+              <div class="pan-summary-item"><span>账号总数</span><strong id="pan-account-count">--</strong><small>按平台独立保存</small></div>
+              <div class="pan-summary-item"><span>上传方式</span><strong id="pan-upload-mode">--</strong><small>完成后生成分享链接</small></div>
+            </div>
+            <nav class="pan-tabs" role="tablist" aria-label="选择网盘">
+              <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span>UC网盘</span></button>
+              <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span>夸克网盘</span></button>
+              <button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false"><span class="pan-tab-mark pan-tab-baidu">度</span><span>百度网盘</span></button>
+            </nav>
+            <div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div>
+          </div>
+        </section>
 
         <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
 
@@ -86,9 +105,9 @@ from .帮助网页脚本 import 控制台脚本
 
         <section id="page-messages" class="page-view" data-page="messages" hidden>
           <style>
-            .msg-shell { display:grid; grid-template-columns:330px minmax(0,1fr); min-height:calc(100vh - 130px); align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
-            .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
-            .chat-list-panel { border-right:1px solid #e8e9ec; background:#fafafa; }
+             .msg-shell { --msg-list-width:340px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
+             .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
+             .chat-list-panel { position:relative; border-right:1px solid #e8e9ec; background:#fafafa; }
             .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 12px 8px; border-bottom:1px solid #e8e9ec; background:#fff; }
             .msg-filter { display:flex; gap:2px; padding:2px; background:#f2f3f5; border-radius:8px; }
             .msg-filter button { flex:1 1 0; min-width:0; min-height:26px; padding:0 4px; border:0; border-radius:6px; background:transparent; color:#666; font-size:11px; font-weight:600; cursor:pointer; }
@@ -193,7 +212,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
             .msg-action:hover { background:#d2e9fb; color:#12b7f5; }
             .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
-            .msg-composer { display:flex; flex-direction:column; gap:8px; padding:10px 14px 12px; background:#fff; border-top:1px solid #e8e9ec; }
+             .msg-composer { position:relative; display:flex; flex-direction:column; gap:8px; min-height:132px; max-height:52vh; padding:10px 14px 12px; overflow:auto; resize:vertical; background:#fff; border-top:1px solid #e8e9ec; }
             .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
             .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
             .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
@@ -206,9 +225,9 @@ from .帮助网页脚本 import 控制台脚本
             .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
             .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
             .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
-        .msg-input-box { position:relative; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
+         .msg-input-box { position:relative; display:flex; flex-direction:column; min-height:96px; height:132px; max-height:38vh; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
-        .msg-textarea { width:100%; min-height:88px; max-height:180px; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
+         .msg-textarea { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
         .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
         .msg-img-inline[hidden] { display:none; }
         .msg-img-chip { position:relative; width:84px; height:84px; border-radius:4px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
@@ -300,7 +319,46 @@ from .帮助网页脚本 import 控制台脚本
              .msg-new-messages[hidden] { display:none; }
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
-             @media (max-width:900px) { .msg-shell { grid-template-columns:1fr; } .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; } .msg-bubble-wrap { max-width:88%; } .msg-extra { grid-template-columns:1fr; } }
+             /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
+             .msg-list-resizer { position:absolute; z-index:4; top:0; right:-4px; bottom:0; width:9px; padding:0; border:0; background:transparent; cursor:col-resize; }
+             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:3px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
+             .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
+             .msg-list-resizer:hover::before,.msg-list-resizer:focus-visible::before { background:#12b7f5; }
+             .msg-panel-toggle { display:grid; place-items:center; flex:0 0 auto; width:27px; height:27px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#fff; color:#7a818a; font-size:17px; line-height:1; cursor:pointer; transition:background .16s ease,border-color .16s ease,color .16s ease; }
+             .msg-panel-toggle:hover,.msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#f0f7ff; color:#0b9bd0; }
+             .msg-list-collapse { align-self:flex-end; margin:2px 12px 2px 0; }
+             .msg-composer-resizer { position:absolute; z-index:2; top:-6px; right:14px; left:14px; width:calc(100% - 28px); height:12px; padding:0; border:0; background:transparent; cursor:row-resize; }
+             .msg-composer-resizer::before { content:""; position:absolute; top:5px; left:50%; width:42px; height:3px; border-radius:3px; background:#d5dbe2; transform:translateX(-50%); opacity:.7; transition:background .16s ease,opacity .16s ease; }
+             .msg-composer-resizer:hover::before,.msg-composer-resizer:focus-visible::before { background:#12b7f5; opacity:1; }
+             .msg-composer-toggle { order:-1; margin-right:2px; color:#7a818a; }
+             .msg-toolbar { min-height:30px; }
+             .msg-shell.msg-list-collapsed { --msg-list-width:38px; grid-template-columns:38px minmax(0,1fr); }
+             .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { visibility:hidden; pointer-events:none; }
+             .msg-shell.msg-list-collapsed .msg-list-collapse { visibility:visible; pointer-events:auto; position:absolute; top:10px; right:5px; margin:0; transform:rotate(180deg); }
+             .msg-shell.msg-composer-collapsed .msg-composer { min-height:38px; height:38px; max-height:38px; overflow:hidden; padding:5px 14px; }
+             .msg-shell.msg-composer-collapsed .msg-composer > :not(.msg-composer-resizer):not(.msg-composer-toggle) { visibility:hidden; pointer-events:none; }
+             .msg-shell.msg-composer-collapsed .msg-composer .msg-composer-toggle { visibility:visible !important; pointer-events:auto !important; position:absolute; right:14px; bottom:5px; transform:rotate(180deg); }
+             /* 消息页/专用控制页已有自己的标题，隐藏上方重复的全局标题。 */
+             .content:has(#page-messages:not([hidden])) > .page-heading,
+             .content:has(#page-pans:not([hidden])) > .page-heading,
+             .content:has(#page-novels:not([hidden])) > .page-heading { display:none; }
+             @media (max-width:900px) {
+               .msg-shell { height:auto; min-height:620px; grid-template-columns:1fr; }
+               .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; }
+               .msg-list-resizer { display:none; }
+               .msg-shell.msg-list-collapsed { grid-template-columns:1fr; }
+               .msg-shell.msg-list-collapsed .chat-list-panel { min-height:38px; max-height:38px; }
+               .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:none; }
+               .msg-shell.msg-list-collapsed .msg-list-collapse { top:5px; right:8px; }
+               .msg-bubble-wrap { max-width:88%; }
+               .msg-extra { grid-template-columns:1fr; }
+             }
+             @media (max-width:600px) {
+               .msg-shell { min-height:calc(100vh - 112px); }
+               .msg-composer { max-height:58vh; }
+               .msg-input-box { max-height:45vh; }
+               .msg-head-actions { gap:5px; }
+             }
 
             /* ===== 深色模式（跟随系统） ===== */
                           :root[data-theme="dark"] .msg-shell { background:#1f2330; border-color:var(--line); }
@@ -402,12 +460,16 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
               :root[data-theme="dark"] .msg-meta { color:#6f7590; }
               :root[data-theme="dark"] .msg-composer { background:#1f2330; border-top-color:#2c3044; }
-              :root[data-theme="dark"] .msg-textarea { background:#161926; }
-              :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; }
-              :root[data-theme="dark"] .msg-multi-bar { border-bottom-color:#1e4a68; }
-          </style>
-          <div class="msg-shell">
-            <div class="msg-panel chat-list-panel">
+               :root[data-theme="dark"] .msg-textarea { background:#161926; }
+               :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; }
+               :root[data-theme="dark"] .msg-multi-bar { border-bottom-color:#1e4a68; }
+               :root[data-theme="dark"] .msg-list-resizer::before,:root[data-theme="dark"] .msg-composer-resizer::before { background:#4a5268; }
+               :root[data-theme="dark"] .msg-list-resizer:hover::before,:root[data-theme="dark"] .msg-list-resizer:focus-visible::before,:root[data-theme="dark"] .msg-composer-resizer:hover::before,:root[data-theme="dark"] .msg-composer-resizer:focus-visible::before { background:#42c6ff; }
+               :root[data-theme="dark"] .msg-panel-toggle { border-color:#3a4256; background:#1f2330; color:#9aa0b5; }
+               :root[data-theme="dark"] .msg-panel-toggle:hover,:root[data-theme="dark"] .msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#1d3850; color:#42c6ff; }
+           </style>
+          <div class="msg-shell" id="msg-shell">
+            <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
               <div class="msg-list-head">
                 <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
                   <button type="button" data-msg-filter="all" class="active">全量</button>
@@ -421,6 +483,8 @@ from .帮助网页脚本 import 控制台脚本
                 </div>
               </div>
               <div class="msg-chats" id="msg-chats"><div class="msg-empty">正在加载会话...</div></div>
+              <button class="msg-list-resizer" id="msg-list-resizer" type="button" aria-label="拖动调整会话列表宽度" title="拖动调整会话列表宽度"><span aria-hidden="true"></span></button>
+              <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
             </div>
             <div class="msg-panel msg-work">
               <div class="msg-head">
@@ -442,6 +506,7 @@ from .帮助网页脚本 import 控制台脚本
                  <button class="msg-new-messages" id="msg-new-messages" type="button" hidden title="回到底部查看最新消息"><span class="msg-new-messages-dot" aria-hidden="true"></span><span id="msg-new-messages-label">有新消息</span><span class="msg-new-messages-arrow" aria-hidden="true">↓</span></button>
                </div>
               <div class="msg-composer" id="msg-composer" hidden>
+                <button class="msg-composer-resizer" id="msg-composer-resizer" type="button" aria-label="拖动调整编辑区高度" title="拖动调整编辑区高度"><span aria-hidden="true"></span></button>
                 <div class="msg-composer-mode">
                   <select id="msg-send-mode" aria-label="发送方式">
                     <option value="default">默认（全量群主动/其他被动）</option>
@@ -468,6 +533,7 @@ from .帮助网页脚本 import 控制台脚本
                   <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 </div>
                 <div class="msg-toolbar">
+                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
                   <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                     <input id="msg-img-file" type="file" accept="image/*" hidden>
