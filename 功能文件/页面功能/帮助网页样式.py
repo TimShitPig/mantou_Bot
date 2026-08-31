@@ -280,7 +280,11 @@
      .config-field { display:grid; gap:6px; min-width:0; }
      .config-field.full { grid-column:1 / -1; }
      .config-field label { color:#65687b; font-size:11px; font-weight:700; }
+     .config-input-wrap { position:relative; min-width:0; }
      .config-field input,.config-field textarea,.config-field select,.account-add input,.group-account input { width:100%; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); outline:none; }
+     .config-input-wrap input { padding-right:62px; }
+     .config-secret-toggle { position:absolute; top:50%; right:8px; transform:translateY(-50%); padding:3px 5px; border:0; background:transparent; color:var(--primary); cursor:pointer; font-size:11px; font-weight:700; }
+     .config-secret-toggle:disabled { cursor:not-allowed; opacity:.45; }
      .config-field textarea { min-height:74px; resize:vertical; }
      .config-field input:focus,.config-field textarea:focus,.config-field select:focus,.account-add input:focus,.group-account input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
      .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }

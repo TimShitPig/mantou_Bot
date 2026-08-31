@@ -78,7 +78,12 @@
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
-        const selected = (fields || []).filter((field) => !filter || filter(field));
+        const selected = (fields || []).filter((field) => {
+          if (filter && !filter(field)) return false;
+          // 帮助网页只在控制台展示端口和登录凭据；监听地址/域名继续由后端读取。
+          if (field.category === 'help_web_settings') return ['help_web_port', 'help_web_admin_username', 'help_web_admin_password'].includes(field.key);
+          return true;
+        });
         const groups = [];
         categoryOrder.forEach((category) => {
           const groupFields = selected.filter((field) => field.category === category);
@@ -97,9 +102,20 @@
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
           if (field.kind === 'select') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${(field.options || []).map((option) => `<option value="${esc(option)}" ${String(option) === String(field.value ?? '') ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select><small>${hint}</small></div>`;
           const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
-          return `<div class="config-field"><label for="${inputId}">${label}</label><input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(field.secret ? '留空不修改' : '')}"><small>${hint}</small></div>`;
+          const placeholder = field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : '');
+          const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(placeholder)}">`;
+          const toggle = field.key === 'help_web_admin_password' ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${editable ? '' : 'disabled'} aria-label="显示或隐藏登录密码" aria-pressed="false">显示</button>` : '';
+          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button><span class="config-message" data-config-message></span></div>`;
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
+        node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => button.addEventListener('click', () => {
+          const input = $(button.dataset.configSecretToggle);
+          if (!input) return;
+          const visible = input.type === 'text';
+          input.type = visible ? 'password' : 'text';
+          button.textContent = visible ? '显示' : '隐藏';
+          button.setAttribute('aria-pressed', String(!visible));
+        }));
       };
        const saveConfig = async (editor) => {
         const fields = {};
