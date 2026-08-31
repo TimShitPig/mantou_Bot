@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import re
 from typing import Any
 
@@ -82,7 +82,11 @@ def 读取远端文件时间戳(项目: Any) -> float:
     return 0.0
 
 
-def 是早于当天的小说(项目: Any, 当前日期: date | None = None) -> bool:
+def 是应清理的小说(
+    项目: Any,
+    当前日期: date | None = None,
+    保留天数: int = 2,
+) -> bool:
     if not 是小说TXT(项目):
         return False
     时间戳 = 读取远端文件时间戳(项目)
@@ -93,4 +97,13 @@ def 是早于当天的小说(项目: Any, 当前日期: date | None = None) -> b
         文件日期 = datetime.fromtimestamp(时间戳).date()
     except (OverflowError, OSError, ValueError):
         return False
-    return 文件日期 < 日期
+    try:
+        保留天数 = max(0, int(保留天数))
+    except (TypeError, ValueError):
+        保留天数 = 2
+    return 文件日期 <= 日期 - timedelta(days=保留天数)
+
+
+def 是早于当天的小说(项目: Any, 当前日期: date | None = None) -> bool:
+    """兼容旧调用：判断文件是否早于当天。"""
+    return 是应清理的小说(项目, 当前日期, 保留天数=0)

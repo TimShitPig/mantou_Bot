@@ -198,14 +198,14 @@ class 百度网盘客户端:
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
-        """删除上传目录中日期早于当天的小说 TXT，不删除文件夹。"""
+        """删除上传目录中前两天及更早的小说 TXT，不删除文件夹。"""
         远端目录 = 规范化目录路径(上传目录)
         项目列表 = await self.列出目录(远端目录)
         待删除: list[str] = []
         for 项目 in 项目列表:
             if not isinstance(项目, dict) or 是百度文件夹项目(项目):
                 continue
-            if not 网盘清理工具.是早于当天的小说(项目, 当前日期):
+            if not 网盘清理工具.是应清理的小说(项目, 当前日期, 保留天数=2):
                 continue
             远端路径 = str(项目.get("path") or "").strip()
             if not 远端路径:
