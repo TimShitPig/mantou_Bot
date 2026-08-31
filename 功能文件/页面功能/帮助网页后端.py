@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.66.0"
+控制台版本 = "5.67.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1876,6 +1876,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片公开基础地址=获取帮助网页地址(当前帮助网页配置),
              图片前文本=str(数据.get("image_before") or ""),
              图片后文本=str(数据.get("image_after") or ""),
+             图片占位标记=str(数据.get("image_marker") or "\ufffc"),
              媒体路径=str(数据.get("media") or ""),
              媒体URL=str(数据.get("media_url") or ""),
              媒体数据=str(数据.get("media_data") or ""),

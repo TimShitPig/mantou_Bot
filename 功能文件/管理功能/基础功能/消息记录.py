@@ -3720,12 +3720,18 @@ def _构造Markdown图文内容(
     图片地址: Any,
     图片前文本: Any = "",
     图片后文本: Any = "",
+    图片占位标记: Any = "\ufffc",
 ) -> str:
     """按 QQ 官方 Markdown 图片语法拼接一条图文消息。"""
     文本 = str(内容 or "").strip()
     地址 = _规范化公网图片地址(图片地址)
     前文本 = str(图片前文本 or "").strip()
     后文本 = str(图片后文本 or "").strip()
+    占位标记 = str(图片占位标记 or "\ufffc")
+    if 文本 and 地址 and 占位标记 and 占位标记 in 文本:
+        编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
+        图片标记 = f"![图片 #640px #480px]({编码地址})"
+        return (f"\n\n{图片标记}\n\n").join(文本.split(占位标记)).strip()
     if (前文本 or 后文本) and 地址:
         编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
         图片标记 = f"![图片 #640px #480px]({编码地址})"
@@ -3754,6 +3760,7 @@ async def 发送消息(
     图片公开基础地址: str = "",
     图片前文本: str = "",
     图片后文本: str = "",
+    图片占位标记: str = "\ufffc",
     媒体路径: str = "",
     媒体URL: str = "",
     媒体数据: str = "",
@@ -3862,15 +3869,24 @@ async def 发送消息(
         if len(媒体字节) <= 0 or len(媒体字节) > 200 * 1024 * 1024:
             return {"ok": False, "message": "媒体文件过大"}
 
+    图片占位标记 = str(图片占位标记 or "\ufffc")
+
     def _图片媒体记录() -> dict[str, Any]:
+        展示文本 = str(内容 or "").replace(图片占位标记, "").strip()
+        前文本 = 图片前文本
+        后文本 = 图片后文本
+        if 图片占位标记 and 图片占位标记 in str(内容 or ""):
+            前文本, 后文本 = str(内容 or "").split(图片占位标记, 1)
+            前文本 = 前文本.strip()
+            后文本 = 后文本.strip()
         媒体记录: dict[str, Any] = {
             "type": "图片",
             "src": 图片公开地址,
-            "text": 内容,
+            "text": 展示文本,
         }
-        if 图片前文本 or 图片后文本:
-            媒体记录["before_text"] = 图片前文本
-            媒体记录["after_text"] = 图片后文本
+        if 前文本 or 后文本:
+            媒体记录["before_text"] = 前文本
+            媒体记录["after_text"] = 后文本
         return 媒体记录
 
     def _普通媒体记录() -> dict[str, Any]:
@@ -3884,7 +3900,7 @@ async def 发送消息(
             "src": 媒体URL if str(媒体URL or "").startswith(("http://", "https://")) else "",
             "name": str(媒体文件名 or "").strip(),
             "content_type": str(媒体内容类型 or "").strip(),
-            "text": 内容,
+            "text": str(内容 or "").replace(图片占位标记, "").strip(),
         }
 
     # QQ 富媒体上传只返回 file_info，Markdown 图片必须使用公网 URL。
@@ -3904,7 +3920,13 @@ async def 发送消息(
 
     # 官方 Markdown 支持公网图片与文字同条发送；本地图片使用帮助网页的短时公网地址。
     图文内容 = (
-        _构造Markdown图文内容(内容, 图片公开地址, 图片前文本, 图片后文本)
+        _构造Markdown图文内容(
+            内容,
+            图片公开地址,
+            图片前文本,
+            图片后文本,
+            图片占位标记,
+        )
         if 类型 in ("text", "markdown")
         else ""
     )
@@ -4003,10 +4025,11 @@ async def 发送消息(
         if 实际使用主动消息:
             记录主动消息权限(会话标识, 权限会话类型, True)
         # 未能取得可公开 Markdown 图片地址时，按官方协议先发媒体再补发文字。
-        if 消息体.get("msg_type") == 7 and 内容:
+        补发内容 = str(内容 or "").replace(图片占位标记, "").strip()
+        if 消息体.get("msg_type") == 7 and 补发内容:
             文本消息体 = {
                 "msg_type": 0,
-                "content": 内容,
+                "content": 补发内容,
                 "msg_seq": random.randint(1, 10000),
             }
             if 被动ID:
@@ -4021,7 +4044,7 @@ async def 发送消息(
                 记录发送消息(
                     会话标识,
                     会话类型 or "group",
-                    内容,
+                    补发内容,
                     appid,
                     消息ID=文本ID,
                     自身REFIDX=_提取发送响应REFIDX(文本结果),
@@ -4057,9 +4080,10 @@ async def 发送消息(
             else:
                 if isinstance(结果, dict) and 结果.get("id"):
                     响应ID = str(结果.get("id") or "")
-                    展示内容 = 内容
+                    展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
                     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
-                        展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
+                        清理文本 = str(内容 or "").replace(图片占位标记, "").strip()
+                        展示内容 = "[图片]" if not 清理文本 else "[图片] " + 清理文本
                     if 类型 == "media":
                         展示内容 = f"[{_普通媒体记录().get('type') or '文件'}]"
                     elif 类型 == "ark":
@@ -4104,9 +4128,10 @@ async def 发送消息(
         响应ID = str(结果.get("id") or "")
     elif 结果 is not None:
         响应ID = str(getattr(结果, "id", None) or "")
-    展示内容 = 内容
+    展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
-        展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
+        清理文本 = str(内容 or "").replace(图片占位标记, "").strip()
+        展示内容 = "[图片]" if not 清理文本 else "[图片] " + 清理文本
     if 类型 == "media":
         展示内容 = f"[{_普通媒体记录().get('type') or '文件'}]"
     elif 类型 == "ark":

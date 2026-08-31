@@ -268,9 +268,100 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean(String(msgState.mediaData || '').trim() && Number(msgState.mediaType || 0));
+      const composerImageMarker = '\uFFFC';
+      const getComposerEditor = () => $('msg-editor');
+      const syncComposerImageState = () => {
+        const editor = getComposerEditor();
+        if (composerHasImage() && !editor?.querySelector('[data-composer-image="1"]')) {
+          msgState.pastedImage = null;
+          msgState.pastedImageSource = '';
+          $('msg-input-box')?.classList.remove('has-inline-image');
+        }
+      };
+      const composerNodeText = (node, root = false) => {
+        if (!node) return '';
+        if (node.nodeType === Node.TEXT_NODE) return String(node.nodeValue || '');
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.dataset?.composerImage === '1') return composerImageMarker;
+        if (node.tagName === 'BR') return '\n';
+        let result = Array.from(node.childNodes || []).map((child) => composerNodeText(child)).join('');
+        if (!root && ['DIV', 'P', 'LI'].includes(node.tagName) && result && !result.endsWith('\n')) result += '\n';
+        return result;
+      };
+      const getComposerText = () => composerNodeText(getComposerEditor(), true).replace(/\u00a0/g, ' ');
+      const saveComposerSelection = () => {
+        const editor = getComposerEditor();
+        const selection = window.getSelection?.();
+        if (!editor || !selection || !selection.rangeCount) return;
+        const range = selection.getRangeAt(0);
+        if (editor.contains(range.commonAncestorContainer)) msgState.composerSelection = range.cloneRange();
+      };
+      const restoreComposerSelection = () => {
+        const editor = getComposerEditor();
+        const selection = window.getSelection?.();
+        if (!editor || !selection) return null;
+        const range = msgState.composerSelection && editor.contains(msgState.composerSelection.commonAncestorContainer)
+          ? msgState.composerSelection.cloneRange() : document.createRange();
+        if (!msgState.composerSelection || !editor.contains(range.commonAncestorContainer)) {
+          range.selectNodeContents(editor);
+          range.collapse(false);
+        }
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return range;
+      };
+      const insertComposerText = (value) => {
+        const editor = getComposerEditor();
+        if (!editor || !value) return;
+        editor.focus();
+        const range = restoreComposerSelection();
+        if (!range) return;
+        range.deleteContents();
+        const text = document.createTextNode(String(value));
+        range.insertNode(text);
+        range.setStartAfter(text);
+        range.collapse(true);
+        const selection = window.getSelection?.();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        msgState.composerSelection = range.cloneRange();
+      };
+      const insertComposerImage = (source) => {
+        const editor = getComposerEditor();
+        if (!editor || !source) return;
+        editor.querySelector('[data-composer-image="1"]')?.remove();
+        editor.focus();
+        const range = restoreComposerSelection();
+        if (!range) return;
+        range.deleteContents();
+        const wrapper = document.createElement('span');
+        wrapper.className = 'composer-inline-image';
+        wrapper.dataset.composerImage = '1';
+        wrapper.contentEditable = 'false';
+        const image = document.createElement('img');
+        image.src = source;
+        image.alt = '待发送图片';
+        image.draggable = false;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '移除图片');
+        remove.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); clearMsgImage(); });
+        wrapper.append(image, remove);
+        range.insertNode(wrapper);
+        const spacer = document.createTextNode(' ');
+        wrapper.after(spacer);
+        range.setStartAfter(spacer);
+        range.collapse(true);
+        const selection = window.getSelection?.();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        msgState.composerSelection = range.cloneRange();
+        editor.closest('.msg-input-box')?.classList.add('has-inline-image');
+      };
       const setMsgMobileChatOpen = (open) => {
         const shell = $('msg-shell');
         const back = $('msg-mobile-back');
@@ -1162,13 +1253,8 @@
           $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
           renderMsgExtra();
         }
-        const ta = $('msg-textarea');
-        ta.focus();
         const mention = `<@${uid}> `;
-        const start = ta.selectionStart ?? ta.value.length;
-        ta.value = ta.value.slice(0, start) + mention + ta.value.slice(ta.selectionEnd ?? start);
-        ta.selectionStart = ta.selectionEnd = start + mention.length;
-        ta.dispatchEvent(new Event('input'));
+        insertComposerText(mention);
         toast(`已插入 @${nick || uid}（将以 Markdown 发送）`);
       };
       const setMsgQuote = (messageId, userId, nickname, quotedText = '', refidx = '') => {
@@ -1183,24 +1269,18 @@
         if (previewText) previewText.textContent = `${name || '引用消息'} · 引用`;
         // 群聊引用同步插入官方 Markdown 提及；避免重复点击引用时重复插入。
         if (uid && msgState.chatType === 'group') {
-          const ta = $('msg-textarea');
-          if (ta) {
+          const editor = getComposerEditor();
+          if (editor) {
             msgState.sendType = 'markdown';
             const tabs = $('msg-composer-tabs');
             tabs?.querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
             renderMsgExtra();
             const mention = `<@${uid}> `;
-            const existing = String(ta.value || '');
-            if (!existing.startsWith(mention)) {
-              const start = ta.selectionStart ?? existing.length;
-              const end = ta.selectionEnd ?? start;
-              ta.value = existing.slice(0, start) + mention + existing.slice(end);
-              ta.selectionStart = ta.selectionEnd = start + mention.length;
-              ta.dispatchEvent(new Event('input'));
-            }
+            const existing = getComposerText();
+            if (!existing.startsWith(mention)) insertComposerText(mention);
           }
         }
-        $('msg-textarea')?.focus();
+        getComposerEditor()?.focus();
       };
       const copyMsgText = async (text, row = null) => {
         let copyText = String(text || '');
@@ -1287,11 +1367,13 @@
       };
       const createOptimisticSend = (payload) => {
         const id = `web-${Date.now()}-${++msgState.optimisticSeq}`;
-        const content = String(payload.content || '').trim();
+        const rawContent = String(payload.content || '');
+        const imageParts = rawContent.split(composerImageMarker);
+        const content = imageParts.join('').trim();
         const imageData = String(payload.image_data || '').trim();
         const imageUrl = safeImageSource(payload.image_url);
-        const imageBefore = String(payload.image_before || '').trim();
-        const imageAfter = String(payload.image_after || '').trim();
+        const imageBefore = imageParts.length > 1 ? imageParts[0].trim() : String(payload.image_before || '').trim();
+        const imageAfter = imageParts.length > 1 ? imageParts.slice(1).join(composerImageMarker).trim() : String(payload.image_after || '').trim();
         const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
         const mediaData = String(payload.media_data || '').trim();
         const mediaType = Number(payload.media_file_type || 4) === 2 ? '视频' : '文件';
@@ -1344,20 +1426,14 @@
         );
       };
       const resetComposer = () => {
-        const before = $('msg-textarea-before');
-        const textarea = $('msg-textarea');
-        if (before) { before.value = ''; before.hidden = true; }
-        if (textarea) textarea.value = '';
+        const editor = getComposerEditor();
+        if (editor) editor.replaceChildren();
         msgState.quote = null;
         msgState.pastedImage = null;
         msgState.pastedImageSource = '';
+        msgState.composerSelection = null;
         clearComposerMedia();
-        const inline = $('msg-img-inline');
-        if (inline) inline.hidden = true;
         $('msg-input-box')?.classList.remove('has-inline-image');
-        if (textarea) textarea.placeholder = '输入消息内容...（回车发送，Ctrl+Enter 换行）';
-        const thumb = $('msg-img-thumb');
-        if (thumb) thumb.removeAttribute('src');
         const file = $('msg-img-file');
         if (file) file.value = '';
         const quote = $('msg-quote-preview');
@@ -1509,26 +1585,12 @@
         return blob;
       };
       const setComposerImage = (data, source, preview = '') => {
-        const before = $('msg-textarea-before');
-        const after = $('msg-textarea');
-        const inputBox = $('msg-input-box');
         clearComposerMedia();
-        if (!composerHasImage() && before && after) {
-          before.value = after.value;
-          after.value = '';
-        }
         msgState.pastedImage = String(data || '');
         msgState.pastedImageSource = String(source || '');
-        if (before) before.hidden = false;
-        if (inputBox) inputBox.classList.add('has-inline-image');
-        if (after) {
-          after.placeholder = '图片后文字（可选）';
-          after.focus();
-        }
-        const thumb = $('msg-img-thumb');
-        if (thumb) thumb.src = preview || data || source || '';
-        const inline = $('msg-img-inline');
-        if (inline) inline.hidden = false;
+        const inlineSource = String(preview || data || source || '').trim();
+        if (inlineSource) insertComposerImage(inlineSource);
+        getComposerEditor()?.focus();
       };
       const setComposerMedia = (data, name, fileType, mime = '') => {
         clearMsgImage();
@@ -1543,7 +1605,7 @@
         if (label) label.textContent = msgState.mediaName;
         if (icon) icon.textContent = msgState.mediaType === 2 ? '▶' : '□';
         if (inline) inline.hidden = false;
-        $('msg-textarea')?.focus();
+        getComposerEditor()?.focus();
       };
       const clearComposerMedia = () => {
         msgState.mediaData = null;
@@ -1780,11 +1842,8 @@
         body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
         body.querySelectorAll('[data-msg-command]').forEach((el) => el.addEventListener('click', () => {
           const command = String(el.dataset.msgCommand || '').trim();
-          const textarea = $('msg-textarea');
-          if (!command || !textarea) return;
-          textarea.value = command;
-          textarea.dispatchEvent(new Event('input'));
-          textarea.focus();
+          if (!command || !getComposerEditor()) return;
+          insertComposerText(command);
           toast(`已填入 ${command}`);
         }));
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
@@ -2109,13 +2168,12 @@
         if (msgState.chatRemoved) return toast('你已被移除群聊');
         const hasImage = composerHasImage();
         const hasMedia = composerHasMedia();
-        const imageBefore = hasImage ? String($('msg-textarea-before')?.value || '').trim() : '';
-        const imageAfter = hasImage ? String($('msg-textarea')?.value || '').trim() : '';
-        const content = hasImage
-          ? [imageBefore, imageAfter].filter(Boolean).join('\n')
-          : $('msg-textarea').value.trim();
+        const editorText = getComposerText().trim();
+        const imageBefore = '';
+        const imageAfter = '';
+        const content = editorText;
         const customId = $('msg-custom-id')?.value.trim() || '';
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter };
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter, image_marker:hasImage ? composerImageMarker : '' };
         if (hasMedia) {
           payload.media_data = msgState.mediaData;
           payload.media_name = msgState.mediaName;
@@ -2168,10 +2226,16 @@
           sendMessage();
         }
       };
-      document.querySelectorAll('#msg-textarea, #msg-textarea-before').forEach((node) => node.addEventListener('keydown', handleComposerKeydown));
+      document.querySelectorAll('#msg-editor').forEach((node) => {
+        node.addEventListener('keydown', handleComposerKeydown);
+        node.addEventListener('keyup', saveComposerSelection);
+        node.addEventListener('mouseup', saveComposerSelection);
+        node.addEventListener('input', () => { syncComposerImageState(); saveComposerSelection(); });
+      });
       const handleComposerPaste = (e) => {
         const items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
+        saveComposerSelection();
         for (const item of items) {
           if (item.type && item.type.indexOf('image/') === 0) {
             const file = item.getAsFile();
@@ -2187,7 +2251,7 @@
           }
         }
       };
-      document.querySelectorAll('#msg-textarea, #msg-textarea-before').forEach((node) => node.addEventListener('paste', handleComposerPaste));
+      document.querySelectorAll('#msg-editor').forEach((node) => node.addEventListener('paste', handleComposerPaste));
       const msgInputBox = $('msg-input-box');
       msgInputBox?.addEventListener('dragover', (event) => {
         const types = Array.from(event.dataTransfer?.types || []);
@@ -2205,6 +2269,7 @@
         event.preventDefault();
         event.stopPropagation();
         msgInputBox.classList.remove('drag-over');
+        saveComposerSelection();
         const transfer = event.dataTransfer;
         const droppedFile = transfer?.files?.[0];
         if (droppedFile) {
@@ -2224,20 +2289,13 @@
         void attachDroppedImage(source);
       });
       const clearMsgImage = () => {
-        const before = $('msg-textarea-before');
-        const after = $('msg-textarea');
-        const beforeText = String(before?.value || '').trim();
-        const afterText = String(after?.value || '').trim();
-        if (after) after.value = [beforeText, afterText].filter(Boolean).join('\n');
-        if (before) { before.value = ''; before.hidden = true; }
+        getComposerEditor()?.querySelector('[data-composer-image="1"]')?.remove();
         msgState.pastedImage = null;
         msgState.pastedImageSource = '';
-        $('msg-img-inline').hidden = true;
-        $('msg-img-thumb').removeAttribute('src');
         $('msg-input-box')?.classList.remove('has-inline-image');
-        if (after) { after.placeholder = '输入消息内容...（回车发送，Ctrl+Enter 换行）'; after.focus(); }
+        getComposerEditor()?.focus();
       };
-      $('msg-img-clear').addEventListener('click', clearMsgImage);
+      $('msg-img-pick').addEventListener('mousedown', saveComposerSelection);
       $('msg-img-pick').addEventListener('click', () => $('msg-img-file').click());
       $('msg-img-file').addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0];

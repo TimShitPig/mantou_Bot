@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.66.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.67.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -236,14 +236,14 @@ from .帮助网页脚本 import 控制台脚本
          .msg-input-box { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-height:96px; height:auto; max-height:none; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
         .msg-input-box:focus-within { border-color:#12b7f5; }
         .msg-input-box.drag-over { border-color:#12b7f5; background:#f0f9ff; box-shadow:0 0 0 2px rgba(18,183,245,.14); }
-        .msg-textarea-before[hidden] { display:none; }
-        .msg-input-box.has-inline-image .msg-textarea { min-height:42px; flex:1 1 0; }
-        .msg-input-box.has-inline-image .msg-textarea-before { border-bottom:1px solid #eef0f2; }
-         .msg-textarea { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; border:0; outline:none; resize:none; padding:12px 14px 6px; font-size:13px; line-height:1.6; color:#333; background:transparent; box-sizing:border-box; }
-        .msg-img-inline { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
-        .msg-img-inline[hidden] { display:none; }
-        .msg-img-chip { position:relative; width:84px; height:84px; border-radius:4px; overflow:hidden; border:1px solid #e3e4e8; background:#f5f6f8; }
-        .msg-img-chip img { width:100%; height:100%; object-fit:cover; display:block; }
+        .msg-input-box.has-inline-image .msg-editor { min-height:42px; }
+        .msg-editor { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; overflow:auto; padding:12px 14px 6px; border:0; outline:none; color:#333; background:transparent; box-sizing:border-box; font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+        .msg-editor:empty::before { content:attr(data-placeholder); color:#a0a4ad; pointer-events:none; }
+        .msg-editor:focus { background:#fff; }
+        .composer-inline-image { position:relative; display:inline-flex; align-items:center; vertical-align:middle; margin:2px 3px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#f5f6f8; line-height:0; }
+        .composer-inline-image img { display:block; width:auto; max-width:180px; max-height:120px; border-radius:5px; object-fit:contain; }
+        .composer-inline-image button { position:absolute; top:-7px; right:-7px; width:18px; height:18px; padding:0; border:0; border-radius:50%; background:rgba(0,0,0,.58); color:#fff; cursor:pointer; font-size:12px; line-height:18px; }
+        .composer-inline-image button:hover { background:rgba(230,67,64,.92); }
         .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
         .msg-img-remove:hover { background:rgba(230,67,64,.9); }
         .msg-attachment-inline { position:relative; display:flex; align-items:center; gap:8px; min-height:40px; margin:9px 12px 0; padding:7px 34px 7px 9px; border:1px solid #e3e4e8; border-radius:6px; background:#f5f6f8; color:#555; }
@@ -418,7 +418,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-composer { max-height:52vh; padding:7px 10px 8px; }
                .msg-composer-top-hint { display:none; }
                .msg-input-box { max-height:none; }
-               .msg-textarea { min-height:42px; }
+               .msg-editor { min-height:42px; }
              }
 
             /* ===== 深色模式（跟随系统） ===== */
@@ -486,13 +486,11 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#12344d; }
               :root[data-theme="dark"] .msg-composer-mode select { border-color:var(--line); background:#1f2330; color:#e8eaf2; }
               :root[data-theme="dark"] .msg-composer-mode input { border-color:var(--line); background:#161926; color:#e8eaf2; }
-              :root[data-theme="dark"] .msg-textarea { background:#161926; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-textarea,:root[data-theme="dark"] .msg-editor { background:#161926; color:#e8eaf2; }
               :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; box-shadow:inset 0 0 0 1px #12b7f5; }
               :root[data-theme="dark"] .msg-extra input { border-color:var(--line); background:#161926; color:#e8eaf2; }
               :root[data-theme="dark"] .msg-input-box { border-color:#2c3044; background:#1f2330; }
               :root[data-theme="dark"] .msg-input-box.drag-over { border-color:#42c6ff; background:#172b39; box-shadow:0 0 0 2px rgba(66,198,255,.16); }
-              :root[data-theme="dark"] .msg-input-box.has-inline-image .msg-textarea-before { border-bottom-color:#2c3044; }
-              :root[data-theme="dark"] .msg-img-chip { border-color:#2c3044; background:#161926; }
               :root[data-theme="dark"] .msg-attachment-inline { border-color:#2c3044; background:#161926; color:#d3d7e4; }
               :root[data-theme="dark"] .msg-attachment-icon { background:#294b70; color:#9bc9f4; }
               :root[data-theme="dark"] .msg-composer-top-hint { color:#6f7590; }
@@ -532,8 +530,8 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
               :root[data-theme="dark"] .msg-meta { color:#6f7590; }
               :root[data-theme="dark"] .msg-composer { background:#1f2330; border-top-color:#2c3044; }
-               :root[data-theme="dark"] .msg-textarea { background:#161926; }
-               :root[data-theme="dark"] .msg-textarea:focus { background:#1f2330; }
+               :root[data-theme="dark"] .msg-textarea,:root[data-theme="dark"] .msg-editor { background:#161926; }
+               :root[data-theme="dark"] .msg-textarea:focus,:root[data-theme="dark"] .msg-editor:focus { background:#1f2330; }
                :root[data-theme="dark"] .msg-multi-bar { border-bottom-color:#1e4a68; }
                :root[data-theme="dark"] .msg-list-resizer::before,:root[data-theme="dark"] .msg-composer-resizer::before { background:#4a5268; }
                :root[data-theme="dark"] .msg-list-resizer:hover::before,:root[data-theme="dark"] .msg-list-resizer:focus-visible::before,:root[data-theme="dark"] .msg-composer-resizer:hover::before,:root[data-theme="dark"] .msg-composer-resizer:focus-visible::before { background:#42c6ff; }
@@ -617,16 +615,12 @@ from .帮助网页脚本 import 控制台脚本
                 </div>
                 <div class="msg-input-box" id="msg-input-box">
                   <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
-                  <textarea id="msg-textarea-before" class="msg-textarea msg-textarea-before" placeholder="图片前文字（可选）" aria-label="图片前文字" hidden></textarea>
-                  <div class="msg-img-inline" id="msg-img-inline" hidden>
-                    <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
-                  </div>
                   <div class="msg-attachment-inline" id="msg-media-inline" hidden>
                     <span class="msg-attachment-icon" id="msg-media-icon" aria-hidden="true">□</span>
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
                     <button class="msg-img-remove" id="msg-media-clear" type="button" aria-label="移除附件">×</button>
                   </div>
-                  <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
+                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></div>
                 </div>
                 <div class="msg-toolbar">
                   <span style="flex:1"></span>
