@@ -15,6 +15,7 @@ import random
 import re
 import secrets
 import threading
+import tempfile
 import time
 from datetime import datetime as _日期类
 from datetime import timedelta as _时间差
@@ -142,7 +143,21 @@ _QQ图片域名 = re.compile(
 _显示时区 = _时区类(_时间差(hours=8))
 _临时Markdown图片: dict[str, tuple[float, bytes, str]] = globals().get("_临时Markdown图片") or {}
 _临时Markdown图片锁 = globals().get("_临时Markdown图片锁") or threading.RLock()
-_临时Markdown图片有效期秒 = 30 * 60
+
+
+def _默认临时Markdown图片目录() -> Path:
+    """优先使用 AstrBot 数据目录，避免容器重启丢失令牌对应的图片。"""
+    try:
+        插件根目录 = Path(__file__).resolve().parents[3]
+        if 插件根目录.parent.name.lower() == "plugins":
+            return 插件根目录.parent.parent / "mantou_bot_markdown_images"
+    except (OSError, IndexError):
+        pass
+    return Path(tempfile.gettempdir()) / "mantou_bot_markdown_images"
+
+
+_临时Markdown图片目录 = globals().get("_临时Markdown图片目录") or _默认临时Markdown图片目录()
+_临时Markdown图片有效期秒 = 3 * 24 * 60 * 60
 _临时Markdown图片最大数量 = 64
 
 
@@ -1294,44 +1309,144 @@ def _清理媒体地址(地址: Any) -> str:
     return html.unescape(str(地址 or "").strip()).strip("<>[](){}，。；;、")
 
 
+_临时Markdown图片标识规则 = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
+
+
+def _临时Markdown图片路径(标识: str) -> tuple[Path, Path]:
+    return (
+        _临时Markdown图片目录 / f"{标识}.bin",
+        _临时Markdown图片目录 / f"{标识}.json",
+    )
+
+
+def _清理临时Markdown图片磁盘(现在: float | None = None) -> None:
+    """清理过期或超量的 Markdown 图片磁盘缓存。"""
+    当前时间 = float(现在 if 现在 is not None else time.time())
+    try:
+        if not _临时Markdown图片目录.is_dir():
+            return
+        有效文件: list[tuple[float, Path, Path]] = []
+        for 元数据路径 in _临时Markdown图片目录.glob("*.json"):
+            try:
+                元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
+                过期时间 = float(元数据.get("expires_at") or 0)
+                标识 = 元数据路径.stem
+                文件路径, _ = _临时Markdown图片路径(标识)
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                元数据路径.unlink(missing_ok=True)
+                continue
+            if (
+                not _临时Markdown图片标识规则.fullmatch(标识)
+                or 过期时间 <= 当前时间
+                or not 文件路径.is_file()
+            ):
+                元数据路径.unlink(missing_ok=True)
+                文件路径.unlink(missing_ok=True)
+                continue
+            有效文件.append((过期时间, 元数据路径, 文件路径))
+        if len(有效文件) > _临时Markdown图片最大数量:
+            for _, 元数据路径, 文件路径 in sorted(有效文件)[: -_临时Markdown图片最大数量]:
+                元数据路径.unlink(missing_ok=True)
+                文件路径.unlink(missing_ok=True)
+        for 文件路径 in _临时Markdown图片目录.glob("*.bin"):
+            if not 文件路径.with_suffix(".json").is_file():
+                try:
+                    if 当前时间 - 文件路径.stat().st_mtime > _临时Markdown图片有效期秒:
+                        文件路径.unlink(missing_ok=True)
+                except OSError:
+                    continue
+    except OSError:
+        return
+
+
 def 注册临时Markdown图片(图片字节: bytes, 内容类型: str = "image/png") -> str:
-    """把网页上传的图片暂存到进程内，供 QQ Markdown 短时转存。"""
+    """把网页上传的图片写入短期磁盘缓存，供 QQ Markdown 转存。"""
     if not isinstance(图片字节, (bytes, bytearray)) or not 图片字节:
         return ""
     类型 = str(内容类型 or "image/png").split(";", 1)[0].strip().lower()
     if not 类型.startswith("image/"):
         类型 = "image/png"
     现在 = time.time()
+    过期时间 = 现在 + _临时Markdown图片有效期秒
     with _临时Markdown图片锁:
-        for 标识, (过期时间, _, _) in list(_临时Markdown图片.items()):
-            if 过期时间 <= 现在:
+        _清理临时Markdown图片磁盘(现在)
+        for 标识, 项 in list(_临时Markdown图片.items()):
+            try:
+                if float(项[0]) <= 现在:
+                    _临时Markdown图片.pop(标识, None)
+            except (IndexError, TypeError, ValueError):
                 _临时Markdown图片.pop(标识, None)
         while len(_临时Markdown图片) >= _临时Markdown图片最大数量:
             最旧标识 = min(_临时Markdown图片, key=lambda 值: _临时Markdown图片[值][0])
             _临时Markdown图片.pop(最旧标识, None)
         标识 = secrets.token_urlsafe(24)
-        _临时Markdown图片[标识] = (
-            现在 + _临时Markdown图片有效期秒,
-            bytes(图片字节),
-            类型,
-        )
+        文件路径, 元数据路径 = _临时Markdown图片路径(标识)
+        try:
+            _临时Markdown图片目录.mkdir(parents=True, exist_ok=True)
+            临时文件 = 文件路径.with_name(f".{文件路径.name}.{secrets.token_hex(6)}.tmp")
+            临时元数据 = 元数据路径.with_name(
+                f".{元数据路径.name}.{secrets.token_hex(6)}.tmp"
+            )
+            临时文件.write_bytes(bytes(图片字节))
+            临时元数据.write_text(
+                json.dumps(
+                    {"expires_at": 过期时间, "content_type": 类型},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            临时文件.replace(文件路径)
+            临时元数据.replace(元数据路径)
+        except OSError:
+            try:
+                临时文件.unlink(missing_ok=True)
+                临时元数据.unlink(missing_ok=True)
+            except (UnboundLocalError, OSError):
+                pass
+            return ""
+        # 图片正文只保留在磁盘，避免插件重载后令牌失效或常驻内存。
+        _临时Markdown图片[标识] = (过期时间, b"", 类型)
         return 标识
 
 
 def 读取临时Markdown图片(标识: str) -> tuple[bytes, str] | None:
-    """读取尚未过期的 Markdown 图片；过期后立即释放进程内字节。"""
+    """读取短期 Markdown 图片；支持插件重载后从磁盘恢复。"""
     标识 = str(标识 or "").strip()
-    if not 标识 or len(标识) > 128:
+    if not _临时Markdown图片标识规则.fullmatch(标识):
         return None
     现在 = time.time()
     with _临时Markdown图片锁:
+        _清理临时Markdown图片磁盘(现在)
         项 = _临时Markdown图片.get(标识)
-        if not 项:
+        文件路径, 元数据路径 = _临时Markdown图片路径(标识)
+        if 项:
+            try:
+                过期时间, 图片字节, 内容类型 = 项
+            except (TypeError, ValueError):
+                过期时间, 图片字节, 内容类型 = 0, b"", "image/png"
+            if float(过期时间) <= 现在:
+                _临时Markdown图片.pop(标识, None)
+                文件路径.unlink(missing_ok=True)
+                元数据路径.unlink(missing_ok=True)
+                return None
+            if isinstance(图片字节, (bytes, bytearray)) and 图片字节:
+                return bytes(图片字节), str(内容类型 or "image/png")
+        try:
+            元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
+            过期时间 = float(元数据.get("expires_at") or 0)
+            内容类型 = str(元数据.get("content_type") or "image/png").split(";", 1)[0]
+            图片字节 = 文件路径.read_bytes()
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return None
-        过期时间, 图片字节, 内容类型 = 项
-        if 过期时间 <= 现在:
+        if 过期时间 <= 现在 or not 图片字节:
+            文件路径.unlink(missing_ok=True)
+            元数据路径.unlink(missing_ok=True)
             _临时Markdown图片.pop(标识, None)
             return None
+        if not 内容类型.startswith("image/"):
+            内容类型 = "image/png"
+        _临时Markdown图片[标识] = (过期时间, b"", 内容类型)
         return 图片字节, 内容类型
 
 
