@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import date
 import hashlib
 import json
 import mimetypes
@@ -19,6 +20,7 @@ from 功能文件.管理功能.网盘功能.网盘Cookie import (
     读取网盘Cookie,
 )
 from 功能文件.管理功能.网盘功能 import 网盘状态
+from 功能文件.管理功能.网盘功能 import 网盘清理工具
 
 基础接口地址 = "https://drive-pc.quark.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -117,6 +119,28 @@ class 夸克网盘客户端:
                 return 读取文件ID(项目)
         return ""
 
+    async def 删除文件ID列表(self, 文件ID列表: list[str]) -> int:
+        去重ID = list(dict.fromkeys(str(值).strip() for 值 in 文件ID列表 if str(值).strip()))
+        if not 去重ID:
+            return 0
+        数据 = await self.请求JSON(
+            "POST",
+            "/file/delete",
+            json_data={"action_type": 2, "filelist": 去重ID, "exclude_fids": []},
+        )
+        if not 接口成功(数据):
+            raise RuntimeError(f"夸克网盘删除文件失败：{限制文本长度(数据)}")
+        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+        任务ID = str(返回数据.get("task_id") or "")
+        if 任务ID:
+            任务数据 = await self.轮询任务(任务ID)
+            任务结果 = (
+                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
+            )
+            if 安全整数(任务结果.get("status"), -1) != 2:
+                raise RuntimeError("夸克网盘删除文件任务未完成")
+        return len(去重ID)
+
     async def 删除同名普通文件(self, 文件名: str, 父目录ID: str) -> None:
         文件ID列表 = [
             读取文件ID(项目)
@@ -127,25 +151,31 @@ class 夸克网盘客户端:
         ]
         if not 文件ID列表:
             return
-        数据 = await self.请求JSON(
-            "POST",
-            "/file/delete",
-            json_data={"action_type": 2, "filelist": 文件ID列表, "exclude_fids": []},
-        )
-        if not 接口成功(数据):
-            raise RuntimeError(f"夸克网盘删除同名旧文件失败：{限制文本长度(数据)}")
-        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
-        任务ID = str(返回数据.get("task_id") or "")
-        if 任务ID:
-            任务数据 = await self.轮询任务(任务ID)
-            任务结果 = (
-                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
-            )
-            if 安全整数(任务结果.get("status"), -1) != 2:
-                raise RuntimeError("夸克网盘删除同名旧文件任务未完成")
+        try:
+            await self.删除文件ID列表(文件ID列表)
+        except Exception as 异常:
+            raise RuntimeError(
+                f"夸克网盘删除同名旧文件失败：错误类型={type(异常).__name__}"
+            ) from 异常
         logger.debug(
             f"夸克网盘上传前已删除同名旧文件：file={文件名}, count={len(文件ID列表)}"
         )
+
+    async def 清理早于当天小说(
+        self, 上传目录: str, 当前日期: date | None = None
+    ) -> int:
+        """删除上传目录中日期早于当天的小说 TXT，不删除文件夹。"""
+        目录ID = await self.确保目录路径(上传目录)
+        待删除: list[str] = []
+        for 项目 in await self.列出目录全部项目(目录ID):
+            if not isinstance(项目, dict) or 是文件夹项目(项目):
+                continue
+            if not 网盘清理工具.是早于当天的小说(项目, 当前日期):
+                continue
+            文件ID = 读取文件ID(项目)
+            if 文件ID and 文件ID not in 待删除:
+                待删除.append(文件ID)
+        return await self.删除文件ID列表(待删除)
 
     async def 列出目录全部项目(self, 父目录ID: str) -> list[dict[str, Any]]:
         结果: list[dict[str, Any]] = []

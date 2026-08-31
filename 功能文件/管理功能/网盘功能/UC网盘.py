@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import date
 import hashlib
 import json
 import mimetypes
@@ -19,6 +20,7 @@ from 功能文件.管理功能.网盘功能.网盘Cookie import (
     读取网盘Cookie,
 )
 from 功能文件.管理功能.网盘功能 import 网盘状态
+from 功能文件.管理功能.网盘功能 import 网盘清理工具
 
 基础接口地址 = "https://pc-api.uc.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
@@ -239,6 +241,26 @@ class UC网盘客户端:
         if str(数据.get("code")) not in ("0", "200"):
             raise RuntimeError(f"UC网盘删除文件失败：{限制文本长度(数据)}")
         return True
+
+    async def 清理早于当天小说(
+        self, 上传目录: str, 当前日期: date | None = None
+    ) -> int:
+        """删除上传目录中日期早于当天的小说 TXT，不删除文件夹。"""
+        目录ID = await self.确保目录路径(上传目录)
+        待删除: list[str] = []
+        for 项目 in await self.列出目录项目(目录ID):
+            if not isinstance(项目, dict) or 是UC文件夹项目(项目):
+                continue
+            if not 网盘清理工具.是早于当天的小说(项目, 当前日期):
+                continue
+            文件ID = 读取UC文件ID(项目)
+            if 文件ID and 文件ID not in 待删除:
+                待删除.append(文件ID)
+        已删除 = 0
+        for 文件ID in 待删除:
+            if await self.删除文件(文件ID):
+                已删除 += 1
+        return 已删除
 
     async def 请求预上传数据(
         self,

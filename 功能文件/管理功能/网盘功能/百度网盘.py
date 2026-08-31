@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import json
 import re
 import secrets
@@ -14,6 +15,7 @@ from astrbot.api import logger
 
 from 功能文件.管理功能.网盘功能.网盘Cookie import 读取网盘Cookie
 from 功能文件.管理功能.网盘功能 import 网盘状态
+from 功能文件.管理功能.网盘功能 import 网盘清理工具
 
 基础地址 = "https://pan.baidu.com"
 上传地址 = "https://c.pcs.baidu.com/rest/2.0/pcs/superfile2"
@@ -192,6 +194,30 @@ class 百度网盘客户端:
         }
         表单 = {"filelist": json.dumps(文件路径列表, ensure_ascii=False)}
         return await self.请求JSON("POST", "/api/filemanager", params=参数, data=表单)
+
+    async def 清理早于当天小说(
+        self, 上传目录: str, 当前日期: date | None = None
+    ) -> int:
+        """删除上传目录中日期早于当天的小说 TXT，不删除文件夹。"""
+        远端目录 = 规范化目录路径(上传目录)
+        项目列表 = await self.列出目录(远端目录)
+        待删除: list[str] = []
+        for 项目 in 项目列表:
+            if not isinstance(项目, dict) or 是百度文件夹项目(项目):
+                continue
+            if not 网盘清理工具.是早于当天的小说(项目, 当前日期):
+                continue
+            远端路径 = str(项目.get("path") or "").strip()
+            if not 远端路径:
+                远端路径 = 拼接远端路径(远端目录, 项目.get("server_filename") or "")
+            if 远端路径 and 远端路径 not in 待删除:
+                待删除.append(远端路径)
+        if not 待删除:
+            return 0
+        数据 = await self.删除文件(待删除)
+        if str(数据.get("errno")) != "0":
+            raise RuntimeError("百度网盘删除过期小说失败")
+        return len(待删除)
 
     async def 上传文件(
         self, 本地路径: str | Path, 远端目录: str = "/", 文件名: str | None = None

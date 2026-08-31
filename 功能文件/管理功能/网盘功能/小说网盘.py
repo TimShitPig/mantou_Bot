@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime
 import json
 import re
 from pathlib import Path
@@ -37,6 +38,7 @@ from 功能文件.管理功能.网盘功能 import 网盘状态
     "百": "百度",
     "百度": "百度",
 }
+网盘远端清理任务: asyncio.Task[Any] | None = globals().get("网盘远端清理任务")
 
 
 def 设置当前网盘事件(event: Any) -> Any:
@@ -52,7 +54,98 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -
 
 
 async def 停止网盘后台任务() -> None:
+    await 停止每日网盘远端清理任务()
     await 网盘Cookie.停止全部夸克扫码登录任务()
+
+
+async def 清理网盘过期小说文件(
+    配置: Any, 当前日期: date | None = None
+) -> dict[str, int]:
+    """清理所有已启用网盘上传目录中早于当天的 TXT 小说。"""
+    日期 = 当前日期 or datetime.now().astimezone().date()
+    客户端映射 = {
+        "UC": (UC网盘.UC网盘客户端, UC网盘.读取UC上传目录),
+        "夸克": (夸克网盘.夸克网盘客户端, 夸克网盘.读取夸克上传目录),
+        "百度": (百度网盘.百度网盘客户端, 百度网盘.读取百度上传目录),
+    }
+    统计: dict[str, int] = {}
+    for 平台 in 网盘顺序:
+        if not 网盘状态.网盘开关是否开启(配置, 平台):
+            continue
+        账号列表 = 网盘Cookie.获取网盘账号列表(配置, 平台)
+        if not 账号列表:
+            continue
+        客户端类, 读取目录 = 客户端映射[平台]
+        删除数量 = 0
+        for 序号, Cookie in enumerate(账号列表, start=1):
+            try:
+                async with 客户端类(Cookie) as 客户端:
+                    删除数量 += await 客户端.清理早于当天小说(
+                        读取目录(配置), 日期
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as 异常:
+                logger.warning(
+                    "网盘远端旧小说清理失败：平台=%s，账号=%d，错误类型=%s",
+                    平台,
+                    序号,
+                    type(异常).__name__,
+                )
+        if 删除数量:
+            统计[平台] = 删除数量
+    return 统计
+
+
+async def 每日网盘远端清理任务(配置: Any) -> None:
+    """按服务器本地时间每天零点清理网盘旧小说。"""
+    while True:
+        await asyncio.sleep(下载缓存清理.计算下次本地零点等待秒数())
+        try:
+            统计 = await 清理网盘过期小说文件(配置)
+            总数 = sum(统计.values())
+            if 总数:
+                logger.info(
+                    "每日零点网盘旧小说清理完成：数量=%d，平台=%s",
+                    总数,
+                    ",".join(f"{平台}:{数量}" for 平台, 数量 in 统计.items()),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.warning(
+                "每日零点网盘旧小说清理失败：错误类型=%s",
+                type(异常).__name__,
+            )
+
+
+def 启动每日网盘远端清理任务(配置: Any) -> asyncio.Task[Any] | None:
+    global 网盘远端清理任务
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if (
+        网盘远端清理任务 is not None
+        and not 网盘远端清理任务.done()
+        and getattr(网盘远端清理任务, "get_loop", lambda: None)() is 循环
+    ):
+        return 网盘远端清理任务
+    网盘远端清理任务 = 循环.create_task(
+        每日网盘远端清理任务(配置),
+        name="网盘每日旧小说清理",
+    )
+    return 网盘远端清理任务
+
+
+async def 停止每日网盘远端清理任务() -> None:
+    global 网盘远端清理任务
+    任务 = 网盘远端清理任务
+    网盘远端清理任务 = None
+    if 任务 is None or 任务.done():
+        return
+    任务.cancel()
+    await asyncio.gather(任务, return_exceptions=True)
 
 
 def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
