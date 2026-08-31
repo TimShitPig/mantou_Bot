@@ -6,7 +6,8 @@ import hashlib
 import json
 import mimetypes
 import re
-from email.utils import formatdate
+import time
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ class 夸克网盘客户端:
     def __init__(self, cookie: str):
         self.cookie = 清理Cookie(cookie)
         self.session: aiohttp.ClientSession | None = None
+        self.服务器时间偏移秒 = 0.0
 
     async def __aenter__(self) -> "夸克网盘客户端":
         await self.初始化()
@@ -232,41 +234,45 @@ class 夸克网盘客户端:
     async def 上传OSS单分片(
         self, 路径: Path, MD5: str, 上传参数: dict[str, Any]
     ) -> str:
-        当前时间 = formatdate(usegmt=True)
         存储桶 = str(上传参数.get("bucket") or "")
         对象键 = str(上传参数.get("obj_key") or "")
         上传ID = str(上传参数.get("upload_id") or "")
         PDS编号 = str(上传参数.get("pds_id") or PDS_ID)
         OSS用户代理 = "aliyun-sdk-js/1.0.0 Chrome 150.0.0.0 on Windows 10 64-bit"
         内容类型 = mimetypes.guess_type(路径.name)[0] or "application/octet-stream"
-        鉴权元数据 = (
-            f"PUT\n\n{内容类型}\n{当前时间}\n"
-            f"x-oss-date:{当前时间}\n"
-            f"x-oss-user-agent:{OSS用户代理}\n"
-            f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
-        )
-        鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?partNumber=1&uploadId={上传ID}"
-        请求头 = {
-            "authorization": 鉴权键,
-            "x-oss-date": 当前时间,
-            "x-oss-user-agent": OSS用户代理,
-            "content-type": 内容类型,
-        }
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
-        ) as 会话:
-            with 路径.open("rb") as 文件:
-                async with 会话.put(地址, data=文件, headers=请求头) as 响应:
-                    响应文本 = await 响应.text()
-                    if 响应.status not in (200, 201):
+        for 尝试次数 in range(2):
+            当前时间 = self.获取OSS时间()
+            鉴权元数据 = (
+                f"PUT\n\n{内容类型}\n{当前时间}\n"
+                f"x-oss-date:{当前时间}\n"
+                f"x-oss-user-agent:{OSS用户代理}\n"
+                f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
+            )
+            鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
+            请求头 = {
+                "authorization": 鉴权键,
+                "x-oss-date": 当前时间,
+                "x-oss-user-agent": OSS用户代理,
+                "content-type": 内容类型,
+            }
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
+            ) as 会话:
+                with 路径.open("rb") as 文件:
+                    async with 会话.put(地址, data=文件, headers=请求头) as 响应:
+                        响应文本 = await 响应.text()
+                        if 响应.status in (200, 201):
+                            return 提取ETag(响应.headers) or MD5
+                        if 尝试次数 == 0 and 响应.status == 403 and "requesttimeskewed" in 响应文本.lower():
+                            self.同步服务器时间(响应.headers)
+                            continue
                         raise RuntimeError(
                             f"夸克网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
                         )
-                    return 提取ETag(响应.headers) or MD5
+        raise RuntimeError("夸克网盘OSS上传失败：时间校准后仍未成功")
 
     async def 完成OSS单分片(self, ETag: str, 上传参数: dict[str, Any]) -> None:
-        当前时间 = formatdate(usegmt=True)
         存储桶 = str(上传参数.get("bucket") or "")
         对象键 = str(上传参数.get("obj_key") or "")
         上传ID = str(上传参数.get("upload_id") or "")
@@ -288,38 +294,45 @@ class 夸克网盘客户端:
         )
         XML字节 = XML正文.encode("utf-8")
         内容MD5 = base64.b64encode(hashlib.md5(XML字节).digest()).decode("ascii")
-        鉴权元数据 = (
-            f"POST\n{内容MD5}\napplication/xml\n{当前时间}\n"
-            f"x-oss-callback:{回调编码}\n"
-            f"x-oss-date:{当前时间}\n"
-            f"x-oss-user-agent:{OSS用户代理}\n"
-            f"/{PDS编号}/{存储桶}/{对象键}?uploadId={上传ID}"
-        )
-        鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?uploadId={上传ID}"
-        请求头 = {
-            "authorization": 鉴权键,
-            "content-md5": 内容MD5,
-            "content-type": "application/xml",
-            "x-oss-date": 当前时间,
-            "x-oss-user-agent": OSS用户代理,
-            "x-oss-callback": 回调编码,
-        }
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
-        ) as 会话:
-            async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
-                响应文本 = await 响应.text()
-                if 响应.status == 203 and "CallbackFailed" in 响应文本:
-                    logger.warning(
-                        "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
-                        响应.status,
-                    )
-                    return
-                if 响应.status not in (200, 201):
+        for 尝试次数 in range(2):
+            当前时间 = self.获取OSS时间()
+            鉴权元数据 = (
+                f"POST\n{内容MD5}\napplication/xml\n{当前时间}\n"
+                f"x-oss-callback:{回调编码}\n"
+                f"x-oss-date:{当前时间}\n"
+                f"x-oss-user-agent:{OSS用户代理}\n"
+                f"/{PDS编号}/{存储桶}/{对象键}?uploadId={上传ID}"
+            )
+            鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
+            请求头 = {
+                "authorization": 鉴权键,
+                "content-md5": 内容MD5,
+                "content-type": "application/xml",
+                "x-oss-date": 当前时间,
+                "x-oss-user-agent": OSS用户代理,
+                "x-oss-callback": 回调编码,
+            }
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
+            ) as 会话:
+                async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
+                    响应文本 = await 响应.text()
+                    if 响应.status == 203 and "CallbackFailed" in 响应文本:
+                        logger.warning(
+                            "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
+                            响应.status,
+                        )
+                        return
+                    if 响应.status in (200, 201):
+                        return
+                    if 尝试次数 == 0 and 响应.status == 403 and "requesttimeskewed" in 响应文本.lower():
+                        self.同步服务器时间(响应.headers)
+                        continue
                     raise RuntimeError(
                         f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
                     )
+        raise RuntimeError("夸克网盘OSS合并分片失败：时间校准后仍未成功")
 
     async def 获取上传鉴权(self, 上传参数: dict[str, Any], 鉴权元数据: str) -> str:
         数据 = await self.请求JSON(
@@ -438,6 +451,25 @@ class 夸克网盘客户端:
             await asyncio.sleep(计算等待秒数(尝试次数))
         return ""
 
+    def 同步服务器时间(self, 响应头: Any) -> None:
+        """按夸克/OSS Date 响应头校准本次上传会话的签名时间。"""
+        try:
+            日期文本 = str(响应头.get("Date") or "").strip()
+            if not 日期文本:
+                return
+            服务器时间 = parsedate_to_datetime(日期文本).timestamp()
+            偏移 = 服务器时间 - time.time()
+            if abs(偏移) <= 365 * 24 * 60 * 60:
+                self.服务器时间偏移秒 = 偏移
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return
+
+    def 获取OSS时间(self) -> str:
+        return formatdate(
+            timeval=time.time() + float(self.服务器时间偏移秒 or 0),
+            usegmt=True,
+        )
+
     async def 请求JSON(
         self,
         方法: str,
@@ -451,6 +483,7 @@ class 夸克网盘客户端:
         请求参数.update(params or {})
         地址 = 路径 if 路径.startswith("http") else f"{基础接口地址}{路径}"
         async with 会话.request(方法, 地址, params=请求参数, json=json_data) as 响应:
+            self.同步服务器时间(响应.headers)
             文本 = await 响应.text()
             self.刷新会话Cookie(响应)
             if 响应.status >= 400:
