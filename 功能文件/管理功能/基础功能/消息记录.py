@@ -4487,8 +4487,9 @@ def _包装事件发送(发送方法: Any) -> Any:
         try:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
-                会话标识 = str(getattr(getattr(self, "session", None), "session_id", "") or "").strip()
-                消息类型 = getattr(getattr(self, "session", None), "message_type", None)
+                会话 = getattr(self, "session", None)
+                会话标识 = _会话标识兜底(会话)
+                消息类型 = getattr(会话, "message_type", None)
                 类型 = "group" if "GROUP" in str(消息类型).upper() else "user"
                 try:
                     appid = str(getattr(getattr(self, "platform_meta", None), "id", "") or "")
@@ -4501,7 +4502,13 @@ def _包装事件发送(发送方法: Any) -> Any:
         if asyncio.iscoroutine(结果):
             结果 = await 结果
         try:
-            if 会话标识 and 内容 and 结果 is not None:
+            原始消息 = getattr(self, "message_obj", None)
+            原始消息ID = str(
+                getattr(原始消息, "message_id", None)
+                or getattr(原始消息, "id", None)
+                or ""
+            ).strip()
+            if 会话标识 and 内容 and (结果 is not None or 原始消息ID):
                 记录发送消息(
                     会话标识,
                     类型,
@@ -4546,13 +4553,29 @@ def _包装发送方法(发送方法: Any) -> Any:
             结果 = await 结果
         try:
             发送后消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
-            if 会话标识 and 内容 and 发送后消息ID and 发送后消息ID != 发送前消息ID:
+            响应消息ID = _提取发送响应消息ID(结果)
+            if 响应消息ID and 响应消息ID == 发送前消息ID:
+                响应消息ID = ""
+            消息ID = 响应消息ID or (
+                发送后消息ID
+                if 发送后消息ID and 发送后消息ID != 发送前消息ID
+                else ""
+            )
+            # send_by_session 按官方适配器约定返回 None。群聊没有旧消息 ID 时，
+            # 适配器可能实际跳过发送，因此只允许已有会话或明确开启主动发送的群
+            # 在无 ID 时落一条记录；私聊发送成功返回后始终保留本地记录。
+            允许无ID记录 = (
+                类型 == "user"
+                or bool(发送前消息ID)
+                or bool(getattr(self, "_allow_group_proactive_send", False))
+            )
+            if 会话标识 and 内容 and (消息ID or 允许无ID记录):
                 记录发送消息(
                     会话标识,
                     类型,
                     内容,
                     appid,
-                    消息ID=发送后消息ID,
+                    消息ID=消息ID,
                     自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
                     来源="bot_send",
