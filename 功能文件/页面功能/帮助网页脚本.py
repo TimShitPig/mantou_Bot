@@ -2188,7 +2188,25 @@
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
       bindMsgLayoutControls();
       void loadMsgLayout();
-      msgState.timer = setInterval(() => { const active = !document.querySelector('#page-messages')?.hidden; if (active) { if (!msgState.eventTransport) loadMsgChats(); if (msgState.chatId && !msgState.eventTransport) loadMsgHistory(false, true); } }, 30000);
+      // QQ 官方群消息通过 Gateway 事件接收，没有可轮询的群历史 REST 接口。
+      // 这里仅低频校准本地消息记录，事件通道在线时也能修复偶发漏事件，
+      // 不会额外消耗 QQ 官方消息或 bot_state 请求额度。
+      const msgPollOfflineMs = 15000;
+      const msgPollOnlineMs = 60000;
+      let msgLastPollAt = 0;
+      let msgPollPromise = null;
+      const pollLocalMessages = () => {
+        const page = document.querySelector('#page-messages');
+        if (!page || page.hidden || document.visibilityState === 'hidden' || msgPollPromise) return;
+        const now = Date.now();
+        const interval = msgState.eventTransport ? msgPollOnlineMs : msgPollOfflineMs;
+        if (now - msgLastPollAt < interval) return;
+        msgLastPollAt = now;
+        const history = msgState.chatId ? loadMsgHistory(false, true) : Promise.resolve();
+        msgPollPromise = Promise.allSettled([loadMsgChats(), history]).finally(() => { msgPollPromise = null; });
+      };
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); } });
+      msgState.timer = setInterval(pollLocalMessages, 5000);
 
       setView(viewFromUrl(), false); load();
     })();
