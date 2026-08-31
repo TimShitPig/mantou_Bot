@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.14"
+控制台版本 = "5.62.16"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1814,6 +1814,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
             发送方式=str(数据.get("send_mode") or "default"),
              自定义ID=str(数据.get("custom_id") or ""),
              引用消息ID=str(数据.get("quote_message_id") or 数据.get("message_reference_id") or ""),
+             引用消息REFIDX=str(数据.get("quote_message_refidx") or ""),
              图片路径=str(数据.get("image") or ""),
              图片数据=str(数据.get("image_data") or ""),
              图片URL=str(数据.get("image_url") or ""),

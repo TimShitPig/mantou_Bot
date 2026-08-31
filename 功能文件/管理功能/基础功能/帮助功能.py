@@ -1079,7 +1079,13 @@ async def 发送Markdown键盘消息(
     try:
         发送结果 = await _http.request(route, json=消息体)
         响应消息ID = _提取发送响应消息ID(发送结果)
-        _记录MD键盘发送(群openid, 用户openid, md文本, 消息ID=响应消息ID)
+        _记录MD键盘发送(
+            群openid,
+            用户openid,
+            md文本,
+            消息ID=响应消息ID,
+            自身REFIDX=_提取发送响应REFIDX(发送结果),
+        )
         return True
     except Exception as e:
         if not 消息ID or 主动发送:
@@ -1092,7 +1098,13 @@ async def 发送Markdown键盘消息(
         主动消息体.pop("msg_id", None)
         try:
             主动发送结果 = await _http.request(route, json=主动消息体)
-            _记录MD键盘发送(群openid, 用户openid, md文本, 消息ID=_提取发送响应消息ID(主动发送结果))
+            _记录MD键盘发送(
+                群openid,
+                用户openid,
+                md文本,
+                消息ID=_提取发送响应消息ID(主动发送结果),
+                自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+            )
             return True
         except Exception as 主动异常:
             logger.warning(
@@ -1102,12 +1114,20 @@ async def 发送Markdown键盘消息(
             return False
 
 
-def _记录MD键盘发送(群openid: str, 用户openid: str, md文本: str, appid: str = "", 消息ID: str = "") -> None:
+def _记录MD键盘发送(
+    群openid: str,
+    用户openid: str,
+    md文本: str,
+    appid: str = "",
+    消息ID: str = "",
+    自身REFIDX: str = "",
+) -> None:
     """机器人主动发送（MD 键盘/下载完成按钮）成功后写入消息记录，网页可查看。"""
     try:
         from 功能文件.管理功能.基础功能.消息记录 import (
             获取QQ官方平台,
             记录发送消息,
+            _提取发送响应REFIDX,
         )
 
         会话标识 = str(群openid or "").strip() or str(用户openid or "").strip()
@@ -1128,6 +1148,7 @@ def _记录MD键盘发送(群openid: str, 用户openid: str, md文本: str, appi
             展示文本,
             appid,
             消息ID=str(消息ID or "").strip(),
+            自身REFIDX=str(自身REFIDX or "").strip(),
             发送者昵称="机器人",
             来源="bot_active",
         )
@@ -1142,5 +1163,14 @@ def _提取发送响应消息ID(发送结果: Any) -> str:
             return str(发送结果.get("id") or "")
         标识 = getattr(发送结果, "id", None)
         return str(标识 or "") if 标识 is not None else ""
+    except Exception:
+        return ""
+
+
+def _提取发送响应REFIDX(发送结果: Any) -> str:
+    """读取 QQ 官方发送响应中的 ext_info.ref_idx。"""
+    try:
+        扩展 = 读取字段(发送结果, "ext_info")
+        return str(读取字段(扩展, "ref_idx") or 读取字段(扩展, "refidx") or "").strip()
     except Exception:
         return ""

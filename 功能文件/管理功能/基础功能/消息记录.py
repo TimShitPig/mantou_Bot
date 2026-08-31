@@ -213,6 +213,12 @@ def _提取发送响应时间(响应: Any) -> int | None:
     )
 
 
+def _提取发送响应REFIDX(响应: Any) -> str:
+    """读取 QQ 官方发送响应中的 ext_info.ref_idx，用于引用机器人消息。"""
+    扩展 = _提取发送响应字段(响应, "ext_info")
+    return str(_读取字段(扩展, "ref_idx") or _读取字段(扩展, "refidx") or "").strip()
+
+
 def _提取原始消息时间(原始消息: Any) -> Any:
     """从历史消息的 JSON/字典文本取出 QQ 官方原始 timestamp。"""
     数据 = 原始消息
@@ -1766,6 +1772,7 @@ def 记录发送消息(
     appid: str = "",
     *,
     消息ID: str = "",
+    自身REFIDX: str = "",
     引用ID: str = "",
     媒体: dict[str, Any] | None = None,
     发送者昵称: str = "",
@@ -1792,6 +1799,7 @@ def 记录发送消息(
                         "message_id": str(消息ID),
                         "content": 内容,
                         "media": 媒体 or _提取媒体字段(内容),
+                        "refidx": 自身REFIDX or "",
                         "reference_id": 引用ID or "",
                         "is_self": True,
                         "source": 来源 or "web_panel",
@@ -1816,6 +1824,7 @@ def 记录发送消息(
             "id": 发送序号,
             "_session": str(会话标识 or ""),
             "message_id": 消息ID,
+            "refidx": str(自身REFIDX or "").strip(),
             "user_id": "",
             "appid": str(appid or 会话.get("appid") or ""),
             "nickname": 发送者昵称 or "我",
@@ -3369,6 +3378,7 @@ async def 发送消息(
     发送方式: str = "default",
     自定义ID: str = "",
     引用消息ID: str = "",
+    引用消息REFIDX: str = "",
     图片路径: str = "",
     图片数据: str = "",
     图片URL: str = "",
@@ -3425,13 +3435,14 @@ async def 发送消息(
     if 事件ID:
         消息体["event_id"] = 事件ID
     if 引用消息ID:
-        引用目标 = 引用消息ID
+        引用目标 = str(引用消息REFIDX or "").strip() or 引用消息ID
         # QQ 官方引用需优先使用被引用消息自身的 REFIDX，找不到时回退完整消息 ID
-        for 会话记录 in 消息缓存.values():
-            目标 = next((x for x in (会话记录.get("messages") or []) if str(x.get("message_id") or "") == 引用消息ID), None)
-            if 目标 and 目标.get("refidx"):
-                引用目标 = str(目标.get("refidx"))
-                break
+        if not 引用消息REFIDX:
+            for 会话记录 in 消息缓存.values():
+                目标 = next((x for x in (会话记录.get("messages") or []) if str(x.get("message_id") or "") == 引用消息ID), None)
+                if 目标 and 目标.get("refidx"):
+                    引用目标 = str(目标.get("refidx"))
+                    break
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
@@ -3593,6 +3604,7 @@ async def 发送消息(
                     内容,
                     appid,
                     消息ID=文本ID,
+                    自身REFIDX=_提取发送响应REFIDX(文本结果),
                     引用ID=引用消息ID,
                     发送时间=_提取发送响应时间(文本结果),
                 )
@@ -3638,6 +3650,7 @@ async def 发送消息(
                         展示内容 or "（空消息）",
                         appid,
                         消息ID=响应ID,
+                        自身REFIDX=_提取发送响应REFIDX(结果),
                         引用ID=引用消息ID,
                         媒体=媒体记录,
                         发送时间=_提取发送响应时间(结果),
@@ -3682,6 +3695,7 @@ async def 发送消息(
         展示内容 or "（空消息）",
         appid,
         消息ID=响应ID,
+        自身REFIDX=_提取发送响应REFIDX(结果),
         引用ID=引用消息ID,
         媒体=媒体记录,
         发送时间=_提取发送响应时间(结果),
@@ -4016,6 +4030,7 @@ def _包装事件发送(发送方法: Any) -> Any:
                     内容,
                     appid,
                     消息ID=_提取发送响应消息ID(结果),
+                    自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
                     来源="bot_send",
                     发送时间=_提取发送响应时间(结果),
@@ -4060,6 +4075,7 @@ def _包装发送方法(发送方法: Any) -> Any:
                     内容,
                     appid,
                     消息ID=发送后消息ID,
+                    自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
                     来源="bot_send",
                 )

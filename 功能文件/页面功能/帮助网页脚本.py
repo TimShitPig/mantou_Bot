@@ -1188,12 +1188,12 @@
         ta.dispatchEvent(new Event('input'));
         toast(`已插入 @${nick || uid}（将以 Markdown 发送）`);
       };
-      const setMsgQuote = (messageId, userId, nickname, quotedText = '') => {
+      const setMsgQuote = (messageId, userId, nickname, quotedText = '', refidx = '') => {
         const id = String(messageId || '').trim();
         if (!id) return;
         const uid = String(userId || '').trim();
         const name = String(nickname || '').trim();
-        msgState.quote = {id, userId:uid, name, text:String(quotedText || name || '引用消息')};
+        msgState.quote = {id, refidx:String(refidx || '').trim(), userId:uid, name, text:String(quotedText || name || '引用消息')};
         const preview = $('msg-quote-preview');
         const previewText = $('msg-quote-text');
         if (preview) preview.hidden = false;
@@ -1678,9 +1678,10 @@
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || msgState.botIsAdmin);
           const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
+          const quoteReady = Boolean(m.message_id) && !recalled && (!optimisticEntry || sendState === 'sent');
           const actions = [];
           if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
-          if (!isSelf && msgState.chatType === 'group' && m.user_id) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id)}" data-msg-name="${esc(displayNickname)}" type="button">引用</button>`);
+          if (quoteReady) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id || '')}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-name="${esc(displayNickname)}" type="button">引用</button>`);
           if (canMute) actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
@@ -1689,7 +1690,7 @@
           const sendStateHtml = failedSend
             ? `<button class="msg-send-error" data-msg-retry="${esc(optimisticId)}" type="button" title="发送失败，点击重试" aria-label="发送失败，点击重试">!</button>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar">${avatarHtml(av, displayNickname || '?')}</span>
@@ -1737,7 +1738,7 @@
           textarea.focus();
           toast(`已填入 ${command}`);
         }));
-        body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '')));
+        body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
@@ -1750,6 +1751,8 @@
             const isSelf = row.dataset.msgSelf === '1';
             const recalled = row.dataset.msgRecalled === '1';
             const content = row.dataset.msgContent || '';
+            const refidx = row.dataset.msgRefidx || '';
+            const optimistic = msgState.optimisticSends.get(row.dataset.msgOptimistic || '');
             if (msgState.multi) {
               toggleMsgSelect(row, mid);
               return;
@@ -1761,7 +1764,7 @@
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
             if (canMuteRow) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
             if (items.length && !isSelf) items.push({sep:true});
-            if (!isSelf && msgState.chatType === 'group' && mid) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content)});
+            if (mid && !recalled && (!optimistic || optimistic.status === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
             if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
             if (canRecallRow) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
             if (mid) items.push({sep:true});
@@ -2064,7 +2067,7 @@
           ? [imageBefore, imageAfter].filter(Boolean).join('\n')
           : $('msg-textarea').value.trim();
         const customId = $('msg-custom-id')?.value.trim() || '';
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter };
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter };
         if (msgState.sendType === 'media') {
           payload.media_file_type = Number($('msg-media-type')?.value || 1);
           payload.media = $('msg-media-path')?.value.trim() || '';
