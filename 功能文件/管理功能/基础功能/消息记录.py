@@ -149,7 +149,24 @@ def 记录主动消息权限(会话标识: str, 会话类型: str, 允许: bool)
 
 
 def 主动消息是否允许(会话标识: str, 会话类型: str) -> bool | None:
-    """返回已知主动消息权限；未知时返回 None。"""
+    """返回已知主动消息权限；未知时返回 None。
+
+    群状态接口返回的权限优先于发送结果缓存，避免在已明确禁止主动推送
+    时仍尝试调用发送接口。实际查询由异步 ``查询群主动消息权限`` 完成。
+    """
+    if str(会话类型 or "").strip().lower() == "group":
+        读取状态 = globals().get("_读取群机器人状态")
+        if callable(读取状态):
+            try:
+                状态 = 读取状态(会话标识)
+            except Exception:
+                状态 = {}
+            if isinstance(状态, dict):
+                if str(状态.get("status") or "").strip().lower() == "removed":
+                    return False
+                明确权限 = 状态.get("allow_proactive_msg")
+                if isinstance(明确权限, bool):
+                    return 明确权限
     键 = _主动消息权限键(会话标识, 会话类型)
     项 = 主动消息权限缓存.get(键)
     if not 项:
@@ -167,7 +184,7 @@ def 清除主动消息权限(会话标识: str, 会话类型: str = "") -> None:
 
 
 def 主动消息无权限(异常: Any) -> bool:
-    """识别 QQ 官方主动消息权限错误，不依赖未文档化的查询接口。"""
+    """识别 QQ 官方发送接口返回的主动消息权限错误。"""
     文本 = str(异常 or "").lower()
     return any(
         关键词 in 文本
@@ -2263,18 +2280,38 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
         检查时间 = int(原始.get("checked_at") or 0)
     except (TypeError, ValueError):
         检查时间 = 0
+    允许主动消息 = 原始.get("allow_proactive_msg")
+    if isinstance(允许主动消息, str):
+        文本 = 允许主动消息.strip().lower()
+        if 文本 in {"true", "1", "yes", "on", "开启"}:
+            允许主动消息 = True
+        elif 文本 in {"false", "0", "no", "off", "关闭"}:
+            允许主动消息 = False
+        else:
+            允许主动消息 = None
+    elif not isinstance(允许主动消息, bool):
+        允许主动消息 = None
     return {
         "status": 状态,
         "checked_at": max(0, 检查时间),
         "appid": str(原始.get("appid") or "").strip(),
         "member_role": str(原始.get("member_role") or "").strip().lower(),
+        "allow_proactive_msg": 允许主动消息,
+        "recv_msg_setting": str(原始.get("recv_msg_setting") or "").strip().lower(),
     }
 
 
 def _读取群机器人状态(会话标识: str) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
-        return {"status": "unknown", "checked_at": 0, "appid": "", "member_role": ""}
+        return {
+            "status": "unknown",
+            "checked_at": 0,
+            "appid": "",
+            "member_role": "",
+            "allow_proactive_msg": None,
+            "recv_msg_setting": "",
+        }
     状态 = 群机器人状态缓存.get(会话标识)
     if isinstance(状态, dict):
         return _解析群机器人状态值(状态)
@@ -2286,9 +2323,18 @@ def _读取群机器人状态(会话标识: str) -> dict[str, Any]:
                 "checked_at": 信息.get("membership_checked_at") or 信息.get("updated_at") or 0,
                 "appid": 信息.get("appid") or "",
                 "member_role": 信息.get("member_role") or "",
+                "allow_proactive_msg": 信息.get("allow_proactive_msg"),
+                "recv_msg_setting": 信息.get("recv_msg_setting") or "",
             }
         )
-    return {"status": "unknown", "checked_at": 0, "appid": "", "member_role": ""}
+    return {
+        "status": "unknown",
+        "checked_at": 0,
+        "appid": "",
+        "member_role": "",
+        "allow_proactive_msg": None,
+        "recv_msg_setting": "",
+    }
 
 
 def 获取群机器人状态(会话标识: str) -> str:
@@ -2304,12 +2350,21 @@ def _设置群机器人状态(
     状态: str,
     appid: str = "",
     成员角色: str = "",
+    允许主动消息: bool | None = None,
+    接收消息设置: str = "",
     *,
     持久化: bool = True,
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
-        return {"status": "unknown", "checked_at": 0, "appid": "", "member_role": ""}
+        return {
+            "status": "unknown",
+            "checked_at": 0,
+            "appid": "",
+            "member_role": "",
+            "allow_proactive_msg": None,
+            "recv_msg_setting": "",
+        }
     状态 = str(状态 or "unknown").strip().lower()
     if 状态 not in {"active", "removed", "unknown"}:
         状态 = "unknown"
@@ -2319,6 +2374,16 @@ def _设置群机器人状态(
         "checked_at": int(time.time()),
         "appid": str(appid or "").strip(),
         "member_role": str(成员角色 or "").strip().lower(),
+        "allow_proactive_msg": (
+            允许主动消息
+            if isinstance(允许主动消息, bool)
+            else (群机器人状态缓存.get(会话标识) or {}).get("allow_proactive_msg")
+        ),
+        "recv_msg_setting": str(
+            接收消息设置
+            or (群机器人状态缓存.get(会话标识) or {}).get("recv_msg_setting")
+            or ""
+        ).strip().lower(),
     }
     群机器人状态缓存[会话标识] = 记录
     信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
@@ -2328,6 +2393,10 @@ def _设置群机器人状态(
         信息["appid"] = 记录["appid"]
     if 记录["member_role"]:
         信息["member_role"] = 记录["member_role"]
+    if isinstance(记录.get("allow_proactive_msg"), bool):
+        信息["allow_proactive_msg"] = 记录["allow_proactive_msg"]
+    if 记录.get("recv_msg_setting"):
+        信息["recv_msg_setting"] = 记录["recv_msg_setting"]
     if 记录["member_role"] in {"owner", "admin"}:
         信息["is_admin"] = True
     elif 状态 == "removed":
@@ -2381,6 +2450,10 @@ def _恢复群机器人状态() -> None:
                 信息["appid"] = 记录["appid"]
             if 记录["member_role"]:
                 信息["member_role"] = 记录["member_role"]
+            if isinstance(记录.get("allow_proactive_msg"), bool):
+                信息["allow_proactive_msg"] = 记录["allow_proactive_msg"]
+            if 记录.get("recv_msg_setting"):
+                信息["recv_msg_setting"] = 记录["recv_msg_setting"]
             if 记录["status"] == "removed":
                 信息["is_admin"] = False
     except Exception as 异常:
@@ -2447,11 +2520,54 @@ async def _查询群机器人状态(
         if not 成员OpenID:
             raise RuntimeError("群机器人状态缺少成员标识")
         角色 = str(响应.get("member_role") or "member").strip().lower()
-        return _设置群机器人状态(会话标识, "active", appid, 角色, 持久化=True)
+        允许主动消息 = 响应.get("allow_proactive_msg")
+        if isinstance(允许主动消息, str):
+            允许主动消息文本 = 允许主动消息.strip().lower()
+            if 允许主动消息文本 in {"true", "1", "yes", "on", "开启"}:
+                允许主动消息 = True
+            elif 允许主动消息文本 in {"false", "0", "no", "off", "关闭"}:
+                允许主动消息 = False
+            else:
+                允许主动消息 = None
+        elif not isinstance(允许主动消息, bool):
+            允许主动消息 = None
+        记录 = _设置群机器人状态(
+            会话标识,
+            "active",
+            appid,
+            角色,
+            允许主动消息,
+            str(响应.get("recv_msg_setting") or ""),
+            持久化=True,
+        )
+        return 记录
     except Exception as 异常:
         if _异常表示群机器人已移除(异常):
             return _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
         return 现有
+
+
+async def 查询群主动消息权限(会话标识: str, appid: str = "") -> bool | None:
+    """查询 QQ 官方群内主动消息权限，并复用长期群状态缓存。
+
+    返回 ``True`` 表示允许主动推送，``False`` 表示明确禁止或机器人已
+    被移出群，``None`` 表示当前无法从官方状态或缓存确认。私聊没有对应
+    的群状态接口，因此只返回已有的发送结果缓存。
+    """
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识:
+        return None
+    if not str(appid or "").strip():
+        appid = str((_读取群机器人状态(会话标识) or {}).get("appid") or "").strip()
+    状态 = await _查询群机器人状态(会话标识, appid)
+    if str(状态.get("status") or "").strip().lower() == "removed":
+        记录主动消息权限(会话标识, "group", False)
+        return False
+    权限 = 状态.get("allow_proactive_msg")
+    if isinstance(权限, bool):
+        记录主动消息权限(会话标识, "group", 权限)
+        return 权限
+    return 主动消息是否允许(会话标识, "group")
 
 
 def _获取群信息appid(会话标识: str, appid: str = "") -> str:
@@ -2687,6 +2803,11 @@ def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
     成员状态 = _读取群机器人状态(会话标识)
     返回.setdefault("membership_status", str(成员状态.get("status") or "unknown"))
     返回.setdefault("membership_checked_at", int(成员状态.get("checked_at") or 0))
+    if isinstance(成员状态.get("allow_proactive_msg"), bool):
+        返回.setdefault("allow_proactive_msg", 成员状态["allow_proactive_msg"])
+    else:
+        返回.setdefault("allow_proactive_msg", None)
+    返回.setdefault("recv_msg_setting", str(成员状态.get("recv_msg_setting") or ""))
     返回["in_group"] = 返回.get("membership_status") != "removed"
     return 返回
 
@@ -3268,6 +3389,8 @@ async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
         "bot_role": 机器人角色,
         "bot_in_group": 状态.get("status") != "removed",
         "membership_status": str(状态.get("status") or "unknown"),
+        "allow_proactive_msg": 状态.get("allow_proactive_msg"),
+        "recv_msg_setting": str(状态.get("recv_msg_setting") or ""),
     }
 
 
@@ -3451,11 +3574,12 @@ async def 发送消息(
     类型 = _规范化消息类型(类型)
     发送方式 = _规范化发送方式(发送方式)
     内容 = str(内容 or "").strip()
-    权限会话类型 = str(
+    会话类型 = str(
         会话类型
         or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
         or "group"
-    ).strip()
+    ).strip().lower()
+    权限会话类型 = 会话类型
     平台实例 = 获取QQ官方平台(appid=appid)
     通道 = 获取HTTP通道(平台实例)
     if 通道 is None:
@@ -3483,8 +3607,13 @@ async def 发送消息(
         return {"ok": False, "message": "发送失败：该群最近没有收到新消息，无法主动发送。请先在群里发一条消息后 2 分钟内重试，或确认该群已开启全量消息接收。"}
     事件ID = 自定义ID if 发送方式 == "custom_event_id" else ""
     实际使用主动消息 = not 被动ID and not 事件ID
-    if 实际使用主动消息 and 主动消息是否允许(会话标识, 权限会话类型) is False:
-        return {"ok": False, "message": "发送失败：主动消息权限未开启"}
+    if 实际使用主动消息:
+        if 权限会话类型 == "group":
+            查询权限 = await 查询群主动消息权限(会话标识, appid)
+            if 查询权限 is False:
+                return {"ok": False, "message": "发送失败：主动消息权限未开启"}
+        elif 主动消息是否允许(会话标识, 权限会话类型) is False:
+            return {"ok": False, "message": "发送失败：主动消息权限未开启"}
     消息体: dict[str, Any] = {
         "msg_type": 0,
         "content": 内容,
