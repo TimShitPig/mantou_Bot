@@ -1544,7 +1544,7 @@
         if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
         return safeMediaUrl(raw);
       };
-      const mediaProxyUrl = (src, mode = 'image', name = '') => {
+      const mediaProxyUrl = (src, mode = 'image', name = '', messageId = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
         try {
@@ -1554,6 +1554,7 @@
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
           if (name) query.set('name', name);
+          if (messageId) query.set('message_id', String(messageId));
           return `/api/message/media?${query.toString()}`;
         } catch (_) { return direct; }
       };
@@ -1573,7 +1574,7 @@
         if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
         return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
       };
-      const renderMessageMedia = (value) => {
+      const renderMessageMedia = (value, messageId = '') => {
         if (!value) return '';
         const items = Array.isArray(value?.items) && value.items.length ? value.items : [value];
         return items.map((item) => {
@@ -1588,11 +1589,11 @@
           const isVideo = ['视频', 'video'].includes(typeLower) || contentType.startsWith('video/');
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
-            const preview = mediaProxyUrl(src, 'image');
+            const preview = mediaProxyUrl(src, 'image', '', messageId);
             return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
-            const videoUrl = mediaProxyUrl(src, 'file');
+            const videoUrl = mediaProxyUrl(src, 'file', '', messageId);
             return `<div class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
           }
           const name = mediaFileName(item, src);
@@ -1600,7 +1601,7 @@
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
           if (!src) return `<div class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
-          const fileUrl = mediaProxyUrl(src, 'file', name);
+          const fileUrl = mediaProxyUrl(src, 'file', name, messageId);
           return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
       };
@@ -1809,7 +1810,7 @@
           // 撤回只改变颜色和标签，保留撤回前的正文、引用和媒体。
           const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
           const mediaData = m.media;
-          const media = renderMessageMedia(mediaData);
+          const media = renderMessageMedia(mediaData, m.message_id);
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
           let content = stripMediaMarker(renderedContent, mediaData);

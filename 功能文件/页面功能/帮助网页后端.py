@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.73.1"
+控制台版本 = "5.73.2"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -46,12 +46,29 @@ except Exception:
 }
 媒体代理最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
-媒体缓存目录 = Path(tempfile.gettempdir()) / "mantou_bot_media"
-媒体缓存有效期秒 = 3 * 24 * 60 * 60
+
+
+def _默认媒体缓存目录() -> Path:
+    """优先落到 AstrBot 数据目录，避免系统临时目录被重启清空。"""
+    try:
+        插件根目录 = Path(__file__).resolve().parents[2]
+        if 插件根目录.parent.name.lower() == "plugins":
+            return 插件根目录.parent.parent / "mantou_bot_media"
+    except (OSError, IndexError):
+        pass
+    return Path(tempfile.gettempdir()) / "mantou_bot_media"
+
+
+媒体缓存目录 = _默认媒体缓存目录()
+媒体缓存旧目录 = Path(tempfile.gettempdir()) / "mantou_bot_media"
+媒体缓存迁移完成 = False
+媒体缓存有效期秒 = 30 * 24 * 60 * 60
 媒体缓存最大字节数 = 512 * 1024 * 1024
 媒体缓存清理间隔秒 = 5 * 60
 媒体缓存上次清理时间 = float(globals().get("媒体缓存上次清理时间", 0.0) or 0.0)
 媒体缓存锁 = globals().get("媒体缓存锁") or threading.RLock()
+媒体消息索引: dict[str, tuple[Path, str]] = {}
+媒体消息索引已加载 = False
 媒体代理主机后缀 = (
     "multimedia.nt.qq.com.cn",
     "qqbot.ugcimg.cn",
@@ -888,8 +905,34 @@ def _媒体缓存路径(地址: str) -> tuple[Path, Path]:
     return 媒体缓存目录 / f"{标识}.cache", 媒体缓存目录 / f"{标识}.json"
 
 
+def _迁移旧媒体缓存() -> None:
+    """把升级前的系统临时缓存迁移到持久目录，保留仍有效的图片。"""
+    global 媒体缓存迁移完成
+    if 媒体缓存迁移完成 or 媒体缓存旧目录 == 媒体缓存目录:
+        媒体缓存迁移完成 = True
+        return
+    媒体缓存迁移完成 = True
+    if not 媒体缓存旧目录.is_dir():
+        return
+    try:
+        媒体缓存目录.mkdir(parents=True, exist_ok=True)
+        for 路径 in 媒体缓存旧目录.iterdir():
+            if 路径.suffix not in {".cache", ".json"}:
+                continue
+            目标 = 媒体缓存目录 / 路径.name
+            if 目标.exists():
+                continue
+            try:
+                路径.replace(目标)
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
 def _清理媒体缓存() -> None:
     global 媒体缓存上次清理时间
+    _迁移旧媒体缓存()
     当前时间 = time.time()
     with 媒体缓存锁:
         if 当前时间 - 媒体缓存上次清理时间 < 媒体缓存清理间隔秒:
@@ -919,7 +962,55 @@ def _清理媒体缓存() -> None:
             总大小 -= 大小
 
 
-def _读取媒体缓存(地址: str) -> tuple[Path, str] | None:
+def _读取媒体缓存按消息ID(消息ID: str) -> tuple[Path, str] | None:
+    """按消息 ID 回退查找已落盘媒体，避免依赖已过期的 QQ 签名 URL。"""
+    global 媒体消息索引已加载
+    消息ID = str(消息ID or "").strip()
+    if not 消息ID or len(消息ID) > 512 or not 媒体缓存目录.is_dir():
+        return None
+    当前时间 = time.time()
+    with 媒体缓存锁:
+        if not 媒体消息索引已加载:
+            try:
+                for 元数据路径 in 媒体缓存目录.glob("*.json"):
+                    try:
+                        元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
+                        if not isinstance(元数据, dict):
+                            continue
+                        消息ID列表 = 元数据.get("message_ids")
+                        if not isinstance(消息ID列表, list):
+                            消息ID列表 = [元数据.get("message_id")]
+                        文件路径 = 元数据路径.with_suffix(".cache")
+                        类型 = str(元数据.get("content_type") or "application/octet-stream")
+                        if not 类型 or not 文件路径.is_file():
+                            continue
+                        for 当前消息ID in 消息ID列表:
+                            当前消息ID = str(当前消息ID or "").strip()
+                            if 当前消息ID:
+                                媒体消息索引[当前消息ID] = (文件路径, 类型)
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                        continue
+            except OSError:
+                pass
+            媒体消息索引已加载 = True
+        缓存项目 = 媒体消息索引.get(消息ID)
+        if not 缓存项目:
+            return None
+        文件路径, 类型 = 缓存项目
+        try:
+            状态 = 文件路径.stat()
+            if 当前时间 - 状态.st_mtime > 媒体缓存有效期秒:
+                媒体消息索引.pop(消息ID, None)
+                文件路径.unlink(missing_ok=True)
+                文件路径.with_suffix(".json").unlink(missing_ok=True)
+                return None
+        except OSError:
+            媒体消息索引.pop(消息ID, None)
+            return None
+        return 文件路径, 类型
+
+
+def _读取媒体缓存(地址: str, 消息ID: str = "") -> tuple[Path, str] | None:
     _清理媒体缓存()
     文件路径, 元数据路径 = _媒体缓存路径(地址)
     try:
@@ -927,30 +1018,58 @@ def _读取媒体缓存(地址: str) -> tuple[Path, str] | None:
         if time.time() - 状态.st_mtime > 媒体缓存有效期秒:
             文件路径.unlink(missing_ok=True)
             元数据路径.unlink(missing_ok=True)
-            return None
+            return _读取媒体缓存按消息ID(消息ID)
         元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
+        if not isinstance(元数据, dict):
+            return _读取媒体缓存按消息ID(消息ID)
         类型 = str(元数据.get("content_type") or "application/octet-stream")
         if not 类型:
-            return None
+            return _读取媒体缓存按消息ID(消息ID)
         return 文件路径, 类型
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+        return _读取媒体缓存按消息ID(消息ID)
 
 
-def _写入媒体缓存元数据(地址: str, 内容类型: str, 大小: int) -> None:
+def _写入媒体缓存元数据(
+    地址: str, 内容类型: str, 大小: int, 消息ID: str = ""
+) -> None:
     _, 元数据路径 = _媒体缓存路径(地址)
     try:
         媒体缓存目录.mkdir(parents=True, exist_ok=True)
+        旧元数据: dict[str, Any] = {}
+        try:
+            旧元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            旧元数据 = {}
+        if not isinstance(旧元数据, dict):
+            旧元数据 = {}
+        消息ID列表 = [
+            str(值 or "").strip()
+            for 值 in (旧元数据.get("message_ids") or [旧元数据.get("message_id")])
+            if str(值 or "").strip()
+        ]
+        消息ID = str(消息ID or "").strip()
+        if 消息ID and 消息ID not in 消息ID列表:
+            消息ID列表.append(消息ID)
+        元数据: dict[str, Any] = {
+            "content_type": str(内容类型 or "application/octet-stream"),
+            "size": int(大小),
+        }
+        if 消息ID列表:
+            元数据["message_ids"] = 消息ID列表[-32:]
         临时路径 = 元数据路径.with_name(f".{元数据路径.name}.{secrets.token_hex(6)}.tmp")
         临时路径.write_text(
-            json.dumps(
-                {"content_type": str(内容类型 or "application/octet-stream"), "size": int(大小)},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
+            json.dumps(元数据, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
         )
         临时路径.replace(元数据路径)
+        文件路径 = 元数据路径.with_suffix(".cache")
+        with 媒体缓存锁:
+            for 当前消息ID in 消息ID列表:
+                媒体消息索引[当前消息ID] = (
+                    文件路径,
+                    str(内容类型 or "application/octet-stream"),
+                )
     except OSError:
         pass
 
@@ -973,7 +1092,7 @@ def _媒体缓存响应(
     return web.FileResponse(文件路径, headers=响应头)
 
 
-async def 预缓存消息媒体(媒体: Any) -> bool:
+async def 预缓存消息媒体(媒体: Any, 消息ID: str = "") -> bool:
     """在 QQ 临时签名地址有效时落盘，供历史消息继续查看媒体。"""
     项目 = 媒体
     if isinstance(媒体, dict):
@@ -987,9 +1106,21 @@ async def 预缓存消息媒体(媒体: Any) -> bool:
     地址 = str(
         项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
     ).strip()
+    消息ID = str(消息ID or "").strip()[:512]
     if len(地址) > 8192 or not _允许媒体地址(地址):
         return False
-    if _读取媒体缓存(地址) is not None:
+    已有缓存 = _读取媒体缓存(地址, 消息ID)
+    if 已有缓存 is not None:
+        if 消息ID:
+            try:
+                _写入媒体缓存元数据(
+                    地址,
+                    已有缓存[1],
+                    已有缓存[0].stat().st_size,
+                    消息ID,
+                )
+            except OSError:
+                pass
         return True
     类型值 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
     模式 = "image" if 类型值 in {"图片", "image", "img"} else "file"
@@ -1044,7 +1175,7 @@ async def 预缓存消息媒体(媒体: Any) -> bool:
                     return False
                 临时路径.replace(缓存路径)
                 临时路径 = None
-                _写入媒体缓存元数据(地址, 内容类型, 已写入)
+                _写入媒体缓存元数据(地址, 内容类型, 已写入, 消息ID)
                 return True
     except asyncio.CancelledError:
         raise
@@ -1072,7 +1203,8 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if 模式 not in {"image", "file"}:
         模式 = "file"
     文件名 = _媒体文件名(request.query.get("name"))
-    已缓存 = _读取媒体缓存(地址)
+    消息ID = str(request.query.get("message_id") or "").strip()[:512]
+    已缓存 = _读取媒体缓存(地址, 消息ID)
     if 已缓存 is not None:
         return _媒体缓存响应(request, 已缓存, 模式, 文件名)
     缓存临时路径: Path | None = None
@@ -1169,7 +1301,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     ):
                         缓存路径, _ = _媒体缓存路径(地址)
                         缓存临时路径.replace(缓存路径)
-                        _写入媒体缓存元数据(地址, 类型, 已发送)
+                        _写入媒体缓存元数据(地址, 类型, 已发送, 消息ID)
                     elif 缓存临时路径 is not None:
                         缓存临时路径.unlink(missing_ok=True)
                 await 响应.write_eof()

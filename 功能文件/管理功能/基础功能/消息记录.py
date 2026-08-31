@@ -157,9 +157,13 @@ def _默认临时Markdown图片目录() -> Path:
     return Path(tempfile.gettempdir()) / "mantou_bot_markdown_images"
 
 
-_临时Markdown图片目录 = globals().get("_临时Markdown图片目录") or _默认临时Markdown图片目录()
-_临时Markdown图片有效期秒 = 3 * 24 * 60 * 60
-_临时Markdown图片最大数量 = 64
+_临时Markdown图片旧目录 = globals().get("_临时Markdown图片目录") or (
+    Path(tempfile.gettempdir()) / "mantou_bot_markdown_images"
+)
+_临时Markdown图片目录 = _默认临时Markdown图片目录()
+_临时Markdown图片迁移完成 = False
+_临时Markdown图片有效期秒 = 30 * 24 * 60 * 60
+_临时Markdown图片最大数量 = 256
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -1320,8 +1324,34 @@ def _临时Markdown图片路径(标识: str) -> tuple[Path, Path]:
     )
 
 
+def _迁移旧临时Markdown图片() -> None:
+    """把旧版本缓存迁移到当前数据目录，避免重载后令牌指向空目录。"""
+    global _临时Markdown图片迁移完成
+    if _临时Markdown图片迁移完成 or _临时Markdown图片旧目录 == _临时Markdown图片目录:
+        _临时Markdown图片迁移完成 = True
+        return
+    _临时Markdown图片迁移完成 = True
+    if not _临时Markdown图片旧目录.is_dir():
+        return
+    try:
+        _临时Markdown图片目录.mkdir(parents=True, exist_ok=True)
+        for 路径 in _临时Markdown图片旧目录.iterdir():
+            if 路径.suffix not in {".bin", ".json"}:
+                continue
+            目标 = _临时Markdown图片目录 / 路径.name
+            if 目标.exists():
+                continue
+            try:
+                路径.replace(目标)
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
 def _清理临时Markdown图片磁盘(现在: float | None = None) -> None:
     """清理过期或超量的 Markdown 图片磁盘缓存。"""
+    _迁移旧临时Markdown图片()
     当前时间 = float(现在 if 现在 is not None else time.time())
     try:
         if not _临时Markdown图片目录.is_dir():
@@ -1922,7 +1952,7 @@ def _取媒体预缓存信号量() -> asyncio.Semaphore | None:
     return _媒体预缓存信号量
 
 
-async def _预缓存收到消息媒体(媒体: Any) -> None:
+async def _预缓存收到消息媒体(媒体: Any, 消息ID: str = "") -> None:
     """在 QQ 临时地址有效期内把媒体写入网页缓存，不阻塞消息接收 worker。"""
     信号量 = _取媒体预缓存信号量()
     if 信号量 is None:
@@ -1931,7 +1961,7 @@ async def _预缓存收到消息媒体(媒体: Any) -> None:
         from 功能文件.页面功能 import 帮助网页后端
 
         async with 信号量:
-            await 帮助网页后端.预缓存消息媒体(媒体)
+            await 帮助网页后端.预缓存消息媒体(媒体, 消息ID)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1944,6 +1974,7 @@ def _排队媒体预缓存(记录: Any) -> bool:
         return False
     媒体 = 记录.get("media")
     地址 = _媒体预缓存地址(媒体)
+    消息ID = str(记录.get("message_id") or "").strip()
     if not 地址 or 地址 in _媒体预缓存地址中:
         return False
     if len(_媒体预缓存任务) >= _媒体预缓存最大任务数:
@@ -1954,7 +1985,9 @@ def _排队媒体预缓存(记录: Any) -> bool:
         return False
     _媒体预缓存地址中.add(地址)
     try:
-        任务 = 循环.create_task(_预缓存收到消息媒体(copy.deepcopy(媒体)))
+        任务 = 循环.create_task(
+            _预缓存收到消息媒体(copy.deepcopy(媒体), 消息ID)
+        )
     except Exception:
         _媒体预缓存地址中.discard(地址)
         return False
