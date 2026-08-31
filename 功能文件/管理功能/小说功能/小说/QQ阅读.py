@@ -4415,11 +4415,12 @@ async def 生成下载回复流(
             原始目录数 = len(catalog)
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
             账号有VIP = _是真值(details.get("is_vip"))
-            if 账号有VIP:
+            使用第三方整本 = not 账号有VIP and 付费类型 in {"free", "vip"}
+            if not 使用第三方整本:
                 catalog = 获取QQ阅读可下载目录(details, catalog)
             else:
-                # 非 VIP 账号的第三方明文接口按原始目录取整本，不能套用 QQ
-                # 阅读账号的 max_free_chapter 限制；接口自身负责返回可用正文。
+                # 非 VIP 的免费书和 VIP 书把第三方明文接口当作 VIP 使用，
+                # 按原始目录取整本；单独付费书仍走上面的免费章节筛选。
                 catalog = [
                     {
                         **dict(项目),
@@ -4433,7 +4434,7 @@ async def 生成下载回复流(
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
-            正文来源 = "官方账号接口" if 账号有VIP else "免费明文接口"
+            正文来源 = "免费明文接口" if 使用第三方整本 else "官方账号接口"
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
@@ -4444,14 +4445,14 @@ async def 生成下载回复流(
             yield 格式化下载提示(details, len(catalog))
 
             stage = "content"
-            if not 账号有VIP:
+            if 使用第三方整本:
                 logger.debug(
                     f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP=否, 来源=免费正文接口"
                 )
                 chapters = await 下载QQ阅读免费正文API(book_id, catalog)
             else:
                 logger.debug(
-                    f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP=是, 来源=账号正文接口"
+                    f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP={'是' if 账号有VIP else '否'}, 来源=账号正文接口"
                 )
                 chapters = (
                     await 下载参考出版书正文(book_id, catalog, session)
