@@ -1062,6 +1062,21 @@ async def 发送Markdown键盘消息(
 
     群openid = 获取群openid同步(event)
     用户openid = 获取用户openid同步(event)
+    try:
+        from 功能文件.管理功能.基础功能.消息记录 import (
+            主动消息是否允许,
+            记录主动消息权限,
+            主动消息无权限,
+        )
+    except Exception:
+        主动消息是否允许 = lambda *args, **kwargs: None
+        记录主动消息权限 = lambda *args, **kwargs: None
+        主动消息无权限 = lambda *args, **kwargs: False
+    目标会话 = str(群openid or 用户openid or "").strip()
+    目标类型 = "group" if 群openid else "user"
+    if 主动发送 and 目标会话 and 主动消息是否允许(目标会话, 目标类型) is False:
+        logger.debug("QQ官方主动消息已跳过：已知目标未开启主动消息权限")
+        return False
     if 群openid:
         route = Route(
             "POST", "/v2/groups/{group_openid}/messages", group_openid=群openid
@@ -1078,6 +1093,8 @@ async def 发送Markdown键盘消息(
 
     try:
         发送结果 = await _http.request(route, json=消息体)
+        if 主动发送 and 目标会话:
+            记录主动消息权限(目标会话, 目标类型, True)
         响应消息ID = _提取发送响应消息ID(发送结果)
         _记录MD键盘发送(
             群openid,
@@ -1088,6 +1105,8 @@ async def 发送Markdown键盘消息(
         )
         return True
     except Exception as e:
+        if 主动发送 and 目标会话 and 主动消息无权限(e):
+            记录主动消息权限(目标会话, 目标类型, False)
         if not 消息ID or 主动发送:
             logger.warning(f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}")
             return False
@@ -1096,8 +1115,13 @@ async def 发送Markdown键盘消息(
         # QQ 官方 API 支持不带 msg_id 的主动发送，避免完成按钮丢失。
         主动消息体 = dict(消息体)
         主动消息体.pop("msg_id", None)
+        if 目标会话 and 主动消息是否允许(目标会话, 目标类型) is False:
+            logger.debug("QQ官方主动消息已跳过：已知目标未开启主动消息权限")
+            return False
         try:
             主动发送结果 = await _http.request(route, json=主动消息体)
+            if 目标会话:
+                记录主动消息权限(目标会话, 目标类型, True)
             _记录MD键盘发送(
                 群openid,
                 用户openid,
@@ -1107,6 +1131,8 @@ async def 发送Markdown键盘消息(
             )
             return True
         except Exception as 主动异常:
+            if 目标会话 and 主动消息无权限(主动异常):
+                记录主动消息权限(目标会话, 目标类型, False)
             logger.warning(
                 f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}；"
                 f"主动发送也失败: {type(主动异常).__name__}: {主动异常}"

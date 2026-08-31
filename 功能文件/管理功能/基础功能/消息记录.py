@@ -110,6 +110,8 @@ _消息事件队列上限 = 512
 _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
+主动消息权限缓存: dict[str, tuple[str, float]] = globals().get("主动消息权限缓存") or {}
+主动消息权限缓存有效期秒 = 30 * 60
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 _提及规则 = re.compile(r"<@!?([A-Za-z0-9_-]{5,128})>")
@@ -131,6 +133,54 @@ def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
     if isinstance(对象, dict):
         return 对象.get(字段名, 默认值)
     return getattr(对象, 字段名, 默认值)
+
+
+def _主动消息权限键(会话标识: str, 会话类型: str = "") -> str:
+    类型 = "user" if str(会话类型 or "").strip().lower() == "user" else "group"
+    return f"{类型}:{str(会话标识 or '').strip()}"
+
+
+def 记录主动消息权限(会话标识: str, 会话类型: str, 允许: bool) -> None:
+    """记录最近一次主动消息结果，避免反复请求已确认无权限的会话。"""
+    键 = _主动消息权限键(会话标识, 会话类型)
+    if 键.endswith(":"):
+        return
+    主动消息权限缓存[键] = ("allowed" if 允许 else "denied", time.time())
+
+
+def 主动消息是否允许(会话标识: str, 会话类型: str) -> bool | None:
+    """返回已知主动消息权限；未知时返回 None。"""
+    键 = _主动消息权限键(会话标识, 会话类型)
+    项 = 主动消息权限缓存.get(键)
+    if not 项:
+        return None
+    状态, 时间戳 = 项
+    if time.time() - float(时间戳 or 0) >= 主动消息权限缓存有效期秒:
+        主动消息权限缓存.pop(键, None)
+        return None
+    return 状态 == "allowed"
+
+
+def 清除主动消息权限(会话标识: str, 会话类型: str = "") -> None:
+    """收到新消息后清除旧的拒绝结果，允许下一次重新探测。"""
+    主动消息权限缓存.pop(_主动消息权限键(会话标识, 会话类型), None)
+
+
+def 主动消息无权限(异常: Any) -> bool:
+    """识别 QQ 官方主动消息权限错误，不依赖未文档化的查询接口。"""
+    文本 = str(异常 or "").lower()
+    return any(
+        关键词 in 文本
+        for 关键词 in (
+            "主动消息失败",
+            "主动发送失败",
+            "主动消息无权限",
+            "主动发送无权限",
+            "40034105",
+            "no permission",
+            "not allowed",
+        )
+    )
 
 
 def _转数字时间戳(时间戳: Any) -> int | None:
@@ -1527,6 +1577,8 @@ def 记录收到消息(
             成员标识 = _提取成员标识(消息, "group")
         if not 会话标识:
             return None
+        if not is_self:
+            清除主动消息权限(会话标识, 类型)
         昵称 = _提取成员昵称(消息)
         作者 = _读取字段(消息, "author")
         是机器人 = bool(_读取字段(作者, "bot") or False)
@@ -3399,6 +3451,11 @@ async def 发送消息(
     类型 = _规范化消息类型(类型)
     发送方式 = _规范化发送方式(发送方式)
     内容 = str(内容 or "").strip()
+    权限会话类型 = str(
+        会话类型
+        or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
+        or "group"
+    ).strip()
     平台实例 = 获取QQ官方平台(appid=appid)
     通道 = 获取HTTP通道(平台实例)
     if 通道 is None:
@@ -3425,6 +3482,9 @@ async def 发送消息(
     if 类型 == "group" and 发送方式 == "default" and not 被动ID:
         return {"ok": False, "message": "发送失败：该群最近没有收到新消息，无法主动发送。请先在群里发一条消息后 2 分钟内重试，或确认该群已开启全量消息接收。"}
     事件ID = 自定义ID if 发送方式 == "custom_event_id" else ""
+    实际使用主动消息 = not 被动ID and not 事件ID
+    if 实际使用主动消息 and 主动消息是否允许(会话标识, 权限会话类型) is False:
+        return {"ok": False, "message": "发送失败：主动消息权限未开启"}
     消息体: dict[str, Any] = {
         "msg_type": 0,
         "content": 内容,
@@ -3585,6 +3645,8 @@ async def 发送消息(
                 group_openid=会话标识,
             )
         结果 = await _http.request(route, json=消息体)
+        if 实际使用主动消息:
+            记录主动消息权限(会话标识, 权限会话类型, True)
         # 未能取得可公开 Markdown 图片地址时，按官方协议先发媒体再补发文字。
         if 消息体.get("msg_type") == 7 and 内容:
             文本消息体 = {
@@ -3614,6 +3676,8 @@ async def 发送消息(
             except Exception as 文本异常:
                 logger.warning("消息记录图片附带文本发送失败：错误类型=%s", type(文本异常).__name__)
     except Exception as exc:
+        if 实际使用主动消息 and 主动消息无权限(exc):
+            记录主动消息权限(会话标识, 权限会话类型, False)
         import traceback as _traceback
 
         logger.warning(
@@ -3625,9 +3689,14 @@ async def 发送消息(
         if 被动ID and any(词 in 错误文本 for 词 in ("过期", "expired", "msg_id")):
             # msg_id 已过期：去掉后重试一次主动推送（全量消息群可成功）
             消息体.pop("msg_id", None)
+            if 主动消息是否允许(会话标识, 权限会话类型) is False:
+                return {"ok": False, "message": "发送失败：主动消息权限未开启"}
             try:
                 结果 = await _http.request(route, json=消息体)
+                记录主动消息权限(会话标识, 权限会话类型, True)
             except Exception as 重试异常:
+                if 主动消息无权限(重试异常):
+                    记录主动消息权限(会话标识, 权限会话类型, False)
                 错误文本 = str(重试异常)
                 logger.warning("消息记录主动重试失败：错误类型=%s，错误详情=%s", type(重试异常).__name__, 错误文本[:400])
             else:
