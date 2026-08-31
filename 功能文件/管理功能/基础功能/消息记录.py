@@ -105,6 +105,12 @@ _消息接收队列: asyncio.Queue[tuple[Any, Any, str]] = (
 _消息接收任务: asyncio.Task[Any] | None = globals().get("_消息接收任务")
 _消息接收入队 = globals().get("_消息接收入队", True)
 _消息接收溢出数 = int(globals().get("_消息接收溢出数", 0) or 0)
+_媒体预缓存任务: set[asyncio.Task[Any]] = globals().get("_媒体预缓存任务") or set()
+_媒体预缓存地址中: set[str] = globals().get("_媒体预缓存地址中") or set()
+_媒体预缓存信号量: asyncio.Semaphore | None = globals().get("_媒体预缓存信号量")
+_媒体预缓存信号量循环: Any = globals().get("_媒体预缓存信号量循环")
+_媒体预缓存最大任务数 = 64
+_媒体预缓存并发数 = 4
 _昵称补查队列上限 = 1024
 _昵称补查工作数 = 2
 _昵称补查队列: asyncio.Queue[tuple[str, str, str]] = (
@@ -801,6 +807,7 @@ async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
+    global _媒体预缓存任务, _媒体预缓存地址中
     global _群信息轮询任务
     群信息轮询任务 = _群信息轮询任务
     _群信息轮询任务 = None
@@ -827,6 +834,16 @@ async def 停止消息记录() -> bool:
     if 接收任务 is not None and not 接收任务.done():
         接收任务.cancel()
         await asyncio.gather(接收任务, return_exceptions=True)
+
+    媒体预缓存任务列表 = [
+        任务 for 任务 in list(_媒体预缓存任务) if not 任务.done()
+    ]
+    _媒体预缓存任务 = set()
+    _媒体预缓存地址中.clear()
+    for 任务 in 媒体预缓存任务列表:
+        任务.cancel()
+    if 媒体预缓存任务列表:
+        await asyncio.gather(*媒体预缓存任务列表, return_exceptions=True)
 
     _昵称补查接收入队 = False
     昵称队列 = _准备昵称补查队列()
@@ -1733,6 +1750,7 @@ async def _消息接收工作() -> None:
             try:
                 appid = str(_读取字段(_读取字段(客户端, "platform"), "appid") or "")
                 记录 = 记录收到消息(消息, 类型, appid)
+                _排队媒体预缓存(记录)
                 if 类型 == "group" and 记录:
                     会话标识 = str(记录.get("_session") or "").strip()
                     if 会话标识 and 获取群机器人状态(会话标识) != "active":
@@ -1754,6 +1772,89 @@ async def _消息接收工作() -> None:
         当前任务 = asyncio.current_task()
         if _消息接收任务 is 当前任务:
             _消息接收任务 = None
+
+
+def _媒体预缓存地址(媒体: Any) -> str:
+    """从已规范化的媒体记录提取 QQ 临时下载地址。"""
+    项目 = 媒体
+    if isinstance(媒体, dict):
+        项目列表 = 媒体.get("items")
+        if isinstance(项目列表, (list, tuple)) and 项目列表:
+            项目 = 项目列表[0]
+    elif isinstance(媒体, (list, tuple)):
+        项目 = 媒体[0] if 媒体 else None
+    if not isinstance(项目, dict):
+        return ""
+    return str(
+        项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
+    ).strip()
+
+
+def _取媒体预缓存信号量() -> asyncio.Semaphore | None:
+    """按当前事件循环建立媒体预缓存并发限制，避免消息洪峰占满连接。"""
+    global _媒体预缓存信号量, _媒体预缓存信号量循环
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if (
+        _媒体预缓存信号量 is None
+        or _媒体预缓存信号量循环 is not 当前循环
+    ):
+        _媒体预缓存信号量 = asyncio.Semaphore(_媒体预缓存并发数)
+        _媒体预缓存信号量循环 = 当前循环
+    return _媒体预缓存信号量
+
+
+async def _预缓存收到消息媒体(媒体: Any) -> None:
+    """在 QQ 临时地址有效期内把媒体写入网页缓存，不阻塞消息接收 worker。"""
+    信号量 = _取媒体预缓存信号量()
+    if 信号量 is None:
+        return
+    try:
+        from 功能文件.页面功能 import 帮助网页后端
+
+        async with 信号量:
+            await 帮助网页后端.预缓存消息媒体(媒体)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("帮助控制台消息媒体预缓存失败：错误类型=%s", type(exc).__name__)
+
+
+def _排队媒体预缓存(记录: Any) -> bool:
+    """收到消息后异步预缓存媒体；队列满时放弃预缓存但保留消息记录。"""
+    if not isinstance(记录, dict):
+        return False
+    媒体 = 记录.get("media")
+    地址 = _媒体预缓存地址(媒体)
+    if not 地址 or 地址 in _媒体预缓存地址中:
+        return False
+    if len(_媒体预缓存任务) >= _媒体预缓存最大任务数:
+        return False
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    _媒体预缓存地址中.add(地址)
+    try:
+        任务 = 循环.create_task(_预缓存收到消息媒体(copy.deepcopy(媒体)))
+    except Exception:
+        _媒体预缓存地址中.discard(地址)
+        return False
+    _媒体预缓存任务.add(任务)
+
+    def _清理预缓存任务(完成任务: asyncio.Task[Any], _地址: str = 地址) -> None:
+        _媒体预缓存任务.discard(完成任务)
+        _媒体预缓存地址中.discard(_地址)
+        if not 完成任务.cancelled():
+            try:
+                完成任务.exception()
+            except Exception:
+                pass
+
+    任务.add_done_callback(_清理预缓存任务)
+    return True
 
 
 def _启动消息接收任务() -> asyncio.Task[Any] | None:

@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.70.4"
+控制台版本 = "5.70.5"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -971,6 +971,94 @@ def _媒体缓存响应(
             文件名, safe=""
         )
     return web.FileResponse(文件路径, headers=响应头)
+
+
+async def 预缓存消息媒体(媒体: Any) -> bool:
+    """在 QQ 临时签名地址有效时落盘，供历史消息继续查看媒体。"""
+    项目 = 媒体
+    if isinstance(媒体, dict):
+        项目列表 = 媒体.get("items")
+        if isinstance(项目列表, (list, tuple)) and 项目列表:
+            项目 = 项目列表[0]
+    elif isinstance(媒体, (list, tuple)):
+        项目 = 媒体[0] if 媒体 else None
+    if not isinstance(项目, dict):
+        return False
+    地址 = str(
+        项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
+    ).strip()
+    if len(地址) > 8192 or not _允许媒体地址(地址):
+        return False
+    if _读取媒体缓存(地址) is not None:
+        return True
+    类型值 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
+    模式 = "image" if 类型值 in {"图片", "image", "img"} else "file"
+    临时路径: Path | None = None
+    try:
+        超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
+        async with ClientSession(timeout=超时, trust_env=False) as 客户端:
+            async with 客户端.get(
+                地址,
+                allow_redirects=True,
+                max_redirects=3,
+                headers={
+                    "Accept": "image/*,application/octet-stream,*/*",
+                    "User-Agent": "MantouBot/console-media",
+                },
+            ) as 上游:
+                最终地址 = str(getattr(上游, "url", 地址) or 地址)
+                if not _允许媒体地址(最终地址) or 上游.status != 200:
+                    logger.debug(
+                        "帮助控制台消息媒体预缓存跳过：阶段=上游响应，状态=%s",
+                        int(getattr(上游, "status", 0) or 0),
+                    )
+                    return False
+                try:
+                    内容长度 = int(上游.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    内容长度 = 0
+                if 内容长度 > 媒体代理最大字节数:
+                    return False
+                前缀 = await 上游.content.read(64 * 1024)
+                内容类型 = _识别媒体类型(
+                    上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
+                )
+                if 模式 == "image" and not 内容类型.startswith("image/"):
+                    return False
+                媒体缓存目录.mkdir(parents=True, exist_ok=True)
+                缓存路径, _ = _媒体缓存路径(地址)
+                临时路径 = 缓存路径.with_name(
+                    f".{缓存路径.name}.{secrets.token_hex(6)}.tmp"
+                )
+                已写入 = 0
+                with 临时路径.open("wb") as 文件:
+                    if 前缀:
+                        文件.write(前缀)
+                        已写入 = len(前缀)
+                    async for 数据块 in 上游.content.iter_chunked(64 * 1024):
+                        已写入 += len(数据块)
+                        if 已写入 > 媒体代理最大字节数:
+                            return False
+                        文件.write(数据块)
+                if 已写入 <= 0:
+                    return False
+                临时路径.replace(缓存路径)
+                临时路径 = None
+                _写入媒体缓存元数据(地址, 内容类型, 已写入)
+                return True
+    except asyncio.CancelledError:
+        raise
+    except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
+        logger.debug(
+            "帮助控制台消息媒体预缓存失败：错误类型=%s", type(exc).__name__
+        )
+        return False
+    finally:
+        if 临时路径 is not None:
+            try:
+                临时路径.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
