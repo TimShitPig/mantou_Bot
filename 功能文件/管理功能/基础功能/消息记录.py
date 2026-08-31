@@ -49,10 +49,12 @@ except Exception as 导入异常:
 最大会话数 = 200
 每会话最大消息数 = 500
 总消息上限 = 10000
-群信息刷新间隔秒 = 24 * 60 * 60
+# 群基本信息接口限制为 30 QPM；后台按群串行请求，每个群至少一小时更新一次。
+群信息刷新间隔秒 = 60 * 60
 群信息限流冷却秒 = 30 * 60
 群信息默认失败冷却秒 = 60 * 60
 群信息请求间隔秒 = 3.0
+群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
 # 官方 bot_state 限制为 30 QPM；半小时复核一次，避免已退出群长期显示为正常。
 群机器人状态缓存有效期秒 = 30 * 60
@@ -67,6 +69,7 @@ except Exception as 导入异常:
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _群信息刷新任务: asyncio.Task[Any] | None = globals().get("_群信息刷新任务")
+_群信息轮询任务: asyncio.Task[Any] | None = globals().get("_群信息轮询任务")
 _数据库写入锁 = globals().get("_数据库写入锁") or asyncio.Lock()
 _元数据写入锁 = globals().get("_元数据写入锁") or threading.RLock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
@@ -798,6 +801,12 @@ async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
+    global _群信息轮询任务
+    群信息轮询任务 = _群信息轮询任务
+    _群信息轮询任务 = None
+    if 群信息轮询任务 is not None and not 群信息轮询任务.done():
+        群信息轮询任务.cancel()
+        await asyncio.gather(群信息轮询任务, return_exceptions=True)
     群信息任务 = _群信息刷新任务
     _群信息刷新任务 = None
     if 群信息任务 is not None and not 群信息任务.done():
@@ -2703,6 +2712,69 @@ def 安排待处理群信息刷新() -> None:
     ):
         return
     _群信息刷新任务 = 循环.create_task(刷新待处理群信息())
+
+
+def _获取群信息轮询候选() -> list[str]:
+    """收集已知官方群，跳过已确认退出的群，保持轮询只覆盖已有会话。"""
+    候选: set[str] = set()
+    for 会话标识, 信息 in 群信息缓存.items():
+        会话标识 = str(会话标识 or "").strip()
+        if not isinstance(信息, dict):
+            continue
+        信息字典 = 信息
+        if not 会话标识 or str(信息字典.get("membership_status") or "").lower() == "removed":
+            continue
+        候选.add(会话标识)
+    for 会话标识, 会话 in 消息缓存.items():
+        会话标识 = str(会话标识 or "").strip()
+        if not isinstance(会话, dict):
+            continue
+        会话字典 = 会话
+        if not 会话标识 or str(会话字典.get("chat_type") or "group") != "group":
+            continue
+        if 获取群机器人状态(会话标识) == "removed":
+            continue
+        候选.add(会话标识)
+    return list(候选)
+
+
+async def _群信息轮询工作() -> None:
+    """低频轮询群基本信息，实际请求复用待刷新队列的串行限流。"""
+    global _群信息轮询任务
+    try:
+        while True:
+            await asyncio.sleep(群信息轮询检查间隔秒)
+            try:
+                for 会话标识 in _获取群信息轮询候选():
+                    if _群信息需要刷新(群信息缓存.get(会话标识)):
+                        标记群信息待刷新(会话标识)
+                安排待处理群信息刷新()
+            except Exception as 异常:
+                logger.debug("消息记录群信息轮询检查失败：错误类型=%s", type(异常).__name__)
+    except asyncio.CancelledError:
+        raise
+    except Exception as 异常:
+        logger.debug("消息记录群信息轮询任务停止：错误类型=%s", type(异常).__name__)
+    finally:
+        当前任务 = asyncio.current_task()
+        if _群信息轮询任务 is 当前任务:
+            _群信息轮询任务 = None
+
+
+def _启动群信息轮询任务() -> asyncio.Task[Any] | None:
+    """启动单个群资料轮询任务，热重载时避免重复创建。"""
+    global _群信息轮询任务
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if (
+        _群信息轮询任务 is None
+        or _群信息轮询任务.done()
+        or getattr(_群信息轮询任务, "get_loop", lambda: None)() is not 循环
+    ):
+        _群信息轮询任务 = 循环.create_task(_群信息轮询工作())
+    return _群信息轮询任务
 
 
 def _群信息冷却秒数(异常: Exception) -> int:
@@ -4669,7 +4741,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     _消息持久化接收入队 = True
     _消息数据库配置缓存 = None
     _消息数据库配置缓存时间 = 0.0
-    # 热重载不沿用旧版本遗留的群资料待刷新队列；新队列只由打开会话产生。
+    # 热重载不沿用旧版本遗留的群资料待刷新队列；队列由打开会话和后台轮询产生。
     群信息待刷新.clear()
     if 上下文 is not None:
         当前插件上下文 = 上下文
@@ -4687,6 +4759,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
         _修补botpy昵称()
         _安装消息事件挂钩()
         _安装消息发送挂钩()
+        _启动群信息轮询任务()
         return True
     except Exception as exc:
         logger.warning("消息记录安装失败：错误类型=%s", type(exc).__name__)
