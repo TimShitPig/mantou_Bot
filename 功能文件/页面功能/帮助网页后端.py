@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.70.0"
+控制台版本 = "5.70.1"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1985,9 +1985,8 @@ async def _处理消息已读(request: web.Request) -> web.Response:
         from 功能文件.管理功能.基础功能 import 消息记录
 
         消息记录.设置会话已读(会话标识)
-        # 清零操作先落库再返回，避免随后刷新列表又读到旧未读值。
-        if not await 消息记录.等待消息记录写入(5.0):
-            return _控制台错误(409, "已读状态保存失败")
+        # 已读值已进入消息记录后台队列；不要让浏览器等待 MySQL 提交，
+        # 否则每次打开群聊都会被数据库往返阻塞数百毫秒。
         清理消息列表缓存()
         return web.json_response({"ok": True})
     except Exception as exc:

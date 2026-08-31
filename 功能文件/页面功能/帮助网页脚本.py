@@ -271,7 +271,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean(String(msgState.mediaData || '').trim() && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -725,6 +725,14 @@
       const msgRoleRetryMs = 5 * 60 * 1000;
       const msgMembershipRefreshMs = 30 * 60 * 1000;
       let autoScanAdminRunning = false;
+      let autoScanAdminTimer = null;
+      const scheduleAutoScanAdminGroups = (delay = 2500) => {
+        if (autoScanAdminTimer) clearTimeout(autoScanAdminTimer);
+        autoScanAdminTimer = setTimeout(() => {
+          autoScanAdminTimer = null;
+          void autoScanAdminGroups();
+        }, delay);
+      };
       const autoScanAdminGroups = async () => {
         if (autoScanAdminRunning) return;
         autoScanAdminRunning = true;
@@ -735,7 +743,7 @@
             const id = String(c.chat_id || '');
             const failedAt = Number(msgState.adminScanFailures.get(id) || 0);
             const retryDue = failedAt > 0 && now - failedAt >= msgRoleRetryMs;
-            const checkedAt = Number(c.membership_checked_at || 0) * 1000;
+            const checkedAt = Number(msgState.adminCheckedAt.get(id) || Number(c.membership_checked_at || 0) * 1000);
             const membershipDue = !checkedAt || now - checkedAt >= msgMembershipRefreshMs;
             const scanAllowed = failedAt > 0
               ? retryDue
@@ -743,11 +751,12 @@
             return c.chat_type === 'group' && id
               && c.membership_status !== 'removed' && c.in_group !== false
               && scanAllowed;
-          }).slice(0, 5);
+          }).slice(0, 1);
           let membershipChanged = false;
           for (const group of groupsToScan) {
             const chatId = String(group.chat_id || '');
             msgState.adminScanAttempted.add(chatId);
+            msgState.adminCheckedAt.set(chatId, Date.now());
             const scanRoleToken = Number(msgState.adminRequestToken || 0);
             try {
               const res = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:chatId})});
@@ -793,6 +802,7 @@
             await new Promise((r) => setTimeout(r, 1000));
           }
           if (membershipChanged) renderMsgChats({chats:msgState.chats});
+          if (groupsToScan.length >= 1) scheduleAutoScanAdminGroups(10000);
         } finally {
           autoScanAdminRunning = false;
         }
@@ -840,7 +850,7 @@
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
-        queueMicrotask(autoScanAdminGroups);
+        scheduleAutoScanAdminGroups();
         node.querySelectorAll('[data-msg-chat]').forEach((el) => {
           el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -988,6 +998,7 @@
       };
       const closeMsgEvents = () => {
         if (msgState.eventReconnect) { clearTimeout(msgState.eventReconnect); msgState.eventReconnect = null; }
+        if (autoScanAdminTimer) { clearTimeout(autoScanAdminTimer); autoScanAdminTimer = null; }
         if (msgState.eventRefreshTimer) { clearTimeout(msgState.eventRefreshTimer); msgState.eventRefreshTimer = null; }
         if (msgState.chatRenderTimer) { clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null; }
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
@@ -2136,6 +2147,7 @@
         const requestToken = Number(msgState.adminRequestToken || 0) + 1;
         msgState.adminRequestToken = requestToken;
         msgState.lastRolesAt = now; msgState.lastRolesChatId = requestChatId;
+        msgState.adminCheckedAt.set(requestChatId, now);
         try {
           const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:requestChatId})});
           if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
@@ -2171,6 +2183,7 @@
         }
         catch (error) {
           if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
+          msgState.adminScanFailures.set(requestChatId, Date.now());
           updateMsgAdminTag();
         }
       };
