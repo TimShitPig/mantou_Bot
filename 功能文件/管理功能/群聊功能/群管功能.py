@@ -745,6 +745,36 @@ def 记录消息段成员映射(消息: Any, 群号: str) -> None:
         记录官方群成员映射(群号, 用户, 成员)
 
 
+def 禁言请求可重试(异常: Exception) -> bool:
+    """只对官方服务端临时错误或限流重试，权限/成员错误不重复请求。"""
+    异常类型 = type(异常).__name__.strip().lower()
+    if 异常类型 in {"servererror", "gatewayerror", "timeouterror"}:
+        return True
+    for 字段名 in ("status", "status_code", "http_status", "code", "err_code"):
+        try:
+            状态码 = int(getattr(异常, 字段名))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if 状态码 == 429 or 500 <= 状态码 <= 599:
+            return True
+    try:
+        文本 = str(异常).lower()
+    except Exception:
+        文本 = ""
+    return any(
+        标记 in 文本
+        for 标记 in (
+            "429",
+            "too many",
+            "rate limit",
+            "限流",
+            "频率",
+            "temporarily",
+            "处理失败",
+        )
+    )
+
+
 async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发次数: int) -> bool:
     群号 = 获取群号(event)
     用户标识 = 获取撤回发送者标识(event)
@@ -755,25 +785,35 @@ async def 尝试广告撤回禁言(event: AstrMessageEvent, 秒数: int, 触发�
             触发次数,
         )
         return False
-    try:
-        await 使用QQ官方成员禁言接口(bot, 群号, 用户标识, 秒数, "add")
-        logger.info(
-            "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s",
-            群号,
-            用户标识,
-            触发次数,
-            秒数,
-        )
-        return True
-    except Exception as exc:
-        logger.warning(
-            "广告撤回自动禁言失败：group_id=%s, user_id=%s, count=%s, error_type=%s",
-            群号,
-            用户标识,
-            触发次数,
-            type(exc).__name__,
-        )
-        return False
+    最后异常: Exception | None = None
+    已尝试次数 = 0
+    for 尝试次数 in range(3):
+        已尝试次数 = 尝试次数 + 1
+        try:
+            await 使用QQ官方成员禁言接口(bot, 群号, 用户标识, 秒数, "add")
+            logger.info(
+                "广告撤回自动禁言成功：group_id=%s, user_id=%s, count=%s, seconds=%s, attempts=%s",
+                群号,
+                用户标识,
+                触发次数,
+                秒数,
+                尝试次数 + 1,
+            )
+            return True
+        except Exception as exc:
+            最后异常 = exc
+            if not 禁言请求可重试(exc) or 尝试次数 >= 2:
+                break
+            await asyncio.sleep(0.5 * (2**尝试次数))
+    logger.warning(
+        "广告撤回自动禁言失败：group_id=%s, user_id=%s, count=%s, error_type=%s, attempts=%s",
+        群号,
+        用户标识,
+        触发次数,
+        type(最后异常).__name__ if 最后异常 is not None else "UnknownError",
+        已尝试次数,
+    )
+    return False
 
 
 def 获取撤回发送者提及(event: AstrMessageEvent) -> str:
@@ -847,69 +887,21 @@ async def 发送撤回广告提醒(event: AstrMessageEvent) -> bool:
 async def 是否发送者为QQ群主或管理员(event: AstrMessageEvent) -> bool:
     if not 是QQ官方机器人(event):
         return False
-    事件角色 = 提取事件发送者群角色(event)
-
+    事件角色 = str(提取事件发送者群角色(event) or "").strip().lower()
     群号 = 获取群号(event)
     用户标识 = 获取撤回发送者标识(event)
-    if not 群号 or not 用户标识:
-        结果 = 是QQ群管理角色(事件角色)
+    if not 事件角色:
+        # QQ 官方公开接口没有目标成员角色查询；角色缺失时宁可跳过处罚，
+        # 避免把群主、管理员或机器人误提交到禁言接口。
         logger.info(
-            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s",
+            "QQ官方群管理身份检查：group_id=%s, member_openid=%s, event_role=missing, result=True",
             群号,
             用户标识,
-            事件角色,
-            结果,
         )
-        return 结果
-
-    bot = getattr(event, "bot", None)
-    if bot is None:
-        结果 = 是QQ群管理角色(事件角色)
-        logger.info(
-            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s (缺少bot)",
-            群号,
-            用户标识,
-            事件角色,
-            结果,
-        )
-        return 结果
-
-    try:
-        响应 = await 调用机器人动作(
-            bot,
-            "get_group_member_info",
-            group_openid=群号,
-            user_openid=用户标识,
-            no_cache=True,
-        )
-    except Exception as exc:
-        结果 = 是QQ群管理角色(事件角色)
-        logger.info(
-            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s, error_type=%s",
-            群号,
-            用户标识,
-            事件角色,
-            结果,
-            type(exc).__name__,
-        )
-        return 结果
-
-    数据 = 响应.get("data") if isinstance(响应, dict) and "data" in 响应 else 响应
-    if isinstance(数据, dict):
-        角色 = 数据.get("role")
-        结果 = 是QQ群管理角色(角色)
-        logger.info(
-            "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, api_role=%r, result=%s",
-            群号,
-            用户标识,
-            事件角色,
-            角色,
-            结果,
-        )
-        return 结果
+        return True
     结果 = 是QQ群管理角色(事件角色)
     logger.info(
-        "QQ官方群管理身份检查: group_id=%s, member_openid=%s, event_role=%r, result=%s (API返回非dict)",
+        "QQ官方群管理身份检查：group_id=%s, member_openid=%s, event_role=%r, result=%s",
         群号,
         用户标识,
         事件角色,
