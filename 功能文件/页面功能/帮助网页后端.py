@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.70.3"
+控制台版本 = "5.70.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -86,6 +86,7 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 消息列表缓存锁: dict[tuple[str, str, int, int], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
 消息列表后台刷新: set[tuple[str, str, int, int]] = globals().get("消息列表后台刷新") or set()
 消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
+实时连接任务: set[asyncio.Task[Any]] = globals().get("实时连接任务") or set()
 
 
 def _获取控制台执行器() -> ThreadPoolExecutor:
@@ -115,6 +116,22 @@ def 关闭控制台执行器() -> None:
         _控制台执行器 = None
     if 执行器 is not None:
         执行器.shutdown(wait=False, cancel_futures=True)
+
+
+async def 停止实时连接() -> None:
+    """在插件重载前主动关闭 SSE/WebSocket，避免 runner.cleanup 等待长连接超时。"""
+    当前任务 = asyncio.current_task()
+    待取消 = [
+        任务
+        for 任务 in list(实时连接任务)
+        if 任务 is not 当前任务 and not 任务.done()
+    ]
+    for 任务 in 待取消:
+        任务.cancel()
+    if 待取消:
+        await asyncio.gather(*待取消, return_exceptions=True)
+        for 任务 in 待取消:
+            实时连接任务.discard(任务)
 
 
 def 清理消息列表缓存() -> None:
@@ -1887,6 +1904,7 @@ async def _处理消息事件(request: web.Request) -> web.StreamResponse:
     """向消息记录页推送实时事件，避免等待固定轮询周期。"""
     if not _请求已授权(request):
         return web.Response(status=401, text="Unauthorized")
+    当前任务: asyncio.Task[Any] | None = None
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
@@ -1902,6 +1920,9 @@ async def _处理消息事件(request: web.Request) -> web.StreamResponse:
                 "X-Accel-Buffering": "no",
             },
         )
+        当前任务 = asyncio.current_task()
+        if 当前任务 is not None:
+            实时连接任务.add(当前任务)
         await 响应.prepare(request)
         await 响应.write(b'data: {"type":"ready","data":{}}\n\n')
         try:
@@ -1921,10 +1942,16 @@ async def _处理消息事件(request: web.Request) -> web.StreamResponse:
             logger.debug("帮助控制台消息事件连接结束：错误类型=%s", type(exc).__name__)
         finally:
             消息记录.取消消息事件订阅(队列)
+            if 当前任务 is not None:
+                实时连接任务.discard(当前任务)
         return 响应
     except asyncio.CancelledError:
+        if 当前任务 is not None:
+            实时连接任务.discard(当前任务)
         raise
     except Exception as exc:
+        if 当前任务 is not None:
+            实时连接任务.discard(当前任务)
         logger.debug("帮助控制台消息事件启动失败：错误类型=%s", type(exc).__name__)
         return web.Response(status=503, text="Event stream unavailable")
 
@@ -1935,6 +1962,7 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
         return web.Response(status=401, text="Unauthorized")
     if not _请求来自同源(request):
         return web.Response(status=403, text="Forbidden")
+    当前任务: asyncio.Task[Any] | None = None
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
@@ -1942,6 +1970,9 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
         if 队列 is None:
             return web.Response(status=503, text="WebSocket unavailable")
         响应 = web.WebSocketResponse(heartbeat=30.0, compress=False)
+        当前任务 = asyncio.current_task()
+        if 当前任务 is not None:
+            实时连接任务.add(当前任务)
         接收任务: asyncio.Task[Any] | None = None
         事件任务: asyncio.Task[Any] | None = None
         try:
@@ -1980,10 +2011,16 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
             消息记录.取消消息事件订阅(队列)
             if not 响应.closed:
                 await 响应.close()
+            if 当前任务 is not None:
+                实时连接任务.discard(当前任务)
         return 响应
     except asyncio.CancelledError:
+        if 当前任务 is not None:
+            实时连接任务.discard(当前任务)
         raise
     except Exception as exc:
+        if 当前任务 is not None:
+            实时连接任务.discard(当前任务)
         logger.debug("帮助控制台消息 WebSocket 启动失败：错误类型=%s", type(exc).__name__)
         return web.Response(status=503, text="WebSocket unavailable")
 

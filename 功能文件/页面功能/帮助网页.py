@@ -162,6 +162,7 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
     """停止网页服务并清理内存会话。"""
 
     try:
+        await 后端.停止实时连接()
         if 服务 is not None:
             await 服务.runner.cleanup()
     except Exception as exc:
