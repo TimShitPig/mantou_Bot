@@ -4414,12 +4414,25 @@ async def 生成下载回复流(
                 raise RuntimeError("目录为空")
             原始目录数 = len(catalog)
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-            catalog = 获取QQ阅读可下载目录(details, catalog)
+            账号有VIP = _是真值(details.get("is_vip"))
+            if 账号有VIP:
+                catalog = 获取QQ阅读可下载目录(details, catalog)
+            else:
+                # 非 VIP 账号的第三方明文接口按原始目录取整本，不能套用 QQ
+                # 阅读账号的 max_free_chapter 限制；接口自身负责返回可用正文。
+                catalog = [
+                    {
+                        **dict(项目),
+                        "_qq_source_index": int(
+                            项目.get("_qq_source_index") or 位置
+                        ),
+                    }
+                    for 位置, 项目 in enumerate(catalog, start=1)
+                ]
             if not catalog:
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
-            账号有VIP = _是真值(details.get("is_vip"))
             正文来源 = "官方账号接口" if 账号有VIP else "免费明文接口"
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
