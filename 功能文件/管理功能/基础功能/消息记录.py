@@ -127,6 +127,7 @@ _消息事件队列上限 = 512
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
+_消息撤回事件挂钩版本 = int(globals().get("_消息撤回事件挂钩版本", 0) or 0)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
 主动消息权限缓存: dict[str, tuple[str, float]] = globals().get("主动消息权限缓存") or {}
 主动消息权限缓存有效期秒 = 30 * 60
@@ -4647,10 +4648,168 @@ def _修补botpy昵称() -> bool:
 # 事件挂钩
 # ---------------------------------------------------------------------------
 
+_撤回事件名称 = {
+    "message_delete",
+    "message_recall",
+    "group_message_delete",
+    "group_message_recall",
+    "group_message_recalled",
+    "c2c_message_delete",
+    "c2c_message_recall",
+    "direct_message_delete",
+    "direct_message_recall",
+    "public_message_delete",
+}
+
+
+def _查找消息会话(消息ID: str) -> tuple[str, str] | None:
+    """按消息 ID 在本地缓存中反查会话，兼容撤回事件缺少会话字段。"""
+    目标ID = str(消息ID or "").strip()
+    if not 目标ID:
+        return None
+    for 会话标识, 会话 in list(消息缓存.items()):
+        if not isinstance(会话, dict):
+            continue
+        for 记录 in 会话.get("messages") or []:
+            if isinstance(记录, dict) and str(记录.get("message_id") or "").strip() == 目标ID:
+                return str(会话标识), str(记录.get("chat_type") or 会话.get("chat_type") or "group")
+    return None
+
+
+def _提取撤回事件目标(
+    事件名: Any, 参数: tuple[Any, ...], 关键字: dict[str, Any]
+) -> list[tuple[str, str, str]]:
+    """从可能的 QQ 网关撤回负载提取会话、消息 ID 和会话类型。"""
+    名称 = str(事件名 or "").strip().lower().replace("-", "_")
+    默认类型 = "user" if any(值 in 名称 for 值 in ("c2c", "direct")) else "group"
+    结果: list[tuple[str, str, str]] = []
+    已见: set[tuple[str, str, str]] = set()
+
+    def 加入(会话标识: Any, 消息ID: Any, 类型: str) -> None:
+        会话值 = str(会话标识 or "").strip()
+        消息值 = str(消息ID or "").strip()
+        类型值 = "user" if 类型 == "user" else "group"
+        if not 消息值:
+            return
+        if not 会话值:
+            反查 = _查找消息会话(消息值)
+            if 反查:
+                会话值, 类型值 = 反查
+        if not 会话值:
+            return
+        项 = (会话值, 消息值, 类型值)
+        if 项 not in 已见:
+            已见.add(项)
+            结果.append(项)
+
+    def 遍历(对象: Any, 类型: str, 会话标识: str = "", 深度: int = 0, 消息上下文: bool = False) -> None:
+        if 对象 is None or 深度 > 7:
+            return
+        if isinstance(对象, dict):
+            当前会话 = str(
+                对象.get("group_openid")
+                or 对象.get("group_id")
+                or 对象.get("user_openid")
+                or 对象.get("user_id")
+                or 会话标识
+                or ""
+            ).strip()
+            当前类型 = "user" if any(
+                对象.get(字段) not in (None, "")
+                for 字段 in ("user_openid", "user_id")
+            ) else 类型
+            消息值 = 对象.get("message_id") or 对象.get("msg_id") or 对象.get("messageId")
+            if not 消息值 and 消息上下文:
+                消息值 = 对象.get("id")
+            if 消息值:
+                加入(当前会话, 消息值, 当前类型)
+            for 字段, 子对象 in 对象.items():
+                if 字段 in {"group_openid", "group_id", "user_openid", "user_id", "message_id", "msg_id", "messageId"}:
+                    continue
+                遍历(
+                    子对象,
+                    当前类型,
+                    当前会话,
+                    深度 + 1,
+                    消息上下文 or 字段 in {"message", "deleted_message", "deleted", "data"},
+                )
+            return
+        if isinstance(对象, (list, tuple, set)):
+            for 子对象 in 对象:
+                遍历(子对象, 类型, 会话标识, 深度 + 1, 消息上下文)
+            return
+        if isinstance(对象, (str, bytes, int, float, bool)):
+            return
+        当前会话 = str(
+            _读取字段(对象, "group_openid")
+            or _读取字段(对象, "group_id")
+            or _读取字段(对象, "user_openid")
+            or _读取字段(对象, "user_id")
+            or 会话标识
+            or ""
+        ).strip()
+        当前类型 = "user" if _读取字段(对象, "user_openid") or _读取字段(对象, "user_id") else 类型
+        消息值 = (
+            _读取字段(对象, "message_id")
+            or _读取字段(对象, "msg_id")
+            or _读取字段(对象, "messageId")
+            or (_读取字段(对象, "id") if 消息上下文 else "")
+        )
+        if 消息值:
+            加入(当前会话, 消息值, 当前类型)
+        for 字段 in ("message", "deleted_message", "deleted", "data", "payload", "raw_data"):
+            子对象 = _读取字段(对象, 字段)
+            if 子对象 not in (None, ""):
+                遍历(子对象, 当前类型, 当前会话, 深度 + 1, 消息上下文 or 字段 in {"message", "deleted_message", "deleted", "data"})
+
+    for 对象 in (*参数, *关键字.values()):
+        遍历(对象, 默认类型)
+    return 结果
+
+
+def _处理撤回网关事件(事件名: Any, 参数: tuple[Any, ...], 关键字: dict[str, Any]) -> int:
+    目标列表 = _提取撤回事件目标(事件名, 参数, 关键字)
+    for 会话标识, 消息ID, _类型 in 目标列表:
+        标记撤回(会话标识, 消息ID)
+    if 目标列表:
+        logger.debug(
+            "消息记录撤回事件已同步：事件=%s，数量=%d",
+            str(事件名 or "").strip().lower(),
+            len(目标列表),
+        )
+    return len(目标列表)
+
+
+def _安装消息撤回事件挂钩(客户端类: Any) -> bool:
+    """兼容 QQ 网关可能下发的消息删除/撤回事件。"""
+    global _消息撤回事件挂钩版本
+    原分发方法 = getattr(客户端类, "ws_dispatch", None)
+    if not callable(原分发方法):
+        return False
+    if getattr(原分发方法, "__mantou_recall_hook_version__", 0) >= 1:
+        _消息撤回事件挂钩版本 = max(_消息撤回事件挂钩版本, 1)
+        return True
+
+    def 新分发方法(self: Any, 事件名: Any, *参数: Any, **关键字: Any) -> Any:
+        名称 = str(事件名 or "").strip().lower().replace("-", "_")
+        if 名称 in _撤回事件名称:
+            try:
+                _处理撤回网关事件(名称, 参数, 关键字)
+            except Exception as 异常:
+                logger.debug("消息记录撤回事件处理失败：错误类型=%s", type(异常).__name__)
+        return 原分发方法(self, 事件名, *参数, **关键字)
+
+    setattr(新分发方法, "__mantou_recall_hook_version__", 1)
+    客户端类.ws_dispatch = 新分发方法
+    _消息撤回事件挂钩版本 = 1
+    logger.info("消息记录撤回事件挂钩已安装：已兼容网关删除/撤回事件")
+    return True
+
+
 def _安装消息事件挂钩() -> bool:
     """为 QQ 官方 botClient 包装消息事件回调，把收到的消息写入缓存。"""
     global _挂钩已安装, _消息事件挂钩版本
-    if _挂钩已安装 and _消息事件挂钩版本 >= 2:
+    if _挂钩已安装 and _消息事件挂钩版本 >= 3 and _消息撤回事件挂钩版本 >= 1:
         return True
     try:
         from astrbot.core.platform.sources.qqofficial import (
@@ -4662,6 +4821,7 @@ def _安装消息事件挂钩() -> bool:
     客户端类 = getattr(适配器模块, "botClient", None)
     if 客户端类 is None:
         return False
+    _安装消息撤回事件挂钩(客户端类)
 
     事件表 = (
         ("on_group_at_message_create", "group"),
@@ -4695,7 +4855,7 @@ def _安装消息事件挂钩() -> bool:
 
         setattr(客户端类, 事件名, 新回调)
     _挂钩已安装 = True
-    _消息事件挂钩版本 = 2
+    _消息事件挂钩版本 = 3
     logger.info("消息记录事件挂钩已安装：group/user 消息已接入缓存")
     return True
 

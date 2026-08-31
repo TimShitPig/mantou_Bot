@@ -1806,17 +1806,17 @@
             return replaceMsgMentions(text, profiles);
           };
           const ref = (data.references || {})[m.reference_id];
-          // 撤回后隐藏引用与媒体，只显示已撤回
-          const quote = !recalled && m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
-          const mediaData = !recalled ? m.media : null;
+          // 撤回只改变颜色和标签，保留撤回前的正文、引用和媒体。
+          const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
+          const mediaData = m.media;
           const media = renderMessageMedia(mediaData);
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
-          let content = recalled ? '已撤回' : stripMediaMarker(renderedContent, mediaData);
-          if (!recalled && !content && mediaText) content = renderText(mediaText);
-          if (!content && !media) content = recalled ? '已撤回' : '（空消息）';
+          let content = stripMediaMarker(renderedContent, mediaData);
+          if (!content && mediaText) content = renderText(mediaText);
+          if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
-          const hasInlineMediaText = !recalled && media && mediaData && !Array.isArray(mediaData)
+          const hasInlineMediaText = media && mediaData && !Array.isArray(mediaData)
             && (Object.prototype.hasOwnProperty.call(mediaData, 'before_text') || Object.prototype.hasOwnProperty.call(mediaData, 'after_text'));
           const inlineMediaHtml = hasInlineMediaText
             ? `${mediaData.before_text ? `<div class="msg-media-text">${renderMsgMarkup(String(mediaData.before_text), profiles)}</div>` : ''}${media}${mediaData.after_text ? `<div class="msg-media-text msg-media-text-after">${renderMsgMarkup(String(mediaData.after_text), profiles)}</div>` : ''}`
