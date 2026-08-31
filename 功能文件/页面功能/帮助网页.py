@@ -132,7 +132,11 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     基础地址 = 后端._计算帮助网页地址(配置)
     public_url = 后端._构造控制台访问地址(基础地址, 配置)
     host, port = 后端._读取监听配置(配置)
-    app = web.Application(middlewares=[_压缩控制台响应])
+    # 官方富媒体硬限制为 200 MB；浏览器上传使用 base64 JSON，需要预留编码开销。
+    app = web.Application(
+        client_max_size=300 * 1024 * 1024,
+        middlewares=[_压缩控制台响应],
+    )
     _注册路由(app)
     runner = web.AppRunner(app, access_log=None)
     try:

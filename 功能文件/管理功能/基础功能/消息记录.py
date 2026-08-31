@@ -25,6 +25,12 @@ from urllib.parse import quote as _网址编码
 from urllib.parse import urlsplit as _解析网址
 
 try:
+    from aiohttp import ClientSession, ClientTimeout
+except Exception:
+    ClientSession = None
+    ClientTimeout = None
+
+try:
     from astrbot.api import logger
 except Exception:
     import logging
@@ -3502,27 +3508,53 @@ async def _上传媒体(
     文件URL: str = "",
     文件类型: int = 1,
     文件字节: bytes | None = None,
+    文件名: str = "",
 ) -> str:
-    """上传媒体到群/私聊，返回 file_info。"""
+    """按 QQ 官方富媒体协议上传并返回 file_info。"""
     from botpy.http import Route
 
-    payload: dict[str, Any] = {"file_type": 文件类型, "srv_send_msg": False}
+    try:
+        文件类型 = int(文件类型 or 4)
+    except (TypeError, ValueError):
+        文件类型 = 4
+    if 文件类型 not in {1, 2, 3, 4}:
+        文件类型 = 4
     地址 = str(文件路径 or "").strip()
     远程 = str(文件URL or "").strip()
-    if 文件字节:
-        payload["file_data"] = base64.b64encode(文件字节).decode("utf-8")
-    elif 地址 and Path(地址).is_file():
-        with open(地址, "rb") as f:
-            payload["file_data"] = base64.b64encode(f.read()).decode("utf-8")
-    elif 远程.startswith("http://") or 远程.startswith("https://"):
-        payload["url"] = 远程
-    else:
+    默认文件名 = {1: "image.png", 2: "video.mp4", 3: "audio.silk", 4: "attachment.bin"}[文件类型]
+    文件名 = str(文件名 or "").strip()
+    if 地址:
+        文件名 = Path(地址).name
+    文件名 = re.sub(r"[\x00-\x1f\x7f\\/]", "_", 文件名)[:160].strip() or 默认文件名
+
+    if 文件字节 is None and 地址 and Path(地址).is_file():
+        try:
+            with open(地址, "rb") as 文件句柄:
+                文件字节 = 文件句柄.read()
+        except OSError:
+            return ""
+    if 文件字节 is not None:
+        if len(文件字节) <= 0 or len(文件字节) > 200 * 1024 * 1024:
+            return ""
+        return await _上传媒体分片(
+            _http,
+            会话标识,
+            类型,
+            文件类型,
+            文件名,
+            文件字节,
+        )
+    if not (远程.startswith("http://") or 远程.startswith("https://")):
         return ""
+    payload: dict[str, Any] = {
+        "file_type": 文件类型,
+        "url": 远程,
+        "file_name": 文件名,
+        "srv_send_msg": False,
+    }
     if 类型 == "user":
-        payload["openid"] = 会话标识
         route = Route("POST", "/v2/users/{openid}/files", openid=会话标识)
     else:
-        payload["group_openid"] = 会话标识
         route = Route(
             "POST",
             "/v2/groups/{group_openid}/files",
@@ -3531,6 +3563,126 @@ async def _上传媒体(
     结果 = await _http.request(route, json=payload)
     if isinstance(结果, dict):
         return str(结果.get("file_info") or "")
+    return ""
+
+
+async def _上传媒体分片(
+    _http: Any,
+    会话标识: str,
+    类型: str,
+    文件类型: int,
+    文件名: str,
+    文件字节: bytes,
+) -> str:
+    """执行官方 upload_prepare、分片 PUT、part_finish 和合并流程。"""
+    if ClientSession is None or ClientTimeout is None:
+        return ""
+    from botpy.http import Route
+
+    文件大小 = len(文件字节)
+    文件MD5 = hashlib.md5(文件字节).hexdigest()
+    文件SHA1 = hashlib.sha1(文件字节).hexdigest()
+    前十MBMD5 = hashlib.md5(文件字节[:10002432]).hexdigest()
+    if 类型 == "user":
+        预上传路由 = Route("POST", "/v2/users/{user_id}/upload_prepare", user_id=会话标识)
+        分片完成路由模板 = "/v2/users/{user_id}/upload_part_finish"
+        合并路由 = Route("POST", "/v2/users/{openid}/files", openid=会话标识)
+        路由参数名 = "user_id"
+    else:
+        预上传路由 = Route("POST", "/v2/groups/{group_id}/upload_prepare", group_id=会话标识)
+        分片完成路由模板 = "/v2/groups/{group_id}/upload_part_finish"
+        合并路由 = Route("POST", "/v2/groups/{group_openid}/files", group_openid=会话标识)
+        路由参数名 = "group_id"
+    预上传 = await _http.request(
+        预上传路由,
+        json={
+            "file_type": 文件类型,
+            "file_size": str(文件大小),
+            "file_name": 文件名,
+            "md5": 文件MD5,
+            "sha1": 文件SHA1,
+            "md5_10m": 前十MBMD5,
+        },
+    )
+    if not isinstance(预上传, dict):
+        return ""
+    上传ID = str(预上传.get("upload_id") or "").strip()
+    分片列表 = 预上传.get("parts")
+    try:
+        默认分片大小 = max(1, int(预上传.get("block_size") or 5 * 1024 * 1024))
+    except (TypeError, ValueError):
+        默认分片大小 = 5 * 1024 * 1024
+    if not 上传ID or not isinstance(分片列表, list) or not 分片列表:
+        return ""
+    配置 = 预上传.get("upload_config") if isinstance(预上传.get("upload_config"), dict) else {}
+    try:
+        并发数 = max(1, min(4, int(配置.get("concurrency") or 1)))
+    except (TypeError, ValueError):
+        并发数 = 1
+
+    async def 上传一个分片(客户端: Any, 分片: dict[str, Any]) -> None:
+        if not isinstance(分片, dict):
+            raise RuntimeError("分片参数无效")
+        try:
+            分片序号 = int(分片.get("index"))
+        except (TypeError, ValueError):
+            raise RuntimeError("分片序号无效")
+        预签名地址 = str(分片.get("presigned_url") or 分片.get("url") or "").strip()
+        try:
+            分片大小 = max(1, int(分片.get("block_size") or 默认分片大小))
+        except (TypeError, ValueError):
+            分片大小 = 默认分片大小
+        起点 = 分片序号 * 默认分片大小
+        数据 = 文件字节[起点 : min(文件大小, 起点 + 分片大小)]
+        if not 预签名地址 or not 数据:
+            raise RuntimeError("分片数据无效")
+        分片MD5 = hashlib.md5(数据).hexdigest()
+        for 次数 in range(3):
+            try:
+                async with 客户端.put(预签名地址, data=数据) as 响应:
+                    if not 200 <= 响应.status < 300:
+                        raise RuntimeError(f"分片上传 HTTP {响应.status}")
+                await _http.request(
+                    Route(
+                        "POST",
+                        分片完成路由模板,
+                        **{路由参数名: 会话标识},
+                    ),
+                    json={
+                        "upload_id": 上传ID,
+                        "part_index": 分片序号,
+                        "block_size": str(len(数据)),
+                        "md5": 分片MD5,
+                    },
+                )
+                return
+            except Exception:
+                if 次数 >= 2:
+                    raise
+                await asyncio.sleep(1 + 次数)
+
+    信号量 = asyncio.Semaphore(并发数)
+
+    async def 限制上传(客户端: Any, 分片: dict[str, Any]) -> None:
+        async with 信号量:
+            await 上传一个分片(客户端, 分片)
+
+    async with ClientSession(
+        timeout=ClientTimeout(total=300, connect=20, sock_read=300),
+        trust_env=False,
+    ) as 客户端:
+        await asyncio.gather(*(限制上传(客户端, 分片) for 分片 in 分片列表))
+    合并 = await _http.request(
+        合并路由,
+        json={
+            "file_type": 文件类型,
+            "file_name": 文件名,
+            "upload_id": 上传ID,
+            "srv_send_msg": False,
+        },
+    )
+    if isinstance(合并, dict):
+        return str(合并.get("file_info") or "")
     return ""
 
 
@@ -3604,6 +3756,9 @@ async def 发送消息(
     图片后文本: str = "",
     媒体路径: str = "",
     媒体URL: str = "",
+    媒体数据: str = "",
+    媒体文件名: str = "",
+    媒体内容类型: str = "",
     媒体文件类型: int = 1,
     媒体文本: str = "",
     ARK模板ID: str = "",
@@ -3695,6 +3850,18 @@ async def 发送消息(
         except Exception:
             return {"ok": False, "message": "图片数据无效"}
 
+    媒体字节: bytes | None = None
+    if 媒体数据:
+        媒体原始数据 = str(媒体数据 or "").strip()
+        try:
+            if 媒体原始数据.startswith("data:") and "," in 媒体原始数据:
+                媒体原始数据 = 媒体原始数据.split(",", 1)[1]
+            媒体字节 = base64.b64decode(媒体原始数据, validate=True)
+        except Exception:
+            return {"ok": False, "message": "媒体数据无效"}
+        if len(媒体字节) <= 0 or len(媒体字节) > 200 * 1024 * 1024:
+            return {"ok": False, "message": "媒体文件过大"}
+
     def _图片媒体记录() -> dict[str, Any]:
         媒体记录: dict[str, Any] = {
             "type": "图片",
@@ -3705,6 +3872,20 @@ async def 发送消息(
             媒体记录["before_text"] = 图片前文本
             媒体记录["after_text"] = 图片后文本
         return 媒体记录
+
+    def _普通媒体记录() -> dict[str, Any]:
+        try:
+            类型编号 = int(媒体文件类型 or 4)
+        except (TypeError, ValueError):
+            类型编号 = 4
+        类型名称 = {2: "视频", 3: "语音", 4: "文件"}.get(类型编号, "文件")
+        return {
+            "type": 类型名称,
+            "src": 媒体URL if str(媒体URL or "").startswith(("http://", "https://")) else "",
+            "name": str(媒体文件名 or "").strip(),
+            "content_type": str(媒体内容类型 or "").strip(),
+            "text": 内容,
+        }
 
     # QQ 富媒体上传只返回 file_info，Markdown 图片必须使用公网 URL。
     # 帮助网页服务为本地图片提供短时内存地址，让 QQ 官方转存后仍只发一条消息。
@@ -3746,6 +3927,7 @@ async def 发送消息(
             文件URL=图片公开地址,
             文件类型=1,
             文件字节=图片字节,
+            文件名=图片文件名,
         )
         if not file_info:
             return {"ok": False, "message": "图片上传失败"}
@@ -3759,7 +3941,7 @@ async def 发送消息(
         消息体["markdown"] = {"content": 内容}
     elif 类型 == "media":
         file_info = ""
-        if 媒体路径 or 媒体URL:
+        if 媒体路径 or 媒体URL or 媒体字节 is not None:
             file_info = await _上传媒体(
                 _http,
                 会话标识,
@@ -3767,6 +3949,8 @@ async def 发送消息(
                 媒体路径,
                 媒体URL,
                 int(媒体文件类型 or 1),
+                媒体字节,
+                媒体文件名,
             )
         if not file_info:
             return {"ok": False, "message": "媒体上传失败"}
@@ -3877,7 +4061,7 @@ async def 发送消息(
                     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
                         展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
                     if 类型 == "media":
-                        展示内容 = "[媒体]"
+                        展示内容 = f"[{_普通媒体记录().get('type') or '文件'}]"
                     elif 类型 == "ark":
                         展示内容 = "[ARK卡片] " + 展示内容
                     elif 类型 == "card":
@@ -3887,6 +4071,8 @@ async def 发送消息(
                         媒体记录 = _图片媒体记录()
                     elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
                         媒体记录 = _图片媒体记录()
+                    elif 类型 == "media":
+                        媒体记录 = _普通媒体记录()
                     记录 = 记录发送消息(
                         会话标识,
                         会话类型 or "group",
@@ -3922,7 +4108,7 @@ async def 发送消息(
     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
         展示内容 = "[图片]" if not 内容 else "[图片] " + 内容
     if 类型 == "media":
-        展示内容 = "[媒体]"
+        展示内容 = f"[{_普通媒体记录().get('type') or '文件'}]"
     elif 类型 == "ark":
         展示内容 = "[ARK卡片] " + 展示内容
     elif 类型 == "card":
@@ -3932,6 +4118,8 @@ async def 发送消息(
         媒体记录 = _图片媒体记录()
     elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
         媒体记录 = _图片媒体记录()
+    elif 类型 == "media":
+        媒体记录 = _普通媒体记录()
     记录 = 记录发送消息(
         会话标识,
         会话类型 or "group",

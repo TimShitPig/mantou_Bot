@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.62.26</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.66.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -105,10 +105,10 @@ from .帮助网页脚本 import 控制台脚本
 
         <section id="page-messages" class="page-view" data-page="messages" hidden>
           <style>
-             .msg-shell { --msg-list-width:340px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; }
+             .msg-shell { --msg-list-width:340px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; transition:grid-template-columns .22s ease; }
              .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
              .chat-list-panel { position:relative; border-right:1px solid #e8e9ec; background:#fafafa; }
-            .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 12px 8px; border-bottom:1px solid #e8e9ec; background:#fff; }
+            .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 48px 8px 12px; border-bottom:1px solid #e8e9ec; background:#fff; }
             .msg-filter { display:flex; gap:2px; padding:2px; background:#f2f3f5; border-radius:8px; }
             .msg-filter button { flex:1 1 0; min-width:0; min-height:26px; padding:0 4px; border:0; border-radius:6px; background:transparent; color:#666; font-size:11px; font-weight:600; cursor:pointer; }
             .msg-filter button.active { background:#fff; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.08); }
@@ -183,6 +183,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-image-link:focus-visible { outline:2px solid #12b7f5; outline-offset:3px; }
             .msg-media img { max-width:240px; max-height:240px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; background:#f2f3f5; }
             .msg-media img:hover { transform:scale(1.03); }
+            .msg-video-media video { display:block; width:min(320px,80vw); max-height:240px; border-radius:8px; background:#111; }
             .msg-image-link.is-broken { display:none; }
             .msg-file-card { display:flex; align-items:center; gap:9px; min-width:190px; max-width:290px; padding:8px 10px; border-radius:8px; background:#f5f8fc; color:#3e4a5a; text-decoration:none; }
             .msg-file-card:hover { background:#eaf2fc; }
@@ -218,7 +219,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
             .msg-action:hover { background:#d2e9fb; color:#12b7f5; }
             .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
-             .msg-composer { position:relative; display:flex; flex-direction:column; gap:8px; min-height:132px; max-height:52vh; padding:10px 14px 12px; overflow:auto; resize:vertical; background:#fff; border-top:1px solid #e8e9ec; }
+             .msg-composer { position:relative; display:flex; flex-direction:column; gap:8px; min-height:132px; max-height:52vh; padding:10px 14px 12px; overflow:auto; resize:vertical; background:#fff; border-top:1px solid #e8e9ec; transition:height .22s ease,min-height .22s ease,padding .22s ease; }
             .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
             .msg-composer-mode[hidden], .msg-composer-tabs[hidden], .msg-composer-toggle[hidden], .msg-composer > .msg-extra[hidden] { display:none !important; }
             .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
@@ -245,11 +246,17 @@ from .帮助网页脚本 import 控制台脚本
         .msg-img-chip img { width:100%; height:100%; object-fit:cover; display:block; }
         .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
         .msg-img-remove:hover { background:rgba(230,67,64,.9); }
+        .msg-attachment-inline { position:relative; display:flex; align-items:center; gap:8px; min-height:40px; margin:9px 12px 0; padding:7px 34px 7px 9px; border:1px solid #e3e4e8; border-radius:6px; background:#f5f6f8; color:#555; }
+        .msg-attachment-inline[hidden] { display:none; }
+        .msg-attachment-icon { width:25px; height:25px; display:grid; place-items:center; border-radius:5px; background:#dcecff; color:#3a7bd5; font-size:13px; font-weight:700; }
+        .msg-attachment-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
         .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:4px; background:#f8f7ff; color:#999; font-size:11px; }
         .msg-quote-preview[hidden] { display:none; }
         .msg-quote-preview b { color:#333; }
         .msg-quote-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .msg-toolbar { display:flex; align-items:center; gap:10px; }
+        .msg-composer-topbar { display:flex; align-items:center; gap:5px; min-height:30px; }
+        .msg-composer-top-hint { margin-left:3px; color:#a0a4ad; font-size:10px; }
+        .msg-toolbar { display:flex; align-items:center; gap:10px; min-height:30px; }
         .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:4px; color:#6b6f78; cursor:pointer; }
         .msg-tool-btn:hover { background:#f0f7ff; color:#12b7f5; }
         .msg-tool-btn svg { display:block; }
@@ -335,26 +342,28 @@ from .帮助网页脚本 import 控制台脚本
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
              /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
-             .msg-list-resizer { position:absolute; z-index:4; top:0; right:-4px; bottom:0; width:9px; padding:0; border:0; background:transparent; cursor:col-resize; }
+             .msg-list-resizer { position:absolute; z-index:4; top:0; right:-6px; bottom:0; width:14px; padding:0; border:0; background:transparent; cursor:col-resize; }
              .msg-list-resizer,.msg-composer-resizer { touch-action:none; }
-             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:3px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
+             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:6px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
              .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
              .msg-list-resizer:hover::before,.msg-list-resizer:focus-visible::before { background:#12b7f5; }
              .msg-panel-toggle { display:grid; place-items:center; flex:0 0 auto; width:27px; height:27px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#fff; color:#7a818a; font-size:17px; line-height:1; cursor:pointer; transition:background .16s ease,border-color .16s ease,color .16s ease; }
              .msg-panel-toggle:hover,.msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#f0f7ff; color:#0b9bd0; }
-             .msg-list-collapse { align-self:flex-end; margin:2px 12px 2px 0; }
+             .msg-list-collapse { position:absolute; z-index:5; top:10px; right:8px; margin:0; }
              .msg-composer-resizer { position:absolute; z-index:2; top:-6px; right:14px; left:14px; width:calc(100% - 28px); height:12px; padding:0; border:0; background:transparent; cursor:row-resize; }
              .msg-composer-resizer::before { content:""; position:absolute; top:5px; left:50%; width:42px; height:3px; border-radius:3px; background:#d5dbe2; transform:translateX(-50%); opacity:.7; transition:background .16s ease,opacity .16s ease; }
              .msg-composer-resizer:hover::before,.msg-composer-resizer:focus-visible::before { background:#12b7f5; opacity:1; }
-             .msg-composer-toggle { order:-1; margin-right:2px; color:#7a818a; }
+             .msg-composer-toggle { margin-right:2px; color:#7a818a; }
              body.msg-resizing { user-select:none; }
              .msg-toolbar { min-height:30px; }
              .msg-shell.msg-list-collapsed { --msg-list-width:38px; grid-template-columns:38px minmax(0,1fr); }
              .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { visibility:hidden; pointer-events:none; }
-             .msg-shell.msg-list-collapsed .msg-list-collapse { visibility:visible; pointer-events:auto; position:absolute; top:10px; right:5px; margin:0; transform:rotate(180deg); }
+             .msg-shell.msg-list-collapsed .msg-list-collapse { visibility:visible; pointer-events:auto; position:absolute; top:10px; right:5px; margin:0; transform:none; }
              .msg-shell.msg-composer-collapsed .msg-composer { min-height:38px; height:38px; max-height:38px; overflow:hidden; padding:5px 14px; }
-             .msg-shell.msg-composer-collapsed .msg-composer > :not(.msg-composer-resizer):not(.msg-composer-toggle) { visibility:hidden; pointer-events:none; }
-             .msg-shell.msg-composer-collapsed .msg-composer .msg-composer-toggle { visibility:visible !important; pointer-events:auto !important; position:absolute; right:14px; bottom:5px; transform:rotate(180deg); }
+             .msg-shell.msg-composer-collapsed .msg-composer > :not(.msg-composer-resizer):not(.msg-composer-topbar) { visibility:hidden; pointer-events:none; }
+             .msg-shell.msg-composer-collapsed .msg-composer-topbar { visibility:visible; pointer-events:auto; }
+             .msg-shell.msg-composer-collapsed .msg-composer-topbar > :not(.msg-composer-toggle) { visibility:hidden; pointer-events:none; }
+             .msg-shell.msg-composer-collapsed .msg-composer .msg-composer-toggle { visibility:visible !important; pointer-events:auto !important; transform:none; }
              .msg-mobile-back { display:none; place-items:center; flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:7px; background:transparent; color:#5f6873; font-size:27px; line-height:1; cursor:pointer; }
              .msg-mobile-back:hover,.msg-mobile-back:focus-visible { background:#f0f7ff; color:#12b7f5; outline:none; }
              /* 消息页/专用控制页已有自己的标题，隐藏上方重复的全局标题。 */
@@ -387,10 +396,10 @@ from .帮助网页脚本 import 控制台脚本
                .msg-shell.msg-mobile-chat-open .chat-list-panel { display:none; }
                .msg-shell.msg-mobile-chat-open .msg-work { display:flex; }
                .msg-shell.msg-list-collapsed { grid-template-columns:1fr; }
-               .msg-shell.msg-list-collapsed .chat-list-panel { min-height:0; max-height:none; }
-               .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:flex; visibility:visible; pointer-events:auto; }
-               .msg-list-resizer,.msg-list-collapse { display:none !important; }
-               .msg-list-head { padding:9px 12px 8px; }
+               .msg-shell.msg-list-collapsed .chat-list-panel { min-height:38px; max-height:38px; }
+               .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:none; visibility:hidden; pointer-events:none; }
+               .msg-list-resizer { display:none; }
+               .msg-list-head { padding:9px 44px 8px 12px; }
                .msg-filter { padding:1px; }
                .msg-filter button { min-height:24px; font-size:10px; }
                .msg-search { gap:5px; }
@@ -407,6 +416,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-body { padding:14px 10px 8px; }
                .msg-bubble-wrap { max-width:82%; }
                .msg-composer { max-height:52vh; padding:7px 10px 8px; }
+               .msg-composer-top-hint { display:none; }
                .msg-input-box { max-height:none; }
                .msg-textarea { min-height:42px; }
              }
@@ -483,6 +493,9 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-input-box.drag-over { border-color:#42c6ff; background:#172b39; box-shadow:0 0 0 2px rgba(66,198,255,.16); }
               :root[data-theme="dark"] .msg-input-box.has-inline-image .msg-textarea-before { border-bottom-color:#2c3044; }
               :root[data-theme="dark"] .msg-img-chip { border-color:#2c3044; background:#161926; }
+              :root[data-theme="dark"] .msg-attachment-inline { border-color:#2c3044; background:#161926; color:#d3d7e4; }
+              :root[data-theme="dark"] .msg-attachment-icon { background:#294b70; color:#9bc9f4; }
+              :root[data-theme="dark"] .msg-composer-top-hint { color:#6f7590; }
               :root[data-theme="dark"] .msg-quote-preview { border-color:#3a3f58; background:#1f2133; color:#8a90a5; }
               :root[data-theme="dark"] .msg-quote-preview b { color:#e8eaf2; }
               :root[data-theme="dark"] .msg-tool-btn { color:#9aa0b5; }
@@ -531,6 +544,7 @@ from .帮助网页脚本 import 控制台脚本
            </style>
           <div class="msg-shell" id="msg-shell">
             <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
+              <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
               <div class="msg-list-head">
                 <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
                   <button type="button" data-msg-filter="all" class="active">全量</button>
@@ -544,7 +558,6 @@ from .帮助网页脚本 import 控制台脚本
               </div>
               <div class="msg-chats" id="msg-chats"><div class="msg-empty">正在加载会话...</div></div>
               <button class="msg-list-resizer" id="msg-list-resizer" type="button" aria-label="拖动调整会话列表宽度" title="拖动调整会话列表宽度"><span aria-hidden="true"></span></button>
-              <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
             </div>
             <div class="msg-panel msg-work">
               <div class="msg-head">
@@ -565,9 +578,25 @@ from .帮助网页脚本 import 控制台脚本
                <div class="msg-body-wrap" id="msg-body-wrap">
                  <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
                  <button class="msg-new-messages" id="msg-new-messages" type="button" hidden title="回到底部查看最新消息"><span class="msg-new-messages-dot" aria-hidden="true"></span><span id="msg-new-messages-label">有新消息</span><span class="msg-new-messages-arrow" aria-hidden="true">↓</span></button>
-               </div>
+              </div>
               <div class="msg-composer" id="msg-composer" hidden>
                 <button class="msg-composer-resizer" id="msg-composer-resizer" type="button" aria-label="拖动调整编辑区高度" title="拖动调整编辑区高度"><span aria-hidden="true"></span></button>
+                <div class="msg-composer-topbar">
+                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
+                  <label class="msg-tool-btn" title="选择图片" id="msg-img-pick" aria-label="选择图片">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                    <input id="msg-img-file" type="file" accept="image/*" hidden>
+                  </label>
+                  <label class="msg-tool-btn" title="选择视频" id="msg-video-pick" aria-label="选择视频">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+                    <input id="msg-video-file" type="file" accept="video/mp4,video/*" hidden>
+                  </label>
+                  <label class="msg-tool-btn" title="选择文件" id="msg-file-pick" aria-label="选择文件">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h6"/></svg>
+                    <input id="msg-attachment-file" type="file" accept="*/*" hidden>
+                  </label>
+                  <span class="msg-composer-top-hint">图片、视频或文件</span>
+                </div>
                 <div class="msg-composer-mode" hidden>
                   <select id="msg-send-mode" aria-label="发送方式">
                     <option value="default">默认（全量群主动/其他被动）</option>
@@ -592,14 +621,14 @@ from .帮助网页脚本 import 控制台脚本
                   <div class="msg-img-inline" id="msg-img-inline" hidden>
                     <div class="msg-img-chip"><img id="msg-img-thumb" alt="待发送图片"><button class="msg-img-remove" id="msg-img-clear" type="button" aria-label="移除图片">×</button></div>
                   </div>
+                  <div class="msg-attachment-inline" id="msg-media-inline" hidden>
+                    <span class="msg-attachment-icon" id="msg-media-icon" aria-hidden="true">□</span>
+                    <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
+                    <button class="msg-img-remove" id="msg-media-clear" type="button" aria-label="移除附件">×</button>
+                  </div>
                   <textarea id="msg-textarea" class="msg-textarea" placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></textarea>
                 </div>
                 <div class="msg-toolbar">
-                  <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
-                  <label class="msg-tool-btn" title="选择图片" id="msg-img-pick">
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                    <input id="msg-img-file" type="file" accept="image/*" hidden>
-                  </label>
                   <span style="flex:1"></span>
                   <button class="msg-btn primary" id="msg-send" type="button">发送</button>
                 </div>

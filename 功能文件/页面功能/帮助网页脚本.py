@@ -268,8 +268,9 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
+      const composerHasMedia = () => Boolean(String(msgState.mediaData || '').trim() && Number(msgState.mediaType || 0));
       const setMsgMobileChatOpen = (open) => {
         const shell = $('msg-shell');
         const back = $('msg-mobile-back');
@@ -289,7 +290,7 @@
           return fallback;
         };
         return {
-          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(520, width)) : 340,
+          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 340,
           composerHeight:Number.isFinite(height) ? Math.max(96, Math.min(420, height)) : 132,
           listCollapsed:bool(data.list_collapsed ?? data.listCollapsed),
           composerCollapsed:bool(data.composer_collapsed ?? data.composerCollapsed),
@@ -1292,6 +1293,10 @@
         const imageBefore = String(payload.image_before || '').trim();
         const imageAfter = String(payload.image_after || '').trim();
         const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
+        const mediaData = String(payload.media_data || '').trim();
+        const mediaType = Number(payload.media_file_type || 4) === 2 ? '视频' : '文件';
+        const mediaMime = String(payload.media_mime || '').trim();
+        const mediaName = String(payload.media_name || '').trim() || '附件文件';
         const message = {
           message_id: id,
           optimistic_id: id,
@@ -1304,7 +1309,9 @@
           reference_id: String(payload.quote_message_id || '').trim(),
           media: imageData
             ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content, before_text:imageBefore, after_text:imageAfter}
-            : (imageUrl ? {type:'图片', content_type:'image/*', src:imageUrl, text:content, before_text:imageBefore, after_text:imageAfter} : null),
+            : (imageUrl
+              ? {type:'图片', content_type:'image/*', src:imageUrl, text:content, before_text:imageBefore, after_text:imageAfter}
+              : (mediaData ? {type:mediaType, content_type:mediaMime, name:mediaName, optimistic_data:mediaData, text:content} : null)),
         };
         const entry = {
           id,
@@ -1344,6 +1351,7 @@
         msgState.quote = null;
         msgState.pastedImage = null;
         msgState.pastedImageSource = '';
+        clearComposerMedia();
         const inline = $('msg-img-inline');
         if (inline) inline.hidden = true;
         $('msg-input-box')?.classList.remove('has-inline-image');
@@ -1466,10 +1474,15 @@
            const src = safeMediaUrl(directSrc) || inlineSrc;
           const typeLower = type.toLowerCase();
           const isImage = ['图片', 'image', 'img'].includes(typeLower) || contentType.startsWith('image/');
+          const isVideo = ['视频', 'video'].includes(typeLower) || contentType.startsWith('video/');
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
             const preview = mediaProxyUrl(src, 'image');
             return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
+          }
+          if (isVideo && src) {
+            const videoUrl = mediaProxyUrl(src, 'file');
+            return `<div class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
           }
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
@@ -1499,6 +1512,7 @@
         const before = $('msg-textarea-before');
         const after = $('msg-textarea');
         const inputBox = $('msg-input-box');
+        clearComposerMedia();
         if (!composerHasImage() && before && after) {
           before.value = after.value;
           after.value = '';
@@ -1515,6 +1529,49 @@
         if (thumb) thumb.src = preview || data || source || '';
         const inline = $('msg-img-inline');
         if (inline) inline.hidden = false;
+      };
+      const setComposerMedia = (data, name, fileType, mime = '') => {
+        clearMsgImage();
+        msgState.mediaData = String(data || '');
+        msgState.mediaName = String(name || '附件文件').trim() || '附件文件';
+        msgState.mediaType = Number(fileType || 4) === 2 ? 2 : 4;
+        msgState.mediaMime = String(mime || '').trim();
+        msgState.sendType = 'media';
+        const inline = $('msg-media-inline');
+        const label = $('msg-media-name');
+        const icon = $('msg-media-icon');
+        if (label) label.textContent = msgState.mediaName;
+        if (icon) icon.textContent = msgState.mediaType === 2 ? '▶' : '□';
+        if (inline) inline.hidden = false;
+        $('msg-textarea')?.focus();
+      };
+      const clearComposerMedia = () => {
+        msgState.mediaData = null;
+        msgState.mediaName = '';
+        msgState.mediaType = 0;
+        msgState.mediaMime = '';
+        const inline = $('msg-media-inline');
+        if (inline) inline.hidden = true;
+        const label = $('msg-media-name');
+        if (label) label.textContent = '待发送附件';
+        const input = $('msg-attachment-file');
+        const video = $('msg-video-file');
+        if (input) input.value = '';
+        if (video) video.value = '';
+      };
+      const readComposerMediaFile = (file, fileType) => {
+        if (!file) return;
+        const maxBytes = 200 * 1024 * 1024;
+        if (Number(file.size || 0) <= 0) return toast('文件为空，无法发送');
+        if (Number(file.size || 0) > maxBytes) return toast('文件超过 200 MB 限制');
+        if (Number(fileType) === 2 && String(file.type || '').toLowerCase() !== 'video/mp4' && !/\.mp4$/i.test(String(file.name || ''))) return toast('视频只支持 MP4 格式');
+        const reader = new FileReader();
+        reader.onload = () => {
+          setComposerMedia(String(reader.result || ''), file.name, Number(fileType) === 2 ? 2 : 4, file.type);
+          toast(`${Number(fileType) === 2 ? '视频' : '文件'}已添加，可继续输入说明后发送`);
+        };
+        reader.onerror = () => toast('文件读取失败，请重试');
+        reader.readAsDataURL(file);
       };
       const copyImageToClipboard = async (source, image) => {
         try {
@@ -2051,14 +2108,21 @@
       const sendMessage = () => {
         if (msgState.chatRemoved) return toast('你已被移除群聊');
         const hasImage = composerHasImage();
+        const hasMedia = composerHasMedia();
         const imageBefore = hasImage ? String($('msg-textarea-before')?.value || '').trim() : '';
         const imageAfter = hasImage ? String($('msg-textarea')?.value || '').trim() : '';
         const content = hasImage
           ? [imageBefore, imageAfter].filter(Boolean).join('\n')
           : $('msg-textarea').value.trim();
         const customId = $('msg-custom-id')?.value.trim() || '';
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : msgState.sendType, content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter };
-        if (msgState.sendType === 'media') {
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter };
+        if (hasMedia) {
+          payload.media_data = msgState.mediaData;
+          payload.media_name = msgState.mediaName;
+          payload.media_file_type = msgState.mediaType;
+          payload.media_mime = msgState.mediaMime;
+          if (content) payload.media_text = content;
+        } else if (msgState.sendType === 'media' && !hasImage) {
           payload.media_file_type = Number($('msg-media-type')?.value || 1);
           payload.media = $('msg-media-path')?.value.trim() || '';
           payload.media_url = $('msg-media-url')?.value.trim() || '';
@@ -2078,7 +2142,7 @@
           payload.card = { title: $('msg-card-title')?.value.trim() || '', description: $('msg-card-desc')?.value.trim() || '', pic_url: $('msg-card-pic')?.value.trim() || '', url: $('msg-card-url')?.value.trim() || '' };
           if (!payload.card.title) return toast('请填写卡片标题');
         }
-        if (!content && !hasImage && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
+        if (!content && !hasImage && !hasMedia && !['media','ark','card'].includes(msgState.sendType)) return toast('请输入消息内容');
         const entry = createOptimisticSend(payload);
         // 先完成本地发送事务，输入框立即恢复可用；网络请求在后台运行。
         resetComposer();
@@ -2127,7 +2191,7 @@
       const msgInputBox = $('msg-input-box');
       msgInputBox?.addEventListener('dragover', (event) => {
         const types = Array.from(event.dataTransfer?.types || []);
-        if (!types.includes('application/x-mantou-image') && !types.includes('text/uri-list')) return;
+        if (!types.includes('Files') && !types.includes('application/x-mantou-image') && !types.includes('text/uri-list')) return;
         event.preventDefault();
         event.stopPropagation();
         event.dataTransfer.dropEffect = 'copy';
@@ -2142,6 +2206,18 @@
         event.stopPropagation();
         msgInputBox.classList.remove('drag-over');
         const transfer = event.dataTransfer;
+        const droppedFile = transfer?.files?.[0];
+        if (droppedFile) {
+          if (String(droppedFile.type || '').toLowerCase().startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = () => setComposerImage(String(reader.result || ''), '', String(reader.result || ''));
+            reader.onerror = () => toast('图片读取失败，请重试');
+            reader.readAsDataURL(droppedFile);
+          } else {
+            readComposerMediaFile(droppedFile, String(droppedFile.type || '').toLowerCase().startsWith('video/') ? 2 : 4);
+          }
+          return;
+        }
         const custom = transfer?.getData('application/x-mantou-image') || '';
         const uri = transfer?.getData('text/uri-list') || transfer?.getData('text/plain') || '';
         const source = String(custom || uri).split(/\r?\n/).map((value) => value.trim()).find((value) => value && !value.startsWith('#')) || '';
@@ -2172,6 +2248,15 @@
         reader.readAsDataURL(file);
         e.target.value = '';
       });
+      $('msg-video-file').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        readComposerMediaFile(file, 2);
+      });
+      $('msg-attachment-file').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        readComposerMediaFile(file, 4);
+      });
+      $('msg-media-clear').addEventListener('click', clearComposerMedia);
       const maybeLoadOlderMessages = () => {
         const body = $('msg-body');
         if (!body || body.scrollTop > 20 || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;

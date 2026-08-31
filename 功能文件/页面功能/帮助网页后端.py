@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.26"
+控制台版本 = "5.66.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1183,7 +1183,7 @@ def _规范化消息布局(布局: Any = None) -> dict[str, Any]:
     except (TypeError, ValueError):
         输入高度 = int(消息布局默认值["composer_height"])
     return {
-        "list_width": max(220, min(520, 列表宽度)),
+        "list_width": max(220, min(680, 列表宽度)),
         "composer_height": max(96, min(420, 输入高度)),
         "list_collapsed": _解析消息布局布尔值(
             来源.get("list_collapsed"), bool(消息布局默认值["list_collapsed"])
@@ -1878,6 +1878,9 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片后文本=str(数据.get("image_after") or ""),
              媒体路径=str(数据.get("media") or ""),
              媒体URL=str(数据.get("media_url") or ""),
+             媒体数据=str(数据.get("media_data") or ""),
+             媒体文件名=str(数据.get("media_name") or ""),
+             媒体内容类型=str(数据.get("media_mime") or ""),
              媒体文本=str(数据.get("media_text") or ""),
              媒体文件类型=int(数据.get("media_file_type") or 1),
             ARK模板ID=str(数据.get("ark_template_id") or ""),
