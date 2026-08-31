@@ -4419,16 +4419,19 @@ async def 生成下载回复流(
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
+            账号有VIP = _是真值(details.get("is_vip"))
+            正文来源 = "官方账号接口" if 账号有VIP else "免费明文接口"
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
                 f"原始章节数={原始目录数}, 付费类型={付费类型}, "
-                f"书籍类型={'published' if published else 'novel'}"
+                f"书籍类型={'published' if published else 'novel'}, "
+                f"账号VIP={'是' if 账号有VIP else '否'}, 正文来源={正文来源}"
             )
             yield 格式化下载提示(details, len(catalog))
 
             stage = "content"
-            if not _是真值(details.get("is_vip")):
+            if not 账号有VIP:
                 logger.debug(
                     f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP=否, 来源=免费正文接口"
                 )
