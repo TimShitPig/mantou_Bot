@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.70.2</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.70.3</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -559,7 +559,7 @@ from .帮助网页脚本 import 控制台脚本
             </div>
             <div class="msg-panel msg-work">
               <div class="msg-head">
-                <button class="msg-mobile-back" id="msg-mobile-back" type="button" aria-hidden="true" aria-label="返回会话列表" title="返回会话列表"><span aria-hidden="true">‹</span></button>
+                <button class="msg-mobile-back" id="msg-mobile-back" type="button" hidden aria-label="返回会话列表" title="返回会话列表"><span aria-hidden="true">‹</span></button>
                 <div style="min-width:0">
                   <div class="msg-head-name" id="msg-head-name">选择一个会话</div>
                   <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>

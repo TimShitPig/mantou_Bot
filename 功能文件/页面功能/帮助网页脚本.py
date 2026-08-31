@@ -368,9 +368,14 @@
       const setMsgMobileChatOpen = (open) => {
         const shell = $('msg-shell');
         const back = $('msg-mobile-back');
+        if (back && !open && document.activeElement === back) back.blur();
         if (shell) shell.classList.toggle('msg-mobile-chat-open', Boolean(open));
         document.body.classList.toggle('msg-mobile-chat-view', Boolean(open));
-        if (back) back.setAttribute('aria-hidden', String(!open));
+        if (back) {
+          back.hidden = !open;
+          back.tabIndex = open ? 0 : -1;
+          back.removeAttribute('aria-hidden');
+        }
       };
       const msgLayout = {listWidth:340, composerHeight:132, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
@@ -1854,7 +1859,14 @@
               return;
             }
             img.hidden = true;
-            img.closest('.msg-image-link')?.classList.add('is-broken');
+            const holder = img.closest('.msg-image-link');
+            holder?.classList.add('is-broken');
+            if (holder && !holder.querySelector('.msg-media-ph')) {
+              const placeholder = document.createElement('span');
+              placeholder.className = 'msg-media-ph';
+              placeholder.textContent = '图片已过期或不可用';
+              holder.appendChild(placeholder);
+            }
           });
         });
         if (scroll.prepend) {
