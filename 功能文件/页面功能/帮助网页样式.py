@@ -242,13 +242,13 @@
      .summary-card > span { color:var(--muted); font-size:12px; }
      .summary-card > strong { margin-top:12px; color:var(--ink); font-size:21px; }
      .summary-card > small { min-height:18px; margin-top:4px; color:var(--muted); font-size:11px; }
-     .text-button { display:block; margin-top:auto; padding:0; color:var(--primary); font-size:12px; font-weight:700; text-align:left; }
+     .text-button { display:block; margin-top:auto; padding:0; border:0; background:transparent; color:var(--primary); cursor:pointer; font:inherit; font-size:12px; font-weight:700; text-align:left; }
      .text-button:hover { color:var(--primary-dark); }
      .page-grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(280px,.9fr); gap:16px; margin-top:16px; }
      .page-grid .console-card { min-width:0; }
      .page-view-head { margin-top:18px; margin-bottom:0; }
      .shortcut-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-     .shortcut-card { min-height:94px; display:grid; grid-template-columns:30px minmax(0,1fr); grid-template-rows:auto auto; column-gap:10px; align-items:center; padding:13px; border:1px solid #e8e9f2; border-radius:7px; background:#fff; color:var(--ink); text-align:left; }
+     .shortcut-card { width:100%; min-height:94px; display:grid; grid-template-columns:30px minmax(0,1fr); grid-template-rows:auto auto; column-gap:10px; align-items:center; padding:13px; border:1px solid #e8e9f2; border-radius:7px; background:#fff; color:var(--ink); cursor:pointer; font:inherit; text-align:left; }
      .shortcut-card:hover { border-color:#c9c6ff; background:#fbfaff; }
      .shortcut-icon { grid-row:1 / span 2; width:30px; height:30px; display:grid; place-items:center; border-radius:8px; background:var(--primary-soft); color:var(--primary); font-size:14px; }
      .shortcut-card strong { font-size:12px; }
@@ -323,7 +323,6 @@
       .page-view:not([hidden]) .console-card:nth-child(4),.page-view:not([hidden]) .summary-card:nth-child(4),.page-view:not([hidden]) .shortcut-card:nth-child(4),.page-view:not([hidden]) .pan-card:nth-child(4),.page-view:not([hidden]) .runtime-item:nth-child(4) { animation-delay:.135s; }
       .summary-card,.shortcut-card,.pan-card,.runtime-item { transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease; }
       .summary-card:hover,.shortcut-card:hover,.pan-card:hover,.runtime-item:hover { transform:translateY(-2px); }
-      .shortcut-card { cursor:default; }
       .switch:active { animation:switch-feedback .22s ease both; }
      /* Novel controls use an unframed workspace with compact, real controls. */
      .novel-console { margin-top:18px; padding:4px 0 0; }
