@@ -392,8 +392,9 @@ def 标记消息撤回(会话标识: str, message_id: str) -> bool:
                 f"UPDATE `{消息记录表名}` SET recalled=1 WHERE 会话标识=%s AND message_id=%s",
                 (会话标识, message_id),
             )
+            已更新 = int(getattr(游标, "rowcount", 0) or 0)
         连接.commit()
-        return True
+        return 已更新 > 0
     except Exception as exc:
         logger.warning("消息记录 MySQL 撤回标记失败：错误类型=%s", type(exc).__name__)
         return False

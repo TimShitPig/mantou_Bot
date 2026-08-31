@@ -1335,13 +1335,29 @@
         if (!confirm(`确定撤回选中的 ${ids.length} 条消息吗？发送超过 2 分钟的消息不可撤回。`)) return;
         let okCount = 0; let failCount = 0;
         for (const id of ids) {
-          try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:id})}); okCount++; }
+          try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:id})}); markLocalMessageRecalled(id); okCount++; }
           catch (error) { failCount++; }
         }
         toast(`撤回完成：成功 ${okCount} 条${failCount ? `，失败 ${failCount} 条` : ''}`);
         exitMultiMode(); loadMsgHistory();
       };
       const msgMessageKey = (message) => String(message?.message_id || message?.id || '');
+      const msgIsRecalled = (message) => {
+        const value = message?.recalled;
+        return value === true || value === 1 || ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+      };
+      const mergeMsgRecalledStates = (incoming, current = msgState.messages) => {
+        const recalledKeys = new Set((Array.isArray(current) ? current : [])
+          .filter((message) => msgIsRecalled(message))
+          .map((message) => msgMessageKey(message))
+          .filter(Boolean));
+        return (Array.isArray(incoming) ? incoming : []).map((message) => {
+          const key = msgMessageKey(message);
+          return key && recalledKeys.has(key) && !msgIsRecalled(message)
+            ? {...message, recalled:true}
+            : message;
+        });
+      };
       const dedupeMsgMessages = (messages) => {
         const seen = new Set();
         return (Array.isArray(messages) ? messages : []).filter((message) => {
@@ -1719,7 +1735,7 @@
           member_profiles:{...(previousData.member_profiles || {}), ...(data.member_profiles || {})},
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
-        const serverMessages = dedupeMsgMessages(data.messages || []);
+        const serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
         const msgs = mergeOptimisticMessages(msgState.chatId, serverMessages);
         // 历史缓存只保存服务器消息；待发送/失败消息由 optimisticSends 单独维护。
         msgState.historyData = {...data, messages:serverMessages};
@@ -1742,7 +1758,7 @@
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
           const botMessage = String(m.source || '').startsWith('bot');
-          const recalled = Boolean(m.recalled);
+          const recalled = msgIsRecalled(m);
           const optimisticId = String(m.optimistic_id || '').trim();
           const optimisticEntry = optimisticId ? msgState.optimisticSends.get(optimisticId) : null;
           const sendState = String(optimisticEntry?.status || m.send_status || '').trim();
@@ -1780,9 +1796,9 @@
           const media = renderMessageMedia(mediaData);
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
-          let content = recalled ? '（消息已撤回）' : stripMediaMarker(renderedContent, mediaData);
+          let content = recalled ? '已撤回' : stripMediaMarker(renderedContent, mediaData);
           if (!recalled && !content && mediaText) content = renderText(mediaText);
-          if (!content && !media) content = recalled ? '（消息已撤回）' : '（空消息）';
+          if (!content && !media) content = recalled ? '已撤回' : '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
           const hasInlineMediaText = !recalled && media && mediaData && !Array.isArray(mediaData)
             && (Object.prototype.hasOwnProperty.call(mediaData, 'before_text') || Object.prototype.hasOwnProperty.call(mediaData, 'after_text'));
@@ -1962,6 +1978,19 @@
         const chatId = String(payload.chat_id || '').trim();
         const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
         if (!chatId || !message) return;
+        const messageKey = msgMessageKey(message);
+        const recalledIndex = messageKey ? msgState.messages.findIndex((item) => msgMessageKey(item) === messageKey) : -1;
+        if (msgIsRecalled(message) && recalledIndex >= 0) {
+          msgState.messages = msgState.messages.map((item, index) => index === recalledIndex ? {...item, recalled:true} : item);
+          if (msgState.chatId === chatId && !$('page-messages')?.hidden) {
+            const body = $('msg-body');
+            renderMsgMessages(
+              {...(msgState.historyData || {}), messages:msgState.messages},
+              {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+            );
+          }
+          return;
+        }
         msgState.profiles = mergeMsgProfiles(
           {...(msgState.profiles || {}), ...(payload.member_profiles || {})},
           [message],
@@ -1997,8 +2026,8 @@
         }
         if (!isViewing || !isNewEvent) return;
         const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
-        const messageKey = msgMessageKey(realtimeMessage);
-        const alreadyRendered = msgState.messages.some((item) => messageKey && msgMessageKey(item) === messageKey);
+        const realtimeKey = msgMessageKey(realtimeMessage);
+        const alreadyRendered = msgState.messages.some((item) => realtimeKey && msgMessageKey(item) === realtimeKey);
         if (!alreadyRendered) {
           msgState.messages = [...msgState.messages, realtimeMessage];
           scheduleMsgRealtimeMessageRender(chatId, followLatest);
@@ -2057,11 +2086,17 @@
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
           if (requestId !== msgState.historyRequest || requestChatId !== msgState.chatId || requestChatType !== msgState.chatType) return;
-          const incoming = dedupeMsgMessages(data.messages || []);
+          const incoming = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
           if (quiet && !older) {
             updateMsgHead(data);
             const newLast = msgMessageKey(incoming[incoming.length - 1]);
-            if (previousLast === newLast && incoming.length === msgState.messages.length) {
+            const recalledChanged = incoming.some((message) => {
+              const key = msgMessageKey(message);
+              if (!key) return false;
+              const previous = msgState.messages.find((item) => msgMessageKey(item) === key);
+              return previous && msgIsRecalled(previous) !== msgIsRecalled(message);
+            });
+            if (previousLast === newLast && incoming.length === msgState.messages.length && !recalledChanged) {
               cacheMsgHistory(historyCacheKey, {...data, messages:msgState.messages.map((message) => ({...message}))});
               return;
             }
@@ -2139,9 +2174,25 @@
           updateMsgAdminTag();
         }
       };
+      const markLocalMessageRecalled = (messageId) => {
+        const id = String(messageId || '').trim();
+        if (!id) return;
+        let changed = false;
+        msgState.messages = msgState.messages.map((message) => {
+          if (String(message?.message_id || '') !== id || message.recalled) return message;
+          changed = true;
+          return {...message, recalled:true};
+        });
+        if (!changed || $('page-messages')?.hidden) return;
+        const body = $('msg-body');
+        renderMsgMessages(
+          {...(msgState.historyData || {}), messages:msgState.messages},
+          {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+        );
+      };
       const recallMessage = async (messageId) => {
         if (!confirm('确定撤回这条消息吗？发送超过 2 分钟的消息不可撤回。')) return;
-        try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:messageId})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('撤回成功'); loadMsgHistory(); }
+        try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:messageId})}); markLocalMessageRecalled(messageId); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('撤回成功'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };
       const refreshGroupInfo = async () => {

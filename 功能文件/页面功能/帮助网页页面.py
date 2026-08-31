@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.68.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.68.1</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -172,7 +172,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-inline-code { padding:1px 4px; border-radius:4px; background:rgba(0,0,0,.08); font:12px/1.4 Consolas,Monaco,monospace; }
             .msg-command-chip { display:inline; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed currentColor; background:transparent; color:inherit; font:inherit; line-height:inherit; cursor:pointer; }
             .msg-command-chip:hover { opacity:.72; }
-            .msg-bubble.recalled { color:#bbb; font-style:italic; background:#eee; }
+            .msg-bubble.recalled { color:#c45b5b; font-style:italic; background:#fff1f1; border:1px solid #ffd6d6; }
             .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
@@ -213,7 +213,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-tag.bot { background:#ffeef5; color:#c66791; }
             .msg-tag.role { background:#eef3ff; color:#5b7bd5; }
             .msg-tag.self { background:#e9fbf3; color:#319e6b; }
-            .msg-tag.recalled { background:#f2f2f5; color:#9a9cb0; }
+            .msg-tag.recalled { background:#fff0f0; color:#e64340; }
             .msg-actions { display:flex; gap:5px; margin-top:5px; }
             .msg-row.self .msg-actions { justify-content:flex-end; }
             .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
@@ -463,7 +463,7 @@ from .帮助网页脚本 import 控制台脚本
             :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#12b7f5; color:#fff; }
             :root[data-theme="dark"] .msg-inline-link { color:#77b8f2; }
             :root[data-theme="dark"] .msg-inline-code { background:rgba(255,255,255,.12); }
-              :root[data-theme="dark"] .msg-bubble.recalled { color:#6f7590; background:#1a1e2a; }
+              :root[data-theme="dark"] .msg-bubble.recalled { color:#f08080; background:#302126; border-color:#5a3038; }
               :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
               :root[data-theme="dark"] .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
@@ -477,7 +477,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-tag.bot { background:#3a2130; color:#e287ae; }
               :root[data-theme="dark"] .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
               :root[data-theme="dark"] .msg-tag.self { background:#16382c; color:#55d8a2; }
-              :root[data-theme="dark"] .msg-tag.recalled { background:#262b38; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-tag.recalled { background:#3a2121; color:#f08080; }
               :root[data-theme="dark"] .msg-action { background:#262b38; color:#9aa0b5; }
               :root[data-theme="dark"] .msg-action:hover { background:#1d3850; color:#12b7f5; }
               :root[data-theme="dark"] .msg-load-older { border-color:var(--line); background:#1f2330; color:#8a90a5; }

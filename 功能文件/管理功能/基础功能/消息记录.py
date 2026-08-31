@@ -63,6 +63,7 @@ except Exception as 导入异常:
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群机器人状态缓存: dict[str, dict[str, Any]] = globals().get("群机器人状态缓存") or {}
+已撤回消息待同步: dict[tuple[str, str], float] = globals().get("已撤回消息待同步") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _群信息刷新任务: asyncio.Task[Any] | None = globals().get("_群信息刷新任务")
@@ -1635,6 +1636,12 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        撤回键 = (会话标识, 消息ID)
+        待同步时间 = 已撤回消息待同步.get(撤回键)
+        if 待同步时间 is not None:
+            if time.time() - float(待同步时间 or 0) < 10 * 60:
+                记录["recalled"] = True
+            已撤回消息待同步.pop(撤回键, None)
         _更新消息提及资料(记录, 消息)
         已有记录 = next(
             (
@@ -1984,20 +1991,35 @@ def 设置会话已读(会话标识: str) -> bool:
 
 
 def 标记撤回(会话标识: str, 消息ID: str) -> bool:
-    会话 = 消息缓存.get(str(会话标识 or "").strip())
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = str(消息ID or "").strip()
+    if not 会话标识 or not 消息ID:
+        return False
+    当前时间 = time.time()
+    for 键, 时间戳 in list(已撤回消息待同步.items()):
+        if 当前时间 - float(时间戳 or 0) >= 10 * 60:
+            已撤回消息待同步.pop(键, None)
+    会话 = 消息缓存.get(会话标识)
     找到 = False
+    已更新记录: list[dict[str, Any]] = []
     if 会话:
         for 记录 in 会话.get("messages", []):
-            if 记录.get("message_id") == 消息ID:
+            if str(记录.get("message_id") or "").strip() == 消息ID:
                 记录["recalled"] = True
                 找到 = True
-                break
+                已更新记录.append(记录)
+    存储已标记 = False
     if _消息存储 is not None:
         try:
-            _消息存储.标记消息撤回(会话标识, 消息ID)
+            存储已标记 = bool(_消息存储.标记消息撤回(会话标识, 消息ID))
         except Exception:
-            pass
-    return 找到
+            存储已标记 = False
+    if not 找到 and not 存储已标记:
+        已撤回消息待同步[(会话标识, 消息ID)] = 当前时间
+    if 已更新记录 and 会话:
+        for 记录 in 已更新记录:
+            _推送消息事件(记录, 会话)
+    return 找到 or 存储已标记
 
 
 def _读取平台实例列表(上下文: Any) -> list[Any]:

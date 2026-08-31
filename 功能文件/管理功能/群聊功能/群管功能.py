@@ -1427,6 +1427,12 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
 
     try:
         await 使用QQ官方消息撤回(bot, 消息编号, 群号)
+        try:
+            from 功能文件.管理功能.基础功能 import 消息记录
+
+            消息记录.标记撤回(群号, 消息编号)
+        except Exception as 记录异常:
+            logger.debug("自动撤回消息记录标记失败：错误类型=%s", type(记录异常).__name__)
         logger.info(f"数字撤回成功：message_id={消息编号}")
         return True
     except Exception as exc:
