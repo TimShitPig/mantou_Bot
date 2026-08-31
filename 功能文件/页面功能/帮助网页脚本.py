@@ -252,7 +252,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, historyPrefetch:null, historyPrefetchToken:0, historyPrefetchAbort:null, historyPrefetchTimer:null, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const setMsgMobileChatOpen = (open) => {
         const shell = $('msg-shell');
@@ -751,61 +751,6 @@
           });
         });
       };
-      const cancelMsgHistoryPrefetch = () => {
-        msgState.historyPrefetchToken = Number(msgState.historyPrefetchToken || 0) + 1;
-        if (msgState.historyPrefetchTimer) { clearTimeout(msgState.historyPrefetchTimer); msgState.historyPrefetchTimer = null; }
-        if (msgState.historyPrefetchAbort) { msgState.historyPrefetchAbort.abort(); msgState.historyPrefetchAbort = null; }
-        msgState.historyPrefetch = null;
-      };
-      const prefetchMsgHistory = (chatId, chatType, data) => {
-        const id = String(chatId || '').trim();
-        const type = String(chatType || 'group');
-        const messages = Array.isArray(data?.messages) ? data.messages : [];
-        if (!id || !data?.has_more || !messages.length) { cancelMsgHistoryPrefetch(); return null; }
-        const first = messages[0] || {};
-        const beforeId = Number(first.id || 0) || 0;
-        const beforeDate = beforeId ? '' : String(first.timestamp || '');
-        if (!beforeId && !beforeDate) { cancelMsgHistoryPrefetch(); return null; }
-        const key = `${id}|${type}|${beforeId}|${beforeDate}`;
-        const existing = msgState.historyPrefetch;
-        if (existing && existing.key === key) return existing.promise;
-        if (msgState.historyPrefetchAbort) msgState.historyPrefetchAbort.abort();
-        const token = Number(msgState.historyPrefetchToken || 0) + 1;
-        msgState.historyPrefetchToken = token;
-        const controller = new AbortController();
-        msgState.historyPrefetchAbort = controller;
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
-        const entry = {key, chatId:id, chatType:type, beforeId, beforeDate, data:null, failed:false, promise:null};
-        const promise = (async () => {
-          try {
-            const prefetched = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:id, chat_type:type, before_date:beforeDate, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
-            if (token !== msgState.historyPrefetchToken || id !== String(msgState.chatId || '') || type !== String(msgState.chatType || 'group')) return null;
-            entry.data = prefetched;
-            return prefetched;
-          } catch (error) {
-            entry.failed = true;
-            return null;
-          } finally {
-            clearTimeout(timeoutId);
-            if (msgState.historyPrefetchAbort === controller) msgState.historyPrefetchAbort = null;
-          }
-        })();
-        entry.promise = promise;
-        msgState.historyPrefetch = entry;
-        return promise;
-      };
-      const scheduleMsgHistoryPrefetch = (chatId, chatType, data) => {
-        if (msgState.historyPrefetchTimer) clearTimeout(msgState.historyPrefetchTimer);
-        const id = String(chatId || '').trim();
-        const type = String(chatType || 'group');
-        const token = Number(msgState.historyPrefetchToken || 0) + 1;
-        msgState.historyPrefetchToken = token;
-        msgState.historyPrefetchTimer = setTimeout(() => {
-          msgState.historyPrefetchTimer = null;
-          if (token !== Number(msgState.historyPrefetchToken || 0) || id !== String(msgState.chatId || '') || type !== String(msgState.chatType || 'group') || $('page-messages')?.hidden) return;
-          void prefetchMsgHistory(id, type, data);
-        }, 800);
-      };
       const selectMsgChat = (chat, selectedNode = null) => {
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
@@ -819,7 +764,6 @@
         if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
         if (msgState.chatId !== chatId) {
           cancelMsgRealtimeMessageRender();
-          cancelMsgHistoryPrefetch();
         }
         // 切换会话时立即失效旧的管理员请求，避免旧群响应把当前群标成红色。
         msgState.adminRequestToken = Number(msgState.adminRequestToken || 0) + 1;
@@ -931,7 +875,6 @@
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
         msgState.historyOlderLoading = false;
-        cancelMsgHistoryPrefetch();
         msgState.historyScheduleToken = Number(msgState.historyScheduleToken || 0) + 1;
         if (msgState.historyScheduleFrame != null) {
           if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(msgState.historyScheduleFrame);
@@ -1947,7 +1890,6 @@
         if (!msgState.chatId) return;
         if (older && msgState.historyOlderLoading) return;
         if (older) msgState.historyOlderLoading = true;
-        if (!older) cancelMsgHistoryPrefetch();
         $('msg-composer').hidden = msgState.chatRemoved;
         const requestId = Number(msgState.historyRequest || 0) + 1;
         msgState.historyRequest = requestId;
@@ -1965,14 +1907,7 @@
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-          const prefetchKey = older ? `${requestChatId}|${requestChatType}|${beforeId}|${beforeId ? '' : before}` : '';
-          const prefetchedEntry = older && msgState.historyPrefetch?.key === prefetchKey ? msgState.historyPrefetch : null;
-          let data = null;
-          if (prefetchedEntry && !prefetchedEntry.failed) {
-            data = prefetchedEntry.data || await prefetchedEntry.promise;
-            if (msgState.historyPrefetch === prefetchedEntry) msgState.historyPrefetch = null;
-          }
-          if (!data) data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
+          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
           if (requestId !== msgState.historyRequest || requestChatId !== msgState.chatId || requestChatType !== msgState.chatType) return;
           const incoming = dedupeMsgMessages(data.messages || []);
           if (quiet && !older) {
@@ -1980,7 +1915,6 @@
             const newLast = msgMessageKey(incoming[incoming.length - 1]);
             if (previousLast === newLast && incoming.length === msgState.messages.length) {
               cacheMsgHistory(historyCacheKey, {...data, messages:msgState.messages.map((message) => ({...message}))});
-              scheduleMsgHistoryPrefetch(requestChatId, requestChatType, {...data, messages:incoming});
               return;
             }
           }
@@ -2001,7 +1935,6 @@
             ...data,
             messages: msgState.messages.map((message) => ({...message})),
           });
-          scheduleMsgHistoryPrefetch(requestChatId, requestChatType, {...data, messages:msgState.messages});
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
           if (!older) loadGroupRoles(true);
