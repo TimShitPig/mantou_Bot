@@ -12,6 +12,18 @@ from typing import Any
 
 日志 = logging.getLogger(__name__)
 下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
+插件根目录 = Path(__file__).resolve().parents[4]
+旧下载缓存目录 = 插件根目录 / "功能文件" / "下载缓存"
+if 插件根目录.parent.name.lower() == "plugins":
+    # AstrBot 重装插件会替换插件目录，上传中的 TXT 必须放在稳定的数据目录。
+    下载缓存目录 = 插件根目录.parent.parent / "mantou_bot_download_cache"
+
+
+def 获取下载缓存目录列表() -> tuple[Path, ...]:
+    """返回当前缓存目录和旧目录，兼容重装前遗留的续传任务。"""
+    if 旧下载缓存目录 == 下载缓存目录:
+        return (下载缓存目录,)
+    return (下载缓存目录, 旧下载缓存目录)
 上传占用标记后缀 = ".uploading"
 上传任务目录名 = ".upload_jobs"
 上传任务状态 = {"primary_pending", "primary_done", "backup_pending"}
@@ -134,25 +146,31 @@ def 删除下载缓存文件(缓存路径: str | Path | None) -> bool:
 
 
 def 获取待续传上传任务(缓存目录: str | Path | None = None) -> list[dict[str, Any]]:
-    任务目录 = 获取上传任务目录(缓存目录)
-    if not 任务目录.is_dir():
-        return []
     结果: list[dict[str, Any]] = []
-    for 任务路径 in sorted(任务目录.glob("*.json")):
-        try:
-            数据 = json.loads(任务路径.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    目录列表 = (
+        (Path(缓存目录),)
+        if 缓存目录 is not None
+        else 获取下载缓存目录列表()
+    )
+    for 当前目录 in 目录列表:
+        任务目录 = 获取上传任务目录(当前目录)
+        if not 任务目录.is_dir():
             continue
-        if (
-            not isinstance(数据, dict)
-            or str(数据.get("state") or "") not in 上传任务状态
-        ):
-            continue
-        缓存路径 = Path(str(数据.get("cache_path") or ""))
-        if 缓存路径.is_file():
-            结果.append(数据)
-        else:
-            任务路径.unlink(missing_ok=True)
+        for 任务路径 in sorted(任务目录.glob("*.json")):
+            try:
+                数据 = json.loads(任务路径.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if (
+                not isinstance(数据, dict)
+                or str(数据.get("state") or "") not in 上传任务状态
+            ):
+                continue
+            缓存路径 = Path(str(数据.get("cache_path") or ""))
+            if 缓存路径.is_file():
+                结果.append(数据)
+            else:
+                任务路径.unlink(missing_ok=True)
     return 结果
 
 
@@ -229,18 +247,23 @@ def _清理孤立占用标记(目录: Path) -> None:
 
 def 清理残留下载缓存(缓存目录: str | Path | None = None) -> int:
     """删除上次运行遗留的小说 TXT，跳过当前仍在上传的缓存。"""
-    目录 = Path(缓存目录) if 缓存目录 is not None else 下载缓存目录
-    if not 目录.is_dir():
-        return 0
     已清理 = 0
-    for 路径 in 目录.glob("*.txt"):
-        if not 路径.is_file():
+    目录列表 = (
+        (Path(缓存目录),)
+        if 缓存目录 is not None
+        else 获取下载缓存目录列表()
+    )
+    for 目录 in 目录列表:
+        if not 目录.is_dir():
             continue
-        if 上传任务待续传(路径) or 下载缓存正在使用(路径):
-            continue
-        if 删除下载缓存文件(路径):
-            已清理 += 1
-    _清理孤立占用标记(目录)
+        for 路径 in 目录.glob("*.txt"):
+            if not 路径.is_file():
+                continue
+            if 上传任务待续传(路径) or 下载缓存正在使用(路径):
+                continue
+            if 删除下载缓存文件(路径):
+                已清理 += 1
+        _清理孤立占用标记(目录)
     return 已清理
 
 
@@ -249,23 +272,28 @@ def 清理过期下载缓存(
     当前日期: date | datetime | None = None,
 ) -> int:
     """删除本地日期早于当天的小说 TXT，保留当天及上传中的文件。"""
-    目录 = Path(缓存目录) if 缓存目录 is not None else 下载缓存目录
-    if not 目录.is_dir():
-        return 0
     日期边界 = _转换为本地日期(当前日期)
     已清理 = 0
-    for 路径 in 目录.glob("*.txt"):
-        if not 路径.is_file():
+    目录列表 = (
+        (Path(缓存目录),)
+        if 缓存目录 is not None
+        else 获取下载缓存目录列表()
+    )
+    for 目录 in 目录列表:
+        if not 目录.is_dir():
             continue
-        文件日期 = _获取文件本地日期(路径)
-        if 文件日期 is None or 文件日期 >= 日期边界:
-            continue
-        if 上传任务待续传(路径) or 下载缓存正在使用(路径):
-            continue
-        if not 删除下载缓存文件(路径):
-            continue
-        已清理 += 1
-    _清理孤立占用标记(目录)
+        for 路径 in 目录.glob("*.txt"):
+            if not 路径.is_file():
+                continue
+            文件日期 = _获取文件本地日期(路径)
+            if 文件日期 is None or 文件日期 >= 日期边界:
+                continue
+            if 上传任务待续传(路径) or 下载缓存正在使用(路径):
+                continue
+            if not 删除下载缓存文件(路径):
+                continue
+            已清理 += 1
+        _清理孤立占用标记(目录)
     return 已清理
 
 
