@@ -123,7 +123,7 @@ _QQ图片域名 = re.compile(
 _显示时区 = _时区类(_时间差(hours=8))
 _临时Markdown图片: dict[str, tuple[float, bytes, str]] = globals().get("_临时Markdown图片") or {}
 _临时Markdown图片锁 = globals().get("_临时Markdown图片锁") or threading.RLock()
-_临时Markdown图片有效期秒 = 10 * 60
+_临时Markdown图片有效期秒 = 30 * 60
 _临时Markdown图片最大数量 = 64
 
 
@@ -3499,7 +3499,10 @@ async def 发送消息(
     if 图文内容:
         消息体["msg_type"] = 2
         消息体.pop("content", None)
-        消息体["markdown"] = {"content": 图文内容}
+        消息体["markdown"] = {
+            "content": 图文内容,
+            "force_verify_image_resource": True,
+        }
     else:
         # QQ 官方富媒体消息与文本不能混在同一条：没有公网图片地址时分两条发送。
         if (图片字节 is not None or 图片公开地址) and 类型 == "markdown":

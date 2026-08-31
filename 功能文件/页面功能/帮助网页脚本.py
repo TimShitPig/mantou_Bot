@@ -1561,8 +1561,15 @@
         const url = safeImageSource(source);
         if (!url) return toast('请拖入图片');
         if (!url.startsWith('data:')) {
-          setComposerImage('', url, mediaProxyUrl(url, 'image') || url);
-          toast('图片已添加，可继续输入文字后发送');
+          const proxy = mediaProxyUrl(url, 'image') || url;
+          try {
+            const dataUrl = await blobToDataUrl(await fetchImageBlob(proxy));
+            setComposerImage(dataUrl, '', dataUrl);
+            toast('图片已读取，可继续输入文字后发送');
+          } catch (_) {
+            setComposerImage('', url, proxy);
+            toast('图片已添加，可继续输入文字后发送');
+          }
           return;
         }
         try {
