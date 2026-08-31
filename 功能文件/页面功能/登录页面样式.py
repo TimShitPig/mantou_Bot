@@ -31,6 +31,9 @@
     .login-theme-control > span { color:var(--primary); font-size:14px; line-height:1; }
     .login-theme-control select { min-height:23px; padding:1px 17px 1px 2px; border:0; border-radius:4px; background:transparent; color:var(--ink); font-size:11px; font-weight:650; cursor:pointer; outline:none; }
     .login-theme-control select option { background:var(--panel); color:var(--ink); }
+    .login-theme-control > span { transform-origin:center; }
+    .theme-switching .login-shell { animation:theme-switch .32s ease both; }
+    .theme-switching .login-theme-control > span { animation:theme-icon .32s ease both; }
     .login-panel h2 { margin:0; font-size:20px; }
     .login-panel > p { margin:7px 0 25px; color:var(--muted); font-size:12px; }
     .login-form { display:grid; gap:15px; }
@@ -47,6 +50,8 @@
     @keyframes login-rise { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
     @keyframes login-float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5px); } }
     @keyframes login-twinkle { 0%,100% { opacity:.45; transform:scale(.9); } 50% { opacity:1; transform:scale(1.08); } }
+    @keyframes theme-switch { 0% { opacity:.72; } 100% { opacity:1; } }
+    @keyframes theme-icon { 0% { transform:rotate(0deg) scale(.86); } 55% { transform:rotate(180deg) scale(1.08); } 100% { transform:rotate(360deg) scale(1); } }
     @media (max-width:680px) { .login-page { padding:15px; } .login-shell { grid-template-columns:1fr; max-width:430px; } .login-welcome { min-height:0; padding:31px 26px 27px; border-right:0; border-bottom:1px solid var(--line); } .login-illustration { width:130px; height:130px; margin:24px auto 18px; } .login-illustration::before { inset:8px; } .login-avatar { width:82px; height:82px; border-width:5px; } .login-avatar::before { width:72px; height:69px; top:4px; } .login-avatar-face { left:16px; top:31px; font-size:22px; letter-spacing:4px; } .login-avatar::after { right:5px; top:2px; font-size:12px; } .login-star { font-size:14px; } .login-welcome h1 { font-size:21px; } .login-panel { padding:31px 26px 34px; } .login-theme-control { margin:-8px -3px 15px 0; } }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
 

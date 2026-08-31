@@ -16,8 +16,8 @@ from .帮助网页脚本 import 控制台脚本
   <script>
     (() => {
       try {
-        const preference = ['light', 'dark', 'system'].includes(localStorage.getItem('mantou-theme')) ? localStorage.getItem('mantou-theme') : 'system';
-        const dark = preference === 'dark' || (preference === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
+        const dark = preference === 'dark';
         document.documentElement.dataset.themePreference = preference;
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       } catch (_) {}
@@ -31,8 +31,8 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.67.0</span></div></div>
-      <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.68.0</span></div></div>
+      <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
       <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div><strong data-bot-name>馒头助手</strong><span class="online">在线</span></div>
@@ -421,7 +421,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-editor { min-height:42px; }
              }
 
-            /* ===== 深色模式（跟随系统） ===== */
+              /* ===== 深色模式 ===== */
                           :root[data-theme="dark"] .msg-shell { background:#1f2330; border-color:var(--line); }
               :root[data-theme="dark"] .msg-panel { background:#1f2330; }
               :root[data-theme="dark"] .chat-list-panel { border-right-color:var(--line); background:#1a1e2a; }
