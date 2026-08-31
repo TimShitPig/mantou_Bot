@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.69.0"
+控制台版本 = "5.70.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1666,11 +1666,11 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         页码 = 1
     try:
-        每页 = int((数据 or {}).get("page_size") or 50)
+        原始每页 = int((数据 or {}).get("page_size", 50))
+        每页 = 0 if 原始每页 <= 0 else min(100, 原始每页)
     except (TypeError, ValueError):
         每页 = 50
     页码 = max(1, 页码)
-    每页 = max(1, min(100, 每页))
     缓存键 = (过滤, 搜索, 页码, 每页)
     当前时间 = time.monotonic()
     缓存项 = 消息列表缓存.get(缓存键)

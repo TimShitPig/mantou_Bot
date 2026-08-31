@@ -949,7 +949,7 @@
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
       $('msg-mobile-back')?.addEventListener('click', () => setMsgMobileChatOpen(false));
       const loadMsgChats = (force = false) => {
-        const params = {filter:msgState.filter, search:msgState.search, page:msgState.page, page_size:50};
+        const params = {filter:msgState.filter, search:msgState.search, page:1, page_size:0};
         const paramsKey = JSON.stringify(params);
         if (!force && msgState.chatListPromise && msgState.chatListKey === paramsKey) return msgState.chatListPromise;
         const requestId = Number(msgState.chatListRequest || 0) + 1;

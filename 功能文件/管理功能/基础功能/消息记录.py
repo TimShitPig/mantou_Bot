@@ -3078,7 +3078,8 @@ def _数据库聚合聊天项(
     if _消息存储 is None:
         return None
     try:
-        骨架 = _消息存储.聚合聊天列表(500)
+        # 控制台群列表使用全部模式；消息历史仍由单独接口按 100 条分页。
+        骨架 = _消息存储.聚合聊天列表(0)
         if not 骨架:
             return None
         最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
@@ -3248,7 +3249,8 @@ def 获取聊天列表(
     搜索 = str(搜索 or "").strip()
     try:
         页码 = max(1, int(页码))
-        每页 = max(1, min(100, int(每页)))
+        原始每页 = int(每页)
+        每页 = 0 if 原始每页 <= 0 else min(100, 原始每页)
     except (TypeError, ValueError):
         页码, 每页 = 1, 50
     本地数据 = _读取本地缓存文件()
@@ -3312,9 +3314,13 @@ def 获取聊天列表(
         )
     )
     总数 = len(聊天列表)
-    开始 = (页码 - 1) * 每页
+    if 每页 <= 0:
+        返回聊天 = 聊天列表
+    else:
+        开始 = (页码 - 1) * 每页
+        返回聊天 = 聊天列表[开始 : 开始 + 每页]
     return {
-        "chats": 聊天列表[开始 : 开始 + 每页],
+        "chats": 返回聊天,
         "total": 总数,
         "page": 页码,
         "page_size": 每页,

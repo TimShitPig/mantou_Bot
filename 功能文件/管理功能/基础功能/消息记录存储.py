@@ -455,17 +455,26 @@ def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
     """
     if not _MySQL可用():
         return []
-    上限 = max(1, min(上限, 500))
+    try:
+        上限 = int(上限)
+    except (TypeError, ValueError):
+        上限 = 200
+    # 上限 <= 0 表示读取全部会话，供控制台群列表使用。
+    上限 = 0 if 上限 <= 0 else min(上限, 5000)
     连接 = _打开连接()
     if 连接 is None:
         return []
     try:
         with 连接.cursor() as 游标:
-            游标.execute(
+            查询 = (
                 f"SELECT 会话标识, MAX(id) AS last_id, MAX(ts) AS last_ts, COUNT(*) AS n "
-                f"FROM `{消息记录表名}` WHERE 会话标识 != '' GROUP BY 会话标识 ORDER BY last_ts DESC LIMIT %s",
-                (上限,),
+                f"FROM `{消息记录表名}` WHERE 会话标识 != '' GROUP BY 会话标识 ORDER BY last_ts DESC"
             )
+            if 上限 > 0:
+                查询 += " LIMIT %s"
+                游标.execute(查询, (上限,))
+            else:
+                游标.execute(查询)
             行列表 = 游标.fetchall()
         结果: list[dict[str, Any]] = []
         for 行 in 行列表:
