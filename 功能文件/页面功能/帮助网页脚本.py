@@ -57,6 +57,7 @@
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
         document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
         if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
+        if (next !== 'messages' && previousView === 'messages') setMsgMobileChatOpen(false);
         if (next === 'messages') {
           connectMsgEvents();
           if (previousView !== 'messages') loadMsgChats();
@@ -257,6 +258,7 @@
         const shell = $('msg-shell');
         const back = $('msg-mobile-back');
         if (shell) shell.classList.toggle('msg-mobile-chat-open', Boolean(open));
+        document.body.classList.toggle('msg-mobile-chat-view', Boolean(open));
         if (back) back.setAttribute('aria-hidden', String(!open));
       };
       const msgLayout = {listWidth:340, composerHeight:132, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};

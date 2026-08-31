@@ -669,4 +669,10 @@
         .sidebar { gap:5px; padding-left:7px; padding-right:7px; }
         .nav a { padding-left:6px; padding-right:6px; }
       }
-   """
+      @media (max-width:760px) {
+        body.msg-mobile-chat-view .topbar,
+        body.msg-mobile-chat-view .sidebar { display:none; }
+        body.msg-mobile-chat-view .main { min-height:100dvh; }
+        body.msg-mobile-chat-view .content { width:100%; padding:0; }
+      }
+    """
