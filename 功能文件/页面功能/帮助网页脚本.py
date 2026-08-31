@@ -1620,7 +1620,10 @@
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           const roleMap = {owner:'群主', admin:'管理', member:'群员'};
-          const roleTag = roleMap[profile.role] || roleMap[String(m.raw_message||'').match(/member_role[^,]*?['"]([a-z]+)['"]/)?.[1] || ''];
+          const rawRole = String(m.raw_message || '').match(/member_role[^,]*?['"]([a-z]+)['"]/)?.[1] || '';
+          const memberRole = String(profile.role || rawRole || '').trim().toLowerCase();
+          const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
+          const roleTag = roleMap[memberRole] || '';
           if (!isSelf && roleTag) tags.push(`<span class="msg-tag role">${roleTag}</span>`);
           const renderText = (text) => {
             return replaceMsgMentions(text, profiles);
@@ -1642,8 +1645,8 @@
             ? `${mediaData.before_text ? `<div class="msg-media-text">${renderMsgMarkup(String(mediaData.before_text), profiles)}</div>` : ''}${media}${mediaData.after_text ? `<div class="msg-media-text msg-media-text-after">${renderMsgMarkup(String(mediaData.after_text), profiles)}</div>` : ''}`
             : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
-          const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || msgState.botIsAdmin);
-          const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
+          const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || (msgState.botIsAdmin && !protectedRole));
+          const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && !protectedRole;
           const quoteReady = Boolean(m.message_id) && !recalled && (!optimisticEntry || sendState === 'sent');
           const actions = [];
           if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
@@ -1656,7 +1659,7 @@
           const sendStateHtml = failedSend
             ? `<button class="msg-send-error" data-msg-retry="${esc(optimisticId)}" type="button" title="发送失败，点击重试" aria-label="发送失败，点击重试">!</button>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar">${avatarHtml(av, displayNickname || '?')}</span>
@@ -1719,13 +1722,14 @@
             const content = row.dataset.msgContent || '';
             const refidx = row.dataset.msgRefidx || '';
             const optimistic = msgState.optimisticSends.get(row.dataset.msgOptimistic || '');
+            const protectedRole = !isSelf && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
             if (msgState.multi) {
               toggleMsgSelect(row, mid);
               return;
             }
             const profile = (msgState.profiles || {})[uid] || {};
-            const canMuteRow = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && profile.role !== 'owner' && profile.role !== 'admin';
-            const canRecallRow = Boolean(mid) && !recalled && (isSelf || msgState.botIsAdmin);
+            const canMuteRow = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
+            const canRecallRow = Boolean(mid) && !recalled && (isSelf || (msgState.botIsAdmin && !protectedRole));
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
             if (canMuteRow) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
@@ -1739,7 +1743,8 @@
           });
           row.addEventListener('click', (e) => {
             if (msgState.multi && !e.target.closest('button')) {
-              const canSel = Boolean(row.dataset.msgMid) && !(row.dataset.msgRecalled === '1') && (row.dataset.msgSelf === '1' || msgState.botIsAdmin);
+              const protectedRole = row.dataset.msgSelf !== '1' && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
+              const canSel = Boolean(row.dataset.msgMid) && !(row.dataset.msgRecalled === '1') && (row.dataset.msgSelf === '1' || (msgState.botIsAdmin && !protectedRole));
               if (canSel) toggleMsgSelect(row, row.dataset.msgMid);
             }
           });
@@ -1751,7 +1756,8 @@
             const isSelf = row.dataset.msgSelf === '1';
             if (msgState.multi) return;
             const profileA = (msgState.profiles || {})[uid] || {};
-            const canMuteAv = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && profileA.role !== 'owner' && profileA.role !== 'admin';
+            const protectedRole = !isSelf && ['owner', 'admin'].includes(String(row.dataset.msgRole || profileA.role || '').toLowerCase());
+            const canMuteAv = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
             if (canMuteAv) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
