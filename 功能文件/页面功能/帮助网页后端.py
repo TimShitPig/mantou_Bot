@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.22"
+控制台版本 = "5.62.23"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -353,15 +353,39 @@ def _设置插件配置值(配置: Any, 分类名: str, 字段名: str, 值: Any
 
 
 def _插件配置可持久化(配置: Any) -> bool:
-    return callable(getattr(配置, "save_config", None))
+    return callable(getattr(配置, "save_config_async", None)) or callable(
+        getattr(配置, "save_config", None)
+    )
 
 
 async def _持久化插件配置() -> None:
     配置 = 当前帮助网页配置
+    异步保存方法 = getattr(配置, "save_config_async", None)
+    if callable(异步保存方法):
+        结果 = 异步保存方法()
+        if inspect.isawaitable(结果):
+            await 结果
+        return
     保存方法 = getattr(配置, "save_config", None)
     if not callable(保存方法):
         raise RuntimeError("插件配置没有持久化接口")
-    结果 = 保存方法()
+    try:
+        签名 = inspect.signature(保存方法)
+        必填参数 = [
+            参数
+            for 参数名, 参数 in 签名.parameters.items()
+            if 参数名 != "self"
+            and 参数.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            and 参数.default is inspect.Parameter.empty
+        ]
+    except (TypeError, ValueError):
+        必填参数 = []
+    if 必填参数:
+        配置字典 = _读取插件配置字典(配置)
+        结果 = 保存方法(dict(配置字典 or {}))
+    else:
+        结果 = 保存方法()
     if inspect.isawaitable(结果):
         await 结果
 
@@ -1371,10 +1395,12 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
         return _控制台错误(503, "插件配置不可用")
     配置字典: dict[str, Any] | None = None
     原配置快照: dict[str, Any] | None = None
+    阶段 = "读取配置"
     try:
         配置字典 = _读取插件配置字典(当前帮助网页配置)
         原配置快照 = copy.deepcopy(配置字典) if isinstance(配置字典, dict) else None
         待更新: list[tuple[str, dict[str, Any], Any]] = []
+        阶段 = "校验配置"
         for 字段名, 原值 in 字段数据.items():
             字段名 = str(字段名 or "").strip()
             定义 = 插件配置字段定义.get(字段名)
@@ -1385,6 +1411,7 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
             值 = _校验插件配置字段(字段名, 原值)
             待更新.append((字段名, 定义, 值))
         已更新 = []
+        阶段 = "写入配置"
         # 先完整校验，再一次性写入，避免同一请求中后续字段失败时留下半套配置。
         for 字段名, 定义, 值 in 待更新:
             _设置插件配置值(
@@ -1394,6 +1421,7 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
                 值,
             )
             已更新.append(字段名)
+        阶段 = "持久化配置"
         if 已更新 and _插件配置可持久化(当前帮助网页配置):
             await _持久化插件配置()
         elif 已更新 and not isinstance(当前帮助网页配置, dict):
@@ -1412,7 +1440,11 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
         if isinstance(配置字典, dict) and isinstance(原配置快照, dict):
             配置字典.clear()
             配置字典.update(原配置快照)
-        logger.warning("帮助控制台插件配置保存失败：错误类型=%s", type(exc).__name__)
+        logger.warning(
+            "帮助控制台插件配置保存失败：阶段=%s，错误类型=%s",
+            阶段,
+            type(exc).__name__,
+        )
         return _控制台错误(409, "配置保存失败，请稍后重试")
 
 
