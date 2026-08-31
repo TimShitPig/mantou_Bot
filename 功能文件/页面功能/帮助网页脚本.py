@@ -73,9 +73,10 @@
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
-      const categoryOrder = ['basic_settings', 'help_web_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
+      const categoryOrder = ['basic_settings', 'help_web_settings', 'image_host_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
       const safeFieldValue = (field) => {
         if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\n') : '';
+        if (field.kind === 'boolean') return Boolean(field.value);
         return field.secret ? '' : String(field.value ?? '');
       };
       const renderConfigEditor = (targetId, fields, editable, filter) => {
@@ -123,7 +124,7 @@
        const saveConfig = async (editor) => {
         const fields = {};
         editor.querySelectorAll('[data-config-field]').forEach((input) => {
-          const value = input.tagName === 'TEXTAREA' ? input.value : input.value;
+          const value = input.type === 'checkbox' ? input.checked : input.value;
           if (input.type === 'password' && !value.trim()) return;
            if (input.dataset.configField === 'group_file_cleanup_admin_qq') {
              fields[input.dataset.configField] = value.split(/[\s,，]+/).filter(Boolean);
@@ -232,7 +233,7 @@
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
-        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
+        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['image_host_settings', 'database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));

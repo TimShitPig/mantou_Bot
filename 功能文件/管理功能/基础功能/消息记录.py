@@ -8,12 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import hashlib
 import html
-import ipaddress
 import json
 import os
 import random
 import re
-import secrets
 import threading
 import tempfile
 import time
@@ -1391,54 +1389,8 @@ def _清理临时Markdown图片磁盘(现在: float | None = None) -> None:
 
 
 def 注册临时Markdown图片(图片字节: bytes, 内容类型: str = "image/png") -> str:
-    """把网页上传的图片写入短期磁盘缓存，供 QQ Markdown 转存。"""
-    if not isinstance(图片字节, (bytes, bytearray)) or not 图片字节:
-        return ""
-    类型 = str(内容类型 or "image/png").split(";", 1)[0].strip().lower()
-    if not 类型.startswith("image/"):
-        类型 = "image/png"
-    现在 = time.time()
-    过期时间 = 现在 + _临时Markdown图片有效期秒
-    with _临时Markdown图片锁:
-        _清理临时Markdown图片磁盘(现在)
-        for 标识, 项 in list(_临时Markdown图片.items()):
-            try:
-                if float(项[0]) <= 现在:
-                    _临时Markdown图片.pop(标识, None)
-            except (IndexError, TypeError, ValueError):
-                _临时Markdown图片.pop(标识, None)
-        while len(_临时Markdown图片) >= _临时Markdown图片最大数量:
-            最旧标识 = min(_临时Markdown图片, key=lambda 值: _临时Markdown图片[值][0])
-            _临时Markdown图片.pop(最旧标识, None)
-        标识 = secrets.token_urlsafe(24)
-        文件路径, 元数据路径 = _临时Markdown图片路径(标识)
-        try:
-            _临时Markdown图片目录.mkdir(parents=True, exist_ok=True)
-            临时文件 = 文件路径.with_name(f".{文件路径.name}.{secrets.token_hex(6)}.tmp")
-            临时元数据 = 元数据路径.with_name(
-                f".{元数据路径.name}.{secrets.token_hex(6)}.tmp"
-            )
-            临时文件.write_bytes(bytes(图片字节))
-            临时元数据.write_text(
-                json.dumps(
-                    {"expires_at": 过期时间, "content_type": 类型},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
-            )
-            临时文件.replace(文件路径)
-            临时元数据.replace(元数据路径)
-        except OSError:
-            try:
-                临时文件.unlink(missing_ok=True)
-                临时元数据.unlink(missing_ok=True)
-            except (UnboundLocalError, OSError):
-                pass
-            return ""
-        # 图片正文只保留在磁盘，避免插件重载后令牌失效或常驻内存。
-        _临时Markdown图片[标识] = (过期时间, b"", 类型)
-        return 标识
+    """旧版本兼容入口；新图片必须先上传图床，不再写入本地。"""
+    return ""
 
 
 def 读取临时Markdown图片(标识: str) -> tuple[bytes, str] | None:
@@ -1952,8 +1904,12 @@ def _取媒体预缓存信号量() -> asyncio.Semaphore | None:
     return _媒体预缓存信号量
 
 
-async def _预缓存收到消息媒体(媒体: Any, 消息ID: str = "") -> None:
-    """在 QQ 临时地址有效期内把媒体写入网页缓存，不阻塞消息接收 worker。"""
+async def _预缓存收到消息媒体(
+    媒体: Any,
+    消息ID: str = "",
+    记录: dict[str, Any] | None = None,
+) -> None:
+    """把聊天媒体异步转存图床，成功后只保留外链。"""
     信号量 = _取媒体预缓存信号量()
     if 信号量 is None:
         return
@@ -1961,7 +1917,30 @@ async def _预缓存收到消息媒体(媒体: Any, 消息ID: str = "") -> None:
         from 功能文件.页面功能 import 帮助网页后端
 
         async with 信号量:
-            await 帮助网页后端.预缓存消息媒体(媒体, 消息ID)
+            结果 = await 帮助网页后端.预缓存消息媒体(
+                媒体,
+                消息ID,
+                当前插件配置,
+            )
+        图床地址 = str(结果 or "").strip()
+        if (
+            isinstance(记录, dict)
+            and 图床地址.startswith(("http://", "https://"))
+        ):
+            媒体记录 = 记录.get("media")
+            if isinstance(媒体记录, dict):
+                媒体记录["src"] = 图床地址
+                会话标识 = str(记录.get("_session") or "").strip()
+                if _消息存储 is not None and _消息数据库已配置():
+                    更新媒体 = getattr(_消息存储, "更新消息媒体", None)
+                    if callable(更新媒体):
+                        await 等待消息记录写入(5.0)
+                        _后台执行同步(
+                            更新媒体,
+                            会话标识,
+                            消息ID,
+                            copy.deepcopy(媒体记录),
+                        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1986,7 +1965,7 @@ def _排队媒体预缓存(记录: Any) -> bool:
     _媒体预缓存地址中.add(地址)
     try:
         任务 = 循环.create_task(
-            _预缓存收到消息媒体(copy.deepcopy(媒体), 消息ID)
+            _预缓存收到消息媒体(copy.deepcopy(媒体), 消息ID, 记录)
         )
     except Exception:
         _媒体预缓存地址中.discard(地址)
@@ -4048,23 +4027,6 @@ def _规范化公网图片地址(地址: Any) -> str:
     return 文本
 
 
-def _适合QQ转存的公网地址(地址: Any) -> str:
-    """过滤本机/内网地址，避免把不可达地址交给 QQ Markdown。"""
-    文本 = _规范化公网图片地址(地址)
-    if not 文本:
-        return ""
-    try:
-        主机 = str(_解析网址(文本).hostname or "").strip().lower().rstrip(".")
-        if 主机 in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-            return ""
-        try:
-            return 文本 if ipaddress.ip_address(主机).is_global else ""
-        except ValueError:
-            return 文本
-    except (TypeError, ValueError):
-        return ""
-
-
 def _构造Markdown图文内容(
     内容: Any,
     图片地址: Any,
@@ -4189,7 +4151,6 @@ async def 发送消息(
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
-    图片公开基础地址 = _适合QQ转存的公网地址(图片公开基础地址)
     图片前文本 = str(图片前文本 or "").strip()
     图片后文本 = str(图片后文本 or "").strip()
     图片文件名 = "image.png"
@@ -4220,6 +4181,71 @@ async def 发送消息(
             return {"ok": False, "message": "媒体文件过大"}
 
     图片占位标记 = str(图片占位标记 or "\ufffc")
+
+    if 类型 in ("text", "markdown") and 图片字节 is not None and not 图片公开地址:
+        try:
+            from 功能文件.页面功能 import 图床
+
+            内容类型 = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+            }.get(Path(图片文件名).suffix.lower(), "image/png")
+            图片公开地址 = await 图床.上传图片字节(
+                图片字节,
+                图片文件名,
+                内容类型,
+                当前插件配置,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.debug("消息图片图床上传失败：错误类型=%s", type(异常).__name__)
+        if not 图片公开地址:
+            return {"ok": False, "message": "图片上传失败，请稍后再试"}
+
+    if 媒体字节 is not None and not str(媒体URL or "").strip():
+        try:
+            from 功能文件.页面功能 import 图床
+
+            媒体类型名称 = {
+                2: "video/mp4",
+                3: "audio/silk",
+                4: "application/octet-stream",
+            }.get(int(媒体文件类型 or 4), "application/octet-stream")
+            媒体URL = await 图床.上传媒体字节(
+                媒体字节,
+                媒体文件名 or "attachment.bin",
+                媒体内容类型 or 媒体类型名称,
+                当前插件配置,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.debug("消息媒体图床上传失败：错误类型=%s", type(异常).__name__)
+
+    if 媒体字节 is None and 媒体路径 and not str(媒体URL or "").strip():
+        try:
+            from 功能文件.页面功能 import 图床
+
+            媒体类型名称 = {
+                1: "image/png",
+                2: "video/mp4",
+                3: "audio/silk",
+                4: "application/octet-stream",
+            }.get(int(媒体文件类型 or 4), "application/octet-stream")
+            媒体URL = await 图床.上传媒体文件(
+                媒体路径,
+                媒体文件名 or Path(媒体路径).name,
+                媒体内容类型 or 媒体类型名称,
+                当前插件配置,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.debug("消息媒体文件图床上传失败：错误类型=%s", type(异常).__name__)
 
     def _图片媒体记录() -> dict[str, Any]:
         展示文本 = str(内容 or "").replace(图片占位标记, "").strip()
@@ -4253,22 +4279,7 @@ async def 发送消息(
             "text": str(内容 or "").replace(图片占位标记, "").strip(),
         }
 
-    # QQ 富媒体上传只返回 file_info，Markdown 图片必须使用公网 URL。
-    # 帮助网页服务为本地图片提供短时内存地址，让 QQ 官方转存后仍只发一条消息。
-    if not 图片公开地址 and 图片字节 is not None and 图片公开基础地址:
-        扩展名 = Path(图片文件名).suffix.lower()
-        内容类型 = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-        }.get(扩展名, "image/png")
-        临时标识 = 注册临时Markdown图片(图片字节, 内容类型)
-        if 临时标识:
-            图片公开地址 = f"{图片公开基础地址.rstrip('/')}/api/message/markdown-image/{临时标识}"
-
-    # 官方 Markdown 支持公网图片与文字同条发送；本地图片使用帮助网页的短时公网地址。
+    # 官方 Markdown 只接收公网图片地址；图片正文已经在图床完成转存。
     图文内容 = (
         _构造Markdown图文内容(
             内容,

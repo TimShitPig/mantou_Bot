@@ -328,6 +328,34 @@ def 写入消息(记录: dict[str, Any]) -> bool:
     return _写入消息记录(记录)
 
 
+def 更新消息媒体(会话标识: str, 消息ID: str, 媒体: Any) -> bool:
+    """在图床转存完成后只更新消息媒体外链，不保存图片正文。"""
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = str(消息ID or "").strip()
+    if not 会话标识 or not 消息ID or not _MySQL可用():
+        return False
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"UPDATE `{消息记录表名}` SET media=%s WHERE 会话标识=%s AND message_id=%s",
+                (
+                    json.dumps(媒体 or {}, ensure_ascii=False),
+                    会话标识,
+                    消息ID,
+                ),
+            )
+        连接.commit()
+        return True
+    except Exception as exc:
+        logger.warning("消息记录 MySQL 媒体外链更新失败：错误类型=%s", type(exc).__name__)
+        return False
+    finally:
+        _关闭连接(连接)
+
+
 def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     """使用单连接、单事务批量写入消息，供异步持久化队列调用。"""
     有效记录 = [记录 for 记录 in (记录列表 or []) if 记录 and 记录.get("_session")]

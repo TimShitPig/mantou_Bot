@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.73.2-2ea44f)
+![version](https://img.shields.io/badge/version-v5.73.3-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.73.2 |
+| 版本 | v5.73.3 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -150,7 +150,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 
 所有小说模块都复用统一的 TXT 合成和网盘出口。AstrBot 环境下正文写入数据目录的 `mantou_bot_download_cache/`，避免重装插件替换代码目录时删除正在上传的文件；非标准本地目录回退到 `功能文件/下载缓存/`。缓存仅用于所有已启用网盘生成分享链接，不直接通过 QQ 发送 txt 文件。插件启动或重载时会清理上次运行遗留的非占用缓存；运行期间每天按服务器本地时间零点清理本地缓存和 UC、夸克、百度上传目录中前两天及更早的小说 TXT，今天和昨天的文件以及仍在上传或等待续传的文件会保留。
 
-消息记录中的 QQ 图片、视频和文件会在接收后异步保存到 AstrBot 数据目录的 `mantou_bot_media/`，保留 30 天；历史页面请求会优先使用本地副本，并按消息 ID回退，避免 QQ 临时签名地址过期或服务器重启后出现 404。网页发送的 Markdown 图片令牌同样保存 30 天。
+聊天中的 QQ 图片、视频和普通文件会在接收后直接转存默认图床 `https://0x0.st`，消息记录只保存图床外链，不在服务器落地媒体文件；图床上传失败时不写本地媒体缓存。网页发送的图片、视频和文件也直接上传图床，消息记录只保存外链。
 
 至少一个已启用网盘上传成功后，QQ 官方机器人会按平台发送对应的链接按钮；只有一个网盘成功时按钮显示“点击打开”，多个网盘成功时按平台显示且每行最多两个；所有已启用网盘都未配置或上传失败时只回复 `文件发送失败，请稍后再试`。
 
@@ -204,6 +204,8 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 ├── metadata.yaml
 ├── requirements.txt
 └── 功能文件/
+    ├── 页面功能/
+    │   └── 图床.py
     └── 管理功能/
         ├── 基础功能/
         │   ├── QQ官方交互桥.py
@@ -261,6 +263,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 | --- | --- |
 | `group_file_cleanup_admin_qq` | 管理员 QQ 白名单 |
 | `help_web_settings` | 控制台监听地址、端口、可选域名和账号密码 |
+| `image_host_settings` | 图片图床上传地址和可选鉴权 Token；默认已配置 `https://0x0.st`，聊天图片始终使用图床 |
 | `uc_pan_settings` | UC 网盘 Cookie 和上传目录 |
 | `quark_pan_settings` | 夸克网盘 Cookie 和上传目录 |
 | `baidu_pan_settings` | 百度网盘 Cookie 和上传目录 |

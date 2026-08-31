@@ -4,7 +4,6 @@ import asyncio
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-import hashlib
 import hmac
 import inspect
 import ipaddress
@@ -16,7 +15,6 @@ import re
 import secrets
 import socket
 import threading
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -31,7 +29,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.73.2"
+控制台版本 = "5.73.3"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -46,29 +44,6 @@ except Exception:
 }
 媒体代理最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
-
-
-def _默认媒体缓存目录() -> Path:
-    """优先落到 AstrBot 数据目录，避免系统临时目录被重启清空。"""
-    try:
-        插件根目录 = Path(__file__).resolve().parents[2]
-        if 插件根目录.parent.name.lower() == "plugins":
-            return 插件根目录.parent.parent / "mantou_bot_media"
-    except (OSError, IndexError):
-        pass
-    return Path(tempfile.gettempdir()) / "mantou_bot_media"
-
-
-媒体缓存目录 = _默认媒体缓存目录()
-媒体缓存旧目录 = Path(tempfile.gettempdir()) / "mantou_bot_media"
-媒体缓存迁移完成 = False
-媒体缓存有效期秒 = 30 * 24 * 60 * 60
-媒体缓存最大字节数 = 512 * 1024 * 1024
-媒体缓存清理间隔秒 = 5 * 60
-媒体缓存上次清理时间 = float(globals().get("媒体缓存上次清理时间", 0.0) or 0.0)
-媒体缓存锁 = globals().get("媒体缓存锁") or threading.RLock()
-媒体消息索引: dict[str, tuple[Path, str]] = {}
-媒体消息索引已加载 = False
 媒体代理主机后缀 = (
     "multimedia.nt.qq.com.cn",
     "qqbot.ugcimg.cn",
@@ -234,6 +209,19 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
+    "image_host_upload_url": {
+        "category": "image_host_settings",
+        "label": "图床上传地址",
+        "kind": "text",
+        "secret": False,
+    },
+    "image_host_token": {
+        "category": "image_host_settings",
+        "label": "图床 Token",
+        "kind": "secret",
+        "secret": True,
+        "allow_empty": True,
+    },
     "uc_pan_cookie": {
         "category": "uc_pan_settings",
         "label": "UC 网盘 Cookie",
@@ -299,6 +287,7 @@ async def _后台刷新消息列表(
 配置字段分类显示名 = {
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
+    "image_host_settings": "图片图床",
     "uc_pan_settings": "UC 网盘",
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
@@ -459,7 +448,13 @@ def _读取插件配置摘要() -> dict[str, Any]:
             配置,
             str(定义["category"]),
             字段名,
-            [] if 定义["kind"] == "admin_list" else "",
+            (
+                []
+                if 定义["kind"] == "admin_list"
+                else "https://0x0.st"
+                if 字段名 == "image_host_upload_url"
+                else ""
+            ),
         )
         项目: dict[str, Any] = {
             "key": 字段名,
@@ -480,6 +475,13 @@ def _读取插件配置摘要() -> dict[str, Any]:
             项目["count"] = len(值列表)
             # 管理员标识不是密钥，网页需要能编辑它；其它敏感字段仍只返回摘要。
             项目["value"] = 值列表
+        elif 定义["kind"] == "boolean":
+            文本值 = str(原值 or "").strip().lower()
+            项目["value"] = (
+                原值
+                if isinstance(原值, bool)
+                else 文本值 in {"1", "true", "yes", "on", "enabled", "开启", "开"}
+            )
         elif not 定义.get("secret"):
             项目["value"] = (
                 list(原值) if isinstance(原值, list) else str(原值 or "")
@@ -501,9 +503,18 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     if not 定义:
         raise ValueError("配置字段不支持")
     kind = 定义["kind"]
+    if kind == "boolean":
+        if isinstance(值, bool):
+            return 值
+        文本 = str(值 or "").strip().lower()
+        if 文本 in {"1", "true", "yes", "on", "enabled", "开启", "开"}:
+            return True
+        if 文本 in {"0", "false", "no", "off", "disabled", "关闭", "关"}:
+            return False
+        raise ValueError("布尔配置值无效")
     if 定义.get("secret"):
         文本 = str(值 or "").strip()
-        if not 文本:
+        if not 文本 and not 定义.get("allow_empty"):
             raise ValueError("敏感字段不能为空")
         if len(文本) > 20000:
             raise ValueError("配置值过长")
@@ -900,200 +911,12 @@ def _识别媒体类型(响应类型: Any, 前缀: bytes, 地址: str, 模式: s
     return 类型 or "application/octet-stream"
 
 
-def _媒体缓存路径(地址: str) -> tuple[Path, Path]:
-    标识 = hashlib.sha256(str(地址 or "").encode("utf-8", errors="ignore")).hexdigest()
-    return 媒体缓存目录 / f"{标识}.cache", 媒体缓存目录 / f"{标识}.json"
-
-
-def _迁移旧媒体缓存() -> None:
-    """把升级前的系统临时缓存迁移到持久目录，保留仍有效的图片。"""
-    global 媒体缓存迁移完成
-    if 媒体缓存迁移完成 or 媒体缓存旧目录 == 媒体缓存目录:
-        媒体缓存迁移完成 = True
-        return
-    媒体缓存迁移完成 = True
-    if not 媒体缓存旧目录.is_dir():
-        return
-    try:
-        媒体缓存目录.mkdir(parents=True, exist_ok=True)
-        for 路径 in 媒体缓存旧目录.iterdir():
-            if 路径.suffix not in {".cache", ".json"}:
-                continue
-            目标 = 媒体缓存目录 / 路径.name
-            if 目标.exists():
-                continue
-            try:
-                路径.replace(目标)
-            except OSError:
-                continue
-    except OSError:
-        return
-
-
-def _清理媒体缓存() -> None:
-    global 媒体缓存上次清理时间
-    _迁移旧媒体缓存()
-    当前时间 = time.time()
-    with 媒体缓存锁:
-        if 当前时间 - 媒体缓存上次清理时间 < 媒体缓存清理间隔秒:
-            return
-        媒体缓存上次清理时间 = 当前时间
-        if not 媒体缓存目录.is_dir():
-            return
-        文件列表: list[tuple[Path, int, float]] = []
-        for 路径 in 媒体缓存目录.glob("*.cache"):
-            try:
-                状态 = 路径.stat()
-            except OSError:
-                continue
-            if 当前时间 - 状态.st_mtime > 媒体缓存有效期秒:
-                路径.unlink(missing_ok=True)
-                路径.with_suffix(".json").unlink(missing_ok=True)
-                continue
-            文件列表.append((路径, int(状态.st_size), float(状态.st_mtime)))
-        总大小 = sum(大小 for _, 大小, _ in 文件列表)
-        if 总大小 <= 媒体缓存最大字节数:
-            return
-        for 路径, 大小, _ in sorted(文件列表, key=lambda 项: 项[2]):
-            if 总大小 <= 媒体缓存最大字节数:
-                break
-            路径.unlink(missing_ok=True)
-            路径.with_suffix(".json").unlink(missing_ok=True)
-            总大小 -= 大小
-
-
-def _读取媒体缓存按消息ID(消息ID: str) -> tuple[Path, str] | None:
-    """按消息 ID 回退查找已落盘媒体，避免依赖已过期的 QQ 签名 URL。"""
-    global 媒体消息索引已加载
-    消息ID = str(消息ID or "").strip()
-    if not 消息ID or len(消息ID) > 512 or not 媒体缓存目录.is_dir():
-        return None
-    当前时间 = time.time()
-    with 媒体缓存锁:
-        if not 媒体消息索引已加载:
-            try:
-                for 元数据路径 in 媒体缓存目录.glob("*.json"):
-                    try:
-                        元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
-                        if not isinstance(元数据, dict):
-                            continue
-                        消息ID列表 = 元数据.get("message_ids")
-                        if not isinstance(消息ID列表, list):
-                            消息ID列表 = [元数据.get("message_id")]
-                        文件路径 = 元数据路径.with_suffix(".cache")
-                        类型 = str(元数据.get("content_type") or "application/octet-stream")
-                        if not 类型 or not 文件路径.is_file():
-                            continue
-                        for 当前消息ID in 消息ID列表:
-                            当前消息ID = str(当前消息ID or "").strip()
-                            if 当前消息ID:
-                                媒体消息索引[当前消息ID] = (文件路径, 类型)
-                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                        continue
-            except OSError:
-                pass
-            媒体消息索引已加载 = True
-        缓存项目 = 媒体消息索引.get(消息ID)
-        if not 缓存项目:
-            return None
-        文件路径, 类型 = 缓存项目
-        try:
-            状态 = 文件路径.stat()
-            if 当前时间 - 状态.st_mtime > 媒体缓存有效期秒:
-                媒体消息索引.pop(消息ID, None)
-                文件路径.unlink(missing_ok=True)
-                文件路径.with_suffix(".json").unlink(missing_ok=True)
-                return None
-        except OSError:
-            媒体消息索引.pop(消息ID, None)
-            return None
-        return 文件路径, 类型
-
-
-def _读取媒体缓存(地址: str, 消息ID: str = "") -> tuple[Path, str] | None:
-    _清理媒体缓存()
-    文件路径, 元数据路径 = _媒体缓存路径(地址)
-    try:
-        状态 = 文件路径.stat()
-        if time.time() - 状态.st_mtime > 媒体缓存有效期秒:
-            文件路径.unlink(missing_ok=True)
-            元数据路径.unlink(missing_ok=True)
-            return _读取媒体缓存按消息ID(消息ID)
-        元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
-        if not isinstance(元数据, dict):
-            return _读取媒体缓存按消息ID(消息ID)
-        类型 = str(元数据.get("content_type") or "application/octet-stream")
-        if not 类型:
-            return _读取媒体缓存按消息ID(消息ID)
-        return 文件路径, 类型
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return _读取媒体缓存按消息ID(消息ID)
-
-
-def _写入媒体缓存元数据(
-    地址: str, 内容类型: str, 大小: int, 消息ID: str = ""
-) -> None:
-    _, 元数据路径 = _媒体缓存路径(地址)
-    try:
-        媒体缓存目录.mkdir(parents=True, exist_ok=True)
-        旧元数据: dict[str, Any] = {}
-        try:
-            旧元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            旧元数据 = {}
-        if not isinstance(旧元数据, dict):
-            旧元数据 = {}
-        消息ID列表 = [
-            str(值 or "").strip()
-            for 值 in (旧元数据.get("message_ids") or [旧元数据.get("message_id")])
-            if str(值 or "").strip()
-        ]
-        消息ID = str(消息ID or "").strip()
-        if 消息ID and 消息ID not in 消息ID列表:
-            消息ID列表.append(消息ID)
-        元数据: dict[str, Any] = {
-            "content_type": str(内容类型 or "application/octet-stream"),
-            "size": int(大小),
-        }
-        if 消息ID列表:
-            元数据["message_ids"] = 消息ID列表[-32:]
-        临时路径 = 元数据路径.with_name(f".{元数据路径.name}.{secrets.token_hex(6)}.tmp")
-        临时路径.write_text(
-            json.dumps(元数据, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        临时路径.replace(元数据路径)
-        文件路径 = 元数据路径.with_suffix(".cache")
-        with 媒体缓存锁:
-            for 当前消息ID in 消息ID列表:
-                媒体消息索引[当前消息ID] = (
-                    文件路径,
-                    str(内容类型 or "application/octet-stream"),
-                )
-    except OSError:
-        pass
-
-
-def _媒体缓存响应(
-    request: web.Request, 缓存: tuple[Path, str], 模式: str, 文件名: str
-) -> web.FileResponse:
-    文件路径, 内容类型 = 缓存
-    响应头 = {
-        "Cache-Control": "private, max-age=120",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Type": 内容类型,
-    }
-    if 模式 == "image":
-        响应头["Content-Disposition"] = "inline"
-    else:
-        响应头["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(
-            文件名, safe=""
-        )
-    return web.FileResponse(文件路径, headers=响应头)
-
-
-async def 预缓存消息媒体(媒体: Any, 消息ID: str = "") -> bool:
-    """在 QQ 临时签名地址有效时落盘，供历史消息继续查看媒体。"""
+async def 预缓存消息媒体(
+    媒体: Any,
+    消息ID: str = "",
+    配置: Any = None,
+) -> str | bool:
+    """把聊天媒体直接转存图床，不在服务器落地媒体正文。"""
     项目 = 媒体
     if isinstance(媒体, dict):
         项目列表 = 媒体.get("items")
@@ -1109,22 +932,33 @@ async def 预缓存消息媒体(媒体: Any, 消息ID: str = "") -> bool:
     消息ID = str(消息ID or "").strip()[:512]
     if len(地址) > 8192 or not _允许媒体地址(地址):
         return False
-    已有缓存 = _读取媒体缓存(地址, 消息ID)
-    if 已有缓存 is not None:
-        if 消息ID:
-            try:
-                _写入媒体缓存元数据(
-                    地址,
-                    已有缓存[1],
-                    已有缓存[0].stat().st_size,
-                    消息ID,
-                )
-            except OSError:
-                pass
-        return True
     类型值 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
     模式 = "image" if 类型值 in {"图片", "image", "img"} else "file"
-    临时路径: Path | None = None
+    文件名 = _媒体文件名(
+        项目.get("name")
+        or 项目.get("filename")
+        or ("image.png" if 模式 == "image" else "attachment.bin")
+    )
+    声明内容类型 = str(
+        项目.get("content_type")
+        or 项目.get("mime_type")
+        or ("image/png" if 模式 == "image" else "application/octet-stream")
+    ).split(";", 1)[0]
+    try:
+        from 功能文件.页面功能 import 图床
+
+        图床地址 = await 图床.上传媒体URL(
+            地址,
+            文件名,
+            声明内容类型,
+            配置,
+        )
+        if 图床地址:
+            return 图床地址
+    except asyncio.CancelledError:
+        raise
+    except Exception as 异常:
+        logger.debug("帮助控制台消息媒体 URL 转存失败：错误类型=%s", type(异常).__name__)
     try:
         超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
         async with ClientSession(timeout=超时, trust_env=False) as 客户端:
@@ -1156,27 +990,21 @@ async def 预缓存消息媒体(媒体: Any, 消息ID: str = "") -> bool:
                 )
                 if 模式 == "image" and not 内容类型.startswith("image/"):
                     return False
-                媒体缓存目录.mkdir(parents=True, exist_ok=True)
-                缓存路径, _ = _媒体缓存路径(地址)
-                临时路径 = 缓存路径.with_name(
-                    f".{缓存路径.name}.{secrets.token_hex(6)}.tmp"
-                )
-                已写入 = 0
-                with 临时路径.open("wb") as 文件:
+                from 功能文件.页面功能 import 图床
+
+                async def _媒体流() -> Any:
                     if 前缀:
-                        文件.write(前缀)
-                        已写入 = len(前缀)
+                        yield 前缀
                     async for 数据块 in 上游.content.iter_chunked(64 * 1024):
-                        已写入 += len(数据块)
-                        if 已写入 > 媒体代理最大字节数:
-                            return False
-                        文件.write(数据块)
-                if 已写入 <= 0:
-                    return False
-                临时路径.replace(缓存路径)
-                临时路径 = None
-                _写入媒体缓存元数据(地址, 内容类型, 已写入, 消息ID)
-                return True
+                        yield 数据块
+
+                图床地址 = await 图床.上传媒体流(
+                    _媒体流(),
+                    文件名,
+                    内容类型,
+                    配置,
+                )
+                return 图床地址 or False
     except asyncio.CancelledError:
         raise
     except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
@@ -1184,12 +1012,6 @@ async def 预缓存消息媒体(媒体: Any, 消息ID: str = "") -> bool:
             "帮助控制台消息媒体预缓存失败：错误类型=%s", type(exc).__name__
         )
         return False
-    finally:
-        if 临时路径 is not None:
-            try:
-                临时路径.unlink(missing_ok=True)
-            except OSError:
-                pass
 
 
 async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
@@ -1203,13 +1025,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if 模式 not in {"image", "file"}:
         模式 = "file"
     文件名 = _媒体文件名(request.query.get("name"))
-    消息ID = str(request.query.get("message_id") or "").strip()[:512]
-    已缓存 = _读取媒体缓存(地址, 消息ID)
-    if 已缓存 is not None:
-        return _媒体缓存响应(request, 已缓存, 模式, 文件名)
-    缓存临时路径: Path | None = None
-    缓存文件: Any = None
-    缓存完整 = True
     try:
         超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
         async with ClientSession(timeout=超时, trust_env=False) as 客户端:
@@ -1256,66 +1071,27 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 响应 = web.StreamResponse(status=上游.status, headers=响应头)
                 await 响应.prepare(request)
                 已发送 = 0
-                if 上游.status == 200:
-                    try:
-                        媒体缓存目录.mkdir(parents=True, exist_ok=True)
-                        缓存路径, _ = _媒体缓存路径(地址)
-                        缓存临时路径 = 缓存路径.with_name(
-                            f".{缓存路径.name}.{secrets.token_hex(6)}.tmp"
-                        )
-                        缓存文件 = 缓存临时路径.open("wb")
-                    except OSError:
-                        缓存临时路径 = None
-                        缓存文件 = None
                 if 前缀:
                     已发送 = len(前缀)
                     if 已发送 > 媒体代理最大字节数:
-                        缓存完整 = False
-                        if 缓存文件 is not None:
-                            缓存文件.close()
-                            缓存临时路径.unlink(missing_ok=True)
                         await 响应.write_eof()
                         return 响应
-                    if 缓存文件 is not None:
-                        缓存文件.write(前缀)
                     await 响应.write(前缀)
                 async for 数据块 in 上游.content.iter_chunked(64 * 1024):
                     if 已发送 + len(数据块) > 媒体代理最大字节数:
-                        缓存完整 = False
                         logger.warning(
                             "帮助控制台媒体代理达到大小上限：模式=%s，大小上限=%d",
                             模式,
                             媒体代理最大字节数,
                         )
                         break
-                    if 缓存文件 is not None:
-                        缓存文件.write(数据块)
                     await 响应.write(数据块)
                     已发送 += len(数据块)
-                if 缓存文件 is not None:
-                    缓存文件.close()
-                    if (
-                        缓存完整
-                        and 缓存临时路径 is not None
-                        and 已发送 <= 媒体缓存最大字节数
-                    ):
-                        缓存路径, _ = _媒体缓存路径(地址)
-                        缓存临时路径.replace(缓存路径)
-                        _写入媒体缓存元数据(地址, 类型, 已发送, 消息ID)
-                    elif 缓存临时路径 is not None:
-                        缓存临时路径.unlink(missing_ok=True)
                 await 响应.write_eof()
                 return 响应
     except asyncio.CancelledError:
         raise
     except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
-        if 缓存文件 is not None:
-            try:
-                缓存文件.close()
-            except OSError:
-                pass
-        if 缓存临时路径 is not None:
-            缓存临时路径.unlink(missing_ok=True)
         logger.warning(
             "帮助控制台媒体代理失败：模式=%s，错误类型=%s",
             模式,
