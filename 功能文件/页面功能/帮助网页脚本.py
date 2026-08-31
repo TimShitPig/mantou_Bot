@@ -612,6 +612,7 @@
         catch (_) {}
       };
       const msgRoleRetryMs = 5 * 60 * 1000;
+      const msgMembershipRefreshMs = 30 * 60 * 1000;
       let autoScanAdminRunning = false;
       const autoScanAdminGroups = async () => {
         if (autoScanAdminRunning) return;
@@ -623,10 +624,14 @@
             const id = String(c.chat_id || '');
             const failedAt = Number(msgState.adminScanFailures.get(id) || 0);
             const retryDue = failedAt > 0 && now - failedAt >= msgRoleRetryMs;
-            return c.chat_type === 'group' && id && !localAdmins.has(id)
+            const checkedAt = Number(c.membership_checked_at || 0) * 1000;
+            const membershipDue = !checkedAt || now - checkedAt >= msgMembershipRefreshMs;
+            const scanAllowed = failedAt > 0
+              ? retryDue
+              : (membershipDue || !msgState.adminByChat.has(id) || !msgState.adminScanAttempted.has(id));
+            return c.chat_type === 'group' && id
               && c.membership_status !== 'removed' && c.in_group !== false
-              && !msgState.adminByChat.has(id)
-              && (!msgState.adminScanAttempted.has(id) || retryDue);
+              && scanAllowed;
           }).slice(0, 5);
           let membershipChanged = false;
           for (const group of groupsToScan) {
@@ -639,6 +644,7 @@
               if (removed) {
                 group.membership_status = 'removed';
                 group.in_group = false;
+                group.membership_checked_at = Number(res?.membership_checked_at || Math.floor(Date.now() / 1000));
                 membershipChanged = true;
                 if (msgState.chatId === chatId && msgState.chatType === 'group') {
                   msgState.chatRemoved = true;
@@ -655,6 +661,7 @@
               if (group.membership_status !== 'active' || group.in_group === false) membershipChanged = true;
               group.membership_status = 'active';
               group.in_group = true;
+              group.membership_checked_at = Number(res?.membership_checked_at || Math.floor(Date.now() / 1000));
               const isAdmin = Boolean(res && res.bot_is_admin);
               msgState.adminByChat.set(chatId, isAdmin);
               msgState.adminScanFailures.delete(chatId);
@@ -1965,7 +1972,11 @@
           const removed = data?.membership_status === 'removed' || data?.bot_in_group === false;
           const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId);
           if (removed) {
-            if (current) { current.membership_status = 'removed'; current.in_group = false; }
+            if (current) {
+              current.membership_status = 'removed';
+              current.in_group = false;
+              current.membership_checked_at = Number(data?.membership_checked_at || Math.floor(Date.now() / 1000));
+            }
             msgState.chatRemoved = true;
             $('msg-composer').hidden = true;
             msgState.adminByChat.set(requestChatId, false);
@@ -1976,6 +1987,7 @@
           const role = String(data?.bot_role || '').trim().toLowerCase();
           if (!['owner', 'admin', 'member'].includes(role)) return;
           if (current) { current.membership_status = 'active'; current.in_group = true; }
+          if (current) current.membership_checked_at = Number(data?.membership_checked_at || Math.floor(Date.now() / 1000));
           const isAdmin = Boolean(data.bot_is_admin);
           msgState.adminByChat.set(requestChatId, isAdmin);
           msgState.adminScanFailures.delete(requestChatId);

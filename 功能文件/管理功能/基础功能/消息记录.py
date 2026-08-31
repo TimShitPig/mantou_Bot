@@ -48,7 +48,8 @@ except Exception as 导入异常:
 群信息默认失败冷却秒 = 60 * 60
 群信息请求间隔秒 = 3.0
 群机器人状态命名空间 = "qq_group_membership"
-群机器人状态缓存有效期秒 = 24 * 60 * 60
+# 官方 bot_state 限制为 30 QPM；半小时复核一次，避免已退出群长期显示为正常。
+群机器人状态缓存有效期秒 = 30 * 60
 未读状态命名空间 = "msg_console_unread"
 当前插件上下文: Any = globals().get("当前插件上下文")
 当前插件配置: Any = globals().get("当前插件配置")
@@ -2472,6 +2473,9 @@ def _群机器人状态需检查(会话标识: str, 强制: bool = False) -> boo
 
 
 def _异常表示群机器人已移除(异常: Exception) -> bool:
+    异常类型 = type(异常).__name__.strip().lower()
+    if "notfound" in 异常类型 or "not_found" in 异常类型:
+        return True
     for 字段名 in ("status", "status_code", "code", "http_status"):
         try:
             if int(getattr(异常, 字段名)) == 404:
@@ -2485,6 +2489,41 @@ def _异常表示群机器人已移除(异常: Exception) -> bool:
     if any(词 in 文本 for 词 in ("rate limit", "rate_limit", "限流", "频率", "timeout", "timed out")):
         return False
     return any(词 in 文本 for 词 in ("404", "not found", "不存在", "不在群", "未加入群"))
+
+
+def _响应表示群机器人已移除(响应: Any) -> bool:
+    """识别官方接口返回的群不存在/机器人不在群错误，不误判权限错误。"""
+    if not isinstance(响应, dict):
+        return False
+    for 字段名 in ("status", "status_code", "http_status", "code"):
+        try:
+            if int(响应.get(字段名)) == 404:
+                return True
+        except (TypeError, ValueError):
+            continue
+    try:
+        文本 = json.dumps(响应, ensure_ascii=False, separators=(",", ":")).lower()
+    except Exception:
+        文本 = str(响应).lower()
+    if any(词 in 文本 for 词 in ("rate limit", "rate_limit", "限流", "频率", "timeout", "timed out", "11253")):
+        return False
+    return any(词 in 文本 for 词 in ("404", "not found", "不存在", "不在群", "未加入群"))
+
+
+def _构造已移除群摘要(
+    会话标识: str, 已有: dict[str, Any] | None = None, appid: str = ""
+) -> dict[str, Any]:
+    """保留原群会话信息，只把机器人成员状态更新为已移除。"""
+    会话标识 = str(会话标识 or "").strip()
+    摘要 = dict(已有 or {})
+    摘要.setdefault("group_openid", 会话标识)
+    摘要["membership_status"] = "removed"
+    摘要["membership_checked_at"] = int(time.time())
+    if str(appid or "").strip():
+        摘要.setdefault("appid", str(appid).strip())
+    摘要["is_admin"] = False
+    群信息缓存[会话标识] = 摘要
+    return 摘要
 
 
 async def _查询群机器人状态(
@@ -2511,6 +2550,8 @@ async def _查询群机器人状态(
         )
         if not isinstance(响应, dict):
             raise RuntimeError("群机器人状态响应无效")
+        if _响应表示群机器人已移除(响应):
+            return _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
         错误码 = 响应.get("code")
         if 错误码 not in (None, 0, "", "0"):
             if str(错误码) in {"404", "40400", "10004"}:
@@ -2661,12 +2702,7 @@ async def 刷新群信息(
     appid = _获取群信息appid(会话标识, appid)
     成员状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
     if 成员状态.get("status") == "removed":
-        已移除摘要 = dict(已有)
-        已移除摘要.setdefault("group_openid", 会话标识)
-        已移除摘要["membership_status"] = "removed"
-        已移除摘要["membership_checked_at"] = int(成员状态.get("checked_at") or time.time())
-        群信息缓存[会话标识] = 已移除摘要
-        return 已移除摘要
+        return _构造已移除群摘要(会话标识, 已有, appid)
     通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
     if 通道 is None:
         return None
@@ -2697,6 +2733,9 @@ async def 刷新群信息(
             or not 有群资料字段
             or 错误码 not in (None, 0, "0", "")
         ):
+            if _响应表示群机器人已移除(结果):
+                _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
+                return _构造已移除群摘要(会话标识, 已有, appid)
             失败缓存 = dict(已有)
             失败缓存.setdefault("group_openid", 会话标识)
             # 非成功业务响应也进入长冷却，防止权限/接口异常时每次打开会话都重试。
@@ -2759,6 +2798,7 @@ async def 刷新群信息(
     except Exception as exc:
         if _异常表示群机器人已移除(exc):
             _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
+            return _构造已移除群摘要(会话标识, 已有, appid)
         冷却秒数 = _群信息冷却秒数(exc)
         失败缓存 = dict(已有)
         失败缓存.setdefault("group_openid", 会话标识)
@@ -2847,11 +2887,12 @@ def _聊天显示名(
 
 def _聊天群成员状态(会话标识: str, 类型: str) -> dict[str, Any]:
     if str(类型 or "") != "group":
-        return {"in_group": True, "membership_status": "active"}
-    状态 = 获取群机器人状态(会话标识)
+        return {"in_group": True, "membership_status": "active", "membership_checked_at": 0}
+    状态 = _读取群机器人状态(会话标识)
     return {
-        "in_group": 状态 != "removed",
-        "membership_status": 状态,
+        "in_group": 状态.get("status") != "removed",
+        "membership_status": str(状态.get("status") or "unknown"),
+        "membership_checked_at": int(状态.get("checked_at") or 0),
     }
 
 
@@ -3389,6 +3430,7 @@ async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
         "bot_role": 机器人角色,
         "bot_in_group": 状态.get("status") != "removed",
         "membership_status": str(状态.get("status") or "unknown"),
+        "membership_checked_at": int(状态.get("checked_at") or 0),
         "allow_proactive_msg": 状态.get("allow_proactive_msg"),
         "recv_msg_setting": str(状态.get("recv_msg_setting") or ""),
     }
