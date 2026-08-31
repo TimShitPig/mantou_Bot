@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.62.17</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.62.18</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="system">跟随系统</option><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -380,7 +380,7 @@ from .帮助网页脚本 import 控制台脚本
              }
              @media (max-width:760px) {
                .content:has(#page-messages:not([hidden])) { width:100%; padding:0 0 20px; }
-               .msg-shell { display:block; height:calc(100dvh - 190px); min-height:460px; margin:0; border-right:0; border-left:0; border-radius:0; }
+               .msg-shell { display:block; height:calc(100dvh - 135px); min-height:420px; margin:0; border-right:0; border-left:0; border-radius:0; }
                .msg-shell .chat-list-panel { display:flex; height:100%; min-height:0; max-height:none; border-right:0; }
                .msg-shell .msg-work { display:none; height:100%; min-height:0; }
                .msg-shell.msg-mobile-chat-open .chat-list-panel { display:none; }
@@ -390,6 +390,10 @@ from .帮助网页脚本 import 控制台脚本
                .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:flex; visibility:visible; pointer-events:auto; }
                .msg-list-resizer,.msg-list-collapse { display:none !important; }
                .msg-list-head { padding:9px 12px 8px; }
+               .msg-filter { padding:1px; }
+               .msg-filter button { min-height:24px; font-size:10px; }
+               .msg-search { gap:5px; }
+               .msg-search input,.msg-search button { height:28px; font-size:11px; }
                .msg-chat { min-height:60px; padding:8px 10px; border-radius:0; }
                .msg-chat-divider { margin-left:4px; margin-right:4px; }
                .msg-mobile-back { display:grid; }

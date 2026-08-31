@@ -634,4 +634,39 @@
       :root[data-theme="dark"] .pan-page .account-row button { border-color:#5a3941; background:#30222a; color:#e07085; }
       :root[data-theme="dark"] .pan-page .account-row button:hover { background:#3a212b; color:#f0899c; }
       :root[data-theme="dark"] .pan-section-kicker { color:#767d96; }
+      @media (max-width:760px) {
+        .topbar { min-height:50px; height:50px; padding:0 10px; gap:8px; }
+        .brand { gap:7px; }
+        .brand-mark { width:30px; height:30px; border-width:2px; font-size:11px; }
+        .brand strong { font-size:14px; }
+        .version-badge { display:none; }
+        .top-actions { min-width:0; gap:4px; }
+        .theme-control { min-height:28px; padding:2px 3px; }
+        .theme-control-icon { display:none; }
+        .theme-control select { width:68px; max-width:68px; padding-right:12px; font-size:10px; }
+        .admin-chip { min-height:30px; gap:4px; padding:2px 5px 2px 3px; font-size:11px; }
+        .admin-avatar { width:24px; height:24px; font-size:10px; }
+        .admin-chevron { font-size:11px; }
+        #admin-name { max-width:64px; }
+        .sidebar { display:flex; flex-direction:row; align-items:center; gap:8px; min-height:48px; max-height:54px; padding:6px 10px; }
+        .sidebar > div:nth-child(2) { flex:1 1 auto; min-width:0; }
+        .profile { display:flex; align-items:center; justify-content:flex-start; gap:6px; min-width:0; padding:0; }
+        .bot-avatar { width:32px; height:32px; flex:0 0 32px; border-width:2px; box-shadow:none; }
+        .bot-avatar::before { width:28px; height:27px; top:2px; }
+        .avatar-face { left:7px; top:10px; font-size:11px; letter-spacing:1px; }
+        .bot-avatar::after { right:1px; top:0; font-size:7px; }
+        .profile strong { max-width:62px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+        .online { margin-left:0; font-size:10px; white-space:nowrap; }
+        .nav { gap:2px; overflow-x:auto; scrollbar-width:none; }
+        .nav::-webkit-scrollbar { display:none; }
+        .nav a { min-height:32px; gap:5px; padding:6px 7px; border-radius:6px; font-size:11px; white-space:nowrap; }
+        .nav-icon { width:14px; font-size:13px; }
+        .content:has(#page-messages:not([hidden])) { width:100%; padding-top:0; }
+      }
+      @media (max-width:390px) {
+        .profile strong { display:none; }
+        .online { display:none; }
+        .sidebar { gap:5px; padding-left:7px; padding-right:7px; }
+        .nav a { padding-left:6px; padding-right:6px; }
+      }
    """
