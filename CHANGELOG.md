@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.62.24
+
+- 修复：配置保存回滚快照改为递归复制 JSON 配置值，避免复制 AstrBot 配置对象内部锁导致读取阶段 `TypeError`。
+
 ## v5.62.23
 
 - 修复：帮助网页配置保存兼容 AstrBot 新版 `save_config_async()` 和旧版 `save_config()` 签名，避免配置保存时出现 `TypeError`；错误日志增加保存阶段。

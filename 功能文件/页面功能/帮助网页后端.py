@@ -28,7 +28,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.62.23"
+控制台版本 = "5.62.24"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -327,6 +327,24 @@ def _读取插件配置字典(配置: Any) -> dict[str, Any] | None:
         except Exception:
             pass
     return None
+
+
+def _复制插件配置值(值: Any) -> Any:
+    """只复制插件配置支持的 JSON 值，避开 AstrBot 配置对象内部锁。"""
+    if isinstance(值, dict):
+        return {键: _复制插件配置值(项目) for 键, 项目 in 值.items()}
+    if isinstance(值, list):
+        return [_复制插件配置值(项目) for 项目 in 值]
+    if isinstance(值, tuple):
+        return tuple(_复制插件配置值(项目) for 项目 in 值)
+    if isinstance(值, set):
+        return {_复制插件配置值(项目) for 项目 in 值}
+    if 值 is None or isinstance(值, (str, int, float, bool)):
+        return 值
+    try:
+        return copy.deepcopy(值)
+    except (TypeError, ValueError):
+        return str(值)
 
 
 def _读取插件配置值(配置: Any, 分类名: str, 字段名: str, 默认值: Any = None) -> Any:
@@ -1398,7 +1416,12 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
     阶段 = "读取配置"
     try:
         配置字典 = _读取插件配置字典(当前帮助网页配置)
-        原配置快照 = copy.deepcopy(配置字典) if isinstance(配置字典, dict) else None
+        阶段 = "创建配置快照"
+        原配置快照 = (
+            _复制插件配置值(配置字典)
+            if isinstance(配置字典, dict)
+            else None
+        )
         待更新: list[tuple[str, dict[str, Any], Any]] = []
         阶段 = "校验配置"
         for 字段名, 原值 in 字段数据.items():
