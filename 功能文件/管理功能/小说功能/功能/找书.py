@@ -486,6 +486,14 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     return {"keyword": 关键词, "type": 搜索类型}
 
 
+def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str | None:
+    """返回搜索开始前立即发送的等待提示；翻页和选书不重复提示。"""
+    查询 = 解析找书查询(命令文本)
+    if 查询 is None or not 小说功能开关.小说总开关是否开启(配置):
+        return None
+    return f"正在为您找{查询['keyword']}请稍等"
+
+
 def 构造番茄链接(书籍编号: str) -> str:
     return f"https://fanqienovel.com/page/{书籍编号}"
 
