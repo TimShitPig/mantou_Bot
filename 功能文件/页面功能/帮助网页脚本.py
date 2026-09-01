@@ -634,6 +634,13 @@
         const name = String(data.username || data.name || '').trim() || '馒头助手';
         const avatar = safeMediaUrl(String(data.avatar || data.avatar_url || '').trim());
         const id = String(data.id || '').trim();
+        const previousProfile = window.msgBotProfile;
+        const hasRealProfile = Boolean(id || avatar || (name && name !== '馒头助手'));
+        const profileChanged = previousProfile
+          ? (String(previousProfile.id || '') !== id
+            || String(previousProfile.username || '') !== name
+            || String(previousProfile.avatar || '') !== avatar)
+          : hasRealProfile;
         window.msgBotProfile = {id, username:name, avatar};
         document.querySelectorAll('[data-bot-name]').forEach((node) => { node.textContent = name; });
         document.querySelectorAll('[data-bot-id]').forEach((node) => { node.textContent = id || '由适配器提供'; });
@@ -646,7 +653,7 @@
             node.innerHTML = '<span class="avatar-face">•ᴗ•</span>';
           }, {once:true});
         });
-        if (msgState.chatId && msgState.historyData && typeof renderMsgMessages === 'function') {
+        if (profileChanged && msgState.chatId && msgState.historyData && typeof renderMsgMessages === 'function') {
           const body = $('msg-body');
           renderMsgMessages(
             {...msgState.historyData, messages:msgState.messages},
@@ -2014,10 +2021,17 @@
                 if (username) msgState.profiles[id] = {...(msgState.profiles[id] || {}), nickname:username, username};
                 next.set(id, {...member, member_openid:id, mute_expire_ts:expireTs});
               });
+              const mutesChanged = next.size !== msgState.mutes.size
+                || [...next].some(([id, member]) => {
+                  const previous = msgState.mutes.get(id);
+                  return !previous
+                    || Number(previous.mute_expire_ts || 0) !== Number(member.mute_expire_ts || 0)
+                    || String(previous.username || '') !== String(member.username || '');
+                });
               msgState.mutes = next;
               msgState.muteRequestAt = Date.now();
               const body = $('msg-body');
-              if (!$('page-messages')?.hidden && msgState.renderedChatId === chatId) {
+              if (mutesChanged && !$('page-messages')?.hidden && msgState.renderedChatId === chatId) {
                 renderMsgMessages(
                   {...(msgState.historyData || {}), messages:msgState.messages},
                   {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
