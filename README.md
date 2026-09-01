@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.76.0-2ea44f)
+![version](https://img.shields.io/badge/version-v5.77.0-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.76.0 |
+| 版本 | v5.77.0 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -91,6 +91,7 @@ qrcode[pil]
 | 广告拦截开关 | `开广告` / `关广告` / `广告状态` | 插件管理员可按 QQ 官方群独立控制自动撤回，默认关闭，状态保存到 MySQL |
 | 单成员禁言 | `禁言 @成员` / `禁 @成员 1` / `解除禁言 @成员` / `解 @成员` | 默认禁言 7 天，支持秒、分、时、天；OneBot 与 QQ 官方群均支持 |
 | 网页禁言状态 | 消息记录页群聊 | 按 QQ 官方禁言状态接口显示被禁言成员、灰色头像、实时剩余时间，并可解除禁言 |
+| 网页成员头像 | 消息记录页群聊 | 官方事件提供头像时使用原图；OpenID 没有头像字段时显示姓名首字母 |
 
 ### 小说下载
 

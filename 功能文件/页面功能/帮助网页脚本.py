@@ -588,10 +588,12 @@
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
-        if (!openid) return '';
-        if (type === 'group') { const qq = window.msgGroupQQ?.[openid] || ''; return qq ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
+        const id = String(openid || '').trim();
+        if (!id) return '';
+        if (type === 'group') { const qq = window.msgGroupQQ?.[id] || ''; return /^\d{5,12}$/.test(String(qq)) ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
+        if (!/^\d{5,12}$/.test(id)) return '';
         const aid = appid || window.msgAppid || '';
-        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${openid}/0` : '';
+        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${id}/0` : '';
       };
       const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
       const avatarHtml = (url, letter) => {
@@ -1891,6 +1893,7 @@
           const profileNickname = String(profile.nickname || profile.username || '').trim();
           const botProfileName = String(window.msgBotProfile?.username || '').trim();
           const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
+          const profileAvatar = safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim());
           const muteState = !isSelf ? msgState.mutes.get(String(m.user_id || '').trim()) : null;
           const muteExpireTs = Number(muteState?.mute_expire_ts || 0);
           const isMuted = Boolean(muteState) && (!muteExpireTs || muteExpireTs > Date.now() / 1000);
@@ -1899,7 +1902,7 @@
               ? (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : (botProfileName || '机器人'))
               : (rawNickname && rawNickname !== '未知用户' ? rawNickname : '我'))
             : ((rawNickname && rawNickname !== '未知用户' && rawNickname !== '未知') ? rawNickname : (profileNickname || rawNickname || '未知用户'));
-          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid));
+          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid)));
           const tags = [];
           if (isSelf) {
             tags.push('<span class="msg-tag self">' + (botMessage ? '机器人' : '我') + '</span>');

@@ -343,12 +343,14 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
+    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message"))
     if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
         _记录成员资料(
             会话标识,
             作者标识,
             作者昵称,
             bool(记录.get("is_self")),
+            头像=作者头像,
         )
     原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
     try:
@@ -391,8 +393,15 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
+    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message"))
     if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
-        _记录成员资料(会话标识, 作者标识, 作者昵称, bool(记录.get("is_self")))
+        _记录成员资料(
+            会话标识,
+            作者标识,
+            作者昵称,
+            bool(记录.get("is_self")),
+            头像=作者头像,
+        )
     原始时间 = _转数字时间戳(_提取原始消息时间(记录.get("raw_message")))
     try:
         记录时间 = int(记录.get("ts") or 0)
@@ -1365,24 +1374,61 @@ def _提取成员昵称(消息: Any) -> str:
     return ""
 
 
+def _提取成员头像(消息: Any) -> str:
+    """读取事件扩展中的头像地址；官方群消息未提供时返回空值。"""
+    候选对象: list[Any] = [消息]
+    if isinstance(消息, str):
+        解析对象 = _解析消息结构(消息)
+        if 解析对象 is not 消息:
+            候选对象.append(解析对象)
+    原始数据 = _读取字段(消息, "raw_data")
+    if isinstance(原始数据, dict):
+        候选对象.append(原始数据)
+        if isinstance(原始数据.get("d"), dict):
+            候选对象.append(原始数据["d"])
+    扩展对象: list[Any] = []
+    for 对象 in 候选对象:
+        扩展对象.extend(
+            [
+                _读取字段(对象, "author"),
+                _读取字段(对象, "member"),
+                对象,
+            ]
+        )
+    for 对象 in 扩展对象:
+        for 字段 in ("avatar", "avatar_url", "avatarUrl", "icon"):
+            地址 = str(_读取字段(对象, 字段) or "").strip()
+            if 地址.startswith(("https://", "http://")):
+                return 地址
+    return ""
+
+
 def _记录成员资料(
     会话标识: str,
     成员标识: str,
     昵称: str,
     是机器人: bool = False,
     角色: str = "",
+    头像: str = "",
 ) -> None:
     if not 成员标识:
         return
     会话资料 = 成员资料缓存.setdefault(会话标识, {})
     if 成员标识 not in 会话资料:
-        会话资料[成员标识] = {"nickname": 昵称 or "", "is_bot": bool(是机器人), "role": str(角色 or "")}
+        会话资料[成员标识] = {
+            "nickname": 昵称 or "",
+            "is_bot": bool(是机器人),
+            "role": str(角色 or ""),
+            "avatar": str(头像 or "").strip(),
+        }
     else:
         if 昵称:
             会话资料[成员标识]["nickname"] = 昵称
         会话资料[成员标识]["is_bot"] = bool(是机器人)
         if 角色:
             会话资料[成员标识]["role"] = str(角色 or "")
+        if 头像:
+            会话资料[成员标识]["avatar"] = str(头像).strip()
 
 
 _用户详情接口不可用 = False
@@ -1581,7 +1627,14 @@ def 记录收到消息(
         if 消息引用:
             引用ID = str(_读取字段(消息引用, "message_id") or "").strip()
         自身REFIDX = _提取REFIDX(消息)
-        _记录成员资料(会话标识, 成员标识, 昵称, 是机器人, 角色)
+        _记录成员资料(
+            会话标识,
+            成员标识,
+            昵称,
+            是机器人,
+            角色,
+            _提取成员头像(消息),
+        )
         会话 = _取得会话缓存(会话标识, 类型, appid)
         发送序号 += 1
         记录: dict[str, Any] = {
