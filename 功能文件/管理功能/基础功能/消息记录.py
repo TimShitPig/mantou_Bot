@@ -333,6 +333,8 @@ def _提取原始消息时间(原始消息: Any) -> Any:
 
 def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     """修复旧记录的时区和来源标记，保证历史排序与新消息一致。"""
+    if isinstance(记录, dict):
+        记录["message_id"] = _规范消息ID(记录.get("message_id"))
     来源 = str(记录.get("source") or "")
     if 来源.startswith("bot_") or 来源 == "web_panel":
         记录["is_self"] = True
@@ -420,13 +422,69 @@ def _历史消息排序键(记录: dict[str, Any]) -> tuple[int, int, str]:
         消息序号 = int(记录.get("id") or 0)
     except (TypeError, ValueError):
         消息序号 = 0
-    return int(记录.get("ts") or 0), 消息序号, str(记录.get("message_id") or "")
+    return int(记录.get("ts") or 0), 消息序号, _规范消息ID(记录.get("message_id"))
+
+
+def _规范消息ID(值: Any) -> str:
+    """统一消息 ID 的空白表示，兼容旧记录和不同适配器字段。"""
+    return str(值 or "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "").strip()
+
+
+def _提取消息ID(消息: Any) -> str:
+    """从官方消息对象及其原始负载读取同一条消息的 ID。"""
+    待检查 = [消息]
+    for 字段 in ("raw_data", "data", "payload"):
+        值 = _读取字段(消息, 字段)
+        if 值 not in (None, ""):
+            待检查.append(值)
+    for 对象 in 待检查:
+        结构 = _解析消息结构(对象)
+        if 结构 is not None:
+            对象 = 结构
+        for 字段 in ("id", "message_id", "messageId"):
+            值 = _规范消息ID(_读取字段(对象, 字段))
+            if 值:
+                return 值
+    return ""
+
+
+def _消息去重键(记录: dict[str, Any]) -> tuple[str, ...]:
+    """返回消息主键及官方原始事件键，避免双回调造成重复显示。"""
+    if not isinstance(记录, dict):
+        return ()
+    键: list[str] = []
+    消息ID = _规范消息ID(记录.get("message_id"))
+    if 消息ID:
+        键.append(f"id:{消息ID}")
+    # 同一网关负载在全量/At 两条回调路径中可能携带不同的适配器字段，
+    # 但 raw_message 完全一致；只对官方接收事件使用该高置信度键。
+    if str(记录.get("source") or "").strip().lower() == "qq_official":
+        原始 = str(记录.get("raw_message") or "").strip()
+        if 原始:
+            try:
+                摘要 = hashlib.sha1(原始.encode("utf-8", errors="ignore")).hexdigest()
+            except Exception:
+                摘要 = 原始[:512]
+            键.append(f"raw:{摘要}")
+    return tuple(键)
+
+
+def _消息记录重复(已有记录: dict[str, Any], 新记录: dict[str, Any]) -> bool:
+    旧键 = set(_消息去重键(已有记录))
+    新键 = set(_消息去重键(新记录))
+    return bool(旧键 and 新键 and 旧键.intersection(新键))
 
 
 def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any]) -> dict[str, Any]:
     """合并同一 message_id 的重复事件，保留较完整的消息资料。"""
     if not isinstance(已有记录, dict) or not isinstance(新记录, dict):
         return 已有记录
+    新消息ID = _规范消息ID(新记录.get("message_id"))
+    旧消息ID = _规范消息ID(已有记录.get("message_id"))
+    if 旧消息ID:
+        已有记录["message_id"] = 旧消息ID
+    elif 新消息ID:
+        已有记录["message_id"] = 新消息ID
     for 字段 in (
         "user_id", "nickname", "content", "timestamp", "source", "raw_message",
         "reference_id", "refidx", "chat_type", "appid",
@@ -456,22 +514,25 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
 
 
 def _去重消息列表(消息列表: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """按会话内 message_id 去重，兼容修复前已经落库的重复记录。"""
+    """按消息 ID 或同一官方原始事件去重，兼容修复前已经落库的重复记录。"""
     结果: list[dict[str, Any]] = []
     索引: dict[str, int] = {}
     for 消息 in 消息列表 or []:
         if not isinstance(消息, dict):
             continue
-        消息ID = str(消息.get("message_id") or "").strip()
-        if not 消息ID:
+        去重键 = _消息去重键(消息)
+        if not 去重键:
             结果.append(消息)
             continue
-        已有位置 = 索引.get(消息ID)
+        已有位置 = next((索引.get(键) for 键 in 去重键 if 键 in 索引), None)
         if 已有位置 is None:
-            索引[消息ID] = len(结果)
+            for 键 in 去重键:
+                索引[键] = len(结果)
             结果.append(消息)
         else:
             _合并重复消息(结果[已有位置], 消息)
+            for 键 in 去重键:
+                索引[键] = 已有位置
     return 结果
 
 
@@ -1603,7 +1664,7 @@ def 记录收到消息(
     global 发送序号, _消息缓存总数缓存
     try:
         会话标识 = ""
-        消息ID = str(_读取字段(消息, "id") or "").strip()
+        消息ID = _提取消息ID(消息)
         回显自己 = bool(消息ID) and 消息ID in 自己发送消息ID
         is_self = bool(is_self) or 回显自己
         内容 = _提取消息文本(_读取字段(消息, "content"))
@@ -1666,7 +1727,10 @@ def 记录收到消息(
         已有记录 = next(
             (
                 x for x in reversed(会话["messages"] or [])
-                if 消息ID and str(x.get("message_id") or "") == 消息ID
+                if (
+                    (消息ID and _规范消息ID(x.get("message_id")) == 消息ID)
+                    or _消息记录重复(x, 记录)
+                )
             ),
             None,
         )
@@ -1885,13 +1949,14 @@ def 记录发送消息(
     """把机器人发送的消息写入缓存，并按一条新消息累计未读数。"""
     global 发送序号, _消息缓存总数缓存
     try:
+        消息ID = _规范消息ID(消息ID)
         会话 = _取得会话缓存(会话标识, 类型, appid)
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
         if 消息ID:
             已有记录 = next(
                 (
                     x for x in reversed(会话["messages"] or [])
-                    if str(x.get("message_id") or "") == str(消息ID)
+                    if _规范消息ID(x.get("message_id")) == 消息ID
                 ),
                 None,
             )
@@ -3628,7 +3693,7 @@ def _数据库历史消息(
         ]
         已有记录键 = {
             (
-                str(消息项.get("message_id") or ""),
+                _规范消息ID(消息项.get("message_id")),
                 str(消息项.get("content") or ""),
                 int(消息项.get("ts") or 0),
             )
@@ -3640,7 +3705,7 @@ def _数据库历史消息(
             if not before_id and before_date and int(消息项.get("ts") or 0) >= int(_转数字时间戳(before_date) or 0):
                 continue
             记录键 = (
-                str(消息项.get("message_id") or ""),
+                _规范消息ID(消息项.get("message_id")),
                 str(消息项.get("content") or ""),
                 int(消息项.get("ts") or 0),
             )
@@ -3651,7 +3716,7 @@ def _数据库历史消息(
         返回消息.sort(key=_历史消息排序键)
         返回消息 = 返回消息[-limit:]
         最后消息 = 返回消息[-1] if 返回消息 else {}
-        消息索引 = {str(m.get("message_id") or ""): m for m in 返回消息 if m.get("message_id")}
+        消息索引 = {_规范消息ID(m.get("message_id")): m for m in 返回消息 if _规范消息ID(m.get("message_id"))}
         引用映射: dict[str, dict[str, str]] = {}
         for 消息记录项 in 返回消息:
             引用ID = str(消息记录项.get("reference_id") or "").strip()
@@ -3743,7 +3808,7 @@ def 获取消息历史(
     返回消息 = 会话消息[-limit:]
     最后消息 = 会话消息[-1] if 会话消息 else {}
     引用映射: dict[str, dict[str, str]] = {}
-    消息索引 = {str(m.get("message_id") or ""): m for m in 会话消息 if m.get("message_id")}
+    消息索引 = {_规范消息ID(m.get("message_id")): m for m in 会话消息 if _规范消息ID(m.get("message_id"))}
     for 消息记录项 in 返回消息:
         引用ID = str(消息记录项.get("reference_id") or "").strip()
         if not 引用ID or 引用ID in 引用映射:

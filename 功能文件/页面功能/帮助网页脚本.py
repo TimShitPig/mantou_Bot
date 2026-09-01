@@ -1363,7 +1363,29 @@
         toast(`撤回完成：成功 ${okCount} 条${failCount ? `，失败 ${failCount} 条` : ''}`);
         exitMultiMode(); loadMsgHistory();
       };
-      const msgMessageKey = (message) => String(message?.message_id || message?.id || '');
+      const normalizeMsgIdentity = (value) => String(value ?? '')
+        .replace(/[\u200b-\u200d\ufeff]/g, '')
+        .trim();
+      const msgMessageKey = (message) => normalizeMsgIdentity(
+        message?.message_id ?? message?.messageId ?? message?.id,
+      );
+      const msgMessageIdentityKeys = (message) => {
+        if (!message || typeof message !== 'object') return [];
+        const keys = [];
+        const primary = msgMessageKey(message);
+        if (primary) keys.push(`id:${primary}`);
+        // 同一官方网关负载可能经过全量/At 两条回调路径；原始负载相同
+        // 时视为同一条事件，避免不同适配器 ID 造成重复显示。
+        if (String(message.source || '').trim().toLowerCase() === 'qq_official') {
+          const raw = String(message.raw_message || '').trim();
+          if (raw) keys.push(`raw:${raw}`);
+        }
+        return keys;
+      };
+      const msgMessagesMatch = (left, right) => {
+        const rightKeys = new Set(msgMessageIdentityKeys(right));
+        return msgMessageIdentityKeys(left).some((key) => rightKeys.has(key));
+      };
       const msgIsRecalled = (message) => {
         const value = message?.recalled;
         return value === true || value === 1 || ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
@@ -1383,10 +1405,10 @@
       const dedupeMsgMessages = (messages) => {
         const seen = new Set();
         return (Array.isArray(messages) ? messages : []).filter((message) => {
-          const key = msgMessageKey(message);
-          if (!key) return true;
-          if (seen.has(key)) return false;
-          seen.add(key);
+          const keys = msgMessageIdentityKeys(message);
+          if (!keys.length) return true;
+          if (keys.some((key) => seen.has(key))) return false;
+          keys.forEach((key) => seen.add(key));
           return true;
         });
       };
@@ -2069,11 +2091,18 @@
       };
       const rememberMsgEvent = (chatId, message) => {
         const fallback = `${message?.ts || message?.timestamp || ''}:${message?.user_id || ''}:${message?.content || ''}`;
-        const key = `${chatId}:${msgMessageKey(message) || fallback}`;
-        if (msgState.eventKeys.has(key)) return false;
-        msgState.eventKeys.add(key);
-        msgState.eventKeyOrder.push(key);
-        while (msgState.eventKeyOrder.length > 1000) msgState.eventKeys.delete(msgState.eventKeyOrder.shift());
+        const keys = msgMessageIdentityKeys(message);
+        if (!keys.length) keys.push(`fallback:${fallback}`);
+        const eventKeys = keys.map((key) => `${chatId}:${key}`);
+        if (eventKeys.some((key) => msgState.eventKeys.has(key))) return false;
+        eventKeys.forEach((key) => {
+          msgState.eventKeys.add(key);
+          msgState.eventKeyOrder.push(key);
+        });
+        while (msgState.eventKeyOrder.length > 1000) {
+          const oldest = msgState.eventKeyOrder.shift();
+          if (oldest) msgState.eventKeys.delete(oldest);
+        }
         return true;
       };
       const scheduleMsgChatRender = () => {
@@ -2123,7 +2152,7 @@
         const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
         if (!chatId || !message) return;
         const messageKey = msgMessageKey(message);
-        const recalledIndex = messageKey ? msgState.messages.findIndex((item) => msgMessageKey(item) === messageKey) : -1;
+        const recalledIndex = messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
         if (msgIsRecalled(message) && recalledIndex >= 0) {
           msgState.messages = msgState.messages.map((item, index) => index === recalledIndex ? {...item, recalled:true} : item);
           if (msgState.chatId === chatId && !$('page-messages')?.hidden) {
@@ -2170,8 +2199,7 @@
         }
         if (!isViewing || !isNewEvent) return;
         const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
-        const realtimeKey = msgMessageKey(realtimeMessage);
-        const alreadyRendered = msgState.messages.some((item) => realtimeKey && msgMessageKey(item) === realtimeKey);
+        const alreadyRendered = msgState.messages.some((item) => msgMessagesMatch(item, realtimeMessage));
         if (!alreadyRendered) {
           msgState.messages = [...msgState.messages, realtimeMessage];
           scheduleMsgRealtimeMessageRender(chatId, followLatest);

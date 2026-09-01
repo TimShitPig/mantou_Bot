@@ -269,12 +269,24 @@ def _按列宽截断(值: Any, 列名: str) -> str:
     return 文本
 
 
+def _规范消息ID(值: Any) -> str:
+    """统一历史消息 ID，避免旧记录空白导致重复落库。"""
+    return (
+        str(值 or "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+        .strip()
+    )
+
+
 def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
     return (
         _按列宽截断(记录.get("_session") or "", "会话标识"),
         _按列宽截断(记录.get("chat_type") or "group", "消息类型"),
         _按列宽截断(记录.get("appid") or "", "appid"),
-        _按列宽截断(记录.get("message_id") or "", "message_id"),
+        _按列宽截断(_规范消息ID(记录.get("message_id")), "message_id"),
         _按列宽截断(记录.get("user_id") or "", "user_id"),
         _按列宽截断(记录.get("nickname") or "", "nickname"),
         str(记录.get("content") or ""),
@@ -297,7 +309,7 @@ def _写入消息记录(记录: dict[str, Any]) -> bool:
     try:
         with 连接.cursor() as 游标:
             会话标识 = str(记录.get("_session") or "")
-            消息ID = str(记录.get("message_id") or "")
+            消息ID = _规范消息ID(记录.get("message_id"))
             if 消息ID:
                 游标.execute(
                     f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
@@ -336,7 +348,7 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     去重记录: list[dict[str, Any]] = []
     已见键: set[tuple[str, str]] = set()
     for 记录 in 有效记录:
-        消息ID = str(记录.get("message_id") or "")
+        消息ID = _规范消息ID(记录.get("message_id"))
         键 = (str(记录.get("_session") or ""), 消息ID)
         if 消息ID and 键 in 已见键:
             continue
@@ -350,7 +362,7 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         with 连接.cursor() as 游标:
             待写入: list[tuple[Any, ...]] = []
             for 记录 in 去重记录:
-                消息ID = str(记录.get("message_id") or "")
+                消息ID = _规范消息ID(记录.get("message_id"))
                 if 消息ID:
                     游标.execute(
                         f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
@@ -380,7 +392,7 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
 
 def 标记消息撤回(会话标识: str, message_id: str) -> bool:
     会话标识 = str(会话标识 or "")
-    message_id = str(message_id or "")
+    message_id = _规范消息ID(message_id)
     if not message_id or not _MySQL可用():
         return False
     连接 = _打开连接()
@@ -887,7 +899,7 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "_session": 取值(1),
         "chat_type": 取值(2, "group") or "group",
         "appid": 取值(3),
-        "message_id": 取值(4),
+        "message_id": _规范消息ID(取值(4)),
         "user_id": 取值(5),
         "nickname": 取值(6),
         "content": 取值(7),
