@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.74.0"
+控制台版本 = "5.75.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -2097,6 +2097,43 @@ async def _处理消息禁言(request: web.Request) -> web.Response:
 
 
 
+
+
+async def _处理消息禁言状态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    会话标识 = str((数据 or {}).get("chat_id") or "").strip()
+    类型 = str((数据 or {}).get("chat_type") or "group").strip().lower()
+    appid = str((数据 or {}).get("appid") or "").strip()
+    强制 = (数据 or {}).get("force") is True or str(
+        (数据 or {}).get("force") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not 会话标识 or 类型 != "group":
+        return _控制台错误(400, "群聊参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        状态 = await 消息记录.查询群禁言状态(会话标识, appid, 强制=强制)
+        return web.json_response(
+            {"ok": True, **状态},
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台群禁言状态读取失败：错误类型=%s",
+            type(exc).__name__,
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "available": False,
+                "members": [],
+                "global_rule": {},
+                "checked_at": int(time.time()),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 async def _处理消息置顶(request: web.Request) -> web.Response:

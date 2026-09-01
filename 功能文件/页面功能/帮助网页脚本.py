@@ -272,7 +272,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean(String(msgState.mediaData || '').trim() && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -898,6 +898,9 @@
         if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
         if (msgState.chatId !== chatId) {
           cancelMsgRealtimeMessageRender();
+          msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
+          msgState.mutes = new Map();
+          msgState.muteRequestAt = 0;
         }
         // 切换会话时立即失效旧的管理员请求，避免旧群响应把当前群标成红色。
         msgState.adminRequestToken = Number(msgState.adminRequestToken || 0) + 1;
@@ -1743,6 +1746,92 @@
         if (!media) return raw;
         return raw.replace(/\[(?:图片|语音|视频|文件|媒体|media)\]\s*(?:https?:\/\/[^\s<>]+)?/i, '').trim();
       };
+      const msgMuteRefreshMs = 30 * 1000;
+      const formatMuteRemaining = (expireTs) => {
+        const left = Math.max(0, Math.ceil(Number(expireTs || 0) - Date.now() / 1000));
+        if (!left) return '已结束';
+        const days = Math.floor(left / 86400);
+        const hours = Math.floor((left % 86400) / 3600);
+        const minutes = Math.floor((left % 3600) / 60);
+        const seconds = left % 60;
+        const pad = (value) => String(value).padStart(2, '0');
+        return days > 0
+          ? `${days}天 ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
+          : `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+      };
+      const updateMuteCountdowns = () => {
+        const now = Date.now() / 1000;
+        let expired = false;
+        document.querySelectorAll('[data-msg-mute-expire]').forEach((node) => {
+          const expireTs = Number(node.dataset.msgMuteExpire || 0);
+          const row = node.closest('.msg-row');
+          if (expireTs > 0 && expireTs <= now) {
+            const member = String(row?.dataset.msgUid || '').trim();
+            if (member && msgState.mutes.delete(member)) expired = true;
+            return;
+          }
+          node.textContent = expireTs > 0 ? `禁言剩余 ${formatMuteRemaining(expireTs)}` : '已禁言';
+        });
+        if (expired && msgState.chatId && !$('page-messages')?.hidden) {
+          const body = $('msg-body');
+          renderMsgMessages(
+            {...(msgState.historyData || {}), messages:msgState.messages},
+            {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+          );
+        }
+      };
+      const loadMuteStates = (force = false) => {
+        if (msgState.chatType !== 'group' || !msgState.chatId) return Promise.resolve(null);
+        if (!msgState.botIsAdmin) return Promise.resolve(null);
+        const chatId = String(msgState.chatId);
+        const chatType = String(msgState.chatType);
+        if (msgState.muteRequestPromise && msgState.muteRequestChatId === chatId) return msgState.muteRequestPromise;
+        const now = Date.now();
+        if (!force && msgState.muteRequestAt && now - msgState.muteRequestAt < msgMuteRefreshMs) return Promise.resolve(null);
+        const token = Number(msgState.muteRequestToken || 0) + 1;
+        msgState.muteRequestToken = token;
+        const promise = (async () => {
+          try {
+            const currentChat = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || {};
+            const data = await api('message/group-member/mutes', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:chatType, appid:String(currentChat.appid || window.msgAppid || '')})});
+            if (token !== Number(msgState.muteRequestToken || 0) || msgState.chatId !== chatId || msgState.chatType !== chatType) return data;
+            msgState.muteRequestAt = Date.now();
+            if (data?.available !== false) {
+              const next = new Map();
+              (Array.isArray(data?.members) ? data.members : []).forEach((member) => {
+                const id = String(member?.member_openid || member?.union_openid || '').trim();
+                if (!id) return;
+                const expireTs = Number(member?.mute_expire_ts || 0);
+                if (expireTs > 0 && expireTs <= Date.now() / 1000) return;
+                const username = String(member?.username || '').trim();
+                if (username) msgState.profiles[id] = {...(msgState.profiles[id] || {}), nickname:username, username};
+                next.set(id, {...member, member_openid:id, mute_expire_ts:expireTs});
+              });
+              msgState.mutes = next;
+              msgState.muteRequestAt = Date.now();
+              const body = $('msg-body');
+              if (!$('page-messages')?.hidden && msgState.renderedChatId === chatId) {
+                renderMsgMessages(
+                  {...(msgState.historyData || {}), messages:msgState.messages},
+                  {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+                );
+              }
+            }
+            return data;
+          } catch (_) {
+            if (token === Number(msgState.muteRequestToken || 0) && msgState.chatId === chatId) msgState.muteRequestAt = Date.now();
+            return null;
+          } finally {
+            if (msgState.muteRequestPromise === promise) {
+              msgState.muteRequestPromise = null;
+              msgState.muteRequestChatId = '';
+            }
+          }
+        })();
+        msgState.muteRequestChatId = chatId;
+        msgState.muteRequestPromise = promise;
+        return promise;
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
@@ -1785,6 +1874,9 @@
           const profileNickname = String(profile.nickname || profile.username || '').trim();
           const botProfileName = String(window.msgBotProfile?.username || '').trim();
           const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
+          const muteState = !isSelf ? msgState.mutes.get(String(m.user_id || '').trim()) : null;
+          const muteExpireTs = Number(muteState?.mute_expire_ts || 0);
+          const isMuted = Boolean(muteState) && (!muteExpireTs || muteExpireTs > Date.now() / 1000);
           const displayNickname = isSelf
             ? (botMessage
               ? (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : (botProfileName || '机器人'))
@@ -1797,6 +1889,7 @@
           }
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
+          if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
           const roleMap = {owner:'群主', admin:'管理', member:'群员'};
           const rawRole = String(m.raw_message || '').match(/member_role[^,]*?['"]([a-z]+)['"]/)?.[1] || '';
           const memberRole = String(profile.role || rawRole || '').trim().toLowerCase();
@@ -1837,14 +1930,17 @@
           const sendStateHtml = failedSend
             ? `<button class="msg-send-error" data-msg-retry="${esc(optimisticId)}" type="button" title="发送失败，点击重试" aria-label="发送失败，点击重试">!</button>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
+          const muteStatusHtml = isMuted
+            ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
+            : '';
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
-              <span class="msg-avatar">${avatarHtml(av, displayNickname || '?')}</span>
+              <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${hasInlineMediaText ? inlineMediaHtml : `${contentHtml}${media}`}</div>
-              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}${sendStateHtml}</div>
+              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}${muteStatusHtml}${sendStateHtml}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });
@@ -2144,7 +2240,9 @@
           });
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
-          if (!older) loadGroupRoles(true);
+          if (!older) {
+            void loadGroupRoles(true).then(() => loadMuteStates(true));
+          }
         } catch (error) { if (error.name === 'AbortError' || requestId !== msgState.historyRequest) return; if (error.status === 401) showAuthError(error); else toast(error.message); }
         finally {
           if (msgState.historyAbort === controller) msgState.historyAbort = null;
@@ -2424,7 +2522,7 @@
       $('msg-remark-cancel').addEventListener('click', () => { $('msg-remark-modal').hidden = true; });
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
-      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; } catch (error) { toast(error.message); } });
+      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; void loadMuteStates(true); } catch (error) { toast(error.message); } });
       bindMsgLayoutControls();
       void loadMsgLayout();
       // QQ 官方群消息通过 Gateway 事件接收，没有可轮询的群历史 REST 接口。
@@ -2442,10 +2540,15 @@
         if (now - msgLastPollAt < interval) return;
         msgLastPollAt = now;
         const history = msgState.chatId ? loadMsgHistory(false, true) : Promise.resolve();
-        msgPollPromise = Promise.allSettled([loadMsgChats(), history]).finally(() => { msgPollPromise = null; });
+        const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
+        msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); } });
       msgState.timer = setInterval(pollLocalMessages, 5000);
+      msgState.muteTimer = setInterval(() => {
+        updateMuteCountdowns();
+        if (msgState.chatType === 'group' && msgState.chatId) void loadMuteStates();
+      }, 1000);
 
       setView(viewFromUrl(), false); load();
     })();

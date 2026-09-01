@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.73.3</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v5.75.0</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -214,6 +214,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-tag.role { background:#eef3ff; color:#5b7bd5; }
             .msg-tag.self { background:#e9fbf3; color:#319e6b; }
             .msg-tag.recalled { background:#fff0f0; color:#e64340; }
+            .msg-tag.muted { background:#fff0f0; color:#d64545; }
+            .msg-row.muted .msg-avatar { background:#d9dde2; color:#89919b; filter:grayscale(.7); }
+            .msg-row.muted .msg-avatar img { filter:grayscale(1); opacity:.55; }
+            .msg-mute-countdown { display:inline-block; margin-left:7px; color:#d64545; font-size:9px; font-weight:700; }
             .msg-actions { display:flex; gap:5px; margin-top:5px; }
             .msg-row.self .msg-actions { justify-content:flex-end; }
             .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
@@ -478,6 +482,9 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-tag.role { background:#1f2a44; color:#8fa8ec; }
               :root[data-theme="dark"] .msg-tag.self { background:#16382c; color:#55d8a2; }
               :root[data-theme="dark"] .msg-tag.recalled { background:#3a2121; color:#f08080; }
+              :root[data-theme="dark"] .msg-tag.muted { background:#3a2121; color:#f08080; }
+              :root[data-theme="dark"] .msg-row.muted .msg-avatar { background:#3b404a; color:#a6adb8; }
+              :root[data-theme="dark"] .msg-mute-countdown { color:#f08080; }
               :root[data-theme="dark"] .msg-action { background:#262b38; color:#9aa0b5; }
               :root[data-theme="dark"] .msg-action:hover { background:#1d3850; color:#12b7f5; }
               :root[data-theme="dark"] .msg-load-older { border-color:var(--line); background:#1f2330; color:#8a90a5; }

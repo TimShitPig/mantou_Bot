@@ -63,6 +63,10 @@ except Exception as 导入异常:
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
 群机器人状态缓存: dict[str, dict[str, Any]] = globals().get("群机器人状态缓存") or {}
+群禁言状态缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("群禁言状态缓存") or {}
+群禁言状态缓存有效期秒 = 30
+群禁言状态失败冷却秒 = 60
+_群禁言状态请求锁 = globals().get("_群禁言状态请求锁") or asyncio.Lock()
 已撤回消息待同步: dict[tuple[str, str], float] = globals().get("已撤回消息待同步") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
@@ -2706,6 +2710,122 @@ def _获取群信息appid(会话标识: str, appid: str = "") -> str:
         return appid
     会话 = 消息缓存.get(str(会话标识 or "").strip()) or {}
     return str(会话.get("appid") or "").strip()
+
+
+def _复制群禁言状态(状态: dict[str, Any], *, cached: bool = False) -> dict[str, Any]:
+    结果 = copy.deepcopy(状态 if isinstance(状态, dict) else {})
+    结果.setdefault("available", False)
+    结果.setdefault("members", [])
+    结果.setdefault("global_rule", {})
+    结果["cached"] = bool(cached)
+    return 结果
+
+
+async def 查询群禁言状态(
+    会话标识: str,
+    appid: str = "",
+    强制: bool = False,
+) -> dict[str, Any]:
+    """按 QQ 官方接口读取当前群的成员禁言状态并短时缓存。"""
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识:
+        return {"available": False, "members": [], "global_rule": {}, "checked_at": 0}
+    appid = _获取群信息appid(会话标识, appid)
+    缓存键 = (appid, 会话标识)
+    现在 = time.time()
+    现有 = 群禁言状态缓存.get(缓存键)
+    if (
+        not 强制
+        and isinstance(现有, dict)
+        and float(现有.get("next_refresh_at") or 0) > 现在
+    ):
+        return _复制群禁言状态(现有, cached=True)
+
+    async with _群禁言状态请求锁:
+        现在 = time.time()
+        现有 = 群禁言状态缓存.get(缓存键)
+        if (
+            not 强制
+            and isinstance(现有, dict)
+            and float(现有.get("next_refresh_at") or 0) > 现在
+        ):
+            return _复制群禁言状态(现有, cached=True)
+        try:
+            from botpy.http import Route
+
+            平台 = 获取QQ官方平台(appid=appid)
+            通道 = 获取HTTP通道(平台)
+            if 通道 is None:
+                raise RuntimeError("QQ官方HTTP通道未加载")
+            _, _http = 通道
+            响应 = await _http.request(
+                Route(
+                    "GET",
+                    "/v2/groups/{group_openid}/restrict_chat_setting",
+                    group_openid=会话标识,
+                )
+            )
+            if not isinstance(响应, dict):
+                raise RuntimeError("禁言状态响应格式无效")
+            错误码 = 响应.get("code")
+            if 错误码 not in (None, 0, "", "0"):
+                raise RuntimeError(f"禁言状态业务错误：code={错误码}")
+            成员列表: list[dict[str, Any]] = []
+            for 成员 in 响应.get("members") or []:
+                if not isinstance(成员, dict):
+                    continue
+                成员标识 = str(
+                    成员.get("member_openid") or 成员.get("union_openid") or ""
+                ).strip()
+                if not 成员标识:
+                    continue
+                到期文本 = str(成员.get("mute_expire_at") or "").strip()
+                到期时间 = _转数字时间戳(到期文本) or 0
+                if 到期时间 and 到期时间 <= 现在:
+                    continue
+                成员列表.append(
+                    {
+                        "member_openid": 成员标识,
+                        "username": str(成员.get("username") or "").strip(),
+                        "mute_expire_at": 到期文本,
+                        "mute_expire_ts": int(到期时间) if 到期时间 else 0,
+                    }
+                )
+            全员规则 = 响应.get("global_rule")
+            if not isinstance(全员规则, dict):
+                全员规则 = {}
+            状态 = {
+                "available": True,
+                "members": 成员列表,
+                "global_rule": {
+                    "mode": str(全员规则.get("mode") or "none").strip(),
+                },
+                "checked_at": int(现在),
+                "next_refresh_at": 现在 + 群禁言状态缓存有效期秒,
+            }
+            群禁言状态缓存[缓存键] = 状态
+            return _复制群禁言状态(状态)
+        except Exception as 异常:
+            logger.warning(
+                "消息记录群禁言状态查询失败：stage=restrict_chat_setting, "
+                "group_id=%s, appid=%s, error_type=%s, cooldown=%s",
+                会话标识,
+                appid,
+                type(异常).__name__,
+                群禁言状态失败冷却秒,
+            )
+            失败状态 = dict(现有) if isinstance(现有, dict) else {}
+            失败状态.update(
+                {
+                    "available": False,
+                    "checked_at": int(现在),
+                    "next_refresh_at": 现在 + 群禁言状态失败冷却秒,
+                }
+            )
+            失败状态.setdefault("members", [])
+            失败状态.setdefault("global_rule", {})
+            群禁言状态缓存[缓存键] = 失败状态
+            return _复制群禁言状态(失败状态, cached=bool(现有))
 
 
 def _群信息需要刷新(信息: dict[str, Any] | None) -> bool:
