@@ -2056,6 +2056,7 @@
       };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
+        const keepLatestVisible = !scroll.prepend && (Boolean(scroll.toBottom) || msgBodyNearBottom(body));
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
         data = {
           ...previousData,
@@ -2211,7 +2212,7 @@
         });
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
-        } else if (scroll.toBottom) {
+        } else if (keepLatestVisible) {
           scrollMsgBodyToBottom(body, msgState.chatId);
           clearMsgNewMessages();
         } else {
