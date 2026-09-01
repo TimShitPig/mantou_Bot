@@ -2818,7 +2818,8 @@ QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
 QQ阅读免费正文地址 = "http://154.12.91.167:7000/content"
 QQ阅读免费正文批量章节数 = 200
 QQ阅读免费正文最大动态并发数 = 16
-QQ阅读进度日志分段数 = 10
+# 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
+QQ阅读进度日志分段数 = 4
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"

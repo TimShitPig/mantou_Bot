@@ -581,7 +581,7 @@ async def 下载全部章节(
     进度锁 = asyncio.Lock()
     已完成 = 0
     成功数 = 0
-    下次进度 = 10
+    下次进度 = 25
     解密并发数 = min(书旗解码最大动态并发数, 总数)
     解密执行器 = ThreadPoolExecutor(
         max_workers=max(1, 解密并发数), thread_name_prefix="shuqi-decode"
@@ -610,7 +610,7 @@ async def 下载全部章节(
                 "模式=iOS逐章正文, 会话复用=开启"
             )
             while 下次进度 <= 百分比:
-                下次进度 += 10
+                下次进度 += 25
 
     try:
         for 尝试次数 in range(1, 书旗正文最大尝试次数 + 1):

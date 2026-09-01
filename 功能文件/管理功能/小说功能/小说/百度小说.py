@@ -645,7 +645,7 @@ async def 下载百度出版正文(
     页面锁 = asyncio.Lock()
     页面进度锁 = asyncio.Lock()
     已完成页面 = 0
-    下次页面日志 = max(1, len(分组) // 10)
+    下次页面日志 = max(1, (len(分组) + 3) // 4)
 
     async def 下载页面(
         页面编号: str, 页面目录: list[tuple[int, dict[str, Any]]]
@@ -688,7 +688,7 @@ async def 下载百度出版正文(
                             len(分组),
                             sum(bool(页面结果.get(页面, {})) for 页面 in 分组),
                         )
-                        下次页面日志 += max(1, len(分组) // 10)
+                        下次页面日志 += max(1, (len(分组) + 3) // 4)
 
     await asyncio.gather(*(下载页面(页面编号, 项目) for 页面编号, 项目 in 分组.items()))
     for 页面编号, 页面目录 in 分组.items():
@@ -777,7 +777,7 @@ async def 下载百度正文(
     结果 = [""] * len(目录)
     信号量 = asyncio.Semaphore(百度最大并发数)
     已完成 = 0
-    下次日志 = max(1, len(目录) // 10)
+    下次日志 = max(1, (len(目录) + 3) // 4)
     锁 = asyncio.Lock()
 
     async def 下载一章(下标: int, 章节: dict[str, Any]) -> None:
@@ -793,7 +793,7 @@ async def 下载百度正文(
                     len(目录),
                     sum(bool(正文) for 正文 in 结果),
                 )
-                下次日志 += max(1, len(目录) // 10)
+                下次日志 += max(1, (len(目录) + 3) // 4)
 
     await asyncio.gather(*(下载一章(下标, 章节) for 下标, 章节 in enumerate(目录)))
     return 结果

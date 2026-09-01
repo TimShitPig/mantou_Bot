@@ -767,7 +767,7 @@ async def 下载全部章节(
     结果: dict[int, str] = {}
     已完成 = 0
     成功数 = 0
-    下次进度 = 10
+    下次进度 = 25
     进度锁 = asyncio.Lock()
     解密执行器 = ThreadPoolExecutor(
         max_workers=min(追书解密并发数, max(1, 总数)),
@@ -803,7 +803,7 @@ async def 下载全部章节(
                 已完成 - 成功数,
             )
             while 下次进度 <= 百分比:
-                下次进度 += 10
+                下次进度 += 25
 
     待处理 = list(书籍.chapters)
     try:

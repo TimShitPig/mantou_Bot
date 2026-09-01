@@ -221,7 +221,7 @@ async def 下载连城正文(
     results = [""] * len(chapters)
     sem = asyncio.Semaphore(max(1, min(连城并发数, len(chapters) or 1)))
     done = 0
-    next_log = max(1, len(chapters) // 10)
+    next_log = max(1, (len(chapters) + 3) // 4)
     lock = asyncio.Lock()
 
     async def one(index: int, chapter: dict[str, str]) -> None:
@@ -241,7 +241,7 @@ async def 下载连城正文(
                     done - success,
                     连城并发数,
                 )
-                next_log += max(1, len(chapters) // 10)
+                next_log += max(1, (len(chapters) + 3) // 4)
 
     await asyncio.gather(*(one(i, chapter) for i, chapter in enumerate(chapters)))
     return results

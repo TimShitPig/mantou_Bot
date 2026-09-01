@@ -934,7 +934,8 @@ async def 异步获取得间章节目录(
 
 # ===== 业务封装 =====
 
-进度日志分段数 = 10
+# 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
+进度日志分段数 = 25
 得间域名正则 = re.compile(r"palmestore\.com|zhangyue\.com|ireader\.com|dejian", re.I)
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
 书籍编号正则 = re.compile(r"(?:bid|book[_-]?id|bookId)=(\d{5,})", re.I)

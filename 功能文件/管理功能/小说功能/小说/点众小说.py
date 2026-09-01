@@ -195,7 +195,8 @@ async def 初始化设备(session: aiohttp.ClientSession) -> dict[str, Any]:
 
 # ===== 业务封装 =====
 
-进度日志分段数 = 10
+# 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
+进度日志分段数 = 4
 点众域名正则 = re.compile(r"dianzhong\.com|dz\.|点众", re.I)
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
 书籍编号正则 = re.compile(r"(?:bookId|book[_-]?id|bid)=(\d{4,})", re.I)
@@ -705,7 +706,7 @@ async def 异步下载全部章节(
     完成 = 0
     成功 = 0
     进度锁 = asyncio.Lock()
-    下次进度 = 10
+    下次进度 = 25
 
     async def 记录进度(成功一章: bool) -> None:
         nonlocal 完成, 成功, 下次进度

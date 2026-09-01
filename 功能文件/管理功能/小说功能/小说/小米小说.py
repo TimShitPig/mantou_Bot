@@ -514,7 +514,7 @@ async def 下载小米正文(
     结果 = [""] * len(目录)
     信号量 = asyncio.Semaphore(小米最大并发数)
     已完成 = 0
-    下次日志 = max(1, len(目录) // 10)
+    下次日志 = max(1, (len(目录) + 3) // 4)
     锁 = asyncio.Lock()
 
     async def 下载一章(下标: int, 章节: dict[str, Any]) -> None:
@@ -530,7 +530,7 @@ async def 下载小米正文(
                     len(目录),
                     sum(bool(正文) for 正文 in 结果),
                 )
-                下次日志 += max(1, len(目录) // 10)
+                下次日志 += max(1, (len(目录) + 3) // 4)
 
     await asyncio.gather(*(下载一章(下标, 章节) for 下标, 章节 in enumerate(目录)))
     return 结果

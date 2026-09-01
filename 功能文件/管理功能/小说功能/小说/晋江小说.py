@@ -44,7 +44,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 晋江请求并发上限 = 50
 晋江搜索数量上限 = 30
 晋江请求重试次数 = 3
-晋江进度日志分段数 = 10
+晋江进度日志最多条数 = 5
 晋江下载缓存目录 = 小说缓存工具.下载缓存目录
 晋江文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
@@ -330,7 +330,13 @@ async def 下载晋江正文(
     progress_lock = asyncio.Lock()
     completed = 0
     success = 0
-    next_log = max(1, total // 晋江进度日志分段数)
+    # 总进度日志（含 0% 起始行）最多 5 条，短篇不再按章节逐条刷屏。
+    进度日志间隔 = max(
+        1,
+        (total + 晋江进度日志最多条数 - 2)
+        // max(1, 晋江进度日志最多条数 - 1),
+    )
+    next_log = 进度日志间隔
     logger.info(
         "晋江小说章节进度：书籍编号=%s, 进度=0/%s, 百分比=0%%, "
         "可下载章节并发数=%s, 会话复用=开启, 重试次数=%s",
@@ -380,7 +386,7 @@ async def 下载晋江正文(
                     completed - success,
                 )
                 while next_log <= completed:
-                    next_log += max(1, total // 晋江进度日志分段数)
+                    next_log += 进度日志间隔
 
     await asyncio.gather(
         *(下载一章(index, chapter) for index, chapter in enumerate(目录))
