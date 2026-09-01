@@ -2576,12 +2576,12 @@
       $('msg-raw-close').addEventListener('click', () => { $('msg-raw-modal').hidden = true; });
       $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) $('msg-raw-modal').hidden = true; });
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));
-      $('msg-mute-custom').addEventListener('input', (e) => { const v = Number(e.target.value); if (v >= 1) msgState.muteMinutes = v; });
+      $('msg-mute-custom').addEventListener('input', (e) => { const raw = Number(e.target.value); if (!Number.isFinite(raw) || raw < 1) return; const days = Math.min(30, Math.floor(raw)); e.target.value = String(days); msgState.muteMinutes = days * 1440; });
       $('msg-mute-cancel').addEventListener('click', () => { $('msg-mute-modal').hidden = true; });
       $('msg-remark-cancel').addEventListener('click', () => { $('msg-remark-modal').hidden = true; });
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
-      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:msgState.muteMinutes})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; void loadMuteStates(true); } catch (error) { toast(error.message); } });
+      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; const custom = $('msg-mute-custom'); const rawDays = Number(custom?.value); if (Number.isFinite(rawDays) && rawDays >= 1) { const days = Math.min(30, Math.floor(rawDays)); if (custom) custom.value = String(days); msgState.muteMinutes = days * 1440; } try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:Math.min(43200, Math.max(1, Number(msgState.muteMinutes) || 30))})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; void loadMuteStates(true); } catch (error) { toast(error.message); } });
       bindMsgLayoutControls();
       void loadMsgLayout();
       // QQ 官方群消息通过 Gateway 事件接收，没有可轮询的群历史 REST 接口。
