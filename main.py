@@ -61,7 +61,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "5.77.3"
+插件版本 = "6.0.0"
 
 
 
@@ -120,15 +120,16 @@ class MyPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
+        if not 权限工具.是QQ官方机器人(event):
+            return
         群管功能.获取群号(event)
         命令文本 = 获取命令文本(event)
         回复内容 = None
 
         async def _输出文本回复(文本):
-            """QQ 官方群聊统一使用 Markdown 并提及发起人，其他适配器保持原回复。"""
-            if 权限工具.是QQ官方机器人(event):
-                if await 帮助功能.发送QQ官方提及Markdown(event, str(文本)):
-                    return
+            """QQ 官方群聊统一使用 Markdown 并提及发起人。"""
+            if await 帮助功能.发送QQ官方提及Markdown(event, str(文本)):
+                return
             yield event.plain_result(文本)
 
         async def _输出找书结果(找书结果):

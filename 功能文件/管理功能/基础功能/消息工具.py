@@ -44,8 +44,7 @@ def 转消息段文本(消息段: Any) -> str:
 
 
 def 清理命令文本(文本: str) -> str:
-    文本 = re.sub(r"\[CQ:reply,[^\]]*\]", "", str(文本 or ""))
-    文本 = re.sub(r"\[CQ:at,[^\]]*\]", "", 文本)
+    文本 = str(文本 or "")
     文本 = re.sub(r"\[At:[^\]]+\]", "", 文本)
     文本 = re.sub(r"<@!?[A-Za-z0-9_-]{5,64}>", "", 文本)
     return 文本.strip()

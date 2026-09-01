@@ -852,39 +852,31 @@ def 构造小说下载完成文字链接(分享链接: Any) -> str:
 async def 发送小说下载完成链接(
     event: Any, 书名: Any, 作者: Any, 分享链接: Any
 ) -> dict[str, Any]:
-    """QQ 官方在同一消息发送链接按钮及备用文字链接；其他适配器降级为文本链接。"""
+    """仅通过 QQ 官方接口发送同一条完成消息和链接按钮。"""
     完成文本 = 构造小说下载完成文本(书名, 作者)
     链接列表 = 解析小说分享链接(分享链接)
     文字链接 = 构造小说下载完成文字链接(链接列表)
     if not 文字链接:
         return {"sent": False, "fallback_text": "", "error": "分享链接为空"}
 
-    是官方机器人 = False
     try:
         from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
 
-        是官方机器人 = bool(是QQ官方机器人(event))
-        if 是官方机器人:
-            from 功能文件.管理功能.基础功能.帮助功能 import 发送Markdown键盘消息
+        if not 是QQ官方机器人(event):
+            return {"sent": False, "fallback_text": "", "error": "仅支持 QQ 官方接口"}
+        from 功能文件.管理功能.基础功能.帮助功能 import 发送Markdown键盘消息
 
-            完整文本 = f"{完成文本}\n\n{文字链接}"
-            按钮已发送 = await 发送Markdown键盘消息(
-                event, 完整文本, 构造小说下载完成键盘(链接列表)
-            )
-            if 按钮已发送:
-                return {"sent": True, "fallback_text": "", "error": ""}
-            logger.warning("小说完成链接按钮发送失败")
+        完整文本 = f"{完成文本}\n\n{文字链接}"
+        按钮已发送 = await 发送Markdown键盘消息(
+            event, 完整文本, 构造小说下载完成键盘(链接列表)
+        )
+        if 按钮已发送:
+            return {"sent": True, "fallback_text": "", "error": ""}
+        logger.warning("小说完成链接按钮发送失败")
     except Exception as 异常:
         logger.warning(f"小说完成链接按钮构建或发送失败：error={异常}")
 
-    if 是官方机器人:
-        return {"sent": False, "fallback_text": "", "error": "链接按钮发送失败"}
-
-    return {
-        "sent": False,
-        "fallback_text": f"{完成文本}\n{文字链接}",
-        "error": "链接按钮发送失败",
-    }
+    return {"sent": False, "fallback_text": "", "error": "链接按钮发送失败"}
 
 
 def UC网盘是否启用(配置: Any) -> bool:

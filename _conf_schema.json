@@ -6,7 +6,7 @@
       "group_file_cleanup_admin_qq": {
         "description": "插件管理员 QQ 白名单",
         "type": "list",
-        "hint": "只有这里填写的账号可以使用帮助、状态、保存 UC/夸克/百度/QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和群管指令。普通 QQ/OneBot 适配器填写 QQ 号；QQ 官方群如需被 Markdown 实际 @，请填写对应群成员 OpenID。这里是插件管理员白名单，不是群管理员；填写内容会与 MySQL mantou_runtime_state 双向同步。",
+        "hint": "只有这里填写的账号可以使用帮助、状态、保存 UC/夸克/百度/QQ阅读 Cookie、切换小说网盘、开启/关闭小说功能和群管指令。QQ 官方群如需被 Markdown 实际 @，请填写对应群成员 OpenID。这里是插件管理员白名单，不是群管理员；填写内容会与 MySQL mantou_runtime_state 双向同步。",
         "default": []
       }
     }

@@ -291,7 +291,7 @@ def 获取适配器名称(event: Any) -> str:
         方法 = getattr(event, 方法名, None)
         if callable(方法):
             try:
-                return str(方法()).lower()
+                return str(方法()).strip().lower()
             except Exception:
                 pass
 
@@ -302,7 +302,7 @@ def 获取适配器名称(event: Any) -> str:
             for 字段名 in ("name", "id", "platform", "adapter_name", "platform_name"):
                 值 = 读取字段(platform_meta, 字段名)
                 if 值:
-                    return str(值).lower()
+                    return str(值).strip().lower()
             if isinstance(platform_meta, dict):
                 for 字段名 in (
                     "name",
@@ -313,28 +313,25 @@ def 获取适配器名称(event: Any) -> str:
                 ):
                     值 = platform_meta.get(字段名)
                     if 值:
-                        return str(值).lower()
+                        return str(值).strip().lower()
 
     bot = getattr(event, "bot", None)
     if bot is not None:
         for 字段名 in ("platform", "adapter_name", "adapter"):
             值 = 读取字段(bot, 字段名)
             if 值:
-                return str(值).lower()
+                    return str(值).strip().lower()
         for 字段名 in ("platform_name", "platform_type"):
             值 = 读取字段(bot, 字段名)
             if 值:
-                return str(值).lower()
+                    return str(值).strip().lower()
 
     return ""
 
 
 def 是QQ官方机器人(event: Any) -> bool:
-    适配器 = 获取适配器名称(event)
+    适配器 = re.sub(r"[-\s]+", "_", 获取适配器名称(event))
     if not 适配器:
         return False
-    return any(
-        关键词 in 适配器
-        for 关键词 in ("qq_official", "qqofficial", "q官方", "qq官方", "official")
-    )
+    return 适配器 == "qq_official" or 适配器 == "qqofficial"
 
