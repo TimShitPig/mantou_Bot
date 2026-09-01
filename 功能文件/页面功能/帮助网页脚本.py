@@ -1775,6 +1775,17 @@
         reader.onerror = () => reject(reader.error || new Error('图片读取失败'));
         reader.readAsDataURL(blob);
       });
+      const dataUrlToFile = (dataUrl, name = 'image.png') => {
+        const match = String(dataUrl || '').match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i);
+        if (!match || typeof atob !== 'function' || typeof File === 'undefined') return null;
+        try {
+          const binary = atob(match[2]);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+          const extension = String(match[1]).split('/')[1].replace(/[^a-z0-9]+/gi, '') || 'png';
+          return new File([bytes], String(name || `image.${extension}`), {type:match[1]});
+        } catch (_) { return null; }
+      };
       const fetchImageBlob = async (source) => {
         const url = safeImageSource(source);
         if (!url) throw new Error('图片地址无效');
@@ -2750,6 +2761,33 @@
             return;
           }
         }
+        const html = e.clipboardData.getData('text/html') || '';
+        const plain = e.clipboardData.getData('text/plain') || '';
+        let pastedSource = '';
+        try {
+          const parsed = new DOMParser().parseFromString(html, 'text/html');
+          pastedSource = safeImageSource(parsed.querySelector('img')?.getAttribute('src') || '');
+        } catch (_) {}
+        if (!pastedSource && /^data:image\//i.test(plain.trim())) pastedSource = safeImageSource(plain.trim());
+        if (!pastedSource) return;
+        e.preventDefault();
+        if (pastedSource.startsWith('data:image/')) {
+          const file = dataUrlToFile(pastedSource);
+          setComposerImage(pastedSource, '', pastedSource, file);
+          toast('已粘贴图片，可单独发送或继续输入文字');
+          return;
+        }
+        const proxy = mediaProxyUrl(pastedSource, 'image') || pastedSource;
+        void fetchImageBlob(proxy)
+          .then((blob) => blobToDataUrl(blob))
+          .then((dataUrl) => {
+            setComposerImage(dataUrl, '', dataUrl, dataUrlToFile(dataUrl));
+            toast('已粘贴图片，可单独发送或继续输入文字');
+          })
+          .catch(() => {
+            setComposerImage('', pastedSource, proxy);
+            toast('已粘贴图片，可单独发送或继续输入文字');
+          });
       };
       document.querySelectorAll('#msg-editor').forEach((node) => node.addEventListener('paste', handleComposerPaste));
       const msgInputBox = $('msg-input-box');
