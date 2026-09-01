@@ -2479,7 +2479,18 @@ def _异常表示群机器人已移除(异常: Exception) -> bool:
         文本 = ""
     if any(词 in 文本 for 词 in ("rate limit", "rate_limit", "限流", "频率", "timeout", "timed out")):
         return False
-    return any(词 in 文本 for 词 in ("404", "not found", "不存在", "不在群", "未加入群"))
+    return any(
+        词 in 文本
+        for 词 in (
+            "404",
+            "not found",
+            "不存在",
+            "不在群",
+            "未加入群",
+            "非群成员",
+            "不是群成员",
+        )
+    )
 
 
 def _响应表示群机器人已移除(响应: Any) -> bool:
@@ -2498,7 +2509,68 @@ def _响应表示群机器人已移除(响应: Any) -> bool:
         文本 = str(响应).lower()
     if any(词 in 文本 for 词 in ("rate limit", "rate_limit", "限流", "频率", "timeout", "timed out", "11253")):
         return False
-    return any(词 in 文本 for 词 in ("404", "not found", "不存在", "不在群", "未加入群"))
+    return any(
+        词 in 文本
+        for 词 in (
+            "404",
+            "not found",
+            "不存在",
+            "不在群",
+            "未加入群",
+            "非群成员",
+            "不是群成员",
+        )
+    )
+
+
+def _群信息异常摘要(异常: Exception) -> dict[str, str]:
+    """提取群资料请求的受控诊断字段，避免日志只剩 ServerError。"""
+    类型 = type(异常).__name__
+    原文 = getattr(异常, "msgs", None) or str(异常)
+    文本 = re.sub(r"\s+", " ", str(原文 or "")).strip()
+    文本 = re.sub(r"https?://\S+", "<url>", 文本, flags=re.IGNORECASE)[:200]
+    小写 = 文本.lower()
+    if _异常表示群机器人已移除(异常):
+        分类 = "not_member"
+    elif any(词 in 小写 for 词 in ("rate limit", "rate_limit", "限流", "频率", "限制")):
+        分类 = "rate_limit"
+    elif any(词 in 小写 for 词 in ("timeout", "timed out", "超时")):
+        分类 = "timeout"
+    elif any(词 in 小写 for 词 in ("connection", "connect", "网络", "socket")):
+        分类 = "network"
+    else:
+        分类 = "unknown"
+
+    def _字段值(*名称: str) -> str:
+        for 名称项 in 名称:
+            try:
+                值 = getattr(异常, 名称项, None)
+            except Exception:
+                值 = None
+            if 值 not in (None, ""):
+                return str(值).strip()
+        return ""
+
+    http_status = _字段值("status", "status_code", "http_status")
+    code = _字段值("code", "ret_code", "error_code")
+    err_code = _字段值("err_code", "errno", "business_code")
+    if not http_status:
+        匹配 = re.search(r"(?:HTTP|错误代码|status)[：:= ]+(\d{3})", 文本, re.IGNORECASE)
+        http_status = 匹配.group(1) if 匹配 else ""
+    if not code:
+        匹配 = re.search(r"(?:^|[\s,])code[：:= ]*(-?\d+)", 文本, re.IGNORECASE)
+        code = 匹配.group(1) if 匹配 else ""
+    if not err_code:
+        匹配 = re.search(r"(?:err_code|error_code|errno)[：:= ]*(-?\d+)", 文本, re.IGNORECASE)
+        err_code = 匹配.group(1) if 匹配 else ""
+    return {
+        "error_type": 类型,
+        "category": 分类,
+        "http_status": http_status,
+        "code": code,
+        "err_code": err_code,
+        "detail": 文本 or "(empty)",
+    }
 
 
 def _构造已移除群摘要(
@@ -2575,7 +2647,32 @@ async def _查询群机器人状态(
         return 记录
     except Exception as 异常:
         if _异常表示群机器人已移除(异常):
+            详情 = _群信息异常摘要(异常)
+            logger.info(
+                "消息记录群机器人状态：stage=bot_state, group_id=%s, appid=%s, "
+                "status=removed, category=%s, http_status=%s, code=%s, err_code=%s, detail=%s",
+                会话标识,
+                appid,
+                详情["category"],
+                详情["http_status"] or "unknown",
+                详情["code"] or "unknown",
+                详情["err_code"] or "unknown",
+                详情["detail"],
+            )
             return _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
+        详情 = _群信息异常摘要(异常)
+        logger.warning(
+            "消息记录群机器人状态查询失败：stage=bot_state, group_id=%s, appid=%s, "
+            "error_type=%s, category=%s, http_status=%s, code=%s, err_code=%s, detail=%s",
+            会话标识,
+            appid,
+            详情["error_type"],
+            详情["category"],
+            详情["http_status"] or "unknown",
+            详情["code"] or "unknown",
+            详情["err_code"] or "unknown",
+            详情["detail"],
+        )
         return 现有
 
 
@@ -2795,6 +2892,21 @@ async def 刷新群信息(
             # 非成功业务响应也进入长冷却，防止权限/接口异常时每次打开会话都重试。
             失败缓存["next_refresh_at"] = int(time.time()) + 群信息默认失败冷却秒
             群信息缓存[会话标识] = 失败缓存
+            返回字段 = (
+                ",".join(sorted(str(字段) for 字段 in 结果.keys()))
+                if isinstance(结果, dict)
+                else ""
+            )
+            logger.warning(
+                "消息记录群信息响应无效：stage=group_info_response, group_id=%s, appid=%s, "
+                "response_type=%s, code=%s, fields=%s, cooldown=%s",
+                会话标识,
+                appid,
+                type(结果).__name__,
+                str(错误码 or "unknown"),
+                返回字段 or "none",
+                群信息默认失败冷却秒,
+            )
             return None
         标签 = 结果.get("group_tags") if "group_tags" in 结果 else 已有.get("group_tags")
         if not isinstance(标签, (list, tuple)):
@@ -2851,6 +2963,18 @@ async def 刷新群信息(
         return 摘要
     except Exception as exc:
         if _异常表示群机器人已移除(exc):
+            详情 = _群信息异常摘要(exc)
+            logger.info(
+                "消息记录群信息：stage=group_info, group_id=%s, appid=%s, "
+                "status=removed, category=%s, http_status=%s, code=%s, err_code=%s, detail=%s",
+                会话标识,
+                appid,
+                详情["category"],
+                详情["http_status"] or "unknown",
+                详情["code"] or "unknown",
+                详情["err_code"] or "unknown",
+                详情["detail"],
+            )
             _设置群机器人状态(会话标识, "removed", appid, 持久化=True)
             return _构造已移除群摘要(会话标识, 已有, appid)
         冷却秒数 = _群信息冷却秒数(exc)
@@ -2858,9 +2982,19 @@ async def 刷新群信息(
         失败缓存.setdefault("group_openid", 会话标识)
         失败缓存["next_refresh_at"] = int(time.time()) + 冷却秒数
         群信息缓存[会话标识] = 失败缓存
+        详情 = _群信息异常摘要(exc)
         logger.warning(
-            "消息记录群信息刷新失败：错误类型=%s，冷却 %s 秒",
-            type(exc).__name__, 冷却秒数,
+            "消息记录群信息刷新失败：stage=group_info, group_id=%s, appid=%s, "
+            "error_type=%s, category=%s, http_status=%s, code=%s, err_code=%s, detail=%s, cooldown=%s",
+            会话标识,
+            appid,
+            详情["error_type"],
+            详情["category"],
+            详情["http_status"] or "unknown",
+            详情["code"] or "unknown",
+            详情["err_code"] or "unknown",
+            详情["detail"],
+            冷却秒数,
         )
         return None
 
