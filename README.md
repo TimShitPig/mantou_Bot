@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.73.8-2ea44f)
+![version](https://img.shields.io/badge/version-v5.74.0-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.73.8 |
+| 版本 | v5.74.0 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -37,7 +37,7 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 
 无需填写域名。插件默认监听 `0.0.0.0:8090`，启动时自动获取服务器 IPv4；重载插件后发送 `帮助`，菜单会直接显示“打开网页版帮助”按钮，地址格式为 `http://服务器IP:8090`。打开后先进入独立登录页，使用帮助网页设置中的账号密码登录管理员控制台；登录前不会返回侧边栏、功能页或控制台结构，登录后可查看小说开关、网盘摘要、数据库状态和服务器运行状态。
 
-控制台的“机器人配置”和“系统设置”可直接修改插件配置，包括管理员白名单、网页账号密码、三种网盘目录和数据库连接；“网盘配置”可分别开启或关闭 UC、夸克、百度网盘，新增、删除账号，刷新夸克账号资料，切换默认主网盘并按群选择账号；开启多个网盘后，一次下载会同时上传并生成多个分享链接和按钮；QQ阅读登录态也可在网页保存或清除。Cookie、密码、数据库凭据和 QQ阅读密钥只提交给后端，不会回显。
+控制台的“机器人配置”和“系统设置”可直接修改插件配置，包括管理员白名单、网页账号密码、三种网盘目录和数据库连接；管理员白名单会与 MySQL `mantou_runtime_state` 双向同步，AstrBot 配置和数据库任一侧变更后会在下次同步时保持一致；“网盘配置”可分别开启或关闭 UC、夸克、百度网盘，新增、删除账号，刷新夸克账号资料，切换默认主网盘并按群选择账号；开启多个网盘后，一次下载会同时上传并生成多个分享链接和按钮；QQ阅读登录态也可在网页保存或清除。Cookie、密码、数据库凭据和 QQ阅读密钥只提交给后端，不会回显。
 
 如果使用域名或反向代理，可以在 AstrBot 插件配置的“帮助网页设置”中填写外网地址覆盖自动地址，例如：
 
@@ -268,7 +268,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 
 | 配置项 | 说明 |
 | --- | --- |
-| `group_file_cleanup_admin_qq` | 管理员 QQ 白名单 |
+| `group_file_cleanup_admin_qq` | 管理员 QQ 白名单（与 MySQL 双向同步） |
 | `help_web_settings` | 控制台监听地址、端口、可选域名和账号密码 |
 | `uc_pan_settings` | UC 网盘 Cookie 和上传目录 |
 | `quark_pan_settings` | 夸克网盘 Cookie 和上传目录 |

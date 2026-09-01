@@ -1,5 +1,9 @@
 # 更新日志
 
+## v5.74.0
+
+- 新增：管理员白名单与 MySQL `mantou_runtime_state` 双向同步；AstrBot 配置变更会写入数据库，数据库外部变更会在启动、网页读取和权限校验时同步回 AstrBot 配置。
+
 ## v5.73.8
 
 - 优化：番茄畅听正文解密改用独立动态线程池，按当前 CPU 核心数运行，避免受 asyncio 默认线程池上限影响；继续使用 `gmpy2` 完成 DH 运算、PyCryptodome 完成 AES 解密。

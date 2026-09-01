@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.73.8"
+控制台版本 = "5.74.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -430,6 +430,12 @@ async def _持久化插件配置() -> None:
 
 def _读取插件配置摘要() -> dict[str, Any]:
     配置 = 当前帮助网页配置
+    try:
+        from 功能文件.管理功能.基础功能 import 权限工具
+
+        权限工具.同步管理员白名单(配置)
+    except Exception as exc:
+        logger.debug("帮助控制台管理员白名单同步失败：错误类型=%s", type(exc).__name__)
     字段列表: list[dict[str, Any]] = []
     for 字段名, 定义 in 插件配置字段定义.items():
         原值 = _读取插件配置值(
@@ -1572,6 +1578,11 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
             await _持久化插件配置()
         elif 已更新 and not isinstance(当前帮助网页配置, dict):
             raise RuntimeError("插件配置没有持久化接口")
+        if "group_file_cleanup_admin_qq" in 已更新:
+            阶段 = "同步管理员白名单"
+            from 功能文件.管理功能.基础功能 import 权限工具
+
+            权限工具.同步管理员白名单(当前帮助网页配置, 强制=True)
         return web.json_response(
             {
                 "ok": True,

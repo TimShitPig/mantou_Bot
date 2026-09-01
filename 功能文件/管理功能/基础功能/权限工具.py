@@ -1,6 +1,24 @@
 from __future__ import annotations
 
+import json
+import logging
+import re
+import threading
+import time
 from typing import Any
+
+try:
+    from astrbot.api import logger
+except Exception:
+    logger = logging.getLogger(__name__)
+
+
+管理员白名单命名空间 = "admin_whitelist"
+管理员白名单状态键 = "group_file_cleanup_admin_qq"
+管理员白名单配置快照键 = "config_snapshot"
+管理员白名单同步间隔秒 = 5.0
+_管理员白名单缓存: dict[int, tuple[float, list[str]]] = {}
+_管理员白名单同步锁 = threading.RLock()
 
 
 def 是群文件清理管理员(event: Any, 配置: Any) -> bool:
@@ -10,14 +28,178 @@ def 是群文件清理管理员(event: Any, 配置: Any) -> bool:
 
 
 def 获取群文件清理管理员QQ列表(配置: Any) -> set[str]:
-    if not 配置:
-        return set()
-    值 = 读取配置字段(配置, "group_file_cleanup_admin_qq") or []
+    return set(同步管理员白名单(配置))
+
+
+def _规范化管理员白名单(值: Any) -> list[str]:
     if isinstance(值, str):
-        值 = [值]
-    if not isinstance(值, list):
-        return set()
-    return {str(项目).strip() for 项目 in 值 if str(项目).strip()}
+        文本 = 值.strip()
+        if 文本.startswith("["):
+            try:
+                值 = json.loads(文本)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                值 = 文本
+        if isinstance(值, str):
+            值 = [项目 for 项目 in re.split(r"[,，\n\r\s]+", 值) if 项目]
+    if not isinstance(值, (list, tuple, set)):
+        return []
+    结果: list[str] = []
+    for 项目 in 值:
+        文本 = str(项目 or "").strip()
+        if 文本 and 文本 not in 结果:
+            结果.append(文本)
+    return 结果
+
+
+def _读取管理员配置白名单(配置: Any) -> list[str]:
+    if not 配置:
+        return []
+    return _规范化管理员白名单(
+        读取配置字段(配置, "group_file_cleanup_admin_qq") or []
+    )
+
+
+def _读取数据库白名单状态(配置: Any) -> tuple[bool, str, str]:
+    try:
+        from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+        if not 运行状态数据库.已配置运行状态数据库(配置):
+            return False, "", ""
+        当前值 = 运行状态数据库.读取运行状态值(
+            配置, 管理员白名单命名空间, 管理员白名单状态键, ""
+        )
+        快照值 = 运行状态数据库.读取运行状态值(
+            配置, 管理员白名单命名空间, 管理员白名单配置快照键, ""
+        )
+        return True, str(当前值 or ""), str(快照值 or "")
+    except Exception as 异常:
+        logger.debug(
+            "管理员白名单数据库读取失败：错误类型=%s",
+            type(异常).__name__,
+        )
+        return False, "", ""
+
+
+def _写入数据库白名单状态(配置: Any, 白名单: list[str]) -> bool:
+    try:
+        from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+        if not 运行状态数据库.已配置运行状态数据库(配置):
+            return False
+        值 = json.dumps(白名单, ensure_ascii=False, separators=(",", ":"))
+        批量写入 = getattr(运行状态数据库, "批量写入运行状态值", None)
+        if callable(批量写入):
+            批量写入(
+                配置,
+                管理员白名单命名空间,
+                {
+                    管理员白名单状态键: 值,
+                    管理员白名单配置快照键: 值,
+                },
+            )
+        else:
+            运行状态数据库.写入运行状态值(
+                配置, 管理员白名单命名空间, 管理员白名单状态键, 值
+            )
+            运行状态数据库.写入运行状态值(
+                配置, 管理员白名单命名空间, 管理员白名单配置快照键, 值
+            )
+        return True
+    except Exception as 异常:
+        logger.debug(
+            "管理员白名单数据库写入失败：错误类型=%s",
+            type(异常).__name__,
+        )
+        return False
+
+
+def _写入AstrBot配置白名单(配置: Any, 白名单: list[str]) -> bool:
+    数据 = 获取配置字典(配置)
+    if isinstance(数据, dict):
+        for 分类名 in ("basic_settings", "基础配置"):
+            分类 = 数据.get(分类名)
+            if isinstance(分类, dict):
+                分类["group_file_cleanup_admin_qq"] = list(白名单)
+                return True
+        if "group_file_cleanup_admin_qq" in 数据:
+            数据["group_file_cleanup_admin_qq"] = list(白名单)
+            return True
+        基础配置 = 数据.setdefault("basic_settings", {})
+        if isinstance(基础配置, dict):
+            基础配置["group_file_cleanup_admin_qq"] = list(白名单)
+            return True
+    try:
+        setattr(配置, "group_file_cleanup_admin_qq", list(白名单))
+        return True
+    except Exception:
+        return False
+
+
+def _持久化AstrBot配置(配置: Any) -> None:
+    保存方法 = getattr(配置, "save_config", None)
+    if not callable(保存方法):
+        return
+    try:
+        保存方法()
+    except Exception as 异常:
+        logger.debug(
+            "管理员白名单 AstrBot 配置写入失败：错误类型=%s",
+            type(异常).__name__,
+        )
+
+
+def 同步管理员白名单(配置: Any, 强制: bool = False) -> list[str]:
+    """在 AstrBot 配置与 MySQL 之间双向同步管理员白名单。
+
+    ``config_snapshot`` 记录上次同步的配置值，用于区分“配置刚被修改”与
+    “数据库被外部修改”。数据库可用时优先保留外部数据库变更，配置发生
+    变化时则把新配置写入数据库；两边最终保持同一份列表。
+    """
+    if not 配置:
+        return []
+    配置键 = id(配置)
+    现在 = time.monotonic()
+    with _管理员白名单同步锁:
+        缓存 = _管理员白名单缓存.get(配置键)
+        if (
+            not 强制
+            and 缓存 is not None
+            and 现在 - 缓存[0] < 管理员白名单同步间隔秒
+        ):
+            return list(缓存[1])
+
+        配置白名单 = _读取管理员配置白名单(配置)
+        数据库已配置, 数据库文本, 快照文本 = _读取数据库白名单状态(配置)
+        if not 数据库已配置:
+            _管理员白名单缓存[配置键] = (现在, list(配置白名单))
+            return 配置白名单
+
+        数据库有值 = bool(数据库文本.strip())
+        快照有值 = bool(快照文本.strip())
+        数据库白名单 = _规范化管理员白名单(数据库文本) if 数据库有值 else []
+        上次配置白名单 = _规范化管理员白名单(快照文本) if 快照有值 else []
+
+        if 快照有值 and 配置白名单 != 上次配置白名单:
+            # AstrBot 配置在上次同步后发生变化，配置值作为本次更新源。
+            最终白名单 = 配置白名单
+        elif 数据库有值:
+            # 配置未变化时，数据库可能被网页、运维脚本或其他实例修改。
+            最终白名单 = 数据库白名单
+        elif 配置白名单:
+            # 首次启用数据库同步时迁移现有 AstrBot 配置。
+            最终白名单 = 配置白名单
+        else:
+            最终白名单 = []
+
+        配置已变化 = 最终白名单 != 配置白名单
+        数据库值 = json.dumps(最终白名单, ensure_ascii=False, separators=(",", ":"))
+        数据库需写入 = 数据库文本 != 数据库值 or 快照文本 != 数据库值
+        if 配置已变化 and _写入AstrBot配置白名单(配置, 最终白名单):
+            _持久化AstrBot配置(配置)
+        if 数据库需写入:
+            _写入数据库白名单状态(配置, 最终白名单)
+        _管理员白名单缓存[配置键] = (现在, list(最终白名单))
+        return list(最终白名单)
 
 
 def 读取配置字段(配置: Any, 字段名: str) -> Any:
