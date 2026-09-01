@@ -1,7 +1,7 @@
 name: 馒头bot # 插件唯一识别名
 display_name: 馒头bot # 用于展示的名字
 desc: 适用于 AstrBot 的馒头bot插件。 # 插件简短描述
-version: v5.73.3 # 插件版本号
+version: v5.73.4 # 插件版本号
 
 
 

@@ -78,7 +78,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("get", "/api/message/media", 后端._处理消息媒体),
-        ("get", "/api/message/markdown-image/{token}", 后端._处理临时Markdown图片),
+        ("get", "/api/message/local-media/{filename}", 后端._处理本地发送媒体),
         ("get", "/api/message/layout", 后端._处理消息布局),
         ("post", "/api/message/layout", 后端._处理消息布局),
         ("get", "/api/message/ws", 后端._处理消息WebSocket),
@@ -125,6 +125,7 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     后端.当前帮助网页服务 = None
     后端.网页服务启动状态 = False
     后端.当前帮助网页配置 = 配置
+    后端._清理本地发送媒体同步()
     后端.控制台会话.clear()
     后端.控制台会话身份.clear()
     后端._加载持久化控制台会话()

@@ -73,7 +73,7 @@
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
-      const categoryOrder = ['basic_settings', 'help_web_settings', 'image_host_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
+      const categoryOrder = ['basic_settings', 'help_web_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
       const safeFieldValue = (field) => {
         if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\n') : '';
         if (field.kind === 'boolean') return Boolean(field.value);
@@ -233,7 +233,7 @@
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
-        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['image_host_settings', 'database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
+        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
@@ -1545,7 +1545,7 @@
         if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
         return safeMediaUrl(raw);
       };
-      const mediaProxyUrl = (src, mode = 'image', name = '', messageId = '') => {
+      const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
         try {
@@ -1555,7 +1555,6 @@
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
           if (name) query.set('name', name);
-          if (messageId) query.set('message_id', String(messageId));
           return `/api/message/media?${query.toString()}`;
         } catch (_) { return direct; }
       };
@@ -1590,11 +1589,11 @@
           const isVideo = ['视频', 'video'].includes(typeLower) || contentType.startsWith('video/');
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
-            const preview = mediaProxyUrl(src, 'image', '', messageId);
+            const preview = mediaProxyUrl(src, 'image');
             return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
-            const videoUrl = mediaProxyUrl(src, 'file', '', messageId);
+            const videoUrl = mediaProxyUrl(src, 'file');
             return `<div class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
           }
           const name = mediaFileName(item, src);
@@ -1602,7 +1601,7 @@
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
           if (!src) return `<div class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
-          const fileUrl = mediaProxyUrl(src, 'file', name, messageId);
+          const fileUrl = mediaProxyUrl(src, 'file', name);
           return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
       };

@@ -47,24 +47,6 @@
       }
     }
   },
-  "image_host_settings": {
-    "description": "图片图床设置",
-    "type": "object",
-    "items": {
-      "image_host_upload_url": {
-        "description": "图床上传地址",
-        "type": "string",
-        "hint": "默认 https://0x0.st；自建图床需要支持 multipart 字段 file，并返回图片 URL。",
-        "default": "https://0x0.st"
-      },
-      "image_host_token": {
-        "description": "图床 Token（可选）",
-        "type": "string",
-        "hint": "自建图床需要鉴权时填写；只写入，不在网页回显。",
-        "default": ""
-      }
-    }
-  },
   "uc_pan_settings": {
     "description": "UC网盘设置",
     "type": "object",

@@ -13,7 +13,6 @@ import os
 import random
 import re
 import threading
-import tempfile
 import time
 from datetime import datetime as _日期类
 from datetime import timedelta as _时间差
@@ -104,12 +103,6 @@ _消息接收队列: asyncio.Queue[tuple[Any, Any, str]] = (
 _消息接收任务: asyncio.Task[Any] | None = globals().get("_消息接收任务")
 _消息接收入队 = globals().get("_消息接收入队", True)
 _消息接收溢出数 = int(globals().get("_消息接收溢出数", 0) or 0)
-_媒体预缓存任务: set[asyncio.Task[Any]] = globals().get("_媒体预缓存任务") or set()
-_媒体预缓存地址中: set[str] = globals().get("_媒体预缓存地址中") or set()
-_媒体预缓存信号量: asyncio.Semaphore | None = globals().get("_媒体预缓存信号量")
-_媒体预缓存信号量循环: Any = globals().get("_媒体预缓存信号量循环")
-_媒体预缓存最大任务数 = 64
-_媒体预缓存并发数 = 4
 _昵称补查队列上限 = 1024
 _昵称补查工作数 = 2
 _昵称补查队列: asyncio.Queue[tuple[str, str, str]] = (
@@ -140,28 +133,6 @@ _QQ图片域名 = re.compile(
     r"(?:https?://)?[^>\s]*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)[^>\s]*"
 )
 _显示时区 = _时区类(_时间差(hours=8))
-_临时Markdown图片: dict[str, tuple[float, bytes, str]] = globals().get("_临时Markdown图片") or {}
-_临时Markdown图片锁 = globals().get("_临时Markdown图片锁") or threading.RLock()
-
-
-def _默认临时Markdown图片目录() -> Path:
-    """优先使用 AstrBot 数据目录，避免容器重启丢失令牌对应的图片。"""
-    try:
-        插件根目录 = Path(__file__).resolve().parents[3]
-        if 插件根目录.parent.name.lower() == "plugins":
-            return 插件根目录.parent.parent / "mantou_bot_markdown_images"
-    except (OSError, IndexError):
-        pass
-    return Path(tempfile.gettempdir()) / "mantou_bot_markdown_images"
-
-
-_临时Markdown图片旧目录 = globals().get("_临时Markdown图片目录") or (
-    Path(tempfile.gettempdir()) / "mantou_bot_markdown_images"
-)
-_临时Markdown图片目录 = _默认临时Markdown图片目录()
-_临时Markdown图片迁移完成 = False
-_临时Markdown图片有效期秒 = 30 * 24 * 60 * 60
-_临时Markdown图片最大数量 = 256
 
 
 def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
@@ -825,7 +796,6 @@ async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
-    global _媒体预缓存任务, _媒体预缓存地址中
     global _群信息轮询任务
     群信息轮询任务 = _群信息轮询任务
     _群信息轮询任务 = None
@@ -852,16 +822,6 @@ async def 停止消息记录() -> bool:
     if 接收任务 is not None and not 接收任务.done():
         接收任务.cancel()
         await asyncio.gather(接收任务, return_exceptions=True)
-
-    媒体预缓存任务列表 = [
-        任务 for 任务 in list(_媒体预缓存任务) if not 任务.done()
-    ]
-    _媒体预缓存任务 = set()
-    _媒体预缓存地址中.clear()
-    for 任务 in 媒体预缓存任务列表:
-        任务.cancel()
-    if 媒体预缓存任务列表:
-        await asyncio.gather(*媒体预缓存任务列表, return_exceptions=True)
 
     _昵称补查接收入队 = False
     昵称队列 = _准备昵称补查队列()
@@ -1312,127 +1272,6 @@ def _清理媒体地址(地址: Any) -> str:
     return html.unescape(str(地址 or "").strip()).strip("<>[](){}，。；;、")
 
 
-_临时Markdown图片标识规则 = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
-
-
-def _临时Markdown图片路径(标识: str) -> tuple[Path, Path]:
-    return (
-        _临时Markdown图片目录 / f"{标识}.bin",
-        _临时Markdown图片目录 / f"{标识}.json",
-    )
-
-
-def _迁移旧临时Markdown图片() -> None:
-    """把旧版本缓存迁移到当前数据目录，避免重载后令牌指向空目录。"""
-    global _临时Markdown图片迁移完成
-    if _临时Markdown图片迁移完成 or _临时Markdown图片旧目录 == _临时Markdown图片目录:
-        _临时Markdown图片迁移完成 = True
-        return
-    _临时Markdown图片迁移完成 = True
-    if not _临时Markdown图片旧目录.is_dir():
-        return
-    try:
-        _临时Markdown图片目录.mkdir(parents=True, exist_ok=True)
-        for 路径 in _临时Markdown图片旧目录.iterdir():
-            if 路径.suffix not in {".bin", ".json"}:
-                continue
-            目标 = _临时Markdown图片目录 / 路径.name
-            if 目标.exists():
-                continue
-            try:
-                路径.replace(目标)
-            except OSError:
-                continue
-    except OSError:
-        return
-
-
-def _清理临时Markdown图片磁盘(现在: float | None = None) -> None:
-    """清理过期或超量的 Markdown 图片磁盘缓存。"""
-    _迁移旧临时Markdown图片()
-    当前时间 = float(现在 if 现在 is not None else time.time())
-    try:
-        if not _临时Markdown图片目录.is_dir():
-            return
-        有效文件: list[tuple[float, Path, Path]] = []
-        for 元数据路径 in _临时Markdown图片目录.glob("*.json"):
-            try:
-                元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
-                过期时间 = float(元数据.get("expires_at") or 0)
-                标识 = 元数据路径.stem
-                文件路径, _ = _临时Markdown图片路径(标识)
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                元数据路径.unlink(missing_ok=True)
-                continue
-            if (
-                not _临时Markdown图片标识规则.fullmatch(标识)
-                or 过期时间 <= 当前时间
-                or not 文件路径.is_file()
-            ):
-                元数据路径.unlink(missing_ok=True)
-                文件路径.unlink(missing_ok=True)
-                continue
-            有效文件.append((过期时间, 元数据路径, 文件路径))
-        if len(有效文件) > _临时Markdown图片最大数量:
-            for _, 元数据路径, 文件路径 in sorted(有效文件)[: -_临时Markdown图片最大数量]:
-                元数据路径.unlink(missing_ok=True)
-                文件路径.unlink(missing_ok=True)
-        for 文件路径 in _临时Markdown图片目录.glob("*.bin"):
-            if not 文件路径.with_suffix(".json").is_file():
-                try:
-                    if 当前时间 - 文件路径.stat().st_mtime > _临时Markdown图片有效期秒:
-                        文件路径.unlink(missing_ok=True)
-                except OSError:
-                    continue
-    except OSError:
-        return
-
-
-def 注册临时Markdown图片(图片字节: bytes, 内容类型: str = "image/png") -> str:
-    """旧版本兼容入口；新图片必须先上传图床，不再写入本地。"""
-    return ""
-
-
-def 读取临时Markdown图片(标识: str) -> tuple[bytes, str] | None:
-    """读取短期 Markdown 图片；支持插件重载后从磁盘恢复。"""
-    标识 = str(标识 or "").strip()
-    if not _临时Markdown图片标识规则.fullmatch(标识):
-        return None
-    现在 = time.time()
-    with _临时Markdown图片锁:
-        _清理临时Markdown图片磁盘(现在)
-        项 = _临时Markdown图片.get(标识)
-        文件路径, 元数据路径 = _临时Markdown图片路径(标识)
-        if 项:
-            try:
-                过期时间, 图片字节, 内容类型 = 项
-            except (TypeError, ValueError):
-                过期时间, 图片字节, 内容类型 = 0, b"", "image/png"
-            if float(过期时间) <= 现在:
-                _临时Markdown图片.pop(标识, None)
-                文件路径.unlink(missing_ok=True)
-                元数据路径.unlink(missing_ok=True)
-                return None
-            if isinstance(图片字节, (bytes, bytearray)) and 图片字节:
-                return bytes(图片字节), str(内容类型 or "image/png")
-        try:
-            元数据 = json.loads(元数据路径.read_text(encoding="utf-8"))
-            过期时间 = float(元数据.get("expires_at") or 0)
-            内容类型 = str(元数据.get("content_type") or "image/png").split(";", 1)[0]
-            图片字节 = 文件路径.read_bytes()
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        if 过期时间 <= 现在 or not 图片字节:
-            文件路径.unlink(missing_ok=True)
-            元数据路径.unlink(missing_ok=True)
-            _临时Markdown图片.pop(标识, None)
-            return None
-        if not 内容类型.startswith("image/"):
-            内容类型 = "image/png"
-        _临时Markdown图片[标识] = (过期时间, b"", 内容类型)
-        return 图片字节, 内容类型
-
-
 def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
     """从 QQ 官方消息 attachments 提取图片/语音/视频/文件及元数据。"""
     try:
@@ -1848,7 +1687,6 @@ async def _消息接收工作() -> None:
             try:
                 appid = str(_读取字段(_读取字段(客户端, "platform"), "appid") or "")
                 记录 = 记录收到消息(消息, 类型, appid)
-                _排队媒体预缓存(记录)
                 if 类型 == "group" and 记录:
                     会话标识 = str(记录.get("_session") or "").strip()
                     if 会话标识 and 获取群机器人状态(会话标识) != "active":
@@ -1870,119 +1708,6 @@ async def _消息接收工作() -> None:
         当前任务 = asyncio.current_task()
         if _消息接收任务 is 当前任务:
             _消息接收任务 = None
-
-
-def _媒体预缓存地址(媒体: Any) -> str:
-    """从已规范化的媒体记录提取 QQ 临时下载地址。"""
-    项目 = 媒体
-    if isinstance(媒体, dict):
-        项目列表 = 媒体.get("items")
-        if isinstance(项目列表, (list, tuple)) and 项目列表:
-            项目 = 项目列表[0]
-    elif isinstance(媒体, (list, tuple)):
-        项目 = 媒体[0] if 媒体 else None
-    if not isinstance(项目, dict):
-        return ""
-    return str(
-        项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
-    ).strip()
-
-
-def _取媒体预缓存信号量() -> asyncio.Semaphore | None:
-    """按当前事件循环建立媒体预缓存并发限制，避免消息洪峰占满连接。"""
-    global _媒体预缓存信号量, _媒体预缓存信号量循环
-    try:
-        当前循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        return None
-    if (
-        _媒体预缓存信号量 is None
-        or _媒体预缓存信号量循环 is not 当前循环
-    ):
-        _媒体预缓存信号量 = asyncio.Semaphore(_媒体预缓存并发数)
-        _媒体预缓存信号量循环 = 当前循环
-    return _媒体预缓存信号量
-
-
-async def _预缓存收到消息媒体(
-    媒体: Any,
-    消息ID: str = "",
-    记录: dict[str, Any] | None = None,
-) -> None:
-    """把聊天媒体异步转存图床，成功后只保留外链。"""
-    信号量 = _取媒体预缓存信号量()
-    if 信号量 is None:
-        return
-    try:
-        from 功能文件.页面功能 import 帮助网页后端
-
-        async with 信号量:
-            结果 = await 帮助网页后端.预缓存消息媒体(
-                媒体,
-                消息ID,
-                当前插件配置,
-            )
-        图床地址 = str(结果 or "").strip()
-        if (
-            isinstance(记录, dict)
-            and 图床地址.startswith(("http://", "https://"))
-        ):
-            媒体记录 = 记录.get("media")
-            if isinstance(媒体记录, dict):
-                媒体记录["src"] = 图床地址
-                会话标识 = str(记录.get("_session") or "").strip()
-                if _消息存储 is not None and _消息数据库已配置():
-                    更新媒体 = getattr(_消息存储, "更新消息媒体", None)
-                    if callable(更新媒体):
-                        await 等待消息记录写入(5.0)
-                        _后台执行同步(
-                            更新媒体,
-                            会话标识,
-                            消息ID,
-                            copy.deepcopy(媒体记录),
-                        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.debug("帮助控制台消息媒体预缓存失败：错误类型=%s", type(exc).__name__)
-
-
-def _排队媒体预缓存(记录: Any) -> bool:
-    """收到消息后异步预缓存媒体；队列满时放弃预缓存但保留消息记录。"""
-    if not isinstance(记录, dict):
-        return False
-    媒体 = 记录.get("media")
-    地址 = _媒体预缓存地址(媒体)
-    消息ID = str(记录.get("message_id") or "").strip()
-    if not 地址 or 地址 in _媒体预缓存地址中:
-        return False
-    if len(_媒体预缓存任务) >= _媒体预缓存最大任务数:
-        return False
-    try:
-        循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-    _媒体预缓存地址中.add(地址)
-    try:
-        任务 = 循环.create_task(
-            _预缓存收到消息媒体(copy.deepcopy(媒体), 消息ID, 记录)
-        )
-    except Exception:
-        _媒体预缓存地址中.discard(地址)
-        return False
-    _媒体预缓存任务.add(任务)
-
-    def _清理预缓存任务(完成任务: asyncio.Task[Any], _地址: str = 地址) -> None:
-        _媒体预缓存任务.discard(完成任务)
-        _媒体预缓存地址中.discard(_地址)
-        if not 完成任务.cancelled():
-            try:
-                完成任务.exception()
-            except Exception:
-                pass
-
-    任务.add_done_callback(_清理预缓存任务)
-    return True
 
 
 def _启动消息接收任务() -> asyncio.Task[Any] | None:
@@ -4069,7 +3794,6 @@ async def 发送消息(
     图片路径: str = "",
     图片数据: str = "",
     图片URL: str = "",
-    图片公开基础地址: str = "",
     图片前文本: str = "",
     图片后文本: str = "",
     图片占位标记: str = "\ufffc",
@@ -4182,10 +3906,18 @@ async def 发送消息(
 
     图片占位标记 = str(图片占位标记 or "\ufffc")
 
-    if 类型 in ("text", "markdown") and 图片字节 is not None and not 图片公开地址:
-        try:
-            from 功能文件.页面功能 import 图床
+    图片记录地址 = 图片公开地址
+    媒体记录地址 = str(媒体URL or "").strip()
 
+    async def _保存本地发送媒体记录() -> None:
+        """仅为发送的字节媒体保留本地副本，收到的附件仍只保存官方 URL。"""
+        nonlocal 图片记录地址, 媒体记录地址
+        数据: bytes | None = None
+        文件名 = ""
+        内容类型 = "application/octet-stream"
+        if 图片字节 is not None and not 图片记录地址:
+            数据 = 图片字节
+            文件名 = 图片文件名
             内容类型 = {
                 ".jpg": "image/jpeg",
                 ".jpeg": "image/jpeg",
@@ -4193,59 +3925,39 @@ async def 发送消息(
                 ".webp": "image/webp",
                 ".bmp": "image/bmp",
             }.get(Path(图片文件名).suffix.lower(), "image/png")
-            图片公开地址 = await 图床.上传图片字节(
-                图片字节,
-                图片文件名,
+        elif 媒体字节 is not None and not 媒体记录地址:
+            数据 = 媒体字节
+            文件名 = 媒体文件名 or "attachment.bin"
+            try:
+                媒体类型编号 = int(媒体文件类型 or 4)
+            except (TypeError, ValueError):
+                媒体类型编号 = 4
+            内容类型 = 媒体内容类型 or {
+                2: "video/mp4",
+                3: "audio/silk",
+                4: "application/octet-stream",
+            }.get(媒体类型编号, "application/octet-stream")
+        if not 数据:
+            return
+        try:
+            from 功能文件.页面功能 import 帮助网页后端
+
+            地址 = await 帮助网页后端.保存本地发送媒体(
+                数据,
+                文件名,
                 内容类型,
-                当前插件配置,
             )
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
-            logger.debug("消息图片图床上传失败：错误类型=%s", type(异常).__name__)
-        if not 图片公开地址:
-            return {"ok": False, "message": "图片上传失败，请稍后再试"}
-
-    if 媒体字节 is not None and not str(媒体URL or "").strip():
-        try:
-            from 功能文件.页面功能 import 图床
-
-            媒体类型名称 = {
-                2: "video/mp4",
-                3: "audio/silk",
-                4: "application/octet-stream",
-            }.get(int(媒体文件类型 or 4), "application/octet-stream")
-            媒体URL = await 图床.上传媒体字节(
-                媒体字节,
-                媒体文件名 or "attachment.bin",
-                媒体内容类型 or 媒体类型名称,
-                当前插件配置,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as 异常:
-            logger.debug("消息媒体图床上传失败：错误类型=%s", type(异常).__name__)
-
-    if 媒体字节 is None and 媒体路径 and not str(媒体URL or "").strip():
-        try:
-            from 功能文件.页面功能 import 图床
-
-            媒体类型名称 = {
-                1: "image/png",
-                2: "video/mp4",
-                3: "audio/silk",
-                4: "application/octet-stream",
-            }.get(int(媒体文件类型 or 4), "application/octet-stream")
-            媒体URL = await 图床.上传媒体文件(
-                媒体路径,
-                媒体文件名 or Path(媒体路径).name,
-                媒体内容类型 or 媒体类型名称,
-                当前插件配置,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as 异常:
-            logger.debug("消息媒体文件图床上传失败：错误类型=%s", type(异常).__name__)
+            logger.debug("消息发送媒体本地副本保存失败：错误类型=%s", type(异常).__name__)
+            return
+        if not 地址:
+            return
+        if 图片字节 is not None and not 图片记录地址:
+            图片记录地址 = 地址
+        elif 媒体字节 is not None and not 媒体记录地址:
+            媒体记录地址 = 地址
 
     def _图片媒体记录() -> dict[str, Any]:
         展示文本 = str(内容 or "").replace(图片占位标记, "").strip()
@@ -4257,7 +3969,7 @@ async def 发送消息(
             后文本 = 后文本.strip()
         媒体记录: dict[str, Any] = {
             "type": "图片",
-            "src": 图片公开地址,
+            "src": 图片记录地址,
             "text": 展示文本,
         }
         if 前文本 or 后文本:
@@ -4271,15 +3983,21 @@ async def 发送消息(
         except (TypeError, ValueError):
             类型编号 = 4
         类型名称 = {2: "视频", 3: "语音", 4: "文件"}.get(类型编号, "文件")
+        媒体地址 = str(媒体记录地址 or "").strip()
+        if not (
+            媒体地址.startswith(("http://", "https://"))
+            or 媒体地址.startswith("/api/message/local-media/")
+        ):
+            媒体地址 = ""
         return {
             "type": 类型名称,
-            "src": 媒体URL if str(媒体URL or "").startswith(("http://", "https://")) else "",
+            "src": 媒体地址,
             "name": str(媒体文件名 or "").strip(),
             "content_type": str(媒体内容类型 or "").strip(),
             "text": str(内容 or "").replace(图片占位标记, "").strip(),
         }
 
-    # 官方 Markdown 只接收公网图片地址；图片正文已经在图床完成转存。
+    # 有公网地址时使用 Markdown；本地字节媒体直接走官方富媒体消息。
     图文内容 = (
         _构造Markdown图文内容(
             内容,
@@ -4299,7 +4017,7 @@ async def 发送消息(
             "force_verify_image_resource": True,
         }
     else:
-        # QQ 官方富媒体消息与文本不能混在同一条：没有公网图片地址时分两条发送。
+        # 没有公网图片地址时，下面改用官方富媒体消息。
         if (图片字节 is not None or 图片公开地址) and 类型 == "markdown":
             类型 = "text"
     if not 图文内容 and (图片字节 is not None or 图片公开地址):
@@ -4315,7 +4033,7 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "图片上传失败"}
         消息体["msg_type"] = 7
-        消息体.pop("content", None)
+        消息体["content"] = str(内容 or "").replace(图片占位标记, "").strip()
         消息体["media"] = {"file_info": file_info}
 
     if not 图文内容 and 类型 == "markdown":
@@ -4338,11 +4056,11 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "媒体上传失败"}
         消息体["msg_type"] = 7
-        消息体.pop("content", None)
+        消息体["content"] = (
+            str(内容 or "").replace(图片占位标记, "").strip()
+            or str(媒体文本 or "").strip()
+        )
         消息体["media"] = {"file_info": file_info}
-        # 媒体说明文本单独补发（QQ 官方不支持图文/媒体混排）
-        if str(媒体文本 or "").strip() and not 内容:
-            内容 = str(媒体文本 or "").strip()
     elif 类型 == "ark":
         kv = _构造ARK数据(ARK模板ID, ARK字段 or {}, ARK列表)
         if not kv:
@@ -4385,35 +4103,6 @@ async def 发送消息(
         结果 = await _http.request(route, json=消息体)
         if 实际使用主动消息:
             记录主动消息权限(会话标识, 权限会话类型, True)
-        # 未能取得可公开 Markdown 图片地址时，按官方协议先发媒体再补发文字。
-        补发内容 = str(内容 or "").replace(图片占位标记, "").strip()
-        if 消息体.get("msg_type") == 7 and 补发内容:
-            文本消息体 = {
-                "msg_type": 0,
-                "content": 补发内容,
-                "msg_seq": random.randint(1, 10000),
-            }
-            if 被动ID:
-                文本消息体["msg_id"] = 被动ID
-            if 事件ID:
-                文本消息体["event_id"] = 事件ID
-            try:
-                文本结果 = await _http.request(route, json=文本消息体)
-                文本ID = ""
-                if isinstance(文本结果, dict):
-                    文本ID = str(文本结果.get("id") or "")
-                记录发送消息(
-                    会话标识,
-                    会话类型 or "group",
-                    补发内容,
-                    appid,
-                    消息ID=文本ID,
-                    自身REFIDX=_提取发送响应REFIDX(文本结果),
-                    引用ID=引用消息ID,
-                    发送时间=_提取发送响应时间(文本结果),
-                )
-            except Exception as 文本异常:
-                logger.warning("消息记录图片附带文本发送失败：错误类型=%s", type(文本异常).__name__)
     except Exception as exc:
         if 实际使用主动消息 and 主动消息无权限(exc):
             记录主动消息权限(会话标识, 权限会话类型, False)
@@ -4441,6 +4130,7 @@ async def 发送消息(
             else:
                 if isinstance(结果, dict) and 结果.get("id"):
                     响应ID = str(结果.get("id") or "")
+                    await _保存本地发送媒体记录()
                     展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
                     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
                         清理文本 = str(内容 or "").replace(图片占位标记, "").strip()
@@ -4489,6 +4179,7 @@ async def 发送消息(
         响应ID = str(结果.get("id") or "")
     elif 结果 is not None:
         响应ID = str(getattr(结果, "id", None) or "")
+    await _保存本地发送媒体记录()
     展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
     if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
         清理文本 = str(内容 or "").replace(图片占位标记, "").strip()

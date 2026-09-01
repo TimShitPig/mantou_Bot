@@ -4,6 +4,7 @@ import asyncio
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+import hashlib
 import hmac
 import inspect
 import ipaddress
@@ -15,6 +16,7 @@ import re
 import secrets
 import socket
 import threading
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.73.3"
+控制台版本 = "5.73.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -209,19 +211,6 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
-    "image_host_upload_url": {
-        "category": "image_host_settings",
-        "label": "图床上传地址",
-        "kind": "text",
-        "secret": False,
-    },
-    "image_host_token": {
-        "category": "image_host_settings",
-        "label": "图床 Token",
-        "kind": "secret",
-        "secret": True,
-        "allow_empty": True,
-    },
     "uc_pan_cookie": {
         "category": "uc_pan_settings",
         "label": "UC 网盘 Cookie",
@@ -287,7 +276,6 @@ async def _后台刷新消息列表(
 配置字段分类显示名 = {
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
-    "image_host_settings": "图片图床",
     "uc_pan_settings": "UC 网盘",
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
@@ -448,13 +436,7 @@ def _读取插件配置摘要() -> dict[str, Any]:
             配置,
             str(定义["category"]),
             字段名,
-            (
-                []
-                if 定义["kind"] == "admin_list"
-                else "https://0x0.st"
-                if 字段名 == "image_host_upload_url"
-                else ""
-            ),
+            [] if 定义["kind"] == "admin_list" else "",
         )
         项目: dict[str, Any] = {
             "key": 字段名,
@@ -911,109 +893,6 @@ def _识别媒体类型(响应类型: Any, 前缀: bytes, 地址: str, 模式: s
     return 类型 or "application/octet-stream"
 
 
-async def 预缓存消息媒体(
-    媒体: Any,
-    消息ID: str = "",
-    配置: Any = None,
-) -> str | bool:
-    """把聊天媒体直接转存图床，不在服务器落地媒体正文。"""
-    项目 = 媒体
-    if isinstance(媒体, dict):
-        项目列表 = 媒体.get("items")
-        if isinstance(项目列表, (list, tuple)) and 项目列表:
-            项目 = 项目列表[0]
-    elif isinstance(媒体, (list, tuple)):
-        项目 = 媒体[0] if 媒体 else None
-    if not isinstance(项目, dict):
-        return False
-    地址 = str(
-        项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
-    ).strip()
-    消息ID = str(消息ID or "").strip()[:512]
-    if len(地址) > 8192 or not _允许媒体地址(地址):
-        return False
-    类型值 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
-    模式 = "image" if 类型值 in {"图片", "image", "img"} else "file"
-    文件名 = _媒体文件名(
-        项目.get("name")
-        or 项目.get("filename")
-        or ("image.png" if 模式 == "image" else "attachment.bin")
-    )
-    声明内容类型 = str(
-        项目.get("content_type")
-        or 项目.get("mime_type")
-        or ("image/png" if 模式 == "image" else "application/octet-stream")
-    ).split(";", 1)[0]
-    try:
-        from 功能文件.页面功能 import 图床
-
-        图床地址 = await 图床.上传媒体URL(
-            地址,
-            文件名,
-            声明内容类型,
-            配置,
-        )
-        if 图床地址:
-            return 图床地址
-    except asyncio.CancelledError:
-        raise
-    except Exception as 异常:
-        logger.debug("帮助控制台消息媒体 URL 转存失败：错误类型=%s", type(异常).__name__)
-    try:
-        超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
-        async with ClientSession(timeout=超时, trust_env=False) as 客户端:
-            async with 客户端.get(
-                地址,
-                allow_redirects=True,
-                max_redirects=3,
-                headers={
-                    "Accept": "image/*,application/octet-stream,*/*",
-                    "User-Agent": "MantouBot/console-media",
-                },
-            ) as 上游:
-                最终地址 = str(getattr(上游, "url", 地址) or 地址)
-                if not _允许媒体地址(最终地址) or 上游.status != 200:
-                    logger.debug(
-                        "帮助控制台消息媒体预缓存跳过：阶段=上游响应，状态=%s",
-                        int(getattr(上游, "status", 0) or 0),
-                    )
-                    return False
-                try:
-                    内容长度 = int(上游.headers.get("Content-Length") or 0)
-                except (TypeError, ValueError):
-                    内容长度 = 0
-                if 内容长度 > 媒体代理最大字节数:
-                    return False
-                前缀 = await 上游.content.read(64 * 1024)
-                内容类型 = _识别媒体类型(
-                    上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
-                )
-                if 模式 == "image" and not 内容类型.startswith("image/"):
-                    return False
-                from 功能文件.页面功能 import 图床
-
-                async def _媒体流() -> Any:
-                    if 前缀:
-                        yield 前缀
-                    async for 数据块 in 上游.content.iter_chunked(64 * 1024):
-                        yield 数据块
-
-                图床地址 = await 图床.上传媒体流(
-                    _媒体流(),
-                    文件名,
-                    内容类型,
-                    配置,
-                )
-                return 图床地址 or False
-    except asyncio.CancelledError:
-        raise
-    except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
-        logger.debug(
-            "帮助控制台消息媒体预缓存失败：错误类型=%s", type(exc).__name__
-        )
-        return False
-
-
 async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     """在同源会话中转发 QQ 附件，解决签名 URL 的跨域和响应类型问题。"""
     if not _请求已授权(request):
@@ -1100,26 +979,113 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
         return web.Response(status=502, text="媒体暂时不可用")
 
 
-async def _处理临时Markdown图片(request: web.Request) -> web.Response:
-    """提供给 QQ 官方短时转存的本地图片，不需要控制台登录 Cookie。"""
-    标识 = str(request.match_info.get("token") or "").strip()
-    try:
-        from 功能文件.管理功能.基础功能 import 消息记录
+本地发送媒体有效期秒 = 3 * 24 * 60 * 60
+本地发送媒体扩展名 = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".mp4", ".silk", ".dat"})
 
-        结果 = 消息记录.读取临时Markdown图片(标识)
-    except Exception:
-        结果 = None
-    if not 结果:
-        return web.Response(status=404, text="图片暂时不可用")
-    图片字节, 内容类型 = 结果
-    return web.Response(
-        body=图片字节,
-        content_type=str(内容类型 or "image/png"),
-        headers={
-            "Cache-Control": "public, max-age=600",
-            "X-Content-Type-Options": "nosniff",
-        },
+
+def _默认本地发送媒体目录() -> Path:
+    """使用 AstrBot 数据目录保存发送媒体，避免写入插件代码目录。"""
+    try:
+        插件根目录 = Path(__file__).resolve().parents[2]
+        if 插件根目录.parent.name.lower() == "plugins":
+            return 插件根目录.parent.parent / "mantou_bot_media"
+    except (OSError, IndexError):
+        pass
+    return Path(tempfile.gettempdir()) / "mantou_bot_media"
+
+
+本地发送媒体目录 = _默认本地发送媒体目录()
+
+
+def _本地发送媒体路径(文件名: Any) -> Path | None:
+    名称 = str(文件名 or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}\.[A-Za-z0-9]{1,8}", 名称, re.IGNORECASE):
+        return None
+    路径 = (本地发送媒体目录 / 名称).resolve()
+    根目录 = 本地发送媒体目录.resolve()
+    if 路径.parent != 根目录:
+        return None
+    return 路径
+
+
+def _清理本地发送媒体同步(现在: float | None = None) -> None:
+    截止时间 = float(现在 if 现在 is not None else time.time()) - 本地发送媒体有效期秒
+    try:
+        if not 本地发送媒体目录.is_dir():
+            return
+        for 路径 in 本地发送媒体目录.iterdir():
+            if not 路径.is_file() or 路径.suffix.lower() not in 本地发送媒体扩展名:
+                continue
+            try:
+                if 路径.stat().st_mtime < 截止时间:
+                    路径.unlink(missing_ok=True)
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def _保存本地发送媒体同步(数据: bytes, 文件名: str, 内容类型: str) -> str:
+    if not isinstance(数据, bytes) or not 数据 or len(数据) > 媒体代理最大字节数:
+        return ""
+    try:
+        _清理本地发送媒体同步()
+        扩展名 = Path(str(文件名 or "")).suffix.lower()
+        if 扩展名 not in 本地发送媒体扩展名:
+            扩展名 = mimetypes.guess_extension(str(内容类型 or "").split(";", 1)[0]) or ".dat"
+        if 扩展名 == ".jpe":
+            扩展名 = ".jpg"
+        目标 = 本地发送媒体目录 / f"{hashlib.md5(数据).hexdigest()}{扩展名}"
+        本地发送媒体目录.mkdir(parents=True, exist_ok=True)
+        if not 目标.is_file():
+            临时 = 目标.with_name(f".{目标.name}.{secrets.token_hex(4)}.tmp")
+            try:
+                临时.write_bytes(数据)
+                临时.replace(目标)
+            finally:
+                临时.unlink(missing_ok=True)
+        return f"/api/message/local-media/{目标.name}"
+    except (OSError, TypeError, ValueError):
+        return ""
+
+
+async def 保存本地发送媒体(
+    数据: bytes,
+    文件名: str = "",
+    内容类型: str = "application/octet-stream",
+) -> str:
+    """按内容 MD5 保存发送媒体，返回控制台同源地址。"""
+    if not isinstance(数据, (bytes, bytearray)) or not 数据:
+        return ""
+    return await _控制台线程执行(
+        _保存本地发送媒体同步,
+        bytes(数据),
+        str(文件名 or ""),
+        str(内容类型 or "application/octet-stream"),
     )
+
+
+async def _处理本地发送媒体(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return web.Response(status=401, text="请先登录控制台")
+    路径 = _本地发送媒体路径(request.match_info.get("filename"))
+    if 路径 is None or not 路径.is_file():
+        return web.Response(status=404, text="媒体暂时不可用")
+    try:
+        _清理本地发送媒体同步()
+        if not 路径.is_file():
+            return web.Response(status=404, text="媒体暂时不可用")
+        类型 = mimetypes.guess_type(路径.name)[0] or "application/octet-stream"
+        return web.FileResponse(
+            路径,
+            headers={
+                "Cache-Control": "private, max-age=120",
+                "Content-Type": 类型,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except OSError:
+        return web.Response(status=404, text="媒体暂时不可用")
 
 
 async def _处理控制台登录(request: web.Request) -> web.Response:
@@ -2050,7 +2016,6 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              图片路径=str(数据.get("image") or ""),
              图片数据=str(数据.get("image_data") or ""),
              图片URL=str(数据.get("image_url") or ""),
-             图片公开基础地址=获取帮助网页地址(当前帮助网页配置),
              图片前文本=str(数据.get("image_before") or ""),
              图片后文本=str(数据.get("image_after") or ""),
              图片占位标记=str(数据.get("image_marker") or "\ufffc"),
