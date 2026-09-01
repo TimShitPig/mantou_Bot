@@ -4533,6 +4533,9 @@ async def 禁言群成员(
                 ]
             },
         )
+        for 缓存键 in list(群禁言状态缓存):
+            if 缓存键[1] == 会话标识:
+                群禁言状态缓存.pop(缓存键, None)
         return {"ok": True, "message": "禁言成功"}
     except Exception as exc:
         提示 = "禁言失败，请稍后再试"
@@ -4542,6 +4545,54 @@ async def 禁言群成员(
         elif "不存在" in 原文 or "无效" in 原文:
             提示 = "群或成员不存在，无法禁言"
         logger.warning("消息记录禁言失败：错误类型=%s", type(exc).__name__)
+        return {"ok": False, "message": 提示}
+
+
+async def 解除群成员禁言(
+    会话标识: str,
+    成员标识: str,
+    appid: str = "",
+) -> dict[str, Any]:
+    """通过 QQ 官方接口解除当前群成员禁言。"""
+    会话标识 = str(会话标识 or "").strip()
+    成员标识 = str(成员标识 or "").strip()
+    if not 会话标识 or not 成员标识:
+        return {"ok": False, "message": "参数无效"}
+    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
+    if 通道 is None:
+        return {"ok": False, "message": "QQ官方平台未加载"}
+    _, _http = 通道
+    try:
+        from botpy.http import Route
+
+        route = Route(
+            "POST",
+            "/v2/groups/{group_openid}/restrict_chat_setting",
+            group_openid=会话标识,
+        )
+        await _http.request(
+            route,
+            json={
+                "members": [
+                    {
+                        "op": "del",
+                        "member_openid": 成员标识,
+                    }
+                ]
+            },
+        )
+        for 缓存键 in list(群禁言状态缓存):
+            if 缓存键[1] == 会话标识:
+                群禁言状态缓存.pop(缓存键, None)
+        return {"ok": True, "message": "解除禁言成功"}
+    except Exception as exc:
+        提示 = "解除禁言失败，请稍后再试"
+        原文 = str(getattr(exc, "resp", "") or exc)
+        if "not admin" in 原文 or "没有权限" in 原文 or "权限" in 原文:
+            提示 = "机器人不是该群管理员，无法解除禁言"
+        elif "不存在" in 原文 or "无效" in 原文:
+            提示 = "群或成员不存在，无法解除禁言"
+        logger.warning("消息记录解除禁言失败：错误类型=%s", type(exc).__name__)
         return {"ok": False, "message": 提示}
 
 

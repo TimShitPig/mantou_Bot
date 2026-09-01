@@ -86,6 +86,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/send", 后端._处理消息发送),
         ("post", "/api/message/recall", 后端._处理消息撤回),
         ("post", "/api/message/group-member/mute", 后端._处理消息禁言),
+        ("post", "/api/message/group-member/unmute", 后端._处理消息解除禁言),
         ("post", "/api/message/group-member/mutes", 后端._处理消息禁言状态),
         ("post", "/api/message/group-roles", 后端._处理群角色),
         ("post", "/api/message/pin", 后端._处理消息置顶),

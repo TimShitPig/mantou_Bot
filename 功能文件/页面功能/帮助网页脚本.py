@@ -1832,6 +1832,23 @@
         msgState.muteRequestPromise = promise;
         return promise;
       };
+      const unmuteMember = async (member, name = '') => {
+        const memberId = String(member || '').trim();
+        if (!memberId || msgState.chatType !== 'group' || !msgState.chatId) return;
+        if (!confirm(`确定解除 ${name || memberId} 的禁言吗？`)) return;
+        try {
+          await api('message/group-member/unmute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:memberId, appid:String(window.msgAppid || '')})});
+          toast('已解除禁言');
+          void loadMuteStates(true);
+        } catch (error) {
+          toast(error.message || '解除禁言失败');
+        }
+      };
+      const openMuteDialog = (member, name = '') => {
+        msgState.mute = {member:String(member || '').trim(), name:String(name || '').trim()};
+        $('msg-mute-title').textContent = `禁言 ${name || member}`;
+        $('msg-mute-modal').hidden = false;
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
@@ -1922,7 +1939,10 @@
           const actions = [];
           if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
           if (quoteReady) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id || '')}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-name="${esc(displayNickname)}" type="button">引用</button>`);
-          if (canMute) actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
+          if (canMute) {
+            if (isMuted) actions.push(`<button class="msg-action" data-msg-unmute="${esc(m.user_id)}" data-msg-unmute-name="${esc(displayNickname)}" type="button">解除禁言</button>`);
+            else actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
+          }
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
           const isSelected = msgState.selected.has(m.message_id);
@@ -1987,6 +2007,7 @@
         }));
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-unmute]').forEach((el) => el.addEventListener('click', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
         body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
           row.addEventListener('contextmenu', (e) => {
@@ -2010,7 +2031,7 @@
             const canRecallRow = Boolean(mid) && !recalled && (isSelf || (msgState.botIsAdmin && !protectedRole));
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (canMuteRow) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (canMuteRow) items.push({label:msgState.mutes.has(uid) ? '解除禁言' : '禁言', action:() => msgState.mutes.has(uid) ? unmuteMember(uid, nick) : openMuteDialog(uid, nick)});
             if (items.length && !isSelf) items.push({sep:true});
             if (mid && !recalled && (!optimistic || optimistic.status === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
             if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
@@ -2038,7 +2059,7 @@
             const canMuteAv = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (canMuteAv) items.push({label:'禁言', action:() => { msgState.mute = {member:uid, name:nick}; $('msg-mute-title').textContent = `禁言 ${nick || uid}`; $('msg-mute-modal').hidden = false; }});
+            if (canMuteAv) items.push({label:msgState.mutes.has(uid) ? '解除禁言' : '禁言', action:() => msgState.mutes.has(uid) ? unmuteMember(uid, nick) : openMuteDialog(uid, nick)});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
         });

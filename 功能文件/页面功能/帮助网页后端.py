@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "5.75.0"
+控制台版本 = "5.76.0"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -2134,6 +2134,27 @@ async def _处理消息禁言状态(request: web.Request) -> web.Response:
             },
             headers={"Cache-Control": "no-store"},
         )
+
+
+async def _处理消息解除禁言(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    会话标识 = str((数据 or {}).get("chat_id") or "").strip()
+    成员标识 = str((数据 or {}).get("member_openid") or "").strip()
+    appid = str((数据 or {}).get("appid") or "").strip()
+    if not 会话标识 or not 成员标识:
+        return _控制台错误(400, "参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        结果 = await 消息记录.解除群成员禁言(会话标识, 成员标识, appid)
+        if not 结果.get("ok"):
+            return _控制台错误(409, str(结果.get("message") or "解除禁言失败"))
+        return web.json_response({"ok": True, "message": "解除禁言成功"})
+    except Exception as exc:
+        logger.warning("帮助控制台解除禁言失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "解除禁言失败，请稍后重试")
 
 
 async def _处理消息置顶(request: web.Request) -> web.Response:
