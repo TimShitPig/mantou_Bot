@@ -29,8 +29,8 @@ except Exception:
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
     "(会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
-    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, raw_message) "
-    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message) "
+    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
 )
 
 # 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
@@ -38,7 +38,7 @@ _消息写入SQL = (
 _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
-    "LEFT(raw_message, 4096) AS raw_message"
+    "avatar, LEFT(raw_message, 4096) AS raw_message"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -53,6 +53,7 @@ _列最大长度: dict[str, int] = {
     "source": 32,
     "reference_id": 128,
     "refidx": 128,
+    "avatar": 1024,
 }
 
 _数据库配置引用: dict[str, Any] = {}
@@ -156,6 +157,7 @@ def 初始化数据库() -> bool:
                     media TEXT,
                     reference_id VARCHAR(128) DEFAULT '',
                     refidx VARCHAR(128) DEFAULT '',
+                    avatar VARCHAR(1024) DEFAULT '',
                     raw_message MEDIUMTEXT,
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
@@ -210,6 +212,7 @@ def 初始化数据库() -> bool:
                     ("reference_id", "VARCHAR(128) DEFAULT ''"),
                     ("media", "TEXT"),
                     ("source", "VARCHAR(32) DEFAULT ''"),
+                    ("avatar", "VARCHAR(1024) DEFAULT ''"),
                 ):
                     游标.execute(
                         "SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -298,6 +301,7 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
         json.dumps(记录.get("media") or {}, ensure_ascii=False),
         _按列宽截断(记录.get("reference_id") or "", "reference_id"),
         _按列宽截断(记录.get("refidx") or "", "refidx"),
+        _按列宽截断(记录.get("avatar") or "", "avatar"),
         str(记录.get("raw_message") or ""),
     )
 
@@ -460,11 +464,7 @@ def 读取全部会话标识() -> list[str]:
 
 
 def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
-    """对齐 ElainaBot：单次 GROUP BY 聚合所有会话的最后消息 id/时间与条数。
-
-    等价于 ElainaBot 的 _aggregate_chats_sync（SQLite GROUP BY group_id），
-    这里按 会话标识 聚合，返回每个会话的 last_id/last_ts/msg_count 骨架。
-    """
+    """返回每个会话的最新消息和总数，保证 id/时间来自同一行。"""
     if not _MySQL可用():
         return []
     try:
@@ -478,9 +478,15 @@ def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
         return []
     try:
         with 连接.cursor() as 游标:
+            # 不能分别使用 MAX(id) 和 MAX(ts)：延迟写入时两者可能属于不同消息。
+            # 先按自增 id 聚合，再回表读取同一行的 ts，保持查询可使用会话索引。
             查询 = (
-                f"SELECT 会话标识, MAX(id) AS last_id, MAX(ts) AS last_ts, COUNT(*) AS n "
-                f"FROM `{消息记录表名}` WHERE 会话标识 != '' GROUP BY 会话标识 ORDER BY last_ts DESC"
+                f"SELECT 统计.会话标识, 统计.last_id, 消息.ts AS last_ts, 统计.n "
+                f"FROM (SELECT 会话标识, MAX(id) AS last_id, COUNT(*) AS n "
+                f"FROM `{消息记录表名}` "
+                "WHERE 会话标识 != '' GROUP BY 会话标识) 统计 "
+                f"JOIN `{消息记录表名}` 消息 ON 消息.id = 统计.last_id "
+                "ORDER BY 消息.ts DESC, 消息.id DESC"
             )
             if 上限 > 0:
                 查询 += " LIMIT %s"
@@ -530,7 +536,10 @@ def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
             分块 = id列表[起点 : 起点 + 500]
             占位 = ",".join(["%s"] * len(分块))
             with 连接.cursor() as 游标:
-                游标.execute(f"SELECT * FROM `{消息记录表名}` WHERE id IN ({占位})", tuple(分块))
+                游标.execute(
+                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE id IN ({占位})",
+                    tuple(分块),
+                )
                 for 行 in 游标.fetchall():
                     记录 = _行转记录(行)
                     结果[int(记录.get("id") or 0)] = 记录
@@ -563,9 +572,9 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                 # 原文只保留首尾字段（含 QQ timestamp），完整消息仍由历史接口分页读取。
                 游标.execute(
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
-                    f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
-                    f"'' AS media, reference_id, refidx, "
-                    f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message "
+                     f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
+                     f"'' AS media, reference_id, refidx, avatar, "
+                     f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
                     tuple(分块),
                 )
@@ -885,7 +894,8 @@ def _行转记录(行: Any) -> dict[str, Any]:
             13: ("media",),
             14: ("reference_id",),
             15: ("refidx",),
-            16: ("raw_message",),
+            16: ("avatar",),
+            17: ("raw_message",),
         }
         值 = _行字段(行, 索引, *字段映射.get(索引, ()), 默认值=None)
         return str(值 if 值 is not None else 默认值)
@@ -911,5 +921,6 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "media": 媒体 or None,
         "reference_id": 取值(14),
         "refidx": 取值(15),
-        "raw_message": 取值(16),
+        "avatar": 取值(16),
+        "raw_message": 取值(17),
     }

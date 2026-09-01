@@ -31,7 +31,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.0"
+控制台版本 = "6.1.1"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -2062,7 +2062,12 @@ async def _处理消息撤回(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await 消息记录.撤回消息(会话标识, 消息ID, str((数据 or {}).get("appid") or ""))
+        结果 = await 消息记录.撤回消息(
+            会话标识,
+            消息ID,
+            str((数据 or {}).get("appid") or ""),
+            str((数据 or {}).get("chat_type") or ""),
+        )
         if not 结果.get("ok"):
             return _控制台错误(409, str(结果.get("message") or "撤回失败"))
         清理消息列表缓存()

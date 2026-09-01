@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 import json
 import re
@@ -166,6 +167,14 @@ class 百度网盘客户端:
             raise RuntimeError(
                 f"百度网盘删除同名旧文件失败：paths={删除路径列表}, response={限制文本长度(数据)}"
             )
+        # 百度文件管理删除接口使用异步任务；确认目录中已不可见后再开始同名上传，
+        # 避免旧文件尚未完成删除时触发覆盖/重名冲突。
+        for 尝试次数 in range(1, 9):
+            await asyncio.sleep(min(0.25 * 尝试次数, 1.5))
+            if not await self.查找同名普通文件列表(文件名, 远端目录):
+                break
+        else:
+            raise RuntimeError("百度网盘删除同名旧文件未完成")
         logger.debug(
             f"百度网盘上传前已删除远端同名旧文件：file={文件名}, count={len(删除路径列表)}, dir={远端目录}"
         )

@@ -679,6 +679,12 @@ OAUTH_HMAC_KEY = b"1a8154132fg4a784fad101661z1854181ac1qed7"
     r"/(?:book|read|reader|detail)/([0-9]{4,})(?:[./?]|$)", re.IGNORECASE
 )
 
+_旧塔读解密执行器 = globals().get("塔读解密执行器")
+if _旧塔读解密执行器 is not None:
+    try:
+        _旧塔读解密执行器.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
 塔读解密执行器 = ThreadPoolExecutor(
     max_workers=塔读解密并发上限,
     thread_name_prefix="tadu-decrypt",
@@ -1660,7 +1666,10 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
 
 def 关闭塔读资源() -> None:
     global 塔读解密执行器
-    try:
-        塔读解密执行器.shutdown(wait=False, cancel_futures=True)
-    except Exception:
-        pass
+    执行器 = 塔读解密执行器
+    塔读解密执行器 = None
+    if 执行器 is not None:
+        try:
+            执行器.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass

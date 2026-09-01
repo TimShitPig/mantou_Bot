@@ -184,7 +184,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-media img { max-width:240px; max-height:240px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; background:#f2f3f5; }
             .msg-media img:hover { transform:scale(1.03); }
             .msg-video-media video { display:block; width:min(320px,80vw); max-height:240px; border-radius:8px; background:#111; }
-            .msg-image-link.is-broken { display:none; }
+             /* 图片失效时保留占位提示，不能把包含提示的按钮整体隐藏。 */
+             .msg-image-link.is-broken { display:inline-flex; align-items:center; min-width:0; min-height:0; padding:0; cursor:default; line-height:1.4; }
+             .msg-image-link.is-broken img { display:none; }
+             .msg-image-link.is-broken .msg-media-ph { margin:0; }
             .msg-file-card { display:flex; align-items:center; gap:9px; min-width:190px; max-width:290px; padding:8px 10px; border-radius:8px; background:#f5f8fc; color:#3e4a5a; text-decoration:none; }
             .msg-file-card:hover { background:#eaf2fc; }
             .msg-file-card.is-unavailable { color:#8a8f99; }
@@ -470,7 +473,8 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-bubble.recalled { color:#f08080; background:#302126; border-color:#5a3038; }
               :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
-              :root[data-theme="dark"] .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+               :root[data-theme="dark"] .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+               :root[data-theme="dark"] .msg-image-link.is-broken .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
               :root[data-theme="dark"] .msg-file-card { background:#202c3d; color:#dce8f6; }
               :root[data-theme="dark"] .msg-file-card:hover { background:#263a52; }
               :root[data-theme="dark"] .msg-file-icon { background:#294b70; color:#9bc9f4; }

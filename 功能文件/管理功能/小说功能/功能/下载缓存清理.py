@@ -73,6 +73,7 @@ def 登记上传任务(
     网盘名称: str = "",
     *,
     账号索引: dict[str, int] | None = None,
+    待处理平台: list[str] | tuple[str, ...] | None = None,
 ) -> Path:
     路径 = Path(缓存路径)
     任务路径 = 获取上传任务路径(路径)
@@ -89,6 +90,24 @@ def 登记上传任务(
         "retry_count": int(旧任务.get("retry_count") or 0),
         "last_error": str(旧任务.get("last_error") or ""),
     }
+    if isinstance(待处理平台, (list, tuple)):
+        数据["pending_platforms"] = [
+            str(平台).strip()
+            for 平台 in 待处理平台
+            if str(平台 or "").strip()
+        ]
+    elif isinstance(旧任务.get("pending_platforms"), list):
+        数据["pending_platforms"] = [
+            str(平台).strip()
+            for 平台 in 旧任务["pending_platforms"]
+            if str(平台 or "").strip()
+        ]
+    if isinstance(旧任务.get("completed_platforms"), list):
+        数据["completed_platforms"] = [
+            str(平台).strip()
+            for 平台 in 旧任务["completed_platforms"]
+            if str(平台 or "").strip()
+        ]
     if isinstance(账号索引, dict):
         数据["account_indices"] = {
             str(平台): max(1, int(序号))
@@ -271,8 +290,8 @@ def 清理过期下载缓存(
     缓存目录: str | Path | None = None,
     当前日期: date | datetime | None = None,
 ) -> int:
-    """删除本地日期早于当天的小说 TXT，保留当天及上传中的文件。"""
-    日期边界 = _转换为本地日期(当前日期)
+    """删除本地日期早于前一天的小说 TXT，保留今天和昨天。"""
+    日期边界 = _转换为本地日期(当前日期) - timedelta(days=1)
     已清理 = 0
     目录列表 = (
         (Path(缓存目录),)

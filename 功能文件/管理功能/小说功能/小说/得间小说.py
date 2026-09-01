@@ -42,6 +42,12 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 得间正文最大并发数 = 500
 得间正文重试次数 = 3
 得间解密最大动态并发数 = 200
+_旧得间解密执行器 = globals().get("得间解密执行器")
+if _旧得间解密执行器 is not None:
+    try:
+        _旧得间解密执行器.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
 得间解密执行器 = ThreadPoolExecutor(
     max_workers=得间解密最大动态并发数,
     thread_name_prefix="dejian-decrypt",
@@ -1296,6 +1302,18 @@ def 删除缓存(缓存路径: Any) -> None:
     if not 缓存路径:
         return
     小说缓存工具.删除下载缓存文件(缓存路径)
+
+
+def 关闭得间资源() -> None:
+    """释放全局解密线程池，供插件停止和热重载使用。"""
+    global 得间解密执行器
+    执行器 = 得间解密执行器
+    得间解密执行器 = None
+    if 执行器 is not None:
+        try:
+            执行器.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
 
 def 提取直接得间来源(命令文本: str) -> str | None:

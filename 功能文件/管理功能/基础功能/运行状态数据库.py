@@ -1,10 +1,35 @@
 from __future__ import annotations
 
 import time
+import threading
 from typing import Any
 
 运行状态数据库表名 = "mantou_runtime_state"
 数据库配置分类名 = "database_settings"
+_已确保运行状态表: set[tuple[str, int, str, str, str]] = set()
+_运行状态表锁 = threading.Lock()
+
+
+def _配置缓存键(数据库配置: dict[str, Any], 表名: str) -> tuple[str, int, str, str, str]:
+    return (
+        str(数据库配置.get("host") or ""),
+        安全整数(数据库配置.get("port"), 3306),
+        str(数据库配置.get("user") or ""),
+        str(数据库配置.get("database") or ""),
+        str(表名 or ""),
+    )
+
+
+def _确保运行状态表一次(连接: Any, 数据库配置: dict[str, Any], 表名: str) -> None:
+    """进程内缓存建表结果，避免每次状态读写都执行 DDL 和提交。"""
+    键 = _配置缓存键(数据库配置, 表名)
+    if 键 in _已确保运行状态表:
+        return
+    with _运行状态表锁:
+        if 键 in _已确保运行状态表:
+            return
+        确保运行状态数据库表(连接, 表名)
+        _已确保运行状态表.add(键)
 
 
 def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认值: str = "") -> str:
@@ -13,7 +38,7 @@ def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
-        确保运行状态数据库表(连接, 表名)
+        _确保运行状态表一次(连接, 数据库配置, 表名)
         with 连接.cursor() as 游标:
             游标.execute(
                 f"""
@@ -35,7 +60,7 @@ def 写入运行状态值(配置: Any, 命名空间: str, 状态键: str, 状态
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     当前时间 = int(time.time())
     with 打开数据库连接(数据库配置) as 连接:
-        确保运行状态数据库表(连接, 表名)
+        _确保运行状态表一次(连接, 数据库配置, 表名)
         with 连接.cursor() as 游标:
             游标.execute(
                 f"""
@@ -66,7 +91,7 @@ def 批量写入运行状态值(
     if not 记录列表:
         return
     with 打开数据库连接(数据库配置) as 连接:
-        确保运行状态数据库表(连接, 表名)
+        _确保运行状态表一次(连接, 数据库配置, 表名)
         with 连接.cursor() as 游标:
             游标.executemany(
                 f"""
@@ -85,7 +110,7 @@ def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, 
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
-        确保运行状态数据库表(连接, 表名)
+        _确保运行状态表一次(连接, 数据库配置, 表名)
         with 连接.cursor() as 游标:
             游标.execute(
                 f"""
@@ -106,7 +131,7 @@ def 删除运行状态值(配置: Any, 命名空间: str, 状态键: str) -> Non
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
-        确保运行状态数据库表(连接, 表名)
+        _确保运行状态表一次(连接, 数据库配置, 表名)
         with 连接.cursor() as 游标:
             游标.execute(
                 f"""

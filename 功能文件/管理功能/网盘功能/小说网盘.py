@@ -340,6 +340,7 @@ async def _上传小说并获取分享链接内部(
         文件名,
         网盘显示名[目标平台列表[0]],
         账号索引=_账号索引,
+        待处理平台=目标平台列表,
     )
     结果列表 = await _并发上传平台列表(
         配置,
@@ -357,13 +358,17 @@ async def _上传小说并获取分享链接内部(
         for 结果 in 结果列表
         if 结果.get("success") and str(结果.get("url") or "").strip()
     ]
+    成功平台 = [str(结果.get("platform") or "") for 结果 in 结果列表 if 结果.get("success")]
+    失败平台 = [str(结果.get("platform") or "") for 结果 in 结果列表 if not 结果.get("success")]
     if 分享列表:
         分享链接 = _序列化分享链接(分享列表)
         下载缓存清理.更新上传任务(
             源路径,
-            "primary_done",
+            "primary_done" if not 失败平台 else "primary_pending",
             share_url=分享链接,
             last_error="",
+            pending_platforms=失败平台,
+            completed_platforms=成功平台,
         )
         return {
             "enabled": True,
@@ -436,36 +441,71 @@ async def 恢复待续传上传任务(配置: Any) -> int:
         if 状态 == "primary_pending" and 下载缓存清理.下载缓存正在使用(路径):
             continue
         if 状态 == "primary_pending":
-            任务网盘 = next(
-                (
-                    键
-                    for 键, 显示名 in 网盘显示名.items()
-                    if str(任务.get("provider") or "") == 显示名
-                ),
-                None,
-            )
+            任务平台 = 任务.get("pending_platforms")
+            if isinstance(任务平台, list):
+                待处理平台 = [
+                    str(平台).strip()
+                    for 平台 in 任务平台
+                    if str(平台 or "").strip() in 网盘模块映射
+                ]
+            else:
+                任务网盘 = next(
+                    (
+                        键
+                        for 键, 显示名 in 网盘显示名.items()
+                        if str(任务.get("provider") or "") == 显示名
+                    ),
+                    None,
+                )
+                待处理平台 = [任务网盘] if 任务网盘 else [
+                    平台 for 平台 in 网盘顺序 if 主网盘是否启用(平台, 配置)
+                ]
+            if not 待处理平台:
+                下载缓存清理.更新上传任务(路径, "primary_done", last_error="")
+                if 下载缓存清理.删除下载缓存文件(路径):
+                    logger.info(f"重载恢复小说上传完成：file={文件名}")
+                continue
             账号索引 = 任务.get("account_indices")
             if not isinstance(账号索引, dict):
                 账号索引 = {}
             try:
-                任务账号序号 = max(1, int(账号索引.get(任务网盘, 1)))
-            except (TypeError, ValueError):
-                任务账号序号 = 1
-            try:
-                结果 = await 上传小说并获取分享链接(
+                结果列表 = await _并发上传平台列表(
                     配置,
                     路径,
                     文件名,
-                    _指定网盘=任务网盘,
-                    _账号序号=任务账号序号,
-                    _账号索引=账号索引,
+                    待处理平台,
+                    账号索引,
                 )
             except Exception as 异常:
                 logger.warning(f"重载恢复小说上传失败：file={文件名}, error={异常}")
                 continue
-            if not 结果.get("success"):
+            成功平台 = [
+                str(结果.get("platform") or "")
+                for 结果 in 结果列表
+                if 结果.get("success")
+            ]
+            失败平台 = [
+                str(结果.get("platform") or "")
+                for 结果 in 结果列表
+                if not 结果.get("success")
+            ]
+            if 失败平台:
+                下载缓存清理.更新上传任务(
+                    路径,
+                    "primary_pending",
+                    pending_platforms=失败平台,
+                    completed_platforms=成功平台,
+                    last_error="上传失败",
+                )
                 continue
             已处理 += 1
+            下载缓存清理.更新上传任务(
+                路径,
+                "primary_done",
+                pending_platforms=[],
+                completed_platforms=成功平台,
+                last_error="",
+            )
         elif 状态 == "backup_pending":
             # 旧版本可能留下“百度后台备份”状态；新流程不再做后台备份，直接结束任务。
             下载缓存清理.更新上传任务(路径, "primary_done", last_error="")

@@ -26,14 +26,12 @@ async def _发送回复内容(
         return
     if isinstance(内容, str):
         try:
-            if await 帮助功能.发送QQ官方提及Markdown(event, 内容):
-                return
+            await 帮助功能.发送QQ官方提及Markdown(event, 内容)
         except Exception as 异常:
             logger.debug(
                 "小说下载后台发送QQ官方Markdown失败：错误类型=%s",
                 type(异常).__name__,
             )
-        await event.send(event.plain_result(内容))
         return
 
     # MessageEventResult 继承 MessageChain，保留对象本身以避免丢失 QQ 官方按钮等消息段。

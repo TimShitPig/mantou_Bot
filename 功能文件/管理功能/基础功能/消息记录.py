@@ -52,6 +52,7 @@ except Exception as 导入异常:
 群信息限流冷却秒 = 30 * 60
 群信息默认失败冷却秒 = 60 * 60
 群信息请求间隔秒 = 3.0
+群信息人工最短间隔秒 = 60
 群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
 # 官方 bot_state 限制为 30 QPM；半小时复核一次，避免已退出群长期显示为正常。
@@ -81,6 +82,8 @@ _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
 _消息持久化批量大小 = 200
 _消息持久化聚合秒数 = 0.05
+_消息持久化最大重试次数 = 3
+_消息持久化重试等待秒 = 0.5
 _消息持久化队列: asyncio.Queue[tuple[str, Any]] = (
     globals().get("_消息持久化队列") or asyncio.Queue(maxsize=_消息持久化队列上限)
 )
@@ -207,6 +210,21 @@ def 主动消息无权限(异常: Any) -> bool:
             "no permission",
             "not allowed",
         )
+    )
+
+
+def 被动消息ID已过期(异常: Any) -> bool:
+    """只识别官方明确的被动消息 ID 失效，避免未知错误触发重复重发。"""
+    文本 = str(异常 or "").lower()
+    return (
+        (
+            any(关键词 in 文本 for 关键词 in ("过期", "expired", "timeout"))
+            and any(
+                关键词 in 文本
+                for 关键词 in ("msg_id", "msgid", "消息id", "消息 id")
+            )
+        )
+        or any(关键词 in 文本 for 关键词 in ("40034005", "40034006", "msg_id已过期"))
     )
 
 
@@ -345,8 +363,19 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
-    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message"))
-    if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
+    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message")) or str(
+        记录.get("avatar") or ""
+    ).strip()
+    if 作者头像:
+        记录["avatar"] = 作者头像
+    if (
+        会话标识
+        and 作者标识
+        and (
+            (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
+            or bool(作者头像)
+        )
+    ):
         _记录成员资料(
             会话标识,
             作者标识,
@@ -395,8 +424,19 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
-    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message"))
-    if 会话标识 and 作者标识 and 作者昵称 and 作者昵称 not in {"未知用户", "未知"}:
+    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message")) or str(
+        记录.get("avatar") or ""
+    ).strip()
+    if 作者头像:
+        记录["avatar"] = 作者头像
+    if (
+        会话标识
+        and 作者标识
+        and (
+            (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
+            or bool(作者头像)
+        )
+    ):
         _记录成员资料(
             会话标识,
             作者标识,
@@ -475,6 +515,89 @@ def _消息记录重复(已有记录: dict[str, Any], 新记录: dict[str, Any])
     return bool(旧键 and 新键 and 旧键.intersection(新键))
 
 
+def _整数时间戳(值: Any) -> int:
+    """读取记录时间，异常值统一按 0 处理。"""
+    try:
+        return int(值 or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _消息媒体指纹(媒体: Any) -> str:
+    if not isinstance(媒体, dict) or not 媒体:
+        return ""
+    try:
+        return json.dumps(媒体, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return str(媒体)
+
+
+def _查找机器人回显记录(
+    会话: dict[str, Any],
+    消息ID: str,
+    内容: str,
+    时间戳: Any,
+) -> dict[str, Any] | None:
+    """补齐发送响应缺少消息 ID 时的官方回显，避免再显示一条机器人消息。
+
+    只有最近几秒内、内容完全相同且原记录确实来自机器人发送入口时才合并，
+    普通成员消息不会因为文本相同而被吞掉。
+    """
+    if not str(内容 or "").strip():
+        return None
+    当前时间 = _整数时间戳(时间戳) or int(time.time())
+    for 记录 in reversed(会话.get("messages") or []):
+        if not isinstance(记录, dict) or not 记录.get("is_self"):
+            continue
+        来源 = str(记录.get("source") or "").strip().lower()
+        if not (来源.startswith("bot_") or 来源 == "web_panel"):
+            continue
+        旧ID = _规范消息ID(记录.get("message_id"))
+        if 消息ID and 旧ID and 消息ID != 旧ID:
+            continue
+        if str(记录.get("content") or "").strip() != str(内容 or "").strip():
+            continue
+        if abs(当前时间 - _整数时间戳(记录.get("ts"))) > 8:
+            continue
+        return 记录
+    return None
+
+
+def _查找重复机器人发送(
+    会话: dict[str, Any],
+    类型: str,
+    内容: str,
+    媒体: dict[str, Any] | None,
+    时间戳: int,
+    来源: str,
+    消息ID: str = "",
+) -> dict[str, Any] | None:
+    """合并事件发送/会话发送挂钩的无 ID 重复记账。"""
+    来源 = str(来源 or "").strip().lower()
+    if not (来源.startswith("bot_") or 来源 == "web_panel"):
+        return None
+    新媒体指纹 = _消息媒体指纹(媒体)
+    for 记录 in reversed(会话.get("messages") or []):
+        if not isinstance(记录, dict) or not 记录.get("is_self"):
+            continue
+        旧来源 = str(记录.get("source") or "").strip().lower()
+        if not (旧来源.startswith("bot_") or 旧来源 == "web_panel") or 旧来源 == 来源:
+            continue
+        旧ID = _规范消息ID(记录.get("message_id"))
+        if 消息ID and 旧ID and 消息ID != 旧ID:
+            continue
+        if str(记录.get("chat_type") or 类型).strip().lower() != str(类型 or "").strip().lower():
+            continue
+        if str(记录.get("content") or "").strip() != str(内容 or "").strip():
+            continue
+        if _消息媒体指纹(记录.get("media")) != 新媒体指纹:
+            continue
+        if abs(int(时间戳 or 0) - _整数时间戳(记录.get("ts"))) > 5:
+            continue
+        return 记录
+    return None
+
+
 def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any]) -> dict[str, Any]:
     """合并同一 message_id 的重复事件，保留较完整的消息资料。"""
     if not isinstance(已有记录, dict) or not isinstance(新记录, dict):
@@ -487,7 +610,7 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         已有记录["message_id"] = 新消息ID
     for 字段 in (
         "user_id", "nickname", "content", "timestamp", "source", "raw_message",
-        "reference_id", "refidx", "chat_type", "appid",
+        "reference_id", "refidx", "avatar", "chat_type", "appid",
     ):
         新值 = 新记录.get(字段)
         if 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
@@ -696,7 +819,7 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
     return 任务
 
 
-def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> None:
+def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
     """在线程中批量落库；同一会话的未读值只写本批最后一次状态。"""
     消息列表: list[dict[str, Any]] = []
     未读表: dict[str, int] = {}
@@ -707,21 +830,31 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> None:
             会话标识, 未读数 = 数据
             未读表[str(会话标识)] = max(0, int(未读数 or 0))
 
-    if 消息列表 and _消息存储 is not None:
-        批量写入 = getattr(_消息存储, "批量写入消息", None)
-        if callable(批量写入):
-            批量写入(消息列表)
+    成功 = True
+    if 消息列表:
+        if _消息存储 is None:
+            成功 = False
         else:
-            for 记录 in 消息列表:
-                _消息存储.写入消息(记录)
+            try:
+                批量写入 = getattr(_消息存储, "批量写入消息", None)
+                if callable(批量写入):
+                    if 批量写入(消息列表) is False:
+                        成功 = False
+                else:
+                    for 记录 in 消息列表:
+                        if _消息存储.写入消息(记录) is False:
+                            成功 = False
+            except Exception as 异常:
+                logger.debug("消息记录消息批量持久化失败：错误类型=%s", type(异常).__name__)
+                成功 = False
 
     if not 未读表:
-        return
+        return 成功
     try:
         from 功能文件.管理功能.基础功能 import 运行状态数据库
 
         if not 运行状态数据库.已配置运行状态数据库(当前插件配置):
-            return
+            return 成功
         批量写入 = getattr(运行状态数据库, "批量写入运行状态值", None)
         if callable(批量写入):
             批量写入(
@@ -729,12 +862,14 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> None:
                 未读状态命名空间,
                 未读表,
             )
-            return
+            return 成功
         写入运行状态值 = 运行状态数据库.写入运行状态值
         for 会话标识, 未读数 in 未读表.items():
             写入运行状态值(当前插件配置, 未读状态命名空间, 会话标识, 未读数)
     except Exception as 异常:
         logger.debug("消息记录未读数批量持久化失败：错误类型=%s", type(异常).__name__)
+        成功 = False
+    return 成功
 
 
 def _准备消息持久化队列() -> asyncio.Queue[tuple[str, Any]]:
@@ -772,17 +907,39 @@ async def _消息持久化工作() -> None:
                     批次.append(await asyncio.wait_for(队列.get(), timeout=剩余时间))
                 except TimeoutError:
                     break
+            # 消息和未读状态分开重试。未读状态失败时不重复 INSERT 已提交的
+            # 无 message_id 消息，避免网络抖动造成历史记录再次出现。
             try:
-                async with _数据库写入锁:
-                    await _异步执行消息记录同步(_执行消息持久化批次, 批次)
-            except asyncio.CancelledError:
-                raise
-            except Exception as 异常:
-                logger.warning(
-                    "消息记录后台批量写入失败：数量=%d，错误类型=%s",
-                    len(批次),
-                    type(异常).__name__,
-                )
+                for 项目类型 in ("message", "unread"):
+                    子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
+                    if not 子批次:
+                        continue
+                    写入成功 = False
+                    最后错误类型 = ""
+                    for 重试次数 in range(_消息持久化最大重试次数):
+                        try:
+                            async with _数据库写入锁:
+                                结果 = await _异步执行消息记录同步(
+                                    _执行消息持久化批次,
+                                    子批次,
+                                )
+                            写入成功 = 结果 is not False
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as 异常:
+                            最后错误类型 = type(异常).__name__
+                        if 写入成功:
+                            break
+                        if 重试次数 + 1 < _消息持久化最大重试次数:
+                            await asyncio.sleep(_消息持久化重试等待秒 * (重试次数 + 1))
+                    if not 写入成功:
+                        logger.warning(
+                            "消息记录后台批量写入失败：类型=%s，数量=%d，重试次数=%d，错误类型=%s",
+                            项目类型,
+                            len(子批次),
+                            _消息持久化最大重试次数,
+                            最后错误类型 or "写入返回失败",
+                        )
             finally:
                 for _ in 批次:
                     队列.task_done()
@@ -958,7 +1115,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     字段 = (
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "source", "recalled", "media", "reference_id", "refidx",
-        "chat_type", "ts", "appid",
+        "avatar", "chat_type", "ts", "appid",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
@@ -1058,10 +1215,49 @@ def _推送群状态事件(会话标识: str, 状态: str) -> None:
 
 
 def _序列化原始消息(消息: Any, 最长: int = 0) -> str:
-    try:
-        文本 = str(消息 or "")
-    except Exception:
-        return ""
+    """保存官方事件负载，而不是只保存 botpy 对象的精简 ``repr``。
+
+    qq-botpy 的 ``GroupMessage.__repr__`` 不包含 ``author``，而头像等
+    非标准扩展字段只存在于适配器保存的 ``raw_data`` 中。优先序列化
+    结构化负载，历史分页才能继续解析头像和昵称。
+    """
+    负载 = 消息
+    if not isinstance(负载, (dict, list, tuple)):
+        for 字段 in ("raw_data", "data", "payload"):
+            值 = _读取字段(消息, 字段)
+            if isinstance(值, (dict, list, tuple)):
+                负载 = 值
+                break
+    if isinstance(负载, (dict, list, tuple)):
+        try:
+            文本 = json.dumps(负载, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            try:
+                文本 = str(负载 or "")
+            except Exception:
+                return ""
+    else:
+        文本 = ""
+        for 方法名 in ("model_dump", "dict"):
+            方法 = getattr(负载, 方法名, None)
+            if not callable(方法):
+                continue
+            try:
+                结构 = 方法()
+                if isinstance(结构, (dict, list, tuple)):
+                    文本 = json.dumps(
+                        结构,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    break
+            except Exception:
+                continue
+        if not 文本:
+            try:
+                文本 = str(负载 or "")
+            except Exception:
+                return ""
     if 最长 > 0 and len(文本) > 最长:
         return 文本[:最长] + "...[已截断]"
     return 文本
@@ -1436,31 +1632,71 @@ def _提取成员昵称(消息: Any) -> str:
 
 
 def _提取成员头像(消息: Any) -> str:
-    """读取事件扩展中的头像地址；官方群消息未提供时返回空值。"""
-    候选对象: list[Any] = [消息]
-    if isinstance(消息, str):
-        解析对象 = _解析消息结构(消息)
-        if 解析对象 is not 消息:
-            候选对象.append(解析对象)
-    原始数据 = _读取字段(消息, "raw_data")
-    if isinstance(原始数据, dict):
-        候选对象.append(原始数据)
-        if isinstance(原始数据.get("d"), dict):
-            候选对象.append(原始数据["d"])
-    扩展对象: list[Any] = []
-    for 对象 in 候选对象:
-        扩展对象.extend(
-            [
-                _读取字段(对象, "author"),
-                _读取字段(对象, "member"),
-                对象,
-            ]
-        )
-    for 对象 in 扩展对象:
-        for 字段 in ("avatar", "avatar_url", "avatarUrl", "icon"):
-            地址 = str(_读取字段(对象, 字段) or "").strip()
-            if 地址.startswith(("https://", "http://")):
+    """读取官方事件扩展中的头像地址，不调用其他适配器接口。
+
+    标准官方群事件不保证头像字段；新旧 AstrBot/botpy 版本可能把它
+    放在 ``author``、``member``、``user`` 或 ``raw_data.d`` 中，且别名
+    可能是 ``avatar_url``。限定遍历深度和字段，避免把整个消息对象
+    转字符串，也避免误把正文中的 URL 当成头像。
+    """
+    待检查: list[tuple[Any, int]] = [(消息, 0)]
+    已检查: set[int] = set()
+    嵌套字段 = (
+        "raw_data",
+        "data",
+        "payload",
+        "event",
+        "message",
+        "d",
+        "author",
+        "member",
+        "user",
+        "profile",
+    )
+    头像字段 = ("avatar", "avatar_url", "avatarUrl", "icon")
+
+    def 取地址(值: Any) -> str:
+        if isinstance(值, dict):
+            值 = (
+                值.get("url")
+                or 值.get("src")
+                or 值.get("href")
+                or 值.get("value")
+            )
+        地址 = str(值 or "").strip()
+        if 地址.startswith("//"):
+            地址 = "https:" + 地址
+        return 地址 if 地址.startswith(("https://", "http://")) else ""
+
+    while 待检查:
+        当前, 深度 = 待检查.pop()
+        if 当前 in (None, "") or 深度 > 5:
+            continue
+        if isinstance(当前, (dict, list, tuple, set)):
+            对象键 = id(当前)
+            if 对象键 in 已检查:
+                continue
+            已检查.add(对象键)
+        for 字段 in 头像字段:
+            地址 = 取地址(_读取字段(当前, 字段))
+            if 地址:
                 return 地址
+        结构 = _解析消息结构(当前)
+        if 结构 is not None and 结构 is not 当前:
+            待检查.append((结构, 深度))
+            continue
+        if isinstance(当前, dict):
+            for 字段 in 嵌套字段:
+                值 = 当前.get(字段)
+                if 值 not in (None, ""):
+                    待检查.append((值, 深度 + 1))
+        elif isinstance(当前, (list, tuple, set)):
+            待检查.extend((值, 深度 + 1) for 值 in 当前)
+        else:
+            for 字段 in 嵌套字段:
+                值 = _读取字段(当前, 字段)
+                if 值 not in (None, ""):
+                    待检查.append((值, 深度 + 1))
     return ""
 
 
@@ -1667,6 +1903,7 @@ def 记录收到消息(
         消息ID = _提取消息ID(消息)
         回显自己 = bool(消息ID) and 消息ID in 自己发送消息ID
         is_self = bool(is_self) or 回显自己
+        回显记录: dict[str, Any] | None = None
         内容 = _提取消息文本(_读取字段(消息, "content"))
         if 类型 == "user":
             会话标识 = _提取成员标识(消息, "user")
@@ -1676,25 +1913,41 @@ def 记录收到消息(
             成员标识 = _提取成员标识(消息, "group")
         if not 会话标识:
             return None
-        if not is_self:
-            清除主动消息权限(会话标识, 类型)
         昵称 = _提取成员昵称(消息)
         作者 = _读取字段(消息, "author")
         是机器人 = bool(_读取字段(作者, "bot") or False)
         角色 = str(_读取字段(作者, "member_role") or "").strip()
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
+        if not is_self and 类型 in {"group", "user"}:
+            # 部分发送入口拿不到响应 ID，官方回显仍会再次经过消息事件。
+            # 只在短时间窗口内把它并入已记录的机器人消息，避免重复展示。
+            回显记录 = _查找机器人回显记录(
+                消息缓存.get(会话标识) or {},
+                消息ID,
+                内容,
+                时间戳,
+            )
+            if 回显记录 is not None:
+                is_self = True
+                if 消息ID and not _规范消息ID(回显记录.get("message_id")):
+                    回显记录["message_id"] = 消息ID
+                if 消息ID:
+                    自己发送消息ID[消息ID] = time.time()
+        if not is_self:
+            清除主动消息权限(会话标识, 类型)
         引用ID = ""
         消息引用 = _读取字段(消息, "message_reference")
         if 消息引用:
             引用ID = str(_读取字段(消息引用, "message_id") or "").strip()
         自身REFIDX = _提取REFIDX(消息)
+        作者头像 = _提取成员头像(消息)
         _记录成员资料(
             会话标识,
             成员标识,
             昵称,
             是机器人,
             角色,
-            _提取成员头像(消息),
+            作者头像,
         )
         会话 = _取得会话缓存(会话标识, 类型, appid)
         发送序号 += 1
@@ -1709,6 +1962,7 @@ def 记录收到消息(
             "timestamp": _格式化时间戳(时间戳),
             "is_self": bool(is_self),
             "source": 源,
+            "avatar": 作者头像,
             "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
             "recalled": False,
             "media": _提取媒体字段(内容, 消息),
@@ -1729,6 +1983,7 @@ def 记录收到消息(
                 x for x in reversed(会话["messages"] or [])
                 if (
                     (消息ID and _规范消息ID(x.get("message_id")) == 消息ID)
+                    or (回显记录 is not None and x is 回显记录)
                     or _消息记录重复(x, 记录)
                 )
             ),
@@ -1943,6 +2198,7 @@ def 记录发送消息(
     引用ID: str = "",
     媒体: dict[str, Any] | None = None,
     发送者昵称: str = "",
+    发送者头像: str = "",
     来源: str = "",
     发送时间: Any = None,
 ) -> dict[str, Any] | None:
@@ -1952,6 +2208,50 @@ def 记录发送消息(
         消息ID = _规范消息ID(消息ID)
         会话 = _取得会话缓存(会话标识, 类型, appid)
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
+        来源值 = str(来源 or "web_panel").strip() or "web_panel"
+        媒体值 = 媒体 or _提取媒体字段(内容)
+        头像值 = str(发送者头像 or "").strip()
+        if not 头像值 and 来源值.startswith("bot_"):
+            机器人缓存项 = 机器人资料缓存.get(str(appid or "default").strip() or "default")
+            if isinstance(机器人缓存项, tuple) and len(机器人缓存项) > 1:
+                机器人资料 = 机器人缓存项[1]
+                if isinstance(机器人资料, dict):
+                    头像值 = str(
+                        机器人资料.get("avatar")
+                        or 机器人资料.get("avatar_url")
+                        or ""
+                    ).strip()
+        # event._post_send、send_by_session 和网页直发可能分别捕获同一
+        # 次发送。响应没有消息 ID 时，以来源、内容和短时间窗口合并交叉记账。
+        重复发送记录 = _查找重复机器人发送(
+            会话,
+            类型,
+            内容,
+            媒体值,
+            成功时间戳,
+            来源值,
+            消息ID,
+        )
+        if 重复发送记录 is not None:
+            _合并重复消息(
+                重复发送记录,
+                {
+                    "message_id": 消息ID,
+                    "content": 内容,
+                    "media": 媒体值,
+                    "avatar": 头像值,
+                    "refidx": 自身REFIDX or "",
+                    "reference_id": 引用ID or "",
+                    "is_self": True,
+                    "source": 来源值,
+                    "chat_type": 类型,
+                    "appid": str(appid or ""),
+                    "ts": 成功时间戳,
+                },
+            )
+            if 消息ID:
+                自己发送消息ID[消息ID] = time.time()
+            return 重复发送记录
         if 消息ID:
             已有记录 = next(
                 (
@@ -1967,10 +2267,11 @@ def 记录发送消息(
                         "message_id": str(消息ID),
                         "content": 内容,
                         "media": 媒体 or _提取媒体字段(内容),
+                        "avatar": 头像值,
                         "refidx": 自身REFIDX or "",
                         "reference_id": 引用ID or "",
                         "is_self": True,
-                        "source": 来源 or "web_panel",
+                        "source": 来源值,
                         "chat_type": 类型,
                         "appid": str(appid or ""),
                         "ts": 成功时间戳,
@@ -1999,10 +2300,11 @@ def 记录发送消息(
             "content": 内容,
             "timestamp": _格式化时间戳(成功时间戳),
             "is_self": True,
-            "source": 来源 or "web_panel",
+            "source": 来源值,
+            "avatar": 头像值,
             "raw_message": "",
             "recalled": False,
-            "media": 媒体 or _提取媒体字段(内容),
+            "media": 媒体值,
             "reference_id": 引用ID or "",
             "chat_type": 类型,
             "ts": 成功时间戳,
@@ -3088,6 +3390,22 @@ async def 刷新群信息(
     已有 = 群信息缓存.get(会话标识) or {}
     if not 强制 and not _群信息需要刷新(已有):
         return None
+    if 强制:
+        try:
+            上次请求 = int(已有.get("last_request_at") or 0)
+        except (TypeError, ValueError):
+            上次请求 = 0
+        现在 = int(time.time())
+        if 上次请求 and 现在 - 上次请求 < 群信息人工最短间隔秒:
+            logger.info(
+                "消息记录群信息刷新被频率保护：group_id=%s, cooldown=%s",
+                会话标识,
+                群信息人工最短间隔秒 - (现在 - 上次请求),
+            )
+            return None
+        已有 = dict(已有)
+        已有["last_request_at"] = 现在
+        群信息缓存[会话标识] = 已有
     appid = _获取群信息appid(会话标识, appid)
     成员状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
     if 成员状态.get("status") == "removed":
@@ -3186,6 +3504,7 @@ async def 刷新群信息(
             "membership_status": str(成员状态.get("status") or "unknown"),
             "membership_checked_at": int(成员状态.get("checked_at") or time.time()),
             "updated_at": int(time.time()),
+            "last_request_at": int(已有.get("last_request_at") or 0),
         }
         群信息缓存[会话标识] = 摘要
         if _消息存储 is not None:
@@ -3406,7 +3725,25 @@ def _数据库聚合聊天项(
     try:
         # 控制台群列表使用全部模式；消息历史仍由单独接口按 100 条分页。
         骨架 = _消息存储.聚合聊天列表(0)
-        if not 骨架:
+        # 被移除的群可能没有任何消息行，单靠消息表聚合会把它们漏掉。
+        # 启动恢复已经把群资料放入内存，列表刷新优先使用缓存，避免每次
+        # 打开消息页再建立一次数据库连接；缓存为空时保留持久化兜底。
+        群信息项: dict[str, dict[str, Any]] = {}
+        for 群标识, 信息 in 群信息缓存.items():
+            群标识 = str(群标识 or "").strip()
+            if not 群标识 or not isinstance(信息, dict):
+                continue
+            群信息项[群标识] = dict(信息)
+        if not 群信息项:
+            读取群信息 = getattr(_消息存储, "读取全部群信息", None)
+            持久化群信息 = 读取群信息() if callable(读取群信息) else []
+            for 信息 in 持久化群信息 or []:
+                if not isinstance(信息, dict):
+                    continue
+                群标识 = str(信息.get("group_openid") or "").strip()
+                if 群标识:
+                    群信息项[群标识] = dict(信息)
+        if not 骨架 and not 群信息项:
             return None
         最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
         # 会话列表只需最后消息的预览和元数据，不把卡片原文/媒体字段整批读回。
@@ -3449,11 +3786,21 @@ def _数据库聚合聊天项(
             )
             if 内存最后时间 >= 数据库最后时间 and (内存最后时间 or 内存会话.get("last_content")):
                 # 接收路径已经维护会话摘要，列表请求无需遍历和规范化整段内存消息。
+                内存最后记录 = 内存消息列表[-1] if 内存消息列表 else {}
                 最后记录 = {
                     "chat_type": str(内存会话.get("chat_type") or 类型),
                     "nickname": str(内存会话.get("last_nickname") or ""),
                     "appid": str(内存会话.get("appid") or ""),
                     "content": str(内存会话.get("last_content") or ""),
+                    "avatar": str(
+                        (
+                            内存最后记录.get("avatar")
+                            if isinstance(内存最后记录, dict)
+                            else ""
+                        )
+                        or 最后记录.get("avatar")
+                        or ""
+                    ).strip(),
                     "timestamp": _格式化时间戳(内存最后时间),
                     "ts": 内存最后时间,
                 }
@@ -3491,6 +3838,7 @@ def _数据库聚合聊天项(
                     "chat_type": 类型,
                     "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
                     "nickname": 显示名,
+                    "avatar": str(最后记录.get("avatar") or "").strip(),
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(
@@ -3511,6 +3859,47 @@ def _数据库聚合聊天项(
                     **_聊天群成员状态(会话标识, 类型),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                }
+            )
+        # 没有消息记录的群也要进入列表，尤其是已被移除且需要长期保留提示的群。
+        for 信息 in 群信息项.values():
+            会话标识 = str(信息.get("group_openid") or "").strip()
+            if not 会话标识 or 会话标识 in 已有会话标识:
+                continue
+            已有会话标识.add(会话标识)
+            会话备注 = 本地备注表.get(会话标识) or {}
+            备注 = str(会话备注.get("remark") or "")
+            if 过滤 == "remark" and not 备注:
+                continue
+            群名 = str(信息.get("group_name") or "").strip()
+            轻量会话 = {
+                "chat_type": "group",
+                "last_nickname": 群名,
+                "appid": str(信息.get("appid") or ""),
+            }
+            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表)
+            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
+                continue
+            当前未读数 = _未读待写.get(
+                会话标识,
+                int(持久化未读表.get(会话标识) or 0),
+            )
+            聊天项.append(
+                {
+                    "chat_id": 会话标识,
+                    "chat_type": "group",
+                    "appid": str(信息.get("appid") or ""),
+                    "nickname": 显示名,
+                    "group_qq": str(会话备注.get("group_qq") or ""),
+                    "last_content": "",
+                    "last_time": "",
+                    "last_ts": 0,
+                    "msg_count": 0,
+                    "unread": max(0, int(当前未读数 or 0)),
+                    "remark": 备注,
+                    **_聊天群成员状态(会话标识, "group"),
+                    "is_admin": bool(群机器人是否管理员(会话标识)),
+                    "group_name": 群名,
                 }
             )
         # 数据库写入线程尚未提交时，GROUP BY 不会包含刚收到的新会话。
@@ -3542,6 +3931,7 @@ def _数据库聚合聊天项(
                     "chat_type": 类型,
                     "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
                     "nickname": 显示名,
+                    "avatar": str(最后记录.get("avatar") or "").strip(),
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
@@ -3609,6 +3999,7 @@ def 获取聊天列表(
                     "chat_type": 类型,
                     "appid": str(会话.get("appid") or ""),
                     "nickname": 显示名,
+                    "avatar": str(最后消息.get("avatar") or "").strip(),
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(
@@ -4215,14 +4606,12 @@ async def 发送消息(
     else:
         # 默认：仅用 2 分钟时效内的近期 msg_id 被动发送；无近期消息时尝试主动推送（全量群可用）
         被动ID = 近期消息ID or ""
-    if 类型 == "group" and 发送方式 == "default" and not 被动ID:
-        return {"ok": False, "message": "发送失败：该群最近没有收到新消息，无法主动发送。请先在群里发一条消息后 2 分钟内重试，或确认该群已开启全量消息接收。"}
     事件ID = 自定义ID if 发送方式 == "custom_event_id" else ""
     实际使用主动消息 = not 被动ID and not 事件ID
     if 实际使用主动消息:
         if 权限会话类型 == "group":
             查询权限 = await 查询群主动消息权限(会话标识, appid)
-            if 查询权限 is False:
+            if 查询权限 is not True:
                 return {"ok": False, "message": "发送失败：主动消息权限未开启"}
         elif 主动消息是否允许(会话标识, 权限会话类型) is False:
             return {"ok": False, "message": "发送失败：主动消息权限未开启"}
@@ -4405,7 +4794,9 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "图片上传失败"}
         消息体["msg_type"] = 7
-        消息体["content"] = str(内容 or "").replace(图片占位标记, "").strip()
+        # QQ 官方 msg_type=7 只接受 media.file_info；文字只能通过 Markdown
+        # 图文消息发送，不能把 content 混入富媒体请求体。
+        消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
 
     if not 图文内容 and 类型 == "markdown":
@@ -4428,10 +4819,7 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "媒体上传失败"}
         消息体["msg_type"] = 7
-        消息体["content"] = (
-            str(内容 or "").replace(图片占位标记, "").strip()
-            or str(媒体文本 or "").strip()
-        )
+        消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
     elif 类型 == "ark":
         kv = _构造ARK数据(ARK模板ID, ARK字段 or {}, ARK列表)
@@ -4478,15 +4866,13 @@ async def 发送消息(
     except Exception as exc:
         if 实际使用主动消息 and 主动消息无权限(exc):
             记录主动消息权限(会话标识, 权限会话类型, False)
-        import traceback as _traceback
-
         logger.warning(
             "消息记录发送失败：错误类型=%s，错误详情=%s",
             type(exc).__name__,
             str(exc)[:400],
         )
         错误文本 = str(exc)
-        if 被动ID and any(词 in 错误文本 for 词 in ("过期", "expired", "msg_id")):
+        if 被动ID and 被动消息ID已过期(exc):
             # msg_id 已过期：去掉后重试一次主动推送（全量消息群可成功）
             消息体.pop("msg_id", None)
             if 主动消息是否允许(会话标识, 权限会话类型) is False:
@@ -4543,7 +4929,6 @@ async def 发送消息(
             return {"ok": False, "message": "发送失败：会话或目标不存在，请刷新会话列表重试"}
         if "timeout" in 错误文本.lower() or "timed out" in 错误文本.lower():
             return {"ok": False, "message": "发送失败：请求超时，请稍后重试"}
-        _traceback.print_exc()
         return {"ok": False, "message": "发送失败，请稍后再试"}
 
     响应ID = ""
@@ -4583,24 +4968,39 @@ async def 发送消息(
     return {"ok": True, "message_id": 响应ID, "message": 记录}
 
 
-async def 撤回消息(会话标识: str, 消息ID: str, appid: str = "") -> dict[str, Any]:
+async def 撤回消息(
+    会话标识: str, 消息ID: str, appid: str = "", 类型: str = ""
+) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     消息ID = str(消息ID or "").strip()
     if not 会话标识 or not 消息ID:
         return {"ok": False, "message": "参数无效"}
-    通道 = 获取HTTP通道()
+    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     _, _http = 通道
     try:
         from botpy.http import Route
 
-        route = Route(
-            "DELETE",
-            "/v2/groups/{group_openid}/messages/{message_id}",
-            group_openid=会话标识,
-            message_id=消息ID,
-        )
+        会话类型 = str(
+            类型
+            or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
+            or "group"
+        ).strip().lower()
+        if 会话类型 == "user":
+            route = Route(
+                "DELETE",
+                "/v2/users/{user_openid}/messages/{message_id}",
+                user_openid=会话标识,
+                message_id=消息ID,
+            )
+        else:
+            route = Route(
+                "DELETE",
+                "/v2/groups/{group_openid}/messages/{message_id}",
+                group_openid=会话标识,
+                message_id=消息ID,
+            )
         await _http.request(route)
         标记撤回(会话标识, 消息ID)
         return {"ok": True, "message": "撤回成功"}
@@ -4623,7 +5023,7 @@ async def 禁言群成员(
         分钟数 = 30
     if not 会话标识 or not 成员标识:
         return {"ok": False, "message": "参数无效"}
-    通道 = 获取HTTP通道()
+    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     _, _http = 通道
@@ -4632,8 +5032,8 @@ async def 禁言群成员(
 
         from datetime import datetime, timedelta, timezone
 
-        到期 = datetime.now(timezone.utc) + timedelta(minutes=分钟数)
-        到期文本 = 到期.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        到期 = datetime.now(timezone(timedelta(hours=8))) + timedelta(minutes=分钟数)
+        到期文本 = 到期.isoformat(timespec="seconds")
         route = Route(
             "POST",
             "/v2/groups/{group_openid}/restrict_chat_setting",
@@ -4722,11 +5122,12 @@ _昵称修补已安装 = globals().get("_昵称修补已安装", False)
 
 
 def _修补botpy昵称() -> bool:
-    """botpy 解析 QQ 官方事件时丢弃了 author.username，这里包装构造器补回。
+    """补回 botpy 丢弃的 author 昵称及官方事件扩展头像字段。
 
     QQ 官方 C2C/群聊事件原始 JSON 的 author 带 username（用户昵称），但
-    botpy 1.2.1 的 C2CMessage._User / GroupMessage._User 只解析 openid。
-    在事件构造后把 username 动态补到 author 对象上，下游即可读取。
+    部分 botpy 版本的 C2CMessage._User / GroupMessage._User 只解析 openid。
+    在事件构造后把 username 和可能存在的 avatar 动态补到 author 对象上，
+    下游即可读取；标准事件没有头像字段时仍保持为空。
     """
     global _昵称修补已安装
     if _昵称修补已安装:
@@ -4735,8 +5136,31 @@ def _修补botpy昵称() -> bool:
         import botpy.message as _botpy消息模块
     except Exception:
         return False
-    for 类名 in ("C2CMessage", "GroupMessage"):
-        消息类 = getattr(_botpy消息模块, 类名, None)
+    消息模块列表 = [_botpy消息模块]
+    try:
+        from astrbot.core.platform.sources.qqofficial import (
+            qqofficial_platform_adapter as _官方适配器模块,
+        )
+
+        消息模块列表.append(_官方适配器模块)
+    except Exception:
+        pass
+    消息类列表: list[type[Any]] = []
+    已处理类型: set[type[Any]] = set()
+    for 消息模块 in 消息模块列表:
+        for 类名 in (
+            "C2CMessage",
+            "GroupMessage",
+            "PatchedC2CMessage",
+            "PatchedGroupMessage",
+            "PatchedDirectMessage",
+        ):
+            消息类 = getattr(消息模块, 类名, None)
+            if not isinstance(消息类, type) or 消息类 in 已处理类型:
+                continue
+            已处理类型.add(消息类)
+            消息类列表.append(消息类)
+    for 消息类 in 消息类列表:
         if 消息类 is None:
             continue
         原初始化 = getattr(消息类, "__init__", None)
@@ -4757,10 +5181,29 @@ def _修补botpy昵称() -> bool:
                     return
                 作者 = getattr(self, "author", None)
                 作者数据 = 数据.get("author") or {}
+                成员数据 = 数据.get("member") or {}
+                资料对象列表 = [
+                    项
+                    for 项 in (
+                        作者数据,
+                        成员数据,
+                        成员数据.get("user") if isinstance(成员数据, dict) else None,
+                    )
+                    if isinstance(项, dict)
+                ]
                 if isinstance(作者数据, dict):
                     昵称 = str(作者数据.get("username") or "").strip()
                     if 昵称 and 作者 is not None:
                         作者.username = 昵称
+                if 作者 is not None:
+                    for 资料 in 资料对象列表:
+                        for 字段 in ("avatar", "avatar_url", "avatarUrl", "icon"):
+                            头像 = 资料.get(字段)
+                            if 头像 not in (None, ""):
+                                try:
+                                    setattr(作者, 字段, str(头像).strip())
+                                except Exception:
+                                    pass
                 原始提及 = 数据.get("mentions") or []
                 已解析提及 = getattr(self, "mentions", None) or []
                 if isinstance(原始提及, dict):
@@ -5129,7 +5572,7 @@ def _包装事件发送(发送方法: Any) -> Any:
                     消息ID=_提取发送响应消息ID(结果),
                     自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
-                    来源="bot_send",
+                    来源="bot_event",
                     发送时间=_提取发送响应时间(结果),
                 )
         except Exception as exc:
@@ -5190,7 +5633,7 @@ def _包装发送方法(发送方法: Any) -> Any:
                     消息ID=消息ID,
                     自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
-                    来源="bot_send",
+                    来源="bot_session",
                 )
         except Exception as exc:
             logger.warning("消息记录主动发送成功后记录失败：错误类型=%s", type(exc).__name__)

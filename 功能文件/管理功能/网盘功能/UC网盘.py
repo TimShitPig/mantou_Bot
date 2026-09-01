@@ -341,9 +341,11 @@ class UC网盘客户端:
             "x-oss-user-agent": OSS用户代理,
             "content-type": 媒体类型,
         }
-        OSS响应头 = await self.请求OSS(
-            "PUT", OSS地址, data=路径.read_bytes(), headers=OSS头
-        )
+        # 单分片直接把文件句柄交给 aiohttp，避免把整本小说再次复制到内存。
+        with 路径.open("rb") as 文件句柄:
+            OSS响应头 = await self.请求OSS(
+                "PUT", OSS地址, data=文件句柄, headers=OSS头
+            )
         响应ETag = 提取OSS响应ETag(OSS响应头)
         ETag = 响应ETag or 内容MD5
         if not 响应ETag:
@@ -652,7 +654,7 @@ class UC网盘客户端:
         raise RuntimeError(f"UC网盘接口重试后仍无返回：{路径}")
 
     async def 请求OSS(
-        self, 方法: str, 地址: str, data: bytes, headers: dict[str, str]
+        self, 方法: str, 地址: str, data: Any, headers: dict[str, str]
     ) -> dict[str, str]:
         会话 = self.获取会话()
         async with 会话.request(

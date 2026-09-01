@@ -1086,8 +1086,9 @@ async def 发送Markdown键盘消息(
                 查询权限 = await 查询群主动消息权限(目标会话)
             except Exception as 查询异常:
                 logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
-        if 查询权限 is False or (
-            查询权限 is None and 主动消息是否允许(目标会话, 目标类型) is False
+        if (
+            (目标类型 == "group" and 查询权限 is not True)
+            or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
         ):
             logger.debug("QQ官方主动消息已跳过：目标未开启主动消息权限")
             return False
@@ -1121,7 +1122,14 @@ async def 发送Markdown键盘消息(
     except Exception as e:
         if 实际主动发送 and 目标会话 and 主动消息无权限(e):
             记录主动消息权限(目标会话, 目标类型, False)
-        if not 消息ID or 主动发送:
+        错误文本 = str(e or "").lower()
+        被动消息已过期 = (
+            any(关键词 in 错误文本 for 关键词 in ("过期", "expired"))
+            and any(关键词 in 错误文本 for 关键词 in ("msg_id", "msgid", "消息id", "消息 id"))
+        )
+        # 只有官方明确指出被动 msg_id 失效时才改用主动发送。
+        # 网络超时/连接异常不能确认首个 POST 是否已成功，盲目重发会造成两条消息。
+        if not 消息ID or 主动发送 or not 被动消息已过期:
             logger.warning(f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}")
             return False
 
@@ -1136,8 +1144,9 @@ async def 发送Markdown键盘消息(
                     查询权限 = await 查询群主动消息权限(目标会话)
                 except Exception as 查询异常:
                     logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
-            if 查询权限 is False or (
-                查询权限 is None and 主动消息是否允许(目标会话, 目标类型) is False
+            if (
+                (目标类型 == "group" and 查询权限 is not True)
+                or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
             ):
                 logger.debug("QQ官方主动消息已跳过：目标未开启主动消息权限")
                 return False

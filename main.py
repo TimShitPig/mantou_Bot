@@ -61,7 +61,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.0"
+插件版本 = "6.1.1"
 
 
 
@@ -128,7 +128,10 @@ class MyPlugin(Star):
 
         async def _输出文本回复(文本):
             """QQ 官方群聊统一使用 Markdown 并提及发起人。"""
-            if await 帮助功能.发送QQ官方提及Markdown(event, str(文本)):
+            if 权限工具.是QQ官方机器人(event):
+                # 官方 POST 超时不能证明服务端没有收到消息；不再用
+                # plain_result 立即重发，避免一次请求显示两条消息。
+                await 帮助功能.发送QQ官方提及Markdown(event, str(文本))
                 return
             yield event.plain_result(文本)
 
@@ -144,10 +147,7 @@ class MyPlugin(Star):
                 键盘 = 找书结果.get("keyboard")
                 纯文本 = str(找书结果.get("text") or md文本)
                 if md文本 and 权限工具.是QQ官方机器人(event):
-                    发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                    if not 发送成功:
-                        async for 输出内容 in _输出文本回复(纯文本):
-                            yield 输出内容
+                    await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                 else:
                     async for 输出内容 in _输出文本回复(纯文本):
                         yield 输出内容
@@ -191,10 +191,7 @@ class MyPlugin(Star):
             md文本, 键盘 = 欢迎回调内容
             logger.info("QQ官方群欢迎回调分发")
             if 权限工具.是QQ官方机器人(event):
-                发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                if not 发送成功:
-                    async for 输出内容 in _输出文本回复(md文本):
-                        yield 输出内容
+                await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
             else:
                 async for 输出内容 in _输出文本回复(md文本):
                     yield 输出内容
@@ -210,12 +207,7 @@ class MyPlugin(Star):
                 )
                 if md文本 is not None:
                     if 权限工具.是QQ官方机器人(event):
-                        发送成功 = await 帮助功能.发送Markdown键盘消息(
-                            event, md文本, 键盘
-                        )
-                        if not 发送成功:
-                            async for 输出内容 in _输出文本回复(md文本):
-                                yield 输出内容
+                        await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                     else:
                         async for 输出内容 in _输出文本回复(md文本):
                             yield 输出内容
@@ -272,10 +264,7 @@ class MyPlugin(Star):
                     event, 命令文本, self.config
                 )
                 if md文本 is not None:
-                    发送成功 = await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
-                    if not 发送成功:
-                        async for 输出内容 in _输出文本回复(md文本):
-                            yield 输出内容
+                    await 帮助功能.发送Markdown键盘消息(event, md文本, 键盘)
                     event.stop_event()
                     return
             回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
@@ -581,6 +570,7 @@ class MyPlugin(Star):
         self._小说缓存清理任务 = None
         await 小说下载任务.停止小说下载任务()
         QQ阅读功能.关闭QQ阅读签名执行器()
+        得间小说功能.关闭得间资源()
         await 消息记录.停止消息记录()
         塔读小说功能.关闭塔读资源()
         await 小说网盘功能.停止网盘后台任务()
