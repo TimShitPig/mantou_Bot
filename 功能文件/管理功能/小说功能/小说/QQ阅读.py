@@ -2832,6 +2832,8 @@ QQ阅读登录态状态键 = "login_state"
 下载失败提示 = "下载失败 请重试"
 文件发送失败提示 = "文件发送失败，请稍后再试"
 章节单独付费提示 = "没有可下载的免费章节"
+QQ阅读事件去重缓存: dict[str, float] = globals().get("QQ阅读事件去重缓存") or {}
+QQ阅读事件去重有效期秒 = 5 * 60
 
 
 def _是QQ阅读域名(hostname: str) -> bool:
@@ -2926,6 +2928,88 @@ def 提取QQ阅读事件链接(event: Any) -> str | None:
             if link is not None:
                 return link
     return None
+
+
+def _提取QQ阅读事件消息ID(event: Any) -> str:
+    """读取 QQ 官方事件消息 ID，合并全量事件与 @事件的重复投递。"""
+    候选对象 = [
+        _读取QQ阅读字段(event, "message_obj"),
+        _读取QQ阅读字段(event, "raw_message"),
+        _读取QQ阅读字段(event, "message"),
+        event,
+    ]
+    已访问: set[int] = set()
+    for 对象 in 候选对象:
+        if 对象 is None:
+            continue
+        if isinstance(对象, (dict, list, tuple)) or not isinstance(
+            对象, (str, bytes, int, float, bool)
+        ):
+            标识 = id(对象)
+            if 标识 in 已访问:
+                continue
+            已访问.add(标识)
+        字段列表 = ["message_id", "msg_id", "messageId"]
+        if isinstance(对象, dict):
+            字段列表.append("id")
+        for 字段名 in 字段列表:
+            值 = _读取QQ阅读字段(对象, 字段名)
+            if isinstance(值, (dict, list, tuple, set)):
+                continue
+            文本 = str(值 or "").strip()
+            if 文本 and len(文本) >= 8 and len(文本) <= 512:
+                return 文本
+    return ""
+
+
+def _QQ阅读事件是否重复(event: Any, link: str) -> bool:
+    消息ID = _提取QQ阅读事件消息ID(event)
+    if 消息ID:
+        键 = f"id:{消息ID}"
+    else:
+        候选对象 = [
+            event,
+            _读取QQ阅读字段(event, "message_obj"),
+            _读取QQ阅读字段(event, "raw_message"),
+            _读取QQ阅读字段(event, "message"),
+        ]
+        发送者 = ""
+        时间戳 = ""
+        for 对象 in 候选对象:
+            if not 发送者:
+                发送者 = str(
+                    _读取QQ阅读字段(对象, "sender_id")
+                    or _读取QQ阅读字段(对象, "user_id")
+                    or _读取QQ阅读字段(对象, "group_member_openid")
+                    or ""
+                ).strip()
+            if not 时间戳:
+                时间戳 = str(
+                    _读取QQ阅读字段(对象, "timestamp")
+                    or _读取QQ阅读字段(对象, "time")
+                    or ""
+                ).strip()
+            if isinstance(对象, dict):
+                作者 = 对象.get("author") or 对象.get("sender")
+                if isinstance(作者, dict):
+                    发送者 = 发送者 or str(
+                        作者.get("member_openid")
+                        or 作者.get("user_openid")
+                        or 作者.get("id")
+                        or ""
+                    ).strip()
+        if not (发送者 and 时间戳 and link):
+            return False
+        键 = f"fallback:{发送者}:{时间戳}:{link}"
+    现在 = time.monotonic()
+    for 旧键, 到期 in list(QQ阅读事件去重缓存.items()):
+        if float(到期 or 0) <= 现在:
+            QQ阅读事件去重缓存.pop(旧键, None)
+    if 键 in QQ阅读事件去重缓存:
+        logger.debug("QQ阅读重复事件已跳过：消息ID存在=%s", bool(消息ID))
+        return True
+    QQ阅读事件去重缓存[键] = 现在 + QQ阅读事件去重有效期秒
+    return False
 
 
 def 识别QQ阅读Cookie文本(文本: Any) -> bool:
@@ -3408,11 +3492,18 @@ def 获取QQ阅读书籍付费类型(
     has_paid_chapter = any(
         _安全整数(item.get("chapter_fee")) > 0 for item in catalog
     )
+    # QQ 阅读的 free 字段区分书籍权益：1=整本免费，2=VIP 书，0=章节单独付费。
+    # vip_free 只是“会员可免费阅读”的展示标记，不能单独覆盖 free=0。
+    free_state = _安全整数(details.get("free"), -1)
+    if free_state == 1 and not has_paid_chapter and not has_free_limit:
+        return "free"
+    if free_state == 2:
+        return "vip"
+    if free_state == 0 and (has_paid_chapter or has_free_limit):
+        return "single"
     if not has_paid_chapter and not has_free_limit:
         return "free"
-    if _是真值(details.get("vip_free")):
-        return "vip"
-    return "single"
+    return "vip" if _是真值(details.get("vip_free")) else "single"
 
 
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
@@ -4366,6 +4457,8 @@ def 获取QQ阅读回复流(
 ) -> AsyncIterator[Any] | None:
     link = 提取QQ阅读链接(命令文本) or 提取QQ阅读事件链接(event)
     if link is None:
+        return None
+    if _QQ阅读事件是否重复(event, link):
         return None
     return 生成下载回复流(event, link, 配置)
 
