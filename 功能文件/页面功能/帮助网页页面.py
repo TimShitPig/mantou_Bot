@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.0</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.4</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -116,10 +116,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-search input { flex:1 1 0; min-width:0; height:30px; padding:0 10px; border:1px solid transparent; border-radius:15px; background:#f2f3f5; color:#333; font-size:12px; outline:none; transition:all .15s ease; }
             .msg-search input:focus { border-color:#12b7f5; background:#fff; }
             .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
-            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; }
+            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; scrollbar-gutter:stable; }
             .msg-chat-divider { margin:6px 6px 2px; padding:7px 4px 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
             .msg-chat-divider:first-child { margin-top:0; border-top:0; }
-            .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
+            .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; content-visibility:auto; contain-intrinsic-size:56px; }
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
             .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
@@ -153,9 +153,14 @@ from .帮助网页脚本 import 控制台脚本
             .msg-btn:hover { border-color:#12b7f5; color:#12b7f5; }
             .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
             .msg-btn.primary:hover { background:#0ea5e0; }
-            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; }
+            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; overscroll-behavior:contain; scrollbar-gutter:stable; }
+            .msg-loading { display:grid; gap:12px; padding:18px 8px; }
+            .msg-loading span { display:block; width:68%; height:44px; border-radius:10px; background:#e7ebf0; animation:msg-loading-pulse 1.15s ease-in-out infinite alternate; }
+            .msg-loading span:nth-child(2) { width:54%; margin-left:18%; animation-delay:.18s; }
+            .msg-loading span:nth-child(3) { width:62%; animation-delay:.36s; }
+            @keyframes msg-loading-pulse { from { opacity:.48; transform:translateY(1px); } to { opacity:1; transform:translateY(0); } }
             .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
-            .msg-row { display:flex; gap:9px; margin-bottom:14px; }
+            .msg-row { display:flex; gap:9px; margin-bottom:14px; content-visibility:auto; contain-intrinsic-size:96px; }
             .msg-row.self { flex-direction:row-reverse; }
             .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
             .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
@@ -474,6 +479,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#3f6ea8; background:#16222e; color:#9db4c9; }
               :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
                :root[data-theme="dark"] .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
+               :root[data-theme="dark"] .msg-loading span { background:#2a3040; }
                :root[data-theme="dark"] .msg-image-link.is-broken .msg-media-ph { background:#1a1e2a; color:#9aa0b5; }
               :root[data-theme="dark"] .msg-file-card { background:#202c3d; color:#dce8f6; }
               :root[data-theme="dark"] .msg-file-card:hover { background:#263a52; }
@@ -550,7 +556,10 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-panel-toggle:hover,:root[data-theme="dark"] .msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#1d3850; color:#42c6ff; }
               :root[data-theme="dark"] .msg-mobile-back { color:#b9c0d0; }
               :root[data-theme="dark"] .msg-mobile-back:hover,:root[data-theme="dark"] .msg-mobile-back:focus-visible { background:#1d3850; color:#42c6ff; }
-           </style>
+              @media (prefers-reduced-motion: reduce) {
+                *, *::before, *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:0.01ms !important; }
+              }
+            </style>
           <div class="msg-shell" id="msg-shell">
             <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
               <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
@@ -663,15 +672,19 @@ from .帮助网页脚本 import 控制台脚本
 </body>
 </html>
 """
+_控制台页面缓存: str | None = None
 
 
 def 渲染控制台页面() -> str:
-    return (
-        页面头部前缀
-        + 控制台样式
-        + 页面头部后缀
-        + 页面主体
-        + 脚本标签前缀
-        + 控制台脚本
-        + 脚本标签后缀
-    )
+    global _控制台页面缓存
+    if _控制台页面缓存 is None:
+        _控制台页面缓存 = (
+            页面头部前缀
+            + 控制台样式
+            + 页面头部后缀
+            + 页面主体
+            + 脚本标签前缀
+            + 控制台脚本
+            + 脚本标签后缀
+        )
+    return _控制台页面缓存

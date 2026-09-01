@@ -11,6 +11,7 @@ import ipaddress
 import mimetypes
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import secrets
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-from aiohttp import ClientError, ClientSession, ClientTimeout, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector, web
 
 try:
     from astrbot.api import logger
@@ -31,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.2"
+控制台版本 = "6.1.4"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -81,6 +82,7 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 消息列表后台刷新: set[tuple[str, str, int, int]] = globals().get("消息列表后台刷新") or set()
 消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
 实时连接任务: set[asyncio.Task[Any]] = globals().get("实时连接任务") or set()
+_媒体代理会话: ClientSession | None = globals().get("_媒体代理会话")
 
 
 def _获取控制台执行器() -> ThreadPoolExecutor:
@@ -110,6 +112,30 @@ def 关闭控制台执行器() -> None:
         _控制台执行器 = None
     if 执行器 is not None:
         执行器.shutdown(wait=False, cancel_futures=True)
+
+
+async def 获取媒体代理会话() -> ClientSession:
+    """复用媒体代理连接，避免每张图片重复建立 TCP/TLS 会话。"""
+    global _媒体代理会话
+    if _媒体代理会话 is None or _媒体代理会话.closed:
+        _媒体代理会话 = ClientSession(
+            connector=TCPConnector(
+                limit=32,
+                limit_per_host=8,
+                ttl_dns_cache=300,
+                enable_cleanup_closed=True,
+            ),
+            trust_env=False,
+        )
+    return _媒体代理会话
+
+
+async def 关闭媒体代理会话() -> None:
+    global _媒体代理会话
+    会话 = _媒体代理会话
+    _媒体代理会话 = None
+    if 会话 is not None and not 会话.closed:
+        await 会话.close()
 
 
 async def 停止实时连接() -> None:
@@ -847,6 +873,60 @@ async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:
     return 数据 if isinstance(数据, dict) else None
 
 
+async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any] | None, Path | None]:
+    """读取 JSON 或 multipart 消息请求；大文件落临时文件，避免 Base64 内存膨胀。"""
+    if not str(request.content_type or '').lower().startswith('multipart/'):
+        return await _读取请求JSON(request), None
+    数据: dict[str, Any] = {}
+    临时路径: Path | None = None
+    try:
+        读取器 = await request.multipart()
+        async for 部分 in 读取器:
+            名称 = str(部分.name or '').strip()
+            if not 名称:
+                continue
+            文件名 = str(部分.filename or '').strip()
+            if 文件名:
+                if 临时路径 is not None:
+                    while await 部分.read_chunk(size=1024 * 1024):
+                        pass
+                    continue
+                后缀 = re.sub(r'[^A-Za-z0-9.]', '', Path(文件名).suffix.lower())[:12]
+                fd, 路径文本 = tempfile.mkstemp(prefix='mantou-web-', suffix=后缀)
+                临时路径 = Path(路径文本)
+                已读 = 0
+                try:
+                    with os.fdopen(fd, 'wb') as 文件句柄:
+                        while True:
+                            数据块 = await 部分.read_chunk(size=1024 * 1024)
+                            if not 数据块:
+                                break
+                            已读 += len(数据块)
+                            if 已读 > 媒体代理最大字节数:
+                                raise ValueError('媒体文件过大')
+                            文件句柄.write(数据块)
+                except Exception:
+                    临时路径.unlink(missing_ok=True)
+                    临时路径 = None
+                    raise
+                数据['media'] = str(临时路径)
+                数据['media_name'] = 文件名[:160]
+                continue
+            数据[名称] = await 部分.text()
+        for 名称 in ('card', 'ark_fields'):
+            值 = 数据.get(名称)
+            if isinstance(值, str) and 值.strip().startswith(('{', '[')):
+                try:
+                    数据[名称] = json.loads(值)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+        return 数据, 临时路径
+    except Exception:
+        if 临时路径 is not None:
+            临时路径.unlink(missing_ok=True)
+        raise
+
+
 def _允许媒体地址(地址: Any) -> bool:
     """只允许 QQ 媒体域名进入代理，避免把控制台变成开放 URL 转发器。"""
     try:
@@ -912,16 +992,17 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     文件名 = _媒体文件名(request.query.get("name"))
     try:
         超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
-        async with ClientSession(timeout=超时, trust_env=False) as 客户端:
-            async with 客户端.get(
-                地址,
-                allow_redirects=True,
-                max_redirects=3,
-                headers={
-                    "Accept": "image/*,application/octet-stream,*/*",
-                    "User-Agent": "MantouBot/console-media",
-                },
-            ) as 上游:
+        客户端 = await 获取媒体代理会话()
+        async with 客户端.get(
+            地址,
+            allow_redirects=True,
+            max_redirects=3,
+            timeout=超时,
+            headers={
+                "Accept": "image/*,application/octet-stream,*/*",
+                "User-Agent": "MantouBot/console-media",
+            },
+        ) as 上游:
                 最终地址 = str(getattr(上游, "url", 地址) or 地址)
                 if not _允许媒体地址(最终地址):
                     return web.Response(status=502, text="媒体地址不可用")
@@ -1814,7 +1895,7 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
             消息列表后台刷新.add(缓存键)
             asyncio.create_task(_后台刷新消息列表(缓存键, 过滤, 搜索, 页码, 每页, 消息列表缓存版本))
         return web.json_response(
-            {"ok": True, **copy.deepcopy(缓存结果)},
+            {"ok": True, **缓存结果},
             headers={"Cache-Control": "no-store"},
         )
     try:
@@ -1822,7 +1903,7 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         async with 锁:
             缓存项 = 消息列表缓存.get(缓存键)
             if 缓存项:
-                结果 = copy.deepcopy(缓存项[1])
+                结果 = 缓存项[1]
             else:
                 缓存版本 = 消息列表缓存版本
                 结果 = await _构建消息列表(过滤, 搜索, 页码, 每页)
@@ -2001,16 +2082,17 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
 async def _处理消息发送(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
-    数据 = await _读取请求JSON(request)
-    if not 数据:
-        return _控制台错误(400, "请求参数无效")
-    会话标识 = str(数据.get("chat_id") or "").strip()
-    会话类型 = str(数据.get("chat_type") or "")
-    消息类型 = str(数据.get("msg_type") or "text")
-    内容 = str(数据.get("content") or "")
-    if not 会话标识 or len(会话标识) > 200:
-        return _控制台错误(400, "会话参数无效")
+    临时媒体路径: Path | None = None
     try:
+        数据, 临时媒体路径 = await _读取消息发送请求(request)
+        if not 数据:
+            return _控制台错误(400, "请求参数无效")
+        会话标识 = str(数据.get("chat_id") or "").strip()
+        会话类型 = str(数据.get("chat_type") or "")
+        消息类型 = str(数据.get("msg_type") or "text")
+        内容 = str(数据.get("content") or "")
+        if not 会话标识 or len(会话标识) > 200:
+            return _控制台错误(400, "会话参数无效")
         from 功能文件.管理功能.基础功能 import 消息记录
 
         结果 = await 消息记录.发送消息(
@@ -2049,6 +2131,12 @@ async def _处理消息发送(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台消息发送失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(409, "发送失败，请稍后再试")
+    finally:
+        if 临时媒体路径 is not None:
+            try:
+                临时媒体路径.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("帮助控制台临时媒体清理失败：错误类型=OSError")
 
 
 async def _处理消息撤回(request: web.Request) -> web.Response:

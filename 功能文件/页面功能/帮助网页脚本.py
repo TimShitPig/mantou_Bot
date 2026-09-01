@@ -44,7 +44,11 @@
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
       const api = async (path, options = {}) => {
-        const response = await fetch(`/api/${path}`, { cache:'no-store', credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...options });
+        const requestOptions = { cache:'no-store', credentials:'same-origin', ...options };
+        const requestHeaders = {...(options.headers || {})};
+        if (!(requestOptions.body instanceof FormData) && !Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-type')) requestHeaders['Content-Type'] = 'application/json';
+        requestOptions.headers = requestHeaders;
+        const response = await fetch(`/api/${path}`, requestOptions);
         const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
         if (!response.ok || !data.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; }
         return data;
@@ -272,9 +276,9 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
-      const composerHasMedia = () => Boolean(String(msgState.mediaData || '').trim() && Number(msgState.mediaType || 0));
+      const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
       const getComposerEditor = () => $('msg-editor');
       const syncComposerImageState = () => {
@@ -511,7 +515,7 @@
         if (!key || !data) return;
         msgState.historyCache.delete(key);
         msgState.historyCache.set(key, data);
-        while (msgState.historyCache.size > 12) {
+         while (msgState.historyCache.size > 6) {
           const oldest = msgState.historyCache.keys().next().value;
           if (oldest === undefined) break;
           msgState.historyCache.delete(oldest);
@@ -597,7 +601,7 @@
         // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
         return aid ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
-      const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
+      const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
       const avatarHtml = (url, letter) => {
         if (!url) return esc(String(letter || '?').slice(0, 1));
         return `<span class="avatar-letter">${esc(String(letter || '?').slice(0, 1))}</span>` + avatarImg(url, letter);
@@ -671,6 +675,7 @@
         && (String(chat?.membership_status || '').toLowerCase() === 'removed' || chat?.in_group === false);
       const mergeMsgRealtimeChats = (serverChats) => {
         const byId = new Map((serverChats || []).map((chat) => [String(chat.chat_id || ''), {...chat}]));
+        const now = Math.floor(Date.now() / 1000);
         msgState.realtimeChats.forEach((overlay, chatId) => {
           const current = byId.get(chatId);
           if (!current) { if (msgChatMatchesView(overlay)) byId.set(chatId, {...overlay}); return; }
@@ -691,6 +696,16 @@
             is_admin:adminKnown,
           });
         });
+        // 服务器刷新失败时临时会话不会被确认，定期淘汰过期覆盖项，
+        // 避免长时间打开控制台后 Map 无限增长。
+        if (msgState.realtimeChats.size > 256) {
+          msgState.realtimeChats.forEach((overlay, chatId) => {
+            if (msgState.realtimeChats.size <= 256) return;
+            if (chatId !== String(msgState.chatId || '') && now - Number(overlay?.last_ts || 0) > 600) {
+              msgState.realtimeChats.delete(chatId);
+            }
+          });
+        }
         return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
           Number(msgChatIsRemoved(left)) - Number(msgChatIsRemoved(right)) ||
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
@@ -836,7 +851,28 @@
         });
         saveLocalAdminGroups(localAdmins);
         msgState.chats = chats;
+        const knownChatIds = new Set(chats.map((chat) => String(chat.chat_id || '')).filter(Boolean));
+        [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
+          .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
+        const chatRenderSignature = chats.map((chat) => [
+          chat.chat_id,
+          chat.chat_type,
+          chat.nickname || chat.remark || '',
+          chat.last_content || '',
+          chat.last_ts,
+          chat.unread,
+          chat.msg_count,
+          chat.pinned ? 1 : 0,
+          chat.is_admin ? 1 : 0,
+          chat.membership_status,
+          chat.avatar || chat.avatar_url ? 1 : 0,
+        ].join(':')).join('|');
+        if (msgState.chatRenderSignature === chatRenderSignature) {
+          scheduleAutoScanAdminGroups(10000);
+          return;
+        }
+        msgState.chatRenderSignature = chatRenderSignature;
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; return; }
         let removedSectionShown = false;
         node.innerHTML = chats.map((chat) => {
@@ -862,8 +898,11 @@
           </button>`;
         }).join('');
         scheduleAutoScanAdminGroups();
-        node.querySelectorAll('[data-msg-chat]').forEach((el) => {
-          el.addEventListener('contextmenu', (e) => {
+        if (node.dataset.msgDelegated !== '1') {
+          node.dataset.msgDelegated = '1';
+          node.addEventListener('contextmenu', (e) => {
+            const el = e.target.closest?.('[data-msg-chat]');
+            if (!el || !node.contains(el)) return;
             e.preventDefault();
             e.stopPropagation();
             const chatId = el.dataset.msgChat; const chatType = el.dataset.msgType; const pinned = el.dataset.msgPinned === '1';
@@ -875,7 +914,9 @@
             if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
-          el.addEventListener('click', () => {
+          node.addEventListener('click', (e) => {
+            const el = e.target.closest?.('[data-msg-chat]');
+            if (!el || !node.contains(el)) return;
             if (msgState.multi) exitMultiMode();
             const chatId = String(el.dataset.msgChat || '');
             const chatType = String(el.dataset.msgType || 'group');
@@ -888,7 +929,7 @@
             scheduleMsgHistoryLoad(chatId);
             markMsgRead(chatId, true);
           });
-        });
+        }
       };
       const selectMsgChat = (chat, selectedNode = null) => {
         const chatId = String(chat?.chat_id || '').trim();
@@ -942,7 +983,7 @@
         $('msg-composer').hidden = msgState.chatRemoved;
         const body = $('msg-body');
         if (body) {
-          body.innerHTML = '<div class="msg-empty msg-loading">正在加载消息...</div>';
+          body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
           body.scrollTop = 0;
           const cachedHistory = msgState.historyCache.get(`${chatType}|${chatId}`);
           if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
@@ -1078,7 +1119,10 @@
         try { source = new EventSource('/api/message/events'); }
         catch (_) { scheduleMsgRealtimeReconnect(); return; }
         msgState.eventSource = source;
-        msgState.eventTransport = 'sse';
+        msgState.eventTransport = '';
+        source.onopen = () => {
+          if (msgState.eventSource === source) msgState.eventTransport = 'sse';
+        };
         source.onmessage = (event) => handleMsgRealtimeData(event.data);
         source.onerror = () => {
           if (msgState.eventSource !== source) return;
@@ -1096,7 +1140,7 @@
         try { socket = new WebSocket(`${wsProtocol}//${location.host}/api/message/ws`); }
         catch (_) { connectMsgSse(); return; }
         msgState.eventSocket = socket;
-        msgState.eventTransport = 'websocket';
+        msgState.eventTransport = '';
         socket.onopen = () => { if (msgState.eventSocket === socket) msgState.eventTransport = 'websocket'; };
         socket.onmessage = (event) => handleMsgRealtimeData(event.data);
         socket.onerror = () => {
@@ -1379,17 +1423,26 @@
       const msgMessageKey = (message) => normalizeMsgIdentity(
         message?.message_id ?? message?.messageId ?? message?.id,
       );
-      const msgMessageIdentityKeys = (message) => {
+       const msgIdentityHash = (value) => {
+         let hash = 2166136261;
+         const text = String(value || '');
+         for (let index = 0; index < text.length; index += 1) {
+           hash ^= text.charCodeAt(index);
+           hash = Math.imul(hash, 16777619);
+         }
+         return (hash >>> 0).toString(16).padStart(8, '0');
+       };
+       const msgMessageIdentityKeys = (message) => {
         if (!message || typeof message !== 'object') return [];
         const keys = [];
         const primary = msgMessageKey(message);
         if (primary) keys.push(`id:${primary}`);
         // 同一官方网关负载可能经过全量/At 两条回调路径；原始负载相同
         // 时视为同一条事件，避免不同适配器 ID 造成重复显示。
-        if (String(message.source || '').trim().toLowerCase() === 'qq_official') {
-          const raw = String(message.raw_message || '').trim();
-          if (raw) keys.push(`raw:${raw}`);
-        }
+         if (String(message.source || '').trim().toLowerCase() === 'qq_official') {
+           const raw = String(message.raw_message || '').trim();
+           if (raw) keys.push(`raw:${msgIdentityHash(raw)}`);
+         }
         return keys;
       };
       const msgMessagesMatch = (left, right) => {
@@ -1448,8 +1501,9 @@
         const imageBefore = imageParts.length > 1 ? imageParts[0].trim() : String(payload.image_before || '').trim();
         const imageAfter = imageParts.length > 1 ? imageParts.slice(1).join(composerImageMarker).trim() : String(payload.image_after || '').trim();
         const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
-        const mediaData = String(payload.media_data || '').trim();
-        const mediaType = Number(payload.media_file_type || 4) === 2 ? '视频' : '文件';
+         const mediaData = String(payload.media_data || '').trim();
+         const mediaFile = typeof File !== 'undefined' && payload.media_file instanceof File ? payload.media_file : null;
+         const mediaType = Number(payload.media_file_type || 4) === 2 ? '视频' : '文件';
         const mediaMime = String(payload.media_mime || '').trim();
         const mediaName = String(payload.media_name || '').trim() || '附件文件';
         const message = {
@@ -1466,7 +1520,7 @@
             ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content, before_text:imageBefore, after_text:imageAfter}
             : (imageUrl
               ? {type:'图片', content_type:'image/*', src:imageUrl, text:content, before_text:imageBefore, after_text:imageAfter}
-              : (mediaData ? {type:mediaType, content_type:mediaMime, name:mediaName, optimistic_data:mediaData, text:content} : null)),
+              : ((mediaData || mediaFile) ? {type:mediaType, content_type:mediaMime, name:mediaName, optimistic_data:mediaData, text:content} : null)),
         };
         const entry = {
           id,
@@ -1498,6 +1552,17 @@
           {previousTop, previousHeight, toBottom:followLatest},
         );
       };
+      const buildSendBody = (payload) => {
+        const file = payload?.media_file;
+        if (!(file && typeof File !== 'undefined' && file instanceof File)) return JSON.stringify(payload || {});
+        const form = new FormData();
+        Object.entries(payload || {}).forEach(([key, value]) => {
+          if (key === 'media_file' || key === 'media_data' || value == null || value === '') return;
+          form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+        });
+        form.append('media_file', file, String(payload.media_name || file.name || 'attachment'));
+        return form;
+      };
       const resetComposer = () => {
         const editor = getComposerEditor();
         if (editor) editor.replaceChildren();
@@ -1514,7 +1579,7 @@
       };
       const finishOptimisticSend = async (entry) => {
         try {
-          const result = await api('message/send', {method:'POST', body:JSON.stringify(entry.payload)});
+          const result = await api('message/send', {method:'POST', body:buildSendBody(entry.payload)});
           const remoteId = String(result?.message_id || result?.message?.message_id || result?.message?.id || '').trim();
           entry.status = 'sent';
           entry.remoteId = remoteId;
@@ -1665,9 +1730,10 @@
         if (inlineSource) insertComposerImage(inlineSource);
         getComposerEditor()?.focus();
       };
-      const setComposerMedia = (data, name, fileType, mime = '') => {
+      const setComposerMedia = (data, name, fileType, mime = '', file = null) => {
         clearMsgImage();
         msgState.mediaData = String(data || '');
+        msgState.mediaFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
         msgState.mediaName = String(name || '附件文件').trim() || '附件文件';
         msgState.mediaType = Number(fileType || 4) === 2 ? 2 : 4;
         msgState.mediaMime = String(mime || '').trim();
@@ -1682,6 +1748,7 @@
       };
       const clearComposerMedia = () => {
         msgState.mediaData = null;
+        msgState.mediaFile = null;
         msgState.mediaName = '';
         msgState.mediaType = 0;
         msgState.mediaMime = '';
@@ -1700,13 +1767,8 @@
         if (Number(file.size || 0) <= 0) return toast('文件为空，无法发送');
         if (Number(file.size || 0) > maxBytes) return toast('文件超过 200 MB 限制');
         if (Number(fileType) === 2 && String(file.type || '').toLowerCase() !== 'video/mp4' && !/\.mp4$/i.test(String(file.name || ''))) return toast('视频只支持 MP4 格式');
-        const reader = new FileReader();
-        reader.onload = () => {
-          setComposerMedia(String(reader.result || ''), file.name, Number(fileType) === 2 ? 2 : 4, file.type);
-          toast(`${Number(fileType) === 2 ? '视频' : '文件'}已添加，可继续输入说明后发送`);
-        };
-        reader.onerror = () => toast('文件读取失败，请重试');
-        reader.readAsDataURL(file);
+        setComposerMedia('', file.name, Number(fileType) === 2 ? 2 : 4, file.type, file);
+        toast(`${Number(fileType) === 2 ? '视频' : '文件'}已添加，可继续输入说明后发送`);
       };
       const copyImageToClipboard = async (source, image) => {
         try {
@@ -2280,6 +2342,7 @@
         if (previousAbort) previousAbort.abort();
         const controller = new AbortController();
         msgState[older ? 'historyOlderAbort' : 'historyAbort'] = controller;
+        const historyTimeoutId = setTimeout(() => controller.abort(), 18000);
         const requestChatId = msgState.chatId;
         const requestChatType = msgState.chatType;
         const requestIsCurrent = () => requestId === Number(msgState[older ? 'historyOlderRequest' : 'historyRequest'] || 0)
@@ -2339,6 +2402,7 @@
           }
         } catch (error) { if (error.name === 'AbortError' || !requestIsCurrent()) return; if (error.status === 401) showAuthError(error); else toast(error.message); }
         finally {
+          clearTimeout(historyTimeoutId);
           const abortKey = older ? 'historyOlderAbort' : 'historyAbort';
           if (msgState[abortKey] === controller) msgState[abortKey] = null;
           if (older) msgState.historyOlderLoading = false;
@@ -2448,7 +2512,8 @@
         const customId = $('msg-custom-id')?.value.trim() || '';
         const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter, image_marker:hasImage ? composerImageMarker : '' };
         if (hasMedia) {
-          payload.media_data = msgState.mediaData;
+          if (msgState.mediaFile) payload.media_file = msgState.mediaFile;
+          else payload.media_data = msgState.mediaData;
           payload.media_name = msgState.mediaName;
           payload.media_file_type = msgState.mediaType;
           payload.media_mime = msgState.mediaMime;

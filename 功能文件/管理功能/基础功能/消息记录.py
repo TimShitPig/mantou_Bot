@@ -122,6 +122,7 @@ _昵称补查溢出数 = int(globals().get("_昵称补查溢出数", 0) or 0)
 _消息事件订阅: dict[asyncio.Queue[Any], asyncio.AbstractEventLoop] = globals().get("_消息事件订阅") or {}
 _消息事件队列上限 = 512
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
+成员资料每会话上限 = 2000
 发送序号 = globals().get("发送序号") or 0
 _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
@@ -1110,6 +1111,27 @@ def 取消消息事件订阅(队列: asyncio.Queue[Any] | None) -> None:
         _消息事件订阅.pop(队列, None)
 
 
+def _获取消息相关成员资料(
+    会话标识: str,
+    消息列表: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+) -> dict[str, dict[str, Any]]:
+    """只复制当前消息页涉及的成员资料，避免把整群资料推到浏览器。"""
+    全部资料 = 成员资料缓存.get(str(会话标识 or "").strip()) or {}
+    相关标识: set[str] = set()
+    for 消息 in 消息列表 or ():
+        if not isinstance(消息, dict):
+            continue
+        作者标识 = str(消息.get("user_id") or "").strip()
+        if 作者标识:
+            相关标识.add(作者标识)
+        相关标识.update(_提及规则.findall(str(消息.get("content") or "")))
+    return {
+        标识: copy.deepcopy(全部资料[标识])
+        for 标识 in 相关标识
+        if isinstance(全部资料.get(标识), dict)
+    }
+
+
 def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[str, Any]:
     """构造控制台实时事件，避免把内部会话键和未处理对象直接推到网页。"""
     字段 = (
@@ -1119,7 +1141,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
-    成员资料 = copy.deepcopy(成员资料缓存.get(会话标识, {}))
+    成员资料 = _获取消息相关成员资料(会话标识, [记录])
     return {
         "chat_id": 会话标识,
         "chat_type": str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
@@ -1391,6 +1413,12 @@ def _更新消息提及资料(记录: dict[str, Any], 消息: Any = None) -> Non
         return
     会话资料 = 成员资料缓存.setdefault(会话标识, {})
     for 成员标识, 昵称 in 资料.items():
+        if 成员标识 not in 会话资料:
+            while len(会话资料) >= 成员资料每会话上限:
+                try:
+                    会话资料.pop(next(iter(会话资料)))
+                except (StopIteration, RuntimeError):
+                    break
         当前 = 会话资料.setdefault(成员标识, {})
         当前["nickname"] = 昵称
         当前.setdefault("is_bot", False)
@@ -1712,6 +1740,11 @@ def _记录成员资料(
         return
     会话资料 = 成员资料缓存.setdefault(会话标识, {})
     if 成员标识 not in 会话资料:
+        while len(会话资料) >= 成员资料每会话上限:
+            try:
+                会话资料.pop(next(iter(会话资料)))
+            except (StopIteration, RuntimeError):
+                break
         会话资料[成员标识] = {
             "nickname": 昵称 or "",
             "is_bot": bool(是机器人),
@@ -1726,6 +1759,18 @@ def _记录成员资料(
             会话资料[成员标识]["role"] = str(角色 or "")
         if 头像:
             会话资料[成员标识]["avatar"] = str(头像).strip()
+
+
+def _裁剪成员资料缓存() -> None:
+    """热重载后也限制旧模块遗留的成员资料数量。"""
+    for 资料表 in 成员资料缓存.values():
+        if not isinstance(资料表, dict):
+            continue
+        while len(资料表) > 成员资料每会话上限:
+            try:
+                资料表.pop(next(iter(资料表)))
+            except (StopIteration, RuntimeError):
+                break
 
 
 _用户详情接口不可用 = False
@@ -4139,7 +4184,7 @@ def _数据库历史消息(
             "chat_name": _聊天显示名(会话标识, 轻量会话),
             "group_info": 获取缓存的群信息(会话标识),
             "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
-            "member_profiles": 成员资料缓存.get(会话标识, {}),
+            "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
             "references": 引用映射,
         }
     except Exception as exc:
@@ -4224,7 +4269,7 @@ def 获取消息历史(
         "chat_name": _聊天显示名(会话标识, 会话),
         "group_info": 获取缓存的群信息(会话标识),
         "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
-        "member_profiles": 成员资料缓存.get(会话标识, {}),
+        "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
         "references": 引用映射,
     }
 
@@ -5726,6 +5771,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     _消息数据库配置缓存时间 = 0.0
     # 热重载不沿用旧版本遗留的群资料待刷新队列；队列由打开会话和后台轮询产生。
     群信息待刷新.clear()
+    _裁剪成员资料缓存()
     if 上下文 is not None:
         当前插件上下文 = 上下文
     try:

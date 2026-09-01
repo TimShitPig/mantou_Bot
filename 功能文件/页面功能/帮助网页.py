@@ -171,6 +171,10 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
     except Exception as exc:
         logger.warning("帮助控制台停止失败：错误类型=%s", type(exc).__name__)
     finally:
+        try:
+            await 后端.关闭媒体代理会话()
+        except Exception as exc:
+            logger.debug("帮助控制台媒体代理会话关闭失败：错误类型=%s", type(exc).__name__)
         后端.关闭控制台执行器()
         if 后端.当前帮助网页服务 is 服务:
             后端.当前帮助网页服务 = None
