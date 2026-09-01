@@ -276,7 +276,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -966,6 +966,7 @@
           : Boolean(chat?.is_admin || localAdmins.has(chatId));
         if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
         if (msgState.chatId !== chatId) {
+          msgState.initialScrollChatId = chatId;
           cancelMsgRealtimeMessageRender();
           msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
           msgState.mutes = new Map();
@@ -2036,6 +2037,23 @@
         $('msg-mute-title').textContent = `禁言 ${name || member}`;
         $('msg-mute-modal').hidden = false;
       };
+      const scrollMsgBodyToBottom = (body, chatId = msgState.chatId) => {
+        if (!body) return;
+        const targetChatId = String(chatId || '');
+        const apply = () => {
+          if (targetChatId && String(msgState.chatId || '') !== targetChatId) return;
+          body.scrollTop = body.scrollHeight;
+        };
+        apply();
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            apply();
+            requestAnimationFrame(apply);
+          });
+        } else {
+          setTimeout(apply, 0);
+        }
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
@@ -2194,7 +2212,7 @@
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (scroll.toBottom) {
-          body.scrollTop = body.scrollHeight;
+          scrollMsgBodyToBottom(body, msgState.chatId);
           clearMsgNewMessages();
         } else {
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
@@ -2440,6 +2458,7 @@
           && requestChatId === msgState.chatId && requestChatType === msgState.chatType;
         const body = $('msg-body');
         const newChat = msgState.renderedChatId !== msgState.chatId;
+        const forceInitialBottom = !older && msgState.initialScrollChatId === requestChatId;
         const previousTop = body?.scrollTop || 0;
         const previousHeight = body?.scrollHeight || 0;
         const previousLast = !newChat ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
@@ -2471,7 +2490,7 @@
           }
           const renderTop = body?.scrollTop ?? previousTop;
           const renderHeight = body?.scrollHeight ?? previousHeight;
-          const renderNearBottom = newChat || msgBodyNearBottom(body);
+          const renderNearBottom = forceInitialBottom || newChat || msgBodyNearBottom(body);
           // 轮询可能在上翻页完成后才返回；保留当前已展开的更早消息，避免刷新把它们截掉。
           const currentMessages = Array.isArray(msgState.messages) ? msgState.messages : [];
           const preserveLoadedHistory = !older && !newChat && currentMessages.length > incoming.length;
@@ -2482,6 +2501,10 @@
             {...data, messages: msgState.messages},
             {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
           );
+          if (forceInitialBottom) {
+            msgState.initialScrollChatId = '';
+            scrollMsgBodyToBottom(body, requestChatId);
+          }
           cacheMsgHistory(historyCacheKey, {
             ...data,
             messages: msgState.messages.map((message) => ({...message})),
