@@ -4600,6 +4600,7 @@ async def 发送消息(
     引用消息ID: str = "",
     引用消息REFIDX: str = "",
     图片路径: str = "",
+    图片文件名: str = "",
     图片数据: str = "",
     图片URL: str = "",
     图片前文本: str = "",
@@ -4683,8 +4684,23 @@ async def 发送消息(
     图片公开地址 = _规范化公网图片地址(图片URL)
     图片前文本 = str(图片前文本 or "").strip()
     图片后文本 = str(图片后文本 or "").strip()
-    图片文件名 = "image.png"
+    图片文件名 = str(图片文件名 or "").strip()
     图片字节: bytes | None = None
+    if 图片路径:
+        图片路径值 = Path(str(图片路径).strip())
+        try:
+            文件大小 = 图片路径值.stat().st_size
+        except OSError:
+            return {"ok": False, "message": "图片数据无效"}
+        if 文件大小 <= 0 or 文件大小 > 200 * 1024 * 1024:
+            return {"ok": False, "message": "图片数据无效"}
+        try:
+            图片字节 = 图片路径值.read_bytes()
+        except OSError:
+            return {"ok": False, "message": "图片数据无效"}
+        图片文件名 = 图片文件名 or 图片路径值.name or "image.png"
+    if not 图片文件名:
+        图片文件名 = "image.png"
     if 图片数据:
         图片数据 = str(图片数据 or "").strip()
         try:

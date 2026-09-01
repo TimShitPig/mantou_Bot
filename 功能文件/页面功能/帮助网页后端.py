@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.10"
+控制台版本 = "6.1.11"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -909,8 +909,12 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                     临时路径.unlink(missing_ok=True)
                     临时路径 = None
                     raise
-                数据['media'] = str(临时路径)
-                数据['media_name'] = 文件名[:160]
+                if 名称 == 'image_file':
+                    数据['image'] = str(临时路径)
+                    数据['image_name'] = 文件名[:160]
+                else:
+                    数据['media'] = str(临时路径)
+                    数据['media_name'] = 文件名[:160]
                 continue
             数据[名称] = await 部分.text()
         for 名称 in ('card', 'ark_fields'):
@@ -2107,6 +2111,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              引用消息ID=str(数据.get("quote_message_id") or 数据.get("message_reference_id") or ""),
              引用消息REFIDX=str(数据.get("quote_message_refidx") or ""),
              图片路径=str(数据.get("image") or ""),
+             图片文件名=str(数据.get("image_name") or ""),
              图片数据=str(数据.get("image_data") or ""),
              图片URL=str(数据.get("image_url") or ""),
              图片前文本=str(数据.get("image_before") or ""),

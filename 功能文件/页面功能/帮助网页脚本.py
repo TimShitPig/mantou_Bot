@@ -276,7 +276,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -285,6 +285,7 @@
         const editor = getComposerEditor();
         if (composerHasImage() && !editor?.querySelector('[data-composer-image="1"]')) {
           msgState.pastedImage = null;
+          msgState.pastedImageFile = null;
           msgState.pastedImageSource = '';
           $('msg-input-box')?.classList.remove('has-inline-image');
         }
@@ -1610,13 +1611,17 @@
       };
       const buildSendBody = (payload) => {
         const file = payload?.media_file;
-        if (!(file && typeof File !== 'undefined' && file instanceof File)) return JSON.stringify(payload || {});
+        const imageFile = payload?.image_file;
+        const hasMediaFile = file && typeof File !== 'undefined' && file instanceof File;
+        const hasImageFile = imageFile && typeof File !== 'undefined' && imageFile instanceof File;
+        if (!hasMediaFile && !hasImageFile) return JSON.stringify(payload || {});
         const form = new FormData();
         Object.entries(payload || {}).forEach(([key, value]) => {
-          if (key === 'media_file' || key === 'media_data' || value == null || value === '') return;
+          if (key === 'media_file' || key === 'image_file' || key === 'media_data' || (key === 'image_data' && hasImageFile) || value == null || value === '') return;
           form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
         });
-        form.append('media_file', file, String(payload.media_name || file.name || 'attachment'));
+        if (hasMediaFile) form.append('media_file', file, String(payload.media_name || file.name || 'attachment'));
+        if (hasImageFile) form.append('image_file', imageFile, String(imageFile.name || 'image.png'));
         return form;
       };
       const resetComposer = () => {
@@ -1624,6 +1629,7 @@
         if (editor) editor.replaceChildren();
         msgState.quote = null;
         msgState.pastedImage = null;
+        msgState.pastedImageFile = null;
         msgState.pastedImageSource = '';
         msgState.composerSelection = null;
         clearComposerMedia();
@@ -1848,9 +1854,10 @@
           holder.remove();
         }
       };
-      const setComposerImage = (data, source, preview = '') => {
+      const setComposerImage = (data, source, preview = '', file = null) => {
         clearComposerMedia();
         msgState.pastedImage = String(data || '');
+        msgState.pastedImageFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
         msgState.pastedImageSource = String(source || '');
         const inlineSource = String(preview || data || source || '').trim();
         if (inlineSource) insertComposerImage(inlineSource);
@@ -1924,7 +1931,7 @@
           const proxy = mediaProxyUrl(url, 'image') || url;
           try {
             const dataUrl = await blobToDataUrl(await fetchImageBlob(proxy));
-            setComposerImage(dataUrl, '', dataUrl);
+            setComposerImage(dataUrl, '', dataUrl, null);
             toast('图片已读取，可继续输入文字后发送');
           } catch (_) {
             setComposerImage('', url, proxy);
@@ -1934,7 +1941,7 @@
         }
         try {
           const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
-          setComposerImage(dataUrl, '', dataUrl);
+          setComposerImage(dataUrl, '', dataUrl, null);
           toast('图片已添加，可继续输入文字后发送');
         } catch (_) {
           toast('图片读取失败，请重新拖入');
@@ -2681,6 +2688,7 @@
           if (!payload.media && !payload.media_url && !hasImage) return toast('请填写媒体文件路径或 URL');
         }
         if (msgState.pastedImage) { payload.image_data = msgState.pastedImage; }
+        if (msgState.pastedImageFile) { payload.image_file = msgState.pastedImageFile; }
         if (msgState.sendType === 'ark') {
           payload.ark_template_id = $('msg-ark-template')?.value || '24';
           const fields = {};
@@ -2734,7 +2742,7 @@
             if (!file) continue;
             const reader = new FileReader();
             reader.onload = () => {
-              setComposerImage(reader.result, '', reader.result);
+              setComposerImage(reader.result, '', reader.result, file);
               toast('已粘贴图片，可继续输入文字后发送');
             };
             reader.readAsDataURL(file);
@@ -2767,7 +2775,7 @@
         if (droppedFile) {
           if (String(droppedFile.type || '').toLowerCase().startsWith('image/')) {
             const reader = new FileReader();
-            reader.onload = () => setComposerImage(String(reader.result || ''), '', String(reader.result || ''));
+            reader.onload = () => setComposerImage(String(reader.result || ''), '', String(reader.result || ''), droppedFile);
             reader.onerror = () => toast('图片读取失败，请重试');
             reader.readAsDataURL(droppedFile);
           } else {
@@ -2783,6 +2791,7 @@
       const clearMsgImage = () => {
         getComposerEditor()?.querySelector('[data-composer-image="1"]')?.remove();
         msgState.pastedImage = null;
+        msgState.pastedImageFile = null;
         msgState.pastedImageSource = '';
         $('msg-input-box')?.classList.remove('has-inline-image');
         getComposerEditor()?.focus();
@@ -2794,7 +2803,7 @@
         if (!file) return;
         if (!file.type.startsWith('image/')) { toast('请选择图片文件'); e.target.value = ''; return; }
         const reader = new FileReader();
-        reader.onload = () => { setComposerImage(reader.result, '', reader.result); };
+        reader.onload = () => { setComposerImage(reader.result, '', reader.result, file); };
         reader.readAsDataURL(file);
         e.target.value = '';
       });
