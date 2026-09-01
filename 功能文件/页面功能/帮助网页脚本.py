@@ -276,7 +276,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -856,7 +856,21 @@
         }
       };
       const renderMsgChats = (data) => {
-        const node = $('msg-chats'); const chats = mergeMsgRealtimeChats(data.chats || []);
+        const node = $('msg-chats');
+        if (!node) return;
+        if (msgState.chatListScrollActive) {
+          msgState.chatListPendingData = data;
+          return;
+        }
+        const previousTop = node.scrollTop;
+        const previousHeight = node.scrollHeight;
+        const previousClientHeight = node.clientHeight;
+        const keepListBottom = previousHeight - previousTop - previousClientHeight <= 24;
+        const restoreListScroll = () => {
+          const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
+          node.scrollTop = keepListBottom ? maxTop : Math.min(previousTop, maxTop);
+        };
+        const chats = mergeMsgRealtimeChats(data.chats || []);
         const localAdmins = getLocalAdminGroups();
         chats.forEach((c) => {
           if (c.chat_type === 'group') {
@@ -920,6 +934,8 @@
             <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
           </button>`;
         }).join('');
+        restoreListScroll();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restoreListScroll);
         scheduleAutoScanAdminGroups();
         if (node.dataset.msgDelegated !== '1') {
           node.dataset.msgDelegated = '1';
@@ -1086,6 +1102,9 @@
         if (autoScanAdminTimer) { clearTimeout(autoScanAdminTimer); autoScanAdminTimer = null; }
         if (msgState.eventRefreshTimer) { clearTimeout(msgState.eventRefreshTimer); msgState.eventRefreshTimer = null; }
         if (msgState.chatRenderTimer) { clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null; }
+        if (msgState.chatListScrollTimer) { clearTimeout(msgState.chatListScrollTimer); msgState.chatListScrollTimer = null; }
+        msgState.chatListScrollActive = false;
+        msgState.chatListPendingData = null;
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
         msgState.historyOlderLoading = false;
@@ -2773,6 +2792,18 @@
         if (!body || body.scrollTop > 20 || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
         loadMsgHistory(true);
       };
+      const msgChatsNode = $('msg-chats');
+      msgChatsNode?.addEventListener('scroll', () => {
+        msgState.chatListScrollActive = true;
+        if (msgState.chatListScrollTimer) clearTimeout(msgState.chatListScrollTimer);
+        msgState.chatListScrollTimer = setTimeout(() => {
+          msgState.chatListScrollTimer = null;
+          msgState.chatListScrollActive = false;
+          const pending = msgState.chatListPendingData;
+          msgState.chatListPendingData = null;
+          if (pending) renderMsgChats(pending);
+        }, 140);
+      }, {passive:true});
       $('msg-body').addEventListener('scroll', () => {
         maybeLoadOlderMessages();
         if (!msgBodyNearBottom($('msg-body'))) return;
