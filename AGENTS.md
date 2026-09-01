@@ -80,7 +80,7 @@
 - 群管功能的自动广告拦截只保留 QQ 官方群：每群默认关闭，插件管理员可发送 `开广告`、`关广告`、`广告状态` 独立保存开关；关闭时数字、群名片/JSON 卡片、合并转发和 QQ 闪传都不自动处理。命中规则后必须先判断发送者身份，群主和管理员不撤回、不累计禁言次数；优先使用 QQ 官方事件角色并在可用时查询官方群成员角色，插件管理员白名单不等同于群管理员。普通成员只撤回当前触发消息，必须通过 QQ 官方 `DELETE /v2/groups/{group_openid}/messages/{message_id}`，禁止调用任何其他适配器的撤回或历史消息接口；不写臆造批量撤回接口。自动禁言只作用于当前触发的 QQ 官方群。广告类消息撤回并成功禁言后只发送一条三行提醒：@发送者、请勿发送此类消息、如果是小说请联系群主；不再发送管理员/发送者撤回详情通知。数字、群名片/JSON 卡片、合并转发和 QQ 闪传等本模块处理的撤回类型都计数，不自动踢人。
 - 群信息接口返回 `机器人非群成员`、`非群成员`、`不在群` 或 `未加入群` 时，必须将群状态持久化为 `removed`；群资料/机器人状态请求失败日志至少包含阶段、群标识、appid、错误类型、错误分类、HTTP/业务码、受控错误详情和冷却时间。
 - 网页消息记录页显示成员禁言状态时，必须调用 QQ 官方 `GET /v2/groups/{group_openid}/restrict_chat_setting`，只使用返回的未过期 `members[].member_openid`、`username` 和 `mute_expire_at`；按群缓存至少 30 秒，接口失败保留旧状态并使用失败冷却，不把原始响应返回网页。网页解除禁言必须通过同一接口提交 `members[].op=del`，成功后清除缓存并刷新状态。
-- QQ 官方群消息的成员 OpenID 不能拼接到 QQ 号头像接口；网页只对数字 QQ 号使用 qlogo，官方 OpenID 优先使用事件扩展提供的 `avatar`/`avatar_url`，没有头像时显示姓名首字母。
+- QQ 官方群消息的成员 OpenID 不用于 QQ 号群头像接口；网页优先使用事件扩展/历史记录提供的 `avatar`/`avatar_url`，没有头像时使用腾讯官方 `q.qlogo.cn/qqapp/{appid}/{openid}/0` AppID 作用域地址，仍无有效 AppID 或图片失败时显示姓名首字母。
 - 所有小说平台章节进度日志最多输出 5 条（含 0% 起始进度）；不得在短篇下载时逐章输出 INFO 进度。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]`、组件对象字符串中的 `ComponentType.Json`，以及 QQ 官方机器人空间相册分享等卡片降级展示文本 `暂不能查看该消息内容`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com`、`qimao.com`、`app-share.wtzw.com`、`shuqi.com`、`shuqireader.com`、`zhuishushenqi.com`、`zhuishuvip.com`、`reader.qq.com`、`book.qq.com`、`novel.html5.qq.com`、`mr.baidu.com`、`boxnovel.baidu.com`、`novel.baidu.com`、`reader.browser.miui.com`、`dushu.xiaomi.com`、`jjwxc.net`、`jjwxc.com` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。

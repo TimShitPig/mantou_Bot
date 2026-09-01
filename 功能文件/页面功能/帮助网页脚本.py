@@ -592,9 +592,10 @@
         const id = String(openid || '').trim();
         if (!id) return '';
         if (type === 'group') { const qq = window.msgGroupQQ?.[id] || ''; return /^\d{5,12}$/.test(String(qq)) ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
-        if (!/^\d{5,12}$/.test(id)) return '';
         const aid = appid || window.msgAppid || '';
-        return aid ? `https://q.qlogo.cn/qqapp/${aid}/${id}/0` : '';
+        // QQ 官方群成员使用 AppID 作用域 OpenID；腾讯官方 qlogo
+        // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
+        return aid ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
       const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
       const avatarHtml = (url, letter) => {
