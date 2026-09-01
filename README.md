@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v5.73.7-2ea44f)
+![version](https://img.shields.io/badge/version-v5.73.8-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v5.73.7 |
+| 版本 | v5.73.8 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -156,7 +156,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 
 支持平台及特点：
 
-- 番茄：批量正文接口，每批最多 1500 章，最多 5 路动态并发。
+- 番茄：批量正文接口，每批最多 1500 章，最多 5 路动态并发；畅听正文使用 `gmpy2`/PyCryptodome 解密，并按 CPU 核心数使用独立线程池。
 - 七猫：长篇正文优先 App 批量接口，短篇走短篇详情/目录与 `reader_agent=1` 正文接口。
 - 书旗：使用 iOS 目录接口动态生成签名，复用异步 HTTP 会话，按目录逐章请求正文，最高 400 路动态并发并使用标准库字符变换/Base64 解码；缺章或解密失败时不生成文件。
 - 追书：自动建立追书神器游客会话，复用异步 HTTP 会话，最高 400 路动态并发请求逐章密钥和正文；章节密钥与正文均使用 PyCryptodome 解密线程池处理，缺章或解密失败时不生成文件。

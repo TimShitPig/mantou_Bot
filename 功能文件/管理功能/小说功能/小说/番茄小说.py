@@ -23,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -3703,6 +3704,9 @@ def fetch_batch_worker(args: Tuple[int, int, str, List[str], str]) -> Dict[str, 
 
 番茄正文最大动态并发数 = 5
 
+# 畅听正文解密使用独立线程池，避免受 asyncio 默认线程池上限影响。
+番茄解密最大动态并发数 = max(1, os.cpu_count() or 1)
+
 # 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
 番茄进度日志分段数 = 4
 
@@ -4132,11 +4136,17 @@ async def 异步下载番茄全部章节(
     logger.info(
         f"番茄小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, "
         f"百分比=0%, 批次数={len(任务列表)}, 批量章节数={批量章节数}, "
-        f"并发数={动态并发数}, HTTP会话复用={'开启' if FULL_MGET_HTTP_REUSE else 'off'}"
+        f"并发数={动态并发数}, 解密并发数={min(番茄解密最大动态并发数, 总数)}, "
+        f"HTTP会话复用={'开启' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
 
     请求信号量 = asyncio.Semaphore(max(1, 动态并发数))
-    解密信号量 = asyncio.Semaphore(max(1, min(64, (os.cpu_count() or 4) * 2)))
+    解密并发数 = max(1, min(番茄解密最大动态并发数, 总数))
+    解密信号量 = asyncio.Semaphore(解密并发数)
+    解密执行器 = ThreadPoolExecutor(
+        max_workers=解密并发数,
+        thread_name_prefix="fanqie-decrypt",
+    )
 
     async def 请求批次(任务: tuple[int, int, str, list[str], str]) -> dict[str, Any]:
         批次序号, 起始序号, 请求书籍编号, 批次章节, 签名模式 = 任务
@@ -4171,9 +4181,18 @@ async def 异步下载番茄全部章节(
 
     async def 解密章节(参数: tuple[int, str, dict[str, Any], int]) -> dict[str, Any]:
         async with 解密信号量:
-            return await asyncio.to_thread(decrypt_item_worker, 参数)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(解密执行器, decrypt_item_worker, 参数)
 
     async with AsyncExitStack() as stack:
+        async def 关闭解密执行器() -> None:
+            await asyncio.to_thread(
+                解密执行器.shutdown,
+                wait=True,
+                cancel_futures=True,
+            )
+
+        stack.push_async_callback(关闭解密执行器)
         if HTTP客户端 is None:
             HTTP客户端 = await stack.enter_async_context(
                 创建番茄正文HTTP客户端(动态并发数)
