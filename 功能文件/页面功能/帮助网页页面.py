@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.4</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.5</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -292,7 +292,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
             .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
             /* ===== QQ PC 风格覆盖 ===== */
-            .msg-shell { grid-template-columns:340px minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+            .msg-shell { grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
             .chat-list-panel { background:#f7f8fa; }
             .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
             .msg-filter button.active { color:#12b7f5; }
@@ -354,7 +354,7 @@ from .帮助网页脚本 import 控制台脚本
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
              /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
-             .msg-list-resizer { position:absolute; z-index:4; top:0; right:-6px; bottom:0; width:14px; padding:0; border:0; background:transparent; cursor:col-resize; }
+             .msg-list-resizer { position:absolute; z-index:6; top:0; right:0; bottom:0; width:14px; padding:0; border:0; background:transparent; cursor:col-resize; }
              .msg-list-resizer,.msg-composer-resizer { touch-action:none; }
              .msg-list-resizer::before { content:""; position:absolute; top:50%; left:6px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
              .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
@@ -366,7 +366,10 @@ from .帮助网页脚本 import 控制台脚本
              .msg-composer-resizer::before { content:""; position:absolute; top:5px; left:50%; width:42px; height:3px; border-radius:3px; background:#d5dbe2; transform:translateX(-50%); opacity:.7; transition:background .16s ease,opacity .16s ease; }
              .msg-composer-resizer:hover::before,.msg-composer-resizer:focus-visible::before { background:#12b7f5; opacity:1; }
              .msg-composer-toggle { margin-right:2px; color:#7a818a; }
-             body.msg-resizing { user-select:none; }
+             .msg-composer { flex:0 0 auto; box-sizing:border-box; resize:none; }
+             body.msg-resizing { user-select:none; cursor:col-resize; }
+             body.msg-resizing .msg-shell, body.msg-resizing .msg-composer { transition:none !important; }
+             body.msg-resizing .msg-composer { cursor:row-resize; }
              .msg-toolbar { min-height:30px; }
              .msg-shell.msg-list-collapsed { --msg-list-width:38px; grid-template-columns:38px minmax(0,1fr); }
              .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { visibility:hidden; pointer-events:none; }

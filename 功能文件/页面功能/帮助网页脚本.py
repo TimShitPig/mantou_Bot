@@ -468,18 +468,41 @@
           event.preventDefault();
           event.stopPropagation();
           const pointerId = event.pointerId;
-          event.currentTarget?.setPointerCapture?.(pointerId);
-          const onMove = (nextEvent) => move(nextEvent);
+          const target = event.currentTarget;
+          try { target?.setPointerCapture?.(pointerId); } catch (_) {}
+          let active = true;
+          let pendingEvent = null;
+          let frame = 0;
+          const flush = () => {
+            frame = 0;
+            if (!active || !pendingEvent) return;
+            const nextEvent = pendingEvent;
+            pendingEvent = null;
+            move(nextEvent);
+          };
+          const onMove = (nextEvent) => {
+            if (!active || nextEvent.pointerId !== pointerId) return;
+            nextEvent.preventDefault();
+            pendingEvent = nextEvent;
+            if (!frame) frame = window.requestAnimationFrame(flush);
+          };
           const onEnd = (endEvent) => {
+            if (!active || (endEvent.pointerId != null && endEvent.pointerId !== pointerId)) return;
+            active = false;
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onEnd);
             window.removeEventListener('pointercancel', onEnd);
+            if (frame) window.cancelAnimationFrame(frame);
+            frame = 0;
+            if (pendingEvent) move(pendingEvent);
+            pendingEvent = null;
+            try { target?.releasePointerCapture?.(pointerId); } catch (_) {}
             document.body.classList.remove('msg-resizing');
             end(endEvent);
           };
-          window.addEventListener('pointermove', onMove);
-          window.addEventListener('pointerup', onEnd, {once:true});
-          window.addEventListener('pointercancel', onEnd, {once:true});
+          window.addEventListener('pointermove', onMove, {passive:false});
+          window.addEventListener('pointerup', onEnd);
+          window.addEventListener('pointercancel', onEnd);
           document.body.classList.add('msg-resizing');
         };
         listResizer?.addEventListener('pointerdown', (event) => {
@@ -1722,6 +1745,76 @@
         if (!String(blob.type || '').toLowerCase().startsWith('image/')) throw new Error('不是图片');
         return blob;
       };
+      const imageElementToBlob = (image) => new Promise((resolve, reject) => {
+        if (!image || !image.complete || !image.naturalWidth || !image.naturalHeight) {
+          reject(new Error('图片尚未加载'));
+          return;
+        }
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('浏览器不支持图片读取');
+          context.drawImage(image, 0, 0);
+          canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('图片转换失败')), 'image/png');
+        } catch (error) { reject(error); }
+      });
+      const getCopyImageBlob = async (source, image) => {
+        const sources = [source, image?.dataset?.mediaDirect, image?.currentSrc, image?.src]
+          .map((item) => safeImageSource(item))
+          .filter(Boolean)
+          .filter((item, index, values) => values.indexOf(item) === index);
+        let lastError = new Error('图片读取失败');
+        for (const candidate of sources) {
+          try { return await fetchImageBlob(candidate); }
+          catch (error) { lastError = error; }
+        }
+        try { return await imageElementToBlob(image); }
+        catch (error) { lastError = error; }
+        throw lastError;
+      };
+      const copyImageDataUrlWithExecCommand = (dataUrl) => {
+        const holder = document.createElement('div');
+        const image = document.createElement('img');
+        holder.contentEditable = 'true';
+        holder.setAttribute('aria-hidden', 'true');
+        holder.style.position = 'fixed';
+        holder.style.left = '-10000px';
+        holder.style.top = '0';
+        holder.style.width = '1px';
+        holder.style.height = '1px';
+        holder.style.overflow = 'hidden';
+        image.src = dataUrl;
+        image.alt = '图片';
+        holder.appendChild(image);
+        document.body.appendChild(holder);
+        const selection = window.getSelection?.();
+        const previousRanges = [];
+        try {
+          for (let index = 0; selection && index < selection.rangeCount; index += 1) previousRanges.push(selection.getRangeAt(index).cloneRange());
+          const range = document.createRange();
+          range.selectNode(image);
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          const onCopy = (event) => {
+            const clipboard = event.clipboardData;
+            if (!clipboard) return;
+            clipboard.setData('text/html', `<img src="${dataUrl}" alt="图片">`);
+            clipboard.setData('text/plain', '');
+            event.preventDefault();
+          };
+          document.addEventListener('copy', onCopy, true);
+          let copied = false;
+          try { copied = document.execCommand('copy'); }
+          finally { document.removeEventListener('copy', onCopy, true); }
+          return copied;
+        } finally {
+          selection?.removeAllRanges();
+          previousRanges.forEach((range) => selection?.addRange(range));
+          holder.remove();
+        }
+      };
       const setComposerImage = (data, source, preview = '') => {
         clearComposerMedia();
         msgState.pastedImage = String(data || '');
@@ -1772,21 +1865,19 @@
       };
       const copyImageToClipboard = async (source, image) => {
         try {
-          const blob = await fetchImageBlob(source);
-          if (window.isSecureContext && navigator.clipboard?.write && window.ClipboardItem) {
-            const mime = String(blob.type || 'image/png').toLowerCase().startsWith('image/') ? String(blob.type || 'image/png').toLowerCase() : 'image/png';
-            await navigator.clipboard.write([new window.ClipboardItem({[mime]: blob.type === mime ? blob : blob.slice(0, blob.size, mime)})]);
-            toast('图片已复制');
-            return;
+          const blob = await getCopyImageBlob(source, image);
+          let copied = false;
+          if (navigator.clipboard?.write && window.ClipboardItem) {
+            const mime = String(blob.type || '').toLowerCase().startsWith('image/') ? String(blob.type || '').toLowerCase() : 'image/png';
+            try {
+              await navigator.clipboard.write([new window.ClipboardItem({[mime]: blob.type === mime ? blob : blob.slice(0, blob.size, mime)})]);
+              copied = true;
+            } catch (_) {}
           }
-          // HTTP 控制台没有 Clipboard API 时，复制选中的图片节点作为浏览器兼容回退。
-          const selection = window.getSelection?.();
-          const range = document.createRange();
-          range.selectNode(image);
-          selection?.removeAllRanges();
-          selection?.addRange(range);
-          const copied = document.execCommand('copy');
-          selection?.removeAllRanges();
+          if (!copied) {
+            const dataUrl = await blobToDataUrl(blob);
+            copied = copyImageDataUrlWithExecCommand(dataUrl);
+          }
           if (!copied) throw new Error('浏览器不支持图片复制');
           toast('图片已复制');
         } catch (_) {
