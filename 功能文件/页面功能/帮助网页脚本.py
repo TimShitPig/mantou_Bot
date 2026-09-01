@@ -1960,13 +1960,14 @@
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || (msgState.botIsAdmin && !protectedRole));
           const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && !protectedRole;
-          const quoteReady = Boolean(m.message_id) && !recalled && (!optimisticEntry || sendState === 'sent');
+          const quoteReady = Boolean(m.message_id) && (!optimisticEntry || sendState === 'sent');
           const actions = [];
           if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
           if (quoteReady) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id || '')}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-name="${esc(displayNickname)}" type="button">引用</button>`);
           if (canMute) {
+            // 活跃禁言也保留“禁言”入口，便于直接重新设置时长；到期后只显示该入口。
+            actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
             if (isMuted) actions.push(`<button class="msg-action" data-msg-unmute="${esc(m.user_id)}" data-msg-unmute-name="${esc(displayNickname)}" type="button">解除禁言</button>`);
-            else actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
           }
           if (m.raw_message) actions.push(`<button class="msg-action" data-msg-raw="${msgState.chatId}_${m.id}" type="button">原始数据</button>`);
           window._msgRaw = window._msgRaw || {}; window._msgRaw[`${msgState.chatId}_${m.id}`] = m.raw_message;
@@ -2056,9 +2057,12 @@
             const canRecallRow = Boolean(mid) && !recalled && (isSelf || (msgState.botIsAdmin && !protectedRole));
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (canMuteRow) items.push({label:msgState.mutes.has(uid) ? '解除禁言' : '禁言', action:() => msgState.mutes.has(uid) ? unmuteMember(uid, nick) : openMuteDialog(uid, nick)});
+            if (canMuteRow) {
+              items.push({label:'禁言', action:() => openMuteDialog(uid, nick)});
+              if (msgState.mutes.has(uid)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
+            }
             if (items.length && !isSelf) items.push({sep:true});
-            if (mid && !recalled && (!optimistic || optimistic.status === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
+            if (mid && (!optimistic || optimistic.status === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
             if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
             if (canRecallRow) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
             if (mid) items.push({sep:true});
@@ -2084,7 +2088,10 @@
             const canMuteAv = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
             const items = [];
             if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (canMuteAv) items.push({label:msgState.mutes.has(uid) ? '解除禁言' : '禁言', action:() => msgState.mutes.has(uid) ? unmuteMember(uid, nick) : openMuteDialog(uid, nick)});
+            if (canMuteAv) {
+              items.push({label:'禁言', action:() => openMuteDialog(uid, nick)});
+              if (msgState.mutes.has(uid)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
+            }
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
         });
