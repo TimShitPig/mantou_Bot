@@ -4902,6 +4902,7 @@ async def 发送消息(
             return {"ok": False, "message": "媒体文件过大"}
 
     图片占位标记 = str(图片占位标记 or "\ufffc")
+    富媒体文字内容 = str(内容 or "").replace(图片占位标记, "").strip()
 
     图片记录地址 = 图片公开地址
     媒体记录地址 = str(媒体URL or "").strip()
@@ -5032,7 +5033,7 @@ async def 发送消息(
         消息体["msg_type"] = 7
         # QQ 官方富媒体消息允许同时携带 content，保持图片和文字在同一条消息。
         if 内容:
-            消息体["content"] = 内容
+            消息体["content"] = 富媒体文字内容
         else:
             消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
@@ -5058,7 +5059,7 @@ async def 发送消息(
             return {"ok": False, "message": "媒体上传失败"}
         消息体["msg_type"] = 7
         if 内容:
-            消息体["content"] = 内容
+            消息体["content"] = 富媒体文字内容
         else:
             消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}

@@ -2324,6 +2324,7 @@
           const renderedContent = renderText(m.content || '');
           let content = stripMediaMarker(renderedContent, mediaData);
           content = stripObjectMarker(content, mediaData);
+          content = content.replace(/\uFFFC/g, '').trim();
           if (!content && mediaText) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
@@ -2826,10 +2827,11 @@
         if (msgState.chatRemoved) return toast('你已被移除群聊');
         const hasImage = composerHasImage();
         const hasMedia = composerHasMedia();
-        const editorText = getComposerText().trim();
-        const imageBefore = '';
-        const imageAfter = '';
-        const content = editorText;
+        const editorText = getComposerText();
+        const imageParts = editorText.split(composerImageMarker);
+        const imageBefore = imageParts.length > 1 ? imageParts[0].trim() : '';
+        const imageAfter = imageParts.length > 1 ? imageParts.slice(1).join('').trim() : '';
+        const content = imageParts.length > 1 ? imageParts.join('').trim() : editorText.trim();
         const customId = $('msg-custom-id')?.value.trim() || '';
         const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter, image_marker:hasImage ? composerImageMarker : '' };
         if (hasMedia) {
