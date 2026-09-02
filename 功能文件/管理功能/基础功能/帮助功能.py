@@ -1006,6 +1006,16 @@ def 构造QQ官方提及Markdown(event: Any, 文本: str) -> str:
     return f"<@{成员OpenID}>\n\n{原文本}"
 
 
+def 清空QQ官方书名作者(文本: Any) -> str:
+    """内容违规时保留消息结构，只清空书名和作者值。"""
+    原文本 = str(文本 or "")
+    if not 原文本:
+        return ""
+    清空文本 = re.sub(r"(?im)^([ \t]*书名[ \t]*[:：])[ \t]*.*$", r"\1", 原文本)
+    清空文本 = re.sub(r"(?im)^([ \t]*作者[ \t]*[:：])[ \t]*.*$", r"\1", 清空文本)
+    return 清空文本 if 清空文本 != 原文本 else ""
+
+
 async def 发送QQ官方提及Markdown(event: Any, 文本: str) -> bool:
     return await 发送Markdown键盘消息(event, 文本, None)
 
@@ -1106,6 +1116,7 @@ async def 发送Markdown键盘消息(
         logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
         return False
 
+    记录文本 = md文本
     try:
         发送结果 = await _http.request(route, json=消息体)
         if 实际主动发送 and 目标会话:
@@ -1123,6 +1134,38 @@ async def 发送Markdown键盘消息(
         if 实际主动发送 and 目标会话 and 主动消息无权限(e):
             记录主动消息权限(目标会话, 目标类型, False)
         错误文本 = str(e or "").lower()
+        内容违规 = any(
+            关键词 in 错误文本
+            for 关键词 in ("消息内容违规", "内容违规", "content violation")
+        )
+        if 内容违规:
+            降级文本 = 清空QQ官方书名作者(md文本)
+            if 降级文本:
+                记录文本 = 降级文本
+                降级消息体 = dict(消息体)
+                降级消息体["markdown"] = {"content": 降级文本}
+                降级消息体["msg_seq"] = _random.randint(1, 10000)
+                消息体 = 降级消息体
+                try:
+                    降级结果 = await _http.request(route, json=降级消息体)
+                    if 实际主动发送 and 目标会话:
+                        记录主动消息权限(目标会话, 目标类型, True)
+                    _记录MD键盘发送(
+                        群openid,
+                        用户openid,
+                        记录文本,
+                        消息ID=_提取发送响应消息ID(降级结果),
+                        自身REFIDX=_提取发送响应REFIDX(降级结果),
+                    )
+                    logger.info("[帮助MD键盘] 内容违规，已清空书名和作者后重发")
+                    return True
+                except Exception as 降级异常:
+                    e = 降级异常
+                    错误文本 = str(e or "").lower()
+                    logger.debug(
+                        "[帮助MD键盘] 书名作者清空后发送失败：错误类型=%s",
+                        type(e).__name__,
+                    )
         被动消息已过期 = (
             any(关键词 in 错误文本 for 关键词 in ("过期", "expired"))
             and any(关键词 in 错误文本 for 关键词 in ("msg_id", "msgid", "消息id", "消息 id"))
@@ -1155,11 +1198,11 @@ async def 发送Markdown键盘消息(
             if 目标会话:
                 记录主动消息权限(目标会话, 目标类型, True)
             _记录MD键盘发送(
-                群openid,
-                用户openid,
-                md文本,
-                消息ID=_提取发送响应消息ID(主动发送结果),
-                自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+            群openid,
+            用户openid,
+            记录文本,
+            消息ID=_提取发送响应消息ID(主动发送结果),
+            自身REFIDX=_提取发送响应REFIDX(主动发送结果),
             )
             return True
         except Exception as 主动异常:
