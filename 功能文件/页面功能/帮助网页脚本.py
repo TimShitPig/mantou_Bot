@@ -1013,8 +1013,10 @@
           ? Boolean(msgState.adminByChat.get(chatId))
           : Boolean(chat?.is_admin || localAdmins.has(chatId));
         if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
-        if (msgState.chatId !== chatId) {
-          msgState.initialScrollChatId = chatId;
+        const sameChat = msgState.chatId === chatId && msgState.chatType === chatType;
+        // 每次点选会话都重新执行首屏定位，同一会话也不能沿用旧滚动位置。
+        msgState.initialScrollChatId = chatId;
+        if (!sameChat) {
           cancelMsgRealtimeMessageRender();
           msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
           msgState.mutes = new Map();

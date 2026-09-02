@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.17</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.21</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -161,9 +161,8 @@ from .帮助网页脚本 import 控制台脚本
             .msg-loading span:nth-child(3) { width:62%; animation-delay:.36s; }
             @keyframes msg-loading-pulse { from { opacity:.48; transform:translateY(1px); } to { opacity:1; transform:translateY(0); } }
             .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
-            .msg-row { display:flex; gap:9px; margin-bottom:14px; content-visibility:auto; contain-intrinsic-size:96px; }
-            /* 首次定位期间必须使用真实高度，避免懒布局让滚动高度在揭示后继续变化。 */
-            .msg-body.msg-positioning .msg-row { content-visibility:visible; contain-intrinsic-size:none; }
+            /* 消息行必须使用真实高度，避免估算布局在显示后把滚动位置推离底部。 */
+            .msg-row { display:flex; gap:9px; margin-bottom:14px; }
             .msg-row.self { flex-direction:row-reverse; }
             .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
             .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
