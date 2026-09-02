@@ -1055,6 +1055,7 @@
         $('msg-composer').hidden = msgState.chatRemoved;
         const body = $('msg-body');
         if (body) {
+          body.classList.remove('msg-positioning');
           body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
           body.scrollTop = 0;
           const cachedHistory = msgState.historyCache.get(`${chatType}|${chatId}`);
@@ -2128,26 +2129,40 @@
         $('msg-mute-title').textContent = `禁言 ${name || member}`;
         $('msg-mute-modal').hidden = false;
       };
-      const scrollMsgBodyToBottom = (body, chatId = msgState.chatId) => {
+      const scrollMsgBodyToBottom = (body, chatId = msgState.chatId, revealAfterPosition = false) => {
         if (!body) return;
         const targetChatId = String(chatId || '');
         const apply = () => {
           if (targetChatId && String(msgState.chatId || '') !== targetChatId) return;
           body.scrollTop = body.scrollHeight;
         };
+        const reveal = () => {
+          if (!revealAfterPosition || (targetChatId && String(msgState.chatId || '') !== targetChatId)) return;
+          body.classList.remove('msg-positioning');
+        };
         apply();
         if (typeof requestAnimationFrame === 'function') {
           requestAnimationFrame(() => {
             apply();
-            requestAnimationFrame(apply);
+            requestAnimationFrame(() => {
+              apply();
+              reveal();
+            });
           });
         } else {
-          setTimeout(apply, 0);
+          setTimeout(() => {
+            apply();
+            reveal();
+          }, 0);
         }
       };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const keepLatestVisible = !scroll.prepend && (Boolean(scroll.toBottom) || msgBodyNearBottom(body));
+        const initialPositioning = !scroll.prepend
+          && msgState.initialScrollChatId === msgState.chatId
+          && keepLatestVisible;
+        if (initialPositioning) body.classList.add('msg-positioning');
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
         data = {
           ...previousData,
@@ -2169,6 +2184,7 @@
         const renderedRawKeys = new Set();
         if (!msgs.length) {
           body.innerHTML = '<div class="msg-empty">暂无消息记录</div>';
+          body.classList.remove('msg-positioning');
           Object.keys(rawStore).forEach((key) => delete rawStore[key]);
           msgState.renderedChatId = msgState.chatId;
           clearMsgNewMessages();
@@ -2304,7 +2320,7 @@
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (keepLatestVisible) {
-          scrollMsgBodyToBottom(body, msgState.chatId);
+          scrollMsgBodyToBottom(body, msgState.chatId, initialPositioning);
           clearMsgNewMessages();
         } else {
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
@@ -2574,7 +2590,7 @@
             cacheMsgHistory(historyCacheKey, {...data, messages:incoming.map((message) => ({...message}))});
             if (forceInitialBottom) {
               msgState.initialScrollChatId = '';
-              scrollMsgBodyToBottom(body, requestChatId);
+              scrollMsgBodyToBottom(body, requestChatId, true);
             }
             return;
           }
@@ -2598,7 +2614,6 @@
           );
           if (forceInitialBottom) {
             msgState.initialScrollChatId = '';
-            scrollMsgBodyToBottom(body, requestChatId);
           }
           cacheMsgHistory(historyCacheKey, {
             ...data,
