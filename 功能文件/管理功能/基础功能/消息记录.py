@@ -3799,6 +3799,28 @@ def _聊天已移除(聊天: dict[str, Any]) -> bool:
     return 状态 == "removed" or 不在群
 
 
+def _会话列表头像(
+    会话标识: str,
+    类型: str,
+    最后记录: dict[str, Any] | None = None,
+    群信息: dict[str, Any] | None = None,
+) -> str:
+    """返回会话头像；群聊不能误用最后一条消息的成员头像。"""
+    if str(类型 or "group").strip().lower() == "group":
+        信息候选 = [群信息 or {}, 群信息缓存.get(str(会话标识 or "").strip()) or {}]
+        for 信息 in 信息候选:
+            if not isinstance(信息, dict):
+                continue
+            for 字段 in ("group_avatar", "group_avatar_url", "avatar", "avatar_url"):
+                地址 = str(信息.get(字段) or "").strip()
+                if 地址.startswith(("https://", "http://")):
+                    return 地址
+        return ""
+    if isinstance(最后记录, dict):
+        return str(最后记录.get("avatar") or 最后记录.get("avatar_url") or "").strip()
+    return ""
+
+
 async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int:
     """对昵称缺失的私聊会话逐个补查昵称（历史会话补查入口）。"""
     补查数 = 0
@@ -3929,6 +3951,7 @@ def _数据库聚合聊天项(
             内存会话 = 消息缓存.get(会话标识) or {}
             内存消息列表 = 内存会话.get("messages") or []
             内存最后时间 = int(内存会话.get("last_ts") or 0)
+            群资料 = 群信息项.get(会话标识) or {}
             数据库最后时间 = max(
                 int(项.get("last_ts") or 0),
                 int(最后记录.get("ts") or 0),
@@ -3941,15 +3964,7 @@ def _数据库聚合聊天项(
                     "nickname": str(内存会话.get("last_nickname") or ""),
                     "appid": str(内存会话.get("appid") or ""),
                     "content": str(内存会话.get("last_content") or ""),
-                    "avatar": str(
-                        (
-                            内存最后记录.get("avatar")
-                            if isinstance(内存最后记录, dict)
-                            else ""
-                        )
-                        or 最后记录.get("avatar")
-                        or ""
-                    ).strip(),
+                    "avatar": _会话列表头像(会话标识, 类型, 内存最后记录, 群资料),
                     "timestamp": _格式化时间戳(内存最后时间),
                     "ts": 内存最后时间,
                 }
@@ -3981,13 +3996,15 @@ def _数据库聚合聊天项(
                 当前未读数 = 持久化未读表[会话标识]
             else:
                 当前未读数 = int(内存会话.get("unread") or 0)
+            列表头像 = _会话列表头像(会话标识, 类型, 最后记录, 群资料)
             聊天项.append(
                 {
                     "chat_id": 会话标识,
                     "chat_type": 类型,
                     "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
                     "nickname": 显示名,
-                    "avatar": str(最后记录.get("avatar") or "").strip(),
+                    "avatar": 列表头像 if 类型 != "group" else "",
+                    "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(
@@ -4033,12 +4050,15 @@ def _数据库聚合聊天项(
                 会话标识,
                 int(持久化未读表.get(会话标识) or 0),
             )
+            群头像 = _会话列表头像(会话标识, "group", {}, 信息)
             聊天项.append(
                 {
                     "chat_id": 会话标识,
                     "chat_type": "group",
                     "appid": str(信息.get("appid") or ""),
                     "nickname": 显示名,
+                    "avatar": "",
+                    "group_avatar": 群头像,
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": "",
                     "last_time": "",
@@ -4074,13 +4094,15 @@ def _数据库聚合聊天项(
             最后内容 = str(内存会话.get("last_content") or 最后记录.get("content") or "")
             最后时间 = int(内存会话.get("last_ts") or 最后记录.get("ts") or 0)
             当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
+            列表头像 = _会话列表头像(会话标识, 类型, 最后记录, 群信息缓存.get(会话标识) or {})
             聊天项.append(
                 {
                     "chat_id": 会话标识,
                     "chat_type": 类型,
                     "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
                     "nickname": 显示名,
-                    "avatar": str(最后记录.get("avatar") or "").strip(),
+                    "avatar": 列表头像 if 类型 != "group" else "",
+                    "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
@@ -4142,13 +4164,15 @@ def 获取聊天列表(
                 continue
             消息列表 = 会话.get("messages") or []
             最后消息 = 消息列表[-1] if 消息列表 else {}
+            列表头像 = _会话列表头像(会话标识, 类型, 最后消息, 群信息缓存.get(会话标识) or {})
             聊天列表.append(
                 {
                     "chat_id": 会话标识,
                     "chat_type": 类型,
                     "appid": str(会话.get("appid") or ""),
                     "nickname": 显示名,
-                    "avatar": str(最后消息.get("avatar") or "").strip(),
+                    "avatar": 列表头像 if 类型 != "group" else "",
+                    "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
                     "last_content": _替换提及名称(
                         _表情标签规则.sub(

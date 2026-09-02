@@ -726,8 +726,8 @@
             remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
             group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
             pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
-            msg_count:Math.max(Number(current.msg_count || 0), Number(overlay.msg_count || 0)),
-            is_admin:adminKnown,
+          msg_count:Math.max(Number(current.msg_count || 0), Number(overlay.msg_count || 0)),
+          is_admin:adminKnown,
           });
         });
         // 服务器刷新失败时临时会话不会被确认，定期淘汰过期覆盖项，
@@ -938,7 +938,7 @@
           chat.pinned ? 1 : 0,
           chat.is_admin ? 1 : 0,
           chat.membership_status,
-          chat.avatar || chat.avatar_url ? 1 : 0,
+          (chat.group_avatar || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url))) ? 1 : 0,
         ].join(':')).join('|');
         if (msgState.chatRenderSignature === chatRenderSignature) {
           scheduleAutoScanAdminGroups(10000);
@@ -949,7 +949,10 @@
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; settleListScroll(); return; }
         let removedSectionShown = false;
         node.innerHTML = chats.map((chat) => {
-          const av = safeMediaUrl(String(chat.avatar || chat.avatar_url || '').trim())
+          const avatarSource = chat.chat_type === 'group'
+            ? (chat.group_avatar || chat.group_avatar_url || '')
+            : (chat.avatar || chat.avatar_url || '');
+          const av = safeMediaUrl(String(avatarSource).trim())
             || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
           if (chat.appid) window.msgAppid = chat.appid;
           const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
