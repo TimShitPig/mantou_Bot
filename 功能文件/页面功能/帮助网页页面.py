@@ -154,7 +154,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
             .msg-btn.primary:hover { background:#0ea5e0; }
             .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; overscroll-behavior:contain; scrollbar-gutter:stable; }
-            .msg-body.msg-positioning { visibility:hidden; }
+            .msg-body.msg-positioning { visibility:hidden; overflow-anchor:none; }
             .msg-loading { display:grid; gap:12px; padding:18px 8px; }
             .msg-loading span { display:block; width:68%; height:44px; border-radius:10px; background:#e7ebf0; animation:msg-loading-pulse 1.15s ease-in-out infinite alternate; }
             .msg-loading span:nth-child(2) { width:54%; margin-left:18%; animation-delay:.18s; }
@@ -162,6 +162,8 @@ from .帮助网页脚本 import 控制台脚本
             @keyframes msg-loading-pulse { from { opacity:.48; transform:translateY(1px); } to { opacity:1; transform:translateY(0); } }
             .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
             .msg-row { display:flex; gap:9px; margin-bottom:14px; content-visibility:auto; contain-intrinsic-size:96px; }
+            /* 首次定位期间必须使用真实高度，避免懒布局让滚动高度在揭示后继续变化。 */
+            .msg-body.msg-positioning .msg-row { content-visibility:visible; contain-intrinsic-size:none; }
             .msg-row.self { flex-direction:row-reverse; }
             .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
             .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }

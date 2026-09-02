@@ -1063,6 +1063,7 @@
           const cachedHistory = msgState.historyCache.get(`${chatType}|${chatId}`);
           if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
             msgState.messages = dedupeMsgMessages(cachedHistory.messages);
+            // 缓存只用于预热布局；首轮网络历史返回前不要揭示，避免先看到缓存中段再跳到底部。
             renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true});
           }
         }
@@ -1797,7 +1798,7 @@
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
             const preview = mediaProxyUrl(src, 'image');
-            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-img></button></div>`;
+            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
             const videoUrl = mediaProxyUrl(src, 'file');
@@ -2205,9 +2206,12 @@
           msgState.positionFrame = requestAnimationFrame(settle);
         } else if (typeof requestAnimationFrame === 'function') {
           requestAnimationFrame(() => {
+            if (!isCurrentPosition()) return;
             apply();
             requestAnimationFrame(() => {
+              if (!isCurrentPosition()) return;
               apply();
+              msgState.positionBody = null;
             });
           });
         } else {
@@ -2360,7 +2364,7 @@
           bindImageInteractions(img);
           img.addEventListener('error', () => {
             const direct = String(img.dataset.mediaDirect || '').trim();
-            if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
+            if (direct && img.dataset.mediaProxied !== '1' && !img.dataset.mediaDirectTried && img.src !== direct) {
               img.dataset.mediaDirectTried = '1';
               img.src = direct;
               img.dataset.lightbox = direct;
@@ -2380,7 +2384,10 @@
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (keepLatestVisible) {
-          scrollMsgBodyToBottom(body, msgState.chatId, initialPositioning);
+          // 首轮历史请求返回前，任何实时或资料刷新都只能重算隐藏布局，
+          // 不能提前显示缓存页并再次触发到底部的可见跳动。
+          const deferInitialReveal = initialPositioning && !scroll.revealInitial;
+          scrollMsgBodyToBottom(body, msgState.chatId, initialPositioning && !deferInitialReveal);
           clearMsgNewMessages();
         } else {
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
@@ -2670,7 +2677,13 @@
             : (preserveLoadedHistory ? dedupeMsgMessages([...currentMessages, ...incoming]) : incoming);
           renderMsgMessages(
             {...data, messages: msgState.messages},
-            {prepend:older, previousTop:renderTop, previousHeight:renderHeight, toBottom:!older && renderNearBottom},
+            {
+              prepend:older,
+              previousTop:renderTop,
+              previousHeight:renderHeight,
+              toBottom:!older && renderNearBottom,
+              revealInitial: forceInitialBottom,
+            },
           );
           if (forceInitialBottom) {
             msgState.initialScrollChatId = '';
@@ -2684,7 +2697,17 @@
           if (!older) {
             void loadGroupRoles(true).then(() => loadMuteStates(true));
           }
-        } catch (error) { if (error.name === 'AbortError' || !requestIsCurrent()) return; if (error.status === 401) showAuthError(error); else toast(error.message); }
+        } catch (error) {
+          if (!requestIsCurrent()) return;
+          if (forceInitialBottom) {
+            // 首轮请求失败时仍展示缓存/空状态，不能让定位期间的隐藏样式残留。
+            msgState.initialScrollChatId = '';
+            body.classList.remove('msg-positioning');
+            body.scrollTop = body.scrollHeight;
+          }
+          if (error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error); else toast(error.message);
+        }
         finally {
           clearTimeout(historyTimeoutId);
           const abortKey = older ? 'historyOlderAbort' : 'historyAbort';
