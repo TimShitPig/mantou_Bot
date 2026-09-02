@@ -2033,6 +2033,11 @@
         if (!media) return raw;
         return raw.replace(/\[(?:图片|语音|视频|文件|媒体|media)\]\s*(?:https?:\/\/[^\s<>]+)?/i, '').trim();
       };
+      const stripObjectMarker = (text, media) => {
+        const raw = String(text || '').trim();
+        if (!/^\[?OBJ\s*:\s*\d+\]?$/i.test(raw)) return raw;
+        return media ? '' : '（消息对象）';
+      };
       const msgMuteRefreshMs = 30 * 1000;
       const formatMuteRemaining = (expireTs) => {
         const left = Math.max(0, Math.ceil(Number(expireTs || 0) - Date.now() / 1000));
@@ -2315,6 +2320,7 @@
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
           let content = stripMediaMarker(renderedContent, mediaData);
+          content = stripObjectMarker(content, mediaData);
           if (!content && mediaText) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
