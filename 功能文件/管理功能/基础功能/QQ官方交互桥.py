@@ -19,6 +19,7 @@ except Exception:
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
 群成员加入桥版本 = 8
+QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {"group_member_add", "group_add_robot", "group_del_robot"}
 当前插件上下文: Any = None
 平台同步任务: asyncio.Task | None = None
@@ -65,6 +66,77 @@ def _是QQ官方平台(平台实例: Any) -> bool:
 
 def _已加载QQ官方平台(上下文: Any) -> bool:
     return any(_是QQ官方平台(平台实例) for 平台实例 in _获取平台实例列表(上下文))
+
+
+def 安装QQ官方语音Silk兼容补丁() -> bool:
+    """兼容 QQ 语音的 0x03 前缀 Tencent SILK 数据。"""
+    try:
+        from astrbot.core.utils import media_utils, tencent_record_helper
+    except Exception as 异常:
+        logger.warning("QQ官方语音兼容补丁加载失败：error_type=%s", type(异常).__name__)
+        return False
+
+    if getattr(media_utils, "_mantou_qq_silk_patch_version", 0) == QQ官方语音Silk补丁版本:
+        return True
+    原始音频魔数探测 = getattr(media_utils, "_mantou_原始音频魔数探测", None)
+    if not callable(原始音频魔数探测):
+        原始音频魔数探测 = getattr(media_utils, "_get_audio_magic_type", None)
+    原始腾讯Silk解码 = getattr(tencent_record_helper, "_mantou_原始腾讯Silk解码", None)
+    if not callable(原始腾讯Silk解码):
+        原始腾讯Silk解码 = getattr(tencent_record_helper, "tencent_silk_to_wav", None)
+    if not callable(原始音频魔数探测) or not callable(原始腾讯Silk解码):
+        logger.warning("QQ官方语音兼容补丁安装失败：媒体工具接口不可用")
+        return False
+
+    setattr(media_utils, "_mantou_原始音频魔数探测", 原始音频魔数探测)
+    setattr(tencent_record_helper, "_mantou_原始腾讯Silk解码", 原始腾讯Silk解码)
+
+    def 新音频魔数探测(音频路径: str) -> str:
+        try:
+            with open(音频路径, "rb") as 文件:
+                头部 = 文件.read(12)
+            if 头部.startswith(b"\x03#!SILK_V3"):
+                return "silk"
+        except OSError:
+            pass
+        return 原始音频魔数探测(音频路径)
+
+    async def 新腾讯Silk到Wav(Silk路径: str, 输出路径: str) -> str:
+        def 读取Silk数据() -> bytes:
+            with open(Silk路径, "rb") as 文件:
+                return 文件.read()
+
+        try:
+            数据 = await asyncio.to_thread(读取Silk数据)
+        except OSError:
+            return await 原始腾讯Silk解码(Silk路径, 输出路径)
+        if not 数据.startswith(b"\x03#!SILK_V3"):
+            return await 原始腾讯Silk解码(Silk路径, 输出路径)
+
+        def 解码并写入() -> str:
+            from io import BytesIO
+            import wave
+
+            import pysilk
+
+            输出 = BytesIO()
+            pysilk.decode(BytesIO(数据[1:]), 输出, 24000)
+            输出.seek(0)
+            with wave.open(输出路径, "wb") as WAV文件:
+                WAV文件.setnchannels(1)
+                WAV文件.setsampwidth(2)
+                WAV文件.setframerate(24000)
+                WAV文件.writeframes(输出.read())
+            return str(输出路径)
+
+        return await asyncio.to_thread(解码并写入)
+
+    media_utils._get_audio_magic_type = 新音频魔数探测
+    media_utils.tencent_silk_to_wav = 新腾讯Silk到Wav
+    tencent_record_helper.tencent_silk_to_wav = 新腾讯Silk到Wav
+    media_utils._mantou_qq_silk_patch_version = QQ官方语音Silk补丁版本
+    logger.info("QQ官方语音兼容补丁已安装：支持 0x03 Tencent SILK")
+    return True
 
 
 def _提取按钮数据(交互: Any) -> str:
@@ -750,6 +822,8 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
     except Exception as 异常:
         logger.warning("QQ官方帮助回调桥加载失败：error_type=%s", type(异常).__name__)
         return False
+
+    安装QQ官方语音Silk兼容补丁()
 
     适配器类 = getattr(适配器模块, "QQOfficialPlatformAdapter", None)
     客户端类 = getattr(适配器模块, "botClient", None)
