@@ -31,7 +31,7 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.26</span></div></div>
+        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.27</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><label class="theme-control" for="theme-select"><span class="theme-control-label">主题</span><span class="theme-control-icon" aria-hidden="true">◐</span><select id="theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
@@ -185,6 +185,9 @@ from .帮助网页脚本 import 控制台脚本
             .msg-media { margin-top:7px; }
             .msg-media-text { white-space:pre-wrap; word-break:break-word; }
             .msg-media-text-after { margin-top:7px; }
+            .msg-inline-media { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-width:0; max-width:100%; }
+            .msg-inline-media > .msg-media { margin-top:0; }
+            .msg-inline-media > .msg-media-text { margin-top:0; }
             .msg-image-media { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
             .msg-image-link { display:block; min-width:24px; min-height:24px; padding:0; border:0; background:transparent; text-align:left; line-height:0; cursor:zoom-in; }
             .msg-image-link:focus-visible { outline:2px solid #12b7f5; outline-offset:3px; }

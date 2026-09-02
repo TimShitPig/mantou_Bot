@@ -137,6 +137,80 @@ _媒体占位规则 = re.compile(
     r"\[(图片|语音|视频|文件|媒体|media)]\s*((?:https?:)?//[^\s<>]+)",
     re.IGNORECASE,
 )
+
+# QQ 官方消息链在图片组件前后可能写入 U+FFFC 和 OBJ:n 对象标记。
+# 这些标记不是用户正文，必须在保存和展示前拆成图片两侧的文字。
+_图片对象标记规则 = re.compile(r"\[?\s*OBJ\s*:\s*\d+\s*\]?", re.IGNORECASE)
+
+
+def _拆分图片两侧文字(
+    内容: Any,
+    图片占位标记: Any = "\ufffc",
+) -> tuple[str, str, bool]:
+    """从消息文本中拆出图片前文、后文，并移除 QQ 对象标记。"""
+    原文 = str(内容 or "")
+    占位 = str(图片占位标记 or "\ufffc")
+    if not 原文 or not 占位 or 占位 not in 原文:
+        return 原文.strip(), "", False
+    try:
+        规则 = re.compile(
+            re.escape(占位)
+            + r"\s*(?:\[?\s*OBJ\s*:\s*\d+\s*\]?)?",
+            re.IGNORECASE,
+        )
+        匹配 = 规则.search(原文)
+    except (TypeError, re.error):
+        匹配 = None
+    if not 匹配:
+        return 原文.strip(), "", False
+    前文 = 原文[: 匹配.start()].strip()
+    后文 = 原文[匹配.end() :].strip()
+    # 兼容对象标记与占位符之间存在换行/括号的旧记录。
+    后文 = _图片对象标记规则.sub("", 后文, count=1).strip()
+    return 前文, 后文, True
+
+
+def _媒体文字去占位(
+    内容: Any,
+    图片占位标记: Any = "\ufffc",
+) -> str:
+    """返回不含图片占位符和 OBJ 标记的正文，用于历史记录和引用。"""
+    前文, 后文, 已拆分 = _拆分图片两侧文字(内容, 图片占位标记)
+    if not 已拆分:
+        return str(内容 or "").strip()
+    return f"{前文}{后文}".strip()
+
+
+def _补充媒体文字位置(
+    媒体: dict[str, Any] | None,
+    内容: Any,
+    图片占位标记: Any = "\ufffc",
+) -> dict[str, Any] | None:
+    """把消息文本中的图片两侧文字并入媒体记录，兼容旧数据库行。"""
+    if not isinstance(媒体, dict):
+        return 媒体
+    前文, 后文, 已拆分 = _拆分图片两侧文字(内容, 图片占位标记)
+    if not 已拆分:
+        return 媒体
+    结果 = dict(媒体)
+    结果["before_text"] = 前文
+    结果["after_text"] = 后文
+    结果["text"] = f"{前文}{后文}".strip()
+    return 结果
+
+
+def _归一化记录媒体文字(记录: dict[str, Any]) -> None:
+    """为历史媒体补齐图片两侧文字，并清掉正文中的对象占位标记。"""
+    if not isinstance(记录, dict) or not isinstance(记录.get("media"), dict):
+        return
+    内容 = str(记录.get("content") or "")
+    媒体 = _补充媒体文字位置(记录["media"], 内容)
+    if 媒体 is not 记录["media"]:
+        记录["media"] = 媒体
+    if _拆分图片两侧文字(内容)[2]:
+        记录["content"] = _媒体文字去占位(内容)
+
+
 _QQ图片域名片段 = (
     "multimedia.nt.qq.com.cn",
     "qqbot.ugcimg.cn",
@@ -399,6 +473,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     if 标准时间:
         记录["ts"] = 标准时间
         记录["timestamp"] = _格式化时间戳(标准时间)
+    _归一化记录媒体文字(记录)
     现有媒体 = 记录.get("media")
     现有地址 = (
         str(现有媒体.get("src") or "").strip()
@@ -476,6 +551,8 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     if 标准时间:
         记录["ts"] = 标准时间
         记录["timestamp"] = _格式化时间戳(标准时间)
+    _归一化记录媒体文字(记录)
+    现有媒体 = 记录.get("media")
     现有地址 = (
         str(现有媒体.get("src") or "").strip()
         if isinstance(现有媒体, dict)
@@ -1695,7 +1772,7 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
     """提取媒体信息：优先附件，其次带 URL 的消息占位或 QQ 富媒体链接。"""
     附件媒体 = _提取附件媒体(消息) if 消息 is not None else None
     if 附件媒体:
-        return 附件媒体
+        return _补充媒体文字位置(附件媒体, 内容)
     if not 内容:
         return None
     小写内容 = 内容.casefold()
@@ -1705,14 +1782,20 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
             类型 = 匹配.group(1)
             地址 = _清理媒体地址(匹配.group(2))
             文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
-            return {"type": 类型, "src": 地址, "text": 文本}
+            return _补充媒体文字位置(
+                {"type": 类型, "src": 地址, "text": 文本},
+                内容,
+            )
     if not any(域名 in 小写内容 for 域名 in _QQ图片域名片段):
         return None
     匹配 = _QQ图片域名.search(内容)
     if 匹配:
         地址 = _清理媒体地址(匹配.group(0))
         文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
-        return {"type": "图片", "src": 地址, "text": 文本}
+        return _补充媒体文字位置(
+            {"type": "图片", "src": 地址, "text": 文本},
+            内容,
+        )
     return None
 
 
@@ -2082,6 +2165,9 @@ def 记录收到消息(
         )
         会话 = _取得会话缓存(会话标识, 类型, appid)
         发送序号 += 1
+        媒体记录 = _提取媒体字段(内容, 消息)
+        if 媒体记录:
+            内容 = _媒体文字去占位(内容)
         记录: dict[str, Any] = {
             "id": 发送序号,
             "message_id": 消息ID,
@@ -2096,7 +2182,7 @@ def 记录收到消息(
             "avatar": 作者头像,
             "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
             "recalled": False,
-            "media": _提取媒体字段(内容, 消息),
+            "media": 媒体记录,
             "reference_id": 引用ID or "",
             "refidx": 自身REFIDX or "",
             "chat_type": 类型,
@@ -2341,6 +2427,9 @@ def 记录发送消息(
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
         来源值 = str(来源 or "web_panel").strip() or "web_panel"
         媒体值 = 媒体 or _提取媒体字段(内容)
+        媒体值 = _补充媒体文字位置(媒体值, 内容)
+        if 媒体值:
+            内容 = _媒体文字去占位(内容)
         头像值 = str(发送者头像 or "").strip()
         机器人来源 = 来源值.startswith("bot_") or 来源值 == "web_panel"
         机器人资料: dict[str, Any] = {}
@@ -4748,10 +4837,13 @@ def _构造Markdown图文内容(
     前文本 = str(图片前文本 or "").strip()
     后文本 = str(图片后文本 or "").strip()
     占位标记 = str(图片占位标记 or "\ufffc")
-    if 文本 and 地址 and 占位标记 and 占位标记 in 文本:
-        编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
-        图片标记 = f"![图片 #640px #480px]({编码地址})"
-        return (f"\n\n{图片标记}\n\n").join(文本.split(占位标记)).strip()
+    拆分前文, 拆分后文, 已拆分 = _拆分图片两侧文字(文本, 占位标记)
+    if 已拆分:
+        if not 前文本:
+            前文本 = 拆分前文
+        if not 后文本:
+            后文本 = 拆分后文
+        文本 = f"{拆分前文}{拆分后文}".strip()
     if (前文本 or 后文本) and 地址:
         编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
         图片标记 = f"![图片 #640px #480px]({编码地址})"
@@ -4902,7 +4994,7 @@ async def 发送消息(
             return {"ok": False, "message": "媒体文件过大"}
 
     图片占位标记 = str(图片占位标记 or "\ufffc")
-    富媒体文字内容 = str(内容 or "").replace(图片占位标记, "").strip()
+    富媒体文字内容 = _媒体文字去占位(内容, 图片占位标记)
 
     图片记录地址 = 图片公开地址
     媒体记录地址 = str(媒体URL or "").strip()
@@ -4958,13 +5050,19 @@ async def 发送消息(
             媒体记录地址 = 地址
 
     def _图片媒体记录() -> dict[str, Any]:
-        展示文本 = str(内容 or "").replace(图片占位标记, "").strip()
-        前文本 = 图片前文本
-        后文本 = 图片后文本
-        if 图片占位标记 and 图片占位标记 in str(内容 or ""):
-            前文本, 后文本 = str(内容 or "").split(图片占位标记, 1)
-            前文本 = 前文本.strip()
-            后文本 = 后文本.strip()
+        原始文本 = str(内容 or "")
+        拆分前文, 拆分后文, 已拆分 = _拆分图片两侧文字(
+            原始文本,
+            图片占位标记,
+        )
+        展示文本 = _媒体文字去占位(原始文本, 图片占位标记)
+        前文本 = str(图片前文本 or "").strip()
+        后文本 = str(图片后文本 or "").strip()
+        if 已拆分:
+            if not 前文本:
+                前文本 = 拆分前文
+            if not 后文本:
+                后文本 = 拆分后文
         媒体记录: dict[str, Any] = {
             "type": "图片",
             "src": 图片记录地址,
@@ -4992,7 +5090,7 @@ async def 发送消息(
             "src": 媒体地址,
             "name": str(媒体文件名 or "").strip(),
             "content_type": str(媒体内容类型 or "").strip(),
-            "text": str(内容 or "").replace(图片占位标记, "").strip(),
+            "text": _媒体文字去占位(内容, 图片占位标记),
         }
 
     # 有公网地址时使用 Markdown；本地字节媒体直接走官方富媒体消息。

@@ -2036,6 +2036,15 @@
         if (!media) return raw;
         return raw.replace(/\[(?:图片|语音|视频|文件|媒体|media)\]\s*(?:https?:\/\/[^\s<>]+)?/i, '').trim();
       };
+      const splitMediaTextMarkers = (text) => {
+        const raw = String(text || '');
+        const match = raw.match(/\uFFFC\s*(?:\[?\s*OBJ\s*:\s*\d+\s*\]?)?/i);
+        if (!match) return null;
+        return {
+          before: raw.slice(0, match.index).trim(),
+          after: raw.slice((match.index || 0) + match[0].length).replace(/^\s*(?:\[?\s*OBJ\s*:\s*\d+\s*\]?)/i, '').trim(),
+        };
+      };
       const stripObjectMarker = (text, media) => {
         const raw = String(text || '').trim();
         if (!/^\[?OBJ\s*:\s*\d+\]?$/i.test(raw)) return raw;
@@ -2320,18 +2329,28 @@
           const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
           const mediaData = m.media;
           const media = renderMessageMedia(mediaData, m.message_id);
+          const mediaTextPosition = media && mediaData && !Array.isArray(mediaData) ? splitMediaTextMarkers(m.content || '') : null;
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
           let content = stripMediaMarker(renderedContent, mediaData);
           content = stripObjectMarker(content, mediaData);
           content = content.replace(/\uFFFC/g, '').trim();
+          if (mediaTextPosition) content = '';
           if (!content && mediaText) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
+          const mediaBeforeText = mediaTextPosition
+            ? mediaTextPosition.before
+            : (mediaData && !Array.isArray(mediaData) ? String(mediaData.before_text || '').trim() : '');
+          const mediaAfterText = mediaTextPosition
+            ? mediaTextPosition.after
+            : (mediaData && !Array.isArray(mediaData) ? String(mediaData.after_text || '').trim() : '');
           const hasInlineMediaText = media && mediaData && !Array.isArray(mediaData)
-            && (Object.prototype.hasOwnProperty.call(mediaData, 'before_text') || Object.prototype.hasOwnProperty.call(mediaData, 'after_text'));
+            && (Boolean(mediaTextPosition)
+              || Object.prototype.hasOwnProperty.call(mediaData, 'before_text')
+              || Object.prototype.hasOwnProperty.call(mediaData, 'after_text'));
           const inlineMediaHtml = hasInlineMediaText
-            ? `${mediaData.before_text ? `<div class="msg-media-text">${renderMsgMarkup(String(mediaData.before_text), profiles)}</div>` : ''}${media}${mediaData.after_text ? `<div class="msg-media-text msg-media-text-after">${renderMsgMarkup(String(mediaData.after_text), profiles)}</div>` : ''}`
+            ? `<div class="msg-inline-media">${mediaBeforeText ? `<span class="msg-media-text">${renderMsgMarkup(mediaBeforeText, profiles)}</span>` : ''}${media}${mediaAfterText ? `<span class="msg-media-text msg-media-text-after">${renderMsgMarkup(mediaAfterText, profiles)}</span>` : ''}</div>`
             : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || (msgState.botIsAdmin && !protectedRole));
