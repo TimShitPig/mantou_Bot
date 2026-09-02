@@ -1554,6 +1554,18 @@
           return true;
         });
       };
+      const msgMessageListsEqual = (left, right) => {
+        const first = Array.isArray(left) ? left : [];
+        const second = Array.isArray(right) ? right : [];
+        if (first.length !== second.length) return false;
+        return first.every((message, index) => {
+          const other = second[index];
+          if (!msgMessagesMatch(message, other)) return false;
+          if (String(message?.content || '') !== String(other?.content || '')) return false;
+          if (msgIsRecalled(message) !== msgIsRecalled(other)) return false;
+          return JSON.stringify(message?.media || null) === JSON.stringify(other?.media || null);
+        });
+      };
       const mergeOptimisticMessages = (chatId, messages) => {
         const id = String(chatId || '');
         const base = dedupeMsgMessages(Array.isArray(messages) ? messages.slice() : []);
@@ -2549,19 +2561,22 @@
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, before_date:beforeId ? '' : before, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
           if (!requestIsCurrent()) return;
           const incoming = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
-          if (quiet && !older) {
+          const sameRenderedPage = !older && !newChat
+            && msgMessageListsEqual(incoming, msgState.messages)
+            && Boolean(data.has_more) === Boolean(msgState.historyData?.has_more);
+          if (sameRenderedPage) {
             updateMsgHead(data);
-            const newLast = msgMessageKey(incoming[incoming.length - 1]);
-            const recalledChanged = incoming.some((message) => {
-              const key = msgMessageKey(message);
-              if (!key) return false;
-              const previous = msgState.messages.find((item) => msgMessageKey(item) === key);
-              return previous && msgIsRecalled(previous) !== msgIsRecalled(message);
-            });
-            if (previousLast === newLast && incoming.length === msgState.messages.length && !recalledChanged) {
-              cacheMsgHistory(historyCacheKey, {...data, messages:msgState.messages.map((message) => ({...message}))});
-              return;
+            msgState.historyData = {...(msgState.historyData || {}), ...data, messages:incoming};
+            msgState.profiles = mergeMsgProfiles(
+              {...(msgState.profiles || {}), ...(data.member_profiles || {})},
+              incoming,
+            );
+            cacheMsgHistory(historyCacheKey, {...data, messages:incoming.map((message) => ({...message}))});
+            if (forceInitialBottom) {
+              msgState.initialScrollChatId = '';
+              scrollMsgBodyToBottom(body, requestChatId);
             }
+            return;
           }
           let newCount = 0;
           if (!older && previousLast) {
