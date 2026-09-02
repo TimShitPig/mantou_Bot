@@ -1728,6 +1728,12 @@
         if (!body) return;
         if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior});
         else body.scrollTop = body.scrollHeight;
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior:'auto'});
+            else body.scrollTop = body.scrollHeight;
+          });
+        }
         clearMsgNewMessages();
         markMsgRead(undefined, true);
       };
@@ -2132,6 +2138,11 @@
       const scrollMsgBodyToBottom = (body, chatId = msgState.chatId, revealAfterPosition = false) => {
         if (!body) return;
         const targetChatId = String(chatId || '');
+        const startedAt = Date.now();
+        let frame = 0;
+        let previousHeight = -1;
+        let stableFrames = 0;
+        let observer = null;
         const apply = () => {
           if (targetChatId && String(msgState.chatId || '') !== targetChatId) return;
           body.scrollTop = body.scrollHeight;
@@ -2140,19 +2151,47 @@
           if (!revealAfterPosition || (targetChatId && String(msgState.chatId || '') !== targetChatId)) return;
           body.classList.remove('msg-positioning');
         };
+        const finish = () => {
+          if (frame) cancelAnimationFrame(frame);
+          frame = 0;
+          observer?.disconnect();
+          observer = null;
+          apply();
+          reveal();
+        };
         apply();
-        if (typeof requestAnimationFrame === 'function') {
+        if (revealAfterPosition && typeof requestAnimationFrame === 'function') {
+          body.querySelectorAll('img').forEach((image) => image.addEventListener('load', apply, {once:true}));
+          if (typeof ResizeObserver === 'function') {
+            observer = new ResizeObserver(apply);
+            observer.observe(body);
+          }
+          const settle = () => {
+            if (targetChatId && String(msgState.chatId || '') !== targetChatId) {
+              finish();
+              return;
+            }
+            apply();
+            const height = body.scrollHeight;
+            if (height === previousHeight) stableFrames += 1;
+            else { previousHeight = height; stableFrames = 0; }
+            if (stableFrames >= 3 || Date.now() - startedAt >= 700) {
+              finish();
+              return;
+            }
+            frame = requestAnimationFrame(settle);
+          };
+          frame = requestAnimationFrame(settle);
+        } else if (typeof requestAnimationFrame === 'function') {
           requestAnimationFrame(() => {
             apply();
             requestAnimationFrame(() => {
               apply();
-              reveal();
             });
           });
         } else {
           setTimeout(() => {
-            apply();
-            reveal();
+            finish();
           }, 0);
         }
       };
