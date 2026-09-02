@@ -411,6 +411,82 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     return 记录
 
 
+def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
+    """快速整理数据库历史行；仅在缺少必要资料时解析原始消息。"""
+    if not isinstance(记录, dict):
+        return {}
+    记录["message_id"] = _规范消息ID(记录.get("message_id"))
+    来源 = str(记录.get("source") or "")
+    if 来源.startswith("bot_") or 来源 == "web_panel":
+        记录["is_self"] = True
+        if not str(记录.get("nickname") or "").strip():
+            记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
+    会话标识 = str(记录.get("_session") or "").strip()
+    作者标识 = str(记录.get("user_id") or "").strip()
+    作者昵称 = str(记录.get("nickname") or "").strip()
+    作者头像 = str(记录.get("avatar") or "").strip()
+    内容文本 = str(记录.get("content") or "")
+    现有媒体 = 记录.get("media")
+    原始消息: Any = None
+    # 大多数历史行已经保存 nickname/avatar/media；仅对缺失资料或提及消息回看原文。
+    需要原始 = (
+        not 作者头像
+        or bool(_提及规则.search(内容文本))
+        or (
+            not isinstance(现有媒体, dict)
+            and bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE))
+        )
+    )
+    if 需要原始:
+        原始消息 = _解析消息结构(记录.get("raw_message"))
+        if 原始消息:
+            _更新消息提及资料(记录, 原始消息)
+            if not 作者头像:
+                作者头像 = _提取成员头像(原始消息)
+                if 作者头像:
+                    记录["avatar"] = 作者头像
+    if (
+        会话标识
+        and 作者标识
+        and (
+            (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
+            or bool(作者头像)
+        )
+    ):
+        _记录成员资料(
+            会话标识,
+            作者标识,
+            作者昵称,
+            bool(记录.get("is_self")),
+            头像=作者头像,
+        )
+    try:
+        记录时间 = int(记录.get("ts") or 0)
+    except (TypeError, ValueError):
+        记录时间 = 0
+    标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
+    if not 标准时间 and 原始消息 is not None:
+        标准时间 = _转数字时间戳(_提取原始消息时间(原始消息))
+    if 标准时间:
+        记录["ts"] = 标准时间
+        记录["timestamp"] = _格式化时间戳(标准时间)
+    现有地址 = (
+        str(现有媒体.get("src") or "").strip()
+        if isinstance(现有媒体, dict)
+        else ""
+    )
+    if not 现有地址:
+        补充媒体 = _提取媒体字段(内容文本, 原始消息)
+        if 补充媒体:
+            if isinstance(现有媒体, dict):
+                合并媒体 = dict(现有媒体)
+                合并媒体.update({k: v for k, v in 补充媒体.items() if v not in (None, "")})
+                记录["media"] = 合并媒体
+            else:
+                记录["media"] = 补充媒体
+    return 记录
+
+
 def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     """只归一化会话列表摘要的时间和来源，不解析完整媒体/正文。"""
     if not isinstance(记录, dict):
@@ -4115,7 +4191,7 @@ def _数据库历史消息(
             # 查询多取一条只用于判断分页，不把探测行返回给网页。
             行列表 = 行列表[:limit]
         原始会话消息: list[dict[str, Any]] = [
-            _规范化历史消息(x) for x in reversed(行列表)
+            _快速规范化历史消息(x) for x in reversed(行列表)
         ]
         原始数量 = len(原始会话消息)
         会话消息: list[dict[str, Any]] = _去重消息列表(原始会话消息)
@@ -4226,7 +4302,7 @@ def 获取消息历史(
         }
     消息列表 = 会话.get("messages") or []
     会话消息: list[dict[str, Any]] = _去重消息列表(
-        [_规范化历史消息(m) for m in 消息列表]
+        [_快速规范化历史消息(m) for m in 消息列表]
     )
     会话消息.sort(key=_历史消息排序键)
     try:
