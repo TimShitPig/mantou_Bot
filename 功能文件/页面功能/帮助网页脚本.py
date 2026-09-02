@@ -654,7 +654,10 @@
             node.innerHTML = '<span class="avatar-face">•ᴗ•</span>';
           }, {once:true});
         });
-        if (profileChanged && msgState.chatId && msgState.historyData && typeof renderMsgMessages === 'function') {
+        const hasMessageData = msgState.historyData
+          || (Array.isArray(msgState.messages) && msgState.messages.length)
+          || Number(msgState.optimisticSends?.size || 0) > 0;
+        if (profileChanged && msgState.chatId && hasMessageData && typeof renderMsgMessages === 'function') {
           const body = $('msg-body');
           renderMsgMessages(
             {...msgState.historyData, messages:msgState.messages},
@@ -2267,7 +2270,7 @@
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
-          const botMessage = String(m.source || '').startsWith('bot');
+          const botMessage = String(m.source || '').startsWith('bot') || String(m.source || '') === 'web_panel';
           const recalled = msgIsRecalled(m);
           const optimisticId = String(m.optimistic_id || '').trim();
           const optimisticEntry = optimisticId ? msgState.optimisticSends.get(optimisticId) : null;

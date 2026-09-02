@@ -2342,16 +2342,34 @@ def 记录发送消息(
         来源值 = str(来源 or "web_panel").strip() or "web_panel"
         媒体值 = 媒体 or _提取媒体字段(内容)
         头像值 = str(发送者头像 or "").strip()
-        if not 头像值 and 来源值.startswith("bot_"):
-            机器人缓存项 = 机器人资料缓存.get(str(appid or "default").strip() or "default")
-            if isinstance(机器人缓存项, tuple) and len(机器人缓存项) > 1:
-                机器人资料 = 机器人缓存项[1]
-                if isinstance(机器人资料, dict):
+        机器人来源 = 来源值.startswith("bot_") or 来源值 == "web_panel"
+        机器人资料: dict[str, Any] = {}
+        if 机器人来源:
+            资料键 = str(appid or "default").strip() or "default"
+            缓存候选 = [机器人资料缓存.get(资料键)]
+            if 资料键 != "default":
+                缓存候选.append(机器人资料缓存.get("default"))
+            for 机器人缓存项 in 缓存候选:
+                if not isinstance(机器人缓存项, tuple) or len(机器人缓存项) <= 1:
+                    continue
+                缓存资料 = 机器人缓存项[1]
+                if not isinstance(缓存资料, dict):
+                    continue
+                机器人资料 = 缓存资料
+                if not 头像值:
                     头像值 = str(
                         机器人资料.get("avatar")
                         or 机器人资料.get("avatar_url")
                         or ""
                     ).strip()
+                if 头像值 or 机器人资料.get("username") or 机器人资料.get("name"):
+                    break
+        if 机器人来源 and not str(发送者昵称 or "").strip():
+            发送者昵称 = str(
+                机器人资料.get("username")
+                or 机器人资料.get("name")
+                or "机器人"
+            ).strip()
         # event._post_send、send_by_session 和网页直发可能分别捕获同一
         # 次发送。响应没有消息 ID 时，以来源、内容和短时间窗口合并交叉记账。
         重复发送记录 = _查找重复机器人发送(
@@ -4484,6 +4502,15 @@ async def _上传媒体(
     if 文件字节 is not None:
         if len(文件字节) <= 0 or len(文件字节) > 200 * 1024 * 1024:
             return ""
+        if len(文件字节) <= 10 * 1024 * 1024:
+            return await _上传媒体单请求(
+                _http,
+                会话标识,
+                类型,
+                文件类型,
+                文件名,
+                文件字节,
+            )
         return await _上传媒体分片(
             _http,
             会话标识,
@@ -4509,6 +4536,44 @@ async def _上传媒体(
             group_openid=会话标识,
         )
     结果 = await _http.request(route, json=payload)
+    if isinstance(结果, dict):
+        return str(结果.get("file_info") or "")
+    return ""
+
+
+async def _上传媒体单请求(
+    _http: Any,
+    会话标识: str,
+    类型: str,
+    文件类型: int,
+    文件名: str,
+    文件字节: bytes,
+) -> str:
+    """按 QQ 官方适配器的小文件流程上传 file_data。"""
+    from botpy.http import Route
+
+    payload: dict[str, Any] = {
+        "file_data": base64.b64encode(文件字节).decode("ascii"),
+        "file_type": 文件类型,
+        "srv_send_msg": False,
+    }
+    if 文件名 and 文件类型 != 1:
+        payload["file_name"] = 文件名
+    if 类型 == "user":
+        payload["openid"] = 会话标识
+        route = Route("POST", "/v2/users/{openid}/files", openid=会话标识)
+    else:
+        payload["group_openid"] = 会话标识
+        route = Route(
+            "POST",
+            "/v2/groups/{group_openid}/files",
+            group_openid=会话标识,
+        )
+    try:
+        结果 = await _http.request(route, json=payload)
+    except Exception as 异常:
+        logger.warning("消息记录小文件上传失败：错误类型=%s", type(异常).__name__)
+        return ""
     if isinstance(结果, dict):
         return str(结果.get("file_info") or "")
     return ""
@@ -4941,9 +5006,11 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "图片上传失败"}
         消息体["msg_type"] = 7
-        # QQ 官方 msg_type=7 只接受 media.file_info；文字只能通过 Markdown
-        # 图文消息发送，不能把 content 混入富媒体请求体。
-        消息体.pop("content", None)
+        # QQ 官方富媒体消息允许同时携带 content，保持图片和文字在同一条消息。
+        if 内容:
+            消息体["content"] = 内容
+        else:
+            消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
 
     if not 图文内容 and 类型 == "markdown":
@@ -4966,7 +5033,10 @@ async def 发送消息(
         if not file_info:
             return {"ok": False, "message": "媒体上传失败"}
         消息体["msg_type"] = 7
-        消息体.pop("content", None)
+        if 内容:
+            消息体["content"] = 内容
+        else:
+            消息体.pop("content", None)
         消息体["media"] = {"file_info": file_info}
     elif 类型 == "ark":
         kv = _构造ARK数据(ARK模板ID, ARK字段 or {}, ARK列表)
