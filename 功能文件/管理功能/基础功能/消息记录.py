@@ -137,8 +137,14 @@ _媒体占位规则 = re.compile(
     r"\[(图片|语音|视频|文件|媒体|media)]\s*((?:https?:)?//[^\s<>]+)",
     re.IGNORECASE,
 )
+_QQ图片域名片段 = (
+    "multimedia.nt.qq.com.cn",
+    "qqbot.ugcimg.cn",
+    "gchat.qpic.cn",
+)
 _QQ图片域名 = re.compile(
-    r"(?:https?://)?[^>\s]*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)[^>\s]*"
+    r'''(?:(?:https?:)?//)?(?:[A-Za-z0-9-]+\.)*(?:multimedia\.nt\.qq\.com\.cn|qqbot\.ugcimg\.cn|gchat\.qpic\.cn)(?:[/?#][^\s<>"']*)?''',
+    re.IGNORECASE,
 )
 _显示时区 = _时区类(_时间差(hours=8))
 
@@ -1687,17 +1693,21 @@ def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
 
 def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | None:
     """提取媒体信息：优先附件，其次带 URL 的消息占位或 QQ 富媒体链接。"""
-    附件媒体 = _提取附件媒体(消息)
+    附件媒体 = _提取附件媒体(消息) if 消息 is not None else None
     if 附件媒体:
         return 附件媒体
     if not 内容:
         return None
-    匹配 = _媒体占位规则.search(内容)
-    if 匹配:
-        类型 = 匹配.group(1)
-        地址 = _清理媒体地址(匹配.group(2))
-        文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
-        return {"type": 类型, "src": 地址, "text": 文本}
+    小写内容 = 内容.casefold()
+    if "[" in 内容 and "]" in 内容 and ("http://" in 小写内容 or "https://" in 小写内容 or "//" in 内容):
+        匹配 = _媒体占位规则.search(内容)
+        if 匹配:
+            类型 = 匹配.group(1)
+            地址 = _清理媒体地址(匹配.group(2))
+            文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
+            return {"type": 类型, "src": 地址, "text": 文本}
+    if not any(域名 in 小写内容 for 域名 in _QQ图片域名片段):
+        return None
     匹配 = _QQ图片域名.search(内容)
     if 匹配:
         地址 = _清理媒体地址(匹配.group(0))

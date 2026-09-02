@@ -276,7 +276,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-       const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1055,6 +1055,8 @@
         $('msg-composer').hidden = msgState.chatRemoved;
         const body = $('msg-body');
         if (body) {
+          // 新会话开始前终止旧会话的定位循环，防止旧循环提前取消新会话的隐藏状态。
+          cancelMsgBottomPosition(body, true);
           body.classList.remove('msg-positioning');
           body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
           body.scrollTop = 0;
@@ -2135,43 +2137,62 @@
         $('msg-mute-title').textContent = `禁言 ${name || member}`;
         $('msg-mute-modal').hidden = false;
       };
+      const cancelMsgBottomPosition = (body = null, reveal = false) => {
+        msgState.positionToken = Number(msgState.positionToken || 0) + 1;
+        if (msgState.positionFrame != null) {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(msgState.positionFrame);
+          else clearTimeout(msgState.positionFrame);
+        }
+        msgState.positionFrame = null;
+        msgState.positionObserver?.disconnect();
+        msgState.positionObserver = null;
+        const positionedBody = body || msgState.positionBody;
+        msgState.positionBody = null;
+        if (reveal && positionedBody) positionedBody.classList.remove('msg-positioning');
+      };
       const scrollMsgBodyToBottom = (body, chatId = msgState.chatId, revealAfterPosition = false) => {
         if (!body) return;
         const targetChatId = String(chatId || '');
         const startedAt = Date.now();
-        let frame = 0;
         let previousHeight = -1;
         let stableFrames = 0;
-        let observer = null;
+        cancelMsgBottomPosition();
+        const positionToken = Number(msgState.positionToken || 0);
+        msgState.positionBody = body;
+        const isCurrentPosition = () => positionToken === Number(msgState.positionToken || 0)
+          && msgState.positionBody === body
+          && (!targetChatId || String(msgState.chatId || '') === targetChatId);
         const apply = () => {
-          if (targetChatId && String(msgState.chatId || '') !== targetChatId) return;
+          if (!isCurrentPosition()) return false;
           body.scrollTop = body.scrollHeight;
+          return true;
         };
         const reveal = () => {
-          if (!revealAfterPosition || (targetChatId && String(msgState.chatId || '') !== targetChatId)) return;
+          if (!revealAfterPosition || !isCurrentPosition()) return;
           body.classList.remove('msg-positioning');
         };
         const finish = () => {
-          if (frame) cancelAnimationFrame(frame);
-          frame = 0;
-          observer?.disconnect();
-          observer = null;
+          if (!isCurrentPosition()) return;
+          if (msgState.positionFrame != null) {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(msgState.positionFrame);
+            else clearTimeout(msgState.positionFrame);
+          }
+          msgState.positionFrame = null;
+          msgState.positionObserver?.disconnect();
+          msgState.positionObserver = null;
           apply();
           reveal();
+          msgState.positionBody = null;
         };
         apply();
         if (revealAfterPosition && typeof requestAnimationFrame === 'function') {
           body.querySelectorAll('img').forEach((image) => image.addEventListener('load', apply, {once:true}));
           if (typeof ResizeObserver === 'function') {
-            observer = new ResizeObserver(apply);
-            observer.observe(body);
+            msgState.positionObserver = new ResizeObserver(apply);
+            msgState.positionObserver.observe(body);
           }
           const settle = () => {
-            if (targetChatId && String(msgState.chatId || '') !== targetChatId) {
-              finish();
-              return;
-            }
-            apply();
+            if (!apply()) return;
             const height = body.scrollHeight;
             if (height === previousHeight) stableFrames += 1;
             else { previousHeight = height; stableFrames = 0; }
@@ -2179,9 +2200,9 @@
               finish();
               return;
             }
-            frame = requestAnimationFrame(settle);
+            msgState.positionFrame = requestAnimationFrame(settle);
           };
-          frame = requestAnimationFrame(settle);
+          msgState.positionFrame = requestAnimationFrame(settle);
         } else if (typeof requestAnimationFrame === 'function') {
           requestAnimationFrame(() => {
             apply();
