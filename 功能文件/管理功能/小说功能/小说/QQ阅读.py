@@ -3622,10 +3622,24 @@ async def 下载QQ阅读免费正文API(
             ) as 响应:
                 响应.raise_for_status()
                 数据 = await 响应.json(content_type=None)
-        if not isinstance(数据, dict) or _安全整数(数据.get("code"), -1) != 0:
+        if not isinstance(数据, dict):
+            raise RuntimeError("免费正文接口业务失败")
+        业务码 = 数据.get("code")
+        # 部分部署只返回 msg/data；HTTP 成功且 data 为列表时按成功响应处理。
+        if 业务码 not in (None, "") and _安全整数(业务码, -1) != 0:
             raise RuntimeError("免费正文接口业务失败")
         正文列表 = 数据.get("data")
         if not isinstance(正文列表, list) or len(正文列表) != len(项目):
+            logger.warning(
+                "QQ阅读免费正文接口章节数不完整：书籍编号=%s，请求范围=%s-%s，"
+                "返回章节=%s，预期章节=%s，错误分类=%s",
+                book_id,
+                开始,
+                结束,
+                len(正文列表) if isinstance(正文列表, list) else 0,
+                len(项目),
+                "章节范围不可用" if isinstance(正文列表, list) else "响应格式无效",
+            )
             raise RuntimeError("免费正文接口章节数量不完整")
         for 偏移, 正文 in enumerate(正文列表):
             if isinstance(正文, dict):
