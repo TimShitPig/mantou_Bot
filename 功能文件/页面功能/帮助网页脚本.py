@@ -955,7 +955,7 @@
           chat.pinned ? 1 : 0,
           chat.is_admin ? 1 : 0,
           chat.membership_status,
-          (chat.group_avatar || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url))) ? 1 : 0,
+          chat.group_avatar || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
         ].join(':')).join('|');
         if (msgState.chatRenderSignature === chatRenderSignature) {
           scheduleAutoScanAdminGroups(10000);
@@ -2611,13 +2611,31 @@
         const unread = followLatest
           ? 0
           : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : fallbackUnread);
+        const eventUserId = String(message.user_id || '').trim();
+        const eventSource = String(message.source || '').trim();
+        const eventIsSelf = Boolean(message.is_self)
+          || eventSource.startsWith('bot_')
+          || eventSource === 'web_panel';
+        const eventAvatar = String(
+          message.avatar
+          || payload.member_profiles?.[eventUserId]?.avatar
+          || '',
+        ).trim();
+        const existingAvatar = String(existing.avatar || existing.avatar_url || '').trim();
+        const contactAvatar = String(msgState.profiles?.[chatId]?.avatar || '').trim();
+        const botAvatar = String(window.msgBotProfile?.avatar || '').trim();
+        const preservedAvatar = contactAvatar
+          || (existingAvatar && (!botAvatar || existingAvatar !== botAvatar) ? existingAvatar : '');
+        const overlayAvatar = chatType === 'user' && eventIsSelf
+          ? preservedAvatar
+          : (eventAvatar || preservedAvatar);
         const overlay = {
           ...existing,
           chat_id:chatId,
           chat_type:chatType,
           appid:String(payload.appid || message.appid || existing.appid || ''),
           nickname:existing.nickname || (chatType === 'user' ? String(payload.last_nickname || message.nickname || chatId) : chatId),
-          avatar:String(message.avatar || payload.member_profiles?.[String(message.user_id || '').trim()]?.avatar || existing.avatar || '').trim(),
+          avatar:overlayAvatar,
           last_content:replaceMsgMentions(String(payload.last_content || message.content || existing.last_content || '')),
           last_time:String(message.timestamp || existing.last_time || new Date(eventTs * 1000).toISOString()),
           last_ts:eventTs,

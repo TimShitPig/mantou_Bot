@@ -3839,6 +3839,46 @@ def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
 # 聊天列表与历史
 # ---------------------------------------------------------------------------
 
+def _私聊联系人资料(
+    会话标识: str,
+    会话: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """返回私聊对方资料，不把机器人最后一条回复当成联系人资料。"""
+    标识 = str(会话标识 or "").strip()
+    if not 标识:
+        return {"nickname": "", "avatar": ""}
+    资料表 = 成员资料缓存.get(标识) or {}
+    候选: list[dict[str, Any]] = []
+    精确资料 = 资料表.get(标识)
+    if isinstance(精确资料, dict):
+        候选.append(精确资料)
+    当前会话 = 消息缓存.get(标识) or (会话 if isinstance(会话, dict) else {})
+    for 记录 in reversed(当前会话.get("messages") or []):
+        if not isinstance(记录, dict):
+            continue
+        if str(记录.get("user_id") or "").strip() != 标识:
+            continue
+        来源 = str(记录.get("source") or "").strip()
+        if bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel":
+            continue
+        候选.append(记录)
+    for 资料 in 候选:
+        昵称 = str(
+            资料.get("nickname")
+            or 资料.get("username")
+            or 资料.get("member_name")
+            or ""
+        ).strip()
+        头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
+        if 昵称 in {"机器人", "我", "未知用户", "未知", 标识}:
+            昵称 = ""
+        if not (头像.startswith("https://") or 头像.startswith("http://")):
+            头像 = ""
+        if 昵称 or 头像:
+            return {"nickname": 昵称, "avatar": 头像}
+    return {"nickname": "", "avatar": ""}
+
+
 def _聊天显示名(
     会话标识: str,
     会话: dict[str, Any],
@@ -3856,14 +3896,22 @@ def _聊天显示名(
     群名 = str(信息.get("group_name") or "")
     if 群名:
         return 群名
+    类型 = str(会话.get("chat_type") or "group")
+    if 类型 == "user":
+        联系人 = _私聊联系人资料(会话标识, 会话)
+        if 联系人["nickname"]:
+            return 联系人["nickname"]
+        本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
+        if 本地昵称 and 本地昵称 not in {"机器人", "我", "未知用户", "未知", 会话标识}:
+            return 本地昵称
     最近昵称 = str(会话.get("last_nickname") or "")
     # 群会话不把机器人和网页发送昵称当作群名退路，避免群名被"机器人"/"我"污染
-    if 最近昵称 and ((str(会话.get("chat_type") or "") == "user") or 最近昵称 not in ("机器人", "我")):
+    if 最近昵称 and (
+        (类型 == "user" and 最近昵称 not in {"机器人", "我", "未知用户", "未知", 会话标识})
+        or (类型 != "user" and 最近昵称 not in ("机器人", "我"))
+    ):
         return 最近昵称
-    if str(会话.get("chat_type") or "") == "user":
-        本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
-        if 本地昵称:
-            return 本地昵称
+    if 类型 == "user":
         return _私聊兜底昵称(会话标识)
     return 会话标识
 
@@ -3906,7 +3954,20 @@ def _会话列表头像(
                     return 地址
         return ""
     if isinstance(最后记录, dict):
-        return str(最后记录.get("avatar") or 最后记录.get("avatar_url") or "").strip()
+        联系人 = _私聊联系人资料(会话标识)
+        if 联系人["avatar"]:
+            return 联系人["avatar"]
+        记录标识 = str(最后记录.get("user_id") or "").strip()
+        来源 = str(最后记录.get("source") or "").strip()
+        if (
+            记录标识 == str(会话标识 or "").strip()
+            and not bool(最后记录.get("is_self"))
+            and not 来源.startswith("bot_")
+            and 来源 != "web_panel"
+        ):
+            地址 = str(最后记录.get("avatar") or 最后记录.get("avatar_url") or "").strip()
+            if 地址.startswith(("https://", "http://")):
+                return 地址
     return ""
 
 
@@ -3923,6 +3984,9 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             if not 会话标识:
                 continue
             会话 = 消息缓存.get(会话标识)
+            联系人 = _私聊联系人资料(会话标识, 会话)
+            if 联系人["avatar"] and not str(聊天.get("avatar") or "").strip():
+                聊天["avatar"] = 联系人["avatar"]
             if not _昵称需要补查(会话标识, 会话):
                 continue
             本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
