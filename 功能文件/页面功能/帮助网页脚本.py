@@ -9,24 +9,41 @@
       const themeStorageKey = 'mantou-theme';
       const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
       const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', theme === 'dark' ? '#171a24' : '#f8f8ff'); };
+      const updateThemeControl = (theme) => {
+        const select = $('theme-select');
+        if (select && select.value !== theme) select.value = theme;
+        const toggle = $('theme-toggle');
+        if (!toggle) return;
+        const dark = theme === 'dark';
+        const label = dark ? '切换到浅色模式' : '切换到深色模式';
+        toggle.setAttribute('aria-pressed', String(dark));
+        toggle.setAttribute('aria-label', label);
+        toggle.title = label;
+        const icon = toggle.querySelector('.theme-control-icon');
+        if (icon) icon.textContent = dark ? '☀' : '☾';
+      };
       const applyTheme = (preference = readThemePreference(), persist = true) => {
         const next = preference === 'dark' ? 'dark' : 'light';
         const theme = next;
         const previous = document.documentElement.dataset.theme;
+        const switching = Boolean(previous && previous !== theme);
+        if (switching) {
+          document.documentElement.classList.remove('theme-switching');
+          void document.documentElement.offsetWidth;
+          document.documentElement.classList.add('theme-switching');
+        }
         document.documentElement.dataset.themePreference = next;
         document.documentElement.dataset.theme = theme;
         updateThemeMeta(theme);
         if (persist) { try { localStorage.setItem(themeStorageKey, next); } catch (_) {} }
-        const control = $('theme-select'); if (control && control.value !== next) control.value = next;
-        if (previous && previous !== theme) {
-          document.documentElement.classList.remove('theme-switching');
-          void document.documentElement.offsetWidth;
-          document.documentElement.classList.add('theme-switching');
+        updateThemeControl(next);
+        if (switching) {
           setTimeout(() => document.documentElement.classList.remove('theme-switching'), 320);
         }
       };
       applyTheme(readThemePreference(), false);
       $('theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
+      $('theme-toggle')?.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
       const views = {
         dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
         bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],

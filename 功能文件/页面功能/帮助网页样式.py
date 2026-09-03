@@ -14,12 +14,16 @@
     .brand strong { font-size:16px; letter-spacing:.1px; }
     .version-badge { display:inline-flex; margin-left:7px; padding:3px 8px; border-radius:999px; background:#f3f3f8; color:var(--muted); font-size:11px; font-weight:650; }
     .top-actions { display:flex; align-items:center; gap:16px; }
-    .theme-control { display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:3px 7px 3px 9px; border:1px solid transparent; border-radius:8px; color:var(--muted); font-size:11px; font-weight:650; transition:background .18s ease,border-color .18s ease; }
+    .theme-control { display:inline-flex; align-items:center; gap:5px; min-height:32px; padding:3px 6px 3px 9px; border:1px solid transparent; border-radius:8px; color:var(--muted); font-size:11px; font-weight:650; transition:background .18s ease,border-color .18s ease; }
     .theme-control:hover,.theme-control:focus-within { border-color:#e5e3f7; background:#fbfaff; }
-    .theme-control-icon { color:var(--primary); font-size:15px; line-height:1; }
+    .theme-toggle-button { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--primary); cursor:pointer; transition:background .18s ease,color .18s ease,transform .18s ease; }
+    .theme-toggle-button:hover,.theme-toggle-button:focus-visible { background:var(--primary-soft); color:var(--primary-dark); outline:none; }
+    .theme-toggle-button:active { transform:scale(.92); }
+    .theme-control-icon { display:inline-block; color:currentColor; font-size:16px; line-height:1; transform-origin:center; }
+    .theme-select-wrap { display:inline-flex; align-items:center; }
     .theme-control select { min-height:26px; padding:2px 20px 2px 3px; border:0; border-radius:5px; background:transparent; color:var(--ink); font-size:11px; font-weight:650; cursor:pointer; outline:none; }
     .theme-control select option { background:var(--panel); color:var(--ink); }
-    .theme-control-icon { transform-origin:center; }
+    html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after { transition-property:background-color,border-color,color,box-shadow,fill,stroke !important; transition-duration:.28s !important; transition-timing-function:ease !important; }
     .theme-switching .shell { animation:theme-switch .32s ease both; }
     .theme-switching .theme-control-icon { animation:theme-icon .32s ease both; }
     .status-dot { display:inline-flex; align-items:center; gap:7px; color:var(--mint-ink); font-size:12px; font-weight:650; }
@@ -390,8 +394,8 @@
         *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; }
       }
       @media (max-width:760px) { .heading-actions { gap:7px; } .updated-label { display:none; } .summary-grid,.page-grid,.runtime-detail,.help-grid { grid-template-columns:1fr; } .shortcut-grid { grid-template-columns:1fr; } .runtime-page-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standalone-card { margin-top:15px; } .safe-list > div,.settings-row { min-height:56px; } .config-fields,.qq-auth-row { grid-template-columns:1fr; } .group-account { grid-template-columns:minmax(0,1fr) 70px; } .group-account .outline-button { grid-column:1 / -1; } }
-      @media (max-width:760px) { .theme-control { flex:0 0 auto; gap:2px; padding:3px 4px; } .theme-control-label { display:none; } .theme-control select { width:80px; max-width:80px; padding-right:13px; } }
-      @media (max-width:340px) { .topbar { gap:8px; padding-left:12px; padding-right:12px; } .brand { flex:0 0 auto; gap:7px; } .brand > div { max-width:64px; min-width:0; } .brand strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; } .version-badge { display:none; } .top-actions { min-width:0; gap:5px; } .status-dot { font-size:0; gap:0; } .status-dot::before { width:6px; height:6px; } .theme-control select { width:68px; max-width:68px; } .admin-chip { gap:3px; padding-right:4px; } #admin-name { display:none; } }
+      @media (max-width:760px) { .theme-control { flex:0 0 auto; gap:1px; padding:2px 3px 2px 5px; } .theme-control-label { display:none; } .theme-toggle-button { width:26px; height:26px; } .theme-control-icon { display:inline-block; font-size:15px; } .theme-control select { width:76px; max-width:76px; padding-right:13px; } }
+      @media (max-width:340px) { .topbar { gap:8px; padding-left:12px; padding-right:12px; } .brand { flex:0 0 auto; gap:7px; } .brand > div { max-width:64px; min-width:0; } .brand strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; } .version-badge { display:none; } .top-actions { min-width:0; gap:5px; } .status-dot { font-size:0; gap:0; } .status-dot::before { width:6px; height:6px; } .theme-control select { width:68px; max-width:68px; } .theme-toggle-button { width:24px; height:24px; } .admin-chip { gap:3px; padding-right:4px; } #admin-name { display:none; } }
 
       /* 桌面端让右侧内容独立滚动，侧栏保持视口高度，不随页面内容拉伸。 */
       @media (min-width:761px) {
@@ -649,8 +653,10 @@
         .brand strong { font-size:14px; }
         .version-badge { display:none; }
         .top-actions { min-width:0; gap:4px; }
-        .theme-control { min-height:28px; padding:2px 3px; }
-        .theme-control-icon { display:none; }
+        .theme-control { min-height:28px; gap:1px; padding:2px 3px 2px 5px; }
+        .theme-control-label { display:none; }
+        .theme-toggle-button { width:26px; height:26px; }
+        .theme-control-icon { display:inline-block; font-size:15px; }
         .theme-control select { width:68px; max-width:68px; padding-right:12px; font-size:10px; }
         .admin-chip { min-height:30px; gap:4px; padding:2px 5px 2px 3px; font-size:11px; }
         .admin-avatar { width:24px; height:24px; font-size:10px; }
