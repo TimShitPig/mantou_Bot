@@ -4848,7 +4848,10 @@ def _构造Markdown图文内容(
         编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
         图片标记 = f"![图片 #640px #480px]({编码地址})"
         return "\n\n".join(值 for 值 in (前文本, 图片标记, 后文本) if 值)
-    if not 文本 or not 地址:
+    if 地址 and not 文本:
+        编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
+        return f"![图片 #640px #480px]({编码地址})"
+    if not 地址:
         return ""
     编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
     return f"{文本}\n\n![图片 #640px #480px]({编码地址})"
@@ -4998,6 +5001,34 @@ async def 发送消息(
 
     图片记录地址 = 图片公开地址
     媒体记录地址 = str(媒体URL or "").strip()
+    if 图片字节 is not None and 类型 in ("text", "markdown") and not 图片公开地址:
+        临时Markdown地址 = ""
+        try:
+            from 功能文件.页面功能 import 帮助网页后端
+
+            图片内容类型 = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+            }.get(Path(图片文件名).suffix.lower(), "image/png")
+            临时Markdown地址 = await 帮助网页后端.创建临时Markdown媒体地址(
+                图片字节,
+                图片内容类型,
+            )
+            if 临时Markdown地址:
+                图片公开地址 = _规范化公网图片地址(临时Markdown地址)
+                图片记录地址 = 图片公开地址
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.debug(
+                "消息发送临时 Markdown 图片地址创建失败：错误类型=%s",
+                type(异常).__name__,
+            )
+        if not 图片公开地址:
+            return {"ok": False, "message": "图片暂时无法发送"}
 
     async def _保存本地发送媒体记录() -> None:
         """仅为发送的字节媒体保留本地副本，收到的附件仍只保存官方 URL。"""

@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.28"
+控制台版本 = "6.1.29"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -66,6 +66,14 @@ except Exception:
     b'font-family="Arial,sans-serif" font-size="16" fill="#68727d">'
     b'&#22270;&#29255;&#24050;&#36807;&#26399;&#25110;&#19981;&#21487;&#29992;</text></svg>'
 )
+临时Markdown媒体有效期秒 = 180
+临时Markdown媒体单文件上限 = 20 * 1024 * 1024
+临时Markdown媒体总上限 = 64 * 1024 * 1024
+临时Markdown媒体: dict[str, tuple[bytes, str, float, int]] = (
+    globals().get("临时Markdown媒体") or {}
+)
+临时Markdown媒体锁 = globals().get("临时Markdown媒体锁") or threading.Lock()
+临时Markdown媒体总字节数 = int(globals().get("临时Markdown媒体总字节数", 0) or 0)
 
 
 @dataclass
@@ -147,6 +155,117 @@ async def 关闭媒体代理会话() -> None:
     _媒体代理会话 = None
     if 会话 is not None and not 会话.closed:
         await 会话.close()
+
+
+def _清理临时Markdown媒体同步(现在: float | None = None) -> None:
+    """清理只存内存的 Markdown 图片，避免本地落盘和无限增长。"""
+    global 临时Markdown媒体总字节数
+    当前时间 = float(现在 if 现在 is not None else time.time())
+    with 临时Markdown媒体锁:
+        for 令牌, 项目 in list(临时Markdown媒体.items()):
+            if not isinstance(项目, tuple) or len(项目) < 4:
+                临时Markdown媒体.pop(令牌, None)
+                continue
+            if float(项目[2] or 0) <= 当前时间:
+                临时Markdown媒体.pop(令牌, None)
+                临时Markdown媒体总字节数 = max(
+                    0,
+                    临时Markdown媒体总字节数 - len(项目[0]),
+                )
+
+
+def 清空临时Markdown媒体() -> None:
+    """停止网页服务时释放临时图片字节。"""
+    global 临时Markdown媒体总字节数
+    with 临时Markdown媒体锁:
+        临时Markdown媒体.clear()
+        临时Markdown媒体总字节数 = 0
+
+
+def 创建临时Markdown媒体地址(
+    数据: bytes,
+    内容类型: str = "image/png",
+    配置: Any = None,
+) -> str:
+    """创建短时公网图片地址，数据只保留在内存供 QQ Markdown 转存。"""
+    global 临时Markdown媒体总字节数
+    if not isinstance(数据, (bytes, bytearray)):
+        return ""
+    图片字节 = bytes(数据)
+    if not 图片字节 or len(图片字节) > 临时Markdown媒体单文件上限:
+        return ""
+    基础地址 = _计算帮助网页地址(配置 if 配置 is not None else 当前帮助网页配置)
+    try:
+        地址解析 = urlsplit(str(基础地址 or ""))
+        if 地址解析.scheme.lower() not in {"http", "https"} or not 地址解析.netloc:
+            return ""
+        if str(地址解析.hostname or "").strip().lower() in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            return ""
+    except ValueError:
+        return ""
+    媒体类型 = str(内容类型 or "image/png").split(";", 1)[0].strip().lower()
+    if not re.fullmatch(r"image/[a-z0-9.+-]+", 媒体类型):
+        媒体类型 = "image/png"
+    现在 = time.time()
+    过期时间 = 现在 + 临时Markdown媒体有效期秒
+    令牌 = secrets.token_urlsafe(24)
+    _清理临时Markdown媒体同步(现在)
+    with 临时Markdown媒体锁:
+        while (
+            临时Markdown媒体
+            and 临时Markdown媒体总字节数 + len(图片字节) > 临时Markdown媒体总上限
+        ):
+            最早令牌 = next(iter(临时Markdown媒体), None)
+            if not 最早令牌:
+                break
+            旧项目 = 临时Markdown媒体.pop(最早令牌, None)
+            if isinstance(旧项目, tuple) and 旧项目:
+                临时Markdown媒体总字节数 = max(
+                    0,
+                    临时Markdown媒体总字节数 - len(旧项目[0]),
+                )
+        if 临时Markdown媒体总字节数 + len(图片字节) > 临时Markdown媒体总上限:
+            return ""
+        临时Markdown媒体[令牌] = (图片字节, 媒体类型, 过期时间, 0)
+        临时Markdown媒体总字节数 += len(图片字节)
+    return f"{str(基础地址).rstrip('/')}/api/message/markdown-media/{quote(令牌, safe='')}"
+
+
+async def _处理临时Markdown媒体(request: web.Request) -> web.Response:
+    """提供给 QQ Markdown 转存的短时内存图片，不需要控制台登录。"""
+    global 临时Markdown媒体总字节数
+    令牌 = str(request.match_info.get("token") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,96}", 令牌):
+        return web.Response(status=404, text="媒体暂时不可用")
+    现在 = time.time()
+    _清理临时Markdown媒体同步(现在)
+    with 临时Markdown媒体锁:
+        项目 = 临时Markdown媒体.get(令牌)
+        if not isinstance(项目, tuple) or len(项目) < 4:
+            return web.Response(status=404, text="媒体暂时不可用")
+        数据, 媒体类型, 过期时间, 访问次数 = 项目
+        if float(过期时间 or 0) <= 现在:
+            临时Markdown媒体.pop(令牌, None)
+            临时Markdown媒体总字节数 = max(
+                0,
+                临时Markdown媒体总字节数 - len(数据),
+            )
+            return web.Response(status=404, text="媒体暂时不可用")
+        临时Markdown媒体[令牌] = (数据, 媒体类型, 过期时间, int(访问次数 or 0) + 1)
+    return web.Response(
+        body=数据,
+        headers={
+            "Cache-Control": "public, max-age=60",
+            "Content-Type": 媒体类型,
+            "Content-Length": str(len(数据)),
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 async def 停止实时连接() -> None:
