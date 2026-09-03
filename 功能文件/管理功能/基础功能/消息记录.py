@@ -5013,7 +5013,7 @@ async def 发送消息(
                 ".webp": "image/webp",
                 ".bmp": "image/bmp",
             }.get(Path(图片文件名).suffix.lower(), "image/png")
-            临时Markdown地址 = await 帮助网页后端.创建临时Markdown媒体地址(
+            临时Markdown地址 = 帮助网页后端.创建临时Markdown媒体地址(
                 图片字节,
                 图片内容类型,
             )
@@ -5027,6 +5027,11 @@ async def 发送消息(
                 "消息发送临时 Markdown 图片地址创建失败：错误类型=%s",
                 type(异常).__name__,
             )
+        logger.info(
+            "消息发送本地图片 Markdown 地址状态：字节数=%s，已创建=%s",
+            len(图片字节),
+            bool(临时Markdown地址),
+        )
         if not 图片公开地址:
             return {"ok": False, "message": "图片暂时无法发送"}
 

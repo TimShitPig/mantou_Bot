@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.29"
+控制台版本 = "6.1.34"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -194,18 +194,34 @@ def 创建临时Markdown媒体地址(
     图片字节 = bytes(数据)
     if not 图片字节 or len(图片字节) > 临时Markdown媒体单文件上限:
         return ""
-    基础地址 = _计算帮助网页地址(配置 if 配置 is not None else 当前帮助网页配置)
+    基础地址 = str(
+        getattr(当前帮助网页服务, "public_url", "") or ""
+    ).strip() or _计算帮助网页地址(
+        配置 if 配置 is not None else 当前帮助网页配置
+    )
     try:
         地址解析 = urlsplit(str(基础地址 or ""))
         if 地址解析.scheme.lower() not in {"http", "https"} or not 地址解析.netloc:
+            logger.info(
+                "临时 Markdown 图片地址不可用：地址类型=invalid，内存字节=%s",
+                len(图片字节),
+            )
             return ""
         if str(地址解析.hostname or "").strip().lower() in {
             "localhost",
             "127.0.0.1",
             "::1",
         }:
+            logger.info(
+                "临时 Markdown 图片地址不可用：地址类型=loopback，内存字节=%s",
+                len(图片字节),
+            )
             return ""
     except ValueError:
+        logger.info(
+            "临时 Markdown 图片地址不可用：地址类型=invalid，内存字节=%s",
+            len(图片字节),
+        )
         return ""
     媒体类型 = str(内容类型 or "image/png").split(";", 1)[0].strip().lower()
     if not re.fullmatch(r"image/[a-z0-9.+-]+", 媒体类型):
@@ -229,10 +245,23 @@ def 创建临时Markdown媒体地址(
                     临时Markdown媒体总字节数 - len(旧项目[0]),
                 )
         if 临时Markdown媒体总字节数 + len(图片字节) > 临时Markdown媒体总上限:
+            logger.info(
+                "临时 Markdown 图片地址不可用：地址类型=memory_limit，内存字节=%s，"
+                "当前占用=%s",
+                len(图片字节),
+                临时Markdown媒体总字节数,
+            )
             return ""
         临时Markdown媒体[令牌] = (图片字节, 媒体类型, 过期时间, 0)
         临时Markdown媒体总字节数 += len(图片字节)
-    return f"{str(基础地址).rstrip('/')}/api/message/markdown-media/{quote(令牌, safe='')}"
+    公开地址 = f"{str(基础地址).rstrip('/')}/api/message/markdown-media/{quote(令牌, safe='')}"
+    logger.info(
+        "临时 Markdown 图片地址已创建：地址=%s，字节数=%s，过期秒数=%s",
+        公开地址,
+        len(图片字节),
+        临时Markdown媒体有效期秒,
+    )
+    return 公开地址
 
 
 async def _处理临时Markdown媒体(request: web.Request) -> web.Response:
