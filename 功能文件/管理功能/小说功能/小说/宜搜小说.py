@@ -39,9 +39,16 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 宜搜签名密钥 = "EaSoU0517+PuBlIsHkEy-JRKKOWTUNZCNTWY-"
 宜搜解密密钥 = b"EaSoUcNt"
 宜搜解密向量 = b"EaSoUcNt"
-宜搜允许域名 = {"ieasou.com", "www.ieasou.com", "api.ieasou.com", "easou.com"}
+宜搜允许域名 = {
+    "ieasou.com",
+    "www.ieasou.com",
+    "api.ieasou.com",
+    "easou.com",
+}
+宜搜分享域名 = {"eayue.com", "www.eayue.com", "book.eayue.com"}
 宜搜链接正则 = re.compile(
-    r"https?://(?:[^\s/<>\"']*\.)?(?:ieasou\.com|easou\.com)[^\s<>\"']*", re.I
+    r"https?://(?:(?:[^\s/<>\"']*\.)?(?:ieasou\.com|easou\.com|eayue\.com))[^\s<>\"']*",
+    re.I,
 )
 宜搜缓存目录 = 小说缓存工具.下载缓存目录
 宜搜并发数 = 50
@@ -84,15 +91,36 @@ def _候选(value: Any, out: list[str], seen: set[int], depth: int = 0) -> None:
             pass
 
 
+def _是宜搜分享地址(value: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(urllib.parse.unquote(str(value or "")))
+        host = str(parsed.hostname or "").lower().rstrip(".")
+        if host == "ieasou.com" or host.endswith(".ieasou.com"):
+            return True
+        if host == "easou.com" or host.endswith(".easou.com"):
+            return True
+        if host not in 宜搜分享域名:
+            return False
+        if parsed.path.rstrip("/").lower() != "/app/bookshare.m":
+            return False
+        query = urllib.parse.parse_qs(parsed.query)
+        return bool(query.get("gid") and query.get("nid"))
+    except Exception:
+        return False
+
+
 def 提取宜搜来源(event: Any, command: Any) -> str | None:
     values: list[str] = []
     _候选(command, values, set())
     _候选(event, values, set())
     for value in values:
-        for text in (value, urllib.parse.unquote(value)):
+        标准文本 = urllib.parse.unquote(str(value or "")).replace("\\/", "/")
+        for text in (str(value or ""), 标准文本):
             match = 宜搜链接正则.search(text)
             if match:
-                return match.group(0).rstrip("'\"，。；;]}>）)")
+                candidate = match.group(0).rstrip("'\"，。；;]}>）)")
+                if _是宜搜分享地址(candidate):
+                    return candidate
     for value in values:
         if (
             "宜搜" not in value
@@ -122,6 +150,29 @@ def 解析宜搜书籍编号(source: str) -> str:
 
 def 构造宜搜链接(book_id: Any) -> str:
     return f"https://www.ieasou.com/book/{book_id}"
+
+
+async def _解析宜搜分享页编号(
+    session: aiohttp.ClientSession, source: str
+) -> str:
+    """从新版宜搜分享页读取真实数字 nid/gid，兼容分享参数为字母的卡片。"""
+    try:
+        parsed = urllib.parse.urlsplit(urllib.parse.unquote(str(source or "")))
+        host = str(parsed.hostname or "").lower().rstrip(".")
+        if host not in 宜搜分享域名 or parsed.path.rstrip("/").lower() != "/app/bookshare.m":
+            return ""
+        async with session.get(source) as response:
+            response.raise_for_status()
+            html_text = await response.text(errors="ignore")
+        nid = re.search(r"\bvar\s+nid\s*=\s*['\"](\d+)['\"]", html_text, re.I)
+        gid = re.search(r"\bvar\s+gid\s*=\s*['\"](\d+)['\"]", html_text, re.I)
+        if not nid or not gid:
+            return ""
+        return f"{nid.group(1)}_{gid.group(1)}"
+    except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError):
+        return ""
+    except Exception:
+        return ""
 
 
 def _时间参数() -> str:
@@ -551,11 +602,13 @@ async def 生成宜搜下载回复流(
     event: Any, source: str, config: Any = None
 ) -> AsyncIterator[Any]:
     book_id = 解析宜搜书籍编号(source)
-    if not book_id:
-        yield "下载失败 请重试"
-        return
     try:
         async with 创建宜搜HTTP会话() as session:
+            if not book_id:
+                book_id = await _解析宜搜分享页编号(session, source)
+            if not book_id:
+                yield "下载失败 请重试"
+                return
             detail, chapters = await 获取宜搜详情(session, book_id)
             if not detail or not chapters:
                 yield "下载失败 请重试"

@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.40-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.41-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.40 |
+| 版本 | v6.1.41 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -109,7 +109,7 @@ qrcode[pil]
 | 塔读小说 | `reader.tadu.com` 书籍链接 | TDZ/AES/DES 解密，最高 400 路并发 |
 | 百度小说 | 百度链接 / 分享卡片 | 出版源和 AES 普通源 |
 | 小米小说 | 小米链接 / 分享卡片 | 兼容 `reader.browser.miui.com` 旧链接 |
-| 宜搜小说 | 链接 / 分享卡片 | DES-CBC 解密 |
+| 宜搜小说 | ieasou/eayue 链接 / 分享卡片 | 支持 `book.eayue.com/app/bookshare.m` 分享页，DES-CBC 解密 |
 | 米读小说 | 链接 / 分享卡片 | 异步并发下载 |
 | 猫眼小说 | 猫眼/掌阅链接 | XML 目录与 HTML 正文清理 |
 | 酷我小说 | 链接 / 分享卡片 | 明文正文异步下载 |
