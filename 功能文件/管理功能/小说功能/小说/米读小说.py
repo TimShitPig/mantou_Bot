@@ -33,8 +33,10 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
     "api.midureader.com",
     "book.midureader.com",
 }
+米读分享域名 = {"kuaittt.net", "www.kuaittt.net"}
 米读链接正则 = re.compile(
-    r"https?://(?:[^\s/<>\"']*\.)?midureader\.com[^\s<>\"']*", re.I
+    r"https?://(?:(?:[^\s/<>\"']*\.)?midureader\.com|(?:www\.)?kuaittt\.net)[^\s<>\"']*",
+    re.I,
 )
 米读并发数 = 80
 米读重试次数 = 3
@@ -78,14 +80,33 @@ def _收集(value: Any, output: list[str], seen: set[int], depth: int = 0) -> No
             pass
 
 
+def _是米读分享地址(value: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(urllib.parse.unquote(str(value or "")))
+        host = str(parsed.hostname or "").lower().rstrip(".")
+        if host == "midureader.com" or host.endswith(".midureader.com"):
+            return True
+        if host not in 米读分享域名:
+            return False
+        if parsed.path.rstrip("/").lower() != "/share_novel_2/reader.html":
+            return False
+        app = urllib.parse.parse_qs(parsed.query).get("app", [""])[0]
+        return str(app or "").strip().lower() == "midu"
+    except Exception:
+        return False
+
+
 def 提取米读来源(event: Any, command: Any) -> str | None:
     values: list[str] = []
     _收集(command, values, set())
     _收集(event, values, set())
     for value in values:
-        match = 米读链接正则.search(urllib.parse.unquote(value))
+        文本值 = urllib.parse.unquote(str(value or "")).replace("\\/", "/")
+        match = 米读链接正则.search(文本值)
         if match:
-            return match.group(0).rstrip("'\"，。；;]}>）)")
+            candidate = match.group(0).rstrip("'\"，。；;]}>）)")
+            if _是米读分享地址(candidate):
+                return candidate
     for value in values:
         if "米读" in value or "midureader" in value.lower():
             match = re.search(
