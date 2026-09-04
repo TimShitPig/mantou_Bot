@@ -72,6 +72,10 @@ class ShuqiError(RuntimeError):
     pass
 
 
+class EmptyChapterPayloadError(ShuqiError):
+    """书旗明确返回成功、但没有提供章节正文的响应。"""
+
+
 @dataclass
 class Chapter:
     index: int
@@ -137,7 +141,9 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             yield 格式化下载提示(书籍)
 
             章节内容 = await 下载全部章节(session, 书籍, 配置)
-            成功数 = sum(1 for 项 in 章节内容 if 项.get("content"))
+            成功数 = sum(
+                1 for 项 in 章节内容 if 项.get("content") or 项.get("title_only")
+            )
             if 成功数 != len(书籍.chapters):
                 raise ShuqiError(
                     f"章节正文不完整：success={成功数}, total={len(书籍.chapters)}"
@@ -551,6 +557,8 @@ async def _请求书旗章节正文(
         raise ShuqiError(f"章节正文接口异常：state={状态}")
     加密正文 = str(数据.get("ChapterContent") or "")
     if not 加密正文.strip():
+        if 状态 in {"200", "0"}:
+            raise EmptyChapterPayloadError("章节正文为空")
         raise ShuqiError("章节正文为空")
     async with 解密信号量:
         loop = asyncio.get_running_loop()
@@ -568,13 +576,18 @@ def 计算书旗正文并发数(章节数: int, 上限: int = 书旗正文最大
 
 async def 下载全部章节(
     session: aiohttp.ClientSession, 书籍: Book, 配置: Any = None
-) -> list[dict[str, str]]:
-    """使用 iOS 目录和正文接口按目录顺序下载，缺章时不生成 TXT。"""
+) -> list[dict[str, Any]]:
+    """使用 iOS 目录和正文接口按目录顺序下载，真实缺章时不生成 TXT。"""
     总数 = len(书籍.chapters)
     if not 总数:
         return []
-    结果: list[dict[str, str]] = [
-        {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
+    结果: list[dict[str, Any]] = [
+        {
+            "id": 章节.chapter_id,
+            "title": 章节.name,
+            "content": "",
+            "title_only": False,
+        }
         for 章节 in 书籍.chapters
     ]
     待处理 = list(range(总数))
@@ -582,6 +595,8 @@ async def 下载全部章节(
     已完成 = 0
     成功数 = 0
     下次进度 = 25
+    标题公告索引: set[int] = set()
+    最后失败分类: dict[int, str] = {}
     解密并发数 = min(书旗解码最大动态并发数, 总数)
     解密执行器 = ThreadPoolExecutor(
         max_workers=max(1, 解密并发数), thread_name_prefix="shuqi-decode"
@@ -635,8 +650,16 @@ async def 下载全部章节(
             for 索引, 正文, 错误类型 in 本轮结果:
                 if 正文:
                     结果[索引]["content"] = 正文
+                    最后失败分类.pop(索引, None)
+                elif 错误类型 == "title_only":
+                    # 目录标注为零字且接口成功返回空正文的是作者公告，标题本身
+                    # 就是完整内容；保留该目录项，不能把整本当作缺章。
+                    结果[索引]["title_only"] = True
+                    标题公告索引.add(索引)
+                    最后失败分类.pop(索引, None)
                 else:
                     下轮待处理.append(索引)
+                    最后失败分类[索引] = 错误类型
                     logger.debug(
                         f"书旗章节下载失败，准备重试：书籍编号={书籍.book_id}, "
                         f"章节编号={书籍.chapters[索引].chapter_id}, "
@@ -648,13 +671,25 @@ async def 下载全部章节(
     finally:
         解密执行器.shutdown(wait=False, cancel_futures=True)
 
-    成功总数 = sum(bool(项.get("content")) for 项 in 结果)
+    成功总数 = sum(
+        bool(项.get("content")) or bool(项.get("title_only")) for 项 in 结果
+    )
     logger.info(
         f"书旗小说章节下载汇总：书籍编号={书籍.book_id}, "
         f"成功={成功总数}, 失败={总数 - 成功总数}, 总数={总数}, "
+        f"标题公告={len(标题公告索引)}, "
         f"动态并发上限={计算书旗正文并发数(总数)}, 解码方式=标准库"
     )
     if 待处理:
+        缺失详情 = ", ".join(
+            f"{书籍.chapters[索引].index}:{书籍.chapters[索引].chapter_id}:"
+            f"{最后失败分类.get(索引, 'unknown')}"
+            for 索引 in 待处理[:5]
+        )
+        logger.warning(
+            f"书旗小说章节仍不完整：书籍编号={书籍.book_id}, "
+            f"missing={len(待处理)}, chapters={缺失详情}"
+        )
         raise ShuqiError(f"章节正文不完整：missing={len(待处理)}")
     return 结果
 
@@ -683,6 +718,15 @@ async def _下载章节一轮(
             if 进度回调 is not None:
                 await 进度回调(True)
             return 索引, 正文, ""
+        except EmptyChapterPayloadError:
+            章节 = 书籍.chapters[索引]
+            if 章节.word_count <= 0:
+                if 进度回调 is not None:
+                    await 进度回调(True)
+                return 索引, "", "title_only"
+            if 进度回调 is not None:
+                await 进度回调(False)
+            return 索引, "", "EmptyChapterPayloadError"
         except Exception as exc:
             if 进度回调 is not None:
                 await 进度回调(False)
