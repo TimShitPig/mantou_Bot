@@ -2266,6 +2266,51 @@ def 构造QQ阅读鉴权请求头(
     if request_url:
         return _补充QQ阅读网关签名(headers, request_url)
     return headers
+def _递归判定QQ阅读会员(数据: Any) -> bool:
+    """递归扫描账号会员接口响应中的状态和到期时间。"""
+    vip_fields = ("vipStatus", "vipstatus", "vip_status", "isVip", "is_vip", "user_vip", "vip")
+    expiry_fields = ("vipEndTime", "vip_end_time", "expired_time", "vipEnd")
+    stack: list[Any] = [数据]
+    seen: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if not isinstance(item, (dict, list)):
+            continue
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, dict):
+            if any(_是真值(item.get(field)) for field in vip_fields):
+                return True
+            if any(str(item.get(field) or "").strip() and "-0" not in str(item.get(field) or "") for field in expiry_fields):
+                return True
+            stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
+        else:
+            stack.extend(value for value in item if isinstance(value, (dict, list)))
+    return False
+
+
+async def 查询QQ阅读账号VIP状态(session: aiohttp.ClientSession) -> bool:
+    """按当前登录态查询账号会员状态，失败时安全按非 VIP 处理。"""
+    config = ConfigManager.get_instance()
+    if not (config.uid and config.usid):
+        return False
+    request_url = _构造QQ阅读请求地址(QQ阅读账号VIP地址, {})
+    headers = await 异步构造QQ阅读鉴权请求头(int(time.time() * 1000), request_url)
+    try:
+        async with session.get(
+            QQ阅读账号VIP地址,
+            params={"c_version": config.c_version, "c_platform": config.c_platform, "channel": config.channel},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15, sock_connect=10, sock_read=15),
+        ) as response:
+            response.raise_for_status()
+            data = await response.json(content_type=None)
+    except Exception as exc:
+        logger.debug(f"QQ阅读账号VIP状态查询失败：错误={type(exc).__name__}")
+        return False
+    return _递归判定QQ阅读会员(data)
+
 
 
 def _提取QQ阅读章节号(value: str) -> int:
@@ -2816,6 +2861,7 @@ QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
 QQ阅读免费正文地址 = "http://154.12.91.167:7000/content"
+QQ阅读账号VIP地址 = "https://select.reader.qq.com/uservipstatus"
 QQ阅读免费正文批量章节数 = 200
 QQ阅读免费正文最大动态并发数 = 16
 # 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
@@ -4522,7 +4568,7 @@ async def 生成下载回复流(
                 raise RuntimeError("目录为空")
             原始目录数 = len(catalog)
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-            账号有VIP = _是真值(details.get("is_vip"))
+            账号有VIP = await 查询QQ阅读账号VIP状态(session)
             使用第三方整本 = not 账号有VIP and 付费类型 in {"free", "vip"}
             if not 使用第三方整本:
                 catalog = 获取QQ阅读可下载目录(details, catalog)
