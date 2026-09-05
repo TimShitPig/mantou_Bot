@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.41"
+控制台版本 = "6.1.43"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -318,6 +318,21 @@ def 清理消息列表缓存() -> None:
     global 消息列表缓存版本
     消息列表缓存版本 += 1
     消息列表缓存.clear()
+    _清理消息列表缓存锁()
+
+
+def _清理消息列表缓存锁() -> None:
+    """回收已失效请求的空闲锁，避免不同搜索条件长期累积。"""
+    有效缓存键 = set(消息列表缓存)
+    for 缓存键, 锁 in list(消息列表缓存锁.items()):
+        if 缓存键 in 有效缓存键 or 缓存键 in 消息列表后台刷新:
+            continue
+        try:
+            被占用 = bool(锁.locked())
+        except Exception:
+            被占用 = False
+        if not 被占用:
+            消息列表缓存锁.pop(缓存键, None)
 
 
 def _写入消息列表缓存(
@@ -329,6 +344,7 @@ def _写入消息列表缓存(
         最旧键 = min(消息列表缓存, key=lambda key: 消息列表缓存[key][0])
         消息列表缓存.pop(最旧键, None)
     消息列表缓存[缓存键] = (time.monotonic(), copy.deepcopy(结果))
+    _清理消息列表缓存锁()
 
 
 async def _构建消息列表(
@@ -2145,6 +2161,8 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台消息列表读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "消息列表暂时不可用")
+    finally:
+        _清理消息列表缓存锁()
 
 
 async def _处理消息历史(request: web.Request) -> web.Response:

@@ -156,6 +156,9 @@ except Exception as exc:
 找书结果缓存: dict[
     tuple[str, str, tuple[str, ...]], tuple[float, list[dict[str, Any]]]
 ] = {}
+找书进行中任务: dict[
+    tuple[str, str, tuple[str, ...]], asyncio.Task[list[dict[str, Any]]]
+] = globals().get("找书进行中任务") or {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 找书名命令正则 = re.compile(r"^找(?:书名|小说名)\s*[:：]?\s*(.+)$")
 找作者命令正则 = re.compile(r"^找(?:作者|作家)\s*[:：]?\s*(.+)$")
@@ -486,10 +489,10 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     return {"keyword": 关键词, "type": 搜索类型}
 
 
-def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str | None:
+async def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str | None:
     """返回搜索开始前立即发送的等待提示；翻页和选书不重复提示。"""
     查询 = 解析找书查询(命令文本)
-    if 查询 is None or not 小说功能开关.小说总开关是否开启(配置):
+    if 查询 is None or not await 小说功能开关.异步小说总开关是否开启(配置):
         return None
     return f"正在为您找{查询['keyword']}请稍等"
 
@@ -2020,16 +2023,41 @@ async def 聚合搜索(
             )
         找书结果缓存.pop(缓存键, None)
 
-    结果 = await _聚合搜索未缓存(
-        关键词,
-        搜索类型,
-        允许平台=允许平台集合,
-    )
-    结果 = _过滤不可用平台结果(结果, 允许平台集合)
-    找书结果缓存[缓存键] = (time.monotonic(), [dict(项) for 项 in 结果])
-    if len(找书结果缓存) > 找书结果缓存上限:
-        最旧键 = min(找书结果缓存, key=lambda key: 找书结果缓存[key][0])
-        找书结果缓存.pop(最旧键, None)
+    当前循环 = asyncio.get_running_loop()
+    进行中任务 = 找书进行中任务.get(缓存键)
+    任务循环 = getattr(进行中任务, "get_loop", lambda: None)() if 进行中任务 else None
+    if (
+        进行中任务 is not None
+        and not 进行中任务.done()
+        and 任务循环 is 当前循环
+    ):
+        结果 = await asyncio.shield(进行中任务)
+        return [dict(项) for 项 in 结果]
+    if 进行中任务 is not None:
+        找书进行中任务.pop(缓存键, None)
+
+    async def _执行并缓存() -> list[dict[str, Any]]:
+        try:
+            结果 = await _聚合搜索未缓存(
+                关键词,
+                搜索类型,
+                允许平台=允许平台集合,
+            )
+            结果 = _过滤不可用平台结果(结果, 允许平台集合)
+            副本 = [dict(项) for 项 in 结果]
+            找书结果缓存[缓存键] = (time.monotonic(), 副本)
+            while len(找书结果缓存) > 找书结果缓存上限:
+                最旧键 = min(找书结果缓存, key=lambda key: 找书结果缓存[key][0])
+                找书结果缓存.pop(最旧键, None)
+            return 副本
+        finally:
+            当前任务 = asyncio.current_task()
+            if 找书进行中任务.get(缓存键) is 当前任务:
+                找书进行中任务.pop(缓存键, None)
+
+    进行中任务 = 当前循环.create_task(_执行并缓存(), name="找书聚合搜索")
+    找书进行中任务[缓存键] = 进行中任务
+    结果 = await asyncio.shield(进行中任务)
     return [dict(项) for 项 in 结果]
 
 
@@ -2124,7 +2152,7 @@ def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
 选书命令正则 = re.compile(r"^选([1-5])$")
 
 
-def 解析找书选中项(
+async def 解析找书选中项(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> dict[str, Any] | str | None:
     """识别点击指令链发来的 选N，映射当前页第 N 本并交给下载流。"""
@@ -2138,7 +2166,7 @@ def 解析找书选中项(
         return "找书结果已过期，请重新发送 找 关键词"
     会话["ts"] = time.time()
     允许平台 = _规范化允许平台(
-        小说功能开关.获取当前事件可用小说平台(event, 配置)
+        await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
     )
     if _更新会话可用结果(会话, 允许平台):
         找书会话.pop(获取找书会话键(event), None)
@@ -2152,17 +2180,17 @@ def 解析找书选中项(
     return 当前页[序号 - 1]
 
 
-def 获取找书下载回复流(
+async def 获取找书下载回复流(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> AsyncIterator[Any] | str | None:
     """main 优先调用：用户点击指令链发出 选N 后，这里直接进入各平台下载流。"""
     文本 = str(命令文本 or "").strip()
     if not 选书命令正则.fullmatch(文本):
         return None
-    if not 小说功能开关.小说总开关是否开启(配置):
+    if not await 小说功能开关.异步小说总开关是否开启(配置):
         找书会话.clear()
         return 小说功能开关.获取小说功能关闭回复("", 配置)
-    选中 = 解析找书选中项(event, 命令文本, 配置)
+    选中 = await 解析找书选中项(event, 命令文本, 配置)
     if 选中 is None:
         return None
     if isinstance(选中, str):
@@ -2171,7 +2199,7 @@ def 获取找书下载回复流(
     链接 = str(选中.get("url") or "")
     书籍编号 = str(选中.get("book_id") or "").strip()
     标题 = 选中.get("title") or ""
-    if not 小说功能开关.当前事件可使用小说功能(event, 平台, 配置):
+    if not await 小说功能开关.异步当前事件可使用小说功能(event, 平台, 配置):
         return 小说功能开关.获取小说功能关闭回复(平台, 配置)
     logger.info(f"找书选择下载：平台={平台}, 书名={标题}, 书籍编号={书籍编号}")
     if 平台 == "番茄" and 番茄小说 is not None:
@@ -2239,13 +2267,13 @@ async def 处理找书指令(
     if 查询 is None and not 是当前会话翻页:
         # 找书处理器会被主分发器对每条消息调用；非找书消息不读取开关状态。
         return None
-    if (查询 is not None or 是当前会话翻页) and not 小说功能开关.小说总开关是否开启(
+    if (查询 is not None or 是当前会话翻页) and not await 小说功能开关.异步小说总开关是否开启(
         配置
     ):
         找书会话.clear()
         return 小说功能开关.获取小说功能关闭回复("", 配置)
     允许平台 = _规范化允许平台(
-        小说功能开关.获取当前事件可用小说平台(event, 配置)
+        await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
     )
     会话 = None
     if 查询 is not None:

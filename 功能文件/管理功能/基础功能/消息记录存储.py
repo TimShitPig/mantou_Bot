@@ -32,6 +32,7 @@ _消息写入SQL = (
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message) "
     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
 )
+_消息查重分块大小 = 200
 
 # 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
 # 显式列出字段避免 SELECT * 搬运未来新增列；正文与媒体字段保持完整。
@@ -162,6 +163,7 @@ def 初始化数据库() -> bool:
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
+                    KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_message (message_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
@@ -253,6 +255,18 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_session_id (会话标识, id)"
                     )
                     logger.info("消息记录 MySQL 已补充会话分页索引")
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
+                    "AND INDEX_NAME = %s",
+                    (消息记录表名, "idx_msg_records_session_message"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{消息记录表名}` "
+                        "ADD KEY idx_msg_records_session_message (会话标识(64), message_id(64))"
+                    )
+                    logger.info("消息记录 MySQL 已补充会话消息去重索引")
             except Exception as 修复异常:
                 logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
         连接.commit()
@@ -306,14 +320,44 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _消息记录去重键(记录: dict[str, Any]) -> tuple[str, str]:
+    """返回与实际入库列宽一致的会话/消息 ID 去重键。"""
+    return (
+        _按列宽截断(记录.get("_session") or "", "会话标识"),
+        _按列宽截断(_规范消息ID(记录.get("message_id")), "message_id"),
+    )
+
+
+def _批量读取已存在消息键(游标: Any, 键列表: list[tuple[str, str]]) -> set[tuple[str, str]]:
+    """一次查询一批已入库消息，避免批量写入时逐条 SELECT。"""
+    已存在: set[tuple[str, str]] = set()
+    有效键 = [(会话, 消息ID) for 会话, 消息ID in 键列表 if 会话 and 消息ID]
+    for 起点 in range(0, len(有效键), _消息查重分块大小):
+        分块 = 有效键[起点 : 起点 + _消息查重分块大小]
+        占位符 = ",".join(["(%s,%s)"] * len(分块))
+        参数: list[str] = []
+        for 会话, 消息ID in 分块:
+            参数.extend((会话, 消息ID))
+        游标.execute(
+            f"SELECT 会话标识, message_id FROM `{消息记录表名}` "
+            f"WHERE (会话标识, message_id) IN ({占位符})",
+            tuple(参数),
+        )
+        for 行 in 游标.fetchall():
+            会话 = str(_行字段(行, 0, "会话标识", 默认值="") or "")
+            消息ID = str(_行字段(行, 1, "message_id", 默认值="") or "")
+            if 会话 and 消息ID:
+                已存在.add((会话, 消息ID))
+    return 已存在
+
+
 def _写入消息记录(记录: dict[str, Any]) -> bool:
     连接 = _打开连接()
     if 连接 is None:
         return False
     try:
         with 连接.cursor() as 游标:
-            会话标识 = str(记录.get("_session") or "")
-            消息ID = _规范消息ID(记录.get("message_id"))
+            会话标识, 消息ID = _消息记录去重键(记录)
             if 消息ID:
                 游标.execute(
                     f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
@@ -352,8 +396,8 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     去重记录: list[dict[str, Any]] = []
     已见键: set[tuple[str, str]] = set()
     for 记录 in 有效记录:
-        消息ID = _规范消息ID(记录.get("message_id"))
-        键 = (str(记录.get("_session") or ""), 消息ID)
+        键 = _消息记录去重键(记录)
+        消息ID = 键[1]
         if 消息ID and 键 in 已见键:
             continue
         if 消息ID:
@@ -364,17 +408,16 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         return False
     try:
         with 连接.cursor() as 游标:
-            待写入: list[tuple[Any, ...]] = []
-            for 记录 in 去重记录:
-                消息ID = _规范消息ID(记录.get("message_id"))
-                if 消息ID:
-                    游标.execute(
-                        f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
-                        (str(记录.get("_session") or ""), 消息ID),
-                    )
-                    if 游标.fetchone():
-                        continue
-                待写入.append(_消息写入参数(记录))
+            记录键列表 = [(记录, _消息记录去重键(记录)) for 记录 in 去重记录]
+            已存在 = _批量读取已存在消息键(
+                游标,
+                [键 for _, 键 in 记录键列表],
+            )
+            待写入 = [
+                _消息写入参数(记录)
+                for 记录, 键 in 记录键列表
+                if not 键[1] or 键 not in 已存在
+            ]
             if 待写入:
                 游标.executemany(_消息写入SQL, 待写入)
         连接.commit()

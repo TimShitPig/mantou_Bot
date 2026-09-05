@@ -61,7 +61,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.42"
+插件版本 = "6.1.43"
 
 
 
@@ -216,7 +216,7 @@ class MyPlugin(Star):
             命令文本 = 回调命令
 
         # 找书优先：搜索/翻页/选N 下载（兼容 Markdown 文字指令链和手动发送）
-        找书下载 = 找书功能.获取找书下载回复流(event, 命令文本, self.config)
+        找书下载 = await 找书功能.获取找书下载回复流(event, 命令文本, self.config)
         if 找书下载 is not None:
             if hasattr(找书下载, "__aiter__"):
                 小说下载任务.启动小说回复流任务(event, 找书下载, 帮助功能, 权限工具)
@@ -226,7 +226,7 @@ class MyPlugin(Star):
             event.stop_event()
             return
 
-        找书等待提示 = 找书功能.获取找书等待提示(命令文本, self.config)
+        找书等待提示 = await 找书功能.获取找书等待提示(命令文本, self.config)
         if 找书等待提示:
             async for 片段 in _输出文本回复(找书等待提示):
                 yield 片段
@@ -278,7 +278,7 @@ class MyPlugin(Star):
 
             书旗回复流 = 书旗小说功能.获取书旗小说回复流(event, 命令文本, self.config)
             if 书旗回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "书旗", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "书旗", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("书旗", self.config)
                     ):
@@ -293,7 +293,7 @@ class MyPlugin(Star):
                 event, 命令文本, self.config
             )
             if 追书回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(
+                if not await 小说功能开关.异步当前事件可使用小说功能(
                     event, "追书", self.config
                 ):
                     async for 输出内容 in _输出文本回复(
@@ -310,7 +310,7 @@ class MyPlugin(Star):
 
             七猫回复流 = 七猫小说功能.获取七猫小说回复流(event, 命令文本, self.config)
             if 七猫回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "七猫", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "七猫", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("七猫", self.config)
                     ):
@@ -325,7 +325,7 @@ class MyPlugin(Star):
                 event, 命令文本, self.config
             )
             if QQ浏览器回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(
+                if not await 小说功能开关.异步当前事件可使用小说功能(
                     event, "QQ浏览器", self.config
                 ):
                     async for 输出内容 in _输出文本回复(
@@ -342,7 +342,7 @@ class MyPlugin(Star):
 
             QQ阅读回复流 = QQ阅读功能.获取QQ阅读回复流(event, 命令文本, self.config)
             if QQ阅读回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(
+                if not await 小说功能开关.异步当前事件可使用小说功能(
                     event, "QQ阅读", self.config
                 ):
                     async for 输出内容 in _输出文本回复(
@@ -357,7 +357,7 @@ class MyPlugin(Star):
 
             得间回复流 = 得间小说功能.获取得间小说回复流(event, 命令文本, self.config)
             if 得间回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "得间", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "得间", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("得间", self.config)
                     ):
@@ -370,7 +370,7 @@ class MyPlugin(Star):
 
             点众回复流 = 点众小说功能.获取点众小说回复流(event, 命令文本, self.config)
             if 点众回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "点众", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "点众", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("点众", self.config)
                     ):
@@ -383,7 +383,7 @@ class MyPlugin(Star):
 
             盐言回复流 = 盐言小说功能.获取盐言小说回复流(event, 命令文本, self.config)
             if 盐言回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "盐言", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "盐言", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("盐言", self.config)
                     ):
@@ -396,7 +396,7 @@ class MyPlugin(Star):
 
             塔读回复流 = 塔读小说功能.获取塔读小说回复流(event, 命令文本, self.config)
             if 塔读回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "塔读", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "塔读", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("塔读", self.config)
                     ):
@@ -410,7 +410,7 @@ class MyPlugin(Star):
             番茄回复流 = 番茄小说功能.获取番茄小说回复流(event, 命令文本, self.config)
             if 番茄回复流 is not None:
                 logger.debug("番茄小说分发：使用本地下载链路")
-                if not 小说功能开关.当前事件可使用小说功能(event, "番茄", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "番茄", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("番茄", self.config)
                     ):
@@ -423,7 +423,7 @@ class MyPlugin(Star):
 
             百度回复流 = 百度小说功能.获取百度小说回复流(event, 命令文本, self.config)
             if 百度回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "百度", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "百度", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("百度", self.config)
                     ):
@@ -436,7 +436,7 @@ class MyPlugin(Star):
 
             小米回复流 = 小米小说功能.获取小米小说回复流(event, 命令文本, self.config)
             if 小米回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "小米", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "小米", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("小米", self.config)
                     ):
@@ -449,7 +449,7 @@ class MyPlugin(Star):
 
             宜搜回复流 = 宜搜小说功能.获取宜搜小说回复流(event, 命令文本, self.config)
             if 宜搜回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "宜搜", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "宜搜", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("宜搜", self.config)
                     ):
@@ -462,7 +462,7 @@ class MyPlugin(Star):
 
             米读回复流 = 米读小说功能.获取米读小说回复流(event, 命令文本, self.config)
             if 米读回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "米读", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "米读", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("米读", self.config)
                     ):
@@ -475,7 +475,7 @@ class MyPlugin(Star):
 
             猫眼回复流 = 猫眼小说功能.获取猫眼小说回复流(event, 命令文本, self.config)
             if 猫眼回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "猫眼", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "猫眼", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("猫眼", self.config)
                     ):
@@ -488,7 +488,7 @@ class MyPlugin(Star):
 
             酷我回复流 = 酷我小说功能.获取酷我小说回复流(event, 命令文本, self.config)
             if 酷我回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "酷我", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "酷我", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("酷我", self.config)
                     ):
@@ -501,7 +501,7 @@ class MyPlugin(Star):
 
             酷匠回复流 = 酷匠小说功能.获取酷匠小说回复流(event, 命令文本, self.config)
             if 酷匠回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "酷匠", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "酷匠", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("酷匠", self.config)
                     ):
@@ -514,7 +514,7 @@ class MyPlugin(Star):
 
             连城回复流 = 连城小说功能.获取连城小说回复流(event, 命令文本, self.config)
             if 连城回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "连城", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "连城", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("连城", self.config)
                     ):
@@ -529,7 +529,7 @@ class MyPlugin(Star):
                 event, 命令文本, self.config
             )
             if 菠萝包回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(
+                if not await 小说功能开关.异步当前事件可使用小说功能(
                     event, "菠萝包", self.config
                 ):
                     async for 输出内容 in _输出文本回复(
@@ -544,7 +544,7 @@ class MyPlugin(Star):
 
             晋江回复流 = 晋江小说功能.获取晋江小说回复流(event, 命令文本, self.config)
             if 晋江回复流 is not None:
-                if not 小说功能开关.当前事件可使用小说功能(event, "晋江", self.config):
+                if not await 小说功能开关.异步当前事件可使用小说功能(event, "晋江", self.config):
                     async for 输出内容 in _输出文本回复(
                         小说功能开关.获取小说功能关闭回复("晋江", self.config)
                     ):
@@ -569,6 +569,7 @@ class MyPlugin(Star):
         await 小说缓存清理.停止每日下载缓存清理任务(self._小说缓存清理任务)
         self._小说缓存清理任务 = None
         await 小说下载任务.停止小说下载任务()
+        小说功能开关.关闭小说功能状态执行器()
         QQ阅读功能.关闭QQ阅读签名执行器()
         得间小说功能.关闭得间资源()
         await 消息记录.停止消息记录()

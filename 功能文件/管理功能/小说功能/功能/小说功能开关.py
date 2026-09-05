@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any
 
 try:
@@ -10,10 +15,13 @@ except Exception:
 
     logger = logging.getLogger(__name__)
 
-from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
+from 功能文件.管理功能.基础功能.权限工具 import (
+    获取发送者QQ,
+    获取群文件清理管理员QQ列表,
+    是群文件清理管理员,
+)
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     写入布尔运行状态值,
-    读取布尔运行状态值,
     读取运行状态命名空间,
 )
 
@@ -123,6 +131,73 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
 状态命名空间 = "novel_feature_switch"
 小说总开关状态键 = "全部小说"
 管理员测试模式状态键 = "管理员测试模式"
+小说功能状态缓存秒数 = 2.0
+_小说功能状态缓存: dict[int, tuple[float, dict[str, Any]]] = {}
+_小说功能状态缓存锁 = threading.RLock()
+_小说功能状态执行器: ThreadPoolExecutor | None = globals().get("_小说功能状态执行器")
+_小说功能状态执行器锁 = threading.RLock()
+
+
+def _复制小说功能状态(状态: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "global_enabled": bool(状态.get("global_enabled", True)),
+        "test_mode": bool(状态.get("test_mode", False)),
+        "platforms": dict(状态.get("platforms") or 默认状态),
+    }
+
+
+def _清除小说功能状态缓存(配置: Any = None) -> None:
+    with _小说功能状态缓存锁:
+        if 配置 is None:
+            _小说功能状态缓存.clear()
+        else:
+            _小说功能状态缓存.pop(id(配置), None)
+
+
+def _获取小说功能状态执行器() -> ThreadPoolExecutor:
+    global _小说功能状态执行器
+    with _小说功能状态执行器锁:
+        if _小说功能状态执行器 is None or getattr(_小说功能状态执行器, "_shutdown", False):
+            _小说功能状态执行器 = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="mantou-novel-state",
+            )
+        return _小说功能状态执行器
+
+
+def 关闭小说功能状态执行器() -> None:
+    """插件停止时释放开关查询线程，避免热重载遗留工作线程。"""
+    global _小说功能状态执行器
+    with _小说功能状态执行器锁:
+        执行器 = _小说功能状态执行器
+        _小说功能状态执行器 = None
+    if 执行器 is not None:
+        执行器.shutdown(wait=False, cancel_futures=True)
+
+
+async def _异步执行小说功能状态查询(函数: Any, *参数: Any) -> Any:
+    """把数据库状态读取移出事件循环，避免等待 MySQL 时拖慢正文下载任务。"""
+    循环 = asyncio.get_running_loop()
+    return await 循环.run_in_executor(
+        _获取小说功能状态执行器(),
+        partial(函数, *参数),
+    )
+
+
+async def _异步是小说测试管理员(event: Any, 配置: Any) -> bool:
+    """先在事件循环读取发送者，再在线程中读取可能涉及 MySQL 的白名单。"""
+    发送者 = 获取发送者QQ(event)
+    if not 发送者:
+        return False
+    try:
+        管理员列表 = await _异步执行小说功能状态查询(
+            获取群文件清理管理员QQ列表,
+            配置,
+        )
+    except Exception as 异常:
+        logger.debug("小说测试模式管理员读取失败：错误类型=%s", type(异常).__name__)
+        return False
+    return str(发送者) in set(管理员列表 or ())
 
 
 def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
@@ -144,6 +219,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         是否开启 = 小说总开关命令配置[文本]
         try:
             写入布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, 是否开启)
+            _清除小说功能状态缓存(配置)
         except Exception as exc:
             logger.warning(
                 f"全局小说功能开关写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}"
@@ -155,6 +231,7 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
         是否开启 = 测试模式命令配置[文本]
         try:
             写入布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, 是否开启)
+            _清除小说功能状态缓存(配置)
         except Exception as exc:
             logger.warning(
                 f"管理员测试模式写入数据库失败：是否开启={是否开启}, 错误={type(exc).__name__}"
@@ -176,24 +253,15 @@ def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -
 
 
 def 小说功能是否开启(功能名: str, 配置: Any = None) -> bool:
-    状态 = 读取小说功能状态(配置)
-    return bool(状态.get(功能名, True))
+    return bool(读取小说功能控制台状态(配置)["platforms"].get(功能名, True))
 
 
 def 小说总开关是否开启(配置: Any = None) -> bool:
-    try:
-        return 读取布尔运行状态值(配置, 状态命名空间, 小说总开关状态键, True)
-    except Exception as exc:
-        logger.warning(f"全局小说功能开关读取数据库失败：错误={type(exc).__name__}")
-        return True
+    return bool(读取小说功能控制台状态(配置)["global_enabled"])
 
 
 def 管理员测试模式是否开启(配置: Any = None) -> bool:
-    try:
-        return 读取布尔运行状态值(配置, 状态命名空间, 管理员测试模式状态键, False)
-    except Exception as exc:
-        logger.warning(f"管理员测试模式读取数据库失败：错误={type(exc).__name__}")
-        return False
+    return bool(读取小说功能控制台状态(配置)["test_mode"])
 
 
 def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = None) -> bool:
@@ -202,6 +270,26 @@ def 当前事件可使用小说功能(event: Any, 功能名: str, 配置: Any = 
     if 小说功能是否开启(功能名, 配置):
         return True
     return bool(是群文件清理管理员(event, 配置) and 管理员测试模式是否开启(配置))
+
+
+async def 异步当前事件可使用小说功能(
+    event: Any, 功能名: str, 配置: Any = None
+) -> bool:
+    状态 = await _异步执行小说功能状态查询(读取小说功能控制台状态, 配置)
+    if not isinstance(状态, dict):
+        状态 = {}
+    if not bool(状态.get("global_enabled", True)):
+        return False
+    平台状态 = 状态.get("platforms") if isinstance(状态, dict) else {}
+    if bool((平台状态 or {}).get(功能名, 默认状态.get(功能名, True))):
+        return True
+    return bool(状态.get("test_mode")) and await _异步是小说测试管理员(event, 配置)
+
+
+async def 异步小说总开关是否开启(配置: Any = None) -> bool:
+    return bool(
+        await _异步执行小说功能状态查询(小说总开关是否开启, 配置)
+    )
 
 
 def 获取当前事件可用小说平台(event: Any, 配置: Any = None) -> set[str]:
@@ -219,6 +307,24 @@ def 获取当前事件可用小说平台(event: Any, 配置: Any = None) -> set[
         功能名
         for 功能名, 默认值 in 默认状态.items()
         if bool(平台状态.get(功能名, 默认值))
+    }
+
+
+async def 异步获取当前事件可用小说平台(
+    event: Any, 配置: Any = None
+) -> set[str]:
+    状态 = await _异步执行小说功能状态查询(读取小说功能控制台状态, 配置)
+    if not isinstance(状态, dict):
+        状态 = {}
+    if not bool(状态.get("global_enabled", True)):
+        return set()
+    if bool(状态.get("test_mode")) and await _异步是小说测试管理员(event, 配置):
+        return set(默认状态)
+    平台状态 = 状态.get("platforms") if isinstance(状态, dict) else {}
+    return {
+        功能名
+        for 功能名, 默认值 in 默认状态.items()
+        if bool((平台状态 or {}).get(功能名, 默认值))
     }
 
 
@@ -241,6 +347,7 @@ def 写入小说功能状态(配置: Any, 功能名: str, 是否开启: bool) ->
     if 功能名 not in 默认状态:
         raise RuntimeError(f"未知小说功能：{功能名}")
     写入布尔运行状态值(配置, 状态命名空间, 功能名, bool(是否开启))
+    _清除小说功能状态缓存(配置)
 
 
 def _运行状态转布尔(值: Any, 默认值: bool) -> bool:
@@ -261,16 +368,26 @@ def 读取小说功能控制台状态(配置: Any = None) -> dict[str, Any]:
     }
     if 配置 is None:
         return 结果
+    配置键 = id(配置)
+    当前时间 = time.monotonic()
+    with _小说功能状态缓存锁:
+        缓存 = _小说功能状态缓存.get(配置键)
+        if 缓存 is not None and 当前时间 - 缓存[0] < 小说功能状态缓存秒数:
+            return _复制小说功能状态(缓存[1])
     try:
         状态 = 读取运行状态命名空间(配置, 状态命名空间)
     except Exception as exc:
         logger.warning(
             f"小说功能开关批量读取数据库失败：错误={type(exc).__name__}"
         )
-        return 结果
+        with _小说功能状态缓存锁:
+            _小说功能状态缓存[配置键] = (time.monotonic(), _复制小说功能状态(结果))
+        return _复制小说功能状态(结果)
     if not isinstance(状态, dict):
         logger.warning("小说功能开关批量读取数据库返回格式异常：错误类型=TypeError")
-        return 结果
+        with _小说功能状态缓存锁:
+            _小说功能状态缓存[配置键] = (time.monotonic(), _复制小说功能状态(结果))
+        return _复制小说功能状态(结果)
     结果["global_enabled"] = _运行状态转布尔(
         状态.get(小说总开关状态键), True
     )
@@ -280,7 +397,9 @@ def 读取小说功能控制台状态(配置: Any = None) -> dict[str, Any]:
     平台状态 = 结果["platforms"]
     for 功能名, 默认值 in 默认状态.items():
         平台状态[功能名] = _运行状态转布尔(状态.get(功能名), 默认值)
-    return 结果
+    with _小说功能状态缓存锁:
+        _小说功能状态缓存[配置键] = (time.monotonic(), _复制小说功能状态(结果))
+    return _复制小说功能状态(结果)
 
 
 def 读取小说功能状态(配置: Any = None) -> dict[str, bool]:

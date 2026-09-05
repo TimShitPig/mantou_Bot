@@ -90,11 +90,19 @@ _消息持久化队列: asyncio.Queue[tuple[str, Any]] = (
 _消息持久化任务: asyncio.Task[Any] | None = globals().get("_消息持久化任务")
 _消息持久化接收入队 = globals().get("_消息持久化接收入队", True)
 _消息持久化溢出数 = int(globals().get("_消息持久化溢出数", 0) or 0)
+_消息持久化失败批次: list[tuple[str, Any]] = list(
+    globals().get("_消息持久化失败批次") or []
+)
+_消息持久化失败重试次数 = int(globals().get("_消息持久化失败重试次数", 0) or 0)
+_消息持久化失败重试最大等待秒 = 30.0
 机器人资料缓存: dict[str, tuple[float, dict[str, str]]] = globals().get("机器人资料缓存") or {}
 机器人资料缓存秒数 = 6 * 60 * 60
 _数据库裁剪进行中 = globals().get("_数据库裁剪进行中", False)
 _上次数据库裁剪排队时间 = float(globals().get("_上次数据库裁剪排队时间", 0.0) or 0.0)
 _数据库裁剪最短间隔 = 300.0
+_消息数据库维护任务: asyncio.Task[Any] | None = globals().get("_消息数据库维护任务")
+_消息数据库维护首次延迟秒 = 30.0
+_消息数据库维护间隔秒 = 10 * 60.0
 _消息缓存总数缓存 = int(globals().get("_消息缓存总数缓存", 0) or 0)
 _消息缓存总数检查时间 = float(globals().get("_消息缓存总数检查时间", 0.0) or 0.0)
 _消息缓存总数检查间隔 = 0.5
@@ -1041,68 +1049,109 @@ def _准备消息持久化队列() -> asyncio.Queue[tuple[str, Any]]:
         return _消息持久化队列
     队列循环 = getattr(_消息持久化队列, "_loop", None)
     任务运行中 = _消息持久化任务 is not None and not _消息持久化任务.done()
-    if 队列循环 not in (None, 当前循环) and _消息持久化队列.empty() and not 任务运行中:
+    未完成项目数 = int(getattr(_消息持久化队列, "_unfinished_tasks", 0) or 0)
+    if (
+        队列循环 not in (None, 当前循环)
+        and _消息持久化队列.empty()
+        and not 任务运行中
+        and not _消息持久化失败批次
+        and 未完成项目数 <= 0
+    ):
         _消息持久化队列 = asyncio.Queue(maxsize=_消息持久化队列上限)
     return _消息持久化队列
 
 
+async def _写入消息持久化子批次(
+    项目类型: str,
+    子批次: list[tuple[str, Any]],
+) -> tuple[bool, str]:
+    """带有限重试地写入一种持久化项目，返回成功状态与最后错误分类。"""
+    最后错误类型 = ""
+    for 重试次数 in range(_消息持久化最大重试次数):
+        try:
+            async with _数据库写入锁:
+                结果 = await _异步执行消息记录同步(
+                    _执行消息持久化批次,
+                    子批次,
+                )
+            if 结果 is not False:
+                return True, ""
+            最后错误类型 = "写入返回失败"
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            最后错误类型 = type(异常).__name__
+        if 重试次数 + 1 < _消息持久化最大重试次数:
+            await asyncio.sleep(_消息持久化重试等待秒 * (重试次数 + 1))
+    return False, 最后错误类型 or "写入返回失败"
+
+
 async def _消息持久化工作() -> None:
-    """固定单消费者按时间窗聚合消息，避免每条消息创建一个后台任务。"""
-    global _消息持久化任务
+    """固定单消费者批量落库；失败项保留在内存中直到成功写入。"""
+    global _消息持久化任务, _消息持久化失败批次, _消息持久化失败重试次数
     队列 = _准备消息持久化队列()
     try:
         while True:
-            首项 = await 队列.get()
-            批次 = [首项]
-            截止时间 = asyncio.get_running_loop().time() + _消息持久化聚合秒数
-            while len(批次) < _消息持久化批量大小:
-                try:
-                    批次.append(队列.get_nowait())
-                    continue
-                except asyncio.QueueEmpty:
-                    剩余时间 = 截止时间 - asyncio.get_running_loop().time()
-                    if 剩余时间 <= 0:
-                        break
-                try:
-                    批次.append(await asyncio.wait_for(队列.get(), timeout=剩余时间))
-                except TimeoutError:
-                    break
-            # 消息和未读状态分开重试。未读状态失败时不重复 INSERT 已提交的
-            # 无 message_id 消息，避免网络抖动造成历史记录再次出现。
-            try:
-                for 项目类型 in ("message", "unread"):
-                    子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
-                    if not 子批次:
+            if _消息持久化失败批次:
+                批次 = list(_消息持久化失败批次)
+            else:
+                首项 = await 队列.get()
+                批次 = [首项]
+                截止时间 = asyncio.get_running_loop().time() + _消息持久化聚合秒数
+                while len(批次) < _消息持久化批量大小:
+                    try:
+                        批次.append(队列.get_nowait())
                         continue
-                    写入成功 = False
-                    最后错误类型 = ""
-                    for 重试次数 in range(_消息持久化最大重试次数):
-                        try:
-                            async with _数据库写入锁:
-                                结果 = await _异步执行消息记录同步(
-                                    _执行消息持久化批次,
-                                    子批次,
-                                )
-                            写入成功 = 结果 is not False
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as 异常:
-                            最后错误类型 = type(异常).__name__
-                        if 写入成功:
+                    except asyncio.QueueEmpty:
+                        剩余时间 = 截止时间 - asyncio.get_running_loop().time()
+                        if 剩余时间 <= 0:
                             break
-                        if 重试次数 + 1 < _消息持久化最大重试次数:
-                            await asyncio.sleep(_消息持久化重试等待秒 * (重试次数 + 1))
-                    if not 写入成功:
-                        logger.warning(
-                            "消息记录后台批量写入失败：类型=%s，数量=%d，重试次数=%d，错误类型=%s",
-                            项目类型,
-                            len(子批次),
-                            _消息持久化最大重试次数,
-                            最后错误类型 or "写入返回失败",
-                        )
-            finally:
-                for _ in 批次:
-                    队列.task_done()
+                    try:
+                        批次.append(await asyncio.wait_for(队列.get(), timeout=剩余时间))
+                    except TimeoutError:
+                        break
+                # 入队项目只有写入成功后才 task_done；热重载或临时断库期间，
+                # 失败批次仍会留在当前进程并优先于新消息继续重试。
+                _消息持久化失败批次 = list(批次)
+
+            待重试: list[tuple[str, Any]] = []
+            失败详情: list[tuple[str, int, str]] = []
+            # 消息和未读状态分开落库。未读写入失败时不重复已经成功的消息批次，
+            # 同时让失败项继续持有队列的 unfinished_tasks 计数。
+            for 项目类型 in ("message", "unread"):
+                子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
+                if not 子批次:
+                    continue
+                写入成功, 错误类型 = await _写入消息持久化子批次(项目类型, 子批次)
+                if 写入成功:
+                    for _ in 子批次:
+                        队列.task_done()
+                else:
+                    待重试.extend(子批次)
+                    失败详情.append((项目类型, len(子批次), 错误类型))
+
+            if not 待重试:
+                _消息持久化失败批次 = []
+                _消息持久化失败重试次数 = 0
+                continue
+
+            _消息持久化失败批次 = 待重试
+            _消息持久化失败重试次数 += 1
+            if _消息持久化失败重试次数 == 1 or _消息持久化失败重试次数 % 10 == 0:
+                for 项目类型, 数量, 错误类型 in 失败详情:
+                    logger.warning(
+                        "消息记录后台批量写入延后重试：类型=%s，数量=%d，累计重试=%d，错误类型=%s",
+                        项目类型,
+                        数量,
+                        _消息持久化失败重试次数,
+                        错误类型,
+                    )
+            等待秒数 = min(
+                _消息持久化失败重试最大等待秒,
+                _消息持久化重试等待秒
+                * max(1, 2 ** min(6, _消息持久化失败重试次数 - 1)),
+            )
+            await asyncio.sleep(max(_消息持久化重试等待秒, 等待秒数))
     except asyncio.CancelledError:
         raise
     finally:
@@ -1157,7 +1206,7 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
     """等待当前已排队的消息/未读/元数据写入，供网页操作和插件停机调用。"""
     截止时间 = asyncio.get_running_loop().time() + max(0.1, float(超时))
     队列 = _准备消息持久化队列()
-    if not 队列.empty():
+    if _消息持久化失败批次 or not 队列.empty():
         _启动消息持久化任务()
     try:
         剩余时间 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
@@ -1187,7 +1236,12 @@ async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
-    global _群信息轮询任务
+    global _群信息轮询任务, _消息数据库维护任务
+    数据库维护任务 = _消息数据库维护任务
+    _消息数据库维护任务 = None
+    if 数据库维护任务 is not None and not 数据库维护任务.done():
+        数据库维护任务.cancel()
+        await asyncio.gather(数据库维护任务, return_exceptions=True)
     群信息轮询任务 = _群信息轮询任务
     _群信息轮询任务 = None
     if 群信息轮询任务 is not None and not 群信息轮询任务.done():
@@ -2340,9 +2394,81 @@ def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
     return True
 
 
+def _安排数据库裁剪() -> asyncio.Task[Any] | None:
+    """低频安排消息表保留清理，不依赖内存消息是否到达上限。"""
+    global _数据库裁剪进行中, _上次数据库裁剪排队时间
+    if _消息存储 is None or not _消息数据库已配置():
+        return None
+    当前时间 = time.monotonic()
+    if (
+        _数据库裁剪进行中
+        or 当前时间 - _上次数据库裁剪排队时间 < _数据库裁剪最短间隔
+    ):
+        return None
+    _数据库裁剪进行中 = True
+    _上次数据库裁剪排队时间 = 当前时间
+    try:
+        任务 = _后台执行同步(_消息存储.裁剪总消息, 总消息上限 * 2)
+    except Exception:
+        _数据库裁剪进行中 = False
+        return None
+    if 任务 is None:
+        _数据库裁剪进行中 = False
+        return None
+
+    def _裁剪完成(_任务: asyncio.Task[Any]) -> None:
+        global _数据库裁剪进行中
+        _数据库裁剪进行中 = False
+
+    任务.add_done_callback(_裁剪完成)
+    return 任务
+
+
+async def _消息数据库维护工作() -> None:
+    """独立检查持久化消息总量，避免低活跃会话永远不触发数据库裁剪。"""
+    global _消息数据库维护任务
+    try:
+        await asyncio.sleep(_消息数据库维护首次延迟秒)
+        while True:
+            任务 = _安排数据库裁剪()
+            if 任务 is not None:
+                try:
+                    await asyncio.shield(任务)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as 异常:
+                    logger.debug("消息记录数据库维护失败：错误类型=%s", type(异常).__name__)
+            await asyncio.sleep(_消息数据库维护间隔秒)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        if _消息数据库维护任务 is asyncio.current_task():
+            _消息数据库维护任务 = None
+
+
+def _启动消息数据库维护任务() -> asyncio.Task[Any] | None:
+    """只保留一个消息表维护任务，热重载时复用当前事件循环的任务。"""
+    global _消息数据库维护任务
+    if not _消息数据库已配置():
+        return None
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if _消息数据库维护任务 is None or _消息数据库维护任务.done():
+        _消息数据库维护任务 = 循环.create_task(
+            _消息数据库维护工作(),
+            name="消息记录数据库维护",
+        )
+    return _消息数据库维护任务
+
+
 def _裁剪总缓存() -> None:
     global _数据库裁剪进行中, _上次数据库裁剪排队时间
     global _消息缓存总数缓存, _消息缓存总数检查时间
+    # 数据库保留清理独立于内存缓存大小；调用本函数的高频路径只会命中
+    # 既有 5 分钟限流，不增加小说或消息处理的同步数据库等待。
+    _安排数据库裁剪()
     当前时间 = time.monotonic()
     需要重新统计 = (
         _消息缓存总数缓存 <= 0
@@ -2383,27 +2509,6 @@ def _裁剪总缓存() -> None:
         _消息缓存总数缓存 = max(0, 总数)
     except Exception:
         _消息缓存总数缓存 = max(0, 总数)
-    if _消息数据库已配置():
-        try:
-            当前时间 = time.monotonic()
-            if _数据库裁剪进行中 or 当前时间 - _上次数据库裁剪排队时间 < _数据库裁剪最短间隔:
-                return
-            _数据库裁剪进行中 = True
-            _上次数据库裁剪排队时间 = 当前时间
-            任务 = _后台执行同步(_消息存储.裁剪总消息, 总消息上限 * 2)
-            if 任务 is None:
-                _数据库裁剪进行中 = False
-            else:
-                def _裁剪完成(_任务: asyncio.Task[Any]) -> None:
-                    global _数据库裁剪进行中
-                    _数据库裁剪进行中 = False
-
-                任务.add_done_callback(_裁剪完成)
-        except Exception:
-            _数据库裁剪进行中 = False
-            pass
-
-
 def 记录发送消息(
     会话标识: str,
     类型: str,
@@ -6178,6 +6283,9 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
                 _消息存储.设置数据库配置(插件配置)
                 _消息存储.初始化数据库()
                 _从数据库恢复()
+                _启动消息数据库维护任务()
+                if _消息持久化失败批次 or not _准备消息持久化队列().empty():
+                    _启动消息持久化任务()
             except Exception as 恢复异常:
                 logger.warning("消息记录数据库恢复失败：错误类型=%s", type(恢复异常).__name__)
         _修补botpy昵称()
