@@ -3405,11 +3405,15 @@ def 获取QQ阅读书籍付费类型(
     has_paid_chapter = any(
         _安全整数(item.get("chapter_fee")) > 0 for item in catalog
     )
-    if not has_paid_chapter and not has_free_limit:
-        return "free"
+    # 目录明确给出正价章节时，该书属于单章付费；详情页的 vip_free
+    # 只是“可用会员阅读”的展示标记，不能覆盖实际章节价格。
+    if has_paid_chapter:
+        return "single"
     if _是真值(details.get("vip_free")):
         return "vip"
-    return "single"
+    if has_free_limit:
+        return "single"
+    return "free"
 
 
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
