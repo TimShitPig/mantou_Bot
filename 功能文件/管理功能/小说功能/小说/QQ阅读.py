@@ -1779,11 +1779,9 @@ def tar_decrypt(stream: Union[BinaryIO, bytes]) -> Dict[str, object]:
 CONFIG: Dict[str, str] = {
     "loginType": "50",
     "c_platform": "android",
-    "c_version": "qqreader_8.5.2.0888_android",
-    "version_code": "407",
+    "c_version": "qqreader_8.3.3.0888_android",
     "channel": "10005136",
     "qrsn": "0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b",
-    "qrsn_new": "",
     "usid": "ywIWoPGBmOeI",
     "uid": "855131499808",
     "fuid": "89306811035542cd868d49def7d3857d",
@@ -1801,14 +1799,10 @@ class ConfigManager:
         self.login_type = "50"
         self.c_platform = "android"
         self.c_version = ""
-        self.version_code = ""
         self.channel = ""
         self.qrsn = ""
-        self.qrsn_new = ""
         self.usid = ""
         self.uid = ""
-        self.ywguid = ""
-        self.ywkey = ""
         self.fuid = ""
         self.key_pool: Optional[str] = None
         self._knva_cache: bytes | None = None
@@ -1885,22 +1879,14 @@ class ConfigManager:
             self.c_platform = str(m["c_platform"])
         if "c_version" in m:
             self.c_version = str(m["c_version"])
-        if "version_code" in m:
-            self.version_code = str(m["version_code"])
         if "channel" in m:
             self.channel = str(m["channel"])
         if "qrsn" in m:
             self.qrsn = str(m["qrsn"])
-        if "qrsn_new" in m:
-            self.qrsn_new = str(m["qrsn_new"])
         if "usid" in m:
             self.usid = str(m["usid"])
         if "uid" in m:
             self.uid = str(m["uid"])
-        if "ywguid" in m:
-            self.ywguid = str(m["ywguid"])
-        if "ywkey" in m:
-            self.ywkey = str(m["ywkey"])
         if "fuid" in m:
             new_fuid = str(m["fuid"])
             if new_fuid != self.fuid:
@@ -2158,19 +2144,6 @@ def _生成QQ阅读YWToken(value: str) -> str:
     return DES.new(b"1R8SH560", DES.MODE_ECB).encrypt(padded).hex().upper()
 
 
-def _生成QQ阅读CKey(value: str) -> str:
-    """复现 QQ 阅读账号请求的大小写位图 ckey。"""
-    return "".join("1" if char.isupper() else "0" for char in str(value or ""))
-
-
-def _QQ阅读使用账号登录态(config: ConfigManager) -> bool:
-    return bool(
-        config.ywguid
-        and config.ywkey
-        and str(config.login_type or "") not in {"50", "52"}
-    )
-
-
 def _稳定QQ阅读随机标识(seed: str, length: int) -> str:
     value = str(seed or "").strip() or secrets.token_hex(16)
     result = hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -2190,9 +2163,6 @@ def _补充QQ阅读网关签名(
     signed["qrtm"] = str(int(timestamp_ms) // 1000)
 
     config = ConfigManager.get_instance()
-    account_mode = _QQ阅读使用账号登录态(config)
-    login_id = config.ywguid if account_mode else config.uid
-    login_key = config.ywkey if account_mode else config.usid
     if not signed.get("qrsn"):
         signed["qrsn"] = _稳定QQ阅读随机标识(
             "|".join(
@@ -2200,23 +2170,15 @@ def _补充QQ阅读网关签名(
                     config.channel,
                     config.c_version,
                     config.login_type,
-                    login_id,
-                    login_key,
+                    config.uid,
+                    config.usid,
                 )
             ),
             16,
         )
     if not signed.get("qrsn_new"):
         signed["qrsn_new"] = _稳定QQ阅读随机标识(
-            "|".join(
-                (
-                    signed["qrsn"],
-                    config.c_platform,
-                    config.version_code,
-                    login_id,
-                    login_key,
-                )
-            ),
+            "|".join((signed["qrsn"], config.c_platform, config.uid, config.usid)),
             36,
         )
 
@@ -2228,7 +2190,7 @@ def _补充QQ阅读网关签名(
         f"{fuid}_{timestamp_ms}" if fuid else f"{secrets.token_hex(16)}_{timestamp_ms}"
     )
 
-    login_uin = str(signed.get("ywguid") or signed.get("uid") or "").strip()
+    login_uin = str(signed.get("uid") or "").strip()
     channel = str(signed.get("channel") or "").strip()
     c_version = str(signed.get("c_version") or "").strip()
     qrtm = signed["qrtm"]
@@ -2282,221 +2244,28 @@ def 构造QQ阅读鉴权请求头(
     request_url: str | None = None,
 ) -> Dict[str, str]:
     config = ConfigManager.get_instance()
+    pwd = (
+        f"{config.login_type}|||{config.c_version}|{config.c_platform}|{config.channel}|"
+        f"{config.qrsn}|{config.qrsn}||||0|{timestamp_ms}|{SIGN_TAIL}"
+    )
     headers = {
         "User-Agent": UA,
         "loginType": config.login_type,
         "c_platform": config.c_platform,
         "c_version": config.c_version,
-        "version_code": config.version_code,
         "channel": config.channel,
         "qrsn": config.qrsn,
+        "usid": config.usid,
+        "uid": config.uid,
+        "qqnum": config.uid,
         "youngerMode": "0",
-        "qrsn_new": config.qrsn_new,
-        "gselect": "",
-        "server_sex": "",
-        "rcmd": "",
+        "qrsn_new": config.qrsn,
         "ttime": str(timestamp_ms),
+        "csigs": search(sha256_hex(pwd), generate_salt()),
     }
-    if _QQ阅读使用账号登录态(config):
-        headers.update(
-            {
-                "ywguid": config.ywguid,
-                "ywkey": config.ywkey,
-                "cookie": f"ywkey={config.ywkey}",
-                "ckey": _生成QQ阅读CKey(config.ywkey),
-                "qqnum": config.ywguid,
-            }
-        )
-    else:
-        headers.update(
-            {
-                "usid": config.usid,
-                "uid": config.uid,
-                "qqnum": config.uid,
-            }
-        )
-    csigs_fields = (
-        "loginType",
-        "ywguid",
-        "ywkey",
-        "c_version",
-        "c_platform",
-        "channel",
-        "qrsn",
-        "qrsn_new",
-        "gselect",
-        "server_sex",
-        "rcmd",
-        "youngerMode",
-        "ttime",
-    )
-    pwd = "|".join(str(headers.get(field) or "") for field in csigs_fields)
-    headers["csigs"] = search(sha256_hex(f"{pwd}|{SIGN_TAIL}"), generate_salt())
     if request_url:
         return _补充QQ阅读网关签名(headers, request_url)
     return headers
-QQ阅读账号VIP_是 = "VIP"
-QQ阅读账号VIP_否 = "非VIP"
-QQ阅读账号VIP_未知 = "未知"
-
-
-def _解析QQ阅读会员到期时间(value: Any) -> float | None:
-    """兼容账号资料接口返回的秒、毫秒和日期字符串。"""
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        numeric = float(raw)
-    except (TypeError, ValueError):
-        numeric = None
-    if numeric is not None:
-        if numeric > 100000000000:
-            numeric /= 1000
-        return numeric if numeric >= 0 else None
-    normalized = raw.replace("T", " ").split("+", 1)[0].split("Z", 1)[0]
-    for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            return time.mktime(time.strptime(normalized, pattern))
-        except ValueError:
-            continue
-    return None
-
-
-def _遍历QQ阅读会员对象(data: Any) -> Iterator[dict[str, Any]]:
-    """按响应优先级遍历会员接口对象，避免误读书籍详情里的 VIP 字段。"""
-    待处理: list[Any] = [data]
-    已访问: set[int] = set()
-    while 待处理:
-        当前 = 待处理.pop(0)
-        if not isinstance(当前, (dict, list)):
-            continue
-        标识 = id(当前)
-        if 标识 in 已访问:
-            continue
-        已访问.add(标识)
-        if isinstance(当前, list):
-            待处理.extend(当前)
-            continue
-        yield 当前
-        # 接口可能把统一响应放在 data/result/body 中，按固定顺序优先读取。
-        for key in ("data", "result", "body", "user", "account"):
-            nested = 当前.get(key)
-            if isinstance(nested, (dict, list)):
-                待处理.append(nested)
-
-
-def _读取QQ阅读账号会员状态(data: Any) -> str:
-    """按 QQ 阅读官方会员接口规则判断账号状态，未知响应不降级为非会员。"""
-    # QQ 阅读 8.5.2 的 UserVipStatus 逻辑：code=0 后，monthUser != 0
-    # 才是会员；isLogin=false 说明鉴权没有生效，不能当作“非 VIP”。
-    objects = list(_遍历QQ阅读会员对象(data))
-    for item in objects:
-        if "code" in item and _安全整数(item.get("code"), 0) != 0:
-            continue
-        if "isLogin" in item and not _是真值(item.get("isLogin")):
-            continue
-        if "monthUser" in item:
-            month_user = _安全整数(item.get("monthUser"), -1)
-            if month_user >= 0:
-                return QQ阅读账号VIP_是 if month_user != 0 else QQ阅读账号VIP_否
-
-    value_fields = (
-        "vipType",
-        "vip_type",
-        "vipStatus",
-        "vipstatus",
-        "vip_status",
-        "isVip",
-        "is_vip",
-        "user_vip",
-        "vip",
-    )
-    expiry_fields = ("vipEndTime", "vip_end_time", "expired_time", "vipEnd")
-    stack: list[Any] = objects
-    seen: set[int] = set()
-    observed_non_vip = False
-    now = time.time()
-    while stack:
-        item = stack.pop()
-        if not isinstance(item, (dict, list)):
-            continue
-        marker = id(item)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        if isinstance(item, list):
-            stack.extend(value for value in item if isinstance(value, (dict, list)))
-            continue
-
-        for field in value_fields:
-            if field not in item:
-                continue
-            value = item.get(field)
-            if _是真值(value):
-                return QQ阅读账号VIP_是
-            normalized = str(value or "").strip().lower()
-            if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-                observed_non_vip = True
-        for field in expiry_fields:
-            if field not in item:
-                continue
-            expires_at = _解析QQ阅读会员到期时间(item.get(field))
-            if expires_at is None:
-                continue
-            if expires_at > now:
-                return QQ阅读账号VIP_是
-            observed_non_vip = True
-        stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
-    return QQ阅读账号VIP_否 if observed_non_vip else QQ阅读账号VIP_未知
-
-
-async def 查询QQ阅读账号VIP状态(session: aiohttp.ClientSession) -> str:
-    """按账号登录态读取会员资料，返回会员、非会员或未知。"""
-    config = ConfigManager.get_instance()
-    if not _QQ阅读使用账号登录态(config):
-        logger.debug("QQ阅读账号VIP状态查询跳过：未加载账号登录态")
-        return QQ阅读账号VIP_未知
-
-    # 先调用账号级会员接口；资料接口只作为兼容旧服务端的回退。
-    endpoints = (
-        ("vip_status", QQ阅读账号VIP地址, {}),
-        ("profile", QQ阅读账号资料地址, {"rechargeCouponSwith": "1"}),
-    )
-    observed_non_vip = False
-    for stage, url, params in endpoints:
-        request_url = _构造QQ阅读请求地址(url, params)
-        headers = await 异步构造QQ阅读鉴权请求头(
-            int(time.time() * 1000), request_url
-        )
-        try:
-            async with session.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15, sock_connect=10, sock_read=15),
-            ) as response:
-                status_code = response.status
-                if status_code != 200:
-                    logger.debug(
-                        "QQ阅读账号VIP状态查询失败："
-                        f"阶段={stage}, HTTP状态={status_code}"
-                    )
-                    continue
-                data = await response.json(content_type=None)
-        except Exception as exc:
-            logger.debug(
-                "QQ阅读账号VIP状态查询失败："
-                f"阶段={stage}, 错误={type(exc).__name__}"
-            )
-            continue
-
-        status = _读取QQ阅读账号会员状态(data)
-        if status == QQ阅读账号VIP_是:
-            return status
-        if status == QQ阅读账号VIP_否:
-            observed_non_vip = True
-    return QQ阅读账号VIP_否 if observed_non_vip else QQ阅读账号VIP_未知
-
 
 
 def _提取QQ阅读章节号(value: str) -> int:
@@ -3046,13 +2815,7 @@ def _parse_teb_info_blob(blob: bytes) -> list[dict]:
 QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
-QQ阅读免费正文地址 = "http://154.12.91.167:7000/content"
-QQ阅读账号VIP地址 = "https://select.reader.qq.com/v7_6_6/uservipstatus"
-QQ阅读账号资料地址 = "https://select.reader.qq.com/v7_6_6/nativepage/getAcctInfo"
-QQ阅读免费正文批量章节数 = 200
-QQ阅读免费正文最大动态并发数 = 16
-# 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
-QQ阅读进度日志分段数 = 4
+QQ阅读进度日志分段数 = 10
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"
@@ -3066,8 +2829,6 @@ QQ阅读登录态状态键 = "login_state"
 下载失败提示 = "下载失败 请重试"
 文件发送失败提示 = "文件发送失败，请稍后再试"
 章节单独付费提示 = "没有可下载的免费章节"
-QQ阅读事件去重缓存: dict[str, float] = globals().get("QQ阅读事件去重缓存") or {}
-QQ阅读事件去重有效期秒 = 5 * 60
 
 
 def _是QQ阅读域名(hostname: str) -> bool:
@@ -3164,88 +2925,6 @@ def 提取QQ阅读事件链接(event: Any) -> str | None:
     return None
 
 
-def _提取QQ阅读事件消息ID(event: Any) -> str:
-    """读取 QQ 官方事件消息 ID，合并全量事件与 @事件的重复投递。"""
-    候选对象 = [
-        _读取QQ阅读字段(event, "message_obj"),
-        _读取QQ阅读字段(event, "raw_message"),
-        _读取QQ阅读字段(event, "message"),
-        event,
-    ]
-    已访问: set[int] = set()
-    for 对象 in 候选对象:
-        if 对象 is None:
-            continue
-        if isinstance(对象, (dict, list, tuple)) or not isinstance(
-            对象, (str, bytes, int, float, bool)
-        ):
-            标识 = id(对象)
-            if 标识 in 已访问:
-                continue
-            已访问.add(标识)
-        字段列表 = ["message_id", "msg_id", "messageId"]
-        if isinstance(对象, dict):
-            字段列表.append("id")
-        for 字段名 in 字段列表:
-            值 = _读取QQ阅读字段(对象, 字段名)
-            if isinstance(值, (dict, list, tuple, set)):
-                continue
-            文本 = str(值 or "").strip()
-            if 文本 and len(文本) >= 8 and len(文本) <= 512:
-                return 文本
-    return ""
-
-
-def _QQ阅读事件是否重复(event: Any, link: str) -> bool:
-    消息ID = _提取QQ阅读事件消息ID(event)
-    if 消息ID:
-        键 = f"id:{消息ID}"
-    else:
-        候选对象 = [
-            event,
-            _读取QQ阅读字段(event, "message_obj"),
-            _读取QQ阅读字段(event, "raw_message"),
-            _读取QQ阅读字段(event, "message"),
-        ]
-        发送者 = ""
-        时间戳 = ""
-        for 对象 in 候选对象:
-            if not 发送者:
-                发送者 = str(
-                    _读取QQ阅读字段(对象, "sender_id")
-                    or _读取QQ阅读字段(对象, "user_id")
-                    or _读取QQ阅读字段(对象, "group_member_openid")
-                    or ""
-                ).strip()
-            if not 时间戳:
-                时间戳 = str(
-                    _读取QQ阅读字段(对象, "timestamp")
-                    or _读取QQ阅读字段(对象, "time")
-                    or ""
-                ).strip()
-            if isinstance(对象, dict):
-                作者 = 对象.get("author") or 对象.get("sender")
-                if isinstance(作者, dict):
-                    发送者 = 发送者 or str(
-                        作者.get("member_openid")
-                        or 作者.get("user_openid")
-                        or 作者.get("id")
-                        or ""
-                    ).strip()
-        if not (发送者 and 时间戳 and link):
-            return False
-        键 = f"fallback:{发送者}:{时间戳}:{link}"
-    现在 = time.monotonic()
-    for 旧键, 到期 in list(QQ阅读事件去重缓存.items()):
-        if float(到期 or 0) <= 现在:
-            QQ阅读事件去重缓存.pop(旧键, None)
-    if 键 in QQ阅读事件去重缓存:
-        logger.debug("QQ阅读重复事件已跳过：消息ID存在=%s", bool(消息ID))
-        return True
-    QQ阅读事件去重缓存[键] = 现在 + QQ阅读事件去重有效期秒
-    return False
-
-
 def 识别QQ阅读Cookie文本(文本: Any) -> bool:
     return bool(re.search(r"\byw(?:guid|key)\b", str(文本 or ""), re.I))
 
@@ -3328,12 +3007,8 @@ def 初始化参考核心() -> ConfigManager:
 
 def _应用QQ阅读登录态(登录态: dict[str, str]) -> None:
     config = 初始化参考核心()
-    # Cookie 中的 ywguid/ywkey 是账号登录态，不能填入游客 uid/usid 字段。
-    config.login_type = "51"
-    config.ywguid = 登录态["ywguid"]
-    config.ywkey = 登录态["ywkey"]
-    config.uid = ""
-    config.usid = ""
+    config.uid = 登录态["ywguid"]
+    config.usid = 登录态["ywkey"]
 
 
 def _读取QQ阅读登录态(配置: Any) -> dict[str, str] | None:
@@ -3730,18 +3405,11 @@ def 获取QQ阅读书籍付费类型(
     has_paid_chapter = any(
         _安全整数(item.get("chapter_fee")) > 0 for item in catalog
     )
-    # QQ 阅读的 free 字段区分书籍权益：1=整本免费，2=VIP 书，0=章节单独付费。
-    # vip_free 只是“会员可免费阅读”的展示标记，不能单独覆盖 free=0。
-    free_state = _安全整数(details.get("free"), -1)
-    if free_state == 1 and not has_paid_chapter and not has_free_limit:
-        return "free"
-    if free_state == 2:
-        return "vip"
-    if free_state == 0 and (has_paid_chapter or has_free_limit):
-        return "single"
     if not has_paid_chapter and not has_free_limit:
         return "free"
-    return "vip" if _是真值(details.get("vip_free")) else "single"
+    if _是真值(details.get("vip_free")):
+        return "vip"
+    return "single"
 
 
 def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str, Any]]) -> bool:
@@ -3752,19 +3420,11 @@ def 获取QQ阅读可下载目录(
     details: dict[str, Any], catalog: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """免费书取全量，VIP 账号只对 VIP 书取全量，单章付费始终只取免费章。"""
-    def 带原始序号() -> list[dict[str, Any]]:
-        结果: list[dict[str, Any]] = []
-        for 位置, 项目 in enumerate(catalog, start=1):
-            复制 = dict(项目)
-            复制.setdefault("_qq_source_index", 位置)
-            结果.append(复制)
-        return 结果
-
     付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
     if 付费类型 == "free" or (
         付费类型 == "vip" and _是真值(details.get("is_vip"))
     ):
-        return 带原始序号()
+        return list(catalog)
     max_free = _安全整数(details.get("max_free_chapter"))
     total = max(
         _安全整数(details.get("total_chapters")),
@@ -3773,7 +3433,7 @@ def 获取QQ阅读可下载目录(
     )
     has_free_limit = max_free > 0 and max_free < total
     free_catalog = [
-        {**dict(item), "_qq_source_index": position}
+        dict(item)
         for position, item in enumerate(catalog, start=1)
         if _安全整数(item.get("chapter_fee")) <= 0
         and (not has_free_limit or position <= max_free)
@@ -3781,136 +3441,6 @@ def 获取QQ阅读可下载目录(
     for index, item in enumerate(free_catalog, start=1):
         item["index"] = index
     return free_catalog
-
-
-def _QQ阅读免费正文范围(
-    catalog: list[dict[str, Any]],
-) -> list[tuple[int, int, list[dict[str, Any]]]]:
-    """按原目录序号拆分免费章节，避免过滤付费章后错位。"""
-    带序号: list[tuple[int, dict[str, Any]]] = []
-    for 位置, 项目 in enumerate(catalog, start=1):
-        try:
-            原始序号 = int(项目.get("_qq_source_index") or 位置)
-        except (TypeError, ValueError):
-            原始序号 = 位置
-        if 原始序号 > 0:
-            带序号.append((原始序号, 项目))
-    带序号.sort(key=lambda 项目: 项目[0])
-    结果: list[tuple[int, int, list[dict[str, Any]]]] = []
-    当前开始 = 0
-    当前结束 = 0
-    当前项目: list[dict[str, Any]] = []
-    for 原始序号, 项目 in 带序号:
-        if not 当前项目 or 原始序号 == 当前结束 + 1:
-            if not 当前项目:
-                当前开始 = 原始序号
-            当前结束 = 原始序号
-            当前项目.append(项目)
-            continue
-        结果.append((当前开始, 当前结束, 当前项目))
-        当前开始 = 当前结束 = 原始序号
-        当前项目 = [项目]
-    if 当前项目:
-        结果.append((当前开始, 当前结束, 当前项目))
-    return 结果
-
-
-async def 下载QQ阅读免费正文API(
-    book_id: str, catalog: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """非 VIP 账号从免费明文接口按原目录序号获取正文。"""
-    if not catalog:
-        return []
-    范围任务: list[tuple[int, int, list[dict[str, Any]]]] = []
-    for 开始, 结束, 项目 in _QQ阅读免费正文范围(catalog):
-        for 偏移 in range(0, len(项目), QQ阅读免费正文批量章节数):
-            分段 = 项目[偏移 : 偏移 + QQ阅读免费正文批量章节数]
-            if 分段:
-                范围任务.append(
-                    (
-                        开始 + 偏移,
-                        开始 + 偏移 + len(分段) - 1,
-                        分段,
-                    )
-                )
-    if not 范围任务:
-        return []
-    并发数 = max(
-        1,
-        min(QQ阅读免费正文最大动态并发数, len(范围任务)),
-    )
-    信号量 = asyncio.Semaphore(并发数)
-    超时 = aiohttp.ClientTimeout(total=45, sock_connect=10, sock_read=45)
-    结果按序号: dict[int, str] = {}
-    完成数 = 0
-
-    async def 请求范围(
-        客户端: aiohttp.ClientSession,
-        开始: int,
-        结束: int,
-        项目: list[dict[str, Any]],
-    ) -> None:
-        nonlocal 完成数
-        async with 信号量:
-            async with 客户端.get(
-                QQ阅读免费正文地址,
-                params={"bookid": str(book_id), "s": 开始, "e": 结束},
-                headers={"Accept": "application/json", "User-Agent": UA},
-            ) as 响应:
-                响应.raise_for_status()
-                数据 = await 响应.json(content_type=None)
-        if not isinstance(数据, dict):
-            raise RuntimeError("免费正文接口业务失败")
-        业务码 = 数据.get("code")
-        # 部分部署只返回 msg/data；HTTP 成功且 data 为列表时按成功响应处理。
-        if 业务码 not in (None, "") and _安全整数(业务码, -1) != 0:
-            raise RuntimeError("免费正文接口业务失败")
-        正文列表 = 数据.get("data")
-        if not isinstance(正文列表, list) or len(正文列表) != len(项目):
-            logger.warning(
-                "QQ阅读免费正文接口章节数不完整：书籍编号=%s，请求范围=%s-%s，"
-                "返回章节=%s，预期章节=%s，错误分类=%s",
-                book_id,
-                开始,
-                结束,
-                len(正文列表) if isinstance(正文列表, list) else 0,
-                len(项目),
-                "章节范围不可用" if isinstance(正文列表, list) else "响应格式无效",
-            )
-            raise RuntimeError("免费正文接口章节数量不完整")
-        for 偏移, 正文 in enumerate(正文列表):
-            if isinstance(正文, dict):
-                正文 = (
-                    正文.get("content")
-                    or 正文.get("text")
-                    or 正文.get("body")
-                    or ""
-                )
-            文本 = str(正文 or "").strip()
-            if not 文本:
-                raise RuntimeError("免费正文接口返回空正文")
-            结果按序号[开始 + 偏移] = 文本
-        完成数 += len(项目)
-        logger.debug(
-            f"QQ阅读免费正文接口进度：书籍编号={book_id}, "
-            f"进度={完成数}/{len(catalog)}, 并发数={并发数}"
-        )
-
-    async with aiohttp.ClientSession(timeout=超时, trust_env=False) as 客户端:
-        await asyncio.gather(
-            *(请求范围(客户端, 开始, 结束, 项目) for 开始, 结束, 项目 in 范围任务)
-        )
-    章节结果: list[dict[str, Any]] = []
-    for 项目 in catalog:
-        try:
-            原始序号 = int(项目.get("_qq_source_index") or 项目.get("index") or 0)
-        except (TypeError, ValueError):
-            原始序号 = 0
-        正文 = 结果按序号.get(原始序号, "")
-        if not 正文:
-            raise RuntimeError("免费正文接口缺少章节")
-        章节结果.append({**项目, "content": 正文})
-    return 章节结果
 
 
 async def 获取参考书籍目录(
@@ -4077,8 +3607,6 @@ async def 获取参考出版书密码(
     session: aiohttp.ClientSession,
 ) -> bytes:
     config = ConfigManager.get_instance()
-    account_id = config.ywguid if _QQ阅读使用账号登录态(config) else config.uid
-    account_key = config.ywkey if _QQ阅读使用账号登录态(config) else config.usid
     params = {
         "bookid": book_id,
         "authInfo": config.qrsn[:16],
@@ -4088,9 +3616,9 @@ async def 获取参考出版书密码(
     # /auth 使用独立的 App 登录包格式；混入网关签名会改变响应封装。
     headers = {
         "User-Agent": UA,
-        "Cookie": f"ywguid={account_id}; ywkey={account_key};",
-        "ywguid": account_id,
-        "ywkey": account_key,
+        "Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
+        "ywguid": config.uid,
+        "ywkey": config.usid,
         "Accept": "*/*",
     }
     async with session.get(
@@ -4101,7 +3629,7 @@ async def 获取参考出版书密码(
         response.raise_for_status()
         encrypted = await response.read()
     plain = await _异步QQ阅读CPU函数(
-        tea_decrypt_bytes, encrypted, tea_key_ints(account_id)
+        tea_decrypt_bytes, encrypted, tea_key_ints(config.uid)
     )
     payload = json.loads(plain.split(b"\x00", 1)[0].decode("utf-8"))
     password = str(payload.get("pwd") or "").encode("utf-8")
@@ -4712,8 +4240,6 @@ def 获取QQ阅读回复流(
     link = 提取QQ阅读链接(命令文本) or 提取QQ阅读事件链接(event)
     if link is None:
         return None
-    if _QQ阅读事件是否重复(event, link):
-        return None
     return 生成下载回复流(event, link, 配置)
 
 
@@ -4761,53 +4287,25 @@ async def 生成下载回复流(
                 raise RuntimeError("目录为空")
             原始目录数 = len(catalog)
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-            账号VIP状态 = await 查询QQ阅读账号VIP状态(session)
-            # 会员接口鉴权修复完成前，所有可下载正文先走官方账号接口。
-            # 单独付费书仍由下方的可下载目录筛选保留免费章节。
-            使用第三方整本 = False
-            if not 使用第三方整本:
-                catalog = 获取QQ阅读可下载目录(details, catalog)
-            else:
-                # 非 VIP 的免费书和 VIP 书把第三方明文接口当作 VIP 使用，
-                # 按原始目录取整本；单独付费书仍走上面的免费章节筛选。
-                catalog = [
-                    {
-                        **dict(项目),
-                        "_qq_source_index": int(
-                            项目.get("_qq_source_index") or 位置
-                        ),
-                    }
-                    for 位置, 项目 in enumerate(catalog, start=1)
-                ]
+            catalog = 获取QQ阅读可下载目录(details, catalog)
             if not catalog:
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
-            正文来源 = "免费明文接口" if 使用第三方整本 else "官方账号接口"
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
                 f"原始章节数={原始目录数}, 付费类型={付费类型}, "
-                f"书籍类型={'published' if published else 'novel'}, "
-                f"账号VIP={账号VIP状态}, 正文来源={正文来源}"
+                f"书籍类型={'published' if published else 'novel'}"
             )
             yield 格式化下载提示(details, len(catalog))
 
             stage = "content"
-            if 使用第三方整本:
-                logger.debug(
-                    f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP={账号VIP状态}, 来源=免费正文接口"
-                )
-                chapters = await 下载QQ阅读免费正文API(book_id, catalog)
-            else:
-                logger.debug(
-                    f"QQ阅读正文来源：书籍编号={book_id}, 账号VIP={账号VIP状态}, 来源=账号正文接口"
-                )
-                chapters = (
-                    await 下载参考出版书正文(book_id, catalog, session)
-                    if published
-                    else await 下载参考正文(book_id, catalog, session)
-                )
+            chapters = (
+                await 下载参考出版书正文(book_id, catalog, session)
+                if published
+                else await 下载参考正文(book_id, catalog, session)
+            )
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
