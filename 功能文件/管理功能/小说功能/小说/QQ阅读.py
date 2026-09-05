@@ -3419,11 +3419,9 @@ def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str,
 def 获取QQ阅读可下载目录(
     details: dict[str, Any], catalog: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """免费书取全量，VIP 账号只对 VIP 书取全量，单章付费始终只取免费章。"""
+    """免费书与 VIP 书请求完整目录，单章付费书仅保留免费章节。"""
     付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-    if 付费类型 == "free" or (
-        付费类型 == "vip" and _是真值(details.get("is_vip"))
-    ):
+    if 付费类型 in {"free", "vip"}:
         return list(catalog)
     max_free = _安全整数(details.get("max_free_chapter"))
     total = max(
