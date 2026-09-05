@@ -2820,13 +2820,13 @@ QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"
 QQ阅读登录态状态键 = "login_state"
-下载缓存目录 = 小说缓存工具.下载缓存目录
+下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
     "如喜欢本书，请支持正版。"
 )
-下载失败提示 = "下载失败 请重试"
+下载失败提示 = "下载失败"
 文件发送失败提示 = "文件发送失败，请稍后再试"
 章节单独付费提示 = "没有可下载的免费章节"
 
@@ -3419,9 +3419,11 @@ def 是章节单独付费书籍(details: dict[str, Any], catalog: list[dict[str,
 def 获取QQ阅读可下载目录(
     details: dict[str, Any], catalog: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """免费书与 VIP 书请求完整目录，单章付费书仅保留免费章节。"""
+    """免费书取全量，VIP 账号只对 VIP 书取全量，单章付费始终只取免费章。"""
     付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-    if 付费类型 in {"free", "vip"}:
+    if 付费类型 == "free" or (
+        付费类型 == "vip" and _是真值(details.get("is_vip"))
+    ):
         return list(catalog)
     max_free = _安全整数(details.get("max_free_chapter"))
     total = max(
