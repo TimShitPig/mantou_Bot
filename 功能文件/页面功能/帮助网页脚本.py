@@ -271,9 +271,12 @@
       const renderQQAuthEditor = (auth) => {
         const node = $('qq-auth-editor'); if (!node) return;
         const hasAccount = auth.configured && auth.ywguid;
+        const defaultSvg = "data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 64 64\'><circle cx=\'32\' cy=\'32\' r=\'32\' fill=\'%237c69ef\'/><circle cx=\'32\' cy=\'25\' r=\'12\' fill=\'%23ffffff\' opacity=\'0.9\'/><path d=\'M14 54 C14 42 22 38 32 38 C42 38 50 42 50 54 Z\' fill=\'%23ffffff\' opacity=\'0.9\'/></svg>";
+        const rawAvatar = auth.avatar_url || '';
+        const proxyAvatar = rawAvatar ? `/api/message/media?src=${encodeURIComponent(rawAvatar)}&mode=image` : defaultSvg;
         const profileHtml = hasAccount ? `
           <div class="qq-auth-profile-card">
-            <img class="qq-auth-avatar" src="${auth.avatar_url || 'https://shp.qpic.cn/qqreader_f/0/default/136'}" alt="头像" onerror="this.src='https://shp.qpic.cn/qqreader_f/0/default/136'">
+            <img class="qq-auth-avatar" src="${proxyAvatar}" alt="头像" referrerpolicy="no-referrer" onerror="if(this.src!=='${rawAvatar}'){this.src='${rawAvatar}';}else{this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 64 64\'><circle cx=\'32\' cy=\'32\' r=\'32\' fill=\'%237c69ef\'/><circle cx=\'32\' cy=\'25\' r=\'12\' fill=\'%23ffffff\' opacity=\'0.9\'/><path d=\'M14 54 C14 42 22 38 32 38 C42 38 50 42 50 54 Z\' fill=\'%23ffffff\' opacity=\'0.9\'/></svg>';}">
             <div class="qq-auth-profile-meta">
               <strong style="font-size:15px;color:var(--ink);">${auth.nickname || '书友用户'}</strong>
               <span style="font-size:12px;color:var(--muted);margin-top:2px;">UIN: ${auth.ywguid} ${auth.phone ? ' · 手机: ' + auth.phone : ''}</span>

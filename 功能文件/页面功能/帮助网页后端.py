@@ -33,7 +33,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.56"
+控制台版本 = "6.1.57"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -53,6 +53,7 @@ except Exception:
     "qqbot.ugcimg.cn",
     "gchat.qpic.cn",
     "qpic.cn",
+    "qlogo.cn",
     "qq.com.cn",
     "qq.com",
 )
