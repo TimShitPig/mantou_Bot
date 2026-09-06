@@ -71,7 +71,7 @@
         return data;
       };
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
-      const setView = (view, push = true) => {
+      const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
         const previousView = activeView;
         activeView = next;
@@ -88,9 +88,11 @@
           if (previousView !== 'messages' && msgState.chatId) loadMsgHistory();
         }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
-        const scrollContainer = document.querySelector('.main');
-        if (scrollContainer) scrollContainer.scrollTop = 0;
-        window.scrollTo({top:0, behavior:'auto'});
+        if (resetScroll) {
+          const scrollContainer = document.querySelector('.main');
+          if (scrollContainer) scrollContainer.scrollTop = 0;
+          window.scrollTo({top:0, behavior:'auto'});
+        }
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
@@ -333,9 +335,17 @@
         $('qq-auth-save')?.addEventListener('click', saveQQAuth);
         $('qq-auth-delete')?.addEventListener('click', deleteQQAuth);
         $('qq-btn-refresh-profile')?.addEventListener('click', async () => {
-          toast('正在刷新账号资料...');
-          await load();
-          toast('✅ 账号资料已刷新');
+          const btn = $('qq-btn-refresh-profile'); if (btn) btn.disabled = true;
+          try {
+            toast('正在刷新账号资料...');
+            const authData = await api('qq-reader-auth');
+            renderQQAuthEditor(authData || {});
+            toast('✅ 账号资料已刷新');
+          } catch(e) {
+            toast(e.message || '刷新失败');
+          } finally {
+            if (btn) btn.disabled = false;
+          }
         });
       };
 
