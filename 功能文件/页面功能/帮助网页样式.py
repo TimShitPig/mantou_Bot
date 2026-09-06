@@ -315,10 +315,21 @@
      .group-account { display:grid; grid-template-columns:minmax(0,1fr) 74px auto; gap:7px; margin-top:9px; }
      .group-account input { min-width:0; }
      .group-account select { min-height:39px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); }
-     .qq-auth-form { display:grid; gap:11px; max-width:500px; }
+     .qq-auth-form { display:grid; gap:13px; max-width:560px; }
+     .qq-auth-profile-card { display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--panel-hover,#f4f6fb); border:1px solid #e1e3ec; border-radius:9px; }
+     .qq-auth-avatar { width:46px; height:46px; border-radius:50%; object-fit:cover; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.08); background:#e2e8f0; flex-shrink:0; }
+     .qq-auth-profile-meta { display:flex; flex-direction:column; gap:2px; flex:1; min-width:0; }
+     .qq-auth-profile-meta strong { font-size:14px; color:var(--ink); }
+     .qq-auth-profile-meta span { font-size:12px; color:var(--muted); }
+     .qq-auth-tabs { display:flex; gap:6px; border-bottom:1px solid #e1e3ec; padding-bottom:8px; }
+     .qq-auth-tab { padding:6px 12px; border-radius:6px; border:0; background:transparent; font-size:12px; font-weight:600; color:var(--muted); cursor:pointer; }
+     .qq-auth-tab.active { background:#7c69ef; color:#fff; }
+     .qq-auth-phone-box { display:grid; gap:10px; }
+     .qq-auth-phone-row { display:flex; gap:8px; }
+     .qq-auth-phone-row input { flex:1; min-height:38px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); font-size:13px; }
      .qq-auth-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-     .qq-auth-row input { min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); }
-     .qq-auth-actions { display:flex; align-items:center; gap:9px; }
+     .qq-auth-row input { min-height:38px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:#fff; color:var(--ink); font-size:13px; }
+     .qq-auth-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
      .settings-hint { margin-top:15px; padding:12px 13px; border-radius:7px; background:#f7f7fd; color:var(--muted); font-size:11px; line-height:1.6; }
      .help-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px; }
      .help-card h3 { margin:0; font-size:14px; }

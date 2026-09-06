@@ -407,7 +407,22 @@ async def 上传小说并获取分享链接(
     _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     if _账号索引 is None:
-        _账号索引 = {平台: 网盘Cookie.获取当前网盘账号序号(配置, 平台) for 平台 in 网盘模块映射}
+        # 账号选择会读取运行状态数据库；三个平台互不依赖，并行读取避免
+        # 在小说下载完成后连续阻塞事件循环。
+        账号序号列表 = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    网盘Cookie.获取当前网盘账号序号,
+                    配置,
+                    平台,
+                )
+                for 平台 in 网盘模块映射
+            )
+        )
+        _账号索引 = {
+            平台: max(1, int(序号 or 1))
+            for 平台, 序号 in zip(网盘模块映射, 账号序号列表)
+        }
     else:
         _账号索引 = {
             平台: max(1, int(序号))

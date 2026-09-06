@@ -75,6 +75,9 @@ def _注册路由(app: web.Application) -> None:
         ("get", "/api/qq-reader-auth", 后端._处理QQ阅读登录态),
         ("post", "/api/qq-reader-auth", 后端._处理QQ阅读登录态保存),
         ("delete", "/api/qq-reader-auth", 后端._处理QQ阅读登录态删除),
+        ("post", "/api/qq-reader-auth/pre-send", 后端._处理QQ阅读短信预请求),
+        ("post", "/api/qq-reader-auth/confirm-send", 后端._处理QQ阅读短信确认下发),
+        ("post", "/api/qq-reader-auth/sms-login", 后端._处理QQ阅读短信登录),
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("get", "/api/message/media", 后端._处理消息媒体),
@@ -128,10 +131,13 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
     后端.当前帮助网页服务 = None
     后端.网页服务启动状态 = False
     后端.当前帮助网页配置 = 配置
-    后端._清理本地发送媒体同步()
+    # 媒体目录清理属于低优先级维护任务，不阻塞网页监听器启动。
+    后端._安排控制台后台任务(后端._清理本地发送媒体同步)
     后端.控制台会话.clear()
     后端.控制台会话身份.clear()
-    后端._加载持久化控制台会话()
+    后端.控制台会话最后持久化.clear()
+    # 会话恢复会读取 MySQL，放入独立线程池，启动服务不阻塞事件循环。
+    await 后端._控制台线程执行(后端._加载持久化控制台会话)
 
     基础地址 = 后端._计算帮助网页地址(配置)
     public_url = 后端._构造控制台访问地址(基础地址, 配置)
@@ -184,6 +190,7 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
             后端.当前帮助网页配置 = None
             后端.控制台会话.clear()
             后端.控制台会话身份.clear()
+            后端.控制台会话最后持久化.clear()
 
 
 __all__ = ["获取帮助网页地址", "启动帮助网页服务", "停止帮助网页服务"]

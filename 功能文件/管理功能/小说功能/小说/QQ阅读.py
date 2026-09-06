@@ -3265,11 +3265,14 @@ def _读取QQ阅读登录态(配置: Any) -> dict[str, str] | None:
     )
 
 
-def _保存QQ阅读登录态(配置: Any, 登录态: dict[str, str]) -> None:
+def _保存QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
     payload = json.dumps(
         {
-            "ywguid": 登录态["ywguid"],
-            "ywkey": 登录态["ywkey"],
+            "ywguid": str(登录态.get("ywguid") or 登录态.get("uid") or ""),
+            "ywkey": str(登录态.get("ywkey") or 登录态.get("usid") or ""),
+            "phone": str(登录态.get("phone") or ""),
+            "nickname": str(登录态.get("nickname") or ""),
+            "avatar_url": str(登录态.get("avatar_url") or ""),
             "updated_at": int(time.time()),
         },
         ensure_ascii=True,

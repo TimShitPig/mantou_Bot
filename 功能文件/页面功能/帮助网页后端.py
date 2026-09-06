@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.43"
+控制台版本 = "6.1.53"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -91,6 +91,8 @@ class 帮助网页服务:
 当前帮助网页配置: Any = globals().get("当前帮助网页配置")
 控制台会话: dict[str, float] = globals().get("控制台会话") or {}
 控制台会话身份: dict[str, str] = globals().get("控制台会话身份") or {}
+控制台会话最后持久化: dict[str, float] = globals().get("控制台会话最后持久化") or {}
+控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
 _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
 控制台执行器最大并发数 = 4
@@ -311,6 +313,17 @@ async def 停止实时连接() -> None:
         await asyncio.gather(*待取消, return_exceptions=True)
         for 任务 in 待取消:
             实时连接任务.discard(任务)
+    待取消后台 = [
+        任务
+        for 任务 in list(控制台后台任务)
+        if 任务 is not 当前任务 and not 任务.done()
+    ]
+    for 任务 in 待取消后台:
+        任务.cancel()
+    if 待取消后台:
+        await asyncio.gather(*待取消后台, return_exceptions=True)
+        for 任务 in 待取消后台:
+            控制台后台任务.discard(任务)
 
 
 def 清理消息列表缓存() -> None:
@@ -965,6 +978,7 @@ def _加载持久化控制台会话() -> None:
                 continue
             控制台会话[会话值] = 到期时间
             控制台会话身份[会话值] = 用户名
+            控制台会话最后持久化[会话值] = 现在
     except Exception as exc:
         logger.debug("帮助控制台加载持久会话失败：错误类型=%s", type(exc).__name__)
 
@@ -975,7 +989,18 @@ def _清理控制台会话() -> None:
         if 到期时间 <= 截止时间:
             控制台会话.pop(会话值, None)
             控制台会话身份.pop(会话值, None)
-            _删除持久化控制台会话(会话值)
+            控制台会话最后持久化.pop(会话值, None)
+            _安排控制台后台任务(_删除持久化控制台会话, 会话值)
+
+
+def _安排控制台后台任务(函数: Any, *参数: Any) -> None:
+    """把会话清理/续期写入移出请求事件循环，不让数据库连接阻塞网页响应。"""
+    try:
+        任务 = asyncio.create_task(_控制台线程执行(函数, *参数))
+    except RuntimeError:
+        return
+    控制台后台任务.add(任务)
+    任务.add_done_callback(控制台后台任务.discard)
 
 
 def _取得请求会话(request: web.Request) -> str:
@@ -988,24 +1013,25 @@ def _请求已授权(request: web.Request) -> bool:
     if not 会话值:
         return False
     到期时间 = 控制台会话.get(会话值)
-    需要回写持久会话 = False
-    if 到期时间 is None:
-        # 内存未命中（如插件重载后）：尝试从 MySQL 恢复持久会话
-        持久会话 = _读取持久化控制台会话(会话值)
-        if 持久会话 is not None:
-            到期时间, 用户名 = 持久会话
-            控制台会话[会话值] = 到期时间
-            控制台会话身份[会话值] = 用户名
-            需要回写持久会话 = True
+    # 持久会话在服务启动阶段一次性恢复；请求路径不再同步访问 MySQL。
+    # 这样消息列表和媒体请求不会被数据库连接/查询拖住事件循环。
     if 到期时间 is None or 到期时间 <= time.time():
         控制台会话.pop(会话值, None)
         控制台会话身份.pop(会话值, None)
+        控制台会话最后持久化.pop(会话值, None)
         return False
     新到期时间 = time.time() + 控制台会话有效期
     控制台会话[会话值] = 新到期时间
-    if 需要回写持久会话:
-        # 恢复会话时同步滑动续期到 MySQL，保证长期使用不因插件重载掉线
-        _写入持久化控制台会话(会话值, 新到期时间, 控制台会话身份.get(会话值, "管理员"))
+    # 滑动续期仍保留，但最多每小时后台写一次，避免每个 API 请求都触发数据库写入。
+    现在 = time.time()
+    if 现在 - 控制台会话最后持久化.get(会话值, 0.0) >= 3600:
+        控制台会话最后持久化[会话值] = 现在
+        _安排控制台后台任务(
+            _写入持久化控制台会话,
+            会话值,
+            新到期时间,
+            控制台会话身份.get(会话值, "管理员"),
+        )
     return True
 
 
@@ -1316,6 +1342,8 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
 
 
 本地发送媒体有效期秒 = 3 * 24 * 60 * 60
+本地发送媒体清理间隔秒 = 5 * 60
+本地发送媒体上次清理时间 = float(globals().get("本地发送媒体上次清理时间", 0.0) or 0.0)
 本地发送媒体扩展名 = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".mp4", ".silk", ".dat"})
 
 
@@ -1345,7 +1373,13 @@ def _本地发送媒体路径(文件名: Any) -> Path | None:
 
 
 def _清理本地发送媒体同步(现在: float | None = None) -> None:
-    截止时间 = float(现在 if 现在 is not None else time.time()) - 本地发送媒体有效期秒
+    global 本地发送媒体上次清理时间
+    是否强制 = 现在 is not None
+    当前时间 = float(现在 if 现在 is not None else time.time())
+    if not 是否强制 and 当前时间 - 本地发送媒体上次清理时间 < 本地发送媒体清理间隔秒:
+        return
+    本地发送媒体上次清理时间 = 当前时间
+    截止时间 = 当前时间 - 本地发送媒体有效期秒
     try:
         if not 本地发送媒体目录.is_dir():
             return
@@ -1408,8 +1442,9 @@ async def _处理本地发送媒体(request: web.Request) -> web.Response:
     if 路径 is None or not 路径.is_file():
         return web.Response(status=404, text="媒体暂时不可用")
     try:
-        _清理本地发送媒体同步()
-        if not 路径.is_file():
+        # 清理只做后台维护；当前文件用 mtime 单点校验，避免 GET 等待目录扫描。
+        _安排控制台后台任务(_清理本地发送媒体同步)
+        if not 路径.is_file() or 路径.stat().st_mtime < time.time() - 本地发送媒体有效期秒:
             return web.Response(status=404, text="媒体暂时不可用")
         类型 = mimetypes.guess_type(路径.name)[0] or "application/octet-stream"
         return web.FileResponse(
@@ -1442,7 +1477,13 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
     到期时间 = time.time() + 控制台会话有效期
     控制台会话[会话值] = 到期时间
     控制台会话身份[会话值] = 配置用户名
-    _写入持久化控制台会话(会话值, 到期时间, 配置用户名)
+    await _控制台线程执行(
+        _写入持久化控制台会话,
+        会话值,
+        到期时间,
+        配置用户名,
+    )
+    控制台会话最后持久化[会话值] = time.time()
     响应 = web.json_response({"ok": True})
     响应.set_cookie(
         控制台会话Cookie名,
@@ -1460,7 +1501,8 @@ async def _处理控制台退出(request: web.Request) -> web.Response:
     会话值 = _取得请求会话(request)
     控制台会话.pop(会话值, None)
     控制台会话身份.pop(会话值, None)
-    _删除持久化控制台会话(会话值)
+    控制台会话最后持久化.pop(会话值, None)
+    await _控制台线程执行(_删除持久化控制台会话, 会话值)
     响应 = web.json_response({"ok": True})
     响应.del_cookie(控制台会话Cookie名, path="/")
     return 响应
@@ -2055,24 +2097,215 @@ async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        原值 = QQ阅读._读取QQ阅读登录态(当前帮助网页配置)
-        原始状态 = QQ阅读.读取运行状态值(
-            当前帮助网页配置,
-            QQ阅读.QQ阅读登录态命名空间,
-            QQ阅读.QQ阅读登录态状态键,
-            "",
+        原值, 原始状态 = await asyncio.gather(
+            _控制台线程执行(QQ阅读._读取QQ阅读登录态, 当前帮助网页配置),
+            _控制台线程执行(
+                QQ阅读.读取运行状态值,
+                当前帮助网页配置,
+                QQ阅读.QQ阅读登录态命名空间,
+                QQ阅读.QQ阅读登录态状态键,
+                "",
+            ),
         )
         更新时间 = 0
+        账号详情 = {}
         try:
-            更新时间 = int((json.loads(原始状态) or {}).get("updated_at") or 0)
+            if 原始状态:
+                账号详情 = json.loads(原始状态) or {}
+                更新时间 = int(账号详情.get("updated_at") or 0)
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
+        
+        ywguid = str((原值 or {}).get("ywguid") or 账号详情.get("ywguid") or "")
+        nickname = str(账号详情.get("nickname") or "")
+        if ywguid and not nickname:
+            nickname = f"书友_{ywguid[-6:]}"
+        avatar_url = str(账号详情.get("avatar_url") or "")
+        if ywguid and not avatar_url:
+            avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
+
         return web.json_response(
-            {"ok": True, "configured": bool(原值), "updated_at": 更新时间}
+            {
+                "ok": True,
+                "configured": bool(原值),
+                "updated_at": 更新时间,
+                "ywguid": ywguid,
+                "nickname": nickname,
+                "avatar_url": avatar_url,
+                "phone": str(账号详情.get("phone") or ""),
+            }
         )
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(500, "QQ阅读状态读取失败")
+
+
+async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    手机号 = str((数据 or {}).get("phone") or "").strip()
+    if not re.fullmatch(r"1d{10}", 手机号):
+        return _控制台错误(400, "请输入有效的11位手机号")
+    
+    url = "https://passport.yuewen.com/userSdk/sendmsgnew"
+    params = {
+        "appId": "1450000219",
+        "areaId": "1",
+        "format": "jsonp",
+        "method": "callback",
+        "phoneIsAbroad": "0",
+        "inputUserId": "+86" + 手机号,
+        "mobilePhone": 手机号,
+        "type": "1",
+        "needRegister": "0",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
+        "Origin": "https://passport.yuewen.com",
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                text = await resp.text()
+                match = re.search(r'callback\((.*)\)', text)
+                if match:
+                    res_data = json.loads(match.group(1))
+                    session_key = str(res_data.get("data", {}).get("sessionKey") or "")
+                    return web.json_response({"ok": True, "sessionKey": session_key, "data": res_data})
+                return _控制台错误(400, "获取会话令牌失败")
+    except Exception as exc:
+        logger.warning("QQ阅读短信预请求失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, f"请求失败: {exc}")
+
+
+async def _处理QQ阅读短信确认下发(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    手机号 = str((数据 or {}).get("phone") or "").strip()
+    session_key = str((数据 or {}).get("sessionKey") or "").strip()
+    ticket = str((数据 or {}).get("ticket") or "").strip()
+    randstr = str((数据 or {}).get("randstr") or "").strip()
+
+    if not 手机号 or not session_key or not ticket:
+        return _控制台错误(400, "参数不完整，请完成滑块验证")
+
+    url = "https://passport.yuewen.com/userSdk/sendmsgnew"
+    validate_code = f"{randstr};{ticket}"
+    params = {
+        "appId": "1450000219",
+        "areaId": "1",
+        "format": "jsonp",
+        "method": "callback",
+        "phoneIsAbroad": "0",
+        "inputUserId": "+86" + 手机号,
+        "mobilePhone": 手机号,
+        "sessionKey": session_key,
+        "validateCode": validate_code,
+        "type": "1",
+        "needRegister": "0",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
+        "Origin": "https://passport.yuewen.com",
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                text = await resp.text()
+                match = re.search(r'callback\((.*)\)', text)
+                if match:
+                    res_data = json.loads(match.group(1))
+                    if res_data.get("code") == 0:
+                        new_session = str(res_data.get("data", {}).get("sessionKey") or "")
+                        return web.json_response({"ok": True, "sessionKey": new_session or session_key, "message": "短信验证码已下发"})
+                    return _控制台错误(400, str(res_data.get("message") or "短信下发失败"))
+                return _控制台错误(400, "解析响应失败")
+    except Exception as exc:
+        logger.warning("QQ阅读短信确认下发失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, f"下发短信异常: {exc}")
+
+
+async def _处理QQ阅读短信登录(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    手机号 = str((数据 or {}).get("phone") or "").strip()
+    session_key = str((数据 or {}).get("sessionKey") or "").strip()
+    code = str((数据 or {}).get("code") or "").strip()
+
+    if not 手机号 or not session_key or not code:
+        return _控制台错误(400, "请输入完整的手机号和短信验证码")
+
+    url = "https://passport.yuewen.com/userSdk/phonecodelogin"
+    params = {
+        "appId": "1450000219",
+        "areaId": "1",
+        "format": "jsonp",
+        "method": "callback",
+        "inputUserId": 手机号,
+        "sessionKey": session_key,
+        "validateCode": code,
+        "auto": "1",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
+        "Origin": "https://passport.yuewen.com",
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                text = await resp.text()
+                match = re.search(r'callback\((.*)\)', text)
+                if not match:
+                    return _控制台错误(400, "解析登录响应失败")
+                res_data = json.loads(match.group(1))
+                if res_data.get("code") != 0:
+                    return _控制台错误(400, str(res_data.get("message") or "验证码错误或已过期"))
+                
+                d = res_data.get("data", {})
+                ywguid = str(d.get("ywGuid") or "")
+                ywkey = str(d.get("ywKey") or "")
+                if not ywguid or not ywkey:
+                    return _控制台错误(400, "登录成功但未提取到关键鉴权票据")
+                
+                nickname = f"书友_{ywguid[-6:]}"
+                avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
+                
+                login_info = {
+                    "ywguid": ywguid,
+                    "ywkey": ywkey,
+                    "phone": 手机号,
+                    "nickname": nickname,
+                    "avatar_url": avatar_url,
+                    "ticket": str(d.get("ticket") or ""),
+                    "openid": str(d.get("ywOpenId") or ""),
+                }
+                
+                from 功能文件.管理功能.小说功能.小说 import QQ阅读
+                if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
+                    return _控制台错误(409, "数据库未配置，登录态未持久化")
+
+                await _控制台线程执行(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, login_info)
+                await _控制台线程执行(QQ阅读._应用QQ阅读登录态, login_info)
+                
+                return web.json_response({
+                    "ok": True,
+                    "message": "登录成功",
+                    "account": {
+                        "ywguid": ywguid,
+                        "phone": 手机号,
+                        "nickname": nickname,
+                        "avatar_url": avatar_url,
+                    }
+                })
+    except Exception as exc:
+        logger.warning("QQ阅读短信登录失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, f"登录失败: {exc}")
 
 
 async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
@@ -2106,7 +2339,8 @@ async def _处理QQ阅读登录态删除(request: web.Request) -> web.Response:
 
         if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
             return _控制台错误(409, "数据库未配置，登录态未删除")
-        QQ阅读.写入运行状态值(
+        await _控制台线程执行(
+            QQ阅读.写入运行状态值,
             当前帮助网页配置,
             QQ阅读.QQ阅读登录态命名空间,
             QQ阅读.QQ阅读登录态状态键,

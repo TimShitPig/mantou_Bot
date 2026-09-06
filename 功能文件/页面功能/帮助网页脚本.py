@@ -267,10 +267,123 @@
          document.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
          document.querySelectorAll('[data-pan-tab]').forEach((node) => { node.addEventListener('click', () => choosePanTab(node.dataset.panTab)); node.addEventListener('keydown', (event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); const tabs = Array.from(document.querySelectorAll('[data-pan-tab]')); const index = tabs.indexOf(node); const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next?.focus(); choosePanTab(next?.dataset.panTab); } }); });
       };
+      let currentQQSessionKey = '';
       const renderQQAuthEditor = (auth) => {
         const node = $('qq-auth-editor'); if (!node) return;
-        node.innerHTML = `<div class="qq-auth-form"><div class="qq-auth-row"><input type="text" id="qq-ywguid" placeholder="ywguid" autocomplete="off"><input type="password" id="qq-ywkey" placeholder="ywkey" autocomplete="off"></div><div class="qq-auth-actions"><button class="primary-button" type="button" id="qq-auth-save">保存登录态</button><button class="outline-button" type="button" id="qq-auth-delete" ${auth.configured ? '' : 'disabled'}>清除登录态</button><span class="qq-auth-message">${auth.configured ? `已配置${auth.updated_at ? ` · ${new Date(auth.updated_at * 1000).toLocaleString()}` : ''}` : '未配置'}</span></div></div>`;
-        $('qq-auth-save').addEventListener('click', saveQQAuth); $('qq-auth-delete').addEventListener('click', deleteQQAuth);
+        const hasAccount = auth.configured && auth.ywguid;
+        const profileHtml = hasAccount ? `
+          <div class="qq-auth-profile-card">
+            <img class="qq-auth-avatar" src="${auth.avatar_url || 'https://shp.qpic.cn/qqreader_f/0/default/136'}" alt="头像" onerror="this.src='https://shp.qpic.cn/qqreader_f/0/default/136'">
+            <div class="qq-auth-profile-meta">
+              <strong>${auth.nickname || '书友用户'}</strong>
+              <span>UIN (ywguid): ${auth.ywguid} ${auth.phone ? ' · 手机: ' + auth.phone : ''}</span>
+              <span>更新时间: ${auth.updated_at ? new Date(auth.updated_at * 1000).toLocaleString() : '--'}</span>
+            </div>
+          </div>
+        ` : '';
+
+        node.innerHTML = `
+          <div class="qq-auth-form">
+            ${profileHtml}
+            <div class="qq-auth-tabs">
+              <button class="qq-auth-tab active" type="button" id="tab-qq-phone">手机号登录</button>
+              <button class="qq-auth-tab" type="button" id="tab-qq-manual">手动配置</button>
+            </div>
+            <div id="qq-box-phone" class="qq-auth-phone-box">
+              <div class="qq-auth-phone-row">
+                <input type="text" id="qq-phone-input" placeholder="请输入11位手机号" autocomplete="off" value="${auth.phone || ''}">
+                <button class="outline-button" type="button" id="qq-btn-sms">获取验证码</button>
+              </div>
+              <div class="qq-auth-phone-row">
+                <input type="text" id="qq-code-input" placeholder="请输入6位短信验证码" autocomplete="off">
+                <button class="primary-button" type="button" id="qq-btn-login">登录并保存</button>
+              </div>
+            </div>
+            <div id="qq-box-manual" class="qq-auth-phone-box" style="display:none;">
+              <div class="qq-auth-row">
+                <input type="text" id="qq-ywguid" placeholder="ywguid / uid" autocomplete="off" value="${auth.ywguid || ''}">
+                <input type="password" id="qq-ywkey" placeholder="ywkey / usid" autocomplete="off">
+              </div>
+              <div class="qq-auth-actions">
+                <button class="primary-button" type="button" id="qq-auth-save">手动保存</button>
+              </div>
+            </div>
+            <div class="qq-auth-actions">
+              <button class="outline-button" type="button" id="qq-auth-delete" ${auth.configured ? '' : 'disabled'}>清除当前账号</button>
+              <span class="qq-auth-message">${auth.configured ? '已连接' : '未登录'}</span>
+            </div>
+          </div>
+        `;
+
+        $('tab-qq-phone')?.addEventListener('click', () => {
+          $('tab-qq-phone').classList.add('active'); $('tab-qq-manual').classList.remove('active');
+          $('qq-box-phone').style.display = 'grid'; $('qq-box-manual').style.display = 'none';
+        });
+        $('tab-qq-manual')?.addEventListener('click', () => {
+          $('tab-qq-manual').classList.add('active'); $('tab-qq-phone').classList.remove('active');
+          $('qq-box-manual').style.display = 'grid'; $('qq-box-phone').style.display = 'none';
+        });
+
+        $('qq-btn-sms')?.addEventListener('click', sendQQSmsCode);
+        $('qq-btn-login')?.addEventListener('click', loginQQBySms);
+        $('qq-auth-save')?.addEventListener('click', saveQQAuth);
+        $('qq-auth-delete')?.addEventListener('click', deleteQQAuth);
+      };
+
+      const sendQQSmsCode = async () => {
+        const phone = $('qq-phone-input')?.value.trim();
+        if (!phone || !/^1\d{10}$/.test(phone)) return toast('请输入正确的11位手机号');
+        const btn = $('qq-btn-sms'); if (btn) btn.disabled = true;
+        try {
+          const pre = await api('qq-reader-auth/pre-send', {method:'POST', body:JSON.stringify({phone})});
+          if (!pre || !pre.sessionKey) throw new Error(pre?.message || '获取会话失败');
+          currentQQSessionKey = pre.sessionKey;
+          
+          if (typeof TencentCaptcha === 'undefined') {
+            throw new Error('腾讯防水墙组件正在加载，请稍候重试');
+          }
+          const captcha = new TencentCaptcha('1600000770', async (res) => {
+            if (res && res.ret === 0) {
+              toast('滑块验证成功，正在发送短信...');
+              try {
+                const sData = await api('qq-reader-auth/confirm-send', {
+                  method: 'POST',
+                  body: JSON.stringify({ phone, sessionKey: currentQQSessionKey, ticket: res.ticket, randstr: res.randstr })
+                });
+                if (sData.sessionKey) currentQQSessionKey = sData.sessionKey;
+                toast('🎉 短信验证码已发送！');
+              } catch (e) { toast(e.message || '短信下发失败'); }
+            } else {
+              toast('滑块验证未完成');
+            }
+          });
+          captcha.show();
+        } catch (error) {
+          if (error.status === 401) showAuthError(error); else toast(error.message);
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      };
+
+      const loginQQBySms = async () => {
+        const phone = $('qq-phone-input')?.value.trim();
+        const code = $('qq-code-input')?.value.trim();
+        if (!phone) return toast('请输入手机号');
+        if (!code) return toast('请输入验证码');
+        if (!currentQQSessionKey) return toast('请先获取验证码并完成滑块');
+        const btn = $('qq-btn-login'); if (btn) btn.disabled = true;
+        try {
+          const res = await api('qq-reader-auth/sms-login', {
+            method: 'POST',
+            body: JSON.stringify({ phone, sessionKey: currentQQSessionKey, code })
+          });
+          toast('🎉 QQ阅读登录成功！');
+          await load();
+        } catch (error) {
+          if (error.status === 401) showAuthError(error); else toast(error.message);
+        } finally {
+          if (btn) btn.disabled = false;
+        }
       };
        const addPanAccount = async (platform) => { const input = document.querySelector(`[data-pan-cookie="${CSS.escape(platform)}"]`); const button = document.querySelector(`[data-pan-add="${CSS.escape(platform)}"]`); const cookie = input?.value.trim(); if (!cookie) return toast('请先粘贴 Cookie'); if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'POST', body:JSON.stringify({cookie})}); if (input) input.value = ''; toast(`${platform}账号已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const deletePanAccount = async (platform, index, button) => { if (!confirm(`确定删除${platform}账号${index}吗？`)) return; if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'DELETE', body:JSON.stringify({index:Number(index)})}); toast('账号已删除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
@@ -293,7 +406,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1068,6 +1181,7 @@
         msgState.historyData = null;
         msgState.messages = [];
         msgState.renderedChatId = '';
+        msgState.messageRenderSignature = null;
         clearMsgNewMessages();
         // 先更新右侧会话头和蓝色消息区域的加载占位，历史请求异步完成后再替换内容。
         updateMsgHead({
@@ -2288,6 +2402,7 @@
         if (!msgs.length) {
           body.innerHTML = '<div class="msg-empty">暂无消息记录</div>';
           body.classList.remove('msg-positioning');
+          msgState.messageRenderSignature = JSON.stringify({more:Boolean(data.has_more), messages:[]});
           Object.keys(rawStore).forEach((key) => delete rawStore[key]);
           msgState.renderedChatId = msgState.chatId;
           clearMsgNewMessages();
@@ -2298,6 +2413,42 @@
           msgs,
         );
         msgState.profiles = profiles;
+        const renderSignature = JSON.stringify({
+          more: Boolean(data.has_more),
+          multi: Boolean(msgState.multi),
+          messages: msgs.map((message) => {
+            const id = String(message.message_id || message.id || '');
+            const profile = profiles[message.user_id] || {};
+            const mute = msgState.mutes.get(String(message.user_id || '').trim());
+            const optimisticId = String(message.optimistic_id || '').trim();
+            const optimistic = optimisticId ? msgState.optimisticSends.get(optimisticId) : null;
+            return [
+              id,
+              message.timestamp || '',
+              message.content || '',
+              message.media ? JSON.stringify(message.media) : '',
+              msgIsRecalled(message) ? 1 : 0,
+              message.nickname || '',
+              profile.nickname || profile.username || '',
+              profile.avatar || profile.avatar_url || '',
+              profile.role || '',
+              mute?.mute_expire_ts || 0,
+              optimisticId,
+              optimistic?.status || message.send_status || '',
+              message.reference_id || '',
+            ];
+          }),
+        });
+        if (
+          msgState.messageRenderSignature === renderSignature
+          && msgState.renderedChatId === msgState.chatId
+          && !scroll.prepend
+          && !scroll.forceRender
+        ) {
+          // 事件轮询可能只返回相同页面；保留现有 DOM，避免图片重载和滚动闪动。
+          return;
+        }
+        msgState.messageRenderSignature = renderSignature;
         let lastDay = ''; let html = '';
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
         msgs.forEach((m) => {
@@ -3125,6 +3276,7 @@
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
         updateMuteCountdowns();
+        if (document.visibilityState === 'hidden' || $('page-messages')?.hidden) return;
         if (msgState.chatType === 'group' && msgState.chatId) void loadMuteStates();
       }, 1000);
 

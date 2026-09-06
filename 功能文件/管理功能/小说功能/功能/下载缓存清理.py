@@ -27,6 +27,7 @@ def 获取下载缓存目录列表() -> tuple[Path, ...]:
 上传占用标记后缀 = ".uploading"
 上传任务目录名 = ".upload_jobs"
 上传任务状态 = {"primary_pending", "primary_done", "backup_pending"}
+_进程活动缓存路径: set[str] = globals().get("_进程活动缓存路径") or set()
 
 
 def 获取下载缓存占用标记路径(缓存路径: str | Path) -> Path:
@@ -147,13 +148,16 @@ def 完成上传任务(缓存路径: str | Path) -> None:
 
 
 def 删除下载缓存文件(缓存路径: str | Path | None) -> bool:
-    """删除缓存；主上传尚未成功时保留文件，等待下次重载恢复。"""
+    """删除缓存；主上传失败时保留文件并释放本次尝试的活动占用。"""
     if not 缓存路径:
         return False
     路径 = Path(缓存路径)
     任务 = 读取上传任务(路径)
     状态 = str(任务.get("state") or "") if 任务 else ""
     if 状态 in {"primary_pending", "backup_pending"}:
+        # 失败任务由 .upload_jobs 持久化保护；释放当前尝试的占用，
+        # 使同一进程中的重试/重载恢复任务不再被自己的 PID 永久跳过。
+        解除下载缓存占用(路径)
         return False
     try:
         路径.unlink(missing_ok=True)
@@ -206,13 +210,21 @@ def 标记下载缓存正在使用(缓存路径: str | Path) -> Path:
     临时路径 = 标记路径.with_name(f"{标记路径.name}.{os.getpid()}.tmp")
     临时路径.write_text(内容, encoding="utf-8")
     临时路径.replace(标记路径)
+    _进程活动缓存路径.add(str(路径.absolute()))
     return 标记路径
 
 
 def 解除下载缓存占用(缓存路径: str | Path | None) -> None:
     if not 缓存路径:
         return
-    获取下载缓存占用标记路径(缓存路径).unlink(missing_ok=True)
+    路径 = Path(缓存路径)
+    _进程活动缓存路径.discard(str(路径.absolute()))
+    获取下载缓存占用标记路径(路径).unlink(missing_ok=True)
+
+
+def 重置进程上传占用() -> None:
+    """旧插件任务已停止后重置活动集合，保留任务文件用于续传。"""
+    _进程活动缓存路径.clear()
 
 
 def _进程仍在运行(进程号: int) -> bool:
@@ -228,6 +240,9 @@ def _进程仍在运行(进程号: int) -> bool:
 
 
 def 下载缓存正在使用(缓存路径: str | Path) -> bool:
+    路径 = Path(缓存路径)
+    if str(路径.absolute()) in _进程活动缓存路径:
+        return True
     标记路径 = 获取下载缓存占用标记路径(缓存路径)
     if not 标记路径.is_file():
         return False
@@ -235,6 +250,10 @@ def 下载缓存正在使用(缓存路径: str | Path) -> bool:
         数据 = json.loads(标记路径.read_text(encoding="utf-8"))
         进程号 = int(数据.get("pid") or 0) if isinstance(数据, dict) else 0
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    # 当前进程的旧标记可能来自插件重载前的失败任务；只有本次模块
+    # 生命周期重新登记过的路径才算活动，避免阻塞续传恢复。
+    if 进程号 == os.getpid():
         return False
     return _进程仍在运行(进程号)
 

@@ -4148,6 +4148,11 @@ async def 异步下载番茄全部章节(
         thread_name_prefix="fanqie-decrypt",
     )
 
+    async def 解密章节(参数: tuple[int, str, dict[str, Any], int]) -> dict[str, Any]:
+        async with 解密信号量:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(解密执行器, decrypt_item_worker, 参数)
+
     async def 请求批次(任务: tuple[int, int, str, list[str], str]) -> dict[str, Any]:
         批次序号, 起始序号, 请求书籍编号, 批次章节, 签名模式 = 任务
         started_at = time.perf_counter()
@@ -4168,6 +4173,23 @@ async def 异步下载番茄全部章节(
             ),
             None,
         )
+        解密输入: list[tuple[int, str, dict[str, Any], int] | None] = []
+        for 偏移, (item_id, 正文信息, 解密参数, 错误) in enumerate(results):
+            if 错误 or not 正文信息:
+                解密输入.append(None)
+                continue
+            解密输入.append(
+                (
+                    起始序号 + 偏移,
+                    item_id,
+                    正文信息,
+                    解密参数 if 解密参数 is not None else 0,
+                )
+            )
+        # HTTP 批次结束即提交解密，解密期间其他批次仍可继续占用 HTTP 连接。
+        解密结果列表 = await asyncio.gather(
+            *(解密章节(参数) for 参数 in 解密输入 if 参数 is not None)
+        )
         return {
             "batch": 批次序号,
             "start": 起始序号,
@@ -4177,12 +4199,8 @@ async def 异步下载番茄全部章节(
             "fatal_error": str(fatal_error) if fatal_error else "",
             "elapsed": time.perf_counter() - started_at,
             "results": results,
+            "decrypted_results": 解密结果列表,
         }
-
-    async def 解密章节(参数: tuple[int, str, dict[str, Any], int]) -> dict[str, Any]:
-        async with 解密信号量:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(解密执行器, decrypt_item_worker, 参数)
 
     async with AsyncExitStack() as stack:
         async def 关闭解密执行器() -> None:
@@ -4197,8 +4215,8 @@ async def 异步下载番茄全部章节(
             HTTP客户端 = await stack.enter_async_context(
                 创建番茄正文HTTP客户端(动态并发数)
             )
-        # 先统一发起并完成所有批次请求，再进入解密和合并阶段，避免
-        # 当前批次的解密处理影响下一批请求的可见执行顺序。
+        # 每个请求任务在收到批次后立即解密；gather 只等待全部结果，
+        # 不再出现“所有 HTTP 请求完成后才开始解密”的串行屏障。
         批次结果列表 = await asyncio.gather(*(请求批次(任务) for 任务 in 任务列表))
         for 批次结果 in 批次结果列表:
             批次起始 = int(批次结果.get("start") or 1)
@@ -4210,18 +4228,7 @@ async def 异步下载番茄全部章节(
                     f"范围={批次起始}-{批次结果.get('end')}, 错误={限制番茄日志文本(str(批次结果.get('fatal_error')), 200)}"
                 )
             原始结果 = list(批次结果.get("results") or [])
-            解密输入: list[tuple[int, str, dict[str, Any], int] | None] = []
-            for 偏移, (item_id, 正文信息, 解密参数, 错误) in enumerate(原始结果):
-                序号 = 批次起始 + 偏移
-                if 错误 or not 正文信息:
-                    解密输入.append(None)
-                    continue
-                解密输入.append(
-                    (序号, item_id, 正文信息, 解密参数 if 解密参数 is not None else 0)
-                )
-            解密结果列表 = await asyncio.gather(
-                *(解密章节(参数) for 参数 in 解密输入 if 参数 is not None)
-            )
+            解密结果列表 = list(批次结果.get("decrypted_results") or [])
             解密结果迭代器 = iter(解密结果列表)
             for 偏移, (item_id, 正文信息, _解密参数, 错误) in enumerate(原始结果):
                 序号 = 批次起始 + 偏移
