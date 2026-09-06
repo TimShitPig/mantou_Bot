@@ -33,7 +33,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.55"
+控制台版本 = "6.1.56"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -1545,7 +1545,28 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
                 更新时间 = int((json.loads(原始状态) or {}).get("updated_at") or 0)
             except (TypeError, ValueError, json.JSONDecodeError):
                 更新时间 = 0
-        QQ登录态摘要 = {"configured": bool(原值), "updated_at": 更新时间}
+        账号详情 = {}
+        if 原始状态:
+            try:
+                账号详情 = json.loads(原始状态) or {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+        ywguid = str((原值 or {}).get("ywguid") or 账号详情.get("ywguid") or "")
+        nickname = str(账号详情.get("nickname") or "")
+        if ywguid and not nickname:
+            nickname = f"书友_{ywguid[-6:]}"
+        avatar_url = str(账号详情.get("avatar_url") or "")
+        if ywguid and not avatar_url:
+            avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
+
+        QQ登录态摘要 = {
+            "configured": bool(原值),
+            "updated_at": 更新时间,
+            "ywguid": ywguid,
+            "nickname": nickname,
+            "avatar_url": avatar_url,
+            "phone": str(账号详情.get("phone") or ""),
+        }
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
     小说控制台状态 = 小说功能开关.读取小说功能控制台状态(配置)

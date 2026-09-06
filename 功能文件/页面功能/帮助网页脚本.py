@@ -275,10 +275,11 @@
           <div class="qq-auth-profile-card">
             <img class="qq-auth-avatar" src="${auth.avatar_url || 'https://shp.qpic.cn/qqreader_f/0/default/136'}" alt="头像" onerror="this.src='https://shp.qpic.cn/qqreader_f/0/default/136'">
             <div class="qq-auth-profile-meta">
-              <strong>${auth.nickname || '书友用户'}</strong>
-              <span>UIN (ywguid): ${auth.ywguid} ${auth.phone ? ' · 手机: ' + auth.phone : ''}</span>
-              <span>更新时间: ${auth.updated_at ? new Date(auth.updated_at * 1000).toLocaleString() : '--'}</span>
+              <strong style="font-size:15px;color:var(--ink);">${auth.nickname || '书友用户'}</strong>
+              <span style="font-size:12px;color:var(--muted);margin-top:2px;">UIN: ${auth.ywguid} ${auth.phone ? ' · 手机: ' + auth.phone : ''}</span>
+              <span style="font-size:11px;color:var(--muted);">登录时间: ${auth.updated_at ? new Date(auth.updated_at * 1000).toLocaleString() : '--'}</span>
             </div>
+            <button class="outline-button" type="button" id="qq-btn-refresh-profile" style="align-self:flex-start;padding:4px 8px;font-size:11px;">刷新资料</button>
           </div>
         ` : '';
 
@@ -328,6 +329,11 @@
         $('qq-btn-login')?.addEventListener('click', loginQQBySms);
         $('qq-auth-save')?.addEventListener('click', saveQQAuth);
         $('qq-auth-delete')?.addEventListener('click', deleteQQAuth);
+        $('qq-btn-refresh-profile')?.addEventListener('click', async () => {
+          toast('正在刷新账号资料...');
+          await load();
+          toast('✅ 账号资料已刷新');
+        });
       };
 
       const sendQQSmsCode = async () => {
