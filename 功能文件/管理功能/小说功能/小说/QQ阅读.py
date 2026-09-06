@@ -3643,8 +3643,16 @@ def 获取QQ阅读书籍付费类型(
     has_paid_chapter = any(
         _安全整数(item.get("chapter_fee")) > 0 for item in catalog
     )
-    # 目录明确给出正价章节时，该书属于单章付费；详情页的 vip_free
-    # 只是“可用会员阅读”的展示标记，不能覆盖实际章节价格。
+    # 详情的 free 是 QQ 阅读 App 的书籍级分类，应优先于目录中的
+    # chapter_fee。VIP 章节同样会带章节价格，不能因此把 VIP 书误判为
+    # 单章付费；只有 free=0 且目录明确存在付费/免费上限时才是单章付费。
+    free_type = _安全整数(details.get("free"), default=-1)
+    if free_type == 1:
+        return "free"
+    if free_type == 2:
+        return "vip"
+    if free_type == 0 and (has_paid_chapter or has_free_limit):
+        return "single"
     if has_paid_chapter:
         return "single"
     if _是真值(details.get("vip_free")):
