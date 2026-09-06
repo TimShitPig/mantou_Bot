@@ -2145,7 +2145,7 @@ async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
         return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     手机号 = str((数据 or {}).get("phone") or "").strip()
-    if not re.fullmatch(r"1d{10}", 手机号):
+    if not re.fullmatch(r"1\d{10}", 手机号):
         return _控制台错误(400, "请输入有效的11位手机号")
     
     url = "https://passport.yuewen.com/userSdk/sendmsgnew"
