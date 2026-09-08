@@ -789,7 +789,31 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
     if isinstance(新媒体, dict) and 新媒体:
-        if not isinstance(旧媒体, dict) or not 旧媒体.get("src"):
+        旧媒体地址 = str(旧媒体.get("src") or "").strip() if isinstance(旧媒体, dict) else ""
+        新媒体地址 = str(新媒体.get("src") or "").strip()
+        旧地址优先级 = (
+            3
+            if 旧媒体地址.startswith("/api/message/local-media/")
+            else 0
+            if 旧媒体地址.startswith("/api/message/markdown-media/")
+            else 2
+            if 旧媒体地址.startswith(("http://", "https://"))
+            else 1
+            if 旧媒体地址
+            else -1
+        )
+        新地址优先级 = (
+            3
+            if 新媒体地址.startswith("/api/message/local-media/")
+            else 0
+            if 新媒体地址.startswith("/api/message/markdown-media/")
+            else 2
+            if 新媒体地址.startswith(("http://", "https://"))
+            else 1
+            if 新媒体地址
+            else -1
+        )
+        if not isinstance(旧媒体, dict) or not 旧媒体地址 or 新地址优先级 > 旧地址优先级:
             已有记录["media"] = dict(新媒体)
         else:
             for 字段 in (
@@ -5289,7 +5313,7 @@ async def 发送消息(
         数据: bytes | None = None
         文件名 = ""
         内容类型 = "application/octet-stream"
-        if 图片字节 is not None and not 图片记录地址:
+        if 图片字节 is not None:
             数据 = 图片字节
             文件名 = 图片文件名
             内容类型 = {
@@ -5328,7 +5352,7 @@ async def 发送消息(
             return
         if not 地址:
             return
-        if 图片字节 is not None and not 图片记录地址:
+        if 图片字节 is not None:
             图片记录地址 = 地址
         elif 媒体字节 is not None and not 媒体记录地址:
             媒体记录地址 = 地址
