@@ -3032,6 +3032,10 @@ def _parse_teb_info_blob(blob: bytes) -> list[dict]:
 QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
 QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
+QQ阅读第三方正文地址 = "http://154.12.91.167:7000/content"
+# 每批固定 25 章，避免第三方服务对大范围请求截断；整本按连续区间分段并发完成。
+QQ阅读第三方正文批量章节数 = 25
+QQ阅读第三方正文最大动态并发数 = 16
 QQ阅读进度日志分段数 = 10
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
@@ -3675,11 +3679,15 @@ def 获取QQ阅读可下载目录(
     账号有VIP: bool = False,
 ) -> list[dict[str, Any]]:
     """免费书取全量，账号 VIP 取 VIP 书全量，单章付费始终只取免费章。"""
+    带原始序号目录 = [
+        {**dict(item), "_qq_source_index": position}
+        for position, item in enumerate(catalog, start=1)
+    ]
     付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
     if 付费类型 == "free" or (
         付费类型 == "vip" and bool(账号有VIP)
     ):
-        return list(catalog)
+        return 带原始序号目录
     max_free = _安全整数(details.get("max_free_chapter"))
     total = max(
         _安全整数(details.get("total_chapters")),
@@ -3689,13 +3697,162 @@ def 获取QQ阅读可下载目录(
     has_free_limit = max_free > 0 and max_free < total
     free_catalog = [
         dict(item)
-        for position, item in enumerate(catalog, start=1)
+        for position, item in enumerate(带原始序号目录, start=1)
         if _安全整数(item.get("chapter_fee")) <= 0
         and (not has_free_limit or position <= max_free)
     ]
     for index, item in enumerate(free_catalog, start=1):
         item["index"] = index
     return free_catalog
+
+
+def _获取QQ阅读带原始序号目录(
+    catalog: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """保留第三方正文接口使用的原始目录位置。"""
+    return [
+        {**dict(item), "_qq_source_index": position}
+        for position, item in enumerate(catalog, start=1)
+    ]
+
+
+def _QQ阅读第三方正文范围(
+    catalog: list[dict[str, Any]],
+) -> list[tuple[int, int, list[dict[str, Any]]]]:
+    """按原目录序号拆分连续区间，避免过滤章节后正文错位。"""
+    indexed: list[tuple[int, dict[str, Any]]] = []
+    for position, item in enumerate(catalog, start=1):
+        source_index = _安全整数(item.get("_qq_source_index"), position)
+        if source_index > 0:
+            indexed.append((source_index, item))
+    indexed.sort(key=lambda entry: entry[0])
+
+    ranges: list[tuple[int, int, list[dict[str, Any]]]] = []
+    start = 0
+    end = 0
+    items: list[dict[str, Any]] = []
+    for source_index, item in indexed:
+        if not items or source_index == end + 1:
+            if not items:
+                start = source_index
+            end = source_index
+            items.append(item)
+            continue
+        ranges.append((start, end, items))
+        start = end = source_index
+        items = [item]
+    if items:
+        ranges.append((start, end, items))
+    return ranges
+
+
+async def 下载QQ阅读第三方正文(
+    book_id: str,
+    catalog: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """非会员从第三方正文服务分段获取完整可下载目录。"""
+    if not catalog:
+        return []
+
+    tasks: list[tuple[int, int, list[dict[str, Any]]]] = []
+    for range_start, _range_end, range_items in _QQ阅读第三方正文范围(catalog):
+        for offset in range(0, len(range_items), QQ阅读第三方正文批量章节数):
+            batch_items = range_items[
+                offset : offset + QQ阅读第三方正文批量章节数
+            ]
+            if batch_items:
+                tasks.append(
+                    (
+                        range_start + offset,
+                        range_start + offset + len(batch_items) - 1,
+                        batch_items,
+                    )
+                )
+    if not tasks:
+        return []
+
+    concurrency = max(
+        1,
+        min(QQ阅读第三方正文最大动态并发数, len(tasks)),
+    )
+    semaphore = asyncio.Semaphore(concurrency)
+    timeout = aiohttp.ClientTimeout(total=45, sock_connect=10, sock_read=45)
+    contents_by_source_index: dict[int, str] = {}
+
+    async def fetch_range(
+        client: aiohttp.ClientSession,
+        range_start: int,
+        range_end: int,
+        range_items: list[dict[str, Any]],
+    ) -> None:
+        async with semaphore:
+            async with client.get(
+                QQ阅读第三方正文地址,
+                params={"bookid": str(book_id), "s": range_start, "e": range_end},
+                headers={"Accept": "application/json", "User-Agent": UA},
+            ) as response:
+                response.raise_for_status()
+                payload = await response.json(content_type=None)
+
+        if not isinstance(payload, dict):
+            raise RuntimeError("第三方正文响应格式无效")
+        result_code = payload.get("code")
+        if result_code not in (None, "") and _安全整数(result_code, -1) != 0:
+            raise RuntimeError("第三方正文接口业务失败")
+        chapter_contents = payload.get("data")
+        if not isinstance(chapter_contents, list) or len(chapter_contents) != len(
+            range_items
+        ):
+            logger.warning(
+                "QQ阅读第三方正文响应不完整：书籍编号=%s，请求范围=%s-%s，"
+                "返回章节=%s，预期章节=%s，错误分类=%s",
+                book_id,
+                range_start,
+                range_end,
+                len(chapter_contents) if isinstance(chapter_contents, list) else 0,
+                len(range_items),
+                "章节范围不可用"
+                if isinstance(chapter_contents, list)
+                else "响应格式无效",
+            )
+            raise RuntimeError("第三方正文章节数量不完整")
+
+        for offset, chapter_content in enumerate(chapter_contents):
+            if isinstance(chapter_content, dict):
+                chapter_content = (
+                    chapter_content.get("content")
+                    or chapter_content.get("text")
+                    or chapter_content.get("body")
+                    or ""
+                )
+            text = str(chapter_content or "").strip()
+            if not text:
+                raise RuntimeError("第三方正文返回空章节")
+            contents_by_source_index[range_start + offset] = text
+
+    connector = aiohttp.TCPConnector(
+        limit=concurrency,
+        limit_per_host=concurrency,
+        ttl_dns_cache=300,
+        keepalive_timeout=30,
+    )
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        connector=connector,
+        trust_env=True,
+    ) as client:
+        await asyncio.gather(
+            *(fetch_range(client, start, end, items) for start, end, items in tasks)
+        )
+
+    chapters: list[dict[str, Any]] = []
+    for position, item in enumerate(catalog, start=1):
+        source_index = _安全整数(item.get("_qq_source_index"), position)
+        text = contents_by_source_index.get(source_index, "")
+        if not text:
+            raise RuntimeError("第三方正文缺少章节")
+        chapters.append({**item, "content": text})
+    return chapters
 
 
 async def 获取参考书籍目录(
@@ -4032,58 +4189,6 @@ async def 异步获取QQ阅读正文批次(
         f"解包解密={decrypt_elapsed:.3f}s"
     )
     return result
-
-
-def 获取QQ阅读VIP验证章节(
-    details: dict[str, Any],
-    catalog: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """选择一章不在免费试读范围内的 VIP 正文用于权限预检。"""
-    if not catalog:
-        return None
-    total = len(catalog)
-    max_free = _安全整数(details.get("max_free_chapter"))
-    if 0 < max_free < total:
-        return dict(catalog[max_free])
-    return dict(catalog[-1])
-
-
-async def 验证QQ阅读VIP正文权限(
-    book_id: str,
-    details: dict[str, Any],
-    catalog: list[dict[str, Any]],
-    session: aiohttp.ClientSession,
-) -> bool:
-    """账号接口不可用时，以官方正文链路验证当前账号的会员阅读权限。"""
-    item = 获取QQ阅读VIP验证章节(details, catalog)
-    chapter_id = str((item or {}).get("cid") or "").strip()
-    if not chapter_id.isdigit():
-        return False
-    try:
-        if not await 确保QQ阅读密钥池(session):
-            return False
-        try:
-            解密材料 = ConfigManager.get_instance().获取解密材料()
-        except Exception:
-            解密材料 = None
-        content, _, _ = await 异步获取QQ阅读正文批次(
-            session,
-            book_id,
-            [chapter_id],
-            asyncio.Semaphore(1),
-            请求信号量=asyncio.Semaphore(1),
-            解密材料=解密材料,
-        )
-    except Exception as exc:
-        logger.debug(f"QQ阅读VIP正文权限预检失败：错误={type(exc).__name__}")
-        return False
-    available = bool(
-        isinstance(content, list)
-        and content
-        and content[0] not in (None, "", "章节解密失败")
-    )
-    logger.debug(f"QQ阅读VIP正文权限预检：结果={'可用' if available else '不可用'}")
-    return available
 
 
 async def 下载参考正文(
@@ -4601,39 +4706,37 @@ async def 生成下载回复流(
                 raise RuntimeError("目录为空")
             原始目录数 = len(catalog)
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-            if (
-                付费类型 == "vip"
-                and not account_vip.get("available")
-                and not published
-            ):
-                账号有VIP = await 验证QQ阅读VIP正文权限(
-                    book_id,
-                    details,
-                    catalog,
-                    session,
-                )
-                VIP判断来源 = "正文权限预检"
-            catalog = 获取QQ阅读可下载目录(details, catalog, 账号有VIP)
+            使用第三方正文 = not 账号有VIP and 付费类型 in {"free", "vip"}
+            if 使用第三方正文:
+                # 第三方接口的 s/e 使用原目录位置，不能使用筛选后重排的 index。
+                catalog = _获取QQ阅读带原始序号目录(catalog)
+            else:
+                catalog = 获取QQ阅读可下载目录(details, catalog, 账号有VIP)
             if not catalog:
                 yield 章节单独付费提示
                 return
             details["chapters"] = len(catalog)
+            正文来源 = "第三方正文接口" if 使用第三方正文 else "官方账号接口"
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
                 f"原始章节数={原始目录数}, 付费类型={付费类型}, "
                 f"账号VIP={'是' if 账号有VIP else '否'}, "
                 f"VIP判断={VIP判断来源}, "
+                f"正文来源={正文来源}, "
                 f"书籍类型={'published' if published else 'novel'}"
             )
             yield 格式化下载提示(details, len(catalog))
 
             stage = "content"
-            chapters = (
-                await 下载参考出版书正文(book_id, catalog, session)
-                if published
-                else await 下载参考正文(book_id, catalog, session)
-            )
+            if 使用第三方正文:
+                chapters = await 下载QQ阅读第三方正文(book_id, catalog)
+            else:
+                chapters = (
+                    await 下载参考出版书正文(book_id, catalog, session)
+                    if published
+                    else await 下载参考正文(book_id, catalog, session)
+                )
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
