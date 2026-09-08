@@ -87,7 +87,12 @@ At消息规则 = re.compile(
 数字撤回处理中: set[str] = set()
 数字撤回完成时间: dict[str, float] = {}
 数字撤回去重缓存秒数 = 120.0
-群管功能模块版本 = "1.25.1"
+# 此缓存只防止同一事件重复处理，不限制消息发送时间。
+广告联动撤回上限 = 30
+QQ官方撤回请求间隔秒 = 0.125
+QQ官方撤回调度锁: asyncio.Lock | None = None
+QQ官方撤回上次请求时间 = 0.0
+群管功能模块版本 = "1.26.0"
 QQ群管理角色集合 = {"owner", "admin", "群主", "管理员"}
 QQ官方机器人权限缓存秒数 = 30.0
 QQ官方机器人权限缓存: dict[tuple[int, str], tuple[float, bool]] = {}
@@ -560,16 +565,21 @@ async def 处理数字撤回(event: AstrMessageEvent, 配置: Any = None) -> boo
                 禁言成功 = await 尝试广告撤回禁言(event, 禁言秒数, 触发次数)
                 if 禁言成功:
                     await 发送撤回广告提醒(event)
+        await 尝试撤回广告历史消息(event)
         return 撤回成功
     finally:
         await 结束数字撤回去重(去重键, 撤回成功)
 
 
 async def 开始数字撤回去重(event: AstrMessageEvent) -> str | None:
-    消息编号 = str(获取当前消息编号(event) or "").strip()
+    return await 开始消息撤回去重(获取群号(event), 获取当前消息编号(event))
+
+
+async def 开始消息撤回去重(群号: str, 消息编号: Any) -> str | None:
+    消息编号 = str(消息编号 or "").strip()
     if not 消息编号:
         return None
-    群号 = str(获取群号(event) or "").strip()
+    群号 = str(群号 or "").strip()
     去重键 = f"{群号}:{消息编号}"
 
     global 数字撤回处理锁
@@ -1367,23 +1377,70 @@ async def 尝试撤回当前消息(event: AstrMessageEvent) -> bool:
         logger.warning(f"数字撤回失败：当前事件缺少 bot 实例，message_id={消息编号}")
         return False
 
-    logger.info(
-        f"尝试撤回: message_id={消息编号}, group_id={群号}, 是官方机器人={是QQ官方机器人(event)}, bot类型={type(bot).__name__}"
-    )
+    return await 尝试撤回指定群消息(bot, 群号, str(消息编号))
 
+
+async def 尝试撤回指定群消息(bot: Any, 群号: str, 消息编号: str) -> bool:
+    """所有消息均提交官方接口，由接口判定权限和时限。"""
     try:
         await 使用QQ官方消息撤回(bot, 消息编号, 群号)
         try:
             from 功能文件.管理功能.基础功能 import 消息记录
 
-            消息记录.标记撤回(群号, 消息编号)
+            await 消息记录.异步标记撤回(群号, 消息编号)
         except Exception as 记录异常:
             logger.debug("自动撤回消息记录标记失败：错误类型=%s", type(记录异常).__name__)
-        logger.info(f"数字撤回成功：message_id={消息编号}")
+        logger.debug("群消息撤回成功：group_id=%s, message_id=%s", 群号, 消息编号)
         return True
     except Exception as exc:
-        logger.warning(f"数字撤回失败：message_id={消息编号}, error={exc}")
+        logger.warning(
+            "群消息撤回失败：group_id=%s, message_id=%s, error_type=%s, code=%s",
+            群号, 消息编号, type(exc).__name__, 获取QQ官方撤回错误码(exc),
+        )
         return False
+
+
+async def 尝试撤回广告历史消息(event: AstrMessageEvent) -> None:
+    """只在广告身份/权限检查后调用；包含触发消息在内最多取最近 30 条。"""
+    群号 = 获取群号(event)
+    用户标识 = 获取撤回发送者标识(event)
+    当前消息 = str(获取当前消息编号(event) or "").strip()
+    bot = getattr(event, "bot", None)
+    if not 群号 or not 用户标识 or not 当前消息 or bot is None:
+        return
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        消息编号列表 = await 消息记录.获取群成员最近消息编号(
+            群号, 用户标识, 当前消息, 广告联动撤回上限,
+        )
+    except Exception as exc:
+        logger.warning(
+            "广告历史撤回查询失败：group_id=%s, user_id=%s, error_type=%s",
+            群号, 用户标识, type(exc).__name__,
+        )
+        return
+    历史消息 = [编号 for 编号 in 消息编号列表 if 编号 != 当前消息][:广告联动撤回上限 - 1]
+    并发限制 = asyncio.Semaphore(3)
+
+    async def 撤回一条(编号: str) -> bool | None:
+        async with 并发限制:
+            去重键 = await 开始消息撤回去重(群号, 编号)
+            if not 去重键:
+                return None
+            成功 = False
+            try:
+                成功 = await 尝试撤回指定群消息(bot, 群号, 编号)
+                return 成功
+            finally:
+                await 结束数字撤回去重(去重键, 成功)
+
+    结果 = await asyncio.gather(*(撤回一条(编号) for 编号 in 历史消息))
+    logger.info(
+        "广告历史联动撤回：group_id=%s, user_id=%s, 历史候选=%s, 成功=%s, 失败=%s, 去重跳过=%s, 总条数上限=%s",
+        群号, 用户标识, len(历史消息), 结果.count(True), 结果.count(False),
+        结果.count(None), 广告联动撤回上限,
+    )
 
 
 async def 记录撤回触发(event: AstrMessageEvent) -> int:
@@ -1554,10 +1611,30 @@ async def 使用QQ官方消息撤回(bot: Any, 消息编号: Any, 群号: str = 
         group_openid=群号文本,
         message_id=消息编号文本,
     )
+    # 官方群消息撤回接口为 10 QPS；网页与广告撤回共用调度，留出间隔余量。
+    global QQ官方撤回调度锁, QQ官方撤回上次请求时间
+    if QQ官方撤回调度锁 is None:
+        QQ官方撤回调度锁 = asyncio.Lock()
+    async with QQ官方撤回调度锁:
+        等待秒数 = QQ官方撤回请求间隔秒 - (time.monotonic() - QQ官方撤回上次请求时间)
+        if 等待秒数 > 0:
+            await asyncio.sleep(等待秒数)
+        QQ官方撤回上次请求时间 = time.monotonic()
     响应 = await http客户端.request(路由)
     if not 撤回响应成功(响应):
-        raise RuntimeError("QQ 官方撤回接口返回失败")
+        错误 = RuntimeError("QQ 官方撤回接口返回失败")
+        错误.code = 响应.get("code") if isinstance(响应, dict) else None
+        raise 错误
     return True
+
+
+def 获取QQ官方撤回错误码(错误: Any) -> str:
+    for 字段 in ("code", "error_code", "status"):
+        值 = getattr(错误, 字段, None)
+        if 值 is not None and re.fullmatch(r"\d{3,10}", str(值)):
+            return str(值)
+    匹配 = re.search(r"(?<!\d)(40061001|40062003|40064004|50065001)(?!\d)", str(错误))
+    return 匹配.group(1) if 匹配 else "unknown"
 
 
 def 撤回响应成功(响应: Any) -> bool:

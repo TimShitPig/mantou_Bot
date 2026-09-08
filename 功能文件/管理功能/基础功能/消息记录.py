@@ -996,6 +996,9 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
     未读表: dict[str, int] = {}
     for 类型, 数据 in 项目列表:
         if 类型 == "message" and isinstance(数据, dict):
+            撤回键 = (str(数据.get("_session") or ""), _规范消息ID(数据.get("message_id")))
+            if 撤回键 in 已撤回消息待同步:
+                数据 = {**数据, "recalled": True}
             消息列表.append(数据)
         elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
             会话标识, 未读数 = 数据
@@ -2723,7 +2726,77 @@ def 设置会话已读(会话标识: str) -> bool:
         return False
 
 
-def 标记撤回(会话标识: str, 消息ID: str) -> bool:
+async def 获取群成员最近消息编号(
+    会话标识: str, 用户标识: str, 当前消息: str, 上限: int = 30,
+) -> list[str]:
+    """合并接收缓存与持久化历史，触发消息固定占用一个名额。"""
+    会话标识 = str(会话标识 or "").strip()
+    用户标识 = str(用户标识 or "").strip()
+    当前消息 = _规范消息ID(当前消息)
+    if not 会话标识 or not 用户标识 or not 当前消息:
+        return []
+    上限 = max(1, min(30, int(上限)))
+    会话 = 消息缓存.get(会话标识) or {}
+    缓存消息 = list(会话.get("messages") or [])
+    截至时间 = int(time.time())
+    缓存含触发消息 = False
+    for 索引, 记录 in enumerate(缓存消息):
+        if _规范消息ID(记录.get("message_id")) == 当前消息:
+            截至时间 = int(记录.get("ts") or 截至时间)
+            缓存消息 = 缓存消息[:索引 + 1]
+            缓存含触发消息 = True
+            break
+    内存记录 = [
+        {"message_id": _规范消息ID(记录.get("message_id")),
+         "ts": int(记录.get("ts") or 0), "recalled": bool(记录.get("recalled"))}
+        for 记录 in reversed(缓存消息)
+        if str(记录.get("user_id") or "") == 用户标识
+        and str(记录.get("chat_type") or 会话.get("chat_type") or "") == "group"
+        and str(记录.get("_session") or 会话标识) == 会话标识
+        and not 记录.get("is_self")
+        and int(记录.get("ts") or 0) <= 截至时间
+        and _规范消息ID(记录.get("message_id"))
+    ][:上限]
+    数据库记录 = []
+    if _消息存储 is not None and _消息数据库已配置():
+        数据库记录 = await _异步执行消息记录同步(
+            _消息存储.读取群成员最近消息, 会话标识, 用户标识, 当前消息, 截至时间, 上限,
+        )
+    if not 缓存含触发消息:
+        数据库触发记录 = next((记录 for 记录 in 数据库记录 if 记录["message_id"] == 当前消息), None)
+        if 数据库触发记录 is not None:
+            # 触发消息只在数据库时，同秒顺序以持久化 ID 边界为准。
+            内存记录 = [记录 for 记录 in 内存记录 if 记录["ts"] < 数据库触发记录["ts"]]
+    # 相同消息的撤回状态取并集；同秒时优先使用实时接收顺序。
+    候选: dict[str, dict[str, Any]] = {}
+    for 记录 in [*内存记录, *数据库记录]:
+        编号 = _规范消息ID(记录.get("message_id"))
+        if not 编号 or 编号 == 当前消息:
+            continue
+        if 编号 in 候选:
+            候选[编号]["recalled"] |= bool(记录.get("recalled"))
+        else:
+            候选[编号] = dict(记录)
+    最近记录 = sorted(候选.values(), key=lambda 记录: 记录["ts"], reverse=True)[:上限 - 1]
+    return [当前消息, *[记录["message_id"] for 记录 in 最近记录 if not 记录["recalled"]]]
+
+
+async def 异步标记撤回(会话标识: str, 消息ID: str) -> bool:
+    """在事件循环更新展示，数据库写入使用消息专用线程池。"""
+    找到 = 标记撤回(会话标识, 消息ID, 持久化=False)
+    if _消息存储 is None or not _消息数据库已配置():
+        return 找到
+    try:
+        # 已开始的 INSERT 完成后再更新；尚未写入的批次从待同步表合并撤回状态。
+        async with _数据库写入锁:
+            存储已标记 = await _异步执行消息记录同步(_消息存储.标记消息撤回, 会话标识, 消息ID)
+        return bool(找到 or 存储已标记)
+    except Exception as exc:
+        logger.warning("消息撤回状态写入失败：错误类型=%s", type(exc).__name__)
+        return 找到
+
+
+def 标记撤回(会话标识: str, 消息ID: str, *, 持久化: bool = True) -> bool:
     会话标识 = str(会话标识 or "").strip()
     消息ID = str(消息ID or "").strip()
     if not 会话标识 or not 消息ID:
@@ -2742,12 +2815,12 @@ def 标记撤回(会话标识: str, 消息ID: str) -> bool:
                 找到 = True
                 已更新记录.append(记录)
     存储已标记 = False
-    if _消息存储 is not None:
+    if 持久化 and _消息存储 is not None:
         try:
             存储已标记 = bool(_消息存储.标记消息撤回(会话标识, 消息ID))
         except Exception:
             存储已标记 = False
-    if not 找到 and not 存储已标记:
+    if not 持久化 or (not 找到 and not 存储已标记):
         已撤回消息待同步[(会话标识, 消息ID)] = 当前时间
     if 已更新记录 and 会话:
         for 记录 in 已更新记录:
@@ -5526,7 +5599,8 @@ async def 撤回消息(
     消息ID = str(消息ID or "").strip()
     if not 会话标识 or not 消息ID:
         return {"ok": False, "message": "参数无效"}
-    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
+    平台 = 获取QQ官方平台(appid=appid)
+    通道 = 获取HTTP通道(平台)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     _, _http = 通道
@@ -5546,17 +5620,20 @@ async def 撤回消息(
                 message_id=消息ID,
             )
         else:
-            route = Route(
-                "DELETE",
-                "/v2/groups/{group_openid}/messages/{message_id}",
-                group_openid=会话标识,
-                message_id=消息ID,
-            )
-        await _http.request(route)
-        标记撤回(会话标识, 消息ID)
+            from 功能文件.管理功能.群聊功能 import 群管功能
+
+            await 群管功能.使用QQ官方消息撤回(_读取字段(平台, "client"), 消息ID, 会话标识)
+        if 会话类型 == "user":
+            await _http.request(route)
+        await 异步标记撤回(会话标识, 消息ID)
         return {"ok": True, "message": "撤回成功"}
     except Exception as exc:
-        logger.warning("消息记录撤回失败：错误类型=%s", type(exc).__name__)
+        from 功能文件.管理功能.群聊功能 import 群管功能
+
+        错误码 = 群管功能.获取QQ官方撤回错误码(exc)
+        logger.warning("消息记录撤回失败：错误类型=%s, code=%s", type(exc).__name__, 错误码)
+        if 错误码 == "40064004":
+            return {"ok": False, "message": "消息已超出平台允许的撤回时限"}
         return {"ok": False, "message": "撤回失败，请稍后再试"}
 
 

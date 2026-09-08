@@ -1649,7 +1649,7 @@
       const recallSelected = async () => {
         const ids = [...msgState.selected];
         if (!ids.length) return toast('请先选择要撤回的消息');
-        if (!confirm(`确定撤回选中的 ${ids.length} 条消息吗？发送超过 2 分钟的消息不可撤回。`)) return;
+        if (!confirm(`确定撤回选中的 ${ids.length} 条消息吗？`)) return;
         let okCount = 0; let failCount = 0;
         for (const id of ids) {
           try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:id})}); markLocalMessageRecalled(id); okCount++; }
@@ -3020,7 +3020,7 @@
         );
       };
       const recallMessage = async (messageId) => {
-        if (!confirm('确定撤回这条消息吗？发送超过 2 分钟的消息不可撤回。')) return;
+        if (!confirm('确定撤回这条消息吗？')) return;
         try { await api('message/recall', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, message_id:messageId})}); markLocalMessageRecalled(messageId); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('撤回成功'); loadMsgHistory(); }
         catch (error) { toast(error.message); }
       };

@@ -163,6 +163,7 @@ def 初始化数据库() -> bool:
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
+                    KEY idx_msg_records_member_time (会话标识, user_id, ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_message (message_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -267,6 +268,17 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_session_message (会话标识(64), message_id(64))"
                     )
                     logger.info("消息记录 MySQL 已补充会话消息去重索引")
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+                    (消息记录表名, "idx_msg_records_member_time"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{消息记录表名}` "
+                        "ADD KEY idx_msg_records_member_time (会话标识, user_id, ts, id)"
+                    )
+                    logger.info("消息记录 MySQL 已补充群成员历史索引")
             except Exception as 修复异常:
                 logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
         连接.commit()
@@ -457,6 +469,54 @@ def 标记消息撤回(会话标识: str, message_id: str) -> bool:
     except Exception as exc:
         logger.warning("消息记录 MySQL 撤回标记失败：错误类型=%s", type(exc).__name__)
         return False
+    finally:
+        _关闭连接(连接)
+
+
+def 读取群成员最近消息(
+    会话标识: str, 用户标识: str, 当前消息: str, 截至时间: int, 上限: int = 30,
+) -> list[dict[str, Any]]:
+    """只取撤回需要的标识与状态，不限制消息年龄，不加载正文或媒体。"""
+    if not 会话标识 or not 用户标识 or not _MySQL可用():
+        return []
+    连接 = _打开连接()
+    if 连接 is None:
+        return []
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT id, ts FROM `{消息记录表名}` "
+                "WHERE 会话标识=%s AND message_id=%s AND user_id=%s "
+                "AND 消息类型='group' ORDER BY id DESC LIMIT 1",
+                (会话标识, 当前消息, 用户标识),
+            )
+            锚点 = 游标.fetchone()
+            锚点ID = int(_行字段(锚点, 0, "id", 默认值=0) or 0)
+            锚点时间 = int(_行字段(锚点, 1, "ts", 默认值=截至时间) or 截至时间)
+            时间上限 = min(截至时间, 锚点时间)
+            条件 = ["会话标识=%s", "user_id=%s", "消息类型='group'", "is_self=0", "message_id<>''", "ts<=%s"]
+            参数: list[Any] = [会话标识, 用户标识, 时间上限]
+            if 锚点ID:
+                条件.append("id<=%s")
+                参数.append(锚点ID)
+            参数.append(max(1, min(30, int(上限))))
+            游标.execute(
+                f"SELECT message_id, ts, recalled FROM `{消息记录表名}` WHERE "
+                + " AND ".join(条件) + " ORDER BY ts DESC, id DESC LIMIT %s",
+                tuple(参数),
+            )
+            return [
+                {"message_id": _规范消息ID(_行字段(行, 0, "message_id")),
+                 "ts": int(_行字段(行, 1, "ts", 默认值=0) or 0),
+                 "recalled": bool(_行字段(行, 2, "recalled", 默认值=False))}
+                for 行 in 游标.fetchall()
+            ]
+    except Exception as exc:
+        logger.warning(
+            "群成员历史消息读取失败：group_id=%s, user_id=%s, error_type=%s",
+            会话标识, 用户标识, type(exc).__name__,
+        )
+        return []
     finally:
         _关闭连接(连接)
 
