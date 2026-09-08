@@ -33,7 +33,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.58"
+控制台版本 = "6.1.59"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -104,6 +104,9 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 消息列表缓存锁: dict[tuple[str, str, int, int], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
 消息列表后台刷新: set[tuple[str, str, int, int]] = globals().get("消息列表后台刷新") or set()
 消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
+消息历史查询任务: dict[tuple[str, str, str, int, int, int], asyncio.Task[Any]] = (
+    globals().get("消息历史查询任务") or {}
+)
 实时连接任务: set[asyncio.Task[Any]] = globals().get("实时连接任务") or set()
 _媒体代理会话: ClientSession | None = globals().get("_媒体代理会话")
 
@@ -2422,6 +2425,38 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         _清理消息列表缓存锁()
 
 
+async def _合并查询消息历史(
+    会话标识: str, 类型: str, before_date: str, limit: int, before_id: int,
+) -> dict[str, Any]:
+    """相同历史请求共享正在执行的查询，完成后立即释放，不缓存历史结果。"""
+    from 功能文件.管理功能.基础功能 import 消息记录
+
+    # 网页发送/撤回等写操作会推进版本，新请求不能加入写操作前的查询。
+    键 = (会话标识, 类型, before_date, limit, before_id, 消息列表缓存版本)
+    任务 = 消息历史查询任务.get(键)
+    if 任务 is None or 任务.done():
+        任务 = asyncio.create_task(
+            _控制台线程执行(
+                消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
+            ),
+            name="控制台历史查询",
+        )
+        消息历史查询任务[键] = 任务
+        控制台后台任务.add(任务)
+
+        def 查询结束(已完成: asyncio.Task[Any]) -> None:
+            if 消息历史查询任务.get(键) is 已完成:
+                消息历史查询任务.pop(键, None)
+            控制台后台任务.discard(已完成)
+            # 所有网页请求取消后仍要取走异常，避免留下无人接收的任务异常。
+            if not 已完成.cancelled():
+                已完成.exception()
+
+        任务.add_done_callback(查询结束)
+    # 切换群聊取消某个 HTTP 请求时，其他正在等待的标签页继续使用同一查询。
+    return await asyncio.shield(任务)
+
+
 async def _处理消息历史(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
@@ -2434,7 +2469,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         before_id = 0
     try:
-        limit = int((数据 or {}).get("limit") or 100)
+        limit = max(1, min(100, int((数据 or {}).get("limit") or 100)))
     except (TypeError, ValueError):
         limit = 100
     if not 会话标识 or len(会话标识) > 200:
@@ -2442,8 +2477,8 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await _控制台线程执行(
-            消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
+        结果 = await _合并查询消息历史(
+            会话标识, 类型, before_date, limit, before_id
         )
         try:
             消息记录.安排待处理群信息刷新()

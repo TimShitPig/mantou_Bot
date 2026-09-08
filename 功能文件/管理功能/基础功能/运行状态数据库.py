@@ -259,7 +259,14 @@ def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
             write_timeout=10,
         )
     except Exception as 连接异常:
-        # 目标库不存在时先建库再重连
+        # 只有 MySQL 1049（未知数据库）需要建库。网络/鉴权失败继续建库
+        # 只会重复等待连接超时，占住控制台或消息写入线程。
+        if (
+            not isinstance(连接异常, pymysql.err.OperationalError)
+            or not 连接异常.args
+            or 连接异常.args[0] != 1049
+        ):
+            raise RuntimeError("数据库连接失败") from 连接异常
         try:
             临时连接 = pymysql.connect(
                 host=数据库配置["host"],
@@ -269,6 +276,8 @@ def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
                 charset="utf8mb4",
                 autocommit=False,
                 connect_timeout=5,
+                read_timeout=10,
+                write_timeout=10,
             )
             with 临时连接.cursor() as 游标:
                 游标.execute(

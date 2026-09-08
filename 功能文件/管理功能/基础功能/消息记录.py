@@ -501,9 +501,12 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
 
 
 def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
-    """快速整理数据库历史行；仅在缺少必要资料时解析原始消息。"""
+    """在副本上整理历史行；仅在缺少必要资料时解析原始消息。"""
     if not isinstance(记录, dict):
         return {}
+    # 展示层会补齐媒体、合并撤回状态并截断原文，不能修改接收缓存或待写记录。
+    # deepcopy 共享不可变正文字符串，只复制字典和媒体等可变结构。
+    记录 = copy.deepcopy(记录)
     记录["message_id"] = _规范消息ID(记录.get("message_id"))
     来源 = str(记录.get("source") or "")
     if 来源.startswith("bot_") or 来源 == "web_panel":
@@ -4503,7 +4506,6 @@ def _数据库历史消息(
         原始会话消息: list[dict[str, Any]] = [
             _快速规范化历史消息(x) for x in reversed(行列表)
         ]
-        原始数量 = len(原始会话消息)
         会话消息: list[dict[str, Any]] = _去重消息列表(原始会话消息)
         会话消息.sort(key=_历史消息排序键)
         返回消息 = 会话消息[-limit:]
@@ -4511,14 +4513,15 @@ def _数据库历史消息(
         # 因此把本进程尚未出现在本页的接收/发送记录一起合并，避免实时消息延迟。
         内存会话 = 消息缓存.get(会话标识) or {}
         内存消息记录 = [
-            _规范化历史消息(消息项) for 消息项 in (内存会话.get("messages") or [])
+            _快速规范化历史消息(消息项)
+            for 消息项 in list(内存会话.get("messages") or [])
         ]
         已有记录键 = {
             (
                 _规范消息ID(消息项.get("message_id")),
                 str(消息项.get("content") or ""),
                 int(消息项.get("ts") or 0),
-            )
+            ): 消息项
             for 消息项 in 返回消息
         }
         for 消息项 in 内存消息记录:
@@ -4533,7 +4536,10 @@ def _数据库历史消息(
             )
             if 记录键 not in 已有记录键:
                 返回消息.append(消息项)
-                已有记录键.add(记录键)
+                已有记录键[记录键] = 消息项
+            else:
+                # 数据库写入可能尚未包含内存中的撤回、头像和引用更新。
+                _合并重复消息(已有记录键[记录键], 消息项)
         返回消息 = _去重消息列表(返回消息)
         返回消息.sort(key=_历史消息排序键)
         返回消息 = 返回消息[-limit:]
