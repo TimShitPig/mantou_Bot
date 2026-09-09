@@ -33,7 +33,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.60"
+控制台版本 = "6.1.63"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -61,13 +61,6 @@ except Exception:
 媒体代理失败缓存上限 = 4096
 媒体代理失败缓存: dict[str, float] = globals().get("媒体代理失败缓存") or {}
 媒体代理失败缓存锁 = globals().get("媒体代理失败缓存锁") or threading.Lock()
-媒体代理过期占位内容 = (
-    b'<svg xmlns="http://www.w3.org/2000/svg" width="280" height="72" '
-    b'viewBox="0 0 280 72"><rect width="280" height="72" rx="8" '
-    b'fill="#eef1f4"/><text x="140" y="42" text-anchor="middle" '
-    b'font-family="Arial,sans-serif" font-size="16" fill="#68727d">'
-    b'&#22270;&#29255;&#24050;&#36807;&#26399;&#25110;&#19981;&#21487;&#29992;</text></svg>'
-)
 临时Markdown媒体有效期秒 = 180
 临时Markdown媒体单文件上限 = 20 * 1024 * 1024
 临时Markdown媒体总上限 = 64 * 1024 * 1024
@@ -1226,23 +1219,31 @@ def _清除媒体代理失败(缓存键: str) -> None:
         媒体代理失败缓存.pop(缓存键, None)
 
 
-def _媒体代理失败响应(模式: str) -> web.Response:
-    """过期图片返回可缓存占位图，普通文件仍返回错误状态。"""
-    if str(模式 or "").strip().lower() == "image":
-        return web.Response(
-            status=200,
-            body=媒体代理过期占位内容,
-            headers={
-                "Cache-Control": "private, max-age=300",
-                "Content-Type": "image/svg+xml; charset=utf-8",
-                "X-Content-Type-Options": "nosniff",
-                "X-Mantou-Media-Placeholder": "expired",
-            },
-        )
+async def _媒体上游地址已过期(上游: Any) -> bool:
+    """仅识别 QQ 明确返回的附件签名过期，不能把临时 4xx 锁成过期。"""
+    try:
+        if int(getattr(上游, "status", 0) or 0) != 400:
+            return False
+        内容 = await 上游.content.read(16 * 1024)
+        负载 = json.loads(内容.decode("utf-8", errors="ignore"))
+        if not isinstance(负载, dict):
+            return False
+        错误码 = 负载.get("retcode", 负载.get("code"))
+        return str(错误码 or "").strip() == "-5503007"
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _媒体代理失败响应(模式: str, *, 已过期: bool = False) -> web.Response:
+    """保留真实失败状态，使网页可对临时代理失败执行一次直连回退。"""
     return web.Response(
-        status=404,
-        text="媒体暂时不可用",
-        headers={"Cache-Control": "private, max-age=120"},
+        status=404 if 已过期 else 502,
+        text="媒体已过期" if 已过期 else "媒体暂时不可用",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Mantou-Media-Error": "expired" if 已过期 else "temporary",
+        },
     )
 
 
@@ -1258,7 +1259,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
         模式 = "file"
     缓存键 = _媒体代理缓存键(地址)
     if _媒体代理失败缓存命中(缓存键):
-        return _媒体代理失败响应(模式)
+        return _媒体代理失败响应(模式, 已过期=True)
     文件名 = _媒体文件名(request.query.get("name"))
     try:
         超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
@@ -1277,16 +1278,12 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 if not _允许媒体地址(最终地址):
                     return web.Response(status=502, text="媒体地址不可用")
                 if 上游.status not in {200, 206}:
-                    # QQ 附件签名过期时上游常返回 400；该 URL 后续不会自行恢复，
-                    # 短时负缓存可避免页面轮询反复请求同一个失效地址。
-                    if 400 <= int(上游.status or 0) < 500:
+                    # QQ 附件仅在明确返回 -5503007 时才不可恢复；429、403 和
+                    # CDN 短暂 4xx 都让前端立即尝试一次原地址，不能进入五分钟负缓存。
+                    if await _媒体上游地址已过期(上游):
                         _记录媒体代理失败(缓存键)
-                        return _媒体代理失败响应(模式)
-                    return web.Response(
-                        status=404,
-                        text="媒体暂时不可用",
-                        headers={"Cache-Control": "private, max-age=30"},
-                    )
+                        return _媒体代理失败响应(模式, 已过期=True)
+                    return _媒体代理失败响应(模式)
                 _清除媒体代理失败(缓存键)
                 try:
                     内容长度 = int(上游.headers.get("Content-Length") or 0)
@@ -1302,7 +1299,9 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 if 模式 == "image" and not 类型.startswith("image/"):
                     return web.Response(status=415, text="不是可预览的图片")
                 响应头 = {
-                    "Cache-Control": "private, max-age=120",
+                    # 只由登录用户自己的浏览器缓存；服务器不保存收到的图片字节。
+                    # 保留已成功展示的 QQ 图片，避免同一带签名地址过期后再次请求变占位。
+                    "Cache-Control": "private, max-age=86400, stale-if-error=604800",
                     "X-Content-Type-Options": "nosniff",
                     "Content-Type": 类型,
                 }
@@ -1343,7 +1342,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
             模式,
             type(exc).__name__,
         )
-        return web.Response(status=502, text="媒体暂时不可用")
+        return _媒体代理失败响应(模式)
 
 
 本地发送媒体有效期秒 = 3 * 24 * 60 * 60

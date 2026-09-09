@@ -1911,6 +1911,7 @@
         if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
         return safeMediaUrl(raw);
       };
+      const messageMediaProxyRevision = '6.1.63';
       const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
@@ -1920,6 +1921,8 @@
           const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
+          // 新版本绕过浏览器中旧版 200 占位响应，仍由服务端按 src 统一处理失败冷却。
+          query.set('v', messageMediaProxyRevision);
           if (name) query.set('name', name);
           return `/api/message/media?${query.toString()}`;
         } catch (_) { return direct; }
@@ -2585,7 +2588,9 @@
           bindImageInteractions(img);
           img.addEventListener('error', () => {
             const direct = String(img.dataset.mediaDirect || '').trim();
-            if (direct && img.dataset.mediaProxied !== '1' && !img.dataset.mediaDirectTried && img.src !== direct) {
+            // QQ 图片先走同源代理，代理遇到网络/CDN 临时失败时仍可由浏览器直连一次。
+            // <img> 直连显示不需要 CORS；只限一次，避免失效 rkey 产生循环请求。
+            if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
               img.dataset.mediaDirectTried = '1';
               img.src = direct;
               img.dataset.lightbox = direct;
