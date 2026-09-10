@@ -1911,7 +1911,7 @@
         if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
         return safeMediaUrl(raw);
       };
-      const messageMediaProxyRevision = '6.1.63';
+      const messageMediaProxyRevision = '6.1.64';
       const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
@@ -1943,7 +1943,7 @@
         if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
         return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
       };
-      const renderMessageMedia = (value, messageId = '') => {
+      const renderMessageMedia = (value, messageId = '', preload = false) => {
         if (!value) return '';
         const items = Array.isArray(value?.items) && value.items.length ? value.items : [value];
         return items.map((item) => {
@@ -1959,7 +1959,9 @@
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
             const preview = mediaProxyUrl(src, 'image');
-            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="lazy" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
+            const loading = preload ? 'eager' : 'lazy';
+            const priority = preload ? 'high' : 'low';
+            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
             const videoUrl = mediaProxyUrl(src, 'file');
@@ -2473,7 +2475,7 @@
         msgState.messageRenderSignature = renderSignature;
         let lastDay = ''; let html = '';
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
-        msgs.forEach((m) => {
+        msgs.forEach((m, index) => {
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
@@ -2518,7 +2520,10 @@
           // 撤回只改变颜色和标签，保留撤回前的正文、引用和媒体。
           const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
           const mediaData = m.media;
-          const media = renderMessageMedia(mediaData, m.message_id);
+          // QQ 图片链接有短时签名。页面已打开时，提前加载最新一批消息可让
+          // 浏览器私有缓存保留已成功取得的图片；加载更早历史仍保持惰性请求。
+          const preloadMedia = !scroll.prepend && index >= Math.max(0, msgs.length - 12);
+          const media = renderMessageMedia(mediaData, m.message_id, preloadMedia);
           const mediaTextPosition = media && mediaData && !Array.isArray(mediaData) ? splitMediaTextMarkers(m.content || '') : null;
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');

@@ -68,6 +68,11 @@ At消息规则 = re.compile(
 闪传消息规则 = re.compile(
     r"QQ闪传|该消息类型暂不支持查看|\[闪传(?:消息)?\]", re.IGNORECASE
 )
+网盘分享广告链接规则 = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:https?://)?(?:pan\.quark\.cn|pan\.baidu\.com)"
+    r"/s/[A-Za-z0-9_-]{1,128}(?=[/?#&\s\"'<>()\[\]{}，。；：！？、]|$)",
+    re.IGNORECASE,
+)
 用户编号规则 = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
 广告撤回禁言时长表 = (3 * 60, 10 * 60, 30 * 60, 86400, 30 * 86400)
 广告开关状态命名空间 = "group_ad_protection"
@@ -1041,9 +1046,11 @@ async def QQ官方机器人具备群管权限(
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
     if not 是QQ官方机器人(event):
         return False
-    if 是否白名单消息(event, 消息文本):
-        return False
     if 是否At消息(event):
+        return False
+    if 是否网盘分享广告消息(event, 消息文本):
+        return True
+    if 是否白名单消息(event, 消息文本):
         return False
     return (
         是否群名片消息(event)
@@ -1064,6 +1071,21 @@ def 是否需要撤回数字消息(消息文本: str) -> bool:
             break
         当前文本 = 解码文本
     return bool(数字撤回规则.search(文本))
+
+
+def 是否网盘分享广告消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if 包含网盘分享广告链接(消息文本):
+        return True
+    for 文本 in 获取原始文本候选(event):
+        if 包含网盘分享广告链接(文本):
+            return True
+
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (消息对象, event):
+        for 字段名 in ("message", "content"):
+            if 包含网盘分享广告链接(读取字段(对象, 字段名)):
+                return True
+    return False
 
 
 def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
@@ -1242,6 +1264,25 @@ def 包含白名单域名(值: Any) -> bool:
         当前文本 = 解码文本
     数据 = 读取字段(值, "data")
     return 数据 is not None and 数据 is not 值 and 包含白名单域名(数据)
+
+
+def 包含网盘分享广告链接(值: Any) -> bool:
+    if 值 is None:
+        return False
+    if isinstance(值, (list, tuple, set)):
+        return any(包含网盘分享广告链接(子值) for 子值 in 值)
+    if isinstance(值, dict):
+        return any(包含网盘分享广告链接(子值) for 子值 in 值.values())
+    当前文本 = str(值).replace("\\/", "/")
+    for _ in range(3):
+        if 网盘分享广告链接规则.search(当前文本):
+            return True
+        解码文本 = unquote(当前文本)
+        if 解码文本 == 当前文本:
+            break
+        当前文本 = 解码文本
+    数据 = 读取字段(值, "data")
+    return 数据 is not None and 数据 is not 值 and 包含网盘分享广告链接(数据)
 
 
 def 包含QQ阅读小程序白名单(值: Any) -> bool:
