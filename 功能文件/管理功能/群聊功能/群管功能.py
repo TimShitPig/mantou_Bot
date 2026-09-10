@@ -1123,11 +1123,19 @@ def 是否群名片消息(event: AstrMessageEvent) -> bool:
 
 
 def 是否合并转发消息(event: AstrMessageEvent) -> bool:
+    消息对象 = getattr(event, "message_obj", None)
+    官方消息候选 = [event, 消息对象]
+    for 对象 in (event, 消息对象):
+        原始消息 = 读取字段(对象, "raw_message")
+        if 原始消息 is not None:
+            官方消息候选.append(原始消息)
+    if any(包含QQ官方聊天记录类型(对象) for 对象 in 官方消息候选):
+        return True
+
     for 文本 in 获取原始文本候选(event):
         if 合并转发规则.search(文本):
             return True
 
-    消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
         if 包含合并转发消息段(消息) or 包含合并转发标记(消息):
@@ -1213,6 +1221,40 @@ def 是否合并转发消息段(消息段: Any) -> bool:
     if isinstance(消息段, dict):
         return 是否合并转发类型值(消息段.get("type"))
     return 是否合并转发类型值(读取字段(消息段, "type"))
+
+
+def 包含QQ官方聊天记录类型(对象: Any) -> bool:
+    """只读取官方群消息结构中的聊天记录类型，避免普通数字误触发。"""
+    待检查 = [对象]
+    已检查: set[int] = set()
+    while 待检查:
+        当前对象 = 待检查.pop()
+        if 当前对象 is None:
+            continue
+        if isinstance(当前对象, (list, tuple, set)):
+            待检查.extend(当前对象)
+            continue
+        if isinstance(当前对象, (dict, str, bytes, bytearray)):
+            标识 = id(当前对象)
+            if 标识 in 已检查:
+                continue
+            已检查.add(标识)
+        if 是否QQ官方聊天记录类型值(读取字段(当前对象, "message_type")):
+            return True
+        for 字段名 in ("msg_elements", "raw_data"):
+            子对象 = 读取字段(当前对象, 字段名)
+            if 子对象 is not None:
+                待检查.append(子对象)
+    return False
+
+
+def 是否QQ官方聊天记录类型值(值: Any) -> bool:
+    if isinstance(值, bool):
+        return False
+    try:
+        return int(str(值).strip()) == 102
+    except (TypeError, ValueError):
+        return False
 
 
 def 包含At对象标记(值: Any) -> bool:
