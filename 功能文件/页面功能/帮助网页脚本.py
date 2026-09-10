@@ -2397,6 +2397,44 @@
           }, 0);
         }
       };
+      const msgRawFieldOrder = [
+        'op', 's', 't', 'd',
+        'id', 'event_id', 'message_id', 'msg_id',
+        'message_type', 'msg_type',
+        'group_openid', 'group_id', 'channel_id', 'guild_id',
+        'group_member_openid', 'member_openid', 'user_openid', 'openid',
+        'author', 'member', 'user',
+        'content', 'timestamp', 'seq', 'seq_in_channel',
+        'message_reference', 'mentions',
+        'attachments', 'embeds', 'ark', 'ark_data', 'msg_elements',
+      ];
+      const msgRawFieldRanks = new Map(msgRawFieldOrder.map((field, index) => [field, index]));
+      const sortMsgRawValue = (value) => {
+        if (Array.isArray(value)) return value.map(sortMsgRawValue);
+        if (!value || typeof value !== 'object') return value;
+        const sorted = {};
+        Object.keys(value).sort((left, right) => {
+          const leftRank = msgRawFieldRanks.get(left);
+          const rightRank = msgRawFieldRanks.get(right);
+          if (leftRank !== undefined || rightRank !== undefined) {
+            if (leftRank === undefined) return 1;
+            if (rightRank === undefined) return -1;
+            return leftRank - rightRank;
+          }
+          return left < right ? -1 : left > right ? 1 : 0;
+        }).forEach((key) => { sorted[key] = sortMsgRawValue(value[key]); });
+        return sorted;
+      };
+      const formatMsgRaw = (raw) => {
+        const source = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
+        if (!source.trim()) return '无原始数据';
+        try {
+          return JSON.stringify(sortMsgRawValue(JSON.parse(source)), null, 2);
+        } catch (_) {
+          // 旧记录可能已截断，或者上游给出的不是 JSON；保留原文供排查。
+          return source;
+        }
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const keepLatestVisible = !scroll.prepend && (Boolean(scroll.toBottom) || msgBodyNearBottom(body));
@@ -2637,7 +2675,7 @@
         body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-unmute]').forEach((el) => el.addEventListener('click', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
-        body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = window._msgRaw?.[el.dataset.msgRaw] || '无原始数据'; $('msg-raw-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
           row.addEventListener('contextmenu', (e) => {
             e.preventDefault();
