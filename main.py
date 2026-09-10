@@ -61,7 +61,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.66"
+插件版本 = "6.2.0"
 
 
 
@@ -124,6 +124,7 @@ class MyPlugin(Star):
         消息记录.安装消息记录(self.context, self.config)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
+    @消息记录.保持QQ官方触发消息引用上下文
     async def on_all_message(self, event: AstrMessageEvent):
         if not 权限工具.是QQ官方机器人(event):
             return

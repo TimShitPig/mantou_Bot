@@ -1054,12 +1054,12 @@ async def 发送Markdown键盘消息(
     for 对象 in (event, 消息对象):
         值 = (
             读取字段(对象, "message_id")
-            or 读取字段(对象, "id")
             or 读取字段(对象, "msg_id")
         )
         if 值:
             消息ID = str(值)
             break
+    触发消息ID = ""
 
     消息体: dict[str, Any] = {
         "content": "",
@@ -1074,16 +1074,28 @@ async def 发送Markdown键盘消息(
     用户openid = 获取用户openid同步(event)
     try:
         from 功能文件.管理功能.基础功能.消息记录 import (
+            获取QQ官方触发消息ID,
+            QQ官方引用字段不兼容,
             主动消息是否允许,
             查询群主动消息权限,
             记录主动消息权限,
             主动消息无权限,
+            _移除QQ官方消息引用,
         )
+        触发消息ID = 获取QQ官方触发消息ID(event)
     except Exception:
+        获取QQ官方触发消息ID = lambda *args, **kwargs: ""
+        QQ官方引用字段不兼容 = lambda *args, **kwargs: False
         主动消息是否允许 = lambda *args, **kwargs: None
         查询群主动消息权限 = None
         记录主动消息权限 = lambda *args, **kwargs: None
         主动消息无权限 = lambda *args, **kwargs: False
+        _移除QQ官方消息引用 = lambda 消息体: 消息体
+    if 触发消息ID:
+        消息体["message_reference"] = {
+            "message_id": str(触发消息ID),
+            "ignore_get_message_error": True,
+        }
     目标会话 = str(群openid or 用户openid or "").strip()
     目标类型 = "group" if 群openid else "user"
     # 没有 msg_id 时官方请求实际就是主动推送，即使调用方未显式传入
@@ -1116,9 +1128,26 @@ async def 发送Markdown键盘消息(
         logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
         return False
 
+    async def 请求消息体(待发送消息体: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        """仅在 QQ 明确不支持引用字段时，移除引用后重试同一条消息一次。"""
+        try:
+            return await _http.request(route, json=待发送消息体), 待发送消息体
+        except Exception as 异常:
+            无引用消息体 = _移除QQ官方消息引用(待发送消息体)
+            if (
+                无引用消息体 is 待发送消息体
+                or not QQ官方引用字段不兼容(异常)
+            ):
+                raise
+            logger.debug(
+                "[帮助MD键盘] QQ官方引用字段不兼容，已去除引用后重试一次：错误类型=%s",
+                type(异常).__name__,
+            )
+            return await _http.request(route, json=无引用消息体), 无引用消息体
+
     记录文本 = md文本
     try:
-        发送结果 = await _http.request(route, json=消息体)
+        发送结果, 消息体 = await 请求消息体(消息体)
         if 实际主动发送 and 目标会话:
             记录主动消息权限(目标会话, 目标类型, True)
         响应消息ID = _提取发送响应消息ID(发送结果)
@@ -1128,6 +1157,7 @@ async def 发送Markdown键盘消息(
             md文本,
             消息ID=响应消息ID,
             自身REFIDX=_提取发送响应REFIDX(发送结果),
+            引用ID=触发消息ID if "message_reference" in 消息体 else "",
         )
         return True
     except Exception as e:
@@ -1147,7 +1177,7 @@ async def 发送Markdown键盘消息(
                 降级消息体["msg_seq"] = _random.randint(1, 10000)
                 消息体 = 降级消息体
                 try:
-                    降级结果 = await _http.request(route, json=降级消息体)
+                    降级结果, 降级消息体 = await 请求消息体(降级消息体)
                     if 实际主动发送 and 目标会话:
                         记录主动消息权限(目标会话, 目标类型, True)
                     _记录MD键盘发送(
@@ -1156,6 +1186,7 @@ async def 发送Markdown键盘消息(
                         记录文本,
                         消息ID=_提取发送响应消息ID(降级结果),
                         自身REFIDX=_提取发送响应REFIDX(降级结果),
+                        引用ID=触发消息ID if "message_reference" in 降级消息体 else "",
                     )
                     logger.info("[帮助MD键盘] 内容违规，已清空书名和作者后重发")
                     return True
@@ -1194,15 +1225,16 @@ async def 发送Markdown键盘消息(
                 logger.debug("QQ官方主动消息已跳过：目标未开启主动消息权限")
                 return False
         try:
-            主动发送结果 = await _http.request(route, json=主动消息体)
+            主动发送结果, 主动消息体 = await 请求消息体(主动消息体)
             if 目标会话:
                 记录主动消息权限(目标会话, 目标类型, True)
             _记录MD键盘发送(
-            群openid,
-            用户openid,
-            记录文本,
-            消息ID=_提取发送响应消息ID(主动发送结果),
-            自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+                群openid,
+                用户openid,
+                记录文本,
+                消息ID=_提取发送响应消息ID(主动发送结果),
+                自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+                引用ID=触发消息ID if "message_reference" in 主动消息体 else "",
             )
             return True
         except Exception as 主动异常:
@@ -1222,6 +1254,7 @@ def _记录MD键盘发送(
     appid: str = "",
     消息ID: str = "",
     自身REFIDX: str = "",
+    引用ID: str = "",
 ) -> None:
     """机器人主动发送（MD 键盘/下载完成按钮）成功后写入消息记录，网页可查看。"""
     try:
@@ -1250,6 +1283,7 @@ def _记录MD键盘发送(
             appid,
             消息ID=str(消息ID or "").strip(),
             自身REFIDX=str(自身REFIDX or "").strip(),
+            引用ID=str(引用ID or "").strip(),
             发送者昵称="机器人",
             来源="bot_active",
         )
