@@ -5,8 +5,7 @@ import ast
 import base64
 import copy
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import ContextVar
-from functools import partial, wraps
+from functools import partial
 import hashlib
 import html
 import json
@@ -137,18 +136,6 @@ _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
 _消息撤回事件挂钩版本 = int(globals().get("_消息撤回事件挂钩版本", 0) or 0)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
-_发送挂钩版本 = int(globals().get("_发送挂钩版本", 0) or 0)
-_发送挂钩当前版本 = 6
-_管道引用挂钩版本 = int(globals().get("_管道引用挂钩版本", 0) or 0)
-_管道引用挂钩当前版本 = 1
-_当前QQ官方触发消息ID: ContextVar[str] = (
-    globals().get("_当前QQ官方触发消息ID")
-    or ContextVar("mantou_qqofficial_trigger_message_id", default="")
-)
-_当前QQ官方触发引用生效: ContextVar[bool | None] = (
-    globals().get("_当前QQ官方触发引用生效")
-    or ContextVar("mantou_qqofficial_trigger_reference_applied", default=None)
-)
 主动消息权限缓存: dict[str, tuple[str, float]] = globals().get("主动消息权限缓存") or {}
 主动消息权限缓存有效期秒 = 30 * 60
 
@@ -1739,7 +1726,7 @@ _REFIDX规则 = re.compile(r"(?:^|[?&])msg_idx=([^&]+)")
 
 
 def _提取REFIDX(消息: Any) -> str:
-    """从消息 message_scene.ext 提取历史索引，仅供本地展示和兼容记录。"""
+    """从消息 message_scene.ext 提取 REFIDX（QQ 官方引用消息专用标识）。"""
     try:
         场景 = _读取字段(消息, "message_scene") or {}
         if isinstance(场景, str):
@@ -1768,207 +1755,6 @@ def _提取REFIDX(消息: Any) -> str:
     except Exception:
         pass
     return ""
-
-
-def _提取QQ官方触发消息ID(事件: Any) -> str:
-    """只读取 QQ 官方入站消息的原始 message_id，用作回复引用目标。"""
-    消息对象 = getattr(事件, "message_obj", None)
-    候选对象 = [
-        消息对象,
-        _读取字段(消息对象, "raw_message"),
-        _读取字段(事件, "raw_message"),
-        事件,
-    ]
-    for 对象 in 候选对象:
-        if 对象 is None:
-            continue
-        # 群成员变更和互动桥会构造 ``id`` 作为内部事件标识，不能把它当作
-        # QQ 消息 ID 引用；官方入站消息同时提供 message_id 或 msg_id。
-        for 字段名 in ("message_id", "msg_id"):
-            值 = _读取字段(对象, 字段名)
-            if 值:
-                return str(值).strip()
-    return ""
-
-
-def 获取QQ官方触发消息ID(事件: Any = None) -> str:
-    """返回当前发送所对应的 QQ 官方入站消息 ID。"""
-    当前消息ID = str(_当前QQ官方触发消息ID.get() or "").strip()
-    if 当前消息ID:
-        return 当前消息ID
-    return _提取QQ官方触发消息ID(事件) if 事件 is not None else ""
-
-
-def _是QQ官方事件(事件: Any) -> bool:
-    """只为 QQ 官方入站事件建立回复引用上下文。"""
-    try:
-        元数据 = getattr(事件, "platform_meta", None)
-        名称 = str(
-            getattr(元数据, "name", "")
-            or getattr(getattr(事件, "platform", None), "name", "")
-            or ""
-        ).strip().lower()
-        if not 名称 and hasattr(事件, "get_platform_name"):
-            名称 = str(事件.get_platform_name() or "").strip().lower()
-        return 名称.replace("-", "_") in {"qq_official", "qqofficial"}
-    except Exception:
-        return False
-
-
-def 保持QQ官方触发消息引用上下文(处理函数: Any) -> Any:
-    """在本插件事件处理及其创建的后台任务中保留真实触发消息 ID。"""
-    @wraps(处理函数)
-    async def 包装处理函数(*参数: Any, **关键字: Any) -> Any:
-        事件 = 关键字.get("event")
-        if 事件 is None:
-            for 候选 in 参数:
-                if _是QQ官方事件(候选):
-                    事件 = 候选
-                    break
-        触发消息ID = _提取QQ官方触发消息ID(事件) if _是QQ官方事件(事件) else ""
-        消息令牌 = _当前QQ官方触发消息ID.set(触发消息ID)
-        引用令牌 = _当前QQ官方触发引用生效.set(None)
-        try:
-            结果 = 处理函数(*参数, **关键字)
-            if hasattr(结果, "__aiter__"):
-                async for 输出 in 结果:
-                    yield 输出
-            elif asyncio.iscoroutine(结果):
-                await 结果
-        finally:
-            _当前QQ官方触发引用生效.reset(引用令牌)
-            _当前QQ官方触发消息ID.reset(消息令牌)
-
-    return 包装处理函数
-
-
-def _解包QQ官方管道引用挂钩(执行方法: Any) -> Any:
-    """热重载时返回未包装的 PipelineScheduler.execute。"""
-    当前执行 = 执行方法
-    已见: set[int] = set()
-    while callable(当前执行) and id(当前执行) not in 已见:
-        已见.add(id(当前执行))
-        if not getattr(当前执行, "__mantou_quote_pipeline_hook_version__", 0):
-            break
-        原执行 = getattr(当前执行, "__mantou_quote_pipeline_original__", None)
-        if not callable(原执行) or 原执行 is 当前执行:
-            break
-        当前执行 = 原执行
-    return 当前执行
-
-
-def _安装QQ官方触发消息引用上下文挂钩() -> bool:
-    """让完整管道以及其创建的任务都保留当前 QQ 入站消息引用。"""
-    global _管道引用挂钩版本
-    if _管道引用挂钩版本 >= _管道引用挂钩当前版本:
-        return True
-    try:
-        from astrbot.core.pipeline.scheduler import PipelineScheduler
-
-        当前执行 = getattr(PipelineScheduler, "execute", None)
-        if int(
-            getattr(当前执行, "__mantou_quote_pipeline_hook_version__", 0) or 0
-        ) >= _管道引用挂钩当前版本:
-            _管道引用挂钩版本 = _管道引用挂钩当前版本
-            return True
-        原执行 = _解包QQ官方管道引用挂钩(当前执行)
-        if not callable(原执行):
-            return False
-
-        async def 新执行(self: Any, event: Any, *参数: Any, **关键字: Any) -> Any:
-            if not _是QQ官方事件(event):
-                return await 原执行(self, event, *参数, **关键字)
-            触发消息ID = _提取QQ官方触发消息ID(event)
-            if not 触发消息ID:
-                return await 原执行(self, event, *参数, **关键字)
-            消息令牌 = _当前QQ官方触发消息ID.set(触发消息ID)
-            引用令牌 = _当前QQ官方触发引用生效.set(None)
-            try:
-                return await 原执行(self, event, *参数, **关键字)
-            finally:
-                _当前QQ官方触发引用生效.reset(引用令牌)
-                _当前QQ官方触发消息ID.reset(消息令牌)
-
-        setattr(
-            新执行,
-            "__mantou_quote_pipeline_hook_version__",
-            _管道引用挂钩当前版本,
-        )
-        setattr(新执行, "__mantou_quote_pipeline_original__", 原执行)
-        setattr(PipelineScheduler, "execute", 新执行)
-        _管道引用挂钩版本 = _管道引用挂钩当前版本
-        logger.info("QQ官方消息引用上下文挂钩已安装：按事件隔离所有回复")
-        return True
-    except Exception as 异常:
-        logger.warning(
-            "QQ官方消息引用上下文挂钩安装失败：错误类型=%s",
-            type(异常).__name__,
-        )
-        return False
-
-
-def _注入QQ官方触发消息引用(
-    消息体: dict[str, Any],
-    *,
-    触发消息ID: str = "",
-) -> dict[str, Any]:
-    """给被动回复写入 QQ 官方 message_reference，不覆盖调用方的显式引用。"""
-    if not isinstance(消息体, dict) or "message_reference" in 消息体:
-        return 消息体
-    引用消息ID = str(触发消息ID or 获取QQ官方触发消息ID() or "").strip()
-    if not 引用消息ID:
-        return 消息体
-    新消息体 = dict(消息体)
-    新消息体["message_reference"] = {
-        "message_id": 引用消息ID,
-        "ignore_get_message_error": True,
-    }
-    return 新消息体
-
-
-def QQ官方引用字段不兼容(异常: Any) -> bool:
-    """只识别 QQ 明确拒绝 message_reference 字段或其目标的错误。"""
-    错误文本 = str(异常 or "").lower()
-    return any(
-        标记 in 错误文本
-        for 标记 in (
-            "message_reference",
-            "message reference",
-            "引用消息",
-            "消息引用",
-        )
-    )
-
-
-def _移除QQ官方消息引用(消息体: dict[str, Any]) -> dict[str, Any]:
-    """复制消息体并移除引用字段，供官方明确不支持时单次降级。"""
-    if not isinstance(消息体, dict) or "message_reference" not in 消息体:
-        return 消息体
-    无引用消息体 = dict(消息体)
-    无引用消息体.pop("message_reference", None)
-    return 无引用消息体
-
-
-async def _请求QQ官方消息体(
-    _http: Any,
-    route: Any,
-    消息体: dict[str, Any],
-) -> tuple[Any, dict[str, Any]]:
-    """发送消息；QQ 明确拒绝引用字段时仅去字段重试一次。"""
-    try:
-        return await _http.request(route, json=消息体), 消息体
-    except Exception as 异常:
-        无引用消息体 = _移除QQ官方消息引用(消息体)
-        if (
-            无引用消息体 is 消息体
-            or not QQ官方引用字段不兼容(异常)
-        ):
-            raise
-        logger.debug(
-            "QQ官方引用字段不兼容，已去除引用后重试一次：错误类型=%s",
-            type(异常).__name__,
-        )
-        return await _http.request(route, json=无引用消息体), 无引用消息体
 
 
 def _提取附件列表(消息: Any) -> list[Any]:
@@ -2636,6 +2422,7 @@ def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
         return False
     _启动消息接收任务()
     return True
+
 
 def _安排数据库裁剪() -> asyncio.Task[Any] | None:
     """低频安排消息表保留清理，不依赖内存消息是否到达上限。"""
@@ -4855,35 +4642,6 @@ def _数据库历史消息(
         返回消息 = 返回消息[-limit:]
         最后消息 = 返回消息[-1] if 返回消息 else {}
         消息索引 = {_规范消息ID(m.get("message_id")): m for m in 返回消息 if _规范消息ID(m.get("message_id"))}
-        待补引用ID = list(
-            dict.fromkeys(
-                _规范消息ID(消息记录项.get("reference_id"))
-                for 消息记录项 in 返回消息
-                if _规范消息ID(消息记录项.get("reference_id"))
-                and _规范消息ID(消息记录项.get("reference_id")) not in 消息索引
-            )
-        )
-        if 待补引用ID:
-            待补集合 = set(待补引用ID)
-            for 内存消息项 in 内存消息记录:
-                内存消息ID = _规范消息ID(内存消息项.get("message_id"))
-                if 内存消息ID in 待补集合:
-                    消息索引[内存消息ID] = 内存消息项
-            待补引用ID = [
-                消息ID for 消息ID in 待补引用ID if 消息ID not in 消息索引
-            ]
-        if 待补引用ID and _消息存储 is not None:
-            try:
-                补查结果 = _消息存储.批量读取会话引用消息(
-                    会话标识,
-                    待补引用ID,
-                )
-                for 消息ID, 被引用消息 in (补查结果 or {}).items():
-                    规范消息ID = _规范消息ID(消息ID)
-                    if 规范消息ID and isinstance(被引用消息, dict):
-                        消息索引[规范消息ID] = _快速规范化历史消息(被引用消息)
-            except Exception as 补查异常:
-                logger.debug("消息记录跨页引用补查失败：错误类型=%s", type(补查异常).__name__)
         引用映射: dict[str, dict[str, str]] = {}
         for 消息记录项 in 返回消息:
             引用ID = str(消息记录项.get("reference_id") or "").strip()
@@ -5455,12 +5213,15 @@ async def 发送消息(
     if 事件ID:
         消息体["event_id"] = 事件ID
     if 引用消息ID:
-        # QQ 官方 message_reference 接收被引用消息的原始 message_id；
-        # ref_idx 仅用于历史消息索引，不能替代引用目标。
-        消息体["message_reference"] = {
-            "message_id": str(引用消息ID),
-            "ignore_get_message_error": True,
-        }
+        引用目标 = str(引用消息REFIDX or "").strip() or 引用消息ID
+        # QQ 官方引用需优先使用被引用消息自身的 REFIDX，找不到时回退完整消息 ID
+        if not 引用消息REFIDX:
+            for 会话记录 in 消息缓存.values():
+                目标 = next((x for x in (会话记录.get("messages") or []) if str(x.get("message_id") or "") == 引用消息ID), None)
+                if 目标 and 目标.get("refidx"):
+                    引用目标 = str(目标.get("refidx"))
+                    break
+        消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
     图片前文本 = str(图片前文本 or "").strip()
@@ -5747,7 +5508,7 @@ async def 发送消息(
                 "/v2/groups/{group_openid}/messages",
                 group_openid=会话标识,
             )
-        结果, 消息体 = await _请求QQ官方消息体(_http, route, 消息体)
+        结果 = await _http.request(route, json=消息体)
         if 实际使用主动消息:
             记录主动消息权限(会话标识, 权限会话类型, True)
     except Exception as exc:
@@ -5765,7 +5526,7 @@ async def 发送消息(
             if 主动消息是否允许(会话标识, 权限会话类型) is False:
                 return {"ok": False, "message": "发送失败：主动消息权限未开启"}
             try:
-                结果, 消息体 = await _请求QQ官方消息体(_http, route, 消息体)
+                结果 = await _http.request(route, json=消息体)
                 记录主动消息权限(会话标识, 权限会话类型, True)
             except Exception as 重试异常:
                 if 主动消息无权限(重试异常):
@@ -5800,7 +5561,7 @@ async def 发送消息(
                         appid,
                         消息ID=响应ID,
                         自身REFIDX=_提取发送响应REFIDX(结果),
-                        引用ID=引用消息ID if "message_reference" in 消息体 else "",
+                        引用ID=引用消息ID,
                         媒体=媒体记录,
                         发送时间=_提取发送响应时间(结果),
                     )
@@ -5848,7 +5609,7 @@ async def 发送消息(
         appid,
         消息ID=响应ID,
         自身REFIDX=_提取发送响应REFIDX(结果),
-        引用ID=引用消息ID if "message_reference" in 消息体 else "",
+        引用ID=引用消息ID,
         媒体=媒体记录,
         发送时间=_提取发送响应时间(结果),
     )
@@ -6420,214 +6181,9 @@ def _会话标识兜底(session: Any) -> str:
     return ""
 
 
-def _解包消息发送挂钩(发送方法: Any) -> Any:
-    """热重载时取回旧消息记录包装器里的原始 _post_send。"""
-    当前发送 = 发送方法
-    已见: set[int] = set()
-    while callable(当前发送) and id(当前发送) not in 已见:
-        已见.add(id(当前发送))
-        if not getattr(当前发送, "__mantou_record_after_send__", False):
-            break
-        原发送 = getattr(当前发送, "__mantou_record_original__", None)
-        if not callable(原发送):
-            闭包 = getattr(当前发送, "__closure__", None) or ()
-            自由变量 = getattr(getattr(当前发送, "__code__", None), "co_freevars", ())
-            for 名称, 单元格 in zip(自由变量, 闭包):
-                if 名称 != "发送方法":
-                    continue
-                try:
-                    候选 = 单元格.cell_contents
-                except ValueError:
-                    continue
-                if callable(候选):
-                    原发送 = 候选
-                    break
-        if not callable(原发送) or 原发送 is 当前发送:
-            break
-        当前发送 = 原发送
-    return 当前发送
-
-
-def _解包QQ官方引用请求挂钩(请求方法: Any) -> Any:
-    """热重载时仅用于移除旧版本的 HTTP 级引用包装器。"""
-    当前请求 = 请求方法
-    已见: set[int] = set()
-    while callable(当前请求) and id(当前请求) not in 已见:
-        已见.add(id(当前请求))
-        if not getattr(当前请求, "__mantou_quote_http_hook_version__", 0):
-            break
-        原请求 = getattr(当前请求, "__mantou_quote_http_original__", None)
-        if not callable(原请求) or 原请求 is 当前请求:
-            break
-        当前请求 = 原请求
-    return 当前请求
-
-
-def _卸载QQ官方旧引用传输挂钩(对象: Any) -> bool:
-    """移除 v6.2.0 预览版遗留的 HTTP 级包装器，恢复精确消息入口。"""
-    已移除 = False
-    候选客户端 = [
-        对象,
-        getattr(对象, "client", None),
-        getattr(对象, "bot", None),
-    ]
-    for 客户端 in 候选客户端:
-        try:
-            api = getattr(客户端, "api", None)
-            http客户端 = getattr(api, "_http", None)
-            HTTP类 = type(http客户端) if http客户端 is not None else None
-            当前请求 = getattr(HTTP类, "request", None) if HTTP类 is not None else None
-            if not getattr(当前请求, "__mantou_quote_http_hook_version__", 0):
-                continue
-            原请求 = _解包QQ官方引用请求挂钩(当前请求)
-            if callable(原请求) and 原请求 is not 当前请求:
-                setattr(HTTP类, "request", 原请求)
-                已移除 = True
-        except Exception:
-            continue
-    return 已移除
-
-
-def _卸载QQ官方旧最终引用挂钩(事件类: Any) -> bool:
-    """移除预览版对 Markdown 回退器的包装，防止热重载产生双重重试。"""
-    方法名 = "_send_with_markdown_fallback"
-    try:
-        描述符 = vars(事件类).get(方法名)
-    except Exception:
-        return False
-    if 描述符 is None:
-        return False
-    是静态方法 = isinstance(描述符, staticmethod)
-    当前发送 = 描述符.__func__ if 是静态方法 else 描述符
-    if not getattr(当前发送, "__mantou_quote_hook_version__", 0):
-        return False
-    原始发送 = getattr(当前发送, "__mantou_quote_original__", None)
-    if not callable(原始发送) or 原始发送 is 当前发送:
-        return False
-    try:
-        setattr(
-            事件类,
-            方法名,
-            staticmethod(原始发送) if 是静态方法 else 原始发送,
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _解包QQ官方引用发送挂钩(发送方法: Any) -> Any:
-    """热重载时返回未包装的 QQ 官方最终消息发送方法。"""
-    当前发送 = 发送方法
-    已见: set[int] = set()
-    while callable(当前发送) and id(当前发送) not in 已见:
-        已见.add(id(当前发送))
-        if not getattr(当前发送, "__mantou_quote_api_hook_version__", 0):
-            break
-        原发送 = getattr(当前发送, "__mantou_quote_api_original__", None)
-        if not callable(原发送) or 原发送 is 当前发送:
-            break
-        当前发送 = 原发送
-    return 当前发送
-
-
-async def _调用QQ官方引用发送(
-    调用原发送: Any,
-    参数: tuple[Any, ...],
-    关键字: dict[str, Any],
-) -> Any:
-    """只为当前 QQ 事件的群聊/私聊最终消息写入引用并提供一次降级。"""
-    触发消息ID = 获取QQ官方触发消息ID()
-    已提供引用 = len(参数) >= 6 or 关键字.get("message_reference") is not None
-    if not 触发消息ID or 已提供引用:
-        return await 调用原发送(*参数, **关键字)
-
-    带引用关键字 = dict(关键字)
-    带引用关键字["message_reference"] = {
-        "message_id": 触发消息ID,
-        "ignore_get_message_error": True,
-    }
-    if _当前QQ官方触发引用生效.get() is not False:
-        _当前QQ官方触发引用生效.set(True)
-    try:
-        return await 调用原发送(*参数, **带引用关键字)
-    except Exception as 异常:
-        if not QQ官方引用字段不兼容(异常):
-            raise
-        _当前QQ官方触发引用生效.set(False)
-        无引用关键字 = dict(带引用关键字)
-        无引用关键字.pop("message_reference", None)
-        logger.debug(
-            "QQ官方引用字段不兼容，已去除引用后重试一次：错误类型=%s",
-            type(异常).__name__,
-        )
-        return await 调用原发送(*参数, **无引用关键字)
-
-
-def _包装QQ官方引用发送(发送方法: Any) -> Any:
-    """包装一个 QQ 官方群聊或私聊最终发送方法。"""
-    if 发送方法 is None or int(
-        getattr(发送方法, "__mantou_quote_api_hook_version__", 0) or 0
-    ) >= _发送挂钩当前版本:
-        return None
-    原始发送方法 = _解包QQ官方引用发送挂钩(发送方法)
-    if not callable(原始发送方法):
-        return None
-
-    async def 新发送(self: Any, *参数: Any, **关键字: Any) -> Any:
-        async def 调用原发送(*原始参数: Any, **原始关键字: Any) -> Any:
-            return await 原始发送方法(self, *原始参数, **原始关键字)
-
-        return await _调用QQ官方引用发送(调用原发送, 参数, 关键字)
-
-    setattr(新发送, "__mantou_quote_api_hook_version__", _发送挂钩当前版本)
-    setattr(新发送, "__mantou_quote_api_original__", 原始发送方法)
-    return 新发送
-
-
-def _安装QQ官方引用发送挂钩(事件模块: Any, 事件类: Any) -> int:
-    """仅包装 QQ 官方三条最终消息 API，不影响上传、查询和撤回请求。"""
-    已包装 = 0
-    try:
-        from botpy.api import BotAPI
-    except Exception:
-        BotAPI = getattr(getattr(事件模块, "botpy", None), "api", None)
-        BotAPI = getattr(BotAPI, "BotAPI", None)
-
-    目标方法 = []
-    if BotAPI is not None:
-        目标方法.extend(
-            [
-                (BotAPI, "post_group_message"),
-                (BotAPI, "post_c2c_message"),
-            ]
-        )
-    if 事件类 is not None:
-        目标方法.append((事件类, "post_c2c_message"))
-
-    for 目标类, 方法名 in 目标方法:
-        try:
-            新发送 = _包装QQ官方引用发送(getattr(目标类, 方法名, None))
-            if 新发送 is None:
-                continue
-            setattr(目标类, 方法名, 新发送)
-            已包装 += 1
-        except Exception as 异常:
-            logger.debug(
-                "QQ官方引用发送挂钩安装失败：方法=%s，错误类型=%s",
-                方法名,
-                type(异常).__name__,
-            )
-    return 已包装
-
-
 def _包装事件发送(发送方法: Any) -> Any:
     """包装 QQ 官方事件发送入口，只在平台成功返回后记录消息和时间。"""
-    if 发送方法 is None or int(
-        getattr(发送方法, "__mantou_quote_hook_version__", 0) or 0
-    ) >= _发送挂钩当前版本:
-        return None
-    原始发送方法 = _解包消息发送挂钩(发送方法)
-    if not callable(原始发送方法):
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
         return None
 
     async def 新发送(self: Any, stream: Any = None, **关键字: Any) -> Any:
@@ -6635,8 +6191,6 @@ def _包装事件发送(发送方法: Any) -> Any:
         类型 = "user"
         appid = ""
         内容 = ""
-        原始消息ID = ""
-        触发消息ID = ""
         try:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
@@ -6649,23 +6203,18 @@ def _包装事件发送(发送方法: Any) -> Any:
                 except Exception:
                     pass
                 内容 = _链提取文本(缓冲)
-            原始消息ID = _提取QQ官方触发消息ID(self)
-            触发消息ID = 原始消息ID
         except Exception as exc:
             logger.debug("消息记录事件发送参数提取失败：错误类型=%s", type(exc).__name__)
-        触发消息令牌 = _当前QQ官方触发消息ID.set(触发消息ID)
-        引用状态令牌 = _当前QQ官方触发引用生效.set(None)
-        引用已发送 = False
+        结果 = 发送方法(self, stream, **关键字)
+        if asyncio.iscoroutine(结果):
+            结果 = await 结果
         try:
-            _卸载QQ官方旧引用传输挂钩(self)
-            结果 = 原始发送方法(self, stream, **关键字)
-            if asyncio.iscoroutine(结果):
-                结果 = await 结果
-        finally:
-            引用已发送 = _当前QQ官方触发引用生效.get() is True
-            _当前QQ官方触发引用生效.reset(引用状态令牌)
-            _当前QQ官方触发消息ID.reset(触发消息令牌)
-        try:
+            原始消息 = getattr(self, "message_obj", None)
+            原始消息ID = str(
+                getattr(原始消息, "message_id", None)
+                or getattr(原始消息, "id", None)
+                or ""
+            ).strip()
             if 会话标识 and 内容 and (结果 is not None or 原始消息ID):
                 记录发送消息(
                     会话标识,
@@ -6674,7 +6223,6 @@ def _包装事件发送(发送方法: Any) -> Any:
                     appid,
                     消息ID=_提取发送响应消息ID(结果),
                     自身REFIDX=_提取发送响应REFIDX(结果),
-                    引用ID=触发消息ID if 引用已发送 else "",
                     发送者昵称="机器人",
                     来源="bot_event",
                     发送时间=_提取发送响应时间(结果),
@@ -6684,19 +6232,12 @@ def _包装事件发送(发送方法: Any) -> Any:
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_quote_hook_version__", _发送挂钩当前版本)
-    setattr(新发送, "__mantou_record_original__", 原始发送方法)
     return 新发送
 
 
 def _包装发送方法(发送方法: Any) -> Any:
-    """包装主动会话发送，只在适配器确认发送后记录本地历史。"""
-    if 发送方法 is None or int(
-        getattr(发送方法, "__mantou_quote_hook_version__", 0) or 0
-    ) >= _发送挂钩当前版本:
-        return None
-    原始发送方法 = _解包消息发送挂钩(发送方法)
-    if not callable(原始发送方法):
+    """包装主动会话发送，只在适配器确认发送成功后记录。"""
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
         return None
 
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
@@ -6714,16 +6255,9 @@ def _包装发送方法(发送方法: Any) -> Any:
             发送前消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
         except Exception as exc:
             logger.debug("消息记录主动发送参数提取失败：错误类型=%s", type(exc).__name__)
-        引用状态令牌 = _当前QQ官方触发引用生效.set(None)
-        引用已发送 = False
-        try:
-            _卸载QQ官方旧引用传输挂钩(self)
-            结果 = 原始发送方法(self, session, message_chain)
-            if asyncio.iscoroutine(结果):
-                结果 = await 结果
-        finally:
-            引用已发送 = _当前QQ官方触发引用生效.get() is True
-            _当前QQ官方触发引用生效.reset(引用状态令牌)
+        结果 = 发送方法(self, session, message_chain)
+        if asyncio.iscoroutine(结果):
+            结果 = await 结果
         try:
             发送后消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
             响应消息ID = _提取发送响应消息ID(结果)
@@ -6750,7 +6284,6 @@ def _包装发送方法(发送方法: Any) -> Any:
                     appid,
                     消息ID=消息ID,
                     自身REFIDX=_提取发送响应REFIDX(结果),
-                    引用ID=获取QQ官方触发消息ID() if 引用已发送 else "",
                     发送者昵称="机器人",
                     来源="bot_session",
                 )
@@ -6759,8 +6292,6 @@ def _包装发送方法(发送方法: Any) -> Any:
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_quote_hook_version__", _发送挂钩当前版本)
-    setattr(新发送, "__mantou_record_original__", 原始发送方法)
     return 新发送
 
 
@@ -6770,8 +6301,8 @@ def _安装消息发送挂钩() -> bool:
     事件回复和主动会话发送分别包装一次；不再包装 Platform 基类，避免
     QQOfficialPlatformAdapter 调用基类收尾时把同一条消息重复记录。
     """
-    global _发送挂钩已安装, _发送挂钩版本
-    if _发送挂钩已安装 and _发送挂钩版本 >= _发送挂钩当前版本:
+    global _发送挂钩已安装
+    if _发送挂钩已安装:
         return True
     已包装 = 0
     try:
@@ -6789,20 +6320,17 @@ def _安装消息发送挂钩() -> bool:
                 已包装 += 1
         事件类 = getattr(事件模块, "QQOfficialMessageEvent", None)
         if 事件类 is not None:
-            _卸载QQ官方旧最终引用挂钩(事件类)
             原发送 = getattr(事件类, "_post_send", None)
             新发送 = _包装事件发送(原发送)
             if 新发送 is not None:
                 setattr(事件类, "_post_send", 新发送)
                 已包装 += 1
-        已包装 += _安装QQ官方引用发送挂钩(事件模块, 事件类)
     except Exception as 异常:
         logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)
     if 已包装 == 0:
-        return bool(_发送挂钩已安装)
+        return False
     _发送挂钩已安装 = True
-    _发送挂钩版本 = _发送挂钩当前版本
-    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存和引用（%d 处）", 已包装)
+    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存（%d 处）", 已包装)
     return True
 
 
@@ -6869,7 +6397,6 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
                 logger.warning("消息记录数据库恢复失败：错误类型=%s", type(恢复异常).__name__)
         _修补botpy昵称()
         _安装消息事件挂钩()
-        _安装QQ官方触发消息引用上下文挂钩()
         _安装消息发送挂钩()
         _启动群信息轮询任务()
         return True

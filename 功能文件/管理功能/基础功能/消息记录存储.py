@@ -741,49 +741,6 @@ def 分页读取历史(
         _关闭连接(连接)
 
 
-def 批量读取会话引用消息(
-    会话标识: str,
-    消息ID列表: list[str],
-) -> dict[str, dict[str, Any]]:
-    """按原始 message_id 补查同一会话的被引用消息，避免跨页引用只显示 ID。"""
-    结果: dict[str, dict[str, Any]] = {}
-    if not 消息ID列表 or not _MySQL可用():
-        return 结果
-    会话 = str(会话标识 or "").strip()
-    消息ID去重列表 = list(
-        dict.fromkeys(
-            _规范消息ID(消息ID)
-            for 消息ID in 消息ID列表
-            if _规范消息ID(消息ID)
-        )
-    )
-    if not 会话 or not 消息ID去重列表:
-        return 结果
-    连接 = _打开连接()
-    if 连接 is None:
-        return 结果
-    try:
-        for 起点 in range(0, len(消息ID去重列表), 500):
-            分块 = 消息ID去重列表[起点 : 起点 + 500]
-            占位 = ",".join(["%s"] * len(分块))
-            with 连接.cursor() as 游标:
-                游标.execute(
-                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
-                    f"WHERE 会话标识=%s AND message_id IN ({占位})",
-                    (会话, *分块),
-                )
-                for 行 in 游标.fetchall():
-                    记录 = _行转记录(行)
-                    消息ID = _规范消息ID(记录.get("message_id"))
-                    if 消息ID and 消息ID not in 结果:
-                        结果[消息ID] = 记录
-    except Exception as exc:
-        logger.debug("消息记录 MySQL 引用消息补查失败：错误类型=%s", type(exc).__name__)
-    finally:
-        _关闭连接(连接)
-    return 结果
-
-
 
 
 def 统计会话消息数(会话标识: str) -> int:
