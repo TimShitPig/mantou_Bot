@@ -1400,27 +1400,8 @@ def _清理本地发送媒体同步(现在: float | None = None) -> None:
 
 
 def _保存本地发送媒体同步(数据: bytes, 文件名: str, 内容类型: str) -> str:
-    if not isinstance(数据, bytes) or not 数据 or len(数据) > 媒体代理最大字节数:
-        return ""
-    try:
-        _清理本地发送媒体同步()
-        扩展名 = Path(str(文件名 or "")).suffix.lower()
-        if 扩展名 not in 本地发送媒体扩展名:
-            扩展名 = mimetypes.guess_extension(str(内容类型 or "").split(";", 1)[0]) or ".dat"
-        if 扩展名 == ".jpe":
-            扩展名 = ".jpg"
-        目标 = 本地发送媒体目录 / f"{hashlib.md5(数据).hexdigest()}{扩展名}"
-        本地发送媒体目录.mkdir(parents=True, exist_ok=True)
-        if not 目标.is_file():
-            临时 = 目标.with_name(f".{目标.name}.{secrets.token_hex(4)}.tmp")
-            try:
-                临时.write_bytes(数据)
-                临时.replace(目标)
-            finally:
-                临时.unlink(missing_ok=True)
-        return f"/api/message/local-media/{目标.name}"
-    except (OSError, TypeError, ValueError):
-        return ""
+    """旧接口兼容占位；新发送媒体不再写入服务器硬盘。"""
+    return ""
 
 
 async def 保存本地发送媒体(
@@ -1428,15 +1409,8 @@ async def 保存本地发送媒体(
     文件名: str = "",
     内容类型: str = "application/octet-stream",
 ) -> str:
-    """按内容 MD5 保存发送媒体，返回控制台同源地址。"""
-    if not isinstance(数据, (bytes, bytearray)) or not 数据:
-        return ""
-    return await _控制台线程执行(
-        _保存本地发送媒体同步,
-        bytes(数据),
-        str(文件名 or ""),
-        str(内容类型 or "application/octet-stream"),
-    )
+    """兼容旧调用方；实际媒体副本由浏览器 Cache API 保存。"""
+    return ""
 
 
 async def _处理本地发送媒体(request: web.Request) -> web.Response:
@@ -2662,6 +2636,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
              媒体内容类型=str(数据.get("media_mime") or ""),
              媒体文本=str(数据.get("media_text") or ""),
              媒体文件类型=int(数据.get("media_file_type") or 1),
+             浏览器媒体键=str(数据.get("browser_media_key") or ""),
             ARK模板ID=str(数据.get("ark_template_id") or ""),
             ARK字段=数据.get("ark_fields") if isinstance(数据.get("ark_fields"), dict) else None,
             ARK列表=str(数据.get("ark_list") or ""),

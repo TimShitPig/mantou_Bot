@@ -5155,6 +5155,7 @@ async def 发送消息(
     媒体内容类型: str = "",
     媒体文件类型: int = 1,
     媒体文本: str = "",
+    浏览器媒体键: str = "",
     ARK模板ID: str = "",
     ARK字段: dict[str, Any] | None = None,
     ARK列表: str = "",
@@ -5308,49 +5309,13 @@ async def 发送消息(
             return {"ok": False, "message": "图片暂时无法发送"}
 
     async def _保存本地发送媒体记录() -> None:
-        """仅为发送的字节媒体保留本地副本，收到的附件仍只保存官方 URL。"""
+        """记录浏览器本地媒体键，不把发送字节写入服务器硬盘。"""
         nonlocal 图片记录地址, 媒体记录地址
-        数据: bytes | None = None
-        文件名 = ""
-        内容类型 = "application/octet-stream"
-        if 图片字节 is not None:
-            数据 = 图片字节
-            文件名 = 图片文件名
-            内容类型 = {
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-            }.get(Path(图片文件名).suffix.lower(), "image/png")
-        elif 媒体字节 is not None and not 媒体记录地址:
-            数据 = 媒体字节
-            文件名 = 媒体文件名 or "attachment.bin"
-            try:
-                媒体类型编号 = int(媒体文件类型 or 4)
-            except (TypeError, ValueError):
-                媒体类型编号 = 4
-            内容类型 = 媒体内容类型 or {
-                2: "video/mp4",
-                3: "audio/silk",
-                4: "application/octet-stream",
-            }.get(媒体类型编号, "application/octet-stream")
-        if not 数据:
-            return
-        try:
-            from 功能文件.页面功能 import 帮助网页后端
-
-            地址 = await 帮助网页后端.保存本地发送媒体(
-                数据,
-                文件名,
-                内容类型,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as 异常:
-            logger.debug("消息发送媒体本地副本保存失败：错误类型=%s", type(异常).__name__)
-            return
-        if not 地址:
+        地址 = str(浏览器媒体键 or "").strip()
+        if not re.fullmatch(
+            r"/api/message/browser-media/[A-Za-z0-9_-]{16,96}\.[A-Za-z0-9]{1,8}",
+            地址,
+        ):
             return
         if 图片字节 is not None:
             图片记录地址 = 地址
@@ -5391,6 +5356,7 @@ async def 发送消息(
         if not (
             媒体地址.startswith(("http://", "https://"))
             or 媒体地址.startswith("/api/message/local-media/")
+            or 媒体地址.startswith("/api/message/browser-media/")
         ):
             媒体地址 = ""
         return {

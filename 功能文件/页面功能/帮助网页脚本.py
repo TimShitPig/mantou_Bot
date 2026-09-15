@@ -1837,6 +1837,7 @@
       };
       const finishOptimisticSend = async (entry) => {
         try {
+          try { await cacheBrowserMediaPayload(entry.payload); } catch (_) {}
           const result = await api('message/send', {method:'POST', body:buildSendBody(entry.payload)});
           const remoteId = String(result?.message_id || result?.message?.message_id || result?.message?.id || '').trim();
           entry.status = 'sent';
@@ -1911,6 +1912,180 @@
         if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i.test(raw)) return raw;
         return safeMediaUrl(raw);
       };
+      const browserMediaCacheName = 'mantou-message-media-v1';
+      const browserMediaMarkerPattern = /^\/api\/message\/browser-media\/[A-Za-z0-9_-]{16,96}\.[A-Za-z0-9]{1,8}$/i;
+      const browserMediaObjectUrls = new Map();
+      const browserMediaMarker = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        try {
+          const url = new URL(raw, location.href);
+          return url.origin === location.origin && browserMediaMarkerPattern.test(url.pathname) ? url.pathname : '';
+        } catch (_) { return ''; }
+      };
+      const browserMediaDbName = 'mantou-message-media-v1';
+      const openBrowserMediaDb = () => new Promise((resolve) => {
+        if (typeof indexedDB === 'undefined') { resolve(null); return; }
+        try {
+          const request = indexedDB.open(browserMediaDbName, 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains('media')) db.createObjectStore('media', {keyPath:'key'});
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => resolve(null);
+        } catch (_) { resolve(null); }
+      });
+      const putBrowserMediaIndexedDb = async (key, blob) => {
+        const db = await openBrowserMediaDb();
+        if (!db) return false;
+        return await new Promise((resolve) => {
+          try {
+            const tx = db.transaction('media', 'readwrite');
+            tx.objectStore('media').put({key, blob, savedAt:Date.now()});
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+          } catch (_) { resolve(false); }
+        });
+      };
+      const trimBrowserMediaIndexedDb = async () => {
+        const db = await openBrowserMediaDb();
+        if (!db) return;
+        await new Promise((resolve) => {
+          try {
+            const read = db.transaction('media', 'readonly').objectStore('media').getAll();
+            read.onsuccess = () => {
+              const items = Array.isArray(read.result) ? read.result : [];
+              const excess = items.length - 128;
+              if (excess <= 0) { resolve(); return; }
+              const tx = db.transaction('media', 'readwrite');
+              items.sort((left, right) => Number(left?.savedAt || 0) - Number(right?.savedAt || 0));
+              items.slice(0, excess).forEach((item) => tx.objectStore('media').delete(item.key));
+              tx.oncomplete = () => resolve();
+              tx.onerror = () => resolve();
+            };
+            read.onerror = () => resolve();
+          } catch (_) { resolve(); }
+        });
+      };
+      const getBrowserMediaIndexedDb = async (key) => {
+        const db = await openBrowserMediaDb();
+        if (!db) return null;
+        return await new Promise((resolve) => {
+          try {
+            const request = db.transaction('media', 'readonly').objectStore('media').get(key);
+            request.onsuccess = () => resolve(request.result?.blob || null);
+            request.onerror = () => resolve(null);
+          } catch (_) { resolve(null); }
+        });
+      };
+      const browserMediaExtension = (name, mime, fallback = 'dat') => {
+        let ext = String(name || '').split('.').pop()?.toLowerCase() || '';
+        if (!/^[a-z0-9]{1,8}$/.test(ext) || ext === String(name || '').toLowerCase()) ext = '';
+        if (ext === 'jpe') ext = 'jpg';
+        if (!ext) ext = ({'image/jpeg':'jpg','image/png':'png','image/gif':'gif','image/webp':'webp','image/bmp':'bmp','video/mp4':'mp4','audio/silk':'silk'}[String(mime || '').toLowerCase()] || fallback);
+        return /^[a-z0-9]{1,8}$/.test(ext) ? ext : fallback;
+      };
+      const browserMediaKeyForPayload = (payload) => {
+        const data = payload || {};
+        const hasFile = (typeof File !== 'undefined' && data.image_file instanceof File) || (typeof File !== 'undefined' && data.media_file instanceof File);
+        const hasData = /^data:(?:image|video|audio)\//i.test(String(data.image_data || data.media_data || '').trim());
+        if (!hasFile && !hasData) return '';
+        const file = data.image_file instanceof File ? data.image_file : (data.media_file instanceof File ? data.media_file : null);
+        const mime = String(file?.type || data.media_mime || (String(data.image_data || '').match(/^data:([^;,]+)/i)?.[1] || '')).toLowerCase();
+        const name = String(file?.name || data.media_name || (mime.startsWith('image/') ? 'image.png' : 'attachment.dat'));
+        const token = (typeof crypto !== 'undefined' && crypto.randomUUID)
+          ? crypto.randomUUID().replace(/-/g, '')
+          : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+        return `/api/message/browser-media/${token}.${browserMediaExtension(name, mime, mime.startsWith('image/') ? 'png' : 'dat')}`;
+      };
+      const browserMediaBlobForPayload = async (payload) => {
+        const data = payload || {};
+        const file = data.image_file instanceof File ? data.image_file : (data.media_file instanceof File ? data.media_file : null);
+        if (file) return file;
+        const raw = String(data.image_data || data.media_data || '').trim();
+        if (!/^data:(?:image|video|audio)\//i.test(raw)) return null;
+        const response = await fetch(raw);
+        return response.ok ? response.blob() : null;
+      };
+      const trimBrowserMediaCache = async (cache) => {
+        try {
+          const keys = await cache.keys();
+          const excess = keys.length - 128;
+          for (let index = 0; index < excess; index += 1) await cache.delete(keys[index]);
+        } catch (_) {}
+      };
+      const cacheBrowserMediaPayload = async (payload) => {
+        const key = browserMediaMarker(payload?.browser_media_key);
+        if (!key) return;
+        const blob = await browserMediaBlobForPayload(payload);
+        if (!blob || !blob.size) return;
+        if (typeof caches !== 'undefined') {
+          const cache = await caches.open(browserMediaCacheName);
+          await cache.put(
+            new Request(new URL(key, location.href).href),
+            new Response(blob, {headers:{'Content-Type':blob.type || String(payload?.media_mime || 'application/octet-stream'), 'Cache-Control':'public,max-age=604800'}}),
+          );
+          await trimBrowserMediaCache(cache);
+        } else {
+          await putBrowserMediaIndexedDb(key, blob);
+          await trimBrowserMediaIndexedDb();
+        }
+      };
+      const loadBrowserMedia = async (key) => {
+        const marker = browserMediaMarker(key);
+        if (!marker) return '';
+        if (browserMediaObjectUrls.has(marker)) return browserMediaObjectUrls.get(marker);
+        try {
+          let blob = null;
+          if (typeof caches !== 'undefined') {
+            const cache = await caches.open(browserMediaCacheName);
+            const response = await cache.match(new Request(new URL(marker, location.href).href));
+            blob = response ? await response.blob() : null;
+          } else {
+            blob = await getBrowserMediaIndexedDb(marker);
+          }
+          if (!blob || !blob.size) return '';
+          const url = URL.createObjectURL(blob);
+          browserMediaObjectUrls.set(marker, url);
+          return url;
+        } catch (_) { return ''; }
+      };
+      const markBrowserMediaUnavailable = (node) => {
+        if (!node) return;
+        if (node.tagName === 'IMG') {
+          node.hidden = true;
+          const holder = node.closest('.msg-image-link');
+          holder?.classList.add('is-broken');
+          if (holder && !holder.querySelector('.msg-media-ph')) {
+            const placeholder = document.createElement('span');
+            placeholder.className = 'msg-media-ph';
+            placeholder.textContent = '图片已过期或不可用';
+            holder.appendChild(placeholder);
+          }
+        } else if (node.tagName === 'A') {
+          node.removeAttribute('href');
+          node.classList.add('is-unavailable');
+        } else {
+          node.removeAttribute('src');
+        }
+      };
+      const hydrateBrowserMedia = async (root) => {
+        if (!root) return;
+        const nodes = [...root.querySelectorAll('[data-browser-media-key]')];
+        await Promise.all(nodes.map(async (node) => {
+          const url = await loadBrowserMedia(node.dataset.browserMediaKey);
+          if (!url) { markBrowserMediaUnavailable(node); return; }
+          if (node.tagName === 'IMG') {
+            node.src = url;
+            node.dataset.lightbox = url;
+            node.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(url); });
+          } else if (node.tagName === 'A' || node.tagName === 'VIDEO') {
+            node.src = url;
+            if (node.tagName === 'A') node.href = url;
+          }
+        }));
+      };
       const messageMediaProxyRevision = '6.1.64';
       const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
@@ -1953,17 +2128,20 @@
            const directSrc = item.src || item.url || item.download_url;
            const inlineSrc = String(item.optimistic_data || '').match(/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i) && String(item.optimistic_data).length <= 12000000 ? String(item.optimistic_data) : '';
            const src = safeMediaUrl(directSrc) || inlineSrc;
+          const browserKey = browserMediaMarker(src);
           const typeLower = type.toLowerCase();
           const isImage = ['图片', 'image', 'img'].includes(typeLower) || contentType.startsWith('image/');
           const isVideo = ['视频', 'video'].includes(typeLower) || contentType.startsWith('video/');
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
+            if (browserKey) return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="打开图片"><img alt="图片" loading="${preload ? 'eager' : 'lazy'}" fetchpriority="${preload ? 'high' : 'low'}" decoding="async" data-browser-media-key="${esc(browserKey)}" data-media-img></button></div>`;
             const preview = mediaProxyUrl(src, 'image');
             const loading = preload ? 'eager' : 'lazy';
             const priority = preload ? 'high' : 'low';
             return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
+            if (browserKey) return `<div class="msg-media msg-video-media"><video controls preload="metadata" data-browser-media-key="${esc(browserKey)}"></video></div>`;
             const videoUrl = mediaProxyUrl(src, 'file');
             return `<div class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
           }
@@ -1972,6 +2150,7 @@
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
           if (!src) return `<div class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
+          if (browserKey) return `<a class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
           const fileUrl = mediaProxyUrl(src, 'file', name);
           return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
@@ -2627,6 +2806,7 @@
         Object.keys(rawStore).forEach((key) => {
           if (!renderedRawKeys.has(key)) delete rawStore[key];
         });
+        void hydrateBrowserMedia(body);
         body.querySelectorAll('[data-media-img]').forEach((img) => {
           bindImageInteractions(img);
           img.addEventListener('error', () => {
@@ -3123,6 +3303,7 @@
         }
         if (msgState.pastedImage) { payload.image_data = msgState.pastedImage; }
         if (msgState.pastedImageFile) { payload.image_file = msgState.pastedImageFile; }
+        payload.browser_media_key = browserMediaKeyForPayload(payload);
         if (msgState.sendType === 'ark') {
           payload.ark_template_id = $('msg-ark-template')?.value || '24';
           const fields = {};
