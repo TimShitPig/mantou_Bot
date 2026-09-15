@@ -61,7 +61,7 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.69"
+插件版本 = "6.1.70"
 
 
 
@@ -105,18 +105,8 @@ class MyPlugin(Star):
         )
         await 小说网盘功能.停止每日网盘远端清理任务()
         小说网盘功能.启动每日网盘远端清理任务(self.config)
-
-        async def _恢复小说上传任务():
-            try:
-                恢复数量 = await 小说网盘功能.恢复待续传上传任务(self.config)
-                if 恢复数量:
-                    logger.info("插件重载恢复小说上传任务：数量=%s", 恢复数量)
-            except Exception as 异常:
-                logger.warning(
-                    "插件重载恢复小说上传任务异常：错误类型=%s", type(异常).__name__
-                )
-
-        asyncio.create_task(_恢复小说上传任务())
+        await 小说网盘功能.停止恢复待续传上传任务()
+        小说网盘功能.启动恢复待续传上传任务(self.config)
 
     @filter.on_platform_loaded()
     async def _QQ官方平台加载后同步(self):

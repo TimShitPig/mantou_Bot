@@ -39,6 +39,7 @@ from 功能文件.管理功能.网盘功能 import 网盘状态
     "百度": "百度",
 }
 网盘远端清理任务: asyncio.Task[Any] | None = globals().get("网盘远端清理任务")
+恢复上传任务句柄: asyncio.Task[Any] | None = globals().get("恢复上传任务句柄")
 
 
 def 设置当前网盘事件(event: Any) -> Any:
@@ -54,8 +55,41 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any) -
 
 
 async def 停止网盘后台任务() -> None:
+    await 停止恢复待续传上传任务()
     await 停止每日网盘远端清理任务()
     await 网盘Cookie.停止全部夸克扫码登录任务()
+
+
+async def 停止恢复待续传上传任务() -> None:
+    """停止上一轮重载恢复，避免同一缓存被多个协程重复处理。"""
+    global 恢复上传任务句柄
+    当前任务 = asyncio.current_task()
+    待停止任务: list[asyncio.Task[Any]] = []
+    任务 = 恢复上传任务句柄
+    if 任务 is not None and not 任务.done() and 任务 is not 当前任务:
+        待停止任务.append(任务)
+    # v6.1.70 之前的恢复任务没有保存句柄；热重载时按其限定名清理，
+    # 避免旧协程与新单实例恢复任务同时处理同一个缓存文件。
+    for 候选任务 in asyncio.all_tasks():
+        if 候选任务 is 当前任务 or 候选任务.done() or 候选任务 in 待停止任务:
+            continue
+        try:
+            协程名称 = str(候选任务.get_coro().__qualname__ or "")
+        except Exception:
+            协程名称 = ""
+        if "initialize.<locals>._恢复小说上传任务" in 协程名称:
+            待停止任务.append(候选任务)
+    恢复上传任务句柄 = None
+    if not 待停止任务:
+        return
+    for 待停止 in 待停止任务:
+        待停止.cancel()
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        当前循环 = None
+    if 当前循环 is not None:
+        await asyncio.gather(*待停止任务, return_exceptions=True)
 
 
 async def 清理网盘过期小说文件(
@@ -527,6 +561,42 @@ async def 恢复待续传上传任务(配置: Any) -> int:
         if 下载缓存清理.删除下载缓存文件(路径):
             logger.info(f"重载恢复小说上传完成：file={文件名}")
     return 已处理
+
+
+def 启动恢复待续传上传任务(配置: Any) -> asyncio.Task[Any] | None:
+    """启动单实例的重载恢复任务，重复初始化时复用现有任务。"""
+    global 恢复上传任务句柄
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    现有任务 = 恢复上传任务句柄
+    if (
+        现有任务 is not None
+        and not 现有任务.done()
+        and getattr(现有任务, "get_loop", lambda: None)() is 循环
+    ):
+        return 现有任务
+    if 现有任务 is not None and not 现有任务.done():
+        现有任务.cancel()
+
+    async def _恢复工作() -> None:
+        try:
+            恢复数量 = await 恢复待续传上传任务(配置)
+            if 恢复数量:
+                logger.info("插件重载恢复小说上传任务：数量=%s", 恢复数量)
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.warning(
+                "插件重载恢复小说上传任务异常：错误类型=%s", type(异常).__name__
+            )
+
+    恢复上传任务句柄 = 循环.create_task(
+        _恢复工作(),
+        name="小说网盘重载恢复",
+    )
+    return 恢复上传任务句柄
 
 
 async def 发送小说下载完成链接(
