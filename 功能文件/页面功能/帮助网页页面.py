@@ -392,7 +392,7 @@ from .帮助网页脚本 import 控制台脚本
              .content:has(#page-pans:not([hidden])) > .page-heading,
              .content:has(#page-novels:not([hidden])) > .page-heading { display:none; }
              /* 消息工作区优先使用可用宽度，减少桌面端两侧空白。 */
-             .content:has(#page-messages:not([hidden])) { width:calc(100% - 20px); max-width:none; }
+             .content:has(#page-messages:not([hidden])) { width:calc(100% - 20px); max-width:none; padding-top:0; }
              @media (max-width:900px) {
                .msg-shell { height:auto; min-height:620px; grid-template-columns:1fr; }
                .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; }
