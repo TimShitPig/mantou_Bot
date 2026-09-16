@@ -813,12 +813,27 @@ async def 异步搜索得间书籍(
 
 def 解析得间书籍详情(data: Any, bid: str) -> Dict[str, Any]:
     if not isinstance(data, dict) or data.get("code", -1) != 0:
-        return {"success": False, "detail": {}, "raw": data}
+        业务码 = data.get("code") if isinstance(data, dict) else None
+        return {
+            "success": False,
+            "detail": {},
+            "raw": data,
+            "error_code": 业务码 if isinstance(业务码, int) else "未知",
+            "error_category": "书籍无详情" if 业务码 == 404 else "详情接口拒绝",
+        }
 
     body = data.get("body") or {}
     info = body.get("bookInfo") if isinstance(body, dict) else {}
-    if not isinstance(info, dict):
-        info = {}
+    if not isinstance(info, dict) or not info.get("bookId") or not info.get("bookName"):
+        return {
+            "success": False, "detail": {}, "raw": data,
+            "error_code": 0, "error_category": "缺少书籍信息",
+        }
+    if str(info["bookId"]) != str(bid):
+        return {
+            "success": False, "detail": {}, "raw": data,
+            "error_code": 0, "error_category": "书籍编号不一致",
+        }
 
     complete_state = info.get("completeState") or "N"
     status = "已完结" if complete_state == "Y" else "连载中"
@@ -942,10 +957,9 @@ async def 异步获取得间章节目录(
 
 # 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
 进度日志分段数 = 25
-得间域名正则 = re.compile(r"palmestore\.com|zhangyue\.com|ireader\.com|dejian", re.I)
+得间域名正则 = re.compile(r"(?:^|\.)(?:palmestore|zhangyue|ireader|idejian)\.com$", re.I)
 链接正则 = re.compile(r"https?://[^\s'\"<>]+", re.I)
-书籍编号正则 = re.compile(r"(?:bid|book[_-]?id|bookId)=(\d{5,})", re.I)
-路径编号正则 = re.compile(r"/(?:book|detail|books?)/(\d{5,})", re.I)
+路径编号正则 = re.compile(r"/(?:book|detail|books?)/([0-9]{5,})(?=/|\.html?$|$)", re.I)
 
 
 def 计算得间正文并发数(章节总数: int) -> int:
@@ -980,7 +994,8 @@ def 获取得间小说回复流(
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     书籍编号 = 提取书籍编号(来源)
     if not 书籍编号:
-        yield "下载失败 请重试"
+        logger.warning("得间小说链接解析失败：阶段=link, 错误分类=链接缺少书籍编号")
+        yield "链接不完整，请重新分享或发送书名找书"
         return
     try:
         async with 创建得间HTTP会话(2) as HTTP会话:
@@ -990,7 +1005,11 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 异步获取得间批量下载清单(HTTP会话, 书籍编号),
             )
         if not 详情包.get("success"):
-            logger.warning(f"得间小说详情失败：书籍编号={书籍编号}")
+            logger.warning(
+                f"得间小说详情失败：书籍编号={书籍编号}, 阶段=detail, "
+                f"业务码={详情包.get('error_code', '未知')}, "
+                f"错误分类={详情包.get('error_category', '详情异常')}"
+            )
             yield "下载失败 请重试"
             return
         详情 = 详情包.get("detail") or {}
@@ -1318,10 +1337,15 @@ def 关闭得间资源() -> None:
 
 def 提取直接得间来源(命令文本: str) -> str | None:
     文本 = str(命令文本 or "")
-    if not 得间域名正则.search(文本):
-        return None
-    m = 链接正则.search(文本)
-    return m.group(0) if m else 文本.strip() or None
+    for 匹配 in 链接正则.finditer(文本):
+        地址 = 匹配.group(0)
+        try:
+            主机 = urllib.parse.urlsplit(地址).hostname or ""
+        except ValueError:
+            continue
+        if 得间域名正则.search(主机):
+            return 地址
+    return None
 
 
 def 提取事件得间来源(event: Any) -> str | None:
@@ -1336,13 +1360,25 @@ def 提取事件得间来源(event: Any) -> str | None:
 
 
 def 提取书籍编号(来源: str) -> str:
-    文本 = str(来源 or "")
-    for 正则 in (书籍编号正则, 路径编号正则):
-        m = 正则.search(文本)
-        if m:
-            return m.group(1)
-    m = re.search(r"(\d{6,})", 文本)
-    return m.group(1) if m else ""
+    文本 = str(来源 or "").strip()
+    if re.fullmatch(r"[0-9]{5,}", 文本):
+        return 文本
+    匹配 = 链接正则.search(文本)
+    if not 匹配:
+        return ""
+    try:
+        地址 = urllib.parse.urlsplit(匹配.group(0))
+    except ValueError:
+        return ""
+    for 键, 值列表 in urllib.parse.parse_qs(地址.query).items():
+        if 键.lower() not in {"bid", "bookid", "book_id", "book-id"}:
+            continue
+        for 值 in 值列表:
+            if re.fullmatch(r"[0-9]{5,}", 值):
+                return 值
+    # 分享地址的书籍编号位于 /book/编号/1.html，uique 等参数不能作为编号。
+    路径匹配 = 路径编号正则.search(地址.path)
+    return 路径匹配.group(1) if 路径匹配 else ""
 
 
 def 格式化字数(字数: Any) -> str:
