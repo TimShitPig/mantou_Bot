@@ -165,40 +165,32 @@ def _native_ctr_batch(data: bytes, round_keys: Tuple[int, ...], iv: bytes) -> by
     """将同一自定义轮变换按 uint32 批量执行；计数器和末轮与单块协议一致。"""
     块数 = (len(data) + 15) // 16
     计数器 = (np.arange(块数, dtype=np.uint64) + int.from_bytes(iv[10:14], "big")) & 0xFFFFFFFF
-    s0 = np.full(块数, round_keys[0] ^ int.from_bytes(iv[:4], "big"), dtype=np.uint32)
-    s1 = np.full(块数, round_keys[1] ^ int.from_bytes(iv[4:8], "big"), dtype=np.uint32)
-    s2 = np.uint32(round_keys[2]) ^ (
+    状态 = np.empty((4, 块数), dtype=np.uint32)
+    状态[0] = round_keys[0] ^ int.from_bytes(iv[:4], "big")
+    状态[1] = round_keys[1] ^ int.from_bytes(iv[4:8], "big")
+    状态[2] = np.uint32(round_keys[2]) ^ (
         (np.uint32(int.from_bytes(iv[8:10], "big")) << 16)
         | (计数器 >> 16).astype(np.uint32)
     )
-    s3 = np.uint32(round_keys[3]) ^ (
+    状态[3] = np.uint32(round_keys[3]) ^ (
         (计数器.astype(np.uint32) << 16)
         | np.uint32(int.from_bytes(iv[14:16], "big"))
     )
     t0, t1, t2, t3 = _NATIVE_T_ARRAYS
+    轮密钥 = np.asarray(round_keys, dtype=np.uint32).reshape(11, 4, 1)
     for r in range(1, 10):
-        s0, s1, s2, s3 = (
-            t0[s0 >> 24] ^ t1[(s1 >> 16) & 255] ^ t2[(s2 >> 8) & 255]
-            ^ t3[s3 & 255] ^ np.uint32(round_keys[4 * r]),
-            t0[s1 >> 24] ^ t1[(s2 >> 16) & 255] ^ t2[(s3 >> 8) & 255]
-            ^ t3[s0 & 255] ^ np.uint32(round_keys[4 * r + 1]),
-            t0[s2 >> 24] ^ t1[(s3 >> 16) & 255] ^ t2[(s0 >> 8) & 255]
-            ^ t3[s1 & 255] ^ np.uint32(round_keys[4 * r + 2]),
-            t0[s3 >> 24] ^ t1[(s0 >> 16) & 255] ^ t2[(s1 >> 8) & 255]
-            ^ t3[s2 & 255] ^ np.uint32(round_keys[4 * r + 3]),
+        状态 = (
+            t0[状态 >> 24] ^ t1[(状态[[1, 2, 3, 0]] >> 16) & 255]
+            ^ t2[(状态[[2, 3, 0, 1]] >> 8) & 255]
+            ^ t3[状态[[3, 0, 1, 2]] & 255] ^ 轮密钥[r]
         )
     box = _NATIVE_SBOX_ARRAY
     words = (
-        (box[s0 >> 24] << 24) ^ (box[(s1 >> 16) & 255] << 16)
-        ^ (box[(s2 >> 8) & 255] << 8) ^ box[s3 & 255] ^ np.uint32(round_keys[40]),
-        (box[s1 >> 24] << 24) ^ (box[(s2 >> 16) & 255] << 16)
-        ^ (box[(s3 >> 8) & 255] << 8) ^ box[s0 & 255] ^ np.uint32(round_keys[41]),
-        (box[s2 >> 24] << 24) ^ (box[(s3 >> 16) & 255] << 16)
-        ^ (box[(s0 >> 8) & 255] << 8) ^ box[s1 & 255] ^ np.uint32(round_keys[42]),
-        (box[s3 >> 24] << 24) ^ (box[(s0 >> 16) & 255] << 16)
-        ^ (box[(s1 >> 8) & 255] << 8) ^ box[s2 & 255] ^ np.uint32(round_keys[43]),
+        (box[状态 >> 24] << 24) ^ (box[(状态[[1, 2, 3, 0]] >> 16) & 255] << 16)
+        ^ (box[(状态[[2, 3, 0, 1]] >> 8) & 255] << 8)
+        ^ box[状态[[3, 0, 1, 2]] & 255] ^ 轮密钥[10]
     )
-    密钥流 = np.stack(words, axis=1).astype(">u4").tobytes()[:len(data)]
+    密钥流 = words.T.astype(">u4").tobytes()[:len(data)]
     return strxor(data, 密钥流).translate(ZHANGYUE_CTR_POST_XOR)
 
 
@@ -376,3 +368,15 @@ def 解密得间正文并计时(*参数) -> Tuple[str, float]:
     开始 = time.perf_counter()
     正文 = 解密得间正文(*参数)
     return 正文, time.perf_counter() - 开始
+
+
+def 批量解密得间正文并计时(参数列表):
+    结果 = []
+    for 参数 in 参数列表:
+        开始 = time.perf_counter()
+        try:
+            正文 = 解密得间正文(*参数)
+            结果.append((正文, time.perf_counter() - 开始, None))
+        except Exception as 异常:
+            结果.append(("", time.perf_counter() - 开始, 异常))
+    return 结果

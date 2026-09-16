@@ -33,20 +33,22 @@ except Exception as exc:
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
-from 功能文件.管理功能.小说功能.功能.得间解密 import 解密得间正文并计时
+from 功能文件.管理功能.小说功能.功能.得间解密 import 批量解密得间正文并计时, 解密得间正文并计时
 
 下载缓存目录 = 小说缓存工具.下载缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 得间正文最大并发数 = 128
 得间正文重试次数 = 3
-得间清单最大并发数 = 8
+得间清单最大并发数 = 32
+得间授权最大并发数 = 32
+得间授权超时秒数 = (1, 3, 20)
+得间正文超时秒数 = (6, 20, 120)
+得间解密批量数 = 8
 得间解密最大动态并发数 = max(1, min(4, cpu_count() - 1))
 _旧得间解密执行器 = globals().get("得间解密执行器")
 if _旧得间解密执行器 is not None:
     try:
-        _旧得间解密执行器.shutdown(wait=False, kill_workers=True)
-    except TypeError:
-        _旧得间解密执行器.shutdown(wait=False, cancel_futures=True)
+        _旧得间解密执行器.shutdown(wait=False)
     except Exception:
         pass
 得间解密执行器: ProcessPoolExecutor | None = None
@@ -54,7 +56,7 @@ _得间解密信号量: asyncio.Semaphore | None = None
 _得间解密失败截止时间 = 0.0
 
 
-async def 异步解密得间正文(*参数: Any) -> Tuple[str, float]:
+async def _异步执行得间解密(解密函数: Callable, *参数: Any) -> Any:
     global 得间解密执行器, _得间解密信号量, _得间解密失败截止时间
     循环 = asyncio.get_running_loop()
     if 循环.time() < _得间解密失败截止时间:
@@ -77,7 +79,7 @@ async def 异步解密得间正文(*参数: Any) -> Tuple[str, float]:
     assert 信号量 is not None
     try:
         async with 信号量:
-            任务 = await asyncio.to_thread(执行器.submit, 解密得间正文并计时, *参数)
+            任务 = await asyncio.to_thread(执行器.submit, 解密函数, *参数)
             return await asyncio.wrap_future(任务, loop=循环)
     except BrokenProcessPool:
         if 得间解密执行器 is 执行器:
@@ -85,6 +87,10 @@ async def 异步解密得间正文(*参数: Any) -> Tuple[str, float]:
             _得间解密失败截止时间 = 循环.time() + 10
             logger.warning("得间解密执行器异常：错误分类=工作进程退出, 冷却=10秒")
         raise
+
+
+async def 异步解密得间正文(*参数: Any) -> Tuple[str, float]:
+    return await _异步执行得间解密(解密得间正文并计时, *参数)
 
 # ===== 得间协议与解密（原 _得间源码） =====
 
@@ -181,7 +187,7 @@ def extract_token_b64(auth: Any, chapter_id: int) -> str:
 def 创建得间HTTP会话(并发数: int) -> aiohttp.ClientSession:
     并发数 = max(1, int(并发数 or 1))
     connector = aiohttp.TCPConnector(
-        limit=并发数,
+        limit=并发数 + min(并发数, 得间授权最大并发数),
         limit_per_host=并发数,
         keepalive_timeout=30,
         ttl_dns_cache=300,
@@ -235,8 +241,9 @@ async def 异步下载得间字节(
     HTTP会话: aiohttp.ClientSession,
     地址: str,
     请求信号量: Optional[asyncio.Semaphore] = None,
+    超时秒数: int = 120,
 ) -> bytes:
-    超时 = aiohttp.ClientTimeout(total=120)
+    超时 = aiohttp.ClientTimeout(total=max(1, int(超时秒数)))
 
     async def 请求() -> bytes:
         async with HTTP会话.get(地址, timeout=超时) as 响应:
@@ -328,7 +335,7 @@ class 得间异步客户端:
             请求信号量=self.请求信号量,
         )
 
-    async def 提交JSON(self, 路径或地址: str, 表单: Dict[str, Any]) -> Any:
+    async def 提交JSON(self, 路径或地址: str, 表单: Dict[str, Any], 超时秒数: int = 20) -> Any:
         地址 = 路径或地址 if 路径或地址.startswith("http") else f"{BASE}{路径或地址}"
         return await 异步请求得间JSON(
             self.HTTP会话,
@@ -337,6 +344,7 @@ class 得间异步客户端:
             参数=self.附加参数({}),
             表单=表单,
             请求信号量=self.请求信号量,
+            超时秒数=超时秒数,
         )
 
     async def 下载(self, 地址: str) -> bytes:
@@ -450,7 +458,7 @@ class 得间异步客户端:
             唯一章节[_to_int(项.get("chapterId"))] = 项
         return [唯一章节[编号] for 编号 in sorted(唯一章节)]
 
-    async def 获取章节授权(self, 书籍编号: str, 章节编号: int) -> Any:
+    async def 获取章节授权(self, 书籍编号: str, 章节编号: int, 超时秒数: int = 20) -> Any:
         表单 = self.签名参数(
             {
                 "bookId": str(书籍编号),
@@ -460,7 +468,7 @@ class 得间异步客户端:
             }
         )
         表单.update({"type": "0", "fid": "72"})
-        return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单)
+        return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单, 超时秒数)
 
 
 async def 异步下载得间章节正文(
@@ -471,10 +479,17 @@ async def 异步下载得间章节正文(
     请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
     计时统计: Optional[Dict[str, float]] = None,
+    解密函数: Optional[Callable[..., Awaitable[Tuple[str, float]]]] = None,
 ) -> str:
-    """使用批量清单中的正文地址；授权接口仍按平台协议为每章签发密钥。"""
+    """单章授权与加密正文并行获取，重试复用成功部分和本章会话参数。"""
     当前客户端 = 得间异步客户端(HTTP会话, 请求信号量)
+    正文数据: bytes | None = None
+    授权令牌 = ""
+    解密函数 = 解密函数 or 异步解密得间正文
     for 重试轮次 in range(1, 得间正文重试次数 + 1):
+        任务: list[asyncio.Task] = []
+        授权任务 = 正文任务 = None
+        正在解密 = False
         try:
             用户名 = str(当前客户端.会话参数.get("usr") or "")
             设备号 = str(当前客户端.会话参数.get("devId") or "")
@@ -488,17 +503,42 @@ async def 异步下载得间章节正文(
             ).strip()
             if not 正文地址:
                 raise RuntimeError("no chapter url")
-            开始 = time.perf_counter()
-            授权结果 = await 当前客户端.获取章节授权(书籍编号, 章节编号)
-            if 计时统计 is not None:
-                计时统计["auth"] += time.perf_counter() - 开始
-            授权令牌 = extract_token_b64(授权结果, 章节编号)
-            开始 = time.perf_counter()
-            正文数据 = await 当前客户端.下载(正文地址)
-            if 计时统计 is not None:
-                计时统计["body"] += time.perf_counter() - 开始
+            async def 获取授权() -> str:
+                开始 = time.perf_counter()
+                try:
+                    授权结果 = await 当前客户端.获取章节授权(
+                        书籍编号, 章节编号, 得间授权超时秒数[重试轮次 - 1]
+                    )
+                    return extract_token_b64(授权结果, 章节编号)
+                finally:
+                    if 计时统计 is not None:
+                        计时统计["auth"] += time.perf_counter() - 开始
+
+            async def 下载正文() -> bytes:
+                开始 = time.perf_counter()
+                try:
+                    return await 异步下载得间字节(
+                        HTTP会话, 正文地址, 超时秒数=得间正文超时秒数[重试轮次 - 1]
+                    )
+                finally:
+                    if 计时统计 is not None:
+                        计时统计["body"] += time.perf_counter() - 开始
+
+            if not 授权令牌:
+                授权任务 = asyncio.create_task(获取授权())
+                任务.append(授权任务)
+            if 正文数据 is None:
+                正文任务 = asyncio.create_task(下载正文())
+                任务.append(正文任务)
+            await asyncio.gather(*任务)
+            if 授权任务 is not None:
+                授权令牌 = 授权任务.result()
+            if 正文任务 is not None:
+                正文数据 = 正文任务.result()
+            assert 正文数据 is not None
+            正在解密 = True
             async with 解密信号量:
-                正文, 解密耗时 = await 异步解密得间正文(
+                正文, 解密耗时 = await 解密函数(
                     正文数据,
                     授权令牌,
                     用户名,
@@ -508,12 +548,23 @@ async def 异步下载得间章节正文(
                     计时统计["decrypt"] += 解密耗时
                 return 正文
         except Exception as 异常:
+            if 正在解密:
+                正文数据, 授权令牌 = None, ""
+            else:
+                if 正文任务 is not None and 正文任务.done() and not 正文任务.cancelled() and 正文任务.exception() is None:
+                    正文数据 = 正文任务.result()
+                if 授权任务 is not None and 授权任务.done() and not 授权任务.cancelled() and 授权任务.exception() is None:
+                    授权令牌 = 授权任务.result()
             logger.debug(
                 f"得间章节下载重试：书籍编号={书籍编号}, 章节编号={章节编号}, "
                 f"轮次={重试轮次}, 错误类型={type(异常).__name__}"
             )
-            if 重试轮次 < 得间正文重试次数:
-                await asyncio.sleep(0.05 * 重试轮次)
+        finally:
+            for 任务项 in 任务:
+                任务项.cancel()
+            await asyncio.gather(*任务, return_exceptions=True)
+        if 重试轮次 < 得间正文重试次数:
+            await asyncio.sleep(0.05 * 重试轮次)
     return ""
 
 
@@ -959,8 +1010,50 @@ async def 下载全部章节(
     成功 = 0
     上次日志百分比 = 0
     进度锁 = asyncio.Lock()
-    请求信号量 = asyncio.Semaphore(实际正文并发数)
-    解密信号量 = asyncio.Semaphore(解密并发数)
+    请求信号量 = asyncio.Semaphore(min(实际正文并发数, 得间授权最大并发数))
+    解密信号量 = asyncio.Semaphore(实际正文并发数)
+    解密队列: asyncio.Queue = asyncio.Queue(maxsize=实际正文并发数)
+
+    async def 本次批量解密(*参数: Any) -> Tuple[str, float]:
+        回传 = asyncio.get_running_loop().create_future()
+        try:
+            await 解密队列.put((参数, 回传))
+            return await 回传
+        finally:
+            回传.cancel()
+
+    async def 解密工作流() -> None:
+        while True:
+            批次 = [await 解密队列.get()]
+            while len(批次) < 得间解密批量数:
+                try:
+                    批次.append(解密队列.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            批次 = [(参数, 回传) for 参数, 回传 in 批次 if not 回传.cancelled()]
+            if not 批次:
+                continue
+            try:
+                解密结果 = await _异步执行得间解密(
+                    批量解密得间正文并计时, [参数 for 参数, _ in 批次]
+                )
+                if len(解密结果) != len(批次):
+                    raise RuntimeError("得间解密批次结果不完整")
+                for (_, 回传), (正文, 耗时, 异常) in zip(批次, 解密结果):
+                    if 回传.done():
+                        continue
+                    if 异常 is not None:
+                        回传.set_exception(异常)
+                    else:
+                        回传.set_result((正文, 耗时))
+            except asyncio.CancelledError:
+                for _, 回传 in 批次:
+                    回传.cancel()
+                raise
+            except Exception as 异常:
+                for _, 回传 in 批次:
+                    if not 回传.done():
+                        回传.set_exception(异常)
     正文模式 = "单章正文流水线" if 地址队列 is not None else "单章正文"
     下载开始 = time.perf_counter()
     计时统计 = {"auth": 0.0, "body": 0.0, "decrypt": 0.0}
@@ -982,6 +1075,7 @@ async def 下载全部章节(
                     请求信号量,
                     解密信号量,
                     计时统计,
+                    本次批量解密,
                 )
             ).strip()
             for 下标 in 下标列表:
@@ -1022,13 +1116,17 @@ async def 下载全部章节(
                 批量章节表[章节编号] = 章节项
                 await 下载一章(章节编号, 章节下标表[章节编号])
 
+        解密任务 = [asyncio.create_task(解密工作流()) for _ in range(解密并发数)]
         任务 = [asyncio.create_task(下载工作流()) for _ in range(实际正文并发数)]
         try:
             await asyncio.gather(*任务)
         finally:
-            for 任务项 in 任务:
+            for 任务项 in [*任务, *解密任务]:
                 任务项.cancel()
-            await asyncio.gather(*任务, return_exceptions=True)
+            await asyncio.gather(*任务, *解密任务, return_exceptions=True)
+            while not 解密队列.empty():
+                _, 回传 = 解密队列.get_nowait()
+                回传.cancel()
     输出: list[dict[str, str]] = []
     for 下标, 章 in enumerate(目录):
         已下载 = 结果[下标]
@@ -1192,7 +1290,8 @@ def 关闭得间资源() -> None:
     _得间解密信号量 = None
     if 执行器 is not None:
         try:
-            执行器.shutdown(wait=False, kill_workers=True)
+            # 有界在途工作结束后由 loky 回收，避免强杀时清空尚未分发的任务。
+            执行器.shutdown(wait=False)
         except Exception:
             pass
 
