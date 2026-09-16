@@ -4,23 +4,20 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import random
 import re
-import struct
 import time
 import urllib.parse
-import zlib
-from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
-import gmpy2
+import loky
 from astrbot.api import logger
-from Crypto.Util.strxor import strxor
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from loky import BrokenProcessPool, ProcessPoolExecutor, cpu_count
 
 try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
@@ -36,22 +33,58 @@ except Exception as exc:
 
 from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.得间解密 import 解密得间正文并计时
 
 下载缓存目录 = 小说缓存工具.下载缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-得间正文最大并发数 = 500
+得间正文最大并发数 = 128
 得间正文重试次数 = 3
-得间解密最大动态并发数 = 200
+得间清单最大并发数 = 8
+得间解密最大动态并发数 = max(1, min(4, cpu_count() - 1))
 _旧得间解密执行器 = globals().get("得间解密执行器")
 if _旧得间解密执行器 is not None:
     try:
+        _旧得间解密执行器.shutdown(wait=False, kill_workers=True)
+    except TypeError:
         _旧得间解密执行器.shutdown(wait=False, cancel_futures=True)
     except Exception:
         pass
-得间解密执行器 = ThreadPoolExecutor(
-    max_workers=得间解密最大动态并发数,
-    thread_name_prefix="dejian-decrypt",
-)
+得间解密执行器: ProcessPoolExecutor | None = None
+_得间解密信号量: asyncio.Semaphore | None = None
+_得间解密失败截止时间 = 0.0
+
+
+async def 异步解密得间正文(*参数: Any) -> Tuple[str, float]:
+    global 得间解密执行器, _得间解密信号量, _得间解密失败截止时间
+    循环 = asyncio.get_running_loop()
+    if 循环.time() < _得间解密失败截止时间:
+        raise RuntimeError("得间解密执行器冷却中")
+    if 得间解密执行器 is None:
+        # AstrBot 可把依赖装到 --target 目录；loky 启动器须在恢复 sys.path 前找到库。
+        依赖目录 = str(Path(loky.__file__).resolve().parent.parent)
+        子进程路径 = [路径 for 路径 in os.environ.get("PYTHONPATH", "").split(os.pathsep) if 路径]
+        if 依赖目录 not in 子进程路径:
+            os.environ["PYTHONPATH"] = os.pathsep.join([依赖目录, *子进程路径])
+        # loky 不重新执行 AstrBot 主模块，避免子进程重复加载框架与数据库。
+        得间解密执行器 = ProcessPoolExecutor(
+            max_workers=得间解密最大动态并发数,
+            timeout=60,
+            env={"OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+        )
+        _得间解密信号量 = asyncio.Semaphore(得间解密最大动态并发数 * 2)
+    执行器 = 得间解密执行器
+    信号量 = _得间解密信号量
+    assert 信号量 is not None
+    try:
+        async with 信号量:
+            任务 = await asyncio.to_thread(执行器.submit, 解密得间正文并计时, *参数)
+            return await asyncio.wrap_future(任务, loop=循环)
+    except BrokenProcessPool:
+        if 得间解密执行器 is 执行器:
+            关闭得间资源()
+            _得间解密失败截止时间 = 循环.time() + 10
+            logger.warning("得间解密执行器异常：错误分类=工作进程退出, 冷却=10秒")
+        raise
 
 # ===== 得间协议与解密（原 _得间源码） =====
 
@@ -69,24 +102,6 @@ EMBEDDED_KEY_PK8_B64 = "MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAMXGjyS3
 DEFAULT_SESSION: Dict[str, str] = {
     "p3": "25272056",
 }
-
-TOKEN_KEY_BASE0 = bytes.fromhex("5a0b1252b41e6bf509dd542a66d25a47")
-TOKEN_KEY_BASE1 = bytes.fromhex("16a7f4c45ec7a517d82f84e753fc5ecd")
-NATIVE_AES_SBOX = bytes.fromhex(
-    "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b275"
-    "09832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cfd0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2"
-    "cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdbe0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08"
-    "ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9ee1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16"
-)
-NATIVE_AES_RCON = (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36)
-NATIVE_RSA_N = int(
-    "bd95ed3c46e9cc7e5174db00493f54c9fcd307a689260aeac7c9ca1fb635b45083d54dce90b00a4d98f8baa508edb4aa14efce8d6cbf73f6c0bb9fddf522699a"
-    "e0106c19bfc2bd84147d1d20ecafd4796d01b4d7f8d785f58408aa0fc91c30be2198c14a45bb7714ae2bd03bc571d4d5e7dbf8e24b60a48e936076ec1e1216d1",
-    16,
-)
-NATIVE_RSA_E = 65537
-IV_XOR_CONST = 0xC83C4ED0
-
 
 def p7_encrypt(s: str) -> str:
     out = ["__"]
@@ -161,287 +176,6 @@ def extract_token_b64(auth: Any, chapter_id: int) -> str:
         if isinstance(value, dict) and value.get("token"):
             return str(value["token"])
     raise RuntimeError("no token")
-
-
-def _rol3(x: int) -> int:
-    return (((x << 3) & 0xFF) | (x >> 5)) & 0xFF
-
-
-ZHANGYUE_CTR_POST_XOR = bytes((~_rol3(value)) & 0xFF for value in range(256))
-
-
-def _gf_xtime(a: int) -> int:
-    return (((a << 1) & 0xFF) ^ (0x1B if a & 0x80 else 0)) & 0xFF
-
-
-def _gf_mul(a: int, b: int) -> int:
-    out = 0
-    while b:
-        if b & 1:
-            out ^= a
-        a = _gf_xtime(a)
-        b >>= 1
-    return out & 0xFF
-
-
-def _ror32(v: int, n: int) -> int:
-    return ((v >> n) | ((v & ((1 << n) - 1)) << (32 - n))) & 0xFFFFFFFF
-
-
-def _native_t_tables() -> Tuple[List[int], List[int], List[int], List[int]]:
-    t0 = [
-        (_gf_mul(s, 3) << 24) | (_gf_mul(s, 10) << 16) | (s << 8) | _gf_mul(s, 9)
-        for s in NATIVE_AES_SBOX
-    ]
-    return (
-        t0,
-        [_ror32(v, 8) for v in t0],
-        [_ror32(v, 16) for v in t0],
-        [_ror32(v, 24) for v in t0],
-    )
-
-
-_NATIVE_T = _native_t_tables()
-
-
-@lru_cache(maxsize=512)
-def _native_key_schedule(key: bytes) -> Tuple[int, ...]:
-    if len(key) != 16:
-        raise ValueError("bad key")
-    words = [int.from_bytes(key[i : i + 4], "big") for i in range(0, 16, 4)]
-    for rcon in NATIVE_AES_RCON:
-        t = words[-1]
-        rot = ((t << 8) & 0xFFFFFFFF) | (t >> 24)
-        sub = 0
-        for shift in (24, 16, 8, 0):
-            sub |= NATIVE_AES_SBOX[(rot >> shift) & 0xFF] << shift
-        sub ^= rcon << 24
-        words.append(words[-4] ^ sub)
-        words.append(words[-4] ^ words[-1])
-        words.append(words[-4] ^ words[-1])
-        words.append(words[-4] ^ words[-1])
-    return tuple(x & 0xFFFFFFFF for x in words)
-
-
-def _native_block(round_keys: Tuple[int, ...], block16: bytes) -> bytes:
-    if len(block16) != 16:
-        raise ValueError("bad block")
-    t0, t1, t2, t3 = _NATIVE_T
-    s0 = round_keys[0] ^ int.from_bytes(block16[0:4], "big")
-    s1 = round_keys[1] ^ int.from_bytes(block16[4:8], "big")
-    s2 = round_keys[2] ^ int.from_bytes(block16[8:12], "big")
-    s3 = round_keys[3] ^ int.from_bytes(block16[12:16], "big")
-    for r in range(1, 10):
-        n0 = (
-            t0[s0 >> 24]
-            ^ t1[(s1 >> 16) & 0xFF]
-            ^ t2[(s2 >> 8) & 0xFF]
-            ^ t3[s3 & 0xFF]
-            ^ round_keys[4 * r]
-        )
-        n1 = (
-            t0[s1 >> 24]
-            ^ t1[(s2 >> 16) & 0xFF]
-            ^ t2[(s3 >> 8) & 0xFF]
-            ^ t3[s0 & 0xFF]
-            ^ round_keys[4 * r + 1]
-        )
-        n2 = (
-            t0[s2 >> 24]
-            ^ t1[(s3 >> 16) & 0xFF]
-            ^ t2[(s0 >> 8) & 0xFF]
-            ^ t3[s1 & 0xFF]
-            ^ round_keys[4 * r + 2]
-        )
-        n3 = (
-            t0[s3 >> 24]
-            ^ t1[(s0 >> 16) & 0xFF]
-            ^ t2[(s1 >> 8) & 0xFF]
-            ^ t3[s2 & 0xFF]
-            ^ round_keys[4 * r + 3]
-        )
-        s0, s1, s2, s3 = (
-            n0 & 0xFFFFFFFF,
-            n1 & 0xFFFFFFFF,
-            n2 & 0xFFFFFFFF,
-            n3 & 0xFFFFFFFF,
-        )
-    out = bytearray(16)
-    final = round_keys[40:44]
-    selectors = (
-        (s0 >> 24, 24, 0),
-        ((s1 >> 16) & 0xFF, 16, 0),
-        ((s2 >> 8) & 0xFF, 8, 0),
-        (s3 & 0xFF, 0, 0),
-        (s1 >> 24, 24, 1),
-        ((s2 >> 16) & 0xFF, 16, 1),
-        ((s3 >> 8) & 0xFF, 8, 1),
-        (s0 & 0xFF, 0, 1),
-        (s2 >> 24, 24, 2),
-        ((s3 >> 16) & 0xFF, 16, 2),
-        ((s0 >> 8) & 0xFF, 8, 2),
-        (s1 & 0xFF, 0, 2),
-        (s3 >> 24, 24, 3),
-        ((s0 >> 16) & 0xFF, 16, 3),
-        ((s1 >> 8) & 0xFF, 8, 3),
-        (s2 & 0xFF, 0, 3),
-    )
-    for i, (src, shift, key_index) in enumerate(selectors):
-        out[i] = NATIVE_AES_SBOX[src & 0xFF] ^ ((final[key_index] >> shift) & 0xFF)
-    return bytes(out)
-
-
-def zhangyue_native_ctr(data: bytes, key: bytes, iv: bytes) -> bytes:
-    if len(key) != 16 or len(iv) != 16:
-        raise ValueError("bad ctr args")
-    if not data:
-        return b""
-    counter = bytearray(iv)
-    key_stream = bytearray(len(data))
-    round_keys = _native_key_schedule(key)
-    for off in range(0, len(data), 16):
-        end = min(off + 16, len(data))
-        key_stream[off:end] = _native_block(round_keys, bytes(counter))[: end - off]
-        for idx in (13, 12, 11, 10):
-            counter[idx] = (counter[idx] + 1) & 0xFF
-            if counter[idx]:
-                break
-    return strxor(data, key_stream).translate(ZHANGYUE_CTR_POST_XOR)
-
-
-def native_rsa_unwrap(cipher: bytes) -> bytes:
-    if len(cipher) != 128:
-        raise ValueError("bad token length")
-    m = int(
-        gmpy2.powmod(int.from_bytes(cipher, "big"), NATIVE_RSA_E, NATIVE_RSA_N)
-    ).to_bytes(128, "big")
-    if not m.startswith(b"\x00\x01"):
-        raise ValueError("bad token padding")
-    sep = m.find(b"\x00", 2)
-    if sep < 0:
-        raise ValueError("bad token sep")
-    return m[sep + 1 :]
-
-
-def _token_first_layer_key(seed4: bytes) -> bytes:
-    return bytes(
-        (TOKEN_KEY_BASE0[i] + TOKEN_KEY_BASE1[i] + seed4[i & 3]) & 0xFF
-        for i in range(16)
-    )
-
-
-def unwrap_dejian_token(raw: bytes) -> bytes:
-    if len(raw) < 12:
-        raise ValueError("bad raw token")
-    struct_len = int.from_bytes(raw[:4], "little")
-    if struct_len <= 0 or struct_len > 0x400:
-        raise ValueError("bad token header")
-    key = _token_first_layer_key(raw[4:8])
-    body = zhangyue_native_ctr(
-        raw[8:], key, bytes((~key[(i + 5) & 15]) & 0xFF for i in range(16))
-    )
-    return raw[:8] + body
-
-
-def derive_stage1_key(raw_token: bytes, usr: str, dev: str) -> bytes:
-    token = unwrap_dejian_token(raw_token)
-    if len(token) < 0x4C:
-        raise ValueError("token too short")
-    iv = bytes.fromhex("000001018b0000000000000000000000")
-    slot0 = token[0x0C:0x1C]
-    check = token[0x2C:0x3C]
-    key = zhangyue_native_ctr(slot0, hashlib.md5(usr.encode("utf-8")).digest(), iv)
-    if hashlib.md5(key).digest() != check:
-        raise ValueError("token check failed")
-    return key
-
-
-def iv_from_stage1(key16: bytes) -> bytes:
-    iv = bytearray()
-    for i in range(0, 16, 4):
-        d = struct.unpack_from("<I", key16, i)[0] ^ IV_XOR_CONST
-        iv += struct.pack("<I", d)
-    return bytes(iv)
-
-
-def parse_zip_stored(data: bytes):
-    off = 0
-    while off + 30 <= len(data) and data[off : off + 4] == b"PK\x03\x04":
-        _sig, _ver, flag, method, _mt, _md, _crc, csize, _usize, nlen, xlen = (
-            struct.unpack_from("<IHHHHHIIIHH", data, off)
-        )
-        name = data[off + 30 : off + 30 + nlen].decode("utf-8", "replace")
-        data_off = off + 30 + nlen + xlen
-        payload = data[data_off : data_off + csize]
-        yield name, method, payload
-        off = data_off + csize
-        if flag & 8:
-            off += 16 if data[off : off + 4] == b"PK\x07\x08" else 12
-
-
-def decrypt_payload(payload: bytes, key: bytes) -> bytes:
-    dec = zhangyue_native_ctr(payload, key, iv_from_stage1(key))
-    last_err: Optional[Exception] = None
-    for skip in range(8):
-        try:
-            return zlib.decompress(dec[skip:], -15)
-        except Exception as e:
-            last_err = e
-    raise RuntimeError(f"inflate failed: {last_err}")
-
-
-def strip_zy_header(raw: bytes) -> bytes:
-    if raw.startswith(b"<?xml") or raw.startswith(b"<"):
-        return raw
-    idx = raw.find(b"<?xml")
-    if 0 < idx <= 16:
-        return raw[idx:]
-    return raw
-
-
-def html_to_text(html: str) -> str:
-    # 删除 class="text-title-1" 的 h1 标签
-    html = re.sub(
-        r'<h1[^>]*class="text-title-1"[^>]*>.*?</h1>',
-        "",
-        html,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-
-    t = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
-    t = re.sub(r"<style[\s\S]*?</style>", " ", t, flags=re.I)
-    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
-    t = re.sub(r"</p\s*>", "\n", t, flags=re.I)
-    t = re.sub(r"<[^>]+>", "", t)
-
-    # 合并连续换行为一个
-    t = re.sub(r"\n{2,}", "\n", t)
-
-    for a, b in [
-        ("&nbsp;", " "),
-        ("&lt;", "<"),
-        ("&gt;", ">"),
-        ("&amp;", "&"),
-        ("&quot;", '"'),
-        ("&#39;", "'"),
-    ]:
-        t = t.replace(a, b)
-    t = t.replace("\r", "")
-    t = t.strip()
-    return t
-
-
-def decrypt_epub_text(epub_data: bytes, key: bytes) -> str:
-    text = ""
-    for name, method, payload in parse_zip_stored(epub_data):
-        if name == "mimetype" or name.endswith("encryption.xml"):
-            continue
-        body = strip_zy_header(decrypt_payload(payload, key))
-        if name.endswith((".xhtml", ".html")):
-            text = html_to_text(body.decode("utf-8", "replace"))
-    if not text:
-        raise RuntimeError("no text")
-    return text
 
 
 def 创建得间HTTP会话(并发数: int) -> aiohttp.ClientSession:
@@ -628,42 +362,93 @@ class 得间异步客户端:
         self,
         书籍编号: str,
         批量下载清单: Optional[Dict[str, Any]] = None,
+        页回调: Optional[Callable[[List[Dict[str, Any]]], Awaitable[None]]] = None,
     ) -> List[Dict[str, Any]]:
         """使用 batchDownloadChapteres 返回的地址一次读取整本正文地址清单。"""
         清单 = 批量下载清单 or await self.获取批量下载清单(书籍编号)
         基础地址 = str(清单.get("downUrl") or "").strip()
         if not 基础地址:
             raise RuntimeError("no batch downUrl")
-        结果: List[Dict[str, Any]] = []
-        当前章节 = 1
-        while True:
+        async def 获取一页(当前章节: int) -> Tuple[List[Dict[str, Any]], bool]:
             分隔符 = "&" if "?" in 基础地址 else "?"
             地址 = (
                 f"{基础地址}{分隔符}{urllib.parse.urlencode({'startChapID': 当前章节})}"
             )
-            信息 = await self.获取JSON(地址, 需要公共参数=False)
+            for 轮次 in range(1, 得间正文重试次数 + 1):
+                try:
+                    信息 = await self.获取JSON(地址, 需要公共参数=False)
+                    break
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    if 轮次 == 得间正文重试次数:
+                        raise
+                    await asyncio.sleep(0.1 * 轮次)
             正文 = 信息.get("body") if isinstance(信息, dict) else None
             if not isinstance(正文, dict):
-                break
+                raise RuntimeError("no chapter list body")
             章节列表 = 正文.get("downInfo") or []
             if not isinstance(章节列表, list):
-                break
-            for 项 in 章节列表:
-                if not isinstance(项, dict):
-                    continue
-                章节编号 = _to_int(项.get("chapterId"))
-                if not 章节编号:
-                    continue
-                结果.append(项)
-            if 正文.get("end") or not 章节列表:
-                break
-            最后章节 = _to_int((章节列表[-1] or {}).get("chapterId"))
-            if 最后章节 <= 0:
-                break
-            当前章节 = 最后章节 + 1
-            if 清单.get("maxChapId") and 当前章节 > _to_int(清单.get("maxChapId")):
-                break
-        return 结果
+                raise RuntimeError("bad chapter list")
+            有效章节 = [项 for 项 in 章节列表 if isinstance(项, dict) and _to_int(项.get("chapterId")) > 0]
+            if 页回调 is not None:
+                await 页回调(有效章节)
+            return 有效章节, bool(正文.get("end"))
+
+        结果, 已结束 = await 获取一页(1)
+        if not 结果 or 已结束:
+            return 结果
+        最大章节 = _to_int(清单.get("maxChapId"))
+        最后章节 = _to_int(结果[-1].get("chapterId"))
+        页大小 = len(结果)
+        首章 = _to_int(结果[0].get("chapterId"))
+        首包章节号 = [_to_int(项.get("chapterId")) for 项 in 结果]
+        if 最大章节 >= 最后章节 and 首包章节号 == list(range(首章, 最后章节 + 1)):
+            页起点 = iter(range(最后章节 + 1, 最大章节 + 1, 页大小))
+            页结果: Dict[int, List[Dict[str, Any]]] = {}
+
+            async def 获取后续页() -> None:
+                for 起点 in 页起点:
+                    当前章节 = 起点
+                    终点 = min(最大章节, 起点 + 页大小 - 1)
+                    当前结果: List[Dict[str, Any]] = []
+                    while 当前章节 <= 终点:
+                        章节列表, 已结束 = await 获取一页(当前章节)
+                        if not 章节列表:
+                            break
+                        新最后章节 = _to_int(章节列表[-1].get("chapterId"))
+                        if 新最后章节 < 当前章节:
+                            raise RuntimeError("chapter list did not advance")
+                        当前结果.extend(章节列表)
+                        当前章节 = 新最后章节 + 1
+                        if 已结束:
+                            break
+                    页结果[起点] = 当前结果
+
+            任务 = [asyncio.create_task(获取后续页()) for _ in range(得间清单最大并发数)]
+            try:
+                await asyncio.gather(*任务)
+            finally:
+                for 任务项 in 任务:
+                    任务项.cancel()
+                await asyncio.gather(*任务, return_exceptions=True)
+            for 起点 in sorted(页结果):
+                结果.extend(页结果[起点])
+        else:
+            # 无法从首包确认连续分页宽度时，继续按实际返回的章节号推进。
+            while 最后章节 > 0:
+                章节列表, 已结束 = await 获取一页(最后章节 + 1)
+                if not 章节列表:
+                    break
+                新最后章节 = _to_int(章节列表[-1].get("chapterId"))
+                if 新最后章节 <= 最后章节:
+                    raise RuntimeError("chapter list did not advance")
+                结果.extend(章节列表)
+                最后章节 = 新最后章节
+                if 已结束 or (最大章节 > 0 and 最后章节 >= 最大章节):
+                    break
+        唯一章节: Dict[int, Dict[str, Any]] = {}
+        for 项 in 结果:
+            唯一章节[_to_int(项.get("chapterId"))] = 项
+        return [唯一章节[编号] for 编号 in sorted(唯一章节)]
 
     async def 获取章节授权(self, 书籍编号: str, 章节编号: int) -> Any:
         表单 = self.签名参数(
@@ -678,12 +463,6 @@ class 得间异步客户端:
         return await self.提交JSON("/dj_drm/djdrm/getAuthChapter", 表单)
 
 
-def 解密得间正文(正文数据: bytes, 授权令牌: str, 用户名: str, 设备号: str) -> str:
-    原始令牌 = native_rsa_unwrap(base64.b64decode(授权令牌))
-    密钥 = derive_stage1_key(原始令牌, 用户名, 设备号)
-    return decrypt_epub_text(正文数据, 密钥).strip()
-
-
 async def 异步下载得间章节正文(
     HTTP会话: aiohttp.ClientSession,
     书籍编号: str,
@@ -691,6 +470,7 @@ async def 异步下载得间章节正文(
     章节项: Dict[str, Any],
     请求信号量: asyncio.Semaphore,
     解密信号量: asyncio.Semaphore,
+    计时统计: Optional[Dict[str, float]] = None,
 ) -> str:
     """使用批量清单中的正文地址；授权接口仍按平台协议为每章签发密钥。"""
     当前客户端 = 得间异步客户端(HTTP会话, 请求信号量)
@@ -708,18 +488,25 @@ async def 异步下载得间章节正文(
             ).strip()
             if not 正文地址:
                 raise RuntimeError("no chapter url")
+            开始 = time.perf_counter()
             授权结果 = await 当前客户端.获取章节授权(书籍编号, 章节编号)
+            if 计时统计 is not None:
+                计时统计["auth"] += time.perf_counter() - 开始
             授权令牌 = extract_token_b64(授权结果, 章节编号)
+            开始 = time.perf_counter()
             正文数据 = await 当前客户端.下载(正文地址)
+            if 计时统计 is not None:
+                计时统计["body"] += time.perf_counter() - 开始
             async with 解密信号量:
-                return await asyncio.get_running_loop().run_in_executor(
-                    得间解密执行器,
-                    解密得间正文,
+                正文, 解密耗时 = await 异步解密得间正文(
                     正文数据,
                     授权令牌,
                     用户名,
                     设备号,
                 )
+                if 计时统计 is not None:
+                    计时统计["decrypt"] += 解密耗时
+                return 正文
         except Exception as 异常:
             logger.debug(
                 f"得间章节下载重试：书籍编号={书籍编号}, 章节编号={章节编号}, "
@@ -882,7 +669,7 @@ async def 异步获取得间批量下载清单(
 ) -> Dict[str, Any]:
     """下载前读取批量正文地址，避免按章节重复请求批量清单。"""
     try:
-        客户端 = 得间异步客户端(HTTP会话, asyncio.Semaphore(2))
+        客户端 = 得间异步客户端(HTTP会话, asyncio.Semaphore(得间清单最大并发数))
         清单 = await 客户端.获取批量下载清单(bid)
         清单["chapters"] = await 客户端.获取批量章节清单(bid, 清单)
         return 清单
@@ -999,10 +786,10 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         return
     try:
         async with 创建得间HTTP会话(2) as HTTP会话:
-            详情包, 目录包, 批量清单 = await asyncio.gather(
+            预检开始 = time.perf_counter()
+            详情包, 目录包 = await asyncio.gather(
                 异步获取得间书籍详情(HTTP会话, 书籍编号),
                 异步获取得间章节目录(HTTP会话, 书籍编号),
-                异步获取得间批量下载清单(HTTP会话, 书籍编号),
             )
         if not 详情包.get("success"):
             logger.warning(
@@ -1014,32 +801,17 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             return
         详情 = 详情包.get("detail") or {}
         目录 = 目录包.get("chapters") or []
-        if not 目录:
+        if not 目录 or _to_int(目录包.get("total_record"), len(目录)) != len(目录):
             logger.warning(f"得间小说目录失败：书籍编号={书籍编号}")
             yield "下载失败 请重试"
             return
-        if not isinstance(批量清单, dict) or not isinstance(
-            批量清单.get("chapters"), list
-        ):
-            logger.warning(f"得间小说批量章节地址获取失败：书籍编号={书籍编号}")
-            yield "下载失败 请重试"
-            return
-
-        if 得间存在未购买章节(目录, 批量清单):
-            可下载章节数 = _to_int(批量清单.get("downloadCount"))
-            logger.warning(
-                f"得间小说包含未购买章节：书籍编号={书籍编号}, "
-                f"可下载章节数={可下载章节数}, 总章节数={len(目录)}"
-            )
-            yield "该书包含未购买章节，暂不支持下载"
-            return
-
         书名 = str(详情.get("title") or "未知")
         作者 = str(详情.get("author") or "未知")
         状态 = "完结" if "完结" in str(详情.get("status") or "") else "连载"
         字数 = 格式化字数(详情.get("word_count"))
         logger.info(
-            f"得间小说开始下载：书籍编号={书籍编号}, 书名={书名}, 作者={作者}, 章节数={len(目录)}"
+            f"得间小说开始下载：书籍编号={书籍编号}, 书名={书名}, 作者={作者}, "
+            f"章节数={len(目录)}, 详情目录耗时={time.perf_counter() - 预检开始:.3f}秒"
         )
         yield "\n".join(
             [
@@ -1053,7 +825,18 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             ]
         )
 
-        章节结果 = await 下载全部章节(书籍编号, 目录, 批量清单)
+        async with 创建得间HTTP会话(得间清单最大并发数) as HTTP会话:
+            清单客户端 = 得间异步客户端(HTTP会话, asyncio.Semaphore(得间清单最大并发数))
+            批量清单 = await 清单客户端.获取批量下载清单(书籍编号)
+            if 得间存在未购买章节(目录, 批量清单):
+                可下载章节数 = _to_int(批量清单.get("downloadCount"))
+                logger.warning(
+                    f"得间小说包含未购买章节：书籍编号={书籍编号}, "
+                    f"可下载章节数={可下载章节数}, 总章节数={len(目录)}"
+                )
+                yield "该书包含未购买章节，暂不支持下载"
+                return
+            章节结果 = await 下载得间章节流水线(书籍编号, 目录, 清单客户端, 批量清单)
         成功 = [x for x in 章节结果 if x.get("content")]
         if len(成功) != len(目录):
             logger.warning(
@@ -1062,7 +845,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "下载失败 请重试"
             return
 
-        文件名, 文件内容 = 生成小说文件(书籍编号, 书名, 作者, 状态, 字数, 章节结果)
+        文件名, 文件内容 = await asyncio.to_thread(
+            生成小说文件, 书籍编号, 书名, 作者, 状态, 字数, 章节结果
+        )
         发送结果 = await 准备发送文本文件(
             event, 文件名, 文件内容, 配置, 书名=书名, 作者=作者
         )
@@ -1085,10 +870,47 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         yield "下载失败 请重试"
 
 
+async def 下载得间章节流水线(
+    书籍编号: str,
+    目录: list[dict[str, Any]],
+    清单客户端: 得间异步客户端,
+    批量清单: Dict[str, Any],
+) -> list[dict[str, str]]:
+    """地址分页与单章授权/正文重叠执行，队列提供背压且最终必须完整。"""
+    并发数 = 计算得间正文并发数(len(目录))
+    地址队列: asyncio.Queue[Dict[str, Any] | None] = asyncio.Queue(maxsize=并发数 * 2)
+    清单开始 = time.perf_counter()
+
+    async def 放入地址(章节列表: List[Dict[str, Any]]) -> None:
+        for 章节项 in 章节列表:
+            await 地址队列.put(章节项)
+
+    async def 获取清单() -> None:
+        章节列表 = await 清单客户端.获取批量章节清单(书籍编号, 批量清单, 放入地址)
+        logger.info(
+            f"得间小说正文地址清单完成：书籍编号={书籍编号}, "
+            f"地址数={len(章节列表)}, 并发数={得间清单最大并发数}, "
+            f"耗时={time.perf_counter() - 清单开始:.3f}秒, 与正文下载重叠=开启"
+        )
+        for _ in range(并发数):
+            await 地址队列.put(None)
+
+    清单任务 = asyncio.create_task(获取清单())
+    正文任务 = asyncio.create_task(下载全部章节(书籍编号, 目录, {}, 地址队列))
+    try:
+        _, 章节结果 = await asyncio.gather(清单任务, 正文任务)
+        return 章节结果
+    finally:
+        清单任务.cancel()
+        正文任务.cancel()
+        await asyncio.gather(清单任务, 正文任务, return_exceptions=True)
+
+
 async def 下载全部章节(
     书籍编号: str,
     目录: list[dict[str, Any]],
     批量清单: Dict[str, Any],
+    地址队列: Optional[asyncio.Queue[Dict[str, Any] | None]] = None,
 ) -> list[dict[str, str]]:
     总数 = len(目录)
     结果: list[dict[str, str] | None] = [None] * 总数
@@ -1105,14 +927,16 @@ async def 下载全部章节(
             f"得间小说目录章节编号无效或重复：书籍编号={书籍编号}, "
             f"无效数={len(无效章节下标)}, 唯一章节数={len(章节下标表)}, 总章节数={总数}"
         )
+        if 地址队列 is not None:
+            raise RuntimeError("得间目录章节编号无效或重复")
         return []
 
     批量章节 = 批量清单.get("chapters") if isinstance(批量清单, dict) else None
-    if not isinstance(批量章节, list):
+    if 地址队列 is None and not isinstance(批量章节, list):
         logger.warning(f"得间小说批量章节地址缺失：书籍编号={书籍编号}")
         return []
     批量章节表: Dict[int, Dict[str, Any]] = {}
-    for 项 in 批量章节:
+    for 项 in 批量章节 or []:
         if not isinstance(项, dict):
             continue
         章节编号 = _to_int(项.get("chapterId") or 项.get("chapter_id"))
@@ -1122,7 +946,7 @@ async def 下载全部章节(
         if 章节编号 > 0 and 正文地址:
             批量章节表[章节编号] = 项
     缺失章节 = sorted(章节编号 for 章节编号 in 章节下标表 if 章节编号 not in 批量章节表)
-    if 缺失章节 or len(批量章节表) != len(章节下标表):
+    if 地址队列 is None and (缺失章节 or len(批量章节表) != len(章节下标表)):
         logger.warning(
             f"得间小说批量章节地址不完整：书籍编号={书籍编号}, "
             f"目录章节数={len(章节下标表)}, 批量地址数={len(批量章节表)}, 缺失数={len(缺失章节)}"
@@ -1137,10 +961,13 @@ async def 下载全部章节(
     进度锁 = asyncio.Lock()
     请求信号量 = asyncio.Semaphore(实际正文并发数)
     解密信号量 = asyncio.Semaphore(解密并发数)
+    正文模式 = "单章正文流水线" if 地址队列 is not None else "单章正文"
+    下载开始 = time.perf_counter()
+    计时统计 = {"auth": 0.0, "body": 0.0, "decrypt": 0.0}
     async with 创建得间HTTP会话(实际正文并发数) as HTTP会话:
         logger.info(
             f"得间小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, 百分比=0%, "
-            f"模式=批量地址, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
+            f"模式={正文模式}, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
             f"HTTP会话复用=开启, 每章授权=开启, 解密并发数={解密并发数}, 重试次数={得间正文重试次数}"
         )
 
@@ -1154,6 +981,7 @@ async def 下载全部章节(
                     批量章节表[章节编号],
                     请求信号量,
                     解密信号量,
+                    计时统计,
                 )
             ).strip()
             for 下标 in 下标列表:
@@ -1174,9 +1002,33 @@ async def 下载全部章节(
                     )
                     上次日志百分比 = 当前百分比
 
-        await asyncio.gather(
-            *(下载一章(章节编号, 下标列表) for 章节编号, 下标列表 in 章节下标表.items())
-        )
+        待下载章节 = iter(章节下标表.items())
+
+        async def 下载工作流() -> None:
+            if 地址队列 is None:
+                for 章节编号, 下标列表 in 待下载章节:
+                    await 下载一章(章节编号, 下标列表)
+                return
+            while True:
+                章节项 = await 地址队列.get()
+                if 章节项 is None:
+                    return
+                章节编号 = _to_int(章节项.get("chapterId") or 章节项.get("chapter_id"))
+                正文地址 = str(章节项.get("url") or 章节项.get("downUrl") or 章节项.get("downloadUrl") or "").strip()
+                if 章节编号 not in 章节下标表 or not 正文地址:
+                    raise RuntimeError("得间正文地址不在目录内或为空")
+                if 章节编号 in 批量章节表:
+                    continue
+                批量章节表[章节编号] = 章节项
+                await 下载一章(章节编号, 章节下标表[章节编号])
+
+        任务 = [asyncio.create_task(下载工作流()) for _ in range(实际正文并发数)]
+        try:
+            await asyncio.gather(*任务)
+        finally:
+            for 任务项 in 任务:
+                任务项.cancel()
+            await asyncio.gather(*任务, return_exceptions=True)
     输出: list[dict[str, str]] = []
     for 下标, 章 in enumerate(目录):
         已下载 = 结果[下标]
@@ -1190,9 +1042,18 @@ async def 下载全部章节(
         输出.append(已下载)
     logger.info(
         f"得间小说章节下载完成：书籍编号={书籍编号}, 成功={成功}, 总数={总数}, "
-        f"模式=批量地址, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
-        f"HTTP会话复用=开启, 每章授权=开启, 解密并发数={解密并发数}, 重试次数={得间正文重试次数}"
+        f"模式={正文模式}, 并发数={实际正文并发数}, 最大并发数={得间正文最大并发数}, "
+        f"HTTP会话复用=开启, 每章授权=开启, 解密进程数={解密并发数}, "
+        f"总耗时={time.perf_counter() - 下载开始:.3f}秒, "
+        f"授权累计={计时统计['auth']:.3f}秒, 正文请求累计={计时统计['body']:.3f}秒, "
+        f"纯解密累计={计时统计['decrypt']:.3f}秒"
     )
+    if len(批量章节表) != 总数:
+        logger.warning(
+            f"得间小说流水线章节地址不完整：书籍编号={书籍编号}, "
+            f"地址数={len(批量章节表)}, 总数={总数}"
+        )
+        return []
     return 输出
 
 
@@ -1234,7 +1095,7 @@ async def 准备发送文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    缓存路径 = 写入缓存(文件名, 文件内容)
+    缓存路径 = await asyncio.to_thread(写入缓存, 文件名, 文件内容)
     if 小说网盘 is None:
         删除缓存(缓存路径)
         return {
@@ -1324,13 +1185,14 @@ def 删除缓存(缓存路径: Any) -> None:
 
 
 def 关闭得间资源() -> None:
-    """释放全局解密线程池，供插件停止和热重载使用。"""
-    global 得间解密执行器
+    """释放专用解密进程，供插件停止和热重载使用。"""
+    global 得间解密执行器, _得间解密信号量
     执行器 = 得间解密执行器
     得间解密执行器 = None
+    _得间解密信号量 = None
     if 执行器 is not None:
         try:
-            执行器.shutdown(wait=False, cancel_futures=True)
+            执行器.shutdown(wait=False, kill_workers=True)
         except Exception:
             pass
 
