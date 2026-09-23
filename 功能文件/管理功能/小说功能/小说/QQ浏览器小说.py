@@ -313,6 +313,124 @@ def 提取事件QQ浏览器来源(event: Any) -> str | None:
     return None
 
 
+def _规范QQ浏览器分享书名(值: Any) -> str:
+    文本 = _清理QQ浏览器文本(值)
+    if not 文本:
+        return ""
+    匹配 = re.search(r"[《〈]([^》〉\r\n]{1,100})[》〉]", 文本)
+    if 匹配:
+        文本 = 匹配.group(1)
+    else:
+        文本 = re.sub(r"^(?:推荐|分享|发现)(?:一本)?(?:好书)?[：:\s]*", "", 文本)
+    文本 = 文本.strip(" \t\r\n《》〈〉“”\"'")
+    if not 文本 or 文本 in {"推荐一本好书", "发现一本好书", "好书推荐"}:
+        return ""
+    return 文本 if len(文本) <= 100 else ""
+
+
+def _收集QQ浏览器卡片书名(
+    值: Any,
+    候选: list[str],
+    已见对象: set[int],
+    已处理文本: set[str],
+    深度: int = 0,
+) -> None:
+    if 值 is None or 深度 > 8 or len(候选) >= 64:
+        return
+    if isinstance(值, str):
+        文本 = html.unescape(值).strip()
+        if not 文本 or 文本 in 已处理文本:
+            return
+        已处理文本.add(文本)
+        for 匹配 in re.finditer(
+            r"(?im)(?:^|[\r\n])\s*(?:title|书名)\s*[:：]\s*([^\r\n]+)", 文本
+        ):
+            候选.append(匹配.group(1).strip())
+        if 文本[:1] in {"{", "["}:
+            try:
+                解析数据 = json.loads(文本)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return
+            _收集QQ浏览器卡片书名(
+                解析数据, 候选, 已见对象, 已处理文本, 深度 + 1
+            )
+        return
+    if isinstance(值, dict):
+        对象标识 = id(值)
+        if 对象标识 in 已见对象:
+            return
+        已见对象.add(对象标识)
+        标题字段 = {
+            "title", "booktitle", "book_title", "bookname", "book_name",
+            "resourcename", "resource_name", "novelname", "novel_name", "书名",
+        }
+        for 键, 项目 in 值.items():
+            if str(键).replace("-", "_").lower() in 标题字段 and isinstance(
+                项目, (str, int, float)
+            ):
+                候选.append(str(项目))
+            _收集QQ浏览器卡片书名(
+                项目, 候选, 已见对象, 已处理文本, 深度 + 1
+            )
+        return
+    if isinstance(值, (list, tuple, set)):
+        对象标识 = id(值)
+        if 对象标识 in 已见对象:
+            return
+        已见对象.add(对象标识)
+        for 项目 in 值:
+            _收集QQ浏览器卡片书名(
+                项目, 候选, 已见对象, 已处理文本, 深度 + 1
+            )
+        return
+    对象标识 = id(值)
+    if 对象标识 in 已见对象:
+        return
+    已见对象.add(对象标识)
+    for 字段 in (
+        "title", "bookTitle", "book_title", "bookName", "book_name",
+        "resourceName", "resource_name", "novelName", "novel_name",
+        "message_str", "message", "raw_message", "message_obj", "raw_data",
+        "msg_elements", "text", "content", "data",
+    ):
+        try:
+            项目 = getattr(值, 字段, None)
+        except Exception:
+            项目 = None
+        _收集QQ浏览器卡片书名(
+            项目, 候选, 已见对象, 已处理文本, 深度 + 1
+        )
+
+
+def 提取QQ浏览器卡片书名(*事件对象: Any) -> str:
+    候选: list[str] = []
+    已处理文本: set[str] = set()
+    for 对象 in 事件对象:
+        _收集QQ浏览器卡片书名(对象, 候选, set(), 已处理文本)
+    for 项目 in 候选:
+        书名 = _规范QQ浏览器分享书名(项目)
+        if 书名:
+            return 书名
+    return ""
+
+
+def _规范QQ浏览器搜索标题(值: Any) -> str:
+    return re.sub(r"\s+", "", _规范QQ浏览器分享书名(值)).casefold()
+
+
+async def 按书名搜索QQ浏览器书籍编号(书名: str) -> str:
+    目标标题 = _规范QQ浏览器搜索标题(书名)
+    if not 目标标题:
+        return ""
+    for 书籍 in await 搜索小说(书名, 需要数量=QQ浏览器搜索数量上限):
+        if _规范QQ浏览器搜索标题(书籍.get("title")) != 目标标题:
+            continue
+        书籍编号 = str(书籍.get("book_id") or "").strip()
+        if re.fullmatch(r"\d{6,}", 书籍编号):
+            return 书籍编号
+    return ""
+
+
 def 解析QQ浏览器搜索结果(数据: Any) -> list[dict[str, Any]]:
     if not _QQ浏览器业务成功(数据, "code"):
         return []
@@ -847,10 +965,34 @@ async def 生成QQ浏览器下载回复流(
         yield QQ浏览器下载失败提示
 
 
+async def 生成QQ浏览器卡片回搜回复流(
+    event: Any,
+    来源: str,
+    书名: str,
+    配置: Any = None,
+) -> AsyncIterator[Any]:
+    书籍编号 = await 按书名搜索QQ浏览器书籍编号(书名)
+    if not 书籍编号:
+        logger.info("QQ浏览器分享卡片回搜未命中：错误分类=无精确书名结果")
+        yield QQ浏览器下载失败提示
+        return
+    async for 回复 in 生成QQ浏览器下载回复流(
+        event, 构造QQ浏览器链接(书籍编号), 配置
+    ):
+        yield 回复
+
+
 def 获取QQ浏览器小说回复流(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> AsyncIterator[Any] | None:
     来源 = 提取直接QQ浏览器来源(命令文本) or 提取事件QQ浏览器来源(event)
-    if 来源 is None or not 提取QQ浏览器书籍编号(来源):
+    if 来源 is None:
         return None
-    return 生成QQ浏览器下载回复流(event, 来源, 配置)
+    if 提取QQ浏览器书籍编号(来源):
+        return 生成QQ浏览器下载回复流(event, 来源, 配置)
+    if not _是QQ浏览器链接(来源):
+        return None
+    书名 = 提取QQ浏览器卡片书名(event, 命令文本)
+    if not 书名:
+        return None
+    return 生成QQ浏览器卡片回搜回复流(event, 来源, 书名, 配置)

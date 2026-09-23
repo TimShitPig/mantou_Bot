@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.75-2ea44f)
+![version](https://img.shields.io/badge/version-v6.2.0-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.75 |
+| 版本 | v6.2.0 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -106,7 +106,7 @@ qrcode[pil]
 | 书旗小说 | 书旗链接 / 分享卡片 | iOS 目录签名、复用异步会话、最高 400 路动态正文请求与标准库解码 |
 | 追书小说 | 追书神器链接 / 分享卡片 | 自动游客会话、复用异步会话，最高 400 路动态请求，PyCryptodome 解密并完整合成 TXT |
 | QQ阅读 | 详情/目录/分享链接、Cookie | 官方账号登录态校验、目录及正文链路；VIP 账号完整下载会员书，单章付费书仍仅下载免费章节 |
-| QQ浏览器小说 | 链接 / `qb://ext/novelreader` | 公开搜索、详情、目录和正文接口 |
+| QQ浏览器小说 | 链接 / `qb://ext/novelreader` | 空 `bookid` 分享卡片按书名精确回搜；命中后复用公开详情、目录和正文下载流程 |
 | 得间小说 | 完整书籍链接 / 分享卡片 | 详情目录后立即提示；32 路地址分页与最高 128 路单章正文流水线，授权最多 32 路；自定义 CTR 批量解密，缺章停止 |
 | 点众小说 | 链接 / 分享卡片 | 独立 App 会话，最高 60 路并发 |
 | 盐言小说 | `story.zhihu.com` 付费专栏分享链接 | 只处理当前分享章节 |
