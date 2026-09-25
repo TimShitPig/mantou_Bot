@@ -310,6 +310,7 @@
                 <input type="text" id="qq-ywguid" placeholder="ywguid / uid" autocomplete="off" value="${auth.ywguid || ''}">
                 <input type="password" id="qq-ywkey" placeholder="ywkey / usid" autocomplete="off">
               </div>
+              <small style="display:block;margin-top:6px;color:var(--muted);font-size:11px;">Cookie 字段：ywguid / uid + ywkey / usid；已保存的密钥不会回显。</small>
               <div class="qq-auth-actions">
                 <button class="primary-button" type="button" id="qq-auth-save">手动保存</button>
               </div>
@@ -338,7 +339,7 @@
           const btn = $('qq-btn-refresh-profile'); if (btn) btn.disabled = true;
           try {
             toast('正在刷新账号资料...');
-            const authData = await api('qq-reader-auth');
+            const authData = await api('qq-reader-auth?refresh=1');
             renderQQAuthEditor(authData || {});
             toast('✅ 账号资料已刷新');
           } catch(e) {
@@ -418,7 +419,8 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); const item = (snapshot.pans.items || []).find((entry) => entry.key === key); if (item && item.enabled === false) return toast('请先开启该网盘'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      const refreshQQProfileSilently = async () => { try { const authData = await api('qq-reader-auth?refresh=1'); renderQQAuthEditor(authData || {}); } catch (_) {} };
+      const load = async () => { try { render(await api('dashboard')); void refreshQQProfileSilently(); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
       $('popover-logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));

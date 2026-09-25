@@ -2449,19 +2449,41 @@ def 解析QQ阅读账号会员状态(data: Any) -> dict[str, Any]:
     }
 
 
+def 解析QQ阅读账号资料(data: Any) -> dict[str, Any]:
+    """解析 getAcctInfo 返回的账号昵称、头像和手机号。"""
+    会员状态 = 解析QQ阅读账号会员状态(data)
+    if not 会员状态.get("available") or not isinstance(data, dict):
+        return {"available": False}
+    return {
+        "available": True,
+        "nickname": str(data.get("nick") or data.get("nickname") or "").strip(),
+        "avatar_url": str(
+            data.get("icon")
+            or data.get("avatar")
+            or data.get("avatarUrl")
+            or data.get("headUrl")
+            or ""
+        ).strip(),
+        "phone": (
+            str(data.get("mobile") or "").strip()
+            if re.fullmatch(r"1\d{10}", str(data.get("mobile") or "").strip())
+            else ""
+        ),
+        "uid": str(data.get("uid") or data.get("uin") or "").strip(),
+    }
+
+
 QQ阅读账号信息地址 = (
     "https://commontgw.reader.qq.com/v7_6_6/nativepage/getAcctInfo"
 )
 
 
-async def 查询QQ阅读账号VIP状态(
-    session: aiohttp.ClientSession,
-) -> dict[str, Any]:
-    """通过官方账号接口判断当前登录态是否有有效会员。"""
+async def _请求QQ阅读账号信息(session: aiohttp.ClientSession) -> dict[str, Any] | None:
+    """请求官方账号资料；调用方只读取受控字段。"""
     load_config_once()
     config = ConfigManager.get_instance()
     if not (str(config.uid or "").strip() and str(config.usid or "").strip()):
-        return {"available": False, "is_vip": False}
+        return None
     params = {"rechargeCouponSwith": "1"}
     request_url = _构造QQ阅读请求地址(QQ阅读账号信息地址, params)
     headers = await 异步构造QQ阅读账号请求头(
@@ -2478,8 +2500,22 @@ async def 查询QQ阅读账号VIP状态(
             data = await response.json(content_type=None)
     except Exception as exc:
         logger.debug(f"QQ阅读账号会员查询失败：错误={type(exc).__name__}")
-        return {"available": False, "is_vip": False}
-    result = 解析QQ阅读账号会员状态(data)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def 查询QQ阅读账号资料(
+    session: aiohttp.ClientSession,
+) -> dict[str, Any]:
+    data = await _请求QQ阅读账号信息(session)
+    return 解析QQ阅读账号资料(data)
+
+
+async def 查询QQ阅读账号VIP状态(
+    session: aiohttp.ClientSession,
+) -> dict[str, Any]:
+    """通过官方账号接口判断当前登录态是否有有效会员。"""
+    result = 解析QQ阅读账号会员状态(await _请求QQ阅读账号信息(session))
     if not result.get("available"):
         logger.debug("QQ阅读账号会员查询未返回有效登录态")
     return result

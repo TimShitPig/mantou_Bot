@@ -2114,6 +2114,29 @@ async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
                 更新时间 = int(账号详情.get("updated_at") or 0)
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
+
+        if request.query.get("refresh") == "1" and 原值:
+            try:
+                await _控制台线程执行(QQ阅读._应用QQ阅读登录态, 原值)
+                async with QQ阅读.创建QQ阅读HTTP会话(concurrency=2) as QQ会话:
+                    资料 = await QQ阅读.查询QQ阅读账号资料(QQ会话)
+                if 资料.get("available"):
+                    await _控制台线程执行(
+                        QQ阅读._保存QQ阅读登录态,
+                        当前帮助网页配置,
+                        {**原值, **资料},
+                    )
+                    账号详情.update(
+                        {
+                            "nickname": str(资料.get("nickname") or ""),
+                            "avatar_url": str(资料.get("avatar_url") or ""),
+                            "phone": str(资料.get("phone") or ""),
+                            "updated_at": int(time.time()),
+                        }
+                    )
+                    更新时间 = int(账号详情["updated_at"])
+            except Exception as exc:
+                logger.debug("帮助控制台 QQ阅读资料刷新失败：错误类型=%s", type(exc).__name__)
         
         ywguid = str((原值 or {}).get("ywguid") or 账号详情.get("ywguid") or "")
         nickname = str(账号详情.get("nickname") or "")
