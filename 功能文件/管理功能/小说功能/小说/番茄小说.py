@@ -67,7 +67,7 @@ except Exception as 异常:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败, 错误={异常}")
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
@@ -3711,7 +3711,7 @@ def fetch_batch_worker(args: Tuple[int, int, str, List[str], str]) -> Dict[str, 
 番茄进度日志分段数 = 4
 
 
-番茄下载缓存目录 = 小说缓存工具.下载缓存目录
+番茄小说缓存目录 = 文件缓存工具.小说缓存目录
 
 番茄文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -4584,7 +4584,7 @@ def 启动番茄百度后台上传并清理源文件(
 def 删除番茄缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
-    if not 小说缓存工具.删除下载缓存文件(缓存路径):
+    if not 文件缓存工具.删除小说缓存文件(缓存路径):
         logger.debug(f"番茄小说下载缓存仍在等待续传：文件={缓存路径}")
         return
     try:
@@ -4594,10 +4594,10 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
 
 
 def 写入番茄下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    番茄下载缓存目录.mkdir(parents=True, exist_ok=True)
+    番茄小说缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突番茄缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
-    小说缓存工具.标记下载缓存正在使用(缓存路径)
+    文件缓存工具.标记小说缓存正在使用(缓存路径)
     return 缓存路径
 
 
@@ -4605,16 +4605,16 @@ def 生成不冲突番茄缓存路径(文件名: str) -> Path:
     安全文件名 = Path(清理番茄文件名(文件名)).name or "番茄小说.txt"
     if not 安全文件名.lower().endswith(".txt"):
         安全文件名 = f"{安全文件名}.txt"
-    缓存路径 = 番茄下载缓存目录 / 安全文件名
+    缓存路径 = 番茄小说缓存目录 / 安全文件名
     if not 缓存路径.exists():
         return 缓存路径
     后缀 = 缓存路径.suffix
     主名 = 缓存路径.stem
     for 序号 in range(1, 1000):
-        候选路径 = 番茄下载缓存目录 / f"{主名}_{序号}{后缀}"
+        候选路径 = 番茄小说缓存目录 / f"{主名}_{序号}{后缀}"
         if not 候选路径.exists():
             return 候选路径
-    raise RuntimeError("下载缓存目录中同名文件过多")
+    raise RuntimeError("小说缓存目录中同名文件过多")
 
 
 async def 展开番茄短链(来源: str) -> str:

@@ -36,7 +36,7 @@ except Exception as exc:
     logger.warning("百度网盘模块加载失败：错误=%s", type(exc).__name__)
 
 from 功能文件.管理功能.基础功能.权限工具 import 读取字段
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 try:
@@ -88,7 +88,7 @@ except Exception:
 追书正文最大动态并发数 = 400
 追书正文最大尝试次数 = 3
 追书解密并发数 = max(4, min(32, (os.cpu_count() or 4) * 2))
-下载缓存目录 = 小说缓存工具.下载缓存目录
+小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 正文降级提示 = (
     "请安装最新版追书",
@@ -1052,13 +1052,13 @@ async def 准备发送文本文件给当前会话(
     logger.info("追书小说准备上传：文件=%s, 大小=%s", 文件名, len(文件内容))
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     if 小说网盘 is None:
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "网盘模块未加载"}
     try:
         网盘结果 = await 小说网盘.上传小说并获取分享链接(配置, 缓存路径, 文件名)
         if not 网盘结果.get("success"):
             logger.warning("追书小说主网盘上传失败：文件=%s", 文件名)
-            删除下载缓存文件(缓存路径)
+            删除小说缓存文件(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传失败"}
         完成结果 = await 小说网盘.发送小说下载完成链接(
             event, 书名, 作者, str(网盘结果.get("share_url") or "")
@@ -1068,11 +1068,11 @@ async def 准备发送文本文件给当前会话(
         降级文本 = str(完成结果.get("fallback_text") or "")
         if 降级文本:
             return {"sent": False, "fallback_text": 降级文本, "source_cache_path": 缓存路径, "error": ""}
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "完成消息发送失败"}
     except Exception as exc:
         logger.warning("追书小说主网盘上传或完成消息发送失败：文件=%s, 错误类型=%s", 文件名, type(exc).__name__)
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": type(exc).__name__}
 
 
@@ -1091,26 +1091,26 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
         except Exception as exc:
             logger.warning("追书小说百度网盘后台上传异常：文件=%s, 错误类型=%s", 文件名, type(exc).__name__)
         finally:
-            删除下载缓存文件(源缓存路径)
+            删除小说缓存文件(源缓存路径)
 
     try:
         asyncio.create_task(执行())
     except RuntimeError:
-        删除下载缓存文件(源缓存路径)
+        删除小说缓存文件(源缓存路径)
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    小说缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
-    小说缓存工具.标记下载缓存正在使用(缓存路径)
+    文件缓存工具.标记小说缓存正在使用(缓存路径)
     return 缓存路径
 
 
-def 删除下载缓存文件(缓存路径: Any) -> None:
+def 删除小说缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
-    if not 小说缓存工具.删除下载缓存文件(缓存路径):
+    if not 文件缓存工具.删除小说缓存文件(缓存路径):
         logger.debug("追书小说下载缓存仍在等待续传")
         return
     logger.info("追书小说下载缓存文件已删除")
@@ -1120,11 +1120,11 @@ def 生成不冲突缓存路径(文件名: str) -> Path:
     安全名称 = Path(_安全文件名(文件名)).name or "追书小说.txt"
     if not 安全名称.lower().endswith(".txt"):
         安全名称 += ".txt"
-    路径 = 下载缓存目录 / 安全名称
+    路径 = 小说缓存目录 / 安全名称
     if not 路径.exists():
         return 路径
     for number in range(1, 1000):
-        候选 = 下载缓存目录 / f"{路径.stem}_{number}{路径.suffix}"
+        候选 = 小说缓存目录 / f"{路径.stem}_{number}{路径.suffix}"
         if not 候选.exists():
             return 候选
     raise ZhuishuError("下载缓存文件名冲突")

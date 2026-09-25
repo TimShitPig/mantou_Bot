@@ -68,7 +68,7 @@ from Crypto.Cipher import AES, DES
 from Crypto.Hash import MD2, MD4
 from Crypto.Util import Counter
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 # === decrypt ===
@@ -3088,7 +3088,7 @@ QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"
 QQ阅读登录态状态键 = "login_state"
-下载缓存目录 = Path(__file__).resolve().parents[3] / "下载缓存"
+小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
@@ -4571,15 +4571,15 @@ def 格式化下载提示(details: dict[str, Any], catalog_count: int) -> str:
 
 
 def 生成不冲突缓存路径(filename: str) -> Path:
-    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    小说缓存目录.mkdir(parents=True, exist_ok=True)
     safe_name = Path(清理文件名(filename)).name
     if not safe_name.lower().endswith(".txt"):
         safe_name = f"{safe_name}.txt"
-    candidate = 下载缓存目录 / safe_name
+    candidate = 小说缓存目录 / safe_name
     if not candidate.exists():
         return candidate
     for index in range(1, 1000):
-        candidate = 下载缓存目录 / f"{Path(safe_name).stem}_{index}.txt"
+        candidate = 小说缓存目录 / f"{Path(safe_name).stem}_{index}.txt"
         if not candidate.exists():
             return candidate
     raise RuntimeError("下载缓存同名文件过多")
@@ -4588,14 +4588,14 @@ def 生成不冲突缓存路径(filename: str) -> Path:
 def 写入下载缓存文件(filename: str, content: bytes) -> Path:
     path = 生成不冲突缓存路径(filename)
     path.write_bytes(content)
-    小说缓存工具.标记下载缓存正在使用(path)
+    文件缓存工具.标记小说缓存正在使用(path)
     return path
 
 
-def 删除下载缓存文件(path: Any) -> None:
+def 删除小说缓存文件(path: Any) -> None:
     if not path:
         return
-    小说缓存工具.删除下载缓存文件(path)
+    文件缓存工具.删除小说缓存文件(path)
 
 
 async def 准备发送文本文件(
@@ -4609,7 +4609,7 @@ async def 准备发送文本文件(
 ) -> dict[str, Any]:
     cache_path = 写入下载缓存文件(filename, content)
     if 小说网盘 is None:
-        删除下载缓存文件(cache_path)
+        删除小说缓存文件(cache_path)
         return {
             "sent": False,
             "fallback_text": "",
@@ -4619,7 +4619,7 @@ async def 准备发送文本文件(
     try:
         upload = await 小说网盘.上传小说并获取分享链接(config, cache_path, filename)
         if not upload.get("success"):
-            删除下载缓存文件(cache_path)
+            删除小说缓存文件(cache_path)
             return {
                 "sent": False,
                 "fallback_text": "",
@@ -4647,7 +4647,7 @@ async def 准备发送文本文件(
                 "source_cache_path": cache_path,
                 "error": "",
             }
-        删除下载缓存文件(cache_path)
+        删除小说缓存文件(cache_path)
         return {
             "sent": False,
             "fallback_text": "",
@@ -4655,7 +4655,7 @@ async def 准备发送文本文件(
             "error": "完成消息发送失败",
         }
     except Exception as exc:
-        删除下载缓存文件(cache_path)
+        删除小说缓存文件(cache_path)
         return {
             "sent": False,
             "fallback_text": "",
@@ -4683,12 +4683,12 @@ def 启动百度后台上传并清理源文件(config: Any, source_path: Any, fi
                 f"QQ阅读百度网盘后台上传异常：文件={filename}, 错误={type(exc).__name__}"
             )
         finally:
-            删除下载缓存文件(source_path)
+            删除小说缓存文件(source_path)
 
     try:
         asyncio.create_task(upload_and_cleanup())
     except RuntimeError:
-        删除下载缓存文件(source_path)
+        删除小说缓存文件(source_path)
 
 
 def 获取QQ阅读回复流(

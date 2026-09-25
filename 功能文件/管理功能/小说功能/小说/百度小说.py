@@ -36,7 +36,7 @@ try:
 except Exception:
     小说网盘 = None
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 百度搜索地址 = "https://novelapi.baidu.com/boxnovel/cors"
@@ -75,7 +75,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度AES向量 = b"2011121211143000"
 百度最大并发数 = 10
 百度请求重试次数 = 3
-百度下载缓存目录 = 小说缓存工具.下载缓存目录
+百度小说缓存目录 = 文件缓存工具.小说缓存目录
 百度文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -836,23 +836,23 @@ def 生成百度小说文件内容(
 
 
 def 写入百度下载缓存文件(文件名: str, 内容: bytes) -> Path:
-    百度下载缓存目录.mkdir(parents=True, exist_ok=True)
+    百度小说缓存目录.mkdir(parents=True, exist_ok=True)
     安全文件名 = Path(_清理文件名(文件名)).name
-    路径 = 百度下载缓存目录 / 安全文件名
+    路径 = 百度小说缓存目录 / 安全文件名
     if 路径.exists():
         for 序号 in range(1, 1000):
-            候选 = 百度下载缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
+            候选 = 百度小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
             if not 候选.exists():
                 路径 = 候选
                 break
     路径.write_bytes(内容)
-    小说缓存工具.标记下载缓存正在使用(路径)
+    文件缓存工具.标记小说缓存正在使用(路径)
     return 路径
 
 
 def 删除百度缓存文件(路径: Any) -> None:
     if 路径:
-        小说缓存工具.删除下载缓存文件(路径)
+        文件缓存工具.删除小说缓存文件(路径)
 
 
 async def _准备发送文本文件(
@@ -905,13 +905,13 @@ def 启动百度后台上传并清理源文件(配置: Any, 路径: Any, 文件�
             logger.warning("百度小说后台备份异常：错误=%s", type(异常).__name__)
         finally:
             if not 备份完成:
-                小说缓存工具.更新上传任务(
+                文件缓存工具.更新上传任务(
                     路径,
                     "backup_pending",
                     last_error="百度网盘后台备份未完成",
                 )
             else:
-                小说缓存工具.更新上传任务(路径, "primary_done", last_error="")
+                文件缓存工具.更新上传任务(路径, "primary_done", last_error="")
             删除百度缓存文件(路径)
 
     try:

@@ -78,6 +78,7 @@ def 安装QQ官方语音Silk兼容补丁() -> bool:
 
     if getattr(media_utils, "_mantou_qq_silk_patch_version", 0) == QQ官方语音Silk补丁版本:
         return True
+    from 功能文件.管理功能.基础功能 import 文件缓存
     原始音频魔数探测 = getattr(media_utils, "_mantou_原始音频魔数探测", None)
     if not callable(原始音频魔数探测):
         原始音频魔数探测 = getattr(media_utils, "_get_audio_magic_type", None)
@@ -102,6 +103,8 @@ def 安装QQ官方语音Silk兼容补丁() -> bool:
         return 原始音频魔数探测(音频路径)
 
     async def 新腾讯Silk到Wav(Silk路径: str, 输出路径: str) -> str:
+        缓存输出路径 = 文件缓存.创建临时缓存文件("qq-silk-", ".wav")
+
         def 读取Silk数据() -> bytes:
             with open(Silk路径, "rb") as 文件:
                 return 文件.read()
@@ -109,9 +112,9 @@ def 安装QQ官方语音Silk兼容补丁() -> bool:
         try:
             数据 = await asyncio.to_thread(读取Silk数据)
         except OSError:
-            return await 原始腾讯Silk解码(Silk路径, 输出路径)
+            return await 原始腾讯Silk解码(Silk路径, str(缓存输出路径))
         if not 数据.startswith(b"\x03#!SILK_V3"):
-            return await 原始腾讯Silk解码(Silk路径, 输出路径)
+            return await 原始腾讯Silk解码(Silk路径, str(缓存输出路径))
 
         def 解码并写入() -> str:
             from io import BytesIO
@@ -122,12 +125,12 @@ def 安装QQ官方语音Silk兼容补丁() -> bool:
             输出 = BytesIO()
             pysilk.decode(BytesIO(数据[1:]), 输出, 24000)
             输出.seek(0)
-            with wave.open(输出路径, "wb") as WAV文件:
+            with wave.open(str(缓存输出路径), "wb") as WAV文件:
                 WAV文件.setnchannels(1)
                 WAV文件.setsampwidth(2)
                 WAV文件.setframerate(24000)
                 WAV文件.writeframes(输出.read())
-            return str(输出路径)
+            return str(缓存输出路径)
 
         return await asyncio.to_thread(解码并写入)
 

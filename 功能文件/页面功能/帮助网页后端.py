@@ -17,7 +17,6 @@ import re
 import secrets
 import socket
 import threading
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -1091,11 +1090,12 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                         pass
                     continue
                 后缀 = re.sub(r'[^A-Za-z0-9.]', '', Path(文件名).suffix.lower())[:12]
-                fd, 路径文本 = tempfile.mkstemp(prefix='mantou-web-', suffix=后缀)
-                临时路径 = Path(路径文本)
+                from 功能文件.管理功能.基础功能 import 文件缓存
+
+                临时路径 = 文件缓存.创建临时缓存文件("mantou-web-", 后缀)
                 已读 = 0
                 try:
-                    with os.fdopen(fd, 'wb') as 文件句柄:
+                    with 临时路径.open('wb') as 文件句柄:
                         while True:
                             数据块 = await 部分.read_chunk(size=1024 * 1024)
                             if not 数据块:
@@ -1352,14 +1352,10 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
 
 
 def _默认本地发送媒体目录() -> Path:
-    """使用 AstrBot 数据目录保存发送媒体，避免写入插件代码目录。"""
-    try:
-        插件根目录 = Path(__file__).resolve().parents[2]
-        if 插件根目录.parent.name.lower() == "plugins":
-            return 插件根目录.parent.parent / "mantou_bot_media"
-    except (OSError, IndexError):
-        pass
-    return Path(tempfile.gettempdir()) / "mantou_bot_media"
+    """返回统一文件缓存下的媒体分类目录。"""
+    from 功能文件.管理功能.基础功能 import 文件缓存
+
+    return 文件缓存.媒体缓存目录
 
 
 本地发送媒体目录 = _默认本地发送媒体目录()

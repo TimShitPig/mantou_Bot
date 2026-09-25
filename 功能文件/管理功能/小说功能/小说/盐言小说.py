@@ -29,7 +29,7 @@ try:
 except Exception:
     小说网盘 = None
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
@@ -56,7 +56,7 @@ class _盐言目录接口异常(RuntimeError):
     pass
 
 
-下载缓存目录 = 小说缓存工具.下载缓存目录
+小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
@@ -1087,16 +1087,16 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
 
 
 def 写入缓存(文件名: str, 文件内容: bytes) -> Path:
-    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    小说缓存目录.mkdir(parents=True, exist_ok=True)
     基础名 = Path(清理文件名(文件名)).name or "盐言文章.txt"
     if not 基础名.lower().endswith(".txt"):
         基础名 += ".txt"
-    路径 = 下载缓存目录 / 基础名
+    路径 = 小说缓存目录 / 基础名
     for 序号 in range(1000):
-        候选 = 路径 if 序号 == 0 else 下载缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
+        候选 = 路径 if 序号 == 0 else 小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
         if not 候选.exists():
             候选.write_bytes(文件内容)
-            小说缓存工具.标记下载缓存正在使用(候选)
+            文件缓存工具.标记小说缓存正在使用(候选)
             return 候选
     raise RuntimeError("下载缓存文件过多")
 
@@ -1104,7 +1104,7 @@ def 写入缓存(文件名: str, 文件内容: bytes) -> Path:
 def 删除缓存(路径: Any) -> None:
     if not 路径:
         return
-    小说缓存工具.删除下载缓存文件(路径)
+    文件缓存工具.删除小说缓存文件(路径)
 
 
 def 清理文件名(值: Any) -> str:

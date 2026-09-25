@@ -36,7 +36,7 @@ except Exception as exc:
     百度网盘 = None
     logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 USER_ID = "6226157280"
@@ -64,7 +64,7 @@ SEARCH_NO_SIGN_KEYS = {
 书旗正文最大动态并发数 = 400
 书旗正文最大尝试次数 = 3
 书旗解码最大动态并发数 = max(4, min(64, (os.cpu_count() or 4) * 2))
-下载缓存目录 = 小说缓存工具.下载缓存目录
+小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
 
@@ -875,7 +875,7 @@ async def 准备发送文本文件给当前会话(
     logger.info(f"书旗小说准备上传：文件={文件名}, 大小={len(文件内容)}")
     缓存路径 = 写入下载缓存文件(文件名, 文件内容)
     if 小说网盘 is None:
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {
             "sent": False,
             "fallback_text": "",
@@ -890,7 +890,7 @@ async def 准备发送文本文件给当前会话(
                 f"书旗小说主网盘上传失败：网盘={网盘名称}, "
                 f"文件={文件名}, 错误={网盘结果.get('error')}"
             )
-            删除下载缓存文件(缓存路径)
+            删除小说缓存文件(缓存路径)
             return {
                 "sent": False,
                 "fallback_text": "",
@@ -921,7 +921,7 @@ async def 准备发送文本文件给当前会话(
                 "source_cache_path": 缓存路径,
                 "error": str(完成结果.get("error") or ""),
             }
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {
             "sent": False,
             "fallback_text": "",
@@ -932,7 +932,7 @@ async def 准备发送文本文件给当前会话(
         logger.warning(
             f"书旗小说主网盘上传或完成消息发送失败：文件={文件名}, 错误={exc}"
         )
-        删除下载缓存文件(缓存路径)
+        删除小说缓存文件(缓存路径)
         return {
             "sent": False,
             "fallback_text": "",
@@ -964,26 +964,26 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
                 f"书旗小说百度网盘后台上传异常，不影响主分享：文件={文件名}, 错误={exc}"
             )
         finally:
-            删除下载缓存文件(源缓存路径)
+            删除小说缓存文件(源缓存路径)
 
     try:
         asyncio.create_task(执行上传并清理())
     except RuntimeError:
-        删除下载缓存文件(源缓存路径)
+        删除小说缓存文件(源缓存路径)
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    下载缓存目录.mkdir(parents=True, exist_ok=True)
+    小说缓存目录.mkdir(parents=True, exist_ok=True)
     缓存路径 = 生成不冲突缓存路径(文件名)
     缓存路径.write_bytes(文件内容)
-    小说缓存工具.标记下载缓存正在使用(缓存路径)
+    文件缓存工具.标记小说缓存正在使用(缓存路径)
     return 缓存路径
 
 
-def 删除下载缓存文件(缓存路径: Any) -> None:
+def 删除小说缓存文件(缓存路径: Any) -> None:
     if not 缓存路径:
         return
-    if not 小说缓存工具.删除下载缓存文件(缓存路径):
+    if not 文件缓存工具.删除小说缓存文件(缓存路径):
         logger.debug(f"书旗小说下载缓存仍在等待续传：文件={缓存路径}")
         return
     try:
@@ -996,14 +996,14 @@ def 生成不冲突缓存路径(文件名: str) -> Path:
     安全文件名 = Path(清理文件名(文件名)).name or "书旗小说.txt"
     if not 安全文件名.lower().endswith(".txt"):
         安全文件名 += ".txt"
-    缓存路径 = 下载缓存目录 / 安全文件名
+    缓存路径 = 小说缓存目录 / 安全文件名
     if not 缓存路径.exists():
         return 缓存路径
     for 序号 in range(1, 1000):
-        候选路径 = 下载缓存目录 / f"{缓存路径.stem}_{序号}{缓存路径.suffix}"
+        候选路径 = 小说缓存目录 / f"{缓存路径.stem}_{序号}{缓存路径.suffix}"
         if not 候选路径.exists():
             return 候选路径
-    raise RuntimeError("下载缓存目录中同名文件过多")
+    raise RuntimeError("小说缓存目录中同名文件过多")
 
 
 def 解析书旗下载目标(链接: str) -> dict[str, str]:

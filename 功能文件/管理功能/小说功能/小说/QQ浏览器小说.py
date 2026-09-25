@@ -24,7 +24,7 @@ except Exception as exc:
     小说网盘 = None
     logger.warning("QQ浏览器小说网盘模块加载失败：错误=%s", type(exc).__name__)
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 QQ浏览器搜索地址 = "https://so.html5.qq.com/ajax/real/search_result"
@@ -38,7 +38,7 @@ QQ浏览器正文最大并发数 = 4
 QQ浏览器请求重试次数 = 3
 # 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
 QQ浏览器进度日志分段数 = 4
-QQ浏览器下载缓存目录 = 小说缓存工具.下载缓存目录
+QQ浏览器小说缓存目录 = 文件缓存工具.小说缓存目录
 QQ浏览器文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -799,27 +799,27 @@ def 生成不冲突QQ浏览器缓存路径(文件名: str) -> Path:
     安全文件名 = Path(清理QQ浏览器文件名(文件名)).name or "QQ浏览器小说.txt"
     if not 安全文件名.lower().endswith(".txt"):
         安全文件名 = f"{安全文件名}.txt"
-    路径 = QQ浏览器下载缓存目录 / 安全文件名
+    路径 = QQ浏览器小说缓存目录 / 安全文件名
     if not 路径.exists():
         return 路径
     for 序号 in range(1, 1000):
-        候选 = QQ浏览器下载缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
+        候选 = QQ浏览器小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
         if not 候选.exists():
             return 候选
     raise RuntimeError("QQ浏览器下载缓存文件名冲突")
 
 
 def 写入QQ浏览器下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    QQ浏览器下载缓存目录.mkdir(parents=True, exist_ok=True)
+    QQ浏览器小说缓存目录.mkdir(parents=True, exist_ok=True)
     路径 = 生成不冲突QQ浏览器缓存路径(文件名)
     路径.write_bytes(文件内容)
-    小说缓存工具.标记下载缓存正在使用(路径)
+    文件缓存工具.标记小说缓存正在使用(路径)
     return 路径
 
 
 def 删除QQ浏览器缓存文件(缓存路径: Any) -> None:
     if 缓存路径:
-        小说缓存工具.删除下载缓存文件(缓存路径)
+        文件缓存工具.删除小说缓存文件(缓存路径)
 
 
 async def 准备发送QQ浏览器文本文件(

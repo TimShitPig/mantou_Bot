@@ -33,7 +33,7 @@ try:
 except Exception:
     小说网盘 = None
 
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 晋江详情地址 = "https://app-cdn.jjwxc.net/androidapi/novelbasicinfo"
@@ -45,7 +45,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 晋江搜索数量上限 = 30
 晋江请求重试次数 = 3
 晋江进度日志最多条数 = 5
-晋江下载缓存目录 = 小说缓存工具.下载缓存目录
+晋江小说缓存目录 = 文件缓存工具.小说缓存目录
 晋江文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -443,22 +443,22 @@ def 生成晋江小说文件内容(
 
 
 def 写入晋江下载缓存文件(文件名: str, 内容: bytes) -> Path:
-    晋江下载缓存目录.mkdir(parents=True, exist_ok=True)
-    path = 晋江下载缓存目录 / Path(_清理文件名(文件名)).name
+    晋江小说缓存目录.mkdir(parents=True, exist_ok=True)
+    path = 晋江小说缓存目录 / Path(_清理文件名(文件名)).name
     if path.exists():
         for index in range(1, 1000):
-            candidate = 晋江下载缓存目录 / f"{path.stem}_{index}{path.suffix}"
+            candidate = 晋江小说缓存目录 / f"{path.stem}_{index}{path.suffix}"
             if not candidate.exists():
                 path = candidate
                 break
     path.write_bytes(内容)
-    小说缓存工具.标记下载缓存正在使用(path)
+    文件缓存工具.标记小说缓存正在使用(path)
     return path
 
 
 def 删除晋江缓存文件(path: Any) -> None:
     if path:
-        小说缓存工具.删除下载缓存文件(path)
+        文件缓存工具.删除小说缓存文件(path)
 
 
 async def 准备发送晋江文本文件(
@@ -515,11 +515,11 @@ def 启动晋江百度后台上传并清理源文件(配置: Any, path: Any, 文
             logger.warning("晋江小说百度后台备份异常：错误类型=%s", type(exc).__name__)
         finally:
             if not 备份完成:
-                小说缓存工具.更新上传任务(
+                文件缓存工具.更新上传任务(
                     path, "backup_pending", last_error="百度网盘后台备份未完成"
                 )
             else:
-                小说缓存工具.更新上传任务(path, "primary_done", last_error="")
+                文件缓存工具.更新上传任务(path, "primary_done", last_error="")
             删除晋江缓存文件(path)
 
     try:

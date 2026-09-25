@@ -22,7 +22,7 @@ try:
     from 功能文件.管理功能.网盘功能 import 小说网盘, 百度网盘
 except Exception:
     百度网盘 = 小说网盘 = None
-from 功能文件.管理功能.小说功能.功能 import 下载缓存清理 as 小说缓存工具
+from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 猫眼搜索地址 = "https://ah2.zhangyue.com/zybook3/u/p/api.php"
@@ -47,7 +47,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 )
 猫眼并发数 = 80
 猫眼重试次数 = 3
-猫眼缓存目录 = 小说缓存工具.下载缓存目录
+猫眼缓存目录 = 文件缓存工具.小说缓存目录
 猫眼声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
 
@@ -368,7 +368,7 @@ def _缓存(filename: str, content: bytes) -> Path:
         )
         if not path.exists():
             path.write_bytes(content)
-            小说缓存工具.标记下载缓存正在使用(path)
+            文件缓存工具.标记小说缓存正在使用(path)
             return path
     raise RuntimeError("缓存文件名冲突")
 
@@ -378,12 +378,12 @@ async def _发送(
 ) -> dict[str, Any]:
     path = _缓存(filename, content)
     if 小说网盘 is None:
-        小说缓存工具.删除下载缓存文件(path)
+        文件缓存工具.删除小说缓存文件(path)
         return {"sent": False, "source_cache_path": None}
     try:
         uploaded = await 小说网盘.上传小说并获取分享链接(config, path, filename)
         if not uploaded.get("success"):
-            小说缓存工具.删除下载缓存文件(path)
+            文件缓存工具.删除小说缓存文件(path)
             return {"sent": False, "source_cache_path": None}
         sent = await 小说网盘.发送小说下载完成链接(
             event, title, author, str(uploaded.get("share_url") or "")
@@ -395,7 +395,7 @@ async def _发送(
         }
     except Exception as exc:
         logger.warning("猫眼小说文件发送失败：错误类型=%s", type(exc).__name__)
-        小说缓存工具.删除下载缓存文件(path)
+        文件缓存工具.删除小说缓存文件(path)
         return {"sent": False, "source_cache_path": None}
 
 
@@ -410,12 +410,12 @@ def _后台(config: Any, path: Any, filename: str) -> None:
         except Exception as exc:
             logger.warning("猫眼小说百度后台备份异常：错误类型=%s", type(exc).__name__)
         finally:
-            小说缓存工具.删除下载缓存文件(path)
+            文件缓存工具.删除小说缓存文件(path)
 
     try:
         asyncio.create_task(task())
     except RuntimeError:
-        小说缓存工具.删除下载缓存文件(path)
+        文件缓存工具.删除小说缓存文件(path)
 
 
 async def 生成猫眼下载回复流(
