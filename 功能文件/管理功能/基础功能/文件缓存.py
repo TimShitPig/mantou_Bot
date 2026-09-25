@@ -593,8 +593,11 @@ async def 每日文件缓存任务(
         await asyncio.sleep(计算下次本地零点等待秒数())
         try:
             已清理 = 清理过期小说缓存(缓存目录)
+            已清理临时数 = 清理过期临时文件缓存()
             if 清理完成回调 is not None:
                 清理完成回调(已清理)
+            if 已清理临时数:
+                日志.info("每日零点清理过期临时缓存：数量=%s", 已清理临时数)
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
