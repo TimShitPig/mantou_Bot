@@ -2628,7 +2628,18 @@ def _匹配QQ阅读正文章节文件(
         if normalized_name.endswith(("info.txt", "info.json")) or name == "code":
             continue
         chapter_id = ""
-        for candidate in _QQ阅读章节文件候选键(str(name)):
+        候选键 = _QQ阅读章节文件候选键(str(name))
+        # 官方正文包的数字文件名是实际章节号；info.txt 的 UUID 可能跨章节重复，
+        # 因此必须先使用文件名中的目录 ID，避免把第 1 章映射到其他章节。
+        for candidate in 候选键:
+            if candidate.isdigit() and candidate in requested_set:
+                chapter_id = candidate
+                break
+        if chapter_id:
+            if chapter_id not in matched:
+                matched[chapter_id] = (str(name), value)
+            continue
+        for candidate in 候选键:
             target = info_mapping.get(candidate) or (
                 candidate if candidate in requested_set else ""
             )
