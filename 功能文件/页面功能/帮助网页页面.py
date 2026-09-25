@@ -360,9 +360,10 @@ from .帮助网页脚本 import 控制台脚本
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
              /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
-             .msg-list-resizer { position:absolute; z-index:6; top:0; right:0; bottom:0; width:14px; padding:0; border:0; background:transparent; cursor:col-resize; }
+             /* 缩放拖柄移到滚动条外侧，避免与会话列表滚轮滑块叠在同一条轨道。 */
+             .msg-list-resizer { position:absolute; z-index:6; top:0; right:-10px; bottom:0; width:12px; padding:0; border:0; background:transparent; cursor:col-resize; }
              .msg-list-resizer,.msg-composer-resizer { touch-action:none; }
-             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:6px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
+             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:5px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
              .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
              .msg-list-resizer:hover::before,.msg-list-resizer:focus-visible::before { background:#12b7f5; }
              .msg-panel-toggle { display:grid; place-items:center; flex:0 0 auto; width:27px; height:27px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#fff; color:#7a818a; font-size:17px; line-height:1; cursor:pointer; transition:background .16s ease,border-color .16s ease,color .16s ease; }
