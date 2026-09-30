@@ -27,6 +27,7 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 默认上传目录 = "/小说机器人"
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
+目录列表最大并发数 = 4
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 _夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
@@ -217,8 +218,8 @@ class 夸克网盘客户端:
         结果: list[dict[str, Any]] = []
         已见ID: set[str] = set()
         总数量 = 0
-        页码 = 1
-        while True:
+
+        async def 请求目录页(页码: int) -> tuple[list[Any], int]:
             数据 = await self.请求JSON(
                 "GET",
                 "/file/sort",
@@ -238,11 +239,15 @@ class 夸克网盘客户端:
             项目列表 = 读取列表(数据, ("data", "list"))
             数据主体 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
             元数据 = 数据主体.get("metadata") or 数据.get("metadata") or {}
-            if isinstance(元数据, dict) and not 总数量:
+            页总数 = 0
+            if isinstance(元数据, dict):
                 for 字段名 in ("_total", "total", "total_count", "total_num"):
-                    总数量 = 安全整数(元数据.get(字段名), 0)
-                    if 总数量 > 0:
+                    页总数 = 安全整数(元数据.get(字段名), 0)
+                    if 页总数 > 0:
                         break
+            return 项目列表, 页总数
+
+        def 合并项目(项目列表: list[Any]) -> int:
             新增数量 = 0
             for 项目 in 项目列表:
                 if not isinstance(项目, dict):
@@ -258,6 +263,79 @@ class 夸克网盘客户端:
                 已见ID.add(项目标识)
                 结果.append(项目)
                 新增数量 += 1
+            return 新增数量
+
+        首页项目, 总数量 = await 请求目录页(1)
+        首屏新增数量 = 合并项目(首页项目)
+        if 总数量 and len(结果) >= 总数量:
+            return 结果
+        if not 首页项目:
+            if 总数量 and len(结果) < 总数量:
+                raise RuntimeError("夸克网盘目录响应不完整")
+            return 结果
+        if 首屏新增数量 == 0:
+            raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
+
+        if 总数量 > 目录列表每页数量 and len(首页项目) == 目录列表每页数量:
+            页数上限 = (总数量 + 目录列表每页数量 - 1) // 目录列表每页数量
+            metadata一致 = True
+            for 起始页 in range(2, 页数上限 + 1, 目录列表最大并发数):
+                页码列表 = list(
+                    range(
+                        起始页,
+                        min(起始页 + 目录列表最大并发数, 页数上限 + 1),
+                    )
+                )
+                批次Cookie = self.cookie
+                批次结果 = await asyncio.gather(
+                    *(请求目录页(页码) for 页码 in 页码列表),
+                    return_exceptions=True,
+                )
+                if any(
+                    isinstance(响应, asyncio.CancelledError) for 响应 in 批次结果
+                ):
+                    raise asyncio.CancelledError
+                if self.cookie != 批次Cookie or any(
+                    isinstance(响应, Exception) for 响应 in 批次结果
+                ):
+                    metadata一致 = False
+                    break
+                for 页码, 响应 in zip(页码列表, 批次结果):
+                    项目列表, 页总数 = 响应
+                    该页预期数量 = min(
+                        目录列表每页数量,
+                        总数量 - (页码 - 1) * 目录列表每页数量,
+                    )
+                    if (页总数 and 页总数 != 总数量) or len(
+                        项目列表
+                    ) != 该页预期数量:
+                        metadata一致 = False
+                        break
+                if not metadata一致:
+                    break
+                for 页码, 响应 in zip(页码列表, 批次结果):
+                    项目列表, _ = 响应
+                    合并项目(项目列表)
+                    if len(结果) != min(
+                        总数量, 页码 * 目录列表每页数量
+                    ):
+                        metadata一致 = False
+                        break
+                if not metadata一致:
+                    break
+            if metadata一致 and len(结果) == 总数量:
+                return 结果
+
+            结果.clear()
+            已见ID.clear()
+            合并项目(首页项目)
+
+        页码 = 2
+        while True:
+            项目列表, 页总数 = await 请求目录页(页码)
+            if not 总数量:
+                总数量 = 页总数
+            新增数量 = 合并项目(项目列表)
             if 总数量 and len(结果) >= 总数量:
                 break
             if not 项目列表:
