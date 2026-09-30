@@ -8,6 +8,7 @@ import json
 import mimetypes
 import re
 import time
+import weakref
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,12 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 默认上传目录 = "/小说机器人"
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
-目录列表最大页数 = 20
+目录列表最大页数 = 100
 文件可见重试次数 = 12
 分享链接重试次数 = 12
+_夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
+if not isinstance(_夸克同名上传锁表, weakref.WeakValueDictionary):
+    _夸克同名上传锁表 = weakref.WeakValueDictionary()
 浏览器请求头 = {
     "accept": "application/json, text/plain, */*",
     "content-type": "application/json",
@@ -71,15 +75,17 @@ class 夸克网盘客户端:
     async def 上传文件并创建分享(
         self, 本地路径: str | Path, 文件名: str, 上传目录: str
     ) -> str:
-        目录ID = await self.确保目录路径(上传目录)
-        await self.删除同名普通文件(文件名, 目录ID)
-        文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
-        if not 文件ID:
-            raise RuntimeError("夸克网盘上传后没有返回文件ID")
-        分享链接 = await self.创建分享(文件ID, 文件名)
-        if not 分享链接:
-            raise RuntimeError("夸克网盘没有返回分享链接")
-        return 分享链接
+        上传锁 = 获取夸克同名上传锁(self.cookie, 上传目录, 文件名)
+        async with 上传锁:
+            目录ID = await self.确保目录路径(上传目录)
+            await self.删除同名普通文件(文件名, 目录ID)
+            文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
+            if not 文件ID:
+                raise RuntimeError("夸克网盘上传后没有返回文件ID")
+            分享链接 = await self.创建分享(文件ID, 文件名)
+            if not 分享链接:
+                raise RuntimeError("夸克网盘没有返回分享链接")
+            return 分享链接
 
     async def 确保目录路径(self, 上传目录: str) -> str:
         当前目录ID = "0"
@@ -142,24 +148,55 @@ class 夸克网盘客户端:
         return len(去重ID)
 
     async def 删除同名普通文件(self, 文件名: str, 父目录ID: str) -> None:
-        文件ID列表 = [
-            读取文件ID(项目)
-            for 项目 in await self.列出目录全部项目(父目录ID)
-            if not 是文件夹项目(项目)
-            and 读取文件名(项目) == 文件名
-            and 读取文件ID(项目)
-        ]
-        if not 文件ID列表:
-            return
-        try:
-            await self.删除文件ID列表(文件ID列表)
-        except Exception as 异常:
+        已删除ID: set[str] = set()
+        for 尝试次数 in range(1, 文件可见重试次数 + 1):
+            文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
+            if not 文件ID列表:
+                logger.debug(
+                    f"夸克网盘同名清理确认完成：file={文件名}, "
+                    f"deleted={len(已删除ID)}, parent_id={父目录ID}"
+                )
+                return
+            待删ID = [文件ID for 文件ID in 文件ID列表 if 文件ID not in 已删除ID]
+            if 待删ID:
+                try:
+                    await self.删除文件ID列表(待删ID)
+                    已删除ID.update(待删ID)
+                except Exception as 异常:
+                    logger.warning(
+                        f"夸克网盘删除同名旧文件重试：file={文件名}, "
+                        f"attempt={尝试次数}/{文件可见重试次数}, "
+                        f"error_type={type(异常).__name__}"
+                    )
+                    if 尝试次数 == 文件可见重试次数:
+                        raise RuntimeError("夸克网盘删除同名旧文件失败") from 异常
+            if 尝试次数 < 文件可见重试次数:
+                await asyncio.sleep(计算等待秒数(尝试次数))
+
+        剩余ID = await self.查找同名普通文件ID列表(文件名, 父目录ID)
+        if 剩余ID:
             raise RuntimeError(
-                f"夸克网盘删除同名旧文件失败：错误类型={type(异常).__name__}"
-            ) from 异常
+                f"夸克网盘同名旧文件仍可见，停止上传：file={文件名}, "
+                f"count={len(剩余ID)}, parent_id={父目录ID}"
+            )
         logger.debug(
-            f"夸克网盘上传前已删除同名旧文件：file={文件名}, count={len(文件ID列表)}"
+            f"夸克网盘同名清理确认完成：file={文件名}, "
+            f"deleted={len(已删除ID)}, parent_id={父目录ID}"
         )
+
+    async def 查找同名普通文件ID列表(
+        self, 文件名: str, 父目录ID: str
+    ) -> list[str]:
+        文件ID列表 = []
+        for 项目 in await self.列出目录全部项目(父目录ID):
+            if not isinstance(项目, dict):
+                continue
+            if 是文件夹项目(项目) or 读取文件名(项目) != 文件名:
+                continue
+            文件ID = 读取文件ID(项目)
+            if 文件ID and 文件ID not in 文件ID列表:
+                文件ID列表.append(文件ID)
+        return 文件ID列表
 
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
@@ -179,7 +216,9 @@ class 夸克网盘客户端:
 
     async def 列出目录全部项目(self, 父目录ID: str) -> list[dict[str, Any]]:
         结果: list[dict[str, Any]] = []
-        for 页码 in range(1, 目录列表最大页数 + 1):
+        已见ID: set[str] = set()
+        总数量 = 0
+        for 页码 in range(1, 目录列表最大页数 + 2):
             数据 = await self.请求JSON(
                 "GET",
                 "/file/sort",
@@ -197,9 +236,38 @@ class 夸克网盘客户端:
             if not 接口成功(数据):
                 raise RuntimeError(f"夸克网盘目录列表获取失败：{限制文本长度(数据)}")
             项目列表 = 读取列表(数据, ("data", "list"))
-            结果.extend(项目 for 项目 in 项目列表 if isinstance(项目, dict))
-            if len(项目列表) < 目录列表每页数量:
+            数据主体 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
+            元数据 = 数据主体.get("metadata") or 数据.get("metadata") or {}
+            if isinstance(元数据, dict) and not 总数量:
+                for 字段名 in ("_total", "total", "total_count", "total_num"):
+                    总数量 = 安全整数(元数据.get(字段名), 0)
+                    if 总数量 > 0:
+                        break
+            if 页码 > 目录列表最大页数:
+                if 项目列表:
+                    raise RuntimeError("夸克网盘目录列表超过扫描上限")
+                if 总数量 and len(结果) < 总数量:
+                    raise RuntimeError("夸克网盘目录响应为空，扫描结果不完整")
                 break
+            新增数量 = 0
+            for 项目 in 项目列表:
+                if not isinstance(项目, dict):
+                    continue
+                文件ID = 读取文件ID(项目)
+                if 文件ID and 文件ID in 已见ID:
+                    continue
+                if 文件ID:
+                    已见ID.add(文件ID)
+                结果.append(项目)
+                新增数量 += 1
+            if 总数量 and len(结果) >= 总数量:
+                break
+            if not 项目列表:
+                if 总数量 and len(结果) < 总数量:
+                    raise RuntimeError("夸克网盘目录响应不完整")
+                break
+            if 新增数量 == 0:
+                raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
         return 结果
 
     async def 上传文件(self, 本地路径: str | Path, 父目录ID: str, 文件名: str) -> str:
@@ -669,6 +737,25 @@ def 拆分上传目录(上传目录: str) -> list[str]:
         for 片段 in str(上传目录 or 默认上传目录).replace("\\", "/").split("/")
         if 片段.strip()
     ]
+
+
+def 获取夸克同名上传锁(cookie: str, 上传目录: str, 文件名: str) -> asyncio.Lock:
+    稳定Cookie片段 = [
+        片段.strip()
+        for 片段 in 清理Cookie(cookie).split(";")
+        if 片段.strip()
+        and 片段.split("=", 1)[0].strip().lower() not in {"__puus", "ctoken"}
+    ]
+    账号摘要 = hashlib.sha256(";".join(稳定Cookie片段).encode("utf-8")).hexdigest()
+    目录路径 = "/".join(拆分上传目录(上传目录))
+    锁键 = hashlib.sha256(
+        f"{账号摘要}\0{目录路径}\0{文件名}".encode("utf-8")
+    ).hexdigest()
+    锁 = _夸克同名上传锁表.get(锁键)
+    if 锁 is None:
+        锁 = asyncio.Lock()
+        _夸克同名上传锁表[锁键] = 锁
+    return 锁
 
 
 def 接口成功(数据: Any) -> bool:
