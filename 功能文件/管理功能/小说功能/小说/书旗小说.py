@@ -1069,6 +1069,7 @@ def 提取书旗链接(值: Any) -> str:
         return ""
     文本 = str(值)
     模式列表 = (
+        r"https?://c\d+\.shuqireader\.com/sapi/book/sharecover/?\?[^\s'\"<>，。]*",
         r"https?://d\.shuqi\.com/[^\s'\"<>，。]*",
         r"https?://(?:www\.)?shuqi\.com/book/\d+\.html[^\s'\"<>，。]*",
         r"https?://t\.shuqi\.com/book/\d+/?[^\s'\"<>，。]*",

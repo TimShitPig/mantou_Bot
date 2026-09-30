@@ -1,5 +1,9 @@
 # 更新日志
 
+## v6.1.83
+
+- 修复：识别书旗 c*.shuqireader.com/sapi/book/sharecover 分享链接，提取 bookId 后复用现有 iOS 目录与正文下载流程。
+
 ## v6.1.82
 
 - 修复：兼容七猫章节接口返回的加密 EPUB 正文包，按 EPUB spine 提取 XHTML 正文，同时保留旧版 UTF-8 纯文本解码。
