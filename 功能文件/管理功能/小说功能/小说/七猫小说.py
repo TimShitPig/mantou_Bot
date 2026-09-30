@@ -4,11 +4,16 @@ import asyncio
 import base64
 import hashlib
 import html
+import io
 import json
+import posixpath
 import random
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import unquote, urlsplit
 
 import aiohttp
 from astrbot.api import logger
@@ -850,7 +855,129 @@ def 解密正文(加密正文: str) -> str:
     原始内容 = base64.b64decode(加密正文)
     cipher = AES.new(解密密钥, AES.MODE_CBC, iv=原始内容[:16])
     解密内容 = unpad(cipher.decrypt(原始内容[16:]), AES.block_size)
+    if 解密内容.startswith(b"PK\x03\x04"):
+        return 提取EPUB正文(解密内容)
     return 解密内容.decode("utf-8").strip()
+
+
+def 提取EPUB正文(EPUB内容: bytes) -> str:
+    """按 EPUB spine 顺序提取七猫单章包中的 XHTML 正文。"""
+    with zipfile.ZipFile(io.BytesIO(EPUB内容)) as EPUB:
+        成员名称 = set(EPUB.namelist())
+        容器 = ET.fromstring(EPUB.read("META-INF/container.xml"))
+        根文件 = next(
+            (
+                节点.get("full-path")
+                for 节点 in 容器.iter()
+                if 节点.tag.rsplit("}", 1)[-1] == "rootfile"
+            ),
+            "",
+        )
+        根文件 = posixpath.normpath((根文件 or "").replace("\\", "/"))
+        if not 根文件 or 根文件 == ".." or 根文件.startswith("../"):
+            raise ValueError("章节 EPUB 的 OPF 路径无效")
+        if 根文件 not in 成员名称:
+            raise ValueError("章节 EPUB 缺少 OPF 文件")
+
+        OPF = ET.fromstring(EPUB.read(根文件))
+        清单: dict[str, str] = {}
+        for 节点 in OPF.iter():
+            if 节点.tag.rsplit("}", 1)[-1] != "item":
+                continue
+            标识 = 节点.get("id")
+            地址 = 节点.get("href")
+            类型 = 节点.get("media-type", "")
+            if (
+                标识
+                and 地址
+                and (
+                    类型 == "application/xhtml+xml"
+                    or 地址.lower().endswith((".xhtml", ".html", ".htm"))
+                )
+            ):
+                清单[标识] = 地址
+
+        章节地址列表 = [
+            清单[节点.get("idref", "")]
+            for 节点 in OPF.iter()
+            if 节点.tag.rsplit("}", 1)[-1] == "itemref"
+            and 节点.get("idref") in 清单
+        ]
+        if not 章节地址列表:
+            raise ValueError("章节 EPUB 的 spine 为空")
+
+        块级标签 = {
+            "address",
+            "article",
+            "blockquote",
+            "body",
+            "div",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "li",
+            "ol",
+            "p",
+            "section",
+            "table",
+            "tr",
+        }
+
+        def 追加文本(节点: ET.Element, 文本段: list[str]) -> None:
+            标签 = 节点.tag.rsplit("}", 1)[-1]
+            if 标签 in {"script", "style"}:
+                return
+            if 标签 in {"br", "hr"}:
+                文本段.append("\n")
+                return
+            if 标签 in 块级标签:
+                文本段.append("\n")
+            if 节点.text:
+                文本段.append(节点.text)
+            for 子节点 in 节点:
+                追加文本(子节点, 文本段)
+                if 子节点.tail:
+                    文本段.append(子节点.tail)
+            if 标签 in 块级标签:
+                文本段.append("\n")
+
+        文档列表 = []
+        已读取文档 = False
+        for 地址 in 章节地址列表:
+            URL = urlsplit(地址)
+            if URL.scheme or URL.netloc:
+                continue
+            文档 = posixpath.normpath(
+                posixpath.join(posixpath.dirname(根文件), unquote(URL.path))
+            )
+            if 文档 == ".." or 文档.startswith("../") or 文档 not in 成员名称:
+                continue
+            XHTML = ET.fromstring(EPUB.read(文档))
+            已读取文档 = True
+            正文节点 = next(
+                (
+                    节点
+                    for 节点 in XHTML.iter()
+                    if 节点.tag.rsplit("}", 1)[-1] == "body"
+                ),
+                XHTML,
+            )
+            文本段: list[str] = []
+            追加文本(正文节点, 文本段)
+            文本 = "".join(文本段).replace("\r\n", "\n").replace("\r", "\n")
+            文本 = 文本.replace("\xa0", " ")
+            文本 = re.sub(r"[ \t\f\v]+", " ", 文本)
+            文本 = re.sub(r" *\n *", "\n", 文本)
+            文本 = re.sub(r"\n{3,}", "\n\n", 文本).strip()
+            if 文本:
+                文档列表.append(文本)
+
+        if not 文档列表:
+            if 已读取文档:
+                return ""
+            raise ValueError("章节 EPUB 没有可用正文")
+        return "\n\n".join(文档列表).strip()
 
 
 def 提取直接七猫链接参数(命令文本: str) -> str | None:
