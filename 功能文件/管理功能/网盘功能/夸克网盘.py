@@ -27,7 +27,6 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 默认上传目录 = "/小说机器人"
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
-目录列表最大页数 = 100
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 _夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
@@ -218,7 +217,8 @@ class 夸克网盘客户端:
         结果: list[dict[str, Any]] = []
         已见ID: set[str] = set()
         总数量 = 0
-        for 页码 in range(1, 目录列表最大页数 + 2):
+        页码 = 1
+        while True:
             数据 = await self.请求JSON(
                 "GET",
                 "/file/sort",
@@ -243,21 +243,19 @@ class 夸克网盘客户端:
                     总数量 = 安全整数(元数据.get(字段名), 0)
                     if 总数量 > 0:
                         break
-            if 页码 > 目录列表最大页数:
-                if 项目列表:
-                    raise RuntimeError("夸克网盘目录列表超过扫描上限")
-                if 总数量 and len(结果) < 总数量:
-                    raise RuntimeError("夸克网盘目录响应为空，扫描结果不完整")
-                break
             新增数量 = 0
             for 项目 in 项目列表:
                 if not isinstance(项目, dict):
                     continue
                 文件ID = 读取文件ID(项目)
-                if 文件ID and 文件ID in 已见ID:
+                项目标识 = 文件ID or hashlib.sha256(
+                    json.dumps(
+                        项目, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                ).hexdigest()
+                if 项目标识 in 已见ID:
                     continue
-                if 文件ID:
-                    已见ID.add(文件ID)
+                已见ID.add(项目标识)
                 结果.append(项目)
                 新增数量 += 1
             if 总数量 and len(结果) >= 总数量:
@@ -268,6 +266,7 @@ class 夸克网盘客户端:
                 break
             if 新增数量 == 0:
                 raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
+            页码 += 1
         return 结果
 
     async def 上传文件(self, 本地路径: str | Path, 父目录ID: str, 文件名: str) -> str:
