@@ -711,6 +711,34 @@ async def _请求外部提取(
         return 内容
 
 
+def _盐言错误分类(异常: BaseException, 深度: int = 0) -> str:
+    """生成不含请求地址、响应正文或分享凭据的有限错误分类。"""
+    if isinstance(异常, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(异常, aiohttp.ClientResponseError):
+        return f"http_{int(异常.status)}"
+    if isinstance(异常, aiohttp.ClientError):
+        return "http_client_error"
+    if 深度 < 5:
+        原因 = getattr(异常, "__cause__", None) or getattr(异常, "__context__", None)
+        if 原因 is not None and 原因 is not 异常:
+            return _盐言错误分类(原因, 深度 + 1)
+    文本 = str(异常 or "")
+    状态码 = re.fullmatch(r"HTTP\s+(\d{3})", 文本, re.I)
+    if 状态码:
+        return f"http_{状态码.group(1)}"
+    固定分类 = {
+        "盐言正文接口返回错误": "provider_rejected",
+        "盐言章节正文为空": "body_empty",
+        "盐言章节正文标题不匹配": "title_mismatch",
+        "盐言章节正文不完整": "body_incomplete",
+        "盐言章节正文获取失败": "body_fetch_failed",
+        "盐言章节详情请求失败": "header_fetch_failed",
+        "盐言链接参数不完整": "link_fields_missing",
+    }
+    return 固定分类.get(文本, type(异常).__name__)
+
+
 async def _获取单章正文(
     session: aiohttp.ClientSession,
     来源: str,
@@ -736,7 +764,8 @@ async def _获取单章正文(
             最后异常 = exc
             logger.debug(
                 f"盐言章节提取失败：章节编号={章节编号}, "
-                f"轮次={尝试次数 + 1}/{正文重试次数}, 错误={type(exc).__name__}"
+                f"轮次={尝试次数 + 1}/{正文重试次数}, "
+                f"错误类型={type(exc).__name__}, 错误分类={_盐言错误分类(exc)}"
             )
             if 尝试次数 + 1 < 正文重试次数:
                 await asyncio.sleep(min(1.5, 0.25 * (尝试次数 + 1)))
@@ -939,7 +968,8 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(
-            f"盐言小说下载失败：阶段={阶段}, 错误类型={type(exc).__name__}"
+            f"盐言小说下载失败：阶段={阶段}, 错误类型={type(exc).__name__}, "
+            f"错误分类={_盐言错误分类(exc)}"
         )
         yield "下载失败 请重试"
 
