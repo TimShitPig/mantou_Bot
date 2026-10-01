@@ -1680,12 +1680,33 @@
         const keys = [];
         const primary = msgMessageKey(message);
         if (primary) keys.push(`id:${primary}`);
-        // 同一官方网关负载可能经过全量/At 两条回调路径；原始负载相同
-        // 时视为同一条事件，避免不同适配器 ID 造成重复显示。
-         if (String(message.source || '').trim().toLowerCase() === 'qq_official') {
-           const raw = String(message.raw_message || '').trim();
-           if (raw) keys.push(`raw:${msgIdentityHash(raw)}`);
-         }
+        const isOfficial = String(message.source || '').trim().toLowerCase() === 'qq_official';
+        const sessionId = normalizeMsgIdentity(message._session || msgState.chatId);
+        const userId = normalizeMsgIdentity(message.user_id);
+        if (isOfficial) {
+          let rawPayload = message.raw_message;
+          if (typeof rawPayload === 'string') {
+            try { rawPayload = JSON.parse(rawPayload); } catch (_) { rawPayload = null; }
+          }
+          if (rawPayload && typeof rawPayload === 'object' && sessionId) {
+            const payloads = [rawPayload];
+            ['d', 'data', 'message', 'payload'].forEach((field) => {
+              const nested = rawPayload[field];
+              if (nested && typeof nested === 'object' && !Array.isArray(nested)) payloads.push(nested);
+            });
+            payloads.forEach((payload) => {
+              ['seq_in_channel', 'seq'].forEach((field) => {
+                const sequence = normalizeMsgIdentity(payload[field]);
+                if (sequence && sequence !== '0') {
+                  keys.push(`seq:${sessionId}:${userId}:${field}:${sequence}`);
+                }
+              });
+            });
+          }
+          // 回调负载相同但适配器 ID 不同时，仍按事件内容合并。
+          const raw = String(message.raw_message || '').trim();
+          if (raw && sessionId) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
+        }
         return keys;
       };
       const msgMessagesMatch = (left, right) => {
@@ -1709,14 +1730,35 @@
         });
       };
       const dedupeMsgMessages = (messages) => {
-        const seen = new Set();
-        return (Array.isArray(messages) ? messages : []).filter((message) => {
+        const seen = new Map();
+        const result = [];
+        (Array.isArray(messages) ? messages : []).forEach((message) => {
           const keys = msgMessageIdentityKeys(message);
-          if (!keys.length) return true;
-          if (keys.some((key) => seen.has(key))) return false;
-          keys.forEach((key) => seen.add(key));
-          return true;
+          const duplicateIndex = keys.map((key) => seen.get(key)).find((index) => Number.isInteger(index));
+          if (!keys.length || !Number.isInteger(duplicateIndex)) {
+            const index = result.length;
+            keys.forEach((key) => seen.set(key, index));
+            result.push(message);
+            return;
+          }
+          const existing = result[duplicateIndex];
+          if (!existing) return;
+          ['raw_message', 'avatar', 'nickname', 'user_id', 'reference_id', 'refidx'].forEach((field) => {
+            const oldValue = String(existing[field] || '');
+            const newValue = String(message?.[field] || '');
+            if (field === 'raw_message' ? newValue.length > oldValue.length : !oldValue && newValue) {
+              existing[field] = message[field];
+            }
+          });
+          if (msgIsRecalled(message)) existing.recalled = true;
+          const oldMedia = existing.media;
+          const newMedia = message?.media;
+          if ((!oldMedia || (typeof oldMedia === 'object' && !Object.keys(oldMedia).length)) && newMedia) {
+            existing.media = newMedia;
+          }
+          keys.forEach((key) => seen.set(key, duplicateIndex));
         });
+        return result;
       };
       const msgMessageListsEqual = (left, right) => {
         const first = Array.isArray(left) ? left : [];

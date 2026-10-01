@@ -659,24 +659,56 @@ def _提取消息ID(消息: Any) -> str:
     return ""
 
 
+def _提取官方消息序号键(记录: dict[str, Any]) -> tuple[str, ...]:
+    """从 QQ 官方原始负载提取跨群消息回调稳定的 seq 身份。"""
+    if str(记录.get("source") or "").strip().lower() != "qq_official":
+        return ()
+    会话标识 = str(记录.get("_session") or "").strip()
+    if not 会话标识:
+        return ()
+    负载 = _解析消息结构(记录.get("raw_message"))
+    if not isinstance(负载, dict):
+        return ()
+    待检查 = [负载]
+    for 字段 in ("d", "data", "message", "payload"):
+        嵌套 = 负载.get(字段)
+        if isinstance(嵌套, dict):
+            待检查.append(嵌套)
+    用户标识 = _规范消息ID(记录.get("user_id"))
+    前缀 = f"seq:{会话标识}:{用户标识}:"
+    键: list[str] = []
+    for 对象 in 待检查:
+        for 字段 in ("seq_in_channel", "seq"):
+            序号 = _规范消息ID(对象.get(字段))
+            if not 序号 or 序号 == "0":
+                continue
+            身份 = f"{前缀}{字段}:{序号}"
+            if 身份 not in 键:
+                键.append(身份)
+    return tuple(键)
+
+
 def _消息去重键(记录: dict[str, Any]) -> tuple[str, ...]:
-    """返回消息主键及官方原始事件键，避免双回调造成重复显示。"""
+    """按消息 ID、QQ 序号或官方原始事件身份去重。"""
     if not isinstance(记录, dict):
         return ()
     键: list[str] = []
     消息ID = _规范消息ID(记录.get("message_id"))
     if 消息ID:
         键.append(f"id:{消息ID}")
+    键.extend(_提取官方消息序号键(记录))
     # 同一网关负载在全量/At 两条回调路径中可能携带不同的适配器字段，
     # 但 raw_message 完全一致；只对官方接收事件使用该高置信度键。
     if str(记录.get("source") or "").strip().lower() == "qq_official":
+        会话标识 = str(记录.get("_session") or "").strip()
+        用户标识 = _规范消息ID(记录.get("user_id"))
         原始 = str(记录.get("raw_message") or "").strip()
-        if 原始:
+        if 原始 and 会话标识:
             try:
                 摘要 = hashlib.sha1(原始.encode("utf-8", errors="ignore")).hexdigest()
             except Exception:
                 摘要 = 原始[:512]
-            键.append(f"raw:{摘要}")
+            键.append(f"raw:{会话标识}:{用户标识}:{摘要}")
     return tuple(键)
 
 
@@ -780,12 +812,24 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     elif 新消息ID:
         已有记录["message_id"] = 新消息ID
     for 字段 in (
-        "user_id", "nickname", "content", "timestamp", "source", "raw_message",
+        "user_id", "nickname", "content", "timestamp", "source",
         "reference_id", "refidx", "avatar", "chat_type", "appid",
     ):
         新值 = 新记录.get(字段)
         if 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
             已有记录[字段] = 新值
+    旧原始消息 = str(已有记录.get("raw_message") or "")
+    新原始消息 = str(新记录.get("raw_message") or "")
+    旧原始结构 = _解析消息结构(旧原始消息) if 旧原始消息 else None
+    新原始结构 = _解析消息结构(新原始消息) if 新原始消息 else None
+    if 新原始消息 and (
+        not 旧原始消息
+        or (
+            新原始结构 is not None
+            and (旧原始结构 is None or len(新原始消息) > len(旧原始消息))
+        )
+    ):
+        已有记录["raw_message"] = 新原始消息
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
     if isinstance(新媒体, dict) and 新媒体:
@@ -832,7 +876,7 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
 
 
 def _去重消息列表(消息列表: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """按消息 ID 或同一官方原始事件去重，兼容修复前已经落库的重复记录。"""
+    """按消息 ID、官方消息序号或原始事件去重，兼容历史重复记录。"""
     结果: list[dict[str, Any]] = []
     索引: dict[str, int] = {}
     for 消息 in 消息列表 or []:
