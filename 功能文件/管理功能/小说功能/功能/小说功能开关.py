@@ -46,6 +46,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
     "连城": True,
     "菠萝包": True,
     "晋江": True,
+    "ZLibrary": True,
 }
 功能显示名 = {
     "番茄": "番茄小说",
@@ -68,6 +69,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
     "连城": "连城小说",
     "菠萝包": "菠萝包小说",
     "晋江": "晋江小说",
+    "ZLibrary": "Z-Library小说",
 }
 开关命令配置 = {
     "开启番茄": ("番茄", True),
@@ -203,6 +205,7 @@ async def _异步是小说测试管理员(event: Any, 配置: Any) -> bool:
 def 处理小说功能开关指令(event: Any, 命令文本: str, 配置: Any) -> str | None:
     文本 = str(命令文本 or "").strip()
     文本 = re.sub(r"(?i)qq(?=阅读)", "QQ", 文本)
+    文本 = re.sub(r"(?i)z[-_ ]?library(?=小说|$)", "ZLibrary", 文本)
     if (
         文本 not in 开关命令配置
         and 文本 not in 小说状态命令

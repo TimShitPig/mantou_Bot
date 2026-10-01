@@ -57,12 +57,13 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 连城小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.连城小说")
 菠萝包小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.菠萝包小说")
 晋江小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.晋江小说")
+ZLibrary小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.Z-Library小说")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.86"
+插件版本 = "6.1.87"
 
 
 
@@ -562,6 +563,25 @@ class MyPlugin(Star):
                     event.stop_event()
                     return
                 小说下载任务.启动小说回复流任务(event, 晋江回复流, 帮助功能, 权限工具)
+                event.stop_event()
+                return
+
+            ZLibrary回复流 = ZLibrary小说功能.获取ZLibrary小说回复流(
+                event, 命令文本, self.config
+            )
+            if ZLibrary回复流 is not None:
+                if not await 小说功能开关.异步当前事件可使用小说功能(
+                    event, "ZLibrary", self.config
+                ):
+                    async for 输出内容 in _输出文本回复(
+                        小说功能开关.获取小说功能关闭回复("ZLibrary", self.config)
+                    ):
+                        yield 输出内容
+                    event.stop_event()
+                    return
+                小说下载任务.启动小说回复流任务(
+                    event, ZLibrary回复流, 帮助功能, 权限工具
+                )
                 event.stop_event()
                 return
 
