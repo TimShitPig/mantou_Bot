@@ -890,8 +890,10 @@ def 获取盐言小说回复流(
 
 
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[str]:
+    阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
+            阶段 = "chapter_header"
             书籍 = await _准备盐言分享章节书籍(session, 来源)
             目录 = list(书籍.get("chapters") or [])
             logger.info(
@@ -900,10 +902,13 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 f"章节数={len(目录)}, declared_总数={书籍.get('declared_total')}, "
                 f"catalog_来源={书籍.get('catalog_source') or 'catalog'}"
             )
+            阶段 = "body_extract"
             书籍 = await _下载盐言分享章节(session, 来源, 书籍)
+            阶段 = "body_validate"
             章节 = list(书籍.get("chapters") or [])
             if len(章节) != len(目录) or any(not 项目.get("content") for 项目 in 章节):
                 raise RuntimeError("盐言章节正文不完整")
+            阶段 = "txt_assemble"
             yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
@@ -911,6 +916,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 f"成功={len(章节)}, 总数={len(目录)}, 字数={书籍.get('word_count')}, "
                 f"文件大小={len(文件内容)}"
             )
+            阶段 = "cache_and_share_upload"
             发送结果 = await 准备发送文本文件(
                 event,
                 文件名,
@@ -933,7 +939,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
         logger.warning(
-            f"盐言小说下载失败：阶段=extract_or_upload, 错误={type(exc).__name__}"
+            f"盐言小说下载失败：阶段={阶段}, 错误类型={type(exc).__name__}"
         )
         yield "下载失败 请重试"
 
