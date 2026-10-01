@@ -33,14 +33,8 @@ from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存�
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
-目录地址模板 = "https://api.zhihu.com/km-indep-home/catalog/{}"
 请求超时秒数 = 20
 正文重试次数 = 3
-盐言正文最大并发数 = 16
-# 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
-进度日志分段数 = 4
-目录最大章节数 = 10000
-目录页大小 = 50
 盐言网页请求头 = {
     "Accept": "application/json,text/plain,*/*",
     "Accept-Encoding": "identity",
@@ -52,7 +46,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 }
 
 
-class _盐言目录接口异常(RuntimeError):
+class _盐言正文未就绪(RuntimeError):
     pass
 
 
@@ -276,19 +270,6 @@ def _解析响应对象(原始: bytes) -> Any:
         return 文本
 
 
-def _解析章节进度(值: Any) -> tuple[int, int]:
-    匹配 = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", str(值 or ""))
-    if not 匹配:
-        return 0, 0
-    return int(匹配.group(1)), int(匹配.group(2))
-
-
-def _章节引用(值: Any) -> str:
-    if not isinstance(值, dict):
-        return ""
-    return str(值.get("id") or "").strip()
-
-
 def _解析盐言作者(值: Any) -> str:
     if isinstance(值, dict):
         return 清理正文(
@@ -324,34 +305,15 @@ def 解析盐言章节详情(
     if 章节编号 and 实际章节编号 and 实际章节编号 != str(章节编号):
         raise RuntimeError("盐言章节详情章节不匹配")
 
-    当前序号, 声明总数 = _解析章节进度(父级.get("progress"))
     作者 = _解析盐言作者(数据.get("authors"))
     if not 作者:
         作者 = _解析盐言作者(父级.get("authors"))
-    下章 = (
-        数据.get("next_section") if isinstance(数据.get("next_section"), dict) else {}
-    )
-    上章 = 数据.get("pre_section") if isinstance(数据.get("pre_section"), dict) else {}
     标题 = 清理正文(数据.get("title") or 基础.get("title") or "")
-    专栏标题 = 清理正文(父级.get("title") or "")
-    目录信息 = (
-        数据.get("catalog_info") if isinstance(数据.get("catalog_info"), dict) else {}
-    )
-    简介 = 清理正文(
-        父级.get("description") or 父级.get("desc") or 目录信息.get("desc") or ""
-    )
     return {
         "business_id": 实际业务编号,
         "section_id": 实际章节编号,
-        "title": 标题 or f"第{当前序号 or 1}节",
-        "column_title": 专栏标题,
+        "title": 标题 or "盐言文章",
         "author": 作者 or "未知",
-        "intro": 简介,
-        "index": 当前序号,
-        "declared_total": 声明总数,
-        "next_id": _章节引用(下章),
-        "pre_id": _章节引用(上章),
-        "is_limit_free": bool(基础.get("is_limit_free")),
     }
 
 
@@ -377,247 +339,6 @@ async def _请求盐言章节详情(
             if 尝试次数 + 1 < 3:
                 await asyncio.sleep(0.2 * (尝试次数 + 1))
     raise RuntimeError("盐言章节详情请求失败") from 最后异常
-
-
-async def _请求盐言目录页(
-    session: aiohttp.ClientSession,
-    业务编号: str,
-    偏移量: int,
-) -> dict[str, Any]:
-    地址 = 目录地址模板.format(业务编号)
-    最后异常: Exception | None = None
-    for 尝试次数 in range(3):
-        try:
-            async with session.get(
-                地址,
-                params={"limit": 目录页大小, "offset": 偏移量},
-                headers=盐言网页请求头,
-            ) as response:
-                原始 = await response.read()
-                if response.status >= 400:
-                    raise RuntimeError(f"HTTP {response.status}")
-                数据 = _解析响应对象(原始)
-                if not isinstance(数据, dict) or not isinstance(数据.get("data"), list):
-                    raise RuntimeError("盐言目录响应格式错误")
-                return 数据
-        except Exception as exc:
-            最后异常 = exc
-            if 尝试次数 + 1 < 3:
-                await asyncio.sleep(0.25 * (尝试次数 + 1))
-    raise _盐言目录接口异常("盐言目录请求失败") from 最后异常
-
-
-async def _获取盐言目录接口(
-    session: aiohttp.ClientSession,
-    业务编号: str,
-    起始章节编号: str,
-) -> dict[str, Any]:
-    所有项目: list[dict[str, Any]] = []
-    已有章节编号: set[str] = set()
-    父级信息: dict[str, Any] = {}
-    作者信息: Any = None
-    偏移量 = 0
-    声明总数 = 0
-    页数 = 0
-
-    while True:
-        页数 += 1
-        if 页数 > (目录最大章节数 // 目录页大小) + 2:
-            raise RuntimeError("盐言目录分页数量异常")
-        数据 = await _请求盐言目录页(session, 业务编号, 偏移量)
-        if not 父级信息 and isinstance(数据.get("parent"), dict):
-            父级信息 = 数据["parent"]
-        if 作者信息 is None:
-            作者信息 = 数据.get("author")
-        分页 = 数据.get("paging") if isinstance(数据.get("paging"), dict) else {}
-        try:
-            声明总数 = int(分页.get("total") or 声明总数 or 0)
-        except (TypeError, ValueError):
-            声明总数 = 0
-
-        for 项目 in 数据.get("data") or []:
-            if not isinstance(项目, dict):
-                continue
-            章节编号 = str(项目.get("section_id") or "").strip()
-            if not 章节编号 or 章节编号 in 已有章节编号:
-                continue
-            if 项目.get("business_id") and str(项目.get("business_id")) != str(
-                业务编号
-            ):
-                raise RuntimeError("盐言目录专栏不匹配")
-            try:
-                原始序号 = 项目.get("idx")
-                序号 = int(原始序号) + 1 if 原始序号 is not None else 0
-            except (TypeError, ValueError):
-                序号 = 0
-            if 序号 <= 0:
-                序号匹配 = re.search(
-                    r"(\d+)", str(项目.get("serial_number_text") or "")
-                )
-                序号 = int(序号匹配.group(1)) if 序号匹配 else len(所有项目) + 1
-            所有项目.append(
-                {
-                    "id": 章节编号,
-                    "title": 清理正文(项目.get("title") or "") or f"第{序号}节",
-                    "index": 序号,
-                    "word_count": 解析字数(项目.get("word_count")),
-                    "is_limit_free": bool(项目.get("is_limit_free")),
-                }
-            )
-            已有章节编号.add(章节编号)
-
-        当前偏移 = 分页.get("offset")
-        当前限制 = 分页.get("limit")
-        try:
-            当前偏移 = int(当前偏移) if 当前偏移 is not None else 偏移量
-            当前限制 = int(当前限制) if 当前限制 is not None else 目录页大小
-        except (TypeError, ValueError):
-            当前偏移, 当前限制 = 偏移量, 目录页大小
-        if bool(分页.get("is_end")) or not 数据.get("data"):
-            break
-        下一偏移 = 当前偏移 + max(1, 当前限制)
-        if 下一偏移 <= 偏移量:
-            raise RuntimeError("盐言目录分页未前进")
-        偏移量 = 下一偏移
-
-    if not 所有项目:
-        raise RuntimeError("盐言目录为空")
-    所有项目.sort(
-        key=lambda 项目: (int(项目.get("index") or 0), str(项目.get("id") or ""))
-    )
-    if 声明总数 and len(所有项目) != 声明总数:
-        raise RuntimeError("盐言目录章节数量不完整")
-    序号列表 = [int(项目.get("index") or 0) for 项目 in 所有项目]
-    if len(set(序号列表)) != len(序号列表) or 序号列表 != list(
-        range(1, len(序号列表) + 1)
-    ):
-        raise RuntimeError("盐言目录章节序号不连续")
-
-    详情作者 = ""
-    try:
-        详情 = await _请求盐言章节详情(session, 业务编号, 起始章节编号)
-        详情作者 = str(详情.get("author") or "")
-    except Exception as exc:
-        logger.debug(
-            f"盐言章节详情补充元数据失败：阶段=header, 错误={type(exc).__name__}"
-        )
-    作者 = _解析盐言作者(作者信息) or 详情作者 or "未知"
-    专栏标题 = 清理正文(父级信息.get("title") or "") or "盐言专栏"
-    子标题 = 清理正文(父级信息.get("sub_title") or "")
-    简介 = 清理正文(父级信息.get("introduction") or "")
-    return {
-        "business_id": str(业务编号),
-        "chapters": 所有项目,
-        "title": 专栏标题,
-        "author": 作者,
-        "intro": 简介,
-        "declared_total": 声明总数 or len(所有项目),
-        "word_count": sum(int(项目.get("word_count") or 0) for 项目 in 所有项目),
-        "complete": "完结" in 子标题,
-        "source": "catalog",
-    }
-
-
-async def 获取盐言目录(
-    session: aiohttp.ClientSession,
-    业务编号: str,
-    起始章节编号: str,
-) -> dict[str, Any]:
-    try:
-        return await _获取盐言目录接口(session, 业务编号, 起始章节编号)
-    except _盐言目录接口异常 as exc:
-        logger.debug(f"盐言分页目录不可用，回退章节详情链：错误={type(exc).__name__}")
-        return await _获取盐言目录头部链(session, 业务编号, 起始章节编号)
-
-
-async def _获取盐言目录头部链(
-    session: aiohttp.ClientSession,
-    业务编号: str,
-    起始章节编号: str,
-) -> dict[str, Any]:
-    """沿章节头部的前后指针收集可见目录，支持从任意分享章节开始。"""
-    节点: dict[str, dict[str, Any]] = {}
-    反向编号: list[str] = []
-
-    async def 加载(章节编号: str) -> dict[str, Any]:
-        章节编号 = str(章节编号 or "").strip()
-        if not 章节编号:
-            raise RuntimeError("盐言目录章节编号为空")
-        if 章节编号 not in 节点:
-            if len(节点) >= 目录最大章节数:
-                raise RuntimeError("盐言目录章节数量异常")
-            节点[章节编号] = await _请求盐言章节详情(session, 业务编号, 章节编号)
-        return 节点[章节编号]
-
-    起点 = await 加载(起始章节编号)
-    当前编号 = 起点.get("pre_id")
-    while 当前编号 and 当前编号 not in 节点:
-        反向编号.append(当前编号)
-        当前编号 = (await 加载(当前编号)).get("pre_id")
-
-    正向编号: list[str] = []
-    当前编号 = str(起始章节编号)
-    是否循环 = False
-    while 当前编号:
-        if 当前编号 in 正向编号:
-            是否循环 = True
-            break
-        当前 = await 加载(当前编号)
-        正向编号.append(当前编号)
-        下一个编号 = str(当前.get("next_id") or "").strip()
-        if not 下一个编号:
-            break
-        if 下一个编号 in 节点:
-            是否循环 = True
-            break
-        当前编号 = 下一个编号
-
-    编号顺序 = list(reversed(反向编号)) + 正向编号
-    编号顺序 = list(dict.fromkeys(编号顺序))
-    if not 编号顺序:
-        raise RuntimeError("盐言目录为空")
-
-    目录节点 = [节点[编号] for 编号 in 编号顺序]
-    有效进度 = [节点信息 for 节点信息 in 目录节点 if 节点信息.get("index", 0) > 0]
-    if len(有效进度) == len(目录节点):
-        进度集合 = [int(节点信息["index"]) for 节点信息 in 有效进度]
-        if len(set(进度集合)) != len(进度集合):
-            raise RuntimeError("盐言目录章节序号重复")
-        进度排序 = sorted(进度集合)
-        if 进度排序 != list(range(进度排序[0], 进度排序[-1] + 1)):
-            raise RuntimeError("盐言目录章节不连续")
-        目录节点.sort(
-            key=lambda 项目: (
-                int(项目.get("index") or 0),
-                str(项目.get("section_id") or ""),
-            )
-        )
-
-    声明总数 = max(
-        (int(项目.get("declared_total") or 0) for 项目 in 目录节点), default=0
-    )
-    if not 是否循环 and 声明总数 and len(目录节点) < 声明总数:
-        raise RuntimeError("盐言目录不完整")
-
-    首节点 = 目录节点[0]
-    return {
-        "business_id": str(业务编号),
-        "chapters": [
-            {
-                "id": str(项目.get("section_id") or ""),
-                "title": str(项目.get("title") or ""),
-                "index": int(项目.get("index") or 序号),
-            }
-            for 序号, 项目 in enumerate(目录节点, 1)
-        ],
-        "title": str(首节点.get("column_title") or 首节点.get("title") or "盐言专栏"),
-        "author": str(首节点.get("author") or "未知"),
-        "intro": str(首节点.get("intro") or ""),
-        "declared_total": 声明总数,
-        "word_count": sum(int(项目.get("word_count") or 0) for 项目 in 目录节点),
-        "complete": bool(声明总数 and len(目录节点) >= 声明总数),
-        "source": "header_chain",
-    }
 
 
 def 解析字数(值: Any) -> int:
@@ -651,8 +372,11 @@ def 解析盐言章节正文(原始: bytes, 默认标题: str = "") -> dict[str,
         正文 = 清理正文(根对象)
     if len(正文) < 2:
         raise RuntimeError("盐言章节正文为空")
+    # 服务可能用 code=0 返回补录状态；这条固定提示不是文章正文。
+    if 正文.rstrip("。.!！") == "正在补录中，请次日查看":
+        raise _盐言正文未就绪("盐言章节正文尚未就绪")
     来源标题 = 清理正文(_字段值(根对象, 标题键))
-    if 来源标题 in {"链接查阅", "文章详情", "盐言文章"}:
+    if 来源标题 in {"链接查阅", "文章详情", "盐言文章", "未知标题"}:
         来源标题 = ""
     标题 = 来源标题 or 清理正文(默认标题) or "盐言章节"
     return {"title": 标题, "content": 正文, "source_title": 来源标题}
@@ -676,20 +400,20 @@ def _盐言章节标题候选(值: Any) -> set[str]:
 
 
 def 盐言章节标题一致(期望标题: Any, 来源标题: Any) -> bool:
-    """判断提取结果显式标题是否仍指向目录中的同一章节。"""
+    """判断提取结果显式标题是否仍指向详情中的同一文章。"""
     期望候选 = _盐言章节标题候选(期望标题)
     来源候选 = _盐言章节标题候选(来源标题)
     return bool(期望候选 and 来源候选 and 期望候选 & 来源候选)
 
 
 def _校验并固定盐言章节标题(结果: dict[str, str], 章节标题: str) -> dict[str, str]:
-    """拒绝标题明确错配的正文，并始终使用官方目录标题写入 TXT。"""
+    """拒绝标题明确错配的正文，并始终使用当前文章详情标题写入 TXT。"""
     来源标题 = 清理正文(结果.pop("source_title", ""))
-    目录标题 = 清理正文(章节标题)
-    if 来源标题 and 目录标题 and not 盐言章节标题一致(目录标题, 来源标题):
+    详情标题 = 清理正文(章节标题)
+    if 来源标题 and 详情标题 and not 盐言章节标题一致(详情标题, 来源标题):
         raise RuntimeError("盐言章节正文标题不匹配")
-    if 目录标题:
-        结果["title"] = 目录标题
+    if 详情标题:
+        结果["title"] = 详情标题
     return 结果
 
 
@@ -730,6 +454,7 @@ def _盐言错误分类(异常: BaseException, 深度: int = 0) -> str:
     固定分类 = {
         "盐言正文接口返回错误": "provider_rejected",
         "盐言章节正文为空": "body_empty",
+        "盐言章节正文尚未就绪": "body_pending",
         "盐言章节正文标题不匹配": "title_mismatch",
         "盐言章节正文不完整": "body_incomplete",
         "盐言章节正文获取失败": "body_fetch_failed",
@@ -760,6 +485,9 @@ async def _获取单章正文(
             )
             结果["section_id"] = 章节编号
             return 结果
+        except _盐言正文未就绪:
+            # 已知补录状态当次终止，避免重复请求同一篇尚未收录的文章。
+            raise
         except Exception as exc:
             最后异常 = exc
             logger.debug(
@@ -773,82 +501,6 @@ async def _获取单章正文(
     raise RuntimeError("盐言章节正文获取失败") from 最后异常
 
 
-async def 下载盐言全部章节(
-    session: aiohttp.ClientSession,
-    来源: str,
-    业务编号: str,
-    目录: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    总数 = len(目录)
-    if not 总数:
-        raise RuntimeError("盐言目录为空")
-    动态并发数 = max(1, min(盐言正文最大并发数, 总数))
-    结果列表: list[dict[str, str] | None] = [None] * 总数
-    待重试 = set(range(总数))
-    # 0% 起始行已经记录了第 0 桶，避免首章再额外输出一条 0% 进度。
-    上次进度桶 = 0
-    logger.info(
-        f"盐言小说章节进度：业务编号={业务编号}, 进度=0/{总数}, "
-        f"百分比=0%, 并发数={动态并发数}, 重试次数={正文重试次数}"
-    )
-
-    async def 记录进度(轮次: int) -> None:
-        nonlocal 上次进度桶
-        成功数 = sum(项目 is not None for 项目 in 结果列表)
-        失败数 = len(待重试)
-        进度桶 = int(成功数 * 进度日志分段数 / 总数)
-        if 成功数 >= 总数:
-            进度桶 = 进度日志分段数
-        if 进度桶 <= 上次进度桶 and 成功数 < 总数:
-            return
-        上次进度桶 = 进度桶
-        百分比 = int(成功数 * 100 / 总数)
-        logger.info(
-            f"盐言小说章节进度：业务编号={业务编号}, 进度={成功数}/{总数}, "
-            f"百分比={百分比}%, 成功={成功数}, 失败={失败数}, 轮次={轮次}"
-        )
-
-    for 轮次 in range(1, 正文重试次数 + 1):
-        if not 待重试:
-            break
-        当前待处理 = sorted(待重试)
-        信号量 = asyncio.Semaphore(动态并发数)
-
-        async def 下载任务(序号: int) -> tuple[int, dict[str, str] | None]:
-            async with 信号量:
-                try:
-                    return 序号, await _获取单章正文(
-                        session, 来源, 业务编号, 目录[序号]
-                    )
-                except Exception as exc:
-                    logger.debug(
-                        f"盐言章节下载失败：章节编号={目录[序号].get('id')}, "
-                        f"轮次={轮次}, 错误={type(exc).__name__}"
-                    )
-                    return 序号, None
-
-        任务列表 = [asyncio.create_task(下载任务(序号)) for 序号 in 当前待处理]
-        for 任务 in asyncio.as_completed(任务列表):
-            序号, 结果 = await 任务
-            if 结果:
-                结果列表[序号] = 结果
-                待重试.discard(序号)
-            await 记录进度(轮次)
-
-        if 待重试 and 轮次 < 正文重试次数:
-            logger.debug(
-                f"盐言小说失败章节重试：业务编号={业务编号}, "
-                f"轮次={轮次 + 1}, 数量={len(待重试)}"
-            )
-            await asyncio.sleep(0.4)
-
-    if 待重试:
-        await 记录进度(正文重试次数)
-        raise RuntimeError(f"盐言章节正文不完整：missing={len(待重试)}")
-    await 记录进度(正文重试次数)
-    return [项目 for 项目 in 结果列表 if 项目 is not None]
-
-
 async def _准备盐言分享章节书籍(
     session: aiohttp.ClientSession, 来源: str
 ) -> dict[str, Any]:
@@ -860,14 +512,12 @@ async def _准备盐言分享章节书籍(
     return {
         "title": 分享章节标题,
         "author": 详情.get("author") or "未知",
-        "intro": 详情.get("intro") or "",
+        "intro": "",
         "status": "完结",
         "word_count": 0,
         "chapters": [{"id": 起始章节编号, "title": 分享章节标题}],
         "column_id": 业务编号,
         "section_id": 起始章节编号,
-        "declared_total": 1,
-        "catalog_source": "share_section",
     }
 
 
@@ -876,14 +526,14 @@ async def _下载盐言分享章节(
     来源: str,
     书籍: dict[str, Any],
 ) -> dict[str, Any]:
-    章节目录 = list(书籍.get("chapters") or [])
-    if len(章节目录) != 1:
+    章节列表 = list(书籍.get("chapters") or [])
+    if len(章节列表) != 1:
         raise RuntimeError("盐言分享章节数量异常")
     章节 = await _获取单章正文(
         session,
         来源,
         str(书籍.get("column_id") or ""),
-        章节目录[0],
+        章节列表[0],
     )
     if not str(章节.get("content") or "").strip():
         raise RuntimeError("盐言分享章节正文为空")
@@ -896,8 +546,8 @@ async def _下载盐言分享章节(
 def _创建盐言会话() -> aiohttp.ClientSession:
     timeout = aiohttp.ClientTimeout(total=请求超时秒数, sock_connect=8, sock_read=15)
     connector = aiohttp.TCPConnector(
-        limit=max(8, 盐言正文最大并发数),
-        limit_per_host=max(8, 盐言正文最大并发数),
+        limit=4,
+        limit_per_host=4,
         ttl_dns_cache=300,
     )
     return aiohttp.ClientSession(timeout=timeout, connector=connector)
@@ -924,25 +574,23 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         async with _创建盐言会话() as session:
             阶段 = "chapter_header"
             书籍 = await _准备盐言分享章节书籍(session, 来源)
-            目录 = list(书籍.get("chapters") or [])
             logger.info(
                 f"盐言小说开始下载：业务编号={书籍.get('column_id')}, "
                 f"书名={书籍.get('title')}, 作者={书籍.get('author')}, "
-                f"章节数={len(目录)}, declared_总数={书籍.get('declared_total')}, "
-                f"catalog_来源={书籍.get('catalog_source') or 'catalog'}"
+                "章节数=1"
             )
             阶段 = "body_extract"
             书籍 = await _下载盐言分享章节(session, 来源, 书籍)
             阶段 = "body_validate"
             章节 = list(书籍.get("chapters") or [])
-            if len(章节) != len(目录) or any(not 项目.get("content") for 项目 in 章节):
+            if len(章节) != 1 or not 章节[0].get("content"):
                 raise RuntimeError("盐言章节正文不完整")
             阶段 = "txt_assemble"
             yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
                 f"盐言小说章节下载完成：业务编号={书籍.get('column_id')}, "
-                f"成功={len(章节)}, 总数={len(目录)}, 字数={书籍.get('word_count')}, "
+                f"成功={len(章节)}, 总数=1, 字数={书籍.get('word_count')}, "
                 f"文件大小={len(文件内容)}"
             )
             阶段 = "cache_and_share_upload"

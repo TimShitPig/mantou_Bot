@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.2.4-2ea44f)
+![version](https://img.shields.io/badge/version-v6.2.5-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.2.4 |
+| 版本 | v6.2.5 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -171,7 +171,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - QQ阅读：使用官方账号会员状态校验、目录和正文链路；有效 VIP 登录态下载会员书完整目录，单章付费书仍只请求免费章节；正文每批 200 章、最多 100 路并发，支持 Cookie 登录态写入数据库；网页可刷新官方昵称和头像，手动配置页显示 `ywguid/uid` 与 `ywkey/usid` 字段说明但不回显密钥。
 - 得间：详情目录完成后立即提示下载；32 路地址分页与最高 128 路单章正文流水线重叠执行，单章授权最多 32 路，并与加密正文并行获取，复用异步 HTTP 会话及有界队列。重试只补失败部分，解密异常时重新获取该章授权和正文，超时逐轮递增。自定义 CTR 使用 NumPy 四路矩阵轮变换、PyCryptodome 异或和 `gmpy2`，保持单章密钥及原协议；解密队列每批最多 8 章，独立进程最多 4 个且按可用 CPU 保留调度空间，空闲 60 秒回收。依赖包含 `numpy>=1.26,<3`、`loky>=3.5,<4`，缺少任意地址或正文不合成 TXT。
 - 点众：每路正文任务使用独立 App 身份和 HTTP Session，最高 60 路并发。
-- 盐言小说：只下载一条分享链接对应的当前章节。
+- 盐言小说：只下载分享链接对应的当前文章，固定按 1 章合成 TXT；详情只补充当前文章标题和作者。正文标题未知时使用详情标题；正文服务处于补录状态时结束本次下载，不生成提示文字冒充的正文。
 - 塔读：TDZ/AES/DES 与 UTF-16LE 正文解析合并到单文件，最高 400 路动态并发。
 - 百度：出版源使用 `doc_id` 接口，普通源使用 AES 正文接口。
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
