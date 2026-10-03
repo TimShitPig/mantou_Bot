@@ -101,6 +101,24 @@
       }
     }
   },
+  "zlibrary_account_settings": {
+    "description": "ZLibrary账号创建",
+    "type": "object",
+    "items": {
+      "zlibrary_mail_api_key": {
+        "description": "215邮箱 API Key",
+        "type": "string",
+        "hint": "填写邮箱服务的 AC- API Key；仅用于管理员主动创建账号，不在聊天或帮助控制台回显。每次创建使用随机邮箱域名。",
+        "default": ""
+      },
+      "zlibrary_registration_rx": {
+        "description": "注册表单 rx",
+        "type": "string",
+        "hint": "注册页面当前表单的 rx 值，默认 215；远端表单变更时按实际页面更新。",
+        "default": "215"
+      }
+    }
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",
@@ -108,7 +126,7 @@
       "database_host": {
         "description": "MySQL 地址",
         "type": "string",
-        "hint": "例如 127.0.0.1。三种网盘 Cookie、QQ阅读登录态和小说开关使用 MySQL 存储。",
+        "hint": "例如 127.0.0.1。三种网盘 Cookie、QQ阅读登录态、ZLibrary创建账号记录和小说开关使用 MySQL 存储。",
         "default": ""
       },
       "database_port": {

@@ -1,5 +1,11 @@
 # 更新日志
 
+## v6.1.88
+
+- 新增：白名单管理员可发送 `注册ZLibrary` / `创建ZLibrary账号`，每次通过 API 自动创建一个随机域名邮箱、等待邮件验证码、完成注册并使用全新会话验证登录。
+- 新增：`zlibrary_account_settings` 配置邮箱 API Key 和注册表单 rx；创建前要求可用 MySQL，账号按尝试 ID 写入 `zlibrary_accounts`，分阶段记录 pending、registered、logged_in。
+- 保持：公开书籍下载模块不使用账号；不加入定时补充或下载账号轮换。聊天和控制台/API 不返回账号凭据、Key、邮箱 Token 或验证码。
+
 ## v6.1.87
 
 - 新增：支持识别 `zh.z-library.sk/book/` 与 `z-library.sk/book/` 公开分享链接，读取书名、作者和页面提供的整本文件；不接入账号登录。

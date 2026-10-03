@@ -57,13 +57,14 @@ QQ浏览器小说功能 = 加载功能模块("功能文件.管理功能.小说�
 连城小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.连城小说")
 菠萝包小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.菠萝包小说")
 晋江小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.晋江小说")
+ZLibrary账号功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.ZLibrary账号")
 ZLibrary小说功能 = 加载功能模块("功能文件.管理功能.小说功能.小说.Z-Library小说")
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 QQ官方交互桥.安装QQ官方帮助交互()
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.87"
+插件版本 = "6.1.88"
 
 
 
@@ -169,6 +170,14 @@ class MyPlugin(Star):
                         yield 输出内容
                 else:
                     yield 找书回复内容
+
+        ZLibrary账号回复流 = ZLibrary账号功能.获取ZLibrary账号回复流(event, 命令文本, self.config)
+        if ZLibrary账号回复流 is not None:
+            async for 回复文本 in ZLibrary账号回复流:
+                async for 输出内容 in _输出文本回复(回复文本):
+                    yield 输出内容
+            event.stop_event()
+            return
 
         网盘Cookie回复 = await 小说网盘功能.处理网盘Cookie指令(
             event,
@@ -594,6 +603,7 @@ class MyPlugin(Star):
         event.stop_event()
 
     async def terminate(self):
+        await ZLibrary账号功能.停止ZLibrary账号任务()
         await 帮助网页.停止帮助网页服务(self._帮助网页服务)
         self._帮助网页服务 = None
         await 文件缓存工具.停止每日文件缓存任务(self._文件缓存工具任务)
