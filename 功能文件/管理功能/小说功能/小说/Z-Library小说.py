@@ -880,7 +880,11 @@ def _提取官方TXT转换链接(原始HTML: str) -> str:
 
 
 def _解析HTML字段(原始: str) -> dict[str, Any]:
-    if "diamwall" in 原始.lower() or "verifying your browser" in 原始.lower():
+    小写原始 = 原始.lower()
+    if any(
+        标记 in 小写原始
+        for 标记 in ("diamwall", "verifying your browser", "checking your browser")
+    ):
         raise _ZLibrary站点错误(
             "Z-Library站点验证未通过", 诊断原因="anti_bot_page"
         )
@@ -979,9 +983,20 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     try:
         async with session.get(来源, headers=_请求头(来源)) as response:
             if response.status in {403, 429, 503, 513}:
+                响应提示 = (
+                    await response.content.read(64 * 1024)
+                ).decode("utf-8", "replace").lower()
+                是浏览器校验 = any(
+                    标记 in 响应提示
+                    for 标记 in (
+                        "diamwall",
+                        "verifying your browser",
+                        "checking your browser",
+                    )
+                )
                 raise _ZLibrary站点错误(
                     "Z-Library站点暂时不可访问",
-                    诊断原因="http_blocked",
+                    诊断原因="anti_bot_page" if 是浏览器校验 else "http_blocked",
                     http_status=response.status,
                 )
             if response.status >= 400:
@@ -1065,6 +1080,21 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     return 详情
 
 
+async def _请求详情含认证重试(
+    session: aiohttp.ClientSession, 来源: str, 配置: Any
+) -> dict[str, Any]:
+    try:
+        return await _请求详情(session, 来源)
+    except _ZLibrary站点错误 as exc:
+        if exc.诊断原因 != "anti_bot_page" or exc.http_status != 503:
+            raise
+        账号 = await 获取ZLibrary搜索账号(配置)
+        if not 账号:
+            raise
+        await _登录ZLibrary转换账号(session, 来源, 账号)
+        return await _请求详情(session, 来源)
+
+
 def _请求头(来源: str = "") -> dict[str, str]:
     地址 = urlsplit(来源)
     return {
@@ -1082,6 +1112,12 @@ async def _登录ZLibrary转换账号(
     站点地址 = f"{地址.scheme}://{地址.netloc}"
     if not _是ZLibrary站点HTTPS地址(站点地址):
         raise _ZLibrary站点错误("Z-Library登录站点地址无效")
+    现有Cookie = session.cookie_jar.filter_cookies(aiohttp.client_reqrep.URL(站点地址))
+    if all(
+        现有Cookie.get(字段) and 现有Cookie[字段].value
+        for 字段 in ("remix_userid", "remix_userkey")
+    ):
+        return 站点地址
     登录数据 = await _请求ZLibrary注册接口(
         session,
         "POST",
@@ -1403,7 +1439,7 @@ async def 生成ZLibrary下载回复流(
     try:
         async with _创建ZLibrary会话() as session:
             阶段 = "detail"
-            详情 = await _请求详情(session, 来源)
+            详情 = await _请求详情含认证重试(session, 来源, 配置)
             logger.info(
                 "Z-Library小说开始下载：书名=%s, 作者=%s, 下载文件=1",
                 详情.get("title") or "未知",
@@ -1454,8 +1490,10 @@ async def 生成ZLibrary下载回复流(
             "Z-Library小说下载失败：阶段=%s, 错误类型=%s, 原因=%s, HTTP状态=%s, 底层错误类型=%s",
             阶段,
             type(exc).__name__,
-            getattr(exc, "诊断原因", "unclassified"),
-            getattr(exc, "http_status", None) or "none",
+            getattr(exc, "诊断原因", None) or getattr(exc, "状态", "unclassified"),
+            getattr(exc, "http_status", None)
+            or getattr(exc, "http状态", None)
+            or "none",
             type(exc.__cause__).__name__ if exc.__cause__ else "none",
         )
         yield ZLibrary下载失败提示
