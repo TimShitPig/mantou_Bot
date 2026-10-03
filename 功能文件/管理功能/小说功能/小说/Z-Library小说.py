@@ -37,14 +37,20 @@ from 功能文件.管理功能.基础功能 import 权限工具, 运行状态数
 ZLibrary允许域名 = {
     "z-library.sk",
     "zh.z-library.sk",
+    "libb.la",
+    "zh.libb.la",
 }
 ZLibrary链接正则 = re.compile(
-    r"https?://(?:zh\.)?z-library\.sk/book/[^\s<>\"']+", re.IGNORECASE
+    r"https?://(?:(?:zh\.)?z-library\.sk|(?:zh\.)?libb\.la)/book/[^\s<>\"']+",
+    re.IGNORECASE,
 )
 ZLibrary请求超时秒数 = 35
 ZLibrary详情最大字节数 = 4 * 1024 * 1024
 ZLibrary文件最大字节数 = 120 * 1024 * 1024
 ZLibrary搜索结果最大字节数 = 4 * 1024 * 1024
+ZLibrary转换响应最大字节数 = 2 * 1024 * 1024
+ZLibrary转换等待秒数 = 300
+ZLibrary转换轮询间隔秒数 = 10
 ZLibrary搜索登录URL = "https://z-library.sk/rpc.php"
 ZLibrary搜索域名 = "https://z-library.sk"
 ZLibrary邮箱API地址 = "https://maliapi.215.im/v1"
@@ -912,6 +918,26 @@ def _解析HTML字段(原始: str) -> dict[str, Any]:
     )
     if 文件类型匹配:
         详情文件类型 = _清理正文(文件类型匹配.group(1))
+    数字书籍编号匹配 = re.search(
+        r"<[^>]+\bid\s*=\s*['\"]([0-9]{4,12})['\"][^>]*>",
+        原始,
+        re.I,
+    )
+    if not 数字书籍编号匹配:
+        数字书籍编号匹配 = re.search(
+            r"\bdata-book-id\s*=\s*['\"]([0-9]{4,12})['\"]",
+            原始,
+            re.I,
+        )
+    数字书籍编号 = 数字书籍编号匹配.group(1) if 数字书籍编号匹配 else ""
+    TXT转换可用 = bool(
+        re.search(
+            r"\bdata-convertation-available\s*=\s*['\"]?1['\"]?",
+            原始,
+            re.I,
+        )
+        and re.search(r"\bdata-convert_to\s*=\s*['\"]txt['\"]", 原始, re.I)
+    )
     下载链接 = ""
     for 匹配 in re.finditer(
         r"<(?:a|button)[^>]+(?:href|data-href|data-url)\s*=\s*['\"]([^'\"]+)['\"][^>]*>",
@@ -932,6 +958,8 @@ def _解析HTML字段(原始: str) -> dict[str, Any]:
         "author": ", ".join(作者列表) or "未知",
         "download_url": 下载链接,
         "txt_conversion_url": TXT转换链接,
+        "txt_conversion_available": TXT转换可用,
+        "book_id": 数字书籍编号,
         "file_type": 详情文件类型,
     }
 
@@ -955,26 +983,42 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     if not _是ZLibrary链接(最终来源):
         raise _ZLibrary站点错误("Z-Library详情发生非站点跳转")
     书籍编号, 哈希 = 解析ZLibrary书籍编号(来源)
-    详情["book_id"] = 书籍编号
+    if not 详情.get("book_id") and re.fullmatch(r"[0-9]{4,12}", 书籍编号):
+        详情["book_id"] = 书籍编号
+    详情["book_slug"] = 书籍编号
     详情["hash"] = 哈希
     详情["detail_url"] = 最终来源
+    可用官方转换 = bool(
+        详情.get("txt_conversion_available")
+        and re.fullmatch(r"[0-9]{4,12}", str(详情.get("book_id") or ""))
+    )
     if not 详情.get("title") or not (
-        详情.get("download_url") or 详情.get("txt_conversion_url")
+        详情.get("download_url") or 详情.get("txt_conversion_url") or 可用官方转换
     ):
         raise _ZLibrary站点错误("Z-Library详情缺少下载信息")
-    原始下载链接 = urljoin(最终来源, str(详情["download_url"]))
+    原始下载链接 = (
+        urljoin(最终来源, str(详情["download_url"]))
+        if 详情.get("download_url")
+        else ""
+    )
     TXT转换链接 = str(详情.get("txt_conversion_url") or "").strip()
     if TXT转换链接:
         官方TXT链接 = urljoin(最终来源, TXT转换链接)
         if not _是ZLibrary站点HTTPS地址(官方TXT链接):
             raise _ZLibrary站点错误("Z-Library官方TXT转换地址无效")
         详情["download_url"] = 官方TXT链接
+        详情["download_mode"] = "direct_txt"
     else:
         原始格式 = re.sub(r"[^a-z0-9]", "", str(详情.get("file_type") or "").lower())
-        原始路径 = urlsplit(原始下载链接).path.lower()
-        if "txt" not in 原始格式 and not 原始路径.endswith(".txt"):
-            raise _ZLibrary站点错误("Z-Library详情没有官方TXT转换链接")
-        详情["download_url"] = 原始下载链接
+        原始路径 = urlsplit(原始下载链接).path.lower() if 原始下载链接 else ""
+        if "txt" in 原始格式 or 原始路径.endswith(".txt"):
+            详情["download_mode"] = "direct_txt"
+            详情["download_url"] = 原始下载链接
+        elif 可用官方转换:
+            详情["download_mode"] = "api_conversion"
+            详情["download_url"] = ""
+        else:
+            raise _ZLibrary站点错误("Z-Library详情没有官方TXT转换方式")
     return 详情
 
 
@@ -986,6 +1030,155 @@ def _请求头(来源: str = "") -> dict[str, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
         "Referer": f"{地址.scheme}://{地址.netloc}/" if 地址.netloc else "https://zh.z-library.sk/",
     }
+
+
+async def _登录ZLibrary转换账号(
+    session: aiohttp.ClientSession, 详情页地址: str, 账号: dict[str, str]
+) -> str:
+    地址 = urlsplit(详情页地址)
+    站点地址 = f"{地址.scheme}://{地址.netloc}"
+    if not _是ZLibrary站点HTTPS地址(站点地址):
+        raise _ZLibrary站点错误("Z-Library登录站点地址无效")
+    登录数据 = await _请求ZLibrary注册接口(
+        session,
+        "POST",
+        站点地址 + "/rpc.php",
+        "login",
+        headers={
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+            "Origin": 站点地址,
+            "Referer": 详情页地址,
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        data={
+            "isModal": "true",
+            "email": str(账号.get("email") or ""),
+            "password": str(账号.get("password") or ""),
+            "site_mode": "books",
+            "action": "login",
+            "isSingleLogin": "1",
+            "redirectUrl": "",
+            "gg_json_mode": "1",
+        },
+    )
+    _检查ZLibrary业务回复(登录数据, "login")
+    cookies = session.cookie_jar.filter_cookies(aiohttp.client_reqrep.URL(站点地址))
+    if not all(
+        cookies.get(字段) and cookies[字段].value
+        for 字段 in ("remix_userid", "remix_userkey")
+    ):
+        raise _ZLibrary站点错误("Z-Library登录未取得有效会话")
+    return 站点地址
+
+
+async def _请求ZLibrary转换JSON(
+    session: aiohttp.ClientSession,
+    方法: str,
+    地址: str,
+    详情页地址: str,
+) -> dict[str, Any]:
+    try:
+        async with session.request(
+            方法,
+            地址,
+            headers={
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Origin": f"{urlsplit(详情页地址).scheme}://{urlsplit(详情页地址).netloc}",
+                "Referer": 详情页地址,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            allow_redirects=False,
+        ) as response:
+            if response.status in {401, 403}:
+                raise _ZLibrary站点错误("Z-Library官方TXT转换未通过登录验证")
+            if response.status >= 400:
+                raise _ZLibrary站点错误("Z-Library官方TXT转换请求失败")
+            原始 = await response.content.read(ZLibrary转换响应最大字节数 + 1)
+            if len(原始) > ZLibrary转换响应最大字节数:
+                raise _ZLibrary站点错误("Z-Library官方TXT转换响应过大")
+    except _ZLibrary站点错误:
+        raise
+    except Exception as exc:
+        raise _ZLibrary站点错误("Z-Library官方TXT转换请求失败") from exc
+    try:
+        数据 = json.loads(原始.decode("utf-8"))
+    except (ValueError, UnicodeError) as exc:
+        raise _ZLibrary站点错误("Z-Library官方TXT转换响应无效") from exc
+    if not isinstance(数据, dict):
+        raise _ZLibrary站点错误("Z-Library官方TXT转换响应无效")
+    return 数据
+
+
+def _官方转换下载地址(数据: Any, 详情页地址: str) -> str:
+    if not isinstance(数据, dict):
+        return ""
+    候选 = str(数据.get("downloadUrl") or "").strip()
+    if not 候选:
+        return ""
+    地址 = urljoin(详情页地址, 候选)
+    if not _是ZLibrary站点HTTPS地址(地址):
+        raise _ZLibrary站点错误("Z-Library官方TXT转换下载地址无效")
+    return 地址
+
+
+async def _请求官方TXT转换(
+    session: aiohttp.ClientSession, 详情: dict[str, Any], 来源: str, 配置: Any
+) -> str:
+    书籍编号 = str(详情.get("book_id") or "")
+    详情页地址 = str(详情.get("detail_url") or 来源)
+    if not re.fullmatch(r"[0-9]{4,12}", 书籍编号):
+        raise _ZLibrary站点错误("Z-Library官方TXT转换缺少书籍编号")
+    账号 = await 获取ZLibrary搜索账号(配置)
+    if not 账号:
+        raise _ZLibrary站点错误("Z-Library官方TXT转换缺少已登录账号")
+    站点地址 = await _登录ZLibrary转换账号(session, 详情页地址, 账号)
+    转换地址 = f"{站点地址}/papi/book/{书籍编号}/file-conversion/txt"
+    创建结果 = await _请求ZLibrary转换JSON(
+        session, "POST", 转换地址, 详情页地址
+    )
+    if 创建结果.get("error"):
+        raise _ZLibrary站点错误("Z-Library官方TXT转换任务创建失败")
+    即时结果 = 创建结果.get("response")
+    下载地址 = _官方转换下载地址(即时结果, 详情页地址)
+    if 下载地址:
+        return 下载地址
+    任务编号 = str(
+        创建结果.get("jobId")
+        or (即时结果.get("jobId") if isinstance(即时结果, dict) else "")
+        or ""
+    )
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", 任务编号):
+        raise _ZLibrary站点错误("Z-Library官方TXT转换未返回任务编号")
+    状态地址 = f"{站点地址}/papi/book/{书籍编号}/file-conversion/jobs"
+    截止时间 = time.monotonic() + ZLibrary转换等待秒数
+    await asyncio.sleep(min(5, ZLibrary转换等待秒数))
+    while time.monotonic() < 截止时间:
+        状态结果 = await _请求ZLibrary转换JSON(
+            session, "GET", 状态地址, 详情页地址
+        )
+        状态主体 = 状态结果.get("response")
+        if not isinstance(状态主体, dict) or "jobs" not in 状态主体:
+            状态主体 = 状态结果
+        任务列表 = 状态主体.get("jobs") if isinstance(状态主体, dict) else None
+        if not isinstance(任务列表, list):
+            raise _ZLibrary站点错误("Z-Library官方TXT转换状态无效")
+        for 任务 in 任务列表:
+            if not isinstance(任务, dict) or str(任务.get("jobId") or "") != 任务编号:
+                continue
+            状态 = str(任务.get("status") or "").lower()
+            if 状态 == "ok":
+                下载地址 = _官方转换下载地址(任务, 详情页地址)
+                if not 下载地址:
+                    raise _ZLibrary站点错误("Z-Library官方TXT转换未返回下载地址")
+                return 下载地址
+            if 状态 in {"error", "failed", "failure", "cancelled"}:
+                raise _ZLibrary站点错误("Z-Library官方TXT转换任务失败")
+            break
+        await asyncio.sleep(
+            min(ZLibrary转换轮询间隔秒数, max(0, 截止时间 - time.monotonic()))
+        )
+    raise _ZLibrary站点错误("Z-Library官方TXT转换等待超时")
 
 
 async def _下载原文件(
@@ -1174,6 +1367,11 @@ async def 生成ZLibrary下载回复流(
                 详情.get("author") or "未知",
             )
             yield 格式化ZLibrary下载提示(详情)
+            if 详情.get("download_mode") == "api_conversion":
+                阶段 = "official_txt_conversion"
+                详情["download_url"] = await _请求官方TXT转换(
+                    session, 详情, 来源, 配置
+                )
             阶段 = "download"
             临时路径, 原文件名 = await _下载原文件(session, 详情, 来源)
             阶段 = "official_txt"
