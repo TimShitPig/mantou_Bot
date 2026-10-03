@@ -64,7 +64,16 @@ ZLibrary文件发送失败提示 = "文件发送失败，请稍后再试"
 
 
 class _ZLibrary站点错误(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        诊断原因: str = "site_error",
+        http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.诊断原因 = 诊断原因
+        self.http_status = http_status
 
 
 class _ZLibrary正文HTML解析器(HTMLParser):
@@ -872,7 +881,9 @@ def _提取官方TXT转换链接(原始HTML: str) -> str:
 
 def _解析HTML字段(原始: str) -> dict[str, Any]:
     if "diamwall" in 原始.lower() or "verifying your browser" in 原始.lower():
-        raise _ZLibrary站点错误("Z-Library站点验证未通过")
+        raise _ZLibrary站点错误(
+            "Z-Library站点验证未通过", 诊断原因="anti_bot_page"
+        )
 
     def 匹配文本(选择器属性: str) -> str:
         标签选择器 = (
@@ -968,20 +979,40 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     try:
         async with session.get(来源, headers=_请求头(来源)) as response:
             if response.status in {403, 429, 503, 513}:
-                raise _ZLibrary站点错误("Z-Library站点暂时不可访问")
+                raise _ZLibrary站点错误(
+                    "Z-Library站点暂时不可访问",
+                    诊断原因="http_blocked",
+                    http_status=response.status,
+                )
             if response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status}")
+                raise _ZLibrary站点错误(
+                    "Z-Library详情请求HTTP失败",
+                    诊断原因="http_error",
+                    http_status=response.status,
+                )
             原始 = await response.content.read(ZLibrary详情最大字节数 + 1)
             if len(原始) > ZLibrary详情最大字节数:
-                raise _ZLibrary站点错误("Z-Library详情响应过大")
+                raise _ZLibrary站点错误(
+                    "Z-Library详情响应过大", 诊断原因="response_too_large"
+                )
             最终来源 = str(response.url)
     except _ZLibrary站点错误:
         raise
+    except asyncio.TimeoutError as exc:
+        raise _ZLibrary站点错误(
+            "Z-Library详情请求超时", 诊断原因="request_timeout"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        raise _ZLibrary站点错误(
+            "Z-Library详情连接失败", 诊断原因="transport_error"
+        ) from exc
     except Exception as exc:
         raise RuntimeError("Z-Library详情请求失败") from exc
     详情 = _解析HTML字段(原始.decode("utf-8", "replace"))
     if not _是ZLibrary链接(最终来源):
-        raise _ZLibrary站点错误("Z-Library详情发生非站点跳转")
+        raise _ZLibrary站点错误(
+            "Z-Library详情发生非站点跳转", 诊断原因="redirect_outside_site"
+        )
     书籍编号, 哈希 = 解析ZLibrary书籍编号(来源)
     if not 详情.get("book_id") and re.fullmatch(r"[0-9]{4,12}", 书籍编号):
         详情["book_id"] = 书籍编号
@@ -992,10 +1023,16 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
         详情.get("txt_conversion_available")
         and re.fullmatch(r"[0-9]{4,12}", str(详情.get("book_id") or ""))
     )
-    if not 详情.get("title") or not (
+    if not 详情.get("title"):
+        raise _ZLibrary站点错误(
+            "Z-Library详情缺少标题", 诊断原因="detail_title_missing"
+        )
+    if not (
         详情.get("download_url") or 详情.get("txt_conversion_url") or 可用官方转换
     ):
-        raise _ZLibrary站点错误("Z-Library详情缺少下载信息")
+        raise _ZLibrary站点错误(
+            "Z-Library详情缺少下载信息", 诊断原因="detail_download_markers_missing"
+        )
     原始下载链接 = (
         urljoin(最终来源, str(详情["download_url"]))
         if 详情.get("download_url")
@@ -1005,7 +1042,10 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     if TXT转换链接:
         官方TXT链接 = urljoin(最终来源, TXT转换链接)
         if not _是ZLibrary站点HTTPS地址(官方TXT链接):
-            raise _ZLibrary站点错误("Z-Library官方TXT转换地址无效")
+            raise _ZLibrary站点错误(
+                "Z-Library官方TXT转换地址无效",
+                诊断原因="invalid_txt_conversion_url",
+            )
         详情["download_url"] = 官方TXT链接
         详情["download_mode"] = "direct_txt"
     else:
@@ -1018,7 +1058,10 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
             详情["download_mode"] = "api_conversion"
             详情["download_url"] = ""
         else:
-            raise _ZLibrary站点错误("Z-Library详情没有官方TXT转换方式")
+            raise _ZLibrary站点错误(
+                "Z-Library详情没有官方TXT转换方式",
+                诊断原因="official_txt_conversion_unavailable",
+            )
     return 详情
 
 
@@ -1408,9 +1451,12 @@ async def 生成ZLibrary下载回复流(
             yield ZLibrary文件发送失败提示
     except Exception as exc:
         logger.warning(
-            "Z-Library小说下载失败：阶段=%s, 错误类型=%s",
+            "Z-Library小说下载失败：阶段=%s, 错误类型=%s, 原因=%s, HTTP状态=%s, 底层错误类型=%s",
             阶段,
             type(exc).__name__,
+            getattr(exc, "诊断原因", "unclassified"),
+            getattr(exc, "http_status", None) or "none",
+            type(exc.__cause__).__name__ if exc.__cause__ else "none",
         )
         yield ZLibrary下载失败提示
     finally:
