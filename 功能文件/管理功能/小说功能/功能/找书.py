@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import importlib
 import json
 import re
 import time
@@ -143,6 +144,14 @@ try:
 except Exception as exc:
     晋江小说 = None
     logger.warning(f"找书加载晋江失败：错误={exc}")
+
+try:
+    ZLibrary小说 = importlib.import_module(
+        "功能文件.管理功能.小说功能.小说.Z-Library小说"
+    )
+except Exception as exc:
+    ZLibrary小说 = None
+    logger.warning("找书加载ZLibrary下载器失败：错误类型=%s", type(exc).__name__)
 
 
 每页数量 = 5
@@ -1583,6 +1592,21 @@ async def 搜索晋江(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索ZLibrary(
+    关键词: str, *, 需要数量: int = 20, 配置: Any = None
+) -> list[dict[str, Any]]:
+    if ZLibrary小说 is None:
+        return []
+    try:
+        原始结果 = await ZLibrary小说.搜索ZLibrary(
+            关键词, 需要数量=需要数量, 配置=配置
+        )
+        return _整理新增平台搜索结果("ZLibrary", 原始结果, 需要数量)
+    except Exception as exc:
+        logger.debug("找书ZLibrary搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
 def _清理QQ阅读预检缓存() -> None:
     现在 = time.time()
     if len(QQ阅读预检缓存) < 512:
@@ -1691,6 +1715,7 @@ def _平台优先级值(平台: Any) -> int:
         "连城": -5,
         "菠萝包": -6,
         "晋江": -7,
+        "ZLibrary": -8,
     }.get(str(平台 or ""), 0)
 
 
@@ -1804,6 +1829,7 @@ async def _聚合搜索未缓存(
     关键词: str,
     搜索类型: str = "auto",
     允许平台: Any = None,
+    配置: Any = None,
 ) -> list[dict[str, Any]]:
     timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
     关键词 = 清理搜索关键词(关键词)
@@ -1842,6 +1868,10 @@ async def _聚合搜索未缓存(
             平台搜索任务("菠萝包", lambda: 搜索菠萝包(关键词, 需要数量=数量)),
             平台搜索任务("晋江", lambda: 搜索晋江(关键词, 需要数量=数量)),
             平台搜索任务("追书", lambda: 搜索追书(session, 关键词, 需要数量=数量)),
+            平台搜索任务(
+                "ZLibrary",
+                lambda: 搜索ZLibrary(关键词, 需要数量=数量, 配置=配置),
+            ),
         )
         (
             番茄结果,
@@ -1863,6 +1893,7 @@ async def _聚合搜索未缓存(
             菠萝包结果,
             晋江结果,
             追书结果,
+            ZLibrary结果,
         ) = await asyncio.gather(
             *搜索任务,
             return_exceptions=False,
@@ -1887,6 +1918,7 @@ async def _聚合搜索未缓存(
             菠萝包结果,
             晋江结果,
             追书结果,
+            ZLibrary结果,
         ):
             for 排名, 项 in enumerate(平台结果):
                 if isinstance(项, dict):
@@ -1920,6 +1952,7 @@ async def _聚合搜索未缓存(
                 连城结果,
                 菠萝包结果,
                 晋江结果,
+                ZLibrary结果,
             ]
         )
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
@@ -1953,6 +1986,7 @@ async def _聚合搜索未缓存(
                 菠萝包结果,
                 晋江结果,
                 追书结果,
+                ZLibrary结果,
             ]
 
             async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
@@ -1976,6 +2010,11 @@ async def _聚合搜索未缓存(
                     平台搜索任务("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10), "菠萝包联想"),
                     平台搜索任务("晋江", lambda: 搜索晋江(w, 需要数量=10), "晋江联想"),
                     平台搜索任务("追书", lambda: 搜索追书(session, w, 需要数量=10), "追书联想"),
+                    平台搜索任务(
+                        "ZLibrary",
+                        lambda: 搜索ZLibrary(w, 需要数量=10, 配置=配置),
+                        "ZLibrary联想",
+                    ),
                 )
 
             补搜结果 = await asyncio.gather(*(补搜一个词(w) for w in 补搜词))
@@ -2003,6 +2042,7 @@ async def 聚合搜索(
     关键词: str,
     搜索类型: str = "auto",
     允许平台: Any = None,
+    配置: Any = None,
 ) -> list[dict[str, Any]]:
     """搜索结果短缓存，避免重复查询反复等待所有平台响应。"""
     关键词 = 清理搜索关键词(关键词)
@@ -2042,6 +2082,7 @@ async def 聚合搜索(
                 关键词,
                 搜索类型,
                 允许平台=允许平台集合,
+                配置=配置,
             )
             结果 = _过滤不可用平台结果(结果, 允许平台集合)
             副本 = [dict(项) for 项 in 结果]
@@ -2250,6 +2291,10 @@ async def 获取找书下载回复流(
         return 菠萝包小说.生成菠萝包下载回复流(event, 链接, 配置)
     if 平台 == "晋江" and 晋江小说 is not None:
         return 晋江小说.生成晋江下载回复流(event, 链接, 配置)
+    if 平台 == "ZLibrary" and ZLibrary小说 is not None:
+        if not 链接:
+            return "下载失败 请重试"
+        return ZLibrary小说.生成ZLibrary下载回复流(event, 链接, 配置)
     return "下载失败 请重试"
 
 
@@ -2285,6 +2330,7 @@ async def 处理找书指令(
                     关键词,
                     搜索类型,
                     允许平台=允许平台,
+                    配置=配置,
                 ),
                 允许平台,
             )

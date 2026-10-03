@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.88-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.89-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.88 |
+| 版本 | v6.1.89 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -122,7 +122,7 @@ qrcode[pil]
 | 连城小说 | 链接 / 分享卡片 | HTML 正文清理 |
 | 菠萝包小说 | 链接 / 分享卡片 | 支持 `m.sfacg.com/Novel/{书籍ID}` 与 `m.sfacg.com/b/{书籍ID}` 短链 |
 | 晋江小说 | 链接 / 分享卡片 | 只请求公开章节，跳过付费或明确锁定章节 |
-| Z-Library小说 | `zh.z-library.sk/book/书籍ID` | 公开下载模块不使用账号；读取公开详情页提供的整本文件并转换为 TXT |
+| Z-Library小说 | 找书聚合搜索 / `zh.z-library.sk/book/书籍ID` | 找书使用 MySQL 中已验证账号搜索；公开链接下载读取详情页提供的整本文件并转换为 TXT |
 | ZLibrary账号创建 | `注册ZLibrary` / `创建ZLibrary账号` | 白名单管理员每次命令创建一个账号，自动随机邮箱、收码、注册并验证登录；账号仅存 MySQL |
 
 所有小说缺章时不生成部分 TXT；下载完成后上传到所有已开启且已配置的网盘，并按网盘发送对应分享按钮。
@@ -180,8 +180,8 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
 - 菠萝包：支持 `m.sfacg.com/Novel/{书籍ID}` 和 `m.sfacg.com/b/{书籍ID}` 短链。
 - 晋江：只请求公开章节，付费或明确锁定章节不请求。
-- Z-Library 公开下载：只识别 `.sk` 公开书籍详情链接，不使用账号；下载详情页提供的电子书并转换成 TXT，通过现有多网盘流程分享。
-- ZLibrary 账号创建：独立模块通过 API 创建随机邮箱、发送邮件验证码并最多轮询 120 秒，在同一会话提交注册，再用全新会话验证登录。每次管理员主动命令仅创建一个账号，不定时补充、不轮换下载账号，也不修改公开下载流程。
+- Z-Library：搜索、账号创建、登录验证和公开链接下载都由 `Z-Library小说.py` 提供；找书聚合搜索使用 MySQL 中最新的已验证账号，公开书籍下载仍通过详情页取得电子书并转换成 TXT。
+- ZLibrary 账号创建通过 API 创建随机域名邮箱、发送邮件验证码并最多轮询 120 秒，在同一会话提交注册，再用全新会话验证登录。每次管理员主动命令仅创建一个账号，不定时补充、不轮换搜索账号。
 
 </details>
 
@@ -263,7 +263,6 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
         │       ├── 小说下载任务.py
         │       ├── 小说功能开关.py
         │       ├── 找书.py
-        │       ├── ZLibrary账号.py
         │       └── 文本处理.py
         ├── 网盘功能/
         │   ├── UC网盘.py
@@ -302,7 +301,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 
 ### 自动创建 ZLibrary 账号
 
-先在 AstrBot 插件配置填写 `zlibrary_account_settings.zlibrary_mail_api_key`，并配置可用 MySQL；Key 默认空，禁止把真实 Key 写入源码。重载插件后，白名单管理员发送 `注册ZLibrary` 或 `创建ZLibrary账号`，即可启动单次流程。邮箱域名由服务端随机选择，无需指定域名；密码和昵称自动生成。未配置 Key 或 MySQL 时不会创建邮箱；发送成功后等待实际邮件验证码，超时结束，不把发码接口 HTTP 200 当作注册成功。聊天只显示进度和固定结果提示，不显示邮箱、密码、Key、Token 或验证码。
+先在 AstrBot 插件配置填写 `zlibrary_account_settings.zlibrary_mail_api_key`，并配置可用 MySQL；Key 默认空，禁止把真实 Key 写入源码。重载插件后，白名单管理员发送 `注册ZLibrary` 或 `创建ZLibrary账号`，即可启动单次流程。邮箱域名由服务端随机选择，无需指定域名；密码和昵称自动生成。未配置 Key 或 MySQL 时不会创建邮箱；发送成功后等待实际邮件验证码，超时结束，不把发码接口 HTTP 200 当作注册成功。聊天只显示进度和固定结果提示，不显示邮箱、密码、Key、Token 或验证码。账号注册、搜索和下载实现均位于 `功能文件/管理功能/小说功能/小说/Z-Library小说.py`。
 
 小说下载功能全部免费可用，不保留用户激活、卡密、收费、付费或每日免费额度。
 

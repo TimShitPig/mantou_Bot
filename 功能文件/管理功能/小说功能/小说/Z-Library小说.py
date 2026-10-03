@@ -1,22 +1,22 @@
-"""Z-Library 公开书籍链接下载。
-
-当前模块只处理公开书籍详情页和详情页提供的下载文件，不读取或保存
-Z-Library 账号、密码、Cookie、浏览器配置和注册资料。下载到的 EPUB、FB2、
-HTML、TXT 及可选 PDF 文件统一转换为小说 TXT，再交给小说网盘出口。
-"""
+"""Z-Library 搜索、账号创建与公开书籍下载。"""
 
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import html
+import json
 import posixpath
 import re
+import secrets
+import time
+import uuid
 import zipfile
 from email.message import Message
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, AsyncIterator
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import aiohttp
@@ -34,6 +34,7 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+from 功能文件.管理功能.基础功能 import 权限工具, 运行状态数据库
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 
@@ -48,6 +49,15 @@ ZLibrary请求超时秒数 = 35
 ZLibrary详情最大字节数 = 4 * 1024 * 1024
 ZLibrary文件最大字节数 = 120 * 1024 * 1024
 ZLibrary压缩后最大展开字节数 = 256 * 1024 * 1024
+ZLibrary搜索结果最大字节数 = 4 * 1024 * 1024
+ZLibrary搜索登录URL = "https://z-library.sk/rpc.php"
+ZLibrary搜索域名 = "https://z-library.sk"
+ZLibrary邮箱API地址 = "https://maliapi.215.im/v1"
+ZLibrary注册站点地址 = "https://libb.la"
+ZLibrary搜索锁: asyncio.Lock = globals().get("ZLibrary搜索锁", asyncio.Lock())
+ZLibrary账号命名空间 = "zlibrary_accounts"
+ZLibrary注册任务集合: set[asyncio.Task] = globals().get("ZLibrary注册任务集合", set())
+ZLibrary最近注册启动 = globals().get("ZLibrary最近注册启动", 0.0)
 ZLibrary文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
@@ -195,6 +205,555 @@ def _是ZLibrary链接(值: str) -> bool:
     主机 = (地址.hostname or "").lower().strip(".")
     路径 = [项目 for 项目 in (地址.path or "").split("/") if 项目]
     return 主机 in ZLibrary允许域名 and len(路径) >= 2 and 路径[0].lower() == "book"
+
+
+class _ZLibrary注册错误(RuntimeError):
+    def __init__(self, 阶段: str, 状态: str, http状态: int = 0):
+        self.阶段, self.状态, self.http状态 = 阶段, 状态, http状态
+        super().__init__(f"{阶段}:{状态}:{http状态}")
+
+
+async def _请求ZLibrary注册接口(session, 方法, 地址, 阶段, **参数):
+    async with session.request(方法, 地址, allow_redirects=False, **参数) as response:
+        原始 = bytearray()
+        async for 数据块 in response.content.iter_chunked(65536):
+            原始.extend(数据块)
+            if len(原始) > 2 * 1024 * 1024:
+                raise _ZLibrary注册错误(阶段, "response_too_large", response.status)
+        if not 200 <= response.status < 300:
+            raise _ZLibrary注册错误(阶段, "http_error", response.status)
+        try:
+            数据 = json.loads(原始)
+        except (ValueError, UnicodeError) as exc:
+            raise _ZLibrary注册错误(阶段, "invalid_json", response.status) from exc
+        if not isinstance(数据, dict) or any(数据.get(字段) for 字段 in ("error", "errors", "_error")):
+            raise _ZLibrary注册错误(阶段, "business_error", response.status)
+        return 数据
+
+
+def _提取ZLibrary验证码(邮件: dict, 地址: str) -> str | None:
+    收件人列表 = 邮件.get("to")
+    if not isinstance(收件人列表, list) or not any(
+        isinstance(收件人, dict)
+        and str(收件人.get("address", "")).lower() == 地址.lower()
+        for 收件人 in 收件人列表
+    ):
+        return None
+    发件人 = 邮件.get("from")
+    发件地址 = 发件人.get("address", "") if isinstance(发件人, dict) else ""
+    发件域名 = str(发件地址).rsplit("@", 1)[-1].lower()
+    if not any(
+        发件域名 == 域名 or 发件域名.endswith("." + 域名)
+        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk")
+    ):
+        return None
+    主题 = str(邮件.get("subject", ""))
+    if not re.search(
+        r"verification|verify|confirmation|confirm|sign.?up|registration|验证码|验证|注册",
+        主题,
+        re.I,
+    ):
+        return None
+    验证码 = 邮件.get("verificationCode")
+    if isinstance(验证码, str) and re.fullmatch(r"[0-9]{4}", 验证码):
+        return 验证码
+    片段 = [str(邮件.get(字段) or "")[:256000] for 字段 in ("subject", "intro", "text")]
+    正文 = 邮件.get("html")
+    if isinstance(正文, str):
+        片段.append(正文[:256000])
+    elif isinstance(正文, list):
+        片段.extend(项目[:256000] for 项目 in 正文 if isinstance(项目, str))
+    文本 = html.unescape(" ".join(片段))
+    文本 = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", 文本)
+    文本 = re.sub(r"(?s)<[^>]*>", " ", 文本)
+    文本 = re.sub(r"\s+", " ", 文本)
+    验证词 = r"(?:verification|verify|confirmation|confirm|security|one[\s-]?time|otp|验证码|校验码|確認碼|确认码|驗證碼)"
+    匹配 = re.search(
+        rf"{验证词}[^0-9]{{0,80}}(?<![0-9])([0-9]{{4}})(?![0-9])|(?<![0-9])([0-9]{{4}})(?![0-9])[^0-9]{{0,80}}{验证词}",
+        文本,
+        re.I,
+    )
+    return (匹配.group(1) or 匹配.group(2)) if 匹配 else None
+
+
+def _检查ZLibrary业务回复(数据: dict, 阶段: str) -> dict:
+    回复 = 数据.get("response")
+    if not isinstance(回复, dict) or not 回复:
+        raise _ZLibrary注册错误(阶段, "unconfirmed")
+    if any(回复.get(字段) for 字段 in ("validationError", "error", "errors", "_error")):
+        raise _ZLibrary注册错误(阶段, "business_error")
+    return 回复
+
+
+def _ZLibrary跳转已确认(回复: dict, 登录: bool = False) -> bool:
+    字段 = "priorityRedirectUrl" if 登录 else "forceRedirection"
+    return bool(
+        (isinstance(回复.get(字段), str) and 回复[字段])
+        or (
+            isinstance(回复.get("regularDomains"), (list, dict))
+            and 回复["regularDomains"]
+            and isinstance(回复.get("params"), str)
+            and 回复["params"]
+        )
+    )
+
+
+async def 自动创建ZLibrary账号(
+    api_key: str,
+    保存账号,
+    rx: str = "215",
+    *,
+    邮箱地址: str = ZLibrary邮箱API地址,
+    站点地址: str = ZLibrary注册站点地址,
+    等待秒数: float = 120,
+    轮询间隔: float = 5,
+) -> str:
+    """通过邮箱 API 收码注册，并用独立会话确认登录。"""
+    if not api_key.startswith("AC-") or not rx.strip():
+        raise _ZLibrary注册错误("config", "invalid_config")
+    尝试ID = uuid.uuid4().hex
+    密码 = secrets.token_urlsafe(15)
+    名称 = "Reader" + secrets.token_hex(4)
+    超时 = aiohttp.ClientTimeout(total=25, connect=10)
+    邮箱请求头 = {"Accept": "application/json", "User-Agent": "YYDSMailClient/1.0"}
+    async with aiohttp.ClientSession(
+        timeout=超时,
+        headers=邮箱请求头,
+        cookie_jar=aiohttp.DummyCookieJar(),
+    ) as 邮箱会话:
+        创建结果 = await _请求ZLibrary注册接口(
+            邮箱会话,
+            "POST",
+            邮箱地址 + "/accounts",
+            "mail_create",
+            headers={"X-API-Key": api_key, "Idempotency-Key": 尝试ID},
+            json={"localPart": "m" + secrets.token_hex(8)},
+        )
+        邮箱数据 = 创建结果.get("data")
+        if 创建结果.get("success") is not True or not isinstance(邮箱数据, dict):
+            raise _ZLibrary注册错误("mail_create", "unconfirmed")
+        邮箱 = 邮箱数据.get("address")
+        邮箱令牌 = 邮箱数据.get("token")
+        邮箱ID = 邮箱数据.get("id")
+        if not isinstance(邮箱, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", 邮箱):
+            raise _ZLibrary注册错误("mail_create", "invalid_address")
+        if not isinstance(邮箱令牌, str) or not 邮箱令牌 or not isinstance(邮箱ID, str) or not 邮箱ID:
+            raise _ZLibrary注册错误("mail_create", "missing_mailbox")
+        邮箱鉴权头 = {"Authorization": "Bearer " + 邮箱令牌}
+        表单 = {
+            "email": 邮箱,
+            "password": 密码,
+            "name": 名称,
+            "rx": rx,
+            "action": "registration",
+            "redirectUrl": "",
+        }
+        站点请求头 = {
+            "Accept": "application/json",
+            "Origin": 站点地址,
+            "Referer": 站点地址 + "/registration",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        账号 = {
+            "email": 邮箱,
+            "password": 密码,
+            "name": 名称,
+            "status": "pending",
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        await 保存账号(尝试ID, dict(账号))
+        async with aiohttp.ClientSession(timeout=超时, headers=站点请求头) as 站点会话:
+            发码表单 = aiohttp.FormData()
+            for 字段, 值 in 表单.items():
+                发码表单.add_field(字段, 值, content_type="text/plain")
+            开始时间 = dt.datetime.now(dt.timezone.utc)
+            发码结果 = await _请求ZLibrary注册接口(
+                站点会话,
+                "POST",
+                站点地址 + "/papi/user/verification/send-code",
+                "send_code",
+                data=发码表单,
+            )
+            if 发码结果.get("success") not in (1, True):
+                raise _ZLibrary注册错误("send_code", "unconfirmed")
+            验证码 = None
+            已检查邮件: set[str] = set()
+            try:
+                async with asyncio.timeout(等待秒数):
+                    while 验证码 is None:
+                        收件箱 = await _请求ZLibrary注册接口(
+                            邮箱会话,
+                            "GET",
+                            邮箱地址 + "/inboxes/" + quote(邮箱ID, safe="") + "/messages",
+                            "mail_read",
+                            headers=邮箱鉴权头,
+                            params={"since": 开始时间.isoformat(), "seen": "false", "limit": "200"},
+                        )
+                        邮件列表 = (
+                            收件箱.get("data", {}).get("messages")
+                            if isinstance(收件箱.get("data"), dict)
+                            else None
+                        )
+                        if 收件箱.get("success") is not True or not isinstance(邮件列表, list):
+                            raise _ZLibrary注册错误("mail_read", "unconfirmed")
+                        for 邮件摘要 in 邮件列表:
+                            if not isinstance(邮件摘要, dict):
+                                continue
+                            邮件ID = 邮件摘要.get("id")
+                            if (
+                                not isinstance(邮件ID, str)
+                                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", 邮件ID)
+                                or 邮件ID in 已检查邮件
+                            ):
+                                continue
+                            邮件详情 = await _请求ZLibrary注册接口(
+                                邮箱会话,
+                                "GET",
+                                邮箱地址 + "/messages/" + quote(邮件ID, safe=""),
+                                "mail_read",
+                                headers=邮箱鉴权头,
+                                params={"address": 邮箱},
+                            )
+                            邮件 = 邮件详情.get("data")
+                            if 邮件详情.get("success") is not True or not isinstance(邮件, dict):
+                                raise _ZLibrary注册错误("mail_read", "unconfirmed")
+                            try:
+                                时间戳 = dt.datetime.fromisoformat(
+                                    str(邮件.get("createdAt") or 邮件摘要.get("createdAt") or "").replace("Z", "+00:00")
+                                )
+                            except ValueError:
+                                已检查邮件.add(邮件ID)
+                                continue
+                            if 时间戳.tzinfo is None or 时间戳 < 开始时间:
+                                已检查邮件.add(邮件ID)
+                                continue
+                            验证码 = _提取ZLibrary验证码(邮件, 邮箱)
+                            if 验证码:
+                                break
+                            已检查邮件.add(邮件ID)
+                        if 验证码 is None:
+                            await asyncio.sleep(轮询间隔)
+            except TimeoutError as exc:
+                raise _ZLibrary注册错误("mail_read", "code_timeout") from exc
+            注册数据 = await _请求ZLibrary注册接口(
+                站点会话,
+                "POST",
+                站点地址 + "/rpc.php",
+                "registration",
+                data={
+                    **表单,
+                    "verifyCode": 验证码,
+                    "isModal": "true",
+                    "gg_json_mode": "1",
+                },
+            )
+            注册回复 = _检查ZLibrary业务回复(注册数据, "registration")
+            if not _ZLibrary跳转已确认(注册回复):
+                raise _ZLibrary注册错误("registration", "unconfirmed")
+            账号["status"] = "registered"
+            await 保存账号(尝试ID, dict(账号))
+        async with aiohttp.ClientSession(timeout=超时, headers=站点请求头) as 登录会话:
+            登录数据 = await _请求ZLibrary注册接口(
+                登录会话,
+                "POST",
+                站点地址 + "/rpc.php",
+                "login",
+                data={
+                    "email": 邮箱,
+                    "password": 密码,
+                    "action": "login",
+                    "site_mode": "books",
+                    "isSingleLogin": "1",
+                    "isModal": "true",
+                    "redirectUrl": "",
+                    "gg_json_mode": "1",
+                },
+            )
+            登录回复 = _检查ZLibrary业务回复(登录数据, "login")
+            cookies = 登录会话.cookie_jar.filter_cookies(aiohttp.client_reqrep.URL(站点地址))
+            if not _ZLibrary跳转已确认(登录回复, True) or not all(
+                cookies.get(字段) and cookies[字段].value
+                for 字段 in ("remix_userid", "remix_userkey")
+            ):
+                raise _ZLibrary注册错误("login", "unconfirmed")
+        账号["status"] = "logged_in"
+        await 保存账号(尝试ID, dict(账号))
+    return 尝试ID
+
+
+async def _注册并保存ZLibrary账号(配置: Any) -> str:
+    分类 = 运行状态数据库.读取配置字段(配置, "zlibrary_account_settings") or 配置
+    api_key = str(运行状态数据库.读取配置字段(分类, "zlibrary_mail_api_key") or "").strip()
+    rx = str(运行状态数据库.读取配置字段(分类, "zlibrary_registration_rx") or "215").strip()
+    if not api_key:
+        return "请先配置邮箱 API Key"
+    if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
+        return "请先配置并连接数据库"
+
+    async def 保存(标识: str, 数据: dict[str, Any]) -> None:
+        await asyncio.to_thread(
+            运行状态数据库.写入运行状态值,
+            配置,
+            ZLibrary账号命名空间,
+            标识,
+            json.dumps(数据, ensure_ascii=False),
+        )
+
+    try:
+        await 自动创建ZLibrary账号(api_key, 保存, rx)
+    except _ZLibrary注册错误 as exc:
+        logger.warning(
+            "ZLibrary创建账号失败：阶段=%s 状态=%s HTTP=%s",
+            exc.阶段,
+            exc.状态,
+            exc.http状态,
+        )
+        return "账号创建流程未完成，请稍后再试"
+    except Exception as exc:
+        logger.warning("ZLibrary创建账号失败：类型=%s", type(exc).__name__)
+        return "账号创建流程未完成，请稍后再试"
+    return "账号注册成功，登录返回成功，账号已保存到数据库"
+
+
+async def 获取ZLibrary搜索账号(配置: Any) -> dict[str, str] | None:
+    if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
+        return None
+    try:
+        状态列表 = await asyncio.to_thread(
+            运行状态数据库.读取运行状态命名空间,
+            配置,
+            ZLibrary账号命名空间,
+        )
+    except Exception as exc:
+        logger.warning("ZLibrary搜索账号读取失败：错误类型=%s", type(exc).__name__)
+        return None
+    账号候选 = []
+    for 原始值 in 状态列表.values():
+        try:
+            账号 = json.loads(原始值)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(账号, dict) or 账号.get("status") != "logged_in":
+            continue
+        邮箱, 密码 = 账号.get("email"), 账号.get("password")
+        if not isinstance(邮箱, str) or not 邮箱 or not isinstance(密码, str) or not 密码:
+            continue
+        账号候选.append((str(账号.get("created_at") or ""), 邮箱, 密码))
+    if not 账号候选:
+        return None
+    _, 邮箱, 密码 = max(账号候选, key=lambda 项: 项[0])
+    return {"email": 邮箱, "password": 密码}
+
+
+async def _ZLibrary注册回复流(配置: Any):
+    global ZLibrary最近注册启动
+    if ZLibrary注册任务集合 or time.monotonic() - ZLibrary最近注册启动 < 60:
+        yield "账号创建处理中，请稍后再试"
+        return
+    ZLibrary最近注册启动 = time.monotonic()
+    任务 = asyncio.create_task(_注册并保存ZLibrary账号(配置))
+    ZLibrary注册任务集合.add(任务)
+    try:
+        yield "正在自动获取邮箱并创建账号，请稍等"
+        yield await 任务
+    finally:
+        if not 任务.done():
+            任务.cancel()
+        await asyncio.gather(任务, return_exceptions=True)
+        ZLibrary注册任务集合.discard(任务)
+
+
+async def _ZLibrary静默回复流():
+    if False:
+        yield ""
+
+
+def 获取ZLibrary账号回复流(event: Any, 命令文本: str, 配置: Any):
+    if str(命令文本).strip().lower() not in {"注册zlibrary", "创建zlibrary账号"}:
+        return None
+    if not 权限工具.是QQ官方机器人(event) or not 权限工具.是群文件清理管理员(event, 配置):
+        return _ZLibrary静默回复流()
+    return _ZLibrary注册回复流(配置)
+
+
+async def 停止ZLibrary账号任务() -> None:
+    任务列表 = list(ZLibrary注册任务集合)
+    for 任务 in 任务列表:
+        任务.cancel()
+    await asyncio.gather(*任务列表, return_exceptions=True)
+    ZLibrary注册任务集合.clear()
+
+
+class _ZLibrary搜索结果解析器(HTMLParser):
+    """解析上游搜索页中的 z-bookcard 书籍卡片。"""
+
+    _空标签 = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.深度 = 0
+        self.结果区深度: int | None = None
+        self.当前卡片: dict[str, str] | None = None
+        self.捕获字段: tuple[str, int, list[str]] | None = None
+        self.卡片列表: list[dict[str, str]] = []
+
+    @staticmethod
+    def _读取属性(attrs: list[tuple[str, str | None]]) -> dict[str, str]:
+        return {键.lower(): str(值 or "") for 键, 值 in attrs if 键}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        属性 = self._读取属性(attrs)
+        if tag == "div" and 属性.get("id") == "searchResultBox":
+            self.结果区深度 = self.深度
+        elif tag == "z-bookcard" and self.结果区深度 is not None:
+            self.当前卡片 = {
+                "book_id": 属性.get("id", "").strip(),
+                "href": 属性.get("href", "").strip(),
+                "title": "",
+                "authors": "",
+            }
+        elif self.当前卡片 is not None and tag == "div" and 属性.get("slot") in {"title", "author"}:
+            self.捕获字段 = (属性["slot"], self.深度 + 1, [])
+        if tag not in self._空标签:
+            self.深度 += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag.lower() not in self._空标签:
+            self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self.捕获字段 is not None:
+            self.捕获字段[2].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if self.捕获字段 is not None and self.深度 == self.捕获字段[1]:
+            字段名, _深度, 文本片段 = self.捕获字段
+            if self.当前卡片 is not None:
+                self.当前卡片["title" if 字段名 == "title" else "authors"] = " ".join(文本片段)
+            self.捕获字段 = None
+        if tag == "z-bookcard" and self.当前卡片 is not None:
+            self.卡片列表.append(self.当前卡片)
+            self.当前卡片 = None
+        if tag == "div" and self.结果区深度 == self.深度 - 1:
+            self.结果区深度 = None
+        if tag not in self._空标签:
+            self.深度 = max(0, self.深度 - 1)
+
+
+def _解析ZLibrary搜索结果(原始HTML: str, 需要数量: int) -> list[dict[str, Any]]:
+    解析器 = _ZLibrary搜索结果解析器()
+    解析器.feed(原始HTML)
+    结果: list[dict[str, Any]] = []
+    for 卡片 in 解析器.卡片列表:
+        地址 = urljoin(ZLibrary搜索域名 + "/", html.unescape(卡片.get("href", "")))
+        if not _是ZLibrary链接(地址):
+            continue
+        路径 = [段 for 段 in urlsplit(地址).path.split("/") if 段]
+        编号 = str(卡片.get("book_id") or (路径[1] if len(路径) >= 2 else "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", 编号):
+            continue
+        书名 = re.sub(r"\s+", " ", html.unescape(卡片.get("title", ""))).strip()
+        作者 = re.sub(r"\s+", " ", html.unescape(卡片.get("authors", ""))).strip()
+        if not 书名:
+            continue
+        作者 = ", ".join(作者.split(";")) if 作者 else "未知"
+        结果.append({
+            "platform": "ZLibrary",
+            "book_id": 编号,
+            "title": 书名,
+            "author": 作者,
+            "url": 地址,
+            "heat": 0,
+            "score": 0,
+            "read_count": 0,
+            "word_count": 0,
+        })
+        if len(结果) >= max(1, min(int(需要数量 or 15), 50)):
+            break
+    return 结果
+
+
+async def 搜索ZLibrary(
+    关键词: str, *, 需要数量: int = 15, 配置: Any = None
+) -> list[dict[str, Any]]:
+    """通过已验证账号调用上游 search(q,count) 对应的书籍搜索页。"""
+    查询 = str(关键词 or "").strip()
+    if not 查询:
+        return []
+    async with ZLibrary搜索锁:
+        账号 = await 获取ZLibrary搜索账号(配置)
+        if not 账号:
+            return []
+        timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_connect=5, sock_read=8)
+        headers = {
+            "Accept": "application/json,text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+            "Origin": ZLibrary搜索域名,
+            "Referer": ZLibrary搜索域名 + "/",
+        }
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers=headers,
+            cookie_jar=aiohttp.CookieJar(unsafe=True),
+            trust_env=False,
+        ) as session:
+            表单 = {
+                "isModal": "true",
+                "email": str(账号.get("email") or ""),
+                "password": str(账号.get("password") or ""),
+                "site_mode": "books",
+                "action": "login",
+                "isSingleLogin": "1",
+                "redirectUrl": "",
+                "gg_json_mode": "1",
+            }
+            try:
+                async with session.post(
+                    ZLibrary搜索登录URL, data=表单, allow_redirects=False
+                ) as response:
+                    if response.status != 200:
+                        logger.debug("ZLibrary搜索登录失败：HTTP=%s", response.status)
+                        return []
+                    原始 = await response.content.read(1024 * 1024 + 1)
+                    if len(原始) > 1024 * 1024:
+                        return []
+                    回复 = json.loads(原始.decode("utf-8"))
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, UnicodeError) as exc:
+                logger.debug("ZLibrary搜索登录异常：错误类型=%s", type(exc).__name__)
+                return []
+            登录回复 = 回复.get("response") if isinstance(回复, dict) else None
+            if not isinstance(登录回复, dict) or 登录回复.get("validationError"):
+                logger.debug("ZLibrary搜索登录未确认")
+                return []
+            Cookies = {cookie.key: cookie.value for cookie in session.cookie_jar}
+            认证字段 = {"remix_userid", "remix_userkey"}
+            if not 认证字段.issubset(Cookies) or not all(Cookies.get(name) for name in 认证字段):
+                logger.debug("ZLibrary搜索登录缺少认证Cookie")
+                return []
+            搜索地址 = ZLibrary搜索域名 + "/s/" + quote(查询, safe="")
+            try:
+                async with session.get(
+                    搜索地址,
+                    params={"page": "1"},
+                    headers={"Cookie": "; ".join(f"{key}={value}" for key, value in Cookies.items())},
+                    allow_redirects=False,
+                ) as response:
+                    if response.status != 200:
+                        logger.debug("ZLibrary搜索失败：HTTP=%s", response.status)
+                        return []
+                    原始 = await response.content.read(ZLibrary搜索结果最大字节数 + 1)
+                    if len(原始) > ZLibrary搜索结果最大字节数:
+                        return []
+                    return _解析ZLibrary搜索结果(
+                        原始.decode("utf-8", "replace"), 需要数量
+                    )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logger.debug("ZLibrary搜索异常：错误类型=%s", type(exc).__name__)
+                return []
 
 
 def 解析ZLibrary书籍编号(来源: str) -> tuple[str, str]:
