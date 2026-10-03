@@ -6,18 +6,15 @@ import asyncio
 import datetime as dt
 import html
 import json
-import posixpath
 import re
 import secrets
 import time
 import uuid
-import zipfile
 from email.message import Message
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import quote, unquote, urljoin, urlsplit
-from xml.etree import ElementTree
 
 import aiohttp
 
@@ -35,7 +32,6 @@ except Exception:
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.基础功能 import 权限工具, 运行状态数据库
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 
 ZLibrary允许域名 = {
@@ -48,7 +44,6 @@ ZLibrary链接正则 = re.compile(
 ZLibrary请求超时秒数 = 35
 ZLibrary详情最大字节数 = 4 * 1024 * 1024
 ZLibrary文件最大字节数 = 120 * 1024 * 1024
-ZLibrary压缩后最大展开字节数 = 256 * 1024 * 1024
 ZLibrary搜索结果最大字节数 = 4 * 1024 * 1024
 ZLibrary搜索登录URL = "https://z-library.sk/rpc.php"
 ZLibrary搜索域名 = "https://z-library.sk"
@@ -58,11 +53,6 @@ ZLibrary搜索锁: asyncio.Lock = globals().get("ZLibrary搜索锁", asyncio.Loc
 ZLibrary账号命名空间 = "zlibrary_accounts"
 ZLibrary注册任务集合: set[asyncio.Task] = globals().get("ZLibrary注册任务集合", set())
 ZLibrary最近注册启动 = globals().get("ZLibrary最近注册启动", 0.0)
-ZLibrary文件声明 = (
-    "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
-    "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。"
-    "如喜欢本书，请支持正版。"
-)
 ZLibrary下载失败提示 = "下载失败 请重试"
 ZLibrary文件发送失败提示 = "文件发送失败，请稍后再试"
 
@@ -72,7 +62,7 @@ class _ZLibrary站点错误(RuntimeError):
 
 
 class _ZLibrary正文HTML解析器(HTMLParser):
-    """把常见 EPUB XHTML 或网页正文转成段落文本。"""
+    """清理详情页与搜索结果里的 HTML 文本片段。"""
 
     _块元素 = {
         "article",
@@ -205,6 +195,14 @@ def _是ZLibrary链接(值: str) -> bool:
     主机 = (地址.hostname or "").lower().strip(".")
     路径 = [项目 for 项目 in (地址.path or "").split("/") if 项目]
     return 主机 in ZLibrary允许域名 and len(路径) >= 2 and 路径[0].lower() == "book"
+
+
+def _是ZLibrary站点HTTPS地址(值: str) -> bool:
+    try:
+        地址 = urlsplit(str(值).strip())
+    except ValueError:
+        return False
+    return 地址.scheme.lower() == "https" and (地址.hostname or "").lower().strip(".") in ZLibrary允许域名
 
 
 class _ZLibrary注册错误(RuntimeError):
@@ -789,6 +787,83 @@ def _清理文件名(值: Any) -> str:
     return 文本[:90] or "Z-Library小说"
 
 
+class _ZLibrary详情链接解析器(HTMLParser):
+    """读取详情页公开的格式下载与转换链接。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.链接列表: list[dict[str, str]] = []
+        self._当前链接: dict[str, Any] | None = None
+
+    def _完成当前链接(self) -> None:
+        if self._当前链接 is None:
+            return
+        项目 = self._当前链接
+        项目["text"] = " ".join(项目.pop("text_parts")).strip()
+        self.链接列表.append(项目)
+        self._当前链接 = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag not in {"a", "button"}:
+            return
+        self._完成当前链接()
+        属性 = {键.lower(): str(值 or "") for 键, 值 in attrs if 键}
+        href = 属性.get("href") or 属性.get("data-href") or 属性.get("data-url")
+        if not href:
+            return
+        self._当前链接 = {
+            "tag": tag,
+            "href": html.unescape(href.strip()),
+            "format": 属性.get("data-format") or 属性.get("data-type") or "",
+            "label": 属性.get("aria-label") or 属性.get("title") or "",
+            "text_parts": [],
+        }
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if self._当前链接 is not None:
+            self._完成当前链接()
+
+    def handle_data(self, data: str) -> None:
+        if self._当前链接 is not None:
+            self._当前链接["text_parts"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._当前链接 is not None and tag.lower() == self._当前链接.get("tag"):
+            self._完成当前链接()
+
+
+def _提取官方TXT转换链接(原始HTML: str) -> str:
+    解析器 = _ZLibrary详情链接解析器()
+    解析器.feed(原始HTML)
+    解析器.close()
+    解析器._完成当前链接()
+    for 链接 in 解析器.链接列表:
+        href = 链接.get("href", "")
+        try:
+            地址 = urlsplit(href)
+            主机 = (地址.hostname or "").lower().strip(".")
+        except ValueError:
+            continue
+        if 地址.scheme and 地址.scheme.lower() not in {"http", "https"}:
+            continue
+        if 主机 and 主机 not in ZLibrary允许域名:
+            continue
+        标签 = re.sub(r"\s+", " ", _清理正文(链接.get("text") or 链接.get("label"))).strip().lower()
+        格式 = re.sub(r"[^a-z0-9]", "", 链接.get("format", "").lower())
+        路径 = 地址.path.lower()
+        查询 = 地址.query.lower()
+        if (
+            re.search(r"(?<![a-z])txt(?![a-z])", 标签)
+            or 格式 in {"txt", "text", "plaintext"}
+            or 路径.endswith(".txt")
+            or re.search(r"(?:^|&)(?:format|type|extension)=txt(?:&|$)", 查询)
+        ):
+            return href
+    return ""
+
+
 def _解析HTML字段(原始: str) -> dict[str, Any]:
     if "diamwall" in 原始.lower() or "verifying your browser" in 原始.lower():
         raise _ZLibrary站点错误("Z-Library站点验证未通过")
@@ -851,10 +926,12 @@ def _解析HTML字段(原始: str) -> dict[str, Any]:
         匹配 = re.search(r"['\"]([^'\"]*/dl/[^'\"]+)['\"]", 原始, re.I)
         if 匹配:
             下载链接 = html.unescape(匹配.group(1))
+    TXT转换链接 = _提取官方TXT转换链接(原始)
     return {
         "title": 标题,
         "author": ", ".join(作者列表) or "未知",
         "download_url": 下载链接,
+        "txt_conversion_url": TXT转换链接,
         "file_type": 详情文件类型,
     }
 
@@ -881,9 +958,23 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
     详情["book_id"] = 书籍编号
     详情["hash"] = 哈希
     详情["detail_url"] = 最终来源
-    if not 详情.get("title") or not 详情.get("download_url"):
+    if not 详情.get("title") or not (
+        详情.get("download_url") or 详情.get("txt_conversion_url")
+    ):
         raise _ZLibrary站点错误("Z-Library详情缺少下载信息")
-    详情["download_url"] = urljoin(最终来源, str(详情["download_url"]))
+    原始下载链接 = urljoin(最终来源, str(详情["download_url"]))
+    TXT转换链接 = str(详情.get("txt_conversion_url") or "").strip()
+    if TXT转换链接:
+        官方TXT链接 = urljoin(最终来源, TXT转换链接)
+        if not _是ZLibrary站点HTTPS地址(官方TXT链接):
+            raise _ZLibrary站点错误("Z-Library官方TXT转换地址无效")
+        详情["download_url"] = 官方TXT链接
+    else:
+        原始格式 = re.sub(r"[^a-z0-9]", "", str(详情.get("file_type") or "").lower())
+        原始路径 = urlsplit(原始下载链接).path.lower()
+        if "txt" not in 原始格式 and not 原始路径.endswith(".txt"):
+            raise _ZLibrary站点错误("Z-Library详情没有官方TXT转换链接")
+        详情["download_url"] = 原始下载链接
     return 详情
 
 
@@ -933,6 +1024,22 @@ async def _下载原文件(
                 }.get(内容类型.split(";", 1)[0].strip())
                 if 后缀:
                     文件名 = f"book{后缀}"
+            内容媒体类型 = 内容类型.split(";", 1)[0].strip()
+            if 内容媒体类型 in {
+                "text/html",
+                "application/xhtml+xml",
+                "application/pdf",
+                "application/epub+zip",
+                "application/json",
+                "application/problem+json",
+                "application/xml",
+                "text/xml",
+            }:
+                raise _ZLibrary站点错误("Z-Library官方TXT转换未返回TXT")
+            if Path(文件名).suffix.lower() != ".txt":
+                if 内容媒体类型 != "text/plain":
+                    raise _ZLibrary站点错误("Z-Library官方TXT转换未返回TXT")
+                文件名 = f"{Path(文件名).stem or 'book'}.txt"
             总长度 = response.headers.get("Content-Length")
             if 总长度 and int(总长度) > ZLibrary文件最大字节数:
                 raise _ZLibrary站点错误("Z-Library文件过大")
@@ -944,9 +1051,7 @@ async def _下载原文件(
                         raise _ZLibrary站点错误("Z-Library文件过大")
                     文件.write(块)
             if 内容类型.startswith("text/html"):
-                前缀 = 路径.read_bytes()[:4096].lower()
-                if b"login" in 前缀 or b"diamwall" in 前缀 or b"verification" in 前缀:
-                    raise _ZLibrary站点错误("Z-Library下载需要公开可用的文件地址")
+                raise _ZLibrary站点错误("Z-Library下载未返回可用TXT")
             return 路径, 文件名
     except Exception:
         await asyncio.to_thread(路径.unlink, True)
@@ -964,121 +1069,23 @@ def _解码文本(原始: bytes) -> str:
     return 原始.decode("utf-8", "replace")
 
 
-def _读取EPUB正文(路径: Path) -> str:
-    with zipfile.ZipFile(路径) as 压缩包:
-        if sum(项目.file_size for 项目 in 压缩包.infolist()) > ZLibrary压缩后最大展开字节数:
-            raise RuntimeError("EPUB解压后过大")
-        opf路径 = ""
-        try:
-            容器 = ElementTree.fromstring(压缩包.read("META-INF/container.xml"))
-            for 节点 in 容器.iter():
-                if 节点.tag.rsplit("}", 1)[-1] == "rootfile":
-                    opf路径 = str(节点.attrib.get("full-path") or "")
-                    if opf路径:
-                        break
-        except Exception:
-            pass
-        if not opf路径:
-            opf候选 = [项目 for 项目 in 压缩包.namelist() if 项目.lower().endswith(".opf")]
-            opf路径 = opf候选[0] if opf候选 else ""
-        if not opf路径:
-            raise RuntimeError("EPUB缺少目录文件")
-        opf = ElementTree.fromstring(压缩包.read(opf路径))
-        清单: dict[str, str] = {}
-        for 节点 in opf.iter():
-            if 节点.tag.rsplit("}", 1)[-1] == "item":
-                标识 = str(节点.attrib.get("id") or "")
-                href = str(节点.attrib.get("href") or "")
-                类型 = str(节点.attrib.get("media-type") or "").lower()
-                if 标识 and href and ("html" in 类型 or href.lower().endswith((".xhtml", ".html", ".htm"))):
-                    清单[标识] = posixpath.normpath(posixpath.join(posixpath.dirname(opf路径), href))
-        正文路径: list[str] = []
-        for 节点 in opf.iter():
-            if 节点.tag.rsplit("}", 1)[-1] == "itemref":
-                路径 = 清单.get(str(节点.attrib.get("idref") or ""))
-                if 路径:
-                    正文路径.append(路径)
-        if not 正文路径:
-            正文路径 = list(清单.values())
-        片段 = [_清理正文(_解码文本(压缩包.read(路径))) for 路径 in 正文路径 if 路径 in 压缩包.namelist()]
-    return "\n\n".join(项目 for 项目 in 片段 if 项目).strip()
+def _读取官方TXT(路径: Path) -> str:
+    原始 = 路径.read_bytes()
+    if 原始.startswith((b"PK\x03\x04", b"%PDF-")):
+        raise _ZLibrary站点错误("Z-Library官方转换返回了非TXT文件")
+    正文 = _解码文本(原始).replace("\r\n", "\n").replace("\r", "\n")
+    开头 = re.sub(r"\s+", "", 正文[:512]).lower()
+    if 开头.startswith(("<!doctypehtml", "<html", "<head", "<body")):
+        raise _ZLibrary站点错误("Z-Library官方转换未返回TXT正文")
+    if len(正文.strip()) < 2:
+        raise _ZLibrary站点错误("Z-Library官方TXT正文为空")
+    return 正文.strip()
 
 
-def _读取FB2正文(路径: Path) -> str:
-    return _读取FB2内容(路径.read_bytes())
-
-
-def _读取FB2内容(原始: bytes) -> str:
-    根节点 = ElementTree.fromstring(原始)
-    片段: list[str] = []
-    for 节点 in 根节点.iter():
-        标签 = 节点.tag.rsplit("}", 1)[-1]
-        if 标签 in {"title", "p", "subtitle", "text-author", "epigraph"}:
-            文本 = _清理正文("".join(节点.itertext()))
-            if 文本:
-                片段.append(文本)
-    return "\n\n".join(片段).strip()
-
-
-def _读取PDF正文(路径: Path) -> str:
-    try:
-        from pypdf import PdfReader
-    except Exception as exc:
-        raise RuntimeError("PDF解析库不可用") from exc
-    读取器 = PdfReader(str(路径))
-    return "\n\n".join(
-        文本.strip()
-        for 页面 in 读取器.pages
-        for 文本 in [页面.extract_text() or ""]
-        if 文本.strip()
-    ).strip()
-
-
-def _转换为正文(路径: Path, 文件名: str) -> str:
-    后缀 = Path(文件名 or 路径.name).suffix.lower() or 路径.suffix.lower()
-    with 路径.open("rb") as 文件:
-        文件头 = 文件.read(5)
-    if 后缀 == ".pdf" or 文件头 == b"%PDF-":
-        return _读取PDF正文(路径)
-    if zipfile.is_zipfile(路径):
-        with zipfile.ZipFile(路径) as 压缩包:
-            if sum(项目.file_size for 项目 in 压缩包.infolist()) > ZLibrary压缩后最大展开字节数:
-                raise RuntimeError("电子书解压后过大")
-            FB2路径 = next(
-                (项目 for 项目 in 压缩包.namelist() if 项目.lower().endswith(".fb2")),
-                None,
-            )
-            if FB2路径:
-                return _读取FB2内容(压缩包.read(FB2路径))
-        return _读取EPUB正文(路径)
-    if 后缀 == ".fb2":
-        return _读取FB2正文(路径)
-    if 后缀 == ".pdf":
-        return _读取PDF正文(路径)
-    return _清理正文(_解码文本(路径.read_bytes()))
-
-
-def _生成文件内容(详情: dict[str, Any], 正文: str) -> tuple[str, bytes]:
+def _生成输出文件名(详情: dict[str, Any]) -> str:
     标题 = _清理文件名(详情.get("title") or "Z-Library小说")
     作者 = _清理文件名(详情.get("author") or "未知")
-    正文 = 去除章节正文重复标题(标题, 正文)
-    if len(正文.strip()) < 2:
-        raise RuntimeError("Z-Library正文为空")
-    行列表 = [
-        ZLibrary文件声明,
-        "",
-        f"书名：{标题}",
-        f"作者：{作者}",
-        "状态：电子书文件",
-        "章节数：整本文件",
-        "",
-        标题,
-        "",
-        正文.strip(),
-        "",
-    ]
-    文本 = "\n".join(行列表).replace("\r\n", "\n").replace("\r", "\n")
-    return f"[完结]书名：{标题} 作者：{作者}.txt", 文本.replace("\n", "\r\n").encode("utf-8")
+    return f"[完结]书名：{标题} 作者：{作者}.txt"
 
 
 def _写入小说缓存(文件名: str, 内容: bytes) -> Path:
@@ -1169,11 +1176,12 @@ async def 生成ZLibrary下载回复流(
             yield 格式化ZLibrary下载提示(详情)
             阶段 = "download"
             临时路径, 原文件名 = await _下载原文件(session, 详情, 来源)
-            阶段 = "convert"
-            正文 = await asyncio.to_thread(_转换为正文, 临时路径, 原文件名)
-            if len(re.sub(r"\s+", "", 正文)) < 2:
-                raise RuntimeError("Z-Library正文为空")
-            文件名, 内容 = await asyncio.to_thread(_生成文件内容, 详情, 正文)
+            阶段 = "official_txt"
+            if Path(原文件名).suffix.lower() != ".txt":
+                raise _ZLibrary站点错误("Z-Library官方转换没有生成TXT")
+            正文 = await asyncio.to_thread(_读取官方TXT, 临时路径)
+            内容 = await asyncio.to_thread(临时路径.read_bytes)
+            文件名 = _生成输出文件名(详情)
             字数 = len(re.sub(r"\s+", "", 正文))
             logger.info(
                 "Z-Library小说下载完成：书名=%s, 文件数=1, 字数=%s, 文件大小=%s",

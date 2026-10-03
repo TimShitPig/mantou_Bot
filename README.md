@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.89-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.90-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.89 |
+| 版本 | v6.1.90 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -122,7 +122,7 @@ qrcode[pil]
 | 连城小说 | 链接 / 分享卡片 | HTML 正文清理 |
 | 菠萝包小说 | 链接 / 分享卡片 | 支持 `m.sfacg.com/Novel/{书籍ID}` 与 `m.sfacg.com/b/{书籍ID}` 短链 |
 | 晋江小说 | 链接 / 分享卡片 | 只请求公开章节，跳过付费或明确锁定章节 |
-| Z-Library小说 | 找书聚合搜索 / `zh.z-library.sk/book/书籍ID` | 找书使用 MySQL 中已验证账号搜索；公开链接下载读取详情页提供的整本文件并转换为 TXT |
+| Z-Library小说 | 找书聚合搜索 / `zh.z-library.sk/book/书籍ID` | 找书使用 MySQL 中已验证账号搜索；下载原样保存详情页提供的官方 TXT 或转换结果 |
 | ZLibrary账号创建 | `注册ZLibrary` / `创建ZLibrary账号` | 白名单管理员每次命令创建一个账号，自动随机邮箱、收码、注册并验证登录；账号仅存 MySQL |
 
 所有小说缺章时不生成部分 TXT；下载完成后上传到所有已开启且已配置的网盘，并按网盘发送对应分享按钮。
@@ -180,7 +180,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
 - 菠萝包：支持 `m.sfacg.com/Novel/{书籍ID}` 和 `m.sfacg.com/b/{书籍ID}` 短链。
 - 晋江：只请求公开章节，付费或明确锁定章节不请求。
-- Z-Library：搜索、账号创建、登录验证和公开链接下载都由 `Z-Library小说.py` 提供；找书聚合搜索使用 MySQL 中最新的已验证账号，公开书籍下载仍通过详情页取得电子书并转换成 TXT。
+- Z-Library：搜索、账号创建、登录验证和公开链接下载都由 `Z-Library小说.py` 提供；找书聚合搜索使用 MySQL 中最新的已验证账号，下载优先使用详情页官方 TXT 转换链接并原样保存响应字节，不在本地改写正文或解析 EPUB、FB2、PDF。
 - ZLibrary 账号创建通过 API 创建随机域名邮箱、发送邮件验证码并最多轮询 120 秒，在同一会话提交注册，再用全新会话验证登录。每次管理员主动命令仅创建一个账号，不定时补充、不轮换搜索账号。
 
 </details>
