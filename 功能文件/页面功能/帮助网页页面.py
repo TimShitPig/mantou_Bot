@@ -90,12 +90,11 @@ from .帮助网页脚本 import 控制台脚本
               <div class="pan-summary-item"><span>账号总数</span><strong id="pan-account-count">--</strong><small>按平台独立保存</small></div>
               <div class="pan-summary-item"><span>上传方式</span><strong id="pan-upload-mode">--</strong><small>完成后生成分享链接</small></div>
             </div>
-            <nav class="pan-tabs" role="tablist" aria-label="选择网盘">
-              <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span class="pan-tab-copy"><span>UC网盘</span><small data-pan-tab-meta="UC">读取中</small></span></button>
-              <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span class="pan-tab-copy"><span>夸克网盘</span><small data-pan-tab-meta="夸克">读取中</small></span></button>
-              <button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false"><span class="pan-tab-mark pan-tab-baidu">度</span><span class="pan-tab-copy"><span>百度网盘</span><small data-pan-tab-meta="百度">读取中</small></span></button>
-            </nav>
-            <div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div>
+            <div id="pan-overview" class="pan-overview-grid"><div class="empty">正在读取网盘状态...</div></div>
+            <section id="pan-detail" class="pan-detail" hidden aria-live="polite">
+              <div class="pan-detail-head"><button class="pan-back-button" type="button" data-pan-back aria-label="返回网盘卡片列表"><span aria-hidden="true">←</span>返回网盘列表</button><strong id="pan-detail-title">网盘设置</strong></div>
+              <div id="pan-grid" class="pan-grid"></div>
+            </section>
           </div>
         </section>
 

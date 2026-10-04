@@ -56,7 +56,8 @@
       };
       let snapshot = null;
       let activeView = null;
-      let activePanTab = null;
+      let activePanKey = null;
+      let panDetailOpen = false;
       let toastTimer = null;
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
@@ -185,7 +186,7 @@
            return `<option value="${esc(index)}" ${index === selectedAccount ? 'selected' : ''}>账号${esc(index)}</option>`;
          }).join('') || '<option value="" selected disabled>没有启用的账号</option>';
          const defaultOption = item.active ? '默认使用中' : (enabled ? '设为默认主网盘' : '请先开启网盘');
-         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
+         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="region" aria-labelledby="pan-detail-title">
            <header class="pan-card-head pan-top">
              <div class="pan-card-brand pan-card-identity pan-title"><div class="pan-logo">${esc(panPlatformGlyph(item.key))}</div><div><strong>${esc(item.name)}</strong><small>${enabled ? '参与启用平台的并发分享' : '当前暂停上传和分享'}</small></div></div>
              <div class="pan-card-head-actions pan-top-actions">${item.active ? '<span class="tag active">默认主网盘</span>' : ''}<div class="pan-enable"><span>${enabled ? '运行中' : '已停用'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div>
@@ -212,8 +213,52 @@
            </div>
          </article>`;
        };
-       const applyPanTab = (key) => { const cards = document.querySelectorAll('[data-pan-card]'); const tabs = document.querySelectorAll('[data-pan-tab]'); const available = Array.from(cards).map((node) => node.dataset.panCard); const selected = available.includes(key) ? key : (available[0] || ''); activePanTab = selected || null; try { if (selected) sessionStorage.setItem('mantou-pan-tab', selected); } catch (_) {} tabs.forEach((node) => { const isActive = node.dataset.panTab === selected; node.classList.toggle('active', isActive); node.setAttribute('aria-selected', String(isActive)); node.tabIndex = isActive ? 0 : -1; }); cards.forEach((node) => { const isActive = node.dataset.panCard === selected; node.hidden = !isActive; node.setAttribute('aria-hidden', String(!isActive)); }); };
-       const choosePanTab = (key) => { applyPanTab(key); };
+       const renderPanOverviewCard = (item) => {
+         const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+         const total = Number.isFinite(Number(item.accounts)) ? Number(item.accounts) : accounts.length;
+         const enabledCount = accounts.filter((account) => account?.enabled !== false).length;
+         const enabled = item.enabled !== false;
+         const configured = Boolean(item.configured || total);
+         return `<button class="pan-entry-card ${enabled ? '' : 'is-disabled'}" type="button" data-pan-open="${esc(item.key)}" aria-label="进入${esc(item.name)}设置">
+           <span class="pan-entry-head"><span class="pan-entry-brand"><span class="pan-logo">${esc(panPlatformGlyph(item.key))}</span><span class="pan-entry-copy"><strong>${esc(item.name)}</strong><small>${enabled ? '运行中' : '已停用'}</small></span></span><span class="pan-entry-arrow" aria-hidden="true">›</span></span>
+           <span class="pan-entry-stats"><span><small>账号总数</small><strong>${esc(total)}</strong></span><span><small>已启用账号</small><strong>${esc(enabledCount)}</strong></span><span><small>上传目录</small><strong title="${esc(item.directory || '')}">${esc(item.directory || '默认目录')}</strong></span></span>
+           <span class="pan-entry-footer"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '网盘已开启' : '网盘已关闭'}</span><span class="tag ${configured ? 'ok' : 'off'}">${configured ? '账号已配置' : '暂无账号'}</span>${item.active ? '<span class="tag active">默认主网盘</span>' : ''}</span>
+         </button>`;
+       };
+       const openPanDetail = (key) => {
+         const item = (snapshot?.pans?.items || []).find((entry) => entry.key === key);
+         if (!item) return;
+         activePanKey = key;
+         panDetailOpen = true;
+         $('pan-overview').hidden = true;
+         $('pan-detail').hidden = false;
+         $('pan-detail-title').textContent = `${item.name}设置`;
+         $('pan-grid').innerHTML = renderPanCard(item, snapshot.pans.editable, snapshot.pans.config_editable);
+         bindPanDetailEvents();
+         document.querySelector('[data-pan-back]')?.focus({preventScroll:true});
+         $('pan-detail')?.scrollIntoView({block:'nearest', behavior:'smooth'});
+       };
+       const backToPanOverview = () => {
+         const previousKey = activePanKey;
+         panDetailOpen = false;
+         activePanKey = null;
+         $('pan-grid').innerHTML = '';
+         $('pan-detail').hidden = true;
+         $('pan-overview').hidden = false;
+         document.querySelector(`[data-pan-open="${CSS.escape(previousKey || '')}"]`)?.focus({preventScroll:true});
+         $('pan-overview')?.scrollIntoView({block:'nearest', behavior:'smooth'});
+       };
+       const bindPanDetailEvents = () => {
+         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
+         document.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
+         document.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index)));
+         document.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
+         document.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
+         document.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
+         document.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
+         document.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
+       };
+       document.querySelector('[data-pan-back]')?.addEventListener('click', backToPanOverview);
       const render = (data) => {
         snapshot = data;
         const auth = data.auth || {}; const novels = data.novels || {}; const pans = data.pans || {}; const server = data.server || {}; const database = data.database || {};
@@ -248,21 +293,26 @@
            return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
          }, 0);
          const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
-         panItems.forEach((item) => {
-           const meta = document.querySelector(`[data-pan-tab-meta="${CSS.escape(item.key)}"]`);
-           if (!meta) return;
-           const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
-           const total = Number.isFinite(Number(item.accounts)) ? Number(item.accounts) : accounts.length;
-           const enabled = accounts.filter((account) => account?.enabled !== false).length;
-           meta.textContent = total ? `${total} 个账号 · ${enabled} 启用` : '暂无账号';
-         });
          if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
          if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
          if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
          if ($('pan-account-count')) $('pan-account-count').textContent = `${panAccountCount}`;
          if ($('pan-upload-mode')) $('pan-upload-mode').textContent = panReadyCount ? `${panReadyCount} 个平台并发` : '暂无可用平台';
-         $('pan-grid').innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
-        let preferredPanTab = activePanTab; if (!preferredPanTab) { try { preferredPanTab = sessionStorage.getItem('mantou-pan-tab'); } catch (_) {} } applyPanTab(preferredPanTab || pans.active || 'UC');
+         $('pan-overview').innerHTML = panItems.map(renderPanOverviewCard).join('') || '<div class="empty">没有网盘数据</div>';
+         const selectedPan = panItems.find((item) => item.key === activePanKey);
+         if (panDetailOpen && selectedPan) {
+           $('pan-overview').hidden = true;
+           $('pan-detail').hidden = false;
+           $('pan-detail-title').textContent = `${selectedPan.name}设置`;
+           $('pan-grid').innerHTML = renderPanCard(selectedPan, pans.editable, pans.config_editable);
+           bindPanDetailEvents();
+         } else {
+           panDetailOpen = false;
+           activePanKey = null;
+           $('pan-overview').hidden = false;
+           $('pan-detail').hidden = true;
+           $('pan-grid').innerHTML = '';
+         }
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
@@ -271,15 +321,7 @@
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
-        document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
-        document.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
-        document.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index)));
-         document.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
-         document.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
-         document.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
-         document.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
-         document.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
-         document.querySelectorAll('[data-pan-tab]').forEach((node) => { node.addEventListener('click', () => choosePanTab(node.dataset.panTab)); node.addEventListener('keydown', (event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); const tabs = Array.from(document.querySelectorAll('[data-pan-tab]')); const index = tabs.indexOf(node); const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next?.focus(); choosePanTab(next?.dataset.panTab); } }); });
+         document.querySelectorAll('[data-pan-open]').forEach((node) => node.addEventListener('click', () => openPanDetail(node.dataset.panOpen)));
       };
       let currentQQSessionKey = '';
       const renderQQAuthEditor = (auth) => {
