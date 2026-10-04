@@ -488,15 +488,27 @@
       .pan-directory input { min-width:0; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:var(--panel); color:var(--ink); outline:none; }
       .pan-directory input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
       .pan-directory .outline-button { min-height:39px; padding:0 13px; }
-      .pan-page .account-list { display:grid; gap:7px; max-height:240px; margin:0; overflow-y:auto; padding-right:2px; overscroll-behavior:contain; }
-      .pan-page .account-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; padding:9px 10px; border:1px solid #eceef4; border-radius:7px; background:#fbfcfe; }
-      .pan-page .account-row > div,.pan-page .account-row-main { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:9px; min-width:0; }
-      .pan-page .account-row strong { color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap; }
-      .pan-page .account-row span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:11px; }
-      .pan-page .account-row button { flex:0 0 auto; min-height:28px; padding:0 8px; border:1px solid #f0d8df; border-radius:6px; background:#fff8fa; color:#ba5c75; font-size:10px; }
-      .pan-page .account-row button:hover { border-color:#e5b9c5; background:#fff0f4; color:#a94761; }
-      .pan-page .account-row-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
-      .pan-page .account-row-actions .tag { white-space:nowrap; }
+      .pan-page .account-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr)); gap:8px; max-height:320px; margin:0; overflow-y:auto; padding:1px 2px 1px 0; overscroll-behavior:contain; }
+      .pan-page .account-row.pan-account-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-width:0; min-height:64px; padding:10px; border:1px solid #e7e9f1; border-radius:7px; background:var(--panel); }
+      .pan-page .pan-account-card.is-disabled { border-color:#e3e5ec; background:#f6f7fa; }
+      .pan-page .pan-account-card > div { display:flex; align-items:center; gap:9px; min-width:0; }
+      .pan-page .pan-account-card-main { min-width:0; }
+      .pan-page .pan-account-order { display:grid; place-items:center; width:32px; height:32px; flex:0 0 32px; border-radius:7px; background:var(--primary-soft); color:var(--primary-dark)!important; font-size:10px!important; font-weight:800; }
+      .pan-page .pan-account-info { display:grid!important; gap:3px!important; min-width:0; }
+      .pan-page .pan-account-info strong { color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap; }
+      .pan-page .pan-account-info span { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:10px; }
+      .pan-page .pan-account-card-actions { justify-content:flex-end; gap:7px!important; flex:0 0 auto; }
+      .pan-page .pan-account-card-actions .tag { overflow:visible; white-space:nowrap; }
+      .pan-page .pan-account-card-actions .tag.ok { background:var(--mint); color:var(--mint-ink); font-size:10px; }
+      .pan-page .pan-account-card-actions .tag.off { background:#f2f4f7; color:#667085; font-size:10px; }
+      .pan-page .pan-account-card .pan-account-switch { width:36px; height:21px; flex:0 0 36px; border:0; border-radius:999px; background:#d7d8e4; }
+      .pan-page .pan-account-card .pan-account-switch.on { background:var(--mint-ink); }
+      .pan-page .pan-account-card .pan-account-switch span { top:3px; left:3px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #0002; }
+      .pan-page .pan-account-card .pan-account-switch.on span { transform:translateX(15px); }
+      .pan-page .pan-account-card .pan-account-switch:hover:not(:disabled) { background:#c3c5d3; }
+      .pan-page .pan-account-card .pan-account-switch.on:hover:not(:disabled) { background:#40b97e; }
+      .pan-page .pan-account-delete { flex:0 0 auto; min-height:28px; padding:0 8px; border:1px solid #f0d8df; border-radius:6px; background:#fff8fa; color:#ba5c75; font-size:10px; }
+      .pan-page .pan-account-delete:hover { border-color:#e5b9c5; background:#fff0f4; color:#a94761; }
       .pan-page .account-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:0; }
       .pan-page .account-add input { min-width:0; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:var(--panel); color:var(--ink); outline:none; }
       .pan-page .account-add input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
@@ -542,6 +554,9 @@
         .pan-card-stats > div:nth-child(2n) { border-right:0; }
         .pan-card-stats > div:nth-child(-n+2) { border-bottom:1px solid var(--line); }
         .pan-column { padding:16px; }
+        .pan-page .account-list { grid-template-columns:1fr; }
+        .pan-page .account-row.pan-account-card { grid-template-columns:minmax(0,1fr); }
+        .pan-page .pan-account-card-actions { justify-content:flex-end; }
         .pan-directory,.pan-page .account-add { grid-template-columns:1fr; }
         .pan-directory .outline-button,.pan-page .account-add .outline-button { width:100%; }
         .pan-page .account-actions { grid-template-columns:1fr; }
@@ -653,9 +668,13 @@
       :root[data-theme="dark"] .pan-card-stats > div { border-right-color:var(--line); }
       :root[data-theme="dark"] .pan-card.active { border-color:#6a66c9; box-shadow:0 0 0 2px #24284a inset,0 8px 23px rgba(0,0,0,.28); }
       :root[data-theme="dark"] .pan-security-note { border-color:#333a55; background:#181c28; }
-      :root[data-theme="dark"] .pan-page .account-row { border-color:#2c3044; background:#1d2130; }
-      :root[data-theme="dark"] .pan-page .account-row button { border-color:#5a3941; background:#30222a; color:#e07085; }
-      :root[data-theme="dark"] .pan-page .account-row button:hover { background:#3a212b; color:#f0899c; }
+      :root[data-theme="dark"] .pan-page .pan-account-card { border-color:#2c3044; background:#1d2130; }
+      :root[data-theme="dark"] .pan-page .pan-account-card.is-disabled { border-color:#303449; background:#1a1d29; }
+      :root[data-theme="dark"] .pan-page .pan-account-card .pan-account-switch { background:#383d52; }
+      :root[data-theme="dark"] .pan-page .pan-account-card .pan-account-switch.on { background:#4dbb82; }
+      :root[data-theme="dark"] .pan-page .pan-account-card-actions .tag.off { background:#262b38; color:#9aa0b5; }
+      :root[data-theme="dark"] .pan-page .pan-account-delete { border-color:#5a3941; background:#30222a; color:#e07085; }
+      :root[data-theme="dark"] .pan-page .pan-account-delete:hover { background:#3a212b; color:#f0899c; }
       :root[data-theme="dark"] .pan-section-kicker { color:#767d96; }
       @media (max-width:760px) {
         .topbar { min-height:50px; height:50px; padding:0 10px; gap:8px; }

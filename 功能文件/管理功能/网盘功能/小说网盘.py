@@ -106,12 +106,12 @@ async def 清理网盘过期小说文件(
     for 平台 in 网盘顺序:
         if not 网盘状态.网盘开关是否开启(配置, 平台):
             continue
-        账号列表 = 网盘Cookie.获取网盘账号列表(配置, 平台)
+        账号列表 = 网盘Cookie.获取启用网盘账号列表(配置, 平台)
         if not 账号列表:
             continue
         客户端类, 读取目录 = 客户端映射[平台]
         删除数量 = 0
-        for 序号, Cookie in enumerate(账号列表, start=1):
+        for 序号, Cookie in 账号列表:
             try:
                 async with 客户端类(Cookie) as 客户端:
                     删除数量 += await 客户端.清理早于当天小说(

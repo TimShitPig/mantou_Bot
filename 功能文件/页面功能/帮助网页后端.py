@@ -1583,8 +1583,15 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
                 "directory": 目录,
                 "enabled": bool(网盘启用状态.get(标识, True)),
                 "active": 标识 == 当前网盘,
-                # 账号选择按群隔离；控制台没有当前群上下文，默认展示账号1。
-                "selected_account": 1,
+                # 控制台没有当前群上下文，展示第一个启用账号作为默认选择。
+                "selected_account": next(
+                    (
+                        int(账号.get("index") or 0)
+                        for 账号 in 账号摘要
+                        if 账号.get("enabled", True)
+                    ),
+                    0,
+                ),
             }
         )
 
@@ -2054,6 +2061,46 @@ async def _处理网盘账号删除(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台网盘账号删除失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
         return _控制台错误(409, "网盘账号删除失败")
+
+
+async def _处理网盘账号开关(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    平台 = _规范化网盘平台(request.match_info.get("platform"))
+    数据 = await _读取请求JSON(request)
+    try:
+        序号 = int((数据 or {}).get("index"))
+    except (TypeError, ValueError):
+        序号 = 0
+    启用 = (数据 or {}).get("enabled")
+    if not 平台 or 序号 < 1 or not isinstance(启用, bool):
+        return _控制台错误(400, "网盘账号参数无效")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        成功, _ = await _控制台线程执行(
+            网盘Cookie._设置网盘账号启用,
+            当前帮助网页配置,
+            平台,
+            序号,
+            启用,
+        )
+        if not 成功:
+            return _控制台错误(409, "账号状态保存失败，请检查账号和数据库配置")
+        return web.json_response(
+            {
+                "ok": True,
+                "enabled": 启用,
+                "message": f"{平台}账号{序号}{'已启用' if 启用 else '已停用'}",
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台网盘账号开关失败：平台=%s，错误类型=%s",
+            平台,
+            type(exc).__name__,
+        )
+        return _控制台错误(409, "账号状态保存失败，请检查数据库配置")
 
 
 async def _处理网盘账号选择(request: web.Request) -> web.Response:

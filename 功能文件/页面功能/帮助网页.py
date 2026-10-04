@@ -71,6 +71,7 @@ def _注册路由(app: web.Application) -> None:
         ("get", "/api/pan-accounts/{platform}", 后端._处理网盘账号列表),
         ("post", "/api/pan-accounts/{platform}", 后端._处理网盘账号新增),
         ("delete", "/api/pan-accounts/{platform}", 后端._处理网盘账号删除),
+        ("post", "/api/pan-accounts/{platform}/enable", 后端._处理网盘账号开关),
         ("post", "/api/pan-account-selection", 后端._处理网盘账号选择),
         ("get", "/api/qq-reader-auth", 后端._处理QQ阅读登录态),
         ("post", "/api/qq-reader-auth", 后端._处理QQ阅读登录态保存),

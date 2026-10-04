@@ -164,7 +164,9 @@
            const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
            const name = account?.name || '未命名账号';
            const phone = account?.phone || '未获取';
-           return `<div class="account-row pan-account-row"><div class="account-row-main"><strong>账号${esc(index)}</strong><span>${esc(name)} · ${esc(phone)}</span></div><div class="account-row-actions"><span class="tag ok">已保存</span><button type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'} aria-label="删除${esc(item.name)}账号${esc(index)}">删除</button></div></div>`;
+           const enabled = account?.enabled !== false;
+           const state = enabled ? '运行中' : '已停用';
+           return `<article class="account-row pan-account-card ${enabled ? '' : 'is-disabled'}"><div class="pan-account-card-main"><span class="pan-account-order">${String(index).padStart(2, '0')}</span><div class="pan-account-info"><strong>账号${esc(index)}</strong><span>${esc(name)} · ${esc(phone)}</span></div></div><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${state}</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'} aria-label="删除${esc(item.name)}账号${esc(index)}">删除</button></div></article>`;
          }).join('');
        };
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
@@ -174,13 +176,14 @@
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
          const accountCount = Number(item.accounts) >= 0 ? Number(item.accounts) : accounts.length;
          const configured = Boolean(item.configured || accounts.length);
-         const selectedAccount = Number(item.selected_account) > 0 ? Number(item.selected_account) : 1;
+         const selectedAccount = Number(item.selected_account) >= 0 ? Number(item.selected_account) : 0;
          const stateTag = enabled ? '<span class="tag ok">已开启</span>' : '<span class="tag off">已关闭</span>';
          const configTag = configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>';
-         const groupOptions = accounts.map((account, position) => {
+         const enabledAccounts = accounts.filter((account) => account?.enabled !== false);
+         const groupOptions = enabledAccounts.map((account, position) => {
            const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
            return `<option value="${esc(index)}" ${index === selectedAccount ? 'selected' : ''}>账号${esc(index)}</option>`;
-         }).join('') || '<option value="1">账号1</option>';
+         }).join('') || '<option value="" selected disabled>没有启用的账号</option>';
          const defaultOption = item.active ? '默认使用中' : (enabled ? '设为默认主网盘' : '请先开启网盘');
          return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
            <header class="pan-card-head pan-top">
@@ -204,7 +207,7 @@
              </section>
              <aside class="pan-column pan-column-secondary">
                <section class="pan-action-block"><div class="pan-section-title pan-section-heading"><div><span class="pan-section-kicker">SHARE ROUTE</span><h3>分享设置</h3></div><span class="pan-section-hint">完成后生成链接</span></div><label class="pan-field-label" for="pan-select-${esc(item.key)}">默认主网盘</label><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${enabled ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></section>
-               <details class="pan-advanced pan-group-settings"><summary><span>群账号选择</span><small>为不同群使用不同账号</small></summary><div class="pan-advanced-content pan-advanced-body"><p>输入群号后选择该群使用的账号；控制台默认显示账号${esc(selectedAccount)}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>保存</button></div></div></details>
+               <details class="pan-advanced pan-group-settings"><summary><span>群账号选择</span><small>为不同群使用不同账号</small></summary><div class="pan-advanced-content pan-advanced-body"><p>输入群号后选择该群使用的账号；控制台默认显示账号${selectedAccount ? esc(selectedAccount) : '暂无'}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></div></details>
              </aside>
            </div>
          </article>`;
@@ -244,7 +247,7 @@
            const reported = Number(item.accounts);
            return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
          }, 0);
-         const panReadyCount = panItems.filter((item) => item.enabled !== false && Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
+         const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
          if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
          if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
          if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
@@ -263,6 +266,7 @@
         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
         document.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
         document.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index)));
+         document.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
          document.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
          document.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
          document.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
@@ -409,7 +413,8 @@
        const deletePanAccount = async (platform, index, button) => { if (!confirm(`确定删除${platform}账号${index}吗？`)) return; if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'DELETE', body:JSON.stringify({index:Number(index)})}); toast('账号已删除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const refreshPanAccounts = async (platform, button) => { if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}?refresh=1`); toast('账号资料已刷新'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const savePanDirectory = async (platform, button) => { const input = document.querySelector(`[data-pan-dir="${CSS.escape(platform)}"]`); const field = input?.dataset.panDirField; const value = input?.value.trim(); if (!field || !value) return toast('请输入上传目录'); if (button) button.disabled = true; try { const result = await api('config', {method:'POST', body:JSON.stringify({fields:{[field]:value}})}); toast(result.message || `${platform}上传目录已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
-       const savePanGroup = async (platform) => { const group = document.querySelector(`[data-pan-group="${CSS.escape(platform)}"]`)?.value.trim(); const select = document.querySelector(`[data-pan-group-index="${CSS.escape(platform)}"]`); if (!group) return toast('请输入QQ群号'); if (!/^\d+$/.test(group)) return toast('QQ群号格式无效'); try { await api('pan-account-selection', {method:'POST', body:JSON.stringify({platform, index:Number(select?.value || 1), group_id:group})}); toast('群账号选择已保存'); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } };
+       const changePanAccountEnabled = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，账号状态不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/enable`, {method:'POST', body:JSON.stringify({index:Number(index), enabled})}); toast(result.message || `账号${enabled ? '已启用' : '已停用'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
+       const savePanGroup = async (platform) => { const group = document.querySelector(`[data-pan-group="${CSS.escape(platform)}"]`)?.value.trim(); const select = document.querySelector(`[data-pan-group-index="${CSS.escape(platform)}"]`); const index = Number(select?.value); if (!group) return toast('请输入QQ群号'); if (!/^\d+$/.test(group)) return toast('QQ群号格式无效'); if (!Number.isInteger(index) || index < 1) return toast('请先启用一个账号'); try { await api('pan-account-selection', {method:'POST', body:JSON.stringify({platform, index, group_id:group})}); toast('群账号选择已保存'); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const saveQQAuth = async () => { const ywguid = $('qq-ywguid')?.value.trim(); const ywkey = $('qq-ywkey')?.value.trim(); if (!ywguid || !ywkey) return toast('请填写 ywguid 和 ywkey'); const button = $('qq-auth-save'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'POST', body:JSON.stringify({ywguid, ywkey})}); if ($('qq-ywguid')) $('qq-ywguid').value = ''; if ($('qq-ywkey')) $('qq-ywkey').value = ''; toast('QQ阅读登录态已保存'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const deleteQQAuth = async () => { if (!confirm('确定清除 QQ阅读登录态吗？')) return; const button = $('qq-auth-delete'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'DELETE'}); toast('QQ阅读登录态已清除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
       const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
