@@ -110,22 +110,11 @@
     .novel-name small { display:block; margin-top:2px; color:var(--muted); font-size:11px; }
     .pan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
     .pan-card { padding:18px; border:1px solid var(--line); border-radius:11px; background:var(--panel); box-shadow:var(--shadow); }
-    .pan-card.active { border-color:#c4c0ff; box-shadow:0 0 0 2px #eeecff inset, var(--shadow); }
-      .pan-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
-      .pan-top-actions { display:flex; align-items:flex-start; justify-content:flex-end; gap:8px; }
-      .pan-enable { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:10px; white-space:nowrap; }
-      .pan-enable-switch { transform:scale(.82); transform-origin:right top; }
-      .pan-card.is-disabled { opacity:.78; }
-    .pan-title { display:flex; align-items:center; gap:9px; }
-    .pan-logo { width:31px; height:31px; display:grid; place-items:center; border-radius:9px; background:var(--primary-soft); color:var(--primary); font-weight:800; }
-    .pan-title strong { font-size:14px; }
+    .pan-enable-switch { transform:scale(.82); transform-origin:right top; }
     .tag { display:inline-flex; padding:3px 7px; border-radius:999px; font-size:10px; font-weight:700; }
     .tag.active { background:var(--primary-soft); color:var(--primary-dark); }
     .tag.ok { background:var(--mint); color:var(--mint-ink); }
     .tag.off { background:#f2f4f7; color:#667085; }
-    .pan-meta { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:20px 0 14px; }
-    .pan-meta span { display:block; color:var(--muted); font-size:11px; }
-    .pan-meta strong { display:block; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
     .account-list { display:grid; gap:6px; margin:0 0 14px; }
     .account-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 9px; border:1px solid #eef0f3; border-radius:6px; background:#fbfcfe; color:var(--muted); font-size:11px; }
     .account-row strong { color:var(--ink); font-size:12px; font-weight:650; }
@@ -419,23 +408,8 @@
         .main { min-height:0; overflow:visible; }
       }
 
-      /* 网盘中心：单平台工作区。保留旧 data-pan-* 控件，只调整信息层级和交互密度。 */
+      /* 网盘页：平台页签下只显示账号卡，单账号详情集中承载账号与平台配置。 */
       .pan-page { margin-top:18px; }
-      .pan-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:17px; }
-      .pan-heading-copy { min-width:0; }
-      .pan-page-overline { display:block; color:#8b8ea4; font-size:10px; font-weight:800; letter-spacing:1.1px; }
-      .pan-page-head h2 { margin:4px 0 0; color:var(--ink); font-size:24px; letter-spacing:0; }
-      .pan-page-head p { margin:6px 0 0; color:var(--muted); font-size:12px; }
-      .pan-live { display:flex; align-items:center; gap:10px; min-width:154px; padding:10px 13px; border:1px solid #dce9e2; border-radius:10px; background:#f7fcf9; }
-      .pan-live-dot { width:8px; height:8px; flex:0 0 auto; border-radius:50%; background:#49b97d; box-shadow:0 0 0 4px #e2f5e9; }
-      .pan-live small { display:block; color:#7b8b84; font-size:10px; }
-      .pan-live strong { display:block; margin-top:2px; color:#2e7656; font-size:13px; }
-      .pan-summary-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin-bottom:16px; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--panel); box-shadow:0 5px 18px rgba(55,59,103,.035); }
-      .pan-summary-item { min-width:0; min-height:76px; padding:12px 15px; border-right:1px solid var(--line); }
-      .pan-summary-item:last-child { border-right:0; }
-      .pan-summary-item span { display:block; color:var(--muted); font-size:11px; }
-      .pan-summary-item strong { display:block; margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); font-size:16px; }
-      .pan-summary-item small { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--soft); font-size:10px; }
       .pan-tabs { display:flex; align-items:stretch; gap:4px; overflow-x:auto; border-bottom:1px solid var(--line); scrollbar-width:thin; }
       .pan-tab { display:flex; align-items:center; gap:10px; min-width:170px; min-height:58px; padding:8px 13px; border:1px solid transparent; border-bottom:0; border-radius:7px 7px 0 0; background:transparent; color:var(--muted); font-family:inherit; text-align:left; cursor:pointer; }
       .pan-tab:hover { background:var(--panel); color:var(--ink); }
@@ -447,37 +421,23 @@
       .pan-tab-copy { display:grid; gap:3px; min-width:0; }
       .pan-tab-copy > span { color:inherit; font-size:12px; font-weight:750; white-space:nowrap; }
       .pan-tab-copy small { color:var(--muted); font-size:10px; white-space:nowrap; }
-      .pan-page .pan-grid { display:block; grid-template-columns:1fr; gap:0; min-width:0; padding-top:16px; }
+      .pan-page .pan-grid { display:block; grid-template-columns:1fr; gap:0; min-width:0; padding-top:0; }
       .pan-back-button { display:inline-flex; align-items:center; gap:7px; min-height:36px; padding:0 11px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--primary-dark); font-family:inherit; font-size:11px; font-weight:700; cursor:pointer; }
       .pan-back-button:hover { border-color:#98a8d9; background:#f3f6fc; }
       .pan-back-button:focus-visible { outline:3px solid #8b85ff; outline-offset:2px; }
       .pan-back-button > span { font-size:17px; line-height:1; }
       .pan-page .pan-card { min-width:0; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
       .pan-page .pan-card:hover { transform:none; box-shadow:none; }
-      .pan-page .pan-card.active { border:0; box-shadow:none; }
-      .pan-page .pan-card.is-disabled { opacity:1; }
       .pan-page .pan-card[hidden] { display:none !important; }
-      .pan-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; padding:3px 0 14px; border-bottom:1px solid var(--line); background:transparent; }
-      .pan-card-brand { display:flex; align-items:center; gap:11px; min-width:0; }
-      .pan-card-brand > div:last-child { min-width:0; }
-      .pan-card-brand strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); font-size:16px; }
-      .pan-card-brand small { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
-      .pan-page .pan-logo { width:39px; height:39px; flex:0 0 auto; border-radius:11px; background:#efeeff; color:#625dd4; font-size:15px; font-weight:850; }
-      .pan-page [data-pan-card="夸克"] .pan-logo { background:#e8f8ef; color:#35936a; }
-      .pan-page [data-pan-card="百度"] .pan-logo { background:#fff0e9; color:#ca7b5f; }
-      .pan-card-head-actions { display:flex; align-items:center; justify-content:flex-end; gap:9px; flex:0 0 auto; }
-      .pan-card-head-actions .tag { white-space:nowrap; }
-      .pan-enable { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px; white-space:nowrap; }
-      .pan-page .pan-enable-switch { transform:none; transform-origin:center; }
-      .pan-card-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; margin:0; border-bottom:1px solid var(--line); background:transparent; }
-      .pan-card-stats > div { min-width:0; padding:11px 13px; border-right:1px solid var(--line); }
-      .pan-card-stats > div:last-child { border-right:0; }
-      .pan-card-stats span { display:block; color:var(--muted); font-size:10px; }
-      .pan-card-stats strong { display:block; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); font-size:12px; }
       .pan-card-content { min-width:0; }
+      .pan-account-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:16px; padding:12px 0; }
+      .pan-account-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; gap:15px; }
+      .pan-platform-switch { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; white-space:nowrap; }
+      .pan-page .pan-enable-switch { transform:none; transform-origin:center; }
+      .pan-page .pan-add-account { min-height:35px; padding:0 12px; }
       .pan-section-kicker { display:block; margin-bottom:3px; color:var(--muted); font-size:9px; font-weight:800; }
       .pan-security-note { margin:11px 0 0; padding:8px 10px; border:0; border-left:3px solid #90a4cf; border-radius:3px; background:#f1f4f8; color:var(--muted); font-size:10px; line-height:1.55; }
-      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr)); gap:10px; padding:17px 0 3px; }
+      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr)); gap:11px; padding:15px 0 3px; }
       .pan-object-card { min-width:0; min-height:78px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
       .pan-object-card:hover { border-color:#a9b6d4; background:#fbfcfe; }
       .pan-account-object.is-disabled { background:#f6f7fa; }
@@ -500,27 +460,25 @@
       .pan-account-delete { min-height:32px; padding:0 10px; border:1px solid #efd5dc; border-radius:6px; background:#fff8fa; color:#a94d65; font-family:inherit; font-size:11px; cursor:pointer; }
       .pan-account-delete:hover:not(:disabled) { border-color:#dfb4c0; background:#fff0f4; }
       .pan-account-delete:disabled { cursor:not-allowed; opacity:.55; }
-      .pan-setting-object { display:flex; align-items:center; gap:12px; width:100%; padding:12px; font-family:inherit; text-align:left; cursor:pointer; }
-      .pan-object-mark { display:grid; place-items:center; width:35px; height:35px; flex:0 0 35px; border-radius:6px; background:#edf1f7; color:#526784; font-size:11px; font-weight:800; }
-      .pan-setting-object[data-pan-object-type="add"] .pan-object-mark { background:#e7f4eb; color:#3c8656; font-size:20px; font-weight:500; }
-      .pan-setting-object[data-pan-object-type="directory"] .pan-object-mark { background:#e8effb; color:#476a9d; }
-      .pan-setting-object[data-pan-object-type="share"] .pan-object-mark { background:#fff1e7; color:#a96236; font-size:16px; }
-      .pan-setting-object[data-pan-object-type="groups"] .pan-object-mark { background:#eeeafa; color:#695d9d; }
-      .pan-setting-object .pan-object-copy { flex:1; }
       .pan-object-empty { grid-column:1 / -1; min-height:0; padding:17px; border:1px dashed var(--line); border-radius:6px; background:transparent; }
       .pan-object-detail[hidden],.pan-object-browser[hidden] { display:none !important; }
-      .pan-object-detail { margin-top:15px; border-top:1px solid var(--line); }
-      .pan-object-detail-head { display:flex; align-items:center; gap:12px; padding:13px 0 10px; }
-      .pan-object-detail-head > strong { color:var(--ink); font-size:13px; }
-      .pan-object-pane { max-width:720px; padding:7px 0 19px; }
-      .pan-object-form { display:grid; gap:10px; padding:6px 0; }
-      .pan-object-form-copy { margin:0; color:var(--muted); font-size:11px; line-height:1.6; }
+      .pan-object-detail { padding-top:2px; }
+      .pan-object-detail-head { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+      .pan-detail-heading { display:grid; gap:3px; min-width:0; flex:1; }
+      .pan-detail-heading small { color:var(--muted); font-size:10px; }
+      .pan-detail-heading strong { color:var(--ink); font-size:14px; }
+      .pan-object-pane { max-width:900px; padding:14px 0 19px; }
       .pan-object-account-detail { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
       .pan-object-account-copy { min-width:0; flex:1; }
       .pan-object-account-copy h3 { margin:2px 0 3px; color:var(--ink); font-size:14px; }
       .pan-object-account-copy p { margin:0; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-      .pan-object-detail-actions { display:flex; align-items:center; gap:9px; padding:13px 0; color:var(--muted); font-size:11px; }
+      .pan-object-detail-actions { display:flex; align-items:center; gap:9px; padding:13px 0 4px; color:var(--muted); font-size:11px; }
       .pan-object-detail-actions .pan-account-delete { margin-left:auto; }
+      .pan-detail-section { display:grid; gap:10px; margin-top:16px; padding-top:13px; border-top:1px solid var(--line); }
+      .pan-detail-section-head { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+      .pan-detail-section-head h3 { margin:0; color:var(--ink); font-size:13px; }
+      .pan-detail-section-head p { margin:0; color:var(--muted); font-size:10px; }
+      .pan-object-form { display:grid; gap:10px; padding:6px 0; }
       .pan-directory { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:0; }
       .pan-directory input { min-width:0; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:var(--panel); color:var(--ink); outline:none; }
       .pan-directory input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }
@@ -535,45 +493,32 @@
       .pan-field-label { display:block; margin:0 0 6px; color:var(--muted); font-size:10px; font-weight:700; }
       .pan-page .pan-select { width:100%; min-height:39px; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--ink); }
       .pan-page .pan-select:focus-visible { outline:3px solid #c9c6ff; outline-offset:2px; }
-      .pan-object-form .group-account { display:grid; grid-template-columns:minmax(0,1fr) 84px auto; gap:8px; }
-      .pan-object-form .group-account input,.pan-object-form .group-account select { min-width:0; min-height:39px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
-      .pan-object-form .group-account .outline-button { min-height:39px; padding:0 12px; }
+      .pan-page .group-account { display:grid; grid-template-columns:minmax(0,1fr) 84px auto; gap:8px; }
+      .pan-page .group-account input,.pan-page .group-account select { min-width:0; min-height:39px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
+      .pan-page .group-account .outline-button { min-height:39px; padding:0 12px; }
       .pan-page .outline-button:disabled,.pan-page .pan-select:disabled,.pan-page input:disabled { cursor:not-allowed; opacity:.55; }
       .pan-page .outline-button { border-color:#c9c6ff; background:var(--panel); color:var(--primary-dark); }
       .pan-page .outline-button:hover:not(:disabled) { background:var(--primary-soft); }
-      @media (max-width:1050px) {
-        .pan-summary-strip { grid-template-columns:repeat(2,minmax(0,1fr)); }
-        .pan-summary-item:nth-child(2n) { border-right:0; }
-        .pan-summary-item:nth-child(-n+2) { border-bottom:1px solid var(--line); }
-      }
       @media (max-width:760px) {
         .pan-page { margin-top:15px; }
-        .pan-page-head { display:block; }
-        .pan-page-head h2 { font-size:21px; }
-        .pan-live { width:max-content; min-width:0; margin-top:12px; }
         .pan-tabs { margin-right:-2px; }
         .pan-tab { min-width:150px; min-height:54px; padding:7px 10px; }
-        .pan-card-head { padding:3px 0 12px; }
-        .pan-card-head-actions { align-items:flex-end; flex-direction:column; gap:7px; }
-        .pan-card-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
-        .pan-card-stats > div:nth-child(2n) { border-right:0; }
-        .pan-card-stats > div:nth-child(-n+2) { border-bottom:1px solid var(--line); }
+        .pan-account-toolbar { align-items:flex-start; }
+        .pan-account-toolbar-actions { gap:9px; }
         .pan-object-grid { grid-template-columns:1fr; gap:8px; padding-top:12px; }
         .pan-account-card-actions { gap:6px; padding-right:10px; }
         .pan-directory,.pan-page .account-add { grid-template-columns:1fr; }
         .pan-directory .outline-button,.pan-page .account-add .outline-button { width:100%; }
         .pan-page .account-actions { grid-template-columns:1fr; }
-        .pan-object-form .group-account { grid-template-columns:minmax(0,1fr) 78px; }
-        .pan-object-form .group-account .outline-button { grid-column:1 / -1; }
+        .pan-page .group-account { grid-template-columns:minmax(0,1fr) 78px; }
+        .pan-page .group-account .outline-button { grid-column:1 / -1; }
         .pan-object-detail-actions { flex-wrap:wrap; }
       }
       @media (max-width:390px) {
-        .pan-summary-strip { grid-template-columns:1fr; }
-        .pan-summary-item,.pan-summary-item:nth-child(2n) { border-right:0; border-bottom:1px solid var(--line); }
-        .pan-summary-item:last-child { border-bottom:0; }
-        .pan-card-head { display:block; }
-        .pan-card-head-actions { align-items:flex-start; flex-direction:row; flex-wrap:wrap; margin-top:12px; }
-        .pan-card-stats > div { padding:10px 8px; }
+        .pan-account-toolbar-actions { width:100%; justify-content:flex-end; }
+        .pan-object-detail-head { align-items:flex-start; flex-wrap:wrap; }
+        .pan-detail-heading { min-width:calc(100% - 130px); }
+        .pan-object-detail-head > .pan-platform-switch { margin-left:auto; }
         .pan-object-copy small { max-width:165px; }
       }
 
@@ -600,8 +545,6 @@
       :root[data-theme="dark"] .metric:nth-child(4) { background:#2b1b24; }
       :root[data-theme="dark"] .global-bar { background:#1c2030; }
       :root[data-theme="dark"] .switch { background:#383d52; }
-      :root[data-theme="dark"] .pan-card.active { border-color:#6a66c9; box-shadow:0 0 0 2px #24284a inset, var(--shadow); }
-      :root[data-theme="dark"] .pan-enable { color:#9aa0b5; }
       :root[data-theme="dark"] .tag.off { background:#262b38; color:#9aa0b5; }
       :root[data-theme="dark"] .account-row { border-color:#2c3044; background:#1d2130; }
       :root[data-theme="dark"] .pan-select { background:var(--panel); }
@@ -620,6 +563,9 @@
       :root[data-theme="dark"] .pan-tab:hover,:root[data-theme="dark"] .pan-tab.active { border-color:#333a55; background:#1f2330; }
       :root[data-theme="dark"] .pan-tab.active { box-shadow:0 1px 0 #1f2330; }
       :root[data-theme="dark"] .pan-object-card { border-color:#2c3044; background:#1d2130; }
+      :root[data-theme="dark"] .pan-account-object.is-disabled { background:#191d29; }
+      :root[data-theme="dark"] .pan-account-order { background:#252b43; color:#a6b9eb; }
+      :root[data-theme="dark"] .pan-security-note { border-left-color:#5c6990; background:#1a2030; }
       :root[data-theme="dark"] .pan-object-card:hover { border-color:#555d80; background:#202435; }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#1a1d29; }
       :root[data-theme="dark"] .pan-object-empty { border-color:#333a55; background:transparent; }
@@ -672,10 +618,6 @@
       :root[data-theme="dark"] .pan-live-dot { background:#55d8a2; box-shadow:0 0 0 4px #1d4a39; }
       :root[data-theme="dark"] .pan-live small { color:#9aa0b5; }
       :root[data-theme="dark"] .pan-live strong { color:#55d8a2; }
-      :root[data-theme="dark"] .pan-card-head { border-bottom-color:var(--line); background:transparent; }
-      :root[data-theme="dark"] .pan-card-stats { border-bottom-color:var(--line); background:transparent; }
-      :root[data-theme="dark"] .pan-card-stats > div { border-right-color:var(--line); }
-      :root[data-theme="dark"] .pan-page .pan-card.active { border:0; box-shadow:none; }
       :root[data-theme="dark"] .pan-security-note { border-color:#53627e; background:#1b2130; }
       :root[data-theme="dark"] .pan-page .pan-account-switch { background:#383d52; }
       :root[data-theme="dark"] .pan-page .pan-account-switch.on { background:#4dbb82; }

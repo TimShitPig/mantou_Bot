@@ -80,16 +80,6 @@ from .帮助网页脚本 import 控制台脚本
 
         <section id="page-pans" class="page-view" data-page="pans" hidden>
           <div id="pans" class="pan-page">
-            <header class="pan-page-head">
-              <div class="pan-heading-copy"><span class="pan-page-overline">网盘管理</span><h2>网盘中心</h2><p>选择一个网盘，管理上传、账号和分享设置。</p></div>
-              <div class="pan-live"><span class="pan-live-dot"></span><div><small>默认分享</small><strong id="pan-active-label">--</strong></div></div>
-            </header>
-            <div class="pan-summary-strip" aria-label="网盘摘要">
-              <div class="pan-summary-item"><span>已启用</span><strong id="pan-enabled-count">--</strong><small>参与小说分享</small></div>
-              <div class="pan-summary-item"><span>已配置</span><strong id="pan-configured-count">--</strong><small>登录态可用</small></div>
-              <div class="pan-summary-item"><span>账号总数</span><strong id="pan-account-count">--</strong><small>按平台独立保存</small></div>
-              <div class="pan-summary-item"><span>上传方式</span><strong id="pan-upload-mode">--</strong><small>完成后生成分享链接</small></div>
-            </div>
             <nav class="pan-tabs" role="tablist" aria-label="选择网盘">
               <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span class="pan-tab-copy"><span>UC网盘</span><small data-pan-tab-meta="UC">读取中</small></span></button>
               <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span class="pan-tab-copy"><span>夸克网盘</span><small data-pan-tab-meta="夸克">读取中</small></span></button>

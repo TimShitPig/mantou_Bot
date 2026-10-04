@@ -158,8 +158,6 @@
         try { const result = await api('config', {method:'POST', body:JSON.stringify({fields})}); if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; } toast(result.message || '配置已保存'); await load(); }
          catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
       };
-       const panPlatformGlyph = (key) => ({UC:'U','夸克':'夸','百度':'度'})[key] || String(key || '盘').slice(0, 1);
-       const panSettingCard = (platform, type, glyph, title, detail) => `<button class="pan-object-card pan-setting-object" type="button" data-pan-object-open="${esc(platform)}" data-pan-object-type="${esc(type)}" aria-label="打开${esc(title)}"><span class="pan-object-mark">${esc(glyph)}</span><span class="pan-object-copy"><strong>${esc(title)}</strong><small>${esc(detail)}</small></span><span class="pan-object-arrow" aria-hidden="true">›</span></button>`;
        const panAccountRows = (item, editable) => {
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
          if (!accounts.length) return '<div class="empty pan-object-empty">暂无登录账号</div>';
@@ -174,34 +172,14 @@
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
        const renderPanCard = (item, pansEditable, configEditable) => {
          const enabled = item.enabled !== false;
-         const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
-         const accountCount = Number(item.accounts) >= 0 ? Number(item.accounts) : accounts.length;
-         const configured = Boolean(item.configured || accounts.length);
-         const stateTag = enabled ? '<span class="tag ok">已开启</span>' : '<span class="tag off">已关闭</span>';
-         const configTag = configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>';
-         const enabledAccountCount = accounts.filter((account) => account?.enabled !== false).length;
-         const settingCards = [
-           panSettingCard(item.key, 'add', '+', '添加账号', '粘贴 Cookie 添加登录态'),
-           panSettingCard(item.key, 'directory', 'DIR', '上传目录', item.directory || '默认目录'),
-           panSettingCard(item.key, 'share', '↗', '分享设置', item.active ? '当前默认主网盘' : '设置默认主网盘'),
-           panSettingCard(item.key, 'groups', '群', '群账号选择', '为不同群选择账号'),
-         ].join('');
-         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
-           <header class="pan-card-head pan-top">
-             <div class="pan-card-brand pan-card-identity pan-title"><div class="pan-logo">${esc(panPlatformGlyph(item.key))}</div><div><strong>${esc(item.name)}</strong><small>${enabled ? '参与启用平台的并发分享' : '当前暂停上传和分享'}</small></div></div>
-             <div class="pan-card-head-actions pan-top-actions">${item.active ? '<span class="tag active">默认主网盘</span>' : ''}<div class="pan-enable"><span>${enabled ? '运行中' : '已停用'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div>
-           </header>
-           <div class="pan-card-stats pan-meta">
-             <div class="pan-stat"><span>运行状态</span><strong>${stateTag}</strong></div>
-             <div class="pan-stat"><span>配置状态</span><strong>${configTag}</strong></div>
-             <div class="pan-stat"><span>账号数量</span><strong>${esc(accountCount)} 个 · ${esc(enabledAccountCount)} 启用</strong></div>
-             <div class="pan-stat"><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div>
+         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
+           <div class="pan-object-browser" data-pan-browser="${esc(item.key)}">
+             <header class="pan-account-toolbar"><div class="pan-account-toolbar-actions"><div class="pan-platform-switch"><span>${enabled ? '网盘已开启' : '网盘已关闭'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div><button class="outline-button pan-add-account" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="add">添加账号</button></div></header>
+             <div class="pan-object-grid">${panAccountRows(item, pansEditable)}</div>
            </div>
-           <div class="pan-security-note pan-card-note">登录态：${configured ? '已保存（Cookie 不回显）' : '未配置'}${enabled ? '' : ' · 已暂停上传和分享'}${item.key === '夸克' ? ' · 可刷新账号资料' : ''}</div>
            <div class="pan-card-content">
-             <div class="pan-object-browser" data-pan-browser="${esc(item.key)}"><div class="pan-object-grid">${panAccountRows(item, pansEditable)}${settingCards}</div></div>
              <section class="pan-object-detail" data-pan-object-detail="${esc(item.key)}" hidden>
-               <div class="pan-object-detail-head"><button class="pan-back-button" type="button" data-pan-object-back="${esc(item.key)}" aria-label="返回${esc(item.name)}卡片列表"><span aria-hidden="true">←</span>返回${esc(item.name)}</button><strong data-pan-object-title="${esc(item.key)}"></strong></div>
+               <div class="pan-object-detail-head"><button class="pan-back-button" type="button" data-pan-object-back="${esc(item.key)}" aria-label="返回${esc(item.name)}账号列表"><span aria-hidden="true">←</span>返回账号列表</button><div class="pan-detail-heading"><small>${esc(item.name)}</small><strong data-pan-object-title="${esc(item.key)}"></strong></div><div class="pan-platform-switch"><span>${enabled ? '网盘已开启' : '网盘已关闭'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div>
                <div class="pan-object-pane" data-pan-object-pane="${esc(item.key)}"></div>
              </section>
            </div>
@@ -221,15 +199,12 @@
            const account = accounts.find((entry, position) => Number(entry?.index) === index || (!entry?.index && position + 1 === index));
            if (!account) return '';
            const enabled = account.enabled !== false;
-           return `<div class="pan-object-account-detail"><div class="pan-account-order">${String(index).padStart(2, '0')}</div><div class="pan-object-account-copy"><span class="pan-section-kicker">ACCOUNT</span><h3>账号${esc(index)}</h3><p>${esc(account.name || '未命名账号')} · ${esc(account.phone || '未获取')}</p></div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><span>${enabled ? '账号已启用' : '账号已停用'}</span><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 只写入，不在页面回显。</p>`;
+           return `<div class="pan-object-account-detail"><div class="pan-account-order">${String(index).padStart(2, '0')}</div><div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息</span><h3>账号${esc(index)}</h3><p>${esc(account.name || '未命名账号')} · ${esc(account.phone || '未获取')}</p></div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">分享</span><h3>默认分享网盘</h3></div></div><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${item.enabled !== false ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></section><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">群聊</span><h3>群账号选择</h3></div><p>未单独设置时使用账号${selectedAccount || '1'}。</p></div><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></section>`;
          }
          if (type === 'add') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></div>`;
-         if (type === 'directory') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-dir-${esc(item.key)}">上传目录</label><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></div>`;
-         if (type === 'share') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-select-${esc(item.key)}">默认主网盘</label><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${item.enabled !== false ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></div>`;
-         if (type === 'groups') return `<div class="pan-object-form"><p class="pan-object-form-copy">为不同群选择该平台的独立账号；未设置时默认使用账号${selectedAccount || '1'}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></div>`;
          return '';
        };
-       const panObjectTitle = (type, index) => type === 'account' ? `账号${index}` : ({add:'添加账号',directory:'上传目录',share:'分享设置',groups:'群账号选择'})[type] || '设置';
+       const panObjectTitle = (type, index) => type === 'account' ? `账号${index}` : '添加账号';
        const bindPanObjectControls = (platform) => {
          const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
          const pane = card?.querySelector('[data-pan-object-pane]');
@@ -241,6 +216,7 @@
          pane.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
          pane.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
          pane.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
+         card.querySelector('[data-pan-object-detail] .pan-object-detail-head [data-pan-enable]')?.addEventListener('click', (event) => changePanEnabled(event.currentTarget.dataset.panEnable, event.currentTarget));
        };
        const showPanObject = (restoreFocus = false) => {
          const object = activePanObject;
@@ -349,20 +325,6 @@
         if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('novel-grid').innerHTML = platforms.map((item) => `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
         const panItems = Array.isArray(pans.items) ? pans.items : [];
-        const panTotal = panItems.length;
-        const panEnabledCount = panItems.filter((item) => item.enabled !== false).length;
-        const panConfiguredCount = panItems.filter((item) => Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
-        const panAccountCount = panItems.reduce((total, item) => {
-          const listed = Array.isArray(item.account_summary) ? item.account_summary.length : 0;
-          const reported = Number(item.accounts);
-          return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
-        }, 0);
-        const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
-        if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
-        if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
-        if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
-        if ($('pan-account-count')) $('pan-account-count').textContent = `${panAccountCount}`;
-        if ($('pan-upload-mode')) $('pan-upload-mode').textContent = panReadyCount ? `${panReadyCount} 个平台并发` : '暂无可用平台';
         panItems.forEach((item) => {
           const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
           const enabled = accounts.filter((account) => account?.enabled !== false).length;
