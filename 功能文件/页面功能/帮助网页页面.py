@@ -91,9 +91,9 @@ from .帮助网页脚本 import 控制台脚本
               <div class="pan-summary-item"><span>上传方式</span><strong id="pan-upload-mode">--</strong><small>完成后生成分享链接</small></div>
             </div>
             <nav class="pan-tabs" role="tablist" aria-label="选择网盘">
-              <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span>UC网盘</span></button>
-              <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span>夸克网盘</span></button>
-              <button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false"><span class="pan-tab-mark pan-tab-baidu">度</span><span>百度网盘</span></button>
+              <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span class="pan-tab-copy"><span>UC网盘</span><small data-pan-tab-meta="UC">读取中</small></span></button>
+              <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span class="pan-tab-copy"><span>夸克网盘</span><small data-pan-tab-meta="夸克">读取中</small></span></button>
+              <button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false"><span class="pan-tab-mark pan-tab-baidu">度</span><span class="pan-tab-copy"><span>百度网盘</span><small data-pan-tab-meta="百度">读取中</small></span></button>
             </nav>
             <div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div>
           </div>

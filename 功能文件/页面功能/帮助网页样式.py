@@ -443,11 +443,14 @@
       .pan-summary-item small { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--soft); font-size:10px; }
       .pan-page .pan-tabs { display:flex; gap:7px; margin:0 0 13px; padding:4px; overflow-x:auto; scrollbar-width:thin; border:1px solid #e8e8f4; border-radius:10px; background:#fafaff; }
       .pan-page .pan-tabs::-webkit-scrollbar { height:4px; }
-      .pan-page .pan-tab { position:relative; display:flex; align-items:center; justify-content:center; gap:8px; flex:1 1 0; min-width:112px; min-height:43px; padding:0 14px; border:0; border-radius:7px; background:transparent; color:#777992; font-size:12px; font-weight:750; white-space:nowrap; transition:color .18s ease,background .18s ease,box-shadow .18s ease; }
+      .pan-page .pan-tab { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:9px; flex:1 1 0; min-width:150px; min-height:52px; padding:0 15px; border:0; border-radius:7px; background:transparent; color:#777992; font-size:12px; font-weight:750; text-align:left; white-space:nowrap; transition:color .18s ease,background .18s ease,box-shadow .18s ease; }
       .pan-page .pan-tab:hover { color:var(--primary-dark); background:#f2f1ff; }
       .pan-page .pan-tab.active { color:var(--primary-dark); background:var(--panel); box-shadow:0 2px 8px rgba(72,68,146,.11); }
       .pan-page .pan-tab.active::after { content:""; position:absolute; right:22%; bottom:3px; left:22%; height:2px; border-radius:2px; background:var(--primary); }
       .pan-tab-mark { width:24px; height:24px; display:grid; place-items:center; flex:0 0 auto; border-radius:7px; font-size:11px; font-weight:850; }
+      .pan-tab-copy { display:grid; gap:3px; min-width:0; }
+      .pan-tab-copy > span { color:inherit; font-size:12px; font-weight:750; }
+      .pan-tab-copy > small { overflow:hidden; color:var(--muted); font-size:10px; font-weight:550; text-overflow:ellipsis; }
       .pan-tab-uc { background:#efeeff; color:#625dd4; }
       .pan-tab-quark { background:#e8f8ef; color:#35936a; }
       .pan-tab-baidu { background:#fff0e9; color:#ca7b5f; }
@@ -547,7 +550,7 @@
         .pan-page-head h2 { font-size:21px; }
         .pan-live { width:max-content; min-width:0; margin-top:12px; }
         .pan-page .pan-tabs { margin-bottom:11px; }
-        .pan-page .pan-tab { flex:0 0 auto; min-width:104px; min-height:40px; padding:0 12px; }
+        .pan-page .pan-tab { flex:0 0 auto; min-width:158px; min-height:48px; padding:0 12px; }
         .pan-card-head { padding:16px; }
         .pan-card-head-actions { align-items:flex-end; flex-direction:column; gap:7px; }
         .pan-card-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }

@@ -248,6 +248,14 @@
            return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
          }, 0);
          const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
+         panItems.forEach((item) => {
+           const meta = document.querySelector(`[data-pan-tab-meta="${CSS.escape(item.key)}"]`);
+           if (!meta) return;
+           const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+           const total = Number.isFinite(Number(item.accounts)) ? Number(item.accounts) : accounts.length;
+           const enabled = accounts.filter((account) => account?.enabled !== false).length;
+           meta.textContent = total ? `${total} 个账号 · ${enabled} 启用` : '暂无账号';
+         });
          if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
          if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
          if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
