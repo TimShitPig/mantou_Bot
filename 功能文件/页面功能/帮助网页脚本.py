@@ -56,8 +56,8 @@
       };
       let snapshot = null;
       let activeView = null;
-      let activePanKey = null;
-      let panDetailOpen = false;
+      let activePanTab = null;
+      let activePanObject = null;
       let toastTimer = null;
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
@@ -159,34 +159,34 @@
          catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
       };
        const panPlatformGlyph = (key) => ({UC:'U','夸克':'夸','百度':'度'})[key] || String(key || '盘').slice(0, 1);
+       const panSettingCard = (platform, type, glyph, title, detail) => `<button class="pan-object-card pan-setting-object" type="button" data-pan-object-open="${esc(platform)}" data-pan-object-type="${esc(type)}" aria-label="打开${esc(title)}"><span class="pan-object-mark">${esc(glyph)}</span><span class="pan-object-copy"><strong>${esc(title)}</strong><small>${esc(detail)}</small></span><span class="pan-object-arrow" aria-hidden="true">›</span></button>`;
        const panAccountRows = (item, editable) => {
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+         if (!accounts.length) return '<div class="empty pan-object-empty">暂无登录账号</div>';
          return accounts.map((account, position) => {
            const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
            const name = account?.name || '未命名账号';
            const phone = account?.phone || '未获取';
            const enabled = account?.enabled !== false;
-           const state = enabled ? '运行中' : '已停用';
-           return `<article class="account-row pan-account-card ${enabled ? '' : 'is-disabled'}"><div class="pan-account-card-main"><span class="pan-account-order">${String(index).padStart(2, '0')}</span><div class="pan-account-info"><strong>账号${esc(index)}</strong><span>${esc(name)} · ${esc(phone)}</span></div></div><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${state}</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'} aria-label="删除${esc(item.name)}账号${esc(index)}">删除</button></div></article>`;
+           return `<article class="pan-object-card pan-account-object ${enabled ? '' : 'is-disabled'}"><button class="pan-object-open pan-account-object-main" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="account" data-index="${esc(index)}" aria-label="打开${esc(item.name)}账号${esc(index)}"><span class="pan-account-order">${String(index).padStart(2, '0')}</span><span class="pan-object-copy"><strong>账号${esc(index)}</strong><small>${esc(name)} · ${esc(phone)}</small></span><span class="pan-object-arrow" aria-hidden="true">›</span></button><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button></div></article>`;
          }).join('');
        };
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
        const renderPanCard = (item, pansEditable, configEditable) => {
-         const directoryField = ({UC:'uc_pan_upload_dir','夸克':'quark_pan_upload_dir','百度':'baidu_pan_upload_dir'})[item.key] || '';
          const enabled = item.enabled !== false;
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
          const accountCount = Number(item.accounts) >= 0 ? Number(item.accounts) : accounts.length;
          const configured = Boolean(item.configured || accounts.length);
-         const selectedAccount = Number(item.selected_account) >= 0 ? Number(item.selected_account) : 0;
          const stateTag = enabled ? '<span class="tag ok">已开启</span>' : '<span class="tag off">已关闭</span>';
          const configTag = configured ? '<span class="tag ok">已配置</span>' : '<span class="tag off">未配置</span>';
-         const enabledAccounts = accounts.filter((account) => account?.enabled !== false);
-         const groupOptions = enabledAccounts.map((account, position) => {
-           const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
-           return `<option value="${esc(index)}" ${index === selectedAccount ? 'selected' : ''}>账号${esc(index)}</option>`;
-         }).join('') || '<option value="" selected disabled>没有启用的账号</option>';
-         const defaultOption = item.active ? '默认使用中' : (enabled ? '设为默认主网盘' : '请先开启网盘');
-         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="region" aria-labelledby="pan-detail-title">
+         const enabledAccountCount = accounts.filter((account) => account?.enabled !== false).length;
+         const settingCards = [
+           panSettingCard(item.key, 'add', '+', '添加账号', '粘贴 Cookie 添加登录态'),
+           panSettingCard(item.key, 'directory', 'DIR', '上传目录', item.directory || '默认目录'),
+           panSettingCard(item.key, 'share', '↗', '分享设置', item.active ? '当前默认主网盘' : '设置默认主网盘'),
+           panSettingCard(item.key, 'groups', '群', '群账号选择', '为不同群选择账号'),
+         ].join('');
+         return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace ${item.active ? 'active' : ''} ${enabled ? '' : 'is-disabled'}" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
            <header class="pan-card-head pan-top">
              <div class="pan-card-brand pan-card-identity pan-title"><div class="pan-logo">${esc(panPlatformGlyph(item.key))}</div><div><strong>${esc(item.name)}</strong><small>${enabled ? '参与启用平台的并发分享' : '当前暂停上传和分享'}</small></div></div>
              <div class="pan-card-head-actions pan-top-actions">${item.active ? '<span class="tag active">默认主网盘</span>' : ''}<div class="pan-enable"><span>${enabled ? '运行中' : '已停用'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div></div>
@@ -194,71 +194,136 @@
            <div class="pan-card-stats pan-meta">
              <div class="pan-stat"><span>运行状态</span><strong>${stateTag}</strong></div>
              <div class="pan-stat"><span>配置状态</span><strong>${configTag}</strong></div>
-             <div class="pan-stat"><span>账号数量</span><strong>${esc(accountCount)} 个</strong></div>
+             <div class="pan-stat"><span>账号数量</span><strong>${esc(accountCount)} 个 · ${esc(enabledAccountCount)} 启用</strong></div>
              <div class="pan-stat"><span>上传目录</span><strong title="${esc(item.directory)}">${esc(item.directory || '默认目录')}</strong></div>
            </div>
            <div class="pan-security-note pan-card-note">登录态：${configured ? '已保存（Cookie 不回显）' : '未配置'}${enabled ? '' : ' · 已暂停上传和分享'}${item.key === '夸克' ? ' · 可刷新账号资料' : ''}</div>
            <div class="pan-card-content">
-             <section class="pan-column pan-column-primary">
-               <div class="pan-section-title pan-section-heading"><div><span class="pan-section-kicker">STORAGE PATH</span><h3>上传目录</h3></div><span class="pan-section-hint">文件会按此目录生成分享</span></div>
-               <div class="pan-directory"><input type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div>
-               <div class="pan-section-title pan-section-heading account-heading"><div><span class="pan-section-kicker">ACCOUNTS</span><h3>登录账号</h3></div><span class="pan-section-hint">Cookie 仅写入，不在页面回显</span></div>
-               <div class="account-list pan-account-list">${panAccountRows(item, pansEditable) || '<div class="empty">暂无账号，请添加登录态</div>'}</div>
-               <div class="account-add pan-account-add"><input type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 ${esc(item.name)} Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div>
+             <div class="pan-object-browser" data-pan-browser="${esc(item.key)}"><div class="pan-object-grid">${panAccountRows(item, pansEditable)}${settingCards}</div></div>
+             <section class="pan-object-detail" data-pan-object-detail="${esc(item.key)}" hidden>
+               <div class="pan-object-detail-head"><button class="pan-back-button" type="button" data-pan-object-back="${esc(item.key)}" aria-label="返回${esc(item.name)}卡片列表"><span aria-hidden="true">←</span>返回${esc(item.name)}</button><strong data-pan-object-title="${esc(item.key)}"></strong></div>
+               <div class="pan-object-pane" data-pan-object-pane="${esc(item.key)}"></div>
              </section>
-             <aside class="pan-column pan-column-secondary">
-               <section class="pan-action-block"><div class="pan-section-title pan-section-heading"><div><span class="pan-section-kicker">SHARE ROUTE</span><h3>分享设置</h3></div><span class="pan-section-hint">完成后生成链接</span></div><label class="pan-field-label" for="pan-select-${esc(item.key)}">默认主网盘</label><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${enabled ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></section>
-               <details class="pan-advanced pan-group-settings"><summary><span>群账号选择</span><small>为不同群使用不同账号</small></summary><div class="pan-advanced-content pan-advanced-body"><p>输入群号后选择该群使用的账号；控制台默认显示账号${selectedAccount ? esc(selectedAccount) : '暂无'}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></div></details>
-             </aside>
            </div>
          </article>`;
        };
-       const renderPanOverviewCard = (item) => {
+       const renderPanObjectContent = (item, type, index, pansEditable, configEditable) => {
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
-         const total = Number.isFinite(Number(item.accounts)) ? Number(item.accounts) : accounts.length;
-         const enabledCount = accounts.filter((account) => account?.enabled !== false).length;
-         const enabled = item.enabled !== false;
-         const configured = Boolean(item.configured || total);
-         return `<button class="pan-entry-card ${enabled ? '' : 'is-disabled'}" type="button" data-pan-open="${esc(item.key)}" aria-label="进入${esc(item.name)}设置">
-           <span class="pan-entry-head"><span class="pan-entry-brand"><span class="pan-logo">${esc(panPlatformGlyph(item.key))}</span><span class="pan-entry-copy"><strong>${esc(item.name)}</strong><small>${enabled ? '运行中' : '已停用'}</small></span></span><span class="pan-entry-arrow" aria-hidden="true">›</span></span>
-           <span class="pan-entry-stats"><span><small>账号总数</small><strong>${esc(total)}</strong></span><span><small>已启用账号</small><strong>${esc(enabledCount)}</strong></span><span><small>上传目录</small><strong title="${esc(item.directory || '')}">${esc(item.directory || '默认目录')}</strong></span></span>
-           <span class="pan-entry-footer"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '网盘已开启' : '网盘已关闭'}</span><span class="tag ${configured ? 'ok' : 'off'}">${configured ? '账号已配置' : '暂无账号'}</span>${item.active ? '<span class="tag active">默认主网盘</span>' : ''}</span>
-         </button>`;
+         const enabledAccounts = accounts.filter((account) => account?.enabled !== false);
+         const selectedAccount = Number(item.selected_account) >= 0 ? Number(item.selected_account) : 0;
+         const groupOptions = enabledAccounts.map((account, position) => {
+           const accountIndex = Number(account?.index) > 0 ? Number(account.index) : position + 1;
+           return `<option value="${esc(accountIndex)}" ${accountIndex === selectedAccount ? 'selected' : ''}>账号${esc(accountIndex)}</option>`;
+         }).join('') || '<option value="" selected disabled>没有启用的账号</option>';
+         const directoryField = ({UC:'uc_pan_upload_dir','夸克':'quark_pan_upload_dir','百度':'baidu_pan_upload_dir'})[item.key] || '';
+         const defaultOption = item.active ? '默认使用中' : (item.enabled !== false ? '设为默认主网盘' : '请先开启网盘');
+         if (type === 'account') {
+           const account = accounts.find((entry, position) => Number(entry?.index) === index || (!entry?.index && position + 1 === index));
+           if (!account) return '';
+           const enabled = account.enabled !== false;
+           return `<div class="pan-object-account-detail"><div class="pan-account-order">${String(index).padStart(2, '0')}</div><div class="pan-object-account-copy"><span class="pan-section-kicker">ACCOUNT</span><h3>账号${esc(index)}</h3><p>${esc(account.name || '未命名账号')} · ${esc(account.phone || '未获取')}</p></div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><span>${enabled ? '账号已启用' : '账号已停用'}</span><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 只写入，不在页面回显。</p>`;
+         }
+         if (type === 'add') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></div>`;
+         if (type === 'directory') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-dir-${esc(item.key)}">上传目录</label><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></div>`;
+         if (type === 'share') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-select-${esc(item.key)}">默认主网盘</label><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${item.enabled !== false ? '' : 'disabled'}>切换到${esc(item.name)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></div>`;
+         if (type === 'groups') return `<div class="pan-object-form"><p class="pan-object-form-copy">为不同群选择该平台的独立账号；未设置时默认使用账号${selectedAccount || '1'}。</p><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></div>`;
+         return '';
        };
-       const openPanDetail = (key) => {
-         const item = (snapshot?.pans?.items || []).find((entry) => entry.key === key);
-         if (!item) return;
-         activePanKey = key;
-         panDetailOpen = true;
-         $('pan-overview').hidden = true;
-         $('pan-detail').hidden = false;
-         $('pan-detail-title').textContent = `${item.name}设置`;
-         $('pan-grid').innerHTML = renderPanCard(item, snapshot.pans.editable, snapshot.pans.config_editable);
-         bindPanDetailEvents();
-         document.querySelector('[data-pan-back]')?.focus({preventScroll:true});
-         $('pan-detail')?.scrollIntoView({block:'nearest', behavior:'smooth'});
+       const panObjectTitle = (type, index) => type === 'account' ? `账号${index}` : ({add:'添加账号',directory:'上传目录',share:'分享设置',groups:'群账号选择'})[type] || '设置';
+       const bindPanObjectControls = (platform) => {
+         const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
+         const pane = card?.querySelector('[data-pan-object-pane]');
+         if (!pane) return;
+         pane.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
+         pane.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
+         pane.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index, node)));
+         pane.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
+         pane.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
+         pane.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
+         pane.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
        };
-       const backToPanOverview = () => {
-         const previousKey = activePanKey;
-         panDetailOpen = false;
-         activePanKey = null;
-         $('pan-grid').innerHTML = '';
-         $('pan-detail').hidden = true;
-         $('pan-overview').hidden = false;
-         document.querySelector(`[data-pan-open="${CSS.escape(previousKey || '')}"]`)?.focus({preventScroll:true});
-         $('pan-overview')?.scrollIntoView({block:'nearest', behavior:'smooth'});
+       const showPanObject = (restoreFocus = false) => {
+         const object = activePanObject;
+         if (!object) return;
+         const card = document.querySelector(`[data-pan-card="${CSS.escape(object.platform)}"]`);
+         const item = (snapshot?.pans?.items || []).find((entry) => entry.key === object.platform);
+         if (!card || !item) return;
+         if (object.type === 'account') {
+           const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+           const exists = accounts.some((entry, position) => Number(entry?.index) === object.index || (!entry?.index && position + 1 === object.index));
+           if (!exists) { activePanObject = null; return; }
+         }
+         const browser = card.querySelector('[data-pan-browser]');
+         const detail = card.querySelector('[data-pan-object-detail]');
+         const title = card.querySelector('[data-pan-object-title]');
+         const pane = card.querySelector('[data-pan-object-pane]');
+         browser.hidden = true;
+         detail.hidden = false;
+         title.textContent = panObjectTitle(object.type, object.index);
+         pane.innerHTML = renderPanObjectContent(item, object.type, object.index, snapshot.pans.editable, snapshot.pans.config_editable);
+         bindPanObjectControls(object.platform);
+         if (restoreFocus) {
+           card.querySelector('[data-pan-object-back]')?.focus({preventScroll:true});
+           detail.scrollIntoView({block:'nearest', behavior:'smooth'});
+         }
        };
-       const bindPanDetailEvents = () => {
-         document.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
-         document.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
-         document.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index)));
-         document.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
-         document.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
-         document.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
-         document.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
-         document.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
+       const openPanObject = (platform, type, index) => {
+         activePanObject = {platform, type, index: Number(index) || 0};
+         showPanObject(true);
        };
-       document.querySelector('[data-pan-back]')?.addEventListener('click', backToPanOverview);
+       const closePanObject = (platform) => {
+         const previous = activePanObject;
+         if (!previous || previous.platform !== platform) return;
+         activePanObject = null;
+         const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
+         if (!card) return;
+         card.querySelector('[data-pan-object-pane]').innerHTML = '';
+         card.querySelector('[data-pan-object-detail]').hidden = true;
+         card.querySelector('[data-pan-browser]').hidden = false;
+         const controls = Array.from(card.querySelectorAll('[data-pan-object-open]'));
+         controls.find((node) => node.dataset.panObjectType === previous.type && Number(node.dataset.index || 0) === previous.index)?.focus({preventScroll:true});
+         card.querySelector('[data-pan-browser]')?.scrollIntoView({block:'nearest', behavior:'smooth'});
+       };
+       const applyPanTab = (key) => {
+         const cards = document.querySelectorAll('[data-pan-card]');
+         const tabs = document.querySelectorAll('[data-pan-tab]');
+         const available = Array.from(cards).map((node) => node.dataset.panCard);
+         const selected = available.includes(key) ? key : (available[0] || '');
+         activePanTab = selected || null;
+         try { if (selected) sessionStorage.setItem('mantou-pan-tab', selected); } catch (_) {}
+         tabs.forEach((node) => { const isActive = node.dataset.panTab === selected; node.classList.toggle('active', isActive); node.setAttribute('aria-selected', String(isActive)); node.tabIndex = isActive ? 0 : -1; });
+         cards.forEach((node) => { const isActive = node.dataset.panCard === selected; node.hidden = !isActive; node.setAttribute('aria-hidden', String(!isActive)); });
+       };
+       const choosePanTab = (key) => {
+         if (activePanTab === key) return;
+         if (activePanObject) closePanObject(activePanObject.platform);
+         activePanObject = null;
+         applyPanTab(key);
+       };
+       const bindPanWorkspaceControls = () => {
+         const grid = $('pan-grid');
+         if (!grid) return;
+         grid.querySelectorAll('[data-pan-object-open]').forEach((node) => node.addEventListener('click', () => openPanObject(node.dataset.panObjectOpen, node.dataset.panObjectType, node.dataset.index)));
+         grid.querySelectorAll('[data-pan-object-back]').forEach((node) => node.addEventListener('click', () => closePanObject(node.dataset.panObjectBack)));
+         grid.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
+         grid.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
+       };
+       document.querySelectorAll('[data-pan-tab]').forEach((node) => {
+         node.addEventListener('click', () => choosePanTab(node.dataset.panTab));
+         node.addEventListener('keydown', (event) => {
+           const tabs = Array.from(document.querySelectorAll('[data-pan-tab]'));
+           const current = tabs.indexOf(node);
+           let next = current;
+           if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+           else if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+           else if (event.key === 'Home') next = 0;
+           else if (event.key === 'End') next = tabs.length - 1;
+           else return;
+           event.preventDefault();
+           tabs[next]?.focus();
+           choosePanTab(tabs[next]?.dataset.panTab);
+         });
+       });
       const render = (data) => {
         snapshot = data;
         const auth = data.auth || {}; const novels = data.novels || {}; const pans = data.pans || {}; const server = data.server || {}; const database = data.database || {};
@@ -283,36 +348,34 @@
         if ($('novel-enabled-count')) $('novel-enabled-count').textContent = `${enabledCount} / ${totalCount} 已开启`;
         if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('novel-grid').innerHTML = platforms.map((item) => `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
-         const panItems = Array.isArray(pans.items) ? pans.items : [];
-         const panTotal = panItems.length;
-         const panEnabledCount = panItems.filter((item) => item.enabled !== false).length;
-         const panConfiguredCount = panItems.filter((item) => Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
-         const panAccountCount = panItems.reduce((total, item) => {
-           const listed = Array.isArray(item.account_summary) ? item.account_summary.length : 0;
-           const reported = Number(item.accounts);
-           return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
-         }, 0);
-         const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
-         if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
-         if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
-         if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
-         if ($('pan-account-count')) $('pan-account-count').textContent = `${panAccountCount}`;
-         if ($('pan-upload-mode')) $('pan-upload-mode').textContent = panReadyCount ? `${panReadyCount} 个平台并发` : '暂无可用平台';
-         $('pan-overview').innerHTML = panItems.map(renderPanOverviewCard).join('') || '<div class="empty">没有网盘数据</div>';
-         const selectedPan = panItems.find((item) => item.key === activePanKey);
-         if (panDetailOpen && selectedPan) {
-           $('pan-overview').hidden = true;
-           $('pan-detail').hidden = false;
-           $('pan-detail-title').textContent = `${selectedPan.name}设置`;
-           $('pan-grid').innerHTML = renderPanCard(selectedPan, pans.editable, pans.config_editable);
-           bindPanDetailEvents();
-         } else {
-           panDetailOpen = false;
-           activePanKey = null;
-           $('pan-overview').hidden = false;
-           $('pan-detail').hidden = true;
-           $('pan-grid').innerHTML = '';
-         }
+        const panItems = Array.isArray(pans.items) ? pans.items : [];
+        const panTotal = panItems.length;
+        const panEnabledCount = panItems.filter((item) => item.enabled !== false).length;
+        const panConfiguredCount = panItems.filter((item) => Boolean(item.configured || (Array.isArray(item.account_summary) && item.account_summary.length))).length;
+        const panAccountCount = panItems.reduce((total, item) => {
+          const listed = Array.isArray(item.account_summary) ? item.account_summary.length : 0;
+          const reported = Number(item.accounts);
+          return total + (Number.isFinite(reported) && reported >= 0 ? reported : listed);
+        }, 0);
+        const panReadyCount = panItems.filter((item) => item.enabled !== false && (Array.isArray(item.account_summary) ? item.account_summary.some((account) => account?.enabled !== false) : Boolean(item.configured))).length;
+        if ($('pan-active-label')) $('pan-active-label').textContent = pans.active || '--';
+        if ($('pan-enabled-count')) $('pan-enabled-count').textContent = `${panEnabledCount} / ${panTotal}`;
+        if ($('pan-configured-count')) $('pan-configured-count').textContent = `${panConfiguredCount} / ${panTotal}`;
+        if ($('pan-account-count')) $('pan-account-count').textContent = `${panAccountCount}`;
+        if ($('pan-upload-mode')) $('pan-upload-mode').textContent = panReadyCount ? `${panReadyCount} 个平台并发` : '暂无可用平台';
+        panItems.forEach((item) => {
+          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
+          const enabled = accounts.filter((account) => account?.enabled !== false).length;
+          const meta = document.querySelector(`[data-pan-tab-meta="${CSS.escape(item.key)}"]`);
+          if (meta) meta.textContent = `${accounts.length} 个账号 · ${enabled} 启用`;
+        });
+        const panGrid = $('pan-grid');
+        if (panGrid) panGrid.innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
+        bindPanWorkspaceControls();
+        let savedPanTab = activePanTab;
+        if (!savedPanTab) { try { savedPanTab = sessionStorage.getItem('mantou-pan-tab'); } catch (_) {} }
+        applyPanTab(savedPanTab || panItems.find((item) => item.active)?.key || panItems[0]?.key || '');
+        if (activePanObject) showPanObject(false);
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
@@ -321,7 +384,6 @@
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
-         document.querySelectorAll('[data-pan-open]').forEach((node) => node.addEventListener('click', () => openPanDetail(node.dataset.panOpen)));
       };
       let currentQQSessionKey = '';
       const renderQQAuthEditor = (auth) => {
