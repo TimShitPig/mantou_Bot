@@ -437,23 +437,23 @@
       .pan-page .pan-add-account { min-height:35px; padding:0 12px; }
       .pan-section-kicker { display:block; margin-bottom:3px; color:var(--muted); font-size:9px; font-weight:800; }
       .pan-security-note { margin:11px 0 0; padding:8px 10px; border:0; border-left:3px solid #90a4cf; border-radius:3px; background:#f1f4f8; color:var(--muted); font-size:10px; line-height:1.55; }
-      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr)); gap:13px; padding:17px 0 3px; }
+      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr)); gap:13px; padding:17px 0 3px; }
       .pan-object-card { min-width:0; min-height:110px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
       .pan-object-card:hover { border-color:#a9b6d4; background:#fbfcfe; }
       .pan-account-object.is-disabled { background:#f6f7fa; }
-      .pan-account-object { display:flex; align-items:stretch; }
-      .pan-object-open { display:flex; align-items:center; gap:14px; flex:1 1 auto; min-width:0; min-height:110px; padding:16px 9px 16px 16px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
+      .pan-account-object { display:flex; flex-direction:column; align-items:stretch; aspect-ratio:1 / 1; min-height:0; padding:16px; }
+      .pan-object-open { position:relative; display:grid; grid-template-columns:64px minmax(0,1fr) 12px; align-content:start; align-items:start; gap:0 12px; flex:1 1 auto; min-width:0; min-height:0; padding:2px 0 14px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
       .pan-object-open:hover { color:var(--ink); }
       .pan-account-order { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:6px; background:#e9efff; color:#4668ba; font-size:10px; font-weight:800; }
-      .pan-account-avatar { position:relative; display:grid; place-items:center; width:58px; height:58px; flex:0 0 58px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:19px; font-weight:800; }
+      .pan-account-avatar { position:relative; display:grid; place-items:center; width:64px; height:64px; flex:0 0 64px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:19px; font-weight:800; }
       .pan-account-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:var(--panel); }
-      .pan-object-copy { display:grid; gap:6px; min-width:0; flex:1; }
+      .pan-object-copy { display:grid; align-content:start; gap:8px; min-width:0; flex:1; }
       .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:14px; text-overflow:ellipsis; white-space:nowrap; }
-      .pan-object-copy small { overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+      .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:11px; white-space:normal; }
       .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; overflow:visible; color:var(--soft); font-size:11px; font-weight:600; line-height:1.4; white-space:normal; }
       .pan-account-meta > span { min-width:0; overflow-wrap:anywhere; }
-      .pan-object-arrow { margin-left:auto; color:var(--soft); font-size:18px; line-height:1; }
-      .pan-account-card-actions { display:flex; align-items:center; gap:9px; padding:0 15px 0 5px; }
+      .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; }
+      .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:9px; padding:12px 1px 0; border-top:1px solid var(--line); }
       .pan-account-card-actions .tag { white-space:nowrap; }
       .pan-page .pan-account-switch { width:36px; height:21px; flex:0 0 36px; border:0; border-radius:999px; background:#d7d8e4; }
       .pan-page .pan-account-switch.on { background:#3fa979; }
@@ -514,8 +514,11 @@
         .pan-tab { min-width:150px; min-height:54px; padding:7px 10px; }
         .pan-account-toolbar { align-items:flex-start; }
         .pan-account-toolbar-actions { gap:9px; }
-        .pan-object-grid { grid-template-columns:1fr; gap:8px; padding-top:12px; }
-        .pan-account-card-actions { gap:6px; padding-right:10px; }
+        .pan-object-grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr)); gap:8px; padding-top:12px; }
+        .pan-account-object { padding:14px; }
+        .pan-object-open { grid-template-columns:58px minmax(0,1fr) 12px; column-gap:9px; }
+        .pan-account-avatar { width:58px; height:58px; flex-basis:58px; }
+        .pan-account-card-actions { gap:6px; }
         .pan-directory,.pan-page .account-add { grid-template-columns:1fr; }
         .pan-directory .outline-button,.pan-page .account-add .outline-button { width:100%; }
         .pan-page .account-actions { grid-template-columns:1fr; }
