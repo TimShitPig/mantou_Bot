@@ -706,6 +706,7 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
         {
             "avatarurl",
             "avatar_url",
+            "avataruri",
             "avatar",
             "headimgurl",
             "head_img_url",
@@ -759,7 +760,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             continue
         Cookie = 解析结果[1]
         try:
-            资料查询时间 = max(0, int(元数据.get("profile_checked_at") or 0))
+            资料查询时间 = max(0, int(元数据.get("avatar_checked_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         记录 = {
@@ -780,7 +781,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
                 if 平台 == "夸克"
                 else ""
             ),
-            "profile_checked_at": 资料查询时间,
+            "avatar_checked_at": 资料查询时间,
             "enabled": _解析网盘账号启用状态(元数据.get("enabled")),
         }
         已有位置 = next(
@@ -802,9 +803,9 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             for 字段 in ("name", "phone", "avatar_url"):
                 if 记录[字段]:
                     已有记录[字段] = 记录[字段]
-            已有记录["profile_checked_at"] = max(
-                int(已有记录.get("profile_checked_at") or 0),
-                记录["profile_checked_at"],
+            已有记录["avatar_checked_at"] = max(
+                int(已有记录.get("avatar_checked_at") or 0),
+                记录["avatar_checked_at"],
             )
     return 结果
 
@@ -837,7 +838,7 @@ def _合并配置网盘账号记录(
                 "name": "",
                 "phone": "",
                 "avatar_url": "",
-                "profile_checked_at": 0,
+                "avatar_checked_at": 0,
                 "enabled": True,
             },
         )
@@ -881,7 +882,7 @@ def _写入网盘账号记录(
             else ""
         )
         try:
-            资料查询时间 = max(0, int(原记录.get("profile_checked_at") or 0))
+            资料查询时间 = max(0, int(原记录.get("avatar_checked_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         if 身份:
@@ -893,7 +894,7 @@ def _写入网盘账号记录(
         if 头像地址:
             记录["avatar_url"] = 头像地址
         if 平台 == "夸克" and 资料查询时间:
-            记录["profile_checked_at"] = 资料查询时间
+            记录["avatar_checked_at"] = 资料查询时间
         账号数据.append(记录)
     payload = json.dumps(
         {
@@ -932,7 +933,7 @@ def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str])
                 "name": 原记录.get("name", ""),
                 "phone": 原记录.get("phone", ""),
                 "avatar_url": 原记录.get("avatar_url", ""),
-                "profile_checked_at": 原记录.get("profile_checked_at", 0),
+                "avatar_checked_at": 原记录.get("avatar_checked_at", 0),
                 "enabled": _解析网盘账号启用状态(原记录.get("enabled")),
             }
         )
@@ -992,7 +993,7 @@ def _保存网盘Cookie(
                         "name": "",
                         "phone": "",
                         "avatar_url": "",
-                        "profile_checked_at": 0,
+                        "avatar_checked_at": 0,
                         "enabled": True,
                     }
                 )
@@ -1014,7 +1015,7 @@ def _保存网盘Cookie(
                 if 新头像地址:
                     已保存记录["avatar_url"] = 新头像地址
                 if 规范平台 == "夸克":
-                    已保存记录["profile_checked_at"] = int(time.time())
+                    已保存记录["avatar_checked_at"] = 0
                 _写入网盘账号记录(配置, 规范平台, 账号记录)
                 return 位置 + 1
         已有位置 = next(
@@ -1033,7 +1034,7 @@ def _保存网盘Cookie(
             if 新头像地址:
                 账号记录[已有位置]["avatar_url"] = 新头像地址
             if 规范平台 == "夸克":
-                账号记录[已有位置]["profile_checked_at"] = int(time.time())
+                账号记录[已有位置]["avatar_checked_at"] = 0
             _写入网盘账号记录(配置, 规范平台, 账号记录)
             return 已有位置 + 1
         账号记录.append(
@@ -1043,9 +1044,7 @@ def _保存网盘Cookie(
                 "name": 新名称,
                 "phone": 新手机号,
                 "avatar_url": 新头像地址,
-                "profile_checked_at": int(time.time())
-                if 规范平台 == "夸克"
-                else 0,
+                "avatar_checked_at": 0,
                 "enabled": True,
             }
         )
@@ -1317,7 +1316,7 @@ async def _刷新夸克账号资料(
                     "name": "",
                     "phone": "",
                     "avatar_url": "",
-                    "profile_checked_at": 0,
+                    "avatar_checked_at": 0,
                 }
             ]
     if not 账号记录:
@@ -1331,7 +1330,7 @@ async def _刷新夸克账号资料(
         ):
             return False
         try:
-            上次查询 = max(0, int(记录.get("profile_checked_at") or 0))
+            上次查询 = max(0, int(记录.get("avatar_checked_at") or 0))
         except (TypeError, ValueError):
             上次查询 = 0
         if not 强制 and 上次查询 and time.time() - 上次查询 < 3600:
@@ -1351,8 +1350,8 @@ async def _刷新夸克账号资料(
             记录["avatar_url"] = 头像地址
             已变更 = True
         查询时间 = int(time.time())
-        if 查询时间 != 记录.get("profile_checked_at"):
-            记录["profile_checked_at"] = 查询时间
+        if 查询时间 != 记录.get("avatar_checked_at"):
+            记录["avatar_checked_at"] = 查询时间
             已变更 = True
         return 已变更
 
