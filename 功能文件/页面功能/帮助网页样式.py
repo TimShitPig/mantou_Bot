@@ -440,31 +440,35 @@
       .pan-page .pan-add-account { min-height:35px; padding:0 12px; }
       .pan-section-kicker { display:block; margin-bottom:3px; color:var(--muted); font-size:9px; font-weight:800; }
       .pan-security-note { margin:11px 0 0; padding:8px 10px; border:0; border-left:3px solid #90a4cf; border-radius:3px; background:#f1f4f8; color:var(--muted); font-size:10px; line-height:1.55; }
-      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr)); gap:13px; padding:17px 0 3px; }
+      .pan-object-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr)); justify-content:start; gap:10px; padding:14px 0 3px; }
       .pan-object-card { min-width:0; min-height:110px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
       .pan-object-card:hover { border-color:#a9b6d4; background:#fbfcfe; }
       .pan-account-object.is-disabled { background:#f6f7fa; }
-      .pan-account-object { display:flex; flex-direction:column; align-items:stretch; justify-self:center; width:min(100%,280px); aspect-ratio:1 / 1; min-height:0; padding:16px; animation:pan-account-card-enter .28s ease-out both; transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease; }
+      .pan-account-object { display:flex; flex-direction:column; align-items:stretch; justify-self:start; width:100%; max-width:240px; aspect-ratio:auto; min-height:0; padding:12px; animation:pan-account-card-enter .28s ease-out both; transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease; }
       .pan-account-object:nth-child(2) { animation-delay:35ms; }
       .pan-account-object:nth-child(3) { animation-delay:70ms; }
       .pan-account-object:nth-child(4) { animation-delay:105ms; }
       .pan-account-object:nth-child(5) { animation-delay:140ms; }
       .pan-account-object:hover { transform:translateY(-3px); box-shadow:0 8px 20px rgba(30,48,85,.11); }
       @keyframes pan-account-card-enter { from { opacity:0; } to { opacity:1; } }
-      .pan-object-open { position:relative; display:grid; grid-template-columns:64px minmax(0,1fr) 12px; align-content:start; align-items:start; gap:0 12px; flex:1 1 auto; min-width:0; min-height:0; padding:2px 0 14px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
+      .pan-object-open { position:relative; display:grid; grid-template-columns:52px minmax(0,1fr) 12px; align-content:start; align-items:start; gap:0 10px; flex:0 0 auto; min-width:0; min-height:0; padding:1px 0 9px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
       .pan-object-open:hover { color:var(--ink); }
       .pan-account-order { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:6px; background:#e9efff; color:#4668ba; font-size:10px; font-weight:800; }
-      .pan-account-avatar { position:relative; display:grid; place-items:center; width:64px; height:64px; flex:0 0 64px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:19px; font-weight:800; }
+      .pan-account-avatar { position:relative; display:grid; place-items:center; width:52px; height:52px; flex:0 0 52px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:16px; font-weight:800; }
       .pan-account-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:var(--panel); }
-      .pan-object-copy { display:grid; align-content:start; gap:8px; min-width:0; flex:1; }
-      .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:14px; text-overflow:ellipsis; white-space:nowrap; }
-      .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:11px; white-space:normal; }
-      .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; overflow:visible; color:var(--soft); font-size:11px; font-weight:600; line-height:1.4; white-space:normal; }
+      .pan-object-copy { display:grid; align-content:start; gap:5px; min-width:0; flex:1; }
+      .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+      .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:10px; white-space:normal; }
+      .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; overflow:visible; color:var(--soft); font-size:10px; font-weight:600; line-height:1.35; white-space:normal; }
       .pan-account-meta > span { min-width:0; overflow-wrap:anywhere; }
       .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
       .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
-      .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:9px; padding:12px 1px 0; border-top:1px solid var(--line); }
+      .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 1px 0; border-top:1px solid var(--line); }
       .pan-account-card-actions .tag { white-space:nowrap; }
+      .pan-account-default { min-height:26px; padding:0 7px; border:1px solid #cce4d5; border-radius:5px; background:#f3faf5; color:#318154; font-family:inherit; font-size:10px; font-weight:650; white-space:nowrap; cursor:pointer; }
+      .pan-account-default:hover:not(:disabled) { border-color:#8fc4a1; background:#e8f6ed; }
+      .pan-account-default:disabled { cursor:not-allowed; opacity:.55; }
+      .pan-account-default-tag { font-size:9px; }
       .pan-page .pan-account-switch { width:36px; height:21px; flex:0 0 36px; border:0; border-radius:999px; background:#d7d8e4; transition:background-color .2s ease; }
       .pan-page .pan-account-switch.on { background:#3fa979; }
       .pan-page .pan-account-switch span { top:3px; left:3px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #0002; transition:transform .2s cubic-bezier(.2,.8,.2,1); }
@@ -524,11 +528,11 @@
         .pan-tab { min-width:150px; min-height:54px; padding:7px 10px; }
         .pan-account-toolbar { align-items:flex-start; }
         .pan-account-toolbar-actions { gap:9px; }
-        .pan-object-grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr)); gap:8px; padding-top:12px; }
-        .pan-account-object { padding:14px; }
-        .pan-object-open { grid-template-columns:58px minmax(0,1fr) 12px; column-gap:9px; }
-        .pan-account-avatar { width:58px; height:58px; flex-basis:58px; }
-        .pan-account-card-actions { gap:6px; }
+        .pan-object-grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr)); gap:8px; padding-top:12px; }
+        .pan-account-object { max-width:230px; padding:11px; }
+        .pan-object-open { grid-template-columns:48px minmax(0,1fr) 10px; column-gap:8px; }
+        .pan-account-avatar { width:48px; height:48px; flex-basis:48px; }
+        .pan-account-card-actions { gap:5px; }
         .pan-directory,.pan-page .account-add { grid-template-columns:1fr; }
         .pan-directory .outline-button,.pan-page .account-add .outline-button { width:100%; }
         .pan-page .account-actions { grid-template-columns:1fr; }
@@ -647,6 +651,8 @@
       :root[data-theme="dark"] .pan-page .pan-account-switch { background:#383d52; }
       :root[data-theme="dark"] .pan-page .pan-account-switch.on { background:#4dbb82; }
       :root[data-theme="dark"] .pan-page .pan-account-card-actions .tag.off { background:#262b38; color:#9aa0b5; }
+      :root[data-theme="dark"] .pan-page .pan-account-default { border-color:#35513e; background:#1c3023; color:#8bc9a5; }
+      :root[data-theme="dark"] .pan-page .pan-account-default:hover:not(:disabled) { border-color:#4c765b; background:#203a29; }
       :root[data-theme="dark"] .pan-page .pan-account-delete { border-color:#5a3941; background:#30222a; color:#e07085; }
       :root[data-theme="dark"] .pan-page .pan-account-delete:hover { background:#3a212b; color:#f0899c; }
       :root[data-theme="dark"] .pan-section-kicker { color:#767d96; }

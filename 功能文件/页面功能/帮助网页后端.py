@@ -1571,8 +1571,9 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
             账号数量 = len(账号摘要)
             已配置 = bool(账号摘要)
             目录 = str(读取目录(配置) or "")
+            默认账号 = 网盘Cookie.获取默认网盘账号序号(配置, 标识)
         except Exception:
-            已配置, 账号数量, 账号摘要, 目录 = False, 0, [], ""
+            已配置, 账号数量, 账号摘要, 目录, 默认账号 = False, 0, [], "", 0
         网盘列表.append(
             {
                 "key": 标识,
@@ -1583,15 +1584,8 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
                 "directory": 目录,
                 "enabled": bool(网盘启用状态.get(标识, True)),
                 "active": 标识 == 当前网盘,
-                # 控制台没有当前群上下文，展示第一个启用账号作为默认选择。
-                "selected_account": next(
-                    (
-                        int(账号.get("index") or 0)
-                        for 账号 in 账号摘要
-                        if 账号.get("enabled", True)
-                    ),
-                    0,
-                ),
+                "default_account": int(默认账号 or 0),
+                "selected_account": int(默认账号 or 0),
             }
         )
 
@@ -2009,7 +2003,13 @@ async def _处理网盘账号列表(request: web.Request) -> web.Response:
             网盘Cookie.获取当前网盘账号序号, 当前帮助网页配置, 平台
         )
         return web.json_response(
-            {"ok": True, "platform": 平台, "selected_account": 当前序号, "accounts": 摘要},
+            {
+                "ok": True,
+                "platform": 平台,
+                "selected_account": 当前序号,
+                "default_account": 当前序号,
+                "accounts": 摘要,
+            },
             headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:
@@ -2115,6 +2115,46 @@ async def _处理网盘账号开关(request: web.Request) -> web.Response:
             type(exc).__name__,
         )
         return _控制台错误(409, "账号状态保存失败，请检查数据库配置")
+
+
+async def _处理网盘账号默认(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    平台 = _规范化网盘平台(request.match_info.get("platform"))
+    数据 = await _读取请求JSON(request)
+    try:
+        序号 = int((数据 or {}).get("index"))
+    except (TypeError, ValueError):
+        序号 = 0
+    if not 平台 or 序号 < 1:
+        return _控制台错误(400, "网盘账号参数无效")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，默认账号不能保存")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        成功, _ = await _控制台线程执行(
+            网盘Cookie.设置默认网盘账号序号,
+            当前帮助网页配置,
+            平台,
+            序号,
+        )
+        if not 成功:
+            return _控制台错误(409, "默认账号设置失败，请检查账号状态和数据库配置")
+        return web.json_response(
+            {
+                "ok": True,
+                "default_account": 序号,
+                "message": f"{平台}默认账号已更新",
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台网盘默认账号写入失败：平台=%s，错误类型=%s",
+            平台,
+            type(exc).__name__,
+        )
+        return _控制台错误(409, "默认账号保存失败，请检查数据库配置")
 
 
 async def _处理网盘账号选择(request: web.Request) -> web.Response:

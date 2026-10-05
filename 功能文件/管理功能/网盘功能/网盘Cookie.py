@@ -1192,6 +1192,42 @@ def _删除后调整网盘账号选择(
         前缀 = f"{平台}:"
         for 状态键, 原值 in list(状态字典.items()):
             键文本 = str(状态键)
+            if 键文本 == _默认账号选择状态键(平台):
+                try:
+                    原序号 = int(str(原值 or "1"))
+                except (TypeError, ValueError):
+                    删除运行状态值(配置, 网盘账号选择命名空间, 键文本)
+                    continue
+                if 新账号数量 < 1:
+                    删除运行状态值(配置, 网盘账号选择命名空间, 键文本)
+                elif 原序号 > 删除序号:
+                    写入运行状态值(
+                        配置,
+                        网盘账号选择命名空间,
+                        键文本,
+                        str(原序号 - 1),
+                    )
+                elif 原序号 == 删除序号:
+                    新账号记录 = _读取保存的网盘账号记录(配置, 平台)
+                    可用序号 = next(
+                        (
+                            序号
+                            for 序号, 记录 in enumerate(新账号记录, start=1)
+                            if 记录.get("enabled", True)
+                            and str(记录.get("cookie") or "").strip()
+                        ),
+                        0,
+                    )
+                    if 可用序号:
+                        写入运行状态值(
+                            配置,
+                            网盘账号选择命名空间,
+                            键文本,
+                            str(可用序号),
+                        )
+                    else:
+                        删除运行状态值(配置, 网盘账号选择命名空间, 键文本)
+                continue
             if 键文本.startswith("group:"):
                 try:
                     群选择 = json.loads(str(原值 or ""))
@@ -1286,6 +1322,79 @@ def _账号选择状态键(平台: str, 群标识: str) -> str:
     return f"{平台}:sha256:{摘要}"
 
 
+def _默认账号选择状态键(平台: str) -> str:
+    return f"default:{平台}"
+
+
+def _读取已保存默认网盘账号序号(配置: Any, 平台: str) -> int:
+    if not 已配置运行状态数据库(配置):
+        return 0
+    try:
+        文本 = 读取运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _默认账号选择状态键(平台),
+            "",
+        )
+        序号 = int(str(文本 or "").strip())
+        return 序号 if 序号 > 0 else 0
+    except Exception as 异常:
+        logger.warning(
+            "%s默认账号读取失败：error=%s",
+            平台显示名.get(平台, 平台),
+            type(异常).__name__,
+        )
+        return 0
+
+
+def 获取默认网盘账号序号(配置: Any, 平台: str) -> int:
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台:
+        return 0
+    账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
+    可用序号 = [
+        序号
+        for 序号, 记录 in enumerate(账号记录, start=1)
+        if 记录.get("enabled", True) and str(记录.get("cookie") or "").strip()
+    ]
+    if not 可用序号:
+        return 0
+    已保存序号 = _读取已保存默认网盘账号序号(配置, 规范平台)
+    return 已保存序号 if 已保存序号 in 可用序号 else 可用序号[0]
+
+
+def 设置默认网盘账号序号(
+    配置: Any, 平台: str, 序号: int
+) -> tuple[bool, str]:
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台 or 序号 < 1:
+        return False, "网盘账号参数无效"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，默认账号未保存"
+    with 网盘账号写入锁:
+        可用账号 = {
+            账号序号
+            for 账号序号, _ in 获取启用网盘账号列表(配置, 规范平台)
+        }
+        if 序号 not in 可用账号:
+            return False, "该账号未启用或不存在"
+        try:
+            写入运行状态值(
+                配置,
+                网盘账号选择命名空间,
+                _默认账号选择状态键(规范平台),
+                str(序号),
+            )
+        except Exception as 异常:
+            logger.warning(
+                "%s默认账号写入失败：error=%s",
+                平台显示名[规范平台],
+                type(异常).__name__,
+            )
+            return False, "默认账号保存失败，请稍后再试"
+    return True, ""
+
+
 def _读取网盘账号序号(配置: Any, 平台: str, event: Any = None) -> int:
     覆盖 = 当前网盘账号覆盖.get()
     if 覆盖 and 覆盖[0] == 平台:
@@ -1297,19 +1406,20 @@ def _读取网盘账号序号(配置: Any, 平台: str, event: Any = None) -> in
 def _读取网盘账号序号按群标识(
     配置: Any, 平台: str, 群标识: str
 ) -> int:
+    默认序号 = 获取默认网盘账号序号(配置, 平台) or 1
     if not 群标识 or not 已配置运行状态数据库(配置):
-        return 1
+        return 默认序号
     try:
         文本 = 读取运行状态值(
             配置,
             网盘账号选择命名空间,
             _账号选择状态键(平台, 群标识),
-            "1",
+            str(默认序号),
         )
-        序号 = int(str(文本 or "1").strip())
-        return 序号 if 序号 > 0 else 1
+        序号 = int(str(文本 or 默认序号).strip())
+        return 序号 if 序号 > 0 else 默认序号
     except Exception:
-        return 1
+        return 默认序号
 
 
 def 获取网盘账号列表(配置: Any, 平台: str, 配置Cookie: Any = "") -> list[str]:
@@ -1635,7 +1745,10 @@ def 获取当前网盘账号序号按群标识(
     if not 可用序号:
         return 0
     当前序号 = _读取网盘账号序号按群标识(配置, 规范平台, str(群标识 or "").strip())
-    return 当前序号 if 当前序号 in 可用序号 else 可用序号[0]
+    if 当前序号 in 可用序号:
+        return 当前序号
+    默认序号 = 获取默认网盘账号序号(配置, 规范平台)
+    return 默认序号 if 默认序号 in 可用序号 else 可用序号[0]
 
 
 def 获取群网盘账号选择(配置: Any, 群标识: str = "") -> dict[str, Any] | None:
