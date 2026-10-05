@@ -613,10 +613,19 @@ def _清理夸克头像地址(值: Any) -> str:
     文本 = _清理账号资料文本(值, 512)
     if 文本.startswith("//"):
         文本 = f"https:{文本}"
+    elif 文本.startswith("/"):
+        文本 = f"https://image.quark.cn{文本}"
+    elif 文本.startswith("o/uop/"):
+        文本 = f"https://image.quark.cn/{文本}"
+    elif (
+        re.fullmatch(r"[A-Za-z0-9._~-]{1,256}", 文本)
+        and 文本.lower() not in {".", "..", "0", "null", "none", "undefined", "false"}
+    ):
+        文本 = f"https://image.quark.cn/o/uop/g/uop/avatar/{quote(文本, safe='._~-')}"
     try:
         地址 = urlsplit(文本)
         if (
-            地址.scheme.lower() != "https"
+            地址.scheme.lower() not in {"http", "https"}
             or (地址.hostname or "").lower() != "image.quark.cn"
             or 地址.username
             or 地址.password
@@ -649,9 +658,14 @@ def _脱敏手机号(值: Any) -> str:
 
 
 def _递归查找账号资料字段(对象: Any, 字段名集合: set[str]) -> str:
+    标准字段名集合 = {
+        re.sub(r"[^a-z0-9]", "", 字段名.lower())
+        for 字段名 in 字段名集合
+    }
     if isinstance(对象, dict):
         for 键, 值 in 对象.items():
-            if str(键).lower() in 字段名集合 and isinstance(值, (str, int, float)):
+            标准字段名 = re.sub(r"[^a-z0-9]", "", str(键).lower())
+            if 标准字段名 in 标准字段名集合 and isinstance(值, (str, int, float)):
                 文本 = str(值).strip()
                 if 文本:
                     return 文本
@@ -667,12 +681,28 @@ def _递归查找账号资料字段(对象: Any, 字段名集合: set[str]) -> s
     return ""
 
 
+def _夸克接口请求成功(响应数据: Any) -> bool:
+    if not isinstance(响应数据, dict):
+        return False
+    业务码 = 响应数据.get("code")
+    状态 = 响应数据.get("status")
+    业务成功 = not isinstance(业务码, bool) and (
+        业务码 == 0
+        or str(业务码 or "").strip().upper() in {"0", "OK"}
+    )
+    状态成功 = not isinstance(状态, bool) and 状态 in (
+        0, 200, 2000000, "0", "200", "2000000", "OK"
+    )
+    success值 = 响应数据.get("success")
+    明确成功 = success值 is True or success值 == 1 or (
+        isinstance(success值, str)
+        and success值.strip().lower() in {"1", "true", "yes"}
+    )
+    return 业务成功 or 状态成功 or 明确成功
+
+
 def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
-    if not isinstance(响应数据, dict) or not (
-        响应数据.get("success")
-        or str(响应数据.get("code") or "").upper() == "OK"
-        or 响应数据.get("status") == 2000000
-    ):
+    if not _夸克接口请求成功(响应数据):
         return "", "", ""
     数据 = 响应数据.get("data")
     名称 = _递归查找账号资料字段(
@@ -708,6 +738,11 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
             "avatarurl",
             "avatar_url",
             "avataruri",
+            "avatar_uri",
+            "avatar_id",
+            "headimageurl",
+            "headimage",
+            "useravatar",
             "avatar",
             "headimgurl",
             "head_img_url",
@@ -734,23 +769,7 @@ def _安全解析网盘空间值(值: Any) -> int | None:
 def _解析夸克账号权益(
     响应数据: Any,
 ) -> tuple[str, int | None, int | None]:
-    if not isinstance(响应数据, dict):
-        return "", None, None
-    业务码 = 响应数据.get("code")
-    状态 = 响应数据.get("status")
-    业务成功 = not isinstance(业务码, bool) and (
-        业务码 == 0
-        or str(业务码 or "").strip().upper() in {"0", "OK"}
-    )
-    状态成功 = not isinstance(状态, bool) and 状态 in (
-        0, 200, 2000000, "0", "200", "2000000", "OK"
-    )
-    success值 = 响应数据.get("success")
-    明确成功 = success值 is True or success值 == 1 or (
-        isinstance(success值, str)
-        and success值.strip().lower() in {"1", "true", "yes"}
-    )
-    if not (业务成功 or 状态成功 or 明确成功):
+    if not _夸克接口请求成功(响应数据):
         return "", None, None
     数据 = 响应数据.get("data")
     if not isinstance(数据, dict):
@@ -807,7 +826,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             continue
         Cookie = 解析结果[1]
         try:
-            资料查询时间 = max(0, int(元数据.get("account_info_checked_at") or 0))
+            资料查询时间 = max(0, int(元数据.get("profile_checked_v2_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         记录 = {
@@ -835,7 +854,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             "space_total_bytes": _安全解析网盘空间值(
                 元数据.get("space_total_bytes")
             ),
-            "account_info_checked_at": 资料查询时间,
+            "profile_checked_v2_at": 资料查询时间,
             "enabled": _解析网盘账号启用状态(元数据.get("enabled")),
         }
         已有位置 = next(
@@ -860,9 +879,9 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             for 字段 in ("space_used_bytes", "space_total_bytes"):
                 if 记录[字段] is not None:
                     已有记录[字段] = 记录[字段]
-            已有记录["account_info_checked_at"] = max(
-                int(已有记录.get("account_info_checked_at") or 0),
-                记录["account_info_checked_at"],
+            已有记录["profile_checked_v2_at"] = max(
+                int(已有记录.get("profile_checked_v2_at") or 0),
+                记录["profile_checked_v2_at"],
             )
     return 结果
 
@@ -898,7 +917,7 @@ def _合并配置网盘账号记录(
                 "membership": "",
                 "space_used_bytes": None,
                 "space_total_bytes": None,
-                "account_info_checked_at": 0,
+                "profile_checked_v2_at": 0,
                 "enabled": True,
             },
         )
@@ -945,7 +964,7 @@ def _写入网盘账号记录(
             else ""
         )
         try:
-            资料查询时间 = max(0, int(原记录.get("account_info_checked_at") or 0))
+            资料查询时间 = max(0, int(原记录.get("profile_checked_v2_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         if 身份:
@@ -963,7 +982,7 @@ def _写入网盘账号记录(
         if 头像地址:
             记录["avatar_url"] = 头像地址
         if 平台 == "夸克" and 资料查询时间:
-            记录["account_info_checked_at"] = 资料查询时间
+            记录["profile_checked_v2_at"] = 资料查询时间
         账号数据.append(记录)
     payload = json.dumps(
         {
@@ -1005,7 +1024,7 @@ def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str])
                 "membership": 原记录.get("membership", ""),
                 "space_used_bytes": 原记录.get("space_used_bytes"),
                 "space_total_bytes": 原记录.get("space_total_bytes"),
-                "account_info_checked_at": 原记录.get("account_info_checked_at", 0),
+                "profile_checked_v2_at": 原记录.get("profile_checked_v2_at", 0),
                 "enabled": _解析网盘账号启用状态(原记录.get("enabled")),
             }
         )
@@ -1079,7 +1098,7 @@ def _保存网盘Cookie(
                         "membership": "",
                         "space_used_bytes": None,
                         "space_total_bytes": None,
-                        "account_info_checked_at": 0,
+                        "profile_checked_v2_at": 0,
                         "enabled": True,
                     }
                 )
@@ -1107,7 +1126,7 @@ def _保存网盘Cookie(
                 if 新总空间 is not None:
                     已保存记录["space_total_bytes"] = 新总空间
                 if 规范平台 == "夸克":
-                    已保存记录["account_info_checked_at"] = 新资料查询时间
+                    已保存记录["profile_checked_v2_at"] = 新资料查询时间
                 _写入网盘账号记录(配置, 规范平台, 账号记录)
                 return 位置 + 1
         已有位置 = next(
@@ -1132,7 +1151,7 @@ def _保存网盘Cookie(
             if 新总空间 is not None:
                 账号记录[已有位置]["space_total_bytes"] = 新总空间
             if 规范平台 == "夸克":
-                账号记录[已有位置]["account_info_checked_at"] = 新资料查询时间
+                账号记录[已有位置]["profile_checked_v2_at"] = 新资料查询时间
             _写入网盘账号记录(配置, 规范平台, 账号记录)
             return 已有位置 + 1
         账号记录.append(
@@ -1145,7 +1164,7 @@ def _保存网盘Cookie(
                 "membership": 新账号权益,
                 "space_used_bytes": 新已用空间,
                 "space_total_bytes": 新总空间,
-                "account_info_checked_at": 新资料查询时间,
+                "profile_checked_v2_at": 新资料查询时间,
                 "enabled": True,
             }
         )
@@ -1488,7 +1507,7 @@ async def _刷新夸克账号资料(
                     "membership": "",
                     "space_used_bytes": None,
                     "space_total_bytes": None,
-                    "account_info_checked_at": 0,
+                    "profile_checked_v2_at": 0,
                 }
             ]
     if not 账号记录:
@@ -1505,7 +1524,7 @@ async def _刷新夸克账号资料(
         ):
             return False
         try:
-            上次查询 = max(0, int(记录.get("account_info_checked_at") or 0))
+            上次查询 = max(0, int(记录.get("profile_checked_v2_at") or 0))
         except (TypeError, ValueError):
             上次查询 = 0
         if not 强制 and 上次查询 and time.time() - 上次查询 < 3600:
@@ -1526,8 +1545,8 @@ async def _刷新夸克账号资料(
                 记录[字段] = 值
                 已变更 = True
         查询时间 = int(time.time())
-        if 查询时间 != 记录.get("account_info_checked_at"):
-            记录["account_info_checked_at"] = 查询时间
+        if 查询时间 != 记录.get("profile_checked_v2_at"):
+            记录["profile_checked_v2_at"] = 查询时间
             已变更 = True
         return 已变更
 
