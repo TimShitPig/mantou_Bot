@@ -445,7 +445,9 @@
       .pan-object-open { display:flex; align-items:center; gap:11px; flex:1 1 auto; min-width:0; min-height:78px; padding:11px 8px 11px 12px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
       .pan-object-open:hover { color:var(--ink); }
       .pan-account-order { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:6px; background:#e9efff; color:#4668ba; font-size:10px; font-weight:800; }
-      .pan-object-copy { display:grid; gap:4px; min-width:0; }
+      .pan-account-avatar { position:relative; display:grid; place-items:center; width:46px; height:46px; flex:0 0 46px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:16px; font-weight:800; }
+      .pan-account-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:var(--panel); }
+      .pan-object-copy { display:grid; gap:4px; min-width:0; flex:1; }
       .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-copy small { overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-arrow { margin-left:auto; color:var(--soft); font-size:18px; line-height:1; }
@@ -565,6 +567,7 @@
       :root[data-theme="dark"] .pan-object-card { border-color:#2c3044; background:#1d2130; }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#191d29; }
       :root[data-theme="dark"] .pan-account-order { background:#252b43; color:#a6b9eb; }
+      :root[data-theme="dark"] .pan-account-avatar { background:#20392d; color:#8bc9a5; }
       :root[data-theme="dark"] .pan-security-note { border-left-color:#5c6990; background:#1a2030; }
       :root[data-theme="dark"] .pan-object-card:hover { border-color:#555d80; background:#202435; }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#1a1d29; }
