@@ -1329,22 +1329,44 @@ def _默认账号选择状态键(平台: str) -> str:
 def _读取已保存默认网盘账号序号(配置: Any, 平台: str) -> int:
     if not 已配置运行状态数据库(配置):
         return 0
-    try:
-        文本 = 读取运行状态值(
-            配置,
-            网盘账号选择命名空间,
-            _默认账号选择状态键(平台),
-            "",
-        )
-        序号 = int(str(文本 or "").strip())
+    with 网盘账号写入锁:
+        try:
+            文本 = 读取运行状态值(
+                配置,
+                网盘账号选择命名空间,
+                _默认账号选择状态键(平台),
+                "",
+            )
+        except Exception as 异常:
+            logger.warning(
+                "%s默认账号状态读取失败：stage=database_read, error=%s",
+                平台显示名.get(平台, 平台),
+                type(异常).__name__,
+            )
+            return 0
+        文本 = str(文本 or "").strip()
+        if not 文本:
+            return 0
+        if len(文本) > 9 or not 文本.isascii() or not 文本.isdecimal():
+            logger.warning(
+                "%s默认账号状态无效：stage=state_value, error=invalid_integer",
+                平台显示名.get(平台, 平台),
+            )
+            try:
+                删除运行状态值(
+                    配置,
+                    网盘账号选择命名空间,
+                    _默认账号选择状态键(平台),
+                )
+            except Exception as 异常:
+                logger.debug(
+                    "%s无效默认账号状态清理失败：error=%s",
+                    平台显示名.get(平台, 平台),
+                    type(异常).__name__,
+                )
+            return 0
+        序号 = int(文本)
         return 序号 if 序号 > 0 else 0
-    except Exception as 异常:
-        logger.warning(
-            "%s默认账号读取失败：error=%s",
-            平台显示名.get(平台, 平台),
-            type(异常).__name__,
-        )
-        return 0
 
 
 def 获取默认网盘账号序号(配置: Any, 平台: str) -> int:
