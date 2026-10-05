@@ -166,13 +166,14 @@
            const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
            const profileName = account?.name && account.name !== '未命名账号' ? account.name : '';
            const name = profileName || `账号${index}`;
-           const phone = account?.phone || '未获取';
+           const phoneValue = String(account?.phone || '').trim();
+           const phone = phoneValue && phoneValue !== '未获取' ? phoneValue : '手机号未获取';
            const enabled = account?.enabled !== false;
            const avatar = item.key === '夸克'
              ? panAccountAvatarHtml(account, index, name)
              : `<span class="pan-account-order">${String(index).padStart(2, '0')}</span>`;
            const accountMetadata = item.key === '夸克'
-             ? `<small class="pan-account-meta">${esc(panAccountMetaLine(account))}</small>`
+             ? panAccountMetaHtml(account)
              : '';
            return `<article class="pan-object-card pan-account-object ${enabled ? '' : 'is-disabled'}"><button class="pan-object-open pan-account-object-main" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="account" data-index="${esc(index)}" aria-label="打开${esc(item.name)}账号${esc(index)}">${avatar}<span class="pan-object-copy"><strong>${esc(name)}</strong><small>账号${esc(index)} · ${esc(phone)}</small>${accountMetadata}</span><span class="pan-object-arrow" aria-hidden="true">›</span></button><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button></div></article>`;
          }).join('');
@@ -197,7 +198,7 @@
          return `${unit === 0 || bytes >= 10 ? bytes.toFixed(0) : bytes.toFixed(1)} ${units[unit]}`;
        };
        const panAccountSpaceText = (account) => `${formatPanBytes(account?.space_used_bytes)} / ${formatPanBytes(account?.space_total_bytes)}`;
-       const panAccountMetaLine = (account) => `空间 ${panAccountSpaceText(account)} · 权益 ${account?.membership || '未获取'}`;
+       const panAccountMetaHtml = (account) => `<span class="pan-account-meta"><span>空间 ${esc(panAccountSpaceText(account))}</span><span>权益 ${esc(account?.membership || '未获取')}</span></span>`;
        const panAccountStatsHtml = (account) => `<div class="pan-account-stats"><div><small>空间用量</small><strong>${esc(panAccountSpaceText(account))}</strong></div><div><small>账号权益</small><strong>${esc(account?.membership || '未获取')}</strong></div></div>`;
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
        const renderPanCard = (item, pansEditable, configEditable) => {
