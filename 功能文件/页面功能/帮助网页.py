@@ -70,6 +70,9 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/config", 后端._处理插件配置写入),
         ("get", "/api/pan-accounts/{platform}", 后端._处理网盘账号列表),
         ("post", "/api/pan-accounts/{platform}", 后端._处理网盘账号新增),
+        ("post", "/api/pan-accounts/{platform}/scan", 后端._处理夸克网页扫码开始),
+        ("get", "/api/pan-accounts/{platform}/scan/{scan_id}", 后端._处理夸克网页扫码状态),
+        ("delete", "/api/pan-accounts/{platform}/scan/{scan_id}", 后端._处理夸克网页扫码取消),
         ("delete", "/api/pan-accounts/{platform}", 后端._处理网盘账号删除),
         ("post", "/api/pan-accounts/{platform}/enable", 后端._处理网盘账号开关),
         ("post", "/api/pan-accounts/{platform}/default", 后端._处理网盘账号默认),
@@ -175,6 +178,7 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
     """停止网页服务并清理内存会话。"""
 
     try:
+        await 后端._取消全部夸克网页扫码()
         await 后端.停止实时连接()
         if 服务 is not None:
             await 服务.runner.cleanup()

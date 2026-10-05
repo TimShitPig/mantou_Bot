@@ -502,6 +502,14 @@
       .pan-detail-section-head h3 { margin:0; color:var(--ink); font-size:13px; }
       .pan-detail-section-head p { margin:0; color:var(--muted); font-size:10px; }
       .pan-object-form { display:grid; gap:10px; padding:6px 0; }
+      .pan-add-method { display:inline-grid; grid-template-columns:96px 96px; gap:3px; width:max-content; max-width:100%; padding:3px; border:1px solid var(--line); border-radius:7px; background:var(--bg); }
+      .pan-add-method button { min-height:32px; padding:0 12px; border:0; border-radius:5px; background:transparent; color:var(--muted); font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+      .pan-add-method button[aria-pressed="true"] { background:var(--panel); color:var(--primary-dark); box-shadow:0 1px 3px rgba(26,35,58,.12); }
+      .pan-quark-scan { display:grid; justify-items:start; gap:10px; }
+      .pan-quark-scan[hidden],.pan-quark-scan-image[hidden] { display:none !important; }
+      .pan-quark-scan .pan-security-note { margin:0; }
+      .pan-quark-scan-image { display:block; width:min(100%,240px); aspect-ratio:1; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fff; object-fit:contain; }
+      .pan-quark-scan-status { min-height:16px; margin:0; color:var(--muted); font-size:11px; }
       .pan-directory { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:0; }
       .pan-directory input { min-width:0; min-height:39px; padding:8px 10px; border:1px solid #e1e3ec; border-radius:7px; background:var(--panel); color:var(--ink); outline:none; }
       .pan-directory input:focus { border-color:#aaa0e7; box-shadow:0 0 0 3px #efedff; }

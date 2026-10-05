@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -32,7 +33,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.109"
+控制台版本 = "6.1.110"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -89,6 +90,7 @@ class 帮助网页服务:
 控制台会话身份: dict[str, str] = globals().get("控制台会话身份") or {}
 控制台会话最后持久化: dict[str, float] = globals().get("控制台会话最后持久化") or {}
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
+夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
 _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
 控制台执行器最大并发数 = 4
@@ -984,12 +986,24 @@ def _加载持久化控制台会话() -> None:
 
 def _清理控制台会话() -> None:
     截止时间 = time.time()
+    for scan_id, 扫码状态 in list(夸克网页扫码会话.items()):
+        if (
+            扫码状态.get("status") in {"success", "expired", "cancelled", "error"}
+            and 截止时间 - float(扫码状态.get("updated_at") or 0) > 300
+        ):
+            夸克网页扫码会话.pop(scan_id, None)
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
             控制台会话.pop(会话值, None)
             控制台会话身份.pop(会话值, None)
             控制台会话最后持久化.pop(会话值, None)
             _安排控制台后台任务(_删除持久化控制台会话, 会话值)
+            try:
+                asyncio.get_running_loop().create_task(
+                    _取消夸克网页扫码所有者(会话值)
+                )
+            except RuntimeError:
+                pass
 
 
 def _安排控制台后台任务(函数: Any, *参数: Any) -> None:
@@ -1500,6 +1514,7 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
 
 async def _处理控制台退出(request: web.Request) -> web.Response:
     会话值 = _取得请求会话(request)
+    await _取消夸克网页扫码所有者(会话值)
     控制台会话.pop(会话值, None)
     控制台会话身份.pop(会话值, None)
     控制台会话最后持久化.pop(会话值, None)
@@ -2077,6 +2092,191 @@ async def _处理网盘账号新增(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台网盘账号保存失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
         return _控制台错误(409, "网盘账号保存失败，请检查数据库配置")
+
+
+def _夸克网页扫码状态文案(状态: str) -> str:
+    return {
+        "waiting": "请使用夸克 App 扫描二维码，二维码有效期为 5 分钟。",
+        "saving": "扫码成功，正在读取账号资料并保存。",
+        "success": "夸克账号已添加。",
+        "expired": "二维码已过期，请重新获取。",
+        "cancelled": "扫码已取消。",
+        "error": "扫码失败，请重新获取二维码。",
+    }.get(状态, "扫码状态暂不可用。")
+
+
+async def _运行夸克网页扫码(scan_id: str) -> None:
+    状态 = 夸克网页扫码会话.get(scan_id)
+    if not 状态:
+        return
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        Cookie = await 状态["client"].等待登录并获取Cookie(
+            状态["token"], timeout=300, interval=2
+        )
+        状态["status"] = "saving"
+        状态["updated_at"] = time.time()
+        账号资料 = await 网盘Cookie._获取夸克账号资料(Cookie)
+        资料保存参数 = 网盘Cookie._夸克账号资料保存参数(账号资料)
+        序号 = await _控制台线程执行(
+            网盘Cookie._保存网盘Cookie,
+            当前帮助网页配置,
+            "夸克",
+            Cookie,
+            **资料保存参数,
+        )
+        状态["status"] = "success"
+        状态["index"] = int(序号)
+        状态["updated_at"] = time.time()
+    except asyncio.CancelledError:
+        状态["status"] = "cancelled"
+        状态["updated_at"] = time.time()
+        raise
+    except TimeoutError:
+        状态["status"] = "expired"
+        状态["updated_at"] = time.time()
+    except Exception as exc:
+        阶段 = str(getattr(exc, "阶段", "save" if 状态.get("status") == "saving" else "poll"))
+        logger.warning(
+            "帮助控制台夸克扫码失败：阶段=%s，错误类型=%s",
+            阶段,
+            type(exc).__name__,
+        )
+        状态["status"] = "error"
+        状态["updated_at"] = time.time()
+    finally:
+        状态.pop("token", None)
+        try:
+            await 状态["client"].关闭()
+        except Exception as exc:
+            logger.debug("帮助控制台夸克扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+
+
+async def _移除夸克网页扫码会话(
+    scan_id: str, 所有者: str | None = None
+) -> bool:
+    状态 = 夸克网页扫码会话.get(scan_id)
+    if not 状态 or (所有者 is not None and 状态.get("owner") != 所有者):
+        return False
+    任务 = 状态.get("task")
+    if isinstance(任务, asyncio.Task) and not 任务.done():
+        任务.cancel()
+        await asyncio.gather(任务, return_exceptions=True)
+    try:
+        await 状态["client"].关闭()
+    except Exception as exc:
+        logger.debug("帮助控制台夸克扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+    夸克网页扫码会话.pop(scan_id, None)
+    return True
+
+
+async def _取消夸克网页扫码所有者(所有者: str) -> None:
+    if not 所有者:
+        return
+    所有者摘要 = hashlib.sha256(所有者.encode("utf-8")).hexdigest()
+    for scan_id, 状态 in list(夸克网页扫码会话.items()):
+        if 状态.get("owner") == 所有者摘要:
+            await _移除夸克网页扫码会话(scan_id, 所有者摘要)
+
+
+async def _取消全部夸克网页扫码() -> None:
+    for scan_id in list(夸克网页扫码会话):
+        await _移除夸克网页扫码会话(scan_id)
+
+
+async def _处理夸克网页扫码开始(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if _规范化网盘平台(request.match_info.get("platform")) != "夸克":
+        return _控制台错误(400, "网盘参数无效")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，扫码账号不能保存")
+
+    会话值 = _取得请求会话(request)
+    await _取消夸克网页扫码所有者(会话值)
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+    客户端 = 网盘Cookie.夸克扫码登录客户端()
+    try:
+        Token, 登录地址 = await 客户端.获取登录二维码()
+        图片字节 = await asyncio.to_thread(
+            网盘Cookie.生成夸克登录二维码, 登录地址
+        )
+    except Exception as exc:
+        阶段 = str(getattr(exc, "阶段", "qr"))
+        logger.warning(
+            "帮助控制台夸克二维码获取失败：阶段=%s，错误类型=%s",
+            阶段,
+            type(exc).__name__,
+        )
+        try:
+            await 客户端.关闭()
+        except Exception as close_exc:
+            logger.debug("帮助控制台夸克扫码会话关闭失败：错误类型=%s", type(close_exc).__name__)
+        return _控制台错误(502, "夸克二维码获取失败，请稍后重试")
+
+    scan_id = secrets.token_urlsafe(24)
+    状态: dict[str, Any] = {
+        "owner": 所有者,
+        "client": 客户端,
+        "token": Token,
+        "status": "waiting",
+        "updated_at": time.time(),
+        "index": 0,
+    }
+    夸克网页扫码会话[scan_id] = 状态
+    状态["task"] = asyncio.create_task(_运行夸克网页扫码(scan_id))
+    图片编码 = base64.b64encode(图片字节).decode("ascii")
+    return web.json_response(
+        {
+            "ok": True,
+            "scan_id": scan_id,
+            "qr_image": f"data:image/png;base64,{图片编码}",
+            "status": "waiting",
+            "message": _夸克网页扫码状态文案("waiting"),
+            "expires_in": 300,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _处理夸克网页扫码状态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if _规范化网盘平台(request.match_info.get("platform")) != "夸克":
+        return _控制台错误(400, "网盘参数无效")
+    scan_id = str(request.match_info.get("scan_id") or "").strip()
+    状态 = 夸克网页扫码会话.get(scan_id)
+    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    if not 状态 or 状态.get("owner") != 所有者:
+        return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    当前状态 = str(状态.get("status") or "error")
+    if 当前状态 in {"success", "expired", "cancelled", "error"}:
+        if time.time() - float(状态.get("updated_at") or 0) > 300:
+            await _移除夸克网页扫码会话(scan_id, 状态.get("owner"))
+            return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    return web.json_response(
+        {
+            "ok": True,
+            "status": 当前状态,
+            "message": _夸克网页扫码状态文案(当前状态),
+            "index": int(状态.get("index") or 0),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _处理夸克网页扫码取消(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if _规范化网盘平台(request.match_info.get("platform")) != "夸克":
+        return _控制台错误(400, "网盘参数无效")
+    scan_id = str(request.match_info.get("scan_id") or "").strip()
+    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    await _移除夸克网页扫码会话(scan_id, 所有者)
+    return web.json_response({"ok": True, "message": "扫码会话已结束"})
 
 
 async def _处理网盘账号删除(request: web.Request) -> web.Response:

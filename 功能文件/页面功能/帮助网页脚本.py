@@ -59,6 +59,9 @@
       let activePanTab = null;
       let activePanObject = null;
       let quarkProfileAutoloadStarted = false;
+      let quarkWebScanId = '';
+      let quarkWebScanTimer = null;
+      let quarkWebScanGeneration = 0;
       let toastTimer = null;
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
@@ -72,10 +75,34 @@
         if (!response.ok || !data.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; }
         return data;
       };
+      const stopQuarkWebScan = async () => {
+        const scanId = quarkWebScanId;
+        quarkWebScanId = '';
+        quarkWebScanGeneration += 1;
+        clearTimeout(quarkWebScanTimer);
+        quarkWebScanTimer = null;
+        if (scanId) {
+          try { await api(`pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(scanId)}`, {method:'DELETE'}); } catch (_) {}
+        }
+        const card = document.querySelector(`[data-pan-card="${CSS.escape('夸克')}"]`);
+        const image = card?.querySelector('[data-quark-scan-image]');
+        if (image) { image.removeAttribute('src'); image.hidden = true; }
+        const status = card?.querySelector('[data-quark-scan-status]');
+        if (status) status.textContent = '获取二维码后使用夸克 App 扫描。';
+        const cancel = card?.querySelector('[data-quark-scan-cancel]');
+        if (cancel) cancel.hidden = true;
+        const start = card?.querySelector('[data-quark-scan-start]');
+        if (start) { start.disabled = false; start.textContent = '获取二维码'; }
+      };
+      window.addEventListener('pagehide', () => {
+        if (!quarkWebScanId) return;
+        fetch(`/api/pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(quarkWebScanId)}`, {method:'DELETE', credentials:'same-origin', keepalive:true}).catch(() => {});
+      });
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
         const previousView = activeView;
+        if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         activeView = next;
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); history.pushState({view:next}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
@@ -239,7 +266,10 @@
            const accountMetadata = item.key === '夸克' ? panAccountStatsHtml(account) : '';
            return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息 · 账号${esc(index)}</span><h3>${esc(profileName)}</h3><p>${esc(account.phone || '未获取')}</p>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
          }
-         if (type === 'add') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></div>`;
+         if (type === 'add') {
+           const isQuark = item.key === '夸克';
+           return `<div class="pan-object-form">${isQuark ? `<div class="pan-add-method" role="group" aria-label="选择夸克账号添加方式"><button type="button" data-quark-mode="cookie" aria-pressed="true">Cookie</button><button type="button" data-quark-mode="scan" aria-pressed="false">扫码</button></div>` : ''}<section data-quark-cookie-panel><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></section>${isQuark ? `<section class="pan-quark-scan" data-quark-scan-panel hidden><p class="pan-security-note">使用夸克 App 扫描网页二维码，确认后自动保存账号。</p><button class="outline-button" type="button" data-quark-scan-start ${pansEditable ? '' : 'disabled'}>获取二维码</button><img class="pan-quark-scan-image" data-quark-scan-image alt="夸克登录二维码" hidden><p class="pan-quark-scan-status" data-quark-scan-status aria-live="polite">获取二维码后使用夸克 App 扫描。</p><button class="pan-account-delete" type="button" data-quark-scan-cancel hidden>取消扫码</button></section>` : ''}</div>`;
+         }
          return '';
        };
        const panObjectTitle = (type, index) => type === 'account' ? `账号${index}` : '添加账号';
@@ -249,6 +279,18 @@
          if (!pane) return;
          pane.querySelectorAll('[data-pan]').forEach((node) => node.addEventListener('change', () => { const value = node.value; node.value = ''; if (value) changePan(value, node); }));
          pane.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
+         pane.querySelectorAll('[data-quark-mode]').forEach((node) => node.addEventListener('click', async () => {
+           await stopQuarkWebScan();
+           const scanMode = node.dataset.quarkMode === 'scan';
+           pane.querySelector('[data-quark-cookie-panel]')?.toggleAttribute('hidden', scanMode);
+           pane.querySelector('[data-quark-scan-panel]')?.toggleAttribute('hidden', !scanMode);
+           pane.querySelectorAll('[data-quark-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button === node)));
+         }));
+         pane.querySelector('[data-quark-scan-start]')?.addEventListener('click', (event) => startQuarkWebScan(event.currentTarget));
+         pane.querySelector('[data-quark-scan-cancel]')?.addEventListener('click', async () => {
+           await stopQuarkWebScan();
+           toast('扫码已取消');
+         });
          pane.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-account-default]').forEach((node) => node.addEventListener('click', () => changePanAccountDefault(node.dataset.panAccountDefault, node.dataset.index, node)));
@@ -288,6 +330,7 @@
        const closePanObject = (platform) => {
          const previous = activePanObject;
          if (!previous || previous.platform !== platform) return;
+         if (previous.type === 'add') void stopQuarkWebScan();
          activePanObject = null;
          const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
          if (!card) return;
@@ -524,6 +567,61 @@
         }
       };
        const addPanAccount = async (platform) => { const input = document.querySelector(`[data-pan-cookie="${CSS.escape(platform)}"]`); const button = document.querySelector(`[data-pan-add="${CSS.escape(platform)}"]`); const cookie = input?.value.trim(); if (!cookie) return toast('请先粘贴 Cookie'); if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'POST', body:JSON.stringify({cookie})}); if (input) input.value = ''; toast(`${platform}账号已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
+       const startQuarkWebScan = async (button) => {
+         if (!snapshot?.pans?.editable) return toast('数据库未配置，扫码账号不能保存');
+         await stopQuarkWebScan();
+         if (button) { button.disabled = true; button.textContent = '正在获取二维码'; }
+         const statusNode = document.querySelector('[data-quark-scan-status]');
+         try {
+           const result = await api(`pan-accounts/${encodeURIComponent('夸克')}/scan`, {method:'POST', body:'{}'});
+           quarkWebScanId = String(result.scan_id || '');
+           const generation = ++quarkWebScanGeneration;
+           const image = document.querySelector('[data-quark-scan-image]');
+           if (image) { image.src = result.qr_image; image.hidden = false; }
+           if (statusNode) statusNode.textContent = result.message || '请使用夸克 App 扫描二维码。';
+           const cancel = document.querySelector('[data-quark-scan-cancel]');
+           if (cancel) cancel.hidden = false;
+           if (button) { button.disabled = false; button.textContent = '重新获取二维码'; }
+           const scanId = quarkWebScanId;
+           const poll = async () => {
+             if (!scanId || scanId !== quarkWebScanId || generation !== quarkWebScanGeneration) return;
+             try {
+               const state = await api(`pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(scanId)}`);
+               if (scanId !== quarkWebScanId || generation !== quarkWebScanGeneration) return;
+               const label = document.querySelector('[data-quark-scan-status]');
+               if (label) label.textContent = state.message || '正在等待扫码。';
+               if (state.status === 'waiting' || state.status === 'saving') {
+                 quarkWebScanTimer = setTimeout(poll, 2000);
+                 return;
+               }
+               quarkWebScanId = '';
+               quarkWebScanTimer = null;
+               try { await api(`pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(scanId)}`, {method:'DELETE'}); } catch (_) {}
+               const qr = document.querySelector('[data-quark-scan-image]');
+               if (qr) { qr.removeAttribute('src'); qr.hidden = true; }
+               const cancelButton = document.querySelector('[data-quark-scan-cancel]');
+               if (cancelButton) cancelButton.hidden = true;
+               const startButton = document.querySelector('[data-quark-scan-start]');
+               if (startButton) { startButton.disabled = false; startButton.textContent = '获取二维码'; }
+               if (state.status === 'success') {
+                 activePanObject = null;
+                 toast(state.message || '夸克账号已添加');
+                 await load();
+               }
+             } catch (error) {
+               if (error.status === 401) { showAuthError(error); return; }
+               const label = document.querySelector('[data-quark-scan-status]');
+               if (label) label.textContent = error.message || '正在重试查询扫码状态。';
+               quarkWebScanTimer = setTimeout(poll, 3000);
+             }
+           };
+           quarkWebScanTimer = setTimeout(poll, 1500);
+         } catch (error) {
+           if (button) { button.disabled = false; button.textContent = '获取二维码'; }
+           if (statusNode) statusNode.textContent = error.message || '二维码获取失败。';
+           if (error.status === 401) showAuthError(error); else toast(error.message);
+         }
+       };
        const deletePanAccount = async (platform, index, button) => { if (!confirm(`确定删除${platform}账号${index}吗？`)) return; if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'DELETE', body:JSON.stringify({index:Number(index)})}); toast('账号已删除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const refreshPanAccounts = async (platform, button) => { if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}?refresh=1`); toast('账号资料已刷新'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const refreshMissingQuarkProfiles = async () => {
