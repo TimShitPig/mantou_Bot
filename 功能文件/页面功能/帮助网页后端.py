@@ -2022,19 +2022,18 @@ async def _处理网盘账号新增(request: web.Request) -> web.Response:
         解析结果 = 网盘Cookie.解析网盘Cookie(f"{平台} Cookie: {Cookie文本}")
         if not 解析结果 or 解析结果[0] != 平台 or not 解析结果[1]:
             return _控制台错误(400, "网盘账号格式无效")
-        名称 = 手机号 = 头像地址 = ""
+        资料保存参数: dict[str, Any] = {}
         if 平台 == "夸克":
-            名称, 手机号, 头像地址 = await 网盘Cookie._获取夸克账号资料(
+            账号资料 = await 网盘Cookie._获取夸克账号资料(
                 解析结果[1]
             )
+            资料保存参数 = 网盘Cookie._夸克账号资料保存参数(账号资料)
         序号 = await _控制台线程执行(
             网盘Cookie._保存网盘Cookie,
             当前帮助网页配置,
             平台,
             解析结果[1],
-            名称=名称,
-            手机号=手机号,
-            头像地址=头像地址,
+            **资料保存参数,
         )
         return web.json_response(
             {"ok": True, "index": 序号, "message": f"{平台}账号已保存"}

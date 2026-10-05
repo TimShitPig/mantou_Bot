@@ -54,6 +54,7 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
 夸克账号资料地址 = "https://pan.quark.cn/account/info"
+夸克账号权益地址 = "https://drive-pc.quark.cn/1/clouddrive/member"
 夸克扫码刷新Cookie地址 = "https://drive-pc.quark.cn/1/clouddrive/auth/pc/flush"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
 夸克账号查看命令 = {"夸克账号", "夸克账号列表", "夸克账户", "夸克账户列表"}
@@ -721,6 +722,52 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
     )
 
 
+def _安全解析网盘空间值(值: Any) -> int | None:
+    if isinstance(值, bool) or 值 is None:
+        return None
+    try:
+        return max(0, int(值))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _解析夸克账号权益(
+    响应数据: Any,
+) -> tuple[str, int | None, int | None]:
+    if not isinstance(响应数据, dict):
+        return "", None, None
+    业务码 = 响应数据.get("code")
+    状态 = 响应数据.get("status")
+    业务成功 = not isinstance(业务码, bool) and (
+        业务码 == 0
+        or str(业务码 or "").strip().upper() in {"0", "OK"}
+    )
+    状态成功 = not isinstance(状态, bool) and 状态 in (
+        0, 200, 2000000, "0", "200", "2000000", "OK"
+    )
+    success值 = 响应数据.get("success")
+    明确成功 = success值 is True or success值 == 1 or (
+        isinstance(success值, str)
+        and success值.strip().lower() in {"1", "true", "yes"}
+    )
+    if not (业务成功 or 状态成功 or 明确成功):
+        return "", None, None
+    数据 = 响应数据.get("data")
+    if not isinstance(数据, dict):
+        return "", None, None
+    会员类型 = _清理账号资料文本(数据.get("member_type"), 64).upper()
+    权益名称 = {
+        "NORMAL": "普通账号",
+        "VIP": "VIP会员",
+        "SUPER_VIP": "超级会员",
+        "EXP_VIP": "体验VIP",
+        "EXP_SVIP": "体验超级会员",
+    }.get(会员类型, 会员类型)
+    已用空间 = _安全解析网盘空间值(数据.get("use_capacity"))
+    总空间 = _安全解析网盘空间值(数据.get("total_capacity"))
+    return 权益名称, 已用空间, 总空间
+
+
 def _解析网盘账号启用状态(值: Any) -> bool:
     if isinstance(值, bool):
         return 值
@@ -760,7 +807,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             continue
         Cookie = 解析结果[1]
         try:
-            资料查询时间 = max(0, int(元数据.get("avatar_checked_at") or 0))
+            资料查询时间 = max(0, int(元数据.get("account_info_checked_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         记录 = {
@@ -781,7 +828,14 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
                 if 平台 == "夸克"
                 else ""
             ),
-            "avatar_checked_at": 资料查询时间,
+            "membership": _清理账号资料文本(元数据.get("membership"), 64),
+            "space_used_bytes": _安全解析网盘空间值(
+                元数据.get("space_used_bytes")
+            ),
+            "space_total_bytes": _安全解析网盘空间值(
+                元数据.get("space_total_bytes")
+            ),
+            "account_info_checked_at": 资料查询时间,
             "enabled": _解析网盘账号启用状态(元数据.get("enabled")),
         }
         已有位置 = next(
@@ -800,12 +854,15 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             结果.append(记录)
         else:
             已有记录 = 结果[已有位置]
-            for 字段 in ("name", "phone", "avatar_url"):
+            for 字段 in ("name", "phone", "avatar_url", "membership"):
                 if 记录[字段]:
                     已有记录[字段] = 记录[字段]
-            已有记录["avatar_checked_at"] = max(
-                int(已有记录.get("avatar_checked_at") or 0),
-                记录["avatar_checked_at"],
+            for 字段 in ("space_used_bytes", "space_total_bytes"):
+                if 记录[字段] is not None:
+                    已有记录[字段] = 记录[字段]
+            已有记录["account_info_checked_at"] = max(
+                int(已有记录.get("account_info_checked_at") or 0),
+                记录["account_info_checked_at"],
             )
     return 结果
 
@@ -838,7 +895,10 @@ def _合并配置网盘账号记录(
                 "name": "",
                 "phone": "",
                 "avatar_url": "",
-                "avatar_checked_at": 0,
+                "membership": "",
+                "space_used_bytes": None,
+                "space_total_bytes": None,
+                "account_info_checked_at": 0,
                 "enabled": True,
             },
         )
@@ -874,6 +934,9 @@ def _写入网盘账号记录(
         )
         名称 = _清理账号资料文本(原记录.get("name") or 原记录.get("nickname"))
         手机号 = _脱敏手机号(原记录.get("phone") or 原记录.get("mobile"))
+        权益 = _清理账号资料文本(原记录.get("membership"), 64)
+        已用空间 = _安全解析网盘空间值(原记录.get("space_used_bytes"))
+        总空间 = _安全解析网盘空间值(原记录.get("space_total_bytes"))
         头像地址 = (
             _清理夸克头像地址(
                 原记录.get("avatar_url") or 原记录.get("avatarUrl")
@@ -882,7 +945,7 @@ def _写入网盘账号记录(
             else ""
         )
         try:
-            资料查询时间 = max(0, int(原记录.get("avatar_checked_at") or 0))
+            资料查询时间 = max(0, int(原记录.get("account_info_checked_at") or 0))
         except (TypeError, ValueError):
             资料查询时间 = 0
         if 身份:
@@ -891,10 +954,16 @@ def _写入网盘账号记录(
             记录["name"] = 名称
         if 手机号:
             记录["phone"] = 手机号
+        if 权益:
+            记录["membership"] = 权益
+        if 已用空间 is not None:
+            记录["space_used_bytes"] = 已用空间
+        if 总空间 is not None:
+            记录["space_total_bytes"] = 总空间
         if 头像地址:
             记录["avatar_url"] = 头像地址
         if 平台 == "夸克" and 资料查询时间:
-            记录["avatar_checked_at"] = 资料查询时间
+            记录["account_info_checked_at"] = 资料查询时间
         账号数据.append(记录)
     payload = json.dumps(
         {
@@ -933,7 +1002,10 @@ def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str])
                 "name": 原记录.get("name", ""),
                 "phone": 原记录.get("phone", ""),
                 "avatar_url": 原记录.get("avatar_url", ""),
-                "avatar_checked_at": 原记录.get("avatar_checked_at", 0),
+                "membership": 原记录.get("membership", ""),
+                "space_used_bytes": 原记录.get("space_used_bytes"),
+                "space_total_bytes": 原记录.get("space_total_bytes"),
+                "account_info_checked_at": 原记录.get("account_info_checked_at", 0),
                 "enabled": _解析网盘账号启用状态(原记录.get("enabled")),
             }
         )
@@ -971,6 +1043,10 @@ def _保存网盘Cookie(
     名称: Any = "",
     手机号: Any = "",
     头像地址: Any = "",
+    账号权益: Any = "",
+    已用空间: Any = None,
+    总空间: Any = None,
+    资料查询时间: Any = 0,
 ) -> int:
     """保存平台账号；同一夸克身份刷新 Cookie 时保留原账号序号。"""
     规范平台 = _规范化平台名称(平台)
@@ -980,6 +1056,13 @@ def _保存网盘Cookie(
     新头像地址 = (
         _清理夸克头像地址(头像地址) if 规范平台 == "夸克" else ""
     )
+    新账号权益 = _清理账号资料文本(账号权益, 64)
+    新已用空间 = _安全解析网盘空间值(已用空间)
+    新总空间 = _安全解析网盘空间值(总空间)
+    try:
+        新资料查询时间 = max(0, int(资料查询时间 or 0))
+    except (TypeError, ValueError, OverflowError):
+        新资料查询时间 = 0
     with 网盘账号写入锁:
         账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
         if not 账号记录:
@@ -993,7 +1076,10 @@ def _保存网盘Cookie(
                         "name": "",
                         "phone": "",
                         "avatar_url": "",
-                        "avatar_checked_at": 0,
+                        "membership": "",
+                        "space_used_bytes": None,
+                        "space_total_bytes": None,
+                        "account_info_checked_at": 0,
                         "enabled": True,
                     }
                 )
@@ -1014,8 +1100,14 @@ def _保存网盘Cookie(
                     已保存记录["phone"] = 新手机号
                 if 新头像地址:
                     已保存记录["avatar_url"] = 新头像地址
+                if 新账号权益:
+                    已保存记录["membership"] = 新账号权益
+                if 新已用空间 is not None:
+                    已保存记录["space_used_bytes"] = 新已用空间
+                if 新总空间 is not None:
+                    已保存记录["space_total_bytes"] = 新总空间
                 if 规范平台 == "夸克":
-                    已保存记录["avatar_checked_at"] = 0
+                    已保存记录["account_info_checked_at"] = 新资料查询时间
                 _写入网盘账号记录(配置, 规范平台, 账号记录)
                 return 位置 + 1
         已有位置 = next(
@@ -1033,8 +1125,14 @@ def _保存网盘Cookie(
                 账号记录[已有位置]["phone"] = 新手机号
             if 新头像地址:
                 账号记录[已有位置]["avatar_url"] = 新头像地址
+            if 新账号权益:
+                账号记录[已有位置]["membership"] = 新账号权益
+            if 新已用空间 is not None:
+                账号记录[已有位置]["space_used_bytes"] = 新已用空间
+            if 新总空间 is not None:
+                账号记录[已有位置]["space_total_bytes"] = 新总空间
             if 规范平台 == "夸克":
-                账号记录[已有位置]["avatar_checked_at"] = 0
+                账号记录[已有位置]["account_info_checked_at"] = 新资料查询时间
             _写入网盘账号记录(配置, 规范平台, 账号记录)
             return 已有位置 + 1
         账号记录.append(
@@ -1044,7 +1142,10 @@ def _保存网盘Cookie(
                 "name": 新名称,
                 "phone": 新手机号,
                 "avatar_url": 新头像地址,
-                "avatar_checked_at": 0,
+                "membership": 新账号权益,
+                "space_used_bytes": 新已用空间,
+                "space_total_bytes": 新总空间,
+                "account_info_checked_at": 新资料查询时间,
                 "enabled": True,
             }
         )
@@ -1217,6 +1318,13 @@ def _网盘账号摘要(账号记录: list[dict[str, Any]]) -> list[dict[str, An
                 "avatar_url": _清理夸克头像地址(记录.get("avatar_url"))
                 if 记录.get("avatar_url")
                 else "",
+                "membership": _清理账号资料文本(记录.get("membership"), 64),
+                "space_used_bytes": _安全解析网盘空间值(
+                    记录.get("space_used_bytes")
+                ),
+                "space_total_bytes": _安全解析网盘空间值(
+                    记录.get("space_total_bytes")
+                ),
                 "configured": True,
                 "enabled": _解析网盘账号启用状态(记录.get("enabled")),
             }
@@ -1268,9 +1376,17 @@ def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
     return _网盘账号摘要(账号记录)
 
 
-async def _获取夸克账号资料(Cookie: str) -> tuple[str, str, str]:
+async def _获取夸克账号资料(Cookie: str) -> dict[str, Any]:
+    空资料: dict[str, Any] = {
+        "name": "",
+        "phone": "",
+        "avatar_url": "",
+        "membership": "",
+        "space_used_bytes": None,
+        "space_total_bytes": None,
+    }
     if not Cookie:
-        return "", "", ""
+        return 空资料
     try:
         Timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(
@@ -1286,20 +1402,73 @@ async def _获取夸克账号资料(Cookie: str) -> tuple[str, str, str]:
                 "Cookie": Cookie,
             },
         ) as 会话:
-            async with 会话.get(
-                夸克账号资料地址,
-                params={"lw": "scan", "fr": "pc", "platform": "pc"},
-            ) as 响应:
-                数据 = await 响应.json(content_type=None)
-                if 响应.status != 200:
-                    return "", "", ""
-        return _解析夸克账号资料(数据)
+
+            async def 获取接口数据(
+                地址: str, 参数: dict[str, Any], 阶段: str
+            ) -> dict[str, Any]:
+                try:
+                    async with 会话.get(地址, params=参数) as 响应:
+                        if 响应.status != 200:
+                            logger.warning(
+                                "夸克账号资料请求失败：stage=%s, http=%s",
+                                阶段,
+                                响应.status,
+                            )
+                            return {}
+                        数据 = await 响应.json(content_type=None)
+                        return 数据 if isinstance(数据, dict) else {}
+                except Exception as 异常:
+                    logger.warning(
+                        "夸克账号资料读取失败：stage=%s, error=%s",
+                        阶段,
+                        type(异常).__name__,
+                    )
+                    return {}
+
+            资料响应, 权益响应 = await asyncio.gather(
+                获取接口数据(
+                    夸克账号资料地址,
+                    {"lw": "scan", "fr": "pc", "platform": "pc"},
+                    "profile",
+                ),
+                获取接口数据(
+                    夸克账号权益地址,
+                    {
+                        "pr": "ucpro",
+                        "fr": "pc",
+                        "uc_param_str": "",
+                    },
+                    "membership",
+                ),
+            )
+        名称, 手机号, 头像地址 = _解析夸克账号资料(资料响应)
+        权益, 已用空间, 总空间 = _解析夸克账号权益(权益响应)
+        return {
+            "name": 名称,
+            "phone": 手机号,
+            "avatar_url": 头像地址,
+            "membership": 权益,
+            "space_used_bytes": 已用空间,
+            "space_total_bytes": 总空间,
+        }
     except Exception as 异常:
         logger.warning(
-            "夸克账号资料读取失败：stage=profile, error=%s",
+            "夸克账号资料读取失败：stage=session, error=%s",
             type(异常).__name__,
         )
-        return "", "", ""
+        return 空资料
+
+
+def _夸克账号资料保存参数(资料: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "名称": 资料.get("name"),
+        "手机号": 资料.get("phone"),
+        "头像地址": 资料.get("avatar_url"),
+        "账号权益": 资料.get("membership"),
+        "已用空间": 资料.get("space_used_bytes"),
+        "总空间": 资料.get("space_total_bytes"),
+        "资料查询时间": int(time.time()),
+    }
 
 
 async def _刷新夸克账号资料(
@@ -1316,7 +1485,10 @@ async def _刷新夸克账号资料(
                     "name": "",
                     "phone": "",
                     "avatar_url": "",
-                    "avatar_checked_at": 0,
+                    "membership": "",
+                    "space_used_bytes": None,
+                    "space_total_bytes": None,
+                    "account_info_checked_at": 0,
                 }
             ]
     if not 账号记录:
@@ -1327,31 +1499,35 @@ async def _刷新夸克账号资料(
         if not 强制 and (
             记录.get("name")
             and 记录.get("avatar_url")
+            and 记录.get("membership")
+            and 记录.get("space_used_bytes") is not None
+            and 记录.get("space_total_bytes") is not None
         ):
             return False
         try:
-            上次查询 = max(0, int(记录.get("avatar_checked_at") or 0))
+            上次查询 = max(0, int(记录.get("account_info_checked_at") or 0))
         except (TypeError, ValueError):
             上次查询 = 0
         if not 强制 and 上次查询 and time.time() - 上次查询 < 3600:
             return False
         async with 信号量:
-            名称, 手机号, 头像地址 = await _获取夸克账号资料(
+            账号资料 = await _获取夸克账号资料(
                 str(记录.get("cookie") or "")
             )
         已变更 = False
-        if 名称 and 名称 != 记录.get("name"):
-            记录["name"] = 名称
-            已变更 = True
-        if 手机号 and 手机号 != 记录.get("phone"):
-            记录["phone"] = 手机号
-            已变更 = True
-        if 头像地址 and 头像地址 != 记录.get("avatar_url"):
-            记录["avatar_url"] = 头像地址
-            已变更 = True
+        for 字段 in ("name", "phone", "avatar_url", "membership"):
+            值 = 账号资料.get(字段)
+            if 值 and 值 != 记录.get(字段):
+                记录[字段] = 值
+                已变更 = True
+        for 字段 in ("space_used_bytes", "space_total_bytes"):
+            值 = _安全解析网盘空间值(账号资料.get(字段))
+            if 值 is not None and 值 != 记录.get(字段):
+                记录[字段] = 值
+                已变更 = True
         查询时间 = int(time.time())
-        if 查询时间 != 记录.get("avatar_checked_at"):
-            记录["avatar_checked_at"] = 查询时间
+        if 查询时间 != 记录.get("account_info_checked_at"):
+            记录["account_info_checked_at"] = 查询时间
             已变更 = True
         return 已变更
 
@@ -1559,15 +1735,13 @@ async def _等待夸克扫码并保存(
     当前任务 = asyncio.current_task()
     try:
         Cookie = await 客户端.等待登录并获取Cookie(Token, timeout=300, interval=2)
-        名称, 手机号, 头像地址 = await _获取夸克账号资料(Cookie)
+        账号资料 = await _获取夸克账号资料(Cookie)
         账号序号 = await asyncio.to_thread(
             _保存网盘Cookie,
             配置,
             "夸克",
             Cookie,
-            名称=名称,
-            手机号=手机号,
-            头像地址=头像地址,
+            **_夸克账号资料保存参数(账号资料),
         )
         await _发送扫码结果(event, f"夸克网盘登录成功，已保存为账号{账号序号}")
     except asyncio.CancelledError:
@@ -1681,19 +1855,16 @@ async def 处理网盘Cookie指令(event: Any, 命令文本: str, 配置: Any = 
     if not 已配置运行状态数据库(配置):
         return f"数据库未配置，{显示名}Cookie未保存"
     try:
-        资料名称 = ""
-        资料手机号 = ""
-        资料头像地址 = ""
+        资料保存参数: dict[str, Any] = {}
         if 平台 == "夸克":
-            资料名称, 资料手机号, 资料头像地址 = await _获取夸克账号资料(Cookie)
+            账号资料 = await _获取夸克账号资料(Cookie)
+            资料保存参数 = _夸克账号资料保存参数(账号资料)
         账号序号 = await asyncio.to_thread(
             _保存网盘Cookie,
             配置,
             平台,
             Cookie,
-            名称=资料名称,
-            手机号=资料手机号,
-            头像地址=资料头像地址,
+            **资料保存参数,
         )
     except Exception as 异常:
         logger.warning(f"{显示名}Cookie保存失败：error={type(异常).__name__}")

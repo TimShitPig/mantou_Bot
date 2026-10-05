@@ -450,6 +450,7 @@
       .pan-object-copy { display:grid; gap:4px; min-width:0; flex:1; }
       .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-copy small { overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+      .pan-object-copy .pan-account-meta { color:var(--soft); }
       .pan-object-arrow { margin-left:auto; color:var(--soft); font-size:18px; line-height:1; }
       .pan-account-card-actions { display:flex; align-items:center; gap:8px; padding:0 12px 0 4px; }
       .pan-account-card-actions .tag { white-space:nowrap; }
@@ -474,6 +475,11 @@
       .pan-object-account-copy { min-width:0; flex:1; }
       .pan-object-account-copy h3 { margin:2px 0 3px; color:var(--ink); font-size:14px; }
       .pan-object-account-copy p { margin:0; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+      .pan-account-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:9px; }
+      .pan-account-stats > div { min-width:0; }
+      .pan-account-stats small { display:block; color:var(--muted); font-size:9px; }
+      .pan-account-stats strong { display:block; margin-top:3px; overflow-wrap:anywhere; color:var(--ink); font-size:11px; font-weight:650; }
+      @media (max-width:420px) { .pan-account-stats { grid-template-columns:1fr; gap:6px; } }
       .pan-object-detail-actions { display:flex; align-items:center; gap:9px; padding:13px 0 4px; color:var(--muted); font-size:11px; }
       .pan-object-detail-actions .pan-account-delete { margin-left:auto; }
       .pan-detail-section { display:grid; gap:10px; margin-top:16px; padding-top:13px; border-top:1px solid var(--line); }
