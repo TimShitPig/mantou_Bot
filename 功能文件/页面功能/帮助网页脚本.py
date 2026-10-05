@@ -2343,7 +2343,7 @@
           }
         }));
       };
-      const messageMediaProxyRevision = '6.1.64';
+      const messageMediaProxyRevision = '6.1.109';
       const mediaProxyUrl = (src, mode = 'image', name = '') => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';

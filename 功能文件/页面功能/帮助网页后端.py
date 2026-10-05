@@ -32,7 +32,7 @@ except Exception:
 
 默认监听地址 = "0.0.0.0"
 默认监听端口 = 8090
-控制台版本 = "6.1.64"
+控制台版本 = "6.1.109"
 默认控制台用户名 = "admin"
 默认控制台密码 = ""
 控制台会话Cookie名 = "mantou_console_session"
@@ -47,6 +47,8 @@ except Exception:
 }
 媒体代理最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
+媒体代理连接超时秒 = 10
+媒体代理读取超时秒 = 60
 媒体代理主机后缀 = (
     "multimedia.nt.qq.com.cn",
     "qqbot.ugcimg.cn",
@@ -143,7 +145,7 @@ async def 获取媒体代理会话() -> ClientSession:
                 ttl_dns_cache=300,
                 enable_cleanup_closed=True,
             ),
-            trust_env=False,
+            trust_env=True,
         )
     return _媒体代理会话
 
@@ -1247,6 +1249,14 @@ def _媒体代理失败响应(模式: str, *, 已过期: bool = False) -> web.Re
     )
 
 
+def _媒体代理请求超时(模式: str) -> ClientTimeout:
+    return ClientTimeout(
+        total=None if 模式 == "file" else 媒体代理超时秒,
+        connect=媒体代理连接超时秒,
+        sock_read=媒体代理读取超时秒,
+    )
+
+
 async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     """在同源会话中转发 QQ 附件，解决签名 URL 的跨域和响应类型问题。"""
     if not _请求已授权(request):
@@ -1261,9 +1271,14 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if _媒体代理失败缓存命中(缓存键):
         return _媒体代理失败响应(模式, 已过期=True)
     文件名 = _媒体文件名(request.query.get("name"))
+    阶段 = "session"
+    已发送 = 0
+    上游状态: int | None = None
+    响应: web.StreamResponse | None = None
     try:
-        超时 = ClientTimeout(total=媒体代理超时秒, connect=10, sock_read=媒体代理超时秒)
+        超时 = _媒体代理请求超时(模式)
         客户端 = await 获取媒体代理会话()
+        阶段 = "upstream_request"
         async with 客户端.get(
             地址,
             allow_redirects=True,
@@ -1274,6 +1289,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 "User-Agent": "MantouBot/console-media",
             },
         ) as 上游:
+                上游状态 = int(getattr(上游, "status", 0) or 0)
                 最终地址 = str(getattr(上游, "url", 地址) or 地址)
                 if not _允许媒体地址(最终地址):
                     return web.Response(status=502, text="媒体地址不可用")
@@ -1292,6 +1308,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 if 内容长度 > 媒体代理最大字节数:
                     return web.Response(status=413, text="媒体文件过大")
 
+                阶段 = "read_prefix"
                 前缀 = await 上游.content.read(64 * 1024)
                 类型 = _识别媒体类型(
                     上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
@@ -1314,8 +1331,9 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                         "attachment; filename*=UTF-8''" + quote(文件名, safe="")
                     )
                 响应 = web.StreamResponse(status=上游.status, headers=响应头)
+                阶段 = "prepare_response"
                 await 响应.prepare(request)
-                已发送 = 0
+                阶段 = "stream_body"
                 if 前缀:
                     已发送 = len(前缀)
                     if 已发送 > 媒体代理最大字节数:
@@ -1338,10 +1356,19 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
         raise
     except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
         logger.warning(
-            "帮助控制台媒体代理失败：模式=%s，错误类型=%s",
+            "帮助控制台媒体代理失败：模式=%s，阶段=%s，错误类型=%s，上游状态=%s，已发送字节=%d",
             模式,
+            阶段,
             type(exc).__name__,
+            上游状态 if 上游状态 is not None else "none",
+            已发送,
         )
+        if 响应 is not None and 响应.prepared:
+            响应.force_close()
+            传输 = request.transport
+            if 传输 is not None:
+                传输.close()
+            return 响应
         return _媒体代理失败响应(模式)
 
 
