@@ -201,11 +201,18 @@
        const panAccountMetaHtml = (account) => `<span class="pan-account-meta"><span>空间 ${esc(panAccountSpaceText(account))}</span><span>权益 ${esc(account?.membership || '未获取')}</span></span>`;
        const panAccountStatsHtml = (account) => `<div class="pan-account-stats"><div><small>空间用量</small><strong>${esc(panAccountSpaceText(account))}</strong></div><div><small>账号权益</small><strong>${esc(account?.membership || '未获取')}</strong></div></div>`;
        const panSwitchHtml = (key, enabled, editable, name) => `<button class="switch pan-enable-switch ${enabled ? 'on' : ''}" data-pan-enable="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(enabled ? '关闭' : '开启')}${esc(name)}" aria-pressed="${enabled}"><span></span></button>`;
-       const renderPanCard = (item, pansEditable, configEditable) => {
+       const renderPanCard = (item, pansEditable, configEditable, panItems, defaultPan) => {
          const enabled = item.enabled !== false;
+         const availablePans = (panItems || []).filter((pan) => pan.enabled !== false && (Array.isArray(pan.account_summary) ? pan.account_summary : []).some((account) => account?.configured !== false && account?.enabled !== false));
+         const defaultPanAvailable = availablePans.some((pan) => pan.key === defaultPan);
+         const defaultOptions = [
+           !defaultPanAvailable && defaultPan ? `<option value="" selected disabled>${esc(defaultPan)}（暂无启用账号）</option>` : '',
+           ...availablePans.map((pan) => `<option value="${esc(pan.key)}" ${pan.key === defaultPan ? 'selected' : ''}>${esc(pan.name)}</option>`),
+           !availablePans.length && !defaultPan ? '<option value="" selected disabled>暂无可用网盘账号</option>' : '',
+         ].filter(Boolean).join('');
          return `<article id="pan-card-${esc(item.key)}" class="pan-card pan-workspace" data-pan-card="${esc(item.key)}" role="tabpanel" aria-labelledby="pan-tab-${esc(item.key)}">
            <div class="pan-object-browser" data-pan-browser="${esc(item.key)}">
-             <header class="pan-account-toolbar"><div class="pan-account-toolbar-actions"><div class="pan-platform-switch"><span>${enabled ? '网盘已开启' : '网盘已关闭'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div><button class="outline-button pan-add-account" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="add">添加账号</button></div></header>
+             <header class="pan-account-toolbar"><label class="pan-default-control"><span>默认网盘</span><select data-default-pan aria-label="选择全局默认网盘" ${pansEditable && availablePans.length ? '' : 'disabled'}>${defaultOptions}</select></label><div class="pan-account-toolbar-actions"><div class="pan-platform-switch"><span>${enabled ? '网盘已开启' : '网盘已关闭'}</span>${panSwitchHtml(item.key, enabled, pansEditable, item.name)}</div><button class="outline-button pan-add-account" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="add">添加账号</button></div></header>
              <div class="pan-object-grid">${panAccountRows(item, pansEditable)}</div>
            </div>
            <div class="pan-card-content">
@@ -218,14 +225,7 @@
        };
        const renderPanObjectContent = (item, type, index, pansEditable, configEditable) => {
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
-         const enabledAccounts = accounts.filter((account) => account?.enabled !== false);
-         const selectedAccount = Number(item.selected_account) >= 0 ? Number(item.selected_account) : 0;
-         const groupOptions = enabledAccounts.map((account, position) => {
-           const accountIndex = Number(account?.index) > 0 ? Number(account.index) : position + 1;
-           return `<option value="${esc(accountIndex)}" ${accountIndex === selectedAccount ? 'selected' : ''}>账号${esc(accountIndex)}</option>`;
-         }).join('') || '<option value="" selected disabled>没有启用的账号</option>';
          const directoryField = ({UC:'uc_pan_upload_dir','夸克':'quark_pan_upload_dir','百度':'baidu_pan_upload_dir'})[item.key] || '';
-         const defaultOption = item.active ? '默认使用中' : (item.enabled !== false ? '设为默认主网盘' : '请先开启网盘');
          if (type === 'account') {
            const account = accounts.find((entry, position) => Number(entry?.index) === index || (!entry?.index && position + 1 === index));
            if (!account) return '';
@@ -235,7 +235,7 @@
              ? panAccountAvatarHtml(account, index, profileName)
              : `<div class="pan-account-order">${String(index).padStart(2, '0')}</div>`;
            const accountMetadata = item.key === '夸克' ? panAccountStatsHtml(account) : '';
-           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息 · 账号${esc(index)}</span><h3>${esc(profileName)}</h3><p>${esc(account.phone || '未获取')}</p>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">分享</span><h3>默认分享网盘</h3></div></div><div class="account-actions pan-action-row"><select id="pan-select-${esc(item.key)}" class="pan-select" data-pan="${esc(item.key)}" ${pansEditable ? '' : 'disabled'} aria-label="选择${esc(item.name)}"><option value="">${defaultOption}</option><option value="${esc(item.key)}" ${item.enabled !== false ? '' : 'disabled'}>切换到${esc(item.key)}</option></select><button class="outline-button pan-refresh-button" type="button" data-pan-refresh="${esc(item.key)}" ${pansEditable && item.key === '夸克' ? '' : 'disabled'} title="刷新夸克账号资料">刷新资料</button></div></section><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">群聊</span><h3>群账号选择</h3></div><p>未单独设置时使用账号${selectedAccount || '1'}。</p></div><div class="group-account"><input type="text" data-pan-group="${esc(item.key)}" placeholder="QQ群号" ${pansEditable ? '' : 'disabled'} inputmode="numeric" aria-label="${esc(item.name)}群号"><select data-pan-group-index="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'} aria-label="选择${esc(item.name)}账号">${groupOptions}</select><button class="outline-button" type="button" data-pan-group-save="${esc(item.key)}" ${pansEditable && enabledAccounts.length ? '' : 'disabled'}>保存</button></div></section>`;
+           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息 · 账号${esc(index)}</span><h3>${esc(profileName)}</h3><p>${esc(account.phone || '未获取')}</p>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button><button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
          }
          if (type === 'add') return `<div class="pan-object-form"><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></div>`;
          return '';
@@ -250,7 +250,6 @@
          pane.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
-         pane.querySelectorAll('[data-pan-group-save]').forEach((node) => node.addEventListener('click', () => savePanGroup(node.dataset.panGroupSave)));
          pane.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
          card.querySelector('[data-pan-object-detail] .pan-object-detail-head [data-pan-enable]')?.addEventListener('click', (event) => changePanEnabled(event.currentTarget.dataset.panEnable, event.currentTarget));
        };
@@ -319,6 +318,7 @@
          grid.querySelectorAll('[data-pan-object-back]').forEach((node) => node.addEventListener('click', () => closePanObject(node.dataset.panObjectBack)));
          grid.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
          grid.querySelectorAll('[data-pan-enable]').forEach((node) => node.addEventListener('click', () => changePanEnabled(node.dataset.panEnable, node)));
+         grid.querySelectorAll('[data-default-pan]').forEach((node) => node.addEventListener('change', () => changePan(node.value, node)));
        };
        document.querySelectorAll('[data-pan-tab]').forEach((node) => {
          node.addEventListener('click', () => choosePanTab(node.dataset.panTab));
@@ -368,7 +368,7 @@
           if (meta) meta.textContent = `${accounts.length} 个账号 · ${enabled} 启用`;
         });
         const panGrid = $('pan-grid');
-        if (panGrid) panGrid.innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
+        if (panGrid) panGrid.innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable, panItems, pans.active)).join('') || '<div class="empty">没有网盘数据</div>';
         bindPanWorkspaceControls();
         let savedPanTab = activePanTab;
         if (!savedPanTab) { try { savedPanTab = sessionStorage.getItem('mantou-pan-tab'); } catch (_) {} }
@@ -535,7 +535,6 @@
        };
        const savePanDirectory = async (platform, button) => { const input = document.querySelector(`[data-pan-dir="${CSS.escape(platform)}"]`); const field = input?.dataset.panDirField; const value = input?.value.trim(); if (!field || !value) return toast('请输入上传目录'); if (button) button.disabled = true; try { const result = await api('config', {method:'POST', body:JSON.stringify({fields:{[field]:value}})}); toast(result.message || `${platform}上传目录已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const changePanAccountEnabled = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，账号状态不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/enable`, {method:'POST', body:JSON.stringify({index:Number(index), enabled})}); toast(result.message || `账号${enabled ? '已启用' : '已停用'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-       const savePanGroup = async (platform) => { const group = document.querySelector(`[data-pan-group="${CSS.escape(platform)}"]`)?.value.trim(); const select = document.querySelector(`[data-pan-group-index="${CSS.escape(platform)}"]`); const index = Number(select?.value); if (!group) return toast('请输入QQ群号'); if (!/^\d+$/.test(group)) return toast('QQ群号格式无效'); if (!Number.isInteger(index) || index < 1) return toast('请先启用一个账号'); try { await api('pan-account-selection', {method:'POST', body:JSON.stringify({platform, index, group_id:group})}); toast('群账号选择已保存'); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const saveQQAuth = async () => { const ywguid = $('qq-ywguid')?.value.trim(); const ywkey = $('qq-ywkey')?.value.trim(); if (!ywguid || !ywkey) return toast('请填写 ywguid 和 ywkey'); const button = $('qq-auth-save'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'POST', body:JSON.stringify({ywguid, ywkey})}); if ($('qq-ywguid')) $('qq-ywguid').value = ''; if ($('qq-ywkey')) $('qq-ywkey').value = ''; toast('QQ阅读登录态已保存'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const deleteQQAuth = async () => { if (!confirm('确定清除 QQ阅读登录态吗？')) return; const button = $('qq-auth-delete'); if (button) button.disabled = true; try { await api('qq-reader-auth', {method:'DELETE'}); toast('QQ阅读登录态已清除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
       const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
@@ -543,7 +542,7 @@
       adminChip?.addEventListener('click', (event) => { event.stopPropagation(); const expanded = adminChip.getAttribute('aria-expanded') === 'true'; adminChip.setAttribute('aria-expanded', String(!expanded)); if (adminPopover) adminPopover.hidden = expanded; });
       document.addEventListener('click', () => { if (adminChip?.getAttribute('aria-expanded') === 'true') { adminChip.setAttribute('aria-expanded', 'false'); if (adminPopover) adminPopover.hidden = true; } });
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘选择不能保存'); const item = (snapshot.pans.items || []).find((entry) => entry.key === key); if (item && item.enabled === false) return toast('请先开启该网盘'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('主分享网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
+       const changePan = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，默认网盘不能保存'); const item = (snapshot.pans.items || []).find((entry) => entry.key === key); const accounts = Array.isArray(item?.account_summary) ? item.account_summary : []; if (!item || item.enabled === false || !accounts.some((account) => account?.configured !== false && account?.enabled !== false)) return toast('请先启用并配置该网盘账号'); if (node) node.disabled = true; try { await api('pan-switch', {method:'POST', body:JSON.stringify({key})}); toast('默认网盘已更新'); await load(); } catch (error) { if (node) node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const refreshQQProfileSilently = async () => { try { const authData = await api('qq-reader-auth?refresh=1'); renderQQAuthEditor(authData || {}); } catch (_) {} };
       const load = async () => { try { render(await api('dashboard')); void refreshMissingQuarkProfiles(); void refreshQQProfileSilently(); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
@@ -553,7 +552,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1301,6 +1300,9 @@
         msgState.initialScrollChatId = chatId;
         if (!sameChat) {
           cancelMsgRealtimeMessageRender();
+          msgState.panSelectionSaving = false;
+          msgState.panSelectionData = null;
+          msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
           msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
           msgState.mutes = new Map();
           msgState.muteRequestAt = 0;
@@ -1357,7 +1359,14 @@
           node.classList.toggle('active', String(node.dataset.msgChat || '') === chatId);
         });
         selectedNode?.scrollIntoView({block:'nearest'});
-        if (msgState.chatType === 'group') void loadGroupAdSwitch();
+        if (msgState.chatType === 'group') {
+          void loadGroupAdSwitch();
+          void loadMsgPanSelection();
+        } else {
+          msgState.panSelectionData = null;
+          msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
+          updateMsgPanSelector();
+        }
       };
       const scheduleMsgHistoryLoad = (chatId) => {
         const id = String(chatId || '').trim();
@@ -1631,6 +1640,78 @@
           }
         }
       };
+      const updateMsgPanSelector = (loading = false) => {
+        const wrap = $('msg-pan-account-wrap');
+        const select = $('msg-pan-account-select');
+        if (!wrap || !select) return;
+        const visible = msgState.chatType === 'group' && Boolean(msgState.chatId) && !msgState.chatRemoved;
+        wrap.hidden = !visible;
+        if (!visible) return;
+        const data = msgState.panSelectionData;
+        if (loading || !data) {
+          select.innerHTML = `<option value="">${loading ? '读取中' : '读取失败'}</option>`;
+          select.disabled = true;
+          return;
+        }
+        const choices = Array.isArray(data.choices) ? data.choices : [];
+        const defaultLabel = data.default?.label ? `跟随默认 · ${data.default.label}` : '跟随默认 · 暂无可用账号';
+        const options = [`<option value="__default__">${esc(defaultLabel)}</option>`, ...choices.map((choice) => `<option value="${esc(choice.value)}">${esc(choice.label)}</option>`)];
+        select.innerHTML = options.join('');
+        select.value = data.selected_value || '__default__';
+        select.disabled = !data.editable || msgState.panSelectionSaving || !choices.length;
+        select.title = data.editable ? '只影响当前群；跟随默认会使用网盘配置页中的默认网盘' : '数据库未配置，群网盘选择不能保存';
+      };
+      const loadMsgPanSelection = async () => {
+        const chatId = String(msgState.chatId || '').trim();
+        if (msgState.chatType !== 'group' || !chatId || msgState.chatRemoved) {
+          updateMsgPanSelector();
+          return;
+        }
+        const request = Number(msgState.panSelectionRequest || 0) + 1;
+        msgState.panSelectionRequest = request;
+        msgState.panSelectionData = null;
+        updateMsgPanSelector(true);
+        try {
+          const data = await api('message/group-pan', {method:'POST', body:JSON.stringify({chat_id:chatId, action:'get'})});
+          if (request !== msgState.panSelectionRequest || msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          msgState.panSelectionData = data;
+          updateMsgPanSelector();
+        } catch (error) {
+          if (request !== msgState.panSelectionRequest || msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          msgState.panSelectionData = {editable:false, choices:[], default:null, selected_value:'__default__'};
+          updateMsgPanSelector();
+          if (error.status === 401) showAuthError(error);
+        }
+      };
+      const saveMsgPanSelection = async () => {
+        const select = $('msg-pan-account-select');
+        const chatId = String(msgState.chatId || '').trim();
+        const value = String(select?.value || '');
+        if (!select || !chatId || msgState.chatType !== 'group' || !msgState.panSelectionData?.editable || msgState.panSelectionSaving) return;
+        let payload = {chat_id:chatId, action:'reset'};
+        if (value !== '__default__') {
+          const separator = value.lastIndexOf(':');
+          const platform = separator > 0 ? value.slice(0, separator) : '';
+          const index = Number(value.slice(separator + 1));
+          if (!['UC','夸克','百度'].includes(platform) || !Number.isInteger(index) || index < 1) return toast('网盘账号选择无效');
+          payload = {chat_id:chatId, action:'set', platform, index};
+        }
+        msgState.panSelectionSaving = true;
+        updateMsgPanSelector();
+        try {
+          const result = await api('message/group-pan', {method:'POST', body:JSON.stringify(payload)});
+          if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          toast(result.message || '本群网盘账号已更新');
+        } catch (error) {
+          if (error.status === 401) showAuthError(error);
+          else toast(error.message || '本群网盘账号保存失败');
+        } finally {
+          if (msgState.chatId === chatId && msgState.chatType === 'group') {
+            msgState.panSelectionSaving = false;
+            await loadMsgPanSelection();
+          }
+        }
+      };
       const updateMsgHead = (data) => {
         const nameEl = $('msg-head-name');
         nameEl.textContent = data.chat_name || '未命名会话';
@@ -1656,6 +1737,7 @@
           $('msg-refresh-info').hidden = true;
           $('msg-remark').hidden = true;
         }
+        updateMsgPanSelector();
       };
       const openMsgLightbox = (src) => {
         if (!src) return;
@@ -3658,6 +3740,7 @@
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
       $('msg-ad-switch').addEventListener('click', toggleGroupAdSwitch);
+      $('msg-pan-account-select').addEventListener('change', saveMsgPanSelection);
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       $('msg-quote-clear').addEventListener('click', () => { msgState.quote = null; $('msg-quote-preview').hidden = true; });

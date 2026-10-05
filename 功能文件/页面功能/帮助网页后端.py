@@ -1825,12 +1825,14 @@ async def _处理小说开关(request: web.Request) -> web.Response:
 async def _处理网盘切换(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，默认网盘不能保存")
     数据 = await _读取请求JSON(request)
     网盘名 = str((数据 or {}).get("key") or "").strip()
     if 网盘名 not in {"UC", "夸克", "百度"}:
         return _控制台错误(400, "网盘参数无效")
     try:
-        from 功能文件.管理功能.网盘功能 import 网盘状态
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie, 网盘状态
 
         网盘已开启 = await _控制台线程执行(
             网盘状态.网盘开关是否开启,
@@ -1839,6 +1841,13 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
         )
         if not 网盘已开启:
             return _控制台错误(409, "该网盘已关闭，请先开启")
+        可用账号 = await _控制台线程执行(
+            网盘Cookie.获取启用网盘账号列表,
+            当前帮助网页配置,
+            网盘名,
+        )
+        if not 可用账号:
+            return _控制台错误(409, "该网盘没有启用的账号")
     except Exception as exc:
         logger.warning(
             "帮助控制台主网盘开关读取失败：平台=%s，错误类型=%s",
@@ -2136,6 +2145,138 @@ async def _处理网盘账号选择(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台群账号选择失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
         return _控制台错误(409, "群账号选择失败")
+
+
+def _构建群网盘选择数据(配置: Any, 群标识: str) -> dict[str, Any]:
+    from 功能文件.管理功能.网盘功能 import 网盘Cookie, 网盘状态, 小说网盘
+
+    平台列表 = ("UC", "夸克", "百度")
+    账号摘要 = 网盘Cookie.获取网盘账号摘要批量(配置, 平台列表)
+    网盘开关 = 网盘状态.读取网盘开关批量(配置, 平台列表)
+    choices: list[dict[str, Any]] = []
+    for 平台 in 平台列表:
+        if not 网盘开关.get(平台, False):
+            continue
+        for 账号 in 账号摘要.get(平台) or []:
+            if not 账号.get("configured") or not 账号.get("enabled", True):
+                continue
+            try:
+                序号 = int(账号.get("index") or 0)
+            except (TypeError, ValueError):
+                continue
+            if 序号 < 1:
+                continue
+            名称 = str(账号.get("name") or "").strip()
+            if not 名称 or 名称 == "未命名账号":
+                名称 = f"账号{序号}"
+            choices.append(
+                {
+                    "platform": 平台,
+                    "index": 序号,
+                    "value": f"{平台}:{序号}",
+                    "label": f"{小说网盘.网盘显示名[平台]} · {名称}",
+                }
+            )
+
+    当前默认平台 = 小说网盘.获取当前主网盘(配置)
+    默认选项 = next(
+        (选项 for 选项 in choices if 选项["platform"] == 当前默认平台),
+        choices[0] if choices else None,
+    )
+    if 默认选项:
+        默认账号 = 网盘Cookie.获取当前网盘账号序号按群标识(
+            配置, str(默认选项["platform"]), 群标识
+        )
+        默认选项 = next(
+            (
+                选项
+                for 选项 in choices
+                if 选项["platform"] == 默认选项["platform"]
+                and 选项["index"] == 默认账号
+            ),
+            默认选项,
+        )
+
+    已保存选择 = 网盘Cookie.获取群网盘账号选择(配置, 群标识)
+    已保存值 = (
+        f"{已保存选择['platform']}:{已保存选择['index']}"
+        if 已保存选择
+        else ""
+    )
+    if 已保存值 not in {选项["value"] for 选项 in choices}:
+        已保存选择 = None
+        已保存值 = ""
+    return {
+        "ok": True,
+        "editable": _数据库会话可用(),
+        "choices": choices,
+        "default": 默认选项,
+        "selected": 已保存选择,
+        "selected_value": 已保存值 or "__default__",
+    }
+
+
+async def _处理群网盘选择(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    群标识 = str((数据 or {}).get("chat_id") or "").strip()
+    操作 = str((数据 or {}).get("action") or "get").strip().lower()
+    if not 群标识 or len(群标识) > 128:
+        return _控制台错误(400, "群标识无效")
+    if 操作 == "get":
+        try:
+            结果 = await _控制台线程执行(
+                _构建群网盘选择数据,
+                当前帮助网页配置,
+                群标识,
+            )
+            return web.json_response(结果, headers={"Cache-Control": "no-store"})
+        except Exception as exc:
+            logger.warning(
+                "帮助控制台群网盘选择读取失败：错误类型=%s",
+                type(exc).__name__,
+            )
+            return _控制台错误(500, "群网盘选择读取失败")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，群网盘选择不能保存")
+    try:
+        from 功能文件.管理功能.网盘功能 import 网盘Cookie
+
+        if 操作 == "reset":
+            成功, _ = await _控制台线程执行(
+                网盘Cookie.清除群网盘账号选择,
+                当前帮助网页配置,
+                群标识,
+            )
+            if not 成功:
+                return _控制台错误(409, "群网盘选择清除失败")
+            return web.json_response({"ok": True, "message": "已恢复全局默认网盘"})
+        if 操作 != "set":
+            return _控制台错误(400, "群网盘操作无效")
+        平台 = _规范化网盘平台((数据 or {}).get("platform"))
+        try:
+            序号 = int((数据 or {}).get("index"))
+        except (TypeError, ValueError):
+            序号 = 0
+        if not 平台 or 序号 < 1:
+            return _控制台错误(400, "群网盘账号参数无效")
+        成功, _ = await _控制台线程执行(
+            网盘Cookie.设置群网盘账号选择,
+            当前帮助网页配置,
+            平台,
+            序号,
+            群标识,
+        )
+        if not 成功:
+            return _控制台错误(409, "群网盘选择失败，请检查账号状态")
+        return web.json_response({"ok": True, "message": "本群网盘账号已更新"})
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台群网盘选择写入失败：错误类型=%s",
+            type(exc).__name__,
+        )
+        return _控制台错误(409, "群网盘选择保存失败")
 
 
 async def _处理QQ阅读登录态(request: web.Request) -> web.Response:

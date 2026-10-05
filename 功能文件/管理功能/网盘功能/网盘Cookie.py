@@ -28,6 +28,7 @@ from 功能文件.管理功能.基础功能.权限工具 import (
 )
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     写入运行状态值,
+    删除运行状态值,
     已配置运行状态数据库,
     读取运行状态值,
     读取运行状态命名空间,
@@ -1189,8 +1190,34 @@ def _删除后调整网盘账号选择(
     try:
         状态字典 = 读取运行状态命名空间(配置, 网盘账号选择命名空间)
         前缀 = f"{平台}:"
-        for 状态键, 原值 in 状态字典.items():
-            if not str(状态键).startswith(前缀):
+        for 状态键, 原值 in list(状态字典.items()):
+            键文本 = str(状态键)
+            if 键文本.startswith("group:"):
+                try:
+                    群选择 = json.loads(str(原值 or ""))
+                    if _规范化平台名称(群选择.get("platform")) != 平台:
+                        continue
+                    原序号 = int(群选择.get("index") or 0)
+                except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if 原序号 < 删除序号:
+                    continue
+                if 新账号数量 < 1:
+                    删除运行状态值(配置, 网盘账号选择命名空间, 键文本)
+                    continue
+                新序号 = 原序号 - 1 if 原序号 > 删除序号 else min(删除序号, 新账号数量)
+                写入运行状态值(
+                    配置,
+                    网盘账号选择命名空间,
+                    键文本,
+                    json.dumps(
+                        {"platform": 平台, "index": max(1, 新序号)},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                continue
+            if not 键文本.startswith(前缀):
                 continue
             try:
                 原序号 = int(str(原值 or "1"))
@@ -1202,7 +1229,7 @@ def _删除后调整网盘账号选择(
                 新序号 = min(删除序号, 新账号数量)
             else:
                 continue
-            写入运行状态值(配置, 网盘账号选择命名空间, str(状态键), str(max(1, 新序号)))
+            写入运行状态值(配置, 网盘账号选择命名空间, 键文本, str(max(1, 新序号)))
     except Exception as 异常:
         logger.warning(
             f"{平台显示名[平台]}账号选择整理失败：error={type(异常).__name__}"
@@ -1264,6 +1291,12 @@ def _读取网盘账号序号(配置: Any, 平台: str, event: Any = None) -> in
     if 覆盖 and 覆盖[0] == 平台:
         return 覆盖[1]
     群标识 = 获取网盘群标识(event)
+    return _读取网盘账号序号按群标识(配置, 平台, 群标识)
+
+
+def _读取网盘账号序号按群标识(
+    配置: Any, 平台: str, 群标识: str
+) -> int:
     if not 群标识 or not 已配置运行状态数据库(配置):
         return 1
     try:
@@ -1580,6 +1613,19 @@ def 获取当前网盘账号序号(配置: Any, 平台: str, event: Any = None) 
     规范平台 = _规范化平台名称(平台)
     if not 规范平台:
         return 0
+    群标识 = 获取网盘群标识(event)
+    return 获取当前网盘账号序号按群标识(配置, 规范平台, 群标识)
+
+
+def 获取当前网盘账号序号按群标识(
+    配置: Any, 平台: str, 群标识: str
+) -> int:
+    规范平台 = _规范化平台名称(平台)
+    if not 规范平台:
+        return 0
+    覆盖 = 当前网盘账号覆盖.get()
+    if 覆盖 and 覆盖[0] == 规范平台:
+        return 覆盖[1]
     账号记录 = _读取保存的网盘账号记录(配置, 规范平台)
     可用序号 = [
         序号
@@ -1588,8 +1634,90 @@ def 获取当前网盘账号序号(配置: Any, 平台: str, event: Any = None) 
     ]
     if not 可用序号:
         return 0
-    当前序号 = _读取网盘账号序号(配置, 规范平台, event)
+    当前序号 = _读取网盘账号序号按群标识(配置, 规范平台, str(群标识 or "").strip())
     return 当前序号 if 当前序号 in 可用序号 else 可用序号[0]
+
+
+def 获取群网盘账号选择(配置: Any, 群标识: str = "") -> dict[str, Any] | None:
+    群标识 = str(群标识 or 获取网盘群标识() or "").strip()
+    if not 群标识 or not 已配置运行状态数据库(配置):
+        return None
+    try:
+        原值 = 读取运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键("group", 群标识),
+            "",
+        )
+        选择 = json.loads(str(原值 or ""))
+        平台 = _规范化平台名称(选择.get("platform")) if isinstance(选择, dict) else ""
+        序号 = int(选择.get("index")) if isinstance(选择, dict) else 0
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    except Exception as 异常:
+        logger.warning(
+            "群网盘账号选择读取失败：error=%s", type(异常).__name__
+        )
+        return None
+    if not 平台 or 序号 < 1:
+        return None
+    return {"platform": 平台, "index": 序号}
+
+
+def 设置群网盘账号选择(
+    配置: Any, 平台: str, 序号: int, 群标识: str
+) -> tuple[bool, str]:
+    规范平台 = _规范化平台名称(平台)
+    群标识 = str(群标识 or "").strip()
+    if not 规范平台 or not 群标识 or len(群标识) > 128 or 序号 < 1:
+        return False, "群网盘选择参数无效"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，群网盘选择未保存"
+    from 功能文件.管理功能.网盘功能 import 网盘状态
+
+    if not 网盘状态.网盘开关是否开启(配置, 规范平台):
+        return False, "该网盘已关闭"
+    可用账号 = 获取启用网盘账号列表(配置, 规范平台)
+    if 序号 not in {账号序号 for 账号序号, _ in 可用账号}:
+        return False, "该账号未启用或不存在"
+    选择 = json.dumps(
+        {"platform": 规范平台, "index": 序号},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        写入运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键("group", 群标识),
+            选择,
+        )
+    except Exception as 异常:
+        logger.warning(
+            "群网盘账号选择写入失败：平台=%s，错误类型=%s",
+            规范平台,
+            type(异常).__name__,
+        )
+        return False, "群网盘选择保存失败，请稍后再试"
+    return True, ""
+
+
+def 清除群网盘账号选择(配置: Any, 群标识: str) -> tuple[bool, str]:
+    群标识 = str(群标识 or "").strip()
+    if not 群标识 or len(群标识) > 128:
+        return False, "群网盘选择参数无效"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，群网盘选择未保存"
+    try:
+        删除运行状态值(
+            配置,
+            网盘账号选择命名空间,
+            _账号选择状态键("group", 群标识),
+        )
+    except Exception as 异常:
+        logger.warning("群网盘选择清除失败：错误类型=%s", type(异常).__name__)
+        return False, "群网盘选择清除失败，请稍后再试"
+    return True, ""
 
 
 def 设置网盘账号序号(

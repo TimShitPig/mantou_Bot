@@ -140,6 +140,9 @@ from .帮助网页脚本 import 控制台脚本
             .msg-head-name.admin { color:#dc2626 !important; font-weight:700; }
             .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
             .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+            .msg-pan-account-control { display:flex; align-items:center; gap:6px; min-width:0; min-height:28px; padding:0 8px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#858895; font-size:10px; white-space:nowrap; }
+            .msg-pan-account-control select { min-width:0; max-width:155px; border:0; outline:0; background:transparent; color:#4e5260; font-family:inherit; font-size:11px; font-weight:600; cursor:pointer; }
+            .msg-pan-account-control select:disabled { cursor:not-allowed; opacity:.65; }
             .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }
             .msg-btn:hover { border-color:#12b7f5; color:#12b7f5; }
             .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
@@ -427,6 +430,8 @@ from .帮助网页脚本 import 控制台脚本
                .msg-head-sub { font-size:10px; }
                .msg-head-actions { gap:4px; }
                .msg-head-actions .msg-btn { min-height:27px; padding:0 7px; font-size:10px; }
+               .msg-pan-account-control { min-height:27px; padding:0 6px; }
+               .msg-pan-account-control select { max-width:105px; font-size:10px; }
                .msg-body { padding:14px 10px 8px; }
                .msg-bubble-wrap { max-width:82%; }
                .msg-composer { max-height:52vh; padding:7px 10px 8px; }
@@ -467,6 +472,8 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-head-name { color:#e8eaf2; }
               :root[data-theme="dark"] .msg-head-name.admin { color:#f87171 !important; }
               :root[data-theme="dark"] .msg-btn { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-pan-account-control { border-color:var(--line); background:#1f2330; color:#9aa0b5; }
+              :root[data-theme="dark"] .msg-pan-account-control select { color:#d5d8e4; }
                :root[data-theme="dark"] .msg-body { background:#161926; }
                :root[data-theme="dark"] .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }
                :root[data-theme="dark"] .msg-new-messages-dot { background:#42c6ff; box-shadow:0 0 0 4px #12344d; }
@@ -588,6 +595,7 @@ from .帮助网页脚本 import 控制台脚本
                   <span class="msg-admin-tag" id="msg-admin-tag" hidden>· 机器人是管理员</span>
                 </div>
                 <div class="msg-head-actions">
+                  <label class="msg-pan-account-control" id="msg-pan-account-wrap" hidden><span>网盘账号</span><select id="msg-pan-account-select" aria-label="选择当前群的网盘账号" disabled><option value="">读取中</option></select></label>
                   <button class="msg-btn" id="msg-ad-switch" type="button" hidden title="切换当前群的广告拦截">广告拦截</button>
                   <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
                   <button class="msg-btn" id="msg-remark" type="button" hidden>群备注</button>

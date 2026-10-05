@@ -224,6 +224,8 @@ def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str 
     目标网盘 = 切换命令[文本]
     if not 网盘状态.网盘开关是否开启(配置, 目标网盘):
         return f"{网盘显示名[目标网盘]}已关闭，请先开启"
+    if not 网盘Cookie.获取启用网盘账号列表(配置, 目标网盘):
+        return f"{网盘显示名[目标网盘]}没有启用账号，请先启用一个账号"
     try:
         写入运行状态值(配置, 状态命名空间, 状态键, 目标网盘)
     except Exception as 异常:
@@ -431,6 +433,39 @@ async def _上传小说并获取分享链接内部(
     }
 
 
+def _获取当前群上传网盘(配置: Any) -> tuple[str, int]:
+    群标识 = 网盘Cookie.获取网盘群标识()
+    可用账号 = {
+        平台: {
+            序号
+            for 序号, _ in 网盘Cookie.获取启用网盘账号列表(配置, 平台)
+        }
+        for 平台 in 网盘顺序
+        if 网盘状态.网盘开关是否开启(配置, 平台)
+    }
+    可用账号 = {平台: 序号集合 for 平台, 序号集合 in 可用账号.items() if 序号集合}
+
+    群选择 = 网盘Cookie.获取群网盘账号选择(配置, 群标识)
+    if 群选择:
+        平台 = str(群选择.get("platform") or "")
+        try:
+            序号 = int(群选择.get("index") or 0)
+        except (TypeError, ValueError):
+            序号 = 0
+        if 平台 in 可用账号 and 序号 in 可用账号[平台]:
+            return 平台, 序号
+
+    平台 = 获取当前主网盘(配置)
+    if 平台 not in 可用账号:
+        平台 = next((名称 for 名称 in 网盘顺序 if 名称 in 可用账号), 平台)
+    序号 = 网盘Cookie.获取当前网盘账号序号按群标识(
+        配置, 平台, 群标识
+    )
+    if 平台 in 可用账号 and 序号 not in 可用账号[平台]:
+        序号 = min(可用账号[平台])
+    return 平台, max(1, int(序号 or 1))
+
+
 async def 上传小说并获取分享链接(
     配置: Any,
     源缓存路径: str | Path,
@@ -440,32 +475,31 @@ async def 上传小说并获取分享链接(
     _账号序号: int | None = None,
     _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    if _账号索引 is None:
-        # 账号选择会读取运行状态数据库；三个平台互不依赖，并行读取避免
-        # 在小说下载完成后连续阻塞事件循环。
-        账号序号列表 = await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    网盘Cookie.获取当前网盘账号序号,
-                    配置,
-                    平台,
-                )
-                for 平台 in 网盘模块映射
-            )
+    if _指定网盘 not in 网盘模块映射:
+        _指定网盘, 默认账号序号 = await asyncio.to_thread(
+            _获取当前群上传网盘, 配置
         )
-        _账号索引 = {
-            平台: max(1, int(序号 or 1))
-            for 平台, 序号 in zip(网盘模块映射, 账号序号列表)
-        }
+        if _账号序号 is None:
+            _账号序号 = 默认账号序号
+    if _账号索引 is None:
+        if _账号序号 is None:
+            _账号序号 = await asyncio.to_thread(
+                网盘Cookie.获取当前网盘账号序号,
+                配置,
+                str(_指定网盘),
+            )
+        _账号索引 = {str(_指定网盘): max(1, int(_账号序号 or 1))}
     else:
         _账号索引 = {
             平台: max(1, int(序号))
             for 平台, 序号 in _账号索引.items()
             if 平台 in 网盘模块映射 and str(序号).lstrip("+").isdigit()
         }
-    if _指定网盘 in 网盘模块映射 and _账号序号 is not None:
+    if _指定网盘 in 网盘模块映射:
         try:
-            _账号索引[str(_指定网盘)] = max(1, int(_账号序号))
+            _账号索引[str(_指定网盘)] = max(
+                1, int(_账号序号 or _账号索引.get(str(_指定网盘), 1))
+            )
         except (TypeError, ValueError):
             _账号索引[str(_指定网盘)] = 1
     return await _上传小说并获取分享链接内部(

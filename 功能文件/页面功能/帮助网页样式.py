@@ -430,8 +430,11 @@
       .pan-page .pan-card:hover { transform:none; box-shadow:none; }
       .pan-page .pan-card[hidden] { display:none !important; }
       .pan-card-content { min-width:0; }
-      .pan-account-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:16px; padding:12px 0; }
+      .pan-account-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px 16px; padding:12px 0; }
       .pan-account-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; gap:15px; }
+      .pan-default-control { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; font-weight:650; white-space:nowrap; }
+      .pan-default-control select { min-width:150px; min-height:35px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); font:inherit; }
+      .pan-default-control select:disabled { cursor:not-allowed; opacity:.6; }
       .pan-platform-switch { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; white-space:nowrap; }
       .pan-page .pan-enable-switch { transform:none; transform-origin:center; }
       .pan-page .pan-add-account { min-height:35px; padding:0 12px; }
@@ -588,6 +591,7 @@
       :root[data-theme="dark"] .pan-account-avatar { background:#20392d; color:#8bc9a5; }
       :root[data-theme="dark"] .pan-security-note { border-left-color:#5c6990; background:#1a2030; }
       :root[data-theme="dark"] .pan-object-card:hover { border-color:#555d80; background:#202435; }
+      :root[data-theme="dark"] .pan-default-control select { border-color:#333a55; background:var(--panel); color:var(--ink); }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#1a1d29; }
       :root[data-theme="dark"] .pan-object-empty { border-color:#333a55; background:transparent; }
       :root[data-theme="dark"] .pan-object-account-detail,:root[data-theme="dark"] .pan-object-detail { border-color:#2c3044; }
