@@ -441,7 +441,13 @@
       .pan-object-card { min-width:0; min-height:110px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
       .pan-object-card:hover { border-color:#a9b6d4; background:#fbfcfe; }
       .pan-account-object.is-disabled { background:#f6f7fa; }
-      .pan-account-object { display:flex; flex-direction:column; align-items:stretch; aspect-ratio:1 / 1; min-height:0; padding:16px; }
+      .pan-account-object { display:flex; flex-direction:column; align-items:stretch; justify-self:center; width:min(100%,280px); aspect-ratio:1 / 1; min-height:0; padding:16px; animation:pan-account-card-enter .28s ease-out both; transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease; }
+      .pan-account-object:nth-child(2) { animation-delay:35ms; }
+      .pan-account-object:nth-child(3) { animation-delay:70ms; }
+      .pan-account-object:nth-child(4) { animation-delay:105ms; }
+      .pan-account-object:nth-child(5) { animation-delay:140ms; }
+      .pan-account-object:hover { transform:translateY(-3px); box-shadow:0 8px 20px rgba(30,48,85,.11); }
+      @keyframes pan-account-card-enter { from { opacity:0; } to { opacity:1; } }
       .pan-object-open { position:relative; display:grid; grid-template-columns:64px minmax(0,1fr) 12px; align-content:start; align-items:start; gap:0 12px; flex:1 1 auto; min-width:0; min-height:0; padding:2px 0 14px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
       .pan-object-open:hover { color:var(--ink); }
       .pan-account-order { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:6px; background:#e9efff; color:#4668ba; font-size:10px; font-weight:800; }
@@ -452,12 +458,13 @@
       .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:11px; white-space:normal; }
       .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; overflow:visible; color:var(--soft); font-size:11px; font-weight:600; line-height:1.4; white-space:normal; }
       .pan-account-meta > span { min-width:0; overflow-wrap:anywhere; }
-      .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; }
+      .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
+      .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
       .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:9px; padding:12px 1px 0; border-top:1px solid var(--line); }
       .pan-account-card-actions .tag { white-space:nowrap; }
-      .pan-page .pan-account-switch { width:36px; height:21px; flex:0 0 36px; border:0; border-radius:999px; background:#d7d8e4; }
+      .pan-page .pan-account-switch { width:36px; height:21px; flex:0 0 36px; border:0; border-radius:999px; background:#d7d8e4; transition:background-color .2s ease; }
       .pan-page .pan-account-switch.on { background:#3fa979; }
-      .pan-page .pan-account-switch span { top:3px; left:3px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #0002; }
+      .pan-page .pan-account-switch span { top:3px; left:3px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #0002; transition:transform .2s cubic-bezier(.2,.8,.2,1); }
       .pan-page .pan-account-switch.on span { transform:translateX(15px); }
       .pan-page .pan-account-switch:hover:not(:disabled) { background:#c3c5d3; }
       .pan-page .pan-account-switch.on:hover:not(:disabled) { background:#358f67; }
