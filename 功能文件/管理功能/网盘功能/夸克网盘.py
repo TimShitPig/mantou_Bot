@@ -517,7 +517,6 @@ class 夸克网盘客户端:
                 "task_id": 上传参数.get("task_id"),
                 "auth_info": 上传参数.get("auth_info"),
                 "auth_meta": 鉴权元数据,
-                "callback_meta": 上传参数.get("callback"),
             },
         )
         if not 接口成功(数据):
