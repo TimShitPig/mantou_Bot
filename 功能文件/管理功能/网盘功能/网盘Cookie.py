@@ -170,6 +170,8 @@ class 夸克扫码登录客户端:
                     if not self.手机号:
                         self.手机号 = await self._使用票据获取手机号(票据)
                     Cookie = await self._使用票据获取Cookie(票据)
+                    if not self.手机号:
+                        self.手机号 = await self._使用票据获取手机号(票据)
                     return Cookie
                 raise 夸克扫码登录异常("poll", "missing_service_ticket")
             if interval > 0:
@@ -205,6 +207,7 @@ class 夸克扫码登录客户端:
                     "mobile_phone",
                     "mobilephone",
                     "phonenum",
+                    "security_mobile",
                     "mobile_number",
                 },
             )
@@ -339,6 +342,7 @@ class 夸克扫码登录客户端:
                         "mobile_phone",
                         "mobilephone",
                         "phonenum",
+                        "security_mobile",
                         "mobile_num",
                         "mobile_number",
                         "masked_mobile",
@@ -796,6 +800,8 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
             "mobile_phone",
             "mobilephone",
             "phonenum",
+            "security_mobile",
+            "mobile_number",
             "mobile_num",
             "masked_mobile",
             "masked_phone",
