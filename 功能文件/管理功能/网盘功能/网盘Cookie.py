@@ -1682,6 +1682,7 @@ async def _刷新夸克账号资料(
     async def 刷新单个账号(记录: dict[str, Any]) -> bool:
         if not 强制 and (
             记录.get("name")
+            and _脱敏手机号(记录.get("phone"))
             and 记录.get("avatar_url")
             and 记录.get("membership")
             and 记录.get("space_used_bytes") is not None

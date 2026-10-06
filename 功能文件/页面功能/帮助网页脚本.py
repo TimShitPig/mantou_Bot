@@ -619,10 +619,15 @@
          if (quarkProfileAutoloadStarted || !snapshot) return;
          const quark = snapshot.pans?.items?.find((item) => item.key === '夸克');
          const accounts = Array.isArray(quark?.account_summary) ? quark.account_summary : [];
-         if (!accounts.some((account) => !account?.avatar_url || !account?.name || account.name === '未命名账号' || !account?.membership || account.space_used_bytes == null || account.space_total_bytes == null)) return;
+         const missingPhone = accounts.some((account) => {
+           const phone = String(account?.phone || '').trim();
+           return !phone || phone === '未获取' || phone === '手机号未获取';
+         });
+         const missingProfile = accounts.some((account) => !account?.avatar_url || !account?.name || account.name === '未命名账号' || !account?.membership || account.space_used_bytes == null || account.space_total_bytes == null);
+         if (!missingPhone && !missingProfile) return;
          quarkProfileAutoloadStarted = true;
          try {
-           await api('pan-accounts/夸克');
+           await api(`pan-accounts/夸克${missingPhone ? '?refresh=1' : ''}`);
            await load();
          } catch (_) {}
        };
