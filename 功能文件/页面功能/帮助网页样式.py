@@ -430,11 +430,8 @@
       .pan-page .pan-card:hover { transform:none; box-shadow:none; }
       .pan-page .pan-card[hidden] { display:none !important; }
       .pan-card-content { min-width:0; }
-      .pan-account-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px 16px; padding:12px 0; }
+      .pan-account-toolbar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px 16px; padding:12px 0; }
       .pan-account-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; gap:15px; }
-      .pan-default-control { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; font-weight:650; white-space:nowrap; }
-      .pan-default-control select { min-width:150px; min-height:35px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); font:inherit; }
-      .pan-default-control select:disabled { cursor:not-allowed; opacity:.6; }
       .pan-platform-switch { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; white-space:nowrap; }
       .pan-page .pan-enable-switch { transform:none; transform-origin:center; }
       .pan-page .pan-add-account { min-height:35px; padding:0 12px; }
@@ -459,8 +456,8 @@
       .pan-object-copy { display:grid; align-content:start; gap:5px; min-width:0; flex:1; }
       .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:10px; white-space:normal; }
-      .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; overflow:visible; color:var(--soft); font-size:10px; font-weight:600; line-height:1.35; white-space:normal; }
-      .pan-account-meta > span { min-width:0; overflow-wrap:anywhere; }
+      .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:minmax(0,1fr); gap:3px; overflow:visible; color:var(--soft); font-size:10px; font-weight:600; line-height:1.35; white-space:normal; }
+      .pan-account-meta > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
       .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
       .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 1px 0; border-top:1px solid var(--line); }
@@ -554,7 +551,6 @@
         .pan-detail-heading { min-width:calc(100% - 130px); }
         .pan-object-detail-head > .pan-platform-switch { margin-left:auto; }
         .pan-object-copy small { max-width:none; }
-        .pan-object-copy .pan-account-meta { grid-template-columns:1fr; gap:3px; }
       }
 
       /* ===== 可选深色模式 ===== */
@@ -603,7 +599,6 @@
       :root[data-theme="dark"] .pan-account-avatar { background:#20392d; color:#8bc9a5; }
       :root[data-theme="dark"] .pan-security-note { border-left-color:#5c6990; background:#1a2030; }
       :root[data-theme="dark"] .pan-object-card:hover { border-color:#555d80; background:#202435; }
-      :root[data-theme="dark"] .pan-default-control select { border-color:#333a55; background:var(--panel); color:var(--ink); }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#1a1d29; }
       :root[data-theme="dark"] .pan-object-empty { border-color:#333a55; background:transparent; }
       :root[data-theme="dark"] .pan-object-account-detail,:root[data-theme="dark"] .pan-object-detail { border-color:#2c3044; }
