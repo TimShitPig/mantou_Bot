@@ -25,6 +25,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 import zlib
+import zipfile
 from pathlib import Path
 from typing import (
     Any,
@@ -2831,98 +2832,14 @@ def strip_epu_trailer(data: bytes) -> bytes:
     return data[: eocd + 22 + comment_len]
 
 
-_CRCTAB = []
-for _i in range(256):
-    _c = _i
-    for _ in range(8):
-        _c = (_c >> 1) ^ 0xEDB88320 if (_c & 1) else (_c >> 1)
-    _CRCTAB.append(_c)
-
-
-def _crc32_byte(crc: int, b: int) -> int:
-    return (_CRCTAB[(crc ^ (b & 0xFF)) & 0xFF] ^ (crc >> 8)) & 0xFFFFFFFF
-
-
-class ZipCrypto:
-    def __init__(self, pwd: bytes):
-        self.k = [305419896, 591751049, 878082192]
-        for x in pwd:
-            self.update(x)
-
-    def update(self, b: int) -> None:
-        self.k[0] = _crc32_byte(self.k[0], b)
-        self.k[1] = (self.k[1] + (self.k[0] & 0xFF)) & 0xFFFFFFFF
-        self.k[1] = (self.k[1] * 134775813 + 1) & 0xFFFFFFFF
-        self.k[2] = _crc32_byte(self.k[2], (self.k[1] >> 24) & 0xFF)
-
-    def dec_byte(self) -> int:
-        t = (self.k[2] | 2) & 0xFFFFFFFF
-        return ((t * (t ^ 1)) >> 8) & 0xFF
-
-    def decrypt(self, data: bytes) -> bytes:
-        out = bytearray(len(data))
-        for i, c in enumerate(data):
-            p = c ^ self.dec_byte()
-            self.update(p)
-            out[i] = p
-        return bytes(out)
-
-
-def _查找下一个ZIP标记(data: bytes, start: int) -> int:
-    positions = [
-        data.find(signature, start)
-        for signature in (b"PK\x03\x04", b"PK\x01\x02", b"PK\x05\x06")
-    ]
-    valid = [position for position in positions if position >= 0]
-    return min(valid) if valid else -1
-
-
-def extract_zip_entries_manual(zdata: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
-    out: list[tuple[str, bytes]] = []
-    pos = 0
-    while pos + 30 <= len(zdata):
-        sig = struct.unpack_from("<I", zdata, pos)[0]
-        if sig in (0x02014B50, 0x06054B50):
-            break
-        if sig != 0x04034B50:
-            break
-        _ver, flag, method, _t, _d, _crc, csize, _usize, nlen, xlen = (
-            struct.unpack_from("<HHHHHIIIHH", zdata, pos + 4)
-        )
-        name = zdata[pos + 30 : pos + 30 + nlen]
-        data_off = pos + 30 + nlen + xlen
-        if data_off > len(zdata):
-            break
-        data_end = data_off + csize
-        if csize == 0 or data_end > len(zdata):
-            next_pos = _查找下一个ZIP标记(zdata, data_off)
-            if next_pos < data_off:
-                break
-            data_end = next_pos
-        payload = zdata[data_off:data_end]
-        pos = data_end
-        if csize and flag & 0x8:
-            if zdata[pos : pos + 4] == b"PK\x07\x08":
-                pos += 16
-            elif pos + 12 <= len(zdata):
-                pos += 12
-        name_s = name.decode("utf-8", "replace")
-        if flag & 1:
-            if len(payload) < 12:
-                raise ValueError(f"encrypted entry too short: {name_s}")
-            body = ZipCrypto(pwd).decrypt(payload)[12:]
-        else:
-            body = payload
-        if method == 0:
-            plain = body
-        elif method == 8:
-            plain = zlib.decompress(body, -15)
-        else:
-            raise ValueError(f"unsupported method {method}")
-        out.append((name_s, plain))
-    if not out:
-        raise ValueError("no local zip entries")
-    return out
+def extract_zip_entries(zdata: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
+    with zipfile.ZipFile(io.BytesIO(zdata)) as archive:
+        archive.setpassword(pwd)
+        return [
+            (entry.filename, archive.read(entry))
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        ]
 
 
 def extract_eqct(eqct: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
@@ -2935,7 +2852,7 @@ def extract_eqct(eqct: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
     if start < 0:
         raise ValueError(f"TEA head decrypt failed head={decrypted[:8].hex()}")
     zdata = strip_epu_trailer(decrypted[start:])
-    return extract_zip_entries_manual(zdata, pwd)
+    return extract_zip_entries(zdata, pwd)
 
 
 def xhtml_to_text(data: bytes) -> str:
@@ -4107,6 +4024,32 @@ def 解析参考出版书章节(package: bytes, password: bytes) -> str:
     return text
 
 
+def _出版书章节失败分类(exc: Exception) -> str:
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return f"http_{exc.status}"
+    if isinstance(exc, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(exc, aiohttp.ClientError):
+        return "network_error"
+    if isinstance(exc, zipfile.BadZipFile):
+        return "bad_zip"
+    if isinstance(exc, zlib.error):
+        return "deflate_error"
+    if isinstance(exc, NotImplementedError):
+        return "unsupported_compression"
+    if isinstance(exc, RuntimeError):
+        if str(exc) == "出版书资源解包为空":
+            return "empty_archive"
+        if str(exc) == "出版书正文为空":
+            return "empty_text"
+        if "password" in str(exc).lower():
+            return "zip_password_error"
+        return "runtime_error"
+    if isinstance(exc, (ValueError, struct.error, EOFError)):
+        return "invalid_container"
+    return type(exc).__name__
+
+
 async def 下载参考出版书正文(
     book_id: str,
     catalog: list[dict[str, Any]],
@@ -4150,15 +4093,10 @@ async def 下载参考出版书正文(
                 return index, text
             except Exception as exc:
                 if attempt >= 3:
-                    if isinstance(exc, aiohttp.ClientResponseError):
-                        failure_types[index] = f"http_{exc.status}"
-                    elif isinstance(exc, asyncio.TimeoutError):
-                        failure_types[index] = "timeout"
-                    else:
-                        failure_types[index] = type(exc).__name__
+                    failure_types[index] = _出版书章节失败分类(exc)
                     logger.debug(
                         f"QQ阅读出版书章节请求失败：书籍编号={book_id}, 序号={index + 1}, "
-                        f"分类={failure_types[index]}"
+                        f"尝试次数={attempt}, 分类={failure_types[index]}"
                     )
                     break
                 await asyncio.sleep(0.3 * attempt)
