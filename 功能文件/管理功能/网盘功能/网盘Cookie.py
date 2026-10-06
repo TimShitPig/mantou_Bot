@@ -55,7 +55,6 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
 夸克账号资料地址 = "https://pan.quark.cn/account/info"
-夸克账号手机号地址 = "https://pan.quark.cn/account/mobileinfo"
 夸克账号权益地址 = "https://drive-pc.quark.cn/1/clouddrive/member"
 夸克扫码刷新Cookie地址 = "https://drive-pc.quark.cn/1/clouddrive/auth/pc/flush"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
@@ -93,7 +92,6 @@ class 夸克扫码登录异常(RuntimeError):
 class 夸克扫码登录客户端:
     def __init__(self, session: Any = None):
         self.session = session
-        self.手机号 = ""
 
     def _获取会话(self) -> Any:
         if self.session is None:
@@ -167,11 +165,7 @@ class 夸克扫码登录客户端:
                     )
                 ).strip()
                 if 票据:
-                    if not self.手机号:
-                        self.手机号 = await self._使用票据获取手机号(票据)
                     Cookie = await self._使用票据获取Cookie(票据)
-                    if not self.手机号:
-                        self.手机号 = await self._使用票据获取手机号(票据)
                     return Cookie
                 raise 夸克扫码登录异常("poll", "missing_service_ticket")
             if interval > 0:
@@ -196,30 +190,6 @@ class 夸克扫码登录客户端:
         if 响应.status != 200 or not isinstance(数据, dict) or not 数据.get("success"):
             状态 = 数据.get("code") if isinstance(数据, dict) else ""
             raise 夸克扫码登录异常("auth", 状态 or 响应.status)
-        self.手机号 = _脱敏手机号(
-            _递归查找账号资料字段(
-                数据.get("data"),
-                {
-                    "mobile",
-                    "phone",
-                    "phone_number",
-                    "phone_num",
-                    "phone_no",
-                    "mobile_phone",
-                    "mobilephone",
-                    "mobile_no",
-                    "phonenum",
-                    "tel",
-                    "telephone",
-                    "cellphone",
-                    "cell_phone",
-                    "bind_mobile",
-                    "bind_phone",
-                    "security_mobile",
-                    "mobile_number",
-                },
-            )
-        ) or self.手机号
         Cookie字段: dict[str, str] = {}
 
         def 收集响应Cookie(响应链: Any) -> None:
@@ -318,80 +288,6 @@ class 夸克扫码登录客户端:
             )
             raise 夸克扫码登录异常("cookie", "missing_required_fields")
         return 解析结果[1]
-
-    async def _使用票据获取手机号(self, 票据: str) -> str:
-        try:
-            async with self._获取会话().get(
-                夸克账号手机号地址,
-                params={"st": 票据},
-            ) as 响应:
-                数据 = await 响应.json(content_type=None)
-            if (
-                响应.status != 200
-                or not isinstance(数据, dict)
-                or not 数据.get("success")
-            ):
-                if isinstance(数据, dict):
-                    业务码 = re.sub(
-                        r"[^A-Za-z0-9_.-]",
-                        "",
-                        str(数据.get("code") or 数据.get("status") or "unknown"),
-                    )[:40]
-                else:
-                    业务码 = "invalid_response"
-                logger.warning(
-                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=%s",
-                    getattr(响应, "status", "unknown"),
-                    业务码,
-                )
-                return ""
-            资料 = 数据.get("data")
-            手机号字段 = {
-                "mobile",
-                "phone",
-                "phone_number",
-                "phone_num",
-                "phone_no",
-                "mobile_phone",
-                "mobilephone",
-                "mobile_no",
-                "phonenum",
-                "tel",
-                "telephone",
-                "cellphone",
-                "cell_phone",
-                "bind_mobile",
-                "bind_phone",
-                "security_mobile",
-                "mobile_num",
-                "mobile_number",
-                "masked_mobile",
-                "masked_phone",
-                "mobile_mask",
-                "phone_mask",
-            }
-            手机号 = (
-                资料
-                if isinstance(资料, (str, int))
-                else _递归查找账号资料字段(资料, 手机号字段)
-            )
-            手机号 = _脱敏手机号(手机号) or _脱敏手机号(
-                _递归查找账号资料字段(数据, 手机号字段)
-            )
-            if not 手机号:
-                字段列表 = _收集账号资料结构路径(数据)
-                logger.warning(
-                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=phone_field_missing, paths=%s",
-                    getattr(响应, "status", "unknown"),
-                    ",".join(字段列表[:20]) or "none",
-                )
-            return 手机号
-        except Exception as 异常:
-            logger.warning(
-                "夸克扫码手机号读取失败：stage=mobileinfo, error=%s",
-                type(异常).__name__,
-            )
-            return ""
 
     async def 关闭(self) -> None:
         if self.session is not None:
@@ -750,19 +646,6 @@ def _清理夸克头像地址(值: Any) -> str:
     return f"https://image.quark.cn/o/uop/g/uop/avatar/{安全标识};100;3,100"
 
 
-def _脱敏手机号(值: Any) -> str:
-    """只保留可展示的脱敏手机号，绝不把完整号码写入运行状态。"""
-    文本 = str(值 or "").strip()
-    if not 文本:
-        return ""
-    数字 = re.sub(r"\D", "", 文本)
-    if len(数字) >= 7:
-        return f"{数字[:3]}****{数字[-4:]}"
-    if "*" in 文本 and len(文本) <= 32:
-        return 文本
-    return ""
-
-
 def _递归查找账号资料字段(对象: Any, 字段名集合: set[str]) -> str:
     return _递归查找账号资料字段内部(对象, 字段名集合, 0)
 
@@ -816,60 +699,6 @@ def _递归查找账号资料字段内部(
     return ""
 
 
-def _收集账号资料结构路径(
-    对象: Any,
-    前缀: str = "$",
-    深度: int = 0,
-    已收集: list[str] | None = None,
-) -> list[str]:
-    if 已收集 is None:
-        已收集 = []
-    if 深度 > 6 or len(已收集) >= 60:
-        return 已收集
-    if isinstance(对象, str):
-        解析值 = _解析账号资料JSON字符串(对象)
-        if isinstance(解析值, (dict, list, str)) and 解析值 != 对象:
-            return _收集账号资料结构路径(
-                解析值,
-                前缀,
-                深度 + 1,
-                已收集,
-            )
-        return 已收集
-    if isinstance(对象, dict):
-        for 键, 值 in 对象.items():
-            安全键 = re.sub(r"[^A-Za-z0-9_.-]", "_", str(键))[:48]
-            if not 安全键:
-                continue
-            路径 = f"{前缀}.{安全键}"
-            if isinstance(值, (dict, list, tuple)):
-                类型 = "object" if isinstance(值, dict) else "array"
-            else:
-                类型 = "string" if isinstance(值, str) else type(值).__name__
-            已收集.append(f"{路径}:{类型}")
-            if len(已收集) >= 60:
-                break
-            _收集账号资料结构路径(
-                值,
-                路径,
-                深度 + 1,
-                已收集,
-            )
-            if len(已收集) >= 60:
-                break
-    elif isinstance(对象, (list, tuple)):
-        for 索引, 值 in enumerate(对象[:5]):
-            _收集账号资料结构路径(
-                值,
-                f"{前缀}[{索引}]",
-                深度 + 1,
-                已收集,
-            )
-            if len(已收集) >= 60:
-                break
-    return 已收集
-
-
 def _夸克接口请求成功(响应数据: Any) -> bool:
     if not isinstance(响应数据, dict):
         return False
@@ -890,9 +719,9 @@ def _夸克接口请求成功(响应数据: Any) -> bool:
     return 业务成功 or 状态成功 or 明确成功
 
 
-def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
+def _解析夸克账号资料(响应数据: Any) -> tuple[str, str]:
     if not _夸克接口请求成功(响应数据):
-        return "", "", ""
+        return "", ""
     数据 = 响应数据.get("data")
     名称 = _递归查找账号资料字段(
         数据,
@@ -905,31 +734,6 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
             "display_name",
             "account_name",
             "uname",
-        },
-    )
-    手机号 = _递归查找账号资料字段(
-        数据,
-        {
-            "mobile",
-            "phone",
-            "phone_number",
-            "phone_num",
-            "phone_no",
-            "mobile_phone",
-            "mobilephone",
-            "mobile_no",
-            "phonenum",
-            "tel",
-            "telephone",
-            "cellphone",
-            "cell_phone",
-            "bind_mobile",
-            "bind_phone",
-            "security_mobile",
-            "mobile_number",
-            "mobile_num",
-            "masked_mobile",
-            "masked_phone",
         },
     )
     头像地址 = _递归查找账号资料字段(
@@ -952,7 +756,6 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
     )
     return (
         _清理账号资料文本(名称),
-        _脱敏手机号(手机号),
         _清理夸克头像地址(头像地址),
     )
 
@@ -1037,9 +840,6 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             "name": _清理账号资料文本(
                 元数据.get("name") or 元数据.get("nickname")
             ),
-            "phone": _脱敏手机号(
-                元数据.get("phone") or 元数据.get("mobile")
-            ),
             "avatar_url": (
                 _清理夸克头像地址(
                     元数据.get("avatar_url") or 元数据.get("avatarUrl")
@@ -1073,7 +873,7 @@ def _解析保存的网盘账号记录(原始值: Any, 平台: str) -> list[dict
             结果.append(记录)
         else:
             已有记录 = 结果[已有位置]
-            for 字段 in ("name", "phone", "avatar_url", "membership"):
+            for 字段 in ("name", "avatar_url", "membership"):
                 if 记录[字段]:
                     已有记录[字段] = 记录[字段]
             for 字段 in ("space_used_bytes", "space_total_bytes"):
@@ -1112,7 +912,6 @@ def _合并配置网盘账号记录(
                 "cookie": 配置Cookie,
                 "identity": 配置身份,
                 "name": "",
-                "phone": "",
                 "avatar_url": "",
                 "membership": "",
                 "space_used_bytes": None,
@@ -1126,6 +925,17 @@ def _合并配置网盘账号记录(
 
 def _读取保存的网盘账号记录(配置: Any, 平台: str) -> list[dict[str, Any]]:
     原始值 = 读取运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], "")
+    if 平台 == "夸克" and _夸克账号状态包含手机号字段(原始值):
+        if _迁移夸克账号手机号字段(配置):
+            try:
+                原始值 = 读取运行状态值(
+                    配置, 网盘Cookie命名空间, 平台状态键[平台], ""
+                )
+            except Exception as 异常:
+                logger.warning(
+                    "夸克账号手机号清理后重读失败：error=%s",
+                    type(异常).__name__,
+                )
     return _合并配置网盘账号记录(
         配置, 平台, _解析保存的网盘账号记录(原始值, 平台)
     )
@@ -1152,7 +962,6 @@ def _写入网盘账号记录(
             原记录.get("identity") or _获取网盘Cookie身份键(平台, Cookie)
         )
         名称 = _清理账号资料文本(原记录.get("name") or 原记录.get("nickname"))
-        手机号 = _脱敏手机号(原记录.get("phone") or 原记录.get("mobile"))
         权益 = _清理账号资料文本(原记录.get("membership"), 64)
         已用空间 = _安全解析网盘空间值(原记录.get("space_used_bytes"))
         总空间 = _安全解析网盘空间值(原记录.get("space_total_bytes"))
@@ -1171,8 +980,6 @@ def _写入网盘账号记录(
             记录["identity"] = 身份
         if 名称:
             记录["name"] = 名称
-        if 手机号:
-            记录["phone"] = 手机号
         if 权益:
             记录["membership"] = 权益
         if 已用空间 is not None:
@@ -1194,6 +1001,68 @@ def _写入网盘账号记录(
         separators=(",", ":"),
     )
     写入运行状态值(配置, 网盘Cookie命名空间, 平台状态键[平台], payload)
+
+
+def _夸克账号状态包含手机号字段(原始值: Any) -> bool:
+    try:
+        数据 = json.loads(str(原始值 or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if isinstance(数据, dict):
+        账号列表 = 数据.get("accounts")
+    elif isinstance(数据, list):
+        账号列表 = 数据
+    else:
+        return False
+    if not isinstance(账号列表, list):
+        return False
+    手机号字段 = {
+        "phone",
+        "mobile",
+        "phonenumber",
+        "phonenum",
+        "phoneno",
+        "mobilephone",
+        "mobilenum",
+        "mobileno",
+        "maskedphone",
+        "maskedmobile",
+        "phonemask",
+        "mobilemask",
+        "securitymobile",
+        "bindmobile",
+        "bindphone",
+        "cellphone",
+    }
+    return any(
+        re.sub(r"[^a-z]", "", str(字段).lower()) in 手机号字段
+        for 账号 in 账号列表
+        if isinstance(账号, dict)
+        for 字段 in 账号
+    )
+
+
+def _迁移夸克账号手机号字段(配置: Any) -> bool:
+    if not 已配置运行状态数据库(配置):
+        return False
+    try:
+        with 网盘账号写入锁:
+            原始值 = 读取运行状态值(
+                配置, 网盘Cookie命名空间, 平台状态键["夸克"], ""
+            )
+            if not _夸克账号状态包含手机号字段(原始值):
+                return False
+            账号记录 = _解析保存的网盘账号记录(原始值, "夸克")
+            if not 账号记录:
+                return False
+            _写入网盘账号记录(配置, "夸克", 账号记录)
+        return True
+    except Exception as 异常:
+        logger.warning(
+            "夸克账号旧手机号字段清理失败：error=%s",
+            type(异常).__name__,
+        )
+        return False
 
 
 def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str]) -> None:
@@ -1219,7 +1088,6 @@ def _写入网盘账号列表(配置: Any, 平台: str, 账号列表: list[str])
                 "cookie": Cookie,
                 "identity": 身份 or 原记录.get("identity", ""),
                 "name": 原记录.get("name", ""),
-                "phone": 原记录.get("phone", ""),
                 "avatar_url": 原记录.get("avatar_url", ""),
                 "membership": 原记录.get("membership", ""),
                 "space_used_bytes": 原记录.get("space_used_bytes"),
@@ -1260,7 +1128,6 @@ def _保存网盘Cookie(
     Cookie: str,
     *,
     名称: Any = "",
-    手机号: Any = "",
     头像地址: Any = "",
     账号权益: Any = "",
     已用空间: Any = None,
@@ -1271,7 +1138,6 @@ def _保存网盘Cookie(
     规范平台 = _规范化平台名称(平台)
     新身份键 = _获取网盘Cookie身份键(规范平台, Cookie)
     新名称 = _清理账号资料文本(名称)
-    新手机号 = _脱敏手机号(手机号)
     新头像地址 = (
         _清理夸克头像地址(头像地址) if 规范平台 == "夸克" else ""
     )
@@ -1293,7 +1159,6 @@ def _保存网盘Cookie(
                         "cookie": 配置结果[1],
                         "identity": _获取网盘Cookie身份键(规范平台, 配置结果[1]),
                         "name": "",
-                        "phone": "",
                         "avatar_url": "",
                         "membership": "",
                         "space_used_bytes": None,
@@ -1315,8 +1180,6 @@ def _保存网盘Cookie(
                 已保存记录["identity"] = 新身份键
                 if 新名称:
                     已保存记录["name"] = 新名称
-                if 新手机号:
-                    已保存记录["phone"] = 新手机号
                 if 新头像地址:
                     已保存记录["avatar_url"] = 新头像地址
                 if 新账号权益:
@@ -1340,8 +1203,6 @@ def _保存网盘Cookie(
         if 已有位置 is not None:
             if 新名称:
                 账号记录[已有位置]["name"] = 新名称
-            if 新手机号:
-                账号记录[已有位置]["phone"] = 新手机号
             if 新头像地址:
                 账号记录[已有位置]["avatar_url"] = 新头像地址
             if 新账号权益:
@@ -1359,7 +1220,6 @@ def _保存网盘Cookie(
                 "cookie": Cookie,
                 "identity": 新身份键,
                 "name": 新名称,
-                "phone": 新手机号,
                 "avatar_url": 新头像地址,
                 "membership": 新账号权益,
                 "space_used_bytes": 新已用空间,
@@ -1697,7 +1557,6 @@ def _网盘账号摘要(账号记录: list[dict[str, Any]]) -> list[dict[str, An
             {
                 "index": 序号,
                 "name": _清理账号资料文本(记录.get("name")) or "未命名账号",
-                "phone": _脱敏手机号(记录.get("phone")) or "未获取",
                 "avatar_url": _清理夸克头像地址(记录.get("avatar_url"))
                 if 记录.get("avatar_url")
                 else "",
@@ -1734,6 +1593,8 @@ def 获取网盘账号摘要批量(
             logger.warning(
                 "网盘账号批量读取失败：error=%s", type(异常).__name__
             )
+    if _夸克账号状态包含手机号字段(状态字典.get(平台状态键["夸克"], "")):
+        _迁移夸克账号手机号字段(配置)
     结果: dict[str, list[dict[str, Any]]] = {}
     for 平台 in 规范平台列表:
         账号记录 = _解析保存的网盘账号记录(
@@ -1762,7 +1623,6 @@ def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
 async def _获取夸克账号资料(Cookie: str) -> dict[str, Any]:
     空资料: dict[str, Any] = {
         "name": "",
-        "phone": "",
         "avatar_url": "",
         "membership": "",
         "space_used_bytes": None,
@@ -1824,11 +1684,10 @@ async def _获取夸克账号资料(Cookie: str) -> dict[str, Any]:
                     "membership",
                 ),
             )
-        名称, 手机号, 头像地址 = _解析夸克账号资料(资料响应)
+        名称, 头像地址 = _解析夸克账号资料(资料响应)
         权益, 已用空间, 总空间 = _解析夸克账号权益(权益响应)
         return {
             "name": 名称,
-            "phone": 手机号,
             "avatar_url": 头像地址,
             "membership": 权益,
             "space_used_bytes": 已用空间,
@@ -1845,7 +1704,6 @@ async def _获取夸克账号资料(Cookie: str) -> dict[str, Any]:
 def _夸克账号资料保存参数(资料: dict[str, Any]) -> dict[str, Any]:
     return {
         "名称": 资料.get("name"),
-        "手机号": 资料.get("phone"),
         "头像地址": 资料.get("avatar_url"),
         "账号权益": 资料.get("membership"),
         "已用空间": 资料.get("space_used_bytes"),
@@ -1866,7 +1724,6 @@ async def _刷新夸克账号资料(
                     "cookie": 配置Cookie,
                     "identity": 配置身份,
                     "name": "",
-                    "phone": "",
                     "avatar_url": "",
                     "membership": "",
                     "space_used_bytes": None,
@@ -1881,7 +1738,6 @@ async def _刷新夸克账号资料(
     async def 刷新单个账号(记录: dict[str, Any]) -> bool:
         if not 强制 and (
             记录.get("name")
-            and _脱敏手机号(记录.get("phone"))
             and 记录.get("avatar_url")
             and 记录.get("membership")
             and 记录.get("space_used_bytes") is not None
@@ -1899,7 +1755,7 @@ async def _刷新夸克账号资料(
                 str(记录.get("cookie") or "")
             )
         已变更 = False
-        for 字段 in ("name", "phone", "avatar_url", "membership"):
+        for 字段 in ("name", "avatar_url", "membership"):
             值 = 账号资料.get(字段)
             if 值 and 值 != 记录.get(字段):
                 记录[字段] = 值
@@ -1932,11 +1788,10 @@ def _格式化夸克账号列表(
     行列表 = [f"夸克账号共{len(账号记录)}个"]
     for index, 记录 in enumerate(账号记录, start=1):
         名称 = 记录.get("name") or "未获取"
-        手机号 = 记录.get("phone") or "未获取"
         当前标记 = "（当前）" if index == 当前序号 else ""
         状态标记 = "" if 记录.get("enabled", True) else "（已停用）"
         行列表.append(
-            f"账号{index}：名称={名称}，手机号={手机号}{状态标记}{当前标记}"
+            f"账号{index}：名称={名称}{状态标记}{当前标记}"
         )
     return "\n".join(行列表)
 
@@ -2218,7 +2073,6 @@ async def _等待夸克扫码并保存(
     try:
         Cookie = await 客户端.等待登录并获取Cookie(Token, timeout=300, interval=2)
         账号资料 = await _获取夸克账号资料(Cookie)
-        账号资料["phone"] = 账号资料.get("phone") or 客户端.手机号
         账号序号 = await asyncio.to_thread(
             _保存网盘Cookie,
             配置,

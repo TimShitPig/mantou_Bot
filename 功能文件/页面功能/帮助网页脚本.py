@@ -193,8 +193,6 @@
            const index = Number(account?.index) > 0 ? Number(account.index) : position + 1;
            const profileName = account?.name && account.name !== '未命名账号' ? account.name : '';
            const name = profileName || `账号${index}`;
-           const phoneValue = String(account?.phone || '').trim();
-           const phone = phoneValue && phoneValue !== '未获取' ? phoneValue : '手机号未获取';
            const enabled = account?.enabled !== false;
            const isDefault = index === Number(item.default_account || item.selected_account || 0);
            const avatar = item.key === '夸克'
@@ -203,7 +201,7 @@
            const accountMetadata = item.key === '夸克'
              ? panAccountMetaHtml(account)
              : '';
-           return `<article class="pan-object-card pan-account-object ${enabled ? '' : 'is-disabled'}"><button class="pan-object-open pan-account-object-main" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="account" data-index="${esc(index)}" aria-label="打开${esc(item.name)}账号${esc(index)}">${avatar}<span class="pan-object-copy"><strong>${esc(name)}</strong><small>账号${esc(index)} · ${esc(phone)}</small>${accountMetadata}</span><span class="pan-object-arrow" aria-hidden="true">›</span></button><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button></div></article>`;
+           return `<article class="pan-object-card pan-account-object ${enabled ? '' : 'is-disabled'}"><button class="pan-object-open pan-account-object-main" type="button" data-pan-object-open="${esc(item.key)}" data-pan-object-type="account" data-index="${esc(index)}" aria-label="打开${esc(item.name)}账号${esc(index)}">${avatar}<span class="pan-object-copy"><strong>${esc(name)}</strong><small>账号${esc(index)}</small>${accountMetadata}</span><span class="pan-object-arrow" aria-hidden="true">›</span></button><div class="pan-account-card-actions"><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${editable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button></div></article>`;
          }).join('');
        };
        const panAccountAvatarHtml = (account, index, name) => {
@@ -257,7 +255,7 @@
              ? panAccountAvatarHtml(account, index, profileName)
              : `<div class="pan-account-order">${String(index).padStart(2, '0')}</div>`;
            const accountMetadata = item.key === '夸克' ? panAccountStatsHtml(account) : '';
-           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息 · 账号${esc(index)}</span><h3>${esc(profileName)}</h3><p>${esc(account.phone || '未获取')}</p>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
+           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息 · 账号${esc(index)}</span><h3>${esc(profileName)}</h3>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
          }
          if (type === 'add') {
            const isQuark = item.key === '夸克';
@@ -619,15 +617,11 @@
          if (quarkProfileAutoloadStarted || !snapshot) return;
          const quark = snapshot.pans?.items?.find((item) => item.key === '夸克');
          const accounts = Array.isArray(quark?.account_summary) ? quark.account_summary : [];
-         const missingPhone = accounts.some((account) => {
-           const phone = String(account?.phone || '').trim();
-           return !phone || phone === '未获取' || phone === '手机号未获取';
-         });
          const missingProfile = accounts.some((account) => !account?.avatar_url || !account?.name || account.name === '未命名账号' || !account?.membership || account.space_used_bytes == null || account.space_total_bytes == null);
-         if (!missingPhone && !missingProfile) return;
+         if (!missingProfile) return;
          quarkProfileAutoloadStarted = true;
          try {
-           await api(`pan-accounts/夸克${missingPhone ? '?refresh=1' : ''}`);
+           await api('pan-accounts/夸克?refresh=1');
            await load();
          } catch (_) {}
        };

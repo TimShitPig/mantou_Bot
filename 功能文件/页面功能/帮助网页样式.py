@@ -488,8 +488,6 @@
       .pan-object-account-copy { min-width:0; flex:1; max-width:700px; }
       .pan-object-account-copy > .pan-section-kicker { display:none; }
       .pan-object-account-copy h3 { margin:3px 0 4px; color:var(--ink); font-size:19px; line-height:1.35; }
-      .pan-object-account-copy p { margin:0; overflow:hidden; color:var(--muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-      .pan-object-account-copy p::before { content:"手机号"; margin-right:8px; color:var(--soft); font-weight:650; }
       .pan-object-account-detail > .tag { align-self:flex-start; margin-top:4px; padding:5px 10px; font-size:11px; }
       .pan-object-pane .pan-security-note { margin:12px 0 0; padding:0; border:0; background:transparent; color:var(--muted); font-size:10px; }
       .pan-account-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0; max-width:540px; margin-top:13px; padding-top:12px; border-top:1px solid var(--line); }
