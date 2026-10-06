@@ -197,9 +197,18 @@ class 夸克扫码登录客户端:
         self.手机号 = _脱敏手机号(
             _递归查找账号资料字段(
                 数据.get("data"),
-                {"mobile", "phone", "phone_number", "mobile_phone", "mobilephone"},
+                {
+                    "mobile",
+                    "phone",
+                    "phone_number",
+                    "phone_num",
+                    "mobile_phone",
+                    "mobilephone",
+                    "phonenum",
+                    "mobile_number",
+                },
             )
-        )
+        ) or self.手机号
         Cookie字段: dict[str, str] = {}
 
         def 收集响应Cookie(响应链: Any) -> None:
