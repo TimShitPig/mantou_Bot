@@ -55,6 +55,7 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 夸克扫码状态地址 = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 夸克扫码换取Cookie地址 = "https://pan.quark.cn/account/info"
 夸克账号资料地址 = "https://pan.quark.cn/account/info"
+夸克账号手机号地址 = "https://pan.quark.cn/account/mobileinfo"
 夸克账号权益地址 = "https://drive-pc.quark.cn/1/clouddrive/member"
 夸克扫码刷新Cookie地址 = "https://drive-pc.quark.cn/1/clouddrive/auth/pc/flush"
 夸克扫码任务: dict[str, asyncio.Task[Any]] = {}
@@ -92,6 +93,7 @@ class 夸克扫码登录异常(RuntimeError):
 class 夸克扫码登录客户端:
     def __init__(self, session: Any = None):
         self.session = session
+        self.手机号 = ""
 
     def _获取会话(self) -> Any:
         if self.session is None:
@@ -165,7 +167,10 @@ class 夸克扫码登录客户端:
                     )
                 ).strip()
                 if 票据:
-                    return await self._使用票据获取Cookie(票据)
+                    Cookie = await self._使用票据获取Cookie(票据)
+                    if not self.手机号:
+                        self.手机号 = await self._使用票据获取手机号(票据)
+                    return Cookie
                 raise 夸克扫码登录异常("poll", "missing_service_ticket")
             if interval > 0:
                 await asyncio.sleep(interval)
@@ -189,6 +194,12 @@ class 夸克扫码登录客户端:
         if 响应.status != 200 or not isinstance(数据, dict) or not 数据.get("success"):
             状态 = 数据.get("code") if isinstance(数据, dict) else ""
             raise 夸克扫码登录异常("auth", 状态 or 响应.status)
+        self.手机号 = _脱敏手机号(
+            _递归查找账号资料字段(
+                数据.get("data"),
+                {"mobile", "phone", "phone_number", "mobile_phone", "mobilephone"},
+            )
+        )
         Cookie字段: dict[str, str] = {}
 
         def 收集响应Cookie(响应链: Any) -> None:
@@ -287,6 +298,49 @@ class 夸克扫码登录客户端:
             )
             raise 夸克扫码登录异常("cookie", "missing_required_fields")
         return 解析结果[1]
+
+    async def _使用票据获取手机号(self, 票据: str) -> str:
+        try:
+            async with self._获取会话().get(
+                夸克账号手机号地址,
+                params={"st": 票据},
+            ) as 响应:
+                数据 = await 响应.json(content_type=None)
+            if (
+                响应.status != 200
+                or not isinstance(数据, dict)
+                or not 数据.get("success")
+            ):
+                logger.warning(
+                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, error=business_status",
+                    getattr(响应, "status", "unknown"),
+                )
+                return ""
+            资料 = 数据.get("data")
+            手机号 = (
+                资料
+                if isinstance(资料, (str, int))
+                else _递归查找账号资料字段(
+                    资料,
+                    {
+                        "mobile",
+                        "phone",
+                        "phone_number",
+                        "mobile_phone",
+                        "mobilephone",
+                        "mobile_num",
+                        "masked_mobile",
+                        "masked_phone",
+                    },
+                )
+            )
+            return _脱敏手机号(手机号)
+        except Exception as 异常:
+            logger.warning(
+                "夸克扫码手机号读取失败：stage=mobileinfo, error=%s",
+                type(异常).__name__,
+            )
+            return ""
 
     async def 关闭(self) -> None:
         if self.session is not None:
@@ -2019,6 +2073,7 @@ async def _等待夸克扫码并保存(
     try:
         Cookie = await 客户端.等待登录并获取Cookie(Token, timeout=300, interval=2)
         账号资料 = await _获取夸克账号资料(Cookie)
+        账号资料["phone"] = 账号资料.get("phone") or 客户端.手机号
         账号序号 = await asyncio.to_thread(
             _保存网盘Cookie,
             配置,

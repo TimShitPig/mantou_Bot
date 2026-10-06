@@ -2118,6 +2118,7 @@ async def _运行夸克网页扫码(scan_id: str) -> None:
         状态["status"] = "saving"
         状态["updated_at"] = time.time()
         账号资料 = await 网盘Cookie._获取夸克账号资料(Cookie)
+        账号资料["phone"] = 账号资料.get("phone") or 状态["client"].手机号
         资料保存参数 = 网盘Cookie._夸克账号资料保存参数(账号资料)
         序号 = await _控制台线程执行(
             网盘Cookie._保存网盘Cookie,
