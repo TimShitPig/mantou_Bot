@@ -2832,14 +2832,79 @@ def strip_epu_trailer(data: bytes) -> bytes:
     return data[: eocd + 22 + comment_len]
 
 
+_CRCTAB = []
+for _i in range(256):
+    _c = _i
+    for _ in range(8):
+        _c = (_c >> 1) ^ 0xEDB88320 if (_c & 1) else (_c >> 1)
+    _CRCTAB.append(_c)
+
+
+def _crc32_byte(crc: int, b: int) -> int:
+    return (_CRCTAB[(crc ^ (b & 0xFF)) & 0xFF] ^ (crc >> 8)) & 0xFFFFFFFF
+
+
+class ZipCrypto:
+    def __init__(self, pwd: bytes):
+        self.k = [305419896, 591751049, 878082192]
+        for value in pwd:
+            self.update(value)
+
+    def update(self, b: int) -> None:
+        self.k[0] = _crc32_byte(self.k[0], b)
+        self.k[1] = (self.k[1] + (self.k[0] & 0xFF)) & 0xFFFFFFFF
+        self.k[1] = (self.k[1] * 134775813 + 1) & 0xFFFFFFFF
+        self.k[2] = _crc32_byte(self.k[2], (self.k[1] >> 24) & 0xFF)
+
+    def dec_byte(self) -> int:
+        t = (self.k[2] | 2) & 0xFFFFFFFF
+        return ((t * (t ^ 1)) >> 8) & 0xFF
+
+    def decrypt(self, data: bytes) -> bytes:
+        out = bytearray(len(data))
+        for index, value in enumerate(data):
+            plain = value ^ self.dec_byte()
+            self.update(plain)
+            out[index] = plain
+        return bytes(out)
+
+
 def extract_zip_entries(zdata: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
     with zipfile.ZipFile(io.BytesIO(zdata)) as archive:
-        archive.setpassword(pwd)
-        return [
-            (entry.filename, archive.read(entry))
-            for entry in archive.infolist()
-            if not entry.is_dir()
-        ]
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            header_offset = entry.header_offset
+            if header_offset < 0 or header_offset + 30 > len(zdata):
+                raise zipfile.BadZipFile("invalid local header offset")
+            header = struct.unpack_from("<4s2B4HL2L2H", zdata, header_offset)
+            if header[0] != b"PK\x03\x04":
+                raise zipfile.BadZipFile("invalid local header signature")
+            data_offset = header_offset + 30 + header[10] + header[11]
+            data_end = data_offset + entry.compress_size
+            if data_end > len(zdata):
+                raise zipfile.BadZipFile("truncated ZIP entry")
+            payload = zdata[data_offset:data_end]
+            if entry.flag_bits & 1:
+                if not pwd:
+                    raise RuntimeError("ZIP password missing")
+                if len(payload) < 12:
+                    raise zipfile.BadZipFile("encrypted ZIP entry is too short")
+                # QQ阅读的加密头校验字节不总符合标准；校验解密后的 CRC。
+                payload = ZipCrypto(pwd).decrypt(payload)[12:]
+            if entry.compress_type == zipfile.ZIP_STORED:
+                plain = payload
+            elif entry.compress_type == zipfile.ZIP_DEFLATED:
+                plain = zlib.decompress(payload, -15)
+            else:
+                raise NotImplementedError("unsupported ZIP compression")
+            if len(plain) != entry.file_size:
+                raise zipfile.BadZipFile("ZIP entry size mismatch")
+            if zlib.crc32(plain) & 0xFFFFFFFF != entry.CRC:
+                raise zipfile.BadZipFile("ZIP entry CRC mismatch")
+            entries.append((entry.filename, plain))
+    return entries
 
 
 def extract_eqct(eqct: bytes, pwd: bytes) -> list[tuple[str, bytes]]:
@@ -4020,6 +4085,14 @@ def 解析参考出版书章节(package: bytes, password: bytes) -> str:
         raise RuntimeError("出版书资源解包为空")
     text = 合并参考出版书正文(files).strip()
     if not text:
+        图片扩展名 = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+        存在图片正文 = any(
+            name.lower().endswith((".xhtml", ".html", ".htm"))
+            and re.search(rb"<img\b[^>]*\bsrc\s*=", data, re.IGNORECASE)
+            for name, data in files
+        ) and any(name.lower().endswith(图片扩展名) for name, _ in files)
+        if 存在图片正文:
+            raise RuntimeError("出版书章节仅包含图片")
         raise RuntimeError("出版书正文为空")
     return text
 
@@ -4040,6 +4113,10 @@ def _出版书章节失败分类(exc: Exception) -> str:
     if isinstance(exc, RuntimeError):
         if str(exc) == "出版书资源解包为空":
             return "empty_archive"
+        if str(exc) == "出版书章节仅包含图片":
+            return "image_only"
+        if str(exc) == "出版书章节正文只有标题":
+            return "title_only"
         if str(exc) == "出版书正文为空":
             return "empty_text"
         if "password" in str(exc).lower():
@@ -4068,6 +4145,7 @@ async def 下载参考出版书正文(
     request_semaphore = asyncio.Semaphore(concurrency)
     decrypt_semaphore = asyncio.Semaphore(max(1, min(QQ阅读解密最大动态并发数, total)))
     failure_types: dict[int, str] = {}
+    skippable_failure_types = {"image_only", "title_only"}
     logger.info(
         f"QQ阅读章节进度：书籍编号={book_id}, 进度=0/{total}, 百分比=0%, "
         f"并发数={concurrency}"
@@ -4090,10 +4168,18 @@ async def 下载参考出版书正文(
                     text = await _异步QQ阅读CPU函数(
                         解析参考出版书章节, package, password
                     )
+                if not 去除章节正文重复标题(item.get("title"), text):
+                    raise RuntimeError("出版书章节正文只有标题")
                 return index, text
             except Exception as exc:
-                if attempt >= 3:
-                    failure_types[index] = _出版书章节失败分类(exc)
+                failure_type = _出版书章节失败分类(exc)
+                if attempt >= 3 or failure_type in {
+                    "empty_archive",
+                    "empty_text",
+                    "image_only",
+                    "title_only",
+                }:
+                    failure_types[index] = failure_type
                     logger.debug(
                         f"QQ阅读出版书章节请求失败：书籍编号={book_id}, 序号={index + 1}, "
                         f"尝试次数={attempt}, 分类={failure_types[index]}"
@@ -4112,6 +4198,11 @@ async def 下载参考出版书正文(
         if text:
             results[index] = text
         completed += 1
+        skipped = sum(
+            1
+            for failure_type in failure_types.values()
+            if failure_type in skippable_failure_types
+        )
         segment = (
             QQ阅读进度日志分段数
             if completed >= total
@@ -4123,31 +4214,51 @@ async def 下载参考出版书正文(
             percent = int(completed * 100 / max(1, total))
             logger.info(
                 f"QQ阅读章节进度：书籍编号={book_id}, 进度={completed}/{total}, "
-                f"百分比={percent}%, 成功={success}, 失败={completed - success}"
+                f"百分比={percent}%, 成功={success}, 跳过={skipped}, "
+                f"失败={max(0, completed - success - skipped)}"
             )
-    if len(results) != total:
-        missing_indices = [
-            index for index in range(total) if index not in results
-        ]
+    missing_indices = [index for index in range(total) if index not in results]
+    skipped_indices = [
+        index
+        for index in missing_indices
+        if failure_types.get(index) in skippable_failure_types
+    ]
+    failed_indices = [index for index in missing_indices if index not in skipped_indices]
+    if skipped_indices:
+        skipped_preview = ",".join(str(index + 1) for index in skipped_indices[:10])
+        if len(skipped_indices) > 10:
+            skipped_preview += ",..."
+        logger.info(
+            f"QQ阅读出版书无可读正文章节已跳过：书籍编号={book_id}, "
+            f"序号={skipped_preview}, 数量={len(skipped_indices)}"
+        )
+    if failed_indices:
         reason_counts: dict[str, int] = {}
-        for index in missing_indices:
+        for index in failed_indices:
             reason = failure_types.get(index, "unknown")
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
         missing_preview = ",".join(
-            str(index + 1) for index in missing_indices[:10]
+            str(index + 1) for index in failed_indices[:10]
         )
-        if len(missing_indices) > 10:
+        if len(failed_indices) > 10:
             missing_preview += ",..."
         reason_summary = ",".join(
             f"{reason}:{count}" for reason, count in sorted(reason_counts.items())
         )
         logger.warning(
             f"QQ阅读出版书正文缺失：书籍编号={book_id}, "
-            f"缺失序号={missing_preview}, 数量={len(missing_indices)}, "
+            f"缺失序号={missing_preview}, 数量={len(failed_indices)}, "
             f"失败分类={reason_summary}"
         )
         raise RuntimeError("章节不完整")
-    return [{**item, "content": results[index]} for index, item in enumerate(catalog)]
+    chapters = [
+        {**item, "content": results[index]}
+        for index, item in enumerate(catalog)
+        if index in results
+    ]
+    if not chapters:
+        raise RuntimeError("出版书全部章节均无可读正文")
+    return chapters
 
 
 async def 异步获取QQ阅读正文批次(
@@ -4752,6 +4863,9 @@ async def 生成下载回复流(
                     if published
                     else await 下载参考正文(book_id, catalog, session)
                 )
+                if published:
+                    catalog = chapters
+                    details["chapters"] = len(chapters)
         filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
