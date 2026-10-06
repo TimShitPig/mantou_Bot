@@ -167,9 +167,9 @@ class 夸克扫码登录客户端:
                     )
                 ).strip()
                 if 票据:
-                    Cookie = await self._使用票据获取Cookie(票据)
                     if not self.手机号:
                         self.手机号 = await self._使用票据获取手机号(票据)
+                    Cookie = await self._使用票据获取Cookie(票据)
                     return Cookie
                 raise 夸克扫码登录异常("poll", "missing_service_ticket")
             if interval > 0:
@@ -326,11 +326,16 @@ class 夸克扫码登录客户端:
                         "mobile",
                         "phone",
                         "phone_number",
+                        "phone_num",
                         "mobile_phone",
                         "mobilephone",
+                        "phonenum",
                         "mobile_num",
+                        "mobile_number",
                         "masked_mobile",
                         "masked_phone",
+                        "mobile_mask",
+                        "phone_mask",
                     },
                 )
             )
