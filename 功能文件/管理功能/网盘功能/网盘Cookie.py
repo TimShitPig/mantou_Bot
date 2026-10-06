@@ -204,9 +204,17 @@ class 夸克扫码登录客户端:
                     "phone",
                     "phone_number",
                     "phone_num",
+                    "phone_no",
                     "mobile_phone",
                     "mobilephone",
+                    "mobile_no",
                     "phonenum",
+                    "tel",
+                    "telephone",
+                    "cellphone",
+                    "cell_phone",
+                    "bind_mobile",
+                    "bind_phone",
                     "security_mobile",
                     "mobile_number",
                 },
@@ -343,9 +351,17 @@ class 夸克扫码登录客户端:
                 "phone",
                 "phone_number",
                 "phone_num",
+                "phone_no",
                 "mobile_phone",
                 "mobilephone",
+                "mobile_no",
                 "phonenum",
+                "tel",
+                "telephone",
+                "cellphone",
+                "cell_phone",
+                "bind_mobile",
+                "bind_phone",
                 "security_mobile",
                 "mobile_num",
                 "mobile_number",
@@ -363,16 +379,9 @@ class 夸克扫码登录客户端:
                 _递归查找账号资料字段(数据, 手机号字段)
             )
             if not 手机号:
-                字段列表 = sorted(
-                    {
-                        str(键)
-                        for 容器 in (数据, 资料)
-                        if isinstance(容器, dict)
-                        for 键 in 容器
-                    }
-                )
+                字段列表 = _收集账号资料结构路径(数据)
                 logger.warning(
-                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=phone_field_missing, fields=%s",
+                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=phone_field_missing, paths=%s",
                     getattr(响应, "status", "unknown"),
                     ",".join(字段列表[:20]) or "none",
                 )
@@ -755,6 +764,35 @@ def _脱敏手机号(值: Any) -> str:
 
 
 def _递归查找账号资料字段(对象: Any, 字段名集合: set[str]) -> str:
+    return _递归查找账号资料字段内部(对象, 字段名集合, 0)
+
+
+def _解析账号资料JSON字符串(值: str) -> Any:
+    文本 = 值.strip()
+    if not 文本 or len(文本) > 262144 or 文本[0] not in '{["':
+        return None
+    try:
+        return json.loads(文本)
+    except (TypeError, ValueError):
+        return None
+
+
+def _递归查找账号资料字段内部(
+    对象: Any,
+    字段名集合: set[str],
+    深度: int,
+) -> str:
+    if 深度 > 8:
+        return ""
+    if isinstance(对象, str):
+        解析值 = _解析账号资料JSON字符串(对象)
+        if isinstance(解析值, (dict, list, str)) and 解析值 != 对象:
+            return _递归查找账号资料字段内部(
+                解析值,
+                字段名集合,
+                深度 + 1,
+            )
+        return ""
     标准字段名集合 = {
         re.sub(r"[^a-z0-9]", "", 字段名.lower())
         for 字段名 in 字段名集合
@@ -764,18 +802,72 @@ def _递归查找账号资料字段(对象: Any, 字段名集合: set[str]) -> s
             标准字段名 = re.sub(r"[^a-z0-9]", "", str(键).lower())
             if 标准字段名 in 标准字段名集合 and isinstance(值, (str, int, float)):
                 文本 = str(值).strip()
-                if 文本:
+                if 文本 and _解析账号资料JSON字符串(文本) is None:
                     return 文本
         for 值 in 对象.values():
-            结果 = _递归查找账号资料字段(值, 字段名集合)
+            结果 = _递归查找账号资料字段内部(值, 字段名集合, 深度 + 1)
             if 结果:
                 return 结果
     elif isinstance(对象, (list, tuple)):
         for 值 in 对象:
-            结果 = _递归查找账号资料字段(值, 字段名集合)
+            结果 = _递归查找账号资料字段内部(值, 字段名集合, 深度 + 1)
             if 结果:
                 return 结果
     return ""
+
+
+def _收集账号资料结构路径(
+    对象: Any,
+    前缀: str = "$",
+    深度: int = 0,
+    已收集: list[str] | None = None,
+) -> list[str]:
+    if 已收集 is None:
+        已收集 = []
+    if 深度 > 6 or len(已收集) >= 60:
+        return 已收集
+    if isinstance(对象, str):
+        解析值 = _解析账号资料JSON字符串(对象)
+        if isinstance(解析值, (dict, list, str)) and 解析值 != 对象:
+            return _收集账号资料结构路径(
+                解析值,
+                前缀,
+                深度 + 1,
+                已收集,
+            )
+        return 已收集
+    if isinstance(对象, dict):
+        for 键, 值 in 对象.items():
+            安全键 = re.sub(r"[^A-Za-z0-9_.-]", "_", str(键))[:48]
+            if not 安全键:
+                continue
+            路径 = f"{前缀}.{安全键}"
+            if isinstance(值, (dict, list, tuple)):
+                类型 = "object" if isinstance(值, dict) else "array"
+            else:
+                类型 = "string" if isinstance(值, str) else type(值).__name__
+            已收集.append(f"{路径}:{类型}")
+            if len(已收集) >= 60:
+                break
+            _收集账号资料结构路径(
+                值,
+                路径,
+                深度 + 1,
+                已收集,
+            )
+            if len(已收集) >= 60:
+                break
+    elif isinstance(对象, (list, tuple)):
+        for 索引, 值 in enumerate(对象[:5]):
+            _收集账号资料结构路径(
+                值,
+                f"{前缀}[{索引}]",
+                深度 + 1,
+                已收集,
+            )
+            if len(已收集) >= 60:
+                break
+    return 已收集
 
 
 def _夸克接口请求成功(响应数据: Any) -> bool:
@@ -821,9 +913,18 @@ def _解析夸克账号资料(响应数据: Any) -> tuple[str, str, str]:
             "mobile",
             "phone",
             "phone_number",
+            "phone_num",
+            "phone_no",
             "mobile_phone",
             "mobilephone",
+            "mobile_no",
             "phonenum",
+            "tel",
+            "telephone",
+            "cellphone",
+            "cell_phone",
+            "bind_mobile",
+            "bind_phone",
             "security_mobile",
             "mobile_number",
             "mobile_num",
