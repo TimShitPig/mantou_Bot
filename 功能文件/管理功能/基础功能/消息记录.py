@@ -68,6 +68,9 @@ except Exception as 导入异常:
 群禁言状态缓存有效期秒 = 30
 群禁言状态失败冷却秒 = 60
 _群禁言状态请求锁 = globals().get("_群禁言状态请求锁") or asyncio.Lock()
+群成员人数事件锁 = globals().get("群成员人数事件锁") or threading.Lock()
+群成员人数事件缓存: dict[str, float] = globals().get("群成员人数事件缓存") or {}
+群成员人数事件缓存上限 = 4096
 已撤回消息待同步: dict[tuple[str, str], float] = globals().get("已撤回消息待同步") or {}
 群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
@@ -1491,6 +1494,47 @@ def _推送群状态事件(会话标识: str, 状态: str) -> None:
         "data": {
             "chat_id": str(会话标识 or "").strip(),
             "membership_status": str(状态 or "unknown").strip().lower(),
+        },
+    }
+
+    def 投递(队列: asyncio.Queue[Any]) -> None:
+        try:
+            队列.put_nowait(载荷)
+        except asyncio.QueueFull:
+            try:
+                队列.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                队列.put_nowait(载荷)
+            except asyncio.QueueFull:
+                pass
+
+    try:
+        当前循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        当前循环 = None
+    for 队列, 循环 in list(_消息事件订阅.items()):
+        if 当前循环 is 循环:
+            投递(队列)
+        elif 循环.is_closed():
+            _消息事件订阅.pop(队列, None)
+        else:
+            try:
+                循环.call_soon_threadsafe(投递, 队列)
+            except RuntimeError:
+                _消息事件订阅.pop(队列, None)
+
+
+def _推送群人数事件(会话标识: str, 成员数: int) -> None:
+    """把群人数变化实时推送到当前消息记录页面。"""
+    if not _消息事件订阅:
+        return
+    载荷 = {
+        "type": "group_info",
+        "data": {
+            "chat_id": str(会话标识 or "").strip(),
+            "member_num": max(0, int(成员数 or 0)),
         },
     }
 
@@ -3994,6 +4038,7 @@ async def 刷新群信息(
             "last_request_at": int(已有.get("last_request_at") or 0),
         }
         群信息缓存[会话标识] = 摘要
+        _推送群人数事件(会话标识, 成员数)
         if _消息存储 is not None:
             try:
                 写入群信息 = getattr(_消息存储, "写入群信息", None)
@@ -4082,6 +4127,81 @@ def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
     返回.setdefault("recv_msg_setting", str(成员状态.get("recv_msg_setting") or ""))
     返回["in_group"] = 返回.get("membership_status") != "removed"
     return 返回
+
+
+def 调整群成员人数(
+    会话标识: str,
+    变化量: int,
+    appid: str = "",
+    事件名: str = "",
+    事件编号: str = "",
+    时间戳: str = "",
+    成员openid: str = "",
+) -> bool:
+    """按官方群成员加入/退出事件调整缓存人数，并安排持久化与实时推送。"""
+    群标识 = str(会话标识 or "").strip()
+    事件名 = str(事件名 or "").strip().lower()
+    成员标识 = str(成员openid or "").strip()
+    try:
+        变化量 = int(变化量)
+    except (TypeError, ValueError):
+        return False
+    if not 群标识 or not 成员标识 or 变化量 not in (-1, 1):
+        return False
+    if 事件名 not in {"group_member_add", "group_member_remove"}:
+        return False
+
+    来源编号 = str(事件编号 or "").strip() or str(时间戳 or "").strip()
+    if not 来源编号:
+        logger.warning(
+            "QQ官方群人数事件缺少去重字段：event=%s, has_group=%s, has_member=%s",
+            事件名,
+            bool(群标识),
+            bool(成员标识),
+        )
+        return False
+    去重键 = "|".join((str(appid or "").strip(), 群标识, 事件名, 来源编号, 成员标识))
+    with 群成员人数事件锁:
+        if 去重键 in 群成员人数事件缓存:
+            return False
+        群成员人数事件缓存[去重键] = time.monotonic()
+        while len(群成员人数事件缓存) > 群成员人数事件缓存上限:
+            群成员人数事件缓存.pop(next(iter(群成员人数事件缓存)))
+
+    信息 = 群信息缓存.get(群标识)
+    try:
+        当前成员数 = int(信息.get("member_num")) if isinstance(信息, dict) else 0
+        资料更新时间 = int(信息.get("updated_at") or 0) if isinstance(信息, dict) else 0
+    except (TypeError, ValueError):
+        当前成员数 = 0
+        资料更新时间 = 0
+    if not isinstance(信息, dict) or 当前成员数 <= 0 or 资料更新时间 <= 0:
+        标记群信息待刷新(群标识)
+        安排待处理群信息刷新()
+        logger.info(
+            "QQ官方群人数基线缺失，安排官方资料刷新：event=%s, group_id=%s",
+            事件名,
+            群标识,
+        )
+        return False
+
+    新成员数 = max(0, 当前成员数 + 变化量)
+    信息["member_num"] = 新成员数
+    _推送群人数事件(群标识, 新成员数)
+    if _消息存储 is not None and _消息数据库已配置():
+        _后台执行同步(
+            _消息存储.写入群信息,
+            dict(信息),
+            str(appid or 信息.get("appid") or "").strip(),
+        )
+    logger.info(
+        "QQ官方群人数已按成员事件调整：event=%s, group_id=%s, delta=%s, member_num=%s",
+        事件名,
+        群标识,
+        变化量,
+        新成员数,
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------

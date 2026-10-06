@@ -1575,6 +1575,7 @@
           const envelope = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
           if (envelope?.type === 'message') { applyMsgRealtimeEvent(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
           else if (envelope?.type === 'group_status') applyMsgGroupStatus(envelope.data || {});
+          else if (envelope?.type === 'group_info') applyMsgGroupInfo(envelope.data || {});
         } catch (_) {}
       };
       const scheduleMsgRealtimeReconnect = () => {
@@ -3420,6 +3421,24 @@
           updateMsgHead({chat_name:(msgState.chats.find((chat) => String(chat.chat_id || '') === chatId)?.nickname || chatId), group_info:{membership_status:status}});
         }
         renderMsgChats({chats:msgState.chats});
+      };
+      const applyMsgGroupInfo = (payload) => {
+        const chatId = String(payload?.chat_id || '').trim();
+        const memberNum = Number(payload?.member_num);
+        if (!chatId || !Number.isFinite(memberNum) || memberNum < 0) return;
+        const count = Math.floor(memberNum);
+        msgState.chats = (msgState.chats || []).map((chat) => String(chat.chat_id || '') === chatId
+          ? {...chat, member_num:count, group_member_num:count}
+          : chat);
+        const overlay = msgState.realtimeChats.get(chatId);
+        if (overlay) msgState.realtimeChats.set(chatId, {...overlay, member_num:count, group_member_num:count});
+        if (msgState.chatId === chatId && msgState.chatType === 'group') {
+          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId);
+          updateMsgHead({
+            chat_name:current?.remark || current?.group_name || current?.nickname || chatId,
+            group_info:{member_num:count, membership_status:current?.membership_status},
+          });
+        }
       };
       const toggleMsgSelect = (row, mid) => {
         if (!mid) return;

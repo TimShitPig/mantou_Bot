@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.112-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.113-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.112 |
+| 版本 | v6.1.113 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -197,7 +197,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - `zlibrary_accounts`：以随机尝试 ID 为键保存创建邮箱、密码、昵称和状态；注册提交前保存 `pending`，注册确认后保存 `registered`，新会话登录验证后保存 `logged_in`。账号凭据不在聊天或帮助控制台/API 中返回，邮箱 Token 和验证码只留在当前流程内存。
 - `novel_share_pan`：全局默认分享网盘标识，未设置群级网盘账号覆盖的群使用该平台上传
 
-消息记录页读取的 QQ 官方群资料保存在 MySQL `mantou_group_infos` 表，重启后直接恢复；后台每分钟检查已知群，单群资料至少每小时更新一次并按官方 30 QPM 限制串行请求，网页中的“刷新群信息”会立即请求最新公开资料。
+消息记录页读取的 QQ 官方群资料保存在 MySQL `mantou_group_infos` 表，重启后直接恢复；官方成员加入/退出事件会即时增减人数并推送到当前页面，后台每分钟检查已知群并以官方资料校准，单群资料至少每小时更新一次且按官方 30 QPM 限制串行请求；网页中的“刷新群信息”会立即请求最新公开资料。
 
 未配置数据库时不会尝试连接 MySQL，小说功能默认全部开启，主网盘默认 UC，相关运行状态无法持久化。
 

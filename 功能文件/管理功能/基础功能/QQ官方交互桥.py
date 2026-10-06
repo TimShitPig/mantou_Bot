@@ -18,9 +18,14 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 8
+群成员加入桥版本 = 9
 QQ官方语音Silk补丁版本 = 1
-欢迎诊断事件名 = {"group_member_add", "group_add_robot", "group_del_robot"}
+欢迎诊断事件名 = {
+    "group_member_add",
+    "group_member_remove",
+    "group_add_robot",
+    "group_del_robot",
+}
 当前插件上下文: Any = None
 平台同步任务: asyncio.Task | None = None
 平台同步已完成 = False
@@ -348,19 +353,24 @@ def _记录群成员加入诊断(
         意图值文本 = "invalid"
         客户端意图文本 = "invalid"
     logger.info(
-        "QQ官方群欢迎诊断：stage=%s, group_member_event=%s, intent_value=%s, "
-        "client_intents=%s, connection=%s, parser_class=%s, "
-        "parser_state=%s, parser_connection=%s, member_callback=%s, "
-        "robot_callback=%s",
+        "QQ官方群成员事件诊断：stage=%s, group_member_event=%s, intent_value=%s, "
+        "client_intents=%s, connection=%s, parser_add=%s, parser_remove=%s, "
+        "parser_state_add=%s, parser_state_remove=%s, parser_connection_add=%s, "
+        "parser_connection_remove=%s, member_add_callback=%s, "
+        "member_remove_callback=%s, robot_callback=%s",
         阶段,
         _群成员加入意图已启用(意图, 客户端) if 意图 is not None else False,
         意图值文本,
         客户端意图文本,
         连接 is not None,
         callable(getattr(连接状态类, "parse_group_member_add", None)),
+        callable(getattr(连接状态类, "parse_group_member_remove", None)),
         _解析器表包含(连接状态, "group_member_add"),
+        _解析器表包含(连接状态, "group_member_remove"),
         _解析器表包含(连接, "group_member_add"),
+        _解析器表包含(连接, "group_member_remove"),
         callable(getattr(客户端类, "on_group_member_add", None)),
+        callable(getattr(客户端类, "on_group_member_remove", None)),
         callable(getattr(客户端类, "on_group_add_robot", None)),
     )
 
@@ -421,6 +431,7 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
 
     # QQ 官方文档中的事件名，分别覆盖普通成员加入和机器人被加入群聊。
     安装解析器("group_member_add")
+    安装解析器("group_member_remove")
     安装解析器("group_add_robot")
     安装解析器("group_del_robot")
 
@@ -433,7 +444,12 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
 
     连接状态 = _读取字段(连接容器, "state")
     已同步 = False
-    for 解析器名称 in ("group_member_add", "group_add_robot", "group_del_robot"):
+    for 解析器名称 in (
+        "group_member_add",
+        "group_member_remove",
+        "group_add_robot",
+        "group_del_robot",
+    ):
         解析器 = getattr(连接状态, "parse_" + 解析器名称, None)
         if not callable(解析器):
             解析器 = getattr(连接容器, "parse_" + 解析器名称, None)
@@ -484,7 +500,7 @@ def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> boo
             客户端,
         )
         logger.info(
-            "QQ官方群成员欢迎监听状态：group_member_event=%s, group_del_robot_event=%s, parser_registered=%s, connected=%s",
+            "QQ官方群成员事件监听状态：group_member_event=%s, group_del_robot_event=%s, parser_registered=%s, connected=%s",
             意图已开启,
             退出意图已开启,
             解析器已注册,
@@ -542,6 +558,49 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
     return 结果
+
+
+def _同步群成员人数变化(
+    客户端: Any,
+    原始事件: Any,
+    事件名: str,
+    变化量: int,
+) -> None:
+    事件数据 = _提取群成员加入数据(原始事件)
+    群号 = str(事件数据.get("group_openid") or "").strip()
+    成员 = str(事件数据.get("member_openid") or "").strip()
+    if not 群号 or not 成员:
+        logger.warning(
+            "QQ官方群人数事件字段无效：event=%s, has_group=%s, has_member=%s",
+            事件名,
+            bool(群号),
+            bool(成员),
+        )
+        return
+    appid = str(
+        _读取字段(客户端, "appid")
+        or _读取字段(_读取字段(客户端, "platform"), "appid")
+        or ""
+    ).strip()
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        消息记录.调整群成员人数(
+            群号,
+            变化量,
+            appid=appid,
+            事件名=事件名,
+            事件编号=str(事件数据.get("_mantou_event_id") or ""),
+            时间戳=str(事件数据.get("timestamp") or ""),
+            成员openid=成员,
+        )
+    except Exception as 异常:
+        logger.warning(
+            "QQ官方群人数事件处理失败：event=%s, group_id=%s, error_type=%s",
+            事件名,
+            群号,
+            type(异常).__name__,
+        )
 
 
 async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配器模块: Any) -> None:
@@ -877,6 +936,13 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 _事件字段状态(原始事件),
             )
             try:
+                _同步群成员人数变化(self, 原始事件, "group_member_add", 1)
+            except Exception as 异常:
+                logger.warning(
+                    "QQ官方群人数事件处理失败：event=group_member_add, error_type=%s",
+                    type(异常).__name__,
+                )
+            try:
                 await _投递群成员加入事件(self, 原始事件, 适配器模块)
             except Exception as 异常:
                 logger.warning(
@@ -920,6 +986,29 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 return 结果
             return None
 
+        原成员退出回调 = getattr(客户端类, "on_group_member_remove", None)
+        if getattr(原成员退出回调, "__module__", "") == __name__:
+            原成员退出回调 = None
+
+        async def 新成员退出回调(self: Any, 原始事件: Any) -> Any:
+            logger.info(
+                "QQ官方群成员事件：stage=callback_enter, event=GROUP_MEMBER_REMOVE, %s",
+                _事件字段状态(原始事件),
+            )
+            try:
+                _同步群成员人数变化(self, 原始事件, "group_member_remove", -1)
+            except Exception as 异常:
+                logger.warning(
+                    "QQ官方群人数事件处理失败：event=group_member_remove, error_type=%s",
+                    type(异常).__name__,
+                )
+            if callable(原成员退出回调):
+                结果 = 原成员退出回调(self, 原始事件)
+                if inspect.isawaitable(结果):
+                    return await 结果
+                return 结果
+            return None
+
         async def 新机器人退群回调(self: Any, 原始事件: Any) -> Any:
             logger.info(
                 "QQ官方群成员状态：stage=callback_enter, event=GROUP_DEL_ROBOT, %s",
@@ -950,11 +1039,12 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
             return None
 
         客户端类.on_group_member_add = 新成员加入回调
+        客户端类.on_group_member_remove = 新成员退出回调
         客户端类.on_group_add_robot = 新机器人入群回调
         客户端类.on_group_del_robot = 新机器人退群回调
         适配器类._mantou_群成员加入已安装 = True
         适配器类._mantou_群成员加入桥版本 = 群成员加入桥版本
-        logger.info("QQ官方群成员加入桥已安装：已接入 GROUP_MEMBER_ADD")
+        logger.info("QQ官方群成员事件桥已安装：已接入 GROUP_MEMBER_ADD/GROUP_MEMBER_REMOVE")
 
     已启用帮助数量 = 0
     已启用成员加入数量 = 0
@@ -982,7 +1072,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         logger.info(
             "QQ官方群事件桥已同步运行中适配器："
             f"interaction={已启用帮助数量}, "
-            f"group_member_add={已启用成员加入数量}",
+            f"group_member_events={已启用成员加入数量}",
         )
     if 上下文 is not None and not 找到官方适配器:
         _安排平台加载后同步(上下文)
