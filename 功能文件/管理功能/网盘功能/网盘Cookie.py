@@ -323,36 +323,60 @@ class 夸克扫码登录客户端:
                 or not isinstance(数据, dict)
                 or not 数据.get("success")
             ):
+                if isinstance(数据, dict):
+                    业务码 = re.sub(
+                        r"[^A-Za-z0-9_.-]",
+                        "",
+                        str(数据.get("code") or 数据.get("status") or "unknown"),
+                    )[:40]
+                else:
+                    业务码 = "invalid_response"
                 logger.warning(
-                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, error=business_status",
+                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=%s",
                     getattr(响应, "status", "unknown"),
+                    业务码,
                 )
                 return ""
             资料 = 数据.get("data")
+            手机号字段 = {
+                "mobile",
+                "phone",
+                "phone_number",
+                "phone_num",
+                "mobile_phone",
+                "mobilephone",
+                "phonenum",
+                "security_mobile",
+                "mobile_num",
+                "mobile_number",
+                "masked_mobile",
+                "masked_phone",
+                "mobile_mask",
+                "phone_mask",
+            }
             手机号 = (
                 资料
                 if isinstance(资料, (str, int))
-                else _递归查找账号资料字段(
-                    资料,
-                    {
-                        "mobile",
-                        "phone",
-                        "phone_number",
-                        "phone_num",
-                        "mobile_phone",
-                        "mobilephone",
-                        "phonenum",
-                        "security_mobile",
-                        "mobile_num",
-                        "mobile_number",
-                        "masked_mobile",
-                        "masked_phone",
-                        "mobile_mask",
-                        "phone_mask",
-                    },
-                )
+                else _递归查找账号资料字段(资料, 手机号字段)
             )
-            return _脱敏手机号(手机号)
+            手机号 = _脱敏手机号(手机号) or _脱敏手机号(
+                _递归查找账号资料字段(数据, 手机号字段)
+            )
+            if not 手机号:
+                字段列表 = sorted(
+                    {
+                        str(键)
+                        for 容器 in (数据, 资料)
+                        if isinstance(容器, dict)
+                        for 键 in 容器
+                    }
+                )
+                logger.warning(
+                    "夸克扫码手机号读取失败：stage=mobileinfo, http=%s, result=phone_field_missing, fields=%s",
+                    getattr(响应, "status", "unknown"),
+                    ",".join(字段列表[:20]) or "none",
+                )
+            return 手机号
         except Exception as 异常:
             logger.warning(
                 "夸克扫码手机号读取失败：stage=mobileinfo, error=%s",
