@@ -3083,7 +3083,7 @@ QQ阅读第三方正文地址 = "http://154.12.91.167:7000/content"
 # 每批固定 25 章，避免第三方服务对大范围请求截断；整本按连续区间分段并发完成。
 QQ阅读第三方正文批量章节数 = 25
 QQ阅读第三方正文最大动态并发数 = 16
-QQ阅读进度日志分段数 = 10
+QQ阅读进度日志分段数 = 4
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
 QQ阅读登录态命名空间 = "qq_reader_auth"
@@ -4124,6 +4124,7 @@ async def 下载参考出版书正文(
     concurrency = max(1, min(QQ阅读出版书最大动态并发数, total))
     request_semaphore = asyncio.Semaphore(concurrency)
     decrypt_semaphore = asyncio.Semaphore(max(1, min(QQ阅读解密最大动态并发数, total)))
+    failure_types: dict[int, str] = {}
     logger.info(
         f"QQ阅读章节进度：书籍编号={book_id}, 进度=0/{total}, 百分比=0%, "
         f"并发数={concurrency}"
@@ -4132,6 +4133,7 @@ async def 下载参考出版书正文(
     async def 下载章节(index: int, item: dict[str, Any]) -> tuple[int, str | None]:
         resource_url = str(item.get("resource_url") or "").strip()
         if not resource_url:
+            failure_types[index] = "missing_resource_url"
             return index, None
         for attempt in range(1, 4):
             try:
@@ -4148,9 +4150,15 @@ async def 下载参考出版书正文(
                 return index, text
             except Exception as exc:
                 if attempt >= 3:
+                    if isinstance(exc, aiohttp.ClientResponseError):
+                        failure_types[index] = f"http_{exc.status}"
+                    elif isinstance(exc, asyncio.TimeoutError):
+                        failure_types[index] = "timeout"
+                    else:
+                        failure_types[index] = type(exc).__name__
                     logger.debug(
                         f"QQ阅读出版书章节请求失败：书籍编号={book_id}, 序号={index + 1}, "
-                        f"错误={type(exc).__name__}"
+                        f"分类={failure_types[index]}"
                     )
                     break
                 await asyncio.sleep(0.3 * attempt)
@@ -4180,6 +4188,26 @@ async def 下载参考出版书正文(
                 f"百分比={percent}%, 成功={success}, 失败={completed - success}"
             )
     if len(results) != total:
+        missing_indices = [
+            index for index in range(total) if index not in results
+        ]
+        reason_counts: dict[str, int] = {}
+        for index in missing_indices:
+            reason = failure_types.get(index, "unknown")
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        missing_preview = ",".join(
+            str(index + 1) for index in missing_indices[:10]
+        )
+        if len(missing_indices) > 10:
+            missing_preview += ",..."
+        reason_summary = ",".join(
+            f"{reason}:{count}" for reason, count in sorted(reason_counts.items())
+        )
+        logger.warning(
+            f"QQ阅读出版书正文缺失：书籍编号={book_id}, "
+            f"缺失序号={missing_preview}, 数量={len(missing_indices)}, "
+            f"失败分类={reason_summary}"
+        )
         raise RuntimeError("章节不完整")
     return [{**item, "content": results[index]} for index, item in enumerate(catalog)]
 
@@ -4405,7 +4433,8 @@ async def 下载参考正文(
         success += 合并批次(first, last, part, results)
         合并请求统计(initial_stats, stats)
         completed += expected
-        汇报进度(completed, success)
+        if completed < total:
+            汇报进度(completed, success)
 
     logger.debug(
         f"QQ阅读正文首轮汇总：书籍编号={book_id}, 批次数={initial_stats['batches']}, "
@@ -4457,7 +4486,6 @@ async def 下载参考正文(
             recovered += 合并批次(first, last, part, results)
             合并请求统计(retry_stats, stats)
         success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
-        汇报进度(total, success)
         logger.debug(
             f"QQ阅读失败章节重试结果：书籍编号={book_id}, 轮次={round_index}/{QQ阅读失败章节重试轮数}, "
             f"恢复={recovered}, 仍缺失={total - success}, "
@@ -4473,6 +4501,8 @@ async def 下载参考正文(
         if round_index < QQ阅读失败章节重试轮数:
             await asyncio.sleep(0.2 * round_index)
 
+    success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
+    汇报进度(total, success)
     chapters: list[dict[str, Any]] = []
     缺失章节号: list[int] = []
     缺失分类: dict[str, int] = {}
