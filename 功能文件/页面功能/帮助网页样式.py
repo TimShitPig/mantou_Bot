@@ -450,7 +450,6 @@
       @keyframes pan-account-card-enter { from { opacity:0; } to { opacity:1; } }
       .pan-object-open { position:relative; display:grid; grid-template-columns:52px minmax(0,1fr) 12px; align-content:start; align-items:start; gap:0 10px; flex:0 0 auto; min-width:0; min-height:0; padding:1px 0 9px; border:0; background:transparent; color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
       .pan-object-open:hover { color:var(--ink); }
-      .pan-account-order { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; border-radius:6px; background:#e9efff; color:#4668ba; font-size:10px; font-weight:800; }
       .pan-account-avatar { position:relative; display:grid; place-items:center; width:52px; height:52px; flex:0 0 52px; overflow:hidden; border-radius:50%; background:#e4f2e9; color:#318154; font-size:16px; font-weight:800; }
       .pan-account-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:var(--panel); }
       .pan-object-copy { display:grid; align-content:start; gap:5px; min-width:0; flex:1; }
@@ -484,7 +483,7 @@
       .pan-detail-heading strong { color:var(--ink); font-size:17px; line-height:1.3; }
       .pan-object-pane { width:min(100%,1000px); max-width:1000px; margin:18px auto 26px; padding:23px 26px 25px; border:1px solid var(--line); border-radius:10px; background:var(--panel); box-shadow:0 4px 18px rgba(36,36,58,.045); }
       .pan-object-account-detail { display:flex; align-items:center; gap:18px; padding:2px 0 20px; border-bottom:1px solid var(--line); }
-      .pan-object-account-detail > .pan-account-avatar,.pan-object-account-detail > .pan-account-order { width:62px; height:62px; flex-basis:62px; font-size:18px; }
+      .pan-object-account-detail > .pan-account-avatar { width:62px; height:62px; flex-basis:62px; font-size:18px; }
       .pan-object-account-copy { min-width:0; flex:1; max-width:700px; }
       .pan-object-account-copy > .pan-section-kicker { display:none; }
       .pan-object-account-copy h3 { margin:3px 0 4px; color:var(--ink); font-size:19px; line-height:1.35; }
@@ -608,7 +607,6 @@
       :root[data-theme="dark"] .pan-tab.active { box-shadow:0 1px 0 #1f2330; }
       :root[data-theme="dark"] .pan-object-card { border-color:#2c3044; background:#1d2130; }
       :root[data-theme="dark"] .pan-account-object.is-disabled { background:#191d29; }
-      :root[data-theme="dark"] .pan-account-order { background:#252b43; color:#a6b9eb; }
       :root[data-theme="dark"] .pan-account-avatar { background:#20392d; color:#8bc9a5; }
       :root[data-theme="dark"] .pan-security-note { border-left-color:#5c6990; background:#1a2030; }
       :root[data-theme="dark"] .pan-object-card:hover { border-color:#555d80; background:#202435; }
