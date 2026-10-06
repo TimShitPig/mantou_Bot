@@ -266,12 +266,19 @@ class 夸克网盘客户端:
             return 新增数量
 
         首页项目, 总数量 = await 请求目录页(1)
+        if not 首页项目 and 总数量:
+            首页项目, 重试总数量 = await 请求目录页(1)
+            if 重试总数量:
+                总数量 = 重试总数量
         首屏新增数量 = 合并项目(首页项目)
         if 总数量 and len(结果) >= 总数量:
             return 结果
         if not 首页项目:
             if 总数量 and len(结果) < 总数量:
-                raise RuntimeError("夸克网盘目录响应不完整")
+                logger.warning(
+                    "夸克网盘目录首屏为空：reported_total=%s",
+                    总数量,
+                )
             return 结果
         if 首屏新增数量 == 0:
             raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
@@ -333,6 +340,12 @@ class 夸克网盘客户端:
         页码 = 2
         while True:
             项目列表, 页总数 = await 请求目录页(页码)
+            if not 项目列表 and max(总数量, 页总数) > len(结果):
+                重试项目列表, 重试页总数 = await 请求目录页(页码)
+                if 重试项目列表:
+                    项目列表 = 重试项目列表
+                if 重试页总数:
+                    页总数 = 重试页总数
             if not 总数量:
                 总数量 = 页总数
             新增数量 = 合并项目(项目列表)
@@ -340,7 +353,12 @@ class 夸克网盘客户端:
                 break
             if not 项目列表:
                 if 总数量 and len(结果) < 总数量:
-                    raise RuntimeError("夸克网盘目录响应不完整")
+                    logger.warning(
+                        "夸克网盘目录扫描以空页结束：page=%s, collected=%s, reported_total=%s",
+                        页码,
+                        len(结果),
+                        总数量,
+                    )
                 break
             if 新增数量 == 0:
                 raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
