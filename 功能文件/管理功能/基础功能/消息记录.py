@@ -670,18 +670,20 @@ def _提取官方消息序号键(记录: dict[str, Any]) -> tuple[str, ...]:
     if not 会话标识:
         return ()
     负载 = _解析消息结构(记录.get("raw_message"))
-    if not isinstance(负载, dict):
-        return ()
-    待检查 = [负载]
-    for 字段 in ("d", "data", "message", "payload"):
-        嵌套 = 负载.get(字段)
-        if isinstance(嵌套, dict):
-            待检查.append(嵌套)
+    待检查 = [负载] if isinstance(负载, dict) else []
+    for 对象 in tuple(待检查):
+        for 字段 in ("d", "data", "message", "payload"):
+            嵌套 = 对象.get(字段)
+            if isinstance(嵌套, dict):
+                待检查.append(嵌套)
     用户标识 = _规范消息ID(记录.get("user_id"))
     前缀 = f"seq:{会话标识}:{用户标识}:"
     键: list[str] = []
+    直接序号 = _规范消息ID(记录.get("msg_seq"))
+    if 直接序号 and 直接序号 != "0":
+        键.append(f"{前缀}msg_seq:{直接序号}")
     for 对象 in 待检查:
-        for 字段 in ("seq_in_channel", "seq"):
+        for 字段 in ("seq_in_channel", "seq", "msg_seq"):
             序号 = _规范消息ID(对象.get(字段))
             if not 序号 or 序号 == "0":
                 continue
@@ -816,10 +818,14 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         已有记录["message_id"] = 新消息ID
     for 字段 in (
         "user_id", "nickname", "content", "timestamp", "source",
-        "reference_id", "refidx", "avatar", "chat_type", "appid",
+        "reference_id", "refidx", "avatar", "chat_type", "appid", "member_role", "msg_seq",
     ):
         新值 = 新记录.get(字段)
-        if 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
+        if 字段 == "content" and str(新值 or "").strip():
+            旧值 = str(已有记录.get(字段) or "")
+            if len(str(新值)) > len(旧值):
+                已有记录[字段] = 新值
+        elif 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
             已有记录[字段] = 新值
     旧原始消息 = str(已有记录.get("raw_message") or "")
     新原始消息 = str(新记录.get("raw_message") or "")
@@ -876,6 +882,25 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     except (TypeError, ValueError):
         pass
     return 已有记录
+
+
+def _消息资料签名(记录: dict[str, Any]) -> tuple[Any, ...]:
+    """标识会改善实时显示或历史记录的重复事件补全。"""
+    return (
+        _规范消息ID(记录.get("message_id")),
+        str(记录.get("user_id") or ""),
+        str(记录.get("nickname") or ""),
+        str(记录.get("content") or ""),
+        str(记录.get("member_role") or ""),
+        str(记录.get("msg_seq") or ""),
+        str(记录.get("avatar") or ""),
+        str(记录.get("raw_message") or ""),
+        str(记录.get("reference_id") or ""),
+        str(记录.get("refidx") or ""),
+        _消息媒体指纹(记录.get("media")),
+        bool(记录.get("is_self")),
+        bool(记录.get("recalled")),
+    )
 
 
 def _去重消息列表(消息列表: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -1427,7 +1452,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     字段 = (
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "source", "recalled", "media", "reference_id", "refidx",
-        "avatar", "chat_type", "ts", "appid",
+        "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
@@ -2347,6 +2372,8 @@ def 记录收到消息(
             "_session": 会话标识,
             "appid": str(appid or 会话.get("appid") or ""),
             "nickname": 昵称 or (_私聊兜底昵称(会话标识) if 类型 == "user" else "未知用户"),
+            "member_role": 角色,
+            "msg_seq": _读取字段(消息, "msg_seq") or "",
             "content": 内容,
             "timestamp": _格式化时间戳(时间戳),
             "is_self": bool(is_self),
@@ -2392,7 +2419,15 @@ def 记录收到消息(
             _持久化未读数(会话标识, 会话["unread"])
         else:
             # QQ 官方可能同时投递 at/group 两种回调；同一 message_id 只保留一条。
+            合并前签名 = _消息资料签名(已有记录)
             记录 = _合并重复消息(已有记录, 记录)
+            if _消息资料签名(记录) != 合并前签名:
+                if _消息数据库已配置():
+                    try:
+                        _排队消息持久化("message", dict(记录))
+                    except Exception as 存储异常:
+                        logger.debug("消息记录补全入库失败：错误类型=%s", type(存储异常).__name__)
+                _推送消息事件(记录, 会话)
         if _消息数据库已配置() and 新增记录:
             try:
                 _排队消息持久化("message", dict(记录))

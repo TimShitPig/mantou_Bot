@@ -29,8 +29,13 @@ except Exception:
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
     "(会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
-    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message) "
-    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message, member_role, msg_seq) "
+    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+)
+_消息更新SQL = (
+    f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
+    "timestamp=%s, ts=%s, is_self=%s, source=%s, recalled=%s, media=%s, reference_id=%s, "
+    "refidx=%s, avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
 )
 _消息查重分块大小 = 200
 
@@ -39,7 +44,7 @@ _消息查重分块大小 = 200
 _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
-    "avatar, LEFT(raw_message, 4096) AS raw_message"
+    "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -55,6 +60,8 @@ _列最大长度: dict[str, int] = {
     "reference_id": 128,
     "refidx": 128,
     "avatar": 1024,
+    "member_role": 16,
+    "msg_seq": 64,
 }
 
 _数据库配置引用: dict[str, Any] = {}
@@ -160,6 +167,8 @@ def 初始化数据库() -> bool:
                     refidx VARCHAR(128) DEFAULT '',
                     avatar VARCHAR(1024) DEFAULT '',
                     raw_message MEDIUMTEXT,
+                    member_role VARCHAR(16) DEFAULT '',
+                    msg_seq VARCHAR(64) DEFAULT '',
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
@@ -216,6 +225,8 @@ def 初始化数据库() -> bool:
                     ("media", "TEXT"),
                     ("source", "VARCHAR(32) DEFAULT ''"),
                     ("avatar", "VARCHAR(1024) DEFAULT ''"),
+                    ("member_role", "VARCHAR(16) DEFAULT ''"),
+                    ("msg_seq", "VARCHAR(64) DEFAULT ''"),
                 ):
                     游标.execute(
                         "SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -329,7 +340,14 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
         _按列宽截断(记录.get("refidx") or "", "refidx"),
         _按列宽截断(记录.get("avatar") or "", "avatar"),
         str(记录.get("raw_message") or ""),
+        _按列宽截断(记录.get("member_role") or "", "member_role"),
+        _按列宽截断(记录.get("msg_seq") or "", "msg_seq"),
     )
+
+
+def _消息更新参数(记录: dict[str, Any]) -> tuple[Any, ...]:
+    值 = _消息写入参数(记录)
+    return (*值[1:3], *值[4:], 值[0], 值[3])
 
 
 def _消息记录去重键(记录: dict[str, Any]) -> tuple[str, str]:
@@ -376,6 +394,8 @@ def _写入消息记录(记录: dict[str, Any]) -> bool:
                     (会话标识, 消息ID),
                 )
                 if 游标.fetchone():
+                    游标.execute(_消息更新SQL, _消息更新参数(记录))
+                    连接.commit()
                     return True
             游标.execute(_消息写入SQL, _消息写入参数(记录))
         连接.commit()
@@ -406,14 +426,15 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     if not 有效记录 or not _MySQL可用():
         return False
     去重记录: list[dict[str, Any]] = []
-    已见键: set[tuple[str, str]] = set()
+    已见索引: dict[tuple[str, str], int] = {}
     for 记录 in 有效记录:
         键 = _消息记录去重键(记录)
         消息ID = 键[1]
-        if 消息ID and 键 in 已见键:
+        if 消息ID and 键 in 已见索引:
+            去重记录[已见索引[键]] = 记录
             continue
         if 消息ID:
-            已见键.add(键)
+            已见索引[键] = len(去重记录)
         去重记录.append(记录)
     连接 = _打开连接()
     if 连接 is None:
@@ -425,11 +446,18 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
                 游标,
                 [键 for _, 键 in 记录键列表],
             )
+            待更新 = [
+                _消息更新参数(记录)
+                for 记录, 键 in 记录键列表
+                if 键[1] and 键 in 已存在
+            ]
             待写入 = [
                 _消息写入参数(记录)
                 for 记录, 键 in 记录键列表
                 if not 键[1] or 键 not in 已存在
             ]
+            if 待更新:
+                游标.executemany(_消息更新SQL, 待更新)
             if 待写入:
                 游标.executemany(_消息写入SQL, 待写入)
         连接.commit()
@@ -677,7 +705,7 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
                      f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
                      f"'' AS media, reference_id, refidx, avatar, "
-                     f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message "
+                     f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message, member_role, msg_seq "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
                     tuple(分块),
                 )
@@ -999,6 +1027,8 @@ def _行转记录(行: Any) -> dict[str, Any]:
             15: ("refidx",),
             16: ("avatar",),
             17: ("raw_message",),
+            18: ("member_role",),
+            19: ("msg_seq",),
         }
         值 = _行字段(行, 索引, *字段映射.get(索引, ()), 默认值=None)
         return str(值 if 值 is not None else 默认值)
@@ -1026,4 +1056,6 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "refidx": 取值(15),
         "avatar": 取值(16),
         "raw_message": 取值(17),
+        "member_role": 取值(18),
+        "msg_seq": 取值(19),
     }

@@ -885,17 +885,40 @@
         });
       };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
-      const mergeMsgProfiles = (profiles, messages = []) => {
+      const mergeMsgProfileMaps = (...sources) => {
         const merged = {};
-        Object.entries(profiles || {}).forEach(([id, profile]) => {
-          if (profile && typeof profile === 'object') merged[String(id)] = {...profile};
+        sources.forEach((source) => {
+          Object.entries(source || {}).forEach(([id, profile]) => {
+            if (!profile || typeof profile !== 'object') return;
+            const key = String(id || '').trim();
+            if (!key) return;
+            const next = {...(merged[key] || {})};
+            Object.entries(profile).forEach(([field, value]) => {
+              if (field === 'role') {
+                const role = String(value || '').trim().toLowerCase();
+                if (role) next.role = role;
+                return;
+              }
+              if (value !== null && value !== undefined && value !== '') next[field] = value;
+            });
+            merged[key] = next;
+          });
         });
+        return merged;
+      };
+      const mergeMsgProfiles = (profiles, messages = []) => {
+        const merged = mergeMsgProfileMaps(profiles);
         (messages || []).forEach((message) => {
           const id = String(message?.user_id || '').trim();
           const nickname = String(message?.nickname || '').trim();
           const avatar = String(message?.avatar || message?.avatar_url || '').trim();
-          if (!id || (!nickname && !avatar) || (nickname === '未知用户' && !avatar) || (nickname === '未知' && !avatar) || !mentionIdPattern.test(id)) return;
-          merged[id] = {...(merged[id] || {}), ...(nickname && nickname !== '未知用户' && nickname !== '未知' ? {nickname} : {}), ...(avatar ? {avatar} : {})};
+          const role = String(message?.member_role || message?.role || '').trim().toLowerCase();
+          if (!id || (!nickname && !avatar && !role) || (nickname === '未知用户' && !avatar && !role) || (nickname === '未知' && !avatar && !role) || !mentionIdPattern.test(id)) return;
+          merged[id] = mergeMsgProfileMaps(merged, {[id]: {
+            ...(nickname && nickname !== '未知用户' && nickname !== '未知' ? {nickname} : {}),
+            ...(avatar ? {avatar} : {}),
+            ...(role ? {role} : {}),
+          }})[id];
         });
         return merged;
       };
@@ -1992,7 +2015,7 @@
               if (nested && typeof nested === 'object' && !Array.isArray(nested)) payloads.push(nested);
             });
             payloads.forEach((payload) => {
-              ['seq_in_channel', 'seq'].forEach((field) => {
+              ['seq_in_channel', 'seq', 'msg_seq'].forEach((field) => {
                 const sequence = normalizeMsgIdentity(payload[field]);
                 if (sequence && sequence !== '0') {
                   keys.push(`seq:${sessionId}:${userId}:${field}:${sequence}`);
@@ -2000,6 +2023,8 @@
               });
             });
           }
+          const directSequence = normalizeMsgIdentity(message.msg_seq);
+          if (directSequence && sessionId) keys.push(`seq:${sessionId}:${userId}:msg_seq:${directSequence}`);
           // 回调负载相同但适配器 ID 不同时，仍按事件内容合并。
           const raw = String(message.raw_message || '').trim();
           if (raw && sessionId) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
@@ -2026,6 +2051,42 @@
             : message;
         });
       };
+      const mergeMsgRealtimeMessage = (existing, incoming) => {
+        const merged = {...existing};
+        const fallbackNames = new Set(['', '未知', '未知用户']);
+        ['user_id', 'nickname', 'content', 'timestamp', 'source', 'member_role', 'msg_seq', 'avatar', 'reference_id', 'refidx', 'chat_type', 'appid'].forEach((field) => {
+          const next = incoming?.[field];
+          const current = merged[field];
+          if (next === null || next === undefined || next === '') return;
+          if (field === 'member_role') {
+            merged[field] = String(next).trim().toLowerCase();
+          } else if (field === 'content') {
+            if (!String(current || '').trim() || String(next).length > String(current || '').length) merged[field] = next;
+          } else if (field === 'nickname') {
+            if (fallbackNames.has(String(current || '').trim()) || !String(current || '').trim()) merged[field] = next;
+          } else if (!current) {
+            merged[field] = next;
+          }
+        });
+        const oldRaw = String(merged.raw_message || '');
+        const newRaw = String(incoming?.raw_message || '');
+        if (newRaw.length > oldRaw.length) merged.raw_message = incoming.raw_message;
+        const oldMedia = merged.media;
+        const newMedia = incoming?.media;
+        if (newMedia && typeof newMedia === 'object') {
+          if (oldMedia && typeof oldMedia === 'object' && !Array.isArray(oldMedia) && !Array.isArray(newMedia)) {
+            merged.media = {...oldMedia, ...Object.fromEntries(Object.entries(newMedia).filter(([, value]) => value !== null && value !== undefined && value !== ''))};
+          } else if (!oldMedia || (Array.isArray(newMedia) && newMedia.length > (Array.isArray(oldMedia) ? oldMedia.length : 0))) {
+            merged.media = newMedia;
+          }
+        }
+        if (!merged.message_id && incoming?.message_id) merged.message_id = incoming.message_id;
+        if (!merged.id && incoming?.id) merged.id = incoming.id;
+        merged.is_self = Boolean(merged.is_self || incoming?.is_self);
+        merged.recalled = Boolean(msgIsRecalled(merged) || msgIsRecalled(incoming));
+        merged.ts = Math.max(Number(merged.ts || 0), Number(incoming?.ts || 0));
+        return merged;
+      };
       const dedupeMsgMessages = (messages) => {
         const seen = new Map();
         const result = [];
@@ -2040,19 +2101,7 @@
           }
           const existing = result[duplicateIndex];
           if (!existing) return;
-          ['raw_message', 'avatar', 'nickname', 'user_id', 'reference_id', 'refidx'].forEach((field) => {
-            const oldValue = String(existing[field] || '');
-            const newValue = String(message?.[field] || '');
-            if (field === 'raw_message' ? newValue.length > oldValue.length : !oldValue && newValue) {
-              existing[field] = message[field];
-            }
-          });
-          if (msgIsRecalled(message)) existing.recalled = true;
-          const oldMedia = existing.media;
-          const newMedia = message?.media;
-          if ((!oldMedia || (typeof oldMedia === 'object' && !Object.keys(oldMedia).length)) && newMedia) {
-            existing.media = newMedia;
-          }
+          result[duplicateIndex] = mergeMsgRealtimeMessage(existing, message);
           keys.forEach((key) => seen.set(key, duplicateIndex));
         });
         return result;
@@ -2966,7 +3015,7 @@
         data = {
           ...previousData,
           ...data,
-          member_profiles:{...(previousData.member_profiles || {}), ...(data.member_profiles || {})},
+          member_profiles:mergeMsgProfileMaps(previousData.member_profiles, data.member_profiles),
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
         const serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
@@ -2991,7 +3040,7 @@
           return;
         }
         const profiles = mergeMsgProfiles(
-          {...(msgState.profiles || {}), ...(data.member_profiles || {})},
+          mergeMsgProfileMaps(msgState.profiles, data.member_profiles),
           msgs,
         );
         msgState.profiles = profiles;
@@ -3067,7 +3116,7 @@
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
           const roleMap = {owner:'群主', admin:'管理', member:'群员'};
           const rawRole = String(m.raw_message || '').match(/member_role[^,]*?['"]([a-z]+)['"]/)?.[1] || '';
-          const memberRole = String(profile.role || rawRole || '').trim().toLowerCase();
+          const memberRole = String(profile.role || m.member_role || rawRole || '').trim().toLowerCase();
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
           const roleTag = roleMap[memberRole] || '';
           if (!isSelf && roleTag) tags.push(`<span class="msg-tag role">${roleTag}</span>`);
@@ -3282,10 +3331,10 @@
           renderMsgChats({chats:msgState.chats});
         }, 50);
       };
-      const scheduleMsgRealtimeMessageRender = (chatId, toBottom) => {
+      const scheduleMsgRealtimeMessageRender = (chatId, toBottom, countAsNew = true) => {
         if (msgState.realtimeRenderChatId && msgState.realtimeRenderChatId !== chatId) return;
         msgState.realtimeRenderChatId = chatId;
-        msgState.realtimeMessageCount += 1;
+        if (countAsNew) msgState.realtimeMessageCount += 1;
         msgState.realtimeToBottom = msgState.realtimeToBottom || Boolean(toBottom);
         if (msgState.realtimeMessageTimer) return;
         msgState.realtimeMessageTimer = setTimeout(() => {
@@ -3333,10 +3382,19 @@
           }
           return;
         }
+        const oldProfiles = JSON.stringify(msgState.profiles || {});
         msgState.profiles = mergeMsgProfiles(
-          {...(msgState.profiles || {}), ...(payload.member_profiles || {})},
+          mergeMsgProfileMaps(msgState.profiles, payload.member_profiles),
           [message],
         );
+        const profilesChanged = JSON.stringify(msgState.profiles || {}) !== oldProfiles;
+        if (msgState.chatId === chatId) {
+          const history = msgState.historyData || {};
+          msgState.historyData = {
+            ...history,
+            member_profiles:mergeMsgProfileMaps(history.member_profiles, payload.member_profiles),
+          };
+        }
         const isNewEvent = rememberMsgEvent(chatId, message);
         const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
         const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
@@ -3385,14 +3443,22 @@
         if (isNewEvent || !msgState.chats.some((chat) => String(chat.chat_id || '') === chatId)) {
           scheduleMsgChatRender();
         }
-        if (!isViewing || !isNewEvent) return;
+        if (!isViewing) return;
         const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
-        const alreadyRendered = msgState.messages.some((item) => msgMessagesMatch(item, realtimeMessage));
-        if (!alreadyRendered) {
+        const existingIndex = msgState.messages.findIndex((item) => msgMessagesMatch(item, realtimeMessage));
+        if (existingIndex >= 0) {
+          const existingMessage = msgState.messages[existingIndex];
+          const mergedMessage = mergeMsgRealtimeMessage(existingMessage, realtimeMessage);
+          const messageChanged = JSON.stringify(existingMessage) !== JSON.stringify(mergedMessage);
+          if (messageChanged) {
+            msgState.messages = msgState.messages.map((item, index) => index === existingIndex ? mergedMessage : item);
+          }
+          if (messageChanged || profilesChanged) scheduleMsgRealtimeMessageRender(chatId, false, false);
+        } else if (isNewEvent) {
           msgState.messages = [...msgState.messages, realtimeMessage];
           scheduleMsgRealtimeMessageRender(chatId, followLatest);
         }
-        if (followLatest) markMsgRead(chatId, true);
+        if (isNewEvent && followLatest) markMsgRead(chatId, true);
       };
       const applyMsgGroupStatus = (payload) => {
         const chatId = String(payload?.chat_id || '').trim();
@@ -3477,7 +3543,7 @@
             updateMsgHead(data);
             msgState.historyData = {...(msgState.historyData || {}), ...data, messages:incoming};
             msgState.profiles = mergeMsgProfiles(
-              {...(msgState.profiles || {}), ...(data.member_profiles || {})},
+              mergeMsgProfileMaps(msgState.profiles, data.member_profiles),
               incoming,
             );
             cacheMsgHistory(historyCacheKey, {...data, messages:incoming.map((message) => ({...message}))});
