@@ -45,10 +45,19 @@ except Exception:
 
 
 class 蓝奏云请求错误(RuntimeError):
-    def __init__(self, 阶段: str, 状态码: int = 0):
+    def __init__(
+        self,
+        阶段: str,
+        状态码: int = 0,
+        业务码: Any = None,
+    ):
         super().__init__(阶段)
         self.阶段 = 阶段
         self.状态码 = int(状态码 or 0)
+        try:
+            self.业务码 = int(业务码) if 业务码 is not None else None
+        except (TypeError, ValueError):
+            self.业务码 = None
 
 
 def _配置值(配置: Any) -> str:
@@ -256,8 +265,8 @@ async def _列出目录(
         {"task": 47, "folder_id": 父目录ID},
         referer=f"{蓝奏云网盘主机}/mydisk.php",
     )
-    if not _成功(结果):
-        raise 蓝奏云请求错误("directory_list")
+    if not isinstance(结果.get("text"), list):
+        raise 蓝奏云请求错误("directory_list", 业务码=结果.get("zt"))
     return _目录项(结果)
 
 
@@ -652,10 +661,11 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                 图片归档失败冷却.clear()
                 图片归档失败冷却[键] = 当前时间 + 300
         logger.warning(
-            "蓝奏云图片归档失败：阶段=%s，错误类型=%s，状态=%s",
+            "蓝奏云图片归档失败：阶段=%s，错误类型=%s，状态=%s，业务码=%s",
             getattr(exc, "阶段", 阶段),
             type(exc).__name__,
             getattr(exc, "状态码", 0) or "none",
+            getattr(exc, "业务码", None) if getattr(exc, "业务码", None) is not None else "none",
         )
     finally:
         图片归档进行中.discard(键)
