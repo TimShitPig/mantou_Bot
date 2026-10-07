@@ -42,6 +42,8 @@ except Exception:
 图片最大字节数 = 100 * 1024 * 1024
 网页最大字节数 = 1024 * 1024
 最大跳转次数 = 4
+最大分享页结构重试次数 = 1
+分享页结构重试间隔秒 = 0.25
 蓝奏云Cookie字段 = frozenset({"phpdisk_info", "ylogin"})
 蓝奏云UserAgent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -711,7 +713,10 @@ async def _取得分享信息(
 
 
 async def _取得直接下载地址(
-    会话: ClientSession, 分享地址: str, 提取码: str
+    会话: ClientSession,
+    分享地址: str,
+    提取码: str,
+    分享页重试次数: int = 0,
 ) -> str:
     分享HTML = await _读取网页文本(
         会话, 分享地址, 限制蓝奏域名=True
@@ -760,6 +765,14 @@ async def _取得直接下载地址(
     else:
         匹配 = re.search(r'<iframe[^>]+src=["\']([^"\']+)', 分享HTML, re.IGNORECASE)
         if not 匹配:
+            if 分享页重试次数 < 最大分享页结构重试次数:
+                await asyncio.sleep(分享页结构重试间隔秒)
+                return await _取得直接下载地址(
+                    会话,
+                    分享地址,
+                    提取码,
+                    分享页重试次数 + 1,
+                )
             raise 蓝奏云请求错误("password_page_unrecognized")
         下载页地址 = urljoin(分享地址, 匹配.group(1))
         下载页HTML = await _读取网页文本(
