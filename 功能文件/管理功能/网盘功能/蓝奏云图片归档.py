@@ -26,6 +26,17 @@ except Exception:
 
 蓝奏云网盘主机 = "https://pc.woozooo.com"
 图片归档目录名 = "QQ聊天图片"
+蓝奏云分享域名 = frozenset(
+    {
+        "lanzou.com",
+        "lanzouo.com",
+        "lanzouw.com",
+        "lanzoui.com",
+        "lanzoux.com",
+        "lanzous.com",
+        "woozooo.com",
+    }
+)
 图片最大字节数 = 100 * 1024 * 1024
 网页最大字节数 = 1024 * 1024
 最大跳转次数 = 4
@@ -50,6 +61,7 @@ class 蓝奏云请求错误(RuntimeError):
         阶段: str,
         状态码: int = 0,
         业务码: Any = None,
+        主机: str = "",
     ):
         super().__init__(阶段)
         self.阶段 = 阶段
@@ -58,6 +70,7 @@ class 蓝奏云请求错误(RuntimeError):
             self.业务码 = int(业务码) if 业务码 is not None else None
         except (TypeError, ValueError):
             self.业务码 = None
+        self.主机 = str(主机 or "")[:253]
 
 
 def _配置值(配置: Any) -> str:
@@ -133,14 +146,10 @@ async def _确保公网HTTPS地址(地址: str, *, 限制蓝奏域名: bool = Fa
         or (解析.port not in (None, 443))
     ):
         raise 蓝奏云请求错误("url_invalid")
-    if 限制蓝奏域名 and not (
-        主机 == "lanzou.com"
-        or 主机.endswith(".lanzou.com")
-        or 主机 == "woozooo.com"
-        or 主机.endswith(".woozooo.com")
-        or re.fullmatch(r"[a-z0-9-]+\.lanzou[a-z0-9-]*\.(?:com|cn)", 主机)
+    if 限制蓝奏域名 and not any(
+        主机 == 根域 or 主机.endswith(f".{根域}") for 根域 in 蓝奏云分享域名
     ):
-        raise 蓝奏云请求错误("share_host_invalid")
+        raise 蓝奏云请求错误("share_host_invalid", 主机=主机)
     try:
         地址列表 = [ipaddress.ip_address(主机)]
     except ValueError:
@@ -661,11 +670,12 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                 图片归档失败冷却.clear()
                 图片归档失败冷却[键] = 当前时间 + 300
         logger.warning(
-            "蓝奏云图片归档失败：阶段=%s，错误类型=%s，状态=%s，业务码=%s",
+            "蓝奏云图片归档失败：阶段=%s，错误类型=%s，状态=%s，业务码=%s，主机=%s",
             getattr(exc, "阶段", 阶段),
             type(exc).__name__,
             getattr(exc, "状态码", 0) or "none",
             getattr(exc, "业务码", None) if getattr(exc, "业务码", None) is not None else "none",
+            getattr(exc, "主机", "") or "none",
         )
     finally:
         图片归档进行中.discard(键)
