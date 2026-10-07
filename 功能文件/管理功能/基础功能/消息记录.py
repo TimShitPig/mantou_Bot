@@ -2616,7 +2616,7 @@ def 记录收到消息(
         return None
 
 
-def 记录群成员系统消息(
+async def 记录群成员系统消息(
     会话标识: str,
     成员openid: str,
     事件名: str,
@@ -2649,11 +2649,27 @@ def 记录群成员系统消息(
     消息ID = f"group-event:{事件身份摘要}"
 
     成员昵称 = str(昵称 or "").strip()
+    无效昵称 = {"成员", "新成员", "未知", "未知用户", 成员标识}
+    if 成员昵称 in 无效昵称:
+        成员昵称 = ""
     if not 成员昵称:
         资料 = (成员资料缓存.get(群标识) or {}).get(成员标识) or {}
         if isinstance(资料, dict):
             成员昵称 = str(资料.get("nickname") or 资料.get("username") or "").strip()
-    if not 成员昵称 or 成员昵称 in {"未知", "未知用户", 成员标识}:
+            if 成员昵称 in 无效昵称:
+                成员昵称 = ""
+    if not 成员昵称 and _消息存储 is not None and _消息数据库已配置():
+        读取昵称 = getattr(_消息存储, "读取群成员最近昵称", None)
+        if callable(读取昵称):
+            try:
+                成员昵称 = str(
+                    await _异步执行消息记录同步(读取昵称, 群标识, 成员标识) or ""
+                ).strip()
+            except Exception as 异常:
+                logger.debug("群成员昵称回查失败：错误类型=%s", type(异常).__name__)
+            if 成员昵称 in 无效昵称:
+                成员昵称 = ""
+    if not 成员昵称:
         成员昵称 = 默认昵称
 
     消息 = {

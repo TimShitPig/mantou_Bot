@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 10
+群成员加入桥版本 = 11
 QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {
     "group_member_add",
@@ -581,7 +581,7 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
     return 结果
 
 
-def _同步群成员人数变化(
+async def _同步群成员人数变化(
     客户端: Any,
     原始事件: Any,
     事件名: str,
@@ -625,7 +625,7 @@ def _同步群成员人数变化(
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        消息记录.记录群成员系统消息(
+        await 消息记录.记录群成员系统消息(
             群号,
             成员,
             事件名,
@@ -983,7 +983,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 _事件字段状态(原始事件),
             )
             try:
-                _同步群成员人数变化(self, 原始事件, "group_member_add", 1)
+                await _同步群成员人数变化(self, 原始事件, "group_member_add", 1)
             except Exception as 异常:
                 logger.warning(
                     "QQ官方群人数事件处理失败：event=group_member_add, error_type=%s",
@@ -1043,7 +1043,7 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 _事件字段状态(原始事件),
             )
             try:
-                _同步群成员人数变化(self, 原始事件, "group_member_remove", -1)
+                await _同步群成员人数变化(self, 原始事件, "group_member_remove", -1)
             except Exception as 异常:
                 logger.warning(
                     "QQ官方群人数事件处理失败：event=group_member_remove, error_type=%s",
