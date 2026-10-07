@@ -9,6 +9,7 @@ import secrets
 import socket
 from contextlib import asynccontextmanager
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -74,6 +75,33 @@ class 蓝奏云请求错误(RuntimeError):
         self.主机 = str(主机 or "")[:253]
 
 
+class _ESAScriptParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.scripts: list[str] = []
+        self._script_parts: list[str] = []
+        self._capture_script = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "script":
+            return
+        attributes = dict(attrs)
+        self._capture_script = not attributes.get("src")
+        self._script_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_script:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "script":
+            return
+        if self._capture_script:
+            self.scripts.append("".join(self._script_parts))
+        self._capture_script = False
+        self._script_parts = []
+
+
 def _配置值(配置: Any) -> str:
     候选列表 = [配置]
     for 属性名 in ("data", "obj"):
@@ -133,6 +161,93 @@ def _新建会话(Cookie: dict[str, str] | None = None) -> ClientSession:
     return 会话
 
 
+def _浏览器页面请求头() -> dict[str, str]:
+    return {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+
+def _执行ESA挑战脚本(
+    会话: ClientSession, 页面地址: str, 页面HTML: str
+) -> None:
+    try:
+        import quickjs
+    except ImportError as exc:
+        raise 蓝奏云请求错误("esa_runtime_unavailable") from exc
+
+    if len(页面HTML.encode("utf-8", errors="ignore")) > 网页最大字节数:
+        raise 蓝奏云请求错误("esa_page_too_large")
+    解析器 = _ESAScriptParser()
+    try:
+        解析器.feed(页面HTML)
+        解析器.close()
+    except Exception as exc:
+        raise 蓝奏云请求错误("esa_html_parse_failed") from exc
+    脚本列表 = [脚本 for 脚本 in 解析器.scripts if 脚本.strip()]
+    if not 脚本列表 or len(脚本列表) > 12:
+        raise 蓝奏云请求错误("esa_script_missing")
+    if sum(len(脚本.encode("utf-8", errors="ignore")) for 脚本 in 脚本列表) > 256 * 1024:
+        raise 蓝奏云请求错误("esa_script_too_large")
+
+    页面URL = URL(页面地址)
+    初始Cookie = {
+        名称: 项目.value
+        for 名称, 项目 in 会话.cookie_jar.filter_cookies(页面URL).items()
+    }
+    上下文 = quickjs.Context()
+    上下文.set_memory_limit(8 * 1024 * 1024)
+    上下文.set_time_limit(2.0)
+    引导脚本 = (
+        "var __cookieMap=new Map(Object.entries("
+        + json.dumps(初始Cookie, ensure_ascii=True)
+        + "));var document={};"
+        "Object.defineProperty(document,'cookie',{get:function(){return "
+        "Array.from(__cookieMap,function(x){return x[0]+'='+x[1]}).join('; ')},"
+        "set:function(v){var p=String(v).split(';',1)[0],i=p.indexOf('=');"
+        "if(i>0)__cookieMap.set(p.slice(0,i).trim(),p.slice(i+1).trim())}});"
+        "var location={href:"
+        + json.dumps(页面地址, ensure_ascii=True)
+        + ",reload:function(){}};document.location=location;document.URL="
+        + json.dumps(页面地址, ensure_ascii=True)
+        + ";document.documentURI=document.URL;var navigator={userAgent:"
+        + json.dumps(蓝奏云UserAgent, ensure_ascii=True)
+        + ",language:'zh-CN',platform:'Win32'};"
+        "var window={document:document,location:location,navigator:navigator};"
+        "var self=window,top=window,parent=window;"
+        "var setTimeout=function(f){if(typeof f==='function')f();return 1};"
+        "var clearTimeout=function(){};"
+    )
+    try:
+        上下文.eval(引导脚本)
+        for 脚本 in 脚本列表:
+            上下文.eval(脚本)
+        Cookie原文 = str(上下文.eval("document.cookie") or "")
+    except Exception as exc:
+        raise 蓝奏云请求错误("esa_script_failed") from exc
+
+    更新Cookie: dict[str, str] = {}
+    for 片段 in Cookie原文.split(";"):
+        名称, 分隔符, 值 = 片段.strip().partition("=")
+        if 分隔符 and 名称 and 值:
+            更新Cookie[名称] = 值
+    挑战Cookie = 更新Cookie.get("acw_sc__v2", "")
+    if not 挑战Cookie or len(挑战Cookie) > 1024:
+        raise 蓝奏云请求错误("esa_cookie_missing")
+    try:
+        会话.cookie_jar.update_cookies(更新Cookie, response_url=页面URL)
+    except Exception as exc:
+        raise 蓝奏云请求错误("esa_cookie_rejected") from exc
+
+
+def _是ESA响应(响应: ClientResponse) -> bool:
+    return str(响应.headers.get("Server") or "").strip().lower().startswith("esa")
+
+
 async def _确保公网HTTPS地址(地址: str, *, 限制蓝奏域名: bool = False) -> str:
     文本 = str(地址 or "").strip()
     if len(文本) > 8192:
@@ -177,6 +292,7 @@ async def _请求跟随跳转(
     *,
     referer: str = "",
     限制蓝奏域名: bool = False,
+    请求头: dict[str, str] | None = None,
 ) -> ClientResponse:
     当前地址 = 地址
     for 次数 in range(最大跳转次数 + 1):
@@ -184,10 +300,13 @@ async def _请求跟随跳转(
             当前地址, 限制蓝奏域名=限制蓝奏域名 and 次数 == 0
         )
         try:
+            当前请求头 = dict(请求头 or {})
+            if referer:
+                当前请求头["Referer"] = referer
             响应 = await 会话.get(
                 当前地址,
                 allow_redirects=False,
-                headers={"Referer": referer} if referer else None,
+                headers=当前请求头 or None,
             )
         except Exception as exc:
             raise 蓝奏云请求错误("get_failed") from exc
@@ -201,6 +320,46 @@ async def _请求跟随跳转(
     raise 蓝奏云请求错误("redirect_limit")
 
 
+async def _请求处理ESA挑战(
+    会话: ClientSession,
+    地址: str,
+    *,
+    referer: str = "",
+    限制蓝奏域名: bool = False,
+    请求头: dict[str, str] | None = None,
+) -> ClientResponse:
+    响应 = await _请求跟随跳转(
+        会话,
+        地址,
+        referer=referer,
+        限制蓝奏域名=限制蓝奏域名,
+        请求头=请求头,
+    )
+    if not _是ESA响应(响应):
+        return 响应
+    状态码 = int(响应.status or 0)
+    有效地址 = str(响应.url)
+    try:
+        页面内容 = await 响应.content.read(网页最大字节数 + 1)
+    finally:
+        响应.release()
+    if 状态码 != 200:
+        raise 蓝奏云请求错误("esa_challenge_status", 状态码)
+    if len(页面内容) > 网页最大字节数:
+        raise 蓝奏云请求错误("esa_page_too_large", 状态码)
+    if b"acw_sc__v2" not in 页面内容.lower():
+        raise 蓝奏云请求错误("esa_challenge_marker_missing", 状态码)
+    页面HTML = 页面内容.decode("utf-8", errors="replace")
+    _执行ESA挑战脚本(会话, 有效地址, 页面HTML)
+    return await _请求跟随跳转(
+        会话,
+        地址,
+        referer=referer,
+        限制蓝奏域名=限制蓝奏域名,
+        请求头=请求头,
+    )
+
+
 async def _读取网页文本(
     会话: ClientSession,
     地址: str,
@@ -209,14 +368,40 @@ async def _读取网页文本(
     限制蓝奏域名: bool = False,
 ) -> str:
     响应 = await _请求跟随跳转(
-        会话, 地址, referer=referer, 限制蓝奏域名=限制蓝奏域名
+        会话,
+        地址,
+        referer=referer,
+        限制蓝奏域名=限制蓝奏域名,
+        请求头=_浏览器页面请求头(),
     )
     try:
-        if 响应.status != 200:
-            raise 蓝奏云请求错误("page_status", 响应.status)
         内容 = await 响应.content.read(网页最大字节数 + 1)
         if len(内容) > 网页最大字节数:
             raise 蓝奏云请求错误("page_too_large", 响应.status)
+        if _是ESA响应(响应) and b"acw_sc__v2" in 内容.lower():
+            if 响应.status != 200:
+                raise 蓝奏云请求错误("esa_challenge_status", 响应.status)
+            有效地址 = str(响应.url)
+            _执行ESA挑战脚本(
+                会话,
+                有效地址,
+                内容.decode("utf-8", errors="replace"),
+            )
+            响应.release()
+            响应 = await _请求跟随跳转(
+                会话,
+                地址,
+                referer=referer,
+                限制蓝奏域名=限制蓝奏域名,
+                请求头=_浏览器页面请求头(),
+            )
+            内容 = await 响应.content.read(网页最大字节数 + 1)
+            if len(内容) > 网页最大字节数:
+                raise 蓝奏云请求错误("page_too_large", 响应.status)
+            if _是ESA响应(响应) and b"acw_sc__v2" in 内容.lower():
+                raise 蓝奏云请求错误("esa_challenge_retry", 响应.status)
+        if 响应.status != 200:
+            raise 蓝奏云请求错误("page_status", 响应.status)
         编码 = 响应.charset or "utf-8"
         return 内容.decode(编码, errors="replace")
     finally:
@@ -229,12 +414,16 @@ async def _提交表单JSON(
     字段: dict[str, Any],
     *,
     referer: str = "",
+    请求头: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
+        当前请求头 = dict(请求头 or {})
+        if referer:
+            当前请求头["Referer"] = referer
         async with 会话.post(
             地址,
             data={名称: str(值) for 名称, 值 in 字段.items()},
-            headers={"Referer": referer} if referer else None,
+            headers=当前请求头 or None,
             allow_redirects=False,
         ) as 响应:
             if 响应.status != 200:
@@ -530,32 +719,68 @@ async def _取得直接下载地址(
     if "文件取消" in 分享HTML or "文件不存在" in 分享HTML:
         raise 蓝奏云请求错误("share_missing")
     分享解析 = urlsplit(分享地址)
-    Ajax地址 = f"{分享解析.scheme}://{分享解析.netloc}/ajaxm.php"
-    if re.search(r'id=["\'](?:pwdload|passwddiv)["\']', 分享HTML, re.IGNORECASE):
+    新版下载接口 = False
+    新版Sign = re.search(
+        r"\bvar\s+isngis\s*=\s*['\"]([^'\"]+)['\"]",
+        分享HTML,
+        re.IGNORECASE,
+    )
+    新版Ajax = re.search(
+        r"\burl\s*:\s*['\"](https://apifile\.woozooo\.com/ajaxfile\.php\?file=[0-9]+)['\"]",
+        分享HTML,
+        re.IGNORECASE,
+    )
+    if 新版Sign and 新版Ajax:
+        Ajax地址 = await _确保公网HTTPS地址(新版Ajax.group(1))
+        if urlsplit(Ajax地址).hostname != "apifile.woozooo.com":
+            raise 蓝奏云请求错误("download_api_host_invalid")
+        Kd匹配 = re.search(r"\bvar\s+kdns\s*=\s*([0-9]+)", 分享HTML)
+        if not Kd匹配:
+            raise 蓝奏云请求错误("download_kd_missing")
+        Ajax字段 = {
+            "action": "downprocess",
+            "sign": 新版Sign.group(1),
+            "kd": Kd匹配.group(1),
+            "p": 提取码,
+        }
+        Referer = 分享地址
+        Ajax请求头 = {
+            "Origin": f"{分享解析.scheme}://{分享解析.netloc}",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+        }
+        新版下载接口 = True
+    elif re.search(r'id=["\'](?:pwdload|passwddiv)["\']', 分享HTML, re.IGNORECASE):
         匹配 = re.search(r"sign=([\w-]+)&", 分享HTML)
         if not 匹配:
             raise 蓝奏云请求错误("password_sign_missing")
+        Ajax地址 = f"{分享解析.scheme}://{分享解析.netloc}/ajaxm.php"
         Ajax字段 = {"action": "downprocess", "sign": 匹配.group(1), "p": 提取码}
         Referer = 分享地址
     else:
         匹配 = re.search(r'<iframe[^>]+src=["\']([^"\']+)', 分享HTML, re.IGNORECASE)
         if not 匹配:
-            raise 蓝奏云请求错误("download_frame_missing")
+            raise 蓝奏云请求错误("password_page_unrecognized")
         下载页地址 = urljoin(分享地址, 匹配.group(1))
         下载页HTML = await _读取网页文本(
             会话, 下载页地址, referer=分享地址, 限制蓝奏域名=True
         )
         if "验证码" in 下载页HTML or "网络异常" in 下载页HTML:
             raise 蓝奏云请求错误("download_challenge")
-        Sign = re.search(r"['\"]sign['\"]\s*:\s*['\"]([^'\"]+)", 下载页HTML)
+        Sign = re.search(r"['\"]sign['\"]\s*:\s*['\"]([^'\"]+)['\"]", 下载页HTML)
         if not Sign:
-            Sign = re.search(r"\bvar\s+sign\s*=\s*['\"]([^'\"]+)", 下载页HTML)
+            Sign = re.search(r"\bvar\s+sign\s*=\s*['\"]([^'\"]+)['\"]", 下载页HTML)
         if not Sign:
             raise 蓝奏云请求错误("download_sign_missing")
+        Ajax地址 = f"{分享解析.scheme}://{分享解析.netloc}/ajaxm.php"
         Ajax字段 = {"action": "downprocess", "sign": Sign.group(1), "ves": 1}
         Referer = 下载页地址
     Ajax结果 = await _提交表单JSON(
-        会话, Ajax地址, Ajax字段, referer=Referer
+        会话,
+        Ajax地址,
+        Ajax字段,
+        referer=Referer,
+        请求头=Ajax请求头 if 新版下载接口 else None,
     )
     if not _成功(Ajax结果):
         raise 蓝奏云请求错误("download_link_rejected")
@@ -563,7 +788,25 @@ async def _取得直接下载地址(
     下载标识 = str(Ajax结果.get("url") or "").strip()
     if not 下载主机 or not 下载标识:
         raise 蓝奏云请求错误("download_link_missing")
-    下载地址 = f"{下载主机}/file/{quote(下载标识, safe='')}"
+    if "://" not in 下载主机:
+        下载主机 = f"https://{下载主机.lstrip('/')}"
+    下载主机解析 = urlsplit(下载主机)
+    if (
+        下载主机解析.scheme.lower() != "https"
+        or not 下载主机解析.hostname
+        or 下载主机解析.username
+        or 下载主机解析.password
+        or 下载主机解析.port not in (None, 443)
+        or 下载主机解析.path not in ("", "/")
+        or 下载主机解析.query
+        or 下载主机解析.fragment
+    ):
+        raise 蓝奏云请求错误("download_host_invalid")
+    if 新版下载接口:
+        下载主机名 = str(下载主机解析.hostname or "").lower().rstrip(".")
+        if not (下载主机名 == "lanrar.com" or 下载主机名.endswith(".lanrar.com")):
+            raise 蓝奏云请求错误("download_host_invalid", 主机=下载主机名)
+    下载地址 = f"{下载主机}/file/{下载标识 if 新版下载接口 else quote(下载标识, safe='')}"
     return await _确保公网HTTPS地址(下载地址)
 
 
@@ -573,7 +816,14 @@ async def 打开归档图片(
 ) -> AsyncIterator[ClientResponse]:
     async with _新建会话() as 会话:
         直接地址 = await _取得直接下载地址(会话, 分享地址, 提取码)
-        响应 = await _请求跟随跳转(会话, 直接地址, referer=分享地址)
+        下载请求头 = _浏览器页面请求头()
+        下载请求头["Sec-Fetch-Site"] = "cross-site"
+        响应 = await _请求处理ESA挑战(
+            会话,
+            直接地址,
+            referer=分享地址,
+            请求头=下载请求头,
+        )
         try:
             if 响应.status != 200:
                 raise 蓝奏云请求错误("download_status", 响应.status)

@@ -1438,6 +1438,16 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
                     前缀, 上游.headers.get("Content-Type")
                 )
                 if not 类型.startswith("image/"):
+                    if (
+                        b"acw_sc__v2" in 前缀.lower()
+                        or (
+                            蓝奏云图片归档._是ESA响应(上游)
+                            and 上游.content_type == "text/html"
+                        )
+                    ):
+                        raise 蓝奏云图片归档.蓝奏云请求错误(
+                            "esa_challenge_retry", 上游.status
+                        )
                     return web.Response(status=415, text="归档内容不是图片")
                 响应 = web.StreamResponse(
                     status=200,
