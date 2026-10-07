@@ -1470,10 +1470,16 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             raise
         except Exception as exc:
             logger.warning(
-                "帮助控制台蓝奏云图片读取失败：阶段=%s，错误类型=%s，上游状态=%s",
+                "帮助控制台蓝奏云图片读取失败：阶段=%s，原因=%s，错误类型=%s，上游状态=%s，错误状态=%s，业务码=%s，主机=%s",
                 阶段,
+                getattr(exc, "阶段", "none") or "none",
                 type(exc).__name__,
                 上游状态 or "none",
+                getattr(exc, "状态码", 0) or "none",
+                getattr(exc, "业务码", None)
+                if getattr(exc, "业务码", None) is not None
+                else "none",
+                getattr(exc, "主机", "") or "none",
             )
             if 响应 is not None and 响应.prepared:
                 响应.force_close()
