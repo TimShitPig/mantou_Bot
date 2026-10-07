@@ -742,10 +742,30 @@ def 构造网页媒体字段(
         大小 = max(0, int(归档.get("size") or 0))
     except (TypeError, ValueError):
         大小 = 0
-    结果["src"] = 构造消息图片代理地址(会话标识, 类型, 消息ID)
+    代理地址 = 构造消息图片代理地址(会话标识, 类型, 消息ID)
+    结果["src"] = 代理地址
     结果["archived"] = True
     结果["content_type"] = str(归档.get("content_type") or "image/jpeg")
     结果["size"] = 大小
+    项目列表 = 结果.get("items")
+    if isinstance(项目列表, list):
+        网页项目列表 = []
+        for 索引, 项目 in enumerate(项目列表):
+            if not isinstance(项目, dict):
+                网页项目列表.append(项目)
+                continue
+            网页项目 = dict(项目)
+            if 索引 == 0:
+                网页项目.update(
+                    {
+                        "src": 代理地址,
+                        "archived": True,
+                        "content_type": 结果["content_type"],
+                        "size": 大小,
+                    }
+                )
+            网页项目列表.append(网页项目)
+        结果["items"] = 网页项目列表
     return 结果
 
 

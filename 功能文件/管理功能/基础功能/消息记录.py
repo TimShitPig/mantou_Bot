@@ -491,13 +491,16 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if isinstance(现有媒体, dict)
         else ""
     )
-    if not 现有地址:
+    需要补全媒体项目 = (
+        isinstance(现有媒体, dict)
+        and not isinstance(现有媒体.get("items"), list)
+        and 原始消息 is not None
+    )
+    if not 现有地址 or 需要补全媒体项目:
         补充媒体 = _提取媒体字段(str(记录.get("content") or ""), 原始消息)
         if 补充媒体:
             if isinstance(现有媒体, dict):
-                合并媒体 = dict(现有媒体)
-                合并媒体.update({k: v for k, v in 补充媒体.items() if v not in (None, "")})
-                记录["media"] = 合并媒体
+                记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
     return 记录
@@ -527,6 +530,11 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     需要原始 = (
         not 作者头像
         or bool(_提及规则.search(内容文本))
+        or (
+            isinstance(现有媒体, dict)
+            and bool(现有媒体.get("src"))
+            and not isinstance(现有媒体.get("items"), list)
+        )
         or (
             not isinstance(现有媒体, dict)
             and bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE))
@@ -572,13 +580,16 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if isinstance(现有媒体, dict)
         else ""
     )
-    if not 现有地址:
+    需要补全媒体项目 = (
+        isinstance(现有媒体, dict)
+        and not isinstance(现有媒体.get("items"), list)
+        and 原始消息 is not None
+    )
+    if not 现有地址 or 需要补全媒体项目:
         补充媒体 = _提取媒体字段(内容文本, 原始消息)
         if 补充媒体:
             if isinstance(现有媒体, dict):
-                合并媒体 = dict(现有媒体)
-                合并媒体.update({k: v for k, v in 补充媒体.items() if v not in (None, "")})
-                记录["media"] = 合并媒体
+                记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
     return 记录
@@ -880,6 +891,13 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             ):
                 if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
                     旧媒体[字段] = 新媒体[字段]
+        if isinstance(旧媒体, dict) and (
+            isinstance(旧媒体.get("items"), list)
+            or isinstance(新媒体.get("items"), list)
+        ):
+            当前媒体 = 已有记录.get("media")
+            if isinstance(当前媒体, dict):
+                当前媒体["items"] = _合并媒体项目列表(旧媒体, 新媒体)
         if isinstance(已有归档, dict):
             当前媒体 = 已有记录.get("media")
             if isinstance(当前媒体, dict):
@@ -1902,6 +1920,69 @@ def _提取REFIDX(消息: Any) -> str:
     return ""
 
 
+def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
+    if not isinstance(媒体, dict):
+        return []
+    项目列表 = 媒体.get("items")
+    if isinstance(项目列表, list) and 项目列表:
+        return [dict(项目) for 项目 in 项目列表 if isinstance(项目, dict)]
+    项目 = {
+        字段: 值
+        for 字段, 值 in 媒体.items()
+        if 字段 not in {"items", "_lanzou_archive"}
+    }
+    if any(str(项目.get(字段) or "").strip() for 字段 in ("src", "url", "download_url")):
+        return [项目]
+    return []
+
+
+def _合并媒体项目列表(*媒体列表: Any) -> list[dict[str, Any]]:
+    合并结果: list[dict[str, Any]] = []
+    已合并数量: dict[str, int] = {}
+    for 媒体 in 媒体列表:
+        本媒体数量: dict[str, int] = {}
+        for 项目 in _媒体项目列表(媒体):
+            地址 = str(
+                项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
+            ).strip()
+            类型 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
+            键 = f"{类型}\0{地址}" if 地址 else json.dumps(
+                项目, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+            )
+            本媒体数量[键] = 本媒体数量.get(键, 0) + 1
+            if 本媒体数量[键] <= 已合并数量.get(键, 0):
+                continue
+            合并结果.append(项目)
+            已合并数量[键] = 本媒体数量[键]
+    return 合并结果
+
+
+def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(已有媒体, dict):
+        return dict(新媒体)
+    合并媒体 = dict(已有媒体)
+    旧归档 = 已有媒体.get("_lanzou_archive")
+    for 字段, 值 in 新媒体.items():
+        if 字段 in {"items", "_lanzou_archive"}:
+            continue
+        if 值 not in (None, ""):
+            合并媒体[字段] = 值
+    if isinstance(已有媒体.get("items"), list) or isinstance(新媒体.get("items"), list):
+        合并媒体["items"] = _合并媒体项目列表(已有媒体, 新媒体)
+    if isinstance(旧归档, dict):
+        合并媒体["_lanzou_archive"] = 旧归档
+    return 合并媒体
+
+
+def _打包媒体项目(项目列表: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not 项目列表:
+        return None
+    结果 = dict(项目列表[0])
+    if len(项目列表) > 1:
+        结果["items"] = [dict(项目) for 项目 in 项目列表]
+    return 结果
+
+
 def _提取附件列表(消息: Any) -> list[Any]:
     """兼容 botpy 对象、字典和 raw_data 嵌套结构中的 attachments。"""
     if 消息 is None:
@@ -1928,6 +2009,7 @@ def _提取附件列表(消息: Any) -> list[Any]:
         if not 待检查:
             break
     附件列表: list[Any] = []
+    已见附件组: set[str] = set()
     for 当前 in 来源:
         for 字段 in ("attachments", "attachment", "files"):
             值 = _读取字段(当前, 字段)
@@ -1936,13 +2018,32 @@ def _提取附件列表(消息: Any) -> list[Any]:
             解析结果 = _解析消息结构(值)
             值 = 解析结果 if 解析结果 is not None else 值
             if isinstance(值, (list, tuple)):
-                附件列表.extend(值)
+                附件项 = list(值)
             elif isinstance(值, dict) and not any(
                 键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type")
             ):
-                附件列表.extend(值.values())
+                附件项 = list(值.values())
             else:
-                附件列表.append(值)
+                附件项 = [值]
+            附件组 = []
+            for 附件 in 附件项:
+                项目 = _解析消息结构(附件) or 附件
+                地址 = _清理媒体地址(
+                    _读取字段(项目, "url")
+                    or _读取字段(项目, "download_url")
+                    or _读取字段(项目, "file_url")
+                    or _读取字段(项目, "src")
+                )
+                if not 地址:
+                    附件组 = []
+                    break
+                附件组.append(地址)
+            签名 = json.dumps(附件组, ensure_ascii=False, separators=(",", ":")) if 附件组 else ""
+            if 签名 and 签名 in 已见附件组:
+                continue
+            if 签名:
+                已见附件组.add(签名)
+            附件列表.extend(附件项)
     return 附件列表
 
 
@@ -1961,6 +2062,7 @@ def _清理媒体地址(地址: Any) -> str:
 def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
     """从 QQ 官方消息 attachments 提取图片/语音/视频/文件及元数据。"""
     try:
+        媒体项目: list[dict[str, Any]] = []
         for 原附件 in _提取附件列表(消息):
             附件 = _解析消息结构(原附件) or 原附件
             类型值 = str(
@@ -1991,7 +2093,8 @@ def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
                 值 = _读取附件字段(附件, 字段)
                 if 值 not in (None, ""):
                     媒体[字段] = 值
-            return 媒体
+            媒体项目.append(媒体)
+        return _打包媒体项目(媒体项目)
     except Exception:
         pass
     return None
@@ -2006,25 +2109,36 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
         return None
     小写内容 = 内容.casefold()
     if "[" in 内容 and "]" in 内容 and ("http://" in 小写内容 or "https://" in 小写内容 or "//" in 内容):
-        匹配 = _媒体占位规则.search(内容)
-        if 匹配:
-            类型 = 匹配.group(1)
-            地址 = _清理媒体地址(匹配.group(2))
-            文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
-            return _补充媒体文字位置(
-                {"type": 类型, "src": 地址, "text": 文本},
-                内容,
-            )
+        匹配列表 = list(_媒体占位规则.finditer(内容))
+        if 匹配列表:
+            媒体项目 = [
+                {"type": 匹配.group(1), "src": _清理媒体地址(匹配.group(2)), "text": ""}
+                for 匹配 in 匹配列表
+                if _清理媒体地址(匹配.group(2))
+            ]
+            媒体 = _打包媒体项目(媒体项目)
+            if 媒体:
+                文本 = 内容
+                for 匹配 in reversed(匹配列表):
+                    文本 = 文本[: 匹配.start()] + 文本[匹配.end() :]
+                媒体["text"] = 文本.strip()
+                return _补充媒体文字位置(媒体, 内容)
     if not any(域名 in 小写内容 for 域名 in _QQ图片域名片段):
         return None
-    匹配 = _QQ图片域名.search(内容)
-    if 匹配:
-        地址 = _清理媒体地址(匹配.group(0))
-        文本 = (内容[: 匹配.start()] + 内容[匹配.end() :]).strip()
-        return _补充媒体文字位置(
-            {"type": "图片", "src": 地址, "text": 文本},
-            内容,
-        )
+    匹配列表 = list(_QQ图片域名.finditer(内容))
+    if 匹配列表:
+        媒体项目 = [
+            {"type": "图片", "src": _清理媒体地址(匹配.group(0)), "text": ""}
+            for 匹配 in 匹配列表
+            if _清理媒体地址(匹配.group(0))
+        ]
+        媒体 = _打包媒体项目(媒体项目)
+        if 媒体:
+            文本 = 内容
+            for 匹配 in reversed(匹配列表):
+                文本 = 文本[: 匹配.start()] + 文本[匹配.end() :]
+            媒体["text"] = 文本.strip()
+            return _补充媒体文字位置(媒体, 内容)
     return None
 
 
