@@ -119,6 +119,18 @@
       }
     }
   },
+  "lanzou_pan_settings": {
+    "description": "蓝奏云图片归档",
+    "type": "object",
+    "items": {
+      "lanzou_pan_cookie": {
+        "description": "蓝奏云普通版登录 Cookie",
+        "type": "string",
+        "hint": "填写普通版蓝奏云已登录浏览器的完整 Cookie。配置后，新收到的 QQ 聊天图片会以原始画质上传到蓝奏云；本地只在上传期间暂存，成功后立即删除。Cookie 只用于归档与读取，不会在网页/API 响应或日志中回显。",
+        "default": ""
+      }
+    }
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",

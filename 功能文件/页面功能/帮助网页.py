@@ -86,6 +86,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("get", "/api/message/media", 后端._处理消息媒体),
+        ("get", "/api/message/lanzou-image", 后端._处理蓝奏云归档图片),
         ("get", "/api/message/markdown-media/{token}", 后端._处理临时Markdown媒体),
         ("get", "/api/message/local-media/{filename}", 后端._处理本地发送媒体),
         ("get", "/api/message/layout", 后端._处理消息布局),

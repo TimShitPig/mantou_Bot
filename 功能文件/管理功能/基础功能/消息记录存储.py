@@ -420,6 +420,47 @@ def 写入消息(记录: dict[str, Any]) -> bool:
     return _写入消息记录(记录)
 
 
+def 读取消息媒体归档(
+    会话标识: str, 消息ID: str, 类型: str = ""
+) -> dict[str, Any] | None:
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = _规范消息ID(消息ID)
+    类型 = str(类型 or "").strip().lower()
+    if not 会话标识 or not 消息ID or not _MySQL可用():
+        return None
+    连接 = _打开连接()
+    if 连接 is None:
+        return None
+    try:
+        with 连接.cursor() as 游标:
+            类型过滤 = " AND 消息类型=%s" if 类型 in {"group", "user"} else ""
+            参数: tuple[str, ...] = (
+                (会话标识, 消息ID, 类型)
+                if 类型过滤
+                else (会话标识, 消息ID)
+            )
+            游标.execute(
+                f"SELECT media FROM `{消息记录表名}` "
+                f"WHERE 会话标识=%s AND message_id=%s{类型过滤} "
+                "ORDER BY id DESC LIMIT 1",
+                参数,
+            )
+            行 = 游标.fetchone()
+        if not 行:
+            return None
+        原文 = _行字段(行, 0, "media", 默认值="{}")
+        if isinstance(原文, bytes):
+            原文 = 原文.decode("utf-8", errors="replace")
+        媒体 = json.loads(str(原文 or "{}"))
+        归档 = 媒体.get("_lanzou_archive") if isinstance(媒体, dict) else None
+        return 归档 if isinstance(归档, dict) else None
+    except Exception as exc:
+        logger.debug("消息记录 MySQL 图片归档读取失败：错误类型=%s", type(exc).__name__)
+        return None
+    finally:
+        _关闭连接(连接)
+
+
 def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     """使用单连接、单事务批量写入消息，供异步持久化队列调用。"""
     有效记录 = [记录 for 记录 in (记录列表 or []) if 记录 and 记录.get("_session")]

@@ -842,6 +842,11 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
     if isinstance(新媒体, dict) and 新媒体:
+        已有归档 = (
+            旧媒体.get("_lanzou_archive")
+            if isinstance(旧媒体, dict)
+            else None
+        )
         旧媒体地址 = str(旧媒体.get("src") or "").strip() if isinstance(旧媒体, dict) else ""
         新媒体地址 = str(新媒体.get("src") or "").strip()
         旧地址优先级 = (
@@ -875,6 +880,10 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             ):
                 if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
                     旧媒体[字段] = 新媒体[字段]
+        if isinstance(已有归档, dict):
+            当前媒体 = 已有记录.get("media")
+            if isinstance(当前媒体, dict):
+                当前媒体["_lanzou_archive"] = 已有归档
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
     已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
     try:
@@ -1058,6 +1067,10 @@ def _消息数据库已配置() -> bool:
         _消息数据库配置缓存 = False
     _消息数据库配置缓存时间 = 当前时间
     return _消息数据库配置缓存
+
+
+def 消息数据库已配置() -> bool:
+    return _消息数据库已配置()
 
 
 def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
@@ -1456,6 +1469,25 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
+    if isinstance(消息.get("media"), dict) and isinstance(
+        消息["media"].get("_lanzou_archive"), dict
+    ):
+        try:
+            from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+
+            消息["media"] = 蓝奏云图片归档.构造网页媒体字段(
+                消息["media"],
+                会话标识,
+                str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
+                str(记录.get("message_id") or ""),
+            )
+        except Exception as exc:
+            logger.debug("消息实时图片代理地址生成失败：错误类型=%s", type(exc).__name__)
+            媒体 = 消息.get("media")
+            if isinstance(媒体, dict):
+                媒体 = dict(媒体)
+                媒体.pop("_lanzou_archive", None)
+                消息["media"] = 媒体
     成员资料 = _获取消息相关成员资料(会话标识, [记录])
     return {
         "chat_id": 会话标识,
@@ -2456,10 +2488,96 @@ def 记录收到消息(
         # 先通知网页再等待数据库线程；这一步必须保持在事件循环内轻量完成。
         if 新增记录:
             _推送消息事件(记录, 会话)
+        if isinstance(媒体记录, dict):
+            try:
+                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+
+                蓝奏云图片归档.安排归档消息图片(当前插件配置, 记录)
+            except Exception as 归档异常:
+                logger.debug("蓝奏云图片归档入队失败：错误类型=%s", type(归档异常).__name__)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
         logger.warning("消息记录缓存写入失败：错误类型=%s", type(exc).__name__)
+        return None
+
+
+def 更新消息媒体归档(
+    会话标识: str,
+    消息ID: str,
+    归档资料: dict[str, Any],
+    *,
+    原记录: dict[str, Any] | None = None,
+) -> bool:
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = _规范消息ID(消息ID)
+    if not 会话标识 or not 消息ID or not isinstance(归档资料, dict):
+        return False
+    必要字段 = ("share_url", "password", "content_type", "size", "filename")
+    if any(not str(归档资料.get(字段) or "").strip() for 字段 in 必要字段):
+        return False
+    会话 = 消息缓存.get(会话标识)
+    记录 = next(
+        (
+            项目
+            for 项目 in reversed((会话 or {}).get("messages") or [])
+            if isinstance(项目, dict)
+            and _规范消息ID(项目.get("message_id")) == 消息ID
+        ),
+        None,
+    )
+    是否内存记录 = isinstance(记录, dict)
+    if not 是否内存记录 and isinstance(原记录, dict):
+        记录 = copy.deepcopy(原记录)
+    if not isinstance(记录, dict):
+        return False
+    媒体 = 记录.get("media")
+    if not isinstance(媒体, dict):
+        return False
+    if isinstance(媒体.get("_lanzou_archive"), dict):
+        return True
+    原媒体 = copy.deepcopy(媒体)
+    媒体["_lanzou_archive"] = {
+        字段: 归档资料[字段]
+        for 字段 in (*必要字段, "file_id")
+        if 字段 in 归档资料
+    }
+    if not _消息数据库已配置() or not _排队消息持久化("message", copy.deepcopy(记录)):
+        记录["media"] = 原媒体
+        return False
+    if 是否内存记录 and isinstance(会话, dict):
+        _推送消息事件(记录, 会话)
+    return True
+
+
+def 获取消息媒体归档(
+    会话标识: str, 消息ID: str, 类型: str = ""
+) -> dict[str, Any] | None:
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = _规范消息ID(消息ID)
+    类型 = str(类型 or "").strip().lower()
+    if not 会话标识 or not 消息ID:
+        return None
+    会话 = 消息缓存.get(会话标识) or {}
+    for 记录 in reversed(会话.get("messages") or []):
+        if not isinstance(记录, dict) or _规范消息ID(记录.get("message_id")) != 消息ID:
+            continue
+        if 类型 and str(记录.get("chat_type") or "").strip().lower() != 类型:
+            continue
+        媒体 = 记录.get("media")
+        归档 = 媒体.get("_lanzou_archive") if isinstance(媒体, dict) else None
+        if isinstance(归档, dict):
+            return copy.deepcopy(归档)
+    if _消息存储 is None or not _消息数据库已配置():
+        return None
+    try:
+        读取方法 = getattr(_消息存储, "读取消息媒体归档", None)
+        if not callable(读取方法):
+            return None
+        归档 = 读取方法(会话标识, 消息ID, 类型)
+        return copy.deepcopy(归档) if isinstance(归档, dict) else None
+    except Exception as exc:
+        logger.debug("消息图片归档读取失败：错误类型=%s", type(exc).__name__)
         return None
 
 

@@ -462,6 +462,12 @@ async def _后台刷新消息列表(
         "kind": "text",
         "secret": False,
     },
+    "lanzou_pan_cookie": {
+        "category": "lanzou_pan_settings",
+        "label": "蓝奏云普通版 Cookie",
+        "kind": "secret",
+        "secret": True,
+    },
     "database_host": {
         "category": "database_settings",
         "label": "数据库地址",
@@ -494,6 +500,7 @@ async def _后台刷新消息列表(
     "uc_pan_settings": "UC 网盘",
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
+    "lanzou_pan_settings": "蓝奏云图片归档",
     "database_settings": "数据库",
 }
 
@@ -1384,6 +1391,104 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 传输.close()
             return 响应
         return _媒体代理失败响应(模式)
+
+
+async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamResponse:
+    if not _请求已授权(request):
+        return web.Response(status=401, text="请先登录控制台")
+    会话标识 = str(request.query.get("chat_id") or "").strip()
+    类型 = str(request.query.get("chat_type") or "group").strip().lower()
+    消息ID = str(request.query.get("message_id") or "").strip()
+    if (
+        not 会话标识
+        or len(会话标识) > 200
+        or 类型 not in {"group", "user"}
+        or not 消息ID
+        or len(消息ID) > 128
+    ):
+        return web.Response(status=400, text="图片记录参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+        from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+
+        归档 = await _控制台线程执行(
+            消息记录.获取消息媒体归档, 会话标识, 消息ID, 类型
+        )
+        if not isinstance(归档, dict):
+            return web.Response(status=404, text="图片归档不存在")
+        分享地址 = str(归档.get("share_url") or "").strip()
+        提取码 = str(归档.get("password") or "").strip()
+        try:
+            大小上限 = int(归档.get("size") or 0)
+        except (TypeError, ValueError):
+            大小上限 = 0
+        if not 分享地址 or not 提取码 or not 0 < 大小上限 <= 100 * 1024 * 1024:
+            return web.Response(status=404, text="图片归档不存在")
+        阶段 = "share"
+        上游状态 = 0
+        响应: web.StreamResponse | None = None
+        try:
+            async with 蓝奏云图片归档.打开归档图片(
+                分享地址, 提取码
+            ) as 上游:
+                上游状态 = int(上游.status or 0)
+                阶段 = "read_prefix"
+                前缀 = await 上游.content.read(64 * 1024)
+                类型 = 蓝奏云图片归档.识别图片类型(
+                    前缀, 上游.headers.get("Content-Type")
+                )
+                if not 类型.startswith("image/"):
+                    return web.Response(status=415, text="归档内容不是图片")
+                响应 = web.StreamResponse(
+                    status=200,
+                    headers={
+                        "Content-Type": 类型,
+                        "Content-Length": str(大小上限),
+                        "Content-Disposition": "inline",
+                        "Cache-Control": "private, max-age=3600",
+                        "X-Content-Type-Options": "nosniff",
+                    },
+                )
+                阶段 = "prepare_response"
+                await 响应.prepare(request)
+                已发送 = len(前缀)
+                if 已发送 > 大小上限:
+                    raise ValueError("archive_size_mismatch")
+                if 前缀:
+                    await 响应.write(前缀)
+                阶段 = "stream_body"
+                async for 数据块 in 上游.content.iter_chunked(64 * 1024):
+                    已发送 += len(数据块)
+                    if 已发送 > 大小上限:
+                        raise ValueError("archive_size_mismatch")
+                    await 响应.write(数据块)
+                if 已发送 != 大小上限:
+                    raise ValueError("archive_size_mismatch")
+                await 响应.write_eof()
+                return 响应
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "帮助控制台蓝奏云图片读取失败：阶段=%s，错误类型=%s，上游状态=%s",
+                阶段,
+                type(exc).__name__,
+                上游状态 or "none",
+            )
+            if 响应 is not None and 响应.prepared:
+                响应.force_close()
+                传输 = request.transport
+                if 传输 is not None:
+                    传输.close()
+                return 响应
+            return web.Response(status=502, text="图片归档暂时不可用")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台蓝奏云图片代理失败：错误类型=%s", type(exc).__name__
+        )
+        return web.Response(status=502, text="图片归档暂时不可用")
 
 
 本地发送媒体有效期秒 = 3 * 24 * 60 * 60
@@ -2932,6 +3037,24 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         结果 = await _合并查询消息历史(
             会话标识, 类型, before_date, limit, before_id
         )
+        try:
+            from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+
+            for 消息项 in 结果.get("messages") or []:
+                if not isinstance(消息项, dict):
+                    continue
+                消息项["media"] = 蓝奏云图片归档.构造网页媒体字段(
+                    消息项.get("media"),
+                    会话标识,
+                    类型,
+                    str(消息项.get("message_id") or ""),
+                )
+        except Exception as exc:
+            logger.debug("帮助控制台历史图片代理地址生成失败：错误类型=%s", type(exc).__name__)
+            for 消息项 in 结果.get("messages") or []:
+                if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
+                    消息项["media"] = dict(消息项["media"])
+                    消息项["media"].pop("_lanzou_archive", None)
         try:
             消息记录.安排待处理群信息刷新()
         except Exception:
