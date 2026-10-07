@@ -62,6 +62,27 @@ def 获取官方群成员标识(群号: Any, 用户标识: Any) -> str:
     return 成员文本
 
 
+def 获取官方群成员映射列表(用户标识: Any) -> list[tuple[str, str]]:
+    """按最近观测顺序返回用户关联的群与群内成员标识。"""
+    用户文本 = _安全群号文本(用户标识)
+    if not 用户文本:
+        return []
+    当前时间 = time.monotonic()
+    匹配项: list[tuple[float, str, str]] = []
+    for 群号文本, 用户映射 in list(官方群成员映射.items()):
+        记录 = 用户映射.get(用户文本)
+        if not 记录:
+            continue
+        成员文本, 时间戳 = 记录
+        if 当前时间 - 时间戳 >= 官方群成员映射有效期秒数:
+            删除官方群成员映射(群号文本, 用户文本, 成员文本)
+            continue
+        if 群号文本 and 成员文本:
+            匹配项.append((时间戳, 群号文本, 成员文本))
+    匹配项.sort(reverse=True)
+    return [(群号文本, 成员文本) for _, 群号文本, 成员文本 in 匹配项]
+
+
 def 获取官方群用户标识(群号: Any, 成员标识: Any) -> str:
     群号文本 = _安全群号文本(群号)
     成员文本 = _安全群号文本(成员标识)
