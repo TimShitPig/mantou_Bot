@@ -28,6 +28,7 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
 目录列表最大并发数 = 4
+目录扫描完整性重试次数 = 1
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 _夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
@@ -214,7 +215,9 @@ class 夸克网盘客户端:
                 待删除.append(文件ID)
         return await self.删除文件ID列表(待删除)
 
-    async def 列出目录全部项目(self, 父目录ID: str) -> list[dict[str, Any]]:
+    async def 列出目录全部项目(
+        self, 父目录ID: str, *, _完整性重试次数: int = 0
+    ) -> list[dict[str, Any]]:
         结果: list[dict[str, Any]] = []
         已见ID: set[str] = set()
         总数量 = 0
@@ -265,6 +268,29 @@ class 夸克网盘客户端:
                 新增数量 += 1
             return 新增数量
 
+        async def 重扫不完整目录(
+            页码: int, 已收集数量: int, 页报告总数: int
+        ) -> list[dict[str, Any]]:
+            报告总数 = max(总数量, 页报告总数)
+            if _完整性重试次数 < 目录扫描完整性重试次数:
+                logger.info(
+                    "夸克网盘目录扫描期间数据变化，重新完整扫描：page=%s, collected=%s, reported_total=%s",
+                    页码,
+                    已收集数量,
+                    报告总数,
+                )
+                await asyncio.sleep(0.25)
+                return await self.列出目录全部项目(
+                    父目录ID, _完整性重试次数=_完整性重试次数 + 1
+                )
+            logger.warning(
+                "夸克网盘目录扫描仍不完整，停止使用部分结果：page=%s, collected=%s, reported_total=%s",
+                页码,
+                已收集数量,
+                报告总数,
+            )
+            raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作")
+
         首页项目, 总数量 = await 请求目录页(1)
         if not 首页项目 and 总数量:
             首页项目, 重试总数量 = await 请求目录页(1)
@@ -275,10 +301,7 @@ class 夸克网盘客户端:
             return 结果
         if not 首页项目:
             if 总数量 and len(结果) < 总数量:
-                logger.warning(
-                    "夸克网盘目录首屏为空：reported_total=%s",
-                    总数量,
-                )
+                return await 重扫不完整目录(1, len(结果), 总数量)
             return 结果
         if 首屏新增数量 == 0:
             raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
@@ -348,17 +371,14 @@ class 夸克网盘客户端:
                     页总数 = 重试页总数
             if not 总数量:
                 总数量 = 页总数
+            if 总数量 and 页总数 and 页总数 != 总数量:
+                return await 重扫不完整目录(页码, len(结果), 页总数)
             新增数量 = 合并项目(项目列表)
             if 总数量 and len(结果) >= 总数量:
                 break
             if not 项目列表:
                 if 总数量 and len(结果) < 总数量:
-                    logger.warning(
-                        "夸克网盘目录扫描以空页结束：page=%s, collected=%s, reported_total=%s",
-                        页码,
-                        len(结果),
-                        总数量,
-                    )
+                    return await 重扫不完整目录(页码, len(结果), 总数量)
                 break
             if 新增数量 == 0:
                 raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
