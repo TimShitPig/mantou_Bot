@@ -34,6 +34,7 @@ except Exception:
         "lanzoui.com",
         "lanzoux.com",
         "lanzous.com",
+        "lanzn.com",
         "woozooo.com",
     }
 )
