@@ -3067,6 +3067,7 @@
               optimisticId,
               optimistic?.status || message.send_status || '',
               message.reference_id || '',
+              message.source || '',
             ];
           }),
         });
@@ -3085,6 +3086,21 @@
         msgs.forEach((m, index) => {
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
+          const systemSource = String(m.source || '');
+          if (systemSource === 'group_member_join' || systemSource === 'group_member_leave') {
+            const fallbackName = systemSource === 'group_member_join' ? '新成员' : '成员';
+            const recordedName = String(m.nickname || '').trim();
+            const profileName = String(
+              profiles[String(m.user_id || '').trim()]?.nickname
+              || profiles[String(m.user_id || '').trim()]?.username
+              || '',
+            ).trim();
+            const genericNames = ['', '新成员', '成员', '未知用户', '未知', String(m.user_id || '').trim()];
+            const memberName = genericNames.includes(recordedName) && profileName ? profileName : (recordedName || fallbackName);
+            const actionText = systemSource === 'group_member_join' ? '加入了群聊。' : '退出了群聊。';
+            html += `<div class="msg-system-row"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
+            return;
+          }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
           const botMessage = String(m.source || '').startsWith('bot') || String(m.source || '') === 'web_panel';
           const recalled = msgIsRecalled(m);

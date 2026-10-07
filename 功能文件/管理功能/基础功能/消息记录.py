@@ -2616,6 +2616,63 @@ def 记录收到消息(
         return None
 
 
+def 记录群成员系统消息(
+    会话标识: str,
+    成员openid: str,
+    事件名: str,
+    *,
+    appid: str = "",
+    事件编号: str = "",
+    时间戳: Any = "",
+    昵称: str = "",
+) -> dict[str, Any] | None:
+    """把官方群成员加入/退出事件写入消息历史和实时事件流。"""
+    群标识 = str(会话标识 or "").strip()
+    成员标识 = str(成员openid or "").strip()
+    事件类型 = str(事件名 or "").strip().lower()
+    来源映射 = {
+        "group_member_add": ("group_member_join", "加入了群聊。", "新成员"),
+        "group_member_remove": ("group_member_leave", "退出了群聊。", "成员"),
+    }
+    来源和文案 = 来源映射.get(事件类型)
+    if not 群标识 or not 成员标识 or 来源和文案 is None:
+        return None
+
+    来源, 内容, 默认昵称 = 来源和文案
+    原始时间戳 = 时间戳 if _转数字时间戳(时间戳) else int(time.time())
+    事件身份 = str(事件编号 or "").strip() or str(时间戳 or 原始时间戳).strip()
+    事件身份摘要 = hashlib.sha256(
+        "|".join((str(appid or "").strip(), 群标识, 来源, 事件身份, 成员标识)).encode(
+            "utf-8", errors="ignore"
+        )
+    ).hexdigest()[:40]
+    消息ID = f"group-event:{事件身份摘要}"
+
+    成员昵称 = str(昵称 or "").strip()
+    if not 成员昵称:
+        资料 = (成员资料缓存.get(群标识) or {}).get(成员标识) or {}
+        if isinstance(资料, dict):
+            成员昵称 = str(资料.get("nickname") or 资料.get("username") or "").strip()
+    if not 成员昵称 or 成员昵称 in {"未知", "未知用户", 成员标识}:
+        成员昵称 = 默认昵称
+
+    消息 = {
+        "id": 消息ID,
+        "content": 内容,
+        "timestamp": 原始时间戳,
+        "group_openid": 群标识,
+        "author": {"member_openid": 成员标识, "username": 成员昵称},
+        "raw_data": {
+            "id": 消息ID,
+            "event": "GROUP_MEMBER_ADD" if 事件类型 == "group_member_add" else "GROUP_MEMBER_REMOVE",
+            "group_openid": 群标识,
+            "member_openid": 成员标识,
+            "timestamp": 原始时间戳,
+        },
+    }
+    return 记录收到消息(消息, "group", appid=appid, 源=来源)
+
+
 def 更新消息媒体归档(
     会话标识: str,
     消息ID: str,

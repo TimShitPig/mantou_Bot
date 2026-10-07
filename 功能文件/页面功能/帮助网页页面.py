@@ -155,6 +155,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-loading span:nth-child(3) { width:62%; animation-delay:.36s; }
             @keyframes msg-loading-pulse { from { opacity:.48; transform:translateY(1px); } to { opacity:1; transform:translateY(0); } }
             .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
+            .msg-system-row { display:flex; flex-direction:column; align-items:center; gap:5px; margin:12px 0 16px; text-align:center; }
+            .msg-system-time { padding:2px 8px; border-radius:12px; background:#e2e4e8; color:#858a94; font-size:10px; line-height:1.35; }
+            .msg-system-notice { max-width:min(90%,520px); padding:4px 12px; border-radius:16px; background:#e5e6e9; color:#777d87; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+            .msg-system-name { color:#3287d5; }
             /* 消息行必须使用真实高度，避免估算布局在显示后把滚动位置推离底部。 */
             .msg-row { display:flex; gap:9px; margin-bottom:14px; }
             .msg-row.self { flex-direction:row-reverse; }
@@ -478,6 +482,9 @@ from .帮助网页脚本 import 控制台脚本
                :root[data-theme="dark"] .msg-new-messages { border-color:#235b78; background:#1f2330; color:#42c6ff; box-shadow:0 5px 16px rgba(0,0,0,.35); }
                :root[data-theme="dark"] .msg-new-messages-dot { background:#42c6ff; box-shadow:0 0 0 4px #12344d; }
                :root[data-theme="dark"] .msg-day { color:#6f7590; }
+              :root[data-theme="dark"] .msg-system-time { background:#343947; color:#999eae; }
+              :root[data-theme="dark"] .msg-system-notice { background:#303542; color:#a5a9b5; }
+              :root[data-theme="dark"] .msg-system-name { color:#69adf4; }
               :root[data-theme="dark"] .msg-avatar { background:#23405f; color:#8db9f0; }
               :root[data-theme="dark"] .msg-avatar .avatar-letter { color:#8db9f0; }
             :root[data-theme="dark"] .msg-bubble { background:#262b3a; color:#e6e8f0; box-shadow:0 1px 2px rgba(0,0,0,.25); }

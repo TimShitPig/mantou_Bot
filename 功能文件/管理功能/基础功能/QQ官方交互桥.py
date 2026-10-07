@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 9
+群成员加入桥版本 = 10
 QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {
     "group_member_add",
@@ -557,6 +557,27 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             值 = _读取字段(原始事件, 字段名)
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
+    for 字段名 in ("username", "member_name", "nickname", "user_name", "name"):
+        for 数据 in 展开数据:
+            值 = 数据.get(字段名)
+            if 值 is not None and str(值).strip():
+                结果[字段名] = 值
+                break
+        if 字段名 in 结果:
+            continue
+        for 数据 in 展开数据:
+            for 容器名 in ("member", "user", "author"):
+                容器 = 数据.get(容器名)
+                值 = _读取字段(容器, 字段名)
+                if 值 is not None and str(值).strip():
+                    结果[字段名] = 值
+                    break
+            if 字段名 in 结果:
+                break
+        if 字段名 not in 结果:
+            值 = _读取字段(原始事件, 字段名)
+            if 值 is not None and str(值).strip():
+                结果[字段名] = 值
     return 结果
 
 
@@ -597,6 +618,32 @@ def _同步群成员人数变化(
     except Exception as 异常:
         logger.warning(
             "QQ官方群人数事件处理失败：event=%s, group_id=%s, error_type=%s",
+            事件名,
+            群号,
+            type(异常).__name__,
+        )
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        消息记录.记录群成员系统消息(
+            群号,
+            成员,
+            事件名,
+            appid=appid,
+            事件编号=str(事件数据.get("_mantou_event_id") or ""),
+            时间戳=str(事件数据.get("timestamp") or ""),
+            昵称=str(
+                事件数据.get("username")
+                or 事件数据.get("member_name")
+                or 事件数据.get("nickname")
+                or 事件数据.get("user_name")
+                or 事件数据.get("name")
+                or ""
+            ),
+        )
+    except Exception as 异常:
+        logger.warning(
+            "QQ官方群成员系统消息记录失败：event=%s, group_id=%s, error_type=%s",
             事件名,
             群号,
             type(异常).__name__,
