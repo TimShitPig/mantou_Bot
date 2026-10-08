@@ -591,7 +591,7 @@ def 读取群成员最近消息(
 
 
 def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
-    """从该群成员最近保存的普通消息读取有效昵称，跳过兜底值和控制字符。"""
+    """从该群成员最近保存的消息或原始事件字段读取有效昵称。"""
     会话标识 = str(会话标识 or "").strip()
     用户标识 = str(用户标识 or "").strip()
     if not 会话标识 or not 用户标识 or not _MySQL可用():
@@ -602,19 +602,38 @@ def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                f"SELECT nickname FROM `{消息记录表名}` "
+                f"SELECT nickname, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.username')) ELSE '' END AS author_username, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.member_name')) ELSE '' END AS author_member_name, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.nickname')) ELSE '' END AS author_nickname, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nick')) ELSE '' END AS member_nick, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nickname')) ELSE '' END AS member_nickname, "
+                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.data.author.username')) ELSE '' END AS data_author_username "
+                f"FROM `{消息记录表名}` "
                 "WHERE 会话标识=%s AND user_id=%s AND 消息类型='group' "
-                "AND is_self=0 AND TRIM(nickname)<>'' "
-                "AND nickname NOT IN ('成员','新成员','未知','未知用户') "
-                "AND nickname<>user_id ORDER BY ts DESC, id DESC LIMIT 64",
+                "AND is_self=0 ORDER BY ts DESC, id DESC LIMIT 64",
                 (会话标识, 用户标识),
             )
             行列表 = 游标.fetchall()
         for 行 in 行列表 or ():
-            昵称 = str(_行字段(行, 0, "nickname", 默认值="") or "").strip()
-            if not 昵称 or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称):
-                continue
-            return 昵称
+            for 索引, 字段名 in enumerate((
+                "nickname",
+                "author_username",
+                "author_member_name",
+                "author_nickname",
+                "member_nick",
+                "member_nickname",
+                "data_author_username",
+            )):
+                昵称 = str(_行字段(行, 索引, 字段名, 默认值="") or "").strip()
+                if (
+                    not 昵称
+                    or 昵称 == 用户标识
+                    or 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}
+                    or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称)
+                ):
+                    continue
+                return 昵称
         return ""
     except Exception as exc:
         logger.warning("群成员昵称回查失败：错误类型=%s", type(exc).__name__)

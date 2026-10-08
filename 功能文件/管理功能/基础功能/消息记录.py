@@ -2155,19 +2155,17 @@ def _提取成员标识(消息: Any, 类型: str) -> str:
 def _提取成员昵称(消息: Any) -> str:
     """从 QQ 官方消息提取昵称（botpy 修补后 author 已带 username）。"""
     作者 = _读取字段(消息, "author") or {}
-    for 字段 in ("username", "member_name", "nickname", "user_name", "name"):
-        昵称 = str(_读取字段(作者, 字段) or "").strip()
-        if 昵称:
-            return 昵称
-    for 字段 in ("username", "member_name", "nickname", "dear_remark", "user_name", "name"):
-        昵称 = str(_读取字段(消息, 字段) or "").strip()
-        if 昵称:
-            return 昵称
     成员 = _读取字段(消息, "member")
-    for 字段 in ("nick", "nickname", "member_name", "username", "name"):
-        昵称 = str(_读取字段(成员, 字段) or "").strip()
-        if 昵称:
-            return 昵称
+    成员标识 = _提取成员标识(消息, "group") or _提取成员标识(消息, "user")
+    for 来源, 字段列表 in (
+        (作者, ("username", "member_name", "nickname", "user_name", "name")),
+        (消息, ("username", "member_name", "nickname", "dear_remark", "user_name", "name")),
+        (成员, ("nick", "nickname", "member_name", "username", "name")),
+    ):
+        for 字段 in 字段列表:
+            昵称 = _有效用户昵称(_读取字段(来源, 字段), 成员标识)
+            if 昵称:
+                return 昵称
     return ""
 
 
@@ -2293,7 +2291,7 @@ def _昵称需要补查(会话标识: str, 会话: dict[str, Any] | None) -> boo
     """私聊会话昵称缺失（空/未知/openid）时需要补查。"""
     if not 会话:
         return False
-    昵称 = str(会话.get("last_nickname") or "").strip()
+    昵称 = _有效用户昵称(会话.get("last_nickname"), 会话标识)
     if not 昵称 or "未知" in 昵称:
         return True
     if 昵称 == _私聊兜底昵称(会话标识):
@@ -4664,15 +4662,14 @@ def _私聊联系人资料(
             continue
         候选.append(记录)
     for 资料 in 候选:
-        昵称 = str(
+        昵称 = _有效用户昵称(
             资料.get("nickname")
             or 资料.get("username")
             or 资料.get("member_name")
-            or ""
-        ).strip()
+            or "",
+            标识,
+        )
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
-        if 昵称 in {"机器人", "我", "未知用户", "未知", 标识}:
-            昵称 = ""
         if not (头像.startswith("https://") or 头像.startswith("http://")):
             头像 = ""
         if 昵称 or 头像:
@@ -4702,10 +4699,15 @@ def _聊天显示名(
         联系人 = _私聊联系人资料(会话标识, 会话)
         if 联系人["nickname"]:
             return 联系人["nickname"]
-        本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
-        if 本地昵称 and 本地昵称 not in {"机器人", "我", "未知用户", "未知", 会话标识}:
+        本地昵称 = _有效用户昵称(
+            (_读取本地缓存文件().get("nicknames") or {}).get(会话标识),
+            会话标识,
+        )
+        if 本地昵称:
             return 本地昵称
     最近昵称 = str(会话.get("last_nickname") or "")
+    if 类型 == "user":
+        最近昵称 = _有效用户昵称(最近昵称, 会话标识)
     # 群会话不把机器人和网页发送昵称当作群名退路，避免群名被"机器人"/"我"污染
     if 最近昵称 and (
         (类型 == "user" and 最近昵称 not in {"机器人", "我", "未知用户", "未知", 会话标识})
