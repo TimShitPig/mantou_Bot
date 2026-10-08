@@ -2361,7 +2361,19 @@ def _回填私聊昵称(会话标识: str, 用户标识: str, 昵称: str) -> No
 
 
 async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
-    """从 QQ 官方群消息作者的 username 事件字段复用昵称，不请求内邀资料接口。"""
+    """从已保存的群消息按 OpenID 跨群复用昵称，不请求内邀资料接口。"""
+    if _消息存储 is not None and _消息数据库已配置():
+        读取用户昵称 = getattr(_消息存储, "读取用户最近群聊昵称", None)
+        if callable(读取用户昵称):
+            try:
+                候选昵称 = await _异步执行消息记录同步(读取用户昵称, 用户标识, appid)
+            except Exception as 异常:
+                logger.debug("私聊昵称跨群回查失败：错误类型=%s", type(异常).__name__)
+            else:
+                昵称 = _有效用户昵称(候选昵称, 用户标识)
+                if 昵称:
+                    return 昵称
+
     from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
 
     群成员列表 = 获取官方群成员映射列表(用户标识)[:3]

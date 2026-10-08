@@ -590,12 +590,20 @@ def 读取群成员最近消息(
         _关闭连接(连接)
 
 
-def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
-    """从该群成员最近保存的消息或原始事件字段读取有效昵称。"""
-    会话标识 = str(会话标识 or "").strip()
+def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appid: str = "") -> str:
     用户标识 = str(用户标识 or "").strip()
-    if not 会话标识 or not 用户标识 or not _MySQL可用():
+    会话标识 = str(会话标识 or "").strip()
+    appid = str(appid or "").strip()
+    if not 用户标识 or not _MySQL可用():
         return ""
+    where_sql = "WHERE user_id=%s AND 消息类型='group' AND is_self=0"
+    参数: tuple[str, ...] = (用户标识,)
+    if 会话标识:
+        where_sql += " AND 会话标识=%s"
+        参数 += (会话标识,)
+    if appid:
+        where_sql += " AND appid=%s"
+        参数 += (appid,)
     连接 = _打开连接()
     if 连接 is None:
         return ""
@@ -609,10 +617,8 @@ def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
                 "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nick')) ELSE '' END AS member_nick, "
                 "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nickname')) ELSE '' END AS member_nickname, "
                 "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.data.author.username')) ELSE '' END AS data_author_username "
-                f"FROM `{消息记录表名}` "
-                "WHERE 会话标识=%s AND user_id=%s AND 消息类型='group' "
-                "AND is_self=0 ORDER BY ts DESC, id DESC LIMIT 64",
-                (会话标识, 用户标识),
+                f"FROM `{消息记录表名}` {where_sql} ORDER BY ts DESC, id DESC LIMIT 256",
+                参数,
             )
             行列表 = 游标.fetchall()
         for 行 in 行列表 or ():
@@ -640,6 +646,19 @@ def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
         return ""
     finally:
         _关闭连接(连接)
+
+
+def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
+    """从该群成员最近保存的消息或原始事件字段读取有效昵称。"""
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识:
+        return ""
+    return _读取最近群消息昵称(用户标识, 会话标识=会话标识)
+
+
+def 读取用户最近群聊昵称(用户标识: str, appid: str = "") -> str:
+    """按用户 OpenID 跨群读取最近有效昵称，供私聊联系人资料复用。"""
+    return _读取最近群消息昵称(用户标识, appid=appid)
 
 
 def 读取会话消息(会话标识: str, 上限: int = 500) -> list[dict[str, Any]]:
