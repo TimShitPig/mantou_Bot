@@ -1118,8 +1118,9 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
 
 
 def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
-    """在线程中批量落库；同一会话的未读值只写本批最后一次状态。"""
+    """在线程中批量写入消息和用户资料；同一会话未读数只写本批最后值。"""
     消息列表: list[dict[str, Any]] = []
+    用户资料列表: list[dict[str, Any]] = []
     未读表: dict[str, int] = {}
     for 类型, 数据 in 项目列表:
         if 类型 == "message" and isinstance(数据, dict):
@@ -1127,6 +1128,8 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
             if 撤回键 in 已撤回消息待同步:
                 数据 = {**数据, "recalled": True}
             消息列表.append(数据)
+        elif 类型 == "user_profile" and isinstance(数据, dict):
+            用户资料列表.append(数据)
         elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
             会话标识, 未读数 = 数据
             未读表[str(会话标识)] = max(0, int(未读数 or 0))
@@ -1147,6 +1150,18 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
                             成功 = False
             except Exception as 异常:
                 logger.debug("消息记录消息批量持久化失败：错误类型=%s", type(异常).__name__)
+                成功 = False
+
+    if 用户资料列表:
+        if _消息存储 is None:
+            成功 = False
+        else:
+            try:
+                批量保存昵称 = getattr(_消息存储, "批量保存用户昵称", None)
+                if not callable(批量保存昵称) or 批量保存昵称(用户资料列表) is False:
+                    成功 = False
+            except Exception as 异常:
+                logger.debug("QQ用户昵称资料批量持久化失败：错误类型=%s", type(异常).__name__)
                 成功 = False
 
     if not 未读表:
@@ -1251,7 +1266,7 @@ async def _消息持久化工作() -> None:
             失败详情: list[tuple[str, int, str]] = []
             # 消息和未读状态分开落库。未读写入失败时不重复已经成功的消息批次，
             # 同时让失败项继续持有队列的 unfinished_tasks 计数。
-            for 项目类型 in ("message", "unread"):
+            for 项目类型 in ("message", "user_profile", "unread"):
                 子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
                 if not 子批次:
                     continue
@@ -1336,7 +1351,7 @@ def _排队消息持久化(类型: str, 数据: Any) -> bool:
 
 
 async def 等待消息记录写入(超时: float = 10.0) -> bool:
-    """等待当前已排队的消息/未读/元数据写入，供网页操作和插件停机调用。"""
+    """等待当前已排队的消息/用户资料/未读/元数据写入，供网页操作和插件停机调用。"""
     截止时间 = asyncio.get_running_loop().time() + max(0.1, float(超时))
     队列 = _准备消息持久化队列()
     if _消息持久化失败批次 or not 队列.empty():
@@ -2363,6 +2378,17 @@ def _回填私聊昵称(会话标识: str, 用户标识: str, 昵称: str) -> No
 async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
     """从已保存的群消息按 OpenID 跨群复用昵称，不请求内邀资料接口。"""
     if _消息存储 is not None and _消息数据库已配置():
+        读取资料昵称 = getattr(_消息存储, "读取用户昵称", None)
+        if callable(读取资料昵称):
+            try:
+                候选昵称 = await _异步执行消息记录同步(读取资料昵称, 用户标识, appid)
+            except Exception as 异常:
+                logger.debug("私聊昵称用户资料读取失败：错误类型=%s", type(异常).__name__)
+            else:
+                昵称 = _有效用户昵称(候选昵称, 用户标识)
+                if 昵称:
+                    return 昵称
+
         读取用户昵称 = getattr(_消息存储, "读取用户最近群聊昵称", None)
         if callable(读取用户昵称):
             try:
@@ -2635,6 +2661,18 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        if (
+            not is_self
+            and not 是机器人
+            and 类型 in {"group", "user"}
+            and 源 == "qq_official"
+            and 昵称
+            and _消息数据库已配置()
+        ):
+            _排队消息持久化(
+                "user_profile",
+                {"appid": 记录["appid"], "user_id": 成员标识, "nickname": 昵称},
+            )
         撤回键 = (会话标识, 消息ID)
         待同步时间 = 已撤回消息待同步.get(撤回键)
         if 待同步时间 is not None:

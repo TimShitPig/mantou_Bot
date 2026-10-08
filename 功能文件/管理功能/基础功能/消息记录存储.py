@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """消息记录 MySQL 持久化层。
 
-- 消息记录写入 mantou_message_records 表（自动建表，带会话/时间与消息 ID 索引）。
+- 消息记录写入 mantou_message_records 表；用户昵称写入 mantou_message_user_profiles 表。
 - 群资料写入 mantou_group_infos 表，启动时恢复，避免每次打开控制台都请求官方接口。
 - 置顶/备注/昵称等元数据写入现有 mantou_runtime_state 表（namespace 隔离）。
 - 依赖插件 database_settings 配置；未配置时接口直接返回默认值/空，
@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -24,6 +25,7 @@ except Exception:
 
 消息记录表名 = "mantou_message_records"
 群信息表名 = "mantou_group_infos"
+用户资料表名 = "mantou_message_user_profiles"
 元数据命名空间 = "message_panel_meta"
 
 _消息写入SQL = (
@@ -175,6 +177,20 @@ def 初始化数据库() -> bool:
                     KEY idx_msg_records_member_time (会话标识, user_id, ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_message (message_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            游标.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{用户资料表名}` (
+                    profile_key CHAR(64) NOT NULL,
+                    appid VARCHAR(64) NOT NULL DEFAULT '',
+                    user_id VARCHAR(128) NOT NULL,
+                    nickname VARCHAR(255) NOT NULL DEFAULT '',
+                    updated_at BIGINT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (profile_key),
+                    KEY idx_user_profiles_lookup (appid(32), user_id(64)),
+                    KEY idx_user_profiles_user (user_id(64), updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -643,6 +659,91 @@ def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appi
         return ""
     except Exception as exc:
         logger.warning("群成员昵称回查失败：错误类型=%s", type(exc).__name__)
+        return ""
+    finally:
+        _关闭连接(连接)
+
+
+def _有效用户昵称(用户标识: str, 昵称: Any) -> str:
+    昵称 = str(昵称 or "").strip()
+    if (
+        not 昵称
+        or 昵称 == 用户标识
+        or 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}
+        or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称)
+    ):
+        return ""
+    return 昵称
+
+
+def 批量保存用户昵称(资料列表: list[dict[str, Any]]) -> bool:
+    """按应用和 OpenID 持久化 QQ 消息事件中的有效用户名。"""
+    if not _MySQL可用() or not 资料列表:
+        return not 资料列表
+    当前时间 = int(time.time())
+    按用户去重: dict[tuple[str, str], tuple[str, str, str, str, int]] = {}
+    for 资料 in 资料列表:
+        if not isinstance(资料, dict):
+            continue
+        用户标识 = str(资料.get("user_id") or "").strip()
+        昵称 = _有效用户昵称(用户标识, 资料.get("nickname"))
+        if not 用户标识 or not 昵称:
+            continue
+        appid = str(资料.get("appid") or "").strip()
+        profile_key = hashlib.sha256(f"{appid}\0{用户标识}".encode("utf-8")).hexdigest()
+        按用户去重[(appid, 用户标识)] = (profile_key, appid, 用户标识, 昵称, 当前时间)
+    if not 按用户去重:
+        return True
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.executemany(
+                f"INSERT INTO `{用户资料表名}` (profile_key, appid, user_id, nickname, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+                "nickname=VALUES(nickname), updated_at=VALUES(updated_at)",
+                list(按用户去重.values()),
+            )
+        连接.commit()
+        return True
+    except Exception as exc:
+        logger.warning("QQ用户昵称资料写入失败：错误类型=%s", type(exc).__name__)
+        return False
+    finally:
+        _关闭连接(连接)
+
+
+def 保存用户昵称(appid: str, 用户标识: str, 昵称: str) -> bool:
+    return 批量保存用户昵称([{"appid": appid, "user_id": 用户标识, "nickname": 昵称}])
+
+
+def 读取用户昵称(用户标识: str, appid: str = "") -> str:
+    """按应用和 OpenID 读取消息事件中最近保存的用户昵称。"""
+    用户标识 = str(用户标识 or "").strip()
+    appid = str(appid or "").strip()
+    if not 用户标识 or not _MySQL可用():
+        return ""
+    连接 = _打开连接()
+    if 连接 is None:
+        return ""
+    try:
+        with 连接.cursor() as 游标:
+            if appid:
+                游标.execute(
+                    f"SELECT nickname FROM `{用户资料表名}` WHERE appid=%s AND user_id=%s LIMIT 1",
+                    (appid, 用户标识),
+                )
+            else:
+                游标.execute(
+                    f"SELECT nickname FROM `{用户资料表名}` WHERE user_id=%s "
+                    "ORDER BY updated_at DESC LIMIT 1",
+                    (用户标识,),
+                )
+            行 = 游标.fetchone()
+        return _有效用户昵称(用户标识, _行字段(行, 0, "nickname", 默认值=""))
+    except Exception as exc:
+        logger.warning("QQ用户昵称资料读取失败：错误类型=%s", type(exc).__name__)
         return ""
     finally:
         _关闭连接(连接)
