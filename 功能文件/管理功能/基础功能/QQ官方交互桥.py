@@ -557,6 +557,23 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             值 = _读取字段(原始事件, 字段名)
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
+        if 字段名 not in 结果:
+            if 字段名 == "user_openid":
+                容器字段 = ("member", "user")
+            elif 字段名 == "member_openid":
+                容器字段 = ("member",)
+            elif 字段名 == "op_member_openid":
+                容器字段 = ("operator", "op_member")
+            else:
+                容器字段 = ()
+            for 数据 in 展开数据:
+                for 容器名 in 容器字段:
+                    值 = _读取字段(数据.get(容器名), 字段名)
+                    if 值 is not None and str(值).strip():
+                        结果[字段名] = 值
+                        break
+                if 字段名 in 结果:
+                    break
     for 字段名 in ("username", "member_name", "nickname", "user_name", "name"):
         for 数据 in 展开数据:
             值 = 数据.get(字段名)
