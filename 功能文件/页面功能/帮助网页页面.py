@@ -108,6 +108,12 @@ from .帮助网页脚本 import 控制台脚本
             .msg-search input:focus { border-color:#12b7f5; background:#fff; }
             .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
             .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; }
+            .msg-chat-folder { display:flex; align-items:center; gap:9px; width:100%; min-height:34px; margin:2px 0; padding:0 8px; border:0; border-radius:6px; background:transparent; color:#4b5563; text-align:left; cursor:pointer; }
+            .msg-chat-folder:hover { background:#ececee; }
+            .msg-chat-folder strong { font-size:12px; font-weight:700; }
+            .msg-chat-folder small { margin-left:auto; color:#9298a1; font-size:10px; }
+            .msg-chat-folder-caret { width:7px; height:7px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg) translateY(-2px); transition:transform .14s ease; }
+            .msg-chat-folder[aria-expanded="false"] .msg-chat-folder-caret { transform:rotate(-45deg); }
             .msg-chat-divider { margin:6px 6px 2px; padding:7px 4px 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
             .msg-chat-divider:first-child { margin-top:0; border-top:0; }
             .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; content-visibility:auto; contain-intrinsic-size:56px; }
@@ -552,6 +558,9 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .chat-list-panel { background:#1a1e2a; }
               :root[data-theme="dark"] .msg-list-head { background:#1f2330; border-bottom-color:#2c3044; }
               :root[data-theme="dark"] .msg-chat:hover { background:#262b3a; }
+              :root[data-theme="dark"] .msg-chat-folder { color:#b9c0d0; }
+              :root[data-theme="dark"] .msg-chat-folder:hover { background:#262b3a; }
+              :root[data-theme="dark"] .msg-chat-folder small { color:#7f879b; }
               :root[data-theme="dark"] .msg-chat-divider { border-top-color:#2c3044; color:#7f879b; }
               :root[data-theme="dark"] .msg-chat.active { background:#1d3850; }
               :root[data-theme="dark"] .msg-work { background:#161926; }
@@ -581,7 +590,7 @@ from .帮助网页脚本 import 控制台脚本
               <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
               <div class="msg-list-head">
                 <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
-                  <button type="button" data-msg-filter="all" class="active">全量</button>
+                  <button type="button" data-msg-filter="all" class="active">聊天记录</button>
                   <button type="button" data-msg-filter="group">群聊</button>
                   <button type="button" data-msg-filter="user">私聊</button>
                 </div>

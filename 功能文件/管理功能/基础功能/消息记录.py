@@ -4905,16 +4905,14 @@ def _补齐数据库会话到内存() -> None:
 def _数据库聚合聊天项(
     过滤: str, 搜索: str, 本地数据: dict[str, Any], 置顶顺序: dict[str, int]
 ) -> list[dict[str, Any]] | None:
-    """对齐 ElainaBot：单次 MySQL GROUP BY 聚合所有会话，返回聊天列表项；不可用时返回 None。
-
-    等价于 ElainaBot 的 _aggregate_chats_sync（SQLite GROUP BY group_id + 前 200 会话
-    按 id 批量补查 last_content），这里用 MySQL 的 聚合聊天列表 + 批量读取最后消息 实现。
+    """从 MySQL 房间摘要索引构建聊天列表；索引不可用时返回 None。
     """
     if _消息存储 is None:
         return None
     try:
         # 控制台群列表使用全部模式；消息历史仍由单独接口按 100 条分页。
-        骨架 = _消息存储.聚合聊天列表(0)
+        类型过滤 = 过滤 if 过滤 in {"group", "user"} else ""
+        骨架 = _消息存储.聚合聊天列表(0, 类型过滤=类型过滤)
         # 被移除的群可能没有任何消息行，单靠消息表聚合会把它们漏掉。
         # 启动恢复已经把群资料放入内存，列表刷新优先使用缓存，避免每次
         # 打开消息页再建立一次数据库连接；缓存为空时保留持久化兜底。
@@ -4958,7 +4956,7 @@ def _数据库聚合聊天项(
             已有会话标识.add(会话标识)
             最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
             _规范化聊天摘要(最后记录)
-            类型 = str(最后记录.get("chat_type") or "group")
+            类型 = str(项.get("chat_type") or 最后记录.get("chat_type") or "group")
             if 过滤 == "group" and 类型 != "group":
                 continue
             if 过滤 == "user" and 类型 != "user":
@@ -5254,6 +5252,7 @@ def _数据库历史消息(
             上限=limit,
             before_ts=before_ts,
             返回额外=True,
+            会话类型=类型,
         )
         if not 行列表:
             return None

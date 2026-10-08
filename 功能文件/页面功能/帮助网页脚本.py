@@ -640,7 +640,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1314,7 +1314,7 @@
         [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
           .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
-        const chatRenderSignature = chats.map((chat) => [
+        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0].join(':') + '|' + chats.map((chat) => [
           chat.chat_id,
           chat.chat_type,
           chat.nickname || chat.remark || '',
@@ -1334,32 +1334,53 @@
         msgState.chatRenderSignature = chatRenderSignature;
         msgState.chatListRendered = true;
         if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; settleListScroll(); return; }
-        let removedSectionShown = false;
-        node.innerHTML = chats.map((chat) => {
-          const avatarSource = chat.chat_type === 'group'
-            ? (chat.group_avatar || chat.group_avatar_url || '')
-            : (chat.avatar || chat.avatar_url || '');
-          const av = safeMediaUrl(String(avatarSource).trim())
-            || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
-          if (chat.appid) window.msgAppid = chat.appid;
-          const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
-          const viewing = msgState.chatId === chat.chat_id;
-          const removed = msgChatIsRemoved(chat);
-          const removedSection = removed && !removedSectionShown
-            ? '<div class="msg-chat-divider" role="separator">已移除群聊</div>'
-            : '';
-          if (removed) removedSectionShown = true;
-          const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
-          const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
-          if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
-          const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
-          return `${removedSection}<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
-            <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
-            <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
-             <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
-            <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
-          </button>`;
-        }).join('');
+        const renderChatRows = (items) => {
+          let removedSectionShown = false;
+          return items.map((chat) => {
+            const avatarSource = chat.chat_type === 'group'
+              ? (chat.group_avatar || chat.group_avatar_url || '')
+              : (chat.avatar || chat.avatar_url || '');
+            const av = safeMediaUrl(String(avatarSource).trim())
+              || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
+            if (chat.appid) window.msgAppid = chat.appid;
+            const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
+            const viewing = msgState.chatId === chat.chat_id;
+            const removed = msgChatIsRemoved(chat);
+            const removedSection = removed && !removedSectionShown
+              ? '<div class="msg-chat-divider" role="separator">已移除群聊</div>'
+              : '';
+            if (removed) removedSectionShown = true;
+            const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
+            const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
+            if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
+            const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
+            return `${removedSection}<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
+              <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
+              <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
+               <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
+              <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
+            </button>`;
+          }).join('');
+        };
+        if (msgState.filter === 'all') {
+          const sections = [
+            ['group', '群聊'],
+            ['user', '私聊'],
+          ];
+          node.innerHTML = sections.map(([type, label]) => {
+            const items = chats.filter((chat) => chat.chat_type === type);
+            if (!items.length) return '';
+            const collapsed = Boolean(msgState.folderCollapsed[type]);
+            return `<section class="msg-chat-folder-section">
+              <button class="msg-chat-folder" type="button" data-msg-folder-toggle="${type}" aria-expanded="${!collapsed}">
+                <span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${label}</strong><small>${items.length}</small>
+              </button>
+              ${collapsed ? '' : renderChatRows(items)}
+            </section>`;
+          }).join('');
+        } else {
+          node.innerHTML = renderChatRows(chats);
+        }
         settleListScroll();
         scheduleAutoScanAdminGroups();
         if (node.dataset.msgDelegated !== '1') {
@@ -1379,6 +1400,15 @@
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           node.addEventListener('click', (e) => {
+            const folder = e.target.closest?.('[data-msg-folder-toggle]');
+            if (folder && node.contains(folder)) {
+              const type = String(folder.dataset.msgFolderToggle || '');
+              if (type === 'group' || type === 'user') {
+                msgState.folderCollapsed[type] = !msgState.folderCollapsed[type];
+                renderMsgChats({chats:msgState.chats});
+              }
+              return;
+            }
             const el = e.target.closest?.('[data-msg-chat]');
             if (!el || !node.contains(el)) return;
             if (msgState.multi) exitMultiMode();

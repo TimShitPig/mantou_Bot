@@ -24,9 +24,12 @@ except Exception:
     logger = logging.getLogger(__name__)
 
 消息记录表名 = "mantou_message_records"
+会话索引表名 = "mantou_message_conversations"
+会话索引状态表名 = "mantou_message_conversation_state"
 群信息表名 = "mantou_group_infos"
 用户资料表名 = "mantou_message_user_profiles"
 元数据命名空间 = "message_panel_meta"
+会话索引就绪键 = "conversation_summary_v1"
 
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
@@ -196,6 +199,28 @@ def 初始化数据库() -> bool:
             )
             游标.execute(
                 f"""
+                CREATE TABLE IF NOT EXISTS `{会话索引表名}` (
+                    chat_type VARCHAR(16) NOT NULL,
+                    conversation_id VARCHAR(128) NOT NULL,
+                    last_id BIGINT NOT NULL DEFAULT 0,
+                    last_ts BIGINT NOT NULL DEFAULT 0,
+                    message_count BIGINT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (chat_type, conversation_id),
+                    KEY idx_message_conversations_recent (chat_type, last_ts, last_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            游标.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{会话索引状态表名}` (
+                    state_key VARCHAR(64) NOT NULL,
+                    state_value VARCHAR(32) NOT NULL DEFAULT '',
+                    PRIMARY KEY (state_key)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            游标.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS `{群信息表名}` (
                     group_openid VARCHAR(128) NOT NULL,
                     appid VARCHAR(64) DEFAULT '',
@@ -306,8 +331,39 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_member_time (会话标识, user_id, ts, id)"
                     )
                     logger.info("消息记录 MySQL 已补充群成员历史索引")
+                游标.execute(
+                    f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                    (会话索引就绪键,),
+                )
+                状态行 = 游标.fetchone()
+                if str(_行字段(状态行, 0, "state_value", 默认值="") or "") != "ready":
+                    游标.execute(
+                        f"""
+                        INSERT INTO `{会话索引表名}`
+                            (chat_type, conversation_id, last_id, last_ts, message_count)
+                        SELECT 汇总.chat_type, 汇总.会话标识, 汇总.last_id, 最后消息.ts, 汇总.message_count
+                        FROM (
+                            SELECT COALESCE(消息类型, 'group') AS chat_type, 会话标识,
+                                MAX(id) AS last_id, COUNT(*) AS message_count
+                            FROM `{消息记录表名}`
+                            WHERE 会话标识 != ''
+                            GROUP BY COALESCE(消息类型, 'group'), 会话标识
+                        ) 汇总
+                        JOIN `{消息记录表名}` 最后消息 ON 最后消息.id = 汇总.last_id
+                        ON DUPLICATE KEY UPDATE
+                            last_ts=IF(VALUES(last_id)>=last_id, VALUES(last_ts), last_ts),
+                            last_id=GREATEST(last_id, VALUES(last_id)),
+                            message_count=GREATEST(message_count, VALUES(message_count))
+                        """
+                    )
+                    游标.execute(
+                        f"INSERT INTO `{会话索引状态表名}` (state_key, state_value) VALUES (%s, %s) "
+                        "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                        (会话索引就绪键, "ready"),
+                    )
+                    logger.info("消息记录 MySQL 会话索引已初始化")
             except Exception as 修复异常:
-                logger.debug("消息记录 MySQL 表结构检查跳过：错误类型=%s", type(修复异常).__name__)
+                logger.warning("消息记录 MySQL 结构/会话索引初始化失败：错误类型=%s", type(修复异常).__name__)
         连接.commit()
         return True
     except Exception as exc:
@@ -374,6 +430,91 @@ def _消息记录去重键(记录: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _写入会话索引(
+    游标: Any, 会话标识: str, 类型: str, 最后消息ID: int, 时间戳: int, 新增数量: int
+) -> None:
+    if not 会话标识:
+        return
+    游标.execute(
+        f"""
+        INSERT INTO `{会话索引表名}`
+            (chat_type, conversation_id, last_id, last_ts, message_count)
+        VALUES (%s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            last_ts=IF(VALUES(last_id)>=last_id, VALUES(last_ts), last_ts),
+            last_id=GREATEST(last_id, VALUES(last_id)),
+            message_count=message_count+VALUES(message_count)
+        """,
+        (
+            _按列宽截断(类型 or "group", "消息类型"),
+            _按列宽截断(会话标识, "会话标识"),
+            max(0, int(最后消息ID or 0)),
+            max(0, int(时间戳 or 0)),
+            max(0, int(新增数量 or 0)),
+        ),
+    )
+
+
+def _同步批量会话索引(游标: Any, 新增参数: list[tuple[Any, ...]]) -> None:
+    """按批次消息 ID 回查新增行，避免扫描整个活跃会话历史。"""
+    新增数量: dict[tuple[str, str], int] = {}
+    空ID会话: set[tuple[str, str]] = set()
+    消息键列表: list[tuple[str, str]] = []
+    for 参数 in 新增参数:
+        会话 = str(参数[0] or "")
+        类型 = str(参数[1] or "group")
+        if 会话:
+            键 = (类型, 会话)
+            新增数量[键] = 新增数量.get(键, 0) + 1
+            消息ID = str(参数[3] or "")
+            if 消息ID:
+                消息键列表.append((会话, 消息ID))
+            else:
+                空ID会话.add(键)
+    if not 新增数量:
+        return
+
+    最后消息: dict[tuple[str, str], tuple[int, int]] = {}
+    for 起点 in range(0, len(消息键列表), _消息查重分块大小):
+        分块 = 消息键列表[起点 : 起点 + _消息查重分块大小]
+        占位符 = ",".join(["(%s,%s)"] * len(分块))
+        查询参数: list[str] = []
+        for 会话, 消息ID in 分块:
+            查询参数.extend((会话, 消息ID))
+        游标.execute(
+            f"SELECT 会话标识, 消息类型, id, ts FROM `{消息记录表名}` "
+            f"WHERE (会话标识, message_id) IN ({占位符})",
+            tuple(查询参数),
+        )
+        for 行 in 游标.fetchall():
+            键 = (
+                str(_行字段(行, 1, "消息类型", 默认值="group") or "group"),
+                str(_行字段(行, 0, "会话标识", 默认值="") or ""),
+            )
+            消息ID = int(_行字段(行, 2, "id", 默认值=0) or 0)
+            时间戳 = int(_行字段(行, 3, "ts", 默认值=0) or 0)
+            if 键 in 新增数量 and 消息ID > 最后消息.get(键, (0, 0))[0]:
+                最后消息[键] = (消息ID, 时间戳)
+
+    for 类型, 会话 in 空ID会话:
+        游标.execute(
+            f"SELECT id, ts FROM `{消息记录表名}` "
+            "WHERE 会话标识=%s AND 消息类型=%s ORDER BY id DESC LIMIT 1",
+            (会话, 类型),
+        )
+        行 = 游标.fetchone()
+        if 行:
+            最后消息[(类型, 会话)] = (
+                int(_行字段(行, 0, "id", 默认值=0) or 0),
+                int(_行字段(行, 1, "ts", 默认值=0) or 0),
+            )
+
+    for (类型, 会话), 数量 in 新增数量.items():
+        最后ID, 时间戳 = 最后消息.get((类型, 会话), (0, 0))
+        if 最后ID:
+            _写入会话索引(游标, 会话, 类型, 最后ID, 时间戳, 数量)
+
+
 def _批量读取已存在消息键(游标: Any, 键列表: list[tuple[str, str]]) -> set[tuple[str, str]]:
     """一次查询一批已入库消息，避免批量写入时逐条 SELECT。"""
     已存在: set[tuple[str, str]] = set()
@@ -409,11 +550,36 @@ def _写入消息记录(记录: dict[str, Any]) -> bool:
                     f"SELECT id FROM `{消息记录表名}` WHERE 会话标识=%s AND message_id=%s LIMIT 1",
                     (会话标识, 消息ID),
                 )
-                if 游标.fetchone():
+                已有行 = 游标.fetchone()
+                if 已有行:
                     游标.execute(_消息更新SQL, _消息更新参数(记录))
+                    最后消息ID = int(_行字段(已有行, 0, "id", 默认值=0) or 0)
+                    游标.execute(
+                        f"SELECT ts FROM `{消息记录表名}` WHERE id=%s LIMIT 1",
+                        (最后消息ID,),
+                    )
+                    时间行 = 游标.fetchone()
+                    参数 = _消息写入参数(记录)
+                    _写入会话索引(
+                        游标,
+                        会话标识,
+                        str(参数[1] or "group"),
+                        最后消息ID,
+                        int(_行字段(时间行, 0, "ts", 默认值=0) or 0),
+                        0,
+                    )
                     连接.commit()
                     return True
-            游标.execute(_消息写入SQL, _消息写入参数(记录))
+            参数 = _消息写入参数(记录)
+            游标.execute(_消息写入SQL, 参数)
+            _写入会话索引(
+                游标,
+                会话标识,
+                str(参数[1] or "group"),
+                int(getattr(游标, "lastrowid", 0) or 0),
+                int(参数[8] or 0),
+                1,
+            )
         连接.commit()
         return True
     except Exception as exc:
@@ -503,20 +669,15 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
                 游标,
                 [键 for _, 键 in 记录键列表],
             )
-            待更新 = [
-                _消息更新参数(记录)
-                for 记录, 键 in 记录键列表
-                if 键[1] and 键 in 已存在
-            ]
-            待写入 = [
-                _消息写入参数(记录)
-                for 记录, 键 in 记录键列表
-                if not 键[1] or 键 not in 已存在
-            ]
+            待更新记录 = [记录 for 记录, 键 in 记录键列表 if 键[1] and 键 in 已存在]
+            待写入记录 = [记录 for 记录, 键 in 记录键列表 if not 键[1] or 键 not in 已存在]
+            待更新 = [_消息更新参数(记录) for 记录 in 待更新记录]
+            待写入 = [_消息写入参数(记录) for 记录 in 待写入记录]
             if 待更新:
                 游标.executemany(_消息更新SQL, 待更新)
             if 待写入:
                 游标.executemany(_消息写入SQL, 待写入)
+                _同步批量会话索引(游标, 待写入)
         连接.commit()
         return True
     except Exception as exc:
@@ -762,7 +923,9 @@ def 读取用户最近群聊昵称(用户标识: str, appid: str = "") -> str:
     return _读取最近群消息昵称(用户标识, appid=appid)
 
 
-def 读取会话消息(会话标识: str, 上限: int = 500) -> list[dict[str, Any]]:
+def 读取会话消息(
+    会话标识: str, 上限: int = 500, 会话类型: str = ""
+) -> list[dict[str, Any]]:
     """按时间正序返回某会话最近 N 条消息。"""
     if not _MySQL可用():
         return []
@@ -772,10 +935,17 @@ def 读取会话消息(会话标识: str, 上限: int = 500) -> list[dict[str, A
         return []
     try:
         with 连接.cursor() as 游标:
+            会话类型 = str(会话类型 or "").strip().lower()
+            类型条件 = " AND 消息类型=%s" if 会话类型 in {"group", "user"} else ""
+            参数: tuple[Any, ...] = (
+                (str(会话标识 or ""), 会话类型, 上限)
+                if 类型条件
+                else (str(会话标识 or ""), 上限)
+            )
             游标.execute(
                 f"SELECT * FROM (SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
-                "WHERE 会话标识=%s ORDER BY ts DESC, id DESC LIMIT %s) t ORDER BY ts ASC, id ASC",
-                (str(会话标识 or ""), 上限),
+                f"WHERE 会话标识=%s{类型条件} ORDER BY ts DESC, id DESC LIMIT %s) t ORDER BY ts ASC, id ASC",
+                参数,
             )
             行列表 = 游标.fetchall()
         return [_行转记录(行) for 行 in 行列表]
@@ -794,11 +964,23 @@ def 读取全部会话标识() -> list[str]:
         return []
     try:
         with 连接.cursor() as 游标:
-            游标.execute(f"SELECT DISTINCT 会话标识 FROM `{消息记录表名}`")
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (会话索引就绪键,),
+            )
+            索引就绪 = str(
+                _行字段(游标.fetchone(), 0, "state_value", 默认值="") or ""
+            ) == "ready"
+            if 索引就绪:
+                游标.execute(
+                    f"SELECT DISTINCT conversation_id FROM `{会话索引表名}` WHERE message_count > 0"
+                )
+            else:
+                游标.execute(f"SELECT DISTINCT 会话标识 FROM `{消息记录表名}`")
             return [
-                str(_行字段(行, 0, "会话标识", 默认值=""))
+                str(_行字段(行, 0, "conversation_id" if 索引就绪 else "会话标识", 默认值=""))
                 for 行 in 游标.fetchall()
-                if _行字段(行, 0, "会话标识", 默认值="")
+                if _行字段(行, 0, "conversation_id" if 索引就绪 else "会话标识", 默认值="")
             ]
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话列表读取失败：错误类型=%s", type(exc).__name__)
@@ -807,8 +989,8 @@ def 读取全部会话标识() -> list[str]:
         _关闭连接(连接)
 
 
-def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
-    """返回每个会话的最新消息和总数，保证 id/时间来自同一行。"""
+def 聚合聊天列表(上限: int = 200, 类型过滤: str = "") -> list[dict[str, Any]]:
+    """从按房间维护的轻量索引读取会话列表，不扫描消息正文表。"""
     if not _MySQL可用():
         return []
     try:
@@ -822,43 +1004,90 @@ def 聚合聊天列表(上限: int = 200) -> list[dict[str, Any]]:
         return []
     try:
         with 连接.cursor() as 游标:
-            # 不能分别使用 MAX(id) 和 MAX(ts)：延迟写入时两者可能属于不同消息。
-            # 先按自增 id 聚合，再回表读取同一行的 ts，保持查询可使用会话索引。
-            查询 = (
-                f"SELECT 统计.会话标识, 统计.last_id, 消息.ts AS last_ts, 统计.n "
-                f"FROM (SELECT 会话标识, MAX(id) AS last_id, COUNT(*) AS n "
-                f"FROM `{消息记录表名}` "
-                "WHERE 会话标识 != '' GROUP BY 会话标识) 统计 "
-                f"JOIN `{消息记录表名}` 消息 ON 消息.id = 统计.last_id "
-                "ORDER BY 消息.ts DESC, 消息.id DESC"
+            类型过滤 = str(类型过滤 or "").strip().lower()
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (会话索引就绪键,),
             )
-            if 上限 > 0:
-                查询 += " LIMIT %s"
-                游标.execute(查询, (上限,))
+            索引就绪 = str(
+                _行字段(游标.fetchone(), 0, "state_value", 默认值="") or ""
+            ) == "ready"
+            if 索引就绪:
+                查询 = (
+                    f"SELECT chat_type, conversation_id, last_id, last_ts, message_count "
+                    f"FROM `{会话索引表名}` WHERE message_count > 0"
+                )
+                参数: tuple[Any, ...] = ()
+                if 类型过滤 in {"group", "user"}:
+                    查询 += " AND chat_type=%s"
+                    参数 = (类型过滤,)
+                查询 += " ORDER BY last_ts DESC, last_id DESC"
+                if 上限 > 0:
+                    查询 += " LIMIT %s"
+                    游标.execute(查询, (*参数, 上限))
+                else:
+                    游标.execute(查询, 参数)
+                行列表 = 游标.fetchall()
             else:
-                游标.execute(查询)
-            行列表 = 游标.fetchall()
+                # 回填未完成时保持旧读取路径，避免升级中会话暂时消失。
+                查询 = (
+                    f"SELECT 统计.会话标识, 统计.last_id, 消息.ts AS last_ts, 统计.n "
+                    f"FROM (SELECT 会话标识, MAX(id) AS last_id, COUNT(*) AS n "
+                    f"FROM `{消息记录表名}` "
+                    "WHERE 会话标识 != '' GROUP BY 会话标识) 统计 "
+                    f"JOIN `{消息记录表名}` 消息 ON 消息.id = 统计.last_id "
+                    "ORDER BY 消息.ts DESC, 消息.id DESC"
+                )
+                if 上限 > 0:
+                    查询 += " LIMIT %s"
+                    游标.execute(查询, (上限,))
+                else:
+                    游标.execute(查询)
+                行列表 = 游标.fetchall()
         结果: list[dict[str, Any]] = []
         for 行 in 行列表:
             if isinstance(行, Mapping):
-                会话标识 = str(_行字段(行, 0, "会话标识", 默认值="") or "")
-                结果.append(
-                    {
-                        "会话标识": 会话标识,
-                        "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
-                        "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
-                        "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
-                    }
-                )
+                if 索引就绪:
+                    结果.append(
+                        {
+                            "会话标识": str(_行字段(行, 1, "conversation_id", 默认值="") or ""),
+                            "chat_type": str(_行字段(行, 0, "chat_type", 默认值="group") or "group"),
+                            "last_id": int(_行字段(行, 2, "last_id", 默认值=0) or 0),
+                            "last_ts": int(_行字段(行, 3, "last_ts", 默认值=0) or 0),
+                            "msg_count": int(_行字段(行, 4, "message_count", "msg_count", 默认值=0) or 0),
+                        }
+                    )
+                else:
+                    结果.append(
+                        {
+                            "会话标识": str(_行字段(行, 0, "会话标识", 默认值="") or ""),
+                            "chat_type": "",
+                            "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
+                            "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
+                            "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
+                        }
+                    )
             else:
-                结果.append(
-                    {
-                        "会话标识": str(_行字段(行, 0, "会话标识", 默认值="") or ""),
-                        "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
-                        "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
-                        "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
-                    }
-                )
+                if 索引就绪:
+                    结果.append(
+                        {
+                            "会话标识": str(_行字段(行, 1, "conversation_id", 默认值="") or ""),
+                            "chat_type": str(_行字段(行, 0, "chat_type", 默认值="group") or "group"),
+                            "last_id": int(_行字段(行, 2, "last_id", 默认值=0) or 0),
+                            "last_ts": int(_行字段(行, 3, "last_ts", 默认值=0) or 0),
+                            "msg_count": int(_行字段(行, 4, "message_count", "msg_count", 默认值=0) or 0),
+                        }
+                    )
+                else:
+                    结果.append(
+                        {
+                            "会话标识": str(_行字段(行, 0, "会话标识", 默认值="") or ""),
+                            "chat_type": "",
+                            "last_id": int(_行字段(行, 1, "last_id", 默认值=0) or 0),
+                            "last_ts": int(_行字段(行, 2, "last_ts", 默认值=0) or 0),
+                            "msg_count": int(_行字段(行, 3, "n", "msg_count", 默认值=0) or 0),
+                        }
+                    )
         return 结果
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话聚合失败：错误类型=%s", type(exc).__name__)
@@ -938,6 +1167,7 @@ def 分页读取历史(
     上限: int = 200,
     before_ts: int = 0,
     返回额外: bool = False,
+    会话类型: str = "",
 ) -> list[dict[str, Any]]:
     """按 id 倒序分页读取某会话历史消息，对齐 ElainaBot 的分页查询。
 
@@ -950,29 +1180,29 @@ def 分页读取历史(
     查询上限 = min(2001, 上限 + (1 if 返回额外 else 0))
     before_id = max(0, int(before_id or 0))
     before_ts = max(0, int(before_ts or 0))
+    会话类型 = str(会话类型 or "").strip().lower()
     连接 = _打开连接()
     if 连接 is None:
         return []
     try:
         with 连接.cursor() as 游标:
+            条件 = ["会话标识=%s"]
+            参数列表: list[Any] = [会话标识]
+            if 会话类型 in {"group", "user"}:
+                条件.append("消息类型=%s")
+                参数列表.append(会话类型)
             if before_id:
-                游标.execute(
-                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s AND id < %s "
-                    "ORDER BY id DESC LIMIT %s",
-                    (会话标识, before_id, 查询上限),
-                )
+                条件.append("id < %s")
+                参数列表.append(before_id)
             elif before_ts:
-                游标.execute(
-                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s AND ts < %s "
-                    "ORDER BY id DESC LIMIT %s",
-                    (会话标识, before_ts, 查询上限),
-                )
-            else:
-                游标.execute(
-                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE 会话标识=%s "
-                    "ORDER BY id DESC LIMIT %s",
-                    (会话标识, 查询上限),
-                )
+                条件.append("ts < %s")
+                参数列表.append(before_ts)
+            参数列表.append(查询上限)
+            游标.execute(
+                f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
+                f"WHERE {' AND '.join(条件)} ORDER BY id DESC LIMIT %s",
+                tuple(参数列表),
+            )
             行列表 = 游标.fetchall()
         return [_行转记录(行) for 行 in 行列表]
     except Exception as exc:
@@ -1013,14 +1243,50 @@ def 裁剪总消息(上限: int) -> None:
         return
     try:
         with 连接.cursor() as 游标:
-            游标.execute(f"SELECT COUNT(*) AS c FROM `{消息记录表名}`")
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (会话索引就绪键,),
+            )
+            索引就绪 = str(
+                _行字段(游标.fetchone(), 0, "state_value", 默认值="") or ""
+            ) == "ready"
+            if 索引就绪:
+                游标.execute(
+                    f"SELECT COALESCE(SUM(message_count), 0) AS c FROM `{会话索引表名}`"
+                )
+            else:
+                游标.execute(f"SELECT COUNT(*) AS c FROM `{消息记录表名}`")
             总数 = int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0)
             if 总数 > 上限:
                 需要删 = 总数 - 上限
+                受影响会话 = []
+                if 索引就绪:
+                    游标.execute(
+                        f"SELECT 旧消息.消息类型, 旧消息.会话标识, COUNT(*) AS n FROM "
+                        f"(SELECT 消息类型, 会话标识 FROM `{消息记录表名}` ORDER BY id ASC LIMIT %s) 旧消息 "
+                        "GROUP BY 旧消息.消息类型, 旧消息.会话标识",
+                        (需要删,),
+                    )
+                    受影响会话 = [
+                        (
+                            str(_行字段(行, 0, "消息类型", 默认值="group") or "group"),
+                            str(_行字段(行, 1, "会话标识", 默认值="") or ""),
+                            int(_行字段(行, 2, "n", "COUNT(*)", 默认值=0) or 0),
+                        )
+                        for 行 in 游标.fetchall()
+                    ]
                 游标.execute(
                     f"DELETE FROM `{消息记录表名}` WHERE id IN (SELECT id FROM (SELECT id FROM `{消息记录表名}` ORDER BY id ASC LIMIT %s) t)",
                     (需要删,),
                 )
+                if 索引就绪:
+                    for 类型, 会话, 数量 in 受影响会话:
+                        游标.execute(
+                            f"UPDATE `{会话索引表名}` SET message_count=GREATEST(message_count-%s, 0) "
+                            "WHERE chat_type=%s AND conversation_id=%s",
+                            (数量, 类型, 会话),
+                        )
+                    游标.execute(f"DELETE FROM `{会话索引表名}` WHERE message_count <= 0")
         连接.commit()
     except Exception as exc:
         logger.warning("消息记录 MySQL 裁剪失败：错误类型=%s", type(exc).__name__)
