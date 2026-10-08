@@ -100,6 +100,32 @@ def _行字段(行: Any, 索引: int, *字段名: str, 默认值: Any = None) ->
         return 默认值
 
 
+def _MySQL错误摘要(异常: Exception) -> str:
+    """生成不包含连接配置的 MySQL 诊断信息。"""
+    参数 = getattr(异常, "args", ())
+    错误码 = getattr(异常, "errno", None)
+    if 错误码 is None and 参数 and isinstance(参数[0], int):
+        错误码 = 参数[0]
+    SQL状态 = getattr(异常, "sqlstate", None) or getattr(异常, "sql_state", None)
+    详情值 = getattr(异常, "msg", None)
+    if not 详情值 and len(参数) > 1:
+        详情值 = 参数[1]
+    if not 详情值:
+        详情值 = str(异常)
+    详情 = re.sub(r"\s+", " ", str(详情值)).strip()
+    详情 = re.sub(
+        r"(?i)\b(password|passwd|token|cookie|secret|key)\b\s*([=:])\s*[^\s,;]+",
+        r"\1\2<redacted>",
+        详情,
+    )
+    详情 = re.sub(r"(?<![\w])(?:\d{1,3}\.){3}\d{1,3}(?!\w)", "<ip>", 详情)
+    详情 = re.sub(r"https?://\S+", "<url>", 详情)
+    return (
+        f"错误码={错误码 if 错误码 is not None else 'none'}, "
+        f"SQLSTATE={SQL状态 or 'none'}, 错误详情={详情[:240] or 'none'}"
+    )
+
+
 def 设置数据库配置(配置: Any) -> None:
     """注入插件配置引用，用于读取 MySQL 连接信息。"""
     _数据库配置引用["配置"] = 配置
@@ -149,8 +175,10 @@ def 初始化数据库() -> bool:
     if 连接 is None:
         return False
     状态表名 = _运行状态表名()
+    初始化阶段 = "建消息记录表"
     try:
         with 连接.cursor() as 游标:
+            初始化阶段 = "建消息记录表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{消息记录表名}` (
@@ -177,12 +205,13 @@ def 初始化数据库() -> bool:
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
-                    KEY idx_msg_records_member_time (会话标识, user_id, ts, id),
+                    KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_message (message_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "建用户资料表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{用户资料表名}` (
@@ -197,6 +226,7 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "建会话摘要表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{会话索引表名}` (
@@ -210,6 +240,7 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "建会话摘要状态表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{会话索引状态表名}` (
@@ -219,6 +250,7 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "建群资料表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{群信息表名}` (
@@ -236,6 +268,7 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "建运行状态表"
             游标.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS `{状态表名}` (
@@ -250,6 +283,7 @@ def 初始化数据库() -> bool:
             # 表结构检查必须在游标仍有效时执行。旧实现离开 with 后复用已关闭游标，
             # 导致字符集和历史列修复被异常吞掉。
             try:
+                初始化阶段 = "检查消息表字符集"
                 游标.execute(
                     "SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'content'",
@@ -269,6 +303,7 @@ def 初始化数据库() -> bool:
                     ("member_role", "VARCHAR(16) DEFAULT ''"),
                     ("msg_seq", "VARCHAR(64) DEFAULT ''"),
                 ):
+                    初始化阶段 = f"检查消息字段_{列名}"
                     游标.execute(
                         "SELECT COUNT(*) FROM information_schema.COLUMNS "
                         "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
@@ -277,6 +312,7 @@ def 初始化数据库() -> bool:
                     if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
                         logger.warning("消息记录 MySQL 表已补列 %s", 列名)
+                初始化阶段 = "检查群资料字段_is_admin"
                 游标.execute(
                     "SELECT COUNT(*) FROM information_schema.COLUMNS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'is_admin'",
@@ -287,6 +323,7 @@ def 初始化数据库() -> bool:
                     logger.info("群信息 MySQL 表已补列 is_admin")
                 # 旧版本可能把长字段建成 TEXT；原始消息/卡片超过 64KB 时会直接 DataError。
                 for 列名 in ("content", "media", "raw_message"):
+                    初始化阶段 = f"检查长字段_{列名}"
                     游标.execute(
                         "SELECT DATA_TYPE FROM information_schema.COLUMNS "
                         "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
@@ -296,6 +333,7 @@ def 初始化数据库() -> bool:
                     if 数据类型 and 数据类型 not in {"mediumtext", "longtext"}:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` MODIFY COLUMN `{列名}` MEDIUMTEXT")
                         logger.warning("消息记录 MySQL 长字段已扩容：列=%s", 列名)
+                初始化阶段 = "检查索引_idx_msg_records_session_id"
                 游标.execute(
                     "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
@@ -308,6 +346,7 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_session_id (会话标识, id)"
                     )
                     logger.info("消息记录 MySQL 已补充会话分页索引")
+                初始化阶段 = "检查索引_idx_msg_records_session_message"
                 游标.execute(
                     "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
@@ -320,6 +359,7 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_session_message (会话标识(64), message_id(64))"
                     )
                     logger.info("消息记录 MySQL 已补充会话消息去重索引")
+                初始化阶段 = "检查索引_idx_msg_records_member_time"
                 游标.execute(
                     "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
@@ -328,15 +368,17 @@ def 初始化数据库() -> bool:
                 if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
                     游标.execute(
                         f"ALTER TABLE `{消息记录表名}` "
-                        "ADD KEY idx_msg_records_member_time (会话标识, user_id, ts, id)"
+                        "ADD KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id)"
                     )
                     logger.info("消息记录 MySQL 已补充群成员历史索引")
+                初始化阶段 = "读取会话摘要初始化状态"
                 游标.execute(
                     f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
                     (会话索引就绪键,),
                 )
                 状态行 = 游标.fetchone()
                 if str(_行字段(状态行, 0, "state_value", 默认值="") or "") != "ready":
+                    初始化阶段 = "回填会话摘要"
                     游标.execute(
                         f"""
                         INSERT INTO `{会话索引表名}`
@@ -356,6 +398,7 @@ def 初始化数据库() -> bool:
                             message_count=GREATEST(message_count, VALUES(message_count))
                         """
                     )
+                    初始化阶段 = "标记会话摘要就绪"
                     游标.execute(
                         f"INSERT INTO `{会话索引状态表名}` (state_key, state_value) VALUES (%s, %s) "
                         "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
@@ -363,11 +406,22 @@ def 初始化数据库() -> bool:
                     )
                     logger.info("消息记录 MySQL 会话索引已初始化")
             except Exception as 修复异常:
-                logger.warning("消息记录 MySQL 结构/会话索引初始化失败：错误类型=%s", type(修复异常).__name__)
+                logger.warning(
+                    "消息记录 MySQL 结构/会话索引初始化失败：阶段=%s，错误类型=%s，%s",
+                    初始化阶段,
+                    type(修复异常).__name__,
+                    _MySQL错误摘要(修复异常),
+                )
+        初始化阶段 = "提交初始化事务"
         连接.commit()
         return True
     except Exception as exc:
-        logger.warning("消息记录 MySQL 建表失败：错误类型=%s", type(exc).__name__)
+        logger.warning(
+            "消息记录 MySQL 建表失败：阶段=%s，错误类型=%s，%s",
+            初始化阶段,
+            type(exc).__name__,
+            _MySQL错误摘要(exc),
+        )
         return False
     finally:
         _关闭连接(连接)
