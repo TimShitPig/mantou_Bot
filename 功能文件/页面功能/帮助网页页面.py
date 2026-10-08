@@ -108,7 +108,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-search input:focus { border-color:#12b7f5; background:#fff; }
             .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
             .msg-chats { --msg-chat-row-height:52px; flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; }
-            .msg-chat-list-spacer { display:block; width:100%; pointer-events:none; }
+            .msg-chat-list-track { position:relative; width:100%; min-height:100%; overflow:visible; }
             .msg-chat-folder { display:flex; box-sizing:border-box; align-items:center; gap:9px; width:100%; height:38px; min-height:38px; max-height:38px; margin:0; padding:0 8px; border:0; border-radius:6px; background:transparent; color:#4b5563; text-align:left; cursor:pointer; }
             .msg-chat-folder:hover { background:#ececee; }
             .msg-chat-folder strong { font-size:12px; font-weight:700; }

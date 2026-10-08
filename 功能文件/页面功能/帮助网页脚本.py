@@ -1006,6 +1006,10 @@
         }).replace(/<qqbot-at-everyone\s*\/?\s*>/gi, '@全体成员');
         return text.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
       };
+      const chatListPreview = (value) => {
+        const text = plainMsgPreview(String(value || '').slice(0, 512));
+        return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+      };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -1262,12 +1266,13 @@
         const value = Number.parseFloat(window.getComputedStyle(node).getPropertyValue('--msg-chat-row-height'));
         return Number.isFinite(value) && value > 0 ? value : 52;
       };
-      const renderMsgChatRow = (item) => {
+      const renderMsgChatRow = (item, top) => {
+        const placement = `position:absolute;top:${top}px;left:0;right:0;height:${item.height}px;`;
         if (item.kind === 'folder') {
           const collapsed = Boolean(msgState.folderCollapsed[item.type]);
-          return `<button class="msg-chat-folder" type="button" data-msg-folder-toggle="${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
+          return `<button class="msg-chat-folder" style="${placement}" type="button" data-msg-folder-toggle="${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
         }
-        if (item.kind === 'divider') return '<div class="msg-chat-divider" role="separator">已移除群聊</div>';
+        if (item.kind === 'divider') return `<div class="msg-chat-divider" style="${placement}" role="separator">已移除群聊</div>`;
         const chat = item.chat;
         const avatarSource = chat.chat_type === 'group'
           ? (chat.group_avatar || chat.group_avatar_url || '')
@@ -1281,8 +1286,8 @@
         const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
         const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
         if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
-        const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
-        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
+        const preview = removed ? '你已被移除群聊' : (item.preview || '（无文本内容）');
+        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
           <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
           <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
           <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
@@ -1295,7 +1300,10 @@
         if (!node || !rows.length) return;
         const offsets = msgState.chatListOffsets;
         const rowHeight = msgState.chatListRowHeight;
-        const viewport = Math.max(node.clientHeight, rowHeight * 8);
+        const viewport = Math.max(0, node.clientHeight);
+        if (!viewport) return;
+        const paddingTop = Number.parseFloat(window.getComputedStyle(node).paddingTop) || 0;
+        const scrollTop = Math.max(0, node.scrollTop - paddingTop);
         const lowerBound = (value) => {
           let low = 0;
           let high = offsets.length;
@@ -1307,14 +1315,22 @@
           return low;
         };
         const overscan = Math.max(8, Math.ceil(viewport / rowHeight));
-        const firstVisible = Math.min(rows.length - 1, Math.max(0, lowerBound(Math.max(0, node.scrollTop)) - 1));
-        const lastVisible = Math.min(rows.length, lowerBound(Math.max(0, node.scrollTop) + viewport) + 1);
+        const firstVisible = Math.min(rows.length - 1, Math.max(0, lowerBound(scrollTop) - 1));
+        const lastVisible = Math.min(rows.length, lowerBound(scrollTop + viewport) + 1);
         const start = Math.max(0, firstVisible - overscan);
         const end = Math.min(rows.length, Math.max(start + 1, lastVisible + overscan));
         if (start === msgState.chatListWindowStart && end === msgState.chatListWindowEnd) return;
-        const top = offsets[start] || 0;
-        const bottom = Math.max(0, msgState.chatListContentHeight - (offsets[end] || 0));
-        node.innerHTML = `<div class="msg-chat-list-spacer" aria-hidden="true" style="height:${top}px"></div>${rows.slice(start, end).map(renderMsgChatRow).join('')}<div class="msg-chat-list-spacer" aria-hidden="true" style="height:${bottom}px"></div>`;
+        let track = node.firstElementChild;
+        if (!track || !track.classList.contains('msg-chat-list-track')) {
+          track = document.createElement('div');
+          track.className = 'msg-chat-list-track';
+          node.replaceChildren(track);
+        }
+        track.style.height = `${msgState.chatListContentHeight}px`;
+        const visibleRows = rows.slice(start, end)
+          .map((row, index) => renderMsgChatRow(row, offsets[start + index] || 0))
+          .join('');
+        track.innerHTML = visibleRows;
         msgState.chatListWindowStart = start;
         msgState.chatListWindowEnd = end;
       };
@@ -1406,22 +1422,27 @@
           .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         const rowHeight = getMsgChatRowHeight(node);
-        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0, rowHeight].join(':') + '|' + visibleChats.map((chat) => [
-          chat.chat_id,
-          chat.chat_type,
-          chat.nickname || '',
-          chat.remark || '',
-          chat.last_content || '',
-          chat.last_ts,
-          chat.last_time || '',
-          chat.unread,
-          chat.msg_count,
-          chat.pinned ? 1 : 0,
-          chat.is_admin ? 1 : 0,
-          chat.membership_status,
-          chat.in_group === false ? 0 : 1,
-          chat.group_avatar || chat.group_avatar_url || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
-        ].join(':')).join('|');
+        const chatPreviews = new Map();
+        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0, rowHeight].join(':') + '|' + visibleChats.map((chat) => {
+          const preview = chatListPreview(chat.last_content);
+          chatPreviews.set(chat, preview);
+          return [
+            chat.chat_id,
+            chat.chat_type,
+            chat.nickname || '',
+            chat.remark || '',
+            preview,
+            chat.last_ts,
+            chat.last_time || '',
+            chat.unread,
+            chat.msg_count,
+            chat.pinned ? 1 : 0,
+            chat.is_admin ? 1 : 0,
+            chat.membership_status,
+            chat.in_group === false ? 0 : 1,
+            chat.group_avatar || chat.group_avatar_url || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
+          ].join(':');
+        }).join('|');
         if (msgState.chatRenderSignature === chatRenderSignature) {
           if (forceListTop) {
             node.scrollTop = 0;
@@ -1450,7 +1471,7 @@
             const removed = msgChatIsRemoved(chat);
             if (removed && !removedSectionShown) rows.push({kind:'divider', height:28});
             if (removed) removedSectionShown = true;
-            rows.push({kind:'chat', chat, height:rowHeight});
+            rows.push({kind:'chat', chat, preview:chatPreviews.get(chat) || '', height:rowHeight});
           });
         };
         if (msgState.filter === 'all') {

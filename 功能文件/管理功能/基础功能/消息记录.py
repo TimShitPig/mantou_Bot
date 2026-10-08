@@ -106,6 +106,7 @@ _数据库裁剪最短间隔 = 300.0
 _消息数据库维护任务: asyncio.Task[Any] | None = globals().get("_消息数据库维护任务")
 _消息数据库维护首次延迟秒 = 30.0
 _消息数据库维护间隔秒 = 10 * 60.0
+_消息资料回填任务: asyncio.Task[Any] | None = globals().get("_消息资料回填任务")
 _消息缓存总数缓存 = int(globals().get("_消息缓存总数缓存", 0) or 0)
 _消息缓存总数检查时间 = float(globals().get("_消息缓存总数检查时间", 0.0) or 0.0)
 _消息缓存总数检查间隔 = 0.5
@@ -1399,7 +1400,12 @@ async def 停止消息记录() -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
-    global _群信息轮询任务, _消息数据库维护任务
+    global _群信息轮询任务, _消息数据库维护任务, _消息资料回填任务
+    资料回填任务 = _消息资料回填任务
+    _消息资料回填任务 = None
+    if 资料回填任务 is not None and not 资料回填任务.done():
+        资料回填任务.cancel()
+        await asyncio.gather(资料回填任务, return_exceptions=True)
     数据库维护任务 = _消息数据库维护任务
     _消息数据库维护任务 = None
     if 数据库维护任务 is not None and not 数据库维护任务.done():
@@ -2358,6 +2364,7 @@ def _裁剪成员资料缓存() -> None:
 
 _群消息昵称补查失败冷却: dict[tuple[str, str], float] = globals().get("_群消息昵称补查失败冷却") or {}
 _群消息昵称补查失败冷却秒 = 5 * 60
+_私聊列表批量昵称回查冷却秒 = 15
 
 
 def _昵称需要补查(
@@ -2390,7 +2397,12 @@ def _私聊兜底昵称(会话标识: str) -> str:
 
 def _有效用户昵称(值: Any, 用户标识: str = "") -> str:
     昵称 = str(值 or "").strip()
-    if not 昵称 or 昵称 == str(用户标识 or "").strip():
+    用户标识 = str(用户标识 or "").strip()
+    if (
+        not 昵称
+        or 昵称 == 用户标识
+        or 昵称 == "用户" + 用户标识[-6:]
+    ):
         return ""
     if 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}:
         return ""
@@ -2639,6 +2651,12 @@ def _排队昵称补查(会话标识: str, 用户标识: str, appid: str = "") -
         return False
     _启动昵称补查任务()
     return True
+
+
+def 排队私聊昵称补查(会话标识: str, appid: str = "") -> bool:
+    """把私聊昵称回查放进有界后台队列，不阻塞历史接口响应。"""
+    会话标识 = str(会话标识 or "").strip()
+    return _排队昵称补查(会话标识, 会话标识, appid)
 
 
 def 记录收到消息(
@@ -3230,6 +3248,50 @@ async def _消息数据库维护工作() -> None:
     finally:
         if _消息数据库维护任务 is asyncio.current_task():
             _消息数据库维护任务 = None
+
+
+async def _消息资料回填工作() -> None:
+    """低频分批回填历史昵称资料，不占用插件初始化和会话切换时间。"""
+    global _消息资料回填任务
+    try:
+        while True:
+            回填 = getattr(_消息存储, "回填历史用户资料批次", None)
+            if not callable(回填):
+                return
+            try:
+                已处理, 已完成 = await _异步执行消息记录同步(回填, 300)
+            except asyncio.CancelledError:
+                raise
+            except Exception as 异常:
+                logger.debug("消息记录历史用户资料回填失败：错误类型=%s", type(异常).__name__)
+                已处理, 已完成 = 0, False
+            if 已完成:
+                return
+            await asyncio.sleep(0.5 if 已处理 else 10.0)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        if _消息资料回填任务 is asyncio.current_task():
+            _消息资料回填任务 = None
+
+
+def _启动消息资料回填任务() -> asyncio.Task[Any] | None:
+    """后台启动可取消、可续跑的历史资料迁移。"""
+    global _消息资料回填任务
+    if not _消息数据库已配置() or not callable(
+        getattr(_消息存储, "回填历史用户资料批次", None)
+    ):
+        return None
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if _消息资料回填任务 is None or _消息资料回填任务.done():
+        _消息资料回填任务 = 循环.create_task(
+            _消息资料回填工作(),
+            name="消息记录历史用户资料回填",
+        )
+    return _消息资料回填任务
 
 
 def _启动消息数据库维护任务() -> asyncio.Task[Any] | None:
@@ -4876,6 +4938,15 @@ def 调整群成员人数(
 # 聊天列表与历史
 # ---------------------------------------------------------------------------
 
+def _限制聊天列表预览(内容: Any) -> str:
+    """聊天列表只返回可见预览，避免把整条超长消息重复传到浏览器。"""
+    文本 = str(内容 or "")
+    if len(文本) <= 512:
+        return 文本
+    文本 = 文本[:512]
+    未闭合标签 = 文本.rfind("<") > 文本.rfind(">")
+    return 文本[:文本.rfind("<")] if 未闭合标签 else 文本
+
 def _私聊联系人资料(
     会话标识: str,
     会话: dict[str, Any] | None = None,
@@ -4919,11 +4990,18 @@ def _聊天显示名(
     会话标识: str,
     会话: dict[str, Any],
     备注表: dict[str, Any] | None = None,
+    昵称表: dict[str, Any] | None = None,
 ) -> str:
-    if 备注表 is None:
-        备注表 = (_读取本地缓存文件().get("remarks") or {})
+    if 备注表 is None or 昵称表 is None:
+        本地数据 = _读取本地缓存文件()
+        if 备注表 is None:
+            备注表 = 本地数据.get("remarks") or {}
+        if 昵称表 is None:
+            昵称表 = 本地数据.get("nicknames") or {}
     if not isinstance(备注表, dict):
         备注表 = {}
+    if not isinstance(昵称表, dict):
+        昵称表 = {}
     备注项 = 备注表.get(会话标识) or {}
     备注 = str(备注项.get("remark") or "")
     if 备注:
@@ -4938,7 +5016,7 @@ def _聊天显示名(
         if 联系人["nickname"]:
             return 联系人["nickname"]
         本地昵称 = _有效用户昵称(
-            (_读取本地缓存文件().get("nicknames") or {}).get(会话标识),
+            昵称表.get(会话标识),
             会话标识,
         )
         if 本地昵称:
@@ -5041,6 +5119,8 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             if not _昵称需要补查(会话标识, 会话, 聊天.get("nickname")):
                 continue
             appid = str(聊天.get("appid") or (会话 or {}).get("appid") or "")
+            if _群消息昵称补查失败冷却.get((appid, 会话标识), 0.0) > time.monotonic():
+                continue
             待补查.append((聊天, 会话标识, appid))
         if not 待补查:
             return 0
@@ -5055,6 +5135,9 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
                 ) or {}
 
             def 应用昵称(聊天: dict[str, Any], 会话标识: str, 昵称: str) -> None:
+                _群消息昵称补查失败冷却.pop(
+                    (str(聊天.get("appid") or ""), 会话标识), None
+                )
                 聊天["nickname"] = 昵称
                 _回填私聊昵称(会话标识, 会话标识, 昵称)
                 _推送私聊昵称事件(
@@ -5097,6 +5180,19 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
                 保存用户资料 = getattr(_消息存储, "批量保存用户昵称", None)
                 if 新资料列表 and callable(保存用户资料):
                     await _异步执行消息记录同步(保存用户资料, 新资料列表)
+            命中会话 = {
+                str(聊天.get("chat_id") or "")
+                for 聊天, _, _ in 待补查
+                if not _昵称需要补查(
+                    str(聊天.get("chat_id") or ""),
+                    None,
+                    聊天.get("nickname"),
+                )
+            }
+            冷却截止 = time.monotonic() + _私聊列表批量昵称回查冷却秒
+            for _, 会话标识, appid in 待补查:
+                if 会话标识 not in 命中会话:
+                    _群消息昵称补查失败冷却[(appid, 会话标识)] = 冷却截止
             # 已批量查过用户资料和群消息；不要再为未匹配用户逐个全表扫描。
             return 0
 
@@ -5183,24 +5279,8 @@ def _数据库聚合聊天项(
             最后消息表 = 读取摘要(最后id列表)
         else:
             最后消息表 = {}
-        用户昵称表: dict[tuple[str, str], str] = {}
-        读取用户昵称表 = getattr(_消息存储, "批量读取用户昵称", None)
-        if callable(读取用户昵称表):
-            用户资料查询 = []
-            for 项 in 骨架:
-                if str(项.get("chat_type") or "") != "user":
-                    continue
-                会话标识 = str(项.get("会话标识") or "").strip()
-                最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
-                内存会话 = 消息缓存.get(会话标识) or {}
-                appid = str(最后记录.get("appid") or 内存会话.get("appid") or "").strip()
-                if 会话标识:
-                    用户资料查询.append({"appid": appid, "user_id": 会话标识})
-            try:
-                用户昵称表 = 读取用户昵称表(用户资料查询) or {}
-            except Exception as 异常:
-                logger.debug("私聊昵称批量读取失败：错误类型=%s", type(异常).__name__)
         本地备注表 = (本地数据.get("remarks") or {})
+        本地昵称表 = (本地数据.get("nicknames") or {})
         持久化未读表 = _读取全部持久化未读数()
         聊天项: list[dict[str, Any]] = []
         已有会话标识: set[str] = set()
@@ -5246,17 +5326,7 @@ def _数据库聚合聊天项(
                 "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
                 "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
             }
-            if 类型 == "user" and _昵称需要补查(
-                会话标识, 内存会话, 轻量会话["last_nickname"]
-            ):
-                资料昵称 = str(
-                    用户昵称表.get((轻量会话["appid"], 会话标识))
-                    or 用户昵称表.get(("", 会话标识))
-                    or ""
-                )
-                if _有效用户昵称(资料昵称, 会话标识):
-                    轻量会话["last_nickname"] = 资料昵称
-            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表)
+            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表, 本地昵称表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             last_ts = int(最后记录.get("ts") or 项.get("last_ts") or 0)
@@ -5288,12 +5358,14 @@ def _数据库聚合聊天项(
                     "avatar": 列表头像 if 类型 != "group" else "",
                     "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _替换提及名称(
-                        _表情标签规则.sub(
-                            lambda 匹配: _解码表情文本(匹配.group(0)),
-                            str(最后记录.get("content") or ""),
-                        ),
-                        会话标识,
+                    "last_content": _限制聊天列表预览(
+                        _替换提及名称(
+                            _表情标签规则.sub(
+                                lambda 匹配: _解码表情文本(匹配.group(0)),
+                                str(最后记录.get("content") or ""),
+                            ),
+                            会话标识,
+                        )
                     ),
                     "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
                     "last_ts": last_ts,
@@ -5325,7 +5397,7 @@ def _数据库聚合聊天项(
                 "last_nickname": 群名,
                 "appid": str(信息.get("appid") or ""),
             }
-            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表)
+            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表, 本地昵称表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             当前未读数 = _未读待写.get(
@@ -5368,7 +5440,7 @@ def _数据库聚合聊天项(
             备注 = str(会话备注.get("remark") or "")
             if 过滤 == "remark" and not 备注:
                 continue
-            显示名 = _聊天显示名(会话标识, 内存会话, 本地备注表)
+            显示名 = _聊天显示名(会话标识, 内存会话, 本地备注表, 本地昵称表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             消息列表 = 内存会话.get("messages") or []
@@ -5386,9 +5458,11 @@ def _数据库聚合聊天项(
                     "avatar": 列表头像 if 类型 != "group" else "",
                     "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _替换提及名称(
-                        _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
-                        会话标识,
+                    "last_content": _限制聊天列表预览(
+                        _替换提及名称(
+                            _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
+                            会话标识,
+                        )
                     ),
                     "last_time": _格式化时间戳(最后时间) or str(最后记录.get("timestamp") or ""),
                     "last_ts": 最后时间,
@@ -5424,6 +5498,7 @@ def 获取聊天列表(
         页码, 每页 = 1, 50
     本地数据 = _读取本地缓存文件()
     本地备注表 = (本地数据.get("remarks") or {})
+    本地昵称表 = (本地数据.get("nicknames") or {})
     置顶列表 = [str(x) for x in (本地数据.get("pinned") or []) if str(x or "").strip()]
     置顶顺序 = {会话: idx for idx, 会话 in enumerate(置顶列表)}
     # 对齐 ElainaBot：数据库 GROUP BY 聚合优先，不可用时回退内存缓存
@@ -5441,7 +5516,7 @@ def 获取聊天列表(
             备注 = str(会话备注.get("remark") or "")
             if 过滤 == "remark" and not 备注:
                 continue
-            显示名 = _聊天显示名(会话标识, 会话, 本地备注表)
+            显示名 = _聊天显示名(会话标识, 会话, 本地备注表, 本地昵称表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
                 continue
             消息列表 = 会话.get("messages") or []
@@ -5456,12 +5531,14 @@ def 获取聊天列表(
                     "avatar": 列表头像 if 类型 != "group" else "",
                     "group_avatar": 列表头像 if 类型 == "group" else "",
                     "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _替换提及名称(
-                        _表情标签规则.sub(
-                            lambda 匹配: _解码表情文本(匹配.group(0)),
-                            str(最后消息.get("content") or 会话.get("last_content") or ""),
-                        ),
-                        会话标识,
+                    "last_content": _限制聊天列表预览(
+                        _替换提及名称(
+                            _表情标签规则.sub(
+                                lambda 匹配: _解码表情文本(匹配.group(0)),
+                                str(最后消息.get("content") or 会话.get("last_content") or ""),
+                            ),
+                            会话标识,
+                        )
                     ),
                     "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
                     "last_ts": int(会话.get("last_ts") or 0),
@@ -7282,6 +7359,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
                 _消息存储.初始化数据库()
                 _从数据库恢复()
                 _启动消息数据库维护任务()
+                _启动消息资料回填任务()
                 if _消息持久化失败批次 or not _准备消息持久化队列().empty():
                     _启动消息持久化任务()
             except Exception as 恢复异常:

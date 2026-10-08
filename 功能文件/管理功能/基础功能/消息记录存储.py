@@ -125,6 +125,43 @@ def _原始消息统一用户标识表达式(别名: str) -> str:
     )
 
 
+def _原始消息昵称表达式(别名: str, 用户字段: str) -> str:
+    路径列表 = (
+        "$.author.username",
+        "$.author.member_name",
+        "$.author.nickname",
+        "$.author.user_name",
+        "$.author.name",
+        "$.member.username",
+        "$.member.nick",
+        "$.member.nickname",
+        "$.member.member_name",
+        "$.username",
+        "$.member_name",
+        "$.nickname",
+        "$.data.author.username",
+        "$.data.author.member_name",
+        "$.data.author.nickname",
+        "$.d.author.username",
+        "$.d.author.member_name",
+        "$.d.author.nickname",
+        "$.raw_data.author.username",
+        "$.raw_data.author.member_name",
+        "$.raw_data.author.nickname",
+    )
+    原始候选 = ",".join(
+        "NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT("
+        + f"{别名}.raw_message, '{路径}'"
+        + ")),''),'null')"
+        for 路径 in 路径列表
+    )
+    return (
+        f"CASE WHEN JSON_VALID({别名}.raw_message) THEN "
+        f"COALESCE({原始候选},NULLIF({别名}.nickname,''),'') "
+        f"ELSE COALESCE(NULLIF({别名}.nickname,''),'') END"
+    )
+
+
 def _MySQL错误摘要(异常: Exception) -> str:
     """生成不包含连接配置的 MySQL 诊断信息。"""
     参数 = getattr(异常, "args", ())
@@ -370,71 +407,6 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
-            初始化阶段 = "回填历史消息统一用户资料"
-            try:
-                游标.execute(
-                    f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
-                    (统一用户资料回填键,),
-                )
-                统一资料回填状态 = 游标.fetchone()
-                if str(_行字段(统一资料回填状态, 0, "state_value", 默认值="") or "") != "ready":
-                    UnionOpenID表达式 = _原始消息统一用户标识表达式("m")
-                    回填Union表达式 = _原始消息统一用户标识表达式("x")
-                    用户名路径列表 = (
-                        "$.author.username",
-                        "$.author.nickname",
-                        "$.member.username",
-                        "$.username",
-                        "$.nickname",
-                        "$.data.author.username",
-                        "$.d.author.username",
-                        "$.raw_data.author.username",
-                    )
-                    原始昵称候选 = ",".join(
-                        "NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '"
-                        + 路径
-                        + "')),''),'null')"
-                        for 路径 in 用户名路径列表
-                    )
-                    历史昵称表达式 = f"COALESCE({原始昵称候选},NULLIF(m.nickname,''),'')"
-                    昵称有效条件 = (
-                        f"{历史昵称表达式}<>'' "
-                        f"AND {历史昵称表达式}<>m.user_id "
-                        f"AND {历史昵称表达式}<>CONCAT('用户',RIGHT(m.user_id,6)) "
-                        f"AND {历史昵称表达式} NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
-                    )
-                    游标.execute(
-                        f"INSERT INTO `{用户资料表名}` "
-                        "(profile_key, appid, user_id, nickname, union_openid, updated_at) "
-                        "SELECT SHA2(CONCAT(COALESCE(m.appid,''),CHAR(0),m.user_id),256), "
-                        "COALESCE(m.appid,''),m.user_id, "
-                        f"CASE WHEN {昵称有效条件} THEN {历史昵称表达式} ELSE '' END, "
-                        f"{UnionOpenID表达式},COALESCE(m.ts,0) "
-                        f"FROM `{消息记录表名}` m JOIN ("
-                        "SELECT x.appid,x.user_id,MAX(x.id) AS last_id "
-                        f"FROM `{消息记录表名}` x WHERE x.消息类型 IN ('group','user') "
-                        "AND x.is_self=0 AND x.user_id<>'' AND JSON_VALID(x.raw_message) "
-                        f"AND {回填Union表达式}<>'' GROUP BY x.appid,x.user_id"
-                        ") latest ON latest.last_id=m.id "
-                        "ON DUPLICATE KEY UPDATE "
-                        "nickname=IF(VALUES(nickname)<>'' AND (nickname='' OR nickname=user_id "
-                        "OR nickname=CONCAT('用户',RIGHT(user_id,6)) "
-                        "OR nickname IN ('成员','新成员','未知','未知用户','机器人','我')),VALUES(nickname),nickname), "
-                        "union_openid=IF(union_openid='',VALUES(union_openid),union_openid), "
-                        "updated_at=GREATEST(updated_at,VALUES(updated_at))"
-                    )
-                    游标.execute(
-                        f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
-                        "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
-                        (统一用户资料回填键, "ready"),
-                    )
-                    logger.info("消息记录 MySQL 历史用户统一 OpenID 资料回填完成")
-            except Exception as 回填异常:
-                logger.warning(
-                    "消息记录 MySQL 历史用户统一 OpenID 资料回填失败：错误类型=%s，%s",
-                    type(回填异常).__name__,
-                    _MySQL错误摘要(回填异常),
-                )
             # 表结构检查必须在游标仍有效时执行。旧实现离开 with 后复用已关闭游标，
             # 导致字符集和历史列修复被异常吞掉。
             try:
@@ -655,6 +627,113 @@ def 初始化数据库() -> bool:
             _MySQL错误摘要(exc),
         )
         return False
+    finally:
+        _关闭连接(连接)
+
+
+def 回填历史用户资料批次(批次大小: int = 300) -> tuple[int, bool]:
+    """断点续跑地补充历史消息里的 union_openid 与群昵称。"""
+    if not _MySQL可用():
+        return 0, True
+    try:
+        批次大小 = max(50, min(1000, int(批次大小)))
+    except (TypeError, ValueError):
+        批次大小 = 300
+    连接 = _打开连接()
+    if 连接 is None:
+        return 0, False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (统一用户资料回填键,),
+            )
+            状态值 = str(_行字段(游标.fetchone(), 0, "state_value", 默认值="") or "")
+            if 状态值 == "ready":
+                return 0, True
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (统一用户资料回填键 + "_cursor",),
+            )
+            游标状态 = str(_行字段(游标.fetchone(), 0, "state_value", 默认值="") or "")
+            try:
+                游标位置 = max(0, int(游标状态))
+            except (TypeError, ValueError):
+                游标位置 = 0
+            UnionOpenID表达式 = _原始消息统一用户标识表达式("m")
+            原始昵称表达式 = _原始消息昵称表达式("m", "m.user_id")
+            游标.execute(
+                f"SELECT m.id,m.appid,m.user_id,m.nickname,m.ts,"
+                f"{UnionOpenID表达式} AS union_openid,{原始昵称表达式} AS raw_nickname "
+                f"FROM `{消息记录表名}` m "
+                "WHERE m.id>%s AND m.消息类型 IN ('group','user') AND m.is_self=0 "
+                "AND m.user_id<>'' AND JSON_VALID(m.raw_message) "
+                f"AND {UnionOpenID表达式}<>'' ORDER BY m.id ASC LIMIT %s",
+                (游标位置, 批次大小),
+            )
+            行列表 = list(游标.fetchall() or ())
+            if not 行列表:
+                游标.execute(
+                    f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                    "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                    (统一用户资料回填键, "ready"),
+                )
+                连接.commit()
+                return 0, True
+
+            待写资料: list[tuple[Any, ...]] = []
+            for 行 in 行列表:
+                记录ID = int(_行字段(行, 0, "id", 默认值=0) or 0)
+                appid = str(_行字段(行, 1, "appid", 默认值="") or "").strip()[:64]
+                用户标识 = str(_行字段(行, 2, "user_id", 默认值="") or "").strip()[:128]
+                if not 记录ID or not 用户标识:
+                    continue
+                昵称 = _有效用户昵称(用户标识, _行字段(行, 6, "raw_nickname", 默认值=""))
+                if not 昵称:
+                    昵称 = _有效用户昵称(用户标识, _行字段(行, 3, "nickname", 默认值=""))
+                统一用户标识 = str(_行字段(行, 5, "union_openid", 默认值="") or "").strip()[:128]
+                if not 统一用户标识:
+                    continue
+                profile_key = hashlib.sha256(
+                    f"{appid}\0{用户标识}".encode("utf-8", errors="ignore")
+                ).hexdigest()
+                待写资料.append((
+                    profile_key,
+                    appid,
+                    用户标识,
+                    昵称[:255],
+                    统一用户标识,
+                    int(_行字段(行, 4, "ts", 默认值=0) or 0),
+                ))
+            if 待写资料:
+                游标.executemany(
+                    f"INSERT INTO `{用户资料表名}` "
+                    "(profile_key,appid,user_id,nickname,union_openid,updated_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+                    "nickname=IF(VALUES(nickname)<>'',VALUES(nickname),nickname), "
+                    "union_openid=IF(VALUES(union_openid)<>'',VALUES(union_openid),union_openid), "
+                    "updated_at=GREATEST(updated_at,VALUES(updated_at))",
+                    待写资料,
+                )
+            最后ID = int(_行字段(行列表[-1], 0, "id", 默认值=游标位置) or 游标位置)
+            游标.execute(
+                f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                (统一用户资料回填键 + "_cursor", str(最后ID)),
+            )
+        连接.commit()
+        return len(行列表), False
+    except Exception as exc:
+        try:
+            连接.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "消息记录 MySQL 历史用户资料分批回填失败：错误类型=%s，%s",
+            type(exc).__name__,
+            _MySQL错误摘要(exc),
+        )
+        return 0, False
     finally:
         _关闭连接(连接)
 
@@ -1396,11 +1475,12 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
                 结果[键] = 昵称
 
     def 昵称条件(消息别名: str, 用户字段: str) -> str:
+        昵称表达式 = _原始消息昵称表达式(消息别名, 用户字段)
         return (
-            f"{消息别名}.nickname IS NOT NULL AND {消息别名}.nickname<>'' "
-            f"AND {消息别名}.nickname<>COALESCE({用户字段},'') "
-            f"AND {消息别名}.nickname<>CONCAT('用户',RIGHT(COALESCE({用户字段},''),6)) "
-            f"AND {消息别名}.nickname NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
+            f"{昵称表达式}<>'' "
+            f"AND {昵称表达式}<>COALESCE({用户字段},'') "
+            f"AND {昵称表达式}<>CONCAT('用户',RIGHT(COALESCE({用户字段},''),6)) "
+            f"AND {昵称表达式} NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
         )
 
     try:
@@ -1415,7 +1495,8 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
                 有效昵称 = 昵称条件("x", "x.user_id")
                 with 连接.cursor() as 游标:
                     游标.execute(
-                        "SELECT m.appid,m.user_id,m.nickname,m.ts,m.id "
+                        "SELECT m.appid,m.user_id,"
+                        f"{_原始消息昵称表达式('m', 'm.user_id')} AS nickname,m.ts,m.id "
                         f"FROM `{消息记录表名}` m JOIN ("
                         f"SELECT x.appid,x.user_id,MAX(x.id) AS last_id FROM `{消息记录表名}` x "
                         f"WHERE x.消息类型='group' AND x.is_self=0 AND x.user_id IN ({占位符})"
@@ -1450,7 +1531,8 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
                 有效子查询昵称 = 昵称条件("r", "l.member_openid")
                 with 连接.cursor() as 游标:
                     游标.execute(
-                        "SELECT l.appid,l.user_openid,m.nickname,m.ts,m.id "
+                        "SELECT l.appid,l.user_openid,"
+                        f"{_原始消息昵称表达式('m', 'l.member_openid')} AS nickname,m.ts,m.id "
                         f"FROM `{群成员映射表名}` l JOIN `{消息记录表名}` m "
                         "ON m.会话标识=l.group_openid AND m.user_id=l.member_openid "
                         "AND m.消息类型='group' AND m.is_self=0 "
@@ -1756,11 +1838,11 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
             分块 = id列表[起点 : 起点 + 500]
             占位 = ",".join(["%s"] * len(分块))
             with 连接.cursor() as 游标:
-                # 列顺序必须与 _行转记录 保持一致；列表预览截取前 4096 个字符，
+                # 列顺序必须与 _行转记录 保持一致；列表预览截取前 1024 个字符，
                 # 原文只保留首尾字段（含 QQ timestamp），完整消息仍由历史接口分页读取。
                 游标.execute(
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
-                     f"LEFT(content, 4096) AS content, timestamp, ts, is_self, source, recalled, "
+                     f"LEFT(content, 1024) AS content, timestamp, ts, is_self, source, recalled, "
                      f"'' AS media, reference_id, refidx, avatar, "
                      f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message, member_role, msg_seq "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
