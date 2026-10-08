@@ -630,6 +630,7 @@ async def _同步群成员人数变化(
             成员,
             事件名,
             appid=appid,
+            用户openid=str(事件数据.get("user_openid") or ""),
             事件编号=str(事件数据.get("_mantou_event_id") or ""),
             时间戳=str(事件数据.get("timestamp") or ""),
             昵称=str(

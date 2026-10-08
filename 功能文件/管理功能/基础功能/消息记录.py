@@ -2340,6 +2340,30 @@ def _有效用户昵称(值: Any, 用户标识: str = "") -> str:
     return 昵称
 
 
+def _群消息包含成员标识(记录: dict[str, Any], 成员标识: str) -> bool:
+    目标标识 = str(成员标识 or "").strip()
+    if not 目标标识:
+        return False
+    if str(记录.get("user_id") or "").strip() == 目标标识:
+        return True
+    原始消息 = _解析消息结构(记录.get("raw_message"))
+    if not isinstance(原始消息, dict):
+        return False
+    容器列表 = [原始消息]
+    for 外层 in (原始消息.get("data"), 原始消息.get("d"), 原始消息.get("raw_data")):
+        if isinstance(外层, dict):
+            容器列表.append(外层)
+    for 容器 in 容器列表:
+        for 作者字段 in ("author", "member", "user"):
+            作者 = 容器.get(作者字段)
+            if not isinstance(作者, dict):
+                continue
+            for 标识字段 in ("member_openid", "user_openid", "openid", "id"):
+                if str(作者.get(标识字段) or "").strip() == 目标标识:
+                    return True
+    return False
+
+
 def _读取群缓存昵称(群标识: str, 成员标识: str) -> str:
     会话 = 消息缓存.get(str(群标识 or "").strip()) or {}
     if str(会话.get("chat_type") or "") != "group":
@@ -2347,11 +2371,18 @@ def _读取群缓存昵称(群标识: str, 成员标识: str) -> str:
     for 记录 in reversed(会话.get("messages") or []):
         if not isinstance(记录, dict) or bool(记录.get("is_self")):
             continue
-        if str(记录.get("user_id") or "").strip() != str(成员标识 or "").strip():
+        if not _群消息包含成员标识(记录, 成员标识):
             continue
-        昵称 = _有效用户昵称(记录.get("nickname"), 成员标识)
+        昵称 = _有效用户昵称(
+            记录.get("nickname"), str(记录.get("user_id") or 成员标识)
+        )
         if 昵称:
             return 昵称
+        原始消息 = _解析消息结构(记录.get("raw_message"))
+        if isinstance(原始消息, dict):
+            昵称 = _有效用户昵称(_提取成员昵称(原始消息), 成员标识)
+            if 昵称:
+                return 昵称
     return ""
 
 
@@ -2413,7 +2444,9 @@ async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
         if not callable(读取昵称):
             continue
         try:
-            候选昵称 = await _异步执行消息记录同步(读取昵称, 群标识, 成员标识)
+            候选昵称 = await _异步执行消息记录同步(
+                读取昵称, 群标识, 成员标识, appid
+            )
         except Exception as 异常:
             logger.debug("私聊昵称群消息回查失败：错误类型=%s", type(异常).__name__)
             continue
@@ -2570,6 +2603,7 @@ def 记录收到消息(
             成员标识 = _提取成员标识(消息, "group")
         if not 会话标识:
             return None
+        群用户标识 = ""
         if 类型 == "group":
             作者 = _读取字段(消息, "author")
             for 候选 in (作者, _读取字段(消息, "member")):
@@ -2639,13 +2673,20 @@ def 记录收到消息(
         媒体记录 = _提取媒体字段(内容, 消息)
         if 媒体记录:
             内容 = _媒体文字去占位(内容)
+        默认记录昵称 = "未知用户"
+        if 类型 == "user":
+            默认记录昵称 = _私聊兜底昵称(会话标识)
+        elif 源 == "group_member_join":
+            默认记录昵称 = "新成员"
+        elif 源 == "group_member_leave":
+            默认记录昵称 = "成员"
         记录: dict[str, Any] = {
             "id": 发送序号,
             "message_id": 消息ID,
             "user_id": 成员标识,
             "_session": 会话标识,
             "appid": str(appid or 会话.get("appid") or ""),
-            "nickname": 昵称 or (_私聊兜底昵称(会话标识) if 类型 == "user" else "未知用户"),
+            "nickname": 昵称 or 默认记录昵称,
             "member_role": 角色,
             "msg_seq": _读取字段(消息, "msg_seq") or "",
             "content": 内容,
@@ -2669,10 +2710,16 @@ def 记录收到消息(
             and 昵称
             and _消息数据库已配置()
         ):
-            _排队消息持久化(
-                "user_profile",
-                {"appid": 记录["appid"], "user_id": 成员标识, "nickname": 昵称},
-            )
+            for 用户资料标识 in dict.fromkeys((成员标识, 群用户标识)):
+                if 用户资料标识:
+                    _排队消息持久化(
+                        "user_profile",
+                        {
+                            "appid": 记录["appid"],
+                            "user_id": 用户资料标识,
+                            "nickname": 昵称,
+                        },
+                    )
         撤回键 = (会话标识, 消息ID)
         待同步时间 = 已撤回消息待同步.get(撤回键)
         if 待同步时间 is not None:
@@ -2762,6 +2809,7 @@ async def 记录群成员系统消息(
     事件名: str,
     *,
     appid: str = "",
+    用户openid: str = "",
     事件编号: str = "",
     时间戳: Any = "",
     昵称: str = "",
@@ -2769,6 +2817,7 @@ async def 记录群成员系统消息(
     """把官方群成员加入/退出事件写入消息历史和实时事件流。"""
     群标识 = str(会话标识 or "").strip()
     成员标识 = str(成员openid or "").strip()
+    用户标识 = str(用户openid or "").strip()
     事件类型 = str(事件名 or "").strip().lower()
     来源映射 = {
         "group_member_add": ("group_member_join", "加入了群聊。", "新成员"),
@@ -2788,27 +2837,59 @@ async def 记录群成员系统消息(
     ).hexdigest()[:40]
     消息ID = f"group-event:{事件身份摘要}"
 
-    成员昵称 = str(昵称 or "").strip()
-    无效昵称 = {"成员", "新成员", "未知", "未知用户", 成员标识}
-    if 成员昵称 in 无效昵称:
-        成员昵称 = ""
-    if not 成员昵称:
-        资料 = (成员资料缓存.get(群标识) or {}).get(成员标识) or {}
+    候选标识列表 = list(dict.fromkeys(标识 for 标识 in (成员标识, 用户标识) if 标识))
+    if 用户标识 and 用户标识 != 成员标识:
+        try:
+            from 功能文件.管理功能.群聊功能.群列表工具 import 记录官方群成员映射
+
+            记录官方群成员映射(群标识, 用户标识, 成员标识)
+        except Exception as 异常:
+            logger.debug("群成员事件 OpenID 映射记录失败：错误类型=%s", type(异常).__name__)
+    elif not 用户标识:
+        try:
+            from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群用户标识
+
+            反向用户标识 = str(获取官方群用户标识(群标识, 成员标识) or "").strip()
+            if 反向用户标识:
+                候选标识列表.append(反向用户标识)
+        except Exception:
+            pass
+
+    成员昵称 = _有效用户昵称(str(昵称 or "").strip(), 成员标识)
+    for 候选标识 in 候选标识列表:
+        if 成员昵称:
+            break
+        资料 = (成员资料缓存.get(群标识) or {}).get(候选标识) or {}
         if isinstance(资料, dict):
-            成员昵称 = str(资料.get("nickname") or 资料.get("username") or "").strip()
-            if 成员昵称 in 无效昵称:
-                成员昵称 = ""
+            成员昵称 = _有效用户昵称(
+                资料.get("nickname") or 资料.get("username"), 候选标识
+            )
+        if not 成员昵称:
+            成员昵称 = _读取群缓存昵称(群标识, 候选标识)
     if not 成员昵称 and _消息存储 is not None and _消息数据库已配置():
-        读取昵称 = getattr(_消息存储, "读取群成员最近昵称", None)
-        if callable(读取昵称):
-            try:
-                成员昵称 = str(
-                    await _异步执行消息记录同步(读取昵称, 群标识, 成员标识) or ""
-                ).strip()
-            except Exception as 异常:
-                logger.debug("群成员昵称回查失败：错误类型=%s", type(异常).__name__)
-            if 成员昵称 in 无效昵称:
-                成员昵称 = ""
+        读取群昵称 = getattr(_消息存储, "读取群成员最近昵称", None)
+        读取用户昵称 = getattr(_消息存储, "读取用户昵称", None)
+        for 候选标识 in 候选标识列表:
+            if callable(读取群昵称):
+                try:
+                    成员昵称 = _有效用户昵称(
+                        await _异步执行消息记录同步(
+                            读取群昵称, 群标识, 候选标识, appid
+                        ),
+                        候选标识,
+                    )
+                except Exception as 异常:
+                    logger.debug("群成员昵称回查失败：错误类型=%s", type(异常).__name__)
+            if not 成员昵称 and callable(读取用户昵称):
+                try:
+                    成员昵称 = _有效用户昵称(
+                        await _异步执行消息记录同步(读取用户昵称, 候选标识, appid),
+                        候选标识,
+                    )
+                except Exception as 异常:
+                    logger.debug("群成员资料昵称回查失败：错误类型=%s", type(异常).__name__)
+            if 成员昵称:
+                break
     if not 成员昵称:
         成员昵称 = 默认昵称
 
@@ -2817,12 +2898,17 @@ async def 记录群成员系统消息(
         "content": 内容,
         "timestamp": 原始时间戳,
         "group_openid": 群标识,
-        "author": {"member_openid": 成员标识, "username": 成员昵称},
+        "author": {
+            "member_openid": 成员标识,
+            "user_openid": 用户标识,
+            "username": 成员昵称,
+        },
         "raw_data": {
             "id": 消息ID,
             "event": "GROUP_MEMBER_ADD" if 事件类型 == "group_member_add" else "GROUP_MEMBER_REMOVE",
             "group_openid": 群标识,
             "member_openid": 成员标识,
+            "user_openid": 用户标识,
             "timestamp": 原始时间戳,
         },
     }

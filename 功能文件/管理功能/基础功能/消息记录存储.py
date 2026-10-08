@@ -827,8 +827,31 @@ def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appi
     appid = str(appid or "").strip()
     if not 用户标识 or not _MySQL可用():
         return ""
-    where_sql = "WHERE user_id=%s AND 消息类型='group' AND is_self=0"
+    身份路径 = (
+        "$.author.member_openid",
+        "$.author.user_openid",
+        "$.author.id",
+        "$.member.member_openid",
+        "$.member.user_openid",
+        "$.data.author.member_openid",
+        "$.data.author.user_openid",
+        "$.d.author.member_openid",
+        "$.d.author.user_openid",
+    )
+    身份条件 = ["user_id=%s"]
     参数: tuple[str, ...] = (用户标识,)
+    for 路径 in 身份路径:
+        身份条件.append(
+            "CASE WHEN JSON_VALID(raw_message) "
+            f"THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '{路径}')) "
+            "ELSE '' END=%s"
+        )
+        参数 += (用户标识,)
+    where_sql = (
+        "WHERE 消息类型='group' AND is_self=0 AND ("
+        + " OR ".join(身份条件)
+        + ")"
+    )
     if 会话标识:
         where_sql += " AND 会话标识=%s"
         参数 += (会话标识,)
@@ -964,12 +987,12 @@ def 读取用户昵称(用户标识: str, appid: str = "") -> str:
         _关闭连接(连接)
 
 
-def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
+def 读取群成员最近昵称(会话标识: str, 用户标识: str, appid: str = "") -> str:
     """从该群成员最近保存的消息或原始事件字段读取有效昵称。"""
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return ""
-    return _读取最近群消息昵称(用户标识, 会话标识=会话标识)
+    return _读取最近群消息昵称(用户标识, 会话标识=会话标识, appid=appid)
 
 
 def 读取用户最近群聊昵称(用户标识: str, appid: str = "") -> str:

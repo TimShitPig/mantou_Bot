@@ -3126,7 +3126,7 @@
               || '',
             ).trim();
             const genericNames = ['', '新成员', '成员', '未知用户', '未知', String(m.user_id || '').trim()];
-            const memberName = genericNames.includes(recordedName) && profileName ? profileName : (recordedName || fallbackName);
+            const memberName = genericNames.includes(recordedName) ? (profileName || fallbackName) : recordedName;
             const actionText = systemSource === 'group_member_join' ? '加入了群聊。' : '退出了群聊。';
             html += `<div class="msg-system-row"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
             return;
