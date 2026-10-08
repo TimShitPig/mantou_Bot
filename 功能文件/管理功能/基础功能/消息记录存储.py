@@ -28,8 +28,10 @@ except Exception:
 会话索引状态表名 = "mantou_message_conversation_state"
 群信息表名 = "mantou_group_infos"
 用户资料表名 = "mantou_message_user_profiles"
+群成员映射表名 = "mantou_message_member_links"
 元数据命名空间 = "message_panel_meta"
 会话索引就绪键 = "conversation_summary_v1"
+群成员映射回填键 = "group_member_links_v1"
 
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
@@ -207,7 +209,8 @@ def 初始化数据库() -> bool:
                     KEY idx_msg_records_session_id (会话标识, id),
                     KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
-                    KEY idx_msg_records_message (message_id)
+                    KEY idx_msg_records_message (message_id),
+                    KEY idx_msg_records_user_id (user_id(64), 消息类型, is_self, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -219,13 +222,77 @@ def 初始化数据库() -> bool:
                     appid VARCHAR(64) NOT NULL DEFAULT '',
                     user_id VARCHAR(128) NOT NULL,
                     nickname VARCHAR(255) NOT NULL DEFAULT '',
+                    union_openid VARCHAR(128) NOT NULL DEFAULT '',
                     updated_at BIGINT NOT NULL DEFAULT 0,
                     PRIMARY KEY (profile_key),
                     KEY idx_user_profiles_lookup (appid(32), user_id(64)),
-                    KEY idx_user_profiles_user (user_id(64), updated_at)
+                    KEY idx_user_profiles_user (user_id(64), updated_at),
+                    KEY idx_user_profiles_union (union_openid(64), updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "检查用户资料统一OpenID字段"
+            游标.execute(
+                "SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME='union_openid'",
+                (用户资料表名,),
+            )
+            if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                游标.execute(
+                    f"ALTER TABLE `{用户资料表名}` "
+                    "ADD COLUMN union_openid VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            初始化阶段 = "检查索引_idx_user_profiles_union"
+            游标.execute(
+                "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s",
+                (用户资料表名, "idx_user_profiles_union"),
+            )
+            if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                游标.execute(
+                    f"ALTER TABLE `{用户资料表名}` "
+                    "ADD KEY idx_user_profiles_union (union_openid(64), updated_at)"
+                )
+            初始化阶段 = "建群成员映射表"
+            游标.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{群成员映射表名}` (
+                    mapping_key CHAR(64) NOT NULL,
+                    appid VARCHAR(64) NOT NULL DEFAULT '',
+                    group_openid VARCHAR(128) NOT NULL,
+                    user_openid VARCHAR(128) NOT NULL,
+                    member_openid VARCHAR(128) NOT NULL,
+                    updated_at BIGINT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (mapping_key),
+                    KEY idx_member_links_user (appid(32), user_openid(64), updated_at),
+                    KEY idx_member_links_group_user (group_openid(64), user_openid(64)),
+                    KEY idx_member_links_user_openid (user_openid(64), appid(32), updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            初始化阶段 = "检查群成员映射字段_mapping_key"
+            游标.execute(
+                "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME='mapping_key'",
+                (群成员映射表名,),
+            )
+            映射键字段 = 游标.fetchone()
+            if 映射键字段 is None:
+                游标.execute(
+                    f"ALTER TABLE `{群成员映射表名}` ADD COLUMN mapping_key CHAR(64) NULL"
+                )
+            if 映射键字段 is None or str(
+                _行字段(映射键字段, 0, "IS_NULLABLE", 默认值="") or ""
+            ).upper() == "YES":
+                初始化阶段 = "回填群成员映射字段_mapping_key"
+                游标.execute(
+                    f"UPDATE `{群成员映射表名}` SET mapping_key=SHA2(CONCAT("
+                    "COALESCE(appid,''),CHAR(31),group_openid,CHAR(31),member_openid),256) "
+                    "WHERE mapping_key IS NULL OR mapping_key=''"
+                )
+                游标.execute(
+                    f"ALTER TABLE `{群成员映射表名}` MODIFY COLUMN mapping_key CHAR(64) NOT NULL"
+                )
             初始化阶段 = "建会话摘要表"
             游标.execute(
                 f"""
@@ -371,6 +438,83 @@ def 初始化数据库() -> bool:
                         "ADD KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id)"
                     )
                     logger.info("消息记录 MySQL 已补充群成员历史索引")
+                初始化阶段 = "检查索引_idx_msg_records_user_id"
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+                    (消息记录表名, "idx_msg_records_user_id"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{消息记录表名}` "
+                        "ADD KEY idx_msg_records_user_id (user_id(64), 消息类型, is_self, id)"
+                    )
+                    logger.info("消息记录 MySQL 已补充用户 OpenID 查询索引")
+                初始化阶段 = "检查索引_idx_member_links_user_openid"
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+                    (群成员映射表名, "idx_member_links_user_openid"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{群成员映射表名}` "
+                        "ADD KEY idx_member_links_user_openid (user_openid(64), appid(32), updated_at)"
+                    )
+                    logger.info("消息记录 MySQL 已补充群成员映射反查索引")
+                初始化阶段 = "读取群成员映射回填状态"
+                游标.execute(
+                    f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                    (群成员映射回填键,),
+                )
+                映射回填状态 = 游标.fetchone()
+                if str(_行字段(映射回填状态, 0, "state_value", 默认值="") or "") != "ready":
+                    初始化阶段 = "回填群成员 OpenID 映射"
+                    用户OpenID表达式 = "COALESCE(" + ",".join(
+                        "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_message, '%s')), '')" % 路径
+                        for 路径 in (
+                            "$.author.user_openid",
+                            "$.user_openid",
+                            "$.raw_data.user_openid",
+                            "$.raw_data.author.user_openid",
+                            "$.data.author.user_openid",
+                            "$.d.author.user_openid",
+                        )
+                    ) + ")"
+                    成员OpenID表达式 = "COALESCE(" + ",".join(
+                        "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(raw_message, '%s')), '')" % 路径
+                        for 路径 in (
+                            "$.author.member_openid",
+                            "$.member_openid",
+                            "$.raw_data.member_openid",
+                            "$.raw_data.author.member_openid",
+                            "$.data.author.member_openid",
+                            "$.d.author.member_openid",
+                        )
+                    ) + ")"
+                    映射键表达式 = (
+                        "SHA2(CONCAT(COALESCE(appid,''),CHAR(31),会话标识,CHAR(31),"
+                        f"{成员OpenID表达式}),256)"
+                    )
+                    游标.execute(
+                        f"INSERT INTO `{群成员映射表名}` "
+                        "(mapping_key, appid, group_openid, user_openid, member_openid, updated_at) "
+                        f"SELECT {映射键表达式}, COALESCE(appid,''), 会话标识, {用户OpenID表达式}, {成员OpenID表达式}, COALESCE(MAX(ts),0) "
+                        f"FROM `{消息记录表名}` "
+                        "WHERE 消息类型='group' AND source IN ('group_member_join','group_member_leave') "
+                        "AND message_id LIKE 'group-event:%' AND 会话标识<>'' AND JSON_VALID(raw_message) "
+                        f"AND {用户OpenID表达式} IS NOT NULL AND {成员OpenID表达式} IS NOT NULL "
+                        f"GROUP BY COALESCE(appid,''), 会话标识, {用户OpenID表达式}, {成员OpenID表达式} "
+                        "ON DUPLICATE KEY UPDATE "
+                        "user_openid=IF(VALUES(updated_at)>=updated_at,VALUES(user_openid),user_openid), "
+                        "updated_at=GREATEST(updated_at,VALUES(updated_at))"
+                    )
+                    游标.execute(
+                        f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                        "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                        (群成员映射回填键, "ready"),
+                    )
+                    logger.info("消息记录 MySQL 群成员 ID 映射历史回填完成")
                 初始化阶段 = "读取会话摘要初始化状态"
                 游标.execute(
                     f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
@@ -838,25 +982,25 @@ def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appi
         "$.d.author.member_openid",
         "$.d.author.user_openid",
     )
-    身份条件 = ["user_id=%s"]
+    身份条件 = ["m.user_id=%s"]
     参数: tuple[str, ...] = (用户标识,)
     for 路径 in 身份路径:
         身份条件.append(
-            "CASE WHEN JSON_VALID(raw_message) "
-            f"THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '{路径}')) "
+            "CASE WHEN JSON_VALID(m.raw_message) "
+            f"THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '{路径}')) "
             "ELSE '' END=%s"
         )
         参数 += (用户标识,)
     where_sql = (
-        "WHERE 消息类型='group' AND is_self=0 AND ("
+        "WHERE m.消息类型='group' AND m.is_self=0 AND ("
         + " OR ".join(身份条件)
         + ")"
     )
     if 会话标识:
-        where_sql += " AND 会话标识=%s"
+        where_sql += " AND m.会话标识=%s"
         参数 += (会话标识,)
     if appid:
-        where_sql += " AND appid=%s"
+        where_sql += " AND m.appid=%s"
         参数 += (appid,)
     连接 = _打开连接()
     if 连接 is None:
@@ -864,14 +1008,14 @@ def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appi
     try:
         with 连接.cursor() as 游标:
             游标.execute(
-                f"SELECT nickname, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.username')) ELSE '' END AS author_username, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.member_name')) ELSE '' END AS author_member_name, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.author.nickname')) ELSE '' END AS author_nickname, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nick')) ELSE '' END AS member_nick, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.member.nickname')) ELSE '' END AS member_nickname, "
-                "CASE WHEN JSON_VALID(raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(raw_message, '$.data.author.username')) ELSE '' END AS data_author_username "
-                f"FROM `{消息记录表名}` {where_sql} ORDER BY ts DESC, id DESC LIMIT 256",
+                "SELECT m.nickname, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.username')) ELSE '' END AS author_username, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.member_name')) ELSE '' END AS author_member_name, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.nickname')) ELSE '' END AS author_nickname, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.member.nick')) ELSE '' END AS member_nick, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.member.nickname')) ELSE '' END AS member_nickname, "
+                "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.data.author.username')) ELSE '' END AS data_author_username "
+                f"FROM `{消息记录表名}` m {where_sql} ORDER BY m.ts DESC, m.id DESC LIMIT 256",
                 参数,
             )
             行列表 = 游标.fetchall()
@@ -894,6 +1038,51 @@ def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appi
                 ):
                     continue
                 return 昵称
+        if not 会话标识:
+            关联参数: list[str] = [用户标识]
+            appid条件 = ""
+            if appid:
+                appid条件 = " AND mapping.appid=%s AND m.appid=%s"
+                关联参数.extend((appid, appid))
+            else:
+                appid条件 = " AND (mapping.appid=m.appid OR mapping.appid='' OR m.appid='')"
+            with 连接.cursor() as 游标:
+                游标.execute(
+                    "SELECT m.nickname, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.username')) ELSE '' END AS author_username, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.member_name')) ELSE '' END AS author_member_name, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.author.nickname')) ELSE '' END AS author_nickname, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.member.nick')) ELSE '' END AS member_nick, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.member.nickname')) ELSE '' END AS member_nickname, "
+                    "CASE WHEN JSON_VALID(m.raw_message) THEN JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '$.data.author.username')) ELSE '' END AS data_author_username "
+                    f"FROM `{群成员映射表名}` mapping "
+                    f"JOIN `{消息记录表名}` m ON mapping.group_openid=m.会话标识 "
+                    "AND mapping.member_openid=m.user_id AND m.消息类型='group' AND m.is_self=0 "
+                    "WHERE mapping.user_openid=%s"
+                    + appid条件
+                    + " ORDER BY m.ts DESC, m.id DESC LIMIT 256",
+                    tuple(关联参数),
+                )
+                映射行列表 = 游标.fetchall()
+            for 行 in 映射行列表 or ():
+                for 索引, 字段名 in enumerate((
+                    "nickname",
+                    "author_username",
+                    "author_member_name",
+                    "author_nickname",
+                    "member_nick",
+                    "member_nickname",
+                    "data_author_username",
+                )):
+                    昵称 = str(_行字段(行, 索引, 字段名, 默认值="") or "").strip()
+                    if (
+                        not 昵称
+                        or 昵称 == 用户标识
+                        or 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}
+                        or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称)
+                    ):
+                        continue
+                    return 昵称
         return ""
     except Exception as exc:
         logger.warning("群成员昵称回查失败：错误类型=%s", type(exc).__name__)
@@ -907,6 +1096,7 @@ def _有效用户昵称(用户标识: str, 昵称: Any) -> str:
     if (
         not 昵称
         or 昵称 == 用户标识
+        or 昵称 == "用户" + str(用户标识 or "")[-6:]
         or 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}
         or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称)
     ):
@@ -919,17 +1109,20 @@ def 批量保存用户昵称(资料列表: list[dict[str, Any]]) -> bool:
     if not _MySQL可用() or not 资料列表:
         return not 资料列表
     当前时间 = int(time.time())
-    按用户去重: dict[tuple[str, str], tuple[str, str, str, str, int]] = {}
+    按用户去重: dict[tuple[str, str], tuple[str, str, str, str, str, int]] = {}
     for 资料 in 资料列表:
         if not isinstance(资料, dict):
             continue
         用户标识 = str(资料.get("user_id") or "").strip()
         昵称 = _有效用户昵称(用户标识, 资料.get("nickname"))
-        if not 用户标识 or not 昵称:
+        统一用户标识 = str(资料.get("union_openid") or "").strip()[:128]
+        if not 用户标识 or (not 昵称 and not 统一用户标识):
             continue
         appid = str(资料.get("appid") or "").strip()
         profile_key = hashlib.sha256(f"{appid}\0{用户标识}".encode("utf-8")).hexdigest()
-        按用户去重[(appid, 用户标识)] = (profile_key, appid, 用户标识, 昵称, 当前时间)
+        按用户去重[(appid, 用户标识)] = (
+            profile_key, appid, 用户标识, 昵称, 统一用户标识, 当前时间
+        )
     if not 按用户去重:
         return True
     连接 = _打开连接()
@@ -938,15 +1131,62 @@ def 批量保存用户昵称(资料列表: list[dict[str, Any]]) -> bool:
     try:
         with 连接.cursor() as 游标:
             游标.executemany(
-                f"INSERT INTO `{用户资料表名}` (profile_key, appid, user_id, nickname, updated_at) "
-                "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
-                "nickname=VALUES(nickname), updated_at=VALUES(updated_at)",
+                f"INSERT INTO `{用户资料表名}` "
+                "(profile_key, appid, user_id, nickname, union_openid, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+                "nickname=IF(VALUES(nickname)<>'',VALUES(nickname),nickname), "
+                "union_openid=IF(VALUES(union_openid)<>'',VALUES(union_openid),union_openid), "
+                "updated_at=GREATEST(updated_at,VALUES(updated_at))",
                 list(按用户去重.values()),
             )
         连接.commit()
         return True
     except Exception as exc:
         logger.warning("QQ用户昵称资料写入失败：错误类型=%s", type(exc).__name__)
+        return False
+    finally:
+        _关闭连接(连接)
+
+
+def 批量保存群成员映射(映射列表: list[dict[str, Any]]) -> bool:
+    """持久化 QQ 群成员 OpenID 与私聊 user_openid 的关联。"""
+    if not _MySQL可用() or not 映射列表:
+        return not 映射列表
+    当前时间 = int(time.time())
+    去重映射: dict[tuple[str, str, str], tuple[str, str, str, str, str, int]] = {}
+    for 映射 in 映射列表:
+        if not isinstance(映射, dict):
+            continue
+        appid = str(映射.get("appid") or "").strip()[:64]
+        群标识 = str(映射.get("group_openid") or "").strip()[:128]
+        用户标识 = str(映射.get("user_openid") or "").strip()[:128]
+        成员标识 = str(映射.get("member_openid") or "").strip()[:128]
+        if not 群标识 or not 用户标识 or not 成员标识:
+            continue
+        映射键 = hashlib.sha256(
+            "\x1f".join((appid, 群标识, 成员标识)).encode("utf-8", errors="ignore")
+        ).hexdigest()
+        去重映射[(appid, 群标识, 成员标识)] = (
+            映射键, appid, 群标识, 用户标识, 成员标识, 当前时间
+        )
+    if not 去重映射:
+        return True
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.executemany(
+                f"INSERT INTO `{群成员映射表名}` "
+                "(mapping_key, appid, group_openid, user_openid, member_openid, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+                "user_openid=VALUES(user_openid), updated_at=VALUES(updated_at)",
+                list(去重映射.values()),
+            )
+        连接.commit()
+        return True
+    except Exception as exc:
+        logger.warning("QQ群成员映射写入失败：错误类型=%s", type(exc).__name__)
         return False
     finally:
         _关闭连接(连接)
@@ -983,6 +1223,216 @@ def 读取用户昵称(用户标识: str, appid: str = "") -> str:
     except Exception as exc:
         logger.warning("QQ用户昵称资料读取失败：错误类型=%s", type(exc).__name__)
         return ""
+    finally:
+        _关闭连接(连接)
+
+
+def 批量读取用户昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """按 appid + user_openid 批量读取资料，避免聊天列表逐用户查库。"""
+    结果: dict[tuple[str, str], str] = {}
+    if not 用户列表 or not _MySQL可用():
+        return 结果
+    查询项 = list(dict.fromkeys(
+        (str(项.get("appid") or "").strip()[:64], str(项.get("user_id") or "").strip()[:128])
+        for 项 in 用户列表
+        if isinstance(项, dict) and str(项.get("user_id") or "").strip()
+    ))
+    if not 查询项:
+        return 结果
+    连接 = _打开连接()
+    if 连接 is None:
+        return 结果
+    try:
+        for 起点 in range(0, len(查询项), 200):
+            分块 = 查询项[起点 : 起点 + 200]
+            条件 = " OR ".join("(appid=%s AND user_id=%s)" for _ in 分块)
+            参数: list[str] = []
+            for appid, 用户标识 in 分块:
+                参数.extend((appid, 用户标识))
+            with 连接.cursor() as 游标:
+                游标.execute(
+                    f"SELECT appid, user_id, nickname FROM `{用户资料表名}` WHERE {条件}",
+                    tuple(参数),
+                )
+                for 行 in 游标.fetchall() or ():
+                    appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+                    用户标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
+                    昵称 = _有效用户昵称(用户标识, _行字段(行, 2, "nickname", 默认值=""))
+                    if 用户标识 and 昵称:
+                        结果[(appid, 用户标识)] = 昵称
+        return 结果
+    except Exception as exc:
+        logger.warning("QQ用户昵称批量读取失败：错误类型=%s", type(exc).__name__)
+        return 结果
+    finally:
+        _关闭连接(连接)
+
+
+def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """按用户批量读取最近有效群昵称，优先走 OpenID 映射和可用索引。"""
+    结果: dict[tuple[str, str], str] = {}
+    if not 用户列表 or not _MySQL可用():
+        return 结果
+    分组: dict[str, list[str]] = {}
+    for 项 in 用户列表:
+        if not isinstance(项, dict):
+            continue
+        appid = str(项.get("appid") or "").strip()[:64]
+        用户标识 = str(项.get("user_id") or "").strip()[:128]
+        if 用户标识:
+            用户列表项 = 分组.setdefault(appid, [])
+            if 用户标识 not in 用户列表项:
+                用户列表项.append(用户标识)
+    if not 分组:
+        return 结果
+    连接 = _打开连接()
+    if 连接 is None:
+        return 结果
+    结果时间: dict[tuple[str, str], tuple[int, int]] = {}
+
+    def 记录昵称(
+        记录appid: str,
+        用户标识: str,
+        昵称: str,
+        时间戳: Any,
+        记录ID: Any,
+        允许跨应用回退: bool,
+    ) -> None:
+        排序键 = (int(时间戳 or 0), int(记录ID or 0))
+        键列表 = [(记录appid, 用户标识)]
+        if 允许跨应用回退:
+            键列表.append(("", 用户标识))
+        for 键 in 键列表:
+            if 排序键 >= 结果时间.get(键, (-1, -1)):
+                结果时间[键] = 排序键
+                结果[键] = 昵称
+
+    def 昵称条件(消息别名: str, 用户字段: str) -> str:
+        return (
+            f"{消息别名}.nickname IS NOT NULL AND {消息别名}.nickname<>'' "
+            f"AND {消息别名}.nickname<>COALESCE({用户字段},'') "
+            f"AND {消息别名}.nickname<>CONCAT('用户',RIGHT(COALESCE({用户字段},''),6)) "
+            f"AND {消息别名}.nickname NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
+        )
+
+    try:
+        for appid, 用户标识列表 in 分组.items():
+            for 起点 in range(0, len(用户标识列表), 200):
+                分块 = 用户标识列表[起点 : 起点 + 200]
+                占位符 = ",".join("%s" for _ in 分块)
+                appid条件 = " AND x.appid=%s" if appid else ""
+                直接参数: list[str] = list(分块)
+                if appid:
+                    直接参数.append(appid)
+                有效昵称 = 昵称条件("x", "x.user_id")
+                with 连接.cursor() as 游标:
+                    游标.execute(
+                        "SELECT m.appid,m.user_id,m.nickname,m.ts,m.id "
+                        f"FROM `{消息记录表名}` m JOIN ("
+                        f"SELECT x.appid,x.user_id,MAX(x.id) AS last_id FROM `{消息记录表名}` x "
+                        f"WHERE x.消息类型='group' AND x.is_self=0 AND x.user_id IN ({占位符})"
+                        f"{appid条件} AND {有效昵称} GROUP BY x.appid,x.user_id"
+                        ") latest ON latest.last_id=m.id ORDER BY m.ts DESC,m.id DESC",
+                        tuple(直接参数),
+                    )
+                    直接行列表 = 游标.fetchall() or ()
+                for 行 in 直接行列表:
+                    记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+                    用户标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
+                    昵称 = _有效用户昵称(
+                        用户标识,
+                        _行字段(行, 2, "nickname", 默认值=""),
+                    )
+                    if not 用户标识 or not 昵称:
+                        continue
+                    记录昵称(
+                        记录appid,
+                        用户标识,
+                        昵称,
+                        _行字段(行, 3, "ts", 默认值=0),
+                        _行字段(行, 4, "id", 默认值=0),
+                        not appid,
+                    )
+
+                映射appid条件 = " AND (l.appid=%s OR l.appid='')" if appid else ""
+                映射参数: list[str] = list(分块)
+                if appid:
+                    映射参数.append(appid)
+                有效映射昵称 = 昵称条件("m", "l.member_openid")
+                有效子查询昵称 = 昵称条件("r", "l.member_openid")
+                with 连接.cursor() as 游标:
+                    游标.execute(
+                        "SELECT l.appid,l.user_openid,m.nickname,m.ts,m.id "
+                        f"FROM `{群成员映射表名}` l JOIN `{消息记录表名}` m "
+                        "ON m.会话标识=l.group_openid AND m.user_id=l.member_openid "
+                        "AND m.消息类型='group' AND m.is_self=0 "
+                        "AND (l.appid='' OR m.appid=l.appid) "
+                        f"WHERE l.user_openid IN ({占位符}){映射appid条件} "
+                        f"AND {有效映射昵称} AND m.id=(SELECT MAX(r.id) "
+                        f"FROM `{消息记录表名}` r WHERE r.会话标识=l.group_openid "
+                        "AND r.user_id=l.member_openid AND r.消息类型='group' AND r.is_self=0 "
+                        "AND (l.appid='' OR r.appid=l.appid) "
+                        f"AND {有效子查询昵称}) ORDER BY m.ts DESC,m.id DESC",
+                        tuple(映射参数),
+                    )
+                    映射行列表 = 游标.fetchall() or ()
+                for 行 in 映射行列表:
+                    记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+                    用户标识 = str(_行字段(行, 1, "user_openid", 默认值="") or "").strip()
+                    昵称 = _有效用户昵称(
+                        用户标识,
+                        _行字段(行, 2, "nickname", 默认值=""),
+                    )
+                    if not 用户标识 or not 昵称:
+                        continue
+                    记录昵称(
+                        记录appid,
+                        用户标识,
+                        昵称,
+                        _行字段(行, 3, "ts", 默认值=0),
+                        _行字段(行, 4, "id", 默认值=0),
+                        not appid or not 记录appid,
+                    )
+
+                资料appid条件 = " AND (p.appid=%s OR p.appid='')" if appid else ""
+                资料参数: list[str] = list(分块)
+                if appid:
+                    资料参数.append(appid)
+                with 连接.cursor() as 游标:
+                    游标.execute(
+                        "SELECT p.appid,p.user_id,g.nickname,g.updated_at "
+                        f"FROM `{用户资料表名}` p JOIN `{用户资料表名}` g "
+                        "ON g.union_openid=p.union_openid "
+                        f"WHERE p.user_id IN ({占位符}){资料appid条件} "
+                        "AND p.union_openid<>'' AND g.nickname<>'' "
+                        "AND g.nickname<>COALESCE(g.user_id,'') "
+                        "AND g.nickname<>CONCAT('用户',RIGHT(COALESCE(g.user_id,''),6)) "
+                        "AND g.nickname NOT IN ('成员','新成员','未知','未知用户','机器人','我') "
+                        "ORDER BY g.updated_at DESC LIMIT 2000",
+                        tuple(资料参数),
+                    )
+                    资料行列表 = 游标.fetchall() or ()
+                for 行 in 资料行列表:
+                    记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+                    用户标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
+                    昵称 = _有效用户昵称(
+                        用户标识,
+                        _行字段(行, 2, "nickname", 默认值=""),
+                    )
+                    if not 用户标识 or not 昵称:
+                        continue
+                    记录昵称(
+                        记录appid,
+                        用户标识,
+                        昵称,
+                        _行字段(行, 3, "updated_at", 默认值=0),
+                        0,
+                        not appid,
+                    )
+        return 结果
+    except Exception as exc:
+        logger.warning("QQ用户批量群昵称读取失败：错误类型=%s", type(exc).__name__)
+        return 结果
     finally:
         _关闭连接(连接)
 

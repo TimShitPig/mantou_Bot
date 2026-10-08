@@ -113,7 +113,10 @@
         if (next !== 'messages' && previousView === 'messages') setMsgMobileChatOpen(false);
         if (next === 'messages') {
           connectMsgEvents();
-          if (previousView !== 'messages') loadMsgChats();
+          if (previousView !== 'messages') {
+            msgState.chatListTopPending = true;
+            loadMsgChats();
+          }
           if (previousView !== 'messages' && msgState.chatId) loadMsgHistory();
         }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
@@ -640,7 +643,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1083,11 +1086,11 @@
         if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       };
-      const msgChatMatchesView = (chat) => {
+      const msgChatMatchesView = (chat, ignoreTypeFilter = false) => {
         const type = String(chat.chat_type || 'group');
-        if (msgState.filter === 'group' && type !== 'group') return false;
-        if (msgState.filter === 'user' && type !== 'user') return false;
-        if (msgState.filter === 'remark' && !chat.remark) return false;
+        if (!ignoreTypeFilter && msgState.filter === 'group' && type !== 'group') return false;
+        if (!ignoreTypeFilter && msgState.filter === 'user' && type !== 'user') return false;
+        if (!ignoreTypeFilter && msgState.filter === 'remark' && !chat.remark) return false;
         const keyword = String(msgState.search || '').trim().toLowerCase();
         if (!keyword) return true;
         return [chat.nickname, chat.remark, chat.chat_id].some((value) => String(value || '').toLowerCase().includes(keyword));
@@ -1099,7 +1102,7 @@
         const now = Math.floor(Date.now() / 1000);
         msgState.realtimeChats.forEach((overlay, chatId) => {
           const current = byId.get(chatId);
-          if (!current) { if (msgChatMatchesView(overlay)) byId.set(chatId, {...overlay}); return; }
+          if (!current) { if (msgChatMatchesView(overlay, true)) byId.set(chatId, {...overlay}); return; }
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
           if (serverTs > eventTs) { msgState.realtimeChats.delete(chatId); return; }
@@ -1127,7 +1130,7 @@
             }
           });
         }
-        return [...byId.values()].filter(msgChatMatchesView).sort((left, right) =>
+        return [...byId.values()].filter((chat) => msgChatMatchesView(chat, true)).sort((left, right) =>
           Number(msgChatIsRemoved(left)) - Number(msgChatIsRemoved(right)) ||
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
           Number(right.last_ts || 0) - Number(left.last_ts || 0)
@@ -1256,22 +1259,43 @@
       const renderMsgChats = (data) => {
         const node = $('msg-chats');
         if (!node) return;
-        if (msgState.chatListScrollActive) {
+        if (msgState.chatListScrollActive || msgState.chatListPointerActive) {
           msgState.chatListPendingData = data;
           return;
         }
         const forceListTop = !msgState.chatListServerLoaded || msgState.chatListTopPending || !msgState.chatListRendered;
         const previousTop = node.scrollTop;
-        const previousHeight = node.scrollHeight;
-        const previousClientHeight = node.clientHeight;
-        const keepListBottom = !forceListTop && previousHeight - previousTop - previousClientHeight <= 24;
+        const wasAtListTop = previousTop <= 8;
+        const listContentTop = () => {
+          const style = window.getComputedStyle(node);
+          return node.getBoundingClientRect().top + node.clientTop + (Number.parseFloat(style.paddingTop) || 0);
+        };
+        let anchorChatId = '';
+        let anchorOffset = 0;
+        if (!forceListTop) {
+          const contentTop = listContentTop();
+          const anchor = Array.from(node.querySelectorAll('[data-msg-chat]'))
+            .find((item) => item.getBoundingClientRect().bottom > contentTop);
+          if (anchor) {
+            anchorChatId = String(anchor.dataset.msgChat || '');
+            anchorOffset = anchor.getBoundingClientRect().top - contentTop;
+          }
+        }
         const restoreListScroll = () => {
-          if (forceListTop) {
+          if (forceListTop || wasAtListTop) {
             node.scrollTop = 0;
             return;
           }
+          if (anchorChatId) {
+            const anchor = Array.from(node.querySelectorAll('[data-msg-chat]'))
+              .find((item) => String(item.dataset.msgChat || '') === anchorChatId);
+            if (anchor) {
+              node.scrollTop += anchor.getBoundingClientRect().top - listContentTop() - anchorOffset;
+              return;
+            }
+          }
           const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
-          node.scrollTop = keepListBottom ? maxTop : Math.min(previousTop, maxTop);
+          node.scrollTop = Math.min(previousTop, maxTop);
         };
         const settleListScroll = () => {
           restoreListScroll();
@@ -1310,11 +1334,12 @@
         });
         saveLocalAdminGroups(localAdmins);
         msgState.chats = chats;
+        const visibleChats = chats.filter(msgChatMatchesView);
         const knownChatIds = new Set(chats.map((chat) => String(chat.chat_id || '')).filter(Boolean));
         [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
           .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
-        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0].join(':') + '|' + chats.map((chat) => [
+        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0].join(':') + '|' + visibleChats.map((chat) => [
           chat.chat_id,
           chat.chat_type,
           chat.nickname || chat.remark || '',
@@ -1328,12 +1353,16 @@
           chat.group_avatar || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
         ].join(':')).join('|');
         if (msgState.chatRenderSignature === chatRenderSignature) {
+          if (forceListTop) {
+            node.scrollTop = 0;
+            if (msgState.chatListServerLoaded) msgState.chatListTopPending = false;
+          }
           scheduleAutoScanAdminGroups(10000);
           return;
         }
         msgState.chatRenderSignature = chatRenderSignature;
         msgState.chatListRendered = true;
-        if (!chats.length) { node.innerHTML = '<div class="msg-empty">暂无消息会话，机器人收到消息后会出现在这里</div>'; settleListScroll(); return; }
+        if (!visibleChats.length) { node.innerHTML = `<div class="msg-empty">${chats.length ? '没有匹配的会话' : '暂无消息会话，机器人收到消息后会出现在这里'}</div>`; settleListScroll(); return; }
         const renderChatRows = (items) => {
           let removedSectionShown = false;
           return items.map((chat) => {
@@ -1368,7 +1397,7 @@
             ['user', '私聊'],
           ];
           node.innerHTML = sections.map(([type, label]) => {
-            const items = chats.filter((chat) => chat.chat_type === type);
+            const items = visibleChats.filter((chat) => chat.chat_type === type);
             if (!items.length) return '';
             const collapsed = Boolean(msgState.folderCollapsed[type]);
             return `<section class="msg-chat-folder-section">
@@ -1379,7 +1408,7 @@
             </section>`;
           }).join('');
         } else {
-          node.innerHTML = renderChatRows(chats);
+          node.innerHTML = renderChatRows(visibleChats);
         }
         settleListScroll();
         scheduleAutoScanAdminGroups();
@@ -1414,18 +1443,19 @@
             if (msgState.multi) exitMultiMode();
             const chatId = String(el.dataset.msgChat || '');
             const chatType = String(el.dataset.msgType || 'group');
+            if (msgState.chatId === chatId && msgState.chatType === chatType) return;
             const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId) || {
               chat_id: chatId,
               chat_type: chatType,
               nickname: chatId,
             };
-            selectMsgChat(chat, el);
+            selectMsgChat(chat);
             scheduleMsgHistoryLoad(chatId);
             markMsgRead(chatId, true);
           });
         }
       };
-      const selectMsgChat = (chat, selectedNode = null) => {
+      const selectMsgChat = (chat) => {
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
         const chatType = String(chat?.chat_type || 'group');
@@ -1492,14 +1522,13 @@
           const cachedHistory = msgState.historyCache.get(`${chatType}|${chatId}`);
           if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
             msgState.messages = dedupeMsgMessages(cachedHistory.messages);
-            // 缓存只用于预热布局；首轮网络历史返回前不要揭示，避免先看到缓存中段再跳到底部。
-            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true});
+            // 先显示上次已读内容，网络结果返回后再合并新消息。
+            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true, revealInitial:true});
           }
         }
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
           node.classList.toggle('active', String(node.dataset.msgChat || '') === chatId);
         });
-        selectedNode?.scrollIntoView({block:'nearest'});
         if (msgState.chatType === 'group') {
           void loadGroupAdSwitch();
           void loadMsgPanSelection();
@@ -1532,7 +1561,7 @@
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMsgLightbox(); });
       $('msg-mobile-back')?.addEventListener('click', () => setMsgMobileChatOpen(false));
       const loadMsgChats = (force = false) => {
-        const params = {filter:msgState.filter, search:msgState.search, page:1, page_size:0};
+        const params = {filter:'all', search:msgState.search, page:1, page_size:0};
         const paramsKey = JSON.stringify(params);
         if (!force && msgState.chatListPromise && msgState.chatListKey === paramsKey) return msgState.chatListPromise;
         const requestId = Number(msgState.chatListRequest || 0) + 1;
@@ -1580,6 +1609,7 @@
         if (msgState.chatRenderTimer) { clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null; }
         if (msgState.chatListScrollTimer) { clearTimeout(msgState.chatListScrollTimer); msgState.chatListScrollTimer = null; }
         msgState.chatListScrollActive = false;
+        msgState.chatListPointerActive = false;
         msgState.chatListPendingData = null;
         if (msgState.realtimeMessageTimer) { clearTimeout(msgState.realtimeMessageTimer); msgState.realtimeMessageTimer = null; }
         msgState.realtimeMessageCount = 0; msgState.realtimeToBottom = false; msgState.realtimeRenderChatId = '';
@@ -1618,12 +1648,32 @@
           await loadMsgChats();
         }, 3000);
       };
+      const applyMsgNickname = (payload) => {
+        const chatId = String(payload?.chat_id || '').trim();
+        const nickname = String(payload?.nickname || '').trim();
+        if (!chatId || !nickname) return;
+        msgState.chats = (msgState.chats || []).map((chat) =>
+          String(chat.chat_id || '') === chatId && String(chat.chat_type || '') === 'user'
+            ? {...chat, nickname:String(chat.remark || nickname)}
+            : chat,
+        );
+        const overlay = msgState.realtimeChats.get(chatId);
+        if (overlay && String(overlay.chat_type || '') === 'user') {
+          msgState.realtimeChats.set(chatId, {...overlay, nickname:String(overlay.remark || nickname)});
+        }
+        if (msgState.chatId === chatId && msgState.chatType === 'user') {
+          const selected = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId);
+          updateMsgHead({chat_name:String(selected?.remark || nickname)});
+        }
+        renderMsgChats({chats:msgState.chats});
+      };
       const handleMsgRealtimeData = (raw) => {
         try {
           const envelope = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
           if (envelope?.type === 'message') { applyMsgRealtimeEvent(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
           else if (envelope?.type === 'group_status') applyMsgGroupStatus(envelope.data || {});
           else if (envelope?.type === 'group_info') applyMsgGroupInfo(envelope.data || {});
+          else if (envelope?.type === 'nickname') { applyMsgNickname(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
         } catch (_) {}
       };
       const scheduleMsgRealtimeReconnect = () => {
@@ -3800,9 +3850,16 @@
         else if (type === 'card') { extra.hidden = false; extra.innerHTML = `<input id="msg-card-title" type="text" placeholder="卡片标题"><input id="msg-card-desc" type="text" placeholder="卡片描述"><input id="msg-card-pic" type="text" placeholder="图片 URL"><input id="msg-card-url" type="text" placeholder="跳转 URL">`; }
         else { extra.hidden = true; extra.innerHTML = ''; }
       };
-      $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((el) => el.addEventListener('click', () => { $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((x) => x.classList.toggle('active', x === el)); msgState.filter = el.dataset.msgFilter; msgState.page = 1; loadMsgChats(true); }));
-      $('msg-search-btn').addEventListener('click', () => { msgState.search = $('msg-search-input').value.trim(); msgState.page = 1; loadMsgChats(true); });
-      $('msg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { msgState.search = e.target.value.trim(); msgState.page = 1; loadMsgChats(true); } });
+      $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((el) => el.addEventListener('click', () => {
+        $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((x) => x.classList.toggle('active', x === el));
+        msgState.filter = el.dataset.msgFilter;
+        msgState.page = 1;
+        msgState.chatListTopPending = true;
+        if (msgState.chatListServerLoaded) renderMsgChats({chats:msgState.chats});
+        else loadMsgChats(true);
+      }));
+      $('msg-search-btn').addEventListener('click', () => { msgState.search = $('msg-search-input').value.trim(); msgState.page = 1; msgState.chatListTopPending = true; loadMsgChats(true); });
+      $('msg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { msgState.search = e.target.value.trim(); msgState.page = 1; msgState.chatListTopPending = true; loadMsgChats(true); } });
       $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((el) => el.addEventListener('click', () => { $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x === el)); msgState.sendType = el.dataset.msgType; renderMsgExtra(); }));
       $('msg-send-mode').addEventListener('change', (e) => { msgState.sendMode = e.target.value; $('msg-custom-id').hidden = !(msgState.sendMode === 'custom_msg_id' || msgState.sendMode === 'custom_event_id'); });
       $('msg-send').addEventListener('click', sendMessage);
@@ -3935,15 +3992,34 @@
         loadMsgHistory(true);
       };
       const msgChatsNode = $('msg-chats');
+      const flushPendingMsgChats = () => {
+        if (msgState.chatListScrollActive || msgState.chatListPointerActive) return;
+        const pending = msgState.chatListPendingData;
+        msgState.chatListPendingData = null;
+        if (pending) renderMsgChats(pending);
+      };
+      msgChatsNode?.addEventListener('pointerdown', () => {
+        msgState.chatListPointerActive = true;
+      });
+      msgChatsNode?.addEventListener('mousedown', () => {
+        msgState.chatListPointerActive = true;
+      });
+      const releaseMsgChatPointer = () => {
+        if (!msgState.chatListPointerActive) return;
+        msgState.chatListPointerActive = false;
+        setTimeout(flushPendingMsgChats, 0);
+      };
+      window.addEventListener('pointerup', releaseMsgChatPointer, {passive:true});
+      window.addEventListener('pointercancel', releaseMsgChatPointer, {passive:true});
+      window.addEventListener('mouseup', releaseMsgChatPointer, {passive:true});
+      window.addEventListener('blur', releaseMsgChatPointer, {passive:true});
       msgChatsNode?.addEventListener('scroll', () => {
         msgState.chatListScrollActive = true;
         if (msgState.chatListScrollTimer) clearTimeout(msgState.chatListScrollTimer);
         msgState.chatListScrollTimer = setTimeout(() => {
           msgState.chatListScrollTimer = null;
           msgState.chatListScrollActive = false;
-          const pending = msgState.chatListPendingData;
-          msgState.chatListPendingData = null;
-          if (pending) renderMsgChats(pending);
+          flushPendingMsgChats();
         }, 140);
       }, {passive:true});
       $('msg-body').addEventListener('scroll', () => {

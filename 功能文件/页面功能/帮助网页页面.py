@@ -116,7 +116,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-chat-folder[aria-expanded="false"] .msg-chat-folder-caret { transform:rotate(-45deg); }
             .msg-chat-divider { margin:6px 6px 2px; padding:7px 4px 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
             .msg-chat-divider:first-child { margin-top:0; border-top:0; }
-            .msg-chat { display:flex; gap:10px; width:100%; min-height:56px; padding:8px 10px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; content-visibility:auto; contain-intrinsic-size:56px; }
+            .msg-chat { display:flex; box-sizing:border-box; gap:10px; width:100%; height:52px; min-height:52px; max-height:52px; padding:6px 8px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
             .msg-chat:hover { background:#ececee; }
             .msg-chat.active { background:#dbeafd; }
             .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
@@ -306,7 +306,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
             .msg-filter button.active { color:#12b7f5; }
             .msg-chats { padding:4px 6px; }
-            .msg-chat { min-height:52px; padding:6px 8px; border-radius:6px; }
+            .msg-chat { height:52px; min-height:52px; max-height:52px; padding:6px 8px; border-radius:6px; }
             .msg-chat:hover { background:#eceef1; }
             .msg-chat.removed { background:#fff8f8; }
             .msg-chat.removed:hover { background:#fff0f0; }
@@ -431,7 +431,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-filter button { min-height:24px; font-size:10px; }
                .msg-search { gap:5px; }
                .msg-search input,.msg-search button { height:28px; font-size:11px; }
-               .msg-chat { min-height:60px; padding:8px 10px; border-radius:0; }
+               .msg-chat { height:60px; min-height:60px; max-height:60px; padding:8px 10px; border-radius:0; }
                .msg-chat-divider { margin-left:4px; margin-right:4px; }
                .msg-mobile-back { display:grid; }
                .msg-shell:not(.msg-mobile-chat-open) .msg-mobile-back { display:none; }

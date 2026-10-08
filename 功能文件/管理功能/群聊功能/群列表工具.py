@@ -34,16 +34,21 @@ def _安全群号文本(值: Any) -> str:
     return 文本
 
 
-def 记录官方群成员映射(群号: Any, 用户标识: Any, 成员标识: Any) -> None:
+def 记录官方群成员映射(群号: Any, 用户标识: Any, 成员标识: Any) -> bool:
     """记录 QQ 官方群内稳定 user_openid 与本群 member_openid 的对应关系。"""
     群号文本 = _安全群号文本(群号)
     用户文本 = _安全群号文本(用户标识)
     成员文本 = _安全群号文本(成员标识)
     if not 群号文本 or not 用户文本 or not 成员文本:
-        return
+        return False
     当前时间 = time.monotonic()
+    旧记录 = 官方群成员映射.setdefault(群号文本, {}).get(用户文本)
+    已变化 = not 旧记录 or 旧记录[0] != 成员文本
+    if 旧记录 and 旧记录[0] != 成员文本:
+        官方群成员反向映射.get(群号文本, {}).pop(旧记录[0], None)
     官方群成员映射.setdefault(群号文本, {})[用户文本] = (成员文本, 当前时间)
     官方群成员反向映射.setdefault(群号文本, {})[成员文本] = (用户文本, 当前时间)
+    return 已变化
 
 
 def 获取官方群成员标识(群号: Any, 用户标识: Any) -> str:
