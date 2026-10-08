@@ -591,7 +591,7 @@ def 读取群成员最近消息(
 
 
 def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
-    """从该群成员最近保存的普通消息读取昵称，跳过系统提示里的兜底值。"""
+    """从该群成员最近保存的普通消息读取有效昵称，跳过兜底值和控制字符。"""
     会话标识 = str(会话标识 or "").strip()
     用户标识 = str(用户标识 or "").strip()
     if not 会话标识 or not 用户标识 or not _MySQL可用():
@@ -606,11 +606,16 @@ def 读取群成员最近昵称(会话标识: str, 用户标识: str) -> str:
                 "WHERE 会话标识=%s AND user_id=%s AND 消息类型='group' "
                 "AND is_self=0 AND TRIM(nickname)<>'' "
                 "AND nickname NOT IN ('成员','新成员','未知','未知用户') "
-                "AND nickname<>user_id ORDER BY ts DESC, id DESC LIMIT 1",
+                "AND nickname<>user_id ORDER BY ts DESC, id DESC LIMIT 64",
                 (会话标识, 用户标识),
             )
-            行 = 游标.fetchone()
-        return str(_行字段(行, 0, "nickname", 默认值="") or "").strip() if 行 else ""
+            行列表 = 游标.fetchall()
+        for 行 in 行列表 or ():
+            昵称 = str(_行字段(行, 0, "nickname", 默认值="") or "").strip()
+            if not 昵称 or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称):
+                continue
+            return 昵称
+        return ""
     except Exception as exc:
         logger.warning("群成员昵称回查失败：错误类型=%s", type(exc).__name__)
         return ""

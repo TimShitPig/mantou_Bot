@@ -2285,9 +2285,8 @@ def _裁剪成员资料缓存() -> None:
                 break
 
 
-_群成员详情接口无权限应用: set[str] = globals().get("_群成员详情接口无权限应用") or set()
-_群成员详情失败冷却: dict[tuple[str, str], float] = globals().get("_群成员详情失败冷却") or {}
-_群成员详情失败冷却秒 = 15 * 60
+_群消息昵称补查失败冷却: dict[tuple[str, str], float] = globals().get("_群消息昵称补查失败冷却") or {}
+_群消息昵称补查失败冷却秒 = 5 * 60
 
 
 def _昵称需要补查(会话标识: str, 会话: dict[str, Any] | None) -> bool:
@@ -2317,6 +2316,86 @@ def _私聊兜底昵称(会话标识: str) -> str:
         return "未知用户"
 
 
+def _有效用户昵称(值: Any, 用户标识: str = "") -> str:
+    昵称 = str(值 or "").strip()
+    if not 昵称 or 昵称 == str(用户标识 or "").strip():
+        return ""
+    if 昵称 in {"成员", "新成员", "未知", "未知用户", "机器人", "我"}:
+        return ""
+    if any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称):
+        return ""
+    return 昵称
+
+
+def _读取群缓存昵称(群标识: str, 成员标识: str) -> str:
+    会话 = 消息缓存.get(str(群标识 or "").strip()) or {}
+    if str(会话.get("chat_type") or "") != "group":
+        return ""
+    for 记录 in reversed(会话.get("messages") or []):
+        if not isinstance(记录, dict) or bool(记录.get("is_self")):
+            continue
+        if str(记录.get("user_id") or "").strip() != str(成员标识 or "").strip():
+            continue
+        昵称 = _有效用户昵称(记录.get("nickname"), 成员标识)
+        if 昵称:
+            return 昵称
+    return ""
+
+
+def _回填私聊昵称(会话标识: str, 用户标识: str, 昵称: str) -> None:
+    会话 = 消息缓存.get(str(会话标识 or "").strip())
+    if not 会话:
+        return
+    if _昵称需要补查(会话标识, 会话):
+        会话["last_nickname"] = 昵称
+    for 记录 in 会话.get("messages") or []:
+        if not isinstance(记录, dict):
+            continue
+        if str(记录.get("user_id") or "").strip() != 用户标识:
+            continue
+        if not _有效用户昵称(记录.get("nickname"), 用户标识):
+            记录["nickname"] = 昵称
+    资料 = 成员资料缓存.setdefault(str(会话标识 or "").strip(), {})
+    旧资料 = 资料.get(用户标识) or {}
+    if not _有效用户昵称(旧资料.get("nickname") or 旧资料.get("username"), 用户标识):
+        旧资料["nickname"] = 昵称
+        资料[用户标识] = 旧资料
+
+
+async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
+    """从 QQ 官方群消息作者的 username 事件字段复用昵称，不请求内邀资料接口。"""
+    from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
+
+    群成员列表 = 获取官方群成员映射列表(用户标识)[:3]
+    for 群标识, 成员标识 in 群成员列表:
+        昵称 = _读取群缓存昵称(群标识, 成员标识)
+        if 昵称:
+            return 昵称
+        if _消息存储 is None or not _消息数据库已配置():
+            continue
+        读取昵称 = getattr(_消息存储, "读取群成员最近昵称", None)
+        if not callable(读取昵称):
+            continue
+        try:
+            候选昵称 = await _异步执行消息记录同步(读取昵称, 群标识, 成员标识)
+        except Exception as 异常:
+            logger.debug("私聊昵称群消息回查失败：错误类型=%s", type(异常).__name__)
+            continue
+        昵称 = _有效用户昵称(候选昵称, 用户标识)
+        if 昵称:
+            return 昵称
+
+    # QQ 的群成员 OpenID 与该用户的单聊 OpenID 在当前记录中相同。
+    # 映射缓存重启后会清空，因此再从已加载的群历史按相同 ID 查一次。
+    for 群标识, 会话 in 消息缓存.items():
+        if str(会话.get("chat_type") or "") != "group":
+            continue
+        昵称 = _读取群缓存昵称(群标识, 用户标识)
+        if 昵称:
+            return 昵称
+    return ""
+
+
 def _保存本地昵称(会话标识: str, 昵称: str) -> None:
     """把补查到的昵称持久化到本地缓存，重启后仍可显示。"""
     if not 会话标识 or not 昵称:
@@ -2333,106 +2412,25 @@ def _保存本地昵称(会话标识: str, 昵称: str) -> None:
 
 
 async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str = "") -> None:
-    """从最近观测到的群关系查询成员详情，并回写私聊昵称缓存。"""
+    """从已保存的群消息作者资料复用昵称，并回写私聊缓存。"""
     用户标识 = str(用户标识 or "").strip()
     应用标识 = str(appid or "").strip()
     冷却键 = (应用标识, 用户标识)
-    if not 用户标识 or 应用标识 in _群成员详情接口无权限应用:
+    if not 用户标识:
         return
-    if _群成员详情失败冷却.get(冷却键, 0.0) > time.monotonic():
+    if _群消息昵称补查失败冷却.get(冷却键, 0.0) > time.monotonic():
         return
     try:
-        from botpy.http import Route
-        from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
-
-        群成员列表 = 获取官方群成员映射列表(用户标识)
-        if not 群成员列表:
-            return
-        平台实例 = 获取QQ官方平台(appid=appid)
-        通道 = 获取HTTP通道(平台实例)
-        if 通道 is None:
-            return
-        _api, _http = 通道
-        昵称 = ""
-        最后异常: Exception | None = None
-        for 群标识, 成员标识 in 群成员列表[:3]:
-            try:
-                结果 = await _http.request(
-                    Route(
-                        "GET",
-                        "/v2/groups/{group_openid}/members/{member_openid}",
-                        group_openid=群标识,
-                        member_openid=成员标识,
-                    )
-                )
-            except Exception as 异常:
-                最后异常 = 异常
-                状态码 = str(
-                    _读取字段(异常, "status")
-                    or _读取字段(异常, "status_code")
-                    or ""
-                )
-                业务码 = str(
-                    _读取字段(异常, "code")
-                    or _读取字段(异常, "err_code")
-                    or ""
-                )
-                if 状态码 in {"401", "403"} or 业务码 == "11253":
-                    _群成员详情接口无权限应用.add(应用标识)
-                    logger.info("QQ官方群成员详情接口当前应用无访问权限")
-                    return
-                continue
-            数据 = (
-                结果
-                if isinstance(结果, dict)
-                else (getattr(结果, "data", None) or {})
-            )
-            if not isinstance(数据, dict):
-                continue
-            业务码 = str(数据.get("code") or "").strip()
-            if 业务码 == "11253":
-                _群成员详情接口无权限应用.add(应用标识)
-                logger.info("QQ官方群成员详情接口当前应用无访问权限")
-                return
-            if 业务码 not in {"", "0"}:
-                continue
-            if isinstance(数据, dict) and isinstance(数据.get("data"), dict):
-                数据 = 数据["data"]
-            if not isinstance(数据, dict):
-                continue
-            昵称 = str(_读取字段(数据, "username") or "").strip()
-            if 昵称:
-                break
+        昵称 = _有效用户昵称(await _从群消息读取昵称(用户标识, appid), 用户标识)
         if not 昵称:
-            _群成员详情失败冷却[冷却键] = time.monotonic() + _群成员详情失败冷却秒
-            if 最后异常 is not None:
-                logger.warning(
-                    "私聊昵称群成员详情补查失败：错误类型=%s",
-                    type(最后异常).__name__,
-                )
+            _群消息昵称补查失败冷却[冷却键] = time.monotonic() + _群消息昵称补查失败冷却秒
             return
-        _群成员详情失败冷却.pop(冷却键, None)
-        会话 = 消息缓存.get(str(会话标识 or "").strip())
-        if 会话:
-            if _昵称需要补查(会话标识, 会话):
-                会话["last_nickname"] = 昵称
-            for 记录 in 会话.get("messages") or []:
-                if not isinstance(记录, dict):
-                    continue
-                if str(记录.get("user_id") or "").strip() != 用户标识:
-                    continue
-                当前昵称 = str(记录.get("nickname") or "").strip()
-                if not 当前昵称 or 当前昵称 == _私聊兜底昵称(用户标识):
-                    记录["nickname"] = 昵称
-            资料 = 成员资料缓存.setdefault(str(会话标识 or "").strip(), {})
-            旧资料 = 资料.get(用户标识) or {}
-            if not str(旧资料.get("nickname") or "").strip():
-                旧资料["nickname"] = 昵称
-                资料[用户标识] = 旧资料
+        _群消息昵称补查失败冷却.pop(冷却键, None)
+        _回填私聊昵称(会话标识, 用户标识, 昵称)
         await _异步执行消息记录同步(_保存本地昵称, 会话标识, 昵称)
     except Exception as exc:
-        _群成员详情失败冷却[冷却键] = time.monotonic() + _群成员详情失败冷却秒
-        logger.warning("私聊昵称群成员详情补查失败：错误类型=%s", type(exc).__name__)
+        _群消息昵称补查失败冷却[冷却键] = time.monotonic() + _群消息昵称补查失败冷却秒
+        logger.warning("私聊昵称群消息回填失败：错误类型=%s", type(exc).__name__)
 
 
 def _准备昵称补查队列() -> asyncio.Queue[tuple[str, str, str]]:
@@ -2484,7 +2482,7 @@ def _启动昵称补查任务() -> None:
 def _排队昵称补查(会话标识: str, 用户标识: str, appid: str = "") -> bool:
     """同一私聊用户同时最多存在一个补查项目，避免消息洪峰生成无限任务。"""
     global _昵称补查溢出数
-    if not _昵称补查接收入队 or str(appid or "").strip() in _群成员详情接口无权限应用:
+    if not _昵称补查接收入队:
         return False
     会话标识 = str(会话标识 or "").strip()
     用户标识 = str(用户标识 or "").strip()
@@ -2564,7 +2562,7 @@ def 记录收到消息(
                             type(映射异常).__name__,
                         )
                     break
-        昵称 = _提取成员昵称(消息)
+        昵称 = _有效用户昵称(_提取成员昵称(消息), 成员标识)
         作者 = _读取字段(消息, "author")
         是机器人 = bool(_读取字段(作者, "bot") or False)
         角色 = str(_读取字段(作者, "member_role") or "").strip()
@@ -4792,11 +4790,24 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
                 聊天["avatar"] = 联系人["avatar"]
             if not _昵称需要补查(会话标识, 会话):
                 continue
-            本地昵称 = str((_读取本地缓存文件().get("nicknames") or {}).get(会话标识) or "")
+            本地昵称 = _有效用户昵称(
+                (_读取本地缓存文件().get("nicknames") or {}).get(会话标识),
+                会话标识,
+            )
             if 本地昵称:
                 if 会话:
                     会话["last_nickname"] = 本地昵称
                 聊天["nickname"] = 本地昵称
+                continue
+            appid = str(聊天.get("appid") or (会话 or {}).get("appid") or "")
+            群消息昵称 = _有效用户昵称(
+                await _从群消息读取昵称(会话标识, appid),
+                会话标识,
+            )
+            if 群消息昵称:
+                _回填私聊昵称(会话标识, 会话标识, 群消息昵称)
+                聊天["nickname"] = 群消息昵称
+                await _异步执行消息记录同步(_保存本地昵称, 会话标识, 群消息昵称)
                 continue
             兜底 = _私聊兜底昵称(会话标识)
             if 会话 and (not str(会话.get("last_nickname") or "").strip() or "未知" in str(会话.get("last_nickname") or "")):
