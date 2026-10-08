@@ -587,15 +587,15 @@ def 初始化数据库() -> bool:
                         f"""
                         INSERT INTO `{会话索引表名}`
                             (chat_type, conversation_id, last_id, last_ts, message_count)
-                        SELECT 汇总.chat_type, 汇总.会话标识, 汇总.last_id, 最后消息.ts, 汇总.message_count
+                        SELECT 汇总.chat_type, 汇总.会话标识, 汇总.摘要最后ID, 最后消息.ts, 汇总.摘要消息数
                         FROM (
                             SELECT COALESCE(消息类型, 'group') AS chat_type, 会话标识,
-                                MAX(id) AS last_id, COUNT(*) AS message_count
+                                MAX(id) AS 摘要最后ID, COUNT(*) AS 摘要消息数
                             FROM `{消息记录表名}`
                             WHERE 会话标识 != ''
                             GROUP BY COALESCE(消息类型, 'group'), 会话标识
                         ) 汇总
-                        JOIN `{消息记录表名}` 最后消息 ON 最后消息.id = 汇总.last_id
+                        JOIN `{消息记录表名}` 最后消息 ON 最后消息.id = 汇总.摘要最后ID
                         ON DUPLICATE KEY UPDATE
                             last_ts=IF(VALUES(last_id)>=last_id, VALUES(last_ts), last_ts),
                             last_id=GREATEST(last_id, VALUES(last_id)),
