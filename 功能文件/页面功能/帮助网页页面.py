@@ -107,14 +107,15 @@ from .帮助网页脚本 import 控制台脚本
             .msg-search input { flex:1 1 0; min-width:0; height:30px; padding:0 10px; border:1px solid transparent; border-radius:15px; background:#f2f3f5; color:#333; font-size:12px; outline:none; transition:all .15s ease; }
             .msg-search input:focus { border-color:#12b7f5; background:#fff; }
             .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
-            .msg-chats { flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; }
-            .msg-chat-folder { display:flex; align-items:center; gap:9px; width:100%; min-height:34px; margin:2px 0; padding:0 8px; border:0; border-radius:6px; background:transparent; color:#4b5563; text-align:left; cursor:pointer; }
+            .msg-chats { --msg-chat-row-height:52px; flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; }
+            .msg-chat-list-spacer { display:block; width:100%; pointer-events:none; }
+            .msg-chat-folder { display:flex; box-sizing:border-box; align-items:center; gap:9px; width:100%; height:38px; min-height:38px; max-height:38px; margin:0; padding:0 8px; border:0; border-radius:6px; background:transparent; color:#4b5563; text-align:left; cursor:pointer; }
             .msg-chat-folder:hover { background:#ececee; }
             .msg-chat-folder strong { font-size:12px; font-weight:700; }
             .msg-chat-folder small { margin-left:auto; color:#9298a1; font-size:10px; }
             .msg-chat-folder-caret { width:7px; height:7px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg) translateY(-2px); transition:transform .14s ease; }
             .msg-chat-folder[aria-expanded="false"] .msg-chat-folder-caret { transform:rotate(-45deg); }
-            .msg-chat-divider { margin:6px 6px 2px; padding:7px 4px 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
+            .msg-chat-divider { display:flex; box-sizing:border-box; align-items:center; height:28px; margin:0 6px; padding:0 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
             .msg-chat-divider:first-child { margin-top:0; border-top:0; }
             .msg-chat { display:flex; box-sizing:border-box; gap:10px; width:100%; height:52px; min-height:52px; max-height:52px; padding:6px 8px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
             .msg-chat:hover { background:#ececee; }
@@ -431,6 +432,7 @@ from .帮助网页脚本 import 控制台脚本
                .msg-filter button { min-height:24px; font-size:10px; }
                .msg-search { gap:5px; }
                .msg-search input,.msg-search button { height:28px; font-size:11px; }
+               .msg-chats { --msg-chat-row-height:60px; }
                .msg-chat { height:60px; min-height:60px; max-height:60px; padding:8px 10px; border-radius:0; }
                .msg-chat-divider { margin-left:4px; margin-right:4px; }
                .msg-mobile-back { display:grid; }

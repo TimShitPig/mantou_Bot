@@ -32,6 +32,7 @@ except Exception:
 元数据命名空间 = "message_panel_meta"
 会话索引就绪键 = "conversation_summary_v1"
 群成员映射回填键 = "group_member_links_v1"
+统一用户资料回填键 = "user_profile_union_openid_v1"
 
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
@@ -100,6 +101,28 @@ def _行字段(行: Any, 索引: int, *字段名: str, 默认值: Any = None) ->
         return 行[索引] if 索引 < len(行) else 默认值
     except (IndexError, KeyError, TypeError):
         return 默认值
+
+
+def _原始消息统一用户标识表达式(别名: str) -> str:
+    路径列表 = (
+        "$.author.union_openid",
+        "$.union_openid",
+        "$.member.union_openid",
+        "$.data.union_openid",
+        "$.data.author.union_openid",
+        "$.d.union_openid",
+        "$.d.author.union_openid",
+        "$.raw_data.union_openid",
+        "$.raw_data.author.union_openid",
+    )
+    候选项 = ",".join(
+        "NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(" + f"{别名}.raw_message, '{路径}'" + ")),''),'null')"
+        for 路径 in 路径列表
+    )
+    return (
+        f"CASE WHEN JSON_VALID({别名}.raw_message) "
+        f"THEN COALESCE({候选项},'') ELSE '' END"
+    )
 
 
 def _MySQL错误摘要(异常: Exception) -> str:
@@ -347,6 +370,71 @@ def 初始化数据库() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "回填历史消息统一用户资料"
+            try:
+                游标.execute(
+                    f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                    (统一用户资料回填键,),
+                )
+                统一资料回填状态 = 游标.fetchone()
+                if str(_行字段(统一资料回填状态, 0, "state_value", 默认值="") or "") != "ready":
+                    UnionOpenID表达式 = _原始消息统一用户标识表达式("m")
+                    回填Union表达式 = _原始消息统一用户标识表达式("x")
+                    用户名路径列表 = (
+                        "$.author.username",
+                        "$.author.nickname",
+                        "$.member.username",
+                        "$.username",
+                        "$.nickname",
+                        "$.data.author.username",
+                        "$.d.author.username",
+                        "$.raw_data.author.username",
+                    )
+                    原始昵称候选 = ",".join(
+                        "NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '"
+                        + 路径
+                        + "')),''),'null')"
+                        for 路径 in 用户名路径列表
+                    )
+                    历史昵称表达式 = f"COALESCE({原始昵称候选},NULLIF(m.nickname,''),'')"
+                    昵称有效条件 = (
+                        f"{历史昵称表达式}<>'' "
+                        f"AND {历史昵称表达式}<>m.user_id "
+                        f"AND {历史昵称表达式}<>CONCAT('用户',RIGHT(m.user_id,6)) "
+                        f"AND {历史昵称表达式} NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
+                    )
+                    游标.execute(
+                        f"INSERT INTO `{用户资料表名}` "
+                        "(profile_key, appid, user_id, nickname, union_openid, updated_at) "
+                        "SELECT SHA2(CONCAT(COALESCE(m.appid,''),CHAR(0),m.user_id),256), "
+                        "COALESCE(m.appid,''),m.user_id, "
+                        f"CASE WHEN {昵称有效条件} THEN {历史昵称表达式} ELSE '' END, "
+                        f"{UnionOpenID表达式},COALESCE(m.ts,0) "
+                        f"FROM `{消息记录表名}` m JOIN ("
+                        "SELECT x.appid,x.user_id,MAX(x.id) AS last_id "
+                        f"FROM `{消息记录表名}` x WHERE x.消息类型 IN ('group','user') "
+                        "AND x.is_self=0 AND x.user_id<>'' AND JSON_VALID(x.raw_message) "
+                        f"AND {回填Union表达式}<>'' GROUP BY x.appid,x.user_id"
+                        ") latest ON latest.last_id=m.id "
+                        "ON DUPLICATE KEY UPDATE "
+                        "nickname=IF(VALUES(nickname)<>'' AND (nickname='' OR nickname=user_id "
+                        "OR nickname=CONCAT('用户',RIGHT(user_id,6)) "
+                        "OR nickname IN ('成员','新成员','未知','未知用户','机器人','我')),VALUES(nickname),nickname), "
+                        "union_openid=IF(union_openid='',VALUES(union_openid),union_openid), "
+                        "updated_at=GREATEST(updated_at,VALUES(updated_at))"
+                    )
+                    游标.execute(
+                        f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                        "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                        (统一用户资料回填键, "ready"),
+                    )
+                    logger.info("消息记录 MySQL 历史用户统一 OpenID 资料回填完成")
+            except Exception as 回填异常:
+                logger.warning(
+                    "消息记录 MySQL 历史用户统一 OpenID 资料回填失败：错误类型=%s，%s",
+                    type(回填异常).__name__,
+                    _MySQL错误摘要(回填异常),
+                )
             # 表结构检查必须在游标仍有效时执行。旧实现离开 with 后复用已关闭游标，
             # 导致字符集和历史列修复被异常吞掉。
             try:

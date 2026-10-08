@@ -115,6 +115,8 @@
           connectMsgEvents();
           if (previousView !== 'messages') {
             msgState.chatListTopPending = true;
+            const chatList = $('msg-chats');
+            if (chatList) chatList.scrollTop = 0;
             loadMsgChats();
           }
           if (previousView !== 'messages' && msgState.chatId) loadMsgHistory();
@@ -643,7 +645,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1256,6 +1258,66 @@
           autoScanAdminRunning = false;
         }
       };
+      const getMsgChatRowHeight = (node) => {
+        const value = Number.parseFloat(window.getComputedStyle(node).getPropertyValue('--msg-chat-row-height'));
+        return Number.isFinite(value) && value > 0 ? value : 52;
+      };
+      const renderMsgChatRow = (item) => {
+        if (item.kind === 'folder') {
+          const collapsed = Boolean(msgState.folderCollapsed[item.type]);
+          return `<button class="msg-chat-folder" type="button" data-msg-folder-toggle="${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
+        }
+        if (item.kind === 'divider') return '<div class="msg-chat-divider" role="separator">已移除群聊</div>';
+        const chat = item.chat;
+        const avatarSource = chat.chat_type === 'group'
+          ? (chat.group_avatar || chat.group_avatar_url || '')
+          : (chat.avatar || chat.avatar_url || '');
+        const av = safeMediaUrl(String(avatarSource).trim())
+          || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
+        if (chat.appid) window.msgAppid = chat.appid;
+        const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
+        const viewing = msgState.chatId === chat.chat_id;
+        const removed = msgChatIsRemoved(chat);
+        const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
+        const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
+        if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
+        const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
+        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
+          <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
+          <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
+          <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
+          <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
+        </button>`;
+      };
+      const renderMsgChatVirtualWindow = () => {
+        const node = $('msg-chats');
+        const rows = msgState.chatListRows;
+        if (!node || !rows.length) return;
+        const offsets = msgState.chatListOffsets;
+        const rowHeight = msgState.chatListRowHeight;
+        const viewport = Math.max(node.clientHeight, rowHeight * 8);
+        const lowerBound = (value) => {
+          let low = 0;
+          let high = offsets.length;
+          while (low < high) {
+            const middle = (low + high) >> 1;
+            if (offsets[middle] < value) low = middle + 1;
+            else high = middle;
+          }
+          return low;
+        };
+        const overscan = Math.max(8, Math.ceil(viewport / rowHeight));
+        const firstVisible = Math.min(rows.length - 1, Math.max(0, lowerBound(Math.max(0, node.scrollTop)) - 1));
+        const lastVisible = Math.min(rows.length, lowerBound(Math.max(0, node.scrollTop) + viewport) + 1);
+        const start = Math.max(0, firstVisible - overscan);
+        const end = Math.min(rows.length, Math.max(start + 1, lastVisible + overscan));
+        if (start === msgState.chatListWindowStart && end === msgState.chatListWindowEnd) return;
+        const top = offsets[start] || 0;
+        const bottom = Math.max(0, msgState.chatListContentHeight - (offsets[end] || 0));
+        node.innerHTML = `<div class="msg-chat-list-spacer" aria-hidden="true" style="height:${top}px"></div>${rows.slice(start, end).map(renderMsgChatRow).join('')}<div class="msg-chat-list-spacer" aria-hidden="true" style="height:${bottom}px"></div>`;
+        msgState.chatListWindowStart = start;
+        msgState.chatListWindowEnd = end;
+      };
       const renderMsgChats = (data) => {
         const node = $('msg-chats');
         if (!node) return;
@@ -1299,12 +1361,15 @@
         };
         const settleListScroll = () => {
           restoreListScroll();
+          renderMsgChatVirtualWindow();
           if (typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(() => {
               restoreListScroll();
+              renderMsgChatVirtualWindow();
               if (forceListTop && msgState.chatListServerLoaded) {
                 requestAnimationFrame(() => {
                   restoreListScroll();
+                  renderMsgChatVirtualWindow();
                   msgState.chatListTopPending = false;
                 });
               }
@@ -1312,6 +1377,7 @@
           } else if (forceListTop && msgState.chatListServerLoaded) {
             setTimeout(() => {
               restoreListScroll();
+              renderMsgChatVirtualWindow();
               msgState.chatListTopPending = false;
             }, 0);
           }
@@ -1339,77 +1405,81 @@
         [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
           .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
-        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0].join(':') + '|' + visibleChats.map((chat) => [
+        const rowHeight = getMsgChatRowHeight(node);
+        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0, rowHeight].join(':') + '|' + visibleChats.map((chat) => [
           chat.chat_id,
           chat.chat_type,
-          chat.nickname || chat.remark || '',
+          chat.nickname || '',
+          chat.remark || '',
           chat.last_content || '',
           chat.last_ts,
+          chat.last_time || '',
           chat.unread,
           chat.msg_count,
           chat.pinned ? 1 : 0,
           chat.is_admin ? 1 : 0,
           chat.membership_status,
-          chat.group_avatar || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
+          chat.in_group === false ? 0 : 1,
+          chat.group_avatar || chat.group_avatar_url || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
         ].join(':')).join('|');
         if (msgState.chatRenderSignature === chatRenderSignature) {
           if (forceListTop) {
             node.scrollTop = 0;
             if (msgState.chatListServerLoaded) msgState.chatListTopPending = false;
           }
+          renderMsgChatVirtualWindow();
           scheduleAutoScanAdminGroups(10000);
           return;
         }
         msgState.chatRenderSignature = chatRenderSignature;
         msgState.chatListRendered = true;
-        if (!visibleChats.length) { node.innerHTML = `<div class="msg-empty">${chats.length ? '没有匹配的会话' : '暂无消息会话，机器人收到消息后会出现在这里'}</div>`; settleListScroll(); return; }
-        const renderChatRows = (items) => {
+        if (!visibleChats.length) {
+          msgState.chatListRows = [];
+          msgState.chatListOffsets = [0];
+          msgState.chatListContentHeight = 0;
+          msgState.chatListWindowStart = -1;
+          msgState.chatListWindowEnd = -1;
+          node.innerHTML = `<div class="msg-empty">${chats.length ? '没有匹配的会话' : '暂无消息会话，机器人收到消息后会出现在这里'}</div>`;
+          settleListScroll();
+          return;
+        }
+        const rows = [];
+        const appendChatRows = (items) => {
           let removedSectionShown = false;
-          return items.map((chat) => {
-            const avatarSource = chat.chat_type === 'group'
-              ? (chat.group_avatar || chat.group_avatar_url || '')
-              : (chat.avatar || chat.avatar_url || '');
-            const av = safeMediaUrl(String(avatarSource).trim())
-              || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
-            if (chat.appid) window.msgAppid = chat.appid;
-            const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
-            const viewing = msgState.chatId === chat.chat_id;
+          items.forEach((chat) => {
             const removed = msgChatIsRemoved(chat);
-            const removedSection = removed && !removedSectionShown
-              ? '<div class="msg-chat-divider" role="separator">已移除群聊</div>'
-              : '';
+            if (removed && !removedSectionShown) rows.push({kind:'divider', height:28});
             if (removed) removedSectionShown = true;
-            const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
-            const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
-            if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
-            const preview = removed ? '你已被移除群聊' : (plainMsgPreview(String(chat.last_content || '（无文本内容）')) || '（无文本内容）');
-            return `${removedSection}<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
-              <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
-              <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
-               <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
-              <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
-            </button>`;
-          }).join('');
+            rows.push({kind:'chat', chat, height:rowHeight});
+          });
         };
         if (msgState.filter === 'all') {
           const sections = [
             ['group', '群聊'],
             ['user', '私聊'],
           ];
-          node.innerHTML = sections.map(([type, label]) => {
+          sections.forEach(([type, label]) => {
             const items = visibleChats.filter((chat) => chat.chat_type === type);
-            if (!items.length) return '';
+            if (!items.length) return;
             const collapsed = Boolean(msgState.folderCollapsed[type]);
-            return `<section class="msg-chat-folder-section">
-              <button class="msg-chat-folder" type="button" data-msg-folder-toggle="${type}" aria-expanded="${!collapsed}">
-                <span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${label}</strong><small>${items.length}</small>
-              </button>
-              ${collapsed ? '' : renderChatRows(items)}
-            </section>`;
-          }).join('');
+            rows.push({kind:'folder', type, label, count:items.length, height:38});
+            if (!collapsed) appendChatRows(items);
+          });
         } else {
-          node.innerHTML = renderChatRows(visibleChats);
+          appendChatRows(visibleChats);
         }
+        msgState.chatListRowHeight = rowHeight;
+        msgState.chatListRows = rows;
+        msgState.chatListWindowStart = -1;
+        msgState.chatListWindowEnd = -1;
+        msgState.chatListOffsets = [0];
+        rows.forEach((row) => msgState.chatListOffsets.push(msgState.chatListOffsets[msgState.chatListOffsets.length - 1] + row.height));
+        msgState.chatListContentHeight = msgState.chatListOffsets[msgState.chatListOffsets.length - 1] || 0;
+        if (!forceListTop && !wasAtListTop && anchorChatId) {
+          const anchorIndex = rows.findIndex((row) => row.kind === 'chat' && String(row.chat?.chat_id || '') === anchorChatId);
+          if (anchorIndex >= 0) node.scrollTop = Math.max(0, msgState.chatListOffsets[anchorIndex] - anchorOffset);
+        }
+        renderMsgChatVirtualWindow();
         settleListScroll();
         scheduleAutoScanAdminGroups();
         if (node.dataset.msgDelegated !== '1') {
@@ -3855,6 +3925,7 @@
         msgState.filter = el.dataset.msgFilter;
         msgState.page = 1;
         msgState.chatListTopPending = true;
+        $('msg-chats').scrollTop = 0;
         if (msgState.chatListServerLoaded) renderMsgChats({chats:msgState.chats});
         else loadMsgChats(true);
       }));
@@ -4015,12 +4086,23 @@
       window.addEventListener('blur', releaseMsgChatPointer, {passive:true});
       msgChatsNode?.addEventListener('scroll', () => {
         msgState.chatListScrollActive = true;
+        renderMsgChatVirtualWindow();
         if (msgState.chatListScrollTimer) clearTimeout(msgState.chatListScrollTimer);
         msgState.chatListScrollTimer = setTimeout(() => {
           msgState.chatListScrollTimer = null;
           msgState.chatListScrollActive = false;
           flushPendingMsgChats();
         }, 140);
+      }, {passive:true});
+      window.addEventListener('resize', () => {
+        if (!msgChatsNode) return;
+        const rowHeight = getMsgChatRowHeight(msgChatsNode);
+        if (rowHeight !== msgState.chatListRowHeight && msgState.chatListRendered) {
+          msgState.chatRenderSignature = '';
+          renderMsgChats({chats:msgState.chats});
+        } else {
+          renderMsgChatVirtualWindow();
+        }
       }, {passive:true});
       $('msg-body').addEventListener('scroll', () => {
         maybeLoadOlderMessages();
