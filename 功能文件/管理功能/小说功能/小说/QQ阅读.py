@@ -38,7 +38,7 @@ from typing import (
     Optional,
     Union,
 )
-from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit
 
 import aiohttp
 from astrbot.api import logger
@@ -3068,6 +3068,12 @@ QQ阅读第三方正文最大动态并发数 = 16
 QQ阅读进度日志分段数 = 4
 QQ阅读链接正则 = re.compile(r"https?://[^\s'\"<>，。]+", re.I)
 QQ阅读允许域名 = ("reader.qq.com", "book.qq.com")
+QQ阅读KOL短链路径正则 = re.compile(r"^/kol-rec/[A-Za-z0-9_-]{6,128}/?$", re.I)
+QQ阅读KOL短链书籍编号正则 = re.compile(
+    r"(?:\bbookData|\"bookData\")\s*:\s*\{[^{}]{0,2048}?"
+    r"(?:\bbid|\"bid\")\s*:\s*[\"']?(\d+)",
+    re.I,
+)
 QQ阅读登录态命名空间 = "qq_reader_auth"
 QQ阅读登录态状态键 = "login_state"
 小说缓存目录 = 文件缓存工具.小说缓存目录
@@ -3269,6 +3275,50 @@ def 解析书籍编号(来源: Any) -> str:
         if match:
             return match.group(1)
     return ""
+
+
+async def 解析QQ阅读分享页书籍编号(
+    来源: Any,
+    session: aiohttp.ClientSession,
+) -> str:
+    link = 提取QQ阅读链接(来源)
+    if not link:
+        return ""
+    try:
+        parsed = urlsplit(link)
+    except ValueError:
+        return ""
+    if (
+        (parsed.hostname or "").lower() != "book.qq.com"
+        or not QQ阅读KOL短链路径正则.fullmatch(parsed.path)
+    ):
+        return ""
+
+    page_url = link
+    page_source = ""
+    for _ in range(4):
+        async with session.get(page_url, allow_redirects=False) as response:
+            if response.status in {301, 302, 303, 307, 308}:
+                location = str(response.headers.get("Location") or "").strip()
+                if not location:
+                    raise RuntimeError("QQ阅读分享页重定向缺少目标地址")
+                next_url = urljoin(page_url, location)
+                next_parsed = urlsplit(next_url)
+                if (
+                    next_parsed.scheme != "https"
+                    or not _是QQ阅读域名(next_parsed.hostname or "")
+                ):
+                    raise RuntimeError("QQ阅读分享页跳转地址无效")
+                page_url = next_url
+                continue
+            response.raise_for_status()
+            page_source = await response.text()
+            break
+    else:
+        raise RuntimeError("QQ阅读分享页跳转次数过多")
+
+    match = QQ阅读KOL短链书籍编号正则.search(page_source)
+    return str(match.group(1)) if match else ""
 
 
 def 初始化参考核心() -> ConfigManager:
@@ -4786,14 +4836,8 @@ async def 生成下载回复流(
     来源: str,
     配置: Any = None,
 ) -> AsyncIterator[Any]:
-    book_id = 解析书籍编号(来源)
-    if not book_id:
-        yield 下载失败提示
-        return
-
-    await 加载保存的QQ阅读登录态(配置)
-
-    stage = "details"
+    book_id = ""
+    stage = "link"
     try:
         async with 创建QQ阅读HTTP会话(
             concurrency=max(
@@ -4801,6 +4845,16 @@ async def 生成下载回复流(
                 QQ阅读出版书最大动态并发数,
             )
         ) as session:
+            book_id = 解析书籍编号(来源) or await 解析QQ阅读分享页书籍编号(
+                来源, session
+            )
+            if not book_id:
+                logger.warning("QQ阅读分享链接解析失败：错误分类=book_id_missing")
+                yield 下载失败提示
+                return
+
+            await 加载保存的QQ阅读登录态(配置)
+            stage = "details"
             try:
                 details = await 获取参考书籍详情(book_id, session)
             except Exception as exc:
