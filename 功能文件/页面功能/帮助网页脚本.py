@@ -58,7 +58,6 @@
       let activeView = null;
       let activePanTab = null;
       let activePanObject = null;
-      let quarkProfileAutoloadStarted = false;
       let quarkWebScanId = '';
       let quarkWebScanTimer = null;
       let quarkWebScanGeneration = 0;
@@ -127,6 +126,7 @@
           if (scrollContainer) scrollContainer.scrollTop = 0;
           window.scrollTo({top:0, behavior:'auto'});
         }
+        if (next === 'pans') void refreshQuarkProfilesSilently();
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
@@ -285,7 +285,6 @@
          pane.querySelectorAll('[data-pan-delete]').forEach((node) => node.addEventListener('click', () => deletePanAccount(node.dataset.panDelete, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
          pane.querySelectorAll('[data-pan-account-default]').forEach((node) => node.addEventListener('click', () => changePanAccountDefault(node.dataset.panAccountDefault, node.dataset.index, node)));
-         pane.querySelectorAll('[data-pan-refresh]').forEach((node) => node.addEventListener('click', () => refreshPanAccounts(node.dataset.panRefresh, node)));
          pane.querySelectorAll('[data-pan-dir-save]').forEach((node) => node.addEventListener('click', () => savePanDirectory(node.dataset.panDirSave, node)));
          card.querySelector('[data-pan-object-detail] .pan-object-detail-head [data-pan-enable]')?.addEventListener('click', (event) => changePanEnabled(event.currentTarget.dataset.panEnable, event.currentTarget));
        };
@@ -323,6 +322,7 @@
          if (!previous || previous.platform !== platform) return;
          if (previous.type === 'add') void stopQuarkWebScan();
          activePanObject = null;
+         if (platform === '夸克') renderQuarkAccountCards();
          const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
          if (!card) return;
          card.querySelector('[data-pan-object-pane]').innerHTML = '';
@@ -347,6 +347,7 @@
          if (activePanObject) closePanObject(activePanObject.platform);
          activePanObject = null;
          applyPanTab(key);
+         void refreshQuarkProfilesSilently();
        };
        const bindPanWorkspaceControls = () => {
          const grid = $('pan-grid');
@@ -613,18 +614,46 @@
          }
        };
        const deletePanAccount = async (platform, index, button) => { if (!confirm(`确定删除${platform}账号吗？`)) return; if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'DELETE', body:JSON.stringify({index:Number(index)})}); toast('账号已删除'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
-       const refreshPanAccounts = async (platform, button) => { if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}?refresh=1`); toast('账号资料已刷新'); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
-       const refreshMissingQuarkProfiles = async () => {
-         if (quarkProfileAutoloadStarted || !snapshot) return;
+       const quarkProfileRefreshIntervalMs = 300000;
+       const quarkProfileRetryIntervalMs = 60000;
+       let quarkProfileRefreshAfter = 0;
+       let quarkProfileRefreshPromise = null;
+       const renderQuarkAccountCards = () => {
+         if (activePanObject?.platform === '夸克') return;
+         const quark = snapshot?.pans?.items?.find((item) => item.key === '夸克');
+         if (!quark) return;
+         const grid = document.querySelector('[data-pan-card="夸克"] [data-pan-browser] .pan-object-grid');
+         if (!grid) return;
+         grid.innerHTML = panAccountRows(quark, snapshot.pans.editable);
+         grid.querySelectorAll('[data-pan-object-open]').forEach((node) => node.addEventListener('click', () => openPanObject(node.dataset.panObjectOpen, node.dataset.panObjectType, node.dataset.index)));
+         grid.querySelectorAll('[data-pan-account-enable]').forEach((node) => node.addEventListener('click', () => changePanAccountEnabled(node.dataset.panAccountEnable, node.dataset.index, node)));
+         grid.querySelectorAll('[data-pan-account-default]').forEach((node) => node.addEventListener('click', () => changePanAccountDefault(node.dataset.panAccountDefault, node.dataset.index, node)));
+       };
+       const refreshQuarkProfilesSilently = () => {
+         if (document.visibilityState !== 'visible' || activeView !== 'pans' || activePanTab !== '夸克' || !snapshot) return;
+         if (quarkProfileRefreshPromise) return quarkProfileRefreshPromise;
+         if (Date.now() < quarkProfileRefreshAfter) return;
          const quark = snapshot.pans?.items?.find((item) => item.key === '夸克');
          const accounts = Array.isArray(quark?.account_summary) ? quark.account_summary : [];
-         const missingProfile = accounts.some((account) => !account?.avatar_url || !account?.name || account.name === '未命名账号' || !account?.membership || account.space_used_bytes == null || account.space_total_bytes == null);
-         if (!missingProfile) return;
-         quarkProfileAutoloadStarted = true;
-         try {
-           await api('pan-accounts/夸克?refresh=1');
-           await load();
-         } catch (_) {}
+         if (!accounts.length) return;
+         quarkProfileRefreshPromise = api('pan-accounts/夸克').then((data) => {
+           // 保存账号或开关时 load() 可能换过快照，旧请求不得覆盖新状态。
+           if (snapshot?.pans?.items?.find((item) => item.key === '夸克') !== quark) return;
+           if (!Array.isArray(data.accounts)) throw new Error('账号资料格式错误');
+           quark.account_summary = data.accounts;
+           quark.accounts = data.accounts.length;
+           quark.configured = data.accounts.length > 0;
+           if (data.default_account != null) quark.default_account = data.default_account;
+           if (data.selected_account != null) quark.selected_account = data.selected_account;
+           const meta = document.querySelector('[data-pan-tab-meta="夸克"]');
+           if (meta) meta.textContent = `${data.accounts.length} 个账号 · ${data.accounts.filter((account) => account?.enabled !== false).length} 启用`;
+           renderQuarkAccountCards();
+           quarkProfileRefreshAfter = Date.now() + quarkProfileRefreshIntervalMs;
+         }).catch((error) => {
+           quarkProfileRefreshAfter = Date.now() + quarkProfileRetryIntervalMs;
+           if (error.status === 401) showAuthError(error);
+         }).finally(() => { quarkProfileRefreshPromise = null; });
+         return quarkProfileRefreshPromise;
        };
        const savePanDirectory = async (platform, button) => { const input = document.querySelector(`[data-pan-dir="${CSS.escape(platform)}"]`); const field = input?.dataset.panDirField; const value = input?.value.trim(); if (!field || !value) return toast('请输入上传目录'); if (button) button.disabled = true; try { const result = await api('config', {method:'POST', body:JSON.stringify({fields:{[field]:value}})}); toast(result.message || `${platform}上传目录已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const changePanAccountEnabled = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，账号状态不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/enable`, {method:'POST', body:JSON.stringify({index:Number(index), enabled})}); toast(result.message || `账号${enabled ? '已启用' : '已停用'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
@@ -638,7 +667,7 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const refreshQQProfileSilently = async () => { try { const authData = await api('qq-reader-auth?refresh=1'); renderQQAuthEditor(authData || {}); } catch (_) {} };
-      const load = async () => { try { render(await api('dashboard')); void refreshMissingQuarkProfiles(); void refreshQQProfileSilently(); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      const load = async () => { try { render(await api('dashboard')); void refreshQQProfileSilently(); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
       $('popover-logout').addEventListener('click', async () => { try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => setView(viewFromUrl(), false));
@@ -4171,7 +4200,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); } });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void refreshQuarkProfilesSilently(); } });
+      setInterval(refreshQuarkProfilesSilently, 60000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
         updateMuteCountdowns();

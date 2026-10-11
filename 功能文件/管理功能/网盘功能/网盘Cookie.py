@@ -70,6 +70,9 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
     "mantou_current_pan_account_override", default=None
 )
 网盘账号写入锁 = threading.RLock()
+夸克账号资料刷新间隔 = 300
+夸克账号资料刷新锁 = asyncio.Lock()
+夸克账号资料缓存: dict[str, dict[str, Any]] = {}
 
 
 def _生成夸克扫码请求参数(**附加参数: Any) -> dict[str, Any]:
@@ -920,6 +923,10 @@ def _合并配置网盘账号记录(
                 "enabled": True,
             },
         )
+    if 平台 == "夸克" and not 已配置运行状态数据库(配置):
+        for 记录 in 账号记录:
+            缓存键 = hashlib.sha256(记录["cookie"].encode("utf-8")).hexdigest()
+            记录.update(夸克账号资料缓存.get(缓存键, {}))
     return 账号记录
 
 
@@ -1712,7 +1719,51 @@ def _夸克账号资料保存参数(资料: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _合并夸克账号资料刷新(
+    配置: Any, 更新记录: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    # 网络请求期间可能新增、删除、停用账号或更换 Cookie，只合并仍匹配的资料。
+    with 网盘账号写入锁:
+        最新记录 = _读取保存的网盘账号记录(配置, "夸克")
+        更新映射 = {记录["cookie"]: 记录 for 记录 in 更新记录}
+        已变更 = False
+        for 记录 in 最新记录:
+            更新 = 更新映射.get(记录.get("cookie"))
+            if not 更新:
+                continue
+            最新查询时间 = int(记录.get("profile_checked_v2_at") or 0)
+            if 更新["profile_checked_v2_at"] < 最新查询时间 <= int(time.time()):
+                continue
+            for 字段, 值 in 更新.items():
+                if 字段 != "cookie" and 值 != 记录.get(字段):
+                    记录[字段] = 值
+                    已变更 = True
+        if 已变更:
+            if 已配置运行状态数据库(配置):
+                _写入网盘账号记录(配置, "夸克", 最新记录)
+            else:
+                # 未配置数据库时只缓存资料，不尝试写库，也不新增本地文件。
+                for 记录 in 最新记录:
+                    缓存键 = hashlib.sha256(记录["cookie"].encode("utf-8")).hexdigest()
+                    夸克账号资料缓存[缓存键] = {
+                        字段: 记录.get(字段)
+                        for 字段 in (
+                            "name", "avatar_url", "membership", "space_used_bytes",
+                            "space_total_bytes", "profile_checked_v2_at",
+                        )
+                    }
+        return 最新记录
+
+
 async def _刷新夸克账号资料(
+    配置: Any, *, 强制: bool = False
+) -> list[dict[str, Any]]:
+    # 多个控制台同时检查时共用缓存时间，避免重复批量查询。
+    async with 夸克账号资料刷新锁:
+        return await _刷新夸克账号资料未加锁(配置, 强制=强制)
+
+
+async def _刷新夸克账号资料未加锁(
     配置: Any, *, 强制: bool = False
 ) -> list[dict[str, Any]]:
     账号记录 = await asyncio.to_thread(_读取保存的网盘账号记录, 配置, "夸克")
@@ -1735,49 +1786,38 @@ async def _刷新夸克账号资料(
         return []
     信号量 = asyncio.Semaphore(4)
 
-    async def 刷新单个账号(记录: dict[str, Any]) -> bool:
-        if not 强制 and (
-            记录.get("name")
-            and 记录.get("avatar_url")
-            and 记录.get("membership")
-            and 记录.get("space_used_bytes") is not None
-            and 记录.get("space_total_bytes") is not None
-        ):
-            return False
+    async def 刷新单个账号(记录: dict[str, Any]) -> dict[str, Any] | None:
         try:
             上次查询 = max(0, int(记录.get("profile_checked_v2_at") or 0))
         except (TypeError, ValueError):
             上次查询 = 0
-        if not 强制 and 上次查询 and time.time() - 上次查询 < 3600:
-            return False
+        查询间隔 = time.time() - 上次查询
+        if not 强制 and 上次查询 and 0 <= 查询间隔 < 夸克账号资料刷新间隔:
+            return None
         async with 信号量:
             账号资料 = await _获取夸克账号资料(
                 str(记录.get("cookie") or "")
             )
-        已变更 = False
+        更新: dict[str, Any] = {"cookie": 记录["cookie"]}
         for 字段 in ("name", "avatar_url", "membership"):
             值 = 账号资料.get(字段)
-            if 值 and 值 != 记录.get(字段):
-                记录[字段] = 值
-                已变更 = True
+            if 值:
+                更新[字段] = 值
         for 字段 in ("space_used_bytes", "space_total_bytes"):
             值 = _安全解析网盘空间值(账号资料.get(字段))
-            if 值 is not None and 值 != 记录.get(字段):
-                记录[字段] = 值
-                已变更 = True
-        查询时间 = int(time.time())
-        if 查询时间 != 记录.get("profile_checked_v2_at"):
-            记录["profile_checked_v2_at"] = 查询时间
-            已变更 = True
-        return 已变更
+            if 值 is not None:
+                更新[字段] = 值
+        # 查询失败也进入冷却，保留旧资料，下一周期再尝试。
+        更新["profile_checked_v2_at"] = int(time.time())
+        return 更新
 
     更新结果 = await asyncio.gather(
         *(刷新单个账号(记录) for 记录 in 账号记录),
         return_exceptions=True,
     )
-    已更新 = any(结果 is True for 结果 in 更新结果)
-    if 已更新:
-        await asyncio.to_thread(_写入网盘账号记录, 配置, "夸克", 账号记录)
+    更新记录 = [结果 for 结果 in 更新结果 if isinstance(结果, dict)]
+    if 更新记录:
+        return await asyncio.to_thread(_合并夸克账号资料刷新, 配置, 更新记录)
     return 账号记录
 
 
