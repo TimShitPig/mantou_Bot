@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 11
+群成员加入桥版本 = 12
 QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {
     "group_member_add",
@@ -753,7 +753,12 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
         bool(成员),
     )
     if not 发送成功:
-        raise RuntimeError("欢迎消息发送失败")
+        # 发送器已区分权限跳过和真实请求失败，不再包装为事件投递异常。
+        logger.info(
+            "QQ官方群成员欢迎消息未发送：group_openid=%s, reason=sender_returned_false",
+            群号,
+        )
+        return
     logger.info("QQ官方群成员欢迎消息已发送：group_openid=%s", 群号)
 
 

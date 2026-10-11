@@ -1032,6 +1032,35 @@ async def 发送QQ官方提及Markdown(event: Any, 文本: str) -> bool:
     return await 发送Markdown键盘消息(event, 文本, None)
 
 
+def _记录QQ官方Markdown发送失败(异常: Exception, 阶段: str = "http_send") -> None:
+    """仅记录发送阶段、分类和数字状态，不输出响应原文或凭据。"""
+    文本 = str(异常 or "").lower()
+    if any(关键词 in 文本 for 关键词 in ("40034105", "主动消息无权限", "主动消息发送失败，无权限", "主动消息失败", "no permission")):
+        原因 = "permissions_denied"
+    elif any(关键词 in 文本 for 关键词 in ("内容违规", "content violation", "40034006")):
+        原因 = "content_violation"
+    elif any(关键词 in 文本 for 关键词 in ("timeout", "timed out", "超时")):
+        原因 = "timeout"
+    else:
+        原因 = "request_failed"
+
+    def 数字字段(*名称: str) -> str:
+        for 字段 in 名称:
+            值 = str(getattr(异常, 字段, "") or "").strip()
+            if re.fullmatch(r"-?\d{1,12}", 值):
+                return 值
+        return "none"
+
+    logger.warning(
+        "QQ官方Markdown发送失败：stage=%s, reason=%s, error_type=%s, http_status=%s, code=%s",
+        阶段,
+        原因,
+        type(异常).__name__,
+        数字字段("status", "status_code", "http_status"),
+        数字字段("code", "ret_code", "error_code", "err_code"),
+    )
+
+
 async def 发送Markdown键盘消息(
     event: Any,
     md文本: str,
@@ -1058,7 +1087,10 @@ async def 发送Markdown键盘消息(
 
         Route = _botpy_http.Route
     except Exception as e:
-        logger.warning(f"[帮助MD键盘] 导入 botpy.http 失败: {e}")
+        logger.warning(
+            "QQ官方Markdown发送失败：stage=init, reason=dependency_missing, error_type=%s",
+            type(e).__name__,
+        )
         return False
 
     消息对象 = getattr(event, "message_obj", None)
@@ -1109,11 +1141,19 @@ async def 发送Markdown键盘消息(
             except Exception as 查询异常:
                 logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
         if (
-            (目标类型 == "group" and 查询权限 is not True)
+            (目标类型 == "group" and 查询权限 is False)
             or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
         ):
-            logger.debug("QQ官方主动消息已跳过：目标未开启主动消息权限")
+            logger.info(
+                "QQ官方Markdown发送诊断：stage=permissions, reason=permissions_denied, target_type=%s",
+                目标类型,
+            )
             return False
+        if 目标类型 == "group" and 查询权限 is None:
+            # 未知权限不等于明确禁止；完成预检查后由官方发送接口判定。
+            logger.info(
+                "QQ官方Markdown发送诊断：stage=permissions, reason=permissions_unknown, target_type=group"
+            )
     if 群openid:
         route = Route(
             "POST", "/v2/groups/{group_openid}/messages", group_openid=群openid
@@ -1130,6 +1170,11 @@ async def 发送Markdown键盘消息(
 
     记录文本 = md文本
     try:
+        if 实际主动发送:
+            logger.info(
+                "QQ官方Markdown发送诊断：stage=http_send, reason=request_started, target_type=%s",
+                目标类型,
+            )
         发送结果 = await _http.request(route, json=消息体)
         if 实际主动发送 and 目标会话:
             记录主动消息权限(目标会话, 目标类型, True)
@@ -1185,7 +1230,7 @@ async def 发送Markdown键盘消息(
         # 只有官方明确指出被动 msg_id 失效时才改用主动发送。
         # 网络超时/连接异常不能确认首个 POST 是否已成功，盲目重发会造成两条消息。
         if not 消息ID or 主动发送 or not 被动消息已过期:
-            logger.warning(f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}")
+            _记录QQ官方Markdown发送失败(e)
             return False
 
         # 下载等耗时任务完成时，原消息可能已经超过被动回复窗口。
@@ -1200,11 +1245,18 @@ async def 发送Markdown键盘消息(
                 except Exception as 查询异常:
                     logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
             if (
-                (目标类型 == "group" and 查询权限 is not True)
+                (目标类型 == "group" and 查询权限 is False)
                 or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
             ):
-                logger.debug("QQ官方主动消息已跳过：目标未开启主动消息权限")
+                logger.info(
+                    "QQ官方Markdown发送诊断：stage=permissions_retry, reason=permissions_denied, target_type=%s",
+                    目标类型,
+                )
                 return False
+            if 目标类型 == "group" and 查询权限 is None:
+                logger.info(
+                    "QQ官方Markdown发送诊断：stage=permissions_retry, reason=permissions_unknown, target_type=group"
+                )
         try:
             主动发送结果 = await _http.request(route, json=主动消息体)
             if 目标会话:
@@ -1220,10 +1272,7 @@ async def 发送Markdown键盘消息(
         except Exception as 主动异常:
             if 目标会话 and 主动消息无权限(主动异常):
                 记录主动消息权限(目标会话, 目标类型, False)
-            logger.warning(
-                f"[帮助MD键盘] 发送失败: {type(e).__name__}: {e}；"
-                f"主动发送也失败: {type(主动异常).__name__}: {主动异常}"
-            )
+            _记录QQ官方Markdown发送失败(主动异常, "http_send_retry")
             return False
 
 

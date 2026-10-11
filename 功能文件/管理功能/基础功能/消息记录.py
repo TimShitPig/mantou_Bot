@@ -83,6 +83,7 @@ _消息记录执行器: ThreadPoolExecutor | None = globals().get("_消息记录
 _消息记录执行器锁 = threading.Lock()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
+_消息持久化项目类型 = ("message", "user_profile", "member_link", "unread")
 _消息持久化批量大小 = 200
 _消息持久化聚合秒数 = 0.05
 _消息持久化最大重试次数 = 3
@@ -297,6 +298,7 @@ def 主动消息无权限(异常: Any) -> bool:
         for 关键词 in (
             "主动消息失败",
             "主动发送失败",
+            "主动消息发送失败，无权限",
             "主动消息无权限",
             "主动发送无权限",
             "40034105",
@@ -1214,6 +1216,23 @@ def _准备消息持久化队列() -> asyncio.Queue[tuple[str, Any]]:
     队列循环 = getattr(_消息持久化队列, "_loop", None)
     任务运行中 = _消息持久化任务 is not None and not _消息持久化任务.done()
     未完成项目数 = int(getattr(_消息持久化队列, "_unfinished_tasks", 0) or 0)
+    可恢复项目数 = _消息持久化队列.qsize() + len(_消息持久化失败批次)
+    if not 任务运行中 and 未完成项目数 != 可恢复项目数:
+        # 旧版本可能取走映射后遗漏 task_done，只重建仍有数据的项目计数。
+        # 不修改旧队列的私有计数，也不把已丢弃的项目宣称为恢复成功。
+        新队列: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=_消息持久化队列上限)
+        for 项目 in _消息持久化失败批次:
+            新队列.put_nowait(项目)
+            新队列.get_nowait()
+        while not _消息持久化队列.empty():
+            新队列.put_nowait(_消息持久化队列.get_nowait())
+        _消息持久化队列 = 新队列
+        logger.warning(
+            "消息记录旧队列计数已重建：原未完成=%d，可恢复项目=%d",
+            未完成项目数,
+            可恢复项目数,
+        )
+        return _消息持久化队列
     if (
         队列循环 not in (None, 当前循环)
         and _消息持久化队列.empty()
@@ -1261,6 +1280,8 @@ async def _消息持久化工作() -> None:
             else:
                 首项 = await 队列.get()
                 批次 = [首项]
+                # 聚合时取消也必须保留每个已取走的项目。
+                _消息持久化失败批次 = 批次
                 截止时间 = asyncio.get_running_loop().time() + _消息持久化聚合秒数
                 while len(批次) < _消息持久化批量大小:
                     try:
@@ -1282,7 +1303,7 @@ async def _消息持久化工作() -> None:
             失败详情: list[tuple[str, int, str]] = []
             # 消息和未读状态分开落库。未读写入失败时不重复已经成功的消息批次，
             # 同时让失败项继续持有队列的 unfinished_tasks 计数。
-            for 项目类型 in ("message", "user_profile", "unread"):
+            for 项目类型 in _消息持久化项目类型:
                 子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
                 if not 子批次:
                     continue
@@ -1290,6 +1311,11 @@ async def _消息持久化工作() -> None:
                 if 写入成功:
                     for _ in 子批次:
                         队列.task_done()
+                    # 下一类型写入期间取消，不得重试已经确认的项目。
+                    _消息持久化失败批次 = [
+                        项目 for 项目 in _消息持久化失败批次
+                        if 项目[0] != 项目类型
+                    ]
                 else:
                     待重试.extend(子批次)
                     失败详情.append((项目类型, len(子批次), 错误类型))
@@ -1339,6 +1365,9 @@ def _启动消息持久化任务() -> asyncio.Task[Any] | None:
 def _排队消息持久化(类型: str, 数据: Any) -> bool:
     """非阻塞投递持久化项目；队列上限与 ElainaBot 日志队列一致。"""
     global _消息持久化溢出数
+    if 类型 not in _消息持久化项目类型:
+        logger.warning("消息记录持久化项目未入队：原因=unsupported_item_type")
+        return False
     if not _消息持久化接收入队:
         return False
     try:
@@ -1376,7 +1405,11 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
         剩余时间 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
         await asyncio.wait_for(队列.join(), timeout=剩余时间)
     except TimeoutError:
-        logger.warning("消息记录持久化队列未在限定时间内冲刷：剩余=%d", 队列.qsize())
+        logger.warning(
+            "消息记录持久化队列未在限定时间内冲刷：排队=%d，未完成=%d",
+            队列.qsize(),
+            int(getattr(队列, "_unfinished_tasks", 0) or 0),
+        )
         return False
     except Exception as 异常:
         logger.warning("消息记录持久化队列等待失败：错误类型=%s", type(异常).__name__)
@@ -1455,12 +1488,14 @@ async def 停止消息记录() -> bool:
 
     _消息持久化接收入队 = False
     剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
-    已冲刷 = 接收冲刷 and 昵称冲刷 and await 等待消息记录写入(剩余)
+    持久化冲刷 = await 等待消息记录写入(剩余)
+    已冲刷 = 接收冲刷 and 昵称冲刷 and 持久化冲刷
     任务 = _消息持久化任务
-    _消息持久化任务 = None
     if 任务 is not None and not 任务.done():
         任务.cancel()
         await asyncio.gather(任务, return_exceptions=True)
+    if _消息持久化任务 is 任务:
+        _消息持久化任务 = None
     关闭消息记录执行器()
     return 已冲刷
 
