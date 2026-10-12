@@ -90,6 +90,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/qq-reader-auth/sms-login", 后端._处理QQ阅读短信登录),
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
+        ("post", "/api/message/user-profile/refresh", 后端._处理私聊资料刷新),
         ("get", "/api/message/media", 后端._处理消息媒体),
         ("get", "/api/message/lanzou-image", 后端._处理蓝奏云归档图片),
         ("get", "/api/message/markdown-media/{token}", 后端._处理临时Markdown媒体),

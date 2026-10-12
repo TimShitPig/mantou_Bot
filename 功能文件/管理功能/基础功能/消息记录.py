@@ -224,6 +224,7 @@ def _归一化记录媒体文字(记录: dict[str, Any]) -> None:
         记录["media"] = 媒体
     if _拆分图片两侧文字(内容)[2]:
         记录["content"] = _媒体文字去占位(内容)
+    _去除图片表情描述(记录)
 
 
 _QQ图片域名片段 = (
@@ -508,6 +509,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
                 记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
+            _去除图片表情描述(记录)
     return 记录
 
 
@@ -597,6 +599,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
                 记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
+            _去除图片表情描述(记录)
     return 记录
 
 
@@ -1581,6 +1584,8 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
+    # 实时消息与历史页使用同一份受限原始预览，不把完整事件对象推给浏览器。
+    消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
     会话标识 = str(记录.get("_session") or "")
     if isinstance(消息.get("media"), dict):
         try:
@@ -2024,6 +2029,37 @@ def _提取消息文本(内容: Any) -> str:
     return _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(内容 or "").strip())
 
 
+def _去除图片表情描述(记录: dict[str, Any]) -> None:
+    """图片表情已有原图时不重复展示 type=6 描述；普通文字和纯文本表情保留。"""
+    媒体 = 记录.get("media")
+    if not isinstance(媒体, dict):
+        return
+    项目 = 媒体.get("items") if isinstance(媒体.get("items"), list) else [媒体]
+    if not any(
+        isinstance(项, dict)
+        and str(项.get("type") or "").lower() in {"图片", "image", "img"}
+        for 项 in 项目
+    ):
+        return
+    原始 = _解析消息结构(记录.get("raw_message"))
+    if not isinstance(原始, dict):
+        return
+    原文 = str(原始.get("content") or "")
+    if "<faceType=6," not in 原文:
+        return
+    内容 = str(记录.get("content") or "").strip()
+    if 内容 not in {原文.strip(), _提取消息文本(原文)}:
+        return
+    显示内容 = _表情标签规则.sub(
+        lambda 匹配: "" if 匹配.group(0).startswith("<faceType=6,") else _解码表情文本(匹配.group(0)),
+        原文,
+    ).strip()
+    记录["content"] = 显示内容
+    for 字段 in ("text", "before_text", "after_text"):
+        if str(媒体.get(字段) or "").strip() == _提取消息文本(原文):
+            媒体[字段] = 显示内容
+
+
 _REFIDX规则 = re.compile(r"(?:^|[?&])msg_idx=([^&]+)")
 
 
@@ -2425,6 +2461,7 @@ def _记录成员资料(
 ) -> None:
     if not 成员标识:
         return
+    昵称 = _有效用户昵称(昵称, 成员标识)
     会话资料 = 成员资料缓存.setdefault(会话标识, {})
     if 成员标识 not in 会话资料:
         while len(会话资料) >= 成员资料每会话上限:
@@ -2914,6 +2951,8 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        _去除图片表情描述(记录)
+        内容 = str(记录.get("content") or "")
         if (
             not is_self
             and not 是机器人
@@ -5020,6 +5059,7 @@ def _私聊联系人资料(
         if bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel":
             continue
         候选.append(记录)
+    结果 = {"nickname": "", "avatar": ""}
     for 资料 in 候选:
         昵称 = _有效用户昵称(
             资料.get("nickname")
@@ -5031,9 +5071,60 @@ def _私聊联系人资料(
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
         if not (头像.startswith("https://") or 头像.startswith("http://")):
             头像 = ""
-        if 昵称 or 头像:
-            return {"nickname": 昵称, "avatar": 头像}
-    return {"nickname": "", "avatar": ""}
+        if 昵称 and not 结果["nickname"]:
+            结果["nickname"] = 昵称
+        if 头像 and not 结果["avatar"]:
+            结果["avatar"] = 头像
+        if all(结果.values()):
+            break
+    return 结果
+
+
+async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, Any]:
+    """管理员主动刷新：即时查已存资料，绕过失败冷却，不调用群成员详情接口。"""
+    标识 = str(会话标识 or "").strip()
+    if not 标识 or len(标识) > 128:
+        raise ValueError("invalid conversation")
+    应用 = _获取群信息appid(标识, appid)
+    _群消息昵称补查失败冷却.pop((应用, 标识), None)
+    资料 = _私聊联系人资料(标识)
+    数据库可用 = _消息存储 is not None and _消息数据库已配置()
+    if 数据库可用:
+        历史 = await _异步执行消息记录同步(
+            _消息存储.读取会话消息, 标识, 100, "user"
+        ) or []
+        for 记录 in reversed(历史):
+            if str(记录.get("user_id") or "") != 标识 or 记录.get("is_self"):
+                continue
+            if 应用 and str(记录.get("appid") or "") != 应用:
+                continue
+            应用 = 应用 or str(记录.get("appid") or "")
+            原始 = _解析消息结构(记录.get("raw_message"))
+            资料["nickname"] = 资料["nickname"] or _有效用户昵称(
+                _提取成员昵称(原始) or 记录.get("nickname"), 标识
+            )
+            资料["avatar"] = 资料["avatar"] or _提取成员头像(原始) or str(记录.get("avatar") or "")
+        查询 = [{"appid": 应用, "user_id": 标识}]
+        for 名称 in ("批量读取用户昵称", "批量读取用户最近群聊昵称"):
+            读取 = getattr(_消息存储, 名称, None)
+            if not callable(读取):
+                continue
+            昵称表 = await _异步执行消息记录同步(读取, 查询) or {}
+            候选 = _有效用户昵称(昵称表.get((应用, 标识)) or 昵称表.get(("", 标识)), 标识)
+            if 候选:
+                资料["nickname"] = 候选
+                break
+    if not 资料["nickname"] and not 数据库可用:
+        资料["nickname"] = _有效用户昵称(await _从群消息读取昵称(标识, 应用), 标识)
+    if not 资料["nickname"]:
+        资料["nickname"] = _有效用户昵称((_读取本地缓存文件().get("nicknames") or {}).get(标识), 标识)
+    if 资料["nickname"] or 资料["avatar"]:
+        _记录成员资料(标识, 标识, 资料["nickname"], 头像=资料["avatar"])
+    if 资料["nickname"]:
+        _回填私聊昵称(标识, 标识, 资料["nickname"])
+        await _异步执行消息记录同步(_保存本地昵称, 标识, 资料["nickname"])
+        _推送私聊昵称事件(标识, 应用, 资料["nickname"])
+    return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料, "nickname_found": bool(资料["nickname"])}
 
 
 def _聊天显示名(

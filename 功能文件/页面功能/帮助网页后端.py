@@ -3592,6 +3592,25 @@ async def _处理群备注(request: web.Request) -> web.Response:
         return _控制台错误(409, "备注保存失败")
 
 
+async def _处理私聊资料刷新(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    标识 = str((数据 or {}).get("chat_id") or "").strip()
+    类型 = str((数据 or {}).get("chat_type") or "user").strip()
+    if not 标识 or len(标识) > 128 or 类型 != "user":
+        return _控制台错误(400, "私聊参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        结果 = await 消息记录.刷新私聊资料(标识, str((数据 or {}).get("appid") or ""))
+        清理消息列表缓存()
+        return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        logger.warning("帮助控制台私聊资料刷新失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "私聊资料刷新失败")
+
+
 async def _处理群信息刷新(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")

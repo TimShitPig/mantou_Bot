@@ -919,6 +919,12 @@
         });
       };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
+      const validMsgNickname = (value, id = '') => {
+        const name = String(value || '').trim();
+        const uid = String(id || '').trim();
+        if (!name || name === uid || name === '用户' + uid.slice(-6) || ['成员','新成员','未知','未知用户','机器人','我'].includes(name) || /[\x00-\x1f\x7f-\x9f]/.test(name)) return '';
+        return name;
+      };
       const mergeMsgProfileMaps = (...sources) => {
         const merged = {};
         sources.forEach((source) => {
@@ -928,6 +934,11 @@
             if (!key) return;
             const next = {...(merged[key] || {})};
             Object.entries(profile).forEach(([field, value]) => {
+              if (field === 'nickname' || field === 'username') {
+                const name = validMsgNickname(value, key);
+                if (name) next[field] = name;
+                return;
+              }
               if (field === 'role') {
                 const role = String(value || '').trim().toLowerCase();
                 if (role) next.role = role;
@@ -944,7 +955,7 @@
         const merged = mergeMsgProfileMaps(profiles);
         (messages || []).forEach((message) => {
           const id = String(message?.user_id || '').trim();
-          const nickname = String(message?.nickname || '').trim();
+          const nickname = validMsgNickname(message?.nickname, id);
           const avatar = String(message?.avatar || message?.avatar_url || '').trim();
           const role = String(message?.member_role || message?.role || '').trim().toLowerCase();
           if (!id || (!nickname && !avatar && !role) || (nickname === '未知用户' && !avatar && !role) || (nickname === '未知' && !avatar && !role) || !mentionIdPattern.test(id)) return;
@@ -1050,7 +1061,12 @@
         // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
         return aid ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
-      const avatarImg = (url, letter) => `<img src="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="this.closest('.msg-chat-avatar, .msg-avatar').classList.add('avatar-fallback'); this.remove();">`;
+      const avatarImg = (url, letter) => {
+        const source = mediaProxyUrl(url);
+        const nonce = Number(msgState.avatarRefresh?.get(String(url)) || 0);
+        const refreshed = nonce && source.startsWith('/api/') ? source + '&avatar_refresh=' + nonce : source;
+        return `<img src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}this.closest('.msg-chat-avatar, .msg-avatar')?.classList.add('avatar-fallback');this.remove();">`;
+      };
       const avatarHtml = (url, letter) => {
         if (!url) return esc(String(letter || '?').slice(0, 1));
         return `<span class="avatar-letter">${esc(String(letter || '?').slice(0, 1))}</span>` + avatarImg(url, letter);
@@ -1789,7 +1805,9 @@
         }
         if (msgState.chatId === chatId && msgState.chatType === 'user') {
           const selected = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId);
+          msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:{nickname}});
           updateMsgHead({chat_name:String(selected?.remark || nickname)});
+          if (msgState.renderedChatId === chatId) renderMsgMessages({...msgState.historyData, messages:msgState.messages, member_profiles:msgState.profiles}, {forceRender:true, previousTop:$('msg-body')?.scrollTop || 0, previousHeight:$('msg-body')?.scrollHeight || 0});
         }
         renderMsgChats({chats:msgState.chats});
       };
@@ -2240,7 +2258,7 @@
           if (directSequence && sessionId) keys.push(`seq:${sessionId}:${userId}:msg_seq:${directSequence}`);
           // 回调负载相同但适配器 ID 不同时，仍按事件内容合并。
           const raw = String(message.raw_message || '').trim();
-          if (raw && sessionId) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
+          if (raw && sessionId && !raw.endsWith('...[已截断]')) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
         }
         return keys;
       };
@@ -2266,7 +2284,6 @@
       };
       const mergeMsgRealtimeMessage = (existing, incoming) => {
         const merged = {...existing};
-        const fallbackNames = new Set(['', '未知', '未知用户']);
         ['user_id', 'nickname', 'content', 'timestamp', 'source', 'member_role', 'msg_seq', 'avatar', 'reference_id', 'refidx', 'chat_type', 'appid'].forEach((field) => {
           const next = incoming?.[field];
           const current = merged[field];
@@ -2276,7 +2293,8 @@
           } else if (field === 'content') {
             if (!String(current || '').trim() || String(next).length > String(current || '').length) merged[field] = next;
           } else if (field === 'nickname') {
-            if (fallbackNames.has(String(current || '').trim()) || !String(current || '').trim()) merged[field] = next;
+            const name = validMsgNickname(next, incoming?.user_id || merged.user_id);
+            if (name && !validMsgNickname(current, merged.user_id)) merged[field] = name;
           } else if (!current) {
             merged[field] = next;
           }
@@ -2328,6 +2346,9 @@
           if (!msgMessagesMatch(message, other)) return false;
           if (String(message?.content || '') !== String(other?.content || '')) return false;
           if (msgIsRecalled(message) !== msgIsRecalled(other)) return false;
+          if (String(message?.raw_message || '') !== String(other?.raw_message || '')) return false;
+          if (String(message?.nickname || '') !== String(other?.nickname || '')) return false;
+          if (String(message?.avatar || '') !== String(other?.avatar || '')) return false;
           return JSON.stringify(message?.media || null) === JSON.stringify(other?.media || null);
         });
       };
@@ -2695,7 +2716,7 @@
         if (!direct) return '';
         try {
           const host = new URL(direct).hostname.toLowerCase().replace(/\.$/, '');
-          const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qq.com.cn', 'qq.com'];
+          const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qlogo.cn', 'qq.com.cn', 'qq.com'];
           const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
@@ -3281,6 +3302,7 @@
               optimistic?.status || message.send_status || '',
               message.reference_id || '',
               message.source || '',
+              String(message.raw_message || ''),
             ];
           }),
         });
@@ -3322,7 +3344,7 @@
           const sendState = String(optimisticEntry?.status || m.send_status || '').trim();
           const failedSend = Boolean(optimisticEntry) && sendState === 'failed';
           const profile = profiles[m.user_id] || {};
-          const rawNickname = String(m.nickname || '').trim();
+          const rawNickname = isSelf ? String(m.nickname || '').trim() : validMsgNickname(m.nickname, m.user_id);
           const profileNickname = String(profile.nickname || profile.username || '').trim();
           const botProfileName = String(window.msgBotProfile?.username || '').trim();
           const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
@@ -3773,7 +3795,9 @@
           if (!requestIsCurrent()) return;
           const incoming = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
           const sameRenderedPage = !older && !newChat
+            && msgState.messageRenderSignature !== null
             && msgMessageListsEqual(incoming, msgState.messages)
+            && JSON.stringify(data.member_profiles || {}) === JSON.stringify(msgState.historyData?.member_profiles || {})
             && Boolean(data.has_more) === Boolean(msgState.historyData?.has_more);
           if (sameRenderedPage) {
             updateMsgHead(data);
@@ -3924,6 +3948,39 @@
           toast(data.group_name ? '群信息已刷新：' + data.group_name + (data.member_num ? '（成员 ' + data.member_num + ' 人）' : '') : '群信息已刷新');
           if (msgState.chatId === chatId && msgState.chatType === requestType) void loadMsgHistory();
         } catch (error) { toast(error.message); }
+      };
+      const refreshMsgConversation = async () => {
+        const button = $('msg-reload');
+        if (button.disabled) return;
+        const chatId = String(msgState.chatId || '');
+        const chatType = msgState.chatType;
+        const current = (msgState.chats || []).find((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === chatType);
+        const appid = String(current?.appid || msgState.messages.find((m) => m.appid)?.appid || '');
+        const isCurrent = () => msgState.chatId === chatId && msgState.chatType === chatType;
+        button.disabled = true;
+        try {
+          if (chatId && chatType === 'user') {
+            const data = await api('message/user-profile/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'user', appid})});
+            const profile = {nickname:validMsgNickname(data.nickname, chatId), avatar:String(data.avatar || '')};
+            msgState.avatarRefresh = msgState.avatarRefresh || new Map();
+            if (msgState.avatarRefresh.size >= 256) msgState.avatarRefresh.clear();
+            const nonce = Date.now();
+            [profile.avatar, current?.avatar, avatarUrl(chatId, 'user', data.appid || appid)].filter(Boolean).forEach((url) => msgState.avatarRefresh.set(String(url), nonce));
+            msgState.historyCache.delete('user|' + chatId);
+            msgState.chats = msgState.chats.map((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === 'user'
+              ? {...chat, appid:data.appid || chat.appid, ...(profile.avatar ? {avatar:profile.avatar} : {}), ...(profile.nickname ? {nickname:chat.remark || profile.nickname} : {})} : chat);
+            const overlay = msgState.realtimeChats.get(chatId);
+            if (overlay && overlay.chat_type === 'user') msgState.realtimeChats.set(chatId, {...overlay, ...(profile.nickname ? {nickname:overlay.remark || profile.nickname} : {}), ...(profile.avatar ? {avatar:profile.avatar} : {})});
+            if (isCurrent()) {
+              msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:profile});
+              msgState.messageRenderSignature = null;
+              toast(profile.nickname ? '私聊资料已刷新' : '已重新查询；当前记录未提供有效昵称');
+            }
+          }
+          await loadMsgChats(true);
+          if (chatId && isCurrent()) await loadMsgHistory();
+        } catch (error) { toast(error.message || '刷新失败'); }
+        finally { button.disabled = false; }
       };
 
       const showRemarkDialog = async () => {
@@ -4191,7 +4248,7 @@
         if (shouldRead) markMsgRead(undefined, true);
       });
       $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
-      $('msg-reload').addEventListener('click', () => { loadMsgChats(true); if (msgState.chatId) loadMsgHistory(); });
+      $('msg-reload').addEventListener('click', refreshMsgConversation);
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });
       $('msg-ad-switch').addEventListener('click', toggleGroupAdSwitch);
