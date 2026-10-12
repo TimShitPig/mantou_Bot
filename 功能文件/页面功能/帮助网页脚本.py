@@ -674,7 +674,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1679,7 +1679,7 @@
           if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
             msgState.messages = dedupeMsgMessages(cachedHistory.messages);
             // 先显示上次已读内容，网络结果返回后再合并新消息。
-            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true, revealInitial:true});
+            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true});
           }
         }
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
@@ -3157,6 +3157,8 @@
           else clearTimeout(msgState.positionFrame);
         }
         msgState.positionFrame = null;
+        if (msgState.positionTimer != null) clearTimeout(msgState.positionTimer);
+        msgState.positionTimer = null;
         msgState.positionObserver?.disconnect();
         msgState.positionObserver = null;
         const positionedBody = body || msgState.positionBody;
@@ -3165,6 +3167,8 @@
       };
       const scrollMsgBodyToBottom = (body, chatId = msgState.chatId, revealAfterPosition = false) => {
         if (!body) return;
+        // 新定位接手旧定位的隐藏状态，实时刷新不能取消最后一次 reveal。
+        revealAfterPosition = revealAfterPosition || body.classList.contains('msg-positioning');
         const targetChatId = String(chatId || '');
         const startedAt = Date.now();
         let previousHeight = -1;
@@ -3191,6 +3195,8 @@
             else clearTimeout(msgState.positionFrame);
           }
           msgState.positionFrame = null;
+          if (msgState.positionTimer != null) clearTimeout(msgState.positionTimer);
+          msgState.positionTimer = null;
           msgState.positionObserver?.disconnect();
           msgState.positionObserver = null;
           apply();
@@ -3198,6 +3204,8 @@
           msgState.positionBody = null;
         };
         apply();
+        // rAF 在后台页或繁忙页面可能暂停，隐藏布局必须有独立的有界收尾。
+        if (revealAfterPosition) msgState.positionTimer = setTimeout(finish, 750);
         if (revealAfterPosition && typeof requestAnimationFrame === 'function') {
           body.querySelectorAll('img').forEach((image) => image.addEventListener('load', apply, {once:true}));
           if (typeof ResizeObserver === 'function') {
@@ -3275,8 +3283,8 @@
         const keepLatestVisible = !scroll.prepend && (Boolean(scroll.toBottom) || msgBodyNearBottom(body));
         const initialPositioning = !scroll.prepend
           && msgState.initialScrollChatId === msgState.chatId
-          && keepLatestVisible;
-        if (initialPositioning) body.classList.add('msg-positioning');
+          && keepLatestVisible
+          && (msgState.renderedChatId !== msgState.chatId || body.classList.contains('msg-positioning'));
         const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
         data = {
           ...previousData,
@@ -3297,8 +3305,8 @@
         const rawStore = window._msgRaw = window._msgRaw || {};
         const renderedRawKeys = new Set();
         if (!msgs.length) {
+          cancelMsgBottomPosition(body, true);
           body.innerHTML = '<div class="msg-empty">暂无消息记录</div>';
-          body.classList.remove('msg-positioning');
           msgState.messageRenderSignature = JSON.stringify({more:Boolean(data.has_more), messages:[]});
           Object.keys(rawStore).forEach((key) => delete rawStore[key]);
           msgState.renderedChatId = msgState.chatId;
@@ -3346,7 +3354,12 @@
           && !scroll.prepend
           && !scroll.forceRender
         ) {
-          // 事件轮询可能只返回相同页面；保留现有 DOM，避免图片重载和滚动闪动。
+          // 相同内容不重建 DOM，但首屏定位仍需收尾；不能留下隐藏正文。
+          if (body.classList.contains('msg-positioning')) {
+            // DOM 没变，无须重启等待帧；直接结束旧定位，避免连续刷新延长隐藏。
+            cancelMsgBottomPosition(body, true);
+            body.scrollTop = body.scrollHeight;
+          }
           return;
         }
         msgState.messageRenderSignature = renderSignature;
@@ -3470,6 +3483,7 @@
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });
+        if (initialPositioning) body.classList.add('msg-positioning');
         body.innerHTML = html;
         Object.keys(rawStore).forEach((key) => {
           if (!renderedRawKeys.has(key)) delete rawStore[key];
@@ -3501,10 +3515,8 @@
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
         } else if (keepLatestVisible) {
-          // 首轮历史请求返回前，任何实时或资料刷新都只能重算隐藏布局，
-          // 不能提前显示缓存页并再次触发到底部的可见跳动。
-          const deferInitialReveal = initialPositioning && !scroll.revealInitial;
-          scrollMsgBodyToBottom(body, msgState.chatId, initialPositioning && !deferInitialReveal);
+          // 缓存、实时和资料刷新都独立完成定位，展示不再等待首轮网络响应。
+          scrollMsgBodyToBottom(body, msgState.chatId, initialPositioning);
           clearMsgNewMessages();
         } else {
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
@@ -3863,7 +3875,6 @@
               previousTop:renderTop,
               previousHeight:renderHeight,
               toBottom:!older && renderNearBottom,
-              revealInitial: forceInitialBottom,
             },
           );
           if (forceInitialBottom) {
