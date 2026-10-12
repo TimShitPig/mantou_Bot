@@ -44,9 +44,10 @@ except Exception as 导入异常:
     logger.warning("消息记录存储模块加载失败：错误类型=%s", type(导入异常).__name__)
 
 消息记录版本 = 1
-最大会话数 = 200
-每会话最大消息数 = 500
-总消息上限 = 10000
+# 以下仅限制内存热点缓存；MySQL 历史不按数量/时间自动删除。
+缓存最大会话数 = 200
+每会话缓存消息数 = 500
+内存消息缓存上限 = 10000
 # 群基本信息接口限制为 30 QPM；后台按群串行请求，每个群至少一小时更新一次。
 群信息刷新间隔秒 = 60 * 60
 群信息限流冷却秒 = 30 * 60
@@ -101,12 +102,7 @@ _消息持久化失败重试次数 = int(globals().get("_消息持久化失败�
 _消息持久化失败重试最大等待秒 = 30.0
 机器人资料缓存: dict[str, tuple[float, dict[str, str]]] = globals().get("机器人资料缓存") or {}
 机器人资料缓存秒数 = 6 * 60 * 60
-_数据库裁剪进行中 = globals().get("_数据库裁剪进行中", False)
-_上次数据库裁剪排队时间 = float(globals().get("_上次数据库裁剪排队时间", 0.0) or 0.0)
-_数据库裁剪最短间隔 = 300.0
 _消息数据库维护任务: asyncio.Task[Any] | None = globals().get("_消息数据库维护任务")
-_消息数据库维护首次延迟秒 = 30.0
-_消息数据库维护间隔秒 = 10 * 60.0
 _消息资料回填任务: asyncio.Task[Any] | None = globals().get("_消息资料回填任务")
 _消息数据库恢复任务: asyncio.Task[Any] | None = globals().get("_消息数据库恢复任务")
 _消息数据库恢复键 = str(globals().get("_消息数据库恢复键", ""))
@@ -975,7 +971,7 @@ def _规范会话标识(会话: str, 类型: str) -> str:
 def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict[str, Any]:
     会话标识 = _规范会话标识(会话标识, 类型)
     if 会话标识 not in 消息缓存:
-        if len(消息缓存) >= 最大会话数:
+        if len(消息缓存) >= 缓存最大会话数:
             # 淘汰最久未活跃的会话
             try:
                 最旧会话 = min(
@@ -1708,6 +1704,8 @@ def _推送群人数事件(会话标识: str, 成员数: int) -> None:
         "data": {
             "chat_id": str(会话标识 or "").strip(),
             "member_num": max(0, int(成员数 or 0)),
+            "group_name": str((群信息缓存.get(会话标识) or {}).get("group_name") or ""),
+            "updated_at": int((群信息缓存.get(会话标识) or {}).get("updated_at") or 0),
         },
     }
 
@@ -2604,7 +2602,7 @@ async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
 
     from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
 
-    群成员列表 = 获取官方群成员映射列表(用户标识)[:3]
+    群成员列表 = 获取官方群成员映射列表(用户标识)
     for 群标识, 成员标识 in 群成员列表:
         昵称 = _读取群缓存昵称(群标识, 成员标识)
         if 昵称:
@@ -2981,9 +2979,9 @@ def 记录收到消息(
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
-        if len(会话["messages"]) > 每会话最大消息数:
+        if len(会话["messages"]) > 每会话缓存消息数:
             旧数量 = len(会话["messages"])
-            会话["messages"] = 会话["messages"][-每会话最大消息数:]
+            会话["messages"] = 会话["messages"][-每会话缓存消息数:]
             _消息缓存总数缓存 = max(
                 0,
                 _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
@@ -3324,58 +3322,6 @@ def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
     return True
 
 
-def _安排数据库裁剪() -> asyncio.Task[Any] | None:
-    """低频安排消息表保留清理，不依赖内存消息是否到达上限。"""
-    global _数据库裁剪进行中, _上次数据库裁剪排队时间
-    if _消息存储 is None or not _消息数据库已配置():
-        return None
-    当前时间 = time.monotonic()
-    if (
-        _数据库裁剪进行中
-        or 当前时间 - _上次数据库裁剪排队时间 < _数据库裁剪最短间隔
-    ):
-        return None
-    _数据库裁剪进行中 = True
-    _上次数据库裁剪排队时间 = 当前时间
-    try:
-        任务 = _后台执行同步(_消息存储.裁剪总消息, 总消息上限 * 2)
-    except Exception:
-        _数据库裁剪进行中 = False
-        return None
-    if 任务 is None:
-        _数据库裁剪进行中 = False
-        return None
-
-    def _裁剪完成(_任务: asyncio.Task[Any]) -> None:
-        global _数据库裁剪进行中
-        _数据库裁剪进行中 = False
-
-    任务.add_done_callback(_裁剪完成)
-    return 任务
-
-
-async def _消息数据库维护工作() -> None:
-    """独立检查持久化消息总量，避免低活跃会话永远不触发数据库裁剪。"""
-    global _消息数据库维护任务
-    try:
-        await asyncio.sleep(_消息数据库维护首次延迟秒)
-        while True:
-            任务 = _安排数据库裁剪()
-            if 任务 is not None:
-                try:
-                    await asyncio.shield(任务)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as 异常:
-                    logger.debug("消息记录数据库维护失败：错误类型=%s", type(异常).__name__)
-            await asyncio.sleep(_消息数据库维护间隔秒)
-    except asyncio.CancelledError:
-        raise
-    finally:
-        if _消息数据库维护任务 is asyncio.current_task():
-            _消息数据库维护任务 = None
-
-
 async def _消息资料回填工作() -> None:
     """低频分批回填历史昵称资料，不占用插件初始化和会话切换时间。"""
     global _消息资料回填任务
@@ -3420,35 +3366,24 @@ def _启动消息资料回填任务() -> asyncio.Task[Any] | None:
     return _消息资料回填任务
 
 
-def _启动消息数据库维护任务() -> asyncio.Task[Any] | None:
-    """只保留一个消息表维护任务，热重载时复用当前事件循环的任务。"""
+def _停止旧消息裁剪任务() -> None:
+    """接管旧版热重载任务，只取消数量清理，不再启动新的历史删除任务。"""
     global _消息数据库维护任务
-    if not _消息数据库已配置():
-        return None
-    try:
-        循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        return None
-    if _消息数据库维护任务 is None or _消息数据库维护任务.done():
-        _消息数据库维护任务 = 循环.create_task(
-            _消息数据库维护工作(),
-            name="消息记录数据库维护",
-        )
-    return _消息数据库维护任务
+    旧任务 = _消息数据库维护任务
+    _消息数据库维护任务 = None
+    if 旧任务 is not None and not 旧任务.done():
+        旧任务.cancel()
 
 
 def _裁剪总缓存() -> None:
-    global _数据库裁剪进行中, _上次数据库裁剪排队时间
     global _消息缓存总数缓存, _消息缓存总数检查时间
-    # 数据库保留清理独立于内存缓存大小；调用本函数的高频路径只会命中
-    # 既有 5 分钟限流，不增加小说或消息处理的同步数据库等待。
-    _安排数据库裁剪()
+    # 仅淘汰内存热点副本，不删除数据库历史和媒体归档元数据。
     当前时间 = time.monotonic()
     需要重新统计 = (
         _消息缓存总数缓存 <= 0
         or 当前时间 - _消息缓存总数检查时间 >= _消息缓存总数检查间隔
     )
-    if not 需要重新统计 and _消息缓存总数缓存 <= 总消息上限:
+    if not 需要重新统计 and _消息缓存总数缓存 <= 内存消息缓存上限:
         return
     if 需要重新统计:
         _消息缓存总数检查时间 = 当前时间
@@ -3458,7 +3393,7 @@ def _裁剪总缓存() -> None:
         # 追加和单会话裁剪都会维护计数；超限时直接使用增量值，
         # 避免消息洪峰期间每条消息都重新遍历全部会话。
         总数 = _消息缓存总数缓存
-    if 总数 <= 总消息上限:
+    if 总数 <= 内存消息缓存上限:
         return
     try:
         会话列表 = sorted(
@@ -3468,10 +3403,10 @@ def _裁剪总缓存() -> None:
         目标会话数 = max(1, len(会话列表))
         目标保留数量 = max(
             1,
-            min(每会话最大消息数 // 2, 总消息上限 // 目标会话数),
+            min(每会话缓存消息数 // 2, 内存消息缓存上限 // 目标会话数),
         )
         for 会话 in 会话列表:
-            if 总数 <= 总消息上限:
+            if 总数 <= 内存消息缓存上限:
                 break
             消息列表 = 会话.get("messages") or []
             保留数量 = 目标保留数量
@@ -3483,6 +3418,8 @@ def _裁剪总缓存() -> None:
         _消息缓存总数缓存 = max(0, 总数)
     except Exception:
         _消息缓存总数缓存 = max(0, 总数)
+
+
 def 记录发送消息(
     会话标识: str,
     类型: str,
@@ -3666,9 +3603,9 @@ def 记录发送消息(
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
                 logger.debug("消息记录入库失败：错误类型=%s", type(存储异常).__name__)
-        if len(会话["messages"]) > 每会话最大消息数:
+        if len(会话["messages"]) > 每会话缓存消息数:
             旧数量 = len(会话["messages"])
-            会话["messages"] = 会话["messages"][-每会话最大消息数:]
+            会话["messages"] = 会话["messages"][-每会话缓存消息数:]
             _消息缓存总数缓存 = max(
                 0,
                 _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
@@ -4853,7 +4790,7 @@ async def 刷新群信息(
                 成员数 = max(0, int(已有.get("member_num") or 0))
             except (TypeError, ValueError):
                 成员数 = 0
-        群名 = 结果.get("group_name") if "group_name" in 结果 else 已有.get("group_name")
+        群名 = str(结果.get("group_name") or "").strip() or str(已有.get("group_name") or "").strip()
         群备注 = (
             结果.get("group_finger_memo")
             if "group_finger_memo" in 结果
@@ -5329,7 +5266,7 @@ def _补齐数据库会话到内存() -> None:
             会话标识 = str(会话标识 or "").strip()
             if not 会话标识 or 会话标识 in 消息缓存:
                 continue
-            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话最大消息数) or [])]
+            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话缓存消息数) or [])]
             消息列表.sort(key=_历史消息排序键)
             if not 消息列表:
                 continue
@@ -5492,6 +5429,7 @@ def _数据库聚合聊天项(
                     **_聊天群成员状态(会话标识, 类型),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
                 }
             )
         # 没有消息记录的群也要进入列表，尤其是已被移除且需要长期保留提示的群。
@@ -5585,6 +5523,7 @@ def _数据库聚合聊天项(
                     **_聊天群成员状态(会话标识, 类型),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
                 }
             )
         for 聊天 in 聊天项:
@@ -5661,6 +5600,7 @@ def 获取聊天列表(
                     **_聊天群成员状态(会话标识, 类型),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
+                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
                 }
             )
         for 聊天 in 聊天列表:
@@ -5824,7 +5764,7 @@ def 获取消息历史(
             "last_msg_id": "",
             "oldest_date": "",
             "has_more": False,
-            "chat_name": "",
+            "chat_name": _聊天显示名(会话标识, {"chat_type": 类型}),
             "group_info": 获取缓存的群信息(会话标识),
             "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
         }
@@ -7527,6 +7467,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息数据库配置缓存, _消息数据库配置缓存时间
     global _消息数据库恢复接收启动
+    _停止旧消息裁剪任务()
     _消息数据库恢复接收启动 = True
     _消息接收入队 = True
     _昵称补查接收入队 = True
@@ -7584,7 +7525,7 @@ async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
                 _从数据库恢复(快照, 基线)
                 _消息数据库恢复完成键 = 键
                 _消息数据库恢复失败冷却 = 0.0
-                _启动消息数据库维护任务()
+                _停止旧消息裁剪任务()
                 _启动消息资料回填任务()
                 return True
         except asyncio.CancelledError:
@@ -7611,7 +7552,7 @@ def _启动消息数据库恢复任务() -> asyncio.Task[Any] | None:
         _消息数据库恢复键 = 键
         _消息数据库恢复失败冷却 = 0.0
     if 键 == _消息数据库恢复完成键:
-        _启动消息数据库维护任务()
+        _停止旧消息裁剪任务()
         _启动消息资料回填任务()
         return None
     if time.monotonic() < _消息数据库恢复失败冷却:

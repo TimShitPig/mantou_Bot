@@ -1121,7 +1121,7 @@
         if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       };
-      const msgChatMatchesView = (chat, ignoreTypeFilter = false) => {
+      const msgChatMatchesView = (chat, {ignoreTypeFilter = false} = {}) => {
         const type = String(chat.chat_type || 'group');
         if (!ignoreTypeFilter && msgState.filter === 'group' && type !== 'group') return false;
         if (!ignoreTypeFilter && msgState.filter === 'user' && type !== 'user') return false;
@@ -1137,17 +1137,23 @@
         const now = Math.floor(Date.now() / 1000);
         msgState.realtimeChats.forEach((overlay, chatId) => {
           const current = byId.get(chatId);
-          if (!current) { if (msgChatMatchesView(overlay, true)) byId.set(chatId, {...overlay}); return; }
+          if (!current) { if (msgChatMatchesView(overlay, {ignoreTypeFilter:true})) byId.set(chatId, {...overlay}); return; }
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
-          if (serverTs > eventTs) { msgState.realtimeChats.delete(chatId); return; }
+          if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)) { msgState.realtimeChats.delete(chatId); return; }
           const adminKnown = msgState.adminByChat.has(chatId)
             ? Boolean(msgState.adminByChat.get(chatId))
             : Boolean(current.is_admin || overlay.is_admin);
+          const groupProfile = Number(current.group_info_updated_at || 0) > Number(overlay.group_info_updated_at || 0) ? current : overlay;
+          const groupName = String(groupProfile.group_name || current.group_name || overlay.group_name || '');
           byId.set(chatId, {
             ...current,
-            ...overlay,
-            nickname:current.nickname || overlay.nickname,
+            ...(serverTs > eventTs ? {} : overlay),
+            group_name:groupName,
+            group_info_updated_at:Math.max(Number(current.group_info_updated_at || 0), Number(overlay.group_info_updated_at || 0)),
+            member_num:groupProfile.member_num ?? current.member_num ?? overlay.member_num,
+            group_member_num:groupProfile.group_member_num ?? current.group_member_num ?? overlay.group_member_num,
+            nickname:current.remark || (current.chat_type === 'group' && groupName) || current.nickname || overlay.nickname,
             remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
             group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
             pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
@@ -1165,7 +1171,7 @@
             }
           });
         }
-        return [...byId.values()].filter((chat) => msgChatMatchesView(chat, true)).sort((left, right) =>
+        return [...byId.values()].filter((chat) => msgChatMatchesView(chat, {ignoreTypeFilter:true})).sort((left, right) =>
           Number(msgChatIsRemoved(left)) - Number(msgChatIsRemoved(right)) ||
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
           Number(right.last_ts || 0) - Number(left.last_ts || 0)
@@ -1445,7 +1451,7 @@
         });
         saveLocalAdminGroups(localAdmins);
         msgState.chats = chats;
-        const visibleChats = chats.filter(msgChatMatchesView);
+        const visibleChats = chats.filter((chat) => msgChatMatchesView(chat));
         const knownChatIds = new Set(chats.map((chat) => String(chat.chat_id || '')).filter(Boolean));
         [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
           .forEach((map) => map.forEach((_value, key) => { if (!knownChatIds.has(String(key))) map.delete(key); }));
@@ -1545,7 +1551,7 @@
               try { const result = await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, pinned:!pinned})}); toast(result.pinned ? '已置顶' : '已取消置顶'); await loadMsgChats(true); }
               catch (error) { toast(error.message || '操作失败'); }
             }});
-            if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then(() => { toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
+            if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})}).then((data) => { applyMsgGroupInfo({...data, chat_id:chatId}); toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           node.addEventListener('click', (e) => {
@@ -2026,8 +2032,15 @@
       };
       const updateMsgHead = (data) => {
         const nameEl = $('msg-head-name');
-        nameEl.textContent = data.chat_name || '未命名会话';
-        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || ''));
+        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || '') && String(c.chat_type || 'group') === msgState.chatType);
+        const knownInfo = data.group_info || {};
+        const newerGroupInfo = Number(knownInfo.updated_at || 0) > Number(curChat?.group_info_updated_at || 0);
+        const groupName = newerGroupInfo ? (knownInfo.group_name || curChat?.group_name) : (curChat?.group_name || knownInfo.group_name);
+        const knownName = curChat?.remark || (msgState.chatType === 'group' ? groupName : '') || data.chat_name || curChat?.nickname;
+        const headKey = msgState.chatType + '|' + String(msgState.chatId || '');
+        const previousName = nameEl.dataset.chatKey === headKey ? nameEl.textContent : '';
+        nameEl.textContent = knownName || previousName || String(msgState.chatId || '') || '未命名会话';
+        nameEl.dataset.chatKey = headKey;
         const chatKey = String(msgState.chatId || '');
         const isAdmin = msgState.adminByChat.has(chatKey)
           ? Boolean(msgState.adminByChat.get(chatKey))
@@ -2038,7 +2051,7 @@
           nameEl.classList.remove('admin');
         }
         const gInfo = data.group_info || {};
-        const gNum = Number(gInfo.member_num || 0);
+        const gNum = Number(gInfo.member_num ?? curChat?.member_num ?? curChat?.group_member_num ?? 0);
         const removed = msgState.chatType === 'group' && (msgState.chatRemoved || gInfo.membership_status === 'removed' || curChat?.membership_status === 'removed' || curChat?.in_group === false);
         msgState.chatRemoved = removed;
         $('msg-head-sub').textContent = msgState.chatType === 'group'
@@ -3700,23 +3713,30 @@
         renderMsgChats({chats:msgState.chats});
       };
       const applyMsgGroupInfo = (payload) => {
-        const chatId = String(payload?.chat_id || '').trim();
+        const chatId = String(payload?.chat_id || payload?.group_openid || '').trim();
+        if (!chatId) return;
         const memberNum = Number(payload?.member_num);
-        if (!chatId || !Number.isFinite(memberNum) || memberNum < 0) return;
-        const count = Math.floor(memberNum);
-        msgState.chats = (msgState.chats || []).map((chat) => String(chat.chat_id || '') === chatId
-          ? {...chat, member_num:count, group_member_num:count}
-          : chat);
+        const groupName = String(payload?.group_name || '').trim();
+        const updatedAt = Number(payload?.updated_at || 0);
+        const update = (chat) => {
+          if (String(chat.chat_id || '') !== chatId || String(chat.chat_type || 'group') !== 'group') return chat;
+          if (updatedAt && Number(chat.group_info_updated_at || 0) > updatedAt) return chat;
+          const next = {...chat};
+          if (Number.isFinite(memberNum) && memberNum >= 0) next.member_num = next.group_member_num = Math.floor(memberNum);
+          if (groupName) { next.group_name = groupName; next.nickname = String(next.remark || groupName); }
+          if (updatedAt) next.group_info_updated_at = updatedAt;
+          return next;
+        };
+        msgState.chats = (msgState.chats || []).map(update);
+        const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId && String(chat.chat_type || 'group') === 'group');
         const overlay = msgState.realtimeChats.get(chatId);
-        if (overlay) msgState.realtimeChats.set(chatId, {...overlay, member_num:count, group_member_num:count});
+        if (overlay || current) msgState.realtimeChats.set(chatId, update(overlay || current));
         if (msgState.chatId === chatId && msgState.chatType === 'group') {
-          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId);
-          updateMsgHead({
-            chat_name:current?.remark || current?.group_name || current?.nickname || chatId,
-            group_info:{member_num:count, membership_status:current?.membership_status},
-          });
+          updateMsgHead({group_info:current ? {group_name:current.group_name, member_num:current.member_num ?? current.group_member_num, updated_at:current.group_info_updated_at, membership_status:current.membership_status} : payload});
         }
+        if (groupName) renderMsgChats({chats:msgState.chats});
       };
+
       const toggleMsgSelect = (row, mid) => {
         if (!mid) return;
         if (msgState.selected.has(mid)) { msgState.selected.delete(mid); row.classList.remove('selected'); }
@@ -3894,10 +3914,18 @@
         catch (error) { toast(error.message); }
       };
       const refreshGroupInfo = async () => {
-        if (!msgState.chatId) return;
-        try { const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast(data.group_name ? `群信息已刷新：${data.group_name}${data.member_num ? `（成员 ${data.member_num} 人）` : ''}` : (data.member_num ? `群信息已刷新：成员 ${data.member_num} 人` : '群信息已刷新')); loadMsgHistory(); }
-        catch (error) { toast(error.message); }
+        if (!msgState.chatId || msgState.chatType !== 'group') return;
+        const chatId = String(msgState.chatId);
+        const requestType = msgState.chatType;
+        try {
+          const data = await api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId})});
+          msgState.historyCache.delete('group|' + chatId);
+          applyMsgGroupInfo({...data, chat_id:chatId});
+          toast(data.group_name ? '群信息已刷新：' + data.group_name + (data.member_num ? '（成员 ' + data.member_num + ' 人）' : '') : '群信息已刷新');
+          if (msgState.chatId === chatId && msgState.chatType === requestType) void loadMsgHistory();
+        } catch (error) { toast(error.message); }
       };
+
       const showRemarkDialog = async () => {
         if (!msgState.chatId) return;
         let data = {}; try { data = await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'get'})}); } catch (error) { data = {}; }

@@ -1576,7 +1576,8 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
             f"{昵称表达式}<>'' "
             f"AND {昵称表达式}<>COALESCE({用户字段},'') "
             f"AND {昵称表达式}<>CONCAT('用户',RIGHT(COALESCE({用户字段},''),6)) "
-            f"AND {昵称表达式} NOT IN ('成员','新成员','未知','未知用户','机器人','我')"
+            f"AND {昵称表达式} NOT IN ('成员','新成员','未知','未知用户','机器人','我') "
+            f"AND {昵称表达式} NOT REGEXP '[[:cntrl:]]'"
         )
 
     try:
@@ -1664,17 +1665,21 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
                 资料参数: list[str] = list(分块)
                 if appid:
                     资料参数.append(appid)
+                # 每个已请求用户只取最新一份关联资料；全批 LIMIT 会让资料多的
+                # 用户挤占结果，导致其余用户即使已有昵称也被漏掉。
                 with 连接.cursor() as 游标:
                     游标.execute(
                         "SELECT p.appid,p.user_id,g.nickname,g.updated_at "
                         f"FROM `{用户资料表名}` p JOIN `{用户资料表名}` g "
-                        "ON g.union_openid=p.union_openid "
+                        "ON g.profile_key=(SELECT r.profile_key "
+                        f"FROM `{用户资料表名}` r WHERE r.union_openid=p.union_openid "
+                        "AND r.nickname<>'' AND r.nickname<>COALESCE(r.user_id,'') "
+                        "AND r.nickname<>CONCAT('用户',RIGHT(COALESCE(r.user_id,''),6)) "
+                        "AND r.nickname NOT IN ('成员','新成员','未知','未知用户','机器人','我') "
+                        "AND r.nickname NOT REGEXP '[[:cntrl:]]' "
+                        "ORDER BY r.updated_at DESC,r.profile_key DESC LIMIT 1) "
                         f"WHERE p.user_id IN ({占位符}){资料appid条件} "
-                        "AND p.union_openid<>'' AND g.nickname<>'' "
-                        "AND g.nickname<>COALESCE(g.user_id,'') "
-                        "AND g.nickname<>CONCAT('用户',RIGHT(COALESCE(g.user_id,''),6)) "
-                        "AND g.nickname NOT IN ('成员','新成员','未知','未知用户','机器人','我') "
-                        "ORDER BY g.updated_at DESC LIMIT 2000",
+                        "AND p.union_openid<>''",
                         tuple(资料参数),
                     )
                     资料行列表 = 游标.fetchall() or ()
@@ -2031,64 +2036,9 @@ def 统计会话消息数(会话标识: str) -> int:
         _关闭连接(连接)
 
 
-def 裁剪总消息(上限: int) -> None:
-    """按 id 顺序删除最旧的超量消息，保持总量不超过上限。"""
-    if not _MySQL可用():
-        return
-    连接 = _打开连接()
-    if 连接 is None:
-        return
-    try:
-        with 连接.cursor() as 游标:
-            游标.execute(
-                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
-                (会话索引就绪键,),
-            )
-            索引就绪 = str(
-                _行字段(游标.fetchone(), 0, "state_value", 默认值="") or ""
-            ) == "ready"
-            if 索引就绪:
-                游标.execute(
-                    f"SELECT COALESCE(SUM(message_count), 0) AS c FROM `{会话索引表名}`"
-                )
-            else:
-                游标.execute(f"SELECT COUNT(*) AS c FROM `{消息记录表名}`")
-            总数 = int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0)
-            if 总数 > 上限:
-                需要删 = 总数 - 上限
-                受影响会话 = []
-                if 索引就绪:
-                    游标.execute(
-                        f"SELECT 旧消息.消息类型, 旧消息.会话标识, COUNT(*) AS n FROM "
-                        f"(SELECT 消息类型, 会话标识 FROM `{消息记录表名}` ORDER BY id ASC LIMIT %s) 旧消息 "
-                        "GROUP BY 旧消息.消息类型, 旧消息.会话标识",
-                        (需要删,),
-                    )
-                    受影响会话 = [
-                        (
-                            str(_行字段(行, 0, "消息类型", 默认值="group") or "group"),
-                            str(_行字段(行, 1, "会话标识", 默认值="") or ""),
-                            int(_行字段(行, 2, "n", "COUNT(*)", 默认值=0) or 0),
-                        )
-                        for 行 in 游标.fetchall()
-                    ]
-                游标.execute(
-                    f"DELETE FROM `{消息记录表名}` WHERE id IN (SELECT id FROM (SELECT id FROM `{消息记录表名}` ORDER BY id ASC LIMIT %s) t)",
-                    (需要删,),
-                )
-                if 索引就绪:
-                    for 类型, 会话, 数量 in 受影响会话:
-                        游标.execute(
-                            f"UPDATE `{会话索引表名}` SET message_count=GREATEST(message_count-%s, 0) "
-                            "WHERE chat_type=%s AND conversation_id=%s",
-                            (数量, 类型, 会话),
-                        )
-                    游标.execute(f"DELETE FROM `{会话索引表名}` WHERE message_count <= 0")
-        连接.commit()
-    except Exception as exc:
-        logger.warning("消息记录 MySQL 裁剪失败：错误类型=%s", type(exc).__name__)
-    finally:
-        _关闭连接(连接)
+def 裁剪总消息(上限: int = 0) -> None:
+    """旧版热重载调用的兼容入口；历史不限条数保存，永不执行自动 DELETE。"""
+    return None
 
 
 def 读取元数据(key: str, 默认值: Any = None) -> Any:
