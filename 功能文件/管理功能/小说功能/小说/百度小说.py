@@ -375,8 +375,22 @@ def _安全整数(值: Any, 默认值: int = 0) -> int:
 
 
 def 格式化百度字数(值: Any) -> str:
-    数字 = _安全整数(值)
-    return f"{数字:,}字" if 数字 > 0 else "未知"
+    文本 = re.sub(r"[\s,，]", "", str(值 or ""))
+    if re.fullmatch(r"\d+(?:\.\d+)?(?:万|亿)字?", 文本):
+        # 上游已给展示单位时保留原精度，不重复除以一万。
+        数值文本 = re.match(r"\d+(?:\.\d+)?", 文本).group()
+        if float(数值文本) <= 0:
+            return "未知"
+        return 文本 if 文本.endswith("字") else f"{文本}字"
+    if 文本.endswith("字"):
+        文本 = 文本[:-1]
+    数字 = _安全整数(文本)
+    if 数字 <= 0:
+        return "未知"
+    if 数字 >= 10000:
+        万字 = f"{数字 / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{万字}万字"
+    return f"{数字}字"
 
 
 def _取详情字段(数据: dict[str, Any]) -> dict[str, Any]:
