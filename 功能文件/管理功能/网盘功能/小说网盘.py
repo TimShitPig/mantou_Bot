@@ -475,6 +475,10 @@ async def 上传小说并获取分享链接(
     _账号序号: int | None = None,
     _账号索引: dict[str, int] | None = None,
 ) -> dict[str, Any]:
+    from 功能文件.管理功能.小说功能.功能 import 小说下载任务
+
+    # TXT 已生成即登记，账号读取等待期间重载也能复用源文件。
+    小说下载任务.登记当前小说上传(配置, 源缓存路径, 文件名, _指定网盘, _账号索引)
     if _指定网盘 not in 网盘模块映射:
         _指定网盘, 默认账号序号 = await asyncio.to_thread(
             _获取当前群上传网盘, 配置
@@ -502,6 +506,7 @@ async def 上传小说并获取分享链接(
             )
         except (TypeError, ValueError):
             _账号索引[str(_指定网盘)] = 1
+    小说下载任务.登记当前小说上传(配置, 源缓存路径, 文件名, _指定网盘, _账号索引)
     return await _上传小说并获取分享链接内部(
         配置,
         源缓存路径,
@@ -521,7 +526,7 @@ async def 恢复待续传上传任务(配置: Any) -> int:
         if not 路径.is_file():
             continue
         状态 = str(任务.get("state") or "primary_pending")
-        if 状态 == "primary_pending" and 文件缓存.小说缓存正在使用(路径):
+        if 文件缓存.小说缓存正在使用(路径):
             continue
         if 状态 == "primary_pending":
             任务平台 = 任务.get("pending_platforms")
@@ -636,7 +641,23 @@ def 启动恢复待续传上传任务(配置: Any) -> asyncio.Task[Any] | None:
 async def 发送小说下载完成链接(
     event: Any, 书名: Any, 作者: Any, 分享链接: Any
 ) -> dict[str, Any]:
-    return await UC网盘.发送小说下载完成链接(event, 书名, 作者, 分享链接)
+    from 功能文件.管理功能.小说功能.功能 import 小说下载任务
+
+    async def _发送并确认() -> dict[str, Any]:
+        结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, 分享链接)
+        if 结果.get("sent"):
+            小说下载任务.标记当前小说完成通知(str(书名 or ""), str(作者 or ""))
+        return 结果
+
+    # 提交中的发送由重载任务接管确认，不阻塞停止，也不重复发送。
+    任务 = asyncio.create_task(_发送并确认(), name="小说完成通知")
+    已登记 = 小说下载任务.登记当前小说发送任务(任务)
+    try:
+        return await asyncio.shield(任务)
+    except asyncio.CancelledError:
+        if not 已登记:
+            await asyncio.shield(任务)
+        raise
 
 
 def 小说分享网盘是否启用(配置: Any) -> bool:

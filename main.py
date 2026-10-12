@@ -13,9 +13,12 @@ if str(插件目录) not in sys.path:
 
 
 def 加载功能模块(模块路径: str):
-    return importlib.reload(importlib.import_module(模块路径))
+    if 模块路径 in _载入前已有模块:
+        return importlib.reload(importlib.import_module(模块路径))
+    return importlib.import_module(模块路径)
 
 
+_载入前已有模块 = set(sys.modules)
 importlib.invalidate_caches()
 文件缓存工具 = 加载功能模块("功能文件.管理功能.基础功能.文件缓存")
 权限工具 = 加载功能模块("功能文件.管理功能.基础功能.权限工具")
@@ -62,9 +65,9 @@ ZLibrary小说功能 = 加载功能模块("功能文件.管理功能.小说功�
 小说功能开关 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说功能开关")
 找书功能 = 加载功能模块("功能文件.管理功能.小说功能.功能.找书")
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
-QQ官方交互桥.安装QQ官方帮助交互()
+插件生命周期 = 加载功能模块("功能文件.管理功能.基础功能.插件生命周期")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.159"
+插件版本 = "6.1.160"
 
 
 
@@ -76,56 +79,12 @@ class MyPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
-        self._文件缓存工具任务 = None
-        self._帮助网页服务 = None
+        self._生命周期句柄 = None
 
     async def initialize(self):
-        await 蓝奏云图片归档.停止图片归档任务()
-        蓝奏云图片归档.启动图片归档任务()
-        QQ官方交互桥.安装QQ官方帮助交互(self.context)
-        消息记录.安装消息记录(self.context, self.config)
-        权限工具.同步管理员白名单(self.config, 强制=True)
-        logger.info("馒头bot加载完成：版本=%s, 源码目录=%s", 插件版本, 插件目录)
-        try:
-            await QQ阅读功能.加载保存的QQ阅读登录态(self.config)
-        except Exception as _exc:
-            logger.debug(f"加载QQ阅读登录态失败：错误={_exc}")
-        await 文件缓存工具.停止每日文件缓存任务(self._文件缓存工具任务)
-        self._文件缓存工具任务 = None
-        await 小说网盘功能.停止恢复待续传上传任务()
-        await asyncio.to_thread(文件缓存工具.初始化文件缓存目录)
-        迁移数量 = await asyncio.to_thread(文件缓存工具.迁移旧文件缓存)
-        if any(迁移数量.values()):
-            logger.info(
-                "文件缓存迁移完成：小说=%s，媒体=%s，临时=%s，消息记录=%s，其他=%s",
-                迁移数量.get("novel", 0),
-                迁移数量.get("media", 0),
-                迁移数量.get("temporary", 0),
-                迁移数量.get("message", 0),
-                迁移数量.get("other", 0),
-            )
-        临时清理数量 = await asyncio.to_thread(文件缓存工具.清理过期临时文件缓存)
-        if 临时清理数量:
-            logger.info("清理过期临时文件缓存：数量=%s", 临时清理数量)
-        文件缓存工具.重置进程上传占用()
-        已清理残留数 = 文件缓存工具.清理残留小说缓存()
-        已清理过期数 = 文件缓存工具.清理过期小说缓存()
-        if 已清理残留数:
-            logger.info(f"插件重载清理遗留小说缓存：数量={已清理残留数}")
-        if 已清理过期数:
-            logger.info(f"插件加载清理过期小说缓存：数量={已清理过期数}")
-
-        def _记录每日缓存清理(清理数量):
-            if 清理数量:
-                logger.info("每日零点清理过期小说缓存：数量=%s", 清理数量)
-
-        self._文件缓存工具任务 = 文件缓存工具.启动每日文件缓存任务(
-            清理完成回调=_记录每日缓存清理,
+        self._生命周期句柄 = await 插件生命周期.启动插件(
+            self.context, self.config, 插件版本, 插件目录
         )
-        await 小说网盘功能.停止每日网盘远端清理任务()
-        小说网盘功能.启动每日网盘远端清理任务(self.config)
-        小说网盘功能.启动恢复待续传上传任务(self.config)
-        self._帮助网页服务 = await 帮助网页.启动帮助网页服务(self.config)
 
     @filter.on_platform_loaded()
     async def _QQ官方平台加载后同步(self):
@@ -605,16 +564,5 @@ class MyPlugin(Star):
         event.stop_event()
 
     async def terminate(self):
-        await ZLibrary小说功能.停止ZLibrary账号任务()
-        await 蓝奏云图片归档.停止图片归档任务()
-        await 帮助网页.停止帮助网页服务(self._帮助网页服务)
-        self._帮助网页服务 = None
-        await 文件缓存工具.停止每日文件缓存任务(self._文件缓存工具任务)
-        self._文件缓存工具任务 = None
-        await 小说下载任务.停止小说下载任务()
-        小说功能开关.关闭小说功能状态执行器()
-        QQ阅读功能.关闭QQ阅读签名执行器()
-        得间小说功能.关闭得间资源()
-        await 消息记录.停止消息记录()
-        塔读小说功能.关闭塔读资源()
-        await 小说网盘功能.停止网盘后台任务()
+        await 插件生命周期.停止插件(self._生命周期句柄)
+        self._生命周期句柄 = None

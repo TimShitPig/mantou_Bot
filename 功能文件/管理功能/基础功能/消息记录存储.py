@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import time
+import threading
 from collections.abc import Mapping
 from typing import Any
 
@@ -72,7 +73,11 @@ _列最大长度: dict[str, int] = {
     "msg_seq": 64,
 }
 
-_数据库配置引用: dict[str, Any] = {}
+_数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
+_数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
+_消息表结构版本 = 2
+_已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
+_消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
 
 
 def _运行状态表名() -> str:
@@ -194,7 +199,7 @@ def 设置数据库配置(配置: Any) -> None:
 
 
 def _读取插件配置() -> Any:
-    return _数据库配置引用.get("配置")
+    return getattr(_数据库线程配置, "配置", _数据库配置引用.get("配置"))
 
 
 def _MySQL可用() -> bool:
@@ -217,6 +222,8 @@ def _打开连接() -> Any | None:
         return 运行状态数据库.打开数据库连接(配置)
     except Exception as exc:
         logger.warning("消息记录 MySQL 连接失败：错误类型=%s", type(exc).__name__)
+        if getattr(_数据库线程配置, "严格读取", False):
+            raise
         return None
 
 
@@ -229,7 +236,45 @@ def _关闭连接(连接: Any | None) -> None:
         pass
 
 
+def 获取数据库配置快照(配置: Any) -> dict[str, Any]:
+    """只固定数据库字段，避免复制 AstrBotConfig 附带的线程锁等对象。"""
+    from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+    数据 = 运行状态数据库.获取数据库配置(配置)
+    return {"database_settings": {
+        "database_host": 数据["host"], "database_port": 数据["port"],
+        "database_user": 数据["user"], "database_password": 数据["password"],
+        "database_name": 数据["database"],
+    }}
+
+
+def 获取数据库初始化键(配置: Any = None) -> str:
+    """结构版本和完整连接配置共同决定缓存键，敏感值不直接存入键。"""
+    from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+    数据库配置 = 运行状态数据库.获取数据库配置(
+        配置 if 配置 is not None else _读取插件配置()
+    )
+    编码 = json.dumps([_消息表结构版本, 数据库配置], sort_keys=True,
+                    ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(编码).hexdigest()
+
+
 def 初始化数据库() -> bool:
+    """每种配置/结构版本仅检查一次；失败不缓存，并串行处理并发启动。"""
+    if not _MySQL可用():
+        return False
+    键 = 获取数据库初始化键()
+    with _消息结构初始化锁:
+        if 键 in _已初始化消息结构:
+            return True
+        if not _初始化数据库结构():
+            return False
+        _已初始化消息结构.add(键)
+        return True
+
+
+def _初始化数据库结构() -> bool:
     """建消息记录、群资料与元数据表；返回是否成功。"""
     if not _MySQL可用():
         return False
@@ -610,12 +655,15 @@ def 初始化数据库() -> bool:
                     )
                     logger.info("消息记录 MySQL 会话索引已初始化")
             except Exception as 修复异常:
+                # 部分迁移失败不能记作结构就绪；下一次后台恢复继续重试。
+                连接.rollback()
                 logger.warning(
                     "消息记录 MySQL 结构/会话索引初始化失败：阶段=%s，错误类型=%s，%s",
                     初始化阶段,
                     type(修复异常).__name__,
                     _MySQL错误摘要(修复异常),
                 )
+                return False
         初始化阶段 = "提交初始化事务"
         连接.commit()
         return True
@@ -629,6 +677,52 @@ def 初始化数据库() -> bool:
         return False
     finally:
         _关闭连接(连接)
+
+
+def 执行数据库配置快照操作(配置: Any, 操作: Any, *参数: Any) -> Any:
+    """即使重载取消等待，正在运行的线程也只使用派发时的数据库。"""
+    原有覆盖 = hasattr(_数据库线程配置, "配置")
+    原有配置 = getattr(_数据库线程配置, "配置", None)
+    _数据库线程配置.配置 = 配置
+    try:
+        return 操作(*参数)
+    finally:
+        if 原有覆盖:
+            _数据库线程配置.配置 = 原有配置
+        else:
+            del _数据库线程配置.配置
+
+
+def 读取启动快照(配置: Any, 群状态命名空间: str, 未读命名空间: str) -> dict[str, Any] | None:
+    """在线程内读取恢复快照，不修改消息模块的活动缓存或共享配置。"""
+    from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+    原有配置 = getattr(_数据库线程配置, "配置", None)
+    原有覆盖 = hasattr(_数据库线程配置, "配置")
+    原有严格读取 = getattr(_数据库线程配置, "严格读取", False)
+    _数据库线程配置.配置 = 配置
+    _数据库线程配置.严格读取 = True
+    try:
+        if not 初始化数据库():
+            return None
+        群状态 = 运行状态数据库.读取运行状态命名空间(配置, 群状态命名空间)
+        未读 = 运行状态数据库.读取运行状态命名空间(配置, 未读命名空间)
+        会话 = 聚合聊天列表(500) or []
+        摘要ID = [int(项.get("last_id") or 0) for 项 in 会话 if int(项.get("last_id") or 0)]
+        return {
+            "group_states": 群状态,
+            "groups": 读取全部群信息() or [],
+            "meta": 读取全部元数据() or {},
+            "unread": {str(会话): max(0, int(值 or 0)) for 会话, 值 in 未读.items()},
+            "conversations": 会话,
+            "summaries": 批量读取最后消息摘要(摘要ID) if 摘要ID else {},
+        }
+    finally:
+        _数据库线程配置.严格读取 = 原有严格读取
+        if 原有覆盖:
+            _数据库线程配置.配置 = 原有配置
+        else:
+            del _数据库线程配置.配置
 
 
 def 回填历史用户资料批次(批次大小: int = 300) -> tuple[int, bool]:
@@ -1788,6 +1882,8 @@ def 聚合聊天列表(上限: int = 200, 类型过滤: str = "") -> list[dict[s
         return 结果
     except Exception as exc:
         logger.warning("消息记录 MySQL 会话聚合失败：错误类型=%s", type(exc).__name__)
+        if getattr(_数据库线程配置, "严格读取", False):
+            raise
         return []
     finally:
         _关闭连接(连接)
@@ -1853,6 +1949,8 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                     结果[int(记录.get("id") or 0)] = 记录
     except Exception as exc:
         logger.warning("消息记录 MySQL 最后消息摘要补查失败：错误类型=%s", type(exc).__name__)
+        if getattr(_数据库线程配置, "严格读取", False):
+            raise
     finally:
         _关闭连接(连接)
     return 结果
@@ -2062,6 +2160,8 @@ def 读取全部元数据() -> dict[str, Any]:
                         logger.debug("消息记录元数据格式无效：键=%s", str(键)[:80])
     except Exception as exc:
         logger.warning("消息记录 MySQL 元数据批量读取失败：错误类型=%s", type(exc).__name__)
+        if getattr(_数据库线程配置, "严格读取", False):
+            raise
     finally:
         _关闭连接(连接)
     return 结果
@@ -2176,6 +2276,8 @@ def 读取全部群信息() -> list[dict[str, Any]]:
         return 结果
     except Exception as exc:
         logger.warning("消息记录 MySQL 群资料读取失败：错误类型=%s", type(exc).__name__)
+        if getattr(_数据库线程配置, "严格读取", False):
+            raise
         return []
     finally:
         _关闭连接(连接)

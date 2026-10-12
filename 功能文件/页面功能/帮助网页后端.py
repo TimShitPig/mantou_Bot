@@ -89,6 +89,10 @@ class 帮助网页服务:
 控制台会话: dict[str, float] = globals().get("控制台会话") or {}
 控制台会话身份: dict[str, str] = globals().get("控制台会话身份") or {}
 控制台会话最后持久化: dict[str, float] = globals().get("控制台会话最后持久化") or {}
+控制台会话恢复排除: set[str] = globals().get("控制台会话恢复排除") or set()
+控制台会话恢复任务: asyncio.Task[Any] | None = globals().get("控制台会话恢复任务")
+控制台会话认证指纹: str = globals().get("控制台会话认证指纹", "")
+_控制台会话存储锁 = globals().get("_控制台会话存储锁") or threading.RLock()
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
 夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
@@ -953,6 +957,25 @@ def _获取自动公开地址(配置: Any = None) -> str:
     return _规范化公开地址(f"http://{公开主机}:{端口}")
 
 
+def _计算帮助网页启动地址(配置: Any = None) -> str:
+    """先使用已知地址启动监听，公网查询随后在后台完成。"""
+    手动地址 = _规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))
+    if 手动地址:
+        return 手动地址
+    主机, 端口 = _读取监听配置(配置)
+    公开主机 = 主机
+    if 主机 in {"", "0.0.0.0", "::"}:
+        公开主机 = 自动公开地址缓存 or "127.0.0.1"
+        if not 自动公开地址缓存:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect(("8.8.8.8", 80))
+                    公开主机 = str(sock.getsockname()[0])
+            except OSError:
+                pass
+    return _规范化公开地址(f"http://{公开主机}:{端口}")
+
+
 def _计算帮助网页地址(配置: Any = None) -> str:
     手动地址 = _规范化公开地址(_读取帮助网页字段(配置, "help_web_domain"))
     return 手动地址 or _获取自动公开地址(配置)
@@ -982,87 +1005,127 @@ def 获取帮助网页地址(配置: Any = None) -> str:
     return _构造控制台访问地址(_计算帮助网页地址(配置), 配置)
 
 
-def _数据库会话可用() -> bool:
+def _数据库会话可用(配置: Any = None) -> bool:
     """当前帮助网页配置已配置运行状态数据库时才能持久化会话。"""
-    if 当前帮助网页配置 is None:
+    数据库配置 = 配置 if 配置 is not None else 当前帮助网页配置
+    if 数据库配置 is None:
         return False
     try:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 已配置运行状态数据库
-        return bool(已配置运行状态数据库(当前帮助网页配置))
+        return bool(已配置运行状态数据库(数据库配置))
     except Exception:
         return False
 
 
-def _解析持久会话文本(文本: str) -> tuple[float | None, str]:
-    """解析持久会话值：到期时间戳|用户名；格式异常返回 (None, 管理员)。"""
-    if not 文本:
-        return None, "管理员"
+def 获取控制台会话配置快照(配置: Any = None) -> dict[str, Any]:
+    """在线程派发前固定认证及连接输入，不引用后续会变更的配置对象。"""
+    from 功能文件.管理功能.基础功能.运行状态数据库 import 读取数据库配置值
+
+    来源 = 配置 if 配置 is not None else 当前帮助网页配置
+    用户名, 密码 = _读取控制台账号(来源)
+    数据库配置 = {
+        字段: 读取数据库配置值(来源, 字段, 旧字段)
+        for 字段, 旧字段 in (
+            ("database_host", "user_activation_database_host"),
+            ("database_port", "user_activation_database_port"),
+            ("database_user", "user_activation_database_user"),
+            ("database_password", "user_activation_database_password"),
+            ("database_name", "user_activation_database_name"),
+        )
+    }
+    for 字段 in ("database_host", "database_user", "database_name"):
+        数据库配置[字段] = str(数据库配置[字段] or "").strip()
+    数据库配置["database_name"] = 数据库配置["database_name"] or 数据库配置["database_user"]
+    数据库配置["database_password"] = str(数据库配置["database_password"] or "")
     try:
-        到期部分, _, 用户名 = str(文本).rpartition("|")
-        return float(到期部分), 用户名 or "管理员"
-    except Exception:
-        return None, "管理员"
+        数据库配置["database_port"] = int(数据库配置["database_port"] or 3306)
+    except (TypeError, ValueError):
+        数据库配置["database_port"] = 3306
+    return {
+        "help_web_settings": {"help_web_admin_username": 用户名, "help_web_admin_password": 密码},
+        "database_settings": 数据库配置,
+    }
 
 
-def _读取持久化控制台会话(会话值: str) -> tuple[float, str] | None:
-    """从 MySQL 恢复会话；返回 (到期时间, 用户名)；无有效会话返回 None。"""
-    if not 会话值 or not _数据库会话可用():
-        return None
+def 获取控制台认证指纹(配置: Any) -> str:
+    快照 = 获取控制台会话配置快照(配置)
+    文本 = json.dumps(快照, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(文本.encode("utf-8")).hexdigest()
+
+
+def 同步控制台会话认证(配置: Any) -> bool:
+    """仅相同凭据及数据库的热重载保留登录；签名从不返回网页或日志。"""
+    global 控制台会话认证指纹
+    新指纹 = 获取控制台认证指纹(配置)
+    一致 = bool(控制台会话认证指纹) and hmac.compare_digest(控制台会话认证指纹, 新指纹)
+    if not 一致:
+        控制台会话.clear()
+        控制台会话身份.clear()
+        控制台会话最后持久化.clear()
+        控制台会话恢复排除.clear()
+    控制台会话认证指纹 = 新指纹
+    return 一致
+
+
+def _解析持久会话文本(文本: str) -> tuple[float | None, str, str]:
+    """只恢复新格式签名会话，旧记录不在冷启动时自动沿用。"""
     try:
-        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态值
-        文本 = 读取运行状态值(当前帮助网页配置, 控制台会话命名空间, 会话值, "")
-        到期时间, 用户名 = _解析持久会话文本(文本)
-        if 到期时间 is None:
-            return None
-        return 到期时间, 用户名
-    except Exception as exc:
-        logger.debug("帮助控制台读取持久会话失败：错误类型=%s", type(exc).__name__)
-        return None
+        值 = json.loads(文本)
+        if not isinstance(值, dict) or 值.get("version") != 2:
+            return None, "管理员", ""
+        return float(值["expires_at"]), str(值["username"]), str(值["auth"])
+    except (TypeError, ValueError, KeyError):
+        return None, "管理员", ""
 
 
-def _写入持久化控制台会话(会话值: str, 到期时间: float, 用户名: str) -> None:
-    if not 会话值 or not _数据库会话可用():
+def _写入持久化控制台会话(会话值: str, 到期时间: float, 用户名: str, 配置: Any) -> None:
+    if not 会话值 or not _数据库会话可用(配置):
         return
     try:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值
-        写入运行状态值(
-            当前帮助网页配置,
-            控制台会话命名空间,
-            会话值,
-            f"{到期时间:.0f}|{用户名}",
-        )
+        指纹 = 获取控制台认证指纹(配置)
+        with _控制台会话存储锁:
+            if 会话值 in 控制台会话恢复排除 or not hmac.compare_digest(指纹, 控制台会话认证指纹):
+                return
+            写入运行状态值(
+                配置, 控制台会话命名空间, 会话值,
+                json.dumps({"version": 2, "expires_at": 到期时间, "username": 用户名, "auth": 指纹},
+                           ensure_ascii=False, separators=(",", ":")),
+            )
     except Exception as exc:
         logger.debug("帮助控制台写入持久会话失败：错误类型=%s", type(exc).__name__)
 
 
-def _删除持久化控制台会话(会话值: str) -> None:
-    if not 会话值 or not _数据库会话可用():
+def _删除持久化控制台会话(会话值: str, 配置: Any) -> None:
+    if not 会话值 or not _数据库会话可用(配置):
         return
     try:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 删除运行状态值
-        删除运行状态值(当前帮助网页配置, 控制台会话命名空间, 会话值)
+        with _控制台会话存储锁:
+            删除运行状态值(配置, 控制台会话命名空间, 会话值)
     except Exception as exc:
         logger.debug("帮助控制台删除持久会话失败：错误类型=%s", type(exc).__name__)
 
 
-def _加载持久化控制台会话() -> None:
-    """启动服务时把数据库中的有效会话恢复到内存，避免重载后同设备重新登录。"""
-    if not _数据库会话可用():
-        return
+def _读取持久化控制台会话(配置: Any) -> dict[str, tuple[float, str]]:
+    """线程中只读取快照，合并和退出排除在事件循环中执行。"""
+    数据库配置 = 配置
     try:
-        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间
-        记录 = 读取运行状态命名空间(当前帮助网页配置, 控制台会话命名空间)
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间, 已配置运行状态数据库
+        if not 已配置运行状态数据库(数据库配置):
+            return {}
+        记录 = 读取运行状态命名空间(数据库配置, 控制台会话命名空间)
+        预期指纹 = 获取控制台认证指纹(数据库配置)
         现在 = time.time()
+        结果 = {}
         for 会话值, 文本 in 记录.items():
-            到期时间, 用户名 = _解析持久会话文本(文本)
-            if 到期时间 is None or 到期时间 <= 现在:
-                _删除持久化控制台会话(会话值)
-                continue
-            控制台会话[会话值] = 到期时间
-            控制台会话身份[会话值] = 用户名
-            控制台会话最后持久化[会话值] = 现在
+            到期时间, 用户名, 指纹 = _解析持久会话文本(文本)
+            if 到期时间 is not None and 到期时间 > 现在 and hmac.compare_digest(指纹, 预期指纹):
+                结果[会话值] = (到期时间, 用户名)
+        return 结果
     except Exception as exc:
         logger.debug("帮助控制台加载持久会话失败：错误类型=%s", type(exc).__name__)
+        return {}
 
 
 def _清理控制台会话() -> None:
@@ -1075,10 +1138,11 @@ def _清理控制台会话() -> None:
             夸克网页扫码会话.pop(scan_id, None)
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
+            控制台会话恢复排除.add(会话值)
             控制台会话.pop(会话值, None)
             控制台会话身份.pop(会话值, None)
             控制台会话最后持久化.pop(会话值, None)
-            _安排控制台后台任务(_删除持久化控制台会话, 会话值)
+            _安排控制台后台任务(_删除持久化控制台会话, 会话值, 获取控制台会话配置快照())
             try:
                 asyncio.get_running_loop().create_task(
                     _取消夸克网页扫码所有者(会话值)
@@ -1103,6 +1167,11 @@ def _取得请求会话(request: web.Request) -> str:
 
 
 def _请求已授权(request: web.Request) -> bool:
+    if not 控制台会话认证指纹 or not hmac.compare_digest(
+        控制台会话认证指纹, 获取控制台认证指纹(当前帮助网页配置)
+    ):
+        同步控制台会话认证(当前帮助网页配置)
+        return False
     会话值 = _取得请求会话(request)
     if not 会话值:
         return False
@@ -1125,6 +1194,7 @@ def _请求已授权(request: web.Request) -> bool:
             会话值,
             新到期时间,
             控制台会话身份.get(会话值, "管理员"),
+            获取控制台会话配置快照(),
         )
     return True
 
@@ -1673,7 +1743,9 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
     数据 = await _读取请求JSON(request)
     用户名 = str((数据 or {}).get("username") or "").strip()
     密码 = str((数据 or {}).get("password") or "")
-    配置用户名, 配置密码 = _读取控制台账号(当前帮助网页配置)
+    配置快照 = 获取控制台会话配置快照()
+    请求指纹 = 获取控制台认证指纹(配置快照)
+    配置用户名, 配置密码 = _读取控制台账号(配置快照)
     if not 配置用户名 or not 配置密码:
         return _控制台错误(503, "登录服务尚未配置")
     if not (
@@ -1692,7 +1764,13 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
         会话值,
         到期时间,
         配置用户名,
+        配置快照,
     )
+    if 会话值 in 控制台会话恢复排除 or not hmac.compare_digest(请求指纹, 控制台会话认证指纹):
+        控制台会话.pop(会话值, None)
+        控制台会话身份.pop(会话值, None)
+        控制台会话最后持久化.pop(会话值, None)
+        return _控制台错误(409, "登录状态已更新，请重新登录")
     控制台会话最后持久化[会话值] = time.time()
     响应 = web.json_response({"ok": True})
     响应.set_cookie(
@@ -1709,11 +1787,14 @@ async def _处理控制台登录(request: web.Request) -> web.Response:
 
 async def _处理控制台退出(request: web.Request) -> web.Response:
     会话值 = _取得请求会话(request)
-    await _取消夸克网页扫码所有者(会话值)
+    配置快照 = 获取控制台会话配置快照()
+    if 会话值:
+        控制台会话恢复排除.add(会话值)
     控制台会话.pop(会话值, None)
     控制台会话身份.pop(会话值, None)
     控制台会话最后持久化.pop(会话值, None)
-    await _控制台线程执行(_删除持久化控制台会话, 会话值)
+    await _取消夸克网页扫码所有者(会话值)
+    await _控制台线程执行(_删除持久化控制台会话, 会话值, 配置快照)
     响应 = web.json_response({"ok": True})
     响应.del_cookie(控制台会话Cookie名, path="/")
     return 响应

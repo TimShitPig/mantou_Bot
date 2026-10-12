@@ -2,22 +2,22 @@ from __future__ import annotations
 
 import time
 import threading
+import hashlib
+import json
 from typing import Any
 
 运行状态数据库表名 = "mantou_runtime_state"
 数据库配置分类名 = "database_settings"
-_已确保运行状态表: set[tuple[str, int, str, str, str]] = set()
-_运行状态表锁 = threading.Lock()
+_运行状态表结构版本 = 1
+_已确保运行状态表: set[tuple[int, str]] = globals().get("_已确保运行状态表", set())
+_运行状态表锁 = globals().get("_运行状态表锁") or threading.Lock()
 
 
-def _配置缓存键(数据库配置: dict[str, Any], 表名: str) -> tuple[str, int, str, str, str]:
-    return (
-        str(数据库配置.get("host") or ""),
-        安全整数(数据库配置.get("port"), 3306),
-        str(数据库配置.get("user") or ""),
-        str(数据库配置.get("database") or ""),
-        str(表名 or ""),
-    )
+def _配置缓存键(数据库配置: dict[str, Any], 表名: str) -> tuple[int, str]:
+    # 密码等配置只参与不可逆指纹；热重载保留成功结果，换连接配置或结构版本重新检查。
+    配置文本 = json.dumps({**数据库配置, "runtime_state_table": str(表名 or "")},
+                        sort_keys=True, ensure_ascii=False, default=str)
+    return _运行状态表结构版本, hashlib.sha256(配置文本.encode("utf-8")).hexdigest()
 
 
 def _确保运行状态表一次(连接: Any, 数据库配置: dict[str, Any], 表名: str) -> None:

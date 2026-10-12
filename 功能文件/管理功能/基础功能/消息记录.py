@@ -108,6 +108,11 @@ _消息数据库维护任务: asyncio.Task[Any] | None = globals().get("_消息�
 _消息数据库维护首次延迟秒 = 30.0
 _消息数据库维护间隔秒 = 10 * 60.0
 _消息资料回填任务: asyncio.Task[Any] | None = globals().get("_消息资料回填任务")
+_消息数据库恢复任务: asyncio.Task[Any] | None = globals().get("_消息数据库恢复任务")
+_消息数据库恢复键 = str(globals().get("_消息数据库恢复键", ""))
+_消息数据库恢复完成键 = str(globals().get("_消息数据库恢复完成键", ""))
+_消息数据库恢复失败冷却 = float(globals().get("_消息数据库恢复失败冷却", 0.0))
+_消息数据库恢复接收启动 = globals().get("_消息数据库恢复接收启动", True)
 _消息缓存总数缓存 = int(globals().get("_消息缓存总数缓存", 0) or 0)
 _消息缓存总数检查时间 = float(globals().get("_消息缓存总数检查时间", 0.0) or 0.0)
 _消息缓存总数检查间隔 = 0.5
@@ -130,6 +135,7 @@ _昵称补查队列: asyncio.Queue[tuple[str, str, str]] = (
 )
 _昵称补查任务: list[asyncio.Task[Any]] = list(globals().get("_昵称补查任务") or [])
 _昵称补查等待中: set[tuple[str, str]] = globals().get("_昵称补查等待中") or set()
+_昵称补查失败项目: list[tuple[str, str, str]] = list(globals().get("_昵称补查失败项目") or [])
 _昵称补查接收入队 = globals().get("_昵称补查接收入队", True)
 _昵称补查溢出数 = int(globals().get("_昵称补查溢出数", 0) or 0)
 _消息事件订阅: dict[asyncio.Queue[Any], asyncio.AbstractEventLoop] = globals().get("_消息事件订阅") or {}
@@ -1053,10 +1059,13 @@ def _获取消息记录执行器() -> ThreadPoolExecutor:
 async def _异步执行消息记录同步(操作: Any, *参数: Any) -> Any:
     """在线程池执行可能阻塞的消息记录数据库操作。"""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        _获取消息记录执行器(),
-        partial(操作, *参数),
-    )
+    调用 = partial(操作, *参数)
+    if _消息存储 is not None and _消息数据库已配置():
+        快照方法 = getattr(_消息存储, "获取数据库配置快照", None)
+        执行方法 = getattr(_消息存储, "执行数据库配置快照操作", None)
+        if callable(快照方法) and callable(执行方法):
+            调用 = partial(执行方法, 快照方法(当前插件配置), 操作, *参数)
+    return await loop.run_in_executor(_获取消息记录执行器(), 调用)
 
 
 def 关闭消息记录执行器() -> None:
@@ -1107,6 +1116,8 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
 
     async def _执行() -> Any:
         try:
+            if not await 等待消息记录恢复():
+                return None
             # 所有后台写库共用一个锁，避免并发 INSERT 按完成先后乱序。
             async with _数据库写入锁:
                 return await _异步执行消息记录同步(操作, *参数)
@@ -1120,8 +1131,9 @@ def _后台执行同步(操作: Any, *参数: Any) -> asyncio.Task[Any] | None:
     return 任务
 
 
-def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
+def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: Any = None) -> bool:
     """在线程中批量写入消息和用户资料；同一会话未读数只写本批最后值。"""
+    配置 = 配置 if 配置 is not None else 当前插件配置
     消息列表: list[dict[str, Any]] = []
     用户资料列表: list[dict[str, Any]] = []
     群成员映射列表: list[dict[str, Any]] = []
@@ -1187,19 +1199,19 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]]) -> bool:
     try:
         from 功能文件.管理功能.基础功能 import 运行状态数据库
 
-        if not 运行状态数据库.已配置运行状态数据库(当前插件配置):
+        if not 运行状态数据库.已配置运行状态数据库(配置):
             return 成功
         批量写入 = getattr(运行状态数据库, "批量写入运行状态值", None)
         if callable(批量写入):
             批量写入(
-                当前插件配置,
+                配置,
                 未读状态命名空间,
                 未读表,
             )
             return 成功
         写入运行状态值 = 运行状态数据库.写入运行状态值
         for 会话标识, 未读数 in 未读表.items():
-            写入运行状态值(当前插件配置, 未读状态命名空间, 会话标识, 未读数)
+            写入运行状态值(配置, 未读状态命名空间, 会话标识, 未读数)
     except Exception as 异常:
         logger.debug("消息记录未读数批量持久化失败：错误类型=%s", type(异常).__name__)
         成功 = False
@@ -1252,10 +1264,14 @@ async def _写入消息持久化子批次(
     最后错误类型 = ""
     for 重试次数 in range(_消息持久化最大重试次数):
         try:
+            if not await 等待消息记录恢复():
+                return False, "数据库初始化未就绪"
             async with _数据库写入锁:
                 结果 = await _异步执行消息记录同步(
                     _执行消息持久化批次,
                     子批次,
+                    _消息存储.获取数据库配置快照(当前插件配置)
+                    if _消息存储 is not None and _消息数据库已配置() else None,
                 )
             if 结果 is not False:
                 return True, ""
@@ -1429,11 +1445,19 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
         return False
 
 
-async def 停止消息记录() -> bool:
+async def 停止消息记录(超时: float = 15.0) -> bool:
     """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
     global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
     global _群信息轮询任务, _消息数据库维护任务, _消息资料回填任务
+    global _消息数据库恢复任务, _消息数据库恢复接收启动
+    _消息数据库恢复接收启动 = False
+    截止时间 = asyncio.get_running_loop().time() + max(0.01, float(超时))
+    恢复任务 = _消息数据库恢复任务
+    _消息数据库恢复任务 = None
+    if 恢复任务 is not None and not 恢复任务.done():
+        恢复任务.cancel()
+        await asyncio.gather(恢复任务, return_exceptions=True)
     资料回填任务 = _消息资料回填任务
     _消息资料回填任务 = None
     if 资料回填任务 is not None and not 资料回填任务.done():
@@ -1455,7 +1479,6 @@ async def 停止消息记录() -> bool:
         群信息任务.cancel()
         await asyncio.gather(群信息任务, return_exceptions=True)
     _消息接收入队 = False
-    截止时间 = asyncio.get_running_loop().time() + 15.0
     接收队列 = _准备消息接收队列()
     接收冲刷 = True
     try:
@@ -2613,7 +2636,7 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
 
 
 def _准备昵称补查队列() -> asyncio.Queue[tuple[str, str, str]]:
-    """热重载切换事件循环后，在旧队列已经清空时重建队列。"""
+    """换事件循环时迁移全部排队和已取项目的未完成计数。"""
     global _昵称补查队列
     try:
         当前循环 = asyncio.get_running_loop()
@@ -2621,24 +2644,40 @@ def _准备昵称补查队列() -> asyncio.Queue[tuple[str, str, str]]:
         return _昵称补查队列
     队列循环 = getattr(_昵称补查队列, "_loop", None)
     有效任务 = any(not 任务.done() for 任务 in _昵称补查任务)
-    if 队列循环 not in (None, 当前循环) and _昵称补查队列.empty() and not 有效任务:
-        _昵称补查队列 = asyncio.Queue(maxsize=_昵称补查队列上限)
+    可恢复 = _昵称补查队列.qsize() + len(_昵称补查失败项目)
+    if not 有效任务 and (
+        队列循环 not in (None, 当前循环)
+        or int(getattr(_昵称补查队列, "_unfinished_tasks", 0)) != 可恢复
+    ):
+        新队列: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue(maxsize=_昵称补查队列上限)
+        for 项目 in _昵称补查失败项目:
+            新队列.put_nowait(项目)
+            新队列.get_nowait()
+        while not _昵称补查队列.empty():
+            新队列.put_nowait(_昵称补查队列.get_nowait())
+        _昵称补查队列 = 新队列
     return _昵称补查队列
 
 
 async def _昵称补查工作() -> None:
     队列 = _准备昵称补查队列()
     while True:
-        会话标识, 用户标识, appid = await 队列.get()
+        项目 = _昵称补查失败项目.pop(0) if _昵称补查失败项目 else await 队列.get()
+        会话标识, 用户标识, appid = 项目
+        已取消 = False
         try:
             await _补查用户昵称(会话标识, 用户标识, appid)
         except asyncio.CancelledError:
+            # 已取项目继续持有未完成计数，重载后的消费者优先恢复。
+            已取消 = True
+            _昵称补查失败项目.append(项目)
             raise
         except Exception as 异常:
             logger.warning("私聊昵称补查任务失败：错误类型=%s", type(异常).__name__)
         finally:
-            _昵称补查等待中.discard((会话标识, 用户标识))
-            队列.task_done()
+            if not 已取消:
+                _昵称补查等待中.discard((会话标识, 用户标识))
+                队列.task_done()
 
 
 def _启动昵称补查任务() -> None:
@@ -3150,8 +3189,11 @@ def _准备消息接收队列() -> asyncio.Queue[tuple[Any, Any, str]]:
         return _消息接收队列
     队列循环 = getattr(_消息接收队列, "_loop", None)
     任务运行中 = _消息接收任务 is not None and not _消息接收任务.done()
-    if 队列循环 not in (None, 当前循环) and _消息接收队列.empty() and not 任务运行中:
-        _消息接收队列 = asyncio.Queue(maxsize=_消息接收队列上限)
+    if 队列循环 not in (None, 当前循环) and not 任务运行中:
+        新队列: asyncio.Queue[tuple[Any, Any, str]] = asyncio.Queue(maxsize=_消息接收队列上限)
+        while not _消息接收队列.empty():
+            新队列.put_nowait(_消息接收队列.get_nowait())
+        _消息接收队列 = 新队列
     return _消息接收队列
 
 
@@ -3922,8 +3964,8 @@ def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
         return True
 
 
-_本地缓存内存: dict[str, Any] | None = None
-_本地缓存时间: float = 0.0
+_本地缓存内存: dict[str, Any] | None = globals().get("_本地缓存内存")
+_本地缓存时间: float = float(globals().get("_本地缓存时间", 0.0))
 
 
 def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
@@ -4140,36 +4182,6 @@ def 标记群机器人已移除(会话标识: str, appid: str = "") -> dict[str,
 def 标记群机器人已加入(会话标识: str, appid: str = "") -> dict[str, Any]:
     """处理官方 GROUP_ADD_ROBOT 事件，恢复群的可用状态并持久化。"""
     return _设置群机器人状态(会话标识, "active", appid, 持久化=True)
-
-
-def _恢复群机器人状态() -> None:
-    if not _消息数据库已配置():
-        return
-    try:
-        from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间
-
-        状态表 = 读取运行状态命名空间(当前插件配置, 群机器人状态命名空间) or {}
-        for 会话标识, 值 in 状态表.items():
-            会话标识 = str(会话标识 or "").strip()
-            if not 会话标识:
-                continue
-            记录 = _解析群机器人状态值(值)
-            群机器人状态缓存[会话标识] = 记录
-            信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
-            信息["membership_status"] = 记录["status"]
-            信息["membership_checked_at"] = 记录["checked_at"]
-            if 记录["appid"]:
-                信息["appid"] = 记录["appid"]
-            if 记录["member_role"]:
-                信息["member_role"] = 记录["member_role"]
-            if isinstance(记录.get("allow_proactive_msg"), bool):
-                信息["allow_proactive_msg"] = 记录["allow_proactive_msg"]
-            if 记录.get("recv_msg_setting"):
-                信息["recv_msg_setting"] = 记录["recv_msg_setting"]
-            if 记录["status"] == "removed":
-                信息["is_admin"] = False
-    except Exception as 异常:
-        logger.debug("消息记录群成员状态恢复失败：错误类型=%s", type(异常).__name__)
 
 
 def _群机器人状态需检查(会话标识: str, 强制: bool = False) -> bool:
@@ -4807,8 +4819,9 @@ async def 刷新群信息(
         if _消息存储 is not None:
             try:
                 写入群信息 = getattr(_消息存储, "写入群信息", None)
-                if callable(写入群信息):
-                    await _异步执行消息记录同步(写入群信息, 摘要, appid)
+                if callable(写入群信息) and await 等待消息记录恢复():
+                    async with _数据库写入锁:
+                        await _异步执行消息记录同步(写入群信息, 摘要, appid)
             except Exception as 存储异常:
                 logger.debug(
                     "消息记录群资料持久化失败：错误类型=%s",
@@ -7372,36 +7385,35 @@ def _平台实例appid(客户端: Any) -> str:
 
 
 def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
-    global 当前插件上下文, _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
+    """先恢复接收入口；建表和摘要读取放到单个后台任务。"""
+    global 当前插件上下文, 当前插件配置
+    global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
     global _消息数据库配置缓存, _消息数据库配置缓存时间
+    global _消息数据库恢复接收启动
+    _消息数据库恢复接收启动 = True
     _消息接收入队 = True
     _昵称补查接收入队 = True
     _消息持久化接收入队 = True
     _消息数据库配置缓存 = None
     _消息数据库配置缓存时间 = 0.0
-    # 热重载不沿用旧版本遗留的群资料待刷新队列；队列由打开会话和后台轮询产生。
-    群信息待刷新.clear()
-    _裁剪成员资料缓存()
     if 上下文 is not None:
         当前插件上下文 = 上下文
+    if 配置 is not None or 上下文 is not None:
+        当前插件配置 = 配置 if 配置 is not None else getattr(上下文, "config", None)
     try:
         if _消息存储 is not None:
-            try:
-                插件配置 = 配置 if 配置 is not None else getattr(上下文, "config", None)
-                global 当前插件配置
-                当前插件配置 = 插件配置
-                _消息存储.设置数据库配置(插件配置)
-                _消息存储.初始化数据库()
-                _从数据库恢复()
-                _启动消息数据库维护任务()
-                _启动消息资料回填任务()
-                if _消息持久化失败批次 or not _准备消息持久化队列().empty():
-                    _启动消息持久化任务()
-            except Exception as 恢复异常:
-                logger.warning("消息记录数据库恢复失败：错误类型=%s", type(恢复异常).__name__)
+            _消息存储.设置数据库配置(当前插件配置)
+        _裁剪成员资料缓存()
         _修补botpy昵称()
         _安装消息事件挂钩()
         _安装消息发送挂钩()
+        _启动消息数据库恢复任务()
+        if not _准备消息接收队列().empty():
+            _启动消息接收任务()
+        if _昵称补查失败项目 or not _准备昵称补查队列().empty():
+            _启动昵称补查任务()
+        if _消息持久化失败批次 or not _准备消息持久化队列().empty():
+            _启动消息持久化任务()
         _启动群信息轮询任务()
         return True
     except Exception as exc:
@@ -7409,9 +7421,106 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
         return False
 
 
-def _从数据库恢复() -> None:
-    """启动/重载时只从 MySQL 恢复会话摘要，历史消息在打开会话时分页读取。"""
-    _恢复群机器人状态()
+def _恢复会话签名(会话: Any) -> tuple[Any, ...]:
+    return tuple((会话 or {}).get(键) for 键 in
+                 ("last_ts", "last_message_id", "msg_count", "unread"))
+
+
+async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
+    global _消息数据库恢复完成键, _消息数据库恢复失败冷却
+    for 尝试 in range(3):
+        基线 = {
+            "conversations": {标识: _恢复会话签名(会话) for 标识, 会话 in 消息缓存.items()},
+            "groups": copy.deepcopy(群信息缓存),
+            "group_states": copy.deepcopy(群机器人状态缓存),
+            "meta_time": _本地缓存时间,
+        }
+        try:
+            # 快照读取不接触活动内存，锁只串行数据库工作，事件接收继续运行。
+            async with _数据库写入锁:
+                快照 = await _异步执行消息记录同步(
+                    _消息存储.读取启动快照, 配置, 群机器人状态命名空间, 未读状态命名空间
+                )
+            if 快照 is not None:
+                if 键 != _消息数据库恢复键:
+                    return False
+                _从数据库恢复(快照, 基线)
+                _消息数据库恢复完成键 = 键
+                _消息数据库恢复失败冷却 = 0.0
+                _启动消息数据库维护任务()
+                _启动消息资料回填任务()
+                return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.debug("消息记录后台恢复失败：错误类型=%s", type(异常).__name__)
+        if 尝试 < 2:
+            await asyncio.sleep(0.5 * (尝试 + 1))
+    if 键 == _消息数据库恢复键:
+        _消息数据库恢复失败冷却 = time.monotonic() + 60.0
+        logger.warning("消息记录后台恢复暂未完成：已尝试=3，冷却=60秒，待写项目保留")
+    return False
+
+
+def _启动消息数据库恢复任务() -> asyncio.Task[Any] | None:
+    global _消息数据库恢复任务, _消息数据库恢复键, _消息数据库恢复失败冷却
+    if not _消息数据库恢复接收启动 or not _消息数据库已配置():
+        return None
+    键 = _消息存储.获取数据库初始化键(当前插件配置)
+    if 键 != _消息数据库恢复键:
+        if _消息数据库恢复任务 is not None and not _消息数据库恢复任务.done():
+            _消息数据库恢复任务.cancel()
+        _消息数据库恢复任务 = None
+        _消息数据库恢复键 = 键
+        _消息数据库恢复失败冷却 = 0.0
+    if 键 == _消息数据库恢复完成键:
+        _启动消息数据库维护任务()
+        _启动消息资料回填任务()
+        return None
+    if time.monotonic() < _消息数据库恢复失败冷却:
+        return None
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if _消息数据库恢复任务 is None or _消息数据库恢复任务.done():
+        _消息数据库恢复任务 = 循环.create_task(
+            _消息数据库恢复工作(键, _消息存储.获取数据库配置快照(当前插件配置)), name="消息记录后台恢复"
+        )
+    return _消息数据库恢复任务
+
+
+async def 等待消息记录恢复() -> bool:
+    """依赖消息表的后台写入等待初始化；接收入口和插件加载不等待。"""
+    if not _消息数据库已配置():
+        return True
+    if _消息数据库恢复完成键 == _消息数据库恢复键 and _消息数据库恢复键:
+        return True
+    任务 = _启动消息数据库恢复任务()
+    return bool(await asyncio.shield(任务)) if 任务 is not None else False
+
+
+def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
+    """在事件循环合并线程快照；恢复期间新消息、群状态和未读数优先。"""
+    已更新群 = {标识 for 标识, 信息 in 群信息缓存.items()
+                if 信息 != (基线.get("groups") or {}).get(标识)}
+    for 会话标识, 值 in (快照.get("group_states") or {}).items():
+        if 群机器人状态缓存.get(会话标识) != (基线.get("group_states") or {}).get(会话标识):
+            continue
+        记录 = _解析群机器人状态值(值)
+        现有 = 群机器人状态缓存.get(会话标识) or {}
+        if int(现有.get("checked_at") or 0) > int(记录.get("checked_at") or 0):
+            continue
+        群机器人状态缓存[会话标识] = 记录
+        信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
+        信息.update({"membership_status": 记录["status"],
+                   "membership_checked_at": 记录["checked_at"],
+                   "member_role": 记录["member_role"]})
+        for 字段 in ("appid", "allow_proactive_msg", "recv_msg_setting"):
+            if 记录.get(字段) is not None:
+                信息[字段] = 记录[字段]
+        if 记录["status"] == "removed":
+            信息["is_admin"] = False
     # 热重载会保留旧模块的内存缓存，无论是否配置数据库都先清掉旧重复。
     for 会话 in 消息缓存.values():
         if isinstance(会话, dict):
@@ -7419,8 +7528,7 @@ def _从数据库恢复() -> None:
     if _消息存储 is None:
         return
     try:
-        读取群信息 = getattr(_消息存储, "读取全部群信息", None)
-        持久化群信息 = 读取群信息() if callable(读取群信息) else []
+        持久化群信息 = 快照.get("groups") or []
         恢复群数 = 0
         for 原始信息 in 持久化群信息 or []:
             if not isinstance(原始信息, dict):
@@ -7450,7 +7558,13 @@ def _从数据库恢复() -> None:
             资料["membership_status"] = str(成员状态.get("status") or "unknown")
             资料["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
             资料["member_role"] = str(成员状态.get("member_role") or "")
+            for 字段 in ("allow_proactive_msg", "recv_msg_setting"):
+                资料[字段] = 成员状态.get(字段)
+            if 资料["membership_status"] == "removed":
+                资料["is_admin"] = False
             现有 = 群信息缓存.get(会话标识) or {}
+            if 会话标识 in 已更新群:
+                continue
             try:
                 资料时间 = int(资料.get("updated_at") or 0)
             except (TypeError, ValueError):
@@ -7478,42 +7592,30 @@ def _从数据库恢复() -> None:
             logger.info("消息记录数据库恢复群资料：数量=%s", 恢复群数)
     except Exception as exc:
         logger.debug("消息记录群资料恢复失败：错误类型=%s", type(exc).__name__)
-    元数据 = {}
-    try:
-        元数据 = _消息存储.读取全部元数据() or {}
-    except Exception as exc:
-        logger.debug("消息记录元数据恢复失败：错误类型=%s", type(exc).__name__)
-    if 元数据:
-        global _本地缓存内存, _本地缓存时间
-        _本地缓存内存 = 元数据
+    global _本地缓存内存, _本地缓存时间
+    元数据 = 快照.get("meta") or {}
+    if _本地缓存时间 == 基线.get("meta_time"):
+        _本地缓存内存 = copy.deepcopy(元数据)
         _本地缓存时间 = time.time()
-    持久化未读表 = _读取全部持久化未读数()
+    else:
+        元数据 = copy.deepcopy(_本地缓存内存 or {})
+    持久化未读表 = 快照.get("unread") or {}
+    启动会话 = 基线.get("conversations") or {}
+    已更新会话 = {标识 for 标识, 会话 in 消息缓存.items()
+                  if _恢复会话签名(会话) != 启动会话.get(标识)}
     # 热重载会保留模块级缓存；只同步未读值，不重复读取整段历史。
     for 已有会话标识, 已有会话 in 消息缓存.items():
         if 已有会话标识 in _未读待写:
             已有会话["unread"] = _未读待写[已有会话标识]
-        elif 已有会话标识 in 持久化未读表:
+        elif 已有会话标识 not in 已更新会话 and 已有会话标识 in 持久化未读表:
             已有会话["unread"] = max(
                 int(已有会话.get("unread") or 0),
                 int(持久化未读表.get(已有会话标识) or 0),
             )
     置顶列表 = [str(x) for x in (元数据.get("pinned") or []) if str(x or "").strip()]
     # 只恢复会话骨架和最后一条摘要；历史消息在打开会话时由分页接口读取。
-    会话骨架: list[dict[str, Any]] = []
-    try:
-        聚合聊天列表 = getattr(_消息存储, "聚合聊天列表", None)
-        if callable(聚合聊天列表):
-            会话骨架 = 聚合聊天列表(500) or []
-    except Exception as exc:
-        logger.debug("消息记录会话摘要恢复失败：错误类型=%s", type(exc).__name__)
-    摘要表: dict[int, dict[str, Any]] = {}
-    try:
-        摘要读取 = getattr(_消息存储, "批量读取最后消息摘要", None)
-        摘要ID = [int(项.get("last_id") or 0) for 项 in 会话骨架 if int(项.get("last_id") or 0)]
-        if callable(摘要读取) and 摘要ID:
-            摘要表 = 摘要读取(摘要ID) or {}
-    except Exception as exc:
-        logger.debug("消息记录最后摘要恢复失败：错误类型=%s", type(exc).__name__)
+    会话骨架 = 快照.get("conversations") or []
+    摘要表 = 快照.get("summaries") or {}
     恢复数 = 0
     最大序号 = 0
     已恢复会话: set[str] = set()
@@ -7525,17 +7627,18 @@ def _从数据库恢复() -> None:
         最后ID = int(项.get("last_id") or 0)
         最后 = dict(摘要表.get(最后ID) or {})
         _规范化聊天摘要(最后)
-        类型 = str(最后.get("chat_type") or "group")
+        类型 = str(最后.get("chat_type") or 项.get("chat_type") or "group")
         appid = str(最后.get("appid") or "")
         会话 = _取得会话缓存(会话标识, 类型, appid)
         会话["msg_count"] = max(
             int(会话.get("msg_count") or 0),
             int(项.get("msg_count") or 0),
         )
-        if 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
+        if 会话标识 not in 已更新会话 and 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
             会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
         摘要时间 = int(最后.get("ts") or 项.get("last_ts") or 0)
-        if 摘要时间 >= int(会话.get("last_ts") or 0):
+        当前摘要时间 = int(会话.get("last_ts") or 0)
+        if 摘要时间 > 当前摘要时间 or (摘要时间 == 当前摘要时间 and 会话标识 not in 已更新会话):
             会话["last_content"] = _替换提及名称(最后.get("content") or "", 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_message_id"] = str(最后.get("message_id") or "")

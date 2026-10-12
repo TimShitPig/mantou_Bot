@@ -6,8 +6,10 @@ API 处理在 :mod:`帮助网页后端`，页面资源在独立的页面模块�
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
+import sys
 from typing import Any
 
 from aiohttp import web
@@ -16,6 +18,8 @@ try:
     from astrbot.api import logger
 except Exception:
     logger = logging.getLogger(__name__)
+
+_载入前已有页面模块 = set(sys.modules)
 
 from . import 帮助网页后端 as 后端
 from . import 帮助网页页面 as 页面
@@ -31,7 +35,8 @@ for _页面模块 in (
     页面,
     后端,
 ):
-    importlib.reload(_页面模块)
+    if _页面模块.__name__ in _载入前已有页面模块:
+        importlib.reload(_页面模块)
 
 帮助网页服务 = 后端.帮助网页服务
 
@@ -131,31 +136,62 @@ async def _压缩控制台响应(request: web.Request, handler: Any) -> web.Stre
     return 响应
 
 
-async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | None:
-    """启动帮助网页并返回可供插件生命周期保存的服务句柄。"""
+async def _恢复控制台会话(服务: 帮助网页服务, 配置: Any) -> None:
+    try:
+        配置快照 = 后端.获取控制台会话配置快照(配置)
+        快照 = await 后端._控制台线程执行(后端._读取持久化控制台会话, 配置快照)
+        if 后端.当前帮助网页服务 is not 服务 or 后端.当前帮助网页配置 is not 配置:
+            return
+        if 后端.获取控制台认证指纹(配置快照) != 后端.获取控制台认证指纹(配置):
+            return
+        for 会话值, (到期时间, 用户名) in 快照.items():
+            if 会话值 in 后端.控制台会话恢复排除:
+                continue
+            后端.控制台会话.setdefault(会话值, 到期时间)
+            后端.控制台会话身份.setdefault(会话值, 用户名)
+            后端.控制台会话最后持久化.setdefault(会话值, 0.0)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("帮助控制台会话后台恢复失败：错误类型=%s", type(exc).__name__)
 
-    await 停止帮助网页服务(后端.当前帮助网页服务)
+
+async def _刷新公开地址(服务: 帮助网页服务, 配置: Any) -> None:
+    try:
+        地址 = await 后端._控制台线程执行(后端._计算帮助网页地址, 配置)
+        if 后端.当前帮助网页服务 is 服务 and 后端.当前帮助网页配置 is 配置 and 地址:
+            服务.public_url = 后端._构造控制台访问地址(地址, 配置)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("帮助控制台访问地址后台更新失败：错误类型=%s", type(exc).__name__)
+
+
+@web.middleware
+async def _等待控制台会话恢复(request: web.Request, handler: Any) -> web.StreamResponse:
+    会话值 = str(request.cookies.get(后端.控制台会话Cookie名) or "").strip()
+    任务 = 后端.控制台会话恢复任务
+    if 会话值 and 会话值 not in 后端.控制台会话 and 任务 is not None and not 任务.done():
+        await asyncio.shield(任务)
+    return await handler(request)
+
+
+async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | None:
+    """先启动监听；数据库会话和公网地址在后台恢复。"""
+    await 停止帮助网页服务(后端.当前帮助网页服务, 保留会话=True)
     后端.当前帮助网页服务 = None
     后端.网页服务启动状态 = False
     后端.当前帮助网页配置 = 配置
-    # 媒体目录清理属于低优先级维护任务，不阻塞网页监听器启动。
-    后端._安排控制台后台任务(后端._清理本地发送媒体同步)
-    后端.控制台会话.clear()
-    后端.控制台会话身份.clear()
-    后端.控制台会话最后持久化.clear()
-    # 会话恢复会读取 MySQL，放入独立线程池，启动服务不阻塞事件循环。
-    await 后端._控制台线程执行(后端._加载持久化控制台会话)
-
-    基础地址 = 后端._计算帮助网页地址(配置)
+    后端.同步控制台会话认证(配置)
+    基础地址 = 后端._计算帮助网页启动地址(配置)
     public_url = 后端._构造控制台访问地址(基础地址, 配置)
     host, port = 后端._读取监听配置(配置)
-    # 官方富媒体硬限制为 200 MB；浏览器上传使用 base64 JSON，需要预留编码开销。
     app = web.Application(
         client_max_size=300 * 1024 * 1024,
-        middlewares=[_压缩控制台响应],
+        middlewares=[_等待控制台会话恢复, _压缩控制台响应],
     )
     _注册路由(app)
-    runner = web.AppRunner(app, access_log=None)
+    runner = web.AppRunner(app, access_log=None, shutdown_timeout=2.0)
     try:
         await runner.setup()
         await web.TCPSite(runner, host, port).start()
@@ -163,21 +199,18 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
         await runner.cleanup()
         logger.warning("帮助控制台启动失败：错误类型=%s", type(exc).__name__)
         return None
-
-    后端.当前帮助网页服务 = 帮助网页服务(runner, public_url, host, port)
+    服务 = 后端.当前帮助网页服务 = 帮助网页服务(runner, public_url, host, port)
     后端.网页服务启动状态 = True
-    logger.info(
-        "帮助控制台已启动：监听地址=%s, 监听端口=%s, 访问地址=%s",
-        host,
-        port,
-        基础地址,
-    )
-    return 后端.当前帮助网页服务
+    后端._安排控制台后台任务(后端._清理本地发送媒体同步)
+    后端.控制台会话恢复任务 = asyncio.create_task(_恢复控制台会话(服务, 配置), name="控制台会话恢复")
+    for 任务 in (后端.控制台会话恢复任务, asyncio.create_task(_刷新公开地址(服务, 配置), name="控制台公开地址")):
+        后端.控制台后台任务.add(任务)
+        任务.add_done_callback(后端.控制台后台任务.discard)
+    logger.info("帮助控制台已启动：监听地址=%s, 监听端口=%s, 访问地址=%s", host, port, 基础地址)
+    return 服务
 
 
-async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
-    """停止网页服务并清理内存会话。"""
-
+async def 停止帮助网页服务(服务: 帮助网页服务 | None, *, 保留会话: bool = False) -> None:
     try:
         await 后端._取消全部夸克网页扫码()
         await 后端.停止实时连接()
@@ -192,13 +225,15 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None) -> None:
             logger.debug("帮助控制台媒体代理会话关闭失败：错误类型=%s", type(exc).__name__)
         后端.清空临时Markdown媒体()
         后端.关闭控制台执行器()
+        后端.控制台会话恢复任务 = None
         if 后端.当前帮助网页服务 is 服务:
             后端.当前帮助网页服务 = None
             后端.网页服务启动状态 = None
             后端.当前帮助网页配置 = None
-            后端.控制台会话.clear()
-            后端.控制台会话身份.clear()
-            后端.控制台会话最后持久化.clear()
+            if not 保留会话:
+                后端.控制台会话.clear()
+                后端.控制台会话身份.clear()
+                后端.控制台会话最后持久化.clear()
 
 
 __all__ = ["获取帮助网页地址", "启动帮助网页服务", "停止帮助网页服务"]

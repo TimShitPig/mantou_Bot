@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import ipaddress
 import json
@@ -49,7 +50,7 @@ except Exception:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
-图片归档并发限制 = asyncio.Semaphore(2)
+图片归档并发限制 = globals().get("图片归档并发限制") or asyncio.Semaphore(2)
 图片归档进行中: set[tuple[str, str]] = globals().get("图片归档进行中") or set()
 图片归档已完成: set[tuple[str, str]] = globals().get("图片归档已完成") or set()
 图片归档失败冷却: dict[tuple[str, str], float] = globals().get("图片归档失败冷却") or {}
@@ -57,6 +58,8 @@ except Exception:
 图片归档排队中: set[tuple[str, str]] = globals().get("图片归档排队中") or set()
 图片归档接收开启 = bool(globals().get("图片归档接收开启", True))
 图片归档最大任务数 = 128
+# 仅保留当前进程的参数与远端操作结果；图片字节仍只使用上传临时文件。
+图片归档待恢复: dict[tuple[str, str], dict[str, Any]] = globals().get("图片归档待恢复", {})
 
 
 class 蓝奏云请求错误(RuntimeError):
@@ -845,44 +848,105 @@ async def 打开归档图片(
             响应.release()
 
 
-async def _执行图片归档(配置: Any, 记录: dict[str, Any]) -> dict[str, Any]:
-    Cookie, UID = _解析Cookie(_配置值(配置))
-    地址 = str((记录.get("media") or {}).get("src") or "").strip()
-    if not 地址:
-        raise 蓝奏云请求错误("source_missing")
+def _删除归档临时文件(路径: Path) -> None:
     from 功能文件.管理功能.基础功能 import 文件缓存
 
-    临时路径 = Path(文件缓存.创建临时缓存文件("lanzou-image-", ".tmp"))
     try:
-        内容类型, 大小 = await _下载QQ图片(地址, 临时路径)
-        媒体 = 记录.get("media") or {}
-        标识 = hashlib.sha256(
-            f"{记录.get('_session') or ''}:{记录.get('message_id') or ''}".encode(
-                "utf-8", errors="ignore"
-            )
-        ).hexdigest()[:24]
-        文件名 = f"msg_{标识}{_图片扩展名(内容类型)}"
-        时间戳 = int(记录.get("ts") or 0)
-        月份 = datetime.fromtimestamp(时间戳).strftime("%Y-%m") if 时间戳 > 0 else datetime.now().strftime("%Y-%m")
+        路径.unlink(missing_ok=True)
+    finally:
+        文件缓存.解除临时缓存占用(路径)
+
+
+async def _上传并取得归档资料(
+    Cookie: dict[str, str],
+    UID: str,
+    进度: dict[str, Any],
+    临时路径: Path | None,
+) -> dict[str, Any]:
+    try:
         async with _新建会话(Cookie) as 会话:
-            登录结果 = await _列出目录(会话, UID, -1)
-            del 登录结果
-            目录ID = await _确保归档目录(会话, UID, 月份)
-            文件ID = await _上传图片(
-                会话, UID, 目录ID, 临时路径, 文件名, 内容类型, 大小
-            )
-            提取码 = f"{secrets.randbelow(10_000):04d}"
-            分享 = await _取得分享信息(会话, UID, 文件ID, 提取码)
-        return {
+            文件ID = str(进度.get("file_id") or "")
+            if not 文件ID:
+                if 临时路径 is None:
+                    raise 蓝奏云请求错误("source_missing")
+                目录ID = await _确保归档目录(会话, UID, str(进度["month"]))
+                文件ID = await _上传图片(
+                    会话, UID, 目录ID, 临时路径,
+                    str(进度["filename"]), str(进度["content_type"]), int(进度["size"]),
+                )
+                # 记录文件 ID 后再请求分享；分享重试复用该文件，不重复上传。
+                进度["file_id"] = 文件ID
+            if 临时路径 is not None:
+                _删除归档临时文件(临时路径)
+                临时路径 = None
+            提取码 = 进度.setdefault("password", f"{secrets.randbelow(10_000):04d}")
+            分享 = await _取得分享信息(会话, UID, 文件ID, str(提取码))
+        归档资料 = {
             "share_url": 分享["share_url"],
             "password": 分享["password"],
             "file_id": 分享["file_id"],
-            "content_type": 内容类型,
-            "size": 大小,
-            "filename": 文件名,
+            "content_type": 进度["content_type"],
+            "size": 进度["size"],
+            "filename": 进度["filename"],
         }
+        进度["archive"] = 归档资料
+        return 归档资料
     finally:
-        临时路径.unlink(missing_ok=True)
+        if 临时路径 is not None:
+            _删除归档临时文件(临时路径)
+
+
+def _读取远端归档任务结果(任务: asyncio.Task[Any]) -> None:
+    # 重载时外层等待已取消，远端请求仍可完成；读取异常避免未观察任务告警。
+    if not 任务.cancelled():
+        任务.exception()
+
+
+async def _执行图片归档(配置: Any, 记录: dict[str, Any]) -> dict[str, Any]:
+    Cookie, UID = _解析Cookie(_配置值(配置))
+    键 = (str(记录.get("_session") or "").strip(), str(记录.get("message_id") or "").strip())
+    参数 = 图片归档待恢复.setdefault(键, {"config": 配置, "record": copy.deepcopy(记录)})
+    进度 = 参数.setdefault("progress", {})
+    if 进度.get("uid") not in (None, UID):
+        进度 = 参数["progress"] = {}
+    进度["uid"] = UID
+    if isinstance(进度.get("archive"), dict):
+        return dict(进度["archive"])
+    远端任务 = 进度.get("remote_task")
+    if isinstance(远端任务, asyncio.Task):
+        if not 远端任务.done() or (not 远端任务.cancelled() and 远端任务.exception() is None):
+            return await asyncio.shield(远端任务)
+        进度.pop("remote_task", None)
+
+    临时路径: Path | None = None
+    try:
+        if not 进度.get("file_id"):
+            地址 = str((记录.get("media") or {}).get("src") or "").strip()
+            if not 地址:
+                raise 蓝奏云请求错误("source_missing")
+            from 功能文件.管理功能.基础功能 import 文件缓存
+
+            临时路径 = Path(文件缓存.创建临时缓存文件("lanzou-image-", ".tmp"))
+            文件缓存.标记临时缓存正在使用(临时路径)
+            内容类型, 大小 = await _下载QQ图片(地址, 临时路径)
+            标识 = hashlib.sha256(f"{键[0]}:{键[1]}".encode("utf-8", errors="ignore")).hexdigest()[:24]
+            时间戳 = int(记录.get("ts") or 0)
+            进度.update({
+                "content_type": 内容类型,
+                "size": 大小,
+                "filename": f"msg_{标识}{_图片扩展名(内容类型)}",
+                "month": datetime.fromtimestamp(时间戳).strftime("%Y-%m") if 时间戳 > 0 else datetime.now().strftime("%Y-%m"),
+            })
+        # 上传一旦提交就独立完成，重载只取消等待者，恢复时接着等同一请求。
+        # 子任务自行持有会话和临时文件，避免关闭会话或重传造成云端重复。
+        远端任务 = asyncio.create_task(_上传并取得归档资料(Cookie, UID, 进度, 临时路径))
+        进度["remote_task"] = 远端任务
+        远端任务.add_done_callback(_读取远端归档任务结果)
+        临时路径 = None
+        return await asyncio.shield(远端任务)
+    finally:
+        if 临时路径 is not None:
+            _删除归档临时文件(临时路径)
 
 
 async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
@@ -901,8 +965,11 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
         return
     if float(图片归档失败冷却.get(键) or 0) > asyncio.get_running_loop().time():
         return
+    参数 = 图片归档待恢复.setdefault(键, {"config": 配置, "record": copy.deepcopy(记录)})
     图片归档进行中.add(键)
     阶段 = "download"
+    已中断 = False
+    已完成 = False
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
@@ -916,10 +983,12 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
             ):
                 raise 蓝奏云请求错误("message_not_found")
             图片归档已完成.add(键)
+            已完成 = True
             if len(图片归档已完成) > 10000:
                 图片归档已完成.clear()
                 图片归档已完成.add(键)
     except asyncio.CancelledError:
+        已中断 = True
         raise
     except Exception as exc:
         当前时间 = asyncio.get_running_loop().time()
@@ -944,6 +1013,37 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
     finally:
         图片归档进行中.discard(键)
         图片归档排队中.discard(键)
+        # 已上传但未写元数据的结果也保留，后续恢复不需要原附件 URL。
+        if 已完成 or (not 已中断 and not (参数.get("progress") or {}).get("file_id")):
+            图片归档待恢复.pop(键, None)
+
+
+def _归档等待任务完成(任务: asyncio.Task[Any], 键: tuple[str, str], 参数: dict[str, Any]) -> None:
+    图片归档任务.discard(任务)
+    if 参数.get("task") is 任务:
+        参数.pop("task", None)
+        图片归档排队中.discard(键)
+        图片归档进行中.discard(键)
+
+
+def _启动待恢复图片(键: tuple[str, str], 参数: dict[str, Any]) -> bool:
+    if 键 in 图片归档进行中 or 键 in 图片归档排队中:
+        return False
+    if not _配置值(参数.get("config")):
+        return False
+    if len(图片归档任务) >= 图片归档最大任务数:
+        return False
+    图片归档排队中.add(键)
+    try:
+        循环 = asyncio.get_running_loop()
+        任务 = 循环.create_task(归档消息图片(参数["config"], 参数["record"]))
+    except RuntimeError:
+        图片归档排队中.discard(键)
+        return False
+    参数["task"] = 任务
+    图片归档任务.add(任务)
+    任务.add_done_callback(lambda 完成任务: _归档等待任务完成(完成任务, 键, 参数))
+    return True
 
 
 def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
@@ -961,23 +1061,28 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
     键 = (会话标识, 消息ID)
     if 键 in 图片归档已完成 or 键 in 图片归档进行中 or 键 in 图片归档排队中:
         return False
-    if len(图片归档任务) >= 图片归档最大任务数:
+    if 键 not in 图片归档待恢复 and len(图片归档待恢复) >= 图片归档最大任务数:
         logger.warning("蓝奏云图片归档队列已满：上限=%s", 图片归档最大任务数)
         return False
-    图片归档排队中.add(键)
-    try:
-        任务 = asyncio.get_running_loop().create_task(归档消息图片(配置, dict(记录)))
-    except RuntimeError:
-        图片归档排队中.discard(键)
-        return False
-    图片归档任务.add(任务)
-    任务.add_done_callback(图片归档任务.discard)
-    return True
+    参数 = 图片归档待恢复.setdefault(键, {"config": 配置, "record": copy.deepcopy(记录)})
+    参数["config"] = 配置
+    return _启动待恢复图片(键, 参数)
 
 
-def 启动图片归档任务() -> None:
+def 启动图片归档任务(配置: Any = None) -> None:
     global 图片归档接收开启
     图片归档接收开启 = True
+    恢复数量 = 0
+    for 键, 参数 in list(图片归档待恢复.items()):
+        if 键 in 图片归档已完成:
+            图片归档待恢复.pop(键, None)
+            continue
+        if 配置 is not None:
+            参数["config"] = 配置
+        图片归档失败冷却.pop(键, None)
+        恢复数量 += int(_启动待恢复图片(键, 参数))
+    if 恢复数量:
+        logger.info("蓝奏云图片归档恢复任务：数量=%s", 恢复数量)
 
 
 async def 停止图片归档任务() -> None:
@@ -991,6 +1096,8 @@ async def 停止图片归档任务() -> None:
     图片归档任务.clear()
     图片归档排队中.clear()
     图片归档进行中.clear()
+    if 图片归档待恢复:
+        logger.info("蓝奏云图片归档暂停任务：待恢复=%s", len(图片归档待恢复))
 
 
 def 构造网页媒体字段(

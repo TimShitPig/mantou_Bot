@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 日志 = logging.getLogger(__name__)
+_进程活动临时缓存路径: set[str] = globals().get("_进程活动临时缓存路径", set())
 插件根目录 = Path(__file__).resolve().parents[3]
 文件缓存目录 = 插件根目录 / "功能文件" / "文件缓存"
 旧本地小说缓存目录 = 插件根目录 / "功能文件" / "下载缓存"
@@ -474,6 +475,14 @@ def 迁移旧文件缓存() -> dict[str, int]:
     return 结果
 
 
+def 标记临时缓存正在使用(路径: str | Path) -> None:
+    _进程活动临时缓存路径.add(str(Path(路径).absolute()))
+
+
+def 解除临时缓存占用(路径: str | Path) -> None:
+    _进程活动临时缓存路径.discard(str(Path(路径).absolute()))
+
+
 def 清理过期临时文件缓存(保留秒数: int = 24 * 60 * 60) -> int:
     """清理重载或进程中断遗留的临时上传/转码文件。"""
     if not 临时缓存目录.is_dir():
@@ -481,7 +490,7 @@ def 清理过期临时文件缓存(保留秒数: int = 24 * 60 * 60) -> int:
     截止时间 = time.time() - max(60, int(保留秒数 or 0))
     已清理 = 0
     for 路径 in 临时缓存目录.iterdir():
-        if not 路径.is_file():
+        if str(路径.absolute()) in _进程活动临时缓存路径 or not 路径.is_file():
             continue
         try:
             if 路径.stat().st_mtime >= 截止时间:
