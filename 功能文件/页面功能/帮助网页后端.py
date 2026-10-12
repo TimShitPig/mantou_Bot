@@ -578,7 +578,7 @@ async def _后台刷新消息列表(
     "uc_pan_settings": "UC 网盘",
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
-    "lanzou_pan_settings": "蓝奏云图片归档",
+    "lanzou_pan_settings": "蓝奏云媒体归档",
     "database_settings": "数据库",
 }
 
@@ -1543,112 +1543,65 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
     会话标识 = str(request.query.get("chat_id") or "").strip()
     类型 = str(request.query.get("chat_type") or "group").strip().lower()
     消息ID = str(request.query.get("message_id") or "").strip()
-    if (
-        not 会话标识
-        or len(会话标识) > 200
-        or 类型 not in {"group", "user"}
-        or not 消息ID
-        or len(消息ID) > 128
-    ):
-        return web.Response(status=400, text="图片记录参数无效")
     try:
+        媒体索引 = int(request.query.get("media_index") or 0)
+    except (TypeError, ValueError):
+        return web.Response(status=400, text="媒体记录参数无效")
+    if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or not 消息ID or len(消息ID) > 128 or not 0 <= 媒体索引 < 10000:
+        return web.Response(status=400, text="媒体记录参数无效")
+    响应: web.StreamResponse | None = None
+    try:
+        import zlib
         from 功能文件.管理功能.基础功能 import 消息记录
         from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 
-        归档 = await _控制台线程执行(
-            消息记录.获取消息媒体归档, 会话标识, 消息ID, 类型
-        )
+        归档 = await _控制台线程执行(消息记录.获取消息媒体归档, 会话标识, 消息ID, 类型, 媒体索引)
         if not isinstance(归档, dict):
-            return web.Response(status=404, text="图片归档不存在")
-        分享地址 = str(归档.get("share_url") or "").strip()
-        提取码 = str(归档.get("password") or "").strip()
+            return web.Response(status=404, text="媒体归档不存在")
+        大小 = int(归档.get("size") or 0)
+        偏移 = 蓝奏云图片归档._归档偏移(归档)
         try:
-            大小上限 = int(归档.get("size") or 0)
-        except (TypeError, ValueError):
-            大小上限 = 0
-        if not 分享地址 or not 提取码 or not 0 < 大小上限 <= 100 * 1024 * 1024:
-            return web.Response(status=404, text="图片归档不存在")
-        阶段 = "share"
-        上游状态 = 0
-        响应: web.StreamResponse | None = None
-        try:
-            async with 蓝奏云图片归档.打开归档图片(
-                分享地址, 提取码
-            ) as 上游:
-                上游状态 = int(上游.status or 0)
-                阶段 = "read_prefix"
-                前缀 = await 上游.content.read(64 * 1024)
-                类型 = 蓝奏云图片归档.识别图片类型(
-                    前缀, 上游.headers.get("Content-Type")
-                )
-                if not 类型.startswith("image/"):
-                    if (
-                        b"acw_sc__v2" in 前缀.lower()
-                        or (
-                            蓝奏云图片归档._是ESA响应(上游)
-                            and 上游.content_type == "text/html"
-                        )
-                    ):
-                        raise 蓝奏云图片归档.蓝奏云请求错误(
-                            "esa_challenge_retry", 上游.status
-                        )
-                    return web.Response(status=415, text="归档内容不是图片")
-                响应 = web.StreamResponse(
-                    status=200,
-                    headers={
-                        "Content-Type": 类型,
-                        "Content-Length": str(大小上限),
-                        "Content-Disposition": "inline",
-                        "Cache-Control": "private, max-age=3600",
-                        "X-Content-Type-Options": "nosniff",
-                    },
-                )
-                阶段 = "prepare_response"
-                await 响应.prepare(request)
-                已发送 = len(前缀)
-                if 已发送 > 大小上限:
-                    raise ValueError("archive_size_mismatch")
-                if 前缀:
-                    await 响应.write(前缀)
-                阶段 = "stream_body"
-                async for 数据块 in 上游.content.iter_chunked(64 * 1024):
-                    已发送 += len(数据块)
-                    if 已发送 > 大小上限:
-                        raise ValueError("archive_size_mismatch")
-                    await 响应.write(数据块)
-                if 已发送 != 大小上限:
-                    raise ValueError("archive_size_mismatch")
-                await 响应.write_eof()
-                return 响应
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "帮助控制台蓝奏云图片读取失败：阶段=%s，原因=%s，错误类型=%s，上游状态=%s，错误状态=%s，业务码=%s，主机=%s",
-                阶段,
-                getattr(exc, "阶段", "none") or "none",
-                type(exc).__name__,
-                上游状态 or "none",
-                getattr(exc, "状态码", 0) or "none",
-                getattr(exc, "业务码", None)
-                if getattr(exc, "业务码", None) is not None
-                else "none",
-                getattr(exc, "主机", "") or "none",
-            )
-            if 响应 is not None and 响应.prepared:
-                响应.force_close()
-                传输 = request.transport
-                if 传输 is not None:
-                    传输.close()
-                return 响应
-            return web.Response(status=502, text="图片归档暂时不可用")
+            起点, 终点, 分段 = 蓝奏云图片归档.解析媒体范围(request.headers.get("Range", ""), 大小)
+        except ValueError:
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
+        # ZIP_STORED 精确映射原文件偏移；若上游忽略 Range，则有界跳过容器头。
+        远端范围 = f"bytes={偏移 + 起点}-{偏移 + 终点}" if 偏移 or 分段 else ""
+        async with 蓝奏云图片归档.打开归档图片(str(归档.get("share_url") or ""), str(归档.get("password") or ""), 范围=远端范围) as 上游:
+            块流 = 蓝奏云图片归档.读取归档媒体块(上游, 归档, 起点, 终点)
+            前块 = await anext(块流)
+            MIME = str(归档.get("content_type") or "").split(";", 1)[0].lower()
+            文件归档 = 归档.get("media_kind") == "file" or MIME == "application/octet-stream"
+            if not 文件归档 and not re.fullmatch(r"(?:image|video|audio)/[a-z0-9.+-]+", MIME):
+                return web.Response(status=415, text="归档内容类型无效")
+            if 起点 == 0 and not 文件归档 and not 蓝奏云图片归档.识别媒体类型(前块[:128], MIME):
+                return web.Response(status=415, text="归档内容不是媒体")
+            响应头 = {"Content-Type": MIME, "Content-Length": str(终点 - 起点 + 1),
+                      "Content-Disposition": ("attachment; filename*=UTF-8''" + quote(_媒体文件名(归档.get("original_name") or 归档.get("filename")), safe="")) if 文件归档 else "inline", "Cache-Control": "private, max-age=3600",
+                      "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes",
+                      "Content-Security-Policy": "sandbox; default-src 'none'"}
+            if 分段:
+                响应头["Content-Range"] = f"bytes {起点}-{终点}/{大小}"
+            响应 = web.StreamResponse(status=206 if 分段 else 200, headers=响应头)
+            await 响应.prepare(request)
+            校验 = zlib.crc32(前块)
+            await 响应.write(前块)
+            async for 块 in 块流:
+                校验 = zlib.crc32(块, 校验)
+                await 响应.write(块)
+            if not 分段 and 归档.get("container") == "zip-stored" and 校验 & 0xffffffff != int(归档.get("crc32", -1)):
+                raise ValueError("archive_crc_mismatch")
+            await 响应.write_eof()
+            return 响应
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning(
-            "帮助控制台蓝奏云图片代理失败：错误类型=%s", type(exc).__name__
-        )
-        return web.Response(status=502, text="图片归档暂时不可用")
+        logger.warning("帮助控制台蓝奏云媒体读取失败：媒体序号=%s，阶段=%s，错误类型=%s，状态=%s", 媒体索引 + 1, getattr(exc, "阶段", "read"), type(exc).__name__, getattr(exc, "状态码", 0) or "none")
+        if 响应 is not None and 响应.prepared:
+            响应.force_close()
+            if request.transport is not None:
+                request.transport.close()
+            return 响应
+        return web.Response(status=502, text="媒体归档暂时不可用")
 
 
 本地发送媒体有效期秒 = 3 * 24 * 60 * 60
@@ -3226,6 +3179,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
                 if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
                     消息项["media"] = dict(消息项["media"])
                     消息项["media"].pop("_lanzou_archive", None)
+                    消息项["media"].pop("_lanzou_archives", None)
         try:
             消息记录.安排待处理群信息刷新()
         except Exception:

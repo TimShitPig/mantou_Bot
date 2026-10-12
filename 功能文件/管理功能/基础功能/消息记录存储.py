@@ -1062,7 +1062,7 @@ def 写入消息(记录: dict[str, Any]) -> bool:
 
 
 def 读取消息媒体归档(
-    会话标识: str, 消息ID: str, 类型: str = ""
+    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0
 ) -> dict[str, Any] | None:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
@@ -1093,7 +1093,9 @@ def 读取消息媒体归档(
         if isinstance(原文, bytes):
             原文 = 原文.decode("utf-8", errors="replace")
         媒体 = json.loads(str(原文 or "{}"))
-        归档 = 媒体.get("_lanzou_archive") if isinstance(媒体, dict) else None
+        归档 = (媒体.get("_lanzou_archives") or {}).get(str(媒体索引)) if isinstance(媒体, dict) else None
+        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+            归档 = 媒体.get("_lanzou_archive")
         return 归档 if isinstance(归档, dict) else None
     except Exception as exc:
         logger.debug("消息记录 MySQL 图片归档读取失败：错误类型=%s", type(exc).__name__)

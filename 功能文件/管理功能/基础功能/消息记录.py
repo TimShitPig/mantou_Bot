@@ -861,6 +861,7 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         已有记录["raw_message"] = 新原始消息
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
+    已有归档列表 = dict(旧媒体.get("_lanzou_archives") or {}) if isinstance(旧媒体, dict) else {}
     if isinstance(新媒体, dict) and 新媒体:
         已有归档 = (
             旧媒体.get("_lanzou_archive")
@@ -911,6 +912,10 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             当前媒体 = 已有记录.get("media")
             if isinstance(当前媒体, dict):
                 当前媒体["_lanzou_archive"] = 已有归档
+        if isinstance(已有记录.get("media"), dict):
+            归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **已有归档列表}
+            if 归档列表:
+                已有记录["media"]["_lanzou_archives"] = 归档列表
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
     已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
     try:
@@ -1581,9 +1586,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     会话标识 = str(记录.get("_session") or "")
-    if isinstance(消息.get("media"), dict) and isinstance(
-        消息["media"].get("_lanzou_archive"), dict
-    ):
+    if isinstance(消息.get("media"), dict):
         try:
             from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 
@@ -1599,6 +1602,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
             if isinstance(媒体, dict):
                 媒体 = dict(媒体)
                 媒体.pop("_lanzou_archive", None)
+                媒体.pop("_lanzou_archives", None)
                 消息["media"] = 媒体
     成员资料 = _获取消息相关成员资料(会话标识, [记录])
     return {
@@ -2066,7 +2070,7 @@ def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
     项目 = {
         字段: 值
         for 字段, 值 in 媒体.items()
-        if 字段 not in {"items", "_lanzou_archive"}
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives"}
     }
     if any(str(项目.get(字段) or "").strip() for 字段 in ("src", "url", "download_url")):
         return [项目]
@@ -2099,8 +2103,9 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
         return dict(新媒体)
     合并媒体 = dict(已有媒体)
     旧归档 = 已有媒体.get("_lanzou_archive")
+    新归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **(已有媒体.get("_lanzou_archives") or {})}
     for 字段, 值 in 新媒体.items():
-        if 字段 in {"items", "_lanzou_archive"}:
+        if 字段 in {"items", "_lanzou_archive", "_lanzou_archives"}:
             continue
         if 值 not in (None, ""):
             合并媒体[字段] = 值
@@ -2108,6 +2113,8 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
         合并媒体["items"] = _合并媒体项目列表(已有媒体, 新媒体)
     if isinstance(旧归档, dict):
         合并媒体["_lanzou_archive"] = 旧归档
+    if 新归档列表:
+        合并媒体["_lanzou_archives"] = 新归档列表
     return 合并媒体
 
 
@@ -2121,67 +2128,93 @@ def _打包媒体项目(项目列表: list[dict[str, Any]]) -> dict[str, Any] | 
 
 
 def _提取附件列表(消息: Any) -> list[Any]:
-    """兼容 botpy 对象、字典和 raw_data 嵌套结构中的 attachments。"""
-    if 消息 is None:
-        return []
-    来源: list[Any] = []
-    待检查: list[Any] = [消息]
-    已检查: set[int] = set()
-    for _ in range(2):
-        下一层: list[Any] = []
-        for 当前 in 待检查:
+    """读取官方附件及递归 msg_elements；合并包装镜像，但保留同源多次附件。"""
+    节点上限, 附件上限, 深度上限 = 512, 256, 12
+    已解析: dict[int, tuple[Any, list[Any]]] = {}
+    活动节点: set[int] = set()
+    节点数 = 0
+
+    def 附件键(附件: Any) -> str:
+        项目 = _解析消息结构(附件)
+        项目 = 项目 if 项目 is not None else 附件
+        return _清理媒体地址(
+            _读取字段(项目, "url") or _读取字段(项目, "download_url")
+            or _读取字段(项目, "file_url") or _读取字段(项目, "src")
+            or _读取字段(项目, "voice_wav_url")
+        )
+
+    def 合并镜像(来源列表: list[list[Any]]) -> list[Any]:
+        # attachments 与 raw_data 常是同一份附件的两种表示；按最大出现次数
+        # 合并，而非全局 URL 去重，同一组中两张相同图片仍保留两项。
+        结果: list[Any] = []
+        已有次数: dict[str, int] = {}
+        for 来源 in 来源列表:
+            本组次数: dict[str, int] = {}
+            for 附件 in 来源[:附件上限]:
+                键 = 附件键(附件)
+                if not 键:
+                    continue
+                本组次数[键] = 本组次数.get(键, 0) + 1
+                if 本组次数[键] > 已有次数.get(键, 0):
+                    结果.append(附件)
+                    if len(结果) >= 附件上限:
+                        return 结果
+            for 键, 次数 in 本组次数.items():
+                已有次数[键] = max(已有次数.get(键, 0), 次数)
+        return 结果
+
+    def 遍历(当前: Any, 深度: int) -> list[Any]:
+        nonlocal 节点数
+        if 当前 is None or 深度 > 深度上限:
+            return []
+        标识 = id(当前)
+        if 标识 in 活动节点:
+            return []
+        if 标识 in 已解析:
+            return 已解析[标识][1]
+        if 节点数 >= 节点上限:
+            return []
+        节点数 += 1
+        活动节点.add(标识)
+        try:
             结构 = _解析消息结构(当前)
-            当前 = 结构 if 结构 is not None else 当前
-            标识 = id(当前)
-            if 标识 in 已检查:
-                continue
-            已检查.add(标识)
-            来源.append(当前)
-            for 字段 in ("raw_data", "data", "payload", "event", "message"):
-                嵌套 = _读取字段(当前, 字段)
-                if 嵌套 not in (None, ""):
-                    解析结果 = _解析消息结构(嵌套)
-                    下一层.append(解析结果 if 解析结果 is not None else 嵌套)
-        待检查 = 下一层
-        if not 待检查:
-            break
-    附件列表: list[Any] = []
-    已见附件组: set[str] = set()
-    for 当前 in 来源:
-        for 字段 in ("attachments", "attachment", "files"):
-            值 = _读取字段(当前, 字段)
-            if 值 in (None, ""):
-                continue
-            解析结果 = _解析消息结构(值)
-            值 = 解析结果 if 解析结果 is not None else 值
-            if isinstance(值, (list, tuple)):
-                附件项 = list(值)
-            elif isinstance(值, dict) and not any(
-                键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type")
-            ):
-                附件项 = list(值.values())
-            else:
-                附件项 = [值]
-            附件组 = []
-            for 附件 in 附件项:
-                项目 = _解析消息结构(附件) or 附件
-                地址 = _清理媒体地址(
-                    _读取字段(项目, "url")
-                    or _读取字段(项目, "download_url")
-                    or _读取字段(项目, "file_url")
-                    or _读取字段(项目, "src")
-                )
-                if not 地址:
-                    附件组 = []
-                    break
-                附件组.append(地址)
-            签名 = json.dumps(附件组, ensure_ascii=False, separators=(",", ":")) if 附件组 else ""
-            if 签名 and 签名 in 已见附件组:
-                continue
-            if 签名:
-                已见附件组.add(签名)
-            附件列表.extend(附件项)
-    return 附件列表
+            结构 = 结构 if 结构 is not None else 当前
+            来源列表: list[list[Any]] = []
+            for 字段 in ("attachments", "attachment", "files"):
+                值 = _读取字段(结构, 字段)
+                解析结果 = _解析消息结构(值)
+                值 = 解析结果 if 解析结果 is not None else 值
+                if isinstance(值, (list, tuple)):
+                    项目 = list(值[:附件上限])
+                elif isinstance(值, dict) and not any(
+                    键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type")
+                ):
+                    项目 = list(值.values())[:附件上限]
+                else:
+                    项目 = [值] if 值 is not None else []
+                来源列表.append(项目)
+            # 只遍历协议容器，不把头像、ARK 预览图或任意正文 URL 当作原附件。
+            for 字段 in ("raw_data", "data", "payload", "event", "message", "d"):
+                值 = _读取字段(结构, 字段)
+                if 值 is not None and not isinstance(值, (int, float, bool)):
+                    来源列表.append(遍历(值, 深度 + 1))
+            元素 = _读取字段(结构, "msg_elements")
+            解析元素 = _解析消息结构(元素)
+            元素 = 解析元素 if 解析元素 is not None else 元素
+            if isinstance(元素, (list, tuple)):
+                子附件: list[Any] = []
+                for 子元素 in 元素[:节点上限]:
+                    子附件.extend(遍历(子元素, 深度 + 1))
+                    if len(子附件) >= 附件上限:
+                        break
+                来源列表.append(子附件[:附件上限])
+            结果 = 合并镜像(来源列表)
+            已解析[标识] = (当前, 结果)
+            return 结果
+        finally:
+            活动节点.discard(标识)
+
+    return 遍历(消息, 0)
 
 
 def _读取附件字段(附件: Any, *字段名: str) -> Any:
@@ -2211,6 +2244,15 @@ def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
             )
             if not 地址:
                 continue
+            if not 类型值.startswith(("image", "video", "audio", "voice")):
+                import mimetypes
+                附件名称 = str(_读取附件字段(附件, "filename", "file_name", "name") or _解析网址(地址).path)
+                后缀 = Path(附件名称).suffix.lower()
+                后缀MIME = {".jfif": "image/jpeg", ".jpe": "image/jpeg", ".heic": "image/heic", ".heif": "image/heif",
+                           ".avif": "image/avif", ".jxl": "image/jxl", ".tif": "image/tiff", ".tiff": "image/tiff",
+                           ".silk": "audio/silk", ".amr": "audio/amr"}.get(后缀) or mimetypes.guess_type(附件名称)[0] or ""
+                if 后缀MIME.startswith(("image/", "video/", "audio/")):
+                    类型值 = 后缀MIME
             if 类型值.startswith("image") or 类型值 in ("img", "图片"):
                 媒体类型 = "图片"
             elif 类型值.startswith("video") or 类型值 in ("视频",):
@@ -2223,7 +2265,7 @@ def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
             名称 = _读取附件字段(附件, "filename", "file_name", "name")
             if 名称 not in (None, ""):
                 媒体["name"] = str(名称).strip()
-            内容类型 = _读取附件字段(附件, "content_type", "mime_type")
+            内容类型 = 类型值 if 类型值.startswith(("image/", "video/", "audio/")) else _读取附件字段(附件, "content_type", "mime_type")
             if 内容类型 not in (None, ""):
                 媒体["content_type"] = str(内容类型).strip()
             for 字段 in ("size", "width", "height"):
@@ -3107,10 +3149,11 @@ def 更新消息媒体归档(
     归档资料: dict[str, Any],
     *,
     原记录: dict[str, Any] | None = None,
+    媒体索引: int = 0,
 ) -> bool:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
-    if not 会话标识 or not 消息ID or not isinstance(归档资料, dict):
+    if not 会话标识 or not 消息ID or not isinstance(归档资料, dict) or 媒体索引 < 0:
         return False
     必要字段 = ("share_url", "password", "content_type", "size", "filename")
     if any(not str(归档资料.get(字段) or "").strip() for 字段 in 必要字段):
@@ -3133,12 +3176,16 @@ def 更新消息媒体归档(
     媒体 = 记录.get("media")
     if not isinstance(媒体, dict):
         return False
-    if isinstance(媒体.get("_lanzou_archive"), dict):
+    if 媒体索引 >= len(媒体.get("items") or [媒体]):
+        return False
+    if isinstance((媒体.get("_lanzou_archives") or {}).get(str(媒体索引)), dict):
+        return True
+    if 媒体索引 == 0 and isinstance(媒体.get("_lanzou_archive"), dict):
         return True
     原媒体 = copy.deepcopy(媒体)
-    媒体["_lanzou_archive"] = {
+    媒体.setdefault("_lanzou_archives", {})[str(媒体索引)] = {
         字段: 归档资料[字段]
-        for 字段 in (*必要字段, "file_id")
+        for 字段 in (*必要字段, "file_id", "container", "offset", "archive_size", "crc32", "media_kind", "original_name")
         if 字段 in 归档资料
     }
     if not _消息数据库已配置() or not _排队消息持久化("message", copy.deepcopy(记录)):
@@ -3150,12 +3197,12 @@ def 更新消息媒体归档(
 
 
 def 获取消息媒体归档(
-    会话标识: str, 消息ID: str, 类型: str = ""
+    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0
 ) -> dict[str, Any] | None:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
     类型 = str(类型 or "").strip().lower()
-    if not 会话标识 or not 消息ID:
+    if not 会话标识 or not 消息ID or 媒体索引 < 0:
         return None
     会话 = 消息缓存.get(会话标识) or {}
     for 记录 in reversed(会话.get("messages") or []):
@@ -3164,7 +3211,9 @@ def 获取消息媒体归档(
         if 类型 and str(记录.get("chat_type") or "").strip().lower() != 类型:
             continue
         媒体 = 记录.get("media")
-        归档 = 媒体.get("_lanzou_archive") if isinstance(媒体, dict) else None
+        归档 = (媒体.get("_lanzou_archives") or {}).get(str(媒体索引)) if isinstance(媒体, dict) else None
+        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+            归档 = 媒体.get("_lanzou_archive")
         if isinstance(归档, dict):
             return copy.deepcopy(归档)
     if _消息存储 is None or not _消息数据库已配置():
@@ -3173,7 +3222,7 @@ def 获取消息媒体归档(
         读取方法 = getattr(_消息存储, "读取消息媒体归档", None)
         if not callable(读取方法):
             return None
-        归档 = 读取方法(会话标识, 消息ID, 类型)
+        归档 = 读取方法(会话标识, 消息ID, 类型, 媒体索引)
         return copy.deepcopy(归档) if isinstance(归档, dict) else None
     except Exception as exc:
         logger.debug("消息图片归档读取失败：错误类型=%s", type(exc).__name__)
@@ -3519,6 +3568,11 @@ def 记录发送消息(
             )
             if 消息ID:
                 自己发送消息ID[消息ID] = time.time()
+            try:
+                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+                蓝奏云图片归档.安排归档消息图片(当前插件配置, 重复发送记录)
+            except Exception as 归档异常:
+                logger.debug("蓝奏云媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
             return 重复发送记录
         if 消息ID:
             已有记录 = next(
@@ -3555,6 +3609,11 @@ def 记录发送消息(
                     会话["last_message_id"] = str(已有记录.get("message_id") or 消息ID or "")
                 会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
                 自己发送消息ID[str(消息ID)] = time.time()
+                try:
+                    from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+                    蓝奏云图片归档.安排归档消息图片(当前插件配置, 已有记录)
+                except Exception as 归档异常:
+                    logger.debug("蓝奏云媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
                 return 已有记录
         发送序号 += 1
         记录: dict[str, Any] = {
@@ -3625,6 +3684,12 @@ def 记录发送消息(
         会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
         # 机器人发送回复也属于一条新消息；只有设置会话已读才会清零红点。
         _推送消息事件(记录, 会话)
+        if isinstance(记录.get("media"), dict):
+            try:
+                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+                蓝奏云图片归档.安排归档消息图片(当前插件配置, 记录)
+            except Exception as 归档异常:
+                logger.debug("蓝奏云媒体归档入队失败：错误类型=%s", type(归档异常).__name__)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -7129,6 +7194,40 @@ def _安装消息事件挂钩() -> bool:
     return True
 
 
+def _链消息段列表(消息链: Any) -> list[Any]:
+    if isinstance(消息链, (list, tuple)):
+        return list(消息链)
+    return list(_读取字段(消息链, "chain") or _读取字段(消息链, "segments") or [])
+
+
+def _链段类型(段: Any) -> str:
+    类型 = _读取字段(段, "type") or ""
+    return str(getattr(类型, "value", 类型)).strip().lower()
+
+
+def _链提取媒体(消息链: Any) -> dict[str, Any] | None:
+    """记录官方组件中可用的远端媒体 URL；不触发 File.file 的同步下载属性。"""
+    附件列表: list[dict[str, Any]] = []
+    for 段 in _链消息段列表(消息链):
+        类型 = _链段类型(段)
+        if 类型 not in {"image", "img", "video", "record", "recordmusic", "file", "files"}:
+            continue
+        数据 = _读取字段(段, "data")
+        结构 = 数据 if isinstance(数据, dict) else 段
+        地址 = _读取字段(结构, "url")
+        if not str(地址 or "").startswith(("http://", "https://")):
+            # 新版 File 使用 file_，访问 file 属性会启动同步下载。
+            字段 = "file_" if 类型 in {"file", "files"} and not isinstance(结构, dict) else "file"
+            地址 = _读取字段(结构, 字段)
+        if not str(地址 or "").startswith(("http://", "https://")):
+            continue
+        默认MIME = {"image": "image", "img": "image", "video": "video",
+                    "record": "voice", "recordmusic": "voice"}.get(类型, "file")
+        附件列表.append({"url": 地址, "filename": _读取字段(结构, "name") or "",
+                         "content_type": _读取字段(结构, "content_type") or 默认MIME})
+    return _提取附件媒体({"attachments": 附件列表})
+
+
 def _链提取文本(消息链: Any) -> str:
     """从 AstrBot MessageChain 提取展示文本（纯文本 + 媒体占位）。
 
@@ -7136,15 +7235,15 @@ def _链提取文本(消息链: Any) -> str:
     与旧版 segments（type/data 字典）两种形态，组件类型大小写不敏感。
     """
     try:
-        段们 = getattr(消息链, "chain", None) or getattr(消息链, "segments", None) or []
+        段们 = _链消息段列表(消息链)
         文本 = ""
         for 段 in 段们:
             if isinstance(段, dict):
-                类型 = str(段.get("type") or "").strip().lower()
+                类型 = _链段类型(段)
                 数据 = 段.get("data") or {}
                 内容 = _链段取文本(类型, 数据)
             else:
-                类型 = str(getattr(段, "type", "") or "").strip().lower()
+                类型 = _链段类型(段)
                 数据 = getattr(段, "data", None)
                 内容 = _链段取文本(类型, 数据 if isinstance(数据, dict) else None, 段)
             if 内容:
@@ -7157,6 +7256,9 @@ def _链提取文本(消息链: Any) -> str:
                 文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[视频] "
             elif 类型 in ("record", "recordmusic", "语音"):
                 文本 += (" " if 文本 and not 文本.endswith(" ") else "") + "[语音] "
+            elif 类型 == "face":
+                表情ID = _读取字段(数据, "id") if isinstance(数据, dict) else _读取字段(段, "id")
+                文本 += f"[表情:{表情ID}]" if 表情ID is not None else "[表情]"
         return 文本.strip()
     except Exception:
         return ""
@@ -7197,9 +7299,27 @@ def _会话标识兜底(session: Any) -> str:
     return ""
 
 
+def _发送挂钩原方法(发送方法: Any) -> Any:
+    """热重载更新本插件包装，旧闭包保持兼容且不叠加重复记录。"""
+    if not getattr(发送方法, "__mantou_record_after_send__", False):
+        return 发送方法
+    原方法 = getattr(发送方法, "__mantou_record_original__", None)
+    if 原方法 is not None:
+        return 原方法
+    # 旧版本未记录 original；只解包已标记的自有闭包。
+    自由变量 = getattr(getattr(发送方法, "__code__", None), "co_freevars", ())
+    for 名称, 单元 in zip(自由变量, getattr(发送方法, "__closure__", ()) or ()):
+        if 名称 == "发送方法":
+            return 单元.cell_contents
+    return None
+
+
 def _包装事件发送(发送方法: Any) -> Any:
     """包装 QQ 官方事件发送入口，只在平台成功返回后记录消息和时间。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 2:
+        return None
+    发送方法 = _发送挂钩原方法(发送方法)
+    if 发送方法 is None:
         return None
 
     async def 新发送(self: Any, stream: Any = None, **关键字: Any) -> Any:
@@ -7207,6 +7327,7 @@ def _包装事件发送(发送方法: Any) -> Any:
         类型 = "user"
         appid = ""
         内容 = ""
+        媒体 = None
         try:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
@@ -7219,6 +7340,7 @@ def _包装事件发送(发送方法: Any) -> Any:
                 except Exception:
                     pass
                 内容 = _链提取文本(缓冲)
+                媒体 = _链提取媒体(缓冲)
         except Exception as exc:
             logger.debug("消息记录事件发送参数提取失败：错误类型=%s", type(exc).__name__)
         结果 = 发送方法(self, stream, **关键字)
@@ -7241,6 +7363,7 @@ def _包装事件发送(发送方法: Any) -> Any:
                     自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
                     来源="bot_event",
+                    媒体=媒体,
                     发送时间=_提取发送响应时间(结果),
                 )
         except Exception as exc:
@@ -7248,12 +7371,17 @@ def _包装事件发送(发送方法: Any) -> Any:
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
+    setattr(新发送, "__mantou_record_version__", 2)
+    setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
 
 def _包装发送方法(发送方法: Any) -> Any:
     """包装主动会话发送，只在适配器确认发送成功后记录。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_after_send__", False):
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 2:
+        return None
+    发送方法 = _发送挂钩原方法(发送方法)
+    if 发送方法 is None:
         return None
 
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
@@ -7262,12 +7390,14 @@ def _包装发送方法(发送方法: Any) -> Any:
         类型 = "user"
         内容 = ""
         发送前消息ID = ""
+        媒体 = None
         try:
             appid = str(getattr(self, "appid", "") or "")
             会话标识 = _会话标识兜底(session)
             消息类型 = str(getattr(session, "message_type", "") or "")
             类型 = "group" if "GROUP" in 消息类型.upper() else "user"
             内容 = _链提取文本(message_chain)
+            媒体 = _链提取媒体(message_chain)
             发送前消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
         except Exception as exc:
             logger.debug("消息记录主动发送参数提取失败：错误类型=%s", type(exc).__name__)
@@ -7302,12 +7432,15 @@ def _包装发送方法(发送方法: Any) -> Any:
                     自身REFIDX=_提取发送响应REFIDX(结果),
                     发送者昵称="机器人",
                     来源="bot_session",
+                    媒体=媒体,
                 )
         except Exception as exc:
             logger.warning("消息记录主动发送成功后记录失败：错误类型=%s", type(exc).__name__)
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
+    setattr(新发送, "__mantou_record_version__", 2)
+    setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
 
@@ -7318,9 +7451,8 @@ def _安装消息发送挂钩() -> bool:
     QQOfficialPlatformAdapter 调用基类收尾时把同一条消息重复记录。
     """
     global _发送挂钩已安装
-    if _发送挂钩已安装:
-        return True
     已包装 = 0
+    已就绪 = 0
     try:
         from astrbot.core.platform.sources.qqofficial import (
             qqofficial_message_event as 事件模块,
@@ -7334,6 +7466,8 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(适配器类, "send_by_session", 新发送)
                 已包装 += 1
+            if getattr(getattr(适配器类, "send_by_session", None), "__mantou_record_version__", 0) == 2:
+                已就绪 += 1
         事件类 = getattr(事件模块, "QQOfficialMessageEvent", None)
         if 事件类 is not None:
             原发送 = getattr(事件类, "_post_send", None)
@@ -7341,12 +7475,15 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(事件类, "_post_send", 新发送)
                 已包装 += 1
+            if getattr(getattr(事件类, "_post_send", None), "__mantou_record_version__", 0) == 2:
+                已就绪 += 1
     except Exception as 异常:
         logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)
-    if 已包装 == 0:
+    if 已就绪 == 0:
         return False
     _发送挂钩已安装 = True
-    logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存（%d 处）", 已包装)
+    if 已包装:
+        logger.info("消息记录发送挂钩已安装：机器人发送消息已接入缓存（%d 处）", 已包装)
     return True
 
 
