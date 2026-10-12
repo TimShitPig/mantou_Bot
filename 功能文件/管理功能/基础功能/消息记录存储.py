@@ -1947,7 +1947,8 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
                      f"LEFT(content, 1024) AS content, timestamp, ts, is_self, source, recalled, "
                      f"'' AS media, reference_id, refidx, avatar, "
-                     f"CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) AS raw_message, member_role, msg_seq "
+                     f"CASE WHEN CHAR_LENGTH(raw_message) <= 2560 THEN raw_message "
+                     f"ELSE CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) END AS raw_message, member_role, msg_seq "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
                     tuple(分块),
                 )

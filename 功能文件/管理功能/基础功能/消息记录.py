@@ -14,6 +14,7 @@ import random
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime as _日期类
 from datetime import timedelta as _时间差
 from datetime import timezone as _时区类
@@ -214,12 +215,49 @@ def _补充媒体文字位置(
     return 结果
 
 
+def _补充Markdown图片位置(媒体: dict[str, Any], 内容: str) -> dict[str, Any]:
+    """只把已保存图片的 Markdown 标记映射到原媒体索引，保留图文顺序。"""
+    项目 = _媒体项目列表(媒体)
+    可用: dict[str, list[int]] = {}
+    for 索引, 图片 in enumerate(项目):
+        类型 = str(图片.get("type") or 图片.get("media_type") or "").lower()
+        if 类型 not in {"图片", "image", "img"} and not str(图片.get("content_type") or "").startswith("image/"):
+            continue
+        地址 = _清理媒体地址(图片.get("src") or 图片.get("url") or 图片.get("download_url"))
+        if 地址:
+            可用.setdefault(地址, []).append(索引)
+    分段: list[dict[str, Any]] = []
+    已用: set[int] = set()
+    起点 = 0
+    for 匹配 in re.finditer(r"!\[[^\]\n]*\]\((https?://[^\s)]+)\)", 内容, re.IGNORECASE):
+        候选 = 可用.get(_清理媒体地址(匹配.group(1))) or []
+        # 同一媒体标记重复出现可复用索引；重复附件有独立索引时依次对应。
+        索引 = next((值 for 值 in 候选 if 值 not in 已用), 候选[0] if 候选 else None)
+        if 索引 is None:
+            continue
+        if 匹配.start() > 起点:
+            分段.append({"text": 内容[起点:匹配.start()]})
+        分段.append({"media_index": 索引})
+        已用.add(索引)
+        起点 = 匹配.end()
+    if not 已用:
+        return 媒体
+    if 起点 < len(内容):
+        分段.append({"text": 内容[起点:]})
+    # 未嵌入正文的其它附件仍需显示，不因首图而遗漏。
+    分段.extend({"media_index": 索引} for 索引 in range(len(项目)) if 索引 not in 已用)
+    结果 = dict(媒体)
+    结果["text_segments"] = 分段
+    结果["text"] = "".join(项.get("text", "") for 项 in 分段).strip()
+    return 结果
+
+
 def _归一化记录媒体文字(记录: dict[str, Any]) -> None:
     """为历史媒体补齐图片两侧文字，并清掉正文中的对象占位标记。"""
     if not isinstance(记录, dict) or not isinstance(记录.get("media"), dict):
         return
     内容 = str(记录.get("content") or "")
-    媒体 = _补充媒体文字位置(记录["media"], 内容)
+    媒体 = _补充Markdown图片位置(_补充媒体文字位置(记录["media"], 内容), 内容)
     if 媒体 is not 记录["media"]:
         记录["media"] = 媒体
     if _拆分图片两侧文字(内容)[2]:
@@ -457,6 +495,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
@@ -535,7 +574,8 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     原始消息: Any = None
     # 大多数历史行已经保存 nickname/avatar/media；仅对缺失资料或提及消息回看原文。
     需要原始 = (
-        not 作者头像
+        not _有效用户昵称(作者昵称, 作者标识)
+        or not 作者头像
         or bool(_提及规则.search(内容文本))
         or (
             isinstance(现有媒体, dict)
@@ -574,6 +614,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         记录时间 = int(记录.get("ts") or 0)
     except (TypeError, ValueError):
         记录时间 = 0
+    _补充记录昵称状态(记录, 原始消息)
     标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
     if not 标准时间 and 原始消息 is not None:
         标准时间 = _转数字时间戳(_提取原始消息时间(原始消息))
@@ -613,6 +654,7 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
@@ -844,6 +886,10 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             旧值 = str(已有记录.get(字段) or "")
             if len(str(新值)) > len(旧值):
                 已有记录[字段] = 新值
+        elif 字段 == "nickname":
+            标识 = str(新记录.get("user_id") or 已有记录.get("user_id") or "")
+            if _有效用户昵称(新值, 标识) and not _有效用户昵称(已有记录.get(字段), 标识):
+                已有记录[字段] = 新值
         elif 新值 not in (None, "") and 已有记录.get(字段) in (None, ""):
             已有记录[字段] = 新值
     旧原始消息 = str(已有记录.get("raw_message") or "")
@@ -896,7 +942,7 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         else:
             for 字段 in (
                 "text", "name", "content_type", "size", "width", "height",
-                "before_text", "after_text",
+                "before_text", "after_text", "text_segments",
             ):
                 if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
                     旧媒体[字段] = 新媒体[字段]
@@ -921,6 +967,9 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         已有记录["ts"] = max(int(已有记录.get("ts") or 0), int(新记录.get("ts") or 0))
     except (TypeError, ValueError):
         pass
+    if 新记录.get("nickname_blank") and not _有效用户昵称(已有记录.get("nickname"), str(已有记录.get("user_id") or "")):
+        已有记录["nickname_blank"] = True
+    _补充记录昵称状态(已有记录)
     return 已有记录
 
 
@@ -930,6 +979,7 @@ def _消息资料签名(记录: dict[str, Any]) -> tuple[Any, ...]:
         _规范消息ID(记录.get("message_id")),
         str(记录.get("user_id") or ""),
         str(记录.get("nickname") or ""),
+        bool(记录.get("nickname_blank")),
         str(记录.get("content") or ""),
         str(记录.get("member_role") or ""),
         str(记录.get("msg_seq") or ""),
@@ -1569,11 +1619,20 @@ def _获取消息相关成员资料(
         if 作者标识:
             相关标识.add(作者标识)
         相关标识.update(_提及规则.findall(str(消息.get("content") or "")))
-    return {
+    结果 = {
         标识: copy.deepcopy(全部资料[标识])
         for 标识 in 相关标识
         if isinstance(全部资料.get(标识), dict)
     }
+    for 消息 in 消息列表 or ():
+        if not isinstance(消息, dict) or not 消息.get("nickname_blank") or 消息.get("is_self"):
+            continue
+        标识 = str(消息.get("user_id") or "").strip()
+        if 标识:
+            资料 = 结果.setdefault(标识, {})
+            if not _有效用户昵称(资料.get("nickname") or 资料.get("username"), 标识):
+                资料["nickname_blank"] = True
+    return 结果
 
 
 def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[str, Any]:
@@ -1584,10 +1643,15 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
+    消息["_session"] = str(记录.get("_session") or "")
+    消息["nickname_blank"] = bool(记录.get("nickname_blank"))
+    _补充记录昵称状态(消息, 记录.get("raw_message"))
+    消息.pop("_session", None)
     # 实时消息与历史页使用同一份受限原始预览，不把完整事件对象推给浏览器。
     消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
     会话标识 = str(记录.get("_session") or "")
     if isinstance(消息.get("media"), dict):
+        消息["media"] = _补充Markdown图片位置(copy.deepcopy(消息["media"]), str(消息.get("content") or ""))
         try:
             from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 
@@ -1977,7 +2041,7 @@ def _更新消息提及资料(记录: dict[str, Any], 消息: Any = None) -> Non
 
 def _替换提及名称(文本: Any, 会话标识: str) -> str:
     """把会话预览中的 `<@openid>` 替换为已缓存的成员名称。"""
-    原文 = str(文本 or "")
+    原文 = re.sub(r"<@all>", "@全体成员", str(文本 or ""), flags=re.IGNORECASE)
     资料表 = 成员资料缓存.get(str(会话标识 or "").strip()) or {}
     if not 资料表 or "<@" not in 原文:
         return 原文
@@ -2317,7 +2381,7 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
     """提取媒体信息：优先附件，其次带 URL 的消息占位或 QQ 富媒体链接。"""
     附件媒体 = _提取附件媒体(消息) if 消息 is not None else None
     if 附件媒体:
-        return _补充媒体文字位置(附件媒体, 内容)
+        return _补充Markdown图片位置(_补充媒体文字位置(附件媒体, 内容), 内容)
     if not 内容:
         return None
     小写内容 = 内容.casefold()
@@ -2335,15 +2399,21 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
                 for 匹配 in reversed(匹配列表):
                     文本 = 文本[: 匹配.start()] + 文本[匹配.end() :]
                 媒体["text"] = 文本.strip()
-                return _补充媒体文字位置(媒体, 内容)
+                return _补充Markdown图片位置(_补充媒体文字位置(媒体, 内容), 内容)
     if not any(域名 in 小写内容 for 域名 in _QQ图片域名片段):
         return None
-    匹配列表 = list(_QQ图片域名.finditer(内容))
-    if 匹配列表:
+    图片标记 = list(re.finditer(r"!\[[^\]\n]*\]\((https?://[^\s)]+)\)", 内容, re.IGNORECASE))
+    地址匹配 = [(匹配.start(), 匹配.group(1)) for 匹配 in 图片标记
+                if any(域名 in 匹配.group(1).lower() for 域名 in _QQ图片域名片段)]
+    匹配列表 = [匹配 for 匹配 in _QQ图片域名.finditer(内容)
+                if not any(标记.start() <= 匹配.start() < 标记.end() for 标记 in 图片标记)]
+    地址匹配.extend((匹配.start(), 匹配.group(0)) for 匹配 in 匹配列表)
+    地址匹配.sort(key=lambda 项: 项[0])
+    if 地址匹配:
         媒体项目 = [
-            {"type": "图片", "src": _清理媒体地址(匹配.group(0)), "text": ""}
-            for 匹配 in 匹配列表
-            if _清理媒体地址(匹配.group(0))
+            {"type": "图片", "src": _清理媒体地址(地址), "text": ""}
+            for _, 地址 in 地址匹配
+            if _清理媒体地址(地址)
         ]
         媒体 = _打包媒体项目(媒体项目)
         if 媒体:
@@ -2351,7 +2421,7 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
             for 匹配 in reversed(匹配列表):
                 文本 = 文本[: 匹配.start()] + 文本[匹配.end() :]
             媒体["text"] = 文本.strip()
-            return _补充媒体文字位置(媒体, 内容)
+            return _补充Markdown图片位置(_补充媒体文字位置(媒体, 内容), 内容)
     return None
 
 
@@ -2530,7 +2600,69 @@ def _私聊兜底昵称(会话标识: str) -> str:
         return "未知用户"
 
 
+def _明确空白昵称(值: Any) -> bool:
+    """区分明确非空的不可见昵称与字段缺失；控制字符只作为展示状态。"""
+    return isinstance(值, str) and bool(值) and all(
+        字符.isspace() or unicodedata.category(字符) in {"Cc", "Cf", "Zs", "Zl", "Zp"}
+        for 字符 in 值
+    )
+
+
+def _提取昵称展示状态(消息: Any, 用户标识: str = "") -> tuple[str, bool]:
+    """有界读取作者及事件包装，任何有效别名优先于空白字段。"""
+    待查 = [(消息, 0)]
+    已查: set[int] = set()
+    有空白 = False
+    for _ in range(48):
+        if not 待查:
+            break
+        当前, 深度 = 待查.pop(0)
+        解析 = _解析消息结构(当前)
+        当前 = 解析 if 解析 is not None else 当前
+        if 当前 is None or isinstance(当前, (str, bytes)) or id(当前) in 已查:
+            continue
+        已查.add(id(当前))
+        for 字段 in ("username", "member_name", "nickname", "dear_remark", "user_name", "name", "nick"):
+            值 = _读取字段(当前, 字段)
+            昵称 = _有效用户昵称(值, 用户标识)
+            if 昵称:
+                return 昵称, False
+            有空白 = 有空白 or _明确空白昵称(值)
+        if 深度 < 4:
+            for 字段 in ("author", "member", "user", "raw_data", "d", "data", "event", "payload"):
+                子项 = _读取字段(当前, 字段)
+                if 子项 is not None:
+                    待查.append((子项, 深度 + 1))
+    return "", 有空白
+
+
+def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None) -> None:
+    """只补充展示标志/已提供的可见别名，不改原始事件或持久化结构。"""
+    if not isinstance(记录, dict):
+        return
+    来源 = str(记录.get("source") or "")
+    作者 = _读取字段(原始消息, "author")
+    if 记录.get("is_self") or 来源.startswith("bot_") or 来源 == "web_panel" or _读取字段(作者, "bot"):
+        记录["nickname_blank"] = False
+        return
+    用户标识 = str(记录.get("user_id") or "")
+    当前昵称 = _有效用户昵称(记录.get("nickname"), 用户标识)
+    if 当前昵称:
+        记录["nickname_blank"] = False
+        return
+    资料 = (成员资料缓存.get(str(记录.get("_session") or "")) or {}).get(用户标识) or {}
+    缓存昵称 = _有效用户昵称(资料.get("nickname") or 资料.get("username"), 用户标识) if isinstance(资料, dict) else ""
+    昵称, 空白 = _提取昵称展示状态(原始消息 if 原始消息 is not None else 记录.get("raw_message"), 用户标识)
+    if 缓存昵称 or 昵称:
+        记录["nickname"] = 缓存昵称 or 昵称
+        记录["nickname_blank"] = False
+    else:
+        记录["nickname_blank"] = bool(记录.get("nickname_blank") or 空白 or _明确空白昵称(记录.get("nickname")))
+
+
 def _有效用户昵称(值: Any, 用户标识: str = "") -> str:
+    if _明确空白昵称(值):
+        return ""
     昵称 = str(值 or "").strip()
     用户标识 = str(用户标识 or "").strip()
     if (
@@ -2951,6 +3083,7 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        _补充记录昵称状态(记录, 消息)
         _去除图片表情描述(记录)
         内容 = str(记录.get("content") or "")
         if (
@@ -5039,11 +5172,11 @@ def _限制聊天列表预览(内容: Any) -> str:
 def _私聊联系人资料(
     会话标识: str,
     会话: dict[str, Any] | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """返回私聊对方资料，不把机器人最后一条回复当成联系人资料。"""
     标识 = str(会话标识 or "").strip()
     if not 标识:
-        return {"nickname": "", "avatar": ""}
+        return {"nickname": "", "avatar": "", "nickname_blank": False}
     资料表 = 成员资料缓存.get(标识) or {}
     候选: list[dict[str, Any]] = []
     精确资料 = 资料表.get(标识)
@@ -5059,7 +5192,7 @@ def _私聊联系人资料(
         if bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel":
             continue
         候选.append(记录)
-    结果 = {"nickname": "", "avatar": ""}
+    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False}
     for 资料 in 候选:
         昵称 = _有效用户昵称(
             资料.get("nickname")
@@ -5068,6 +5201,8 @@ def _私聊联系人资料(
             or "",
             标识,
         )
+        原文昵称, 空白 = _提取昵称展示状态(资料.get("raw_message") or 资料, 标识)
+        昵称 = 昵称 or 原文昵称
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
         if not (头像.startswith("https://") or 头像.startswith("http://")):
             头像 = ""
@@ -5075,8 +5210,11 @@ def _私聊联系人资料(
             结果["nickname"] = 昵称
         if 头像 and not 结果["avatar"]:
             结果["avatar"] = 头像
-        if all(结果.values()):
+        结果["nickname_blank"] = bool(结果["nickname_blank"] or 资料.get("nickname_blank") or 空白)
+        if 结果["nickname"] and 结果["avatar"]:
             break
+    if 结果["nickname"]:
+        结果["nickname_blank"] = False
     return 结果
 
 
@@ -5100,6 +5238,8 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
                 continue
             应用 = 应用 or str(记录.get("appid") or "")
             原始 = _解析消息结构(记录.get("raw_message"))
+            _, 空白 = _提取昵称展示状态(原始, 标识)
+            资料["nickname_blank"] = bool(资料.get("nickname_blank") or 空白)
             资料["nickname"] = 资料["nickname"] or _有效用户昵称(
                 _提取成员昵称(原始) or 记录.get("nickname"), 标识
             )
@@ -5124,7 +5264,8 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
         _回填私聊昵称(标识, 标识, 资料["nickname"])
         await _异步执行消息记录同步(_保存本地昵称, 标识, 资料["nickname"])
         _推送私聊昵称事件(标识, 应用, 资料["nickname"])
-    return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料, "nickname_found": bool(资料["nickname"])}
+    资料["nickname_blank"] = bool(资料.get("nickname_blank") and not 资料["nickname"])
+    return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料, "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
 
 
 def _聊天显示名(
@@ -5172,6 +5313,8 @@ def _聊天显示名(
     ):
         return 最近昵称
     if 类型 == "user":
+        if _私聊联系人资料(会话标识, 会话).get("nickname_blank"):
+            return "\u00a0"
         return _私聊兜底昵称(会话标识)
     return 会话标识
 
@@ -5466,6 +5609,7 @@ def _数据库聚合聊天项(
                 "chat_type": 类型,
                 "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
                 "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
+                "messages": [最后记录] if 最后记录.get("nickname_blank") else [],
             }
             显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表, 本地昵称表)
             if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
@@ -5810,6 +5954,7 @@ def _数据库历史消息(
             "chat_type": 类型,
             "last_nickname": str(最后消息.get("nickname") or 内存会话.get("last_nickname") or ""),
             "appid": str(最后消息.get("appid") or ""),
+            "messages": 返回消息,
         }
         return {
             "messages": 返回消息,

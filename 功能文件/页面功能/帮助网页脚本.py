@@ -919,11 +919,19 @@
         });
       };
       const mentionIdPattern = /^[A-Za-z0-9_-]{5,128}$/;
+      const isBlankMsgNickname = (value) => typeof value === 'string' && value.length > 0 && /^[\s\p{Cc}\p{Cf}\p{Z}]+$/u.test(value);
       const validMsgNickname = (value, id = '') => {
+        if (isBlankMsgNickname(value)) return '';
         const name = String(value || '').trim();
         const uid = String(id || '').trim();
         if (!name || name === uid || name === '用户' + uid.slice(-6) || ['成员','新成员','未知','未知用户','机器人','我'].includes(name) || /[\x00-\x1f\x7f-\x9f]/.test(name)) return '';
         return name;
+      };
+      const displayMsgNickname = (message, profile = {}, fallback = '未知用户') => {
+        const id = message?.user_id || '';
+        const name = validMsgNickname(message?.nickname, id)
+          || validMsgNickname(profile.nickname || profile.username, id);
+        return name || (message?.nickname_blank || profile.nickname_blank || isBlankMsgNickname(message?.nickname) ? '\u00a0' : fallback);
       };
       const mergeMsgProfileMaps = (...sources) => {
         const merged = {};
@@ -946,6 +954,7 @@
               }
               if (value !== null && value !== undefined && value !== '') next[field] = value;
             });
+            if (validMsgNickname(next.nickname || next.username, key)) next.nickname_blank = false;
             merged[key] = next;
           });
         });
@@ -958,11 +967,13 @@
           const nickname = validMsgNickname(message?.nickname, id);
           const avatar = String(message?.avatar || message?.avatar_url || '').trim();
           const role = String(message?.member_role || message?.role || '').trim().toLowerCase();
-          if (!id || (!nickname && !avatar && !role) || (nickname === '未知用户' && !avatar && !role) || (nickname === '未知' && !avatar && !role) || !mentionIdPattern.test(id)) return;
+          const blank = !message?.is_self && !String(message?.source || '').startsWith('bot_') && Boolean(message?.nickname_blank || isBlankMsgNickname(message?.nickname));
+          if (!id || (!nickname && !avatar && !role && !blank) || !mentionIdPattern.test(id)) return;
           merged[id] = mergeMsgProfileMaps(merged, {[id]: {
             ...(nickname && nickname !== '未知用户' && nickname !== '未知' ? {nickname} : {}),
             ...(avatar ? {avatar} : {}),
             ...(role ? {role} : {}),
+            ...(blank ? {nickname_blank:true} : {}),
           }})[id];
         });
         return merged;
@@ -982,7 +993,7 @@
         const nickname = String(profiles?.[id]?.nickname || profiles?.[id]?.username || '').trim();
         return nickname && nickname !== id ? nickname : (id ? `${id.slice(0, 8)}…` : '用户');
       };
-      const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
+      const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/<@all>/gi, '@全体成员').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
       const decodeMsgToken = (value) => {
         const raw = String(value ?? '');
         if (!raw) return '';
@@ -999,6 +1010,7 @@
           return `\u0000MANTOU_CMD_${index}\u0000`;
         };
         let source = replaceMsgMentions(value, profiles);
+        source = source.replace(/!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gi, (_, target) => commandToken('image', target, '图片'));
         source = source.replace(/<qqbot-cmd-(input|enter)\b([^>]*)\/?\s*>/gi, (_, kind, attributes) => {
           const command = decodeMsgToken(msgTagAttribute(attributes, 'text'));
           if (!command) return '';
@@ -1031,11 +1043,13 @@
         return html.replace(/\u0000MANTOU_CMD_(\d+)\u0000/g, (_, index) => {
           const item = commandTokens[Number(index)];
           if (!item) return '';
+          if (item.kind === 'image') return renderMessageMedia({type:'图片', src:item.command});
           return `<button type="button" class="msg-command-chip" data-msg-command="${esc(item.command)}" data-msg-command-kind="${esc(item.kind)}" aria-label="${esc(item.label)}">${esc(item.label)}</button>`;
         });
       };
       const plainMsgPreview = (value, profiles = msgState.profiles) => {
         let text = replaceMsgMentions(value, profiles);
+        text = text.replace(/!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gi, '[图片]');
         text = text.replace(/\[([^\]\n]+)\]\(mqqapi:\/\/aio\/inlinecmd\?[^)\s]+\)/gi, '$1');
         text = text.replace(/(\[[^\]\n]+\]\s*[^\]\n]+)\]\(mqqapi:\/\/aio\/inlinecmd\?[^)\s]+\)/gi, '$1');
         text = text.replace(/mqqapi:\/\/aio\/inlinecmd\?[^\s<>)]*/gi, '');
@@ -2057,7 +2071,8 @@
         const knownName = curChat?.remark || (msgState.chatType === 'group' ? groupName : '') || data.chat_name || curChat?.nickname;
         const headKey = msgState.chatType + '|' + String(msgState.chatId || '');
         const previousName = nameEl.dataset.chatKey === headKey ? nameEl.textContent : '';
-        nameEl.textContent = knownName || previousName || String(msgState.chatId || '') || '未命名会话';
+        const blankContact = msgState.chatType === 'user' && !curChat?.remark && msgState.profiles?.[msgState.chatId]?.nickname_blank && !validMsgNickname(knownName, msgState.chatId);
+        nameEl.textContent = blankContact ? '\u00a0' : (knownName || previousName || String(msgState.chatId || '') || '未命名会话');
         nameEl.dataset.chatKey = headKey;
         const chatKey = String(msgState.chatId || '');
         const isAdmin = msgState.adminByChat.has(chatKey)
@@ -2299,6 +2314,8 @@
             merged[field] = next;
           }
         });
+        if (validMsgNickname(merged.nickname, merged.user_id)) merged.nickname_blank = false;
+        else if (incoming?.nickname_blank) merged.nickname_blank = true;
         const oldRaw = String(merged.raw_message || '');
         const newRaw = String(incoming?.raw_message || '');
         if (newRaw.length > oldRaw.length) merged.raw_message = incoming.raw_message;
@@ -2348,6 +2365,7 @@
           if (msgIsRecalled(message) !== msgIsRecalled(other)) return false;
           if (String(message?.raw_message || '') !== String(other?.raw_message || '')) return false;
           if (String(message?.nickname || '') !== String(other?.nickname || '')) return false;
+          if (Boolean(message?.nickname_blank) !== Boolean(other?.nickname_blank)) return false;
           if (String(message?.avatar || '') !== String(other?.avatar || '')) return false;
           return JSON.stringify(message?.media || null) === JSON.stringify(other?.media || null);
         });
@@ -2778,6 +2796,20 @@
           const fileUrl = mediaProxyUrl(src, 'file', name);
           return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
+      };
+      const renderMsgMediaSegments = (media, messageId = '', preload = false, profiles = msgState.profiles) => {
+        const segments = media?.text_segments;
+        if (!Array.isArray(segments) || !segments.some((part) => Number.isInteger(part?.media_index))) return '';
+        const items = Array.isArray(media?.items) && media.items.length ? media.items : [media];
+        const rendered = new Set();
+        const html = segments.map((part) => {
+          if (typeof part?.text === 'string') return part.text ? '<span class="msg-media-text">' + renderMsgMarkup(part.text, profiles) + '</span>' : '';
+          const index = part?.media_index;
+          if (!Number.isInteger(index) || index < 0 || index >= items.length) return '';
+          rendered.add(index);
+          return renderMessageMedia(items[index], messageId, preload);
+        }).join('');
+        return html + items.map((item, index) => rendered.has(index) ? '' : renderMessageMedia(item, messageId, preload)).join('');
       };
       const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -3294,6 +3326,8 @@
               message.media ? JSON.stringify(message.media) : '',
               msgIsRecalled(message) ? 1 : 0,
               message.nickname || '',
+              Boolean(message.nickname_blank),
+              Boolean(profile.nickname_blank),
               profile.nickname || profile.username || '',
               profile.avatar || profile.avatar_url || '',
               profile.role || '',
@@ -3324,14 +3358,7 @@
           const systemSource = String(m.source || '');
           if (systemSource === 'group_member_join' || systemSource === 'group_member_leave') {
             const fallbackName = systemSource === 'group_member_join' ? '新成员' : '成员';
-            const recordedName = String(m.nickname || '').trim();
-            const profileName = String(
-              profiles[String(m.user_id || '').trim()]?.nickname
-              || profiles[String(m.user_id || '').trim()]?.username
-              || '',
-            ).trim();
-            const genericNames = ['', '新成员', '成员', '未知用户', '未知', String(m.user_id || '').trim()];
-            const memberName = genericNames.includes(recordedName) ? (profileName || fallbackName) : recordedName;
+            const memberName = displayMsgNickname(m, profiles[String(m.user_id || '').trim()] || {}, fallbackName);
             const actionText = systemSource === 'group_member_join' ? '加入了群聊。' : '退出了群聊。';
             html += `<div class="msg-system-row"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
             return;
@@ -3345,7 +3372,6 @@
           const failedSend = Boolean(optimisticEntry) && sendState === 'failed';
           const profile = profiles[m.user_id] || {};
           const rawNickname = isSelf ? String(m.nickname || '').trim() : validMsgNickname(m.nickname, m.user_id);
-          const profileNickname = String(profile.nickname || profile.username || '').trim();
           const botProfileName = String(window.msgBotProfile?.username || '').trim();
           const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
           const profileAvatar = safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim());
@@ -3356,7 +3382,7 @@
             ? (botMessage
               ? (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : (botProfileName || '机器人'))
               : (rawNickname && rawNickname !== '未知用户' ? rawNickname : '我'))
-            : ((rawNickname && rawNickname !== '未知用户' && rawNickname !== '未知') ? rawNickname : (profileNickname || rawNickname || '未知用户'));
+            : displayMsgNickname(m, profile);
           const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid)));
           const tags = [];
           if (isSelf) {
@@ -3382,14 +3408,15 @@
           // 浏览器私有缓存保留已成功取得的图片；加载更早历史仍保持惰性请求。
           const preloadMedia = !scroll.prepend && index >= Math.max(0, msgs.length - 12);
           const media = renderMessageMedia(mediaData, m.message_id, preloadMedia);
+          const segmentedMedia = renderMsgMediaSegments(mediaData, m.message_id, preloadMedia, profiles);
           const mediaTextPosition = media && mediaData && !Array.isArray(mediaData) ? splitMediaTextMarkers(m.content || '') : null;
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
           const renderedContent = renderText(m.content || '');
           let content = stripMediaMarker(renderedContent, mediaData);
           content = stripObjectMarker(content, mediaData);
           content = content.replace(/\uFFFC/g, '').trim();
-          if (mediaTextPosition) content = '';
-          if (!content && mediaText) content = renderText(mediaText);
+          if (mediaTextPosition || segmentedMedia) content = '';
+          if (!content && mediaText && !segmentedMedia) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
           const mediaBeforeText = mediaTextPosition
@@ -3438,7 +3465,7 @@
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
-              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${hasInlineMediaText ? inlineMediaHtml : `${contentHtml}${media}`}</div>
+              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml}${media}`)}</div>
               <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}${muteStatusHtml}${sendStateHtml}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
@@ -3682,7 +3709,9 @@
           chat_id:chatId,
           chat_type:chatType,
           appid:String(payload.appid || message.appid || existing.appid || ''),
-          nickname:existing.nickname || (chatType === 'user' ? String(payload.last_nickname || message.nickname || chatId) : chatId),
+          nickname:chatType === 'user' && !eventIsSelf
+            ? (existing.remark || displayMsgNickname({user_id:chatId, nickname:validMsgNickname(existing.nickname, chatId) || payload.last_nickname || message.nickname, nickname_blank:message.nickname_blank}, msgState.profiles?.[chatId] || {}, existing.nickname || chatId))
+            : (existing.nickname || chatId),
           avatar:overlayAvatar,
           last_content:replaceMsgMentions(String(payload.last_content || message.content || existing.last_content || '')),
           last_time:String(message.timestamp || existing.last_time || new Date(eventTs * 1000).toISOString()),
@@ -3961,20 +3990,20 @@
         try {
           if (chatId && chatType === 'user') {
             const data = await api('message/user-profile/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'user', appid})});
-            const profile = {nickname:validMsgNickname(data.nickname, chatId), avatar:String(data.avatar || '')};
+            const profile = {nickname:validMsgNickname(data.nickname, chatId), nickname_blank:Boolean(data.nickname_blank), avatar:String(data.avatar || '')};
             msgState.avatarRefresh = msgState.avatarRefresh || new Map();
             if (msgState.avatarRefresh.size >= 256) msgState.avatarRefresh.clear();
             const nonce = Date.now();
             [profile.avatar, current?.avatar, avatarUrl(chatId, 'user', data.appid || appid)].filter(Boolean).forEach((url) => msgState.avatarRefresh.set(String(url), nonce));
             msgState.historyCache.delete('user|' + chatId);
             msgState.chats = msgState.chats.map((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === 'user'
-              ? {...chat, appid:data.appid || chat.appid, ...(profile.avatar ? {avatar:profile.avatar} : {}), ...(profile.nickname ? {nickname:chat.remark || profile.nickname} : {})} : chat);
+              ? {...chat, appid:data.appid || chat.appid, ...(profile.avatar ? {avatar:profile.avatar} : {}), ...(profile.nickname ? {nickname:chat.remark || profile.nickname} : profile.nickname_blank && !validMsgNickname(chat.nickname, chatId) ? {nickname:chat.remark || '\u00a0'} : {})} : chat);
             const overlay = msgState.realtimeChats.get(chatId);
-            if (overlay && overlay.chat_type === 'user') msgState.realtimeChats.set(chatId, {...overlay, ...(profile.nickname ? {nickname:overlay.remark || profile.nickname} : {}), ...(profile.avatar ? {avatar:profile.avatar} : {})});
+            if (overlay && overlay.chat_type === 'user') msgState.realtimeChats.set(chatId, {...overlay, ...(profile.nickname ? {nickname:overlay.remark || profile.nickname} : profile.nickname_blank && !validMsgNickname(overlay.nickname, chatId) ? {nickname:overlay.remark || '\u00a0'} : {}), ...(profile.avatar ? {avatar:profile.avatar} : {})});
             if (isCurrent()) {
               msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:profile});
               msgState.messageRenderSignature = null;
-              toast(profile.nickname ? '私聊资料已刷新' : '已重新查询；当前记录未提供有效昵称');
+              toast(profile.nickname || profile.nickname_blank ? '私聊资料已刷新' : '已重新查询；当前记录未提供有效昵称');
             }
           }
           await loadMsgChats(true);
