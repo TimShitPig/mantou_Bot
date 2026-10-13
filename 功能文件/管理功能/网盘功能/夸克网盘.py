@@ -31,6 +31,21 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 目录扫描完整性重试次数 = 1
 文件可见重试次数 = 12
 分享链接重试次数 = 12
+查询失败重试次数 = 3
+可重试查询路径 = frozenset({"/file/sort", "/task", "/share/mypage/detail"})
+请求阶段 = {
+    "/file/sort": "directory_list",
+    "/file": "directory_create",
+    "/file/delete": "file_delete",
+    "/file/upload/pre": "upload_pre",
+    "/file/update/hash": "upload_hash",
+    "/file/upload/auth": "upload_auth",
+    "/file/upload/finish": "upload_finish",
+    "/task": "task",
+    "/share": "share_create",
+    "/share/mypage/detail": "share_list",
+    "/share/password": "share_link",
+}
 _夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
 if not isinstance(_夸克同名上传锁表, weakref.WeakValueDictionary):
     _夸克同名上传锁表 = weakref.WeakValueDictionary()
@@ -44,6 +59,27 @@ if not isinstance(_夸克同名上传锁表, weakref.WeakValueDictionary):
     "origin": "https://pan.quark.cn",
     "referer": "https://pan.quark.cn/",
 }
+
+
+class 夸克网盘请求错误(RuntimeError):
+    def __init__(
+        self,
+        路径: str,
+        *,
+        HTTP状态: int | None = None,
+        业务码: int | None = None,
+        原因: str = "http_error",
+        页码: int | None = None,
+    ):
+        self.阶段 = 请求阶段.get(路径, "api_request")
+        self.HTTP状态 = HTTP状态
+        self.业务码 = 业务码
+        self.原因 = 原因
+        self.页码 = 页码
+        super().__init__(
+            f"夸克网盘请求失败：阶段={self.阶段}, HTTP状态={HTTP状态}, "
+            f"业务码={业务码}, 原因={原因}, 页码={页码}"
+        )
 
 
 class 夸克网盘客户端:
@@ -605,18 +641,25 @@ class 夸克网盘客户端:
                 任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
             )
             分享ID = str(任务结果.get("share_id") or 分享ID)
-        分享链接 = await self.等待分享短链接(分享ID, 文件ID)
-        if 分享链接:
-            return 分享链接
+        查询异常 = None
         if 分享ID:
-            密码数据 = await self.请求JSON(
-                "POST", "/share/password", json_data={"share_id": 分享ID}
-            )
-            return 提取分享链接(密码数据)
-        return ""
+            try:
+                密码数据 = await self.请求JSON(
+                    "POST", "/share/password", json_data={"share_id": 分享ID}
+                )
+                分享链接 = 提取分享链接(密码数据)
+                if 分享链接:
+                    return 分享链接
+            except 夸克网盘请求错误 as 异常:
+                if 异常.原因 != "query_failed":
+                    raise
+                查询异常 = 异常
+        分享链接 = await self.等待分享短链接(分享ID, 文件ID)
+        if not 分享链接 and 查询异常 is not None:
+            raise 查询异常
+        return 分享链接
 
     async def 轮询任务(self, 任务ID: str) -> dict[str, Any]:
-        最后数据: dict[str, Any] = {}
         for 尝试次数 in range(分享链接重试次数):
             最后数据 = await self.请求JSON(
                 "GET",
@@ -626,10 +669,19 @@ class 夸克网盘客户端:
             任务数据 = (
                 最后数据.get("data") if isinstance(最后数据.get("data"), dict) else {}
             )
-            if 安全整数(任务数据.get("status"), -1) == 2:
+            if not 接口成功(最后数据):
+                raise 夸克网盘请求错误(
+                    "/task", HTTP状态=200,
+                    业务码=安全整数(最后数据.get("code"), -1), 原因="business_error"
+                )
+            任务状态 = 安全整数(任务数据.get("status"), -1)
+            if 任务状态 == 2:
                 return 最后数据
-            await asyncio.sleep(1)
-        return 最后数据
+            if 任务状态 == 3:
+                raise 夸克网盘请求错误("/task", HTTP状态=200, 原因="task_failed")
+            if 尝试次数 + 1 < 分享链接重试次数:
+                await asyncio.sleep(1)
+        raise 夸克网盘请求错误("/task", HTTP状态=200, 原因="task_timeout")
 
     async def 等待分享短链接(self, 分享ID: str, 文件ID: str) -> str:
         for 尝试次数 in range(1, 分享链接重试次数 + 1):
@@ -653,9 +705,9 @@ class 夸克网盘客户端:
                     首文件ID = str(项目.get("first_fid") or "")
                     文件ID列表 = {str(值) for 值 in (项目.get("fid_list") or [])}
                     if (
-                        (分享ID and 当前分享ID == 分享ID)
-                        or 文件ID == 首文件ID
-                        or 文件ID in 文件ID列表
+                        当前分享ID == 分享ID
+                        if 分享ID
+                        else 文件ID == 首文件ID or 文件ID in 文件ID列表
                     ):
                         链接 = 提取分享链接(项目)
                         if 链接:
@@ -694,23 +746,50 @@ class 夸克网盘客户端:
         请求参数 = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         请求参数.update(params or {})
         地址 = 路径 if 路径.startswith("http") else f"{基础接口地址}{路径}"
-        async with 会话.request(方法, 地址, params=请求参数, json=json_data) as 响应:
-            self.同步服务器时间(响应.headers)
-            文本 = await 响应.text()
-            self.刷新会话Cookie(响应)
-            if 响应.status >= 400:
-                raise RuntimeError(
-                    f"夸克网盘HTTP {响应.status}：{限制文本长度(文本, 200)}"
-                )
+        for 尝试次数 in range(1, 查询失败重试次数 + 1):
+            async with 会话.request(方法, 地址, params=请求参数, json=json_data) as 响应:
+                self.同步服务器时间(响应.headers)
+                文本 = await 响应.text()
+                self.刷新会话Cookie(响应)
+                HTTP状态 = 响应.status
             try:
                 数据 = json.loads(文本)
-            except Exception as 异常:
-                raise RuntimeError(
-                    f"夸克网盘JSON解析失败：{限制文本长度(文本, 200)}"
-                ) from 异常
+            except (TypeError, ValueError):
+                raise 夸克网盘请求错误(
+                    路径, HTTP状态=HTTP状态,
+                    原因="http_error" if HTTP状态 >= 400 else "invalid_json"
+                ) from None
             if not isinstance(数据, dict):
-                raise RuntimeError("夸克网盘返回格式不是对象")
+                raise 夸克网盘请求错误(路径, HTTP状态=HTTP状态, 原因="invalid_shape")
+            业务码 = 安全整数(数据.get("code"), -1) if "code" in 数据 else None
+            查询失败 = (
+                HTTP状态 in (200, 400)
+                and 业务码 == 15020
+                and str(数据.get("message") or "").strip() == "query fail [61004]"
+            )
+            if HTTP状态 >= 400 or not 接口成功(数据):
+                异常 = 夸克网盘请求错误(
+                    路径, HTTP状态=HTTP状态, 业务码=业务码,
+                    原因="query_failed" if 查询失败 else (
+                        "http_error" if HTTP状态 >= 400 else "business_error"
+                    ),
+                    页码=安全整数(请求参数.get("_page"), 0) or None,
+                )
+                if (
+                    查询失败 and 方法.upper() == "GET"
+                    and 路径 in 可重试查询路径 and 尝试次数 < 查询失败重试次数
+                ):
+                    logger.warning(
+                        "夸克网盘查询失败重试：阶段=%s, HTTP状态=%s, 业务码=%s, "
+                        "页码=%s, 尝试=%s/%s",
+                        异常.阶段, HTTP状态, 业务码, 异常.页码,
+                        尝试次数, 查询失败重试次数,
+                    )
+                    await asyncio.sleep(计算等待秒数(尝试次数))
+                    continue
+                raise 异常
             return 数据
+        raise 夸克网盘请求错误(路径, 原因="query_failed")
 
     def 刷新会话Cookie(self, 响应: aiohttp.ClientResponse) -> None:
         已更新 = False

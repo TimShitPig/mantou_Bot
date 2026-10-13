@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.167-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.168-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.167 |
+| 版本 | v6.1.168 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -173,6 +173,8 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 网页或机器人发送图片、视频和文件时使用 QQ 官方富媒体接口；聊天媒体不经过图床或 COS。
 
 所选网盘上传成功后，QQ 官方机器人会发送该网盘的链接按钮；上传失败时只回复 `文件发送失败，请稍后再试`。
+
+夸克目录、任务及分享列表 GET 遇到 `15020 / query fail [61004]` 时最多请求三次；上传、删除和创建分享 POST 不自动重放。分享任务必须确认完成，失败或超时即停止；已有分享 ID 时优先按该 ID 取链接，列表回退严格匹配同一分享 ID。后端错误日志记录阶段、HTTP/业务码和页码，不拼接响应原文。
 
 支持平台及特点：
 
