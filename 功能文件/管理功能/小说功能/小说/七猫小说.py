@@ -49,6 +49,7 @@ except Exception:
 下载并发数 = 200
 批量章节数 = 50
 批量下载并发数 = 下载并发数
+单章补拉次数 = 2
 # 每个正文下载流程包含 0% 起始行，因此最多再输出 4 个进度节点。
 进度日志分段数 = 4
 小说缓存目录 = 文件缓存工具.小说缓存目录
@@ -121,6 +122,10 @@ QM参数字符映射 = {
 }
 
 
+class _七猫图片版错误(RuntimeError):
+    """接口明确标记图片版，或 EPUB 中仅有图片而没有文字。"""
+
+
 def 获取七猫小说回复流(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> AsyncIterator[str] | None:
@@ -190,10 +195,18 @@ async def 生成下载回复流(
             yield 格式化下载提示(详情, len(目录))
 
             章节内容 = await 下载全部章节(session, 书籍编号, 目录, 是否短篇)
-            成功章节 = [项目 for 项目 in 章节内容 if 项目["content"]]
-            if not 成功章节:
+            成功章节 = [
+                项目 for 项目 in 章节内容
+                if isinstance(项目.get("content"), str) and 项目["content"].strip()
+            ]
+            if len(章节内容) != len(目录) or len(成功章节) != len(目录):
+                缺失编号 = [
+                    str(项目.get("id") or "") for 项目 in 章节内容
+                    if not isinstance(项目.get("content"), str) or not 项目["content"].strip()
+                ]
                 logger.warning(
-                    f"七猫小说下载失败：书籍编号={书籍编号}, 错误=没有获取到可用章节正文"
+                    "七猫小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s, 缺失编号=%s",
+                    书籍编号, len(成功章节), len(目录), ",".join(缺失编号[:10]) or "none",
                 )
                 yield "下载失败 请重试"
                 return
@@ -230,8 +243,12 @@ async def 生成下载回复流(
             )
             yield "文件发送失败，请稍后再试"
             return
+    except _七猫图片版错误:
+        logger.info("七猫小说文字下载结束：书籍编号=%s, 原因=image_only", 书籍编号)
+        yield "这本是图片版，暂无可用文字正文"
+        return
     except Exception as exc:
-        logger.warning(f"七猫小说下载失败：关键词={关键词}, 错误={exc}")
+        logger.warning("七猫小说下载失败：阶段=download, 错误类型=%s", type(exc).__name__)
         yield "下载失败 请重试"
         return
 
@@ -354,6 +371,9 @@ async def 获取小说目录(
         生成请求头(书籍编号, "api-ks.wtzw.com"),
     )
     章节列表 = 读取字段路径(数据, ("data", "chapter_lists")) or []
+    元数据 = 读取字段路径(数据, ("data", "meta"))
+    if isinstance(元数据, dict) and 元数据.get("is_pure_image") in (1, "1", True):
+        raise _七猫图片版错误("image_only")
     目录 = [章节 for 章节 in 章节列表 if isinstance(章节, dict) and 章节.get("id")]
     return sorted(目录, key=lambda 章节: int(章节.get("chapter_sort") or 0))
 
@@ -402,20 +422,31 @@ async def 下载全部章节(
                 章节.get("title") or f"第{章节.get('chapter_sort', '')}章"
             )
             章节编号 = str(章节.get("id"))
-            try:
-                正文 = await 获取章节正文(session, 书籍编号, 章节编号, 是否短篇)
-                await 记录进度(1, 1 if 正文 else 0)
-                return {"id": 章节编号, "title": 标题, "content": 正文}
-            except Exception as exc:
-                logger.warning(
-                    f"七猫章节下载失败：书籍编号={书籍编号}, 章节编号={章节编号}, 错误={exc}"
-                )
-                await 记录进度(1, 0)
-                return {"id": 章节编号, "title": 标题, "content": ""}
+            正文 = ""
+            for 尝试 in range(单章补拉次数):
+                try:
+                    正文 = await 获取章节正文(session, 书籍编号, 章节编号, 是否短篇)
+                    if isinstance(正文, str) and 正文.strip():
+                        break
+                    正文 = ""
+                except _七猫图片版错误:
+                    logger.debug(
+                        "七猫章节补拉结束：书籍编号=%s, 章节编号=%s, 原因=image_only",
+                        书籍编号, 章节编号,
+                    )
+                    break
+                except Exception as exc:
+                    logger.debug(
+                        "七猫章节补拉失败：书籍编号=%s, 章节编号=%s, 尝试=%s, 错误类型=%s",
+                        书籍编号, 章节编号, 尝试 + 1, type(exc).__name__,
+                    )
+            await 记录进度(1, 1 if 正文 else 0)
+            return {"id": 章节编号, "title": 标题, "content": 正文}
 
     async def 下载批次(
         批次目录: list[dict[str, Any]], 批次序号: int, 批次数量: int
     ) -> list[dict[str, str]]:
+        正文映射: dict[str, str] = {}
         async with 批量信号量:
             try:
                 章节编号列表 = [
@@ -424,31 +455,31 @@ async def 下载全部章节(
                 正文映射 = await 获取批量章节正文(
                     session, 书籍编号, 章节编号列表, 是否短篇
                 )
-                结果列表 = []
-                成功增量 = 0
-                for 章节 in 批次目录:
-                    标题 = 清理网页文本(
-                        章节.get("title") or f"第{章节.get('chapter_sort', '')}章"
-                    )
-                    章节编号 = str(章节.get("id"))
-                    正文 = 正文映射.get(章节编号, "")
-                    if 正文:
-                        成功增量 += 1
-                    结果列表.append({"id": 章节编号, "title": 标题, "content": 正文})
-                await 记录进度(len(批次目录), 成功增量)
-                if 成功增量 < len(批次目录):
-                    缺失数量 = len(批次目录) - 成功增量
-                    logger.warning(
-                        f"七猫小说批量正文缺失：书籍编号={书籍编号}, 批次={批次序号}/{批次数量}, "
-                        f"缺失={缺失数量}, 批量章节数={len(批次目录)}"
-                    )
-                return 结果列表
             except Exception as exc:
-                logger.warning(
-                    f"七猫小说批量章节下载失败，回退单章：书籍编号={书籍编号}, "
-                    f"批次={批次序号}/{批次数量}, 批量章节数={len(批次目录)}, 错误={exc}"
+                logger.debug(
+                    "七猫小说批量请求失败：书籍编号=%s, 批次=%s/%s, 错误类型=%s",
+                    书籍编号, 批次序号, 批次数量, type(exc).__name__,
                 )
-        return await asyncio.gather(*(下载单章(章节) for 章节 in 批次目录))
+        # 正常响应也可能缺章；保留已成功正文，只补缺失项，不重复下载整批。
+        结果列表 = []
+        缺失位置 = []
+        for 章节 in 批次目录:
+            标题 = 清理网页文本(章节.get("title") or f"第{章节.get('chapter_sort', '')}章")
+            章节编号 = str(章节.get("id"))
+            正文 = 正文映射.get(章节编号, "")
+            if not isinstance(正文, str) or not 正文.strip():
+                正文 = ""
+                缺失位置.append((len(结果列表), 章节))
+            结果列表.append({"id": 章节编号, "title": 标题, "content": 正文})
+        已成功 = len(批次目录) - len(缺失位置)
+        if 已成功:
+            await 记录进度(已成功, 已成功)
+        if 缺失位置:
+            logger.debug("七猫小说批量缺章补拉：书籍编号=%s, 批次=%s/%s, 缺失=%s", 书籍编号, 批次序号, 批次数量, len(缺失位置))
+            补拉结果 = await asyncio.gather(*(下载单章(章节) for _, 章节 in 缺失位置))
+            for (位置, _), 结果 in zip(缺失位置, 补拉结果):
+                结果列表[位置] = 结果
+        return 结果列表
 
     批次列表 = [
         目录[开始 : 开始 + 批量章节数] for 开始 in range(0, len(目录), 批量章节数)
@@ -488,7 +519,12 @@ async def 获取批量章节正文(
         章节编号 = str(读取首个字段(项目, ("id", "chapter_id", "chapterId")) or "")
         加密正文 = 读取首个字段(项目, ("content", "chapter_content", "body"))
         if 章节编号 and 加密正文:
-            正文映射[章节编号] = 解密正文(str(加密正文))
+            try:
+                正文 = 解密正文(str(加密正文))
+                if 正文:
+                    正文映射[章节编号] = 正文
+            except Exception as exc:
+                logger.debug("七猫批量章节解析失败：书籍编号=%s, 章节编号=%s, 错误类型=%s", 书籍编号, 章节编号, type(exc).__name__)
     return 正文映射
 
 
@@ -548,6 +584,13 @@ def 生成小说文件内容(
     目录: list[dict[str, Any]],
     章节内容: list[dict[str, str]],
 ) -> tuple[str, bytes]:
+    目录编号 = [str(章节.get("id") or "") for 章节 in 目录]
+    if (
+        len(章节内容) != len(目录)
+        or [str(章节.get("id") or "") for 章节 in 章节内容] != 目录编号
+        or any(not isinstance(章节.get("content"), str) or not 章节["content"].strip() for 章节 in 章节内容)
+    ):
+        raise RuntimeError("chapter_content_incomplete")
     标题 = 详情.get("title") or f"七猫小说{书籍编号}"
     文件名 = 生成小说文件名(书籍编号, 详情)
     简介 = str(详情.get("intro") or "").strip()
@@ -567,8 +610,6 @@ def 生成小说文件内容(
         内容列表.extend(["简介：", 简介, ""])
 
     for 章节 in 章节内容:
-        if not 章节["content"]:
-            continue
         内容列表.append(章节["title"])
         内容列表.append("")
         内容列表.append(去除章节正文重复标题(章节["title"], 章节["content"]))
@@ -944,6 +985,7 @@ def 提取EPUB正文(EPUB内容: bytes) -> str:
 
         文档列表 = []
         已读取文档 = False
+        包含图片 = False
         for 地址 in 章节地址列表:
             URL = urlsplit(地址)
             if URL.scheme or URL.netloc:
@@ -963,6 +1005,7 @@ def 提取EPUB正文(EPUB内容: bytes) -> str:
                 ),
                 XHTML,
             )
+            包含图片 = 包含图片 or any(节点.tag.rsplit("}", 1)[-1] in {"img", "image"} for 节点 in 正文节点.iter())
             文本段: list[str] = []
             追加文本(正文节点, 文本段)
             文本 = "".join(文本段).replace("\r\n", "\n").replace("\r", "\n")
@@ -974,6 +1017,8 @@ def 提取EPUB正文(EPUB内容: bytes) -> str:
                 文档列表.append(文本)
 
         if not 文档列表:
+            if 包含图片:
+                raise _七猫图片版错误("image_only")
             if 已读取文档:
                 return ""
             raise ValueError("章节 EPUB 没有可用正文")
