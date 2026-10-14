@@ -112,6 +112,7 @@ class 夸克网盘客户端:
     async def 上传文件并创建分享(
         self, 本地路径: str | Path, 文件名: str, 上传目录: str
     ) -> str:
+        上传目录 = 网盘清理工具.生成每日上传目录(上传目录)
         上传锁 = 获取夸克同名上传锁(self.cookie, 上传目录, 文件名)
         async with 上传锁:
             目录ID = await self.确保目录路径(上传目录)
@@ -131,29 +132,42 @@ class 夸克网盘客户端:
         return 当前目录ID
 
     async def 确保文件夹(self, 目录名: str, 父目录ID: str) -> str:
+        async with 网盘清理工具.获取目录创建锁(self.cookie, 父目录ID, 目录名):
+            return await self._确保文件夹(目录名, 父目录ID)
+
+    async def _确保文件夹(self, 目录名: str, 父目录ID: str) -> str:
         已有ID = await self.查找文件夹ID(目录名, 父目录ID)
         if 已有ID:
             return 已有ID
-        数据 = await self.请求JSON(
-            "POST",
-            "/file",
-            json_data={
-                "pdir_fid": str(父目录ID),
-                "file_name": 目录名,
-                "dir_path": "",
-                "dir_init_lock": False,
-            },
-        )
-        if not 接口成功(数据):
-            raise RuntimeError(f"夸克网盘创建目录失败：{限制文本长度(数据)}")
-        文件ID = 读取文件ID(数据.get("data"))
-        if 文件ID:
-            return 文件ID
+        目录冲突: 夸克网盘请求错误 | None = None
+        try:
+            数据 = await self.请求JSON(
+                "POST",
+                "/file",
+                json_data={
+                    "pdir_fid": str(父目录ID),
+                    "file_name": 目录名,
+                    "dir_path": "",
+                    "dir_init_lock": False,
+                },
+            )
+        except 夸克网盘请求错误 as 异常:
+            if 异常.业务码 != 23008:
+                raise
+            目录冲突 = 异常
+        else:
+            if not 接口成功(数据):
+                raise RuntimeError(f"夸克网盘创建目录失败：{限制文本长度(数据)}")
+            文件ID = 读取文件ID(数据.get("data"))
+            if 文件ID:
+                return 文件ID
         for 尝试次数 in range(1, 文件可见重试次数 + 1):
             await asyncio.sleep(计算等待秒数(尝试次数))
             文件ID = await self.查找文件夹ID(目录名, 父目录ID)
             if 文件ID:
                 return 文件ID
+        if 目录冲突 is not None:
+            raise 目录冲突
         raise RuntimeError("夸克网盘创建目录后没有返回文件ID")
 
     async def 查找文件夹ID(self, 目录名: str, 父目录ID: str) -> str:
@@ -238,18 +252,8 @@ class 夸克网盘客户端:
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
-        """删除上传目录中前两天及更早的小说 TXT，不删除文件夹。"""
-        目录ID = await self.确保目录路径(上传目录)
-        待删除: list[str] = []
-        for 项目 in await self.列出目录全部项目(目录ID):
-            if not isinstance(项目, dict) or 是文件夹项目(项目):
-                continue
-            if not 网盘清理工具.是应清理的小说(项目, 当前日期, 保留天数=2):
-                continue
-            文件ID = 读取文件ID(项目)
-            if 文件ID and 文件ID not in 待删除:
-                待删除.append(文件ID)
-        return await self.删除文件ID列表(待删除)
+        """清理前两天及更早小说，并删除确认清空的日期子目录。"""
+        return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
 
     async def 列出目录全部项目(
         self, 父目录ID: str, *, _完整性重试次数: int = 0
@@ -275,28 +279,44 @@ class 夸克网盘客户端:
             )
             if not 接口成功(数据):
                 raise RuntimeError(f"夸克网盘目录列表获取失败：{限制文本长度(数据)}")
-            项目列表 = 读取列表(数据, ("data", "list"))
-            数据主体 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
-            元数据 = 数据主体.get("metadata") or 数据.get("metadata") or {}
-            页总数 = 0
-            if isinstance(元数据, dict):
+            数据主体 = 数据.get("data")
+            if not isinstance(数据主体, dict):
+                raise RuntimeError("夸克网盘目录响应缺少有效数据主体")
+            项目列表 = 数据主体.get("list")
+            if not isinstance(项目列表, list):
+                raise RuntimeError("夸克网盘目录响应缺少有效列表")
+            for 项目 in 项目列表:
+                if not isinstance(项目, dict) or not 读取文件ID(项目).strip():
+                    raise RuntimeError("夸克网盘目录项目结构或文件ID无效")
+            已知页总数: int | None = None
+            for 元数据主体 in (数据主体, 数据):
+                if "metadata" not in 元数据主体:
+                    continue
+                元数据 = 元数据主体["metadata"]
+                if not isinstance(元数据, dict):
+                    raise RuntimeError("夸克网盘目录元数据无效")
                 for 字段名 in ("_total", "total", "total_count", "total_num"):
-                    页总数 = 安全整数(元数据.get(字段名), 0)
-                    if 页总数 > 0:
-                        break
-            return 项目列表, 页总数
+                    值 = 元数据.get(字段名)
+                    if 值 is None:
+                        continue
+                    if type(值) is int and 值 >= 0:
+                        当前页总数 = 值
+                    elif isinstance(值, str) and re.fullmatch(r"[0-9]+", 值):
+                        当前页总数 = int(值)
+                    else:
+                        raise RuntimeError("夸克网盘目录总数无效")
+                    if 已知页总数 is None:
+                        已知页总数 = 当前页总数
+                    elif 当前页总数 != 已知页总数:
+                        raise RuntimeError("夸克网盘目录总数字段不一致")
+            if 已知页总数 is not None and len(项目列表) > 已知页总数:
+                raise RuntimeError("夸克网盘目录项目数量超过总数")
+            return 项目列表, 已知页总数 or 0
 
         def 合并项目(项目列表: list[Any]) -> int:
             新增数量 = 0
             for 项目 in 项目列表:
-                if not isinstance(项目, dict):
-                    continue
-                文件ID = 读取文件ID(项目)
-                项目标识 = 文件ID or hashlib.sha256(
-                    json.dumps(
-                        项目, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-                    ).encode("utf-8")
-                ).hexdigest()
+                项目标识 = 读取文件ID(项目)
                 if 项目标识 in 已见ID:
                     continue
                 已见ID.add(项目标识)

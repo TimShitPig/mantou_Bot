@@ -27,7 +27,6 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 网盘名称 = "UC网盘"
 同名冲突重试次数 = 5
 目录列表每页数量 = 200
-目录列表最大页数 = 20
 上传完成重试次数 = 6
 上传完成重试基础间隔秒 = 2
 上传完成文件可见重试次数 = 12
@@ -75,6 +74,7 @@ class UC网盘客户端:
     async def 上传文件并创建分享(
         self, 本地路径: str | Path, 文件名: str, 上传目录: str
     ) -> str:
+        上传目录 = 网盘清理工具.生成每日上传目录(上传目录)
         目录ID = await self.确保目录路径(上传目录)
         文件ID = ""
         最后异常: Exception | None = None
@@ -108,6 +108,10 @@ class UC网盘客户端:
         return 当前目录ID
 
     async def 确保文件夹(self, 目录名: str, 父目录ID: str = "0") -> str:
+        async with 网盘清理工具.获取目录创建锁(self.cookie, 父目录ID, 目录名):
+            return await self._确保文件夹(目录名, 父目录ID)
+
+    async def _确保文件夹(self, 目录名: str, 父目录ID: str) -> str:
         文件ID = await self.查找文件夹ID(目录名, 父目录ID)
         if 文件ID:
             return 文件ID
@@ -199,9 +203,14 @@ class UC网盘客户端:
         return 文件ID列表
 
     async def 列出目录项目(self, 父目录ID: str = "0") -> list[dict[str, Any]]:
+        return await self.列出目录全部项目(父目录ID)
+
+    async def 列出目录全部项目(self, 父目录ID: str = "0") -> list[dict[str, Any]]:
         结果列表: list[dict[str, Any]] = []
         已见标识: set[str] = set()
-        for 页码 in range(1, 目录列表最大页数 + 1):
+        总数量: int | None = None
+        页码 = 1
+        while True:
             数据 = await self.请求JSON可等待(
                 "GET",
                 "/file/sort",
@@ -209,15 +218,39 @@ class UC网盘客户端:
                     "pdir_fid": str(父目录ID),
                     "_size": 目录列表每页数量,
                     "_page": 页码,
+                    "_fetch_total": 1,
                 },
             )
-            项目列表 = 读取UC目录项目列表(数据)
-            if not 项目列表:
-                break
+            if str(数据.get("code")) not in ("0", "200"):
+                raise RuntimeError("UC网盘目录列表请求失败")
+            原始列表 = 读取UC目录项目列表(数据)
+            当前总数 = None
+            for 路径 in (
+                ("metadata", "_total"), ("metadata", "total"),
+                ("data", "metadata", "_total"), ("data", "metadata", "total"),
+                ("data", "total"), ("data", "total_count"), ("total",),
+            ):
+                值 = 读取路径(数据, 路径)
+                if 值 is not None:
+                    try:
+                        当前总数 = int(值)
+                    except (TypeError, ValueError, OverflowError):
+                        raise RuntimeError("UC网盘目录总数无效")
+                    if 当前总数 < 0:
+                        raise RuntimeError("UC网盘目录总数无效")
+                    break
+            if 当前总数 is not None:
+                if 总数量 is not None and 当前总数 != 总数量:
+                    raise RuntimeError("UC网盘目录扫描期间数据变化")
+                总数量 = 当前总数
+            if not 原始列表:
+                if 总数量 is not None and len(结果列表) != 总数量:
+                    raise RuntimeError("UC网盘目录扫描不完整")
+                return 结果列表
             新增数量 = 0
-            for 项目 in 项目列表:
+            for 项目 in 原始列表:
                 if not isinstance(项目, dict):
-                    continue
+                    raise RuntimeError("UC网盘目录项目格式无效")
                 标识 = 读取UC文件ID(项目) or json.dumps(
                     项目, ensure_ascii=False, sort_keys=True
                 )
@@ -226,9 +259,21 @@ class UC网盘客户端:
                 已见标识.add(标识)
                 结果列表.append(项目)
                 新增数量 += 1
-            if len(项目列表) < 目录列表每页数量 or 新增数量 == 0:
-                break
-        return 结果列表
+            if 新增数量 == 0:
+                raise RuntimeError("UC网盘目录分页没有新增项目")
+            if 总数量 is not None and len(结果列表) >= 总数量:
+                if len(结果列表) != 总数量:
+                    raise RuntimeError("UC网盘目录扫描总数不一致")
+                return 结果列表
+            页码 += 1
+
+    async def 删除文件ID列表(self, 文件ID列表: list[str]) -> int:
+        去重ID = list(dict.fromkeys(str(值).strip() for 值 in 文件ID列表 if str(值).strip()))
+        已删除 = 0
+        for 文件ID in 去重ID:
+            if await self.删除文件(文件ID):
+                已删除 += 1
+        return 已删除
 
     async def 删除文件(self, 文件ID: str) -> bool:
         if not 文件ID:
@@ -239,28 +284,30 @@ class UC网盘客户端:
             json_data={"action_type": 2, "filelist": [str(文件ID)], "exclude_fids": []},
         )
         if str(数据.get("code")) not in ("0", "200"):
-            raise RuntimeError(f"UC网盘删除文件失败：{限制文本长度(数据)}")
-        return True
+            raise RuntimeError("UC网盘删除文件失败")
+        任务ID = str(读取路径(数据, ("data", "task_id")) or 数据.get("task_id") or "")
+        if not 任务ID:
+            return True
+        for 重试序号 in range(上传完成文件可见重试次数):
+            任务数据 = await self.请求JSON可等待(
+                "GET", "/task", params={"task_id": 任务ID, "retry_index": 重试序号}
+            )
+            if str(任务数据.get("code")) not in ("0", "200"):
+                raise RuntimeError("UC网盘删除任务查询失败")
+            状态 = str(读取路径(任务数据, ("data", "status")))
+            if 状态 == "2":
+                return True
+            if 状态 == "3":
+                raise RuntimeError("UC网盘删除任务失败")
+            if 重试序号 + 1 < 上传完成文件可见重试次数:
+                await asyncio.sleep(0.5)
+        raise RuntimeError("UC网盘删除任务超时")
 
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
-        """删除上传目录中前两天及更早的小说 TXT，不删除文件夹。"""
-        目录ID = await self.确保目录路径(上传目录)
-        待删除: list[str] = []
-        for 项目 in await self.列出目录项目(目录ID):
-            if not isinstance(项目, dict) or 是UC文件夹项目(项目):
-                continue
-            if not 网盘清理工具.是应清理的小说(项目, 当前日期, 保留天数=2):
-                continue
-            文件ID = 读取UC文件ID(项目)
-            if 文件ID and 文件ID not in 待删除:
-                待删除.append(文件ID)
-        已删除 = 0
-        for 文件ID in 待删除:
-            if await self.删除文件(文件ID):
-                已删除 += 1
-        return 已删除
+        """清理前两天及更早小说，并删除确认清空的日期子目录。"""
+        return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
 
     async def 请求预上传数据(
         self,
@@ -1000,7 +1047,7 @@ def 读取UC目录项目列表(数据: Any) -> list[Any]:
         值 = 读取路径(数据, 路径)
         if isinstance(值, list):
             return 值
-    return []
+    raise RuntimeError("UC网盘目录响应缺少列表")
 
 
 def 读取UC文件ID(项目: dict[str, Any]) -> str:

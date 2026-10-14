@@ -95,7 +95,7 @@ async def 停止恢复待续传上传任务() -> None:
 async def 清理网盘过期小说文件(
     配置: Any, 当前日期: date | None = None
 ) -> dict[str, int]:
-    """清理所有已启用网盘上传目录中前两天及更早的 TXT 小说。"""
+    """清理各账号过期 TXT 及已清空的日期目录，保留今天和昨天。"""
     日期 = 当前日期 or datetime.now().astimezone().date()
     客户端映射 = {
         "UC": (UC网盘.UC网盘客户端, UC网盘.读取UC上传目录),

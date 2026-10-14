@@ -72,7 +72,7 @@ class 百度网盘客户端:
     async def 上传文件并删除同名旧文件(
         self, 本地路径: str | Path, 文件名: str, 上传目录: str
     ) -> str:
-        远端目录 = 规范化目录路径(上传目录)
+        远端目录 = 规范化目录路径(网盘清理工具.生成每日上传目录(上传目录))
         await self.确保目录路径(远端目录)
         if 提取文件名状态(文件名) == "完结":
             已有文件 = await self.查找同名普通文件列表(文件名, 远端目录)
@@ -136,7 +136,7 @@ class 百度网盘客户端:
             "dir": 规范化目录路径(远端目录),
             "order": "time",
             "desc": 1,
-            "showempty": 0,
+            "showempty": 1,
             "web": 1,
             "page": 1,
             "num": 1000,
@@ -145,13 +145,31 @@ class 百度网盘客户端:
             "app_id": 250528,
             "clienttype": 0,
         }
-        数据 = await self.请求JSON("GET", "/api/list", params=参数)
-        if str(数据.get("errno")) != "0":
-            raise RuntimeError(
-                f"百度网盘目录列表获取失败：dir={远端目录}, response={限制文本长度(数据)}"
-            )
-        列表 = 数据.get("list") or []
-        return [项目 for 项目 in 列表 if isinstance(项目, dict)]
+        结果: list[dict[str, Any]] = []
+        已见路径: set[str] = set()
+        for 页码 in range(1, 1001):
+            参数["page"] = 页码
+            数据 = await self.请求JSON("GET", "/api/list", params=参数)
+            if str(数据.get("errno")) != "0":
+                raise RuntimeError("百度网盘目录列表获取失败")
+            列表 = 数据.get("list")
+            if not isinstance(列表, list):
+                raise RuntimeError("百度网盘目录列表响应不完整")
+            if not 列表:
+                if 数据.get("has_more") in (1, "1", True):
+                    raise RuntimeError("百度网盘目录列表空页仍报告有后续项目")
+                return 结果
+            for 项目 in 列表:
+                if not isinstance(项目, dict):
+                    raise RuntimeError("百度网盘目录项目响应不完整")
+                标识 = str(项目.get("path") or 项目.get("fs_id") or "")
+                if not 标识 or 标识 in 已见路径:
+                    raise RuntimeError("百度网盘目录分页未前进，停止使用部分结果")
+                已见路径.add(标识)
+                结果.append(项目)
+            if 数据.get("has_more") in (0, "0", False) and "has_more" in 数据:
+                return 结果
+        raise RuntimeError("百度网盘目录分页达到上限，停止使用部分结果")
 
     async def 删除同名普通文件(self, 文件名: str, 远端目录: str) -> int:
         删除路径列表: list[str] = []
@@ -207,26 +225,10 @@ class 百度网盘客户端:
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
-        """删除上传目录中前两天及更早的小说 TXT，不删除文件夹。"""
-        远端目录 = 规范化目录路径(上传目录)
-        项目列表 = await self.列出目录(远端目录)
-        待删除: list[str] = []
-        for 项目 in 项目列表:
-            if not isinstance(项目, dict) or 是百度文件夹项目(项目):
-                continue
-            if not 网盘清理工具.是应清理的小说(项目, 当前日期, 保留天数=2):
-                continue
-            远端路径 = str(项目.get("path") or "").strip()
-            if not 远端路径:
-                远端路径 = 拼接远端路径(远端目录, 项目.get("server_filename") or "")
-            if 远端路径 and 远端路径 not in 待删除:
-                待删除.append(远端路径)
-        if not 待删除:
-            return 0
-        数据 = await self.删除文件(待删除)
-        if str(数据.get("errno")) != "0":
-            raise RuntimeError("百度网盘删除过期小说失败")
-        return len(待删除)
+        """清理过期 TXT 及已清空的日期子目录，保留总目录。"""
+        return await 网盘清理工具.清理日期目录小说(
+            _百度日期清理客户端(self), 上传目录, 当前日期
+        )
 
     async def 上传文件(
         self, 本地路径: str | Path, 远端目录: str = "/", 文件名: str | None = None
@@ -406,6 +408,41 @@ class 百度网盘客户端:
         if self.session is None:
             raise RuntimeError("百度网盘客户端未初始化")
         return self.session
+
+
+class _百度日期清理客户端:
+    """按百度路径适配统一清理，目录和删除均使用 path 而非 fs_id。"""
+    def __init__(self, 客户端: 百度网盘客户端):
+        self.客户端 = 客户端
+
+    async def 确保目录路径(self, 总目录: str) -> str:
+        return 规范化目录路径(总目录)
+
+    async def 列出目录全部项目(self, 目录: str) -> list[dict[str, Any]]:
+        return [
+            {
+                **项目,
+                "fid": str(项目.get("path") or 拼接远端路径(目录, 项目["server_filename"])),
+                "dir": 是百度文件夹项目(项目),
+            }
+            for 项目 in await self.客户端.列出目录(目录)
+        ]
+
+    async def 删除文件ID列表(self, 路径列表: list[str]) -> int:
+        数据 = await self.客户端.删除文件(路径列表)
+        if str(数据.get("errno")) != "0":
+            raise RuntimeError("百度网盘删除过期小说或日期目录失败")
+        父目录集合 = {str(Path(路径).parent).replace("\\", "/") for 路径 in 路径列表}
+        for 尝试 in range(8):
+            剩余路径: set[str] = set()
+            for 父目录 in 父目录集合:
+                剩余路径.update(读取远端路径 for 项目 in await self.列出目录全部项目(父目录)
+                              if (读取远端路径 := str(项目.get("fid") or "")))
+            if not 剩余路径.intersection(路径列表):
+                return len(路径列表)
+            if 尝试 < 7:
+                await asyncio.sleep(min(0.25 * (尝试 + 1), 1.5))
+        raise RuntimeError("百度网盘删除过期小说或日期目录尚未完成")
 
 
 async def 上传小说并获取分享链接(
