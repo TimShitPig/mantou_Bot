@@ -3560,36 +3560,238 @@ async def _处理群角色(request: web.Request) -> web.Response:
         return _控制台错误(500, "群角色暂时不可用")
 
 
-async def _处理群备注(request: web.Request) -> web.Response:
+def _群设置响应(结果: dict[str, Any], 状态码: int = 200) -> web.Response:
+    return web.json_response(结果, status=状态码, headers={"Cache-Control": "no-store"})
+
+
+def _群设置错误(状态码: int, 文本: str) -> web.Response:
+    return _群设置响应({"ok": False, "error": 文本}, 状态码)
+
+
+def _群设置请求范围(数据: dict[str, Any]) -> dict[str, str]:
+    return {"chat_id": 数据["chat_id"], "chat_type": "group", "appid": 数据["appid"]}
+
+
+_群设置标识格式 = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_群设置AppID格式 = re.compile(r"[0-9]{4,32}\Z")
+
+
+async def _读取群设置请求(
+    request: web.Request, 要求已知: bool = False,
+) -> tuple[dict[str, Any] | None, web.Response | None]:
+    """所有群设置入口共享鉴权、同源和显式群作用域校验。"""
     if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
+        return None, _群设置错误(401, "请先登录控制台")
+    if not _请求来自同源(request):
+        return None, _群设置错误(403, "请求来源无效")
     数据 = await _读取请求JSON(request)
-    会话标识 = str((数据 or {}).get("chat_id") or "").strip()
-    if not 会话标识:
-        return _控制台错误(400, "会话参数无效")
+    if 数据 is None:
+        return None, _群设置错误(400, "请求参数无效")
+    群标识 = 数据.get("chat_id")
+    appid = 数据.get("appid", "")
+    if (
+        数据.get("chat_type") != "group"
+        or not isinstance(群标识, str)
+        or not _群设置标识格式.fullmatch(群标识)
+        or not isinstance(appid, str)
+        or (appid and not _群设置AppID格式.fullmatch(appid))
+    ):
+        return None, _群设置错误(400, "群聊参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        if (数据 or {}).get("action") == "get":
+        已知会话 = 消息记录.消息缓存.get(群标识)
+    except Exception as exc:
+        logger.warning("帮助控制台群设置范围检查失败：错误类型=%s", type(exc).__name__)
+        return None, _群设置错误(502, "群资料暂时不可用，请稍后重试")
+    if 已知会话 is not None:
+        if not isinstance(已知会话, dict) or 已知会话.get("chat_type") != "group":
+            return None, _群设置错误(400, "只支持已知群聊")
+        已知AppID = 已知会话.get("appid")
+        if not isinstance(已知AppID, str) or not _群设置AppID格式.fullmatch(已知AppID):
+            return None, _群设置错误(400, "请刷新群资料后重试")
+        if appid and appid != 已知AppID:
+            return None, _群设置错误(400, "群聊与机器人不匹配")
+        appid = 已知AppID
+    elif 要求已知 or not appid:
+        return None, _群设置错误(400, "请先打开已有群聊并刷新资料")
+    数据 = {**数据, "chat_id": 群标识, "appid": appid}
+    return 数据, None
+
+
+def _群设置成员参数有效(标识: Any) -> bool:
+    return isinstance(标识, str) and bool(_群设置标识格式.fullmatch(标识))
+
+
+def _群设置批量成员有效(成员列表: Any) -> bool:
+    return (
+        isinstance(成员列表, list)
+        and 0 < len(成员列表) <= 20
+        and all(_群设置成员参数有效(成员) for 成员 in 成员列表)
+        and len(set(成员列表)) == len(成员列表)
+    )
+
+
+async def _调用群设置业务(
+    数据: dict[str, Any], 函数名: str, 失败提示: str, **参数: Any
+) -> web.Response:
+    try:
+        from 功能文件.管理功能.群聊功能 import 群聊设置
+
+        结果 = await getattr(群聊设置, 函数名)(数据["chat_id"], appid=数据["appid"], **参数)
+        if not isinstance(结果, dict):
+            return _群设置响应({"ok": False, "error": 失败提示, **_群设置请求范围(数据)}, 502)
+        if 函数名 == "批量移除群成员" and (结果.get("ok") is True or 结果.get("partial") is True):
+            清理消息列表缓存()
+        if 结果.get("ok") is not True:
+            原始状态 = 结果.get("http_status")
+            状态码 = 原始状态 if type(原始状态) is int and 400 <= 原始状态 <= 599 else 409
+            原因 = 结果.get("reason")
+            受控提示 = {
+                "api_permission": "机器人尚未开通此群管理接口",
+                "group_permission": "该群尚未授予机器人所需管理权限",
+                "auth_expired": "机器人登录状态暂时失效，请稍后重试",
+                "rate_limited": "操作过于频繁，请稍后重试",
+                "invalid_response": "群管理响应不完整",
+                "remove_unconfirmed": "成员移除结果未确认，请刷新成员列表",
+                "operation_unconfirmed": "黑名单操作结果未确认，请刷新黑名单",
+            }.get(原因, 失败提示) if isinstance(原因, str) else 失败提示
+            错误码 = 结果.get("code")
+            logger.warning(
+                "帮助控制台群设置操作失败：阶段=%s，群标识=%s，appid=%s，HTTP状态=%s，业务码=%s",
+                函数名, 数据["chat_id"], 数据["appid"], 状态码,
+                错误码 if type(错误码) is int else "none",
+            )
+            return _群设置响应(
+                {**结果, "ok": False, "error": 受控提示, "message": 受控提示, **_群设置请求范围(数据)},
+                状态码,
+            )
+        return _群设置响应({**结果, **_群设置请求范围(数据)})
+    except Exception as exc:
+        logger.warning(
+            "帮助控制台群设置操作失败：阶段=%s，群标识=%s，appid=%s，错误类型=%s",
+            函数名, 数据["chat_id"], 数据["appid"], type(exc).__name__,
+        )
+        return _群设置响应({"ok": False, "error": 失败提示, **_群设置请求范围(数据)}, 502)
+
+
+async def _处理群设置(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    return await _调用群设置业务(数据, "获取群设置", "群设置读取失败，请稍后再试")
+
+
+async def _处理群成员列表(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    游标 = 数据.get("cursor", "")
+    强制刷新 = 数据.get("force", False)
+    if not isinstance(游标, str) or len(游标) > 2048 or not isinstance(强制刷新, bool):
+        return _群设置错误(400, "成员分页参数无效")
+    return await _调用群设置业务(
+        数据, "获取群成员列表", "群成员列表读取失败，请稍后再试", cursor=游标, force=强制刷新,
+    )
+
+
+async def _处理群成员信息(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    成员标识 = 数据.get("member_openid")
+    强制刷新 = 数据.get("force", False)
+    if not _群设置成员参数有效(成员标识) or not isinstance(强制刷新, bool):
+        return _群设置错误(400, "成员参数无效")
+    return await _调用群设置业务(
+        数据, "获取群成员信息", "群成员信息读取失败，请稍后再试", member_openid=成员标识.strip(), force=强制刷新,
+    )
+
+
+async def _处理群成员批量移除(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    成员列表 = 数据.get("member_openids")
+    同时拉黑 = 数据.get("add_to_member_blacklist", False)
+    if not _群设置批量成员有效(成员列表) or not isinstance(同时拉黑, bool):
+        return _群设置错误(400, "成员移除参数无效，单次最多选择 20 人")
+    return await _调用群设置业务(
+        数据, "批量移除群成员", "群成员移除失败，请稍后再试",
+        member_openids=[成员.strip() for 成员 in 成员列表], add_to_member_blacklist=同时拉黑,
+    )
+
+
+async def _处理群黑名单查询(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    游标 = 数据.get("cursor", "")
+    条数 = 数据.get("limit", 20)
+    强制刷新 = 数据.get("force", False)
+    if (
+        not isinstance(游标, str) or len(游标) > 2048
+        or type(条数) is not int or not 1 <= 条数 <= 100
+        or not isinstance(强制刷新, bool)
+    ):
+        return _群设置错误(400, "黑名单分页参数无效")
+    return await _调用群设置业务(
+        数据, "获取群黑名单", "群黑名单读取失败，请稍后再试", cursor=游标, limit=条数, force=强制刷新,
+    )
+
+
+async def _处理群黑名单操作(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request)
+    if 错误 is not None:
+        return 错误
+    成员列表 = 数据.get("member_openids")
+    操作 = 数据.get("op")
+    if not _群设置批量成员有效(成员列表) or not isinstance(操作, str) or 操作 not in {"add", "del"}:
+        return _群设置错误(400, "黑名单操作参数无效，单次最多选择 20 人")
+    return await _调用群设置业务(
+        数据, "操作群黑名单", "群黑名单操作失败，请稍后再试",
+        member_openids=[成员.strip() for 成员 in 成员列表], op=操作,
+    )
+
+
+async def _处理群备注(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取群设置请求(request, 要求已知=True)
+    if 错误 is not None:
+        return 错误
+    会话标识 = 数据["chat_id"]
+    操作 = 数据.get("action", "set")
+    if not isinstance(操作, str) or 操作 not in {"get", "set", "delete"}:
+        return _群设置错误(400, "备注操作参数无效")
+    if 操作 == "set" and (
+        not isinstance(数据.get("remark", ""), str)
+        or len(数据.get("remark", "")) > 200
+        or not isinstance(数据.get("group_qq", ""), str)
+        or len(数据.get("group_qq", "")) > 32
+    ):
+        return _群设置错误(400, "备注参数无效")
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+
+        if 操作 == "get":
             结果 = {
                 "remark": 消息记录.获取群备注(会话标识),
                 "group_qq": 消息记录.获取群QQ号(会话标识),
             }
-            return web.json_response({"ok": True, **结果})
-        if (数据 or {}).get("action") == "delete":
+            return _群设置响应({"ok": True, **结果, **_群设置请求范围(数据)})
+        if 操作 == "delete":
             if not await _控制台线程执行(消息记录.删除群备注, 会话标识):
-                return _控制台错误(409, "备注删除失败")
+                return _群设置错误(409, "备注删除失败")
             清理消息列表缓存()
-            return web.json_response({"ok": True, "message": "备注已删除"})
-        备注 = str((数据 or {}).get("remark") or "").strip()
-        群QQ = str((数据 or {}).get("group_qq") or "").strip()
+            return _群设置响应({"ok": True, "message": "备注已删除", **_群设置请求范围(数据)})
+        备注 = 数据.get("remark", "").strip()
+        群QQ = 数据.get("group_qq", "").strip()
         if not await _控制台线程执行(消息记录.保存群备注, 会话标识, 备注, 群QQ):
-            return _控制台错误(409, "备注保存失败")
+            return _群设置错误(409, "备注保存失败")
         清理消息列表缓存()
-        return web.json_response({"ok": True, "message": "备注已保存"})
+        return _群设置响应({"ok": True, "message": "备注已保存", **_群设置请求范围(数据)})
     except Exception as exc:
         logger.warning("帮助控制台群备注保存失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(409, "备注保存失败")
+        return _群设置错误(409, "备注保存失败")
 
 
 async def _处理私聊资料刷新(request: web.Request) -> web.Response:
@@ -3638,18 +3840,17 @@ async def _处理群信息刷新(request: web.Request) -> web.Response:
 
 async def _处理群广告开关(request: web.Request) -> web.Response:
     """读取或修改单个 QQ 官方群的广告拦截状态。"""
-    if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
-    数据 = await _读取请求JSON(request)
-    数据 = 数据 if isinstance(数据, dict) else {}
-    会话标识 = str(数据.get("chat_id") or "").strip()
-    会话类型 = str(数据.get("chat_type") or "group").strip().lower()
-    if not 会话标识 or len(会话标识) > 200 or 会话类型 != "group":
-        return _控制台错误(400, "只支持 QQ 官方群会话")
+    数据, 错误 = await _读取群设置请求(request, 要求已知=True)
+    if 错误 is not None:
+        return 错误
+    会话标识 = 数据["chat_id"]
+    操作 = 数据.get("action", "get")
+    if not isinstance(操作, str) or 操作 not in {"get", "set"}:
+        return _群设置错误(400, "广告开关操作参数无效")
     try:
         from 功能文件.管理功能.群聊功能 import 群管功能
 
-        if str(数据.get("action") or "get").strip().lower() == "get":
+        if 操作 == "get":
             开启 = await _控制台线程执行(
                 群管功能.读取群广告开关,
                 当前帮助网页配置,
@@ -3661,15 +3862,16 @@ async def _处理群广告开关(request: web.Request) -> web.Response:
                     "enabled": bool(开启),
                     "editable": bool(群管功能.群广告开关可持久化(当前帮助网页配置)),
                     "platform": "qq_official",
+                    **_群设置请求范围(数据),
                 },
                 headers={"Cache-Control": "no-store"},
             )
 
         原始状态 = 数据.get("enabled")
         if not isinstance(原始状态, bool):
-            return _控制台错误(400, "广告开关参数无效")
+            return _群设置错误(400, "广告开关参数无效")
         if not 群管功能.群广告开关可持久化(当前帮助网页配置):
-            return _控制台错误(409, "数据库未配置，广告开关无法保存")
+            return _群设置错误(409, "数据库未配置，广告开关保存失败")
         成功 = await _控制台线程执行(
             群管功能.写入群广告开关,
             当前帮助网页配置,
@@ -3677,16 +3879,17 @@ async def _处理群广告开关(request: web.Request) -> web.Response:
             原始状态,
         )
         if not 成功:
-            return _控制台错误(409, "广告开关保存失败，请稍后再试")
+            return _群设置错误(409, "广告开关保存失败，请稍后再试")
         return web.json_response(
             {
                 "ok": True,
                 "enabled": bool(原始状态),
                 "editable": True,
                 "platform": "qq_official",
+                **_群设置请求范围(数据),
             },
             headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:
         logger.warning("帮助控制台群广告开关失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(409, "广告开关暂时不可用")
+        return _群设置错误(409, "广告开关暂时不可用")

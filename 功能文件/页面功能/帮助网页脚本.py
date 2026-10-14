@@ -71,7 +71,7 @@
         requestOptions.headers = requestHeaders;
         const response = await fetch(`/api/${path}`, requestOptions);
         const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
-        if (!response.ok || !data.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; }
+        if (!response.ok || !data.ok) { const error = new Error(data.message || data.error || '请求失败'); error.status = response.status; error.data = data; throw error; }
         return data;
       };
       const stopQuarkWebScan = async () => {
@@ -100,6 +100,8 @@
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
+        if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
+        if (next !== 'messages' && activeView === 'messages') closeGroupSettings();
         const previousView = activeView;
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         activeView = next;
@@ -1600,6 +1602,7 @@
             const chatId = String(el.dataset.msgChat || '');
             const chatType = String(el.dataset.msgType || 'group');
             if (msgState.chatId === chatId && msgState.chatType === chatType) return;
+            if (groupSettingsState.mutating) return toast('正在更新本群设置，请稍候再切换');
             const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId) || {
               chat_id: chatId,
               chat_type: chatType,
@@ -1615,6 +1618,8 @@
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
         const chatType = String(chat?.chat_type || 'group');
+        if (groupSettingsState.mutating && (msgState.chatId !== chatId || msgState.chatType !== chatType)) return toast('正在更新本群设置，请稍候再切换');
+        if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; $('msg-remark-modal').hidden = true; }
         setMsgMobileChatOpen(true);
         msgState.chatRemoved = chatType === 'group' && (chat?.membership_status === 'removed' || chat?.in_group === false);
         const localAdmins = getLocalAdminGroups();
@@ -1666,6 +1671,7 @@
         });
         $('msg-refresh-info').hidden = msgState.chatType !== 'group';
         $('msg-remark').hidden = msgState.chatType !== 'group';
+        $('msg-group-settings-open').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
         updateMsgAdSwitch();
         $('msg-composer').hidden = msgState.chatRemoved;
         const body = $('msg-body');
@@ -1953,7 +1959,7 @@
         msgState.adLoading = true;
         updateMsgAdSwitch();
         try {
-          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'group', action:'get'})});
+          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({...captureGroupTarget(), chat_id:chatId, chat_type:'group', action:'get'})});
           if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
           msgState.adEnabled = Boolean(data.enabled);
           msgState.adEditable = Boolean(data.editable);
@@ -1976,7 +1982,7 @@
         msgState.adSaving = true;
         updateMsgAdSwitch();
         try {
-          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'group', action:'set', enabled})});
+          const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({...captureGroupTarget(), chat_id:chatId, chat_type:'group', action:'set', enabled})});
           if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
           msgState.adEnabled = Boolean(data.enabled);
           msgState.adEditable = Boolean(data.editable);
@@ -2094,6 +2100,8 @@
           $('msg-ad-switch').hidden = true;
           $('msg-refresh-info').hidden = true;
           $('msg-remark').hidden = true;
+          $('msg-group-settings-open').hidden = true;
+          closeGroupSettings(true);
         }
         updateMsgPanSelector();
       };
@@ -3301,6 +3309,7 @@
         updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
         $('msg-remark').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
+        $('msg-group-settings-open').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
         updateMsgAdSwitch();
         const rawStore = window._msgRaw = window._msgRaw || {};
         const renderedRawKeys = new Set();
@@ -4023,23 +4032,349 @@
         finally { button.disabled = false; }
       };
 
+      // 群设置只使用打开时捕获的目标；切群、翻页和迟到响应不能改变写入目标。
+      const groupSettingsState = {session:null, generation:0, mutating:false, remarkTarget:null};
+      const groupSettingsPage = () => ({rows:[], cursors:[''], index:0, nextCursor:'', selected:new Set(), loading:false, loaded:false, available:true, request:0});
+      const captureGroupTarget = () => {
+        const chatId = String(msgState.chatId || '').trim();
+        if (!chatId || msgState.chatType !== 'group') return null;
+        const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId && item.chat_type === 'group');
+        const appid = String(chat?.appid || msgState.historyData?.appid || msgState.messages.find((item) => String(item.chat_id || '') === chatId)?.appid || '').trim();
+        return Object.freeze({chat_id:chatId, chat_type:'group', appid});
+      };
+      const groupSettingsCurrent = (session) => Boolean(session && groupSettingsState.session === session && session.generation === groupSettingsState.generation && msgState.chatType === 'group' && msgState.chatId === session.target.chat_id && !$('msg-group-settings').hidden);
+      const groupSettingsMessage = (kind, message = '', error = false) => {
+        const node = $(`msg-group-${kind}-status`);
+        node.textContent = String(message || ''); node.classList.toggle('error', Boolean(error));
+      };
+      const groupSettingsRequest = async (session, path, payload = {}) => {
+        const data = await api(path, {method:'POST', body:JSON.stringify({...payload, ...session.target})});
+        if ((data.chat_id && String(data.chat_id) !== session.target.chat_id) || (data.chat_type && data.chat_type !== 'group') || (session.target.appid && data.appid && String(data.appid) !== session.target.appid)) throw new Error('群聊资料与当前目标不一致，请重新打开设置');
+        return data;
+      };
+      const groupMemberName = (member) => displayMsgNickname({user_id:member.member_openid, nickname:member.username, nickname_blank:member.nickname_blank}, member, '未提供昵称');
+      const groupMemberRole = (value) => ({owner:'群主',admin:'管理员',administrator:'管理员',member:'成员',normal:'成员'}[String(value || '').toLowerCase()] || '成员');
+      const groupMemberAvatar = (member, session) => avatarHtml(safeMediaUrl(String(member.avatar || '')) || avatarUrl(member.member_openid, 'user', session.target.appid), groupMemberName(member));
+      const groupSettingsControls = () => {
+        const session = groupSettingsState.session;
+        if (!session) return;
+        const busy = groupSettingsState.mutating;
+        const settings = session.settings || {};
+        const loaded = Boolean(session.settings);
+        const manageable = loaded && settings.can_manage !== false && settings.available !== false;
+        $('msg-group-settings-close').disabled = busy;
+        $('msg-group-settings-mask').disabled = busy;
+        $('msg-group-settings-tabs').querySelectorAll('button').forEach((node) => { node.disabled = busy; });
+        const remarkEditable = loaded && Boolean(settings.remark_editable ?? settings.local_settings_editable ?? settings.editable);
+        ['msg-group-remark-name','msg-group-remark-qq','msg-group-basic-save'].forEach((id) => { $(id).disabled = busy || !remarkEditable; });
+        $('msg-group-ad-enabled').disabled = busy || !loaded || !settings.ad_editable;
+        ['members','blacklist'].forEach((kind) => {
+          const page = session[kind];
+          const canSelect = manageable && page.available && !page.loading && !busy;
+          const boxes = $(`msg-group-${kind}-list`).querySelectorAll('input[data-group-select]');
+          boxes.forEach((node) => { node.disabled = !canSelect; node.checked = page.selected.has(node.dataset.groupSelect); });
+          const all = $(`msg-group-${kind}-all`);
+          all.disabled = !canSelect || !page.rows.length;
+          all.checked = page.selected.size > 0 && page.selected.size === Math.min(20, page.rows.length);
+          all.indeterminate = page.selected.size > 0 && !all.checked;
+          $(`msg-group-${kind}-count`).textContent = `已选 ${page.selected.size} / 20`;
+          $(`msg-group-${kind}-prev`).disabled = busy || page.loading || page.index === 0;
+          $(`msg-group-${kind}-next`).disabled = busy || page.loading || !page.nextCursor;
+          $(`msg-group-${kind}-refresh`).disabled = busy || page.loading;
+          $(`msg-group-${kind}-remove`).disabled = !canSelect || page.selected.size < 1;
+          $(`msg-group-${kind}-page`).textContent = `第 ${page.index + 1} 页 · 每页 ${kind === 'members' ? 30 : 20} 人`;
+        });
+        $('msg-group-remove-blacklist').disabled = !manageable || busy;
+        $('msg-group-blacklist-openid').disabled = !manageable || busy;
+        $('msg-group-blacklist-add').disabled = !manageable || busy;
+      };
+      const closeGroupSettings = (force = false) => {
+        if (groupSettingsState.mutating && !force) return;
+        groupSettingsState.session = null;
+        groupSettingsState.generation += 1;
+        $('msg-group-settings').hidden = true;
+        $('msg-group-settings-open').setAttribute('aria-expanded','false');
+        $('msg-group-member-detail').hidden = true;
+        ['members','blacklist'].forEach((kind) => { $(`msg-group-${kind}-list`).innerHTML = ''; });
+      };
+      const renderGroupSettingsRows = (session, kind) => {
+        if (!groupSettingsCurrent(session)) return;
+        const page = session[kind];
+        $(`msg-group-${kind}-list`).innerHTML = page.rows.length ? page.rows.map((member) => {
+          const id = String(member.member_openid || '');
+          const name = groupMemberName(member);
+          const role = groupMemberRole(member.member_role ?? member.role);
+          const tag = kind === 'members' ? 'button' : 'div';
+          const action = kind === 'members' ? ` type="button" data-group-member-info="${esc(id)}"` : '';
+          return `<div class="msg-group-member"><input type="checkbox" data-group-select="${esc(id)}" aria-label="选择成员 ${esc(name)}"${page.selected.has(id) ? ' checked' : ''}><${tag} class="msg-group-member-open"${action}><span class="msg-avatar">${groupMemberAvatar(member, session)}</span><div><strong>${esc(name)}</strong><small>${esc(id)}</small></div>${kind === 'members' && role !== '成员' ? `<span class="msg-group-role">${esc(role)}</span>` : ''}</${tag}></div>`;
+        }).join('') : (page.loaded ? `<div class="msg-empty">${kind === 'members' ? '当前页没有成员' : '本群黑名单为空'}</div>` : '');
+        groupSettingsControls();
+      };
+      const loadGroupSettingsPage = async (session, kind, force = false) => {
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating) return;
+        const page = session[kind];
+        const request = ++page.request;
+        page.loading = true;
+        groupSettingsMessage(kind, '正在读取当前群资料…');
+        groupSettingsControls();
+        try {
+          const data = await groupSettingsRequest(session, kind === 'members' ? 'message/group-members' : 'message/group-blacklist', {cursor:page.cursors[page.index] || '', ...(kind === 'blacklist' ? {limit:20} : {}), force});
+          if (!groupSettingsCurrent(session) || page.request !== request) return;
+          if (data.available === false) { page.available = false; throw new Error(data.message || '当前群暂不支持读取此项资料'); }
+          const rows = kind === 'members' ? data.members : data.users;
+          if (!Array.isArray(rows)) throw new Error('群聊资料返回不完整，请重试');
+          const nextCursor = String(data.next_cursor || '');
+          if (nextCursor && page.cursors.slice(0, page.index + 1).includes(nextCursor)) { page.nextCursor = ''; throw new Error('群成员分页游标重复，请刷新后重试'); }
+          page.rows = rows.filter((member) => member && typeof member.member_openid === 'string' && member.member_openid.trim());
+          page.loaded = true;
+          page.available = data.editable !== false && data.available !== false;
+          page.nextCursor = nextCursor;
+          page.selected.clear();
+          groupSettingsMessage(kind, data.message || (session.settings?.can_manage === false ? '当前权限仅允许查看成员资料' : '每次最多选择 20 人；翻页会清空选择'));
+          renderGroupSettingsRows(session, kind);
+        } catch (error) {
+          if (!groupSettingsCurrent(session) || page.request !== request) return;
+          if (error.data?.reason === 'api_permission') page.available = false;
+          if (error.status === 401) showAuthError(error);
+          groupSettingsMessage(kind, error.message || '读取失败，请稍后重试', true);
+        } finally {
+          if (groupSettingsCurrent(session) && page.request === request) { page.loading = false; groupSettingsControls(); }
+        }
+      };
+      const showGroupSettingsTab = (kind) => {
+        const session = groupSettingsState.session;
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating || !['basic','members','blacklist'].includes(kind)) return;
+        session.tab = kind;
+        $('msg-group-settings-tabs').querySelectorAll('[data-group-tab]').forEach((node) => { const active = node.dataset.groupTab === kind; node.classList.toggle('active', active); node.setAttribute('aria-selected', String(active)); });
+        ['basic','members','blacklist'].forEach((key) => { $(`msg-group-${key}`).hidden = key !== kind; });
+        if (kind !== 'basic' && !session[kind].loaded && !session[kind].loading) void loadGroupSettingsPage(session, kind);
+      };
+      const openGroupSettings = async () => {
+        const target = captureGroupTarget();
+        if (!target || msgState.chatRemoved || groupSettingsState.mutating) return;
+        closeGroupSettings();
+        const current = msgState.chats.find((chat) => String(chat.chat_id || '') === target.chat_id && chat.chat_type === 'group');
+        const session = {target, generation:++groupSettingsState.generation, name:current?.remark || current?.group_name || current?.nickname || target.chat_id, settings:null, tab:'basic', detailRequest:0, members:groupSettingsPage(), blacklist:groupSettingsPage()};
+        groupSettingsState.session = session;
+        $('msg-group-settings').hidden = false;
+        $('msg-group-settings-open').setAttribute('aria-expanded','true');
+        $('msg-group-settings-name').textContent = session.name;
+        $('msg-group-summary').innerHTML = `<span class="msg-chat-avatar">${avatarHtml(avatarUrl(target.chat_id, 'group', target.appid), session.name)}</span><div><strong>${esc(session.name)}</strong><small>仅设置当前群聊</small></div>`;
+        $('msg-group-remark-name').value = '';
+        $('msg-group-remark-qq').value = '';
+        $('msg-group-ad-enabled').checked = false;
+        $('msg-group-remove-blacklist').checked = false;
+        $('msg-group-blacklist-openid').value = '';
+        ['basic','members','blacklist'].forEach((kind) => groupSettingsMessage(kind, kind === 'basic' ? '正在读取本群设置…' : ''));
+        showGroupSettingsTab('basic'); groupSettingsControls();
+        $('msg-group-settings').querySelector('.msg-group-drawer')?.focus({preventScroll:true});
+        try {
+          const data = await groupSettingsRequest(session, 'message/group-settings');
+          if (!groupSettingsCurrent(session)) return;
+          session.settings = data;
+          session.name = data.remark || data.group_name || session.name;
+          $('msg-group-settings-name').textContent = session.name;
+          $('msg-group-remark-name').value = String(data.remark || '');
+          $('msg-group-remark-qq').value = String(data.group_qq || '');
+          $('msg-group-ad-enabled').checked = Boolean(data.ad_enabled);
+          $('msg-group-summary').innerHTML = `<span class="msg-chat-avatar">${avatarHtml(avatarUrl(target.chat_id, 'group', target.appid), session.name)}</span><div><strong>${esc(data.group_name || session.name)}</strong><small>${Number.isFinite(Number(data.member_num)) && Number(data.member_num) > 0 ? `${Number(data.member_num)} 位成员 · ` : ''}本群独立设置</small></div>`;
+          groupSettingsMessage('basic', data.message || ((data.remark_editable ?? data.local_settings_editable ?? data.editable) ? '群备注和广告开关仅对本群生效' : '数据库未配置，本地群设置暂未开放保存'));
+          groupSettingsControls();
+        } catch (error) {
+          if (!groupSettingsCurrent(session)) return;
+          groupSettingsMessage('basic', error.message || '本群设置读取失败，请重新打开设置', true);
+          groupSettingsControls();
+        }
+      };
+      const mutateGroupSettings = async (session, kind, action) => {
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating) return;
+        groupSettingsState.mutating = true; groupSettingsControls();
+        try { await action(); }
+        catch (error) {
+          if (groupSettingsCurrent(session)) groupSettingsMessage(kind, error.message || '本群操作失败，请重试', true);
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          groupSettingsState.mutating = false;
+          if (groupSettingsCurrent(session)) groupSettingsControls();
+        }
+      };
+      const saveGroupSettingsBasic = async () => {
+        const session = groupSettingsState.session;
+        if (!session || $('msg-group-basic-save').disabled) return;
+        const remark = $('msg-group-remark-name').value.trim();
+        const groupQQ = $('msg-group-remark-qq').value.trim();
+        if (groupQQ && !/^\d{5,12}$/.test(groupQQ)) return groupSettingsMessage('basic', '群号需为 5 至 12 位数字，或留空', true);
+        await mutateGroupSettings(session, 'basic', async () => {
+          await groupSettingsRequest(session, 'message/remarks', {remark, group_qq:groupQQ});
+          if (!groupSettingsCurrent(session)) return;
+          session.settings = {...session.settings, remark, group_qq:groupQQ};
+          session.name = remark || session.settings.group_name || session.target.chat_id;
+          $('msg-group-settings-name').textContent = session.name;
+          groupSettingsMessage('basic', '本群设置已保存');
+          msgState.historyCache.delete(`group|${session.target.chat_id}`);
+          void loadMsgChats(true); void loadMsgHistory();
+        });
+      };
+      const saveGroupSettingsAd = async () => {
+        const session = groupSettingsState.session;
+        if (!session || $('msg-group-ad-enabled').disabled) return;
+        const enabled = $('msg-group-ad-enabled').checked;
+        await mutateGroupSettings(session, 'basic', async () => {
+          try {
+            const data = await groupSettingsRequest(session, 'message/group-ad', {action:'set', enabled});
+            if (!groupSettingsCurrent(session)) return;
+            session.settings.ad_enabled = Boolean(data.enabled);
+            msgState.adEnabled = Boolean(data.enabled); msgState.adEditable = Boolean(data.editable); updateMsgAdSwitch();
+            groupSettingsMessage('basic', enabled ? '本群广告拦截已开启' : '本群广告拦截已关闭');
+          } finally { if (groupSettingsCurrent(session)) $('msg-group-ad-enabled').checked = Boolean(session.settings?.ad_enabled); }
+        });
+      };
+      const showGroupMemberInfo = async (id) => {
+        const session = groupSettingsState.session;
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating) return;
+        const request = ++session.detailRequest;
+        const detail = $('msg-group-member-detail'); detail.hidden = false;
+        detail.innerHTML = '<div class="msg-group-status">正在读取成员详情…</div>';
+        try {
+          const data = await groupSettingsRequest(session, 'message/group-member/info', {member_openid:id});
+          if (!groupSettingsCurrent(session) || session.detailRequest !== request) return;
+          const member = data.member;
+          if (!member || String(member.member_openid || '') !== id) throw new Error('成员资料返回不完整，请重试');
+          const joined = String(member.joined_at || '未提供');
+          detail.innerHTML = `<div class="msg-group-detail-head"><span class="msg-avatar">${groupMemberAvatar(member, session)}</span><strong>${esc(groupMemberName(member))}</strong><button class="msg-group-close" type="button" data-group-detail-close aria-label="关闭成员详情">×</button></div><div class="msg-group-detail-field"><span>身份</span><b>${esc(groupMemberRole(member.member_role ?? member.role))}</b></div><div class="msg-group-detail-field"><span>OpenID</span><b>${esc(id)}</b></div><div class="msg-group-detail-field"><span>加入时间</span><b>${esc(joined)}</b></div>`;
+        } catch (error) {
+          if (!groupSettingsCurrent(session) || session.detailRequest !== request) return;
+          detail.innerHTML = `<div class="msg-group-status error">${esc(error.message || '成员详情读取失败')}</div><button class="msg-btn" type="button" data-group-detail-close>关闭详情</button>`;
+        }
+      };
+      const removeGroupSettingsMembers = async () => {
+        const session = groupSettingsState.session;
+        if (!groupSettingsCurrent(session) || $('msg-group-members-remove').disabled) return;
+        const ids = Array.from(session.members.selected);
+        const addToBlacklist = $('msg-group-remove-blacklist').checked;
+        if (ids.length < 1 || ids.length > 20) return groupSettingsMessage('members', '每次请选择 1 至 20 位成员', true);
+        if (!confirm(`确认从「${session.name}」移除选中的 ${ids.length} 位成员？${addToBlacklist ? '\n这些成员还会加入本群黑名单。' : ''}`)) return;
+        await mutateGroupSettings(session, 'members', async () => {
+          const data = await groupSettingsRequest(session, 'message/group-members/remove', {member_openids:ids, add_to_member_blacklist:addToBlacklist});
+          if (!groupSettingsCurrent(session)) return;
+          const removed = new Set(data.removed_member_openids || data.removed_openids || []);
+          const failed = data.failed_member_openids || ids.filter((id) => !removed.has(id));
+          const blacklistFailed = data.blacklist_failed_member_openids || data.add_to_member_blacklist_fail_openids || [];
+          session.blacklistPendingIds = blacklistFailed.filter((id) => ids.includes(id));
+          session.members.rows = session.members.rows.filter((member) => !removed.has(member.member_openid));
+          session.members.selected = new Set(failed.filter((id) => ids.includes(id)));
+          const resultMessage = data.message || `已移除 ${removed.size} 人${failed.length ? `，${failed.length} 人未移除，已保留选择` : ''}`;
+          groupSettingsMessage('members', resultMessage + (session.blacklistPendingIds.length ? `；加入黑名单失败的 OpenID：${session.blacklistPendingIds.join('、')}` : ''), Boolean(failed.length || blacklistFailed.length));
+          renderGroupSettingsRows(session, 'members');
+          session.blacklist.loaded = false;
+          session.blacklist.selected.clear();
+          void loadMsgChats(true);
+        });
+      };
+      const updateGroupSettingsBlacklist = async (op) => {
+        const session = groupSettingsState.session;
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating) return;
+        const ids = op === 'add' ? [$('msg-group-blacklist-openid').value.trim()].filter(Boolean) : Array.from(session.blacklist.selected);
+        if (ids.length < 1 || ids.length > 20 || ids.some((id) => !/^[A-Za-z0-9_-]{1,128}$/.test(id))) return groupSettingsMessage('blacklist', '请输入有效的成员 OpenID；每次最多操作 20 人', true);
+        if (op === 'add' && $('msg-group-blacklist-add').disabled || op === 'del' && $('msg-group-blacklist-remove').disabled) return;
+        if (!confirm(`确认${op === 'add' ? '将' : '解除'}「${session.name}」${ids.length} 位成员的${op === 'add' ? '入群黑名单限制' : '黑名单限制'}？`)) return;
+        let reload = false;
+        await mutateGroupSettings(session, 'blacklist', async () => {
+          const data = await groupSettingsRequest(session, 'message/group-blacklist/update', {op, member_openids:ids});
+          if (!groupSettingsCurrent(session)) return;
+          const success = new Set(data.success_member_openids || data.success_openids || []);
+          const failed = data.failed_member_openids || data.fail_openids || ids.filter((id) => !success.has(id));
+          if (op === 'del') {
+            session.blacklist.rows = session.blacklist.rows.filter((member) => !success.has(member.member_openid));
+            session.blacklist.selected = new Set(failed.filter((id) => ids.includes(id)));
+            renderGroupSettingsRows(session, 'blacklist');
+          } else if (!failed.length) { $('msg-group-blacklist-openid').value = ''; reload = true; }
+          groupSettingsMessage('blacklist', data.message || `已完成 ${success.size} 人${failed.length ? `，${failed.length} 人未完成，已保留待处理对象` : ''}`, Boolean(failed.length));
+        });
+        if (reload && groupSettingsCurrent(session)) await loadGroupSettingsPage(session, 'blacklist', true);
+      };
+      const bindGroupSettings = () => {
+        $('msg-group-settings-open').addEventListener('click', openGroupSettings);
+        ['msg-group-settings-close','msg-group-settings-mask'].forEach((id) => $(id).addEventListener('click', () => closeGroupSettings()));
+        $('msg-group-settings-tabs').addEventListener('click', (event) => { const button = event.target.closest('[data-group-tab]'); if (button) showGroupSettingsTab(button.dataset.groupTab); });
+        $('msg-group-basic-save').addEventListener('click', saveGroupSettingsBasic);
+        $('msg-group-ad-enabled').addEventListener('change', saveGroupSettingsAd);
+        $('msg-group-members-remove').addEventListener('click', removeGroupSettingsMembers);
+        $('msg-group-blacklist-add').addEventListener('click', () => updateGroupSettingsBlacklist('add'));
+        $('msg-group-blacklist-remove').addEventListener('click', () => updateGroupSettingsBlacklist('del'));
+        $('msg-group-member-detail').addEventListener('click', (event) => { if (event.target.closest('[data-group-detail-close]')) { $('msg-group-member-detail').hidden = true; if (groupSettingsState.session) ++groupSettingsState.session.detailRequest; } });
+        ['members','blacklist'].forEach((kind) => {
+          $(`msg-group-${kind}-list`).addEventListener('change', (event) => {
+            const session = groupSettingsState.session; const id = event.target.dataset.groupSelect;
+            if (!groupSettingsCurrent(session) || groupSettingsState.mutating || !id) return;
+            const selected = session[kind].selected;
+            if (event.target.checked) { if (selected.size >= 20) { event.target.checked = false; return toast('每次最多选择 20 人'); } selected.add(id); } else selected.delete(id);
+            groupSettingsControls();
+          });
+          $(`msg-group-${kind}-all`).addEventListener('change', (event) => {
+            const session = groupSettingsState.session;
+            if (!groupSettingsCurrent(session) || groupSettingsState.mutating) return;
+            session[kind].selected = new Set(event.target.checked ? session[kind].rows.slice(0,20).map((member) => member.member_openid) : []);
+            if (event.target.checked && session[kind].rows.length > 20) toast('每次最多选择 20 人，已选择本页前 20 人');
+            groupSettingsControls();
+          });
+          $(`msg-group-${kind}-refresh`).addEventListener('click', () => { const session = groupSettingsState.session; if (session) { session[kind].selected.clear(); void loadGroupSettingsPage(session, kind, true); } });
+          ['prev','next'].forEach((direction) => $(`msg-group-${kind}-${direction}`).addEventListener('click', () => {
+            const session = groupSettingsState.session;
+            if (!groupSettingsCurrent(session) || groupSettingsState.mutating || session[kind].loading) return;
+            const page = session[kind];
+            if (direction === 'next') { if (!page.nextCursor) return; page.cursors[page.index + 1] = page.nextCursor; ++page.index; } else { if (page.index < 1) return; --page.index; }
+            page.selected.clear(); page.rows = []; page.loaded = false; page.nextCursor = '';
+            session.detailRequest += 1; $('msg-group-member-detail').hidden = true;
+            renderGroupSettingsRows(session, kind); void loadGroupSettingsPage(session, kind);
+          }));
+        });
+        $('msg-group-members-list').addEventListener('click', (event) => { const button = event.target.closest('[data-group-member-info]'); if (button) void showGroupMemberInfo(button.dataset.groupMemberInfo); });
+        document.addEventListener('keydown', (event) => {
+          if ($('msg-group-settings').hidden) return;
+          if (event.key === 'Escape') { event.preventDefault(); closeGroupSettings(); }
+          if (event.key !== 'Tab') return;
+          const focusable = Array.from($('msg-group-settings').querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex="0"]')).filter((node) => node.getClientRects().length > 0);
+          if (!focusable.length) return;
+          const first = focusable[0], last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !$('msg-group-settings').contains(document.activeElement))) { last.focus(); event.preventDefault(); }
+          else if (!event.shiftKey && (document.activeElement === last || !$('msg-group-settings').contains(document.activeElement))) { first.focus(); event.preventDefault(); }
+        });
+      };
+
       const showRemarkDialog = async () => {
-        if (!msgState.chatId) return;
-        let data = {}; try { data = await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'get'})}); } catch (error) { data = {}; }
-        $('msg-remark-name').value = data.remark || '';
-        $('msg-remark-qq').value = data.group_qq || '';
-        $('msg-remark-modal').hidden = false;
+        const target = captureGroupTarget();
+        if (!target) return;
+        groupSettingsState.remarkTarget = target;
+        try {
+          const data = await api('message/remarks', {method:'POST', body:JSON.stringify({...target, action:'get'})});
+          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          $('msg-remark-name').value = data.remark || '';
+          $('msg-remark-qq').value = data.group_qq || '';
+          $('msg-remark-modal').hidden = false;
+        } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message || '群备注读取失败'); }
       };
       const saveRemark = async () => {
+        const target = groupSettingsState.remarkTarget;
+        if (!target) return;
         const remark = $('msg-remark-name').value.trim();
         const groupQQ = $('msg-remark-qq').value.trim();
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, remark, group_qq:groupQQ})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('备注已保存'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
-        catch (error) { toast(error.message); }
+        try {
+          await api('message/remarks', {method:'POST', body:JSON.stringify({...target, remark, group_qq:groupQQ})});
+          msgState.historyCache.delete(`group|${target.chat_id}`);
+          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          toast('备注已保存'); $('msg-remark-modal').hidden = true; void loadMsgChats(true); void loadMsgHistory();
+        } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message); }
       };
       const deleteRemark = async () => {
-        if (!confirm('确定删除该会话的备注和群号吗？')) return;
-        try { await api('message/remarks', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, action:'delete'})}); msgState.historyCache.delete(`${msgState.chatType}|${msgState.chatId}`); toast('备注已删除'); $('msg-remark-modal').hidden = true; loadMsgChats(true); loadMsgHistory(); }
-        catch (error) { toast(error.message); }
+        const target = groupSettingsState.remarkTarget;
+        if (!target || !confirm('确定删除该群的备注和群号吗？')) return;
+        try {
+          await api('message/remarks', {method:'POST', body:JSON.stringify({...target, action:'delete'})});
+          msgState.historyCache.delete(`group|${target.chat_id}`);
+          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          toast('备注已删除'); $('msg-remark-modal').hidden = true; void loadMsgChats(true); void loadMsgHistory();
+        } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message); }
       };
       const sendMessage = () => {
         if (msgState.chatRemoved) return toast('你已被移除群聊');
@@ -4295,6 +4630,7 @@
       $('msg-pan-account-select').addEventListener('change', saveMsgPanSelection);
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
+      bindGroupSettings();
       $('msg-quote-clear').addEventListener('click', () => { msgState.quote = null; $('msg-quote-preview').hidden = true; });
       $('msg-raw-close').addEventListener('click', () => { $('msg-raw-modal').hidden = true; });
       $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) $('msg-raw-modal').hidden = true; });

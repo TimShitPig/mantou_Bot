@@ -141,7 +141,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-chat-type { display:none; }
             .msg-chat-meta { display:none; }
             .msg-empty { padding:26px 14px; color:#aaa; font-size:12px; text-align:center; }
-            .msg-work { display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
+            .msg-work { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
             .msg-head { display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #e8e9ec; }
             .msg-head-name { font-size:15px; font-weight:650; color:#222; }
             .msg-head-name.admin { color:#dc2626 !important; font-weight:700; }
@@ -583,6 +583,67 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-panel-toggle:hover,:root[data-theme="dark"] .msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#1d3850; color:#42c6ff; }
               :root[data-theme="dark"] .msg-mobile-back { color:#b9c0d0; }
               :root[data-theme="dark"] .msg-mobile-back:hover,:root[data-theme="dark"] .msg-mobile-back:focus-visible { background:#1d3850; color:#42c6ff; }
+              .msg-group-settings { position:absolute; inset:0; z-index:35; display:flex; justify-content:flex-end; overflow:hidden; border-radius:inherit; }
+              .msg-group-settings[hidden] { display:none; }
+              .msg-group-mask { position:absolute; inset:0; border:0; background:rgba(21,37,56,.18); cursor:default; }
+              .msg-group-drawer { position:relative; display:flex; flex-direction:column; width:min(420px,100%); min-width:0; background:#fff; color:#283647; box-shadow:-10px 0 28px rgba(23,39,66,.1); animation:msg-group-slide .18s ease-out; }
+              @keyframes msg-group-slide { from { transform:translateX(24px); opacity:.6; } to { transform:translateX(0); opacity:1; } }
+              .msg-group-drawer-head { display:flex; align-items:center; gap:10px; padding:17px 18px 13px; border-bottom:1px solid #edf0f4; }
+              .msg-group-drawer-head > div { flex:1; min-width:0; }
+              .msg-group-drawer-head strong { display:block; font-size:15px; }
+              .msg-group-drawer-head small { display:block; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#8994a3; font-size:11px; }
+              .msg-group-close { width:28px; height:28px; border:0; border-radius:6px; background:#f4f6f9; color:#788594; font-size:20px; cursor:pointer; }
+              .msg-group-tabs { display:flex; gap:4px; padding:9px 14px 0; border-bottom:1px solid #edf0f4; }
+              .msg-group-tabs button { flex:1; padding:10px 4px; border:0; border-bottom:2px solid transparent; background:none; color:#8994a3; font-size:12px; cursor:pointer; }
+              .msg-group-tabs button.active { border-bottom-color:#12b7f5; color:#049cd8; font-weight:650; }
+              .msg-group-body { flex:1 1 0; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; }
+              .msg-group-pane[hidden],.msg-group-member-detail[hidden] { display:none; }
+              .msg-group-summary { display:flex; align-items:center; gap:12px; padding:3px 0 16px; }
+              .msg-group-summary .msg-chat-avatar { width:48px; height:48px; }
+              .msg-group-summary strong { display:block; font-size:14px; overflow-wrap:anywhere; }
+              .msg-group-summary small { display:block; margin-top:5px; color:#8994a3; font-size:11px; }
+              .msg-group-field { display:block; margin-bottom:14px; font-size:12px; color:#5f6e7f; }
+              .msg-group-field > input { display:block; width:100%; margin-top:7px; padding:9px 10px; box-sizing:border-box; border:1px solid #dfe5ec; border-radius:7px; background:#fff; color:#283647; font-family:inherit; font-size:12px; }
+              .msg-group-field > input:focus { outline:2px solid #d8f3ff; border-color:#12b7f5; }
+              .msg-group-toggle { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:21px; padding-top:16px; border-top:1px solid #edf0f4; font-size:12px; }
+              .msg-group-toggle small { display:block; margin-top:5px; color:#8994a3; line-height:1.5; }
+              .msg-group-toggle input { width:34px; height:18px; accent-color:#12b7f5; cursor:pointer; }
+              .msg-group-status { margin:0 0 12px; padding:10px 11px; border-radius:7px; background:#f2f7fc; color:#718299; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
+              .msg-group-status:empty { display:none; }
+              .msg-group-status.error { color:#c25659; background:#fff1f1; }
+              .msg-group-tools { display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:11px; color:#8994a3; }
+              .msg-group-tools > span { flex:1; }
+              .msg-group-select-all { display:inline-flex; align-items:center; gap:5px; color:#5f6e7f; cursor:pointer; }
+              .msg-group-member { display:flex; align-items:center; gap:9px; padding:9px 0; border-bottom:1px solid #f0f2f6; }
+              .msg-group-member > input { width:15px; height:15px; flex:0 0 auto; accent-color:#12b7f5; }
+              .msg-group-member-open { flex:1; display:flex; align-items:center; gap:10px; min-width:0; padding:0; border:0; background:none; text-align:left; color:inherit; cursor:pointer; }
+              .msg-group-member-open > div { flex:1; min-width:0; }
+              .msg-group-member-open strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:550; }
+              .msg-group-member-open small { display:block; margin-top:4px; color:#8994a3; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+              .msg-group-role { padding:3px 5px; border-radius:4px; font-size:9px; background:#eef7ff; color:#398dd3; white-space:nowrap; }
+              .msg-group-pagination { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:15px 0; color:#8994a3; font-size:11px; }
+              .msg-group-batch { position:sticky; bottom:-16px; padding:12px 0 16px; background:#fff; border-top:1px solid #edf0f4; }
+              .msg-group-batch label { display:flex; align-items:center; gap:6px; margin-bottom:10px; color:#718299; font-size:11px; }
+              .msg-group-batch > .msg-btn { width:100%; min-height:34px; }
+              .msg-btn.danger { color:#d45d60; border-color:#edc8ca; background:#fff; }
+              .msg-btn:disabled,.msg-group-drawer button:disabled { cursor:not-allowed; opacity:.48; }
+              .msg-group-member-detail { margin:0 0 15px; padding:12px; border:1px solid #d9e9f6; border-radius:9px; background:#f7fbff; }
+              .msg-group-detail-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+              .msg-group-detail-head strong { flex:1; min-width:0; overflow-wrap:anywhere; font-size:13px; }
+              .msg-group-detail-field { display:grid; grid-template-columns:58px minmax(0,1fr); gap:8px; margin:8px 0; font-size:11px; line-height:1.5; }
+              .msg-group-detail-field span { color:#8994a3; }
+              .msg-group-detail-field b { color:#5f6e7f; font-weight:450; overflow-wrap:anywhere; }
+              .msg-group-blacklist-add { display:flex; gap:7px; margin-bottom:14px; }
+              .msg-group-blacklist-add input { min-width:0; flex:1; padding:9px; border:1px solid #dfe5ec; border-radius:6px; background:#fff; color:inherit; font-size:11px; }
+              :root[data-theme="dark"] .msg-group-drawer,:root[data-theme="dark"] .msg-group-batch { background:#1f2330; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-group-drawer-head,:root[data-theme="dark"] .msg-group-tabs,:root[data-theme="dark"] .msg-group-toggle,:root[data-theme="dark"] .msg-group-batch,:root[data-theme="dark"] .msg-group-member { border-color:#303749; }
+              :root[data-theme="dark"] .msg-group-field > input,:root[data-theme="dark"] .msg-group-blacklist-add input { background:#161926; border-color:#3a4256; color:#e8eaf2; }
+              :root[data-theme="dark"] .msg-group-close { background:#303749; color:#b9c0d0; }
+              :root[data-theme="dark"] .msg-group-status,:root[data-theme="dark"] .msg-group-member-detail { background:#202f40; border-color:#31465f; color:#b0bed0; }
+              :root[data-theme="dark"] .msg-group-status.error { background:#39282e; color:#ef8585; }
+              :root[data-theme="dark"] .msg-group-detail-field b,:root[data-theme="dark"] .msg-group-field,:root[data-theme="dark"] .msg-group-select-all { color:#b9c0d0; }
+              :root[data-theme="dark"] .msg-btn.danger { color:#ef8585; border-color:#754047; background:#1f2330; }
+              @media (max-width:640px) { .msg-group-drawer { width:100%; } .msg-group-body { padding:13px; } }
               @media (prefers-reduced-motion: reduce) {
                 *, *::before, *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:0.01ms !important; }
               }
@@ -617,6 +678,7 @@ from .帮助网页脚本 import 控制台脚本
                   <button class="msg-btn" id="msg-ad-switch" type="button" hidden title="切换当前群的广告拦截">广告拦截</button>
                   <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
                   <button class="msg-btn" id="msg-remark" type="button" hidden>群备注</button>
+                  <button class="msg-btn" id="msg-group-settings-open" type="button" hidden aria-label="打开当前群聊设置" aria-expanded="false" aria-controls="msg-group-settings">⚙ 设置</button>
                   <button class="msg-btn" id="msg-reload" type="button">刷新</button>
                 </div>
               </div>
@@ -674,6 +736,36 @@ from .帮助网页脚本 import 控制台脚本
                   <span style="flex:1"></span>
                   <button class="msg-btn primary" id="msg-send" type="button">发送</button>
                 </div>
+              </div>
+              <div class="msg-group-settings" id="msg-group-settings" hidden>
+                <button class="msg-group-mask" id="msg-group-settings-mask" type="button" aria-label="关闭群聊设置"></button>
+                <aside class="msg-group-drawer" role="dialog" aria-modal="true" aria-labelledby="msg-group-settings-title" tabindex="-1">
+                  <div class="msg-group-drawer-head"><div><strong id="msg-group-settings-title">群聊设置</strong><small id="msg-group-settings-name"></small></div><button class="msg-group-close" id="msg-group-settings-close" type="button" aria-label="关闭群聊设置">×</button></div>
+                  <div class="msg-group-tabs" id="msg-group-settings-tabs" role="tablist" aria-label="群聊设置分类"><button type="button" id="msg-group-tab-basic" data-group-tab="basic" class="active" role="tab" aria-selected="true" aria-controls="msg-group-basic">基础设置</button><button type="button" id="msg-group-tab-members" data-group-tab="members" role="tab" aria-selected="false" aria-controls="msg-group-members">群成员</button><button type="button" id="msg-group-tab-blacklist" data-group-tab="blacklist" role="tab" aria-selected="false" aria-controls="msg-group-blacklist">黑名单</button></div>
+                  <div class="msg-group-body">
+                    <section class="msg-group-pane" id="msg-group-basic" role="tabpanel" aria-labelledby="msg-group-tab-basic">
+                      <div class="msg-group-summary" id="msg-group-summary"></div><div class="msg-group-status" id="msg-group-basic-status" role="status"></div>
+                      <label class="msg-group-field">本群备注<input id="msg-group-remark-name" maxlength="128" type="text" placeholder="仅改变本控制台显示的群名" disabled></label>
+                      <label class="msg-group-field">群号<input id="msg-group-remark-qq" maxlength="12" inputmode="numeric" type="text" placeholder="用于显示群头像，可留空" disabled></label>
+                      <button class="msg-btn primary" id="msg-group-basic-save" type="button" disabled>保存本群设置</button>
+                      <label class="msg-group-toggle"><span>广告拦截<small>只对当前群生效，其他群保持原设置</small></span><input id="msg-group-ad-enabled" type="checkbox" aria-label="当前群广告拦截" disabled></label>
+                    </section>
+                    <section class="msg-group-pane" id="msg-group-members" role="tabpanel" aria-labelledby="msg-group-tab-members" hidden>
+                      <div class="msg-group-status" id="msg-group-members-status" role="status"></div>
+                      <div class="msg-group-tools"><label class="msg-group-select-all"><input id="msg-group-members-all" type="checkbox">本页</label><span id="msg-group-members-count">已选 0 / 20</span><button class="msg-btn" id="msg-group-members-refresh" type="button">刷新</button></div>
+                      <div class="msg-group-member-detail" id="msg-group-member-detail" hidden></div><div id="msg-group-members-list"></div>
+                      <div class="msg-group-pagination"><button class="msg-btn" id="msg-group-members-prev" type="button" disabled>上一页</button><span id="msg-group-members-page">第 1 页 · 每页 30 人</span><button class="msg-btn" id="msg-group-members-next" type="button" disabled>下一页</button></div>
+                      <div class="msg-group-batch"><label><input id="msg-group-remove-blacklist" type="checkbox">移除后同时加入本群黑名单</label><button class="msg-btn danger" id="msg-group-members-remove" type="button" disabled>移除选中的成员</button></div>
+                    </section>
+                    <section class="msg-group-pane" id="msg-group-blacklist" role="tabpanel" aria-labelledby="msg-group-tab-blacklist" hidden>
+                      <div class="msg-group-status" id="msg-group-blacklist-status" role="status"></div><p class="msg-group-status">手动添加仅限已离群用户；在群成员可在移除时同时加入黑名单。</p>
+                      <div class="msg-group-blacklist-add"><input id="msg-group-blacklist-openid" type="text" maxlength="128" placeholder="输入已离群成员的 OpenID" aria-label="黑名单成员 OpenID" disabled><button class="msg-btn" id="msg-group-blacklist-add" type="button" disabled>添加</button></div>
+                      <div class="msg-group-tools"><label class="msg-group-select-all"><input id="msg-group-blacklist-all" type="checkbox">本页</label><span id="msg-group-blacklist-count">已选 0 / 20</span><button class="msg-btn" id="msg-group-blacklist-refresh" type="button">刷新</button></div><div id="msg-group-blacklist-list"></div>
+                      <div class="msg-group-pagination"><button class="msg-btn" id="msg-group-blacklist-prev" type="button" disabled>上一页</button><span id="msg-group-blacklist-page">第 1 页 · 每页 20 人</span><button class="msg-btn" id="msg-group-blacklist-next" type="button" disabled>下一页</button></div>
+                      <div class="msg-group-batch"><button class="msg-btn" id="msg-group-blacklist-remove" type="button" disabled>解除选中的黑名单</button></div>
+                    </section>
+                  </div>
+                </aside>
               </div>
             </div>
           </div>
