@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 12
+群成员加入桥版本 = 13
 QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {
     "group_member_add",
@@ -520,24 +520,43 @@ def _开启群成员加入事件(平台实例: Any, 适配器模块: Any) -> boo
 
 
 def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
-    候选数据: list[dict[str, Any]] = []
-    if isinstance(原始事件, dict):
-        候选数据.append(原始事件)
-    else:
-        for 字段名 in ("raw_data", "data", "payload", "event"):
-            值 = _读取字段(原始事件, 字段名)
-            if isinstance(值, dict):
-                候选数据.append(值)
-        属性字典 = _读取字段(原始事件, "__dict__")
-        if isinstance(属性字典, dict):
-            候选数据.append(属性字典)
-
-    展开数据: list[dict[str, Any]] = []
-    for 数据 in 候选数据:
+    # SDK 可能保留原始字典，也可能把它包在对象的 raw_data/data/d 中。
+    # 仅展开事件包装与成员容器，不从 operator 读取当事人的昵称和统一标识。
+    展开数据: list[Any] = []
+    待展开 = [(原始事件, 0)]
+    已展开: set[int] = set()
+    while 待展开 and len(展开数据) < 32:
+        数据, 深度 = 待展开.pop(0)
+        if 数据 is None or isinstance(数据, (str, bytes, int, float, bool)):
+            continue
+        if id(数据) in 已展开:
+            continue
+        已展开.add(id(数据))
         展开数据.append(数据)
-        内层数据 = 数据.get("d")
-        if isinstance(内层数据, dict):
-            展开数据.append(内层数据)
+        if 深度 < 4:
+            for 字段名 in ("raw_data", "data", "payload", "event", "d"):
+                内层 = _读取字段(数据, 字段名)
+                if 内层 is not None:
+                    待展开.append((内层, 深度 + 1))
+
+    def 读取容器字段(容器字段: tuple[str, ...], 字段名: str) -> Any:
+        for 数据 in 展开数据:
+            待检查 = [(_读取字段(数据, 名称), 0) for 名称 in 容器字段]
+            已检查: set[int] = set()
+            while 待检查 and len(已检查) < 16:
+                容器, 深度 = 待检查.pop(0)
+                if 容器 is None or id(容器) in 已检查:
+                    continue
+                已检查.add(id(容器))
+                值 = _读取字段(容器, 字段名)
+                if 值 is not None and str(值).strip():
+                    return 值
+                if 深度 < 2:
+                    待检查.extend(
+                        (_读取字段(容器, 名称), 深度 + 1)
+                        for 名称 in 容器字段
+                    )
+        return None
 
     结果: dict[str, Any] = {}
     for 字段名 in (
@@ -546,54 +565,35 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
         "member_openid",
         "op_member_openid",
         "user_openid",
+        "union_openid",
         "_mantou_event_id",
     ):
         for 数据 in 展开数据:
-            值 = 数据.get(字段名)
+            值 = _读取字段(数据, 字段名)
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
                 break
         if 字段名 not in 结果:
-            值 = _读取字段(原始事件, 字段名)
-            if 值 is not None and str(值).strip():
-                结果[字段名] = 值
-        if 字段名 not in 结果:
-            if 字段名 == "user_openid":
-                容器字段 = ("member", "user")
+            if 字段名 in {"user_openid", "union_openid"}:
+                容器字段 = ("member", "user", "author")
             elif 字段名 == "member_openid":
-                容器字段 = ("member",)
+                容器字段 = ("member", "author")
             elif 字段名 == "op_member_openid":
                 容器字段 = ("operator", "op_member")
             else:
                 容器字段 = ()
-            for 数据 in 展开数据:
-                for 容器名 in 容器字段:
-                    值 = _读取字段(数据.get(容器名), 字段名)
-                    if 值 is not None and str(值).strip():
-                        结果[字段名] = 值
-                        break
-                if 字段名 in 结果:
-                    break
-    for 字段名 in ("username", "member_name", "nickname", "user_name", "name"):
+            值 = 读取容器字段(容器字段, 字段名)
+            if 值 is not None:
+                结果[字段名] = 值
+    for 字段名 in ("username", "member_name", "nickname", "user_name", "nick", "name"):
         for 数据 in 展开数据:
-            值 = 数据.get(字段名)
+            值 = _读取字段(数据, 字段名)
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
                 break
-        if 字段名 in 结果:
-            continue
-        for 数据 in 展开数据:
-            for 容器名 in ("member", "user", "author"):
-                容器 = 数据.get(容器名)
-                值 = _读取字段(容器, 字段名)
-                if 值 is not None and str(值).strip():
-                    结果[字段名] = 值
-                    break
-            if 字段名 in 结果:
-                break
         if 字段名 not in 结果:
-            值 = _读取字段(原始事件, 字段名)
-            if 值 is not None and str(值).strip():
+            值 = 读取容器字段(("member", "user", "author"), 字段名)
+            if 值 is not None:
                 结果[字段名] = 值
     return 结果
 
@@ -656,6 +656,7 @@ async def _同步群成员人数变化(
                 or 事件数据.get("member_name")
                 or 事件数据.get("nickname")
                 or 事件数据.get("user_name")
+                or 事件数据.get("nick")
                 or 事件数据.get("name")
                 or ""
             ),
@@ -686,6 +687,16 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
         事件数据.get("member_openid") or 事件数据.get("op_member_openid") or ""
     ).strip()
     用户 = str(事件数据.get("user_openid") or "").strip()
+    统一用户 = str(事件数据.get("union_openid") or "").strip()
+    昵称 = str(
+        事件数据.get("username")
+        or 事件数据.get("member_name")
+        or 事件数据.get("nickname")
+        or 事件数据.get("user_name")
+        or 事件数据.get("nick")
+        or 事件数据.get("name")
+        or ""
+    )
     if not 群号 or not 成员:
         logger.warning(
             "QQ官方群成员加入事件缺少必要标识：has_group=%s, has_member=%s",
@@ -716,7 +727,8 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
         "author": {
             "member_openid": 成员,
             "user_openid": 用户,
-            "username": "",
+            "username": 昵称,
+            "union_openid": 统一用户,
         },
         群成员加入事件标记: True,
         "group_member_add": {
@@ -724,6 +736,8 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
             "group_openid": 群号,
             "member_openid": 成员,
             "user_openid": 用户,
+            "username": 昵称,
+            "union_openid": 统一用户,
         },
     }
     消息类 = _读取字段(适配器模块, "PatchedGroupMessage")

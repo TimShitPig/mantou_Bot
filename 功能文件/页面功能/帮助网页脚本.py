@@ -676,7 +676,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -965,6 +965,8 @@
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = mergeMsgProfileMaps(profiles);
         (messages || []).forEach((message) => {
+          const source = String(message?.source || '');
+          if (message?.is_self || source.startsWith('bot_') || source === 'web_panel') return;
           const id = String(message?.user_id || '').trim();
           const nickname = validMsgNickname(message?.nickname, id);
           const avatar = String(message?.avatar || message?.avatar_url || '').trim();
@@ -1656,6 +1658,7 @@
         msgState.historyOlderLoading = false;
         msgState.chatId = chatId;
         msgState.chatType = chatType;
+        msgState.chatAppid = String(chat?.appid || '').trim();
         msgState.botIsAdmin = cachedAdmin;
         resetMsgAdSwitch();
         msgState.profiles = {};
@@ -3304,7 +3307,9 @@
         const msgs = mergeOptimisticMessages(msgState.chatId, serverMessages);
         // 历史缓存只保存服务器消息；待发送/失败消息由 optimisticSends 单独维护。
         msgState.historyData = {...data, messages:serverMessages};
-        window.msgAppid = data.messages?.[0]?.appid || window.msgAppid || '';
+        const historyAppid = String(data.messages?.find((message) => message?.appid)?.appid || '').trim();
+        if (historyAppid) msgState.chatAppid = historyAppid;
+        window.msgAppid = msgState.chatAppid || window.msgAppid || '';
         updateMsgHead(data);
         updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
@@ -3668,8 +3673,17 @@
         const chatId = String(payload.chat_id || '').trim();
         const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
         if (!chatId || !message) return;
+        const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
+        const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
+        const eventAppid = String(payload.appid || message.appid || existing.appid || '').trim();
+        if (payload.appid && message.appid && String(payload.appid).trim() !== String(message.appid).trim()) return;
+        if (existing.appid && eventAppid && String(existing.appid).trim() !== eventAppid) return;
+        const currentAppid = String(msgState.chatAppid || msgState.historyData?.messages?.find((item) => item?.appid)?.appid || '').trim();
+        const matchesCurrent = msgState.chatId === chatId && msgState.chatType === chatType
+          && (!currentAppid || currentAppid === eventAppid);
+        if (matchesCurrent && eventAppid) msgState.chatAppid = eventAppid;
         const messageKey = msgMessageKey(message);
-        const recalledIndex = messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
+        const recalledIndex = matchesCurrent && messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
         if (msgIsRecalled(message) && recalledIndex >= 0) {
           msgState.messages = msgState.messages.map((item, index) => index === recalledIndex ? {...item, recalled:true} : item);
           if (msgState.chatId === chatId && !$('page-messages')?.hidden) {
@@ -3681,13 +3695,14 @@
           }
           return;
         }
-        const oldProfiles = JSON.stringify(msgState.profiles || {});
-        msgState.profiles = mergeMsgProfiles(
-          mergeMsgProfileMaps(msgState.profiles, payload.member_profiles),
-          [message],
-        );
-        const profilesChanged = JSON.stringify(msgState.profiles || {}) !== oldProfiles;
-        if (msgState.chatId === chatId) {
+        let profilesChanged = false;
+        if (matchesCurrent) {
+          const oldProfiles = JSON.stringify(msgState.profiles || {});
+          msgState.profiles = mergeMsgProfiles(
+            mergeMsgProfileMaps(msgState.profiles, payload.member_profiles),
+            [message],
+          );
+          profilesChanged = JSON.stringify(msgState.profiles || {}) !== oldProfiles;
           const history = msgState.historyData || {};
           msgState.historyData = {
             ...history,
@@ -3695,11 +3710,9 @@
           };
         }
         const isNewEvent = rememberMsgEvent(chatId, message);
-        const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
-        const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
         if (isNewEvent) msgState.historyCache.delete(`${chatType}|${chatId}`);
         const eventTs = Number(payload.last_ts || message.ts || 0) || Math.floor(Date.now() / 1000);
-        const isViewing = msgState.chatId === chatId && !$('page-messages')?.hidden;
+        const isViewing = matchesCurrent && !$('page-messages')?.hidden;
         const body = $('msg-body');
         const followLatest = isViewing && msgState.pendingNewMessages === 0 && msgBodyNearBottom(body);
         const payloadUnread = Number(payload.unread);
@@ -3718,7 +3731,8 @@
           || '',
         ).trim();
         const existingAvatar = String(existing.avatar || existing.avatar_url || '').trim();
-        const contactAvatar = String(msgState.profiles?.[chatId]?.avatar || '').trim();
+        const contactProfile = (matchesCurrent ? msgState.profiles?.[chatId] : payload.member_profiles?.[chatId]) || {};
+        const contactAvatar = String(contactProfile.avatar || '').trim();
         const botAvatar = String(window.msgBotProfile?.avatar || '').trim();
         const preservedAvatar = contactAvatar
           || (existingAvatar && (!botAvatar || existingAvatar !== botAvatar) ? existingAvatar : '');
@@ -3731,7 +3745,7 @@
           chat_type:chatType,
           appid:String(payload.appid || message.appid || existing.appid || ''),
           nickname:chatType === 'user' && !eventIsSelf
-            ? (existing.remark || displayMsgNickname({user_id:chatId, nickname:validMsgNickname(existing.nickname, chatId) || payload.last_nickname || message.nickname, nickname_blank:message.nickname_blank}, msgState.profiles?.[chatId] || {}, existing.nickname || chatId))
+            ? (existing.remark || displayMsgNickname({user_id:chatId, nickname:validMsgNickname(existing.nickname, chatId) || payload.last_nickname || message.nickname, nickname_blank:message.nickname_blank}, contactProfile, existing.nickname || chatId))
             : (existing.nickname || chatId),
           avatar:overlayAvatar,
           last_content:replaceMsgMentions(String(payload.last_content || message.content || existing.last_content || '')),
