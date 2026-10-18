@@ -2723,19 +2723,39 @@
           node.removeAttribute('src');
         }
       };
+      const msgEventBindings = new WeakMap();
+      const bindMsgEvent = (node, eventName, identity, handler) => {
+        if (!node) return;
+        let bindings = msgEventBindings.get(node);
+        if (!bindings) { bindings = new Set(); msgEventBindings.set(node, bindings); }
+        const key = `${eventName}:${identity}`;
+        if (bindings.has(key)) return;
+        bindings.add(key);
+        node.addEventListener(eventName, handler);
+      };
+      const browserMediaHydrationKeys = new WeakMap();
       const hydrateBrowserMedia = async (root) => {
         if (!root) return;
         const nodes = [...root.querySelectorAll('[data-browser-media-key]')];
         await Promise.all(nodes.map(async (node) => {
-          const url = await loadBrowserMedia(node.dataset.browserMediaKey);
-          if (!url) { markBrowserMediaUnavailable(node); return; }
+          const key = String(node.dataset.browserMediaKey || '');
+          if (browserMediaHydrationKeys.get(node) === key) return;
+          browserMediaHydrationKeys.set(node, key);
+          const url = await loadBrowserMedia(key);
+          if (!node.isConnected || node.dataset.browserMediaKey !== key) return;
+          if (!url) {
+            browserMediaHydrationKeys.delete(node);
+            markBrowserMediaUnavailable(node);
+            return;
+          }
           if (node.tagName === 'IMG') {
-            node.src = url;
+            if (node.getAttribute('src') !== url) node.src = url;
             node.dataset.lightbox = url;
-            node.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(url); });
-          } else if (node.tagName === 'A' || node.tagName === 'VIDEO') {
-            node.src = url;
-            if (node.tagName === 'A') node.href = url;
+            bindMsgEvent(node, 'click', 'lightbox', (event) => { event.preventDefault(); openMsgLightbox(node.dataset.lightbox); });
+          } else if (node.tagName === 'A') {
+            if (node.getAttribute('href') !== url) node.href = url;
+          } else if (node.tagName === 'VIDEO' || node.tagName === 'AUDIO') {
+            if (node.getAttribute('src') !== url) node.src = url;
           }
         }));
       };
@@ -2771,10 +2791,10 @@
         if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
         return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
       };
-      const renderMessageMedia = (value, messageId = '', preload = false) => {
+      const renderMessageMedia = (value, messageId = '', preload = false, mediaIndex = 0) => {
         if (!value) return '';
         const items = Array.isArray(value?.items) && value.items.length ? value.items : [value];
-        return items.map((item) => {
+        return items.map((item, index) => {
           if (!item || typeof item !== 'object') return '';
           const type = String(item.type || item.media_type || '文件');
           const contentType = String(item.content_type || item.mime_type || '').toLowerCase();
@@ -2785,27 +2805,28 @@
           const typeLower = type.toLowerCase();
           const isImage = ['图片', 'image', 'img'].includes(typeLower) || contentType.startsWith('image/');
           const isVideo = ['视频', 'video'].includes(typeLower) || contentType.startsWith('video/');
+          const mediaKey = esc(JSON.stringify([mediaIndex + index, isImage ? 'image' : isVideo ? 'video' : 'file', src]));
           if (isImage) {
             if (!src) return '<div class="msg-media msg-image-media"><span class="msg-media-ph">图片地址未保存</span></div>';
-            if (browserKey) return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="打开图片"><img alt="图片" loading="${preload ? 'eager' : 'lazy'}" fetchpriority="${preload ? 'high' : 'low'}" decoding="async" data-browser-media-key="${esc(browserKey)}" data-media-img></button></div>`;
+            if (browserKey) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="打开图片"><img alt="图片" loading="${preload ? 'eager' : 'lazy'}" fetchpriority="${preload ? 'high' : 'low'}" decoding="async" data-browser-media-key="${esc(browserKey)}" data-media-img></button></div>`;
             const preview = mediaProxyUrl(src, 'image');
             const loading = preload ? 'eager' : 'lazy';
             const priority = preload ? 'high' : 'low';
-            return `<div class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
+            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
           }
           if (isVideo && src) {
-            if (browserKey) return `<div class="msg-media msg-video-media"><video controls preload="metadata" data-browser-media-key="${esc(browserKey)}"></video></div>`;
+            if (browserKey) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" data-browser-media-key="${esc(browserKey)}"></video></div>`;
             const videoUrl = mediaProxyUrl(src, 'file');
-            return `<div class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
+            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
           }
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
-          if (!src) return `<div class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
+          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
-          if (browserKey) return `<a class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
+          if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
           const fileUrl = mediaProxyUrl(src, 'file', name);
-          return `<a class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
+          return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
         }).join('');
       };
       const renderMsgMediaSegments = (media, messageId = '', preload = false, profiles = msgState.profiles) => {
@@ -2818,9 +2839,9 @@
           const index = part?.media_index;
           if (!Number.isInteger(index) || index < 0 || index >= items.length) return '';
           rendered.add(index);
-          return renderMessageMedia(items[index], messageId, preload);
+          return renderMessageMedia(items[index], messageId, preload, index);
         }).join('');
-        return html + items.map((item, index) => rendered.has(index) ? '' : renderMessageMedia(item, messageId, preload)).join('');
+        return html + items.map((item, index) => rendered.has(index) ? '' : renderMessageMedia(item, messageId, preload, index)).join('');
       };
       const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -3014,7 +3035,7 @@
       const bindImageInteractions = (img) => {
         if (!img) return;
         img.draggable = true;
-        img.addEventListener('contextmenu', (event) => {
+        bindMsgEvent(img, 'contextmenu', 'image-context', (event) => {
           event.preventDefault();
           event.stopPropagation();
           const source = img.currentSrc || img.dataset.mediaDirect || img.src;
@@ -3022,7 +3043,7 @@
             {label:'复制图片', action:() => copyImageToClipboard(source, img)},
           ]);
         });
-        img.addEventListener('dragstart', (event) => {
+        bindMsgEvent(img, 'dragstart', 'image-drag', (event) => {
           const source = img.dataset.mediaDirect || img.currentSrc || img.src;
           if (!source || !event.dataTransfer) return;
           event.stopPropagation();
@@ -3289,6 +3310,91 @@
           return source;
         }
       };
+      const msgDomSignatures = new WeakMap();
+      const msgDomKey = (node) => {
+        if (node.nodeType !== 1) return `node:${node.nodeType}`;
+        const messageKey = node.getAttribute('data-msg-render-key');
+        if (messageKey !== null) return messageKey ? `message:${messageKey}` : null;
+        const mediaKey = node.getAttribute('data-msg-media-key');
+        if (mediaKey !== null) return `media:${node.tagName}:${mediaKey}`;
+        const action = [...node.attributes].map((attr) => attr.name)
+          .filter((name) => /^data-msg-(?:recall|retry|command|quote|mute|unmute|raw)$/.test(name)).sort().join(',');
+        return `${node.tagName}:${node.id || ''}:${node.classList[0] || ''}:${action}`;
+      };
+      const rememberMsgDom = (node) => {
+        msgDomSignatures.set(node, node.nodeType === 1 ? node.outerHTML : node.nodeValue);
+        [...node.childNodes].forEach(rememberMsgDom);
+      };
+      const patchMsgDomNode = (current, incoming) => {
+        const signature = incoming.nodeType === 1 ? incoming.outerHTML : incoming.nodeValue;
+        if (msgDomSignatures.get(current) === signature) return current;
+        const mediaKey = incoming.nodeType === 1 ? incoming.getAttribute('data-msg-media-key') : null;
+        if (mediaKey !== null && current.getAttribute('data-msg-media-key') === mediaKey) {
+          const existingMedia = [...current.querySelectorAll('[data-media-img], video, audio')];
+          const nextMedia = [...incoming.querySelectorAll('[data-media-img], video, audio')];
+          if (existingMedia.length && existingMedia.length === nextMedia.length
+            && existingMedia.every((node, index) => node.tagName === nextMedia[index].tagName)) {
+            existingMedia.forEach((node, index) => {
+              ['alt', 'loading', 'fetchpriority', 'decoding', 'referrerpolicy', 'controls', 'preload'].forEach((name) => {
+                const value = nextMedia[index].getAttribute(name);
+                if (value !== null && node.getAttribute(name) !== value) node.setAttribute(name, value);
+              });
+            });
+            msgDomSignatures.set(current, signature);
+            return current;
+          }
+        }
+        const mediaSource = (node) => node.dataset.browserMediaKey || node.dataset.mediaDirect || node.getAttribute('src') || '';
+        if (incoming.nodeType === 1 && current.matches('[data-media-img], video, audio')
+          && mediaSource(current) === mediaSource(incoming)) {
+          // Preserve fallback/error state and playback; hint changes must not reset src.
+          ['alt', 'loading', 'fetchpriority', 'decoding', 'referrerpolicy', 'controls', 'preload'].forEach((name) => {
+            const value = incoming.getAttribute(name);
+            if (value !== null && current.getAttribute(name) !== value) current.setAttribute(name, value);
+          });
+        } else if (incoming.nodeType !== 1) current.nodeValue = incoming.nodeValue;
+        else {
+          [...current.attributes].forEach((attr) => {
+            if (!incoming.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+          });
+          [...incoming.attributes].forEach((attr) => {
+            if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+          });
+          reconcileMsgDomChildren(current, incoming);
+        }
+        msgDomSignatures.set(current, signature);
+        return current;
+      };
+      const reconcileMsgDomChildren = (parent, incoming) => {
+        const available = new Map();
+        [...parent.childNodes].forEach((node) => {
+          const key = msgDomKey(node);
+          if (key === null) return;
+          if (!available.has(key)) available.set(key, []);
+          available.get(key).push(node);
+        });
+        let cursor = parent.firstChild;
+        [...incoming.childNodes].forEach((node) => {
+          const key = msgDomKey(node);
+          const previous = key === null ? null : available.get(key)?.shift();
+          const next = previous ? patchMsgDomNode(previous, node) : node;
+          if (!previous) rememberMsgDom(next);
+          // Append/prepend leave existing rows and their active media connected.
+          if (next !== cursor) parent.insertBefore(next, cursor);
+          cursor = next.nextSibling;
+        });
+        while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+      };
+      const renderMsgMessageDom = (body, html, scope) => {
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        if (body._msgRenderScope === scope) reconcileMsgDomChildren(body, template.content);
+        else {
+          [...template.content.childNodes].forEach(rememberMsgDom);
+          body.replaceChildren(template.content);
+        }
+        body._msgRenderScope = scope;
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         const body = $('msg-body');
         const keepLatestVisible = !scroll.prepend && (Boolean(scroll.toBottom) || msgBodyNearBottom(body));
@@ -3296,7 +3402,9 @@
           && msgState.initialScrollChatId === msgState.chatId
           && keepLatestVisible
           && (msgState.renderedChatId !== msgState.chatId || body.classList.contains('msg-positioning'));
-        const previousData = msgState.renderedChatId === msgState.chatId ? (msgState.historyData || {}) : {};
+        const renderScope = JSON.stringify([msgState.chatType, msgState.chatId,
+          String(data.messages?.find((message) => message?.appid)?.appid || msgState.chatAppid || '').trim()]);
+        const previousData = body._msgRenderScope === renderScope ? (msgState.historyData || {}) : {};
         data = {
           ...previousData,
           ...data,
@@ -3320,7 +3428,7 @@
         const renderedRawKeys = new Set();
         if (!msgs.length) {
           cancelMsgBottomPosition(body, true);
-          body.innerHTML = '<div class="msg-empty">暂无消息记录</div>';
+          renderMsgMessageDom(body, '<div class="msg-empty">暂无消息记录</div>', renderScope);
           msgState.messageRenderSignature = JSON.stringify({more:Boolean(data.has_more), messages:[]});
           Object.keys(rawStore).forEach((key) => delete rawStore[key]);
           msgState.renderedChatId = msgState.chatId;
@@ -3333,6 +3441,7 @@
         );
         msgState.profiles = profiles;
         const renderSignature = JSON.stringify({
+          scope: renderScope,
           more: Boolean(data.has_more),
           multi: Boolean(msgState.multi),
           messages: msgs.map((message) => {
@@ -3383,11 +3492,12 @@
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const systemSource = String(m.source || '');
+          const renderKey = String(m.message_id || m.messageId || m.id || m.optimistic_id || '').trim();
           if (systemSource === 'group_member_join' || systemSource === 'group_member_leave') {
             const fallbackName = systemSource === 'group_member_join' ? '新成员' : '成员';
             const memberName = displayMsgNickname(m, profiles[String(m.user_id || '').trim()] || {}, fallbackName);
             const actionText = systemSource === 'group_member_join' ? '加入了群聊。' : '退出了群聊。';
-            html += `<div class="msg-system-row"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
+            html += `<div class="msg-system-row" data-msg-render-key="${esc(renderKey)}"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
             return;
           }
           const isSelf = Boolean(m.is_self) || ['bot_active', 'bot_send', 'web_panel'].includes(String(m.source || ''));
@@ -3486,7 +3596,7 @@
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
@@ -3498,14 +3608,14 @@
             </div></div>`;
         });
         if (initialPositioning) body.classList.add('msg-positioning');
-        body.innerHTML = html;
+        renderMsgMessageDom(body, html, renderScope);
         Object.keys(rawStore).forEach((key) => {
           if (!renderedRawKeys.has(key)) delete rawStore[key];
         });
         void hydrateBrowserMedia(body);
         body.querySelectorAll('[data-media-img]').forEach((img) => {
           bindImageInteractions(img);
-          img.addEventListener('error', () => {
+          bindMsgEvent(img, 'error', 'media-error', () => {
             const direct = String(img.dataset.mediaDirect || '').trim();
             // QQ 图片先走同源代理，代理遇到网络/CDN 临时失败时仍可由浏览器直连一次。
             // <img> 直连显示不需要 CORS；只限一次，避免失效 rkey 产生循环请求。
@@ -3536,22 +3646,22 @@
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
         }
         msgState.renderedChatId = msgState.chatId;
-        body.querySelector('#msg-load-older')?.addEventListener('click', () => loadMsgHistory(true));
-        body.querySelectorAll('[data-msg-recall]').forEach((el) => el.addEventListener('click', () => recallMessage(el.dataset.msgRecall)));
-        body.querySelectorAll('[data-msg-retry]').forEach((el) => el.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); retryOptimisticSend(el.dataset.msgRetry); }));
-        body.querySelectorAll('[data-lightbox]').forEach((img) => img.addEventListener('click', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
-        body.querySelectorAll('[data-msg-command]').forEach((el) => el.addEventListener('click', () => {
+        bindMsgEvent(body.querySelector('#msg-load-older'), 'click', 'load-older', () => loadMsgHistory(true));
+        body.querySelectorAll('[data-msg-recall]').forEach((el) => bindMsgEvent(el, 'click', 'recall', () => recallMessage(el.dataset.msgRecall)));
+        body.querySelectorAll('[data-msg-retry]').forEach((el) => bindMsgEvent(el, 'click', 'retry', (event) => { event.preventDefault(); event.stopPropagation(); retryOptimisticSend(el.dataset.msgRetry); }));
+        body.querySelectorAll('[data-lightbox]').forEach((img) => bindMsgEvent(img, 'click', 'lightbox', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
+        body.querySelectorAll('[data-msg-command]').forEach((el) => bindMsgEvent(el, 'click', 'command', () => {
           const command = String(el.dataset.msgCommand || '').trim();
           if (!command || !getComposerEditor()) return;
           insertComposerText(command);
           toast(`已填入 ${command}`);
         }));
-        body.querySelectorAll('[data-msg-quote]').forEach((el) => el.addEventListener('click', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
-        body.querySelectorAll('[data-msg-mute]').forEach((el) => el.addEventListener('click', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
-        body.querySelectorAll('[data-msg-unmute]').forEach((el) => el.addEventListener('click', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
-        body.querySelectorAll('[data-msg-raw]').forEach((el) => el.addEventListener('click', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-quote]').forEach((el) => bindMsgEvent(el, 'click', 'quote', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
+        body.querySelectorAll('[data-msg-mute]').forEach((el) => bindMsgEvent(el, 'click', 'mute', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-unmute]').forEach((el) => bindMsgEvent(el, 'click', 'unmute', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
+        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
-          row.addEventListener('contextmenu', (e) => {
+          bindMsgEvent(row, 'contextmenu', 'message-context', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const mid = row.dataset.msgMid;
@@ -3584,14 +3694,14 @@
             items.push({label:'多选', action:() => { enterMultiMode(); if (canRecallRow) toggleMsgSelect(row, mid); }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
-          row.addEventListener('click', (e) => {
+          bindMsgEvent(row, 'click', 'message-select', (e) => {
             if (msgState.multi && !e.target.closest('button')) {
               const protectedRole = row.dataset.msgSelf !== '1' && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
               const canSel = Boolean(row.dataset.msgMid) && !(row.dataset.msgRecalled === '1') && (row.dataset.msgSelf === '1' || (msgState.botIsAdmin && !protectedRole));
               if (canSel) toggleMsgSelect(row, row.dataset.msgMid);
             }
           });
-          row.querySelector('.msg-avatar')?.addEventListener('contextmenu', (e) => {
+          bindMsgEvent(row.querySelector('.msg-avatar'), 'contextmenu', 'avatar-context', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const uid = row.dataset.msgUid;

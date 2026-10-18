@@ -1550,6 +1550,9 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
     if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or not 消息ID or len(消息ID) > 128 or not 0 <= 媒体索引 < 10000:
         return web.Response(status=400, text="媒体记录参数无效")
     响应: web.StreamResponse | None = None
+    阶段 = "archive_lookup"
+    上游状态: int | None = None
+    已发送 = 0
     try:
         import zlib
         from 功能文件.管理功能.基础功能 import 消息记录, 消息记录存储
@@ -1562,6 +1565,7 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
         )
         if not isinstance(归档, dict):
             return web.Response(status=404, text="媒体归档不存在")
+        阶段 = "archive_metadata"
         大小 = int(归档.get("size") or 0)
         偏移 = 蓝奏云图片归档._归档偏移(归档)
         try:
@@ -1583,12 +1587,16 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(当前帮助网页配置):
                 消息记录.更新缓存消息媒体直链(*参数)
 
+        阶段 = "archive_open"
         async with 蓝奏云图片归档.打开归档图片(
             str(归档.get("share_url") or ""), str(归档.get("password") or ""),
             范围=远端范围, 归档资料=归档, 保存直链=保存直链,
         ) as 上游:
+            上游状态 = 上游.status
+            阶段 = "upstream_read"
             块流 = 蓝奏云图片归档.读取归档媒体块(上游, 归档, 起点, 终点)
             前块 = await anext(块流)
+            阶段 = "media_type"
             MIME = str(归档.get("content_type") or "").split(";", 1)[0].lower()
             文件归档 = 归档.get("media_kind") == "file" or MIME == "application/octet-stream"
             if not 文件归档 and not re.fullmatch(r"(?:image|video|audio)/[a-z0-9.+-]+", MIME):
@@ -1602,22 +1610,41 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             if 分段:
                 响应头["Content-Range"] = f"bytes {起点}-{终点}/{大小}"
             响应 = web.StreamResponse(status=206 if 分段 else 200, headers=响应头)
+            阶段 = "response_prepare"
             await 响应.prepare(request)
             校验 = zlib.crc32(前块)
+            阶段 = "response_write"
             await 响应.write(前块)
+            已发送 += len(前块)
+            阶段 = "upstream_read"
             async for 块 in 块流:
                 校验 = zlib.crc32(块, 校验)
+                阶段 = "response_write"
                 await 响应.write(块)
+                已发送 += len(块)
+                阶段 = "upstream_read"
+            阶段 = "crc"
             if not 分段 and 归档.get("container") == "zip-stored" and 校验 & 0xffffffff != int(归档.get("crc32", -1)):
                 raise ValueError("archive_crc_mismatch")
+            阶段 = "response_eof"
             await 响应.write_eof()
+            # Content-Length 响应的空 EOF 不一定触碰套接字，补查客户端连接。
+            传输 = request.transport
+            if 传输 is None or 传输.is_closing():
+                raise ConnectionResetError("media_client_disconnected")
+            阶段 = "complete"
             已完整读取 = True
             return 响应
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning("帮助控制台蓝奏云媒体读取失败：媒体序号=%s，阶段=%s，错误类型=%s，状态=%s", 媒体索引 + 1, getattr(exc, "阶段", "read"), type(exc).__name__, getattr(exc, "状态码", 0) or "none")
-        if 响应 is not None and 响应.prepared:
+        # 仅响应写入边界的连接异常表示下游断开；同类上游异常仍需告警。
+        客户端断开 = 阶段 in {"response_prepare", "response_write", "response_eof"} and isinstance(exc, ConnectionError)
+        if 客户端断开:
+            logger.debug("帮助控制台蓝奏云媒体请求被客户端中断：媒体序号=%s，阶段=%s，错误类型=%s，已发送字节=%d", 媒体索引 + 1, 阶段, type(exc).__name__, 已发送)
+        else:
+            logger.warning("帮助控制台蓝奏云媒体读取失败：媒体序号=%s，阶段=%s，原因=%s，错误类型=%s，状态=%s，已发送字节=%d", 媒体索引 + 1, 阶段, getattr(exc, "阶段", "none"), type(exc).__name__, getattr(exc, "状态码", 0) or 上游状态 or "none", 已发送)
+        if 响应 is not None and (响应.prepared or 客户端断开):
             响应.force_close()
             if request.transport is not None:
                 request.transport.close()
