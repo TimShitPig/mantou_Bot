@@ -96,7 +96,10 @@ class _ESAScriptParser(HTMLParser):
         if tag.lower() != "script":
             return
         attributes = dict(attrs)
-        self._capture_script = not attributes.get("src")
+        类型 = str(attributes.get("type") or "").strip().lower()
+        self._capture_script = not attributes.get("src") and 类型 in {
+            "", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript"
+        }
         self._script_parts = []
 
     def handle_data(self, data: str) -> None:
@@ -182,16 +185,21 @@ def _浏览器页面请求头() -> dict[str, str]:
     }
 
 
-def _执行ESA挑战脚本(
-    会话: ClientSession, 页面地址: str, 页面HTML: str
-) -> None:
-    try:
-        import quickjs
-    except ImportError as exc:
-        raise 蓝奏云请求错误("esa_runtime_unavailable") from exc
+async def _读取有界响应内容(
+    响应: ClientResponse, 超限阶段: str = "response_too_large"
+) -> bytes:
+    # StreamReader.read(n) 可能只返回当前网络分块，必须继续读取直到 EOF。
+    内容 = bytearray()
+    while True:
+        块 = await 响应.content.read(min(64 * 1024, 网页最大字节数 + 1 - len(内容)))
+        if not 块:
+            return bytes(内容)
+        内容.extend(块)
+        if len(内容) > 网页最大字节数:
+            raise 蓝奏云请求错误(超限阶段, 响应.status)
 
-    if len(页面HTML.encode("utf-8", errors="ignore")) > 网页最大字节数:
-        raise 蓝奏云请求错误("esa_page_too_large")
+
+def _提取ESA脚本(页面HTML: str) -> list[str]:
     解析器 = _ESAScriptParser()
     try:
         解析器.feed(页面HTML)
@@ -199,10 +207,65 @@ def _执行ESA挑战脚本(
     except Exception as exc:
         raise 蓝奏云请求错误("esa_html_parse_failed") from exc
     脚本列表 = [脚本 for 脚本 in 解析器.scripts if 脚本.strip()]
-    if not 脚本列表 or len(脚本列表) > 12:
+    # 某些响应直接返回 JS；只接受 Cookie 标记，HTML 正文不作为脚本执行。
+    if not 脚本列表 and not re.search(r"<(?:!doctype|html|head|body|script)\b", 页面HTML, re.IGNORECASE):
+        if "acw_sc__v2" in 页面HTML:
+            脚本列表 = [页面HTML]
+    return 脚本列表
+
+
+def _解析标准ESA参数(脚本列表: list[str]) -> str:
+    # 与公开 LanZouCloud-API 的 calc_acw_sc__v2 协议一致，仅匹配已知参数。
+    掩码 = "3000176000856006061501533003690027800375"
+    参数 = []
+    for 脚本 in 脚本列表:
+        if "acw_sc__v2" not in 脚本:
+            continue
+        参数.extend(值 for _, 值 in re.findall(r"\barg1\s*=\s*(['\"])([^'\"]*)\1", 脚本))
+    if len(参数) != 1 or not re.fullmatch(r"[0-9a-fA-F]{40}", 参数[0]):
+        return ""
+    置换 = (15, 35, 29, 24, 33, 16, 1, 38, 10, 9, 19, 31, 40, 27, 22, 23,
+            25, 13, 6, 11, 39, 18, 20, 8, 14, 21, 32, 26, 2, 30, 7, 4, 17, 5,
+            3, 28, 34, 37, 12, 36)
+    数据 = bytes.fromhex("".join(参数[0][位置 - 1] for 位置 in 置换))
+    return bytes(左 ^ 右 for 左, 右 in zip(数据, bytes.fromhex(掩码))).hex()
+
+
+def _含ESA挑战(页面HTML: str) -> bool:
+    脚本列表 = _提取ESA脚本(页面HTML)
+    if _解析标准ESA参数(脚本列表):
+        return True
+    return any(
+        "acw_sc__v2" in 脚本 and (
+            re.search(r"\barg1\s*=", 脚本)
+            or re.search(r"\bdocument\s*(?:\.\s*cookie|\[\s*['\"]cookie['\"]\s*\])\s*=", 脚本)
+        )
+        for 脚本 in 脚本列表
+    )
+
+
+def _执行ESA挑战脚本(
+    会话: ClientSession, 页面地址: str, 页面HTML: str, *, 优先直接解析: bool = True
+) -> bool:
+    if len(页面HTML.encode("utf-8", errors="ignore")) > 网页最大字节数:
+        raise 蓝奏云请求错误("esa_page_too_large")
+    脚本列表 = _提取ESA脚本(页面HTML)
+    if not 脚本列表:
         raise 蓝奏云请求错误("esa_script_missing")
+    if len(脚本列表) > 12:
+        raise 蓝奏云请求错误("esa_script_count")
     if sum(len(脚本.encode("utf-8", errors="ignore")) for 脚本 in 脚本列表) > 256 * 1024:
         raise 蓝奏云请求错误("esa_script_too_large")
+    标准Cookie = _解析标准ESA参数(脚本列表) if 优先直接解析 else ""
+    if 标准Cookie:
+        会话.cookie_jar.update_cookies(
+            {"acw_sc__v2": 标准Cookie}, response_url=URL(页面地址)
+        )
+        return True
+    try:
+        import quickjs
+    except ImportError as exc:
+        raise 蓝奏云请求错误("esa_runtime_unavailable") from exc
 
     页面URL = URL(页面地址)
     初始Cookie = {
@@ -215,11 +278,12 @@ def _执行ESA挑战脚本(
     引导脚本 = (
         "var __cookieMap=new Map(Object.entries("
         + json.dumps(初始Cookie, ensure_ascii=True)
-        + "));var document={};"
+        + "));var __cookieWrites=new Map();var document={};"
         "Object.defineProperty(document,'cookie',{get:function(){return "
         "Array.from(__cookieMap,function(x){return x[0]+'='+x[1]}).join('; ')},"
         "set:function(v){var p=String(v).split(';',1)[0],i=p.indexOf('=');"
-        "if(i>0)__cookieMap.set(p.slice(0,i).trim(),p.slice(i+1).trim())}});"
+        "if(i>0){var k=p.slice(0,i).trim(),v=p.slice(i+1).trim();"
+        "__cookieMap.set(k,v);__cookieWrites.set(k,v)}}});"
         "var location={href:"
         + json.dumps(页面地址, ensure_ascii=True)
         + ",reload:function(){}};document.location=location;document.URL="
@@ -236,7 +300,7 @@ def _执行ESA挑战脚本(
         上下文.eval(引导脚本)
         for 脚本 in 脚本列表:
             上下文.eval(脚本)
-        Cookie原文 = str(上下文.eval("document.cookie") or "")
+        Cookie原文 = str(上下文.eval("Array.from(__cookieWrites,function(x){return x[0]+'='+x[1]}).join('; ')") or "")
     except Exception as exc:
         raise 蓝奏云请求错误("esa_script_failed") from exc
 
@@ -252,10 +316,15 @@ def _执行ESA挑战脚本(
         会话.cookie_jar.update_cookies(更新Cookie, response_url=页面URL)
     except Exception as exc:
         raise 蓝奏云请求错误("esa_cookie_rejected") from exc
+    return False
 
 
 def _是ESA响应(响应: ClientResponse) -> bool:
-    return str(响应.headers.get("Server") or "").strip().lower().startswith("esa")
+    # ESA 服务器同样返回普通文件，200/206 二进制流不得被预读或释放。
+    类型 = str(响应.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    return 响应.status == 200 and 类型 in {
+        "text/html", "application/xhtml+xml", "text/javascript", "application/javascript"
+    }
 
 
 async def _确保公网HTTPS地址(地址: str, *, 限制蓝奏域名: bool = False) -> str:
@@ -338,36 +407,28 @@ async def _请求处理ESA挑战(
     限制蓝奏域名: bool = False,
     请求头: dict[str, str] | None = None,
 ) -> ClientResponse:
-    响应 = await _请求跟随跳转(
-        会话,
-        地址,
-        referer=referer,
-        限制蓝奏域名=限制蓝奏域名,
-        请求头=请求头,
-    )
-    if not _是ESA响应(响应):
-        return 响应
-    状态码 = int(响应.status or 0)
-    有效地址 = str(响应.url)
-    try:
-        页面内容 = await 响应.content.read(网页最大字节数 + 1)
-    finally:
-        响应.release()
-    if 状态码 != 200:
-        raise 蓝奏云请求错误("esa_challenge_status", 状态码)
-    if len(页面内容) > 网页最大字节数:
-        raise 蓝奏云请求错误("esa_page_too_large", 状态码)
-    if b"acw_sc__v2" not in 页面内容.lower():
-        raise 蓝奏云请求错误("esa_challenge_marker_missing", 状态码)
-    页面HTML = 页面内容.decode("utf-8", errors="replace")
-    _执行ESA挑战脚本(会话, 有效地址, 页面HTML)
-    return await _请求跟随跳转(
-        会话,
-        地址,
-        referer=referer,
-        限制蓝奏域名=限制蓝奏域名,
-        请求头=请求头,
-    )
+    上次直接解析 = False
+    for 次数 in range(3):
+        响应 = await _请求跟随跳转(
+            会话, 地址, referer=referer,
+            限制蓝奏域名=限制蓝奏域名, 请求头=请求头,
+        )
+        if not _是ESA响应(响应):
+            return 响应
+        try:
+            页面内容 = await _读取有界响应内容(响应, "esa_page_too_large")
+            页面HTML = 页面内容.decode("utf-8", errors="replace")
+            if not _含ESA挑战(页面HTML):
+                raise 蓝奏云请求错误("download_not_file", 响应.status)
+            if 次数 and not 上次直接解析:
+                raise 蓝奏云请求错误("esa_challenge_retry", 响应.status)
+            # 标准参数优先直接解析；仍返回挑战时只兼容执行一次未知变体。
+            上次直接解析 = _执行ESA挑战脚本(
+                会话, str(响应.url), 页面HTML, 优先直接解析=次数 == 0
+            )
+        finally:
+            响应.release()
+    raise 蓝奏云请求错误("esa_challenge_retry")
 
 
 async def _读取网页文本(
@@ -377,45 +438,27 @@ async def _读取网页文本(
     referer: str = "",
     限制蓝奏域名: bool = False,
 ) -> str:
-    响应 = await _请求跟随跳转(
-        会话,
-        地址,
-        referer=referer,
-        限制蓝奏域名=限制蓝奏域名,
-        请求头=_浏览器页面请求头(),
-    )
-    try:
-        内容 = await 响应.content.read(网页最大字节数 + 1)
-        if len(内容) > 网页最大字节数:
-            raise 蓝奏云请求错误("page_too_large", 响应.status)
-        if _是ESA响应(响应) and b"acw_sc__v2" in 内容.lower():
+    上次直接解析 = False
+    for 次数 in range(3):
+        响应 = await _请求跟随跳转(
+            会话, 地址, referer=referer,
+            限制蓝奏域名=限制蓝奏域名, 请求头=_浏览器页面请求头(),
+        )
+        try:
+            内容 = await _读取有界响应内容(响应, "page_too_large")
             if 响应.status != 200:
-                raise 蓝奏云请求错误("esa_challenge_status", 响应.status)
-            有效地址 = str(响应.url)
-            _执行ESA挑战脚本(
-                会话,
-                有效地址,
-                内容.decode("utf-8", errors="replace"),
-            )
-            响应.release()
-            响应 = await _请求跟随跳转(
-                会话,
-                地址,
-                referer=referer,
-                限制蓝奏域名=限制蓝奏域名,
-                请求头=_浏览器页面请求头(),
-            )
-            内容 = await 响应.content.read(网页最大字节数 + 1)
-            if len(内容) > 网页最大字节数:
-                raise 蓝奏云请求错误("page_too_large", 响应.status)
-            if _是ESA响应(响应) and b"acw_sc__v2" in 内容.lower():
+                raise 蓝奏云请求错误("page_status", 响应.status)
+            页面HTML = 内容.decode(响应.charset or "utf-8", errors="replace")
+            if not (_是ESA响应(响应) and _含ESA挑战(页面HTML)):
+                return 页面HTML
+            if 次数 and not 上次直接解析:
                 raise 蓝奏云请求错误("esa_challenge_retry", 响应.status)
-        if 响应.status != 200:
-            raise 蓝奏云请求错误("page_status", 响应.status)
-        编码 = 响应.charset or "utf-8"
-        return 内容.decode(编码, errors="replace")
-    finally:
-        响应.release()
+            上次直接解析 = _执行ESA挑战脚本(
+                会话, str(响应.url), 页面HTML, 优先直接解析=次数 == 0
+            )
+        finally:
+            响应.release()
+    raise 蓝奏云请求错误("esa_challenge_retry")
 
 
 async def _提交表单JSON(
@@ -438,9 +481,7 @@ async def _提交表单JSON(
         ) as 响应:
             if 响应.status != 200:
                 raise 蓝奏云请求错误("post_status", 响应.status)
-            内容 = await 响应.content.read(网页最大字节数 + 1)
-            if len(内容) > 网页最大字节数:
-                raise 蓝奏云请求错误("response_too_large", 响应.status)
+            内容 = await _读取有界响应内容(响应)
             try:
                 结果 = json.loads(内容.decode(响应.charset or "utf-8", errors="replace"))
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -771,9 +812,7 @@ async def _上传图片(
             ) as 响应:
                 if 响应.status != 200:
                     raise 蓝奏云请求错误("upload_status", 响应.status)
-                内容 = await 响应.content.read(网页最大字节数 + 1)
-                if len(内容) > 网页最大字节数:
-                    raise 蓝奏云请求错误("upload_response_too_large", 响应.status)
+                内容 = await _读取有界响应内容(响应, "upload_response_too_large")
                 try:
                     结果 = json.loads(内容.decode(响应.charset or "utf-8", errors="replace"))
                 except (TypeError, ValueError, json.JSONDecodeError) as exc:
