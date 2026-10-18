@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.178-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.179-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.178 |
+| 版本 | v6.1.179 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -200,7 +200,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - 百度：出版源使用 `doc_id` 接口，普通源使用 AES 正文接口。
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
 - 菠萝包：支持 `m.sfacg.com/Novel/{书籍ID}` 和 `m.sfacg.com/b/{书籍ID}` 短链。
-- 晋江：只请求公开章节，付费或明确锁定章节不请求。
+- 晋江：只请求公开章节，付费或明确锁定章节不请求。目录返回业务码 `1058` 且详情明确为 0 章时提示“该书暂未发布章节”；其他空目录、资料不一致或请求失败仍按异常处理，不生成 TXT。
 - Z-Library：搜索、账号创建、登录验证和公开链接下载都由 `Z-Library小说.py` 提供；找书聚合搜索使用 MySQL 中最新的已验证账号，详情页返回浏览器校验时使用已验证账号登录后重试一次；下载优先使用详情页官方 TXT 转换链接并原样保存响应字节，不在本地改写正文或解析 EPUB、FB2、PDF。
 - ZLibrary 账号创建通过 API 创建随机域名邮箱、发送邮件验证码并最多轮询 120 秒，在同一会话提交注册，再用全新会话验证登录。每次管理员主动命令仅创建一个账号，不定时补充、不轮换搜索账号。
 
