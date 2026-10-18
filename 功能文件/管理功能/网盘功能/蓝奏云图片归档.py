@@ -52,17 +52,19 @@ except Exception:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
-图片归档并发限制 = globals().get("图片归档并发限制") or asyncio.Semaphore(2)
-图片归档进行中: set[tuple[str, str]] = globals().get("图片归档进行中") or set()
-图片归档失败冷却: dict[tuple[str, str], float] = globals().get("图片归档失败冷却") or {}
-图片归档任务: set[asyncio.Task[Any]] = globals().get("图片归档任务") or set()
-图片归档排队中: set[tuple[str, str]] = globals().get("图片归档排队中") or set()
+图片归档并发限制 = globals().get("图片归档并发限制", asyncio.Semaphore(2))
+图片归档进行中: set[tuple[str, str]] = globals().get("图片归档进行中", set())
+图片归档失败冷却: dict[tuple[str, str], float] = globals().get("图片归档失败冷却", {})
+图片归档任务: set[asyncio.Task[Any]] = globals().get("图片归档任务", set())
+图片归档排队中: set[tuple[str, str]] = globals().get("图片归档排队中", set())
 图片归档接收开启 = bool(globals().get("图片归档接收开启", True))
-图片归档最大任务数 = 128
+图片归档最大任务数 = 2
+图片归档唤醒句柄: asyncio.TimerHandle | None = globals().get("图片归档唤醒句柄")
+图片归档调度代次 = int(globals().get("图片归档调度代次", 0))
 # 仅保留当前进程的参数与远端结果；附件字节只使用上传临时文件。
 图片归档待恢复: dict[tuple[str, str], dict[str, Any]] = globals().get("图片归档待恢复", {})
-媒体远端并发限制 = globals().get("媒体远端并发限制") or asyncio.Semaphore(2)
-归档目录锁 = globals().get("归档目录锁") or asyncio.Lock()
+媒体远端并发限制 = globals().get("媒体远端并发限制", asyncio.Semaphore(2))
+归档目录锁 = globals().get("归档目录锁", asyncio.Lock())
 
 
 class 蓝奏云请求错误(RuntimeError):
@@ -477,7 +479,7 @@ async def _列出目录(
     return _目录项(结果)
 
 
-async def _确保归档目录(会话: ClientSession, UID: str, 月份目录: str) -> int:
+async def _确保归档目录(会话: ClientSession, UID: str, 日期目录: str) -> int:
     根目录 = await _列出目录(会话, UID, -1)
     根ID = next(
         (
@@ -515,43 +517,43 @@ async def _确保归档目录(会话: ClientSession, UID: str, 月份目录: str
     if not 根ID:
         raise 蓝奏云请求错误("directory_missing")
 
-    月份列表 = await _列出目录(会话, UID, 根ID)
-    月份ID = next(
+    日期列表 = await _列出目录(会话, UID, 根ID)
+    日期ID = next(
         (
             str(项目.get("fol_id"))
-            for 项目 in 月份列表
-            if str(项目.get("name") or "").strip() == 月份目录
+            for 项目 in 日期列表
+            if str(项目.get("name") or "").strip() == 日期目录
             and str(项目.get("fol_id") or "").isdigit()
         ),
         "",
     )
-    if not 月份ID:
+    if not 日期ID:
         创建结果 = await _提交表单JSON(
             会话,
             f"{蓝奏云网盘主机}/doupload.php?{urlencode({'uid': UID})}",
             {
                 "task": 2,
                 "parent_id": 根ID,
-                "folder_name": 月份目录,
+                "folder_name": 日期目录,
                 "folder_description": "",
             },
             referer=f"{蓝奏云网盘主机}/mydisk.php",
         )
         if not _成功(创建结果):
             raise 蓝奏云请求错误("directory_create")
-        月份列表 = await _列出目录(会话, UID, 根ID)
-        月份ID = next(
+        日期列表 = await _列出目录(会话, UID, 根ID)
+        日期ID = next(
             (
                 str(项目.get("fol_id"))
-                for 项目 in 月份列表
-                if str(项目.get("name") or "").strip() == 月份目录
+                for 项目 in 日期列表
+                if str(项目.get("name") or "").strip() == 日期目录
                 and str(项目.get("fol_id") or "").isdigit()
             ),
             "",
         )
-    if not 月份ID:
+    if not 日期ID:
         raise 蓝奏云请求错误("directory_missing")
-    return int(月份ID)
+    return int(日期ID)
 
 
 def _媒体种类(项目: dict[str, Any]) -> str:
@@ -1039,7 +1041,7 @@ async def _上传并取得归档资料(
                 if 临时路径 is None:
                     raise 蓝奏云请求错误("source_missing")
                 async with 归档目录锁:
-                    目录ID = await _确保归档目录(会话, UID, str(进度["month"]))
+                    目录ID = await _确保归档目录(会话, UID, str(进度.get("directory") or 进度.get("month") or _归档日期目录名()))
                 进度["upload_submitted"] = True
                 文件ID = await _上传图片(
                     会话, UID, 目录ID, 临时路径,
@@ -1065,6 +1067,15 @@ async def _上传并取得归档资料(
             _删除归档临时文件(临时路径)
 
 
+def _归档日期目录名(时间戳: Any = None) -> str:
+    try:
+        数值 = float(时间戳)
+        日期 = datetime.fromtimestamp(数值) if 数值 > 0 else datetime.now()
+    except (TypeError, ValueError, OverflowError, OSError):
+        日期 = datetime.now()
+    return f"{日期.year}年{日期.month}月{日期.day}日"
+
+
 async def _归档单项远端(Cookie: dict[str, str], UID: str, 记录: dict[str, Any], 索引: int, 进度: dict[str, Any]) -> dict[str, Any]:
     from 功能文件.管理功能.基础功能 import 文件缓存
 
@@ -1083,10 +1094,10 @@ async def _归档单项远端(Cookie: dict[str, str], UID: str, 记录: dict[str
                 文件缓存.标记临时缓存正在使用(原路径)
                 内容类型, 大小 = await _下载QQ媒体(地址, 原路径, _媒体种类(项目))
                 标识 = hashlib.sha256(f"{记录['_session']}:{记录['message_id']}:{索引}".encode()).hexdigest()[:24]
-                时间戳 = int(记录.get("ts") or 0)
+                日期目录 = _归档日期目录名(记录.get("ts"))
                 进度.update({"content_type": 内容类型, "size": 大小, "filename": f"msg_{标识}{_原附件后缀(项目, 内容类型)}",
                             "media_kind": _媒体种类(项目), "original_name": str(项目.get("name") or 项目.get("filename") or "")[:160],
-                            "month": datetime.fromtimestamp(时间戳).strftime("%Y-%m") if 时间戳 > 0 else datetime.now().strftime("%Y-%m")})
+                            "directory": 日期目录})
                 包路径 = Path(文件缓存.创建临时缓存文件("lanzou-media-", ".zip"))
                 文件缓存.标记临时缓存正在使用(包路径)
                 打包任务 = asyncio.create_task(asyncio.to_thread(_打包原始媒体, 原路径, 包路径, 进度["filename"]))
@@ -1149,6 +1160,43 @@ async def _执行图片归档(配置: Any, 记录: dict[str, Any], 媒体索引:
     return await asyncio.shield(远端任务)
 
 
+def _归档逐项进度(参数: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    进度 = 参数.setdefault("progress", {})
+    if any(字段 in 进度 for 字段 in ("uid", "remote_task", "archive", "file_id", "upload_submitted")):
+        进度 = 参数["progress"] = {0: 进度}
+    return 进度
+
+
+def _归档项目可恢复(进度: dict[str, Any]) -> bool:
+    if 进度.get("file_id") or isinstance(进度.get("archive"), dict):
+        return True
+    远端 = 进度.get("remote_task")
+    if isinstance(远端, asyncio.Task) and not 远端.done():
+        return True
+    # POST 已经发出但没有确认文件 ID，保留标记，禁止重新上传。
+    if 进度.get("upload_submitted"):
+        return False
+    return int(进度.get("source_failures", 0)) < 3
+
+
+def _归档参数可恢复(参数: dict[str, Any]) -> bool:
+    媒体 = 参数["record"].get("media") or {}
+    进度 = _归档逐项进度(参数)
+    return any(
+        not _项目归档资料(媒体, 索引)
+        and _归档项目可恢复(进度.get(索引, {}))
+        for 索引, _ in _媒体项目列表(媒体)
+    )
+
+
+def _归档存在未确认上传(参数: dict[str, Any]) -> bool:
+    return any(
+        项.get("upload_submitted") and not 项.get("file_id")
+        for 项 in _归档逐项进度(参数).values()
+        if isinstance(项, dict)
+    )
+
+
 async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
     if not _配置值(配置) or not _媒体项目列表(记录.get("media")):
         return
@@ -1174,6 +1222,9 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                 已处理.add(索引)
                 if _项目归档资料(记录["media"], 索引):
                     continue
+                进度 = _归档逐项进度(参数).setdefault(索引, {})
+                if not _归档项目可恢复(进度):
+                    continue
                 try:
                     归档资料 = await _执行图片归档(配置, 记录, 索引)
                     for 尝试 in range(3):
@@ -1187,6 +1238,8 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if not 进度.get("file_id") and not 进度.get("upload_submitted"):
+                        进度["source_failures"] = int(进度.get("source_failures", 0)) + 1
                     # 单项失败不阻止本条消息其余图片/视频。
                     logger.warning("蓝奏云媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s", 索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "upload"), type(exc).__name__, getattr(exc, "状态码", 0) or "none")
     except asyncio.CancelledError:
@@ -1208,10 +1261,8 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                     图片归档失败冷却.pop(k, None)
                 if len(图片归档失败冷却) > 10000:
                     图片归档失败冷却.pop(next(iter(图片归档失败冷却)), None)
-            # 保留已上传资料重试分享/元数据，其余失败项可有限重试后释放。
-            有远端结果 = any(项.get("file_id") or 项.get("archive") for 项 in (参数.get("progress") or {}).values() if isinstance(项, dict))
-            if not 有远端结果:
-                图片归档待恢复.pop(键, None)
+            # 等待字典只保存元数据；已提交未知结果必须跨重复回显和热重载保留。
+            # 前置失败仍由外层三次预算决定释放，已确认文件 ID 只重试分享/持久化。
 
 
 def _归档等待任务完成(任务: asyncio.Task[Any], 键: tuple[str, str], 参数: dict[str, Any]) -> None:
@@ -1221,6 +1272,8 @@ def _归档等待任务完成(任务: asyncio.Task[Any], 键: tuple[str, str], �
         图片归档排队中.discard(键)
         图片归档进行中.discard(键)
     _读取远端归档任务结果(任务)
+    if 图片归档接收开启:
+        _排空图片归档队列()
 
 
 async def _归档有限重试(键: tuple[str, str], 参数: dict[str, Any]) -> None:
@@ -1228,21 +1281,28 @@ async def _归档有限重试(键: tuple[str, str], 参数: dict[str, Any]) -> N
         if 次数:
             await asyncio.sleep(次数 * 2)
         图片归档失败冷却.pop(键, None)
-        await 归档消息图片(参数["config"], 参数["record"])
-        if 键 not in 图片归档待恢复:
-            # 可重试下载失败时参数仍在当前任务内，最多三次；不反复 POST 未确认上传。
-            媒体 = 参数["record"].get("media") or {}
-            if all(_项目归档资料(媒体, i) for i, _ in _媒体项目列表(媒体)):
-                return
-            if 次数 < 2:
-                图片归档待恢复[键] = 参数
-        进度列表 = list((参数.get("progress") or {}).values())
-        if 进度列表 and all(isinstance(进度, dict) and 进度.get("upload_submitted") and not 进度.get("file_id") for 进度 in 进度列表):
-            图片归档待恢复.pop(键, None)
+        try:
+            await 归档消息图片(参数["config"], 参数["record"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            图片归档失败冷却[键] = asyncio.get_running_loop().time() + 300
+            logger.warning("蓝奏云媒体归档调度失败：错误类型=%s", type(exc).__name__)
             return
+        if 键 not in 图片归档待恢复:
+            return
+        if not _归档参数可恢复(参数):
+            图片归档失败冷却.pop(键, None)
+            if not _归档存在未确认上传(参数):
+                图片归档待恢复.pop(键, None)
+            return
+    # 三次后释放等待 Task；已确认的文件 ID 由唯一冷却句柄再次唤醒。
+    图片归档失败冷却[键] = asyncio.get_running_loop().time() + 300
 
 
 def _启动待恢复图片(键: tuple[str, str], 参数: dict[str, Any]) -> bool:
+    if not 图片归档接收开启 or not _归档参数可恢复(参数):
+        return False
     当前任务 = 参数.get("task")
     if isinstance(当前任务, asyncio.Task) and not 当前任务.done():
         return False
@@ -1264,6 +1324,57 @@ def _启动待恢复图片(键: tuple[str, str], 参数: dict[str, Any]) -> bool
     return True
 
 
+def _取消图片归档唤醒() -> None:
+    global 图片归档唤醒句柄
+    if 图片归档唤醒句柄 is not None:
+        图片归档唤醒句柄.cancel()
+        图片归档唤醒句柄 = None
+
+
+def _排空图片归档队列() -> None:
+    global 图片归档唤醒句柄
+    if not 图片归档接收开启:
+        return
+    try:
+        循环 = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _取消图片归档唤醒()
+    图片归档任务.difference_update(任务 for 任务 in list(图片归档任务) if 任务.done())
+    if len(图片归档任务) >= 图片归档最大任务数:
+        # 满额时由完成回调继续排空，不在每次入队时重复扫描全部元数据。
+        return
+    当前时间 = 循环.time()
+    下次唤醒: float | None = None
+    for 键, 参数 in list(图片归档待恢复.items()):
+        当前任务 = 参数.get("task")
+        if isinstance(当前任务, asyncio.Task) and not 当前任务.done():
+            continue
+        if not _配置值(参数.get("config")) or not _归档参数可恢复(参数):
+            continue
+        截止 = 图片归档失败冷却.get(键, 0)
+        if 截止 > 当前时间:
+            下次唤醒 = 截止 if 下次唤醒 is None else min(下次唤醒, 截止)
+            continue
+        if len(图片归档任务) < 图片归档最大任务数:
+            _启动待恢复图片(键, 参数)
+        if len(图片归档任务) >= 图片归档最大任务数:
+            break
+    if 下次唤醒 is not None and len(图片归档任务) < 图片归档最大任务数:
+        代次 = 图片归档调度代次
+
+        def 到期唤醒() -> None:
+            global 图片归档唤醒句柄
+            if 图片归档唤醒句柄 is not 句柄 or 图片归档调度代次 != 代次:
+                return
+            图片归档唤醒句柄 = None
+            if 图片归档接收开启:
+                _排空图片归档队列()
+
+        句柄 = 循环.call_at(下次唤醒, 到期唤醒)
+        图片归档唤醒句柄 = 句柄
+
+
 def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
     from 功能文件.管理功能.基础功能 import 消息记录
 
@@ -1276,28 +1387,30 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
     键 = (str(记录.get("_session") or "").strip(), str(记录.get("message_id") or "").strip())
     if not all(键):
         return False
-    if 键 not in 图片归档待恢复 and len(图片归档待恢复) >= 图片归档最大任务数:
-        logger.warning("蓝奏云媒体归档队列已满：上限=%s", 图片归档最大任务数)
-        return False
+    # 高峰期只排消息元数据，不提前下载附件或为每条消息创建等待 Task。
     参数 = 图片归档待恢复.setdefault(键, {"config": 配置, "record": copy.deepcopy(记录)})
     参数["config"] = 配置
     参数["record"]["media"] = 消息记录._合并媒体记录(参数["record"]["media"], 媒体)
-    return _启动待恢复图片(键, 参数)
+    _排空图片归档队列()
+    return True
 
 
 def 启动图片归档任务(配置: Any = None) -> None:
-    global 图片归档接收开启
+    global 图片归档接收开启, 图片归档调度代次
+    _取消图片归档唤醒()
+    图片归档调度代次 += 1
     图片归档接收开启 = True
     for 键, 参数 in list(图片归档待恢复.items()):
         if 配置 is not None:
             参数["config"] = 配置
-        图片归档失败冷却.pop(键, None)
-        _启动待恢复图片(键, 参数)
+    _排空图片归档队列()
 
 
 async def 停止图片归档任务() -> None:
-    global 图片归档接收开启
+    global 图片归档接收开启, 图片归档调度代次
     图片归档接收开启 = False
+    图片归档调度代次 += 1
+    _取消图片归档唤醒()
     任务列表 = [任务 for 任务 in 图片归档任务 if not 任务.done()]
     for 任务 in 任务列表:
         任务.cancel()
