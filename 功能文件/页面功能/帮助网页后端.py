@@ -1552,10 +1552,14 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
     响应: web.StreamResponse | None = None
     try:
         import zlib
-        from 功能文件.管理功能.基础功能 import 消息记录
+        from 功能文件.管理功能.基础功能 import 消息记录, 消息记录存储
         from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 
-        归档 = await _控制台线程执行(消息记录.获取消息媒体归档, 会话标识, 消息ID, 类型, 媒体索引)
+        数据库快照 = 消息记录存储.获取数据库配置快照(当前帮助网页配置)
+        归档 = await _控制台线程执行(
+            消息记录存储.执行数据库配置快照操作, 数据库快照,
+            消息记录存储.读取消息媒体归档, 会话标识, 消息ID, 类型, 媒体索引,
+        )
         if not isinstance(归档, dict):
             return web.Response(status=404, text="媒体归档不存在")
         大小 = int(归档.get("size") or 0)
@@ -1566,7 +1570,23 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
         # ZIP_STORED 精确映射原文件偏移；若上游忽略 Range，则有界跳过容器头。
         远端范围 = f"bytes={偏移 + 起点}-{偏移 + 终点}" if 偏移 or 分段 else ""
-        async with 蓝奏云图片归档.打开归档图片(str(归档.get("share_url") or ""), str(归档.get("password") or ""), 范围=远端范围) as 上游:
+        已完整读取 = False
+
+        async def 保存直链(直链: str, 获取时间: float) -> None:
+            if not 已完整读取:
+                return
+            参数 = (会话标识, 消息ID, 类型, 媒体索引, 归档, 直链, 获取时间)
+            成功 = await _控制台线程执行(
+                消息记录存储.执行数据库配置快照操作, 数据库快照,
+                消息记录.更新消息媒体直链, *参数,
+            )
+            if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(当前帮助网页配置):
+                消息记录.更新缓存消息媒体直链(*参数)
+
+        async with 蓝奏云图片归档.打开归档图片(
+            str(归档.get("share_url") or ""), str(归档.get("password") or ""),
+            范围=远端范围, 归档资料=归档, 保存直链=保存直链,
+        ) as 上游:
             块流 = 蓝奏云图片归档.读取归档媒体块(上游, 归档, 起点, 终点)
             前块 = await anext(块流)
             MIME = str(归档.get("content_type") or "").split(";", 1)[0].lower()
@@ -1591,6 +1611,7 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             if not 分段 and 归档.get("container") == "zip-stored" and 校验 & 0xffffffff != int(归档.get("crc32", -1)):
                 raise ValueError("archive_crc_mismatch")
             await 响应.write_eof()
+            已完整读取 = True
             return 响应
     except asyncio.CancelledError:
         raise

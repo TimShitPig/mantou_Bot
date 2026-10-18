@@ -9,6 +9,7 @@ import re
 import secrets
 import socket
 import struct
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -45,6 +46,7 @@ except Exception:
 图片最大字节数 = 100 * 1024 * 1024
 网页最大字节数 = 1024 * 1024
 最大跳转次数 = 4
+归档直链复用秒 = 300
 最大分享页结构重试次数 = 1
 分享页结构重试间隔秒 = 0.25
 蓝奏云Cookie字段 = frozenset({"phpdisk_info", "ylogin"})
@@ -977,28 +979,67 @@ async def _取得直接下载地址(
     return await _确保公网HTTPS地址(下载地址)
 
 
+def _可复用归档直链(归档资料: Any, 分享地址: str, 提取码: str) -> str:
+    if not isinstance(归档资料, dict):
+        return ""
+    if 归档资料.get("share_url") != 分享地址 or 归档资料.get("password") != 提取码:
+        return ""
+    try:
+        已过秒数 = time.time() - float(归档资料.get("direct_url_cached_at") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if not 0 <= 已过秒数 < 归档直链复用秒:
+        return ""
+    return str(归档资料.get("direct_url") or "").strip()
+
+
 @asynccontextmanager
 async def 打开归档图片(
-    分享地址: str, 提取码: str, *, 范围: str = ""
+    分享地址: str, 提取码: str, *, 范围: str = "",
+    归档资料: dict[str, Any] | None = None,
+    保存直链: Any = None,
 ) -> AsyncIterator[ClientResponse]:
     async with _新建会话() as 会话:
-        直接地址 = await _取得直接下载地址(会话, 分享地址, 提取码)
         下载请求头 = _浏览器页面请求头()
         下载请求头["Sec-Fetch-Site"] = "cross-site"
         if 范围:
             下载请求头["Range"] = 范围
-        响应 = await _请求处理ESA挑战(
-            会话,
-            直接地址,
-            referer=分享地址,
-            请求头=下载请求头,
-        )
+        直接地址 = _可复用归档直链(归档资料, 分享地址, 提取码)
+        响应 = None
+        获取时间 = 0.0
+        if 直接地址:
+            try:
+                # 所有缓存地址仍走公网 HTTPS 校验；失效时只在发送字节前重取一次。
+                响应 = await _请求处理ESA挑战(
+                    会话, 直接地址, referer=分享地址, 请求头=下载请求头,
+                )
+                if 响应.status not in {200, 206}:
+                    响应.release()
+                    响应 = None
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                响应 = None
+        if 响应 is None:
+            直接地址 = await _取得直接下载地址(会话, 分享地址, 提取码)
+            获取时间 = time.time()
+            响应 = await _请求处理ESA挑战(
+                会话, 直接地址, referer=分享地址, 请求头=下载请求头,
+            )
         try:
             if 响应.status not in {200, 206}:
                 raise 蓝奏云请求错误("download_status", 响应.status)
             yield 响应
         finally:
             响应.release()
+        # 消费者正常退出意味着 Range/原字节校验已完成；失败及取消不保存新地址。
+        if 获取时间 and callable(保存直链):
+            try:
+                await 保存直链(直接地址, 获取时间)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("蓝奏云媒体直链保存失败：错误类型=%s", type(exc).__name__)
 
 
 def 解析媒体范围(范围: str, 大小: int) -> tuple[int, int, bool]:

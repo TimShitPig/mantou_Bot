@@ -3495,6 +3495,80 @@ def 获取消息媒体归档(
         return None
 
 
+def 更新消息媒体直链(
+    会话标识: str,
+    消息ID: str,
+    类型: str,
+    媒体索引: int,
+    原归档: dict[str, Any],
+    直链: str,
+    获取时间: float,
+) -> bool:
+    """在线程固定的数据库配置下局部保存直链，不排入整条消息写入队列。"""
+    if _消息存储 is None:
+        return False
+    更新方法 = getattr(_消息存储, "更新消息媒体直链", None)
+    if not callable(更新方法):
+        return False
+    try:
+        return bool(更新方法(会话标识, 消息ID, 类型, 媒体索引, 原归档, 直链, 获取时间))
+    except Exception as exc:
+        logger.debug("消息媒体直链保存失败：错误类型=%s", type(exc).__name__)
+        return False
+
+
+def 更新缓存消息媒体直链(
+    会话标识: str,
+    消息ID: str,
+    类型: str,
+    媒体索引: int,
+    原归档: dict[str, Any],
+    直链: str,
+    获取时间: float,
+) -> bool:
+    """数据库保存后在事件循环更新现有热点副本，不新增消息或网页事件。"""
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = _规范消息ID(消息ID)
+    类型 = str(类型 or "").strip().lower()
+    直链 = str(直链 or "").strip()
+    try:
+        获取时间 = float(获取时间)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        not 会话标识 or not 消息ID or 类型 not in {"group", "user"}
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool)
+        or not 0 <= 媒体索引 < 10000 or not isinstance(原归档, dict)
+        or not str(原归档.get("share_url") or "").strip()
+        or not str(原归档.get("password") or "").strip()
+        or not 直链.startswith("https://") or len(直链) > 8192
+        or not 0 < 获取时间 < float("inf")
+    ):
+        return False
+    匹配方法 = getattr(_消息存储, "_媒体归档直链匹配", None)
+    if not callable(匹配方法):
+        return False
+    会话 = 消息缓存.get(会话标识) or {}
+    for 记录 in reversed(会话.get("messages") or []):
+        if (
+            not isinstance(记录, dict)
+            or _规范消息ID(记录.get("message_id")) != 消息ID
+            or str(记录.get("chat_type") or "").strip().lower() != 类型
+        ):
+            continue
+        媒体 = 记录.get("media")
+        归档列表 = 媒体.get("_lanzou_archives") if isinstance(媒体, dict) else None
+        归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
+        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+            归档 = 媒体.get("_lanzou_archive")
+        if not 匹配方法(归档, 原归档):
+            return False
+        归档["direct_url"] = 直链
+        归档["direct_url_cached_at"] = 获取时间
+        return True
+    return False
+
+
 def _准备消息接收队列() -> asyncio.Queue[tuple[Any, Any, str]]:
     """热重载切换事件循环后，在旧队列已经清空时重建队列。"""
     global _消息接收队列

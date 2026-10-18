@@ -41,9 +41,21 @@ _消息写入SQL = (
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message, member_role, msg_seq) "
     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
 )
+# 已归档对象不随消息快照回退；数据库中的直链缓存可能比排队快照更新。
+# 仅合并现有归档对象，传入媒体中的其它字段和首次新增归档索引仍正常写入。
+_已有媒体SQL = "IF(JSON_VALID(media), media, '{}')"
+_归档保留SQL = ", ".join(
+    "CASE WHEN JSON_TYPE(JSON_EXTRACT("
+    + _已有媒体SQL
+    + f", '$.{字段}'))='OBJECT' THEN JSON_OBJECT('{字段}', JSON_EXTRACT("
+    + _已有媒体SQL
+    + f", '$.{字段}')) ELSE JSON_OBJECT() END"
+    for 字段 in ("_lanzou_archives", "_lanzou_archive")
+)
 _消息更新SQL = (
     f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
-    "timestamp=%s, ts=%s, is_self=%s, source=%s, recalled=%s, media=%s, reference_id=%s, "
+    "timestamp=%s, ts=%s, is_self=%s, source=%s, recalled=%s, "
+    f"media=JSON_MERGE_PATCH(%s, {_归档保留SQL}), reference_id=%s, "
     "refidx=%s, avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
 )
 _消息查重分块大小 = 200
@@ -1100,6 +1112,97 @@ def 读取消息媒体归档(
     except Exception as exc:
         logger.debug("消息记录 MySQL 图片归档读取失败：错误类型=%s", type(exc).__name__)
         return None
+    finally:
+        _关闭连接(连接)
+
+
+def _媒体归档直链匹配(当前归档: Any, 原归档: Any) -> bool:
+    """直链更新仅匹配同一远端归档及调用方读取到的缓存版本。"""
+    if not isinstance(当前归档, dict) or not isinstance(原归档, dict):
+        return False
+    if any(
+        str(当前归档.get(字段) or "") != str(原归档.get(字段) or "")
+        for 字段 in ("share_url", "password", "file_id", "direct_url")
+    ):
+        return False
+    try:
+        return float(当前归档.get("direct_url_cached_at") or 0) == float(
+            原归档.get("direct_url_cached_at") or 0
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def 更新消息媒体直链(
+    会话标识: str,
+    消息ID: str,
+    类型: str,
+    媒体索引: int,
+    原归档: dict[str, Any],
+    直链: str,
+    获取时间: float,
+) -> bool:
+    """只更新现有归档的直链；锁行合并且不创建已删除的消息。"""
+    会话标识 = str(会话标识 or "").strip()
+    消息ID = _规范消息ID(消息ID)
+    类型 = str(类型 or "").strip().lower()
+    直链 = str(直链 or "").strip()
+    try:
+        获取时间 = float(获取时间)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        not 会话标识 or not 消息ID or 类型 not in {"group", "user"}
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool)
+        or not 0 <= 媒体索引 < 10000 or not isinstance(原归档, dict)
+        or not str(原归档.get("share_url") or "").strip()
+        or not str(原归档.get("password") or "").strip()
+        or not 直链.startswith("https://") or len(直链) > 8192
+        or not 0 < 获取时间 < float("inf") or not _MySQL可用()
+    ):
+        return False
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT id, media FROM `{消息记录表名}` "
+                "WHERE 会话标识=%s AND message_id=%s AND 消息类型=%s "
+                "ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                (会话标识, 消息ID, 类型),
+            )
+            行 = 游标.fetchone()
+            if not 行:
+                连接.rollback()
+                return False
+            媒体原文 = _行字段(行, 1, "media", 默认值="{}")
+            if isinstance(媒体原文, bytes):
+                媒体原文 = 媒体原文.decode("utf-8", errors="replace")
+            媒体 = json.loads(str(媒体原文 or "{}"))
+            归档列表 = 媒体.get("_lanzou_archives") if isinstance(媒体, dict) else None
+            归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
+            if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+                归档 = 媒体.get("_lanzou_archive")
+            if not _媒体归档直链匹配(归档, 原归档):
+                连接.rollback()
+                return False
+            归档["direct_url"] = 直链
+            归档["direct_url_cached_at"] = 获取时间
+            游标.execute(
+                f"UPDATE `{消息记录表名}` SET media=%s WHERE id=%s",
+                (json.dumps(媒体, ensure_ascii=False), _行字段(行, 0, "id", 默认值=0)),
+            )
+            # 重复保存完全相同的链接和时间也算已确认，无需依赖 changed_rows。
+        连接.commit()
+        return True
+    except Exception as exc:
+        try:
+            连接.rollback()
+        except Exception:
+            pass
+        logger.debug("消息记录 MySQL 媒体直链更新失败：错误类型=%s", type(exc).__name__)
+        return False
     finally:
         _关闭连接(连接)
 
