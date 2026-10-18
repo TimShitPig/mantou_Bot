@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.172-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.173-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.172 |
+| 版本 | v6.1.173 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -123,7 +123,7 @@ quickjs
 | 点众小说 | 链接 / 分享卡片 | 独立 App 会话，最高 60 路并发 |
 | 盐言小说 | `story.zhihu.com` 付费专栏分享链接 | 只处理当前分享章节 |
 | 塔读小说 | `reader.tadu.com` 书籍链接 | TDZ/AES/DES 解密，最高 400 路并发 |
-| 百度小说 | 百度链接 / 分享卡片 | 出版源和 AES 普通源；200 路异步并发，单会话连接池复用 |
+| 百度小说 | 百度链接 / 分享卡片 | 当前官方 doc_id 搜索、详情和正文；32 路异步动态补位，单会话复用，缺章不生成 TXT |
 | 小米小说 | 小米链接 / 分享卡片 | 兼容 `reader.browser.miui.com` 旧链接 |
 | 宜搜小说 | ieasou/eayue 链接 / 分享卡片 | 支持 `book.eayue.com/app/bookshare.m` 分享页，DES-CBC 解密 |
 | 米读小说 | 链接 / 分享卡片 | 异步并发下载 |

@@ -541,7 +541,17 @@ def 构造塔读链接(书籍编号: str) -> str:
 
 
 def 构造百度链接(书籍编号: str) -> str:
-    return f"https://boxnovel.baidu.com/boxnovel/reader?gid={书籍编号}"
+    书籍编号 = str(书籍编号 or "").strip().lower()
+    if not re.fullmatch(r"(?:[0-9]{5,30}|[0-9a-f]{16,64})", 书籍编号):
+        return ""
+    if 百度小说 is not None and hasattr(百度小说, "构造百度链接"):
+        return str(百度小说.构造百度链接(书籍编号))
+    if re.fullmatch(r"[0-9]{5,30}", 书籍编号):
+        return f"https://boxnovel.baidu.com/boxnovel/reader?gid={书籍编号}"
+    数据 = json.dumps({"doc_id": 书籍编号}, separators=(",", ":"))
+    return "https://boxnovel.baidu.com/boxnovel/yuedu/wapdetail?" + urllib.parse.urlencode(
+        {"data": 数据}
+    )
 
 
 def 构造小米链接(书籍编号: str) -> str:
@@ -1403,9 +1413,9 @@ async def 搜索百度(关键词: str, *, 需要数量: int = 20) -> list[dict[s
     for 书籍 in 原始结果:
         if not isinstance(书籍, dict):
             continue
-        book_id = str(书籍.get("book_id") or "").strip()
+        book_id = str(书籍.get("book_id") or "").strip().lower()
         title = 清理文本(书籍.get("title"))
-        if not book_id.isdigit() or not title:
+        if not re.fullmatch(r"(?:[0-9]{5,30}|[0-9a-f]{16,64})", book_id) or not title:
             continue
         评分 = _安全浮点(书籍.get("score"))
         字数 = _安全整数热度(书籍.get("word_count"))
