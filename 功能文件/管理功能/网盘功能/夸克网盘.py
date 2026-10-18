@@ -49,6 +49,9 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 _夸克同名上传锁表 = globals().get("_夸克同名上传锁表")
 if not isinstance(_夸克同名上传锁表, weakref.WeakValueDictionary):
     _夸克同名上传锁表 = weakref.WeakValueDictionary()
+_夸克账号操作锁表 = globals().get("_夸克账号操作锁表")
+if not isinstance(_夸克账号操作锁表, weakref.WeakValueDictionary):
+    _夸克账号操作锁表 = weakref.WeakValueDictionary()
 浏览器请求头 = {
     "accept": "application/json, text/plain, */*",
     "content-type": "application/json",
@@ -115,11 +118,13 @@ class 夸克网盘客户端:
         上传目录 = 网盘清理工具.生成每日上传目录(上传目录)
         上传锁 = 获取夸克同名上传锁(self.cookie, 上传目录, 文件名)
         async with 上传锁:
-            目录ID = await self.确保目录路径(上传目录)
-            await self.删除同名普通文件(文件名, 目录ID)
-            文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
-            if not 文件ID:
-                raise RuntimeError("夸克网盘上传后没有返回文件ID")
+            # 目录使用偏移分页；同账号不同小说的写入也会使正在扫描的页错位。
+            async with 获取夸克账号操作锁(self.cookie):
+                目录ID = await self.确保目录路径(上传目录)
+                await self.删除同名普通文件(文件名, 目录ID)
+                文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
+                if not 文件ID:
+                    raise RuntimeError("夸克网盘上传后没有返回文件ID")
             分享链接 = await self.创建分享(文件ID, 文件名)
             if not 分享链接:
                 raise RuntimeError("夸克网盘没有返回分享链接")
@@ -253,10 +258,12 @@ class 夸克网盘客户端:
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
         """清理前两天及更早小说，并删除确认清空的日期子目录。"""
-        return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
+        async with 获取夸克账号操作锁(self.cookie):
+            return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
 
     async def 列出目录全部项目(
-        self, 父目录ID: str, *, _完整性重试次数: int = 0
+        self, 父目录ID: str, *, _完整性重试次数: int = 0,
+        _串行扫描: bool = False,
     ) -> list[dict[str, Any]]:
         结果: list[dict[str, Any]] = []
         已见ID: set[str] = set()
@@ -285,9 +292,14 @@ class 夸克网盘客户端:
             项目列表 = 数据主体.get("list")
             if not isinstance(项目列表, list):
                 raise RuntimeError("夸克网盘目录响应缺少有效列表")
+            页内ID: set[str] = set()
             for 项目 in 项目列表:
                 if not isinstance(项目, dict) or not 读取文件ID(项目).strip():
                     raise RuntimeError("夸克网盘目录项目结构或文件ID无效")
+                文件ID = 读取文件ID(项目)
+                if 文件ID in 页内ID:
+                    raise RuntimeError("夸克网盘目录页包含重复文件ID")
+                页内ID.add(文件ID)
             已知页总数: int | None = None
             for 元数据主体 in (数据主体, 数据):
                 if "metadata" not in 元数据主体:
@@ -337,7 +349,8 @@ class 夸克网盘客户端:
                 )
                 await asyncio.sleep(0.25)
                 return await self.列出目录全部项目(
-                    父目录ID, _完整性重试次数=_完整性重试次数 + 1
+                    父目录ID, _完整性重试次数=_完整性重试次数 + 1,
+                    _串行扫描=True,
                 )
             logger.warning(
                 "夸克网盘目录扫描仍不完整，停止使用部分结果：page=%s, collected=%s, reported_total=%s",
@@ -347,22 +360,34 @@ class 夸克网盘客户端:
             )
             raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作")
 
+        async def 确认完整扫描() -> list[dict[str, Any]]:
+            # 总数相同仍可能换入/换出；再核对首页，避免交付错位分页的集合。
+            复查首页, 复查总数 = await 请求目录页(1)
+            if (
+                复查总数 != 总数量
+                or [读取文件ID(项目) for 项目 in 复查首页]
+                != [读取文件ID(项目) for 项目 in 首页项目]
+                or (总数量 and len(结果) != 总数量)
+            ):
+                return await 重扫不完整目录(1, len(结果), 复查总数)
+            return 结果
+
         首页项目, 总数量 = await 请求目录页(1)
         if not 首页项目 and 总数量:
             首页项目, 重试总数量 = await 请求目录页(1)
             if 重试总数量:
                 总数量 = 重试总数量
         首屏新增数量 = 合并项目(首页项目)
-        if 总数量 and len(结果) >= 总数量:
-            return 结果
+        if 总数量 and len(结果) == 总数量:
+            return await 确认完整扫描()
         if not 首页项目:
             if 总数量 and len(结果) < 总数量:
                 return await 重扫不完整目录(1, len(结果), 总数量)
-            return 结果
+            return await 确认完整扫描()
         if 首屏新增数量 == 0:
             raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
 
-        if 总数量 > 目录列表每页数量 and len(首页项目) == 目录列表每页数量:
+        if not _串行扫描 and 总数量 > 目录列表每页数量 and len(首页项目) == 目录列表每页数量:
             页数上限 = (总数量 + 目录列表每页数量 - 1) // 目录列表每页数量
             metadata一致 = True
             for 起始页 in range(2, 页数上限 + 1, 目录列表最大并发数):
@@ -372,7 +397,6 @@ class 夸克网盘客户端:
                         min(起始页 + 目录列表最大并发数, 页数上限 + 1),
                     )
                 )
-                批次Cookie = self.cookie
                 批次结果 = await asyncio.gather(
                     *(请求目录页(页码) for 页码 in 页码列表),
                     return_exceptions=True,
@@ -381,11 +405,10 @@ class 夸克网盘客户端:
                     isinstance(响应, asyncio.CancelledError) for 响应 in 批次结果
                 ):
                     raise asyncio.CancelledError
-                if self.cookie != 批次Cookie or any(
-                    isinstance(响应, Exception) for 响应 in 批次结果
-                ):
-                    metadata一致 = False
-                    break
+                # __puus 刷新不代表目录或账号变化；请求失败保留原来的错误分类。
+                for 响应 in 批次结果:
+                    if isinstance(响应, Exception):
+                        raise 响应
                 for 页码, 响应 in zip(页码列表, 批次结果):
                     项目列表, 页总数 = 响应
                     该页预期数量 = min(
@@ -410,11 +433,9 @@ class 夸克网盘客户端:
                 if not metadata一致:
                     break
             if metadata一致 and len(结果) == 总数量:
-                return 结果
-
-            结果.clear()
-            已见ID.clear()
-            合并项目(首页项目)
+                return await 确认完整扫描()
+            # 回退必须丢弃全部旧页，串行重扫也从最新首页开始。
+            return await 重扫不完整目录(起始页, len(结果), 总数量)
 
         页码 = 2
         while True:
@@ -430,7 +451,9 @@ class 夸克网盘客户端:
             if 总数量 and 页总数 and 页总数 != 总数量:
                 return await 重扫不完整目录(页码, len(结果), 页总数)
             新增数量 = 合并项目(项目列表)
-            if 总数量 and len(结果) >= 总数量:
+            if 新增数量 != len(项目列表) or (总数量 and len(结果) > 总数量):
+                return await 重扫不完整目录(页码, len(结果), 总数量)
+            if 总数量 and len(结果) == 总数量:
                 break
             if not 项目列表:
                 if 总数量 and len(结果) < 总数量:
@@ -439,7 +462,7 @@ class 夸克网盘客户端:
             if 新增数量 == 0:
                 raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
             页码 += 1
-        return 结果
+        return await 确认完整扫描()
 
     async def 上传文件(self, 本地路径: str | Path, 父目录ID: str, 文件名: str) -> str:
         路径 = Path(本地路径)
@@ -952,6 +975,22 @@ def 拆分上传目录(上传目录: str) -> list[str]:
     ]
 
 
+def 获取夸克账号操作锁(cookie: str) -> asyncio.Lock:
+    """账号级写入窗口跨客户端共用，刷新 __puus 不生成另一把锁。"""
+    稳定Cookie = sorted(
+        片段.strip()
+        for 片段 in 清理Cookie(cookie).split(";")
+        if 片段.strip()
+        and 片段.split("=", 1)[0].strip().lower() not in {"__puus", "ctoken"}
+    )
+    键 = hashlib.sha256(";".join(稳定Cookie).encode("utf-8")).hexdigest()
+    锁 = _夸克账号操作锁表.get(键)
+    if 锁 is None:
+        锁 = asyncio.Lock()
+        _夸克账号操作锁表[键] = 锁
+    return 锁
+
+
 def 获取夸克同名上传锁(cookie: str, 上传目录: str, 文件名: str) -> asyncio.Lock:
     稳定Cookie片段 = [
         片段.strip()
@@ -959,6 +998,7 @@ def 获取夸克同名上传锁(cookie: str, 上传目录: str, 文件名: str) 
         if 片段.strip()
         and 片段.split("=", 1)[0].strip().lower() not in {"__puus", "ctoken"}
     ]
+    稳定Cookie片段.sort()
     账号摘要 = hashlib.sha256(";".join(稳定Cookie片段).encode("utf-8")).hexdigest()
     目录路径 = "/".join(拆分上传目录(上传目录))
     锁键 = hashlib.sha256(
