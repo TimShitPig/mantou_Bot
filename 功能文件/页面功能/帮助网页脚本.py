@@ -2308,6 +2308,120 @@
             : message;
         });
       };
+      const msgMediaItemUrl = (item) => String(item?.src || item?.url || item?.download_url || '').trim();
+      const msgMediaItemName = (item) => String(item?.name || item?.filename || item?.file_name || '').trim();
+      const msgMediaItemKind = (item) => {
+        const type = String(item?.type || item?.media_type || '').trim().toLowerCase();
+        const mime = String(item?.content_type || item?.mime_type || '').trim().toLowerCase();
+        if (['图片','image','img'].includes(type) || mime.startsWith('image/')) return 'image';
+        if (['视频','video'].includes(type) || mime.startsWith('video/')) return 'video';
+        if (['语音','音频','audio','voice','record'].includes(type) || mime.startsWith('audio/') || mime === 'voice') return 'audio';
+        return ['文件','file','document'].includes(type) || mime ? 'file' : type;
+      };
+      const msgMediaHasValue = (value) => value !== null && value !== undefined
+        && (typeof value !== 'string' || Boolean(value.trim()));
+      const msgMediaItems = (media) => {
+        if (!media || typeof media !== 'object') return [];
+        const source = Array.isArray(media) ? media : (Array.isArray(media.items) && media.items.length ? media.items : [media]);
+        return source.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => {
+          const result = {...item};
+          ['items','_lanzou_archive','_lanzou_archives'].forEach((key) => delete result[key]);
+          return result;
+        }).filter((item) => Boolean(msgMediaItemUrl(item) || msgMediaItemName(item) || msgMediaItemKind(item)));
+      };
+      const msgMediaMetadataMatches = (left, right) => {
+        const name = msgMediaItemName(left);
+        if (!name || name !== msgMediaItemName(right)) return false;
+        const leftKind = msgMediaItemKind(left), rightKind = msgMediaItemKind(right);
+        if (leftKind && rightKind && leftKind !== rightKind) return false;
+        if (msgMediaHasValue(left.size) && msgMediaHasValue(right.size)) {
+          const leftSize = Number(left.size), rightSize = Number(right.size);
+          if (Number.isFinite(leftSize) && Number.isFinite(rightSize) ? leftSize !== rightSize : String(left.size) !== String(right.size)) return false;
+        }
+        return true;
+      };
+      const msgMediaArchiveProxy = (item, messageId, scope = {}) => {
+        if (item?.archived !== true || !messageId) return null;
+        const src = msgMediaItemUrl(item);
+        if (!src.startsWith('/api/message/lanzou-image?')) return null;
+        try {
+          const url = new URL(src, 'https://mantou.invalid');
+          if (url.pathname !== '/api/message/lanzou-image' || url.searchParams.get('message_id') !== String(messageId)) return null;
+          const rawIndex = url.searchParams.get('media_index') || '';
+          const index = Number(rawIndex), chatId = url.searchParams.get('chat_id') || '', chatType = url.searchParams.get('chat_type') || '';
+          if (!/^\d+$/.test(rawIndex) || !Number.isSafeInteger(index) || !chatId || !['group','user'].includes(chatType)) return null;
+          const expectedId = String(scope.chat_id || scope._session || '').trim();
+          const expectedType = String(scope.chat_type || '').trim();
+          if ((expectedId && expectedId !== chatId) || (expectedType && expectedType !== chatType)) return null;
+          return {index, chatId, chatType};
+        } catch (_) { return null; }
+      };
+      const msgMediaArchiveMatches = (left, right, index, messageId, scope) => {
+        if (!msgMediaMetadataMatches(left, right)) return false;
+        const oldProxy = msgMediaArchiveProxy(left, messageId, scope), newProxy = msgMediaArchiveProxy(right, messageId, scope);
+        if (!oldProxy && !newProxy) return false;
+        if ((oldProxy && oldProxy.index !== index) || (newProxy && newProxy.index !== index)) return false;
+        return !oldProxy || !newProxy || (oldProxy.chatId === newProxy.chatId && oldProxy.chatType === newProxy.chatType);
+      };
+      const mergeMsgMediaItems = (existing, incoming, messageId = '', scope = {}) => {
+        const items = msgMediaItems(existing), nextItems = msgMediaItems(incoming);
+        const oldCount = items.length, matched = new Set(), incomingIndexes = [];
+        const matchAll = (matches) => nextItems.forEach((item, nextIndex) => {
+          if (Number.isInteger(incomingIndexes[nextIndex])) return;
+          const index = items.findIndex((old, i) => i < oldCount && !matched.has(i) && matches(old, item, i));
+          if (index >= 0) {
+            incomingIndexes[nextIndex] = index;
+            matched.add(index);
+          }
+        });
+        // Resolve specific URLs first, so a missing URL cannot consume another item's slot.
+        matchAll((old, item) => Boolean(msgMediaItemUrl(item)) && msgMediaItemUrl(old) === msgMediaItemUrl(item));
+        matchAll((old, item, index) => msgMediaArchiveMatches(old, item, index, messageId, scope));
+        matchAll((old, item) => (!msgMediaItemUrl(item) || !msgMediaItemUrl(old)) && msgMediaMetadataMatches(old, item));
+        nextItems.forEach((item, nextIndex) => {
+          const index = incomingIndexes[nextIndex], src = msgMediaItemUrl(item);
+          if (!Number.isInteger(index)) {
+            incomingIndexes[nextIndex] = items.length;
+            items.push({...item});
+            return;
+          }
+          Object.entries(item).forEach(([key, value]) => {
+            if (msgMediaHasValue(value) && !msgMediaHasValue(items[index][key])) items[index][key] = value;
+          });
+          if (msgMediaArchiveProxy(item, messageId, scope)?.index === index) {
+            items[index].src = src;
+            items[index].archived = true;
+            delete items[index].url;
+            delete items[index].download_url;
+          }
+        });
+        return {items, incomingIndexes};
+      };
+      const mergeMsgRealtimeMedia = (existing, incoming, messageId = '', scope = {}) => {
+        if (!existing || typeof existing !== 'object') return incoming;
+        const {items, incomingIndexes} = mergeMsgMediaItems(existing, incoming, messageId, scope);
+        if (!items.length) return existing;
+        const result = Array.isArray(existing) ? {} : {...existing};
+        if (!Array.isArray(incoming)) Object.entries(incoming).forEach(([key, value]) => {
+          if (key === 'items' || key === 'text_segments' || !msgMediaHasValue(value) || msgMediaHasValue(result[key])) return;
+          result[key] = value;
+        });
+        if (!Array.isArray(result.text_segments) || !result.text_segments.length) {
+          if (Array.isArray(incoming?.text_segments)) result.text_segments = incoming.text_segments.map((part) => {
+            if (!Number.isInteger(part?.media_index)) return part;
+            const index = incomingIndexes[part.media_index];
+            return Number.isInteger(index) ? {...part, media_index:index} : part;
+          });
+        }
+        // The first item remains the existing slot zero; later metadata cannot replace its URL.
+        ['type','media_type','src','url','download_url','name','filename','file_name','content_type','mime_type','size','width','height','optimistic_data','archived'].forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(items[0], key)) result[key] = items[0][key];
+          else delete result[key];
+        });
+        if (items.length > 1 || Array.isArray(existing.items) || Array.isArray(incoming?.items)) result.items = items;
+        else delete result.items;
+        return result;
+      };
       const mergeMsgRealtimeMessage = (existing, incoming) => {
         const merged = {...existing};
         ['user_id', 'nickname', 'content', 'timestamp', 'source', 'member_role', 'msg_seq', 'avatar', 'reference_id', 'refidx', 'chat_type', 'appid'].forEach((field) => {
@@ -2332,13 +2446,8 @@
         if (newRaw.length > oldRaw.length) merged.raw_message = incoming.raw_message;
         const oldMedia = merged.media;
         const newMedia = incoming?.media;
-        if (newMedia && typeof newMedia === 'object') {
-          if (oldMedia && typeof oldMedia === 'object' && !Array.isArray(oldMedia) && !Array.isArray(newMedia)) {
-            merged.media = {...oldMedia, ...Object.fromEntries(Object.entries(newMedia).filter(([, value]) => value !== null && value !== undefined && value !== ''))};
-          } else if (!oldMedia || (Array.isArray(newMedia) && newMedia.length > (Array.isArray(oldMedia) ? oldMedia.length : 0))) {
-            merged.media = newMedia;
-          }
-        }
+        if (newMedia && typeof newMedia === 'object') merged.media = mergeMsgRealtimeMedia(oldMedia, newMedia,
+          merged.message_id || incoming?.message_id || '', {chat_id:merged.chat_id || merged._session || incoming?.chat_id, chat_type:merged.chat_type || incoming?.chat_type});
         if (!merged.message_id && incoming?.message_id) merged.message_id = incoming.message_id;
         if (!merged.id && incoming?.id) merged.id = incoming.id;
         merged.is_self = Boolean(merged.is_self || incoming?.is_self);
@@ -2822,7 +2931,7 @@
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
-          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 地址未保存</small></span></div>`;
+          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
           if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
           const fileUrl = mediaProxyUrl(src, 'file', name);

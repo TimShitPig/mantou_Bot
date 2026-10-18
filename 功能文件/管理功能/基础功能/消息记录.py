@@ -585,7 +585,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         )
         or (
             not isinstance(现有媒体, dict)
-            and bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE))
+            and (not 内容文本.strip() or bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE)))
         )
     )
     if 需要原始:
@@ -909,61 +909,34 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         已有记录["raw_message"] = 新原始消息
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
-    已有归档列表 = dict(旧媒体.get("_lanzou_archives") or {}) if isinstance(旧媒体, dict) else {}
     if isinstance(新媒体, dict) and 新媒体:
-        已有归档 = (
-            旧媒体.get("_lanzou_archive")
-            if isinstance(旧媒体, dict)
-            else None
-        )
-        旧媒体地址 = str(旧媒体.get("src") or "").strip() if isinstance(旧媒体, dict) else ""
-        新媒体地址 = str(新媒体.get("src") or "").strip()
-        旧地址优先级 = (
-            3
-            if 旧媒体地址.startswith("/api/message/local-media/")
-            else 0
-            if 旧媒体地址.startswith("/api/message/markdown-media/")
-            else 2
-            if 旧媒体地址.startswith(("http://", "https://"))
-            else 1
-            if 旧媒体地址
-            else -1
-        )
-        新地址优先级 = (
-            3
-            if 新媒体地址.startswith("/api/message/local-media/")
-            else 0
-            if 新媒体地址.startswith("/api/message/markdown-media/")
-            else 2
-            if 新媒体地址.startswith(("http://", "https://"))
-            else 1
-            if 新媒体地址
-            else -1
-        )
-        if not isinstance(旧媒体, dict) or not 旧媒体地址 or 新地址优先级 > 旧地址优先级:
-            已有记录["media"] = dict(新媒体)
-        else:
-            for 字段 in (
-                "text", "name", "content_type", "size", "width", "height",
-                "before_text", "after_text", "text_segments",
-            ):
-                if 新媒体.get(字段) not in (None, "") and not 旧媒体.get(字段):
-                    旧媒体[字段] = 新媒体[字段]
-        if isinstance(旧媒体, dict) and (
-            isinstance(旧媒体.get("items"), list)
-            or isinstance(新媒体.get("items"), list)
+        旧地址 = str(旧媒体.get("src") or "").strip() if isinstance(旧媒体, dict) else ""
+        新地址 = str(新媒体.get("src") or "").strip()
+        if (
+            isinstance(旧媒体, dict) and 旧地址 and 新地址
+            and not isinstance(旧媒体.get("items"), list)
+            and not isinstance(新媒体.get("items"), list)
         ):
-            当前媒体 = 已有记录.get("media")
-            if isinstance(当前媒体, dict):
-                当前媒体["items"] = _合并媒体项目列表(旧媒体, 新媒体)
-        if isinstance(已有归档, dict):
-            当前媒体 = 已有记录.get("media")
-            if isinstance(当前媒体, dict):
-                当前媒体["_lanzou_archive"] = 已有归档
-        if isinstance(已有记录.get("media"), dict):
-            归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **已有归档列表}
+            # 单项发送回显沿用本地/官方/Markdown 地址优先级，不制造同文件副本。
+            def 地址优先级(地址: str) -> int:
+                if 地址.startswith("/api/message/local-media/"):
+                    return 3
+                if 地址.startswith("/api/message/markdown-media/"):
+                    return 0
+                return 2 if 地址.startswith(("http://", "https://")) else 1
+
+            当前媒体 = dict(新媒体 if 地址优先级(新地址) > 地址优先级(旧地址) else 旧媒体)
+            for 字段 in ("text", "name", "content_type", "size", "width", "height", "before_text", "after_text", "text_segments"):
+                if 新媒体.get(字段) not in (None, "") and not 当前媒体.get(字段):
+                    当前媒体[字段] = 新媒体[字段]
+            if isinstance(旧媒体.get("_lanzou_archive"), dict):
+                当前媒体["_lanzou_archive"] = 旧媒体["_lanzou_archive"]
+            归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **(旧媒体.get("_lanzou_archives") or {})}
             if 归档列表:
-                已有记录["media"]["_lanzou_archives"] = 归档列表
+                当前媒体["_lanzou_archives"] = 归档列表
+            已有记录["media"] = 当前媒体
+        else:
+            已有记录["media"] = _合并媒体记录(旧媒体, 新媒体)
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
     已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
     try:
@@ -2162,6 +2135,71 @@ def _提取REFIDX(消息: Any) -> str:
     return ""
 
 
+def _附件内容类型(附件: Any, 地址: str = "") -> str:
+    类型 = str(_读取附件字段(附件, "content_type", "mime_type", "type", "media_type") or "").strip().lower()
+    if not 类型.startswith(("image", "video", "audio", "voice")):
+        import mimetypes
+        名称 = str(_读取附件字段(附件, "filename", "file_name", "name") or _解析网址(地址).path)
+        后缀 = Path(名称).suffix.lower()
+        推断类型 = {
+            ".jfif": "image/jpeg", ".jpe": "image/jpeg", ".heic": "image/heic", ".heif": "image/heif",
+            ".avif": "image/avif", ".jxl": "image/jxl", ".tif": "image/tiff", ".tiff": "image/tiff",
+            ".silk": "audio/silk", ".amr": "audio/amr",
+        }.get(后缀) or mimetypes.guess_type(名称)[0] or ""
+        if 推断类型.startswith(("image/", "video/", "audio/")):
+            类型 = 推断类型
+    return 类型
+
+
+def _附件身份字段(附件: Any) -> tuple[str, str, str, str]:
+    """只取附件身份元数据，不读取消息场景中的认证信息。"""
+    地址 = _清理媒体地址(_读取附件字段(附件, "src", "url", "download_url", "file_url", "voice_wav_url"))
+    名称 = str(_读取附件字段(附件, "name", "filename", "file_name") or "").strip()
+    类型 = _附件内容类型(附件, 地址)
+    if 类型.startswith("image") or 类型 in {"图片", "img"}:
+        类型 = "image"
+    elif 类型.startswith("video") or 类型 == "视频":
+        类型 = "video"
+    elif 类型.startswith(("audio", "voice")) or 类型 in {"语音", "音频"}:
+        类型 = "audio"
+    elif 类型:
+        类型 = "file"
+    大小 = _读取附件字段(附件, "size")
+    try:
+        大小 = str(int(大小)) if 大小 is not None and int(大小) >= 0 else ""
+    except (TypeError, ValueError, OverflowError):
+        大小 = ""
+    return 地址, 类型, 名称, 大小
+
+
+def _附件匹配索引(已有: list[Any], 新项: list[Any]) -> dict[int, int]:
+    """先匹配确切地址，再补齐缺地址的同名附件；每个旧项只匹配一次。"""
+    旧身份 = [_附件身份字段(项) for 项 in 已有]
+    新身份 = [_附件身份字段(项) for 项 in 新项]
+    结果: dict[int, int] = {}
+    已使用: set[int] = set()
+    for 精确地址 in (True, False):
+        for 新序号, (新地址, 新类型, 新名称, 新大小) in enumerate(新身份):
+            if 新序号 in 结果:
+                continue
+            for 旧序号, (旧地址, 旧类型, 旧名称, 旧大小) in enumerate(旧身份):
+                if 旧序号 in 已使用 or (旧类型 and 新类型 and 旧类型 != 新类型):
+                    continue
+                if 精确地址:
+                    相同 = bool(新地址 and 新地址 == 旧地址)
+                else:
+                    相同 = (
+                        not (旧地址 and 新地址)
+                        and bool(新名称 and 新名称 == 旧名称)
+                        and not (旧大小 and 新大小 and 旧大小 != 新大小)
+                    )
+                if 相同:
+                    结果[新序号] = 旧序号
+                    已使用.add(旧序号)
+                    break
+    return 结果
+
+
 def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
     if not isinstance(媒体, dict):
         return []
@@ -2173,49 +2211,64 @@ def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
         for 字段, 值 in 媒体.items()
         if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives"}
     }
-    if any(str(项目.get(字段) or "").strip() for 字段 in ("src", "url", "download_url")):
-        return [项目]
-    return []
+    地址, _, 名称, _ = _附件身份字段(项目)
+    return [项目] if 地址 or 名称 else []
 
 
 def _合并媒体项目列表(*媒体列表: Any) -> list[dict[str, Any]]:
     合并结果: list[dict[str, Any]] = []
-    已合并数量: dict[str, int] = {}
     for 媒体 in 媒体列表:
-        本媒体数量: dict[str, int] = {}
-        for 项目 in _媒体项目列表(媒体):
-            地址 = str(
-                项目.get("src") or 项目.get("url") or 项目.get("download_url") or ""
-            ).strip()
-            类型 = str(项目.get("type") or 项目.get("media_type") or "").strip().lower()
-            键 = f"{类型}\0{地址}" if 地址 else json.dumps(
-                项目, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-            )
-            本媒体数量[键] = 本媒体数量.get(键, 0) + 1
-            if 本媒体数量[键] <= 已合并数量.get(键, 0):
-                continue
-            合并结果.append(项目)
-            已合并数量[键] = 本媒体数量[键]
+        新项目 = _媒体项目列表(媒体)
+        匹配 = _附件匹配索引(合并结果, 新项目)
+        for 序号, 项目 in enumerate(新项目):
+            if 序号 in 匹配:
+                合并结果[匹配[序号]].update({键: 值 for 键, 值 in 项目.items() if 值 not in (None, "")})
+            else:
+                合并结果.append(dict(项目))
     return 合并结果
+
+
+def _同步媒体首项(媒体: dict[str, Any], 项目列表: list[dict[str, Any]]) -> None:
+    if not 项目列表:
+        return
+    for 字段 in ("type", "media_type", "src", "url", "download_url", "name", "filename", "file_name", "content_type", "size", "width", "height"):
+        媒体.pop(字段, None)
+        if 字段 in 项目列表[0]:
+            媒体[字段] = 项目列表[0][字段]
 
 
 def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(已有媒体, dict):
         return dict(新媒体)
     合并媒体 = dict(已有媒体)
-    旧归档 = 已有媒体.get("_lanzou_archive")
-    新归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **(已有媒体.get("_lanzou_archives") or {})}
     for 字段, 值 in 新媒体.items():
-        if 字段 in {"items", "_lanzou_archive", "_lanzou_archives"}:
-            continue
-        if 值 not in (None, ""):
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives"} and 值 not in (None, ""):
             合并媒体[字段] = 值
-    if isinstance(已有媒体.get("items"), list) or isinstance(新媒体.get("items"), list):
-        合并媒体["items"] = _合并媒体项目列表(已有媒体, 新媒体)
-    if isinstance(旧归档, dict):
-        合并媒体["_lanzou_archive"] = 旧归档
-    if 新归档列表:
-        合并媒体["_lanzou_archives"] = 新归档列表
+    项目列表 = _合并媒体项目列表(已有媒体, 新媒体)
+    新索引 = _附件匹配索引(项目列表, _媒体项目列表(新媒体))
+    if len(项目列表) > 1 or isinstance(已有媒体.get("items"), list) or isinstance(新媒体.get("items"), list):
+        合并媒体["items"] = 项目列表
+    _同步媒体首项(合并媒体, 项目列表)
+    if isinstance(新媒体.get("text_segments"), list):
+        合并媒体["text_segments"] = [
+            {**段, "media_index": 新索引[段["media_index"]]}
+            if isinstance(段, dict) and isinstance(段.get("media_index"), int) and 段["media_index"] in 新索引
+            else 段
+            for 段 in 新媒体["text_segments"]
+        ]
+    归档列表 = dict(已有媒体.get("_lanzou_archives") or {})
+    for 索引, 归档 in (新媒体.get("_lanzou_archives") or {}).items():
+        try:
+            目标 = 新索引[int(索引)]
+        except (ValueError, TypeError, KeyError):
+            continue
+        归档列表.setdefault(str(目标), 归档)
+    if isinstance(已有媒体.get("_lanzou_archive"), dict):
+        合并媒体["_lanzou_archive"] = 已有媒体["_lanzou_archive"]
+    elif isinstance(新媒体.get("_lanzou_archive"), dict) and 0 in 新索引:
+        归档列表.setdefault(str(新索引[0]), 新媒体["_lanzou_archive"])
+    if 归档列表:
+        合并媒体["_lanzou_archives"] = 归档列表
     return 合并媒体
 
 
@@ -2235,33 +2288,25 @@ def _提取附件列表(消息: Any) -> list[Any]:
     活动节点: set[int] = set()
     节点数 = 0
 
-    def 附件键(附件: Any) -> str:
-        项目 = _解析消息结构(附件)
-        项目 = 项目 if 项目 is not None else 附件
-        return _清理媒体地址(
-            _读取字段(项目, "url") or _读取字段(项目, "download_url")
-            or _读取字段(项目, "file_url") or _读取字段(项目, "src")
-            or _读取字段(项目, "voice_wav_url")
-        )
-
     def 合并镜像(来源列表: list[list[Any]]) -> list[Any]:
-        # attachments 与 raw_data 常是同一份附件的两种表示；按最大出现次数
-        # 合并，而非全局 URL 去重，同一组中两张相同图片仍保留两项。
+        # 每个来源只匹配一次已有项，保留同源重复；缺地址附件也保留原始位置。
         结果: list[Any] = []
-        已有次数: dict[str, int] = {}
         for 来源 in 来源列表:
-            本组次数: dict[str, int] = {}
+            有效附件 = []
             for 附件 in 来源[:附件上限]:
-                键 = 附件键(附件)
-                if not 键:
-                    continue
-                本组次数[键] = 本组次数.get(键, 0) + 1
-                if 本组次数[键] > 已有次数.get(键, 0):
+                项目 = _解析消息结构(附件)
+                项目 = 项目 if 项目 is not None else 附件
+                地址, _, 名称, _ = _附件身份字段(项目)
+                if 地址 or 名称:
+                    有效附件.append(项目)
+            匹配 = _附件匹配索引(结果, 有效附件)
+            for 序号, 附件 in enumerate(有效附件):
+                if 序号 not in 匹配:
                     结果.append(附件)
-                    if len(结果) >= 附件上限:
-                        return 结果
-            for 键, 次数 in 本组次数.items():
-                已有次数[键] = max(已有次数.get(键, 0), 次数)
+                elif not _附件身份字段(结果[匹配[序号]])[0] and _附件身份字段(附件)[0]:
+                    结果[匹配[序号]] = 附件
+                if len(结果) >= 附件上限:
+                    return 结果
         return 结果
 
     def 遍历(当前: Any, 深度: int) -> list[Any]:
@@ -2288,7 +2333,7 @@ def _提取附件列表(消息: Any) -> list[Any]:
                 if isinstance(值, (list, tuple)):
                     项目 = list(值[:附件上限])
                 elif isinstance(值, dict) and not any(
-                    键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type")
+                    键 in 值 for 键 in ("url", "download_url", "file_url", "src", "content_type", "mime_type", "filename", "file_name", "name")
                 ):
                     项目 = list(值.values())[:附件上限]
                 else:
@@ -2336,24 +2381,14 @@ def _提取附件媒体(消息: Any) -> dict[str, Any] | None:
         媒体项目: list[dict[str, Any]] = []
         for 原附件 in _提取附件列表(消息):
             附件 = _解析消息结构(原附件) or 原附件
-            类型值 = str(
-                _读取附件字段(附件, "content_type", "mime_type", "type") or ""
-            ).strip().lower()
+            类型值 = _附件内容类型(附件)
             地址 = _清理媒体地址(
                 _读取附件字段(附件, "url", "download_url", "file_url", "src")
                 or (_读取附件字段(附件, "voice_wav_url") if "voice" in 类型值 else "")
             )
-            if not 地址:
+            if not 地址 and not _附件身份字段(附件)[2]:
                 continue
-            if not 类型值.startswith(("image", "video", "audio", "voice")):
-                import mimetypes
-                附件名称 = str(_读取附件字段(附件, "filename", "file_name", "name") or _解析网址(地址).path)
-                后缀 = Path(附件名称).suffix.lower()
-                后缀MIME = {".jfif": "image/jpeg", ".jpe": "image/jpeg", ".heic": "image/heic", ".heif": "image/heif",
-                           ".avif": "image/avif", ".jxl": "image/jxl", ".tif": "image/tiff", ".tiff": "image/tiff",
-                           ".silk": "audio/silk", ".amr": "audio/amr"}.get(后缀) or mimetypes.guess_type(附件名称)[0] or ""
-                if 后缀MIME.startswith(("image/", "video/", "audio/")):
-                    类型值 = 后缀MIME
+            类型值 = _附件内容类型(附件, 地址)
             if 类型值.startswith("image") or 类型值 in ("img", "图片"):
                 媒体类型 = "图片"
             elif 类型值.startswith("video") or 类型值 in ("视频",):
@@ -2384,6 +2419,10 @@ def _提取媒体字段(内容: str, 消息: Any = None) -> dict[str, Any] | Non
     """提取媒体信息：优先附件，其次带 URL 的消息占位或 QQ 富媒体链接。"""
     附件媒体 = _提取附件媒体(消息) if 消息 is not None else None
     if 附件媒体:
+        if not any(_附件身份字段(项)[0] for 项 in _媒体项目列表(附件媒体)):
+            正文媒体 = _提取媒体字段(内容)
+            if 正文媒体:
+                附件媒体 = _打包媒体项目(_合并媒体项目列表(附件媒体, 正文媒体))
         return _补充Markdown图片位置(_补充媒体文字位置(附件媒体, 内容), 内容)
     if not 内容:
         return None
