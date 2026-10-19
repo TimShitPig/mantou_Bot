@@ -34,7 +34,7 @@ except Exception:
 会话索引就绪键 = "conversation_summary_v1"
 群成员映射回填键 = "group_member_links_v1"
 统一用户资料回填键 = "user_profile_union_openid_v1"
-历史引用索引回填键 = "message_reference_indexes_v1"
+历史完整引用索引回填键 = "message_reference_indexes_v2"
 
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
@@ -61,8 +61,14 @@ _归档保留SQL = ", ".join(
 _消息更新SQL = (
     f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
     "timestamp=%s, ts=%s, is_self=%s, source=%s, recalled=%s, "
-    f"media=JSON_MERGE_PATCH(%s, {_归档保留SQL}), reference_id=COALESCE(NULLIF(%s,''),reference_id), "
-    "refidx=COALESCE(NULLIF(%s,''),refidx), avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
+    f"media=JSON_MERGE_PATCH(%s, {_归档保留SQL}), "
+    "reference_id=CASE WHEN CHAR_LENGTH(%s)=128 AND CHAR_LENGTH(reference_id)>128 "
+    "AND BINARY LEFT(reference_id,128)=BINARY %s THEN reference_id "
+    "ELSE COALESCE(NULLIF(%s,''),reference_id) END, "
+    "refidx=CASE WHEN CHAR_LENGTH(%s)=128 AND CHAR_LENGTH(refidx)>128 "
+    "AND BINARY LEFT(refidx,128)=BINARY %s THEN refidx "
+    "ELSE COALESCE(NULLIF(%s,''),refidx) END, "
+    "avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
 )
 _消息查重分块大小 = 200
 
@@ -84,8 +90,8 @@ _列最大长度: dict[str, int] = {
     "nickname": 255,
     "timestamp": 32,
     "source": 32,
-    "reference_id": 128,
-    "refidx": 128,
+    "reference_id": 512,
+    "refidx": 512,
     "avatar": 1024,
     "member_role": 16,
     "msg_seq": 64,
@@ -93,7 +99,7 @@ _列最大长度: dict[str, int] = {
 
 _数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
 _数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
-_消息表结构版本 = 2
+_消息表结构版本 = 3
 _已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
 _消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
 
@@ -321,8 +327,8 @@ def _初始化数据库结构() -> bool:
                     source VARCHAR(32) DEFAULT '',
                     recalled TINYINT DEFAULT 0,
                     media TEXT,
-                    reference_id VARCHAR(128) DEFAULT '',
-                    refidx VARCHAR(128) DEFAULT '',
+                    reference_id VARCHAR(512) DEFAULT '',
+                    refidx VARCHAR(512) DEFAULT '',
                     avatar VARCHAR(1024) DEFAULT '',
                     raw_message MEDIUMTEXT,
                     member_role VARCHAR(16) DEFAULT '',
@@ -484,9 +490,9 @@ def _初始化数据库结构() -> bool:
                     游标.execute(f"ALTER TABLE `{消息记录表名}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
                     logger.warning("消息记录 MySQL 表已转为 utf8mb4")
                 for 列名, 定义 in (
-                    ("refidx", "VARCHAR(128) DEFAULT ''"),
+                    ("refidx", "VARCHAR(512) DEFAULT ''"),
                     ("recalled", "TINYINT DEFAULT 0"),
-                    ("reference_id", "VARCHAR(128) DEFAULT ''"),
+                    ("reference_id", "VARCHAR(512) DEFAULT ''"),
                     ("media", "TEXT"),
                     ("source", "VARCHAR(32) DEFAULT ''"),
                     ("avatar", "VARCHAR(1024) DEFAULT ''"),
@@ -502,6 +508,22 @@ def _初始化数据库结构() -> bool:
                     if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
                         logger.warning("消息记录 MySQL 表已补列 %s", 列名)
+                for 列名 in ("reference_id", "refidx"):
+                    初始化阶段 = f"检查引用索引字段长度_{列名}"
+                    游标.execute(
+                        "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "
+                        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME=%s",
+                        (消息记录表名, 列名),
+                    )
+                    字段长度 = int(_行字段(
+                        游标.fetchone(), 0, "CHARACTER_MAXIMUM_LENGTH", 默认值=0,
+                    ) or 0)
+                    if 字段长度 < _列最大长度[列名]:
+                        游标.execute(
+                            f"ALTER TABLE `{消息记录表名}` MODIFY COLUMN `{列名}` "
+                            f"VARCHAR({_列最大长度[列名]}) DEFAULT ''"
+                        )
+                        logger.info("消息记录 MySQL 引用索引字段已扩容：列=%s", 列名)
                 初始化阶段 = "检查群资料字段_is_admin"
                 游标.execute(
                     "SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -753,6 +775,7 @@ def _有效历史引用索引(值: Any) -> str:
 
 def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -> tuple[int, bool]:
     """在后台按主键恢复旧引用索引，索引 CAS 与游标提交保持同一事务。"""
+    本次回填键 = 历史完整引用索引回填键
     if not _MySQL可用():
         return 0, True
     if not callable(补充索引):
@@ -768,13 +791,13 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
         with 连接.cursor() as 游标:
             游标.execute(
                 f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
-                (历史引用索引回填键,),
+                (本次回填键,),
             )
             if str(_行字段(游标.fetchone(), 0, "state_value", 默认值="") or "") == "ready":
                 return 0, True
             游标.execute(
                 f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
-                (历史引用索引回填键 + "_cursor",),
+                (本次回填键 + "_cursor",),
             )
             try:
                 游标状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=None)
@@ -783,7 +806,7 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
                 游标位置 = None
             游标.execute(
                 f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
-                (历史引用索引回填键 + "_upper",),
+                (本次回填键 + "_upper",),
             )
             上界状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=None)
             if 上界状态 is None:
@@ -792,12 +815,12 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
                 游标.execute(
                     f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE state_value=state_value",
-                    (历史引用索引回填键 + "_upper", str(初始上界)),
+                    (本次回填键 + "_upper", str(初始上界)),
                 )
                 # 热重载交接中的旧线程可能同时完成首批，当前读取以已保存上界为准。
                 游标.execute(
                     f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1 FOR UPDATE",
-                    (历史引用索引回填键 + "_upper",),
+                    (本次回填键 + "_upper",),
                 )
                 上界状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=初始上界)
             扫描上界 = max(0, int(上界状态 or 0))
@@ -806,7 +829,8 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
             游标.execute(
                 f"SELECT id,会话标识,消息类型,appid,refidx,reference_id,raw_message "
                 f"FROM `{消息记录表名}` WHERE id<%s AND id<=%s AND 消息类型 IN ('group','user') "
-                "AND (COALESCE(refidx,'')='' OR COALESCE(reference_id,'')='') "
+                "AND (COALESCE(refidx,'')='' OR COALESCE(reference_id,'')='' "
+                "OR CHAR_LENGTH(refidx)=128 OR CHAR_LENGTH(reference_id)=128) "
                 "ORDER BY id DESC LIMIT %s",
                 (游标位置, 扫描上界, 批次大小),
             )
@@ -815,7 +839,7 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
                 游标.execute(
                     f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
-                    (历史引用索引回填键, "ready"),
+                    (本次回填键, "ready"),
                 )
                 连接.commit()
                 return 0, True
@@ -828,22 +852,32 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
                 原自身索引 = str(_行字段(行, 4, "refidx", 默认值="") or "")
                 原引用索引 = str(_行字段(行, 5, "reference_id", 默认值="") or "")
                 原文 = _行字段(行, 6, "raw_message", 默认值="")
-                补充 = {"refidx": 原自身索引, "reference_id": 原引用索引}
+                # 独立从完整原文解析；旧的非空截断值不能阻止提取真正的完整索引。
+                补充: dict[str, Any] = {}
                 补充索引(补充, 原文)
-                自身索引 = _有效历史引用索引(补充.get("refidx")) if not 原自身索引 else ""
-                引用索引 = _有效历史引用索引(补充.get("reference_id")) if not 原引用索引 else ""
+                自身索引 = _有效历史引用索引(补充.get("refidx"))
+                引用索引 = _有效历史引用索引(补充.get("reference_id"))
+                if 原自身索引 and not (
+                    len(原自身索引) == 128 and len(自身索引) > 128 and 自身索引.startswith(原自身索引)
+                ):
+                    自身索引 = ""
+                if 原引用索引 and not (
+                    len(原引用索引) == 128 and len(引用索引) > 128 and 引用索引.startswith(原引用索引)
+                ):
+                    引用索引 = ""
                 if 记录ID and 会话标识 and 类型 in {"group", "user"} and (自身索引 or 引用索引):
                     待补索引.append((
-                        自身索引, 自身索引, 引用索引, 引用索引,
-                        记录ID, 会话标识, 类型, appid, 自身索引, 引用索引,
+                        原自身索引, 自身索引, 自身索引, 原引用索引, 引用索引, 引用索引,
+                        记录ID, 会话标识, 类型, appid, 原自身索引, 自身索引, 原引用索引, 引用索引,
                     ))
             if 待补索引:
                 游标.executemany(
                     f"UPDATE `{消息记录表名}` SET "
-                    "refidx=CASE WHEN COALESCE(refidx,'')='' AND %s<>'' THEN %s ELSE refidx END, "
-                    "reference_id=CASE WHEN COALESCE(reference_id,'')='' AND %s<>'' THEN %s ELSE reference_id END "
+                    "refidx=CASE WHEN BINARY COALESCE(refidx,'')=BINARY %s AND %s<>'' THEN %s ELSE refidx END, "
+                    "reference_id=CASE WHEN BINARY COALESCE(reference_id,'')=BINARY %s AND %s<>'' THEN %s ELSE reference_id END "
                     "WHERE id=%s AND 会话标识=%s AND 消息类型=%s AND appid=%s "
-                    "AND ((COALESCE(refidx,'')='' AND %s<>'') OR (COALESCE(reference_id,'')='' AND %s<>''))",
+                    "AND ((BINARY COALESCE(refidx,'')=BINARY %s AND %s<>'') "
+                    "OR (BINARY COALESCE(reference_id,'')=BINARY %s AND %s<>''))",
                     待补索引,
                 )
             最后ID = min(游标位置, int(_行字段(行列表[-1], 0, "id", 默认值=游标位置) or 游标位置))
@@ -851,7 +885,7 @@ def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -
                 f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
                 "ON DUPLICATE KEY UPDATE state_value=CAST(LEAST("
                 "CAST(state_value AS UNSIGNED),CAST(VALUES(state_value) AS UNSIGNED)) AS CHAR)",
-                (历史引用索引回填键 + "_cursor", str(最后ID)),
+                (本次回填键 + "_cursor", str(最后ID)),
             )
         连接.commit()
         return len(行列表), False
@@ -1008,8 +1042,8 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
         _按列宽截断(记录.get("source") or "", "source"),
         1 if 记录.get("recalled") else 0,
         json.dumps(记录.get("media") or {}, ensure_ascii=False),
-        _按列宽截断(记录.get("reference_id") or "", "reference_id"),
-        _按列宽截断(记录.get("refidx") or "", "refidx"),
+        _有效历史引用索引(记录.get("reference_id")),
+        _有效历史引用索引(记录.get("refidx")),
         _按列宽截断(记录.get("avatar") or "", "avatar"),
         str(记录.get("raw_message") or ""),
         _按列宽截断(记录.get("member_role") or "", "member_role"),
@@ -1019,7 +1053,11 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
 
 def _消息更新参数(记录: dict[str, Any]) -> tuple[Any, ...]:
     值 = _消息写入参数(记录)
-    return (*值[1:3], *值[4:], 值[0], 值[3])
+    return (
+        *值[1:3], *值[4:13],
+        值[13], 值[13], 值[13], 值[14], 值[14], 值[14],
+        *值[15:], 值[0], 值[3],
+    )
 
 
 def _消息记录去重键(记录: dict[str, Any]) -> tuple[str, str]:
