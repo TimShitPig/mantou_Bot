@@ -53,6 +53,7 @@ except Exception as 导入异常:
 群信息刷新间隔秒 = 60 * 60
 群信息限流冷却秒 = 30 * 60
 群信息默认失败冷却秒 = 60 * 60
+群信息认证失败冷却秒 = 60
 群信息请求间隔秒 = 3.0
 群信息人工最短间隔秒 = 60
 群信息轮询检查间隔秒 = 60.0
@@ -4894,7 +4895,11 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     文本 = re.sub(r"\s+", " ", str(原文 or "")).strip()
     文本 = re.sub(r"https?://\S+", "<url>", 文本, flags=re.IGNORECASE)[:200]
     小写 = 文本.lower()
-    if _异常表示群机器人已移除(异常):
+    if _群信息认证失败(异常):
+        分类 = "auth_expired"
+    elif 文本 == "群资料认证 AppID 缺失或不匹配":
+        分类 = "app_scope"
+    elif _异常表示群机器人已移除(异常):
         分类 = "not_member"
     elif any(词 in 小写 for 词 in ("rate limit", "rate_limit", "限流", "频率", "限制")):
         分类 = "rate_limit"
@@ -4916,6 +4921,9 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
         return ""
 
     http_status = _字段值("status", "status_code", "http_status")
+    if not http_status and 类型 == "AuthenticationFailedError":
+        # SDK 的 HTTP 401 映射只留下 msgs，恢复其已知状态而不臆造业务码。
+        http_status = "401"
     code = _字段值("code", "ret_code", "error_code")
     err_code = _字段值("err_code", "errno", "business_code")
     if not http_status:
@@ -4960,15 +4968,12 @@ async def _查询群机器人状态(
     现有 = _读取群机器人状态(会话标识)
     if not 会话标识 or not _群机器人状态需检查(会话标识, 强制):
         return 现有
-    appid = _获取群信息appid(会话标识, appid) if "_获取群信息appid" in globals() else str(appid or "")
-    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
-    if 通道 is None:
-        return 现有
-    _, _http = 通道
+    appid = _获取群信息appid(会话标识, appid)
     try:
         from botpy.http import Route
 
-        响应 = await _http.request(
+        appid, _http = _获取群资料通道(会话标识, appid)
+        响应 = await _请求群资料GET(_http,
             Route(
                 "GET",
                 "/v2/groups/{group_openid}/bot_state",
@@ -5064,12 +5069,99 @@ async def 查询群主动消息权限(会话标识: str, appid: str = "") -> boo
 
 
 def _获取群信息appid(会话标识: str, appid: str = "") -> str:
-    """优先使用调用方提供的 AppID，否则从当前会话恢复。"""
+    """恢复群的机器人作用域；缺少历史资料时只允许唯一官方实例补全。"""
     appid = str(appid or "").strip()
     if appid:
         return appid
-    会话 = 消息缓存.get(str(会话标识 or "").strip()) or {}
-    return str(会话.get("appid") or "").strip()
+    会话标识 = str(会话标识 or "").strip()
+    for 资料 in (
+        消息缓存.get(会话标识) or {},
+        群信息缓存.get(会话标识) or {},
+        _读取群机器人状态(会话标识),
+    ):
+        appid = str(资料.get("appid") or "").strip()
+        if appid:
+            return appid
+    平台列表 = [平台 for 平台 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(平台)]
+    if len(平台列表) == 1:
+        通道 = 获取HTTP通道(平台列表[0])
+        if 通道 is not None:
+            return str(getattr(getattr(通道[1], "_token", None), "app_id", "") or "").strip()
+    return ""
+
+
+def _获取群资料通道(会话标识: str, appid: str = "") -> tuple[str, Any]:
+    """按真实 SDK Token 选择实例，禁止兼容入口再次回退首个机器人。"""
+    appid = _获取群信息appid(会话标识, appid)
+    已知AppID = next((str(资料.get("appid") or "").strip() for 资料 in (
+        消息缓存.get(会话标识) or {}, 群信息缓存.get(会话标识) or {},
+        _读取群机器人状态(会话标识),
+    ) if str(资料.get("appid") or "").strip()), "")
+    if appid and (not 已知AppID or 已知AppID == appid):
+        for 平台 in _读取平台实例列表(当前插件上下文):
+            if not _是QQ官方平台(平台):
+                continue
+            通道 = 获取HTTP通道(平台)
+            if 通道 is not None and str(getattr(getattr(通道[1], "_token", None), "app_id", "") or "").strip() == appid:
+                return appid, 通道[1]
+    raise RuntimeError("群资料认证 AppID 缺失或不匹配")
+
+
+def _群信息认证失败(异常: Exception) -> bool:
+    if type(异常).__name__ == "AuthenticationFailedError":
+        return True
+    for 字段 in ("status", "status_code", "http_status"):
+        if str(getattr(异常, 字段, "")) == "401":
+            return True
+    return any(str(getattr(异常, 字段, "")) == "11243" for 字段 in ("code", "err_code", "error_code"))
+
+
+async def _请求群资料GET(http: Any, route: Any) -> Any:
+    """只为幂等群资料 GET 续期一次，复用 SDK Token、会话及认证头。"""
+    if str(getattr(route, "method", "")).upper() != "GET":
+        raise ValueError("群资料认证重试仅接受 GET")
+    状态 = getattr(http, "_mantou_group_auth_state", None)
+    if not isinstance(状态, dict) or 状态.get("token") is not http._token:
+        状态 = {"lock": asyncio.Lock(), "generation": 0, "failed_until": 0, "last_error": None, "token": http._token}
+        http._mantou_group_auth_state = 状态
+    async with 状态["lock"]:
+        if 状态["failed_until"] > time.monotonic():
+            raise 状态["last_error"]
+        try:
+            await http.check_session()
+        except Exception as 异常:
+            if _群信息认证失败(异常):
+                状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
+                状态["last_error"] = 异常
+            raise
+        token = http._token
+        旧令牌 = token.access_token
+        旧代次 = 状态["generation"]
+    try:
+        return await http.request(route)
+    except Exception as 异常:
+        if not _群信息认证失败(异常):
+            raise
+        async with 状态["lock"]:
+            if 状态["failed_until"] > time.monotonic():
+                raise 状态["last_error"]
+            if 状态["generation"] == 旧代次 and token.access_token == 旧令牌:
+                try:
+                    await token.update_access_token()
+                    await http.check_session()
+                except Exception:
+                    状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
+                    状态["last_error"] = 异常
+                    raise 异常 from None
+                状态["generation"] += 1
+            重试代次 = 状态["generation"]
+        try:
+            return await http.request(route)
+        except Exception as 重试异常:
+            if _群信息认证失败(重试异常) and 状态["generation"] == 重试代次:
+                状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
+                状态["last_error"] = 重试异常
+            raise
 
 
 def _复制群禁言状态(状态: dict[str, Any], *, cached: bool = False) -> dict[str, Any]:
@@ -5310,6 +5402,8 @@ def _启动群信息轮询任务() -> asyncio.Task[Any] | None:
 
 def _群信息冷却秒数(异常: Exception) -> int:
     """按错误类型返回冷却秒数，避免失败时持续触碰官方群信息接口。"""
+    if _群信息认证失败(异常):
+        return 群信息认证失败冷却秒
     try:
         文本 = str(异常)
     except Exception:
@@ -5347,22 +5441,19 @@ async def 刷新群信息(
         已有["last_request_at"] = 现在
         群信息缓存[会话标识] = 已有
     appid = _获取群信息appid(会话标识, appid)
-    成员状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
-    if 成员状态.get("status") == "removed":
-        return _构造已移除群摘要(会话标识, 已有, appid)
-    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
-    if 通道 is None:
-        return None
-    _, _http = 通道
     try:
         from botpy.http import Route
 
+        appid, _http = _获取群资料通道(会话标识, appid)
+        成员状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
+        if 成员状态.get("status") == "removed":
+            return _构造已移除群摘要(会话标识, 已有, appid)
         route = Route(
             "GET",
             "/v2/groups/{group_openid}/info",
             group_openid=会话标识,
         )
-        结果 = await _http.request(route)
+        结果 = await _请求群资料GET(_http, route)
         错误码 = 结果.get("code") if isinstance(结果, dict) else None
         有群资料字段 = isinstance(结果, dict) and any(
             字段 in 结果
