@@ -2696,6 +2696,104 @@ def _匹配QQ阅读正文章节文件(
     return matched
 
 
+def _规范QQ阅读正文业务码(value: Any) -> str:
+    normalized = str(value if value is not None else "").strip()
+    digits = normalized[1:] if normalized.startswith("-") else normalized
+    return normalized if digits.isascii() and digits.isdigit() and len(digits) <= 20 else ""
+
+
+class _QQ阅读正文响应错误(RuntimeError):
+    """只携带受控分类，不把正文接口原文放进异常或日志。"""
+
+    def __init__(
+        self,
+        category: str,
+        *,
+        http_status: int = 0,
+        code: Any = "",
+    ) -> None:
+        super().__init__("正文响应处理失败")
+        self.category = (
+            category
+            if category in {"响应包无效", "响应缺失", "接口业务失败"}
+            else "响应包无效"
+        )
+        self.http_status = (
+            http_status
+            if isinstance(http_status, int) and 100 <= http_status <= 599
+            else 0
+        )
+        self.code = _规范QQ阅读正文业务码(code)
+
+
+def _检查QQ阅读正文响应(package: bytes, http_status: int = 0) -> None:
+    """HTTP 成功仍须排除空响应和非正文错误页；不记录响应原文。"""
+    sample = package.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if not sample:
+        raise _QQ阅读正文响应错误("响应包无效", http_status=http_status)
+    if sample.startswith((b"{", b"[")):
+        code: Any = ""
+        if len(sample) <= 1024 * 1024:
+            try:
+                payload = json.loads(sample)
+            except (UnicodeError, ValueError, TypeError):
+                payload = None
+            if isinstance(payload, dict):
+                for key in ("code", "ret", "retcode", "errcode", "error_code"):
+                    normalized = _规范QQ阅读正文业务码(payload.get(key))
+                    if normalized:
+                        code = normalized
+                        break
+        raise _QQ阅读正文响应错误("响应包无效", http_status=http_status, code=code)
+    lowered = sample[:512].lower()
+    if lowered.startswith((b"<!doctype", b"<html", b"<head", b"<body", b"<?xml")):
+        raise _QQ阅读正文响应错误("响应包无效", http_status=http_status)
+
+
+def _QQ阅读正文项失败原因(value: Any) -> str:
+    if isinstance(value, _QQ阅读正文响应错误):
+        return value.category
+    if value is None or value == "章节响应缺失":
+        return "响应缺失"
+    if value == "章节解密失败":
+        return "解密失败"
+    if isinstance(value, bytes):
+        return "" if value.decode("utf-8", "replace").strip() else "实际空正文"
+    return "" if str(value).strip() else "实际空正文"
+
+
+def _解析QQ阅读正文章节业务失败(
+    members: dict[str, object], requested_ids: list[str]
+) -> dict[str, str]:
+    """仅把 info 中与本次真实 cid 一致的非零业务码用于缺失诊断。"""
+    requested_set = set(requested_ids)
+    failures: dict[str, str] = {}
+    for name, raw in members.items():
+        normalized_name = str(name).replace("\\", "/").lower()
+        if not normalized_name.endswith(("info.txt", "info.json")):
+            continue
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > 1024 * 1024:
+            continue
+        try:
+            payload = json.loads(bytes(raw).decode("utf-8-sig", "replace"))
+        except (TypeError, ValueError):
+            continue
+        for item in _展开QQ阅读正文信息(payload):
+            chapter_id = str(
+                item.get("chapter_id")
+                or item.get("chapterId")
+                or item.get("cid")
+                or item.get("scid")
+                or ""
+            ).strip()
+            if chapter_id not in requested_set:
+                continue
+            code = _规范QQ阅读正文业务码(item.get("code"))
+            if code and int(code) != 0:
+                failures[chapter_id] = code
+    return failures
+
+
 def 解析QQ阅读正文批次(
     package: bytes,
     chapter_ids: list[str],
@@ -2710,7 +2808,10 @@ def 解析QQ阅读正文批次带统计(
     解密材料: tuple[bytes, bytes, bytes] | None = None,
 ) -> tuple[list[Any], int, int]:
     """解析正文包，并返回实际匹配数和解密失败数。"""
+    _检查QQ阅读正文响应(package)
     members = tar_decrypt(package)
+    if members.get("code") != 0:
+        raise _QQ阅读正文响应错误("响应包无效")
     requested_ids = [
         str(chapter_id).strip() for chapter_id in chapter_ids if str(chapter_id).strip()
     ]
@@ -2740,9 +2841,15 @@ def 解析QQ阅读正文批次带统计(
         current = chapter_map.get(chapter_id)
         if current is None or current == "章节解密失败":
             chapter_map[chapter_id] = value
-    result = [
-        chapter_map.get(chapter_id, "章节解密失败") for chapter_id in requested_ids
-    ]
+    business_failures = _解析QQ阅读正文章节业务失败(members, requested_ids)
+    result: list[Any] = []
+    for chapter_id in requested_ids:
+        value = chapter_map.get(chapter_id, "章节响应缺失")
+        if _QQ阅读正文项失败原因(value) and chapter_id in business_failures:
+            value = _QQ阅读正文响应错误(
+                "接口业务失败", code=business_failures[chapter_id]
+            )
+        result.append(value)
     decrypt_failed = sum(1 for value in chapter_map.values() if value == "章节解密失败")
     return result, len(chapter_map), decrypt_failed
 
@@ -4402,11 +4509,14 @@ async def 异步获取QQ阅读正文批次(
         _构造QQ阅读请求地址(QQ阅读目录地址, params),
     )
     request_started = time.perf_counter()
+    response_status = 0
     if 请求信号量 is None:
         请求上下文 = session.get(QQ阅读目录地址, params=params, headers=headers)
         async with 请求上下文 as response:
             response.raise_for_status()
             package = await response.read()
+            response_status = response.status
+            _检查QQ阅读正文响应(package, response_status)
     else:
         async with 请求信号量:
             async with session.get(
@@ -4414,15 +4524,27 @@ async def 异步获取QQ阅读正文批次(
             ) as response:
                 response.raise_for_status()
                 package = await response.read()
+                response_status = response.status
+                _检查QQ阅读正文响应(package, response_status)
     request_elapsed = time.perf_counter() - request_started
     decrypt_started = time.perf_counter()
-    async with 解密信号量:
-        result = await _异步QQ阅读CPU函数(
-            解析QQ阅读正文批次带统计,
-            package,
-            chapter_ids,
-            解密材料,
-        )
+    try:
+        async with 解密信号量:
+            result = await _异步QQ阅读CPU函数(
+                解析QQ阅读正文批次带统计,
+                package,
+                chapter_ids,
+                解密材料,
+            )
+    except _QQ阅读正文响应错误 as exc:
+        raise _QQ阅读正文响应错误(
+            exc.category,
+            http_status=exc.http_status or response_status,
+            code=exc.code,
+        ) from None
+    for item in result[0]:
+        if isinstance(item, _QQ阅读正文响应错误) and not item.http_status:
+            item.http_status = response_status
     decrypt_elapsed = time.perf_counter() - decrypt_started
     chapter_span = (
         f"{chapter_ids[0]}-{chapter_ids[-1]}" if chapter_ids else ""
@@ -4461,22 +4583,37 @@ async def 下载参考正文(
         f"最大并发数={QQ阅读批量最大动态并发数}"
     )
 
-    def 合并批次(first: int, last: int, part: Any, results: list[Any]) -> int:
-        if not isinstance(part, list):
-            return 0
+    def 合并批次(
+        first: int,
+        last: int,
+        part: Any,
+        results: list[Any],
+        batch_failure: dict[str, Any] | None,
+    ) -> int:
         recovered = 0
-        expected = last - first + 1
-        for offset, item in enumerate(part[:expected]):
+        for offset in range(last - first + 1):
             target_index = first + offset - 1
             if target_index < 0 or target_index >= len(results):
                 continue
-            if item in (None, "", "章节解密失败") or results[target_index] not in (
-                None,
-                "",
-                "章节解密失败",
-            ):
+            if not _QQ阅读正文项失败原因(results[target_index]):
+                continue
+            if batch_failure is not None:
+                failure_reasons[target_index] = dict(batch_failure)
+                continue
+            if not isinstance(part, list) or offset >= len(part):
+                failure_reasons[target_index] = {"category": "响应缺失"}
+                continue
+            item = part[offset]
+            reason = _QQ阅读正文项失败原因(item)
+            if reason:
+                failure_reasons[target_index] = {"category": reason}
+                if isinstance(item, _QQ阅读正文响应错误):
+                    failure_reasons[target_index].update(
+                        {"http_status": item.http_status, "code": item.code}
+                    )
                 continue
             results[target_index] = item
+            failure_reasons[target_index] = None
             recovered += 1
         return recovered
 
@@ -4511,6 +4648,7 @@ async def 下载参考正文(
         for start in range(1, total + 1, QQ阅读批量章节数)
     ]
     results: list[Any] = [None] * total
+    failure_reasons: list[dict[str, Any] | None] = [None] * total
     completed = 0
     success = 0
     请求信号量 = asyncio.Semaphore(concurrency)
@@ -4531,6 +4669,8 @@ async def 下载参考正文(
             "decrypt_failed": 0,
             "http_failed": 0,
             "other_failed": 0,
+            "timeout_failed": 0,
+            "invalid_response": 0,
         }
 
     def 合并请求统计(target: dict[str, int], source: dict[str, int]) -> None:
@@ -4546,7 +4686,7 @@ async def 下载参考正文(
     async def 请求批次(
         first: int,
         last: int,
-    ) -> tuple[int, int, list[Any] | None, dict[str, int]]:
+    ) -> tuple[int, int, list[Any] | None, dict[str, int], dict[str, Any] | None]:
         expected = last - first + 1
         stats = 新建请求统计()
         stats["batches"] = 1
@@ -4570,36 +4710,48 @@ async def 下载参考正文(
                 sum(
                     1
                     for item in part[:expected]
-                    if item not in (None, "", "章节解密失败")
+                    if not _QQ阅读正文项失败原因(item)
                 )
                 if isinstance(part, list)
                 else 0
             )
             stats["response_missing"] = max(
                 0,
-                expected - stats["response_items"] - stats["decrypt_failed"],
+                expected - stats["response_items"],
             )
-            return first, last, part, stats
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return first, last, part, stats, None
+        except asyncio.TimeoutError:
+            stats["timeout_failed"] = 1
+            return first, last, None, stats, {"category": "超时"}
+        except aiohttp.ClientError as exc:
             stats["http_failed"] = 1
+            status = getattr(exc, "status", 0)
+            status = status if isinstance(status, int) and 100 <= status <= 599 else 0
             logger.debug(
                 f"QQ阅读批量正文请求失败：书籍编号={book_id}, 范围={first}-{last}, "
-                "阶段=请求"
+                f"阶段=请求, HTTP状态={status or 'none'}, 错误={type(exc).__name__}"
             )
-            return first, last, None, stats
+            return first, last, None, stats, {"category": "请求失败", "http_status": status}
+        except _QQ阅读正文响应错误 as exc:
+            stats["invalid_response"] = 1
+            return first, last, None, stats, {
+                "category": exc.category,
+                "http_status": exc.http_status,
+                "code": exc.code,
+            }
         except Exception as exc:
             stats["other_failed"] = 1
             logger.debug(
                 f"QQ阅读批量正文请求失败：书籍编号={book_id}, 范围={first}-{last}, "
                 f"错误={type(exc).__name__}"
             )
-            return first, last, None, stats
+            return first, last, None, stats, {"category": "响应处理失败"}
 
     initial_stats = 新建请求统计()
     for task in asyncio.as_completed([请求批次(a, b) for a, b in ranges]):
-        first, last, part, stats = await task
+        first, last, part, stats, batch_failure = await task
         expected = last - first + 1
-        success += 合并批次(first, last, part, results)
+        success += 合并批次(first, last, part, results, batch_failure)
         合并请求统计(initial_stats, stats)
         completed += expected
         if completed < total:
@@ -4612,14 +4764,16 @@ async def 下载参考正文(
         f"响应缺失={initial_stats['response_missing']}, "
         f"解密失败={initial_stats['decrypt_failed']}, "
         f"请求失败={initial_stats['http_failed']}, "
-        f"其他失败={initial_stats['other_failed']}"
+        f"其他失败={initial_stats['other_failed']}, "
+        f"超时={initial_stats['timeout_failed']}, "
+        f"响应包无效={initial_stats['invalid_response']}"
     )
 
     for round_index in range(1, QQ阅读失败章节重试轮数 + 1):
         missing = [
             index + 1
             for index, item in enumerate(results)
-            if item in (None, "", "章节解密失败")
+            if _QQ阅读正文项失败原因(item)
         ]
         if not missing:
             break
@@ -4645,16 +4799,16 @@ async def 下载参考正文(
         async def 重试批次(
             first: int,
             last: int,
-        ) -> tuple[int, int, list[Any] | None, dict[str, int]]:
+        ) -> tuple[int, int, list[Any] | None, dict[str, int], dict[str, Any] | None]:
             async with retry_semaphore:
                 return await 请求批次(first, last)
 
         retry_stats = 新建请求统计()
         for task in asyncio.as_completed([重试批次(a, b) for a, b in retry_ranges]):
-            first, last, part, stats = await task
-            recovered += 合并批次(first, last, part, results)
+            first, last, part, stats, batch_failure = await task
+            recovered += 合并批次(first, last, part, results, batch_failure)
             合并请求统计(retry_stats, stats)
-        success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
+        success = sum(1 for item in results if not _QQ阅读正文项失败原因(item))
         logger.debug(
             f"QQ阅读失败章节重试结果：书籍编号={book_id}, 轮次={round_index}/{QQ阅读失败章节重试轮数}, "
             f"恢复={recovered}, 仍缺失={total - success}, "
@@ -4663,36 +4817,47 @@ async def 下载参考正文(
             f"响应缺失={retry_stats['response_missing']}, "
             f"解密失败={retry_stats['decrypt_failed']}, "
             f"请求失败={retry_stats['http_failed']}, "
-            f"其他失败={retry_stats['other_failed']}"
+            f"其他失败={retry_stats['other_failed']}, "
+            f"超时={retry_stats['timeout_failed']}, "
+            f"响应包无效={retry_stats['invalid_response']}"
         )
         if success >= total or recovered <= 0:
             break
         if round_index < QQ阅读失败章节重试轮数:
             await asyncio.sleep(0.2 * round_index)
 
-    success = sum(1 for item in results if item not in (None, "", "章节解密失败"))
+    success = sum(1 for item in results if not _QQ阅读正文项失败原因(item))
     汇报进度(total, success)
     chapters: list[dict[str, Any]] = []
     缺失章节号: list[int] = []
     缺失分类: dict[str, int] = {}
+    失败HTTP状态: set[int] = set()
+    失败业务码: set[str] = set()
     for 序号, (catalog_item, content) in enumerate(zip(catalog, results), start=1):
+        reason = _QQ阅读正文项失败原因(content)
+        if reason:
+            缺失章节号.append(序号)
+            failure = failure_reasons[序号 - 1] or {"category": reason}
+            category = str(failure.get("category") or reason)
+            缺失分类[category] = 缺失分类.get(category, 0) + 1
+            if failure.get("http_status"):
+                失败HTTP状态.add(int(failure["http_status"]))
+            if failure.get("code"):
+                失败业务码.add(str(failure["code"]))
+            continue
         text = (
             content.decode("utf-8", "replace").strip()
             if isinstance(content, bytes)
             else str(content or "").strip()
         )
-        if not text or text == "章节解密失败":
-            缺失章节号.append(序号)
-            if text == "章节解密失败":
-                缺失分类["解密失败"] = 缺失分类.get("解密失败", 0) + 1
-            else:
-                缺失分类["空正文"] = 缺失分类.get("空正文", 0) + 1
-            continue
         chapters.append({**catalog_item, "content": text})
     if 缺失章节号:
+        statuses = ",".join(str(status) for status in sorted(失败HTTP状态)) or "none"
+        codes = ",".join(sorted(失败业务码)) or "none"
         logger.warning(
             f"QQ阅读正文缺失：书籍编号={book_id}, 缺失章节号={格式化失败范围(缺失章节号)}, "
-            f"数量={len(缺失章节号)}, 分类={缺失分类}"
+            f"数量={len(缺失章节号)}, 分类={缺失分类}, "
+            f"HTTP状态={statuses}, 业务码={codes}"
         )
         raise RuntimeError("章节不完整")
     return chapters
