@@ -694,6 +694,10 @@
         if (!node) return '';
         if (node.nodeType === Node.TEXT_NODE) return String(node.nodeValue || '');
         if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.dataset?.composerMention) {
+          const id = String(node.dataset.composerMention);
+          return id === 'all' || /^[A-Za-z0-9_-]{5,128}$/.test(id) ? `<@${id}>` : '';
+        }
         if (node.dataset?.composerImage === '1') return composerImageMarker;
         if (node.tagName === 'BR') return '\n';
         let result = Array.from(node.childNodes || []).map((child) => composerNodeText(child)).join('');
@@ -994,8 +998,11 @@
       };
       const resolveMentionName = (openid, profiles = msgState.profiles) => {
         const id = String(openid || '').trim();
-        const nickname = String(profiles?.[id]?.nickname || profiles?.[id]?.username || '').trim();
-        return nickname && nickname !== id ? nickname : (id ? `${id.slice(0, 8)}…` : '用户');
+        const profile = profiles?.[id] || {};
+        const nickname = validMsgNickname(profile.nickname || profile.username, id);
+        if (nickname) return nickname;
+        if (profile.nickname_blank || isBlankMsgNickname(profile.nickname || profile.username)) return '\u00a0';
+        return '用户';
       };
       const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/<@all>/gi, '@全体成员').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
       const decodeMsgToken = (value) => {
@@ -1076,6 +1083,60 @@
         const labels = {图片:'[图片]',image:'[图片]',img:'[图片]',视频:'[视频]',video:'[视频]',语音:'[语音]',音频:'[语音]',audio:'[语音]',voice:'[语音]',record:'[语音]',文件:'[文件]',file:'[文件]'};
         const label = (type) => Object.prototype.hasOwnProperty.call(labels, type) ? labels[type] : '';
         return label(String(first.type || '').trim().toLowerCase()) || label(String(media.type || '').trim().toLowerCase());
+      };
+      const msgQuoteSummary = (message = {}, profiles = msgState.profiles) => {
+        const id = String(message.user_id || message.userId || '').trim();
+        const profile = profiles?.[id] || {};
+        const own = Boolean(message.is_self) || /^(?:bot_|web_panel)/.test(String(message.source || ''));
+        const nickname = own
+          ? (validMsgNickname(message.nickname, id) || validMsgNickname(window.msgBotProfile?.username, id) || '机器人')
+          : displayMsgNickname(message, profile);
+        return {
+          message_id:String(message.message_id || message.id || '').trim(),
+          refidx:String(message.refidx || '').trim(),
+          user_id:id,
+          nickname,
+          nickname_blank:Boolean(message.nickname_blank || profile.nickname_blank || isBlankMsgNickname(message.nickname)) && !validMsgNickname(nickname, id),
+          content:String(msgMessagePreview(message) || '（空消息）').slice(0, 1000),
+          timestamp:String(message.timestamp || ''),
+        };
+      };
+      const buildMsgReferenceIndex = (messages = [], references = {}, profiles = msgState.profiles) => {
+        const index = new Map();
+        const conflicts = new Set();
+        const add = (id, summary) => {
+          const key = String(id || '').trim();
+          if (!key || conflicts.has(key)) return;
+          const previous = index.get(key);
+          if (previous?.message_id && summary.message_id && previous.message_id !== summary.message_id) {
+            index.delete(key); conflicts.add(key); return;
+          }
+          index.set(key, summary);
+        };
+        const currentMessages = (messages || []).filter((message) => {
+          if (message._session && msgState.chatId && String(message._session) !== msgState.chatId) return false;
+          if (message.chat_type && msgState.chatType && String(message.chat_type) !== msgState.chatType) return false;
+          return !message.appid || !msgState.chatAppid || String(message.appid) === msgState.chatAppid;
+        });
+        Object.entries(references || {}).forEach(([id, reference]) => {
+          if (reference && typeof reference === 'object') add(id, msgQuoteSummary(reference, profiles));
+        });
+        currentMessages.forEach((message) => {
+          const summary = msgQuoteSummary(message, profiles);
+          [message.message_id, message.refidx].forEach((id) => add(id, summary));
+        });
+        currentMessages.forEach((message) => {
+          if (message.reference_id && message.reference_preview && !index.has(String(message.reference_id))) {
+            add(message.reference_id, msgQuoteSummary(message.reference_preview, profiles));
+          }
+        });
+        return index;
+      };
+      const renderMsgQuote = (reference, profiles = msgState.profiles) => {
+        if (!reference) return '<div class="msg-bubble-quote"><span class="msg-quote-content">原消息暂不可用</span></div>';
+        const summary = msgQuoteSummary(reference, profiles);
+        const content = plainMsgPreview(summary.content, profiles) || '（空消息）';
+        return `<div class="msg-bubble-quote"><span class="msg-quote-name">${esc(summary.nickname)}</span><span class="msg-quote-content">${esc(content)}</span></div>`;
       };
       const msgRealtimeChatSummary = (payload, message, existing) => {
         const lastTs = Number(existing.last_ts || 0);
@@ -1684,6 +1745,7 @@
         resetMsgAdSwitch();
         msgState.profiles = {};
         msgState.historyData = null;
+        clearMsgQuote();
         msgState.messages = [];
         msgState.renderedChatId = '';
         msgState.messageRenderSignature = null;
@@ -2173,32 +2235,90 @@
           $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
           renderMsgExtra();
         }
-        const mention = `<@${uid}> `;
-        insertComposerText(mention);
-        toast(`已插入 @${nick || uid}（将以 Markdown 发送）`);
+        insertComposerMention(uid, nick);
+        toast(`已插入 @${nick || '用户'}（将以 Markdown 发送）`);
+      };
+      const removeQuoteMention = () => {
+        getComposerEditor()?.querySelectorAll('[data-composer-quote-mention="1"]').forEach((node) => {
+          const spacer = node._composerMentionSpace;
+          node.remove();
+          if (spacer?.parentNode && String(spacer.nodeValue || '').startsWith('\u00a0')) {
+            spacer.nodeValue = spacer.nodeValue.slice(1);
+            if (!spacer.nodeValue) spacer.remove();
+          }
+        });
+        msgState.composerSelection = null;
+      };
+      const insertComposerMention = (userId, nickname = '', quote = false) => {
+        const id = String(userId || '').trim();
+        const editor = getComposerEditor();
+        if (!editor || (id !== 'all' && !mentionIdPattern.test(id))) return;
+        const profile = msgState.profiles?.[id] || {};
+        const name = id === 'all' ? '全体成员'
+          : displayMsgNickname({user_id:id, nickname, nickname_blank:isBlankMsgNickname(nickname)}, profile, '用户');
+        editor.focus();
+        const range = quote ? document.createRange() : restoreComposerSelection();
+        if (!range) return;
+        if (quote) { range.selectNodeContents(editor); range.collapse(true); }
+        else range.deleteContents();
+        const node = document.createElement('span');
+        node.className = 'composer-mention';
+        node.dataset.composerMention = id;
+        if (quote) node.dataset.composerQuoteMention = '1';
+        node.contentEditable = 'false';
+        node.textContent = `@${name}`;
+        range.insertNode(node);
+        const spacer = document.createTextNode('\u00a0');
+        node._composerMentionSpace = spacer;
+        node.after(spacer);
+        range.setStartAfter(spacer);
+        range.collapse(true);
+        const selection = window.getSelection?.();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        msgState.composerSelection = range.cloneRange();
+      };
+      const clearMsgQuote = () => {
+        removeQuoteMention();
+        msgState.quote = null;
+        const preview = $('msg-quote-preview');
+        if (preview) preview.hidden = true;
+        $('msg-quote-text')?.replaceChildren();
+      };
+      const renderMsgQuotePreview = () => {
+        const preview = $('msg-quote-preview');
+        const previewText = $('msg-quote-text');
+        const quote = msgState.quote;
+        if (!preview || !previewText) return;
+        if (!quote || quote.chatId !== msgState.chatId || quote.chatType !== msgState.chatType || (quote.appid && quote.appid !== String(msgState.chatAppid || ''))) {
+          preview.hidden = true;
+          return;
+        }
+        const index = buildMsgReferenceIndex(msgState.historyData?.messages || msgState.messages, {}, msgState.profiles);
+        const summary = index.get(quote.id) || msgQuoteSummary({user_id:quote.userId, nickname:quote.name, nickname_blank:quote.nickname_blank, content:quote.text}, msgState.profiles);
+        quote.name = summary.nickname;
+        quote.nickname_blank = summary.nickname_blank;
+        quote.text = summary.content;
+        previewText.innerHTML = `<span class="msg-quote-name">${esc(summary.nickname)}</span><span class="msg-quote-content">${esc(plainMsgPreview(summary.content) || '（空消息）')}</span>`;
+        preview.hidden = false;
+        getComposerEditor()?.querySelectorAll('[data-composer-quote-mention="1"]').forEach((node) => {
+          node.textContent = `@${summary.nickname}`;
+        });
       };
       const setMsgQuote = (messageId, userId, nickname, quotedText = '', refidx = '') => {
         const id = String(messageId || '').trim();
         if (!id) return;
         const uid = String(userId || '').trim();
-        const name = String(nickname || '').trim();
-        msgState.quote = {id, refidx:String(refidx || '').trim(), userId:uid, name, text:String(quotedText || name || '引用消息')};
-        const preview = $('msg-quote-preview');
-        const previewText = $('msg-quote-text');
-        if (preview) preview.hidden = false;
-        if (previewText) previewText.textContent = `${name || '引用消息'} · 引用`;
-        // 群聊引用同步插入官方 Markdown 提及；避免重复点击引用时重复插入。
-        if (uid && msgState.chatType === 'group') {
-          const editor = getComposerEditor();
-          if (editor) {
-            msgState.sendType = 'markdown';
-            const tabs = $('msg-composer-tabs');
-            tabs?.querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
-            renderMsgExtra();
-            const mention = `<@${uid}> `;
-            const existing = getComposerText();
-            if (!existing.startsWith(mention)) insertComposerText(mention);
-          }
+        const index = buildMsgReferenceIndex([...(msgState.historyData?.messages || []), ...msgState.messages], {}, msgState.profiles);
+        const summary = index.get(id) || msgQuoteSummary({user_id:uid, nickname, content:quotedText}, msgState.profiles);
+        removeQuoteMention();
+        msgState.quote = {id, refidx:String(refidx || summary.refidx || '').trim(), userId:uid || summary.user_id, name:summary.nickname, nickname_blank:summary.nickname_blank, text:summary.content, chatId:msgState.chatId, chatType:msgState.chatType, appid:String(msgState.chatAppid || '')};
+        renderMsgQuotePreview();
+        if (msgState.quote.userId && msgState.chatType === 'group') {
+          msgState.sendType = 'markdown';
+          $('msg-composer-tabs')?.querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
+          renderMsgExtra();
+          insertComposerMention(msgState.quote.userId, summary.nickname, true);
         }
         getComposerEditor()?.focus();
       };
@@ -2508,6 +2628,9 @@
           if (String(message?.nickname || '') !== String(other?.nickname || '')) return false;
           if (Boolean(message?.nickname_blank) !== Boolean(other?.nickname_blank)) return false;
           if (String(message?.avatar || '') !== String(other?.avatar || '')) return false;
+          if (String(message?.reference_id || '') !== String(other?.reference_id || '')) return false;
+          if (String(message?.refidx || '') !== String(other?.refidx || '')) return false;
+          if (JSON.stringify(message?.reference_preview || null) !== JSON.stringify(other?.reference_preview || null)) return false;
           return JSON.stringify(message?.media || null) === JSON.stringify(other?.media || null);
         });
       };
@@ -2550,8 +2673,12 @@
           content,
           timestamp: new Date().toISOString(),
           source: 'web_panel',
+          chat_type: String(payload.chat_type || 'group'),
+          appid: String(payload.appid || ''),
           is_self: true,
           reference_id: String(payload.quote_message_id || '').trim(),
+          reference_preview: msgState.quote && msgState.quote.id === payload.quote_message_id && msgState.quote.chatId === payload.chat_id
+            ? {message_id:msgState.quote.id, refidx:msgState.quote.refidx, user_id:msgState.quote.userId, nickname:msgState.quote.name, nickname_blank:msgState.quote.nickname_blank, content:msgState.quote.text} : null,
           media: imageData
             ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content, before_text:imageBefore, after_text:imageAfter}
             : (imageUrl
@@ -3570,8 +3697,12 @@
           msgs,
         );
         msgState.profiles = profiles;
+        renderMsgQuotePreview();
+        const referenceIndex = buildMsgReferenceIndex(msgs, data.references, profiles);
         const renderSignature = JSON.stringify({
           scope: renderScope,
+          profiles,
+          references:msgs.map((message) => message.reference_id ? referenceIndex.get(String(message.reference_id)) || null : null),
           more: Boolean(data.has_more),
           multi: Boolean(msgState.multi),
           messages: msgs.map((message) => {
@@ -3667,9 +3798,8 @@
           const renderText = (text) => {
             return replaceMsgMentions(text, profiles);
           };
-          const ref = (data.references || {})[m.reference_id];
-          // 撤回只改变颜色和标签，保留撤回前的正文、引用和媒体。
-          const quote = m.reference_id ? (ref ? `<div class="msg-bubble-quote"><b>${esc(ref.nickname || '')}</b>：${esc(ref.content || '')}</div>` : `<div class="msg-bubble-quote">引用消息 ${esc(m.reference_id)}</div>`) : '';
+          // 引用标识只用于查找，未取得原消息时不把协议 ID 当作正文显示。
+          const quote = m.reference_id ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles) : '';
           const mediaData = m.media;
           // QQ 图片链接有短时签名。页面已打开时，提前加载最新一批消息可让
           // 浏览器私有缓存保留已成功取得的图片；加载更早历史仍保持惰性请求。
@@ -3949,6 +4079,11 @@
             member_profiles:mergeMsgProfileMaps(history.member_profiles, payload.member_profiles),
           };
         }
+        const referencesChanged = matchesCurrent && Boolean(payload.references)
+          && JSON.stringify(payload.references) !== JSON.stringify(msgState.historyData?.references || {});
+        if (matchesCurrent && payload.references) {
+          msgState.historyData = {...(msgState.historyData || {}), references:{...(msgState.historyData?.references || {}), ...payload.references}};
+        }
         const isNewEvent = rememberMsgEvent(chatId, message);
         if (isNewEvent) msgState.historyCache.delete(`${chatType}|${chatId}`);
         const isViewing = matchesCurrent && !$('page-messages')?.hidden;
@@ -4006,7 +4141,7 @@
           if (messageChanged) {
             msgState.messages = msgState.messages.map((item, index) => index === existingIndex ? mergedMessage : item);
           }
-          if (messageChanged || profilesChanged) scheduleMsgRealtimeMessageRender(chatId, false, false);
+          if (messageChanged || profilesChanged || referencesChanged) scheduleMsgRealtimeMessageRender(chatId, false, false);
         } else if (isNewEvent) {
           msgState.messages = [...msgState.messages, realtimeMessage];
           scheduleMsgRealtimeMessageRender(chatId, followLatest);
@@ -4100,6 +4235,7 @@
             && msgState.messageRenderSignature !== null
             && msgMessageListsEqual(incoming, msgState.messages)
             && JSON.stringify(data.member_profiles || {}) === JSON.stringify(msgState.historyData?.member_profiles || {})
+            && JSON.stringify(data.references || {}) === JSON.stringify(msgState.historyData?.references || {})
             && Boolean(data.has_more) === Boolean(msgState.historyData?.has_more);
           if (sameRenderedPage) {
             updateMsgHead(data);
@@ -4638,7 +4774,7 @@
         const imageAfter = imageParts.length > 1 ? imageParts.slice(1).join('').trim() : '';
         const content = imageParts.length > 1 ? imageParts.join('').trim() : editorText.trim();
         const customId = $('msg-custom-id')?.value.trim() || '';
-        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter, image_marker:hasImage ? composerImageMarker : '' };
+        const payload = { chat_id:msgState.chatId, chat_type:msgState.chatType, appid:String(msgState.chatAppid || ''), msg_type:hasImage ? 'text' : (hasMedia ? 'media' : msgState.sendType), content, send_mode:msgState.sendMode, custom_id:customId, quote_message_id:msgState.quote?.id || '', quote_message_refidx:msgState.quote?.refidx || '', image_url:msgState.pastedImageSource || '', image_before:imageBefore, image_after:imageAfter, image_marker:hasImage ? composerImageMarker : '' };
         if (hasMedia) {
           if (msgState.mediaFile) payload.media_file = msgState.mediaFile;
           else payload.media_data = msgState.mediaData;
@@ -4883,7 +5019,7 @@
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       bindGroupSettings();
-      $('msg-quote-clear').addEventListener('click', () => { msgState.quote = null; $('msg-quote-preview').hidden = true; });
+      $('msg-quote-clear').addEventListener('click', clearMsgQuote);
       $('msg-raw-close').addEventListener('click', () => { $('msg-raw-modal').hidden = true; });
       $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) $('msg-raw-modal').hidden = true; });
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));

@@ -185,7 +185,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-command-chip { display:inline; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed currentColor; background:transparent; color:inherit; font:inherit; line-height:inherit; cursor:pointer; }
             .msg-command-chip:hover { opacity:.72; }
             .msg-bubble.recalled { color:#c45b5b; font-style:italic; background:#fff1f1; border:1px solid #ffd6d6; }
-            .msg-bubble-quote { margin:-2px 0 6px; padding:5px 8px; border-left:3px solid #8ec5f2; border-radius:4px; background:#f2f8ff; color:#888; font-size:11px; }
+            .msg-bubble-quote { display:flex; flex-direction:column; gap:3px; max-width:100%; margin:0 0 8px; padding:6px 9px; border-left:2px solid #8ec5f2; border-radius:3px; background:#f2f8ff; color:#888; font-size:12px; white-space:normal; }
+            .msg-quote-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+            .msg-quote-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; }
+            .composer-mention { color:#168bde; white-space:pre-wrap; user-select:all; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
             .msg-media-text { white-space:pre-wrap; word-break:break-word; }
@@ -272,10 +275,12 @@ from .帮助网页脚本 import 控制台脚本
         .msg-attachment-inline[hidden] { display:none; }
         .msg-attachment-icon { width:25px; height:25px; display:grid; place-items:center; border-radius:5px; background:#dcecff; color:#3a7bd5; font-size:13px; font-weight:700; }
         .msg-attachment-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-        .msg-quote-preview { display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid #e2ddf5; border-radius:4px; background:#f8f7ff; color:#999; font-size:11px; }
+        .msg-quote-preview { display:flex; align-items:flex-start; gap:10px; width:fit-content; max-width:min(100%,420px); margin:7px 9px 0; padding:7px 9px; border:0; border-left:2px solid #b6bdc8; border-radius:5px; background:#f1f2f5; color:#7d8490; font-size:12px; }
         .msg-quote-preview[hidden] { display:none; }
         .msg-quote-preview b { color:#333; }
-        .msg-quote-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .msg-quote-text { display:grid; gap:3px; flex:1; min-width:0; overflow:hidden; }
+        .msg-quote-preview .msg-action { flex:none; padding:0 3px; background:transparent; font-size:16px; line-height:20px; }
+        .msg-quote-preview .msg-quote-content { -webkit-line-clamp:1; }
         .msg-composer-topbar { display:flex; align-items:center; gap:5px; min-height:30px; }
         .msg-composer-top-hint { margin-left:3px; color:#a0a4ad; font-size:10px; }
         .msg-toolbar { display:flex; align-items:center; gap:10px; min-height:30px; }
@@ -571,7 +576,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-day { color:#6f7590; }
               :root[data-theme="dark"] .msg-bubble { background:#262b3a; }
               :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#95ec69; color:#0f1a12; }
-              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
+              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:rgba(255,255,255,.8); color:rgba(0,0,0,.55); }
               :root[data-theme="dark"] .msg-meta { color:#6f7590; }
               :root[data-theme="dark"] .msg-composer { background:#1f2330; border-top-color:#2c3044; }
                :root[data-theme="dark"] .msg-textarea,:root[data-theme="dark"] .msg-editor { background:#161926; }
@@ -724,7 +729,7 @@ from .帮助网页脚本 import 控制台脚本
                   <button type="button" data-msg-type="card">图文卡片</button>
                 </div>
                 <div class="msg-input-box" id="msg-input-box">
-                  <div class="msg-quote-preview" id="msg-quote-preview" hidden><b>引用：</b><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button">取消引用</button></div>
+                  <div class="msg-quote-preview" id="msg-quote-preview" hidden><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button" title="取消引用" aria-label="取消引用">×</button></div>
                   <div class="msg-attachment-inline" id="msg-media-inline" hidden>
                     <span class="msg-attachment-icon" id="msg-media-icon" aria-hidden="true">□</span>
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>

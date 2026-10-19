@@ -1078,6 +1078,38 @@ def 写入消息(记录: dict[str, Any]) -> bool:
     return _写入消息记录(记录)
 
 
+def 批量读取引用消息(
+    会话标识: str, 消息标识列表: list[str], 类型: str = "group", appid: str = "",
+) -> list[dict[str, Any]]:
+    """一次补读当前会话最多 100 条引用目标，不扫描或返回其它群/应用记录。"""
+    会话标识 = str(会话标识 or "").strip()
+    类型 = str(类型 or "").strip()
+    appid = str(appid or "").strip()
+    标识列表 = list(dict.fromkeys(_规范消息ID(项) for 项 in (消息标识列表 or []) if _规范消息ID(项)))[:100]
+    if not 会话标识 or 类型 not in {"group", "user"} or not 标识列表 or not _MySQL可用():
+        return []
+    连接 = _打开连接()
+    if 连接 is None:
+        return []
+    try:
+        占位符 = ",".join("%s" for _ in 标识列表)
+        字段 = _历史查询字段SQL.replace("recalled, media, reference_id", f"recalled, {_聊天摘要媒体SQL} AS media, reference_id")
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT {字段} FROM `{消息记录表名}` "
+                "WHERE 会话标识=%s AND 消息类型=%s AND appid=%s "
+                f"AND (message_id IN ({占位符}) OR refidx IN ({占位符})) "
+                "ORDER BY id DESC LIMIT %s",
+                (会话标识, 类型, appid, *标识列表, *标识列表, 100),
+            )
+            return [_行转记录(行) for 行 in (游标.fetchall() or [])]
+    except Exception as 异常:
+        logger.debug("消息记录 MySQL 引用目标读取失败：错误类型=%s", type(异常).__name__)
+        return []
+    finally:
+        _关闭连接(连接)
+
+
 def 读取消息媒体归档(
     会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0
 ) -> dict[str, Any] | None:

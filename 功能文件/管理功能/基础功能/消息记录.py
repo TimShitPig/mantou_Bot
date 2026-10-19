@@ -497,6 +497,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     原始消息 = _解析消息结构(记录.get("raw_message"))
     _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
+    _补充记录引用索引(记录, 原始消息)
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
@@ -575,7 +576,8 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     原始消息: Any = None
     # 大多数历史行已经保存 nickname/avatar/media；仅对缺失资料或提及消息回看原文。
     需要原始 = (
-        not _有效用户昵称(作者昵称, 作者标识)
+        not str(记录.get("refidx") or "").strip()
+        or not _有效用户昵称(作者昵称, 作者标识)
         or not 作者头像
         or bool(_提及规则.search(内容文本))
         or (
@@ -617,6 +619,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         记录时间 = 0
     _补充记录昵称状态(记录, 原始消息)
+    _补充记录引用索引(记录, 原始消息)
     标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
     if not 标准时间 and 原始消息 is not None:
         标准时间 = _转数字时间戳(_提取原始消息时间(原始消息))
@@ -702,6 +705,7 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     原始消息 = _解析消息结构(记录.get("raw_message"))
     _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
+    _补充记录引用索引(记录, 原始消息)
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
@@ -1705,6 +1709,10 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "last_ts": int(会话.get("last_ts") or 0),
         **_聊天群成员状态(会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group")),
         "member_profiles": 成员资料,
+        "references": _构造引用映射(
+            会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
+            str(记录.get("appid") or 会话.get("appid") or ""), [消息], 允许数据库=False,
+        ),
         "message": 消息,
     }
 
@@ -2145,39 +2153,172 @@ def _去除图片表情描述(记录: dict[str, Any]) -> None:
             媒体[字段] = 显示内容
 
 
-_REFIDX规则 = re.compile(r"(?:^|[?&])msg_idx=([^&]+)")
+def _引用负载候选(消息: Any) -> list[Any]:
+    """读取官方负载及已知包装，不遍历任意对象或递归消息元素。"""
+    候选: list[Any] = []
+    待检查 = [消息]
+    已见: set[int] = set()
+    while 待检查 and len(候选) < 8:
+        当前 = 待检查.pop(0)
+        if 当前 is None or id(当前) in 已见:
+            continue
+        已见.add(id(当前))
+        结构 = _解析消息结构(当前)
+        当前 = 结构 if 结构 is not None else 当前
+        候选.append(当前)
+        for 字段 in ("raw_data", "d", "data", "payload", "message"):
+            嵌套 = _读取字段(当前, 字段)
+            if isinstance(嵌套, (dict, str)):
+                待检查.append(嵌套)
+    return 候选
+
+
+def _提取消息场景索引(消息: Any, 字段: str) -> str:
+    """区分消息自身 msg_idx 与被引用的 ref_msg_idx；保留索引中的加号。"""
+    if 字段 not in {"msg_idx", "ref_msg_idx"}:
+        return ""
+    规则 = re.compile(r"(?:^|[?&])" + 字段 + r"=([^&]+)")
+    for 当前 in _引用负载候选(消息):
+        场景 = _读取字段(当前, "message_scene") or {}
+        if isinstance(场景, str):
+            场景 = _解析消息结构(场景) or {}
+        扩展 = _读取字段(场景, "ext")
+        if isinstance(扩展, str):
+            扩展 = [扩展]
+        if not isinstance(扩展, (list, tuple)):
+            continue
+        for 项 in 扩展[:32]:
+            匹配 = 规则.search(项) if isinstance(项, str) else None
+            if 匹配:
+                from urllib.parse import unquote
+
+                return _规范消息ID(unquote(匹配.group(1)))
+    return ""
 
 
 def _提取REFIDX(消息: Any) -> str:
-    """从消息 message_scene.ext 提取 REFIDX（QQ 官方引用消息专用标识）。"""
-    try:
-        场景 = _读取字段(消息, "message_scene") or {}
-        if isinstance(场景, str):
-            try:
-                import json as _json
+    """从官方 message_scene.ext.msg_idx 提取消息自身的引用索引。"""
+    return _提取消息场景索引(消息, "msg_idx")
 
-                场景 = _json.loads(场景)
-            except Exception:
-                场景 = {}
-        扩展 = 场景.get("ext") if isinstance(场景, dict) else None
-        if isinstance(扩展, str):
-            扩展 = [扩展]
-        if not isinstance(扩展, list):
-            return ""
-        for 项 in 扩展:
-            if not isinstance(项, str):
+
+def _补充记录引用索引(记录: dict[str, Any], 原始消息: Any = None) -> None:
+    """接收与旧历史共用，只补缺失字段，不把引用索引写成消息自身 ID。"""
+    原始消息 = 原始消息 if 原始消息 is not None else 记录.get("raw_message")
+    引用ID = _规范消息ID(记录.get("reference_id"))
+    if not 引用ID:
+        for 当前 in _引用负载候选(原始消息):
+            引用 = _读取字段(当前, "message_reference")
+            引用ID = _规范消息ID(_读取字段(引用, "message_id"))
+            if 引用ID:
+                break
+    记录["reference_id"] = 引用ID or _提取消息场景索引(原始消息, "ref_msg_idx")
+    记录["refidx"] = _规范消息ID(记录.get("refidx")) or _提取REFIDX(原始消息)
+
+
+def _引用作用域匹配(记录: dict[str, Any], 会话标识: str, 类型: str, appid: str) -> bool:
+    return (
+        isinstance(记录, dict)
+        and str(记录.get("_session") or 会话标识).strip() == 会话标识
+        and str(记录.get("chat_type") or 类型).strip() == 类型
+        and str(记录.get("appid") or "").strip() == appid
+    )
+
+
+def _引用会话AppID(会话标识: str, 消息列表: list[dict[str, Any]]) -> str:
+    缓存AppID = str((消息缓存.get(会话标识) or {}).get("appid") or "").strip()
+    if 缓存AppID:
+        return 缓存AppID
+    应用列表 = {str(项.get("appid") or "").strip() for 项 in 消息列表 if isinstance(项, dict)}
+    return next(iter(应用列表)) if len(应用列表) == 1 else ""
+
+
+def _引用消息摘要(记录: dict[str, Any]) -> dict[str, Any]:
+    """仅返回可显示文本和身份索引，不返回媒体 URL、归档、令牌或原始负载。"""
+    用户标识 = str(记录.get("user_id") or "").strip()
+    来源 = str(记录.get("source") or "").strip()
+    自身消息 = bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel"
+    昵称 = _有效用户昵称(记录.get("nickname"), 用户标识)
+    if not 昵称 and 自身消息:
+        昵称 = str(记录.get("nickname") or "").strip()
+        if _明确空白昵称(昵称) or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 昵称):
+            昵称 = ""
+    正文 = _提取消息文本(_媒体文字去占位(_消息列表摘要(记录)))
+    正文 = _媒体占位规则.sub(lambda 匹配: f"[{匹配.group(1)}]", 正文)
+    正文 = re.sub(r"!\[[^\]\n]*\]\((?:https?:)?//[^\s)]+\)", "[图片]", 正文, flags=re.IGNORECASE)
+    return {
+        "nickname": 昵称,
+        "nickname_blank": bool(记录.get("nickname_blank") or _明确空白昵称(记录.get("nickname"))) and not bool(昵称),
+        "user_id": 用户标识,
+        "is_self": 自身消息,
+        "content": 正文[:600],
+        "timestamp": str(记录.get("timestamp") or ""),
+        "message_id": _规范消息ID(记录.get("message_id")),
+        "refidx": _规范消息ID(记录.get("refidx")),
+    }
+
+
+def _构造引用映射(
+    会话标识: str, 类型: str, appid: str, 消息列表: list[dict[str, Any]], *, 允许数据库: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """当前会话按 message_id/refidx 双键查找；页外引用一次最多补查 100 项。"""
+    会话标识 = str(会话标识 or "").strip()
+    类型 = str(类型 or "group").strip()
+    appid = str(appid or "").strip()
+    if not 会话标识 or 类型 not in {"group", "user"}:
+        return {}
+    引用标识: list[str] = []
+    for 项 in 消息列表:
+        if not _引用作用域匹配(项, 会话标识, 类型, appid):
+            continue
+        _补充记录引用索引(项)
+        标识 = _规范消息ID(项.get("reference_id"))
+        if 标识 and 标识 not in 引用标识:
+            引用标识.append(标识)
+    引用标识 = 引用标识[:100]
+    if not 引用标识:
+        return {}
+    索引: dict[str, dict[str, Any]] = {}
+    冲突: set[str] = set()
+
+    def 加入(记录: dict[str, Any]) -> None:
+        if not _引用作用域匹配(记录, 会话标识, 类型, appid):
+            return
+        # 索引仅补顶层身份/昵称字段；媒体和原始负载只读，不复制大型归档对象。
+        记录 = dict(记录)
+        if not _规范消息ID(记录.get("refidx")):
+            _补充记录引用索引(记录)
+        消息ID = _规范消息ID(记录.get("message_id"))
+        自身索引 = _规范消息ID(记录.get("refidx"))
+        for 别名 in (消息ID, 自身索引):
+            if not 别名:
                 continue
-            匹配 = _REFIDX规则.search(项)
-            if 匹配:
-                try:
-                    from urllib.parse import unquote
+            已有 = 索引.get(别名)
+            if 已有 and (消息ID or 自身索引) != (_规范消息ID(已有.get("message_id")) or _规范消息ID(已有.get("refidx"))):
+                冲突.add(别名)
+            else:
+                索引.setdefault(别名, 记录)
 
-                    return unquote(匹配.group(1))
-                except Exception:
-                    return 匹配.group(1)
-    except Exception:
-        pass
-    return ""
+    for 项 in 消息列表:
+        加入(项)
+    缓存会话 = 消息缓存.get(会话标识) or {}
+    if str(缓存会话.get("chat_type") or 类型) == 类型 and str(缓存会话.get("appid") or "").strip() == appid:
+        for 项 in list(缓存会话.get("messages") or []):
+            加入(项)
+    缺失 = [标识 for 标识 in 引用标识 if 标识 not in 索引 and 标识 not in 冲突]
+    读取 = getattr(_消息存储, "批量读取引用消息", None) if 允许数据库 else None
+    if 缺失 and callable(读取):
+        try:
+            for 项 in 读取(会话标识, 缺失, 类型, appid) or []:
+                加入(项)
+        except Exception as 异常:
+            logger.debug("消息引用摘要读取失败：错误类型=%s", type(异常).__name__)
+    结果: dict[str, dict[str, Any]] = {}
+    for 标识 in 引用标识:
+        if 标识 in 索引 and 标识 not in 冲突:
+            目标 = 索引[标识]
+            _补充记录昵称状态(目标)
+            结果[标识] = _引用消息摘要(目标)
+    return 结果
 
 
 def _附件内容类型(附件: Any, 地址: str = "") -> str:
@@ -3230,11 +3371,10 @@ def 记录收到消息(
                     自己发送消息ID[消息ID] = time.time()
         if not is_self:
             清除主动消息权限(会话标识, 类型)
-        引用ID = ""
-        消息引用 = _读取字段(消息, "message_reference")
-        if 消息引用:
-            引用ID = str(_读取字段(消息引用, "message_id") or "").strip()
-        自身REFIDX = _提取REFIDX(消息)
+        引用索引: dict[str, Any] = {}
+        _补充记录引用索引(引用索引, 消息)
+        引用ID = 引用索引["reference_id"]
+        自身REFIDX = 引用索引["refidx"]
         作者头像 = _提取成员头像(消息)
         _记录成员资料(
             会话标识,
@@ -6164,19 +6304,9 @@ def _数据库历史消息(
         返回消息 = 返回消息[-limit:]
         _补齐群成员系统消息昵称(返回消息)
         最后消息 = 返回消息[-1] if 返回消息 else {}
-        消息索引 = {_规范消息ID(m.get("message_id")): m for m in 返回消息 if _规范消息ID(m.get("message_id"))}
-        引用映射: dict[str, dict[str, str]] = {}
-        for 消息记录项 in 返回消息:
-            引用ID = str(消息记录项.get("reference_id") or "").strip()
-            if not 引用ID or 引用ID in 引用映射:
-                continue
-            被引用 = 消息索引.get(引用ID)
-            if 被引用:
-                引用映射[引用ID] = {
-                    "nickname": str(被引用.get("nickname") or ""),
-                    "content": _替换提及名称(被引用.get("content") or "", 会话标识),
-                    "timestamp": str(被引用.get("timestamp") or ""),
-                }
+        引用映射 = _构造引用映射(
+            会话标识, 类型, _引用会话AppID(会话标识, 返回消息), 返回消息,
+        )
         for 历史项 in 返回消息:
             if isinstance(历史项, dict) and 历史项.get("raw_message"):
                 历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
@@ -6257,19 +6387,9 @@ def 获取消息历史(
     返回消息 = 会话消息[-limit:]
     _补齐群成员系统消息昵称(返回消息)
     最后消息 = 会话消息[-1] if 会话消息 else {}
-    引用映射: dict[str, dict[str, str]] = {}
-    消息索引 = {_规范消息ID(m.get("message_id")): m for m in 会话消息 if _规范消息ID(m.get("message_id"))}
-    for 消息记录项 in 返回消息:
-        引用ID = str(消息记录项.get("reference_id") or "").strip()
-        if not 引用ID or 引用ID in 引用映射:
-            continue
-        被引用 = 消息索引.get(引用ID)
-        if 被引用:
-            引用映射[引用ID] = {
-                "nickname": str(被引用.get("nickname") or ""),
-                "content": _替换提及名称(被引用.get("content") or "", 会话标识),
-                "timestamp": str(被引用.get("timestamp") or ""),
-            }
+    引用映射 = _构造引用映射(
+        会话标识, 类型, _引用会话AppID(会话标识, 返回消息), 返回消息,
+    )
     for 历史项 in 返回消息:
         if isinstance(历史项, dict) and 历史项.get("raw_message"):
             历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
@@ -6696,6 +6816,11 @@ async def 发送消息(
         or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
         or "group"
     ).strip().lower()
+    当前会话 = 消息缓存.get(会话标识) or {}
+    if not str(appid or "").strip() and str(当前会话.get("chat_type") or 会话类型) == 会话类型:
+        appid = str(当前会话.get("appid") or "").strip()
+    else:
+        appid = str(appid or "").strip()
     权限会话类型 = 会话类型
     平台实例 = 获取QQ官方平台(appid=appid)
     通道 = 获取HTTP通道(平台实例)
@@ -6739,14 +6864,14 @@ async def 发送消息(
     if 事件ID:
         消息体["event_id"] = 事件ID
     if 引用消息ID:
-        引用目标 = str(引用消息REFIDX or "").strip() or 引用消息ID
-        # QQ 官方引用需优先使用被引用消息自身的 REFIDX，找不到时回退完整消息 ID
-        if not 引用消息REFIDX:
-            for 会话记录 in 消息缓存.values():
-                目标 = next((x for x in (会话记录.get("messages") or []) if str(x.get("message_id") or "") == 引用消息ID), None)
-                if 目标 and 目标.get("refidx"):
-                    引用目标 = str(目标.get("refidx"))
-                    break
+        引用消息ID = _规范消息ID(引用消息ID)
+        引用映射 = await asyncio.to_thread(
+            _构造引用映射, 会话标识, 会话类型, appid,
+            [{"reference_id": 引用消息ID, "_session": 会话标识, "chat_type": 会话类型, "appid": appid}],
+        )
+        被引用摘要 = 引用映射.get(引用消息ID) or {}
+        # REFIDX 必须来自当前会话、消息类型及应用的记录，不按其它会话或客户端提示猜测。
+        引用目标 = str(被引用摘要.get("refidx") or "").strip() or 引用消息ID
         消息体["message_reference"] = {"message_id": 引用目标, "ignore_get_message_error": True}
 
     图片公开地址 = _规范化公网图片地址(图片URL)
