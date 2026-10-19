@@ -4611,12 +4611,14 @@ def _读取本地缓存文件(强制刷新: bool = False) -> dict[str, Any]:
                 # 空元数据也是有效结果，必须更新时间戳，否则每次会话
                 # 显示名计算都会重新建立数据库连接。
                 _本地缓存内存 = copy.deepcopy(元数据 or {})
-                _本地缓存时间 = now
+                _本地缓存时间 = time.time()
                 return copy.deepcopy(_本地缓存内存)
         except Exception as exc:
             logger.debug("消息记录 MySQL 元数据读取失败：错误类型=%s", type(exc).__name__)
             # 失败结果短暂缓存，避免同一请求内的会话循环触发 N+1 重试。
-            _本地缓存时间 = now
+            if _本地缓存内存 is None:
+                _本地缓存内存 = {}
+            _本地缓存时间 = time.time()
         return copy.deepcopy(_本地缓存内存 or {})
 
 
@@ -5713,7 +5715,8 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
     if not 资料["nickname"]:
         资料["nickname"] = _有效用户昵称(_从已知群缓存读取昵称(标识, 应用), 标识)
     if not 资料["nickname"]:
-        资料["nickname"] = _有效用户昵称((_读取本地缓存文件().get("nicknames") or {}).get(标识), 标识)
+        本地资料 = await _异步执行消息记录同步(_读取本地缓存文件)
+        资料["nickname"] = _有效用户昵称((本地资料.get("nicknames") or {}).get(标识), 标识)
     if 资料["nickname"] or 资料["avatar"]:
         _记录成员资料(标识, 标识, 资料["nickname"], 头像=资料["avatar"])
     if 资料["nickname"]:
@@ -5836,7 +5839,8 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
     if not 聊天项列表:
         return 0
     try:
-        本地昵称表 = _读取本地缓存文件().get("nicknames") or {}
+        本地资料 = await _异步执行消息记录同步(_读取本地缓存文件)
+        本地昵称表 = 本地资料.get("nicknames") or {}
         for 聊天 in 聊天项列表:
             if str(聊天.get("chat_type") or "") != "user":
                 continue
