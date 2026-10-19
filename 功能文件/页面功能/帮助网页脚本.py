@@ -1254,9 +1254,30 @@
         msgState.realtimeChats.forEach((overlay, chatId) => {
           const current = byId.get(chatId);
           if (!current) { if (msgChatMatchesView(overlay, {ignoreTypeFilter:true})) byId.set(chatId, {...overlay}); return; }
+          const currentAppid = String(current.appid || '').trim();
+          const overlayAppid = String(overlay.appid || '').trim();
+          if (String(current.chat_type || 'group') !== String(overlay.chat_type || 'group')
+            || (currentAppid && overlayAppid && currentAppid !== overlayAppid)) {
+            msgState.realtimeChats.delete(chatId);
+            return;
+          }
+          const isPrivate = String(current.chat_type || 'group') === 'user';
+          const contactName = isPrivate
+            ? (validMsgNickname(current.nickname, chatId) || validMsgNickname(overlay.nickname, chatId))
+            : '';
+          const contactAvatar = isPrivate ? String(current.avatar || overlay.avatar || '') : '';
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
-          if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)) { msgState.realtimeChats.delete(chatId); return; }
+          if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)) {
+            if (isPrivate && ((!validMsgNickname(current.nickname, chatId) && contactName)
+              || (!current.avatar && contactAvatar))) {
+              // 消息摘要跟随较新服务器记录，只保留后台已取得的联系人资料。
+              const profile = {...current, nickname:current.remark || contactName || current.nickname, avatar:contactAvatar};
+              byId.set(chatId, profile);
+              msgState.realtimeChats.set(chatId, profile);
+            } else msgState.realtimeChats.delete(chatId);
+            return;
+          }
           const adminKnown = msgState.adminByChat.has(chatId)
             ? Boolean(msgState.adminByChat.get(chatId))
             : Boolean(current.is_admin || overlay.is_admin);
@@ -1269,7 +1290,8 @@
             group_info_updated_at:Math.max(Number(current.group_info_updated_at || 0), Number(overlay.group_info_updated_at || 0)),
             member_num:groupProfile.member_num ?? current.member_num ?? overlay.member_num,
             group_member_num:groupProfile.group_member_num ?? current.group_member_num ?? overlay.group_member_num,
-            nickname:current.remark || (current.chat_type === 'group' && groupName) || current.nickname || overlay.nickname,
+            nickname:current.remark || (current.chat_type === 'group' && groupName) || contactName || current.nickname || overlay.nickname,
+            ...(isPrivate ? {avatar:contactAvatar} : {}),
             remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
             group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
             pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
@@ -1899,18 +1921,23 @@
       };
       const applyMsgNickname = (payload) => {
         const chatId = String(payload?.chat_id || '').trim();
-        const nickname = String(payload?.nickname || '').trim();
-        if (!chatId || !nickname) return;
-        msgState.chats = (msgState.chats || []).map((chat) =>
-          String(chat.chat_id || '') === chatId && String(chat.chat_type || '') === 'user'
-            ? {...chat, nickname:String(chat.remark || nickname)}
-            : chat,
-        );
+        const nickname = validMsgNickname(payload?.nickname, chatId);
+        const appid = String(payload?.appid || '').trim();
+        if (!chatId || !nickname || String(payload?.chat_type || 'user') !== 'user') return;
+        const matches = (chat) => chat && String(chat.chat_id || '') === chatId
+          && String(chat.chat_type || '') === 'user'
+          && (!appid || !String(chat.appid || '').trim() || String(chat.appid || '').trim() === appid);
+        const current = (msgState.chats || []).find(matches);
         const overlay = msgState.realtimeChats.get(chatId);
-        if (overlay && String(overlay.chat_type || '') === 'user') {
-          msgState.realtimeChats.set(chatId, {...overlay, nickname:String(overlay.remark || nickname)});
-        }
-        if (msgState.chatId === chatId && msgState.chatType === 'user') {
+        const seed = matches(overlay) ? overlay : current;
+        if (!seed) return;
+        msgState.chats = (msgState.chats || []).map((chat) =>
+          matches(chat) ? {...chat, nickname:String(chat.remark || nickname)} : chat,
+        );
+        // 昵称补查可能早于任何实时消息；从已有联系人保存资料覆盖项。
+        msgState.realtimeChats.set(chatId, {...seed, appid:String(seed.appid || appid), nickname:String(seed.remark || nickname)});
+        if (msgState.chatId === chatId && msgState.chatType === 'user'
+          && (!appid || !String(msgState.chatAppid || '').trim() || String(msgState.chatAppid || '').trim() === appid)) {
           const selected = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId);
           msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:{nickname}});
           updateMsgHead({chat_name:String(selected?.remark || nickname)});
