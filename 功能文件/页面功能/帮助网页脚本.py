@@ -4226,6 +4226,10 @@
       };
       const loadMsgHistory = async (older = false, quiet = false) => {
         if (!msgState.chatId) return;
+        const requestScope = JSON.stringify([msgState.chatType, msgState.chatId]);
+        // 后台校准不能中止尚未返回的首屏；切换和主动刷新仍可替换旧请求。
+        if (!older && quiet && msgState.historyActiveScope === requestScope
+          && msgState.historyAbort && !msgState.historyAbort.signal.aborted) return;
         if (older && msgState.historyOlderLoading) return;
         if (older) msgState.historyOlderLoading = true;
         $('msg-composer').hidden = msgState.chatRemoved;
@@ -4235,7 +4239,9 @@
         if (previousAbort) previousAbort.abort();
         const controller = new AbortController();
         msgState[older ? 'historyOlderAbort' : 'historyAbort'] = controller;
-        const historyTimeoutId = setTimeout(() => controller.abort(), 18000);
+        if (!older) msgState.historyActiveScope = requestScope;
+        let timedOut = false;
+        const historyTimeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, 18000);
         const requestChatId = msgState.chatId;
         const requestChatType = msgState.chatType;
         const requestIsCurrent = () => requestId === Number(msgState[older ? 'historyOlderRequest' : 'historyRequest'] || 0)
@@ -4310,19 +4316,31 @@
           }
         } catch (error) {
           if (!requestIsCurrent()) return;
+          if (error.name === 'AbortError' && !timedOut) return;
           if (forceInitialBottom) {
             // 首轮请求失败时仍展示缓存/空状态，不能让定位期间的隐藏样式残留。
             msgState.initialScrollChatId = '';
             body.classList.remove('msg-positioning');
             body.scrollTop = body.scrollHeight;
           }
-          if (error.name === 'AbortError') return;
-          if (error.status === 401) showAuthError(error); else toast(error.message);
+          if (error.status === 401) { showAuthError(error); return; }
+          const message = timedOut ? '消息加载超时，请重试' : '消息加载失败，请重试';
+          if (!older && !msgState.messages.length && body?.querySelector('.msg-loading')) {
+            body.innerHTML = `<div class="msg-empty" role="status">${message}<br><button type="button" class="btn secondary" data-msg-history-retry>重试</button></div>`;
+            body.querySelector('[data-msg-history-retry]')?.addEventListener('click', () => {
+              if (msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
+              body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
+              void loadMsgHistory();
+            });
+          } else if (!quiet || timedOut) toast(message);
         }
         finally {
           clearTimeout(historyTimeoutId);
           const abortKey = older ? 'historyOlderAbort' : 'historyAbort';
-          if (msgState[abortKey] === controller) msgState[abortKey] = null;
+          if (msgState[abortKey] === controller) {
+            msgState[abortKey] = null;
+            if (!older) msgState.historyActiveScope = '';
+          }
           if (older) msgState.historyOlderLoading = false;
         }
       };
