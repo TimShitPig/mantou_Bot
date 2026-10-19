@@ -44,6 +44,11 @@ _消息写入SQL = (
 # 已归档对象不随消息快照回退；数据库中的直链缓存可能比排队快照更新。
 # 仅合并现有归档对象，传入媒体中的其它字段和首次新增归档索引仍正常写入。
 _已有媒体SQL = "IF(JSON_VALID(media), media, '{}')"
+# 会话摘要只投影两个有界类型字段，保持列顺序，不读取 URL 或归档 JSON。
+_聊天摘要媒体SQL = (
+    f"JSON_OBJECT('type', LEFT(JSON_UNQUOTE(JSON_EXTRACT({_已有媒体SQL}, '$.type')), 16), "
+    f"'items', JSON_ARRAY(JSON_OBJECT('type', LEFT(JSON_UNQUOTE(JSON_EXTRACT({_已有媒体SQL}, '$.items[0].type')), 16))))"
+)
 _归档保留SQL = ", ".join(
     "CASE WHEN JSON_TYPE(JSON_EXTRACT("
     + _已有媒体SQL
@@ -2029,7 +2034,7 @@ def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
 def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, Any]]:
     """只读取会话列表需要的最后消息字段。
 
-    会话列表只展示昵称、时间和文本预览，不需要完整消息原文和媒体 JSON。
+    会话列表只展示昵称、时间、文本及媒体类型，不需要完整消息原文和媒体 JSON。
     这里保持与 ``_行转记录`` 相同的列顺序，用原文首尾摘要保留时间字段，
     避免列表请求把历史卡片/原始消息整批从 MySQL 传回 Python。
     """
@@ -2049,7 +2054,7 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                 游标.execute(
                     f"SELECT id, 会话标识, 消息类型, appid, message_id, user_id, nickname, "
                      f"LEFT(content, 1024) AS content, timestamp, ts, is_self, source, recalled, "
-                     f"'' AS media, reference_id, refidx, avatar, "
+                     f"{_聊天摘要媒体SQL} AS media, reference_id, refidx, avatar, "
                      f"CASE WHEN CHAR_LENGTH(raw_message) <= 2560 THEN raw_message "
                      f"ELSE CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) END AS raw_message, member_role, msg_seq "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",

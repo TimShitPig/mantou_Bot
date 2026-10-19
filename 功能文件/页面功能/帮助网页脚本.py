@@ -1068,6 +1068,27 @@
         const text = plainMsgPreview(String(value || '').slice(0, 512));
         return text.length > 120 ? `${text.slice(0, 120)}…` : text;
       };
+      const msgMessagePreview = (message) => {
+        const text = String(message.content || '');
+        if (text.trim()) return text;
+        const media = message.media && typeof message.media === 'object' ? message.media : {};
+        const first = Array.isArray(media.items) && media.items[0] && typeof media.items[0] === 'object' ? media.items[0] : {};
+        const labels = {图片:'[图片]',image:'[图片]',img:'[图片]',视频:'[视频]',video:'[视频]',语音:'[语音]',音频:'[语音]',audio:'[语音]',voice:'[语音]',record:'[语音]',文件:'[文件]',file:'[文件]'};
+        const label = (type) => Object.prototype.hasOwnProperty.call(labels, type) ? labels[type] : '';
+        return label(String(first.type || '').trim().toLowerCase()) || label(String(media.type || '').trim().toLowerCase());
+      };
+      const msgRealtimeChatSummary = (payload, message, existing) => {
+        const lastTs = Number(existing.last_ts || 0);
+        const eventTs = Number(payload.last_ts || message.ts || 0) || lastTs || Math.floor(Date.now() / 1000);
+        if (eventTs < lastTs) return {last_content:existing.last_content || '',last_ts:lastTs,last_time:existing.last_time || '',last_message_id:existing.last_message_id || ''};
+        const preview = Object.prototype.hasOwnProperty.call(payload, 'last_content') ? String(payload.last_content || '') : msgMessagePreview(message);
+        return {
+          last_content:replaceMsgMentions(preview),
+          last_ts:eventTs,
+          last_time:String(payload.last_time || (Number(message.ts || 0) === eventTs ? message.timestamp : '') || new Date(eventTs * 1000).toISOString()),
+          last_message_id:String(payload.last_message_id || message.message_id || ''),
+        };
+      };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
       const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
@@ -3892,7 +3913,7 @@
         const chatId = String(payload.chat_id || '').trim();
         const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
         if (!chatId || !message) return;
-        const existing = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || msgState.realtimeChats.get(chatId) || {};
+        const existing = msgState.realtimeChats.get(chatId) || msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || {};
         const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
         const eventAppid = String(payload.appid || message.appid || existing.appid || '').trim();
         if (payload.appid && message.appid && String(payload.appid).trim() !== String(message.appid).trim()) return;
@@ -3930,7 +3951,6 @@
         }
         const isNewEvent = rememberMsgEvent(chatId, message);
         if (isNewEvent) msgState.historyCache.delete(`${chatType}|${chatId}`);
-        const eventTs = Number(payload.last_ts || message.ts || 0) || Math.floor(Date.now() / 1000);
         const isViewing = matchesCurrent && !$('page-messages')?.hidden;
         const body = $('msg-body');
         const followLatest = isViewing && msgState.pendingNewMessages === 0 && msgBodyNearBottom(body);
@@ -3967,14 +3987,13 @@
             ? (existing.remark || displayMsgNickname({user_id:chatId, nickname:validMsgNickname(existing.nickname, chatId) || payload.last_nickname || message.nickname, nickname_blank:message.nickname_blank}, contactProfile, existing.nickname || chatId))
             : (existing.nickname || chatId),
           avatar:overlayAvatar,
-          last_content:replaceMsgMentions(String(payload.last_content || message.content || existing.last_content || '')),
-          last_time:String(message.timestamp || existing.last_time || new Date(eventTs * 1000).toISOString()),
-          last_ts:eventTs,
+          ...msgRealtimeChatSummary(payload, message, existing),
           msg_count:Math.max(0, Number(existing.msg_count || 0) + (isNewEvent ? 1 : 0)),
           unread,
         };
         msgState.realtimeChats.set(chatId, overlay);
-        if (isNewEvent || !msgState.chats.some((chat) => String(chat.chat_id || '') === chatId)) {
+        if (isNewEvent || overlay.last_content !== existing.last_content || overlay.last_ts !== existing.last_ts
+          || !msgState.chats.some((chat) => String(chat.chat_id || '') === chatId)) {
           scheduleMsgChatRender();
         }
         if (!isViewing) return;

@@ -646,6 +646,50 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     return 记录
 
 
+def _消息列表摘要(记录: dict[str, Any]) -> str:
+    """正文为空时显示首项媒体类型，不读取媒体地址或下载内容。"""
+    文本 = str(记录.get("content") or "")
+    if 文本.strip():
+        return 文本
+    媒体 = 记录.get("media")
+    if not isinstance(媒体, dict):
+        return ""
+    项目 = 媒体.get("items")
+    首项 = 项目[0] if isinstance(项目, list) and 项目 and isinstance(项目[0], dict) else {}
+    标签 = {
+        "图片": "[图片]", "image": "[图片]", "img": "[图片]",
+        "视频": "[视频]", "video": "[视频]",
+        "语音": "[语音]", "音频": "[语音]", "audio": "[语音]", "voice": "[语音]", "record": "[语音]",
+        "文件": "[文件]", "file": "[文件]",
+    }
+    return 标签.get(str(首项.get("type") or "").strip().lower()) or 标签.get(
+        str(媒体.get("type") or "").strip().lower(), ""
+    )
+
+
+def _更新会话摘要(会话: dict[str, Any], 记录: dict[str, Any]) -> None:
+    """新消息和当前最后消息的补全共用摘要，旧消息不回退列表。"""
+    时间 = int(记录.get("ts") or 0)
+    当前时间 = int(会话.get("last_ts") or 0)
+    消息ID = str(记录.get("message_id") or "")
+    if 时间 >= 当前时间 or (消息ID and 消息ID == 会话.get("last_message_id")):
+        会话["last_content"] = _消息列表摘要(记录)
+        会话["last_nickname"] = str(记录.get("nickname") or "")
+        会话["last_message_id"] = 消息ID
+    会话["last_ts"] = max(当前时间, 时间)
+
+
+def _会话列表摘要(会话: dict[str, Any], 最后记录: dict[str, Any]) -> str:
+    """兼容重载前缓存，并避免迟到的旧记录覆盖最新摘要。"""
+    消息ID = str(最后记录.get("message_id") or "")
+    if 最后记录 and (
+        (消息ID and 消息ID == 会话.get("last_message_id"))
+        or int(最后记录.get("ts") or 0) >= int(会话.get("last_ts") or 0)
+    ):
+        return _消息列表摘要(最后记录)
+    return str(会话.get("last_content") or "")
+
+
 def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     """只归一化会话列表摘要的时间和来源，不解析完整媒体/正文。"""
     if not isinstance(记录, dict):
@@ -1657,6 +1701,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "unread": max(0, int(会话.get("unread") or 0)),
         "last_content": _替换提及名称(会话.get("last_content") or "", 会话标识),
         "last_nickname": str(会话.get("last_nickname") or ""),
+        "last_message_id": str(会话.get("last_message_id") or ""),
         "last_ts": int(会话.get("last_ts") or 0),
         **_聊天群成员状态(会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group")),
         "member_profiles": 成员资料,
@@ -3274,6 +3319,7 @@ def 记录收到消息(
             None,
         )
         新增记录 = 已有记录 is None
+        资料已补全 = False
         if 新增记录:
             会话["messages"].append(记录)
             _消息缓存总数缓存 += 1
@@ -3295,7 +3341,7 @@ def 记录收到消息(
                         _排队消息持久化("message", dict(记录))
                     except Exception as 存储异常:
                         logger.debug("消息记录补全入库失败：错误类型=%s", type(存储异常).__name__)
-                _推送消息事件(记录, 会话)
+                资料已补全 = True
         if _消息数据库已配置() and 新增记录:
             try:
                 _排队消息持久化("message", dict(记录))
@@ -3308,21 +3354,9 @@ def 记录收到消息(
                 0,
                 _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
             )
-        新时间戳 = _转数字时间戳(时间戳) or int(time.time())
-        # 摘要按时间维护，纯媒体/空文本消息也要覆盖上一条预览；
-        # 旧消息回补时不能把较新的摘要倒退。
-        try:
-            当前摘要时间 = int(会话.get("last_ts") or 0)
-        except (TypeError, ValueError):
-            当前摘要时间 = 0
-        摘要记录 = 记录 if isinstance(记录, dict) else {}
-        if 新时间戳 >= 当前摘要时间:
-            会话["last_content"] = str(摘要记录.get("content") or "")
-            会话["last_nickname"] = str(摘要记录.get("nickname") or 昵称 or "")
-            会话["last_message_id"] = str(摘要记录.get("message_id") or 消息ID or "")
-        会话["last_ts"] = max(int(会话.get("last_ts") or 0), 新时间戳)
-        # 先通知网页再等待数据库线程；这一步必须保持在事件循环内轻量完成。
-        if 新增记录:
+        _更新会话摘要(会话, 记录)
+        # 先维护摘要再通知网页；同消息晚到的媒体也同步刷新列表。
+        if 新增记录 or 资料已补全:
             _推送消息事件(记录, 会话)
         if isinstance(媒体记录, dict):
             try:
@@ -3884,6 +3918,8 @@ def 记录发送消息(
                     "ts": 成功时间戳,
                 },
             )
+            _更新会话摘要(会话, 重复发送记录)
+            _推送消息事件(重复发送记录, 会话)
             if 消息ID:
                 自己发送消息ID[消息ID] = time.time()
             try:
@@ -3917,15 +3953,8 @@ def 记录发送消息(
                         "ts": 成功时间戳,
                     },
                 )
-                try:
-                    当前摘要时间 = int(会话.get("last_ts") or 0)
-                except (TypeError, ValueError):
-                    当前摘要时间 = 0
-                if 成功时间戳 >= 当前摘要时间:
-                    会话["last_content"] = str(已有记录.get("content") or "")
-                    会话["last_nickname"] = str(已有记录.get("nickname") or 发送者昵称 or "我")
-                    会话["last_message_id"] = str(已有记录.get("message_id") or 消息ID or "")
-                会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
+                _更新会话摘要(会话, 已有记录)
+                _推送消息事件(已有记录, 会话)
                 自己发送消息ID[str(消息ID)] = time.time()
                 try:
                     from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
@@ -3991,15 +4020,7 @@ def 记录发送消息(
                 0,
                 _消息缓存总数缓存 - (旧数量 - len(会话["messages"])),
             )
-        try:
-            当前摘要时间 = int(会话.get("last_ts") or 0)
-        except (TypeError, ValueError):
-            当前摘要时间 = 0
-        if 成功时间戳 >= 当前摘要时间:
-            会话["last_content"] = str(内容 or "")
-            会话["last_nickname"] = 发送者昵称 or "我"
-            会话["last_message_id"] = str(消息ID or "")
-        会话["last_ts"] = max(int(会话.get("last_ts") or 0), 成功时间戳)
+        _更新会话摘要(会话, 记录)
         # 机器人发送回复也属于一条新消息；只有设置会话已读才会清零红点。
         _推送消息事件(记录, 会话)
         if isinstance(记录.get("media"), dict):
@@ -5719,7 +5740,7 @@ def _补齐数据库会话到内存() -> None:
                 会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
             会话["messages"] = 消息列表
             最后 = 消息列表[-1]
-            会话["last_content"] = _替换提及名称(最后.get("content") or "", 会话标识)
+            会话["last_content"] = _替换提及名称(_消息列表摘要(最后), 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(最后.get("ts") or 0))
             已加载 = True
@@ -5808,7 +5829,9 @@ def _数据库聚合聊天项(
                     "chat_type": str(内存会话.get("chat_type") or 类型),
                     "nickname": str(内存会话.get("last_nickname") or ""),
                     "appid": str(内存会话.get("appid") or ""),
-                    "content": str(内存会话.get("last_content") or ""),
+                    "content": _会话列表摘要(内存会话, 内存最后记录) if 内存消息列表 else (
+                        _消息列表摘要(最后记录) if 内存最后时间 == 数据库最后时间 else str(内存会话.get("last_content") or "")
+                    ),
                     "avatar": _会话列表头像(会话标识, 类型, 内存最后记录, 群资料),
                     "timestamp": _格式化时间戳(内存最后时间),
                     "ts": 内存最后时间,
@@ -5856,7 +5879,7 @@ def _数据库聚合聊天项(
                         _替换提及名称(
                             _表情标签规则.sub(
                                 lambda 匹配: _解码表情文本(匹配.group(0)),
-                                str(最后记录.get("content") or ""),
+                                _消息列表摘要(最后记录),
                             ),
                             会话标识,
                         )
@@ -5940,7 +5963,7 @@ def _数据库聚合聊天项(
                 continue
             消息列表 = 内存会话.get("messages") or []
             最后记录 = 消息列表[-1] if 消息列表 else {}
-            最后内容 = str(内存会话.get("last_content") or 最后记录.get("content") or "")
+            最后内容 = _会话列表摘要(内存会话, 最后记录)
             最后时间 = int(内存会话.get("last_ts") or 最后记录.get("ts") or 0)
             当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
             列表头像 = _会话列表头像(会话标识, 类型, 最后记录, 群信息缓存.get(会话标识) or {})
@@ -6031,7 +6054,7 @@ def 获取聊天列表(
                         _替换提及名称(
                             _表情标签规则.sub(
                                 lambda 匹配: _解码表情文本(匹配.group(0)),
-                                str(最后消息.get("content") or 会话.get("last_content") or ""),
+                                _会话列表摘要(会话, 最后消息),
                             ),
                             会话标识,
                         )
@@ -8164,7 +8187,7 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
         摘要时间 = int(最后.get("ts") or 项.get("last_ts") or 0)
         当前摘要时间 = int(会话.get("last_ts") or 0)
         if 摘要时间 > 当前摘要时间 or (摘要时间 == 当前摘要时间 and 会话标识 not in 已更新会话):
-            会话["last_content"] = _替换提及名称(最后.get("content") or "", 会话标识)
+            会话["last_content"] = _替换提及名称(_消息列表摘要(最后), 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_message_id"] = str(最后.get("message_id") or "")
             会话["last_ts"] = 摘要时间
