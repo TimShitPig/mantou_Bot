@@ -213,7 +213,7 @@ def _原始消息昵称表达式(别名: str, 用户字段: str) -> str:
     保存昵称 = _有效用户昵称SQL(f"{别名}.nickname", 用户字段)
     return (
         f"CASE WHEN JSON_VALID({别名}.raw_message) THEN "
-        f"COALESCE({原始候选},{保存昵称},'') "
+        f"COALESCE({保存昵称},{原始候选},'') "
         f"ELSE COALESCE({保存昵称},'') END"
     )
 
@@ -1936,8 +1936,104 @@ def 批量读取用户昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[s
         _关闭连接(连接)
 
 
+def _批量读取历史昵称行(
+    连接: Any, appid: str, 用户标识列表: list[str], *, 严格应用: bool = True,
+) -> list[Any]:
+    """索引分页读取本人姓名；每批有界，查到有效姓名后停止该用户。"""
+    if not 用户标识列表:
+        return []
+    appid条件 = " AND x.appid=%s" if 严格应用 or appid else ""
+    已找到: dict[tuple[str, str], tuple[Any, ...]] = {}
+    当前用户 = list(用户标识列表)
+    游标ID: int | None = None
+    while 当前用户:
+        占位符 = ",".join("%s" for _ in 当前用户)
+        参数: list[Any] = list(当前用户)
+        if appid条件:
+            参数.append(appid)
+        翻页条件 = " AND x.id<%s" if 游标ID is not None else ""
+        if 游标ID is not None:
+            参数.append(游标ID)
+        with 连接.cursor() as 游标:
+            游标.execute(
+                "SELECT x.appid,x.user_id,x.nickname,x.ts,x.id,x.raw_message,x.消息类型 "
+                f"FROM `{消息记录表名}` x WHERE x.消息类型 IN ('group','user') "
+                f"AND x.is_self=0 AND x.user_id IN ({占位符}){appid条件}{翻页条件} "
+                "ORDER BY x.id DESC LIMIT 200", tuple(参数),
+            )
+            行列表 = 游标.fetchall() or ()
+        if not 行列表:
+            break
+        for 行 in 行列表:
+            记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+            标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
+            键 = (记录appid, 标识)
+            if 键 in 已找到:
+                continue
+            昵称 = _有效用户昵称(标识, _行字段(行, 2, "nickname", 默认值=""))
+            if not 昵称:
+                原文 = _行字段(行, 5, "raw_message", 默认值="")
+                类型 = str(_行字段(行, 6, "消息类型", 默认值="") or "")
+                for 资料 in _历史消息本人资料(原文, 标识, "", 类型):
+                    昵称 = _有效用户昵称(标识, 资料.get("nickname"))
+                    if 昵称:
+                        break
+            if 昵称:
+                已找到[键] = (
+                    记录appid, 标识, 昵称,
+                    _行字段(行, 3, "ts", 默认值=0), _行字段(行, 4, "id", 默认值=0),
+                )
+        下页ID = min(int(_行字段(行, 4, "id", 默认值=0) or 0) for 行 in 行列表)
+        if 下页ID <= 0 or (游标ID is not None and 下页ID >= 游标ID):
+            break
+        游标ID = 下页ID
+        if 严格应用 or appid:
+            当前用户 = [标识 for 标识 in 当前用户 if (appid, 标识) not in 已找到]
+        if len(行列表) < 200:
+            break
+    return list(已找到.values())
+
+
+def 批量读取历史用户昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """同 AppID、同用户 OpenID 直接复用群聊及私聊历史中的真实姓名。"""
+    结果: dict[tuple[str, str], str] = {}
+    if not 用户列表 or not _MySQL可用():
+        return 结果
+    分组: dict[str, list[str]] = {}
+    for 项 in 用户列表:
+        if not isinstance(项, dict):
+            continue
+        appid = str(项.get("appid") or "").strip()
+        用户标识 = str(项.get("user_id") or "").strip()
+        if not 用户标识 or len(用户标识) > 128 or len(appid) > 64:
+            continue
+        if 用户标识 not in 分组.setdefault(appid, []):
+            分组[appid].append(用户标识)
+    if not 分组:
+        return 结果
+    连接 = _打开连接()
+    if 连接 is None:
+        return 结果
+    try:
+        for appid, 标识列表 in 分组.items():
+            for 起点 in range(0, len(标识列表), 200):
+                分块 = 标识列表[起点 : 起点 + 200]
+                for 行 in _批量读取历史昵称行(连接, appid, 分块):
+                    记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
+                    标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
+                    昵称 = _有效用户昵称(标识, _行字段(行, 2, "nickname", 默认值=""))
+                    if 记录appid == appid and 标识 in 分块 and 昵称:
+                        结果[(appid, 标识)] = 昵称
+        return 结果
+    except Exception as exc:
+        logger.warning("QQ用户历史昵称读取失败：错误类型=%s，%s", type(exc).__name__, _MySQL错误摘要(exc))
+        return 结果
+    finally:
+        _关闭连接(连接)
+
+
 def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
-    """按用户批量读取最近有效群昵称，优先走 OpenID 映射和可用索引。"""
+    """兼容入口：直接匹配全部聊天历史，再补充已确认的跨群身份关联。"""
     结果: dict[tuple[str, str], str] = {}
     if not 用户列表 or not _MySQL可用():
         return 结果
@@ -1985,24 +2081,8 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
             for 起点 in range(0, len(用户标识列表), 200):
                 分块 = 用户标识列表[起点 : 起点 + 200]
                 占位符 = ",".join("%s" for _ in 分块)
-                appid条件 = " AND x.appid=%s" if appid else ""
-                直接参数: list[str] = list(分块)
-                if appid:
-                    直接参数.append(appid)
-                有效昵称 = 昵称条件("x", "x.user_id")
                 阶段 = "direct_user_index"
-                with 连接.cursor() as 游标:
-                    游标.execute(
-                        "SELECT m.appid,m.user_id,"
-                        f"{_原始消息昵称表达式('m', 'm.user_id')} AS nickname,m.ts,m.id "
-                        f"FROM `{消息记录表名}` m JOIN ("
-                        f"SELECT x.appid,x.user_id,MAX(x.id) AS last_id FROM `{消息记录表名}` x "
-                        f"WHERE x.消息类型='group' AND x.is_self=0 AND x.user_id IN ({占位符})"
-                        f"{appid条件} AND {有效昵称} GROUP BY x.appid,x.user_id"
-                        ") latest ON latest.last_id=m.id ORDER BY m.ts DESC,m.id DESC",
-                        tuple(直接参数),
-                    )
-                    直接行列表 = 游标.fetchall() or ()
+                直接行列表 = _批量读取历史昵称行(连接, appid, 分块, 严格应用=bool(appid))
                 for 行 in 直接行列表:
                     记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
                     用户标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
