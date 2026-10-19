@@ -34,6 +34,7 @@ except Exception:
 会话索引就绪键 = "conversation_summary_v1"
 群成员映射回填键 = "group_member_links_v1"
 统一用户资料回填键 = "user_profile_union_openid_v1"
+历史引用索引回填键 = "message_reference_indexes_v1"
 
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
@@ -60,8 +61,8 @@ _归档保留SQL = ", ".join(
 _消息更新SQL = (
     f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
     "timestamp=%s, ts=%s, is_self=%s, source=%s, recalled=%s, "
-    f"media=JSON_MERGE_PATCH(%s, {_归档保留SQL}), reference_id=%s, "
-    "refidx=%s, avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
+    f"media=JSON_MERGE_PATCH(%s, {_归档保留SQL}), reference_id=COALESCE(NULLIF(%s,''),reference_id), "
+    "refidx=COALESCE(NULLIF(%s,''),refidx), avatar=%s, raw_message=%s, member_role=%s, msg_seq=%s WHERE 会话标识=%s AND message_id=%s"
 )
 _消息查重分块大小 = 200
 
@@ -740,6 +741,129 @@ def 读取启动快照(配置: Any, 群状态命名空间: str, 未读命名空�
             _数据库线程配置.配置 = 原有配置
         else:
             del _数据库线程配置.配置
+
+
+def _有效历史引用索引(值: Any) -> str:
+    """索引完整保留或拒绝；不截断身份，不接收空白/控制字符。"""
+    文本 = _规范消息ID(值)
+    if not 文本 or len(文本) > _列最大长度["refidx"]:
+        return ""
+    return 文本 if all(33 <= ord(字符) <= 126 for 字符 in 文本) else ""
+
+
+def 回填历史引用索引批次(补充索引: Any, 批次大小: int = 300) -> tuple[int, bool]:
+    """在后台按主键恢复旧引用索引，索引 CAS 与游标提交保持同一事务。"""
+    if not _MySQL可用():
+        return 0, True
+    if not callable(补充索引):
+        return 0, False
+    try:
+        批次大小 = max(1, min(1000, int(批次大小)))
+    except (TypeError, ValueError):
+        批次大小 = 300
+    连接 = _打开连接()
+    if 连接 is None:
+        return 0, False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (历史引用索引回填键,),
+            )
+            if str(_行字段(游标.fetchone(), 0, "state_value", 默认值="") or "") == "ready":
+                return 0, True
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (历史引用索引回填键 + "_cursor",),
+            )
+            try:
+                游标状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=None)
+                游标位置 = max(0, int(游标状态)) if 游标状态 is not None else None
+            except (TypeError, ValueError):
+                游标位置 = None
+            游标.execute(
+                f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1",
+                (历史引用索引回填键 + "_upper",),
+            )
+            上界状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=None)
+            if 上界状态 is None:
+                游标.execute(f"SELECT COALESCE(MAX(id),0) AS max_id FROM `{消息记录表名}`")
+                初始上界 = max(0, int(_行字段(游标.fetchone(), 0, "max_id", 默认值=0) or 0))
+                游标.execute(
+                    f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                    "ON DUPLICATE KEY UPDATE state_value=state_value",
+                    (历史引用索引回填键 + "_upper", str(初始上界)),
+                )
+                # 热重载交接中的旧线程可能同时完成首批，当前读取以已保存上界为准。
+                游标.execute(
+                    f"SELECT state_value FROM `{会话索引状态表名}` WHERE state_key=%s LIMIT 1 FOR UPDATE",
+                    (历史引用索引回填键 + "_upper",),
+                )
+                上界状态 = _行字段(游标.fetchone(), 0, "state_value", 默认值=初始上界)
+            扫描上界 = max(0, int(上界状态 or 0))
+            if 游标位置 is None:
+                游标位置 = 扫描上界 + 1
+            游标.execute(
+                f"SELECT id,会话标识,消息类型,appid,refidx,reference_id,raw_message "
+                f"FROM `{消息记录表名}` WHERE id<%s AND id<=%s AND 消息类型 IN ('group','user') "
+                "AND (COALESCE(refidx,'')='' OR COALESCE(reference_id,'')='') "
+                "ORDER BY id DESC LIMIT %s",
+                (游标位置, 扫描上界, 批次大小),
+            )
+            行列表 = list(游标.fetchall() or ())
+            if not 行列表:
+                游标.execute(
+                    f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                    "ON DUPLICATE KEY UPDATE state_value=VALUES(state_value)",
+                    (历史引用索引回填键, "ready"),
+                )
+                连接.commit()
+                return 0, True
+            待补索引: list[tuple[Any, ...]] = []
+            for 行 in 行列表:
+                记录ID = int(_行字段(行, 0, "id", 默认值=0) or 0)
+                会话标识 = str(_行字段(行, 1, "会话标识", 默认值="") or "")
+                类型 = str(_行字段(行, 2, "消息类型", 默认值="") or "")
+                appid = str(_行字段(行, 3, "appid", 默认值="") or "")
+                原自身索引 = str(_行字段(行, 4, "refidx", 默认值="") or "")
+                原引用索引 = str(_行字段(行, 5, "reference_id", 默认值="") or "")
+                原文 = _行字段(行, 6, "raw_message", 默认值="")
+                补充 = {"refidx": 原自身索引, "reference_id": 原引用索引}
+                补充索引(补充, 原文)
+                自身索引 = _有效历史引用索引(补充.get("refidx")) if not 原自身索引 else ""
+                引用索引 = _有效历史引用索引(补充.get("reference_id")) if not 原引用索引 else ""
+                if 记录ID and 会话标识 and 类型 in {"group", "user"} and (自身索引 or 引用索引):
+                    待补索引.append((
+                        自身索引, 自身索引, 引用索引, 引用索引,
+                        记录ID, 会话标识, 类型, appid, 自身索引, 引用索引,
+                    ))
+            if 待补索引:
+                游标.executemany(
+                    f"UPDATE `{消息记录表名}` SET "
+                    "refidx=CASE WHEN COALESCE(refidx,'')='' AND %s<>'' THEN %s ELSE refidx END, "
+                    "reference_id=CASE WHEN COALESCE(reference_id,'')='' AND %s<>'' THEN %s ELSE reference_id END "
+                    "WHERE id=%s AND 会话标识=%s AND 消息类型=%s AND appid=%s "
+                    "AND ((COALESCE(refidx,'')='' AND %s<>'') OR (COALESCE(reference_id,'')='' AND %s<>''))",
+                    待补索引,
+                )
+            最后ID = min(游标位置, int(_行字段(行列表[-1], 0, "id", 默认值=游标位置) or 游标位置))
+            游标.execute(
+                f"INSERT INTO `{会话索引状态表名}` (state_key,state_value) VALUES (%s,%s) "
+                "ON DUPLICATE KEY UPDATE state_value=CAST(LEAST("
+                "CAST(state_value AS UNSIGNED),CAST(VALUES(state_value) AS UNSIGNED)) AS CHAR)",
+                (历史引用索引回填键 + "_cursor", str(最后ID)),
+            )
+        连接.commit()
+        return len(行列表), False
+    except Exception as 异常:
+        try:
+            连接.rollback()
+        except Exception:
+            pass
+        logger.warning("消息记录 MySQL 历史引用索引回填失败：错误类型=%s", type(异常).__name__)
+        return 0, False
+    finally:
+        _关闭连接(连接)
 
 
 def 回填历史用户资料批次(批次大小: int = 300) -> tuple[int, bool]:

@@ -3878,23 +3878,60 @@ def _排队收到消息(客户端: Any, 消息: Any, 类型: str) -> bool:
 
 
 async def _消息资料回填工作() -> None:
-    """低频分批回填历史昵称资料，不占用插件初始化和会话切换时间。"""
+    """后台逐批恢复引用索引和昵称；进度在库中提交，重载后继续。"""
     global _消息资料回填任务
+    已完成项目: set[str] = set()
+    上轮配置键: str | None = None
     try:
         while True:
-            回填 = getattr(_消息存储, "回填历史用户资料批次", None)
-            if not callable(回填):
+            读取配置键 = getattr(_消息存储, "获取数据库初始化键", None)
+            配置键 = str(读取配置键(当前插件配置)) if callable(读取配置键) else ""
+            if 配置键 != 上轮配置键:
+                已完成项目.clear()
+                上轮配置键 = 配置键
+            本轮处理 = 0
+            待继续 = False
+            配置已变化 = False
+            for 名称, 方法名, 额外参数 in (
+                ("引用索引", "回填历史引用索引批次", (_补充记录引用索引,)),
+                ("用户资料", "回填历史用户资料批次", ()),
+            ):
+                if 名称 in 已完成项目:
+                    continue
+                回填 = getattr(_消息存储, 方法名, None)
+                if not callable(回填):
+                    已完成项目.add(名称)
+                    continue
+                派发配置键 = str(读取配置键(当前插件配置)) if callable(读取配置键) else ""
+                if 派发配置键 != 配置键:
+                    已完成项目.clear()
+                    配置已变化 = True
+                    break
+                try:
+                    已处理, 已完成 = await _异步执行消息记录同步(回填, *额外参数, 300)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as 异常:
+                    logger.debug("消息记录历史%s回填失败：错误类型=%s", 名称, type(异常).__name__)
+                    已处理, 已完成 = 0, False
+                返回配置键 = str(读取配置键(当前插件配置)) if callable(读取配置键) else ""
+                if 返回配置键 != 派发配置键:
+                    已完成项目.clear()
+                    配置已变化 = True
+                    break
+                本轮处理 += max(0, int(已处理 or 0))
+                if 已完成:
+                    已完成项目.add(名称)
+                else:
+                    待继续 = True
+            if 配置已变化:
+                continue
+            结束配置键 = str(读取配置键(当前插件配置)) if callable(读取配置键) else ""
+            if 结束配置键 != 配置键:
+                continue
+            if not 待继续:
                 return
-            try:
-                已处理, 已完成 = await _异步执行消息记录同步(回填, 300)
-            except asyncio.CancelledError:
-                raise
-            except Exception as 异常:
-                logger.debug("消息记录历史用户资料回填失败：错误类型=%s", type(异常).__name__)
-                已处理, 已完成 = 0, False
-            if 已完成:
-                return
-            await asyncio.sleep(0.5 if 已处理 else 10.0)
+            await asyncio.sleep(0.5 if 本轮处理 else 10.0)
     except asyncio.CancelledError:
         raise
     finally:
@@ -3905,8 +3942,9 @@ async def _消息资料回填工作() -> None:
 def _启动消息资料回填任务() -> asyncio.Task[Any] | None:
     """后台启动可取消、可续跑的历史资料迁移。"""
     global _消息资料回填任务
-    if not _消息数据库已配置() or not callable(
-        getattr(_消息存储, "回填历史用户资料批次", None)
+    if not _消息数据库已配置() or not any(
+        callable(getattr(_消息存储, 方法名, None))
+        for 方法名 in ("回填历史引用索引批次", "回填历史用户资料批次")
     ):
         return None
     try:
@@ -3916,7 +3954,7 @@ def _启动消息资料回填任务() -> asyncio.Task[Any] | None:
     if _消息资料回填任务 is None or _消息资料回填任务.done():
         _消息资料回填任务 = 循环.create_task(
             _消息资料回填工作(),
-            name="消息记录历史用户资料回填",
+            name="消息记录历史资料回填",
         )
     return _消息资料回填任务
 
