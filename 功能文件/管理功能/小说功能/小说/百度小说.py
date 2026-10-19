@@ -689,7 +689,7 @@ def _从百度出版图书提取目录(
             return []
         索引[编号] = 项目
     目录: list[dict[str, Any]] = []
-    for 编号, 项目 in 索引.items():
+    for 章节下标, (编号, 项目) in enumerate(索引.items()):
         坐标 = _百度出版坐标(编号)
         标题 = 项目.get("title")
         标题 = 标题.strip() if isinstance(标题, str) else ""
@@ -708,6 +708,8 @@ def _从百度出版图书提取目录(
                 "source_cid": 编号,
                 "source_map": 范围,
                 "source_para_count": 每页段数[坐标[0] - 1],
+                "source_page_count": 页数,
+                "source_is_last": 章节下标 == len(索引) - 1,
                 "source_free_boundary": 免费边界文本,
                 "source_next_title": 下一标题,
                 "source_doc_id": 实际编号,
@@ -739,13 +741,61 @@ def _百度出版标题键(值: Any) -> str:
     return re.sub(r"\s+", "", html.unescape(值)) if isinstance(值, str) else ""
 
 
+def _百度出版章节切片(
+    章节: dict[str, Any],
+) -> tuple[tuple[int, int, bool] | None, str]:
+    """按官方排他坐标规划当前分片，明确区分免费范围和坏目录。"""
+    起点 = _百度出版坐标(章节.get("id"))
+    范围 = 章节.get("source_map")
+    范围项 = 范围.split(",") if isinstance(范围, str) else []
+    段数 = _百度出版正整数(章节.get("source_para_count"))
+    免费边界 = _百度出版坐标(章节.get("source_free_boundary"))
+    if (
+        起点 is None or len(范围项) != 2
+        or _百度出版坐标(范围项[0]) != 起点
+        or 段数 is None or 起点[1] > 段数
+        or str(章节.get("source_page")) != str(起点[0])
+        or 免费边界 is None
+    ):
+        return None, "catalog_range_invalid"
+    终点 = _百度出版坐标(范围项[1])
+    页末 = False
+    if 范围项[1] == f"{起点[0]}-0":
+        if (
+            章节.get("source_is_last") is not True
+            or _百度出版正整数(章节.get("source_page_count")) != 起点[0]
+        ):
+            return None, "catalog_range_invalid"
+        结束下标, 页末 = 段数, True
+    else:
+        下一标题 = 章节.get("source_next_title")
+        if 终点 is None or 终点 <= 起点 or not isinstance(下一标题, str) or not 下一标题.strip():
+            return None, "catalog_range_invalid"
+        if 终点[0] == 起点[0]:
+            if 终点[1] > 段数:
+                return None, "catalog_range_invalid"
+            结束下标 = 终点[1] - 1
+        elif 终点 == (起点[0] + 1, 1):
+            总页数 = _百度出版正整数(章节.get("source_page_count"))
+            if 总页数 is None or 终点[0] > 总页数:
+                return None, "catalog_range_invalid"
+            结束下标, 页末 = 段数, True
+        else:
+            return None, "unsupported_span"
+    if 起点 >= 免费边界 or (起点[0], 结束下标) >= 免费边界:
+        return None, "free_boundary"
+    if 结束下标 <= 起点[1]:
+        return None, "empty_chapter"
+    return (起点[1] - 1, 结束下标, 页末), ""
+
+
 def _拆分百度出版页面正文(
     内容: Any, 页面目录: list[dict[str, Any]]
 ) -> dict[str, str]:
     """只返回完整、可读、与目录边界一致的同分片章节。
 
-    结束坐标和免费边界均为排他边界。跨分片范围、缺少真实标题、
-    尾章 0 段占位或无元数据的旧缓存不会被推测补齐。
+    下一分片第 1 段不属于本章；真实末章的本片 0 段标记表示读至页末。
+    需要多个分片正文的章节仍保持失败，不推测补齐，也不越过免费边界。
     """
     if (
         not isinstance(内容, dict)
@@ -771,37 +821,16 @@ def _拆分百度出版页面正文(
         标题 = 章节.get("title")
         if not isinstance(标题, str) or not 标题.strip():
             continue
-        起点 = _百度出版坐标(编号)
-        范围 = 章节.get("source_map")
-        范围项 = 范围.split(",") if isinstance(范围, str) else []
-        if len(范围项) != 2:
-            continue
-        范围起点 = _百度出版坐标(范围项[0])
-        终点 = _百度出版坐标(范围项[1])
-        免费边界 = _百度出版坐标(章节.get("source_free_boundary"))
         段数 = _百度出版正整数(章节.get("source_para_count"))
-        下一标题 = 章节.get("source_next_title")
-        if (
-            起点 is None
-            or 范围起点 != 起点
-            or 终点 is None
-            or 免费边界 is None
-            or not isinstance(下一标题, str)
-            or not 下一标题.strip()
-            or 段数 != len(区块列表)
-            or 起点[0] != 页码
-            or 终点[0] != 页码
-            or str(章节.get("source_page")) != str(页码)
-            or 终点 <= 起点
-            or 终点[1] > 段数
-            or 起点 >= 免费边界
-            or (页码, 终点[1] - 1) >= 免费边界
-        ):
+        切片, _ = _百度出版章节切片(章节)
+        if 切片 is None or 段数 != len(区块列表) or str(章节.get("source_page")) != str(页码):
             continue
-        起始下标, 结束下标 = 起点[1] - 1, 终点[1] - 1
+        起始下标, 结束下标, 页末 = 切片
         if not _百度出版标题匹配(区块列表[起始下标], 标题):
             continue
-        if 终点 < 免费边界 and not _百度出版标题匹配(区块列表[结束下标], 下一标题):
+        终点 = _百度出版坐标(章节.get("source_map", "").split(",")[-1])
+        免费边界 = _百度出版坐标(章节.get("source_free_boundary"))
+        if not 页末 and 终点 < 免费边界 and not _百度出版标题匹配(区块列表[结束下标], 章节.get("source_next_title")):
             continue
         正文区块 = 区块列表[起始下标 + 1 : 结束下标]
         if any(
@@ -824,10 +853,23 @@ async def 下载百度出版正文(
 ) -> list[str | None]:
     结果: list[str | None] = [None] * len(目录)
     分组: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    范围失败: dict[str, int] = {}
     for 下标, 章节 in enumerate(目录):
+        if 章节.get("source_doc_id") != 文档编号 or 章节.get("source_version") != 版本:
+            raise RuntimeError("published_identity_mismatch")
+        切片, 原因 = _百度出版章节切片(章节)
+        if 切片 is None:
+            范围失败[原因] = 范围失败.get(原因, 0) + 1
+            continue
         页面编号 = str(章节.get("source_page") or "").strip()
         if 页面编号:
             分组.setdefault(页面编号, []).append((下标, 章节))
+    if 范围失败:
+        logger.warning(
+            "百度出版正文范围检查：书籍编号=%s, 可请求章节=%s, 跳过分类=%s",
+            文档编号, sum(len(项目) for 项目 in 分组.values()),
+            ",".join(f"{原因}:{数量}" for 原因, 数量 in sorted(范围失败.items())),
+        )
     信号量 = asyncio.Semaphore(百度最大并发数)
     节流器 = _百度请求节流器()
     页面结果: dict[str, dict[str, str]] = {}
@@ -876,11 +918,12 @@ async def 下载百度出版正文(
                     已完成页面 += 1
                     if 已完成页面 >= 下次页面日志 or 已完成页面 == len(分组):
                         logger.info(
-                            "百度出版正文进度：书籍编号=%s, 进度=%s/%s, 成功=%s",
+                            "百度出版正文进度：书籍编号=%s, 分片=%s/%s, 成功章节=%s/%s",
                             文档编号,
                             已完成页面,
                             len(分组),
-                            sum(bool(页面结果.get(页面, {})) for 页面 in 分组),
+                            sum(len(项目) for 项目 in 页面结果.values()),
+                            len(目录),
                         )
                         下次页面日志 += max(1, (len(分组) + 3) // 4)
 

@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.193-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.194-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.193 |
+| 版本 | v6.1.194 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -197,7 +197,7 @@ QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的�
 - 点众：每路正文任务使用独立 App 身份和 HTTP Session，最高 60 路并发。
 - 盐言小说：只下载分享链接对应的当前文章，固定按 1 章合成 TXT；详情只补充当前文章标题和作者。正文标题未知时使用详情标题；正文服务处于补录状态时结束本次下载，不生成提示文字冒充的正文。
 - 塔读：TDZ/AES/DES 与 UTF-16LE 正文解析合并到单文件，最高 400 路动态并发。
-- 百度：出版源使用 `doc_id` 接口，普通源使用 AES 正文接口。 支持 `yd.baidu.com` 的 `wapdetail` / `wapcontent` 分享链接，直接读取 `data.doc_id`，同类小说链接加入群管白名单。
+- 百度：出版源使用 `doc_id` 接口，普通源使用 AES 正文接口。出版正文支持以下一分片首段为排他边界的章节和真实末章的页末标记；请求前校验完整免费阅读范围，越界或缺章时不生成部分 TXT。支持 `yd.baidu.com` 的 `wapdetail` / `wapcontent` 分享链接，直接读取 `data.doc_id`，同类小说链接加入群管白名单。
 - 小米：使用 `dushu.xiaomi.com` 接口，兼容旧 `reader.browser.miui.com` 链接。
 - 菠萝包：支持 `m.sfacg.com/Novel/{书籍ID}` 和 `m.sfacg.com/b/{书籍ID}` 短链。
 - 晋江：只请求公开章节，付费或明确锁定章节不请求。目录返回业务码 `1058` 且详情明确为 0 章时提示“该书暂未发布章节”；其他空目录、资料不一致或请求失败仍按异常处理，不生成 TXT。
