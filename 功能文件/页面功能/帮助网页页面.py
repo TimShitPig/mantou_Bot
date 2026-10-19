@@ -148,6 +148,7 @@ from .帮助网页脚本 import 控制台脚本
             .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
             .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
             .msg-pan-account-control { display:flex; align-items:center; gap:6px; min-width:0; min-height:28px; padding:0 8px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#858895; font-size:10px; white-space:nowrap; }
+            .msg-pan-account-control[hidden] { display:none; }
             .msg-pan-account-control select { min-width:0; max-width:155px; border:0; outline:0; background:transparent; color:#4e5260; font-family:inherit; font-size:11px; font-weight:600; cursor:pointer; }
             .msg-pan-account-control select:disabled { cursor:not-allowed; opacity:.65; }
             .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }

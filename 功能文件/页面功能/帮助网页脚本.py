@@ -676,7 +676,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1717,6 +1717,7 @@
         if (!sameChat) {
           cancelMsgRealtimeMessageRender();
           msgState.panSelectionSaving = false;
+          msgState.panSelectionLoading = false;
           msgState.panSelectionData = null;
           msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
           msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
@@ -2088,48 +2089,66 @@
         if (!wrap || !select) return;
         const visible = msgState.chatType === 'group' && Boolean(msgState.chatId) && !msgState.chatRemoved;
         wrap.hidden = !visible;
-        if (!visible) return;
-        const data = msgState.panSelectionData;
-        if (loading || !data) {
-          select.innerHTML = `<option value="">${loading ? '读取中' : '读取失败'}</option>`;
+        if (!visible) {
+          select.replaceChildren();
           select.disabled = true;
+          select.removeAttribute('title');
+          return;
+        }
+        const data = msgState.panSelectionData;
+        const pending = loading || msgState.panSelectionLoading;
+        if (pending || !data) {
+          select.innerHTML = `<option value="">${pending ? '读取中' : '读取失败'}</option>`;
+          select.disabled = true;
+          select.removeAttribute('title');
           return;
         }
         const choices = Array.isArray(data.choices) ? data.choices : [];
         const defaultLabel = data.default?.label ? `跟随默认 · ${data.default.label}` : '跟随默认 · 暂无可用账号';
         const options = [`<option value="__default__">${esc(defaultLabel)}</option>`, ...choices.map((choice) => `<option value="${esc(choice.value)}">${esc(choice.label)}</option>`)];
+        const selectedValue = msgState.panSelectionSaving ? select.value : data.selected_value;
         select.innerHTML = options.join('');
-        select.value = data.selected_value || '__default__';
+        select.value = selectedValue || '__default__';
         select.disabled = !data.editable || msgState.panSelectionSaving || !choices.length;
         select.title = data.editable ? '只影响当前群；跟随默认会使用网盘配置页中的默认网盘' : '数据库未配置，群网盘选择不能保存';
       };
+      const isMsgPanSelectionCurrent = (request, chatId, appid) => request === msgState.panSelectionRequest
+        && msgState.chatId === chatId && msgState.chatType === 'group'
+        && (!appid || String(msgState.chatAppid || '') === appid) && !msgState.chatRemoved;
       const loadMsgPanSelection = async () => {
         const chatId = String(msgState.chatId || '').trim();
+        const appid = String(msgState.chatAppid || '');
+        const request = Number(msgState.panSelectionRequest || 0) + 1;
+        msgState.panSelectionRequest = request;
+        msgState.panSelectionData = null;
+        msgState.panSelectionLoading = false;
+        msgState.panSelectionSaving = false;
         if (msgState.chatType !== 'group' || !chatId || msgState.chatRemoved) {
           updateMsgPanSelector();
           return;
         }
-        const request = Number(msgState.panSelectionRequest || 0) + 1;
-        msgState.panSelectionRequest = request;
-        msgState.panSelectionData = null;
+        msgState.panSelectionLoading = true;
         updateMsgPanSelector(true);
         try {
           const data = await api('message/group-pan', {method:'POST', body:JSON.stringify({chat_id:chatId, action:'get'})});
-          if (request !== msgState.panSelectionRequest || msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          if (!isMsgPanSelectionCurrent(request, chatId, appid)) return;
           msgState.panSelectionData = data;
-          updateMsgPanSelector();
         } catch (error) {
-          if (request !== msgState.panSelectionRequest || msgState.chatId !== chatId || msgState.chatType !== 'group') return;
-          msgState.panSelectionData = {editable:false, choices:[], default:null, selected_value:'__default__'};
-          updateMsgPanSelector();
+          if (!isMsgPanSelectionCurrent(request, chatId, appid)) return;
           if (error.status === 401) showAuthError(error);
+        } finally {
+          if (isMsgPanSelectionCurrent(request, chatId, appid)) {
+            msgState.panSelectionLoading = false;
+            updateMsgPanSelector();
+          }
         }
       };
       const saveMsgPanSelection = async () => {
         const select = $('msg-pan-account-select');
         const chatId = String(msgState.chatId || '').trim();
+        const appid = String(msgState.chatAppid || '');
         const value = String(select?.value || '');
-        if (!select || !chatId || msgState.chatType !== 'group' || !msgState.panSelectionData?.editable || msgState.panSelectionSaving) return;
+        if (!select || !chatId || msgState.chatType !== 'group' || msgState.chatRemoved || !msgState.panSelectionData?.editable || msgState.panSelectionSaving || msgState.panSelectionLoading) return;
         let payload = {chat_id:chatId, action:'reset'};
         if (value !== '__default__') {
           const separator = value.lastIndexOf(':');
@@ -2138,17 +2157,20 @@
           if (!['UC','夸克','百度'].includes(platform) || !Number.isInteger(index) || index < 1) return toast('网盘账号选择无效');
           payload = {chat_id:chatId, action:'set', platform, index};
         }
+        const request = Number(msgState.panSelectionRequest || 0) + 1;
+        msgState.panSelectionRequest = request;
         msgState.panSelectionSaving = true;
         updateMsgPanSelector();
         try {
           const result = await api('message/group-pan', {method:'POST', body:JSON.stringify(payload)});
-          if (msgState.chatId !== chatId || msgState.chatType !== 'group') return;
+          if (!isMsgPanSelectionCurrent(request, chatId, appid)) return;
           toast(result.message || '本群网盘账号已更新');
         } catch (error) {
+          if (!isMsgPanSelectionCurrent(request, chatId, appid)) return;
           if (error.status === 401) showAuthError(error);
           else toast(error.message || '本群网盘账号保存失败');
         } finally {
-          if (msgState.chatId === chatId && msgState.chatType === 'group') {
+          if (isMsgPanSelectionCurrent(request, chatId, appid)) {
             msgState.panSelectionSaving = false;
             await loadMsgPanSelection();
           }
