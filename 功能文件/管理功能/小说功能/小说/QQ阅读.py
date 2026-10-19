@@ -23,6 +23,7 @@ import struct
 import tarfile
 import threading
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
 import zipfile
@@ -3254,6 +3255,75 @@ def 解析QQ阅读Cookie(文本: Any) -> dict[str, str] | None:
     return {"ywguid": ywguid, "ywkey": ywkey}
 
 
+def _是QQ阅读通用分享链接(来源: Any) -> bool:
+    link = 提取QQ阅读链接(来源)
+    if not link:
+        return False
+    try:
+        parsed = urlsplit(link)
+        return (
+            parsed.scheme == "https"
+            and (parsed.hostname or "").lower() == "ih5.reader.qq.com"
+            and parsed.path.rstrip("/").lower() == "/h5/share/bookshare"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 443)
+        )
+    except ValueError:
+        return False
+
+
+def 提取QQ阅读分享书名(文本: Any, 来源: Any) -> str:
+    """只关联同段官方分享文案里的书名和当前通用链接。"""
+    if not isinstance(文本, str) or not _是QQ阅读通用分享链接(来源):
+        return ""
+    link = 提取QQ阅读链接(来源)
+    text = html.unescape(文本).replace("\\/", "/")
+    标题集: set[str] = set()
+    for match in re.finditer(
+        r"我正在用\s*QQ阅读\s*看一本书\s*《([^《》\r\n]{1,120})》"
+        r"\s*[，,]\s*觉得不错\s*[，,]\s*与大家一起分享[。.!！]?\s*"
+        r"(https?://[^\s<>\"']+)",
+        text,
+        re.I,
+    ):
+        if 提取QQ阅读链接(match.group(2)) != link:
+            continue
+        title = match.group(1).strip()
+        if title and all(ord(char) >= 32 and ord(char) != 127 for char in title):
+            标题集.add(title)
+    return next(iter(标题集)) if len(标题集) == 1 else ""
+
+
+def _清理QQ阅读搜索文本(文本: Any) -> str:
+    """去除官方搜索响应里的 em 高亮标签，保留书名标点和副标题。"""
+    return re.sub(r"</?em\s*>", "", html.unescape(str(文本 or "")), flags=re.I).strip()
+
+
+def _规范QQ阅读书名(文本: Any) -> str:
+    return "".join(unicodedata.normalize("NFKC", _清理QQ阅读搜索文本(文本)).split())
+
+
+async def 按QQ阅读分享书名解析编号(标题: str) -> str:
+    """完整书名匹配且唯一时才恢复缺失的编号，不采用相似结果。"""
+    标准书名 = _规范QQ阅读书名(标题)
+    if not 标准书名:
+        return ""
+    try:
+        结果 = await asyncio.wait_for(搜索小说(标题, 需要数量=30), timeout=30)
+    except Exception as exc:
+        logger.warning("QQ阅读分享书名补全失败：错误类型=%s", type(exc).__name__)
+        return ""
+    候选编号 = {
+        str(项.get("book_id") or "")
+        for 项 in 结果
+        if isinstance(项, dict)
+        and str(项.get("book_id") or "").isdigit()
+        and _规范QQ阅读书名(项.get("title")) == 标准书名
+    }
+    return next(iter(候选编号)) if len(候选编号) == 1 else ""
+
+
 def 解析书籍编号(来源: Any) -> str:
     link = 提取QQ阅读链接(来源) or str(来源 or "").strip()
     try:
@@ -3600,9 +3670,9 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
         book_id = str(
             info.get("bid") or card.get("bid") or card.get("id") or ""
         ).strip()
-        title = str(
+        title = _清理QQ阅读搜索文本(
             info.get("title") or info.get("bookName") or card.get("title") or ""
-        ).strip()
+        )
         if not book_id.isdigit() or not title:
             continue
         result.append(
@@ -3610,9 +3680,9 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
                 "platform": "QQ阅读",
                 "book_id": book_id,
                 "title": title,
-                "author": str(
+                "author": _清理QQ阅读搜索文本(
                     info.get("author") or card.get("author") or "未知"
-                ).strip()
+                )
                 or "未知",
                 "url": f"https://book.qq.com/book-detail/{book_id}",
                 "score": card.get("book_score") or info.get("score") or 0,
@@ -4828,13 +4898,15 @@ def 获取QQ阅读回复流(
     link = 提取QQ阅读链接(命令文本) or 提取QQ阅读事件链接(event)
     if link is None:
         return None
-    return 生成下载回复流(event, link, 配置)
+    return 生成下载回复流(event, link, 配置, 分享文本=命令文本)
 
 
 async def 生成下载回复流(
     event: Any,
     来源: str,
     配置: Any = None,
+    *,
+    分享文本: str = "",
 ) -> AsyncIterator[Any]:
     book_id = ""
     stage = "link"
@@ -4848,12 +4920,20 @@ async def 生成下载回复流(
             book_id = 解析书籍编号(来源) or await 解析QQ阅读分享页书籍编号(
                 来源, session
             )
+            登录态已加载 = False
+            if not book_id:
+                分享书名 = 提取QQ阅读分享书名(分享文本 or 来源, 来源)
+                if 分享书名:
+                    await 加载保存的QQ阅读登录态(配置)
+                    登录态已加载 = True
+                    book_id = await 按QQ阅读分享书名解析编号(分享书名)
             if not book_id:
                 logger.warning("QQ阅读分享链接解析失败：错误分类=book_id_missing")
                 yield 下载失败提示
                 return
 
-            await 加载保存的QQ阅读登录态(配置)
+            if not 登录态已加载:
+                await 加载保存的QQ阅读登录态(配置)
             stage = "details"
             try:
                 details = await 获取参考书籍详情(book_id, session)
