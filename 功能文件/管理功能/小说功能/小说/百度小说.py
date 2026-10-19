@@ -44,13 +44,13 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度出版图书地址 = "https://appyd.baidu.com/nabook/book"
 百度出版目录地址 = "https://appyd.baidu.com/nabook/chapter"
 百度出版正文地址 = "https://appyd.baidu.com/mobile/getbdjson"
-百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com"}
+百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com", "yd.baidu.com"}
 百度详情页路径 = "/boxnovel/yuedu/wapdetail"
 百度详情页路径集合 = {"/boxnovel/yuedu/wapdetail", "/boxnovel/yuedu/wapcontent"}
 百度详情页最大响应字节 = 1024 * 1024
 百度链接正则 = re.compile(
-    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com)"
-    r"[^\s<>\"']*",
+    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|yd\.baidu\.com)"
+    r"(?::[0-9]{1,5})?(?=[/?#\s<>\"']|$)[^\s<>\"']*",
     re.IGNORECASE,
 )
 百度卡片编号正则 = re.compile(
@@ -203,16 +203,15 @@ def 提取百度来源(event: Any, 命令文本: Any) -> str | None:
     _文本候选(命令文本, 候选, set())
     _文本候选(event, 候选, set())
     for 文本 in 候选:
-        for 匹配 in 百度链接正则.finditer(文本):
-            return _清理来源(匹配.group(0))
-        解码文本 = 文本
-        for _ in range(2):
-            新文本 = _安全解码(解码文本)
+        解码文本 = html.unescape(文本).replace("\\/", "/")
+        # 每次解码后立即匹配，避免继续解码把 data 查询中的 JSON 引号展开截断。
+        for _ in range(3):
+            for 匹配 in 百度链接正则.finditer(解码文本):
+                return _清理来源(匹配.group(0))
+            新文本 = html.unescape(_安全解码(解码文本)).replace("\\/", "/")
             if 新文本 == 解码文本:
                 break
             解码文本 = 新文本
-        for 匹配 in 百度链接正则.finditer(解码文本):
-            return _清理来源(匹配.group(0))
     for 文本 in 候选:
         if "百度" not in 文本 and "baidu" not in 文本.lower():
             continue
@@ -407,7 +406,7 @@ async def _解析百度详情页编号(会话: aiohttp.ClientSession, 来源: st
         主机 = (解析.hostname or "").lower()
         路径 = (解析.path or "").rstrip("/").lower()
         if (
-            主机 not in {"boxnovel.baidu.com", "novel.baidu.com"}
+            主机 not in {"boxnovel.baidu.com", "novel.baidu.com", "yd.baidu.com"}
             or 路径 not in 百度详情页路径集合
         ):
             return ""
