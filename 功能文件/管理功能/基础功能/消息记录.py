@@ -3038,12 +3038,26 @@ def _群消息包含成员标识(记录: dict[str, Any], 成员标识: str) -> b
     return False
 
 
-def _读取群缓存昵称(群标识: str, 成员标识: str) -> str:
+def _读取群缓存昵称(群标识: str, 成员标识: str, appid: str = "") -> str:
     会话 = 消息缓存.get(str(群标识 or "").strip()) or {}
-    if str(会话.get("chat_type") or "") != "group":
+    群资料 = 群信息缓存.get(str(群标识 or "").strip()) or {}
+    应用 = str(appid or "").strip()
+    会话应用 = str(会话.get("appid") or 群资料.get("appid") or "").strip()
+    if str(会话.get("chat_type") or "") != "group" and not 群资料:
         return ""
+    if 应用 and 会话应用 != 应用:
+        return ""
+    # 成员详情或晚到资料可能早于消息页加载，不要求对应群消息仍在热点缓存中。
+    资料 = (成员资料缓存.get(str(群标识 or "").strip()) or {}).get(成员标识) or {}
+    if isinstance(资料, dict) and not 资料.get("is_bot"):
+        for 字段 in ("nickname", "username"):
+            昵称 = _有效用户昵称(资料.get(字段), 成员标识)
+            if 昵称:
+                return 昵称
     for 记录 in reversed(会话.get("messages") or []):
         if not isinstance(记录, dict) or bool(记录.get("is_self")):
+            continue
+        if 应用 and str(记录.get("appid") or 会话应用).strip() != 应用:
             continue
         if not _群消息包含成员标识(记录, 成员标识):
             continue
@@ -3057,6 +3071,38 @@ def _读取群缓存昵称(群标识: str, 成员标识: str) -> str:
             昵称 = _有效用户昵称(_提取成员昵称(原始消息), 成员标识)
             if 昵称:
                 return 昵称
+    return ""
+
+
+def _从已知群缓存读取昵称(用户标识: str, appid: str = "") -> str:
+    """只复用同应用的已确认身份关系；热点缓存有界，不执行数据库或网络请求。"""
+    用户标识 = str(用户标识 or "").strip()
+    if not 用户标识:
+        return ""
+    应用 = str(appid or (消息缓存.get(用户标识) or {}).get("appid") or "").strip()
+    from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
+
+    已查: set[tuple[str, str]] = set()
+    候选 = list(获取官方群成员映射列表(用户标识))
+    候选.extend(
+        (群标识, 用户标识)
+        for 群标识, 会话 in 消息缓存.items()
+        if str(会话.get("chat_type") or "") == "group"
+    )
+    for 群标识, 成员标识 in 候选:
+        键 = (str(群标识 or "").strip(), str(成员标识 or "").strip())
+        if not all(键) or 键 in 已查:
+            continue
+        已查.add(键)
+        会话 = 消息缓存.get(键[0]) or {}
+        群资料 = 群信息缓存.get(键[0]) or {}
+        群应用 = str(会话.get("appid") or 群资料.get("appid") or "").strip()
+        # 未知应用只复用同为未知应用的旧缓存，不借用其他机器人的资料。
+        if 群应用 != 应用:
+            continue
+        昵称 = _读取群缓存昵称(键[0], 键[1], 应用)
+        if 昵称:
+            return 昵称
     return ""
 
 
@@ -3082,6 +3128,10 @@ def _回填私聊昵称(会话标识: str, 用户标识: str, 昵称: str) -> No
 
 async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
     """从已保存的群消息按 OpenID 跨群复用昵称，不请求内邀资料接口。"""
+    appid = str(appid or (消息缓存.get(用户标识) or {}).get("appid") or "").strip()
+    缓存昵称 = _从已知群缓存读取昵称(用户标识, appid)
+    if 缓存昵称:
+        return 缓存昵称
     if _消息存储 is not None and _消息数据库已配置():
         读取资料昵称 = getattr(_消息存储, "读取用户昵称", None)
         if callable(读取资料昵称):
@@ -3109,7 +3159,7 @@ async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
 
     群成员列表 = 获取官方群成员映射列表(用户标识)
     for 群标识, 成员标识 in 群成员列表:
-        昵称 = _读取群缓存昵称(群标识, 成员标识)
+        昵称 = _读取群缓存昵称(群标识, 成员标识, appid)
         if 昵称:
             return 昵称
         if _消息存储 is None or not _消息数据库已配置():
@@ -3128,13 +3178,6 @@ async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
         if 昵称:
             return 昵称
 
-    # 没有数据库时，仍可从当前进程已加载的群消息中复用同一 OpenID。
-    for 群标识, 会话 in 消息缓存.items():
-        if str(会话.get("chat_type") or "") != "group":
-            continue
-        昵称 = _读取群缓存昵称(群标识, 用户标识)
-        if 昵称:
-            return 昵称
     return ""
 
 
@@ -3376,6 +3419,11 @@ def 记录收到消息(
         引用ID = 引用索引["reference_id"]
         自身REFIDX = 引用索引["refidx"]
         作者头像 = _提取成员头像(消息)
+        if 类型 == "user" and not is_self and not 是机器人 and not 昵称:
+            昵称 = _从已知群缓存读取昵称(
+                成员标识,
+                str(appid or (消息缓存.get(会话标识) or {}).get("appid") or ""),
+            )
         _记录成员资料(
             会话标识,
             成员标识,
@@ -5662,8 +5710,8 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
             if 候选:
                 资料["nickname"] = 候选
                 break
-    if not 资料["nickname"] and not 数据库可用:
-        资料["nickname"] = _有效用户昵称(await _从群消息读取昵称(标识, 应用), 标识)
+    if not 资料["nickname"]:
+        资料["nickname"] = _有效用户昵称(_从已知群缓存读取昵称(标识, 应用), 标识)
     if not 资料["nickname"]:
         资料["nickname"] = _有效用户昵称((_读取本地缓存文件().get("nicknames") or {}).get(标识), 标识)
     if 资料["nickname"] or 资料["avatar"]:
@@ -5811,6 +5859,13 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             if not _昵称需要补查(会话标识, 会话, 聊天.get("nickname")):
                 continue
             appid = str(聊天.get("appid") or (会话 or {}).get("appid") or "")
+            缓存昵称 = _有效用户昵称(_从已知群缓存读取昵称(会话标识, appid), 会话标识)
+            if 缓存昵称:
+                _群消息昵称补查失败冷却.pop((appid, 会话标识), None)
+                聊天["nickname"] = 缓存昵称
+                _回填私聊昵称(会话标识, 会话标识, 缓存昵称)
+                _推送私聊昵称事件(会话标识, appid, 缓存昵称)
+                continue
             if _群消息昵称补查失败冷却.get((appid, 会话标识), 0.0) > time.monotonic():
                 continue
             待补查.append((聊天, 会话标识, appid))
