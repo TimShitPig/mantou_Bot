@@ -4566,6 +4566,15 @@
       };
       const groupSettingsCurrent = (session) => Boolean(session && groupSettingsState.session === session && session.generation === groupSettingsState.generation && msgState.chatType === 'group' && msgState.chatId === session.target.chat_id && (!session.target.appid || captureGroupTarget()?.appid === session.target.appid) && !$('msg-group-settings').hidden);
       const groupProfileFields = ['group_finger_memo','group_class_text','group_tags'];
+      const decodeGroupProfileText = (value) => {
+        const text = String(value || '');
+        if (!text.includes('&')) return text;
+        const decoder = document.createElement('textarea');
+        return text.replace(/&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/g, (entity) => {
+          decoder.innerHTML = entity;
+          return decoder.value;
+        });
+      };
       const clearGroupSettingsProfile = () => {
         $('msg-group-profile-memo').textContent = '未设置';
         $('msg-group-profile-class').textContent = '未设置';
@@ -4591,11 +4600,11 @@
         });
         if (changed) session.profileRevision = Number(session.profileRevision || 0) + 1;
         if (updatedAt) session.profileUpdatedAt = Math.max(session.profileUpdatedAt || 0, updatedAt);
-        const memo = String(profile.group_finger_memo || '');
-        const category = String(profile.group_class_text || '');
+        const memo = decodeGroupProfileText(profile.group_finger_memo);
+        const category = decodeGroupProfileText(profile.group_class_text);
         $('msg-group-profile-memo').textContent = memo.trim() ? memo : '未设置';
         $('msg-group-profile-class').textContent = category.trim() ? category : '未设置';
-        const tags = Array.isArray(profile.group_tags) ? profile.group_tags : [];
+        const tags = Array.isArray(profile.group_tags) ? profile.group_tags.map(decodeGroupProfileText).filter((tag) => tag.trim()) : [];
         const nodes = tags.map((tag) => {
           const node = document.createElement('span');
           node.className = 'msg-group-profile-tag'; node.textContent = tag;
