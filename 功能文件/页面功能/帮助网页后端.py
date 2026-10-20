@@ -1417,7 +1417,9 @@ def _媒体代理失败响应(模式: str, *, 已过期: bool = False) -> web.Re
 def _媒体代理请求超时(模式: str) -> ClientTimeout:
     return ClientTimeout(
         total=None if 模式 == "file" else 媒体代理超时秒,
-        connect=媒体代理连接超时秒,
+        # connect 包含连接池等待；实际新建连接仍单独限制为十秒。
+        connect=媒体代理超时秒,
+        sock_connect=媒体代理连接超时秒,
         sock_read=媒体代理读取超时秒,
     )
 
@@ -1498,13 +1500,16 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 响应 = web.StreamResponse(status=上游.status, headers=响应头)
                 阶段 = "prepare_response"
                 await 响应.prepare(request)
-                阶段 = "stream_body"
                 if 前缀:
-                    已发送 = len(前缀)
-                    if 已发送 > 媒体代理最大字节数:
+                    if len(前缀) > 媒体代理最大字节数:
+                        阶段 = "response_eof"
                         await 响应.write_eof()
+                        阶段 = "upstream_release"
                         return 响应
+                    阶段 = "response_write"
                     await 响应.write(前缀)
+                    已发送 += len(前缀)
+                阶段 = "upstream_read"
                 async for 数据块 in 上游.content.iter_chunked(64 * 1024):
                     if 已发送 + len(数据块) > 媒体代理最大字节数:
                         logger.warning(
@@ -1513,22 +1518,32 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                             媒体代理最大字节数,
                         )
                         break
+                    阶段 = "response_write"
                     await 响应.write(数据块)
                     已发送 += len(数据块)
+                    阶段 = "upstream_read"
+                阶段 = "response_eof"
                 await 响应.write_eof()
+                阶段 = "upstream_release"
                 return 响应
     except asyncio.CancelledError:
         raise
     except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, ValueError) as exc:
-        logger.warning(
-            "帮助控制台媒体代理失败：模式=%s，阶段=%s，错误类型=%s，上游状态=%s，已发送字节=%d",
-            模式,
-            阶段,
-            type(exc).__name__,
-            上游状态 if 上游状态 is not None else "none",
-            已发送,
-        )
-        if 响应 is not None and 响应.prepared:
+        # 异步读取与响应写入会抛出同类连接错误，必须在实际 I/O 边界区分方向。
+        客户端断开 = 阶段 in {"prepare_response", "response_write", "response_eof"} and isinstance(exc, ConnectionError)
+        if 客户端断开:
+            logger.debug(
+                "帮助控制台媒体请求被客户端中断：模式=%s，阶段=%s，错误类型=%s，上游状态=%s，已发送字节=%d",
+                模式, 阶段, type(exc).__name__,
+                上游状态 if 上游状态 is not None else "none", 已发送,
+            )
+        else:
+            logger.warning(
+                "帮助控制台媒体代理失败：模式=%s，阶段=%s，错误类型=%s，上游状态=%s，已发送字节=%d",
+                模式, 阶段, type(exc).__name__,
+                上游状态 if 上游状态 is not None else "none", 已发送,
+            )
+        if 响应 is not None and (响应.prepared or 客户端断开):
             响应.force_close()
             传输 = request.transport
             if 传输 is not None:
