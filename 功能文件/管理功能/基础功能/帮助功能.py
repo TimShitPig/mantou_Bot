@@ -322,6 +322,13 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
         return 附加帮助网页地址(格式化帮助大类(), 配置)
 
     帮助状态 = 获取有效帮助状态(会话键)
+    目标 = 匹配任意层级名称(文本)
+    if not (
+        (帮助状态 is not None and re.fullmatch(r"\d{1,2}", 文本))
+        or 文本 in 返回上一步别名
+        or 目标 is not None
+    ):
+        return None
     是管理员 = 是群文件清理管理员(event, 配置)
     if 帮助状态 is not None and (
         re.fullmatch(r"\d{1,2}", 文本) or 文本 in 返回上一步别名
@@ -336,7 +343,6 @@ def 处理帮助指令(event: Any, 命令文本: str, 配置: Any) -> str | None
             return None
         设置帮助状态(会话键, "大类")
         return 格式化帮助大类()
-    目标 = 匹配任意层级名称(文本)
     if 目标 is not None:
         if not 是管理员:
             if 帮助状态 is not None:
@@ -917,6 +923,13 @@ def 处理帮助指令MD带键盘(
         return md文本, 键盘
 
     帮助状态 = 获取有效帮助状态(会话键)
+    目标 = 匹配任意层级名称(文本)
+    if not (
+        (帮助状态 is not None and re.fullmatch(r"\d{1,2}", 文本))
+        or 文本 in 返回上一步别名
+        or 目标 is not None
+    ):
+        return None, None
     是管理员 = 是群文件清理管理员(event, 配置)
     if 帮助状态 is not None and (
         re.fullmatch(r"\d{1,2}", 文本) or 文本 in 返回上一步别名
@@ -935,7 +948,6 @@ def 处理帮助指令MD带键盘(
         md文本 = 附加帮助网页地址(格式化帮助大类MD(), 配置)
         键盘 = 获取帮助键盘(会话键, 按钮自动发送, 配置, 键盘群号)
         return md文本, 键盘
-    目标 = 匹配任意层级名称(文本)
     if 目标 is not None:
         if not 是管理员:
             if 帮助状态 is not None:

@@ -283,10 +283,10 @@ def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[st
 
 async def 处理群踢人(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
     """管理员明确指令才移除成员；权限以本次 POST 实际响应为准。"""
-    if not 是QQ官方机器人(event) or not 是群文件清理管理员(event, 配置):
+    if not 是QQ官方机器人(event):
         return None
     参数 = 解析群踢人参数(event, 命令文本)
-    if 参数 is None:
+    if 参数 is None or not 是群文件清理管理员(event, 配置):
         return None
     if not 获取群号(event):
         return "成员移除失败：只能在群聊中使用"
