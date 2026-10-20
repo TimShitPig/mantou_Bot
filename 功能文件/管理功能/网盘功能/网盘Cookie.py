@@ -32,6 +32,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库,
     读取运行状态值,
     读取运行状态命名空间,
+    批量读取运行状态值,
 )
 
 网盘Cookie命名空间 = "novel_pan_auth"
@@ -1611,6 +1612,97 @@ def 获取网盘账号摘要批量(
         结果[平台] = _网盘账号摘要(账号记录)
     return 结果
 
+
+
+def 获取群网盘选择摘要(配置: Any, 群标识: str) -> dict[str, Any]:
+    """从同一数据库快照构造群选择项；仅返回界面摘要，不返回账号凭据。"""
+    from 功能文件.管理功能.网盘功能 import 网盘状态, 小说网盘
+
+    群标识 = str(群标识 or "").strip()
+    平台列表 = ("UC", "夸克", "百度")
+    查询项 = tuple(
+        (空间, 键)
+        for 平台 in 平台列表
+        for 空间, 键 in (
+            (网盘Cookie命名空间, 平台状态键[平台]),
+            (网盘状态.状态命名空间, 网盘状态.平台状态键[平台]),
+            (网盘账号选择命名空间, _默认账号选择状态键(平台)),
+            (网盘账号选择命名空间, _账号选择状态键(平台, 群标识)),
+        )
+    ) + (
+        (小说网盘.状态命名空间, 小说网盘.状态键),
+        (网盘账号选择命名空间, _账号选择状态键("group", 群标识)),
+    )
+    状态 = 批量读取运行状态值(配置, 查询项)
+    if _夸克账号状态包含手机号字段(状态.get((网盘Cookie命名空间, 平台状态键["夸克"]), "")):
+        if _迁移夸克账号手机号字段(配置):
+            状态 = 批量读取运行状态值(配置, 查询项)
+    choices: list[dict[str, Any]] = []
+    默认账号表: dict[str, int] = {}
+    for 平台 in 平台列表:
+        开关 = 状态.get((网盘状态.状态命名空间, 网盘状态.平台状态键[平台]))
+        if not 网盘状态._解析布尔值(开关, 网盘状态.默认状态[平台]):
+            continue
+        账号记录 = _合并配置网盘账号记录(
+            配置, 平台,
+            _解析保存的网盘账号记录(状态.get((网盘Cookie命名空间, 平台状态键[平台]), ""), 平台),
+        )
+        摘要列表 = _网盘账号摘要(账号记录)
+        可用序号 = [账号["index"] for 账号 in 摘要列表 if 账号["enabled"]]
+        if not 可用序号:
+            continue
+        默认文本 = str(状态.get((网盘账号选择命名空间, _默认账号选择状态键(平台)), "") or "").strip()
+        已保存默认 = (
+            int(默认文本)
+            if 0 < len(默认文本) <= 9 and 默认文本.isascii() and 默认文本.isdecimal()
+            else 0
+        )
+        默认序号 = 已保存默认 if 已保存默认 in 可用序号 else 可用序号[0]
+        群账号文本 = 状态.get((网盘账号选择命名空间, _账号选择状态键(平台, 群标识)))
+        try:
+            群账号序号 = int(str(群账号文本 or 默认序号).strip())
+        except (TypeError, ValueError):
+            群账号序号 = 默认序号
+        默认账号表[平台] = 群账号序号 if 群账号序号 in 可用序号 else 默认序号
+        for 账号 in 摘要列表:
+            if not 账号["enabled"]:
+                continue
+            序号 = 账号["index"]
+            名称 = str(账号.get("name") or "").strip()
+            if not 名称 or 名称 == "未命名账号":
+                名称 = f"账号{序号}"
+            choices.append({
+                "platform": 平台, "index": 序号, "value": f"{平台}:{序号}",
+                "label": f"{小说网盘.网盘显示名[平台]} · {名称}",
+            })
+    当前平台 = str(状态.get((小说网盘.状态命名空间, 小说网盘.状态键), 小说网盘.默认主网盘) or "").strip()
+    if 当前平台 not in 小说网盘.网盘模块映射:
+        当前平台 = 小说网盘.默认主网盘
+    默认选项 = next(
+        (选项 for 选项 in choices if 选项["platform"] == 当前平台),
+        choices[0] if choices else None,
+    )
+    if 默认选项:
+        默认选项 = next(
+            (选项 for 选项 in choices if 选项["platform"] == 默认选项["platform"]
+             and 选项["index"] == 默认账号表[默认选项["platform"]]),
+            默认选项,
+        )
+    原选择 = 状态.get((网盘账号选择命名空间, _账号选择状态键("group", 群标识)), "")
+    try:
+        选择 = json.loads(str(原选择 or ""))
+        平台 = _规范化平台名称(选择.get("platform")) if isinstance(选择, dict) else ""
+        序号 = int(选择.get("index")) if isinstance(选择, dict) else 0
+        已保存选择 = {"platform": 平台, "index": 序号} if 平台 and 序号 > 0 else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        已保存选择 = None
+    已保存值 = f"{已保存选择['platform']}:{已保存选择['index']}" if 已保存选择 else ""
+    if 已保存值 not in {选项["value"] for 选项 in choices}:
+        已保存选择, 已保存值 = None, ""
+    return {
+        "choices": choices, "default": 默认选项, "selected": 已保存选择,
+        "selected_value": 已保存值 or "__default__",
+    }
 
 def 获取网盘账号摘要(配置: Any, 平台: str) -> list[dict[str, Any]]:
     """返回控制台可展示的账号摘要，不返回 Cookie 或身份令牌。"""

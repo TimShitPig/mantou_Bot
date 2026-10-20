@@ -112,6 +112,10 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 )
 实时连接任务: set[asyncio.Task[Any]] = globals().get("实时连接任务") or set()
 _媒体代理会话: ClientSession | None = globals().get("_媒体代理会话")
+群状态刷新任务: dict[tuple[str, str, str], asyncio.Task[Any]] = globals().get("群状态刷新任务") or {}
+群状态刷新失败冷却: dict[tuple[str, str, str], float] = globals().get("群状态刷新失败冷却") or {}
+_群状态刷新并发: asyncio.Semaphore | None = None
+
 
 
 def _获取控制台执行器() -> ThreadPoolExecutor:
@@ -2707,72 +2711,9 @@ async def _处理网盘账号选择(request: web.Request) -> web.Response:
 
 
 def _构建群网盘选择数据(配置: Any, 群标识: str) -> dict[str, Any]:
-    from 功能文件.管理功能.网盘功能 import 网盘Cookie, 网盘状态, 小说网盘
+    from 功能文件.管理功能.网盘功能 import 网盘Cookie
 
-    平台列表 = ("UC", "夸克", "百度")
-    账号摘要 = 网盘Cookie.获取网盘账号摘要批量(配置, 平台列表)
-    网盘开关 = 网盘状态.读取网盘开关批量(配置, 平台列表)
-    choices: list[dict[str, Any]] = []
-    for 平台 in 平台列表:
-        if not 网盘开关.get(平台, False):
-            continue
-        for 账号 in 账号摘要.get(平台) or []:
-            if not 账号.get("configured") or not 账号.get("enabled", True):
-                continue
-            try:
-                序号 = int(账号.get("index") or 0)
-            except (TypeError, ValueError):
-                continue
-            if 序号 < 1:
-                continue
-            名称 = str(账号.get("name") or "").strip()
-            if not 名称 or 名称 == "未命名账号":
-                名称 = f"账号{序号}"
-            choices.append(
-                {
-                    "platform": 平台,
-                    "index": 序号,
-                    "value": f"{平台}:{序号}",
-                    "label": f"{小说网盘.网盘显示名[平台]} · {名称}",
-                }
-            )
-
-    当前默认平台 = 小说网盘.获取当前主网盘(配置)
-    默认选项 = next(
-        (选项 for 选项 in choices if 选项["platform"] == 当前默认平台),
-        choices[0] if choices else None,
-    )
-    if 默认选项:
-        默认账号 = 网盘Cookie.获取当前网盘账号序号按群标识(
-            配置, str(默认选项["platform"]), 群标识
-        )
-        默认选项 = next(
-            (
-                选项
-                for 选项 in choices
-                if 选项["platform"] == 默认选项["platform"]
-                and 选项["index"] == 默认账号
-            ),
-            默认选项,
-        )
-
-    已保存选择 = 网盘Cookie.获取群网盘账号选择(配置, 群标识)
-    已保存值 = (
-        f"{已保存选择['platform']}:{已保存选择['index']}"
-        if 已保存选择
-        else ""
-    )
-    if 已保存值 not in {选项["value"] for 选项 in choices}:
-        已保存选择 = None
-        已保存值 = ""
-    return {
-        "ok": True,
-        "editable": _数据库会话可用(),
-        "choices": choices,
-        "default": 默认选项,
-        "selected": 已保存选择,
-        "selected_value": 已保存值 or "__default__",
-    }
+    return {"ok": True, "editable": _数据库会话可用(), **网盘Cookie.获取群网盘选择摘要(配置, 群标识)}
 
 
 async def _处理群网盘选择(request: web.Request) -> web.Response:
@@ -3500,6 +3441,76 @@ async def _处理消息禁言(request: web.Request) -> web.Response:
 
 
 
+
+def _读取网页群状态快照(
+    类型: str, 会话标识: str, appid: str = "", 强制: bool = False,
+) -> dict[str, Any]:
+    """状态读取不等待官方接口；未取得资料时明确返回 pending。"""
+    from 功能文件.管理功能.基础功能 import 消息记录
+
+    读取 = 消息记录.获取网页群禁言快照 if 类型 == "mutes" else 消息记录.获取网页群角色快照
+    状态, 需要刷新 = 读取(会话标识, appid)
+    键 = (类型, str(状态["appid"]), str(状态["chat_id"]))
+    现有任务 = 群状态刷新任务.get(键)
+    if 现有任务 is not None and 现有任务.done():
+        群状态刷新任务.pop(键, None)
+        现有任务 = None
+    当前时间 = time.monotonic()
+    for 冷却键, 截止 in tuple(群状态刷新失败冷却.items()):
+        if 截止 <= 当前时间:
+            群状态刷新失败冷却.pop(冷却键, None)
+    冷却中 = 群状态刷新失败冷却.get(键, 0.0) > 当前时间
+    if (需要刷新 or 强制) and 现有任务 is None and (强制 or not 冷却中):
+        global _群状态刷新并发
+        if _群状态刷新并发 is None:
+            _群状态刷新并发 = asyncio.Semaphore(2)
+        并发 = _群状态刷新并发
+
+        async def 刷新() -> None:
+            try:
+                async with 并发:
+                    async with asyncio.timeout(15):
+                        if 类型 == "mutes":
+                            刷新结果 = await 消息记录.查询群禁言状态(键[2], 键[1], 强制=强制)
+                        else:
+                            刷新结果 = await 消息记录.获取群角色(键[2], 键[1], 强制=True)
+                        # 角色层会保留旧资料并吞掉受控接口失败，不能只靠异常判断刷新成功。
+                        # 禁言写入淘汰了较早 GET 时，应让下一次读取补查，不能进入失败冷却。
+                        _, 仍需刷新 = 读取(键[2], 键[1])
+                        已被写入淘汰 = isinstance(刷新结果, dict) and 刷新结果.get("invalidated") is True
+                        if 仍需刷新 and not 已被写入淘汰:
+                            群状态刷新失败冷却[键] = time.monotonic() + 30
+                        else:
+                            群状态刷新失败冷却.pop(键, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                群状态刷新失败冷却[键] = time.monotonic() + 30
+                logger.debug("帮助控制台群状态后台刷新失败：类型=%s，错误类型=%s", 类型, type(exc).__name__)
+
+        现有任务 = asyncio.create_task(刷新(), name="控制台群状态刷新")
+        群状态刷新任务[键] = 现有任务
+        控制台后台任务.add(现有任务)
+
+        def 结束(任务: asyncio.Task[Any]) -> None:
+            if 群状态刷新任务.get(键) is 任务:
+                群状态刷新任务.pop(键, None)
+            控制台后台任务.discard(任务)
+            if not 任务.cancelled():
+                任务.exception()
+
+        现有任务.add_done_callback(结束)
+    状态["refreshing"] = 现有任务 is not None and not 现有任务.done()
+    冷却剩余 = max(0.0, 群状态刷新失败冷却.get(键, 0.0) - time.monotonic())
+    状态["retry_after_ms"] = 1000
+    if 冷却剩余 and 需要刷新 and not 状态["refreshing"]:
+        状态["pending"] = False
+        状态["status"] = "stale" if 状态.get("has_data") else "unavailable"
+        状态["next_refresh_at"] = time.time() + 冷却剩余
+        状态["retry_after_ms"] = max(1000, int(冷却剩余 * 1000))
+    return 状态
+
+
 async def _处理消息禁言状态(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
@@ -3507,34 +3518,17 @@ async def _处理消息禁言状态(request: web.Request) -> web.Response:
     会话标识 = str((数据 or {}).get("chat_id") or "").strip()
     类型 = str((数据 or {}).get("chat_type") or "group").strip().lower()
     appid = str((数据 or {}).get("appid") or "").strip()
-    强制 = (数据 or {}).get("force") is True or str(
-        (数据 or {}).get("force") or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not 会话标识 or 类型 != "group":
+    强制 = (数据 or {}).get("force") is True
+    if not 会话标识 or len(会话标识) > 200 or 类型 != "group":
         return _控制台错误(400, "群聊参数无效")
     try:
-        from 功能文件.管理功能.基础功能 import 消息记录
-
-        状态 = await 消息记录.查询群禁言状态(会话标识, appid, 强制=强制)
-        return web.json_response(
-            {"ok": True, **状态},
-            headers={"Cache-Control": "no-store"},
-        )
+        状态 = _读取网页群状态快照("mutes", 会话标识, appid, 强制)
+        return web.json_response({"ok": True, **状态}, headers={"Cache-Control": "no-store"})
+    except ValueError:
+        return _控制台错误(400, "群聊与机器人不匹配，请刷新资料")
     except Exception as exc:
-        logger.warning(
-            "帮助控制台群禁言状态读取失败：错误类型=%s",
-            type(exc).__name__,
-        )
-        return web.json_response(
-            {
-                "ok": True,
-                "available": False,
-                "members": [],
-                "global_rule": {},
-                "checked_at": int(time.time()),
-            },
-            headers={"Cache-Control": "no-store"},
-        )
+        logger.warning("帮助控制台群禁言快照读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(503, "群状态暂时不可用，请稍后重试")
 
 
 async def _处理消息解除禁言(request: web.Request) -> web.Response:
@@ -3611,16 +3605,16 @@ async def _处理群角色(request: web.Request) -> web.Response:
         return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     会话标识 = str((数据 or {}).get("chat_id") or "").strip()
-    if not 会话标识:
+    if not 会话标识 or len(会话标识) > 200:
         return _控制台错误(400, "会话参数无效")
     try:
-        from 功能文件.管理功能.基础功能 import 消息记录
-
-        结果 = await 消息记录.获取群角色(会话标识, str((数据 or {}).get("appid") or ""))
-        return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
+        状态 = _读取网页群状态快照("roles", 会话标识, str((数据 or {}).get("appid") or "").strip())
+        return web.json_response({"ok": True, **状态}, headers={"Cache-Control": "no-store"})
+    except ValueError:
+        return _控制台错误(400, "群聊与机器人不匹配，请刷新资料")
     except Exception as exc:
-        logger.warning("帮助控制台群角色读取失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(500, "群角色暂时不可用")
+        logger.warning("帮助控制台群角色快照读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(503, "群角色暂时不可用，请稍后重试")
 
 
 def _群设置响应(结果: dict[str, Any], 状态码: int = 200) -> web.Response:

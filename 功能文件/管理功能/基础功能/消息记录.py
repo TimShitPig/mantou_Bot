@@ -5,6 +5,7 @@ import ast
 import base64
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from functools import partial
 import hashlib
 import html
@@ -70,7 +71,11 @@ except Exception as 导入异常:
 群禁言状态缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("群禁言状态缓存") or {}
 群禁言状态缓存有效期秒 = 30
 群禁言状态失败冷却秒 = 60
-_群禁言状态请求锁 = globals().get("_群禁言状态请求锁") or asyncio.Lock()
+_群禁言状态请求锁表: dict[tuple[str, str], dict[str, Any]] = globals().get("_群禁言状态请求锁表") or {}
+_群禁言状态请求锁上限 = 512
+_群禁言溢出请求锁 = globals().get("_群禁言溢出请求锁") or {"lock": asyncio.Lock(), "users": 0}
+_群禁言状态代次: dict[tuple[str, str], int] = globals().get("_群禁言状态代次") or {}
+_群禁言群代次: dict[str, int] = globals().get("_群禁言群代次") or {}
 群成员人数事件锁 = globals().get("群成员人数事件锁") or threading.Lock()
 群成员人数事件缓存: dict[str, float] = globals().get("群成员人数事件缓存") or {}
 群成员人数事件缓存上限 = 4096
@@ -5329,13 +5334,114 @@ async def _请求群资料GET(http: Any, route: Any) -> Any:
             raise
 
 
-def _复制群禁言状态(状态: dict[str, Any], *, cached: bool = False) -> dict[str, Any]:
+def _网页群状态作用域(会话标识: str, appid: str = "") -> tuple[str, str]:
+    会话标识 = str(会话标识 or "").strip()
+    appid = _获取群信息appid(会话标识, appid)
+    已知AppID = {
+        str(资料.get("appid") or "").strip()
+        for 资料 in (
+            消息缓存.get(会话标识) or {},
+            群信息缓存.get(会话标识) or {},
+            _读取群机器人状态(会话标识),
+        )
+        if str(资料.get("appid") or "").strip()
+    }
+    if not 会话标识 or not appid or any(值 != appid for 值 in 已知AppID):
+        raise ValueError("群资料认证 AppID 缺失或不匹配")
+    return 会话标识, appid
+
+
+@asynccontextmanager
+async def _占用群禁言请求锁(缓存键: tuple[str, str]):
+    """同群请求串行；只回收无人使用的锁，满载时共享一个有界溢出锁。"""
+    记录 = _群禁言状态请求锁表.get(缓存键)
+    if 记录 is None:
+        if int(_群禁言溢出请求锁.get("users") or 0) > 0:
+            # 溢出任务仍在使用同一锁时，新键继续共享，不能为相同键另建锁。
+            记录 = _群禁言溢出请求锁
+        if len(_群禁言状态请求锁表) >= _群禁言状态请求锁上限:
+            for 旧键, 旧记录 in list(_群禁言状态请求锁表.items()):
+                if int(旧记录.get("users") or 0) == 0:
+                    _群禁言状态请求锁表.pop(旧键, None)
+                    if len(_群禁言状态请求锁表) < _群禁言状态请求锁上限:
+                        break
+        if 记录 is None and len(_群禁言状态请求锁表) < _群禁言状态请求锁上限:
+            记录 = {"lock": asyncio.Lock(), "users": 0}
+            _群禁言状态请求锁表[缓存键] = 记录
+        elif 记录 is None:
+            记录 = _群禁言溢出请求锁
+    记录["users"] += 1
+    try:
+        async with 记录["lock"]:
+            yield
+    finally:
+        记录["users"] -= 1
+
+
+def _群禁言请求代次(缓存键: tuple[str, str]) -> tuple[int, int]:
+    return _群禁言群代次.get(缓存键[1], 0), _群禁言状态代次.get(缓存键, 0)
+
+
+def 失效群禁言状态(会话标识: str, appid: str = "") -> None:
+    """禁言写入成功后清除快照，并阻止较早的 GET 回填旧结果。"""
+    会话标识 = str(会话标识 or "").strip()
+    appid = str(appid or "").strip()
+    if not 会话标识:
+        return
+    if appid:
+        缓存键 = (appid, 会话标识)
+        _群禁言状态代次[缓存键] = _群禁言状态代次.get(缓存键, 0) + 1
+        群禁言状态缓存.pop(缓存键, None)
+    else:
+        _群禁言群代次[会话标识] = _群禁言群代次.get(会话标识, 0) + 1
+        for 缓存键 in list(群禁言状态缓存):
+            if 缓存键[1] == 会话标识:
+                群禁言状态缓存.pop(缓存键, None)
+
+
+def _复制群禁言状态(状态: dict[str, Any] | None, *, cached: bool = False) -> dict[str, Any]:
     结果 = copy.deepcopy(状态 if isinstance(状态, dict) else {})
     结果.setdefault("available", False)
     结果.setdefault("members", [])
     结果.setdefault("global_rule", {})
+    现在 = time.time()
+    成员列表 = []
+    for 成员 in 结果["members"]:
+        if not isinstance(成员, dict):
+            continue
+        到期时间 = _转数字时间戳(成员.get("mute_expire_at")) or 0
+        try:
+            到期时间 = float(成员.get("mute_expire_ts") or 到期时间)
+        except (TypeError, ValueError):
+            continue
+        if 到期时间 and 到期时间 <= 现在:
+            continue
+        成员列表.append(成员)
+    结果["members"] = 成员列表
     结果["cached"] = bool(cached)
     return 结果
+
+
+def 获取网页群禁言快照(会话标识: str, appid: str = "") -> tuple[dict[str, Any], bool]:
+    """网页只读取内存；未知状态与已确认的空列表分开，刷新由控制台调度。"""
+    会话标识, appid = _网页群状态作用域(会话标识, appid)
+    现有 = 群禁言状态缓存.get((appid, 会话标识))
+    结果 = _复制群禁言状态(现有, cached=isinstance(现有, dict))
+    有资料 = bool(结果.get("has_data", 结果.get("available") is True
+        or bool(结果.get("members")) or bool(结果.get("global_rule"))))
+    现在 = time.time()
+    下次刷新 = float(结果.get("next_refresh_at") or 0)
+    最后成功 = float(结果.get("last_success_at") or 结果.get("checked_at") or 0)
+    需刷新 = 下次刷新 <= 现在
+    陈旧 = 有资料 and (结果.get("available") is False
+        or 最后成功 + 群禁言状态缓存有效期秒 <= 现在)
+    结果.update({
+        "chat_id": 会话标识, "chat_type": "group", "appid": appid,
+        "available": 有资料, "has_data": 有资料,
+        "pending": not 有资料 and 需刷新, "stale": 陈旧, "refreshing": False,
+        "status": "stale" if 陈旧 else "ready" if 有资料 else "pending" if 需刷新 else "unavailable",
+    })
+    return 结果, 需刷新
 
 
 async def 查询群禁言状态(
@@ -5358,7 +5464,7 @@ async def 查询群禁言状态(
     ):
         return _复制群禁言状态(现有, cached=True)
 
-    async with _群禁言状态请求锁:
+    async with _占用群禁言请求锁(缓存键):
         现在 = time.time()
         现有 = 群禁言状态缓存.get(缓存键)
         if (
@@ -5367,15 +5473,12 @@ async def 查询群禁言状态(
             and float(现有.get("next_refresh_at") or 0) > 现在
         ):
             return _复制群禁言状态(现有, cached=True)
+        请求代次 = _群禁言请求代次(缓存键)
         try:
             from botpy.http import Route
 
-            平台 = 获取QQ官方平台(appid=appid)
-            通道 = 获取HTTP通道(平台)
-            if 通道 is None:
-                raise RuntimeError("QQ官方HTTP通道未加载")
-            _, _http = 通道
-            响应 = await _http.request(
+            appid, _http = _获取群资料通道(会话标识, appid)
+            响应 = await _请求群资料GET(_http,
                 Route(
                     "GET",
                     "/v2/groups/{group_openid}/restrict_chat_setting",
@@ -5387,6 +5490,7 @@ async def 查询群禁言状态(
             错误码 = 响应.get("code")
             if 错误码 not in (None, 0, "", "0"):
                 raise RuntimeError(f"禁言状态业务错误：code={错误码}")
+            现在 = time.time()
             成员列表: list[dict[str, Any]] = []
             for 成员 in 响应.get("members") or []:
                 if not isinstance(成员, dict):
@@ -5413,13 +5517,18 @@ async def 查询群禁言状态(
                 全员规则 = {}
             状态 = {
                 "available": True,
+                "has_data": True,
                 "members": 成员列表,
                 "global_rule": {
                     "mode": str(全员规则.get("mode") or "none").strip(),
                 },
                 "checked_at": int(现在),
+                "last_success_at": 现在,
                 "next_refresh_at": 现在 + 群禁言状态缓存有效期秒,
             }
+            if 请求代次 != _群禁言请求代次(缓存键):
+                return {**_复制群禁言状态(群禁言状态缓存.get(缓存键), cached=True),
+                    "invalidated": True, "pending": True}
             群禁言状态缓存[缓存键] = 状态
             return _复制群禁言状态(状态)
         except Exception as 异常:
@@ -5431,12 +5540,17 @@ async def 查询群禁言状态(
                 type(异常).__name__,
                 群禁言状态失败冷却秒,
             )
+            if 请求代次 != _群禁言请求代次(缓存键):
+                return {**_复制群禁言状态(群禁言状态缓存.get(缓存键), cached=True),
+                    "invalidated": True, "pending": True}
             失败状态 = dict(现有) if isinstance(现有, dict) else {}
+            失败状态["has_data"] = bool(失败状态.get("has_data", 失败状态.get("available") is True
+                or bool(失败状态.get("members")) or bool(失败状态.get("global_rule"))))
             失败状态.update(
                 {
                     "available": False,
                     "checked_at": int(现在),
-                    "next_refresh_at": 现在 + 群禁言状态失败冷却秒,
+                    "next_refresh_at": time.time() + 群禁言状态失败冷却秒,
                 }
             )
             失败状态.setdefault("members", [])
@@ -6889,19 +7003,16 @@ def 获取消息历史(
     }
 
 
-async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
-    """查询机器人在群状态与成员角色缓存，返回 (成员角色表, 机器人是否管理员)。"""
-    状态 = await _查询群机器人状态(会话标识, appid)
+def _构造群角色结果(会话标识: str, 状态: dict[str, Any], appid: str = "") -> dict[str, Any]:
     机器人角色 = str(状态.get("member_role") or "")
     机器人是否管理员 = (
         状态.get("status") != "removed"
         and 机器人角色 in ("owner", "admin")
     )
-    if 会话标识:
-        信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
-        信息["is_admin"] = 机器人是否管理员
     成员表: dict[str, dict[str, Any]] = {}
     for 成员标识, 资料 in (成员资料缓存.get(会话标识) or {}).items():
+        if appid and str(资料.get("appid") or "").strip() not in {"", appid}:
+            continue
         成员表[成员标识] = {
             "nickname": 资料.get("nickname") or "",
             "is_bot": bool(资料.get("is_bot") or False),
@@ -6917,6 +7028,41 @@ async def 获取群角色(会话标识: str, appid: str = "") -> dict[str, Any]:
         "allow_proactive_msg": 状态.get("allow_proactive_msg"),
         "recv_msg_setting": str(状态.get("recv_msg_setting") or ""),
     }
+
+
+def 获取网页群角色快照(会话标识: str, appid: str = "") -> tuple[dict[str, Any], bool]:
+    """复制同 AppID 的角色资料，未查询的角色保持 unknown 而不推断普通成员。"""
+    会话标识, appid = _网页群状态作用域(会话标识, appid)
+    状态 = _读取群机器人状态(会话标识)
+    if str(状态.get("appid") or "").strip() != appid:
+        状态 = {}
+    有资料 = 状态.get("status") == "removed" or (
+        状态.get("status") == "active" and 状态.get("member_role") in {"owner", "admin", "member"}
+    )
+    检查时间 = int(状态.get("checked_at") or 0)
+    下次刷新 = 检查时间 + 群机器人状态缓存有效期秒 if 有资料 else 0
+    需刷新 = 下次刷新 <= time.time()
+    结果 = _构造群角色结果(会话标识, 状态, appid)
+    结果.update({
+        "chat_id": 会话标识, "chat_type": "group", "appid": appid,
+        "available": 有资料, "has_data": 有资料, "cached": 有资料,
+        "pending": not 有资料, "stale": 有资料 and 需刷新, "refreshing": False,
+        "next_refresh_at": 下次刷新,
+        "status": "stale" if 有资料 and 需刷新 else "ready" if 有资料 else "pending",
+    })
+    if not 有资料:
+        结果.update({"bot_is_admin": None, "bot_in_group": None, "bot_role": "", "membership_status": "unknown"})
+    return 结果, 需刷新
+
+
+async def 获取群角色(会话标识: str, appid: str = "", 强制: bool = False) -> dict[str, Any]:
+    """查询机器人在群状态与成员角色缓存，保留默认等待语义。"""
+    状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
+    结果 = _构造群角色结果(会话标识, 状态, appid)
+    if 会话标识:
+        信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
+        信息["is_admin"] = 结果["bot_is_admin"]
+    return 结果
 
 
 # ---------------------------------------------------------------------------
@@ -7800,9 +7946,7 @@ async def 禁言群成员(
                 ]
             },
         )
-        for 缓存键 in list(群禁言状态缓存):
-            if 缓存键[1] == 会话标识:
-                群禁言状态缓存.pop(缓存键, None)
+        失效群禁言状态(会话标识, appid)
         return {"ok": True, "message": "禁言成功"}
     except Exception as exc:
         提示 = "禁言失败，请稍后再试"
@@ -7848,9 +7992,7 @@ async def 解除群成员禁言(
                 ]
             },
         )
-        for 缓存键 in list(群禁言状态缓存):
-            if 缓存键[1] == 会话标识:
-                群禁言状态缓存.pop(缓存键, None)
+        失效群禁言状态(会话标识, appid)
         return {"ok": True, "message": "解除禁言成功"}
     except Exception as exc:
         提示 = "解除禁言失败，请稍后再试"

@@ -1918,6 +1918,9 @@ async def 使用QQ官方成员禁言接口(
     响应 = await http客户端.request(路由, json=请求体)
     if not 官方禁言响应成功(响应):
         raise RuntimeError("QQ 官方成员禁言接口返回失败")
+    from 功能文件.管理功能.基础功能 import 消息记录
+
+    消息记录.失效群禁言状态(群OpenID)
     return True
 
 

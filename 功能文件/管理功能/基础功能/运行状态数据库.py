@@ -55,6 +55,32 @@ def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认
     return str(记录[0] if 记录[0] is not None else 默认值)
 
 
+
+def 批量读取运行状态值(
+    配置: Any, 查询项: tuple[tuple[str, str], ...],
+) -> dict[tuple[str, str], str]:
+    """单次查询读取跨命名空间的指定键，不缓存值、不载入无关群状态。"""
+    if not 查询项 or not 已配置运行状态数据库(配置):
+        return {}
+    查询键 = list(dict.fromkeys((str(空间), str(键)) for 空间, 键 in 查询项))
+    数据库配置 = 获取数据库配置(配置)
+    表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
+    占位 = ",".join("(%s,%s)" for _ in 查询键)
+    参数 = tuple(值 for 项 in 查询键 for 值 in 项)
+    with 打开数据库连接(数据库配置) as 连接:
+        _确保运行状态表一次(连接, 数据库配置, 表名)
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT namespace, state_key, state_value FROM `{表名}` "
+                f"WHERE (namespace, state_key) IN ({占位})",
+                参数,
+            )
+            记录列表 = 游标.fetchall()
+    return {
+        (str(记录[0]), str(记录[1])): str(记录[2] if 记录[2] is not None else "")
+        for 记录 in 记录列表
+    }
+
 def 写入运行状态值(配置: Any, 命名空间: str, 状态键: str, 状态值: Any) -> None:
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名

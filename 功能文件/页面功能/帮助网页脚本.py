@@ -101,7 +101,7 @@
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
-        if (next !== 'messages' && activeView === 'messages') closeGroupSettings();
+        if (next !== 'messages' && activeView === 'messages') { closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         activeView = next;
@@ -676,7 +676,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, muteRequestToken:0, muteRequestChatId:'', muteRequestPromise:null, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
@@ -1350,6 +1350,91 @@
         try { localStorage.setItem('mantou_bot_admin_groups', JSON.stringify(Array.from(set))); }
         catch (_) {}
       };
+      // 远端权限和禁言先返回快照；当前群有限补查不占用聊天首屏请求。
+      const msgGroupSnapshotTasks = {roles:null, mutes:null};
+      const msgGroupSnapshotTarget = () => {
+        if (msgState.chatType !== 'group' || !msgState.chatId) return null;
+        const chatId = String(msgState.chatId);
+        const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId && item.chat_type === 'group');
+        return {chat_id:chatId, chat_type:'group', appid:String(chat?.appid || msgState.chatAppid || '').trim()};
+      };
+      const msgGroupSnapshotScope = (target) => JSON.stringify([target?.chat_id || '', target?.chat_type || '', target?.appid || '']);
+      const msgGroupSnapshotVisible = () => !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
+      const stopMsgGroupSnapshots = () => {
+        Object.keys(msgGroupSnapshotTasks).forEach((kind) => {
+          const task = msgGroupSnapshotTasks[kind];
+          msgGroupSnapshotTasks[kind] = null;
+          if (task?.timer || task?.controller) {
+            if (kind === 'roles') msgState.lastRolesAt = 0;
+            else msgState.muteRequestAt = 0;
+          }
+          if (task?.timer) clearTimeout(task.timer);
+          if (task?.controller) task.controller.abort();
+        });
+      };
+      const msgGroupSnapshotMatches = (data, target) => String(data?.chat_id || '') === target.chat_id
+        && String(data?.chat_type || '') === target.chat_type
+        && (!target.appid || String(data?.appid || '') === target.appid);
+      const requestMsgGroupSnapshot = (kind, target, apply, force = false, retryTask = null) => {
+        if (!target || !msgGroupSnapshotVisible() || msgGroupSnapshotScope(msgGroupSnapshotTarget()) !== msgGroupSnapshotScope(target)) return Promise.resolve(null);
+        let task = msgGroupSnapshotTasks[kind];
+        if (retryTask && task !== retryTask) return Promise.resolve(null);
+        if (!retryTask && task?.scope === msgGroupSnapshotScope(target) && task.promise) {
+          if (force) task.forceAfter = true;
+          return task.promise;
+        }
+        if (!retryTask && !force && task?.scope === msgGroupSnapshotScope(target) && task.timer) return Promise.resolve(null);
+        if (!retryTask) {
+          if (task?.timer) clearTimeout(task.timer);
+          if (task?.controller) task.controller.abort();
+          task = {target, scope:msgGroupSnapshotScope(target), attempts:0, promise:null, timer:null, controller:null, forceAfter:false};
+          msgGroupSnapshotTasks[kind] = task;
+        }
+        const isCurrent = () => msgGroupSnapshotTasks[kind] === task && msgGroupSnapshotVisible()
+          && msgGroupSnapshotScope(msgGroupSnapshotTarget()) === task.scope;
+        const controller = new AbortController();
+        task.controller = controller;
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const promise = (async () => {
+          try {
+            const path = kind === 'roles' ? 'message/group-roles' : 'message/group-member/mutes';
+            const data = await api(path, {method:'POST', signal:controller.signal, body:JSON.stringify({...target, ...(force ? {force:true} : {})})});
+            if (!isCurrent() || !msgGroupSnapshotMatches(data, target)) return null;
+            // pending 表示尚无权威结果；空成员数组不能覆盖已经显示的禁言。
+            if (!data.pending && data.has_data !== false) apply(data);
+            if (data.pending || data.refreshing) {
+              const retryDelays = [1000, 1000, 2000, 3000, 5000, 5000];
+              if (task.attempts < retryDelays.length) {
+                const delay = Math.max(retryDelays[task.attempts], Math.min(5000, Number(data.retry_after_ms) || 1000));
+                task.attempts += 1;
+                task.timer = setTimeout(() => {
+                  task.timer = null;
+                  if (isCurrent()) void requestMsgGroupSnapshot(kind, target, apply, false, task);
+                }, delay);
+              } else {
+                // 有限补查覆盖慢请求；队列更久时交还常规轮询，不无限追加定时器。
+                if (kind === 'roles') msgState.lastRolesAt = 0;
+                else msgState.muteRequestAt = Date.now();
+              }
+            }
+            return data;
+          } catch (error) {
+            if (isCurrent() && error.name !== 'AbortError' && kind === 'roles') msgState.adminScanFailures.set(target.chat_id, Date.now());
+            return null;
+          } finally {
+            clearTimeout(timeout);
+            if (task.promise === promise) { task.promise = null; task.controller = null; }
+            if (task.forceAfter && isCurrent()) {
+              task.forceAfter = false;
+              if (task.timer) clearTimeout(task.timer);
+              task.timer = null;
+              void requestMsgGroupSnapshot(kind, target, apply, true);
+            }
+          }
+        })();
+        task.promise = promise;
+        return promise;
+      };
       const msgRoleRetryMs = 5 * 60 * 1000;
       const msgMembershipRefreshMs = 30 * 60 * 1000;
       let autoScanAdminRunning = false;
@@ -1362,7 +1447,7 @@
         }, delay);
       };
       const autoScanAdminGroups = async () => {
-        if (autoScanAdminRunning) return;
+        if (autoScanAdminRunning || !msgGroupSnapshotVisible()) return;
         autoScanAdminRunning = true;
         try {
           const localAdmins = getLocalAdminGroups();
@@ -1378,6 +1463,7 @@
               : (membershipDue || !msgState.adminByChat.has(id) || !msgState.adminScanAttempted.has(id));
             return c.chat_type === 'group' && id
               && c.membership_status !== 'removed' && c.in_group !== false
+              && !(msgState.chatType === 'group' && String(msgState.chatId) === id)
               && scanAllowed;
           }).slice(0, 1);
           let membershipChanged = false;
@@ -1387,7 +1473,10 @@
             msgState.adminCheckedAt.set(chatId, Date.now());
             const scanRoleToken = Number(msgState.adminRequestToken || 0);
             try {
-              const res = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:chatId})});
+              const target = {chat_id:chatId, chat_type:'group', appid:String(group.appid || '').trim()};
+              const res = await api('message/group-roles', {method:'POST', body:JSON.stringify(target)});
+              if (!msgGroupSnapshotVisible() || !msgGroupSnapshotMatches(res, target)) continue;
+              if (res.pending || res.has_data === false) continue;
               const removed = res?.membership_status === 'removed' || res?.bot_in_group === false;
               if (removed) {
                 group.membership_status = 'removed';
@@ -1736,13 +1825,13 @@
         const sameChat = msgState.chatId === chatId && msgState.chatType === chatType;
         // 每次点选会话都重新执行首屏定位，同一会话也不能沿用旧滚动位置。
         msgState.initialScrollChatId = chatId;
+        stopMsgGroupSnapshots();
         if (!sameChat) {
           cancelMsgRealtimeMessageRender();
           msgState.panSelectionSaving = false;
           msgState.panSelectionLoading = false;
           msgState.panSelectionData = null;
           msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
-          msgState.muteRequestToken = Number(msgState.muteRequestToken || 0) + 1;
           msgState.mutes = new Map();
           msgState.muteRequestAt = 0;
         }
@@ -1874,6 +1963,7 @@
         return requestPromise;
       };
       const closeMsgEvents = () => {
+        stopMsgGroupSnapshots();
         if (msgState.eventReconnect) { clearTimeout(msgState.eventReconnect); msgState.eventReconnect = null; }
         if (autoScanAdminTimer) { clearTimeout(autoScanAdminTimer); autoScanAdminTimer = null; }
         if (msgState.eventRefreshTimer) { clearTimeout(msgState.eventRefreshTimer); msgState.eventRefreshTimer = null; }
@@ -3413,63 +3503,40 @@
         }
       };
       const loadMuteStates = (force = false) => {
-        if (msgState.chatType !== 'group' || !msgState.chatId) return Promise.resolve(null);
-        if (!msgState.botIsAdmin) return Promise.resolve(null);
-        const chatId = String(msgState.chatId);
-        const chatType = String(msgState.chatType);
-        if (msgState.muteRequestPromise && msgState.muteRequestChatId === chatId) return msgState.muteRequestPromise;
+        const target = msgGroupSnapshotTarget();
+        if (!target || !msgState.botIsAdmin || !msgGroupSnapshotVisible()) return Promise.resolve(null);
         const now = Date.now();
         if (!force && msgState.muteRequestAt && now - msgState.muteRequestAt < msgMuteRefreshMs) return Promise.resolve(null);
-        const token = Number(msgState.muteRequestToken || 0) + 1;
-        msgState.muteRequestToken = token;
-        const promise = (async () => {
-          try {
-            const currentChat = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || {};
-            const data = await api('message/group-member/mutes', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:chatType, appid:String(currentChat.appid || window.msgAppid || '')})});
-            if (token !== Number(msgState.muteRequestToken || 0) || msgState.chatId !== chatId || msgState.chatType !== chatType) return data;
-            msgState.muteRequestAt = Date.now();
-            if (data?.available !== false) {
-              const next = new Map();
-              (Array.isArray(data?.members) ? data.members : []).forEach((member) => {
-                const id = String(member?.member_openid || member?.union_openid || '').trim();
-                if (!id) return;
-                const expireTs = Number(member?.mute_expire_ts || 0);
-                if (expireTs > 0 && expireTs <= Date.now() / 1000) return;
-                const username = String(member?.username || '').trim();
-                if (username) msgState.profiles[id] = {...(msgState.profiles[id] || {}), nickname:username, username};
-                next.set(id, {...member, member_openid:id, mute_expire_ts:expireTs});
-              });
-              const mutesChanged = next.size !== msgState.mutes.size
-                || [...next].some(([id, member]) => {
-                  const previous = msgState.mutes.get(id);
-                  return !previous
-                    || Number(previous.mute_expire_ts || 0) !== Number(member.mute_expire_ts || 0)
-                    || String(previous.username || '') !== String(member.username || '');
-                });
-              msgState.mutes = next;
-              msgState.muteRequestAt = Date.now();
-              const body = $('msg-body');
-              if (mutesChanged && !$('page-messages')?.hidden && msgState.renderedChatId === chatId) {
-                renderMsgMessages(
-                  {...(msgState.historyData || {}), messages:msgState.messages},
-                  {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
-                );
-              }
-            }
-            return data;
-          } catch (_) {
-            if (token === Number(msgState.muteRequestToken || 0) && msgState.chatId === chatId) msgState.muteRequestAt = Date.now();
-            return null;
-          } finally {
-            if (msgState.muteRequestPromise === promise) {
-              msgState.muteRequestPromise = null;
-              msgState.muteRequestChatId = '';
-            }
+        msgState.muteRequestAt = now;
+        return requestMsgGroupSnapshot('mutes', target, (data) => {
+          if (data.available === false) return;
+          const next = new Map();
+          (Array.isArray(data.members) ? data.members : []).forEach((member) => {
+            const id = String(member?.member_openid || member?.union_openid || '').trim();
+            if (!id) return;
+            const expireTs = Number(member?.mute_expire_ts || 0);
+            if (expireTs > 0 && expireTs <= Date.now() / 1000) return;
+            const username = String(member?.username || '').trim();
+            if (username) msgState.profiles[id] = {...(msgState.profiles[id] || {}), nickname:username, username};
+            next.set(id, {...member, member_openid:id, mute_expire_ts:expireTs});
+          });
+          const mutesChanged = next.size !== msgState.mutes.size
+            || [...next].some(([id, member]) => {
+              const previous = msgState.mutes.get(id);
+              return !previous
+                || Number(previous.mute_expire_ts || 0) !== Number(member.mute_expire_ts || 0)
+                || String(previous.username || '') !== String(member.username || '');
+            });
+          msgState.mutes = next;
+          msgState.muteRequestAt = Date.now();
+          const body = $('msg-body');
+          if (mutesChanged && msgState.renderedChatId === target.chat_id) {
+            renderMsgMessages(
+              {...(msgState.historyData || {}), messages:msgState.messages},
+              {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+            );
           }
-        })();
-        msgState.muteRequestChatId = chatId;
-        msgState.muteRequestPromise = promise;
-        return promise;
+        }, force);
       };
       const unmuteMember = async (member, name = '') => {
         const memberId = String(member || '').trim();
@@ -4339,7 +4406,7 @@
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
           if (!older) {
-            void loadGroupRoles(true).then(() => loadMuteStates(true));
+            void loadGroupRoles(true).then(() => loadMuteStates());
           }
         } catch (error) {
           if (!requestIsCurrent()) return;
@@ -4371,26 +4438,22 @@
           if (older) msgState.historyOlderLoading = false;
         }
       };
-      const loadGroupRoles = async (throttled = false) => {
-        if (msgState.chatType !== 'group' || !msgState.chatId) return;
-        const requestChatId = String(msgState.chatId);
-        const requestChatType = String(msgState.chatType);
+      const loadGroupRoles = (throttled = false) => {
+        const target = msgGroupSnapshotTarget();
+        if (!target || !msgGroupSnapshotVisible()) return Promise.resolve(null);
+        const requestChatId = target.chat_id;
         const now = Date.now();
-        if (throttled && msgState.lastRolesChatId === requestChatId && msgState.lastRolesAt && now - msgState.lastRolesAt < msgRoleRetryMs) return;
-        const requestToken = Number(msgState.adminRequestToken || 0) + 1;
-        msgState.adminRequestToken = requestToken;
-        msgState.lastRolesAt = now; msgState.lastRolesChatId = requestChatId;
+        if (throttled && msgState.lastRolesChatId === requestChatId && msgState.lastRolesAppid === target.appid && msgState.lastRolesAt && now - msgState.lastRolesAt < msgRoleRetryMs) return Promise.resolve(null);
+        msgState.lastRolesAt = now; msgState.lastRolesChatId = requestChatId; msgState.lastRolesAppid = target.appid;
         msgState.adminCheckedAt.set(requestChatId, now);
-        try {
-          const data = await api('message/group-roles', {method:'POST', body:JSON.stringify({chat_id:requestChatId})});
-          if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
-          const removed = data?.membership_status === 'removed' || data?.bot_in_group === false;
-          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId);
+        return requestMsgGroupSnapshot('roles', target, (data) => {
+          const removed = data.membership_status === 'removed' || data.bot_in_group === false;
+          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId && chat.chat_type === 'group' && (!target.appid || String(chat.appid || '') === target.appid));
           if (removed) {
             if (current) {
               current.membership_status = 'removed';
               current.in_group = false;
-              current.membership_checked_at = Number(data?.membership_checked_at || Math.floor(Date.now() / 1000));
+              current.membership_checked_at = Number(data.membership_checked_at || Math.floor(Date.now() / 1000));
             }
             msgState.chatRemoved = true;
             $('msg-composer').hidden = true;
@@ -4399,10 +4462,10 @@
             renderMsgChats({chats:msgState.chats});
             return;
           }
-          const role = String(data?.bot_role || '').trim().toLowerCase();
+          const role = String(data.bot_role || '').trim().toLowerCase();
           if (!['owner', 'admin', 'member'].includes(role)) return;
           if (current) { current.membership_status = 'active'; current.in_group = true; }
-          if (current) current.membership_checked_at = Number(data?.membership_checked_at || Math.floor(Date.now() / 1000));
+          if (current) current.membership_checked_at = Number(data.membership_checked_at || Math.floor(Date.now() / 1000));
           const isAdmin = Boolean(data.bot_is_admin);
           msgState.adminByChat.set(requestChatId, isAdmin);
           msgState.adminScanFailures.delete(requestChatId);
@@ -4413,12 +4476,8 @@
           msgState.botIsAdmin = isAdmin;
           if (current) current.is_admin = isAdmin;
           updateMsgAdminTag();
-        }
-        catch (error) {
-          if (requestToken !== Number(msgState.adminRequestToken || 0) || msgState.chatId !== requestChatId || msgState.chatType !== requestChatType) return;
-          msgState.adminScanFailures.set(requestChatId, Date.now());
-          updateMsgAdminTag();
-        }
+          if (isAdmin) void loadMuteStates();
+        });
       };
       const markLocalMessageRecalled = (messageId) => {
         const id = String(messageId || '').trim();
@@ -5116,7 +5175,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void refreshQuarkProfilesSilently(); } });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else stopMsgGroupSnapshots(); });
+      window.addEventListener('pagehide', stopMsgGroupSnapshots);
       setInterval(refreshQuarkProfilesSilently, 60000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
