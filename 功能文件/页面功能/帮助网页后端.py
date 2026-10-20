@@ -97,6 +97,8 @@ _控制台会话存储锁 = globals().get("_控制台会话存储锁") or thread
 夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
 QQ阅读网页扫码会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页扫码会话") or {}
 QQ阅读扫码启动代次: dict[str, str] = globals().get("QQ阅读扫码启动代次") or {}
+QQ阅读网页短信会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页短信会话") or {}
+QQ阅读短信启动代次: dict[str, str] = globals().get("QQ阅读短信启动代次") or {}
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
 _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
 控制台执行器最大并发数 = 4
@@ -1094,8 +1096,10 @@ def 同步控制台会话认证(配置: Any) -> bool:
     一致 = bool(控制台会话认证指纹) and hmac.compare_digest(控制台会话认证指纹, 新指纹)
     if not 一致:
         QQ阅读扫码启动代次.clear()
+        QQ阅读短信启动代次.clear()
         try:
             asyncio.get_running_loop().create_task(_取消全部QQ阅读网页扫码())
+            asyncio.get_running_loop().create_task(_取消全部QQ阅读网页短信())
         except RuntimeError:
             pass
         控制台会话.clear()
@@ -1178,6 +1182,12 @@ def _清理控制台会话() -> None:
     for scan_id, 状态 in list(QQ阅读网页扫码会话.items()):
         if 状态.get("status") in {"success", "expired", "cancelled", "error"} and 截止时间 - float(状态.get("updated_at") or 0) > 300:
             QQ阅读网页扫码会话.pop(scan_id, None)
+    for 所有者, 状态 in list(QQ阅读网页短信会话.items()):
+        if 状态.get("expires_at", 0) <= 截止时间:
+            try:
+                asyncio.get_running_loop().create_task(_移除QQ阅读网页短信会话(所有者, 状态))
+            except RuntimeError:
+                pass
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
             控制台会话恢复排除.add(会话值)
@@ -1190,6 +1200,7 @@ def _清理控制台会话() -> None:
                     _取消夸克网页扫码所有者(会话值)
                 )
                 asyncio.get_running_loop().create_task(_取消QQ阅读网页扫码所有者(会话值))
+                asyncio.get_running_loop().create_task(_取消QQ阅读网页短信所有者(会话值))
             except RuntimeError:
                 pass
 
@@ -1854,6 +1865,7 @@ async def _处理控制台退出(request: web.Request) -> web.Response:
     控制台会话最后持久化.pop(会话值, None)
     await _取消夸克网页扫码所有者(会话值)
     await _取消QQ阅读网页扫码所有者(会话值)
+    await _取消QQ阅读网页短信所有者(会话值)
     await _控制台线程执行(_删除持久化控制台会话, 会话值, 配置快照)
     响应 = web.json_response({"ok": True})
     响应.del_cookie(控制台会话Cookie名, path="/")
@@ -2888,6 +2900,188 @@ async def _处理QQ阅读账号刷新(request: web.Request) -> web.Response:
 
 async def _处理QQ阅读账号凭据(request: web.Request) -> web.Response:
     return await _QQ阅读账号操作(request, "credential")
+
+
+def _QQ阅读短信仍有效(状态: dict[str, Any]) -> bool:
+    return (
+        not 状态.get("cancelled")
+        and QQ阅读网页短信会话.get(状态["owner"]) is 状态
+        and QQ阅读短信启动代次.get(状态["owner"]) == 状态["generation"]
+        and 状态.get("expires_at", 0) > time.time()
+        and 控制台会话.get(状态["session"], 0) > time.time()
+        and hmac.compare_digest(状态["auth"], 控制台会话认证指纹)
+        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(当前帮助网页配置))
+    )
+
+
+async def _移除QQ阅读网页短信会话(所有者: str, 预期: dict[str, Any] | None = None) -> None:
+    状态 = QQ阅读网页短信会话.get(所有者)
+    if not 状态 or (预期 is not None and 状态 is not 预期):
+        return
+    状态["cancelled"] = True
+    QQ阅读网页短信会话.pop(所有者, None)
+    if QQ阅读短信启动代次.get(所有者) == 状态["generation"]:
+        QQ阅读短信启动代次.pop(所有者, None)
+    try:
+        await 状态["client"].关闭()
+    except Exception as exc:
+        logger.debug("QQ阅读短信会话关闭失败：错误类型=%s", type(exc).__name__)
+
+
+async def _取消QQ阅读网页短信所有者(会话值: str) -> None:
+    if 会话值:
+        所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+        QQ阅读短信启动代次.pop(所有者, None)
+        await _移除QQ阅读网页短信会话(所有者)
+
+
+async def _取消全部QQ阅读网页短信() -> None:
+    QQ阅读短信启动代次.clear()
+    for 所有者 in list(QQ阅读网页短信会话):
+        await _移除QQ阅读网页短信会话(所有者)
+
+
+async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号未保存")
+    数据 = await _读取请求JSON(request)
+    手机号 = str((数据 or {}).get("phone") or "").strip()
+    if not re.fullmatch(r"1[0-9]{10}", 手机号):
+        return _控制台错误(400, "请输入有效的11位手机号")
+    会话值 = _取得请求会话(request)
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    原状态 = QQ阅读网页短信会话.get(所有者)
+    if 原状态 and _QQ阅读短信仍有效(原状态):
+        if 原状态.get("busy"):
+            return _控制台错误(409, "登录请求处理中，请稍候")
+        if time.time() - 原状态.get("sent_at", 0) < 60:
+            return _控制台错误(429, "验证码已发送，请稍后再试")
+    代次 = secrets.token_urlsafe(16)
+    QQ阅读短信启动代次[所有者] = 代次
+    认证 = 控制台会话认证指纹
+    配置 = 获取控制台会话配置快照()
+    await _移除QQ阅读网页短信会话(所有者)
+    if (QQ阅读短信启动代次.get(所有者) != 代次 or 控制台会话.get(会话值, 0) <= time.time()
+            or not hmac.compare_digest(认证, 控制台会话认证指纹)):
+        return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+    状态 = {"owner": 所有者, "session": 会话值, "auth": 认证, "generation": 代次,
+            "config": 配置, "phone": 手机号,
+            "expires_at": time.time() + 600, "busy": True, "sent_at": 0,
+            "client": QQ阅读.QQ阅读手机号登录客户端()}
+    QQ阅读网页短信会话[所有者] = 状态
+    try:
+        if not _QQ阅读短信仍有效(状态):
+            return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+        结果 = await 状态["client"].预请求(手机号)
+        if not _QQ阅读短信仍有效(状态):
+            return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+        已发送 = 结果.get("sent") is True
+        需要验证 = 结果.get("challenge_required") is True
+        if 已发送:
+            状态["sent_at"] = time.time()
+        if not 已发送 and not 需要验证:
+            raise RuntimeError("qqreader_sms_send_unconfirmed")
+        return _QQ阅读JSON({"ok": True, "sent": 已发送, "challenge_required": 需要验证,
+            "captcha_app_id": str(结果.get("captcha_app_id") or "") if 需要验证 else "",
+            "message": "请完成安全验证" if 需要验证 else "验证码已发送"})
+    except Exception as exc:
+        logger.warning("QQ阅读短信预请求失败：错误类型=%s", type(exc).__name__)
+        await _移除QQ阅读网页短信会话(所有者, 状态)
+        return _控制台错误(502, "验证码请求失败，请稍后重试")
+    finally:
+        状态["busy"] = False
+
+
+def _保存QQ阅读短信账号(状态: dict[str, Any], 登录态: dict[str, Any]) -> dict[str, Any] | None:
+    # 在线程队列实际取得执行权时再校验，取消后的排队结果不写账号库。
+    if not _QQ阅读短信仍有效(状态):
+        return None
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+    return QQ阅读.保存QQ阅读账号(状态["config"], 登录态)
+
+
+async def _QQ阅读短信操作(request: web.Request, 操作: str) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    会话值 = _取得请求会话(request)
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    if 操作 == "cancel":
+        await _取消QQ阅读网页短信所有者(会话值)
+        return _QQ阅读JSON({"ok": True})
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号未保存")
+    数据 = await _读取请求JSON(request)
+    状态 = QQ阅读网页短信会话.get(所有者)
+    if not 状态 or not _QQ阅读短信仍有效(状态):
+        return _控制台错误(409, "请重新获取验证码")
+    if str((数据 or {}).get("phone") or "").strip() != 状态["phone"]:
+        return _控制台错误(400, "手机号已变化，请重新获取验证码")
+    if 状态.get("busy"):
+        return _控制台错误(409, "登录请求处理中，请稍候")
+    if 操作 == "confirm":
+        ticket = str((数据 or {}).get("ticket") or "").strip()
+        randstr = str((数据 or {}).get("randstr") or "").strip()
+        if not ticket or len(ticket) > 8192 or not randstr or len(randstr) > 512:
+            return _控制台错误(400, "请完成安全验证")
+        if time.time() - 状态.get("sent_at", 0) < 60:
+            return _控制台错误(429, "验证码已发送，请稍后再试")
+    else:
+        code = str((数据 or {}).get("code") or "").strip()
+        if not re.fullmatch(r"[0-9]{4,8}", code):
+            return _控制台错误(400, "请输入有效的短信验证码")
+        if not 状态.get("sent_at"):
+            return _控制台错误(409, "请先获取验证码")
+    状态["busy"] = True
+    try:
+        if 操作 == "confirm":
+            结果 = await 状态["client"].确认发送(ticket, randstr)
+            if not _QQ阅读短信仍有效(状态):
+                return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+            已发送 = 结果.get("sent") is True
+            需要验证 = 结果.get("challenge_required") is True
+            if not 已发送 and not 需要验证:
+                raise RuntimeError("qqreader_sms_send_unconfirmed")
+            if 已发送:
+                状态["sent_at"] = time.time()
+            return _QQ阅读JSON({"ok": True, "sent": 已发送, "challenge_required": 需要验证,
+                "captcha_app_id": str(结果.get("captcha_app_id") or "") if 需要验证 else "",
+                "message": "请重新完成安全验证" if 需要验证 else "验证码已发送"})
+        登录态 = await 状态["client"].验证登录(code)
+        if not _QQ阅读短信仍有效(状态):
+            return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        摘要 = await _控制台线程执行(_保存QQ阅读短信账号, 状态, 登录态)
+        if 摘要 is None:
+            return _控制台错误(409, "登录会话已更新，请重新获取验证码")
+        try:
+            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 摘要["selected_id"]), timeout=20)
+        except Exception as exc:
+            logger.debug("QQ阅读手机号账号资料暂未更新：错误类型=%s", type(exc).__name__)
+        await _移除QQ阅读网页短信会话(所有者, 状态)
+        return _QQ阅读JSON({"ok": True, "message": "账号已添加并设为当前账号", **摘要})
+    except Exception as exc:
+        logger.warning("QQ阅读短信操作失败：阶段=%s，错误类型=%s", 操作, type(exc).__name__)
+        return _控制台错误(502, "验证码校验或登录失败，请检查后重试")
+    finally:
+        状态["busy"] = False
+
+
+async def _处理QQ阅读短信确认下发(request: web.Request) -> web.Response:
+    return await _QQ阅读短信操作(request, "confirm")
+
+
+async def _处理QQ阅读短信登录(request: web.Request) -> web.Response:
+    return await _QQ阅读短信操作(request, "login")
+
+
+async def _处理QQ阅读短信取消(request: web.Request) -> web.Response:
+    return await _QQ阅读短信操作(request, "cancel")
 
 
 async def _移除QQ阅读网页扫码会话(scan_id: str, 所有者: str | None = None) -> bool:

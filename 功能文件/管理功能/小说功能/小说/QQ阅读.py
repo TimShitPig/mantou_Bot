@@ -5829,3 +5829,234 @@ class QQ阅读扫码登录客户端:
             self._session = None
         self._oauth.clear()
         self._pt.clear()
+
+
+
+class QQ阅读手机号登录客户端:
+    """当前官网手机号登录；Cookie 和两阶段 sessionKey 只保留于本实例。"""
+
+    _回调 = "mantouReaderSms"
+    _官网地址 = "https://login.book.qq.com/login.html"
+    _接口地址 = "https://ptlogin.yuewen.com"
+
+    def __init__(self) -> None:
+        self._session: aiohttp.ClientSession | None = None
+        self._closed = False
+        self._phone = ""
+        self._challenge_key = ""
+        self._sms_key = ""
+        self._captcha_app_id = ""
+        self._config: dict[str, Any] = {}
+        self._deadline = 0.0
+        self._lock = asyncio.Lock()
+        self.status = "created"
+
+    def _检查有效(self) -> None:
+        if self._closed or self._session is None:
+            raise RuntimeError("qqreader_sms_closed")
+        if self._deadline and time.monotonic() >= self._deadline:
+            self.status = "expired"
+            self._challenge_key = self._sms_key = ""
+            raise TimeoutError("qqreader_sms_expired")
+
+    async def _读取(self, url: str) -> bytes:
+        self._检查有效()
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or parsed.hostname not in {
+            "login.book.qq.com", "ptlogin.yuewen.com", "book.qq.com",
+            "ywloginstatic.yuewen.com",
+        } or parsed.username or parsed.password or parsed.port not in (None, 443)):
+            raise RuntimeError("qqreader_sms_address_invalid")
+        assert self._session is not None
+        async with self._session.get(
+            url, allow_redirects=False,
+            headers={"Referer": self._官网地址},
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError("qqreader_sms_http_error")
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                size += len(chunk)
+                if size > 1024 * 1024:
+                    raise RuntimeError("qqreader_sms_response_large")
+                chunks.append(chunk)
+        self._检查有效()
+        return b"".join(chunks)
+
+    async def _初始化(self) -> None:
+        params = {
+            "appId": "1450000219", "areaId": "10", "tab": "phone",
+            "returnurl": "https://book.qq.com/loginSuccess", "popup": "1",
+            "ticket": "1", "target": "iframe", "version": "1.0",
+            "unionshow": "00001",
+        }
+        page = (await self._读取(self._官网地址 + "?" + urlencode(params))).decode("utf-8", "replace")
+        match = re.search(r"\bLoginV1\.init\(\s*(\{)", page)
+        if not match:
+            raise RuntimeError("qqreader_sms_config_missing")
+        try:
+            config, _ = json.JSONDecoder().raw_decode(page[match.start(1):])
+        except (ValueError, TypeError, RecursionError):
+            raise RuntimeError("qqreader_sms_config_invalid") from None
+        if not isinstance(config, dict) or (
+            str(config.get("appId")) != "1450000219"
+            or str(config.get("areaId")) != "10"
+            or config.get("baseUrl") != self._接口地址
+            or config.get("returnUrl") != "https://book.qq.com/loginSuccess"
+            or not _是真值(config.get("usePhone"))
+        ):
+            raise RuntimeError("qqreader_sms_provider_changed")
+        script = re.search(
+            r'<script\b[^>]*\bsrc=["\']((?:https:)?//ywloginstatic\.yuewen\.com/js4/login\.js(?:\?[^"\']*)?)["\']',
+            page, re.I,
+        )
+        if not script:
+            raise RuntimeError("qqreader_sms_script_missing")
+        script_url = html.unescape(script.group(1))
+        if script_url.startswith("//"):
+            script_url = "https:" + script_url
+        javascript = (await self._读取(script_url)).decode("utf-8", "replace")
+        captcha = re.search(r'\bcaptchaAppId\s*:\s*["\'](\d{6,14})["\']', javascript)
+        if not captcha or not all(re.search(pattern, javascript) for pattern in (
+            r'["\']phoneSendMsg["\']\s*:\s*["\']/userSdk/sendmsgnew["\']',
+            r'["\']phoneCodeLogin["\']\s*:\s*["\']/userSdk/phonecodelogin["\']',
+        )):
+            raise RuntimeError("qqreader_sms_script_changed")
+        self._config = config
+        self._captcha_app_id = captcha.group(1)
+
+    def _基础参数(self) -> dict[str, str]:
+        config = self._config
+        return {
+            "appId": "1450000219", "areaId": "10",
+            "source": str(config.get("source") or ""),
+            "returnurl": "https://book.qq.com/loginSuccess",
+            "version": str(config.get("version") or "1.0"),
+            "imei": str(config.get("imei") or ""),
+            "qimei": str(config.get("qimei") or ""),
+            "target": str(config.get("target") or "iframe"),
+            "ticket": str(config.get("ticket") or "1"),
+            "autotime": str(config.get("autoTime") or "14"),
+            "jumpdm": str(config.get("jumpdm") or ""),
+            "ajaxdm": str(config.get("ajaxdm") or "yuewen"),
+            "auto": str(config.get("autoLoginFlag") or "0"),
+            "sdkversion": str(config.get("sdkversion") or ""),
+            "format": "jsonp", "method": self._回调,
+        }
+
+    async def _请求JSONP(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
+        if endpoint not in {"sendmsgnew", "phonecodelogin"}:
+            raise RuntimeError("qqreader_sms_endpoint_invalid")
+        payload = (await self._读取(
+            self._接口地址 + "/userSdk/" + endpoint + "?" + urlencode(params)
+        )).decode("utf-8", "strict")
+        wrapper = re.fullmatch(r"\s*" + re.escape(self._回调) + r"\((.*)\)\s*;?\s*", payload, re.S)
+        try:
+            data = json.loads(wrapper.group(1) if wrapper else payload)
+        except (ValueError, TypeError, RecursionError):
+            raise RuntimeError("qqreader_sms_json_invalid") from None
+        if not isinstance(data, dict) or str(data.get("code")) != "0":
+            if isinstance(data, dict) and str(data.get("code")) in {"-11003", "-10092"}:
+                self.status = "expired"
+                self._challenge_key = self._sms_key = ""
+            raise ValueError("qqreader_sms_request_rejected")
+        result = data.get("data")
+        if not isinstance(result, dict):
+            raise RuntimeError("qqreader_sms_data_invalid")
+        return result
+
+    def _处理发送结果(self, result: dict[str, Any]) -> dict[str, Any]:
+        key = result.get("sessionKey")
+        if not isinstance(key, str) or not 1 <= len(key) <= 8192 or any(ord(ch) < 32 for ch in key):
+            raise RuntimeError("qqreader_sms_session_missing")
+        action = str(result.get("nextAction"))
+        self._sms_key = ""
+        if action == "0":
+            self._challenge_key = ""
+            self._sms_key = key
+            self.status = "sent"
+            self._deadline = time.monotonic() + 300
+            return {"challenge_required": False, "sent": True}
+        if action == "11":
+            script = str(result.get("imgSrc") or "")
+            if "TCaptcha.js" not in script:
+                raise RuntimeError("qqreader_sms_challenge_changed")
+            self._challenge_key = key
+            self.status = "challenge"
+            return {"challenge_required": True, "sent": False,
+                    "captcha_app_id": self._captcha_app_id}
+        raise RuntimeError("qqreader_sms_challenge_unrecognized")
+
+    async def 预请求(self, 手机号: str) -> dict[str, Any]:
+        phone = str(手机号 or "").strip()
+        if not re.fullmatch(r"1\d{10}", phone):
+            raise ValueError("qqreader_sms_phone_invalid")
+        async with self._lock:
+            if self._closed or self._session is not None:
+                raise RuntimeError("qqreader_sms_already_started")
+            self._phone = phone
+            self._deadline = time.monotonic() + 300
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": QQ阅读扫码登录客户端._UA},
+                timeout=aiohttp.ClientTimeout(total=15, sock_connect=5, sock_read=10),
+                connector=aiohttp.TCPConnector(limit=2, ttl_dns_cache=300),
+                cookie_jar=aiohttp.CookieJar(),
+            )
+            try:
+                await self._初始化()
+                params = self._基础参数()
+                params.update({"phoneIsAbroad": "0", "auto": "",
+                               "inputUserId": "+86" + phone, "sessionKey": "",
+                               "type": "1", "validateCode": "", "needRegister": "0"})
+                return self._处理发送结果(await self._请求JSONP("sendmsgnew", params))
+            except BaseException:
+                await self.关闭()
+                raise
+
+    async def 确认发送(self, ticket: str, randstr: str) -> dict[str, Any]:
+        async with self._lock:
+            self._检查有效()
+            if self.status != "challenge" or not self._challenge_key:
+                raise RuntimeError("qqreader_sms_challenge_required")
+            values = (ticket, randstr)
+            if any(not isinstance(value, str) or not 1 <= len(value) <= 8192
+                   or any(ord(ch) < 33 or ord(ch) == 127 or ch == ";" for ch in value)
+                   for value in values):
+                raise ValueError("qqreader_sms_challenge_invalid")
+            params = self._基础参数()
+            params.update({"phoneIsAbroad": "0", "mobilePhone": self._phone,
+                           "inputUserId": "+86" + self._phone,
+                           "sessionKey": self._challenge_key, "type": "1",
+                           "validateCode": randstr + ";" + ticket, "needRegister": "0"})
+            return self._处理发送结果(await self._请求JSONP("sendmsgnew", params))
+
+    async def 验证登录(self, 验证码: str) -> dict[str, str]:
+        code = str(验证码 or "").strip()
+        if not re.fullmatch(r"\d{4,8}", code):
+            raise ValueError("qqreader_sms_code_invalid")
+        async with self._lock:
+            self._检查有效()
+            if self.status != "sent" or not self._sms_key:
+                raise RuntimeError("qqreader_sms_not_sent")
+            params = self._基础参数()
+            params.update({"inputUserId": self._phone, "sessionKey": self._sms_key,
+                           "validateCode": code})
+            result = await self._请求JSONP("phonecodelogin", params)
+            login = 解析QQ阅读Cookie(json.dumps({
+                "ywguid": result.get("ywGuid"), "ywkey": result.get("ywKey"),
+            }))
+            if not login:
+                raise RuntimeError("qqreader_sms_credentials_missing")
+            self.status = "confirmed"
+            await self.关闭()
+            return login
+
+    async def 关闭(self) -> None:
+        self._closed = True
+        self._phone = self._challenge_key = self._sms_key = ""
+        self._config.clear()
+        if self._session is not None:
+            self._session.cookie_jar.clear()
+            await self._session.close()
+            self._session = None
