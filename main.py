@@ -69,7 +69,7 @@ ZLibrary小说功能 = 加载功能模块("功能文件.管理功能.小说功�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 插件生命周期 = 加载功能模块("功能文件.管理功能.基础功能.插件生命周期")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.196"
+插件版本 = "6.1.197"
 
 
 
@@ -251,6 +251,8 @@ class MyPlugin(Star):
                     event.stop_event()
                     return
             回复内容 = 帮助功能.处理帮助指令(event, 命令文本, self.config)
+        if 回复内容 is None:
+            回复内容 = await 群管功能.处理群踢人(event, 命令文本, self.config)
         if 回复内容 is None:
             回复内容 = await 群管功能.处理群禁言(event, 命令文本, self.config)
 

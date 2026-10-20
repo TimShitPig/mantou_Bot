@@ -22,6 +22,9 @@ _读取锁 = globals().get("_读取锁", {})
 _缓存代次 = globals().get("_缓存代次", {})
 _缓存上限 = 1024
 _频率上限 = {"members": 60, "member": 30, "remove": 30, "blacklist": 30, "blacklist_op": 60}
+_踢人事件记录 = globals().get("_踢人事件记录", {})
+_踢人事件有效期秒 = 600
+_踢人事件记录上限 = 4096
 
 
 def _错误(reason, message, status=409, code=None):
@@ -81,6 +84,31 @@ def _通道(chat_id, appid, 上下文=None):
     return (appid, http), None
 
 
+def _事件通道(event):
+    """群指令直接使用收到该事件的官方认证通道，不借用其它平台 Token。"""
+    if not 群管功能.是QQ官方机器人(event):
+        return None, _错误("platform_missing", "QQ 官方机器人尚未就绪")
+    chat_id = 群管功能.获取群号(event)
+    if not _标识有效(chat_id):
+        return None, _错误("invalid_scope", "群标识无效", 400)
+    消息对象 = getattr(event, "message_obj", None)
+    for 对象 in (event, 消息对象):
+        for 字段 in ("group_openid", "group_id"):
+            标识 = _取字段(对象, 字段)
+            if isinstance(标识, str) and 标识 and 标识 != chat_id:
+                return None, _错误("invalid_scope", "群聊目标不匹配", 400)
+    bot = getattr(event, "bot", None)
+    http = getattr(getattr(bot, "api", None), "_http", None)
+    if http is None:
+        return None, _错误("http_missing", "QQ 官方机器人尚未就绪")
+    appid = str(getattr(getattr(http, "_token", None), "app_id", ""))
+    if not _AppID格式.fullmatch(appid):
+        return None, _错误("appid_missing", "机器人认证状态不完整", 400)
+    if getattr(http, "is_sandbox", False):
+        return None, _错误("sandbox", "请使用正式环境的 QQ 官方机器人")
+    return (chat_id, appid, http), None
+
+
 def _受控失败(chat_id, appid, stage, status=None, code=None, error_type="response"):
     if code in {11253, 11254, 40012010}:
         结果 = _错误("api_permission", "机器人尚未开通此群管理接口", 403, code)
@@ -116,6 +144,7 @@ async def _请求(chat_id, appid, http, stage, method, path, *, params=None, bod
     if len(记录) >= _频率上限[stage]:
         return _错误("rate_limited", "操作过于频繁，请稍后重试", 429)
     记录.append(现在)
+    请求已提交 = False
     try:
         # 复用 SDK 的刷新认证与会话，但避开 request() 对 ConnectionReset 的 POST 重放。
         await http.check_session()
@@ -128,11 +157,15 @@ async def _请求(chat_id, appid, http, stage, method, path, *, params=None, bod
             参数["params"] = params
         if body is not None:
             参数["json"] = body
+        请求已提交 = True
         async with http._session.request(method, "https://api.bot.qq.com" + path, **参数) as 响应:
             状态 = 响应.status
             数据 = await 响应.json(content_type=None)
         if not isinstance(数据, dict):
-            return _受控失败(chat_id, appid, stage, 状态, error_type="invalid_response")
+            结果 = _受控失败(chat_id, appid, stage, 状态, error_type="invalid_response")
+            if stage == "remove" and 200 <= 状态 < 300:
+                return _错误("remove_unconfirmed", "成员移除结果未确认，请刷新成员列表", 502)
+            return 结果
         业务码 = _整数错误码(数据)
         if not 200 <= 状态 < 300 or 业务码 is not None:
             if 消息记录._响应表示群机器人已移除(数据):
@@ -142,7 +175,10 @@ async def _请求(chat_id, appid, http, stage, method, path, *, params=None, bod
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        return _受控失败(chat_id, appid, stage, error_type=type(exc).__name__)
+        结果 = _受控失败(chat_id, appid, stage, error_type=type(exc).__name__)
+        if stage == "remove" and 请求已提交:
+            return _错误("remove_unconfirmed", "成员移除结果未确认，请刷新成员列表", 502)
+        return 结果
 
 
 def _日期(值):
@@ -296,6 +332,35 @@ async def 批量移除群成员(chat_id, appid="", member_openids=None, add_to_m
     if 错误:
         return 错误
     appid, http = 通道
+    return await _执行批量移除(chat_id, appid, http, member_openids, add_to_member_blacklist)
+
+
+async def 批量移除事件群成员(event, member_openids=None):
+    if not _批量有效(member_openids):
+        return _错误("invalid_batch", "单次请选择 1 至 20 个不同成员", 400)
+    通道, 错误 = _事件通道(event)
+    if 错误:
+        return 错误
+    chat_id, appid, http = 通道
+    消息编号 = 群管功能.获取当前消息编号(event)
+    if (not isinstance(消息编号, str) or not 消息编号 or len(消息编号) > 2048
+            or any(ord(x) < 32 or 127 <= ord(x) <= 159 for x in 消息编号)):
+        return _错误("message_id_missing", "当前消息标识无效", 400)
+    现在 = time.monotonic()
+    for 键, 时间 in list(_踢人事件记录.items()):
+        if 现在 - 时间 >= _踢人事件有效期秒:
+            _踢人事件记录.pop(键, None)
+    键 = (appid, chat_id, 消息编号)
+    if 键 in _踢人事件记录:
+        return _错误("duplicate_event", "此条指令已处理", 409)
+    if len(_踢人事件记录) >= _踢人事件记录上限:
+        return _错误("rate_limited", "操作过于频繁，请稍后重试", 429)
+    # 在第一次 await 前领取；成功、超时与取消均保留，避免双事件重放 POST。
+    _踢人事件记录[键] = 现在
+    return await _执行批量移除(chat_id, appid, http, member_openids, False)
+
+
+async def _执行批量移除(chat_id, appid, http, member_openids, add_to_member_blacklist):
     async with _群写入锁.setdefault((appid, chat_id), asyncio.Lock()):
         try:
             结果 = await _请求(chat_id, appid, http, "remove", "POST", "/v2/groups/%s/batch_remove_members" % chat_id,

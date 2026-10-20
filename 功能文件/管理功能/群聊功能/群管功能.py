@@ -216,6 +216,106 @@ async def 处理广告开关指令(
     if not await asyncio.to_thread(写入群广告开关, 配置, 群号, 目标状态):
         return "广告开关保存失败，请稍后再试"
     return f"本群广告拦截已{'开启' if 目标状态 else '关闭'}"
+def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[str, Any] | None:
+    """仅解析当前顶层文字与 @；引用、卡片及其子节点不参与命令。"""
+    消息对象 = getattr(event, "message_obj", None)
+    消息链 = None
+    for 对象 in (消息对象, event):
+        for 字段名 in ("message", "components", "content"):
+            候选 = 读取字段(对象, 字段名)
+            if isinstance(候选, (list, tuple)) and 候选:
+                消息链 = 候选
+                break
+        if 消息链 is not None:
+            break
+    文本片段: list[str] = []
+    目标: list[str] = []
+    if 消息链 is not None:
+        for 消息段 in 消息链:
+            if isinstance(消息段, str):
+                文本片段.append(消息段)
+                continue
+            类型值 = 读取字段(消息段, "type")
+            类型 = str(读取字段(类型值, "value") or 类型值 or "").lower()
+            if 是否At类型值(类型值):
+                数据 = 读取字段(消息段, "data")
+                用户 = next((规范化用户编号(读取字段(对象, 字段))
+                             for 对象 in (消息段, 数据)
+                             for 字段 in ("qq", "user_id", "member_openid", "user_openid", "openid")
+                             if 规范化用户编号(读取字段(对象, 字段))), "")
+                if 用户:
+                    目标.append(用户)
+            elif 类型 in {"plain", "text"} or 类型.endswith((".plain", ".text")):
+                数据 = 读取字段(消息段, "data")
+                文本 = (读取字段(消息段, "text") or 读取字段(消息段, "content")
+                      or 读取字段(数据, "text") or 读取字段(数据, "content") or "")
+                if not isinstance(文本, str):
+                    return None
+                文本片段.append(文本)
+            else:
+                return None
+        文本 = "".join(文本片段)
+    else:
+        # 无组件链时只读取适配器公开的当前可见文本，不遍历 raw_message。
+        文本 = next((值 for 值 in (读取字段(event, "message_str"),
+                              读取字段(消息对象, "message_str"), 命令文本)
+                   if isinstance(值, str) and 值), "")
+    def 去除提及(匹配):
+        用户 = 规范化用户编号(匹配.group(1) or 匹配.group(2))
+        if 用户:
+            目标.append(用户)
+        return " "
+    文本 = re.sub(r"\[At:([A-Za-z0-9_-]{1,128})\]|<@!?([A-Za-z0-9_-]{1,128})>",
+                去除提及, 文本, flags=re.IGNORECASE).strip()
+    if 文本 not in {"踢", "踢了"}:
+        return None
+    忽略用户 = 获取应忽略At用户(event)
+    获取自身 = getattr(event, "get_self_id", None)
+    if callable(获取自身):
+        try:
+            自身 = 获取自身()
+        except Exception:
+            自身 = None
+        if isinstance(自身, str):
+            忽略用户.add(自身)
+    return {"command": 文本, "targets": [用户 for 用户 in 去重保序(目标) if 用户 not in 忽略用户]}
+
+
+async def 处理群踢人(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
+    """管理员明确指令才移除成员；权限以本次 POST 实际响应为准。"""
+    if not 是QQ官方机器人(event) or not 是群文件清理管理员(event, 配置):
+        return None
+    参数 = 解析群踢人参数(event, 命令文本)
+    if 参数 is None:
+        return None
+    if not 获取群号(event):
+        return "成员移除失败：只能在群聊中使用"
+    目标 = 参数["targets"]
+    if not 目标:
+        return "成员移除失败：请@要移除的成员"
+    if len(目标) > 20:
+        return "成员移除失败：单次最多20人"
+    try:
+        # 群聊设置依赖本模块，命令执行时再导入以避免循环加载。
+        from 功能文件.管理功能.群聊功能 import 群聊设置
+
+        结果 = await 群聊设置.批量移除事件群成员(event, member_openids=目标)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("QQ官方群踢人指令失败：error_type=%s", type(exc).__name__)
+        return "成员移除失败，请稍后再试"
+    if 结果.get("reason") == "duplicate_event":
+        return None
+    if 结果.get("ok") is True:
+        return "成员已移除"
+    if 结果.get("reason") in {"api_permission", "group_permission"}:
+        return "成员移除失败：当前操作未获授权"
+    if 结果.get("reason") == "remove_unconfirmed":
+        return "成员移除结果未确认，请查看群成员"
+    return "成员移除失败，请稍后再试"
+
+
 async def 处理群禁言(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
     单用户参数 = 解析单用户禁言参数(event, 命令文本)
     if 单用户参数 is not None:
