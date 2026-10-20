@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 import aiohttp
 
-from 功能文件.管理功能.基础功能 import 帮助功能
+from 功能文件.管理功能.基础功能 import 帮助功能, 权限工具
 
 try:
     from astrbot.api import logger
@@ -87,8 +88,9 @@ def _生成欢迎回调按钮(标识: str, 标签: str) -> dict[str, Any]:
     }
 
 
-def 获取欢迎键盘(好友邀请链接: str = "") -> dict[str, Any]:
-    按钮 = [_生成欢迎回调按钮(标识, 标签) for 标识, 标签 in 欢迎回调标签.items()]
+def 获取欢迎键盘(好友邀请链接: str = "", *, 公开菜单: bool = False) -> dict[str, Any]:
+    标签表 = {"小说列表": "小说列表", "教程": "如何下载"} if 公开菜单 else 欢迎回调标签
+    按钮 = [_生成欢迎回调按钮(标识, 标签) for 标识, 标签 in 标签表.items()]
     if 好友邀请链接:
         按钮.append({
             "id": "welcome_add_robot",
@@ -176,11 +178,14 @@ def 获取欢迎回调内容(文本: str, 配置: Any = None) -> tuple[str, None
 
 
 async def _获取好友邀请链接(event: Any) -> str:
-    """使用当前事件的官方认证生成带来源群的好友链接；失败保留原欢迎。"""
+    """使用当前事件的官方认证生成好友链接；群聊附带来源群。"""
     阶段 = "scope"
     try:
         群号 = 帮助功能.获取群openid同步(event)
-        if not isinstance(群号, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", 群号):
+        if 群号:
+            if not isinstance(群号, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", 群号):
+                return ""
+        elif not 帮助功能.获取用户openid同步(event):
             return ""
         for 对象 in (event, _读取字段(event, "message_obj"), _读取字段(event, "message")):
             原始数据 = _读取字段(_读取字段(对象, "raw_message"), "raw_data")
@@ -209,7 +214,7 @@ async def _获取好友邀请链接(event: Any) -> str:
             # SDK request() 会重放连接中断的 POST；底层会话只提交一次。
             async with http._session.request(
                 "POST", "https://api.bot.qq.com/v2/generate_url_link",
-                headers=请求头, json={"callback_data": 群号},
+                headers=请求头, json={"callback_data": 群号} if 群号 else {},
                 allow_redirects=False, timeout=aiohttp.ClientTimeout(total=5),
             ) as 响应:
                 if not 200 <= 响应.status < 300:
@@ -247,6 +252,117 @@ async def _获取好友邀请链接(event: Any) -> str:
     except Exception as exc:
         logger.warning("QQ官方群欢迎好友链接生成失败：stage=%s, error_type=%s", 阶段, type(exc).__name__)
         return ""
+
+
+# QQ 全量群消息和 @事件可能携带同一消息；按真实消息 ID 在首次 await 前占位。
+_公开帮助已处理 = globals().get("_公开帮助已处理", {})
+
+
+def _获取事件标识(event: Any, 方法名: str, 字段名: str) -> str:
+    方法 = _读取字段(event, 方法名)
+    if callable(方法):
+        try:
+            值 = 方法()
+        except Exception:
+            值 = None
+        if isinstance(值, (str, int)) and not isinstance(值, bool) and 值:
+            return str(值)
+    for 对象 in (event, _读取字段(event, "message_obj")):
+        值 = _读取字段(对象, 字段名)
+        if isinstance(值, (str, int)) and not isinstance(值, bool) and 值:
+            return str(值)
+    return ""
+
+
+def _是否仅提及机器人(event: Any) -> bool:
+    # 私聊由适配器固定插入 At(qq_official)，不代表用户实际提及。
+    if not 帮助功能.获取群openid同步(event):
+        return False
+    消息对象 = _读取字段(event, "message_obj")
+    自身标识 = {"qq_official"}
+    自身ID = _获取事件标识(event, "get_self_id", "self_id")
+    if 自身ID:
+        自身标识.add(自身ID)
+    原始消息 = _读取字段(消息对象, "raw_message")
+    原始数据 = _读取字段(原始消息, "raw_data")
+    for 资料 in (原始消息, 原始数据):
+        for 提及 in _读取字段(资料, "mentions", []) or []:
+            if _读取字段(提及, "is_you") is not True:
+                return False
+            标识 = _读取字段(提及, "id")
+            if isinstance(标识, str) and 标识:
+                自身标识.add(标识)
+        # botpy 即使无引用也创建 _MessageRef(None)，只按实际消息 ID 判断。
+        if _读取字段(_读取字段(资料, "message_reference"), "message_id"):
+            return False
+        if any(_读取字段(资料, 字段) for 字段 in (
+            "attachments", "ark", "ark_data", "msg_elements",
+        )):
+            return False
+        正文 = _读取字段(资料, "content", "")
+        if not isinstance(正文, str):
+            return False
+        for 标识 in 自身标识:
+            正文 = re.sub(r"<@!?" + re.escape(标识) + r">", "", 正文)
+        if 正文.strip():
+            return False
+    方法 = _读取字段(event, "get_messages")
+    消息链 = 方法() if callable(方法) else _读取字段(消息对象, "message", [])
+    if not isinstance(消息链, (list, tuple)) or not 0 < len(消息链) <= 32:
+        return False
+    已提及 = False
+    for 组件 in 消息链:
+        类型 = _读取字段(组件, "type")
+        类型 = _读取字段(类型, "value", 类型)
+        if not isinstance(类型, str):
+            return False
+        类型 = 类型.lower()
+        数据 = _读取字段(组件, "data", 组件)
+        if 类型 in ("plain", "text"):
+            文本 = _读取字段(数据, "text", "")
+            if not isinstance(文本, str) or 文本.strip():
+                return False
+        elif 类型 == "at":
+            目标 = _读取字段(数据, "qq", _读取字段(数据, "id"))
+            if not isinstance(目标, (str, int)) or str(目标) not in 自身标识:
+                return False
+            已提及 = True
+        else:
+            return False
+    return 已提及
+
+
+async def 处理公开帮助入口(event: Any, 命令文本: str, 配置: Any = None) -> bool:
+    """普通用户帮助和群内单独提及使用公开菜单，管理帮助保持原权限。"""
+    if 命令文本 not in ("", "帮助") or not 权限工具.是QQ官方机器人(event):
+        return False
+    if 命令文本 == "帮助":
+        if 权限工具.是群文件清理管理员(event, 配置):
+            return False
+    elif not _是否仅提及机器人(event):
+        return False
+    消息ID = _获取事件标识(event, "get_message_id", "message_id")
+    if 消息ID:
+        http = _读取字段(_读取字段(_读取字段(event, "bot"), "api"), "_http")
+        appid = _读取字段(_读取字段(http, "_token"), "app_id", "")
+        群号 = 帮助功能.获取群openid同步(event)
+        用户 = 帮助功能.获取用户openid同步(event)
+        键 = (str(appid), "group" if 群号 else "private", 群号 or 用户, 用户, 消息ID)
+        当前 = time.monotonic()
+        for 旧键, 时间 in list(_公开帮助已处理.items()):
+            if 当前 - 时间 >= 180:
+                _公开帮助已处理.pop(旧键, None)
+        if 键 in _公开帮助已处理:
+            return True
+        if len(_公开帮助已处理) >= 512:
+            _公开帮助已处理.pop(next(iter(_公开帮助已处理)))
+        _公开帮助已处理[键] = 当前
+    好友邀请链接 = await _获取好友邀请链接(event)
+    await 帮助功能.发送Markdown键盘消息(
+        event, "点击下方按钮查看小说列表、下载方法或添加机器人。",
+        获取欢迎键盘(好友邀请链接, 公开菜单=True),
+    )
+    return True
 
 
 async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
