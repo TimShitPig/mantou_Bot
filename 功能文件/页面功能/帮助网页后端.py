@@ -478,6 +478,13 @@ async def _后台刷新消息列表(
         "kind": "admin_list",
         "secret": False,
     },
+    "welcome_tutorial_image_width": {
+        "category": "help_web_settings",
+        "label": "使用教程图片宽度（像素）",
+        "kind": "number",
+        "secret": False,
+        "default": 480,
+    },
     "help_web_domain": {
         "category": "help_web_settings",
         "label": "帮助网页外网地址",
@@ -746,7 +753,7 @@ def _读取插件配置摘要() -> dict[str, Any]:
             配置,
             str(定义["category"]),
             字段名,
-            [] if 定义["kind"] == "admin_list" else "",
+            定义.get("default", [] if 定义["kind"] == "admin_list" else ""),
         )
         项目: dict[str, Any] = {
             "key": 字段名,
@@ -830,6 +837,10 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     文本 = str(值 or "").strip()
     if len(文本) > 500:
         raise ValueError("配置值过长")
+    if 字段名 == "welcome_tutorial_image_width":
+        if not 文本.isdigit() or not 160 <= int(文本) <= 1080:
+            raise ValueError("教程图片宽度应为 160 至 1080 像素")
+        return int(文本)
     if 字段名 == "help_web_port":
         if not 文本.isdigit() or not 1 <= int(文本) <= 65535:
             raise ValueError("帮助网页端口无效")
@@ -1007,6 +1018,23 @@ def 获取帮助网页地址(配置: Any = None) -> str:
     if 网页服务启动状态 is False:
         return ""
     return _构造控制台访问地址(_计算帮助网页地址(配置), 配置)
+
+
+async def _处理教程图片(request: web.Request) -> web.StreamResponse:
+    """仅公开随插件发布的四张教程配图，不读取聊天媒体或缓存。"""
+    from 功能文件.管理功能.群聊功能.群成员事件 import 教程图片规格
+
+    文件名 = request.match_info.get("filename", "")
+    if 文件名 not in {规格[0] for 规格 in 教程图片规格}:
+        raise web.HTTPNotFound()
+    目录 = Path(__file__).with_name("教程图片").resolve()
+    路径 = (目录 / 文件名).resolve()
+    if 路径.parent != 目录 or not 路径.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(路径, headers={
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 def _数据库会话可用(配置: Any = None) -> bool:

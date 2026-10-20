@@ -15,6 +15,12 @@
     "description": "帮助网页设置",
     "type": "object",
     "items": {
+      "welcome_tutorial_image_width": {
+        "description": "使用教程图片宽度（像素）",
+        "type": "int",
+        "hint": "欢迎菜单的使用教程在同一条消息中发送四步文字和四张配图。宽度默认 480，可设置 160 至 1080，图片高度按原图比例自动计算；不修改图片原始字节。配图复用帮助网页外网地址，请保持该地址可从公网访问。",
+        "default": 480
+      },
       "help_web_domain": {
         "description": "帮助网页外网地址",
         "type": "string",

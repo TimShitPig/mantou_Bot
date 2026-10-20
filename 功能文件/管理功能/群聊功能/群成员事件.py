@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -22,12 +22,10 @@ except Exception:
 欢迎回调标签 = {
     "教程": "使用教程",
     "小说列表": "小说列表",
-    "如何下载": "如何下载",
 }
 欢迎回调按钮ID = {
     "教程": "welcome_tutorial",
     "小说列表": "welcome_novel_list",
-    "如何下载": "welcome_download",
 }
 小说列表平台 = (
     ("番茄", "番茄小说"),
@@ -103,10 +101,7 @@ def 获取欢迎键盘(好友邀请链接: str = "") -> dict[str, Any]:
             },
         })
     return {
-        "rows": [
-            {"buttons": 按钮[:2]},
-            {"buttons": 按钮[2:]},
-        ],
+        "rows": [{"buttons": 按钮[偏移 : 偏移 + 2]} for 偏移 in range(0, len(按钮), 2)],
     }
 
 
@@ -115,6 +110,8 @@ def 解析欢迎回调命令(文本: str) -> str | None:
     if not 数据.startswith(欢迎回调前缀):
         return None
     标识 = 数据[len(欢迎回调前缀) :].strip()
+    if 标识 == "如何下载":
+        return "教程"
     return 标识 if 标识 in 欢迎回调标签 else None
 
 
@@ -123,56 +120,59 @@ def _获取小说列表内容(配置: Any = None) -> str:
 
     小说功能状态 = 小说功能开关.读取小说功能状态(配置)
     小说总开关已开启 = 小说功能开关.小说总开关是否开启(配置)
-    平台行 = [
-        f"- **{显示名}**：分享链接或分享卡片"
+    平台名 = [
+        显示名
         for 功能名, 显示名 in 小说列表平台
         if 小说总开关已开启 and 小说功能状态.get(功能名, True)
     ]
-    if not 平台行:
-        return "\n".join(
-            [
-                "## 支持下载的小说\n",
-                "当前没有开启的小说下载功能。",
-            ]
-        )
-    return "\n".join(
-        [
-            "## 支持下载的小说\n",
-            "以下平台的书籍支持下载：",
-            *平台行,
-            "直接发送对应书籍的分享链接或分享卡片即可下载；也可以发送 `找关键词` 搜索具体书名。",
-        ]
+    平台行 = ["　　".join(平台名[偏移 : 偏移 + 2]) for 偏移 in range(0, len(平台名), 2)]
+    return "\n\n".join(["## 小说列表", "\n".join(平台行) or "暂无开启的小说平台。"])
+
+
+教程图片规格 = (
+    ("share-link.jpg", 1080, 1102),
+    ("search-command.png", 1080, 528),
+    ("select-result.png", 1080, 1007),
+    ("open-book.jpg", 1080, 1475),
+)
+
+
+def _获取使用教程内容(配置: Any = None) -> str:
+    from 功能文件.页面功能 import 帮助网页后端
+
+    宽度值 = 帮助网页后端._读取帮助网页字段(配置, "welcome_tutorial_image_width")
+    try:
+        图片宽度 = max(160, min(1080, int(宽度值))) if not isinstance(宽度值, bool) else 480
+    except (TypeError, ValueError, OverflowError):
+        图片宽度 = 480
+    基础地址 = 帮助网页后端.获取帮助网页地址(配置)
+    地址 = urlsplit(基础地址)
+    图片路径 = quote(地址.path.rstrip("/"), safe="/%") + "/tutorial-images/"
+    步骤 = (
+        "**1. 直接下载**：把小说的分享链接直接发送到群里即可。",
+        "**2. 找书**：发送 `找xx`，xx 可以是书名或作者。**一定要加“找”，不加不会进行找书。**",
+        "**3. 选择小说**：在找书结果中点击书名或作者，再发送填入的选书指令即可下载。",
+        "**4. 打开小说**：下载完成后点击“打开”（图中“点击打开”）即可查看小说。",
     )
+    内容 = ["## 使用教程"]
+    for 序号, (说明, (文件名, 原宽, 原高)) in enumerate(zip(步骤, 教程图片规格), 1):
+        内容.append(说明)
+        if 基础地址:
+            图片地址 = urlunsplit((地址.scheme, 地址.netloc, 图片路径 + 文件名, "", ""))
+            图片高度 = round(原高 * 图片宽度 / 原宽)
+            内容.append(f"![步骤{序号}示例 #{图片宽度}px #{图片高度}px]({图片地址})")
+    if not 基础地址:
+        logger.warning("使用教程配图未生成：reason=web_service_unavailable")
+    return "\n\n".join(内容)
 
 
-def 获取欢迎回调内容(文本: str, 配置: Any = None) -> tuple[str, dict[str, Any]] | None:
+def 获取欢迎回调内容(文本: str, 配置: Any = None) -> tuple[str, None] | None:
     标识 = 解析欢迎回调命令(文本)
     if 标识 is None:
         return None
-
-    内容 = {
-        "教程": "\n".join(
-            [
-                "## 使用教程\n",
-                "**1. 直接下载**：将支持平台的小说分享链接或分享卡片直接发送到群内。",
-                "**2. 找书下载**：发送 `找关键词` 或 `找书 关键词` 搜索书名、作者。",
-                "**3. 精确搜索**：发送 `找书名 关键词` 只按书名找，发送 `找作者 关键词` 只按作者找。",
-                "**4. 选择结果**：在搜索结果中点击书名，或手动发送 `选N`；可发送 `上一页`、`下一页` 翻页。",
-                "**5. 获取文件**：下载、合成 TXT 并上传完成后，点击机器人发送的“点击打开”即可查看。",
-            ]
-        ),
-        "小说列表": _获取小说列表内容(配置),
-        "如何下载": "\n".join(
-            [
-                "## 如何下载小说\n",
-                "**方式一：分享链接或卡片**\n将书籍的分享链接、图文 H5 卡片或平台分享卡片直接发送到群内，机器人会识别书籍并开始下载。",
-                "**方式二：找书**\n发送 `找关键词`、`找书 关键词`；需要限定条件时使用 `找书名 关键词` 或 `找作者 关键词`。",
-                "**选择与翻页**\n搜索结果每页最多 5 本，点击结果或发送 `选1` 至 `选5` 下载；发送 `上一页`、`下一页` 浏览更多结果。",
-                "**下载完成**\n机器人会先下载并合成完整 TXT，随后上传到当前网盘，并在同一条完成消息中提供“点击打开”链接。",
-            ]
-        ),
-    }
-    return 内容[标识], 获取欢迎键盘()
+    if 标识 == "小说列表":
+        return _获取小说列表内容(配置), None
+    return _获取使用教程内容(配置), None
 
 
 async def _获取好友邀请链接(event: Any) -> str:
@@ -255,7 +255,7 @@ async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
         [
             f"欢迎<@{成员openid}> 加入本群",
             "",
-            "点击下方按钮查看机器人的使用教程、可下载小说和下载方式。",
+            "点击下方按钮查看使用教程和小说列表。",
         ]
     )
     return await 帮助功能.发送Markdown键盘消息(

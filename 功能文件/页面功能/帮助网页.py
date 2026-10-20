@@ -64,6 +64,7 @@ async def _处理帮助网页(request: web.Request) -> web.Response:
 def _注册路由(app: web.Application) -> None:
     路由 = (
         ("get", "/", _处理帮助网页),
+        ("get", "/tutorial-images/{filename}", 后端._处理教程图片),
         ("post", "/api/login", 后端._处理控制台登录),
         ("post", "/api/logout", 后端._处理控制台退出),
         ("get", "/api/dashboard", 后端._处理控制台数据),

@@ -143,8 +143,8 @@
         if (!node) return;
         const selected = (fields || []).filter((field) => {
           if (filter && !filter(field)) return false;
-          // 帮助网页只在控制台展示端口和登录凭据；监听地址/域名继续由后端读取。
-          if (field.category === 'help_web_settings') return ['help_web_port', 'help_web_admin_username', 'help_web_admin_password'].includes(field.key);
+          // 展示教程尺寸、端口和登录凭据；监听地址/域名继续由后端读取。
+          if (field.category === 'help_web_settings') return ['welcome_tutorial_image_width', 'help_web_port', 'help_web_admin_username', 'help_web_admin_password'].includes(field.key);
           return true;
         });
         const groups = [];
