@@ -2,7 +2,7 @@
 """QQ阅读参考核心及 AstrBot 下载适配。
 
 依赖: aiohttp, pycryptodome, bcrypt
-账号配置: 文件内 CONFIG 字典（仅鉴权必要字段）
+账号配置: MySQL qq_reader_auth/login_state 多账号；CONFIG 只保留固定客户端字段。
 """
 
 from __future__ import annotations
@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import gzip
 import hashlib
 import html
@@ -1784,13 +1786,16 @@ CONFIG: Dict[str, str] = {
     "c_version": "qqreader_8.3.3.0888_android",
     "channel": "10005136",
     "qrsn": "0022ece0af3ed4d0052148e33e8bce20ab31a706cf9af04b",
-    "usid": "ywIWoPGBmOeI",
-    "uid": "855131499808",
+    "usid": "",
+    "uid": "",
     "fuid": "89306811035542cd868d49def7d3857d",
 }
 
 _固定配置已加载 = False
 _固定配置加载锁 = threading.Lock()
+_QQ阅读配置上下文 = globals().get("_QQ阅读配置上下文") or contextvars.ContextVar(
+    "mantou_qq_reader_account_config", default=None
+)
 
 
 class ConfigManager:
@@ -1813,6 +1818,9 @@ class ConfigManager:
 
     @classmethod
     def get_instance(cls) -> "ConfigManager":
+        当前配置 = _QQ阅读配置上下文.get()
+        if 当前配置 is not None:
+            return 当前配置
         with cls._lock:
             if cls._instance is None:
                 cls._instance = ConfigManager()
@@ -1906,8 +1914,29 @@ def load_config_once() -> None:
     with _固定配置加载锁:
         if _固定配置已加载:
             return
-        ConfigManager.get_instance().apply(CONFIG)
+        with ConfigManager._lock:
+            if ConfigManager._instance is None:
+                ConfigManager._instance = ConfigManager()
+            ConfigManager._instance.apply(CONFIG)
         _固定配置已加载 = True
+
+
+@contextmanager
+def QQ阅读账号上下文(登录态: dict[str, Any] | None):
+    """固定本次异步任务及其子任务的账号，不修改其它下载的身份。"""
+    load_config_once()
+    当前配置 = ConfigManager()
+    当前配置.apply(CONFIG)
+    当前配置.uid = str((登录态 or {}).get("ywguid") or "")
+    当前配置.usid = str((登录态 or {}).get("ywkey") or "")
+    基础配置 = ConfigManager._instance
+    if 基础配置 is not None and 基础配置.fuid == 当前配置.fuid:
+        当前配置.key_pool = 基础配置.key_pool
+    token = _QQ阅读配置上下文.set(当前配置)
+    try:
+        yield 当前配置
+    finally:
+        _QQ阅读配置上下文.reset(token)
 
 
 # === fetcher ===
@@ -1988,7 +2017,9 @@ def _获取QQ阅读解密执行器() -> ThreadPoolExecutor:
 async def _异步QQ阅读CPU函数(函数: Callable[..., Any], *参数: Any) -> Any:
     """在独立线程池运行正文解包/解密，避免挤占网页与消息线程池。"""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_获取QQ阅读解密执行器(), 函数, *参数)
+    return await loop.run_in_executor(
+        _获取QQ阅读解密执行器(), contextvars.copy_context().run, 函数, *参数
+    )
 
 
 async def 异步构造QQ阅读鉴权请求头(
@@ -1999,6 +2030,7 @@ async def 异步构造QQ阅读鉴权请求头(
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _获取QQ阅读签名执行器(),
+        contextvars.copy_context().run,
         构造QQ阅读鉴权请求头,
         timestamp_ms,
         request_url,
@@ -2399,6 +2431,7 @@ async def 异步构造QQ阅读账号请求头(
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _获取QQ阅读签名执行器(),
+        contextvars.copy_context().run,
         构造QQ阅读账号请求头,
         timestamp_ms,
         request_url,
@@ -2407,19 +2440,21 @@ async def 异步构造QQ阅读账号请求头(
 
 def 解析QQ阅读账号会员状态(data: Any) -> dict[str, Any]:
     """解析官方 getAcctInfo 的顶层账号会员字段。"""
+    不可用 = {"available": False, "is_vip": False, "vip_type": "",
+              "vip_expire_at": 0, "vip_expire_text": "", "checked_at": 0}
     if not isinstance(data, dict):
-        return {"available": False, "is_vip": False}
+        return 不可用
     code = data.get("code")
     # getAcctInfo 正常响应始终携带 code=0 与 isLogin。两项任一缺失时，
     # 不把空 JSON、网关降级页或其他接口的相似字段当作有效账号状态。
     if code in (None, "") or _安全整数(code, -1) != 0:
-        return {"available": False, "is_vip": False}
+        return 不可用
     is_login = data.get("isLogin")
     is_guest = data.get("isGuest")
     if is_login is None or not _是真值(is_login):
-        return {"available": False, "is_vip": False}
+        return 不可用
     if is_guest is not None and _是真值(is_guest):
-        return {"available": False, "is_vip": False}
+        return 不可用
 
     vip_fields = ("vipStatus", "isVip", "isMVip")
     vip_seen = any(field in data for field in vip_fields)
@@ -2437,17 +2472,45 @@ def 解析QQ阅读账号会员状态(data: Any) -> dict[str, Any]:
         # 作为补充证据，vipType/vipLevel 不会单独把账号判为会员。
         for pattern in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
             try:
-                expiry_active = time.mktime(
+                expiry = int(time.mktime(
                     time.strptime(expiry_value.strip(), pattern)
-                ) >= time.time()
+                ))
+                if pattern == "%Y-%m-%d":
+                    expiry += 24 * 60 * 60 - 1
+                expiry_active = expiry >= time.time()
                 break
-            except ValueError:
+            except (ValueError, OverflowError):
                 continue
+    is_vip = bool(vip_value or expiry_active)
+    # vipType=2 已由账号响应核实；没有可靠枚举文档时原样显示类型编号，
+    # 不将其猜成超级会员或年费会员，也不据此单独认定权益有效。
+    type_value = str(data.get("vipType") or "").strip()
+    type_value = "".join(char for char in type_value if ord(char) >= 32 and ord(char) != 127)[:40]
+    if type_value and type_value != "0":
+        vip_type = f"会员（类型 {type_value}）" if type_value.isdigit() else type_value
+    else:
+        vip_type = "VIP会员" if is_vip else ""
+    expiry_text = ""
+    if expiry > 0 and isinstance(expiry_value, str) and re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?", expiry_value.strip()
+    ):
+        expiry_text = expiry_value.strip()
+    elif expiry > 0:
+        try:
+            expiry_text = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expiry))
+        except (ValueError, OverflowError, OSError):
+            expiry_text = ""
+    if not expiry_text:
+        expiry_text = str(data.get("vipComment") or "").strip()[:80]
     return {
         "available": True,
-        "is_vip": bool(vip_value or expiry_active),
+        "is_vip": is_vip,
         "vip_field_seen": vip_seen,
         "expiry_active": expiry_active,
+        "vip_type": vip_type,
+        "vip_expire_at": max(0, expiry),
+        "vip_expire_text": expiry_text,
+        "checked_at": int(time.time()),
     }
 
 
@@ -2472,6 +2535,9 @@ def 解析QQ阅读账号资料(data: Any) -> dict[str, Any]:
             else ""
         ),
         "uid": str(data.get("uid") or data.get("uin") or "").strip(),
+        "vip": {键: 会员状态[键] for 键 in (
+            "available", "is_vip", "vip_type", "vip_expire_at", "vip_expire_text", "checked_at"
+        )},
     }
 
 
@@ -2510,7 +2576,41 @@ async def 查询QQ阅读账号资料(
     session: aiohttp.ClientSession,
 ) -> dict[str, Any]:
     data = await _请求QQ阅读账号信息(session)
-    return 解析QQ阅读账号资料(data)
+    资料 = 解析QQ阅读账号资料(data)
+    if not 资料.get("available"):
+        return 资料
+    config = ConfigManager.get_instance()
+    try:
+        # 官方用户中心以 freeType/memberType 展示会员名称；不猜 native vipType 枚举。
+        async with session.get(
+            "https://book.qq.com/api/user/homepage",
+            headers={"Cookie": f"ywguid={config.uid}; ywkey={config.usid};",
+                     "Referer": "https://book.qq.com/user-center"},
+            allow_redirects=False,
+            timeout=aiohttp.ClientTimeout(total=5, sock_connect=3, sock_read=4),
+        ) as response:
+            response.raise_for_status()
+            homepage = await response.json(content_type=None)
+        会员名称 = 解析QQ阅读官网会员名称(homepage)
+        if 会员名称:
+            资料["vip"]["vip_type"] = 会员名称
+    except Exception as exc:
+        logger.debug("QQ阅读官网会员类型补查失败：错误类型=%s", type(exc).__name__)
+    return 资料
+
+
+def 解析QQ阅读官网会员名称(响应: Any) -> str:
+    if not isinstance(响应, dict) or str(响应.get("code")) != "0":
+        return ""
+    data = 响应.get("data")
+    if not isinstance(data, dict):
+        return ""
+    if _是真值(data.get("freeType")):
+        return "体验会员"
+    member_type = _安全整数(data.get("memberType"), 0)
+    if member_type > 0:
+        return "付费会员·年费" if member_type > 1 else "付费会员"
+    return ""
 
 
 async def 查询QQ阅读账号VIP状态(
@@ -3184,6 +3284,7 @@ QQ阅读KOL短链书籍编号正则 = re.compile(
 )
 QQ阅读登录态命名空间 = "qq_reader_auth"
 QQ阅读登录态状态键 = "login_state"
+_QQ阅读账号状态锁 = globals().get("_QQ阅读账号状态锁") or threading.RLock()
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
@@ -3504,41 +3605,215 @@ def 初始化参考核心() -> ConfigManager:
 
 
 def _应用QQ阅读登录态(登录态: dict[str, str]) -> None:
-    config = 初始化参考核心()
-    config.uid = 登录态["ywguid"]
-    config.usid = 登录态["ywkey"]
+    """兼容旧调用；只更新调用方已绑定的账号上下文。"""
+    config = _QQ阅读配置上下文.get()
+    if config is not None:
+        config.uid = 登录态["ywguid"]
+        config.usid = 登录态["ywkey"]
+
+
+def _解析QQ阅读账号项(数据: Any) -> dict[str, Any] | None:
+    if not isinstance(数据, dict):
+        return None
+    凭据 = 解析QQ阅读Cookie(json.dumps({
+        "ywguid": 数据.get("ywguid") or 数据.get("uid") or "",
+        "ywkey": 数据.get("ywkey") or 数据.get("usid") or "",
+    }))
+    if not 凭据:
+        return None
+    账号ID = "qr_" + hashlib.sha256(凭据["ywguid"].encode("ascii")).hexdigest()[:20]
+    资料 = 数据.get("profile") if isinstance(数据.get("profile"), dict) else 数据
+    vip = 资料.get("vip") if isinstance(资料.get("vip"), dict) else {}
+    return {
+        "id": 账号ID,
+        **凭据,
+        "enabled": 数据.get("enabled") is not False,
+        "nickname": str(资料.get("nickname") or "")[:120],
+        "avatar_url": str(资料.get("avatar_url") or "")[:2048],
+        "phone": str(资料.get("phone") or "")[:32],
+        "updated_at": max(0, _安全整数(数据.get("updated_at"), 0)),
+        "profile_updated_at": max(0, _安全整数(数据.get("profile_updated_at"), 0)),
+        "vip": {
+            "available": vip.get("available") is True,
+            "is_vip": vip.get("is_vip") is True,
+            "vip_type": str(vip.get("vip_type") or "")[:80],
+            "vip_expire_at": max(0, _安全整数(vip.get("vip_expire_at"), 0)),
+            "vip_expire_text": str(vip.get("vip_expire_text") or "")[:80],
+            "checked_at": max(0, _安全整数(vip.get("checked_at"), 0)),
+        },
+    }
+
+
+def _读取QQ阅读账号状态(配置: Any) -> dict[str, Any]:
+    raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
+    if not raw:
+        return {"version": 2, "selected_id": "", "accounts": []}
+    try:
+        数据 = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("QQ阅读账号状态无效") from exc
+    if not isinstance(数据, dict):
+        raise ValueError("QQ阅读账号状态无效")
+    原项 = 数据.get("accounts") if "accounts" in 数据 else [数据]
+    if not isinstance(原项, list):
+        raise ValueError("QQ阅读账号列表无效")
+    账号项: dict[str, dict[str, Any]] = {}
+    for 项 in 原项:
+        已解析 = _解析QQ阅读账号项(项)
+        if 已解析:
+            账号项[已解析["id"]] = 已解析
+    选中ID = str(数据.get("selected_id") or "")
+    if not (选中ID in 账号项 and 账号项[选中ID]["enabled"]):
+        选中ID = next((项["id"] for 项 in 账号项.values() if 项["enabled"]), "")
+    return {"version": 2, "selected_id": 选中ID, "accounts": list(账号项.values())}
+
+
+def _写入QQ阅读账号状态(配置: Any, 状态: dict[str, Any]) -> None:
+    if not 已配置运行状态数据库(配置):
+        raise ValueError("数据库未配置")
+    写入运行状态值(
+        配置, QQ阅读登录态命名空间, QQ阅读登录态状态键,
+        json.dumps(状态, ensure_ascii=True, separators=(",", ":")),
+    )
+
+
+def _QQ阅读账号摘要(状态: dict[str, Any]) -> dict[str, Any]:
+    列表 = []
+    for 账号 in 状态["accounts"]:
+        资料 = {键: 值 for 键, 值 in 账号.items() if 键 != "ywkey"}
+        资料["vip"] = dict(账号["vip"])
+        资料["selected"] = 账号["id"] == 状态["selected_id"]
+        if not 资料["nickname"]:
+            资料["nickname"] = "书友_" + 账号["ywguid"][-6:]
+        if not 资料["avatar_url"]:
+            资料["avatar_url"] = (
+                "https://shp.qpic.cn/qqreader_f/0/" + 账号["ywguid"] + "/136"
+            )
+        列表.append(资料)
+    return {"configured": bool(状态["selected_id"]),
+            "selected_id": 状态["selected_id"], "accounts": 列表}
+
+
+def 读取QQ阅读账号列表(配置: Any) -> dict[str, Any]:
+    with _QQ阅读账号状态锁:
+        return _QQ阅读账号摘要(_读取QQ阅读账号状态(配置))
+
+
+def 读取QQ阅读账号凭据(配置: Any, 账号ID: str = "") -> dict[str, Any] | None:
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        目标 = str(账号ID or 状态["selected_id"])
+        for 项 in 状态["accounts"]:
+            if 项["id"] == 目标:
+                return {"id": 项["id"], "ywguid": 项["ywguid"], "ywkey": 项["ywkey"]}
+    return None
+
+
+def 保存QQ阅读账号(
+    配置: Any, 登录态: dict[str, Any], 账号ID: str = "", 设为当前: bool = True,
+) -> dict[str, Any]:
+    凭据 = _解析QQ阅读账号项(登录态)
+    if not 凭据:
+        raise ValueError("QQ阅读登录态格式无效")
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        if 账号ID and 账号ID != 凭据["id"]:
+            raise ValueError("账号身份不匹配")
+        原值 = next((项 for 项 in 状态["accounts"] if 项["id"] == 凭据["id"]), None)
+        if 原值:
+            # 换票据后保留已有资料，但下次刷新重新核对官方会员状态。
+            原值.update({"ywkey": 凭据["ywkey"], "enabled": True,
+                         "updated_at": int(time.time())})
+            for 键 in ("nickname", "avatar_url", "phone"):
+                if 凭据[键]:
+                    原值[键] = 凭据[键]
+        else:
+            凭据["updated_at"] = int(time.time())
+            状态["accounts"].append(凭据)
+        if 设为当前 or not 状态["selected_id"]:
+            状态["selected_id"] = 凭据["id"]
+        _写入QQ阅读账号状态(配置, 状态)
+        return _QQ阅读账号摘要(状态)
+
+
+def 设置QQ阅读账号启用(配置: Any, 账号ID: str, 启用: bool) -> dict[str, Any]:
+    if not isinstance(启用, bool):
+        raise ValueError("账号开关参数无效")
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        账号 = next((项 for 项 in 状态["accounts"] if 项["id"] == 账号ID), None)
+        if 账号 is None:
+            raise ValueError("QQ阅读账号不存在")
+        账号["enabled"] = 启用
+        if not 启用 and 状态["selected_id"] == 账号ID:
+            状态["selected_id"] = next((项["id"] for 项 in 状态["accounts"] if 项["enabled"]), "")
+        elif 启用 and not 状态["selected_id"]:
+            状态["selected_id"] = 账号ID
+        _写入QQ阅读账号状态(配置, 状态)
+        return _QQ阅读账号摘要(状态)
+
+
+def 切换QQ阅读账号(配置: Any, 账号ID: str) -> dict[str, Any]:
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        if not any(项["id"] == 账号ID and 项["enabled"] for 项 in 状态["accounts"]):
+            raise ValueError("请选择已启用的QQ阅读账号")
+        状态["selected_id"] = 账号ID
+        _写入QQ阅读账号状态(配置, 状态)
+        return _QQ阅读账号摘要(状态)
+
+
+def 删除QQ阅读账号(配置: Any, 账号ID: str) -> dict[str, Any]:
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        if not any(项["id"] == 账号ID for 项 in 状态["accounts"]):
+            raise ValueError("QQ阅读账号不存在")
+        状态["accounts"] = [项 for 项 in 状态["accounts"] if 项["id"] != 账号ID]
+        if 状态["selected_id"] == 账号ID:
+            状态["selected_id"] = next((项["id"] for 项 in 状态["accounts"] if 项["enabled"]), "")
+        _写入QQ阅读账号状态(配置, 状态)
+        return _QQ阅读账号摘要(状态)
+
+
+def _合并QQ阅读账号资料(
+    配置: Any, 凭据: dict[str, Any], 资料: dict[str, Any],
+) -> dict[str, Any]:
+    with _QQ阅读账号状态锁:
+        状态 = _读取QQ阅读账号状态(配置)
+        账号 = next((项 for 项 in 状态["accounts"] if 项["id"] == 凭据["id"]), None)
+        # 刷新期间删除、重登或改票据时，迟到资料不新增账号也不覆盖新资料。
+        if 账号 is None or 账号["ywkey"] != 凭据["ywkey"]:
+            return _QQ阅读账号摘要(状态)
+        for 键 in ("nickname", "avatar_url", "phone"):
+            值 = str(资料.get(键) or "")
+            if 值:
+                账号[键] = 值[:2048 if 键 == "avatar_url" else 120]
+        if isinstance(资料.get("vip"), dict):
+            账号["vip"] = dict(资料["vip"])
+        账号["profile_updated_at"] = int(time.time())
+        _写入QQ阅读账号状态(配置, 状态)
+        return _QQ阅读账号摘要(状态)
+
+
+async def 刷新QQ阅读账号资料(配置: Any, 账号ID: str = "") -> dict[str, Any]:
+    凭据 = await asyncio.to_thread(读取QQ阅读账号凭据, 配置, 账号ID)
+    if not 凭据:
+        raise ValueError("QQ阅读账号不存在")
+    with QQ阅读账号上下文(凭据):
+        async with 创建QQ阅读HTTP会话(concurrency=2) as session:
+            资料 = await 查询QQ阅读账号资料(session)
+    if not 资料.get("available"):
+        raise ValueError("QQ阅读账号资料暂未获取")
+    return await asyncio.to_thread(_合并QQ阅读账号资料, 配置, 凭据, 资料)
 
 
 def _读取QQ阅读登录态(配置: Any) -> dict[str, str] | None:
-    raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    return 解析QQ阅读Cookie(
-        f"ywguid={data.get('ywguid') or data.get('uid') or ''};"
-        f"ywkey={data.get('ywkey') or data.get('usid') or ''};"
-    )
+    凭据 = 读取QQ阅读账号凭据(配置)
+    return {"ywguid": 凭据["ywguid"], "ywkey": 凭据["ywkey"]} if 凭据 else None
 
 
 def _保存QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
-    payload = json.dumps(
-        {
-            "ywguid": str(登录态.get("ywguid") or 登录态.get("uid") or ""),
-            "ywkey": str(登录态.get("ywkey") or 登录态.get("usid") or ""),
-            "phone": str(登录态.get("phone") or ""),
-            "nickname": str(登录态.get("nickname") or ""),
-            "avatar_url": str(登录态.get("avatar_url") or ""),
-            "updated_at": int(time.time()),
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    写入运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, payload)
+    保存QQ阅读账号(配置, 登录态)
 
 
 async def 加载保存的QQ阅读登录态(配置: Any) -> bool:
@@ -3552,7 +3827,7 @@ async def 加载保存的QQ阅读登录态(配置: Any) -> bool:
         return False
     if not 登录态:
         return False
-    await asyncio.to_thread(_应用QQ阅读登录态, 登录态)
+    _应用QQ阅读登录态(登录态)
     return True
 
 
@@ -3572,11 +3847,10 @@ async def 处理QQ阅读Cookie指令(
         return "数据库未配置，QQ阅读Cookie未保存"
     try:
         await asyncio.to_thread(_保存QQ阅读登录态, 配置, 登录态)
-        await asyncio.to_thread(_应用QQ阅读登录态, 登录态)
     except Exception as exc:
         logger.warning(f"QQ阅读Cookie保存失败：错误={type(exc).__name__}")
         return "QQ阅读Cookie保存失败，请稍后再试"
-    return "QQ阅读Cookie已保存并覆盖原登录态"
+    return "QQ阅读账号已保存并设为当前账号"
 
 
 def _遍历详情对象(data: Any) -> list[dict[str, Any]]:
@@ -3611,7 +3885,7 @@ def _读取详情字段(objects: list[dict[str, Any]], *names: str, default: Any
 def _安全整数(value: Any, default: int = 0) -> int:
     try:
         return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -5073,6 +5347,44 @@ async def 生成下载回复流(
     *,
     分享文本: str = "",
 ) -> AsyncIterator[Any]:
+    """一次下载固定一个启用账号；后续切换和停用只影响新任务。"""
+    try:
+        登录态 = await asyncio.to_thread(_读取QQ阅读登录态, 配置)
+    except Exception as exc:
+        logger.warning("QQ阅读下载账号读取失败：错误类型=%s", type(exc).__name__)
+        yield 下载失败提示
+        return
+    with QQ阅读账号上下文(登录态) as 下载配置:
+        pass
+    回复流 = _生成固定账号QQ阅读下载回复流(
+        event, 来源, 配置, 分享文本=分享文本,
+    )
+    try:
+        while True:
+            token = _QQ阅读配置上下文.set(下载配置)
+            try:
+                try:
+                    回复 = await anext(回复流)
+                except StopAsyncIteration:
+                    break
+            finally:
+                _QQ阅读配置上下文.reset(token)
+            yield 回复
+    finally:
+        token = _QQ阅读配置上下文.set(下载配置)
+        try:
+            await 回复流.aclose()
+        finally:
+            _QQ阅读配置上下文.reset(token)
+
+
+async def _生成固定账号QQ阅读下载回复流(
+    event: Any,
+    来源: str,
+    配置: Any = None,
+    *,
+    分享文本: str = "",
+) -> AsyncIterator[Any]:
     book_id = ""
     stage = "link"
     try:
@@ -5085,20 +5397,15 @@ async def 生成下载回复流(
             book_id = 解析书籍编号(来源) or await 解析QQ阅读分享页书籍编号(
                 来源, session
             )
-            登录态已加载 = False
             if not book_id:
                 分享书名 = 提取QQ阅读分享书名(分享文本 or 来源, 来源)
                 if 分享书名:
-                    await 加载保存的QQ阅读登录态(配置)
-                    登录态已加载 = True
                     book_id = await 按QQ阅读分享书名解析编号(分享书名)
             if not book_id:
                 logger.warning("QQ阅读分享链接解析失败：错误分类=book_id_missing")
                 yield 下载失败提示
                 return
 
-            if not 登录态已加载:
-                await 加载保存的QQ阅读登录态(配置)
             stage = "details"
             try:
                 details = await 获取参考书籍详情(book_id, session)
@@ -5197,3 +5504,328 @@ async def 生成下载回复流(
             f"QQ阅读参考下载失败：书籍编号={book_id}, 阶段={stage}, 错误={type(exc).__name__}"
         )
         yield 下载失败提示
+
+
+
+
+class QQ阅读扫码登录客户端:
+    """复用 QQ阅读当前 QQConnect 登录链；每个实例持有独立 Cookie 会话。"""
+
+    _允许主机 = frozenset({
+        "login.book.qq.com", "book.qq.com", "passport.yuewen.com",
+        "ptlogin.yuewen.com", "ptlogin.qidian.com", "passport.qidian.com",
+        "graph.qq.com", "xui.ptlogin2.qq.com", "ssl.ptlogin2.qq.com",
+        "ptlogin2.qq.com", "ui.ptlogin2.qq.com",
+    })
+    _UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    )
+
+    def __init__(self) -> None:
+        self._session: aiohttp.ClientSession | None = None
+        self._closed = False
+        self._expires_at = 0.0
+        self._oauth: dict[str, str] = {}
+        self._graph_url = ""
+        self._xlogin_url = ""
+        self._pt: dict[str, str] = {}
+        self.status = "created"
+
+    @classmethod
+    def _校验地址(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme != "https" or parsed.hostname not in cls._允许主机
+                or parsed.username or parsed.password or parsed.port not in (None, 443)
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise RuntimeError("qqreader_qr_redirect_invalid") from None
+        return value
+
+    async def _请求(
+        self, method: str, url: str, *, data: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[str, bytes, list[tuple[str, bytes]]]:
+        if self._closed or self._session is None:
+            raise RuntimeError("qqreader_qr_closed")
+        frames: list[tuple[str, bytes]] = []
+        for _ in range(10):
+            self._校验地址(url)
+            async with self._session.request(
+                method, url, data=data, headers=headers, allow_redirects=False,
+            ) as response:
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    size += len(chunk)
+                    if size > 1024 * 1024:
+                        raise RuntimeError("qqreader_qr_response_large")
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location", "")
+                    if not location or (method != "GET" and response.status in {307, 308}):
+                        raise RuntimeError("qqreader_qr_redirect_invalid")
+                    frames.append((str(response.url), body))
+                    url = self._校验地址(urljoin(str(response.url), location))
+                    method, data, headers = "GET", None, None
+                    continue
+                if response.status != 200:
+                    raise RuntimeError("qqreader_qr_http_error")
+                frames.append((str(response.url), body))
+                return str(response.url), body, frames
+        raise RuntimeError("qqreader_qr_redirect_limit")
+
+    def _读取Cookie(self, name: str, url: str) -> str:
+        if self._session is None:
+            return ""
+        from yarl import URL
+
+        cookie = self._session.cookie_jar.filter_cookies(URL(url)).get(name)
+        return cookie.value if cookie else ""
+
+    @staticmethod
+    def _解析回调(text: str) -> list[str]:
+        import ast
+
+        match = re.fullmatch(r"\s*ptuiCB\((.{0,16384})\)\s*;?\s*", text, re.S)
+        if not match:
+            raise RuntimeError("qqreader_qr_callback_invalid")
+        try:
+            values = ast.literal_eval("(" + match.group(1) + ",)")
+        except (SyntaxError, ValueError, TypeError, RecursionError):
+            raise RuntimeError("qqreader_qr_callback_invalid") from None
+        if not isinstance(values, tuple) or not 5 <= len(values) <= 10 or not all(
+            isinstance(value, str) for value in values
+        ):
+            raise RuntimeError("qqreader_qr_callback_invalid")
+        return list(values)
+
+    @staticmethod
+    def _提取页面数据(text: str) -> dict[str, Any] | None:
+        match = re.search(r"\bvar\s+data\s*=\s*(\{)", text)
+        if not match:
+            return None
+        try:
+            data, _ = json.JSONDecoder().raw_decode(text[match.start(1):])
+        except (ValueError, TypeError, RecursionError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    async def 获取登录二维码(self) -> bytes:
+        if self._closed or self._session is not None:
+            raise RuntimeError("qqreader_qr_session_started")
+        self._session = aiohttp.ClientSession(
+            headers={"User-Agent": self._UA},
+            timeout=aiohttp.ClientTimeout(total=20, sock_connect=8, sock_read=15),
+            connector=aiohttp.TCPConnector(limit=2, ttl_dns_cache=300),
+            cookie_jar=aiohttp.CookieJar(),
+        )
+        try:
+            login_params = {
+                "appId": "1450000219", "areaId": "10", "tab": "qq",
+                "returnurl": "https://book.qq.com/loginSuccess", "popup": "1",
+                "ticket": "1", "target": "iframe", "version": "1.0",
+                "unionshow": "00001",
+            }
+            _, body, _ = await self._请求(
+                "GET", "https://login.book.qq.com/login.html?" + urlencode(login_params),
+            )
+            page = body.decode("utf-8", "replace")
+            button = re.search(
+                r'href-value="([^"]{1,8192})"\s+id="qqLoginButton"', page,
+            )
+            if not button:
+                raise RuntimeError("qqreader_qr_entry_missing")
+            entry = self._校验地址(html.unescape(button.group(1)))
+            if urlsplit(entry).hostname != "ptlogin.yuewen.com" or urlsplit(entry).path != "/login/qqconnectlogin":
+                raise RuntimeError("qqreader_qr_entry_invalid")
+            self._graph_url, body, _ = await self._请求("GET", entry)
+            graph = urlsplit(self._graph_url)
+            if graph.hostname != "graph.qq.com" or graph.path != "/oauth2.0/show":
+                raise RuntimeError("qqreader_qr_oauth_entry_invalid")
+            self._oauth = {key: value[-1] for key, value in parse_qs(graph.query).items() if value}
+            if self._oauth.get("client_id") != "101481755" or self._oauth.get("response_type") != "code":
+                raise RuntimeError("qqreader_qr_oauth_app_invalid")
+            redirect = self._校验地址(self._oauth.get("redirect_uri", ""))
+            if urlsplit(redirect).hostname != "ptlogin.qidian.com" or urlsplit(redirect).path != "/login/qqconnectcallback":
+                raise RuntimeError("qqreader_qr_oauth_callback_invalid")
+            graph_text = body.decode("utf-8", "replace")
+            if not re.search(r"xlogin\?appid=716027609&daid=383", graph_text):
+                raise RuntimeError("qqreader_qr_provider_changed")
+            params = {
+                "appid": "716027609", "daid": "383", "style": "33",
+                "login_text": "登录", "hide_title_bar": "1", "hide_border": "1",
+                "target": "self", "s_url": "https://graph.qq.com/oauth2.0/login_jump",
+                "pt_3rd_aid": self._oauth["client_id"], "theme": "2",
+            }
+            self._xlogin_url, body, _ = await self._请求(
+                "GET", "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?" + urlencode(params),
+            )
+            pt_page = body.decode("utf-8", "replace")
+            version = re.search(r'ptui_version:encodeURIComponent\("(\d{4,32})"\)', pt_page)
+            style = re.search(r'style:encodeURIComponent\("(\d{1,3})"\)', pt_page)
+            if not version or not style or not self._读取Cookie("pt_login_sig", self._xlogin_url):
+                raise RuntimeError("qqreader_qr_provider_fields_missing")
+            self._pt = {"version": version.group(1), "style": style.group(1)}
+            qr_params = {
+                "appid": "716027609", "e": "2", "l": "M", "s": "3",
+                "d": "72", "v": "4", "t": str(secrets.randbelow(10**15) / 10**15),
+                "daid": "383", "pt_3rd_aid": self._oauth["client_id"],
+                "u1": "https://graph.qq.com/oauth2.0/login_jump",
+            }
+            _, image, _ = await self._请求(
+                "GET", "https://xui.ptlogin2.qq.com/ssl/ptqrshow?" + urlencode(qr_params),
+                headers={"Referer": self._xlogin_url},
+            )
+            if not image.startswith(b"\x89PNG\r\n\x1a\n") or not self._读取Cookie(
+                "qrsig", "https://xui.ptlogin2.qq.com/ssl/ptqrlogin",
+            ):
+                raise RuntimeError("qqreader_qr_image_invalid")
+            self.status = "waiting"
+            self._expires_at = time.monotonic() + 300
+            return image
+        except BaseException:
+            await self.关闭()
+            raise
+
+    async def _交换阅读登录态(self, jump_url: str) -> dict[str, str]:
+        self.status = "authorizing"
+        _, _, frames = await self._请求("GET", self._校验地址(jump_url))
+        skey = self._读取Cookie("p_skey", "https://graph.qq.com/")
+        if not skey:
+            raise RuntimeError("qqreader_qr_oauth_cookie_missing")
+        token = 5381
+        for char in skey:
+            token = (token * 33 + ord(char)) & 0x7FFFFFFF
+        data = {key: self._oauth.get(key, "") for key in (
+            "response_type", "client_id", "redirect_uri", "scope", "state", "switch",
+        )}
+        data.update({
+            "from_ptlogin": "1", "src": "1", "update_auth": "1", "openapi": "",
+            "g_tk": str(token), "auth_time": str(int(time.time() * 1000)),
+            "ui": secrets.token_hex(16).upper(),
+        })
+        # 授权 POST 只提交一次；错误及取消均不自动重放。
+        final_url, body, more = await self._请求(
+            "POST", "https://graph.qq.com/oauth2.0/authorize", data=data,
+            headers={"Referer": self._graph_url, "Origin": "https://graph.qq.com"},
+        )
+        frames.extend(more)
+        if urlsplit(final_url).hostname == "graph.qq.com":
+            text = body.decode("utf-8", "replace")
+            match = re.search(r'"callback"\s*:\s*("(?:[^"\\]|\\.){1,16384}")', text)
+            if not match:
+                raise RuntimeError("qqreader_qr_oauth_authorize_failed")
+            callback = json.loads(match.group(1))
+            if urlsplit(self._校验地址(callback)).hostname != "ptlogin.qidian.com":
+                raise RuntimeError("qqreader_qr_oauth_callback_invalid")
+            final_url, body, more = await self._请求("GET", callback)
+            frames.extend(more)
+        guid, key, ticket = "", "", ""
+        landing = ""
+        for frame_url, frame_body in frames:
+            parsed_url = urlsplit(frame_url)
+            if parsed_url.hostname == "book.qq.com" and parsed_url.path == "/loginSuccess":
+                query = parse_qs(parsed_url.query)
+                guid = (query.get("ywguid") or [guid])[-1]
+                ticket = (query.get("ticket") or [ticket])[-1]
+                landing = frame_url
+            if parsed_url.hostname not in {"ptlogin.qidian.com", "ptlogin.yuewen.com", "passport.yuewen.com", "passport.qidian.com"}:
+                continue
+            page_data = self._提取页面数据(frame_body.decode("utf-8", "replace"))
+            if not page_data:
+                continue
+            callback_data = page_data.get("callbackData")
+            if not isinstance(callback_data, dict) or str(callback_data.get("code")) != "0":
+                raise RuntimeError("qqreader_qr_reader_callback_failed")
+            details = callback_data.get("data")
+            if not isinstance(details, dict):
+                raise RuntimeError("qqreader_qr_reader_callback_invalid")
+            guid = str(details.get("ywGuid") or guid)
+            key = str(details.get("ywKey") or key)
+            ticket = str(details.get("ticket") or ticket)
+            redirect = details.get("302url") or callback_data.get("302url")
+            if redirect and not key:
+                redirect = self._校验地址(str(redirect))
+                _, _, extra = await self._请求("GET", redirect)
+                for target_url, _ in extra:
+                    target = urlsplit(target_url)
+                    if target.hostname == "book.qq.com" and target.path == "/loginSuccess":
+                        query = parse_qs(target.query)
+                        guid = (query.get("ywguid") or [guid])[-1]
+                        ticket = (query.get("ticket") or [ticket])[-1]
+                        landing = target_url
+        if not key and guid and ticket:
+            _, body, _ = await self._请求(
+                "GET", "https://book.qq.com/api/authen/getKeyByTicket",
+                headers={"ywguid": guid, "ywTicket": ticket, "Referer": landing or "https://book.qq.com/loginSuccess"},
+            )
+            try:
+                result = json.loads(body)
+            except (ValueError, TypeError):
+                raise RuntimeError("qqreader_qr_ticket_invalid") from None
+            if not isinstance(result, dict) or str(result.get("code")) != "0" or not isinstance(result.get("data"), dict):
+                raise RuntimeError("qqreader_qr_ticket_failed")
+            key = str(result["data"].get("ywkey") or "")
+        if not re.fullmatch(r"[1-9]\d{5,31}", guid) or not re.fullmatch(
+            r"[^\s;,\"']{6,256}", key
+        ) or any(ord(char) < 33 or ord(char) == 127 for char in key):
+            raise RuntimeError("qqreader_qr_reader_credentials_missing")
+        self.status = "confirmed"
+        return {"ywguid": guid, "ywkey": key}
+
+    async def 等待登录并获取登录态(self, timeout: float = 300, interval: float = 2) -> dict[str, str]:
+        if self.status != "waiting" or self._session is None or self._closed:
+            raise RuntimeError("qqreader_qr_not_started")
+        deadline = min(self._expires_at, time.monotonic() + max(1, min(float(timeout), 300)))
+        qrsig = self._读取Cookie("qrsig", "https://xui.ptlogin2.qq.com/ssl/ptqrlogin")
+        token = 0
+        for char in qrsig:
+            token = (token * 33 + ord(char)) & 0x7FFFFFFF
+        try:
+            while not self._closed and time.monotonic() < deadline:
+                params = {
+                    "u1": "https://graph.qq.com/oauth2.0/login_jump", "ptqrtoken": str(token),
+                    "ptredirect": "0", "h": "1", "t": "1", "g": "1", "from_ui": "1",
+                    "ptlang": "2052", "action": "0-0-" + str(int(time.time() * 1000)),
+                    "js_ver": self._pt["version"], "js_type": "1",
+                    "login_sig": self._读取Cookie("pt_login_sig", self._xlogin_url),
+                    "pt_uistyle": self._pt["style"], "aid": "716027609", "daid": "383",
+                    "pt_3rd_aid": self._oauth["client_id"],
+                }
+                _, body, _ = await self._请求(
+                    "GET", "https://xui.ptlogin2.qq.com/ssl/ptqrlogin?" + urlencode(params),
+                    headers={"Referer": self._xlogin_url},
+                )
+                result = self._解析回调(body.decode("utf-8", "replace"))
+                if result[0] == "0":
+                    return await self._交换阅读登录态(result[2])
+                if result[0] == "65":
+                    self.status = "expired"
+                    raise TimeoutError("qqreader_qr_expired")
+                if result[0] == "67":
+                    self.status = "scanned"
+                elif result[0] == "66":
+                    self.status = "waiting"
+                else:
+                    self.status = "failed"
+                    raise RuntimeError("qqreader_qr_authorization_required")
+                await asyncio.sleep(max(2, min(float(interval), 10)))
+            self.status = "expired"
+            raise TimeoutError("qqreader_qr_expired")
+        finally:
+            await self.关闭()
+
+    async def 关闭(self) -> None:
+        self._closed = True
+        if self._session is not None:
+            self._session.cookie_jar.clear()
+            await self._session.close()
+            self._session = None
+        self._oauth.clear()
+        self._pt.clear()

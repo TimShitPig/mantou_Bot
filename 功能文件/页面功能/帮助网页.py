@@ -86,9 +86,13 @@ def _注册路由(app: web.Application) -> None:
         ("get", "/api/qq-reader-auth", 后端._处理QQ阅读登录态),
         ("post", "/api/qq-reader-auth", 后端._处理QQ阅读登录态保存),
         ("delete", "/api/qq-reader-auth", 后端._处理QQ阅读登录态删除),
-        ("post", "/api/qq-reader-auth/pre-send", 后端._处理QQ阅读短信预请求),
-        ("post", "/api/qq-reader-auth/confirm-send", 后端._处理QQ阅读短信确认下发),
-        ("post", "/api/qq-reader-auth/sms-login", 后端._处理QQ阅读短信登录),
+        ("post", "/api/qq-reader-auth/select", 后端._处理QQ阅读账号选择),
+        ("post", "/api/qq-reader-auth/enable", 后端._处理QQ阅读账号启用),
+        ("post", "/api/qq-reader-auth/refresh", 后端._处理QQ阅读账号刷新),
+        ("post", "/api/qq-reader-auth/credential", 后端._处理QQ阅读账号凭据),
+        ("post", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码开始),
+        ("get", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码状态),
+        ("delete", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码取消),
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("post", "/api/message/user-profile/refresh", 后端._处理私聊资料刷新),
@@ -221,6 +225,7 @@ async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | N
 async def 停止帮助网页服务(服务: 帮助网页服务 | None, *, 保留会话: bool = False) -> None:
     try:
         await 后端._取消全部夸克网页扫码()
+        await 后端._取消全部QQ阅读网页扫码()
         await 后端.停止实时连接()
         if 服务 is not None:
             await 服务.runner.cleanup()

@@ -95,6 +95,8 @@ class 帮助网页服务:
 _控制台会话存储锁 = globals().get("_控制台会话存储锁") or threading.RLock()
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
 夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
+QQ阅读网页扫码会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页扫码会话") or {}
+QQ阅读扫码启动代次: dict[str, str] = globals().get("QQ阅读扫码启动代次") or {}
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
 _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lock()
 控制台执行器最大并发数 = 4
@@ -1091,6 +1093,11 @@ def 同步控制台会话认证(配置: Any) -> bool:
     新指纹 = 获取控制台认证指纹(配置)
     一致 = bool(控制台会话认证指纹) and hmac.compare_digest(控制台会话认证指纹, 新指纹)
     if not 一致:
+        QQ阅读扫码启动代次.clear()
+        try:
+            asyncio.get_running_loop().create_task(_取消全部QQ阅读网页扫码())
+        except RuntimeError:
+            pass
         控制台会话.clear()
         控制台会话身份.clear()
         控制台会话最后持久化.clear()
@@ -1168,6 +1175,9 @@ def _清理控制台会话() -> None:
             and 截止时间 - float(扫码状态.get("updated_at") or 0) > 300
         ):
             夸克网页扫码会话.pop(scan_id, None)
+    for scan_id, 状态 in list(QQ阅读网页扫码会话.items()):
+        if 状态.get("status") in {"success", "expired", "cancelled", "error"} and 截止时间 - float(状态.get("updated_at") or 0) > 300:
+            QQ阅读网页扫码会话.pop(scan_id, None)
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
             控制台会话恢复排除.add(会话值)
@@ -1179,6 +1189,7 @@ def _清理控制台会话() -> None:
                 asyncio.get_running_loop().create_task(
                     _取消夸克网页扫码所有者(会话值)
                 )
+                asyncio.get_running_loop().create_task(_取消QQ阅读网页扫码所有者(会话值))
             except RuntimeError:
                 pass
 
@@ -1842,6 +1853,7 @@ async def _处理控制台退出(request: web.Request) -> web.Response:
     控制台会话身份.pop(会话值, None)
     控制台会话最后持久化.pop(会话值, None)
     await _取消夸克网页扫码所有者(会话值)
+    await _取消QQ阅读网页扫码所有者(会话值)
     await _控制台线程执行(_删除持久化控制台会话, 会话值, 配置快照)
     响应 = web.json_response({"ok": True})
     响应.del_cookie(控制台会话Cookie名, path="/")
@@ -1871,41 +1883,7 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        原值 = QQ阅读._读取QQ阅读登录态(配置)
-        原始状态 = QQ阅读.读取运行状态值(
-            配置,
-            QQ阅读.QQ阅读登录态命名空间,
-            QQ阅读.QQ阅读登录态状态键,
-            "",
-        )
-        更新时间 = 0
-        if 原始状态:
-            try:
-                更新时间 = int((json.loads(原始状态) or {}).get("updated_at") or 0)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                更新时间 = 0
-        账号详情 = {}
-        if 原始状态:
-            try:
-                账号详情 = json.loads(原始状态) or {}
-            except (TypeError, ValueError, json.JSONDecodeError):
-                pass
-        ywguid = str((原值 or {}).get("ywguid") or 账号详情.get("ywguid") or "")
-        nickname = str(账号详情.get("nickname") or "")
-        if ywguid and not nickname:
-            nickname = f"书友_{ywguid[-6:]}"
-        avatar_url = str(账号详情.get("avatar_url") or "")
-        if ywguid and not avatar_url:
-            avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
-
-        QQ登录态摘要 = {
-            "configured": bool(原值),
-            "updated_at": 更新时间,
-            "ywguid": ywguid,
-            "nickname": nickname,
-            "avatar_url": avatar_url,
-            "phone": str(账号详情.get("phone") or ""),
-        }
+        QQ登录态摘要 = {"editable": 数据库已配置, **QQ阅读.读取QQ阅读账号列表(配置)}
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
     小说控制台状态 = 小说功能开关.读取小说功能控制台状态(配置)
@@ -2807,289 +2785,279 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
         return _控制台错误(409, "群网盘选择保存失败")
 
 
+def _QQ阅读JSON(数据: dict[str, Any]) -> web.Response:
+    return web.json_response(数据, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
 async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        原值, 原始状态 = await asyncio.gather(
-            _控制台线程执行(QQ阅读._读取QQ阅读登录态, 当前帮助网页配置),
-            _控制台线程执行(
-                QQ阅读.读取运行状态值,
-                当前帮助网页配置,
-                QQ阅读.QQ阅读登录态命名空间,
-                QQ阅读.QQ阅读登录态状态键,
-                "",
-            ),
-        )
-        更新时间 = 0
-        账号详情 = {}
-        try:
-            if 原始状态:
-                账号详情 = json.loads(原始状态) or {}
-                更新时间 = int(账号详情.get("updated_at") or 0)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
-
-        if request.query.get("refresh") == "1" and 原值:
-            try:
-                await _控制台线程执行(QQ阅读._应用QQ阅读登录态, 原值)
-                async with QQ阅读.创建QQ阅读HTTP会话(concurrency=2) as QQ会话:
-                    资料 = await QQ阅读.查询QQ阅读账号资料(QQ会话)
-                if 资料.get("available"):
-                    await _控制台线程执行(
-                        QQ阅读._保存QQ阅读登录态,
-                        当前帮助网页配置,
-                        {**原值, **资料},
-                    )
-                    账号详情.update(
-                        {
-                            "nickname": str(资料.get("nickname") or ""),
-                            "avatar_url": str(资料.get("avatar_url") or ""),
-                            "phone": str(资料.get("phone") or ""),
-                            "updated_at": int(time.time()),
-                        }
-                    )
-                    更新时间 = int(账号详情["updated_at"])
-            except Exception as exc:
-                logger.debug("帮助控制台 QQ阅读资料刷新失败：错误类型=%s", type(exc).__name__)
-        
-        ywguid = str((原值 or {}).get("ywguid") or 账号详情.get("ywguid") or "")
-        nickname = str(账号详情.get("nickname") or "")
-        if ywguid and not nickname:
-            nickname = f"书友_{ywguid[-6:]}"
-        avatar_url = str(账号详情.get("avatar_url") or "")
-        if ywguid and not avatar_url:
-            avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
-
-        return web.json_response(
-            {
-                "ok": True,
-                "configured": bool(原值),
-                "updated_at": 更新时间,
-                "ywguid": ywguid,
-                "nickname": nickname,
-                "avatar_url": avatar_url,
-                "phone": str(账号详情.get("phone") or ""),
-            }
-        )
+        摘要 = await _控制台线程执行(QQ阅读.读取QQ阅读账号列表, 当前帮助网页配置)
+        return _QQ阅读JSON({"ok": True, "editable": _数据库会话可用(), **摘要})
     except Exception as exc:
-        logger.warning("帮助控制台 QQ阅读状态读取失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(500, "QQ阅读状态读取失败")
-
-
-async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
-    if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
-    数据 = await _读取请求JSON(request)
-    手机号 = str((数据 or {}).get("phone") or "").strip()
-    if not re.fullmatch(r"1\d{10}", 手机号):
-        return _控制台错误(400, "请输入有效的11位手机号")
-    
-    url = "https://passport.yuewen.com/userSdk/sendmsgnew"
-    params = {
-        "appId": "1450000219",
-        "areaId": "1",
-        "format": "jsonp",
-        "method": "callback",
-        "phoneIsAbroad": "0",
-        "inputUserId": "+86" + 手机号,
-        "mobilePhone": 手机号,
-        "type": "1",
-        "needRegister": "0",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
-        "Origin": "https://passport.yuewen.com",
-    }
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                text = await resp.text()
-                match = re.search(r'callback\((.*)\)', text)
-                if match:
-                    res_data = json.loads(match.group(1))
-                    session_key = str(res_data.get("data", {}).get("sessionKey") or "")
-                    return web.json_response({"ok": True, "sessionKey": session_key, "data": res_data})
-                return _控制台错误(400, "获取会话令牌失败")
-    except Exception as exc:
-        logger.warning("QQ阅读短信预请求失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(500, f"请求失败: {exc}")
-
-
-async def _处理QQ阅读短信确认下发(request: web.Request) -> web.Response:
-    if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
-    数据 = await _读取请求JSON(request)
-    手机号 = str((数据 or {}).get("phone") or "").strip()
-    session_key = str((数据 or {}).get("sessionKey") or "").strip()
-    ticket = str((数据 or {}).get("ticket") or "").strip()
-    randstr = str((数据 or {}).get("randstr") or "").strip()
-
-    if not 手机号 or not session_key or not ticket:
-        return _控制台错误(400, "参数不完整，请完成滑块验证")
-
-    url = "https://passport.yuewen.com/userSdk/sendmsgnew"
-    validate_code = f"{randstr};{ticket}"
-    params = {
-        "appId": "1450000219",
-        "areaId": "1",
-        "format": "jsonp",
-        "method": "callback",
-        "phoneIsAbroad": "0",
-        "inputUserId": "+86" + 手机号,
-        "mobilePhone": 手机号,
-        "sessionKey": session_key,
-        "validateCode": validate_code,
-        "type": "1",
-        "needRegister": "0",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
-        "Origin": "https://passport.yuewen.com",
-    }
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                text = await resp.text()
-                match = re.search(r'callback\((.*)\)', text)
-                if match:
-                    res_data = json.loads(match.group(1))
-                    if res_data.get("code") == 0:
-                        new_session = str(res_data.get("data", {}).get("sessionKey") or "")
-                        return web.json_response({"ok": True, "sessionKey": new_session or session_key, "message": "短信验证码已下发"})
-                    return _控制台错误(400, str(res_data.get("message") or "短信下发失败"))
-                return _控制台错误(400, "解析响应失败")
-    except Exception as exc:
-        logger.warning("QQ阅读短信确认下发失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(500, f"下发短信异常: {exc}")
-
-
-async def _处理QQ阅读短信登录(request: web.Request) -> web.Response:
-    if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
-    数据 = await _读取请求JSON(request)
-    手机号 = str((数据 or {}).get("phone") or "").strip()
-    session_key = str((数据 or {}).get("sessionKey") or "").strip()
-    code = str((数据 or {}).get("code") or "").strip()
-
-    if not 手机号 or not session_key or not code:
-        return _控制台错误(400, "请输入完整的手机号和短信验证码")
-
-    url = "https://passport.yuewen.com/userSdk/phonecodelogin"
-    params = {
-        "appId": "1450000219",
-        "areaId": "1",
-        "format": "jsonp",
-        "method": "callback",
-        "inputUserId": 手机号,
-        "sessionKey": session_key,
-        "validateCode": code,
-        "auto": "1",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://passport.yuewen.com/yuewen.html?appid=1450000219&areaid=1",
-        "Origin": "https://passport.yuewen.com",
-    }
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                text = await resp.text()
-                match = re.search(r'callback\((.*)\)', text)
-                if not match:
-                    return _控制台错误(400, "解析登录响应失败")
-                res_data = json.loads(match.group(1))
-                if res_data.get("code") != 0:
-                    return _控制台错误(400, str(res_data.get("message") or "验证码错误或已过期"))
-                
-                d = res_data.get("data", {})
-                ywguid = str(d.get("ywGuid") or "")
-                ywkey = str(d.get("ywKey") or "")
-                if not ywguid or not ywkey:
-                    return _控制台错误(400, "登录成功但未提取到关键鉴权票据")
-                
-                nickname = f"书友_{ywguid[-6:]}"
-                avatar_url = f"https://shp.qpic.cn/qqreader_f/0/{ywguid}/136"
-                
-                login_info = {
-                    "ywguid": ywguid,
-                    "ywkey": ywkey,
-                    "phone": 手机号,
-                    "nickname": nickname,
-                    "avatar_url": avatar_url,
-                    "ticket": str(d.get("ticket") or ""),
-                    "openid": str(d.get("ywOpenId") or ""),
-                }
-                
-                from 功能文件.管理功能.小说功能.小说 import QQ阅读
-                if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
-                    return _控制台错误(409, "数据库未配置，登录态未持久化")
-
-                await _控制台线程执行(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, login_info)
-                await _控制台线程执行(QQ阅读._应用QQ阅读登录态, login_info)
-                
-                return web.json_response({
-                    "ok": True,
-                    "message": "登录成功",
-                    "account": {
-                        "ywguid": ywguid,
-                        "phone": 手机号,
-                        "nickname": nickname,
-                        "avatar_url": avatar_url,
-                    }
-                })
-    except Exception as exc:
-        logger.warning("QQ阅读短信登录失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(500, f"登录失败: {exc}")
+        logger.warning("帮助控制台 QQ阅读账号读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, "QQ阅读账号读取失败")
 
 
 async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号未保存")
     数据 = await _读取请求JSON(request)
-    文本 = str((数据 or {}).get("cookie") or "").strip()
+    if not 数据:
+        return _控制台错误(400, "账号参数无效")
+    文本 = str(数据.get("cookie") or "").strip()
     if not 文本:
-        文本 = f"ywguid: {(数据 or {}).get('ywguid') or ''}\nywkey: {(数据 or {}).get('ywkey') or ''}"
+        文本 = json.dumps({"ywguid": 数据.get("ywguid"), "ywkey": 数据.get("ywkey")})
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
         登录态 = QQ阅读.解析QQ阅读Cookie(文本)
         if not 登录态:
             return _控制台错误(400, "QQ阅读登录态格式无效")
-        if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
-            return _控制台错误(409, "数据库未配置，登录态未保存")
-        await _控制台线程执行(QQ阅读._保存QQ阅读登录态, 当前帮助网页配置, 登录态)
-        await _控制台线程执行(QQ阅读._应用QQ阅读登录态, 登录态)
-        return web.json_response({"ok": True, "message": "QQ阅读登录态已保存"})
+        配置 = 获取控制台会话配置快照()
+        摘要 = await _控制台线程执行(
+            QQ阅读.保存QQ阅读账号, 配置, 登录态, str(数据.get("account_id") or "")
+        )
+        try:
+            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(配置, 摘要["selected_id"]), timeout=20)
+        except Exception as exc:
+            logger.debug("QQ阅读新账号资料暂未更新：错误类型=%s", type(exc).__name__)
+        return _QQ阅读JSON({"ok": True, "message": "QQ阅读账号已保存并设为当前账号", **摘要})
+    except ValueError:
+        return _控制台错误(400, "账号格式或账号身份无效")
     except Exception as exc:
-        logger.warning("帮助控制台 QQ阅读登录态保存失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(409, "QQ阅读登录态保存失败")
+        logger.warning("帮助控制台 QQ阅读账号保存失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "QQ阅读账号保存失败")
 
 
-async def _处理QQ阅读登录态删除(request: web.Request) -> web.Response:
+async def _QQ阅读账号操作(request: web.Request, 操作: str) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号操作未保存")
+    数据 = await _读取请求JSON(request)
+    账号ID = str((数据 or {}).get("account_id") or "").strip()
+    if not 账号ID or len(账号ID) > 80:
+        return _控制台错误(400, "请选择QQ阅读账号")
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        if not QQ阅读.已配置运行状态数据库(当前帮助网页配置):
-            return _控制台错误(409, "数据库未配置，登录态未删除")
-        await _控制台线程执行(
-            QQ阅读.写入运行状态值,
-            当前帮助网页配置,
-            QQ阅读.QQ阅读登录态命名空间,
-            QQ阅读.QQ阅读登录态状态键,
-            "",
-        )
-        return web.json_response({"ok": True, "message": "QQ阅读登录态已清除"})
+        配置 = 获取控制台会话配置快照()
+        if 操作 == "credential":
+            凭据 = await _控制台线程执行(QQ阅读.读取QQ阅读账号凭据, 配置, 账号ID)
+            if not 凭据:
+                return _控制台错误(404, "QQ阅读账号不存在")
+            return _QQ阅读JSON({"ok": True, "ywguid": 凭据["ywguid"], "ywkey": 凭据["ywkey"]})
+        if 操作 == "refresh":
+            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(配置, 账号ID), timeout=25)
+        elif 操作 == "enable":
+            if not isinstance(数据.get("enabled"), bool):
+                return _控制台错误(400, "账号开关参数无效")
+            摘要 = await _控制台线程执行(QQ阅读.设置QQ阅读账号启用, 配置, 账号ID, 数据["enabled"])
+        else:
+            函数 = QQ阅读.删除QQ阅读账号 if 操作 == "delete" else QQ阅读.切换QQ阅读账号
+            摘要 = await _控制台线程执行(函数, 配置, 账号ID)
+        return _QQ阅读JSON({"ok": True, **摘要})
+    except ValueError:
+        return _控制台错误(409, "QQ阅读账号状态已变化或资料暂未获取，请刷新后重试")
     except Exception as exc:
-        logger.warning("帮助控制台 QQ阅读登录态删除失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(409, "QQ阅读登录态清除失败")
+        logger.warning("帮助控制台 QQ阅读账号操作失败：阶段=%s，错误类型=%s", 操作, type(exc).__name__)
+        return _控制台错误(502 if 操作 == "refresh" else 409, "QQ阅读账号操作失败，请稍后重试")
 
+
+async def _处理QQ阅读登录态删除(request: web.Request) -> web.Response:
+    return await _QQ阅读账号操作(request, "delete")
+
+
+async def _处理QQ阅读账号选择(request: web.Request) -> web.Response:
+    return await _QQ阅读账号操作(request, "select")
+
+
+async def _处理QQ阅读账号启用(request: web.Request) -> web.Response:
+    return await _QQ阅读账号操作(request, "enable")
+
+
+async def _处理QQ阅读账号刷新(request: web.Request) -> web.Response:
+    return await _QQ阅读账号操作(request, "refresh")
+
+
+async def _处理QQ阅读账号凭据(request: web.Request) -> web.Response:
+    return await _QQ阅读账号操作(request, "credential")
+
+
+async def _移除QQ阅读网页扫码会话(scan_id: str, 所有者: str | None = None) -> bool:
+    状态 = QQ阅读网页扫码会话.get(scan_id)
+    if not 状态 or (所有者 is not None and 状态.get("owner") != 所有者):
+        return False
+    状态["cancelled"] = True
+    if QQ阅读扫码启动代次.get(状态["owner"]) == 状态["generation"]:
+        QQ阅读扫码启动代次.pop(状态["owner"], None)
+    任务 = 状态.get("task")
+    if isinstance(任务, asyncio.Task) and not 任务.done():
+        任务.cancel()
+        await asyncio.gather(任务, return_exceptions=True)
+    try:
+        await 状态["client"].关闭()
+    except Exception as exc:
+        logger.debug("QQ阅读扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+    QQ阅读网页扫码会话.pop(scan_id, None)
+    return True
+
+
+async def _取消QQ阅读网页扫码所有者(会话值: str, *, 取消启动: bool = True) -> None:
+    if not 会话值:
+        return
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    if 取消启动:
+        QQ阅读扫码启动代次.pop(所有者, None)
+    for scan_id, 状态 in list(QQ阅读网页扫码会话.items()):
+        if 状态.get("owner") == 所有者:
+            await _移除QQ阅读网页扫码会话(scan_id, 所有者)
+
+
+async def _取消全部QQ阅读网页扫码() -> None:
+    QQ阅读扫码启动代次.clear()
+    for scan_id in list(QQ阅读网页扫码会话):
+        await _移除QQ阅读网页扫码会话(scan_id)
+
+
+def _QQ阅读扫码仍有效(状态: dict[str, Any]) -> bool:
+    return (
+        not 状态.get("cancelled")
+        and 控制台会话.get(状态["session"], 0) > time.time()
+        and hmac.compare_digest(状态["auth"], 控制台会话认证指纹)
+        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(当前帮助网页配置))
+        and QQ阅读扫码启动代次.get(状态["owner"]) == 状态["generation"]
+    )
+
+
+def _QQ阅读扫码响应(scan_id: str, 状态: dict[str, Any]) -> dict[str, Any]:
+    当前状态 = str(状态.get("status") or "waiting")
+    if 当前状态 == "waiting" and getattr(状态["client"], "status", "") == "scanned":
+        当前状态 = "scanned"
+    文案 = {
+        "waiting": "请使用手机QQ扫码并确认登录QQ阅读。",
+        "scanned": "二维码已扫描，请在手机QQ确认登录。",
+        "saving": "登录成功，正在保存账号。",
+        "success": "QQ阅读账号已添加并设为当前账号。",
+        "expired": "二维码已过期，请重新获取。",
+        "cancelled": "扫码已取消。",
+        "error": "扫码登录失败，请重新获取二维码。",
+    }
+    return {"ok": True, "scan_id": scan_id, "status": 当前状态,
+            "account_id": str(状态.get("account_id") or ""),
+            "expires_in": max(0, int(状态["expires_at"] - time.time())),
+            "message": 文案.get(当前状态, "请重新获取二维码。")}
+
+
+async def _运行QQ阅读网页扫码(scan_id: str) -> None:
+    状态 = QQ阅读网页扫码会话[scan_id]
+    try:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+        登录态 = await 状态["client"].等待登录并获取登录态(timeout=300, interval=2)
+        if not _QQ阅读扫码仍有效(状态):
+            状态["status"] = "cancelled"
+            return
+        状态["status"] = "saving"
+        状态["updated_at"] = time.time()
+        摘要 = await _控制台线程执行(QQ阅读.保存QQ阅读账号, 状态["config"], 登录态)
+        状态["account_id"] = 摘要["selected_id"]
+        try:
+            await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 摘要["selected_id"]), timeout=20)
+        except Exception as exc:
+            logger.debug("QQ阅读扫码账号资料暂未更新：错误类型=%s", type(exc).__name__)
+        状态["status"] = "success"
+    except asyncio.CancelledError:
+        状态["status"] = "cancelled"
+        raise
+    except TimeoutError:
+        状态["status"] = "expired"
+    except Exception as exc:
+        状态["status"] = "error"
+        logger.warning("帮助控制台 QQ阅读扫码失败：错误类型=%s", type(exc).__name__)
+    finally:
+        状态["updated_at"] = time.time()
+        try:
+            await 状态["client"].关闭()
+        except Exception as exc:
+            logger.debug("QQ阅读扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+
+
+async def _处理QQ阅读网页扫码开始(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，扫码账号未保存")
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+    会话值 = _取得请求会话(request)
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    代次 = secrets.token_urlsafe(16)
+    QQ阅读扫码启动代次[所有者] = 代次
+    await _取消QQ阅读网页扫码所有者(会话值, 取消启动=False)
+    状态: dict[str, Any] = {
+        "owner": 所有者, "session": 会话值, "generation": 代次,
+        "auth": 控制台会话认证指纹, "config": 获取控制台会话配置快照(),
+        "client": QQ阅读.QQ阅读扫码登录客户端(), "status": "waiting",
+        "updated_at": time.time(), "expires_at": time.time() + 300,
+    }
+    客户端 = 状态["client"]
+    已登记 = False
+    try:
+        if not _QQ阅读扫码仍有效(状态):
+            return _控制台错误(409, "扫码会话已更新")
+        图片 = await 客户端.获取登录二维码()
+        if not _QQ阅读扫码仍有效(状态):
+            return _控制台错误(409, "扫码会话已更新")
+        scan_id = secrets.token_urlsafe(24)
+        QQ阅读网页扫码会话[scan_id] = 状态
+        状态["task"] = asyncio.create_task(_运行QQ阅读网页扫码(scan_id))
+        已登记 = True
+        return _QQ阅读JSON({**_QQ阅读扫码响应(scan_id, 状态),
+            "qr_image": "data:image/png;base64," + base64.b64encode(图片).decode("ascii")})
+    except Exception as exc:
+        logger.warning("QQ阅读登录二维码获取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(502, "QQ阅读二维码获取失败，请稍后重试")
+    finally:
+        if not 已登记:
+            try:
+                await 客户端.关闭()
+            except Exception:
+                pass
+
+
+async def _处理QQ阅读网页扫码状态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    scan_id = str(request.query.get("scan_id") or "")
+    状态 = QQ阅读网页扫码会话.get(scan_id)
+    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    if not 状态 or 状态.get("owner") != 所有者:
+        return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    if not _QQ阅读扫码仍有效(状态):
+        await _移除QQ阅读网页扫码会话(scan_id, 所有者)
+        return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    return _QQ阅读JSON(_QQ阅读扫码响应(scan_id, 状态))
+
+
+async def _处理QQ阅读网页扫码取消(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    scan_id = str((数据 or {}).get("scan_id") or "")
+    会话值 = _取得请求会话(request)
+    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    if not scan_id:
+        await _取消QQ阅读网页扫码所有者(会话值)
+    else:
+        await _移除QQ阅读网页扫码会话(scan_id, 所有者)
+    return _QQ阅读JSON({"ok": True, "message": "扫码会话已结束"})
 
 
 async def _处理消息聊天列表(request: web.Request) -> web.Response:
