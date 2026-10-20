@@ -4621,22 +4621,96 @@ async def 展开番茄短链(来源: str) -> str:
     文本 = str(来源 or "").strip()
     if aiohttp is None:
         return 文本
+    当前链接 = 文本
+    截止时间 = time.monotonic() + 20
+    阶段 = "request"
+    状态 = None
+    原因 = "book_id_missing"
+    错误类型 = "none"
+    已访问: set[str] = set()
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=20), headers={"User-Agent": DEFAULT_UA}
         ) as session:
-            async with session.get(文本, allow_redirects=True) as 响应:
-                最终链接 = str(响应.url)
-                if 提取番茄书籍编号(最终链接) or 提取番茄短篇编号(最终链接):
-                    return 最终链接
-                页面文本 = await 响应.text(errors="ignore")
-                页面链接 = 提取番茄链接(页面文本)
-                if 页面链接:
-                    return 页面链接
+            for _ in range(10):
+                if 当前链接 in 已访问:
+                    原因 = "redirect_loop"
+                    break
+                已访问.add(当前链接)
+                剩余时间 = 截止时间 - time.monotonic()
+                if 剩余时间 <= 0:
+                    raise asyncio.TimeoutError
+                阶段 = "request"
+                状态 = None
+                async with session.get(
+                    当前链接,
+                    allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=剩余时间),
+                ) as 响应:
+                    状态 = 响应.status
+                    if 状态 in {301, 302, 303, 307, 308}:
+                        阶段 = "redirect"
+                        位置 = 响应.headers.get("Location")
+                        if not 位置:
+                            原因 = "redirect_location_missing"
+                            break
+                        下一链接 = urllib.parse.urljoin(str(响应.url), 位置)
+                        网址 = urllib.parse.urlsplit(下一链接)
+                        主机 = (网址.hostname or "").lower()
+                        if 网址.scheme not in {"http", "https"} or not any(
+                            主机 == 域名 or 主机.endswith("." + 域名)
+                            for 域名 in (
+                                "fanqienovel.com", "changdunovel.com",
+                                "fqnovel.com", "novelfm.com",
+                            )
+                        ):
+                            原因 = "redirect_url_invalid"
+                            break
+                        # 官方 302 的 Location 已带编号，不必等待分享落地页加载。
+                        if 提取番茄书籍编号(下一链接) or 提取番茄短篇编号(下一链接):
+                            return 下一链接
+                        当前链接 = 下一链接
+                        continue
+                    if 状态 >= 400:
+                        原因 = "http_error"
+                        break
+                    最终链接 = str(响应.url)
+                    if 提取番茄书籍编号(最终链接) or 提取番茄短篇编号(最终链接):
+                        return 最终链接
+                    阶段 = "read"
+                    页面字节 = bytearray()
+                    async for 数据块 in 响应.content.iter_chunked(65536):
+                        页面字节.extend(数据块)
+                        if len(页面字节) > 1024 * 1024:
+                            原因 = "page_too_large"
+                            break
+                    else:
+                        页面文本 = 页面字节.decode(响应.charset or "utf-8", errors="ignore")
+                        页面链接 = 提取番茄链接(页面文本)
+                        if 页面链接:
+                            return 页面链接
+                        原因 = "book_id_missing"
+                    break
+            else:
+                原因 = "redirect_limit"
+    except asyncio.CancelledError:
+        raise
     except Exception as 异常:
-        logger.warning(
-            f"番茄短链解析失败：来源={限制番茄日志文本(文本, 200)}, 错误={异常}"
-        )
+        错误类型 = type(异常).__name__
+        if isinstance(异常, asyncio.TimeoutError):
+            原因 = "timeout"
+        elif isinstance(异常, aiohttp.ClientSSLError):
+            原因 = "tls_error"
+        elif isinstance(异常, aiohttp.ClientConnectionError):
+            原因 = "connection_error"
+        elif isinstance(异常, aiohttp.ClientPayloadError):
+            原因 = "payload_error"
+        else:
+            原因 = "request_error"
+    logger.warning(
+        f"番茄短链解析失败：阶段={阶段}, 原因={原因}, HTTP状态={状态 or 'none'}, "
+        f"错误类型={错误类型}, 跳转次数={max(0, len(已访问) - 1)}"
+    )
     return 文本
 
 
