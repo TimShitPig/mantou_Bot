@@ -583,17 +583,23 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     内容文本 = str(记录.get("content") or "")
     现有媒体 = 记录.get("media")
     原始消息: Any = None
-    # 大多数历史行已经保存 nickname/avatar/media；仅对缺失资料或提及消息回看原文。
+    媒体项目 = 现有媒体.get("items") if isinstance(现有媒体, dict) else None
+    需要检查媒体原文 = isinstance(现有媒体, dict) and (
+        not isinstance(媒体项目, list)
+        or not 媒体项目
+        or any(
+            isinstance(项目, dict)
+            and not any(_清理媒体地址(项目.get(字段)) for 字段 in ("src", "url", "download_url", "file_url", "voice_wav_url"))
+            for 项目 in 媒体项目
+        )
+    )
+    # 单项检查原文补充元数据；多项仅在缺少地址时补查，完整多项沿用快速路径。
     需要原始 = (
         not str(记录.get("refidx") or "").strip()
         or not _有效用户昵称(作者昵称, 作者标识)
         or not 作者头像
         or bool(_提及规则.search(内容文本))
-        or (
-            isinstance(现有媒体, dict)
-            and bool(现有媒体.get("src"))
-            and not isinstance(现有媒体.get("items"), list)
-        )
+        or 需要检查媒体原文
         or (
             not isinstance(现有媒体, dict)
             and (not 内容文本.strip() or bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE)))
@@ -642,11 +648,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if isinstance(现有媒体, dict)
         else ""
     )
-    需要补全媒体项目 = (
-        isinstance(现有媒体, dict)
-        and not isinstance(现有媒体.get("items"), list)
-        and 原始消息 is not None
-    )
+    需要补全媒体项目 = 需要检查媒体原文 and 原始消息 is not None
     if not 现有地址 or 需要补全媒体项目:
         补充媒体 = _提取媒体字段(内容文本, 原始消息)
         if 补充媒体:
