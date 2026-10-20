@@ -44,12 +44,12 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 百度出版图书地址 = "https://appyd.baidu.com/nabook/book"
 百度出版目录地址 = "https://appyd.baidu.com/nabook/chapter"
 百度出版正文地址 = "https://appyd.baidu.com/mobile/getbdjson"
-百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com", "yd.baidu.com"}
+百度允许域名 = {"mr.baidu.com", "boxnovel.baidu.com", "novel.baidu.com", "yd.baidu.com", "dushu.baidu.com"}
 百度详情页路径 = "/boxnovel/yuedu/wapdetail"
 百度详情页路径集合 = {"/boxnovel/yuedu/wapdetail", "/boxnovel/yuedu/wapcontent"}
 百度详情页最大响应字节 = 1024 * 1024
 百度链接正则 = re.compile(
-    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|yd\.baidu\.com)"
+    r"https?://(?:mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|yd\.baidu\.com|dushu\.baidu\.com)"
     r"(?::[0-9]{1,5})?(?=[/?#\s<>\"']|$)[^\s<>\"']*",
     re.IGNORECASE,
 )
@@ -79,16 +79,15 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
     "内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 )
 百度下载失败提示 = "下载失败 请重试"
-百度章节不可用提示 = "部分章节暂不可用，请稍后再试"
 百度文件发送失败提示 = "文件发送失败，请稍后再试"
 
 
 class _百度访问错误(RuntimeError):
-    """远端明确拒绝时停止本书任务，避免重放所有剩余章节。"""
+    """保存受控访问原因；章节权限独立处理，HTTP 拒绝停止后续请求。"""
 
     def __init__(self, 原因: str, *, HTTP状态: int | None = None, 阶段: str = "permission") -> None:
         super().__init__(原因)
-        self.reason = 原因 if 原因 in {"http_blocked", "chapter_access_required", "chapter_purchase_required"} else "access_denied"
+        self.reason = 原因 if 原因 in {"http_blocked", "chapter_access_required", "chapter_login_required", "chapter_purchase_required"} else "access_denied"
         self.http_status = HTTP状态
         self.stage = 阶段
 
@@ -126,13 +125,22 @@ class _百度请求节流器:
     def __init__(self) -> None:
         self.锁 = asyncio.Lock()
         self.下次 = 0.0
+        self.停止异常: _百度访问错误 | None = None
+
+    def 停止(self, 异常: _百度访问错误) -> None:
+        if self.停止异常 is None:
+            self.停止异常 = 异常
 
     async def 等待(self) -> None:
         async with self.锁:
+            if self.停止异常 is not None:
+                raise _百度访问错误("http_blocked", HTTP状态=self.停止异常.http_status, 阶段="request_stopped")
             循环 = asyncio.get_running_loop()
             等待秒 = self.下次 - 循环.time()
             if 等待秒 > 0:
                 await asyncio.sleep(等待秒)
+            if self.停止异常 is not None:
+                raise _百度访问错误("http_blocked", HTTP状态=self.停止异常.http_status, 阶段="request_stopped")
             self.下次 = 循环.time() + 1 / 百度每秒请求上限
 
 
@@ -157,14 +165,18 @@ def _是百度官方地址(地址: Any) -> bool:
 def _检查百度章节权限(数据: Any) -> None:
     if not isinstance(数据, dict):
         return
-    if any(str(数据.get(键) or "").lower() in {"1", "true"} for 键 in (
-        "need_login", "needLogin", "login_required", "need_pay", "needPay", "need_purchase", "purchase_required",
-    )):
-        raise _百度访问错误("chapter_access_required")
+    for 键列表, 原因 in (
+        (("need_login", "needLogin", "login_required"), "chapter_login_required"),
+        (("need_pay", "needPay", "need_purchase", "purchase_required"), "chapter_purchase_required"),
+    ):
+        if any(str(数据.get(键) or "").lower() in {"1", "true"} for 键 in 键列表):
+            raise _百度访问错误(原因)
     状态 = 数据.get("status") if isinstance(数据.get("status"), dict) else {}
     消息 = " ".join(str(值 or "") for 值 in (状态.get("msg"), 数据.get("message"), 数据.get("msg"), 数据.get("error_msg")))
-    if re.search(r"login|log\s*in|sign\s*in|登录|登陆|purchase|payment.required|pay.required|购买|付费", 消息, re.IGNORECASE):
-        raise _百度访问错误("chapter_access_required")
+    if re.search(r"login|log\s*in|sign\s*in|登录|登陆", 消息, re.IGNORECASE):
+        raise _百度访问错误("chapter_login_required")
+    if re.search(r"purchase|payment.required|pay.required|购买|付费", 消息, re.IGNORECASE):
+        raise _百度访问错误("chapter_purchase_required")
     if "free" in 数据 and str(数据["free"]) == "0" and str(数据.get("purchase") or "0") != "1":
         raise _百度访问错误("chapter_purchase_required")
     if "public_status" in 数据 and str(数据["public_status"]) != "1":
@@ -186,20 +198,45 @@ def _校验百度目录(目录: list[dict[str, Any]]) -> None:
         已见.add(编号)
 
 
-def _预检百度小说目录(目录: list[dict[str, Any]]) -> None:
-    """完整性要求已知必缺章时提前退出，不启动其余章节请求。"""
-    _校验百度目录(目录)
-    不可用: list[int] = []
-    for 序号, 章节 in enumerate(目录, 1):
-        try:
-            _检查百度章节权限(章节)
-        except _百度章节不可用错误:
-            不可用.append(序号)
-    if 不可用:
-        首项 = 目录[不可用[0] - 1]
-        raise _百度章节不可用错误(
-            str(首项["id"]), 序号=tuple(不可用), 数量=len(不可用), 状态=首项.get("public_status"),
-        )
+def _百度章节失败原因(异常: Exception) -> str:
+    """只输出已确认的固定分类，不把远端原文或异常对象写入 TXT。"""
+    if isinstance(异常, _百度章节不可用错误):
+        状态 = 异常.public_status
+        return "平台标记该章节不可用" + (f"（状态 {状态}）" if 状态 != "unknown" else "")
+    if isinstance(异常, _百度访问错误):
+        if 异常.reason == "chapter_login_required":
+            return "平台要求登录后阅读该章节"
+        if 异常.reason == "chapter_purchase_required":
+            return "平台要求购买后阅读该章节"
+        if 异常.reason == "http_blocked":
+            原因 = "平台请求过于频繁（HTTP 429）" if 异常.http_status == 429 else "平台拒绝正文请求（HTTP 403）"
+            return ("未继续请求：" if 异常.stage == "request_stopped" else "") + 原因
+        return "平台未授予该章节的阅读权限"
+    if isinstance(异常, asyncio.TimeoutError):
+        return "正文请求超时，重试后仍未取得内容"
+    if isinstance(异常, aiohttp.ClientResponseError):
+        状态 = 异常.status
+        return f"正文请求失败（HTTP {状态}）" if isinstance(状态, int) and 100 <= 状态 <= 599 else "正文请求失败"
+    if isinstance(异常, aiohttp.ClientError):
+        return "正文连接失败，重试后仍未取得内容"
+    if isinstance(异常, ValueError):
+        return "正文响应格式或解析校验失败"
+    原因 = {
+        "chapter_business_error": "平台未成功返回章节正文",
+        "chapter_identity_mismatch": "返回的章节编号与目录不一致",
+        "invalid_content_host": "平台未返回有效的官方正文地址",
+        "unexpected_content_status": "正文响应状态异常",
+        "content_too_large": "正文响应超过大小上限",
+        "invalid_content": "正文为空或解密校验失败",
+        "empty_content": "平台未返回该章节正文",
+    }.get(str(异常)) if isinstance(异常, RuntimeError) else None
+    if 原因:
+        return 原因
+    if isinstance(异常.__cause__, Exception):
+        根因 = 异常.__cause__
+        if isinstance(根因, (asyncio.TimeoutError, aiohttp.ClientError, ValueError)):
+            return _百度章节失败原因(根因)
+    return "章节正文获取失败，未取得明确原因"
 
 
 def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0) -> None:
@@ -404,7 +441,10 @@ async def _请求JSON(
                 await 节流器.等待()
             async with 会话.get(地址, params=参数, allow_redirects=False) as 响应:
                 if 响应.status in {403, 429}:
-                    raise _百度访问错误("http_blocked", HTTP状态=响应.status, 阶段="request_json")
+                    异常 = _百度访问错误("http_blocked", HTTP状态=响应.status, 阶段="request_json")
+                    if 节流器 is not None:
+                        节流器.停止(异常)
+                    raise 异常
                 响应.raise_for_status()
                 数据 = await 响应.json(content_type=None)
             if not isinstance(数据, dict):
@@ -904,7 +944,10 @@ async def 下载百度出版正文(
     文档编号: str,
     目录: list[dict[str, Any]],
     版本: str,
+    *, 失败原因: dict[int, str] | None = None,
 ) -> list[str | None]:
+    _校验百度目录(目录)
+    失败原因 = 失败原因 if 失败原因 is not None else {}
     结果: list[str | None] = [None] * len(目录)
     分组: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     范围失败: dict[str, int] = {}
@@ -914,10 +957,18 @@ async def 下载百度出版正文(
         切片, 原因 = _百度出版章节切片(章节)
         if 切片 is None:
             范围失败[原因] = 范围失败.get(原因, 0) + 1
+            失败原因[下标] = {
+                "free_boundary": "该章节超出平台提供的免费阅读范围",
+                "unsupported_span": "该章节跨正文分片，当前解析未能取得完整内容",
+                "catalog_range_invalid": "该章节的目录范围校验失败",
+                "empty_chapter": "目录指定的章节正文范围为空",
+            }.get(原因, "该章节的正文范围校验失败")
             continue
         页面编号 = str(章节.get("source_page") or "").strip()
         if 页面编号:
             分组.setdefault(页面编号, []).append((下标, 章节))
+        else:
+            失败原因[下标] = "目录未提供该章节的正文分片"
     if 范围失败:
         logger.warning(
             "百度出版正文范围检查：书籍编号=%s, 可请求章节=%s, 跳过分类=%s",
@@ -938,6 +989,10 @@ async def 下载百度出版正文(
         nonlocal 已完成页面, 下次页面日志
         async with 信号量:
             try:
+                if 节流器.停止异常 is not None:
+                    for 下标, _ in 页面目录:
+                        失败原因[下标] = "未请求：" + _百度章节失败原因(节流器.停止异常)
+                    return
                 if any(章节.get("source_doc_id") != 文档编号 or 章节.get("source_version") != 版本 for _, 章节 in 页面目录):
                     raise RuntimeError("published_identity_mismatch")
                 数据 = await _请求JSON(
@@ -946,22 +1001,29 @@ async def 下载百度出版正文(
                     {"cn": 页面编号, "version": 版本, "doc_id": 文档编号},
                     节流器=节流器,
                 )
+                _检查百度章节权限(数据)
                 状态 = 数据.get("status") if isinstance(数据, dict) else None
                 if not isinstance(状态, dict) or _安全整数(状态.get("code"), -1) != 0:
                     logger.debug(
                         "百度出版正文页面获取失败：页码=%s, 错误=BusinessError",
                         页面编号,
                     )
+                    for 下标, _ in 页面目录:
+                        失败原因[下标] = "平台未成功返回该章节所在的正文分片"
                     return
                 数据节点 = 数据.get("data")
+                _检查百度章节权限(数据节点)
                 内容 = 数据节点.get("content") if isinstance(数据节点, dict) else None
                 当前目录 = [章节 for _, 章节 in 页面目录]
                 拆分结果 = _拆分百度出版页面正文(内容, 当前目录)
+                for 下标, 章节 in 页面目录:
+                    if str(章节.get("id") or "") not in 拆分结果:
+                        失败原因[下标] = "正文分片未包含该章节，或与目录校验不一致"
                 async with 页面锁:
                     页面结果[页面编号] = 拆分结果
-            except _百度访问错误:
-                raise
             except Exception as 异常:
+                for 下标, _ in 页面目录:
+                    失败原因[下标] = _百度章节失败原因(异常)
                 logger.debug(
                     "百度出版正文页面获取失败：页码=%s, 错误=%s",
                     页面编号,
@@ -1026,6 +1088,7 @@ async def _下载百度章节(
     编号 = str(章节.get("id") or "")
     async with 信号量:
         _检查百度章节权限(章节)
+        最后异常: Exception = RuntimeError("empty_content")
         for 次数 in range(百度请求重试次数):
             try:
                 新版 = _是百度文档编号(书籍编号)
@@ -1035,8 +1098,8 @@ async def _下载百度章节(
                     "data": json.dumps({"gid": 书籍编号, "cid": 编号}, separators=(",", ":")),
                 }
                 元数据 = await _请求JSON(会话, 百度正文地址 if 新版 else 百度旧版目录地址, 参数, 节流器=节流器, 重试=False)
+                _检查百度章节权限(元数据)
                 if 新版:
-                    _检查百度章节权限(元数据)
                     数据 = 元数据.get("data")
                     数据 = 数据 if isinstance(数据, dict) else {}
                     _检查百度章节权限(数据)
@@ -1050,14 +1113,19 @@ async def _下载百度章节(
                 else:
                     if not _百度成功(元数据):
                         raise RuntimeError("chapter_business_error")
-                    内容地址 = 元数据.get("data", {}).get("novel", {}).get("content", {}).get("dataset", {}).get("content_url")
+                    章节数据 = 元数据.get("data", {}).get("novel", {}).get("content", {}).get("dataset", {})
+                    _检查百度章节权限(章节数据)
+                    内容地址 = 章节数据.get("content_url")
                 if not _是百度官方地址(内容地址):
                     raise RuntimeError("invalid_content_host")
                 if 节流器 is not None:
                     await 节流器.等待()
                 async with 会话.get(内容地址, allow_redirects=False) as 响应:
                     if 响应.status in {403, 429}:
-                        raise _百度访问错误("http_blocked", HTTP状态=响应.status, 阶段="content_cdn")
+                        异常 = _百度访问错误("http_blocked", HTTP状态=响应.status, 阶段="content_cdn")
+                        if 节流器 is not None:
+                            节流器.停止(异常)
+                        raise 异常
                     响应.raise_for_status()
                     if 响应.status != 200:
                         raise RuntimeError("unexpected_content_status")
@@ -1071,16 +1139,19 @@ async def _下载百度章节(
             except (_百度访问错误, _百度章节不可用错误):
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as 异常:
+                最后异常 = 异常
                 logger.debug("百度小说章节获取失败：阶段=chapter, 错误类型=%s", type(异常).__name__)
                 if 次数 + 1 < 百度请求重试次数:
                     await asyncio.sleep(0.25 * (次数 + 1))
-    return ""
+        raise 最后异常
 
 
 async def 下载百度正文(
     会话: aiohttp.ClientSession, 书籍编号: str, 目录: list[dict[str, Any]],
+    *, 失败原因: dict[int, str] | None = None,
 ) -> list[str]:
-    _预检百度小说目录(目录)
+    _校验百度目录(目录)
+    失败原因 = 失败原因 if 失败原因 is not None else {}
     结果 = [""] * len(目录)
     信号量 = asyncio.Semaphore(百度最大并发数)
     节流器 = _百度请求节流器()
@@ -1092,7 +1163,19 @@ async def 下载百度正文(
     async def 工作() -> None:
         nonlocal 已完成
         for 下标, 章节 in 工作项:
-            结果[下标] = await _下载百度章节(会话, 书籍编号, 章节, 信号量, 节流器)
+            try:
+                _检查百度章节权限(章节)
+                if 节流器.停止异常 is not None:
+                    失败原因[下标] = "未请求：" + _百度章节失败原因(节流器.停止异常)
+                else:
+                    结果[下标] = await _下载百度章节(会话, 书籍编号, 章节, 信号量, 节流器)
+                    if not 结果[下标] or not 结果[下标].strip():
+                        失败原因[下标] = "平台未返回该章节正文"
+            except Exception as 异常:
+                失败原因[下标] = _百度章节失败原因(异常)
+                if isinstance(异常, _百度访问错误) and 异常.reason == "http_blocked":
+                    节流器.停止(异常)
+                logger.debug("百度小说章节未取得正文：序号=%s, 原因=%s", 下标 + 1, 失败原因[下标])
             已完成 += 1
             if 已完成 in 进度节点:
                 logger.info("百度小说章节进度：书籍编号=%s, 进度=%s/%s, 成功=%s", 书籍编号, 已完成, len(目录), sum(bool(x) for x in 结果))
@@ -1118,13 +1201,19 @@ def 生成百度小说文件内容(
     详情: dict[str, Any],
     目录: list[dict[str, Any]],
     正文列表: list[str],
+    *, 失败原因: dict[int, str] | None = None,
 ) -> tuple[str, bytes]:
     _校验百度目录(目录)
     预期 = _安全整数(详情.get("chapter_count"))
     if 预期 > 0 and 预期 != len(目录):
         raise RuntimeError("incomplete_book_catalog")
-    if len(目录) != len(正文列表) or any(not isinstance(正文, str) or not 正文.strip() for 正文 in 正文列表):
+    if len(目录) != len(正文列表) or any(not isinstance(正文, str) for 正文 in 正文列表):
         raise RuntimeError("incomplete_book_content")
+    成功数 = sum(bool(正文.strip()) for 正文 in 正文列表)
+    if not 成功数:
+        raise RuntimeError("empty_book_content")
+    缺失数 = len(目录) - 成功数
+    失败原因 = 失败原因 or {}
     状态 = str(详情.get("status") or "连载")
     书名 = _清理文件名(详情.get("title") or f"百度小说{书籍编号}")
     作者 = _清理文件名(详情.get("author") or "未知")
@@ -1138,14 +1227,22 @@ def 生成百度小说文件内容(
         f"字数：{格式化百度字数(详情.get('word_count'))}",
         f"书籍ID：{书籍编号}",
         f"章节数：{len(目录)}",
-        "",
     ]
+    if 缺失数:
+        行列表.extend([
+            f"正文获取：成功 {成功数} 章，未获取 {缺失数} 章",
+            "说明：本文件包含部分章节正文；未获取章节在原位置注明原因，不代表完整正文。",
+        ])
+    行列表.append("")
     简介 = str(详情.get("intro") or "").strip()
     if 简介:
         行列表.extend(["简介：", 简介, ""])
-    for 章节, 正文 in zip(目录, 正文列表):
+    for 下标, (章节, 正文) in enumerate(zip(目录, 正文列表)):
         标题 = str(章节.get("title") or "章节")
-        行列表.extend([标题, "", 去除章节正文重复标题(标题, 正文), ""])
+        展示正文 = 去除章节正文重复标题(标题, 正文) if 正文.strip() else (
+            "【本章正文未获取：" + 失败原因.get(下标, "平台未返回该章节正文") + "】"
+        )
+        行列表.extend([标题, "", 展示正文, ""])
     文本 = "\n".join(行列表).replace("\r\n", "\n").replace("\r", "\n")
     return 文件名, 文本.replace("\n", "\r\n").encode("utf-8")
 
@@ -1265,9 +1362,7 @@ async def 生成百度下载回复流(
                 )
                 yield 百度下载失败提示
                 return
-            if not 出版模式:
-                stage = "目录可用性"
-                _预检百度小说目录(目录)
+            _校验百度目录(目录)
             logger.info("百度小说开始下载：书籍编号=%s, 章节数=%s", 书籍编号, len(目录))
             yield "\n".join(
                 [
@@ -1281,25 +1376,33 @@ async def 生成百度下载回复流(
                 ]
             )
             stage = "正文"
+            失败原因: dict[int, str] = {}
             if 出版模式:
                 出版正文列表 = await 下载百度出版正文(
-                    会话, 书籍编号, 目录, 正文版本
+                    会话, 书籍编号, 目录, 正文版本, 失败原因=失败原因,
                 )
-                正文缺失 = any(not 正文 or not 正文.strip() for 正文 in 出版正文列表)
                 正文列表 = [正文 or "" for 正文 in 出版正文列表]
             else:
-                正文列表 = await 下载百度正文(会话, 书籍编号, 目录)
-                正文缺失 = any(not 正文 for 正文 in 正文列表)
-        if len(正文列表) != len(目录) or 正文缺失:
+                正文列表 = await 下载百度正文(会话, 书籍编号, 目录, 失败原因=失败原因)
+        if len(正文列表) != len(目录):
+            raise RuntimeError("incomplete_book_content")
+        成功数 = sum(bool(正文.strip()) for 正文 in 正文列表)
+        缺失数 = len(目录) - 成功数
+        if 缺失数:
+            分类: dict[str, int] = {}
+            for 下标, 正文 in enumerate(正文列表):
+                if not 正文.strip():
+                    原因 = 失败原因.setdefault(下标, "平台未返回该章节正文")
+                    分类[原因] = 分类.get(原因, 0) + 1
             logger.warning(
-                "百度小说正文不完整：书籍编号=%s, 成功=%s, 总数=%s",
-                书籍编号,
-                sum(bool(x) for x in 正文列表),
-                len(目录),
+                "百度小说部分正文未获取：书籍编号=%s, 成功=%s, 总数=%s, 分类=%s",
+                书籍编号, 成功数, len(目录), 分类,
             )
-            yield 百度下载失败提示
-            return
-        文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
+            if not 成功数:
+                yield "未获取到可用章节正文：" + "；".join(f"{原因}（{数量}章）" for 原因, 数量 in list(分类.items())[:4])
+                return
+            yield f"正文已获取 {成功数}/{len(目录)} 章，{缺失数} 章未获取，原因已在文件对应章节标注"
+        文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表, 失败原因=失败原因)
         发送结果 = await _准备发送文本文件(
             event,
             文件名,
@@ -1320,9 +1423,6 @@ async def 生成百度下载回复流(
                 启动百度后台上传并清理源文件(配置, 路径, 文件名)
             return
         yield 百度文件发送失败提示
-    except _百度章节不可用错误 as 异常:
-        _记录百度下载异常(stage, 异常)
-        yield 百度章节不可用提示
     except Exception as 异常:
         _记录百度下载异常(stage, 异常)
         yield 百度下载失败提示
