@@ -5528,9 +5528,49 @@ class QQ阅读扫码登录客户端:
         self._expires_at = 0.0
         self._oauth: dict[str, str] = {}
         self._graph_url = ""
+        self._oauth_openapi = "#"
         self._xlogin_url = ""
         self._pt: dict[str, str] = {}
         self.status = "created"
+        self.诊断阶段 = "created"
+        self.HTTP状态: int | None = None
+        self.轮询状态: str | None = None
+        self.业务码: str | None = None
+
+    def _设置诊断阶段(self, 阶段: str) -> None:
+        self.诊断阶段 = 阶段
+        self.HTTP状态 = None
+        self.业务码 = None
+
+    def _记录业务码(self, value: Any) -> None:
+        if type(value) is int and -10**12 < value < 10**12:
+            value = str(value)
+        self.业务码 = value if type(value) is str and re.fullmatch(r"-?[0-9]{1,12}", value) else None
+
+    @staticmethod
+    def _提取授权选项(text: str) -> str:
+        from html.parser import HTMLParser
+
+        class 授权选项解析器(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__(convert_charrefs=True)
+                self.values: list[str] = []
+
+            def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                fields = dict(attrs)
+                if tag != "input" or fields.get("name") != "api_choose":
+                    return
+                if "checked" not in fields and "disabled" not in fields:
+                    return
+                value = fields.get("value")
+                if value is None or not re.fullmatch(r"[0-9]{1,12}", value):
+                    raise RuntimeError("qqreader_qr_provider_fields_missing")
+                self.values.append(value)
+
+        parser = 授权选项解析器()
+        parser.feed(text)
+        parser.close()
+        return "_".join(parser.values) or "#"
 
     @classmethod
     def _校验地址(cls, value: str) -> str:
@@ -5555,9 +5595,11 @@ class QQ阅读扫码登录客户端:
         frames: list[tuple[str, bytes]] = []
         for _ in range(10):
             self._校验地址(url)
+            self.HTTP状态 = None
             async with self._session.request(
                 method, url, data=data, headers=headers, allow_redirects=False,
             ) as response:
+                self.HTTP状态 = response.status
                 chunks: list[bytes] = []
                 size = 0
                 async for chunk in response.content.iter_chunked(64 * 1024):
@@ -5632,6 +5674,7 @@ class QQ阅读扫码登录客户端:
                 "ticket": "1", "target": "iframe", "version": "1.0",
                 "unionshow": "00001",
             }
+            self._设置诊断阶段("login_page")
             _, body, _ = await self._请求(
                 "GET", "https://login.book.qq.com/login.html?" + urlencode(login_params),
             )
@@ -5644,7 +5687,9 @@ class QQ阅读扫码登录客户端:
             entry = self._校验地址(html.unescape(button.group(1)))
             if urlsplit(entry).hostname != "ptlogin.yuewen.com" or urlsplit(entry).path != "/login/qqconnectlogin":
                 raise RuntimeError("qqreader_qr_entry_invalid")
+            self._设置诊断阶段("qq_entry")
             self._graph_url, body, _ = await self._请求("GET", entry)
+            self.诊断阶段 = "oauth_page"
             graph = urlsplit(self._graph_url)
             if graph.hostname != "graph.qq.com" or graph.path != "/oauth2.0/show":
                 raise RuntimeError("qqreader_qr_oauth_entry_invalid")
@@ -5657,12 +5702,14 @@ class QQ阅读扫码登录客户端:
             graph_text = body.decode("utf-8", "replace")
             if not re.search(r"xlogin\?appid=716027609&daid=383", graph_text):
                 raise RuntimeError("qqreader_qr_provider_changed")
+            self._oauth_openapi = self._提取授权选项(graph_text)
             params = {
                 "appid": "716027609", "daid": "383", "style": "33",
                 "login_text": "登录", "hide_title_bar": "1", "hide_border": "1",
                 "target": "self", "s_url": "https://graph.qq.com/oauth2.0/login_jump",
                 "pt_3rd_aid": self._oauth["client_id"], "theme": "2",
             }
+            self._设置诊断阶段("ptlogin_page")
             self._xlogin_url, body, _ = await self._请求(
                 "GET", "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?" + urlencode(params),
             )
@@ -5678,6 +5725,7 @@ class QQ阅读扫码登录客户端:
                 "daid": "383", "pt_3rd_aid": self._oauth["client_id"],
                 "u1": "https://graph.qq.com/oauth2.0/login_jump",
             }
+            self._设置诊断阶段("qr_image")
             _, image, _ = await self._请求(
                 "GET", "https://xui.ptlogin2.qq.com/ssl/ptqrshow?" + urlencode(qr_params),
                 headers={"Referer": self._xlogin_url},
@@ -5695,6 +5743,7 @@ class QQ阅读扫码登录客户端:
 
     async def _交换阅读登录态(self, jump_url: str) -> dict[str, str]:
         self.status = "authorizing"
+        self._设置诊断阶段("login_jump")
         _, _, frames = await self._请求("GET", self._校验地址(jump_url))
         skey = self._读取Cookie("p_skey", "https://graph.qq.com/")
         if not skey:
@@ -5706,11 +5755,12 @@ class QQ阅读扫码登录客户端:
             "response_type", "client_id", "redirect_uri", "scope", "state", "switch",
         )}
         data.update({
-            "from_ptlogin": "1", "src": "1", "update_auth": "1", "openapi": "",
+            "from_ptlogin": "1", "src": "1", "update_auth": "1", "openapi": self._oauth_openapi,
             "g_tk": str(token), "auth_time": str(int(time.time() * 1000)),
             "ui": secrets.token_hex(16).upper(),
         })
         # 授权 POST 只提交一次；错误及取消均不自动重放。
+        self._设置诊断阶段("oauth_authorize")
         final_url, body, more = await self._请求(
             "POST", "https://graph.qq.com/oauth2.0/authorize", data=data,
             headers={"Referer": self._graph_url, "Origin": "https://graph.qq.com"},
@@ -5718,12 +5768,15 @@ class QQ阅读扫码登录客户端:
         frames.extend(more)
         if urlsplit(final_url).hostname == "graph.qq.com":
             text = body.decode("utf-8", "replace")
+            code = re.search(r'"ret"\s*:\s*"?(-?[0-9]{1,12})"?(?=\s*[,}])', text)
+            self._记录业务码(code.group(1) if code else None)
             match = re.search(r'"callback"\s*:\s*("(?:[^"\\]|\\.){1,16384}")', text)
             if not match:
                 raise RuntimeError("qqreader_qr_oauth_authorize_failed")
             callback = json.loads(match.group(1))
             if urlsplit(self._校验地址(callback)).hostname != "ptlogin.qidian.com":
                 raise RuntimeError("qqreader_qr_oauth_callback_invalid")
+            self._设置诊断阶段("reader_callback")
             final_url, body, more = await self._请求("GET", callback)
             frames.extend(more)
         guid, key, ticket = "", "", ""
@@ -5740,7 +5793,9 @@ class QQ阅读扫码登录客户端:
             page_data = self._提取页面数据(frame_body.decode("utf-8", "replace"))
             if not page_data:
                 continue
+            self.诊断阶段 = "reader_callback"
             callback_data = page_data.get("callbackData")
+            self._记录业务码(callback_data.get("code") if isinstance(callback_data, dict) else None)
             if not isinstance(callback_data, dict) or str(callback_data.get("code")) != "0":
                 raise RuntimeError("qqreader_qr_reader_callback_failed")
             details = callback_data.get("data")
@@ -5761,6 +5816,7 @@ class QQ阅读扫码登录客户端:
                         ticket = (query.get("ticket") or [ticket])[-1]
                         landing = target_url
         if not key and guid and ticket:
+            self._设置诊断阶段("ticket_exchange")
             _, body, _ = await self._请求(
                 "GET", "https://book.qq.com/api/authen/getKeyByTicket",
                 headers={"ywguid": guid, "ywTicket": ticket, "Referer": landing or "https://book.qq.com/loginSuccess"},
@@ -5769,14 +5825,17 @@ class QQ阅读扫码登录客户端:
                 result = json.loads(body)
             except (ValueError, TypeError):
                 raise RuntimeError("qqreader_qr_ticket_invalid") from None
+            self._记录业务码(result.get("code") if isinstance(result, dict) else None)
             if not isinstance(result, dict) or str(result.get("code")) != "0" or not isinstance(result.get("data"), dict):
                 raise RuntimeError("qqreader_qr_ticket_failed")
             key = str(result["data"].get("ywkey") or "")
+        self.诊断阶段 = "credentials"
         if not re.fullmatch(r"[1-9]\d{5,31}", guid) or not re.fullmatch(
             r"[^\s;,\"']{6,256}", key
         ) or any(ord(char) < 33 or ord(char) == 127 for char in key):
             raise RuntimeError("qqreader_qr_reader_credentials_missing")
         self.status = "confirmed"
+        self.诊断阶段 = "confirmed"
         return {"ywguid": guid, "ywkey": key}
 
     async def 等待登录并获取登录态(self, timeout: float = 300, interval: float = 2) -> dict[str, str]:
@@ -5798,11 +5857,13 @@ class QQ阅读扫码登录客户端:
                     "pt_uistyle": self._pt["style"], "aid": "716027609", "daid": "383",
                     "pt_3rd_aid": self._oauth["client_id"],
                 }
+                self._设置诊断阶段("poll")
                 _, body, _ = await self._请求(
                     "GET", "https://xui.ptlogin2.qq.com/ssl/ptqrlogin?" + urlencode(params),
                     headers={"Referer": self._xlogin_url},
                 )
                 result = self._解析回调(body.decode("utf-8", "replace"))
+                self.轮询状态 = result[0] if re.fullmatch(r"-?[0-9]{1,12}", result[0]) else None
                 if result[0] == "0":
                     return await self._交换阅读登录态(result[2])
                 if result[0] == "65":
@@ -5828,6 +5889,7 @@ class QQ阅读扫码登录客户端:
             await self._session.close()
             self._session = None
         self._oauth.clear()
+        self._oauth_openapi = "#"
         self._pt.clear()
 
 

@@ -3149,8 +3149,54 @@ def _QQ阅读扫码响应(scan_id: str, 状态: dict[str, Any]) -> dict[str, Any
             "message": 文案.get(当前状态, "请重新获取二维码。")}
 
 
+def _记录QQ阅读扫码失败(客户端: Any, exc: BaseException, 阶段: str) -> None:
+    """只记录固定阶段、已知错误标识和数字状态，不输出异常或远端原文。"""
+    允许原因 = {
+        "qqreader_qr_redirect_invalid", "qqreader_qr_closed", "qqreader_qr_response_large",
+        "qqreader_qr_http_error", "qqreader_qr_redirect_limit", "qqreader_qr_callback_invalid",
+        "qqreader_qr_session_started", "qqreader_qr_entry_missing", "qqreader_qr_entry_invalid",
+        "qqreader_qr_oauth_entry_invalid", "qqreader_qr_oauth_app_invalid",
+        "qqreader_qr_oauth_callback_invalid", "qqreader_qr_provider_changed",
+        "qqreader_qr_provider_fields_missing", "qqreader_qr_image_invalid",
+        "qqreader_qr_oauth_cookie_missing", "qqreader_qr_oauth_authorize_failed",
+        "qqreader_qr_reader_callback_failed", "qqreader_qr_reader_callback_invalid",
+        "qqreader_qr_ticket_invalid", "qqreader_qr_ticket_failed",
+        "qqreader_qr_reader_credentials_missing", "qqreader_qr_not_started",
+        "qqreader_qr_authorization_required",
+    }
+    原因 = "unexpected_error"
+    if isinstance(exc, RuntimeError) and len(exc.args) == 1:
+        候选原因 = exc.args[0]
+        if type(候选原因) is str and 候选原因 in 允许原因:
+            原因 = 候选原因
+    if 阶段 not in {"qr_start", "wait_login", "save_account", "refresh_profile"}:
+        阶段 = "unknown"
+    客户端阶段 = getattr(客户端, "诊断阶段", "unknown")
+    if type(客户端阶段) is not str or 客户端阶段 not in {
+        "created", "login_page", "qq_entry", "oauth_page", "ptlogin_page", "qr_image",
+        "poll", "login_jump", "oauth_authorize", "reader_callback", "ticket_exchange",
+        "credentials", "confirmed", "closed",
+    }:
+        客户端阶段 = "unknown"
+    HTTP状态 = getattr(客户端, "HTTP状态", None)
+    if type(HTTP状态) is not int or not 100 <= HTTP状态 <= 599:
+        HTTP状态 = "none"
+    状态码 = []
+    for 字段 in ("轮询状态", "业务码"):
+        值 = getattr(客户端, 字段, None)
+        if type(值) is int and -10**12 < 值 < 10**12:
+            值 = str(值)
+        状态码.append(值 if type(值) is str and re.fullmatch(r"-?[0-9]{1,12}", 值) else "none")
+    日志 = logger.debug if 阶段 == "refresh_profile" else logger.warning
+    日志(
+        "帮助控制台 QQ阅读扫码失败：阶段=%s，客户端阶段=%s，原因=%s，HTTP状态=%s，轮询码=%s，业务码=%s，错误类型=%s",
+        阶段, 客户端阶段, 原因, HTTP状态, *状态码, type(exc).__name__,
+    )
+
+
 async def _运行QQ阅读网页扫码(scan_id: str) -> None:
     状态 = QQ阅读网页扫码会话[scan_id]
+    阶段 = "wait_login"
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
@@ -3160,12 +3206,14 @@ async def _运行QQ阅读网页扫码(scan_id: str) -> None:
             return
         状态["status"] = "saving"
         状态["updated_at"] = time.time()
+        阶段 = "save_account"
         摘要 = await _控制台线程执行(QQ阅读.保存QQ阅读账号, 状态["config"], 登录态)
         状态["account_id"] = 摘要["selected_id"]
+        阶段 = "refresh_profile"
         try:
             await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 摘要["selected_id"]), timeout=20)
         except Exception as exc:
-            logger.debug("QQ阅读扫码账号资料暂未更新：错误类型=%s", type(exc).__name__)
+            _记录QQ阅读扫码失败(状态["client"], exc, 阶段)
         状态["status"] = "success"
     except asyncio.CancelledError:
         状态["status"] = "cancelled"
@@ -3174,7 +3222,7 @@ async def _运行QQ阅读网页扫码(scan_id: str) -> None:
         状态["status"] = "expired"
     except Exception as exc:
         状态["status"] = "error"
-        logger.warning("帮助控制台 QQ阅读扫码失败：错误类型=%s", type(exc).__name__)
+        _记录QQ阅读扫码失败(状态["client"], exc, 阶段)
     finally:
         状态["updated_at"] = time.time()
         try:
@@ -3216,7 +3264,7 @@ async def _处理QQ阅读网页扫码开始(request: web.Request) -> web.Respons
         return _QQ阅读JSON({**_QQ阅读扫码响应(scan_id, 状态),
             "qr_image": "data:image/png;base64," + base64.b64encode(图片).decode("ascii")})
     except Exception as exc:
-        logger.warning("QQ阅读登录二维码获取失败：错误类型=%s", type(exc).__name__)
+        _记录QQ阅读扫码失败(客户端, exc, "qr_start")
         return _控制台错误(502, "QQ阅读二维码获取失败，请稍后重试")
     finally:
         if not 已登记:
