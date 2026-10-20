@@ -162,7 +162,7 @@ def _是百度官方地址(地址: Any) -> bool:
         return False
 
 
-def _检查百度章节权限(数据: Any) -> None:
+def _检查百度章节权限(数据: Any, *, 检查公开状态: bool = True) -> None:
     if not isinstance(数据, dict):
         return
     for 键列表, 原因 in (
@@ -179,7 +179,7 @@ def _检查百度章节权限(数据: Any) -> None:
         raise _百度访问错误("chapter_purchase_required")
     if "free" in 数据 and str(数据["free"]) == "0" and str(数据.get("purchase") or "0") != "1":
         raise _百度访问错误("chapter_purchase_required")
-    if "public_status" in 数据 and str(数据["public_status"]) != "1":
+    if 检查公开状态 and "public_status" in 数据 and str(数据["public_status"]) != "1":
         raise _百度章节不可用错误(
             str(数据.get("id") or 数据.get("cid") or ""), 状态=数据["public_status"],
         )
@@ -1087,7 +1087,9 @@ async def _下载百度章节(
 ) -> str:
     编号 = str(章节.get("id") or "")
     async with 信号量:
-        _检查百度章节权限(章节)
+        # 目录状态可能与可用正文不一致；仍先检查明确的登录和购买要求。
+        # 官方返回有效 CDN 且正文校验成功时，以实际正文为准。
+        _检查百度章节权限(章节, 检查公开状态=False)
         最后异常: Exception = RuntimeError("empty_content")
         for 次数 in range(百度请求重试次数):
             try:
@@ -1098,25 +1100,27 @@ async def _下载百度章节(
                     "data": json.dumps({"gid": 书籍编号, "cid": 编号}, separators=(",", ":")),
                 }
                 元数据 = await _请求JSON(会话, 百度正文地址 if 新版 else 百度旧版目录地址, 参数, 节流器=节流器, 重试=False)
-                _检查百度章节权限(元数据)
+                _检查百度章节权限(元数据, 检查公开状态=False)
                 if 新版:
                     数据 = 元数据.get("data")
                     数据 = 数据 if isinstance(数据, dict) else {}
-                    _检查百度章节权限(数据)
+                    _检查百度章节权限(数据, 检查公开状态=False)
                     if not _百度出版接口成功(元数据):
                         raise RuntimeError("chapter_business_error")
                     章节数据 = 数据.get("items")
                     if not isinstance(章节数据, dict) or str(章节数据.get("cid") or "") != 编号:
                         raise RuntimeError("chapter_identity_mismatch")
-                    _检查百度章节权限(章节数据)
+                    _检查百度章节权限(章节数据, 检查公开状态=False)
                     内容地址 = 章节数据.get("cdn_url")
                 else:
                     if not _百度成功(元数据):
                         raise RuntimeError("chapter_business_error")
                     章节数据 = 元数据.get("data", {}).get("novel", {}).get("content", {}).get("dataset", {})
-                    _检查百度章节权限(章节数据)
+                    _检查百度章节权限(章节数据, 检查公开状态=False)
                     内容地址 = 章节数据.get("content_url")
                 if not _是百度官方地址(内容地址):
+                    _检查百度章节权限(章节数据)
+                    _检查百度章节权限(章节)
                     raise RuntimeError("invalid_content_host")
                 if 节流器 is not None:
                     await 节流器.等待()
@@ -1164,7 +1168,7 @@ async def 下载百度正文(
         nonlocal 已完成
         for 下标, 章节 in 工作项:
             try:
-                _检查百度章节权限(章节)
+                _检查百度章节权限(章节, 检查公开状态=False)
                 if 节流器.停止异常 is not None:
                     失败原因[下标] = "未请求：" + _百度章节失败原因(节流器.停止异常)
                 else:
@@ -1395,13 +1399,13 @@ async def 生成百度下载回复流(
                     原因 = 失败原因.setdefault(下标, "平台未返回该章节正文")
                     分类[原因] = 分类.get(原因, 0) + 1
             logger.warning(
-                "百度小说部分正文未获取：书籍编号=%s, 成功=%s, 总数=%s, 分类=%s",
+                "百度小说部分正文未获取：书籍编号=%s, 成功=%s, 总数=%s, 分类=%s, 缺失章节=%s",
                 书籍编号, 成功数, len(目录), 分类,
+                ",".join(f"{下标 + 1}:{目录[下标]['id']}" for 下标 in sorted(失败原因)[:10]),
             )
             if not 成功数:
                 yield "未获取到可用章节正文：" + "；".join(f"{原因}（{数量}章）" for 原因, 数量 in list(分类.items())[:4])
                 return
-            yield f"正文已获取 {成功数}/{len(目录)} 章，{缺失数} 章未获取，原因已在文件对应章节标注"
         文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表, 失败原因=失败原因)
         发送结果 = await _准备发送文本文件(
             event,
