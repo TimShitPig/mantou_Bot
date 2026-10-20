@@ -217,7 +217,7 @@ async def _获取好友邀请链接(event: Any) -> str:
                 数据 = await 响应.json(content_type=None)
             阶段 = "response"
             if not isinstance(数据, dict) or any(
-                数据.get(字段) not in (None, "", 0, "0") for 字段 in ("code", "err_code")
+                数据.get(字段) not in (None, "", 0, "0") for 字段 in ("code", "err_code", "retcode")
             ):
                 return ""
             资料 = 数据.get("data")
@@ -226,9 +226,14 @@ async def _获取好友邀请链接(event: Any) -> str:
                     or any(字符.isspace() or ord(字符) < 32 or ord(字符) == 127 for 字符 in 链接)):
                 return ""
             地址 = urlsplit(链接)
-            if (地址.scheme != "https" or 地址.hostname != "qun.qq.com"
+            if (地址.scheme != "https" or 地址.hostname not in ("qun.qq.com", "bot.q.qq.com")
                     or 地址.username is not None or 地址.password is not None
                     or 地址.port not in (None, 443)):
+                return ""
+            if 地址.hostname == "bot.q.qq.com" and (
+                not re.fullmatch(r"/s/[A-Za-z0-9_-]{6,128}", 地址.path)
+                or "?" in 链接 or "#" in 链接
+            ):
                 return ""
             返回AppID = parse_qs(地址.query).get("robot_appid")
             if 返回AppID is not None and 返回AppID != [appid]:
