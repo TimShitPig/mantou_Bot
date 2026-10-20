@@ -751,6 +751,10 @@ from .帮助网页脚本 import 控制台脚本
                   <div class="msg-group-body">
                     <section class="msg-group-pane" id="msg-group-basic" role="tabpanel" aria-labelledby="msg-group-tab-basic">
                       <div class="msg-group-summary" id="msg-group-summary"></div><div class="msg-group-status" id="msg-group-basic-status" role="status"></div>
+                      <div class="msg-group-profile" aria-label="群资料">
+                        <strong class="msg-group-profile-title">群资料</strong>
+                        <dl><dt>群简介</dt><dd class="msg-group-profile-memo" id="msg-group-profile-memo">未设置</dd><dt>群分类</dt><dd id="msg-group-profile-class">未设置</dd><dt>群标签</dt><dd class="msg-group-profile-tags" id="msg-group-profile-tags"><span class="msg-group-profile-empty">暂无标签</span></dd></dl>
+                      </div>
                       <label class="msg-group-field">本群备注<input id="msg-group-remark-name" maxlength="128" type="text" placeholder="仅改变本控制台显示的群名" disabled></label>
                       <label class="msg-group-field">群号<input id="msg-group-remark-qq" maxlength="12" inputmode="numeric" type="text" placeholder="用于显示群头像，可留空" disabled></label>
                       <button class="msg-btn primary" id="msg-group-basic-save" type="button" disabled>保存本群设置</button>

@@ -3,6 +3,15 @@
 控制台样式 = """
     :root { color-scheme: light; --ink:#24243a; --muted:#7d8096; --soft:#a8abc0; --line:#e8e9f2; --bg:#f7f8fd; --panel:#fff; --primary:#6b63f5; --primary-dark:#574eea; --primary-soft:#f0efff; --mint:#e9fbf3; --mint-ink:#319e6b; --peach:#fff3ed; --peach-ink:#d77755; --yellow:#fff9e5; --yellow-ink:#bd8a23; --pink:#fff0f7; --pink-ink:#c66791; --shadow:0 10px 30px rgba(60,57,112,.06); }
     * { box-sizing:border-box; }
+    .msg-group-profile { margin:0 0 18px; padding:14px; border:1px solid var(--line); border-radius:10px; }
+    .msg-group-profile-title { display:block; margin-bottom:12px; font-size:12px; }
+    .msg-group-profile dl { display:grid; gap:6px; min-width:0; margin:0; }
+    .msg-group-profile dt { color:var(--muted); font-size:11px; }
+    .msg-group-profile dt:not(:first-child) { margin-top:7px; }
+    .msg-group-profile dd { min-width:0; margin:0; font-size:12px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .msg-group-profile-tags { display:flex; flex-wrap:wrap; align-items:flex-start; gap:6px; }
+    .msg-group-profile-tag { display:inline-block; min-width:0; max-width:100%; padding:2px 9px; border-radius:999px; background:var(--primary-soft); color:var(--primary); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .msg-group-profile-empty { color:var(--muted); }
     html { scroll-behavior:smooth; }
     body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 Inter,"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif; overflow-x:hidden; }
     button,input { font:inherit; }

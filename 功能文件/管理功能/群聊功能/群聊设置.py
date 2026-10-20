@@ -273,9 +273,17 @@ async def 获取群设置(chat_id, appid="", 上下文=None):
         配置 = 消息记录.当前插件配置
         可保存 = 群管功能.群广告开关可持久化(配置)
         群信息 = 消息记录.获取缓存的群信息(chat_id)
+        if 群信息.get("appid") not in (None, "", 通道[0]):
+            return _错误("appid_mismatch", "群聊与机器人不匹配", 400)
+        群简介 = 群信息.get("group_finger_memo")
+        群分类 = 群信息.get("group_class_text")
+        群标签 = 群信息.get("group_tags")
         return {"ok": True, "can_manage": True, "available": True, "editable": True,
                 "remark": 消息记录.获取群备注(chat_id), "group_qq": 消息记录.获取群QQ号(chat_id),
                 "group_name": 消息记录._有效用户昵称(群信息.get("group_name") or 群信息.get("name")),
+                "group_finger_memo": 群简介 if isinstance(群简介, str) else "",
+                "group_class_text": 群分类 if isinstance(群分类, str) else "",
+                "group_tags": [标签 for 标签 in 群标签 if isinstance(标签, str)] if isinstance(群标签, list) else [],
                 "member_num": 群信息.get("member_num", 0), "is_admin": 消息记录.群机器人是否管理员(chat_id),
                 "ad_enabled": 群管功能.读取群广告开关(配置, chat_id), "ad_editable": 可保存,
                 "remark_editable": 可保存, "local_settings_editable": 可保存, "message": ""}

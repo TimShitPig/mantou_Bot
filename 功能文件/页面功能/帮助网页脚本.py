@@ -2329,6 +2329,7 @@
           closeGroupSettings(true);
         }
         updateMsgPanSelector();
+        if (data.group_info && groupSettingsCurrent(groupSettingsState.session)) renderGroupSettingsProfile(groupSettingsState.session, data.group_info);
       };
       const openMsgLightbox = (src) => {
         if (!src) return;
@@ -4292,13 +4293,18 @@
         if (!chatId) return;
         const memberNum = Number(payload?.member_num);
         const groupName = String(payload?.group_name || '').trim();
+        const appid = String(payload?.appid || '').trim();
         const updatedAt = Number(payload?.updated_at || 0);
         const update = (chat) => {
-          if (String(chat.chat_id || '') !== chatId || String(chat.chat_type || 'group') !== 'group') return chat;
+          if (String(chat.chat_id || '') !== chatId || String(chat.chat_type || 'group') !== 'group' || (appid && chat.appid && String(chat.appid) !== appid)) return chat;
           if (updatedAt && Number(chat.group_info_updated_at || 0) > updatedAt) return chat;
           const next = {...chat};
           if (Number.isFinite(memberNum) && memberNum >= 0) next.member_num = next.group_member_num = Math.floor(memberNum);
           if (groupName) { next.group_name = groupName; next.nickname = String(next.remark || groupName); }
+          groupProfileFields.forEach((field) => {
+            const value = payload[field];
+            if (field === 'group_tags' ? Array.isArray(value) : typeof value === 'string') next[field] = field === 'group_tags' ? value.filter((tag) => typeof tag === 'string') : value;
+          });
           if (updatedAt) next.group_info_updated_at = updatedAt;
           return next;
         };
@@ -4309,6 +4315,8 @@
         if (msgState.chatId === chatId && msgState.chatType === 'group') {
           updateMsgHead({group_info:current ? {group_name:current.group_name, member_num:current.member_num ?? current.group_member_num, updated_at:current.group_info_updated_at, membership_status:current.membership_status} : payload});
         }
+        const session = groupSettingsState.session;
+        if (groupSettingsCurrent(session) && session.target.chat_id === chatId) renderGroupSettingsProfile(session, payload);
         if (groupName) renderMsgChats({chats:msgState.chats});
       };
 
@@ -4556,7 +4564,49 @@
         const appid = String(chat?.appid || msgState.historyData?.appid || msgState.messages.find((item) => String(item.chat_id || '') === chatId)?.appid || '').trim();
         return Object.freeze({chat_id:chatId, chat_type:'group', appid});
       };
-      const groupSettingsCurrent = (session) => Boolean(session && groupSettingsState.session === session && session.generation === groupSettingsState.generation && msgState.chatType === 'group' && msgState.chatId === session.target.chat_id && !$('msg-group-settings').hidden);
+      const groupSettingsCurrent = (session) => Boolean(session && groupSettingsState.session === session && session.generation === groupSettingsState.generation && msgState.chatType === 'group' && msgState.chatId === session.target.chat_id && (!session.target.appid || captureGroupTarget()?.appid === session.target.appid) && !$('msg-group-settings').hidden);
+      const groupProfileFields = ['group_finger_memo','group_class_text','group_tags'];
+      const clearGroupSettingsProfile = () => {
+        $('msg-group-profile-memo').textContent = '未设置';
+        $('msg-group-profile-class').textContent = '未设置';
+        const placeholder = document.createElement('span');
+        placeholder.className = 'msg-group-profile-empty'; placeholder.textContent = '暂无标签';
+        $('msg-group-profile-tags').replaceChildren(placeholder);
+      };
+      const renderGroupSettingsProfile = (session, info = {}, onlyMissing = false) => {
+        if (!groupSettingsCurrent(session) || !info || typeof info !== 'object') return;
+        const chatId = String(info.chat_id || info.group_openid || '');
+        if ((chatId && chatId !== session.target.chat_id) || (session.target.appid && info.appid && String(info.appid) !== session.target.appid)) return;
+        const updatedAt = Number(info.updated_at || info.group_info_updated_at || 0);
+        if (updatedAt && session.profileUpdatedAt > updatedAt) return;
+        const profile = session.profile || (session.profile = {});
+        let changed = false;
+        groupProfileFields.forEach((field) => {
+          if (onlyMissing && Object.prototype.hasOwnProperty.call(profile, field)) return;
+          const value = info[field];
+          if (field === 'group_tags' ? !Array.isArray(value) : typeof value !== 'string') return;
+          const next = field === 'group_tags' ? value.filter((tag) => typeof tag === 'string' && tag.trim()) : value;
+          if (!Object.prototype.hasOwnProperty.call(profile, field) || JSON.stringify(profile[field]) !== JSON.stringify(next)) changed = true;
+          profile[field] = next;
+        });
+        if (changed) session.profileRevision = Number(session.profileRevision || 0) + 1;
+        if (updatedAt) session.profileUpdatedAt = Math.max(session.profileUpdatedAt || 0, updatedAt);
+        const memo = String(profile.group_finger_memo || '');
+        const category = String(profile.group_class_text || '');
+        $('msg-group-profile-memo').textContent = memo.trim() ? memo : '未设置';
+        $('msg-group-profile-class').textContent = category.trim() ? category : '未设置';
+        const tags = Array.isArray(profile.group_tags) ? profile.group_tags : [];
+        const nodes = tags.map((tag) => {
+          const node = document.createElement('span');
+          node.className = 'msg-group-profile-tag'; node.textContent = tag;
+          return node;
+        });
+        if (!nodes.length) {
+          const node = document.createElement('span');
+          node.className = 'msg-group-profile-empty'; node.textContent = '暂无标签'; nodes.push(node);
+        }
+        $('msg-group-profile-tags').replaceChildren(...nodes);
+      };
       const groupSettingsMessage = (kind, message = '', error = false) => {
         const node = $(`msg-group-${kind}-status`);
         node.textContent = String(message || ''); node.classList.toggle('error', Boolean(error));
@@ -4608,6 +4658,7 @@
         groupSettingsState.generation += 1;
         $('msg-group-settings').hidden = true;
         $('msg-group-settings-open').setAttribute('aria-expanded','false');
+        clearGroupSettingsProfile();
         $('msg-group-member-detail').hidden = true;
         ['members','blacklist'].forEach((kind) => { $(`msg-group-${kind}-list`).innerHTML = ''; });
       };
@@ -4668,11 +4719,13 @@
         if (!target || msgState.chatRemoved || groupSettingsState.mutating) return;
         closeGroupSettings();
         const current = msgState.chats.find((chat) => String(chat.chat_id || '') === target.chat_id && chat.chat_type === 'group');
-        const session = {target, generation:++groupSettingsState.generation, name:current?.remark || current?.group_name || current?.nickname || target.chat_id, settings:null, tab:'basic', detailRequest:0, members:groupSettingsPage(), blacklist:groupSettingsPage()};
+        const session = {target, generation:++groupSettingsState.generation, name:current?.remark || current?.group_name || current?.nickname || target.chat_id, settings:null, profile:{}, profileRevision:0, profileUpdatedAt:0, tab:'basic', detailRequest:0, members:groupSettingsPage(), blacklist:groupSettingsPage()};
         groupSettingsState.session = session;
         $('msg-group-settings').hidden = false;
         $('msg-group-settings-open').setAttribute('aria-expanded','true');
         $('msg-group-settings-name').textContent = session.name;
+        renderGroupSettingsProfile(session, current || {});
+        if (msgState.historyData?.group_info) renderGroupSettingsProfile(session, msgState.historyData.group_info);
         $('msg-group-summary').innerHTML = `<span class="msg-chat-avatar">${avatarHtml(avatarUrl(target.chat_id, 'group', target.appid), session.name)}</span><div><strong>${esc(session.name)}</strong><small>仅设置当前群聊</small></div>`;
         $('msg-group-remark-name').value = '';
         $('msg-group-remark-qq').value = '';
@@ -4683,9 +4736,11 @@
         showGroupSettingsTab('basic'); groupSettingsControls();
         $('msg-group-settings').querySelector('.msg-group-drawer')?.focus({preventScroll:true});
         try {
+          const profileRevision = session.profileRevision;
           const data = await groupSettingsRequest(session, 'message/group-settings');
           if (!groupSettingsCurrent(session)) return;
           session.settings = data;
+          renderGroupSettingsProfile(session, data.group_info || data, session.profileRevision !== profileRevision);
           session.name = data.remark || data.group_name || session.name;
           $('msg-group-settings-name').textContent = session.name;
           $('msg-group-remark-name').value = String(data.remark || '');
