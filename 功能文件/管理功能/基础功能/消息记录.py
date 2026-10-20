@@ -59,6 +59,9 @@ except Exception as 导入异常:
 群信息人工最短间隔秒 = 60
 群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
+好友关系状态命名空间 = "qq_friend_membership"
+好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
+_好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
 # 官方 bot_state 限制为 30 QPM；半小时复核一次，避免已退出群长期显示为正常。
 群机器人状态缓存有效期秒 = 30 * 60
 未读状态命名空间 = "msg_console_unread"
@@ -91,7 +94,7 @@ _消息记录执行器: ThreadPoolExecutor | None = globals().get("_消息记录
 _消息记录执行器锁 = threading.Lock()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
-_消息持久化项目类型 = ("message", "user_profile", "member_link", "unread")
+_消息持久化项目类型 = ("message", "user_profile", "member_link", "unread", "friend_state")
 _消息持久化批量大小 = 200
 _消息持久化聚合秒数 = 0.05
 _消息持久化最大重试次数 = 3
@@ -1222,6 +1225,7 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
     用户资料列表: list[dict[str, Any]] = []
     群成员映射列表: list[dict[str, Any]] = []
     未读表: dict[str, int] = {}
+    好友状态列表: list[dict[str, Any]] = []
     for 类型, 数据 in 项目列表:
         if 类型 == "message" and isinstance(数据, dict):
             撤回键 = (str(数据.get("_session") or ""), _规范消息ID(数据.get("message_id")))
@@ -1232,6 +1236,8 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
             用户资料列表.append(数据)
         elif 类型 == "member_link" and isinstance(数据, dict):
             群成员映射列表.append(数据)
+        elif 类型 == "friend_state" and isinstance(数据, dict):
+            好友状态列表.append(数据)
         elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
             会话标识, 未读数 = 数据
             未读表[str(会话标识)] = max(0, int(未读数 or 0))
@@ -1277,6 +1283,14 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
             except Exception as 异常:
                 logger.debug("QQ群成员映射批量持久化失败：错误类型=%s", type(异常).__name__)
                 成功 = False
+
+    if 好友状态列表:
+        try:
+            if _写入好友关系状态(好友状态列表, 配置) is False:
+                成功 = False
+        except Exception as 异常:
+            logger.debug("QQ好友关系批量持久化失败：错误类型=%s", type(异常).__name__)
+            成功 = False
 
     if not 未读表:
         return 成功
@@ -1406,6 +1420,10 @@ async def _消息持久化工作() -> None:
             for 项目类型 in _消息持久化项目类型:
                 子批次 = [项目 for 项目 in 批次 if 项目[0] == 项目类型]
                 if not 子批次:
+                    continue
+                if 项目类型 == "friend_state" and any(项[0] == "message" for 项 in 待重试):
+                    待重试.extend(子批次)
+                    失败详情.append((项目类型, len(子批次), "等待系统消息持久化"))
                     continue
                 写入成功, 错误类型 = await _写入消息持久化子批次(项目类型, 子批次)
                 if 写入成功:
@@ -1596,7 +1614,7 @@ async def 停止消息记录(超时: float = 15.0) -> bool:
     _消息持久化接收入队 = False
     剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
     持久化冲刷 = await 等待消息记录写入(剩余)
-    已冲刷 = 接收冲刷 and 昵称冲刷 and 持久化冲刷
+    已冲刷 = 接收冲刷 and 昵称冲刷 and 持久化冲刷 and not _好友事件待恢复
     任务 = _消息持久化任务
     if 任务 is not None and not 任务.done():
         任务.cancel()
@@ -1713,7 +1731,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "last_nickname": str(会话.get("last_nickname") or ""),
         "last_message_id": str(会话.get("last_message_id") or ""),
         "last_ts": int(会话.get("last_ts") or 0),
-        **_聊天群成员状态(会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group")),
+        **_聊天群成员状态(会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group"), str(记录.get("appid") or 会话.get("appid") or "")),
         "member_profiles": 成员资料,
         "references": _构造引用映射(
             会话标识, str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
@@ -3652,7 +3670,7 @@ def 记录收到消息(
             not is_self
             and not 是机器人
             and 类型 in {"group", "user"}
-            and 源 in {"qq_official", "group_member_join", "group_member_leave"}
+            and 源 in {"qq_official", "group_member_join", "group_member_leave", "friend_add", "friend_del"}
             and (昵称 or 统一用户标识)
             and _消息数据库已配置()
         ):
@@ -3709,7 +3727,7 @@ def 记录收到消息(
                     except Exception as 存储异常:
                         logger.debug("消息记录补全入库失败：错误类型=%s", type(存储异常).__name__)
                 资料已补全 = True
-        if _消息数据库已配置() and 新增记录:
+        if _消息数据库已配置() and 新增记录 and 源 not in {"friend_add", "friend_del"}:
             try:
                 _排队消息持久化("message", dict(记录))
             except Exception as 存储异常:
@@ -3737,6 +3755,149 @@ def 记录收到消息(
     except Exception as exc:
         logger.warning("消息记录缓存写入失败：错误类型=%s", type(exc).__name__)
         return None
+
+
+
+def _好友事件时间(值: Any) -> int:
+    if type(值) is int:
+        return 值 if 0 < 值 <= 253402300799 else 0
+    if isinstance(值, str) and re.fullmatch(r"[0-9]{1,12}", 值):
+        return _好友事件时间(int(值))
+    return 0
+
+
+def _好友作用域(用户标识: Any, appid: Any) -> tuple[str, str] | None:
+    if not isinstance(用户标识, str) or not isinstance(appid, str):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", 用户标识) or not re.fullmatch(r"[0-9]{4,32}", appid):
+        return None
+    return appid, 用户标识
+
+
+def 获取好友关系状态(用户标识: str, appid: str = "") -> dict[str, Any]:
+    应用 = appid or str((消息缓存.get(用户标识) or {}).get("appid") or "")
+    状态 = 好友关系缓存.get(_好友作用域(用户标识, 应用)) or {}
+    值 = 状态.get("status") if 状态.get("status") in {"active", "removed"} else "unknown"
+    return {"friend_status": 值, "friend_checked_at": _好友事件时间(状态.get("event_ts")),
+            "is_friend": None if 值 == "unknown" else 值 == "active"}
+
+
+def _恢复好友关系状态(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
+    for 状态键, 原值 in (快照.get("friend_states") or {}).items():
+        try:
+            值 = json.loads(原值) if isinstance(原值, str) else 原值
+            if not isinstance(值, dict):
+                continue
+            键 = _好友作用域(值.get("openid"), 值.get("appid"))
+            if 键 is None or 状态键 != ":".join(键) or 值.get("status") not in {"active", "removed"}:
+                continue
+            值["event_ts"] = _好友事件时间(值.get("event_ts"))
+            if not 值["event_ts"]:
+                continue
+            现有 = 好友关系缓存.get(键) or {}
+            if 现有 != (基线.get("friend_states") or {}).get(键, {}) or _好友事件时间(现有.get("event_ts")) > 值["event_ts"]:
+                continue
+            已见 = 值.get("seen") or []
+            值 = {"appid": 键[0], "openid": 键[1], "status": 值["status"], "event_ts": 值["event_ts"],
+                  "seen": [项 for 项 in 已见 if isinstance(项, str) and re.fullmatch(r"[0-9a-f]{64}", 项)][-32:]}
+            好友关系缓存[键] = 值
+        except (TypeError, ValueError):
+            continue
+
+
+def _读取好友关系启动快照(配置: Any) -> dict[str, Any] | None:
+    from 功能文件.管理功能.基础功能 import 运行状态数据库
+    快照 = _消息存储.读取启动快照(配置, 群机器人状态命名空间, 未读状态命名空间)
+    if 快照 is not None:
+        快照["friend_states"] = 运行状态数据库.读取运行状态命名空间(配置, 好友关系状态命名空间)
+    return 快照
+
+
+def _写入好友关系状态(项目: list[dict[str, Any]], 配置: Any) -> bool:
+    from 功能文件.管理功能.基础功能 import 运行状态数据库
+    if not 运行状态数据库.已配置运行状态数据库(配置):
+        return True
+    状态表 = {}
+    for 值 in 项目:
+        键 = _好友作用域(值.get("openid"), 值.get("appid"))
+        if 键 is None:
+            continue
+        状态键 = ":".join(键)
+        if _好友事件时间(值.get("event_ts")) >= _好友事件时间((状态表.get(状态键) or {}).get("event_ts")):
+            状态表[状态键] = dict(值)
+    if 状态表:
+        已序列化 = {键: json.dumps(值, ensure_ascii=False, separators=(",", ":")) for 键, 值 in 状态表.items()}
+        return 运行状态数据库.批量写入运行状态值(配置, 好友关系状态命名空间, 已序列化) is not False
+    return True
+
+
+def 排队好友关系事件(客户端: Any, 数据: dict[str, Any], 事件名: str) -> bool:
+    if 事件名 not in {"friend_add", "friend_del"} or not isinstance(数据, dict):
+        return False
+    appid = _平台实例appid(客户端)
+    if _好友作用域(数据.get("openid"), appid) is None or not _好友事件时间(数据.get("timestamp")):
+        return False
+    return _排队收到消息(客户端, copy.deepcopy(数据), 事件名)
+
+
+def 记录好友关系事件(数据: dict[str, Any], 事件名: str, appid: str) -> dict[str, Any] | None:
+    """好友关系按事件时间更新；重复与迟到事件不新增历史或未读。"""
+    if not isinstance(数据, dict) or 事件名 not in {"friend_add", "friend_del"}:
+        return None
+    用户 = 数据.get("openid")
+    键 = _好友作用域(用户, appid)
+    时间戳 = _好友事件时间(数据.get("timestamp"))
+    if 键 is None or not 时间戳:
+        return None
+    指纹 = hashlib.sha256(json.dumps([appid, 用户, 事件名, 时间戳,
+                       数据.get("_mantou_event_id") or ""], ensure_ascii=False).encode()).hexdigest()
+    旧值 = 好友关系缓存.get(键) or {}
+    if 时间戳 < _好友事件时间(旧值.get("event_ts")) or 指纹 in (旧值.get("seen") or []):
+        return None
+    状态 = "active" if 事件名 == "friend_add" else "removed"
+    新值 = {"appid": appid, "openid": 用户, "status": 状态, "event_ts": 时间戳,
+            "seen": [*(旧值.get("seen") or []), 指纹][-32:]}
+    try:
+        好友关系缓存[键] = 新值
+        已有会话 = 消息缓存.get(用户) or {}
+        同作用域 = not 已有会话 or (str(已有会话.get("chat_type") or "user") == "user"
+                                        and str(已有会话.get("appid") or "") in {"", appid})
+        if 旧值.get("status") == 状态:
+            if _消息数据库已配置():
+                if _排队消息持久化("friend_state", 新值) is False:
+                    raise RuntimeError("friend_state_queue_pending")
+            return None
+        作者 = 数据.get("author") if isinstance(数据.get("author"), dict) else {}
+        真实作者 = {字段: 值 for 字段, 值 in 作者.items()
+                  if 字段 in {"username", "nickname", "union_openid", "avatar", "avatar_url"} and isinstance(值, str)}
+        原始 = {字段: 数据[字段] for 字段 in ("openid", "timestamp", "scene", "scene_param", "short_code", "_mantou_event_id") if 字段 in 数据}
+        原始.update({"event": 事件名.upper(), "author": 真实作者})
+        消息 = {"id": "friend-event:" + 指纹[:40], "timestamp": 时间戳,
+                "content": "添加了机器人好友。" if 状态 == "active" else "删除了机器人好友。",
+                "author": {**真实作者, "user_openid": 用户}, "raw_data": 原始}
+        if 同作用域:
+            记录 = 记录收到消息(消息, "user", appid=appid, 源=事件名)
+        else:
+            # 旧会话缓存键尚未按 AppID 拆分；不把另一机器人事件合入该缓存。
+            记录 = {"_session": 用户, "chat_type": "user", "appid": appid, "user_id": 用户,
+                    "message_id": 消息["id"], "nickname": _提取成员昵称(消息) or _私聊兜底昵称(用户),
+                    "content": 消息["content"], "timestamp": _格式化时间戳(时间戳), "ts": 时间戳,
+                    "source": 事件名, "is_self": False, "raw_message": _序列化原始消息(原始)}
+        if 记录 is None:
+            raise RuntimeError("friend_message_pending")
+        if _消息数据库已配置():
+            # 系统消息入队确认先于关系状态；队列满时以同一消息 ID 恢复，不增未读。
+            if _排队消息持久化("message", dict(记录)) is False:
+                raise RuntimeError("friend_message_queue_pending")
+            if _排队消息持久化("friend_state", 新值) is False:
+                raise RuntimeError("friend_state_queue_pending")
+        return 记录
+    except Exception:
+        if 旧值:
+            好友关系缓存[键] = 旧值
+        else:
+            好友关系缓存.pop(键, None)
+        raise
 
 
 async def 记录群成员系统消息(
@@ -4032,9 +4193,23 @@ async def _消息接收工作() -> None:
     队列 = _准备消息接收队列()
     try:
         while True:
-            客户端, 消息, 类型 = await 队列.get()
+            来自队列 = True
+            if _好友事件待恢复 and (not _消息数据库已配置() or (_消息数据库恢复键 and _消息数据库恢复完成键 == _消息数据库恢复键)):
+                客户端, 消息, 类型 = _好友事件待恢复.pop(0)
+                来自队列 = False
+            else:
+                客户端, 消息, 类型 = await 队列.get()
             try:
-                appid = str(_读取字段(_读取字段(客户端, "platform"), "appid") or "")
+                if 类型 == "friend_resume":
+                    continue
+                appid = _平台实例appid(客户端)
+                if 类型 in {"friend_add", "friend_del"}:
+                    if _消息数据库已配置() and (not _消息数据库恢复键 or _消息数据库恢复完成键 != _消息数据库恢复键):
+                        _好友事件待恢复.append((客户端, 消息, 类型))
+                        _启动消息数据库恢复任务()
+                        continue
+                    记录好友关系事件(消息, 类型, appid)
+                    continue
                 记录 = 记录收到消息(消息, 类型, appid)
                 if 类型 == "group" and 记录:
                     会话标识 = str(记录.get("_session") or "").strip()
@@ -4048,9 +4223,13 @@ async def _消息接收工作() -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as 异常:
+                if 类型 in {"friend_add", "friend_del"}:
+                    _好友事件待恢复.append((客户端, 消息, 类型))
+                    await asyncio.sleep(0.1)
                 logger.warning("消息记录接收队列处理失败：错误类型=%s", type(异常).__name__)
             finally:
-                队列.task_done()
+                if 来自队列:
+                    队列.task_done()
     except asyncio.CancelledError:
         raise
     finally:
@@ -5286,7 +5465,7 @@ def _群信息认证失败(异常: Exception) -> bool:
     return any(str(getattr(异常, 字段, "")) == "11243" for 字段 in ("code", "err_code", "error_code"))
 
 
-async def _请求群资料GET(http: Any, route: Any) -> Any:
+async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None) -> Any:
     """只为幂等群资料 GET 续期一次，复用 SDK Token、会话及认证头。"""
     if str(getattr(route, "method", "")).upper() != "GET":
         raise ValueError("群资料认证重试仅接受 GET")
@@ -5308,7 +5487,7 @@ async def _请求群资料GET(http: Any, route: Any) -> Any:
         旧令牌 = token.access_token
         旧代次 = 状态["generation"]
     try:
-        return await http.request(route)
+        return await 请求实现() if 请求实现 is not None else await http.request(route)
     except Exception as 异常:
         if not _群信息认证失败(异常):
             raise
@@ -5326,7 +5505,7 @@ async def _请求群资料GET(http: Any, route: Any) -> Any:
                 状态["generation"] += 1
             重试代次 = 状态["generation"]
         try:
-            return await http.request(route)
+            return await 请求实现() if 请求实现 is not None else await http.request(route)
         except Exception as 重试异常:
             if _群信息认证失败(重试异常) and 状态["generation"] == 重试代次:
                 状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
@@ -5399,25 +5578,155 @@ def 失效群禁言状态(会话标识: str, appid: str = "") -> None:
                 群禁言状态缓存.pop(缓存键, None)
 
 
-def _复制群禁言状态(状态: dict[str, Any] | None, *, cached: bool = False) -> dict[str, Any]:
-    结果 = copy.deepcopy(状态 if isinstance(状态, dict) else {})
-    结果.setdefault("available", False)
-    结果.setdefault("members", [])
-    结果.setdefault("global_rule", {})
+class _群禁言查询配额耗尽(RuntimeError):
+    pass
+
+
+class _群禁言请求错误(RuntimeError):
+    def __init__(self, status: int, code: Any = None, err_code: Any = None):
+        super().__init__("禁言状态请求失败")
+        self.status = status
+        self.code = code if isinstance(code, (int, str)) else None
+        self.err_code = err_code if isinstance(err_code, (int, str)) else None
+
+
+_群禁言查询尝试: dict[str, list[float]] = globals().get("_群禁言查询尝试") or {}
+
+
+def _领取群禁言查询额度(appid: str) -> None:
+    """同 AppID 的全部群共用 30 QPM；检查与记账之间不让出事件循环。"""
+    现在 = time.monotonic()
+    已用 = [时间 for 时间 in _群禁言查询尝试.get(appid, []) if 时间 > 现在 - 60]
+    _群禁言查询尝试[appid] = 已用
+    if len(已用) >= 30:
+        raise _群禁言查询配额耗尽("禁言状态查询暂缓")
+    已用.append(现在)
+
+
+async def _读取群禁言官方状态(http: Any, 会话标识: str, appid: str) -> dict[str, Any]:
+    """只读固定官方端点，每次底层发送（包括 aiohttp 内部重试）均独立计额。"""
+    令牌 = getattr(http, "_token", None)
+    会话 = getattr(http, "_session", None)
+    请求头 = dict(getattr(http, "_headers", None) or {})
+    if (not appid or str(getattr(令牌, "app_id", "") or "").strip() != appid
+        or str(请求头.get("X-Union-Appid") or "").strip() != appid
+        or not str(请求头.get("Authorization") or "").startswith("QQBot ")
+        or not str(请求头.get("Authorization") or "")[6:].strip()
+        or bool(getattr(http, "is_sandbox", False))
+        or 会话 is None or getattr(会话, "closed", True)):
+        raise ValueError("群资料认证 AppID 缺失或不匹配")
+
+    async def 配额中间件(请求: Any, 发送: Any) -> Any:
+        _领取群禁言查询额度(appid)
+        return await 发送(请求)
+
+    地址 = "https://api.sgroup.qq.com/v2/groups/" + _网址编码(会话标识, safe="") + "/restrict_chat_setting"
+    async with 会话.request(
+        "GET", 地址, headers=请求头, allow_redirects=False,
+        timeout=ClientTimeout(total=8, connect=3, sock_read=5),
+        middlewares=(配额中间件,),
+    ) as 响应:
+        状态码 = 响应.status
+        内容 = bytearray()
+        async for 片段 in 响应.content.iter_chunked(65536):
+            内容.extend(片段)
+            if len(内容) > 2 * 1024 * 1024:
+                raise _群禁言请求错误(状态码)
+        try:
+            资料 = json.loads(bytes(内容))
+        except (ValueError, UnicodeError):
+            raise _群禁言请求错误(状态码) from None
+        if not isinstance(资料, dict):
+            raise _群禁言请求错误(状态码)
+        业务码, 扩展码 = 资料.get("code"), 资料.get("err_code")
+        if (not 200 <= 状态码 < 300
+            or 业务码 not in (None, 0, "", "0")
+            or 扩展码 not in (None, 0, "", "0")):
+            raise _群禁言请求错误(状态码, 业务码, 扩展码)
+        return 资料
+
+
+def _群禁言RFC3339(值: Any) -> tuple[str, float] | None:
+    if not isinstance(值, str):
+        return None
+    文本 = 值.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})", 文本):
+        return None
+    try:
+        日期 = _日期类.fromisoformat(文本.replace("t", "T").replace("z", "+00:00").replace("Z", "+00:00"))
+        return 文本, 日期.timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _规范群禁言全员规则(原始: Any) -> dict[str, Any]:
+    原始 = 原始 if isinstance(原始, dict) else {}
+    模式 = 原始.get("mode")
+    结果: dict[str, Any] = {
+        "mode": 模式 if 模式 in ("none", "always", "schedule") else "unknown",
+        "schedule_rules": [], "recurring_rules": [],
+    }
+    定时列表 = 原始.get("schedule_rules")
+    for 规则 in 定时列表 if isinstance(定时列表, list) else []:
+        if not isinstance(规则, dict) or not isinstance(规则.get("enabled"), bool):
+            continue
+        开始, 结束 = _群禁言RFC3339(规则.get("start_at")), _群禁言RFC3339(规则.get("end_at"))
+        if not 开始 or not 结束 or 结束[1] <= 开始[1]:
+            continue
+        结果["schedule_rules"].append({
+            "task_id": str(规则.get("task_id") or "")[:128],
+            "start_at": 开始[0], "end_at": 结束[0], "enabled": 规则["enabled"],
+        })
+    周期列表 = 原始.get("recurring_rules")
+    for 规则 in 周期列表 if isinstance(周期列表, list) else []:
+        if not isinstance(规则, dict) or not isinstance(规则.get("enabled"), bool):
+            continue
+        开始, 结束 = 规则.get("start_time"), 规则.get("end_time")
+        if not all(isinstance(值, str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", 值) for 值 in (开始, 结束)):
+            continue
+        星期 = 规则.get("weekdays")
+        if not isinstance(星期, list):
+            continue
+        星期 = sorted({值 for 值 in 星期 if type(值) is int and 1 <= 值 <= 7})
+        if not 星期:
+            continue
+        结果["recurring_rules"].append({
+            "task_id": str(规则.get("task_id") or "")[:128], "weekdays": 星期,
+            "start_time": 开始, "end_time": 结束, "enabled": 规则["enabled"],
+        })
+    return 结果
+
+
+def _规范群禁言成员(原始: Any) -> list[dict[str, Any]]:
+    结果: list[dict[str, Any]] = []
     现在 = time.time()
-    成员列表 = []
-    for 成员 in 结果["members"]:
+    for 成员 in 原始 if isinstance(原始, list) else []:
         if not isinstance(成员, dict):
             continue
-        到期时间 = _转数字时间戳(成员.get("mute_expire_at")) or 0
-        try:
-            到期时间 = float(成员.get("mute_expire_ts") or 到期时间)
-        except (TypeError, ValueError):
+        成员标识 = 成员.get("member_openid")
+        if not isinstance(成员标识, str) or not 成员标识.strip():
             continue
-        if 到期时间 and 到期时间 <= 现在:
+        到期 = _群禁言RFC3339(成员.get("mute_expire_at"))
+        if not 到期 or 到期[1] <= 现在:
             continue
-        成员列表.append(成员)
-    结果["members"] = 成员列表
+        成员标识 = 成员标识.strip()[:200]
+        结果.append({
+            "member_openid": 成员标识,
+            "union_openid": str(成员.get("union_openid") or "")[:200],
+            "username": _有效用户昵称(成员.get("username"), 成员标识),
+            "mute_expire_at": 到期[0], "mute_expire_ts": 到期[1],
+        })
+    return 结果
+
+
+def _复制群禁言状态(状态: dict[str, Any] | None, *, cached: bool = False) -> dict[str, Any]:
+    状态 = 状态 if isinstance(状态, dict) else {}
+    字段 = ("available", "has_data", "checked_at", "last_success_at", "next_refresh_at")
+    结果 = {键: copy.deepcopy(状态[键]) for 键 in 字段 if 键 in 状态}
+    结果.setdefault("available", False)
+    结果.setdefault("has_data", 状态.get("available") is True or bool(状态.get("members")) or bool(状态.get("global_rule")))
+    结果["members"] = _规范群禁言成员(状态.get("members"))
+    结果["global_rule"] = _规范群禁言全员规则(状态.get("global_rule"))
     结果["cached"] = bool(cached)
     return 结果
 
@@ -5453,7 +5762,7 @@ async def 查询群禁言状态(
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return {"available": False, "members": [], "global_rule": {}, "checked_at": 0}
-    appid = _获取群信息appid(会话标识, appid)
+    会话标识, appid = _网页群状态作用域(会话标识, appid)
     缓存键 = (appid, 会话标识)
     现在 = time.time()
     现有 = 群禁言状态缓存.get(缓存键)
@@ -5483,45 +5792,17 @@ async def 查询群禁言状态(
                     "GET",
                     "/v2/groups/{group_openid}/restrict_chat_setting",
                     group_openid=会话标识,
-                )
+                ),
+                请求实现=lambda: _读取群禁言官方状态(_http, 会话标识, appid),
             )
-            if not isinstance(响应, dict):
-                raise RuntimeError("禁言状态响应格式无效")
-            错误码 = 响应.get("code")
-            if 错误码 not in (None, 0, "", "0"):
-                raise RuntimeError(f"禁言状态业务错误：code={错误码}")
             现在 = time.time()
-            成员列表: list[dict[str, Any]] = []
-            for 成员 in 响应.get("members") or []:
-                if not isinstance(成员, dict):
-                    continue
-                成员标识 = str(
-                    成员.get("member_openid") or 成员.get("union_openid") or ""
-                ).strip()
-                if not 成员标识:
-                    continue
-                到期文本 = str(成员.get("mute_expire_at") or "").strip()
-                到期时间 = _转数字时间戳(到期文本) or 0
-                if 到期时间 and 到期时间 <= 现在:
-                    continue
-                成员列表.append(
-                    {
-                        "member_openid": 成员标识,
-                        "username": str(成员.get("username") or "").strip(),
-                        "mute_expire_at": 到期文本,
-                        "mute_expire_ts": int(到期时间) if 到期时间 else 0,
-                    }
-                )
-            全员规则 = 响应.get("global_rule")
-            if not isinstance(全员规则, dict):
-                全员规则 = {}
+            成员列表 = _规范群禁言成员(响应.get("members"))
+            全员规则 = _规范群禁言全员规则(响应.get("global_rule"))
             状态 = {
                 "available": True,
                 "has_data": True,
                 "members": 成员列表,
-                "global_rule": {
-                    "mode": str(全员规则.get("mode") or "none").strip(),
-                },
+                "global_rule": 全员规则,
                 "checked_at": int(现在),
                 "last_success_at": 现在,
                 "next_refresh_at": 现在 + 群禁言状态缓存有效期秒,
@@ -5534,10 +5815,13 @@ async def 查询群禁言状态(
         except Exception as 异常:
             logger.warning(
                 "消息记录群禁言状态查询失败：stage=restrict_chat_setting, "
-                "group_id=%s, appid=%s, error_type=%s, cooldown=%s",
+                "group_id=%s, appid=%s, error_type=%s, http_status=%s, code=%s, err_code=%s, cooldown=%s",
                 会话标识,
                 appid,
                 type(异常).__name__,
+                getattr(异常, "status", "unknown"),
+                getattr(异常, "code", "unknown"),
+                getattr(异常, "err_code", "unknown"),
                 群禁言状态失败冷却秒,
             )
             if 请求代次 != _群禁言请求代次(缓存键):
@@ -6177,9 +6461,10 @@ def _私聊历史显示名(会话标识: str, 会话: dict[str, Any], 显示名:
         return 显示名
 
 
-def _聊天群成员状态(会话标识: str, 类型: str) -> dict[str, Any]:
+def _聊天群成员状态(会话标识: str, 类型: str, appid: str = "") -> dict[str, Any]:
     if str(类型 or "") != "group":
-        return {"in_group": True, "membership_status": "active", "membership_checked_at": 0}
+        return {"in_group": True, "membership_status": "active", "membership_checked_at": 0,
+                **获取好友关系状态(会话标识, appid)}
     状态 = _读取群机器人状态(会话标识)
     return {
         "in_group": 状态.get("status") != "removed",
@@ -6191,7 +6476,7 @@ def _聊天群成员状态(会话标识: str, 类型: str) -> dict[str, Any]:
 def _聊天已移除(聊天: dict[str, Any]) -> bool:
     """返回会话是否已确认机器人被移出群聊。"""
     if str(聊天.get("chat_type") or "group") != "group":
-        return False
+        return str(聊天.get("friend_status") or "") == "removed"
     状态 = str(聊天.get("membership_status") or "").strip().lower()
     不在群 = 聊天.get("in_group") is False or str(聊天.get("in_group") or "").strip().lower() == "false"
     return 状态 == "removed" or 不在群
@@ -6623,7 +6908,7 @@ def _数据库聚合聊天项(
                     ),
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型),
+                    **_聊天群成员状态(会话标识, 类型, str(最后记录.get("appid") or 内存会话.get("appid") or "")),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                     "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
@@ -6719,7 +7004,7 @@ def _数据库聚合聊天项(
                     "msg_count": max(int(内存会话.get("msg_count") or 0), len(消息列表)),
                     "unread": max(0, int(当前未读数 or 0)),
                     "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型),
+                    **_聊天群成员状态(会话标识, 类型, str(最后记录.get("appid") or 内存会话.get("appid") or "")),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                     "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
@@ -6796,7 +7081,7 @@ def 获取聊天列表(
                     "msg_count": max(int(会话.get("msg_count") or 0), len(消息列表)),
                     "unread": int(会话.get("unread") or 0),
                     "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型),
+                    **_聊天群成员状态(会话标识, 类型, str(最后消息.get("appid") or 会话.get("appid") or "")),
                     "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
                     "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
                     "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
@@ -6924,6 +7209,7 @@ def _数据库历史消息(
             "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
             "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
             "references": 引用映射,
+            **(获取好友关系状态(会话标识, 轻量会话["appid"]) if 类型 == "user" else {}),
         }
     except Exception as exc:
         logger.debug("消息记录数据库历史读取失败，回退内存：错误类型=%s", type(exc).__name__)
@@ -7000,6 +7286,7 @@ def 获取消息历史(
         "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
         "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
         "references": 引用映射,
+        **(获取好友关系状态(会话标识, str(会话.get("appid") or "")) if 类型 == "user" else {}),
     }
 
 
@@ -8704,7 +8991,7 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
         _安装消息事件挂钩()
         _安装消息发送挂钩()
         _启动消息数据库恢复任务()
-        if not _准备消息接收队列().empty():
+        if _好友事件待恢复 or not _准备消息接收队列().empty():
             _启动消息接收任务()
         if _昵称补查失败项目 or not _准备昵称补查队列().empty():
             _启动昵称补查任务()
@@ -8729,13 +9016,14 @@ async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
             "conversations": {标识: _恢复会话签名(会话) for 标识, 会话 in 消息缓存.items()},
             "groups": copy.deepcopy(群信息缓存),
             "group_states": copy.deepcopy(群机器人状态缓存),
+            "friend_states": copy.deepcopy(好友关系缓存),
             "meta_time": _本地缓存时间,
         }
         try:
             # 快照读取不接触活动内存，锁只串行数据库工作，事件接收继续运行。
             async with _数据库写入锁:
                 快照 = await _异步执行消息记录同步(
-                    _消息存储.读取启动快照, 配置, 群机器人状态命名空间, 未读状态命名空间
+                    _读取好友关系启动快照, 配置
                 )
             if 快照 is not None:
                 if 键 != _消息数据库恢复键:
@@ -8743,6 +9031,8 @@ async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
                 _从数据库恢复(快照, 基线)
                 _消息数据库恢复完成键 = 键
                 _消息数据库恢复失败冷却 = 0.0
+                if _好友事件待恢复:
+                    _排队收到消息(None, None, "friend_resume")
                 _停止旧消息裁剪任务()
                 _启动消息资料回填任务()
                 return True
@@ -8798,6 +9088,7 @@ async def 等待消息记录恢复() -> bool:
 
 def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
     """在事件循环合并线程快照；恢复期间新消息、群状态和未读数优先。"""
+    _恢复好友关系状态(快照, 基线)
     已更新群 = {标识 for 标识, 信息 in 群信息缓存.items()
                 if 信息 != (基线.get("groups") or {}).get(标识)}
     for 会话标识, 值 in (快照.get("group_states") or {}).items():

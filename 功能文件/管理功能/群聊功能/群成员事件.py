@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import re
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import aiohttp
 
 from 功能文件.管理功能.基础功能 import 帮助功能
 
@@ -84,8 +89,19 @@ def _生成欢迎回调按钮(标识: str, 标签: str) -> dict[str, Any]:
     }
 
 
-def 获取欢迎键盘() -> dict[str, Any]:
+def 获取欢迎键盘(好友邀请链接: str = "") -> dict[str, Any]:
     按钮 = [_生成欢迎回调按钮(标识, 标签) for 标识, 标签 in 欢迎回调标签.items()]
+    if 好友邀请链接:
+        按钮.append({
+            "id": "welcome_add_robot",
+            "render_data": {"label": "添加机器人", "visited_label": "添加机器人"},
+            "action": {
+                "type": 0,
+                "permission": {"type": 2},
+                "data": 好友邀请链接,
+                "unsupport_tips": "当前客户端暂不支持该操作",
+            },
+        })
     return {
         "rows": [
             {"buttons": 按钮[:2]},
@@ -159,7 +175,77 @@ def 获取欢迎回调内容(文本: str, 配置: Any = None) -> tuple[str, dict
     return 内容[标识], 获取欢迎键盘()
 
 
+async def _获取好友邀请链接(event: Any) -> str:
+    """使用当前事件的官方认证生成带来源群的好友链接；失败保留原欢迎。"""
+    阶段 = "scope"
+    try:
+        群号 = 帮助功能.获取群openid同步(event)
+        if not isinstance(群号, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", 群号):
+            return ""
+        for 对象 in (event, _读取字段(event, "message_obj"), _读取字段(event, "message")):
+            原始数据 = _读取字段(_读取字段(对象, "raw_message"), "raw_data")
+            for 资料 in (对象, 原始数据, _读取字段(原始数据, "group_member_add")):
+                for 字段 in ("group_openid", "group_id"):
+                    标识 = _读取字段(资料, 字段)
+                    if 标识 not in (None, "") and 标识 != 群号:
+                        return ""
+        http = _读取字段(_读取字段(_读取字段(event, "bot"), "api"), "_http")
+        if http is None or getattr(http, "is_sandbox", False):
+            return ""
+        appid = str(getattr(getattr(http, "_token", None), "app_id", ""))
+        if not re.fullmatch(r"[0-9]{4,32}", appid):
+            return ""
+
+        async def 请求链接() -> str:
+            nonlocal 阶段
+            阶段 = "auth"
+            await http.check_session()
+            请求头 = dict(getattr(http, "_headers", {}) or {})
+            认证 = 请求头.get("Authorization", "")
+            if (str(getattr(getattr(http, "_token", None), "app_id", "")) != appid
+                    or not isinstance(认证, str) or not 认证.startswith("QQBot ") or not 认证[6:].strip()):
+                return ""
+            阶段 = "generate_url_link"
+            # SDK request() 会重放连接中断的 POST；底层会话只提交一次。
+            async with http._session.request(
+                "POST", "https://api.bot.qq.com/v2/generate_url_link",
+                headers=请求头, json={"callback_data": 群号},
+                allow_redirects=False, timeout=aiohttp.ClientTimeout(total=5),
+            ) as 响应:
+                if not 200 <= 响应.status < 300:
+                    return ""
+                数据 = await 响应.json(content_type=None)
+            阶段 = "response"
+            if not isinstance(数据, dict) or any(
+                数据.get(字段) not in (None, "", 0, "0") for 字段 in ("code", "err_code")
+            ):
+                return ""
+            资料 = 数据.get("data")
+            链接 = 资料.get("url") if isinstance(资料, dict) else None
+            if (not isinstance(链接, str) or len(链接) > 4096
+                    or any(字符.isspace() or ord(字符) < 32 or ord(字符) == 127 for 字符 in 链接)):
+                return ""
+            地址 = urlsplit(链接)
+            if (地址.scheme != "https" or 地址.hostname != "qun.qq.com"
+                    or 地址.username is not None or 地址.password is not None
+                    or 地址.port not in (None, 443)):
+                return ""
+            返回AppID = parse_qs(地址.query).get("robot_appid")
+            if 返回AppID is not None and 返回AppID != [appid]:
+                return ""
+            return 链接
+
+        # 总预算也覆盖 SDK 的认证刷新；官方未声明链接寿命，不缓存链接。
+        return await asyncio.wait_for(请求链接(), timeout=5)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("QQ官方群欢迎好友链接生成失败：stage=%s, error_type=%s", 阶段, type(exc).__name__)
+        return ""
+
+
 async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
+    好友邀请链接 = await _获取好友邀请链接(event)
     文本 = "\n".join(
         [
             f"欢迎<@{成员openid}> 加入本群",
@@ -170,7 +256,7 @@ async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
     return await 帮助功能.发送Markdown键盘消息(
         event,
         文本,
-        获取欢迎键盘(),
+        获取欢迎键盘(好友邀请链接),
         主动发送=True,
         自动提及=False,
     )

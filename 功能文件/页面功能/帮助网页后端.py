@@ -3508,6 +3508,13 @@ def _读取网页群状态快照(
         状态["status"] = "stale" if 状态.get("has_data") else "unavailable"
         状态["next_refresh_at"] = time.time() + 冷却剩余
         状态["retry_after_ms"] = max(1000, int(冷却剩余 * 1000))
+    if 类型 == "mutes":
+        # 仅返回归一化后的规则、成员及快照元数据，不透传 SDK 或缓存中的额外字段。
+        归一化 = 消息记录._复制群禁言状态(状态, cached=bool(状态.get("cached")))
+        for 字段 in ("chat_id", "chat_type", "appid", "available", "has_data", "pending", "stale", "refreshing", "status", "retry_after_ms"):
+            if 字段 in 状态:
+                归一化[字段] = 状态[字段]
+        return 归一化
     return 状态
 
 

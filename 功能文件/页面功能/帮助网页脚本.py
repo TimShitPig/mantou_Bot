@@ -1246,8 +1246,45 @@
         if (!keyword) return true;
         return [chat.nickname, chat.remark, chat.chat_id].some((value) => String(value || '').toLowerCase().includes(keyword));
       };
-      const msgChatIsRemoved = (chat) => String(chat?.chat_type || 'group') === 'group'
-        && (String(chat?.membership_status || '').toLowerCase() === 'removed' || chat?.in_group === false);
+      const msgChatIsRemoved = (chat) => String(chat?.chat_type || 'group') === 'user'
+        ? (String(chat?.friend_status || '').toLowerCase() === 'removed' || chat?.is_friend === false)
+        : (String(chat?.membership_status || '').toLowerCase() === 'removed' || chat?.in_group === false);
+      let msgFriendEventOrder = 0;
+      const pickMsgFriendState = (current = {}, incoming = {}, authoritative = false) => {
+        const read = (source) => {
+          const explicit = String(source?.friend_status || '').trim().toLowerCase();
+          const status = ['active','removed'].includes(explicit) ? explicit : source?.is_friend === true ? 'active' : source?.is_friend === false ? 'removed' : 'unknown';
+          const checked = Number(source?.friend_checked_at || 0);
+          return {friend_status:status, friend_checked_at:Number.isFinite(checked) && checked > 0 ? checked : 0, is_friend:status === 'unknown' ? null : status === 'active', _friend_live_order:Number(source?._friend_live_order || 0)};
+        };
+        const previous = read(current), next = read(incoming);
+        if (authoritative && next.friend_status !== 'unknown') next._friend_live_order = ++msgFriendEventOrder;
+        // 关系更新时间独立于最后一条消息；缺失或未知资料不能抹掉已确认关系。
+        if (next.friend_status === 'unknown') return previous.friend_status !== 'unknown' ? previous : next.friend_checked_at > previous.friend_checked_at ? next : previous;
+        if (previous.friend_status !== 'unknown' && (next.friend_checked_at < previous.friend_checked_at || (next.friend_checked_at === previous.friend_checked_at && next._friend_live_order <= previous._friend_live_order))) return previous;
+        return next;
+      };
+      const syncMsgFriendState = (chatId, incoming = {}, authoritative = false) => {
+        chatId = String(chatId || '').trim();
+        if (!chatId) return {};
+        const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === 'user');
+        const overlay = msgState.realtimeChats.get(chatId);
+        const validOverlay = overlay?.chat_type === 'user' ? overlay : null;
+        const viewing = msgState.chatId === chatId && msgState.chatType === 'user';
+        const appid = String(current?.appid || validOverlay?.appid || (viewing ? msgState.chatAppid : '') || '').trim();
+        const matches = (source) => source && (!source.chat_id || String(source.chat_id) === chatId)
+          && (!source.chat_type || source.chat_type === 'user')
+          && (!appid || !source.appid || String(source.appid).trim() === appid);
+        const history = viewing && matches(msgState.historyData) ? msgState.historyData : null;
+        let state = pickMsgFriendState(current, matches(validOverlay) ? validOverlay : {});
+        state = pickMsgFriendState(state, history || {});
+        if (matches(incoming)) state = pickMsgFriendState(state, incoming, authoritative);
+        msgState.chats = msgState.chats.map((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === 'user' && matches(chat) ? {...chat, ...state} : chat);
+        const base = matches(validOverlay) ? validOverlay : current;
+        if (base) msgState.realtimeChats.set(chatId, {...base, ...state});
+        if (viewing) msgState.historyData = {...(msgState.historyData || {}), ...state};
+        return state;
+      };
       const mergeMsgRealtimeChats = (serverChats) => {
         const byId = new Map((serverChats || []).map((chat) => [String(chat.chat_id || ''), {...chat}]));
         const now = Math.floor(Date.now() / 1000);
@@ -1262,6 +1299,9 @@
             return;
           }
           const isPrivate = String(current.chat_type || 'group') === 'user';
+          const friendState = isPrivate ? pickMsgFriendState(current, overlay) : {};
+          const keepFriendOverlay = isPrivate && (Number(friendState.friend_checked_at || 0) > Number(current.friend_checked_at || 0)
+            || (Number(friendState.friend_checked_at || 0) === Number(current.friend_checked_at || 0) && Number(friendState._friend_live_order || 0) > Number(current._friend_live_order || 0)));
           const contactName = isPrivate
             ? (validMsgNickname(current.nickname, chatId) || validMsgNickname(overlay.nickname, chatId))
             : '';
@@ -1269,10 +1309,10 @@
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
           if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)) {
-            if (isPrivate && ((!validMsgNickname(current.nickname, chatId) && contactName)
+            if (isPrivate && (keepFriendOverlay || (!validMsgNickname(current.nickname, chatId) && contactName)
               || (!current.avatar && contactAvatar))) {
               // 消息摘要跟随较新服务器记录，只保留后台已取得的联系人资料。
-              const profile = {...current, nickname:current.remark || contactName || current.nickname, avatar:contactAvatar};
+              const profile = {...current, ...friendState, nickname:current.remark || contactName || current.nickname, avatar:contactAvatar};
               byId.set(chatId, profile);
               msgState.realtimeChats.set(chatId, profile);
             } else msgState.realtimeChats.delete(chatId);
@@ -1291,7 +1331,7 @@
             member_num:groupProfile.member_num ?? current.member_num ?? overlay.member_num,
             group_member_num:groupProfile.group_member_num ?? current.group_member_num ?? overlay.group_member_num,
             nickname:current.remark || (current.chat_type === 'group' && groupName) || contactName || current.nickname || overlay.nickname,
-            ...(isPrivate ? {avatar:contactAvatar} : {}),
+            ...(isPrivate ? {avatar:contactAvatar, ...friendState} : {}),
             remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
             group_qq:Object.prototype.hasOwnProperty.call(current, 'group_qq') ? String(current.group_qq || '') : String(overlay.group_qq || ''),
             pinned:Object.prototype.hasOwnProperty.call(current, 'pinned') ? Boolean(current.pinned) : Boolean(overlay.pinned),
@@ -1401,7 +1441,7 @@
             const data = await api(path, {method:'POST', signal:controller.signal, body:JSON.stringify({...target, ...(force ? {force:true} : {})})});
             if (!isCurrent() || !msgGroupSnapshotMatches(data, target)) return null;
             // pending 表示尚无权威结果；空成员数组不能覆盖已经显示的禁言。
-            if (!data.pending && data.has_data !== false) apply(data);
+            if (kind === 'mutes' || (!data.pending && data.has_data !== false)) apply(data);
             if (data.pending || data.refreshing) {
               const retryDelays = [1000, 1000, 2000, 3000, 5000, 5000];
               if (task.attempts < retryDelays.length) {
@@ -1414,12 +1454,15 @@
               } else {
                 // 有限补查覆盖慢请求；队列更久时交还常规轮询，不无限追加定时器。
                 if (kind === 'roles') msgState.lastRolesAt = 0;
-                else msgState.muteRequestAt = Date.now();
+                else { msgState.muteRequestAt = Date.now(); apply({...data, pending:false, refreshing:false, stale:Boolean(data.has_data)}); }
               }
             }
             return data;
           } catch (error) {
-            if (isCurrent() && error.name !== 'AbortError' && kind === 'roles') msgState.adminScanFailures.set(target.chat_id, Date.now());
+            if (isCurrent()) {
+              if (kind === 'roles' && error.name !== 'AbortError') msgState.adminScanFailures.set(target.chat_id, Date.now());
+              else if (kind === 'mutes') apply({...target, has_data:false, pending:false, refreshing:false, available:false, status:'unavailable'});
+            }
             return null;
           } finally {
             clearTimeout(timeout);
@@ -1534,7 +1577,7 @@
           const collapsed = Boolean(msgState.folderCollapsed[item.type]);
           return `<button class="msg-chat-folder" style="${placement}" type="button" data-msg-folder-toggle="${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
         }
-        if (item.kind === 'divider') return `<div class="msg-chat-divider" style="${placement}" role="separator">已移除群聊</div>`;
+        if (item.kind === 'divider') return `<div class="msg-chat-divider" style="${placement}" role="separator">${item.type === 'user' ? '已删除好友' : '已移除群聊'}</div>`;
         const chat = item.chat;
         const avatarSource = chat.chat_type === 'group'
           ? (chat.group_avatar || chat.group_avatar_url || '')
@@ -1548,8 +1591,9 @@
         const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
         const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
         if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
-        const preview = removed ? '你已被移除群聊' : (item.preview || '（无文本内容）');
-        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? '你已被移除群聊' : (chat.pinned ? '取消置顶' : '置顶')}">
+        const removedText = chat.chat_type === 'user' ? '对方已删除机器人好友' : '你已被移除群聊';
+        const preview = removed ? removedText : (item.preview || '（无文本内容）');
+        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? removedText : (chat.pinned ? '取消置顶' : '置顶')}">
           <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
           <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
           <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
@@ -1700,6 +1744,9 @@
             chat.msg_count,
             chat.pinned ? 1 : 0,
             chat.is_admin ? 1 : 0,
+            chat.friend_status,
+            chat.friend_checked_at,
+            chat.is_friend === null ? 'unknown' : chat.is_friend === false ? 0 : 1,
             chat.membership_status,
             chat.in_group === false ? 0 : 1,
             chat.group_avatar || chat.group_avatar_url || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
@@ -1728,11 +1775,12 @@
         }
         const rows = [];
         const appendChatRows = (items) => {
-          let removedSectionShown = false;
+          const removedSections = new Set();
           items.forEach((chat) => {
             const removed = msgChatIsRemoved(chat);
-            if (removed && !removedSectionShown) rows.push({kind:'divider', height:28});
-            if (removed) removedSectionShown = true;
+            const type = String(chat.chat_type || 'group');
+            if (removed && !removedSections.has(type)) rows.push({kind:'divider', type, height:28});
+            if (removed) removedSections.add(type);
             rows.push({kind:'chat', chat, preview:chatPreviews.get(chat) || '', height:rowHeight});
           });
         };
@@ -1816,7 +1864,7 @@
         if (groupSettingsState.mutating && (msgState.chatId !== chatId || msgState.chatType !== chatType)) return toast('正在更新本群设置，请稍候再切换');
         if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; $('msg-remark-modal').hidden = true; }
         setMsgMobileChatOpen(true);
-        msgState.chatRemoved = chatType === 'group' && (chat?.membership_status === 'removed' || chat?.in_group === false);
+        msgState.chatRemoved = msgChatIsRemoved(chat);
         const localAdmins = getLocalAdminGroups();
         const cachedAdmin = msgState.adminByChat.has(chatId)
           ? Boolean(msgState.adminByChat.get(chatId))
@@ -2294,6 +2342,7 @@
         }
       };
       const updateMsgHead = (data) => {
+        if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
         const nameEl = $('msg-head-name');
         const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || '') && String(c.chat_type || 'group') === msgState.chatType);
         const knownInfo = data.group_info || {};
@@ -2316,11 +2365,12 @@
         }
         const gInfo = data.group_info || {};
         const gNum = Number(gInfo.member_num ?? curChat?.member_num ?? curChat?.group_member_num ?? 0);
-        const removed = msgState.chatType === 'group' && (msgState.chatRemoved || gInfo.membership_status === 'removed' || curChat?.membership_status === 'removed' || curChat?.in_group === false);
+        const removed = msgState.chatType === 'user' ? msgChatIsRemoved({...curChat, ...data, chat_type:'user'}) : (msgState.chatRemoved || gInfo.membership_status === 'removed' || curChat?.membership_status === 'removed' || curChat?.in_group === false);
         msgState.chatRemoved = removed;
         $('msg-head-sub').textContent = msgState.chatType === 'group'
           ? (removed ? '你已被移除群聊' : `群聊 · ${esc(msgState.chatId)}${gNum > 0 ? ` · 群成员 ${gNum} 人` : ''}`)
-          : `私聊 · ${esc(msgState.chatId)}`;
+          : (removed ? '对方已删除机器人好友 · 保留聊天记录' : `私聊 · ${esc(msgState.chatId)}`);
+        $('msg-composer').hidden = removed;
         if (removed) {
           $('msg-ad-switch').hidden = true;
           $('msg-refresh-info').hidden = true;
@@ -3483,6 +3533,7 @@
           : `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
       };
       const updateMuteCountdowns = () => {
+        updateGroupMuteExpiry();
         const now = Date.now() / 1000;
         let expired = false;
         document.querySelectorAll('[data-msg-mute-expire]').forEach((node) => {
@@ -3503,20 +3554,23 @@
           );
         }
       };
-      const loadMuteStates = (force = false) => {
-        const target = msgGroupSnapshotTarget();
-        if (!target || !msgState.botIsAdmin || !msgGroupSnapshotVisible()) return Promise.resolve(null);
-        const now = Date.now();
-        if (!force && msgState.muteRequestAt && now - msgState.muteRequestAt < msgMuteRefreshMs) return Promise.resolve(null);
-        msgState.muteRequestAt = now;
-        return requestMsgGroupSnapshot('mutes', target, (data) => {
-          if (data.available === false) return;
+      let msgMuteSnapshot = null;
+      const applyMsgMuteSnapshot = (target, data) => {
+          if (!msgGroupSnapshotMatches(data, target) || msgGroupSnapshotScope(msgGroupSnapshotTarget()) !== msgGroupSnapshotScope(target)) return;
+          const previous = msgMuteSnapshot?.scope === msgGroupSnapshotScope(target) ? msgMuteSnapshot.data : null;
+          const known = data.has_data !== false && !data.pending;
+          const snapshot = known ? data : {...(previous || {}), ...data, ...(previous?.has_data ? {members:previous.members, global_rule:previous.global_rule, has_data:true, stale:true} : {})};
+          msgMuteSnapshot = {scope:msgGroupSnapshotScope(target), data:snapshot};
+          const session = groupSettingsState.session;
+          if (groupSettingsCurrent(session) && msgGroupSnapshotScope(session.target) === msgGroupSnapshotScope(target)) renderGroupMuteStates(session, snapshot);
+          if (snapshot.has_data !== true) return;
+
           const next = new Map();
-          (Array.isArray(data.members) ? data.members : []).forEach((member) => {
+          (Array.isArray(snapshot.members) ? snapshot.members : []).forEach((member) => {
             const id = String(member?.member_openid || member?.union_openid || '').trim();
             if (!id) return;
             const expireTs = Number(member?.mute_expire_ts || 0);
-            if (expireTs > 0 && expireTs <= Date.now() / 1000) return;
+            if (!(expireTs > Date.now() / 1000)) return;
             const username = String(member?.username || '').trim();
             if (username) msgState.profiles[id] = {...(msgState.profiles[id] || {}), nickname:username, username};
             next.set(id, {...member, member_openid:id, mute_expire_ts:expireTs});
@@ -3537,18 +3591,30 @@
               {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
             );
           }
-        }, force);
+      };
+      const loadMuteStates = (force = false, settingsSession = null) => {
+        const target = msgGroupSnapshotTarget();
+        const drawerRequest = groupSettingsCurrent(settingsSession) && msgGroupSnapshotScope(settingsSession.target) === msgGroupSnapshotScope(target);
+        if (!target || (!msgState.botIsAdmin && !drawerRequest) || !msgGroupSnapshotVisible()) return Promise.resolve(null);
+        const existing = msgMuteSnapshot?.scope === msgGroupSnapshotScope(target) ? msgMuteSnapshot.data : null;
+        if (drawerRequest) renderGroupMuteStates(settingsSession, existing || {...target, has_data:false, pending:true});
+        const now = Date.now();
+        if (!force && msgState.muteRequestAt && now - msgState.muteRequestAt < msgMuteRefreshMs && existing) return Promise.resolve(existing);
+        msgState.muteRequestAt = now;
+        return requestMsgGroupSnapshot('mutes', target, (data) => applyMsgMuteSnapshot(target, data), force);
       };
       const unmuteMember = async (member, name = '') => {
         const memberId = String(member || '').trim();
-        if (!memberId || msgState.chatType !== 'group' || !msgState.chatId) return;
+        const target = captureGroupTarget();
+        if (!memberId || !target) return;
         if (!confirm(`确定解除 ${name || memberId} 的禁言吗？`)) return;
         try {
-          await api('message/group-member/unmute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:memberId, appid:String(window.msgAppid || '')})});
+          await api('message/group-member/unmute', {method:'POST', body:JSON.stringify({...target, member_openid:memberId})});
+          if (msgGroupSnapshotScope(msgGroupSnapshotTarget()) !== msgGroupSnapshotScope(target)) return;
           toast('已解除禁言');
-          void loadMuteStates(true);
+          void loadMuteStates(true, groupSettingsState.session);
         } catch (error) {
-          toast(error.message || '解除禁言失败');
+          if (msgGroupSnapshotScope(msgGroupSnapshotTarget()) === msgGroupSnapshotScope(target)) toast(error.message || '解除禁言失败');
         }
       };
       const openMuteDialog = (member, name = '') => {
@@ -3785,6 +3851,7 @@
           member_profiles:mergeMsgProfileMaps(previousData.member_profiles, data.member_profiles),
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
+        if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
         const serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
         const msgs = mergeOptimisticMessages(msgState.chatId, serverMessages);
         // 历史缓存只保存服务器消息；待发送/失败消息由 optimisticSends 单独维护。
@@ -3871,10 +3938,10 @@
           if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
           const systemSource = String(m.source || '');
           const renderKey = String(m.message_id || m.messageId || m.id || m.optimistic_id || '').trim();
-          if (systemSource === 'group_member_join' || systemSource === 'group_member_leave') {
-            const fallbackName = systemSource === 'group_member_join' ? '新成员' : '成员';
+          if (['group_member_join','group_member_leave','friend_add','friend_del'].includes(systemSource)) {
+            const fallbackName = systemSource.startsWith('friend_') ? '用户' : systemSource === 'group_member_join' ? '新成员' : '成员';
             const memberName = displayMsgNickname(m, profiles[String(m.user_id || '').trim()] || {}, fallbackName);
-            const actionText = systemSource === 'group_member_join' ? '加入了群聊。' : '退出了群聊。';
+            const actionText = {group_member_join:'加入了群聊。', group_member_leave:'退出了群聊。', friend_add:'添加了机器人好友。', friend_del:'删除了机器人好友。'}[systemSource];
             html += `<div class="msg-system-row" data-msg-render-key="${esc(renderKey)}"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
             return;
           }
@@ -4163,7 +4230,9 @@
         const existing = msgState.realtimeChats.get(chatId) || msgState.chats.find((chat) => String(chat.chat_id || '') === chatId) || {};
         const chatType = String(payload.chat_type || message.chat_type || existing.chat_type || 'group');
         const eventAppid = String(payload.appid || message.appid || existing.appid || '').trim();
+        if (payload.chat_type && message.chat_type && String(payload.chat_type) !== String(message.chat_type)) return;
         if (payload.appid && message.appid && String(payload.appid).trim() !== String(message.appid).trim()) return;
+        if (existing.chat_type && String(existing.chat_type) !== chatType) return;
         if (existing.appid && eventAppid && String(existing.appid).trim() !== eventAppid) return;
         const currentAppid = String(msgState.chatAppid || msgState.historyData?.messages?.find((item) => item?.appid)?.appid || '').trim();
         const matchesCurrent = msgState.chatId === chatId && msgState.chatType === chatType
@@ -4182,6 +4251,9 @@
           }
           return;
         }
+        const isNewEvent = rememberMsgEvent(chatId, message);
+        const friendState = chatType === 'user' ? syncMsgFriendState(chatId, {...payload, chat_type:chatType, appid:eventAppid}, isNewEvent && ['friend_add','friend_del'].includes(String(message.source || ''))) : {};
+        const friendChanged = chatType === 'user' && (String(friendState.friend_status || '') !== String(existing.friend_status || '') || Number(friendState.friend_checked_at || 0) !== Number(existing.friend_checked_at || 0));
         let profilesChanged = false;
         if (matchesCurrent) {
           const oldProfiles = JSON.stringify(msgState.profiles || {});
@@ -4201,7 +4273,6 @@
         if (matchesCurrent && payload.references) {
           msgState.historyData = {...(msgState.historyData || {}), references:{...(msgState.historyData?.references || {}), ...payload.references}};
         }
-        const isNewEvent = rememberMsgEvent(chatId, message);
         if (isNewEvent) msgState.historyCache.delete(`${chatType}|${chatId}`);
         const isViewing = matchesCurrent && !$('page-messages')?.hidden;
         const body = $('msg-body');
@@ -4240,15 +4311,17 @@
             : (existing.nickname || chatId),
           avatar:overlayAvatar,
           ...msgRealtimeChatSummary(payload, message, existing),
+          ...friendState,
           msg_count:Math.max(0, Number(existing.msg_count || 0) + (isNewEvent ? 1 : 0)),
           unread,
         };
         msgState.realtimeChats.set(chatId, overlay);
-        if (isNewEvent || overlay.last_content !== existing.last_content || overlay.last_ts !== existing.last_ts
+        if (friendChanged || isNewEvent || overlay.last_content !== existing.last_content || overlay.last_ts !== existing.last_ts
           || !msgState.chats.some((chat) => String(chat.chat_id || '') === chatId)) {
           scheduleMsgChatRender();
         }
         if (!isViewing) return;
+        if (friendChanged) updateMsgHead({...msgState.historyData, ...friendState});
         const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
         const existingIndex = msgState.messages.findIndex((item) => msgMessagesMatch(item, realtimeMessage));
         if (existingIndex >= 0) {
@@ -4616,6 +4689,56 @@
         }
         $('msg-group-profile-tags').replaceChildren(...nodes);
       };
+      const groupMuteDate = (value) => {
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('zh-CN', {timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}).format(date) : '时间未知';
+      };
+      const renderGroupMuteStates = (session, data = {}) => {
+        if (!groupSettingsCurrent(session) || !msgGroupSnapshotMatches(data, session.target)) return;
+        const known = data.has_data === true;
+        session.muteLoading = Boolean(data.pending || data.refreshing);
+        $('msg-group-mutes-refresh').disabled = groupSettingsState.mutating || session.muteLoading;
+        const status = data.refreshing || data.pending ? (known ? '正在后台刷新，先显示上次成功取得的状态。' : '正在后台查询禁言状态…') : data.stale ? '刷新未完成，保留上次成功取得的状态。' : known ? '已读取当前群聊的禁言状态。' : '暂未取得禁言状态，请稍后刷新；机器人需拥有本群管理员身份。';
+        groupSettingsMessage('mutes', status, !known && !session.muteLoading);
+        if (!known) return;
+        const rule = data.global_rule && typeof data.global_rule === 'object' ? data.global_rule : {};
+        $('msg-group-mutes-mode').textContent = {none:'未开启全员禁言', always:'始终全员禁言', schedule:'按定时或周期规则禁言'}[String(rule.mode || '')] || '未知状态';
+        const checked = Number(data.last_success_at || data.checked_at || 0);
+        $('msg-group-mutes-checked').textContent = checked > 0 ? `上次成功更新：${groupMuteDate(checked * 1000)}（北京时间）` : '';
+        const schedules = Array.isArray(rule.schedule_rules) ? rule.schedule_rules : [];
+        $('msg-group-mutes-schedules').innerHTML = schedules.length ? schedules.map((item) => `<div class="msg-group-mute-rule${item.enabled === true ? '' : ' is-disabled'}"><span>${esc(groupMuteDate(item.start_at))} — ${esc(groupMuteDate(item.end_at))}</span><small>${item.enabled === true ? '已启用' : '未启用'} · 北京时间</small></div>`).join('') : '<span class="msg-group-profile-empty">暂无定时禁言</span>';
+        const recurring = Array.isArray(rule.recurring_rules) ? rule.recurring_rules : [];
+        const weekdays = ['','周一','周二','周三','周四','周五','周六','周日'];
+        $('msg-group-mutes-recurring').innerHTML = recurring.length ? recurring.map((item) => {
+          const days = [...new Set((Array.isArray(item.weekdays) ? item.weekdays : []).filter((day) => Number.isInteger(day) && day >= 1 && day <= 7))].sort((a,b) => a-b).map((day) => weekdays[day]).join('、');
+          const start = String(item.start_time || ''), end = String(item.end_time || '');
+          const crossDay = /^\d{2}:\d{2}$/.test(start) && /^\d{2}:\d{2}$/.test(end) && end < start;
+          return `<div class="msg-group-mute-rule${item.enabled === true ? '' : ' is-disabled'}"><span>${esc(days || '未指定日期')} · ${esc(start)} — ${crossDay ? '次日 ' : ''}${esc(end)}</span><small>${item.enabled === true ? '已启用' : '未启用'}</small></div>`;
+        }).join('') : '<span class="msg-group-profile-empty">暂无周期禁言</span>';
+        const members = (Array.isArray(data.members) ? data.members : []).filter((member) => Number(member?.mute_expire_ts) > Date.now() / 1000 && String(member?.member_openid || '').trim());
+        $('msg-group-mutes-count').textContent = `${members.length} 人`;
+        $('msg-group-mutes-members').innerHTML = members.length ? members.map((member) => `<div class="msg-group-muted-member" data-group-mute-expire="${esc(Number(member.mute_expire_ts))}"><strong>${esc(groupMemberName(member))}</strong><small>到期：${esc(groupMuteDate(Number(member.mute_expire_ts) * 1000))}（北京时间）</small></div>`).join('') : '<span class="msg-group-profile-empty">当前没有被禁言的成员</span>';
+      };
+      const updateGroupMuteExpiry = () => {
+        if (!groupSettingsCurrent(groupSettingsState.session)) return;
+        const list = $('msg-group-mutes-members');
+        let changed = false;
+        list.querySelectorAll('[data-group-mute-expire]').forEach((node) => {
+          if (!(Number(node.dataset.groupMuteExpire) > Date.now() / 1000)) { node.remove(); changed = true; }
+        });
+        if (!changed) return;
+        const count = list.querySelectorAll('[data-group-mute-expire]').length;
+        $('msg-group-mutes-count').textContent = `${count} 人`;
+        if (!count) list.innerHTML = '<span class="msg-group-profile-empty">当前没有被禁言的成员</span>';
+      };
+      const clearGroupMuteStates = () => {
+        $('msg-group-mutes-mode').textContent = '未知状态';
+        $('msg-group-mutes-checked').textContent = '';
+        $('msg-group-mutes-count').textContent = '';
+        ['schedules','recurring','members'].forEach((kind) => { $(`msg-group-mutes-${kind}`).innerHTML = '<span class="msg-group-profile-empty">尚未查询</span>'; });
+        groupSettingsMessage('mutes', '尚未查询');
+        $('msg-group-mutes-refresh').disabled = false;
+      };
       const groupSettingsMessage = (kind, message = '', error = false) => {
         const node = $(`msg-group-${kind}-status`);
         node.textContent = String(message || ''); node.classList.toggle('error', Boolean(error));
@@ -4660,6 +4783,7 @@
         $('msg-group-remove-blacklist').disabled = !manageable || busy;
         $('msg-group-blacklist-openid').disabled = !manageable || busy;
         $('msg-group-blacklist-add').disabled = !manageable || busy;
+        $('msg-group-mutes-refresh').disabled = busy || Boolean(session.muteLoading);
       };
       const closeGroupSettings = (force = false) => {
         if (groupSettingsState.mutating && !force) return;
@@ -4668,6 +4792,7 @@
         $('msg-group-settings').hidden = true;
         $('msg-group-settings-open').setAttribute('aria-expanded','false');
         clearGroupSettingsProfile();
+        clearGroupMuteStates();
         $('msg-group-member-detail').hidden = true;
         ['members','blacklist'].forEach((kind) => { $(`msg-group-${kind}-list`).innerHTML = ''; });
       };
@@ -4717,11 +4842,12 @@
       };
       const showGroupSettingsTab = (kind) => {
         const session = groupSettingsState.session;
-        if (!groupSettingsCurrent(session) || groupSettingsState.mutating || !['basic','members','blacklist'].includes(kind)) return;
+        if (!groupSettingsCurrent(session) || groupSettingsState.mutating || !['basic','mutes','members','blacklist'].includes(kind)) return;
         session.tab = kind;
         $('msg-group-settings-tabs').querySelectorAll('[data-group-tab]').forEach((node) => { const active = node.dataset.groupTab === kind; node.classList.toggle('active', active); node.setAttribute('aria-selected', String(active)); });
-        ['basic','members','blacklist'].forEach((key) => { $(`msg-group-${key}`).hidden = key !== kind; });
-        if (kind !== 'basic' && !session[kind].loaded && !session[kind].loading) void loadGroupSettingsPage(session, kind);
+        ['basic','mutes','members','blacklist'].forEach((key) => { $(`msg-group-${key}`).hidden = key !== kind; });
+        if (kind === 'mutes') void loadMuteStates(false, session);
+        else if (kind !== 'basic' && !session[kind].loaded && !session[kind].loading) void loadGroupSettingsPage(session, kind);
       };
       const openGroupSettings = async () => {
         const target = captureGroupTarget();
@@ -4875,6 +5001,7 @@
         $('msg-group-settings-open').addEventListener('click', openGroupSettings);
         ['msg-group-settings-close','msg-group-settings-mask'].forEach((id) => $(id).addEventListener('click', () => closeGroupSettings()));
         $('msg-group-settings-tabs').addEventListener('click', (event) => { const button = event.target.closest('[data-group-tab]'); if (button) showGroupSettingsTab(button.dataset.groupTab); });
+        $('msg-group-mutes-refresh').addEventListener('click', () => { const session = groupSettingsState.session; if (groupSettingsCurrent(session) && !groupSettingsState.mutating) void loadMuteStates(true, session); });
         $('msg-group-basic-save').addEventListener('click', saveGroupSettingsBasic);
         $('msg-group-ad-enabled').addEventListener('change', saveGroupSettingsAd);
         $('msg-group-members-remove').addEventListener('click', removeGroupSettingsMembers);
@@ -4955,7 +5082,7 @@
         } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message); }
       };
       const sendMessage = () => {
-        if (msgState.chatRemoved) return toast('你已被移除群聊');
+        if (msgState.chatRemoved) return toast(msgState.chatType === 'user' ? '对方已删除机器人好友' : '你已被移除群聊');
         const hasImage = composerHasImage();
         const hasMedia = composerHasMedia();
         const editorText = getComposerText();

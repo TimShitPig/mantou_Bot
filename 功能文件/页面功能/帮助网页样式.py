@@ -393,6 +393,19 @@
      .novel-item .switch:focus-visible,.novel-master-panel .switch:focus-visible,.novel-test-panel .switch:focus-visible { outline:3px solid #c9c6ff; outline-offset:3px; }
      @media (max-width:900px) { .novel-control-grid { grid-template-columns:1fr; } }
      @media (max-width:760px) { .novel-console { margin-top:15px; padding-top:0; } .novel-console-head { display:block; } .novel-state-pill { margin-top:14px; } .novel-master-panel,.novel-test-panel { min-height:0; padding:17px; } .novel-master-copy h3,.novel-test-panel h3 { margin-top:15px; } .novel-platform-head { align-items:flex-start; margin-top:24px; } .novel-platform-head { display:block; } .novel-platform-count { display:block; margin-top:6px; } .novel-grid { grid-template-columns:1fr; } .novel-item { min-height:72px; padding:13px 14px; } }
+      .msg-group-tabs { overflow-x:auto; }
+      .msg-group-tabs > button { white-space:nowrap; }
+      .msg-group-mute-card { margin-bottom:12px; padding:13px; border:1px solid #e3eaf2; border-radius:9px; background:#fafcfe; }
+      .msg-group-mute-card h4 { margin:0 0 10px; font-size:12px; font-weight:600; }
+      .msg-group-mute-card h4 small { margin-left:5px; color:#8994a3; font-size:10px; font-weight:400; }
+      .msg-group-mute-card > strong { display:block; font-size:13px; }
+      .msg-group-mute-card > small { display:block; margin-top:6px; color:#8994a3; font-size:10px; }
+      .msg-group-mute-rule,.msg-group-muted-member { padding:9px 0; border-top:1px solid #e8edf3; font-size:11px; line-height:1.65; overflow-wrap:anywhere; }
+      .msg-group-mute-rule:first-child,.msg-group-muted-member:first-child { border-top:0; padding-top:0; }
+      .msg-group-mute-rule small,.msg-group-muted-member small { display:block; color:#8994a3; font-size:10px; }
+      .msg-group-mute-rule.is-disabled { color:#8994a3; }
+      :root[data-theme="dark"] .msg-group-mute-card { background:#242a38; border-color:#343d50; }
+      :root[data-theme="dark"] .msg-group-mute-rule,:root[data-theme="dark"] .msg-group-muted-member { border-color:#343d50; }
       @media (max-width:760px) { #admin-name { max-width:88px; } .admin-popover { right:-2px; width:205px; } }
       @media (prefers-reduced-motion: reduce) {
         *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; }

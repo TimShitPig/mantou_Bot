@@ -396,6 +396,118 @@ def _写入群聊事件解析器(容器: Any, 解析器名称: str, 解析器: A
     return 已写入
 
 
+
+def _提取好友事件数据(原始事件: Any) -> dict[str, Any]:
+    """仅展开事件包装，scene_param 只保留来源，不作为用户标识。"""
+    待查 = [(原始事件, 0)]
+    已查: set[int] = set()
+    结果: dict[str, Any] = {}
+    for _ in range(32):
+        if not 待查:
+            break
+        数据, 深度 = 待查.pop(0)
+        if 数据 is None or isinstance(数据, (str, bytes, int, float, bool)) or id(数据) in 已查:
+            continue
+        已查.add(id(数据))
+        for 字段 in ("openid", "timestamp", "scene", "scene_param", "short_code", "author"):
+            值 = _读取字段(数据, 字段)
+            if 字段 not in 结果 and 值 is not None:
+                if 字段 == "author":
+                    if isinstance(值, dict):
+                        结果[字段] = {名: 项 for 名, 项 in 值.items()
+                                    if 名 in {"username", "nickname", "union_openid", "avatar", "avatar_url"}
+                                    and isinstance(项, str)}
+                elif 字段 == "scene":
+                    if type(值) is int:
+                        结果[字段] = 值
+                elif 字段 == "timestamp" and type(值) in (int, str):
+                    结果[字段] = 值
+                elif isinstance(值, str):
+                    结果[字段] = 值
+        if "_mantou_event_id" not in 结果:
+            编号 = _读取字段(数据, "_mantou_event_id") or _读取字段(数据, "event_id")
+            if isinstance(编号, str) and 编号:
+                结果["_mantou_event_id"] = 编号
+        if 深度 < 4:
+            for 字段 in ("raw_data", "data", "payload", "event", "d"):
+                内层 = _读取字段(数据, 字段)
+                if 内层 is not None:
+                    待查.append((内层, 深度 + 1))
+    return 结果
+
+
+def _注册好友事件解析器(适配器模块: Any, 客户端: Any = None) -> bool:
+    """保留 SDK 事件类型，并补回旧 C2CManageEvent 未解析的官方字段。"""
+    连接状态类 = _读取字段(适配器模块, "ConnectionState")
+    if 连接状态类 is None:
+        try:
+            from botpy.connection import ConnectionState as 连接状态类
+        except ImportError:
+            return False
+    try:
+        from botpy.manage import C2CManageEvent as 好友事件基类
+    except ImportError:
+        好友事件基类 = object
+
+    class 扩展好友事件(好友事件基类):
+        def __init__(self, api: Any, event_id: Any, data: dict[str, Any]) -> None:
+            if 好友事件基类 is not object:
+                super().__init__(api, event_id, data)
+            else:
+                self._api = api
+                self.event_id = event_id
+                self.openid = data.get("openid")
+                self.timestamp = data.get("timestamp")
+            self.raw_data = dict(data)
+            self._mantou_event_id = event_id
+            for 字段 in ("scene", "scene_param", "short_code", "author"):
+                if 字段 in data:
+                    setattr(self, 字段, data[字段])
+
+    for 事件名 in ("friend_add", "friend_del"):
+        方法名 = "parse_" + 事件名
+        当前 = getattr(连接状态类, 方法名, None)
+        if getattr(当前, "_mantou_friend_parser_version", 0) != 1:
+            def 解析好友事件(self: Any, 负载: Any, _事件名=事件名) -> None:
+                外层 = 负载 if isinstance(负载, dict) else {}
+                数据 = 外层.get("d")
+                if not isinstance(数据, dict):
+                    return
+                事件 = 扩展好友事件(_读取字段(self, "api"), 外层.get("id"), 数据)
+                self._dispatch(_事件名, 事件)
+            解析好友事件._mantou_friend_parser_version = 1
+            setattr(连接状态类, 方法名, 解析好友事件)
+    if 客户端 is not None:
+        连接 = _读取字段(客户端, "_connection")
+        状态 = _读取字段(连接, "state")
+        for 事件名 in ("friend_add", "friend_del"):
+            解析器 = getattr(状态, "parse_" + 事件名, None)
+            if callable(解析器):
+                _写入群聊事件解析器(连接, 事件名, 解析器)
+                _写入群聊事件解析器(状态, 事件名, 解析器)
+    return True
+
+
+def _安装好友事件回调(客户端类: Any) -> None:
+    for 事件名 in ("friend_add", "friend_del"):
+        方法名 = "on_" + 事件名
+        原回调 = getattr(客户端类, 方法名, None)
+        if getattr(原回调, "_mantou_friend_callback_version", 0) == 1:
+            continue
+        async def 好友事件回调(self: Any, 原始事件: Any, _原=原回调, _事件名=事件名) -> Any:
+            try:
+                from 功能文件.管理功能.基础功能 import 消息记录
+                消息记录.排队好友关系事件(self, _提取好友事件数据(原始事件), _事件名)
+            except Exception as 异常:
+                logger.warning("QQ官方好友事件入队失败：event=%s，错误类型=%s", _事件名, type(异常).__name__)
+            if callable(_原):
+                结果 = _原(self, 原始事件)
+                return await 结果 if inspect.isawaitable(结果) else 结果
+            return None
+        好友事件回调._mantou_friend_callback_version = 1
+        setattr(客户端类, 方法名, 好友事件回调)
+
+
 def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None) -> bool:
     """补齐旧版 qq-botpy 未内置的官方群聊事件解析器。"""
     连接状态类 = _读取字段(适配器模块, "ConnectionState")
@@ -429,6 +541,7 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
 
         setattr(连接状态类, 方法名, 解析官方群聊事件)
 
+    _注册好友事件解析器(适配器模块, 客户端)
     # QQ 官方文档中的事件名，分别覆盖普通成员加入和机器人被加入群聊。
     安装解析器("group_member_add")
     安装解析器("group_member_remove")
@@ -777,7 +890,7 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
 
 
 def _安装登录后解析器同步(客户端类: Any, 适配器模块: Any) -> None:
-    if getattr(客户端类, "_mantou_群成员登录同步已安装", False):
+    if getattr(客户端类, "_mantou_群成员登录同步版本", 0) == 2:
         return
     原登录方法 = getattr(客户端类, "_bot_login", None)
     if not callable(原登录方法):
@@ -788,6 +901,7 @@ def _安装登录后解析器同步(客户端类: Any, 适配器模块: Any) -> 
         try:
             平台 = _读取字段(self, "platform")
             _启用群成员加入意图(_读取字段(平台, "intents"), self)
+            _启用群机器人退出意图(_读取字段(平台, "intents"), self)
             结果 = 原登录方法(self, *参数, **关键字)
             if inspect.isawaitable(结果):
                 结果 = await 结果
@@ -808,6 +922,7 @@ def _安装登录后解析器同步(客户端类: Any, 适配器模块: Any) -> 
 
     客户端类._bot_login = 新登录方法
     客户端类._mantou_群成员登录同步已安装 = True
+    客户端类._mantou_群成员登录同步版本 = 2
 
 
 def _安装网关鉴权订阅(适配器模块: Any) -> None:
@@ -818,7 +933,7 @@ def _安装网关鉴权订阅(适配器模块: Any) -> None:
     if 网关类 is None:
         logger.warning("QQ官方群欢迎诊断：stage=ws_identify_hook, installed=False")
         return
-    if getattr(网关类, "_mantou_群成员鉴权订阅已安装", False):
+    if getattr(网关类, "_mantou_群成员鉴权订阅版本", 0) == 2:
         return
     原鉴权方法 = getattr(网关类, "ws_identify", None)
     if not callable(原鉴权方法):
@@ -832,7 +947,7 @@ def _安装网关鉴权订阅(适配器模块: Any) -> None:
             原值 = int(原意图值 or 0)
         except (TypeError, ValueError):
             原值 = 0
-        新值 = 原值 | 群成员事件意图位
+        新值 = 原值 | 群成员事件意图位 | 群机器人退出事件意图位
         if isinstance(会话, dict):
             会话["intent"] = 新值
         logger.info(
@@ -847,6 +962,7 @@ def _安装网关鉴权订阅(适配器模块: Any) -> None:
 
     网关类.ws_identify = 新鉴权方法
     网关类._mantou_群成员鉴权订阅已安装 = True
+    网关类._mantou_群成员鉴权订阅版本 = 2
     logger.info("QQ官方群欢迎诊断：stage=ws_identify_hook, installed=True")
 
 
@@ -978,6 +1094,8 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
         logger.warning("QQ官方帮助回调桥加载失败：适配器类或客户端类不存在")
         return False
 
+    _安装好友事件回调(客户端类)
+    _注册好友事件解析器(适配器模块)
     _移除旧群成员欢迎回调(客户端类, 适配器类)
     if not getattr(适配器类, "_mantou_帮助互动已安装", False):
         原互动回调 = getattr(客户端类, "on_interaction_create", None)

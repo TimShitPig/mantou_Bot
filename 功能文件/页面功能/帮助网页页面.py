@@ -747,7 +747,7 @@ from .帮助网页脚本 import 控制台脚本
                 <button class="msg-group-mask" id="msg-group-settings-mask" type="button" aria-label="关闭群聊设置"></button>
                 <aside class="msg-group-drawer" role="dialog" aria-modal="true" aria-labelledby="msg-group-settings-title" tabindex="-1">
                   <div class="msg-group-drawer-head"><div><strong id="msg-group-settings-title">群聊设置</strong><small id="msg-group-settings-name"></small></div><button class="msg-group-close" id="msg-group-settings-close" type="button" aria-label="关闭群聊设置">×</button></div>
-                  <div class="msg-group-tabs" id="msg-group-settings-tabs" role="tablist" aria-label="群聊设置分类"><button type="button" id="msg-group-tab-basic" data-group-tab="basic" class="active" role="tab" aria-selected="true" aria-controls="msg-group-basic">基础设置</button><button type="button" id="msg-group-tab-members" data-group-tab="members" role="tab" aria-selected="false" aria-controls="msg-group-members">群成员</button><button type="button" id="msg-group-tab-blacklist" data-group-tab="blacklist" role="tab" aria-selected="false" aria-controls="msg-group-blacklist">黑名单</button></div>
+                  <div class="msg-group-tabs" id="msg-group-settings-tabs" role="tablist" aria-label="群聊设置分类"><button type="button" id="msg-group-tab-basic" data-group-tab="basic" class="active" role="tab" aria-selected="true" aria-controls="msg-group-basic">基础设置</button><button type="button" id="msg-group-tab-members" data-group-tab="members" role="tab" aria-selected="false" aria-controls="msg-group-members">群成员</button><button type="button" id="msg-group-tab-mutes" data-group-tab="mutes" role="tab" aria-selected="false" aria-controls="msg-group-mutes">禁言状态</button><button type="button" id="msg-group-tab-blacklist" data-group-tab="blacklist" role="tab" aria-selected="false" aria-controls="msg-group-blacklist">黑名单</button></div>
                   <div class="msg-group-body">
                     <section class="msg-group-pane" id="msg-group-basic" role="tabpanel" aria-labelledby="msg-group-tab-basic">
                       <div class="msg-group-summary" id="msg-group-summary"></div><div class="msg-group-status" id="msg-group-basic-status" role="status"></div>
@@ -759,6 +759,14 @@ from .帮助网页脚本 import 控制台脚本
                       <label class="msg-group-field">群号<input id="msg-group-remark-qq" maxlength="12" inputmode="numeric" type="text" placeholder="用于显示群头像，可留空" disabled></label>
                       <button class="msg-btn primary" id="msg-group-basic-save" type="button" disabled>保存本群设置</button>
                       <label class="msg-group-toggle"><span>广告拦截<small>只对当前群生效，其他群保持原设置</small></span><input id="msg-group-ad-enabled" type="checkbox" aria-label="当前群广告拦截" disabled></label>
+                    </section>
+                    <section class="msg-group-pane" id="msg-group-mutes" role="tabpanel" aria-labelledby="msg-group-tab-mutes" hidden>
+                      <div class="msg-group-tools"><span>当前群聊的禁言状态</span><button class="msg-btn" id="msg-group-mutes-refresh" type="button">刷新</button></div>
+                      <div class="msg-group-status" id="msg-group-mutes-status" role="status">尚未查询</div>
+                      <div class="msg-group-mute-card"><h4>全员禁言</h4><strong id="msg-group-mutes-mode">未知状态</strong><small id="msg-group-mutes-checked"></small></div>
+                      <div class="msg-group-mute-card"><h4>定时禁言</h4><div id="msg-group-mutes-schedules"><span class="msg-group-profile-empty">尚未查询</span></div></div>
+                      <div class="msg-group-mute-card"><h4>周期禁言 <small>北京时间</small></h4><div id="msg-group-mutes-recurring"><span class="msg-group-profile-empty">尚未查询</span></div></div>
+                      <div class="msg-group-mute-card"><h4>禁言成员 <small id="msg-group-mutes-count"></small></h4><div id="msg-group-mutes-members"><span class="msg-group-profile-empty">尚未查询</span></div></div>
                     </section>
                     <section class="msg-group-pane" id="msg-group-members" role="tabpanel" aria-labelledby="msg-group-tab-members" hidden>
                       <div class="msg-group-status" id="msg-group-members-status" role="status"></div>
