@@ -107,7 +107,7 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
     globals().get("消息列表昵称回填任务") or {}
 )
 消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
-消息历史查询任务: dict[tuple[str, str, str, int, int, int], asyncio.Task[Any]] = (
+消息历史查询任务: dict[tuple[Any, ...], asyncio.Task[Any]] = (
     globals().get("消息历史查询任务") or {}
 )
 实时连接任务: set[asyncio.Task[Any]] = globals().get("实时连接任务") or set()
@@ -3112,18 +3112,22 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
 
 async def _合并查询消息历史(
     会话标识: str, 类型: str, before_date: str, limit: int, before_id: int,
-) -> dict[str, Any]:
+    appid: str = "", 引用标识: str = "", after_id: int = 0, 历史窗口: bool = False,
+) -> dict[str, Any] | None:
     """相同历史请求共享正在执行的查询，完成后立即释放，不缓存历史结果。"""
     from 功能文件.管理功能.基础功能 import 消息记录
 
     # 网页发送/撤回等写操作会推进版本，新请求不能加入写操作前的查询。
-    键 = (会话标识, 类型, before_date, limit, before_id, 消息列表缓存版本)
+    键 = (会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口, 消息列表缓存版本)
     任务 = 消息历史查询任务.get(键)
     if 任务 is None or 任务.done():
+        查询 = (
+            _控制台线程执行(消息记录.获取引用定位历史, 会话标识, 类型, appid, limit, 引用标识, before_id, after_id)
+            if 历史窗口 else
+            _控制台线程执行(消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id)
+        )
         任务 = asyncio.create_task(
-            _控制台线程执行(
-                消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id
-            ),
+            查询,
             name="控制台历史查询",
         )
         消息历史查询任务[键] = 任务
@@ -3149,22 +3153,40 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     会话标识 = str((数据 or {}).get("chat_id") or "").strip()
     类型 = str((数据 or {}).get("chat_type") or "group")
     before_date = str((数据 or {}).get("before_date") or "")
+    appid = str((数据 or {}).get("appid") or "").strip()
+    引用标识 = str((数据 or {}).get("locate_reference_id") or "").strip()
+    历史窗口 = bool(引用标识 or (数据 or {}).get("history_window") is True)
     try:
         before_id = max(0, int((数据 or {}).get("before_id") or 0))
     except (TypeError, ValueError):
         before_id = 0
+    try:
+        after_id = max(0, int((数据 or {}).get("after_id") or 0))
+    except (TypeError, ValueError):
+        return _控制台错误(400, "会话参数无效")
     try:
         limit = max(1, min(100, int((数据 or {}).get("limit") or 100)))
     except (TypeError, ValueError):
         limit = 100
     if not 会话标识 or len(会话标识) > 200:
         return _控制台错误(400, "会话参数无效")
+    if (
+        历史窗口 and (
+            类型 not in {"group", "user"} or len(appid) > 64 or len(引用标识) > 512
+            or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 引用标识)
+            or (before_id and after_id) or (引用标识 and (before_id or after_id))
+            or (not 引用标识 and not before_id and not after_id)
+        )
+    ) or (after_id and not 历史窗口):
+        return _控制台错误(400, "会话参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
         结果 = await _合并查询消息历史(
-            会话标识, 类型, before_date, limit, before_id
+            会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口
         )
+        if 结果 is None:
+            return _控制台错误(404, "原消息未保存或已删除")
         try:
             from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 

@@ -563,7 +563,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     return 记录
 
 
-def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
+def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: bool = True) -> dict[str, Any]:
     """在副本上整理历史行；仅在缺少必要资料时解析原始消息。"""
     if not isinstance(记录, dict):
         return {}
@@ -608,13 +608,14 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     if 需要原始:
         原始消息 = _解析消息结构(记录.get("raw_message"))
         if 原始消息:
-            _更新消息提及资料(记录, 原始消息)
+            if 允许成员缓存:
+                _更新消息提及资料(记录, 原始消息)
             if not 作者头像:
                 作者头像 = _提取成员头像(原始消息)
                 if 作者头像:
                     记录["avatar"] = 作者头像
     if (
-        会话标识
+        允许成员缓存 and 会话标识
         and 作者标识
         and (
             (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
@@ -633,7 +634,7 @@ def _快速规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         记录时间 = int(记录.get("ts") or 0)
     except (TypeError, ValueError):
         记录时间 = 0
-    _补充记录昵称状态(记录, 原始消息)
+    _补充记录昵称状态(记录, 原始消息, 允许缓存=允许成员缓存)
     _补充记录引用索引(记录, 原始消息)
     标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
     if not 标准时间 and 原始消息 is not None:
@@ -2284,7 +2285,8 @@ def _引用消息摘要(记录: dict[str, Any]) -> dict[str, Any]:
 
 
 def _构造引用映射(
-    会话标识: str, 类型: str, appid: str, 消息列表: list[dict[str, Any]], *, 允许数据库: bool = True,
+    会话标识: str, 类型: str, appid: str, 消息列表: list[dict[str, Any]], *,
+    允许数据库: bool = True, 允许成员缓存: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """当前会话按 message_id/refidx 双键查找；页外引用一次最多补查 100 项。"""
     会话标识 = str(会话标识 or "").strip()
@@ -2342,7 +2344,7 @@ def _构造引用映射(
     for 标识 in 引用标识:
         if 标识 in 索引 and 标识 not in 冲突:
             目标 = 索引[标识]
-            _补充记录昵称状态(目标)
+            _补充记录昵称状态(目标, 允许缓存=允许成员缓存)
             结果[标识] = _引用消息摘要(目标)
     return 结果
 
@@ -2998,7 +3000,7 @@ def _提取昵称展示状态(消息: Any, 用户标识: str = "") -> tuple[str,
     return "", 有空白
 
 
-def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None) -> None:
+def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None, *, 允许缓存: bool = True) -> None:
     """只补充展示标志/已提供的可见别名，不改原始事件或持久化结构。"""
     if not isinstance(记录, dict):
         return
@@ -3012,7 +3014,7 @@ def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None) 
     if 当前昵称:
         记录["nickname_blank"] = False
         return
-    资料 = (成员资料缓存.get(str(记录.get("_session") or "")) or {}).get(用户标识) or {}
+    资料 = ((成员资料缓存.get(str(记录.get("_session") or "")) or {}).get(用户标识) or {}) if 允许缓存 else {}
     缓存昵称 = _有效用户昵称(资料.get("nickname") or 资料.get("username"), 用户标识) if isinstance(资料, dict) else ""
     昵称, 空白 = _提取昵称展示状态(原始消息 if 原始消息 is not None else 记录.get("raw_message"), 用户标识)
     if 缓存昵称 or 昵称:
@@ -7216,6 +7218,95 @@ def _数据库历史消息(
     except Exception as exc:
         logger.debug("消息记录数据库历史读取失败，回退内存：错误类型=%s", type(exc).__name__)
         return None
+
+
+def 获取引用定位历史(
+    会话标识: str, 类型: str, appid: str, limit: int = 100,
+    引用标识: str = "", before_id: int = 0, after_id: int = 0,
+) -> dict[str, Any] | None:
+    """引用跳转专用历史窗口；原有最新页与倒序历史接口保持原行为。"""
+    会话标识, 类型, appid = str(会话标识 or "").strip(), str(类型 or "").strip(), str(appid or "").strip()
+    limit = max(1, min(100, int(limit)))
+    if not 会话标识 or 类型 not in {"group", "user"} or (before_id and after_id):
+        raise ValueError("invalid history window")
+    def 数字ID(项: dict[str, Any]) -> int:
+        try:
+            return max(0, int(项.get("id") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    读取 = getattr(_消息存储, "读取引用定位窗口", None)
+    窗口 = 读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id) if callable(读取) else None
+    if 窗口 and 窗口.get("failure") == "conflict":
+        return None
+    会话 = 消息缓存.get(会话标识) or {}
+    缓存作用域匹配 = str(会话.get("chat_type") or "") == 类型 and str(会话.get("appid") or "").strip() == appid
+    if 窗口 is None or (引用标识 and not 窗口.get("found")):
+        # 未落库的新消息只在本会话热点缓存精确查找，不逐页扫描持久化历史。
+        缓存消息 = [
+            dict(项) for 项 in list(会话.get("messages") or [])
+            if _引用作用域匹配(项, 会话标识, 类型, appid)
+        ] if 缓存作用域匹配 else []
+        for 项 in 缓存消息:
+            _补充记录引用索引(项)
+        缓存有连续游标 = bool(缓存消息) and all(数字ID(项) for 项 in 缓存消息)
+        缓存消息.sort(key=数字ID if 缓存有连续游标 else _历史消息排序键)
+        if 引用标识:
+            候选 = [项 for 项 in 缓存消息 if 引用标识 in {项.get("message_id"), 项.get("refidx")}]
+            身份 = {项.get("message_id") or 项.get("refidx") for 项 in 候选}
+            if len(身份) != 1:
+                return None
+            目标 = 候选[-1]
+            位置 = 缓存消息.index(目标)
+            起点 = max(0, 位置 - min(limit // 2, limit - 1))
+            消息列表 = 缓存消息[起点:起点 + limit]
+        else:
+            目标 = {}
+            消息列表 = [
+                项 for 项 in 缓存消息
+                if (before_id and 0 < 数字ID(项) < before_id)
+                or (after_id and 数字ID(项) > after_id)
+            ]
+            消息列表 = 消息列表[:limit] if after_id else 消息列表[-limit:]
+        最旧ID = min((数字ID(项) for 项 in 消息列表), default=after_id or before_id)
+        最新ID = max((数字ID(项) for 项 in 消息列表), default=after_id or before_id)
+        窗口 = {
+            "messages": 消息列表,
+            "has_more": 缓存有连续游标 and any(数字ID(项) < 最旧ID for 项 in 缓存消息),
+            "has_newer": 缓存有连续游标 and any(数字ID(项) > 最新ID for 项 in 缓存消息),
+            "located_message_id": str(目标.get("message_id") or ""),
+            "located_refidx": str(目标.get("refidx") or ""),
+        }
+    返回消息 = _去重消息列表([
+        _快速规范化历史消息(项, 允许成员缓存=缓存作用域匹配) for 项 in 窗口.get("messages") or []
+        if _引用作用域匹配(项, 会话标识, 类型, appid)
+    ])
+    返回消息.sort(key=_历史消息排序键)
+    if 缓存作用域匹配:
+        _补齐群成员系统消息昵称(返回消息)
+    引用映射 = _构造引用映射(会话标识, 类型, appid, 返回消息, 允许成员缓存=缓存作用域匹配)
+    for 项 in 返回消息:
+        if 项.get("raw_message"):
+            项["raw_message"] = _序列化原始消息(项["raw_message"], 3000)
+        if 项.get("content"):
+            项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(项["content"]))
+    资料 = _获取消息相关成员资料(会话标识, 返回消息) if 缓存作用域匹配 else {}
+    群资料 = 获取缓存的群信息(会话标识) if 类型 == "group" and 缓存作用域匹配 else {}
+    最旧, 最新 = (返回消息[0], 返回消息[-1]) if 返回消息 else ({}, {})
+
+    return {
+        "messages": 返回消息, "references": 引用映射, "member_profiles": 资料,
+        "last_msg_id": str(最新.get("message_id") or ""),
+        "oldest_date": str(最旧.get("timestamp") or ""),
+        "oldest_id": min((数字ID(项) for 项 in 返回消息 if 数字ID(项)), default=0),
+        "newest_id": max((数字ID(项) for 项 in 返回消息), default=0),
+        "has_more": bool(窗口.get("has_more")), "has_newer": bool(窗口.get("has_newer")),
+        "located_message_id": str(窗口.get("located_message_id") or ""),
+        "located_refidx": str(窗口.get("located_refidx") or ""),
+        "history_window": True, "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
+        "group_info": 群资料,
+        "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" and 缓存作用域匹配 else False,
+    }
 
 
 def 获取消息历史(

@@ -101,7 +101,7 @@ _列最大长度: dict[str, int] = {
 
 _数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
 _数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
-_消息表结构版本 = 3
+_消息表结构版本 = 4
 _已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
 _消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
 
@@ -365,6 +365,7 @@ def _初始化数据库结构() -> bool:
                     KEY idx_msg_records_session_id (会话标识, id),
                     KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
+                    KEY idx_msg_records_scope_refidx (会话标识(32), 消息类型, appid(16), refidx(64), id),
                     KEY idx_msg_records_message (message_id),
                     KEY idx_msg_records_user_id (user_id(64), 消息类型, is_self, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -598,6 +599,18 @@ def _初始化数据库结构() -> bool:
                         "ADD KEY idx_msg_records_session_message (会话标识(64), message_id(64))"
                     )
                     logger.info("消息记录 MySQL 已补充会话消息去重索引")
+                初始化阶段 = "检查索引_idx_msg_records_scope_refidx"
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s",
+                    (消息记录表名, "idx_msg_records_scope_refidx"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(
+                        f"ALTER TABLE `{消息记录表名}` ADD KEY idx_msg_records_scope_refidx "
+                        "(会话标识(32), 消息类型, appid(16), refidx(64), id)"
+                    )
+                    logger.info("消息记录 MySQL 已补充引用定位索引")
                 初始化阶段 = "检查索引_idx_msg_records_member_time"
                 游标.execute(
                     "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
@@ -1432,6 +1445,101 @@ def 批量读取引用消息(
     except Exception as 异常:
         logger.debug("消息记录 MySQL 引用目标读取失败：错误类型=%s", type(异常).__name__)
         return []
+    finally:
+        _关闭连接(连接)
+
+
+def 读取引用定位窗口(
+    会话标识: str, 会话类型: str, appid: str, 上限: int = 100,
+    引用标识: str = "", before_id: int = 0, after_id: int = 0,
+) -> dict[str, Any] | None:
+    """按完整作用域定位原消息及相邻页；空结果不回退到其它会话或应用。"""
+    if not _MySQL可用():
+        return None
+    上限 = max(1, min(100, int(上限)))
+    before_id, after_id = max(0, int(before_id or 0)), max(0, int(after_id or 0))
+    if not 会话标识 or 会话类型 not in {"group", "user"} or (before_id and after_id):
+        raise ValueError("invalid history window")
+    连接 = _打开连接()
+    if 连接 is None:
+        raise RuntimeError("history storage unavailable")
+    # 普通等值条件用于索引，BINARY 再排除不区分大小写/尾空格的旧表排序规则。
+    作用域 = (
+        "会话标识=%s AND 消息类型=%s AND appid=%s "
+        "AND BINARY 会话标识=BINARY %s AND BINARY 消息类型=BINARY %s "
+        "AND BINARY appid=BINARY %s"
+    )
+    参数 = (会话标识, 会话类型, appid, 会话标识, 会话类型, appid)
+    try:
+        with 连接.cursor() as 游标:
+            def 读取邻页(边界: int, 方向: str, 数量: int) -> list[dict[str, Any]]:
+                比较符, 排序 = ("<", "DESC") if 方向 == "before" else (">", "ASC")
+                游标.execute(
+                    f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
+                    f"WHERE {作用域} AND id {比较符} %s ORDER BY id {排序} LIMIT %s",
+                    (*参数, 边界, 数量),
+                )
+                return [_行转记录(行) for 行 in (游标.fetchall() or [])]
+
+            目标: dict[str, Any] = {}
+            if 引用标识:
+                候选: dict[int, dict[str, Any]] = {}
+                # 分开查询使 message_id/refidx 各自使用索引，不用 OR 扫描整段历史。
+                for 字段 in ("message_id", "refidx"):
+                    游标.execute(
+                        # 先按完整身份去重，避免两条重复行挡住第三条冲突身份。
+                        f"SELECT MAX(id) AS located_id FROM `{消息记录表名}` WHERE {作用域} "
+                        f"AND {字段}=%s AND BINARY {字段}=BINARY %s "
+                        "GROUP BY BINARY COALESCE(NULLIF(message_id,''),refidx) "
+                        "ORDER BY located_id DESC LIMIT 2",
+                        (*参数, 引用标识, 引用标识),
+                    )
+                    候选ID = [int(_行字段(行, 0, "located_id", 默认值=0) or 0) for 行 in (游标.fetchall() or [])]
+                    if not 候选ID:
+                        continue
+                    占位 = ",".join("%s" for _ in 候选ID)
+                    游标.execute(
+                        f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
+                        f"WHERE {作用域} AND id IN ({占位}) LIMIT 2",
+                        (*参数, *候选ID),
+                    )
+                    for 行 in 游标.fetchall() or []:
+                        记录 = _行转记录(行)
+                        if 引用标识 in {记录.get("message_id"), 记录.get("refidx")}:
+                            候选[int(记录["id"])] = 记录
+                身份 = {项.get("message_id") or 项.get("refidx") for 项 in 候选.values()}
+                if len(身份) != 1:
+                    return {"messages": [], "found": False, "failure": "conflict" if 身份 else "not_found"}
+                目标 = 候选[max(候选)]
+                前数 = min(上限 // 2, 上限 - 1)
+                后数 = 上限 - 前数 - 1
+                之前 = 读取邻页(目标["id"], "before", 前数 + 1)
+                之后 = 读取邻页(目标["id"], "after", 后数 + 1)
+                记录列表 = list(reversed(之前[:前数])) + [目标] + 之后[:后数]
+                有更早, 有更新 = len(之前) > 前数, len(之后) > 后数
+            else:
+                if not before_id and not after_id:
+                    raise ValueError("missing history window cursor")
+                向后 = bool(after_id)
+                记录列表 = 读取邻页(after_id or before_id, "after" if 向后 else "before", 上限 + 1)
+                更多 = len(记录列表) > 上限
+                记录列表 = 记录列表[:上限]
+                if not 向后:
+                    记录列表.reverse()
+                边界 = (记录列表[0]["id"] if 向后 else 记录列表[-1]["id"]) if 记录列表 else (after_id or before_id)
+                游标.execute(
+                    f"SELECT id FROM `{消息记录表名}` WHERE {作用域} "
+                    f"AND id {'<' if 向后 else '>'} %s LIMIT 1",
+                    (*参数, 边界),
+                )
+                反向有记录 = 游标.fetchone() is not None
+                有更早, 有更新 = (反向有记录, 更多) if 向后 else (更多, 反向有记录)
+        return {
+            "messages": 记录列表, "found": True,
+            "has_more": 有更早, "has_newer": 有更新,
+            "located_message_id": str(目标.get("message_id") or ""),
+            "located_refidx": str(目标.get("refidx") or ""),
+        }
     finally:
         _关闭连接(连接)
 

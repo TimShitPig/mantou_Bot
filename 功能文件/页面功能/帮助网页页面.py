@@ -187,6 +187,13 @@ from .帮助网页脚本 import 控制台脚本
             .msg-command-chip:hover { opacity:.72; }
             .msg-bubble.recalled { color:#c45b5b; font-style:italic; background:#fff1f1; border:1px solid #ffd6d6; }
             .msg-bubble-quote { display:flex; flex-direction:column; gap:3px; max-width:100%; margin:0 0 8px; padding:6px 9px; border-left:2px solid #8ec5f2; border-radius:3px; background:#f2f8ff; color:#888; font-size:12px; white-space:normal; }
+            .msg-quote-jump { position:relative; width:100%; border:0; border-left:2px solid #8ec5f2; text-align:left; font-family:inherit; line-height:inherit; cursor:pointer; padding-right:26px; }
+            .msg-quote-jump:hover { background:#e8f3ff; }
+            .msg-quote-jump:focus-visible { outline:2px solid #168bde; outline-offset:2px; }
+            .msg-quote-jump-icon { position:absolute; top:5px; right:8px; opacity:.65; font-size:14px; }
+            .msg-row.msg-jump-target .msg-bubble { animation:msg-reference-highlight 2.2s ease-out; outline:2px solid #5caaff; outline-offset:3px; }
+            @keyframes msg-reference-highlight { 0%,25% { box-shadow:0 0 0 6px rgba(71,156,255,.26); } 100% { box-shadow:0 0 0 2px rgba(71,156,255,0); } }
+            @media (prefers-reduced-motion:reduce) { .msg-row.msg-jump-target .msg-bubble { animation:none; } }
             .msg-quote-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
             .msg-quote-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; }
             .composer-mention { color:#168bde; white-space:pre-wrap; user-select:all; }
