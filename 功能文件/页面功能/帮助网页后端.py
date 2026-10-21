@@ -519,35 +519,17 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
-    "uc_pan_cookie": {
-        "category": "uc_pan_settings",
-        "label": "UC 网盘 Cookie",
-        "kind": "secret",
-        "secret": True,
-    },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
         "label": "UC 上传目录",
         "kind": "text",
         "secret": False,
     },
-    "quark_pan_cookie": {
-        "category": "quark_pan_settings",
-        "label": "夸克网盘 Cookie",
-        "kind": "secret",
-        "secret": True,
-    },
     "quark_pan_upload_dir": {
         "category": "quark_pan_settings",
         "label": "夸克上传目录",
         "kind": "text",
         "secret": False,
-    },
-    "baidu_pan_cookie": {
-        "category": "baidu_pan_settings",
-        "label": "百度网盘 Cookie",
-        "kind": "secret",
-        "secret": True,
     },
     "baidu_pan_upload_dir": {
         "category": "baidu_pan_settings",
@@ -561,30 +543,6 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
-    "database_host": {
-        "category": "database_settings",
-        "label": "数据库地址",
-        "kind": "secret",
-        "secret": True,
-    },
-    "database_port": {
-        "category": "database_settings",
-        "label": "数据库端口",
-        "kind": "secret",
-        "secret": True,
-    },
-    "database_user": {
-        "category": "database_settings",
-        "label": "数据库用户名/名称",
-        "kind": "secret",
-        "secret": True,
-    },
-    "database_password": {
-        "category": "database_settings",
-        "label": "数据库密码",
-        "kind": "secret",
-        "secret": True,
-    },
 }
 
 配置字段分类显示名 = {
@@ -594,7 +552,6 @@ async def _后台刷新消息列表(
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
     "lanzou_pan_settings": "蓝奏云媒体归档",
-    "database_settings": "数据库",
 }
 
 
@@ -821,10 +778,6 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             raise ValueError("敏感字段不能为空")
         if len(文本) > 20000:
             raise ValueError("配置值过长")
-        if 字段名 == "database_port" and (
-            not 文本.isdigit() or not 1 <= int(文本) <= 65535
-        ):
-            raise ValueError("数据库端口无效")
         return 文本
     if kind == "admin_list":
         原列表 = 值 if isinstance(值, list) else re.split(r"[,，\n\r\s]+", str(值 or ""))

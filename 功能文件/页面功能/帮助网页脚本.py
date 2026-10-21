@@ -51,7 +51,7 @@
         pans: ['网盘配置', '管理多网盘分享和账号安全摘要'],
         runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
         help: ['帮助指令', '查看机器人当前支持的聊天指令'],
-         settings: ['系统设置', '直接修改插件配置、网盘目录和数据库连接'],
+         settings: ['系统设置', '查看数据库连接状态'],
         messages: ['消息记录', '查看群聊和私聊消息，回复、发送和撤回消息'],
       };
       let snapshot = null;
@@ -134,7 +134,7 @@
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
       const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
-      const categoryOrder = ['basic_settings', 'help_web_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings', 'database_settings'];
+      const categoryOrder = ['basic_settings', 'help_web_settings'];
       const safeFieldValue = (field) => {
         if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\n') : '';
         if (field.kind === 'boolean') return Boolean(field.value);
@@ -181,6 +181,14 @@
           button.textContent = visible ? '显示' : '隐藏';
           button.setAttribute('aria-pressed', String(!visible));
         }));
+      };
+      const renderDatabaseStatus = (database = {}) => {
+        const status = String(database.status || '--');
+        const configured = Boolean(database.configured);
+        const statusNode = $('settings-db-status');
+        const configuredNode = $('settings-db-configured');
+        if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }
+        if (configuredNode) configuredNode.textContent = configured ? '已配置' : '未配置';
       };
        const saveConfig = async (editor) => {
         const fields = {};
@@ -420,7 +428,7 @@
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
-        renderConfigEditor('settings-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['database_settings', 'uc_pan_settings', 'quark_pan_settings', 'baidu_pan_settings'].includes(field.category));
+        renderDatabaseStatus(database);
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
