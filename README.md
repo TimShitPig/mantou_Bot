@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.224-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.225-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,9 +11,11 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.224 |
+| 版本 | v6.1.225 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
+
+网页群聊输入框输入 `@` 可选择全体成员或当前群已有资料的成员，支持搜索和方向键/Enter 选择；全体提及需要机器人具有群管理员权限。粘贴或选择的 PNG、JPEG、GIF、WebP 图片（不超过 10MB）使用 QQ 官方素材预上传，再以 Markdown 发送，保留原始图片与动画。
 
 引用消息支持按当前聊天的完整消息 ID/引用索引精确定位。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
 

@@ -196,6 +196,19 @@ from .帮助网页脚本 import 控制台脚本
             .msg-quote-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
             .msg-quote-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; }
             .composer-mention { color:#168bde; white-space:pre-wrap; user-select:all; }
+            .msg-mention-picker { position:fixed; z-index:1800; width:300px; max-height:min(320px,60vh); padding:6px; box-sizing:border-box; overflow:hidden; border:1px solid #e2e7ef; border-radius:12px; background:#fff; color:#263442; box-shadow:0 10px 36px #15263d24; }
+            .msg-mention-picker[hidden] { display:none; }
+            .msg-mention-heading { padding:5px 9px 7px; color:#8894a3; font-size:11px; }
+            .msg-mention-options { max-height:min(274px,calc(60vh - 46px)); overflow:auto; overscroll-behavior:contain; }
+            .msg-mention-item { display:flex; width:100%; align-items:center; gap:10px; min-height:54px; padding:7px 9px; border:0; border-radius:8px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+            .msg-mention-item.active,.msg-mention-item:not(:disabled):hover { background:#eef6ff; }
+            .msg-mention-item:disabled { cursor:default; opacity:.5; }
+            .msg-mention-avatar { display:grid; place-items:center; flex:none; width:34px; height:34px; border-radius:50%; background:#e9eef6; color:#6580a4; font-size:15px; }
+            .msg-mention-avatar.everyone { background:#e1f3ff; color:#168bde; font-size:21px; }
+            .msg-mention-copy { display:flex; min-width:0; flex-direction:column; gap:3px; }
+            .msg-mention-copy strong { overflow:hidden; font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+            .msg-mention-copy small,.msg-mention-empty { color:#8993a1; font-size:11px; }
+            .msg-mention-empty { padding:16px 9px; }
             .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
             .msg-media { margin-top:7px; }
             .msg-media-text { white-space:pre-wrap; word-break:break-word; }
@@ -507,6 +520,11 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-bubble { background:var(--raised); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.2); }
               :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#304c40; color:#e1efe7; }
               :root[data-theme="dark"] .msg-inline-link,:root[data-theme="dark"] .composer-mention { color:#b5c6f5; }
+              :root[data-theme="dark"] .msg-mention-picker { border-color:var(--line); background:var(--panel); color:var(--ink); box-shadow:0 12px 36px #0006; }
+              :root[data-theme="dark"] .msg-mention-item.active,:root[data-theme="dark"] .msg-mention-item:not(:disabled):hover { background:var(--raised); }
+              :root[data-theme="dark"] .msg-mention-avatar { background:var(--raised); color:var(--primary); }
+              :root[data-theme="dark"] .msg-mention-avatar.everyone { background:var(--primary-soft); color:var(--primary); }
+              :root[data-theme="dark"] .msg-mention-heading,:root[data-theme="dark"] .msg-mention-copy small,:root[data-theme="dark"] .msg-mention-empty { color:var(--muted); }
               :root[data-theme="dark"] .msg-inline-code { background:rgba(255,255,255,.08); }
               :root[data-theme="dark"] .msg-bubble.recalled { color:var(--danger); background:var(--danger-bg); border-color:var(--danger-line); }
               :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#7b8cae; background:#1a222e; color:#b8c5d8; }
@@ -691,7 +709,7 @@ from .帮助网页脚本 import 控制台脚本
                   <button class="msg-panel-toggle msg-composer-toggle" id="msg-composer-toggle" type="button" aria-expanded="true" aria-label="收起编辑区" title="收起编辑区">⌄</button>
                   <label class="msg-tool-btn" title="选择图片" id="msg-img-pick" aria-label="选择图片">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                    <input id="msg-img-file" type="file" accept="image/*" hidden>
+                    <input id="msg-img-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
                   </label>
                   <label class="msg-tool-btn" title="选择视频" id="msg-video-pick" aria-label="选择视频">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
@@ -728,7 +746,7 @@ from .帮助网页脚本 import 控制台脚本
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
                     <button class="msg-img-remove" id="msg-media-clear" type="button" aria-label="移除附件">×</button>
                   </div>
-                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></div>
+                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></div>
                 </div>
                 <div class="msg-toolbar">
                   <span style="flex:1"></span>
@@ -786,6 +804,7 @@ from .帮助网页脚本 import 控制台脚本
       </div>
     </main>
     <div class="msg-ctx" id="msg-ctx" hidden></div>
+    <div class="msg-mention-picker" id="msg-mention-picker" role="listbox" aria-label="选择提及对象" hidden></div>
     <div class="msg-lightbox" id="msg-lightbox" hidden>
       <div class="msg-lightbox-inner">
         <img id="msg-lightbox-img" alt="图片预览" referrerpolicy="no-referrer">

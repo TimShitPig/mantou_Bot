@@ -102,7 +102,6 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/user-profile/refresh", 后端._处理私聊资料刷新),
         ("get", "/api/message/media", 后端._处理消息媒体),
         ("get", "/api/message/lanzou-image", 后端._处理蓝奏云归档图片),
-        ("get", "/api/message/markdown-media/{token}", 后端._处理临时Markdown媒体),
         ("get", "/api/message/local-media/{filename}", 后端._处理本地发送媒体),
         ("get", "/api/message/layout", 后端._处理消息布局),
         ("post", "/api/message/layout", 后端._处理消息布局),
@@ -241,7 +240,6 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None, *, 保留�
             await 后端.关闭媒体代理会话()
         except Exception as exc:
             logger.debug("帮助控制台媒体代理会话关闭失败：错误类型=%s", type(exc).__name__)
-        后端.清空临时Markdown媒体()
         后端.关闭控制台执行器()
         后端.控制台会话恢复任务 = None
         if 后端.当前帮助网页服务 is 服务:

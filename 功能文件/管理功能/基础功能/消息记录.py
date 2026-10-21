@@ -7960,10 +7960,14 @@ def _构造Markdown图文内容(
     图片前文本: Any = "",
     图片后文本: Any = "",
     图片占位标记: Any = "\ufffc",
+    图片宽度: int = 640,
+    图片高度: int = 480,
 ) -> str:
     """按 QQ 官方 Markdown 图片语法拼接一条图文消息。"""
     文本 = str(内容 or "").strip()
-    地址 = _规范化公网图片地址(图片地址)
+    原地址 = str(图片地址 or "")
+    地址 = (原地址 if re.fullmatch(r"qqbot-media://image/v1/[A-Za-z0-9._~%+=/-]+", 原地址)
+          else _规范化公网图片地址(原地址))
     前文本 = str(图片前文本 or "").strip()
     后文本 = str(图片后文本 or "").strip()
     占位标记 = str(图片占位标记 or "\ufffc")
@@ -7976,15 +7980,19 @@ def _构造Markdown图文内容(
         文本 = f"{拆分前文}{拆分后文}".strip()
     if (前文本 or 后文本) and 地址:
         编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
-        图片标记 = f"![图片 #640px #480px]({编码地址})"
+        图片标记 = f"![图片 #{图片宽度}px #{图片高度}px]({编码地址})"
         return "\n\n".join(值 for 值 in (前文本, 图片标记, 后文本) if 值)
     if 地址 and not 文本:
         编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
-        return f"![图片 #640px #480px]({编码地址})"
+        return f"![图片 #{图片宽度}px #{图片高度}px]({编码地址})"
     if not 地址:
         return ""
     编码地址 = _网址编码(地址, safe=":/?#[]@!$&'*+,;=%~._-")
-    return f"{文本}\n\n![图片 #640px #480px]({编码地址})"
+    return f"{文本}\n\n![图片 #{图片宽度}px #{图片高度}px]({编码地址})"
+
+
+def _规范全体成员提及(文本: Any) -> str:
+    return re.sub(r"<qqbot-at-everyone\s*/\s*>", "<qqbot-at-everyone />", str(文本 or "").replace("<@all>", "<qqbot-at-everyone />"))
 
 
 async def 发送消息(
@@ -8040,6 +8048,16 @@ async def 发送消息(
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     api, _http = 通道
+    有全体提及 = any("<qqbot-at-everyone />" in _规范全体成员提及(值) for 值 in (内容, 图片前文本, 图片后文本))
+    if 有全体提及:
+        if 会话类型 != "group":
+            return {"ok": False, "message": "全体成员提及仅支持群聊"}
+        if 类型 not in ("text", "markdown"):
+            return {"ok": False, "message": "请使用文字或图文消息提及全体成员"}
+        类型 = "markdown"
+        内容 = _规范全体成员提及(内容)
+        图片前文本 = _规范全体成员提及(图片前文本)
+        图片后文本 = _规范全体成员提及(图片后文本)
     最近消息ID = 消息ID or 获取最近消息ID(平台实例, 会话标识) or 获取本地最近消息ID(会话标识)
     场景 = 获取会话场景(平台实例, 会话标识)
     # QQ 官方被动消息 msg_id 2 分钟时效：优先用近期收到的消息 ID 被动发送
@@ -8098,10 +8116,10 @@ async def 发送消息(
             文件大小 = 图片路径值.stat().st_size
         except OSError:
             return {"ok": False, "message": "图片数据无效"}
-        if 文件大小 <= 0 or 文件大小 > 200 * 1024 * 1024:
+        if 文件大小 <= 0 or 文件大小 > 10 * 1024 * 1024:
             return {"ok": False, "message": "图片数据无效"}
         try:
-            图片字节 = 图片路径值.read_bytes()
+            图片字节 = await asyncio.to_thread(图片路径值.read_bytes)
         except OSError:
             return {"ok": False, "message": "图片数据无效"}
         图片文件名 = 图片文件名 or 图片路径值.name or "image.png"
@@ -8137,39 +8155,42 @@ async def 发送消息(
 
     图片记录地址 = 图片公开地址
     媒体记录地址 = str(媒体URL or "").strip()
-    if 图片字节 is not None and 类型 in ("text", "markdown") and not 图片公开地址:
-        临时Markdown地址 = ""
+    Markdown图片地址 = 图片公开地址
+    图片宽度, 图片高度 = 640, 480
+    图片素材 = None
+    if 图片字节 is not None and 类型 in ("text", "markdown"):
         try:
-            from 功能文件.页面功能 import 帮助网页后端
+            from 功能文件.管理功能.基础功能 import QQ官方素材
 
-            图片内容类型 = {
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-            }.get(Path(图片文件名).suffix.lower(), "image/png")
-            临时Markdown地址 = 帮助网页后端.创建临时Markdown媒体地址(
-                图片字节,
-                图片内容类型,
-            )
-            if 临时Markdown地址:
-                图片公开地址 = _规范化公网图片地址(临时Markdown地址)
-                图片记录地址 = 图片公开地址
+            图片素材 = await QQ官方素材.上传Markdown图片(_http, appid, 图片字节)
+            Markdown图片地址 = 图片素材["url"]
+            图片宽度, 图片高度 = 图片素材["width"], 图片素材["height"]
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
-            logger.debug(
-                "消息发送临时 Markdown 图片地址创建失败：错误类型=%s",
-                type(异常).__name__,
+            logger.warning(
+                "QQ官方 Markdown 图片预上传失败：阶段=%s，HTTP状态=%s，业务码=%s，错误类型=%s",
+                getattr(异常, "stage", "request"), getattr(异常, "status", None) or "none",
+                getattr(异常, "code", None) or "none", type(异常).__name__,
             )
-        logger.info(
-            "消息发送本地图片 Markdown 地址状态：字节数=%s，已创建=%s",
-            len(图片字节),
-            bool(临时Markdown地址),
-        )
-        if not 图片公开地址:
-            return {"ok": False, "message": "图片暂时无法发送"}
+            if getattr(异常, "stage", "") == "image_size":
+                return {"ok": False, "message": "Markdown 图片须在 10MB 以内"}
+            if getattr(异常, "stage", "") == "image_format":
+                return {"ok": False, "message": "Markdown 图片仅支持 PNG、JPEG、GIF、WebP"}
+            if getattr(异常, "code", None) == 40035007:
+                return {"ok": False, "message": "图片素材空间已满，请清理后重试"}
+            return {"ok": False, "message": "图片预上传失败，请稍后重试"}
+
+    async def _释放已发送图片素材() -> None:
+        if not 图片素材:
+            return
+        try:
+            await QQ官方素材.删除已发送素材(_http, appid, 图片素材["image_id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            logger.warning("QQ官方已发送图片素材释放失败：HTTP状态=%s，业务码=%s，错误类型=%s",
+                           getattr(异常, "status", None) or "none", getattr(异常, "code", None) or "none", type(异常).__name__)
 
     async def _保存本地发送媒体记录() -> None:
         """记录浏览器本地媒体键，不把发送字节写入服务器硬盘。"""
@@ -8230,14 +8251,16 @@ async def 发送消息(
             "text": _媒体文字去占位(内容, 图片占位标记),
         }
 
-    # 有公网地址时使用 Markdown；本地字节媒体直接走官方富媒体消息。
+    # 本地图片用官方素材引用，网络图片继续支持原 Markdown 地址。
     图文内容 = (
         _构造Markdown图文内容(
             内容,
-            图片公开地址,
+            Markdown图片地址,
             图片前文本,
             图片后文本,
             图片占位标记,
+            图片宽度,
+            图片高度,
         )
         if 类型 in ("text", "markdown")
         else ""
@@ -8245,10 +8268,9 @@ async def 发送消息(
     if 图文内容:
         消息体["msg_type"] = 2
         消息体.pop("content", None)
-        消息体["markdown"] = {
-            "content": 图文内容,
-            "force_verify_image_resource": True,
-        }
+        消息体["markdown"] = {"content": 图文内容}
+        if not Markdown图片地址.startswith("qqbot-media://"):
+            消息体["markdown"]["force_verify_image_resource"] = True
     else:
         # 没有公网图片地址时，下面改用官方富媒体消息。
         if (图片字节 is not None or 图片公开地址) and 类型 == "markdown":
@@ -8394,6 +8416,7 @@ async def 发送消息(
                         媒体=媒体记录,
                         发送时间=_提取发送响应时间(结果),
                     )
+                    await _释放已发送图片素材()
                     return {"ok": True, "message_id": 响应ID, "message": 记录}
                 错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
@@ -8442,6 +8465,8 @@ async def 发送消息(
         媒体=媒体记录,
         发送时间=_提取发送响应时间(结果),
     )
+    if 响应ID:
+        await _释放已发送图片素材()
     return {"ok": True, "message_id": 响应ID, "message": 记录}
 
 

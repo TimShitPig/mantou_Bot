@@ -101,7 +101,7 @@
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
-        if (next !== 'messages' && activeView === 'messages') { closeGroupSettings(); stopMsgGroupSnapshots(); }
+        if (next !== 'messages' && activeView === 'messages') { closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') leaveQQReader();
@@ -2056,6 +2056,7 @@
               }
               const role = String(res?.bot_role || '').trim().toLowerCase();
               if (!['owner', 'admin', 'member'].includes(role)) throw new Error('群角色结果不完整');
+              composerMentionPicker.roles.set(JSON.stringify([chatId, target.appid]), role);
               if (group.membership_status !== 'active' || group.in_group === false) membershipChanged = true;
               group.membership_status = 'active';
               group.in_group = true;
@@ -2376,6 +2377,7 @@
         }
       };
       const selectMsgChat = (chat) => {
+        closeComposerMentionPicker();
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
         const chatType = String(chat?.chat_type || 'group');
@@ -2988,6 +2990,155 @@
         selection?.addRange(range);
         msgState.composerSelection = range.cloneRange();
       };
+      const composerMentionPicker = {scope:'', signature:'', dismissed:'', items:[], index:0, composing:false, frame:null, roles:new Map()};
+      const composerMentionScope = () => JSON.stringify([msgState.chatId, msgState.chatAppid]);
+      const closeComposerMentionPicker = (dismiss = false) => {
+        if (dismiss) composerMentionPicker.dismissed = composerMentionPicker.signature;
+        composerMentionPicker.scope = '';
+        composerMentionPicker.signature = '';
+        composerMentionPicker.items = [];
+        const menu = $('msg-mention-picker');
+        if (menu) { menu.hidden = true; menu.replaceChildren(); }
+        const editor = getComposerEditor();
+        editor?.setAttribute('aria-expanded', 'false');
+        editor?.removeAttribute('aria-activedescendant');
+      };
+      const composerMentionContext = () => {
+        const editor = getComposerEditor();
+        if (composerMentionPicker.composing || !editor || document.activeElement !== editor
+          || msgState.chatType !== 'group' || !msgState.chatId || msgState.chatRemoved
+          || composerHasMedia() || !['text','markdown'].includes(msgState.sendType)
+          || activeView !== 'messages' || document.visibilityState === 'hidden') return null;
+        const selection = window.getSelection?.();
+        if (!selection?.rangeCount || !selection.isCollapsed) return null;
+        const caret = selection.getRangeAt(0);
+        let node = caret.startContainer, offset = caret.startOffset;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          node = node.childNodes[offset - 1];
+          if (!node || node.nodeType !== Node.TEXT_NODE) return null;
+          offset = String(node.nodeValue || '').length;
+        }
+        if (node.nodeType !== Node.TEXT_NODE || !editor.contains(node)
+          || node.parentElement?.closest('[data-composer-mention],[data-composer-image]')) return null;
+        const before = String(node.nodeValue || '').slice(0, offset);
+        const match = /@([^\s@<>]{0,64})$/.exec(before);
+        if (!match || before[match.index - 1] === '<') return null;
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, offset);
+        const scope = composerMentionScope();
+        const prefix = document.createRange();
+        prefix.selectNodeContents(editor);
+        prefix.setEnd(node, offset);
+        return {range, query:match[1], scope, signature:JSON.stringify([scope, prefix.toString()])};
+      };
+      const composerMentionCandidates = (query) => {
+        const wanted = String(query || '').toLocaleLowerCase();
+        const currentAppid = String(msgState.chatAppid || '');
+        const role = composerMentionPicker.roles.get(JSON.stringify([msgState.chatId, currentAppid]));
+        const items = [{id:'all', name:'全体成员', nickname:'', detail:role === 'member' || (!role && !msgState.botIsAdmin) ? '需机器人为群管理员' : '群内所有成员', disabled:role === 'member'}];
+        Object.entries(msgState.profiles || {}).forEach(([id, profile]) => {
+          if (!mentionIdPattern.test(id) || !profile || typeof profile !== 'object'
+            || (profile.appid && String(profile.appid) !== currentAppid)
+            || (profile.group_id && String(profile.group_id) !== msgState.chatId)
+            || (profile.group_openid && String(profile.group_openid) !== msgState.chatId)) return;
+          const name = validMsgNickname(profile.nickname || profile.username, id);
+          const blank = profile.nickname_blank || isBlankMsgNickname(profile.nickname || profile.username);
+          if (!name && !blank) return;
+          items.push({id, name:name || '空白昵称', nickname:name || '\u00a0', detail:'群成员', disabled:false});
+        });
+        return items.filter((item) => !wanted || item.name.toLocaleLowerCase().includes(wanted) || (wanted.length >= 5 && item.id.toLocaleLowerCase().includes(wanted))).slice(0, 30);
+      };
+      const positionComposerMentionPicker = () => {
+        const menu = $('msg-mention-picker');
+        if (!menu || menu.hidden) return;
+        const context = composerMentionContext();
+        if (!context || context.scope !== composerMentionPicker.scope) return closeComposerMentionPicker();
+        const rect = context.range.getBoundingClientRect();
+        const anchor = rect.height ? rect : getComposerEditor().getBoundingClientRect();
+        const width = Math.min(300, Math.max(180, window.innerWidth - 20));
+        menu.style.width = `${width}px`;
+        const height = menu.getBoundingClientRect().height;
+        const left = Math.max(10, Math.min(anchor.left, window.innerWidth - width - 10));
+        let top = anchor.top - height - 8;
+        if (top < 10) top = anchor.bottom + 8;
+        top = Math.max(10, Math.min(top, window.innerHeight - height - 10));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+      };
+      const selectComposerMentionItem = (index) => {
+        const item = composerMentionPicker.items[index];
+        const context = composerMentionContext();
+        if (!item || item.disabled || !context || context.signature !== composerMentionPicker.signature) return;
+        if (item.id === 'all' && composerMentionPicker.roles.get(JSON.stringify([msgState.chatId, msgState.chatAppid])) === 'member') return updateComposerMentionPicker();
+        const range = context.range.cloneRange();
+        closeComposerMentionPicker();
+        msgState.composerSelection = range;
+        msgState.sendType = 'markdown';
+        $('msg-composer-tabs')?.querySelectorAll('[data-msg-type]').forEach((button) => button.classList.toggle('active', button.dataset.msgType === 'markdown'));
+        renderMsgExtra();
+        insertComposerMention(item.id, item.nickname);
+      };
+      const highlightComposerMentionItem = (index) => {
+        const menu = $('msg-mention-picker');
+        composerMentionPicker.index = index;
+        menu?.querySelectorAll('[data-mention-index]').forEach((button) => {
+          const selected = Number(button.dataset.mentionIndex) === index;
+          button.classList.toggle('active', selected);
+          button.setAttribute('aria-selected', String(selected));
+        });
+        const active = menu?.querySelector(`[data-mention-index="${index}"]`);
+        if (active) {
+          getComposerEditor()?.setAttribute('aria-activedescendant', active.id);
+          active.scrollIntoView({block:'nearest'});
+        } else getComposerEditor()?.removeAttribute('aria-activedescendant');
+      };
+      const updateComposerMentionPicker = () => {
+        const context = composerMentionContext();
+        const menu = $('msg-mention-picker');
+        if (!context || !menu) return closeComposerMentionPicker();
+        if (composerMentionPicker.dismissed === context.signature) return closeComposerMentionPicker();
+        const previousId = composerMentionPicker.items[composerMentionPicker.index]?.id;
+        const items = composerMentionCandidates(context.query);
+        composerMentionPicker.items = items;
+        composerMentionPicker.scope = context.scope;
+        composerMentionPicker.signature = context.signature;
+        composerMentionPicker.dismissed = '';
+        menu.innerHTML = '<div class="msg-mention-heading">提及</div><div class="msg-mention-options">' + (items.length ? items.map((item, index) =>
+          `<button type="button" id="msg-mention-option-${index}" class="msg-mention-item" role="option" tabindex="-1" data-mention-index="${index}" aria-selected="false"${item.disabled ? ' disabled aria-disabled="true"' : ''}><span class="msg-mention-avatar${item.id === 'all' ? ' everyone' : ''}" aria-hidden="true">${item.id === 'all' ? '@' : esc(Array.from(item.name)[0] || '·')}</span><span class="msg-mention-copy"><strong>${esc(item.name)}</strong><small>${esc(item.detail)}</small></span></button>`
+        ).join('') : '<div class="msg-mention-empty" role="status">暂无匹配的成员</div>') + '</div>';
+        menu.hidden = false;
+        getComposerEditor()?.setAttribute('aria-expanded', 'true');
+        let index = items.findIndex((item) => item.id === previousId && !item.disabled);
+        if (index < 0) index = items.findIndex((item) => !item.disabled);
+        highlightComposerMentionItem(index);
+        positionComposerMentionPicker();
+      };
+      const scheduleComposerMentionPicker = () => {
+        if (composerMentionPicker.frame !== null) return;
+        composerMentionPicker.frame = requestAnimationFrame(() => { composerMentionPicker.frame = null; updateComposerMentionPicker(); });
+      };
+      const handleComposerMentionKeydown = (event) => {
+        const menu = $('msg-mention-picker');
+        if (!menu || menu.hidden || event.isComposing || composerMentionPicker.composing || event.keyCode === 229) return false;
+        if (event.key === 'Escape') { event.preventDefault(); closeComposerMentionPicker(true); return true; }
+        if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const eligible = composerMentionPicker.items.map((item, index) => item.disabled ? -1 : index).filter((index) => index >= 0);
+          if (eligible.length) {
+            const position = eligible.indexOf(composerMentionPicker.index);
+            highlightComposerMentionItem(eligible[(position + (event.key === 'ArrowDown' ? 1 : -1) + eligible.length) % eligible.length]);
+          }
+          return true;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          selectComposerMentionItem(composerMentionPicker.index);
+          return true;
+        }
+        return false;
+      };
       const clearMsgQuote = () => {
         removeQuoteMention();
         msgState.quote = null;
@@ -3448,6 +3599,7 @@
         return form;
       };
       const resetComposer = () => {
+        closeComposerMentionPicker();
         const editor = getComposerEditor();
         if (editor) editor.replaceChildren();
         msgState.quote = null;
@@ -3921,6 +4073,11 @@
         }
       };
       const setComposerImage = (data, source, preview = '', file = null) => {
+        const imageData = String(data || '');
+        const mime = String(file?.type || /^data:([^;,]+)/i.exec(imageData)?.[1] || '').toLowerCase();
+        const size = file ? Number(file.size || 0) : (imageData.startsWith('data:') ? Math.floor((imageData.split(',')[1] || '').length * 3 / 4) - (/==$/.test(imageData) ? 2 : /=\s*$/.test(imageData) ? 1 : 0) : 0);
+        if (mime && !['image/png','image/jpeg','image/gif','image/webp'].includes(mime)) { toast('图片仅支持 PNG、JPEG、GIF 或 WebP'); return false; }
+        if (size > 10 * 1024 * 1024) { toast('图片不能超过 10 MB'); return false; }
         clearComposerMedia();
         msgState.pastedImage = String(data || '');
         msgState.pastedImageFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
@@ -3928,8 +4085,10 @@
         const inlineSource = String(preview || data || source || '').trim();
         if (inlineSource) insertComposerImage(inlineSource);
         getComposerEditor()?.focus();
+        return true;
       };
       const setComposerMedia = (data, name, fileType, mime = '', file = null) => {
+        closeComposerMentionPicker();
         clearMsgImage();
         msgState.mediaData = String(data || '');
         msgState.mediaFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
@@ -3997,8 +4156,7 @@
           const proxy = mediaProxyUrl(url, 'image') || url;
           try {
             const dataUrl = await blobToDataUrl(await fetchImageBlob(proxy));
-            setComposerImage(dataUrl, '', dataUrl, null);
-            toast('图片已读取，可继续输入文字后发送');
+            if (setComposerImage(dataUrl, '', dataUrl, null)) toast('图片已读取，可继续输入文字后发送');
           } catch (_) {
             setComposerImage('', url, proxy);
             toast('图片已添加，可继续输入文字后发送');
@@ -4007,8 +4165,7 @@
         }
         try {
           const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
-          setComposerImage(dataUrl, '', dataUrl, null);
-          toast('图片已添加，可继续输入文字后发送');
+          if (setComposerImage(dataUrl, '', dataUrl, null)) toast('图片已添加，可继续输入文字后发送');
         } catch (_) {
           toast('图片读取失败，请重新拖入');
         }
@@ -5097,6 +5254,7 @@
           }
           const role = String(data.bot_role || '').trim().toLowerCase();
           if (!['owner', 'admin', 'member'].includes(role)) return;
+          composerMentionPicker.roles.set(JSON.stringify([requestChatId, target.appid]), role);
           if (current) { current.membership_status = 'active'; current.in_group = true; }
           if (current) current.membership_checked_at = Number(data.membership_checked_at || Math.floor(Date.now() / 1000));
           const isAdmin = Boolean(data.bot_is_admin);
@@ -5702,17 +5860,32 @@
       $('msg-send-mode').addEventListener('change', (e) => { msgState.sendMode = e.target.value; $('msg-custom-id').hidden = !(msgState.sendMode === 'custom_msg_id' || msgState.sendMode === 'custom_event_id'); });
       $('msg-send').addEventListener('click', sendMessage);
       const handleComposerKeydown = (e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229) {
+        if (handleComposerMentionKeydown(e)) return;
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && !composerMentionPicker.composing && e.keyCode !== 229) {
           e.preventDefault();
           sendMessage();
         }
       };
       document.querySelectorAll('#msg-editor').forEach((node) => {
         node.addEventListener('keydown', handleComposerKeydown);
-        node.addEventListener('keyup', saveComposerSelection);
-        node.addEventListener('mouseup', saveComposerSelection);
-        node.addEventListener('input', () => { syncComposerImageState(); saveComposerSelection(); });
+        node.addEventListener('keyup', () => { saveComposerSelection(); scheduleComposerMentionPicker(); });
+        node.addEventListener('mouseup', () => { saveComposerSelection(); scheduleComposerMentionPicker(); });
+        node.addEventListener('input', () => { syncComposerImageState(); saveComposerSelection(); scheduleComposerMentionPicker(); });
+        node.addEventListener('compositionstart', () => { composerMentionPicker.composing = true; closeComposerMentionPicker(); });
+        node.addEventListener('compositionend', () => { composerMentionPicker.composing = false; saveComposerSelection(); scheduleComposerMentionPicker(); });
+        node.addEventListener('blur', () => closeComposerMentionPicker());
       });
+      $('msg-mention-picker')?.addEventListener('pointerdown', (event) => event.preventDefault());
+      $('msg-mention-picker')?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-mention-index]');
+        if (button && !button.disabled) selectComposerMentionItem(Number(button.dataset.mentionIndex));
+      });
+      document.addEventListener('selectionchange', scheduleComposerMentionPicker);
+      document.addEventListener('pointerdown', (event) => {
+        if (!getComposerEditor()?.contains(event.target) && !$('msg-mention-picker')?.contains(event.target)) closeComposerMentionPicker(true);
+      });
+      window.addEventListener('resize', positionComposerMentionPicker);
+      document.addEventListener('scroll', positionComposerMentionPicker, true);
       const handleComposerPaste = (e) => {
         const items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
@@ -5723,8 +5896,7 @@
             if (!file) continue;
             const reader = new FileReader();
             reader.onload = () => {
-              setComposerImage(reader.result, '', reader.result, file);
-              toast('已粘贴图片，可继续输入文字后发送');
+              if (setComposerImage(reader.result, '', reader.result, file)) toast('已粘贴图片，可继续输入文字后发送');
             };
             reader.readAsDataURL(file);
             e.preventDefault();
@@ -5743,16 +5915,14 @@
         e.preventDefault();
         if (pastedSource.startsWith('data:image/')) {
           const file = dataUrlToFile(pastedSource);
-          setComposerImage(pastedSource, '', pastedSource, file);
-          toast('已粘贴图片，可单独发送或继续输入文字');
+          if (setComposerImage(pastedSource, '', pastedSource, file)) toast('已粘贴图片，可单独发送或继续输入文字');
           return;
         }
         const proxy = mediaProxyUrl(pastedSource, 'image') || pastedSource;
         void fetchImageBlob(proxy)
           .then((blob) => blobToDataUrl(blob))
           .then((dataUrl) => {
-            setComposerImage(dataUrl, '', dataUrl, dataUrlToFile(dataUrl));
-            toast('已粘贴图片，可单独发送或继续输入文字');
+            if (setComposerImage(dataUrl, '', dataUrl, dataUrlToFile(dataUrl))) toast('已粘贴图片，可单独发送或继续输入文字');
           })
           .catch(() => {
             setComposerImage('', pastedSource, proxy);
@@ -5919,8 +6089,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
-      window.addEventListener('pagehide', () => { cancelMsgQuoteJump(); stopMsgGroupSnapshots(); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
+      window.addEventListener('pagehide', () => { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); });
       setInterval(refreshQuarkProfilesSilently, 60000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
