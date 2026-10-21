@@ -2514,6 +2514,32 @@ def 解析QQ阅读账号会员状态(data: Any) -> dict[str, Any]:
     }
 
 
+def 规范QQ阅读头像地址(value: Any) -> str:
+    """补齐官方 QQConnect 头像缺失的尺寸段，保留完整头像标识。"""
+    if not isinstance(value, str) or len(value) > 2048:
+        return ""
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        return ""
+    address = value.strip()
+    if not address or any(c.isspace() for c in address):
+        return ""
+    try:
+        parts = urlsplit(address)
+        if (parts.scheme not in {"http", "https"} or not parts.hostname
+                or parts.username is not None or parts.password is not None
+                or parts.port not in {None, 443 if parts.scheme == "https" else 80}):
+            return ""
+    except ValueError:
+        return ""
+    avatar_path = parts.path.rstrip("/")
+    if (parts.hostname == "thirdqq.qlogo.cn"
+            and re.fullmatch(r"/ek_qqapp/[A-Za-z0-9]{1,512}", avatar_path)):
+        # 官网部分账号 icon 没有 /100；追加尺寸，不能替换最后一段头像标识。
+        return parts._replace(scheme="https", netloc="thirdqq.qlogo.cn",
+                              path=avatar_path + "/100").geturl()
+    return address
+
+
 def 解析QQ阅读账号资料(data: Any) -> dict[str, Any]:
     """解析 getAcctInfo 返回的账号昵称、头像和手机号。"""
     会员状态 = 解析QQ阅读账号会员状态(data)
@@ -2522,13 +2548,13 @@ def 解析QQ阅读账号资料(data: Any) -> dict[str, Any]:
     return {
         "available": True,
         "nickname": str(data.get("nick") or data.get("nickname") or "").strip(),
-        "avatar_url": str(
+        "avatar_url": 规范QQ阅读头像地址(
             data.get("icon")
             or data.get("avatar")
             or data.get("avatarUrl")
             or data.get("headUrl")
             or ""
-        ).strip(),
+        ),
         "phone": (
             str(data.get("mobile") or "").strip()
             if re.fullmatch(r"1\d{10}", str(data.get("mobile") or "").strip())
@@ -3629,7 +3655,7 @@ def _解析QQ阅读账号项(数据: Any) -> dict[str, Any] | None:
         **凭据,
         "enabled": 数据.get("enabled") is not False,
         "nickname": str(资料.get("nickname") or "")[:120],
-        "avatar_url": str(资料.get("avatar_url") or "")[:2048],
+        "avatar_url": 规范QQ阅读头像地址(资料.get("avatar_url")),
         "phone": str(资料.get("phone") or "")[:32],
         "updated_at": max(0, _安全整数(数据.get("updated_at"), 0)),
         "profile_updated_at": max(0, _安全整数(数据.get("profile_updated_at"), 0)),
@@ -3685,10 +3711,7 @@ def _QQ阅读账号摘要(状态: dict[str, Any]) -> dict[str, Any]:
         资料["selected"] = 账号["id"] == 状态["selected_id"]
         if not 资料["nickname"]:
             资料["nickname"] = "书友_" + 账号["ywguid"][-6:]
-        if not 资料["avatar_url"]:
-            资料["avatar_url"] = (
-                "https://shp.qpic.cn/qqreader_f/0/" + 账号["ywguid"] + "/136"
-            )
+        资料["avatar_url"] = 规范QQ阅读头像地址(资料.get("avatar_url"))
         列表.append(资料)
     return {"configured": bool(状态["selected_id"]),
             "selected_id": 状态["selected_id"], "accounts": 列表}
@@ -3785,7 +3808,8 @@ def _合并QQ阅读账号资料(
         if 账号 is None or 账号["ywkey"] != 凭据["ywkey"]:
             return _QQ阅读账号摘要(状态)
         for 键 in ("nickname", "avatar_url", "phone"):
-            值 = str(资料.get(键) or "")
+            值 = (规范QQ阅读头像地址(资料.get(键))
+                  if 键 == "avatar_url" else str(资料.get(键) or ""))
             if 值:
                 账号[键] = 值[:2048 if 键 == "avatar_url" else 120]
         if isinstance(资料.get("vip"), dict):
@@ -5515,6 +5539,7 @@ class QQ阅读扫码登录客户端:
         "login.book.qq.com", "book.qq.com", "passport.yuewen.com",
         "ptlogin.yuewen.com", "ptlogin.qidian.com", "passport.qidian.com",
         "graph.qq.com", "xui.ptlogin2.qq.com", "ssl.ptlogin2.qq.com",
+        "ssl.ptlogin2.graph.qq.com",
         "ptlogin2.qq.com", "ui.ptlogin2.qq.com",
     })
     _UA = (
@@ -5536,6 +5561,8 @@ class QQ阅读扫码登录客户端:
         self.HTTP状态: int | None = None
         self.轮询状态: str | None = None
         self.业务码: str | None = None
+        self.跳转主机 = "unknown"
+        self.跳转协议 = "unknown"
 
     def _设置诊断阶段(self, 阶段: str) -> None:
         self.诊断阶段 = 阶段
@@ -5744,6 +5771,12 @@ class QQ阅读扫码登录客户端:
     async def _交换阅读登录态(self, jump_url: str) -> dict[str, str]:
         self.status = "authorizing"
         self._设置诊断阶段("login_jump")
+        try:
+            jump = urlsplit(jump_url)
+            self.跳转主机 = jump.hostname if jump.hostname in self._允许主机 else "unknown"
+            self.跳转协议 = jump.scheme if jump.scheme in {"https", "http"} else "unknown"
+        except (TypeError, ValueError):
+            self.跳转主机 = self.跳转协议 = "unknown"
         _, _, frames = await self._请求("GET", self._校验地址(jump_url))
         skey = self._读取Cookie("p_skey", "https://graph.qq.com/")
         if not skey:

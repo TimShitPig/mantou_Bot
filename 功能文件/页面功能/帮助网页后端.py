@@ -3187,10 +3187,20 @@ def _记录QQ阅读扫码失败(客户端: Any, exc: BaseException, 阶段: str)
         if type(值) is int and -10**12 < 值 < 10**12:
             值 = str(值)
         状态码.append(值 if type(值) is str and re.fullmatch(r"-?[0-9]{1,12}", 值) else "none")
+    跳转主机 = getattr(客户端, "跳转主机", None)
+    if type(跳转主机) is not str or 跳转主机 not in {
+        "login.book.qq.com", "book.qq.com", "passport.yuewen.com", "ptlogin.yuewen.com",
+        "ptlogin.qidian.com", "passport.qidian.com", "graph.qq.com", "xui.ptlogin2.qq.com",
+        "ssl.ptlogin2.qq.com", "ptlogin2.qq.com", "ui.ptlogin2.qq.com", "ssl.ptlogin2.graph.qq.com",
+    }:
+        跳转主机 = "unknown"
+    跳转协议 = getattr(客户端, "跳转协议", None)
+    if type(跳转协议) is not str or 跳转协议 not in {"https", "http"}:
+        跳转协议 = "unknown"
     日志 = logger.debug if 阶段 == "refresh_profile" else logger.warning
     日志(
-        "帮助控制台 QQ阅读扫码失败：阶段=%s，客户端阶段=%s，原因=%s，HTTP状态=%s，轮询码=%s，业务码=%s，错误类型=%s",
-        阶段, 客户端阶段, 原因, HTTP状态, *状态码, type(exc).__name__,
+        "帮助控制台 QQ阅读扫码失败：阶段=%s，客户端阶段=%s，原因=%s，HTTP状态=%s，轮询码=%s，业务码=%s，跳转主机=%s，跳转协议=%s，错误类型=%s",
+        阶段, 客户端阶段, 原因, HTTP状态, *状态码, 跳转主机, 跳转协议, type(exc).__name__,
     )
 
 
