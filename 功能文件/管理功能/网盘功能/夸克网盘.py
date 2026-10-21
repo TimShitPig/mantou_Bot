@@ -28,7 +28,8 @@ from 功能文件.管理功能.网盘功能 import 网盘清理工具
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
 目录列表最大并发数 = 4
-目录扫描完整性重试次数 = 1
+目录扫描完整性重试次数 = 3
+目录扫描重试每页数量 = 100
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 查询失败重试次数 = 3
@@ -265,21 +266,24 @@ class 夸克网盘客户端:
         self, 父目录ID: str, *, _完整性重试次数: int = 0,
         _串行扫描: bool = False,
     ) -> list[dict[str, Any]]:
-        结果: list[dict[str, Any]] = []
-        已见ID: set[str] = set()
-        总数量 = 0
+        class 扫描不一致(RuntimeError):
+            def __init__(self, 原因: str, 页码: int, 已收集: int, 总数: int | None):
+                self.原因, self.页码 = 原因, 页码
+                self.已收集, self.总数 = 已收集, 总数
 
-        async def 请求目录页(页码: int) -> tuple[list[Any], int]:
+        async def 请求目录页(
+            页码: int, 每页数量: int,
+        ) -> tuple[list[dict[str, Any]], int | None, int]:
             数据 = await self.请求JSON(
-                "GET",
-                "/file/sort",
+                "GET", "/file/sort",
                 params={
                     "pdir_fid": str(父目录ID),
                     "_page": 页码,
-                    "_size": 目录列表每页数量,
+                    "_size": 每页数量,
                     "_fetch_total": 1,
                     "_fetch_sub_dirs": 0,
-                    "_sort": "file_type:asc,updated_at:desc",
+                    # 更新时间会随远端操作变化，不适合作为偏移分页的排序。
+                    "_sort": "file_type:asc,file_name:asc",
                     "fetch_all_file": 1,
                     "fetch_risk_file_name": 1,
                 },
@@ -292,177 +296,132 @@ class 夸克网盘客户端:
             项目列表 = 数据主体.get("list")
             if not isinstance(项目列表, list):
                 raise RuntimeError("夸克网盘目录响应缺少有效列表")
+            元数据字段: dict[str, int] = {}
+            for 主体 in (数据主体, 数据):
+                if "metadata" not in 主体:
+                    continue
+                元数据 = 主体["metadata"]
+                if not isinstance(元数据, dict):
+                    raise RuntimeError("夸克网盘目录元数据无效")
+                for 字段 in ("_total", "total", "total_count", "total_num", "_page", "_size", "_count"):
+                    值 = 元数据.get(字段)
+                    if 值 is None:
+                        continue
+                    if type(值) is int and 值 >= 0:
+                        数值 = 值
+                    elif isinstance(值, str) and re.fullmatch(r"[0-9]+", 值):
+                        数值 = int(值)
+                    else:
+                        raise RuntimeError("夸克网盘目录分页元数据无效")
+                    键 = "_total" if 字段 in {"total", "total_count", "total_num"} else 字段
+                    if 键 in 元数据字段 and 元数据字段[键] != 数值:
+                        raise RuntimeError("夸克网盘目录分页元数据不一致")
+                    元数据字段[键] = 数值
+            总数 = 元数据字段.get("_total")
+            实际页宽 = 元数据字段.get("_size", 每页数量)
+            if 实际页宽 < 1 or 实际页宽 > 每页数量:
+                raise RuntimeError("夸克网盘目录分页大小无效")
+            if 元数据字段.get("_page", 页码) != 页码:
+                raise 扫描不一致("page_mismatch", 页码, 0, 总数)
+            if 元数据字段.get("_count", len(项目列表)) != len(项目列表):
+                raise 扫描不一致("count_mismatch", 页码, 0, 总数)
+            if len(项目列表) > 实际页宽 or (总数 is not None and len(项目列表) > 总数):
+                raise 扫描不一致("page_overflow", 页码, len(项目列表), 总数)
             页内ID: set[str] = set()
             for 项目 in 项目列表:
                 if not isinstance(项目, dict) or not 读取文件ID(项目).strip():
                     raise RuntimeError("夸克网盘目录项目结构或文件ID无效")
                 文件ID = 读取文件ID(项目)
                 if 文件ID in 页内ID:
-                    raise RuntimeError("夸克网盘目录页包含重复文件ID")
+                    raise 扫描不一致("duplicate_id", 页码, len(页内ID), 总数)
                 页内ID.add(文件ID)
-            已知页总数: int | None = None
-            for 元数据主体 in (数据主体, 数据):
-                if "metadata" not in 元数据主体:
-                    continue
-                元数据 = 元数据主体["metadata"]
-                if not isinstance(元数据, dict):
-                    raise RuntimeError("夸克网盘目录元数据无效")
-                for 字段名 in ("_total", "total", "total_count", "total_num"):
-                    值 = 元数据.get(字段名)
-                    if 值 is None:
-                        continue
-                    if type(值) is int and 值 >= 0:
-                        当前页总数 = 值
-                    elif isinstance(值, str) and re.fullmatch(r"[0-9]+", 值):
-                        当前页总数 = int(值)
+            return 项目列表, 总数, 实际页宽
+
+        for 轮次 in range(_完整性重试次数, 目录扫描完整性重试次数 + 1):
+            串行 = _串行扫描 or 轮次 > 0
+            请求页宽 = 目录扫描重试每页数量 if 串行 else 目录列表每页数量
+            结果: list[dict[str, Any]] = []
+            已见ID: set[str] = set()
+            总数量: int | None = None
+            try:
+                首页项目, 总数量, 实际页宽 = await 请求目录页(1, 请求页宽)
+                前页未满 = False
+
+                def 合并页面(
+                    页码: int, 页面: tuple[list[dict[str, Any]], int | None, int],
+                ) -> bool:
+                    nonlocal 前页未满
+                    项目列表, 页总数, 页宽 = 页面
+                    if 页宽 != 实际页宽 or 页总数 != 总数量:
+                        raise 扫描不一致("metadata_changed", 页码, len(结果), 页总数)
+                    if 总数量 is None and 前页未满 and 项目列表:
+                        raise 扫描不一致("short_page_followed_by_data", 页码, len(结果), None)
+                    for 项目 in 项目列表:
+                        文件ID = 读取文件ID(项目)
+                        if 文件ID in 已见ID:
+                            raise 扫描不一致("duplicate_id", 页码, len(结果), 总数量)
+                        已见ID.add(文件ID)
+                        结果.append(项目)
+                    if 总数量 is not None:
+                        预期数量 = min(实际页宽, max(0, 总数量 - (页码 - 1) * 实际页宽))
+                        if len(项目列表) != 预期数量 or len(结果) > 总数量:
+                            raise 扫描不一致("incomplete_page", 页码, len(结果), 总数量)
+                        return len(结果) == 总数量
+                    # 没有总数时必须继续至空页，不能把短页当作扫描终点。
+                    前页未满 = len(项目列表) < 实际页宽
+                    return not 项目列表
+
+                已完成 = 合并页面(1, (首页项目, 总数量, 实际页宽))
+                页码 = 2
+                while not 已完成:
+                    if not 串行 and 总数量 is not None:
+                        总页数 = (总数量 + 实际页宽 - 1) // 实际页宽
+                        页码列表 = list(range(页码, min(页码 + 目录列表最大并发数, 总页数 + 1)))
+                        批次结果 = await asyncio.gather(
+                            *(请求目录页(值, 实际页宽) for 值 in 页码列表),
+                            return_exceptions=True,
+                        )
+                        if any(isinstance(响应, asyncio.CancelledError) for 响应 in 批次结果):
+                            raise asyncio.CancelledError
+                        # HTTP/业务失败保留原来的错误，不把它们当成目录不一致。
+                        for 响应 in 批次结果:
+                            if isinstance(响应, BaseException) and not isinstance(响应, 扫描不一致):
+                                raise 响应
+                        for 响应 in 批次结果:
+                            if isinstance(响应, 扫描不一致):
+                                raise 响应
+                        for 当前页, 页面 in zip(页码列表, 批次结果):
+                            已完成 = 合并页面(当前页, 页面)
+                        页码 += len(页码列表)
                     else:
-                        raise RuntimeError("夸克网盘目录总数无效")
-                    if 已知页总数 is None:
-                        已知页总数 = 当前页总数
-                    elif 当前页总数 != 已知页总数:
-                        raise RuntimeError("夸克网盘目录总数字段不一致")
-            if 已知页总数 is not None and len(项目列表) > 已知页总数:
-                raise RuntimeError("夸克网盘目录项目数量超过总数")
-            return 项目列表, 已知页总数 or 0
-
-        def 合并项目(项目列表: list[Any]) -> int:
-            新增数量 = 0
-            for 项目 in 项目列表:
-                项目标识 = 读取文件ID(项目)
-                if 项目标识 in 已见ID:
-                    continue
-                已见ID.add(项目标识)
-                结果.append(项目)
-                新增数量 += 1
-            return 新增数量
-
-        async def 重扫不完整目录(
-            页码: int, 已收集数量: int, 页报告总数: int
-        ) -> list[dict[str, Any]]:
-            报告总数 = max(总数量, 页报告总数)
-            if _完整性重试次数 < 目录扫描完整性重试次数:
-                logger.info(
-                    "夸克网盘目录扫描期间数据变化，重新完整扫描：page=%s, collected=%s, reported_total=%s",
-                    页码,
-                    已收集数量,
-                    报告总数,
-                )
-                await asyncio.sleep(0.25)
-                return await self.列出目录全部项目(
-                    父目录ID, _完整性重试次数=_完整性重试次数 + 1,
-                    _串行扫描=True,
-                )
-            logger.warning(
-                "夸克网盘目录扫描仍不完整，停止使用部分结果：page=%s, collected=%s, reported_total=%s",
-                页码,
-                已收集数量,
-                报告总数,
-            )
-            raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作")
-
-        async def 确认完整扫描() -> list[dict[str, Any]]:
-            # 总数相同仍可能换入/换出；再核对首页，避免交付错位分页的集合。
-            复查首页, 复查总数 = await 请求目录页(1)
-            if (
-                复查总数 != 总数量
-                or [读取文件ID(项目) for 项目 in 复查首页]
-                != [读取文件ID(项目) for 项目 in 首页项目]
-                or (总数量 and len(结果) != 总数量)
-            ):
-                return await 重扫不完整目录(1, len(结果), 复查总数)
-            return 结果
-
-        首页项目, 总数量 = await 请求目录页(1)
-        if not 首页项目 and 总数量:
-            首页项目, 重试总数量 = await 请求目录页(1)
-            if 重试总数量:
-                总数量 = 重试总数量
-        首屏新增数量 = 合并项目(首页项目)
-        if 总数量 and len(结果) == 总数量:
-            return await 确认完整扫描()
-        if not 首页项目:
-            if 总数量 and len(结果) < 总数量:
-                return await 重扫不完整目录(1, len(结果), 总数量)
-            return await 确认完整扫描()
-        if 首屏新增数量 == 0:
-            raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
-
-        if not _串行扫描 and 总数量 > 目录列表每页数量 and len(首页项目) == 目录列表每页数量:
-            页数上限 = (总数量 + 目录列表每页数量 - 1) // 目录列表每页数量
-            metadata一致 = True
-            for 起始页 in range(2, 页数上限 + 1, 目录列表最大并发数):
-                页码列表 = list(
-                    range(
-                        起始页,
-                        min(起始页 + 目录列表最大并发数, 页数上限 + 1),
-                    )
-                )
-                批次结果 = await asyncio.gather(
-                    *(请求目录页(页码) for 页码 in 页码列表),
-                    return_exceptions=True,
-                )
-                if any(
-                    isinstance(响应, asyncio.CancelledError) for 响应 in 批次结果
+                        已完成 = 合并页面(页码, await 请求目录页(页码, 实际页宽))
+                        页码 += 1
+                # 总数相同仍可能换入/换出；复验首页，不拼接不同轮次的旧页面。
+                复查首页, 复查总数, 复查页宽 = await 请求目录页(1, 实际页宽)
+                if (
+                    复查总数 != 总数量 or 复查页宽 != 实际页宽
+                    or [读取文件ID(项目) for 项目 in 复查首页]
+                    != [读取文件ID(项目) for 项目 in 首页项目]
                 ):
-                    raise asyncio.CancelledError
-                # __puus 刷新不代表目录或账号变化；请求失败保留原来的错误分类。
-                for 响应 in 批次结果:
-                    if isinstance(响应, Exception):
-                        raise 响应
-                for 页码, 响应 in zip(页码列表, 批次结果):
-                    项目列表, 页总数 = 响应
-                    该页预期数量 = min(
-                        目录列表每页数量,
-                        总数量 - (页码 - 1) * 目录列表每页数量,
+                    raise 扫描不一致("head_changed", 1, len(结果), 复查总数)
+                return 结果
+            except 扫描不一致 as 异常:
+                if 轮次 >= 目录扫描完整性重试次数:
+                    logger.warning(
+                        "夸克网盘目录扫描仍不完整，停止使用部分结果："
+                        "page=%s, collected=%s, reported_total=%s, reason=%s",
+                        异常.页码, 异常.已收集, 异常.总数, 异常.原因,
                     )
-                    if (页总数 and 页总数 != 总数量) or len(
-                        项目列表
-                    ) != 该页预期数量:
-                        metadata一致 = False
-                        break
-                if not metadata一致:
-                    break
-                for 页码, 响应 in zip(页码列表, 批次结果):
-                    项目列表, _ = 响应
-                    合并项目(项目列表)
-                    if len(结果) != min(
-                        总数量, 页码 * 目录列表每页数量
-                    ):
-                        metadata一致 = False
-                        break
-                if not metadata一致:
-                    break
-            if metadata一致 and len(结果) == 总数量:
-                return await 确认完整扫描()
-            # 回退必须丢弃全部旧页，串行重扫也从最新首页开始。
-            return await 重扫不完整目录(起始页, len(结果), 总数量)
+                    raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作") from None
+                logger.info(
+                    "夸克网盘目录扫描不一致，退避后从首页串行重扫："
+                    "page=%s, collected=%s, reported_total=%s, reason=%s, attempt=%s/%s",
+                    异常.页码, 异常.已收集, 异常.总数, 异常.原因,
+                    轮次 + 1, 目录扫描完整性重试次数,
+                )
+                await asyncio.sleep(0.5 * 2 ** 轮次)
+        raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作")
 
-        页码 = 2
-        while True:
-            项目列表, 页总数 = await 请求目录页(页码)
-            if not 项目列表 and max(总数量, 页总数) > len(结果):
-                重试项目列表, 重试页总数 = await 请求目录页(页码)
-                if 重试项目列表:
-                    项目列表 = 重试项目列表
-                if 重试页总数:
-                    页总数 = 重试页总数
-            if not 总数量:
-                总数量 = 页总数
-            if 总数量 and 页总数 and 页总数 != 总数量:
-                return await 重扫不完整目录(页码, len(结果), 页总数)
-            新增数量 = 合并项目(项目列表)
-            if 新增数量 != len(项目列表) or (总数量 and len(结果) > 总数量):
-                return await 重扫不完整目录(页码, len(结果), 总数量)
-            if 总数量 and len(结果) == 总数量:
-                break
-            if not 项目列表:
-                if 总数量 and len(结果) < 总数量:
-                    return await 重扫不完整目录(页码, len(结果), 总数量)
-                break
-            if 新增数量 == 0:
-                raise RuntimeError("夸克网盘目录分页未前进，扫描结果不完整")
-            页码 += 1
-        return await 确认完整扫描()
 
     async def 上传文件(self, 本地路径: str | Path, 父目录ID: str, 文件名: str) -> str:
         路径 = Path(本地路径)
