@@ -184,11 +184,14 @@
       };
       const renderDatabaseStatus = (database = {}) => {
         const status = String(database.status || '--');
-        const configured = Boolean(database.configured);
         const statusNode = $('settings-db-status');
-        const configuredNode = $('settings-db-configured');
+        const setValue = (id, value) => { const node = $(id); if (node) node.textContent = value || '--'; };
         if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }
-        if (configuredNode) configuredNode.textContent = configured ? '已配置' : '未配置';
+        setValue('settings-db-address', database.address);
+        setValue('settings-db-port', database.port);
+        setValue('settings-db-username', database.username);
+        setValue('settings-db-name', database.name);
+        setValue('settings-db-password', database.password_configured ? '已配置（隐藏）' : '未配置');
       };
        const saveConfig = async (editor) => {
         const fields = {};

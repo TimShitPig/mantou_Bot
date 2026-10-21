@@ -269,6 +269,7 @@
      .runtime-page-grid { display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); margin-top:18px; }
      .runtime-detail { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:16px; }
      .settings-db-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+     .settings-db-grid .status-item strong { overflow-wrap:anywhere; }
      .settings-db-note { margin-top:14px; }
      .runtime-detail .status-item { padding:13px; border:1px solid var(--line); border-radius:7px; background:#fbfcff; }
      .safe-list,.settings-list { display:grid; gap:0; }

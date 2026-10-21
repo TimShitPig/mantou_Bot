@@ -1844,6 +1844,7 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
     配置 = 当前帮助网页配置
     数据库已配置 = 已配置运行状态数据库(配置)
     数据库状态 = 检查运行状态数据库(配置)
+    数据库展示配置 = 获取控制台会话配置快照(配置)["database_settings"]
     QQ登录态摘要: dict[str, Any] = {"configured": False}
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
@@ -1917,7 +1918,15 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
             "role": "控制台管理员",
             "admin_count": int(管理员字段.get("count") or 0),
         },
-        "database": {"configured": 数据库已配置, "status": 数据库状态},
+        "database": {
+            "configured": 数据库已配置,
+            "status": 数据库状态,
+            "address": str(数据库展示配置.get("database_host") or ""),
+            "port": str(数据库展示配置.get("database_port") or ""),
+            "username": str(数据库展示配置.get("database_user") or ""),
+            "name": str(数据库展示配置.get("database_name") or ""),
+            "password_configured": bool(数据库展示配置.get("database_password")),
+        },
         "novels": {
             "global_enabled": bool(小说控制台状态["global_enabled"]),
             "test_mode": bool(小说控制台状态["test_mode"]),
