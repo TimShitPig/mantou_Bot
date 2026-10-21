@@ -1683,11 +1683,12 @@
         const source = mediaProxyUrl(url);
         const nonce = Number(msgState.avatarRefresh?.get(String(url)) || 0);
         const refreshed = nonce && source.startsWith('/api/') ? source + '&avatar_refresh=' + nonce : source;
-        return `<img src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}this.closest('.msg-chat-avatar, .msg-avatar')?.classList.add('avatar-fallback');this.remove();">`;
+        return `<img src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar')?.classList.add('avatar-fallback');this.remove();">`;
       };
       const avatarHtml = (url, letter) => {
-        if (!url) return esc(String(letter || '?').slice(0, 1));
-        return `<span class="avatar-letter">${esc(String(letter || '?').slice(0, 1))}</span>` + avatarImg(url, letter);
+        const firstLetter = Array.from(String(letter || '?'))[0];
+        if (!url) return esc(firstLetter);
+        return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter);
       };
       const applyBotProfile = (profile = {}) => {
         const data = profile && typeof profile === 'object' ? profile : {};
@@ -3045,9 +3046,11 @@
           const name = validMsgNickname(profile.nickname || profile.username, id);
           const blank = profile.nickname_blank || isBlankMsgNickname(profile.nickname || profile.username);
           if (!name && !blank) return;
-          items.push({id, name:name || '空白昵称', nickname:name || '\u00a0', detail:'群成员', disabled:false});
+          const avatar = safeMediaUrl(profile.avatar) || safeMediaUrl(profile.avatar_url)
+            || (currentAppid ? avatarUrl(id, 'user', currentAppid) : '');
+          items.push({id, name:name || '空白昵称', nickname:name || '\u00a0', avatar, detail:'群成员', disabled:false});
         });
-        return items.filter((item) => !wanted || item.name.toLocaleLowerCase().includes(wanted) || (wanted.length >= 5 && item.id.toLocaleLowerCase().includes(wanted))).slice(0, 30);
+        return items.filter((item) => !wanted || item.name.toLocaleLowerCase().includes(wanted) || (wanted.length >= 5 && item.id.toLocaleLowerCase().includes(wanted)));
       };
       const positionComposerMentionPicker = () => {
         const menu = $('msg-mention-picker');
@@ -3056,7 +3059,7 @@
         if (!context || context.scope !== composerMentionPicker.scope) return closeComposerMentionPicker();
         const rect = context.range.getBoundingClientRect();
         const anchor = rect.height ? rect : getComposerEditor().getBoundingClientRect();
-        const width = Math.min(300, Math.max(180, window.innerWidth - 20));
+        const width = Math.min(260, Math.max(180, window.innerWidth - 20));
         menu.style.width = `${width}px`;
         const height = menu.getBoundingClientRect().height;
         const left = Math.max(10, Math.min(anchor.left, window.innerWidth - width - 10));
@@ -3105,7 +3108,7 @@
         composerMentionPicker.signature = context.signature;
         composerMentionPicker.dismissed = '';
         menu.innerHTML = '<div class="msg-mention-heading">提及</div><div class="msg-mention-options">' + (items.length ? items.map((item, index) =>
-          `<button type="button" id="msg-mention-option-${index}" class="msg-mention-item" role="option" tabindex="-1" data-mention-index="${index}" aria-selected="false"${item.disabled ? ' disabled aria-disabled="true"' : ''}><span class="msg-mention-avatar${item.id === 'all' ? ' everyone' : ''}" aria-hidden="true">${item.id === 'all' ? '@' : esc(Array.from(item.name)[0] || '·')}</span><span class="msg-mention-copy"><strong>${esc(item.name)}</strong><small>${esc(item.detail)}</small></span></button>`
+          `<button type="button" id="msg-mention-option-${index}" class="msg-mention-item" role="option" tabindex="-1" data-mention-index="${index}" aria-selected="false"${item.disabled ? ' disabled aria-disabled="true"' : ''}><span class="msg-mention-avatar${item.id === 'all' ? ' everyone' : ''}" aria-hidden="true">${item.id === 'all' ? '@' : avatarHtml(item.avatar, Array.from(item.name)[0] || '·')}</span><span class="msg-mention-copy"><strong>${esc(item.name)}</strong><small>${esc(item.detail)}</small></span></button>`
         ).join('') : '<div class="msg-mention-empty" role="status">暂无匹配的成员</div>') + '</div>';
         menu.hidden = false;
         getComposerEditor()?.setAttribute('aria-expanded', 'true');

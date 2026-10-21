@@ -196,16 +196,18 @@ from .帮助网页脚本 import 控制台脚本
             .msg-quote-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
             .msg-quote-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; }
             .composer-mention { color:#168bde; white-space:pre-wrap; user-select:all; }
-            .msg-mention-picker { position:fixed; z-index:1800; width:300px; max-height:min(320px,60vh); padding:6px; box-sizing:border-box; overflow:hidden; border:1px solid #e2e7ef; border-radius:12px; background:#fff; color:#263442; box-shadow:0 10px 36px #15263d24; }
+            .msg-mention-picker { position:fixed; z-index:1800; width:260px; max-height:min(300px,60vh); padding:5px; box-sizing:border-box; overflow:hidden; border:1px solid #e2e7ef; border-radius:10px; background:#fff; color:#263442; box-shadow:0 10px 36px #15263d24; }
             .msg-mention-picker[hidden] { display:none; }
-            .msg-mention-heading { padding:5px 9px 7px; color:#8894a3; font-size:11px; }
-            .msg-mention-options { max-height:min(274px,calc(60vh - 46px)); overflow:auto; overscroll-behavior:contain; }
-            .msg-mention-item { display:flex; width:100%; align-items:center; gap:10px; min-height:54px; padding:7px 9px; border:0; border-radius:8px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+            .msg-mention-heading { padding:4px 7px 6px; color:#8894a3; font-size:11px; }
+            .msg-mention-options { max-height:min(258px,calc(60vh - 42px)); overflow:auto; overscroll-behavior:contain; }
+            .msg-mention-item { display:flex; width:100%; align-items:center; gap:8px; min-height:44px; padding:5px 7px; border:0; border-radius:7px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
             .msg-mention-item.active,.msg-mention-item:not(:disabled):hover { background:#eef6ff; }
             .msg-mention-item:disabled { cursor:default; opacity:.5; }
-            .msg-mention-avatar { display:grid; place-items:center; flex:none; width:34px; height:34px; border-radius:50%; background:#e9eef6; color:#6580a4; font-size:15px; }
-            .msg-mention-avatar.everyone { background:#e1f3ff; color:#168bde; font-size:21px; }
-            .msg-mention-copy { display:flex; min-width:0; flex-direction:column; gap:3px; }
+            .msg-mention-avatar { position:relative; display:grid; place-items:center; flex:none; width:28px; height:28px; overflow:hidden; border-radius:50%; background:#e9eef6; color:#6580a4; font-size:13px; }
+            .msg-mention-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+            .msg-mention-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; }
+            .msg-mention-avatar.everyone { background:#e1f3ff; color:#168bde; font-size:18px; }
+            .msg-mention-copy { display:flex; min-width:0; flex-direction:column; gap:2px; }
             .msg-mention-copy strong { overflow:hidden; font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
             .msg-mention-copy small,.msg-mention-empty { color:#8993a1; font-size:11px; }
             .msg-mention-empty { padding:16px 9px; }
