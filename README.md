@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.219-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.220-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.219 |
+| 版本 | v6.1.220 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -67,7 +67,7 @@ QQ 官方 `FRIEND_ADD`、`FRIEND_DEL` 事件会按机器人和用户记录好友
 帮助网页登录密码: 请填写长随机密码
 ```
 
-将域名或反向代理转发到监听端口后重载插件。QQ 官方帮助菜单会显示“打开网页版帮助”按钮。消息收发、群管和文件发送只处理 QQ 官方适配器（`qq_official`）。网页使用响应式布局，手机和电脑均可访问。控制台和登录页右上角都可以选择浅色模式或深色模式，选择会保存在当前浏览器并带切换动画。服务器位于 NAT 或容器网络时，需要把监听端口映射到外网。
+将域名或反向代理转发到监听端口后重载插件。QQ 官方帮助菜单会显示“打开网页版帮助”按钮。消息收发、群管和文件发送只处理 QQ 官方适配器（`qq_official`）。网页使用响应式布局，手机和电脑均可访问。控制台和登录页右上角都可以选择浅色模式或深色模式，选择会保存在当前浏览器并带切换动画。深色模式采用分层炭灰底色、柔和靛蓝操作色与灰绿发送气泡，输入框、弹窗和状态文字使用统一配色。服务器位于 NAT 或容器网络时，需要把监听端口映射到外网。
 
 ### 私有仓库安装
 

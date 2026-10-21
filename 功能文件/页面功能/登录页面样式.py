@@ -56,20 +56,26 @@
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
 
     /* ===== 可选深色模式 ===== */
-    :root[data-theme="dark"] { color-scheme:dark; --ink:#e8eaf2; --muted:#9aa0b5; --line:#2c3044; --bg:#171a24; --panel:#1f2330; --primary:#8b85ff; --primary-dark:#a29cff; --primary-soft:#2b2b4c; --mint:#16382c; --mint-ink:#55d8a2; }
+    :root[data-theme="dark"] { color-scheme:dark; --bg:#141920; --panel:#1b222c; --surface-raised:#222a35; --surface-hover:#283240; --input-bg:#151b23; --ink:#e5eaf1; --muted:#a4afbf; --soft:#8e9bad; --line:#34404f; --line-strong:#45556a; --primary:#aab8f5; --primary-dark:#c0caf9; --primary-soft:#2b3450; --accent-fill:#5968b8; --accent-hover:#606fbd; --focus-ring:rgba(170,184,245,.22); --mint:#233c35; --mint-ink:#8ecab0; --shadow:0 12px 36px rgba(0,0,0,.22); }
     :root[data-theme="dark"] body { background:var(--bg); color:var(--ink); }
-    :root[data-theme="dark"] .login-shell { box-shadow:0 18px 48px rgba(0,0,0,.35); }
-    :root[data-theme="dark"] .login-welcome { background:#1b1f2c; border-right-color:var(--line); }
-    :root[data-theme="dark"] .login-brand-mark { border-color:#33385a; background:#2b2b4c; color:#a29cff; }
-    :root[data-theme="dark"] .login-illustration::before { border-color:#33385a; }
-    :root[data-theme="dark"] .login-avatar { border-color:#33385a; background:#2b2b4c; box-shadow:0 10px 22px rgba(0,0,0,.4); }
-    :root[data-theme="dark"] .login-avatar::before { background:#4a4e8f; }
-    :root[data-theme="dark"] .login-avatar-face { color:#b9b6ff; }
-    :root[data-theme="dark"] .login-star { color:#6f6fd8; }
-    :root[data-theme="dark"] .login-theme-control:hover,:root[data-theme="dark"] .login-theme-control:focus-within { border-color:#3a3f58; background:#232838; }
-    :root[data-theme="dark"] .login-form label { color:#9aa0b5; }
-    :root[data-theme="dark"] .login-form input { border-color:#333a55; background:#161926; color:var(--ink); }
-    :root[data-theme="dark"] .login-form input:focus { border-color:#8b85ff; box-shadow:0 0 0 3px #262a4c; }
-    :root[data-theme="dark"] .login-button { box-shadow:0 7px 17px rgba(0,0,0,.3); }
-    :root[data-theme="dark"] .login-note { color:#6f7590; }
+    :root[data-theme="dark"] .login-shell { box-shadow:var(--shadow); }
+    :root[data-theme="dark"] .login-welcome { background:#181e27; border-right-color:var(--line); }
+    :root[data-theme="dark"] .login-brand-mark { border-color:var(--surface-raised); background:var(--primary-soft); color:var(--primary); }
+    :root[data-theme="dark"] .login-illustration::before { border-color:var(--line); }
+    :root[data-theme="dark"] .login-avatar { border-color:var(--surface-hover); background:var(--surface-raised); box-shadow:0 8px 20px rgba(0,0,0,.18); }
+    :root[data-theme="dark"] .login-avatar::before { background:#71849b; }
+    :root[data-theme="dark"] .login-avatar-face { color:#192634; }
+    :root[data-theme="dark"] .login-star { color:var(--soft); }
+    :root[data-theme="dark"] .login-theme-control:hover,:root[data-theme="dark"] .login-theme-control:focus-within { border-color:var(--line-strong); background:var(--surface-raised); }
+    :root[data-theme="dark"] .login-theme-control:focus-within { box-shadow:0 0 0 3px var(--focus-ring); }
+    :root[data-theme="dark"] .login-form label { color:var(--muted); }
+    :root[data-theme="dark"] .login-form input { border-color:var(--line-strong); background:var(--input-bg); color:var(--ink); }
+    :root[data-theme="dark"] .login-form input::placeholder { color:var(--soft); opacity:1; }
+    :root[data-theme="dark"] .login-form input:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--focus-ring); }
+    :root[data-theme="dark"] .login-button { background:var(--accent-fill); color:#fff; box-shadow:0 6px 16px rgba(0,0,0,.2); }
+    :root[data-theme="dark"] .login-button:hover { background:var(--accent-hover); }
+    :root[data-theme="dark"] .login-button:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
+    :root[data-theme="dark"] .login-message { color:#f0a5af; }
+    :root[data-theme="dark"] .login-note { color:var(--soft); }
+    :root[data-theme="dark"] .login-note::before { background:var(--mint-ink); }
   """
