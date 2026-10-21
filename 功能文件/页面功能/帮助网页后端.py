@@ -543,6 +543,43 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
+    "database_host": {
+        "category": "database_settings",
+        "label": "数据库地址",
+        "kind": "text",
+        "secret": False,
+        "hint": "MySQL 服务地址。修改后重载插件生效。",
+    },
+    "database_port": {
+        "category": "database_settings",
+        "label": "数据库端口",
+        "kind": "number",
+        "secret": False,
+        "default": "3306",
+        "hint": "默认 3306；有效范围 1 至 65535。修改后重载插件生效。",
+    },
+    "database_user": {
+        "category": "database_settings",
+        "label": "数据库用户名",
+        "kind": "text",
+        "secret": False,
+        "hint": "MySQL 登录用户名。",
+    },
+    "database_name": {
+        "category": "database_settings",
+        "label": "数据库名",
+        "kind": "text",
+        "secret": False,
+        "hint": "留空时使用数据库用户名作为数据库名。",
+        "placeholder": "留空时与用户名相同",
+    },
+    "database_password": {
+        "category": "database_settings",
+        "label": "数据库密码",
+        "kind": "secret",
+        "secret": True,
+        "hint": "密码仅写入、不回显；已配置时留空表示不修改。",
+    },
 }
 
 配置字段分类显示名 = {
@@ -552,6 +589,7 @@ async def _后台刷新消息列表(
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
     "lanzou_pan_settings": "蓝奏云媒体归档",
+    "database_settings": "数据库连接",
 }
 
 
@@ -727,6 +765,10 @@ def _读取插件配置摘要() -> dict[str, Any]:
             "secret": bool(定义.get("secret")),
             "configured": bool(原值),
         }
+        if 定义.get("hint"):
+            项目["hint"] = str(定义["hint"])
+        if 定义.get("placeholder"):
+            项目["placeholder"] = str(定义["placeholder"])
         if 定义.get("options"):
             项目["options"] = list(定义["options"])
         if 定义["kind"] == "admin_list":
@@ -743,8 +785,9 @@ def _读取插件配置摘要() -> dict[str, Any]:
                 else 文本值 in {"1", "true", "yes", "on", "enabled", "开启", "开"}
             )
         elif not 定义.get("secret"):
+            显示值 = "3306" if 字段名 == "database_port" and not 原值 else 原值
             项目["value"] = (
-                list(原值) if isinstance(原值, list) else str(原值 or "")
+                list(显示值) if isinstance(显示值, list) else str(显示值 or "")
             )
         else:
             # 敏感值只返回是否已配置。Cookie、密码、数据库凭据和密钥
@@ -798,6 +841,16 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
         if not 文本.isdigit() or not 160 <= int(文本) <= 1080:
             raise ValueError("教程图片宽度应为 160 至 1080 像素")
         return int(文本)
+    if 字段名 == "database_port":
+        if not 文本:
+            return "3306"
+        if not 文本.isdigit() or not 1 <= int(文本) <= 65535:
+            raise ValueError("数据库端口无效")
+        return 文本
+    if 字段名 == "database_name":
+        if len(文本) > 64 or any(ord(字符) < 32 or ord(字符) == 127 or 字符 in "`\\" for 字符 in 文本):
+            raise ValueError("数据库名无效")
+        return 文本
     if 字段名 == "help_web_port":
         if not 文本.isdigit() or not 1 <= int(文本) <= 65535:
             raise ValueError("帮助网页端口无效")
@@ -2240,6 +2293,7 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
     阶段 = "读取配置"
     try:
         配置字典 = _读取插件配置字典(当前帮助网页配置)
+        原认证指纹 = 获取控制台认证指纹(当前帮助网页配置)
         阶段 = "创建配置快照"
         原配置快照 = (
             _复制插件配置值(配置字典)
@@ -2283,7 +2337,11 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
                 "ok": True,
                 "updated": 已更新,
                 "restart_required": bool(已更新),
-                "message": "配置已保存，监听地址、登录账号和网盘目录等变更需重载插件生效",
+                "auth_changed": not hmac.compare_digest(
+                    原认证指纹,
+                    获取控制台认证指纹(当前帮助网页配置),
+                ),
+                "message": "配置已保存；数据库连接、监听地址和登录账号等变更需重载插件生效",
             }
         )
     except ValueError:

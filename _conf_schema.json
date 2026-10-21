@@ -154,9 +154,15 @@
         "default": ""
       },
       "database_user": {
-        "description": "MySQL 用户名和数据库名",
+        "description": "MySQL 用户名",
         "type": "string",
         "hint": "数据库名默认与用户名相同。",
+        "default": ""
+      },
+      "database_name": {
+        "description": "MySQL 数据库名",
+        "type": "string",
+        "hint": "可单独填写数据库名；留空时使用 database_user。帮助网页系统设置可直接编辑。",
         "default": ""
       },
       "database_password": {

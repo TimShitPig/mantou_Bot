@@ -51,7 +51,7 @@
         pans: ['网盘配置', '管理多网盘分享和账号安全摘要'],
         runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
         help: ['帮助指令', '查看机器人当前支持的聊天指令'],
-         settings: ['系统设置', '查看数据库连接状态'],
+         settings: ['系统设置', '查看状态并编辑数据库连接参数'],
         messages: ['消息记录', '查看群聊和私聊消息，回复、发送和撤回消息'],
       };
       let snapshot = null;
@@ -163,11 +163,11 @@
         node.innerHTML = groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key);
-          const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : '敏感值只写入，不在页面回显') : '';
+          const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
           if (field.kind === 'select') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${(field.options || []).map((option) => `<option value="${esc(option)}" ${String(option) === String(field.value ?? '') ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select><small>${hint}</small></div>`;
           const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
-          const placeholder = field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : '');
+          const placeholder = field.placeholder || (field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : ''));
           const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(placeholder)}">`;
           const toggle = field.key === 'help_web_admin_password' ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${editable ? '' : 'disabled'} aria-label="显示或隐藏登录密码" aria-pressed="false">显示</button>` : '';
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint}</small></div>`;
@@ -182,16 +182,12 @@
           button.setAttribute('aria-pressed', String(!visible));
         }));
       };
-      const renderDatabaseStatus = (database = {}) => {
+       const renderDatabaseStatus = (database = {}) => {
         const status = String(database.status || '--');
         const statusNode = $('settings-db-status');
-        const setValue = (id, value) => { const node = $(id); if (node) node.textContent = value || '--'; };
+        const nameNode = $('settings-db-name');
         if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }
-        setValue('settings-db-address', database.address);
-        setValue('settings-db-port', database.port);
-        setValue('settings-db-username', database.username);
-        setValue('settings-db-name', database.name);
-        setValue('settings-db-password', database.password_configured ? '已配置（隐藏）' : '未配置');
+        if (nameNode) nameNode.textContent = String(database.name || '--');
       };
        const saveConfig = async (editor) => {
         const fields = {};
@@ -203,7 +199,17 @@
           } else fields[input.dataset.configField] = value;
         });
         const message = editor.querySelector('[data-config-message]');
-        try { const result = await api('config', {method:'POST', body:JSON.stringify({fields})}); if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; } toast(result.message || '配置已保存'); await load(); }
+        try {
+          const result = await api('config', {method:'POST', body:JSON.stringify({fields})});
+          if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; }
+          toast(result.message || '配置已保存');
+          if (editor.id === 'database-config-editor' && result.auth_changed) {
+            if (message) message.textContent = '数据库配置已保存。当前登录已结束，请稍候重新登录；重载插件后新连接参数生效。';
+            window.setTimeout(() => location.reload(), 1800);
+            return;
+          }
+          await load();
+        }
          catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
       };
       const panAccountRows = (item, editable) => {
@@ -431,6 +437,7 @@
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
+        renderConfigEditor('database-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'database_settings');
         renderDatabaseStatus(database);
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
