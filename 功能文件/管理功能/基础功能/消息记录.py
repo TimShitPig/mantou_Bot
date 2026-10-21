@@ -224,8 +224,86 @@ def _补充媒体文字位置(
     return 结果
 
 
+_附件标签规则 = re.compile(
+    r'<attachmentType\s*=\s*"(?P<type>[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+)"\s*,\s*'
+    r'attachmentIndex\s*=\s*(?P<index>0|[1-9][0-9]{0,4})\s*,\s*'
+    r'description\s*=\s*"[A-Za-z0-9+/=_-]{0,8192}"\s*>'
+)
+
+
+def _匹配附件标签(内容: str, 项目列表: list[dict[str, Any]]) -> list[tuple[Any, int]]:
+    """标签必须指向现有同类型媒体；不猜附件、不解码 description 为正文。"""
+    if not isinstance(内容, str) or "<attachmentType" not in 内容:
+        return []
+    类别 = {
+        "图片": "image", "image": "image", "img": "image",
+        "视频": "video", "video": "video",
+        "语音": "audio", "音频": "audio", "audio": "audio", "voice": "audio", "record": "audio",
+        "文件": "application", "file": "application",
+    }
+    结果: list[tuple[Any, int]] = []
+    for 匹配 in _附件标签规则.finditer(内容):
+        索引 = int(匹配.group("index"))
+        if 索引 >= len(项目列表) or not isinstance(项目列表[索引], dict):
+            continue
+        项 = 项目列表[索引]
+        标签类型 = 匹配.group("type").lower()
+        内容类型 = str(项.get("content_type") or 项.get("mime_type") or "").split(";", 1)[0].strip().lower()
+        媒体类别 = 类别.get(str(项.get("type") or 项.get("media_type") or "").lower())
+        if "/" in 内容类型:
+            类型匹配 = 内容类型 == 标签类型
+        else:
+            类型匹配 = bool(媒体类别 and 标签类型.split("/", 1)[0] == 媒体类别)
+        if 类型匹配:
+            结果.append((匹配, 索引))
+    return 结果
+
+
+def _附件标签项目列表(媒体: Any) -> list[dict[str, Any]]:
+    if isinstance(媒体, dict) and isinstance(媒体.get("items"), list):
+        if any(not isinstance(项, dict) for 项 in 媒体["items"]):
+            # 不使用过滤后的列表猜原始 attachmentIndex。
+            return []
+    return _媒体项目列表(媒体)
+
+
+def _清理附件标签文字(内容: str, 媒体: Any) -> str:
+    结果 = 内容
+    for 匹配, _ in reversed(_匹配附件标签(内容, _附件标签项目列表(媒体))):
+        结果 = 结果[:匹配.start()] + 结果[匹配.end():]
+    return 结果
+
+
+def _清理媒体附件标签字段(媒体: dict[str, Any]) -> dict[str, Any]:
+    """兼容正文已更新、派生文字仍是旧值的历史行；只复制变更的展示字段。"""
+    结果 = 媒体
+    for 字段 in ("text", "before_text", "after_text"):
+        原值 = 媒体.get(字段)
+        if not isinstance(原值, str):
+            continue
+        新值 = _清理附件标签文字(原值, 媒体)
+        if 新值 != 原值:
+            if 结果 is 媒体:
+                结果 = dict(媒体)
+            结果[字段] = 新值
+    分段 = 媒体.get("text_segments")
+    if isinstance(分段, list):
+        新分段 = []
+        for 段 in 分段:
+            if isinstance(段, dict) and isinstance(段.get("text"), str):
+                新文 = _清理附件标签文字(段["text"], 媒体)
+                if 新文 != 段["text"]:
+                    段 = {**段, "text": 新文}
+            新分段.append(段)
+        if 新分段 != 分段:
+            if 结果 is 媒体:
+                结果 = dict(媒体)
+            结果["text_segments"] = 新分段
+    return 结果
+
+
 def _补充Markdown图片位置(媒体: dict[str, Any], 内容: str) -> dict[str, Any]:
-    """只把已保存图片的 Markdown 标记映射到原媒体索引，保留图文顺序。"""
+    """按原媒体索引消费 Markdown 与官方附件位置标签，保留图文顺序。"""
     项目 = _媒体项目列表(媒体)
     可用: dict[str, list[int]] = {}
     for 索引, 图片 in enumerate(项目):
@@ -235,22 +313,28 @@ def _补充Markdown图片位置(媒体: dict[str, Any], 内容: str) -> dict[str
         地址 = _清理媒体地址(图片.get("src") or 图片.get("url") or 图片.get("download_url"))
         if 地址:
             可用.setdefault(地址, []).append(索引)
+    附件标签 = _匹配附件标签(内容, _附件标签项目列表(媒体))
+    位置 = [(匹配.start(), 匹配.end(), 索引) for 匹配, 索引 in 附件标签]
     分段: list[dict[str, Any]] = []
-    已用: set[int] = set()
-    起点 = 0
+    已用: set[int] = {索引 for _, 索引 in 附件标签}
     for 匹配 in re.finditer(r"!\[[^\]\n]*\]\((https?://[^\s)]+)\)", 内容, re.IGNORECASE):
         候选 = 可用.get(_清理媒体地址(匹配.group(1))) or []
         # 同一媒体标记重复出现可复用索引；重复附件有独立索引时依次对应。
         索引 = next((值 for 值 in 候选 if 值 not in 已用), 候选[0] if 候选 else None)
         if 索引 is None:
             continue
-        if 匹配.start() > 起点:
-            分段.append({"text": 内容[起点:匹配.start()]})
-        分段.append({"media_index": 索引})
+        位置.append((匹配.start(), 匹配.end(), 索引))
         已用.add(索引)
-        起点 = 匹配.end()
-    if not 已用:
-        return 媒体
+    if not 位置:
+        return _清理媒体附件标签字段(媒体)
+    起点 = 0
+    for 开始, 结束, 索引 in sorted(位置):
+        if 开始 < 起点:
+            continue
+        if 开始 > 起点:
+            分段.append({"text": 内容[起点:开始]})
+        分段.append({"media_index": 索引})
+        起点 = 结束
     if 起点 < len(内容):
         分段.append({"text": 内容[起点:]})
     # 未嵌入正文的其它附件仍需显示，不因首图而遗漏。
@@ -258,7 +342,7 @@ def _补充Markdown图片位置(媒体: dict[str, Any], 内容: str) -> dict[str
     结果 = dict(媒体)
     结果["text_segments"] = 分段
     结果["text"] = "".join(项.get("text", "") for 项 in 分段).strip()
-    return 结果
+    return _清理媒体附件标签字段(结果)
 
 
 def _归一化记录媒体文字(记录: dict[str, Any]) -> None:
@@ -269,8 +353,11 @@ def _归一化记录媒体文字(记录: dict[str, Any]) -> None:
     媒体 = _补充Markdown图片位置(_补充媒体文字位置(记录["media"], 内容), 内容)
     if 媒体 is not 记录["media"]:
         记录["media"] = 媒体
-    if _拆分图片两侧文字(内容)[2]:
-        记录["content"] = _媒体文字去占位(内容)
+    显示正文 = _清理附件标签文字(内容, 媒体)
+    if _拆分图片两侧文字(显示正文)[2]:
+        显示正文 = _媒体文字去占位(显示正文)
+    if 显示正文 != 内容:
+        记录["content"] = 显示正文.strip()
     _去除图片表情描述(记录)
 
 
@@ -559,7 +646,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
                 记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
-            _去除图片表情描述(记录)
+            _归一化记录媒体文字(记录)
     return 记录
 
 
@@ -657,13 +744,13 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
                 记录["media"] = _合并媒体记录(现有媒体, 补充媒体)
             else:
                 记录["media"] = 补充媒体
-            _去除图片表情描述(记录)
+            _归一化记录媒体文字(记录)
     return 记录
 
 
 def _消息列表摘要(记录: dict[str, Any]) -> str:
     """正文为空时显示首项媒体类型，不读取媒体地址或下载内容。"""
-    文本 = str(记录.get("content") or "")
+    文本 = _清理附件标签文字(str(记录.get("content") or ""), 记录.get("media"))
     if 文本.strip():
         return 文本
     媒体 = 记录.get("media")
@@ -1709,7 +1796,8 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
     会话标识 = str(记录.get("_session") or "")
     if isinstance(消息.get("media"), dict):
-        消息["media"] = _补充Markdown图片位置(copy.deepcopy(消息["media"]), str(消息.get("content") or ""))
+        消息["media"] = copy.deepcopy(消息["media"])
+        _归一化记录媒体文字(消息)
         try:
             from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
 
@@ -2269,6 +2357,10 @@ def _提取内嵌引用预览(原始消息: Any) -> dict[str, Any] | None:
         正文 = _媒体占位规则.sub(lambda 匹配: f"[{匹配.group(1)}]", 正文)
         附件列表 = _读取字段(元素, "attachments")
         if isinstance(附件列表, (list, tuple)):
+            正文 = _清理附件标签文字(正文, {"items": [
+                {"content_type": _读取字段(附件, "content_type"), "type": _读取字段(附件, "type")}
+                for 附件 in 附件列表[:8]
+            ]})
             for 附件 in 附件列表[:8]:
                 类型 = 文本(_读取字段(附件, "content_type") or _读取字段(附件, "type"), 80).lower()
                 占位 = "[图片]" if 类型.startswith("image") or 类型 in {"img", "图片"} else (
@@ -3739,7 +3831,7 @@ def 记录收到消息(
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
         _补充记录昵称状态(记录, 消息)
-        _去除图片表情描述(记录)
+        _归一化记录媒体文字(记录)
         内容 = str(记录.get("content") or "")
         if (
             not is_self
