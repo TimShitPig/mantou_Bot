@@ -64,7 +64,11 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 
 class _晋江章节未发布(RuntimeError):
-    """目录接口明确返回 1058：作者只开放文案，尚未发布章节。"""
+    """目录接口返回尚未发布章节或尚未通过审核的业务状态。"""
+
+    def __init__(self, 业务码: str) -> None:
+        self.业务码 = 业务码
+        super().__init__("chapters_unpublished")
 
 
 def 创建晋江HTTP会话(并发数: int = 晋江请求并发上限) -> aiohttp.ClientSession:
@@ -280,8 +284,9 @@ async def 获取晋江目录(
         晋江目录地址,
         {"novelId": 书籍编号, "more": "0", "whole": "1"},
     )
-    if str(data.get("code") or "").strip() == "1058":
-        raise _晋江章节未发布("chapters_unpublished")
+    业务码 = str(data.get("code") or "").strip()
+    if 业务码 in {"1058", "1068"}:
+        raise _晋江章节未发布(业务码)
     rows = data.get("chapterlist")
     if not isinstance(rows, list):
         return []
@@ -556,13 +561,16 @@ async def 生成晋江下载回复流(
             )
             # 等待两项都结束后再离开会话，先保留真实的详情错误或取消。
             if isinstance(详情, BaseException):
+                stage = "详情"
                 raise 详情
+            stage = "目录"
             if isinstance(全部目录, _晋江章节未发布):
                 if 详情.get("chapter_count") != 0:
                     raise RuntimeError("晋江目录状态与详情不一致")
                 logger.info(
-                    "晋江小说暂未发布章节：书籍编号=%s, 阶段=目录, 业务码=1058",
+                    "晋江小说暂未发布章节：书籍编号=%s, 阶段=目录, 业务码=%s",
                     书籍编号,
+                    全部目录.业务码,
                 )
                 yield 晋江章节未发布提示
                 return
