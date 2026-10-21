@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.220-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.221-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,9 +11,11 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.220 |
+| 版本 | v6.1.221 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
+
+引用消息支持按当前聊天的完整消息 ID/引用索引精确定位。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
 
 ## 快速开始
 

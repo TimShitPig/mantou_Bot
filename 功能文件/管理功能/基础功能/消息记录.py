@@ -1784,7 +1784,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     字段 = (
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "source", "recalled", "media", "reference_id", "refidx",
-        "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview",
+        "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview", "reference_ids",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     消息["_session"] = str(记录.get("_session") or "")
@@ -2385,20 +2385,51 @@ def _提取内嵌引用预览(原始消息: Any) -> dict[str, Any] | None:
     return None
 
 
+def _提取引用候选(原始消息: Any) -> list[str]:
+    """只收集官方明确指向被引用消息的完整索引，不从正文或索引片段推断。"""
+    结果: list[str] = []
+
+    def 加入(值: Any) -> None:
+        if not isinstance(值, str):
+            return
+        标识 = _规范消息ID(值)
+        if 标识 and len(标识) <= 512 and not any(ord(字) < 32 or ord(字) == 127 for 字 in 标识) and 标识 not in 结果:
+            结果.append(标识)
+
+    for 当前 in _引用负载候选(原始消息):
+        加入(_读取字段(_读取字段(当前, "message_reference"), "message_id"))
+        加入(_提取消息场景索引(当前, "ref_msg_idx"))
+        元素列表 = _读取字段(当前, "msg_elements")
+        if isinstance(元素列表, (list, tuple)) and 元素列表:
+            元素 = 元素列表[0]
+            if (
+                _读取字段(当前, "message_type") in (103, "103")
+                or _读取字段(元素, "message_type") in (103, "103")
+                or bool(_读取字段(_读取字段(当前, "message_reference"), "message_id"))
+            ):
+                加入(_读取字段(元素, "msg_idx"))
+    return 结果[:8]
+
+
 def _补充记录引用索引(记录: dict[str, Any], 原始消息: Any = None) -> None:
     """接收与旧历史共用，只补缺失字段，不把引用索引写成消息自身 ID。"""
     原始消息 = 原始消息 if 原始消息 is not None else 记录.get("raw_message")
+    引用负载 = 记录.pop("_reference_payload", None)
+    候选 = _提取引用候选(原始消息) + _提取引用候选(引用负载)
+    已有候选 = 记录.get("reference_ids")
+    if isinstance(已有候选, list):
+        候选.extend(值 for 值 in 已有候选[:8] if isinstance(值, str))
     引用ID = _规范消息ID(记录.get("reference_id"))
-    if not 引用ID:
-        for 当前 in _引用负载候选(原始消息):
-            引用 = _读取字段(当前, "message_reference")
-            引用ID = _规范消息ID(_读取字段(引用, "message_id"))
-            if 引用ID:
-                break
-    记录["reference_id"] = 引用ID or _提取消息场景索引(原始消息, "ref_msg_idx")
+    候选 = list(dict.fromkeys(
+        标识 for 值 in [引用ID, *候选]
+        if isinstance(值, str) and (标识 := _规范消息ID(值)) and len(标识) <= 512
+        and not any(ord(字) < 32 or ord(字) == 127 for 字 in 标识)
+    ))[:8]
+    记录["reference_id"] = 候选[0] if 候选 else ""
+    if 候选:
+        记录["reference_ids"] = 候选
     记录["refidx"] = _规范消息ID(记录.get("refidx")) or _提取REFIDX(原始消息)
     # SQL 历史投影保留有界首层引用，独立于已截断的原始预览。
-    引用负载 = 记录.pop("_reference_payload", None)
     预览 = _提取内嵌引用预览(引用负载) or _提取内嵌引用预览(原始消息)
     if 预览:
         记录["reference_preview"] = 预览
@@ -2456,15 +2487,16 @@ def _构造引用映射(
     appid = str(appid or "").strip()
     if not 会话标识 or 类型 not in {"group", "user"}:
         return {}
-    引用标识: list[str] = []
+    引用候选: dict[str, set[str]] = {}
     for 项 in 消息列表:
         if not _引用作用域匹配(项, 会话标识, 类型, appid):
             continue
         _补充记录引用索引(项)
+        项["reference_conflict"] = False
         标识 = _规范消息ID(项.get("reference_id"))
-        if 标识 and 标识 not in 引用标识:
-            引用标识.append(标识)
-    引用标识 = 引用标识[:100]
+        if 标识 and (标识 in 引用候选 or len(引用候选) < 100):
+            引用候选.setdefault(标识, set()).update(项.get("reference_ids") or [标识])
+    引用标识 = list(dict.fromkeys(值 for 候选 in 引用候选.values() for 值 in sorted(候选)))
     if not 引用标识:
         return {}
     索引: dict[str, dict[str, Any]] = {}
@@ -2494,7 +2526,7 @@ def _构造引用映射(
     if str(缓存会话.get("chat_type") or 类型) == 类型 and str(缓存会话.get("appid") or "").strip() == appid:
         for 项 in list(缓存会话.get("messages") or []):
             加入(项)
-    缺失 = [标识 for 标识 in 引用标识 if 标识 not in 索引 and 标识 not in 冲突]
+    缺失 = [标识 for 标识 in 引用标识 if 标识 not in 索引 and 标识 not in 冲突][:100]
     读取 = getattr(_消息存储, "批量读取引用消息", None) if 允许数据库 else None
     if 缺失 and callable(读取):
         try:
@@ -2503,9 +2535,19 @@ def _构造引用映射(
         except Exception as 异常:
             logger.debug("消息引用摘要读取失败：错误类型=%s", type(异常).__name__)
     结果: dict[str, dict[str, Any]] = {}
-    for 标识 in 引用标识:
-        if 标识 in 索引 and 标识 not in 冲突:
-            目标 = 索引[标识]
+    for 标识, 候选 in 引用候选.items():
+        目标表 = {
+            _规范消息ID(索引[值].get("message_id")) or _规范消息ID(索引[值].get("refidx")): 索引[值]
+            for 值 in 候选 if 值 in 索引
+        }
+        # 不同明确索引若命中不同原消息，保留快照，不以优先级掩盖冲突。
+        if 候选 & 冲突 or len(目标表) > 1:
+            for 项 in 消息列表:
+                if _引用作用域匹配(项, 会话标识, 类型, appid) and 项.get("reference_id") == 标识:
+                    项["reference_conflict"] = True
+            continue
+        if len(目标表) == 1:
+            目标 = next(iter(目标表.values()))
             _补充记录昵称状态(目标, 允许缓存=允许成员缓存)
             结果[标识] = _引用消息摘要(目标)
     return 结果
@@ -3826,6 +3868,7 @@ def 记录收到消息(
             "media": 媒体记录,
             "reference_id": 引用ID or "",
             "reference_preview": 引用索引.get("reference_preview"),
+            "reference_ids": 引用索引.get("reference_ids") or [],
             "refidx": 自身REFIDX or "",
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),

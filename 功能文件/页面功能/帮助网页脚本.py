@@ -1408,13 +1408,43 @@
           const summary = msgQuoteSummary(message, profiles);
           [message.message_id, message.refidx].forEach((id) => add(id, summary));
         });
+        // 多个明确候选必须指向同一原消息；后端冲突不可由当前页索引覆盖。
+        const groups = new Map();
+        currentMessages.forEach((message) => {
+          const id = String(message.reference_id || '').trim();
+          if (!id) return;
+          if (!groups.has(id)) groups.set(id, {ids:new Set(), blocked:false});
+          const group = groups.get(id);
+          group.blocked ||= Boolean(message.reference_conflict);
+          [id, ...(Array.isArray(message.reference_ids) ? message.reference_ids.slice(0, 8) : [])]
+            .forEach((value) => { if (typeof value === 'string' && value.trim()) group.ids.add(value.trim()); });
+        });
+        const blocked = new Set();
+        const resolved = [];
+        groups.forEach((group, id) => {
+          const targets = new Map();
+          group.ids.forEach((value) => {
+            const summary = index.get(value);
+            if (conflicts.has(value)) group.blocked = true;
+            if (summary?.message_id) targets.set(summary.message_id, summary);
+          });
+          if (group.blocked || targets.size > 1) blocked.add(id);
+          else if (targets.size === 1) resolved.push([id, targets.values().next().value]);
+        });
+        resolved.forEach(([id, summary]) => index.set(id, summary));
+        blocked.forEach((id) => index.delete(id));
+        index.blocked = blocked;
         // 内嵌引用只属于当前回复；TMP 索引可能复用，不作为全局消息别名。
         return index;
       };
-      const renderMsgQuote = (reference, profiles = msgState.profiles, referenceId = '', referencePreview = null) => {
-        const selected = reference || (referencePreview && typeof referencePreview === 'object' && !Array.isArray(referencePreview) ? referencePreview : null);
+      const renderMsgQuote = (reference, profiles = msgState.profiles, referenceId = '', referencePreview = null, blocked = false) => {
+        const selected = (!blocked && reference) || (referencePreview && typeof referencePreview === 'object' && !Array.isArray(referencePreview) ? referencePreview : null);
         const summary = selected ? msgQuoteSummary(selected, profiles) : null;
-        const id = summary?.preview_only ? '' : String(referenceId || summary?.message_id || summary?.refidx || '').trim();
+        const explicitId = String(referenceId || '').trim();
+        // 预览不能制造目标身份；官方完整引用索引仍可主动请求精确定位。
+        const id = blocked ? '' : summary?.preview_only
+          ? (/^(?:REFIDX_|ROBOT\d)/.test(explicitId) ? explicitId : '')
+          : String(summary?.message_id || summary?.refidx || explicitId).trim();
         const content = summary ? plainMsgPreview(summary.content, profiles) || '（空消息）' : '原消息暂不可用';
         const preview = `${summary?.nickname ? `<span class="msg-quote-name">${esc(summary.nickname)}</span>` : ''}<span class="msg-quote-content">${esc(content)}</span>`;
         return id
@@ -1525,7 +1555,7 @@
           if (!current()) return;
           if (data.chat_id !== msgState.chatId || data.chat_type !== msgState.chatType
             || String(data.appid || '') !== String(msgState.chatAppid || '')) {
-            toast('原消息未保存或已删除'); return;
+            toast('暂未匹配到原消息'); return;
           }
           const messages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
           const canonical = String(data.located_message_id || '').trim();
@@ -1533,7 +1563,7 @@
             || messages.some((message) => (message.appid && String(message.appid) !== String(msgState.chatAppid || ''))
               || (message.chat_type && String(message.chat_type) !== msgState.chatType)
               || (message._session && String(message._session) !== msgState.chatId))) {
-            toast('原消息未保存或已删除'); return;
+            toast('暂未匹配到原消息'); return;
           }
           msgState.historyWindow = {scope, oldest_id:Number(data.oldest_id || 0), newest_id:Number(data.newest_id || 0), has_newer:Boolean(data.has_newer)};
           msgState.messages = messages;
@@ -1546,7 +1576,7 @@
         } catch (error) {
           if (!current()) return;
           if (error.status === 401) showAuthError(error);
-          else toast(error.status === 404 ? '原消息未保存或已删除' : '原消息定位失败，请重试');
+          else toast(error.status === 404 ? '暂未匹配到原消息' : '原消息定位失败，请重试');
         } finally {
           clearTimeout(timer);
           if (msgQuoteJump.abort === controller) {
@@ -3227,6 +3257,8 @@
       };
       const mergeMsgRealtimeMessage = (existing, incoming) => {
         const merged = {...existing};
+        if (Array.isArray(incoming?.reference_ids)) merged.reference_ids = incoming.reference_ids.slice(0, 8);
+        if (typeof incoming?.reference_conflict === 'boolean') merged.reference_conflict = incoming.reference_conflict;
         ['user_id', 'nickname', 'content', 'timestamp', 'source', 'member_role', 'msg_seq', 'avatar', 'reference_id', 'refidx', 'chat_type', 'appid'].forEach((field) => {
           const next = incoming?.[field];
           const current = merged[field];
@@ -3294,6 +3326,7 @@
           if (Boolean(message?.nickname_blank) !== Boolean(other?.nickname_blank)) return false;
           if (String(message?.avatar || '') !== String(other?.avatar || '')) return false;
           if (String(message?.reference_id || '') !== String(other?.reference_id || '')) return false;
+          if (Boolean(message?.reference_conflict) !== Boolean(other?.reference_conflict) || JSON.stringify(message?.reference_ids || []) !== JSON.stringify(other?.reference_ids || [])) return false;
           if (String(message?.refidx || '') !== String(other?.refidx || '')) return false;
           if (JSON.stringify(message?.reference_preview || null) !== JSON.stringify(other?.reference_preview || null)) return false;
           return JSON.stringify(message?.media || null) === JSON.stringify(other?.media || null);
@@ -4396,6 +4429,7 @@
               optimisticId,
               optimistic?.status || message.send_status || '',
               message.reference_id || '',
+              Boolean(referenceIndex.blocked?.has(String(message.reference_id))),
               message.refidx || '',
               message.source || '',
               String(message.raw_message || ''),
@@ -4469,7 +4503,7 @@
             return replaceMsgMentions(text, profiles);
           };
           // 引用标识只用于查找，未取得原消息时不把协议 ID 当作正文显示。
-          const quote = m.reference_id || m.reference_preview ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id, m.reference_preview) : '';
+          const quote = m.reference_id || m.reference_preview ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id, m.reference_preview, referenceIndex.blocked?.has(String(m.reference_id))) : '';
           const mediaData = m.media;
           // QQ 图片链接有短时签名。页面已打开时，提前加载最新一批消息可让
           // 浏览器私有缓存保留已成功取得的图片；加载更早历史仍保持惰性请求。

@@ -84,6 +84,35 @@ def _历史引用字符串SQL(路径: str, 上限: int) -> str:
     )
 
 
+def _历史引用标识SQL(路径: str) -> str:
+    """身份必须完整；超出支持长度时忽略，不把截断前缀当成真实索引。"""
+    值 = f"JSON_EXTRACT(raw_message, '{路径}')"
+    文本 = f"JSON_UNQUOTE({值})"
+    return (
+        f"CASE WHEN JSON_TYPE({值})='STRING' AND CHAR_LENGTH({文本}) BETWEEN 1 AND 512 "
+        f"THEN {文本} ELSE '' END"
+    )
+
+
+def _历史引用场景SQL(包装: str) -> str:
+    """仅提取前 32 项里的 ref_msg_idx 参数，拒绝嵌套值，不返回其它扩展。"""
+    扩展 = f"JSON_EXTRACT(raw_message, '{包装}.message_scene.ext')"
+    # CHAR(37) 避免把 LIKE 通配符与驱动的参数占位符混在一起。
+    路径 = f"JSON_UNQUOTE(JSON_SEARCH({扩展}, 'one', CONCAT('ref!_msg!_idx=', CHAR(37)), '!', '$'))"
+    索引 = f"CAST(SUBSTRING_INDEX(SUBSTRING_INDEX({路径}, '[', -1), ']', 1) AS UNSIGNED)"
+    位置有效 = (
+        f"(JSON_TYPE({扩展})='STRING' AND BINARY {路径}=BINARY '$') OR "
+        f"(JSON_TYPE({扩展})='ARRAY' AND {索引}<32 "
+        f"AND BINARY {路径}=BINARY CONCAT('$[', {索引}, ']'))"
+    )
+    文本 = f"JSON_UNQUOTE(JSON_EXTRACT({扩展}, {路径}))"
+    参数 = f"SUBSTRING_INDEX({文本}, '&', 1)"
+    return (
+        f"CASE WHEN ({位置有效}) AND BINARY LEFT({文本}, 12)=BINARY 'ref_msg_idx=' "
+        f"AND CHAR_LENGTH({参数}) BETWEEN 13 AND 524 THEN {参数} ELSE '' END"
+    )
+
+
 def _生成历史引用快照SQL() -> str:
     """先于原文截断提取首项引用；没有元素键的普通消息跳过 JSON 解析。"""
     分支: list[str] = []
@@ -107,14 +136,18 @@ def _生成历史引用快照SQL() -> str:
             f"'{字段}', {_历史引用字符串SQL(f'{附件路径}.{字段}', 上限)}"
             for 字段, 上限 in (("content_type", 80), ("type", 80), ("filename", 255))
         )
-        # 摘要只需首项附件的类型提示，不提取 URL、头像、场景或鉴权字段。
+        # 摘要只需首项附件类型；场景仅白名单提取引用参数，不投影鉴权字段。
         附件 = (
             f"CASE WHEN JSON_TYPE(JSON_EXTRACT(raw_message, '{附件路径}'))='OBJECT' "
             f"THEN JSON_ARRAY(JSON_OBJECT({附件字段})) ELSE JSON_ARRAY() END"
         )
         快照 = (
-            "JSON_OBJECT('message_type', 103, 'msg_elements', JSON_ARRAY(JSON_OBJECT("
-            f"'message_type', 103, 'content', {_历史引用字符串SQL(f'{元素}.content', 4096)}, "
+            "JSON_OBJECT('message_type', 103, 'message_reference', JSON_OBJECT("
+            f"'message_id', {_历史引用标识SQL(f'{包装}.message_reference.message_id')}), "
+            f"'message_scene', JSON_OBJECT('ext', JSON_ARRAY({_历史引用场景SQL(包装)})), "
+            "'msg_elements', JSON_ARRAY(JSON_OBJECT("
+            f"'message_type', 103, 'msg_idx', {_历史引用标识SQL(f'{元素}.msg_idx')}, "
+            f"'content', {_历史引用字符串SQL(f'{元素}.content', 4096)}, "
             f"'author', JSON_OBJECT({作者字段}), 'attachments', {附件})))"
         )
         分支.append(
