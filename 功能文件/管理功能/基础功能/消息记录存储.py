@@ -74,12 +74,69 @@ _消息更新SQL = (
 )
 _消息查重分块大小 = 200
 
+
+def _历史引用字符串SQL(路径: str, 上限: int) -> str:
+    """引用快照只投影有界字符串，不把对象或附件地址转成展示文本。"""
+    值 = f"JSON_EXTRACT(raw_message, '{路径}')"
+    return (
+        f"CASE WHEN JSON_TYPE({值})='STRING' "
+        f"THEN LEFT(JSON_UNQUOTE({值}), {上限}) ELSE '' END"
+    )
+
+
+def _生成历史引用快照SQL() -> str:
+    """先于原文截断提取首项引用；没有元素键的普通消息跳过 JSON 解析。"""
+    分支: list[str] = []
+    for 包装 in ("$", "$.raw_data", "$.raw_data.d", "$.d", "$.data", "$.payload", "$.message"):
+        元素 = f"{包装}.msg_elements[0]"
+        是引用 = (
+            f"JSON_UNQUOTE(JSON_EXTRACT(raw_message, '{包装}.message_type'))='103' "
+            f"OR JSON_UNQUOTE(JSON_EXTRACT(raw_message, '{元素}.message_type'))='103' "
+            f"OR (JSON_TYPE(JSON_EXTRACT(raw_message, '{包装}.message_reference.message_id'))='STRING' "
+            f"AND JSON_UNQUOTE(JSON_EXTRACT(raw_message, '{包装}.message_reference.message_id'))<>'')"
+        )
+        作者字段 = ", ".join(
+            f"'{字段}', {_历史引用字符串SQL(f'{元素}.author.{字段}', 上限)}"
+            for 字段, 上限 in (
+                ("id", 128), ("member_openid", 128), ("user_openid", 128),
+                ("username", 255), ("nickname", 255),
+            )
+        )
+        附件路径 = f"{元素}.attachments[0]"
+        附件字段 = ", ".join(
+            f"'{字段}', {_历史引用字符串SQL(f'{附件路径}.{字段}', 上限)}"
+            for 字段, 上限 in (("content_type", 80), ("type", 80), ("filename", 255))
+        )
+        # 摘要只需首项附件的类型提示，不提取 URL、头像、场景或鉴权字段。
+        附件 = (
+            f"CASE WHEN JSON_TYPE(JSON_EXTRACT(raw_message, '{附件路径}'))='OBJECT' "
+            f"THEN JSON_ARRAY(JSON_OBJECT({附件字段})) ELSE JSON_ARRAY() END"
+        )
+        快照 = (
+            "JSON_OBJECT('message_type', 103, 'msg_elements', JSON_ARRAY(JSON_OBJECT("
+            f"'message_type', 103, 'content', {_历史引用字符串SQL(f'{元素}.content', 4096)}, "
+            f"'author', JSON_OBJECT({作者字段}), 'attachments', {附件})))"
+        )
+        分支.append(
+            f"WHEN JSON_TYPE(JSON_EXTRACT(raw_message, '{元素}'))='OBJECT' "
+            f"AND ({是引用}) THEN {快照}"
+        )
+    return (
+        "CASE WHEN LOCATE('\"msg_elements\"', raw_message)=0 THEN NULL "
+        f"WHEN JSON_VALID(raw_message) THEN CASE {' '.join(分支)} ELSE NULL END ELSE NULL END"
+    )
+
+
+_历史引用快照SQL = _生成历史引用快照SQL()
+
 # 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
 # 显式列出字段避免 SELECT * 搬运未来新增列；正文与媒体字段保持完整。
+# 额外白名单投影保留首项引用摘要，避免长原文在 SQL 截断后成为不完整 JSON。
 _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
-    "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq"
+    "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq, "
+    f"{_历史引用快照SQL} AS reference_payload"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -2862,7 +2919,7 @@ def _行转记录(行: Any) -> dict[str, Any]:
         媒体 = json.loads(取值(13, "{}"))
     except Exception:
         媒体 = {}
-    return {
+    记录 = {
         "id": int(取值(0, "0") or 0),
         "_session": 取值(1),
         "chat_type": 取值(2, "group") or "group",
@@ -2884,3 +2941,13 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "member_role": 取值(18),
         "msg_seq": 取值(19),
     }
+    # 兼容旧的二十列查询和默认/字典游标；只供展示规范化消费，不持久化或回传。
+    引用快照 = _行字段(行, 20, "reference_payload", 默认值=None)
+    if isinstance(引用快照, (str, bytes, bytearray)):
+        try:
+            引用快照 = json.loads(引用快照)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            引用快照 = None
+    if isinstance(引用快照, dict):
+        记录["_reference_payload"] = 引用快照
+    return 记录

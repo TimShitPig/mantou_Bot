@@ -1367,12 +1367,16 @@
         const id = String(message.user_id || message.userId || '').trim();
         const profile = profiles?.[id] || {};
         const own = Boolean(message.is_self) || /^(?:bot_|web_panel)/.test(String(message.source || ''));
-        const nickname = own
-          ? (validMsgNickname(message.nickname, id) || validMsgNickname(window.msgBotProfile?.username, id) || '机器人')
-          : displayMsgNickname(message, profile);
+        const previewOnly = Boolean(message.preview_only);
+        const nickname = previewOnly
+          ? (validMsgNickname(message.nickname, id) || (id ? validMsgNickname(profile.nickname || profile.username, id) : ''))
+          : (own
+            ? (validMsgNickname(message.nickname, id) || validMsgNickname(window.msgBotProfile?.username, id) || '机器人')
+            : displayMsgNickname(message, profile));
         return {
-          message_id:String(message.message_id || message.id || '').trim(),
-          refidx:String(message.refidx || '').trim(),
+          preview_only:previewOnly,
+          message_id:previewOnly ? '' : String(message.message_id || message.id || '').trim(),
+          refidx:previewOnly ? '' : String(message.refidx || '').trim(),
           user_id:id,
           nickname,
           nickname_blank:Boolean(message.nickname_blank || profile.nickname_blank || isBlankMsgNickname(message.nickname)) && !validMsgNickname(nickname, id),
@@ -1398,24 +1402,21 @@
           return !message.appid || !msgState.chatAppid || String(message.appid) === msgState.chatAppid;
         });
         Object.entries(references || {}).forEach(([id, reference]) => {
-          if (reference && typeof reference === 'object') add(id, msgQuoteSummary(reference, profiles));
+          if (reference && typeof reference === 'object' && !reference.preview_only) add(id, msgQuoteSummary(reference, profiles));
         });
         currentMessages.forEach((message) => {
           const summary = msgQuoteSummary(message, profiles);
           [message.message_id, message.refidx].forEach((id) => add(id, summary));
         });
-        currentMessages.forEach((message) => {
-          if (message.reference_id && message.reference_preview && !index.has(String(message.reference_id))) {
-            add(message.reference_id, msgQuoteSummary(message.reference_preview, profiles));
-          }
-        });
+        // 内嵌引用只属于当前回复；TMP 索引可能复用，不作为全局消息别名。
         return index;
       };
-      const renderMsgQuote = (reference, profiles = msgState.profiles, referenceId = '') => {
-        const summary = reference ? msgQuoteSummary(reference, profiles) : null;
-        const id = String(referenceId || summary?.message_id || summary?.refidx || '').trim();
+      const renderMsgQuote = (reference, profiles = msgState.profiles, referenceId = '', referencePreview = null) => {
+        const selected = reference || (referencePreview && typeof referencePreview === 'object' && !Array.isArray(referencePreview) ? referencePreview : null);
+        const summary = selected ? msgQuoteSummary(selected, profiles) : null;
+        const id = summary?.preview_only ? '' : String(referenceId || summary?.message_id || summary?.refidx || '').trim();
         const content = summary ? plainMsgPreview(summary.content, profiles) || '（空消息）' : '原消息暂不可用';
-        const preview = `${summary ? `<span class="msg-quote-name">${esc(summary.nickname)}</span>` : ''}<span class="msg-quote-content">${esc(content)}</span>`;
+        const preview = `${summary?.nickname ? `<span class="msg-quote-name">${esc(summary.nickname)}</span>` : ''}<span class="msg-quote-content">${esc(content)}</span>`;
         return id
           ? `<button type="button" class="msg-bubble-quote msg-quote-jump" data-msg-jump="${esc(id)}" title="跳转到原消息" aria-label="跳转到原消息"><span class="msg-quote-jump-icon" aria-hidden="true">↗</span>${preview}</button>`
           : `<div class="msg-bubble-quote">${preview}</div>`;
@@ -3246,6 +3247,9 @@
         const oldRaw = String(merged.raw_message || '');
         const newRaw = String(incoming?.raw_message || '');
         if (newRaw.length > oldRaw.length) merged.raw_message = incoming.raw_message;
+        const newPreview = incoming?.reference_preview;
+        if (newPreview && typeof newPreview === 'object' && !Array.isArray(newPreview)
+          && (!merged.reference_preview || newRaw.length > oldRaw.length)) merged.reference_preview = {...newPreview};
         const oldMedia = merged.media;
         const newMedia = incoming?.media;
         if (newMedia && typeof newMedia === 'object') merged.media = mergeMsgRealtimeMedia(oldMedia, newMedia,
@@ -4366,7 +4370,7 @@
         const renderSignature = JSON.stringify({
           scope: renderScope,
           profiles,
-          references:msgs.map((message) => message.reference_id ? referenceIndex.get(String(message.reference_id)) || null : null),
+          references:msgs.map((message) => (message.reference_id ? referenceIndex.get(String(message.reference_id)) : null) || message.reference_preview || null),
           more: Boolean(data.has_more),
           newer: Boolean(msgState.historyWindow?.has_newer),
           multi: Boolean(msgState.multi),
@@ -4465,7 +4469,7 @@
             return replaceMsgMentions(text, profiles);
           };
           // 引用标识只用于查找，未取得原消息时不把协议 ID 当作正文显示。
-          const quote = m.reference_id ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id) : '';
+          const quote = m.reference_id || m.reference_preview ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id, m.reference_preview) : '';
           const mediaData = m.media;
           // QQ 图片链接有短时签名。页面已打开时，提前加载最新一批消息可让
           // 浏览器私有缓存保留已成功取得的图片；加载更早历史仍保持惰性请求。

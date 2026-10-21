@@ -1670,6 +1670,12 @@ def _获取消息相关成员资料(
         if 作者标识:
             相关标识.add(作者标识)
         相关标识.update(_提及规则.findall(str(消息.get("content") or "")))
+        预览 = 消息.get("reference_preview")
+        if isinstance(预览, dict):
+            引用作者 = str(预览.get("user_id") or "").strip()
+            if 引用作者:
+                相关标识.add(引用作者)
+            相关标识.update(_提及规则.findall(str(预览.get("content") or "")))
     结果 = {
         标识: copy.deepcopy(全部资料[标识])
         for 标识 in 相关标识
@@ -1691,7 +1697,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     字段 = (
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "source", "recalled", "media", "reference_id", "refidx",
-        "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq",
+        "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     消息["_session"] = str(记录.get("_session") or "")
@@ -1699,6 +1705,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     _补充记录昵称状态(消息, 记录.get("raw_message"))
     消息.pop("_session", None)
     # 实时消息与历史页使用同一份受限原始预览，不把完整事件对象推给浏览器。
+    _补充记录引用索引(消息, 记录.get("raw_message"))
     消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
     会话标识 = str(记录.get("_session") or "")
     if isinstance(消息.get("media"), dict):
@@ -2228,6 +2235,64 @@ def _提取REFIDX(消息: Any) -> str:
     return _提取消息场景索引(消息, "msg_idx")
 
 
+def _提取内嵌引用预览(原始消息: Any) -> dict[str, Any] | None:
+    """仅取首个官方引用元素的可见摘要；不将随附快照伪装成可定位原消息。"""
+    def 文本(值: Any, 上限: int) -> str:
+        if not isinstance(值, str):
+            return ""
+        return "".join(
+            字符 for 字符 in 值[:上限]
+            if 字符 in "\n\t" or not (ord(字符) < 32 or 127 <= ord(字符) <= 159)
+        )
+
+    for 当前 in _引用负载候选(原始消息):
+        元素列表 = _读取字段(当前, "msg_elements")
+        if not isinstance(元素列表, (list, tuple)) or not 元素列表:
+            continue
+        元素 = 元素列表[0]
+        if not isinstance(元素, dict) and not isinstance(_解析消息结构(元素), dict):
+            continue
+        是引用 = (
+            _读取字段(当前, "message_type") in (103, "103")
+            or _读取字段(元素, "message_type") in (103, "103")
+            or bool(_读取字段(_读取字段(当前, "message_reference"), "message_id"))
+        )
+        if not 是引用:
+            continue
+        正文 = 文本(_读取字段(元素, "content"), 4096)
+        # 兼容适配器展开文本，只取第一层正文，不把关联消息树当作引用全文。
+        if re.match(r"^\s*===\s*消息\s*\d+\s*===", 正文):
+            匹配 = re.search(r"\[消息内容\][ \t]*(.*?)(?=\r?\n[ \t]*\[(?:消息类型|关联消息)\]|$)", 正文, re.DOTALL)
+            正文 = 匹配.group(1) if 匹配 else ""
+        正文 = _提取消息文本(正文)
+        正文 = re.sub(r"!\[[^\]\n]*\]\((?:https?:)?//[^\s)]+\)", "[图片]", 正文, flags=re.IGNORECASE)
+        正文 = _媒体占位规则.sub(lambda 匹配: f"[{匹配.group(1)}]", 正文)
+        附件列表 = _读取字段(元素, "attachments")
+        if isinstance(附件列表, (list, tuple)):
+            for 附件 in 附件列表[:8]:
+                类型 = 文本(_读取字段(附件, "content_type") or _读取字段(附件, "type"), 80).lower()
+                占位 = "[图片]" if 类型.startswith("image") or 类型 in {"img", "图片"} else (
+                    "[视频]" if 类型.startswith("video") or 类型 == "视频" else (
+                        "[语音]" if 类型.startswith("audio") or 类型 in {"voice", "语音", "音频"} else "[文件]"
+                    )
+                )
+                if 占位 not in 正文:
+                    正文 = (正文 + " " + 占位).strip()
+        if not 正文.strip():
+            continue
+        作者 = _读取字段(元素, "author") or {}
+        用户 = next((文本(_读取字段(作者, 字段), 128).strip() for 字段 in ("member_openid", "user_openid", "id") if 文本(_读取字段(作者, 字段), 128).strip()), "")
+        原昵称 = next((_读取字段(作者, 字段) for 字段 in ("username", "nickname") if isinstance(_读取字段(作者, 字段), str) and _读取字段(作者, 字段)), "")
+        昵称 = _有效用户昵称(文本(原昵称, 255), 用户)
+        return {
+            "preview_only": True, "message_id": "", "refidx": "",
+            "user_id": 用户, "nickname": 昵称,
+            "nickname_blank": bool(_明确空白昵称(原昵称)) and not bool(昵称),
+            "is_self": False, "content": 文本(正文, 600).strip(), "timestamp": "",
+        }
+    return None
+
+
 def _补充记录引用索引(记录: dict[str, Any], 原始消息: Any = None) -> None:
     """接收与旧历史共用，只补缺失字段，不把引用索引写成消息自身 ID。"""
     原始消息 = 原始消息 if 原始消息 is not None else 记录.get("raw_message")
@@ -2240,6 +2305,11 @@ def _补充记录引用索引(记录: dict[str, Any], 原始消息: Any = None) 
                 break
     记录["reference_id"] = 引用ID or _提取消息场景索引(原始消息, "ref_msg_idx")
     记录["refidx"] = _规范消息ID(记录.get("refidx")) or _提取REFIDX(原始消息)
+    # SQL 历史投影保留有界首层引用，独立于已截断的原始预览。
+    引用负载 = 记录.pop("_reference_payload", None)
+    预览 = _提取内嵌引用预览(引用负载) or _提取内嵌引用预览(原始消息)
+    if 预览:
+        记录["reference_preview"] = 预览
 
 
 def _引用作用域匹配(记录: dict[str, Any], 会话标识: str, 类型: str, appid: str) -> bool:
@@ -3663,6 +3733,7 @@ def 记录收到消息(
             "recalled": False,
             "media": 媒体记录,
             "reference_id": 引用ID or "",
+            "reference_preview": 引用索引.get("reference_preview"),
             "refidx": 自身REFIDX or "",
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
