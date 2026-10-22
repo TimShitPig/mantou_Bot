@@ -379,6 +379,40 @@ def _读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
     return getattr(对象, 字段名, 默认值)
 
 
+def _提取作者机器人状态(消息: Any) -> bool | None:
+    """只读当前消息作者的官方布尔标记，不读取提及、引用或昵称。"""
+    if isinstance(消息, (str, bytes)):
+        消息 = _解析消息结构(消息)
+    if 消息 is None:
+        return None
+    原始 = _读取字段(消息, "raw_data")
+    # SDK 对象可能给缺失的 bot 填默认值；其原始官方负载优先。
+    首项 = (消息, 原始) if isinstance(消息, dict) else (原始, 消息)
+    for 包装 in (
+        *首项, _读取字段(原始, "d"), _读取字段(消息, "d"),
+        _读取字段(消息, "data"), _读取字段(消息, "payload"), _读取字段(消息, "message"),
+    ):
+        值 = _读取字段(_读取字段(包装, "author"), "bot")
+        if isinstance(值, bool):
+            return 值
+    return None
+
+
+def _补充记录机器人状态(记录: dict[str, Any], 原始消息: Any = None) -> bool | None:
+    """保留未知状态；本机器人可信发送来源与对方机器人身份分别处理。"""
+    来源 = str(记录.get("source") or "")
+    if 来源.startswith("bot_") or 来源 == "web_panel":
+        状态 = True
+    else:
+        状态 = 记录.get("is_bot")
+        if not isinstance(状态, bool):
+            状态 = _提取作者机器人状态(
+                原始消息 if 原始消息 is not None else 记录.get("raw_message")
+            )
+    记录["is_bot"] = 状态
+    return 状态
+
+
 def _主动消息权限键(会话标识: str, 会话类型: str = "") -> str:
     类型 = "user" if str(会话类型 or "").strip().lower() == "user" else "group"
     return f"{类型}:{str(会话标识 or '').strip()}"
@@ -591,6 +625,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    _补充记录机器人状态(记录, 原始消息)
     _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
     _补充记录引用索引(记录, 原始消息)
@@ -608,13 +643,14 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         and (
             (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
             or bool(作者头像)
+            or isinstance(记录.get("is_bot"), bool)
         )
     ):
         _记录成员资料(
             会话标识,
             作者标识,
             作者昵称,
-            bool(记录.get("is_self")),
+            记录.get("is_bot"),
             头像=作者头像,
             回填系统消息=False,
         )
@@ -692,6 +728,7 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
             and (not 内容文本.strip() or bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE)))
         )
     )
+    _补充记录机器人状态(记录)
     if 需要原始:
         原始消息 = _解析消息结构(记录.get("raw_message"))
         if 原始消息:
@@ -707,13 +744,14 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
         and (
             (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
             or bool(作者头像)
+            or isinstance(记录.get("is_bot"), bool)
         )
     ):
         _记录成员资料(
             会话标识,
             作者标识,
             作者昵称,
-            bool(记录.get("is_self")),
+            记录.get("is_bot"),
             头像=作者头像,
             回填系统消息=False,
         )
@@ -802,6 +840,7 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    _补充记录机器人状态(记录, 原始消息)
     _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
     _补充记录引用索引(记录, 原始消息)
@@ -819,13 +858,14 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
         and (
             (作者昵称 and 作者昵称 not in {"未知用户", "未知"})
             or bool(作者头像)
+            or isinstance(记录.get("is_bot"), bool)
         )
     ):
         _记录成员资料(
             会话标识,
             作者标识,
             作者昵称,
-            bool(记录.get("is_self")),
+            记录.get("is_bot"),
             头像=作者头像,
             回填系统消息=False,
         )
@@ -1084,6 +1124,9 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             已有记录["media"] = 当前媒体
         else:
             已有记录["media"] = _合并媒体记录(旧媒体, 新媒体)
+    新机器人状态 = _补充记录机器人状态(新记录, 新原始结构)
+    if isinstance(新机器人状态, bool):
+        已有记录["is_bot"] = 新机器人状态
     已有记录["is_self"] = bool(已有记录.get("is_self") or 新记录.get("is_self"))
     已有记录["recalled"] = bool(已有记录.get("recalled") or 新记录.get("recalled"))
     try:
@@ -1112,6 +1155,7 @@ def _消息资料签名(记录: dict[str, Any]) -> tuple[Any, ...]:
         str(记录.get("refidx") or ""),
         _消息媒体指纹(记录.get("media")),
         bool(记录.get("is_self")),
+        记录.get("is_bot"),
         bool(记录.get("recalled")),
     )
 
@@ -1769,10 +1813,14 @@ def _获取消息相关成员资料(
         if isinstance(全部资料.get(标识), dict)
     }
     for 消息 in 消息列表 or ():
-        if not isinstance(消息, dict) or not 消息.get("nickname_blank") or 消息.get("is_self"):
+        if not isinstance(消息, dict):
             continue
         标识 = str(消息.get("user_id") or "").strip()
-        if 标识:
+        if not 标识:
+            continue
+        if isinstance(消息.get("is_bot"), bool):
+            结果.setdefault(标识, {})["is_bot"] = 消息["is_bot"]
+        if 消息.get("nickname_blank") and not 消息.get("is_self"):
             资料 = 结果.setdefault(标识, {})
             if not _有效用户昵称(资料.get("nickname") or 资料.get("username"), 标识):
                 资料["nickname_blank"] = True
@@ -1783,10 +1831,11 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     """构造控制台实时事件，避免把内部会话键和未处理对象直接推到网页。"""
     字段 = (
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
-        "is_self", "source", "recalled", "media", "reference_id", "refidx",
+        "is_self", "is_bot", "source", "recalled", "media", "reference_id", "refidx",
         "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview", "reference_ids",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
+    _补充记录机器人状态(消息, 记录.get("raw_message"))
     消息["_session"] = str(记录.get("_session") or "")
     消息["nickname_blank"] = bool(记录.get("nickname_blank"))
     _补充记录昵称状态(消息, 记录.get("raw_message"))
@@ -1815,7 +1864,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
                 媒体.pop("_lanzou_archive", None)
                 媒体.pop("_lanzou_archives", None)
                 消息["media"] = 媒体
-    成员资料 = _获取消息相关成员资料(会话标识, [记录])
+    成员资料 = _获取消息相关成员资料(会话标识, [消息])
     return {
         "chat_id": 会话标识,
         "chat_type": str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
@@ -2186,7 +2235,7 @@ def _更新消息提及资料(记录: dict[str, Any], 消息: Any = None) -> Non
                     break
         当前 = 会话资料.setdefault(成员标识, {})
         当前["nickname"] = 昵称
-        当前.setdefault("is_bot", False)
+        当前.setdefault("is_bot", None)
         当前.setdefault("role", "")
 
 
@@ -2985,7 +3034,7 @@ def _记录成员资料(
     会话标识: str,
     成员标识: str,
     昵称: str,
-    是机器人: bool = False,
+    是机器人: bool | None = None,
     角色: str = "",
     头像: str = "",
     回填系统消息: bool = True,
@@ -3003,14 +3052,15 @@ def _记录成员资料(
                 break
         会话资料[成员标识] = {
             "nickname": 昵称 or "",
-            "is_bot": bool(是机器人),
+            "is_bot": 是机器人 if isinstance(是机器人, bool) else None,
             "role": str(角色 or ""),
             "avatar": str(头像 or "").strip(),
         }
     else:
         if 昵称:
             会话资料[成员标识]["nickname"] = 昵称
-        会话资料[成员标识]["is_bot"] = bool(是机器人)
+        if isinstance(是机器人, bool):
+            会话资料[成员标识]["is_bot"] = 是机器人
         if 角色:
             会话资料[成员标识]["role"] = str(角色 or "")
         if 头像:
@@ -3209,8 +3259,7 @@ def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None, 
     if not isinstance(记录, dict):
         return
     来源 = str(记录.get("source") or "")
-    作者 = _读取字段(原始消息, "author")
-    if 记录.get("is_self") or 来源.startswith("bot_") or 来源 == "web_panel" or _读取字段(作者, "bot"):
+    if 记录.get("is_self") or 来源.startswith("bot_") or 来源 == "web_panel" or _提取作者机器人状态(原始消息) is True:
         记录["nickname_blank"] = False
         return
     用户标识 = str(记录.get("user_id") or "")
@@ -3798,7 +3847,7 @@ def 记录收到消息(
                 },
             )
         昵称 = _有效用户昵称(_提取成员昵称(消息), 成员标识)
-        是机器人 = bool(_读取字段(作者, "bot") or False)
+        是机器人 = _提取作者机器人状态(消息)
         角色 = str(_读取字段(作者, "member_role") or "").strip()
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
         if not is_self and 类型 in {"group", "user"}:
@@ -3816,7 +3865,9 @@ def 记录收到消息(
                     回显记录["message_id"] = 消息ID
                 if 消息ID:
                     自己发送消息ID[消息ID] = time.time()
-        if not is_self:
+        if is_self:
+            是机器人 = True
+        else:
             清除主动消息权限(会话标识, 类型)
         引用索引: dict[str, Any] = {}
         _补充记录引用索引(引用索引, 消息)
@@ -3861,6 +3912,7 @@ def 记录收到消息(
             "content": 内容,
             "timestamp": _格式化时间戳(时间戳),
             "is_self": bool(is_self),
+            "is_bot": 是机器人,
             "source": 源,
             "avatar": 作者头像,
             "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
@@ -4698,6 +4750,7 @@ def 记录发送消息(
                     "refidx": 自身REFIDX or "",
                     "reference_id": 引用ID or "",
                     "is_self": True,
+                    "is_bot": True,
                     "source": 来源值,
                     "chat_type": 类型,
                     "appid": str(appid or ""),
@@ -4733,6 +4786,7 @@ def 记录发送消息(
                         "refidx": 自身REFIDX or "",
                         "reference_id": 引用ID or "",
                         "is_self": True,
+                        "is_bot": True,
                         "source": 来源值,
                         "chat_type": 类型,
                         "appid": str(appid or ""),
@@ -4760,6 +4814,7 @@ def 记录发送消息(
             "content": 内容,
             "timestamp": _格式化时间戳(成功时间戳),
             "is_self": True,
+            "is_bot": True,
             "source": 来源值,
             "avatar": 头像值,
             "raw_message": "",
@@ -7601,7 +7656,7 @@ def _构造群角色结果(会话标识: str, 状态: dict[str, Any], appid: str
             continue
         成员表[成员标识] = {
             "nickname": 资料.get("nickname") or "",
-            "is_bot": bool(资料.get("is_bot") or False),
+            "is_bot": 资料.get("is_bot") if isinstance(资料.get("is_bot"), bool) else None,
             "role": "",
         }
     return {
@@ -8694,6 +8749,11 @@ def _修补botpy昵称() -> bool:
                     if isinstance(项, dict)
                 ]
                 if isinstance(作者数据, dict):
+                    if 作者 is not None and isinstance(作者数据.get("bot"), bool):
+                        try:
+                            作者.bot = 作者数据["bot"]
+                        except Exception:
+                            pass
                     昵称 = str(作者数据.get("username") or "").strip()
                     if 昵称 and 作者 is not None:
                         作者.username = 昵称

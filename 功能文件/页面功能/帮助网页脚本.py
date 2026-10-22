@@ -1263,6 +1263,12 @@
         });
         return merged;
       };
+      const msgIsBot = (message, profile = {}) => {
+        if (typeof message?.is_bot === 'boolean') return message.is_bot;
+        if (typeof profile?.is_bot === 'boolean') return profile.is_bot;
+        const source = String(message?.source || '');
+        return source.startsWith('bot_') || source === 'web_panel';
+      };
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = mergeMsgProfileMaps(profiles);
         (messages || []).forEach((message) => {
@@ -1273,11 +1279,13 @@
           const avatar = String(message?.avatar || message?.avatar_url || '').trim();
           const role = String(message?.member_role || message?.role || '').trim().toLowerCase();
           const blank = !message?.is_self && !String(message?.source || '').startsWith('bot_') && Boolean(message?.nickname_blank || isBlankMsgNickname(message?.nickname));
-          if (!id || (!nickname && !avatar && !role && !blank) || !mentionIdPattern.test(id)) return;
+          const botKnown = typeof message?.is_bot === 'boolean';
+          if (!id || (!nickname && !avatar && !role && !blank && !botKnown) || !mentionIdPattern.test(id)) return;
           merged[id] = mergeMsgProfileMaps(merged, {[id]: {
             ...(nickname && nickname !== '未知用户' && nickname !== '未知' ? {nickname} : {}),
             ...(avatar ? {avatar} : {}),
             ...(role ? {role} : {}),
+            ...(botKnown ? {is_bot:message.is_bot} : {}),
             ...(blank ? {nickname_blank:true} : {}),
           }})[id];
         });
@@ -3431,6 +3439,7 @@
         const merged = {...existing};
         if (Array.isArray(incoming?.reference_ids)) merged.reference_ids = incoming.reference_ids.slice(0, 8);
         if (typeof incoming?.reference_conflict === 'boolean') merged.reference_conflict = incoming.reference_conflict;
+        if (typeof incoming?.is_bot === 'boolean') merged.is_bot = incoming.is_bot;
         ['user_id', 'nickname', 'content', 'timestamp', 'source', 'member_role', 'msg_seq', 'avatar', 'reference_id', 'refidx', 'chat_type', 'appid'].forEach((field) => {
           const next = incoming?.[field];
           const current = merged[field];
@@ -4610,6 +4619,9 @@
               Boolean(referenceIndex.blocked?.has(String(message.reference_id))),
               message.refidx || '',
               message.source || '',
+              typeof message.is_bot === 'boolean' ? message.is_bot : null,
+              message.member_role || '',
+              Boolean(message.is_self),
               String(message.raw_message || ''),
             ];
           }),
@@ -4665,9 +4677,8 @@
             : displayMsgNickname(m, profile);
           const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid)));
           const tags = [];
-          if (isSelf) {
-            tags.push('<span class="msg-tag self">' + (botMessage ? '机器人' : '我') + '</span>');
-          }
+          if (msgIsBot(m, profile)) tags.push('<span class="msg-tag bot">BOT</span>');
+          else if (isSelf) tags.push('<span class="msg-tag self">我</span>');
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
@@ -4676,7 +4687,7 @@
           const memberRole = String(profile.role || m.member_role || rawRole || '').trim().toLowerCase();
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
           const roleTag = roleMap[memberRole] || '';
-          if (!isSelf && roleTag) tags.push(`<span class="msg-tag role">${roleTag}</span>`);
+          if (!isSelf && roleTag) tags.push(`<span class="msg-tag role ${memberRole}">${roleTag}</span>`);
           const renderText = (text) => {
             return replaceMsgMentions(text, profiles);
           };

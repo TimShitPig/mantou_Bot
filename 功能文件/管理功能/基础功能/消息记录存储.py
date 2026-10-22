@@ -162,6 +162,24 @@ def _生成历史引用快照SQL() -> str:
 
 _历史引用快照SQL = _生成历史引用快照SQL()
 
+
+def _生成历史作者机器人SQL() -> str:
+    """原文截断前只投影当前作者的布尔标记，不进入引用或提及列表。"""
+    分支: list[str] = []
+    for 包装 in ("$", "$.raw_data", "$.raw_data.d", "$.d", "$.data", "$.payload", "$.message"):
+        值 = f"JSON_EXTRACT(raw_message, '{包装}.author.bot')"
+        分支.append(
+            f"WHEN JSON_TYPE({值})='BOOLEAN' "
+            f"THEN CASE WHEN JSON_UNQUOTE({值})='true' THEN 1 ELSE 0 END"
+        )
+    return (
+        "CASE WHEN LOCATE('\"bot\"', raw_message)=0 THEN NULL "
+        f"WHEN JSON_VALID(raw_message) THEN CASE {' '.join(分支)} ELSE NULL END ELSE NULL END"
+    )
+
+
+_历史作者机器人SQL = _生成历史作者机器人SQL()
+
 # 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
 # 显式列出字段避免 SELECT * 搬运未来新增列；正文与媒体字段保持完整。
 # 额外白名单投影保留首项引用摘要，避免长原文在 SQL 截断后成为不完整 JSON。
@@ -169,7 +187,7 @@ _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
     "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq, "
-    f"{_历史引用快照SQL} AS reference_payload"
+    f"{_历史引用快照SQL} AS reference_payload, {_历史作者机器人SQL} AS author_is_bot"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -2983,4 +3001,7 @@ def _行转记录(行: Any) -> dict[str, Any]:
             引用快照 = None
     if isinstance(引用快照, dict):
         记录["_reference_payload"] = 引用快照
+    作者机器人 = _行字段(行, 21, "author_is_bot", 默认值=None)
+    if isinstance(作者机器人, (bool, int)) and 作者机器人 in (0, 1):
+        记录["is_bot"] = bool(作者机器人)
     return 记录

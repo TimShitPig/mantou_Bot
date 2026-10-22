@@ -253,8 +253,10 @@ from .帮助网页脚本 import 控制台脚本
             .msg-send-error:hover { background:#c92f2c; transform:scale(1.06); }
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
             .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
-            .msg-tag.bot { background:#ffeef5; color:#c66791; }
-            .msg-tag.role { background:#eef3ff; color:#5b7bd5; }
+            .msg-tag.bot { background:#e5edfb; color:#3b7bf7; }
+            .msg-tag.role { background:#f0f1f3; color:#858b96; }
+            .msg-tag.role.owner { background:#fef1dd; color:#f59e0b; }
+            .msg-tag.role.admin { background:#e9fbf3; color:#319e6b; }
             .msg-tag.self { background:#e9fbf3; color:#319e6b; }
             .msg-tag.recalled { background:#fff0f0; color:#e64340; }
             .msg-tag.muted { background:#fff0f0; color:#d64545; }
@@ -545,8 +547,10 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-file-action,:root[data-theme="dark"] .msg-row.self .msg-file-action { color:#b5c6f5; }
               :root[data-theme="dark"] .msg-send-error { background:#a74751; color:#fff; box-shadow:none; }
               :root[data-theme="dark"] .msg-send-error:hover { background:#913e48; }
-              :root[data-theme="dark"] .msg-tag.bot { background:var(--pink); color:var(--pink-ink); }
-              :root[data-theme="dark"] .msg-tag.role { background:var(--primary-soft); color:var(--primary); }
+              :root[data-theme="dark"] .msg-tag.bot { background:#233857; color:#83b3ff; }
+              :root[data-theme="dark"] .msg-tag.role { background:var(--raised); color:var(--muted); }
+              :root[data-theme="dark"] .msg-tag.role.owner { background:#483721; color:#f4ba60; }
+              :root[data-theme="dark"] .msg-tag.role.admin { background:var(--mint); color:var(--mint-ink); }
               :root[data-theme="dark"] .msg-tag.self { background:var(--mint); color:var(--mint-ink); }
               :root[data-theme="dark"] .msg-tag.recalled,:root[data-theme="dark"] .msg-tag.muted { background:var(--danger-bg); color:var(--danger); }
               :root[data-theme="dark"] .msg-row.muted .msg-avatar { background:var(--hover); color:var(--muted); }
