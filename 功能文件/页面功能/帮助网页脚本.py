@@ -3849,16 +3849,29 @@
           return url;
         } catch (_) { return ''; }
       };
+      const msgImageRecoveryStates = new WeakMap();
+      const msgImageScope = () => JSON.stringify([msgState.chatType, msgState.chatId, String(msgState.chatAppid || '').trim()]);
+      const msgImageUrl = (value) => {
+        try { return value ? new URL(value, location.href) : null; } catch (_) { return null; }
+      };
+      const clearMsgImageFailure = (img) => {
+        img.hidden = false;
+        const holder = img.closest('.msg-image-link');
+        holder?.classList.remove('is-broken');
+        holder?.querySelectorAll('.msg-media-ph').forEach((node) => node.remove());
+      };
       const markBrowserMediaUnavailable = (node) => {
         if (!node) return;
         if (node.tagName === 'IMG') {
+          const state = msgImageRecoveryStates.get(node);
+          if (state) state.pending = false;
           node.hidden = true;
           const holder = node.closest('.msg-image-link');
           holder?.classList.add('is-broken');
           if (holder && !holder.querySelector('.msg-media-ph')) {
             const placeholder = document.createElement('span');
             placeholder.className = 'msg-media-ph';
-            placeholder.textContent = '图片已过期或不可用';
+            placeholder.textContent = '图片加载失败，点击重试';
             holder.appendChild(placeholder);
           }
         } else if (node.tagName === 'A') {
@@ -3878,6 +3891,78 @@
         bindings.add(key);
         node.addEventListener(eventName, handler);
       };
+      const bindMsgImageRecovery = (img) => {
+        if (msgImageRecoveryStates.has(img)) {
+          if (img.complete && img.naturalWidth > 0) clearMsgImageFailure(img);
+          return;
+        }
+        // 状态跟随原节点，实时消息和滚动重绘不会重置自动重试额度。
+        const state = {scope:msgImageScope(), source:img.getAttribute('src') || '', autoRetried:false, timer:null, pending:false};
+        msgImageRecoveryStates.set(img, state);
+        const active = () => img.isConnected && state.scope === msgImageScope()
+          && !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
+        const cancelTimer = () => { if (state.timer !== null) clearTimeout(state.timer); state.timer = null; };
+        const retry = () => {
+          if (!active() || state.pending) return;
+          cancelTimer();
+          if (img.dataset.browserMediaKey) {
+            // 浏览器私有媒体只重读已有缓存，不将缓存键伪造成网络下载地址。
+            browserMediaHydrationKeys.delete(img);
+            state.pending = true;
+            void hydrateBrowserMedia(img.parentElement).finally(() => { state.pending = false; });
+            return;
+          }
+          if (!state.source) return;
+          state.pending = true;
+          clearMsgImageFailure(img);
+          img.loading = 'eager';
+          img.src = state.source;
+          img.dataset.lightbox = state.source;
+        };
+        const loaded = () => {
+          if (img.naturalWidth <= 0) return;
+          cancelTimer();
+          state.pending = false;
+          clearMsgImageFailure(img);
+        };
+        const failed = () => {
+          state.pending = false;
+          if (!active()) { cancelTimer(); markBrowserMediaUnavailable(img); return; }
+          const current = msgImageUrl(img.getAttribute('src'));
+          // 归档读取偶发失败时只自动重试一次；QQ 代理仍沿用原来的一次直连。
+          if (!img.dataset.browserMediaKey && current?.origin === location.origin
+            && current.pathname === '/api/message/lanzou-image' && !state.autoRetried) {
+            state.autoRetried = true;
+            markBrowserMediaUnavailable(img);
+            state.timer = setTimeout(() => { state.timer = null; retry(); }, 350);
+            return;
+          }
+          const direct = msgImageUrl(img.dataset.mediaDirect || '');
+          if (!img.dataset.browserMediaKey && direct && !img.dataset.mediaDirectTried
+            && direct.href !== current?.href) {
+            img.dataset.mediaDirectTried = '1';
+            state.pending = true;
+            clearMsgImageFailure(img);
+            img.src = direct.href;
+            img.dataset.lightbox = direct.href;
+            return;
+          }
+          markBrowserMediaUnavailable(img);
+        };
+        bindMsgEvent(img, 'load', 'media-load', loaded);
+        bindMsgEvent(img, 'error', 'media-error', failed);
+        bindMsgEvent(img.closest('.msg-image-link'), 'click', 'media-retry', (event) => {
+          if (!img.closest('.msg-image-link')?.classList.contains('is-broken')) return;
+          event.preventDefault();
+          event.stopPropagation();
+          retry();
+        });
+        // src 可在绑定前完成；没有 src 的本地缓存图等待 hydrate，不发请求。
+        if (img.complete && img.getAttribute('src')) {
+          if (img.naturalWidth > 0) loaded();
+          else failed();
+        }
+      };
       const browserMediaHydrationKeys = new WeakMap();
       const hydrateBrowserMedia = async (root) => {
         if (!root) return;
@@ -3894,6 +3979,7 @@
             return;
           }
           if (node.tagName === 'IMG') {
+            clearMsgImageFailure(node);
             if (node.getAttribute('src') !== url) node.src = url;
             node.dataset.lightbox = url;
             bindMsgEvent(node, 'click', 'lightbox', (event) => { event.preventDefault(); openMsgLightbox(node.dataset.lightbox); });
@@ -4769,26 +4855,7 @@
         void hydrateBrowserMedia(body);
         body.querySelectorAll('[data-media-img]').forEach((img) => {
           bindImageInteractions(img);
-          bindMsgEvent(img, 'error', 'media-error', () => {
-            const direct = String(img.dataset.mediaDirect || '').trim();
-            // QQ 图片先走同源代理，代理遇到网络/CDN 临时失败时仍可由浏览器直连一次。
-            // <img> 直连显示不需要 CORS；只限一次，避免失效 rkey 产生循环请求。
-            if (direct && !img.dataset.mediaDirectTried && img.src !== direct) {
-              img.dataset.mediaDirectTried = '1';
-              img.src = direct;
-              img.dataset.lightbox = direct;
-              return;
-            }
-            img.hidden = true;
-            const holder = img.closest('.msg-image-link');
-            holder?.classList.add('is-broken');
-            if (holder && !holder.querySelector('.msg-media-ph')) {
-              const placeholder = document.createElement('span');
-              placeholder.className = 'msg-media-ph';
-              placeholder.textContent = '图片已过期或不可用';
-              holder.appendChild(placeholder);
-            }
-          });
+          bindMsgImageRecovery(img);
         });
         if (scroll.prepend) {
           body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
