@@ -129,6 +129,7 @@
 - 群信息接口返回 `机器人非群成员`、`非群成员`、`不在群` 或 `未加入群` 时，必须将群状态持久化为 `removed`；群资料/机器人状态请求失败日志至少包含阶段、群标识、appid、错误类型、错误分类、HTTP/业务码、受控错误详情和冷却时间。
 - 网页消息记录页显示成员禁言状态时，必须调用 QQ 官方 `GET /v2/groups/{group_openid}/restrict_chat_setting`，只使用返回的未过期 `members[].member_openid`、`username` 和 `mute_expire_at`；按群缓存至少 30 秒，接口失败保留旧状态并使用失败冷却，不把原始响应返回网页。网页解除禁言必须通过同一接口提交 `members[].op=del`，成功后清除缓存并刷新状态。群设置禁言面板同时白名单展示 `global_rule.mode`、`schedule_rules` 与 `recurring_rules`，沿用同一作用域快照和后台调度；本次查询入口不修改全员禁言配置。 同一 AppID 的所有群共享每分钟 30 次查询额度，认证重试及 HTTP 客户端内部重试逐次计入；不得只统计外层函数调用。
 - QQ 官方群消息的成员 OpenID 不用于 QQ 号群头像接口；网页优先使用事件扩展/历史记录提供的 `avatar`/`avatar_url`，没有头像时使用腾讯官方 `q.qlogo.cn/qqapp/{appid}/{openid}/0` AppID 作用域地址，仍无有效 AppID 或图片失败时显示姓名首字母。
+- 百度出版书按官方免费排他坐标限制正文；边界落在章中时仅保留边界前可读片段并注明“本章未完”，完整章、试读片段与未获取分开统计。片段仍验证书籍、目录、页长及起始标题；完整章继续校验下一标题，不请求边界之后的分片。
 - 所有小说平台章节进度日志最多输出 5 条（含 0% 起始进度）；不得在短篇下载时逐章输出 INFO 进度。
 - 群名片/群分享/JSON 卡片消息需要撤回当前消息，包括 `[ComponentType.Json]`、组件对象字符串中的 `ComponentType.Json`，以及 QQ 官方机器人空间相册分享等卡片降级展示文本 `暂不能查看该消息内容`。
 - 白名单域名 `changdunovel.com`、`fanqienovel.com`、`fqnovel.com`、`novelfm.com`、`qimao.com`、`app-share.wtzw.com`、`shuqi.com`、`shuqireader.com`、`zhuishushenqi.com`、`zhuishuvip.com`、`reader.qq.com`、`book.qq.com`、`novel.html5.qq.com`、`mr.baidu.com`、`yd.baidu.com`、`boxnovel.baidu.com`、`novel.baidu.com`、`reader.browser.miui.com`、`dushu.xiaomi.com`、`jjwxc.net`、`jjwxc.com`、`zh.z-library.sk`、`z-library.sk` 不撤回；白名单判断必须优先于 JSON 卡片、合并转发、闪传和数字撤回判断。
