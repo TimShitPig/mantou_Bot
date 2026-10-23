@@ -57,14 +57,6 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
     r"[^\s<>\"']*",
     re.IGNORECASE,
 )
-小米卡片编号正则 = re.compile(
-    r"[\"'`]?\b(?:book[_-]?id|resource[_-]?id|fiction[_-]?id|source[_-]?id|id)[\"'`]?\s*[:=]\s*[\"'`]?([0-9]{1,30})",
-    re.IGNORECASE,
-)
-小米卡片来源编号正则 = re.compile(
-    r"[\"'`]?\bsource[_-]?id[\"'`]?\s*[:=]\s*[\"'`]?([0-9]{1,30})",
-    re.IGNORECASE,
-)
 小米请求头 = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
@@ -84,57 +76,101 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 小米文件发送失败提示 = "文件发送失败，请稍后再试"
 
 
-def _文本候选(值: Any, 结果: list[str], 已见: set[int], 深度: int = 0) -> None:
-    if 值 is None or 深度 > 8:
-        return
-    if isinstance(值, str):
-        结果.append(值)
-        return
-    if isinstance(值, dict):
-        try:
-            序列化 = json.dumps(值, ensure_ascii=False, default=str)
-            if (
-                "小米" in 序列化
-                or "miui" in 序列化.lower()
-                or "xiaomi" in 序列化.lower()
-            ):
-                结果.append(序列化)
-        except Exception:
-            pass
-        for 子值 in 值.values():
-            _文本候选(子值, 结果, 已见, 深度 + 1)
-        return
-    if isinstance(值, (list, tuple, set)):
-        for 子值 in 值:
-            _文本候选(子值, 结果, 已见, 深度 + 1)
-        return
-    标识 = id(值)
-    if 标识 in 已见:
-        return
-    已见.add(标识)
-    for 字段 in (
-        "message_str",
-        "message",
-        "raw_message",
-        "message_obj",
-        "text",
-        "content",
-        "data",
-    ):
-        try:
-            _文本候选(getattr(值, 字段, None), 结果, 已见, 深度 + 1)
-        except Exception:
+def _小米字段(值: Any, 字段: str) -> Any:
+    return 值.get(字段) if isinstance(值, dict) else getattr(值, 字段, None)
+
+
+def _小米当前输入(event: Any, 命令文本: Any) -> tuple[list[str], list[Any]]:
+    """只读本条正文和显式卡片，不把引用、身份资料或对象 repr 当输入。"""
+    正文: list[str] = []
+    段落: list[str] = []
+    卡片: list[Any] = []
+    有消息链 = False
+    待处理 = [(event, 0)]
+    已见: set[int] = set()
+    while 待处理 and len(已见) < 128:
+        当前, 深度 = 待处理.pop(0)
+        if 当前 is None or 深度 > 8 or id(当前) in 已见:
             continue
-    try:
-        文本 = str(值)
-    except Exception:
-        文本 = ""
-    if (
-        "miui.com" in 文本.lower()
-        or "dushu.xiaomi.com" in 文本.lower()
-        or "小米" in 文本
-    ):
-        结果.append(文本)
+        已见.add(id(当前))
+        if isinstance(当前, str):
+            try:
+                当前 = json.loads(当前)
+            except (TypeError, ValueError):
+                continue
+        类型 = _小米字段(当前, "type")
+        类型 = str(getattr(类型, "value", 类型) or "").lower().removeprefix("componenttype.")
+        if 类型 in {"reply", "at", "atall", "forward", "node", "nodes"}:
+            continue
+        if 类型 in {"json", "ark"}:
+            卡片.append(_小米字段(当前, "data"))
+            continue
+        if 类型 in {"text", "plain"}:
+            数据 = _小米字段(当前, "data")
+            文本 = _小米字段(当前, "text") or _小米字段(数据, "text")
+            if isinstance(文本, str):
+                段落.append(文本)
+            continue
+        内容 = _小米字段(当前, "content")
+        if isinstance(内容, str) and any(
+            _小米字段(当前, 字段) is not None
+            for 字段 in ("author", "message_type", "group_openid")
+        ):
+            正文.append(内容)
+        Ark = _小米字段(当前, "ark")
+        if isinstance(Ark, dict):
+            卡片.append(Ark)
+        for 字段 in ("message_obj", "raw_message", "raw_data", "d", "data", "payload", "message"):
+            子值 = _小米字段(当前, 字段)
+            if 字段 == "message" and isinstance(子值, (list, tuple)):
+                有消息链 = 有消息链 or bool(子值)
+                待处理.extend((段, 深度 + 1) for 段 in 子值[:128])
+            elif 子值 is not None and not isinstance(子值, (int, float, bool)):
+                待处理.append((子值, 深度 + 1))
+    if 正文:
+        return 正文, 卡片
+    if 有消息链:
+        return ["".join(段落)], 卡片
+    return [命令文本] if isinstance(命令文本, str) else [], 卡片
+
+
+def _小米卡片输入(卡片: Any) -> tuple[list[str], list[str]]:
+    文本: list[str] = []
+    编号: list[str] = []
+    来源编号: list[str] = []
+    待处理 = [(卡片, 0)]
+    已见: set[int] = set()
+    while 待处理 and len(已见) < 256:
+        当前, 深度 = 待处理.pop(0)
+        if 当前 is None or 深度 > 8 or id(当前) in 已见:
+            continue
+        已见.add(id(当前))
+        if isinstance(当前, str):
+            try:
+                当前 = json.loads(当前)
+            except (TypeError, ValueError):
+                文本.append(当前)
+                continue
+        if isinstance(当前, dict):
+            for 键, 值 in 当前.items():
+                字段 = str(键).lower().replace("_", "").replace("-", "")
+                if 字段 in {
+                    "author", "user", "member", "sender", "mentions", "msgelements",
+                    "parallelmessage", "reply", "ref", "reference", "messagereference",
+                    "quote", "quoted", "quotedmessage", "message", "messageobj",
+                    "rawdata", "rawmessage", "msgidx", "refmsgidx", "messageid",
+                    "openid", "memberopenid", "useropenid", "unionopenid",
+                }:
+                    continue
+                if 字段 in {"sourceid", "bookid", "resourceid", "fictionid"}:
+                    完整编号 = _数字文本(值) if isinstance(值, (str, int)) and not isinstance(值, bool) else ""
+                    if 完整编号:
+                        (来源编号 if 字段 == "sourceid" else 编号).append(完整编号)
+                elif isinstance(值, (dict, list, str)):
+                    待处理.append((值, 深度 + 1))
+        elif isinstance(当前, list):
+            待处理.extend((值, 深度 + 1) for 值 in 当前[:128])
+    return 文本, 来源编号 + 编号
 
 
 def _清理来源(值: Any) -> str:
@@ -143,27 +179,26 @@ def _清理来源(值: Any) -> str:
 
 
 def 提取小米来源(event: Any, 命令文本: Any) -> str | None:
-    候选: list[str] = []
-    _文本候选(命令文本, 候选, set())
-    _文本候选(event, 候选, set())
+    候选, 卡片列表 = _小米当前输入(event, 命令文本)
+    卡片编号: list[str] = []
+    for 卡片 in 卡片列表:
+        卡片文本, 编号 = _小米卡片输入(卡片)
+        候选.extend(卡片文本)
+        if any(re.search(r"小米|miui|xiaomi", 文本, re.I) for 文本 in 卡片文本):
+            卡片编号.extend(编号)
     for 文本 in 候选:
         for 当前 in (文本, urllib.parse.unquote(文本)):
-            匹配 = 小米链接正则.search(当前)
-            if 匹配:
-                return _清理来源(匹配.group(0))
-    for 文本 in 候选:
-        if (
-            "小米" not in 文本
-            and "miui" not in 文本.lower()
-            and "xiaomi" not in 文本.lower()
-        ):
-            continue
-        解码文本 = urllib.parse.unquote(文本)
-        匹配 = 小米卡片来源编号正则.search(解码文本) or 小米卡片编号正则.search(
-            解码文本
-        )
-        if 匹配:
-            return 构造小米链接(匹配.group(1))
+            for 匹配 in 小米链接正则.finditer(当前):
+                链接 = _清理来源(匹配.group(0))
+                try:
+                    解析 = urllib.parse.urlsplit(链接)
+                    if 解析.username or 解析.password or not 解析小米书籍编号(链接):
+                        continue
+                except ValueError:
+                    continue
+                return 链接
+    if 卡片编号:
+        return 构造小米链接(卡片编号[0])
     return None
 
 
@@ -200,18 +235,12 @@ def 解析小米书籍编号(来源: Any) -> str:
             if 编号:
                 return f"dushu:{编号}" if 新接口 else 编号
     匹配 = re.search(
-        r"(?:book|novel|detail)[^0-9]{0,20}(\d{1,30})", 解析.path, re.IGNORECASE
+        r"(?:book|novel|detail)[^0-9]{0,20}(\d{1,30})(?:\.html)?(?:/|$)", 解析.path, re.IGNORECASE
     )
     if 匹配:
         编号 = 匹配.group(1)
         return f"dushu:{编号}" if 新接口 else 编号
-    匹配 = re.search(
-        r"(?:^|[=&])(?:id|bookId|book_id)[=:]?\s*(\d{1,30})", 文本, re.IGNORECASE
-    )
-    if not 匹配:
-        return ""
-    编号 = 匹配.group(1)
-    return f"dushu:{编号}" if 新接口 else 编号
+    return ""
 
 
 def 构造小米链接(书籍编号: Any) -> str:
