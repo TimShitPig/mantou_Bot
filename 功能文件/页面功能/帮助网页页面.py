@@ -317,6 +317,9 @@ from .帮助网页脚本 import 控制台脚本
             .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid #e8e9ec; }
             .msg-raw-head strong { font-size:13px; color:#222; }
             .msg-raw-head button { border:0; background:transparent; color:#999; font-size:16px; cursor:pointer; }
+            .msg-raw-actions { display:flex; align-items:center; gap:14px; }
+            .msg-raw-head .msg-raw-copy { padding:4px 8px; font-size:12px; color:var(--primary); }
+            .msg-raw-copy:disabled { cursor:wait; opacity:.65; }
             .msg-raw-content { flex:1 1 0; min-height:0; overflow:auto; padding:13px 15px; white-space:pre-wrap; word-break:break-all; color:#333; font:12px/1.6 Consolas,Monaco,monospace; }
             .msg-mute-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
             .msg-mute-modal[hidden] { display:none; }
@@ -578,6 +581,7 @@ from .帮助网页脚本 import 控制台脚本
               :root[data-theme="dark"] .msg-raw-head { border-bottom-color:var(--line); }
               :root[data-theme="dark"] .msg-raw-head strong,:root[data-theme="dark"] .msg-mute-box h3,:root[data-theme="dark"] .msg-remark-box h3,:root[data-theme="dark"] .msg-raw-content { color:var(--ink); }
               :root[data-theme="dark"] .msg-raw-head button { color:var(--muted); }
+              :root[data-theme="dark"] .msg-raw-head .msg-raw-copy { color:var(--primary); }
               :root[data-theme="dark"] .msg-remark-box label { color:var(--muted) !important; }
               :root[data-theme="dark"] .msg-mute-box input,:root[data-theme="dark"] .msg-remark-box input { background:var(--input); border-color:var(--line) !important; color:var(--ink); }
               :root[data-theme="dark"] .msg-mute-box input:focus,:root[data-theme="dark"] .msg-remark-box input:focus { outline:2px solid var(--primary); outline-offset:1px; }
@@ -803,7 +807,7 @@ from .帮助网页脚本 import 控制台脚本
               </div>
             </div>
           </div>
-          <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><button id="msg-raw-close" type="button">×</button></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
+          <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><div class="msg-raw-actions"><button class="msg-raw-copy" id="msg-raw-copy" type="button">复制</button><button id="msg-raw-close" type="button" aria-label="关闭原始数据">×</button></div></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
           <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box"><h3>群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
           <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="30" step="1" placeholder="自定义天数（最多30天）" aria-label="自定义禁言天数，最多30天" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
         </section>

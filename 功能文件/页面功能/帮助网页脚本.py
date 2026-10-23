@@ -3194,36 +3194,46 @@
         }
         getComposerEditor()?.focus();
       };
-      const copyMsgText = async (text, row = null) => {
-        let copyText = String(text || '');
+      const copyMsgText = async (text, row = null, {exact = false, notify = true} = {}) => {
+        let copyText = String(text ?? '');
+        if (!exact) {
+          try {
+            const selection = window.getSelection ? window.getSelection() : null;
+            const selected = selection && !selection.isCollapsed ? String(selection.toString() || '') : '';
+            const selectedInRow = selected && row && selection.anchorNode && selection.focusNode
+              ? row.contains(selection.anchorNode) && row.contains(selection.focusNode)
+              : Boolean(selected && !row);
+            if (selected && selectedInRow) copyText = selected;
+          } catch (_) {}
+          if (!copyText.trim() && row) copyText = String(row.querySelector('.msg-bubble')?.innerText || '');
+          copyText = copyText.trim();
+        }
+        if (!copyText) { if (notify) toast('没有可复制的消息内容'); return false; }
         try {
-          const selection = window.getSelection ? window.getSelection() : null;
-          const selected = selection && !selection.isCollapsed ? String(selection.toString() || '') : '';
-          const selectedInRow = selected && row && selection.anchorNode && selection.focusNode
-            ? row.contains(selection.anchorNode) && row.contains(selection.focusNode)
-            : Boolean(selected && !row);
-          if (selected && selectedInRow) copyText = selected;
-        } catch (_) {}
-        if (!copyText.trim() && row) copyText = String(row.querySelector('.msg-bubble')?.innerText || '');
-        copyText = copyText.trim();
-        if (!copyText) return toast('没有可复制的消息内容');
-        try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(copyText);
-          } else {
+          let copied = false;
+          if (navigator.clipboard?.writeText && window.isSecureContext) {
+            try { await navigator.clipboard.writeText(copyText); copied = true; } catch (_) {}
+          }
+          if (!copied) {
+            const previousFocus = document.activeElement;
             const ta = document.createElement('textarea');
             ta.value = copyText;
             ta.style.position = 'fixed';
             ta.style.left = '-9999px';
             document.body.appendChild(ta);
-            ta.select();
-            ta.setSelectionRange(0, ta.value.length);
-            const ok = document.execCommand('copy');
-            document.body.removeChild(ta);
-            if (!ok) throw new Error('execCommand 复制失败');
+            try {
+              ta.focus();
+              ta.select();
+              ta.setSelectionRange(0, ta.value.length);
+              if (!document.execCommand('copy')) throw new Error('clipboard_failed');
+            } finally {
+              ta.remove();
+              previousFocus?.focus({preventScroll:true});
+            }
           }
-          toast('已复制');
-        } catch (error) { toast('复制失败：' + error.message); }
+          if (notify) toast('已复制');
+          return true;
+        } catch (_) { if (notify) toast('复制失败，请重试'); return false; }
       };
       const enterMultiMode = () => {
         msgState.multi = true; msgState.selected.clear();
@@ -4885,7 +4895,7 @@
         body.querySelectorAll('[data-msg-quote]').forEach((el) => bindMsgEvent(el, 'click', 'quote', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
         body.querySelectorAll('[data-msg-mute]').forEach((el) => bindMsgEvent(el, 'click', 'mute', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
         body.querySelectorAll('[data-msg-unmute]').forEach((el) => bindMsgEvent(el, 'click', 'unmute', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
-        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-copy').textContent = '复制'; $('msg-raw-modal').hidden = false; }));
         body.querySelectorAll('.msg-row').forEach((row) => {
           bindMsgEvent(row, 'contextmenu', 'message-context', (e) => {
             e.preventDefault();
@@ -6141,6 +6151,15 @@
       $('msg-remark').addEventListener('click', showRemarkDialog);
       bindGroupSettings();
       $('msg-quote-clear').addEventListener('click', clearMsgQuote);
+      $('msg-raw-copy').addEventListener('click', async () => {
+        const button = $('msg-raw-copy');
+        const content = $('msg-raw-content').textContent || '';
+        button.disabled = true;
+        try {
+          const copied = await copyMsgText(content, null, {exact:true, notify:false});
+          if ($('msg-raw-content').textContent === content) button.textContent = copied ? '已复制' : '复制失败，请重试';
+        } finally { button.disabled = false; }
+      });
       $('msg-raw-close').addEventListener('click', () => { $('msg-raw-modal').hidden = true; });
       $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) $('msg-raw-modal').hidden = true; });
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));
