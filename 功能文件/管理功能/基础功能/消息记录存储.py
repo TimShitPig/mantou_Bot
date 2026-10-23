@@ -195,7 +195,7 @@ _列最大长度: dict[str, int] = {
     "会话标识": 128,
     "消息类型": 16,
     "appid": 64,
-    "message_id": 128,
+    "message_id": 512,
     "user_id": 128,
     "nickname": 255,
     "timestamp": 32,
@@ -209,7 +209,7 @@ _列最大长度: dict[str, int] = {
 
 _数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
 _数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
-_消息表结构版本 = 4
+_消息表结构版本 = 5
 _已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
 _消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
 
@@ -452,7 +452,7 @@ def _初始化数据库结构() -> bool:
                     会话标识 VARCHAR(128) NOT NULL,
                     消息类型 VARCHAR(16) DEFAULT 'group',
                     appid VARCHAR(64) DEFAULT '',
-                    message_id VARCHAR(128) DEFAULT '',
+                    message_id VARCHAR(512) DEFAULT '',
                     user_id VARCHAR(128) DEFAULT '',
                     nickname VARCHAR(255) DEFAULT '',
                     content MEDIUMTEXT,
@@ -644,8 +644,8 @@ def _初始化数据库结构() -> bool:
                     if int(_行字段(游标.fetchone(), 0, "COUNT(*)", 默认值=0) or 0) == 0:
                         游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{列名}` {定义}")
                         logger.warning("消息记录 MySQL 表已补列 %s", 列名)
-                for 列名 in ("reference_id", "refidx"):
-                    初始化阶段 = f"检查引用索引字段长度_{列名}"
+                for 列名 in ("message_id", "reference_id", "refidx"):
+                    初始化阶段 = f"检查消息标识字段长度_{列名}"
                     游标.execute(
                         "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "
                         "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME=%s",
@@ -659,7 +659,7 @@ def _初始化数据库结构() -> bool:
                             f"ALTER TABLE `{消息记录表名}` MODIFY COLUMN `{列名}` "
                             f"VARCHAR({_列最大长度[列名]}) DEFAULT ''"
                         )
-                        logger.info("消息记录 MySQL 引用索引字段已扩容：列=%s", 列名)
+                        logger.info("消息记录 MySQL 消息标识字段已扩容：列=%s", 列名)
                 初始化阶段 = "检查群资料字段_is_admin"
                 游标.execute(
                     "SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -1312,12 +1312,103 @@ def _规范消息ID(值: Any) -> str:
     )
 
 
+def _完整写入消息ID(值: Any) -> str:
+    文本 = _规范消息ID(值)
+    if len(文本) > _列最大长度["message_id"]:
+        raise ValueError("message_id exceeds storage limit")
+    return 文本
+
+
+def 恢复群消息完整编号(
+    消息ID: Any, 原文: Any, 会话标识: str, 用户标识: str, appid: str = "",
+) -> str:
+    """仅凭同条消息的自身原文确认旧 128 字符身份，不读取引用或猜测前缀。"""
+    旧编号 = _规范消息ID(消息ID)
+    if not 旧编号 or len(旧编号) > _列最大长度["message_id"]:
+        return ""
+    if not all(33 <= ord(字符) <= 126 for 字符 in 旧编号):
+        return ""
+    if len(旧编号) != 128:
+        return 旧编号
+    if isinstance(原文, str):
+        try:
+            if len(原文) > 65536 or len(原文.encode("utf-8")) > 65536:
+                return ""
+            原始 = json.loads(原文)
+        except (TypeError, ValueError, RecursionError):
+            return ""
+    elif isinstance(原文, Mapping):
+        原始 = 原文
+    else:
+        return ""
+    if not isinstance(原始, Mapping):
+        return ""
+    会话标识 = str(会话标识 or "").strip()
+    用户标识 = str(用户标识 or "").strip()
+    appid = str(appid or "").strip()
+    if not 会话标识 or not 用户标识:
+        return ""
+
+    def 标识集合(对象: Mapping[str, Any], 字段: tuple[str, ...]) -> set[str]:
+        return {
+            str(值).strip() for 名 in 字段
+            if isinstance((值 := 对象.get(名)), (str, int))
+            and not isinstance(值, bool) and str(值).strip()
+        }
+
+    待看 = [(原始, 0, set(), set(), set())]
+    已看: set[int] = set()
+    自身编号: set[str] = set()
+    while 待看 and len(已看) < 16:
+        对象, 深度, 上层群, 上层用户, 上层应用 = 待看.pop(0)
+        if id(对象) in 已看:
+            continue
+        已看.add(id(对象))
+        群 = 上层群 | 标识集合(对象, ("group_openid", "group_id"))
+        用户 = 上层用户 | 标识集合(对象, ("member_openid", "user_openid", "user_id"))
+        应用 = 上层应用 | 标识集合(对象, ("appid", "app_id"))
+        for 字段 in ("author", "member"):
+            主体 = 对象.get(字段)
+            if isinstance(主体, Mapping):
+                主体用户 = 标识集合(主体, ("id", "member_openid", "user_openid", "user_id"))
+                if 主体用户 and 用户标识 not in 主体用户:
+                    return ""
+                用户 |= 主体用户
+        if 群 and 群 != {会话标识}:
+            return ""
+        if 用户 and 用户标识 not in 用户:
+            return ""
+        if 应用 and (len(应用) != 1 or not appid or 应用 != {appid}):
+            return ""
+        # 包装层的事件 ID 不能当作消息 ID；只有群及发送者均确认的消息对象参与。
+        if 群 == {会话标识} and 用户标识 in 用户:
+            for 字段 in ("id", "message_id", "messageId"):
+                值 = 对象.get(字段)
+                if not isinstance(值, str) or not 值:
+                    continue
+                编号 = _规范消息ID(值)
+                if not 编号 or len(编号) > _列最大长度["message_id"]:
+                    return ""
+                if not all(33 <= ord(字符) <= 126 for 字符 in 编号):
+                    return ""
+                自身编号.add(编号)
+        if 深度 < 3:
+            for 字段 in ("d", "data", "payload", "raw_data", "message"):
+                子对象 = 对象.get(字段)
+                if isinstance(子对象, Mapping):
+                    待看.append((子对象, 深度 + 1, 群, 用户, 应用))
+    if 待看 or len(自身编号) != 1:
+        return ""
+    完整编号 = next(iter(自身编号))
+    return 完整编号 if 完整编号.startswith(旧编号) else ""
+
+
 def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
     return (
         _按列宽截断(记录.get("_session") or "", "会话标识"),
         _按列宽截断(记录.get("chat_type") or "group", "消息类型"),
         _按列宽截断(记录.get("appid") or "", "appid"),
-        _按列宽截断(_规范消息ID(记录.get("message_id")), "message_id"),
+        _完整写入消息ID(记录.get("message_id")),
         _按列宽截断(记录.get("user_id") or "", "user_id"),
         _按列宽截断(记录.get("nickname") or "", "nickname"),
         str(记录.get("content") or ""),
@@ -1346,10 +1437,10 @@ def _消息更新参数(记录: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _消息记录去重键(记录: dict[str, Any]) -> tuple[str, str]:
-    """返回与实际入库列宽一致的会话/消息 ID 去重键。"""
+    """消息身份完整参与查重，超限拒绝，不能截断后变成另一条消息。"""
     return (
         _按列宽截断(记录.get("_session") or "", "会话标识"),
-        _按列宽截断(_规范消息ID(记录.get("message_id")), "message_id"),
+        _完整写入消息ID(记录.get("message_id")),
     )
 
 
@@ -1793,8 +1884,13 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         return False
     去重记录: list[dict[str, Any]] = []
     已见索引: dict[tuple[str, str], int] = {}
+    超限数量 = 0
     for 记录 in 有效记录:
-        键 = _消息记录去重键(记录)
+        try:
+            键 = _消息记录去重键(记录)
+        except ValueError:
+            超限数量 += 1
+            continue
         消息ID = 键[1]
         if 消息ID and 键 in 已见索引:
             去重记录[已见索引[键]] = 记录
@@ -1802,6 +1898,10 @@ def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         if 消息ID:
             已见索引[键] = len(去重记录)
         去重记录.append(记录)
+    if 超限数量:
+        logger.warning("消息记录消息标识超限，已拒绝截断写入：数量=%s", 超限数量)
+    if not 去重记录:
+        return False
     连接 = _打开连接()
     if 连接 is None:
         return False
@@ -1864,43 +1964,103 @@ def 标记消息撤回(会话标识: str, message_id: str) -> bool:
 
 def 读取群成员最近消息(
     会话标识: str, 用户标识: str, 当前消息: str, 截至时间: int, 上限: int = 30,
+    appid: str = "",
 ) -> list[dict[str, Any]]:
-    """只取撤回需要的标识与状态，不限制消息年龄，不加载正文或媒体。"""
+    """有界读取撤回身份；旧截断 ID 仅由同一行原文按需恢复并 CAS 写回。"""
     if not 会话标识 or not 用户标识 or not _MySQL可用():
         return []
+    appid = str(appid or "").strip()
     连接 = _打开连接()
     if 连接 is None:
         return []
     try:
         with 连接.cursor() as 游标:
-            游标.execute(
-                f"SELECT id, ts FROM `{消息记录表名}` "
-                "WHERE 会话标识=%s AND message_id=%s AND user_id=%s "
-                "AND 消息类型='group' ORDER BY id DESC LIMIT 1",
-                (会话标识, 当前消息, 用户标识),
+            范围条件 = "会话标识=%s AND user_id=%s AND 消息类型='group'"
+            范围参数: list[Any] = [会话标识, 用户标识]
+            if appid:
+                范围条件 += " AND appid=%s"
+                范围参数.append(appid)
+            原文投影 = (
+                "CASE WHEN OCTET_LENGTH(raw_message)<=65536 THEN raw_message "
+                "ELSE '' END AS raw_message"
             )
-            锚点 = 游标.fetchone()
-            锚点ID = int(_行字段(锚点, 0, "id", 默认值=0) or 0)
+            已修复 = False
+
+            def 完整编号(行: Any) -> str:
+                nonlocal 已修复
+                旧编号 = _规范消息ID(_行字段(行, 0, "message_id"))
+                原文 = _行字段(行, 5, "raw_message", 默认值="")
+                行应用 = str(_行字段(行, 4, "appid", 默认值="") or "")
+                编号 = 恢复群消息完整编号(
+                    旧编号, 原文, 会话标识, 用户标识, appid or 行应用,
+                )
+                if not 编号 or 编号 == 旧编号:
+                    return 编号
+                记录ID = int(_行字段(行, 3, "id", 默认值=0) or 0)
+                if not 记录ID or not isinstance(原文, str):
+                    return ""
+                原文摘要 = hashlib.sha256(原文.encode("utf-8")).hexdigest()
+                游标.execute(
+                    f"UPDATE `{消息记录表名}` SET message_id=%s "
+                    "WHERE id=%s AND 会话标识=%s AND user_id=%s AND 消息类型='group' "
+                    "AND appid=%s AND BINARY message_id=BINARY %s AND SHA2(raw_message,256)=%s",
+                    (编号, 记录ID, 会话标识, 用户标识, 行应用, 旧编号, 原文摘要),
+                )
+                if int(getattr(游标, "rowcount", 0) or 0) > 0:
+                    已修复 = True
+                    return 编号
+                # 旧快照或另一线程已经改写时不猜测、不覆盖，只接受同作用域相同最终 ID。
+                游标.execute(
+                    f"SELECT message_id FROM `{消息记录表名}` WHERE id=%s AND "
+                    + 范围条件 + " AND appid=%s LIMIT 1",
+                    (记录ID, *范围参数, 行应用),
+                )
+                当前行 = 游标.fetchone()
+                return 编号 if _规范消息ID(_行字段(当前行, 0, "message_id")) == 编号 else ""
+
+            游标.execute(
+                f"SELECT message_id,ts,recalled,id,appid,{原文投影} FROM `{消息记录表名}` "
+                "WHERE " + 范围条件 + " AND message_id IN (%s,%s) ORDER BY id DESC LIMIT 2",
+                (*范围参数, 当前消息, 当前消息[:128]),
+            )
+            锚点行 = list(游标.fetchall() or ())
+            锚点 = next((行 for 行 in 锚点行 if 完整编号(行) == 当前消息), None)
+            锚点ID = int(_行字段(锚点, 3, "id", 默认值=0) or 0)
             锚点时间 = int(_行字段(锚点, 1, "ts", 默认值=截至时间) or 截至时间)
             时间上限 = min(截至时间, 锚点时间)
-            条件 = ["会话标识=%s", "user_id=%s", "消息类型='group'", "is_self=0", "message_id<>''", "ts<=%s"]
-            参数: list[Any] = [会话标识, 用户标识, 时间上限]
+            条件 = [范围条件, "is_self=0", "message_id<>''", "ts<=%s",
+                  "COALESCE(member_role,'') NOT IN ('owner','admin','群主','管理员')"]
+            参数: list[Any] = [*范围参数, 时间上限]
             if 锚点ID:
                 条件.append("id<=%s")
                 参数.append(锚点ID)
             参数.append(max(1, min(30, int(上限))))
             游标.execute(
-                f"SELECT message_id, ts, recalled FROM `{消息记录表名}` WHERE "
+                f"SELECT message_id,ts,recalled,id,appid,{原文投影} FROM `{消息记录表名}` WHERE "
                 + " AND ".join(条件) + " ORDER BY ts DESC, id DESC LIMIT %s",
                 tuple(参数),
             )
-            return [
-                {"message_id": _规范消息ID(_行字段(行, 0, "message_id")),
-                 "ts": int(_行字段(行, 1, "ts", 默认值=0) or 0),
-                 "recalled": bool(_行字段(行, 2, "recalled", 默认值=False))}
-                for 行 in 游标.fetchall()
-            ]
+            行列表 = list(游标.fetchall() or ())
+            结果: dict[str, dict[str, Any]] = {}
+            for 行 in 行列表:
+                编号 = 完整编号(行)
+                if not 编号:
+                    continue
+                已撤回 = bool(_行字段(行, 2, "recalled", 默认值=False))
+                if 编号 in 结果:
+                    结果[编号]["recalled"] |= 已撤回
+                else:
+                    结果[编号] = {"message_id": 编号,
+                                "ts": int(_行字段(行, 1, "ts", 默认值=0) or 0),
+                                "recalled": 已撤回}
+            if 已修复:
+                连接.commit()
+            return list(结果.values())
     except Exception as exc:
+        try:
+            连接.rollback()
+        except Exception:
+            pass
         logger.warning(
             "群成员历史消息读取失败：group_id=%s, user_id=%s, error_type=%s",
             会话标识, 用户标识, type(exc).__name__,

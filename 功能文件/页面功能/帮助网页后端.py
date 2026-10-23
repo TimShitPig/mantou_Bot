@@ -1472,7 +1472,7 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
         媒体索引 = int(request.query.get("media_index") or 0)
     except (TypeError, ValueError):
         return web.Response(status=400, text="媒体记录参数无效")
-    if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or not 消息ID or len(消息ID) > 128 or not 0 <= 媒体索引 < 10000:
+    if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or not 消息ID or len(消息ID) > 512 or not 0 <= 媒体索引 < 10000:
         return web.Response(status=400, text="媒体记录参数无效")
     响应: web.StreamResponse | None = None
     阶段 = "archive_lookup"
