@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 import time
@@ -1084,6 +1085,23 @@ def _记录QQ官方Markdown发送失败(异常: Exception, 阶段: str = "http_s
     )
 
 
+def 统一QQ按钮样式(键盘: dict[str, Any]) -> dict[str, Any]:
+    """使用 QQ 官方蓝色线框样式，保留调用方的完整键盘与动作。"""
+    副本 = copy.deepcopy(键盘)
+    行列表 = 副本.get("rows")
+    if not isinstance(行列表, list):
+        return 副本
+    for 行 in 行列表:
+        按钮列表 = 行.get("buttons") if isinstance(行, dict) else None
+        if not isinstance(按钮列表, list):
+            continue
+        for 按钮 in 按钮列表:
+            渲染资料 = 按钮.get("render_data") if isinstance(按钮, dict) else None
+            if isinstance(渲染资料, dict):
+                渲染资料["style"] = 1
+    return 副本
+
+
 async def 发送Markdown键盘消息(
     event: Any,
     md文本: str,
@@ -1135,7 +1153,7 @@ async def 发送Markdown键盘消息(
         "msg_seq": _random.randint(1, 10000),
     }
     if 键盘 is not None:
-        消息体["keyboard"] = {"content": 键盘}
+        消息体["keyboard"] = {"content": 统一QQ按钮样式(键盘)}
 
     群openid = 获取群openid同步(event)
     用户openid = 获取用户openid同步(event)
