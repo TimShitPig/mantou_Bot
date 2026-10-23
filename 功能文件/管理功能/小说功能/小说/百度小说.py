@@ -728,6 +728,20 @@ def _百度出版图书匹配(图书数据: Any, 文档编号: str) -> bool:
         and 图书.get("exist") is True
     )
 
+def _补全百度出版字数(
+    详情: dict[str, Any], 图书数据: dict[str, Any], 文档编号: str,
+) -> None:
+    if 格式化百度字数(详情.get("word_count")) != "未知" or not _百度出版图书匹配(图书数据, 文档编号):
+        return
+    # charCount 是整本正文的字符基数；percent 仅限制试读范围，不缩放总字数。
+    字数元数据 = 图书数据["bdjson"].get("freeInfo")
+    if not isinstance(字数元数据, dict):
+        return
+    字数 = _百度出版正整数(字数元数据.get("charCount"))
+    if 字数 is not None:
+        详情["word_count"] = 字数
+
+
 def _百度出版标题匹配(节点: Any, 标题: str) -> bool:
     return (
         isinstance(节点, dict)
@@ -1364,6 +1378,7 @@ async def 生成百度下载回复流(
                 if not 出版模式:
                     yield 百度下载失败提示
                     return
+                _补全百度出版字数(详情, 图书数据, 书籍编号)
                 目录 = _从百度出版图书提取目录(图书数据, 书籍编号)
                 正文版本 = _获取百度出版版本(图书数据)
                 if not 目录 or not 正文版本:
