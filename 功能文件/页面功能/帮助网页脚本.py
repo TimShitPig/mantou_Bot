@@ -8,7 +8,7 @@
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const themeStorageKey = 'mantou-theme';
       const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'light' ? 'light' : 'dark'; } catch (_) { return 'dark'; } };
-      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', theme === 'dark' ? '#081423' : '#edf4fa'); };
+      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); const color = theme === 'dark' ? '#081423' : '#edf4fa'; if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color); };
       const updateThemeControl = (theme) => {
         const select = $('theme-select');
         if (select && select.value !== theme) select.value = theme;
@@ -16,31 +16,43 @@
         if (!toggle) return;
         const dark = theme === 'dark';
         const label = dark ? '切换到浅色模式' : '切换到深色模式';
-        toggle.setAttribute('aria-pressed', String(dark));
-        toggle.setAttribute('aria-label', label);
-        toggle.title = label;
+        if (toggle.getAttribute('aria-pressed') !== String(dark)) toggle.setAttribute('aria-pressed', String(dark));
+        if (toggle.getAttribute('aria-label') !== label) toggle.setAttribute('aria-label', label);
+        if (toggle.title !== label) toggle.title = label;
         const icon = toggle.querySelector('.theme-control-icon');
-        if (icon) icon.textContent = dark ? '☀' : '☾';
+        const symbol = dark ? '☀' : '☾';
+        if (icon && icon.textContent !== symbol) icon.textContent = symbol;
+      };
+      let themeFrame = 0;
+      const finishThemeUpdate = () => {
+        if (themeFrame) cancelAnimationFrame(themeFrame);
+        themeFrame = 0;
+        document.documentElement.classList.remove('theme-updating');
       };
       const applyTheme = (preference = readThemePreference(), persist = true) => {
         const next = preference === 'dark' ? 'dark' : 'light';
-        const theme = next;
-        const previous = document.documentElement.dataset.theme;
-        const switching = Boolean(previous && previous !== theme);
+        const root = document.documentElement;
+        if (persist && root.dataset.theme === next && root.dataset.themePreference === next) return;
+        const switching = persist && root.dataset.theme !== next;
         if (switching) {
-          document.documentElement.classList.remove('theme-switching');
-          void document.documentElement.offsetWidth;
-          document.documentElement.classList.add('theme-switching');
+          if (themeFrame) cancelAnimationFrame(themeFrame);
+          root.classList.add('theme-updating');
         }
-        document.documentElement.dataset.themePreference = next;
-        document.documentElement.dataset.theme = theme;
-        updateThemeMeta(theme);
-        if (persist) { try { localStorage.setItem(themeStorageKey, next); } catch (_) {} }
+        // 同一帧提交全部颜色，避免控件过渡留下深浅混杂的中间状态。
+        if (root.dataset.themePreference !== next) root.dataset.themePreference = next;
+        if (root.dataset.theme !== next) root.dataset.theme = next;
+        updateThemeMeta(next);
         updateThemeControl(next);
+        if (persist) {
+          try { if (localStorage.getItem(themeStorageKey) !== next) localStorage.setItem(themeStorageKey, next); } catch (_) {}
+        }
         if (switching) {
-          setTimeout(() => document.documentElement.classList.remove('theme-switching'), 320);
+          if (document.hidden) finishThemeUpdate();
+          else themeFrame = requestAnimationFrame(() => { themeFrame = requestAnimationFrame(finishThemeUpdate); });
         }
       };
+      document.addEventListener('visibilitychange', () => { if (document.hidden) finishThemeUpdate(); });
+      window.addEventListener('pagehide', finishThemeUpdate);
       applyTheme(readThemePreference(), false);
       $('theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
       $('theme-toggle')?.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
