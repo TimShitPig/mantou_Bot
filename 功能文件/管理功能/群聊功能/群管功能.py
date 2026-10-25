@@ -47,7 +47,7 @@ from 功能文件.管理功能.群聊功能.群列表工具 import (
     r"https?://|https?%3A%2F%2F|qb://|qb%3A%2F%2F|\b\w+\.\w+/", re.IGNORECASE
 )
 白名单域名规则 = re.compile(
-    r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|zhuishushenqi\.com|zhuishuvip\.com|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|(?<![A-Za-z0-9_.-])(?:yd|dushu)\.baidu\.com(?::\d+)?(?:/|$|[?#])|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com|ieasou\.com|easou\.com|midureader\.com|sfacg\.com|kuwo\.cn|kuwo\.com|kujiang\.com|lc1001\.com|jjwxc\.net|jjwxc\.com|soia\.zhihu\.com|story\.zhihu\.com|(?<![A-Za-z0-9.-])(?:zh\.)?z-library\.sk(?::\d+)?(?:/|$|[?#])",
+    r"changdunovel\.com|fanqienovel\.com|fqnovel\.com|novelfm\.com|qimao\.com|app-share\.wtzw\.com|shuqi\.com|shuqireader\.com|zhuishushenqi\.com|zhuishuvip\.com|https?://(?:[A-Za-z0-9-]+\.)*qidian\.com(?::\d+)?(?:/|$|[?#])|reader\.qq\.com|book\.qq\.com|bookshelf\.html5\.qq\.com|novel\.html5\.qq\.com|qbnovel\.qq\.com|qb(?::|%3A)(?:/|%2F){2}ext(?:/|%2F)novelreader|palmestore\.com|zhangyue\.com|ireader\.com|dianzhong\.com|mr\.baidu\.com|boxnovel\.baidu\.com|novel\.baidu\.com|(?<![A-Za-z0-9_.-])(?:yd|dushu)\.baidu\.com(?::\d+)?(?:/|$|[?#])|reader\.browser\.miui\.com|reader\.miui\.com|novel\.browser\.miui\.com|dushu\.xiaomi\.com|ieasou\.com|easou\.com|midureader\.com|sfacg\.com|kuwo\.cn|kuwo\.com|kujiang\.com|lc1001\.com|jjwxc\.net|jjwxc\.com|soia\.zhihu\.com|story\.zhihu\.com|(?<![A-Za-z0-9.-])(?:zh\.)?z-library\.sk(?::\d+)?(?:/|$|[?#])",
     re.IGNORECASE,
 )
 QQ阅读小程序白名单规则 = re.compile(
@@ -1639,14 +1639,14 @@ async def 记录撤回触发(event: AstrMessageEvent) -> int:
     群号 = 获取群号(event)
     用户QQ = 获取撤回发送者统一标识(event) or 获取撤回发送者标识(event)
     if not 群号 or not 用户QQ:
-        logger.info("数字撤回计数跳过：缺少群或成员标识")
+        logger.info("广告撤回计数跳过：缺少群或成员标识")
         return 0
 
     计数键 = 用户QQ
     当前次数 = 数字撤回触发次数.get(计数键, 0) + 1
     数字撤回触发次数[计数键] = 当前次数
     logger.info(
-        "数字撤回模块触发计数：group_id=%s, user_id=%s, count=%s",
+        "广告撤回触发计数：group_id=%s, user_id=%s, count=%s",
         群号,
         用户QQ,
         当前次数,

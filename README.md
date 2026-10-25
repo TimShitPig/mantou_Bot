@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.243-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.244-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.243 |
+| 版本 | v6.1.244 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -176,6 +176,8 @@ quickjs
 <summary>群管功能</summary>
 
 QQ 官方群消息包含连续 9 到 12 位数字时，插件会尝试撤回。群名片、JSON 卡片、空间相册分享、合并转发和 QQ 闪传也会进入同一撤回模块。
+
+起点读书的官方 `qidian.com` 及其子域名分享链接属于小说白名单，图文 H5/JSON 书籍卡片不会仅因卡片类型或链接中的书籍编号触发撤回、禁言；夸克/百度网盘分享广告仍优先拦截。
 
 QQ 群主和管理员不会被自动撤回；插件使用 QQ 官方事件中的成员角色，并在可用时查询官方群成员角色。
 
