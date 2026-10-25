@@ -58,7 +58,7 @@ _归档保留SQL = ", ".join(
     + f", '$.{字段}'))='OBJECT' THEN JSON_OBJECT('{字段}', JSON_EXTRACT("
     + _已有媒体SQL
     + f", '$.{字段}')) ELSE JSON_OBJECT() END"
-    for 字段 in ("_lanzou_archives", "_lanzou_archive")
+    for 字段 in ("_lanzou_archives", "_lanzou_archive", "_quark_archives")
 )
 _消息更新SQL = (
     f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
@@ -1743,13 +1743,29 @@ def 读取引用定位窗口(
         _关闭连接(连接)
 
 
+def _媒体归档字段(provider: str) -> str:
+    return {"lanzou": "_lanzou_archives", "quark": "_quark_archives"}.get(provider, "") if isinstance(provider, str) else ""
+
+
+def _媒体归档身份有效(归档: Any, provider: str) -> bool:
+    if not isinstance(归档, dict) or not _媒体归档字段(provider):
+        return False
+    字段列表 = ("account_id", "file_id") if provider == "quark" else ("share_url", "password")
+    return all(str(归档.get(字段) or "").strip() for 字段 in 字段列表)
+
+
 def 读取消息媒体归档(
-    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0
+    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0, *, provider: str = "lanzou",
 ) -> dict[str, Any] | None:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
     类型 = str(类型 or "").strip().lower()
-    if not 会话标识 or not 消息ID or not _MySQL可用():
+    归档字段 = _媒体归档字段(provider)
+    if (
+        not 会话标识 or not 消息ID or not 归档字段
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool) or not 0 <= 媒体索引 < 10000
+        or not _MySQL可用()
+    ):
         return None
     连接 = _打开连接()
     if 连接 is None:
@@ -1775,8 +1791,9 @@ def 读取消息媒体归档(
         if isinstance(原文, bytes):
             原文 = 原文.decode("utf-8", errors="replace")
         媒体 = json.loads(str(原文 or "{}"))
-        归档 = (媒体.get("_lanzou_archives") or {}).get(str(媒体索引)) if isinstance(媒体, dict) else None
-        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+        归档列表 = 媒体.get(归档字段) if isinstance(媒体, dict) else None
+        归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
+        if provider == "lanzou" and not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
             归档 = 媒体.get("_lanzou_archive")
         return 归档 if isinstance(归档, dict) else None
     except Exception as exc:
@@ -1786,13 +1803,14 @@ def 读取消息媒体归档(
         _关闭连接(连接)
 
 
-def _媒体归档直链匹配(当前归档: Any, 原归档: Any) -> bool:
+def _媒体归档直链匹配(当前归档: Any, 原归档: Any, *, provider: str = "lanzou") -> bool:
     """直链更新仅匹配同一远端归档及调用方读取到的缓存版本。"""
-    if not isinstance(当前归档, dict) or not isinstance(原归档, dict):
+    if not _媒体归档身份有效(当前归档, provider) or not _媒体归档身份有效(原归档, provider):
         return False
+    身份字段 = ("account_id", "file_id") if provider == "quark" else ("share_url", "password", "file_id")
     if any(
         str(当前归档.get(字段) or "") != str(原归档.get(字段) or "")
-        for 字段 in ("share_url", "password", "file_id", "direct_url")
+        for 字段 in (*身份字段, "direct_url")
     ):
         return False
     try:
@@ -1811,6 +1829,7 @@ def 更新消息媒体直链(
     原归档: dict[str, Any],
     直链: str,
     获取时间: float,
+    *, provider: str = "lanzou",
 ) -> bool:
     """只更新现有归档的直链；锁行合并且不创建已删除的消息。"""
     会话标识 = str(会话标识 or "").strip()
@@ -1825,8 +1844,7 @@ def 更新消息媒体直链(
         not 会话标识 or not 消息ID or 类型 not in {"group", "user"}
         or not isinstance(媒体索引, int) or isinstance(媒体索引, bool)
         or not 0 <= 媒体索引 < 10000 or not isinstance(原归档, dict)
-        or not str(原归档.get("share_url") or "").strip()
-        or not str(原归档.get("password") or "").strip()
+        or not _媒体归档身份有效(原归档, provider)
         or not 直链.startswith("https://") or len(直链) > 8192
         or not 0 < 获取时间 < float("inf") or not _MySQL可用()
     ):
@@ -1850,11 +1868,11 @@ def 更新消息媒体直链(
             if isinstance(媒体原文, bytes):
                 媒体原文 = 媒体原文.decode("utf-8", errors="replace")
             媒体 = json.loads(str(媒体原文 or "{}"))
-            归档列表 = 媒体.get("_lanzou_archives") if isinstance(媒体, dict) else None
+            归档列表 = 媒体.get(_媒体归档字段(provider)) if isinstance(媒体, dict) else None
             归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
-            if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+            if provider == "lanzou" and not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
                 归档 = 媒体.get("_lanzou_archive")
-            if not _媒体归档直链匹配(归档, 原归档):
+            if not _媒体归档直链匹配(归档, 原归档, provider=provider):
                 连接.rollback()
                 return False
             归档["direct_url"] = 直链

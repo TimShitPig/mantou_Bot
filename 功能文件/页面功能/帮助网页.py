@@ -103,6 +103,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/message/user-profile/refresh", 后端._处理私聊资料刷新),
         ("get", "/api/message/media", 后端._处理消息媒体),
         ("get", "/api/message/lanzou-image", 后端._处理蓝奏云归档图片),
+        ("get", "/api/message/quark-media", 后端._处理夸克归档媒体),
         ("get", "/api/message/local-media/{filename}", 后端._处理本地发送媒体),
         ("get", "/api/message/layout", 后端._处理消息布局),
         ("post", "/api/message/layout", 后端._处理消息布局),

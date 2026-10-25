@@ -1118,9 +1118,15 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
                     当前媒体[字段] = 新媒体[字段]
             if isinstance(旧媒体.get("_lanzou_archive"), dict):
                 当前媒体["_lanzou_archive"] = 旧媒体["_lanzou_archive"]
-            归档列表 = {**(新媒体.get("_lanzou_archives") or {}), **(旧媒体.get("_lanzou_archives") or {})}
-            if 归档列表:
-                当前媒体["_lanzou_archives"] = 归档列表
+            for 归档字段 in ("_lanzou_archives", "_quark_archives"):
+                新归档 = 新媒体.get(归档字段)
+                旧归档 = 旧媒体.get(归档字段)
+                归档列表 = {
+                    **(新归档 if isinstance(新归档, dict) else {}),
+                    **(旧归档 if isinstance(旧归档, dict) else {}),
+                }
+                if 归档列表:
+                    当前媒体[归档字段] = 归档列表
             已有记录["media"] = 当前媒体
         else:
             已有记录["media"] = _合并媒体记录(旧媒体, 新媒体)
@@ -1848,9 +1854,9 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         消息["media"] = copy.deepcopy(消息["media"])
         _归一化记录媒体文字(消息)
         try:
-            from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+            from 功能文件.管理功能.网盘功能 import 夸克媒体归档
 
-            消息["media"] = 蓝奏云图片归档.构造网页媒体字段(
+            消息["media"] = 夸克媒体归档.构造网页媒体字段(
                 消息["media"],
                 会话标识,
                 str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
@@ -1858,12 +1864,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
             )
         except Exception as exc:
             logger.debug("消息实时图片代理地址生成失败：错误类型=%s", type(exc).__name__)
-            媒体 = 消息.get("media")
-            if isinstance(媒体, dict):
-                媒体 = dict(媒体)
-                媒体.pop("_lanzou_archive", None)
-                媒体.pop("_lanzou_archives", None)
-                消息["media"] = 媒体
+        消息["media"] = 清理网页媒体内部字段(消息.get("media"))
     成员资料 = _获取消息相关成员资料(会话标识, [消息])
     return {
         "chat_id": 会话标识,
@@ -2667,6 +2668,19 @@ def _附件匹配索引(已有: list[Any], 新项: list[Any]) -> dict[int, int]:
     return 结果
 
 
+def 清理网页媒体内部字段(媒体: Any) -> Any:
+    """异常回退也移除逐项归档身份、票据和直链缓存，不改原记录。"""
+    if isinstance(媒体, dict):
+        return {
+            字段: 清理网页媒体内部字段(值)
+            for 字段, 值 in 媒体.items()
+            if 字段 not in {"_lanzou_archive", "_lanzou_archives", "_quark_archives"}
+        }
+    if isinstance(媒体, list):
+        return [清理网页媒体内部字段(值) for 值 in 媒体]
+    return 媒体
+
+
 def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
     if not isinstance(媒体, dict):
         return []
@@ -2676,7 +2690,7 @@ def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
     项目 = {
         字段: 值
         for 字段, 值 in 媒体.items()
-        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives"}
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives"}
     }
     地址, _, 名称, _ = _附件身份字段(项目)
     return [项目] if 地址 or 名称 else []
@@ -2709,7 +2723,7 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
         return dict(新媒体)
     合并媒体 = dict(已有媒体)
     for 字段, 值 in 新媒体.items():
-        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives"} and 值 not in (None, ""):
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives"} and 值 not in (None, ""):
             合并媒体[字段] = 值
     项目列表 = _合并媒体项目列表(已有媒体, 新媒体)
     新索引 = _附件匹配索引(项目列表, _媒体项目列表(新媒体))
@@ -2723,19 +2737,23 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
             else 段
             for 段 in 新媒体["text_segments"]
         ]
-    归档列表 = dict(已有媒体.get("_lanzou_archives") or {})
-    for 索引, 归档 in (新媒体.get("_lanzou_archives") or {}).items():
-        try:
-            目标 = 新索引[int(索引)]
-        except (ValueError, TypeError, KeyError):
-            continue
-        归档列表.setdefault(str(目标), 归档)
+    for 归档字段 in ("_lanzou_archives", "_quark_archives"):
+        已有归档 = 已有媒体.get(归档字段)
+        新归档 = 新媒体.get(归档字段)
+        归档列表 = dict(已有归档) if isinstance(已有归档, dict) else {}
+        for 索引, 归档 in (新归档 if isinstance(新归档, dict) else {}).items():
+            try:
+                目标 = 新索引[int(索引)]
+            except (ValueError, TypeError, KeyError):
+                continue
+            归档列表.setdefault(str(目标), 归档)
+        if 归档字段 == "_lanzou_archives" and not isinstance(已有媒体.get("_lanzou_archive"), dict):
+            if isinstance(新媒体.get("_lanzou_archive"), dict) and 0 in 新索引:
+                归档列表.setdefault(str(新索引[0]), 新媒体["_lanzou_archive"])
+        if 归档列表:
+            合并媒体[归档字段] = 归档列表
     if isinstance(已有媒体.get("_lanzou_archive"), dict):
         合并媒体["_lanzou_archive"] = 已有媒体["_lanzou_archive"]
-    elif isinstance(新媒体.get("_lanzou_archive"), dict) and 0 in 新索引:
-        归档列表.setdefault(str(新索引[0]), 新媒体["_lanzou_archive"])
-    if 归档列表:
-        合并媒体["_lanzou_archives"] = 归档列表
     return 合并媒体
 
 
@@ -4007,11 +4025,11 @@ def 记录收到消息(
             _推送消息事件(记录, 会话)
         if isinstance(媒体记录, dict):
             try:
-                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+                from 功能文件.管理功能.网盘功能 import 夸克媒体归档
 
-                蓝奏云图片归档.安排归档消息图片(当前插件配置, 记录)
+                夸克媒体归档.安排归档消息图片(当前插件配置, 记录)
             except Exception as 归档异常:
-                logger.debug("蓝奏云图片归档入队失败：错误类型=%s", type(归档异常).__name__)
+                logger.debug("夸克媒体归档入队失败：错误类型=%s", type(归档异常).__name__)
         _裁剪总缓存()
         return 记录
     except Exception as exc:
@@ -4272,6 +4290,17 @@ async def 记录群成员系统消息(
     return 记录收到消息(消息, "group", appid=appid, 源=来源)
 
 
+def _消息媒体归档字段(provider: str) -> str:
+    return {"lanzou": "_lanzou_archives", "quark": "_quark_archives"}.get(provider, "") if isinstance(provider, str) else ""
+
+
+def _消息媒体归档身份有效(归档: Any, provider: str) -> bool:
+    if not isinstance(归档, dict) or not _消息媒体归档字段(provider):
+        return False
+    字段列表 = ("account_id", "file_id") if provider == "quark" else ("share_url", "password")
+    return all(str(归档.get(字段) or "").strip() for 字段 in 字段列表)
+
+
 def 更新消息媒体归档(
     会话标识: str,
     消息ID: str,
@@ -4279,12 +4308,20 @@ def 更新消息媒体归档(
     *,
     原记录: dict[str, Any] | None = None,
     媒体索引: int = 0,
+    provider: str = "lanzou",
 ) -> bool:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
-    if not 会话标识 or not 消息ID or not isinstance(归档资料, dict) or 媒体索引 < 0:
+    归档字段 = _消息媒体归档字段(provider)
+    if (
+        not 会话标识 or not 消息ID or not isinstance(归档资料, dict) or not 归档字段
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool) or not 0 <= 媒体索引 < 10000
+    ):
         return False
-    必要字段 = ("share_url", "password", "content_type", "size", "filename")
+    必要字段 = (
+        ("account_id", "file_id", "content_type", "size", "filename")
+        if provider == "quark" else ("share_url", "password", "content_type", "size", "filename")
+    )
     if any(not str(归档资料.get(字段) or "").strip() for 字段 in 必要字段):
         return False
     会话 = 消息缓存.get(会话标识)
@@ -4307,14 +4344,21 @@ def 更新消息媒体归档(
         return False
     if 媒体索引 >= len(媒体.get("items") or [媒体]):
         return False
-    if isinstance((媒体.get("_lanzou_archives") or {}).get(str(媒体索引)), dict):
+    已有归档列表 = 媒体.get(归档字段)
+    if isinstance(已有归档列表, dict) and isinstance(已有归档列表.get(str(媒体索引)), dict):
         return True
-    if 媒体索引 == 0 and isinstance(媒体.get("_lanzou_archive"), dict):
+    if provider == "lanzou" and 媒体索引 == 0 and isinstance(媒体.get("_lanzou_archive"), dict):
         return True
     原媒体 = copy.deepcopy(媒体)
-    媒体.setdefault("_lanzou_archives", {})[str(媒体索引)] = {
+    if not isinstance(媒体.get(归档字段), dict):
+        媒体[归档字段] = {}
+    可选字段 = (
+        ("parent_id", "media_kind", "original_name") if provider == "quark"
+        else ("file_id", "container", "offset", "archive_size", "crc32", "media_kind", "original_name")
+    )
+    媒体[归档字段][str(媒体索引)] = {
         字段: 归档资料[字段]
-        for 字段 in (*必要字段, "file_id", "container", "offset", "archive_size", "crc32", "media_kind", "original_name")
+        for 字段 in (*必要字段, *可选字段)
         if 字段 in 归档资料
     }
     if not _消息数据库已配置() or not _排队消息持久化("message", copy.deepcopy(记录)):
@@ -4326,12 +4370,16 @@ def 更新消息媒体归档(
 
 
 def 获取消息媒体归档(
-    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0
+    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0, *, provider: str = "lanzou",
 ) -> dict[str, Any] | None:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
     类型 = str(类型 or "").strip().lower()
-    if not 会话标识 or not 消息ID or 媒体索引 < 0:
+    归档字段 = _消息媒体归档字段(provider)
+    if (
+        not 会话标识 or not 消息ID or not 归档字段
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool) or not 0 <= 媒体索引 < 10000
+    ):
         return None
     会话 = 消息缓存.get(会话标识) or {}
     for 记录 in reversed(会话.get("messages") or []):
@@ -4340,8 +4388,9 @@ def 获取消息媒体归档(
         if 类型 and str(记录.get("chat_type") or "").strip().lower() != 类型:
             continue
         媒体 = 记录.get("media")
-        归档 = (媒体.get("_lanzou_archives") or {}).get(str(媒体索引)) if isinstance(媒体, dict) else None
-        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+        归档列表 = 媒体.get(归档字段) if isinstance(媒体, dict) else None
+        归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
+        if provider == "lanzou" and not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
             归档 = 媒体.get("_lanzou_archive")
         if isinstance(归档, dict):
             return copy.deepcopy(归档)
@@ -4351,7 +4400,7 @@ def 获取消息媒体归档(
         读取方法 = getattr(_消息存储, "读取消息媒体归档", None)
         if not callable(读取方法):
             return None
-        归档 = 读取方法(会话标识, 消息ID, 类型, 媒体索引)
+        归档 = 读取方法(会话标识, 消息ID, 类型, 媒体索引, provider=provider)
         return copy.deepcopy(归档) if isinstance(归档, dict) else None
     except Exception as exc:
         logger.debug("消息图片归档读取失败：错误类型=%s", type(exc).__name__)
@@ -4366,6 +4415,7 @@ def 更新消息媒体直链(
     原归档: dict[str, Any],
     直链: str,
     获取时间: float,
+    *, provider: str = "lanzou",
 ) -> bool:
     """在线程固定的数据库配置下局部保存直链，不排入整条消息写入队列。"""
     if _消息存储 is None:
@@ -4374,7 +4424,7 @@ def 更新消息媒体直链(
     if not callable(更新方法):
         return False
     try:
-        return bool(更新方法(会话标识, 消息ID, 类型, 媒体索引, 原归档, 直链, 获取时间))
+        return bool(更新方法(会话标识, 消息ID, 类型, 媒体索引, 原归档, 直链, 获取时间, provider=provider))
     except Exception as exc:
         logger.debug("消息媒体直链保存失败：错误类型=%s", type(exc).__name__)
         return False
@@ -4388,6 +4438,7 @@ def 更新缓存消息媒体直链(
     原归档: dict[str, Any],
     直链: str,
     获取时间: float,
+    *, provider: str = "lanzou",
 ) -> bool:
     """数据库保存后在事件循环更新现有热点副本，不新增消息或网页事件。"""
     会话标识 = str(会话标识 or "").strip()
@@ -4402,8 +4453,7 @@ def 更新缓存消息媒体直链(
         not 会话标识 or not 消息ID or 类型 not in {"group", "user"}
         or not isinstance(媒体索引, int) or isinstance(媒体索引, bool)
         or not 0 <= 媒体索引 < 10000 or not isinstance(原归档, dict)
-        or not str(原归档.get("share_url") or "").strip()
-        or not str(原归档.get("password") or "").strip()
+        or not _消息媒体归档身份有效(原归档, provider)
         or not 直链.startswith("https://") or len(直链) > 8192
         or not 0 < 获取时间 < float("inf")
     ):
@@ -4420,11 +4470,11 @@ def 更新缓存消息媒体直链(
         ):
             continue
         媒体 = 记录.get("media")
-        归档列表 = 媒体.get("_lanzou_archives") if isinstance(媒体, dict) else None
+        归档列表 = 媒体.get(_消息媒体归档字段(provider)) if isinstance(媒体, dict) else None
         归档 = 归档列表.get(str(媒体索引)) if isinstance(归档列表, dict) else None
-        if not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
+        if provider == "lanzou" and not isinstance(归档, dict) and 媒体索引 == 0 and isinstance(媒体, dict):
             归档 = 媒体.get("_lanzou_archive")
-        if not 匹配方法(归档, 原归档):
+        if not 匹配方法(归档, 原归档, provider=provider):
             return False
         归档["direct_url"] = 直链
         归档["direct_url_cached_at"] = 获取时间
@@ -4762,10 +4812,10 @@ def 记录发送消息(
             if 消息ID:
                 自己发送消息ID[消息ID] = time.time()
             try:
-                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
-                蓝奏云图片归档.安排归档消息图片(当前插件配置, 重复发送记录)
+                from 功能文件.管理功能.网盘功能 import 夸克媒体归档
+                夸克媒体归档.安排归档消息图片(当前插件配置, 重复发送记录)
             except Exception as 归档异常:
-                logger.debug("蓝奏云媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
+                logger.debug("夸克媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
             return 重复发送记录
         if 消息ID:
             已有记录 = next(
@@ -4797,10 +4847,10 @@ def 记录发送消息(
                 _推送消息事件(已有记录, 会话)
                 自己发送消息ID[str(消息ID)] = time.time()
                 try:
-                    from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
-                    蓝奏云图片归档.安排归档消息图片(当前插件配置, 已有记录)
+                    from 功能文件.管理功能.网盘功能 import 夸克媒体归档
+                    夸克媒体归档.安排归档消息图片(当前插件配置, 已有记录)
                 except Exception as 归档异常:
-                    logger.debug("蓝奏云媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
+                    logger.debug("夸克媒体归档补全入队失败：错误类型=%s", type(归档异常).__name__)
                 return 已有记录
         发送序号 += 1
         记录: dict[str, Any] = {
@@ -4866,10 +4916,10 @@ def 记录发送消息(
         _推送消息事件(记录, 会话)
         if isinstance(记录.get("media"), dict):
             try:
-                from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
-                蓝奏云图片归档.安排归档消息图片(当前插件配置, 记录)
+                from 功能文件.管理功能.网盘功能 import 夸克媒体归档
+                夸克媒体归档.安排归档消息图片(当前插件配置, 记录)
             except Exception as 归档异常:
-                logger.debug("蓝奏云媒体归档入队失败：错误类型=%s", type(归档异常).__name__)
+                logger.debug("夸克媒体归档入队失败：错误类型=%s", type(归档异常).__name__)
         _裁剪总缓存()
         return 记录
     except Exception as exc:

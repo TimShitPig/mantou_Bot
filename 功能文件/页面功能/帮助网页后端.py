@@ -388,12 +388,6 @@ async def _后台刷新消息列表(
         "kind": "text",
         "secret": False,
     },
-    "lanzou_pan_cookie": {
-        "category": "lanzou_pan_settings",
-        "label": "蓝奏云普通版 Cookie",
-        "kind": "secret",
-        "secret": True,
-    },
     "database_host": {
         "category": "database_settings",
         "label": "数据库地址",
@@ -439,7 +433,6 @@ async def _后台刷新消息列表(
     "uc_pan_settings": "UC 网盘",
     "quark_pan_settings": "夸克网盘",
     "baidu_pan_settings": "百度网盘",
-    "lanzou_pan_settings": "蓝奏云媒体归档",
     "database_settings": "数据库连接",
 }
 
@@ -1464,6 +1457,14 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
 
 
 async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamResponse:
+    return await _处理云盘归档媒体(request, "lanzou")
+
+
+async def _处理夸克归档媒体(request: web.Request) -> web.StreamResponse:
+    return await _处理云盘归档媒体(request, "quark")
+
+
+async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.StreamResponse:
     if not _请求已授权(request):
         return web.Response(status=401, text="请先登录控制台")
     会话标识 = str(request.query.get("chat_id") or "").strip()
@@ -1482,20 +1483,23 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
     try:
         import zlib
         from 功能文件.管理功能.基础功能 import 消息记录, 消息记录存储
-        from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+        from 功能文件.管理功能.网盘功能 import 夸克媒体归档, 旧蓝奏云归档读取
+
+        归档模块 = 夸克媒体归档 if provider == "quark" else 旧蓝奏云归档读取
+        账号配置快照 = 夸克媒体归档._配置快照(当前帮助网页配置)
 
         数据库快照 = 消息记录存储.获取数据库配置快照(当前帮助网页配置)
         归档 = await _控制台线程执行(
             消息记录存储.执行数据库配置快照操作, 数据库快照,
-            消息记录存储.读取消息媒体归档, 会话标识, 消息ID, 类型, 媒体索引,
+            partial(消息记录存储.读取消息媒体归档, provider=provider), 会话标识, 消息ID, 类型, 媒体索引,
         )
         if not isinstance(归档, dict):
             return web.Response(status=404, text="媒体归档不存在")
         阶段 = "archive_metadata"
         大小 = int(归档.get("size") or 0)
-        偏移 = 蓝奏云图片归档._归档偏移(归档)
+        偏移 = 0 if provider == "quark" else 旧蓝奏云归档读取._归档偏移(归档)
         try:
-            起点, 终点, 分段 = 蓝奏云图片归档.解析媒体范围(request.headers.get("Range", ""), 大小)
+            起点, 终点, 分段 = 归档模块.解析媒体范围(request.headers.get("Range", ""), 大小)
         except ValueError:
             return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
         # ZIP_STORED 精确映射原文件偏移；若上游忽略 Range，则有界跳过容器头。
@@ -1508,26 +1512,30 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
             参数 = (会话标识, 消息ID, 类型, 媒体索引, 归档, 直链, 获取时间)
             成功 = await _控制台线程执行(
                 消息记录存储.执行数据库配置快照操作, 数据库快照,
-                消息记录.更新消息媒体直链, *参数,
+                partial(消息记录.更新消息媒体直链, provider=provider), *参数,
             )
             if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(当前帮助网页配置):
-                消息记录.更新缓存消息媒体直链(*参数)
+                消息记录.更新缓存消息媒体直链(*参数, provider=provider)
 
         阶段 = "archive_open"
-        async with 蓝奏云图片归档.打开归档图片(
-            str(归档.get("share_url") or ""), str(归档.get("password") or ""),
-            范围=远端范围, 归档资料=归档, 保存直链=保存直链,
-        ) as 上游:
+        读取上下文 = (
+            夸克媒体归档.打开归档媒体(账号配置快照, 归档, 范围=远端范围, 保存直链=保存直链)
+            if provider == "quark" else 旧蓝奏云归档读取.打开归档图片(
+                str(归档.get("share_url") or ""), str(归档.get("password") or ""),
+                范围=远端范围, 归档资料=归档, 保存直链=保存直链,
+            )
+        )
+        async with 读取上下文 as 上游:
             上游状态 = 上游.status
             阶段 = "upstream_read"
-            块流 = 蓝奏云图片归档.读取归档媒体块(上游, 归档, 起点, 终点)
+            块流 = 归档模块.读取归档媒体块(上游, 归档, 起点, 终点)
             前块 = await anext(块流)
             阶段 = "media_type"
             MIME = str(归档.get("content_type") or "").split(";", 1)[0].lower()
             文件归档 = 归档.get("media_kind") == "file" or MIME == "application/octet-stream"
             if not 文件归档 and not re.fullmatch(r"(?:image|video|audio)/[a-z0-9.+-]+", MIME):
                 return web.Response(status=415, text="归档内容类型无效")
-            if 起点 == 0 and not 文件归档 and not 蓝奏云图片归档.识别媒体类型(前块[:128], MIME):
+            if 起点 == 0 and not 文件归档 and not 归档模块.识别媒体类型(前块[:128], MIME):
                 return web.Response(status=415, text="归档内容不是媒体")
             响应头 = {"Content-Type": MIME, "Content-Length": str(终点 - 起点 + 1),
                       "Content-Disposition": ("attachment; filename*=UTF-8''" + quote(_媒体文件名(归档.get("original_name") or 归档.get("filename")), safe="")) if 文件归档 else "inline", "Cache-Control": "private, max-age=3600",
@@ -1567,9 +1575,9 @@ async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamRespon
         # 仅响应写入边界的连接异常表示下游断开；同类上游异常仍需告警。
         客户端断开 = 阶段 in {"response_prepare", "response_write", "response_eof"} and isinstance(exc, ConnectionError)
         if 客户端断开:
-            logger.debug("帮助控制台蓝奏云媒体请求被客户端中断：媒体序号=%s，阶段=%s，错误类型=%s，已发送字节=%d", 媒体索引 + 1, 阶段, type(exc).__name__, 已发送)
+            logger.debug("帮助控制台云盘媒体请求被客户端中断：媒体序号=%s，阶段=%s，错误类型=%s，已发送字节=%d", 媒体索引 + 1, 阶段, type(exc).__name__, 已发送)
         else:
-            logger.warning("帮助控制台蓝奏云媒体读取失败：媒体序号=%s，阶段=%s，原因=%s，错误类型=%s，状态=%s，已发送字节=%d", 媒体索引 + 1, 阶段, getattr(exc, "阶段", "none"), type(exc).__name__, getattr(exc, "状态码", 0) or 上游状态 or "none", 已发送)
+            logger.warning("帮助控制台云盘媒体读取失败：媒体序号=%s，阶段=%s，原因=%s，错误类型=%s，状态=%s，已发送字节=%d", 媒体索引 + 1, 阶段, getattr(exc, "阶段", "none"), type(exc).__name__, getattr(exc, "状态码", 0) or 上游状态 or "none", 已发送)
         if 响应 is not None and (响应.prepared or 客户端断开):
             响应.force_close()
             if request.transport is not None:
@@ -3307,24 +3315,23 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         if 结果 is None:
             return _控制台错误(404, "原消息未保存或已删除")
         try:
-            from 功能文件.管理功能.网盘功能 import 蓝奏云图片归档
+            from 功能文件.管理功能.网盘功能 import 夸克媒体归档
 
             for 消息项 in 结果.get("messages") or []:
                 if not isinstance(消息项, dict):
                     continue
-                消息项["media"] = 蓝奏云图片归档.构造网页媒体字段(
+                消息项["media"] = 夸克媒体归档.构造网页媒体字段(
                     消息项.get("media"),
                     会话标识,
                     类型,
                     str(消息项.get("message_id") or ""),
                 )
+                消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         except Exception as exc:
             logger.debug("帮助控制台历史图片代理地址生成失败：错误类型=%s", type(exc).__name__)
             for 消息项 in 结果.get("messages") or []:
                 if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
-                    消息项["media"] = dict(消息项["media"])
-                    消息项["media"].pop("_lanzou_archive", None)
-                    消息项["media"].pop("_lanzou_archives", None)
+                    消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         try:
             消息记录.安排待处理群信息刷新()
         except Exception:

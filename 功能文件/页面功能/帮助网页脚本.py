@@ -3458,7 +3458,7 @@
         const source = Array.isArray(media) ? media : (Array.isArray(media.items) && media.items.length ? media.items : [media]);
         return source.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => {
           const result = {...item};
-          ['items','_lanzou_archive','_lanzou_archives'].forEach((key) => delete result[key]);
+          ['items','_lanzou_archive','_lanzou_archives','_quark_archives'].forEach((key) => delete result[key]);
           return result;
         }).filter((item) => Boolean(msgMediaItemUrl(item) || msgMediaItemName(item) || msgMediaItemKind(item)));
       };
@@ -3473,20 +3473,22 @@
         }
         return true;
       };
+      const msgMediaArchivePaths = new Set(['/api/message/lanzou-image', '/api/message/quark-media']);
       const msgMediaArchiveProxy = (item, messageId, scope = {}) => {
         if (item?.archived !== true || !messageId) return null;
         const src = msgMediaItemUrl(item);
-        if (!src.startsWith('/api/message/lanzou-image?')) return null;
+        if (![...msgMediaArchivePaths].some((path) => src.startsWith(`${path}?`))) return null;
         try {
           const url = new URL(src, 'https://mantou.invalid');
-          if (url.pathname !== '/api/message/lanzou-image' || url.searchParams.get('message_id') !== String(messageId)) return null;
+          if (url.origin !== 'https://mantou.invalid' || !msgMediaArchivePaths.has(url.pathname)
+            || url.searchParams.get('message_id') !== String(messageId)) return null;
           const rawIndex = url.searchParams.get('media_index') || '';
           const index = Number(rawIndex), chatId = url.searchParams.get('chat_id') || '', chatType = url.searchParams.get('chat_type') || '';
           if (!/^\d+$/.test(rawIndex) || !Number.isSafeInteger(index) || !chatId || !['group','user'].includes(chatType)) return null;
           const expectedId = String(scope.chat_id || scope._session || '').trim();
           const expectedType = String(scope.chat_type || '').trim();
           if ((expectedId && expectedId !== chatId) || (expectedType && expectedType !== chatType)) return null;
-          return {index, chatId, chatType};
+          return {index, chatId, chatType, provider:url.pathname === '/api/message/quark-media' ? 'quark' : 'lanzou'};
         } catch (_) { return null; }
       };
       const msgMediaArchiveMatches = (left, right, index, messageId, scope) => {
@@ -3521,7 +3523,9 @@
           Object.entries(item).forEach(([key, value]) => {
             if (msgMediaHasValue(value) && !msgMediaHasValue(items[index][key])) items[index][key] = value;
           });
-          if (msgMediaArchiveProxy(item, messageId, scope)?.index === index) {
+          const nextProxy = msgMediaArchiveProxy(item, messageId, scope);
+          const currentProxy = msgMediaArchiveProxy(items[index], messageId, scope);
+          if (nextProxy?.index === index && !(currentProxy?.provider === 'quark' && nextProxy.provider === 'lanzou')) {
             items[index].src = src;
             items[index].archived = true;
             delete items[index].url;
@@ -3553,6 +3557,7 @@
         });
         if (items.length > 1 || Array.isArray(existing.items) || Array.isArray(incoming?.items)) result.items = items;
         else delete result.items;
+        ['_lanzou_archive','_lanzou_archives','_quark_archives'].forEach((key) => delete result[key]);
         return result;
       };
       const mergeMsgRealtimeMessage = (existing, incoming) => {
@@ -4051,7 +4056,7 @@
           const current = msgImageUrl(img.getAttribute('src'));
           // 归档读取偶发失败时只自动重试一次；QQ 代理仍沿用原来的一次直连。
           if (!img.dataset.browserMediaKey && current?.origin === location.origin
-            && current.pathname === '/api/message/lanzou-image' && !state.autoRetried) {
+            && msgMediaArchivePaths.has(current.pathname) && !state.autoRetried) {
             state.autoRetried = true;
             markBrowserMediaUnavailable(img);
             state.timer = setTimeout(() => { state.timer = null; retry(); }, 350);

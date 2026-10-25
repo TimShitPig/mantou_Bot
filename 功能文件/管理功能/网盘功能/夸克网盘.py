@@ -12,6 +12,7 @@ import weakref
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 from astrbot.api import logger
@@ -42,6 +43,7 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
     "/file/update/hash": "upload_hash",
     "/file/upload/auth": "upload_auth",
     "/file/upload/finish": "upload_finish",
+    "/file/download": "download_info",
     "/task": "task",
     "/share": "share_create",
     "/share/mypage/detail": "share_list",
@@ -259,6 +261,9 @@ class 夸克网盘客户端:
         self, 上传目录: str, 当前日期: date | None = None
     ) -> int:
         """清理前两天及更早小说，并删除确认清空的日期子目录。"""
+        目录片段 = 拆分上传目录(上传目录)
+        if 目录片段 and 目录片段[0] == "QQ聊天媒体":
+            return 0
         async with 获取夸克账号操作锁(self.cookie):
             return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
 
@@ -427,7 +432,7 @@ class 夸克网盘客户端:
         路径 = Path(本地路径)
         if not 路径.is_file():
             raise RuntimeError("夸克网盘上传文件不存在")
-        MD5, SHA1 = 计算文件哈希(路径)
+        MD5, SHA1 = await asyncio.to_thread(计算文件哈希, 路径)
         文件大小 = 路径.stat().st_size
         文件状态 = 路径.stat()
         内容类型 = mimetypes.guess_type(文件名)[0] or "application/octet-stream"
@@ -481,6 +486,45 @@ class 夸克网盘客户端:
             raise RuntimeError(f"夸克网盘完成上传失败：{限制文本长度(完成数据)}")
         文件ID = 读取文件ID(完成数据.get("data"))
         return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
+
+    async def 获取文件下载地址(self, 文件ID: str) -> str:
+        """解析当前登录账号内精确文件的原文件地址；调用方负责同源代理。"""
+        if not isinstance(文件ID, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", 文件ID):
+            raise 夸克网盘请求错误("/file/download", 原因="invalid_file_id")
+        数据 = await self.请求JSON(
+            "POST", "/file/download", json_data={"fids": [文件ID]},
+        )
+        项目列表 = 数据.get("data")
+        if not isinstance(项目列表, list):
+            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_response")
+        匹配项目 = [
+            项目 for 项目 in 项目列表
+            if isinstance(项目, dict) and 项目.get("fid") == 文件ID
+        ]
+        if len(匹配项目) != 1:
+            raise 夸克网盘请求错误("/file/download", 原因="download_file_mismatch")
+        地址 = 匹配项目[0].get("download_url")
+        if not isinstance(地址, str) or not 地址 or len(地址) > 16384 or any(
+            ord(字符) < 32 or ord(字符) == 127 for 字符 in 地址
+        ):
+            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_url")
+        try:
+            解析 = urlsplit(地址)
+            主机 = str(解析.hostname or "").lower()
+            有效 = (
+                解析.scheme == "https"
+                and 解析.username is None and 解析.password is None
+                and 解析.port in (None, 443)
+                and re.fullmatch(
+                    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*quark\.cn", 主机,
+                ) is not None
+                and not 解析.fragment
+            )
+        except ValueError:
+            有效 = False
+        if not 有效:
+            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_url")
+        return 地址
 
     async def 上传OSS单分片(
         self, 路径: Path, MD5: str, 上传参数: dict[str, Any]
