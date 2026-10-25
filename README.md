@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.240-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.241-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.240 |
+| 版本 | v6.1.241 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -42,6 +42,8 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 重载时先交接正在运行的任务，消息入口和帮助网页恢复后，数据库摘要、登录态、公网地址及缓存维护在后台加载。首次成功建表后，同一数据库配置在当前进程内复用结构初始化结果；数据库失败时保留待写数据，冷却后再试。启动日志分别记录基础服务、后台恢复及停止交接耗时。
 
 同一 AstrBot 进程内热重载会恢复被中断的小说任务，并继续回复原聊天；正文未完成时重新执行下载，已生成 TXT 时复用原文件和网盘账号，已取得的分享继续发送，已确认发送的提示和完成消息不会重复发送。蓝奏云媒体归档逐项接管图片/视频未完成上传、分享及元数据写入，上传中的临时文件会保留到子任务结束再删除。进程重启时，未生成 TXT 的小说下载和仅在内存中的图片任务不恢复；已经落盘的 TXT 上传任务仍按原有续传机制处理。
+
+蓝奏云聊天媒体归档按账号串行提交上传，至少间隔 15 秒；遇到明确的“上传频率过快”拒绝后，等待 5 分钟再自动调度，连续拒绝逐步延长至最多 30 分钟。冷却期间只保留等待元数据；网络结果未知的已提交上传继续保留防重复保护。
 
 ### 网页帮助
 

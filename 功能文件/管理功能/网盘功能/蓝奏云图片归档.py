@@ -67,6 +67,13 @@ except Exception:
 图片归档待恢复: dict[tuple[str, str], dict[str, Any]] = globals().get("图片归档待恢复", {})
 媒体远端并发限制 = globals().get("媒体远端并发限制", asyncio.Semaphore(2))
 归档目录锁 = globals().get("归档目录锁", asyncio.Lock())
+# 内部退避策略，不代表蓝奏云公布的固定限额；跨同进程热重载保留。
+蓝奏云上传最小间隔秒 = 15
+蓝奏云频率冷却秒 = 300
+蓝奏云频率最大冷却秒 = 1800
+蓝奏云上传锁 = globals().get("蓝奏云上传锁", asyncio.Lock())
+蓝奏云上传下次允许: dict[str, float] = globals().get("蓝奏云上传下次允许", {})
+蓝奏云上传频率拒绝次数: dict[str, int] = globals().get("蓝奏云上传频率拒绝次数", {})
 
 
 class 蓝奏云请求错误(RuntimeError):
@@ -76,6 +83,7 @@ class 蓝奏云请求错误(RuntimeError):
         状态码: int = 0,
         业务码: Any = None,
         主机: str = "",
+        *, 原因: str = "", 明确拒绝: bool = False,
     ):
         super().__init__(阶段)
         self.阶段 = 阶段
@@ -85,6 +93,30 @@ class 蓝奏云请求错误(RuntimeError):
         except (TypeError, ValueError):
             self.业务码 = None
         self.主机 = str(主机 or "")[:253]
+        self.原因 = 原因 if 原因 in {"upload_rate_limited", "upload_cooldown", "upload_response_invalid"} else ""
+        self.明确拒绝 = bool(明确拒绝)
+
+
+def _上传业务错误(结果: Any, 状态码: int) -> 蓝奏云请求错误:
+    if not isinstance(结果, dict):
+        return 蓝奏云请求错误("upload_response_shape", 状态码, 原因="upload_response_invalid")
+    业务值 = 结果.get("zt")
+    业务码 = int(业务值) if (
+        type(业务值) is int or isinstance(业务值, str) and re.fullmatch(r"-?[0-9]{1,6}", 业务值.strip())
+    ) else None
+    文本 = 结果.get("text")
+    项目 = 文本 if isinstance(文本, list) else [文本]
+    含文件ID = any(
+        isinstance(项, dict) and any(项.get(字段) not in (None, "") for 字段 in ("id", "file_id"))
+        for 项 in [结果, *项目]
+    )
+    # 只处理服务器实测的明确频率拒绝；其它业务码或矛盾响应不推断上传结果。
+    提示 = 结果.get("info")
+    频率拒绝 = 业务码 == 0 and not 含文件ID and isinstance(提示, str) and "上传频率过快" in 提示
+    return 蓝奏云请求错误(
+        "upload_rejected", 状态码, 业务码,
+        原因="upload_rate_limited" if 频率拒绝 else "", 明确拒绝=频率拒绝,
+    )
 
 
 class _ESAScriptParser(HTMLParser):
@@ -820,7 +852,7 @@ async def _上传图片(
                 except (TypeError, ValueError, json.JSONDecodeError) as exc:
                     raise 蓝奏云请求错误("upload_response_not_json", 响应.status) from exc
                 if not isinstance(结果, dict) or not _成功(结果):
-                    raise 蓝奏云请求错误("upload_rejected", 响应.status)
+                    raise _上传业务错误(结果, 响应.status)
                 文本 = 结果.get("text")
                 文件记录 = 文本[0] if isinstance(文本, list) and 文本 else 文本
                 文件ID = 文件记录.get("id") if isinstance(文件记录, dict) else None
@@ -1122,14 +1154,34 @@ async def _上传并取得归档资料(
                     raise 蓝奏云请求错误("source_missing")
                 async with 归档目录锁:
                     目录ID = await _确保归档目录(会话, UID, str(进度.get("directory") or 进度.get("month") or _归档日期目录名()))
-                进度["upload_submitted"] = True
-                文件ID = await _上传图片(
-                    会话, UID, 目录ID, 临时路径,
-                    str(进度["filename"]) + (".zip" if 进度.get("container") == "zip-stored" else ""),
-                    "application/zip" if 进度.get("container") == "zip-stored" else str(进度["content_type"]),
-                    int(进度.get("archive_size") or 进度["size"]),
-                )
-                进度["file_id"] = 文件ID
+                async with 蓝奏云上传锁:
+                    当前时间 = asyncio.get_running_loop().time()
+                    截止 = 蓝奏云上传下次允许.get(UID, 0)
+                    if 截止 > 当前时间:
+                        进度["upload_retry_at"] = 截止
+                        raise 蓝奏云请求错误("upload_cooldown", 原因="upload_cooldown")
+                    蓝奏云上传下次允许[UID] = 当前时间 + 蓝奏云上传最小间隔秒
+                    进度.pop("upload_retry_at", None)
+                    进度["upload_submitted"] = True
+                    try:
+                        文件ID = await _上传图片(
+                            会话, UID, 目录ID, 临时路径,
+                            str(进度["filename"]) + (".zip" if 进度.get("container") == "zip-stored" else ""),
+                            "application/zip" if 进度.get("container") == "zip-stored" else str(进度["content_type"]),
+                            int(进度.get("archive_size") or 进度["size"]),
+                        )
+                    except 蓝奏云请求错误 as 异常:
+                        if 异常.明确拒绝:
+                            进度.pop("upload_submitted", None)
+                            次数 = min(蓝奏云上传频率拒绝次数.get(UID, 0) + 1, 4)
+                            蓝奏云上传频率拒绝次数[UID] = 次数
+                            等待 = min(蓝奏云频率最大冷却秒, 蓝奏云频率冷却秒 * 2 ** (次数 - 1))
+                            截止 = asyncio.get_running_loop().time() + 等待
+                            蓝奏云上传下次允许[UID] = 截止
+                            进度["upload_retry_at"] = 截止
+                        raise
+                    进度["file_id"] = 文件ID
+                    蓝奏云上传频率拒绝次数.pop(UID, None)
             if 临时路径 is not None:
                 _删除归档临时文件(临时路径)
                 临时路径 = None
@@ -1234,6 +1286,11 @@ async def _执行图片归档(配置: Any, 记录: dict[str, Any], 媒体索引:
     if 进度.get("uid") not in (None, UID):
         raise 蓝奏云请求错误("account_changed")
     进度["uid"] = UID
+    if not 进度.get("file_id"):
+        截止 = max(蓝奏云上传下次允许.get(UID, 0), float(进度.get("upload_retry_at") or 0))
+        if 截止 > asyncio.get_running_loop().time():
+            进度["upload_retry_at"] = 截止
+            raise 蓝奏云请求错误("upload_cooldown", 原因="upload_cooldown")
     远端任务 = asyncio.create_task(_归档单项远端(Cookie, UID, 记录, 媒体索引, 进度))
     进度["remote_task"] = 远端任务
     远端任务.add_done_callback(_读取远端归档任务结果)
@@ -1267,6 +1324,26 @@ def _归档参数可恢复(参数: dict[str, Any]) -> bool:
         and _归档项目可恢复(进度.get(索引, {}))
         for 索引, _ in _媒体项目列表(媒体)
     )
+
+
+def _归档参数上传截止(参数: dict[str, Any]) -> float:
+    """取未完成项目最早的可运行时刻；已确认文件和在途任务不受上传冷却阻挡。"""
+    try:
+        _, UID = _解析Cookie(_配置值(参数.get("config")))
+    except 蓝奏云请求错误:
+        return 0
+    媒体 = 参数["record"].get("media") or {}
+    进度表 = _归档逐项进度(参数)
+    截止列表 = []
+    for 索引, _ in _媒体项目列表(媒体):
+        项 = 进度表.get(索引, {})
+        if _项目归档资料(媒体, 索引) or not _归档项目可恢复(项):
+            continue
+        远端 = 项.get("remote_task")
+        if 项.get("file_id") or isinstance(远端, asyncio.Task) and not 远端.done():
+            return 0
+        截止列表.append(max(蓝奏云上传下次允许.get(UID, 0), float(项.get("upload_retry_at") or 0)))
+    return min(截止列表, default=0)
 
 
 def _归档存在未确认上传(参数: dict[str, Any]) -> bool:
@@ -1318,10 +1395,13 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    if not 进度.get("file_id") and not 进度.get("upload_submitted"):
+                    if not 进度.get("file_id") and not 进度.get("upload_submitted") and getattr(exc, "原因", "") not in {"upload_rate_limited", "upload_cooldown"}:
                         进度["source_failures"] = int(进度.get("source_failures", 0)) + 1
                     # 单项失败不阻止本条消息其余图片/视频。
-                    logger.warning("蓝奏云媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s", 索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "upload"), type(exc).__name__, getattr(exc, "状态码", 0) or "none")
+                    业务码 = getattr(exc, "业务码", None)
+                    等待 = max(0, int(float(进度.get("upload_retry_at") or 0) - asyncio.get_running_loop().time()))
+                    日志 = logger.debug if getattr(exc, "原因", "") == "upload_cooldown" else logger.warning
+                    日志("蓝奏云媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s，业务码=%s，原因=%s，等待秒=%s", 索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "upload"), type(exc).__name__, getattr(exc, "状态码", 0) or "none", 业务码 if 业务码 is not None else "none", getattr(exc, "原因", "") or "none", 等待)
     except asyncio.CancelledError:
         中断 = True
         raise
@@ -1334,7 +1414,8 @@ async def 归档消息图片(配置: Any, 记录: dict[str, Any]) -> None:
             图片归档失败冷却.pop(键, None)
         elif not 中断:
             当前时间 = asyncio.get_running_loop().time()
-            图片归档失败冷却[键] = 当前时间 + 300
+            上传截止 = _归档参数上传截止(参数)
+            图片归档失败冷却[键] = 上传截止 if 上传截止 > 当前时间 else 当前时间 + 300
             if len(图片归档失败冷却) > 10000:
                 过期键 = [k for k, v in 图片归档失败冷却.items() if v <= 当前时间]
                 for k in 过期键:
@@ -1376,6 +1457,10 @@ async def _归档有限重试(键: tuple[str, str], 参数: dict[str, Any]) -> N
             if not _归档存在未确认上传(参数):
                 图片归档待恢复.pop(键, None)
             return
+        上传截止 = _归档参数上传截止(参数)
+        if 上传截止 > asyncio.get_running_loop().time():
+            图片归档失败冷却[键] = 上传截止
+            return
     # 三次后释放等待 Task；已确认的文件 ID 由唯一冷却句柄再次唤醒。
     图片归档失败冷却[键] = asyncio.get_running_loop().time() + 300
 
@@ -1390,7 +1475,7 @@ def _启动待恢复图片(键: tuple[str, str], 参数: dict[str, Any]) -> bool
         return False
     if len(图片归档任务) >= 图片归档最大任务数:
         return False
-    if 图片归档失败冷却.get(键, 0) > asyncio.get_running_loop().time():
+    if max(图片归档失败冷却.get(键, 0), _归档参数上传截止(参数)) > asyncio.get_running_loop().time():
         return False
     图片归档排队中.add(键)
     try:
@@ -1432,7 +1517,7 @@ def _排空图片归档队列() -> None:
             continue
         if not _配置值(参数.get("config")) or not _归档参数可恢复(参数):
             continue
-        截止 = 图片归档失败冷却.get(键, 0)
+        截止 = max(图片归档失败冷却.get(键, 0), _归档参数上传截止(参数))
         if 截止 > 当前时间:
             下次唤醒 = 截止 if 下次唤醒 is None else min(下次唤醒, 截止)
             continue
