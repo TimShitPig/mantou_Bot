@@ -2640,21 +2640,70 @@ def _附件身份字段(附件: Any) -> tuple[str, str, str, str]:
     return 地址, 类型, 名称, 大小
 
 
+def _QQ附件换签身份(地址: str) -> tuple[str, str, str, str] | None:
+    """只识别官方同一下载地址的 rkey 换签，其余 URL 字节保持一致。"""
+    if not 地址 or len(地址) > 8192 or re.search(r"[\x00-\x20\x7f]", 地址):
+        return None
+    try:
+        解析 = _解析网址(地址)
+        if (
+            解析.scheme != "https"
+            or 解析.hostname != "multimedia.nt.qq.com.cn"
+            or 解析.path != "/download"
+            or 解析.username is not None
+            or 解析.password is not None
+            or 解析.port not in (None, 443)
+            or 解析.fragment
+        ):
+            return None
+    except (TypeError, ValueError):
+        return None
+    字段: dict[str, list[str]] = {}
+    稳定参数: list[str] = []
+    for 参数 in 解析.query.split("&"):
+        键, 等号, 值 = 参数.partition("=")
+        # 不归一化编码、顺序或其它参数，也不接受编码后的重复 rkey 键。
+        if not 等号 or not re.fullmatch(r"[A-Za-z0-9_]+", 键):
+            return None
+        字段.setdefault(键, []).append(值)
+        稳定参数.append("rkey=" if 键 == "rkey" else 参数)
+    if (
+        len(字段.get("rkey", [])) != 1
+        or not 字段["rkey"][0]
+        or len(字段.get("appid", [])) != 1
+        or not re.fullmatch(r"[0-9]+", 字段["appid"][0])
+        or len(字段.get("fileid", [])) != 1
+        or not 字段["fileid"][0]
+        or ("spec" in 字段 and (len(字段["spec"]) != 1 or not 字段["spec"][0]))
+    ):
+        return None
+    return 解析.scheme, 解析.netloc, 解析.path, "&".join(稳定参数)
+
+
 def _附件匹配索引(已有: list[Any], 新项: list[Any]) -> dict[int, int]:
-    """先匹配确切地址，再补齐缺地址的同名附件；每个旧项只匹配一次。"""
+    """依次匹配确切地址、严格 QQ 换签及缺地址同名项；每个旧项只匹配一次。"""
     旧身份 = [_附件身份字段(项) for 项 in 已有]
     新身份 = [_附件身份字段(项) for 项 in 新项]
+    旧换签身份 = [_QQ附件换签身份(项[0]) for 项 in 旧身份]
+    新换签身份 = [_QQ附件换签身份(项[0]) for 项 in 新身份]
     结果: dict[int, int] = {}
     已使用: set[int] = set()
-    for 精确地址 in (True, False):
+    for 阶段 in ("exact", "renewed", "missing"):
         for 新序号, (新地址, 新类型, 新名称, 新大小) in enumerate(新身份):
             if 新序号 in 结果:
                 continue
             for 旧序号, (旧地址, 旧类型, 旧名称, 旧大小) in enumerate(旧身份):
                 if 旧序号 in 已使用 or (旧类型 and 新类型 and 旧类型 != 新类型):
                     continue
-                if 精确地址:
+                if 阶段 == "exact":
                     相同 = bool(新地址 and 新地址 == 旧地址)
+                elif 阶段 == "renewed":
+                    相同 = bool(
+                        新地址 != 旧地址
+                        and 新换签身份[新序号]
+                        and 新换签身份[新序号] == 旧换签身份[旧序号]
+                        and not (旧大小 and 新大小 and 旧大小 != 新大小)
+                    )
                 else:
                     相同 = (
                         not (旧地址 and 新地址)
@@ -2703,7 +2752,26 @@ def _合并媒体项目列表(*媒体列表: Any) -> list[dict[str, Any]]:
         匹配 = _附件匹配索引(合并结果, 新项目)
         for 序号, 项目 in enumerate(新项目):
             if 序号 in 匹配:
-                合并结果[匹配[序号]].update({键: 值 for 键, 值 in 项目.items() if 值 not in (None, "")})
+                已有项 = 合并结果[匹配[序号]]
+                旧地址 = _附件身份字段(已有项)[0]
+                换签身份 = _QQ附件换签身份(旧地址)
+                地址字段 = ("src", "url", "download_url", "file_url", "voice_wav_url")
+                新地址列表 = list(dict.fromkeys(
+                    _清理媒体地址(项目[字段]) for 字段 in 地址字段 if 项目.get(字段)
+                ))
+                更新地址 = ""
+                if 换签身份 and 新地址列表 and all(_QQ附件换签身份(值) == 换签身份 for 值 in 新地址列表):
+                    不同地址 = [值 for 值 in 新地址列表 if 值 != 旧地址]
+                    if 新地址列表[0] != 旧地址:
+                        更新地址 = 新地址列表[0]
+                    elif len(不同地址) == 1:
+                        更新地址 = 不同地址[0]
+                已有项.update({键: 值 for 键, 值 in 项目.items() if 值 not in (None, "")})
+                if 更新地址:
+                    # src 的读取优先级最高；同步同一资源别名，保留其它资源原地址。
+                    for 字段 in 地址字段:
+                        if 字段 == "src" or _QQ附件换签身份(_清理媒体地址(已有项.get(字段))) == 换签身份:
+                            已有项[字段] = 更新地址
             else:
                 合并结果.append(dict(项目))
     return 合并结果
@@ -2788,8 +2856,16 @@ def _提取附件列表(消息: Any) -> list[Any]:
             for 序号, 附件 in enumerate(有效附件):
                 if 序号 not in 匹配:
                     结果.append(附件)
-                elif not _附件身份字段(结果[匹配[序号]])[0] and _附件身份字段(附件)[0]:
-                    结果[匹配[序号]] = 附件
+                else:
+                    旧地址 = _附件身份字段(结果[匹配[序号]])[0]
+                    新地址 = _附件身份字段(附件)[0]
+                    换签身份 = _QQ附件换签身份(旧地址)
+                    if 新地址 and (
+                        not 旧地址
+                        or 新地址 != 旧地址 and 换签身份 and 换签身份 == _QQ附件换签身份(新地址)
+                    ):
+                        # 镜像中晚到的完整节点携带新 rkey，保留其元数据和原始结构。
+                        结果[匹配[序号]] = 附件
                 if len(结果) >= 附件上限:
                     return 结果
         return 结果

@@ -5,6 +5,7 @@ import asyncio
 import copy
 import hashlib
 import ipaddress
+import json
 import re
 import socket
 import sys
@@ -35,15 +36,18 @@ from .媒体归档工具 import (
 图片归档任务: set[asyncio.Task[Any]] = globals().get("图片归档任务", set())
 图片归档接收开启 = False
 _QQ源请求头已修正 = globals().get("_QQ源请求头已修正", False)
+_QQ源错误分类已启用 = globals().get("_QQ源错误分类已启用", False)
 _唤醒: asyncio.TimerHandle | None = globals().get("_唤醒")
 _上传并发 = globals().get("_上传并发", asyncio.Semaphore(2))
 
 
 class 媒体归档错误(RuntimeError):
-    def __init__(self, 阶段: str, 状态码: int = 0):
+    def __init__(self, 阶段: str, 状态码: int = 0, *, 业务码: int | None = None, 原因: str = ""):
         super().__init__(阶段)
         self.阶段 = 阶段
         self.状态码 = 状态码
+        self.业务码 = 业务码
+        self.原因 = 原因
 
 
 def _配置快照(配置: Any) -> dict[str, Any]:
@@ -139,6 +143,42 @@ def _新建会话() -> aiohttp.ClientSession:
                                  cookie_jar=aiohttp.DummyCookieJar(), trust_env=True)
 
 
+async def _解析QQ源错误(响应: aiohttp.ClientResponse) -> 媒体归档错误:
+    """只提取有界 JSON 数字码；不保留响应文本、地址或票据。"""
+    业务码 = None
+    if 响应.status == 400:
+        async def 读取错误码() -> int | None:
+            上限 = 16 * 1024
+            if 响应.content_length is not None and 响应.content_length > 上限:
+                return None
+            数据 = bytearray()
+            while True:
+                块 = await 响应.content.read(min(4096, 上限 + 1 - len(数据)))
+                if not 块:
+                    break
+                数据.extend(块)
+                if len(数据) > 上限:
+                    return None
+            负载 = json.loads(数据.decode("utf-8"))
+            if not isinstance(负载, dict):
+                return None
+            值 = 负载.get("retcode", 负载.get("code"))
+            if isinstance(值, bool) or not re.fullmatch(r"-?\d{1,10}", str(值)):
+                return None
+            数值 = int(值)
+            return 数值 if -(2 ** 31) <= 数值 < 2 ** 31 else None
+        try:
+            业务码 = await asyncio.wait_for(读取错误码(), timeout=5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+    if 业务码 == -5503007:
+        return 媒体归档错误("source_expired", 响应.status, 业务码=业务码, 原因="qq_signature_expired")
+    return 媒体归档错误("source_status", 响应.status, 业务码=业务码,
+                      原因="qq_source_rejected" if 业务码 == -5503014 else "upstream_http_error")
+
+
 async def _下载QQ媒体(地址: str, 路径: Path, 种类: str) -> tuple[str, int]:
     from 功能文件.页面功能 import 帮助网页后端
     if not 帮助网页后端._允许媒体地址(地址):
@@ -147,7 +187,7 @@ async def _下载QQ媒体(地址: str, 路径: Path, 种类: str) -> tuple[str, 
         响应 = await _请求原字节(会话, 地址)
         try:
             if 响应.status != 200:
-                raise 媒体归档错误("source_status", 响应.status)
+                raise await _解析QQ源错误(响应)
             if 响应.content_length is not None and 响应.content_length > 媒体最大字节数:
                 raise 媒体归档错误("source_too_large")
             总数 = 0
@@ -243,6 +283,22 @@ def _已有归档(媒体: dict[str, Any], 索引: int) -> bool:
         (媒体.get("_lanzou_archives") or {}).get(str(索引)), dict) or 索引 == 0 and isinstance(媒体.get("_lanzou_archive"), dict)
 
 
+def _源地址指纹(项目: dict[str, Any]) -> str:
+    地址 = str(项目.get("src") or 项目.get("url") or 项目.get("download_url") or "")
+    return hashlib.sha256(地址.encode("utf-8")).hexdigest()
+
+
+def _存在更新源(参数: dict[str, Any]) -> bool:
+    for 索引, 项目 in _媒体项目列表(参数["record"].get("media")):
+        进度 = 参数.get("progress", {}).get(索引, {})
+        if (not _已有归档(参数["record"]["media"], 索引)
+                and not 进度.get("upload_submitted") and not 进度.get("file_id")
+                and 进度.get("source_fingerprint")
+                and 进度["source_fingerprint"] != _源地址指纹(项目)):
+            return True
+    return False
+
+
 def _旧项目可完成(进度: dict[str, Any]) -> bool:
     远端 = 进度.get("remote_task")
     return bool(进度.get("archive") or 进度.get("file_id") or
@@ -291,6 +347,8 @@ def _可运行(参数: dict[str, Any]) -> bool:
         _释放未提交旧项(项)
         if _已有归档(媒体, 索引):
             continue
+        if 项.get("source_expired"):
+            continue
         if "_legacy" in 项:
             if _旧项目可完成(项["_legacy"]):
                 return True
@@ -314,6 +372,8 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
                 continue
             进度 = 参数.setdefault("progress", {}).setdefault(索引, {})
             _释放未提交旧项(进度)
+            if 进度.get("source_expired"):
+                continue
             if "_legacy" in 进度 and not _旧项目可完成(进度["_legacy"]):
                 continue
             if int(进度.get("source_failures", 0)) >= 3 and not 进度.get("file_id"):
@@ -321,6 +381,7 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
             try:
                 远端 = 进度.get("remote_task")
                 if not isinstance(远端, asyncio.Task) or 远端.done() and (远端.cancelled() or 远端.exception() is not None):
+                    进度["source_fingerprint"] = _源地址指纹(项目)
                     远端 = asyncio.create_task(_完成旧归档(参数, 进度) if "_legacy" in 进度 else _归档单项(参数, 索引, 项目, 进度))
                     进度["remote_task"] = 远端
                     远端.add_done_callback(_读取任务结果)
@@ -332,14 +393,27 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                当前项 = dict(_媒体项目列表(参数["record"].get("media"))).get(索引, {})
+                if (not 进度.get("upload_submitted") and not 进度.get("file_id")
+                        and getattr(exc, "阶段", "").startswith("source_")
+                        and 进度.get("source_fingerprint")
+                        and 进度["source_fingerprint"] != _源地址指纹(当前项)):
+                    # 下载期间换签后，旧地址的结果不得封死新地址。
+                    进度.pop("source_failures", None)
+                    进度.pop("source_expired", None)
+                    logger.debug("夸克媒体归档源地址已更新，忽略旧地址失败：媒体序号=%s", 索引 + 1)
+                    continue
+                if not 进度.get("upload_submitted") and getattr(exc, "阶段", "") == "source_expired":
+                    进度["source_expired"] = True
                 if not 进度.get("upload_submitted") and getattr(exc, "阶段", "").startswith("source_"):
                     进度["source_failures"] = int(进度.get("source_failures", 0)) + 1
-                logger.warning("夸克媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s",
-                               索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "archive"), type(exc).__name__, getattr(exc, "状态码", 0) or "none")
+                logger.warning("夸克媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s，业务码=%s，原因=%s",
+                               索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "archive"), type(exc).__name__,
+                               getattr(exc, "状态码", 0) or "none", getattr(exc, "业务码", None), getattr(exc, "原因", "") or "none")
         if all(_已有归档(参数["record"]["media"], i) for i, _ in _媒体项目列表(参数["record"].get("media"))):
             图片归档待恢复.pop(键, None)
         else:
-            参数["retry_at"] = asyncio.get_running_loop().time() + 300
+            参数["retry_at"] = asyncio.get_running_loop().time() + (0 if _存在更新源(参数) else 300)
     finally:
         参数.pop("task", None)
 
@@ -393,15 +467,19 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
     参数["record"]["media"] = 消息记录._合并媒体记录(参数["record"]["media"], 记录["media"])
     for i, 项 in _媒体项目列表(参数["record"]["media"]):
         if 项.get("src") != (旧列表.get(i) or {}).get("src"):
-            参数.get("progress", {}).get(i, {}).pop("source_failures", None)
+            进度 = 参数.get("progress", {}).get(i, {})
+            if not 进度.get("upload_submitted") and not 进度.get("file_id"):
+                进度.pop("source_failures", None)
+                进度.pop("source_expired", None)
+                参数.pop("retry_at", None)
     _排空队列()
     return True
 
 
 def 启动图片归档任务(配置: Any = None) -> None:
-    global 图片归档接收开启, _QQ源请求头已修正
+    global 图片归档接收开启, _QQ源请求头已修正, _QQ源错误分类已启用
     图片归档接收开启 = True
-    if not _QQ源请求头已修正:
+    if not _QQ源请求头已修正 or not _QQ源错误分类已启用:
         # 修复旧请求头后，重新尝试此前在源下载阶段失败、尚未提交的项目。
         for 参数 in 图片归档待恢复.values():
             重试 = False
@@ -412,6 +490,7 @@ def 启动图片归档任务(配置: Any = None) -> None:
             if 重试:
                 参数.pop("retry_at", None)
         _QQ源请求头已修正 = True
+        _QQ源错误分类已启用 = True
     # 逐项接管；旧上传未知状态留在原索引，安全兄弟项改走夸克。
     旧模块 = sys.modules.get("功能文件.管理功能.网盘功能.蓝奏云图片归档")
     for 旧参数 in list(getattr(旧模块, "图片归档待恢复", {}).values()):
