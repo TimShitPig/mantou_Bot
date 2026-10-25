@@ -192,10 +192,11 @@ async def _等待控制台会话恢复(request: web.Request, handler: Any) -> we
     return await handler(request)
 
 
-async def 启动帮助网页服务(配置: Any = None) -> 帮助网页服务 | None:
+async def 启动帮助网页服务(配置: Any = None, *, 插件版本: str = "") -> 帮助网页服务 | None:
     """先启动监听；数据库会话和公网地址在后台恢复。"""
     await 停止帮助网页服务(后端.当前帮助网页服务, 保留会话=True)
     后端.当前帮助网页服务 = None
+    后端.控制台版本 = str(插件版本 or "").strip().removeprefix("v")
     后端.网页服务启动状态 = False
     后端.当前帮助网页配置 = 配置
     后端.同步控制台会话认证(配置)

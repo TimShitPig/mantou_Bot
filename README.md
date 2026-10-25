@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.242-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.243-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.242 |
+| 版本 | v6.1.243 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -46,6 +46,8 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 蓝奏云聊天媒体归档按账号串行提交上传，至少间隔 15 秒；遇到明确的“上传频率过快”拒绝后，等待 5 分钟再自动调度，连续拒绝逐步延长至最多 30 分钟。冷却期间只保留等待元数据；网络结果未知的已提交上传继续保留防重复保护。
 
 ### 网页帮助
+
+网页顶部、控制台卡片和运行状态中的插件版本，统一使用当前实际加载的插件注册版本，启动和热重载时自动同步。
 
 控制台与登录页使用统一夜航蓝界面，首次访问默认深色，顶部可切换浅色并保留本设备偏好，通过约 320 毫秒整页快照渐变切换，快速连点合并到最后选择，保留控件轻量反馈并遵循减少动态效果设置；自己的消息使用随主题变化的淡蓝/藏蓝气泡，引用、链接和附件卡片同步配色；适配手机窄屏，遵循系统减少动态效果设置。消息原始数据、群备注与禁言窗口支持 Esc 关闭、Tab 圈定和关闭后焦点恢复，手机返回列表后可重新打开当前聊天。
 

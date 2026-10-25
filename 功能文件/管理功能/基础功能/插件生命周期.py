@@ -96,13 +96,14 @@ async def _同步账号状态(配置: Any) -> None:
 async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: Any) -> dict[str, Any]:
     global _当前句柄
     if _当前句柄 and not _当前句柄["stopped"]:
-        if _当前句柄["context"] is 上下文 and _当前句柄["config"] is 配置:
+        if (_当前句柄["context"] is 上下文 and _当前句柄["config"] is 配置
+                and _当前句柄.get("version") == 版本):
             return _当前句柄
         await 停止插件(_当前句柄)
     from . import 帮助功能
 
     开始 = time.monotonic()
-    句柄 = {"context": 上下文, "config": 配置, "stopped": False,
+    句柄 = {"context": 上下文, "config": 配置, "version": 版本, "stopped": False,
           "help": 帮助功能, "web": None, "cache_daily": None, "background": []}
     _当前句柄 = 句柄
     QQ官方交互桥.安装QQ官方帮助交互(上下文)
@@ -111,7 +112,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
     小说下载任务.保护中断小说缓存()
     蓝奏云图片归档.启动图片归档任务(配置)
     try:
-        句柄["web"] = await 帮助网页.启动帮助网页服务(配置)
+        句柄["web"] = await 帮助网页.启动帮助网页服务(配置, 插件版本=版本)
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
             asyncio.create_task(_同步账号状态(配置), name="插件账号状态同步"),
