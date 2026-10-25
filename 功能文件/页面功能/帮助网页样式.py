@@ -32,7 +32,6 @@
     .theme-select-wrap { display:inline-flex; align-items:center; }
     .theme-control select { min-height:26px; padding:2px 20px 2px 3px; border:0; border-radius:5px; background:transparent; color:var(--ink); font-size:11px; font-weight:650; cursor:pointer; outline:none; }
     .theme-control select option { background:var(--panel); color:var(--ink); }
-    html.theme-updating *,html.theme-updating *::before,html.theme-updating *::after { transition:none !important; }
     .status-dot { display:inline-flex; align-items:center; gap:7px; color:var(--mint-ink); font-size:12px; font-weight:650; }
     .status-dot::before { content:""; width:7px; height:7px; border-radius:50%; background:#4dbb82; box-shadow:0 0 0 4px var(--mint); }
     .admin-menu { position:relative; }
@@ -1562,6 +1561,17 @@
       .summary-card > strong { font-size:19px; }
       .brand strong { font-size:15px; }
       .profile .online { display:none; }
+    }
+    /* 只合成整页主题快照；聊天媒体和滚动容器继续复用原节点。 */
+    html.theme-updating *,html.theme-updating *::before,html.theme-updating *::after { transition:none !important; }
+    html.theme-updating::view-transition { pointer-events:none; }
+    html.theme-updating::view-transition-group(root) { animation:none; }
+    html.theme-updating::view-transition-image-pair(root) { isolation:isolate; }
+    html.theme-updating::view-transition-old(root) { animation:none; opacity:1; mix-blend-mode:normal; }
+    html.theme-updating::view-transition-new(root) { animation:mantou-theme-fade .32s cubic-bezier(.4,0,.2,1) both; mix-blend-mode:normal; }
+    @keyframes mantou-theme-fade { from { opacity:0; } to { opacity:1; } }
+    @media (prefers-reduced-motion:reduce) {
+      html::view-transition-group(root),html::view-transition-old(root),html::view-transition-new(root) { animation:none !important; }
     }
     @media (prefers-reduced-motion:reduce) {
       *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }

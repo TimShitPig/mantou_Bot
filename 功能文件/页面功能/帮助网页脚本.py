@@ -23,39 +23,93 @@
         const symbol = dark ? '☀' : '☾';
         if (icon && icon.textContent !== symbol) icon.textContent = symbol;
       };
+      const commitTheme = (next) => {
+        const root = document.documentElement;
+        if (root.dataset.theme !== next) root.dataset.theme = next;
+        updateThemeMeta(next);
+      };
+      let requestedTheme = readThemePreference();
+      let themeTransition = null;
+      let themeGeneration = 0;
       let themeFrame = 0;
-      const finishThemeUpdate = () => {
+      const themeMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+      const clearThemeUpdate = () => {
         if (themeFrame) cancelAnimationFrame(themeFrame);
         themeFrame = 0;
         document.documentElement.classList.remove('theme-updating');
       };
+      const finishThemeUpdate = () => {
+        if (themeFrame) cancelAnimationFrame(themeFrame);
+        if (document.hidden) { clearThemeUpdate(); return; }
+        themeFrame = requestAnimationFrame(() => { themeFrame = requestAnimationFrame(clearThemeUpdate); });
+      };
+      const animateTheme = () => {
+        if (themeTransition) return;
+        const root = document.documentElement;
+        if (root.dataset.theme === requestedTheme) { finishThemeUpdate(); return; }
+        if (themeFrame) cancelAnimationFrame(themeFrame);
+        themeFrame = 0;
+        root.classList.add('theme-updating');
+        if (document.hidden || themeMotion?.matches || typeof document.startViewTransition !== 'function') {
+          commitTheme(requestedTheme);
+          finishThemeUpdate();
+          return;
+        }
+        const generation = ++themeGeneration;
+        let transition;
+        try {
+          transition = document.startViewTransition(() => {
+            // 快照准备期间的新点击合并到本次；旧回调不得覆盖取消后的主题。
+            if (generation === themeGeneration) commitTheme(requestedTheme);
+          });
+        } catch (_) {
+          commitTheme(requestedTheme);
+          finishThemeUpdate();
+          return;
+        }
+        themeTransition = transition;
+        // 截图不可用或页面隐藏会拒绝 ready；finished 仍负责收尾。
+        transition.ready.catch(() => {});
+        transition.updateCallbackDone.catch(() => {});
+        transition.finished.then(() => {
+          if (themeTransition !== transition || generation !== themeGeneration) return;
+          themeTransition = null;
+          // 动画中只记最后一次意图，完成后最多衔接一次反向渐变。
+          animateTheme();
+        }, () => {
+          if (themeTransition !== transition || generation !== themeGeneration) return;
+          themeTransition = null;
+          commitTheme(requestedTheme);
+          finishThemeUpdate();
+        });
+      };
+      const stopThemeUpdate = () => {
+        ++themeGeneration;
+        const previous = themeTransition;
+        themeTransition = null;
+        previous?.skipTransition();
+        document.documentElement.classList.add('theme-updating');
+        commitTheme(requestedTheme);
+        finishThemeUpdate();
+      };
       const applyTheme = (preference = readThemePreference(), persist = true) => {
         const next = preference === 'dark' ? 'dark' : 'light';
-        const root = document.documentElement;
-        if (persist && root.dataset.theme === next && root.dataset.themePreference === next) return;
-        const switching = persist && root.dataset.theme !== next;
-        if (switching) {
-          if (themeFrame) cancelAnimationFrame(themeFrame);
-          root.classList.add('theme-updating');
-        }
-        // 同一帧提交全部颜色，避免控件过渡留下深浅混杂的中间状态。
-        if (root.dataset.themePreference !== next) root.dataset.themePreference = next;
-        if (root.dataset.theme !== next) root.dataset.theme = next;
-        updateThemeMeta(next);
+        requestedTheme = next;
+        if (document.documentElement.dataset.themePreference !== next) document.documentElement.dataset.themePreference = next;
         updateThemeControl(next);
         if (persist) {
           try { if (localStorage.getItem(themeStorageKey) !== next) localStorage.setItem(themeStorageKey, next); } catch (_) {}
         }
-        if (switching) {
-          if (document.hidden) finishThemeUpdate();
-          else themeFrame = requestAnimationFrame(() => { themeFrame = requestAnimationFrame(finishThemeUpdate); });
-        }
+        if (!persist) { commitTheme(next); clearThemeUpdate(); return; }
+        if (document.hidden || themeMotion?.matches) { stopThemeUpdate(); return; }
+        animateTheme();
       };
-      document.addEventListener('visibilitychange', () => { if (document.hidden) finishThemeUpdate(); });
-      window.addEventListener('pagehide', finishThemeUpdate);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) stopThemeUpdate(); });
+      window.addEventListener('pagehide', stopThemeUpdate);
+      themeMotion?.addEventListener?.('change', (event) => { if (event.matches) stopThemeUpdate(); });
       applyTheme(readThemePreference(), false);
       $('theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
-      $('theme-toggle')?.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+      $('theme-toggle')?.addEventListener('click', () => applyTheme(requestedTheme === 'dark' ? 'light' : 'dark'));
       const views = {
         dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
         bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],

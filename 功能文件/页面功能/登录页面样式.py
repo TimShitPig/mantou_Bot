@@ -67,5 +67,16 @@
     @keyframes login-reveal { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
     @media (max-width:760px) { .login-page { padding:24px 16px; } .login-shell { max-width:480px; grid-template-columns:1fr; border-radius:16px; } .login-welcome { min-height:0; padding:25px 28px; border-right:0; border-bottom:1px solid var(--line); } .login-brand-mark { width:35px; height:35px; font-size:15px; } .login-brand strong { font-size:14px; } .login-brand small { font-size:10px; } .login-constellation { display:none; } .login-welcome h1 { margin-top:25px; font-size:26px; line-height:1.35; } .login-welcome h1 br { display:none; } .login-welcome p { margin-top:8px; font-size:11px; } .login-panel { padding:24px 28px 29px; } .login-theme-control { margin:0 0 22px; } .login-panel h2 { font-size:24px; } .login-panel > p { margin:8px 0 25px; } .login-form { gap:17px; } .login-note { margin-top:17px; } }
     @media (max-width:360px) { .login-page { padding:16px 10px; } .login-welcome,.login-panel { padding-left:21px; padding-right:21px; } .login-welcome h1 { font-size:24px; } }
+    /* 只合成整页主题快照；聊天媒体和滚动容器继续复用原节点。 */
+    html.theme-updating *,html.theme-updating *::before,html.theme-updating *::after { transition:none !important; }
+    html.theme-updating::view-transition { pointer-events:none; }
+    html.theme-updating::view-transition-group(root) { animation:none; }
+    html.theme-updating::view-transition-image-pair(root) { isolation:isolate; }
+    html.theme-updating::view-transition-old(root) { animation:none; opacity:1; mix-blend-mode:normal; }
+    html.theme-updating::view-transition-new(root) { animation:mantou-theme-fade .32s cubic-bezier(.4,0,.2,1) both; mix-blend-mode:normal; }
+    @keyframes mantou-theme-fade { from { opacity:0; } to { opacity:1; } }
+    @media (prefers-reduced-motion:reduce) {
+      html::view-transition-group(root),html::view-transition-old(root),html::view-transition-new(root) { animation:none !important; }
+    }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
   """
