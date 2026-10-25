@@ -116,8 +116,9 @@ async def _校验下载地址(地址: str, *, 夸克: bool = False) -> str:
 async def _请求原字节(会话: aiohttp.ClientSession, 地址: str, *, 范围: str = "", Cookie: str = "") -> aiohttp.ClientResponse:
     for _ in range(5):
         地址 = await _校验下载地址(地址, 夸克=bool(Cookie))
-        请求头 = dict(下载请求头)
+        请求头 = {"User-Agent": 下载请求头["User-Agent"]}
         if Cookie:
+            请求头["Referer"] = 下载请求头["Referer"]
             请求头["Cookie"] = Cookie
         if 范围:
             请求头["Range"] = 范围
