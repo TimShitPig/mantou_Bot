@@ -3,33 +3,35 @@
 登录页脚本 = r"""
     (() => {
       const themeKey = 'mantou-theme';
-      const readTheme = () => { try { return localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
+      const readTheme = () => { try { return localStorage.getItem(themeKey) === 'light' ? 'light' : 'dark'; } catch (_) { return 'dark'; } };
       const applyTheme = (preference = readTheme(), persist = true) => {
         const next = preference === 'dark' ? 'dark' : 'light';
         const dark = next === 'dark';
-        const previous = document.documentElement.dataset.theme;
         document.documentElement.dataset.themePreference = next;
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-        const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', dark ? '#171a24' : '#f7f8fd');
+        const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', dark ? '#081423' : '#edf4fa');
         if (persist) { try { localStorage.setItem(themeKey, next); } catch (_) {} }
         const select = document.getElementById('login-theme-select'); if (select && select.value !== next) select.value = next;
-        if (previous && previous !== (dark ? 'dark' : 'light')) {
-          document.documentElement.classList.remove('theme-switching');
-          void document.documentElement.offsetWidth;
-          document.documentElement.classList.add('theme-switching');
-          setTimeout(() => document.documentElement.classList.remove('theme-switching'), 320);
-        }
+
       };
       applyTheme(readTheme(), false);
       document.getElementById('login-theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
       const form = document.getElementById('login-form');
       const username = document.getElementById('login-username');
       const password = document.getElementById('login-password');
+      const passwordToggle = document.getElementById('login-password-toggle');
+      passwordToggle?.addEventListener('click', () => {
+        const visible = password.type === 'password';
+        password.type = visible ? 'text' : 'password';
+        passwordToggle.setAttribute('aria-pressed', String(visible));
+        passwordToggle.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+      });
       const button = form.querySelector('button[type="submit"]');
       const message = document.getElementById('login-message');
       const setMessage = (value) => { message.textContent = value; };
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (button.disabled) return;
         button.disabled = true;
         setMessage('');
         try {

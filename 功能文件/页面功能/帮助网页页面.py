@@ -7,16 +7,16 @@ from .帮助网页样式 import 控制台样式
 from .帮助网页脚本 import 控制台脚本
 
 页面头部前缀 = """<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f8f8ff">
+  <meta name="theme-color" content="#081423">
   <title>馒头控制台</title>
   <script>
     (() => {
       try {
-        const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
+        const preference = localStorage.getItem('mantou-theme') === 'light' ? 'light' : 'dark';
         const dark = preference === 'dark';
         document.documentElement.dataset.themePreference = preference;
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -31,49 +31,49 @@ from .帮助网页脚本 import 控制台脚本
 <body>
   <div class="shell">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark">馒</div><div><strong>QQ机器人后台</strong><span class="version-badge" id="console-version">v6.1.60</span></div></div>
+        <div class="brand"><div class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></div><div><strong>馒头Bot</strong><span class="version-badge" id="console-version">加载中</span></div></div>
       <div class="top-actions"><span class="status-dot">服务在线</span><div class="theme-control" role="group" aria-label="主题模式"><span class="theme-control-label">主题</span><button id="theme-toggle" class="theme-toggle-button" type="button" aria-label="切换到深色模式" title="切换到深色模式" aria-pressed="false"><span class="theme-control-icon" aria-hidden="true">◐</span></button><label class="theme-select-wrap" for="theme-select"><select id="theme-select" aria-label="选择主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label></div><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
     </header>
     <aside class="sidebar">
-      <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div><strong data-bot-name>馒头助手</strong><span class="online">在线</span></div>
+      <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><strong data-bot-name>馒头助手</strong><span class="online">在线</span></div>
       <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
-        <a href="?view=dashboard" data-view="dashboard"><span class="nav-icon">⌂</span>控制台</a>
-        <a href="?view=bot" data-view="bot"><span class="nav-icon">⚙</span>机器人配置</a>
-        <a href="?view=novels" data-view="novels"><span class="nav-icon">☷</span>小说功能</a>
-        <a href="?view=pans" data-view="pans"><span class="nav-icon">▣</span>网盘配置</a>
-        <a href="?view=messages" data-view="messages"><span class="nav-icon">✉</span>消息记录</a>
-        <a href="?view=runtime" data-view="runtime"><span class="nav-icon">◒</span>运行状态</a>
-        <a href="?view=help" data-view="help"><span class="nav-icon">?</span>帮助指令</a>
-        <a href="?view=settings" data-view="settings"><span class="nav-icon">⚙</span>系统设置</a>
+        <a href="?view=dashboard" data-view="dashboard"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>控制台</a>
+        <a href="?view=bot" data-view="bot"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span>机器人配置</a>
+        <a href="?view=novels" data-view="novels"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span>小说功能</a>
+        <a href="?view=pans" data-view="pans"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span>网盘配置</a>
+        <a href="?view=messages" data-view="messages"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg></span>消息记录</a>
+        <a href="?view=runtime" data-view="runtime"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>运行状态</a>
+        <a href="?view=help" data-view="help"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 1 1 5 2c-1 1-2 1-2 3m0 3h.01"/></svg></span>帮助指令</a>
+        <a href="?view=settings" data-view="settings"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg></span>系统设置</a>
       </nav></div>
-      <div class="sidebar-foot"><span class="spark">✦</span><strong>只显示真实功能</strong><span>未接入后端的数据入口不会伪装成可用按钮。</span></div>
+      <div class="sidebar-foot"><span class="spark" aria-hidden="true">✧</span><strong>馒头工作台</strong><span>消息、小说与网盘，在这里有序运转。</span></div>
     </aside>
     <main class="main">
       <div class="content">
         <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span></div></div>
         <div id="notice" class="notice"></div>
         <section id="page-dashboard" class="page-view" data-page="dashboard">
-          <div class="section-head page-view-head"><div><h2>服务总览</h2><p>快速查看当前功能状态，也可以从快捷入口直接打开页面。</p></div></div>
+          <div class="section-head page-view-head"><div><h2>服务总览</h2><p>小说服务、分享网盘与数据库的当前状态。</p></div></div>
           <div class="summary-grid">
             <article class="summary-card"><span>小说总开关</span><strong id="metric-global">--</strong><small id="metric-global-meta">加载中</small><button class="text-button" type="button" data-view="novels">管理小说功能</button></article>
             <article class="summary-card"><span>当前分享网盘</span><strong id="metric-pan">--</strong><small id="metric-pan-meta">加载中</small><button class="text-button" type="button" data-view="pans">管理网盘</button></article>
             <article class="summary-card"><span>数据库状态</span><strong id="metric-db">--</strong><small id="metric-db-meta">加载中</small><button class="text-button" type="button" data-view="settings">查看数据库状态</button></article>
             <article class="summary-card"><span>插件版本</span><strong id="metric-version">--</strong><small id="metric-version-meta">馒头Bot</small><button class="text-button" type="button" data-view="runtime">查看运行状态</button></article>
           </div>
-          <div class="page-grid dashboard-grid"><article class="console-card"><h2>快捷入口</h2><p class="card-subtitle">点击入口直接打开对应功能页面。</p><div class="shortcut-grid"><button class="shortcut-card" type="button" data-view="bot"><span class="shortcut-icon">⚙</span><strong>机器人配置</strong><small>查看安全摘要与监听配置</small></button><button class="shortcut-card" type="button" data-view="novels"><span class="shortcut-icon">☷</span><strong>小说功能</strong><small>开关平台和管理员测试模式</small></button><button class="shortcut-card" type="button" data-view="pans"><span class="shortcut-icon">▣</span><strong>网盘配置</strong><small>选择主分享网盘和查看账号摘要</small></button><button class="shortcut-card" type="button" data-view="runtime"><span class="shortcut-icon">◒</span><strong>运行状态</strong><small>查看服务器实时指标</small></button></div></article><article class="console-card"><h2>当前状态</h2><p class="card-subtitle">最近一次读取：<span id="dashboard-updated">--</span></p><div class="status-list compact-status"><div class="status-item"><span>CPU 占用</span><strong id="dashboard-cpu">--</strong></div><div class="status-item"><span>物理内存</span><strong id="dashboard-memory">--</strong></div><div class="status-item"><span>系统运行时间</span><strong id="dashboard-runtime">--</strong></div></div></article></div>
+          <div class="page-grid dashboard-grid"><article class="console-card"><h2>快捷入口</h2><p class="card-subtitle">点击入口直接打开对应功能页面。</p><div class="shortcut-grid"><button class="shortcut-card" type="button" data-view="bot"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span><strong>机器人配置</strong><small>查看安全摘要与监听配置</small></button><button class="shortcut-card" type="button" data-view="novels"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span><strong>小说功能</strong><small>开关平台和管理员测试模式</small></button><button class="shortcut-card" type="button" data-view="pans"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span><strong>网盘配置</strong><small>选择主分享网盘和查看账号摘要</small></button><button class="shortcut-card" type="button" data-view="runtime"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span><strong>运行状态</strong><small>查看服务器实时指标</small></button></div></article><article class="console-card"><h2>当前状态</h2><p class="card-subtitle">最近一次读取：<span id="dashboard-updated">--</span></p><div class="status-list compact-status"><div class="status-item"><span>CPU 占用</span><strong id="dashboard-cpu">--</strong></div><div class="status-item"><span>物理内存</span><strong id="dashboard-memory">--</strong></div><div class="status-item"><span>系统运行时间</span><strong id="dashboard-runtime">--</strong></div></div></article></div>
         </section>
 
         <section id="page-bot" class="page-view" data-page="bot" hidden>
-          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong data-bot-name>馒头助手</strong><small>来自 QQ 官方资料</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong data-bot-id>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div><small>QQ 官方资料头像</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单和帮助网页账号；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读账号</h2><p class="card-subtitle">点击账号卡片打开配置；支持Cookie、QQ扫码和手机号登录。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>QQ阅读密钥</span><strong>点击后查看</strong></div><div><span>数据库连接参数</span><strong>登录后可编辑</strong></div><div><span>数据库密码</span><strong>只写入、不回显</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
+          <div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong data-bot-name>馒头助手</strong><small>来自 QQ 官方资料</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong data-bot-id>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><small>QQ 官方资料头像</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="online">在线运行</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单和帮助网页账号；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读账号</h2><p class="card-subtitle">点击账号卡片打开配置；支持Cookie、QQ扫码和手机号登录。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>QQ阅读密钥</span><strong>点击后查看</strong></div><div><span>数据库连接参数</span><strong>登录后可编辑</strong></div><div><span>数据库密码</span><strong>只写入、不回显</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
         </section>
 
         <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="novel-console standalone-card">
-          <header class="novel-console-head"><div><span class="novel-overline">NOVEL CONTROL</span><h2>小说功能</h2><p class="card-subtitle">集中管理小说入口和平台状态，下载逻辑保持不变。</p></div><div id="novel-state-pill" class="novel-state-pill"><span class="novel-state-dot"></span><strong>读取中</strong></div></header>
+          <header class="novel-console-head"><div><span class="novel-overline">小说服务</span><h2>小说功能</h2><p class="card-subtitle">集中管理找书、下载与各平台开关。</p></div><div id="novel-state-pill" class="novel-state-pill"><span class="novel-state-dot"></span><strong>读取中</strong></div></header>
           <div class="novel-control-grid">
-            <section class="novel-master-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">全</span><span>GLOBAL ACCESS</span></div><div class="novel-master-copy"><h3>全部小说功能</h3><p>控制下载、找书和翻页的总入口。关闭后所有平台都会暂停响应。</p></div><div class="novel-master-actions"><div class="novel-master-state"><strong id="novel-master-label">读取中</strong><span id="novel-platform-summary">正在读取平台状态</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></section>
-            <section class="novel-test-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">测</span><span>ADMIN MODE</span></div><h3>管理员测试模式</h3><p>只影响管理员测试，不会绕过普通用户的平台开关。</p><div class="novel-test-actions"><span id="novel-test-label" class="novel-test-note">状态读取中</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div></section>
+            <section class="novel-master-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">全</span><span>全局开关</span></div><div class="novel-master-copy"><h3>全部小说功能</h3><p>控制下载、找书和翻页的总入口。关闭后所有平台都会暂停响应。</p></div><div class="novel-master-actions"><div class="novel-master-state"><strong id="novel-master-label">读取中</strong><span id="novel-platform-summary">正在读取平台状态</span></div><button id="global-switch" class="switch" type="button" aria-label="切换全局小说功能"><span></span></button></div></section>
+            <section class="novel-test-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">测</span><span>测试模式</span></div><h3>管理员测试模式</h3><p>只影响管理员测试，不会绕过普通用户的平台开关。</p><div class="novel-test-actions"><span id="novel-test-label" class="novel-test-note">状态读取中</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div></section>
           </div>
-          <div class="novel-platform-head"><div><span class="novel-platform-overline">PLATFORMS</span><h3>平台开关</h3></div><span id="novel-enabled-count" class="novel-platform-count">-- / -- 已开启</span></div>
+          <div class="novel-platform-head"><div><span class="novel-platform-overline">已接入平台</span><h3>平台开关</h3></div><span id="novel-enabled-count" class="novel-platform-count">-- / -- 已开启</span></div>
           <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
         </article></section>
 
@@ -94,586 +94,6 @@ from .帮助网页脚本 import 控制台脚本
         <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">UC、夸克和百度账号及上传目录请在“网盘配置”中管理；数据库连接参数可在这里查看和编辑。</p><div class="runtime-detail settings-db-grid"><div class="status-item"><span>数据库连接状态</span><strong id="settings-db-status">读取中</strong></div><div class="status-item"><span>当前数据库名</span><strong id="settings-db-name">读取中</strong></div></div><div id="database-config-editor" class="config-editor"><div class="empty">正在读取数据库配置...</div></div><p class="card-subtitle settings-db-note">地址、端口、用户名和数据库名会显示在登录后的控制台；密码只写入、不回显，留空表示保持现有密码。修改并保存后需要重载插件生效。</p></article></section>
 
         <section id="page-messages" class="page-view" data-page="messages" hidden>
-          <style>
-             .msg-shell { --msg-list-width:340px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:#fff; border:1px solid #e8e9ec; border-radius:10px; overflow:hidden; transition:grid-template-columns .22s ease; }
-             .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:#fff; }
-             .chat-list-panel { position:relative; border-right:1px solid #e8e9ec; background:#fafafa; }
-            .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 48px 8px 12px; border-bottom:1px solid #e8e9ec; background:#fff; }
-            .msg-filter { display:flex; gap:2px; padding:2px; background:#f2f3f5; border-radius:8px; }
-            .msg-filter button { flex:1 1 0; min-width:0; min-height:26px; padding:0 4px; border:0; border-radius:6px; background:transparent; color:#666; font-size:11px; font-weight:600; cursor:pointer; }
-            .msg-filter button.active { background:#fff; color:#12b7f5; box-shadow:0 1px 3px rgba(0,0,0,.08); }
-            .msg-search { display:flex; gap:6px; }
-            .msg-search input { flex:1 1 0; min-width:0; height:30px; padding:0 10px; border:1px solid transparent; border-radius:15px; background:#f2f3f5; color:#333; font-size:12px; outline:none; transition:all .15s ease; }
-            .msg-search input:focus { border-color:#12b7f5; background:#fff; }
-            .msg-search button { height:30px; padding:0 12px; border:0; border-radius:15px; background:#12b7f5; color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
-            .msg-chats { --msg-chat-row-height:52px; flex:1 1 0; min-height:0; overflow-y:auto; padding:4px 6px; overscroll-behavior:contain; overflow-anchor:none; scrollbar-gutter:stable; }
-            .msg-chat-list-track { position:relative; width:100%; min-height:100%; overflow:visible; }
-            .msg-chat-folder { display:flex; box-sizing:border-box; align-items:center; gap:9px; width:100%; height:38px; min-height:38px; max-height:38px; margin:0; padding:0 8px; border:0; border-radius:6px; background:transparent; color:#4b5563; text-align:left; cursor:pointer; }
-            .msg-chat-folder:hover { background:#ececee; }
-            .msg-chat-folder strong { font-size:12px; font-weight:700; }
-            .msg-chat-folder small { margin-left:auto; color:#9298a1; font-size:10px; }
-            .msg-chat-folder-caret { width:7px; height:7px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg) translateY(-2px); transition:transform .14s ease; }
-            .msg-chat-folder[aria-expanded="false"] .msg-chat-folder-caret { transform:rotate(-45deg); }
-            .msg-chat-divider { display:flex; box-sizing:border-box; align-items:center; height:28px; margin:0 6px; padding:0 4px; border-top:1px solid #e8e9ec; color:#9a9fa8; font-size:10px; font-weight:650; line-height:1.2; }
-            .msg-chat-divider:first-child { margin-top:0; border-top:0; }
-            .msg-chat { display:flex; box-sizing:border-box; gap:10px; width:100%; height:52px; min-height:52px; max-height:52px; padding:6px 8px; border:0; border-radius:8px; background:transparent; text-align:left; cursor:pointer; transition:background .12s ease; }
-            .msg-chat:hover { background:#ececee; }
-            .msg-chat.active { background:#dbeafd; }
-            .msg-chat-badge { flex:0 0 auto; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#fa5151; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; box-sizing:border-box; }
-            .msg-chat.pinned { background:#e3ecf7; }
-            .msg-chat.pinned:hover { background:#d6e4f4; }
-            .msg-chat.pinned.active { background:#cfe0f2; }
-            .msg-chat.pinned .msg-chat-top strong { color:#1f5fb0; }
-            .msg-chat.pinned .msg-chat-top small { color:#6f8db8; }
-            .msg-chat-top strong.admin,
-            .msg-chat.pinned .msg-chat-top strong.admin { color:#dc2626 !important; font-weight:700; }
-            .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:14px; font-weight:800; overflow:hidden; }
-            .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
-            .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:#3a7bd5; }
-            .msg-chat-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
-            .msg-chat-main { flex:1 1 0; min-width:0; align-self:center; }
-            .msg-chat-top { display:flex; align-items:center; gap:6px; }
-            .msg-chat-top strong { font-size:13px; font-weight:600; color:#222; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-            .msg-chat-top small { margin-left:auto; flex:0 0 auto; color:#999; font-size:10px; }
-            .msg-chat-sub-row { display:flex; align-items:center; gap:8px; margin-top:3px; min-width:0; }
-            .msg-chat-sub { flex:1 1 0; min-width:0; color:#999; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-            .msg-chat-type { display:none; }
-            .msg-chat-meta { display:none; }
-            .msg-empty { padding:26px 14px; color:#aaa; font-size:12px; text-align:center; }
-            .msg-work { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; background:#f5f6f7; }
-            .msg-head { display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #e8e9ec; }
-            .msg-head-name { font-size:15px; font-weight:650; color:#222; }
-            .msg-head-name.admin { color:#dc2626 !important; font-weight:700; }
-            .msg-head-sub { margin-top:2px; color:#999; font-size:11px; }
-            .msg-head-actions { margin-left:auto; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
-            .msg-pan-account-control { display:flex; align-items:center; gap:6px; min-width:0; min-height:28px; padding:0 8px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#858895; font-size:10px; white-space:nowrap; }
-            .msg-pan-account-control[hidden] { display:none; }
-            .msg-pan-account-control select { min-width:0; max-width:155px; border:0; outline:0; background:transparent; color:#4e5260; font-family:inherit; font-size:11px; font-weight:600; cursor:pointer; }
-            .msg-pan-account-control select:disabled { cursor:not-allowed; opacity:.65; }
-            .msg-btn { min-height:28px; padding:0 10px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#666; font-size:11px; font-weight:600; cursor:pointer; transition:all .16s ease; }
-            .msg-btn:hover { border-color:#12b7f5; color:#12b7f5; }
-            .msg-btn.primary { border-color:#12b7f5; background:#12b7f5; color:#fff; }
-            .msg-btn.primary:hover { background:#0ea5e0; }
-            .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:#f5f6f7; overscroll-behavior:contain; scrollbar-gutter:stable; }
-            .msg-body.msg-positioning { visibility:hidden; overflow-anchor:none; }
-            .msg-loading { display:grid; gap:12px; padding:18px 8px; }
-            .msg-loading span { display:block; width:68%; height:44px; border-radius:10px; background:#e7ebf0; animation:msg-loading-pulse 1.15s ease-in-out infinite alternate; }
-            .msg-loading span:nth-child(2) { width:54%; margin-left:18%; animation-delay:.18s; }
-            .msg-loading span:nth-child(3) { width:62%; animation-delay:.36s; }
-            @keyframes msg-loading-pulse { from { opacity:.48; transform:translateY(1px); } to { opacity:1; transform:translateY(0); } }
-            .msg-day { margin:10px 0; color:#aaa; font-size:10px; text-align:center; }
-            .msg-system-row { display:flex; flex-direction:column; align-items:center; gap:5px; margin:12px 0 16px; text-align:center; }
-            .msg-system-time { padding:2px 8px; border-radius:12px; background:#e2e4e8; color:#858a94; font-size:10px; line-height:1.35; }
-            .msg-system-notice { max-width:min(90%,520px); padding:4px 12px; border-radius:16px; background:#e5e6e9; color:#777d87; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
-            .msg-system-name { color:#3287d5; }
-            /* 消息行必须使用真实高度，避免估算布局在显示后把滚动位置推离底部。 */
-            .msg-row { display:flex; gap:9px; margin-bottom:14px; }
-            .msg-row.self { flex-direction:row-reverse; }
-            .msg-avatar { position:relative; width:36px; height:36px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:#cfe3fb; color:#3a7bd5; font-size:12px; font-weight:800; overflow:hidden; }
-            .msg-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
-            .msg-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:12px; font-weight:800; color:#3a7bd5; }
-            .msg-avatar.avatar-fallback .avatar-letter { position:static; display:grid; }
-            .msg-bubble-wrap { max-width:min(70%,560px); min-width:0; }
-            .msg-row.self .msg-bubble-wrap { display:flex; flex-direction:column; align-items:flex-end; }
-            .msg-bubble-name { margin-bottom:3px; color:#999; font-size:10px; padding-left:2px; }
-            .msg-row.self .msg-bubble-name { padding-left:0; padding-right:2px; }
-            .msg-bubble { padding:8px 12px; border-radius:3px 10px 10px 10px; background:#fff; color:#333; font-size:13px; line-height:1.6; word-break:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.05); }
-            .msg-row.self .msg-bubble { border-radius:10px 3px 10px 10px; background:#12b7f5; color:#fff; }
-            .msg-row.self .msg-bubble .msg-bubble-quote { color:#dff1fd; }
-            .msg-inline-link { color:#1c7ed6; text-decoration:underline; text-underline-offset:2px; }
-            .msg-inline-code { padding:1px 4px; border-radius:4px; background:rgba(0,0,0,.08); font:12px/1.4 Consolas,Monaco,monospace; }
-            .msg-command-chip { display:inline; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed currentColor; background:transparent; color:inherit; font:inherit; line-height:inherit; cursor:pointer; }
-            .msg-command-chip:hover { opacity:.72; }
-            .msg-bubble.recalled { color:#c45b5b; font-style:italic; background:#fff1f1; border:1px solid #ffd6d6; }
-            .msg-bubble-quote { display:flex; flex-direction:column; gap:3px; max-width:100%; margin:0 0 8px; padding:6px 9px; border-left:2px solid #8ec5f2; border-radius:3px; background:#f2f8ff; color:#888; font-size:12px; white-space:normal; }
-            .msg-quote-jump { position:relative; width:100%; border:0; border-left:2px solid #8ec5f2; text-align:left; font-family:inherit; line-height:inherit; cursor:pointer; padding-right:26px; }
-            .msg-quote-jump:hover { background:#e8f3ff; }
-            .msg-quote-jump:focus-visible { outline:2px solid #168bde; outline-offset:2px; }
-            .msg-quote-jump-icon { position:absolute; top:5px; right:8px; opacity:.65; font-size:14px; }
-            .msg-row.msg-jump-target .msg-bubble { animation:msg-reference-highlight 2.2s ease-out; outline:2px solid #5caaff; outline-offset:3px; }
-            @keyframes msg-reference-highlight { 0%,25% { box-shadow:0 0 0 6px rgba(71,156,255,.26); } 100% { box-shadow:0 0 0 2px rgba(71,156,255,0); } }
-            @media (prefers-reduced-motion:reduce) { .msg-row.msg-jump-target .msg-bubble { animation:none; } }
-            .msg-quote-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
-            .msg-quote-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; }
-            .composer-mention { color:#168bde; white-space:pre-wrap; user-select:all; }
-            .msg-mention-picker { position:fixed; z-index:1800; width:260px; max-height:min(300px,60vh); padding:5px; box-sizing:border-box; overflow:hidden; border:1px solid #e2e7ef; border-radius:10px; background:#fff; color:#263442; box-shadow:0 10px 36px #15263d24; }
-            .msg-mention-picker[hidden] { display:none; }
-            .msg-mention-heading { padding:4px 7px 6px; color:#8894a3; font-size:11px; }
-            .msg-mention-options { max-height:min(258px,calc(60vh - 42px)); overflow:auto; overscroll-behavior:contain; }
-            .msg-mention-item { display:flex; width:100%; align-items:center; gap:8px; min-height:44px; padding:5px 7px; border:0; border-radius:7px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
-            .msg-mention-item.active,.msg-mention-item:not(:disabled):hover { background:#eef6ff; }
-            .msg-mention-item:disabled { cursor:default; opacity:.5; }
-            .msg-mention-avatar { position:relative; display:grid; place-items:center; flex:none; width:28px; height:28px; overflow:hidden; border-radius:50%; background:#e9eef6; color:#6580a4; font-size:13px; }
-            .msg-mention-avatar img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-            .msg-mention-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; }
-            .msg-mention-avatar.everyone { background:#e1f3ff; color:#168bde; font-size:18px; }
-            .msg-mention-copy { display:flex; min-width:0; flex-direction:column; gap:2px; }
-            .msg-mention-copy strong { overflow:hidden; font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
-            .msg-mention-copy small,.msg-mention-empty { color:#8993a1; font-size:11px; }
-            .msg-mention-empty { padding:16px 9px; }
-            .msg-row.self .msg-bubble-quote { background:rgba(255,255,255,.22); border-left-color:#fff; }
-            .msg-media { margin-top:7px; }
-            .msg-media-text { white-space:pre-wrap; word-break:break-word; }
-            .msg-media-text-after { margin-top:7px; }
-            .msg-inline-media { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-width:0; max-width:100%; }
-            .msg-inline-media > .msg-media { margin-top:0; }
-            .msg-inline-media > .msg-media-text { margin-top:0; }
-            .msg-image-media { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
-            .msg-image-link { display:block; min-width:24px; min-height:24px; padding:0; border:0; background:transparent; text-align:left; line-height:0; cursor:zoom-in; }
-            .msg-image-link:focus-visible { outline:2px solid #12b7f5; outline-offset:3px; }
-            .msg-media img { max-width:240px; max-height:240px; border-radius:8px; display:block; cursor:zoom-in; transition:transform .12s ease; background:#f2f3f5; }
-            .msg-media img:hover { transform:scale(1.03); }
-            .msg-video-media video { display:block; width:min(320px,80vw); max-height:240px; border-radius:8px; background:#111; }
-             /* 图片失效时保留占位提示，不能把包含提示的按钮整体隐藏。 */
-             .msg-image-link.is-broken { display:inline-flex; align-items:center; min-width:0; min-height:0; padding:0; cursor:default; line-height:1.4; }
-             .msg-image-link.is-broken img { display:none; }
-             .msg-image-link.is-broken .msg-media-ph { margin:0; }
-            .msg-file-card { display:flex; align-items:center; gap:9px; min-width:190px; max-width:290px; padding:8px 10px; border-radius:8px; background:#f5f8fc; color:#3e4a5a; text-decoration:none; }
-            .msg-file-card:hover { background:#eaf2fc; }
-            .msg-file-card.is-unavailable { color:#8a8f99; }
-            .msg-file-icon { width:28px; height:28px; flex:0 0 28px; display:grid; place-items:center; border-radius:6px; background:#dcecff; color:#3a7bd5; font-size:15px; font-weight:700; }
-            .msg-file-info { min-width:0; flex:1; display:flex; flex-direction:column; gap:1px; }
-            .msg-file-info strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
-            .msg-file-info small { color:#8a8f99; font-size:10px; line-height:1.3; }
-            .msg-file-action { flex:0 0 auto; color:#3a7bd5; font-size:10px; }
-            .msg-media-ph { display:inline-block; padding:8px 14px; background:#f2f3f5; border-radius:8px; font-size:12px; color:#8a8f99; }
-            .msg-row.self .msg-file-card { background:rgba(255,255,255,.2); color:#fff; }
-            .msg-row.self .msg-file-card:hover { background:rgba(255,255,255,.3); }
-            .msg-row.self .msg-file-info small,.msg-row.self .msg-file-action { color:rgba(255,255,255,.78); }
-            .msg-lightbox { position:fixed; inset:0; z-index:2000; background:rgba(0,0,0,.86); display:flex; align-items:center; justify-content:center; padding:28px; }
-            .msg-lightbox[hidden] { display:none; }
-            .msg-lightbox-inner { position:relative; max-width:100%; max-height:100%; display:flex; flex-direction:column; align-items:center; gap:10px; }
-            .msg-lightbox img { max-width:92vw; max-height:84vh; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.55); object-fit:contain; }
-            .msg-lightbox-close { position:fixed; top:18px; right:22px; width:38px; height:38px; border-radius:50%; border:none; background:rgba(255,255,255,.14); color:#fff; font-size:20px; line-height:38px; text-align:center; cursor:pointer; transition:background .15s ease; }
-            .msg-lightbox-close:hover { background:rgba(255,255,255,.28); }
-            .msg-lightbox-hint { color:rgba(255,255,255,.62); font-size:11px; }
-            .msg-meta { margin-top:3px; color:#b0b0b0; font-size:9px; padding-left:2px; }
-            .msg-row.self .msg-meta { text-align:right; padding-left:0; padding-right:2px; }
-            .msg-send-error { width:18px; height:18px; margin-left:7px; padding:0; border:0; border-radius:50%; background:#e64340; color:#fff; font-size:12px; font-weight:800; line-height:18px; text-align:center; vertical-align:-5px; cursor:pointer; box-shadow:0 1px 3px rgba(230,67,64,.25); }
-            .msg-send-error:hover { background:#c92f2c; transform:scale(1.06); }
-            .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
-            .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
-            .msg-tag.bot { background:#e5edfb; color:#3b7bf7; }
-            .msg-tag.role { background:#f0f1f3; color:#858b96; }
-            .msg-tag.role.owner { background:#fef1dd; color:#f59e0b; }
-            .msg-tag.role.admin { background:#e9fbf3; color:#319e6b; }
-            .msg-tag.self { background:#e9fbf3; color:#319e6b; }
-            .msg-tag.recalled { background:#fff0f0; color:#e64340; }
-            .msg-tag.muted { background:#fff0f0; color:#d64545; }
-            .msg-row.muted .msg-avatar { background:#d9dde2; color:#89919b; filter:grayscale(.7); }
-            .msg-row.muted .msg-avatar img { filter:grayscale(1); opacity:.55; }
-            .msg-mute-countdown { display:inline-block; margin-left:7px; color:#d64545; font-size:9px; font-weight:700; }
-            .msg-actions { display:flex; gap:5px; margin-top:5px; }
-            .msg-row.self .msg-actions { justify-content:flex-end; }
-            .msg-action { padding:0 7px; min-height:22px; border:0; border-radius:5px; background:#e4e7ec; color:#888; font-size:10px; cursor:pointer; }
-            .msg-action:hover { background:#d2e9fb; color:#12b7f5; }
-            .msg-load-older { display:block; margin:0 auto 12px; padding:5px 12px; border:1px solid #dcdfe6; border-radius:6px; background:#fff; color:#999; font-size:11px; cursor:pointer; }
-             .msg-composer { position:relative; display:flex; flex-direction:column; gap:8px; min-height:132px; max-height:52vh; padding:10px 14px 12px; overflow:auto; resize:vertical; background:#fff; border-top:1px solid #e8e9ec; transition:height .22s ease,min-height .22s ease,padding .22s ease; }
-            .msg-composer-tabs { display:flex; gap:5px; flex-wrap:wrap; }
-            .msg-composer-mode[hidden], .msg-composer-tabs[hidden], .msg-composer-toggle[hidden], .msg-composer > .msg-extra[hidden] { display:none !important; }
-            .msg-composer-tabs button { min-height:26px; padding:0 10px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#999; font-size:11px; font-weight:600; cursor:pointer; }
-            .msg-composer-tabs button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
-            .msg-composer-mode { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
-            .msg-composer-mode select { height:28px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fff; color:#333; font-size:11px; }
-            .msg-composer-mode input { height:28px; min-width:120px; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
-            .msg-textarea { min-height:64px; max-height:150px; padding:9px 11px; border:0; border-radius:6px; background:#f2f3f5; color:#333; font-size:12px; line-height:1.55; resize:vertical; outline:none; transition:all .15s ease; }
-            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
-            .msg-extra { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
-            .msg-extra input { height:28px; min-width:0; padding:0 8px; border:1px solid #e0e1e5; border-radius:6px; background:#fbfbff; color:#333; font-size:11px; outline:none; }
-            .msg-send-row { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
-            .msg-send-row .msg-btn.primary { min-height:32px; padding:0 24px; }
-         .msg-input-box { position:relative; display:flex; flex:1 1 auto; flex-direction:column; min-height:96px; height:auto; max-height:none; overflow:auto; resize:vertical; border:1px solid #d8d9dd; border-radius:4px; background:#fff; transition:border-color .15s; }
-        .msg-input-box:focus-within { border-color:#12b7f5; }
-        .msg-input-box.drag-over { border-color:#12b7f5; background:#f0f9ff; box-shadow:0 0 0 2px rgba(18,183,245,.14); }
-        .msg-input-box.has-inline-image .msg-editor { min-height:42px; }
-        .msg-editor { width:100%; flex:1 1 auto; min-height:88px; height:auto; max-height:none; overflow:auto; padding:12px 14px 6px; border:0; outline:none; color:#333; background:transparent; box-sizing:border-box; font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
-        .msg-editor:empty::before { content:attr(data-placeholder); color:#a0a4ad; pointer-events:none; }
-        .msg-editor:focus { background:#fff; }
-        .composer-inline-image { position:relative; display:inline-flex; align-items:center; vertical-align:middle; margin:2px 3px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#f5f6f8; line-height:0; }
-        .composer-inline-image img { display:block; width:auto; max-width:180px; max-height:120px; border-radius:5px; object-fit:contain; }
-        .composer-inline-image button { position:absolute; top:-7px; right:-7px; width:18px; height:18px; padding:0; border:0; border-radius:50%; background:rgba(0,0,0,.58); color:#fff; cursor:pointer; font-size:12px; line-height:18px; }
-        .composer-inline-image button:hover { background:rgba(230,67,64,.92); }
-        .msg-img-remove { position:absolute; top:3px; right:3px; width:18px; height:18px; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:12px; line-height:1; cursor:pointer; display:grid; place-items:center; }
-        .msg-img-remove:hover { background:rgba(230,67,64,.9); }
-        .msg-attachment-inline { position:relative; display:flex; align-items:center; gap:8px; min-height:40px; margin:9px 12px 0; padding:7px 34px 7px 9px; border:1px solid #e3e4e8; border-radius:6px; background:#f5f6f8; color:#555; }
-        .msg-attachment-inline[hidden] { display:none; }
-        .msg-attachment-icon { width:25px; height:25px; display:grid; place-items:center; border-radius:5px; background:#dcecff; color:#3a7bd5; font-size:13px; font-weight:700; }
-        .msg-attachment-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-        .msg-quote-preview { display:flex; align-items:flex-start; gap:10px; width:fit-content; max-width:min(100%,420px); margin:7px 9px 0; padding:7px 9px; border:0; border-left:2px solid #b6bdc8; border-radius:5px; background:#f1f2f5; color:#7d8490; font-size:12px; }
-        .msg-quote-preview[hidden] { display:none; }
-        .msg-quote-preview b { color:#333; }
-        .msg-quote-text { display:grid; gap:3px; flex:1; min-width:0; overflow:hidden; }
-        .msg-quote-preview .msg-action { flex:none; padding:0 3px; background:transparent; font-size:16px; line-height:20px; }
-        .msg-quote-preview .msg-quote-content { -webkit-line-clamp:1; }
-        .msg-composer-topbar { display:flex; align-items:center; gap:5px; min-height:30px; }
-        .msg-composer-top-hint { margin-left:3px; color:#a0a4ad; font-size:10px; }
-        .msg-toolbar { display:flex; align-items:center; gap:10px; min-height:30px; }
-        .msg-tool-btn { display:grid; place-items:center; width:28px; height:28px; border-radius:4px; color:#6b6f78; cursor:pointer; }
-        .msg-tool-btn:hover { background:#f0f7ff; color:#12b7f5; }
-        .msg-tool-btn svg { display:block; }
-            .msg-raw-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
-            .msg-raw-modal[hidden] { display:none; }
-            .msg-raw-box { width:min(720px,100%); height:min(640px,78vh); min-height:320px; display:flex; flex-direction:column; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 18px 50px rgba(40,36,90,.25); }
-            .msg-raw-head { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; border-bottom:1px solid #e8e9ec; }
-            .msg-raw-head strong { font-size:13px; color:#222; }
-            .msg-raw-head button { border:0; background:transparent; color:#999; font-size:16px; cursor:pointer; }
-            .msg-raw-actions { display:flex; align-items:center; gap:14px; }
-            .msg-raw-head .msg-raw-copy { padding:4px 8px; font-size:12px; color:var(--primary); }
-            .msg-raw-copy:disabled { cursor:wait; opacity:.65; }
-            .msg-raw-content { flex:1 1 0; min-height:0; overflow:auto; padding:13px 15px; white-space:pre-wrap; word-break:break-all; color:#333; font:12px/1.6 Consolas,Monaco,monospace; }
-            .msg-mute-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
-            .msg-mute-modal[hidden] { display:none; }
-            .msg-mute-box { width:min(400px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
-            .msg-mute-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
-            .msg-mute-presets { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
-            .msg-mute-presets button { min-height:30px; padding:0 12px; border:1px solid #e0e1e5; border-radius:8px; background:#fff; color:#666; font-size:11px; cursor:pointer; }
-            .msg-mute-presets button.active { border-color:#12b7f5; color:#12b7f5; background:#e8f6fe; }
-            .msg-mute-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
-            .msg-remark-modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(30,28,50,.45); padding:20px; }
-            .msg-remark-modal[hidden] { display:none; }
-            .msg-remark-box { width:min(380px,100%); background:#fff; border-radius:12px; padding:16px; box-shadow:0 18px 50px rgba(40,36,90,.25); }
-            .msg-remark-box h3 { margin:0 0 12px; font-size:14px; color:#222; }
-            /* ===== QQ PC 风格覆盖 ===== */
-            .msg-shell { grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
-            .chat-list-panel { background:#f7f8fa; }
-            .msg-list-head { padding:10px 12px; background:#f7f8fa; border-bottom:1px solid #e5e8ec; }
-            .msg-filter button.active { color:#12b7f5; }
-            .msg-chats { padding:4px 6px; }
-            .msg-chat { height:52px; min-height:52px; max-height:52px; padding:6px 8px; border-radius:6px; }
-            .msg-chat:hover { background:#eceef1; }
-            .msg-chat.removed { background:#fff8f8; }
-            .msg-chat.removed:hover { background:#fff0f0; }
-            .msg-chat.removed .msg-chat-sub { color:#d15f63; font-weight:600; }
-            .msg-chat.removed .msg-chat-avatar { filter:grayscale(.55); opacity:.72; }
-            .msg-chat.active { background:#d5ebfb; }
-            .msg-chat-avatar { width:38px; height:38px; }
-            .msg-chat-top strong { font-size:12.5px; }
-            .msg-chat-sub { font-size:11px; margin-top:1px; }
-            .msg-work { background:#f5f6f7; }
-            .msg-head { padding:8px 14px; background:#fff; }
-            .msg-body { padding:14px 20px 8px; background:#f5f6f7; }
-            .msg-day { margin:8px 0; color:#b6bcc4; font-size:10px; }
-            .msg-row { gap:10px; margin-bottom:12px; align-items:flex-start; }
-            .msg-avatar { width:38px; height:38px; }
-            .msg-bubble-wrap { max-width:min(62%,560px); }
-            .msg-bubble { padding:9px 12px; border-radius:4px 12px 12px 12px; background:#fff; font-size:13px; box-shadow:0 1px 2px rgba(0,0,0,.05); }
-            .msg-row.self .msg-bubble { border-radius:12px 4px 12px 12px; background:#95ec69; color:#000; }
-            .msg-row.self .msg-bubble .msg-bubble-quote { color:rgba(0,0,0,.55); }
-            .msg-meta { color:#b6bcc4; font-size:9px; }
-            .msg-bubble-name { font-size:10px; }
-            .msg-composer { padding:8px 14px 10px; background:#fff; border-top:1px solid #e5e8ec; }
-            .msg-textarea { background:#f7f8fa; border-radius:4px; }
-            .msg-textarea:focus { background:#fff; box-shadow:inset 0 0 0 1px #12b7f5; }
-            .msg-send-row .msg-btn.primary { background:#12b7f5; border-color:#12b7f5; }
-
-            /* 右键菜单 */
-            .msg-ctx { position:fixed; z-index:120; min-width:150px; padding:4px; background:#fff; border:1px solid #e1e5ea; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.14); user-select:none; }
-            .msg-ctx[hidden] { display:none; }
-            .msg-ctx-item { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:0; border-radius:5px; background:transparent; color:#333; font-size:12px; text-align:left; cursor:pointer; }
-            .msg-ctx-item:hover { background:#f0f7ff; color:#12b7f5; }
-            .msg-ctx-item.danger:hover { background:#fff1f0; color:#e64340; }
-            .msg-ctx-sep { height:1px; margin:4px 8px; background:#eee; }
-
-            /* 多选模式 */
-            .msg-multi-bar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#e8f6fe; border-bottom:1px solid #cfe8fb; font-size:12px; color:#12b7f5; }
-            .msg-multi-bar[hidden] { display:none; }
-            .msg-row.multi-mode { cursor:pointer; }
-            .msg-row.multi-mode .msg-avatar, .msg-row.multi-mode .msg-bubble { opacity:.85; }
-            .msg-row.multi-mode.selected .msg-bubble { outline:2px solid #12b7f5; outline-offset:2px; }
-            .msg-pos { position:relative; display:inline-flex; flex:0 0 auto; }
-            .msg-multi-check { display:none; }
-            .msg-row.multi-mode .msg-multi-check { display:grid; position:absolute; left:-16px; top:50%; transform:translateY(-50%); width:18px; height:18px; border-radius:50%; border:2px solid #c3ccd4; background:#fff; display:grid; place-items:center; font-size:11px; color:#fff; }
-            .msg-row.multi-mode.selected .msg-multi-check { border-color:#12b7f5; background:#12b7f5; }
-            .msg-row.self.multi-mode .msg-multi-check { left:auto; right:-16px; }
-            .msg-row.multi-mode.no-multi { opacity:.55; }
-            .msg-row.multi-mode.no-multi .msg-multi-check { display:none; }
-             .msg-row.multi-mode .msg-multi-check::after { content:'✓'; }
-             .msg-pos { position:relative; }
-             .msg-body-wrap { position:relative; display:flex; flex:1 1 0; min-height:0; overflow:hidden; }
-             .msg-new-messages { position:absolute; right:18px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:0 12px; border:1px solid #b8dff2; border-radius:17px; background:#fff; color:#0b9bd0; box-shadow:0 5px 16px rgba(30,110,160,.18); font-size:11px; font-weight:700; cursor:pointer; transition:opacity .16s ease, transform .16s ease, box-shadow .16s ease; }
-             .msg-new-messages:hover { transform:translateY(-1px); box-shadow:0 7px 18px rgba(30,110,160,.24); }
-             .msg-new-messages[hidden] { display:none; }
-             .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:#12b7f5; box-shadow:0 0 0 4px #e8f6fe; }
-             .msg-new-messages-arrow { font-size:15px; line-height:1; }
-             /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
-             /* 缩放拖柄移到滚动条外侧，避免与会话列表滚轮滑块叠在同一条轨道。 */
-             .msg-list-resizer { position:absolute; z-index:6; top:0; right:-10px; bottom:0; width:12px; padding:0; border:0; background:transparent; cursor:col-resize; }
-             .msg-list-resizer,.msg-composer-resizer { touch-action:none; }
-             .msg-list-resizer::before { content:""; position:absolute; top:50%; left:5px; width:2px; height:42px; border-radius:2px; background:#d5dbe2; transform:translateY(-50%); opacity:0; transition:opacity .16s ease,background .16s ease; }
-             .chat-list-panel:hover .msg-list-resizer::before,.msg-list-resizer:focus-visible::before { opacity:1; }
-             .msg-list-resizer:hover::before,.msg-list-resizer:focus-visible::before { background:#12b7f5; }
-             .msg-panel-toggle { display:grid; place-items:center; flex:0 0 auto; width:27px; height:27px; padding:0; border:1px solid #dfe3e8; border-radius:6px; background:#fff; color:#7a818a; font-size:17px; line-height:1; cursor:pointer; transition:background .16s ease,border-color .16s ease,color .16s ease; }
-             .msg-panel-toggle:hover,.msg-panel-toggle:focus-visible { border-color:#12b7f5; background:#f0f7ff; color:#0b9bd0; }
-             .msg-list-collapse { position:absolute; z-index:5; top:10px; right:8px; margin:0; }
-             .msg-composer-resizer { position:absolute; z-index:2; top:-6px; right:14px; left:14px; width:calc(100% - 28px); height:12px; padding:0; border:0; background:transparent; cursor:row-resize; }
-             .msg-composer-resizer::before { content:""; position:absolute; top:5px; left:50%; width:42px; height:3px; border-radius:3px; background:#d5dbe2; transform:translateX(-50%); opacity:.7; transition:background .16s ease,opacity .16s ease; }
-             .msg-composer-resizer:hover::before,.msg-composer-resizer:focus-visible::before { background:#12b7f5; opacity:1; }
-             .msg-composer-toggle { margin-right:2px; color:#7a818a; }
-             .msg-composer { flex:0 0 auto; box-sizing:border-box; resize:none; }
-             body.msg-resizing { user-select:none; cursor:col-resize; }
-             body.msg-resizing .msg-shell, body.msg-resizing .msg-composer { transition:none !important; }
-             body.msg-resizing .msg-composer { cursor:row-resize; }
-             .msg-toolbar { min-height:30px; }
-             .msg-shell.msg-list-collapsed { --msg-list-width:38px; grid-template-columns:38px minmax(0,1fr); }
-             .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { visibility:hidden; pointer-events:none; }
-             .msg-shell.msg-list-collapsed .msg-list-collapse { visibility:visible; pointer-events:auto; position:absolute; top:10px; right:5px; margin:0; transform:none; }
-             .msg-shell.msg-composer-collapsed .msg-composer { min-height:38px; height:38px; max-height:38px; overflow:hidden; padding:5px 14px; }
-             .msg-shell.msg-composer-collapsed .msg-composer > :not(.msg-composer-resizer):not(.msg-composer-topbar) { visibility:hidden; pointer-events:none; }
-             .msg-shell.msg-composer-collapsed .msg-composer-topbar { visibility:visible; pointer-events:auto; }
-             .msg-shell.msg-composer-collapsed .msg-composer-topbar > :not(.msg-composer-toggle) { visibility:hidden; pointer-events:none; }
-             .msg-shell.msg-composer-collapsed .msg-composer .msg-composer-toggle { visibility:visible !important; pointer-events:auto !important; transform:none; }
-             .msg-mobile-back { display:none; place-items:center; flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:7px; background:transparent; color:#5f6873; font-size:27px; line-height:1; cursor:pointer; }
-             .msg-mobile-back:hover,.msg-mobile-back:focus-visible { background:#f0f7ff; color:#12b7f5; outline:none; }
-             /* 消息页/专用控制页已有自己的标题，隐藏上方重复的全局标题。 */
-             .content:has(#page-messages:not([hidden])) > .page-heading,
-             .content:has(#page-pans:not([hidden])) > .page-heading,
-             .content:has(#page-novels:not([hidden])) > .page-heading { display:none; }
-             /* 消息工作区优先使用可用宽度，减少桌面端两侧空白。 */
-             .content:has(#page-messages:not([hidden])) { width:calc(100% - 20px); max-width:none; padding-top:0; }
-             @media (max-width:900px) {
-               .msg-shell { height:auto; min-height:620px; grid-template-columns:1fr; }
-               .msg-panel.chat-list-panel { min-height:280px; max-height:38vh; }
-               .msg-list-resizer { display:none; }
-               .msg-shell.msg-list-collapsed { grid-template-columns:1fr; }
-               .msg-shell.msg-list-collapsed .chat-list-panel { min-height:38px; max-height:38px; }
-               .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:none; }
-               .msg-shell.msg-list-collapsed .msg-list-collapse { top:5px; right:8px; }
-               .msg-bubble-wrap { max-width:88%; }
-               .msg-extra { grid-template-columns:1fr; }
-             }
-             @media (max-width:600px) {
-               .msg-shell { min-height:calc(100vh - 112px); }
-               .msg-composer { max-height:58vh; }
-               .msg-input-box { max-height:45vh; }
-               .msg-head-actions { gap:5px; }
-             }
-             @media (max-width:760px) {
-               .content:has(#page-messages:not([hidden])) { width:100%; padding:0 0 20px; }
-               .msg-shell { display:block; height:calc(100dvh - 135px); min-height:420px; margin:0; border-right:0; border-left:0; border-radius:0; }
-               body.msg-mobile-chat-view .msg-shell { height:100dvh; min-height:0; }
-               .msg-shell .chat-list-panel { display:flex; height:100%; min-height:0; max-height:none; border-right:0; }
-               .msg-shell .msg-work { display:none; height:100%; min-height:0; }
-               .msg-shell.msg-mobile-chat-open .chat-list-panel { display:none; }
-               .msg-shell.msg-mobile-chat-open .msg-work { display:flex; }
-               .msg-shell.msg-list-collapsed { grid-template-columns:1fr; }
-               .msg-shell.msg-list-collapsed .chat-list-panel { min-height:38px; max-height:38px; }
-               .msg-shell.msg-list-collapsed .chat-list-panel > :not(.msg-list-collapse) { display:none; visibility:hidden; pointer-events:none; }
-               .msg-list-resizer { display:none; }
-               .msg-list-head { padding:9px 44px 8px 12px; }
-               .msg-filter { padding:1px; }
-               .msg-filter button { min-height:24px; font-size:10px; }
-               .msg-search { gap:5px; }
-               .msg-search input,.msg-search button { height:28px; font-size:11px; }
-               .msg-chats { --msg-chat-row-height:60px; }
-               .msg-chat { height:60px; min-height:60px; max-height:60px; padding:8px 10px; border-radius:0; }
-               .msg-chat-divider { margin-left:4px; margin-right:4px; }
-               .msg-mobile-back { display:grid; }
-               .msg-shell:not(.msg-mobile-chat-open) .msg-mobile-back { display:none; }
-               .msg-head { min-height:54px; padding:8px 10px; gap:6px; }
-               .msg-head-name { font-size:14px; }
-               .msg-head-sub { font-size:10px; }
-               .msg-head-actions { gap:4px; }
-               .msg-head-actions .msg-btn { min-height:27px; padding:0 7px; font-size:10px; }
-               .msg-pan-account-control { min-height:27px; padding:0 6px; }
-               .msg-pan-account-control select { max-width:105px; font-size:10px; }
-               .msg-body { padding:14px 10px 8px; }
-               .msg-bubble-wrap { max-width:82%; }
-               .msg-composer { max-height:52vh; padding:7px 10px 8px; }
-               .msg-composer-top-hint { display:none; }
-               .msg-input-box { max-height:none; }
-               .msg-editor { min-height:42px; }
-             }
-
-              /* ===== 深色模式：统一炭灰层次与柔和强调色 ===== */
-              :root[data-theme="dark"] .msg-shell { background:var(--panel); border-color:var(--line); box-shadow:0 1px 4px rgba(0,0,0,.2); }
-              :root[data-theme="dark"] .msg-panel,:root[data-theme="dark"] .msg-list-head,:root[data-theme="dark"] .msg-head { background:var(--panel); border-color:var(--line); }
-              :root[data-theme="dark"] .chat-list-panel { border-right-color:var(--line); background:#181e27; }
-              :root[data-theme="dark"] .msg-filter { background:var(--input); }
-              :root[data-theme="dark"] .msg-filter button { color:var(--muted); }
-              :root[data-theme="dark"] .msg-filter button.active { background:var(--primary-soft); color:var(--primary); box-shadow:none; }
-              :root[data-theme="dark"] .msg-search input { border-color:var(--line); background:var(--input); color:var(--ink); }
-              :root[data-theme="dark"] .msg-search input:focus { border-color:var(--primary); background:var(--input); }
-              :root[data-theme="dark"] .msg-search button { border-color:var(--line); background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-search button:hover { border-color:var(--primary); color:var(--primary); }
-              :root[data-theme="dark"] .msg-chat:hover,:root[data-theme="dark"] .msg-chat-folder:hover { background:var(--raised); }
-              :root[data-theme="dark"] .msg-chat.removed { background:#292127; }
-              :root[data-theme="dark"] .msg-chat.removed:hover { background:var(--danger-bg); }
-              :root[data-theme="dark"] .msg-chat.removed .msg-chat-sub { color:var(--danger); }
-              :root[data-theme="dark"] .msg-chat.active { background:var(--primary-soft); }
-              :root[data-theme="dark"] .msg-chat.pinned { background:#202a39; }
-              :root[data-theme="dark"] .msg-chat.pinned:hover { background:var(--hover); }
-              :root[data-theme="dark"] .msg-chat.pinned.active { background:var(--primary-soft); }
-              :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong { color:var(--primary); }
-              :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top small { color:var(--muted); }
-              :root[data-theme="dark"] .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-head-name.admin { color:var(--danger) !important; }
-              :root[data-theme="dark"] .msg-chat-top strong,:root[data-theme="dark"] .msg-head-name { color:var(--ink); }
-              :root[data-theme="dark"] .msg-chat-top small,:root[data-theme="dark"] .msg-chat-sub,:root[data-theme="dark"] .msg-bubble-name,:root[data-theme="dark"] .msg-head-sub { color:var(--muted); }
-              :root[data-theme="dark"] .msg-chat-avatar,:root[data-theme="dark"] .msg-avatar { background:#2c3b50; color:#b0c6e4; }
-              :root[data-theme="dark"] .msg-chat-avatar .avatar-letter,:root[data-theme="dark"] .msg-avatar .avatar-letter { color:#b0c6e4; }
-              :root[data-theme="dark"] .msg-chat-folder { color:var(--muted); }
-              :root[data-theme="dark"] .msg-chat-folder small,:root[data-theme="dark"] .msg-chat-divider { color:var(--soft); border-color:var(--line); }
-              :root[data-theme="dark"] .msg-empty,:root[data-theme="dark"] .msg-day,:root[data-theme="dark"] .msg-meta { color:var(--soft); }
-              :root[data-theme="dark"] .msg-work,:root[data-theme="dark"] .msg-body { background:var(--bg); }
-              :root[data-theme="dark"] .msg-btn,:root[data-theme="dark"] .msg-pan-account-control { border-color:var(--line); background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-btn:hover { border-color:var(--primary); color:var(--primary); }
-              :root[data-theme="dark"] .msg-btn.primary,:root[data-theme="dark"] .msg-send-row .msg-btn.primary { border-color:var(--accent-fill); background:var(--accent-fill); color:#fff; }
-              :root[data-theme="dark"] .msg-btn.primary:hover,:root[data-theme="dark"] .msg-send-row .msg-btn.primary:hover { border-color:var(--accent-hover); background:var(--accent-hover); }
-              :root[data-theme="dark"] .msg-pan-account-control select { color:var(--ink); }
-              :root[data-theme="dark"] .msg-pan-account-control select option { background:var(--panel); color:var(--ink); }
-              :root[data-theme="dark"] .msg-new-messages { border-color:#596783; background:var(--raised); color:var(--primary); box-shadow:var(--shadow); }
-              :root[data-theme="dark"] .msg-new-messages-dot { background:var(--primary); box-shadow:0 0 0 4px var(--primary-soft); }
-              :root[data-theme="dark"] .msg-system-time,:root[data-theme="dark"] .msg-system-notice { background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-system-name { color:var(--primary); }
-              :root[data-theme="dark"] .msg-bubble { background:var(--raised); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.2); }
-              :root[data-theme="dark"] .msg-row.self .msg-bubble { background:#304c40; color:#e1efe7; }
-              :root[data-theme="dark"] .msg-inline-link,:root[data-theme="dark"] .composer-mention { color:#b5c6f5; }
-              :root[data-theme="dark"] .msg-mention-picker { border-color:var(--line); background:var(--panel); color:var(--ink); box-shadow:0 12px 36px #0006; }
-              :root[data-theme="dark"] .msg-mention-item.active,:root[data-theme="dark"] .msg-mention-item:not(:disabled):hover { background:var(--raised); }
-              :root[data-theme="dark"] .msg-mention-avatar { background:var(--raised); color:var(--primary); }
-              :root[data-theme="dark"] .msg-mention-avatar.everyone { background:var(--primary-soft); color:var(--primary); }
-              :root[data-theme="dark"] .msg-mention-heading,:root[data-theme="dark"] .msg-mention-copy small,:root[data-theme="dark"] .msg-mention-empty { color:var(--muted); }
-              :root[data-theme="dark"] .msg-inline-code { background:rgba(255,255,255,.08); }
-              :root[data-theme="dark"] .msg-bubble.recalled { color:var(--danger); background:var(--danger-bg); border-color:var(--danger-line); }
-              :root[data-theme="dark"] .msg-bubble-quote { border-left-color:#7b8cae; background:#1a222e; color:#b8c5d8; }
-              :root[data-theme="dark"] .msg-quote-jump:hover { background:#293647; }
-              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-bubble-quote { background:#263e33; border-left-color:#8bb69e; color:#c3d8ca; }
-              :root[data-theme="dark"] .msg-row.self .msg-bubble .msg-quote-jump:hover { background:#2a4438; }
-              :root[data-theme="dark"] .msg-quote-jump:focus-visible,:root[data-theme="dark"] .msg-image-link:focus-visible,:root[data-theme="dark"] .msg-row.msg-jump-target .msg-bubble { outline-color:var(--primary); }
-              :root[data-theme="dark"] .msg-media-ph,:root[data-theme="dark"] .msg-image-link.is-broken .msg-media-ph { background:var(--input); color:var(--muted); }
-              :root[data-theme="dark"] .msg-media img { background:var(--input); }
-              :root[data-theme="dark"] .msg-loading span { background:var(--raised); }
-              :root[data-theme="dark"] .msg-file-card,:root[data-theme="dark"] .msg-row.self .msg-file-card { background:#253343; color:var(--ink); }
-              :root[data-theme="dark"] .msg-file-card:hover,:root[data-theme="dark"] .msg-row.self .msg-file-card:hover { background:#2d4054; }
-              :root[data-theme="dark"] .msg-file-card.is-unavailable { color:var(--muted); }
-              :root[data-theme="dark"] .msg-file-icon,:root[data-theme="dark"] .msg-attachment-icon { background:#344960; color:#c0d3ed; }
-              :root[data-theme="dark"] .msg-file-info small,:root[data-theme="dark"] .msg-row.self .msg-file-info small { color:#b3c1d2; }
-              :root[data-theme="dark"] .msg-file-action,:root[data-theme="dark"] .msg-row.self .msg-file-action { color:#b5c6f5; }
-              :root[data-theme="dark"] .msg-send-error { background:#a74751; color:#fff; box-shadow:none; }
-              :root[data-theme="dark"] .msg-send-error:hover { background:#913e48; }
-              :root[data-theme="dark"] .msg-tag.bot { background:#233857; color:#83b3ff; }
-              :root[data-theme="dark"] .msg-tag.role { background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-tag.role.owner { background:#483721; color:#f4ba60; }
-              :root[data-theme="dark"] .msg-tag.role.admin { background:var(--mint); color:var(--mint-ink); }
-              :root[data-theme="dark"] .msg-tag.self { background:var(--mint); color:var(--mint-ink); }
-              :root[data-theme="dark"] .msg-tag.recalled,:root[data-theme="dark"] .msg-tag.muted { background:var(--danger-bg); color:var(--danger); }
-              :root[data-theme="dark"] .msg-row.muted .msg-avatar { background:var(--hover); color:var(--muted); }
-              :root[data-theme="dark"] .msg-mute-countdown { color:var(--danger); }
-              :root[data-theme="dark"] .msg-action { background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-action:hover,:root[data-theme="dark"] .msg-tool-btn:hover { background:var(--primary-soft); color:var(--primary); }
-              :root[data-theme="dark"] .msg-load-older { border-color:var(--line); background:var(--panel); color:var(--muted); }
-              :root[data-theme="dark"] .msg-composer { background:var(--panel); border-top-color:var(--line); }
-              :root[data-theme="dark"] .msg-composer-tabs button,:root[data-theme="dark"] .msg-composer-mode select { border-color:var(--line); background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-composer-tabs button.active,:root[data-theme="dark"] .msg-mute-presets button.active { border-color:#7b8cc1; color:var(--primary); background:var(--primary-soft); }
-              :root[data-theme="dark"] .msg-composer-mode input,:root[data-theme="dark"] .msg-extra input { border-color:var(--line); background:var(--input); color:var(--ink); }
-              :root[data-theme="dark"] .msg-textarea,:root[data-theme="dark"] .msg-editor { background:var(--input); color:var(--ink); }
-              :root[data-theme="dark"] .msg-textarea:focus { background:var(--input); box-shadow:inset 0 0 0 1px var(--primary); }
-              :root[data-theme="dark"] .msg-editor:focus { background:var(--input); }
-              :root[data-theme="dark"] .msg-input-box { border-color:var(--line); background:var(--input); }
-              :root[data-theme="dark"] .msg-input-box:focus-within { border-color:var(--primary); }
-              :root[data-theme="dark"] .msg-input-box.drag-over { border-color:var(--primary); background:var(--primary-soft); box-shadow:0 0 0 2px rgba(170,184,245,.16); }
-              :root[data-theme="dark"] .msg-attachment-inline,:root[data-theme="dark"] .composer-inline-image { border-color:var(--line); background:var(--raised); color:var(--ink); }
-              :root[data-theme="dark"] .msg-composer-top-hint,:root[data-theme="dark"] .msg-editor:empty::before { color:var(--soft); }
-              :root[data-theme="dark"] .msg-quote-preview { border-color:#7b8cae; background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-quote-preview b { color:var(--ink); }
-              :root[data-theme="dark"] .msg-tool-btn { color:var(--muted); }
-              :root[data-theme="dark"] .msg-raw-modal,:root[data-theme="dark"] .msg-mute-modal,:root[data-theme="dark"] .msg-remark-modal { background:rgba(5,10,17,.65); }
-              :root[data-theme="dark"] .msg-raw-box,:root[data-theme="dark"] .msg-mute-box,:root[data-theme="dark"] .msg-remark-box { background:var(--panel); box-shadow:0 18px 50px rgba(0,0,0,.4); }
-              :root[data-theme="dark"] .msg-raw-head { border-bottom-color:var(--line); }
-              :root[data-theme="dark"] .msg-raw-head strong,:root[data-theme="dark"] .msg-mute-box h3,:root[data-theme="dark"] .msg-remark-box h3,:root[data-theme="dark"] .msg-raw-content { color:var(--ink); }
-              :root[data-theme="dark"] .msg-raw-head button { color:var(--muted); }
-              :root[data-theme="dark"] .msg-raw-head .msg-raw-copy { color:var(--primary); }
-              :root[data-theme="dark"] .msg-remark-box label { color:var(--muted) !important; }
-              :root[data-theme="dark"] .msg-mute-box input,:root[data-theme="dark"] .msg-remark-box input { background:var(--input); border-color:var(--line) !important; color:var(--ink); }
-              :root[data-theme="dark"] .msg-mute-box input:focus,:root[data-theme="dark"] .msg-remark-box input:focus { outline:2px solid var(--primary); outline-offset:1px; }
-              :root[data-theme="dark"] #msg-remark-delete { color:var(--danger) !important; border-color:var(--danger-line) !important; }
-              :root[data-theme="dark"] .msg-mute-presets button { border-color:var(--line); background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-ctx { background:var(--raised); border-color:var(--line); box-shadow:0 6px 20px rgba(0,0,0,.35); }
-              :root[data-theme="dark"] .msg-ctx-item { color:var(--ink); }
-              :root[data-theme="dark"] .msg-ctx-item:hover { background:var(--primary-soft); color:var(--primary); }
-              :root[data-theme="dark"] .msg-ctx-item.danger { color:var(--danger); }
-              :root[data-theme="dark"] .msg-ctx-item.danger:hover { background:var(--danger-bg); color:var(--danger); }
-              :root[data-theme="dark"] .msg-ctx-sep { background:var(--line); }
-              :root[data-theme="dark"] .msg-multi-bar { background:var(--primary-soft); border-bottom-color:#596783; color:var(--primary); }
-              :root[data-theme="dark"] .msg-row.multi-mode.selected .msg-bubble { outline-color:var(--primary); }
-              :root[data-theme="dark"] .msg-multi-check { border-color:#697b93; background:var(--raised); color:transparent; }
-              :root[data-theme="dark"] .msg-row.multi-mode.selected .msg-multi-check { border-color:var(--accent-fill); background:var(--accent-fill); color:#fff; }
-              :root[data-theme="dark"] .msg-list-resizer::before,:root[data-theme="dark"] .msg-composer-resizer::before { background:#697b93; }
-              :root[data-theme="dark"] .msg-list-resizer:hover::before,:root[data-theme="dark"] .msg-list-resizer:focus-visible::before,:root[data-theme="dark"] .msg-composer-resizer:hover::before,:root[data-theme="dark"] .msg-composer-resizer:focus-visible::before { background:var(--primary); }
-              :root[data-theme="dark"] .msg-panel-toggle { border-color:var(--line); background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-panel-toggle:hover,:root[data-theme="dark"] .msg-panel-toggle:focus-visible,:root[data-theme="dark"] .msg-mobile-back:hover,:root[data-theme="dark"] .msg-mobile-back:focus-visible { border-color:var(--primary); background:var(--primary-soft); color:var(--primary); }
-              :root[data-theme="dark"] .msg-mobile-back { color:var(--muted); }
-              .msg-group-settings { position:absolute; inset:0; z-index:35; display:flex; justify-content:flex-end; overflow:hidden; border-radius:inherit; }
-              .msg-group-settings[hidden] { display:none; }
-              .msg-group-mask { position:absolute; inset:0; border:0; background:rgba(21,37,56,.18); cursor:default; }
-              .msg-group-drawer { position:relative; display:flex; flex-direction:column; width:min(420px,100%); min-width:0; background:#fff; color:#283647; box-shadow:-10px 0 28px rgba(23,39,66,.1); animation:msg-group-slide .18s ease-out; }
-              @keyframes msg-group-slide { from { transform:translateX(24px); opacity:.6; } to { transform:translateX(0); opacity:1; } }
-              .msg-group-drawer-head { display:flex; align-items:center; gap:10px; padding:17px 18px 13px; border-bottom:1px solid #edf0f4; }
-              .msg-group-drawer-head > div { flex:1; min-width:0; }
-              .msg-group-drawer-head strong { display:block; font-size:15px; }
-              .msg-group-drawer-head small { display:block; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#8994a3; font-size:11px; }
-              .msg-group-close { width:28px; height:28px; border:0; border-radius:6px; background:#f4f6f9; color:#788594; font-size:20px; cursor:pointer; }
-              .msg-group-tabs { display:flex; gap:4px; padding:9px 14px 0; border-bottom:1px solid #edf0f4; }
-              .msg-group-tabs button { flex:1; padding:10px 4px; border:0; border-bottom:2px solid transparent; background:none; color:#8994a3; font-size:12px; cursor:pointer; }
-              .msg-group-tabs button.active { border-bottom-color:#12b7f5; color:#049cd8; font-weight:650; }
-              .msg-group-body { flex:1 1 0; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; }
-              .msg-group-pane[hidden],.msg-group-member-detail[hidden] { display:none; }
-              .msg-group-summary { display:flex; align-items:center; gap:12px; padding:3px 0 16px; }
-              .msg-group-summary .msg-chat-avatar { width:48px; height:48px; }
-              .msg-group-summary strong { display:block; font-size:14px; overflow-wrap:anywhere; }
-              .msg-group-summary small { display:block; margin-top:5px; color:#8994a3; font-size:11px; }
-              .msg-group-field { display:block; margin-bottom:14px; font-size:12px; color:#5f6e7f; }
-              .msg-group-field > input { display:block; width:100%; margin-top:7px; padding:9px 10px; box-sizing:border-box; border:1px solid #dfe5ec; border-radius:7px; background:#fff; color:#283647; font-family:inherit; font-size:12px; }
-              .msg-group-field > input:focus { outline:2px solid #d8f3ff; border-color:#12b7f5; }
-              .msg-group-toggle { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:21px; padding-top:16px; border-top:1px solid #edf0f4; font-size:12px; }
-              .msg-group-toggle small { display:block; margin-top:5px; color:#8994a3; line-height:1.5; }
-              .msg-group-toggle input { width:34px; height:18px; accent-color:#12b7f5; cursor:pointer; }
-              .msg-group-status { margin:0 0 12px; padding:10px 11px; border-radius:7px; background:#f2f7fc; color:#718299; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
-              .msg-group-status:empty { display:none; }
-              .msg-group-status.error { color:#c25659; background:#fff1f1; }
-              .msg-group-tools { display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:11px; color:#8994a3; }
-              .msg-group-tools > span { flex:1; }
-              .msg-group-select-all { display:inline-flex; align-items:center; gap:5px; color:#5f6e7f; cursor:pointer; }
-              .msg-group-member { display:flex; align-items:center; gap:9px; padding:9px 0; border-bottom:1px solid #f0f2f6; }
-              .msg-group-member > input { width:15px; height:15px; flex:0 0 auto; accent-color:#12b7f5; }
-              .msg-group-member-open { flex:1; display:flex; align-items:center; gap:10px; min-width:0; padding:0; border:0; background:none; text-align:left; color:inherit; cursor:pointer; }
-              .msg-group-member-open > div { flex:1; min-width:0; }
-              .msg-group-member-open strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:550; }
-              .msg-group-member-open small { display:block; margin-top:4px; color:#8994a3; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-              .msg-group-role { padding:3px 5px; border-radius:4px; font-size:9px; background:#eef7ff; color:#398dd3; white-space:nowrap; }
-              .msg-group-pagination { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:15px 0; color:#8994a3; font-size:11px; }
-              .msg-group-batch { position:sticky; bottom:-16px; padding:12px 0 16px; background:#fff; border-top:1px solid #edf0f4; }
-              .msg-group-batch label { display:flex; align-items:center; gap:6px; margin-bottom:10px; color:#718299; font-size:11px; }
-              .msg-group-batch > .msg-btn { width:100%; min-height:34px; }
-              .msg-btn.danger { color:#d45d60; border-color:#edc8ca; background:#fff; }
-              .msg-btn:disabled,.msg-group-drawer button:disabled { cursor:not-allowed; opacity:.48; }
-              .msg-group-member-detail { margin:0 0 15px; padding:12px; border:1px solid #d9e9f6; border-radius:9px; background:#f7fbff; }
-              .msg-group-detail-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
-              .msg-group-detail-head strong { flex:1; min-width:0; overflow-wrap:anywhere; font-size:13px; }
-              .msg-group-detail-field { display:grid; grid-template-columns:58px minmax(0,1fr); gap:8px; margin:8px 0; font-size:11px; line-height:1.5; }
-              .msg-group-detail-field span { color:#8994a3; }
-              .msg-group-detail-field b { color:#5f6e7f; font-weight:450; overflow-wrap:anywhere; }
-              .msg-group-blacklist-add { display:flex; gap:7px; margin-bottom:14px; }
-              .msg-group-blacklist-add input { min-width:0; flex:1; padding:9px; border:1px solid #dfe5ec; border-radius:6px; background:#fff; color:inherit; font-size:11px; }
-              :root[data-theme="dark"] .msg-group-drawer,:root[data-theme="dark"] .msg-group-batch { background:var(--panel); color:var(--ink); }
-              :root[data-theme="dark"] .msg-group-mask { background:rgba(5,10,17,.5); }
-              :root[data-theme="dark"] .msg-group-drawer-head,:root[data-theme="dark"] .msg-group-tabs,:root[data-theme="dark"] .msg-group-toggle,:root[data-theme="dark"] .msg-group-batch,:root[data-theme="dark"] .msg-group-member { border-color:var(--line); }
-              :root[data-theme="dark"] .msg-group-field > input,:root[data-theme="dark"] .msg-group-blacklist-add input { background:var(--input); border-color:var(--line); color:var(--ink); }
-              :root[data-theme="dark"] .msg-group-field > input:focus,:root[data-theme="dark"] .msg-group-blacklist-add input:focus { border-color:var(--primary); outline-color:var(--primary-soft); }
-              :root[data-theme="dark"] .msg-group-close { background:var(--raised); color:var(--muted); }
-              :root[data-theme="dark"] .msg-group-status,:root[data-theme="dark"] .msg-group-member-detail { background:var(--raised); border-color:var(--line); color:var(--muted); }
-              :root[data-theme="dark"] .msg-group-status.error { background:var(--danger-bg); color:var(--danger); }
-              :root[data-theme="dark"] .msg-group-detail-field b,:root[data-theme="dark"] .msg-group-field,:root[data-theme="dark"] .msg-group-select-all { color:var(--muted); }
-              :root[data-theme="dark"] .msg-group-drawer-head small,:root[data-theme="dark"] .msg-group-summary small,:root[data-theme="dark"] .msg-group-toggle small,:root[data-theme="dark"] .msg-group-tools,:root[data-theme="dark"] .msg-group-member-open small,:root[data-theme="dark"] .msg-group-pagination,:root[data-theme="dark"] .msg-group-detail-field span,:root[data-theme="dark"] .msg-group-batch label,:root[data-theme="dark"] .msg-group-mute-card small,:root[data-theme="dark"] .msg-group-mute-rule small,:root[data-theme="dark"] .msg-group-muted-member small,:root[data-theme="dark"] .msg-group-mute-rule.is-disabled { color:var(--soft); }
-              :root[data-theme="dark"] .msg-group-tabs button { color:var(--muted); }
-              :root[data-theme="dark"] .msg-group-tabs button.active { border-bottom-color:var(--primary); color:var(--primary); }
-              :root[data-theme="dark"] .msg-group-role { background:var(--primary-soft); color:var(--primary); }
-              :root[data-theme="dark"] .msg-group-toggle input,:root[data-theme="dark"] .msg-group-member > input { accent-color:var(--accent-fill); }
-              :root[data-theme="dark"] .msg-btn.danger { color:var(--danger); border-color:var(--danger-line); background:var(--panel); }
-              @media (max-width:640px) { .msg-group-drawer { width:100%; } .msg-group-body { padding:13px; } }
-              @media (prefers-reduced-motion: reduce) {
-                *, *::before, *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:0.01ms !important; }
-              }
-            </style>
           <div class="msg-shell" id="msg-shell">
             <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
               <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
@@ -807,9 +227,9 @@ from .帮助网页脚本 import 控制台脚本
               </div>
             </div>
           </div>
-          <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box"><div class="msg-raw-head"><strong>消息原始数据</strong><div class="msg-raw-actions"><button class="msg-raw-copy" id="msg-raw-copy" type="button">复制</button><button id="msg-raw-close" type="button" aria-label="关闭原始数据">×</button></div></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
-          <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box"><h3>群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
-          <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="30" step="1" placeholder="自定义天数（最多30天）" aria-label="自定义禁言天数，最多30天" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
+          <div class="msg-raw-modal" id="msg-raw-modal" hidden><div class="msg-raw-box" role="dialog" aria-modal="true" aria-labelledby="msg-raw-title" tabindex="-1"><div class="msg-raw-head"><strong id="msg-raw-title">消息原始数据</strong><div class="msg-raw-actions"><button class="msg-raw-copy" id="msg-raw-copy" type="button">复制</button><button id="msg-raw-close" type="button" aria-label="关闭原始数据">×</button></div></div><div class="msg-raw-content" id="msg-raw-content"></div></div></div>
+          <div class="msg-remark-modal" id="msg-remark-modal" hidden><div class="msg-remark-box" role="dialog" aria-modal="true" aria-labelledby="msg-remark-title" tabindex="-1"><h3 id="msg-remark-title">群备注</h3><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">备注名（显示在会话列表）</label><input id="msg-remark-name" type="text" placeholder="输入群备注名" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px;margin-bottom:10px"><label style="display:block;font-size:11px;color:#999;margin-bottom:4px">群号（用于显示群头像，可留空）</label><input id="msg-remark-qq" type="text" placeholder="输入群号" style="width:100%;height:34px;padding:0 9px;border:1px solid #e0e1e5;border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-remark-delete" type="button" style="color:#e64340;border-color:#f5c2c1;margin-right:auto">删除备注</button><button class="msg-btn" id="msg-remark-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-remark-save" type="button">保存</button></div></div></div>
+          <div class="msg-mute-modal" id="msg-mute-modal" hidden><div class="msg-mute-box" role="dialog" aria-modal="true" aria-labelledby="msg-mute-title" tabindex="-1"><h3 id="msg-mute-title">禁言成员</h3><div class="msg-mute-presets" id="msg-mute-presets"><button type="button" data-mute-min="10">10分钟</button><button type="button" data-mute-min="30" class="active">30分钟</button><button type="button" data-mute-min="60">1小时</button><button type="button" data-mute-min="1440">1天</button></div><input id="msg-mute-custom" type="number" min="1" max="30" step="1" placeholder="自定义天数（最多30天）" aria-label="自定义禁言天数，最多30天" style="width:100%;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;font-size:12px"><div class="msg-mute-actions"><button class="msg-btn" id="msg-mute-cancel" type="button">取消</button><button class="msg-btn primary" id="msg-mute-confirm" type="button">确认禁言</button></div></div></div>
         </section>
       </div>
     </main>

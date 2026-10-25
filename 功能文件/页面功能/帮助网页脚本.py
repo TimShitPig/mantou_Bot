@@ -7,8 +7,8 @@
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const themeStorageKey = 'mantou-theme';
-      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
-      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', theme === 'dark' ? '#171a24' : '#f8f8ff'); };
+      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'light' ? 'light' : 'dark'; } catch (_) { return 'dark'; } };
+      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', theme === 'dark' ? '#081423' : '#edf4fa'); };
       const updateThemeControl = (theme) => {
         const select = $('theme-select');
         if (select && select.value !== theme) select.value = theme;
@@ -62,8 +62,50 @@
       let quarkWebScanTimer = null;
       let quarkWebScanGeneration = 0;
       let toastTimer = null;
+      const msgModalIds = ['msg-raw-modal', 'msg-remark-modal', 'msg-mute-modal'];
+      const msgModalFocus = new Map();
+      let msgModalOverflow = null;
+      const activeMsgModal = () => msgModalIds.map($).findLast((node) => node && !node.hidden);
+      const modalFocusable = (node) => [...node.querySelectorAll('button,input,select,textarea,a[href],[tabindex]')].filter((item) => !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
+      const setMsgModal = (id, open, restoreFocus = true) => {
+        const node = $(id);
+        if (!node || node.hidden === !open) return;
+        if (open) {
+          msgModalFocus.set(id, document.activeElement);
+          if (!activeMsgModal()) { msgModalOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; }
+          node.hidden = false;
+          const preferred = id === 'msg-remark-modal' ? $('msg-remark-name') : modalFocusable(node)[0];
+          (preferred || node).focus({preventScroll:true});
+        } else {
+          node.hidden = true;
+          if (id === 'msg-remark-modal') groupSettingsState.remarkTarget = null;
+          if (!activeMsgModal() && msgModalOverflow !== null) { document.body.style.overflow = msgModalOverflow; msgModalOverflow = null; }
+          const previous = msgModalFocus.get(id); msgModalFocus.delete(id);
+          if (restoreFocus && previous?.isConnected && previous.getClientRects().length) previous.focus({preventScroll:true});
+        }
+      };
+      msgModalIds.forEach((id) => { const node = $(id); if (node) { node.tabIndex = -1; document.body.appendChild(node); } });
+      document.addEventListener('keydown', (event) => {
+        const node = activeMsgModal();
+        if (!node) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setMsgModal(node.id, false); return; }
+        if (event.key !== 'Tab') return;
+        const nodes = modalFocusable(node), first = nodes[0], last = nodes[nodes.length - 1];
+        if (!nodes.length) { event.preventDefault(); node.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || !node.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !node.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+        event.stopImmediatePropagation();
+      }, true);
+      document.addEventListener('focusin', (event) => { const node = activeMsgModal(); if (node && !node.contains(event.target)) (modalFocusable(node)[0] || node).focus({preventScroll:true}); });
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
-      const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => node.classList.remove('show'), 2200); };
+      const toast = (message) => {
+        const node = $('toast');
+        // 原生 dialog 位于浏览器顶层；提示跟随当前对话框，关闭后回到页面。
+        const host = document.querySelector('dialog[open]') || document.body;
+        if (node.parentElement !== host) host.appendChild(node);
+        node.textContent = message; node.classList.add('show'); clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { node.classList.remove('show'); if (node.parentElement !== document.body) document.body.appendChild(node); }, 2200);
+      };
       const api = async (path, options = {}) => {
         const requestOptions = { cache:'no-store', credentials:'same-origin', ...options };
         const requestHeaders = {...(options.headers || {})};
@@ -101,7 +143,7 @@
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
-        if (next !== 'messages' && activeView === 'messages') { closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
+        if (next !== 'messages' && activeView === 'messages') { groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') leaveQQReader();
@@ -536,6 +578,7 @@
           const previous = qqReader.modalFocus;
           const restore = qqReader.modalRestoreFocus;
           qqReader.modalFocus = null;
+          if ($('toast')?.parentElement === modal) document.body.appendChild($('toast'));
           if (modal.open) modal.close();
           if (qqReader.modalOverflow !== null) document.body.style.overflow = qqReader.modalOverflow;
           qqReader.modalOverflow = null;
@@ -1084,7 +1127,7 @@
           back.removeAttribute('aria-hidden');
         }
       };
-      const msgLayout = {listWidth:340, composerHeight:132, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
+      const msgLayout = {listWidth:340, composerHeight:164, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
         const data = value && typeof value === 'object' ? value : {};
         const width = Number.parseInt(data.list_width ?? data.listWidth, 10);
@@ -1097,7 +1140,7 @@
         };
         return {
           listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 340,
-          composerHeight:Number.isFinite(height) ? Math.max(96, Math.min(420, height)) : 132,
+          composerHeight:Number.isFinite(height) ? Math.max(164, Math.min(420, height)) : 164,
           listCollapsed:bool(data.list_collapsed ?? data.listCollapsed),
           composerCollapsed:bool(data.composer_collapsed ?? data.composerCollapsed),
         };
@@ -2372,7 +2415,7 @@
             if (msgState.multi) exitMultiMode();
             const chatId = String(el.dataset.msgChat || '');
             const chatType = String(el.dataset.msgType || 'group');
-            if (msgState.chatId === chatId && msgState.chatType === chatType) return;
+            if (msgState.chatId === chatId && msgState.chatType === chatType) { setMsgMobileChatOpen(true); return; }
             if (groupSettingsState.mutating) return toast('正在更新本群设置，请稍候再切换');
             const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId) || {
               chat_id: chatId,
@@ -2391,7 +2434,7 @@
         if (!chatId) return;
         const chatType = String(chat?.chat_type || 'group');
         if (groupSettingsState.mutating && (msgState.chatId !== chatId || msgState.chatType !== chatType)) return toast('正在更新本群设置，请稍候再切换');
-        if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; $('msg-remark-modal').hidden = true; }
+        if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; setMsgModal('msg-remark-modal', false); }
         cancelMsgQuoteJump(true);
         setMsgMobileChatOpen(true);
         msgState.chatRemoved = msgChatIsRemoved(chat);
@@ -3220,7 +3263,8 @@
             ta.value = copyText;
             ta.style.position = 'fixed';
             ta.style.left = '-9999px';
-            document.body.appendChild(ta);
+            const copyHost = activeMsgModal()?.querySelector('[role=dialog]') || document.querySelector('dialog[open]') || document.body;
+            copyHost.appendChild(ta);
             try {
               ta.focus();
               ta.select();
@@ -4203,7 +4247,7 @@
         msgState.mediaName = String(name || '附件文件').trim() || '附件文件';
         msgState.mediaType = Number(fileType || 4) === 2 ? 2 : 4;
         msgState.mediaMime = String(mime || '').trim();
-        msgState.sendType = 'media';
+        // 附件类型由发送时的 hasMedia 决定，保留原文字模式供移除或发送后继续使用。
         const inline = $('msg-media-inline');
         const label = $('msg-media-name');
         const icon = $('msg-media-icon');
@@ -4419,7 +4463,7 @@
       const openMuteDialog = (member, name = '') => {
         msgState.mute = {member:String(member || '').trim(), name:String(name || '').trim()};
         $('msg-mute-title').textContent = `禁言 ${name || member}`;
-        $('msg-mute-modal').hidden = false;
+        setMsgModal('msg-mute-modal', true);
       };
       const cancelMsgBottomPosition = (body = null, reveal = false) => {
         msgState.positionToken = Number(msgState.positionToken || 0) + 1;
@@ -4893,9 +4937,9 @@
           toast(`已填入 ${command}`);
         }));
         body.querySelectorAll('[data-msg-quote]').forEach((el) => bindMsgEvent(el, 'click', 'quote', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
-        body.querySelectorAll('[data-msg-mute]').forEach((el) => bindMsgEvent(el, 'click', 'mute', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; $('msg-mute-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-mute]').forEach((el) => bindMsgEvent(el, 'click', 'mute', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; setMsgModal('msg-mute-modal', true); }));
         body.querySelectorAll('[data-msg-unmute]').forEach((el) => bindMsgEvent(el, 'click', 'unmute', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
-        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-copy').textContent = '复制'; $('msg-raw-modal').hidden = false; }));
+        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-copy').textContent = '复制'; setMsgModal('msg-raw-modal', true); }));
         body.querySelectorAll('.msg-row').forEach((row) => {
           bindMsgEvent(row, 'contextmenu', 'message-context', (e) => {
             e.preventDefault();
@@ -5854,10 +5898,10 @@
         groupSettingsState.remarkTarget = target;
         try {
           const data = await api('message/remarks', {method:'POST', body:JSON.stringify({...target, action:'get'})});
-          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          if (activeView !== 'messages' || groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
           $('msg-remark-name').value = data.remark || '';
           $('msg-remark-qq').value = data.group_qq || '';
-          $('msg-remark-modal').hidden = false;
+          setMsgModal('msg-remark-modal', true);
         } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message || '群备注读取失败'); }
       };
       const saveRemark = async () => {
@@ -5868,8 +5912,8 @@
         try {
           await api('message/remarks', {method:'POST', body:JSON.stringify({...target, remark, group_qq:groupQQ})});
           msgState.historyCache.delete(`group|${target.chat_id}`);
-          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
-          toast('备注已保存'); $('msg-remark-modal').hidden = true; void loadMsgChats(true); void loadMsgHistory();
+          if (activeView !== 'messages' || groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          toast('备注已保存'); setMsgModal('msg-remark-modal', false); void loadMsgChats(true); void loadMsgHistory();
         } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message); }
       };
       const deleteRemark = async () => {
@@ -5878,8 +5922,8 @@
         try {
           await api('message/remarks', {method:'POST', body:JSON.stringify({...target, action:'delete'})});
           msgState.historyCache.delete(`group|${target.chat_id}`);
-          if (groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
-          toast('备注已删除'); $('msg-remark-modal').hidden = true; void loadMsgChats(true); void loadMsgHistory();
+          if (activeView !== 'messages' || groupSettingsState.remarkTarget !== target || msgState.chatType !== 'group' || msgState.chatId !== target.chat_id) return;
+          toast('备注已删除'); setMsgModal('msg-remark-modal', false); void loadMsgChats(true); void loadMsgHistory();
         } catch (error) { if (groupSettingsState.remarkTarget === target) toast(error.message); }
       };
       const sendMessage = () => {
@@ -6160,15 +6204,15 @@
           if ($('msg-raw-content').textContent === content) button.textContent = copied ? '已复制' : '复制失败，请重试';
         } finally { button.disabled = false; }
       });
-      $('msg-raw-close').addEventListener('click', () => { $('msg-raw-modal').hidden = true; });
-      $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) $('msg-raw-modal').hidden = true; });
+      $('msg-raw-close').addEventListener('click', () => { setMsgModal('msg-raw-modal', false); });
+      $('msg-raw-modal').addEventListener('click', (e) => { if (e.target === $('msg-raw-modal')) setMsgModal('msg-raw-modal', false); });
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));
       $('msg-mute-custom').addEventListener('input', (e) => { const raw = Number(e.target.value); if (!Number.isFinite(raw) || raw < 1) return; const days = Math.min(30, Math.floor(raw)); e.target.value = String(days); msgState.muteMinutes = days * 1440; });
-      $('msg-mute-cancel').addEventListener('click', () => { $('msg-mute-modal').hidden = true; });
-      $('msg-remark-cancel').addEventListener('click', () => { $('msg-remark-modal').hidden = true; });
+      $('msg-mute-cancel').addEventListener('click', () => { setMsgModal('msg-mute-modal', false); });
+      $('msg-remark-cancel').addEventListener('click', () => { setMsgModal('msg-remark-modal', false); });
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
-      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; const custom = $('msg-mute-custom'); const rawDays = Number(custom?.value); if (Number.isFinite(rawDays) && rawDays >= 1) { const days = Math.min(30, Math.floor(rawDays)); if (custom) custom.value = String(days); msgState.muteMinutes = days * 1440; } try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:Math.min(43200, Math.max(1, Number(msgState.muteMinutes) || 30))})}); toast('禁言成功'); $('msg-mute-modal').hidden = true; void loadMuteStates(true); } catch (error) { toast(error.message); } });
+      $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; const custom = $('msg-mute-custom'); const rawDays = Number(custom?.value); if (Number.isFinite(rawDays) && rawDays >= 1) { const days = Math.min(30, Math.floor(rawDays)); if (custom) custom.value = String(days); msgState.muteMinutes = days * 1440; } try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:Math.min(43200, Math.max(1, Number(msgState.muteMinutes) || 30))})}); toast('禁言成功'); setMsgModal('msg-mute-modal', false); void loadMuteStates(true); } catch (error) { toast(error.message); } });
       bindMsgLayoutControls();
       void loadMsgLayout();
       // QQ 官方群消息通过 Gateway 事件接收，没有可轮询的群历史 REST 接口。
