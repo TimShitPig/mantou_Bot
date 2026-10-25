@@ -28,7 +28,7 @@ from .媒体归档工具 import (
     _媒体种类, _媒体项目列表, _原附件后缀, 识别媒体类型, 解析媒体范围,
 )
 
-媒体最大字节数 = 100 * 1024 * 1024
+媒体最大字节数 = 5 * 1024 * 1024 * 1024
 归档目录 = "/QQ聊天媒体"
 直链复用秒 = 300
 下载请求头 = {"User-Agent": "Mozilla/5.0", "Referer": "https://pan.quark.cn/"}
@@ -37,17 +37,21 @@ from .媒体归档工具 import (
 图片归档接收开启 = False
 _QQ源请求头已修正 = globals().get("_QQ源请求头已修正", False)
 _QQ源错误分类已启用 = globals().get("_QQ源错误分类已启用", False)
+_已应用媒体大小上限 = globals().get("_已应用媒体大小上限", 100 * 1024 * 1024)
 _唤醒: asyncio.TimerHandle | None = globals().get("_唤醒")
 _上传并发 = globals().get("_上传并发", asyncio.Semaphore(2))
 
 
 class 媒体归档错误(RuntimeError):
-    def __init__(self, 阶段: str, 状态码: int = 0, *, 业务码: int | None = None, 原因: str = ""):
+    def __init__(self, 阶段: str, 状态码: int = 0, *, 业务码: int | None = None, 原因: str = "",
+                 实际字节数: int = 0, 限制字节数: int = 0):
         super().__init__(阶段)
         self.阶段 = 阶段
         self.状态码 = 状态码
         self.业务码 = 业务码
         self.原因 = 原因
+        self.实际字节数 = 实际字节数
+        self.限制字节数 = 限制字节数
 
 
 def _配置快照(配置: Any) -> dict[str, Any]:
@@ -181,6 +185,7 @@ async def _解析QQ源错误(响应: aiohttp.ClientResponse) -> 媒体归档错�
 
 async def _下载QQ媒体(地址: str, 路径: Path, 种类: str) -> tuple[str, int]:
     from 功能文件.页面功能 import 帮助网页后端
+    本次大小上限 = 媒体最大字节数
     if not 帮助网页后端._允许媒体地址(地址):
         raise 媒体归档错误("source_url_invalid")
     async with _新建会话() as 会话:
@@ -188,15 +193,17 @@ async def _下载QQ媒体(地址: str, 路径: Path, 种类: str) -> tuple[str, 
         try:
             if 响应.status != 200:
                 raise await _解析QQ源错误(响应)
-            if 响应.content_length is not None and 响应.content_length > 媒体最大字节数:
-                raise 媒体归档错误("source_too_large")
+            if 响应.content_length is not None and 响应.content_length > 本次大小上限:
+                raise 媒体归档错误("source_too_large", 响应.status, 原因="media_size_limit",
+                               实际字节数=响应.content_length, 限制字节数=本次大小上限)
             总数 = 0
             前缀 = bytearray()
             with 路径.open("wb") as 文件:
                 async for 块 in 响应.content.iter_chunked(64 * 1024):
                     总数 += len(块)
-                    if 总数 > 媒体最大字节数:
-                        raise 媒体归档错误("source_too_large")
+                    if 总数 > 本次大小上限:
+                        raise 媒体归档错误("source_too_large", 响应.status, 原因="media_size_limit",
+                                       实际字节数=总数, 限制字节数=本次大小上限)
                     if len(前缀) < 128:
                         前缀.extend(块[:128 - len(前缀)])
                     写任务 = asyncio.create_task(asyncio.to_thread(文件.write, 块))
@@ -347,7 +354,7 @@ def _可运行(参数: dict[str, Any]) -> bool:
         _释放未提交旧项(项)
         if _已有归档(媒体, 索引):
             continue
-        if 项.get("source_expired"):
+        if 项.get("source_expired") or 项.get("source_size_limit"):
             continue
         if "_legacy" in 项:
             if _旧项目可完成(项["_legacy"]):
@@ -363,6 +370,7 @@ def _可运行(参数: dict[str, Any]) -> bool:
 
 async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
     from 功能文件.管理功能.基础功能 import 消息记录
+    需要立即重试 = False
     try:
         if not 消息记录.消息数据库已配置():
             参数["retry_at"] = asyncio.get_running_loop().time() + 300
@@ -372,7 +380,7 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
                 continue
             进度 = 参数.setdefault("progress", {}).setdefault(索引, {})
             _释放未提交旧项(进度)
-            if 进度.get("source_expired"):
+            if 进度.get("source_expired") or 进度.get("source_size_limit"):
                 continue
             if "_legacy" in 进度 and not _旧项目可完成(进度["_legacy"]):
                 continue
@@ -382,6 +390,7 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
                 远端 = 进度.get("remote_task")
                 if not isinstance(远端, asyncio.Task) or 远端.done() and (远端.cancelled() or 远端.exception() is not None):
                     进度["source_fingerprint"] = _源地址指纹(项目)
+                    进度["source_attempt_limit"] = 媒体最大字节数
                     远端 = asyncio.create_task(_完成旧归档(参数, 进度) if "_legacy" in 进度 else _归档单项(参数, 索引, 项目, 进度))
                     进度["remote_task"] = 远端
                     远端.add_done_callback(_读取任务结果)
@@ -401,19 +410,34 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
                     # 下载期间换签后，旧地址的结果不得封死新地址。
                     进度.pop("source_failures", None)
                     进度.pop("source_expired", None)
+                    进度.pop("source_size_limit", None)
                     logger.debug("夸克媒体归档源地址已更新，忽略旧地址失败：媒体序号=%s", 索引 + 1)
                     continue
+                if (not 进度.get("upload_submitted") and not 进度.get("file_id")
+                        and getattr(exc, "阶段", "") == "source_too_large"):
+                    本次上限 = (getattr(exc, "限制字节数", 0)
+                            or 进度.get("source_attempt_limit") or 媒体最大字节数)
+                    if 0 < 本次上限 < 媒体最大字节数:
+                        # 旧任务在扩容后才返回，不得把旧上限错误归到新上限。
+                        进度.pop("source_failures", None)
+                        进度.pop("source_size_limit", None)
+                        需要立即重试 = True
+                        continue
                 if not 进度.get("upload_submitted") and getattr(exc, "阶段", "") == "source_expired":
                     进度["source_expired"] = True
+                if not 进度.get("upload_submitted") and getattr(exc, "阶段", "") == "source_too_large":
+                    进度["source_size_limit"] = (getattr(exc, "限制字节数", 0)
+                            or 进度.get("source_attempt_limit") or 媒体最大字节数)
                 if not 进度.get("upload_submitted") and getattr(exc, "阶段", "").startswith("source_"):
                     进度["source_failures"] = int(进度.get("source_failures", 0)) + 1
-                logger.warning("夸克媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s，业务码=%s，原因=%s",
+                logger.warning("夸克媒体归档失败：媒体序号=%s，种类=%s，阶段=%s，错误类型=%s，状态=%s，业务码=%s，原因=%s，实际字节=%s，上限字节=%s",
                                索引 + 1, _媒体种类(项目), getattr(exc, "阶段", "archive"), type(exc).__name__,
-                               getattr(exc, "状态码", 0) or "none", getattr(exc, "业务码", None), getattr(exc, "原因", "") or "none")
+                               getattr(exc, "状态码", 0) or "none", getattr(exc, "业务码", None), getattr(exc, "原因", "") or "none",
+                               getattr(exc, "实际字节数", 0) or "none", getattr(exc, "限制字节数", 0) or "none")
         if all(_已有归档(参数["record"]["media"], i) for i, _ in _媒体项目列表(参数["record"].get("media"))):
             图片归档待恢复.pop(键, None)
         else:
-            参数["retry_at"] = asyncio.get_running_loop().time() + (0 if _存在更新源(参数) else 300)
+            参数["retry_at"] = asyncio.get_running_loop().time() + (0 if 需要立即重试 or _存在更新源(参数) else 300)
     finally:
         参数.pop("task", None)
 
@@ -471,13 +495,14 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
             if not 进度.get("upload_submitted") and not 进度.get("file_id"):
                 进度.pop("source_failures", None)
                 进度.pop("source_expired", None)
+                进度.pop("source_size_limit", None)
                 参数.pop("retry_at", None)
     _排空队列()
     return True
 
 
 def 启动图片归档任务(配置: Any = None) -> None:
-    global 图片归档接收开启, _QQ源请求头已修正, _QQ源错误分类已启用
+    global 图片归档接收开启, _QQ源请求头已修正, _QQ源错误分类已启用, _已应用媒体大小上限
     图片归档接收开启 = True
     if not _QQ源请求头已修正 or not _QQ源错误分类已启用:
         # 修复旧请求头后，重新尝试此前在源下载阶段失败、尚未提交的项目。
@@ -491,6 +516,27 @@ def 启动图片归档任务(配置: Any = None) -> None:
                 参数.pop("retry_at", None)
         _QQ源请求头已修正 = True
         _QQ源错误分类已启用 = True
+    if 媒体最大字节数 > _已应用媒体大小上限:
+        for 参数 in 图片归档待恢复.values():
+            重试 = False
+            for 项 in 参数.get("progress", {}).values():
+                if (not isinstance(项, dict) or "_legacy" in 项 or 项.get("upload_submitted")
+                        or 项.get("file_id") or 项.get("source_expired")):
+                    continue
+                旧任务 = 项.get("remote_task")
+                if isinstance(旧任务, asyncio.Task) and not 旧任务.done():
+                    项.setdefault("source_attempt_limit", _已应用媒体大小上限)
+                旧错误 = (旧任务.exception() if isinstance(旧任务, asyncio.Task)
+                       and 旧任务.done() and not 旧任务.cancelled() else None)
+                旧上限 = 项.get("source_size_limit")
+                if ((isinstance(旧上限, int) and 0 < 旧上限 < 媒体最大字节数)
+                        or not 旧上限 and getattr(旧错误, "阶段", "") == "source_too_large"):
+                    项.pop("source_failures", None)
+                    项.pop("source_size_limit", None)
+                    重试 = True
+            if 重试:
+                参数.pop("retry_at", None)
+    _已应用媒体大小上限 = 媒体最大字节数
     # 逐项接管；旧上传未知状态留在原索引，安全兄弟项改走夸克。
     旧模块 = sys.modules.get("功能文件.管理功能.网盘功能.蓝奏云图片归档")
     for 旧参数 in list(getattr(旧模块, "图片归档待恢复", {}).values()):
