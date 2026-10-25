@@ -34,6 +34,7 @@ from .媒体归档工具 import (
 图片归档待恢复: dict[tuple[str, str], dict[str, Any]] = globals().get("图片归档待恢复", {})
 图片归档任务: set[asyncio.Task[Any]] = globals().get("图片归档任务", set())
 图片归档接收开启 = False
+_QQ源请求头已修正 = globals().get("_QQ源请求头已修正", False)
 _唤醒: asyncio.TimerHandle | None = globals().get("_唤醒")
 _上传并发 = globals().get("_上传并发", asyncio.Semaphore(2))
 
@@ -398,8 +399,19 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
 
 
 def 启动图片归档任务(配置: Any = None) -> None:
-    global 图片归档接收开启
+    global 图片归档接收开启, _QQ源请求头已修正
     图片归档接收开启 = True
+    if not _QQ源请求头已修正:
+        # 修复旧请求头后，重新尝试此前在源下载阶段失败、尚未提交的项目。
+        for 参数 in 图片归档待恢复.values():
+            重试 = False
+            for 项 in 参数.get("progress", {}).values():
+                if isinstance(项, dict) and "_legacy" not in 项 and not 项.get("upload_submitted") and not 项.get("file_id") and 项.get("source_failures"):
+                    项.pop("source_failures", None)
+                    重试 = True
+            if 重试:
+                参数.pop("retry_at", None)
+        _QQ源请求头已修正 = True
     # 逐项接管；旧上传未知状态留在原索引，安全兄弟项改走夸克。
     旧模块 = sys.modules.get("功能文件.管理功能.网盘功能.蓝奏云图片归档")
     for 旧参数 in list(getattr(旧模块, "图片归档待恢复", {}).values()):
