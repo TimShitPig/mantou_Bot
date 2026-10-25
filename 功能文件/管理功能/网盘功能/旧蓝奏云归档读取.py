@@ -672,5 +672,3 @@ async def 读取归档媒体块(上游: ClientResponse, 归档: dict[str, Any], 
         if not 余量:
             return
     raise 蓝奏云请求错误("archive_truncated")
-
-

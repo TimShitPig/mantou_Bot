@@ -143,5 +143,3 @@ def 解析媒体范围(范围: str, 大小: int) -> tuple[int, int, bool]:
     if 起点 >= 大小 or 终点 < 起点:
         raise ValueError("range_invalid")
     return 起点, 终点, True
-
-
