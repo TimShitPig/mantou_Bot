@@ -1,7 +1,7 @@
 """馒头控制台的样式资源。"""
 
 控制台样式 = """
-    :root { color-scheme:light; --ink:#17324a; --muted:#5f778b; --soft:#6f8296; --line:#d9e5ef; --bg:#edf3f8; --panel:#fff; --raised:#f4f8fc; --input:#f6f9fc; --hover:#e9f2fa; --primary:#067ca7; --primary-dark:#05688d; --primary-soft:#e1f3fb; --accent-fill:#087eaa; --accent-hover:#066b91; --mint:#e1f5ec; --mint-ink:#217c58; --peach:#fff0df; --peach-ink:#a46722; --yellow:#fff5de; --yellow-ink:#94651f; --pink:#fff0f5; --pink-ink:#ac4c72; --danger:#bb4259; --danger-bg:#fff0f3; --danger-line:#f0c8d1; --shadow:0 8px 24px rgba(25,63,93,.045); --nav-bg:#0c1d30; --nav-ink:#acbfd2; --nav-line:#22384e; --nav-active:#183c55; --nav-accent:#66dcff; }
+    :root { color-scheme:light; --ink:#17324a; --muted:#5f778b; --soft:#6f8296; --line:#d9e5ef; --bg:#edf3f8; --panel:#fff; --raised:#f4f8fc; --input:#f6f9fc; --hover:#e9f2fa; --primary:#067ca7; --primary-dark:#05688d; --primary-soft:#e1f3fb; --accent-fill:#087eaa; --accent-hover:#066b91; --mint:#e1f5ec; --mint-ink:#217c58; --peach:#fff0df; --peach-ink:#a46722; --yellow:#fff5de; --yellow-ink:#94651f; --pink:#fff0f5; --pink-ink:#ac4c72; --danger:#bb4259; --danger-bg:#fff0f3; --danger-line:#f0c8d1; --shadow:0 8px 24px rgba(25,63,93,.045); --nav-bg:#f8fbff; --nav-ink:#536d83; --nav-line:#d9e5ef; --nav-active:#e1f3fb; --nav-accent:#056f97; --nav-title:#17324a; --nav-label:#5b7287; --nav-hover:#ecf4fb; --nav-hover-ink:#17324a; --nav-active-line:#b7dce9; --nav-active-glow:#067ca733; --nav-card:#edf5fb; --nav-card-ink:#526e84; --nav-card-title:#294e68; --nav-avatar-line:#d6e8f4; --nav-avatar-bg:#e4f2fa; --nav-avatar-ink:#176d94; }
     * { box-sizing:border-box; }
     .msg-group-profile { margin:0 0 18px; padding:14px; border:1px solid var(--line); border-radius:10px; }
     .msg-group-profile-title { display:block; margin-bottom:12px; font-size:12px; }
@@ -647,7 +647,7 @@
       }
 
       /* ===== 可选深色模式 ===== */
-      :root[data-theme="dark"] { color-scheme:dark; --ink:#e6f3ff; --muted:#9bb3ca; --soft:#829bb4; --line:#27425b; --bg:#081423; --panel:#102338; --raised:#152c43; --input:#0c1c2e; --hover:#1b354e; --primary:#57d6ff; --primary-dark:#8ce3ff; --primary-soft:#163a51; --accent-fill:#126e96; --accent-hover:#1681ac; --mint:#123b36; --mint-ink:#73d7b2; --peach:#3a2d20; --peach-ink:#f6b76a; --yellow:#3c3221; --yellow-ink:#f6c57c; --pink:#3a2536; --pink-ink:#e9a2c7; --danger:#ff9bab; --danger-bg:#3c2533; --danger-line:#70404e; --shadow:0 10px 30px rgba(0,6,15,.18); --nav-bg:#091a2c; --nav-ink:#9bb3ca; --nav-line:#22384e; --nav-active:#163a51; --nav-accent:#57d6ff; }
+      :root[data-theme="dark"] { color-scheme:dark; --ink:#e6f3ff; --muted:#9bb3ca; --soft:#829bb4; --line:#27425b; --bg:#081423; --panel:#102338; --raised:#152c43; --input:#0c1c2e; --hover:#1b354e; --primary:#57d6ff; --primary-dark:#8ce3ff; --primary-soft:#163a51; --accent-fill:#126e96; --accent-hover:#1681ac; --mint:#123b36; --mint-ink:#73d7b2; --peach:#3a2d20; --peach-ink:#f6b76a; --yellow:#3c3221; --yellow-ink:#f6c57c; --pink:#3a2536; --pink-ink:#e9a2c7; --danger:#ff9bab; --danger-bg:#3c2533; --danger-line:#70404e; --shadow:0 10px 30px rgba(0,6,15,.18); --nav-bg:#091a2c; --nav-ink:#9bb3ca; --nav-line:#22384e; --nav-active:#163a51; --nav-accent:#57d6ff; --nav-title:#e6f3ff; --nav-label:#829bb4; --nav-hover:#163a51; --nav-hover-ink:#8ce3ff; --nav-active-line:#2b556d; --nav-active-glow:#57d6ff66; --nav-card:#10283b; --nav-card-ink:#7e9bb1; --nav-card-title:#c1d6e8; --nav-avatar-line:#15344c; --nav-avatar-bg:#19465d; --nav-avatar-ink:#88e5ff; }
       :root[data-theme="dark"] body { background:var(--bg); color:var(--ink); scrollbar-color:#506075 var(--bg); }
       :root[data-theme="dark"] .topbar,:root[data-theme="dark"] .sidebar,:root[data-theme="dark"] .admin-popover { background:var(--panel); }
       :root[data-theme="dark"] .theme-control:hover,:root[data-theme="dark"] .theme-control:focus-within,:root[data-theme="dark"] .admin-chip:hover,:root[data-theme="dark"] .admin-chip[aria-expanded="true"] { border-color:var(--line); background:var(--hover); }
@@ -1394,22 +1394,24 @@
     .sidebar { padding:25px 15px 18px; background:var(--nav-bg); border-right:1px solid var(--nav-line); color:var(--nav-ink); gap:28px; }
     .profile { position:relative; padding:15px 8px 22px; gap:8px; border-bottom:1px solid var(--nav-line); }
     .profile::before { content:""; position:absolute; top:3px; left:50%; width:102px; height:102px; transform:translateX(-50%); border:1px solid var(--nav-line); border-radius:50%; pointer-events:none; }
-    .profile strong { margin-top:8px; color:#e6f3ff; font-size:15px; }
+    .profile strong { margin-top:8px; color:var(--nav-title); font-size:15px; }
     .bot-avatar { width:80px; height:80px; border:5px solid #15344c; background:#19465d; box-shadow:0 0 28px #57d6ff17; }
+    .sidebar .bot-avatar { border-color:var(--nav-avatar-line); background:var(--nav-avatar-bg); }
     .bot-avatar::before,.bot-avatar::after { display:none; }
     .avatar-face { position:absolute; inset:0; display:grid; place-items:center; color:#88e5ff; letter-spacing:0; }
+    .sidebar .avatar-face { color:var(--nav-avatar-ink); }
     .avatar-face svg { width:65%; height:65%; }
     .avatar-inline .avatar-face { inset:0; }
-    .nav-label { margin:0 13px 12px; color:#6e91ab; font-size:10px; font-weight:600; letter-spacing:.1em; }
+    .nav-label { margin:0 13px 12px; color:var(--nav-label); font-size:10px; font-weight:600; letter-spacing:.1em; }
     .nav { gap:5px; }
     .nav a { position:relative; min-height:44px; padding:11px 13px; border:1px solid transparent; border-radius:8px; color:var(--nav-ink); font-size:12px; transition:background .16s,color .16s,border-color .16s; }
-    .nav a:hover { transform:none; background:#112d43; color:#e6f3ff; }
-    .nav a.active,.nav a[aria-current="page"] { border-color:#2b556d; background:var(--nav-active); color:var(--nav-accent); }
-    .nav a.active::before { content:""; position:absolute; left:-16px; width:3px; height:20px; border-radius:0 3px 3px 0; background:var(--nav-accent); box-shadow:0 0 15px #57d6ff66; }
+    .nav a:hover { transform:none; background:var(--nav-hover); color:var(--nav-hover-ink); }
+    .nav a.active,.nav a[aria-current="page"] { border-color:var(--nav-active-line); background:var(--nav-active); color:var(--nav-accent); }
+    .nav a.active::before { content:""; position:absolute; left:-16px; width:3px; height:20px; border-radius:0 3px 3px 0; background:var(--nav-accent); box-shadow:0 0 15px var(--nav-active-glow); }
     .nav-icon { display:grid; place-items:center; width:19px; color:inherit; }
     .nav-icon svg,.shortcut-icon svg { width:19px; height:19px; }
-    .sidebar-foot { padding:15px 13px; border:1px solid var(--nav-line); border-radius:10px; background:#10283b; color:#7e9bb1; font-size:10px; line-height:1.9; }
-    .sidebar-foot strong { color:#c1d6e8; font-size:12px; }
+    .sidebar-foot { padding:15px 13px; border:1px solid var(--nav-line); border-radius:10px; background:var(--nav-card); color:var(--nav-card-ink); font-size:10px; line-height:1.9; }
+    .sidebar-foot strong { color:var(--nav-card-title); font-size:12px; }
     .sidebar-foot .spark { float:right; color:var(--nav-accent); font-size:25px; }
     .content { width:min(1420px,calc(100% - 64px)); padding:35px 0 52px; }
     .page-heading { align-items:center; margin-bottom:25px; }
@@ -1486,7 +1488,7 @@
     :root[data-theme="dark"] .nav a.active,:root[data-theme="dark"] .nav a[aria-current="page"] { color:var(--nav-accent); background:var(--nav-active); }
     :root[data-theme="dark"] .summary-card { background:transparent; box-shadow:none; }
     :root[data-theme="dark"] .summary-card:last-child > strong { color:var(--peach-ink); }
-    :root[data-theme="dark"] .sidebar-foot { background:#10283b; border-color:var(--nav-line); }
+    :root[data-theme="dark"] .sidebar-foot { background:var(--nav-card); border-color:var(--nav-line); }
     :root[data-theme="dark"] .bot-avatar { border-color:#15344c; background:#19465d; }
     :root[data-theme="dark"] .avatar-face { color:#88e5ff; }
     :root[data-theme="dark"] .novel-master-panel { background:var(--panel); border-color:var(--line); }
