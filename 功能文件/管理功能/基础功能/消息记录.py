@@ -6406,6 +6406,11 @@ async def 刷新群信息(
     """按需调用 QQ 官方群资料接口；成功结果写入数据库长期保存。"""
     if not 会话标识:
         return None
+    appid = _获取群信息appid(会话标识, appid)
+    # 旧发送挂钩曾把平台显示 ID 写入历史作用域。保留这些记录等待可信
+    # 资料补全，不以平台名称选认证实例，也不把隔离会话猜成真实群号。
+    if appid and not re.fullmatch(r"[0-9]{4,32}", appid):
+        return None
     已有 = 群信息缓存.get(会话标识) or {}
     if not 强制 and not _群信息需要刷新(已有):
         return None
@@ -6425,7 +6430,6 @@ async def 刷新群信息(
         已有 = dict(已有)
         已有["last_request_at"] = 现在
         群信息缓存[会话标识] = 已有
-    appid = _获取群信息appid(会话标识, appid)
     try:
         from botpy.http import Route
 
@@ -9271,9 +9275,23 @@ def _链段取文本(类型: str, 数据: dict[str, Any] | None, 段: Any = None
     return ""
 
 
-def _会话标识兜底(session: Any) -> str:
-    """从 AstrBot MessageSession 提取会话标识，优先匹配缓存中已存在的键。"""
+def _会话标识兜底(session: Any, 消息对象: Any = None) -> str:
+    """QQ 官方发送记录使用实际目标，不把群隔离 session_id 写成群 OpenID。"""
     try:
+        消息类型 = str(_读取字段(session, "message_type") or _读取字段(消息对象, "type") or "")
+        if "GROUP" in 消息类型.upper():
+            原始消息 = _读取字段(消息对象, "raw_message")
+            群号 = str(
+                _读取字段(原始消息, "group_openid")
+                or _读取字段(消息对象, "group_id")
+                or _读取字段(session, "group_id")
+                or ""
+            ).strip()
+            if 群号:
+                return 群号
+            # 与 QQOfficialPlatformAdapter._send_by_session_common 的投递目标
+            # 一致；仅处理官方群主动会话，原始消息里的真实群号不拆分。
+            return str(_读取字段(session, "session_id") or "").strip().rsplit("_", 1)[-1]
         候选 = [
             str(getattr(session, "session_id", "") or "").strip(),
             str(getattr(session, "group_id", "") or "").strip(),
@@ -9310,7 +9328,7 @@ def _发送挂钩原方法(发送方法: Any) -> Any:
 
 def _包装事件发送(发送方法: Any) -> Any:
     """包装 QQ 官方事件发送入口，只在平台成功返回后记录消息和时间。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 2:
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 3:
         return None
     发送方法 = _发送挂钩原方法(发送方法)
     if 发送方法 is None:
@@ -9326,11 +9344,11 @@ def _包装事件发送(发送方法: Any) -> Any:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
                 会话 = getattr(self, "session", None)
-                会话标识 = _会话标识兜底(会话)
+                会话标识 = _会话标识兜底(会话, getattr(self, "message_obj", None))
                 消息类型 = getattr(会话, "message_type", None)
                 类型 = "group" if "GROUP" in str(消息类型).upper() else "user"
                 try:
-                    appid = str(getattr(getattr(self, "platform_meta", None), "id", "") or "")
+                    appid = _平台实例appid(self)
                 except Exception:
                     pass
                 内容 = _链提取文本(缓冲)
@@ -9365,14 +9383,14 @@ def _包装事件发送(发送方法: Any) -> Any:
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_record_version__", 2)
+    setattr(新发送, "__mantou_record_version__", 3)
     setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
 
 def _包装发送方法(发送方法: Any) -> Any:
     """包装主动会话发送，只在适配器确认发送成功后记录。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 2:
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 3:
         return None
     发送方法 = _发送挂钩原方法(发送方法)
     if 发送方法 is None:
@@ -9386,7 +9404,7 @@ def _包装发送方法(发送方法: Any) -> Any:
         发送前消息ID = ""
         媒体 = None
         try:
-            appid = str(getattr(self, "appid", "") or "")
+            appid = _平台实例appid(self)
             会话标识 = _会话标识兜底(session)
             消息类型 = str(getattr(session, "message_type", "") or "")
             类型 = "group" if "GROUP" in 消息类型.upper() else "user"
@@ -9433,7 +9451,7 @@ def _包装发送方法(发送方法: Any) -> Any:
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_record_version__", 2)
+    setattr(新发送, "__mantou_record_version__", 3)
     setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
@@ -9460,7 +9478,7 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(适配器类, "send_by_session", 新发送)
                 已包装 += 1
-            if getattr(getattr(适配器类, "send_by_session", None), "__mantou_record_version__", 0) == 2:
+            if getattr(getattr(适配器类, "send_by_session", None), "__mantou_record_version__", 0) == 3:
                 已就绪 += 1
         事件类 = getattr(事件模块, "QQOfficialMessageEvent", None)
         if 事件类 is not None:
@@ -9469,7 +9487,7 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(事件类, "_post_send", 新发送)
                 已包装 += 1
-            if getattr(getattr(事件类, "_post_send", None), "__mantou_record_version__", 0) == 2:
+            if getattr(getattr(事件类, "_post_send", None), "__mantou_record_version__", 0) == 3:
                 已就绪 += 1
     except Exception as 异常:
         logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)
@@ -9507,10 +9525,20 @@ def _提取群机器人退出群号(事件: Any) -> str:
 
 
 def _平台实例appid(客户端: Any) -> str:
-    for 对象 in (客户端, _读取字段(客户端, "platform"), _读取字段(客户端, "config")):
-        for 字段名 in ("appid", "app_id", "id"):
+    """优先取实际发送/接收客户端的认证 AppID，平台显示 ID 不是 AppID。"""
+    对象列表 = (
+        客户端, _读取字段(客户端, "bot"), _读取字段(客户端, "client"),
+        _读取字段(客户端, "platform"),
+    )
+    for 对象 in 对象列表:
+        http = _读取字段(_读取字段(对象, "api"), "_http")
+        值 = str(_读取字段(_读取字段(http, "_token"), "app_id") or "").strip()
+        if re.fullmatch(r"[0-9]{4,32}", 值):
+            return 值
+    for 对象 in (*对象列表, *(_读取字段(项, "config") for 项 in 对象列表)):
+        for 字段名 in ("appid", "app_id"):
             值 = str(_读取字段(对象, 字段名) or "").strip()
-            if 值:
+            if re.fullmatch(r"[0-9]{4,32}", 值):
                 return 值
     return ""
 

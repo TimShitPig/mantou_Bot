@@ -259,7 +259,10 @@ def 清理搜索关键词(值: Any) -> str:
     统一在请求前净化可以避免同一查询在不同平台得到不一致结果。空白
     会折叠为单个 ASCII 空格，中文、字母和数字原样保留。
     """
-    文本 = 清理文本(值)
+    文本 = 清理文本(值).replace(r"\/", "/")
+    # 分享链接由平台链接入口处理，不把链接及其 JSON 查询参数当书名。
+    if re.search(r"(?:https?://|https?%3a%2f%2f|https?%253a%252f%252f|www\.)", 文本, flags=re.I):
+        return ""
     保留字符 = [字符 for 字符 in 文本 if 字符.isspace() or 字符.isalnum()]
     return re.sub(r"\s+", " ", "".join(保留字符)).strip()
 

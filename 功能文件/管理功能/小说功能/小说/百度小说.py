@@ -889,7 +889,8 @@ def _百度出版章节切片(
                 return None, "catalog_range_invalid"
             结束下标, 页末 = 段数, True
         else:
-            return None, "unsupported_span"
+            # 已超出免费范围的跨片章优先记录平台边界，避免误报解析缺失。
+            return None, "free_boundary" if 起点 >= 免费边界 else "unsupported_span"
     if 起点 >= 免费边界:
         return None, "free_boundary"
     试读片段 = 起点[0] == 免费边界[0] and 结束下标 >= 免费边界[1]

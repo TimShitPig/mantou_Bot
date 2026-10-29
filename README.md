@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.248-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.249-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.248 |
+| 版本 | v6.1.249 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -20,6 +20,8 @@
 引用消息支持按当前聊天的完整消息 ID/引用索引精确定位。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
 
 聊天消息身份标签：官方消息确认机器人时显示蓝色 `BOT`，群主显示橙色标签、管理员显示绿色标签；其他机器人保持接收方消息布局，历史记录和实时消息使用同一身份标识。
+
+找书使用 `找书名` 或 `找作者` 等文字查询；含分享链接的输入不作为搜索词，交由已有平台链接识别流程处理，避免将链接参数误送到搜索接口。QQ 官方发送记录使用实际认证 AppID 与真实会话目标；旧平台名称作用域保留历史记录，不提交错误群资料请求。
 
 ## 快速开始
 
