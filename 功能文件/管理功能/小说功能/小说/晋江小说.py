@@ -53,6 +53,8 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 晋江下载失败提示 = "下载失败 请重试"
 晋江没有可下载章节提示 = "没有可下载章节"
 晋江章节未发布提示 = "该书暂未发布章节"
+晋江仅文案提示 = "该书目前仅公开文案，正文尚未发布"
+晋江全文存稿状态文案 = "1058:作者大大全文存稿中，只开启了文案让大家先睹为快，还请继续关注哦~~~"
 晋江文件发送失败提示 = "文件发送失败，请稍后再试"
 晋江请求头 = {
     "User-Agent": "okhttp/4.9.0",
@@ -66,8 +68,9 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 class _晋江章节未发布(RuntimeError):
     """目录接口返回尚未发布章节或尚未通过审核的业务状态。"""
 
-    def __init__(self, 业务码: str) -> None:
+    def __init__(self, 业务码: str, *, 仅文案: bool = False) -> None:
         self.业务码 = 业务码
+        self.仅文案 = 仅文案
         super().__init__("chapters_unpublished")
 
 
@@ -285,9 +288,16 @@ async def 获取晋江目录(
         {"novelId": 书籍编号, "more": "0", "whole": "1"},
     )
     业务码 = str(data.get("code") or "").strip()
-    if 业务码 in {"1058", "1068"}:
-        raise _晋江章节未发布(业务码)
     rows = data.get("chapterlist")
+    if 业务码 in {"1058", "1068"}:
+        # 详情中的章数可能包含作者存稿。只有目录明确返回已核实的
+        # “全文存稿、仅开文案”状态且没有目录时，才能确认未公开正文。
+        仅文案 = (
+            业务码 == "1058"
+            and data.get("message") == 晋江全文存稿状态文案
+            and (rows is None or isinstance(rows, list) and not rows)
+        )
+        raise _晋江章节未发布(业务码, 仅文案=仅文案)
     if not isinstance(rows, list):
         return []
     result: list[dict[str, Any]] = []
@@ -565,6 +575,16 @@ async def 生成晋江下载回复流(
                 raise 详情
             stage = "目录"
             if isinstance(全部目录, _晋江章节未发布):
+                if 全部目录.仅文案:
+                    logger.info(
+                        "晋江小说正文尚未公开：书籍编号=%s, 阶段=目录, 业务码=%s, "
+                        "原因=manuscript_only, 详情章节=%s",
+                        书籍编号,
+                        全部目录.业务码,
+                        详情.get("chapter_count"),
+                    )
+                    yield 晋江仅文案提示
+                    return
                 if 详情.get("chapter_count") != 0:
                     raise RuntimeError("晋江目录状态与详情不一致")
                 logger.info(

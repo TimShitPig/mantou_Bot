@@ -76,6 +76,10 @@ class EmptyChapterPayloadError(ShuqiError):
     """书旗明确返回成功、但没有提供章节正文的响应。"""
 
 
+class ChapterReadRestrictedError(ShuqiError):
+    """当前免费正文链路存在目录明确标记的非免费章节。"""
+
+
 @dataclass
 class Chapter:
     index: int
@@ -83,6 +87,7 @@ class Chapter:
     name: str
     content_url: str
     word_count: int = 0
+    is_free_read: bool | None = None
 
 
 @dataclass
@@ -130,6 +135,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 raise ShuqiError(
                     f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}"
                 )
+
+            _检查书旗免费正文范围(书籍)
 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
@@ -181,6 +188,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             f"文件={文件名}, 错误={发送结果.get('error')}"
         )
         yield "文件发送失败，请稍后再试"
+    except ChapterReadRestrictedError:
+        yield "该书当前仅开放部分章节"
     except Exception as exc:
         logger.warning(f"书旗小说下载失败：错误={exc}")
         yield "下载失败 请重试"
@@ -412,6 +421,34 @@ async def 获取书籍(
     return 解析目录响应(书籍编号, 响应, 是否短篇)
 
 
+def _解析书旗免费阅读标记(值: Any) -> bool | None:
+    if isinstance(值, bool):
+        return 值
+    if type(值) is int and 值 in {0, 1}:
+        return bool(值)
+    if isinstance(值, str):
+        文本 = 值.strip().lower()
+        if 文本 in {"1", "true"}:
+            return True
+        if 文本 in {"0", "false"}:
+            return False
+    return None
+
+
+def _检查书旗免费正文范围(书籍: Book) -> None:
+    非免费数 = sum(getattr(章节, "is_free_read", None) is False for 章节 in 书籍.chapters)
+    if not 非免费数:
+        return
+    免费数 = sum(getattr(章节, "is_free_read", None) is True for 章节 in 书籍.chapters)
+    logger.warning(
+        "书旗小说正文范围检查：书籍编号=%s, 总数=%s, 免费章节=%s, "
+        "非免费章节=%s, 未知章节=%s, 原因=chapter_access_required",
+        书籍.book_id, len(书籍.chapters), 免费数, 非免费数,
+        len(书籍.chapters) - 免费数 - 非免费数,
+    )
+    raise ChapterReadRestrictedError("目录含非免费章节")
+
+
 def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: bool = False) -> Book:
     状态 = str(响应.get("state") or 响应.get("status") or "")
     if 状态 and 状态 not in {"200", "0"}:
@@ -464,6 +501,7 @@ def 解析目录响应(书籍编号: str, 响应: dict[str, Any], 是否短篇: 
                     word_count=安全整数(
                         项.get("wordCount") or 项.get("chapterWordCount"), 0
                     ),
+                    is_free_read=_解析书旗免费阅读标记(项.get("isFreeRead")),
                 )
             )
 
@@ -581,6 +619,7 @@ async def 下载全部章节(
     总数 = len(书籍.chapters)
     if not 总数:
         return []
+    _检查书旗免费正文范围(书籍)
     结果: list[dict[str, Any]] = [
         {
             "id": 章节.chapter_id,
