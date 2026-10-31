@@ -889,11 +889,7 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     ]
     if not 可用章节:
         raise ShuqiError("没有获取到可用章节正文", reason="empty_decoded_content")
-    目录章节数 = len(书籍.chapters)
-    成功章节数 = len(可用章节)
-    完整章节数 = 书籍.chapter_num or 目录章节数
-    部分下载 = 成功章节数 != 目录章节数 or 成功章节数 != 完整章节数
-    文件名 = 生成小说文件名(书籍, 部分下载=部分下载)
+    文件名 = 生成小说文件名(书籍)
     内容列表 = [
         文件声明,
         "",
@@ -902,9 +898,7 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
         f"状态：{获取状态文本(书籍)}",
         f"字数：{格式化字数(书籍.word_count)}",
         f"书籍ID：{书籍.book_id}",
-        f"章节获取状态：{'部分获取' if 部分下载 else '完整获取'}",
-        f"正文成功章节：{成功章节数}/{完整章节数}",
-        f"XML有效目录条目：{目录章节数}",
+        f"章节数：{书籍.chapter_num or len(书籍.chapters)}",
         "",
     ]
     if 书籍.intro:
@@ -924,11 +918,10 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     return 文件名, 文件文本.replace("\n", "\r\n").encode("utf-8")
 
 
-def 生成小说文件名(书籍: Book, *, 部分下载: bool = False) -> str:
+def 生成小说文件名(书籍: Book) -> str:
     标题 = 清理文件名(书籍.book_name or f"书旗小说{书籍.book_id}")
     作者 = 清理文件名(书籍.author_name or "未知")
-    部分前缀 = "[部分]" if 部分下载 else ""
-    return f"{部分前缀}[{获取状态文本(书籍)}]书名：{标题} 作者：{作者}.txt"
+    return f"[{获取状态文本(书籍)}]书名：{标题} 作者：{作者}.txt"
 
 
 def 格式化下载提示(书籍: Book) -> str:
