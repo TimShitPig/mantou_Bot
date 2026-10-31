@@ -9,6 +9,7 @@ import re
 import secrets
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -39,6 +40,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 USER_ID = "6226157280"
 APP_CHAPTERLIST_URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
+XML_CHAPTERLIST_URL = "http://api.shuqireader.com/reader/bc_chapter.php"
 APP_BOOK_COMMENT_LIST_URL = "https://ocean.shuqireader.com/api/interact/comment/book/list"
 UID发现游客ID = "8000000"
 UID自动搜索词 = ("剑来", "凡人修仙传", "斗破苍穹")
@@ -85,6 +87,7 @@ class Chapter:
     cont_url_suffix: str
     short_url_suffix: str
     word_count: int = 0
+    content_url: str = ""
 
 
 @dataclass
@@ -438,6 +441,12 @@ async def 获取书籍(
                 short_url_suffix=html.unescape(str(item.get("shortContUrlSuffix") or "")),
                 word_count=安全整数(item.get("wordCount") or item.get("chapterWordCount"), 0),
             ))
+    try:
+        正文URL映射 = await 获取书旗XML章节映射(session, 书籍编号)
+        for chapter in chapters:
+            chapter.content_url = 正文URL映射.get(chapter.chapter_id, "")
+    except Exception as exc:
+        logger.debug("书旗XML章节目录读取失败：错误类型=%s", type(exc).__name__)
     return Book(
         book_id=书籍编号,
         book_name=清理网页文本(data.get("bookName") or f"书旗小说{书籍编号}"),
@@ -652,6 +661,13 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
     url, 模式 = 获取章节正文URL(书籍, 章节, include_preview)
     if not url:
         return 模式, ""
+    if 模式 == "full" and 章节.content_url:
+        try:
+            编码正文 = await 请求GETXML章节正文(session, 章节.content_url, referer=APP_CHAPTERLIST_URL)
+            if 编码正文:
+                return 模式, 清理正文(解码章节正文(编码正文))
+        except Exception as exc:
+            logger.debug("书旗XML章节正文读取失败：错误类型=%s", type(exc).__name__)
     数据 = await 请求GETJSON(session, url, referer=APP_CHAPTERLIST_URL)
     state = str(数据.get("state") or 数据.get("status"))
     if state != "200":
@@ -663,6 +679,101 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
     if not 编码正文:
         return 模式, ""
     return 模式, 清理正文(解码章节正文(编码正文))
+
+
+async def 获取书旗XML章节映射(
+    session: aiohttp.ClientSession, 书籍编号: str
+) -> dict[str, str]:
+    参数 = urllib.parse.urlencode({
+        "pagesize": "99999999",
+        "bookId": str(书籍编号),
+        "isShowChapterInfo": "true",
+    })
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/xml,text/xml,*/*",
+        "Accept-Encoding": "identity",
+    }
+    async with session.get(f"{XML_CHAPTERLIST_URL}?{参数}", headers=headers) as resp:
+        if resp.status >= 400:
+            raise ShuqiError(f"目录接口 HTTP {int(resp.status)}")
+        文本 = await resp.text()
+    try:
+        root = ET.fromstring(文本)
+    except ET.ParseError as exc:
+        raise ShuqiError("XML目录格式异常") from exc
+    if root.tag.rsplit("}", 1)[-1] != "BookInfos":
+        raise ShuqiError("XML目录根节点异常")
+    返回书籍编号 = str(root.attrib.get("BookId") or "").strip()
+    if 返回书籍编号 != str(书籍编号):
+        raise ShuqiError("XML目录书籍编号不匹配")
+
+    结果: dict[str, str] = {}
+    冲突章节: set[str] = set()
+    for item in root.iter():
+        if item is root:
+            continue
+        if item.tag.rsplit("}", 1)[-1] != "Book":
+            continue
+        章节编号 = str(item.attrib.get("ChapterId") or "").strip()
+        正文URL = str(item.attrib.get("ContentURL") or "").strip()
+        if not re.fullmatch(r"\d+", 章节编号):
+            continue
+        if not 校验书旗XML正文URL(正文URL, str(书籍编号), 章节编号):
+            continue
+        if 章节编号 in 结果 and 结果[章节编号] != 正文URL:
+            结果.pop(章节编号, None)
+            冲突章节.add(章节编号)
+            continue
+        if 章节编号 not in 冲突章节:
+            结果[章节编号] = 正文URL
+    return 结果
+
+
+def 校验书旗XML正文URL(url: str, 书籍编号: str, 章节编号: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = (parsed.hostname or "").lower()
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return False
+        if parsed.username is not None or parsed.password is not None:
+            return False
+        if parsed.query or parsed.fragment:
+            return False
+        if hostname != "shuqireader.com" and not hostname.endswith(".shuqireader.com"):
+            return False
+        if parsed.port not in {None, 80, 443}:
+            return False
+    except ValueError:
+        return False
+    match = re.fullmatch(
+        r"/httpserver/filecache/get_book_content_(\d+)_(\d+)_\d+_\d+_\d+\.xml",
+        parsed.path,
+    )
+    return bool(match and match.group(1) == 书籍编号 and match.group(2) == 章节编号)
+
+
+async def 请求GETXML章节正文(
+    session: aiohttp.ClientSession, url: str, referer: str = ""
+) -> str:
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/xml,text/xml,*/*",
+        "Accept-Encoding": "identity",
+    }
+    if referer:
+        headers["Referer"] = referer
+    async with session.get(url, headers=headers, allow_redirects=False) as resp:
+        if resp.status < 200 or resp.status >= 300:
+            raise ShuqiError(f"章节接口 HTTP {int(resp.status)}")
+        文本 = await resp.text()
+    try:
+        root = ET.fromstring(文本)
+    except ET.ParseError as exc:
+        raise ShuqiError("章节接口 XML 格式异常") from exc
+    if root.tag.rsplit("}", 1)[-1] != "ChapterContent":
+        raise ShuqiError("章节接口 XML 根节点异常")
+    return "".join(root.itertext()).strip()
 
 
 def 获取章节正文URL(书籍: Book, 章节: Chapter, include_preview: bool = False) -> tuple[str | None, str]:
