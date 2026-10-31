@@ -66,7 +66,16 @@ SEARCH_NO_SIGN_KEYS = {
 
 
 class ShuqiError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str = "request_failed",
+        http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.http_status = http_status
 
 
 @dataclass
@@ -451,14 +460,31 @@ async def 下载全部章节(
         f"percent=0%, concurrency={下载并发数}"
     )
 
-    async def 记录进度(成功: bool) -> None:
+    失败分类: dict[str, int] = {}
+    首个失败: dict[str, str | int | None] | None = None
+
+    async def 记录进度(
+        成功: bool,
+        失败原因: str | None = None,
+        HTTP状态: int | None = None,
+        失败章节: str = "",
+    ) -> None:
         nonlocal 已完成, 成功数, 失败数, 上次日志进度
+        nonlocal 首个失败
         async with 进度锁:
             已完成 += 1
             if 成功:
                 成功数 += 1
             else:
                 失败数 += 1
+                分类 = 失败原因 or "unknown_error"
+                失败分类[分类] = 失败分类.get(分类, 0) + 1
+                if 首个失败 is None:
+                    首个失败 = {
+                        "chapter_id": 失败章节,
+                        "reason": 分类,
+                        "http_status": HTTP状态,
+                    }
             当前进度 = 进度日志分段数 if 已完成 >= 总数 else int(已完成 * 进度日志分段数 / 总数)
             if 当前进度 <= 上次日志进度 and 已完成 < 总数:
                 return
@@ -479,19 +505,42 @@ async def 下载全部章节(
                     return {"id": 章节.chapter_id, "title": 标题, "content": 正文}
                 except Exception as exc:
                     最后异常 = exc
+                    失败原因 = 书旗章节失败原因(exc)
                     logger.debug(
                         f"书旗章节下载失败，准备重试：book_id={书籍.book_id}, "
-                        f"chapter_id={章节.chapter_id}, try={尝试次数}/{单章重试次数}, error_type={type(exc).__name__}"
+                        f"chapter_id={章节.chapter_id}, try={尝试次数}/{单章重试次数}, "
+                        f"reason={失败原因}, http_status={getattr(exc, 'http_status', None) or 'none'}"
                     )
                     if 尝试次数 < 单章重试次数:
                         await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
-            logger.warning(f"书旗章节下载最终失败：book_id={书籍.book_id}, chapter_id={章节.chapter_id}, error_type={type(最后异常).__name__}")
-            await 记录进度(False)
+            await 记录进度(
+                False,
+                失败原因=书旗章节失败原因(最后异常),
+                HTTP状态=getattr(最后异常, "http_status", None),
+                失败章节=章节.chapter_id,
+            )
             return {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
 
     任务列表 = [asyncio.create_task(下载单章(章节)) for 章节 in 书籍.chapters]
     try:
-        return list(await asyncio.gather(*任务列表))
+        结果 = list(await asyncio.gather(*任务列表))
+        if 失败数:
+            原因摘要 = ",".join(
+                f"{原因}:{数量}" for 原因, 数量 in sorted(失败分类.items())
+            )
+            logger.warning(
+                "书旗章节下载汇总：book_id=%s, success=%s, failed=%s, "
+                "failure_reasons=%s, first_failed_chapter=%s, "
+                "first_failure_reason=%s, first_failure_http_status=%s",
+                书籍.book_id,
+                成功数,
+                失败数,
+                原因摘要,
+                (首个失败 or {}).get("chapter_id", ""),
+                (首个失败 or {}).get("reason", "unknown_error"),
+                (首个失败 or {}).get("http_status") or "none",
+            )
+        return 结果
     finally:
         for 任务 in 任务列表:
             if not 任务.done():
@@ -501,14 +550,24 @@ async def 下载全部章节(
 
 async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章节: Chapter) -> tuple[str, str]:
     if not 校验书旗XML正文URL(章节.content_url, 书籍.book_id, 章节.chapter_id):
-        raise ShuqiError("XML章节正文地址无效")
+        raise ShuqiError("XML章节正文地址无效", reason="invalid_content_url")
     编码正文 = await 请求GETXML章节正文(session, 章节.content_url)
     if not 编码正文:
-        raise ShuqiError("XML章节正文为空")
+        raise ShuqiError("XML章节正文为空", reason="empty_payload")
     正文 = 清理正文(解码章节正文(编码正文))
     if not 正文:
-        raise ShuqiError("XML章节正文解码后为空")
+        raise ShuqiError("XML章节正文解码后为空", reason="empty_decoded_content")
     return "full", 正文
+
+
+def 书旗章节失败原因(exc: Exception | None) -> str:
+    if isinstance(exc, ShuqiError):
+        return exc.reason
+    if isinstance(exc, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(exc, aiohttp.ClientError):
+        return "network_error"
+    return type(exc).__name__ if exc is not None else "unknown_error"
 
 
 async def 获取书旗XML章节映射(
@@ -722,15 +781,29 @@ async def 请求GETXML章节正文(
     }
     async with session.get(url, headers=headers, allow_redirects=False) as resp:
         if resp.status < 200 or resp.status >= 300:
-            raise ShuqiError(f"章节接口 HTTP {int(resp.status)}")
+            raise ShuqiError(
+                "章节接口 HTTP 状态异常",
+                reason="http_status",
+                http_status=int(resp.status),
+            )
+        内容 = await resp.read()
+        if not 内容:
+            raise ShuqiError(
+                "章节接口正文为空",
+                reason="empty_body",
+                http_status=int(resp.status),
+            )
         文本 = await resp.text()
     try:
         root = ET.fromstring(文本)
     except ET.ParseError as exc:
-        raise ShuqiError("章节接口 XML 格式异常") from exc
+        raise ShuqiError("章节接口 XML 格式异常", reason="xml_parse") from exc
     if root.tag.rsplit("}", 1)[-1] != "ChapterContent":
-        raise ShuqiError("章节接口 XML 根节点异常")
-    return "".join(root.itertext()).strip()
+        raise ShuqiError("章节接口 XML 根节点异常", reason="xml_root")
+    正文 = "".join(root.itertext()).strip()
+    if not 正文:
+        raise ShuqiError("章节接口加密正文为空", reason="empty_payload")
+    return 正文
 
 
 
@@ -748,7 +821,7 @@ def 解码章节正文(encoded: str) -> str:
     try:
         return base64.b64decode(b64, validate=True).decode("utf-8")
     except (ValueError, UnicodeError) as exc:
-        raise ShuqiError("章节正文解码失败") from exc
+        raise ShuqiError("章节正文解码失败", reason="decrypt_failed") from exc
 
 
 def 清理正文(decoded_html: str) -> str:
