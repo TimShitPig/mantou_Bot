@@ -932,13 +932,7 @@ def 生成小说文件名(书籍: Book, *, 部分下载: bool = False) -> str:
 
 
 def 格式化下载提示(书籍: Book) -> str:
-    if len(书籍.chapters) == 书籍.chapter_num:
-        章节提示 = f"章节：{len(书籍.chapters)} 章"
-    else:
-        章节提示 = (
-            f"章节：XML目录可用 {len(书籍.chapters)} 章 / "
-            f"接口声明 {书籍.chapter_num} 章"
-        )
+    章节提示 = f"章节：{书籍.chapter_num or len(书籍.chapters)} 章"
     return "\n".join(
         [
             f"书名：{书籍.book_name or '未知'}",
