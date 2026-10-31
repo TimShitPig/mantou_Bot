@@ -35,6 +35,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 USER_ID = "8000000"
 XML_CHAPTERLIST_URL = "http://api.shuqireader.com/reader/bc_chapter.php"
+BOOK_METADATA_URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
 XML_USER_AGENT = "Mozilla/5.0"
 SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
@@ -396,13 +397,69 @@ async def 搜索联想(session: aiohttp.ClientSession, 关键词: str) -> list[s
     return 建议[:8]
 
 
+async def 获取书旗详情(
+    session: aiohttp.ClientSession, 书籍编号: str
+) -> dict[str, Any]:
+    """恢复旧接口的书籍资料，忽略其中的目录与正文地址。"""
+    请求参数 = _搜索签名参数({
+        "bookId": str(书籍编号),
+        "user_id": USER_ID,
+        "timestamp": str(int(time.time() * 1000)),
+        "resEncryptType": "-1",
+    })
+    headers = {
+        "User-Agent": SEARCH_USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json,*/*",
+        "Accept-Encoding": "identity",
+    }
+    try:
+        async with asyncio.timeout(10):
+            async with session.post(
+                BOOK_METADATA_URL, data=请求参数, headers=headers, allow_redirects=False
+            ) as resp:
+                if not 200 <= resp.status < 300:
+                    raise ShuqiError(
+                        "书籍资料 HTTP 状态异常", reason="metadata_http_status",
+                        http_status=int(resp.status),
+                    )
+                响应 = await resp.json(content_type=None)
+        if not isinstance(响应, dict) or str(响应.get("state")) != "200":
+            raise ShuqiError("书籍资料状态异常", reason="metadata_status")
+        资料 = 响应.get("data")
+        if not isinstance(资料, dict) or str(资料.get("bookId") or "") != str(书籍编号):
+            raise ShuqiError("书籍资料编号不匹配", reason="metadata_book_id")
+        return {
+            字段: 资料[字段]
+            for 字段 in (
+                "bookId", "bookName", "authorName", "state",
+                "realTimeWordCount", "wordCount", "words", "totalWordCount",
+                "intro", "desc", "description", "bookDesc", "summary",
+            )
+            if 字段 in 资料
+        }
+    except Exception as exc:
+        logger.debug(
+            "书旗详情补充失败：book_id=%s, reason=%s, error_type=%s",
+            书籍编号, 书旗章节失败原因(exc), type(exc).__name__,
+        )
+        return {}
+
+
 async def 获取书籍(
     session: aiohttp.ClientSession,
     书籍编号: str,
 ) -> Book:
     if not re.fullmatch(r"\d+", str(书籍编号)):
         raise ShuqiError("书籍编号无效")
-    XML资料, XML章节 = await 获取书旗XML目录(session, 书籍编号)
+    详情任务 = asyncio.create_task(获取书旗详情(session, 书籍编号))
+    try:
+        XML资料, XML章节 = await 获取书旗XML目录(session, 书籍编号)
+        详情 = await 详情任务
+    finally:
+        if not 详情任务.done():
+            详情任务.cancel()
+        await asyncio.gather(详情任务, return_exceptions=True)
     chapters = [
         Chapter(
             chapter_id=item["ChapterId"],
@@ -413,15 +470,27 @@ async def 获取书籍(
     ]
     return Book(
         book_id=书籍编号,
-        book_name=清理网页文本(XML资料.get("BookName")) or f"书旗小说{书籍编号}",
-        author_name=清理网页文本(XML资料.get("Author")) or "未知",
+        book_name=(
+            清理网页文本(XML资料.get("BookName"))
+            or 清理网页文本(详情.get("bookName")) or f"书旗小说{书籍编号}"
+        ),
+        author_name=(
+            清理网页文本(XML资料.get("Author"))
+            or 清理网页文本(详情.get("authorName")) or "未知"
+        ),
         chapter_num=(
             安全整数(XML资料.get("NumChapter"), 0)
             or len(chapters)
         ),
-        word_count=0,
-        intro="",
-        status_text="未知",
+        word_count=next((
+            字数 for 字段 in ("realTimeWordCount", "wordCount", "words", "totalWordCount")
+            if (字数 := 安全整数(详情.get(字段), 0)) > 0
+        ), 0),
+        intro=next((
+            简介 for 字段 in ("intro", "desc", "description", "bookDesc", "summary")
+            if (简介 := 清理网页文本(详情.get(字段)))
+        ), ""),
+        status_text={"1": "连载", "2": "完结"}.get(str(详情.get("state", "")).strip(), "未知"),
         chapters=chapters,
     )
 
