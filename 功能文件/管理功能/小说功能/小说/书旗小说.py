@@ -38,16 +38,9 @@ except Exception as exc:
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
-USER_ID = "6226157280"
+USER_ID = "8000000"
 APP_CHAPTERLIST_URL = "https://ocean.shuqireader.com/api/bcspub/andapi/book/chapterlist/"
 XML_CHAPTERLIST_URL = "http://api.shuqireader.com/reader/bc_chapter.php"
-APP_BOOK_COMMENT_LIST_URL = "https://ocean.shuqireader.com/api/interact/comment/book/list"
-UID发现游客ID = "8000000"
-UID自动搜索词 = ("剑来", "凡人修仙传", "斗破苍穹")
-UID兜底书籍 = ("7106468",)
-UID候选书上限 = 8
-UID评论最大页数 = 3
-UID评论每页数量 = 50
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
 SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
 SUGGEST_URL = "https://ocean.shuqireader.com/sqan/render/render/search/findSuggest"
@@ -117,6 +110,7 @@ def 获取书旗小说回复流(
 
 
 async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> AsyncIterator[str]:
+    阶段 = "share_link"
     try:
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=60)
         connector = aiohttp.TCPConnector(
@@ -131,9 +125,9 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
         ) as session:
             最终链接 = await 解析书旗短链(session, 链接)
             目标 = 解析书旗下载目标(最终链接)
-            用户ID = await 自动获取用户ID(session)
+            阶段 = "catalog"
             书籍 = await 获取书籍(
-                session, 目标["book_id"], 目标["type"] == "short", user_id=用户ID
+                session, 目标["book_id"], 目标["type"] == "short"
             )
             if not 书籍.chapters:
                 raise ShuqiError("没有获取到章节目录")
@@ -145,18 +139,20 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             可读章节数 = 获取目录可读章节数(书籍)
             if 可读章节数 != len(书籍.chapters):
                 raise ShuqiError(
-                    f"目录授权不完整：readable={可读章节数}, total={len(书籍.chapters)}"
+                    f"目录正文地址不完整：readable={可读章节数}, total={len(书籍.chapters)}"
                 )
 
+            下载模式 = "XML目录+XML单章正文" if any(章节.content_url for 章节 in 书籍.chapters) else "App目录+App单章正文"
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
-                f"章节数={len(书籍.chapters)}, 模式=评论UID+Android目录+单章正文, "
+                f"章节数={len(书籍.chapters)}, 模式={下载模式}, "
                 f"会话复用=开启, 最大并发数={下载并发数}"
             )
             yield 格式化下载提示(书籍)
 
-            章节内容 = await 下载全部章节(session, 书籍, user_id=用户ID)
+            阶段 = "content"
+            章节内容 = await 下载全部章节(session, 书籍)
             成功数 = sum(
                 1 for 项 in 章节内容 if 项.get("content")
             )
@@ -170,6 +166,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"成功={成功数}, 总数={len(书籍.chapters)}, 文件大小={len(文件内容)}"
             )
 
+        阶段 = "send"
         发送结果 = await 准备发送文本文件给当前会话(
             event,
             文件名,
@@ -198,7 +195,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
         )
         yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning("书旗小说下载失败：错误类型=%s", type(exc).__name__)
+        logger.warning("书旗小说下载失败：阶段=%s，错误类型=%s", 阶段, type(exc).__name__)
         yield "下载失败 请重试"
 
 
@@ -414,16 +411,33 @@ async def 获取书籍(
     session: aiohttp.ClientSession,
     书籍编号: str,
     是否短篇: bool = False,
-    *,
-    user_id: str,
 ) -> Book:
-    数据 = await 请求书旗POST(session, APP_CHAPTERLIST_URL, 构造目录参数(书籍编号), user_id=user_id)
-    state = str(数据.get("state") or 数据.get("status"))
-    if state != "200":
-        raise ShuqiError("目录接口状态异常")
-    data = 数据.get("data") if isinstance(数据, dict) else {}
-    if not isinstance(data, dict) or not data:
-        raise ShuqiError("目录接口 data 为空")
+    XML资料: dict[str, str] = {}
+    XML章节: list[dict[str, str]] = []
+    if not 是否短篇:
+        try:
+            XML资料, XML章节 = await 获取书旗XML目录(session, 书籍编号)
+        except Exception as exc:
+            logger.debug("书旗XML章节目录读取失败：错误类型=%s", type(exc).__name__)
+
+    data: dict[str, Any] = {}
+    try:
+        数据 = await asyncio.wait_for(
+            请求书旗POST(session, APP_CHAPTERLIST_URL, 构造目录参数(书籍编号), user_id=USER_ID),
+            timeout=10,
+        )
+        if str(数据.get("state") or 数据.get("status")) != "200":
+            raise ShuqiError("目录接口状态异常")
+        if not isinstance(数据.get("data"), dict) or not 数据["data"]:
+            raise ShuqiError("目录接口 data 为空")
+        data = 数据["data"]
+        if str(data.get("bookId") or 书籍编号) != str(书籍编号):
+            raise ShuqiError("目录接口书籍编号不匹配")
+    except Exception as exc:
+        data = {}
+        if not XML章节:
+            raise ShuqiError("没有取得完整书旗目录") from exc
+        logger.debug("书旗补充资料读取失败：错误类型=%s", type(exc).__name__)
     chapters: list[Chapter] = []
     for volume in data.get("chapterList") or []:
         if not isinstance(volume, dict):
@@ -441,17 +455,28 @@ async def 获取书籍(
                 short_url_suffix=html.unescape(str(item.get("shortContUrlSuffix") or "")),
                 word_count=安全整数(item.get("wordCount") or item.get("chapterWordCount"), 0),
             ))
-    try:
-        正文URL映射 = await 获取书旗XML章节映射(session, 书籍编号)
-        for chapter in chapters:
-            chapter.content_url = 正文URL映射.get(chapter.chapter_id, "")
-    except Exception as exc:
-        logger.debug("书旗XML章节目录读取失败：错误类型=%s", type(exc).__name__)
+    if XML章节:
+        原章节 = {chapter.chapter_id: chapter for chapter in chapters}
+        chapters = []
+        for item in XML章节:
+            编号 = item["ChapterId"]
+            补充 = 原章节.get(编号)
+            chapters.append(Chapter(
+                index=len(chapters) + 1,
+                chapter_id=编号,
+                name=清理网页文本(item.get("BookChapter")) or f"第{len(chapters) + 1}章",
+                is_free=补充.is_free if 补充 else False,
+                is_buy=补充.is_buy if 补充 else False,
+                cont_url_suffix=补充.cont_url_suffix if 补充 else "",
+                short_url_suffix=补充.short_url_suffix if 补充 else "",
+                word_count=补充.word_count if 补充 else 0,
+                content_url=item["ContentURL"],
+            ))
     return Book(
         book_id=书籍编号,
-        book_name=清理网页文本(data.get("bookName") or f"书旗小说{书籍编号}"),
-        author_name=清理网页文本(data.get("authorName") or "未知"),
-        chapter_num=安全整数(data.get("chapterNum"), len(chapters)),
+        book_name=清理网页文本(XML资料.get("BookName") or data.get("bookName") or f"书旗小说{书籍编号}"),
+        author_name=清理网页文本(XML资料.get("Author") or data.get("authorName") or "未知"),
+        chapter_num=安全整数(XML资料.get("NumChapter") or data.get("chapterNum"), len(chapters)),
         word_count=获取书旗原始字数(data, chapters),
         intro=获取书旗简介(data),
         status_text=解析书旗状态(data),
@@ -472,128 +497,15 @@ def 获取目录可读章节数(书籍: Book) -> int:
     )
 
 
-async def 自动获取用户ID(session: aiohttp.ClientSession) -> str:
-    候选书 = await 获取UID候选书(session)
-    for 书籍编号 in 候选书:
-        try:
-            书籍 = await 获取书籍(session, 书籍编号, user_id=UID发现游客ID)
-            用户ID = await 从书评获取年费VIP用户ID(session, 书籍)
-            if 用户ID:
-                logger.info("书旗自动获取下载身份成功：来源=评论资料")
-                return 用户ID
-        except Exception as exc:
-            logger.debug("书旗候选资料读取失败：错误类型=%s", type(exc).__name__)
-    raise ShuqiError("自动获取书旗下载身份失败")
 
 
-async def 获取UID候选书(session: aiohttp.ClientSession) -> list[str]:
-    候选书: list[str] = []
-    已记录: set[str] = set()
-
-    def 添加候选(书籍编号: Any) -> None:
-        编号 = str(书籍编号 or "").strip()
-        if not re.fullmatch(r"\d+", 编号) or 编号 in 已记录 or len(候选书) >= UID候选书上限:
-            return
-        已记录.add(编号)
-        候选书.append(编号)
-
-    for 关键词 in UID自动搜索词:
-        if len(候选书) >= UID候选书上限:
-            break
-        try:
-            参数 = {
-                "page": "searchResultV3",
-                "query": 关键词,
-                "fromSug": "0",
-                "kind": "",
-                "relatedBid": "",
-                "showMore": "0",
-                "showPost": "0",
-                "showTypes": "",
-                "pagination": json.dumps({"page": 1, "pageSize": UID候选书上限}, ensure_ascii=False),
-            }
-            数据 = await 请求书旗公共POST(session, SEARCH_URL, 参数, user_id=UID发现游客ID)
-            if str(数据.get("status") or 数据.get("state")) != "200":
-                continue
-            for 书籍编号 in 提取搜索书籍编号(数据, UID候选书上限):
-                添加候选(书籍编号)
-        except Exception:
-            continue
-
-    for 书籍编号 in UID兜底书籍:
-        if 书籍编号 not in 已记录 and len(候选书) >= UID候选书上限:
-            已移除 = 候选书.pop()
-            已记录.discard(已移除)
-        添加候选(书籍编号)
-    return 候选书
 
 
-def 提取搜索书籍编号(数据: Any, 上限: int) -> list[str]:
-    结果: list[str] = []
-    已记录: set[str] = set()
-
-    def 遍历(对象: Any) -> None:
-        if len(结果) >= 上限:
-            return
-        if isinstance(对象, dict):
-            书籍编号 = str(对象.get("bookId") or 对象.get("bid") or 对象.get("id") or "").strip()
-            标题 = 对象.get("bookName") or 对象.get("displayBookName") or 对象.get("title") or 对象.get("name")
-            if 标题 and re.fullmatch(r"\d+", 书籍编号) and 书籍编号 not in 已记录:
-                已记录.add(书籍编号)
-                结果.append(书籍编号)
-            for 值 in 对象.values():
-                遍历(值)
-        elif isinstance(对象, list):
-            for 值 in 对象:
-                遍历(值)
-
-    遍历(数据.get("data", 数据) if isinstance(数据, dict) else 数据)
-    return 结果
-
-
-async def 从书评获取年费VIP用户ID(session: aiohttp.ClientSession, 书籍: Book) -> str:
-    item_index = 0
-    for _ in range(UID评论最大页数):
-        参数 = {
-            "userId": UID发现游客ID,
-            "authorId": 书籍.raw.get("authorId") or "",
-            "bookId": 书籍.book_id,
-            "chapterId": "",
-            "paragraphId": "",
-            "itemIndex": str(item_index),
-            "size": str(UID评论每页数量),
-            "sort": "1",
-            "type": "1",
-            "filterCommentIds": "",
-        }
-        数据 = await 请求书旗POST(session, APP_BOOK_COMMENT_LIST_URL, 参数, user_id=UID发现游客ID)
-        state = str(数据.get("status") or 数据.get("state"))
-        if state != "200":
-            raise ShuqiError("书评接口状态异常")
-        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
-        for 评论 in 返回数据.get("commentList") or []:
-            if not isinstance(评论, dict):
-                continue
-            VIP状态 = 评论.get("vipStatus")
-            if not isinstance(VIP状态, dict):
-                continue
-            if 安全整数(VIP状态.get("status")) != 2 or 安全整数(VIP状态.get("annualVipStatus")) != 1:
-                continue
-            用户ID = str(评论.get("userId") or 评论.get("uid") or "").strip()
-            if re.fullmatch(r"\d+", 用户ID) and 用户ID != "0":
-                return 用户ID
-        next_index = 安全整数(返回数据.get("nextItemIndex"), item_index + UID评论每页数量)
-        if not 返回数据.get("hasMore") or next_index <= item_index:
-            break
-        item_index = next_index
-    return ""
 
 
 async def 下载全部章节(
     session: aiohttp.ClientSession,
     书籍: Book,
-    *,
-    user_id: str,
 ) -> list[dict[str, str]]:
     总数 = len(书籍.chapters)
     if not 总数:
@@ -606,7 +518,7 @@ async def 下载全部章节(
     信号量 = asyncio.Semaphore(下载并发数)
     logger.info(
         f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{总数}, "
-        f"percent=0%, concurrency={下载并发数}, source=catalog_single, uid_bound={bool(user_id)}"
+        f"percent=0%, concurrency={下载并发数}"
     )
 
     async def 记录进度(成功: bool) -> None:
@@ -661,13 +573,21 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
     url, 模式 = 获取章节正文URL(书籍, 章节, include_preview)
     if not url:
         return 模式, ""
-    if 模式 == "full" and 章节.content_url:
+    使用XML = 模式 == "full" and url == 章节.content_url and 校验书旗XML正文URL(url, 书籍.book_id, 章节.chapter_id)
+    if 使用XML:
         try:
             编码正文 = await 请求GETXML章节正文(session, 章节.content_url, referer=APP_CHAPTERLIST_URL)
             if 编码正文:
-                return 模式, 清理正文(解码章节正文(编码正文))
+                正文 = 清理正文(解码章节正文(编码正文))
+                if 正文:
+                    return 模式, 正文
+            raise ShuqiError("XML章节正文为空")
         except Exception as exc:
             logger.debug("书旗XML章节正文读取失败：错误类型=%s", type(exc).__name__)
+    if 使用XML:
+        url, 模式 = 获取章节正文URL(书籍, 章节, include_preview, include_xml=False)
+        if not url:
+            raise ShuqiError("XML章节正文不可用")
     数据 = await 请求GETJSON(session, url, referer=APP_CHAPTERLIST_URL)
     state = str(数据.get("state") or 数据.get("status"))
     if state != "200":
@@ -684,18 +604,34 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
 async def 获取书旗XML章节映射(
     session: aiohttp.ClientSession, 书籍编号: str
 ) -> dict[str, str]:
-    参数 = urllib.parse.urlencode({
+    _, 章节列表 = await 获取书旗XML目录(session, 书籍编号)
+    return {item["ChapterId"]: item["ContentURL"] for item in 章节列表}
+
+
+async def 请求书旗XML目录(
+    session: aiohttp.ClientSession, 书籍编号: str, 分卷编号: str = ""
+) -> ET.Element:
+    if not re.fullmatch(r"\d+", str(书籍编号)):
+        raise ShuqiError("书籍编号无效")
+    参数 = {
         "pagesize": "99999999",
         "bookId": str(书籍编号),
         "isShowChapterInfo": "true",
-    })
+    }
+    if 分卷编号:
+        if not re.fullmatch(r"\d+", 分卷编号):
+            raise ShuqiError("分卷编号无效")
+        参数["vid"] = 分卷编号
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/xml,text/xml,*/*",
         "Accept-Encoding": "identity",
     }
-    async with session.get(f"{XML_CHAPTERLIST_URL}?{参数}", headers=headers) as resp:
-        if resp.status >= 400:
+    async with session.get(
+        f"{XML_CHAPTERLIST_URL}?{urllib.parse.urlencode(参数)}", headers=headers,
+        allow_redirects=False,
+    ) as resp:
+        if resp.status < 200 or resp.status >= 300:
             raise ShuqiError(f"目录接口 HTTP {int(resp.status)}")
         文本 = await resp.text()
     try:
@@ -707,27 +643,75 @@ async def 获取书旗XML章节映射(
     返回书籍编号 = str(root.attrib.get("BookId") or "").strip()
     if 返回书籍编号 != str(书籍编号):
         raise ShuqiError("XML目录书籍编号不匹配")
+    if 分卷编号 and str(root.attrib.get("Vid") or "") != 分卷编号:
+        raise ShuqiError("XML目录分卷编号不匹配")
+    return root
 
-    结果: dict[str, str] = {}
-    冲突章节: set[str] = set()
-    for item in root.iter():
-        if item is root:
-            continue
-        if item.tag.rsplit("}", 1)[-1] != "Book":
-            continue
-        章节编号 = str(item.attrib.get("ChapterId") or "").strip()
-        正文URL = str(item.attrib.get("ContentURL") or "").strip()
-        if not re.fullmatch(r"\d+", 章节编号):
-            continue
-        if not 校验书旗XML正文URL(正文URL, str(书籍编号), 章节编号):
-            continue
-        if 章节编号 in 结果 and 结果[章节编号] != 正文URL:
-            结果.pop(章节编号, None)
-            冲突章节.add(章节编号)
-            continue
-        if 章节编号 not in 冲突章节:
-            结果[章节编号] = 正文URL
-    return 结果
+
+def 提取XML目录节点(root: ET.Element) -> list[dict[str, str]]:
+    节点 = [
+        dict(item.attrib) for item in root.iter()
+        if item is not root and item.tag.rsplit("}", 1)[-1] == "Book"
+    ]
+    if not 节点 or 安全整数(root.attrib.get("TotalCount"), -1) != len(节点):
+        raise ShuqiError("XML目录分页不完整")
+    return 节点
+
+
+async def 获取书旗XML目录(
+    session: aiohttp.ClientSession, 书籍编号: str
+) -> tuple[dict[str, str], list[dict[str, str]]]:
+    root = await 请求书旗XML目录(session, 书籍编号)
+    节点列表 = 提取XML目录节点(root)
+    总章数 = 安全整数(root.attrib.get("NumChapter"), 0)
+    if 总章数 <= 0:
+        raise ShuqiError("XML目录章节总数无效")
+    if (
+        root.attrib.get("GatherId") == "1"
+        and str(root.attrib.get("Vid") or "0") == "0"
+        and all(not item.get("ContentURL") for item in 节点列表)
+    ):
+        分卷编号 = [item.get("ChapterId", "") for item in 节点列表]
+        if (
+            any(not re.fullmatch(r"\d+", 编号) for 编号 in 分卷编号)
+            or len(set(分卷编号)) != len(分卷编号)
+        ):
+            raise ShuqiError("XML分卷目录无效")
+        分卷信号量 = asyncio.Semaphore(4)
+
+        async def 读取分卷(编号: str) -> list[dict[str, str]]:
+            async with 分卷信号量:
+                分卷 = await 请求书旗XML目录(session, 书籍编号, 编号)
+                if 安全整数(分卷.attrib.get("NumChapter")) != 总章数:
+                    raise ShuqiError("XML目录读取期间章节数变化")
+                return 提取XML目录节点(分卷)
+
+        任务列表 = [asyncio.create_task(读取分卷(编号)) for 编号 in 分卷编号]
+        try:
+            分卷列表 = await asyncio.gather(*任务列表)
+        finally:
+            for 任务 in 任务列表:
+                if not 任务.done():
+                    任务.cancel()
+            await asyncio.gather(*任务列表, return_exceptions=True)
+        节点列表 = [item for 分卷 in 分卷列表 for item in 分卷]
+
+    if len(节点列表) != 总章数:
+        raise ShuqiError("XML目录章节不完整")
+    已记录: set[str] = set()
+    for item in 节点列表:
+        章节编号 = str(item.get("ChapterId") or "").strip()
+        正文URL = str(item.get("ContentURL") or "").strip()
+        if (
+            not re.fullmatch(r"\d+", 章节编号)
+            or 章节编号 in 已记录
+            or not 校验书旗XML正文URL(正文URL, str(书籍编号), 章节编号)
+        ):
+            raise ShuqiError("XML目录章节地址或编号无效")
+        已记录.add(章节编号)
+        item["ChapterId"] = 章节编号
+        item["ContentURL"] = 正文URL
+    return dict(root.attrib), 节点列表
 
 
 def 校验书旗XML正文URL(url: str, 书籍编号: str, 章节编号: str) -> bool:
@@ -776,7 +760,11 @@ async def 请求GETXML章节正文(
     return "".join(root.itertext()).strip()
 
 
-def 获取章节正文URL(书籍: Book, 章节: Chapter, include_preview: bool = False) -> tuple[str | None, str]:
+def 获取章节正文URL(
+    书籍: Book, 章节: Chapter, include_preview: bool = False, *, include_xml: bool = True
+) -> tuple[str | None, str]:
+    if include_xml and not 书籍.is_short and 校验书旗XML正文URL(章节.content_url, 书籍.book_id, 章节.chapter_id):
+        return 章节.content_url, "full"
     if 章节.is_free and 章节.cont_url_suffix:
         return 拼接章节URL(书籍.free_prefix, 章节.cont_url_suffix), "full"
     if 章节.is_buy and 章节.cont_url_suffix:
@@ -832,28 +820,6 @@ async def 请求书旗POST(
         return await _读取书旗JSON响应(resp)
 
 
-async def 请求书旗公共POST(
-    session: aiohttp.ClientSession,
-    url: str,
-    参数: dict[str, Any],
-    *,
-    user_id: str,
-    platform: str = "an",
-) -> dict[str, Any]:
-    完整参数: dict[str, Any] = {"_public": 构造公共参数(user_id=user_id, platform=platform)}
-    完整参数.update({str(k): "" if v is None else str(v) for k, v in 参数.items()})
-    完整参数["isTeenMode"] = "0"
-    headers = {
-        "User-Agent": SEARCH_USER_AGENT,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json,*/*",
-        "Accept-Encoding": "identity",
-    }
-    async with session.post(
-        追加请求ID(url), data=签名参数(完整参数, add_reqid=False), headers=headers
-    ) as resp:
-        return await _读取书旗JSON响应(resp)
-
 
 def 构造目录参数(书籍编号: str) -> dict[str, Any]:
     return {"bookId": str(书籍编号), "timestamp": str(int(time.time() * 1000)), "reqEncryptType": "-1", "resEncryptType": "-1", "placeid": "", "apv": SEARCH_VERSION_NAME}
@@ -866,11 +832,6 @@ def 签名参数(params: dict[str, Any], add_reqid: bool = True) -> dict[str, st
     return signed
 
 
-def 追加请求ID(url: str) -> str:
-    分隔符 = "&" if "?" in url else "?"
-    return f"{url}{分隔符}_reqid={urllib.parse.quote(_搜索请求ID(), safe='')}"
-
-
 def 构造公共参数字典(user_id: str, platform: str = "0") -> dict[str, str]:
     参数 = dict(urllib.parse.parse_qsl(_构造搜索公共参数(), keep_blank_values=True))
     参数["user_id"] = str(user_id)
@@ -878,9 +839,6 @@ def 构造公共参数字典(user_id: str, platform: str = "0") -> dict[str, str
     参数["platform"] = platform
     return 参数
 
-
-def 构造公共参数(user_id: str, platform: str = "an") -> str:
-    return urllib.parse.urlencode(构造公共参数字典(user_id, platform), doseq=True)
 
 
 def 解码章节正文(encoded: str) -> str:
@@ -954,7 +912,8 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
                 "",
             ]
         )
-    return 文件名, "\r\n".join(内容列表).encode("utf-8")
+    文件文本 = "\n".join(内容列表).replace("\r\n", "\n").replace("\r", "\n")
+    return 文件名, 文件文本.replace("\n", "\r\n").encode("utf-8")
 
 
 def 生成小说文件名(书籍: Book) -> str:
@@ -1159,42 +1118,179 @@ def 生成不冲突缓存路径(文件名: str) -> Path:
     raise RuntimeError("小说缓存目录中同名文件过多")
 
 
+def _规范化书旗链接文本(值: str) -> str:
+    文本 = str(值 or "")[:262144].strip().replace("\\/", "/")
+    for _ in range(3):
+        新文本 = html.unescape(文本)
+        if 新文本 == 文本:
+            break
+        文本 = 新文本
+    return 文本
+
+
+def _校验书旗官方URL(值: str) -> str:
+    文本 = _规范化书旗链接文本(值)
+    文本 = 文本.rstrip(".,!?;:，。！？；：、）】》〉」』”’)]}>")
+    try:
+        parsed = urllib.parse.urlsplit(文本)
+        主机 = (parsed.hostname or "").lower()
+        官方主机 = 主机 in {"shuqi.com", "www.shuqi.com", "t.shuqi.com", "d.shuqi.com"}
+        官方主机 = 官方主机 or bool(re.fullmatch(r"c[0-9]+\.shuqireader\.com", 主机))
+        if not 官方主机 or parsed.scheme.lower() not in {"http", "https"}:
+            return ""
+        if parsed.username is not None or parsed.password is not None:
+            return ""
+        if parsed.port not in {None, 80, 443}:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return urllib.parse.urlunsplit(parsed)
+
+
+def _解析书旗官方URL(值: str, 深度: int = 0) -> dict[str, str] | None:
+    if 深度 > 3:
+        return None
+    文本 = _规范化书旗链接文本(值)
+    for _ in range(3):
+        if re.match(r"^https?://", 文本, re.I):
+            break
+        新文本 = urllib.parse.unquote(文本)
+        if 新文本 == 文本:
+            break
+        文本 = 新文本
+    链接 = _校验书旗官方URL(文本)
+    if not 链接:
+        return None
+    parsed = urllib.parse.urlsplit(链接)
+    路径 = urllib.parse.unquote(parsed.path)
+    类型 = "short" if re.fullmatch(r"/shortNovel/reader/[0-9]+/?", 路径, re.I) else "book"
+    编号集合: set[str] = set()
+    for 模式 in (
+        r"/(?:catalog|cover)/([0-9]{1,20})/?",
+        r"/shortNovel/reader/([0-9]{1,20})/?",
+        r"/v2/query/([0-9]{1,20})(?:/[0-9]{1,20})?/?",
+        r"/book/([0-9]{1,20})(?:\.html)?/?",
+    ):
+        匹配 = re.fullmatch(模式, 路径, re.I)
+        if 匹配:
+            编号集合.add(匹配.group(1))
+            break
+    try:
+        参数 = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=64)
+    except ValueError:
+        return None
+    嵌套目标: list[dict[str, str]] = []
+    for 键, 值 in 参数:
+        if 键.lower() in {"bid", "bookid"} and 值:
+            if not re.fullmatch(r"[0-9]{1,20}", 值):
+                return None
+            编号集合.add(值)
+        elif 键.lower() in {"url", "link", "redirect", "redirect_url", "redirect_uri", "target", "target_url", "share_url", "shareurl", "jump_url", "jumpurl"}:
+            目标 = _解析书旗官方URL(值, 深度 + 1)
+            if 目标 and (目标["book_id"] or urllib.parse.urlsplit(目标["url"]).hostname == "d.shuqi.com"):
+                嵌套目标.append(目标)
+                if 目标["book_id"]:
+                    编号集合.add(目标["book_id"])
+    if len(编号集合) > 1:
+        return None
+    if 嵌套目标 and not any(re.fullmatch(模式, 路径, re.I) for 模式 in (r"/(?:catalog|cover|book)/[0-9]+(?:\.html)?/?", r"/shortNovel/reader/[0-9]+/?", r"/v2/query/[0-9]+(?:/[0-9]+)?/?")):
+        if not 编号集合 and len({目标["url"] for 目标 in 嵌套目标}) > 1:
+            return None
+        return next((目标 for 目标 in 嵌套目标 if 目标["book_id"]), 嵌套目标[0])
+    return {"url": 链接, "book_id": next(iter(编号集合), ""), "type": 类型}
+
+
 def 解析书旗下载目标(链接: str) -> dict[str, str]:
-    文本 = str(链接 or "").strip()
-    书籍编号 = 提取书籍编号(文本)
-    if not 书籍编号:
+    目标 = _解析书旗官方URL(链接)
+    if not 目标 or not 目标["book_id"]:
         raise ShuqiError("没有识别到书旗 bookId")
-    类型 = "short" if re.search(r"/shortNovel/reader/\d+", 文本, re.I) else "book"
-    return {"book_id": 书籍编号, "type": 类型}
+    return {"book_id": 目标["book_id"], "type": 目标["type"]}
+
+
+def _提取书旗页面目标(文本: str, 基准链接: str) -> str:
+    跳转链接: list[str] = []
+    页面链接: list[str] = []
+    for 标签 in re.findall(r"<(?:meta|link|a)\b[^>]{0,8192}>", 文本, re.I):
+        属性 = {键.lower(): 值 for 键, _, 值 in re.findall(r"([\w-]+)\s*=\s*(['\"])(.*?)\2", 标签, re.S)}
+        if re.match(r"<meta\b", 标签, re.I) and 属性.get("http-equiv", "").lower() == "refresh":
+            匹配 = re.search(r"(?:^|;)\s*url\s*=\s*(.+)$", 属性.get("content", ""), re.I)
+            if 匹配:
+                跳转链接.append(匹配.group(1).strip(" '\""))
+        elif re.match(r"<link\b", 标签, re.I) and 属性.get("rel", "").lower() == "canonical":
+            跳转链接.append(属性.get("href", ""))
+        elif re.match(r"<a\b", 标签, re.I):
+            页面链接.append(属性.get("href", ""))
+    for 脚本 in re.findall(r"<script\b[^>]*>(.*?)</script\s*>", 文本, re.I | re.S):
+        跳转链接.extend(re.findall(r"(?:window\.)?location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]", 脚本, re.I))
+        跳转链接.extend(re.findall(r"(?:window\.)?location\.(?:replace|assign)\(\s*['\"]([^'\"]+)['\"]", 脚本, re.I))
+    for 候选列表 in (跳转链接, 页面链接):
+        目标列表: list[dict[str, str]] = []
+        for 候选 in 候选列表:
+            目标 = _解析书旗官方URL(urllib.parse.urljoin(基准链接, _规范化书旗链接文本(候选)))
+            if 目标 and (目标["book_id"] or urllib.parse.urlsplit(目标["url"]).hostname == "d.shuqi.com"):
+                目标列表.append(目标)
+        if 目标列表:
+            编号集合 = {目标["book_id"] for 目标 in 目标列表 if 目标["book_id"]}
+            链接集合 = {目标["url"] for 目标 in 目标列表}
+            if len(编号集合) > 1 or (not 编号集合 and len(链接集合) > 1):
+                return ""
+            return next((目标["url"] for 目标 in 目标列表 if 目标["book_id"]), 目标列表[0]["url"])
+    return ""
 
 
 async def 解析书旗短链(session: aiohttp.ClientSession, 链接: str) -> str:
-    文本 = str(链接 or "").strip()
-    if not re.search(r"https?://d\.shuqi\.com/[^\s'\"<>，。]+", 文本, re.I):
-        return 文本
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,*/*",
-    }
+    目标 = _解析书旗官方URL(链接)
+    if not 目标:
+        raise ShuqiError("书旗分享链接无效")
+    if 目标["book_id"]:
+        return 目标["url"]
+    当前链接 = 目标["url"]
+    跳转数 = 0
+    headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*"}
     for 方法 in ("HEAD", "GET"):
-        try:
-            async with session.request(
-                方法, 文本, headers=headers, allow_redirects=True
-            ) as resp:
-                最终链接 = str(resp.url)
-                if 提取书籍编号(最终链接):
-                    return 最终链接
-                if 方法 == "GET":
-                    页面链接 = 提取书旗链接(await resp.text(errors="ignore"))
-                    if 提取书籍编号(页面链接):
-                        return 页面链接
-        except Exception as exc:
-            logger.debug(f"书旗短链解析重试：方法={方法}, 错误={exc}")
+        已访问: set[str] = set()
+        while 当前链接 not in 已访问:
+            已访问.add(当前链接)
+            try:
+                async with session.request(方法, 当前链接, headers=headers, allow_redirects=False) as resp:
+                    if 300 <= resp.status < 400:
+                        新链接 = _校验书旗官方URL(urllib.parse.urljoin(当前链接, resp.headers.get("Location", "")))
+                        if not 新链接 or 新链接 == 当前链接 or 跳转数 >= 5:
+                            raise ShuqiError("书旗短链跳转无效")
+                        跳转数 += 1
+                        当前链接 = 新链接
+                    elif 200 <= resp.status < 300 and 方法 == "GET":
+                        内容 = bytearray()
+                        async with asyncio.timeout(20):
+                            while True:
+                                分块 = await resp.content.read(min(65536, 262145 - len(内容)))
+                                if not 分块:
+                                    break
+                                内容.extend(分块)
+                                if len(内容) > 262144:
+                                    raise ShuqiError("书旗短链页面过大")
+                        新链接 = _提取书旗页面目标(内容.decode("utf-8", errors="ignore"), 当前链接)
+                        if not 新链接 or 新链接 == 当前链接 or 跳转数 >= 5:
+                            raise ShuqiError("书旗短链页面未返回目标")
+                        跳转数 += 1
+                        当前链接 = 新链接
+                    else:
+                        break
+                目标 = _解析书旗官方URL(当前链接)
+                if not 目标:
+                    raise ShuqiError("书旗短链目标无效")
+                if 目标["book_id"]:
+                    return 目标["url"]
+            except ShuqiError:
+                raise
+            except Exception as exc:
+                logger.debug("书旗短链解析重试：方法=%s，错误类型=%s", 方法, type(exc).__name__)
+                break
     raise ShuqiError("书旗短链解析失败")
 
 
 def 提取事件书旗链接(event: Any) -> str:
-    消息对象 = getattr(event, "message_obj", None)
+    消息对象 = 读取字段(event, "message_obj")
     for 对象 in (event, 消息对象):
         if 对象 is None:
             continue
@@ -1206,51 +1302,60 @@ def 提取事件书旗链接(event: Any) -> str:
 
 
 def 提取书旗链接(值: Any) -> str:
-    if 值 is None:
+    已访问: set[int] = set()
+    已读节点 = 0
+
+    def 遍历(对象: Any, 深度: int = 0) -> str:
+        nonlocal 已读节点
+        已读节点 += 1
+        if 对象 is None or 深度 > 8 or 已读节点 > 256:
+            return ""
+        if isinstance(对象, (dict, list, tuple, set)):
+            if id(对象) in 已访问:
+                return ""
+            已访问.add(id(对象))
+            for 子值 in (对象.values() if isinstance(对象, dict) else 对象):
+                链接 = 遍历(子值, 深度 + 1)
+                if 链接:
+                    return 链接
+            return ""
+        if not isinstance(对象, str):
+            for 字段名 in ("data", "content", "text", "url", "jump_url"):
+                子值 = 读取字段(对象, 字段名)
+                if 子值 is not 对象:
+                    链接 = 遍历(子值, 深度 + 1)
+                    if 链接:
+                        return 链接
+            return ""
+        文本 = _规范化书旗链接文本(对象)
+        if 文本.startswith(("{", "[")):
+            try:
+                return 遍历(json.loads(文本), 深度 + 1)
+            except (ValueError, TypeError):
+                pass
+        for _ in range(3):
+            for 匹配 in re.finditer(r"https?://[^\s'\"<>，。！？；：、（）【】《》]+", 文本, re.I):
+                目标 = _解析书旗官方URL(匹配.group(0))
+                if not 目标:
+                    continue
+                parsed = urllib.parse.urlsplit(目标["url"])
+                if 目标["book_id"] or parsed.hostname == "d.shuqi.com" or re.fullmatch(r"/sapi/book/sharecover/?", parsed.path, re.I):
+                    return 目标["url"]
+            新文本 = urllib.parse.unquote(文本)
+            if 新文本 == 文本:
+                break
+            文本 = 新文本
         return ""
-    if isinstance(值, (list, tuple, set)):
-        for 子值 in 值:
-            链接 = 提取书旗链接(子值)
-            if 链接:
-                return 链接
-        return ""
-    if isinstance(值, dict):
-        for 子值 in 值.values():
-            链接 = 提取书旗链接(子值)
-            if 链接:
-                return 链接
-        return ""
-    文本 = str(值)
-    模式列表 = (
-        r"https?://c\d+\.shuqireader\.com/sapi/book/sharecover/?\?[^\s'\"<>，。]*",
-        r"https?://d\.shuqi\.com/[^\s'\"<>，。]*",
-        r"https?://(?:www\.)?shuqi\.com/book/\d+\.html[^\s'\"<>，。]*",
-        r"https?://t\.shuqi\.com/book/\d+/?[^\s'\"<>，。]*",
-        r"https?://t\.shuqi\.com/(?:catalog|cover)/\d+/?[^\s'\"<>，。]*",
-        r"https?://t\.shuqi\.com/shortNovel/reader/\d+/?[^\s'\"<>，。]*",
-        r"https?://t\.shuqi\.com/v2/query/\d+(?:/\d+)?/?[^\s'\"<>，。]*",
-    )
-    for 模式 in 模式列表:
-        匹配 = re.search(模式, 文本, flags=re.I)
-        if 匹配:
-            return 匹配.group(0)
-    return ""
+
+    return 遍历(值)
 
 
 def 提取书籍编号(文本: str) -> str:
     文本 = str(文本 or "").strip()
-    for 模式 in (
-        r"/catalog/(\d+)/?",
-        r"/cover/(\d+)/?",
-        r"/shortNovel/reader/(\d+)/?",
-        r"/v2/query/(\d+)",
-        r"/book/(\d+)",
-        r"[?&](?:bid|bookId)=(\d+)",
-    ):
-        匹配 = re.search(模式, 文本, flags=re.I)
-        if 匹配:
-            return 匹配.group(1)
-    return 文本 if re.fullmatch(r"\d{4,20}", 文本) else ""
+    if re.fullmatch(r"[0-9]{4,20}", 文本):
+        return 文本
+    目标 = _解析书旗官方URL(文本)
+    return 目标["book_id"] if 目标 else ""
 
 
 def 清理网页文本(文本: Any) -> str:
