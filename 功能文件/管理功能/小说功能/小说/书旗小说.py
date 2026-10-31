@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import codecs
 import hashlib
 import html
 import json
@@ -29,18 +30,13 @@ except Exception as exc:
     小说网盘 = None
     logger.warning(f"小说网盘模块加载失败：错误={exc}")
 
-try:
-    from 功能文件.管理功能.网盘功能 import 百度网盘
-except Exception as exc:
-    百度网盘 = None
-    logger.warning(f"百度网盘模块加载失败：错误={exc}")
-
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 USER_ID = "8000000"
 XML_CHAPTERLIST_URL = "http://api.shuqireader.com/reader/bc_chapter.php"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36"
+XML_USER_AGENT = "Mozilla/5.0"
 SEARCH_URL = "https://ocean.shuqireader.com/sqan/render/render/search/native_v3"
 SUGGEST_URL = "https://ocean.shuqireader.com/sqan/render/render/search/findSuggest"
 SEARCH_USER_AGENT = "okhttp/3.12.13"
@@ -60,7 +56,7 @@ SEARCH_NO_SIGN_KEYS = {
 }
 下载并发数 = 80
 单章重试次数 = 3
-进度日志分段数 = 10
+进度日志分段数 = 4
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -174,25 +170,19 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             书名=书籍.book_name,
             作者=书籍.author_name,
         )
-        if 发送结果.get("sent"):
-            启动百度后台上传并清理源文件(
-                配置, 发送结果.get("source_cache_path"), 文件名
-            )
-            return
-        降级文本 = str(发送结果.get("fallback_text") or "")
-        if 降级文本:
-            try:
+        try:
+            if 发送结果.get("sent"):
+                return
+            降级文本 = str(发送结果.get("fallback_text") or "")
+            if 降级文本:
                 yield 降级文本
-            finally:
-                启动百度后台上传并清理源文件(
-                    配置, 发送结果.get("source_cache_path"), 文件名
-                )
-            return
-        logger.warning(
-            f"书旗小说完成消息发送失败：书籍编号={书籍.book_id}, "
-            f"文件={文件名}, 错误={发送结果.get('error')}"
-        )
-        yield "文件发送失败，请稍后再试"
+                return
+            logger.warning(
+                "书旗小说完成消息发送失败：book_id=%s", 书籍.book_id
+            )
+            yield "文件发送失败，请稍后再试"
+        finally:
+            删除小说缓存文件(发送结果.get("source_cache_path"))
     except Exception as exc:
         logger.warning("书旗小说下载失败：阶段=%s，错误类型=%s", 阶段, type(exc).__name__)
         yield "下载失败 请重试"
@@ -436,12 +426,6 @@ async def 获取书籍(
     )
 
 
-
-
-
-
-
-
 async def 下载全部章节(
     session: aiohttp.ClientSession,
     书籍: Book,
@@ -454,7 +438,6 @@ async def 下载全部章节(
     失败数 = 0
     上次日志进度 = 0
     进度锁 = asyncio.Lock()
-    信号量 = asyncio.Semaphore(下载并发数)
     logger.info(
         f"书旗小说章节进度：book_id={书籍.book_id}, progress=0/{总数}, "
         f"percent=0%, concurrency={下载并发数}"
@@ -493,37 +476,45 @@ async def 下载全部章节(
             logger.info(f"书旗小说章节进度：book_id={书籍.book_id}, progress={已完成}/{总数}, percent={百分比}%, success={成功数}, failed={失败数}")
 
     async def 下载单章(章节: Chapter) -> dict[str, str]:
-        async with 信号量:
-            最后异常: Exception | None = None
-            for 尝试次数 in range(1, 单章重试次数 + 1):
-                try:
-                    _, 正文 = await 获取章节正文(session, 书籍, 章节)
-                    if not str(正文 or "").strip():
-                        raise ShuqiError("章节正文为空")
-                    await 记录进度(bool(正文))
-                    标题 = 章节.name
-                    return {"id": 章节.chapter_id, "title": 标题, "content": 正文}
-                except Exception as exc:
-                    最后异常 = exc
-                    失败原因 = 书旗章节失败原因(exc)
-                    logger.debug(
-                        f"书旗章节下载失败，准备重试：book_id={书籍.book_id}, "
-                        f"chapter_id={章节.chapter_id}, try={尝试次数}/{单章重试次数}, "
-                        f"reason={失败原因}, http_status={getattr(exc, 'http_status', None) or 'none'}"
-                    )
-                    if 尝试次数 < 单章重试次数:
-                        await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
-            await 记录进度(
-                False,
-                失败原因=书旗章节失败原因(最后异常),
-                HTTP状态=getattr(最后异常, "http_status", None),
-                失败章节=章节.chapter_id,
-            )
-            return {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
+        最后异常: Exception | None = None
+        for 尝试次数 in range(1, 单章重试次数 + 1):
+            try:
+                _, 正文 = await 获取章节正文(session, 书籍, 章节)
+                if not str(正文 or "").strip():
+                    raise ShuqiError("章节正文为空", reason="empty_decoded_content")
+                await 记录进度(True)
+                return {"id": 章节.chapter_id, "title": 章节.name, "content": 正文}
+            except Exception as exc:
+                最后异常 = exc
+                logger.debug(
+                    "书旗章节下载失败，准备重试：book_id=%s, chapter_id=%s, "
+                    "try=%s/%s, reason=%s, http_status=%s",
+                    书籍.book_id, 章节.chapter_id, 尝试次数, 单章重试次数,
+                    书旗章节失败原因(exc), getattr(exc, "http_status", None) or "none",
+                )
+                if 尝试次数 < 单章重试次数:
+                    await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
+        await 记录进度(
+            False,
+            失败原因=书旗章节失败原因(最后异常),
+            HTTP状态=getattr(最后异常, "http_status", None),
+            失败章节=章节.chapter_id,
+        )
+        return {"id": 章节.chapter_id, "title": 章节.name, "content": ""}
 
-    任务列表 = [asyncio.create_task(下载单章(章节)) for 章节 in 书籍.chapters]
+    结果: list[dict[str, str]] = [{} for _ in 书籍.chapters]
+    待下载 = iter(enumerate(书籍.chapters))
+
+    async def 下载工作任务() -> None:
+        for 索引, 章节 in 待下载:
+            结果[索引] = await 下载单章(章节)
+
+    任务列表 = [
+        asyncio.create_task(下载工作任务())
+        for _ in range(min(下载并发数, 总数))
+    ]
     try:
-        结果 = list(await asyncio.gather(*任务列表))
+        await asyncio.gather(*任务列表)
         if 失败数:
             原因摘要 = ",".join(
                 f"{原因}:{数量}" for 原因, 数量 in sorted(失败分类.items())
@@ -570,13 +561,6 @@ def 书旗章节失败原因(exc: Exception | None) -> str:
     return type(exc).__name__ if exc is not None else "unknown_error"
 
 
-async def 获取书旗XML章节映射(
-    session: aiohttp.ClientSession, 书籍编号: str
-) -> dict[str, str]:
-    _, 章节列表 = await 获取书旗XML目录(session, 书籍编号)
-    return {item["ChapterId"]: item["ContentURL"] for item in 章节列表}
-
-
 async def 请求书旗XML目录(
     session: aiohttp.ClientSession, 书籍编号: str, 分卷编号: str = ""
 ) -> ET.Element:
@@ -592,7 +576,7 @@ async def 请求书旗XML目录(
             raise ShuqiError("分卷编号无效")
         参数["vid"] = 分卷编号
     headers = {
-        "User-Agent": USER_AGENT,
+        "User-Agent": XML_USER_AGENT,
         "Accept": "application/xml,text/xml,*/*",
         "Accept-Encoding": "identity",
     }
@@ -602,9 +586,9 @@ async def 请求书旗XML目录(
     ) as resp:
         if resp.status < 200 or resp.status >= 300:
             raise ShuqiError(f"目录接口 HTTP {int(resp.status)}")
-        文本 = await resp.text()
+        内容 = await resp.read()
     try:
-        root = ET.fromstring(文本)
+        root = ET.fromstring(内容)
     except ET.ParseError as exc:
         raise ShuqiError("XML目录格式异常") from exc
     if root.tag.rsplit("}", 1)[-1] != "BookInfos":
@@ -775,27 +759,31 @@ async def 请求GETXML章节正文(
     session: aiohttp.ClientSession, url: str
 ) -> str:
     headers = {
-        "User-Agent": USER_AGENT,
+        "User-Agent": XML_USER_AGENT,
         "Accept": "application/xml,text/xml,*/*",
         "Accept-Encoding": "identity",
     }
-    async with session.get(url, headers=headers, allow_redirects=False) as resp:
-        if resp.status < 200 or resp.status >= 300:
-            raise ShuqiError(
-                "章节接口 HTTP 状态异常",
-                reason="http_status",
-                http_status=int(resp.status),
-            )
-        内容 = await resp.read()
-        if not 内容:
-            raise ShuqiError(
-                "章节接口正文为空",
-                reason="empty_body",
-                http_status=int(resp.status),
-            )
-        文本 = await resp.text()
+    # 部分 CDN 会缓存 200 空正文；仅空响应时刷新同一原始地址的缓存。
+    for 刷新缓存 in (False, True):
+        参数 = {"_sq_retry": str(time.time_ns())} if 刷新缓存 else None
+        async with session.get(
+            url, params=参数, headers=headers, allow_redirects=False
+        ) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                raise ShuqiError(
+                    "章节接口 HTTP 状态异常",
+                    reason="http_status",
+                    http_status=int(resp.status),
+                )
+            内容 = await resp.read()
+        if 内容.strip():
+            break
+    else:
+        raise ShuqiError(
+            "章节接口正文为空", reason="empty_body", http_status=int(resp.status)
+        )
     try:
-        root = ET.fromstring(文本)
+        root = ET.fromstring(内容)
     except ET.ParseError as exc:
         raise ShuqiError("章节接口 XML 格式异常", reason="xml_parse") from exc
     if root.tag.rsplit("}", 1)[-1] != "ChapterContent":
@@ -806,16 +794,8 @@ async def 请求GETXML章节正文(
     return 正文
 
 
-
 def 解码章节正文(encoded: str) -> str:
-    chars: list[str] = []
-    for ch in encoded.strip():
-        if ("A" <= ch <= "Z") or ("a" <= ch <= "z"):
-            value = (ord(ch.lower()) - 83) % 26 or 26
-            chars.append(chr(value + (64 if "A" <= ch <= "Z" else 96)))
-        else:
-            chars.append(ch)
-    b64 = "".join(chars)
+    b64 = codecs.decode("".join(encoded.split()), "rot_13")
     if len(b64) % 4:
         b64 += "=" * (4 - len(b64) % 4)
     try:
@@ -838,10 +818,12 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     可用章节 = [
         章节 for 章节 in 章节内容 if str(章节.get("content") or "").strip()
     ]
+    if not 可用章节:
+        raise ShuqiError("没有获取到可用章节正文", reason="empty_decoded_content")
     目录章节数 = len(书籍.chapters)
     成功章节数 = len(可用章节)
     完整章节数 = 书籍.chapter_num or 目录章节数
-    部分下载 = 成功章节数 < 目录章节数 or 成功章节数 < 完整章节数
+    部分下载 = 成功章节数 != 目录章节数 or 成功章节数 != 完整章节数
     文件名 = 生成小说文件名(书籍, 部分下载=部分下载)
     内容列表 = [
         文件声明,
@@ -989,37 +971,6 @@ async def 准备发送文本文件给当前会话(
             "source_cache_path": None,
             "error": str(exc),
         }
-
-
-def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any, 文件名: str) -> None:
-    if not 源缓存路径:
-        return
-
-    async def 执行上传并清理() -> None:
-        try:
-            if 百度网盘 is not None:
-                百度结果 = await 百度网盘.后台上传小说文件(配置, 源缓存路径, 文件名)
-                if 百度结果.get("success"):
-                    logger.info(f"书旗小说百度网盘后台上传成功：文件={文件名}")
-                elif 百度结果.get("skipped"):
-                    logger.info(
-                        f"书旗小说百度网盘后台上传按状态规则跳过：文件={文件名}"
-                    )
-                elif 百度结果.get("enabled"):
-                    logger.warning(
-                        f"书旗小说百度网盘后台上传失败，不影响主分享：文件={文件名}, 错误={百度结果.get('error')}"
-                    )
-        except Exception as exc:
-            logger.warning(
-                f"书旗小说百度网盘后台上传异常，不影响主分享：文件={文件名}, 错误={exc}"
-            )
-        finally:
-            删除小说缓存文件(源缓存路径)
-
-    try:
-        asyncio.create_task(执行上传并清理())
-    except RuntimeError:
-        删除小说缓存文件(源缓存路径)
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
