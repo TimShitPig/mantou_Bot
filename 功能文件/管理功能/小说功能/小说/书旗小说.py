@@ -124,9 +124,6 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                     书籍.chapter_num,
                     len(书籍.chapters),
                 )
-                raise ShuqiError(
-                    f"目录不完整：catalog={len(书籍.chapters)}, total={书籍.chapter_num}"
-                )
 
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
@@ -137,18 +134,26 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             yield 格式化下载提示(书籍)
 
             阶段 = "content"
-            章节内容 = await 下载全部章节(session, 书籍)
-            成功数 = sum(
-                1 for 项 in 章节内容 if 项.get("content")
-            )
+            所有章节内容 = await 下载全部章节(session, 书籍)
+            章节内容 = [
+                项 for 项 in 所有章节内容 if str(项.get("content") or "").strip()
+            ]
+            成功数 = len(章节内容)
+            if not 成功数:
+                raise ShuqiError("没有获取到可用章节正文")
             if 成功数 != len(书籍.chapters):
-                raise ShuqiError(
-                    f"章节正文不完整：success={成功数}, total={len(书籍.chapters)}"
+                logger.warning(
+                    "书旗小说正文部分获取：book_id=%s, success=%s, catalog=%s, declared=%s",
+                    书籍.book_id,
+                    成功数,
+                    len(书籍.chapters),
+                    书籍.chapter_num,
                 )
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
             logger.info(
                 f"书旗小说章节下载完成：书籍编号={书籍.book_id}, "
-                f"成功={成功数}, 总数={len(书籍.chapters)}, 文件大小={len(文件内容)}"
+                f"成功={成功数}, 目录={len(书籍.chapters)}, 声明={书籍.chapter_num}, "
+                f"文件大小={len(文件内容)}"
             )
 
         阶段 = "send"
@@ -411,7 +416,10 @@ async def 获取书籍(
         book_id=书籍编号,
         book_name=清理网页文本(XML资料.get("BookName")) or f"书旗小说{书籍编号}",
         author_name=清理网页文本(XML资料.get("Author")) or "未知",
-        chapter_num=安全整数(XML资料.get("NumChapter"), len(chapters)),
+        chapter_num=(
+            安全整数(XML资料.get("NumChapter"), 0)
+            or len(chapters)
+        ),
         word_count=0,
         intro="",
         status_text="未知",
@@ -555,8 +563,15 @@ def 提取XML目录节点(root: ET.Element) -> list[dict[str, str]]:
         dict(item.attrib) for item in root.iter()
         if item is not root and item.tag.rsplit("}", 1)[-1] == "Book"
     ]
-    if not 节点 or 安全整数(root.attrib.get("TotalCount"), -1) != len(节点):
-        raise ShuqiError("XML目录分页不完整")
+    声明数量 = 安全整数(root.attrib.get("TotalCount"), -1)
+    if 声明数量 != len(节点):
+        logger.warning(
+            "书旗XML分卷条目数量不一致：book_id=%s, vid=%s, expected=%s, actual=%s",
+            root.attrib.get("BookId", ""),
+            root.attrib.get("Vid", ""),
+            声明数量,
+            len(节点),
+        )
     return 节点
 
 
@@ -567,59 +582,111 @@ async def 获取书旗XML目录(
     节点列表 = 提取XML目录节点(root)
     总章数 = 安全整数(root.attrib.get("NumChapter"), 0)
     if 总章数 <= 0:
-        raise ShuqiError("XML目录章节总数无效")
+        logger.warning(
+            "书旗XML目录未提供有效总章数：book_id=%s, actual=%s",
+            书籍编号,
+            len(节点列表),
+        )
     if (
         root.attrib.get("GatherId") == "1"
         and str(root.attrib.get("Vid") or "0") == "0"
         and all(not item.get("ContentURL") for item in 节点列表)
     ):
-        分卷编号 = [item.get("ChapterId", "") for item in 节点列表]
-        if (
-            any(not re.fullmatch(r"\d+", 编号) for 编号 in 分卷编号)
-            or len(set(分卷编号)) != len(分卷编号)
-        ):
-            raise ShuqiError("XML分卷目录无效")
+        分卷编号: list[str] = []
+        已记录分卷: set[str] = set()
+        无效分卷数 = 0
+        重复分卷数 = 0
+        for item in 节点列表:
+            编号 = str(item.get("ChapterId") or "").strip()
+            if not re.fullmatch(r"\d+", 编号):
+                无效分卷数 += 1
+                continue
+            if 编号 in 已记录分卷:
+                重复分卷数 += 1
+                continue
+            已记录分卷.add(编号)
+            分卷编号.append(编号)
+        if 无效分卷数 or 重复分卷数:
+            logger.warning(
+                "书旗XML分卷列表跳过无效项：book_id=%s, invalid=%s, duplicate=%s",
+                书籍编号,
+                无效分卷数,
+                重复分卷数,
+            )
+        if not 分卷编号:
+            raise ShuqiError("没有有效XML分卷")
         分卷信号量 = asyncio.Semaphore(4)
 
         async def 读取分卷(编号: str) -> list[dict[str, str]]:
             async with 分卷信号量:
                 分卷 = await 请求书旗XML目录(session, 书籍编号, 编号)
-                if 安全整数(分卷.attrib.get("NumChapter")) != 总章数:
-                    raise ShuqiError("XML目录读取期间章节数变化")
+                分卷总数 = 安全整数(分卷.attrib.get("NumChapter"), 0)
+                if 总章数 > 0 and 分卷总数 != 总章数:
+                    logger.warning(
+                        "书旗XML分卷总数不一致：book_id=%s, vid=%s, root=%s, volume=%s",
+                        书籍编号,
+                        编号,
+                        总章数,
+                        分卷总数,
+                    )
                 return 提取XML目录节点(分卷)
 
         任务列表 = [asyncio.create_task(读取分卷(编号)) for 编号 in 分卷编号]
         try:
-            分卷列表 = await asyncio.gather(*任务列表)
+            分卷结果 = await asyncio.gather(*任务列表, return_exceptions=True)
         finally:
             for 任务 in 任务列表:
                 if not 任务.done():
                     任务.cancel()
             await asyncio.gather(*任务列表, return_exceptions=True)
-        节点列表 = [item for 分卷 in 分卷列表 for item in 分卷]
+        节点列表 = []
+        for 编号, 结果 in zip(分卷编号, 分卷结果):
+            if isinstance(结果, BaseException):
+                logger.warning(
+                    "书旗XML分卷读取失败：book_id=%s, vid=%s, error_type=%s",
+                    书籍编号,
+                    编号,
+                    type(结果).__name__,
+                )
+                continue
+            节点列表.extend(结果)
 
-    if len(节点列表) != 总章数:
+    if 总章数 > 0 and len(节点列表) != 总章数:
         logger.warning(
             "书旗XML目录不完整：reason=chapter_count, book_id=%s, expected=%s, actual=%s",
             书籍编号,
             总章数,
             len(节点列表),
         )
-        raise ShuqiError("XML目录章节不完整")
     已记录: set[str] = set()
+    有效节点: list[dict[str, str]] = []
+    无效数量 = 0
+    重复数量 = 0
     for item in 节点列表:
         章节编号 = str(item.get("ChapterId") or "").strip()
         正文URL = str(item.get("ContentURL") or "").strip()
-        if (
-            not re.fullmatch(r"\d+", 章节编号)
-            or 章节编号 in 已记录
-            or not 校验书旗XML正文URL(正文URL, str(书籍编号), 章节编号)
+        if not re.fullmatch(r"\d+", 章节编号) or not 校验书旗XML正文URL(
+            正文URL, str(书籍编号), 章节编号
         ):
-            raise ShuqiError("XML目录章节地址或编号无效")
+            无效数量 += 1
+            continue
+        if 章节编号 in 已记录:
+            重复数量 += 1
+            continue
         已记录.add(章节编号)
         item["ChapterId"] = 章节编号
         item["ContentURL"] = 正文URL
-    return dict(root.attrib), 节点列表
+        有效节点.append(item)
+    if 无效数量 or 重复数量:
+        logger.warning(
+            "书旗XML目录跳过无效条目：book_id=%s, invalid=%s, duplicate=%s",
+            书籍编号,
+            无效数量,
+            重复数量,
+        )
+    if not 有效节点:
+        raise ShuqiError("没有获取到有效XML章节")
+    return dict(root.attrib), 有效节点
 
 
 def 校验书旗XML正文URL(url: str, 书籍编号: str, 章节编号: str) -> bool:
@@ -695,7 +762,14 @@ def 清理正文(decoded_html: str) -> str:
 
 
 def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -> tuple[str, bytes]:
-    文件名 = 生成小说文件名(书籍)
+    可用章节 = [
+        章节 for 章节 in 章节内容 if str(章节.get("content") or "").strip()
+    ]
+    目录章节数 = len(书籍.chapters)
+    成功章节数 = len(可用章节)
+    完整章节数 = 书籍.chapter_num or 目录章节数
+    部分下载 = 成功章节数 < 目录章节数 or 成功章节数 < 完整章节数
+    文件名 = 生成小说文件名(书籍, 部分下载=部分下载)
     内容列表 = [
         文件声明,
         "",
@@ -704,12 +778,14 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
         f"状态：{获取状态文本(书籍)}",
         f"字数：{格式化字数(书籍.word_count)}",
         f"书籍ID：{书籍.book_id}",
-        f"章节数：{len(书籍.chapters)}",
+        f"章节获取状态：{'部分获取' if 部分下载 else '完整获取'}",
+        f"正文成功章节：{成功章节数}/{完整章节数}",
+        f"XML有效目录条目：{目录章节数}",
         "",
     ]
     if 书籍.intro:
         内容列表.extend(["简介：", 书籍.intro, ""])
-    for 章节 in 章节内容:
+    for 章节 in 可用章节:
         标题 = str(章节.get("title") or "")
         正文 = 去除章节正文重复标题(标题, 章节.get("content"))
         内容列表.extend(
@@ -724,19 +800,27 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
     return 文件名, 文件文本.replace("\n", "\r\n").encode("utf-8")
 
 
-def 生成小说文件名(书籍: Book) -> str:
+def 生成小说文件名(书籍: Book, *, 部分下载: bool = False) -> str:
     标题 = 清理文件名(书籍.book_name or f"书旗小说{书籍.book_id}")
     作者 = 清理文件名(书籍.author_name or "未知")
-    return f"[{获取状态文本(书籍)}]书名：{标题} 作者：{作者}.txt"
+    部分前缀 = "[部分]" if 部分下载 else ""
+    return f"{部分前缀}[{获取状态文本(书籍)}]书名：{标题} 作者：{作者}.txt"
 
 
 def 格式化下载提示(书籍: Book) -> str:
+    if len(书籍.chapters) == 书籍.chapter_num:
+        章节提示 = f"章节：{len(书籍.chapters)} 章"
+    else:
+        章节提示 = (
+            f"章节：XML目录可用 {len(书籍.chapters)} 章 / "
+            f"接口声明 {书籍.chapter_num} 章"
+        )
     return "\n".join(
         [
             f"书名：{书籍.book_name or '未知'}",
             f"作者：{书籍.author_name or '未知'}",
             f"状态：{获取状态文本(书籍)}",
-            f"章节：{len(书籍.chapters)} 章",
+            章节提示,
             f"字数：{格式化字数(书籍.word_count)}",
             "",
             "正在下载中请稍等.....",
