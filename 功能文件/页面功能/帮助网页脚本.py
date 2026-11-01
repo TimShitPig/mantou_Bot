@@ -12,16 +12,18 @@
       const updateThemeControl = (theme) => {
         const select = $('theme-select');
         if (select && select.value !== theme) select.value = theme;
-        const toggle = $('theme-toggle');
-        if (!toggle) return;
         const dark = theme === 'dark';
         const label = dark ? '切换到浅色模式' : '切换到深色模式';
-        if (toggle.getAttribute('aria-pressed') !== String(dark)) toggle.setAttribute('aria-pressed', String(dark));
-        if (toggle.getAttribute('aria-label') !== label) toggle.setAttribute('aria-label', label);
-        if (toggle.title !== label) toggle.title = label;
-        const icon = toggle.querySelector('.theme-control-icon');
-        const symbol = dark ? '☀' : '☾';
-        if (icon && icon.textContent !== symbol) icon.textContent = symbol;
+        ['theme-toggle', 'msg-rail-theme'].forEach((id) => {
+          const toggle = $(id);
+          if (!toggle) return;
+          if (toggle.getAttribute('aria-pressed') !== String(dark)) toggle.setAttribute('aria-pressed', String(dark));
+          if (toggle.getAttribute('aria-label') !== label) toggle.setAttribute('aria-label', label);
+          if (toggle.title !== label) toggle.title = label;
+          const icon = toggle.querySelector('.theme-control-icon');
+          const symbol = dark ? '☀' : '☾';
+          if (icon && icon.textContent !== symbol) icon.textContent = symbol;
+        });
       };
       const commitTheme = (next) => {
         const root = document.documentElement;
@@ -147,12 +149,46 @@
       let msgModalOverflow = null;
       const activeMsgModal = () => msgModalIds.map($).findLast((node) => node && !node.hidden);
       const modalFocusable = (node) => [...node.querySelectorAll('button,input,select,textarea,a[href],[tabindex]')].filter((item) => !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
+      const msgFocusReturnTarget = (node = document.activeElement) => node?.closest?.('#msg-head-menu-panel') ? $('msg-head-menu-toggle') : node;
+      const adminPopoverHome = $('admin-popover')?.parentElement;
+      const closeAdminPopover = () => {
+        ['admin-chip', 'msg-rail-admin'].forEach((id) => $(id)?.setAttribute('aria-expanded', 'false'));
+        if ($('admin-popover')) $('admin-popover').hidden = true;
+      };
+      const closeMsgHeadMenu = (restoreFocus = false) => {
+        const panel = $('msg-head-menu-panel');
+        if (!panel || panel.hidden) return;
+        const hadFocus = panel.contains(document.activeElement);
+        panel.hidden = true;
+        $('msg-head-menu-toggle')?.setAttribute('aria-expanded', 'false');
+        if (restoreFocus && hadFocus) $('msg-head-menu-toggle')?.focus({preventScroll:true});
+      };
+      const openMsgHeadMenu = (focus = '') => {
+        if (activeView !== 'messages') return;
+        closeAdminPopover();
+        const panel = $('msg-head-menu-panel');
+        if (!panel) return;
+        panel.hidden = false;
+        $('msg-head-menu-toggle')?.setAttribute('aria-expanded', 'true');
+        const controls = modalFocusable(panel);
+        if (focus) (focus === 'last' ? controls.at(-1) : controls[0])?.focus({preventScroll:true});
+      };
+      const setMessagesWorkspace = (enabled) => {
+        const active = document.body.classList.contains('messages-workspace');
+        if (active === enabled) return;
+        closeMsgHeadMenu(); closeAdminPopover();
+        document.body.classList.toggle('messages-workspace', enabled);
+        const popover = $('admin-popover');
+        if (popover && enabled) document.body.appendChild(popover);
+        else if (popover && adminPopoverHome) adminPopoverHome.appendChild(popover);
+      };
       const setMsgModal = (id, open, restoreFocus = true) => {
         const node = $(id);
         if (id === 'msg-clear-modal' && !open) { invalidateMsgClearPreview(); msgClearState.target = null; }
         if (!node || node.hidden === !open) return;
         if (open) {
-          msgModalFocus.set(id, document.activeElement);
+          closeMsgHeadMenu(true); closeAdminPopover();
+          msgModalFocus.set(id, msgFocusReturnTarget());
           if (!activeMsgModal()) { msgModalOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; }
           node.hidden = false;
           const preferred = id === 'msg-remark-modal' ? $('msg-remark-name') : modalFocusable(node)[0];
@@ -281,6 +317,8 @@
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
+        if (next !== previousView) closeMsgHeadMenu();
+        setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') leaveQQReader();
         activeView = next;
@@ -1199,8 +1237,24 @@
        const changePanAccountDefault = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，默认账号不能保存'); node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/default`, {method:'POST', body:JSON.stringify({index:Number(index)})}); toast(result.message || `${platform}默认账号已更新`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const showAuthError = (error) => { if (error.name === 'AbortError') return; if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
       const adminChip = $('admin-chip'); const adminPopover = $('admin-popover');
-      adminChip?.addEventListener('click', (event) => { event.stopPropagation(); const expanded = adminChip.getAttribute('aria-expanded') === 'true'; adminChip.setAttribute('aria-expanded', String(!expanded)); if (adminPopover) adminPopover.hidden = expanded; });
-      document.addEventListener('click', () => { if (adminChip?.getAttribute('aria-expanded') === 'true') { adminChip.setAttribute('aria-expanded', 'false'); if (adminPopover) adminPopover.hidden = true; } });
+      adminChip?.addEventListener('click', (event) => {
+        event.stopPropagation(); closeMsgHeadMenu();
+        const expanded = adminChip.getAttribute('aria-expanded') === 'true';
+        ['admin-chip', 'msg-rail-admin'].forEach((id) => $(id)?.setAttribute('aria-expanded', String(!expanded)));
+        if (adminPopover) adminPopover.hidden = expanded;
+      });
+      document.addEventListener('click', (event) => { if (!adminPopover?.contains(event.target)) closeAdminPopover(); });
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !adminPopover || adminPopover.hidden) return;
+        event.preventDefault(); closeAdminPopover();
+        $(document.body.classList.contains('messages-workspace') ? 'msg-rail-admin' : 'admin-chip')?.focus({preventScroll:true});
+      });
+      $('msg-rail-theme')?.addEventListener('click', () => $('theme-toggle')?.click());
+      $('msg-rail-admin')?.addEventListener('click', (event) => {
+        event.stopPropagation(); adminChip?.click();
+        if (event.detail === 0 && adminPopover && !adminPopover.hidden) modalFocusable(adminPopover)[0]?.focus({preventScroll:true});
+      });
+      $('msg-rail-exit')?.addEventListener('click', () => $('bot-exit')?.click());
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
@@ -1217,7 +1271,13 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const syncMsgGroupingToggle = () => {
+        const button = $('msg-list-group-toggle');
+        if (!button) return;
+        button.hidden = msgState.filter !== 'all';
+        button.setAttribute('aria-pressed', String(msgState.grouped));
+      };
       const msgScopeKey = (type, id, appid = msgState.selectedAppid) => JSON.stringify([String(appid || '').trim(), String(type || 'group'), String(id || '')]);
       const msgChatKey = (chat) => msgScopeKey(chat?.chat_type, chat?.chat_id, chat?.appid);
       const msgInSelectedBot = (source) => Boolean(msgState.selectedAppid) && String(source?.appid || '').trim() === msgState.selectedAppid;
@@ -1333,7 +1393,7 @@
           back.removeAttribute('aria-hidden');
         }
       };
-      const msgLayout = {listWidth:340, composerHeight:164, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
+      const msgLayout = {listWidth:364, composerHeight:230, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
         const data = value && typeof value === 'object' ? value : {};
         const width = Number.parseInt(data.list_width ?? data.listWidth, 10);
@@ -1345,8 +1405,8 @@
           return fallback;
         };
         return {
-          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 340,
-          composerHeight:Number.isFinite(height) ? Math.max(164, Math.min(420, height)) : 164,
+          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 364,
+          composerHeight:Number.isFinite(height) ? Math.max(164, Math.min(420, height)) : 230,
           listCollapsed:bool(data.list_collapsed ?? data.listCollapsed),
           composerCollapsed:bool(data.composer_collapsed ?? data.composerCollapsed),
         };
@@ -1359,6 +1419,7 @@
           shell.style.setProperty('--msg-list-width', `${next.listWidth}px`);
           shell.classList.toggle('msg-list-collapsed', next.listCollapsed);
           shell.classList.toggle('msg-composer-collapsed', next.composerCollapsed);
+          shell.classList.toggle('msg-composer-compact', !next.composerCollapsed && next.composerHeight < 200);
         }
         const composer = $('msg-composer');
         if (composer) composer.style.height = next.composerCollapsed ? '38px' : `${next.composerHeight}px`;
@@ -1958,6 +2019,7 @@
       const switchMsgBotScope = (appid) => {
         const next = /^\d{4,32}$/.test(String(appid || '').trim()) ? String(appid).trim() : '';
         if (next === msgState.selectedAppid) return;
+        closeMsgHeadMenu(); closeAdminPopover();
         msgState.scopeGeneration += 1;
         for (const key of ['historyAbort','historyOlderAbort','chatListAbort']) { msgState[key]?.abort(); msgState[key] = null; }
         msgState.historyRequest += 1; msgState.historyOlderRequest += 1; msgState.chatListRequest += 1; msgState.historyScheduleToken += 1;
@@ -1971,7 +2033,7 @@
         hideMsgCtx();
         if (msgState.multi) exitMultiMode();
         Object.assign(msgState, {
-          selectedAppid:next, chatId:'', chatType:'group', chatAppid:next, chatRemoved:false, chats:[], messages:[], profiles:{},
+          selectedAppid:next, grouped:false, chatId:'', chatType:'group', chatAppid:next, chatRemoved:false, chats:[], messages:[], profiles:{},
           historyData:null, historyWindow:null, historyActiveScope:'', historyOlderLoading:false, renderedChatId:'', messageRenderSignature:null,
           initialScrollChatId:'', chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false,
           chatListTopPending:true, chatListScrollActive:false, chatListPointerActive:false, chatListPendingData:null,
@@ -1981,16 +2043,18 @@
           adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0,
         });
         for (const key of ['realtimeChats','adminByChat','adminScanAttempted','adminScanFailures','adminCheckedAt']) msgState[key].clear();
-        clearMsgNewMessages(); resetComposer(); resetMsgAdSwitch(); updateMsgPanSelector();
+        clearMsgNewMessages(); resetComposer(); resetMsgAdSwitch(); updateMsgPanSelector(); syncMsgGroupingToggle();
         const body = $('msg-body');
         if (body) { cancelMsgBottomPosition(body, true); body.innerHTML = '<div class="msg-empty">请在左侧选择会话</div>'; }
         $('msg-head-name').textContent = '请选择会话'; $('msg-head-sub').textContent = '';
+        $('msg-head-name').removeAttribute('title'); $('msg-head-sub').removeAttribute('title');
         for (const id of ['msg-composer','msg-refresh-info','msg-remark','msg-group-settings-open','msg-ad-switch']) $(id).hidden = true;
         $('msg-chats').innerHTML = next ? '<div class="msg-empty">正在加载会话…</div>' : '<div class="msg-empty">请先选择机器人</div>';
         window.msgGroupQQ = {}; msgLastPollAt = 0;
         if (next && !$('page-messages')?.hidden) void loadMsgChats(true);
       };
       const showBotPicker = (message = '') => {
+        setMessagesWorkspace(false);
         document.querySelector('.shell')?.classList.add('bot-picker-open');
         $('console-sidebar').hidden = true; $('console-workspace').hidden = true; $('bot-picker').hidden = false;
         $('bot-picker-error').textContent = message; $('bot-picker-error').hidden = !message;
@@ -2665,7 +2729,7 @@
         window.msgGroupQQ = {}; (chats||[]).forEach((chat) => { if (chat.group_qq) window.msgGroupQQ[chat.chat_id] = chat.group_qq; });
         const rowHeight = getMsgChatRowHeight(node);
         const chatPreviews = new Map();
-        const chatRenderSignature = [msgState.filter, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0, rowHeight].join(':') + '|' + visibleChats.map((chat) => {
+        const chatRenderSignature = [msgState.filter, msgState.grouped ? 1 : 0, msgState.folderCollapsed.group ? 1 : 0, msgState.folderCollapsed.user ? 1 : 0, rowHeight].join(':') + '|' + visibleChats.map((chat) => {
           const preview = chatListPreview(chat.last_content);
           chatPreviews.set(chat, preview);
           return [
@@ -2720,7 +2784,7 @@
             rows.push({kind:'chat', chat, preview:chatPreviews.get(chat) || '', height:rowHeight});
           });
         };
-        if (msgState.filter === 'all') {
+        if (msgState.filter === 'all' && msgState.grouped) {
           const sections = [
             ['group', '群聊'],
             ['user', '私聊'],
@@ -2794,6 +2858,7 @@
         }
       };
       const selectMsgChat = (chat) => {
+        closeMsgHeadMenu(); closeAdminPopover();
         closeComposerMentionPicker();
         const chatId = String(chat?.chat_id || '').trim();
         if (!chatId) return;
@@ -3456,9 +3521,12 @@
         const gNum = Number(gInfo.member_num ?? curChat?.member_num ?? curChat?.group_member_num ?? 0);
         const removed = msgState.chatType === 'user' ? msgChatIsRemoved({...curChat, ...data, chat_type:'user'}) : (msgState.chatRemoved || gInfo.membership_status === 'removed' || curChat?.membership_status === 'removed' || curChat?.in_group === false);
         msgState.chatRemoved = removed;
-        $('msg-head-sub').textContent = msgState.chatType === 'group'
-          ? (removed ? '你已被移除群聊' : `群聊 · ${esc(msgState.chatId)}${gNum > 0 ? ` · 群成员 ${gNum} 人` : ''}`)
-          : (removed ? '对方已删除机器人好友 · 保留聊天记录' : `私聊 · ${esc(msgState.chatId)}`);
+        const hasMemberCount = Number.isFinite(gNum) && gNum > 0;
+        const headDetails = msgState.chatType === 'group'
+          ? `群聊 · ${msgState.chatId}${hasMemberCount ? ` · 群成员 ${gNum} 人` : ' · 人数未知'}${removed ? ' · 你已被移除群聊' : ''}`
+          : `私聊 · ${msgState.chatId}${removed ? ' · 对方已删除机器人好友 · 保留聊天记录' : ''}`;
+        $('msg-head-sub').textContent = msgState.chatType === 'group' ? (hasMemberCount ? `${gNum}人` : '人数未知') : '私聊';
+        $('msg-head-sub').title = headDetails; nameEl.title = headDetails;
         $('msg-composer').hidden = removed;
         if (removed) {
           $('msg-ad-switch').hidden = true;
@@ -4630,11 +4698,11 @@
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
           const meta = [type, size].filter(Boolean).join(' · ') || '附件';
-          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">□</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
+          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
-          if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
+          if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
           const fileUrl = mediaProxyUrl(src, 'file', name);
-          return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '□'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载</span></a>`;
+          return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
         }).join('');
       };
       const renderMsgMediaSegments = (media, messageId = '', preload = false, profiles = msgState.profiles) => {
@@ -5423,8 +5491,8 @@
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
-              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml}${media}`)}</div>
-              <div class="msg-meta">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}${muteStatusHtml}${sendStateHtml}</div>
+              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml ? `<div class="msg-text-content">${contentHtml}</div>` : ''}${media}`)}</div>
+              <div class="msg-meta"><span class="msg-meta-detail">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</span>${muteStatusHtml}${sendStateHtml}</div>
               ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
             </div></div>`;
         });
@@ -6173,6 +6241,9 @@
       };
       const closeGroupSettings = (force = false) => {
         if (groupSettingsState.mutating && !force) return;
+        const panel = $('msg-group-settings');
+        const previous = groupSettingsState.session?.returnFocus;
+        const restoreFocus = !force && !panel.hidden && panel.contains(document.activeElement);
         groupSettingsState.session = null;
         groupSettingsState.generation += 1;
         $('msg-group-settings').hidden = true;
@@ -6181,6 +6252,11 @@
         clearGroupMuteStates();
         $('msg-group-member-detail').hidden = true;
         ['members','blacklist'].forEach((kind) => { $(`msg-group-${kind}-list`).innerHTML = ''; });
+        if (restoreFocus) {
+          const target = msgFocusReturnTarget(previous);
+          if (target?.isConnected && target.getClientRects().length) target.focus({preventScroll:true});
+          else if (!$('page-messages').hidden) $('msg-head-menu-toggle')?.focus({preventScroll:true});
+        }
       };
       const renderGroupSettingsRows = (session, kind) => {
         if (!groupSettingsCurrent(session)) return;
@@ -6240,7 +6316,7 @@
         if (!target || msgState.chatRemoved || groupSettingsState.mutating) return;
         closeGroupSettings();
         const current = msgState.chats.find((chat) => String(chat.chat_id || '') === target.chat_id && chat.chat_type === 'group');
-        const session = {target, generation:++groupSettingsState.generation, name:current?.remark || current?.group_name || current?.nickname || target.chat_id, settings:null, profile:{}, profileRevision:0, profileUpdatedAt:0, tab:'basic', detailRequest:0, members:groupSettingsPage(), blacklist:groupSettingsPage()};
+        const session = {target, returnFocus:msgFocusReturnTarget(), generation:++groupSettingsState.generation, name:current?.remark || current?.group_name || current?.nickname || target.chat_id, settings:null, profile:{}, profileRevision:0, profileUpdatedAt:0, tab:'basic', detailRequest:0, members:groupSettingsPage(), blacklist:groupSettingsPage()};
         groupSettingsState.session = session;
         $('msg-group-settings').hidden = false;
         $('msg-group-settings-open').setAttribute('aria-expanded','true');
@@ -6525,19 +6601,57 @@
       $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((el) => el.addEventListener('click', () => {
         $('msg-filter').querySelectorAll('[data-msg-filter]').forEach((x) => x.classList.toggle('active', x === el));
         msgState.filter = el.dataset.msgFilter;
+        syncMsgGroupingToggle();
         msgState.page = 1;
         msgState.chatListTopPending = true;
         $('msg-chats').scrollTop = 0;
         if (msgState.chatListServerLoaded) renderMsgChats({chats:msgState.chats});
         else loadMsgChats(true);
       }));
-      $('msg-search-btn').addEventListener('click', () => { msgState.search = $('msg-search-input').value.trim(); msgState.page = 1; msgState.chatListTopPending = true; loadMsgChats(true); });
-      $('msg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { msgState.search = e.target.value.trim(); msgState.page = 1; msgState.chatListTopPending = true; loadMsgChats(true); } });
+      $('msg-list-group-toggle')?.addEventListener('click', () => {
+        if (msgState.filter !== 'all' || !msgState.selectedAppid) return;
+        msgState.grouped = !msgState.grouped;
+        syncMsgGroupingToggle();
+        msgState.chatRenderSignature = null;
+        msgState.chatListWindowStart = -1; msgState.chatListWindowEnd = -1;
+        renderMsgChats({appid:msgState.selectedAppid, chats:msgState.chats});
+      });
+      const msgHeadMenu = $('msg-head-menu-panel');
+      const msgHeadMenuToggle = $('msg-head-menu-toggle');
+      msgHeadMenuToggle?.addEventListener('click', (event) => {
+        if (msgHeadMenu.hidden) openMsgHeadMenu(event.detail === 0 ? 'first' : '');
+        else closeMsgHeadMenu(true);
+      });
+      msgHeadMenuToggle?.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); openMsgHeadMenu(event.key === 'ArrowUp' ? 'last' : 'first'); }
+        else if (event.key === 'Escape') { event.preventDefault(); closeMsgHeadMenu(true); }
+      });
+      msgHeadMenu?.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMsgHeadMenu(true); return; }
+        if (event.key === 'Tab') { closeMsgHeadMenu(true); return; }
+        // 下拉框保留浏览器原生的方向键和 Home/End 选择行为。
+        if (event.target.tagName === 'SELECT' || !['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+        const controls = modalFocusable(msgHeadMenu);
+        if (!controls.length) return;
+        const index = controls.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? controls.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + controls.length) % controls.length;
+        event.preventDefault(); controls[next].focus({preventScroll:true});
+      });
+      // 先关闭菜单并将焦点还给触发器，再由原按钮执行原有业务和弹窗。
+      msgHeadMenu?.addEventListener('click', (event) => { if (event.target.closest('button:not(:disabled)')) closeMsgHeadMenu(true); }, true);
+      document.addEventListener('click', (event) => { if (!event.target.closest('.msg-head-menu')) closeMsgHeadMenu(); });
+      document.addEventListener('focusin', (event) => { if (!event.target.closest('.msg-head-menu')) closeMsgHeadMenu(); });
       $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((el) => el.addEventListener('click', () => { $('msg-composer-tabs').querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x === el)); msgState.sendType = el.dataset.msgType; renderMsgExtra(); }));
       $('msg-send-mode').addEventListener('change', (e) => { msgState.sendMode = e.target.value; $('msg-custom-id').hidden = !(msgState.sendMode === 'custom_msg_id' || msgState.sendMode === 'custom_event_id'); });
       $('msg-send').addEventListener('click', sendMessage);
       const handleComposerKeydown = (e) => {
         if (handleComposerMentionKeydown(e)) return;
+        if (e.key === 'Enter' && e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && !composerMentionPicker.composing && e.keyCode !== 229) {
+          e.preventDefault();
+          document.execCommand('insertLineBreak');
+          syncComposerImageState(); saveComposerSelection(); scheduleComposerMentionPicker();
+          return;
+        }
         if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && !composerMentionPicker.composing && e.keyCode !== 229) {
           e.preventDefault();
           sendMessage();
@@ -6780,8 +6894,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
-      window.addEventListener('pagehide', () => { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
+      window.addEventListener('pagehide', () => { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
         if (document.visibilityState === 'visible') void loadBotProfile();

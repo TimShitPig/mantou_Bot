@@ -38,16 +38,21 @@ from .帮助网页脚本 import 控制台脚本
       <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><strong data-bot-name>馒头助手</strong><span class="bot-profile-status" data-bot-status>状态未知</span></div>
       <button id="bot-exit" class="bot-workspace-exit" type="button">退出机器人</button>
       <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
-        <a href="?view=dashboard" data-view="dashboard"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>控制台</a>
-        <a href="?view=bot" data-view="bot"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span>机器人配置</a>
-        <a href="?view=novels" data-view="novels"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span>小说功能</a>
-        <a href="?view=pans" data-view="pans"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span>网盘配置</a>
-        <a href="?view=messages" data-view="messages"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg></span>消息记录</a>
-        <a href="?view=runtime" data-view="runtime"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>运行状态</a>
-        <a href="?view=help" data-view="help"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 1 1 5 2c-1 1-2 1-2 3m0 3h.01"/></svg></span>帮助指令</a>
-        <a href="?view=settings" data-view="settings"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg></span>系统设置</a>
+        <a href="?view=dashboard" data-view="dashboard" title="控制台"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>控制台</a>
+        <a href="?view=bot" data-view="bot" title="机器人配置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span>机器人配置</a>
+        <a href="?view=novels" data-view="novels" title="小说功能"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span>小说功能</a>
+        <a href="?view=pans" data-view="pans" title="网盘配置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span>网盘配置</a>
+        <a href="?view=messages" data-view="messages" title="消息记录"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg></span>消息记录</a>
+        <a href="?view=runtime" data-view="runtime" title="运行状态"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>运行状态</a>
+        <a href="?view=help" data-view="help" title="帮助指令"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 1 1 5 2c-1 1-2 1-2 3m0 3h.01"/></svg></span>帮助指令</a>
+        <a href="?view=settings" data-view="settings" title="系统设置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg></span>系统设置</a>
       </nav></div>
       <div class="sidebar-foot"><span class="spark" aria-hidden="true">✧</span><strong>馒头工作台</strong><span>消息、小说与网盘，在这里有序运转。</span></div>
+      <div class="msg-rail-tools" aria-label="消息工作台工具">
+        <button id="msg-rail-theme" type="button" aria-label="切换主题" title="切换主题"><span class="theme-control-icon" aria-hidden="true">◐</span></button>
+        <button id="msg-rail-admin" type="button" aria-label="管理员菜单" title="管理员菜单" aria-expanded="false" aria-controls="admin-popover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></button>
+        <button id="msg-rail-exit" type="button" aria-label="退出机器人" title="退出机器人"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4H4v16h6m5-4 4-4-4-4m-7 4h11"/></svg></button>
+      </div>
     </aside>
     <main class="main">
       <section id="bot-picker" class="bot-picker" aria-labelledby="bot-picker-title" tabindex="-1">
@@ -103,15 +108,12 @@ from .帮助网页脚本 import 控制台脚本
           <div class="msg-shell" id="msg-shell">
             <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
               <button class="msg-panel-toggle msg-list-collapse" id="msg-list-collapse" type="button" aria-expanded="true" aria-label="收起会话列表" title="收起会话列表">‹</button>
+              <button class="msg-panel-toggle msg-list-group-toggle" id="msg-list-group-toggle" type="button" aria-pressed="false" aria-label="按类型分组" title="按类型分组"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="5" height="5" rx="1"/><rect x="3" y="15" width="5" height="5" rx="1"/><path d="M12 6h9M12 17h9"/></svg></button>
               <div class="msg-list-head">
                 <div class="msg-filter" id="msg-filter" role="tablist" aria-label="消息过滤">
-                  <button type="button" data-msg-filter="all" class="active">聊天记录</button>
+                  <button type="button" data-msg-filter="all" class="active">全部</button>
                   <button type="button" data-msg-filter="group">群聊</button>
                   <button type="button" data-msg-filter="user">私聊</button>
-                </div>
-                <div class="msg-search">
-                  <input id="msg-search-input" type="text" placeholder="搜索群名或 openid" aria-label="搜索会话">
-                  <button id="msg-search-btn" type="button">搜索</button>
                 </div>
               </div>
               <div class="msg-chats" id="msg-chats"><div class="msg-empty">正在加载会话...</div></div>
@@ -123,9 +125,11 @@ from .帮助网页脚本 import 控制台脚本
                 <div style="min-width:0">
                   <div class="msg-head-name" id="msg-head-name">选择一个会话</div>
                   <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>
-                  <span class="msg-admin-tag" id="msg-admin-tag" hidden>· 机器人是管理员</span>
                 </div>
-                <div class="msg-head-actions">
+                <div class="msg-head-actions msg-head-menu">
+                  <button class="msg-btn msg-head-menu-toggle" id="msg-head-menu-toggle" type="button" aria-label="会话操作" title="会话操作" aria-expanded="false" aria-controls="msg-head-menu-panel"><span aria-hidden="true">⋮</span></button>
+                  <div class="msg-head-menu-panel" id="msg-head-menu-panel" role="group" aria-label="会话操作" hidden>
+                  <span class="msg-admin-tag" id="msg-admin-tag" hidden>机器人是管理员</span>
                   <label class="msg-pan-account-control" id="msg-pan-account-wrap" hidden><span>网盘账号</span><select id="msg-pan-account-select" aria-label="选择当前群的网盘账号" disabled><option value="">读取中</option></select></label>
                   <button class="msg-btn" id="msg-ad-switch" type="button" hidden title="切换当前群的广告拦截">广告拦截</button>
                   <button class="msg-btn" id="msg-refresh-info" type="button" hidden>刷新群信息</button>
@@ -133,6 +137,7 @@ from .帮助网页脚本 import 控制台脚本
                   <button class="msg-btn" id="msg-group-settings-open" type="button" hidden aria-label="打开当前群聊设置" aria-expanded="false" aria-controls="msg-group-settings">⚙ 设置</button>
                   <button class="msg-btn" id="msg-reload" type="button">刷新</button>
                   <button class="msg-btn msg-clear-open" id="msg-clear-open" type="button">清理记录</button>
+                  </div>
                 </div>
               </div>
               <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
@@ -149,11 +154,11 @@ from .帮助网页脚本 import 控制台脚本
                     <input id="msg-img-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
                   </label>
                   <label class="msg-tool-btn" title="选择视频" id="msg-video-pick" aria-label="选择视频">
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m10 8 6 4-6 4z" stroke-linejoin="round"/></svg>
                     <input id="msg-video-file" type="file" accept="video/mp4,video/*" hidden>
                   </label>
                   <label class="msg-tool-btn" title="选择文件" id="msg-file-pick" aria-label="选择文件">
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h6"/></svg>
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
                     <input id="msg-attachment-file" type="file" accept="*/*" hidden>
                   </label>
                   <span class="msg-composer-top-hint">图片、视频或文件</span>
@@ -183,10 +188,10 @@ from .帮助网页脚本 import 控制台脚本
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
                     <button class="msg-img-remove" id="msg-media-clear" type="button" aria-label="移除附件">×</button>
                   </div>
-                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息内容...（回车发送，Ctrl+Enter 换行）" aria-label="消息内容"></div>
+                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息..." aria-label="消息内容"></div>
                 </div>
                 <div class="msg-toolbar">
-                  <span style="flex:1"></span>
+                  <span class="msg-send-shortcut" style="flex:1">Enter 发送 · Ctrl+Enter 换行</span>
                   <button class="msg-btn primary" id="msg-send" type="button">发送</button>
                 </div>
               </div>
