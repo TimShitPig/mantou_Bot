@@ -51,7 +51,7 @@ from .帮助网页脚本 import 控制台脚本
     </aside>
     <main class="main">
       <section id="bot-picker" class="bot-picker" aria-labelledby="bot-picker-title" tabindex="-1">
-        <div class="bot-picker-heading"><div><h1 id="bot-picker-title" tabindex="-1">选择机器人</h1><p>进入机器人的控制台，管理它的配置和聊天记录。</p></div><button id="bot-picker-refresh" class="outline-button" type="button">刷新列表</button></div>
+        <div class="bot-picker-heading"><div><h1 id="bot-picker-title" tabindex="-1">选择机器人</h1><p>选择卡片进入机器人的控制台，管理它的配置和聊天记录。</p></div><button id="bot-picker-refresh" class="outline-button" type="button">刷新列表</button></div>
         <p id="bot-picker-error" class="bot-picker-error" role="status" hidden></p>
         <div id="bot-profile-list" class="bot-profile-list" aria-label="机器人列表" aria-live="polite"><div class="bot-selector-empty">正在读取机器人…</div></div>
       </section>

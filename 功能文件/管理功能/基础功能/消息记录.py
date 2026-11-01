@@ -119,6 +119,8 @@ _消息持久化失败重试最大等待秒 = 30.0
     if globals().get("机器人资料缓存版本") == 2 else {}
 )
 机器人资料缓存版本 = 2
+_机器人消息统计缓存: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = globals().get("_机器人消息统计缓存") or {}
+_机器人消息统计任务: dict[tuple[Any, ...], asyncio.Task[Any]] = globals().get("_机器人消息统计任务") or {}
 机器人资料缓存秒数 = 6 * 60 * 60
 机器人资料失败冷却: dict[str, float] = globals().get("机器人资料失败冷却") or {}
 机器人资料请求锁: dict[str, asyncio.Lock] = globals().get("机器人资料请求锁") or {}
@@ -5389,6 +5391,90 @@ async def 获取机器人资料(appid: str = "") -> dict[str, str]:
         return {}
     实际AppID = _平台实例appid(平台实例)
     return await _读取机器人公开资料(平台实例, 实际AppID)
+
+
+async def _统计内存机器人消息(appid列表: list[str], *, 读取失败: bool = False) -> dict[str, dict[str, Any]]:
+    """热点记录是部分统计；只按原消息身份计数，缺失身份不归入其他机器人。"""
+    群集合 = {应用: set() for 应用 in appid列表}
+    用户集合 = {应用: set() for 应用 in appid列表}
+    已知应用: set[str] = set()
+    已扫描 = 0
+    for 会话标识, 会话 in _遍历作用域会话缓存():
+        应用 = str(会话.get("appid") or "").strip()
+        类型 = str(会话.get("chat_type") or "group")
+        if 应用 not in 群集合 or 类型 not in {"group", "user"}:
+            continue
+        记录列表 = list(会话.get("messages") or [])
+        if 记录列表 or int(会话.get("msg_count") or 0) > 0:
+            已知应用.add(应用)
+            if 类型 == "group" and 会话标识:
+                群集合[应用].add(会话标识)
+        for 记录 in 记录列表:
+            已扫描 += 1
+            if 已扫描 % 512 == 0:
+                await asyncio.sleep(0)
+            if (not isinstance(记录, dict) or str(记录.get("appid") or "").strip() != 应用
+                    or 记录.get("is_self") or 记录.get("is_bot") is True):
+                continue
+            用户 = str(记录.get("user_id") or "").strip()
+            if re.fullmatch(r"[A-Za-z0-9_-]{5,128}", 用户):
+                用户集合[应用].add(用户)
+    return {应用: {
+        "group_count": None if 读取失败 and 应用 not in 已知应用 else len(群集合[应用]),
+        "user_count": None if 读取失败 and 应用 not in 已知应用 else len(用户集合[应用]),
+        "source": "memory", "status": "unavailable" if 读取失败 and 应用 not in 已知应用 else "partial",
+    } for 应用 in appid列表}
+
+
+async def 获取机器人消息统计(appid列表: list[str]) -> dict[str, dict[str, Any]]:
+    """选择页批量统计，数据库在线程读取，同一请求集单飞并短时缓存。"""
+    应用列表 = sorted({str(值).strip() for 值 in appid列表
+                       if re.fullmatch(r"[0-9]{4,32}", str(值).strip())})
+    if not 应用列表:
+        return {}
+    存储统计 = getattr(_消息存储, "批量统计机器人消息", None)
+    if not _消息数据库已配置() or not callable(存储统计):
+        return await _统计内存机器人消息(应用列表)
+    try:
+        数据库快照 = _消息存储.获取数据库配置快照(当前插件配置)
+        数据库键 = _消息存储.获取数据库初始化键(数据库快照)
+    except Exception as 异常:
+        logger.debug("机器人统计配置读取失败：错误类型=%s", type(异常).__name__)
+        return await _统计内存机器人消息(应用列表, 读取失败=True)
+    键 = (数据库键, tuple(应用列表))
+    缓存 = _机器人消息统计缓存.get(键)
+    if 缓存 and 缓存[0] > time.monotonic():
+        return copy.deepcopy(缓存[1])
+    任务 = _机器人消息统计任务.get(键)
+    if 任务 is None or 任务.done() or 任务.get_loop() is not asyncio.get_running_loop():
+        async def 读取() -> dict[str, dict[str, Any]]:
+            try:
+                循环 = asyncio.get_running_loop()
+                结果 = await 循环.run_in_executor(
+                    _获取消息记录执行器(),
+                    partial(_消息存储.执行数据库配置快照操作, 数据库快照, 存储统计, 应用列表),
+                )
+            except Exception as 异常:
+                logger.debug("机器人消息统计失败：错误类型=%s", type(异常).__name__)
+                结果 = None
+            if not isinstance(结果, dict):
+                结果 = await _统计内存机器人消息(应用列表, 读取失败=True)
+                有效秒数 = 30
+            else:
+                结果 = {应用: {**结果.get(应用, {"group_count": 0, "user_count": 0}),
+                               "source": "database", "status": "ready"} for 应用 in 应用列表}
+                有效秒数 = 60
+            if len(_机器人消息统计缓存) >= 8:
+                _机器人消息统计缓存.pop(next(iter(_机器人消息统计缓存)))
+            _机器人消息统计缓存[键] = (time.monotonic() + 有效秒数, copy.deepcopy(结果))
+            return 结果
+        任务 = asyncio.create_task(读取(), name="机器人卡片消息统计")
+        _机器人消息统计任务[键] = 任务
+        def 清理(完成: asyncio.Task[Any]) -> None:
+            if _机器人消息统计任务.get(键) is 完成:
+                _机器人消息统计任务.pop(键, None)
+        任务.add_done_callback(清理)
+    return copy.deepcopy(await asyncio.shield(任务))
 
 
 async def 获取机器人资料列表() -> list[dict[str, str]]:

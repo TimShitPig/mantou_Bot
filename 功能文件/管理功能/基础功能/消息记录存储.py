@@ -2744,6 +2744,50 @@ def 聚合聊天列表(
         _关闭连接(连接)
 
 
+def 批量统计机器人消息(appid列表: list[str]) -> dict[str, dict[str, int]] | None:
+    """仅返回按认证 AppID 聚合的计数；不把历史正文或用户标识传出数据库。"""
+    应用列表 = sorted({str(值).strip() for 值 in appid列表
+                       if re.fullmatch(r"[0-9]{4,32}", str(值).strip())})
+    if not 应用列表:
+        return {}
+    if not _MySQL可用():
+        return None
+    连接 = _打开连接()
+    if 连接 is None:
+        return None
+    结果 = {应用: {"group_count": 0, "user_count": 0} for 应用 in 应用列表}
+    try:
+        with 连接.cursor() as 游标:
+            for 起点 in range(0, len(应用列表), 128):
+                分块 = 应用列表[起点:起点 + 128]
+                占位 = ",".join(["%s"] * len(分块))
+                游标.execute(
+                    "SELECT /*+ MAX_EXECUTION_TIME(2000) */ appid, "
+                    "COUNT(DISTINCT CASE WHEN 消息类型='group' AND 会话标识<>'' "
+                    "THEN BINARY 会话标识 END) AS group_count, "
+                    "COUNT(DISTINCT CASE WHEN is_self=0 "
+                    "AND user_id REGEXP '^[A-Za-z0-9_-]{5,128}$' "
+                    f"AND COALESCE(({_历史作者机器人SQL}),0)=0 "
+                    "THEN BINARY user_id END) AS user_count "
+                    f"FROM `{消息记录表名}` WHERE appid IN ({占位}) "
+                    "AND 消息类型 IN ('group','user') GROUP BY appid",
+                    tuple(分块),
+                )
+                for 行 in 游标.fetchall():
+                    应用 = str(_行字段(行, 0, "appid", 默认值="") or "")
+                    if 应用 in 结果:
+                        结果[应用] = {
+                            "group_count": max(0, int(_行字段(行, 1, "group_count", 默认值=0) or 0)),
+                            "user_count": max(0, int(_行字段(行, 2, "user_count", 默认值=0) or 0)),
+                        }
+        return 结果
+    except Exception as 异常:
+        logger.debug("机器人消息统计读取失败：错误类型=%s", type(异常).__name__)
+        return None
+    finally:
+        _关闭连接(连接)
+
+
 def 批量读取最后消息(id列表: list[int]) -> dict[int, dict[str, Any]]:
     """按 id 批量读取消息，返回 {id: 记录}，分块 500 对齐 ElainaBot 的 last_content 补查。"""
     结果: dict[int, dict[str, Any]] = {}

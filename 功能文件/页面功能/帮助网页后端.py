@@ -2090,6 +2090,17 @@ async def _处理机器人资料(request: web.Request) -> web.Response:
             {键: str(资料.get(键) or "") for 键 in 字段}
             for 资料 in 资料列表 if isinstance(资料, dict)
         ]
+        try:
+            统计列表 = await 消息记录.获取机器人消息统计([项["appid"] for 项 in 资料列表])
+            if not isinstance(统计列表, dict):
+                统计列表 = {}
+        except Exception as 统计异常:
+            logger.debug("帮助控制台机器人统计读取失败：错误类型=%s", type(统计异常).__name__)
+            统计列表 = {}
+        for 项 in 资料列表:
+            项["stats"] = 统计列表.get(项["appid"], {
+                "group_count": None, "user_count": None, "status": "unavailable",
+            })
         资料 = next((项 for 项 in 资料列表 if 项.get("appid") == 目标AppID), {}) if 目标AppID else next(iter(资料列表), {})
         return web.json_response(
             {"ok": True, "profile": 资料, "profiles": 资料列表,

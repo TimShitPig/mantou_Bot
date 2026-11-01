@@ -2010,6 +2010,8 @@
         }
       };
       const botStatusLabel = (status) => ({running:'运行中', pending:'连接中', error:'连接异常', stopped:'已停止', disabled:'已停用'})[status] || '状态未知';
+      const botPickerStatusLabel = (profile) => ({running:'在线', pending:'连接中', error:'离线（连接异常）', stopped:'离线（已停止）', disabled:'离线（已停用）'})[profile.status] || '状态未知';
+      const botStatValue = (value) => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString('zh-CN') : '—';
       const renderBotProfiles = () => {
         const host = $('bot-profile-list');
         if (!host) return;
@@ -2017,7 +2019,9 @@
         host.innerHTML = profiles.map((profile) => {
           const name = profile.username || profile.platform_id || 'QQ官方机器人';
           const available = /^\d{4,32}$/.test(profile.appid);
-          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" aria-label="进入${esc(name)}控制台" ${consoleEntering || !available ? 'disabled' : ''}><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name, profile.appid)}</span><span class="bot-selector-copy"><strong>${esc(name)}</strong><small><span class="bot-selector-status ${profile.status === 'running' ? 'is-running' : ''}">${esc(botStatusLabel(profile.status))}</span>${profile.appid ? ' · ' + esc(profile.appid) : ''}</small></span><span class="bot-selector-enter">${consoleEntering && profile.appid === consoleAppid ? '正在进入…' : available ? '进入控制台' : '等待认证'}</span></button>`;
+          const status = consoleEntering && profile.appid === consoleAppid ? '正在进入…' : !available ? '等待认证' : botPickerStatusLabel(profile);
+          const stats = profile.stats || {};
+          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" data-bot-unavailable="${!available}" aria-label="进入${esc(name)}控制台${profile.appid ? '，AppID ' + esc(profile.appid) : ''}" title="${esc(profile.appid ? 'AppID：' + profile.appid : '等待机器人认证')}" ${consoleEntering || !available ? 'disabled' : ''}><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name, profile.appid)}</span><span class="bot-selector-copy"><span class="bot-selector-title"><strong>${esc(name)}</strong><span class="bot-selector-admin" title="当前登录身份：控制台管理员"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 2 6 2.5V10c0 4-6 7-6 7s-6-3-6-7V4.5L10 2Z"/><path d="m7 9 2 2 4-4"/></svg>管理员</span></span><small><span class="bot-selector-status ${profile.status === 'running' ? 'is-running' : ''}">${esc(status)}</span></small></span><span class="bot-selector-arrow" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 4 6 6-6 6"/></svg></span><span class="bot-selector-stats"><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="6" r="2.5"/><path d="M2.5 16v-2a5 5 0 0 1 10 0v2h-10Zm11-12a2.5 2.5 0 0 1 0 5m1 2a4 4 0 0 1 3 4v1h-2"/></svg><span>已记录群聊</span><strong data-bot-stat="groups">${esc(botStatValue(stats.group_count))}</strong></span><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>已记录用户</span><strong data-bot-stat="users">${esc(botStatValue(stats.user_count))}</strong></span></span></button>`;
         }).join('') || '<span class="bot-selector-empty">暂无已加载机器人</span>';
         host.querySelectorAll('[data-bot-select]').forEach((button) => button.addEventListener('click', () => {
           const profile = profiles.find((item) => item.key === button.dataset.botSelect);
