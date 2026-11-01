@@ -1506,7 +1506,7 @@
         const nickname = previewOnly
           ? (validMsgNickname(message.nickname, id) || (id ? validMsgNickname(profile.nickname || profile.username, id) : ''))
           : (own
-            ? (validMsgNickname(message.nickname, id) || validMsgNickname(window.msgBotProfile?.username, id) || '机器人')
+            ? (validMsgNickname(botProfileForAppid(message.appid || msgState.chatAppid).username, id) || validMsgNickname(message.nickname, id) || '机器人')
             : displayMsgNickname(message, profile));
         return {
           preview_only:previewOnly,
@@ -1791,66 +1791,94 @@
         const id = String(openid || '').trim();
         if (!id) return '';
         if (type === 'group') { const qq = window.msgGroupQQ?.[id] || ''; return /^\d{5,12}$/.test(String(qq)) ? `https://p.qlogo.cn/gh/${qq}/${qq}/100/` : ''; }
-        const aid = appid || window.msgAppid || '';
+        const aid = String(appid || '').trim();
         // QQ 官方群成员使用 AppID 作用域 OpenID；腾讯官方 qlogo
         // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
-        return aid ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
+        return /^\d{4,32}$/.test(aid) ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
-      const avatarImg = (url, letter) => {
+      const avatarImg = (url, letter, className = '') => {
         const source = mediaProxyUrl(url);
         const nonce = Number(msgState.avatarRefresh?.get(String(url)) || 0);
         const refreshed = nonce && source.startsWith('/api/') ? source + '&avatar_refresh=' + nonce : source;
-        return `<img src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar')?.classList.add('avatar-fallback');this.remove();">`;
+        return `<img class="${esc(className)}" src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}const box=this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar, .bot-selector-avatar, .bot-avatar');box?.classList.add('avatar-fallback');box?.classList.remove('has-image');this.remove();">`;
       };
       const avatarHtml = (url, letter) => {
         const firstLetter = Array.from(String(letter || '?'))[0];
         if (!url) return esc(firstLetter);
         return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter);
       };
-      const applyBotProfile = (profile = {}) => {
+      const botProfileForAppid = (appid) => {
+        const id = String(appid || '').trim();
+        return id ? (window.msgBotProfiles || []).find((profile) => profile.appid === id) || {} : {};
+      };
+      const botStatusLabel = (status) => ({running:'运行中', pending:'连接中', error:'连接异常', stopped:'已停止'})[status] || '状态未知';
+      const renderBotProfiles = () => {
+        const host = $('bot-profile-list');
+        if (!host) return;
+        const profiles = window.msgBotProfiles || [];
+        host.innerHTML = profiles.map((profile) => {
+          const name = profile.username || profile.platform_id || 'QQ官方机器人';
+          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" aria-label="查看${esc(name)}资料" aria-pressed="false"><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name)}</span><span class="bot-selector-copy"><strong>${esc(name)}</strong><small>${esc(botStatusLabel(profile.status))}</small></span></button>`;
+        }).join('') || '<span class="bot-selector-empty">暂无已加载机器人</span>';
+        host.querySelectorAll('[data-bot-select]').forEach((button) => button.addEventListener('click', () => {
+          const profile = profiles.find((item) => item.key === button.dataset.botSelect);
+          if (profile) applyBotProfile(profile);
+        }));
+      };
+      const applyBotProfile = (profile = {}, refreshMessages = false) => {
         const data = profile && typeof profile === 'object' ? profile : {};
         const name = String(data.username || data.name || '').trim() || '馒头助手';
         const avatar = safeMediaUrl(String(data.avatar || data.avatar_url || '').trim());
         const id = String(data.id || '').trim();
-        const previousProfile = window.msgBotProfile;
-        const hasRealProfile = Boolean(id || avatar || (name && name !== '馒头助手'));
-        const profileChanged = previousProfile
-          ? (String(previousProfile.id || '') !== id
-            || String(previousProfile.username || '') !== name
-            || String(previousProfile.avatar || '') !== avatar)
-          : hasRealProfile;
-        window.msgBotProfile = {id, username:name, avatar};
+        window.msgBotProfile = {...data, id, username:name, avatar};
+        document.querySelectorAll('[data-bot-select]').forEach((node) => node.setAttribute('aria-pressed', String(node.dataset.botSelect === data.key)));
         document.querySelectorAll('[data-bot-name]').forEach((node) => { node.textContent = name; });
         document.querySelectorAll('[data-bot-id]').forEach((node) => { node.textContent = id || '由适配器提供'; });
+        document.querySelectorAll('[data-bot-status]').forEach((node) => {
+          node.textContent = botStatusLabel(data.status);
+          node.classList.toggle('online', data.status === 'running');
+        });
         document.querySelectorAll('[data-bot-avatar]').forEach((node) => {
           node.classList.toggle('has-image', Boolean(avatar));
           if (!avatar) { node.innerHTML = '<span class="avatar-face">•ᴗ•</span>'; return; }
-          node.innerHTML = `<img class="bot-avatar-image" src="${esc(avatar)}" alt="${esc(name)}" loading="lazy" referrerpolicy="no-referrer">`;
-          node.querySelector('img')?.addEventListener('error', () => {
-            node.classList.remove('has-image');
-            node.innerHTML = '<span class="avatar-face">•ᴗ•</span>';
-          }, {once:true});
+          node.innerHTML = `<span class="avatar-face">${esc(Array.from(name)[0] || '机')}</span>` + avatarImg(avatar, name, 'bot-avatar-image');
         });
         const hasMessageData = msgState.historyData
           || (Array.isArray(msgState.messages) && msgState.messages.length)
           || Number(msgState.optimisticSends?.size || 0) > 0;
-        if (profileChanged && msgState.chatId && hasMessageData && typeof renderMsgMessages === 'function') {
+        if (refreshMessages && msgState.chatId && hasMessageData && typeof renderMsgMessages === 'function') {
           const body = $('msg-body');
           renderMsgMessages(
             {...msgState.historyData, messages:msgState.messages},
-            {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+            {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0, forceRender:true},
           );
         }
       };
+      let botProfileRequest = null;
+      let botProfileLoadedAt = 0;
       const loadBotProfile = async () => {
-        if (window.msgBotProfileLoaded) return;
-        window.msgBotProfileLoaded = true;
+        if (botProfileRequest) return botProfileRequest;
+        if (Date.now() - botProfileLoadedAt < 60000) return;
+        botProfileRequest = (async () => {
         try {
           const data = await api('bot-profile');
-          applyBotProfile(data.profile || {});
+          const profiles = Array.isArray(data.profiles) ? data.profiles : (data.profile?.appid ? [data.profile] : []);
+          const previousKey = window.msgBotProfile?.key;
+          const previousProfiles = JSON.stringify(window.msgBotProfiles || []);
+          window.msgBotProfiles = profiles.filter((profile) => profile && typeof profile === 'object').map((profile, index) => ({
+            ...profile,
+            appid:String(profile.appid || '').trim(),
+            avatar:safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim()),
+            key:String(profile.appid || profile.platform_id || `bot-${index}`),
+          }));
+          renderBotProfiles();
+          applyBotProfile(window.msgBotProfiles.find((profile) => profile.key === previousKey) || window.msgBotProfiles[0] || {}, previousProfiles !== JSON.stringify(window.msgBotProfiles));
+          botProfileLoadedAt = Date.now();
         } catch (_) {
-          applyBotProfile({});
+          if (!window.msgBotProfiles?.length) applyBotProfile({});
         }
+        })().finally(() => { botProfileRequest = null; });
+        return botProfileRequest;
       };
       const msgTypeName = (m) => {
         const c = String(m.content || '');
@@ -2221,7 +2249,6 @@
           : (chat.avatar || chat.avatar_url || '');
         const av = safeMediaUrl(String(avatarSource).trim())
           || avatarUrl(chat.chat_id, chat.chat_type, chat.appid);
-        if (chat.appid) window.msgAppid = chat.appid;
         const typeTag = chat.chat_type === 'user' ? '<span class="msg-chat-type">私聊</span>' : '<span class="msg-chat-type">群聊</span>';
         const viewing = msgState.chatId === chat.chat_id;
         const removed = msgChatIsRemoved(chat);
@@ -4773,7 +4800,6 @@
         msgState.historyData = {...data, messages:serverMessages};
         const historyAppid = String(data.messages?.find((message) => message?.appid)?.appid || '').trim();
         if (historyAppid) msgState.chatAppid = historyAppid;
-        window.msgAppid = msgState.chatAppid || window.msgAppid || '';
         updateMsgHead(data);
         updateMsgAdminTag();
         $('msg-refresh-info').hidden = msgState.chatType !== 'group' || msgState.chatRemoved;
@@ -4800,6 +4826,7 @@
         const referenceIndex = buildMsgReferenceIndex(msgs, data.references, profiles);
         const renderSignature = JSON.stringify({
           scope: renderScope,
+          botProfile:botProfileForAppid(msgState.chatAppid),
           profiles,
           references:msgs.map((message) => (message.reference_id ? referenceIndex.get(String(message.reference_id)) : null) || message.reference_preview || null),
           more: Boolean(data.has_more),
@@ -4875,18 +4902,19 @@
           const failedSend = Boolean(optimisticEntry) && sendState === 'failed';
           const profile = profiles[m.user_id] || {};
           const rawNickname = isSelf ? String(m.nickname || '').trim() : validMsgNickname(m.nickname, m.user_id);
-          const botProfileName = String(window.msgBotProfile?.username || '').trim();
-          const botProfileAvatar = String(window.msgBotProfile?.avatar || '').trim();
+          const botProfile = botProfileForAppid(m.appid || msgState.chatAppid);
+          const botProfileName = String(botProfile.username || '').trim();
+          const botProfileAvatar = String(botProfile.avatar || '').trim();
           const profileAvatar = safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim());
           const muteState = !isSelf ? msgState.mutes.get(String(m.user_id || '').trim()) : null;
           const muteExpireTs = Number(muteState?.mute_expire_ts || 0);
           const isMuted = Boolean(muteState) && (!muteExpireTs || muteExpireTs > Date.now() / 1000);
           const displayNickname = isSelf
             ? (botMessage
-              ? (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : (botProfileName || '机器人'))
+              ? (botProfileName || (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : '机器人'))
               : (rawNickname && rawNickname !== '未知用户' ? rawNickname : '我'))
             : displayMsgNickname(m, profile);
-          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', data.messages?.[0]?.appid || window.msgAppid)));
+          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', m.appid || msgState.chatAppid)));
           const tags = [];
           if (msgIsBot(m, profile)) tags.push('<span class="msg-tag bot">BOT</span>');
           else if (isSelf) tags.push('<span class="msg-tag self">我</span>');
@@ -5203,7 +5231,7 @@
         const existingAvatar = String(existing.avatar || existing.avatar_url || '').trim();
         const contactProfile = (matchesCurrent ? msgState.profiles?.[chatId] : payload.member_profiles?.[chatId]) || {};
         const contactAvatar = String(contactProfile.avatar || '').trim();
-        const botAvatar = String(window.msgBotProfile?.avatar || '').trim();
+        const botAvatar = String(botProfileForAppid(payload.appid || message.appid || existing.appid).avatar || '').trim();
         const preservedAvatar = contactAvatar
           || (existingAvatar && (!botAvatar || existingAvatar !== botAvatar) ? existingAvatar : '');
         const overlayAvatar = chatType === 'user' && eventIsSelf
@@ -6306,7 +6334,10 @@
       };
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
       window.addEventListener('pagehide', () => { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); });
-      setInterval(refreshQuarkProfilesSilently, 60000);
+      setInterval(() => {
+        void refreshQuarkProfilesSilently();
+        if (document.visibilityState === 'visible') void loadBotProfile();
+      }, 60000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
         updateMuteCountdowns();

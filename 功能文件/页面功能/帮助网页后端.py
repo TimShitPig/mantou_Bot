@@ -1987,22 +1987,31 @@ async def _处理消息布局(request: web.Request) -> web.Response:
 
 
 async def _处理机器人资料(request: web.Request) -> web.Response:
-    """返回 QQ 官方机器人公开资料；失败时返回空资料让页面使用默认头像。"""
+    """返回全部 QQ 官方机器人公开资料，兼容单资料读取。"""
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
+    目标AppID = str(request.query.get("appid") or "").strip()
+    if 目标AppID and not re.fullmatch(r"[0-9]{4,32}", 目标AppID):
+        return _控制台错误(400, "机器人参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        资料 = await 消息记录.获取机器人资料()
+        资料列表 = await 消息记录.获取机器人资料列表()
+        字段 = ("appid", "platform_id", "id", "username", "avatar", "status", "profile_status")
+        资料列表 = [
+            {键: str(资料.get(键) or "") for 键 in 字段}
+            for 资料 in 资料列表 if isinstance(资料, dict)
+        ]
+        资料 = next((项 for 项 in 资料列表 if 项.get("appid") == 目标AppID), {}) if 目标AppID else next(iter(资料列表), {})
         return web.json_response(
-            {"ok": True, "profile": 资料 if isinstance(资料, dict) else {}},
-            headers={"Cache-Control": "private, max-age=300"},
+            {"ok": True, "profile": 资料, "profiles": 资料列表},
+            headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:
         logger.debug("帮助控制台机器人资料读取失败：错误类型=%s", type(exc).__name__)
         return web.json_response(
-            {"ok": True, "profile": {}},
-            headers={"Cache-Control": "private, max-age=60"},
+            {"ok": True, "profile": {}, "profiles": []},
+            headers={"Cache-Control": "no-store"},
         )
 
 

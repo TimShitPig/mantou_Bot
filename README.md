@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.263-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.264-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,9 +11,11 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.263 |
+| 版本 | v6.1.264 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
+
+控制台侧栏列出全部已加载的 QQ 官方机器人，点击可查看各自名称、头像和实际运行状态；页面可见时每分钟更新，单个账号暂时读取失败不影响其他账号。聊天中的机器人资料和头像按该会话所属账号匹配；私聊事件没有提供真实昵称或头像时仍保留占位，不借用其他机器人账号的数据。
 
 网页群聊输入框输入 `@` 可选择全体成员或当前群已有资料的成员，显示头像，候选数量不截断，支持搜索和方向键/Enter 选择；全体提及需要机器人具有群管理员权限。粘贴或选择的 PNG、JPEG、GIF、WebP 图片（不超过 10MB）使用 QQ 官方素材预上传，再以 Markdown 发送，保留原始图片与动画。
 

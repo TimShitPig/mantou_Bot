@@ -110,8 +110,15 @@ _消息持久化失败批次: list[tuple[str, Any]] = list(
 )
 _消息持久化失败重试次数 = int(globals().get("_消息持久化失败重试次数", 0) or 0)
 _消息持久化失败重试最大等待秒 = 30.0
-机器人资料缓存: dict[str, tuple[float, dict[str, str]]] = globals().get("机器人资料缓存") or {}
+机器人资料缓存: dict[str, tuple[float, dict[str, str]]] = (
+    globals().get("机器人资料缓存") or {}
+    if globals().get("机器人资料缓存版本") == 2 else {}
+)
+机器人资料缓存版本 = 2
 机器人资料缓存秒数 = 6 * 60 * 60
+机器人资料失败冷却: dict[str, float] = globals().get("机器人资料失败冷却") or {}
+机器人资料请求锁: dict[str, asyncio.Lock] = globals().get("机器人资料请求锁") or {}
+_机器人资料请求信号量 = globals().get("_机器人资料请求信号量") or asyncio.Semaphore(2)
 _消息数据库维护任务: asyncio.Task[Any] | None = globals().get("_消息数据库维护任务")
 _消息资料回填任务: asyncio.Task[Any] | None = globals().get("_消息资料回填任务")
 _消息数据库恢复任务: asyncio.Task[Any] | None = globals().get("_消息数据库恢复任务")
@@ -4829,25 +4836,18 @@ def 记录发送消息(
         机器人来源 = 来源值.startswith("bot_") or 来源值 == "web_panel"
         机器人资料: dict[str, Any] = {}
         if 机器人来源:
-            资料键 = str(appid or "default").strip() or "default"
-            缓存候选 = [机器人资料缓存.get(资料键)]
-            if 资料键 != "default":
-                缓存候选.append(机器人资料缓存.get("default"))
-            for 机器人缓存项 in 缓存候选:
-                if not isinstance(机器人缓存项, tuple) or len(机器人缓存项) <= 1:
-                    continue
+            资料键 = str(appid or "").strip()
+            机器人缓存项 = 机器人资料缓存.get(资料键) if 资料键 else None
+            if isinstance(机器人缓存项, tuple) and len(机器人缓存项) > 1:
                 缓存资料 = 机器人缓存项[1]
-                if not isinstance(缓存资料, dict):
-                    continue
-                机器人资料 = 缓存资料
-                if not 头像值:
-                    头像值 = str(
-                        机器人资料.get("avatar")
-                        or 机器人资料.get("avatar_url")
-                        or ""
-                    ).strip()
-                if 头像值 or 机器人资料.get("username") or 机器人资料.get("name"):
-                    break
+                if isinstance(缓存资料, dict) and 缓存资料.get("appid") == 资料键:
+                    机器人资料 = 缓存资料
+                    if not 头像值:
+                        头像值 = str(
+                            机器人资料.get("avatar")
+                            or 机器人资料.get("avatar_url")
+                            or ""
+                        ).strip()
         if 机器人来源 and not str(发送者昵称 or "").strip():
             发送者昵称 = str(
                 机器人资料.get("username")
@@ -5168,13 +5168,11 @@ def _是QQ官方平台(平台实例: Any) -> bool:
     try:
         元信息 = 平台实例.meta()
         名称 = str(_读取字段(元信息, "name") or "").strip().casefold()
-        标识 = str(_读取字段(元信息, "id") or "").strip().casefold()
         配置 = _读取字段(平台实例, "config")
         类型 = str(_读取字段(配置, "type") or "").strip().casefold()
         return (
-            名称 == "qq_official"
-            or 标识 == "qq_official"
-            or 类型 == "qq_official"
+            名称 in {"qq_official", "qqofficial"}
+            or 类型 in {"qq_official", "qqofficial"}
             or "qq 机器人官方" in 名称
         )
     except Exception:
@@ -5193,27 +5191,15 @@ def 获取QQ官方平台(上下文: Any = None, appid: str = "") -> Any | None:
                 首个官方平台 = 平台实例
             if not 目标AppID:
                 return 平台实例
-            配置 = _读取字段(平台实例, "config")
-            元信息 = 平台实例.meta()
-            候选AppID = (
-                _读取字段(平台实例, "appid"),
-                _读取字段(平台实例, "app_id"),
-                _读取字段(配置, "appid"),
-                _读取字段(配置, "app_id"),
-                _读取字段(元信息, "appid"),
-                _读取字段(元信息, "app_id"),
-            )
-            if any(str(值 or "").strip() == 目标AppID for 值 in 候选AppID):
+            if _平台实例appid(平台实例) == 目标AppID:
                 return 平台实例
         except Exception:
             continue
-    # 单机器人或旧版本平台对象未暴露 AppID 时保持兼容；多机器人时优先精确匹配。
-    return 首个官方平台
+    return None if 目标AppID else 首个官方平台
 
 
 def 获取HTTP通道(平台实例: Any = None) -> tuple[Any, Any] | None:
-    """返回 (bot_api, http)，用于直接调用 QQ 官方 REST 接口。"""
-    平台实例 = 平台实例 or 获取QQ官方平台()
+    """返回指定实例的 (bot_api, http)，解析失败不借用其他机器人。"""
     if 平台实例 is None:
         return None
     客户端 = _读取字段(平台实例, "client")
@@ -5224,35 +5210,89 @@ def 获取HTTP通道(平台实例: Any = None) -> tuple[Any, Any] | None:
     return api, _http
 
 
-async def 获取机器人资料(appid: str = "") -> dict[str, str]:
-    """按 QQ 官方 /users/@me 接口读取并缓存机器人名称、头像和 ID。"""
-    缓存键 = str(appid or "default").strip() or "default"
-    当前时间 = time.time()
-    已缓存 = 机器人资料缓存.get(缓存键)
-    if 已缓存 and 当前时间 - float(已缓存[0] or 0) < 机器人资料缓存秒数:
-        return dict(已缓存[1])
-    平台实例 = 获取QQ官方平台(appid=appid)
-    通道 = 获取HTTP通道(平台实例)
-    if 通道 is None:
+async def _读取机器人公开资料(平台实例: Any, appid: str) -> dict[str, str]:
+    """资料按真实认证 AppID 隔离；失败只短暂冷却，不写六小时空缓存。"""
+    if not appid or _平台实例appid(平台实例) != appid:
         return {}
-    _, _http = 通道
-    try:
-        from botpy.http import Route
+    锁 = 机器人资料请求锁.setdefault(appid, asyncio.Lock())
+    async with 锁:
+        当前时间 = time.time()
+        已缓存 = 机器人资料缓存.get(appid)
+        旧资料 = dict(已缓存[1]) if 已缓存 and 已缓存[1].get("appid") == appid else {}
+        if 旧资料 and 当前时间 - float(已缓存[0] or 0) < 机器人资料缓存秒数:
+            return 旧资料
+        if 当前时间 < 机器人资料失败冷却.get(appid, 0):
+            return 旧资料
+        通道 = 获取HTTP通道(平台实例)
+        if 通道 is None:
+            return 旧资料
+        _, _http = 通道
+        try:
+            from botpy.http import Route
 
-        响应 = await _http.request(Route("GET", "/users/@me"))
-        资料 = {
-            "id": str(_提取发送响应字段(响应, "id") or "").strip(),
-            "username": str(_提取发送响应字段(响应, "username", "name") or "").strip(),
-            "avatar": str(_提取发送响应字段(响应, "avatar", "avatar_url") or "").strip(),
-        }
-        if not 资料["username"] and not 资料["avatar"]:
-            机器人资料缓存[缓存键] = (当前时间, {})
-            return {}
-        机器人资料缓存[缓存键] = (当前时间, dict(资料))
-        return 资料
-    except Exception as 异常:
-        logger.debug("QQ官方机器人资料读取失败：错误类型=%s", type(异常).__name__)
+            async with _机器人资料请求信号量:
+                响应 = await asyncio.wait_for(_http.request(Route("GET", "/users/@me")), timeout=5)
+            if _平台实例appid(平台实例) != appid:
+                return {}
+            资料 = {
+                "appid": appid,
+                "id": str(_提取发送响应字段(响应, "id") or "").strip(),
+                "username": str(_提取发送响应字段(响应, "username", "name") or "").strip(),
+                "avatar": str(_提取发送响应字段(响应, "avatar", "avatar_url") or "").strip(),
+            }
+            if not 资料["username"] and not 资料["avatar"]:
+                机器人资料失败冷却[appid] = 当前时间 + 30
+                return 旧资料
+            机器人资料缓存[appid] = (time.time(), dict(资料))
+            机器人资料失败冷却.pop(appid, None)
+            return 资料
+        except Exception as 异常:
+            机器人资料失败冷却[appid] = 当前时间 + 30
+            logger.debug("QQ官方机器人资料读取失败：错误类型=%s", type(异常).__name__)
+            return 旧资料
+
+
+async def 获取机器人资料(appid: str = "") -> dict[str, str]:
+    """按认证 AppID 读取公开资料；未知目标不回退其他机器人。"""
+    平台实例 = 获取QQ官方平台(appid=appid)
+    if 平台实例 is None:
         return {}
+    实际AppID = _平台实例appid(平台实例)
+    return await _读取机器人公开资料(平台实例, 实际AppID)
+
+
+async def 获取机器人资料列表() -> list[dict[str, str]]:
+    """返回全部已加载的 QQ 官方机器人；每项只含公开字段。"""
+    平台列表 = [平台 for 平台 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(平台)]
+
+    async def 读取一项(平台: Any) -> dict[str, str]:
+        结果 = {
+            "appid": "", "platform_id": "", "id": "", "username": "QQ官方机器人",
+            "avatar": "", "status": "unknown", "profile_status": "unavailable",
+        }
+        try:
+            结果["appid"] = _平台实例appid(平台)
+            try:
+                元信息 = 平台.meta()
+            except Exception:
+                元信息 = None
+            结果["platform_id"] = str(_读取字段(元信息, "id") or _读取字段(_读取字段(平台, "config"), "id") or "").strip()
+            结果["username"] = 结果["platform_id"] or 结果["username"]
+            状态值 = _读取字段(平台, "status")
+            状态 = str(_读取字段(状态值, "value", 状态值) or "unknown").strip().lower()
+            结果["status"] = 状态 if 状态 in {"pending", "running", "error", "stopped"} else "unknown"
+            资料 = await _读取机器人公开资料(平台, 结果["appid"])
+            结果.update({
+                "id": str(资料.get("id") or ""),
+                "username": str(资料.get("username") or 结果["username"]),
+                "avatar": str(资料.get("avatar") or ""),
+                "profile_status": "ok" if 资料 else "unavailable",
+            })
+        except Exception as 异常:
+            logger.debug("QQ官方机器人资料枚举失败：错误类型=%s", type(异常).__name__)
+        return 结果
+
+    return list(await asyncio.gather(*(读取一项(平台) for 平台 in 平台列表)))
 
 
 def 获取最近消息ID(平台实例: Any, 会话标识: str) -> str:
@@ -8845,18 +8885,20 @@ async def 解除群成员禁言(
 # ---------------------------------------------------------------------------
 
 _昵称修补已安装 = globals().get("_昵称修补已安装", False)
+_昵称修补安装版本 = int(globals().get("_昵称修补安装版本", 0) or 0)
 
 
 def _修补botpy昵称() -> bool:
-    """补回 botpy 丢弃的 author 昵称及官方事件扩展头像字段。
+    """补回 botpy 丢弃的 author 身份、昵称及官方事件扩展头像字段。
 
     QQ 官方 C2C/群聊事件原始 JSON 的 author 带 username（用户昵称），但
     部分 botpy 版本的 C2CMessage._User / GroupMessage._User 只解析 openid。
-    在事件构造后把 username 和可能存在的 avatar 动态补到 author 对象上，
-    下游即可读取；标准事件没有头像字段时仍保持为空。
+    在事件构造后保留原 author 的明确 OpenID 关联、username 和头像扩展，
+    下游按当前 AppID 保存身份关系；缺失字段保持为空，不从引用作者推断。
     """
-    global _昵称修补已安装
-    if _昵称修补已安装:
+    global _昵称修补已安装, _昵称修补安装版本
+    修补版本 = 2
+    if _昵称修补已安装 and _昵称修补安装版本 == 修补版本:
         return True
     try:
         import botpy.message as _botpy消息模块
@@ -8890,8 +8932,15 @@ def _修补botpy昵称() -> bool:
         if 消息类 is None:
             continue
         原初始化 = getattr(消息类, "__init__", None)
-        if 原初始化 is None or getattr(原初始化, "__module__", "") == __name__:
+        if 原初始化 is None or getattr(原初始化, "__mantou_author_profile_version__", 0) == 修补版本:
             continue
+        if getattr(原初始化, "__module__", "") == __name__:
+            # 旧版只用模块名标记修补；热重载时取回原初始化，避免旧闭包拦住升级。
+            原初始化 = getattr(原初始化, "__mantou_author_profile_original__", None) or (
+                getattr(原初始化, "__kwdefaults__", None) or {}
+            ).get("_原")
+            if not callable(原初始化):
+                continue
 
         def 新初始化(self: Any, *参数: Any, _原=原初始化, **关键字: Any) -> None:
             _原(self, *参数, **关键字)
@@ -8918,6 +8967,17 @@ def _修补botpy昵称() -> bool:
                     if isinstance(项, dict)
                 ]
                 if isinstance(作者数据, dict):
+                    if 作者 is not None:
+                        for 字段 in ("union_openid", "user_openid", "member_openid"):
+                            标识 = 作者数据.get(字段)
+                            if (
+                                isinstance(标识, str) and _OPENID规则.fullmatch(标识)
+                                and not getattr(作者, 字段, None)
+                            ):
+                                try:
+                                    setattr(作者, 字段, 标识)
+                                except Exception:
+                                    pass
                     if 作者 is not None and isinstance(作者数据.get("bot"), bool):
                         try:
                             作者.bot = 作者数据["bot"]
@@ -8971,8 +9031,11 @@ def _修补botpy昵称() -> bool:
             except Exception:
                 pass
 
+        setattr(新初始化, "__mantou_author_profile_version__", 修补版本)
+        setattr(新初始化, "__mantou_author_profile_original__", 原初始化)
         消息类.__init__ = 新初始化  # type: ignore[method-assign]
     _昵称修补已安装 = True
+    _昵称修补安装版本 = 修补版本
     return True
 
 
