@@ -42,8 +42,8 @@ except Exception:
 _消息写入SQL = (
     f"INSERT INTO `{消息记录表名}` "
     "(会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
-    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message, member_role, msg_seq) "
-    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, avatar, raw_message, member_role, msg_seq, history_origin, history_order) "
+    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
 )
 # 已归档对象不随消息快照回退；数据库中的直链缓存可能比排队快照更新。
 # 仅合并现有归档对象，传入媒体中的其它字段和首次新增归档索引仍正常写入。
@@ -189,7 +189,7 @@ _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
     "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq, "
-    f"{_历史引用快照SQL} AS reference_payload, {_历史作者机器人SQL} AS author_is_bot"
+    f"{_历史引用快照SQL} AS reference_payload, {_历史作者机器人SQL} AS author_is_bot, history_origin, history_order"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -211,9 +211,11 @@ _列最大长度: dict[str, int] = {
 
 _数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
 _数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
-_消息表结构版本 = 6
+_消息表结构版本 = 7
 _已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
 _消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
+_历史清理边界: dict[tuple[str, str, str, str], dict[str, Any]] = globals().get("_历史清理边界") or {}
+_历史清理写锁 = globals().get("_历史清理写锁") or threading.RLock()
 
 
 def _运行状态表名() -> str:
@@ -406,6 +408,9 @@ def 获取数据库配置快照(配置: Any) -> dict[str, Any]:
         "database_host": 数据["host"], "database_port": 数据["port"],
         "database_user": 数据["user"], "database_password": 数据["password"],
         "database_name": 数据["database"],
+        "database_ssl_mode": 数据.get("ssl_mode", "preferred"),
+        "database_ssl_ca": 数据.get("ssl_ca", ""),
+        "database_connect_timeout": 数据.get("connect_timeout", 10),
     }}
 
 
@@ -497,6 +502,8 @@ def _初始化数据库结构() -> bool:
                     raw_message MEDIUMTEXT,
                     member_role VARCHAR(16) DEFAULT '',
                     msg_seq VARCHAR(64) DEFAULT '',
+                    history_origin VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '',
+                    history_order BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     PRIMARY KEY (id),
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
@@ -509,6 +516,18 @@ def _初始化数据库结构() -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            初始化阶段 = "检查聊天记录清理标记"
+            for 字段, 定义 in (
+                ("history_origin", "VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT ''"),
+                ("history_order", "BIGINT UNSIGNED NOT NULL DEFAULT 0"),
+            ):
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME=%s",
+                    (消息记录表名, 字段),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", 默认值=0) or 0) == 0:
+                    游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{字段}` {定义}")
             初始化阶段 = "建用户资料表"
             游标.execute(
                 f"""
@@ -1466,6 +1485,8 @@ def _消息写入参数(记录: dict[str, Any]) -> tuple[Any, ...]:
         str(记录.get("raw_message") or ""),
         _按列宽截断(记录.get("member_role") or "", "member_role"),
         _按列宽截断(记录.get("msg_seq") or "", "msg_seq"),
+        str(记录.get("history_origin") or "")[:32],
+        max(0, int(记录.get("history_order") or 0)),
     )
 
 
@@ -1474,7 +1495,7 @@ def _消息更新参数(记录: dict[str, Any]) -> tuple[Any, ...]:
     return (
         *值[1:3], *值[4:13],
         值[13], 值[13], 值[13], 值[14], 值[14], 值[14],
-        *值[15:], 值[0], 值[1], 值[2], 值[3],
+        *值[15:19], 值[0], 值[1], 值[2], 值[3],
     )
 
 
@@ -1572,7 +1593,147 @@ def _批量读取已存在消息键(
     return 已存在
 
 
+def _清理范围条件(范围: dict[str, Any]) -> tuple[str, tuple[Any, ...]]:
+    应用 = str(范围.get("appid") or "").strip()
+    if not re.fullmatch(r"[0-9]{4,32}", 应用) or 范围.get("scope") not in {"chat", "bot"}:
+        raise ValueError("invalid_cleanup_scope")
+    条件, 参数 = "BINARY appid=BINARY %s", (应用,)
+    if 范围["scope"] == "chat":
+        类型, 会话 = str(范围.get("chat_type") or ""), str(范围.get("chat_id") or "").strip()
+        if 类型 not in {"group", "user"} or not 会话 or len(会话) > 128:
+            raise ValueError("invalid_cleanup_chat")
+        条件 += " AND BINARY 消息类型=BINARY %s AND BINARY 会话标识=BINARY %s"
+        参数 += (类型, 会话)
+    return 条件, 参数
+
+
+def 登记聊天记录清理边界(范围: dict[str, Any]) -> None:
+    """成功提交后保留清理墓碑；迟到的队列和媒体更新只作为已处理跳过。"""
+    _清理范围条件(范围)
+    键 = (str(范围.get("database_key") or ""), str(范围["appid"]),
+         str(范围.get("chat_type") or "") if 范围["scope"] == "chat" else "",
+         str(范围.get("chat_id") or "") if 范围["scope"] == "chat" else "")
+    原值 = _历史清理边界.get(键) or {}
+    _历史清理边界[键] = {**范围,
+        "cutoff_id": max(int(范围.get("cutoff_id") or 0), int(原值.get("cutoff_id") or 0)),
+        "cutoff_order": max(int(范围.get("cutoff_order") or 0), int(原值.get("cutoff_order") or 0))}
+
+
+def _记录已被清理(记录: dict[str, Any]) -> bool:
+    if not _历史清理边界:
+        return False
+    数据库键 = 获取数据库初始化键()
+    应用, 类型, 会话 = (str(记录.get(字段) or "") for 字段 in ("appid", "chat_type", "_session"))
+    for 键 in ((数据库键, 应用, "", ""), (数据库键, 应用, 类型, 会话)):
+        边界 = _历史清理边界.get(键)
+        if not 边界:
+            continue
+        来源 = str(记录.get("history_origin") or "")
+        顺序 = int(记录.get("history_order") or 0)
+        数据库ID = int(记录.get("_history_db_id") or 0)
+        if 来源 == 边界.get("origin") and 顺序 > int(边界.get("cutoff_order") or 0):
+            continue
+        if (not 来源 or (来源 == 边界.get("origin") and 顺序 <= int(边界.get("cutoff_order") or 0))
+                or (数据库ID and 数据库ID <= int(边界.get("cutoff_id") or 0))):
+            return True
+    return False
+
+
+def 预览聊天记录清理(范围: dict[str, Any]) -> dict[str, Any] | None:
+    条件, 参数 = _清理范围条件(范围)
+    连接 = _打开连接()
+    if 连接 is None:
+        return None
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(f"SELECT COALESCE(MAX(id),0) AS cutoff_id,COUNT(*) AS message_count "
+                       f"FROM `{消息记录表名}` WHERE {条件} AND NOT "
+                       "(BINARY history_origin=BINARY %s AND history_order>%s)",
+                       (*参数, str(范围.get("origin") or ""), max(0, int(范围.get("cutoff_order") or 0))))
+            行 = 游标.fetchone()
+            return {"cutoff_id": int(_行字段(行, 0, "cutoff_id", 默认值=0) or 0),
+                    "database_count": int(_行字段(行, 1, "message_count", 默认值=0) or 0)}
+    except Exception as 异常:
+        logger.warning("聊天记录清理预览失败：错误类型=%s", type(异常).__name__)
+        return None
+    finally:
+        _关闭连接(连接)
+
+
+def 执行聊天记录清理(范围: dict[str, Any]) -> dict[str, Any] | None:
+    """仅删除显式确认边界内的消息；摘要和未读状态在同一事务中更新。"""
+    条件, 参数 = _清理范围条件(范围)
+    with _历史清理写锁:
+        连接 = _打开连接()
+        if 连接 is None:
+            return None
+        try:
+            with 连接.cursor() as 游标:
+                游标.execute(
+                    f"DELETE FROM `{消息记录表名}` WHERE {条件} AND "
+                    "((id<=%s AND NOT (BINARY history_origin=BINARY %s AND history_order>%s)) "
+                    "OR (BINARY history_origin=BINARY %s AND history_order<=%s))",
+                    (*参数, max(0, int(范围.get("cutoff_id") or 0)), str(范围.get("origin") or ""),
+                     max(0, int(范围.get("cutoff_order") or 0)), str(范围.get("origin") or ""),
+                     max(0, int(范围.get("cutoff_order") or 0))),
+                )
+                删除数 = max(0, int(游标.rowcount or 0))
+                索引条件 = "BINARY appid=BINARY %s"
+                索引参数: tuple[Any, ...] = (范围["appid"],)
+                if 范围["scope"] == "chat":
+                    索引条件 += " AND BINARY chat_type=BINARY %s AND BINARY conversation_id=BINARY %s"
+                    索引参数 += (范围["chat_type"], 范围["chat_id"])
+                游标.execute(f"DELETE FROM `{会话索引表名}` WHERE {索引条件}", 索引参数)
+                游标.execute(
+                    f"INSERT INTO `{会话索引表名}` (appid,chat_type,conversation_id,last_id,last_ts,message_count) "
+                    "SELECT m.appid,m.消息类型,m.会话标识,m.id,m.ts,s.message_count "
+                    f"FROM `{消息记录表名}` m JOIN (SELECT MAX(id) AS last_id,COUNT(*) AS message_count "
+                    f"FROM `{消息记录表名}` WHERE {条件} GROUP BY BINARY appid,BINARY 消息类型,BINARY 会话标识) s ON m.id=s.last_id",
+                    参数,
+                )
+                游标.execute(f"SELECT appid,chat_type,conversation_id,message_count FROM `{会话索引表名}` "
+                           f"WHERE {索引条件}", 索引参数)
+                剩余会话 = [{"appid": str(_行字段(行, 0, "appid", 默认值="") or ""),
+                         "chat_type": str(_行字段(行, 1, "chat_type", 默认值="") or ""),
+                         "chat_id": str(_行字段(行, 2, "conversation_id", 默认值="") or ""),
+                         "count": int(_行字段(行, 3, "message_count", 默认值=0) or 0)}
+                        for 行 in (游标.fetchall() or [])]
+                状态表 = _运行状态表名()
+                游标.execute(f"SELECT state_key FROM `{状态表}` WHERE namespace=%s", ("msg_console_unread",))
+                for 行 in 游标.fetchall() or []:
+                    原键 = str(_行字段(行, 0, "state_key", 默认值="") or "")
+                    try:
+                        键 = json.loads(原键)
+                    except (TypeError, ValueError):
+                        continue
+                    if (not isinstance(键, list) or len(键) != 3 or str(键[0]) != 范围["appid"]
+                            or (范围["scope"] == "chat" and 键[1:] != [范围["chat_type"], 范围["chat_id"]])):
+                        continue
+                    游标.execute(f"DELETE FROM `{状态表}` WHERE namespace=%s AND BINARY state_key=BINARY %s",
+                               ("msg_console_unread", 原键))
+            连接.commit()
+            登记聊天记录清理边界(范围)
+            return {"database_deleted_count": 删除数, "conversations": 剩余会话,
+                    "remaining_count": sum(项["count"] for 项 in 剩余会话)}
+        except Exception as 异常:
+            try:
+                连接.rollback()
+            except Exception:
+                pass
+            logger.warning("聊天记录清理事务失败：错误类型=%s", type(异常).__name__)
+            return None
+        finally:
+            _关闭连接(连接)
+
+
 def _写入消息记录(记录: dict[str, Any]) -> bool:
+    with _历史清理写锁:
+        return _实际写入消息记录(记录)
+
+
+def _实际写入消息记录(记录: dict[str, Any]) -> bool:
+    if _记录已被清理(记录):
+        return True
     连接 = _打开连接()
     if 连接 is None:
         return False
@@ -1918,10 +2079,18 @@ def 更新消息媒体直链(
 
 
 def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
+    with _历史清理写锁:
+        return _实际批量写入消息(记录列表)
+
+
+def _实际批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
     """使用单连接、单事务批量写入消息，供异步持久化队列调用。"""
     有效记录 = [记录 for 记录 in (记录列表 or []) if 记录 and 记录.get("_session")]
     if not 有效记录 or not _MySQL可用():
         return False
+    有效记录 = [记录 for 记录 in 有效记录 if not _记录已被清理(记录)]
+    if not 有效记录:
+        return True
     去重记录: list[dict[str, Any]] = []
     已见索引: dict[tuple[str, str, str, str], int] = {}
     超限数量 = 0
@@ -3192,6 +3361,9 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "raw_message": 取值(17),
         "member_role": 取值(18),
         "msg_seq": 取值(19),
+        "history_origin": str(_行字段(行, 22, "history_origin", 默认值="") or ""),
+        "history_order": int(_行字段(行, 23, "history_order", 默认值=0) or 0),
+        "_history_db_id": int(取值(0, "0") or 0),
     }
     # 兼容旧的二十列查询和默认/字典游标；只供展示规范化消费，不持久化或回传。
     引用快照 = _行字段(行, 20, "reference_payload", 默认值=None)

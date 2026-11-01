@@ -13,6 +13,7 @@ import json
 import os
 import random
 import re
+import secrets
 import threading
 import time
 import unicodedata
@@ -162,6 +163,12 @@ _消息事件队列上限 = 512
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
 成员资料每会话上限 = 2000
 发送序号 = globals().get("发送序号") or 0
+_聊天记录接收来源 = globals().get("_聊天记录接收来源") or secrets.token_hex(16)
+_聊天记录接收序号 = int(globals().get("_聊天记录接收序号") or 0)
+_聊天记录清理代次: dict[tuple[str, str, str], int] = globals().get("_聊天记录清理代次") or {}
+_聊天记录内存清理边界: dict[tuple[str, str, str], dict[str, Any]] = globals().get("_聊天记录内存清理边界") or {}
+_聊天记录清理序号 = int(globals().get("_聊天记录清理序号") or 0)
+_聊天记录清理锁 = globals().get("_聊天记录清理锁") or asyncio.Lock()
 _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
 _消息撤回事件挂钩版本 = int(globals().get("_消息撤回事件挂钩版本", 0) or 0)
@@ -1429,6 +1436,11 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
     好友状态列表: list[dict[str, Any]] = []
     for 类型, 数据 in 项目列表:
         if 类型 == "message" and isinstance(数据, dict):
+            # 升级前的排队副本属于当前进程的旧记录；新记录在创建时已有正序号。
+            数据.setdefault("history_origin", _聊天记录接收来源)
+            数据.setdefault("history_order", 0)
+            if _聊天记录已清理(数据):
+                continue
             撤回键 = (str(数据.get("_session") or ""), _规范消息ID(数据.get("message_id")))
             if 撤回键 in 已撤回消息待同步:
                 数据 = {**数据, "recalled": True}
@@ -1441,7 +1453,7 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
             好友状态列表.append(数据)
         elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
             会话标识, 未读数 = 数据
-            未读表[str(会话标识)] = max(0, int(未读数 or 0))
+            未读表[str(会话标识)] = max(0, int(_未读待写.get(str(会话标识), 未读数) or 0))
 
     成功 = True
     if 消息列表:
@@ -1826,6 +1838,202 @@ async def 停止消息记录(超时: float = 15.0) -> bool:
     return 已冲刷
 
 
+def _新聊天记录接收标记() -> dict[str, Any]:
+    global _聊天记录接收序号
+    _聊天记录接收序号 += 1
+    return {"history_origin": _聊天记录接收来源, "history_order": _聊天记录接收序号}
+
+
+def _清理作用域匹配(范围: dict[str, Any], 应用: str, 类型: str, 会话: str) -> bool:
+    return (应用 == 范围.get("appid") and (范围.get("scope") == "bot" or
+            (类型 == 范围.get("chat_type") and 会话 == 范围.get("chat_id"))))
+
+
+def _记录位于清理边界(记录: dict[str, Any], 边界: dict[str, Any]) -> bool:
+    来源 = str(记录.get("history_origin") or "")
+    if 来源 == 边界.get("origin"):
+        return int(记录.get("history_order") or 0) <= int(边界.get("cutoff_order") or 0)
+    数据库ID = int(记录.get("_history_db_id") or 0)
+    return not 来源 or bool(数据库ID and 数据库ID <= int(边界.get("cutoff_id") or 0))
+
+
+def _聊天记录已清理(记录: dict[str, Any]) -> bool:
+    应用, 类型, 会话 = (str(记录.get(字段) or "") for 字段 in ("appid", "chat_type", "_session"))
+    return any(边界 and _记录位于清理边界(记录, 边界)
+               for 键 in ((应用, "", ""), (应用, 类型, 会话))
+               if (边界 := _聊天记录内存清理边界.get(键)))
+
+
+def _恢复快照作用域已清理(应用: str, 类型: str, 会话: str, 基线: dict[str, Any]) -> bool:
+    旧代次 = 基线.get("cleanup_generations") or {}
+    return any(_聊天记录清理代次.get(键, 0) != 旧代次.get(键, 0)
+               for 键 in ((应用, "", ""), (应用, 类型, 会话)))
+
+
+async def 准备清理聊天记录(
+    appid: str, chat_type: str = "", chat_id: str = "", scope: str = "chat",
+) -> dict[str, Any]:
+    """捕获确认时的边界；返回值只由服务端保管，后续新消息不属于此次清理。"""
+    应用, 类型, 会话 = str(appid or "").strip(), str(chat_type or "").strip(), str(chat_id or "").strip()
+    if (not re.fullmatch(r"[0-9]{4,32}", 应用) or scope not in {"chat", "bot"}
+            or (scope == "chat" and (类型 not in {"group", "user"} or not 会话 or len(会话) > 128))):
+        return {"ok": False, "reason": "invalid_scope", "error": "请选择要清理的聊天记录"}
+    范围 = {"appid": 应用, "scope": scope, "chat_type": 类型 if scope == "chat" else "",
+          "chat_id": 会话 if scope == "chat" else ""}
+    数据库启用 = _消息数据库已配置()
+    if 数据库启用 and not await 等待消息记录恢复():
+        return {"ok": False, "reason": "database_unavailable", "error": "数据库暂未连接，请稍后重试"}
+    async with _数据库写入锁:
+        边界 = {**范围, "origin": _聊天记录接收来源, "cutoff_order": _聊天记录接收序号,
+              "cutoff_id": 0, "database_key": ""}
+        内存快照 = []
+        for 标识, 项 in _遍历作用域会话缓存():
+            if not _清理作用域匹配(范围, str(项.get("appid") or ""), str(项.get("chat_type") or "group"), 标识):
+                continue
+            内存快照.append({"chat_id": 标识, "chat_type": str(项.get("chat_type") or "group"),
+                         "count": max(int(项.get("msg_count") or 0), len(项.get("messages") or [])),
+                         "unread": max(0, int(项.get("unread") or 0)),
+                         "unread_removed": int(项.get("_history_unread_removed") or 0)})
+        数据库计数 = 0
+        if 数据库启用:
+            边界["database_key"] = _消息存储.获取数据库初始化键(当前插件配置)
+            结果 = await _异步执行消息记录同步(_消息存储.预览聊天记录清理, 边界)
+            if not isinstance(结果, dict):
+                return {"ok": False, "reason": "database_unavailable", "error": "读取聊天记录失败，请稍后重试"}
+            边界["cutoff_id"] = 结果["cutoff_id"]
+            数据库计数 = 结果["database_count"]
+        内存计数 = sum(项["count"] for 项 in 内存快照)
+        return {"ok": True, **范围, "count": max(数据库计数, 内存计数),
+                "database_count": 数据库计数, "memory_count": 内存计数, "boundary": 边界,
+                "_memory_before": 内存快照, "_database_enabled": 数据库启用}
+
+
+def _推送聊天记录清理事件(数据: dict[str, Any]) -> None:
+    载荷 = {"type": "history_cleared", "data": 数据}
+    for 队列, 循环 in list(_消息事件订阅.items()):
+        if 循环.is_closed():
+            _消息事件订阅.pop(队列, None)
+            continue
+        def 投递(目标: asyncio.Queue[Any] = 队列) -> None:
+            if 目标.full():
+                try:
+                    目标.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                目标.put_nowait(载荷)
+            except asyncio.QueueFull:
+                pass
+        if 循环 is asyncio.get_running_loop():
+            投递()
+        else:
+            循环.call_soon_threadsafe(投递)
+
+
+async def 执行清理聊天记录(准备结果: dict[str, Any]) -> dict[str, Any]:
+    """先提交数据库事务，再同步内存；失败保留历史，接收任务始终继续运行。"""
+    global _消息缓存总数缓存, _聊天记录清理序号
+    if not isinstance(准备结果, dict) or not 准备结果.get("ok") or not isinstance(准备结果.get("boundary"), dict):
+        return {"ok": False, "reason": "invalid_preview", "error": "清理确认已失效，请重新操作"}
+    边界 = dict(准备结果["boundary"])
+    数据库启用 = _消息数据库已配置()
+    if (数据库启用 != bool(准备结果.get("_database_enabled")) or
+            (数据库启用 and 边界.get("database_key") != _消息存储.获取数据库初始化键(当前插件配置)) or
+            边界.get("origin") != _聊天记录接收来源):
+        return {"ok": False, "reason": "configuration_changed", "error": "配置已更新，请重新确认清理"}
+    已取消 = False
+    async with _聊天记录清理锁, _数据库写入锁:
+        if (数据库启用 != _消息数据库已配置() or
+                (数据库启用 and 边界.get("database_key") != _消息存储.获取数据库初始化键(当前插件配置))):
+            return {"ok": False, "reason": "configuration_changed", "error": "配置已更新，请重新确认清理"}
+        数据库结果: dict[str, Any] = {"database_deleted_count": 0, "conversations": [], "remaining_count": 0}
+        if 数据库启用:
+            # 等锁期间配置可变；锁内重新核对后固定目标库，线程不再读取新配置。
+            数据库快照 = _消息存储.获取数据库配置快照(当前插件配置)
+            任务 = asyncio.get_running_loop().run_in_executor(
+                _获取消息记录执行器(),
+                partial(_消息存储.执行数据库配置快照操作, 数据库快照, _消息存储.执行聊天记录清理, 边界),
+            )
+            try:
+                结果 = await asyncio.shield(任务)
+            except asyncio.CancelledError:
+                # 请求断开不撤销已提交事务，等待线程结果后完成内存同步。
+                已取消 = True
+                结果 = await 任务
+            if not isinstance(结果, dict):
+                return {"ok": False, "reason": "delete_failed", "error": "清理未完成，请刷新后重试"}
+            数据库结果 = 结果
+        _聊天记录清理序号 += 1
+        清理键 = (边界["appid"], 边界.get("chat_type") or "", 边界.get("chat_id") or "")
+        _聊天记录清理代次[清理键] = _聊天记录清理序号
+        原边界 = _聊天记录内存清理边界.get(清理键) or {}
+        _聊天记录内存清理边界[清理键] = {**边界,
+            "cutoff_order": max(int(边界.get("cutoff_order") or 0), int(原边界.get("cutoff_order") or 0)),
+            "cutoff_id": max(int(边界.get("cutoff_id") or 0), int(原边界.get("cutoff_id") or 0))}
+        _机器人消息统计缓存.clear()
+        预览内存 = {(项["chat_type"], 项["chat_id"]): 项 for 项 in 准备结果.get("_memory_before") or []}
+        剩余数据库 = {(项["chat_type"], 项["chat_id"]): 项["count"] for 项 in 数据库结果.get("conversations") or []}
+        删除内存数, 剩余内存数 = 0, 0
+        for 标识, 会话 in _遍历作用域会话缓存():
+            应用, 类型 = str(会话.get("appid") or ""), str(会话.get("chat_type") or "group")
+            if not _清理作用域匹配(边界, 应用, 类型, 标识):
+                continue
+            原消息 = list(会话.get("messages") or [])
+            新消息 = [项 for 项 in 原消息 if isinstance(项, dict) and not _记录位于清理边界(项, 边界)]
+            删除内存数 += len(原消息) - len(新消息)
+            旧快照 = 预览内存.get((类型, 标识)) or {}
+            剩余计数 = max(剩余数据库.get((类型, 标识), 0), len(新消息),
+                         int(会话.get("msg_count") or 0) - int(旧快照.get("count") or 0))
+            未读 = max(0, int(会话.get("unread") or 0))
+            if int(会话.get("_history_read_order") or 0) <= int(边界["cutoff_order"]):
+                已移除未读 = max(0, int(会话.get("_history_unread_removed") or 0) - int(旧快照.get("unread_removed") or 0))
+                本次移除未读 = min(未读, max(0, int(旧快照.get("unread") or 0) - 已移除未读))
+                未读 -= 本次移除未读
+                会话["_history_unread_removed"] = int(会话.get("_history_unread_removed") or 0) + 本次移除未读
+            会话.update({"messages": 新消息, "msg_count": 剩余计数, "unread": 未读,
+                        "last_content": "", "last_nickname": "", "last_message_id": "", "last_ts": 0})
+            if 新消息:
+                _更新会话摘要(会话, max(新消息, key=lambda 项: (int(项.get("ts") or 0), int(项.get("history_order") or 0))))
+            作用域键 = _会话作用域键(标识, 类型, 应用)
+            _未读待写[作用域键] = 未读
+            _持久化未读数(作用域键, 未读)
+            剩余内存数 += 剩余计数
+        # 旧混合入口可能与作用域缓存不是同一字典，移除其对应行，防止热点淘汰后再次投影。
+        活动字典 = {id(项) for 项 in 作用域消息缓存.values()}
+        for 标识, 旧会话 in list(消息缓存.items()):
+            if not isinstance(旧会话, dict) or id(旧会话) in 活动字典:
+                continue
+            原消息 = list(旧会话.get("messages") or [])
+            新消息 = [项 for 项 in 原消息 if not (isinstance(项, dict) and
+                _清理作用域匹配(边界, str(项.get("appid") or ""), str(项.get("chat_type") or "group"), 标识) and
+                _记录位于清理边界(项, 边界))]
+            if len(新消息) != len(原消息):
+                旧会话.update({"messages": 新消息, "msg_count": len(新消息), "unread": 0,
+                            "last_content": "", "last_nickname": "", "last_message_id": "", "last_ts": 0})
+                if 新消息:
+                    _更新会话摘要(旧会话, max(新消息, key=lambda 项: int(项.get("ts") or 0)))
+        # 历史被热点淘汰的会话也清除旧的排队未读值，不创建新会话或删除备注。
+        for 原键 in list(_未读待写):
+            try:
+                键 = json.loads(原键)
+            except (TypeError, ValueError):
+                continue
+            if (isinstance(键, list) and len(键) == 3 and
+                    _清理作用域匹配(边界, str(键[0]), str(键[1]), str(键[2])) and
+                    (str(键[0]), str(键[1]), str(键[2])) not in 作用域消息缓存):
+                _未读待写[原键] = 0
+        _消息缓存总数缓存 = sum(len(项.get("messages") or []) for _, 项 in _遍历作用域会话缓存())
+        结果 = {"ok": True, **{键: 边界[键] for 键 in ("appid", "scope", "chat_type", "chat_id", "cutoff_id", "origin", "cutoff_order")},
+              "database_deleted_count": int(数据库结果["database_deleted_count"]),
+              "memory_deleted_count": 删除内存数,
+              "deleted_count": max(int(数据库结果["database_deleted_count"]), 删除内存数),
+              "remaining_count": max(int(数据库结果.get("remaining_count") or 0), 剩余内存数)}
+        _推送聊天记录清理事件(结果)
+    if 已取消:
+        raise asyncio.CancelledError
+    return 结果
+
+
 def _持久化未读数(会话标识: str, 未读数: int) -> None:
     """异步写入未读数，避免 MySQL 往返阻塞消息事件循环。"""
     if not 会话标识 or not _消息数据库已配置():
@@ -1905,6 +2113,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "is_bot", "source", "recalled", "media", "reference_id", "refidx",
         "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview", "reference_ids",
+        "history_origin", "history_order",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     _补充记录机器人状态(消息, 记录.get("raw_message"))
@@ -4064,6 +4273,7 @@ def 记录收到消息(
             默认记录昵称 = "成员"
         记录: dict[str, Any] = {
             "id": 发送序号,
+            **_新聊天记录接收标记(),
             "message_id": 消息ID,
             "user_id": 成员标识,
             "_session": 会话标识,
@@ -4454,6 +4664,7 @@ def 更新消息媒体归档(
     媒体索引: int = 0,
     provider: str = "lanzou",
 ) -> bool:
+    """只关联任务原记录的精确作用域；已清理记录完成为无写入的空操作。"""
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
     归档字段 = _消息媒体归档字段(provider)
@@ -4468,13 +4679,26 @@ def 更新消息媒体归档(
     )
     if any(not str(归档资料.get(字段) or "").strip() for 字段 in 必要字段):
         return False
-    会话 = 消息缓存.get(会话标识)
+    if not isinstance(原记录, dict):
+        return False
+    应用 = str(原记录.get("appid") or "").strip()
+    类型 = str(原记录.get("chat_type") or "").strip()
+    if (not re.fullmatch(r"[0-9]{4,32}", 应用) or 类型 not in {"group", "user"}
+            or str(原记录.get("_session") or "").strip() != 会话标识
+            or _规范消息ID(原记录.get("message_id")) != 消息ID):
+        return False
+    if _聊天记录已清理(原记录):
+        return True
+    会话 = _读取作用域会话缓存(会话标识, 类型, 应用)
     记录 = next(
         (
             项目
             for 项目 in reversed((会话 or {}).get("messages") or [])
             if isinstance(项目, dict)
             and _规范消息ID(项目.get("message_id")) == 消息ID
+            and str(项目.get("appid") or "").strip() == 应用
+            and str(项目.get("chat_type") or "").strip() == 类型
+            and str(项目.get("_session") or "").strip() == 会话标识
         ),
         None,
     )
@@ -4992,6 +5216,7 @@ def 记录发送消息(
         发送序号 += 1
         记录: dict[str, Any] = {
             "id": 发送序号,
+            **_新聊天记录接收标记(),
             "_session": str(会话标识 or ""),
             "message_id": 消息ID,
             "refidx": str(自身REFIDX or "").strip(),
@@ -5070,6 +5295,7 @@ def 设置会话已读(会话标识: str, 类型: str = "group", appid: str = ""
         会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         if 会话:
             会话["unread"] = 0
+            会话["_history_read_order"] = _聊天记录接收序号 + 1
         _持久化未读数(_会话作用域键(会话标识, 类型, appid), 0)
         return True
     except Exception:
@@ -5441,7 +5667,7 @@ async def 获取机器人消息统计(appid列表: list[str]) -> dict[str, dict[
     except Exception as 异常:
         logger.debug("机器人统计配置读取失败：错误类型=%s", type(异常).__name__)
         return await _统计内存机器人消息(应用列表, 读取失败=True)
-    键 = (数据库键, tuple(应用列表))
+    键 = (数据库键, tuple(应用列表), _聊天记录清理序号)
     缓存 = _机器人消息统计缓存.get(键)
     if 缓存 and 缓存[0] > time.monotonic():
         return copy.deepcopy(缓存[1])
@@ -9682,6 +9908,7 @@ async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
             "group_state_generations": dict(群机器人状态代次),
             "friend_states": copy.deepcopy(好友关系缓存),
             "meta_time": _本地缓存时间,
+            "cleanup_generations": dict(_聊天记录清理代次),
         }
         try:
             # 快照读取不接触活动内存，锁只串行数据库工作，事件接收继续运行。
@@ -9914,6 +10141,8 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
 
     def 恢复会话未读(标识: str, 会话: dict[str, Any]) -> None:
         类型, 应用 = str(会话.get("chat_type") or "group"), str(会话.get("appid") or "").strip()
+        if _恢复快照作用域已清理(应用, 类型, 标识, 基线):
+            return
         键 = _会话作用域键(标识, 类型, 应用)
         if 键 in _未读待写:
             会话["unread"] = max(0, int(_未读待写[键] or 0))
@@ -9945,6 +10174,8 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
         _规范化聊天摘要(最后)
         类型 = str(项.get("chat_type") or 最后.get("chat_type") or "group")
         appid = str(项.get("appid") or 最后.get("appid") or "").strip()
+        if _恢复快照作用域已清理(appid, 类型, 会话标识, 基线):
+            continue
         作用域键 = _会话作用域键(会话标识, 类型, appid)
         已恢复会话.add(作用域键)
         if 最后 and (str(最后.get("appid") or "").strip() != appid or str(最后.get("chat_type") or "group") != 类型):

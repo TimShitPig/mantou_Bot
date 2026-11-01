@@ -91,6 +91,8 @@ class 帮助网页服务:
 控制台会话认证指纹: str = globals().get("控制台会话认证指纹", "")
 _控制台会话存储锁 = globals().get("_控制台会话存储锁") or threading.RLock()
 _机器人配置请求锁: dict[tuple[int, str], dict[str, Any]] = globals().get("_机器人配置请求锁") or {}
+_聊天清理确认会话: dict[str, dict[str, Any]] = globals().get("_聊天清理确认会话") or {}
+_聊天清理执行任务: set[asyncio.Task[Any]] = globals().get("_聊天清理执行任务") or set()
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
 夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
 夸克扫码启动代次: dict[str, str] = globals().get("夸克扫码启动代次") or {}
@@ -458,7 +460,7 @@ async def _后台刷新消息列表(
         "label": "数据库地址",
         "kind": "text",
         "secret": False,
-        "hint": "MySQL 服务地址。修改后重载插件生效。",
+        "hint": "支持 IP、域名或带端口的 MySQL 地址。修改后重载插件生效。",
     },
     "database_port": {
         "category": "database_settings",
@@ -466,7 +468,7 @@ async def _后台刷新消息列表(
         "kind": "number",
         "secret": False,
         "default": "3306",
-        "hint": "默认 3306；有效范围 1 至 65535。修改后重载插件生效。",
+        "hint": "留空使用地址内端口，地址未带端口时使用 3306；有效范围 1 至 65535。",
     },
     "database_user": {
         "category": "database_settings",
@@ -489,6 +491,26 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
         "hint": "密码仅写入、不回显；已配置时留空表示不修改。",
+    },
+    "database_ssl_mode": {
+        "category": "database_settings", "label": "数据库加密连接", "kind": "select",
+        "secret": False, "default": "preferred",
+        "options": [
+            {"value": "preferred", "label": "自动协商"},
+            {"value": "required", "label": "必须加密"},
+            {"value": "verify_identity", "label": "验证证书与主机名"},
+            {"value": "disabled", "label": "关闭 TLS"},
+        ],
+        "hint": "公网数据库可选择必须加密；验证证书时地址须与证书匹配。",
+    },
+    "database_ssl_ca": {
+        "category": "database_settings", "label": "数据库 CA 证书", "kind": "text",
+        "secret": False, "default": "",
+        "hint": "可选，填写 AstrBot 所在服务器可读取的 CA 证书文件；留空使用系统证书。",
+    },
+    "database_connect_timeout": {
+        "category": "database_settings", "label": "数据库连接超时（秒）", "kind": "number",
+        "secret": False, "default": "10", "hint": "有效范围 1 至 60 秒。",
     },
 }
 
@@ -699,9 +721,8 @@ def _读取插件配置摘要() -> dict[str, Any]:
                 else 文本值 in {"1", "true", "yes", "on", "enabled", "开启", "开"}
             )
         elif not 定义.get("secret"):
-            显示值 = "3306" if 字段名 == "database_port" and not 原值 else 原值
             项目["value"] = (
-                list(显示值) if isinstance(显示值, list) else str(显示值 or "")
+                list(原值) if isinstance(原值, list) else str(原值 or "")
             )
         else:
             # 敏感值只返回是否已配置。Cookie、密码、数据库凭据和密钥
@@ -721,6 +742,12 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     if not 定义:
         raise ValueError("配置字段不支持")
     kind = 定义["kind"]
+    if kind == "select":
+        文本 = str(值 or "").strip()
+        允许值 = {str(项.get("value")) if isinstance(项, dict) else str(项) for 项 in 定义.get("options", [])}
+        if 文本 not in 允许值:
+            raise ValueError("配置选项无效")
+        return 文本
     if kind == "boolean":
         if isinstance(值, bool):
             return 值
@@ -758,10 +785,16 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
         return int(文本)
     if 字段名 == "database_port":
         if not 文本:
-            return "3306"
+            return ""
         if not 文本.isdigit() or not 1 <= int(文本) <= 65535:
             raise ValueError("数据库端口无效")
         return 文本
+    if 字段名 == "database_connect_timeout":
+        if not 文本.isdigit() or not 1 <= int(文本) <= 60:
+            raise ValueError("数据库连接超时应为 1 至 60 秒")
+        return int(文本)
+    if 字段名 == "database_ssl_ca" and any(ord(字符) < 32 for 字符 in 文本):
+        raise ValueError("数据库证书路径无效")
     if 字段名 == "database_name":
         if len(文本) > 64 or any(ord(字符) < 32 or ord(字符) == 127 or 字符 in "`\\" for 字符 in 文本):
             raise ValueError("数据库名无效")
@@ -976,7 +1009,7 @@ def _数据库会话可用(配置: Any = None) -> bool:
 
 def 获取控制台会话配置快照(配置: Any = None) -> dict[str, Any]:
     """在线程派发前固定认证及连接输入，不引用后续会变更的配置对象。"""
-    from 功能文件.管理功能.基础功能.运行状态数据库 import 读取数据库配置值
+    from 功能文件.管理功能.基础功能.运行状态数据库 import 读取数据库配置值, 获取数据库配置
 
     来源 = 配置 if 配置 is not None else _当前作用域配置()
     用户名, 密码 = _读取控制台账号(来源)
@@ -988,16 +1021,27 @@ def 获取控制台会话配置快照(配置: Any = None) -> dict[str, Any]:
             ("database_user", "user_activation_database_user"),
             ("database_password", "user_activation_database_password"),
             ("database_name", "user_activation_database_name"),
+            ("database_ssl_mode", ""),
+            ("database_ssl_ca", ""),
+            ("database_connect_timeout", ""),
         )
     }
     for 字段 in ("database_host", "database_user", "database_name"):
         数据库配置[字段] = str(数据库配置[字段] or "").strip()
     数据库配置["database_name"] = 数据库配置["database_name"] or 数据库配置["database_user"]
     数据库配置["database_password"] = str(数据库配置["database_password"] or "")
+    数据库配置["database_ssl_mode"] = 数据库配置["database_ssl_mode"] or "preferred"
+    数据库配置["database_ssl_ca"] = 数据库配置["database_ssl_ca"] or ""
+    数据库配置["database_connect_timeout"] = 数据库配置["database_connect_timeout"] if 数据库配置["database_connect_timeout"] is not None else 10
     try:
-        数据库配置["database_port"] = int(数据库配置["database_port"] or 3306)
-    except (TypeError, ValueError):
-        数据库配置["database_port"] = 3306
+        规范配置 = 获取数据库配置({"database_settings": 数据库配置})
+        for 字段, 键 in (("database_host", "host"), ("database_port", "port"),
+                         ("database_ssl_mode", "ssl_mode"), ("database_ssl_ca", "ssl_ca"),
+                         ("database_connect_timeout", "connect_timeout")):
+            数据库配置[字段] = 规范配置[键]
+    except (ValueError, RuntimeError):
+        # 配置尚未填写完整时仍须能登录并编辑；保留原值参与认证指纹。
+        pass
     return {
         "help_web_settings": {"help_web_admin_username": 用户名, "help_web_admin_password": 密码},
         "database_settings": 数据库配置,
@@ -1205,6 +1249,148 @@ def _读取当前控制台身份(request: web.Request) -> str:
 
 def _控制台错误(状态码: int, 文本: str) -> web.Response:
     return web.json_response({"ok": False, "error": 文本}, status=状态码)
+
+
+async def _处理数据库连接测试(request: web.Request) -> web.Response:
+    """测试当前表单，不保存配置，也不创建数据库或表。"""
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _请求来自同源(request):
+        return _控制台错误(403, "请求来源无效")
+    数据 = await _读取请求JSON(request)
+    字段 = (数据 or {}).get("fields")
+    if not isinstance(字段, dict) or not 字段 or any(
+        名 not in 插件配置字段定义 or 插件配置字段定义[名]["category"] != "database_settings"
+        for 名 in 字段
+    ):
+        return _控制台错误(400, "数据库测试参数无效")
+    快照 = 获取控制台会话配置快照()
+    try:
+        for 名, 值 in 字段.items():
+            if 名 == "database_password" and (值 is None or 值 == ""):
+                continue
+            快照["database_settings"][名] = _校验插件配置字段(名, 值)
+    except (ValueError, TypeError):
+        return _控制台错误(400, "数据库测试参数无效")
+    认证 = 控制台会话认证指纹
+    try:
+        from 功能文件.管理功能.基础功能.运行状态数据库 import 测试运行状态数据库连接
+        结果 = await _控制台线程执行(测试运行状态数据库连接, 快照)
+        if not _请求已授权(request) or 认证 != 控制台会话认证指纹:
+            return _控制台错误(401, "登录状态已更新，请重新登录")
+        return web.json_response({
+            "ok": True, "connected": bool(结果["ok"]),
+            **{名: 结果[名] for 名 in ("status", "reason", "message", "mysql_code", "version", "tls")},
+        }, headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        logger.warning("帮助控制台数据库测试失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(502, "数据库测试暂时未完成，请稍后重试")
+
+
+def _清理聊天确认令牌() -> None:
+    现在 = time.monotonic()
+    for 令牌, 项 in list(_聊天清理确认会话.items()):
+        if 项["expires"] <= 现在 or 项["auth"] != 控制台会话认证指纹:
+            _聊天清理确认会话.pop(令牌, None)
+    while len(_聊天清理确认会话) >= 128:
+        _聊天清理确认会话.pop(next(iter(_聊天清理确认会话)))
+
+
+async def _读取聊天清理请求(request: web.Request) -> tuple[dict[str, Any] | None, web.Response | None]:
+    if not _请求已授权(request):
+        return None, _控制台错误(401, "请先登录控制台")
+    if not _请求来自同源(request):
+        return None, _控制台错误(403, "请求来源无效")
+    数据 = await _读取请求JSON(request)
+    appid = 获取当前机器人AppID()
+    if not isinstance(数据, dict) or not appid or 数据.get("appid") != appid:
+        return None, _控制台错误(400, "机器人参数无效")
+    return 数据, None
+
+
+async def _处理聊天清理预览(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取聊天清理请求(request)
+    if 错误 is not None:
+        return 错误
+    范围 = 数据.get("scope")
+    if not isinstance(范围, str) or 范围 not in {"chat", "bot"} or (范围 == "chat" and (
+        not isinstance(数据.get("chat_type"), str) or 数据.get("chat_type") not in {"group", "user"}
+        or not isinstance(数据.get("chat_id"), str)
+        or not 0 < len(数据["chat_id"].strip()) <= 128
+        or any(ord(字) < 32 or ord(字) == 127 for 字 in 数据["chat_id"])
+    )):
+        return _控制台错误(400, "请选择要清理的聊天记录")
+    appid, 认证 = 获取当前机器人AppID(), 控制台会话认证指纹
+    所有者 = hashlib.sha256(_取得请求会话(request).encode()).hexdigest()
+    try:
+        from 功能文件.管理功能.基础功能 import 消息记录
+        结果 = await 消息记录.准备清理聊天记录(
+            appid, 数据.get("chat_type", "") if 范围 == "chat" else "",
+            数据.get("chat_id", "").strip() if 范围 == "chat" else "", 范围,
+        )
+        if not _请求已授权(request) or 认证 != 控制台会话认证指纹:
+            return _控制台错误(401, "登录状态已更新，请重新登录")
+        if not 结果.get("ok"):
+            return _控制台错误(409, "读取聊天记录失败，请稍后重试")
+        _清理聊天确认令牌()
+        for 键, 项 in list(_聊天清理确认会话.items()):
+            if 项["owner"] == 所有者 and 项["appid"] == appid:
+                _聊天清理确认会话.pop(键, None)
+        令牌 = secrets.token_urlsafe(32)
+        _聊天清理确认会话[令牌] = {"owner": 所有者, "appid": appid, "auth": 认证,
+            "expires": time.monotonic() + 120, "preview": 结果}
+        return web.json_response({"ok": True, "clear_token": 令牌, "expires_at": time.time() + 120,
+            "matched_count": int(结果["count"]),
+            **{名: 结果[名] for 名 in ("appid", "scope", "chat_id", "chat_type")},
+            "boundary": {名: 结果["boundary"][名] for 名 in ("cutoff_id", "origin", "cutoff_order")},
+        }, headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        logger.warning("帮助控制台聊天清理预览失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "读取聊天记录失败，请稍后重试")
+
+
+async def _完成聊天记录清理(预览: dict[str, Any]) -> dict[str, Any]:
+    from 功能文件.管理功能.基础功能 import 消息记录
+    结果 = await 消息记录.执行清理聊天记录(预览)
+    if 结果.get("ok"):
+        清理消息列表缓存()
+    return 结果
+
+
+def _聊天清理执行结束(任务: asyncio.Task[Any]) -> None:
+    _聊天清理执行任务.discard(任务)
+    if not 任务.cancelled() and 任务.exception() is not None:
+        logger.warning("帮助控制台聊天清理后台失败：错误类型=%s", type(任务.exception()).__name__)
+
+
+async def _处理聊天记录清理(request: web.Request) -> web.Response:
+    数据, 错误 = await _读取聊天清理请求(request)
+    if 错误 is not None:
+        return 错误
+    _清理聊天确认令牌()
+    令牌 = 数据.get("clear_token")
+    if not isinstance(令牌, str) or len(令牌) > 128:
+        return _控制台错误(400, "清理确认已失效，请重新操作")
+    项 = _聊天清理确认会话.get(令牌)
+    所有者 = hashlib.sha256(_取得请求会话(request).encode()).hexdigest()
+    if not 项 or 项["owner"] != 所有者 or 项["appid"] != 获取当前机器人AppID():
+        return _控制台错误(409, "清理确认已失效，请重新操作")
+    # 先消费再提交，断线或重复请求不得重放删除；业务任务完成事务及内存同步后退出。
+    _聊天清理确认会话.pop(令牌, None)
+    任务 = asyncio.create_task(_完成聊天记录清理(项["preview"]))
+    _聊天清理执行任务.add(任务)
+    任务.add_done_callback(_聊天清理执行结束)
+    try:
+        结果 = await asyncio.shield(任务)
+        if not 结果.get("ok"):
+            return _控制台错误(409, "清理未完成，请刷新后重试")
+        return web.json_response({名: 结果[名] for 名 in (
+            "ok", "appid", "scope", "chat_type", "chat_id", "deleted_count", "database_deleted_count",
+            "memory_deleted_count", "remaining_count", "cutoff_id", "origin", "cutoff_order",
+        )}, headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        logger.warning("帮助控制台聊天清理失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "清理未完成，请刷新后重试")
 
 
 async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:

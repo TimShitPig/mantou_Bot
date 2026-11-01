@@ -132,7 +132,7 @@
       "database_host": {
         "description": "MySQL 地址",
         "type": "string",
-        "hint": "例如 127.0.0.1。三种网盘 Cookie、QQ阅读登录态、ZLibrary创建账号记录和小说开关使用 MySQL 存储。",
+        "hint": "支持 IP、域名、host:port、[IPv6]:port 和不含账号密码的 mysql://host:port。地址自带端口时，独立端口留空或填写一致。远程数据库还需允许插件服务器访问。",
         "default": ""
       },
       "database_port": {
@@ -158,6 +158,25 @@
         "type": "string",
         "hint": "用于连接运行状态数据库。",
         "default": ""
+      },
+      "database_ssl_mode": {
+        "description": "MySQL TLS 模式",
+        "type": "string",
+        "options": ["preferred", "required", "verify_identity", "disabled"],
+        "hint": "preferred 协商加密，兼容旧数据库；required 必须加密；verify_identity 同时校验证书及地址身份；disabled 关闭加密。认证或 TLS 失败不自动降级重连。",
+        "default": "preferred"
+      },
+      "database_ssl_ca": {
+        "description": "MySQL CA 证书文件",
+        "type": "string",
+        "hint": "verify_identity 模式可填写服务器上 PEM 格式 CA 文件路径；留空使用系统 CA。地址需匹配证书中的域名或 IP。其他 TLS 模式不读取此文件。",
+        "default": ""
+      },
+      "database_connect_timeout": {
+        "description": "MySQL 连接超时（秒）",
+        "type": "string",
+        "hint": "范围 1～60，默认 10。公网与跨服务器连接可按网络情况调整。",
+        "default": "10"
       }
     }
   },

@@ -138,13 +138,18 @@
       let quarkWebScanTimer = null;
       let quarkWebScanGeneration = 0;
       let toastTimer = null;
-      const msgModalIds = ['msg-raw-modal', 'msg-remark-modal', 'msg-mute-modal'];
+      const databaseTestState = {generation:0, abort:null};
+      const msgClearState = {generation:0, previewAbort:null, token:'', target:null, expiresAt:0, expiryTimer:null, previewing:false};
+      const msgClearInFlight = new Set();
+      const msgHistoryClearBoundaries = new Map();
+      const msgModalIds = ['msg-raw-modal', 'msg-remark-modal', 'msg-mute-modal', 'msg-clear-modal'];
       const msgModalFocus = new Map();
       let msgModalOverflow = null;
       const activeMsgModal = () => msgModalIds.map($).findLast((node) => node && !node.hidden);
       const modalFocusable = (node) => [...node.querySelectorAll('button,input,select,textarea,a[href],[tabindex]')].filter((item) => !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
       const setMsgModal = (id, open, restoreFocus = true) => {
         const node = $(id);
+        if (id === 'msg-clear-modal' && !open) { invalidateMsgClearPreview(); msgClearState.target = null; }
         if (!node || node.hidden === !open) return;
         if (open) {
           msgModalFocus.set(id, document.activeElement);
@@ -289,12 +294,14 @@
         if (next === 'messages') {
           connectMsgEvents();
           if (previousView !== 'messages') {
+            // 离开消息页期间可能错过另一浏览器的清理广播；重新进入时使用新的服务端快照。
+            msgState.historyCache.clear(); msgState.realtimeChats.clear();
             msgState.chatListTopPending = true;
             const chatList = $('msg-chats');
             if (chatList) chatList.scrollTop = 0;
             loadMsgChats();
           }
-          if (previousView !== 'messages' && msgState.chatId) loadMsgHistory();
+          if (previousView !== 'messages' && msgState.chatId) loadMsgHistory(false, false, true);
         }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
         if (resetScroll) {
@@ -338,14 +345,27 @@
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
-          if (field.kind === 'select') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${(field.options || []).map((option) => `<option value="${esc(option)}" ${String(option) === String(field.value ?? '') ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select><small>${hint}</small></div>`;
+          if (field.kind === 'select') {
+            const rawOptions = field.options || field.choices || [];
+            const options = Array.isArray(rawOptions) ? rawOptions : Object.entries(rawOptions).map(([value, label]) => ({value, label}));
+            return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${options.map((option) => { const value = typeof option === 'object' && option !== null ? option.value : option; const text = typeof option === 'object' && option !== null ? option.label ?? value : option; return `<option value="${esc(value)}" ${String(value) === String(field.value ?? '') ? 'selected' : ''}>${esc(text)}</option>`; }).join('')}</select><small>${hint}</small></div>`;
+          }
           const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
           const placeholder = field.placeholder || (field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : ''));
           const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(placeholder)}">`;
           const toggle = field.key === 'help_web_admin_password' ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${editable ? '' : 'disabled'} aria-label="显示或隐藏登录密码" aria-pressed="false">显示</button>` : '';
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint}</small></div>`;
-        }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button><span class="config-message" data-config-message></span></div>`;
+        }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
+        if (targetId === 'database-config-editor') {
+          databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
+          node.querySelector('[data-database-test]')?.addEventListener('click', () => testDatabaseConnection(node));
+          node.querySelectorAll('[data-config-field]').forEach((input) => input.addEventListener('input', () => {
+            databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
+            const button = node.querySelector('[data-database-test]'); if (button) { button.disabled = !editable; button.textContent = '测试当前连接'; }
+            const result = node.querySelector('[data-database-test-result]'); if (result) { result.hidden = false; result.className = 'database-test-result'; result.textContent = '当前表单已更改，尚未测试；上方状态对应已保存配置。'; }
+          }));
+        }
         node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => button.addEventListener('click', () => {
           const input = $(button.dataset.configSecretToggle);
           if (!input) return;
@@ -362,7 +382,7 @@
         if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }
         if (nameNode) nameNode.textContent = String(database.name || '--');
       };
-       const saveConfig = async (editor) => {
+      const collectConfigFields = (editor) => {
         const fields = {};
         editor.querySelectorAll('[data-config-field]').forEach((input) => {
           const value = input.type === 'checkbox' ? input.checked : input.value;
@@ -371,6 +391,37 @@
              fields[input.dataset.configField] = value.split(/[\s,，]+/).filter(Boolean);
           } else fields[input.dataset.configField] = value;
         });
+        return fields;
+      };
+      const testDatabaseConnection = async (editor) => {
+        const button = editor.querySelector('[data-database-test]');
+        const output = editor.querySelector('[data-database-test-result]');
+        if (!button || !output || button.disabled || !consoleAppid) return;
+        const appid = consoleAppid, scopeGeneration = consoleGeneration;
+        const generation = ++databaseTestState.generation;
+        databaseTestState.abort?.abort();
+        const controller = new AbortController(); databaseTestState.abort = controller;
+        button.disabled = true; button.textContent = '测试中…';
+        output.hidden = false; output.className = 'database-test-result'; output.textContent = '正在测试当前填写的连接参数…';
+        const isCurrent = () => generation === databaseTestState.generation && scopeGeneration === consoleGeneration && appid === consoleAppid && button.isConnected;
+        try {
+          const result = await api('database/test', {method:'POST', body:JSON.stringify({fields:collectConfigFields(editor), appid}), signal:controller.signal});
+          if (!isCurrent()) return;
+          const connected = result.connected === true;
+          const details = [String(result.message || (connected ? '数据库连接成功。' : '数据库连接失败，请检查连接参数。')), '本次测试使用当前表单，未保存配置。'];
+          if (connected && /^\d+(?:\.\d+){1,3}(?:[-.][A-Za-z0-9_.-]{1,64})?$/.test(String(result.version || ''))) details.push(`MySQL 版本：${result.version}`);
+          if (!connected && Number.isInteger(result.mysql_code)) details.push(`MySQL 错误码：${result.mysql_code}`);
+          output.className = `database-test-result ${connected ? 'ok' : 'error'}`; output.textContent = details.join(String.fromCharCode(10));
+        } catch (error) {
+          if (!isCurrent() || error.name === 'AbortError') return;
+          output.className = 'database-test-result error'; output.textContent = '连接测试请求未完成，请稍后重试。';
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          if (isCurrent()) { button.disabled = false; button.textContent = '测试当前连接'; databaseTestState.abort = null; }
+        }
+      };
+       const saveConfig = async (editor) => {
+        const fields = collectConfigFields(editor);
         const message = editor.querySelector('[data-config-message]');
         try {
           const result = await api('config', {method:'POST', body:JSON.stringify({fields})});
@@ -1873,6 +1924,9 @@
           last_ts:eventTs,
           last_time:String(payload.last_time || (Number(message.ts || 0) === eventTs ? message.timestamp : '') || new Date(eventTs * 1000).toISOString()),
           last_message_id:String(payload.last_message_id || message.message_id || ''),
+          last_record_id:Number(message.id || 0),
+          history_origin:String(message.history_origin || ''),
+          history_order:Number(message.history_order || 0),
         };
       };
       const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
@@ -1913,7 +1967,7 @@
         if (msgState.chatRenderTimer) { clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null; }
         if (msgState.chatListScrollTimer) { clearTimeout(msgState.chatListScrollTimer); msgState.chatListScrollTimer = null; }
         closeGroupSettings(true); groupSettingsState.remarkTarget = null;
-        for (const id of ['msg-remark-modal','msg-mute-modal','msg-raw-modal']) setMsgModal(id, false);
+        msgModalIds.forEach((id) => setMsgModal(id, false));
         hideMsgCtx();
         if (msgState.multi) exitMultiMode();
         Object.assign(msgState, {
@@ -1951,6 +2005,7 @@
         for (const controller of consoleRequests) controller.abort();
         consoleRequests.clear();
         consoleEntering = false; consoleAppid = '';
+        databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
         snapshot = null; activeView = null; activePanTab = null; activePanObject = null;
         quarkProfileRefreshAfter = 0; quarkProfileRefreshPromise = null;
         qqReader.request += 1; qqReader.keyRequest += 1; qqReader.auth = null; qqReader.mutation = false;
@@ -2745,7 +2800,7 @@
         const chatType = String(chat?.chat_type || 'group');
         if (!msgInSelectedBot(chat)) return;
         if (groupSettingsState.mutating && (msgState.chatId !== chatId || msgState.chatType !== chatType)) return toast('正在更新本群设置，请稍候再切换');
-        if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; setMsgModal('msg-remark-modal', false); }
+        if (msgState.chatId !== chatId || msgState.chatType !== chatType) { closeGroupSettings(); groupSettingsState.remarkTarget = null; setMsgModal('msg-remark-modal', false); setMsgModal('msg-clear-modal', false); }
         cancelMsgQuoteJump(true);
         setMsgMobileChatOpen(true);
         msgState.chatRemoved = msgChatIsRemoved(chat);
@@ -2971,6 +3026,147 @@
         }
         renderMsgChats({chats:msgState.chats});
       };
+      const msgClearScopeMatches = (boundary, type, id, appid) => String(boundary.appid || '') === String(appid || '')
+        && (boundary.scope === 'bot' || (boundary.scope === 'chat' && boundary.chat_type === type && String(boundary.chat_id || '') === String(id || '')));
+      const msgIsClearedByBoundary = (message, boundary) => {
+        const origin = String(message?.history_origin || ''), order = Number(message?.history_order || 0);
+        if (origin && origin === String(boundary?.origin || '') && Number.isSafeInteger(order) && order > 0) return order <= Number(boundary?.cutoff_order || 0);
+        const id = Number(message?.id || 0), cutoff = Number(boundary?.cutoff_id || 0);
+        if (Number.isSafeInteger(id) && id > 0 && Number.isSafeInteger(cutoff) && cutoff > 0 && id <= cutoff) return true;
+        return false;
+      };
+      const msgIsKnownCleared = (message, type, id, appid) => [...msgHistoryClearBoundaries.values()].some((boundary) =>
+        msgClearScopeMatches(boundary, type, id, appid) && msgIsClearedByBoundary(message, boundary));
+      const invalidateMsgClearPreview = () => {
+        msgClearState.generation += 1;
+        msgClearState.previewAbort?.abort(); msgClearState.previewAbort = null;
+        clearTimeout(msgClearState.expiryTimer); msgClearState.expiryTimer = null;
+        msgClearState.token = ''; msgClearState.expiresAt = 0; msgClearState.previewing = false;
+        if ($('msg-clear-confirm')) $('msg-clear-confirm').disabled = true;
+      };
+      const msgClearTargetCurrent = (target) => target && msgClearState.target === target && !$('msg-clear-modal').hidden
+        && target.appid === consoleAppid && target.context === msgQuoteJumpScope() && activeView === 'messages';
+      const syncMsgClearControls = () => {
+        const busy = msgClearInFlight.has(consoleAppid);
+        $('msg-clear-scope').disabled = busy;
+        $('msg-clear-preview-button').disabled = busy || msgClearState.previewing;
+        $('msg-clear-confirm').disabled = busy || !msgClearState.token || msgClearState.expiresAt <= Date.now();
+      };
+      const previewMsgClear = async () => {
+        const previous = msgClearState.target;
+        if (!msgClearTargetCurrent(previous) || msgClearInFlight.has(previous.appid)) return;
+        invalidateMsgClearPreview();
+        const scope = $('msg-clear-scope').value === 'bot' ? 'bot' : 'chat';
+        const target = {...previous, scope, chat_id:scope === 'chat' ? msgState.chatId : '', chat_type:scope === 'chat' ? msgState.chatType : ''};
+        if (scope === 'chat' && (!target.chat_id || msgState.chatAppid !== target.appid)) return;
+        msgClearState.target = target; msgClearState.previewing = true;
+        const generation = msgClearState.generation;
+        const controller = new AbortController(); msgClearState.previewAbort = controller;
+        const output = $('msg-clear-preview'); output.className = 'msg-clear-preview'; output.textContent = '正在统计记录…';
+        $('msg-clear-target').textContent = scope === 'chat' ? `当前会话：${target.name}` : `当前机器人：${window.msgBotProfile?.username || target.appid}，包含群聊和私聊。`;
+        syncMsgClearControls();
+        try {
+          const result = await api('message/clear/preview', {method:'POST', body:JSON.stringify({scope, chat_id:target.chat_id, chat_type:target.chat_type, appid:target.appid}), signal:controller.signal});
+          if (generation !== msgClearState.generation || !msgClearTargetCurrent(target)) return;
+          const count = result.matched_count;
+          const rawExpiry = result.expires_at;
+          const expiresAt = Number.isFinite(Number(rawExpiry)) ? Number(rawExpiry) * (Number(rawExpiry) < 1e12 ? 1000 : 1) : Date.parse(String(rawExpiry || ''));
+          if (result.scope !== scope || (scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))
+            || !Number.isSafeInteger(count) || count < 0 || !result.clear_token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('invalid_preview');
+          msgClearState.token = count > 0 ? String(result.clear_token) : ''; msgClearState.expiresAt = expiresAt;
+          output.textContent = count > 0 ? `将清理 ${count.toLocaleString('zh-CN')} 条本机聊天记录。确认后删除本次预览范围内的记录。` : '此范围没有需要清理的记录。';
+          if (count > 0) msgClearState.expiryTimer = setTimeout(() => {
+            if (generation !== msgClearState.generation || !msgClearTargetCurrent(target)) return;
+            invalidateMsgClearPreview(); output.textContent = '预览已过期，请重新统计后确认。'; syncMsgClearControls();
+          }, Math.max(0, expiresAt - Date.now()));
+        } catch (error) {
+          if (generation !== msgClearState.generation || !msgClearTargetCurrent(target) || error.name === 'AbortError') return;
+          output.className = 'msg-clear-preview error'; output.textContent = '记录统计未完成，请重新统计后再确认。';
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          if (generation === msgClearState.generation && msgClearTargetCurrent(target)) { msgClearState.previewing = false; msgClearState.previewAbort = null; syncMsgClearControls(); }
+        }
+      };
+      const openMsgClear = () => {
+        if (!consoleAppid) return;
+        closeGroupSettings(); hideMsgCtx();
+        msgModalIds.filter((id) => id !== 'msg-clear-modal').forEach((id) => setMsgModal(id, false, false));
+        invalidateMsgClearPreview();
+        const hasChat = Boolean(msgState.chatId && msgState.chatAppid === consoleAppid);
+        const option = $('msg-clear-scope').querySelector('option[value="chat"]'); option.hidden = !hasChat; option.disabled = !hasChat;
+        $('msg-clear-scope').value = hasChat ? 'chat' : 'bot';
+        msgClearState.target = {appid:consoleAppid, context:msgQuoteJumpScope(), name:$('msg-head-name').textContent || msgState.chatId};
+        $('msg-clear-preview').className = 'msg-clear-preview';
+        $('msg-clear-preview').textContent = msgClearInFlight.has(consoleAppid) ? '当前机器人的记录清理正在执行，请稍候刷新查看结果。' : '正在统计记录…';
+        $('msg-clear-target').textContent = '';
+        setMsgModal('msg-clear-modal', true); syncMsgClearControls();
+        if (!msgClearInFlight.has(consoleAppid)) void previewMsgClear();
+      };
+      const applyMsgHistoryCleared = (payload) => {
+        if (!consoleAppid || String(payload?.appid || '') !== consoleAppid || consoleAppid !== msgState.selectedAppid) return false;
+        const scope = payload.scope;
+        if (!['chat','bot'].includes(scope) || (scope === 'chat' && (!payload.chat_id || !['group','user'].includes(payload.chat_type)))) return false;
+        const boundary = {...payload, appid:consoleAppid, chat_id:String(payload.chat_id || ''), chat_type:String(payload.chat_type || '')};
+        const key = JSON.stringify([boundary.appid, scope, scope === 'chat' ? boundary.chat_type : '', scope === 'chat' ? boundary.chat_id : '', String(boundary.origin || '')]);
+        const previous = msgHistoryClearBoundaries.get(key);
+        if (previous && Number(previous.cutoff_id || 0) >= Number(boundary.cutoff_id || 0) && Number(previous.cutoff_order || 0) >= Number(boundary.cutoff_order || 0)) return false;
+        msgHistoryClearBoundaries.set(key, {...boundary, cutoff_id:Math.max(Number(previous?.cutoff_id || 0), Number(boundary.cutoff_id || 0)), cutoff_order:Math.max(Number(previous?.cutoff_order || 0), Number(boundary.cutoff_order || 0))});
+        setMsgModal('msg-clear-modal', false);
+        const affects = (type, id, appid) => msgClearScopeMatches(boundary, type, id, appid);
+        const keepSummary = (chat) => {
+          if (!affects(chat.chat_type, chat.chat_id, chat.appid)) return true;
+          const record = {id:chat.last_record_id, history_origin:chat.history_origin, history_order:chat.history_order};
+          return Boolean(record.id || record.history_origin) && !msgIsClearedByBoundary(record, boundary);
+        };
+        for (const key of msgState.historyCache.keys()) { try { const [appid, type, id] = JSON.parse(key); if (affects(type, id, appid)) msgState.historyCache.delete(key); } catch (_) {} }
+        for (const [key, chat] of msgState.realtimeChats) if (!keepSummary(chat)) msgState.realtimeChats.delete(key);
+        msgState.chats = msgState.chats.filter(keepSummary);
+        msgState.chatListRequest += 1; msgState.chatListAbort?.abort(); msgState.chatListAbort = null;
+        msgState.chatListPromise = null; msgState.chatListKey = ''; msgState.chatListPendingData = null;
+        msgState.chatListScrollActive = false; msgState.chatListPointerActive = false;
+        if (msgState.chatRenderTimer) clearTimeout(msgState.chatRenderTimer); msgState.chatRenderTimer = null;
+        if (msgState.chatId && affects(msgState.chatType, msgState.chatId, msgState.chatAppid)) {
+          msgState.historyRequest += 1; msgState.historyOlderRequest += 1; msgState.historyScheduleToken += 1;
+          for (const key of ['historyAbort','historyOlderAbort']) { msgState[key]?.abort(); msgState[key] = null; }
+          if (msgState.historyScheduleFrame != null) cancelAnimationFrame(msgState.historyScheduleFrame); msgState.historyScheduleFrame = null;
+          msgState.historyOlderLoading = false; msgState.historyActiveScope = '';
+          cancelMsgQuoteJump(true); cancelMsgRealtimeMessageRender(); closeMsgLightbox(); closeGroupSettings(); hideMsgCtx();
+          msgModalIds.forEach((id) => setMsgModal(id, false));
+          $('msg-raw-content').replaceChildren(); $('msg-raw-copy').textContent = '复制';
+          if (msgState.multi) exitMultiMode(); clearMsgQuote(); clearMsgNewMessages();
+          msgState.messages = msgState.messages.filter((message) => !msgIsKnownCleared(message, msgState.chatType, msgState.chatId, msgState.chatAppid));
+          msgState.historyData = {...(msgState.historyData || {}), references:{}, has_more:false, messages:msgState.messages};
+          msgState.messageRenderSignature = null;
+          renderMsgMessages(msgState.historyData, {forceRender:true, previousTop:$('msg-body').scrollTop, previousHeight:$('msg-body').scrollHeight});
+          if (!$('page-messages').hidden && msgState.chatId) void loadMsgHistory(false, true);
+        }
+        renderMsgChats({appid:consoleAppid, chats:msgState.chats});
+        if (!$('page-messages').hidden) void loadMsgChats(true);
+        return true;
+      };
+      const confirmMsgClear = async () => {
+        const target = msgClearState.target;
+        if (!msgClearTargetCurrent(target) || msgClearInFlight.has(target.appid) || !msgClearState.token) return;
+        if (msgClearState.expiresAt <= Date.now()) { invalidateMsgClearPreview(); $('msg-clear-preview').textContent = '预览已过期，请重新统计后确认。'; syncMsgClearControls(); return; }
+        const token = msgClearState.token;
+        msgClearInFlight.add(target.appid); invalidateMsgClearPreview(); syncMsgClearControls();
+        $('msg-clear-preview').textContent = '正在清理记录…';
+        try {
+          const result = await api('message/clear', {method:'POST', body:JSON.stringify({clear_token:token, appid:target.appid})});
+          if (target.appid !== consoleAppid) return;
+          if (result.scope !== target.scope || (target.scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))) throw new Error('invalid_clear_result');
+          applyMsgHistoryCleared(result);
+          toast(Number.isSafeInteger(result.deleted_count) ? `已清理 ${result.deleted_count.toLocaleString('zh-CN')} 条本机记录` : '本机记录已清理');
+        } catch (error) {
+          if (error.name === 'AbortError' || !msgClearTargetCurrent(target)) return;
+          $('msg-clear-preview').className = 'msg-clear-preview error';
+          $('msg-clear-preview').textContent = '清理结果尚未确认，请刷新记录后重新统计。';
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          msgClearInFlight.delete(target.appid);
+          if (consoleAppid === target.appid && !$('msg-clear-modal').hidden) syncMsgClearControls();
+        }
+      };
       const handleMsgRealtimeData = (raw) => {
         try {
           const envelope = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
@@ -2978,6 +3174,7 @@
           else if (envelope?.type === 'group_status') applyMsgGroupStatus(envelope.data || {});
           else if (envelope?.type === 'group_info') applyMsgGroupInfo(envelope.data || {});
           else if (envelope?.type === 'nickname') { applyMsgNickname(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
+          else if (envelope?.type === 'history_cleared') applyMsgHistoryCleared(envelope.data || {});
         } catch (_) {}
       };
       const scheduleMsgRealtimeReconnect = () => {
@@ -5395,6 +5592,7 @@
         const message = payload.message && typeof payload.message === 'object' ? {...payload.message} : null;
         if (!chatId || !message || !msgInSelectedBot({appid:payload.appid || message.appid})) return;
         const chatType = String(payload.chat_type || message.chat_type || 'group');
+        if (msgIsKnownCleared(message, chatType, chatId, payload.appid || message.appid)) return;
         const chatKey = msgScopeKey(chatType, chatId, payload.appid || message.appid);
         const existing = msgState.realtimeChats.get(chatKey) || msgState.chats.find((chat) => msgChatKey(chat) === chatKey) || {};
         const eventAppid = String(payload.appid || message.appid || existing.appid || '').trim();
@@ -5572,7 +5770,7 @@
         else { msgState.selected.add(mid); row.classList.add('selected'); }
         $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
-      const loadMsgHistory = async (older = false, quiet = false) => {
+      const loadMsgHistory = async (older = false, quiet = false, authoritative = false) => {
         if (!msgState.chatId) return;
         if (msgQuoteJump.pending || (quiet && msgState.historyWindow)) return;
         if (older && msgState.historyWindow) return loadMsgWindowPage('before');
@@ -5606,12 +5804,14 @@
         const previousHeight = body?.scrollHeight || 0;
         const previousLast = !newChat ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
         const historyCacheKey = msgScopeKey(requestChatType, requestChatId, requestAppid);
+        const messagesAtRequest = new Set(msgState.messages.map(msgMessageKey));
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, appid:requestAppid, before_date:beforeId ? '' : before, before_id:beforeId, limit:msgHistoryPageSize}), signal:controller.signal});
           if (!requestIsCurrent() || (data.appid && String(data.appid).trim() !== requestAppid) || (data.chat_id && String(data.chat_id) !== requestChatId) || (data.chat_type && data.chat_type !== requestChatType)) return;
-          data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid);
+          data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid
+            && !msgIsKnownCleared(message, requestChatType, requestChatId, requestAppid));
           const incoming = mergeMsgRecalledStates(dedupeMsgMessages(data.messages));
           const sameRenderedPage = !returningWindow && !older && !newChat
             && msgState.messageRenderSignature !== null
@@ -5644,10 +5844,13 @@
           // 轮询可能在上翻页完成后才返回；保留当前已展开的更早消息，避免刷新把它们截掉。
           const currentMessages = Array.isArray(msgState.messages) ? msgState.messages : [];
           const preserveLoadedHistory = !returningWindow && !older && !newChat && currentMessages.length > incoming.length;
+          const preserveAfterClear = [...msgHistoryClearBoundaries.values()].some((boundary) => msgClearScopeMatches(boundary, requestChatType, requestChatId, requestAppid));
           if (returningWindow) msgState.historyWindow = null;
           msgState.messages = older
             ? dedupeMsgMessages([...incoming, ...currentMessages])
-            : (preserveLoadedHistory ? dedupeMsgMessages([...currentMessages, ...incoming]) : incoming);
+            : authoritative
+              ? dedupeMsgMessages([...incoming, ...currentMessages.filter((message) => !messagesAtRequest.has(msgMessageKey(message)))])
+              : ((preserveLoadedHistory || preserveAfterClear) ? dedupeMsgMessages([...currentMessages, ...incoming]) : incoming);
           renderMsgMessages(
             {...data, messages: msgState.messages},
             {
@@ -5805,7 +6008,7 @@
             }
           }
           await loadMsgChats(true);
-          if (chatId && isCurrent()) await loadMsgHistory();
+          if (chatId && isCurrent()) await loadMsgHistory(false, false, true);
         } catch (error) { toast(error.message || '刷新失败'); }
         finally { button.disabled = false; }
       };
@@ -6548,6 +6751,12 @@
       $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((el) => el.addEventListener('click', () => { $('msg-mute-presets').querySelectorAll('[data-mute-min]').forEach((x) => x.classList.toggle('active', x === el)); msgState.muteMinutes = Number(el.dataset.muteMin); $('msg-mute-custom').value = ''; }));
       $('msg-mute-custom').addEventListener('input', (e) => { const raw = Number(e.target.value); if (!Number.isFinite(raw) || raw < 1) return; const days = Math.min(30, Math.floor(raw)); e.target.value = String(days); msgState.muteMinutes = days * 1440; });
       $('msg-mute-cancel').addEventListener('click', () => { setMsgModal('msg-mute-modal', false); });
+      $('msg-clear-open').addEventListener('click', openMsgClear);
+      $('msg-clear-scope').addEventListener('change', () => { void previewMsgClear(); });
+      $('msg-clear-preview-button').addEventListener('click', () => { void previewMsgClear(); });
+      $('msg-clear-confirm').addEventListener('click', () => { void confirmMsgClear(); });
+      for (const id of ['msg-clear-close','msg-clear-cancel']) $(id).addEventListener('click', () => setMsgModal('msg-clear-modal', false));
+      $('msg-clear-modal').addEventListener('click', (event) => { if (event.target === $('msg-clear-modal')) setMsgModal('msg-clear-modal', false); });
       $('msg-remark-cancel').addEventListener('click', () => { setMsgModal('msg-remark-modal', false); });
       $('msg-remark-save').addEventListener('click', saveRemark);
       $('msg-remark-delete').addEventListener('click', deleteRemark);
@@ -6572,7 +6781,7 @@
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
-      window.addEventListener('pagehide', () => { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); });
+      window.addEventListener('pagehide', () => { closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
         if (document.visibilityState === 'visible') void loadBotProfile();

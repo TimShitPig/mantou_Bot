@@ -4,7 +4,12 @@ import time
 import threading
 import hashlib
 import json
+import ipaddress
+import re
+import socket
+import ssl
 from typing import Any
+from urllib.parse import urlsplit
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 
 运行状态数据库表名 = "mantou_runtime_state"
@@ -262,17 +267,25 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
     ).strip()
     数据库名 = str(
         读取数据库配置值(配置, "database_name", "user_activation_database_name")
-        or 用户名
-    ).strip()
+        or ""
+    ).strip() or 用户名
+    主机, 端口 = _规范化数据库地址(
+        读取数据库配置值(配置, "database_host", "user_activation_database_host"),
+        读取数据库配置值(配置, "database_port", "user_activation_database_port"),
+    )
+    加密模式 = str(读取数据库配置值(配置, "database_ssl_mode") or "preferred").strip().lower()
+    if 加密模式 not in {"preferred", "required", "verify_identity", "disabled"}:
+        raise 数据库连接错误("configuration")
+    超时原值 = 读取数据库配置值(配置, "database_connect_timeout")
+    try:
+        连接超时 = int(str(超时原值).strip()) if 超时原值 is not None else 10
+    except (TypeError, ValueError):
+        raise 数据库连接错误("configuration") from None
+    if not 1 <= 连接超时 <= 60:
+        raise 数据库连接错误("configuration")
     数据库配置 = {
-        "host": str(
-            读取数据库配置值(配置, "database_host", "user_activation_database_host")
-            or ""
-        ).strip(),
-        "port": 安全整数(
-            读取数据库配置值(配置, "database_port", "user_activation_database_port"),
-            3306,
-        ),
+        "host": 主机,
+        "port": 端口,
         "user": 用户名,
         "password": str(
             读取数据库配置值(
@@ -282,10 +295,13 @@ def 获取数据库配置(配置: Any) -> dict[str, Any]:
         ),
         "database": 数据库名,
         "runtime_state_table": 运行状态数据库表名,
+        "ssl_mode": 加密模式,
+        "ssl_ca": str(读取数据库配置值(配置, "database_ssl_ca") or "").strip(),
+        "connect_timeout": 连接超时,
     }
     缺少字段 = [字段 for 字段 in ("host", "user", "database") if not 数据库配置[字段]]
     if 缺少字段:
-        raise RuntimeError(f"数据库配置不完整：缺少 {', '.join(缺少字段)}")
+        raise 数据库连接错误("configuration")
     return 数据库配置
 
 
@@ -302,83 +318,204 @@ def 已配置运行状态数据库(配置: Any) -> bool:
 
 def 检查运行状态数据库(配置: Any) -> str:
     """按需执行一次数据库连通性检查，不返回连接参数或异常原文。"""
+    return str(测试运行状态数据库连接(配置)["status"])
+
+
+数据库连接提示 = {
+    "configuration": "数据库配置无效，请检查地址格式、端口、加密模式和超时",
+    "dependency": "数据库驱动或认证依赖缺失，请更新插件依赖",
+    "dns": "数据库域名解析失败，请检查地址与服务器 DNS",
+    "timeout": "数据库连接超时，请检查公网端口、安全组与防火墙",
+    "network": "数据库网络连接失败，请检查监听地址、端口和访问规则",
+    "tls": "数据库加密连接失败，请检查 TLS 模式与证书",
+    "tls_required": "数据库要求加密连接，请启用 TLS",
+    "tls_unavailable": "目标数据库未提供 TLS，请检查服务端加密配置",
+    "authentication": "数据库账号或密码校验失败",
+    "host_denied": "数据库未允许当前服务器访问，请检查账号来源授权",
+    "permission": "数据库账号权限不足，请检查目标数据库授权",
+    "database_missing": "目标数据库不存在，请先创建数据库或检查库名",
+    "auth_plugin": "数据库认证方式不可用，请更新驱动并检查账号认证配置",
+    "server_busy": "数据库连接数已满，请稍后重试",
+    "unknown": "数据库连接失败，请检查后端受控诊断信息",
+}
+
+
+class 数据库连接错误(RuntimeError):
+    def __init__(self, 原因: str, mysql_code: int | None = None):
+        self.reason = 原因 if 原因 in 数据库连接提示 else "unknown"
+        self.mysql_code = mysql_code
+        super().__init__(数据库连接提示[self.reason])
+
+
+def _规范化数据库地址(地址: Any, 端口: Any = None) -> tuple[str, int]:
+    文本 = str(地址 or "").strip()
+    if not 文本 or re.search(r"[\s\x00-\x1f\x7f]", 文本):
+        raise 数据库连接错误("configuration")
+    独立端口 = None
+    if 端口 is not None and str(端口).strip():
+        try:
+            独立端口 = int(str(端口).strip())
+        except (TypeError, ValueError):
+            raise 数据库连接错误("configuration") from None
+    try:
+        if "://" not in 文本 and 文本.count(":") > 1 and not 文本.startswith("["):
+            ipaddress.IPv6Address(文本)
+            主机, 内嵌端口 = 文本, None
+        else:
+            解析 = urlsplit(文本 if "://" in 文本 else "mysql://" + 文本)
+            if (解析.scheme.lower() != "mysql" or 解析.username is not None
+                    or 解析.password is not None or 解析.path not in {"", "/"}
+                    or 解析.query or 解析.fragment):
+                raise ValueError("address")
+            主机, 内嵌端口 = 解析.hostname or "", 解析.port
+        if not 主机 or any(符号 in 主机 for 符号 in "/\\@?#;"):
+            raise ValueError("host")
+        if ":" not in 主机:
+            主机 = 主机.encode("idna").decode("ascii")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,253}", 主机):
+                raise ValueError("host")
+        else:
+            ipaddress.IPv6Address(主机)
+    except (ValueError, UnicodeError):
+        raise 数据库连接错误("configuration") from None
+    if 独立端口 is not None and 内嵌端口 is not None and 独立端口 != 内嵌端口:
+        raise 数据库连接错误("configuration")
+    最终端口 = 独立端口 if 独立端口 is not None else 内嵌端口 if 内嵌端口 is not None else 3306
+    if not 1 <= 最终端口 <= 65535:
+        raise 数据库连接错误("configuration")
+    return 主机, 最终端口
+
+
+def _分类数据库连接异常(异常: BaseException) -> tuple[str, int | None]:
+    已检查: set[int] = set()
+    待检查: list[BaseException] = [异常]
+    错误码 = None
+    while 待检查:
+        当前 = 待检查.pop(0)
+        if id(当前) in 已检查:
+            continue
+        已检查.add(id(当前))
+        if isinstance(当前, 数据库连接错误):
+            return 当前.reason, 当前.mysql_code
+        if isinstance(当前, (ImportError, ModuleNotFoundError)):
+            return "dependency", 错误码
+        if isinstance(当前, socket.gaierror):
+            return "dns", 错误码
+        if isinstance(当前, ssl.SSLError):
+            return "tls", 错误码
+        if isinstance(当前, (TimeoutError, socket.timeout)):
+            return "timeout", 错误码
+        参数 = getattr(当前, "args", ())
+        if 参数 and type(参数[0]) is int and 1000 <= 参数[0] <= 9999:
+            错误码 = 参数[0]
+        # PyMySQL 对操作系统连接异常保留 original_exception。
+        for 关联 in (getattr(当前, "original_exception", None), 当前.__cause__, 当前.__context__):
+            if isinstance(关联, BaseException):
+                待检查.append(关联)
+        if isinstance(当前, RuntimeError) and "cryptography" in str(当前).lower():
+            return "dependency", 错误码
+    原因 = {
+        1040: "server_busy", 1044: "permission", 1045: "authentication", 1049: "database_missing",
+        1130: "host_denied", 1142: "permission", 1143: "permission", 1251: "auth_plugin",
+        1524: "auth_plugin", 2002: "network", 2003: "network", 2005: "dns",
+        2006: "network", 2013: "network", 2026: "tls", 2059: "auth_plugin",
+        2061: "auth_plugin", 3159: "tls_required",
+    }.get(错误码, "network" if isinstance(异常, OSError) else "unknown")
+    return 原因, 错误码
+
+
+def _建立数据库连接(数据库配置: dict[str, Any]) -> Any:
+    try:
+        import pymysql
+        from pymysql.constants import CLIENT
+    except ImportError as 异常:
+        raise 数据库连接错误("dependency") from 异常
+    模式 = str(数据库配置.get("ssl_mode") or "preferred")
+    if 模式 not in {"preferred", "required", "verify_identity", "disabled"}:
+        raise 数据库连接错误("configuration")
+    参数 = {
+        "host": 数据库配置["host"], "port": 数据库配置["port"],
+        "user": 数据库配置["user"], "password": 数据库配置["password"],
+        "database": 数据库配置["database"], "charset": "utf8mb4", "autocommit": False,
+        "connect_timeout": 数据库配置.get("connect_timeout", 10),
+        "read_timeout": max(15, 数据库配置.get("connect_timeout", 10)),
+        "write_timeout": max(15, 数据库配置.get("connect_timeout", 10)),
+    }
+    if 模式 != "disabled":
+        if 模式 == "verify_identity":
+            try:
+                参数["ssl"] = ssl.create_default_context(cafile=数据库配置.get("ssl_ca") or None)
+            except (OSError, ssl.SSLError) as 异常:
+                raise 数据库连接错误("tls") from 异常
+        else:
+            上下文 = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            上下文.check_hostname = False
+            上下文.verify_mode = ssl.CERT_NONE
+            参数["ssl"] = 上下文
+    else:
+        参数["ssl_disabled"] = True
+    if 模式 in {"required", "verify_identity"}:
+        class 必须加密连接(pymysql.connections.Connection):
+            def _request_authentication(self):
+                # 上游仅在服务端声明 SSL 时协商；在认证发送前强制拒绝无 TLS 服务端。
+                if not self.server_capabilities & CLIENT.SSL:
+                    raise 数据库连接错误("tls_unavailable")
+                return super()._request_authentication()
+        return 必须加密连接(**参数)
+    return pymysql.connect(**参数)
+
+
+def 测试运行状态数据库连接(配置: Any) -> dict[str, Any]:
+    """只连接指定数据库并 SELECT，探测不创建库、表或运行状态。"""
     if not 已配置运行状态数据库(配置):
-        return "未配置"
+        return {"ok": False, "status": "未配置", "reason": "configuration", "message": "请先填写数据库地址和用户名", "mysql_code": None, "version": "", "tls": False}
+    连接 = None
     try:
         数据库配置 = 获取数据库配置(配置)
-        with 打开数据库连接(数据库配置) as 连接:
-            with 连接.cursor() as 游标:
-                游标.execute("SELECT 1")
-                游标.fetchone()
-        return "正常"
-    except Exception:
-        return "异常"
+        连接 = _建立数据库连接(数据库配置)
+        with 连接.cursor() as 游标:
+            游标.execute("SELECT 1, VERSION()")
+            记录 = 游标.fetchone()
+        版本原文 = str((记录.get("VERSION()") if isinstance(记录, dict) else 记录[1]) or "")
+        版本 = re.match(r"[0-9]+(?:\.[0-9]+){1,3}(?:-MariaDB)?", 版本原文)
+        return {"ok": True, "status": "正常", "reason": "connected", "message": "数据库连接正常", "mysql_code": None, "version": 版本.group(0) if 版本 else "", "tls": bool(getattr(连接, "_secure", False))}
+    except Exception as 异常:
+        原因, 错误码 = _分类数据库连接异常(异常)
+        return {"ok": False, "status": "异常", "reason": 原因, "message": 数据库连接提示[原因], "mysql_code": 错误码, "version": "", "tls": False}
+    finally:
+        if 连接 is not None:
+            try:
+                连接.close()
+            except Exception:
+                pass
 
 
 def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
     """打开 MySQL 连接；目标库不存在时自动创建。"""
-    try:
-        import pymysql
-    except Exception as exc:
-        raise RuntimeError("缺少 pymysql 依赖，请先安装 requirements.txt") from exc
     库名 = str(数据库配置.get("database") or "").strip()
     if not 库名:
-        raise RuntimeError("数据库配置不完整：缺少 database")
+        raise 数据库连接错误("configuration")
     临时连接 = None
     try:
-        return pymysql.connect(
-            host=数据库配置["host"],
-            port=数据库配置["port"],
-            user=数据库配置["user"],
-            password=数据库配置["password"],
-            database=库名,
-            charset="utf8mb4",
-            autocommit=False,
-            connect_timeout=5,
-            read_timeout=10,
-            write_timeout=10,
-        )
+        return _建立数据库连接(数据库配置)
     except Exception as 连接异常:
         # 只有 MySQL 1049（未知数据库）需要建库。网络/鉴权失败继续建库
         # 只会重复等待连接超时，占住控制台或消息写入线程。
-        if (
-            not isinstance(连接异常, pymysql.err.OperationalError)
-            or not 连接异常.args
-            or 连接异常.args[0] != 1049
-        ):
-            raise RuntimeError("数据库连接失败") from 连接异常
+        原因, 错误码 = _分类数据库连接异常(连接异常)
+        if 错误码 != 1049:
+            raise 数据库连接错误(原因, 错误码) from 连接异常
         try:
-            临时连接 = pymysql.connect(
-                host=数据库配置["host"],
-                port=数据库配置["port"],
-                user=数据库配置["user"],
-                password=数据库配置["password"],
-                charset="utf8mb4",
-                autocommit=False,
-                connect_timeout=5,
-                read_timeout=10,
-                write_timeout=10,
-            )
+            临时连接 = _建立数据库连接({**数据库配置, "database": None})
             with 临时连接.cursor() as 游标:
                 游标.execute(
-                    f"CREATE DATABASE IF NOT EXISTS `{库名}` "
+                    f"CREATE DATABASE IF NOT EXISTS `{库名.replace('`', '``')}` "
                     "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 )
             临时连接.commit()
-            return pymysql.connect(
-                host=数据库配置["host"],
-                port=数据库配置["port"],
-                user=数据库配置["user"],
-                password=数据库配置["password"],
-                database=库名,
-                charset="utf8mb4",
-                autocommit=False,
-                connect_timeout=5,
-                read_timeout=10,
-                write_timeout=10,
-            )
+            return _建立数据库连接(数据库配置)
         except Exception as 建库异常:
-            raise RuntimeError("数据库连接失败") from 建库异常
+            原因, 错误码 = _分类数据库连接异常(建库异常)
+            raise 数据库连接错误(原因, 错误码) from 建库异常
         finally:
             if 临时连接 is not None:
                 try:
@@ -387,44 +524,36 @@ def 打开数据库连接(数据库配置: dict[str, Any]) -> Any:
                     pass
 
 
+_配置字段缺失 = object()
+
+
 def 读取数据库配置值(配置: Any, *字段列表: str) -> Any:
+    """规范字段只有真正缺失时才兼容旧别名，明确空值不复活旧连接参数。"""
     for 字段名 in 字段列表:
-        值 = 读取配置字段(配置, 字段名)
-        if 值 is None:
-            continue
-        if isinstance(值, str) and not 值.strip():
-            continue
-        return 值
+        值 = 读取配置字段(配置, 字段名, _配置字段缺失)
+        if 值 is not _配置字段缺失:
+            return 值
     return None
 
 
-def 读取配置字段(配置: Any, 字段名: str) -> Any:
+def 读取配置字段(配置: Any, 字段名: str, 默认值: Any = None) -> Any:
     if 配置 is None:
-        return None
+        return 默认值
     配置字典 = 获取配置字典(配置)
-    if 配置字典 is not None and 配置字典 is not 配置:
-        值 = 读取配置字段(配置字典, 字段名)
-        if 值 is not None:
-            return 值
-
-    值 = 读取字段(配置, 字段名)
-    if 值 is None:
-        值 = 读取旧版配置字段(配置, 字段名)
-    if 值 is not None:
-        return 值
-
-    for 分类名 in (数据库配置分类名, "数据库配置"):
-        分类 = 读取字段(配置, 分类名)
-        if 分类 is None:
-            分类 = 读取旧版配置字段(配置, 分类名)
-        if 分类 is None:
-            continue
-        值 = 读取字段(分类, 字段名)
-        if 值 is None:
-            值 = 读取旧版配置字段(分类, 字段名)
-        if 值 is not None:
-            return 值
-    return None
+    来源列表 = [配置字典] if 配置字典 is not None else []
+    if 配置字典 is not 配置:
+        来源列表.append(配置)
+    for 来源 in 来源列表:
+        # 与网页编辑器一致：当前 schema 分类优先于旧根字段。
+        # 中文旧分类仅在两种规范存储均缺失时兼容，空串/None 都是明确值。
+        for 分类名 in (数据库配置分类名, None, "数据库配置"):
+            分类 = 来源 if 分类名 is None else 读取字段(来源, 分类名, _配置字段缺失)
+            if 分类 is _配置字段缺失 or 分类 is None:
+                continue
+            值 = 读取字段(分类, 字段名, _配置字段缺失)
+            if 值 is not _配置字段缺失:
+                return 值
+    return 默认值
 
 
 def 获取配置字典(配置: Any) -> dict[str, Any] | None:
@@ -445,20 +574,30 @@ def 获取配置字典(配置: Any) -> dict[str, Any] | None:
     return None
 
 
-def 读取字段(对象: Any, 字段名: str) -> Any:
+def 读取字段(对象: Any, 字段名: str, 默认值: Any = None) -> Any:
     if isinstance(对象, dict):
-        return 对象.get(字段名)
-    return getattr(对象, 字段名, None)
+        return 对象.get(字段名, 默认值)
+    值 = getattr(对象, 字段名, _配置字段缺失)
+    if 值 is not _配置字段缺失:
+        return 值
+    return 读取旧版配置字段(对象, 字段名, 默认值)
 
 
-def 读取旧版配置字段(配置: Any, 字段名: str) -> Any:
+def 读取旧版配置字段(配置: Any, 字段名: str, 默认值: Any = None) -> Any:
     获取方法 = getattr(配置, "get", None)
     if callable(获取方法):
         try:
-            return 获取方法(字段名)
+            return 获取方法(字段名, 默认值)
+        except TypeError:
+            # 仅接受单参数的旧对象无存在性接口时，None 保持缺失语义。
+            try:
+                值 = 获取方法(字段名)
+                return 默认值 if 值 is None else 值
+            except Exception:
+                pass
         except Exception:
             pass
-    return None
+    return 默认值
 
 
 def 安全整数(值: Any, 默认值: int) -> int:
