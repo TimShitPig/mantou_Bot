@@ -313,11 +313,16 @@ def _收集事件对象(event: Any) -> list[Any]:
 
 
 def 获取找书会话键(event: Any) -> str:
+    from 功能文件.管理功能.基础功能.机器人作用域 import 获取事件机器人AppID
+
+    appid = 获取事件机器人AppID(event)
     群号 = 获取群号(event)
     用户 = 获取找书用户标识(event)
     if not 用户:
         return ""
-    return f"{群号 or 'private'}:{用户}"
+    if not appid:
+        return ""
+    return f"{appid}:{群号 or 'private'}:{用户}"
 
 
 def 获取找书用户标识(event: Any) -> str:

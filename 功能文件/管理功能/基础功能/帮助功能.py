@@ -1121,6 +1121,17 @@ async def 发送Markdown键盘消息(
         )
         return False
 
+    发送AppID = str(getattr(getattr(_http, "_token", None), "app_id", "") or "").strip()
+    if not re.fullmatch(r"[0-9]{4,32}", 发送AppID):
+        logger.warning("QQ官方Markdown发送失败：stage=init, reason=identity_missing")
+        return False
+
+    async def 提交消息(消息体: dict[str, Any]) -> Any:
+        当前AppID = str(getattr(getattr(_http, "_token", None), "app_id", "") or "").strip()
+        if 当前AppID != 发送AppID:
+            raise RuntimeError("QQ官方认证身份已变化")
+        return await _http.request(route, json=消息体)
+
     try:
         import random as _random
 
@@ -1178,12 +1189,12 @@ async def 发送Markdown键盘消息(
         查询权限 = None
         if 目标类型 == "group" and callable(查询群主动消息权限):
             try:
-                查询权限 = await 查询群主动消息权限(目标会话)
+                查询权限 = await 查询群主动消息权限(目标会话, 发送AppID)
             except Exception as 查询异常:
                 logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
         if (
             (目标类型 == "group" and 查询权限 is False)
-            or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
+            or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型, 发送AppID) is False)
         ):
             logger.info(
                 "QQ官方Markdown发送诊断：stage=permissions, reason=permissions_denied, target_type=%s",
@@ -1216,21 +1227,22 @@ async def 发送Markdown键盘消息(
                 "QQ官方Markdown发送诊断：stage=http_send, reason=request_started, target_type=%s",
                 目标类型,
             )
-        发送结果 = await _http.request(route, json=消息体)
+        发送结果 = await 提交消息(消息体)
         if 实际主动发送 and 目标会话:
-            记录主动消息权限(目标会话, 目标类型, True)
+            记录主动消息权限(目标会话, 目标类型, True, 发送AppID)
         响应消息ID = _提取发送响应消息ID(发送结果)
         _记录MD键盘发送(
             群openid,
             用户openid,
             md文本,
+            appid=发送AppID,
             消息ID=响应消息ID,
             自身REFIDX=_提取发送响应REFIDX(发送结果),
         )
         return True
     except Exception as e:
         if 实际主动发送 and 目标会话 and 主动消息无权限(e):
-            记录主动消息权限(目标会话, 目标类型, False)
+            记录主动消息权限(目标会话, 目标类型, False, 发送AppID)
         错误文本 = str(e or "").lower()
         内容违规 = any(
             关键词 in 错误文本
@@ -1245,13 +1257,14 @@ async def 发送Markdown键盘消息(
                 降级消息体["msg_seq"] = _random.randint(1, 10000)
                 消息体 = 降级消息体
                 try:
-                    降级结果 = await _http.request(route, json=降级消息体)
+                    降级结果 = await 提交消息(降级消息体)
                     if 实际主动发送 and 目标会话:
-                        记录主动消息权限(目标会话, 目标类型, True)
+                        记录主动消息权限(目标会话, 目标类型, True, 发送AppID)
                     _记录MD键盘发送(
                         群openid,
                         用户openid,
                         记录文本,
+                        appid=发送AppID,
                         消息ID=_提取发送响应消息ID(降级结果),
                         自身REFIDX=_提取发送响应REFIDX(降级结果),
                     )
@@ -1282,12 +1295,12 @@ async def 发送Markdown键盘消息(
             查询权限 = None
             if 目标类型 == "group" and callable(查询群主动消息权限):
                 try:
-                    查询权限 = await 查询群主动消息权限(目标会话)
+                    查询权限 = await 查询群主动消息权限(目标会话, 发送AppID)
                 except Exception as 查询异常:
                     logger.debug("QQ官方主动消息权限查询失败：错误类型=%s", type(查询异常).__name__)
             if (
                 (目标类型 == "group" and 查询权限 is False)
-                or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型) is False)
+                or (目标类型 != "group" and 主动消息是否允许(目标会话, 目标类型, 发送AppID) is False)
             ):
                 logger.info(
                     "QQ官方Markdown发送诊断：stage=permissions_retry, reason=permissions_denied, target_type=%s",
@@ -1299,20 +1312,21 @@ async def 发送Markdown键盘消息(
                     "QQ官方Markdown发送诊断：stage=permissions_retry, reason=permissions_unknown, target_type=group"
                 )
         try:
-            主动发送结果 = await _http.request(route, json=主动消息体)
+            主动发送结果 = await 提交消息(主动消息体)
             if 目标会话:
-                记录主动消息权限(目标会话, 目标类型, True)
+                记录主动消息权限(目标会话, 目标类型, True, 发送AppID)
             _记录MD键盘发送(
-            群openid,
-            用户openid,
-            记录文本,
-            消息ID=_提取发送响应消息ID(主动发送结果),
-            自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+                群openid,
+                用户openid,
+                记录文本,
+                appid=发送AppID,
+                消息ID=_提取发送响应消息ID(主动发送结果),
+                自身REFIDX=_提取发送响应REFIDX(主动发送结果),
             )
             return True
         except Exception as 主动异常:
             if 目标会话 and 主动消息无权限(主动异常):
-                记录主动消息权限(目标会话, 目标类型, False)
+                记录主动消息权限(目标会话, 目标类型, False, 发送AppID)
             _记录QQ官方Markdown发送失败(主动异常, "http_send_retry")
             return False
 
@@ -1321,18 +1335,19 @@ def _记录MD键盘发送(
     群openid: str,
     用户openid: str,
     md文本: str,
-    appid: str = "",
+    appid: str,
     消息ID: str = "",
     自身REFIDX: str = "",
 ) -> None:
     """机器人主动发送（MD 键盘/下载完成按钮）成功后写入消息记录，网页可查看。"""
     try:
         from 功能文件.管理功能.基础功能.消息记录 import (
-            获取QQ官方平台,
             记录发送消息,
-            _提取发送响应REFIDX,
         )
 
+        appid = str(appid or "").strip()
+        if not re.fullmatch(r"[0-9]{4,32}", appid):
+            return
         会话标识 = str(群openid or "").strip() or str(用户openid or "").strip()
         if not 会话标识:
             return
@@ -1340,11 +1355,6 @@ def _记录MD键盘发送(
         展示文本 = str(md文本 or "").strip()
         if not 展示文本:
             return
-        if not str(appid or "").strip():
-            try:
-                appid = str(getattr(获取QQ官方平台(), "appid", "") or "")
-            except Exception:
-                pass
         记录发送消息(
             会话标识,
             类型,

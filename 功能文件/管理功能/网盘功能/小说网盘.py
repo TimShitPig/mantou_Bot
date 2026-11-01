@@ -11,7 +11,7 @@ from astrbot.api import logger
 
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值, 读取运行状态值
-from 功能文件.管理功能.基础功能 import 文件缓存
+from 功能文件.管理功能.基础功能 import 文件缓存, 机器人作用域
 from 功能文件.管理功能.网盘功能 import UC网盘, 夸克网盘, 百度网盘, 网盘Cookie
 from 功能文件.管理功能.网盘功能 import 网盘状态
 
@@ -95,6 +95,23 @@ async def 停止恢复待续传上传任务() -> None:
 async def 清理网盘过期小说文件(
     配置: Any, 当前日期: date | None = None
 ) -> dict[str, int]:
+    """遍历各机器人的独立账号；共用同一账号/目录时只检查一次。"""
+    配置列表 = ([配置] if 机器人作用域.获取当前机器人AppID(配置)
+              else 机器人作用域.枚举机器人配置(配置))
+    已检查账号: set[tuple[str, str, str]] = set()
+    合计: dict[str, int] = {}
+    for 当前配置 in 配置列表 or [配置]:
+        with 机器人作用域.绑定机器人作用域(机器人作用域.获取当前机器人AppID(当前配置)):
+            统计 = await _清理当前机器人网盘过期小说(当前配置, 当前日期, 已检查账号)
+        for 平台, 数量 in 统计.items():
+            合计[平台] = 合计.get(平台, 0) + 数量
+    return 合计
+
+
+async def _清理当前机器人网盘过期小说(
+    配置: Any, 当前日期: date | None,
+    已检查账号: set[tuple[str, str, str]],
+) -> dict[str, int]:
     """清理各账号过期 TXT 及已清空的日期目录，保留今天和昨天。"""
     日期 = 当前日期 or datetime.now().astimezone().date()
     客户端映射 = {
@@ -112,10 +129,15 @@ async def 清理网盘过期小说文件(
         客户端类, 读取目录 = 客户端映射[平台]
         删除数量 = 0
         for 序号, Cookie in 账号列表:
+            目录 = 读取目录(配置)
+            账号键 = (平台, Cookie, 目录)
+            if 账号键 in 已检查账号:
+                continue
+            已检查账号.add(账号键)
             try:
                 async with 客户端类(Cookie) as 客户端:
                     删除数量 += await 客户端.清理早于当天小说(
-                        读取目录(配置), 日期
+                        目录, 日期
                     )
             except asyncio.CancelledError:
                 raise
@@ -377,6 +399,7 @@ async def _上传小说并获取分享链接内部(
         网盘显示名[目标平台列表[0]],
         账号索引=_账号索引,
         待处理平台=目标平台列表,
+        appid=机器人作用域.获取当前机器人AppID(配置),
     )
     结果列表 = await _并发上传平台列表(
         配置,
@@ -528,6 +551,15 @@ async def 恢复待续传上传任务(配置: Any) -> int:
         状态 = str(任务.get("state") or "primary_pending")
         if 文件缓存.小说缓存正在使用(路径):
             continue
+        appid = str(任务.get("bot_appid") or "").strip()
+        if appid:
+            任务配置 = 机器人作用域.获取机器人配置(配置, appid)
+        else:
+            配置列表 = 机器人作用域.枚举机器人配置(配置)
+            if len(配置列表) > 1:
+                logger.warning("小说上传续传等待：reason=legacy_bot_identity_missing")
+                continue
+            任务配置 = 配置列表[0] if 配置列表 else 配置
         if 状态 == "primary_pending":
             任务平台 = 任务.get("pending_platforms")
             if isinstance(任务平台, list):
@@ -546,7 +578,7 @@ async def 恢复待续传上传任务(配置: Any) -> int:
                     None,
                 )
                 待处理平台 = [任务网盘] if 任务网盘 else [
-                    平台 for 平台 in 网盘顺序 if 主网盘是否启用(平台, 配置)
+                    平台 for 平台 in 网盘顺序 if 主网盘是否启用(平台, 任务配置)
                 ]
             if not 待处理平台:
                 文件缓存.更新上传任务(路径, "primary_done", last_error="")
@@ -557,13 +589,14 @@ async def 恢复待续传上传任务(配置: Any) -> int:
             if not isinstance(账号索引, dict):
                 账号索引 = {}
             try:
-                结果列表 = await _并发上传平台列表(
-                    配置,
-                    路径,
-                    文件名,
-                    待处理平台,
-                    账号索引,
-                )
+                with 机器人作用域.绑定机器人作用域(机器人作用域.获取当前机器人AppID(任务配置)):
+                    结果列表 = await _并发上传平台列表(
+                        任务配置,
+                        路径,
+                        文件名,
+                        待处理平台,
+                        账号索引,
+                    )
             except Exception as 异常:
                 logger.warning(f"重载恢复小说上传失败：file={文件名}, error={异常}")
                 continue

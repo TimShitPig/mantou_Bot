@@ -127,10 +127,15 @@ def 登记上传任务(
     *,
     账号索引: dict[str, int] | None = None,
     待处理平台: list[str] | tuple[str, ...] | None = None,
+    appid: str = "",
 ) -> Path:
     路径 = Path(缓存路径)
     任务路径 = 获取上传任务路径(路径)
     旧任务 = 读取上传任务(路径) or {}
+    原AppID = str(旧任务.get("bot_appid") or "").strip()
+    本次AppID = str(appid or "").strip()
+    if 原AppID and 本次AppID and 原AppID != 本次AppID:
+        raise ValueError("upload_bot_identity_conflict")
     当前时间 = int(time.time())
     数据 = {
         "version": 1,
@@ -142,6 +147,7 @@ def 登记上传任务(
         "updated_at": 当前时间,
         "retry_count": int(旧任务.get("retry_count") or 0),
         "last_error": str(旧任务.get("last_error") or ""),
+        "bot_appid": 原AppID or 本次AppID,
     }
     if isinstance(待处理平台, (list, tuple)):
         数据["pending_platforms"] = [

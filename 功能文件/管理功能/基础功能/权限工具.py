@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from typing import Any
+from 功能文件.管理功能.基础功能.机器人作用域 import 获取机器人配置, 机器人作用域缓存键
 
 try:
     from astrbot.api import logger
@@ -17,7 +18,7 @@ except Exception:
 管理员白名单状态键 = "group_file_cleanup_admin_qq"
 管理员白名单配置快照键 = "config_snapshot"
 管理员白名单同步间隔秒 = 5.0
-_管理员白名单缓存: dict[int, tuple[float, list[str]]] = {}
+_管理员白名单缓存: dict[tuple[int, str], tuple[float, list[str]]] = {}
 _管理员白名单同步锁 = threading.RLock()
 
 
@@ -157,7 +158,8 @@ def 同步管理员白名单(配置: Any, 强制: bool = False) -> list[str]:
     """
     if not 配置:
         return []
-    配置键 = id(配置)
+    配置 = 获取机器人配置(配置)
+    配置键 = 机器人作用域缓存键(配置)
     现在 = time.monotonic()
     with _管理员白名单同步锁:
         缓存 = _管理员白名单缓存.get(配置键)

@@ -113,7 +113,7 @@
       const views = {
         dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
         bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],
-        novels: ['小说功能', '管理全局开关、测试模式和平台开关'],
+        novels: ['小说功能', '管理本机器人的小说开关、测试模式和平台开关'],
         pans: ['网盘配置', '管理多网盘分享和账号安全摘要'],
         runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
         help: ['帮助指令', '查看机器人当前支持的聊天指令'],
@@ -122,6 +122,16 @@
       };
       let snapshot = null;
       let activeView = null;
+      let consoleAppid = '';
+      let consoleGeneration = 0;
+      let consoleEntering = false;
+      const consoleRequests = new Set();
+      const botStorageKey = (key) => `${key}:${consoleAppid}`;
+      const botApiUrl = (path, appid = consoleAppid) => {
+        const url = new URL(`/api/${path}`, location.origin);
+        if (appid) url.searchParams.set('appid', String(appid));
+        return url.pathname + url.search;
+      };
       let activePanTab = null;
       let activePanObject = null;
       let quarkWebScanId = '';
@@ -165,6 +175,7 @@
       document.addEventListener('focusin', (event) => { const node = activeMsgModal(); if (node && !node.contains(event.target)) (modalFocusable(node)[0] || node).focus({preventScroll:true}); });
       const showNotice = (message) => { const node = $('notice'); node.textContent = message; node.classList.toggle('show', Boolean(message)); };
       const toast = (message) => {
+        if (message === '机器人已切换') return;
         const node = $('toast');
         // 原生 dialog 位于浏览器顶层；提示跟随当前对话框，关闭后回到页面。
         const host = document.querySelector('dialog[open]') || document.body;
@@ -173,18 +184,30 @@
         toastTimer = setTimeout(() => { node.classList.remove('show'); if (node.parentElement !== document.body) document.body.appendChild(node); }, 2200);
       };
       const api = async (path, options = {}) => {
-        const requestOptions = { cache:'no-store', credentials:'same-origin', ...options };
-        // 所有聊天动作都绑定明确的机器人；文件表单保留原始附件和发送目标。
-        const scopedMessage = path.startsWith('message/') && path !== 'message/layout';
-        const requestGeneration = scopedMessage ? msgState.scopeGeneration : 0;
+        const {botAppid, scopeCleanup, ...fetchOptions} = options;
+        const requestOptions = { cache:'no-store', credentials:'same-origin', ...fetchOptions };
+        const url = new URL(`/api/${path}`, location.origin);
+        const endpoint = url.pathname.slice('/api/'.length);
+        const scoped = !['bot-profile','login','logout'].includes(endpoint);
+        const requestGeneration = consoleGeneration;
+        const requestAppid = String(botAppid || consoleAppid || '').trim();
+        // 清理旧机器人的扫码会话也固定原 AppID，不借用切换后的账号。
+        const cleanup = scopeCleanup === true && requestOptions.method === 'DELETE';
+        if (scoped) {
+          if (!/^\d{4,32}$/.test(requestAppid)) throw new Error('请先选择机器人');
+          if ((url.searchParams.has('appid') && url.searchParams.get('appid') !== requestAppid)
+            || (!cleanup && requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
+          url.searchParams.set('appid', requestAppid);
+        }
+        const scopedMessage = endpoint.startsWith('message/') && endpoint !== 'message/layout'
+          && !['GET','HEAD'].includes(String(requestOptions.method || 'GET').toUpperCase());
         if (scopedMessage) {
           const form = requestOptions.body instanceof FormData;
           const payload = form ? requestOptions.body : JSON.parse(requestOptions.body || '{}');
           const read = (key) => form ? payload.get(key) : payload[key];
           const write = (key, value) => { if (form) payload.set(key, value); else payload[key] = value; };
-          const appid = String(read('appid') || msgState.selectedAppid || '').trim();
-          if (!/^\d{4,32}$/.test(appid)) throw new Error('请先选择机器人');
-          if (path !== 'message/send' && appid !== msgState.selectedAppid) throw new DOMException('机器人已切换', 'AbortError');
+          const appid = String(read('appid') || requestAppid).trim();
+          if (appid !== requestAppid) throw new DOMException('机器人已切换', 'AbortError');
           write('appid', appid);
           if (read('chat_id') && !read('chat_type')) {
             const chat = msgState.chats.find((item) => item.chat_id === String(read('chat_id')) && item.appid === appid);
@@ -195,21 +218,42 @@
         const requestHeaders = {...(options.headers || {})};
         if (!(requestOptions.body instanceof FormData) && !Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-type')) requestHeaders['Content-Type'] = 'application/json';
         requestOptions.headers = requestHeaders;
-        const response = await fetch(`/api/${path}`, requestOptions);
-        const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
-        if (scopedMessage && path !== 'message/send' && requestGeneration !== msgState.scopeGeneration) throw new DOMException('机器人已切换', 'AbortError');
-        if (!response.ok || !data.ok) { const error = new Error(data.message || data.error || '请求失败'); error.status = response.status; error.data = data; throw error; }
-        return data;
+        const controller = scoped && !cleanup ? new AbortController() : null;
+        const cancel = () => controller?.abort();
+        if (controller) {
+          if (fetchOptions.signal?.aborted) controller.abort();
+          else fetchOptions.signal?.addEventListener('abort', cancel, {once:true});
+          requestOptions.signal = controller.signal;
+          consoleRequests.add(controller);
+        }
+        try {
+          const response = await fetch(url.pathname + url.search, requestOptions);
+          const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
+          if (scoped && !cleanup && (requestGeneration !== consoleGeneration || requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
+          if (scoped && data.appid && String(data.appid) !== requestAppid) throw new Error('机器人资料不匹配，请重新进入');
+          if (!response.ok || !data.ok) { const error = new Error(data.message || data.error || '请求失败'); error.status = response.status; error.data = data; throw error; }
+          return data;
+        } catch (error) {
+          if (scoped && !cleanup && (requestGeneration !== consoleGeneration || requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
+          throw error;
+        } finally {
+          if (controller) consoleRequests.delete(controller);
+          fetchOptions.signal?.removeEventListener('abort', cancel);
+        }
       };
       const stopQuarkWebScan = async () => {
+        const appid = consoleAppid;
+        const scopeGeneration = consoleGeneration;
         const scanId = quarkWebScanId;
         quarkWebScanId = '';
         quarkWebScanGeneration += 1;
         clearTimeout(quarkWebScanTimer);
         quarkWebScanTimer = null;
-        if (scanId) {
-          try { await api(`pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(scanId)}`, {method:'DELETE'}); } catch (_) {}
+        if (appid) {
+          const path = `pan-accounts/${encodeURIComponent('夸克')}/scan${scanId ? '/' + encodeURIComponent(scanId) : ''}`;
+          try { await api(path, {method:'DELETE', botAppid:appid, scopeCleanup:true}); } catch (_) {}
         }
+        if (scopeGeneration !== consoleGeneration) return;
         const card = document.querySelector(`[data-pan-card="${CSS.escape('夸克')}"]`);
         const image = card?.querySelector('[data-quark-scan-image]');
         if (image) { image.removeAttribute('src'); image.hidden = true; }
@@ -221,11 +265,13 @@
         if (start) { start.disabled = false; start.textContent = '获取二维码'; }
       };
       window.addEventListener('pagehide', () => {
-        if (!quarkWebScanId) return;
-        fetch(`/api/pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(quarkWebScanId)}`, {method:'DELETE', credentials:'same-origin', keepalive:true}).catch(() => {});
+        if (!consoleAppid) return;
+        const path = `pan-accounts/${encodeURIComponent('夸克')}/scan${quarkWebScanId ? '/' + encodeURIComponent(quarkWebScanId) : ''}`;
+        fetch(botApiUrl(path), {method:'DELETE', credentials:'same-origin', keepalive:true}).catch(() => {});
       });
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
+        if (!consoleAppid) return;
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
@@ -233,12 +279,12 @@
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') leaveQQReader();
         activeView = next;
-        if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); history.pushState({view:next}, '', `${location.pathname}?${nextParams.toString()}`); }
+        if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); nextParams.set('appid', consoleAppid); history.pushState({view:next,appid:consoleAppid}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
         document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
-        if (next === 'dashboard') $('page-eyebrow').textContent = '馒头Bot / 管理台'; else $('page-eyebrow').textContent = '馒头Bot / 功能页面';
+        $('page-eyebrow').textContent = `${window.msgBotProfile?.username || '机器人'} / ${next === 'dashboard' ? '管理台' : '功能页面'}`;
         if (next !== 'messages' && previousView === 'messages') setMsgMobileChatOpen(false);
         if (next === 'messages') {
           connectMsgEvents();
@@ -289,7 +335,7 @@
         if (!groups.length) { node.innerHTML = '<div class="empty">暂无可编辑配置</div>'; return; }
         node.innerHTML = groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
           const inputId = `cfg-${field.key}`;
-          const label = esc(field.label || field.key);
+          const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
           if (field.kind === 'select') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}>${(field.options || []).map((option) => `<option value="${esc(option)}" ${String(option) === String(field.value ?? '') ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select><small>${hint}</small></div>`;
@@ -486,7 +532,7 @@
          const available = Array.from(cards).map((node) => node.dataset.panCard);
          const selected = available.includes(key) ? key : (available[0] || '');
          activePanTab = selected || null;
-         try { if (selected) sessionStorage.setItem('mantou-pan-tab', selected); } catch (_) {}
+         try { if (selected) sessionStorage.setItem(botStorageKey('mantou-pan-tab'), selected); } catch (_) {}
          tabs.forEach((node) => { const isActive = node.dataset.panTab === selected; node.classList.toggle('active', isActive); node.setAttribute('aria-selected', String(isActive)); node.tabIndex = isActive ? 0 : -1; });
          cards.forEach((node) => { const isActive = node.dataset.panCard === selected; node.hidden = !isActive; node.setAttribute('aria-hidden', String(!isActive)); });
        };
@@ -523,6 +569,7 @@
          });
        });
       const render = (data) => {
+        if (!consoleAppid || (data.appid && String(data.appid) !== consoleAppid)) return;
         snapshot = data;
         const auth = data.auth || {}; const novels = data.novels || {}; const pans = data.pans || {}; const server = data.server || {}; const database = data.database || {};
         const adminName = String(auth.username || '管理员');
@@ -535,7 +582,7 @@
         $('metric-pan').textContent = pans.active || '--'; const activePan = (pans.items || []).find((item) => item.active); $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
         $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`; $('console-version').textContent = `v${data.version || '--'}`;
         $('dashboard-cpu').textContent = server.cpu || '--'; $('dashboard-memory').textContent = server.memory || '--'; $('dashboard-runtime').textContent = server.runtime || '--'; $('dashboard-updated').textContent = '刚刚';
-        [['global-switch', '__global__', novels.global_enabled, '切换全局小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
+        [['global-switch', '__global__', novels.global_enabled, '切换本机器人的小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
         const platforms = novels.platforms || [];
         const enabledCount = platforms.filter((item) => item.enabled).length;
         const totalCount = platforms.length;
@@ -557,7 +604,7 @@
         if (panGrid) panGrid.innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
         bindPanWorkspaceControls();
         let savedPanTab = activePanTab;
-        if (!savedPanTab) { try { savedPanTab = sessionStorage.getItem('mantou-pan-tab'); } catch (_) {} }
+        if (!savedPanTab) { try { savedPanTab = sessionStorage.getItem(botStorageKey('mantou-pan-tab')); } catch (_) {} }
         applyPanTab(savedPanTab || panItems.find((item) => item.active)?.key || panItems[0]?.key || '');
         if (activePanObject) showPanObject(false);
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
@@ -586,7 +633,7 @@
       const qqReaderAvatarHtml = (account) => {
         const name = String(account?.nickname || '书友');
         const raw = safeMediaUrl(String(account?.avatar_url || ''));
-        const source = raw ? `/api/message/media?src=${encodeURIComponent(raw)}&mode=image` : '';
+        const source = raw ? botApiUrl(`message/media?src=${encodeURIComponent(raw)}&mode=image`) : '';
         return `<span class="qq-reader-avatar" aria-hidden="true"><span>${esc(name.trim().slice(0, 1) || '阅')}</span>${source ? `<img src="${esc(source)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`;
       };
       const hideQQReaderKey = () => {
@@ -605,6 +652,7 @@
         if ($('qq-reader-scan-start')) { $('qq-reader-scan-start').disabled = !qqReaderEditable() || qqReader.scanStarting || Boolean(qqReader.scanCancel); $('qq-reader-scan-start').textContent = qqReader.scanStarting ? '正在获取二维码' : qqReader.scanId ? '更换二维码' : '获取二维码'; }
       };
       const stopQQReaderScan = async (clearMessage = true) => {
+        const appid = consoleAppid;
         const scanId = qqReader.scanId;
         const starting = qqReader.scanStarting;
         const previousCancel = qqReader.scanCancel;
@@ -621,7 +669,7 @@
         if (scanId || starting) {
           const cancellation = (async () => {
             if (previousCancel) await previousCancel;
-            try { await api('qq-reader-auth/scan', {method:'DELETE', body:JSON.stringify({scan_id:scanId})}); } catch (_) {}
+            try { await api('qq-reader-auth/scan', {method:'DELETE', body:JSON.stringify({scan_id:scanId}), botAppid:appid, scopeCleanup:true}); } catch (_) {}
           })();
           qqReader.scanCancel = cancellation;
           updateQQReaderScan();
@@ -876,6 +924,7 @@
         if ($('qq-reader-captcha-frame')) $('qq-reader-captcha-frame').hidden = true;
       };
       const stopQQReaderSms = async (clearFields = true, keepalive = false) => {
+        const appid = consoleAppid;
         const shouldCancel = qqReader.smsStarting || qqReader.smsActive;
         const previousCancel = qqReader.smsCancel;
         qqReader.smsGeneration += 1;
@@ -889,7 +938,7 @@
         if ($('qq-reader-phone-code')) $('qq-reader-phone-code').value = '';
         updateQQReaderSms();
         if (shouldCancel) {
-          const cancellation = (async () => { if (previousCancel) await previousCancel; try { if (keepalive) await fetch('/api/qq-reader-auth/sms-login', {method:'DELETE', credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}, body:'{}'}); else await api('qq-reader-auth/sms-login', {method:'DELETE', body:'{}'}); } catch (_) {} })();
+          const cancellation = (async () => { if (previousCancel) await previousCancel; try { if (keepalive) await fetch(botApiUrl('qq-reader-auth/sms-login', appid), {method:'DELETE', credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}, body:'{}'}); else await api('qq-reader-auth/sms-login', {method:'DELETE', body:'{}', botAppid:appid, scopeCleanup:true}); } catch (_) {} })();
           qqReader.smsCancel = cancellation; updateQQReaderSms();
           try { await cancellation; } finally { if (qqReader.smsCancel === cancellation) { qqReader.smsCancel = null; updateQQReaderSms(); } }
         } else if (previousCancel) await previousCancel;
@@ -982,7 +1031,7 @@
         hideQQReaderKey(); clearQQReaderManual();
         void stopQQReaderSms(true, true);
         qqReader.adding = false; qqReader.detailId = ''; qqReader.modalRestoreFocus = false; syncQQReaderModal();
-        if (qqReader.scanId || qqReader.scanStarting) fetch('/api/qq-reader-auth/scan', {method:'DELETE', credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({scan_id:qqReader.scanId})}).catch(() => {});
+        if (qqReader.scanId || qqReader.scanStarting) fetch(botApiUrl('qq-reader-auth/scan'), {method:'DELETE', credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({scan_id:qqReader.scanId})}).catch(() => {});
         qqReader.scanIntent += 1; qqReader.scanGeneration += 1; qqReader.scanStarting = false; qqReader.scanId = ''; qqReader.image = ''; clearTimeout(qqReader.scanTimer);
       });
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveQQReader(); });
@@ -990,13 +1039,16 @@
        const addPanAccount = async (platform) => { const input = document.querySelector(`[data-pan-cookie="${CSS.escape(platform)}"]`); const button = document.querySelector(`[data-pan-add="${CSS.escape(platform)}"]`); const cookie = input?.value.trim(); if (!cookie) return toast('请先粘贴 Cookie'); if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'POST', body:JSON.stringify({cookie})}); if (input) input.value = ''; toast(`${platform}账号已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const startQuarkWebScan = async (button) => {
          if (!snapshot?.pans?.editable) return toast('数据库未配置，扫码账号不能保存');
+         const scopeGeneration = consoleGeneration;
          await stopQuarkWebScan();
+         if (scopeGeneration !== consoleGeneration) return;
+         const generation = ++quarkWebScanGeneration;
          if (button) { button.disabled = true; button.textContent = '正在获取二维码'; }
          const statusNode = document.querySelector('[data-quark-scan-status]');
          try {
            const result = await api(`pan-accounts/${encodeURIComponent('夸克')}/scan`, {method:'POST', body:'{}'});
+           if (scopeGeneration !== consoleGeneration || generation !== quarkWebScanGeneration) return;
            quarkWebScanId = String(result.scan_id || '');
-           const generation = ++quarkWebScanGeneration;
            const image = document.querySelector('[data-quark-scan-image]');
            if (image) { image.src = result.qr_image; image.hidden = false; }
            if (statusNode) statusNode.textContent = result.message || '请使用夸克 App 扫描二维码。';
@@ -1018,6 +1070,7 @@
                quarkWebScanId = '';
                quarkWebScanTimer = null;
                try { await api(`pan-accounts/${encodeURIComponent('夸克')}/scan/${encodeURIComponent(scanId)}`, {method:'DELETE'}); } catch (_) {}
+               if (scopeGeneration !== consoleGeneration || generation !== quarkWebScanGeneration) return;
                const qr = document.querySelector('[data-quark-scan-image]');
                if (qr) { qr.removeAttribute('src'); qr.hidden = true; }
                const cancelButton = document.querySelector('[data-quark-scan-cancel]');
@@ -1030,6 +1083,7 @@
                  await load();
                }
              } catch (error) {
+               if (scopeGeneration !== consoleGeneration || generation !== quarkWebScanGeneration || error.name === 'AbortError') return;
                if (error.status === 401) { showAuthError(error); return; }
                const label = document.querySelector('[data-quark-scan-status]');
                if (label) label.textContent = error.message || '正在重试查询扫码状态。';
@@ -1038,6 +1092,7 @@
            };
            quarkWebScanTimer = setTimeout(poll, 1500);
          } catch (error) {
+           if (scopeGeneration !== consoleGeneration || generation !== quarkWebScanGeneration || error.name === 'AbortError') return;
            if (button) { button.disabled = false; button.textContent = '获取二维码'; }
            if (statusNode) statusNode.textContent = error.message || '二维码获取失败。';
            if (error.status === 401) showAuthError(error); else toast(error.message);
@@ -1066,7 +1121,8 @@
          const quark = snapshot.pans?.items?.find((item) => item.key === '夸克');
          const accounts = Array.isArray(quark?.account_summary) ? quark.account_summary : [];
          if (!accounts.length) return;
-         quarkProfileRefreshPromise = api('pan-accounts/夸克').then((data) => {
+         const generation = consoleGeneration;
+         const pending = api('pan-accounts/夸克').then((data) => {
            // 保存账号或开关时 load() 可能换过快照，旧请求不得覆盖新状态。
            if (snapshot?.pans?.items?.find((item) => item.key === '夸克') !== quark) return;
            if (!Array.isArray(data.accounts)) throw new Error('账号资料格式错误');
@@ -1080,24 +1136,33 @@
            renderQuarkAccountCards();
            quarkProfileRefreshAfter = Date.now() + quarkProfileRefreshIntervalMs;
          }).catch((error) => {
+           if (generation !== consoleGeneration || error.name === 'AbortError') return;
            quarkProfileRefreshAfter = Date.now() + quarkProfileRetryIntervalMs;
            if (error.status === 401) showAuthError(error);
-         }).finally(() => { quarkProfileRefreshPromise = null; });
+         }).finally(() => { if (quarkProfileRefreshPromise === pending) quarkProfileRefreshPromise = null; });
+         quarkProfileRefreshPromise = pending;
          return quarkProfileRefreshPromise;
        };
        const savePanDirectory = async (platform, button) => { const input = document.querySelector(`[data-pan-dir="${CSS.escape(platform)}"]`); const field = input?.dataset.panDirField; const value = input?.value.trim(); if (!field || !value) return toast('请输入上传目录'); if (button) button.disabled = true; try { const result = await api('config', {method:'POST', body:JSON.stringify({fields:{[field]:value}})}); toast(result.message || `${platform}上传目录已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const changePanAccountEnabled = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，账号状态不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/enable`, {method:'POST', body:JSON.stringify({index:Number(index), enabled})}); toast(result.message || `账号${enabled ? '已启用' : '已停用'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanAccountDefault = async (platform, index, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，默认账号不能保存'); node.disabled = true; try { const result = await api(`pan-accounts/${encodeURIComponent(platform)}/default`, {method:'POST', body:JSON.stringify({index:Number(index)})}); toast(result.message || `${platform}默认账号已更新`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const showAuthError = (error) => { if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
+      const showAuthError = (error) => { if (error.name === 'AbortError') return; if (error.status === 401) { location.reload(); return; } if ($('popover-logout')) $('popover-logout').hidden = true; showNotice(error.status === 503 ? '登录服务尚未启用，请联系管理员。' : '控制台数据暂时不可用，请稍后重试。'); };
       const adminChip = $('admin-chip'); const adminPopover = $('admin-popover');
       adminChip?.addEventListener('click', (event) => { event.stopPropagation(); const expanded = adminChip.getAttribute('aria-expanded') === 'true'; adminChip.setAttribute('aria-expanded', String(!expanded)); if (adminPopover) adminPopover.hidden = expanded; });
       document.addEventListener('click', () => { if (adminChip?.getAttribute('aria-expanded') === 'true') { adminChip.setAttribute('aria-expanded', 'false'); if (adminPopover) adminPopover.hidden = true; } });
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
-      const load = async () => { try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
+      const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
       $('popover-logout').addEventListener('click', async () => { leaveQQReader(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
-      window.addEventListener('popstate', () => setView(viewFromUrl(), false));
+      window.addEventListener('popstate', () => {
+        const appid = String(new URLSearchParams(location.search).get('appid') || '').trim();
+        if (!appid) { exitBotConsole(false); return; }
+        if (appid === consoleAppid) { setView(viewFromUrl(), false); return; }
+        const profile = botProfileForAppid(appid);
+        if (profile.appid) { exitBotConsole(false); void enterBotConsole(profile, false); }
+        else exitBotConsole(false);
+      });
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
@@ -1263,32 +1328,33 @@
         if (persist) queueMsgLayoutSave();
       };
       const queueMsgLayoutSave = () => {
-        if (!msgLayout.loaded) return;
+        if (!msgLayout.loaded || !consoleAppid) return;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
+        const appid = consoleAppid, generation = consoleGeneration;
+        const layout = {list_width:msgLayout.listWidth, composer_height:msgLayout.composerHeight,
+          list_collapsed:msgLayout.listCollapsed, composer_collapsed:msgLayout.composerCollapsed};
         msgLayout.saveTimer = setTimeout(async () => {
           msgLayout.saveTimer = null;
+          if (appid !== consoleAppid || generation !== consoleGeneration) return;
           try {
-            const data = await api('message/layout', {method:'POST', body:JSON.stringify({
-              list_width:msgLayout.listWidth,
-              composer_height:msgLayout.composerHeight,
-              list_collapsed:msgLayout.listCollapsed,
-              composer_collapsed:msgLayout.composerCollapsed,
-            })});
+            const data = await api('message/layout', {method:'POST', body:JSON.stringify(layout)});
             msgLayout.persisted = Boolean(data.persisted);
             if (data.layout) applyMsgLayout(data.layout, false);
           } catch (error) {
-            if (error.status !== 409 && error.status !== 401) toast('消息布局保存失败');
+            if (error.name !== 'AbortError' && error.status !== 409 && error.status !== 401) toast('消息布局保存失败');
           }
         }, 280);
       };
       const loadMsgLayout = async () => {
+        if (!consoleAppid) return;
+        const appid = consoleAppid, generation = consoleGeneration;
         applyMsgLayout();
         try {
           const data = await api('message/layout');
           msgLayout.persisted = Boolean(data.persisted);
           applyMsgLayout(data.layout || {});
         } catch (_) {}
-        msgLayout.loaded = true;
+        if (appid === consoleAppid && generation === consoleGeneration) msgLayout.loaded = true;
       };
       const bindMsgLayoutControls = () => {
         const shell = $('msg-shell');
@@ -1820,16 +1886,16 @@
         // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
         return /^\d{4,32}$/.test(aid) ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
-      const avatarImg = (url, letter, className = '') => {
-        const source = mediaProxyUrl(url);
+      const avatarImg = (url, letter, className = '', appid = consoleAppid) => {
+        const source = mediaProxyUrl(url, 'image', '', appid);
         const nonce = Number(msgState.avatarRefresh?.get(String(url)) || 0);
         const refreshed = nonce && source.startsWith('/api/') ? source + '&avatar_refresh=' + nonce : source;
         return `<img class="${esc(className)}" src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}const box=this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar, .bot-selector-avatar, .bot-avatar');box?.classList.add('avatar-fallback');box?.classList.remove('has-image');this.remove();">`;
       };
-      const avatarHtml = (url, letter) => {
+      const avatarHtml = (url, letter, appid = consoleAppid) => {
         const firstLetter = Array.from(String(letter || '?'))[0];
         if (!url) return esc(firstLetter);
-        return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter);
+        return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter, '', appid);
       };
       const botProfileForAppid = (appid) => {
         const id = String(appid || '').trim();
@@ -1870,18 +1936,92 @@
         window.msgGroupQQ = {}; msgLastPollAt = 0;
         if (next && !$('page-messages')?.hidden) void loadMsgChats(true);
       };
-      const botStatusLabel = (status) => ({running:'运行中', pending:'连接中', error:'连接异常', stopped:'已停止'})[status] || '状态未知';
+      const showBotPicker = (message = '') => {
+        document.querySelector('.shell')?.classList.add('bot-picker-open');
+        $('console-sidebar').hidden = true; $('console-workspace').hidden = true; $('bot-picker').hidden = false;
+        $('bot-picker-error').textContent = message; $('bot-picker-error').hidden = !message;
+        document.title = '选择机器人 · 馒头控制台';
+        $('console-brand-name').textContent = '馒头Bot';
+        $('updated').textContent = '--';
+      };
+      const exitBotConsole = (push = true) => {
+        // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
+        void stopQuarkWebScan(); leaveQQReader(); closeMsgEvents();
+        ++consoleGeneration;
+        for (const controller of consoleRequests) controller.abort();
+        consoleRequests.clear();
+        consoleEntering = false; consoleAppid = '';
+        snapshot = null; activeView = null; activePanTab = null; activePanObject = null;
+        quarkProfileRefreshAfter = 0; quarkProfileRefreshPromise = null;
+        qqReader.request += 1; qqReader.keyRequest += 1; qqReader.auth = null; qqReader.mutation = false;
+        qqReader.detailId = ''; qqReader.adding = false; qqReader.modalRestoreFocus = false; qqReader.method = 'cookie';
+        clearQQReaderManual(); syncQQReaderModal();
+        switchMsgBotScope(''); setMsgMobileChatOpen(false);
+        msgState.historyCache.clear(); msgState.readInFlight.clear(); msgState.optimisticSends.clear();
+        msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
+        if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
+        msgLayout.saveTimer = null; msgLayout.loaded = false; msgLayout.persisted = false; applyMsgLayout();
+        window.msgBotProfile = {};
+        clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
+        if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
+        document.querySelectorAll('#console-workspace input,#console-workspace textarea,#qq-reader-account-dialog input').forEach((node) => { node.value = ''; });
+        for (const id of ['pan-grid','basic-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
+        showNotice(''); showBotPicker(); renderBotProfiles();
+        document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; });
+        for (const url of browserMediaObjectUrls.values()) { try { URL.revokeObjectURL(url); } catch (_) {} }
+        browserMediaObjectUrls.clear();
+        if (push) {
+          const params = new URLSearchParams(location.search); params.delete('appid'); params.delete('view');
+          history.pushState({}, '', `${location.pathname}${params.size ? '?' + params.toString() : ''}`);
+          $('bot-picker-title').focus?.({preventScroll:true});
+        }
+      };
+      const enterBotConsole = async (profile, push = true) => {
+        const appid = String(profile?.appid || '').trim();
+        if (consoleEntering || !/^\d{4,32}$/.test(appid)) return;
+        if (consoleAppid && consoleAppid !== appid) exitBotConsole(false);
+        consoleEntering = true; consoleAppid = appid; ++consoleGeneration;
+        const generation = consoleGeneration;
+        showBotPicker(); $('bot-profile-list').setAttribute('aria-busy', 'true'); renderBotProfiles();
+        applyBotProfile(profile);
+        try {
+          const data = await api('dashboard');
+          if (generation !== consoleGeneration || appid !== consoleAppid) return;
+          if (String(data.bot?.appid || data.appid || appid) !== appid) throw new Error('机器人资料不匹配，请重新选择');
+          render(data);
+          $('bot-picker').hidden = true; $('console-sidebar').hidden = false; $('console-workspace').hidden = false;
+          document.querySelector('.shell')?.classList.remove('bot-picker-open');
+          document.title = `${window.msgBotProfile.username || '机器人'} · 馒头控制台`;
+          const params = new URLSearchParams(location.search); params.set('appid', appid);
+          const view = push ? 'dashboard' : viewFromUrl(); params.set('view', view);
+          if (push) history.pushState({appid,view}, '', `${location.pathname}?${params.toString()}`);
+          else history.replaceState({appid,view}, '', `${location.pathname}?${params.toString()}`);
+          setView(view, false); void loadMsgLayout();
+          if ($('popover-logout')) $('popover-logout').hidden = false;
+          $('page-title').tabIndex = -1; $('page-title').focus({preventScroll:true});
+        } catch (error) {
+          if (generation !== consoleGeneration || error.name === 'AbortError') return;
+          exitBotConsole(false);
+          showBotPicker(error.status === 401 ? '登录已过期，请重新登录。' : (error.message || '机器人控制台暂时不可用，请重试。'));
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          if (generation === consoleGeneration) consoleEntering = false;
+          $('bot-profile-list').removeAttribute('aria-busy'); renderBotProfiles();
+        }
+      };
+      const botStatusLabel = (status) => ({running:'运行中', pending:'连接中', error:'连接异常', stopped:'已停止', disabled:'已停用'})[status] || '状态未知';
       const renderBotProfiles = () => {
         const host = $('bot-profile-list');
         if (!host) return;
         const profiles = window.msgBotProfiles || [];
         host.innerHTML = profiles.map((profile) => {
           const name = profile.username || profile.platform_id || 'QQ官方机器人';
-          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" aria-label="查看${esc(name)}资料" aria-pressed="false"><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name)}</span><span class="bot-selector-copy"><strong>${esc(name)}</strong><small>${esc(botStatusLabel(profile.status))}</small></span></button>`;
+          const available = /^\d{4,32}$/.test(profile.appid);
+          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" aria-label="进入${esc(name)}控制台" ${consoleEntering || !available ? 'disabled' : ''}><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name, profile.appid)}</span><span class="bot-selector-copy"><strong>${esc(name)}</strong><small><span class="bot-selector-status ${profile.status === 'running' ? 'is-running' : ''}">${esc(botStatusLabel(profile.status))}</span>${profile.appid ? ' · ' + esc(profile.appid) : ''}</small></span><span class="bot-selector-enter">${consoleEntering && profile.appid === consoleAppid ? '正在进入…' : available ? '进入控制台' : '等待认证'}</span></button>`;
         }).join('') || '<span class="bot-selector-empty">暂无已加载机器人</span>';
         host.querySelectorAll('[data-bot-select]').forEach((button) => button.addEventListener('click', () => {
           const profile = profiles.find((item) => item.key === button.dataset.botSelect);
-          if (profile) { if (groupSettingsState.mutating) return toast('正在更新本群设置，请稍候再切换'); applyBotProfile(profile); }
+          if (profile) void enterBotConsole(profile);
         }));
       };
       const applyBotProfile = (profile = {}, refreshMessages = false) => {
@@ -1889,9 +2029,10 @@
         const name = String(data.username || data.name || '').trim() || '馒头助手';
         const avatar = safeMediaUrl(String(data.avatar || data.avatar_url || '').trim());
         const id = String(data.id || '').trim();
-        switchMsgBotScope(data.appid);
+        if (!consoleAppid || String(data.appid || '') !== consoleAppid) return;
+        switchMsgBotScope(consoleAppid);
         window.msgBotProfile = {...data, id, username:name, avatar};
-        document.querySelectorAll('[data-bot-select]').forEach((node) => node.setAttribute('aria-pressed', String(node.dataset.botSelect === data.key)));
+        $('console-brand-name').textContent = name;
         document.querySelectorAll('[data-bot-name]').forEach((node) => { node.textContent = name; });
         document.querySelectorAll('[data-bot-id]').forEach((node) => { node.textContent = id || '由适配器提供'; });
         document.querySelectorAll('[data-bot-status]').forEach((node) => {
@@ -1923,7 +2064,6 @@
         try {
           const data = await api('bot-profile');
           const profiles = Array.isArray(data.profiles) ? data.profiles : (data.profile?.appid ? [data.profile] : []);
-          const previousKey = window.msgBotProfile?.key;
           const previousProfiles = JSON.stringify(window.msgBotProfiles || []);
           window.msgBotProfiles = profiles.filter((profile) => profile && typeof profile === 'object').map((profile, index) => ({
             ...profile,
@@ -1932,10 +2072,15 @@
             key:String(profile.appid || profile.platform_id || `bot-${index}`),
           }));
           renderBotProfiles();
-          applyBotProfile(window.msgBotProfiles.find((profile) => profile.key === previousKey) || window.msgBotProfiles[0] || {}, previousProfiles !== JSON.stringify(window.msgBotProfiles));
+          const current = window.msgBotProfiles.find((profile) => profile.appid === consoleAppid);
+          if (current) applyBotProfile(current, previousProfiles !== JSON.stringify(window.msgBotProfiles));
+          else if (consoleAppid && !consoleEntering) { exitBotConsole(false); showBotPicker('当前机器人已停止加载，请重新选择。'); }
           botProfileLoadedAt = Date.now();
-        } catch (_) {
-          if (!window.msgBotProfiles?.length) applyBotProfile({});
+          if (data.version) $('console-version').textContent = `v${data.version}`;
+          if ($('popover-logout')) $('popover-logout').hidden = false;
+        } catch (error) {
+          if (error.status === 401) showAuthError(error);
+          else if (!consoleAppid) showBotPicker('机器人列表读取失败，请点击刷新列表重试。');
         }
         })().finally(() => { botProfileRequest = null; });
         return botProfileRequest;
@@ -2839,16 +2984,17 @@
         }, 3000);
       };
       const connectMsgSse = () => {
-        if (msgState.eventSource || msgState.eventSocket || !window.EventSource || $('page-messages')?.hidden) return;
+        if (!consoleAppid || msgState.eventSource || msgState.eventSocket || !window.EventSource || $('page-messages')?.hidden) return;
+        const appid = consoleAppid, generation = consoleGeneration;
         let source;
-        try { source = new EventSource('/api/message/events'); }
+        try { source = new EventSource(botApiUrl('message/events', appid)); }
         catch (_) { scheduleMsgRealtimeReconnect(); return; }
         msgState.eventSource = source;
         msgState.eventTransport = '';
         source.onopen = () => {
           if (msgState.eventSource === source) msgState.eventTransport = 'sse';
         };
-        source.onmessage = (event) => handleMsgRealtimeData(event.data);
+        source.onmessage = (event) => { if (appid === consoleAppid && generation === consoleGeneration && msgState.eventSource === source) handleMsgRealtimeData(event.data); };
         source.onerror = () => {
           if (msgState.eventSource !== source) return;
           source.onopen = null; source.onmessage = null; source.onerror = null;
@@ -2858,16 +3004,17 @@
         };
       };
       const connectMsgEvents = () => {
-        if (msgState.eventSocket || msgState.eventSource || $('page-messages')?.hidden) return;
+        if (!consoleAppid || msgState.eventSocket || msgState.eventSource || $('page-messages')?.hidden) return;
+        const appid = consoleAppid, generation = consoleGeneration;
         if (!window.WebSocket) { connectMsgSse(); return; }
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         let socket;
-        try { socket = new WebSocket(`${wsProtocol}//${location.host}/api/message/ws`); }
+        try { socket = new WebSocket(`${wsProtocol}//${location.host}${botApiUrl('message/ws', appid)}`); }
         catch (_) { connectMsgSse(); return; }
         msgState.eventSocket = socket;
         msgState.eventTransport = '';
         socket.onopen = () => { if (msgState.eventSocket === socket) msgState.eventTransport = 'websocket'; };
-        socket.onmessage = (event) => handleMsgRealtimeData(event.data);
+        socket.onmessage = (event) => { if (appid === consoleAppid && generation === consoleGeneration && msgState.eventSocket === socket) handleMsgRealtimeData(event.data); };
         socket.onerror = () => {
           // onclose 负责统一清理并切换 SSE，避免同时保持两条实时连接。
           try { socket.close(); } catch (_) {}
@@ -3010,13 +3157,13 @@
           return;
         }
         const choices = Array.isArray(data.choices) ? data.choices : [];
-        const defaultLabel = data.default?.label ? `跟随默认 · ${data.default.label}` : '跟随默认 · 暂无可用账号';
+        const defaultLabel = data.default?.label ? `跟随本机器人默认 · ${data.default.label}` : '跟随本机器人默认 · 暂无可用账号';
         const options = [`<option value="__default__">${esc(defaultLabel)}</option>`, ...choices.map((choice) => `<option value="${esc(choice.value)}">${esc(choice.label)}</option>`)];
         const selectedValue = msgState.panSelectionSaving ? select.value : data.selected_value;
         select.innerHTML = options.join('');
         select.value = selectedValue || '__default__';
         select.disabled = !data.editable || msgState.panSelectionSaving || !choices.length;
-        select.title = data.editable ? '只影响当前群；跟随默认会使用网盘配置页中的默认网盘' : '数据库未配置，群网盘选择不能保存';
+        select.title = data.editable ? '只影响当前群；跟随默认会使用本机器人网盘配置页中的默认网盘' : '数据库未配置，群网盘选择不能保存';
       };
       const isMsgPanSelectionCurrent = (request, chatId, appid) => request === msgState.panSelectionRequest
         && msgState.chatId === chatId && msgState.chatType === 'group'
@@ -4219,7 +4366,7 @@
         }));
       };
       const messageMediaProxyRevision = '6.1.109';
-      const mediaProxyUrl = (src, mode = 'image', name = '') => {
+      const mediaProxyUrl = (src, mode = 'image', name = '', appid = consoleAppid) => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
         try {
@@ -4228,6 +4375,7 @@
           const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
+          if (/^\d{4,32}$/.test(String(appid || ''))) query.set('appid', appid);
           // 新版本绕过浏览器中旧版 200 占位响应，仍由服务端按 src 统一处理失败冷却。
           query.set('v', messageMediaProxyRevision);
           if (name) query.set('name', name);
@@ -6401,7 +6549,6 @@
       $('msg-remark-delete').addEventListener('click', deleteRemark);
       $('msg-mute-confirm').addEventListener('click', async () => { if (!msgState.mute.member) return; const custom = $('msg-mute-custom'); const rawDays = Number(custom?.value); if (Number.isFinite(rawDays) && rawDays >= 1) { const days = Math.min(30, Math.floor(rawDays)); if (custom) custom.value = String(days); msgState.muteMinutes = days * 1440; } try { await api('message/group-member/mute', {method:'POST', body:JSON.stringify({chat_id:msgState.chatId, member_openid:msgState.mute.member, minutes:Math.min(43200, Math.max(1, Number(msgState.muteMinutes) || 30))})}); toast('禁言成功'); setMsgModal('msg-mute-modal', false); void loadMuteStates(true); } catch (error) { toast(error.message); } });
       bindMsgLayoutControls();
-      void loadMsgLayout();
       // QQ 官方群消息通过 Gateway 事件接收，没有可轮询的群历史 REST 接口。
       // 这里仅低频校准本地消息记录，事件通道在线时也能修复偶发漏事件，
       // 不会额外消耗 QQ 官方消息或 bot_state 请求额度。
@@ -6433,6 +6580,17 @@
         if (msgState.chatType === 'group' && msgState.chatId) void loadMuteStates();
       }, 1000);
 
-      setView(viewFromUrl(), false); load();
+      $('bot-exit').addEventListener('click', () => exitBotConsole());
+      $('bot-picker-refresh').addEventListener('click', async () => {
+        if (consoleEntering) return;
+        const button = $('bot-picker-refresh'); button.disabled = true; botProfileLoadedAt = 0;
+        showBotPicker();
+        try { await loadBotProfile(); } finally { button.disabled = false; }
+      });
+      showBotPicker();
+      void loadBotProfile().then(() => {
+        const profile = botProfileForAppid(initialParams.get('appid'));
+        if (profile.appid) void enterBotConsole(profile, false);
+      });
     })();
   """

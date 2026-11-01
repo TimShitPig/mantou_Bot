@@ -5,12 +5,58 @@ import threading
 import hashlib
 import json
 from typing import Any
+from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 
 运行状态数据库表名 = "mantou_runtime_state"
 数据库配置分类名 = "database_settings"
 _运行状态表结构版本 = 1
 _已确保运行状态表: set[tuple[int, str]] = globals().get("_已确保运行状态表", set())
 _运行状态表锁 = globals().get("_运行状态表锁") or threading.Lock()
+机器人业务状态命名空间 = frozenset({
+    "admin_whitelist", "novel_pan_auth", "novel_pan_account_selection",
+    "novel_pan_enabled", "novel_share_pan", "qq_reader_auth",
+    "zlibrary_accounts", "novel_feature_switch", "msg_console_layout", "group_ad_protection",
+})
+_机器人状态快照缓存 = globals().get("_机器人状态快照缓存") or set()
+_机器人状态快照锁 = globals().get("_机器人状态快照锁") or threading.RLock()
+_机器人快照标记 = "__bot_scope_v1__"
+
+
+def _机器人状态命名空间(配置: Any, 命名空间: str) -> str:
+    原始 = str(命名空间)
+    appid = 获取当前机器人AppID(配置)
+    if not appid or 原始 not in 机器人业务状态命名空间:
+        return 原始
+    新空间 = "bot_" + hashlib.sha256(f"{appid}\x1f{原始}".encode()).hexdigest()[:56]
+    if not 已配置运行状态数据库(配置):
+        return 新空间
+    数据库配置 = 获取数据库配置(配置)
+    表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
+    缓存键 = (*_配置缓存键(数据库配置, 表名), 新空间)
+    if 缓存键 in _机器人状态快照缓存:
+        return 新空间
+    with _机器人状态快照锁:
+        if 缓存键 in _机器人状态快照缓存:
+            return 新空间
+        with 打开数据库连接(数据库配置) as 连接:
+            _确保运行状态表一次(连接, 数据库配置, 表名)
+            with 连接.cursor() as 游标:
+                游标.execute(f"SELECT state_value FROM `{表名}` WHERE namespace=%s AND state_key=%s LIMIT 1", (新空间, _机器人快照标记))
+                if 游标.fetchone() is None:
+                    # 首次为每个机器人复制一次旧状态；后续不再跟随全局值。
+                    # INSERT IGNORE 保留已确认的独立值，并发初始化也不覆盖。
+                    游标.execute(
+                        f"INSERT IGNORE INTO `{表名}` (namespace,state_key,state_value,updated_at) "
+                        f"SELECT %s,state_key,state_value,updated_at FROM `{表名}` WHERE namespace=%s",
+                        (新空间, 原始),
+                    )
+                    游标.execute(
+                        f"INSERT IGNORE INTO `{表名}` (namespace,state_key,state_value,updated_at) VALUES (%s,%s,%s,%s)",
+                        (新空间, _机器人快照标记, "1", int(time.time())),
+                    )
+            连接.commit()
+        _机器人状态快照缓存.add(缓存键)
+    return 新空间
 
 
 def _配置缓存键(数据库配置: dict[str, Any], 表名: str) -> tuple[int, str]:
@@ -35,6 +81,7 @@ def _确保运行状态表一次(连接: Any, 数据库配置: dict[str, Any], �
 def 读取运行状态值(配置: Any, 命名空间: str, 状态键: str, 默认值: str = "") -> str:
     if not 已配置运行状态数据库(配置):
         return 默认值
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
@@ -62,7 +109,9 @@ def 批量读取运行状态值(
     """单次查询读取跨命名空间的指定键，不缓存值、不载入无关群状态。"""
     if not 查询项 or not 已配置运行状态数据库(配置):
         return {}
-    查询键 = list(dict.fromkeys((str(空间), str(键)) for 空间, 键 in 查询项))
+    原查询键 = list(dict.fromkeys((str(空间), str(键)) for 空间, 键 in 查询项))
+    查询映射 = {(_机器人状态命名空间(配置, 空间), 键): (空间, 键) for 空间, 键 in 原查询键}
+    查询键 = list(查询映射)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     占位 = ",".join("(%s,%s)" for _ in 查询键)
@@ -77,11 +126,12 @@ def 批量读取运行状态值(
             )
             记录列表 = 游标.fetchall()
     return {
-        (str(记录[0]), str(记录[1])): str(记录[2] if 记录[2] is not None else "")
+        查询映射[(str(记录[0]), str(记录[1]))]: str(记录[2] if 记录[2] is not None else "")
         for 记录 in 记录列表
     }
 
 def 写入运行状态值(配置: Any, 命名空间: str, 状态键: str, 状态值: Any) -> None:
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     当前时间 = int(time.time())
@@ -107,6 +157,7 @@ def 批量写入运行状态值(
     """用单连接单事务写入同一命名空间的多条运行状态。"""
     if not 状态值 or not 已配置运行状态数据库(配置):
         return
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     当前时间 = int(time.time())
@@ -133,6 +184,7 @@ def 批量写入运行状态值(
 def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, str]:
     if not 已配置运行状态数据库(配置):
         return {}
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:
@@ -149,11 +201,13 @@ def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, 
             记录列表 = 游标.fetchall()
     return {
         str(记录[0]): str(记录[1] if 记录[1] is not None else "") for 记录 in 记录列表
+        if str(记录[0]) != _机器人快照标记
     }
 
 
 def 删除运行状态值(配置: Any, 命名空间: str, 状态键: str) -> None:
     """按命名空间+键删除一条运行状态；用于控制台持久会话等场景。"""
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
     数据库配置 = 获取数据库配置(配置)
     表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
     with 打开数据库连接(数据库配置) as 连接:

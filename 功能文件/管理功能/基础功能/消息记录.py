@@ -164,7 +164,11 @@ _挂钩已安装 = globals().get("_挂钩已安装", False)
 _消息事件挂钩版本 = int(globals().get("_消息事件挂钩版本", 0) or 0)
 _消息撤回事件挂钩版本 = int(globals().get("_消息撤回事件挂钩版本", 0) or 0)
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
-主动消息权限缓存: dict[str, tuple[str, float]] = globals().get("主动消息权限缓存") or {}
+主动消息权限缓存: dict[tuple[str, str, str], tuple[str, float]] = (
+    globals().get("主动消息权限缓存") or {}
+    if globals().get("主动消息权限缓存版本") == 2 else {}
+)
+主动消息权限缓存版本 = 2
 主动消息权限缓存有效期秒 = 30 * 60
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
@@ -424,30 +428,40 @@ def _补充记录机器人状态(记录: dict[str, Any], 原始消息: Any = Non
     return 状态
 
 
-def _主动消息权限键(会话标识: str, 会话类型: str = "") -> str:
+def _主动消息权限键(
+    会话标识: str, 会话类型: str = "", appid: str = ""
+) -> tuple[str, str, str] | None:
+    appid = str(appid or "").strip()
+    会话标识 = str(会话标识 or "").strip()
+    if not 会话标识 or not re.fullmatch(r"[0-9]{4,32}", appid):
+        return None
     类型 = "user" if str(会话类型 or "").strip().lower() == "user" else "group"
-    return f"{类型}:{str(会话标识 or '').strip()}"
+    return appid, 类型, 会话标识
 
 
-def 记录主动消息权限(会话标识: str, 会话类型: str, 允许: bool) -> None:
-    """记录最近一次主动消息结果，避免反复请求已确认无权限的会话。"""
-    键 = _主动消息权限键(会话标识, 会话类型)
-    if 键.endswith(":"):
+def 记录主动消息权限(会话标识: str, 会话类型: str, 允许: bool, appid: str = "") -> None:
+    """按认证 AppID 记录主动消息结果，不复用其他机器人的权限。"""
+    键 = _主动消息权限键(会话标识, 会话类型, appid)
+    if 键 is None:
         return
     主动消息权限缓存[键] = ("allowed" if 允许 else "denied", time.time())
 
 
-def 主动消息是否允许(会话标识: str, 会话类型: str) -> bool | None:
+def 主动消息是否允许(会话标识: str, 会话类型: str, appid: str = "") -> bool | None:
     """返回已知主动消息权限；未知时返回 None。
 
     群状态接口返回的权限优先于发送结果缓存，避免在已明确禁止主动推送
     时仍尝试调用发送接口。实际查询由异步 ``查询群主动消息权限`` 完成。
     """
-    if str(会话类型 or "").strip().lower() == "group":
+    键 = _主动消息权限键(会话标识, 会话类型, appid)
+    if 键 is None:
+        return None
+    appid, 会话类型, 会话标识 = 键
+    if 会话类型 == "group":
         读取状态 = globals().get("_读取群机器人状态")
         if callable(读取状态):
             try:
-                状态 = 读取状态(会话标识)
+                状态 = 读取状态(会话标识, appid)
             except Exception:
                 状态 = {}
             if isinstance(状态, dict):
@@ -456,7 +470,6 @@ def 主动消息是否允许(会话标识: str, 会话类型: str) -> bool | Non
                 明确权限 = 状态.get("allow_proactive_msg")
                 if isinstance(明确权限, bool):
                     return 明确权限
-    键 = _主动消息权限键(会话标识, 会话类型)
     项 = 主动消息权限缓存.get(键)
     if not 项:
         return None
@@ -467,9 +480,9 @@ def 主动消息是否允许(会话标识: str, 会话类型: str) -> bool | Non
     return 状态 == "allowed"
 
 
-def 清除主动消息权限(会话标识: str, 会话类型: str = "") -> None:
+def 清除主动消息权限(会话标识: str, 会话类型: str = "", appid: str = "") -> None:
     """收到新消息后清除旧的拒绝结果，允许下一次重新探测。"""
-    主动消息权限缓存.pop(_主动消息权限键(会话标识, 会话类型), None)
+    主动消息权限缓存.pop(_主动消息权限键(会话标识, 会话类型, appid), None)
 
 
 def 主动消息无权限(异常: Any) -> bool:
@@ -4015,7 +4028,7 @@ def 记录收到消息(
         if is_self:
             是机器人 = True
         else:
-            清除主动消息权限(会话标识, 类型)
+            清除主动消息权限(会话标识, 类型, appid)
         引用索引: dict[str, Any] = {}
         _补充记录引用索引(引用索引, 消息)
         引用ID = 引用索引["reference_id"]
@@ -5224,6 +5237,58 @@ def _是QQ官方平台(平台实例: Any) -> bool:
         return False
 
 
+def _读取已配置QQ官方机器人(上下文: Any = None) -> list[dict[str, Any]]:
+    """从 AstrBot 公开配置入口投影机器人资料，包含停用平台且不返回凭据。"""
+    上下文 = 上下文 if 上下文 is not None else 当前插件上下文
+    平台配置 = None
+    获取配置 = getattr(上下文, "get_config", None)
+    if callable(获取配置):
+        try:
+            配置 = 获取配置()
+            读取 = getattr(配置, "get", None)
+            平台配置 = 读取("platform") if callable(读取) else None
+        except Exception as 异常:
+            logger.debug("QQ官方机器人配置枚举失败：错误类型=%s", type(异常).__name__)
+    if not isinstance(平台配置, (list, tuple)):
+        管理器 = _读取字段(上下文, "platform_manager")
+        平台配置 = _读取字段(管理器, "platforms_config")
+    if not isinstance(平台配置, (list, tuple)):
+        return []
+    结果 = []
+    for 配置 in 平台配置:
+        if not isinstance(配置, dict):
+            continue
+        类型 = str(配置.get("type") or "").strip().casefold()
+        appid = str(配置.get("appid") or 配置.get("app_id") or "").strip()
+        if 类型 not in {"qq_official", "qqofficial"} or not re.fullmatch(r"[0-9]{4,32}", appid):
+            continue
+        结果.append({
+            "appid": appid,
+            "platform_id": str(配置.get("id") or "").strip(),
+            "type": 类型,
+            "enable": bool(配置.get("enable")),
+        })
+    return 结果
+
+
+def _已加载机器人认证AppID(平台: Any) -> str:
+    通道 = 获取HTTP通道(平台)
+    if 通道 is None:
+        return ""
+    appid = str(_读取字段(_读取字段(通道[1], "_token"), "app_id") or "").strip()
+    return appid if re.fullmatch(r"[0-9]{4,32}", appid) else ""
+
+
+def 获取已配置机器人AppID列表(上下文: Any = None) -> list[str]:
+    """控制台只允许 AstrBot 已配置或真实加载的 QQ 官方机器人身份。"""
+    上下文 = 上下文 if 上下文 is not None else 当前插件上下文
+    appids = {项["appid"] for 项 in _读取已配置QQ官方机器人(上下文)}
+    for 平台 in _读取平台实例列表(上下文):
+        if _是QQ官方平台(平台):
+            appids.add(_已加载机器人认证AppID(平台))
+    return sorted(appid for appid in appids if appid)
+
+
 def 获取QQ官方平台(上下文: Any = None, appid: str = "") -> Any | None:
     上下文 = 上下文 if 上下文 is not None else 当前插件上下文
     目标AppID = str(appid or "").strip()
@@ -5250,9 +5315,12 @@ def _获取消息操作平台(appid: str = "") -> tuple[Any, str]:
         平台 = 获取QQ官方平台(appid=appid)
     else:
         平台列表 = [项 for 项 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(项)]
-        平台 = 平台列表[0] if len(平台列表) == 1 else None
+        平台 = 平台列表[0] if len(平台列表) == 1 and len(获取已配置机器人AppID列表()) == 1 else None
         appid = _平台实例appid(平台) if 平台 is not None else ""
     if 平台 is None or not appid:
+        return None, ""
+    已配置 = [项 for 项 in _读取已配置QQ官方机器人() if 项["appid"] == appid]
+    if 已配置 and not any(项["enable"] for 项 in 已配置):
         return None, ""
     通道 = 获取HTTP通道(平台)
     if 通道 is None or str(_读取字段(_读取字段(通道[1], "_token"), "app_id") or "").strip() != appid:
@@ -5324,37 +5392,57 @@ async def 获取机器人资料(appid: str = "") -> dict[str, str]:
 
 
 async def 获取机器人资料列表() -> list[dict[str, str]]:
-    """返回全部已加载的 QQ 官方机器人；每项只含公开字段。"""
-    平台列表 = [平台 for 平台 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(平台)]
+    """合并已配置和已加载机器人；停用项只读取该 AppID 的历史公开缓存。"""
+    配置映射: dict[str, dict[str, Any]] = {}
+    for 配置 in _读取已配置QQ官方机器人():
+        appid = 配置["appid"]
+        if appid not in 配置映射 or 配置["enable"]:
+            配置映射[appid] = 配置
+    平台映射: dict[str, Any] = {}
+    for 平台 in _读取平台实例列表(当前插件上下文):
+        if _是QQ官方平台(平台):
+            appid = _已加载机器人认证AppID(平台)
+            if appid:
+                平台映射.setdefault(appid, 平台)
+    appids = list(dict.fromkeys((*配置映射, *平台映射)))
 
-    async def 读取一项(平台: Any) -> dict[str, str]:
+    async def 读取一项(appid: str) -> dict[str, str]:
+        配置 = 配置映射.get(appid) or {}
+        平台 = 平台映射.get(appid)
+        停用 = bool(配置) and not 配置["enable"]
         结果 = {
-            "appid": "", "platform_id": "", "id": "", "username": "QQ官方机器人",
-            "avatar": "", "status": "unknown", "profile_status": "unavailable",
+            "appid": appid, "platform_id": str(配置.get("platform_id") or ""),
+            "id": "", "username": "QQ官方机器人", "avatar": "",
+            "status": "disabled" if 停用 else "stopped", "profile_status": "unavailable",
         }
         try:
-            结果["appid"] = _平台实例appid(平台)
-            try:
-                元信息 = 平台.meta()
-            except Exception:
-                元信息 = None
-            结果["platform_id"] = str(_读取字段(元信息, "id") or _读取字段(_读取字段(平台, "config"), "id") or "").strip()
+            if 平台 is not None and not 结果["platform_id"]:
+                try:
+                    结果["platform_id"] = str(_读取字段(平台.meta(), "id") or "").strip()
+                except Exception:
+                    pass
             结果["username"] = 结果["platform_id"] or 结果["username"]
-            状态值 = _读取字段(平台, "status")
-            状态 = str(_读取字段(状态值, "value", 状态值) or "unknown").strip().lower()
-            结果["status"] = 状态 if 状态 in {"pending", "running", "error", "stopped"} else "unknown"
-            资料 = await _读取机器人公开资料(平台, 结果["appid"])
+            if 平台 is not None and not 停用:
+                状态值 = _读取字段(平台, "status")
+                状态 = str(_读取字段(状态值, "value", 状态值) or "unknown").strip().lower()
+                结果["status"] = 状态 if 状态 in {"pending", "running", "error", "stopped"} else "unknown"
+                资料 = await _读取机器人公开资料(平台, appid)
+                资料状态 = "ok" if 资料 else "unavailable"
+            else:
+                缓存 = 机器人资料缓存.get(appid)
+                资料 = dict(缓存[1]) if isinstance(缓存, tuple) and len(缓存) > 1 and isinstance(缓存[1], dict) and 缓存[1].get("appid") == appid else {}
+                资料状态 = "cached" if 资料 else "unavailable"
             结果.update({
                 "id": str(资料.get("id") or ""),
                 "username": str(资料.get("username") or 结果["username"]),
                 "avatar": str(资料.get("avatar") or ""),
-                "profile_status": "ok" if 资料 else "unavailable",
+                "profile_status": 资料状态,
             })
         except Exception as 异常:
             logger.debug("QQ官方机器人资料枚举失败：错误类型=%s", type(异常).__name__)
         return 结果
 
-    return list(await asyncio.gather(*(读取一项(平台) for 平台 in 平台列表)))
+    return list(await asyncio.gather(*(读取一项(appid) for appid in appids)))
 
 
 def 获取最近消息ID(平台实例: Any, 会话标识: str) -> str:
@@ -5985,19 +6073,18 @@ async def 查询群主动消息权限(会话标识: str, appid: str = "") -> boo
     的群状态接口，因此只返回已有的发送结果缓存。
     """
     会话标识 = str(会话标识 or "").strip()
-    if not 会话标识:
+    appid = str(appid or "").strip()
+    if not 会话标识 or not re.fullmatch(r"[0-9]{4,32}", appid):
         return None
-    if not str(appid or "").strip():
-        appid = _获取群信息appid(会话标识)
     状态 = await _查询群机器人状态(会话标识, appid)
     if str(状态.get("status") or "").strip().lower() == "removed":
-        记录主动消息权限(会话标识, "group", False)
+        记录主动消息权限(会话标识, "group", False, appid)
         return False
     权限 = 状态.get("allow_proactive_msg")
     if isinstance(权限, bool):
-        记录主动消息权限(会话标识, "group", 权限)
+        记录主动消息权限(会话标识, "group", 权限, appid)
         return 权限
-    return 主动消息是否允许(会话标识, "group")
+    return 主动消息是否允许(会话标识, "group", appid)
 
 
 def _获取群信息appid(会话标识: str, appid: str = "") -> str:
@@ -8183,7 +8270,7 @@ async def 发送消息(
             查询权限 = await 查询群主动消息权限(会话标识, appid)
             if 查询权限 is not True:
                 return {"ok": False, "message": "发送失败：主动消息权限未开启"}
-        elif 主动消息是否允许(会话标识, 权限会话类型) is False:
+        elif 主动消息是否允许(会话标识, 权限会话类型, appid) is False:
             return {"ok": False, "message": "发送失败：主动消息权限未开启"}
     消息体: dict[str, Any] = {
         "msg_type": 0,
@@ -8461,10 +8548,10 @@ async def 发送消息(
             )
         结果 = await _http.request(route, json=消息体)
         if 实际使用主动消息:
-            记录主动消息权限(会话标识, 权限会话类型, True)
+            记录主动消息权限(会话标识, 权限会话类型, True, appid)
     except Exception as exc:
         if 实际使用主动消息 and 主动消息无权限(exc):
-            记录主动消息权限(会话标识, 权限会话类型, False)
+            记录主动消息权限(会话标识, 权限会话类型, False, appid)
         logger.warning(
             "消息记录发送失败：错误类型=%s，错误详情=%s",
             type(exc).__name__,
@@ -8474,14 +8561,14 @@ async def 发送消息(
         if 被动ID and 被动消息ID已过期(exc):
             # msg_id 已过期：去掉后重试一次主动推送（全量消息群可成功）
             消息体.pop("msg_id", None)
-            if 主动消息是否允许(会话标识, 权限会话类型) is False:
+            if 主动消息是否允许(会话标识, 权限会话类型, appid) is False:
                 return {"ok": False, "message": "发送失败：主动消息权限未开启"}
             try:
                 结果 = await _http.request(route, json=消息体)
-                记录主动消息权限(会话标识, 权限会话类型, True)
+                记录主动消息权限(会话标识, 权限会话类型, True, appid)
             except Exception as 重试异常:
                 if 主动消息无权限(重试异常):
-                    记录主动消息权限(会话标识, 权限会话类型, False)
+                    记录主动消息权限(会话标识, 权限会话类型, False, appid)
                 错误文本 = str(重试异常)
                 logger.warning("消息记录主动重试失败：错误类型=%s，错误详情=%s", type(重试异常).__name__, 错误文本[:400])
             else:

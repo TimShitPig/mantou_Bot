@@ -9,7 +9,7 @@ from typing import Any
 
 from astrbot.api import logger
 
-from . import QQ官方交互桥, 文件缓存, 权限工具, 消息记录
+from . import QQ官方交互桥, 文件缓存, 权限工具, 消息记录, 机器人作用域
 from 功能文件.页面功能 import 帮助网页
 from 功能文件.管理功能.网盘功能 import 小说网盘, 夸克媒体归档
 from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关
@@ -77,7 +77,7 @@ async def _后台恢复(句柄: dict[str, Any]) -> None:
         logger.warning("插件后台恢复失败：stage=cache_resume, error_type=%s", type(异常).__name__)
 
 
-async def _同步账号状态(配置: Any) -> None:
+async def _同步当前机器人账号状态(配置: Any) -> None:
     async def _白名单() -> None:
         try:
             await asyncio.to_thread(权限工具.同步管理员白名单, 配置, 强制=True)
@@ -91,6 +91,12 @@ async def _同步账号状态(配置: Any) -> None:
             logger.warning("插件后台状态同步失败：stage=reader, error_type=%s", type(异常).__name__)
 
     await asyncio.gather(_白名单(), _阅读())
+
+
+async def _同步账号状态(配置: Any, 上下文: Any = None) -> None:
+    for 当前配置 in 机器人作用域.枚举机器人配置(配置, 上下文) or [配置]:
+        with 机器人作用域.绑定机器人作用域(机器人作用域.获取当前机器人AppID(当前配置)):
+            await _同步当前机器人账号状态(当前配置)
 
 
 async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: Any) -> dict[str, Any]:
@@ -115,7 +121,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
         句柄["web"] = await 帮助网页.启动帮助网页服务(配置, 插件版本=版本)
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
-            asyncio.create_task(_同步账号状态(配置), name="插件账号状态同步"),
+            asyncio.create_task(_同步账号状态(配置, 上下文), name="插件账号状态同步"),
         ]
     except BaseException:
         await 停止插件(句柄)

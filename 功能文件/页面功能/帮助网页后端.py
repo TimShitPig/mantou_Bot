@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import hashlib
@@ -22,6 +23,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+from 功能文件.管理功能.基础功能.机器人作用域 import (
+    获取机器人配置, 获取当前机器人AppID, 绑定机器人作用域,
+    规范化机器人AppID, 机器人独立配置分类, 机器人独立帮助字段,
+)
 
 import aiohttp
 from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector, web
@@ -84,8 +90,11 @@ class 帮助网页服务:
 控制台会话恢复任务: asyncio.Task[Any] | None = globals().get("控制台会话恢复任务")
 控制台会话认证指纹: str = globals().get("控制台会话认证指纹", "")
 _控制台会话存储锁 = globals().get("_控制台会话存储锁") or threading.RLock()
+_机器人配置请求锁: dict[tuple[int, str], dict[str, Any]] = globals().get("_机器人配置请求锁") or {}
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
 夸克网页扫码会话: dict[str, dict[str, Any]] = globals().get("夸克网页扫码会话") or {}
+夸克扫码启动代次: dict[str, str] = globals().get("夸克扫码启动代次") or {}
+扫码所有者会话: dict[str, str] = globals().get("扫码所有者会话") or {}
 QQ阅读网页扫码会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页扫码会话") or {}
 QQ阅读扫码启动代次: dict[str, str] = globals().get("QQ阅读扫码启动代次") or {}
 QQ阅读网页短信会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页短信会话") or {}
@@ -113,6 +122,62 @@ _群状态刷新并发: asyncio.Semaphore | None = None
 
 
 
+def _当前作用域配置() -> Any:
+    return 获取机器人配置(当前帮助网页配置)
+
+
+def _扫码所有者(会话值: str) -> str:
+    所有者 = hashlib.sha256((会话值 + "\x1f" + 获取当前机器人AppID()).encode("utf-8")).hexdigest()
+    扫码所有者会话[所有者] = 会话值
+    return 所有者
+
+
+def _待取消扫码所有者(会话值: str) -> set[str]:
+    if 获取当前机器人AppID():
+        return {_扫码所有者(会话值)}
+    return {键 for 键, 值 in 扫码所有者会话.items() if 值 == 会话值}
+
+
+@web.middleware
+async def 机器人作用域中间件(request: web.Request, handler: Any) -> web.StreamResponse:
+    """每次请求固定机器人身份，选择页面及登录不继承其他页面的身份。"""
+    路径 = request.path
+    if not 路径.startswith("/api/") or 路径 in {"/api/login", "/api/logout", "/api/bot-profile"}:
+        with 绑定机器人作用域(""):
+            return await handler(request)
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    媒体读取 = 路径 in {"/api/message/media", "/api/message/lanzou-image", "/api/message/quark-media"} or 路径.startswith("/api/message/local-media/")
+    appid = 规范化机器人AppID(request.query.get("appid"))
+    if not appid:
+        if 媒体读取 and not request.query.get("appid"):
+            with 绑定机器人作用域(""):
+                return await handler(request)
+        return _控制台错误(400, "请先选择机器人")
+    from 功能文件.管理功能.基础功能 import 消息记录
+    if appid not in 消息记录.获取已配置机器人AppID列表():
+        return _控制台错误(409, "机器人配置已变更，请重新选择")
+    if request.content_type == "application/json" and request.can_read_body:
+        try:
+            数据 = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return _控制台错误(400, "请求参数无效")
+        if isinstance(数据, dict) and "appid" in 数据 and str(数据["appid"] or "").strip() != appid:
+            return _控制台错误(400, "机器人参数不一致")
+    request["机器人AppID"] = appid
+    with 绑定机器人作用域(appid):
+        响应 = await handler(request)
+    if isinstance(响应, web.Response) and 响应.content_type == "application/json" and 响应.body:
+        try:
+            内容 = json.loads(响应.body)
+            if isinstance(内容, dict):
+                内容.setdefault("appid", appid)
+                响应.body = json.dumps(内容, ensure_ascii=False).encode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return 响应
+
+
 def _获取控制台执行器() -> ThreadPoolExecutor:
     """为网页数据库读写提供独立线程池，避免下载任务占满默认执行器。"""
     global _控制台执行器
@@ -128,7 +193,7 @@ def _获取控制台执行器() -> ThreadPoolExecutor:
 async def _控制台线程执行(函数: Any, *参数: Any, **关键字参数: Any) -> Any:
     """把可能阻塞的控制台操作移出事件循环和下载默认线程池。"""
     loop = asyncio.get_running_loop()
-    调用 = partial(函数, *参数, **关键字参数)
+    调用 = partial(contextvars.copy_context().run, 函数, *参数, **关键字参数)
     return await loop.run_in_executor(_获取控制台执行器(), 调用)
 
 
@@ -534,6 +599,10 @@ def _读取插件配置值(配置: Any, 分类名: str, 字段名: str, 默认�
 
 
 def _设置插件配置值(配置: Any, 分类名: str, 字段名: str, 值: Any) -> None:
+    设置作用域字段 = getattr(配置, "设置配置字段", None)
+    if callable(设置作用域字段):
+        设置作用域字段(分类名, 字段名, 值)
+        return
     数据 = _读取插件配置字典(配置)
     if not isinstance(数据, dict):
         raise RuntimeError("插件配置对象不可写入")
@@ -551,7 +620,7 @@ def _插件配置可持久化(配置: Any) -> bool:
 
 
 async def _持久化插件配置() -> None:
-    配置 = 当前帮助网页配置
+    配置 = _当前作用域配置()
     异步保存方法 = getattr(配置, "save_config_async", None)
     if callable(异步保存方法):
         结果 = 异步保存方法()
@@ -583,7 +652,7 @@ async def _持久化插件配置() -> None:
 
 
 def _读取插件配置摘要() -> dict[str, Any]:
-    配置 = 当前帮助网页配置
+    配置 = _当前作用域配置()
     try:
         from 功能文件.管理功能.基础功能 import 权限工具
 
@@ -608,6 +677,7 @@ def _读取插件配置摘要() -> dict[str, Any]:
             "kind": 定义["kind"],
             "secret": bool(定义.get("secret")),
             "configured": bool(原值),
+            "scope": "bot" if (定义["category"] in 机器人独立配置分类 or (定义["category"] == "help_web_settings" and 字段名 in 机器人独立帮助字段)) else "shared",
         }
         if 定义.get("hint"):
             项目["hint"] = str(定义["hint"])
@@ -642,6 +712,7 @@ def _读取插件配置摘要() -> dict[str, Any]:
         "editable": _插件配置可持久化(配置) or isinstance(配置, dict),
         "restart_required": True,
         "fields": 字段列表,
+        "appid": 获取当前机器人AppID(配置),
     }
 
 
@@ -892,8 +963,8 @@ async def _处理教程图片(request: web.Request) -> web.StreamResponse:
 
 
 def _数据库会话可用(配置: Any = None) -> bool:
-    """当前帮助网页配置已配置运行状态数据库时才能持久化会话。"""
-    数据库配置 = 配置 if 配置 is not None else 当前帮助网页配置
+    """_当前作用域配置()已配置运行状态数据库时才能持久化会话。"""
+    数据库配置 = 配置 if 配置 is not None else _当前作用域配置()
     if 数据库配置 is None:
         return False
     try:
@@ -907,7 +978,7 @@ def 获取控制台会话配置快照(配置: Any = None) -> dict[str, Any]:
     """在线程派发前固定认证及连接输入，不引用后续会变更的配置对象。"""
     from 功能文件.管理功能.基础功能.运行状态数据库 import 读取数据库配置值
 
-    来源 = 配置 if 配置 is not None else 当前帮助网页配置
+    来源 = 配置 if 配置 is not None else _当前作用域配置()
     用户名, 密码 = _读取控制台账号(来源)
     数据库配置 = {
         字段: 读取数据库配置值(来源, 字段, 旧字段)
@@ -930,11 +1001,13 @@ def 获取控制台会话配置快照(配置: Any = None) -> dict[str, Any]:
     return {
         "help_web_settings": {"help_web_admin_username": 用户名, "help_web_admin_password": 密码},
         "database_settings": 数据库配置,
+        "__mantou_bot_appid__": 获取当前机器人AppID(来源),
     }
 
 
 def 获取控制台认证指纹(配置: Any) -> str:
     快照 = 获取控制台会话配置快照(配置)
+    快照.pop("__mantou_bot_appid__", None)
     文本 = json.dumps(快照, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(文本.encode("utf-8")).hexdigest()
 
@@ -1072,9 +1145,9 @@ def _取得请求会话(request: web.Request) -> str:
 
 def _请求已授权(request: web.Request) -> bool:
     if not 控制台会话认证指纹 or not hmac.compare_digest(
-        控制台会话认证指纹, 获取控制台认证指纹(当前帮助网页配置)
+        控制台会话认证指纹, 获取控制台认证指纹(_当前作用域配置())
     ):
-        同步控制台会话认证(当前帮助网页配置)
+        同步控制台会话认证(_当前作用域配置())
         return False
     会话值 = _取得请求会话(request)
     if not 会话值:
@@ -1139,7 +1212,14 @@ async def _读取请求JSON(request: web.Request) -> dict[str, Any] | None:
         数据 = await request.json()
     except Exception:
         return None
-    return 数据 if isinstance(数据, dict) else None
+    if not isinstance(数据, dict):
+        return None
+    appid = str(request.get("机器人AppID") or "")
+    if appid:
+        if "appid" in 数据 and str(数据["appid"] or "").strip() != appid:
+            raise web.HTTPBadRequest(text="机器人参数不一致")
+        数据 = {**数据, "appid": appid}
+    return 数据
 
 
 async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any] | None, Path | None]:
@@ -1194,6 +1274,11 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                     数据[名称] = json.loads(值)
                 except (TypeError, ValueError, json.JSONDecodeError):
                     pass
+        appid = str(request.get("机器人AppID") or "")
+        if appid and "appid" in 数据 and str(数据["appid"] or "").strip() != appid:
+            raise web.HTTPBadRequest(text="机器人参数不一致")
+        if appid:
+            数据["appid"] = appid
         return 数据, 临时路径
     except (Exception, asyncio.CancelledError):
         if 临时路径 is not None:
@@ -1489,9 +1574,9 @@ async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.
         from 功能文件.管理功能.网盘功能 import 夸克媒体归档, 旧蓝奏云归档读取
 
         归档模块 = 夸克媒体归档 if provider == "quark" else 旧蓝奏云归档读取
-        账号配置快照 = 夸克媒体归档._配置快照(当前帮助网页配置)
+        账号配置快照 = 夸克媒体归档._配置快照(_当前作用域配置())
 
-        数据库快照 = 消息记录存储.获取数据库配置快照(当前帮助网页配置)
+        数据库快照 = 消息记录存储.获取数据库配置快照(_当前作用域配置())
         归档 = await _控制台线程执行(
             消息记录存储.执行数据库配置快照操作, 数据库快照,
             partial(消息记录存储.读取消息媒体归档, provider=provider, appid=appid), 会话标识, 消息ID, 类型, 媒体索引,
@@ -1517,7 +1602,7 @@ async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.
                 消息记录存储.执行数据库配置快照操作, 数据库快照,
                 partial(消息记录.更新消息媒体直链, provider=provider, appid=appid), *参数,
             )
-            if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(当前帮助网页配置):
+            if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(_当前作用域配置()):
                 消息记录.更新缓存消息媒体直链(*参数, provider=provider, appid=appid)
 
         阶段 = "archive_open"
@@ -1756,7 +1841,7 @@ def _读取控制台数据(登录用户名: str = "") -> dict[str, Any]:
     )
     from 功能文件.管理功能.小说功能.功能 import 小说功能开关
 
-    配置 = 当前帮助网页配置
+    配置 = _当前作用域配置()
     数据库已配置 = 已配置运行状态数据库(配置)
     数据库状态 = 检查运行状态数据库(配置)
     数据库展示配置 = 获取控制台会话配置快照(配置)["database_settings"]
@@ -1932,7 +2017,7 @@ def _读取消息布局() -> dict[str, Any]:
     try:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 读取运行状态命名空间
 
-        状态 = 读取运行状态命名空间(当前帮助网页配置, 消息布局命名空间)
+        状态 = 读取运行状态命名空间(_当前作用域配置(), 消息布局命名空间)
         return _规范化消息布局({**默认布局, **状态})
     except Exception as exc:
         logger.debug("帮助控制台消息布局读取失败：错误类型=%s", type(exc).__name__)
@@ -1972,7 +2057,7 @@ async def _处理消息布局(request: web.Request) -> web.Response:
         当前布局 = _读取消息布局()
         合并布局 = _规范化消息布局({**当前布局, **更新})
         批量写入运行状态值(
-            当前帮助网页配置,
+            _当前作用域配置(),
             消息布局命名空间,
             {键: 合并布局[键] for 键 in 允许字段},
         )
@@ -2007,13 +2092,14 @@ async def _处理机器人资料(request: web.Request) -> web.Response:
         ]
         资料 = next((项 for 项 in 资料列表 if 项.get("appid") == 目标AppID), {}) if 目标AppID else next(iter(资料列表), {})
         return web.json_response(
-            {"ok": True, "profile": 资料, "profiles": 资料列表},
+            {"ok": True, "profile": 资料, "profiles": 资料列表,
+             "version": 控制台版本, "auth": {"username": _读取当前控制台身份(request)}},
             headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:
         logger.debug("帮助控制台机器人资料读取失败：错误类型=%s", type(exc).__name__)
         return web.json_response(
-            {"ok": True, "profile": {}, "profiles": []},
+            {"ok": True, "profile": {}, "profiles": [], "version": 控制台版本},
             headers={"Cache-Control": "no-store"},
         )
 
@@ -2033,20 +2119,20 @@ async def _处理小说开关(request: web.Request) -> web.Response:
 
         if 功能名 == "__global__":
             写入布尔运行状态值(
-                当前帮助网页配置,
+                _当前作用域配置(),
                 小说功能开关.状态命名空间,
                 小说功能开关.小说总开关状态键,
                 enabled,
             )
         elif 功能名 == "__test__":
             写入布尔运行状态值(
-                当前帮助网页配置,
+                _当前作用域配置(),
                 小说功能开关.状态命名空间,
                 小说功能开关.管理员测试模式状态键,
                 enabled,
             )
         elif 功能名 in 小说功能开关.默认状态:
-            小说功能开关.写入小说功能状态(当前帮助网页配置, 功能名, enabled)
+            小说功能开关.写入小说功能状态(_当前作用域配置(), 功能名, enabled)
         else:
             raise ValueError("unknown feature")
 
@@ -2072,14 +2158,14 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
 
         网盘已开启 = await _控制台线程执行(
             网盘状态.网盘开关是否开启,
-            当前帮助网页配置,
+            _当前作用域配置(),
             网盘名,
         )
         if not 网盘已开启:
             return _控制台错误(409, "该网盘已关闭，请先开启")
         可用账号 = await _控制台线程执行(
             网盘Cookie.获取启用网盘账号列表,
-            当前帮助网页配置,
+            _当前作用域配置(),
             网盘名,
         )
         if not 可用账号:
@@ -2095,7 +2181,7 @@ async def _处理网盘切换(request: web.Request) -> web.Response:
     def _写入() -> None:
         from 功能文件.管理功能.基础功能.运行状态数据库 import 写入运行状态值
 
-        写入运行状态值(当前帮助网页配置, "novel_share_pan", "active", 网盘名)
+        写入运行状态值(_当前作用域配置(), "novel_share_pan", "active", 网盘名)
 
     try:
         await _控制台线程执行(_写入)
@@ -2122,7 +2208,7 @@ async def _处理网盘开关(request: web.Request) -> web.Response:
 
         await _控制台线程执行(
             网盘状态.写入网盘开关,
-            当前帮助网页配置,
+            _当前作用域配置(),
             网盘名,
             启用,
         )
@@ -2153,18 +2239,33 @@ async def _处理插件配置数据(request: web.Request) -> web.Response:
 async def _处理插件配置写入(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
+    配置 = _当前作用域配置()
+    键 = (id(getattr(配置, "基础配置", 配置)), 获取当前机器人AppID(配置))
+    项 = _机器人配置请求锁.setdefault(键, {"lock": asyncio.Lock(), "users": 0})
+    项["users"] += 1
+    try:
+        # 同一机器人覆盖整个快照、持久化和失败还原，避免较早失败抹掉较晚成功。
+        async with 项["lock"]:
+            return await _处理当前机器人配置写入(request)
+    finally:
+        项["users"] -= 1
+        if 项["users"] == 0 and _机器人配置请求锁.get(键) is 项:
+            _机器人配置请求锁.pop(键, None)
+
+
+async def _处理当前机器人配置写入(request: web.Request) -> web.Response:
     数据 = await _读取请求JSON(request)
     字段数据 = (数据 or {}).get("fields")
     if not isinstance(字段数据, dict) or not 字段数据:
         return _控制台错误(400, "配置参数无效")
-    if 当前帮助网页配置 is None:
+    if _当前作用域配置() is None:
         return _控制台错误(503, "插件配置不可用")
     配置字典: dict[str, Any] | None = None
     原配置快照: dict[str, Any] | None = None
     阶段 = "读取配置"
     try:
-        配置字典 = _读取插件配置字典(当前帮助网页配置)
-        原认证指纹 = 获取控制台认证指纹(当前帮助网页配置)
+        配置字典 = _读取插件配置字典(_当前作用域配置())
+        原认证指纹 = 获取控制台认证指纹(_当前作用域配置())
         阶段 = "创建配置快照"
         原配置快照 = (
             _复制插件配置值(配置字典)
@@ -2187,36 +2288,48 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
         # 先完整校验，再一次性写入，避免同一请求中后续字段失败时留下半套配置。
         for 字段名, 定义, 值 in 待更新:
             _设置插件配置值(
-                当前帮助网页配置,
+                _当前作用域配置(),
                 str(定义["category"]),
                 字段名,
                 值,
             )
             已更新.append(字段名)
         阶段 = "持久化配置"
-        if 已更新 and _插件配置可持久化(当前帮助网页配置):
+        if 已更新 and _插件配置可持久化(_当前作用域配置()):
             await _持久化插件配置()
-        elif 已更新 and not isinstance(当前帮助网页配置, dict):
+        elif 已更新 and not isinstance(_当前作用域配置(), dict):
             raise RuntimeError("插件配置没有持久化接口")
         if "group_file_cleanup_admin_qq" in 已更新:
             阶段 = "同步管理员白名单"
             from 功能文件.管理功能.基础功能 import 权限工具
 
-            权限工具.同步管理员白名单(当前帮助网页配置, 强制=True)
+            权限工具.同步管理员白名单(_当前作用域配置(), 强制=True)
         return web.json_response(
             {
                 "ok": True,
                 "updated": 已更新,
-                "restart_required": bool(已更新),
+                "restart_required": any(
+                    插件配置字段定义[键]["category"] not in 机器人独立配置分类
+                    and not (插件配置字段定义[键]["category"] == "help_web_settings" and 键 in 机器人独立帮助字段)
+                    for 键 in 已更新
+                ),
                 "auth_changed": not hmac.compare_digest(
                     原认证指纹,
-                    获取控制台认证指纹(当前帮助网页配置),
+                    获取控制台认证指纹(_当前作用域配置()),
                 ),
-                "message": "配置已保存；数据库连接、监听地址和登录账号等变更需重载插件生效",
+                "message": "配置已保存；共用数据库连接、监听地址和登录账号等变更需重载插件生效",
             }
         )
     except ValueError:
         return _控制台错误(400, "配置参数无效")
+    except asyncio.CancelledError:
+        if isinstance(配置字典, dict) and isinstance(原配置快照, dict):
+            配置字典.clear()
+            配置字典.update(原配置快照)
+        清除 = getattr(配置字典, "清除待保存字段", None)
+        if callable(清除):
+            清除()
+        raise
     except Exception as exc:
         if isinstance(配置字典, dict) and isinstance(原配置快照, dict):
             配置字典.clear()
@@ -2240,14 +2353,14 @@ async def _处理网盘账号列表(request: web.Request) -> web.Response:
 
         if 平台 == "夸克":
             await 网盘Cookie._刷新夸克账号资料(
-                当前帮助网页配置,
+                _当前作用域配置(),
                 强制=request.query.get("refresh") == "1",
             )
         摘要 = await _控制台线程执行(
-            网盘Cookie.获取网盘账号摘要, 当前帮助网页配置, 平台
+            网盘Cookie.获取网盘账号摘要, _当前作用域配置(), 平台
         )
         当前序号 = await _控制台线程执行(
-            网盘Cookie.获取当前网盘账号序号, 当前帮助网页配置, 平台
+            网盘Cookie.获取当前网盘账号序号, _当前作用域配置(), 平台
         )
         return web.json_response(
             {
@@ -2286,7 +2399,7 @@ async def _处理网盘账号新增(request: web.Request) -> web.Response:
             资料保存参数 = 网盘Cookie._夸克账号资料保存参数(账号资料)
         序号 = await _控制台线程执行(
             网盘Cookie._保存网盘Cookie,
-            当前帮助网页配置,
+            状态["config"],
             平台,
             解析结果[1],
             **资料保存参数,
@@ -2310,6 +2423,21 @@ def _夸克网页扫码状态文案(状态: str) -> str:
     }.get(状态, "扫码状态暂不可用。")
 
 
+def _夸克扫码仍有效(状态: dict[str, Any]) -> bool:
+    return (
+        夸克扫码启动代次.get(状态.get("owner")) == 状态.get("generation")
+        and 控制台会话.get(状态.get("session"), 0) > time.time()
+        and hmac.compare_digest(获取控制台认证指纹(状态.get("config")), 控制台会话认证指纹)
+    )
+
+
+def _保存夸克扫码账号(状态: dict[str, Any], Cookie: str, 资料: dict[str, Any]) -> int:
+    if not _夸克扫码仍有效(状态):
+        return 0
+    from 功能文件.管理功能.网盘功能 import 网盘Cookie
+    return 网盘Cookie._保存网盘Cookie(状态["config"], "夸克", Cookie, **资料)
+
+
 async def _运行夸克网页扫码(scan_id: str) -> None:
     状态 = 夸克网页扫码会话.get(scan_id)
     if not 状态:
@@ -2320,17 +2448,22 @@ async def _运行夸克网页扫码(scan_id: str) -> None:
         Cookie = await 状态["client"].等待登录并获取Cookie(
             状态["token"], timeout=300, interval=2
         )
+        if not _夸克扫码仍有效(状态):
+            状态["status"] = "cancelled"
+            return
         状态["status"] = "saving"
         状态["updated_at"] = time.time()
         账号资料 = await 网盘Cookie._获取夸克账号资料(Cookie)
         资料保存参数 = 网盘Cookie._夸克账号资料保存参数(账号资料)
         序号 = await _控制台线程执行(
-            网盘Cookie._保存网盘Cookie,
-            当前帮助网页配置,
-            "夸克",
+            _保存夸克扫码账号,
+            状态,
             Cookie,
-            **资料保存参数,
+            资料保存参数,
         )
+        if not 序号:
+            状态["status"] = "cancelled"
+            return
         状态["status"] = "success"
         状态["index"] = int(序号)
         状态["updated_at"] = time.time()
@@ -2364,6 +2497,8 @@ async def _移除夸克网页扫码会话(
     状态 = 夸克网页扫码会话.get(scan_id)
     if not 状态 or (所有者 is not None and 状态.get("owner") != 所有者):
         return False
+    if 夸克扫码启动代次.get(状态.get("owner")) == 状态.get("generation"):
+        夸克扫码启动代次.pop(状态.get("owner"), None)
     任务 = 状态.get("task")
     if isinstance(任务, asyncio.Task) and not 任务.done():
         任务.cancel()
@@ -2379,13 +2514,16 @@ async def _移除夸克网页扫码会话(
 async def _取消夸克网页扫码所有者(所有者: str) -> None:
     if not 所有者:
         return
-    所有者摘要 = hashlib.sha256(所有者.encode("utf-8")).hexdigest()
+    所有者摘要集合 = _待取消扫码所有者(所有者)
+    for 摘要 in 所有者摘要集合:
+        夸克扫码启动代次.pop(摘要, None)
     for scan_id, 状态 in list(夸克网页扫码会话.items()):
-        if 状态.get("owner") == 所有者摘要:
-            await _移除夸克网页扫码会话(scan_id, 所有者摘要)
+        if 状态.get("owner") in 所有者摘要集合:
+            await _移除夸克网页扫码会话(scan_id, 状态.get("owner"))
 
 
 async def _取消全部夸克网页扫码() -> None:
+    夸克扫码启动代次.clear()
     for scan_id in list(夸克网页扫码会话):
         await _移除夸克网页扫码会话(scan_id)
 
@@ -2400,7 +2538,9 @@ async def _处理夸克网页扫码开始(request: web.Request) -> web.Response:
 
     会话值 = _取得请求会话(request)
     await _取消夸克网页扫码所有者(会话值)
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(会话值)
+    代次 = secrets.token_urlsafe(16)
+    夸克扫码启动代次[所有者] = 代次
     from 功能文件.管理功能.网盘功能 import 网盘Cookie
 
     客户端 = 网盘Cookie.夸克扫码登录客户端()
@@ -2422,9 +2562,16 @@ async def _处理夸克网页扫码开始(request: web.Request) -> web.Response:
             logger.debug("帮助控制台夸克扫码会话关闭失败：错误类型=%s", type(close_exc).__name__)
         return _控制台错误(502, "夸克二维码获取失败，请稍后重试")
 
+    if 夸克扫码启动代次.get(所有者) != 代次 or 控制台会话.get(会话值, 0) <= time.time():
+        await 客户端.关闭()
+        return _控制台错误(409, "扫码会话已结束")
     scan_id = secrets.token_urlsafe(24)
     状态: dict[str, Any] = {
         "owner": 所有者,
+        "session": 会话值,
+        "appid": 获取当前机器人AppID(),
+        "config": 获取控制台会话配置快照(),
+        "generation": 代次,
         "client": 客户端,
         "token": Token,
         "status": "waiting",
@@ -2454,7 +2601,7 @@ async def _处理夸克网页扫码状态(request: web.Request) -> web.Response:
         return _控制台错误(400, "网盘参数无效")
     scan_id = str(request.match_info.get("scan_id") or "").strip()
     状态 = 夸克网页扫码会话.get(scan_id)
-    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(_取得请求会话(request))
     if not 状态 or 状态.get("owner") != 所有者:
         return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
     当前状态 = str(状态.get("status") or "error")
@@ -2479,7 +2626,10 @@ async def _处理夸克网页扫码取消(request: web.Request) -> web.Response:
     if _规范化网盘平台(request.match_info.get("platform")) != "夸克":
         return _控制台错误(400, "网盘参数无效")
     scan_id = str(request.match_info.get("scan_id") or "").strip()
-    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    if not scan_id:
+        await _取消夸克网页扫码所有者(_取得请求会话(request))
+        return web.json_response({"ok": True, "message": "扫码会话已结束"})
+    所有者 = _扫码所有者(_取得请求会话(request))
     await _移除夸克网页扫码会话(scan_id, 所有者)
     return web.json_response({"ok": True, "message": "扫码会话已结束"})
 
@@ -2499,7 +2649,7 @@ async def _处理网盘账号删除(request: web.Request) -> web.Response:
         from 功能文件.管理功能.网盘功能 import 网盘Cookie
 
         成功, _ = await _控制台线程执行(
-            网盘Cookie._删除网盘账号, 当前帮助网页配置, 平台, 序号
+            网盘Cookie._删除网盘账号, _当前作用域配置(), 平台, 序号
         )
         if not 成功:
             return _控制台错误(409, "账号不能删除，请检查账号序号和数据库配置")
@@ -2526,7 +2676,7 @@ async def _处理网盘账号开关(request: web.Request) -> web.Response:
 
         成功, _ = await _控制台线程执行(
             网盘Cookie._设置网盘账号启用,
-            当前帮助网页配置,
+            _当前作用域配置(),
             平台,
             序号,
             启用,
@@ -2567,7 +2717,7 @@ async def _处理网盘账号默认(request: web.Request) -> web.Response:
 
         成功, _ = await _控制台线程执行(
             网盘Cookie.设置默认网盘账号序号,
-            当前帮助网页配置,
+            _当前作用域配置(),
             平台,
             序号,
         )
@@ -2606,7 +2756,7 @@ async def _处理网盘账号选择(request: web.Request) -> web.Response:
 
         成功, _ = await _控制台线程执行(
             网盘Cookie.设置网盘账号序号按群标识,
-            当前帮助网页配置,
+            _当前作用域配置(),
             平台,
             序号,
             群标识,
@@ -2637,7 +2787,7 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
         try:
             结果 = await _控制台线程执行(
                 _构建群网盘选择数据,
-                当前帮助网页配置,
+                _当前作用域配置(),
                 群标识,
             )
             return web.json_response(结果, headers={"Cache-Control": "no-store"})
@@ -2655,7 +2805,7 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
         if 操作 == "reset":
             成功, _ = await _控制台线程执行(
                 网盘Cookie.清除群网盘账号选择,
-                当前帮助网页配置,
+                _当前作用域配置(),
                 群标识,
             )
             if not 成功:
@@ -2672,7 +2822,7 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
             return _控制台错误(400, "群网盘账号参数无效")
         成功, _ = await _控制台线程执行(
             网盘Cookie.设置群网盘账号选择,
-            当前帮助网页配置,
+            _当前作用域配置(),
             平台,
             序号,
             群标识,
@@ -2698,7 +2848,7 @@ async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        摘要 = await _控制台线程执行(QQ阅读.读取QQ阅读账号列表, 当前帮助网页配置)
+        摘要 = await _控制台线程执行(QQ阅读.读取QQ阅读账号列表, _当前作用域配置())
         return _QQ阅读JSON({"ok": True, "editable": _数据库会话可用(), **摘要})
     except Exception as exc:
         logger.warning("帮助控制台 QQ阅读账号读取失败：错误类型=%s", type(exc).__name__)
@@ -2801,7 +2951,7 @@ def _QQ阅读短信仍有效(状态: dict[str, Any]) -> bool:
         and 状态.get("expires_at", 0) > time.time()
         and 控制台会话.get(状态["session"], 0) > time.time()
         and hmac.compare_digest(状态["auth"], 控制台会话认证指纹)
-        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(当前帮助网页配置))
+        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(_当前作用域配置()))
     )
 
 
@@ -2821,9 +2971,9 @@ async def _移除QQ阅读网页短信会话(所有者: str, 预期: dict[str, An
 
 async def _取消QQ阅读网页短信所有者(会话值: str) -> None:
     if 会话值:
-        所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
-        QQ阅读短信启动代次.pop(所有者, None)
-        await _移除QQ阅读网页短信会话(所有者)
+        for 所有者 in _待取消扫码所有者(会话值):
+            QQ阅读短信启动代次.pop(所有者, None)
+            await _移除QQ阅读网页短信会话(所有者)
 
 
 async def _取消全部QQ阅读网页短信() -> None:
@@ -2842,7 +2992,7 @@ async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
     if not re.fullmatch(r"1[0-9]{10}", 手机号):
         return _控制台错误(400, "请输入有效的11位手机号")
     会话值 = _取得请求会话(request)
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(会话值)
     原状态 = QQ阅读网页短信会话.get(所有者)
     if 原状态 and _QQ阅读短信仍有效(原状态):
         if 原状态.get("busy"):
@@ -2859,7 +3009,7 @@ async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
         return _控制台错误(409, "登录会话已更新，请重新获取验证码")
     from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-    状态 = {"owner": 所有者, "session": 会话值, "auth": 认证, "generation": 代次,
+    状态 = {"owner": 所有者, "session": 会话值, "appid": 获取当前机器人AppID(), "auth": 认证, "generation": 代次,
             "config": 配置, "phone": 手机号,
             "expires_at": time.time() + 600, "busy": True, "sent_at": 0,
             "client": QQ阅读.QQ阅读手机号登录客户端()}
@@ -2900,7 +3050,7 @@ async def _QQ阅读短信操作(request: web.Request, 操作: str) -> web.Respon
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
     会话值 = _取得请求会话(request)
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(会话值)
     if 操作 == "cancel":
         await _取消QQ阅读网页短信所有者(会话值)
         return _QQ阅读JSON({"ok": True})
@@ -2997,12 +3147,13 @@ async def _移除QQ阅读网页扫码会话(scan_id: str, 所有者: str | None 
 async def _取消QQ阅读网页扫码所有者(会话值: str, *, 取消启动: bool = True) -> None:
     if not 会话值:
         return
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者集合 = _待取消扫码所有者(会话值)
     if 取消启动:
-        QQ阅读扫码启动代次.pop(所有者, None)
+        for 所有者 in 所有者集合:
+            QQ阅读扫码启动代次.pop(所有者, None)
     for scan_id, 状态 in list(QQ阅读网页扫码会话.items()):
-        if 状态.get("owner") == 所有者:
-            await _移除QQ阅读网页扫码会话(scan_id, 所有者)
+        if 状态.get("owner") in 所有者集合:
+            await _移除QQ阅读网页扫码会话(scan_id, 状态.get("owner"))
 
 
 async def _取消全部QQ阅读网页扫码() -> None:
@@ -3016,7 +3167,7 @@ def _QQ阅读扫码仍有效(状态: dict[str, Any]) -> bool:
         not 状态.get("cancelled")
         and 控制台会话.get(状态["session"], 0) > time.time()
         and hmac.compare_digest(状态["auth"], 控制台会话认证指纹)
-        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(当前帮助网页配置))
+        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(_当前作用域配置()))
         and QQ阅读扫码启动代次.get(状态["owner"]) == 状态["generation"]
     )
 
@@ -3140,12 +3291,12 @@ async def _处理QQ阅读网页扫码开始(request: web.Request) -> web.Respons
     from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
     会话值 = _取得请求会话(request)
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(会话值)
     代次 = secrets.token_urlsafe(16)
     QQ阅读扫码启动代次[所有者] = 代次
     await _取消QQ阅读网页扫码所有者(会话值, 取消启动=False)
     状态: dict[str, Any] = {
-        "owner": 所有者, "session": 会话值, "generation": 代次,
+        "owner": 所有者, "session": 会话值, "appid": 获取当前机器人AppID(), "generation": 代次,
         "auth": 控制台会话认证指纹, "config": 获取控制台会话配置快照(),
         "client": QQ阅读.QQ阅读扫码登录客户端(), "status": "waiting",
         "updated_at": time.time(), "expires_at": time.time() + 300,
@@ -3180,7 +3331,7 @@ async def _处理QQ阅读网页扫码状态(request: web.Request) -> web.Respons
         return _控制台错误(401, "请先登录控制台")
     scan_id = str(request.query.get("scan_id") or "")
     状态 = QQ阅读网页扫码会话.get(scan_id)
-    所有者 = hashlib.sha256(_取得请求会话(request).encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(_取得请求会话(request))
     if not 状态 or 状态.get("owner") != 所有者:
         return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
     if not _QQ阅读扫码仍有效(状态):
@@ -3195,7 +3346,7 @@ async def _处理QQ阅读网页扫码取消(request: web.Request) -> web.Respons
     数据 = await _读取请求JSON(request)
     scan_id = str((数据 or {}).get("scan_id") or "")
     会话值 = _取得请求会话(request)
-    所有者 = hashlib.sha256(会话值.encode("utf-8")).hexdigest()
+    所有者 = _扫码所有者(会话值)
     if not scan_id:
         await _取消QQ阅读网页扫码所有者(会话值)
     else:
@@ -3397,6 +3548,8 @@ async def _处理消息事件(request: web.Request) -> web.StreamResponse:
                 except asyncio.TimeoutError:
                     await 响应.write(b": keepalive\n\n")
                     continue
+                if not _实时事件属于机器人(事件, 获取当前机器人AppID()):
+                    continue
                 文本 = json.dumps(事件, ensure_ascii=False, separators=(",", ":"), default=str)
                 await 响应.write(f"data: {文本}\n\n".encode("utf-8"))
         except asyncio.CancelledError:
@@ -3419,6 +3572,11 @@ async def _处理消息事件(request: web.Request) -> web.StreamResponse:
             实时连接任务.discard(当前任务)
         logger.debug("帮助控制台消息事件启动失败：错误类型=%s", type(exc).__name__)
         return web.Response(status=503, text="Event stream unavailable")
+
+
+def _实时事件属于机器人(事件: Any, appid: str) -> bool:
+    数据 = 事件.get("data") if isinstance(事件, dict) else None
+    return bool(appid) and isinstance(数据, dict) and str(数据.get("appid") or "").strip() == appid
 
 
 async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
@@ -3457,7 +3615,8 @@ async def _处理消息WebSocket(request: web.Request) -> web.StreamResponse:
                     接收任务 = asyncio.create_task(响应.receive())
                 if 事件任务 in 完成任务:
                     事件 = 事件任务.result()
-                    await 响应.send_json(事件, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
+                    if _实时事件属于机器人(事件, 获取当前机器人AppID()):
+                        await 响应.send_json(事件, dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
                     事件任务 = asyncio.create_task(队列.get())
         except asyncio.CancelledError:
             raise
@@ -4085,14 +4244,14 @@ async def _处理群广告开关(request: web.Request) -> web.Response:
         if 操作 == "get":
             开启 = await _控制台线程执行(
                 群管功能.读取群广告开关,
-                当前帮助网页配置,
+                _当前作用域配置(),
                 会话标识,
             )
             return web.json_response(
                 {
                     "ok": True,
                     "enabled": bool(开启),
-                    "editable": bool(群管功能.群广告开关可持久化(当前帮助网页配置)),
+                    "editable": bool(群管功能.群广告开关可持久化(_当前作用域配置())),
                     "platform": "qq_official",
                     **_群设置请求范围(数据),
                 },
@@ -4102,11 +4261,11 @@ async def _处理群广告开关(request: web.Request) -> web.Response:
         原始状态 = 数据.get("enabled")
         if not isinstance(原始状态, bool):
             return _群设置错误(400, "广告开关参数无效")
-        if not 群管功能.群广告开关可持久化(当前帮助网页配置):
+        if not 群管功能.群广告开关可持久化(_当前作用域配置()):
             return _群设置错误(409, "数据库未配置，广告开关保存失败")
         成功 = await _控制台线程执行(
             群管功能.写入群广告开关,
-            当前帮助网页配置,
+            _当前作用域配置(),
             会话标识,
             原始状态,
         )

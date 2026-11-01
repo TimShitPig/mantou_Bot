@@ -53,6 +53,8 @@ def _捕获回复流工厂(回复流: Any) -> dict[str, Any] | None:
 
 
 def _获取任务键(event: Any, 工厂: dict[str, Any] | None) -> tuple[Any, ...]:
+    from 功能文件.管理功能.基础功能.机器人作用域 import 获取事件机器人AppID
+
     消息标识 = None
     获取标识 = getattr(event, "get_message_id", None)
     if callable(获取标识):
@@ -64,7 +66,7 @@ def _获取任务键(event: Any, 工厂: dict[str, Any] | None) -> tuple[Any, ..
         消息标识 = getattr(getattr(event, "message_obj", None), "message_id", None)
     if not 消息标识:
         消息标识 = getattr(event, "message_id", None)
-    return (str(getattr(event, "unified_msg_origin", "")),
+    return (获取事件机器人AppID(event), str(getattr(event, "unified_msg_origin", "")),
             str(消息标识) if 消息标识 else id(event),
             str((工厂 or {}).get("module") or ""),
             str((工厂 or {}).get("name") or ""))
@@ -213,6 +215,24 @@ async def _创建恢复回复流(记录: dict[str, Any]) -> Any:
 
 
 async def _消费小说回复流(
+    event: Any, 回复流: AsyncIterator[Any] | None,
+    帮助功能: Any, 权限工具: Any, 记录: dict[str, Any],
+) -> None:
+    from 功能文件.管理功能.基础功能.机器人作用域 import (
+        绑定机器人作用域, 获取事件机器人AppID,
+    )
+
+    appid = str(记录.get("bot_appid") or 获取事件机器人AppID(event) or "")
+    if not appid:
+        await _关闭回复流(回复流)
+        logger.warning("小说任务未恢复：reason=bot_identity_missing")
+        return
+    记录["bot_appid"] = appid
+    with 绑定机器人作用域(appid):
+        await _消费小说回复流内部(event, 回复流, 帮助功能, 权限工具, 记录)
+
+
+async def _消费小说回复流内部(
     event: Any, 回复流: AsyncIterator[Any] | None,
     帮助功能: Any, 权限工具: Any, 记录: dict[str, Any],
 ) -> None:
@@ -399,12 +419,15 @@ def 恢复中断小说任务(帮助功能: Any, 权限工具: Any, 配置: Any =
                     _已结束小说任务.pop(next(iter(_已结束小说任务)))
             continue
         if 配置 is not None:
+            from 功能文件.管理功能.基础功能.机器人作用域 import 获取事件配置
+
+            原机器人配置 = 获取事件配置(记录["event"], 配置)
             工厂 = 记录.get("factory") or {}
             for 名称 in ("配置", "config"):
                 if 名称 in 工厂.get("kwargs", {}):
-                    工厂["kwargs"][名称] = 配置
+                    工厂["kwargs"][名称] = 原机器人配置
             if 记录.get("upload"):
-                记录["upload"]["config"] = 配置
+                记录["upload"]["config"] = 原机器人配置
         _启动记录任务(记录, None, 帮助功能, 权限工具)
         已恢复 += 1
     if 已恢复:

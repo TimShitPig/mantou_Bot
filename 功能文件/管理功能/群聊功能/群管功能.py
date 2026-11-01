@@ -33,6 +33,7 @@ from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
     是群文件清理管理员,
 )
+from 功能文件.管理功能.基础功能.机器人作用域 import 机器人作用域缓存键
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库,
     读取布尔运行状态值,
@@ -87,7 +88,7 @@ At消息规则 = re.compile(
 }
 广告状态命令 = {"广告状态"}
 广告开关缓存有效期秒数 = 30.0
-广告开关缓存: dict[tuple[int, str], tuple[float, bool]] = {}
+广告开关缓存: dict[tuple[tuple[int, str], str], tuple[float, bool]] = {}
 广告开关缓存锁 = threading.RLock()
 数字撤回触发次数: dict[str, int] = {}
 数字撤回处理锁: asyncio.Lock | None = globals().get("数字撤回处理锁")
@@ -134,7 +135,7 @@ def 读取群广告开关(配置: Any, 群号: Any) -> bool:
     状态键 = 获取群广告状态键(群号)
     if not 状态键 or not 群广告开关可持久化(配置):
         return 广告开关状态默认值
-    缓存键 = (id(配置), 状态键)
+    缓存键 = (机器人作用域缓存键(配置), 状态键)
     当前时间 = time.monotonic()
     with 广告开关缓存锁:
         缓存项 = 广告开关缓存.get(缓存键)
@@ -181,7 +182,7 @@ def 写入群广告开关(配置: Any, 群号: Any, 开启: bool) -> bool:
         )
         return False
     with 广告开关缓存锁:
-        广告开关缓存[(id(配置), 状态键)] = (time.monotonic(), bool(开启))
+        广告开关缓存[(机器人作用域缓存键(配置), 状态键)] = (time.monotonic(), bool(开启))
     return True
 
 

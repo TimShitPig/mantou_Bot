@@ -54,12 +54,22 @@ class 媒体归档错误(RuntimeError):
         self.限制字节数 = 限制字节数
 
 
-def _配置快照(配置: Any) -> dict[str, Any]:
+def _配置快照(配置: Any, appid: str = "") -> dict[str, Any]:
     from 功能文件.管理功能.基础功能.消息记录存储 import 获取数据库配置快照
+    from 功能文件.管理功能.基础功能 import 机器人作用域
+    身份 = appid or 机器人作用域.获取当前机器人AppID(配置)
+    配置 = 机器人作用域.获取机器人配置(配置, 身份)
     # 普通字典交给线程，避免复制 AstrBotConfig 内部锁。
     数据库 = 获取数据库配置快照(配置)
-    return {"database_settings": dict(数据库["database_settings"]),
+    return {"__mantou_bot_appid__": 身份,
+            "database_settings": dict(数据库["database_settings"]),
             "quark_pan_settings": dict(配置.get("quark_pan_settings", {}) or {})}
+
+
+def _归档任务键(记录: dict[str, Any]) -> tuple[str, str]:
+    身份 = [str(记录.get("appid") or ""), str(记录.get("chat_type") or "group"),
+            str(记录.get("_session") or "")]
+    return json.dumps(身份, separators=(",", ":")), str(记录.get("message_id") or "")
 
 
 def _账号资料(配置: Any) -> list[dict[str, Any]]:
@@ -369,6 +379,13 @@ def _可运行(参数: dict[str, Any]) -> bool:
 
 
 async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
+    from 功能文件.管理功能.基础功能.机器人作用域 import 绑定机器人作用域
+
+    with 绑定机器人作用域(str(参数["record"].get("appid") or "")):
+        await _处理当前机器人记录(键, 参数)
+
+
+async def _处理当前机器人记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
     from 功能文件.管理功能.基础功能 import 消息记录
     需要立即重试 = False
     try:
@@ -396,7 +413,7 @@ async def _处理记录(键: tuple[str, str], 参数: dict[str, Any]) -> None:
                     远端.add_done_callback(_读取任务结果)
                 归档 = await asyncio.shield(远端)
                 提供方 = "lanzou" if "_legacy" in 进度 else "quark"
-                if not 消息记录.更新消息媒体归档(键[0], 键[1], 归档, 原记录=参数["record"], 媒体索引=索引, provider=提供方):
+                if not 消息记录.更新消息媒体归档(参数["record"]["_session"], 键[1], 归档, 原记录=参数["record"], 媒体索引=索引, provider=提供方):
                     raise 媒体归档错误("message_persist_rejected")
                 参数["record"]["media"].setdefault("_lanzou_archives" if 提供方 == "lanzou" else "_quark_archives", {})[str(索引)] = 归档
             except asyncio.CancelledError:
@@ -483,10 +500,12 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
     from 功能文件.管理功能.基础功能 import 消息记录
     if not 图片归档接收开启 or not 消息记录.消息数据库已配置() or not _媒体项目列表(记录.get("media")):
         return False
-    键 = (str(记录.get("_session") or ""), str(记录.get("message_id") or ""))
-    if not all(键):
+    from 功能文件.管理功能.基础功能.机器人作用域 import 规范化机器人AppID
+    appid = 规范化机器人AppID(记录.get("appid"))
+    键 = _归档任务键(记录)
+    if not appid or not 记录.get("_session") or not 键[1]:
         return False
-    参数 = 图片归档待恢复.setdefault(键, {"record": copy.deepcopy(记录), "config": _配置快照(配置)})
+    参数 = 图片归档待恢复.setdefault(键, {"record": copy.deepcopy(记录), "config": _配置快照(配置, appid)})
     旧列表 = dict(_媒体项目列表(参数["record"].get("media")))
     参数["record"]["media"] = 消息记录._合并媒体记录(参数["record"]["media"], 记录["media"])
     for i, 项 in _媒体项目列表(参数["record"]["media"]):
@@ -504,6 +523,10 @@ def 安排归档消息图片(配置: Any, 记录: dict[str, Any]) -> bool:
 def 启动图片归档任务(配置: Any = None) -> None:
     global 图片归档接收开启, _QQ源请求头已修正, _QQ源错误分类已启用, _已应用媒体大小上限
     图片归档接收开启 = True
+    for 旧键, 参数 in list(图片归档待恢复.items()):
+        新键 = _归档任务键(参数["record"])
+        if 新键 != 旧键 and 新键 not in 图片归档待恢复:
+            图片归档待恢复[新键] = 图片归档待恢复.pop(旧键)
     if not _QQ源请求头已修正 or not _QQ源错误分类已启用:
         # 修复旧请求头后，重新尝试此前在源下载阶段失败、尚未提交的项目。
         for 参数 in 图片归档待恢复.values():
@@ -543,7 +566,7 @@ def 启动图片归档任务(配置: Any = None) -> None:
         if 旧参数.get("_quark_handoff"):
             continue
         记录 = 旧参数["record"]
-        键 = (str(记录.get("_session") or ""), str(记录.get("message_id") or ""))
+        键 = _归档任务键(记录)
         if not 安排归档消息图片(配置 or 旧参数.get("config"), 记录):
             continue
         参数 = 图片归档待恢复[键]
@@ -559,7 +582,7 @@ def 启动图片归档任务(配置: Any = None) -> None:
         旧参数["_quark_handoff"] = True
     for 参数 in 图片归档待恢复.values():
         if 配置 is not None:
-            参数["config"] = _配置快照(配置)
+            参数["config"] = _配置快照(配置, str(参数["record"].get("appid") or ""))
     _排空队列()
 
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any
+from 功能文件.管理功能.基础功能.机器人作用域 import 机器人作用域缓存键
 
 try:
     from astrbot.api import logger
@@ -134,7 +136,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
 小说总开关状态键 = "全部小说"
 管理员测试模式状态键 = "管理员测试模式"
 小说功能状态缓存秒数 = 2.0
-_小说功能状态缓存: dict[int, tuple[float, dict[str, Any]]] = {}
+_小说功能状态缓存: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}
 _小说功能状态缓存锁 = threading.RLock()
 _小说功能状态执行器: ThreadPoolExecutor | None = globals().get("_小说功能状态执行器")
 _小说功能状态执行器锁 = threading.RLock()
@@ -153,7 +155,7 @@ def _清除小说功能状态缓存(配置: Any = None) -> None:
         if 配置 is None:
             _小说功能状态缓存.clear()
         else:
-            _小说功能状态缓存.pop(id(配置), None)
+            _小说功能状态缓存.pop(机器人作用域缓存键(配置), None)
 
 
 def _获取小说功能状态执行器() -> ThreadPoolExecutor:
@@ -182,7 +184,7 @@ async def _异步执行小说功能状态查询(函数: Any, *参数: Any) -> An
     循环 = asyncio.get_running_loop()
     return await 循环.run_in_executor(
         _获取小说功能状态执行器(),
-        partial(函数, *参数),
+        partial(contextvars.copy_context().run, 函数, *参数),
     )
 
 
@@ -371,7 +373,7 @@ def 读取小说功能控制台状态(配置: Any = None) -> dict[str, Any]:
     }
     if 配置 is None:
         return 结果
-    配置键 = id(配置)
+    配置键 = 机器人作用域缓存键(配置)
     当前时间 = time.monotonic()
     with _小说功能状态缓存锁:
         缓存 = _小说功能状态缓存.get(配置键)

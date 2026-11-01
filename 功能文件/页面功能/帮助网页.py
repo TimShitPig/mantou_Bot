@@ -78,6 +78,7 @@ def _注册路由(app: web.Application) -> None:
         ("get", "/api/pan-accounts/{platform}", 后端._处理网盘账号列表),
         ("post", "/api/pan-accounts/{platform}", 后端._处理网盘账号新增),
         ("post", "/api/pan-accounts/{platform}/scan", 后端._处理夸克网页扫码开始),
+        ("delete", "/api/pan-accounts/{platform}/scan", 后端._处理夸克网页扫码取消),
         ("get", "/api/pan-accounts/{platform}/scan/{scan_id}", 后端._处理夸克网页扫码状态),
         ("delete", "/api/pan-accounts/{platform}/scan/{scan_id}", 后端._处理夸克网页扫码取消),
         ("delete", "/api/pan-accounts/{platform}", 后端._处理网盘账号删除),
@@ -206,7 +207,7 @@ async def 启动帮助网页服务(配置: Any = None, *, 插件版本: str = ""
     host, port = 后端._读取监听配置(配置)
     app = web.Application(
         client_max_size=300 * 1024 * 1024,
-        middlewares=[_等待控制台会话恢复, _压缩控制台响应],
+        middlewares=[_等待控制台会话恢复, 后端.机器人作用域中间件, _压缩控制台响应],
     )
     _注册路由(app)
     runner = web.AppRunner(app, access_log=None, shutdown_timeout=2.0)
