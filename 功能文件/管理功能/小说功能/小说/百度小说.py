@@ -832,6 +832,38 @@ def _获取百度出版版本(图书数据: dict[str, Any]) -> str:
     return str(详情.get("version") or "").strip() if isinstance(详情, dict) else ""
 
 
+def _校准百度出版章节数(
+    详情: dict[str, Any], 图书数据: dict[str, Any],
+    目录: list[dict[str, Any]], 文档编号: str,
+) -> None:
+    """详情总数可能滞后；只按同版本、覆盖全书的闭合目录校准。"""
+    预期 = _安全整数(详情.get("chapter_count"))
+    if 预期 <= 0 or 预期 == len(目录) or not 目录:
+        return
+    if (
+        详情.get("doc_id") != 文档编号
+        or not _百度出版图书匹配(图书数据, 文档编号)
+        or 目录 != _从百度出版图书提取目录(图书数据, 文档编号)
+        or 目录[0].get("id") != "1-1"
+    ):
+        return
+    总页数 = _百度出版正整数(图书数据["bdjson"].get("page"))
+    for 下标, 章节 in enumerate(目录):
+        编号 = 章节["id"]
+        下一编号 = 目录[下标 + 1]["id"] if 下标 + 1 < len(目录) else ""
+        终点 = 下一编号 or f"{总页数}-0"
+        if 章节.get("source_map") != f"{编号},{终点}":
+            return
+        if 下一编号 and _百度出版坐标(下一编号) <= _百度出版坐标(编号):
+            return
+    _校验百度目录(目录)
+    详情["chapter_count"] = len(目录)
+    logger.debug(
+        "百度出版详情章节数校准：书籍编号=%s, 详情=%s, 完整目录=%s",
+        文档编号, 预期, len(目录),
+    )
+
+
 
 
 def _百度出版节点文本(值: Any) -> str:
@@ -1385,6 +1417,7 @@ async def 生成百度下载回复流(
                 if not 目录 or not 正文版本:
                     yield 百度下载失败提示
                     return
+                _校准百度出版章节数(详情, 图书数据, 目录, 书籍编号)
             else:
                 目录 = await 获取百度目录(会话, 书籍编号)
                 if not 目录:
