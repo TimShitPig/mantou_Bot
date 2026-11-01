@@ -62,10 +62,10 @@ def _取字段(对象, 字段):
 def _通道(chat_id, appid, 上下文=None):
     if not _标识有效(chat_id) or not isinstance(appid, str):
         return None, _错误("invalid_scope", "群标识或机器人参数无效", 400)
-    已知 = (消息记录.消息缓存.get(chat_id) or {}).get("appid")
-    appid = appid or (已知 if isinstance(已知, str) else "")
     if not _AppID格式.fullmatch(appid):
         return None, _错误("appid_missing", "请刷新群资料后重试", 400)
+    已知会话 = 消息记录._读取作用域会话缓存(chat_id, "group", appid) or {}
+    已知 = 已知会话.get("appid")
     if 已知 and str(已知) != appid:
         return None, _错误("appid_mismatch", "群聊与机器人不匹配", 400)
     平台 = 消息记录.获取QQ官方平台(上下文=上下文, appid=appid)
@@ -272,19 +272,19 @@ async def 获取群设置(chat_id, appid="", 上下文=None):
     def 读取本地():
         配置 = 消息记录.当前插件配置
         可保存 = 群管功能.群广告开关可持久化(配置)
-        群信息 = 消息记录.获取缓存的群信息(chat_id)
+        群信息 = 消息记录.获取缓存的群信息(chat_id, appid)
         if 群信息.get("appid") not in (None, "", 通道[0]):
             return _错误("appid_mismatch", "群聊与机器人不匹配", 400)
         群简介 = 群信息.get("group_finger_memo")
         群分类 = 群信息.get("group_class_text")
         群标签 = 群信息.get("group_tags")
         return {"ok": True, "can_manage": True, "available": True, "editable": True,
-                "remark": 消息记录.获取群备注(chat_id), "group_qq": 消息记录.获取群QQ号(chat_id),
+                "remark": 消息记录.获取群备注(chat_id, appid), "group_qq": 消息记录.获取群QQ号(chat_id, appid),
                 "group_name": 消息记录._有效用户昵称(群信息.get("group_name") or 群信息.get("name")),
                 "group_finger_memo": 群简介 if isinstance(群简介, str) else "",
                 "group_class_text": 群分类 if isinstance(群分类, str) else "",
                 "group_tags": [标签 for 标签 in 群标签 if isinstance(标签, str)] if isinstance(群标签, list) else [],
-                "member_num": 群信息.get("member_num", 0), "is_admin": 消息记录.群机器人是否管理员(chat_id),
+                "member_num": 群信息.get("member_num", 0), "is_admin": 消息记录.群机器人是否管理员(chat_id, appid),
                 "ad_enabled": 群管功能.读取群广告开关(配置, chat_id), "ad_editable": 可保存,
                 "remark_editable": 可保存, "local_settings_editable": 可保存, "message": ""}
     return await asyncio.get_running_loop().run_in_executor(None, 读取本地)

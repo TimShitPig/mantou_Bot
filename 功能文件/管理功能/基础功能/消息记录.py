@@ -67,10 +67,14 @@ _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事�
 未读状态命名空间 = "msg_console_unread"
 当前插件上下文: Any = globals().get("当前插件上下文")
 当前插件配置: Any = globals().get("当前插件配置")
-自己发送消息ID: dict[str, float] = globals().get("自己发送消息ID") or {}
+自己发送消息ID: dict[tuple[str, str], float] = globals().get("自己发送消息ID") or {}
 消息缓存: dict[str, dict[str, Any]] = globals().get("消息缓存") or {}
+作用域消息缓存: dict[tuple[str, str, str], dict[str, Any]] = globals().get("作用域消息缓存") or {}
 群信息缓存: dict[str, dict[str, Any]] = globals().get("群信息缓存") or {}
+群信息作用域缓存: dict[str, dict[str, Any]] = globals().get("群信息作用域缓存") or {}
 群机器人状态缓存: dict[str, dict[str, Any]] = globals().get("群机器人状态缓存") or {}
+群机器人状态代次: dict[str, int] = globals().get("群机器人状态代次") or {}
+群信息查询代次: dict[str, int] = globals().get("群信息查询代次") or {}
 群禁言状态缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("群禁言状态缓存") or {}
 群禁言状态缓存有效期秒 = 30
 群禁言状态失败冷却秒 = 60
@@ -83,7 +87,7 @@ _群禁言群代次: dict[str, int] = globals().get("_群禁言群代次") or {}
 群成员人数事件缓存: dict[str, float] = globals().get("群成员人数事件缓存") or {}
 群成员人数事件缓存上限 = 4096
 已撤回消息待同步: dict[tuple[str, str], float] = globals().get("已撤回消息待同步") or {}
-群信息待刷新: set[str] = globals().get("群信息待刷新") or set()
+群信息待刷新: set[str | tuple[str, str]] = globals().get("群信息待刷新") or set()
 _群信息刷新锁 = globals().get("_群信息刷新锁") or asyncio.Lock()
 _群信息刷新任务: asyncio.Task[Any] | None = globals().get("_群信息刷新任务")
 _群信息轮询任务: asyncio.Task[Any] | None = globals().get("_群信息轮询任务")
@@ -972,13 +976,16 @@ def _消息去重键(记录: dict[str, Any]) -> tuple[str, ...]:
             except Exception:
                 摘要 = 原始[:512]
             键.append(f"raw:{会话标识}:{用户标识}:{摘要}")
-    return tuple(键)
+    前缀 = _会话作用域键(str(记录.get("_session") or ""), str(记录.get("chat_type") or "group"), str(记录.get("appid") or ""))
+    return tuple(f"{前缀}:{项}" for 项 in 键)
 
 
 def _消息记录重复(已有记录: dict[str, Any], 新记录: dict[str, Any]) -> bool:
     旧键 = set(_消息去重键(已有记录))
     新键 = set(_消息去重键(新记录))
-    return bool(旧键 and 新键 and 旧键.intersection(新键))
+    return (str(已有记录.get("appid") or "").strip() == str(新记录.get("appid") or "").strip()
+            and str(已有记录.get("chat_type") or "group") == str(新记录.get("chat_type") or "group")
+            and bool(旧键 and 新键 and 旧键.intersection(新键)))
 
 
 def _整数时间戳(值: Any) -> int:
@@ -1201,36 +1208,68 @@ def _规范会话标识(会话: str, 类型: str) -> str:
     return str(会话 or "").strip()
 
 
+def _会话作用域键(会话标识: str, 类型: str, appid: str = "") -> str:
+    return json.dumps([str(appid or "").strip(), str(类型 or "group").strip(), str(会话标识 or "").strip()], ensure_ascii=False, separators=(",", ":"))
+
+
+def _读取作用域会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict[str, Any]:
+    """只读精确作用域；旧混合缓存按原记录身份投影，不猜空 AppID。"""
+    会话标识, 类型, appid = str(会话标识 or "").strip(), str(类型 or "group").strip(), str(appid or "").strip()
+    键 = (appid, 类型, 会话标识)
+    已有 = 作用域消息缓存.get(键)
+    if isinstance(已有, dict):
+        return 已有
+    旧 = 消息缓存.get(会话标识)
+    if not isinstance(旧, dict) or str(旧.get("chat_type") or "group") != 类型:
+        return {}
+    匹配消息 = [项 for 项 in (旧.get("messages") or []) if isinstance(项, dict)
+              and str(项.get("appid") or "").strip() == appid
+              and str(项.get("chat_type") or 类型) == 类型]
+    if str(旧.get("appid") or "").strip() != appid and not 匹配消息:
+        return {}
+    if len(匹配消息) == len(旧.get("messages") or []) and str(旧.get("appid") or "").strip() == appid:
+        会话 = 旧
+    else:
+        会话 = {**旧, "messages": 匹配消息, "appid": appid, "chat_type": 类型,
+              "msg_count": len(匹配消息), "unread": 0, "last_ts": 0,
+              "last_content": "", "last_nickname": "", "last_message_id": ""}
+        if 匹配消息:
+            最后 = max(匹配消息, key=lambda 项: int(项.get("ts") or 0))
+            会话.update(last_ts=int(最后.get("ts") or 0), last_content=str(最后.get("content") or ""),
+                      last_nickname=str(最后.get("nickname") or ""), last_message_id=str(最后.get("message_id") or ""))
+    会话["chat_id"] = 会话标识
+    return 作用域消息缓存.setdefault(键, 会话)
+
+
+def _遍历作用域会话缓存() -> list[tuple[str, dict[str, Any]]]:
+    for 标识, 旧 in list(消息缓存.items()):
+        if not isinstance(旧, dict):
+            continue
+        类型 = str(旧.get("chat_type") or "group")
+        应用列表 = {str(旧.get("appid") or "").strip()}
+        应用列表.update(str(项.get("appid") or "").strip() for 项 in (旧.get("messages") or []) if isinstance(项, dict))
+        for 应用 in 应用列表:
+            _读取作用域会话缓存(标识, 类型, 应用)
+    return [(键[2], 会话) for 键, 会话 in list(作用域消息缓存.items()) if isinstance(会话, dict)]
+
+
 def _取得会话缓存(会话标识: str, 类型: str, appid: str = "") -> dict[str, Any]:
-    会话标识 = _规范会话标识(会话标识, 类型)
-    if 会话标识 not in 消息缓存:
-        if len(消息缓存) >= 缓存最大会话数:
-            # 淘汰最久未活跃的会话
-            try:
-                最旧会话 = min(
-                    消息缓存,
-                    key=lambda k: (
-                        消息缓存[k].get("last_ts") or 0,
-                        k,
-                    ),
-                )
-                消息缓存.pop(最旧会话, None)
-            except Exception:
-                pass
-        消息缓存[会话标识] = {
-            "chat_type": 类型,
-            "appid": str(appid or ""),
-            "messages": [],
-            # 启动时只恢复会话骨架；完整历史在打开会话或滚动到顶部时按页读取。
-            "msg_count": 0,
-            "last_ts": 0,
-            "last_content": "",
-            "last_nickname": "",
-            # 接收事件不能在 AstrBot 事件循环中同步查询 MySQL；启动恢复时
-            # 会一次性载入持久化未读数，新会话则从当前事件开始累计。
-            "unread": max(0, int(_未读待写.get(会话标识, 0) or 0)),
-        }
-    return 消息缓存[会话标识]
+    会话标识, 类型, appid = _规范会话标识(会话标识, 类型), str(类型 or "group"), str(appid or "").strip()
+    已有 = _读取作用域会话缓存(会话标识, 类型, appid)
+    if 已有:
+        return 已有
+    if len(作用域消息缓存) >= 缓存最大会话数:
+        最旧键 = min(作用域消息缓存, key=lambda 键: int(作用域消息缓存[键].get("last_ts") or 0))
+        最旧 = 作用域消息缓存.pop(最旧键)
+        if 消息缓存.get(最旧键[2]) is 最旧:
+            消息缓存.pop(最旧键[2], None)
+    会话 = {"chat_id": 会话标识, "chat_type": 类型, "appid": appid, "messages": [], "msg_count": 0,
+          "last_ts": 0, "last_content": "", "last_nickname": "",
+          "unread": max(0, int(_未读待写.get(_会话作用域键(会话标识, 类型, appid), 0) or 0))}
+    会话 = 作用域消息缓存.setdefault((appid, 类型, 会话标识), 会话)
+    # 仅兼容唯一旧入口；同一 OpenID 的其他机器人保存在独立作用域，绝不混写。
+    消息缓存.setdefault(会话标识, 会话)
+    return 会话
 
 
 def _读取持久化未读数(会话标识: str) -> int:
@@ -1820,10 +1859,11 @@ def _获取消息相关成员资料(
             if 引用作者:
                 相关标识.add(引用作者)
             相关标识.update(_提及规则.findall(str(预览.get("content") or "")))
+    应用列表 = {str(项.get("appid") or "").strip() for 项 in (消息列表 or []) if isinstance(项, dict)}
     结果 = {
         标识: copy.deepcopy(全部资料[标识])
         for 标识 in 相关标识
-        if isinstance(全部资料.get(标识), dict)
+        if isinstance(全部资料.get(标识), dict) and str(全部资料[标识].get("appid") or "").strip() in 应用列表
     }
     for 消息 in 消息列表 or ():
         if not isinstance(消息, dict):
@@ -1831,6 +1871,10 @@ def _获取消息相关成员资料(
         标识 = str(消息.get("user_id") or "").strip()
         if not 标识:
             continue
+        资料 = 结果.setdefault(标识, {})
+        for 字段 in ("nickname", "avatar", "member_role", "appid"):
+            if 消息.get(字段) and not 资料.get(字段):
+                资料[字段] = 消息[字段]
         if isinstance(消息.get("is_bot"), bool):
             结果.setdefault(标识, {})["is_bot"] = 消息["is_bot"]
         if 消息.get("nickname_blank") and not 消息.get("is_self"):
@@ -1868,6 +1912,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
                 会话标识,
                 str(记录.get("chat_type") or 会话.get("chat_type") or "group"),
                 str(记录.get("message_id") or ""),
+                appid=str(记录.get("appid") or ""),
             )
         except Exception as exc:
             logger.debug("消息实时图片代理地址生成失败：错误类型=%s", type(exc).__name__)
@@ -1931,7 +1976,7 @@ def _推送消息事件(记录: dict[str, Any], 会话: dict[str, Any]) -> None:
                 _消息事件订阅.pop(队列, None)
 
 
-def _推送群状态事件(会话标识: str, 状态: str) -> None:
+def _推送群状态事件(会话标识: str, 状态: str, appid: str = "") -> None:
     """把群成员状态变化实时推送到网页，避免等待下一次列表轮询。"""
     if not _消息事件订阅:
         return
@@ -1939,6 +1984,8 @@ def _推送群状态事件(会话标识: str, 状态: str) -> None:
         "type": "group_status",
         "data": {
             "chat_id": str(会话标识 or "").strip(),
+            "chat_type": "group",
+            "appid": str(appid or "").strip(),
             "membership_status": str(状态 or "unknown").strip().lower(),
         },
     }
@@ -1972,17 +2019,21 @@ def _推送群状态事件(会话标识: str, 状态: str) -> None:
                 _消息事件订阅.pop(队列, None)
 
 
-def _推送群人数事件(会话标识: str, 成员数: int) -> None:
+def _推送群人数事件(会话标识: str, 成员数: int, appid: str = "") -> None:
     """把群人数变化实时推送到当前消息记录页面。"""
     if not _消息事件订阅:
         return
+    appid = _获取群信息appid(会话标识, appid)
+    信息 = _读取群作用域信息(会话标识, appid)
     载荷 = {
         "type": "group_info",
         "data": {
             "chat_id": str(会话标识 or "").strip(),
+            "chat_type": "group",
+            "appid": appid,
             "member_num": max(0, int(成员数 or 0)),
-            "group_name": str((群信息缓存.get(会话标识) or {}).get("group_name") or ""),
-            "updated_at": int((群信息缓存.get(会话标识) or {}).get("updated_at") or 0),
+            "group_name": str(信息.get("group_name") or ""),
+            "updated_at": int(信息.get("updated_at") or 0),
         },
     }
 
@@ -3609,27 +3660,21 @@ async def _批量从已知群缓存读取昵称(
 
 
 def _私聊昵称作用域匹配(会话标识: str, appid: str) -> bool:
-    """异步补查返回时再次确认联系人仍属于请求的机器人。"""
-    会话 = 消息缓存.get(会话标识) or {}
-    if 会话 and str(会话.get("chat_type") or "user") != "user":
-        return False
+    """只核对该私聊作用域，不让同 OpenID 的另一机器人阻挡资料补查。"""
     应用 = str(appid or "").strip()
-    会话应用 = str(会话.get("appid") or "").strip()
-    资料应用 = str(((成员资料缓存.get(会话标识) or {}).get(会话标识) or {}).get("appid") or "").strip()
-    当前应用 = 会话应用 or 资料应用
-    return not 当前应用 or 当前应用 == 应用
+    会话 = _读取作用域会话缓存(会话标识, "user", 应用)
+    return not 会话 or (会话.get("chat_type") == "user" and str(会话.get("appid") or "").strip() == 应用)
 
 
-def _私聊昵称读取快照(会话标识: str) -> tuple[str, str]:
-    return (
-        str(_私聊联系人资料(会话标识).get("nickname") or ""),
-        _有效用户昵称((消息缓存.get(会话标识) or {}).get("last_nickname"), 会话标识),
-    )
+def _私聊昵称读取快照(会话标识: str, appid: str = "") -> tuple[str, str]:
+    会话 = _读取作用域会话缓存(会话标识, "user", appid)
+    return (str(_私聊联系人资料(会话标识, 会话).get("nickname") or ""),
+            _有效用户昵称(会话.get("last_nickname"), 会话标识))
 
 
-def _私聊昵称读取期间新名(会话标识: str, 快照: tuple[str, str]) -> str:
+def _私聊昵称读取期间新名(会话标识: str, 快照: tuple[str, str], appid: str = "") -> str:
     """新消息已提供姓名时，迟到的历史回查不得重新覆盖。"""
-    for 原值, 当前值 in zip(快照, _私聊昵称读取快照(会话标识)):
+    for 原值, 当前值 in zip(快照, _私聊昵称读取快照(会话标识, appid)):
         if 当前值 and 当前值 != 原值:
             return 当前值
     return ""
@@ -3646,7 +3691,7 @@ def _回填私聊昵称(
     应用 = str(appid if appid is not None else (消息缓存.get(会话标识) or {}).get("appid") or "").strip()
     if not _私聊昵称作用域匹配(会话标识, 应用):
         return False
-    会话 = 消息缓存.get(会话标识)
+    会话 = _读取作用域会话缓存(会话标识, "user", 应用)
     # 数据库独有的联系人也要保留已查资料；不为昵称补查创建消息会话。
     资料 = 成员资料缓存.setdefault(会话标识, {})
     旧资料 = 资料.get(用户标识) or {}
@@ -3666,7 +3711,7 @@ def _回填私聊昵称(
             continue
         if str(记录.get("user_id") or "").strip() != 用户标识:
             continue
-        if str(记录.get("appid") or "").strip() not in {"", 应用}:
+        if str(记录.get("appid") or "").strip() != 应用:
             continue
         if not _有效用户昵称(记录.get("nickname"), 用户标识):
             记录["nickname"] = 昵称
@@ -3755,10 +3800,10 @@ async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str =
         return
     if _群消息昵称补查失败冷却.get(冷却键, 0.0) > time.monotonic():
         return
-    读取前快照 = _私聊昵称读取快照(会话标识)
+    读取前快照 = _私聊昵称读取快照(会话标识, 应用标识)
     try:
         昵称 = _有效用户昵称(await _从群消息读取昵称(用户标识, 应用标识), 用户标识)
-        if _私聊昵称读取期间新名(会话标识, 读取前快照):
+        if _私聊昵称读取期间新名(会话标识, 读取前快照, 应用标识):
             return
         if not 昵称:
             _群消息昵称补查失败冷却[冷却键] = time.monotonic() + _群消息昵称补查失败冷却秒
@@ -3888,8 +3933,7 @@ def 记录收到消息(
     try:
         会话标识 = ""
         消息ID = _提取消息ID(消息)
-        回显自己 = bool(消息ID) and 消息ID in 自己发送消息ID
-        is_self = bool(is_self) or 回显自己
+        回显自己 = False
         回显记录: dict[str, Any] | None = None
         内容 = _提取消息文本(_读取字段(消息, "content"))
         作者 = _读取字段(消息, "author")
@@ -3906,6 +3950,8 @@ def 记录收到消息(
             成员标识 = _提取成员标识(消息, "group")
         if not 会话标识:
             return None
+        回显自己 = bool(消息ID) and (_会话作用域键(会话标识, 类型, appid), 消息ID) in 自己发送消息ID
+        is_self = bool(is_self) or 回显自己
         群用户标识 = ""
         群成员映射变化 = False
         if 类型 == "group":
@@ -3955,7 +4001,7 @@ def 记录收到消息(
             # 部分发送入口拿不到响应 ID，官方回显仍会再次经过消息事件。
             # 只在短时间窗口内把它并入已记录的机器人消息，避免重复展示。
             回显记录 = _查找机器人回显记录(
-                消息缓存.get(会话标识) or {},
+                _读取作用域会话缓存(会话标识, 类型, appid),
                 消息ID,
                 内容,
                 时间戳,
@@ -3965,7 +4011,7 @@ def 记录收到消息(
                 if 消息ID and not _规范消息ID(回显记录.get("message_id")):
                     回显记录["message_id"] = 消息ID
                 if 消息ID:
-                    自己发送消息ID[消息ID] = time.time()
+                    自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), 消息ID)] = time.time()
         if is_self:
             是机器人 = True
         else:
@@ -3978,7 +4024,7 @@ def 记录收到消息(
         if 类型 == "user" and not is_self and not 是机器人 and not 昵称:
             昵称 = _从已知群缓存读取昵称(
                 成员标识,
-                str(appid or (消息缓存.get(会话标识) or {}).get("appid") or ""),
+                str(appid or (_读取作用域会话缓存(会话标识, 类型, appid)).get("appid") or ""),
                 扫描消息=False,
             )
         _记录成员资料(
@@ -4078,7 +4124,7 @@ def 记录收到消息(
             # 每条首次收到的消息都计入未读数，包括机器人和管理员本人发送的消息；
             # 重复 message_id 会走下方合并分支，不会重复累计。
             会话["unread"] = int(会话.get("unread") or 0) + 1
-            _持久化未读数(会话标识, 会话["unread"])
+            _持久化未读数(_会话作用域键(会话标识, 类型, appid), 会话["unread"])
         else:
             # QQ 官方可能同时投递 at/group 两种回调；同一 message_id 只保留一条。
             合并前签名 = _消息资料签名(已有记录)
@@ -4453,7 +4499,7 @@ def 更新消息媒体归档(
 
 
 def 获取消息媒体归档(
-    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0, *, provider: str = "lanzou",
+    会话标识: str, 消息ID: str, 类型: str = "", 媒体索引: int = 0, *, provider: str = "lanzou", appid: str = "",
 ) -> dict[str, Any] | None:
     会话标识 = str(会话标识 or "").strip()
     消息ID = _规范消息ID(消息ID)
@@ -4464,7 +4510,7 @@ def 获取消息媒体归档(
         or not isinstance(媒体索引, int) or isinstance(媒体索引, bool) or not 0 <= 媒体索引 < 10000
     ):
         return None
-    会话 = 消息缓存.get(会话标识) or {}
+    会话 = _读取作用域会话缓存(会话标识, 类型 or "group", appid)
     for 记录 in reversed(会话.get("messages") or []):
         if not isinstance(记录, dict) or _规范消息ID(记录.get("message_id")) != 消息ID:
             continue
@@ -4483,7 +4529,7 @@ def 获取消息媒体归档(
         读取方法 = getattr(_消息存储, "读取消息媒体归档", None)
         if not callable(读取方法):
             return None
-        归档 = 读取方法(会话标识, 消息ID, 类型, 媒体索引, provider=provider)
+        归档 = 读取方法(会话标识, 消息ID, 类型, 媒体索引, provider=provider, appid=appid)
         return copy.deepcopy(归档) if isinstance(归档, dict) else None
     except Exception as exc:
         logger.debug("消息图片归档读取失败：错误类型=%s", type(exc).__name__)
@@ -4498,7 +4544,7 @@ def 更新消息媒体直链(
     原归档: dict[str, Any],
     直链: str,
     获取时间: float,
-    *, provider: str = "lanzou",
+    *, provider: str = "lanzou", appid: str = "",
 ) -> bool:
     """在线程固定的数据库配置下局部保存直链，不排入整条消息写入队列。"""
     if _消息存储 is None:
@@ -4507,7 +4553,7 @@ def 更新消息媒体直链(
     if not callable(更新方法):
         return False
     try:
-        return bool(更新方法(会话标识, 消息ID, 类型, 媒体索引, 原归档, 直链, 获取时间, provider=provider))
+        return bool(更新方法(会话标识, 消息ID, 类型, 媒体索引, 原归档, 直链, 获取时间, provider=provider, appid=appid))
     except Exception as exc:
         logger.debug("消息媒体直链保存失败：错误类型=%s", type(exc).__name__)
         return False
@@ -4521,7 +4567,7 @@ def 更新缓存消息媒体直链(
     原归档: dict[str, Any],
     直链: str,
     获取时间: float,
-    *, provider: str = "lanzou",
+    *, provider: str = "lanzou", appid: str = "",
 ) -> bool:
     """数据库保存后在事件循环更新现有热点副本，不新增消息或网页事件。"""
     会话标识 = str(会话标识 or "").strip()
@@ -4544,7 +4590,7 @@ def 更新缓存消息媒体直链(
     匹配方法 = getattr(_消息存储, "_媒体归档直链匹配", None)
     if not callable(匹配方法):
         return False
-    会话 = 消息缓存.get(会话标识) or {}
+    会话 = _读取作用域会话缓存(会话标识, 类型, appid)
     for 记录 in reversed(会话.get("messages") or []):
         if (
             not isinstance(记录, dict)
@@ -4608,7 +4654,7 @@ async def _消息接收工作() -> None:
                 记录 = 记录收到消息(消息, 类型, appid)
                 if 类型 == "group" and 记录:
                     会话标识 = str(记录.get("_session") or "").strip()
-                    if 会话标识 and 获取群机器人状态(会话标识) != "active":
+                    if 会话标识 and 获取群机器人状态(会话标识, appid) != "active":
                         _设置群机器人状态(会话标识, "active", appid, 持久化=True)
                 if 类型 == "user" and 记录:
                     用户标识 = str(记录.get("user_id") or "").strip()
@@ -4773,7 +4819,7 @@ def _裁剪总缓存() -> None:
         return
     if 需要重新统计:
         _消息缓存总数检查时间 = 当前时间
-        总数 = sum(len(会话.get("messages", [])) for 会话 in 消息缓存.values())
+        总数 = sum(len(会话.get("messages", [])) for _, 会话 in _遍历作用域会话缓存())
         _消息缓存总数缓存 = 总数
     else:
         # 追加和单会话裁剪都会维护计数；超限时直接使用增量值，
@@ -4783,7 +4829,7 @@ def _裁剪总缓存() -> None:
         return
     try:
         会话列表 = sorted(
-            消息缓存.values(),
+            [会话 for _, 会话 in _遍历作用域会话缓存()],
             key=lambda s: (s.get("last_ts") or 0, s.get("appid") or ""),
         )
         目标会话数 = max(1, len(会话列表))
@@ -4886,7 +4932,7 @@ def 记录发送消息(
             _更新会话摘要(会话, 重复发送记录)
             _推送消息事件(重复发送记录, 会话)
             if 消息ID:
-                自己发送消息ID[消息ID] = time.time()
+                自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), 消息ID)] = time.time()
             try:
                 from 功能文件.管理功能.网盘功能 import 夸克媒体归档
                 夸克媒体归档.安排归档消息图片(当前插件配置, 重复发送记录)
@@ -4921,7 +4967,7 @@ def 记录发送消息(
                 )
                 _更新会话摘要(会话, 已有记录)
                 _推送消息事件(已有记录, 会话)
-                自己发送消息ID[str(消息ID)] = time.time()
+                自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), str(消息ID))] = time.time()
                 try:
                     from 功能文件.管理功能.网盘功能 import 夸克媒体归档
                     夸克媒体归档.安排归档消息图片(当前插件配置, 已有记录)
@@ -4958,7 +5004,7 @@ def 记录发送消息(
         )
         # 网页/机器人主动发送同样是一条新消息，保持未读红点按消息数累计。
         会话["unread"] = int(会话.get("unread") or 0) + 1
-        _持久化未读数(会话标识, 会话["unread"])
+        _持久化未读数(_会话作用域键(会话标识, 类型, appid), 会话["unread"])
         if 来源.startswith("bot_"):
             logger.debug(
                 "消息记录已捕获机器人发送：会话类型=%s，来源=%s，消息ID=%s，文本长度=%d",
@@ -4968,7 +5014,7 @@ def 记录发送消息(
                 len(str(内容 or "")),
             )
         if 消息ID:
-            自己发送消息ID[str(消息ID)] = time.time()
+            自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), str(消息ID))] = time.time()
             try:
                 if len(自己发送消息ID) > 500:
                     for 键 in [k for k, v in 自己发送消息ID.items() if time.time() - v > 300]:
@@ -5003,14 +5049,13 @@ def 记录发送消息(
         return None
 
 
-def 设置会话已读(会话标识: str) -> bool:
-    """打开会话时清零未读数（内存与 MySQL 同步清）。"""
+def 设置会话已读(会话标识: str, 类型: str = "group", appid: str = "") -> bool:
     try:
         会话标识 = str(会话标识 or "").strip()
-        会话 = 消息缓存.get(会话标识)
+        会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         if 会话:
             会话["unread"] = 0
-        _持久化未读数(会话标识, 0)
+        _持久化未读数(_会话作用域键(会话标识, 类型, appid), 0)
         return True
     except Exception:
         return False
@@ -5198,6 +5243,23 @@ def 获取QQ官方平台(上下文: Any = None, appid: str = "") -> Any | None:
     return None if 目标AppID else 首个官方平台
 
 
+def _获取消息操作平台(appid: str = "") -> tuple[Any, str]:
+    """写操作只使用明确机器人；缺少 AppID 时仅兼容唯一官方实例。"""
+    appid = str(appid or "").strip()
+    if appid:
+        平台 = 获取QQ官方平台(appid=appid)
+    else:
+        平台列表 = [项 for 项 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(项)]
+        平台 = 平台列表[0] if len(平台列表) == 1 else None
+        appid = _平台实例appid(平台) if 平台 is not None else ""
+    if 平台 is None or not appid:
+        return None, ""
+    通道 = 获取HTTP通道(平台)
+    if 通道 is None or str(_读取字段(_读取字段(通道[1], "_token"), "app_id") or "").strip() != appid:
+        return None, ""
+    return 平台, appid
+
+
 def 获取HTTP通道(平台实例: Any = None) -> tuple[Any, Any] | None:
     """返回指定实例的 (bot_api, http)，解析失败不借用其他机器人。"""
     if 平台实例 is None:
@@ -5304,10 +5366,10 @@ def 获取最近消息ID(平台实例: Any, 会话标识: str) -> str:
     return str(缓存.get(会话标识) or "").strip()
 
 
-def 获取本地最近消息ID(会话标识: str) -> str:
+def 获取本地最近消息ID(会话标识: str, 类型: str = "group", appid: str = "") -> str:
     """从进程内消息缓存找最近一条收到的消息 ID 作为被动发送 msg_id 兜底。"""
     try:
-        会话 = 消息缓存.get(会话标识) or {}
+        会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         消息列表 = 会话.get("messages") or []
         for 记录 in reversed(消息列表):
             if bool(记录.get("is_self")):
@@ -5320,10 +5382,10 @@ def 获取本地最近消息ID(会话标识: str) -> str:
     return ""
 
 
-def 获取本地最近消息时效(会话标识: str) -> float:
+def 获取本地最近消息时效(会话标识: str, 类型: str = "group", appid: str = "") -> float:
     """返回最近一条收到的消息的时间戳（秒），无消息时返回 0。"""
     try:
-        会话 = 消息缓存.get(会话标识) or {}
+        会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         消息列表 = 会话.get("messages") or []
         for 记录 in reversed(消息列表):
             if bool(记录.get("is_self")):
@@ -5349,21 +5411,36 @@ def 获取会话场景(平台实例: Any, 会话标识: str) -> str:
 # 群信息与备注
 # ---------------------------------------------------------------------------
 
-def 获取群备注(会话标识: str) -> str:
+def _读取会话元数据项(表: dict[str, Any], 会话标识: str, 类型: str, appid: str) -> Any:
+    键 = _会话作用域键(会话标识, 类型, appid)
+    if 键 in 表:
+        return 表[键]
+    if _旧会话元数据可复用(会话标识, 类型, appid):
+        return 表.get(会话标识)
+    return None
+
+
+def 获取群备注(会话标识: str, appid: str = "") -> str:
     数据 = _读取本地缓存文件()
-    return str((数据.get("remarks") or {}).get(会话标识, {}).get("remark") or "")
+    项 = _读取会话元数据项(数据.get("remarks") or {}, 会话标识, "group", appid) or {}
+    return str(项.get("remark") or "")
 
 
-def 获取群QQ号(会话标识: str) -> str:
+def 获取群QQ号(会话标识: str, appid: str = "") -> str:
     数据 = _读取本地缓存文件()
-    return str((数据.get("remarks") or {}).get(会话标识, {}).get("group_qq") or "")
+    项 = _读取会话元数据项(数据.get("remarks") or {}, 会话标识, "group", appid) or {}
+    return str(项.get("group_qq") or "")
 
 
-def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> bool:
+def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "", appid: str = "") -> bool:
+    会话标识, appid = str(会话标识 or "").strip(), str(appid or "").strip()
+    if not 会话标识:
+        return False
+    键 = _会话作用域键(会话标识, "group", appid)
     with _元数据写入锁:
         数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
         备注表 = 数据.setdefault("remarks", {})
-        现有 = 备注表.setdefault(会话标识, {})
+        现有 = dict(_读取会话元数据项(备注表, 会话标识, "group", appid) or {})
         if 备注:
             现有["remark"] = 备注
         else:
@@ -5372,38 +5449,41 @@ def 保存群备注(会话标识: str, 备注: str = "", 群QQ: str = "") -> boo
             现有["group_qq"] = 群QQ
         elif 群QQ == "":
             现有.pop("group_qq", None)
-        备注表[会话标识] = 现有
+        备注表[键] = 现有
+        if _旧会话元数据可复用(会话标识, "group", appid):
+            备注表.pop(会话标识, None)
         return _持久化元数据字段("remarks", 备注表, 数据)
 
 
-def 删除群备注(会话标识: str) -> bool:
+def 删除群备注(会话标识: str, appid: str = "") -> bool:
     """删除某个会话的全部备注与群号信息。"""
     with _元数据写入锁:
         数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
         备注表 = 数据.get("remarks") or {}
-        if 会话标识 in 备注表:
-            del 备注表[会话标识]
+        键 = _会话作用域键(会话标识, "group", appid)
+        有变更 = 键 in 备注表
+        备注表.pop(键, None)
+        if _旧会话元数据可复用(会话标识, "group", appid):
+            有变更 = 有变更 or 会话标识 in 备注表
+            备注表.pop(会话标识, None)
+        if 有变更:
             return _持久化元数据字段("remarks", 备注表, 数据)
         return True
 
 
-def 设置会话置顶(会话标识: str, 置顶: bool) -> bool:
-    """置顶或取消置顶会话，置顶顺序持久化到元数据存储。"""
+def 设置会话置顶(会话标识: str, 置顶: bool, 类型: str = "group", appid: str = "") -> bool:
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return False
+    键 = _会话作用域键(会话标识, 类型, appid)
     with _元数据写入锁:
-        # 置顶操作强制读取数据库最新列表，避免网页多开或并发操作使用旧缓存。
         数据 = copy.deepcopy(_读取本地缓存文件(强制刷新=True))
-        置顶列表 = [str(x) for x in (数据.get("pinned") or []) if str(x or "").strip()]
-        已置顶 = 会话标识 in 置顶列表
-        if 置顶 and not 已置顶:
-            置顶列表.insert(0, 会话标识)
-            return _持久化元数据字段("pinned", 置顶列表, 数据)
-        if not 置顶 and 已置顶:
-            置顶列表 = [x for x in 置顶列表 if x != 会话标识]
-            return _持久化元数据字段("pinned", 置顶列表, 数据)
-        return True
+        置顶列表 = [str(项) for 项 in (数据.get("pinned") or []) if str(项 or "").strip()]
+        if 置顶 and 键 not in 置顶列表:
+            置顶列表.insert(0, 键)
+        elif not 置顶:
+            置顶列表 = [项 for 项 in 置顶列表 if 项 != 键 and not (项 == 会话标识 and _旧会话元数据可复用(会话标识, 类型, appid))]
+        return _持久化元数据字段("pinned", 置顶列表, 数据)
 
 
 _本地缓存内存: dict[str, Any] | None = globals().get("_本地缓存内存")
@@ -5456,10 +5536,55 @@ def _持久化元数据字段(字段名: str, 值: Any, 当前数据: dict[str, 
     return True
 
 
-def 标记群信息待刷新(会话标识: str) -> None:
+def 标记群信息待刷新(会话标识: str, appid: str = "") -> None:
     会话标识 = str(会话标识 or "").strip()
     if 会话标识:
-        群信息待刷新.add(会话标识)
+        appid = _获取群信息appid(会话标识, appid)
+        if appid:
+            群信息待刷新.add((appid, 会话标识))
+
+
+def _群作用域缓存键(会话标识: str, appid: str) -> str:
+    return json.dumps([str(appid or "").strip(), str(会话标识 or "").strip()], separators=(",", ":"))
+
+
+def _读取群作用域信息(会话标识: str, appid: str = "") -> dict[str, Any]:
+    """仅复用当前机器人明确归属的资料，旧群号缓存不跨 AppID 借用。"""
+    会话标识 = str(会话标识 or "").strip()
+    appid = str(appid or "").strip() or _获取群信息appid(会话标识)
+    if not appid:
+        return {}
+    for 信息 in (
+        群信息作用域缓存.get(_群作用域缓存键(会话标识, appid)),
+        群信息缓存.get(会话标识),
+    ):
+        if isinstance(信息, dict) and str(信息.get("appid") or "").strip() == appid:
+            return dict(信息)
+    return {}
+
+
+def _写入群作用域信息(会话标识: str, 信息: dict[str, Any], appid: str = "") -> None:
+    会话标识 = str(会话标识 or "").strip()
+    appid = str(appid or 信息.get("appid") or "").strip()
+    if not 会话标识 or not appid:
+        return
+    信息 = {**信息, "group_openid": 会话标识, "appid": appid}
+    群信息作用域缓存[_群作用域缓存键(会话标识, appid)] = 信息
+    旧信息 = 群信息缓存.get(会话标识)
+    if not isinstance(旧信息, dict) or str(旧信息.get("appid") or "").strip() == appid:
+        群信息缓存[会话标识] = dict(信息)
+
+
+def _遍历群作用域信息() -> list[tuple[str, dict[str, Any]]]:
+    已有: dict[tuple[str, str], dict[str, Any]] = {}
+    for 信息 in (*群信息缓存.values(), *群信息作用域缓存.values()):
+        if not isinstance(信息, dict):
+            continue
+        群号 = str(信息.get("group_openid") or "").strip()
+        appid = str(信息.get("appid") or "").strip()
+        if 群号 and appid:
+            已有[(appid, 群号)] = 信息
+    return [(群号, dict(信息)) for (_, 群号), 信息 in 已有.items()]
 
 
 def _解析群机器人状态值(值: Any) -> dict[str, Any]:
@@ -5490,6 +5615,7 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
     elif not isinstance(允许主动消息, bool):
         允许主动消息 = None
     return {
+        "group_openid": str(原始.get("group_openid") or "").strip(),
         "status": 状态,
         "checked_at": max(0, 检查时间),
         "appid": str(原始.get("appid") or "").strip(),
@@ -5499,21 +5625,15 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
     }
 
 
-def _读取群机器人状态(会话标识: str) -> dict[str, Any]:
+def _读取群机器人状态(会话标识: str, appid: str = "") -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
-    if not 会话标识:
-        return {
-            "status": "unknown",
-            "checked_at": 0,
-            "appid": "",
-            "member_role": "",
-            "allow_proactive_msg": None,
-            "recv_msg_setting": "",
-        }
-    状态 = 群机器人状态缓存.get(会话标识)
-    if isinstance(状态, dict):
-        return _解析群机器人状态值(状态)
-    信息 = 群信息缓存.get(会话标识) or {}
+    appid = str(appid or "").strip() or _获取群信息appid(会话标识)
+    if not 会话标识 or not appid:
+        return _解析群机器人状态值({})
+    for 状态 in (群机器人状态缓存.get(_群作用域缓存键(会话标识, appid)), 群机器人状态缓存.get(会话标识)):
+        if isinstance(状态, dict) and str(状态.get("appid") or "").strip() == appid:
+            return _解析群机器人状态值(状态)
+    信息 = _读取群作用域信息(会话标识, appid)
     if 信息.get("membership_status"):
         return _解析群机器人状态值(
             {
@@ -5525,22 +5645,15 @@ def _读取群机器人状态(会话标识: str) -> dict[str, Any]:
                 "recv_msg_setting": 信息.get("recv_msg_setting") or "",
             }
         )
-    return {
-        "status": "unknown",
-        "checked_at": 0,
-        "appid": "",
-        "member_role": "",
-        "allow_proactive_msg": None,
-        "recv_msg_setting": "",
-    }
+    return _解析群机器人状态值({"appid": appid, "group_openid": 会话标识})
 
 
-def 获取群机器人状态(会话标识: str) -> str:
-    return str(_读取群机器人状态(会话标识).get("status") or "unknown")
+def 获取群机器人状态(会话标识: str, appid: str = "") -> str:
+    return str(_读取群机器人状态(会话标识, appid).get("status") or "unknown")
 
 
-def 群机器人是否在群(会话标识: str) -> bool:
-    return 获取群机器人状态(会话标识) != "removed"
+def 群机器人是否在群(会话标识: str, appid: str = "") -> bool:
+    return 获取群机器人状态(会话标识, appid) != "removed"
 
 
 def _设置群机器人状态(
@@ -5554,37 +5667,35 @@ def _设置群机器人状态(
     持久化: bool = True,
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
-    if not 会话标识:
-        return {
-            "status": "unknown",
-            "checked_at": 0,
-            "appid": "",
-            "member_role": "",
-            "allow_proactive_msg": None,
-            "recv_msg_setting": "",
-        }
+    appid = str(appid or "").strip() or _获取群信息appid(会话标识)
+    if not 会话标识 or not appid:
+        return _解析群机器人状态值({})
     状态 = str(状态 or "unknown").strip().lower()
     if 状态 not in {"active", "removed", "unknown"}:
         状态 = "unknown"
-    旧状态 = str((群机器人状态缓存.get(会话标识) or {}).get("status") or "unknown")
+    缓存键 = _群作用域缓存键(会话标识, appid)
+    原记录 = _读取群机器人状态(会话标识, appid)
+    旧状态 = str(原记录.get("status") or "unknown")
     记录 = {
+        "group_openid": 会话标识,
         "status": 状态,
         "checked_at": int(time.time()),
-        "appid": str(appid or "").strip(),
+        "appid": appid,
         "member_role": str(成员角色 or "").strip().lower(),
         "allow_proactive_msg": (
             允许主动消息
             if isinstance(允许主动消息, bool)
-            else (群机器人状态缓存.get(会话标识) or {}).get("allow_proactive_msg")
+            else 原记录.get("allow_proactive_msg")
         ),
         "recv_msg_setting": str(
             接收消息设置
-            or (群机器人状态缓存.get(会话标识) or {}).get("recv_msg_setting")
+            or 原记录.get("recv_msg_setting")
             or ""
         ).strip().lower(),
     }
-    群机器人状态缓存[会话标识] = 记录
-    信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
+    群机器人状态缓存[缓存键] = 记录
+    群机器人状态代次[缓存键] = 群机器人状态代次.get(缓存键, 0) + 1
+    信息 = _读取群作用域信息(会话标识, appid) or {"group_openid": 会话标识, "appid": appid}
     信息["membership_status"] = 状态
     信息["membership_checked_at"] = 记录["checked_at"]
     if 记录["appid"]:
@@ -5599,8 +5710,9 @@ def _设置群机器人状态(
         信息["is_admin"] = True
     elif 状态 == "removed":
         信息["is_admin"] = False
+    _写入群作用域信息(会话标识, 信息, appid)
     if 状态 != 旧状态:
-        _推送群状态事件(会话标识, 状态)
+        _推送群状态事件(会话标识, 状态, appid)
     if 持久化 and _消息数据库已配置():
         try:
             from 功能文件.管理功能.基础功能 import 运行状态数据库
@@ -5610,7 +5722,7 @@ def _设置群机器人状态(
                 运行状态数据库.写入运行状态值,
                 当前插件配置,
                 群机器人状态命名空间,
-                会话标识,
+                缓存键,
                 值,
             )
         except Exception as 异常:
@@ -5628,10 +5740,10 @@ def 标记群机器人已加入(会话标识: str, appid: str = "") -> dict[str,
     return _设置群机器人状态(会话标识, "active", appid, 持久化=True)
 
 
-def _群机器人状态需检查(会话标识: str, 强制: bool = False) -> bool:
+def _群机器人状态需检查(会话标识: str, 强制: bool = False, appid: str = "") -> bool:
     if 强制:
         return True
-    记录 = _读取群机器人状态(会话标识)
+    记录 = _读取群机器人状态(会话标识, appid)
     if 记录["status"] == "unknown":
         return True
     if 记录["status"] == "active" and not 记录.get("member_role"):
@@ -5761,14 +5873,15 @@ def _构造已移除群摘要(
 ) -> dict[str, Any]:
     """保留原群会话信息，只把机器人成员状态更新为已移除。"""
     会话标识 = str(会话标识 or "").strip()
-    摘要 = dict(已有 or {})
+    appid = str(appid or "").strip() or _获取群信息appid(会话标识)
+    摘要 = dict(已有 or {}) if str((已有 or {}).get("appid") or "").strip() == appid else _读取群作用域信息(会话标识, appid)
     摘要.setdefault("group_openid", 会话标识)
     摘要["membership_status"] = "removed"
     摘要["membership_checked_at"] = int(time.time())
     if str(appid or "").strip():
         摘要.setdefault("appid", str(appid).strip())
     摘要["is_admin"] = False
-    群信息缓存[会话标识] = 摘要
+    _写入群作用域信息(会话标识, 摘要, appid)
     return 摘要
 
 
@@ -5776,10 +5889,12 @@ async def _查询群机器人状态(
     会话标识: str, appid: str = "", 强制: bool = False
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
-    现有 = _读取群机器人状态(会话标识)
-    if not 会话标识 or not _群机器人状态需检查(会话标识, 强制):
-        return 现有
     appid = _获取群信息appid(会话标识, appid)
+    现有 = _读取群机器人状态(会话标识, appid)
+    缓存键 = _群作用域缓存键(会话标识, appid)
+    请求代次 = 群机器人状态代次.get(缓存键, 0)
+    if not 会话标识 or not appid or not _群机器人状态需检查(会话标识, 强制, appid):
+        return 现有
     try:
         from botpy.http import Route
 
@@ -5791,6 +5906,9 @@ async def _查询群机器人状态(
                 group_openid=会话标识,
             )
         )
+        最新状态 = _读取群机器人状态(会话标识, appid)
+        if 群机器人状态代次.get(缓存键, 0) != 请求代次:
+            return 最新状态
         if not isinstance(响应, dict):
             raise RuntimeError("群机器人状态响应无效")
         if _响应表示群机器人已移除(响应):
@@ -5826,6 +5944,9 @@ async def _查询群机器人状态(
         )
         return 记录
     except Exception as 异常:
+        最新状态 = _读取群机器人状态(会话标识, appid)
+        if 群机器人状态代次.get(缓存键, 0) != 请求代次:
+            return 最新状态
         if _异常表示群机器人已移除(异常):
             详情 = _群信息异常摘要(异常)
             logger.info(
@@ -5867,7 +5988,7 @@ async def 查询群主动消息权限(会话标识: str, appid: str = "") -> boo
     if not 会话标识:
         return None
     if not str(appid or "").strip():
-        appid = str((_读取群机器人状态(会话标识) or {}).get("appid") or "").strip()
+        appid = _获取群信息appid(会话标识)
     状态 = await _查询群机器人状态(会话标识, appid)
     if str(状态.get("status") or "").strip().lower() == "removed":
         记录主动消息权限(会话标识, "group", False)
@@ -5885,14 +6006,20 @@ def _获取群信息appid(会话标识: str, appid: str = "") -> str:
     if appid:
         return appid
     会话标识 = str(会话标识 or "").strip()
-    for 资料 in (
+    已知AppID = {
+        str(资料.get("appid") or "").strip()
+        for 资料 in (
         消息缓存.get(会话标识) or {},
         群信息缓存.get(会话标识) or {},
-        _读取群机器人状态(会话标识),
-    ):
-        appid = str(资料.get("appid") or "").strip()
-        if appid:
-            return appid
+        群机器人状态缓存.get(会话标识) or {},
+        *[资料 for 资料 in 群机器人状态缓存.values() if isinstance(资料, dict) and str(资料.get("group_openid") or "").strip() == 会话标识],
+        *[资料 for 资料 in 群信息作用域缓存.values() if isinstance(资料, dict) and str(资料.get("group_openid") or "").strip() == 会话标识],
+        ) if str(资料.get("appid") or "").strip()
+    }
+    if len(已知AppID) == 1:
+        return next(iter(已知AppID))
+    if 已知AppID:
+        return ""
     平台列表 = [平台 for 平台 in _读取平台实例列表(当前插件上下文) if _是QQ官方平台(平台)]
     if len(平台列表) == 1:
         通道 = 获取HTTP通道(平台列表[0])
@@ -5904,11 +6031,7 @@ def _获取群信息appid(会话标识: str, appid: str = "") -> str:
 def _获取群资料通道(会话标识: str, appid: str = "") -> tuple[str, Any]:
     """按真实 SDK Token 选择实例，禁止兼容入口再次回退首个机器人。"""
     appid = _获取群信息appid(会话标识, appid)
-    已知AppID = next((str(资料.get("appid") or "").strip() for 资料 in (
-        消息缓存.get(会话标识) or {}, 群信息缓存.get(会话标识) or {},
-        _读取群机器人状态(会话标识),
-    ) if str(资料.get("appid") or "").strip()), "")
-    if appid and (not 已知AppID or 已知AppID == appid):
+    if re.fullmatch(r"[0-9]{4,32}", appid):
         for 平台 in _读取平台实例列表(当前插件上下文):
             if not _是QQ官方平台(平台):
                 continue
@@ -5978,16 +6101,7 @@ async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None
 def _网页群状态作用域(会话标识: str, appid: str = "") -> tuple[str, str]:
     会话标识 = str(会话标识 or "").strip()
     appid = _获取群信息appid(会话标识, appid)
-    已知AppID = {
-        str(资料.get("appid") or "").strip()
-        for 资料 in (
-            消息缓存.get(会话标识) or {},
-            群信息缓存.get(会话标识) or {},
-            _读取群机器人状态(会话标识),
-        )
-        if str(资料.get("appid") or "").strip()
-    }
-    if not 会话标识 or not appid or any(值 != appid for 值 in 已知AppID):
+    if not 会话标识 or not re.fullmatch(r"[0-9]{4,32}", appid):
         raise ValueError("群资料认证 AppID 缺失或不匹配")
     return 会话标识, appid
 
@@ -6332,9 +6446,13 @@ async def 刷新待处理群信息() -> int:
         批次 = list(群信息待刷新)[:10]
         群信息待刷新.clear()
         成功数 = 0
-        for 会话标识 in 批次:
+        for 项目 in 批次:
+            if isinstance(项目, tuple) and len(项目) == 2:
+                appid, 会话标识 = 项目
+            else:
+                会话标识, appid = str(项目 or "").strip(), ""
             try:
-                结果 = await 刷新群信息(会话标识)
+                结果 = await 刷新群信息(会话标识, appid)
                 if 结果:
                     成功数 += 1
             except Exception as exc:
@@ -6362,27 +6480,28 @@ def 安排待处理群信息刷新() -> None:
     _群信息刷新任务 = 循环.create_task(刷新待处理群信息())
 
 
-def _获取群信息轮询候选() -> list[str]:
+def _获取群信息轮询候选() -> list[tuple[str, str]]:
     """收集已知官方群，跳过已确认退出的群，保持轮询只覆盖已有会话。"""
-    候选: set[str] = set()
-    for 会话标识, 信息 in 群信息缓存.items():
+    候选: set[tuple[str, str]] = set()
+    for 会话标识, 信息 in _遍历群作用域信息():
         会话标识 = str(会话标识 or "").strip()
         if not isinstance(信息, dict):
             continue
         信息字典 = 信息
         if not 会话标识 or str(信息字典.get("membership_status") or "").lower() == "removed":
             continue
-        候选.add(会话标识)
-    for 会话标识, 会话 in 消息缓存.items():
+        候选.add((str(信息.get("appid") or "").strip(), 会话标识))
+    for 会话标识, 会话 in _遍历作用域会话缓存():
         会话标识 = str(会话标识 or "").strip()
         if not isinstance(会话, dict):
             continue
         会话字典 = 会话
         if not 会话标识 or str(会话字典.get("chat_type") or "group") != "group":
             continue
-        if 获取群机器人状态(会话标识) == "removed":
+        appid = str(会话.get("appid") or "").strip()
+        if not appid or 获取群机器人状态(会话标识, appid) == "removed":
             continue
-        候选.add(会话标识)
+        候选.add((appid, 会话标识))
     return list(候选)
 
 
@@ -6393,9 +6512,9 @@ async def _群信息轮询工作() -> None:
         while True:
             await asyncio.sleep(群信息轮询检查间隔秒)
             try:
-                for 会话标识 in _获取群信息轮询候选():
-                    if _群信息需要刷新(群信息缓存.get(会话标识)):
-                        标记群信息待刷新(会话标识)
+                for appid, 会话标识 in _获取群信息轮询候选():
+                    if _群信息需要刷新(_读取群作用域信息(会话标识, appid)):
+                        标记群信息待刷新(会话标识, appid)
                 安排待处理群信息刷新()
             except Exception as 异常:
                 logger.debug("消息记录群信息轮询检查失败：错误类型=%s", type(异常).__name__)
@@ -6451,7 +6570,9 @@ async def 刷新群信息(
     # 资料补全，不以平台名称选认证实例，也不把隔离会话猜成真实群号。
     if appid and not re.fullmatch(r"[0-9]{4,32}", appid):
         return None
-    已有 = 群信息缓存.get(会话标识) or {}
+    if not appid:
+        return None
+    已有 = _读取群作用域信息(会话标识, appid)
     if not 强制 and not _群信息需要刷新(已有):
         return None
     if 强制:
@@ -6469,12 +6590,17 @@ async def 刷新群信息(
             return None
         已有 = dict(已有)
         已有["last_request_at"] = 现在
-        群信息缓存[会话标识] = 已有
+        _写入群作用域信息(会话标识, 已有, appid)
+    缓存键 = _群作用域缓存键(会话标识, appid)
+    群信息查询代次[缓存键] = 群信息查询代次.get(缓存键, 0) + 1
+    请求代次 = 群信息查询代次[缓存键]
+    状态代次 = 群机器人状态代次.get(缓存键, 0)
     try:
         from botpy.http import Route
 
         appid, _http = _获取群资料通道(会话标识, appid)
         成员状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
+        状态代次 = 群机器人状态代次.get(缓存键, 0)
         if 成员状态.get("status") == "removed":
             return _构造已移除群摘要(会话标识, 已有, appid)
         route = Route(
@@ -6483,6 +6609,8 @@ async def 刷新群信息(
             group_openid=会话标识,
         )
         结果 = await _请求群资料GET(_http, route)
+        if 群信息查询代次.get(缓存键) != 请求代次 or 群机器人状态代次.get(缓存键, 0) != 状态代次:
+            return _读取群作用域信息(会话标识, appid) or None
         错误码 = 结果.get("code") if isinstance(结果, dict) else None
         有群资料字段 = isinstance(结果, dict) and any(
             字段 in 结果
@@ -6507,7 +6635,7 @@ async def 刷新群信息(
             失败缓存.setdefault("group_openid", 会话标识)
             # 非成功业务响应也进入长冷却，防止权限/接口异常时每次打开会话都重试。
             失败缓存["next_refresh_at"] = int(time.time()) + 群信息默认失败冷却秒
-            群信息缓存[会话标识] = 失败缓存
+            _写入群作用域信息(会话标识, 失败缓存, appid)
             返回字段 = (
                 ",".join(sorted(str(字段) for 字段 in 结果.keys()))
                 if isinstance(结果, dict)
@@ -6566,8 +6694,8 @@ async def 刷新群信息(
             "updated_at": int(time.time()),
             "last_request_at": int(已有.get("last_request_at") or 0),
         }
-        群信息缓存[会话标识] = 摘要
-        _推送群人数事件(会话标识, 成员数)
+        _写入群作用域信息(会话标识, 摘要, appid)
+        _推送群人数事件(会话标识, 成员数, appid)
         if _消息存储 is not None:
             try:
                 写入群信息 = getattr(_消息存储, "写入群信息", None)
@@ -6581,6 +6709,8 @@ async def 刷新群信息(
                 )
         return 摘要
     except Exception as exc:
+        if 群信息查询代次.get(缓存键) != 请求代次 or 群机器人状态代次.get(缓存键, 0) != 状态代次:
+            return _读取群作用域信息(会话标识, appid) or None
         if _异常表示群机器人已移除(exc):
             详情 = _群信息异常摘要(exc)
             logger.info(
@@ -6600,7 +6730,7 @@ async def 刷新群信息(
         失败缓存 = dict(已有)
         失败缓存.setdefault("group_openid", 会话标识)
         失败缓存["next_refresh_at"] = int(time.time()) + 冷却秒数
-        群信息缓存[会话标识] = 失败缓存
+        _写入群作用域信息(会话标识, 失败缓存, appid)
         详情 = _群信息异常摘要(exc)
         logger.warning(
             "消息记录群信息刷新失败：stage=group_info, group_id=%s, appid=%s, "
@@ -6618,38 +6748,43 @@ async def 刷新群信息(
         return None
 
 
-def 群机器人是否管理员(会话标识: str) -> bool:
+def 群机器人是否管理员(会话标识: str, appid: str = "") -> bool:
     """检查机器人在该群是否具备管理员权限。"""
     会话标识 = str(会话标识 or "").strip()
     if not 会话标识:
         return False
-    群信息 = 群信息缓存.get(会话标识) or {}
+    appid = _获取群信息appid(会话标识, appid)
+    群信息 = _读取群作用域信息(会话标识, appid)
     if "is_admin" in 群信息:
         return bool(群信息.get("is_admin"))
     try:
         from 功能文件.管理功能.群聊功能 import 群管功能
-        for (_, gid), (_, 允许) in getattr(群管功能, "QQ官方机器人权限缓存", {}).items():
-            if str(gid).strip() == 会话标识:
-                return bool(允许)
+        平台 = 获取QQ官方平台(appid=appid) if appid else None
+        bot = _读取字段(平台, "client")
+        if bot is not None and _平台实例appid(bot) == appid:
+            缓存 = getattr(群管功能, "QQ官方机器人权限缓存", {}).get((id(bot), 会话标识))
+            if 缓存 and time.monotonic() - 缓存[0] < 群管功能.QQ官方机器人权限缓存秒数:
+                return bool(缓存[1])
     except Exception:
         pass
     return False
 
 
-def 获取缓存的群信息(会话标识: str) -> dict[str, Any]:
-    信息 = 群信息缓存.get(会话标识) or {}
-    会话 = 消息缓存.get(会话标识) or {}
+def 获取缓存的群信息(会话标识: str, appid: str = "") -> dict[str, Any]:
+    appid = _获取群信息appid(会话标识, appid)
+    信息 = _读取群作用域信息(会话标识, appid)
     返回 = dict(信息)
     返回.pop("next_refresh_at", None)
     返回.setdefault("group_openid", 会话标识)
-    返回.setdefault("group_name", 获取群备注(会话标识) or "")
+    返回.setdefault("appid", appid)
+    返回.setdefault("group_name", 获取群备注(会话标识, appid) or "")
     返回.setdefault("group_finger_memo", "")
     返回.setdefault("group_class_text", "")
     返回.setdefault("group_tags", [])
     返回.setdefault("member_num", 0)
-    成员状态 = _读取群机器人状态(会话标识)
-    返回.setdefault("membership_status", str(成员状态.get("status") or "unknown"))
-    返回.setdefault("membership_checked_at", int(成员状态.get("checked_at") or 0))
+    成员状态 = _读取群机器人状态(会话标识, appid)
+    返回["membership_status"] = str(成员状态.get("status") or "unknown")
+    返回["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
     if isinstance(成员状态.get("allow_proactive_msg"), bool):
         返回.setdefault("allow_proactive_msg", 成员状态["allow_proactive_msg"])
     else:
@@ -6698,7 +6833,8 @@ def 调整群成员人数(
         while len(群成员人数事件缓存) > 群成员人数事件缓存上限:
             群成员人数事件缓存.pop(next(iter(群成员人数事件缓存)))
 
-    信息 = 群信息缓存.get(群标识)
+    appid = _获取群信息appid(群标识, appid)
+    信息 = _读取群作用域信息(群标识, appid)
     try:
         当前成员数 = int(信息.get("member_num")) if isinstance(信息, dict) else 0
         资料更新时间 = int(信息.get("updated_at") or 0) if isinstance(信息, dict) else 0
@@ -6706,7 +6842,7 @@ def 调整群成员人数(
         当前成员数 = 0
         资料更新时间 = 0
     if not isinstance(信息, dict) or 当前成员数 <= 0 or 资料更新时间 <= 0:
-        标记群信息待刷新(群标识)
+        标记群信息待刷新(群标识, appid)
         安排待处理群信息刷新()
         logger.info(
             "QQ官方群人数基线缺失，安排官方资料刷新：event=%s, group_id=%s",
@@ -6717,7 +6853,8 @@ def 调整群成员人数(
 
     新成员数 = max(0, 当前成员数 + 变化量)
     信息["member_num"] = 新成员数
-    _推送群人数事件(群标识, 新成员数)
+    _写入群作用域信息(群标识, 信息, appid)
+    _推送群人数事件(群标识, 新成员数, appid)
     if _消息存储 is not None and _消息数据库已配置():
         _后台执行同步(
             _消息存储.写入群信息,
@@ -6757,17 +6894,17 @@ def _私聊联系人资料(
         return {"nickname": "", "avatar": "", "nickname_blank": False}
     资料表 = 成员资料缓存.get(标识) or {}
     候选: list[dict[str, Any]] = []
-    当前会话 = 消息缓存.get(标识) or (会话 if isinstance(会话, dict) else {})
+    当前会话 = 会话 if isinstance(会话, dict) else (消息缓存.get(标识) or {})
     应用 = str(当前会话.get("appid") or "").strip()
     精确资料 = 资料表.get(标识)
-    if isinstance(精确资料, dict) and (not 应用 or str(精确资料.get("appid") or "").strip() in {"", 应用}):
+    if isinstance(精确资料, dict) and str(精确资料.get("appid") or "").strip() == 应用:
         候选.append(精确资料)
     for 记录 in reversed(当前会话.get("messages") or []):
         if not isinstance(记录, dict):
             continue
         if str(记录.get("user_id") or "").strip() != 标识:
             continue
-        if 应用 and str(记录.get("appid") or "").strip() not in {"", 应用}:
+        if str(记录.get("appid") or "").strip() != 应用:
             continue
         来源 = str(记录.get("source") or "").strip()
         if bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel":
@@ -6804,14 +6941,14 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
     标识 = str(会话标识 or "").strip()
     if not 标识 or len(标识) > 128:
         raise ValueError("invalid conversation")
-    应用 = _获取群信息appid(标识, appid)
+    应用 = str(appid or "").strip()
     _群消息昵称补查失败冷却.pop((应用, 标识), None)
-    资料 = _私聊联系人资料(标识)
-    读取前快照 = _私聊昵称读取快照(标识)
+    资料 = _私聊联系人资料(标识, _读取作用域会话缓存(标识, "user", 应用))
+    读取前快照 = _私聊昵称读取快照(标识, 应用)
     数据库可用 = _消息存储 is not None and _消息数据库已配置()
     if 数据库可用:
         历史 = await _异步执行消息记录同步(
-            _消息存储.读取会话消息, 标识, 100, "user"
+            _消息存储.读取会话消息, 标识, 100, "user", 应用
         ) or []
         for 记录 in reversed(历史):
             if str(记录.get("user_id") or "") != 标识 or 记录.get("is_self"):
@@ -6842,13 +6979,13 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
         资料["nickname"] = _有效用户昵称(缓存表.get((应用, 标识)), 标识)
     if 应用 and not 资料["nickname"]:
         本地资料 = await _异步执行消息记录同步(_读取本地缓存文件)
-        资料["nickname"] = _有效用户昵称((本地资料.get("nicknames") or {}).get(标识), 标识)
+        资料["nickname"] = _有效用户昵称((本地资料.get("nicknames") or {}).get(_会话作用域键(标识, "user", 应用)) or ((本地资料.get("nicknames") or {}).get(标识) if _旧会话元数据可复用(标识, "user", 应用) else ""), 标识)
     if not _私聊昵称作用域匹配(标识, 应用):
         raise ValueError("conversation scope changed")
-    新名 = _私聊昵称读取期间新名(标识, 读取前快照)
+    新名 = _私聊昵称读取期间新名(标识, 读取前快照, 应用)
     if 新名:
         资料["nickname"] = 新名
-        资料["avatar"] = _私聊联系人资料(标识).get("avatar") or 资料["avatar"]
+        资料["avatar"] = _私聊联系人资料(标识, _读取作用域会话缓存(标识, "user", 应用)).get("avatar") or 资料["avatar"]
     else:
         if 资料["nickname"] or 资料["avatar"]:
             _记录成员资料(标识, 标识, 资料["nickname"], 头像=资料["avatar"])
@@ -6865,6 +7002,7 @@ def _聊天显示名(
     备注表: dict[str, Any] | None = None,
     昵称表: dict[str, Any] | None = None,
 ) -> str:
+    默认备注表, 默认昵称表 = 备注表 is None, 昵称表 is None
     if 备注表 is None or 昵称表 is None:
         本地数据 = _读取本地缓存文件()
         if 备注表 is None:
@@ -6875,21 +7013,27 @@ def _聊天显示名(
         备注表 = {}
     if not isinstance(昵称表, dict):
         昵称表 = {}
-    备注项 = 备注表.get(会话标识) or {}
+    类型 = str(会话.get("chat_type") or "group")
+    appid = str(会话.get("appid") or "").strip()
+    作用域键 = _会话作用域键(会话标识, 类型, appid)
+    备注项 = (
+        _读取会话元数据项(备注表, 会话标识, 类型, appid)
+        if 默认备注表 else 备注表.get(作用域键, 备注表.get(会话标识))
+    ) or {}
     备注 = str(备注项.get("remark") or "")
     if 备注:
         return 备注
-    信息 = 群信息缓存.get(会话标识) or {}
+    信息 = _读取群作用域信息(会话标识, appid) if 类型 == "group" else {}
     群名 = str(信息.get("group_name") or "")
     if 群名:
         return 群名
-    类型 = str(会话.get("chat_type") or "group")
     if 类型 == "user":
         联系人 = _私聊联系人资料(会话标识, 会话)
         if 联系人["nickname"]:
             return 联系人["nickname"]
         本地昵称 = _有效用户昵称(
-            昵称表.get(会话标识),
+            _读取会话元数据项(昵称表, 会话标识, 类型, appid)
+            if 默认昵称表 else 昵称表.get(作用域键, 昵称表.get(会话标识)),
             会话标识,
         )
         if 本地昵称:
@@ -6912,11 +7056,12 @@ def _聊天显示名(
 
 def _私聊历史显示名(会话标识: str, 会话: dict[str, Any], 显示名: str) -> str:
     """历史工作线程只投影缺失姓名，不修改共享联系人缓存。"""
-    备注 = ((_读取本地缓存文件().get("remarks") or {}).get(会话标识) or {}).get("remark")
+    应用 = str(会话.get("appid") or "").strip()
+    备注项 = _读取会话元数据项(_读取本地缓存文件().get("remarks") or {}, 会话标识, "user", 应用) or {}
+    备注 = 备注项.get("remark")
     if 备注 or not _昵称需要补查(会话标识, 会话, 显示名) or _消息存储 is None:
         return 显示名
     读取 = getattr(_消息存储, "批量读取历史用户昵称", None)
-    应用 = str(会话.get("appid") or "").strip()
     if not callable(读取) or not _私聊昵称作用域匹配(会话标识, 应用):
         return 显示名
     try:
@@ -6931,7 +7076,7 @@ def _聊天群成员状态(会话标识: str, 类型: str, appid: str = "") -> d
     if str(类型 or "") != "group":
         return {"in_group": True, "membership_status": "active", "membership_checked_at": 0,
                 **获取好友关系状态(会话标识, appid)}
-    状态 = _读取群机器人状态(会话标识)
+    状态 = _读取群机器人状态(会话标识, appid)
     return {
         "in_group": 状态.get("status") != "removed",
         "membership_status": str(状态.get("status") or "unknown"),
@@ -6956,7 +7101,7 @@ def _会话列表头像(
 ) -> str:
     """返回会话头像；群聊不能误用最后一条消息的成员头像。"""
     if str(类型 or "group").strip().lower() == "group":
-        信息候选 = [群信息 or {}, 群信息缓存.get(str(会话标识 or "").strip()) or {}]
+        信息候选 = [群信息 or {}]
         for 信息 in 信息候选:
             if not isinstance(信息, dict):
                 continue
@@ -6998,8 +7143,8 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             会话标识 = str(聊天.get("chat_id") or "").strip()
             if not 会话标识:
                 continue
-            会话 = 消息缓存.get(会话标识)
-            appid = str(聊天.get("appid") or (会话 or {}).get("appid") or "").strip()
+            appid = str(聊天.get("appid") or "").strip()
+            会话 = _读取作用域会话缓存(会话标识, "user", appid)
             if not _私聊昵称作用域匹配(会话标识, appid):
                 continue
             联系人 = _私聊联系人资料(会话标识, 会话)
@@ -7018,7 +7163,7 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             if _群消息昵称补查失败冷却.get((appid, 会话标识), 0.0) > time.monotonic():
                 continue
             待补查.append((聊天, 会话标识, appid))
-            读取前快照[(appid, 会话标识)] = _私聊昵称读取快照(会话标识)
+            读取前快照[(appid, 会话标识)] = _私聊昵称读取快照(会话标识, appid)
         if not 待补查:
             return 0
 
@@ -7030,7 +7175,7 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
         for 聊天, 会话标识, appid in 待补查:
             if not _私聊昵称作用域匹配(会话标识, appid):
                 continue
-            新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)])
+            新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)], appid)
             if 新名:
                 聊天["nickname"] = 新名
                 continue
@@ -7070,7 +7215,7 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             def 应用昵称(聊天: dict[str, Any], 会话标识: str, 昵称: str, 应用: str) -> bool:
                 if not _私聊昵称作用域匹配(会话标识, 应用):
                     return False
-                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(应用, 会话标识)])
+                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(应用, 会话标识)], 应用)
                 if 新名:
                     聊天["nickname"] = 新名
                     return False
@@ -7091,7 +7236,7 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
             for 聊天, 会话标识, appid in 待补查:
                 if not _私聊昵称作用域匹配(会话标识, appid):
                     continue
-                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)])
+                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)], appid)
                 if 新名:
                     聊天["nickname"] = 新名
                     continue
@@ -7144,443 +7289,140 @@ async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int
     return 0
 
 
-def _补齐数据库会话到内存() -> None:
-    """把 MySQL 中持久化的会话补回内存，保证置顶/备注会话重启后仍显示。"""
-    if _消息存储 is None:
-        return
-    try:
-        已加载 = False
-        持久化未读表 = _读取全部持久化未读数()
-        for 会话标识 in _消息存储.读取全部会话标识():
-            会话标识 = str(会话标识 or "").strip()
-            if not 会话标识 or 会话标识 in 消息缓存:
-                continue
-            消息列表 = [_规范化历史消息(x) for x in (_消息存储.读取会话消息(会话标识, 每会话缓存消息数) or [])]
-            消息列表.sort(key=_历史消息排序键)
-            if not 消息列表:
-                continue
-            类型 = str(消息列表[-1].get("chat_type") or "group")
-            会话 = _取得会话缓存(会话标识, 类型, str(消息列表[-1].get("appid") or ""))
-            if 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
-                会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
-            会话["messages"] = 消息列表
-            最后 = 消息列表[-1]
-            会话["last_content"] = _替换提及名称(_消息列表摘要(最后), 会话标识)
-            会话["last_nickname"] = str(最后.get("nickname") or "")
-            会话["last_ts"] = max(int(会话.get("last_ts") or 0), int(最后.get("ts") or 0))
-            已加载 = True
-        if 已加载:
-            logger.debug("消息记录会话已从数据库补回内存")
-    except Exception as exc:
-        logger.debug("消息记录数据库会话补回失败：错误类型=%s", type(exc).__name__)
+
+
+def _旧会话元数据可复用(会话标识: str, 类型: str, appid: str) -> bool:
+    """旧单键元数据只复用到已确认唯一、且机器人身份相同的会话。"""
+    旧 = 消息缓存.get(会话标识) or {}
+    if str(旧.get("chat_type") or "group") != 类型 or str(旧.get("appid") or "").strip() != str(appid or "").strip():
+        return False
+    return all(键 == (str(appid or "").strip(), 类型, 会话标识) for 键 in 作用域消息缓存 if 键[2] == 会话标识)
 
 
 def _数据库聚合聊天项(
-    过滤: str, 搜索: str, 本地数据: dict[str, Any], 置顶顺序: dict[str, int]
-) -> list[dict[str, Any]] | None:
-    """从 MySQL 房间摘要索引构建聊天列表；索引不可用时返回 None。
-    """
-    if _消息存储 is None:
-        return None
-    try:
-        # 控制台群列表使用全部模式；消息历史仍由单独接口按 100 条分页。
-        类型过滤 = 过滤 if 过滤 in {"group", "user"} else ""
-        骨架 = _消息存储.聚合聊天列表(0, 类型过滤=类型过滤)
-        # 被移除的群可能没有任何消息行，单靠消息表聚合会把它们漏掉。
-        # 启动恢复已经把群资料放入内存，列表刷新优先使用缓存，避免每次
-        # 打开消息页再建立一次数据库连接；缓存为空时保留持久化兜底。
-        群信息项: dict[str, dict[str, Any]] = {}
-        for 群标识, 信息 in 群信息缓存.items():
-            群标识 = str(群标识 or "").strip()
-            if not 群标识 or not isinstance(信息, dict):
-                continue
-            群信息项[群标识] = dict(信息)
-        if not 群信息项:
-            读取群信息 = getattr(_消息存储, "读取全部群信息", None)
-            持久化群信息 = 读取群信息() if callable(读取群信息) else []
-            for 信息 in 持久化群信息 or []:
-                if not isinstance(信息, dict):
-                    continue
-                群标识 = str(信息.get("group_openid") or "").strip()
-                if 群标识:
-                    群信息项[群标识] = dict(信息)
-        if not 骨架 and not 群信息项:
-            return None
-        最后id列表 = [int(项.get("last_id") or 0) for 项 in 骨架 if int(项.get("last_id") or 0)]
-        # 会话列表只需最后消息的预览和元数据，不把卡片原文/媒体字段整批读回。
-        if 最后id列表:
-            # 热重载期间可能暂时仍持有旧版存储模块，保留完整读取作为兼容退路。
-            读取摘要 = getattr(_消息存储, "批量读取最后消息摘要", None)
-            if not callable(读取摘要):
-                读取摘要 = getattr(_消息存储, "批量读取最后消息", None)
-            if not callable(读取摘要):
-                raise AttributeError("消息存储缺少最后消息读取方法")
-            最后消息表 = 读取摘要(最后id列表)
-        else:
-            最后消息表 = {}
-        本地备注表 = (本地数据.get("remarks") or {})
-        本地昵称表 = (本地数据.get("nicknames") or {})
-        用户资料昵称表: dict[tuple[str, str], str] = {}
-        读取用户资料 = getattr(_消息存储, "批量读取用户昵称", None)
-        if 过滤 != "group":
-            用户查询: dict[tuple[str, str], dict[str, str]] = {}
-            用户查询会话: dict[tuple[str, str], dict[str, Any]] = {}
+    过滤: str, 搜索: str, 本地数据: dict[str, Any], 置顶顺序: dict[str, int],
+    appid: str | None = None,
+) -> list[dict[str, Any]]:
+    """数据库与热点副本以 AppID、类型、OpenID 合并，保留独立空 AppID 历史。"""
+    来源: dict[tuple[str, str, str], tuple[dict[str, Any], dict[str, Any], int]] = {}
+    if _消息存储 is not None:
+        try:
+            骨架 = _消息存储.聚合聊天列表(0, 类型过滤=过滤 if 过滤 in {"group", "user"} else "", appid=appid)
+            读取摘要 = getattr(_消息存储, "批量读取最后消息摘要", None) or _消息存储.批量读取最后消息
+            摘要表 = 读取摘要([int(项.get("last_id") or 0) for 项 in 骨架 if 项.get("last_id")])
             for 项 in 骨架:
-                标识 = str(项.get("会话标识") or "").strip()
-                最后 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
-                if not 标识 or str(项.get("chat_type") or 最后.get("chat_type") or "group") != "user":
+                标识, 类型, 应用 = str(项.get("会话标识") or ""), str(项.get("chat_type") or "group"), str(项.get("appid") or "").strip()
+                if not 标识 or (appid is not None and 应用 != appid):
                     continue
-                应用 = str(最后.get("appid") or (消息缓存.get(标识) or {}).get("appid") or "").strip()
-                用户查询[(应用, 标识)] = {"appid": 应用, "user_id": 标识}
-                用户查询会话[(应用, 标识)] = {
-                    "chat_type": "user", "appid": 应用, "last_nickname": str(最后.get("nickname") or "")
-                }
-            for 标识, 会话 in list(消息缓存.items()):
-                if str(会话.get("chat_type") or "group") == "user":
-                    应用 = str(会话.get("appid") or "").strip()
-                    用户查询[(应用, 标识)] = {"appid": 应用, "user_id": 标识}
-                    用户查询会话[(应用, 标识)] = 会话
-            if 用户查询 and callable(读取用户资料):
-                try:
-                    用户资料昵称表 = 读取用户资料(list(用户查询.values())) or {}
-                except Exception as 异常:
-                    logger.debug("消息列表已存用户昵称读取失败：错误类型=%s", type(异常).__name__)
-            读取历史昵称 = getattr(_消息存储, "批量读取历史用户昵称", None)
-            if 用户查询 and callable(读取历史昵称):
-                历史查询 = []
-                for (应用, 标识), 查询 in 用户查询.items():
-                    if _有效用户昵称(用户资料昵称表.get((应用, 标识)), 标识):
-                        continue
-                    会话 = 用户查询会话[(应用, 标识)]
-                    显示名 = _聊天显示名(标识, 会话, 本地备注表, 本地昵称表)
-                    if (
-                        _昵称需要补查(标识, 会话, 显示名)
-                        and _私聊昵称作用域匹配(标识, 应用)
-                        and _群消息昵称补查失败冷却.get((应用, 标识), 0.0) <= time.monotonic()
-                    ):
-                        历史查询.append(查询)
-                if 历史查询:
-                    try:
-                        for 键, 值 in (读取历史昵称(历史查询) or {}).items():
-                            if 键 in 用户查询 and _有效用户昵称(值, 键[1]):
-                                用户资料昵称表[键] = 值
-                    except Exception as 异常:
-                        logger.debug("消息列表已存消息昵称读取失败：错误类型=%s", type(异常).__name__)
-
-        def 补齐已存私聊显示名(标识: str, 会话: dict[str, Any], 显示名: str, 备注: str) -> str:
-            if str(会话.get("chat_type") or "group") != "user" or 备注 or not _昵称需要补查(标识, 会话, 显示名):
-                return 显示名
-            # 列表工作线程只投影姓名，缓存由事件循环的补查/主动刷新合并。
-            应用 = str(会话.get("appid") or "").strip()
-            昵称 = _有效用户昵称(用户资料昵称表.get((应用, 标识)), 标识)
-            return 昵称 or 显示名
-
-        持久化未读表 = _读取全部持久化未读数()
-        聊天项: list[dict[str, Any]] = []
-        已有会话标识: set[str] = set()
-        for 项 in 骨架:
-            会话标识 = str(项.get("会话标识") or "")
-            if not 会话标识:
-                continue
-            已有会话标识.add(会话标识)
-            最后记录 = 最后消息表.get(int(项.get("last_id") or 0)) or {}
-            _规范化聊天摘要(最后记录)
-            类型 = str(项.get("chat_type") or 最后记录.get("chat_type") or "group")
-            if 过滤 == "group" and 类型 != "group":
-                continue
-            if 过滤 == "user" and 类型 != "user":
-                continue
-            会话备注 = 本地备注表.get(会话标识) or {}
-            备注 = str(会话备注.get("remark") or "")
-            if 过滤 == "remark" and not 备注:
-                continue
-            内存会话 = 消息缓存.get(会话标识) or {}
-            内存消息列表 = 内存会话.get("messages") or []
-            内存最后时间 = int(内存会话.get("last_ts") or 0)
-            群资料 = 群信息项.get(会话标识) or {}
-            数据库最后时间 = max(
-                int(项.get("last_ts") or 0),
-                int(最后记录.get("ts") or 0),
-            )
-            if 内存最后时间 >= 数据库最后时间 and (内存最后时间 or 内存会话.get("last_content")):
-                # 接收路径已经维护会话摘要，列表请求无需遍历和规范化整段内存消息。
-                内存最后记录 = 内存消息列表[-1] if 内存消息列表 else {}
-                最后记录 = {
-                    "chat_type": str(内存会话.get("chat_type") or 类型),
-                    "nickname": str(内存会话.get("last_nickname") or ""),
-                    "appid": str(内存会话.get("appid") or ""),
-                    "content": _会话列表摘要(内存会话, 内存最后记录) if 内存消息列表 else (
-                        _消息列表摘要(最后记录) if 内存最后时间 == 数据库最后时间 else str(内存会话.get("last_content") or "")
-                    ),
-                    "avatar": _会话列表头像(会话标识, 类型, 内存最后记录, 群资料),
-                    "timestamp": _格式化时间戳(内存最后时间),
-                    "ts": 内存最后时间,
-                }
-                类型 = str(最后记录.get("chat_type") or 类型)
-            轻量会话 = {
-                "chat_type": 类型,
-                "last_nickname": str(最后记录.get("nickname") or 内存会话.get("last_nickname") or ""),
-                "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
-                "messages": [最后记录] if 最后记录.get("nickname_blank") else [],
-            }
-            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表, 本地昵称表)
-            显示名 = 补齐已存私聊显示名(会话标识, 轻量会话, 显示名, 备注)
-            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
-                continue
-            last_ts = int(最后记录.get("ts") or 项.get("last_ts") or 0)
-            if 会话标识 in 消息缓存:
-                # 待写值代表当前事件循环的最新状态；没有待写值时，
-                # 合并内存与持久化值，避免重启或多标签页时红点回退。
-                if 会话标识 in _未读待写:
-                    当前未读数 = _未读待写[会话标识]
-                elif 会话标识 in 持久化未读表:
-                    当前未读数 = max(
-                        int(内存会话.get("unread") or 0),
-                        int(持久化未读表.get(会话标识) or 0),
-                    )
-                else:
-                    当前未读数 = int(内存会话.get("unread") or 0)
-            elif 会话标识 in _未读待写:
-                当前未读数 = _未读待写[会话标识]
-            elif 会话标识 in 持久化未读表:
-                当前未读数 = 持久化未读表[会话标识]
-            else:
-                当前未读数 = int(内存会话.get("unread") or 0)
-            列表头像 = _会话列表头像(会话标识, 类型, 最后记录, 群资料)
-            聊天项.append(
-                {
-                    "chat_id": 会话标识,
-                    "chat_type": 类型,
-                    "appid": str(最后记录.get("appid") or 内存会话.get("appid") or ""),
-                    "nickname": 显示名,
-                    "avatar": 列表头像 if 类型 != "group" else "",
-                    "group_avatar": 列表头像 if 类型 == "group" else "",
-                    "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _限制聊天列表预览(
-                        _替换提及名称(
-                            _表情标签规则.sub(
-                                lambda 匹配: _解码表情文本(匹配.group(0)),
-                                _消息列表摘要(最后记录),
-                            ),
-                            会话标识,
-                        )
-                    ),
-                    "last_time": _格式化时间戳(last_ts) or str(最后记录.get("timestamp") or ""),
-                    "last_ts": last_ts,
-                    "msg_count": max(
-                        int(项.get("msg_count") or 0),
-                        int(内存会话.get("msg_count") or 0),
-                        len(内存消息列表),
-                    ),
-                    "unread": max(0, int(当前未读数 or 0)),
-                    "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型, str(最后记录.get("appid") or 内存会话.get("appid") or "")),
-                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
-                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
-                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
-                }
-            )
-        # 没有消息记录的群也要进入列表，尤其是已被移除且需要长期保留提示的群。
-        for 信息 in 群信息项.values():
-            会话标识 = str(信息.get("group_openid") or "").strip()
-            if not 会话标识 or 会话标识 in 已有会话标识:
-                continue
-            已有会话标识.add(会话标识)
-            会话备注 = 本地备注表.get(会话标识) or {}
-            备注 = str(会话备注.get("remark") or "")
-            if 过滤 == "remark" and not 备注:
-                continue
-            群名 = str(信息.get("group_name") or "").strip()
-            轻量会话 = {
-                "chat_type": "group",
-                "last_nickname": 群名,
-                "appid": str(信息.get("appid") or ""),
-            }
-            显示名 = _聊天显示名(会话标识, 轻量会话, 本地备注表, 本地昵称表)
-            显示名 = 补齐已存私聊显示名(会话标识, 轻量会话, 显示名, 备注)
-            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
-                continue
-            当前未读数 = _未读待写.get(
-                会话标识,
-                int(持久化未读表.get(会话标识) or 0),
-            )
-            群头像 = _会话列表头像(会话标识, "group", {}, 信息)
-            聊天项.append(
-                {
-                    "chat_id": 会话标识,
-                    "chat_type": "group",
-                    "appid": str(信息.get("appid") or ""),
-                    "nickname": 显示名,
-                    "avatar": "",
-                    "group_avatar": 群头像,
-                    "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": "",
-                    "last_time": "",
-                    "last_ts": 0,
-                    "msg_count": 0,
-                    "unread": max(0, int(当前未读数 or 0)),
-                    "remark": 备注,
-                    **_聊天群成员状态(会话标识, "group"),
-                    "is_admin": bool(群机器人是否管理员(会话标识)),
-                    "group_name": 群名,
-                }
-            )
-        # 数据库写入线程尚未提交时，GROUP BY 不会包含刚收到的新会话。
-        # 追加内存会话即可让 SSE 触发的列表刷新立即看到消息和红点。
-        for 会话标识, 内存会话 in list(消息缓存.items()):
-            会话标识 = str(会话标识 or "").strip()
-            if not 会话标识 or 会话标识 in 已有会话标识:
-                continue
-            类型 = str(内存会话.get("chat_type") or "group")
-            if 过滤 == "group" and 类型 != "group":
-                continue
-            if 过滤 == "user" and 类型 != "user":
-                continue
-            会话备注 = 本地备注表.get(会话标识) or {}
-            备注 = str(会话备注.get("remark") or "")
-            if 过滤 == "remark" and not 备注:
-                continue
-            显示名 = _聊天显示名(会话标识, 内存会话, 本地备注表, 本地昵称表)
-            显示名 = 补齐已存私聊显示名(会话标识, 内存会话, 显示名, 备注)
-            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
-                continue
-            消息列表 = 内存会话.get("messages") or []
-            最后记录 = 消息列表[-1] if 消息列表 else {}
-            最后内容 = _会话列表摘要(内存会话, 最后记录)
-            最后时间 = int(内存会话.get("last_ts") or 最后记录.get("ts") or 0)
-            当前未读数 = _未读待写.get(会话标识, int(内存会话.get("unread") or 0))
-            列表头像 = _会话列表头像(会话标识, 类型, 最后记录, 群信息缓存.get(会话标识) or {})
-            聊天项.append(
-                {
-                    "chat_id": 会话标识,
-                    "chat_type": 类型,
-                    "appid": str(内存会话.get("appid") or 最后记录.get("appid") or ""),
-                    "nickname": 显示名,
-                    "avatar": 列表头像 if 类型 != "group" else "",
-                    "group_avatar": 列表头像 if 类型 == "group" else "",
-                    "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _限制聊天列表预览(
-                        _替换提及名称(
-                            _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), 最后内容),
-                            会话标识,
-                        )
-                    ),
-                    "last_time": _格式化时间戳(最后时间) or str(最后记录.get("timestamp") or ""),
-                    "last_ts": 最后时间,
-                    "msg_count": max(int(内存会话.get("msg_count") or 0), len(消息列表)),
-                    "unread": max(0, int(当前未读数 or 0)),
-                    "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型, str(最后记录.get("appid") or 内存会话.get("appid") or "")),
-                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
-                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
-                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
-                }
-            )
-        for 聊天 in 聊天项:
-            聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
-        return 聊天项
-    except Exception as exc:
-        logger.debug("消息记录数据库聊天聚合失败，回退内存：错误类型=%s", type(exc).__name__)
-        return None
+                最后 = dict(摘要表.get(int(项.get("last_id") or 0)) or {})
+                if 最后 and (str(最后.get("appid") or "").strip() != 应用 or str(最后.get("chat_type") or "group") != 类型):
+                    continue
+                _规范化聊天摘要(最后)
+                来源[(应用, 类型, 标识)] = (最后, {}, int(项.get("msg_count") or 0))
+        except Exception as 异常:
+            logger.debug("消息记录作用域摘要读取失败：错误类型=%s", type(异常).__name__)
+    for 标识, 会话 in _遍历作用域会话缓存():
+        类型, 应用 = str(会话.get("chat_type") or "group"), str(会话.get("appid") or "").strip()
+        if appid is not None and 应用 != appid:
+            continue
+        键 = (应用, 类型, 标识)
+        旧最后, _, 旧数量 = 来源.get(键, ({}, {}, 0))
+        消息 = [项 for 项 in (会话.get("messages") or []) if isinstance(项, dict)
+                and str(项.get("appid") or "").strip() == 应用 and str(项.get("chat_type") or 类型) == 类型]
+        最后 = 消息[-1] if 消息 else {}
+        if int(会话.get("last_ts") or 0) >= int(旧最后.get("ts") or 0):
+            最后 = {**最后, "appid": 应用, "chat_type": 类型,
+                  "nickname": str(会话.get("last_nickname") or 最后.get("nickname") or ""),
+                  "content": _会话列表摘要(会话, 最后), "ts": int(会话.get("last_ts") or 0)}
+        else:
+            最后 = 旧最后
+        来源[键] = (最后, 会话, max(旧数量, int(会话.get("msg_count") or 0), len(消息)))
+    for 标识, 信息 in _遍历群作用域信息():
+        应用 = str(信息.get("appid") or "").strip()
+        if appid is None or 应用 == appid:
+            来源.setdefault((应用, "group", 标识), ({}, {}, 0))
+    未读表 = _读取全部持久化未读数()
+    私聊查询 = [{"appid": 应用, "user_id": 标识} for (应用, 类型, 标识) in 来源 if 类型 == "user"]
+    用户昵称表: dict[tuple[str, str], str] = {}
+    if 私聊查询 and _消息存储 is not None:
+        try:
+            批量资料 = getattr(_消息存储, "批量读取用户昵称", None)
+            if callable(批量资料):
+                用户昵称表.update(批量资料(私聊查询) or {})
+            缺失 = [项 for 项 in 私聊查询 if not _有效用户昵称(用户昵称表.get((项["appid"], 项["user_id"])), 项["user_id"])]
+            批量历史 = getattr(_消息存储, "批量读取历史用户昵称", None)
+            if 缺失 and callable(批量历史):
+                for 键, 昵称 in (批量历史(缺失) or {}).items():
+                    if not 用户昵称表.get(键):
+                        用户昵称表[键] = 昵称
+        except Exception as 异常:
+            logger.debug("消息记录作用域私聊昵称批量读取失败：错误类型=%s", type(异常).__name__)
+    备注表, 昵称表 = 本地数据.get("remarks") or {}, 本地数据.get("nicknames") or {}
+    聊天项 = []
+    for (应用, 类型, 标识), (最后, 会话, 数量) in 来源.items():
+        if 过滤 in {"group", "user"} and 类型 != 过滤:
+            continue
+        作用域键 = _会话作用域键(标识, 类型, 应用)
+        备注项 = 备注表.get(作用域键) or {}
+        if not 备注项 and _旧会话元数据可复用(标识, 类型, 应用):
+            备注项 = 备注表.get(标识) or {}
+        备注 = str(备注项.get("remark") or "")
+        if 过滤 == "remark" and not 备注:
+            continue
+        信息 = _读取群作用域信息(标识, 应用) if 类型 == "group" else {}
+        轻量 = {**会话, "chat_type": 类型, "appid": 应用, "last_nickname": str(最后.get("nickname") or 会话.get("last_nickname") or ""),
+                "messages": list(会话.get("messages") or ([最后] if 最后 else []))}
+        if 类型 == "group":
+            名称 = 备注 or str(信息.get("group_name") or 标识)
+            头像 = _会话列表头像(标识, 类型, 最后, 信息)
+        else:
+            名称 = 备注 or _聊天显示名(标识, 轻量, {标识:备注项}, {标识:昵称表.get(作用域键) or (昵称表.get(标识) if _旧会话元数据可复用(标识, 类型, 应用) else "")})
+            已存昵称 = _有效用户昵称(用户昵称表.get((应用, 标识)), 标识)
+            if not 备注 and 已存昵称 and _昵称需要补查(标识, 轻量, 名称):
+                名称 = 已存昵称
+            联系人 = _私聊联系人资料(标识, 轻量)
+            头像 = str(联系人.get("avatar") or "")
+        if 搜索 and 搜索 not in 名称 and 搜索 not in 标识:
+            continue
+        置顶键 = 作用域键 if 作用域键 in 置顶顺序 else (标识 if _旧会话元数据可复用(标识, 类型, 应用) else "")
+        未读 = _未读待写.get(作用域键, max(int(会话.get("unread") or 0), int(未读表.get(作用域键) or 0)))
+        聊天项.append({"chat_id": 标识, "chat_type": 类型, "appid": 应用, "nickname": 名称,
+                    "avatar": 头像 if 类型 == "user" else "", "group_avatar": 头像 if 类型 == "group" else "",
+                    "group_qq": str(备注项.get("group_qq") or ""), "last_content": _限制聊天列表预览(_消息列表摘要(最后)),
+                    "last_time": _格式化时间戳(最后.get("ts")), "last_ts": int(最后.get("ts") or 0),
+                    "msg_count": 数量, "unread": max(0, int(未读 or 0)), "remark": 备注,
+                    "pinned": bool(置顶键 and 置顶键 in 置顶顺序), "_pin_order": 置顶顺序.get(置顶键, 0),
+                    **_聊天群成员状态(标识, 类型, 应用),
+                    "is_admin": bool(群机器人是否管理员(标识, 应用)) if 类型 == "group" else False,
+                    "group_name": str(信息.get("group_name") or ""), "group_info_updated_at": int(信息.get("updated_at") or 0)})
+    return 聊天项
 
 
 def 获取聊天列表(
-    过滤: str = "all",
-    搜索: str = "",
-    页码: int = 1,
-    每页: int = 50,
+    过滤: str = "all", 搜索: str = "", 页码: int = 1, 每页: int = 50,
+    appid: str | None = None,
 ) -> dict[str, Any]:
-    过滤 = str(过滤 or "all").strip()
-    搜索 = str(搜索 or "").strip()
+    过滤, 搜索 = str(过滤 or "all").strip(), str(搜索 or "").strip()
+    appid = str(appid).strip() if appid is not None else None
     try:
-        页码 = max(1, int(页码))
-        原始每页 = int(每页)
-        每页 = 0 if 原始每页 <= 0 else min(100, 原始每页)
+        页码, 每页 = max(1, int(页码)), int(每页)
+        每页 = 0 if 每页 <= 0 else min(100, 每页)
     except (TypeError, ValueError):
         页码, 每页 = 1, 50
     本地数据 = _读取本地缓存文件()
-    本地备注表 = (本地数据.get("remarks") or {})
-    本地昵称表 = (本地数据.get("nicknames") or {})
-    置顶列表 = [str(x) for x in (本地数据.get("pinned") or []) if str(x or "").strip()]
-    置顶顺序 = {会话: idx for idx, 会话 in enumerate(置顶列表)}
-    # 对齐 ElainaBot：数据库 GROUP BY 聚合优先，不可用时回退内存缓存
-    聊天列表: list[dict[str, Any]] | None = _数据库聚合聊天项(过滤, 搜索, 本地数据, 置顶顺序)
-    if 聊天列表 is None:
-        聊天列表 = []
-        _补齐数据库会话到内存()
-        for 会话标识, 会话 in 消息缓存.items():
-            类型 = str(会话.get("chat_type") or "group")
-            if 过滤 == "group" and 类型 != "group":
-                continue
-            if 过滤 == "user" and 类型 != "user":
-                continue
-            会话备注 = 本地备注表.get(会话标识) or {}
-            备注 = str(会话备注.get("remark") or "")
-            if 过滤 == "remark" and not 备注:
-                continue
-            显示名 = _聊天显示名(会话标识, 会话, 本地备注表, 本地昵称表)
-            if 搜索 and 搜索 not in 显示名 and 搜索 not in 会话标识:
-                continue
-            消息列表 = 会话.get("messages") or []
-            最后消息 = 消息列表[-1] if 消息列表 else {}
-            列表头像 = _会话列表头像(会话标识, 类型, 最后消息, 群信息缓存.get(会话标识) or {})
-            聊天列表.append(
-                {
-                    "chat_id": 会话标识,
-                    "chat_type": 类型,
-                    "appid": str(会话.get("appid") or ""),
-                    "nickname": 显示名,
-                    "avatar": 列表头像 if 类型 != "group" else "",
-                    "group_avatar": 列表头像 if 类型 == "group" else "",
-                    "group_qq": str(会话备注.get("group_qq") or ""),
-                    "last_content": _限制聊天列表预览(
-                        _替换提及名称(
-                            _表情标签规则.sub(
-                                lambda 匹配: _解码表情文本(匹配.group(0)),
-                                _会话列表摘要(会话, 最后消息),
-                            ),
-                            会话标识,
-                        )
-                    ),
-                    "last_time": str(最后消息.get("timestamp") or _格式化时间戳(会话.get("last_ts"))),
-                    "last_ts": int(会话.get("last_ts") or 0),
-                    "msg_count": max(int(会话.get("msg_count") or 0), len(消息列表)),
-                    "unread": int(会话.get("unread") or 0),
-                    "remark": 备注,
-                    **_聊天群成员状态(会话标识, 类型, str(最后消息.get("appid") or 会话.get("appid") or "")),
-                    "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
-                    "group_name": str(群信息缓存.get(会话标识, {}).get("group_name") or ""),
-                    "group_info_updated_at": int(群信息缓存.get(会话标识, {}).get("updated_at") or 0),
-                }
-            )
-        for 聊天 in 聊天列表:
-            聊天["pinned"] = str(聊天.get("chat_id") or "") in 置顶顺序
-    # 已移除群聊始终放在列表底部；正常会话中手动置顶仍在最前，
-    # 未读数只显示红点，不改变已读会话的位置。
-    聊天列表.sort(
-        key=lambda x: (
-            1 if _聊天已移除(x) else 0,
-            0 if str(x.get("chat_id") or "") in 置顶顺序 else 1,
-            -(x.get("last_ts") or 0),
-            str(x.get("chat_id") or ""),
-        )
-    )
+    置顶顺序 = {str(项): i for i, 项 in enumerate(本地数据.get("pinned") or [])}
+    聊天列表 = _数据库聚合聊天项(过滤, 搜索, 本地数据, 置顶顺序, appid)
+    聊天列表.sort(key=lambda 项: (1 if _聊天已移除(项) else 0, 0 if 项["pinned"] else 1,
+                              项.get("_pin_order", 0) if 项["pinned"] else -项["last_ts"], 项["appid"], 项["chat_type"], 项["chat_id"]))
     总数 = len(聊天列表)
-    if 每页 <= 0:
-        返回聊天 = 聊天列表
-    else:
-        开始 = (页码 - 1) * 每页
-        返回聊天 = 聊天列表[开始 : 开始 + 每页]
-    return {
-        "chats": 返回聊天,
-        "total": 总数,
-        "page": 页码,
-        "page_size": 每页,
-    }
+    返回 = 聊天列表 if 每页 <= 0 else 聊天列表[(页码 - 1) * 每页:页码 * 每页]
+    for 项 in 返回:
+        项.pop("_pin_order", None)
+    return {"chats": 返回, "total": 总数, "page": 页码, "page_size": 每页, "has_more": 每页 > 0 and 页码 * 每页 < 总数, "appid": appid or ""}
 
 
 def _数据库历史消息(
-    会话标识: str, 类型: str, before_date: str, limit: int, before_id: int = 0,
+    会话标识: str, 类型: str, before_date: str, limit: int, before_id: int = 0, appid: str = "",
 ) -> dict[str, Any] | None:
     """对齐 ElainaBot：从 MySQL 分页读取会话历史；不可用时返回 None 由调用方回退内存。
 
@@ -7598,6 +7440,7 @@ def _数据库历史消息(
             before_ts=before_ts,
             返回额外=True,
             会话类型=类型,
+            appid=appid,
         )
         if not 行列表:
             return None
@@ -7613,10 +7456,11 @@ def _数据库历史消息(
         返回消息 = 会话消息[-limit:]
         # 消息先写入内存再异步落库；数据库查询可能早于写入线程完成，
         # 因此把本进程尚未出现在本页的接收/发送记录一起合并，避免实时消息延迟。
-        内存会话 = 消息缓存.get(会话标识) or {}
+        内存会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         内存消息记录 = [
             _快速规范化历史消息(消息项)
             for 消息项 in list(内存会话.get("messages") or [])
+            if str(消息项.get("appid") or "").strip() == appid and str(消息项.get("chat_type") or 类型) == 类型
         ]
         已有记录键 = {
             (
@@ -7648,18 +7492,18 @@ def _数据库历史消息(
         _补齐群成员系统消息昵称(返回消息)
         最后消息 = 返回消息[-1] if 返回消息 else {}
         引用映射 = _构造引用映射(
-            会话标识, 类型, _引用会话AppID(会话标识, 返回消息), 返回消息,
+            会话标识, 类型, appid, 返回消息,
         )
         for 历史项 in 返回消息:
             if isinstance(历史项, dict) and 历史项.get("raw_message"):
                 历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
             if isinstance(历史项, dict) and 历史项.get("content"):
                 历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
-        内存会话 = 消息缓存.get(会话标识) or {}
+        内存会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         轻量会话 = {
             "chat_type": 类型,
             "last_nickname": str(最后消息.get("nickname") or 内存会话.get("last_nickname") or ""),
-            "appid": str(最后消息.get("appid") or ""),
+            "appid": appid,
             "messages": 返回消息,
         }
         显示名 = _聊天显示名(会话标识, 轻量会话)
@@ -7667,12 +7511,13 @@ def _数据库历史消息(
             显示名 = _私聊历史显示名(会话标识, 轻量会话, 显示名)
         return {
             "messages": 返回消息,
+            "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
             "last_msg_id": str(最后消息.get("message_id") or ""),
             "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
             "has_more": 数据库有更多,
             "chat_name": 显示名,
-            "group_info": 获取缓存的群信息(会话标识),
-            "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
+            "group_info": 获取缓存的群信息(会话标识, appid),
+            "is_admin": bool(群机器人是否管理员(会话标识, appid)) if 类型 == "group" else False,
             "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
             "references": 引用映射,
             **(获取好友关系状态(会话标识, 轻量会话["appid"]) if 类型 == "user" else {}),
@@ -7701,7 +7546,7 @@ def 获取引用定位历史(
     窗口 = 读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id) if callable(读取) else None
     if 窗口 and 窗口.get("failure") == "conflict":
         return None
-    会话 = 消息缓存.get(会话标识) or {}
+    会话 = _读取作用域会话缓存(会话标识, 类型, appid)
     缓存作用域匹配 = str(会话.get("chat_type") or "") == 类型 and str(会话.get("appid") or "").strip() == appid
     if 窗口 is None or (引用标识 and not 窗口.get("found")):
         # 未落库的新消息只在本会话热点缓存精确查找，不逐页扫描持久化历史。
@@ -7753,7 +7598,7 @@ def 获取引用定位历史(
         if 项.get("content"):
             项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(项["content"]))
     资料 = _获取消息相关成员资料(会话标识, 返回消息) if 缓存作用域匹配 else {}
-    群资料 = 获取缓存的群信息(会话标识) if 类型 == "group" and 缓存作用域匹配 else {}
+    群资料 = 获取缓存的群信息(会话标识, appid) if 类型 == "group" and 缓存作用域匹配 else {}
     最旧, 最新 = (返回消息[0], 返回消息[-1]) if 返回消息 else ({}, {})
 
     return {
@@ -7767,7 +7612,7 @@ def 获取引用定位历史(
         "located_refidx": str(窗口.get("located_refidx") or ""),
         "history_window": True, "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
         "group_info": 群资料,
-        "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" and 缓存作用域匹配 else False,
+        "is_admin": bool(群机器人是否管理员(会话标识, appid)) if 类型 == "group" and 缓存作用域匹配 else False,
     }
 
 
@@ -7777,33 +7622,37 @@ def 获取消息历史(
     before_date: str = "",
     limit: int = 100,
     before_id: int = 0,
+    appid: str = "",
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
+    appid = str(appid or "").strip()
     try:
         limit = max(1, min(100, int(limit)))
     except (TypeError, ValueError):
         limit = 100
-    if 类型 == "group" and _群信息需要刷新(群信息缓存.get(会话标识)):
+    if 类型 == "group" and _群信息需要刷新(_读取群作用域信息(会话标识, appid)):
         # 历史请求只负责排队一次后台资料刷新，响应仍先返回消息内容。
         # 会话列表不会触发官方群接口，避免刷新页面反复消耗 30 QPM 配额。
-        标记群信息待刷新(会话标识)
+        标记群信息待刷新(会话标识, appid)
     # 对齐 ElainaBot：MySQL 分页查询优先，不可用时回退内存缓存
     if 类型 in ("group", "user"):
-        数据库结果 = _数据库历史消息(会话标识, 类型, before_date, limit, before_id)
+        数据库结果 = _数据库历史消息(会话标识, 类型, before_date, limit, before_id, appid)
         if 数据库结果 is not None:
             return 数据库结果
-    会话 = 消息缓存.get(会话标识)
+    会话 = _读取作用域会话缓存(会话标识, 类型, appid)
     if not 会话:
         return {
             "messages": [],
+            "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
             "last_msg_id": "",
             "oldest_date": "",
             "has_more": False,
-            "chat_name": _聊天显示名(会话标识, {"chat_type": 类型}),
-            "group_info": 获取缓存的群信息(会话标识),
-            "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
+            "chat_name": _聊天显示名(会话标识, {"chat_type": 类型, "appid": appid}),
+            "group_info": 获取缓存的群信息(会话标识, appid),
+            "is_admin": bool(群机器人是否管理员(会话标识, appid)) if 类型 == "group" else False,
         }
-    消息列表 = 会话.get("messages") or []
+    消息列表 = [项 for 项 in (会话.get("messages") or []) if isinstance(项, dict)
+            and str(项.get("appid") or "").strip() == appid and str(项.get("chat_type") or 类型) == 类型]
     会话消息: list[dict[str, Any]] = _去重消息列表(
         [_快速规范化历史消息(m) for m in 消息列表]
     )
@@ -7824,7 +7673,7 @@ def 获取消息历史(
     _补齐群成员系统消息昵称(返回消息)
     最后消息 = 会话消息[-1] if 会话消息 else {}
     引用映射 = _构造引用映射(
-        会话标识, 类型, _引用会话AppID(会话标识, 返回消息), 返回消息,
+        会话标识, 类型, appid, 返回消息,
     )
     for 历史项 in 返回消息:
         if isinstance(历史项, dict) and 历史项.get("raw_message"):
@@ -7833,12 +7682,13 @@ def 获取消息历史(
             历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
     return {
         "messages": 返回消息,
+        "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
         "last_msg_id": str(最后消息.get("message_id") or ""),
         "oldest_date": str(会话消息[0].get("timestamp") or "") if 会话消息 else "",
         "has_more": 原始数量 > limit or (bool(before_id) and 原始数量 >= limit),
         "chat_name": _聊天显示名(会话标识, 会话),
-        "group_info": 获取缓存的群信息(会话标识),
-        "is_admin": bool(群机器人是否管理员(会话标识)) if 类型 == "group" else False,
+        "group_info": 获取缓存的群信息(会话标识, appid),
+        "is_admin": bool(群机器人是否管理员(会话标识, appid)) if 类型 == "group" else False,
         "member_profiles": _获取消息相关成员资料(会话标识, 返回消息),
         "references": 引用映射,
         **(获取好友关系状态(会话标识, str(会话.get("appid") or "")) if 类型 == "user" else {}),
@@ -7875,7 +7725,7 @@ def _构造群角色结果(会话标识: str, 状态: dict[str, Any], appid: str
 def 获取网页群角色快照(会话标识: str, appid: str = "") -> tuple[dict[str, Any], bool]:
     """复制同 AppID 的角色资料，未查询的角色保持 unknown 而不推断普通成员。"""
     会话标识, appid = _网页群状态作用域(会话标识, appid)
-    状态 = _读取群机器人状态(会话标识)
+    状态 = _读取群机器人状态(会话标识, appid)
     if str(状态.get("appid") or "").strip() != appid:
         状态 = {}
     有资料 = 状态.get("status") == "removed" or (
@@ -7902,8 +7752,9 @@ async def 获取群角色(会话标识: str, appid: str = "", 强制: bool = Fal
     状态 = await _查询群机器人状态(会话标识, appid, 强制=强制)
     结果 = _构造群角色结果(会话标识, 状态, appid)
     if 会话标识:
-        信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
+        信息 = _读取群作用域信息(会话标识, appid)
         信息["is_admin"] = 结果["bot_is_admin"]
+        _写入群作用域信息(会话标识, 信息, appid)
     return 结果
 
 
@@ -8288,18 +8139,11 @@ async def 发送消息(
     类型 = _规范化消息类型(类型)
     发送方式 = _规范化发送方式(发送方式)
     内容 = str(内容 or "").strip()
-    会话类型 = str(
-        会话类型
-        or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
-        or "group"
-    ).strip().lower()
-    当前会话 = 消息缓存.get(会话标识) or {}
-    if not str(appid or "").strip() and str(当前会话.get("chat_type") or 会话类型) == 会话类型:
-        appid = str(当前会话.get("appid") or "").strip()
-    else:
-        appid = str(appid or "").strip()
+    会话类型 = str(会话类型 or "group").strip().lower()
+    if 会话类型 not in {"group", "user"}:
+        return {"ok": False, "message": "会话参数无效"}
+    平台实例, appid = _获取消息操作平台(appid)
     权限会话类型 = 会话类型
-    平台实例 = 获取QQ官方平台(appid=appid)
     通道 = 获取HTTP通道(平台实例)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
@@ -8314,13 +8158,13 @@ async def 发送消息(
         内容 = _规范全体成员提及(内容)
         图片前文本 = _规范全体成员提及(图片前文本)
         图片后文本 = _规范全体成员提及(图片后文本)
-    最近消息ID = 消息ID or 获取最近消息ID(平台实例, 会话标识) or 获取本地最近消息ID(会话标识)
+    最近消息ID = 消息ID or 获取最近消息ID(平台实例, 会话标识) or 获取本地最近消息ID(会话标识, 会话类型, appid)
     场景 = 获取会话场景(平台实例, 会话标识)
     # QQ 官方被动消息 msg_id 2 分钟时效：优先用近期收到的消息 ID 被动发送
-    本地最近时间 = 获取本地最近消息时效(会话标识)
+    本地最近时间 = 获取本地最近消息时效(会话标识, 会话类型, appid)
     近期消息ID = ""
     if 本地最近时间 and int(time.time()) - 本地最近时间 <= 100:
-        近期消息ID = 获取本地最近消息ID(会话标识)
+        近期消息ID = 获取本地最近消息ID(会话标识, 会话类型, appid)
     if 发送方式 == "active":
         被动ID = ""
     elif 发送方式 == "custom_msg_id":
@@ -8602,7 +8446,7 @@ async def 发送消息(
         消息体["embed"] = embed
 
     if not 会话类型:
-        会话缓存 = 消息缓存.get(会话标识) or {}
+        会话缓存 = _读取作用域会话缓存(会话标识, 会话类型, appid)
         会话类型 = str(会话缓存.get("chat_type") or "group")
     try:
         from botpy.http import Route
@@ -8733,7 +8577,7 @@ async def 撤回消息(
     消息ID = str(消息ID or "").strip()
     if not 会话标识 or not 消息ID:
         return {"ok": False, "message": "参数无效"}
-    平台 = 获取QQ官方平台(appid=appid)
+    平台, appid = _获取消息操作平台(appid)
     通道 = 获取HTTP通道(平台)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
@@ -8743,7 +8587,6 @@ async def 撤回消息(
 
         会话类型 = str(
             类型
-            or (消息缓存.get(会话标识, {}) or {}).get("chat_type")
             or "group"
         ).strip().lower()
         if 会话类型 == "user":
@@ -8793,7 +8636,8 @@ async def 禁言群成员(
         分钟数 = 30
     if not 会话标识 or not 成员标识:
         return {"ok": False, "message": "参数无效"}
-    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
+    平台, appid = _获取消息操作平台(appid)
+    通道 = 获取HTTP通道(平台)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     _, _http = 通道
@@ -8844,7 +8688,8 @@ async def 解除群成员禁言(
     成员标识 = str(成员标识 or "").strip()
     if not 会话标识 or not 成员标识:
         return {"ok": False, "message": "参数无效"}
-    通道 = 获取HTTP通道(获取QQ官方平台(appid=appid))
+    平台, appid = _获取消息操作平台(appid)
+    通道 = 获取HTTP通道(平台)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
     _, _http = 通道
@@ -9654,8 +9499,14 @@ async def _消息数据库恢复工作(键: str, 配置: Any) -> bool:
     for 尝试 in range(3):
         基线 = {
             "conversations": {标识: _恢复会话签名(会话) for 标识, 会话 in 消息缓存.items()},
+            "scoped_conversations": {
+                _会话作用域键(标识, str(会话.get("chat_type") or "group"), str(会话.get("appid") or "")): _恢复会话签名(会话)
+                for 标识, 会话 in _遍历作用域会话缓存()
+            },
             "groups": copy.deepcopy(群信息缓存),
+            "scoped_groups": copy.deepcopy(群信息作用域缓存),
             "group_states": copy.deepcopy(群机器人状态缓存),
+            "group_state_generations": dict(群机器人状态代次),
             "friend_states": copy.deepcopy(好友关系缓存),
             "meta_time": _本地缓存时间,
         }
@@ -9729,17 +9580,50 @@ async def 等待消息记录恢复() -> bool:
 def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
     """在事件循环合并线程快照；恢复期间新消息、群状态和未读数优先。"""
     _恢复好友关系状态(快照, 基线)
-    已更新群 = {标识 for 标识, 信息 in 群信息缓存.items()
-                if 信息 != (基线.get("groups") or {}).get(标识)}
-    for 会话标识, 值 in (快照.get("group_states") or {}).items():
-        if 群机器人状态缓存.get(会话标识) != (基线.get("group_states") or {}).get(会话标识):
-            continue
+    已更新群 = {
+        (str(信息.get("appid") or "").strip(), 标识)
+        for 标识, 信息 in 群信息缓存.items()
+        if isinstance(信息, dict) and 信息 != (基线.get("groups") or {}).get(标识)
+    }
+    已更新群.update(
+        (str(信息.get("appid") or "").strip(), str(信息.get("group_openid") or "").strip())
+        for 键, 信息 in 群信息作用域缓存.items()
+        if 信息 != (基线.get("scoped_groups") or {}).get(键)
+    )
+    for 原键, 值 in (快照.get("group_states") or {}).items():
         记录 = _解析群机器人状态值(值)
-        现有 = 群机器人状态缓存.get(会话标识) or {}
+        appid = str(记录.get("appid") or "").strip()
+        会话标识 = str(记录.get("group_openid") or "").strip()
+        if str(原键).startswith("["):
+            try:
+                作用域 = json.loads(原键)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(作用域, list) or len(作用域) != 2 or str(作用域[0]) != appid:
+                continue
+            if 会话标识 and 会话标识 != str(作用域[1] or "").strip():
+                continue
+            会话标识 = str(作用域[1] or "").strip()
+        elif 会话标识 and 会话标识 != str(原键 or "").strip():
+            continue
+        else:
+            会话标识 = str(原键 or "").strip()
+        if not 会话标识 or not appid:
+            continue
+        缓存键 = _群作用域缓存键(会话标识, appid)
+        if 群机器人状态代次.get(缓存键, 0) != (基线.get("group_state_generations") or {}).get(缓存键, 0):
+            continue
+        if 群机器人状态缓存.get(缓存键) != (基线.get("group_states") or {}).get(缓存键):
+            continue
+        if 群机器人状态缓存.get(原键) != (基线.get("group_states") or {}).get(原键):
+            continue
+        现有 = _读取群机器人状态(会话标识, appid)
         if int(现有.get("checked_at") or 0) > int(记录.get("checked_at") or 0):
             continue
-        群机器人状态缓存[会话标识] = 记录
-        信息 = 群信息缓存.setdefault(会话标识, {"group_openid": 会话标识})
+        记录["group_openid"] = 会话标识
+        群机器人状态缓存[缓存键] = 记录
+        群机器人状态代次[缓存键] = 群机器人状态代次.get(缓存键, 0) + 1
+        信息 = _读取群作用域信息(会话标识, appid) or {"group_openid": 会话标识, "appid": appid}
         信息.update({"membership_status": 记录["status"],
                    "membership_checked_at": 记录["checked_at"],
                    "member_role": 记录["member_role"]})
@@ -9748,8 +9632,9 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
                 信息[字段] = 记录[字段]
         if 记录["status"] == "removed":
             信息["is_admin"] = False
+        _写入群作用域信息(会话标识, 信息, appid)
     # 热重载会保留旧模块的内存缓存，无论是否配置数据库都先清掉旧重复。
-    for 会话 in 消息缓存.values():
+    for _, 会话 in _遍历作用域会话缓存():
         if isinstance(会话, dict):
             会话["messages"] = _去重消息列表(会话.get("messages") or [])
     if _消息存储 is None:
@@ -9781,7 +9666,10 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
                 "is_admin": bool(原始信息.get("is_admin")),
                 "updated_at": int(原始信息.get("updated_at") or 0),
             }
-            成员状态 = _读取群机器人状态(会话标识)
+            appid = str(资料.get("appid") or "").strip()
+            if not appid:
+                continue
+            成员状态 = _读取群机器人状态(会话标识, appid)
             资料["membership_status"] = str(成员状态.get("status") or "unknown")
             资料["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
             资料["member_role"] = str(成员状态.get("member_role") or "")
@@ -9789,8 +9677,8 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
                 资料[字段] = 成员状态.get(字段)
             if 资料["membership_status"] == "removed":
                 资料["is_admin"] = False
-            现有 = 群信息缓存.get(会话标识) or {}
-            if 会话标识 in 已更新群:
+            现有 = _读取群作用域信息(会话标识, appid)
+            if (appid, 会话标识) in 已更新群:
                 continue
             try:
                 资料时间 = int(资料.get("updated_at") or 0)
@@ -9813,7 +9701,7 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
                 or bool(现有.get("is_admin"))
             )
             if not 现有 or not 现有有资料 or 资料时间 >= 现有时间:
-                群信息缓存[会话标识] = 资料
+                _写入群作用域信息(会话标识, 资料, appid)
                 恢复群数 += 1
         if 恢复群数:
             logger.info("消息记录数据库恢复群资料：数量=%s", 恢复群数)
@@ -9827,19 +9715,48 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
     else:
         元数据 = copy.deepcopy(_本地缓存内存 or {})
     持久化未读表 = 快照.get("unread") or {}
-    启动会话 = 基线.get("conversations") or {}
-    已更新会话 = {标识 for 标识, 会话 in 消息缓存.items()
-                  if _恢复会话签名(会话) != 启动会话.get(标识)}
-    # 热重载会保留模块级缓存；只同步未读值，不重复读取整段历史。
-    for 已有会话标识, 已有会话 in 消息缓存.items():
-        if 已有会话标识 in _未读待写:
-            已有会话["unread"] = _未读待写[已有会话标识]
-        elif 已有会话标识 not in 已更新会话 and 已有会话标识 in 持久化未读表:
-            已有会话["unread"] = max(
-                int(已有会话.get("unread") or 0),
-                int(持久化未读表.get(已有会话标识) or 0),
-            )
-    置顶列表 = [str(x) for x in (元数据.get("pinned") or []) if str(x or "").strip()]
+    启动会话 = 基线.get("scoped_conversations")
+    if not isinstance(启动会话, dict):
+        # 兼容重载交接中的旧基线；只复用已确认唯一的旧会话。
+        启动会话 = {
+            _会话作用域键(标识, str(会话.get("chat_type") or "group"), str(会话.get("appid") or "")): 签名
+            for 标识, 签名 in (基线.get("conversations") or {}).items()
+            if isinstance(会话 := 消息缓存.get(标识), dict)
+            and _旧会话元数据可复用(标识, str(会话.get("chat_type") or "group"), str(会话.get("appid") or ""))
+        }
+    已更新会话 = {
+        _会话作用域键(标识, str(会话.get("chat_type") or "group"), str(会话.get("appid") or ""))
+        for 标识, 会话 in _遍历作用域会话缓存()
+        if _恢复会话签名(会话) != 启动会话.get(
+            _会话作用域键(标识, str(会话.get("chat_type") or "group"), str(会话.get("appid") or ""))
+        )
+    }
+    快照作用域: dict[str, set[tuple[str, str]]] = {}
+    for 项 in 快照.get("conversations") or []:
+        标识 = str(项.get("会话标识") or "").strip()
+        最后 = (快照.get("summaries") or {}).get(int(项.get("last_id") or 0)) or {}
+        类型 = str(项.get("chat_type") or 最后.get("chat_type") or "group")
+        应用 = str(项.get("appid") or 最后.get("appid") or "").strip()
+        快照作用域.setdefault(标识, set()).add((应用, 类型))
+
+    def 恢复会话未读(标识: str, 会话: dict[str, Any]) -> None:
+        类型, 应用 = str(会话.get("chat_type") or "group"), str(会话.get("appid") or "").strip()
+        键 = _会话作用域键(标识, 类型, 应用)
+        if 键 in _未读待写:
+            会话["unread"] = max(0, int(_未读待写[键] or 0))
+            return
+        if 键 in 已更新会话:
+            return
+        旧键可复用 = _旧会话元数据可复用(标识, 类型, 应用) and 快照作用域.get(标识, {(应用, 类型)}) == {(应用, 类型)}
+        if 旧键可复用 and 标识 in _未读待写:
+            会话["unread"] = max(0, int(_未读待写[标识] or 0))
+        elif 键 in 持久化未读表:
+            会话["unread"] = max(int(会话.get("unread") or 0), max(0, int(持久化未读表[键] or 0)))
+        elif 旧键可复用 and 标识 in 持久化未读表:
+            会话["unread"] = max(int(会话.get("unread") or 0), max(0, int(持久化未读表[标识] or 0)))
+
+    for 标识, 会话 in _遍历作用域会话缓存():
+        恢复会话未读(标识, 会话)
     # 只恢复会话骨架和最后一条摘要；历史消息在打开会话时由分页接口读取。
     会话骨架 = 快照.get("conversations") or []
     摘要表 = 快照.get("summaries") or {}
@@ -9850,45 +9767,55 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
         会话标识 = str(项.get("会话标识") or "").strip()
         if not 会话标识:
             continue
-        已恢复会话.add(会话标识)
         最后ID = int(项.get("last_id") or 0)
         最后 = dict(摘要表.get(最后ID) or {})
         _规范化聊天摘要(最后)
-        类型 = str(最后.get("chat_type") or 项.get("chat_type") or "group")
-        appid = str(最后.get("appid") or "")
+        类型 = str(项.get("chat_type") or 最后.get("chat_type") or "group")
+        appid = str(项.get("appid") or 最后.get("appid") or "").strip()
+        作用域键 = _会话作用域键(会话标识, 类型, appid)
+        已恢复会话.add(作用域键)
+        if 最后 and (str(最后.get("appid") or "").strip() != appid or str(最后.get("chat_type") or "group") != 类型):
+            最后 = {}
         会话 = _取得会话缓存(会话标识, 类型, appid)
-        会话["msg_count"] = max(
-            int(会话.get("msg_count") or 0),
-            int(项.get("msg_count") or 0),
-        )
-        if 会话标识 not in 已更新会话 and 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
-            会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
+        会话["msg_count"] = max(int(会话.get("msg_count") or 0), int(项.get("msg_count") or 0))
+        恢复会话未读(会话标识, 会话)
         摘要时间 = int(最后.get("ts") or 项.get("last_ts") or 0)
         当前摘要时间 = int(会话.get("last_ts") or 0)
-        if 摘要时间 > 当前摘要时间 or (摘要时间 == 当前摘要时间 and 会话标识 not in 已更新会话):
+        if 摘要时间 > 当前摘要时间 or (摘要时间 == 当前摘要时间 and 作用域键 not in 已更新会话):
             会话["last_content"] = _替换提及名称(_消息列表摘要(最后), 会话标识)
             会话["last_nickname"] = str(最后.get("nickname") or "")
             会话["last_message_id"] = str(最后.get("message_id") or "")
             会话["last_ts"] = 摘要时间
         最大序号 = max(最大序号, 最后ID)
         恢复数 += 1
-    # 置顶/备注/昵称中的会话即使没有消息也保留占位，但不触发历史读取。
+    # 元数据中的作用域 JSON 是身份键，不作为真实群 OpenID 创建占位。
     元数据会话: set[str] = set()
-    for 键 in ("pinned", "remarks", "nicknames"):
-        值 = 元数据.get(键)
-        if isinstance(值, dict):
-            元数据会话.update(str(会话 or "").strip() for 会话 in 值)
-        elif isinstance(值, list):
-            元数据会话.update(str(会话 or "").strip() for 会话 in 值)
-    for 会话标识 in 元数据会话 - 已恢复会话:
-        会话标识 = str(会话标识 or "").strip()
-        if not 会话标识 or 会话标识 in 消息缓存:
+    for 字段 in ("pinned", "remarks", "nicknames"):
+        值 = 元数据.get(字段)
+        if isinstance(值, (dict, list)):
+            元数据会话.update(str(键 or "").strip() for 键 in 值 if str(键 or "").strip())
+    for 元数据键 in 元数据会话:
+        类型, appid, 会话标识 = "group", "", 元数据键
+        if 元数据键.startswith("["):
+            try:
+                作用域 = json.loads(元数据键)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(作用域, list) or len(作用域) != 3 or 作用域[1] not in {"group", "user"}:
+                continue
+            appid, 类型, 会话标识 = (str(值 or "").strip() for 值 in 作用域)
+        else:
+            旧会话 = 消息缓存.get(会话标识) or {}
+            旧类型, 旧应用 = str(旧会话.get("chat_type") or "group"), str(旧会话.get("appid") or "").strip()
+            if _旧会话元数据可复用(会话标识, 旧类型, 旧应用):
+                类型, appid = 旧类型, 旧应用
+        作用域键 = _会话作用域键(会话标识, 类型, appid)
+        if not 会话标识 or 作用域键 in 已恢复会话:
             continue
-        会话 = _取得会话缓存(会话标识, "group", "")
-        if 会话标识 not in _未读待写 and 会话标识 in 持久化未读表:
-            会话["unread"] = max(0, int(持久化未读表.get(会话标识) or 0))
-        if 会话标识 in 置顶列表 or 会话标识 in 元数据会话:
-            恢复数 += 1
+        会话 = _取得会话缓存(会话标识, 类型, appid)
+        恢复会话未读(会话标识, 会话)
+        已恢复会话.add(作用域键)
+        恢复数 += 1
     global 发送序号
     if 最大序号 > 发送序号:
         发送序号 = 最大序号

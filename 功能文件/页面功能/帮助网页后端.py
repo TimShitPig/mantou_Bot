@@ -95,13 +95,13 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 控制台执行器最大并发数 = 4
 消息列表缓存秒数 = 3.0
 消息列表缓存最大条目 = 64
-消息列表缓存: dict[tuple[str, str, int, int], tuple[float, dict[str, Any]]] = globals().get("消息列表缓存") or {}
-消息列表缓存锁: dict[tuple[str, str, int, int], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
-消息列表后台刷新: set[tuple[str, str, int, int]] = globals().get("消息列表后台刷新") or set()
-消息列表昵称回填任务: dict[tuple[str, str, int, int], asyncio.Task[Any]] = (
+消息列表缓存: dict[tuple[str, str, int, int, str | None], tuple[float, dict[str, Any]]] = globals().get("消息列表缓存") or {}
+消息列表缓存锁: dict[tuple[str, str, int, int, str | None], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
+消息列表后台刷新: set[tuple[str, str, int, int, str | None]] = globals().get("消息列表后台刷新") or set()
+消息列表昵称回填任务: dict[tuple[str, str, int, int, str | None], asyncio.Task[Any]] = (
     globals().get("消息列表昵称回填任务") or {}
 )
-消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0)
+消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0) + 1
 消息历史查询任务: dict[tuple[Any, ...], asyncio.Task[Any]] = (
     globals().get("消息历史查询任务") or {}
 )
@@ -216,7 +216,7 @@ def _清理消息列表缓存锁() -> None:
 
 
 def _写入消息列表缓存(
-    缓存键: tuple[str, str, int, int], 结果: dict[str, Any], 缓存版本: int
+    缓存键: tuple[str, str, int, int, str | None], 结果: dict[str, Any], 缓存版本: int
 ) -> None:
     if 缓存版本 != 消息列表缓存版本:
         return
@@ -228,19 +228,19 @@ def _写入消息列表缓存(
 
 
 async def _构建消息列表(
-    过滤: str, 搜索: str, 页码: int, 每页: int
+    过滤: str, 搜索: str, 页码: int, 每页: int, appid: str | None = None
 ) -> dict[str, Any]:
     from 功能文件.管理功能.基础功能 import 消息记录
 
     结果 = await _控制台线程执行(
-        消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页
+        消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页, appid
     )
-    _安排消息列表昵称回填((过滤, 搜索, 页码, 每页), 结果.get("chats") or [])
+    _安排消息列表昵称回填((过滤, 搜索, 页码, 每页, appid), 结果.get("chats") or [])
     return 结果
 
 
 async def _后台回填消息列表昵称(
-    缓存键: tuple[str, str, int, int], 聊天项列表: list[dict[str, Any]]
+    缓存键: tuple[str, str, int, int, str | None], 聊天项列表: list[dict[str, Any]]
 ) -> None:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
@@ -251,14 +251,14 @@ async def _后台回填消息列表昵称(
             return
         缓存结果 = copy.deepcopy(缓存项[1])
         缓存聊天 = {
-            (str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or "")): 聊天
+            (str(聊天.get("appid") or ""), str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or "")): 聊天
             for 聊天 in 缓存结果.get("chats") or []
             if isinstance(聊天, dict)
         }
         for 聊天 in 聊天项列表:
             if not isinstance(聊天, dict):
                 continue
-            键 = (str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or ""))
+            键 = (str(聊天.get("appid") or ""), str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or ""))
             目标 = 缓存聊天.get(键)
             if not 目标:
                 continue
@@ -277,7 +277,7 @@ async def _后台回填消息列表昵称(
 
 
 def _安排消息列表昵称回填(
-    缓存键: tuple[str, str, int, int], 聊天项列表: list[dict[str, Any]]
+    缓存键: tuple[str, str, int, int, str | None], 聊天项列表: list[dict[str, Any]]
 ) -> None:
     if not any(
         isinstance(聊天, dict)
@@ -315,11 +315,11 @@ def _安排消息列表昵称回填(
 
 
 async def _后台刷新消息列表(
-    缓存键: tuple[str, str, int, int], 过滤: str, 搜索: str, 页码: int, 每页: int,
-    缓存版本: int,
+    缓存键: tuple[str, str, int, int, str | None], 过滤: str, 搜索: str, 页码: int, 每页: int,
+    缓存版本: int, appid: str | None = None,
 ) -> None:
     try:
-        结果 = await _构建消息列表(过滤, 搜索, 页码, 每页)
+        结果 = await _构建消息列表(过滤, 搜索, 页码, 每页, appid)
         _写入消息列表缓存(缓存键, 结果, 缓存版本)
     except Exception as exc:
         logger.debug("帮助控制台消息列表后台刷新失败：错误类型=%s", type(exc).__name__)
@@ -1470,6 +1470,9 @@ async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.
     会话标识 = str(request.query.get("chat_id") or "").strip()
     类型 = str(request.query.get("chat_type") or "group").strip().lower()
     消息ID = str(request.query.get("message_id") or "").strip()
+    appid = str(request.query.get("appid") or "").strip()
+    if appid and not re.fullmatch(r"[0-9]{4,32}", appid):
+        return web.Response(status=400, text="媒体记录参数无效")
     try:
         媒体索引 = int(request.query.get("media_index") or 0)
     except (TypeError, ValueError):
@@ -1491,7 +1494,7 @@ async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.
         数据库快照 = 消息记录存储.获取数据库配置快照(当前帮助网页配置)
         归档 = await _控制台线程执行(
             消息记录存储.执行数据库配置快照操作, 数据库快照,
-            partial(消息记录存储.读取消息媒体归档, provider=provider), 会话标识, 消息ID, 类型, 媒体索引,
+            partial(消息记录存储.读取消息媒体归档, provider=provider, appid=appid), 会话标识, 消息ID, 类型, 媒体索引,
         )
         if not isinstance(归档, dict):
             return web.Response(status=404, text="媒体归档不存在")
@@ -1512,10 +1515,10 @@ async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.
             参数 = (会话标识, 消息ID, 类型, 媒体索引, 归档, 直链, 获取时间)
             成功 = await _控制台线程执行(
                 消息记录存储.执行数据库配置快照操作, 数据库快照,
-                partial(消息记录.更新消息媒体直链, provider=provider), *参数,
+                partial(消息记录.更新消息媒体直链, provider=provider, appid=appid), *参数,
             )
             if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(当前帮助网页配置):
-                消息记录.更新缓存消息媒体直链(*参数, provider=provider)
+                消息记录.更新缓存消息媒体直链(*参数, provider=provider, appid=appid)
 
         阶段 = "archive_open"
         读取上下文 = (
@@ -3215,15 +3218,18 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
         每页 = 0 if 原始每页 <= 0 else min(100, 原始每页)
     except (TypeError, ValueError):
         每页 = 50
+    appid = str((数据 or {}).get("appid") or "").strip() if "appid" in (数据 or {}) else None
+    if appid is not None and appid and not re.fullmatch(r"[0-9]{4,32}", appid):
+        return _控制台错误(400, "会话参数无效")
     页码 = max(1, 页码)
-    缓存键 = (过滤, 搜索, 页码, 每页)
+    缓存键 = (过滤, 搜索, 页码, 每页, appid)
     当前时间 = time.monotonic()
     缓存项 = 消息列表缓存.get(缓存键)
     if 缓存项:
         缓存时间, 缓存结果 = 缓存项
         if 当前时间 - 缓存时间 >= 消息列表缓存秒数 and 缓存键 not in 消息列表后台刷新:
             消息列表后台刷新.add(缓存键)
-            asyncio.create_task(_后台刷新消息列表(缓存键, 过滤, 搜索, 页码, 每页, 消息列表缓存版本))
+            asyncio.create_task(_后台刷新消息列表(缓存键, 过滤, 搜索, 页码, 每页, 消息列表缓存版本, appid))
         return web.json_response(
             {"ok": True, **缓存结果},
             headers={"Cache-Control": "no-store"},
@@ -3236,7 +3242,7 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
                 结果 = 缓存项[1]
             else:
                 缓存版本 = 消息列表缓存版本
-                结果 = await _构建消息列表(过滤, 搜索, 页码, 每页)
+                结果 = await _构建消息列表(过滤, 搜索, 页码, 每页, appid)
                 _写入消息列表缓存(缓存键, 结果, 缓存版本)
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
@@ -3260,7 +3266,7 @@ async def _合并查询消息历史(
         查询 = (
             _控制台线程执行(消息记录.获取引用定位历史, 会话标识, 类型, appid, limit, 引用标识, before_id, after_id)
             if 历史窗口 else
-            _控制台线程执行(消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id)
+            _控制台线程执行(消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id, appid)
         )
         任务 = asyncio.create_task(
             查询,
@@ -3304,7 +3310,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         limit = max(1, min(100, int((数据 or {}).get("limit") or 100)))
     except (TypeError, ValueError):
         limit = 100
-    if not 会话标识 or len(会话标识) > 200:
+    if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or (appid and not re.fullmatch(r"[0-9]{4,32}", appid)):
         return _控制台错误(400, "会话参数无效")
     if (
         历史窗口 and (
@@ -3334,6 +3340,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
                     会话标识,
                     类型,
                     str(消息项.get("message_id") or ""),
+                    appid=str(消息项.get("appid") or ""),
                 )
                 消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         except Exception as exc:
@@ -3728,12 +3735,14 @@ async def _处理消息置顶(request: web.Request) -> web.Response:
         置顶 = bool(原始置顶)
     else:
         置顶 = str(原始置顶 or "").strip().lower() in {"1", "true", "yes", "on", "置顶"}
-    if not 会话标识:
+    类型 = str((数据 or {}).get("chat_type") or "group").strip()
+    appid = str((数据 or {}).get("appid") or "").strip()
+    if not 会话标识 or 类型 not in {"group", "user"} or (appid and not re.fullmatch(r"[0-9]{4,32}", appid)):
         return _控制台错误(400, "参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        if not await _控制台线程执行(消息记录.设置会话置顶, 会话标识, 置顶):
+        if not await _控制台线程执行(消息记录.设置会话置顶, 会话标识, 置顶, 类型, appid):
             return _控制台错误(409, "数据库未保存，会话置顶未生效")
         清理消息列表缓存()
         return web.json_response(
@@ -3749,12 +3758,14 @@ async def _处理消息已读(request: web.Request) -> web.Response:
         return _控制台错误(401, "请先登录控制台")
     数据 = await _读取请求JSON(request)
     会话标识 = str((数据 or {}).get("chat_id") or "").strip()
-    if not 会话标识:
+    类型 = str((数据 or {}).get("chat_type") or "group").strip()
+    appid = str((数据 or {}).get("appid") or "").strip()
+    if not 会话标识 or 类型 not in {"group", "user"} or (appid and not re.fullmatch(r"[0-9]{4,32}", appid)):
         return _控制台错误(400, "参数无效")
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        消息记录.设置会话已读(会话标识)
+        消息记录.设置会话已读(会话标识, 类型, appid)
         # 已读值已进入消息记录后台队列；不要让浏览器等待 MySQL 提交，
         # 否则每次打开群聊都会被数据库往返阻塞数百毫秒。
         清理消息列表缓存()
@@ -3821,11 +3832,11 @@ async def _读取群设置请求(
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        已知会话 = 消息记录.消息缓存.get(群标识)
+        已知会话 = 消息记录._读取作用域会话缓存(群标识, "group", appid)
     except Exception as exc:
         logger.warning("帮助控制台群设置范围检查失败：错误类型=%s", type(exc).__name__)
         return None, _群设置错误(502, "群资料暂时不可用，请稍后重试")
-    if 已知会话 is not None:
+    if 已知会话:
         if not isinstance(已知会话, dict) or 已知会话.get("chat_type") != "group":
             return None, _群设置错误(400, "只支持已知群聊")
         已知AppID = 已知会话.get("appid")
@@ -3995,18 +4006,18 @@ async def _处理群备注(request: web.Request) -> web.Response:
 
         if 操作 == "get":
             结果 = {
-                "remark": 消息记录.获取群备注(会话标识),
-                "group_qq": 消息记录.获取群QQ号(会话标识),
+                "remark": 消息记录.获取群备注(会话标识, 数据["appid"]),
+                "group_qq": 消息记录.获取群QQ号(会话标识, 数据["appid"]),
             }
             return _群设置响应({"ok": True, **结果, **_群设置请求范围(数据)})
         if 操作 == "delete":
-            if not await _控制台线程执行(消息记录.删除群备注, 会话标识):
+            if not await _控制台线程执行(消息记录.删除群备注, 会话标识, 数据["appid"]):
                 return _群设置错误(409, "备注删除失败")
             清理消息列表缓存()
             return _群设置响应({"ok": True, "message": "备注已删除", **_群设置请求范围(数据)})
         备注 = 数据.get("remark", "").strip()
         群QQ = 数据.get("group_qq", "").strip()
-        if not await _控制台线程执行(消息记录.保存群备注, 会话标识, 备注, 群QQ):
+        if not await _控制台线程执行(消息记录.保存群备注, 会话标识, 备注, 群QQ, 数据["appid"]):
             return _群设置错误(409, "备注保存失败")
         清理消息列表缓存()
         return _群设置响应({"ok": True, "message": "备注已保存", **_群设置请求范围(数据)})

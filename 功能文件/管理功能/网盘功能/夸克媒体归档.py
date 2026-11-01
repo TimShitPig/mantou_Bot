@@ -577,7 +577,9 @@ async def 停止图片归档任务() -> None:
     图片归档任务.clear()
 
 
-def 构造网页媒体字段(媒体: Any, 会话标识: str, 类型: str, 消息ID: str) -> dict[str, Any] | None:
+def 构造网页媒体字段(
+    媒体: Any, 会话标识: str, 类型: str, 消息ID: str, appid: str = "",
+) -> dict[str, Any] | None:
     if not isinstance(媒体, dict):
         return None
     结果 = copy.deepcopy(媒体)
@@ -594,7 +596,7 @@ def 构造网页媒体字段(媒体: Any, 会话标识: str, 类型: str, 消息
             continue
         路由 = "quark-media" if str(索引) in 夸克 else "lanzou-image"
         项.update(src="/api/message/" + 路由 + "?" + urlencode({"chat_id": 会话标识, "chat_type": 类型,
-                    "message_id": 消息ID, "media_index": 索引}), archived=True,
+                    "message_id": 消息ID, "media_index": 索引, "appid": str(appid or "").strip()}), archived=True,
                  content_type=str(归档.get("content_type") or ""), size=int(归档.get("size") or 0))
         for k in ("url", "download_url", "_quark_archives", "_lanzou_archives", "_lanzou_archive"):
             项.pop(k, None)
