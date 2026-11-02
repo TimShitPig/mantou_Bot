@@ -1393,7 +1393,7 @@
           back.removeAttribute('aria-hidden');
         }
       };
-      const msgLayout = {listWidth:273, composerHeight:173, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
+      const msgLayout = {listWidth:273, composerHeight:173, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, revision:0, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
         const data = value && typeof value === 'object' ? value : {};
         const width = Number.parseInt(data.list_width ?? data.listWidth, 10);
@@ -1413,6 +1413,7 @@
       };
       const applyMsgLayout = (value = {}, persist = false) => {
         const next = normalizeMsgLayout(value);
+        msgLayout.revision += 1;
         Object.assign(msgLayout, next);
         const shell = $('msg-shell');
         if (shell) {
@@ -1442,7 +1443,7 @@
       const queueMsgLayoutSave = () => {
         if (!msgLayout.loaded || !consoleAppid) return;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
-        const appid = consoleAppid, generation = consoleGeneration;
+        const appid = consoleAppid, generation = consoleGeneration, revision = msgLayout.revision;
         const layout = {list_width:msgLayout.listWidth, composer_height:msgLayout.composerHeight,
           list_collapsed:msgLayout.listCollapsed, composer_collapsed:msgLayout.composerCollapsed};
         msgLayout.saveTimer = setTimeout(async () => {
@@ -1451,7 +1452,7 @@
           try {
             const data = await api('message/layout', {method:'POST', body:JSON.stringify(layout)});
             msgLayout.persisted = Boolean(data.persisted);
-            if (data.layout) applyMsgLayout(data.layout, false);
+            if (data.layout && revision === msgLayout.revision) applyMsgLayout(data.layout, false);
           } catch (error) {
             if (error.name !== 'AbortError' && error.status !== 409 && error.status !== 401) toast('消息布局保存失败');
           }
@@ -1460,13 +1461,30 @@
       const loadMsgLayout = async () => {
         if (!consoleAppid) return;
         const appid = consoleAppid, generation = consoleGeneration;
+        msgLayout.loaded = false;
+        if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = true;
         applyMsgLayout();
         try {
           const data = await api('message/layout');
           msgLayout.persisted = Boolean(data.persisted);
           applyMsgLayout(data.layout || {});
+          if (appid === consoleAppid && generation === consoleGeneration) {
+            msgLayout.loaded = true;
+            if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = false;
+          }
         } catch (_) {}
-        if (appid === consoleAppid && generation === consoleGeneration) msgLayout.loaded = true;
+      };
+      const shrinkMsgPanels = () => {
+        if (!consoleAppid || !msgLayout.loaded || window.matchMedia?.('(max-width: 760px)').matches) return;
+        const next = normalizeMsgLayout({...msgLayout,
+          listWidth:Math.round(msgLayout.listWidth * 0.75),
+          composerHeight:Math.round(msgLayout.composerHeight * 0.75)});
+        if (next.listWidth === msgLayout.listWidth && next.composerHeight === msgLayout.composerHeight) {
+          toast('面板已达到最小尺寸');
+          return;
+        }
+        applyMsgLayout(next, true);
+        toast('面板已缩小，可拖拽调整');
       };
       const bindMsgLayoutControls = () => {
         const shell = $('msg-shell');
@@ -2080,6 +2098,7 @@
         msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
         msgLayout.saveTimer = null; msgLayout.loaded = false; msgLayout.persisted = false; applyMsgLayout();
+        if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = true;
         window.msgBotProfile = {};
         clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
         if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
@@ -6910,6 +6929,7 @@
       $('msg-mute-custom').addEventListener('input', (e) => { const raw = Number(e.target.value); if (!Number.isFinite(raw) || raw < 1) return; const days = Math.min(30, Math.floor(raw)); e.target.value = String(days); msgState.muteMinutes = days * 1440; });
       $('msg-mute-cancel').addEventListener('click', () => { setMsgModal('msg-mute-modal', false); });
       $('msg-clear-open').addEventListener('click', openMsgClear);
+      $('msg-layout-shrink')?.addEventListener('click', shrinkMsgPanels);
       $('msg-clear-scope').addEventListener('change', () => { void previewMsgClear(); });
       $('msg-clear-preview-button').addEventListener('click', () => { void previewMsgClear(); });
       $('msg-clear-confirm').addEventListener('click', () => { void confirmMsgClear(); });

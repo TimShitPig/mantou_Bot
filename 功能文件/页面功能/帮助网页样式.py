@@ -793,7 +793,7 @@
       }
 
     /* 聊天工作区，与控制台共用主题变量。 */
-.msg-shell { --msg-list-width:340px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; transition:grid-template-columns .22s ease; }
+.msg-shell { --msg-list-width:273px; display:grid; grid-template-columns:minmax(220px,var(--msg-list-width)) minmax(0,1fr); height:calc(100vh - 126px); min-height:520px; align-items:stretch; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; transition:grid-template-columns .22s ease; }
              .msg-panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--panel); }
              .chat-list-panel { position:relative; border-right:1px solid var(--line); background:#fafafa; }
             .msg-list-head { display:flex; flex-direction:column; gap:8px; padding:10px 48px 8px 12px; border-bottom:1px solid var(--line); background:var(--panel); }
@@ -1833,6 +1833,7 @@
     }
     @media (max-width:760px) {
       :root body.messages-workspace .shell { border-radius:0; }
+      :root body.messages-workspace .msg-layout-shrink { display:none; }
       :root body.messages-workspace::after { display:none; }
       :root body.messages-workspace .shell { grid-template-columns:58px minmax(0,1fr); }
       :root body.messages-workspace .sidebar { display:flex; padding:14px 5px 10px; gap:14px; }
