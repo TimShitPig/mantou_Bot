@@ -2233,6 +2233,15 @@
         if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       };
+      const msgKnownGroupMemberCount = (...values) => {
+        for (const value of values) {
+          if (typeof value !== 'number' && typeof value !== 'string') continue;
+          if (typeof value === 'string' && !/^[0-9]+$/.test(value.trim())) continue;
+          const count = Number(value);
+          if (Number.isSafeInteger(count) && count > 0) return count;
+        }
+        return null;
+      };
       const msgChatMatchesView = (chat, {ignoreTypeFilter = false} = {}) => {
         if (!msgInSelectedBot(chat)) return false;
         const type = String(chat.chat_type || 'group');
@@ -2354,7 +2363,9 @@
           const contactAvatar = isPrivate ? String(current.avatar || overlay.avatar || '') : '';
           const serverTs = Number(current.last_ts || 0);
           const eventTs = Number(overlay.last_ts || 0);
-          if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)) {
+          if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)
+            && (isPrivate || msgKnownGroupMemberCount(current.member_num, current.group_member_num) !== null
+              || msgKnownGroupMemberCount(overlay.member_num, overlay.group_member_num) === null)) {
             if (isPrivate && (keepFriendOverlay || (!validMsgNickname(current.nickname, chatId) && contactName)
               || (!current.avatar && contactAvatar))) {
               // 消息摘要跟随较新服务器记录，只保留后台已取得的联系人资料。
@@ -2369,13 +2380,15 @@
             : Boolean(current.is_admin || overlay.is_admin);
           const groupProfile = Number(current.group_info_updated_at || 0) > Number(overlay.group_info_updated_at || 0) ? current : overlay;
           const groupName = String(groupProfile.group_name || current.group_name || overlay.group_name || '');
+          const memberNum = msgKnownGroupMemberCount(groupProfile.member_num, groupProfile.group_member_num,
+            current.member_num, current.group_member_num, overlay.member_num, overlay.group_member_num);
           byId.set(chatKey, {
             ...current,
             ...(serverTs > eventTs ? {} : overlay),
             group_name:groupName,
             group_info_updated_at:Math.max(Number(current.group_info_updated_at || 0), Number(overlay.group_info_updated_at || 0)),
-            member_num:groupProfile.member_num ?? current.member_num ?? overlay.member_num,
-            group_member_num:groupProfile.group_member_num ?? current.group_member_num ?? overlay.group_member_num,
+            member_num:memberNum,
+            group_member_num:memberNum,
             nickname:current.remark || (current.chat_type === 'group' && groupName) || contactName || current.nickname || overlay.nickname,
             ...(isPrivate ? {avatar:contactAvatar, ...friendState} : groupState),
             remark:Object.prototype.hasOwnProperty.call(current, 'remark') ? String(current.remark || '') : String(overlay.remark || ''),
@@ -3591,16 +3604,23 @@
       };
       const updateMsgHead = (data) => {
         if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
+        const responseInfo = data.group_info || {};
+        if ((responseInfo.appid && String(responseInfo.appid) !== String(msgState.chatAppid || ''))
+          || (responseInfo.group_openid && String(responseInfo.group_openid) !== String(msgState.chatId || ''))) {
+          data = {...data, group_info:{}};
+        }
         const previousGroupStatus = msgState.chatType === 'group' ? msgState.chats.find((chat) => chat.chat_type === 'group' && String(chat.chat_id || '') === msgState.chatId && String(chat.appid || '') === msgState.chatAppid)?.membership_status : null;
         const groupState = msgState.chatType === 'group' ? syncMsgGroupState(msgState.chatId, data.group_info || {}, msgState.chatAppid) : null;
         if (previousGroupStatus != null && previousGroupStatus !== groupState?.membership_status) scheduleMsgChatRender();
         const nameEl = $('msg-head-name');
-        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || '') && String(c.chat_type || 'group') === msgState.chatType);
+        const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || '')
+          && String(c.chat_type || 'group') === msgState.chatType
+          && String(c.appid || '') === String(msgState.chatAppid || ''));
         const knownInfo = data.group_info || {};
         const newerGroupInfo = Number(knownInfo.updated_at || 0) > Number(curChat?.group_info_updated_at || 0);
         const groupName = newerGroupInfo ? (knownInfo.group_name || curChat?.group_name) : (curChat?.group_name || knownInfo.group_name);
         const knownName = curChat?.remark || (msgState.chatType === 'group' ? groupName : '') || data.chat_name || curChat?.nickname;
-        const headKey = msgState.chatType + '|' + String(msgState.chatId || '');
+        const headKey = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
         const previousName = nameEl.dataset.chatKey === headKey ? nameEl.textContent : '';
         const blankContact = msgState.chatType === 'user' && !curChat?.remark && msgState.profiles?.[msgState.chatId]?.nickname_blank && !validMsgNickname(knownName, msgState.chatId);
         nameEl.textContent = blankContact ? '\u00a0' : (knownName || previousName || String(msgState.chatId || '') || '未命名会话');
@@ -3615,10 +3635,24 @@
           nameEl.classList.remove('admin');
         }
         const gInfo = data.group_info || {};
-        const gNum = Number(gInfo.member_num ?? curChat?.member_num ?? curChat?.group_member_num ?? 0);
+        const infoCount = msgKnownGroupMemberCount(gInfo.member_num, gInfo.group_member_num);
+        const currentCount = msgKnownGroupMemberCount(curChat?.member_num, curChat?.group_member_num);
+        const infoTime = Number(gInfo.updated_at || 0), currentTime = Number(curChat?.group_info_updated_at || 0);
+        const gNum = currentTime > infoTime ? msgKnownGroupMemberCount(currentCount, infoCount)
+          : msgKnownGroupMemberCount(infoCount, currentCount);
+        if (msgState.chatType === 'group' && curChat && infoCount !== null && infoTime >= currentTime) {
+          curChat.member_num = curChat.group_member_num = infoCount;
+          if (infoTime) curChat.group_info_updated_at = infoTime;
+          const scope = msgScopeKey('group', msgState.chatId, msgState.chatAppid);
+          const overlay = msgState.realtimeChats.get(scope) || curChat;
+          if (Number(overlay.group_info_updated_at || 0) <= infoTime) {
+            msgState.realtimeChats.set(scope, {...overlay, member_num:infoCount,
+              group_member_num:infoCount, group_info_updated_at:infoTime});
+          }
+        }
         const removed = msgState.chatType === 'user' ? msgChatIsRemoved({...curChat, ...data, chat_type:'user'}) : groupState?.membership_status === 'removed';
         msgState.chatRemoved = removed;
-        const hasMemberCount = Number.isFinite(gNum) && gNum > 0;
+        const hasMemberCount = gNum !== null;
         const headDetails = msgState.chatType === 'group'
           ? `群聊 · ${msgState.chatId}${hasMemberCount ? ` · 群成员 ${gNum} 人` : ' · 人数未知'}${removed ? ' · 你已被移除群聊' : ''}`
           : `私聊 · ${msgState.chatId}${removed ? ' · 对方已删除机器人好友 · 保留聊天记录' : ''}`;
@@ -5990,7 +6024,7 @@
         if (!msgInSelectedBot(payload)) return;
         const chatId = String(payload?.chat_id || payload?.group_openid || '').trim();
         if (!chatId) return;
-        const memberNum = Number(payload?.member_num);
+        const memberNum = msgKnownGroupMemberCount(payload?.member_num, payload?.group_member_num);
         const groupName = String(payload?.group_name || '').trim();
         const appid = String(payload?.appid || '').trim();
         const updatedAt = Number(payload?.updated_at || 0);
@@ -5998,7 +6032,7 @@
           if (String(chat.chat_id || '') !== chatId || String(chat.chat_type || 'group') !== 'group' || (appid && chat.appid && String(chat.appid) !== appid)) return chat;
           if (updatedAt && Number(chat.group_info_updated_at || 0) > updatedAt) return chat;
           const next = {...chat};
-          if (Number.isFinite(memberNum) && memberNum >= 0) next.member_num = next.group_member_num = Math.floor(memberNum);
+          if (memberNum !== null) next.member_num = next.group_member_num = memberNum;
           if (groupName) { next.group_name = groupName; next.nickname = String(next.remark || groupName); }
           groupProfileFields.forEach((field) => {
             const value = payload[field];
@@ -6008,7 +6042,8 @@
           return next;
         };
         msgState.chats = (msgState.chats || []).map(update);
-        const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId && String(chat.chat_type || 'group') === 'group');
+        const current = msgState.chats.find((chat) => String(chat.chat_id || '') === chatId
+          && String(chat.chat_type || 'group') === 'group' && String(chat.appid || '') === appid);
         const overlay = msgState.realtimeChats.get(msgScopeKey('group', chatId));
         if (overlay || current) msgState.realtimeChats.set(msgScopeKey('group', chatId), update(overlay || current));
         if (msgState.chatId === chatId && msgState.chatType === 'group') {

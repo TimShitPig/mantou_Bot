@@ -2257,7 +2257,22 @@ def _推送群状态事件(会话标识: str, 状态: str, appid: str = "") -> N
                 _消息事件订阅.pop(队列, None)
 
 
-def _推送群人数事件(会话标识: str, 成员数: int, appid: str = "") -> None:
+def _规范群成员人数(值: Any) -> int | None:
+    """仅把已取得的正整数作为人数；旧缓存的默认零与无效值保持未知。"""
+    if isinstance(值, bool):
+        return None
+    if isinstance(值, str):
+        值 = 值.strip()
+        if not re.fullmatch(r"[0-9]+", 值):
+            return None
+        try:
+            值 = int(值)
+        except ValueError:
+            return None
+    return 值 if isinstance(值, int) and 值 > 0 else None
+
+
+def _推送群人数事件(会话标识: str, 成员数: int | None, appid: str = "") -> None:
     """把群人数变化实时推送到当前消息记录页面。"""
     if not _消息事件订阅:
         return
@@ -2269,7 +2284,7 @@ def _推送群人数事件(会话标识: str, 成员数: int, appid: str = "") -
             "chat_id": str(会话标识 or "").strip(),
             "chat_type": "group",
             "appid": appid,
-            "member_num": max(0, int(成员数 or 0)),
+            "member_num": _规范群成员人数(成员数),
             "group_name": str(信息.get("group_name") or ""),
             "updated_at": int(信息.get("updated_at") or 0),
         },
@@ -7320,18 +7335,10 @@ async def 刷新群信息(
         if not isinstance(标签, (list, tuple)):
             标签 = [] if 标签 in (None, "") else [标签]
         标签 = [str(值).strip() for 值 in 标签 if str(值 or "").strip()]
-        原始成员数 = (
-            结果.get("group_member_num")
-            if "group_member_num" in 结果
-            else 已有.get("member_num")
-        )
-        try:
-            成员数 = max(0, int(原始成员数 or 0))
-        except (TypeError, ValueError):
-            try:
-                成员数 = max(0, int(已有.get("member_num") or 0))
-            except (TypeError, ValueError):
-                成员数 = 0
+        成员数 = _规范群成员人数(结果.get("group_member_num"))
+        if 成员数 is None:
+            最新资料 = _读取群作用域信息(会话标识, appid)
+            成员数 = _规范群成员人数(最新资料.get("member_num")) or _规范群成员人数(已有.get("member_num"))
         群名 = str(结果.get("group_name") or "").strip() or str(已有.get("group_name") or "").strip()
         群备注 = (
             结果.get("group_finger_memo")
@@ -7438,7 +7445,7 @@ def 获取缓存的群信息(会话标识: str, appid: str = "") -> dict[str, An
     返回.setdefault("group_finger_memo", "")
     返回.setdefault("group_class_text", "")
     返回.setdefault("group_tags", [])
-    返回.setdefault("member_num", 0)
+    返回["member_num"] = _规范群成员人数(信息.get("member_num")) or _规范群成员人数(信息.get("group_member_num"))
     成员状态 = _读取群机器人状态(会话标识, appid)
     返回["membership_status"] = str(成员状态.get("status") or "unknown")
     返回["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
@@ -8055,7 +8062,8 @@ def _数据库聚合聊天项(
                     "pinned": bool(置顶键 and 置顶键 in 置顶顺序), "_pin_order": 置顶顺序.get(置顶键, 0),
                     **_聊天群成员状态(标识, 类型, 应用),
                     "is_admin": bool(群机器人是否管理员(标识, 应用)) if 类型 == "group" else False,
-                    "group_name": str(信息.get("group_name") or ""), "group_info_updated_at": int(信息.get("updated_at") or 0)})
+                    "group_name": str(信息.get("group_name") or ""), "group_info_updated_at": int(信息.get("updated_at") or 0),
+                    "member_num": _规范群成员人数(信息.get("member_num")) or _规范群成员人数(信息.get("group_member_num"))})
     return 聊天项
 
 
@@ -10330,10 +10338,7 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
             会话标识 = str(原始信息.get("group_openid") or "").strip()
             if not 会话标识:
                 continue
-            try:
-                成员数 = max(0, int(原始信息.get("member_num") or 0))
-            except (TypeError, ValueError):
-                成员数 = 0
+            成员数 = _规范群成员人数(原始信息.get("member_num"))
             标签 = 原始信息.get("group_tags")
             if not isinstance(标签, list):
                 标签 = [] if 标签 in (None, "") else [标签]
@@ -10385,6 +10390,8 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
                 or bool(现有.get("is_admin"))
             )
             if not 现有 or not 现有有资料 or 资料时间 >= 现有时间:
+                if 资料["member_num"] is None:
+                    资料["member_num"] = _规范群成员人数(现有.get("member_num"))
                 _写入群作用域信息(会话标识, 资料, appid)
                 恢复群数 += 1
         if 恢复群数:
