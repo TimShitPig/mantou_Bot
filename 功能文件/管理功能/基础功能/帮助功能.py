@@ -1115,6 +1115,7 @@ async def 发送Markdown键盘消息(
     *,
     主动发送: bool = False,
     自动提及: bool = True,
+    被动事件ID: str | None = None,
 ) -> bool:
     if 自动提及:
         md文本 = 构造QQ官方提及Markdown(event, md文本)
@@ -1153,15 +1154,16 @@ async def 发送Markdown键盘消息(
 
     消息对象 = getattr(event, "message_obj", None)
     消息ID = ""
-    for 对象 in (event, 消息对象):
-        值 = (
-            读取字段(对象, "message_id")
-            or 读取字段(对象, "id")
-            or 读取字段(对象, "msg_id")
-        )
-        if 值:
-            消息ID = str(值)
-            break
+    if 被动事件ID is None:
+        for 对象 in (event, 消息对象):
+            值 = (
+                读取字段(对象, "message_id")
+                or 读取字段(对象, "id")
+                or 读取字段(对象, "msg_id")
+            )
+            if 值:
+                消息ID = str(值)
+                break
 
     消息体: dict[str, Any] = {
         "content": "",
@@ -1174,6 +1176,16 @@ async def 发送Markdown键盘消息(
 
     群openid = 获取群openid同步(event)
     用户openid = 获取用户openid同步(event)
+    if 被动事件ID is not None and (
+        主动发送
+        or not 群openid
+        or not isinstance(被动事件ID, str)
+        or not 被动事件ID
+        or 被动事件ID != 被动事件ID.strip()
+        or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 被动事件ID)
+    ):
+        logger.warning("QQ官方Markdown发送失败：stage=init, reason=invalid_event_reply")
+        return False
     try:
         from 功能文件.管理功能.基础功能.消息记录 import (
             主动消息是否允许,
@@ -1188,9 +1200,8 @@ async def 发送Markdown键盘消息(
         主动消息无权限 = lambda *args, **kwargs: False
     目标会话 = str(群openid or 用户openid or "").strip()
     目标类型 = "group" if 群openid else "user"
-    # 没有 msg_id 时官方请求实际就是主动推送，即使调用方未显式传入
-    # ``主动发送=True``，也必须先检查群内主动消息权限。
-    实际主动发送 = bool(主动发送 or not 消息ID)
+    # msg_id 回复用户消息，event_id 响应官方支持的事件；两者都缺失才是主动推送。
+    实际主动发送 = bool(主动发送 or not (消息ID or 被动事件ID))
     if 实际主动发送 and 目标会话:
         查询权限 = None
         if 目标类型 == "group" and callable(查询群主动消息权限):
@@ -1216,7 +1227,9 @@ async def 发送Markdown键盘消息(
         route = Route(
             "POST", "/v2/groups/{group_openid}/messages", group_openid=群openid
         )
-        if 消息ID and not 主动发送:
+        if 被动事件ID is not None:
+            消息体["event_id"] = 被动事件ID
+        elif 消息ID and not 主动发送:
             消息体["msg_id"] = 消息ID
     elif 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
@@ -1289,7 +1302,7 @@ async def 发送Markdown键盘消息(
         )
         # 只有官方明确指出被动 msg_id 失效时才改用主动发送。
         # 网络超时/连接异常不能确认首个 POST 是否已成功，盲目重发会造成两条消息。
-        if not 消息ID or 主动发送 or not 被动消息已过期:
+        if 被动事件ID is not None or not 消息ID or 主动发送 or not 被动消息已过期:
             _记录QQ官方Markdown发送失败(e)
             return False
 

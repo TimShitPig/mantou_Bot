@@ -366,7 +366,9 @@ async def 处理公开帮助入口(event: Any, 命令文本: str, 配置: Any = 
     return True
 
 
-async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
+async def _发送欢迎消息(
+    event: Any, 成员openid: str, *, 被动事件ID: str | None = None,
+) -> bool:
     好友邀请链接 = await _获取好友邀请链接(event)
     文本 = "\n".join(
         [
@@ -379,17 +381,20 @@ async def _发送欢迎消息(event: Any, 成员openid: str) -> bool:
         event,
         文本,
         获取欢迎键盘(好友邀请链接),
-        主动发送=True,
+        主动发送=被动事件ID is None,
         自动提及=False,
+        被动事件ID=被动事件ID,
     )
 
 
-async def 发送群成员加入欢迎(event: Any, 成员openid: str) -> bool:
+async def 发送群成员加入欢迎(
+    event: Any, 成员openid: str, *, 被动事件ID: str | None = None,
+) -> bool:
     """发送入群欢迎消息，供 QQ 官方网关桥直接调用。"""
     成员 = str(成员openid or "").strip()
     if not 成员:
         return False
-    return await _发送欢迎消息(event, 成员)
+    return await _发送欢迎消息(event, 成员, 被动事件ID=被动事件ID)
 
 
 async def 处理群成员加入事件(event: Any) -> bool:

@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 13
+群成员加入桥版本 = 14
 QQ官方语音Silk补丁版本 = 1
 欢迎诊断事件名 = {
     "group_member_add",
@@ -686,6 +686,13 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             if 值 is not None and str(值).strip():
                 结果[字段名] = 值
                 break
+        if 字段名 == "_mantou_event_id" and 字段名 not in 结果:
+            # 原生 qq-botpy GroupManageEvent 把外层事件编号保存在 event_id。
+            for 数据 in 展开数据:
+                值 = _读取字段(数据, "event_id")
+                if isinstance(值, str) and 值:
+                    结果[字段名] = 值
+                    break
         if 字段名 not in 结果:
             if 字段名 in {"user_openid", "union_openid"}:
                 容器字段 = ("member", "user", "author")
@@ -783,7 +790,10 @@ async def _同步群成员人数变化(
         )
 
 
-async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配器模块: Any) -> None:
+async def _投递群成员加入事件(
+    客户端: Any, 原始事件: Any, 适配器模块: Any,
+    *, 事件类型: str = "GROUP_MEMBER_ADD",
+) -> None:
     """将官方成员加入事件包装为内部事件，避免混入普通消息解析。"""
     平台 = _读取字段(客户端, "platform")
     if 平台 is None:
@@ -792,7 +802,7 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
     事件数据 = _提取群成员加入数据(原始事件)
     logger.info(
         "QQ官方群欢迎诊断：stage=delivery, event_type=%s, %s",
-        "GROUP_MEMBER_ADD" if 事件数据.get("member_openid") else "GROUP_ADD_ROBOT",
+        事件类型,
         _事件字段状态(原始事件),
     )
     群号 = str(事件数据.get("group_openid") or "").strip()
@@ -817,6 +827,21 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
             bool(成员),
         )
         return
+
+    被动事件ID = None
+    if 事件类型 == "GROUP_ADD_ROBOT":
+        编号 = 事件数据.get("_mantou_event_id")
+        if (
+            not isinstance(编号, str)
+            or not 编号
+            or 编号 != 编号.strip()
+            or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 编号)
+        ):
+            logger.warning(
+                "QQ官方群欢迎诊断：stage=delivery, event_type=GROUP_ADD_ROBOT, reason=event_id_missing"
+            )
+            return
+        被动事件ID = 编号
 
     if 用户:
         try:
@@ -872,7 +897,9 @@ async def _投递群成员加入事件(客户端: Any, 原始事件: Any, 适配
     内部事件 = 平台.create_event(解析结果)
     from 功能文件.管理功能.群聊功能 import 群成员事件
 
-    发送成功 = await 群成员事件.发送群成员加入欢迎(内部事件, 成员)
+    发送成功 = await 群成员事件.发送群成员加入欢迎(
+        内部事件, 成员, 被动事件ID=被动事件ID,
+    )
     logger.info(
         "QQ官方群欢迎诊断：stage=send_result, sent=%s, has_group=%s, has_member=%s",
         bool(发送成功),
@@ -1176,7 +1203,9 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                         or ""
                     ).strip()
                     消息记录.标记群机器人已加入(群号, appid)
-                await _投递群成员加入事件(self, 原始事件, 适配器模块)
+                await _投递群成员加入事件(
+                    self, 原始事件, 适配器模块, 事件类型="GROUP_ADD_ROBOT",
+                )
             except Exception as 异常:
                 logger.warning(
                     "QQ官方机器人入群欢迎投递失败：error_type=%s",
