@@ -48,8 +48,8 @@ except Exception:
 控制台会话命名空间 = "console_session"
 消息布局命名空间 = "msg_console_layout"
 消息布局默认值 = {
-    "list_width": 364,
-    "composer_height": 230,
+    "list_width": 273,
+    "composer_height": 173,
     "list_collapsed": False,
     "composer_collapsed": False,
 }

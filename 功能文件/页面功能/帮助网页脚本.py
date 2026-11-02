@@ -1393,7 +1393,7 @@
           back.removeAttribute('aria-hidden');
         }
       };
-      const msgLayout = {listWidth:364, composerHeight:230, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
+      const msgLayout = {listWidth:273, composerHeight:173, listCollapsed:false, composerCollapsed:false, loaded:false, persisted:false, saveTimer:null};
       const normalizeMsgLayout = (value = {}) => {
         const data = value && typeof value === 'object' ? value : {};
         const width = Number.parseInt(data.list_width ?? data.listWidth, 10);
@@ -1405,8 +1405,8 @@
           return fallback;
         };
         return {
-          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 364,
-          composerHeight:Number.isFinite(height) ? Math.max(164, Math.min(420, height)) : 230,
+          listWidth:Number.isFinite(width) ? Math.max(220, Math.min(680, width)) : 273,
+          composerHeight:Number.isFinite(height) ? Math.max(123, Math.min(420, height)) : 173,
           listCollapsed:bool(data.list_collapsed ?? data.listCollapsed),
           composerCollapsed:bool(data.composer_collapsed ?? data.composerCollapsed),
         };
@@ -1419,7 +1419,7 @@
           shell.style.setProperty('--msg-list-width', `${next.listWidth}px`);
           shell.classList.toggle('msg-list-collapsed', next.listCollapsed);
           shell.classList.toggle('msg-composer-collapsed', next.composerCollapsed);
-          shell.classList.toggle('msg-composer-compact', !next.composerCollapsed && next.composerHeight < 200);
+          shell.classList.toggle('msg-composer-compact', !next.composerCollapsed && next.composerHeight < 150);
         }
         const composer = $('msg-composer');
         if (composer) composer.style.height = next.composerCollapsed ? '38px' : `${next.composerHeight}px`;
