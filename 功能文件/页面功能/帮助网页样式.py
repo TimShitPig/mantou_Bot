@@ -960,8 +960,6 @@
             .msg-row.muted .msg-avatar { background:#d9dde2; color:#89919b; filter:grayscale(.7); }
             .msg-row.muted .msg-avatar img { filter:grayscale(1); opacity:.55; }
             .msg-mute-countdown { display:inline-block; margin-left:7px; color:var(--danger); font-size:9px; font-weight:700; }
-            .msg-actions { display:flex; gap:5px; margin-top:5px; }
-            .msg-row.self .msg-actions { justify-content:flex-end; }
             .msg-row.self .msg-action { background:transparent; color:var(--msg-self-link); }
             .msg-row.self .msg-action:hover { background:var(--msg-self-bg); }
             .msg-row.self .msg-action:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
@@ -1090,7 +1088,7 @@
             .msg-send-row .msg-btn.primary { background:var(--primary); border-color:var(--primary); }
 
             /* 右键菜单 */
-            .msg-ctx { position:fixed; z-index:120; min-width:150px; padding:4px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.14); user-select:none; }
+            .msg-ctx { position:fixed; z-index:120; min-width:150px; max-height:calc(100dvh - 16px); overflow-y:auto; padding:4px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.14); user-select:none; }
             .msg-ctx[hidden] { display:none; }
             .msg-ctx-item { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:0; border-radius:5px; background:transparent; color:var(--ink); font-size:12px; text-align:left; cursor:pointer; }
             .msg-ctx-item:hover { background:var(--primary-soft); color:var(--primary); }
@@ -1779,11 +1777,7 @@
     :root body.messages-workspace .msg-row.self .msg-tag.bot,:root body.messages-workspace .msg-row.self .msg-tag.self { position:absolute; right:0; bottom:100%; opacity:0; }
     :root body.messages-workspace .msg-row.self:hover .msg-tag,:root body.messages-workspace .msg-row.self:focus-within .msg-tag { opacity:1; }
     :root body.messages-workspace .msg-row:hover,:root body.messages-workspace .msg-row:focus-within { z-index:9; }
-    :root body.messages-workspace .msg-meta-detail { position:absolute; top:calc(100% + 31px); left:0; z-index:2; max-width:100%; padding:2px 5px; border-radius:4px; opacity:0; pointer-events:none; background:var(--panel); white-space:nowrap; }
-    :root body.messages-workspace .msg-row.self .msg-meta-detail { left:auto; right:0; }
-    :root body.messages-workspace .msg-actions { position:absolute; top:100%; left:0; z-index:3; margin-top:5px; padding:2px; border-radius:6px; background:var(--panel); opacity:0; pointer-events:none; }
-    :root body.messages-workspace .msg-row.self .msg-actions { left:auto; right:0; }
-    :root body.messages-workspace .msg-row:hover .msg-actions,:root body.messages-workspace .msg-row:focus-within .msg-actions,:root body.messages-workspace .msg-row:hover .msg-meta-detail,:root body.messages-workspace .msg-row:focus-within .msg-meta-detail { opacity:1; pointer-events:auto; }
+    :root body.messages-workspace .msg-row:focus-visible { outline:2px solid var(--primary); outline-offset:3px; border-radius:6px; }
     :root body.messages-workspace .msg-action { min-height:24px; font-size:12px; }
     :root body.messages-workspace .msg-mute-countdown,:root body.messages-workspace .msg-send-error { font-size:12px; line-height:1.5; }
     :root body.messages-workspace .msg-bubble:not(.recalled):has(> .msg-file-card) { padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
@@ -1805,7 +1799,6 @@
     :root body.messages-workspace .msg-list-resizer:hover::before,:root body.messages-workspace .msg-list-resizer:focus-visible::before,:root body.messages-workspace .msg-composer-resizer:hover::before,:root body.messages-workspace .msg-composer-resizer:focus-visible::before { opacity:1; }
     @media (hover:none) {
       :root body.messages-workspace .msg-row.self .msg-tag.bot,:root body.messages-workspace .msg-row.self .msg-tag.self { position:static; opacity:1; }
-      :root body.messages-workspace .msg-actions,:root body.messages-workspace .msg-meta-detail { position:static; opacity:1; pointer-events:auto; }
       :root body.messages-workspace .msg-list-collapse,:root body.messages-workspace .msg-composer-toggle,:root body.messages-workspace .msg-list-group-toggle { opacity:1; }
     }
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer { padding:7.5px 18px 9px; }

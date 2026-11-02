@@ -315,7 +315,7 @@
         if (!consoleAppid) return;
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
-        if (next !== 'messages' && activeView === 'messages') { groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
+        if (next !== 'messages' && activeView === 'messages') { hideMsgCtx(); groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
         if (next !== previousView) closeMsgHeadMenu();
         setMessagesWorkspace(next === 'messages');
@@ -2939,6 +2939,7 @@
         }
       };
       const selectMsgChat = (chat) => {
+        hideMsgCtx();
         closeMsgHeadMenu(); closeAdminPopover();
         closeComposerMentionPicker();
         const chatId = String(chat?.chat_id || '').trim();
@@ -3660,9 +3661,67 @@
         $('msg-lightbox-img').removeAttribute('src');
         document.body.style.overflow = '';
       };
-      const showMsgCtx = (x, y, items) => {
+      let msgCtxFocusTarget = null;
+      let msgLongPress = null;
+      let msgLongPressSuppress = null;
+      let msgLongPressDispatching = false;
+      const msgLongPressScope = () => JSON.stringify([msgState.chatAppid, msgState.chatType, msgState.chatId, msgState.scopeGeneration]);
+      const cancelMsgLongPress = () => {
+        if (msgLongPress) clearTimeout(msgLongPress.timer);
+        msgLongPress = null;
+      };
+      const msgLongPressCurrent = (press) => press?.row.isConnected && press.target.isConnected
+        && activeView === 'messages' && document.visibilityState !== 'hidden' && press.scope === msgLongPressScope();
+      const suppressMsgLongPressEvent = (event) => {
+        const press = msgLongPressSuppress;
+        if (!press || press.until < Date.now() || !msgLongPressCurrent(press)) { msgLongPressSuppress = null; return false; }
+        return press.row.contains(event.target);
+      };
+      document.addEventListener('pointerdown', (event) => {
+        cancelMsgLongPress(); msgLongPressSuppress = null;
+        if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0
+          || activeView !== 'messages' || document.visibilityState === 'hidden') return;
+        const target = event.target;
+        const row = target.closest?.('.msg-row');
+        if (!row || !$('msg-body')?.contains(row)
+          || target.closest('button,a,input,textarea,select,video,audio,[contenteditable="true"],[data-msg-jump]')) return;
+        const press = {row, target, pointerId:event.pointerId, x:event.clientX, y:event.clientY, scope:msgLongPressScope(), timer:null};
+        press.timer = setTimeout(() => {
+          if (msgLongPress !== press) return;
+          msgLongPress = null;
+          if (!msgLongPressCurrent(press)) return;
+          msgLongPressSuppress = {...press, until:Date.now() + 1200};
+          msgLongPressDispatching = true;
+          try {
+            target.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, view:window, clientX:press.x, clientY:press.y}));
+          } finally { msgLongPressDispatching = false; }
+        }, 550);
+        msgLongPress = press;
+      }, {capture:true, passive:true});
+      document.addEventListener('pointermove', (event) => {
+        const press = msgLongPress;
+        if (press && (event.pointerId !== press.pointerId || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10)) cancelMsgLongPress();
+      }, {capture:true, passive:true});
+      ['pointerup', 'pointercancel'].forEach((type) => document.addEventListener(type, cancelMsgLongPress, {capture:true, passive:true}));
+      document.addEventListener('contextmenu', (event) => {
+        if (msgLongPressDispatching) return;
+        if (suppressMsgLongPressEvent(event)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+        const press = msgLongPress;
+        if (press && press.row.contains(event.target) && msgLongPressCurrent(press)) msgLongPressSuppress = {...press, until:Date.now() + 1200};
+        cancelMsgLongPress();
+      }, true);
+      document.addEventListener('click', (event) => {
+        if (!suppressMsgLongPressEvent(event)) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+      }, true);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') { cancelMsgLongPress(); msgLongPressSuppress = null; }
+      });
+      const showMsgCtx = (x, y, items, focusTarget = null) => {
         const ctx = $('msg-ctx');
-        ctx.innerHTML = items.map((it) => it.sep ? '<div class="msg-ctx-sep"></div>' : `<button class="msg-ctx-item${it.danger ? ' danger' : ''}" type="button">${esc(it.label)}</button>`).join('');
+        msgCtxFocusTarget = focusTarget || document.activeElement;
+        ctx.setAttribute('role', 'menu');
+        ctx.innerHTML = items.map((it) => it.sep ? '<div class="msg-ctx-sep" role="separator"></div>' : `<button class="msg-ctx-item${it.danger ? ' danger' : ''}" type="button" role="menuitem">${esc(it.label)}</button>`).join('');
         ctx.hidden = false;
         const pad = 8;
         const rect = ctx.getBoundingClientRect();
@@ -3675,13 +3734,74 @@
         ctx.style.top = top + 'px';
         ctx.querySelectorAll('.msg-ctx-item').forEach((btn, idx) => {
           const item = items.filter((it) => !it.sep)[idx];
-          btn.addEventListener('click', () => { hideMsgCtx(); if (item && item.action) item.action(); });
+          btn.addEventListener('click', () => { hideMsgCtx(true); if (item && item.action) item.action(); });
         });
+        ctx.querySelector('.msg-ctx-item')?.focus({preventScroll:true});
       };
-      const hideMsgCtx = () => { $('msg-ctx').hidden = true; $('msg-ctx').innerHTML = ''; };
+      const hideMsgCtx = (restoreFocus = false) => {
+        cancelMsgLongPress();
+        const ctx = $('msg-ctx');
+        const previous = msgCtxFocusTarget;
+        msgCtxFocusTarget = null;
+        ctx.hidden = true; ctx.innerHTML = '';
+        if (restoreFocus && previous?.isConnected && previous.getClientRects().length) previous.focus({preventScroll:true});
+      };
       document.addEventListener('click', (e) => { if (!$('msg-ctx').contains(e.target)) hideMsgCtx(); });
       document.addEventListener('contextmenu', (e) => { if (!$('msg-ctx').contains(e.target)) hideMsgCtx(); });
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMsgCtx(); });
+      document.addEventListener('keydown', (e) => {
+        const ctx = $('msg-ctx');
+        if (ctx.hidden) return;
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); hideMsgCtx(true); return; }
+        if (!ctx.contains(e.target) || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+        const buttons = [...ctx.querySelectorAll('.msg-ctx-item')];
+        if (!buttons.length) return;
+        e.preventDefault();
+        const current = buttons.indexOf(document.activeElement);
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1
+          : (current + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next].focus({preventScroll:true});
+      });
+      const canRecallMsgRow = (row) => {
+        const isSelf = row.dataset.msgSelf === '1';
+        const protectedRole = !isSelf && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
+        return Boolean(row.dataset.msgMid) && row.dataset.msgRecalled !== '1'
+          && !msgState.optimisticSends.get(row.dataset.msgOptimistic || '')
+          && (isSelf || (msgState.botIsAdmin && !protectedRole));
+      };
+      const buildMsgRowContextItems = (row) => {
+        if (!row) return [];
+        const mid = row.dataset.msgMid;
+        const uid = row.dataset.msgUid;
+        const nick = row.dataset.msgNick;
+        const isSelf = row.dataset.msgSelf === '1';
+        const content = row.dataset.msgContent || '';
+        const refidx = row.dataset.msgRefidx || '';
+        const optimistic = msgState.optimisticSends.get(row.dataset.msgOptimistic || '');
+        const protectedRole = !isSelf && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
+        const canMute = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
+        const canRecall = canRecallMsgRow(row);
+        const items = [];
+        if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
+        if (canMute) {
+          items.push({label:'禁言', action:() => openMuteDialog(uid, nick)});
+          const mute = msgState.mutes.get(uid);
+          const expires = Number(mute?.mute_expire_ts || 0);
+          if (mute && (!expires || expires > Date.now() / 1000)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
+        }
+        if (items.length && !isSelf) items.push({sep:true});
+        if (mid && (!optimistic || (optimistic.status || row.dataset.msgSendStatus) === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
+        if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
+        if (canRecall) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
+        const rawKey = row.dataset.msgRawKey || '';
+        if (rawKey && Object.prototype.hasOwnProperty.call(window._msgRaw || {}, rawKey)) items.push({label:'原始数据', action:() => {
+          $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[rawKey]);
+          $('msg-raw-copy').textContent = '复制';
+          setMsgModal('msg-raw-modal', true);
+        }});
+        if (mid) items.push({sep:true});
+        items.push({label:'多选', action:() => { enterMultiMode(); if (canRecall) toggleMsgSelect(row, mid); }});
+        return items;
+      };
       const atMember = (uid, nick) => {
         if (!uid) return;
         // QQ 官方群聊提及只支持 Markdown 消息，自动切换到 Markdown 类型
@@ -5030,10 +5150,16 @@
         bindMsgEvent(img, 'contextmenu', 'image-context', (event) => {
           event.preventDefault();
           event.stopPropagation();
+          const row = img.closest('.msg-row');
+          if (row && msgState.multi) {
+            if (canRecallMsgRow(row)) toggleMsgSelect(row, row.dataset.msgMid);
+            return;
+          }
           const source = img.currentSrc || img.dataset.mediaDirect || img.src;
-          showMsgCtx(event.clientX, event.clientY, [
-            {label:'复制图片', action:() => copyImageToClipboard(source, img)},
-          ]);
+          const items = [{label:'复制图片', action:() => copyImageToClipboard(source, img)}];
+          const rowItems = buildMsgRowContextItems(row);
+          if (rowItems.length) items.push({sep:true}, ...rowItems);
+          showMsgCtx(event.clientX, event.clientY, items, row);
         });
         bindMsgEvent(img, 'dragstart', 'image-drag', (event) => {
           const source = img.dataset.mediaDirect || img.currentSrc || img.src;
@@ -5577,20 +5703,9 @@
             : '';
           // 权限：撤回自己发的消息总是可以；撤回他人消息需要机器人为管理员；禁言需要机器人为管理员且对方非群主/管理员
           const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || (msgState.botIsAdmin && !protectedRole));
-          const canMute = !isSelf && msgState.chatType === 'group' && Boolean(m.user_id) && msgState.botIsAdmin && !protectedRole;
-          const quoteReady = Boolean(m.message_id) && (!optimisticEntry || sendState === 'sent');
-          const actions = [];
-          if (canRecall) actions.push(`<button class="msg-action" data-msg-recall="${esc(m.message_id)}" type="button">撤回</button>`);
-          if (quoteReady) actions.push(`<button class="msg-action" data-msg-quote="${esc(m.message_id)}" data-msg-user="${esc(m.user_id || '')}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-name="${esc(displayNickname)}" type="button">引用</button>`);
-          if (canMute) {
-            // 活跃禁言也保留“禁言”入口，便于直接重新设置时长；到期后只显示该入口。
-            actions.push(`<button class="msg-action" data-msg-mute="${esc(m.user_id)}" data-msg-mute-name="${esc(displayNickname)}" type="button">禁言</button>`);
-            if (isMuted) actions.push(`<button class="msg-action" data-msg-unmute="${esc(m.user_id)}" data-msg-unmute-name="${esc(displayNickname)}" type="button">解除禁言</button>`);
-          }
           const rawIdentity = String(m.id || m.message_id || m.messageId || `${m.timestamp || ''}_${m.user_id || ''}`).trim();
           const rawKey = `${msgState.chatId}_${rawIdentity}`;
           if (m.raw_message) {
-            actions.push(`<button class="msg-action" data-msg-raw="${esc(rawKey)}" type="button">原始数据</button>`);
             renderedRawKeys.add(rawKey);
             rawStore[rawKey] = m.raw_message;
           }
@@ -5602,15 +5717,14 @@
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${m.raw_message ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
               <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml ? `<div class="msg-text-content">${contentHtml}</div>` : ''}${media}`)}</div>
-              <div class="msg-meta"><span class="msg-meta-detail">${esc(fmtMsgTime(m.timestamp))}${!optimisticEntry && m.message_id ? ` · ${esc(m.message_id.slice(0,18))}…` : ''}</span>${muteStatusHtml}${sendStateHtml}</div>
-              ${actions.length ? `<div class="msg-actions">${actions.join('')}</div>` : ''}
+              ${muteStatusHtml || sendStateHtml ? `<div class="msg-meta">${muteStatusHtml}${sendStateHtml}</div>` : ''}
             </div></div>`;
         });
         if (initialPositioning) body.classList.add('msg-positioning');
@@ -5640,7 +5754,6 @@
           event.preventDefault(); event.stopPropagation();
           void jumpToMsgReference(el.dataset.msgJump);
         }));
-        body.querySelectorAll('[data-msg-recall]').forEach((el) => bindMsgEvent(el, 'click', 'recall', () => recallMessage(el.dataset.msgRecall)));
         body.querySelectorAll('[data-msg-retry]').forEach((el) => bindMsgEvent(el, 'click', 'retry', (event) => { event.preventDefault(); event.stopPropagation(); retryOptimisticSend(el.dataset.msgRetry); }));
         body.querySelectorAll('[data-lightbox]').forEach((img) => bindMsgEvent(img, 'click', 'lightbox', (event) => { event.preventDefault(); openMsgLightbox(img.dataset.lightbox); }));
         body.querySelectorAll('[data-msg-command]').forEach((el) => bindMsgEvent(el, 'click', 'command', () => {
@@ -5649,48 +5762,26 @@
           insertComposerText(command);
           toast(`已填入 ${command}`);
         }));
-        body.querySelectorAll('[data-msg-quote]').forEach((el) => bindMsgEvent(el, 'click', 'quote', () => setMsgQuote(el.dataset.msgQuote, el.dataset.msgUser, el.dataset.msgName, el.closest('.msg-row')?.dataset.msgContent || '', el.dataset.msgRefidx || '')));
-        body.querySelectorAll('[data-msg-mute]').forEach((el) => bindMsgEvent(el, 'click', 'mute', () => { msgState.mute = {member:el.dataset.msgMute, name:el.dataset.msgMuteName}; $('msg-mute-title').textContent = `禁言 ${el.dataset.msgMuteName || el.dataset.msgMute}`; setMsgModal('msg-mute-modal', true); }));
-        body.querySelectorAll('[data-msg-unmute]').forEach((el) => bindMsgEvent(el, 'click', 'unmute', () => unmuteMember(el.dataset.msgUnmute, el.dataset.msgUnmuteName)));
-        body.querySelectorAll('[data-msg-raw]').forEach((el) => bindMsgEvent(el, 'click', 'raw', () => { $('msg-raw-content').textContent = formatMsgRaw(window._msgRaw?.[el.dataset.msgRaw]); $('msg-raw-copy').textContent = '复制'; setMsgModal('msg-raw-modal', true); }));
         body.querySelectorAll('.msg-row').forEach((row) => {
-          bindMsgEvent(row, 'contextmenu', 'message-context', (e) => {
+          const openRowContext = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const mid = row.dataset.msgMid;
-            const uid = row.dataset.msgUid;
-            const nick = row.dataset.msgNick;
-            const isSelf = row.dataset.msgSelf === '1';
-            const recalled = row.dataset.msgRecalled === '1';
-            const content = row.dataset.msgContent || '';
-            const refidx = row.dataset.msgRefidx || '';
-            const optimistic = msgState.optimisticSends.get(row.dataset.msgOptimistic || '');
-            const protectedRole = !isSelf && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
             if (msgState.multi) {
-              toggleMsgSelect(row, mid);
+              if (canRecallMsgRow(row)) toggleMsgSelect(row, row.dataset.msgMid);
               return;
             }
-            const profile = (msgState.profiles || {})[uid] || {};
-            const canMuteRow = !isSelf && msgState.chatType === 'group' && uid && msgState.botIsAdmin && !protectedRole;
-            const canRecallRow = Boolean(mid) && !recalled && (isSelf || (msgState.botIsAdmin && !protectedRole));
-            const items = [];
-            if (!isSelf && msgState.chatType === 'group' && uid) items.push({label:'@' + (nick || 'TA'), action:() => atMember(uid, nick)});
-            if (canMuteRow) {
-              items.push({label:'禁言', action:() => openMuteDialog(uid, nick)});
-              if (msgState.mutes.has(uid)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
-            }
-            if (items.length && !isSelf) items.push({sep:true});
-            if (mid && (!optimistic || optimistic.status === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
-            if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
-            if (canRecallRow) items.push({label:'撤回', danger:true, action:() => recallMessage(mid)});
-            if (mid) items.push({sep:true});
-            items.push({label:'多选', action:() => { enterMultiMode(); if (canRecallRow) toggleMsgSelect(row, mid); }});
-            if (items.length) showMsgCtx(e.clientX, e.clientY, items);
+            const items = buildMsgRowContextItems(row);
+            const rect = row.getBoundingClientRect();
+            const pointer = e.type === 'contextmenu' && (e.clientX || e.clientY);
+            if (items.length) showMsgCtx(pointer ? e.clientX : rect.left + 24, pointer ? e.clientY : rect.top + Math.min(24, rect.height / 2), items, row);
+          };
+          bindMsgEvent(row, 'contextmenu', 'message-context', openRowContext);
+          bindMsgEvent(row, 'keydown', 'message-context-keyboard', (e) => {
+            if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) openRowContext(e);
           });
           bindMsgEvent(row, 'click', 'message-select', (e) => {
             if (msgState.multi && !e.target.closest('button')) {
-              const protectedRole = row.dataset.msgSelf !== '1' && ['owner', 'admin'].includes(String(row.dataset.msgRole || '').toLowerCase());
-              const canSel = Boolean(row.dataset.msgMid) && !(row.dataset.msgRecalled === '1') && (row.dataset.msgSelf === '1' || (msgState.botIsAdmin && !protectedRole));
+              const canSel = canRecallMsgRow(row);
               if (canSel) toggleMsgSelect(row, row.dataset.msgMid);
             }
           });
