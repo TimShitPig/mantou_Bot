@@ -152,6 +152,12 @@ except Exception as exc:
     logger.warning("找书加载话本失败：错误类型=%s", type(exc).__name__)
 
 try:
+    from 功能文件.管理功能.小说功能.小说 import 疯狂追书小说
+except Exception as exc:
+    疯狂追书小说 = None
+    logger.warning("找书加载疯狂追书失败：错误类型=%s", type(exc).__name__)
+
+try:
     ZLibrary小说 = importlib.import_module(
         "功能文件.管理功能.小说功能.小说.Z-Library小说"
     )
@@ -1643,6 +1649,18 @@ async def 搜索话本(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索疯狂追书(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 疯狂追书小说 is None:
+        return []
+    try:
+        return _整理新增平台搜索结果(
+            "疯狂追书", await 疯狂追书小说.搜索疯狂追书小说(关键词, 数量上限=需要数量), 需要数量
+        )
+    except Exception as exc:
+        logger.debug("找书疯狂追书搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
 def _清理QQ阅读预检缓存() -> None:
     现在 = time.time()
     if len(QQ阅读预检缓存) < 512:
@@ -1752,6 +1770,7 @@ def _平台优先级值(平台: Any) -> int:
         "菠萝包": -6,
         "晋江": -7,
         "话本": -7,
+        "疯狂追书": -8,
         "ZLibrary": -8,
     }.get(str(平台 or ""), 0)
 
@@ -1905,6 +1924,7 @@ async def _聚合搜索未缓存(
             平台搜索任务("菠萝包", lambda: 搜索菠萝包(关键词, 需要数量=数量)),
             平台搜索任务("晋江", lambda: 搜索晋江(关键词, 需要数量=数量)),
             平台搜索任务("话本", lambda: 搜索话本(关键词, 需要数量=数量)),
+            平台搜索任务("疯狂追书", lambda: 搜索疯狂追书(关键词, 需要数量=数量)),
             平台搜索任务("追书", lambda: 搜索追书(session, 关键词, 需要数量=数量)),
             平台搜索任务(
                 "ZLibrary",
@@ -1931,6 +1951,7 @@ async def _聚合搜索未缓存(
             菠萝包结果,
             晋江结果,
             话本结果,
+            疯狂追书结果,
             追书结果,
             ZLibrary结果,
         ) = await asyncio.gather(
@@ -1957,6 +1978,7 @@ async def _聚合搜索未缓存(
             菠萝包结果,
             晋江结果,
             话本结果,
+            疯狂追书结果,
             追书结果,
             ZLibrary结果,
         ):
@@ -1993,6 +2015,7 @@ async def _聚合搜索未缓存(
                 菠萝包结果,
                 晋江结果,
                 话本结果,
+                疯狂追书结果,
                 ZLibrary结果,
             ]
         )
@@ -2027,6 +2050,7 @@ async def _聚合搜索未缓存(
                 菠萝包结果,
                 晋江结果,
                 话本结果,
+                疯狂追书结果,
                 追书结果,
                 ZLibrary结果,
             ]
@@ -2052,6 +2076,7 @@ async def _聚合搜索未缓存(
                     平台搜索任务("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10), "菠萝包联想"),
                     平台搜索任务("晋江", lambda: 搜索晋江(w, 需要数量=10), "晋江联想"),
                     平台搜索任务("话本", lambda: 搜索话本(w, 需要数量=10), "话本联想"),
+                    平台搜索任务("疯狂追书", lambda: 搜索疯狂追书(w, 需要数量=10), "疯狂追书联想"),
                     平台搜索任务("追书", lambda: 搜索追书(session, w, 需要数量=10), "追书联想"),
                     平台搜索任务(
                         "ZLibrary",
@@ -2296,6 +2321,10 @@ async def 获取找书下载回复流(
             配置,
             找书候选=选中,
         )
+    if 平台 == "疯狂追书" and 疯狂追书小说 is not None:
+        if not 疯狂追书小说.提取疯狂追书书籍编号(书籍编号):
+            return "下载失败 请重试"
+        return 疯狂追书小说.生成疯狂追书下载回复流(event, 书籍编号, 配置)
     if not 链接:
         return "下载失败 请重试"
     if 平台 == "七猫" and 七猫小说 is not None:
