@@ -1584,6 +1584,18 @@
         const source = String(message?.source || '');
         return source.startsWith('bot_') || source === 'web_panel';
       };
+      const msgMemberRole = (message, profile = {}) => {
+        const appid = String(message?.appid || msgState.chatAppid || '').trim();
+        if (msgState.chatAppid && appid !== String(msgState.chatAppid)) return '';
+        const profileMatches = (!profile.appid || String(profile.appid).trim() === appid)
+          && (!profile.group_id || String(profile.group_id).trim() === String(msgState.chatId))
+          && (!profile.group_openid || String(profile.group_openid).trim() === String(msgState.chatId));
+        for (const value of [profileMatches ? profile.role : '', profileMatches ? profile.member_role : '', message?.member_role]) {
+          const role = String(value || '').trim().toLowerCase();
+          if (['owner', 'admin', 'member'].includes(role)) return role;
+        }
+        return '';
+      };
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = mergeMsgProfileMaps(profiles);
         (messages || []).forEach((message) => {
@@ -5681,11 +5693,10 @@
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
           const roleMap = {owner:'群主', admin:'管理', member:'群员'};
-          const rawRole = String(m.raw_message || '').match(/member_role[^,]*?['"]([a-z]+)['"]/)?.[1] || '';
-          const memberRole = String(profile.role || m.member_role || rawRole || '').trim().toLowerCase();
+          const memberRole = msgMemberRole(m, profile);
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
           const roleTag = roleMap[memberRole] || '';
-          if (!isSelf && roleTag) tags.push(`<span class="msg-tag role ${memberRole}">${roleTag}</span>`);
+          if (roleTag) tags.push(`<span class="msg-tag role ${memberRole}">${roleTag}</span>`);
           const renderText = (text) => {
             return replaceMsgMentions(text, profiles);
           };
