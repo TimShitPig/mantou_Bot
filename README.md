@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.287-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.288-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.287 |
+| 版本 | v6.1.288 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -165,7 +165,7 @@ quickjs
 
 | 平台 | 支持内容 | 说明 |
 | --- | --- | --- |
-| 番茄小说 | 番茄链接 / JSON 分享卡片 | 使用番茄畅听详情、目录和批量正文接口，最多 5 路动态并发 |
+| 番茄小说 | 番茄链接 / JSON 分享卡片 | 默认通过 `api.novelfm.com` 读取番茄畅听详情、目录和批量正文，最多 5 路动态并发 |
 | 七猫小说 | 长篇/短篇链接 / 分享卡片 | 正文优先使用 App 批量接口 |
 | 书旗小说 | 书旗官网链接 / 分享短链 / 分享卡片 | XML 分卷目录和原地址；详情、TXT 头部及文件名沿用原有格式 |
 | 追书小说 | 追书神器链接 / 分享卡片 | 自动游客会话、复用异步会话，最高 400 路动态请求，PyCryptodome 解密并完整合成 TXT |

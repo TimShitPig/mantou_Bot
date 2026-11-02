@@ -1220,12 +1220,12 @@ def medusa_reverse_key4_from_d71bc_rand(d71bc_rand: int) -> bytes:
 
 orjson = None
 
-API_HOST = "https://api5-sinfonlinec.novelfm.com"
+API_HOST = "https://api.novelfm.com"
 
 DEFAULT_UA = "com.xs.fm/656 (Linux; U; Android 9; zh_CN; SM-S9260; Build/PQ3A.190605.02261134;tt-ok/3.12.13.17)"
 
 FULL_MGET_SIGNED_URL = (
-    "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a&_rticket=1783204359936"
+    f"{API_HOST}/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a&_rticket=1783204359936"
     "&cdid=7634657e-a134-47cf-9ac3-c38ea9923097&channel=54157680a&aid=3040&app_name=novel_fm&version_code=656"
     "&version_name=6.5.6.32&manifest_version_code=656&update_version_code=65632&resolution=1440*2560&dpi=640"
     "&device_type=SM-S9260&device_brand=Samsung&language=zh&os_api=28&os_version=9&ac=wifi&device_id=3001028083774489"
@@ -1236,7 +1236,7 @@ FULL_MGET_SIGNED_URL = (
 
 
 CAPTURED_CODE0_SIGNED_URL = (
-    "https://api5-sinfonlinec.novelfm.com/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a"
+    f"{API_HOST}/novelfm/playerapi/full/mget/v1/?device_platform=android&os=android&ssmix=a"
     "&_rticket=1778923033155&cdid=5b00d94e-eaa2-42fa-8095-6e994728a48f&channel=vivo_3040_64&aid=3040"
     "&app_name=novel_fm&version_code=644&version_name=6.4.4.32&manifest_version_code=644&update_version_code=64432"
     "&resolution=1440*2560&dpi=640&device_type=SM-S9260&device_brand=Samsung&language=zh&os_api=28&os_version=9"
@@ -2079,7 +2079,7 @@ def _pure3040_rand31() -> int:
 
 
 def build_pure3040_656_url(epoch_ms: int) -> str:
-    # Use the 6.5.6.32 api5-sinfonlinec.novelfm.com query profile that matches the
+    # Use the 6.5.6.32 full/mget query profile that matches the
     # recovered accepted881 Medusa source family. The fully current 891-byte
     # family is body-bound; downloader defaults to this known code=0 profile.
     _ = epoch_ms
