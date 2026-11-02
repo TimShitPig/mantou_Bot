@@ -5692,11 +5692,19 @@
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
-          const roleMap = {owner:'群主', admin:'管理', member:'群员'};
+          const roleMap = {owner:'群主', admin:'管理', member:'群成员'};
           const memberRole = msgMemberRole(m, profile);
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
-          const roleTag = roleMap[memberRole] || '';
+          const roleTag = msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
+            ? (roleMap[memberRole] || '') : '';
           if (roleTag) tags.push(`<span class="msg-tag role ${memberRole}">${roleTag}</span>`);
+          // 群消息发送者的展示标签不代表已确认的权限角色。
+          const showGroupMember = !roleTag && !isSelf && !msgIsBot(m, profile)
+            && msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
+            && (!m.appid || String(m.appid).trim() === String(msgState.chatAppid))
+            && String(m.chat_id || m._session || msgState.chatId) === String(msgState.chatId)
+            && ['', 'qq_official'].includes(systemSource) && Boolean(String(m.user_id || '').trim());
+          if (showGroupMember) tags.push('<span class="msg-tag group-member">群成员</span>');
           const renderText = (text) => {
             return replaceMsgMentions(text, profiles);
           };

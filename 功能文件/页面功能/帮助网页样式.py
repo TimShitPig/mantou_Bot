@@ -951,7 +951,7 @@
             .msg-tags { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
             .msg-tag { display:inline-block; padding:0 5px; border-radius:4px; font-size:9px; line-height:15px; font-weight:700; }
             .msg-tag.bot { background:#e5edfb; color:#3b7bf7; }
-            .msg-tag.role { background:#f0f1f3; color:#858b96; }
+            .msg-tag.role,.msg-tag.group-member { background:#f0f1f3; color:#858b96; }
             .msg-tag.role.owner { background:#fef1dd; color:#f59e0b; }
             .msg-tag.role.admin { background:#e9fbf3; color:#319e6b; }
             .msg-tag.self { background:#e9fbf3; color:#319e6b; }
@@ -1276,7 +1276,7 @@
               :root[data-theme="dark"] .msg-send-error { background:#a74751; color:#fff; box-shadow:none; }
               :root[data-theme="dark"] .msg-send-error:hover { background:#913e48; }
               :root[data-theme="dark"] .msg-tag.bot { background:#233857; color:#83b3ff; }
-              :root[data-theme="dark"] .msg-tag.role { background:var(--raised); color:var(--muted); }
+              :root[data-theme="dark"] .msg-tag.role,:root[data-theme="dark"] .msg-tag.group-member { background:var(--raised); color:var(--muted); }
               :root[data-theme="dark"] .msg-tag.role.owner { background:#483721; color:#f4ba60; }
               :root[data-theme="dark"] .msg-tag.role.admin { background:var(--mint); color:var(--mint-ink); }
               :root[data-theme="dark"] .msg-tag.self { background:var(--mint); color:var(--mint-ink); }
