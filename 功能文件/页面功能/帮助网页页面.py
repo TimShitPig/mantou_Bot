@@ -137,7 +137,6 @@ from .帮助网页脚本 import 控制台脚本
                   <button class="msg-btn" id="msg-remark" type="button" hidden>群备注</button>
                   <button class="msg-btn" id="msg-group-settings-open" type="button" hidden aria-label="打开当前群聊设置" aria-expanded="false" aria-controls="msg-group-settings">⚙ 设置</button>
                   <button class="msg-btn" id="msg-reload" type="button">刷新</button>
-                  <button class="msg-btn msg-layout-shrink" id="msg-layout-shrink" type="button" disabled title="缩小会话列表和编辑区，仍可拖拽调整">面板缩小 25%</button>
                   <button class="msg-btn msg-clear-open" id="msg-clear-open" type="button">清理记录</button>
                   </div>
                 </div>

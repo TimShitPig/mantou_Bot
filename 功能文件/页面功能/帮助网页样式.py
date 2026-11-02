@@ -1826,7 +1826,6 @@
     }
     @media (max-width:760px) {
       :root body.messages-workspace .shell { border-radius:0; }
-      :root body.messages-workspace .msg-layout-shrink { display:none; }
       :root body.messages-workspace::after { display:none; }
       :root body.messages-workspace .shell { grid-template-columns:58px minmax(0,1fr); }
       :root body.messages-workspace .sidebar { display:flex; padding:14px 5px 10px; gap:14px; }

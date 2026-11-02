@@ -1462,7 +1462,6 @@
         if (!consoleAppid) return;
         const appid = consoleAppid, generation = consoleGeneration;
         msgLayout.loaded = false;
-        if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = true;
         applyMsgLayout();
         try {
           const data = await api('message/layout');
@@ -1470,21 +1469,8 @@
           applyMsgLayout(data.layout || {});
           if (appid === consoleAppid && generation === consoleGeneration) {
             msgLayout.loaded = true;
-            if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = false;
           }
         } catch (_) {}
-      };
-      const shrinkMsgPanels = () => {
-        if (!consoleAppid || !msgLayout.loaded || window.matchMedia?.('(max-width: 760px)').matches) return;
-        const next = normalizeMsgLayout({...msgLayout,
-          listWidth:Math.round(msgLayout.listWidth * 0.75),
-          composerHeight:Math.round(msgLayout.composerHeight * 0.75)});
-        if (next.listWidth === msgLayout.listWidth && next.composerHeight === msgLayout.composerHeight) {
-          toast('面板已达到最小尺寸');
-          return;
-        }
-        applyMsgLayout(next, true);
-        toast('面板已缩小，可拖拽调整');
       };
       const bindMsgLayoutControls = () => {
         const shell = $('msg-shell');
@@ -2098,7 +2084,6 @@
         msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
         msgLayout.saveTimer = null; msgLayout.loaded = false; msgLayout.persisted = false; applyMsgLayout();
-        if ($('msg-layout-shrink')) $('msg-layout-shrink').disabled = true;
         window.msgBotProfile = {};
         clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
         if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
@@ -7064,7 +7049,6 @@
       $('msg-mute-custom').addEventListener('input', (e) => { const raw = Number(e.target.value); if (!Number.isFinite(raw) || raw < 1) return; const days = Math.min(30, Math.floor(raw)); e.target.value = String(days); msgState.muteMinutes = days * 1440; });
       $('msg-mute-cancel').addEventListener('click', () => { setMsgModal('msg-mute-modal', false); });
       $('msg-clear-open').addEventListener('click', openMsgClear);
-      $('msg-layout-shrink')?.addEventListener('click', shrinkMsgPanels);
       $('msg-clear-scope').addEventListener('change', () => { void previewMsgClear(); });
       $('msg-clear-preview-button').addEventListener('click', () => { void previewMsgClear(); });
       $('msg-clear-confirm').addEventListener('click', () => { void confirmMsgClear(); });
