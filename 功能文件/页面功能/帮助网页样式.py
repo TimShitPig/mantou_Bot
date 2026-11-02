@@ -1741,7 +1741,7 @@
     :root body.messages-workspace .msg-head-menu-panel .msg-clear-open { color:var(--danger); }
     :root body.messages-workspace .msg-pan-account-control { flex-wrap:wrap; gap:8px; padding:9px 10px; border:0; background:var(--input); font-size:12px; }
     :root body.messages-workspace .msg-pan-account-control select { flex:1; width:100%; max-width:100%; min-height:30px; color:var(--ink); }
-    :root body.messages-workspace .msg-body { padding:12.75px 21px 9px 18px; scrollbar-gutter:stable; scrollbar-width:auto; scrollbar-color:var(--msg-scroll-thumb) var(--msg-scroll-track); }
+    :root body.messages-workspace .msg-body { isolation:isolate; padding:12.75px 21px 9px 18px; scrollbar-gutter:stable; scrollbar-width:auto; scrollbar-color:var(--msg-scroll-thumb) var(--msg-scroll-track); }
     :root body.messages-workspace .msg-body::-webkit-scrollbar { width:14px; height:14px; }
     :root body.messages-workspace .msg-body::-webkit-scrollbar-track { border-radius:10px; background:var(--msg-scroll-track); }
     :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb { min-height:48px; border:2px solid var(--msg-scroll-track); border-radius:10px; background:var(--msg-scroll-thumb); }
@@ -1788,7 +1788,6 @@
     :root body.messages-workspace .msg-row.self { gap:15.75px; }
     :root body.messages-workspace .msg-row.self .msg-avatar { width:45px; height:45px; margin-top:0; }
     :root body.messages-workspace .msg-row.self .msg-bubble-name { justify-content:flex-end; text-align:right; }
-    :root body.messages-workspace .msg-row:hover,:root body.messages-workspace .msg-row:focus-within { z-index:9; }
     :root body.messages-workspace .msg-row:focus-visible { outline:2px solid var(--primary); outline-offset:3px; border-radius:6px; }
     :root body.messages-workspace .msg-action { min-height:24px; font-size:12px; }
     :root body.messages-workspace .msg-mute-countdown,:root body.messages-workspace .msg-send-error { font-size:12px; line-height:1.5; }
