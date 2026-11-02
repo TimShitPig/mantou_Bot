@@ -116,7 +116,12 @@ def 规范化话本书籍信息(书籍编号: str, 详情: Mapping[str, Any]) ->
     if isinstance(字数, bool) or not isinstance(字数, (int, str)) or not re.fullmatch(r"\d+", str(字数)):
         字数文本 = "未知"
     else:
-        字数文本 = f"{int(字数):,}字" if int(字数) > 0 else "未知"
+        数字 = int(字数)
+        if 数字 >= 10000:
+            万字 = f"{数字 / 10000:.2f}".rstrip("0").rstrip(".")
+            字数文本 = f"{万字}万字"
+        else:
+            字数文本 = f"{数字}字" if 数字 > 0 else "未知"
     状态 = str(详情.get("serial_state_text") or "")
     return {
         "title": str(详情.get("book_name") or f"话本小说{书籍编号}"),
