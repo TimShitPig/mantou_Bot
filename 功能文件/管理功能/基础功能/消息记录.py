@@ -6197,6 +6197,70 @@ def _群机器人状态需检查(会话标识: str, 强制: bool = False, appid:
     return int(time.time()) - int(记录.get("checked_at") or 0) >= 群机器人状态缓存有效期秒
 
 
+def _提取群资料错误字段(异常: Exception) -> dict[str, str]:
+    """只读取明确数字字段，兼容 botpy 的 RuntimeError(str(data))。"""
+    字段映射 = {
+        "http_status": ("status", "status_code", "http_status"),
+        "code": ("code", "ret_code", "error_code"),
+        "err_code": ("err_code", "errno", "business_code"),
+    }
+    结果 = {键: "" for 键 in 字段映射}
+
+    def _数字(值: Any) -> str:
+        if isinstance(值, bool) or not isinstance(值, (int, str)):
+            return ""
+        文本 = str(值).strip()
+        return str(int(文本)) if re.fullmatch(r"-?[0-9]{1,10}", 文本) else ""
+
+    for 目标, 名称表 in 字段映射.items():
+        for 名称 in 名称表:
+            try:
+                值 = _数字(getattr(异常, 名称, None))
+            except Exception:
+                值 = ""
+            if 值:
+                结果[目标] = 值
+                break
+    for 原始 in (*异常.args, getattr(异常, "msgs", None)):
+        if isinstance(原始, str):
+            if len(原始) > 16 * 1024:
+                continue
+            原始 = 原始.strip()
+            if not (原始.startswith("{") and 原始.endswith("}")):
+                continue
+            try:
+                原始 = json.loads(原始)
+            except (ValueError, RecursionError):
+                try:
+                    原始 = ast.literal_eval(原始)
+                except (ValueError, SyntaxError, MemoryError, RecursionError):
+                    continue
+        if not isinstance(原始, dict):
+            continue
+        for 目标, 名称表 in 字段映射.items():
+            if 结果[目标]:
+                continue
+            for 名称 in 名称表:
+                值 = _数字(原始.get(名称))
+                if 值:
+                    结果[目标] = 值
+                    break
+    if 结果["http_status"] and not 100 <= int(结果["http_status"]) <= 599:
+        结果["http_status"] = ""
+    if not 结果["http_status"] and type(异常).__name__ == "AuthenticationFailedError":
+        结果["http_status"] = "401"
+    return 结果
+
+
+def _群信息凭据无效(异常: Exception) -> bool:
+    字段 = _提取群资料错误字段(异常)
+    return "100016" in (字段["code"], 字段["err_code"])
+
+
+class _群资料认证冷却中(RuntimeError):
+    """同一 SDK Token 已失败；调用方保留缓存，不重复记录逐群告警。"""
+
+
 def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     """提取群资料请求的受控诊断字段，避免日志只剩 ServerError。"""
     类型 = type(异常).__name__
@@ -6204,8 +6268,12 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     文本 = re.sub(r"\s+", " ", str(原文 or "")).strip()
     文本 = re.sub(r"https?://\S+", "<url>", 文本, flags=re.IGNORECASE)[:200]
     小写 = 文本.lower()
-    if _群信息认证失败(异常):
+    if _群信息凭据无效(异常):
+        分类 = "credential_invalid"
+        文本 = "QQ机器人认证凭据无效，请核对平台AppID与ClientSecret"
+    elif _群信息认证失败(异常):
         分类 = "auth_expired"
+        文本 = "QQ机器人访问令牌认证失败"
     elif 文本 == "群资料认证 AppID 缺失或不匹配":
         分类 = "app_scope"
     elif any(词 in 小写 for 词 in ("rate limit", "rate_limit", "限流", "频率", "限制")):
@@ -6217,37 +6285,10 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     else:
         分类 = "unknown"
 
-    def _字段值(*名称: str) -> str:
-        for 名称项 in 名称:
-            try:
-                值 = getattr(异常, 名称项, None)
-            except Exception:
-                值 = None
-            if 值 not in (None, ""):
-                return str(值).strip()
-        return ""
-
-    http_status = _字段值("status", "status_code", "http_status")
-    if not http_status and 类型 == "AuthenticationFailedError":
-        # SDK 的 HTTP 401 映射只留下 msgs，恢复其已知状态而不臆造业务码。
-        http_status = "401"
-    code = _字段值("code", "ret_code", "error_code")
-    err_code = _字段值("err_code", "errno", "business_code")
-    if not http_status:
-        匹配 = re.search(r"(?:HTTP|错误代码|status)[：:= ]+(\d{3})", 文本, re.IGNORECASE)
-        http_status = 匹配.group(1) if 匹配 else ""
-    if not code:
-        匹配 = re.search(r"(?:^|[\s,])code[：:= ]*(-?\d+)", 文本, re.IGNORECASE)
-        code = 匹配.group(1) if 匹配 else ""
-    if not err_code:
-        匹配 = re.search(r"(?:err_code|error_code|errno)[：:= ]*(-?\d+)", 文本, re.IGNORECASE)
-        err_code = 匹配.group(1) if 匹配 else ""
     return {
         "error_type": 类型,
         "category": 分类,
-        "http_status": http_status,
-        "code": code,
-        "err_code": err_code,
+        **_提取群资料错误字段(异常),
         "detail": 文本 or "(empty)",
     }
 
@@ -6330,6 +6371,8 @@ async def _查询群机器人状态(
         最新状态 = _读取群机器人状态(会话标识, appid)
         if 群机器人状态代次.get(缓存键, 0) != 请求代次:
             return 最新状态
+        if isinstance(异常, _群资料认证冷却中):
+            return 最新状态
         详情 = _群信息异常摘要(异常)
         logger.warning(
             "消息记录群机器人状态查询失败：stage=bot_state, group_id=%s, appid=%s, "
@@ -6410,12 +6453,12 @@ def _获取群资料通道(会话标识: str, appid: str = "") -> tuple[str, Any
 
 
 def _群信息认证失败(异常: Exception) -> bool:
+    字段 = _提取群资料错误字段(异常)
+    if "100016" in (字段["code"], 字段["err_code"]):
+        return False
     if type(异常).__name__ == "AuthenticationFailedError":
         return True
-    for 字段 in ("status", "status_code", "http_status"):
-        if str(getattr(异常, 字段, "")) == "401":
-            return True
-    return any(str(getattr(异常, 字段, "")) == "11243" for 字段 in ("code", "err_code", "error_code"))
+    return 字段["http_status"] == "401" or "11243" in (字段["code"], 字段["err_code"])
 
 
 async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None) -> Any:
@@ -6428,11 +6471,11 @@ async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None
         http._mantou_group_auth_state = 状态
     async with 状态["lock"]:
         if 状态["failed_until"] > time.monotonic():
-            raise 状态["last_error"]
+            raise _群资料认证冷却中("群资料认证失败冷却中") from None
         try:
             await http.check_session()
         except Exception as 异常:
-            if _群信息认证失败(异常):
+            if _群信息凭据无效(异常) or _群信息认证失败(异常):
                 状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
                 状态["last_error"] = 异常
             raise
@@ -6442,27 +6485,38 @@ async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None
     try:
         return await 请求实现() if 请求实现 is not None else await http.request(route)
     except Exception as 异常:
+        if _群信息凭据无效(异常):
+            async with 状态["lock"]:
+                if 状态["failed_until"] > time.monotonic():
+                    raise _群资料认证冷却中("群资料认证失败冷却中") from None
+                状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
+                状态["last_error"] = 异常
+            raise
         if not _群信息认证失败(异常):
             raise
         async with 状态["lock"]:
             if 状态["failed_until"] > time.monotonic():
-                raise 状态["last_error"]
+                raise _群资料认证冷却中("群资料认证失败冷却中") from None
             if 状态["generation"] == 旧代次 and token.access_token == 旧令牌:
                 try:
                     await token.update_access_token()
                     await http.check_session()
-                except Exception:
+                except Exception as 续期异常:
                     状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
-                    状态["last_error"] = 异常
-                    raise 异常 from None
+                    状态["last_error"] = 续期异常
+                    raise
                 状态["generation"] += 1
             重试代次 = 状态["generation"]
         try:
             return await 请求实现() if 请求实现 is not None else await http.request(route)
         except Exception as 重试异常:
-            if _群信息认证失败(重试异常) and 状态["generation"] == 重试代次:
-                状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
-                状态["last_error"] = 重试异常
+            if _群信息凭据无效(重试异常) or _群信息认证失败(重试异常):
+                async with 状态["lock"]:
+                    if 状态["generation"] == 重试代次:
+                        if 状态["failed_until"] > time.monotonic():
+                            raise _群资料认证冷却中("群资料认证失败冷却中") from None
+                        状态["failed_until"] = time.monotonic() + 群信息认证失败冷却秒
+                        状态["last_error"] = 重试异常
             raise
 
 
@@ -6757,15 +6811,20 @@ async def 查询群禁言状态(
             群禁言状态缓存[缓存键] = 状态
             return _复制群禁言状态(状态)
         except Exception as 异常:
+            if isinstance(异常, _群资料认证冷却中):
+                return {**_复制群禁言状态(群禁言状态缓存.get(缓存键), cached=True),
+                    "pending": True}
+            详情 = _群信息异常摘要(异常)
             logger.warning(
                 "消息记录群禁言状态查询失败：stage=restrict_chat_setting, "
-                "group_id=%s, appid=%s, error_type=%s, http_status=%s, code=%s, err_code=%s, cooldown=%s",
+                "group_id=%s, appid=%s, error_type=%s, category=%s, http_status=%s, code=%s, err_code=%s, cooldown=%s",
                 会话标识,
                 appid,
-                type(异常).__name__,
-                getattr(异常, "status", "unknown"),
-                getattr(异常, "code", "unknown"),
-                getattr(异常, "err_code", "unknown"),
+                详情["error_type"],
+                详情["category"],
+                详情["http_status"] or "unknown",
+                详情["code"] or "unknown",
+                详情["err_code"] or "unknown",
                 群禁言状态失败冷却秒,
             )
             if 请求代次 != _群禁言请求代次(缓存键):
@@ -6914,7 +6973,7 @@ def _启动群信息轮询任务() -> asyncio.Task[Any] | None:
 
 def _群信息冷却秒数(异常: Exception) -> int:
     """按错误类型返回冷却秒数，避免失败时持续触碰官方群信息接口。"""
-    if _群信息认证失败(异常):
+    if _群信息凭据无效(异常) or _群信息认证失败(异常):
         return 群信息认证失败冷却秒
     try:
         文本 = str(异常)
@@ -7078,6 +7137,8 @@ async def 刷新群信息(
     except Exception as exc:
         if 群信息查询代次.get(缓存键) != 请求代次 or 群机器人状态代次.get(缓存键, 0) != 状态代次:
             return _读取群作用域信息(会话标识, appid) or None
+        if isinstance(exc, _群资料认证冷却中):
+            return None
         冷却秒数 = _群信息冷却秒数(exc)
         失败缓存 = dict(已有)
         失败缓存.setdefault("group_openid", 会话标识)
