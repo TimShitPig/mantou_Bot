@@ -1115,6 +1115,7 @@
              .msg-new-messages:hover { transform:translateY(-1px); box-shadow:0 7px 18px rgba(30,110,160,.24); }
              .msg-new-messages[hidden] { display:none; }
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:var(--primary); box-shadow:0 0 0 4px var(--primary-soft); }
+             .msg-new-messages-dot[hidden] { display:none; }
              .msg-new-messages-arrow { font-size:15px; line-height:1; }
              /* 面板尺寸控制：脚本写入 --msg-list-width 并切换折叠 class。 */
              /* 缩放拖柄移到滚动条外侧，避免与会话列表滚轮滑块叠在同一条轨道。 */
@@ -1651,6 +1652,7 @@
       --msg-self-fill:linear-gradient(135deg,#cfe6fd,#c9e2fb);
       --msg-self-bg:#cce4fc; --msg-self-ink:#080a0d; --msg-self-line:#c8e1fa;
       --msg-self-inset:#e7f2ff; --msg-self-inset-hover:#dfedfc; --msg-self-muted:#566d88; --msg-self-link:#126ac3;
+      --msg-scroll-track:#eef1f6; --msg-scroll-thumb:#7a889c; --msg-scroll-thumb-hover:#53667f;
       height:100vh; height:100dvh; overflow:hidden; background:var(--panel);
       font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
     }
@@ -1667,6 +1669,7 @@
       --msg-self-fill:linear-gradient(135deg,#285b9c,#255494);
       --msg-self-bg:#275898; --msg-self-ink:#fff; --msg-self-line:#3062a1;
       --msg-self-inset:#244e7d; --msg-self-inset-hover:#2c5b8e; --msg-self-muted:#c5d5ec; --msg-self-link:#b9deff;
+      --msg-scroll-track:#232932; --msg-scroll-thumb:#8291a8; --msg-scroll-thumb-hover:#a5b5cd;
     }
     :root body.messages-workspace .shell { display:grid; height:100%; min-height:0; grid-template-columns:83.25px minmax(0,1fr); grid-template-rows:minmax(0,1fr); grid-template-areas:"side main"; overflow:hidden; border-radius:13.5px; }
     :root body.messages-workspace::after { position:fixed; inset:0; z-index:90; border:1px solid var(--line); border-radius:13.5px; pointer-events:none; content:""; }
@@ -1738,7 +1741,16 @@
     :root body.messages-workspace .msg-head-menu-panel .msg-clear-open { color:var(--danger); }
     :root body.messages-workspace .msg-pan-account-control { flex-wrap:wrap; gap:8px; padding:9px 10px; border:0; background:var(--input); font-size:12px; }
     :root body.messages-workspace .msg-pan-account-control select { flex:1; width:100%; max-width:100%; min-height:30px; color:var(--ink); }
-    :root body.messages-workspace .msg-body { padding:12.75px 21px 9px 18px; scrollbar-gutter:auto; }
+    :root body.messages-workspace .msg-body { padding:12.75px 21px 9px 18px; scrollbar-gutter:stable; scrollbar-width:auto; scrollbar-color:var(--msg-scroll-thumb) var(--msg-scroll-track); }
+    :root body.messages-workspace .msg-body::-webkit-scrollbar { width:14px; height:14px; }
+    :root body.messages-workspace .msg-body::-webkit-scrollbar-track { border-radius:10px; background:var(--msg-scroll-track); }
+    :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb { min-height:48px; border:2px solid var(--msg-scroll-track); border-radius:10px; background:var(--msg-scroll-thumb); }
+    :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:hover,:root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:active { background:var(--msg-scroll-thumb-hover); }
+    @supports selector(::-webkit-scrollbar) {
+      :root body.messages-workspace .msg-body { scrollbar-color:auto; }
+    }
+    :root body.messages-workspace .msg-new-messages { right:24px; bottom:16px; min-height:38px; max-width:calc(100% - 48px); padding:0 14px; border-color:var(--primary); border-radius:20px; font-size:13px; font-weight:600; }
+    :root body.messages-workspace .msg-new-messages:hover,:root body.messages-workspace .msg-new-messages:focus-visible { background:var(--primary-soft); }
     :root body.messages-workspace .msg-media img { max-width:180px; max-height:180px; }
     :root body.messages-workspace .msg-video-media video { width:min(240px,80vw); max-height:180px; }
     :root body.messages-workspace .msg-row { position:relative; gap:12px; margin:0 0 24px; }
@@ -1852,6 +1864,7 @@
       :root body.messages-workspace .msg-head-sub { font-size:12px; }
       :root body.messages-workspace .msg-head-menu { flex:0 0 auto; width:auto; margin-left:auto; padding:0; }
       :root body.messages-workspace .msg-body { padding:18px 12px 8px; }
+      :root body.messages-workspace .msg-new-messages { right:20px; bottom:12px; min-height:42px; max-width:calc(100% - 40px); }
       :root body.messages-workspace .msg-row { gap:9px; margin-bottom:20px; }
       :root body.messages-workspace .msg-row.self { gap:9px; }
       :root body.messages-workspace .msg-avatar { width:36px; height:36px; margin-top:0; }

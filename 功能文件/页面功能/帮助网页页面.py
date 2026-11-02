@@ -143,8 +143,8 @@ from .帮助网页脚本 import 控制台脚本
               </div>
               <div class="msg-multi-bar" id="msg-multi-bar" hidden><span id="msg-multi-count">已选 0 条</span><button class="msg-btn primary" id="msg-multi-recall" type="button">撤回选中</button><button class="msg-btn" id="msg-multi-cancel" type="button">取消</button></div>
                <div class="msg-body-wrap" id="msg-body-wrap">
-                 <div class="msg-body" id="msg-body"><div class="msg-empty">从左侧选择会话开始查看</div></div>
-                 <button class="msg-new-messages" id="msg-new-messages" type="button" hidden title="回到底部查看最新消息"><span class="msg-new-messages-dot" aria-hidden="true"></span><span id="msg-new-messages-label">有新消息</span><span class="msg-new-messages-arrow" aria-hidden="true">↓</span></button>
+                 <div class="msg-body" id="msg-body" tabindex="-1"><div class="msg-empty">从左侧选择会话开始查看</div></div>
+                 <button class="msg-new-messages" id="msg-new-messages" type="button" hidden title="回到底部" aria-label="回到底部" aria-controls="msg-body"><span class="msg-new-messages-dot" aria-hidden="true" hidden></span><span id="msg-new-messages-label">回到底部</span><span class="msg-new-messages-arrow" aria-hidden="true">↓</span></button>
               </div>
               <div class="msg-composer" id="msg-composer" hidden>
                 <button class="msg-composer-resizer" id="msg-composer-resizer" type="button" aria-label="拖动调整编辑区高度" title="拖动调整编辑区高度"><span aria-hidden="true"></span></button>

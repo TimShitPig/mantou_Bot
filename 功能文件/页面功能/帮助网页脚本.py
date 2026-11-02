@@ -342,6 +342,7 @@
           if (previousView !== 'messages' && msgState.chatId) loadMsgHistory(false, false, true);
         }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
+        syncMsgNewMessagesDisplay();
         if (resetScroll) {
           const scrollContainer = document.querySelector('.main');
           if (scrollContainer) scrollContainer.scrollTop = 0;
@@ -4568,36 +4569,48 @@
         void finishOptimisticSend(entry);
       };
       const msgBodyNearBottom = (body, threshold = 56) => Boolean(body) && body.scrollHeight - body.scrollTop - body.clientHeight <= threshold;
+      const syncMsgNewMessagesDisplay = () => {
+        const button = $('msg-new-messages');
+        if (!button) return;
+        const body = $('msg-body');
+        const count = Number(msgState.pendingNewMessages || 0);
+        const text = msgState.historyWindow
+          ? `返回最新消息${count > 0 ? ` · ${count} 条新消息` : ''}`
+          : count > 0 ? `有 ${count} 条新消息` : '回到底部';
+        const visible = !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
+        const ready = Boolean(msgState.chatId && msgState.chatAppid === msgState.selectedAppid
+          && (msgState.messages.length || msgState.historyWindow));
+        const hidden = !visible || !ready || (!msgState.historyWindow && count === 0 && msgBodyNearBottom(body));
+        const label = $('msg-new-messages-label');
+        if (label) label.textContent = text;
+        const dot = button.querySelector('.msg-new-messages-dot');
+        if (dot) dot.hidden = count === 0;
+        button.title = text;
+        button.setAttribute('aria-label', text);
+        if (hidden && !button.hidden && document.activeElement === button && visible) body?.focus({preventScroll:true});
+        button.hidden = hidden;
+      };
       const clearMsgNewMessages = () => {
         msgState.pendingNewMessages = 0;
-        const button = $('msg-new-messages');
-        if (button) button.hidden = !msgState.historyWindow;
-        if (msgState.historyWindow && $('msg-new-messages-label')) $('msg-new-messages-label').textContent = '返回最新消息';
+        syncMsgNewMessagesDisplay();
       };
       const showMsgNewMessages = (count) => {
         msgState.pendingNewMessages = Math.max(1, Number(msgState.pendingNewMessages || 0) + Number(count || 0));
-        const button = $('msg-new-messages');
-        const label = $('msg-new-messages-label');
-        if (label) label.textContent = msgState.historyWindow
-          ? `返回最新消息 · ${msgState.pendingNewMessages} 条新消息` : `有 ${msgState.pendingNewMessages} 条新消息`;
-        if (button) button.hidden = false;
+        syncMsgNewMessagesDisplay();
       };
       const scrollMsgToBottom = (behavior = 'smooth') => {
         const body = $('msg-body');
-        if (!body) return;
+        if (!body || !msgState.chatId || $('page-messages')?.hidden || document.visibilityState === 'hidden') return;
+        cancelMsgQuoteJump();
+        cancelMsgBottomPosition(body, true);
         if (msgState.historyWindow) {
           msgState.initialScrollChatId = msgState.chatId;
           void loadMsgHistory();
           return;
         }
-        if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior});
+        const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior:reduced ? 'auto' : behavior});
         else body.scrollTop = body.scrollHeight;
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(() => {
-            if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior:'auto'});
-            else body.scrollTop = body.scrollHeight;
-          });
-        }
         clearMsgNewMessages();
         markMsgRead(undefined, true);
       };
@@ -5786,6 +5799,7 @@
           body.scrollTop = Math.min(Number(scroll.previousTop || 0), Math.max(0, body.scrollHeight - body.clientHeight));
         }
         msgState.renderedChatId = msgState.chatId;
+        syncMsgNewMessagesDisplay();
         bindMsgEvent(body.querySelector('#msg-load-older'), 'click', 'load-older', () => loadMsgHistory(true));
         bindMsgEvent(body.querySelector('#msg-load-newer'), 'click', 'load-newer', () => loadMsgWindowPage('after'));
         body.querySelectorAll('[data-msg-jump]').forEach((el) => bindMsgEvent(el, 'click', 'quote-jump', (event) => {
@@ -7060,6 +7074,7 @@
         }, 140);
       }, {passive:true});
       window.addEventListener('resize', () => {
+        syncMsgNewMessagesDisplay();
         if (!msgChatsNode) return;
         const rowHeight = getMsgChatRowHeight(msgChatsNode);
         if (rowHeight !== msgState.chatListRowHeight && msgState.chatListRendered) {
@@ -7070,6 +7085,7 @@
         }
       }, {passive:true});
       $('msg-body').addEventListener('scroll', () => {
+        syncMsgNewMessagesDisplay();
         maybeLoadOlderMessages();
         if (msgState.historyWindow || msgQuoteJump.pending) return;
         if (!msgBodyNearBottom($('msg-body'))) return;
@@ -7131,7 +7147,7 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
+      document.addEventListener('visibilitychange', () => { syncMsgNewMessagesDisplay(); if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
       window.addEventListener('pagehide', () => { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
