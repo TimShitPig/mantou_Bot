@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.274-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.275-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.274 |
+| 版本 | v6.1.275 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -28,6 +28,8 @@
 引用消息支持按当前聊天的完整消息 ID/引用索引精确定位。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
 
 QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret 不正确，应在 AstrBot 对应 QQ 官方平台配置中核对。插件按当前认证通道冷却 60 秒，保留群状态、资料和历史，避免按每个群重复请求与告警；其他机器人不受该通道影响。
+
+群状态和群资料 GET 复用 SDK 认证会话，完整读取有界响应并记录真实 HTTP 状态和数字业务码。同一机器人、群与接口的并发查询合并；失败进入冷却，强制刷新也不重复请求。“机器人非群成员”等查询失败保留原成员状态，只有可信退群事件确认移除。
 
 聊天消息身份标签：官方消息确认机器人时显示蓝色 `BOT`，群主显示橙色标签、管理员显示绿色标签；其他机器人保持接收方消息布局，历史记录和实时消息使用同一身份标识。
 
