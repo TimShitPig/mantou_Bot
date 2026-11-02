@@ -4663,10 +4663,12 @@
         const size = Number(value || 0);
         if (!Number.isFinite(size) || size <= 0) return '';
         if (size < 1024) return `${size} B`;
-        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-        if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-        return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
+        if (size < 1024 * 1024) return `${Number((size / 1024).toFixed(1))} KB`;
+        if (size < 1024 * 1024 * 1024) return `${Number((size / 1024 / 1024).toFixed(1))} MB`;
+        return `${Number((size / 1024 / 1024 / 1024).toFixed(1))} GB`;
       };
+      const renderMessageFileIcon = (type) => type === '视频' ? '▶' : type === '语音' ? '♫'
+        : '<svg viewBox="0 0 42 50" width="42" height="50" aria-hidden="true" focusable="false"><use href="#msg-document-symbol"/></svg>';
       const renderMessageMedia = (value, messageId = '', preload = false, mediaIndex = 0) => {
         if (!value) return '';
         const items = Array.isArray(value?.items) && value.items.length ? value.items : [value];
@@ -4697,12 +4699,12 @@
           }
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
-          const meta = [type, size].filter(Boolean).join(' · ') || '附件';
-          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
+          const meta = [['文件', 'file'].includes(typeLower) ? '' : type, size].filter(Boolean).join(' · ') || type || '附件';
+          if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">${renderMessageFileIcon(type)}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
-          if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
+          if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${renderMessageFileIcon(type)}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
           const fileUrl = mediaProxyUrl(src, 'file', name);
-          return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${type === '视频' ? '▶' : type === '语音' ? '♫' : '<svg viewBox="0 0 24 28" width="32" height="36" aria-hidden="true" focusable="false"><path fill="#4d9bea" d="M4 1h10l6 6v19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1Z"/><path fill="#acd4fc" d="M14 1v6h6Z"/><path fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" d="M7 13h9M7 17h9M7 21h6"/></svg>'}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
+          return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" href="${esc(fileUrl || src)}" target="_blank" rel="noopener noreferrer"${download}><span class="msg-file-icon">${renderMessageFileIcon(type)}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;
         }).join('');
       };
       const renderMsgMediaSegments = (media, messageId = '', preload = false, profiles = msgState.profiles) => {
@@ -5380,7 +5382,13 @@
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
         msgs.forEach((m, index) => {
           const day = String(m.timestamp||'').slice(0,10);
-          if (day !== lastDay && day) { html += `<div class="msg-day">${esc(fmtDayLabel(m.timestamp))}</div>`; lastDay = day; }
+          if (day !== lastDay && day) {
+            const label = fmtDayLabel(m.timestamp);
+            const clock = fmtMsgTime(m.timestamp);
+            const separator = label === '今天' ? clock : [label, clock].filter(Boolean).join(' ');
+            html += `<div class="msg-day" title="${esc(label)}">${esc(separator)}</div>`;
+            lastDay = day;
+          }
           const systemSource = String(m.source || '');
           const renderKey = String(m.message_id || m.messageId || m.id || m.optimistic_id || '').trim();
           if (['group_member_join','group_member_leave','friend_add','friend_del'].includes(systemSource)) {
