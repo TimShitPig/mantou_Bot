@@ -19,7 +19,6 @@ except ImportError:
 
 
 API_BASE = "https://api.ihuaben.com"
-CDN_BASE = "https://apicdn.ihuaben.com"
 MAX_CONCURRENCY = 400
 _IMAGE_RE = re.compile(r"\[img:([^\]]+)\]", re.IGNORECASE)
 _SERIAL_STATES = {
@@ -268,7 +267,7 @@ class AsyncHuabenClient:
     async def get_catalog(self, book_id: Any) -> list[dict[str, Any]]:
         book_id = _positive_id(book_id)
         data = await self._request_json(
-            f"{CDN_BASE}/book/read/chapter/{book_id}/{time.time_ns() // 1_000_000}"
+            f"{API_BASE}/book/read/chapter/{book_id}/{time.time_ns() // 1_000_000}"
         )
         if not isinstance(data, list) or not data:
             raise HuabenError("empty_catalog")
@@ -305,7 +304,7 @@ class AsyncHuabenClient:
         if str(meta.get("chapter_type") or "").upper() in {"PAID", "MEMBER", "VIP"}:
             raise HuabenError("chapter_locked")
         data = await self._request_json(
-            f"{CDN_BASE}/book/read/chapter/content/{book_id}/{chapter_id}/{time.time_ns() // 1_000_000}",
+            f"{API_BASE}/book/read/chapter/content/{book_id}/{chapter_id}/{time.time_ns() // 1_000_000}",
             attempts=attempts,
         )
         if not isinstance(data, dict):

@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.285-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.286-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.285 |
+| 版本 | v6.1.286 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -248,6 +248,7 @@ QQ 图片、动画、视频、音频、普通文件和机器人发送后记录�
 支持平台及特点：
 
 - 话本图文内容按原文保留 `[img:...]` 标记及位置，纯图片章节也保留，不做 OCR 或把图片当缺章。
+- 话本详情、搜索、目录和正文统一请求官方 `https://api.ihuaben.com`，通过同一个异步会话复用连接，保留最高 400 路动态并发。
 - 话本：支持 `www.ihuaben.com/book/{书籍ID}.html`、`www.ihuaben.com/list/{书籍ID}.html` 及分享卡片，也可通过找书选中下载。使用官方 App 的详情、全量目录、搜索和单章明文 JSON 接口，无需正文解密；复用异步会话和连接池，按章节数分配最高 400 路工作任务，失败/限流时降并发、恢复后逐步回升，最多三轮且只补失败章。缺章、锁章或空正文不生成部分 TXT，提示和文件直接复用番茄格式（原始整数字数、免责声明、文件名、头部及 UTF-8/CRLF）；只走当前群所选网盘，分享结束后清理，失败上传沿用统一续传。默认开启，可用 `开话本` / `关话本` 或 `开话本小说` / `关闭话本小说` 管理，无新增账号配置。
 - 番茄：批量正文接口，每批最多 1500 章，最多 5 路动态并发；畅听正文使用 `gmpy2`/PyCryptodome 解密，并按 CPU 核心数使用独立线程池。
 - 七猫：长篇正文优先 App 批量接口，短篇走短篇详情/目录与 `reader_agent=1` 正文接口。目录明确标记 `is_pure_image=1` 的图片版提前提示暂无文字正文；文字书批量缺章时只补拉缺失章节，每章最多两次，最终仍缺章或顺序不符时停止，不生成残缺 TXT。
