@@ -2885,12 +2885,29 @@
             e.preventDefault();
             e.stopPropagation();
             const chatId = el.dataset.msgChat; const chatType = el.dataset.msgType; const appid = el.dataset.msgAppid; const pinned = el.dataset.msgPinned === '1';
+            const menuGeneration = String((Number(node.dataset.msgContextGeneration) || 0) + 1);
+            node.dataset.msgContextGeneration = menuGeneration;
+            const menuScopeGeneration = msgState.scopeGeneration;
+            const menuContext = msgQuoteJumpScope();
             const items = [];
             items.push({label: pinned ? '取消置顶' : '置顶', action: async () => {
               try { const result = await api('message/pin', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:chatType, appid, pinned:!pinned})}); toast(result.pinned ? '已置顶' : '已取消置顶'); await loadMsgChats(true); }
               catch (error) { toast(error.message || '操作失败'); }
             }});
             if (chatType === 'group') items.push({label:'刷新群信息', action:() => { api('message/group-info/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:chatType, appid})}).then((data) => { applyMsgGroupInfo({...data, chat_id:chatId}); toast('已刷新'); loadMsgChats(true); }).catch((error) => toast(error.message || '刷新失败')); }});
+            items.push({sep:true}, {label:'删除会话及记录', danger:true, action:() => {
+              if (activeView !== 'messages' || node.dataset.msgContextGeneration !== menuGeneration
+                || menuScopeGeneration !== msgState.scopeGeneration || menuContext !== msgQuoteJumpScope()
+                || appid !== consoleAppid || appid !== msgState.selectedAppid) return;
+              const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId && item.chat_type === chatType && item.appid === appid);
+              if (!chat) return;
+              if (!msgMatchesCurrent(chatType, chatId, appid)) {
+                selectMsgChat(chat);
+                if (!msgMatchesCurrent(chatType, chatId, appid)) return;
+                scheduleMsgHistoryLoad(chatId);
+              }
+              openMsgClear({chatOnly:true});
+            }});
             if (items.length) showMsgCtx(e.clientX, e.clientY, items);
           });
           node.addEventListener('click', (e) => {
@@ -3174,10 +3191,12 @@
         if ($('msg-clear-confirm')) $('msg-clear-confirm').disabled = true;
       };
       const msgClearTargetCurrent = (target) => target && msgClearState.target === target && !$('msg-clear-modal').hidden
-        && target.appid === consoleAppid && target.context === msgQuoteJumpScope() && activeView === 'messages';
+        && target.appid === consoleAppid && target.appid === msgState.selectedAppid
+        && target.consoleGeneration === consoleGeneration && target.scopeGeneration === msgState.scopeGeneration
+        && target.context === msgQuoteJumpScope() && activeView === 'messages';
       const syncMsgClearControls = () => {
         const busy = msgClearInFlight.has(consoleAppid);
-        $('msg-clear-scope').disabled = busy;
+        $('msg-clear-scope').disabled = busy || Boolean(msgClearState.target?.chatOnly);
         $('msg-clear-preview-button').disabled = busy || msgClearState.previewing;
         $('msg-clear-confirm').disabled = busy || !msgClearState.token || msgClearState.expiresAt <= Date.now();
       };
@@ -3185,7 +3204,7 @@
         const previous = msgClearState.target;
         if (!msgClearTargetCurrent(previous) || msgClearInFlight.has(previous.appid)) return;
         invalidateMsgClearPreview();
-        const scope = $('msg-clear-scope').value === 'bot' ? 'bot' : 'chat';
+        const scope = !previous.chatOnly && $('msg-clear-scope').value === 'bot' ? 'bot' : 'chat';
         const target = {...previous, scope, chat_id:scope === 'chat' ? msgState.chatId : '', chat_type:scope === 'chat' ? msgState.chatType : ''};
         if (scope === 'chat' && (!target.chat_id || msgState.chatAppid !== target.appid)) return;
         msgClearState.target = target; msgClearState.previewing = true;
@@ -3200,11 +3219,14 @@
           const count = result.matched_count;
           const rawExpiry = result.expires_at;
           const expiresAt = Number.isFinite(Number(rawExpiry)) ? Number(rawExpiry) * (Number(rawExpiry) < 1e12 ? 1000 : 1) : Date.parse(String(rawExpiry || ''));
-          if (result.scope !== scope || (scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))
+          if (String(result.appid || '') !== target.appid || result.scope !== scope || (scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))
             || !Number.isSafeInteger(count) || count < 0 || !result.clear_token || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('invalid_preview');
-          msgClearState.token = count > 0 ? String(result.clear_token) : ''; msgClearState.expiresAt = expiresAt;
-          output.textContent = count > 0 ? `将清理 ${count.toLocaleString('zh-CN')} 条本机聊天记录。确认后删除本次预览范围内的记录。` : '此范围没有需要清理的记录。';
-          if (count > 0) msgClearState.expiryTimer = setTimeout(() => {
+          const canConfirm = count > 0 || scope === 'chat';
+          msgClearState.token = canConfirm ? String(result.clear_token) : ''; msgClearState.expiresAt = expiresAt;
+          output.textContent = count > 0
+            ? `将清理 ${count.toLocaleString('zh-CN')} 条本机聊天记录。${scope === 'chat' ? '清空后从列表移除此会话，预览后新消息保留。' : '确认后删除本次预览范围内的记录。'}`
+            : scope === 'chat' ? '当前会话没有聊天记录。确认后从列表移除此会话，预览后新消息保留。' : '此范围没有需要清理的记录。';
+          if (canConfirm) msgClearState.expiryTimer = setTimeout(() => {
             if (generation !== msgClearState.generation || !msgClearTargetCurrent(target)) return;
             invalidateMsgClearPreview(); output.textContent = '预览已过期，请重新统计后确认。'; syncMsgClearControls();
           }, Math.max(0, expiresAt - Date.now()));
@@ -3216,15 +3238,18 @@
           if (generation === msgClearState.generation && msgClearTargetCurrent(target)) { msgClearState.previewing = false; msgClearState.previewAbort = null; syncMsgClearControls(); }
         }
       };
-      const openMsgClear = () => {
-        if (!consoleAppid) return;
+      const openMsgClear = ({chatOnly = false} = {}) => {
+        if (!consoleAppid || consoleAppid !== msgState.selectedAppid || activeView !== 'messages') return;
         closeGroupSettings(); hideMsgCtx();
         msgModalIds.filter((id) => id !== 'msg-clear-modal').forEach((id) => setMsgModal(id, false, false));
         invalidateMsgClearPreview();
         const hasChat = Boolean(msgState.chatId && msgState.chatAppid === consoleAppid);
+        if (chatOnly && !hasChat) return;
         const option = $('msg-clear-scope').querySelector('option[value="chat"]'); option.hidden = !hasChat; option.disabled = !hasChat;
         $('msg-clear-scope').value = hasChat ? 'chat' : 'bot';
-        msgClearState.target = {appid:consoleAppid, context:msgQuoteJumpScope(), name:$('msg-head-name').textContent || msgState.chatId};
+        msgClearState.target = {appid:consoleAppid, context:msgQuoteJumpScope(), name:$('msg-head-name').textContent || msgState.chatId,
+          consoleGeneration, scopeGeneration:msgState.scopeGeneration, chatOnly};
+        $('msg-clear-title').textContent = chatOnly ? '删除会话及记录' : '清理聊天记录';
         $('msg-clear-preview').className = 'msg-clear-preview';
         $('msg-clear-preview').textContent = msgClearInFlight.has(consoleAppid) ? '当前机器人的记录清理正在执行，请稍候刷新查看结果。' : '正在统计记录…';
         $('msg-clear-target').textContent = '';
@@ -3264,10 +3289,28 @@
           $('msg-raw-content').replaceChildren(); $('msg-raw-copy').textContent = '复制';
           if (msgState.multi) exitMultiMode(); clearMsgQuote(); clearMsgNewMessages();
           msgState.messages = msgState.messages.filter((message) => !msgIsKnownCleared(message, msgState.chatType, msgState.chatId, msgState.chatAppid));
-          msgState.historyData = {...(msgState.historyData || {}), references:{}, has_more:false, messages:msgState.messages};
-          msgState.messageRenderSignature = null;
-          renderMsgMessages(msgState.historyData, {forceRender:true, previousTop:$('msg-body').scrollTop, previousHeight:$('msg-body').scrollHeight});
-          if (!$('page-messages').hidden && msgState.chatId) void loadMsgHistory(false, true);
+          const hasLocalNewMessages = msgState.messages.length > 0 || msgState.chats.some((chat) => affects(chat.chat_type, chat.chat_id, chat.appid));
+          if (scope === 'chat' && payload.conversation_removed === true && Number(payload.remaining_count) === 0 && !hasLocalNewMessages) {
+            stopMsgGroupSnapshots(); closeComposerMentionPicker();
+            Object.assign(msgState, {chatId:'', chatType:'group', chatAppid:msgState.selectedAppid, chatRemoved:false,
+              messages:[], profiles:{}, historyData:null, historyWindow:null, historyActiveScope:'', renderedChatId:'',
+              messageRenderSignature:null, initialScrollChatId:'', botIsAdmin:false,
+              adminRequestToken:msgState.adminRequestToken + 1, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'',
+              panSelectionRequest:msgState.panSelectionRequest + 1, panSelectionData:null, panSelectionSaving:false, panSelectionLoading:false,
+              mutes:new Map(), muteRequestAt:0});
+            resetComposer(); resetMsgAdSwitch(); updateMsgPanSelector();
+            const body = $('msg-body'); cancelMsgBottomPosition(body, true); body.classList.remove('msg-positioning');
+            body.innerHTML = '<div class="msg-empty">请在左侧选择会话</div>';
+            $('msg-head-name').textContent = '请选择会话'; $('msg-head-name').dataset.chatKey = ''; $('msg-head-name').classList.remove('admin');
+            $('msg-head-sub').textContent = ''; $('msg-head-name').removeAttribute('title'); $('msg-head-sub').removeAttribute('title');
+            for (const id of ['msg-composer','msg-refresh-info','msg-remark','msg-group-settings-open','msg-ad-switch','msg-admin-tag']) $(id).hidden = true;
+            setMsgMobileChatOpen(false);
+          } else {
+            msgState.historyData = {...(msgState.historyData || {}), references:{}, has_more:false, messages:msgState.messages};
+            msgState.messageRenderSignature = null;
+            renderMsgMessages(msgState.historyData, {forceRender:true, previousTop:$('msg-body').scrollTop, previousHeight:$('msg-body').scrollHeight});
+            if (!$('page-messages').hidden && msgState.chatId) void loadMsgHistory(false, true);
+          }
         }
         renderMsgChats({appid:consoleAppid, chats:msgState.chats});
         if (!$('page-messages').hidden) void loadMsgChats(true);
@@ -3282,8 +3325,9 @@
         $('msg-clear-preview').textContent = '正在清理记录…';
         try {
           const result = await api('message/clear', {method:'POST', body:JSON.stringify({clear_token:token, appid:target.appid})});
-          if (target.appid !== consoleAppid) return;
-          if (result.scope !== target.scope || (target.scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))) throw new Error('invalid_clear_result');
+          if (target.appid !== consoleAppid || target.appid !== msgState.selectedAppid
+            || target.consoleGeneration !== consoleGeneration || target.scopeGeneration !== msgState.scopeGeneration) return;
+          if (String(result.appid || '') !== target.appid || result.scope !== target.scope || (target.scope === 'chat' && (String(result.chat_id || '') !== target.chat_id || result.chat_type !== target.chat_type))) throw new Error('invalid_clear_result');
           applyMsgHistoryCleared(result);
           toast(Number.isSafeInteger(result.deleted_count) ? `已清理 ${result.deleted_count.toLocaleString('zh-CN')} 条本机记录` : '本机记录已清理');
         } catch (error) {

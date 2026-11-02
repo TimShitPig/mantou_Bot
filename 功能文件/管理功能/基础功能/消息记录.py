@@ -2034,6 +2034,7 @@ async def 执行清理聊天记录(准备结果: dict[str, Any]) -> dict[str, An
               "memory_deleted_count": 删除内存数,
               "deleted_count": max(int(数据库结果["database_deleted_count"]), 删除内存数),
               "remaining_count": max(int(数据库结果.get("remaining_count") or 0), 剩余内存数)}
+        结果["conversation_removed"] = 结果["scope"] == "chat" and 结果["remaining_count"] == 0
         _推送聊天记录清理事件(结果)
     if 已取消:
         raise asyncio.CancelledError
@@ -7915,6 +7916,11 @@ def _数据库聚合聊天项(
         旧最后, _, 旧数量 = 来源.get(键, ({}, {}, 0))
         消息 = [项 for 项 in (会话.get("messages") or []) if isinstance(项, dict)
                 and str(项.get("appid") or "").strip() == 应用 and str(项.get("chat_type") or 类型) == 类型]
+        数量 = max(旧数量, int(会话.get("msg_count") or 0), len(消息))
+        if 数量 <= 0:
+            # 群资料、失败查询及清理后的空热点副本不独立构成消息会话。
+            # 媒体/系统消息即使没有正文，仍由真实记录数量保留。
+            continue
         最后 = 消息[-1] if 消息 else {}
         if int(会话.get("last_ts") or 0) >= int(旧最后.get("ts") or 0):
             最后 = {**最后, "appid": 应用, "chat_type": 类型,
@@ -7922,11 +7928,7 @@ def _数据库聚合聊天项(
                   "content": _会话列表摘要(会话, 最后), "ts": int(会话.get("last_ts") or 0)}
         else:
             最后 = 旧最后
-        来源[键] = (最后, 会话, max(旧数量, int(会话.get("msg_count") or 0), len(消息)))
-    for 标识, 信息 in _遍历群作用域信息():
-        应用 = str(信息.get("appid") or "").strip()
-        if appid is None or 应用 == appid:
-            来源.setdefault((应用, "group", 标识), ({}, {}, 0))
+        来源[键] = (最后, 会话, 数量)
     未读表 = _读取全部持久化未读数()
     私聊查询 = [{"appid": 应用, "user_id": 标识} for (应用, 类型, 标识) in 来源 if 类型 == "user"]
     用户昵称表: dict[tuple[str, str], str] = {}
