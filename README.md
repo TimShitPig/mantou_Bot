@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.271-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.272-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.271 |
+| 版本 | v6.1.272 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -68,6 +68,8 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 控制台的“机器人配置”提供管理员白名单和帮助网页设置；管理员白名单会与 MySQL `mantou_runtime_state` 双向同步，AstrBot 配置和数据库任一侧变更后会在下次同步时保持一致。“网盘配置”保留 UC、夸克、百度顶部页签，每个平台下方以 OpenList 风格的紧凑可点击卡片展示账号和设置项；账号卡可进入详情并独立启停或删除，也可分别设置 UC、夸克、百度各自的默认账号和上传目录；Cookie 通过添加账号入口配置。系统设置可查看连接状态并编辑数据库地址、端口、用户名和数据库名，数据库密码只写入、不回显，留空表示保持现有密码；数据库名留空时默认使用用户名。数据库连接配置保存后需重载插件生效。系统设置的“测试当前连接”直接使用尚未保存的表单，空密码沿用已保存密码，仅执行 SELECT，不保存配置或创建数据库、表；测试结果独立于已保存连接状态，显示固定错误分类、MySQL 数字码、服务端版本与 TLS 状态。全局默认分享网盘与每个平台的默认账号分别保存。消息记录页右上角“⋮”菜单可为当前群单独选择网盘账号，未单独设置的群使用全局默认分享网盘及该平台默认账号；每次下载只向所选网盘上传并生成分享链接；QQ阅读提供独立多账号卡片，可添加、删除、切换当前账号和启停账号，查看会员类型与到期时间，并通过手机号验证码或手机 QQ 扫码登录。账号列表仅展示卡片，点击后弹出居中详情；添加账号也使用弹窗，背景遮罩并轻度模糊，关闭后保留列表位置。Cookie、密码和数据库密码等敏感凭据不回显；QQ阅读详情中的密钥仅在登录控制台后点击“显示”时按需读取，隐藏、离开详情或退出登录即清除页面中的密钥。
 
 消息历史按页查询，同参数的并发请求复用一次查询，完成后释放；消息展示使用副本，保留完整原始记录并合并最新撤回状态。
+
+群聊“已移除”只由当前机器人收到 QQ 官方 `GROUP_DEL_ROBOT` 事件确认；资料接口的 HTTP 404、未开放白名单权限（11253）、认证、限流或网络失败保留原有成员状态，群号和成员 OpenID 中包含 `404` 也不会判为移除。旧版没有明确退群事件依据的“已移除”恢复为待确认，保留聊天记录与群资料；`GROUP_ADD_ROBOT`、新收到的群消息或成功读取的群内状态可恢复在群。状态来源与修订号随缓存、热重载和网页更新保留，迟到结果不覆盖较新状态。依据：[官方群退出事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_del_robot.html)、[官方状态接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)及[官方错误说明](https://bot.q.qq.com/wiki/develop/api-v2/openapi/error/error.html)。
 
 入群和退群记录优先使用事件真实昵称、当前群资料及已保存的身份关联资料，历史分页批量补齐已知姓名；后续收到真实昵称时更新原通知，不新增消息或未读。欢迎消息中的 `@成员` 由 QQ 客户端显示姓名，接口未返回的名字不凭空推断；从未收到姓名且成员资料接口无权限的用户保留占位。当前页面的实时资料按群、聊天类型和 AppID 隔离。
 
