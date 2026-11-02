@@ -3968,6 +3968,28 @@ def _读取网页群状态快照(
     """状态读取不等待官方接口；未取得资料时明确返回 pending。"""
     from 功能文件.管理功能.基础功能 import 消息记录
 
+    会话标识, appid = 消息记录._网页群状态作用域(会话标识, appid)
+    if not 消息记录.群会话允许查询资料(会话标识, appid):
+        for 清理键 in (("roles", appid, 会话标识), ("mutes", appid, 会话标识)):
+            旧任务 = 群状态刷新任务.pop(清理键, None)
+            if 旧任务 is not None and not 旧任务.done():
+                旧任务.cancel()
+            群状态刷新失败冷却.pop(清理键, None)
+        状态 = {
+            "chat_id": 会话标识, "chat_type": "group", "appid": appid,
+            "available": False, "has_data": False, "cached": False,
+            "pending": False, "stale": False, "refreshing": False,
+            "status": "unavailable", "next_refresh_at": 0, "retry_after_ms": 1000,
+        }
+        if 类型 == "mutes":
+            return {**消息记录._复制群禁言状态(None), **状态}
+        return {
+            "roles": {}, "bot_is_admin": None, "bot_in_group": None, "bot_role": "",
+            "membership_status": "unknown", "membership_checked_at": 0,
+            "membership_revision": 0, "allow_proactive_msg": None, "recv_msg_setting": "",
+            **状态,
+        }
+
     读取 = 消息记录.获取网页群禁言快照 if 类型 == "mutes" else 消息记录.获取网页群角色快照
     状态, 需要刷新 = 读取(会话标识, appid)
     键 = (类型, str(状态["appid"]), str(状态["chat_id"]))
@@ -3987,13 +4009,23 @@ def _读取网页群状态快照(
         并发 = _群状态刷新并发
 
         async def 刷新() -> None:
+            def 仍可刷新() -> bool:
+                return (
+                    群状态刷新任务.get(键) is asyncio.current_task()
+                    and 消息记录.群会话允许查询资料(键[2], 键[1])
+                )
+
             try:
                 async with 并发:
+                    if not 仍可刷新():
+                        return
                     async with asyncio.timeout(15):
                         if 类型 == "mutes":
                             刷新结果 = await 消息记录.查询群禁言状态(键[2], 键[1], 强制=强制)
                         else:
                             刷新结果 = await 消息记录.获取群角色(键[2], 键[1], 强制=True)
+                        if not 仍可刷新():
+                            return
                         # 角色层会保留旧资料并吞掉受控接口失败，不能只靠异常判断刷新成功。
                         # 禁言写入淘汰了较早 GET 时，应让下一次读取补查，不能进入失败冷却。
                         _, 仍需刷新 = 读取(键[2], 键[1])
@@ -4005,6 +4037,8 @@ def _读取网页群状态快照(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if not 仍可刷新():
+                    return
                 群状态刷新失败冷却[键] = time.monotonic() + 30
                 logger.debug("帮助控制台群状态后台刷新失败：类型=%s，错误类型=%s", 类型, type(exc).__name__)
 
