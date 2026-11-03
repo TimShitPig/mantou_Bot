@@ -352,7 +352,7 @@
         if (next === 'bot' && previousView !== 'bot' && qqReader.auth) void loadQQReaderAccounts().catch((error) => { if (error.status === 401) showAuthError(error); });
       };
       const switchHtml = (key, enabled, editable, label) => `<button class="switch ${enabled ? 'on' : ''}" data-switch="${esc(key)}" data-enabled="${enabled}" ${editable ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${enabled}"><span></span></button>`;
-      const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','话本':'话','疯狂追书':'疯','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
+      const platformGlyph = (name) => ({'番茄':'番','七猫':'猫','书旗':'旗','追书':'追','QQ阅读':'阅','QQ浏览器':'浏','得间':'得','点众':'众','盐言':'盐','塔读':'塔','百度':'度','小米':'米','晋江':'晋','话本':'话','疯狂追书':'疯','梧桐':'梧','宜搜':'搜','米读':'读','猫眼':'眼','酷我':'酷','酷匠':'匠','连城':'城','菠萝包':'菠'}[name] || String(name || '书').slice(0, 1));
       const categoryOrder = ['basic_settings', 'help_web_settings'];
       const safeFieldValue = (field) => {
         if (field.kind === 'admin_list') return Array.isArray(field.value) ? field.value.join('\n') : '';

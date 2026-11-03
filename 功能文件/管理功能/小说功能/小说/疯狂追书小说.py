@@ -110,7 +110,10 @@ async def _写入缓存(文件名: str, 内容: bytes) -> Path:
             raise
 
 
-async def 生成疯狂追书下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
+async def 生成疯狂追书下载回复流(
+    event: Any, 来源: str, 配置: Any = None, *, 客户端类: Any = None,
+    平台名: str = "疯狂追书", 书籍信息规范化: Any = None,
+) -> AsyncIterator[Any]:
     书籍编号 = 提取疯狂追书书籍编号(来源)
     if not 书籍编号:
         yield 疯狂追书下载失败提示
@@ -118,7 +121,7 @@ async def 生成疯狂追书下载回复流(event: Any, 来源: str, 配置: Any
     阶段 = "metadata"
     路径: Path | None = None
     try:
-        async with AsyncFkzsClient(concurrency=400) as client:
+        async with (客户端类 or AsyncFkzsClient)(concurrency=400) as client:
             详情 = await client.get_book(书籍编号)
             目录 = await client.get_catalog(书籍编号, toc_id=详情.get("toc_id"))
             if not 目录:
@@ -126,7 +129,7 @@ async def 生成疯狂追书下载回复流(event: Any, 来源: str, 配置: Any
             声明数 = 详情.get("chapter_count")
             if isinstance(声明数, int) and not isinstance(声明数, bool) and 声明数 > 0 and 声明数 != len(目录):
                 raise FkzsError("incomplete_catalog")
-            书籍信息 = 规范化疯狂追书书籍信息(书籍编号, 详情)
+            书籍信息 = (书籍信息规范化 or 规范化疯狂追书书籍信息)(书籍编号, 详情)
             yield 番茄小说.格式化番茄下载提示(书籍信息, len(目录))
             阶段 = "chapters"
             章节结果 = await client.download_all(书籍编号, 目录, toc_id=详情.get("toc_id"))
@@ -146,8 +149,8 @@ async def 生成疯狂追书下载回复流(event: Any, 来源: str, 配置: Any
             yield 疯狂追书文件发送失败提示
     except Exception as exc:
         logger.warning(
-            "疯狂追书小说处理失败：stage=%s, book_id=%s, error_type=%s, reason=%s, code=%s, http_status=%s",
-            阶段, 书籍编号, type(exc).__name__,
+            "%s小说处理失败：stage=%s, book_id=%s, error_type=%s, reason=%s, code=%s, http_status=%s",
+            平台名, 阶段, 书籍编号, type(exc).__name__,
             exc.reason if isinstance(exc, FkzsError) else "operation_failed",
             exc.code if isinstance(exc, FkzsError) else None,
             exc.status if isinstance(exc, FkzsError) else None,

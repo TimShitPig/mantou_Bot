@@ -250,6 +250,18 @@ def _trusted_url(value: str, *, origin: bool = False) -> str:
 class AsyncFkzsClient:
     """一个任务复用一个连接池；设备和登录态仅保留在当前内存。"""
 
+    app_pkg = APP_PKG
+    app_name = APP_NAME
+    app_version = APP_VERSION
+    version_code = VERSION_CODE
+    channel = CHANNEL
+    platform_name = "疯狂追书"
+    worker_prefix = "mantou-fkzs"
+    device_defaults: Mapping[str, str] = {}
+    encrypt_params = staticmethod(encrypt_app_params)
+    decrypt_response = staticmethod(decrypt_app_response)
+    decrypt_content = staticmethod(decrypt_chapter_content)
+
     def __init__(
         self, *, concurrency: int = MAX_CONCURRENCY, api_host: str = API_HOST,
         openapi_host: str = OPENAPI_HOST,
@@ -270,21 +282,35 @@ class AsyncFkzsClient:
         self._workers: set[asyncio.Task[Any]] = set()
         self._active = 0
         self.common = {
-            "app_name": APP_NAME, "app_pkg": APP_PKG, "app_version": APP_VERSION,
-            "version_code": VERSION_CODE, "device_id": "", "app_device_id": "", "sm_device_id": "",
-            "channel": CHANNEL, "device_brand": "vivo", "device_model": "V2023A", "inner_version": "",
+            "app_name": self.app_name, "app_pkg": self.app_pkg, "app_version": self.app_version,
+            "version_code": self.version_code, "device_id": "", "app_device_id": "", "sm_device_id": "",
+            "channel": self.channel, "device_brand": "vivo", "device_model": "V2023A", "inner_version": "",
             "uid": "", "uuid": secrets.token_hex(16), "oaid": "", "imei": "", "android_id": secrets.token_hex(8),
             "language": "zh-CN", "os_version": "RP1A.200720.012", "os_api": "30", "dpi": "2.75",
             "carrier": "", "resolution": "1080x2400", "device_platform": "android", "device_type": "android",
             "access": "wifi", "is_debug": "0",
         }
+        self.common.update(self.device_defaults)
+        if not self.app_name:
+            self.common.pop("app_name", None)
         self.stats = {key: 0 for key in ("requests", "retries", "http_429", "http_5xx", "network_errors", "peak_concurrency")}
         self.concurrency_history: list[dict[str, Any]] = []
+
+    def _app_form(self, params: Mapping[str, Any], encrypted: str) -> dict[str, Any]:
+        return {"app_pkg": self.app_pkg, "p": encrypted}
+
+    @staticmethod
+    def _encode_chapter_link(link: str) -> str:
+        return urllib.parse.quote(link, safe="")
+
+    @staticmethod
+    def _chapter_link_md5(link: str, encoded: str) -> str:
+        return hashlib.md5(link.encode("utf-8")).hexdigest()
 
     async def __aenter__(self) -> AsyncFkzsClient:
         if self.session is not None:
             raise FkzsError("session_already_open")
-        self._executor = ThreadPoolExecutor(max_workers=min(32, max(2, os.cpu_count() or 2)), thread_name_prefix="mantou-fkzs-crypto")
+        self._executor = ThreadPoolExecutor(max_workers=min(32, max(2, os.cpu_count() or 2)), thread_name_prefix=self.worker_prefix + "-crypto")
         self.session = aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(limit=self.concurrency, limit_per_host=self.concurrency, ttl_dns_cache=300, keepalive_timeout=30),
             timeout=aiohttp.ClientTimeout(total=60, sock_connect=15, sock_read=45),
@@ -350,11 +376,11 @@ class AsyncFkzsClient:
         for attempt in range(max(1, attempts)):
             try:
                 params = {**self.common, "request_time": str(int(time.time())), **(business or {})}
-                encrypted = await self._cpu(encrypt_app_params, params)
+                encrypted = await self._cpu(self.encrypt_params, params)
                 raw = await self._http("POST", self.api_host + path,
-                    headers={**APP_HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-                    data={"app_pkg": APP_PKG, "p": encrypted}, limit=32 * 1024 * 1024)
-                payload = await self._cpu(decrypt_app_response, raw)
+                    headers={**APP_HEADERS, "app_pkg": self.app_pkg, "Content-Type": "application/x-www-form-urlencoded"},
+                    data=self._app_form(params, encrypted), limit=32 * 1024 * 1024)
+                payload = await self._cpu(self.decrypt_response, raw)
                 if not isinstance(payload, dict):
                     raise FkzsError("invalid_app_response")
                 if payload.get("code") not in (0, "0", None):
@@ -397,7 +423,7 @@ class AsyncFkzsClient:
                 return self._token
             if self._token_failure and time.monotonic() < self._token_failure[0]:
                 raise self._token_failure[1]
-            params = {"userId": str(self.common["uid"] or self.common["uuid"]), "appFlag": APP_PKG, "version": "1"}
+            params = {"userId": str(self.common["uid"] or self.common["uuid"]), "appFlag": self.app_pkg, "version": "1"}
             params["sign"] = openapi_sign(params)
             try:
                 raw = await self._http("GET", self.openapi_host + "/interc/public/login", params=params, headers={"x-device-id": self.sdk_device_id})
@@ -482,9 +508,10 @@ class AsyncFkzsClient:
         match = _CHAPTER_ID_RE.search(link)
         if not match or match.group(1) != chapter_id:
             raise FkzsError("chapter_mismatch")
-        params = {"appFlag": APP_PKG, "linkMd5": hashlib.md5(link.encode("utf-8")).hexdigest(), "version": "1"}
+        encoded = self._encode_chapter_link(link)
+        params = {"appFlag": self.app_pkg, "linkMd5": self._chapter_link_md5(link, encoded), "version": "1"}
         params["sign"] = openapi_sign(params)
-        url = URL(self.openapi_host + "/interc/chapter/" + urllib.parse.quote(link, safe="") + "?" + urllib.parse.urlencode(params), encoded=True)
+        url = URL(self.openapi_host + "/interc/chapter/" + encoded + "?" + urllib.parse.urlencode(params), encoded=True)
         token = await self._login()
         for token_attempt in range(2):
             raw = await self._http("GET", url, headers={"x-token": token, "x-device-id": self.sdk_device_id}, limit=2 * 1024 * 1024)
@@ -504,7 +531,7 @@ class AsyncFkzsClient:
         encrypted = chapter.get("cpContent") or chapter.get("chapterContent")
         if not isinstance(encrypted, str) or not encrypted:
             raise FkzsError("empty_content", retryable=True)
-        text = await self._cpu(decrypt_chapter_content, encrypted)
+        text = await self._cpu(self.decrypt_content, encrypted)
         return {"book_id": book_id, "chapter_id": chapter_id, "toc_id": meta.get("toc_id", ""),
                 "index": meta.get("index"), "title": str(chapter.get("title") or meta.get("title") or ""), "text": text, "link": link}
 
@@ -542,7 +569,7 @@ class AsyncFkzsClient:
         pending = list(catalog)
         results: dict[str, dict[str, Any]] = {}
         next_progress = 25
-        logger.info(f"疯狂追书下载进度：章节=0/{total}, 并发={ceiling}")
+        logger.info(f"{self.platform_name}下载进度：章节=0/{total}, 并发={ceiling}")
         for attempt in range(3):
             retry: list[dict[str, Any]] = []
             retry_delay = 0.5 * 2**attempt
@@ -566,18 +593,18 @@ class AsyncFkzsClient:
                             results[chapter_id] = await self.get_chapter(book_id, chapter_id, meta=meta, attempts=1)
                             percent = len(results) * 100 // total
                             if percent >= next_progress and next_progress < 100:
-                                logger.info(f"疯狂追书下载进度：章节={len(results)}/{total}, 并发={self.current_concurrency}")
+                                logger.info(f"{self.platform_name}下载进度：章节={len(results)}/{total}, 并发={self.current_concurrency}")
                                 next_progress = (percent // 25 + 1) * 25
                         except FkzsError as error:
                             failures += 1
                             if error.retryable and attempt < 2:
                                 retry.append(meta)
                                 retry_delay = max(retry_delay, error.retry_after)
-                            logger.debug(f"疯狂追书章节请求失败：原因={error.reason}, HTTP={error.status}, code={error.code}")
+                            logger.debug(f"{self.platform_name}章节请求失败：原因={error.reason}, HTTP={error.status}, code={error.code}")
                         finally:
                             queue.task_done()
 
-                workers = {asyncio.create_task(worker(), name="mantou-fkzs-chapter") for _ in range(min(self.current_concurrency, len(batch)))}
+                workers = {asyncio.create_task(worker(), name=self.worker_prefix + "-chapter") for _ in range(min(self.current_concurrency, len(batch)))}
                 self._workers.update(workers)
                 try:
                     await asyncio.gather(*workers)
@@ -602,7 +629,7 @@ class AsyncFkzsClient:
             await asyncio.sleep(retry_delay)
         if len(results) != total:
             raise FkzsError("incomplete_book", missing_count=total - len(results))
-        logger.info(f"疯狂追书下载进度：章节={total}/{total}, 已完成")
+        logger.info(f"{self.platform_name}下载进度：章节={total}/{total}, 已完成")
         return [results[chapter_id] for chapter_id in chapter_ids]
 
 
