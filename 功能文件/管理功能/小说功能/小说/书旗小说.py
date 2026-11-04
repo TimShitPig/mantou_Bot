@@ -514,6 +514,34 @@ async def 下载全部章节(
 
     失败分类: dict[str, int] = {}
     首个失败: dict[str, str | int | None] | None = None
+    当前请求并发上限 = max(1, 下载并发数)
+    活动请求数 = 0
+    并发条件 = asyncio.Condition()
+
+    async def 获取章节正文受控(章节: Chapter) -> tuple[str, str]:
+        nonlocal 当前请求并发上限, 活动请求数
+        async with 并发条件:
+            await 并发条件.wait_for(lambda: 活动请求数 < 当前请求并发上限)
+            活动请求数 += 1
+        try:
+            return await 获取章节正文(session, 书籍, 章节)
+        except Exception as exc:
+            if getattr(exc, "http_status", None) in {403, 429}:
+                async with 并发条件:
+                    新并发上限 = max(1, 当前请求并发上限 // 2)
+                    if 新并发上限 < 当前请求并发上限:
+                        当前请求并发上限 = 新并发上限
+                        logger.debug(
+                            "书旗正文遇到访问限制，降低后续并发：book_id=%s, concurrency=%s",
+                            书籍.book_id,
+                            当前请求并发上限,
+                        )
+                        并发条件.notify_all()
+            raise
+        finally:
+            async with 并发条件:
+                活动请求数 -= 1
+                并发条件.notify_all()
 
     async def 记录进度(
         成功: bool,
@@ -548,7 +576,7 @@ async def 下载全部章节(
         最后异常: Exception | None = None
         for 尝试次数 in range(1, 单章重试次数 + 1):
             try:
-                _, 正文 = await 获取章节正文(session, 书籍, 章节)
+                _, 正文 = await 获取章节正文受控(章节)
                 if not str(正文 or "").strip():
                     raise ShuqiError("章节正文为空", reason="empty_decoded_content")
                 await 记录进度(True)
@@ -563,7 +591,7 @@ async def 下载全部章节(
                 )
                 if 尝试次数 < 单章重试次数:
                     if getattr(exc, "http_status", None) in {403, 429}:
-                        await asyncio.sleep(min(6.0, 2.0 * 尝试次数))
+                        await asyncio.sleep(min(15.0, 3.0 * (2 ** (尝试次数 - 1))))
                     else:
                         await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
         await 记录进度(
