@@ -1116,7 +1116,7 @@ def _解析书旗官方URL(值: str, 深度: int = 0) -> dict[str, str] | None:
     for 模式 in (
         r"/(?:catalog|cover)/([0-9]{1,20})/?",
         r"/shortNovel/reader/([0-9]{1,20})/?",
-        r"/v2/query/([0-9]{1,20})(?:/[0-9]{1,20})?/?",
+        r"/v2/query/([0-9]{1,20})(?:/[0-9]{1,20})?(?:\.html)?/?",
         r"/book/([0-9]{1,20})(?:\.html)?/?",
     ):
         匹配 = re.fullmatch(模式, 路径, re.I)
@@ -1141,7 +1141,7 @@ def _解析书旗官方URL(值: str, 深度: int = 0) -> dict[str, str] | None:
                     编号集合.add(目标["book_id"])
     if len(编号集合) > 1:
         return None
-    if 嵌套目标 and not any(re.fullmatch(模式, 路径, re.I) for 模式 in (r"/(?:catalog|cover|book)/[0-9]+(?:\.html)?/?", r"/shortNovel/reader/[0-9]+/?", r"/v2/query/[0-9]+(?:/[0-9]+)?/?")):
+    if 嵌套目标 and not any(re.fullmatch(模式, 路径, re.I) for 模式 in (r"/(?:catalog|cover|book)/[0-9]+(?:\.html)?/?", r"/shortNovel/reader/[0-9]+/?", r"/v2/query/[0-9]+(?:/[0-9]+)?(?:\.html)?/?")):
         if not 编号集合 and len({目标["url"] for 目标 in 嵌套目标}) > 1:
             return None
         return next((目标 for 目标 in 嵌套目标 if 目标["book_id"]), 嵌套目标[0])

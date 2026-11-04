@@ -3747,9 +3747,20 @@ def 计算番茄正文批量参数(章节总数: int) -> tuple[int, int]:
 
 def 获取番茄小说回复流(event: Any, 命令文本: str, 配置: Any = None):
     来源 = 提取直接番茄链接参数(命令文本) or 提取事件番茄链接(event)
-    if 来源 is None:
-        return None
-    return 生成番茄下载回复流(event, 来源, 配置)
+    if 来源 is not None:
+        return 生成番茄下载回复流(event, 来源, 配置)
+    输入文本 = (
+        命令文本,
+        读取番茄字段(event, "message_str"),
+        读取番茄字段(event, "raw_message"),
+    )
+    if any(是否番茄关键词搜索页链接(文本) for 文本 in 输入文本):
+        return 番茄关键词搜索页提示回复流()
+    return None
+
+
+async def 番茄关键词搜索页提示回复流():
+    yield "这是番茄搜索页链接，不是书籍详情页。请发送小说详情链接，或从找书结果中选择。"
 
 
 async def 是否番茄一章短篇来源(命令文本: Any) -> bool:
@@ -4767,6 +4778,8 @@ def 提取番茄书籍编号(文本: Any) -> str:
     原文 = str(文本 or "").strip()
     if not 原文:
         return ""
+    if 是否番茄关键词搜索页链接(原文):
+        return ""
     try:
         return resolve_book_id(原文)
     except Exception:
@@ -4785,6 +4798,30 @@ def 提取番茄书籍编号(文本: Any) -> str:
         if 编号 not in 去重列表:
             去重列表.append(编号)
     return 去重列表[0] if len(去重列表) == 1 else ""
+
+
+def 是否番茄关键词搜索页链接(文本: Any) -> bool:
+    for 匹配 in 番茄链接正则.finditer(str(文本 or "")):
+        try:
+            地址 = urllib.parse.urlsplit(匹配.group(0))
+            主机 = (地址.hostname or "").lower().rstrip(".")
+            if not (主机 == "fanqienovel.com" or 主机.endswith(".fanqienovel.com")):
+                continue
+            路径段 = [段 for 段 in 地址.path.split("/") if 段]
+            if not 路径段 or 路径段[0].lower() != "keyword":
+                continue
+            查询 = urllib.parse.parse_qs(地址.query)
+            if any(
+                re.fullmatch(r"\d{8,}", str(值 or ""))
+                for 字段, 数值 in 查询.items()
+                if str(字段).lower() in {"book_id", "book-id", "bookid"}
+                for 值 in 数值
+            ):
+                continue
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def 提取番茄短篇编号(文本: Any) -> str:
