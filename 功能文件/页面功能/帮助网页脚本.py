@@ -2467,8 +2467,17 @@
         const changed = clearMsgChatUnread(id, chatType, appid);
         if (!force && !changed) return;
         if (msgState.readInFlight.has(scope)) return;
+        // A list snapshot started before this read can arrive later and restore the old badge.
+        msgState.chatListRequest = Number(msgState.chatListRequest || 0) + 1;
+        if (msgState.chatListAbort) { msgState.chatListAbort.abort(); msgState.chatListAbort = null; }
+        msgState.chatListPromise = null;
+        msgState.chatListKey = '';
+        msgState.chatListPendingData = null;
         msgState.readInFlight.add(scope);
-        try { await api('message/read', {method:'POST', body:JSON.stringify({chat_id:id, chat_type:chatType, appid})}); }
+        try {
+          await api('message/read', {method:'POST', body:JSON.stringify({chat_id:id, chat_type:chatType, appid})});
+          if (appid === msgState.selectedAppid && !$('page-messages')?.hidden) void loadMsgChats(true);
+        }
         catch (_) {}
         finally { msgState.readInFlight.delete(scope); }
       };
@@ -2954,7 +2963,11 @@
             if (msgState.multi) exitMultiMode();
             const chatId = String(el.dataset.msgChat || '');
             const chatType = String(el.dataset.msgType || 'group');
-            if (msgMatchesCurrent(chatType, chatId, el.dataset.msgAppid)) { setMsgMobileChatOpen(true); return; }
+            if (msgMatchesCurrent(chatType, chatId, el.dataset.msgAppid)) {
+              setMsgMobileChatOpen(true);
+              markMsgRead(chatId, true);
+              return;
+            }
             if (groupSettingsState.mutating) return toast('正在更新本群设置，请稍候再切换');
             const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId && item.chat_type === chatType && item.appid === el.dataset.msgAppid) || {
               chat_id: chatId,
