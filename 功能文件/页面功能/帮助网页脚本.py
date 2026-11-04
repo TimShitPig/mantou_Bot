@@ -1793,7 +1793,8 @@
             : displayMsgNickname(message, profile));
         return {
           preview_only:previewOnly,
-          message_id:previewOnly ? '' : String(message.message_id || message.id || '').trim(),
+          // `id` is a local database row key, not a QQ message locator.
+          message_id:previewOnly ? '' : String(message.message_id || '').trim(),
           refidx:previewOnly ? '' : String(message.refidx || '').trim(),
           user_id:id,
           nickname,

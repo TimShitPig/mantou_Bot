@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.306-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.307-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.306 |
+| 版本 | v6.1.307 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -25,7 +25,7 @@
 
 会话列表宽度和编辑区高度可拖拽调整，并按当前机器人保存；刷新时按已保存的尺寸恢复。
 
-引用消息支持按当前聊天的完整消息 ID/引用索引精确定位。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
+引用消息支持按当前聊天的完整 QQ 消息 ID/引用索引精确定位；数据库行号不作为消息定位 ID，引用链中的消息仍可通过其真实消息 ID 或引用索引跳转。多引用字段冲突时保留预览；带官方引用标识的预览可点击重新定位，未匹配时不猜测原消息。
 
 QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret 不正确，应在 AstrBot 对应 QQ 官方平台配置中核对。插件按当前认证通道冷却 60 秒，保留群状态、资料和历史，避免按每个群重复请求与告警；其他机器人不受该通道影响。
 
