@@ -2123,6 +2123,7 @@ def _获取消息相关成员资料(
     """只复制当前消息页涉及的成员资料，避免把整群资料推到浏览器。"""
     全部资料 = 成员资料缓存.get(str(会话标识 or "").strip()) or {}
     相关标识: set[str] = set()
+    消息提及昵称: dict[str, tuple[str, str]] = {}
     for 消息 in 消息列表 or ():
         if not isinstance(消息, dict):
             continue
@@ -2135,7 +2136,16 @@ def _获取消息相关成员资料(
         作者标识 = str(消息.get("user_id") or "").strip()
         if 作者标识:
             相关标识.add(作者标识)
-        相关标识.update(_提及规则.findall(str(消息.get("content") or "")))
+        正文提及 = list(dict.fromkeys(_提及规则.findall(str(消息.get("content") or ""))))
+        相关标识.update(正文提及)
+        if 正文提及:
+            原始消息 = _解析消息结构(消息.get("raw_message"))
+            原始提及资料 = _提取消息提及资料(原始消息)
+            应用 = str(消息.get("appid") or "").strip()
+            for 成员标识 in 正文提及:
+                昵称 = _有效用户昵称(原始提及资料.get(成员标识), 成员标识)
+                if 昵称:
+                    消息提及昵称[成员标识] = (昵称, 应用)
         预览 = 消息.get("reference_preview")
         if isinstance(预览, dict):
             引用作者 = str(预览.get("user_id") or "").strip()
@@ -2164,6 +2174,12 @@ def _获取消息相关成员资料(
             资料 = 结果.setdefault(标识, {})
             if not _有效用户昵称(资料.get("nickname") or 资料.get("username"), 标识):
                 资料["nickname_blank"] = True
+    for 成员标识, (昵称, 应用) in 消息提及昵称.items():
+        资料 = 结果.setdefault(成员标识, {})
+        资料["nickname"] = 昵称
+        资料["nickname_blank"] = False
+        if 应用:
+            资料["appid"] = 应用
     return 结果
 
 
