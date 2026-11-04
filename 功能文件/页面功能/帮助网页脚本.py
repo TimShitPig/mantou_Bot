@@ -1899,6 +1899,16 @@
           : row.dataset.msgMid === id || row.dataset.msgRefidx === id);
         return matches.length === 1 ? matches[0] : null;
       };
+      const findLocatedMsgReference = (messages, data) => {
+        const messageId = String(data?.located_message_id || '').trim();
+        const refidx = String(data?.located_refidx || '').trim();
+        const matches = messageId
+          ? messages.filter((message) => String(message.message_id || '').trim() === messageId)
+          : refidx
+            ? messages.filter((message) => String(message.refidx || '').trim() === refidx)
+            : [];
+        return matches.length === 1 ? {message:matches[0], messageId, refidx} : null;
+      };
       const highlightMsgReference = (row, behavior = 'smooth') => {
         const body = $('msg-body');
         if (!body || !row || !body.contains(row)) return false;
@@ -1977,8 +1987,8 @@
             toast('暂未匹配到原消息'); return;
           }
           const messages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
-          const canonical = String(data.located_message_id || '').trim();
-          if (!canonical || !messages.some((message) => String(message.message_id || '') === canonical)
+          const located = findLocatedMsgReference(messages, data);
+          if (!located
             || messages.some((message) => (message.appid && String(message.appid) !== String(msgState.chatAppid || ''))
               || (message.chat_type && String(message.chat_type) !== msgState.chatType)
               || (message._session && String(message._session) !== msgState.chatId))) {
@@ -1991,7 +2001,11 @@
           const pendingCount = msgState.pendingNewMessages;
           clearMsgNewMessages();
           if (pendingCount > 0) showMsgNewMessages(pendingCount);
-          highlightMsgReference(findMsgReferenceRow(id, canonical), 'auto');
+          const targetRow = located.messageId
+            ? findMsgReferenceRow('', located.messageId)
+            : findMsgReferenceRow(located.refidx);
+          if (!targetRow) { toast('暂未匹配到原消息'); return; }
+          highlightMsgReference(targetRow, 'auto');
         } catch (error) {
           if (!current()) return;
           if (error.status === 401) showAuthError(error);
