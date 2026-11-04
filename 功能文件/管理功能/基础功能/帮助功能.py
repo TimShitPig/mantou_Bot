@@ -1269,6 +1269,7 @@ async def 发送Markdown键盘消息(
             appid=发送AppID,
             消息ID=响应消息ID,
             自身REFIDX=_提取发送响应REFIDX(发送结果),
+            键盘=键盘,
         )
         return True
     except Exception as e:
@@ -1298,6 +1299,7 @@ async def 发送Markdown键盘消息(
                         appid=发送AppID,
                         消息ID=_提取发送响应消息ID(降级结果),
                         自身REFIDX=_提取发送响应REFIDX(降级结果),
+                        键盘=键盘,
                     )
                     logger.info("[帮助MD键盘] 内容违规，已清空书名和作者后重发")
                     return True
@@ -1353,6 +1355,7 @@ async def 发送Markdown键盘消息(
                 appid=发送AppID,
                 消息ID=_提取发送响应消息ID(主动发送结果),
                 自身REFIDX=_提取发送响应REFIDX(主动发送结果),
+                键盘=键盘,
             )
             return True
         except Exception as 主动异常:
@@ -1369,11 +1372,13 @@ def _记录MD键盘发送(
     appid: str,
     消息ID: str = "",
     自身REFIDX: str = "",
+    键盘: dict[str, Any] | None = None,
 ) -> None:
     """机器人主动发送（MD 键盘/下载完成按钮）成功后写入消息记录，网页可查看。"""
     try:
         from 功能文件.管理功能.基础功能.消息记录 import (
             记录发送消息,
+            提取消息键盘按钮,
         )
 
         appid = str(appid or "").strip()
@@ -1393,6 +1398,7 @@ def _记录MD键盘发送(
             appid,
             消息ID=str(消息ID or "").strip(),
             自身REFIDX=str(自身REFIDX or "").strip(),
+            键盘按钮=提取消息键盘按钮({"keyboard": {"content": 键盘}}) if 键盘 else None,
             发送者昵称="机器人",
             来源="bot_active",
         )

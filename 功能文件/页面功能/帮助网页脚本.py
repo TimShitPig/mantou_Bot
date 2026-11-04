@@ -1705,6 +1705,26 @@
           return `<button type="button" class="msg-command-chip" data-msg-command="${esc(item.command)}" data-msg-command-kind="${esc(item.kind)}" aria-label="${esc(item.label)}">${esc(item.label)}</button>`;
         });
       };
+      const renderMsgKeyboardButtons = (value) => {
+        if (!Array.isArray(value)) return '';
+        const rows = value.slice(0, 5).map((row) => (Array.isArray(row) ? row : []).slice(0, 5).map((item) => {
+          const label = String(item?.label || '').trim();
+          if (!label || label.length > 120) return '';
+          let url = '';
+          if (item?.kind === 'link') {
+            try {
+              const parsed = new URL(String(item.url || ''), location.href);
+              if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password) url = parsed.href;
+            } catch (_) {}
+            if (!url) return '';
+            return `<a class="msg-inline-keyboard-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 12h8"/></svg><span>${esc(label)}</span></a>`;
+          }
+          if (item?.kind === 'preview') return `<span class="msg-inline-keyboard-button" aria-disabled="true">${esc(label)}</span>`;
+          return '';
+        })).map((items) => items.filter(Boolean)).filter((items) => items.length);
+        if (!rows.length) return '';
+        return `<div class="msg-inline-keyboard" role="group" aria-label="QQ消息按钮">${rows.map((items) => `<div class="msg-inline-keyboard-row" style="--msg-keyboard-cols:${items.length}">${items.join('')}</div>`).join('')}</div>`;
+      };
       const plainMsgPreview = (value, profiles = msgState.profiles) => {
         let text = replaceMsgMentions(value, profiles);
         text = text.replace(/!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gi, '[图片]');
@@ -5781,9 +5801,10 @@
           const isWelcomeMessage = botMessage && msgState.chatType === 'group'
             && /^欢迎\s*@.+?\s+加入本群/.test(plainContent)
             && /点击下方按钮查看使用教程和小说列表/.test(plainContent);
-          const welcomeKeyboardHtml = isWelcomeMessage
-            ? '<div class="msg-inline-keyboard" role="group" aria-label="QQ消息按钮预览"><span class="msg-inline-keyboard-button">使用教程</span><span class="msg-inline-keyboard-button">小说列表</span></div>'
-            : '';
+          const keyboardHtml = renderMsgKeyboardButtons(m.keyboard_buttons);
+          const welcomeKeyboardHtml = keyboardHtml || (isWelcomeMessage
+            ? '<div class="msg-inline-keyboard" role="group" aria-label="QQ消息按钮预览"><div class="msg-inline-keyboard-row" style="--msg-keyboard-cols:2"><span class="msg-inline-keyboard-button" aria-disabled="true">使用教程</span><span class="msg-inline-keyboard-button" aria-disabled="true">小说列表</span></div></div>'
+            : '');
           const mediaBeforeText = mediaTextPosition
             ? mediaTextPosition.before
             : (mediaData && !Array.isArray(mediaData) ? String(mediaData.before_text || '').trim() : '');
@@ -5872,12 +5893,15 @@
             const pointer = e.type === 'contextmenu' && (e.clientX || e.clientY);
             if (items.length) showMsgCtx(pointer ? e.clientX : rect.left + 24, pointer ? e.clientY : rect.top + Math.min(24, rect.height / 2), items, row);
           };
-          bindMsgEvent(row, 'contextmenu', 'message-context', openRowContext);
+          bindMsgEvent(row, 'contextmenu', 'message-context', (e) => {
+            if (e.target.closest('.msg-inline-keyboard-link')) return;
+            openRowContext(e);
+          });
           bindMsgEvent(row, 'keydown', 'message-context-keyboard', (e) => {
             if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) openRowContext(e);
           });
           bindMsgEvent(row, 'click', 'message-select', (e) => {
-            if (msgState.multi && !e.target.closest('button')) {
+            if (msgState.multi && !e.target.closest('button, a')) {
               const canSel = canRecallMsgRow(row);
               if (canSel) toggleMsgSelect(row, row.dataset.msgMid);
             }

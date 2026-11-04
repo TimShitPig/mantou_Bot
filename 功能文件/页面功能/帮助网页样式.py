@@ -885,8 +885,10 @@
             .msg-inline-code { padding:1px 4px; border-radius:4px; background:rgba(0,0,0,.08); font:12px/1.4 Consolas,Monaco,monospace; }
             .msg-mention-chip { display:inline-flex; align-items:baseline; gap:1px; margin:0 2px; padding:0 4px; border-radius:5px; background:#e2f0ff; color:#075fae; font-weight:700; white-space:nowrap; }
             .msg-mention-marker { color:#087cff; font-weight:900; }
-            .msg-inline-keyboard { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
-            .msg-inline-keyboard-button { display:grid; min-width:0; min-height:38px; place-items:center; box-sizing:border-box; padding:4px 8px; border:1px solid #dc9bb5; border-radius:6px; background:transparent; color:#078ff4; font:inherit; font-weight:650; line-height:1.35; text-align:center; overflow-wrap:anywhere; }
+            .msg-inline-keyboard { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+            .msg-inline-keyboard-row { display:grid; grid-template-columns:repeat(var(--msg-keyboard-cols,1),minmax(0,1fr)); gap:8px; min-width:0; }
+            .msg-inline-keyboard-button,.msg-inline-keyboard-link { display:flex; min-width:0; min-height:38px; align-items:center; justify-content:center; box-sizing:border-box; gap:8px; padding:4px 8px; border:1px solid #dc9bb5; border-radius:6px; background:transparent; color:#078ff4; font:inherit; font-weight:650; line-height:1.35; text-align:center; overflow-wrap:anywhere; }
+            .msg-inline-keyboard-link { text-decoration:none; }
             .msg-command-chip { display:inline; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed currentColor; background:transparent; color:inherit; font:inherit; line-height:inherit; cursor:pointer; }
             .msg-command-chip:hover { opacity:.72; }
             .msg-bubble.recalled { color:#c45b5b; font-style:italic; background:var(--danger-bg); border:1px solid var(--danger-line); }
@@ -1781,9 +1783,12 @@
     :root body.messages-workspace .msg-inline-link { color:var(--msg-link-color); text-decoration:underline; text-underline-offset:2px; overflow-wrap:anywhere; }
     :root body.messages-workspace .msg-inline-link:hover { color:var(--msg-link-hover); text-decoration:underline; }
     :root body.messages-workspace .msg-inline-link:focus-visible { outline:2px solid currentColor; outline-offset:2px; border-radius:2px; }
-    :root body.messages-workspace .msg-command-chip,:root body.messages-workspace .msg-inline-keyboard-button { min-width:0; border:1px solid var(--msg-action-line); border-radius:7px; background:var(--msg-action-fill); color:var(--msg-action-ink); font:inherit; font-weight:650; line-height:1.35; overflow-wrap:anywhere; }
+    :root body.messages-workspace .msg-command-chip,:root body.messages-workspace .msg-inline-keyboard-button,:root body.messages-workspace .msg-inline-keyboard-link { min-width:0; border:1px solid var(--msg-action-line); border-radius:7px; background:var(--msg-action-fill); color:var(--msg-action-ink); font:inherit; font-weight:650; line-height:1.35; overflow-wrap:anywhere; }
     :root body.messages-workspace .msg-command-chip { display:inline-flex; align-items:center; max-width:100%; min-height:32px; margin:2px 3px 2px 0; padding:3px 10px; vertical-align:middle; white-space:normal; }
-    :root body.messages-workspace .msg-inline-keyboard-button { display:grid; min-height:38px; padding:4px 8px; text-align:center; }
+    :root body.messages-workspace .msg-inline-keyboard-button,:root body.messages-workspace .msg-inline-keyboard-link { display:flex; min-height:38px; align-items:center; justify-content:center; gap:8px; padding:4px 8px; text-align:center; }
+    :root body.messages-workspace .msg-inline-keyboard-link { width:100%; text-decoration:none; }
+    :root body.messages-workspace .msg-inline-keyboard-link:hover { background:var(--msg-action-hover); text-decoration:none; }
+    :root body.messages-workspace .msg-inline-keyboard-link:focus-visible { outline:2px solid var(--msg-action-ink); outline-offset:2px; }
     :root body.messages-workspace .msg-command-chip:hover { background:var(--msg-action-hover); opacity:1; }
     :root body.messages-workspace .msg-command-chip:focus-visible { outline:2px solid var(--msg-action-ink); outline-offset:2px; }
     :root body.messages-workspace .msg-bubble.recalled,:root body.messages-workspace .msg-row.self .msg-bubble.recalled { background:var(--danger-bg); color:var(--danger); border-color:var(--danger-line); }

@@ -661,6 +661,9 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    键盘按钮 = 提取消息键盘按钮(记录.get("keyboard_buttons") or 原始消息)
+    if 键盘按钮:
+        记录["keyboard_buttons"] = 键盘按钮
     if str(记录.get("chat_type") or "group") == "group" and not _规范QQ群成员角色(记录.get("member_role")):
         角色 = _提取QQ群消息作者角色(原始消息)
         if 角色:
@@ -744,6 +747,9 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     作者昵称 = str(记录.get("nickname") or "").strip()
     作者头像 = str(记录.get("avatar") or "").strip()
     内容文本 = str(记录.get("content") or "")
+    键盘按钮 = 提取消息键盘按钮(记录.get("keyboard_buttons") or 记录.get("raw_message"))
+    if 键盘按钮:
+        记录["keyboard_buttons"] = 键盘按钮
     群消息 = str(记录.get("chat_type") or "group") == "group"
     现有媒体 = 记录.get("media")
     原始消息: Any = None
@@ -1143,6 +1149,12 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
         )
     ):
         已有记录["raw_message"] = 新原始消息
+    新键盘按钮 = 提取消息键盘按钮(新记录.get("keyboard_buttons") or 新原始结构)
+    if 新键盘按钮 and 新键盘按钮 != 已有记录.get("keyboard_buttons"):
+        已有记录["keyboard_buttons"] = 新键盘按钮
+        已有记录["raw_message"] = _序列化原始消息含键盘(
+            已有记录.get("raw_message"), 新键盘按钮
+        )
     旧媒体 = 已有记录.get("media")
     新媒体 = 新记录.get("media")
     if isinstance(新媒体, dict) and 新媒体:
@@ -2189,7 +2201,7 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
         "id", "message_id", "user_id", "nickname", "content", "timestamp",
         "is_self", "is_bot", "source", "recalled", "media", "reference_id", "refidx",
         "avatar", "chat_type", "ts", "appid", "member_role", "msg_seq", "reference_preview", "reference_ids",
-        "history_origin", "history_order",
+        "history_origin", "history_order", "keyboard_buttons",
     )
     消息 = {字段名: 记录.get(字段名) for 字段名 in 字段}
     _补充记录机器人状态(消息, 记录.get("raw_message"))
@@ -2200,6 +2212,9 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     # 实时消息与历史页使用同一份受限原始预览，不把完整事件对象推给浏览器。
     _补充记录引用索引(消息, 记录.get("raw_message"))
     消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
+    键盘按钮 = 提取消息键盘按钮(消息.get("keyboard_buttons") or 记录.get("raw_message"))
+    if 键盘按钮:
+        消息["keyboard_buttons"] = 键盘按钮
     会话标识 = str(记录.get("_session") or "")
     if isinstance(消息.get("media"), dict):
         消息["media"] = copy.deepcopy(消息["media"])
@@ -2507,6 +2522,144 @@ def _解析消息结构(对象: Any) -> Any:
         except Exception:
             continue
     return None
+
+
+def _安全键盘跳转地址(地址: Any) -> str:
+    """只允许消息按钮展示 HTTP(S) 链接，不透出其它 action 数据。"""
+    值 = str(地址 or "").strip()
+    if not 值 or len(值) > 2048 or "\\" in 值 or any(ord(字符) <= 32 or ord(字符) == 127 for 字符 in 值):
+        return ""
+    try:
+        解析 = _解析网址(值)
+        if (
+            解析.scheme.lower() not in {"http", "https"}
+            or not 解析.hostname
+            or 解析.username is not None
+            or 解析.password is not None
+        ):
+            return ""
+        解析.port
+    except (TypeError, ValueError):
+        return ""
+    return 值
+
+
+def _规范化键盘按钮行(行列表: Any) -> list[list[dict[str, str]]]:
+    if not isinstance(行列表, list):
+        return []
+    结果: list[list[dict[str, str]]] = []
+    总数 = 0
+    for 行 in 行列表[:5]:
+        按钮列表 = 行.get("buttons") if isinstance(行, dict) else 行
+        if not isinstance(按钮列表, list):
+            continue
+        当前行: list[dict[str, str]] = []
+        for 按钮 in 按钮列表[:5]:
+            if not isinstance(按钮, dict):
+                continue
+            标签 = str(按钮.get("label") or "").strip()
+            if not 标签:
+                渲染资料 = 按钮.get("render_data")
+                标签 = str(渲染资料.get("label") or "").strip() if isinstance(渲染资料, dict) else ""
+            if not 标签 or len(标签) > 120 or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 标签):
+                continue
+            类型 = str(按钮.get("kind") or "").strip().lower()
+            if 类型 == "link":
+                地址 = _安全键盘跳转地址(按钮.get("url"))
+                if not 地址:
+                    continue
+                展示按钮 = {"label": 标签, "kind": "link", "url": 地址}
+            elif 类型 == "preview":
+                展示按钮 = {"label": 标签, "kind": "preview"}
+            else:
+                动作 = 按钮.get("action")
+                if not isinstance(动作, dict):
+                    continue
+                try:
+                    动作类型 = int(动作.get("type"))
+                except (TypeError, ValueError):
+                    continue
+                if 动作类型 == 0:
+                    地址 = _安全键盘跳转地址(动作.get("data"))
+                    if not 地址:
+                        continue
+                    展示按钮 = {"label": 标签, "kind": "link", "url": 地址}
+                elif 动作类型 in {1, 2}:
+                    展示按钮 = {"label": 标签, "kind": "preview"}
+                else:
+                    continue
+            当前行.append(展示按钮)
+            总数 += 1
+            if 总数 >= 25:
+                break
+        if 当前行:
+            结果.append(当前行)
+        if 总数 >= 25:
+            break
+    return 结果
+
+
+def 提取消息键盘按钮(消息: Any) -> list[list[dict[str, str]]]:
+    """从官方消息或已保存快照中提取受限的按钮标签与链接。"""
+    根 = _解析消息结构(消息)
+    if not isinstance(根, (dict, list, tuple)):
+        return []
+    待检查: list[tuple[Any, int]] = [(根, 0)]
+    已检查: set[int] = set()
+    while 待检查:
+        当前, 深度 = 待检查.pop(0)
+        if isinstance(当前, (dict, list, tuple)):
+            身份 = id(当前)
+            if 身份 in 已检查:
+                continue
+            已检查.add(身份)
+        if isinstance(当前, dict):
+            展示按钮 = _规范化键盘按钮行(当前.get("keyboard_buttons"))
+            if 展示按钮:
+                return 展示按钮
+            键盘 = 当前.get("keyboard")
+            if isinstance(键盘, dict):
+                内容 = 键盘.get("content")
+                结构 = 内容 if isinstance(内容, dict) else 键盘
+                展示按钮 = _规范化键盘按钮行(结构.get("rows"))
+                if 展示按钮:
+                    return 展示按钮
+            if 深度 < 3:
+                for 字段 in ("data", "d", "raw_data", "payload", "message"):
+                    子项 = 当前.get(字段)
+                    if isinstance(子项, (dict, list, tuple)):
+                        待检查.append((子项, 深度 + 1))
+        elif isinstance(当前, (list, tuple)) and 深度 < 3:
+            待检查.extend((子项, 深度 + 1) for 子项 in 当前 if isinstance(子项, (dict, list, tuple)))
+    return []
+
+
+def _移除原始键盘动作(值: Any, 深度: int = 0) -> Any:
+    if 深度 >= 12:
+        return 值
+    if isinstance(值, dict):
+        return {
+            键: _移除原始键盘动作(子项, 深度 + 1)
+            for 键, 子项 in 值.items()
+            if str(键 or "").strip().lower() not in {"keyboard", "keyboard_buttons"}
+        }
+    if isinstance(值, (list, tuple)):
+        return [_移除原始键盘动作(子项, 深度 + 1) for 子项 in 值]
+    return 值
+
+
+def _序列化原始消息含键盘(消息: Any, 按钮行: list[list[dict[str, str]]]) -> str:
+    结构 = _解析消息结构(消息)
+    if not isinstance(结构, (dict, list, tuple)):
+        if 按钮行:
+            return _序列化原始消息({"keyboard_buttons": 按钮行})
+        return _序列化原始消息(消息)
+    清理后 = _移除原始键盘动作(结构)
+    if isinstance(清理后, dict):
+        return _序列化原始消息({"keyboard_buttons": 按钮行, **清理后} if 按钮行 else 清理后)
+    if 按钮行:
+        return _序列化原始消息({"keyboard_buttons": 按钮行, "original": 清理后})
+    return _序列化原始消息(清理后)
 
 
 def _提取消息提及资料(消息: Any) -> dict[str, str]:
@@ -4365,6 +4518,8 @@ def 记录收到消息(
             默认记录昵称 = "新成员"
         elif 源 == "group_member_leave":
             默认记录昵称 = "成员"
+        原始消息负载 = _读取字段(消息, "raw_data") or 消息
+        键盘按钮 = 提取消息键盘按钮(消息)
         记录: dict[str, Any] = {
             "id": 发送序号,
             **_新聊天记录接收标记(),
@@ -4381,7 +4536,8 @@ def 记录收到消息(
             "is_bot": 是机器人,
             "source": 源,
             "avatar": 作者头像,
-            "raw_message": _序列化原始消息(_读取字段(消息, "raw_data") or 消息),
+            "raw_message": _序列化原始消息含键盘(原始消息负载, 键盘按钮),
+            "keyboard_buttons": 键盘按钮,
             "recalled": False,
             "media": 媒体记录,
             "reference_id": 引用ID or "",
@@ -5197,6 +5353,7 @@ def 记录发送消息(
     自身REFIDX: str = "",
     引用ID: str = "",
     媒体: dict[str, Any] | None = None,
+    键盘按钮: list[list[dict[str, Any]]] | None = None,
     发送者昵称: str = "",
     发送者头像: str = "",
     来源: str = "",
@@ -5209,6 +5366,7 @@ def 记录发送消息(
         会话 = _取得会话缓存(会话标识, 类型, appid)
         成功时间戳 = _转数字时间戳(发送时间) or int(time.time())
         来源值 = str(来源 or "web_panel").strip() or "web_panel"
+        键盘按钮值 = 提取消息键盘按钮({"keyboard_buttons": 键盘按钮})
         媒体值 = 媒体 or _提取媒体字段(内容)
         媒体值 = _补充媒体文字位置(媒体值, 内容)
         if 媒体值:
@@ -5261,9 +5419,12 @@ def 记录发送消息(
                     "source": 来源值,
                     "chat_type": 类型,
                     "appid": str(appid or ""),
+                    "keyboard_buttons": 键盘按钮值,
                     "ts": 成功时间戳,
                 },
             )
+            if 键盘按钮值 and _消息数据库已配置():
+                _排队消息持久化("message", dict(重复发送记录))
             _更新会话摘要(会话, 重复发送记录)
             _推送消息事件(重复发送记录, 会话)
             if 消息ID:
@@ -5297,9 +5458,12 @@ def 记录发送消息(
                         "source": 来源值,
                         "chat_type": 类型,
                         "appid": str(appid or ""),
+                        "keyboard_buttons": 键盘按钮值,
                         "ts": 成功时间戳,
                     },
                 )
+                if 键盘按钮值 and _消息数据库已配置():
+                    _排队消息持久化("message", dict(已有记录))
                 _更新会话摘要(会话, 已有记录)
                 _推送消息事件(已有记录, 会话)
                 自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), str(消息ID))] = time.time()
@@ -5325,7 +5489,8 @@ def 记录发送消息(
             "is_bot": True,
             "source": 来源值,
             "avatar": 头像值,
-            "raw_message": "",
+            "raw_message": _序列化原始消息含键盘(None, 键盘按钮值),
+            "keyboard_buttons": 键盘按钮值,
             "recalled": False,
             "media": 媒体值,
             "reference_id": 引用ID or "",
