@@ -1282,6 +1282,36 @@
       const msgScopeKey = (type, id, appid = msgState.selectedAppid) => JSON.stringify([String(appid || '').trim(), String(type || 'group'), String(id || '')]);
       const msgChatKey = (chat) => msgScopeKey(chat?.chat_type, chat?.chat_id, chat?.appid);
       const msgInSelectedBot = (source) => Boolean(msgState.selectedAppid) && String(source?.appid || '').trim() === msgState.selectedAppid;
+      const msgReadAgain = new Set();
+      const msgReadOverrides = new Map();
+      const applyMsgReadOverride = (chat) => {
+        const scope = msgChatKey(chat);
+        const override = msgReadOverrides.get(scope);
+        if (!override) return chat;
+        const lastTs = Number(chat?.last_ts || 0);
+        if (Number(chat?.unread || 0) > 0 && lastTs > Number(override.lastTs || 0)) {
+          msgReadOverrides.delete(scope);
+          return chat;
+        }
+        if (lastTs > Number(override.lastTs || 0)) {
+          override.lastTs = lastTs;
+        }
+        return Number(chat?.unread || 0) > 0 ? {...chat, unread:0} : chat;
+      };
+      const rememberMsgRead = (chatType, chatId, appid) => {
+        const scope = msgScopeKey(chatType, chatId, appid);
+        const matches = (chat) => chat && String(chat.chat_id || '') === String(chatId)
+          && chat.chat_type === chatType && String(chat.appid || '').trim() === String(appid || '').trim();
+        const current = msgState.chats.find(matches);
+        const overlay = msgState.realtimeChats.get(scope);
+        const latest = !overlay ? current : !current ? overlay
+          : Number(overlay.last_ts || 0) >= Number(current.last_ts || 0) ? overlay : current;
+        msgReadOverrides.delete(scope);
+        msgReadOverrides.set(scope, {
+          lastTs:Number(latest?.last_ts || 0),
+        });
+        while (msgReadOverrides.size > 2048) msgReadOverrides.delete(msgReadOverrides.keys().next().value);
+      };
       const msgMatchesCurrent = (type, id, appid) => msgState.chatType === type && msgState.chatId === String(id || '')
         && Boolean(appid) && String(appid) === msgState.chatAppid && String(appid) === msgState.selectedAppid;
       const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
@@ -1646,7 +1676,7 @@
         if (profile.nickname_blank || isBlankMsgNickname(profile.nickname || profile.username)) return '\u00a0';
         return '用户';
       };
-      const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/<@all>/gi, '@全体成员').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
+      const replaceMsgMentions = (value, profiles = msgState.profiles) => String(value || '').replace(/@+(?=<@(?:!?[A-Za-z0-9_-]{5,128}|all)>)/gi, '').replace(/<@all>/gi, '@全体成员').replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, openid) => `@${resolveMentionName(openid, profiles)}`);
       const decodeMsgToken = (value) => {
         const raw = String(value ?? '');
         if (!raw) return '';
@@ -1663,7 +1693,7 @@
           return `\u0000MANTOU_CMD_${index}\u0000`;
         };
         const mentionToken = (label) => commandToken('mention', '', String(label || '用户'));
-        let source = String(value || '');
+        let source = String(value || '').replace(/@+(?=<@(?:!?[A-Za-z0-9_-]{5,128}|all)>)/gi, '');
         source = source.replace(/<@all>/gi, () => mentionToken('全体成员'));
         source = source.replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, id) => mentionToken(resolveMentionName(id, profiles)));
         source = source.replace(/@全体成员/g, () => mentionToken('全体成员'));
@@ -2128,7 +2158,7 @@
         qqReader.detailId = ''; qqReader.adding = false; qqReader.modalRestoreFocus = false; qqReader.method = 'cookie';
         clearQQReaderManual(); syncQQReaderModal();
         switchMsgBotScope(''); setMsgMobileChatOpen(false);
-        msgState.historyCache.clear(); msgState.readInFlight.clear(); msgState.optimisticSends.clear();
+        msgState.historyCache.clear(); msgState.readInFlight.clear(); msgReadAgain.clear(); msgReadOverrides.clear(); msgState.optimisticSends.clear();
         msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
         msgLayout.saveTimer = null; msgLayout.loaded = false; msgLayout.persisted = false; applyMsgLayout();
@@ -2456,7 +2486,7 @@
             }
           });
         }
-        return [...byId.values()].filter((chat) => msgChatMatchesView(chat, {ignoreTypeFilter:true})).sort((left, right) =>
+        return [...byId.values()].map(applyMsgReadOverride).filter((chat) => msgChatMatchesView(chat, {ignoreTypeFilter:true})).sort((left, right) =>
           Number(msgChatIsRemoved(left)) - Number(msgChatIsRemoved(right)) ||
           Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
           Number(right.last_ts || 0) - Number(left.last_ts || 0)
@@ -2465,41 +2495,61 @@
       const clearMsgChatUnread = (chatId, chatType = msgState.chatType, appid = msgState.selectedAppid) => {
         const id = String(chatId || '');
         if (!id) return false;
+        const scope = msgScopeKey(chatType, id, appid);
         let changed = false;
         msgState.chats = msgState.chats.map((chat) => {
-          if (String(chat.chat_id || '') !== id || chat.chat_type !== chatType || chat.appid !== appid || Number(chat.unread || 0) <= 0) return chat;
+          if (String(chat.chat_id || '') !== id || chat.chat_type !== chatType || String(chat.appid || '').trim() !== String(appid || '').trim() || Number(chat.unread || 0) <= 0) return chat;
           changed = true;
           return {...chat, unread:0};
         });
-        const existing = msgState.realtimeChats.get(msgScopeKey(chatType, id, appid)) || msgState.chats.find((chat) => String(chat.chat_id || '') === id && chat.chat_type === chatType && chat.appid === appid);
-        if (existing) msgState.realtimeChats.set(msgScopeKey(chatType, id, appid), {...existing, unread:0});
+        msgState.chatListRows = msgState.chatListRows.map((row) => {
+          const chat = row.kind === 'chat' ? row.chat : null;
+          if (!chat || String(chat.chat_id || '') !== id || chat.chat_type !== chatType
+            || String(chat.appid || '').trim() !== String(appid || '').trim() || Number(chat.unread || 0) <= 0) return row;
+          return {...row, chat:{...chat, unread:0}};
+        });
+        const existing = msgState.realtimeChats.get(scope) || msgState.chats.find((chat) => String(chat.chat_id || '') === id && chat.chat_type === chatType && String(chat.appid || '').trim() === String(appid || '').trim());
+        if (existing) msgState.realtimeChats.set(scope, {...existing, unread:0});
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
-          if (node.dataset.msgKey === msgScopeKey(chatType, id, appid)) node.querySelector('.msg-chat-badge')?.remove();
+          if (node.dataset.msgKey === scope) node.querySelector('.msg-chat-badge')?.remove();
         });
         return changed;
       };
-      const markMsgRead = async (chatId = msgState.chatId, force = false) => {
+      const markMsgRead = async (chatId = msgState.chatId, force = false, chatType = msgState.chatType, appid = msgState.selectedAppid) => {
         const id = String(chatId || '');
-        if (!id || !msgState.selectedAppid) return;
-        const chat = msgState.chats.find((item) => item.chat_id === id && item.chat_type === msgState.chatType && msgInSelectedBot(item));
-        const appid = msgState.selectedAppid, chatType = chat?.chat_type || msgState.chatType;
+        appid = String(appid || '').trim();
+        if (!id || !appid || appid !== msgState.selectedAppid || !['group','user'].includes(chatType)) return;
         const scope = msgScopeKey(chatType, id, appid);
+        rememberMsgRead(chatType, id, appid);
         const changed = clearMsgChatUnread(id, chatType, appid);
         if (!force && !changed) return;
-        if (msgState.readInFlight.has(scope)) return;
         // A list snapshot started before this read can arrive later and restore the old badge.
         msgState.chatListRequest = Number(msgState.chatListRequest || 0) + 1;
         if (msgState.chatListAbort) { msgState.chatListAbort.abort(); msgState.chatListAbort = null; }
         msgState.chatListPromise = null;
         msgState.chatListKey = '';
         msgState.chatListPendingData = null;
+        if (msgState.readInFlight.has(scope)) {
+          msgReadAgain.add(scope);
+          return;
+        }
         msgState.readInFlight.add(scope);
         try {
-          await api('message/read', {method:'POST', body:JSON.stringify({chat_id:id, chat_type:chatType, appid})});
-          if (appid === msgState.selectedAppid && !$('page-messages')?.hidden) void loadMsgChats(true);
+          let succeeded = false;
+          while (true) {
+            msgReadAgain.delete(scope);
+            try {
+              await api('message/read', {method:'POST', body:JSON.stringify({chat_id:id, chat_type:chatType, appid})});
+              succeeded = true;
+            } catch (_) {
+              if (!msgReadAgain.has(scope)) break;
+            }
+            if (!msgReadAgain.has(scope)) break;
+          }
+          if (succeeded && appid === msgState.selectedAppid && !$('page-messages')?.hidden) void loadMsgChats(true);
         }
         catch (_) {}
-        finally { msgState.readInFlight.delete(scope); }
+        finally { msgState.readInFlight.delete(scope); msgReadAgain.delete(scope); }
       };
       const getLocalAdminGroups = () => {
         try { return new Set(JSON.parse(localStorage.getItem('mantou_bot_admin_groups:' + msgState.selectedAppid) || '[]')); }
@@ -2710,7 +2760,7 @@
         const removed = msgChatIsRemoved(chat);
         const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
         const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
-        if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id));
+        if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id, false, chat.chat_type, chat.appid));
         const removedText = chat.chat_type === 'user' ? '对方已删除机器人好友' : '你已被移除群聊';
         const preview = removed ? removedText : (item.preview || '（无文本内容）');
         return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-appid="${esc(chat.appid)}" data-msg-key="${esc(msgChatKey(chat))}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? removedText : (chat.pinned ? '取消置顶' : '置顶')}">
@@ -2985,7 +3035,7 @@
             const chatType = String(el.dataset.msgType || 'group');
             if (msgMatchesCurrent(chatType, chatId, el.dataset.msgAppid)) {
               setMsgMobileChatOpen(true);
-              markMsgRead(chatId, true);
+              markMsgRead(chatId, true, chatType, el.dataset.msgAppid);
               return;
             }
             if (groupSettingsState.mutating) return toast('正在更新本群设置，请稍候再切换');
@@ -2996,7 +3046,7 @@
             };
             selectMsgChat(chat);
             scheduleMsgHistoryLoad(chatId);
-            markMsgRead(chatId, true);
+            markMsgRead(chatId, true, chatType, el.dataset.msgAppid);
           });
         }
       };
@@ -4668,7 +4718,7 @@
         if (typeof body.scrollTo === 'function') body.scrollTo({top:body.scrollHeight, behavior:reduced ? 'auto' : behavior});
         else body.scrollTop = body.scrollHeight;
         clearMsgNewMessages();
-        markMsgRead(undefined, true);
+        markMsgRead(undefined, true, msgState.chatType, msgState.chatAppid);
       };
       const safeMediaUrl = (value) => {
         const raw = String(value ?? '').trim().replace(/&amp;/gi, '&').replace(/&#0*38;?/gi, '&');
@@ -6041,6 +6091,7 @@
         const body = $('msg-body');
         const followLatest = isViewing && !msgQuoteJump.pending && !msgState.historyWindow
           && msgState.pendingNewMessages === 0 && msgBodyNearBottom(body);
+        if (isNewEvent && !followLatest) msgReadOverrides.delete(chatKey);
         const payloadUnread = Number(payload.unread);
         const fallbackUnread = Math.max(0, Number(existing.unread || 0) + (isNewEvent ? 1 : 0));
         const unread = followLatest
@@ -6102,7 +6153,7 @@
           msgState.messages = [...msgState.messages, realtimeMessage];
           scheduleMsgRealtimeMessageRender(chatId, followLatest);
         }
-        if (isNewEvent && followLatest) markMsgRead(chatId, true);
+        if (isNewEvent && followLatest) markMsgRead(chatId, true, chatType, eventAppid);
       };
       const applyMsgGroupStatus = (payload) => {
         if (!msgInSelectedBot(payload)) return;
@@ -7184,7 +7235,7 @@
         const activeChat = msgState.chats.find((chat) => String(chat.chat_id || '') === String(msgState.chatId || '') && chat.chat_type === msgState.chatType && msgInSelectedBot(chat));
         const shouldRead = msgState.pendingNewMessages > 0 || Number(activeChat?.unread || 0) > 0;
         clearMsgNewMessages();
-        if (shouldRead) markMsgRead(undefined, true);
+        if (shouldRead) markMsgRead(undefined, true, msgState.chatType, msgState.chatAppid);
       });
       $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
       $('msg-reload').addEventListener('click', refreshMsgConversation);

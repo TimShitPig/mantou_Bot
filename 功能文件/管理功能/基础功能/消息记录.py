@@ -2795,7 +2795,8 @@ def _更新消息提及资料(
 
 def _替换消息提及名称(文本: Any, 记录: dict[str, Any], 会话标识: str) -> str:
     """优先使用该条消息自身的 mentions，缓存回退仅接受同 AppID 资料。"""
-    原文 = re.sub(r"<@all>", "@全体成员", str(文本 or ""), flags=re.IGNORECASE)
+    原文 = re.sub(r"@+(?=<@(?:!?[A-Za-z0-9_-]{5,128}|all)>)", "", str(文本 or ""), flags=re.IGNORECASE)
+    原文 = re.sub(r"<@all>", "@全体成员", 原文, flags=re.IGNORECASE)
     if "<@" not in 原文:
         return 原文
     原始消息 = _解析消息结构(记录.get("raw_message")) if isinstance(记录, dict) else None
@@ -2812,10 +2813,11 @@ def _替换消息提及名称(文本: Any, 记录: dict[str, Any], 会话标识:
             return _有效用户昵称(资料.get("nickname") or 资料.get("username"), 成员标识)
         return ""
 
-    return _提及规则.sub(
-        lambda 匹配: "@" + (取昵称(匹配.group(1)) or 匹配.group(0)),
-        原文,
-    )
+    def 替换提及(匹配: re.Match[str]) -> str:
+        昵称 = 取昵称(匹配.group(1))
+        return "@" + 昵称 if 昵称 else 匹配.group(0)
+
+    return _提及规则.sub(替换提及, 原文)
 
 
 _表情标签规则 = re.compile(r'<faceType=\d+,faceId="([^"]*)"(?:,ext="([^"]*)")?>')
