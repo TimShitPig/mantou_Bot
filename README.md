@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.308-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.309-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.308 |
+| 版本 | v6.1.309 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -374,9 +374,6 @@ QQ 附件只返回文件名和大小、下载地址为空时，消息记录仍�
         │   │   ├── 酷我小说.py
         │   │   └── Z-Library小说.py
         │   └── 功能/
-        │       ├── 话本接口.py
-        │       ├── 疯狂追书接口.py
-        │       ├── 梧桐接口.py
         │       ├── 小说下载任务.py
         │       ├── 小说功能开关.py
         │       ├── 找书.py
