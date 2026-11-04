@@ -1657,7 +1657,7 @@
       --ink:#080a0d; --muted:#747c8d; --soft:#9299a8; --line:#e4e7ed;
       --panel:#fdfdfd; --raised:#f5f6f9; --input:#f5f6f9; --hover:#edf1f7;
       --msg-list-bg:#f5f6f9; --msg-head-bg:#fdfdfd; --msg-composer-bg:#fdfdfd;
-      --primary:#087cff; --primary-dark:#086cdb; --primary-soft:#dcecff;
+      --primary:#087cff; --primary-dark:#086cdb; --primary-soft:#dcecff; --msg-chat-active-bg:#cbdff4;
       --accent-fill:#087cff; --accent-hover:#086cdb; --rail:#eef1f6;
       --msg-surface:linear-gradient(112deg,#fdfdfd,#fefefe 64%,#fdfdfd);
       --msg-incoming-fill:linear-gradient(135deg,#f6f7fa,#f3f4f7);
@@ -1677,7 +1677,7 @@
       --ink:#f5f6f8; --muted:#b9bfcb; --soft:#b0b7c4; --line:#303640;
       --panel:#1f232a; --raised:#2d333d; --input:#272d37; --hover:#293340;
       --msg-list-bg:#1f232a; --msg-head-bg:#1a1e24; --msg-composer-bg:#161920;
-      --primary:#268dff; --primary-dark:#5ca9ff; --primary-soft:#253446;
+      --primary:#268dff; --primary-dark:#5ca9ff; --primary-soft:#253446; --msg-chat-active-bg:#294968;
       --accent-fill:#087cff; --accent-hover:#248dff; --rail:#191e25;
       --msg-surface:linear-gradient(112deg,#1f232a,#20242b 64%,#1e2229);
       --msg-incoming-fill:linear-gradient(135deg,#303640,#2c323c);
@@ -1730,7 +1730,7 @@
     :root body.messages-workspace .msg-chats { --msg-chat-row-height:66px; padding:5.25px 6.75px 5.25px 7.5px; scrollbar-width:thin; scrollbar-gutter:auto; }
     :root body.messages-workspace .msg-chat { height:66px; min-height:66px; max-height:66px; align-items:center; gap:13.5px; padding:7.5px 10.5px; border-radius:9px; }
     :root body.messages-workspace .msg-chat:hover { background:var(--hover); }
-    :root body.messages-workspace .msg-chat.active,:root body.messages-workspace .msg-chat.pinned.active { background:linear-gradient(120deg,var(--primary-soft),color-mix(in srgb,var(--primary-soft) 93%,var(--panel))); box-shadow:inset 0 1px 0 #ffffff0d; }
+    :root body.messages-workspace .msg-chat.active,:root body.messages-workspace .msg-chat.pinned.active { background:var(--msg-chat-active-bg); box-shadow:inset 4px 0 var(--primary),inset 0 0 0 1px color-mix(in srgb,var(--primary) 24%,transparent); }
     :root body.messages-workspace .msg-chat-avatar { width:43.5px; height:43.5px; }
     :root body.messages-workspace .msg-chat-top strong { font-size:16.5px; font-weight:500; }
     :root body.messages-workspace .msg-chat-top small { font-size:13.5px; }
