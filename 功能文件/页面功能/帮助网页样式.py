@@ -1784,10 +1784,10 @@
     :root body.messages-workspace .msg-command-chip,:root body.messages-workspace .msg-inline-keyboard-button,:root body.messages-workspace .msg-inline-keyboard-link { min-width:0; background:transparent; color:var(--msg-action-ink); font:inherit; font-weight:650; line-height:1.35; overflow-wrap:anywhere; }
     :root body.messages-workspace .msg-command-chip { display:inline; min-height:0; margin:0 2px; padding:0 2px; border:0; border-bottom:1px dashed var(--msg-action-line); border-radius:0; vertical-align:baseline; white-space:normal; }
     :root body.messages-workspace .msg-inline-keyboard-button,:root body.messages-workspace .msg-inline-keyboard-link { display:flex; min-height:38px; align-items:center; justify-content:center; gap:8px; padding:4px 8px; text-align:center; }
-    :root body.messages-workspace .msg-inline-keyboard-button { border:1px solid var(--msg-action-line); border-radius:7px; }
-    :root body.messages-workspace .msg-inline-keyboard-button:hover { border-color:var(--msg-action-ink); color:var(--msg-action-ink); }
-    :root body.messages-workspace .msg-inline-keyboard-link { width:100%; border:0; border-radius:0; text-decoration:underline; text-underline-offset:2px; }
-    :root body.messages-workspace .msg-inline-keyboard-link:hover { background:transparent; color:var(--msg-link-hover); text-decoration:underline; }
+    :root body.messages-workspace .msg-inline-keyboard-button,:root body.messages-workspace .msg-inline-keyboard-link { border:1px solid var(--msg-action-line); border-radius:7px; }
+    :root body.messages-workspace .msg-inline-keyboard-button:hover,:root body.messages-workspace .msg-inline-keyboard-link:hover { border-color:var(--msg-action-ink); color:var(--msg-action-ink); }
+    :root body.messages-workspace .msg-inline-keyboard-link { width:100%; text-decoration:none; }
+    :root body.messages-workspace .msg-inline-keyboard-link:hover { background:transparent; color:var(--msg-link-hover); text-decoration:none; }
     :root body.messages-workspace .msg-inline-keyboard-link:focus-visible { outline:2px solid var(--msg-action-ink); outline-offset:2px; }
     :root body.messages-workspace .msg-inline-keyboard-button:focus-visible,:root body.messages-workspace .msg-command-chip:focus-visible { outline:2px solid var(--msg-action-ink); outline-offset:2px; }
     :root body.messages-workspace .msg-command-chip:hover { background:transparent; color:var(--msg-link-hover); text-decoration:underline; opacity:1; }
