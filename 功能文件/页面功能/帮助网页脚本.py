@@ -5562,6 +5562,10 @@
         return sorted;
       };
       const formatMsgRaw = (raw) => {
+        if (raw && typeof raw === 'object') {
+          try { return JSON.stringify(sortMsgRawValue(raw), null, 2); }
+          catch (_) { return String(raw); }
+        }
         const source = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
         if (!source.trim()) return '无原始数据';
         try {
@@ -5570,6 +5574,48 @@
           // 旧记录可能已截断，或者上游给出的不是 JSON；保留原文供排查。
           return source;
         }
+      };
+      const outgoingSnapshotMediaFields = ['type', 'media_type', 'content_type', 'name', 'filename', 'file_name', 'size', 'width', 'height', 'text', 'before_text', 'after_text'];
+      const copyOutgoingMediaSummary = (value) => {
+        if (Array.isArray(value)) return value.map(copyOutgoingMediaSummary).filter(Boolean);
+        if (!value || typeof value !== 'object') return null;
+        const result = {};
+        outgoingSnapshotMediaFields.forEach((field) => {
+          const item = value[field];
+          if (item !== undefined && item !== null && ['string', 'number', 'boolean'].includes(typeof item)) result[field] = item;
+        });
+        if (Array.isArray(value.items)) result.items = value.items.map(copyOutgoingMediaSummary).filter(Boolean);
+        return Object.keys(result).length ? result : null;
+      };
+      const createOutgoingRecordSnapshot = (message) => {
+        const snapshot = {
+          _record_type: 'outgoing_message_snapshot',
+          _record_note: '本地发送记录快照，不是 QQ 官方接口原始响应',
+          id: message.id ?? null,
+          message_id: String(message.message_id || message.messageId || message.id || ''),
+          user_id: String(message.user_id || ''),
+          nickname: String(message.nickname || ''),
+          timestamp: String(message.timestamp || ''),
+          source: String(message.source || ''),
+          chat_type: String(message.chat_type || ''),
+          appid: String(message.appid || ''),
+          is_self: true,
+          content: String(message.content || ''),
+        };
+        const media = copyOutgoingMediaSummary(message.media);
+        if (media) snapshot.media = media;
+        if (message.reference_id) snapshot.reference_id = String(message.reference_id);
+        if (message.refidx) snapshot.refidx = String(message.refidx);
+        if (Array.isArray(message.keyboard_buttons) && message.keyboard_buttons.length) snapshot.keyboard_buttons = message.keyboard_buttons;
+        const reference = message.reference_preview;
+        if (reference && typeof reference === 'object') {
+          snapshot.reference_preview = Object.fromEntries(
+            ['message_id', 'refidx', 'user_id', 'nickname', 'content']
+              .filter((field) => reference[field] !== undefined && reference[field] !== null)
+              .map((field) => [field, reference[field]]),
+          );
+        }
+        return snapshot;
       };
       const msgDomSignatures = new WeakMap();
       const msgDomKey = (node) => {
@@ -5872,9 +5918,16 @@
           const canRecall = Boolean(m.message_id) && !recalled && !optimisticEntry && (isSelf || (msgState.botIsAdmin && !protectedRole));
           const rawIdentity = String(m.id || m.message_id || m.messageId || `${m.timestamp || ''}_${m.user_id || ''}`).trim();
           const rawKey = `${msgState.chatId}_${rawIdentity}`;
-          if (m.raw_message) {
+          const hasRawMessage = typeof m.raw_message === 'string'
+            ? Boolean(m.raw_message.trim())
+            : m.raw_message !== undefined && m.raw_message !== null && m.raw_message !== false;
+          const outgoingSnapshot = isSelf && !hasRawMessage && !['pending', 'failed'].includes(sendState)
+            ? createOutgoingRecordSnapshot(m)
+            : null;
+          const hasRawData = hasRawMessage || Boolean(outgoingSnapshot);
+          if (hasRawData) {
             renderedRawKeys.add(rawKey);
-            rawStore[rawKey] = m.raw_message;
+            rawStore[rawKey] = hasRawMessage ? m.raw_message : outgoingSnapshot;
           }
           const isSelected = msgState.selected.has(m.message_id);
           const multiEnabled = canRecall;
@@ -5884,7 +5937,7 @@
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${m.raw_message ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${hasRawData ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
