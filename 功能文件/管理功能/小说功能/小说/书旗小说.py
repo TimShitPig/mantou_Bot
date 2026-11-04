@@ -55,7 +55,7 @@ SEARCH_NO_SIGN_KEYS = {
     "X-NEBULAXMLHTTPREQUEST",
     "callbackUrl",
 }
-下载并发数 = 80
+下载并发数 = 16
 单章重试次数 = 3
 进度日志分段数 = 4
 小说缓存目录 = 文件缓存工具.小说缓存目录
@@ -562,7 +562,10 @@ async def 下载全部章节(
                     书旗章节失败原因(exc), getattr(exc, "http_status", None) or "none",
                 )
                 if 尝试次数 < 单章重试次数:
-                    await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
+                    if getattr(exc, "http_status", None) in {403, 429}:
+                        await asyncio.sleep(min(6.0, 2.0 * 尝试次数))
+                    else:
+                        await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
         await 记录进度(
             False,
             失败原因=书旗章节失败原因(最后异常),
