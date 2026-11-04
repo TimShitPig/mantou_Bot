@@ -1653,7 +1653,11 @@
           const index = commandTokens.push({kind, command, label}) - 1;
           return `\u0000MANTOU_CMD_${index}\u0000`;
         };
-        let source = replaceMsgMentions(value, profiles);
+        const mentionToken = (label) => commandToken('mention', '', String(label || '用户'));
+        let source = String(value || '');
+        source = source.replace(/<@all>/gi, () => mentionToken('全体成员'));
+        source = source.replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, id) => mentionToken(resolveMentionName(id, profiles)));
+        source = source.replace(/@全体成员/g, () => mentionToken('全体成员'));
         source = source.replace(/!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gi, (_, target) => commandToken('image', target, '图片'));
         source = source.replace(/<qqbot-cmd-(input|enter)\b([^>]*)\/?\s*>/gi, (_, kind, attributes) => {
           const command = decodeMsgToken(msgTagAttribute(attributes, 'text'));
@@ -1674,9 +1678,9 @@
         source = source.replace(/mqqapi:\/\/aio\/inlinecmd\?([^\s<>)]*)/gi, (whole, query) => renderInlineCommand(`mqqapi://aio/inlinecmd?${query}`));
         source = source.replace(/<qqbot-at-user\b([^>]*)\/?\s*>/gi, (_, attributes) => {
           const id = decodeMsgToken(msgTagAttribute(attributes, 'id'));
-          return id ? `@${resolveMentionName(id, profiles)}` : '';
+          return id ? mentionToken(resolveMentionName(id, profiles)) : '';
         });
-        source = source.replace(/<qqbot-at-everyone\s*\/?\s*>/gi, '@全体成员');
+        source = source.replace(/<qqbot-at-everyone\s*\/?\s*>/gi, () => mentionToken('全体成员'));
         let html = esc(source);
         html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/gi, '<a class="msg-inline-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
         html = html.replace(/`([^`\n]+)`/g, '<code class="msg-inline-code">$1</code>');
@@ -1687,6 +1691,7 @@
         return html.replace(/\u0000MANTOU_CMD_(\d+)\u0000/g, (_, index) => {
           const item = commandTokens[Number(index)];
           if (!item) return '';
+          if (item.kind === 'mention') return `<span class="msg-mention-chip"><span class="msg-mention-marker" aria-hidden="true">@</span><span>${esc(item.label)}</span></span>`;
           if (item.kind === 'image') return renderMessageMedia({type:'图片', src:item.command});
           return `<button type="button" class="msg-command-chip" data-msg-command="${esc(item.command)}" data-msg-command-kind="${esc(item.kind)}" aria-label="${esc(item.label)}">${esc(item.label)}</button>`;
         });
@@ -2065,6 +2070,7 @@
         if (body) { cancelMsgBottomPosition(body, true); body.innerHTML = '<div class="msg-empty">请在左侧选择会话</div>'; }
         $('msg-head-name').textContent = '请选择会话'; $('msg-head-sub').textContent = '';
         $('msg-head-name').removeAttribute('title'); $('msg-head-sub').removeAttribute('title');
+        $('msg-head-name').disabled = true; $('msg-head-name').setAttribute('aria-expanded','false'); $('msg-head-name').removeAttribute('aria-label');
         for (const id of ['msg-composer','msg-refresh-info','msg-remark','msg-group-settings-open','msg-ad-switch']) $(id).hidden = true;
         $('msg-chats').innerHTML = next ? '<div class="msg-empty">正在加载会话…</div>' : '<div class="msg-empty">请先选择机器人</div>';
         window.msgGroupQQ = {}; msgLastPollAt = 0;
@@ -3315,6 +3321,7 @@
             body.innerHTML = '<div class="msg-empty">请在左侧选择会话</div>';
             $('msg-head-name').textContent = '请选择会话'; $('msg-head-name').dataset.chatKey = ''; $('msg-head-name').classList.remove('admin');
             $('msg-head-sub').textContent = ''; $('msg-head-name').removeAttribute('title'); $('msg-head-sub').removeAttribute('title');
+            $('msg-head-name').disabled = true; $('msg-head-name').setAttribute('aria-expanded','false'); $('msg-head-name').removeAttribute('aria-label');
             for (const id of ['msg-composer','msg-refresh-info','msg-remark','msg-group-settings-open','msg-ad-switch','msg-admin-tag']) $(id).hidden = true;
             setMsgMobileChatOpen(false);
           } else {
@@ -3665,12 +3672,15 @@
         }
         const removed = msgState.chatType === 'user' ? msgChatIsRemoved({...curChat, ...data, chat_type:'user'}) : groupState?.membership_status === 'removed';
         msgState.chatRemoved = removed;
+        const canOpenGroupInfo = msgState.chatType === 'group' && !removed;
+        nameEl.disabled = !canOpenGroupInfo;
+        nameEl.setAttribute('aria-label', canOpenGroupInfo ? `${nameEl.textContent}，查看群信息` : nameEl.textContent);
         const hasMemberCount = gNum !== null;
         const headDetails = msgState.chatType === 'group'
           ? `群聊 · ${msgState.chatId}${hasMemberCount ? ` · 群成员 ${gNum} 人` : ' · 人数未知'}${removed ? ' · 你已被移除群聊' : ''}`
           : `私聊 · ${msgState.chatId}${removed ? ' · 对方已删除机器人好友 · 保留聊天记录' : ''}`;
         $('msg-head-sub').textContent = msgState.chatType === 'group' ? (hasMemberCount ? `${gNum}人` : '人数未知') : '私聊';
-        $('msg-head-sub').title = headDetails; nameEl.title = headDetails;
+        $('msg-head-sub').title = headDetails; nameEl.title = canOpenGroupInfo ? '查看群信息' : headDetails;
         $('msg-composer').hidden = removed;
         for (const id of ['msg-refresh-info','msg-remark','msg-group-settings-open']) $(id).hidden = msgState.chatType !== 'group' || removed;
         if (removed) {
@@ -5718,9 +5728,7 @@
             && String(m.chat_id || m._session || msgState.chatId) === String(msgState.chatId)
             && ['', 'qq_official'].includes(systemSource) && Boolean(String(m.user_id || '').trim());
           if (showGroupMember) tags.push('<span class="msg-tag group-member">群成员</span>');
-          const renderText = (text) => {
-            return replaceMsgMentions(text, profiles);
-          };
+          const renderText = (text) => String(text || '');
           // 引用标识只用于查找，未取得原消息时不把协议 ID 当作正文显示。
           const quote = m.reference_id || m.reference_preview ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id, m.reference_preview, referenceIndex.blocked?.has(String(m.reference_id))) : '';
           const mediaData = m.media;
@@ -5739,6 +5747,13 @@
           if (!content && mediaText && !segmentedMedia) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
           const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
+          const plainContent = plainMsgPreview(m.content || '', profiles);
+          const isWelcomeMessage = botMessage && msgState.chatType === 'group'
+            && /^欢迎\s*@.+?\s+加入本群/.test(plainContent)
+            && /点击下方按钮查看使用教程和小说列表/.test(plainContent);
+          const welcomeKeyboardHtml = isWelcomeMessage
+            ? '<div class="msg-inline-keyboard" role="group" aria-label="QQ消息按钮预览"><span class="msg-inline-keyboard-button">使用教程</span><span class="msg-inline-keyboard-button">小说列表</span></div>'
+            : '';
           const mediaBeforeText = mediaTextPosition
             ? mediaTextPosition.before
             : (mediaData && !Array.isArray(mediaData) ? String(mediaData.before_text || '').trim() : '');
@@ -5774,7 +5789,7 @@
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
             </span>
             <div class="msg-bubble-wrap"><div class="msg-bubble-name">${esc(displayNickname)}${tags.length ? `<span class="msg-tags">${tags.join('')}</span>` : ''}</div>
-              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml ? `<div class="msg-text-content">${contentHtml}</div>` : ''}${media}`)}</div>
+              <div class="msg-bubble ${recalled ? 'recalled' : ''}">${quote}${segmentedMedia || (hasInlineMediaText ? inlineMediaHtml : `${contentHtml ? `<div class="msg-text-content">${contentHtml}</div>` : ''}${media}`)}${welcomeKeyboardHtml}</div>
               ${muteStatusHtml || sendStateHtml ? `<div class="msg-meta">${muteStatusHtml}${sendStateHtml}</div>` : ''}
             </div></div>`;
         });
@@ -6499,6 +6514,7 @@
         groupSettingsState.generation += 1;
         $('msg-group-settings').hidden = true;
         $('msg-group-settings-open').setAttribute('aria-expanded','false');
+        $('msg-head-name').setAttribute('aria-expanded','false');
         clearGroupSettingsProfile();
         clearGroupMuteStates();
         $('msg-group-member-detail').hidden = true;
@@ -6571,6 +6587,7 @@
         groupSettingsState.session = session;
         $('msg-group-settings').hidden = false;
         $('msg-group-settings-open').setAttribute('aria-expanded','true');
+        $('msg-head-name').setAttribute('aria-expanded','true');
         $('msg-group-settings-name').textContent = session.name;
         renderGroupSettingsProfile(session, current || {});
         if (msgState.historyData?.group_info) renderGroupSettingsProfile(session, msgState.historyData.group_info);
@@ -6712,6 +6729,11 @@
       };
       const bindGroupSettings = () => {
         $('msg-group-settings-open').addEventListener('click', openGroupSettings);
+        $('msg-head-name').addEventListener('click', () => {
+          if ($('msg-head-name').disabled) return;
+          if ($('msg-group-settings').hidden) void openGroupSettings();
+          else closeGroupSettings();
+        });
         ['msg-group-settings-close','msg-group-settings-mask'].forEach((id) => $(id).addEventListener('click', () => closeGroupSettings()));
         $('msg-group-settings-tabs').addEventListener('click', (event) => { const button = event.target.closest('[data-group-tab]'); if (button) showGroupSettingsTab(button.dataset.groupTab); });
         $('msg-group-mutes-refresh').addEventListener('click', () => { const session = groupSettingsState.session; if (groupSettingsCurrent(session) && !groupSettingsState.mutating) void loadMuteStates(true, session); });

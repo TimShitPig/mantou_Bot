@@ -124,7 +124,7 @@ from .帮助网页脚本 import 控制台脚本
               <div class="msg-head">
                 <button class="msg-mobile-back" id="msg-mobile-back" type="button" hidden aria-label="返回会话列表" title="返回会话列表"><span aria-hidden="true">‹</span></button>
                 <div style="min-width:0">
-                  <div class="msg-head-name" id="msg-head-name">选择一个会话</div>
+                  <button class="msg-head-name" id="msg-head-name" type="button" disabled aria-haspopup="dialog" aria-expanded="false" aria-controls="msg-group-settings">选择一个会话</button>
                   <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>
                 </div>
                 <div class="msg-head-actions msg-head-menu">
@@ -199,7 +199,7 @@ from .帮助网页脚本 import 控制台脚本
               <div class="msg-group-settings" id="msg-group-settings" hidden>
                 <button class="msg-group-mask" id="msg-group-settings-mask" type="button" aria-label="关闭群聊设置"></button>
                 <aside class="msg-group-drawer" role="dialog" aria-modal="true" aria-labelledby="msg-group-settings-title" tabindex="-1">
-                  <div class="msg-group-drawer-head"><div><strong id="msg-group-settings-title">群聊设置</strong><small id="msg-group-settings-name"></small></div><button class="msg-group-close" id="msg-group-settings-close" type="button" aria-label="关闭群聊设置">×</button></div>
+                  <div class="msg-group-drawer-head"><div><strong id="msg-group-settings-title">群信息与设置</strong><small id="msg-group-settings-name"></small></div><button class="msg-group-close" id="msg-group-settings-close" type="button" aria-label="关闭群信息与设置">×</button></div>
                   <div class="msg-group-tabs" id="msg-group-settings-tabs" role="tablist" aria-label="群聊设置分类"><button type="button" id="msg-group-tab-basic" data-group-tab="basic" class="active" role="tab" aria-selected="true" aria-controls="msg-group-basic">基础设置</button><button type="button" id="msg-group-tab-members" data-group-tab="members" role="tab" aria-selected="false" aria-controls="msg-group-members">群成员</button><button type="button" id="msg-group-tab-mutes" data-group-tab="mutes" role="tab" aria-selected="false" aria-controls="msg-group-mutes">禁言状态</button><button type="button" id="msg-group-tab-blacklist" data-group-tab="blacklist" role="tab" aria-selected="false" aria-controls="msg-group-blacklist">黑名单</button></div>
                   <div class="msg-group-body">
                     <section class="msg-group-pane" id="msg-group-basic" role="tabpanel" aria-labelledby="msg-group-tab-basic">
