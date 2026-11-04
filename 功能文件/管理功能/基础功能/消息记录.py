@@ -661,6 +661,10 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
         if not str(记录.get("nickname") or "").strip():
             记录["nickname"] = "机器人" if 来源.startswith("bot_") else "我"
     原始消息 = _解析消息结构(记录.get("raw_message"))
+    if str(记录.get("chat_type") or "group") == "group" and not _规范QQ群成员角色(记录.get("member_role")):
+        角色 = _提取QQ群消息作者角色(原始消息)
+        if 角色:
+            记录["member_role"] = 角色
     _补充记录机器人状态(记录, 原始消息)
     _补充记录昵称状态(记录, 原始消息)
     _更新消息提及资料(记录, 原始消息 or 记录.get("raw_message"))
@@ -740,6 +744,7 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     作者昵称 = str(记录.get("nickname") or "").strip()
     作者头像 = str(记录.get("avatar") or "").strip()
     内容文本 = str(记录.get("content") or "")
+    群消息 = str(记录.get("chat_type") or "group") == "group"
     现有媒体 = 记录.get("media")
     原始消息: Any = None
     媒体项目 = 现有媒体.get("items") if isinstance(现有媒体, dict) else None
@@ -754,7 +759,8 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     )
     # 单项检查原文补充元数据；多项仅在缺少地址时补查，完整多项沿用快速路径。
     需要原始 = (
-        not str(记录.get("refidx") or "").strip()
+        (群消息 and not _规范QQ群成员角色(记录.get("member_role")))
+        or not str(记录.get("refidx") or "").strip()
         or not _有效用户昵称(作者昵称, 作者标识)
         or not 作者头像
         or bool(_提及规则.search(内容文本))
@@ -768,6 +774,10 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     if 需要原始:
         原始消息 = _解析消息结构(记录.get("raw_message"))
         if 原始消息:
+            if 群消息 and not _规范QQ群成员角色(记录.get("member_role")):
+                角色 = _提取QQ群消息作者角色(原始消息)
+                if 角色:
+                    记录["member_role"] = 角色
             if 允许成员缓存:
                 _更新消息提及资料(记录, 原始消息)
             if not 作者头像:
@@ -2073,6 +2083,39 @@ def 取消消息事件订阅(队列: asyncio.Queue[Any] | None) -> None:
         _消息事件订阅.pop(队列, None)
 
 
+def _规范QQ群成员角色(值: Any) -> str:
+    if not isinstance(值, str):
+        return ""
+    角色 = 值.strip().lower()
+    return {
+        "owner": "owner", "群主": "owner",
+        "admin": "admin", "管理员": "admin", "群管理员": "admin",
+        "member": "member", "普通成员": "member", "群成员": "member",
+    }.get(角色, "")
+
+
+def _提取QQ群消息作者角色(消息: Any) -> str:
+    """读取官方群消息 author.member_role，兼容 SDK 对象和原始负载。"""
+    待检查: list[Any] = [消息]
+    已检查: set[int] = set()
+    while 待检查 and len(已检查) < 12:
+        当前 = 待检查.pop(0)
+        if isinstance(当前, (str, bytes)):
+            当前 = _解析消息结构(当前)
+        if 当前 is None or id(当前) in 已检查:
+            continue
+        已检查.add(id(当前))
+        作者 = _读取字段(当前, "author")
+        角色 = _规范QQ群成员角色(_读取字段(作者, "member_role"))
+        if 角色:
+            return 角色
+        for 字段 in ("raw_data", "raw_message", "data", "message", "payload", "event", "d"):
+            子项 = _读取字段(当前, 字段)
+            if 子项 not in (None, ""):
+                待检查.append(子项)
+    return ""
+
+
 def _获取消息相关成员资料(
     会话标识: str,
     消息列表: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
@@ -2083,6 +2126,12 @@ def _获取消息相关成员资料(
     for 消息 in 消息列表 or ():
         if not isinstance(消息, dict):
             continue
+        if str(消息.get("chat_type") or "group") == "group":
+            角色 = _规范QQ群成员角色(消息.get("member_role"))
+            if not 角色:
+                角色 = _提取QQ群消息作者角色(消息.get("raw_message"))
+            if 角色:
+                消息["member_role"] = 角色
         作者标识 = str(消息.get("user_id") or "").strip()
         if 作者标识:
             相关标识.add(作者标识)
@@ -4248,7 +4297,7 @@ def 记录收到消息(
             )
         昵称 = _有效用户昵称(_提取成员昵称(消息), 成员标识)
         是机器人 = _提取作者机器人状态(消息)
-        角色 = str(_读取字段(作者, "member_role") or "").strip()
+        角色 = _提取QQ群消息作者角色(消息) if 类型 == "group" else ""
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
         if not is_self and 类型 in {"group", "user"}:
             # 部分发送入口拿不到响应 ID，官方回显仍会再次经过消息事件。

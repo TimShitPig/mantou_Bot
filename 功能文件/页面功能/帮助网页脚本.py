@@ -1272,7 +1272,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
         if (!button) return;
@@ -1585,15 +1585,24 @@
         const source = String(message?.source || '');
         return source.startsWith('bot_') || source === 'web_panel';
       };
+      const normalizeMsgMemberRole = (value) => {
+        const role = String(value || '').trim().toLowerCase();
+        return ({owner:'owner', '群主':'owner', admin:'admin', '管理员':'admin', '群管理员':'admin', member:'member', '普通成员':'member', '群成员':'member'})[role] || '';
+      };
+      const currentBotMemberRole = (message, isSelf) => {
+        const appid = String(msgState.chatAppid || '').trim();
+        if (!isSelf || msgState.chatType !== 'group' || !appid || String(message?.appid || '').trim() !== appid) return '';
+        return normalizeMsgMemberRole(msgState.botRole) || (msgState.botIsAdmin ? 'admin' : '');
+      };
       const msgMemberRole = (message, profile = {}) => {
         const appid = String(message?.appid || msgState.chatAppid || '').trim();
         if (msgState.chatAppid && appid !== String(msgState.chatAppid)) return '';
         const profileMatches = (!profile.appid || String(profile.appid).trim() === appid)
           && (!profile.group_id || String(profile.group_id).trim() === String(msgState.chatId))
           && (!profile.group_openid || String(profile.group_openid).trim() === String(msgState.chatId));
-        for (const value of [profileMatches ? profile.role : '', profileMatches ? profile.member_role : '', message?.member_role]) {
-          const role = String(value || '').trim().toLowerCase();
-          if (['owner', 'admin', 'member'].includes(role)) return role;
+        for (const value of [message?.member_role, profileMatches ? profile.role : '', profileMatches ? profile.member_role : '']) {
+          const role = normalizeMsgMemberRole(value);
+          if (role) return role;
         }
         return '';
       };
@@ -2060,7 +2069,7 @@
           initialScrollChatId:'', chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false,
           chatListTopPending:true, chatListScrollActive:false, chatListPointerActive:false, chatListPendingData:null,
           chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListWindowStart:-1, chatListWindowEnd:-1, chatRenderSignature:null,
-          adminRequestToken:msgState.adminRequestToken + 1, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false,
+          adminRequestToken:msgState.adminRequestToken + 1, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'',
           panSelectionRequest:msgState.panSelectionRequest + 1, panSelectionData:null, panSelectionSaving:false, panSelectionLoading:false,
           adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0,
         });
@@ -2476,8 +2485,11 @@
       const msgGroupSnapshotTarget = () => {
         if (msgState.chatType !== 'group' || !msgState.chatId) return null;
         const chatId = String(msgState.chatId);
-        const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId && item.chat_type === 'group');
-        return {chat_id:chatId, chat_type:'group', appid:String(chat?.appid || msgState.chatAppid || '').trim()};
+        const appid = String(msgState.chatAppid || msgState.selectedAppid || '').trim();
+        if (!appid) return null;
+        const chat = msgState.chats.find((item) => String(item.chat_id || '') === chatId
+          && item.chat_type === 'group' && String(item.appid || '').trim() === appid);
+        return {chat_id:chatId, chat_type:'group', appid:String(chat?.appid || appid).trim()};
       };
       const msgGroupSnapshotScope = (target) => JSON.stringify([target?.chat_id || '', target?.chat_type || '', target?.appid || '']);
       const msgGroupSnapshotVisible = () => !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
@@ -3005,6 +3017,7 @@
         msgState.chatType = chatType;
         msgState.chatAppid = String(chat?.appid || '').trim();
         msgState.botIsAdmin = cachedAdmin;
+        msgState.botRole = '';
         resetMsgAdSwitch();
         msgState.profiles = {};
         msgState.historyData = null;
@@ -3312,7 +3325,7 @@
             stopMsgGroupSnapshots(); closeComposerMentionPicker();
             Object.assign(msgState, {chatId:'', chatType:'group', chatAppid:msgState.selectedAppid, chatRemoved:false,
               messages:[], profiles:{}, historyData:null, historyWindow:null, historyActiveScope:'', renderedChatId:'',
-              messageRenderSignature:null, initialScrollChatId:'', botIsAdmin:false,
+              messageRenderSignature:null, initialScrollChatId:'', botIsAdmin:false, botRole:'',
               adminRequestToken:msgState.adminRequestToken + 1, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'',
               panSelectionRequest:msgState.panSelectionRequest + 1, panSelectionData:null, panSelectionSaving:false, panSelectionLoading:false,
               mutes:new Map(), muteRequestAt:0});
@@ -5615,6 +5628,8 @@
         const renderSignature = JSON.stringify({
           scope: renderScope,
           botProfile:botProfileForAppid(msgState.chatAppid),
+          botRole:msgState.botRole,
+          botIsAdmin:msgState.botIsAdmin,
           profiles,
           references:msgs.map((message) => (message.reference_id ? referenceIndex.get(String(message.reference_id)) : null) || message.reference_preview || null),
           more: Boolean(data.has_more),
@@ -5715,8 +5730,10 @@
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
-          const roleMap = {owner:'群主', admin:'管理', member:'群成员'};
-          const memberRole = msgMemberRole(m, profile);
+          const roleMap = {owner:'群主', admin:'管理员', member:'群成员'};
+          const messageRole = msgMemberRole(m, profile);
+          const botRole = currentBotMemberRole(m, isSelf);
+          const memberRole = botRole || messageRole;
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
           const roleTag = msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
             ? (roleMap[memberRole] || '') : '';
@@ -6240,6 +6257,14 @@
           if (older && requestId === msgState.historyOlderRequest) msgState.historyOlderLoading = false;
         }
       };
+      const rerenderMsgRoleTags = () => {
+        if (msgState.chatType !== 'group' || !msgState.historyData || $('page-messages')?.hidden) return;
+        const body = $('msg-body');
+        renderMsgMessages(
+          {...msgState.historyData, messages:msgState.messages, member_profiles:msgState.profiles},
+          {preservePosition:true, previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+        );
+      };
       const loadGroupRoles = (throttled = false) => {
         const target = msgGroupSnapshotTarget();
         if (!target || !msgGroupSnapshotVisible()) return Promise.resolve(null);
@@ -6253,18 +6278,25 @@
           const membership = syncMsgGroupState(requestChatId, data, target.appid);
           if ((readMsgGroupState(data)?.membership_revision || 0) < membership.membership_revision) return;
           const removed = membership.membership_status === 'removed';
-          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId && chat.chat_type === 'group' && (!target.appid || String(chat.appid || '') === target.appid));
+          const current = msgState.chats.find((chat) => String(chat.chat_id || '') === requestChatId
+            && chat.chat_type === 'group' && String(chat.appid || '').trim() === target.appid);
           updateMsgHead({chat_name:current?.nickname || requestChatId, group_info:membership});
           if (removed) {
+            const roleChanged = msgState.botRole !== '' || msgState.botIsAdmin;
+            msgState.botRole = '';
+            msgState.botIsAdmin = false;
             msgState.adminByChat.set(requestChatId, false);
             renderMsgChats({chats:msgState.chats});
+            if (roleChanged) rerenderMsgRoleTags();
             return;
           }
           if (membership.membership_status !== 'active') return;
-          const role = String(data.bot_role || '').trim().toLowerCase();
-          if (!['owner', 'admin', 'member'].includes(role)) return;
+          const role = normalizeMsgMemberRole(data.bot_role);
+          if (!role) return;
+          const roleChanged = msgState.botRole !== role || msgState.botIsAdmin !== (role === 'owner' || role === 'admin');
+          msgState.botRole = role;
           composerMentionPicker.roles.set(JSON.stringify([requestChatId, target.appid]), role);
-          const isAdmin = Boolean(data.bot_is_admin);
+          const isAdmin = role === 'owner' || role === 'admin';
           msgState.adminByChat.set(requestChatId, isAdmin);
           msgState.adminScanFailures.delete(requestChatId);
           const localAdmins = getLocalAdminGroups();
@@ -6274,6 +6306,7 @@
           msgState.botIsAdmin = isAdmin;
           if (current) current.is_admin = isAdmin;
           updateMsgAdminTag();
+          if (roleChanged) rerenderMsgRoleTags();
           if (previousMembership !== membership.membership_status) renderMsgChats({chats:msgState.chats});
           if (isAdmin) void loadMuteStates();
         });
