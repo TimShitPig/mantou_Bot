@@ -123,14 +123,6 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             书籍 = await 获取书籍(session, 目标["book_id"])
             if not 书籍.chapters:
                 raise ShuqiError("没有获取到章节目录")
-            if len(书籍.chapters) != 书籍.chapter_num:
-                logger.warning(
-                    "书旗XML目录不完整：reason=chapter_count, book_id=%s, expected=%s, actual=%s",
-                    书籍.book_id,
-                    书籍.chapter_num,
-                    len(书籍.chapters),
-                )
-
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
@@ -794,13 +786,6 @@ async def 获取书旗XML目录(
                 continue
             节点列表.extend(结果)
 
-    if 总章数 > 0 and len(节点列表) != 总章数:
-        logger.warning(
-            "书旗XML目录不完整：reason=chapter_count, book_id=%s, expected=%s, actual=%s",
-            书籍编号,
-            总章数,
-            len(节点列表),
-        )
     已记录: set[str] = set()
     有效节点: list[dict[str, str]] = []
     无效数量 = 0
@@ -829,6 +814,20 @@ async def 获取书旗XML目录(
         )
     if not 有效节点:
         raise ShuqiError("没有获取到有效XML章节")
+    if 总章数 > 0 and len(有效节点) < 总章数:
+        logger.warning(
+            "书旗XML目录不完整：reason=chapter_count, book_id=%s, expected=%s, actual=%s",
+            书籍编号,
+            总章数,
+            len(有效节点),
+        )
+    elif 总章数 > 0 and len(有效节点) > 总章数:
+        logger.info(
+            "书旗XML目录章数以有效目录为准：book_id=%s, declared=%s, actual=%s",
+            书籍编号,
+            总章数,
+            len(有效节点),
+        )
     return dict(root.attrib), 有效节点
 
 
@@ -929,7 +928,7 @@ def 生成小说文件内容(书籍: Book, 章节内容: list[dict[str, str]]) -
         f"状态：{获取状态文本(书籍)}",
         f"字数：{格式化字数(书籍.word_count)}",
         f"书籍ID：{书籍.book_id}",
-        f"章节数：{书籍.chapter_num or len(书籍.chapters)}",
+        f"章节数：{max(书籍.chapter_num, len(书籍.chapters))}",
         "",
     ]
     if 书籍.intro:
@@ -956,7 +955,7 @@ def 生成小说文件名(书籍: Book) -> str:
 
 
 def 格式化下载提示(书籍: Book) -> str:
-    章节提示 = f"章节：{书籍.chapter_num or len(书籍.chapters)} 章"
+    章节提示 = f"章节：{max(书籍.chapter_num, len(书籍.chapters))} 章"
     return "\n".join(
         [
             f"书名：{书籍.book_name or '未知'}",

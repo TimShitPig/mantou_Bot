@@ -6597,6 +6597,12 @@ def _群信息凭据无效(异常: Exception) -> bool:
     return "100016" in (字段["code"], 字段["err_code"])
 
 
+def _群资料资源不可用(异常: Exception) -> bool:
+    """仅识别完整数字码对；资源失效或作用域错误不能证明机器人已离群。"""
+    字段 = _提取群资料错误字段(异常)
+    return 字段["code"] == "11255" and 字段["err_code"] == "40011028"
+
+
 class _群资料查询冷却中(RuntimeError):
     """同一群端点已经失败或由另一调用方处理，静默保留现有缓存。"""
 
@@ -6632,6 +6638,9 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     elif 字段["http_status"] == "429":
         分类 = "rate_limit"
         文本 = "群资料请求触发频率限制"
+    elif _群资料资源不可用(异常):
+        分类 = "resource_unavailable"
+        文本 = "群资源不可用，请核对资源有效性及机器人会话作用域，保留原成员状态"
     elif "11253" in (字段["code"], 字段["err_code"]) or 字段["http_status"] == "403":
         分类 = "access_denied"
         文本 = "群资料接口访问权限未通过，保留原成员状态"
@@ -7511,6 +7520,8 @@ def _群信息冷却秒数(异常: Exception) -> int:
         return 群信息认证失败冷却秒
     if _提取群资料错误字段(异常)["http_status"] == "429":
         return 群信息限流冷却秒
+    if _群资料资源不可用(异常):
+        return 86400
     try:
         文本 = str(异常)
     except Exception:
