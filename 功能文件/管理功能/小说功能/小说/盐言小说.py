@@ -8,7 +8,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import aiohttp
 
@@ -57,10 +57,12 @@ class _盐言正文未就绪(RuntimeError):
     "如喜欢本书，请支持正版。"
 )
 链接正则 = re.compile(
-    r"https?://story\.zhihu\.com/manuscript/paid_column/\d{8,30}/\d{8,30}(?:\?[^\s'\"<>，。；;！!]*)?",
+    r"https?://(?:story\.zhihu\.com/manuscript/paid_column/[0-9]{8,30}/[0-9]{8,30}"
+    r"|www\.zhihu\.com/market/paid_column/[0-9]{8,30}/section/[0-9]{8,30}"
+    r"|zhuanlan\.zhihu\.com/p/[0-9]{1,30})(?![0-9A-Za-z_/-])(?:\?[^\s'\"<>，。；;！!]*)?",
     re.I,
 )
-允许主机 = {"story.zhihu.com"}
+允许主机 = {"story.zhihu.com", "zhuanlan.zhihu.com", "www.zhihu.com"}
 正文键 = {
     "content",
     "body",
@@ -504,6 +506,9 @@ async def _获取单章正文(
 async def _准备盐言分享章节书籍(
     session: aiohttp.ClientSession, 来源: str
 ) -> dict[str, Any]:
+    文章编号 = 解析知乎文章编号(来源)
+    if 文章编号:
+        return await _请求知乎专栏文章(session, 文章编号)
     业务编号, 起始章节编号 = 解析盐言编号(来源)
     if not 业务编号 or not 起始章节编号:
         raise RuntimeError("盐言链接参数不完整")
@@ -529,6 +534,10 @@ async def _下载盐言分享章节(
     章节列表 = list(书籍.get("chapters") or [])
     if len(章节列表) != 1:
         raise RuntimeError("盐言分享章节数量异常")
+    if 解析知乎文章编号(来源):
+        if 书籍.get("article_id") != 解析知乎文章编号(来源) or not 章节列表[0].get("content"):
+            raise RuntimeError("盐言章节正文不完整")
+        return 书籍
     章节 = await _获取单章正文(
         session,
         来源,
@@ -796,14 +805,64 @@ def 清理文件名(值: Any) -> str:
     return 文本[:80] or "盐言文章"
 
 
+def 解析知乎文章编号(来源: str) -> str:
+    try:
+        地址 = urlsplit(来源)
+        匹配 = re.fullmatch(r"/p/([0-9]{1,30})/?", 地址.path)
+        if 地址.scheme.lower() in {"http", "https"} and 地址.netloc.lower() == "zhuanlan.zhihu.com" and 匹配:
+            return 匹配.group(1)
+    except ValueError:
+        pass
+    return ""
+
+
+async def _请求知乎专栏文章(session: aiohttp.ClientSession, 文章编号: str) -> dict[str, Any]:
+    # 专栏文章 ID 不能当作盐言专栏/章节 ID，独立读取官方文章资源。
+    async with session.get(
+        f"https://www.zhihu.com/api/v4/articles/{文章编号}",
+        headers=盐言网页请求头,
+        allow_redirects=False,
+    ) as response:
+        if response.status != 200:
+            raise RuntimeError(f"HTTP {response.status}")
+        原始 = bytearray()
+        async for 分块 in response.content.iter_chunked(65536):
+            原始.extend(分块)
+            if len(原始) > 8 * 1024 * 1024:
+                raise RuntimeError("知乎文章响应过大")
+    文章 = json.loads(原始)
+    if not isinstance(文章, dict) or str(文章.get("id") or "") != 文章编号:
+        raise RuntimeError("知乎文章编号不匹配")
+    标题 = 清理正文(文章.get("title"))
+    正文 = 清理正文(文章.get("content"))
+    if not 标题 or not 正文:
+        raise RuntimeError("盐言章节正文为空")
+    作者 = 文章.get("author")
+    return {
+        "title": 标题,
+        "author": 清理正文(作者.get("name")) if isinstance(作者, dict) else "未知",
+        "status": "完结",
+        "word_count": len(re.sub(r"\s+", "", 正文)),
+        "article_id": 文章编号,
+        "column_id": 文章编号,
+        "chapters": [{"id": 文章编号, "title": 标题, "content": 正文}],
+    }
+
+
 def 解析盐言编号(来源: str) -> tuple[str, str]:
     try:
-        路径 = [项目 for 项目 in urlsplit(来源).path.split("/") if 项目]
+        地址 = urlsplit(来源)
+        if 地址.scheme.lower() not in {"http", "https"}:
+            return "", ""
     except ValueError:
         return "", ""
-    if len(路径) >= 3 and 路径[-3].lower() == "paid_column":
-        return 路径[-2], 路径[-1]
-    匹配 = re.search(r"paid_column/(\d{8,30})/(\d{8,30})", 来源, re.I)
+    主机 = 地址.netloc.lower()
+    if 主机 == "story.zhihu.com":
+        匹配 = re.fullmatch(r"/manuscript/paid_column/([0-9]{8,30})/([0-9]{8,30})/?", 地址.path)
+    elif 主机 == "www.zhihu.com":
+        匹配 = re.fullmatch(r"/market/paid_column/([0-9]{8,30})/section/([0-9]{8,30})/?", 地址.path)
+    else:
+        return "", ""
     return (匹配.group(1), 匹配.group(2)) if 匹配 else ("", "")
 
 
@@ -813,7 +872,7 @@ def _是盐言链接(值: str) -> bool:
     except ValueError:
         return False
     主机 = (地址.hostname or "").lower().strip(".")
-    return 主机 in 允许主机 and bool(解析盐言编号(值)[0])
+    return 主机 in 允许主机 and bool(解析盐言编号(值)[0] or 解析知乎文章编号(值))
 
 
 def 提取盐言链接(值: Any) -> str:
@@ -832,6 +891,11 @@ def 提取盐言链接(值: Any) -> str:
                 return 结果
         return ""
     文本 = html.unescape(str(值)).replace("\\/", "/")
+    for _ in range(2):
+        解码 = unquote(文本)
+        if 解码 == 文本:
+            break
+        文本 = 解码
     for 匹配 in 链接正则.finditer(文本):
         链接 = 匹配.group(0).rstrip("`)]}>，。；;！!")
         if _是盐言链接(链接):
