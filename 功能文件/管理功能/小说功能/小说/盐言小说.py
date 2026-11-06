@@ -5,6 +5,7 @@ import gzip
 import html
 import json
 import re
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable
@@ -34,7 +35,6 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
 请求超时秒数 = 20
-正文重试次数 = 3
 盐言网页请求头 = {
     "Accept": "application/json,text/plain,*/*",
     "Accept-Encoding": "identity",
@@ -44,6 +44,71 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
     ),
     "Referer": "https://story.zhihu.com/",
 }
+
+
+# 跨同进程热重载保留冷却与缓存；无凭据的公开资源才跨机器人复用。
+盐言查询缓存 = globals().get("盐言查询缓存", {})
+盐言查询锁 = globals().get("盐言查询锁", {})
+盐言查询下次时间 = globals().get("盐言查询下次时间", {})
+盐言查询拒绝冷却 = globals().get("盐言查询拒绝冷却", {})
+盐言查询最短间隔 = 3
+盐言查询缓存秒数 = 300
+盐言访问拒绝冷却秒数 = 600
+
+
+class _盐言查询错误(RuntimeError):
+    def __init__(self, 分类: str, http状态: int = 0):
+        self.分类, self.http状态 = 分类, http状态
+        super().__init__(f"HTTP {http状态}" if http状态 else "盐言查询暂不可用")
+
+
+async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, headers: dict, params=None, 上限: int = 8 * 1024 * 1024) -> bytes:
+    # 一个通道串行，等待后再次查缓存，实现同资源并发请求合并。
+    async with 盐言查询锁.setdefault(通道, asyncio.Lock()):
+        当前 = time.monotonic()
+        for 旧键, 项 in list(盐言查询缓存.items()):
+            if 项["expires"] <= 当前:
+                盐言查询缓存.pop(旧键, None)
+        缓存 = 盐言查询缓存.get(键)
+        if 缓存:
+            if "error" in 缓存:
+                raise _盐言查询错误(*缓存["error"])
+            return 缓存["body"]
+        冷却 = 盐言查询拒绝冷却.get(通道)
+        if 冷却 and 冷却[0] > 当前:
+            raise _盐言查询错误("http_" + str(冷却[1]), 冷却[1])
+        等待 = 盐言查询下次时间.get(通道, 0) - 当前
+        if 等待 > 0:
+            await asyncio.sleep(等待)
+        盐言查询下次时间[通道] = time.monotonic() + 盐言查询最短间隔
+        try:
+            async with session.get(地址, headers=headers, params=params, allow_redirects=False) as response:
+                if response.status != 200:
+                    raise _盐言查询错误("http_" + str(response.status), response.status)
+                原始 = bytearray()
+                async for 分块 in response.content.iter_chunked(65536):
+                    原始.extend(分块)
+                    if len(原始) > 上限:
+                        raise _盐言查询错误("response_too_large")
+            内容 = bytes(原始)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            状态 = exc.http状态 if isinstance(exc, _盐言查询错误) else 0
+            分类 = exc.分类 if isinstance(exc, _盐言查询错误) else "timeout" if isinstance(exc, TimeoutError) else "http_client_error" if isinstance(exc, aiohttp.ClientError) else "query_failed"
+            if 状态 in {403, 429}:
+                盐言查询拒绝冷却[通道] = (time.monotonic() + 盐言访问拒绝冷却秒数, 状态)
+            # 缓存固定错误分类，不保存异常对象、响应正文或请求票据。
+            while len(盐言查询缓存) >= 16:
+                盐言查询缓存.pop(next(iter(盐言查询缓存)))
+            盐言查询缓存[键] = {"expires": time.monotonic() + (600 if 状态 in {403, 429} else 60), "error": (分类, 状态)}
+            raise _盐言查询错误(分类, 状态) from exc
+        else:
+            # 原始字节总量至多 16 MiB，至多 16 项，淘汰最早条目。
+            while 盐言查询缓存 and (len(盐言查询缓存) >= 16 or sum(len(x.get("body", b"")) for x in 盐言查询缓存.values()) + len(内容) > 16 * 1024 * 1024):
+                盐言查询缓存.pop(next(iter(盐言查询缓存)))
+            盐言查询缓存[键] = {"expires": time.monotonic() + 盐言查询缓存秒数, "body": 内容}
+            return 内容
 
 
 class _盐言正文未就绪(RuntimeError):
@@ -324,23 +389,11 @@ async def _请求盐言章节详情(
     业务编号: str,
     章节编号: str,
 ) -> dict[str, Any]:
-    地址 = 章节详情地址模板.format(业务编号, 章节编号)
-    最后异常: Exception | None = None
-    for 尝试次数 in range(3):
-        try:
-            async with session.get(
-                地址,
-                headers=盐言网页请求头,
-            ) as response:
-                原始 = await response.read()
-                if response.status >= 400:
-                    raise RuntimeError(f"HTTP {response.status}")
-                return 解析盐言章节详情(原始, 业务编号, 章节编号)
-        except Exception as exc:
-            最后异常 = exc
-            if 尝试次数 + 1 < 3:
-                await asyncio.sleep(0.2 * (尝试次数 + 1))
-    raise RuntimeError("盐言章节详情请求失败") from 最后异常
+    原始 = await _盐言低频读取(
+        session, 章节详情地址模板.format(业务编号, 章节编号),
+        ("header", 业务编号, 章节编号), "zhihu", headers=盐言网页请求头,
+    )
+    return 解析盐言章节详情(原始, 业务编号, 章节编号)
 
 
 def 解析字数(值: Any) -> int:
@@ -422,23 +475,17 @@ def _校验并固定盐言章节标题(结果: dict[str, str], 章节标题: str
 async def _请求外部提取(
     session: aiohttp.ClientSession, 业务编号: str, 章节编号: str
 ) -> bytes:
-    async with session.get(
-        外部提取地址,
+    return await _盐言低频读取(
+        session, 外部提取地址, ("extract", 业务编号, 章节编号), "extract",
         params={"q": 业务编号, "a": 章节编号},
-        headers={
-            "Accept": "application/json,text/plain,*/*",
-            "User-Agent": "mantoubot/yanyan",
-            "Connection": "keep-alive",
-        },
-    ) as response:
-        内容 = await response.read()
-        if response.status >= 400:
-            raise RuntimeError(f"HTTP {response.status}")
-        return 内容
+        headers={"Accept": "application/json,text/plain,*/*", "User-Agent": "mantoubot/yanyan"},
+    )
 
 
 def _盐言错误分类(异常: BaseException, 深度: int = 0) -> str:
     """生成不含请求地址、响应正文或分享凭据的有限错误分类。"""
+    if isinstance(异常, _盐言查询错误):
+        return 异常.分类
     if isinstance(异常, asyncio.TimeoutError):
         return "timeout"
     if isinstance(异常, aiohttp.ClientResponseError):
@@ -477,30 +524,12 @@ async def _获取单章正文(
     if not 章节编号:
         raise RuntimeError("盐言章节编号为空")
 
-    最后异常: Exception | None = None
-    for 尝试次数 in range(正文重试次数):
-        try:
-            原始 = await _请求外部提取(session, 业务编号, 章节编号)
-            结果 = _校验并固定盐言章节标题(
-                解析盐言章节正文(原始, 章节标题),
-                章节标题,
-            )
-            结果["section_id"] = 章节编号
-            return 结果
-        except _盐言正文未就绪:
-            # 已知补录状态当次终止，避免重复请求同一篇尚未收录的文章。
-            raise
-        except Exception as exc:
-            最后异常 = exc
-            logger.debug(
-                f"盐言章节提取失败：章节编号={章节编号}, "
-                f"轮次={尝试次数 + 1}/{正文重试次数}, "
-                f"错误类型={type(exc).__name__}, 错误分类={_盐言错误分类(exc)}"
-            )
-            if 尝试次数 + 1 < 正文重试次数:
-                await asyncio.sleep(min(1.5, 0.25 * (尝试次数 + 1)))
-
-    raise RuntimeError("盐言章节正文获取失败") from 最后异常
+    原始 = await _请求外部提取(session, 业务编号, 章节编号)
+    结果 = _校验并固定盐言章节标题(
+        解析盐言章节正文(原始, 章节标题), 章节标题,
+    )
+    结果["section_id"] = 章节编号
+    return 结果
 
 
 async def _准备盐言分享章节书籍(
@@ -581,7 +610,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
     阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
-            阶段 = "chapter_header"
+            阶段 = "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
             书籍 = await _准备盐言分享章节书籍(session, 来源)
             logger.info(
                 f"盐言小说开始下载：业务编号={书籍.get('column_id')}, "
@@ -818,18 +847,10 @@ def 解析知乎文章编号(来源: str) -> str:
 
 async def _请求知乎专栏文章(session: aiohttp.ClientSession, 文章编号: str) -> dict[str, Any]:
     # 专栏文章 ID 不能当作盐言专栏/章节 ID，独立读取官方文章资源。
-    async with session.get(
-        f"https://www.zhihu.com/api/v4/articles/{文章编号}",
-        headers=盐言网页请求头,
-        allow_redirects=False,
-    ) as response:
-        if response.status != 200:
-            raise RuntimeError(f"HTTP {response.status}")
-        原始 = bytearray()
-        async for 分块 in response.content.iter_chunked(65536):
-            原始.extend(分块)
-            if len(原始) > 8 * 1024 * 1024:
-                raise RuntimeError("知乎文章响应过大")
+    原始 = await _盐言低频读取(
+        session, f"https://www.zhihu.com/api/v4/articles/{文章编号}",
+        ("article", 文章编号), "zhihu", headers=盐言网页请求头,
+    )
     文章 = json.loads(原始)
     if not isinstance(文章, dict) or str(文章.get("id") or "") != 文章编号:
         raise RuntimeError("知乎文章编号不匹配")

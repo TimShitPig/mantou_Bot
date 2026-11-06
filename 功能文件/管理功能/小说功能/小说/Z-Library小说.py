@@ -71,6 +71,7 @@ ZLibrary活动注册记录: set[tuple[str, str]] = globals().get("ZLibrary活动
 ZLibrary账号资料并发 = globals().get("ZLibrary账号资料并发") or asyncio.Semaphore(2)
 ZLibrary额度重查冷却: dict[str, float] = globals().get("ZLibrary额度重查冷却", {})
 ZLibrary额度恢复检查间隔 = 300
+ZLibrary账号池恢复调度: dict[str, dict[str, float | int]] = globals().get("ZLibrary账号池恢复调度", {})
 ZLibrary账号池轮询: dict[str, int] = globals().get("ZLibrary账号池轮询", {})
 ZLibrary账号管理锁: dict[str, asyncio.Lock] = globals().get("ZLibrary账号管理锁", {})
 _ZLibrary账号停止 = False
@@ -615,21 +616,28 @@ async def 获取ZLibrary搜索账号(配置: Any, *, 自动注册: bool = True, 
     作用域, _ = _ZLibrary注册配置快照(配置)
     额度状态 = _解析ZLibrary额度状态(状态列表)
     管理状态 = _解析ZLibrary管理状态(状态列表)
-    候选 = []
+    候选, 待复查 = [], []
     for 标识, 账号 in sorted(已验证, key=_ZLibrary账号排序键, reverse=True):
         键 = _ZLibrary账号资料键(作用域, 标识, 账号)
         if 键 in (排除账号 or set()) or 管理状态["accounts"].get(键, {}).get("enabled") is False:
             continue
         额度 = 额度状态.get(键, {})
         if 额度.get("status") == "quota_paused":
-            if not _ZLibrary额度可重查(键, 额度):
-                continue
-            ZLibrary额度重查冷却[键] = time.monotonic() + ZLibrary额度恢复检查间隔
-            结果 = await 获取ZLibrary账号摘要(配置, 刷新=True, 账号标识=键)
-            剩余 = 结果.get("profile", {}).get("downloads_remaining")
-            if 结果.get("profile", {}).get("available") is not True or not isinstance(剩余, int) or isinstance(剩余, bool) or 剩余 <= 0:
-                continue
+            if _ZLibrary额度可重查(键, 额度):
+                待复查.append((标识, 账号, 键))
+            continue
         候选.append((标识, 账号))
+    # 大账号池不逐个登录扫描；每轮最多复查一项，同作用域至少间隔一分钟。
+    调度 = ZLibrary账号池恢复调度.setdefault(作用域, {"next": 0, "cursor": 0})
+    if 待复查 and time.monotonic() >= 调度["next"]:
+        游标 = int(调度["cursor"])
+        标识, 账号, 键 = 待复查[游标 % len(待复查)]
+        调度.update(next=time.monotonic() + 60, cursor=游标 + 1)
+        ZLibrary额度重查冷却[键] = time.monotonic() + ZLibrary额度恢复检查间隔
+        结果 = await 获取ZLibrary账号摘要(配置, 刷新=True, 账号标识=键)
+        剩余 = 结果.get("profile", {}).get("downloads_remaining")
+        if 结果.get("profile", {}).get("available") is True and isinstance(剩余, int) and not isinstance(剩余, bool) and 剩余 > 0:
+            候选.append((标识, 账号))
     if 候选:
         最新 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 配置, ZLibrary账号命名空间)
         最新记录 = dict(_解析ZLibrary账号记录(最新))
@@ -734,7 +742,7 @@ async def 获取ZLibrary下载账号(配置: Any) -> dict[str, str]:
     # 每次下载前取得官方额度，不以本地日期推断已经恢复。
     作用域, 快照 = _ZLibrary注册配置快照(配置)
     初始状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
-    检查上限 = max(1, sum(账号.get("status") == "logged_in" for _, 账号 in _解析ZLibrary账号记录(初始状态)))
+    检查上限 = min(3, max(1, sum(账号.get("status") == "logged_in" for _, 账号 in _解析ZLibrary账号记录(初始状态))))
     已检查: set[str] = set()
     for _ in range(检查上限):
         账号 = await 获取ZLibrary搜索账号(快照, 排除账号=已检查)
@@ -930,7 +938,7 @@ async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账�
                 for 旧键, 项 in list(ZLibrary账号资料缓存.items()):
                     if 项["expires"] <= time.monotonic() and time.monotonic() - 项["expires"] > 3600:
                         ZLibrary账号资料缓存.pop(旧键, None)
-                ZLibrary账号资料缓存[键] = {"expires": time.monotonic() + 60, "failed": 失败, "profile": 资料,
+                ZLibrary账号资料缓存[键] = {"expires": time.monotonic() + 300, "failed": 失败, "profile": 资料,
                                             "last_success": dict(旧资料) if 失败 and 旧资料 else None if 失败 else dict(资料)}
                 return 资料
         任务 = asyncio.create_task(查询())
@@ -1070,7 +1078,7 @@ async def 导入ZLibrary账号(配置: Any, 数据: dict[str, Any], 授权检查
             成功 = await asyncio.to_thread(运行状态数据库.比较并更新运行状态值, 快照, ZLibrary账号命名空间, 期望, 写入, 删除)
             if 成功:
                 await _保存ZLibrary额度状态(快照, 新键, 资料)
-                ZLibrary账号资料缓存[新键] = {"expires": time.monotonic() + 60, "failed": False, "profile": 资料}
+                ZLibrary账号资料缓存[新键] = {"expires": time.monotonic() + 300, "failed": False, "profile": 资料}
             结果.append({**行结果, "success": 成功, "message": "已更新" if 成功 and 旧 else "已导入" if 成功 else "账号已变化，请刷新"})
     return {"results": 结果, "message": f"导入成功 {sum(x['success'] for x in 结果)} / {len(结果)}", **await 获取ZLibrary账号列表(快照)}
 

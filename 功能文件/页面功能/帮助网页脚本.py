@@ -798,6 +798,7 @@
       const refreshZLibraryRow = async (id, force = false) => {
         const state = zlibraryAccountState, account = state.data?.accounts?.find((row) => row.id === id);
         if (!account || account.status !== 'logged_in' || state.busy.has(id) || !state.abort || !zlibraryRequestCurrent(state.request, state.appid, consoleGeneration)) return;
+        if (!force && account.profile && Date.now()/1000 - (account.profile.last_attempt_at || account.profile.checked_at || 0) < 300) return;
         const request = state.request, appid = state.appid, generation = consoleGeneration;
         state.busy.add(id); state.rowErrors.delete(id); renderZLibraryAccount();
         try {
@@ -7504,8 +7505,9 @@
       window.addEventListener('pagehide', () => { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
-        if (document.visibilityState === 'visible') { void loadBotProfile(); void loadZLibraryAccount(); }
+        if (document.visibilityState === 'visible') { void loadBotProfile(); }
       }, 60000);
+      setInterval(() => { if (document.visibilityState === 'visible') void loadZLibraryAccount(); }, 300000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {
         updateMuteCountdowns();
