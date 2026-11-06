@@ -664,7 +664,7 @@ async def _ZLibrary静默回复流():
 
 
 def 获取ZLibrary账号回复流(event: Any, 命令文本: str, 配置: Any):
-    if str(命令文本).strip().lower() not in {"注册zlibrary", "创建zlibrary账号"}:
+    if str(命令文本).strip().lower() not in {"注册zlibrary", "创建zlibrary账号", "测试账号"}:
         return None
     if not 权限工具.是QQ官方机器人(event) or not 权限工具.是群文件清理管理员(event, 配置):
         return _ZLibrary静默回复流()
