@@ -55,7 +55,7 @@ ZLibrary转换等待秒数 = 300
 ZLibrary转换轮询间隔秒数 = 10
 ZLibrary搜索域名 = "https://zh.zlib.bz"
 ZLibrary邮箱API地址 = "https://maliapi.215.im/v1"
-ZLibrary注册站点地址 = "https://libb.la"
+ZLibrary注册站点地址 = "https://zh.zlib.bz"
 ZLibrary账号命名空间 = "zlibrary_accounts"
 ZLibrary注册任务集合: set[asyncio.Task] = globals().get("ZLibrary注册任务集合", set())
 ZLibrary自动注册任务: dict[str, asyncio.Task] = globals().get("ZLibrary自动注册任务", {})
@@ -279,12 +279,12 @@ def _提取ZLibrary验证码(邮件: dict, 地址: str) -> str | None:
     发件域名 = str(发件地址).rsplit("@", 1)[-1].lower()
     if not any(
         发件域名 == 域名 or 发件域名.endswith("." + 域名)
-        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk")
+        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk", "z-lib.gl")
     ):
         return None
     主题 = str(邮件.get("subject", ""))
     if not re.search(
-        r"verification|verify|confirmation|confirm|sign.?up|registration|验证码|验证|注册",
+        r"verification|verify|confirmation|confirm|sign.?up|registration|验证码|验证|注册|确认码|確認碼",
         主题,
         re.I,
     ):
