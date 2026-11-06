@@ -1,5 +1,10 @@
 # 更新日志
 
+## v6.1.328
+
+- 修复 QQ阅读 iPhone 分享链接含 ywguid 参数时被前置 Cookie 指令误拦截的问题；网址内参数不再参与 Cookie 识别，按 bid 正常进入下载入口。普通 Cookie、Cookie 头、JSON、cookies.txt、Android uid/usid 及带分享地址的 curl Cookie 导入保持兼容。
+
+
 ## v6.1.327
 
 - 优化 ZLibrary 账号表格：独立炭灰/浅色配色、筛选标签、账号搜索、更清晰的文字和状态标记，保留分页及逐行刷新，后台更新保留滚动与输入焦点；按用户要求在登录保护的账号列表直接显示完整邮箱，不回显密码、Cookie 或认证键。

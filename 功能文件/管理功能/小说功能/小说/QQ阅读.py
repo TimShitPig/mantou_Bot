@@ -3417,7 +3417,9 @@ def 提取QQ阅读事件链接(event: Any) -> str | None:
 
 
 def 识别QQ阅读Cookie文本(文本: Any) -> bool:
-    raw = str(文本 or "")
+    raw = html.unescape(str(文本 or "")).replace("\\/", "/")
+    # 分享 URL 的 ywguid 等参数不是 Cookie；curl 的 Cookie 头等网址外凭据仍正常识别。
+    raw = QQ阅读链接正则.sub("", raw)
     if re.search(r"\byw(?:guid|key)\b", raw, re.I):
         return True
     # QQ 阅读 Android 原始请求使用 uid/usid 命名。仅同时出现两项时接收，
