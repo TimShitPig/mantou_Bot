@@ -285,7 +285,7 @@ def _提取ZLibrary验证码(
     发件域名 = str(发件地址).rsplit("@", 1)[-1].lower()
     if not any(
         发件域名 == 域名 or 发件域名.endswith("." + 域名)
-        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk", "z-lib.gl")
+        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk", "z-lib.gl", "z-library.im")
     ):
         return 拒绝("sender_untrusted")
     主题 = str(邮件.get("subject", ""))
