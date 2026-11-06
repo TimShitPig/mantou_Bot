@@ -8,6 +8,8 @@ License: GNU Affero General Public License version 3 only (AGPL-3.0-only), see t
 
 The ZLibrary account manager layout and interaction design are adapted from `web-vue/src/views/Accounts.vue` and its account table / action / bulk-action components. This project implements the adapted interface in its existing native HTML/CSS/JavaScript modules, with ZLibrary-specific account operations. It does not incorporate the upstream Vue runtime or represent unsupported ChatGPT credential/quota fields as ZLibrary data.
 
+ZLibrary automatic pool selection also follows the eligible-candidate cursor round-robin design of `services/account_service.py` (`_acquire_next_candidate_token`, `get_text_access_token`). Quota exhaustion is displayed as 限流; ZLibrary-specific verification, persistence, and download binding remain local implementations.
+
 Original distribution notice follows:
 
 ```text

@@ -1977,7 +1977,7 @@
     .zlibrary-pill.is-ok { color:var(--mint-ink); background:var(--mint); border-color:color-mix(in srgb,var(--mint-ink) 45%,var(--line)); }
     .zlibrary-pill.is-danger { color:var(--danger); background:var(--danger-bg); border-color:var(--danger-line); }
     .zlibrary-pill.is-warning { color:var(--yellow-ink); background:var(--yellow); border-color:color-mix(in srgb,var(--yellow-ink) 50%,var(--line)); }
-    .zlibrary-pill.is-current,.zlibrary-pill.is-vip { color:var(--primary); background:var(--primary-soft); border-color:color-mix(in srgb,var(--primary) 45%,var(--line)); }
+    .zlibrary-pill.is-vip { color:var(--primary); background:var(--primary-soft); border-color:color-mix(in srgb,var(--primary) 45%,var(--line)); }
     .zlibrary-account-name .zlibrary-pill { padding:2px 8px; font-size:10px; }
     .zlibrary-quota > .zlibrary-pill { min-width:48px; font-size:13px; font-variant-numeric:tabular-nums; }
     .zlibrary-table .zlibrary-empty { padding:48px 16px; text-align:center; color:var(--muted); }
