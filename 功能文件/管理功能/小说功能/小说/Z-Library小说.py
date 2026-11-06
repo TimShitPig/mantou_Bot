@@ -42,9 +42,10 @@ ZLibrary允许域名 = {
     "libb.la",
     "zh.libb.la",
     "zh.zlib.bz",
+    "zlib.bz",
 }
 ZLibrary链接正则 = re.compile(
-    r"https?://(?:(?:zh\.)?z-library\.sk|(?:zh\.)?libb\.la|zh\.zlib\.bz)/book/[^\s<>\"']+",
+    r"https?://(?:(?:zh\.)?z-library\.sk|(?:zh\.)?libb\.la|(?:zh\.)?zlib\.bz)/book/[^\s<>\"']+",
     re.IGNORECASE,
 )
 ZLibrary请求超时秒数 = 35
@@ -53,15 +54,20 @@ ZLibrary文件最大字节数 = 120 * 1024 * 1024
 ZLibrary转换响应最大字节数 = 2 * 1024 * 1024
 ZLibrary转换等待秒数 = 300
 ZLibrary转换轮询间隔秒数 = 10
-ZLibrary搜索域名 = "https://zh.zlib.bz"
+ZLibrary搜索域名 = "https://zlib.bz"
 ZLibrary邮箱API地址 = "https://maliapi.215.im/v1"
-ZLibrary注册站点地址 = "https://zh.zlib.bz"
+ZLibrary注册站点地址 = "https://zlib.bz"
 ZLibrary账号命名空间 = "zlibrary_accounts"
 ZLibrary注册任务集合: set[asyncio.Task] = globals().get("ZLibrary注册任务集合", set())
 ZLibrary自动注册任务: dict[str, asyncio.Task] = globals().get("ZLibrary自动注册任务", {})
 ZLibrary注册失败冷却: dict[str, float] = globals().get("ZLibrary注册失败冷却", {})
 ZLibrary账号资料缓存: dict[str, dict[str, Any]] = globals().get("ZLibrary账号资料缓存", {})
+# 切换已验证直连入口时丢弃旧失败冷却，不沿用旧域名的网络故障。
+if globals().get("ZLibrary资料请求入口") != ZLibrary搜索域名:
+    ZLibrary账号资料缓存 = {键: 项 for 键, 项 in ZLibrary账号资料缓存.items() if not 项.get("failed")}
+ZLibrary资料请求入口 = ZLibrary搜索域名
 ZLibrary账号资料任务: dict[str, asyncio.Task] = globals().get("ZLibrary账号资料任务", {})
+ZLibrary活动注册记录: set[tuple[str, str]] = globals().get("ZLibrary活动注册记录", set())
 ZLibrary账号资料并发 = globals().get("ZLibrary账号资料并发") or asyncio.Semaphore(2)
 ZLibrary额度重查冷却: dict[str, float] = globals().get("ZLibrary额度重查冷却", {})
 ZLibrary额度恢复检查间隔 = 300
@@ -235,21 +241,31 @@ class _ZLibrary注册错误(RuntimeError):
 
 
 async def _请求ZLibrary注册接口(session, 方法, 地址, 阶段, **参数):
-    async with session.request(方法, 地址, allow_redirects=False, **参数) as response:
-        原始 = bytearray()
-        async for 数据块 in response.content.iter_chunked(65536):
-            原始.extend(数据块)
-            if len(原始) > 2 * 1024 * 1024:
-                raise _ZLibrary注册错误(阶段, "response_too_large", response.status)
-        if not 200 <= response.status < 300:
-            raise _ZLibrary注册错误(阶段, "http_error", response.status)
-        try:
-            数据 = json.loads(原始)
-        except (ValueError, UnicodeError) as exc:
-            raise _ZLibrary注册错误(阶段, "invalid_json", response.status) from exc
-        if not isinstance(数据, dict) or any(数据.get(字段) for 字段 in ("error", "errors", "_error")):
-            raise _ZLibrary注册错误(阶段, "business_error", response.status)
-        return 数据
+    try:
+        async with session.request(方法, 地址, allow_redirects=False, **参数) as response:
+            原始 = bytearray()
+            async for 数据块 in response.content.iter_chunked(65536):
+                原始.extend(数据块)
+                if len(原始) > 2 * 1024 * 1024:
+                    raise _ZLibrary注册错误(阶段, "response_too_large", response.status)
+            if not 200 <= response.status < 300:
+                raise _ZLibrary注册错误(阶段, "http_error", response.status)
+            try:
+                数据 = json.loads(原始)
+            except (ValueError, UnicodeError) as exc:
+                raise _ZLibrary注册错误(阶段, "invalid_json", response.status) from exc
+            if not isinstance(数据, dict) or any(数据.get(字段) for 字段 in ("error", "errors", "_error")):
+                raise _ZLibrary注册错误(阶段, "business_error", response.status)
+            return 数据
+    except _ZLibrary注册错误:
+        raise
+    except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientSSLError) as exc:
+        raise _ZLibrary注册错误(阶段, "tls_error") from exc
+    except aiohttp.ClientConnectorDNSError as exc:
+        raise _ZLibrary注册错误(阶段, "dns_error") from exc
+    except (aiohttp.ClientConnectionError, TimeoutError) as exc:
+        状态 = "connection_timeout" if isinstance(exc, aiohttp.ConnectionTimeoutError) else "network_timeout" if isinstance(exc, TimeoutError) else "connection_error"
+        raise _ZLibrary注册错误(阶段, 状态) from exc
 
 
 async def _登录ZLibraryEAPI(session: aiohttp.ClientSession, 账号: dict[str, str]) -> dict[str, Any]:
@@ -353,6 +369,7 @@ async def 自动创建ZLibrary账号(
         timeout=超时,
         headers=邮箱请求头,
         cookie_jar=aiohttp.DummyCookieJar(),
+        trust_env=False,
     ) as 邮箱会话:
         创建结果 = await _请求ZLibrary注册接口(
             邮箱会话,
@@ -395,7 +412,7 @@ async def 自动创建ZLibrary账号(
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
         await 保存账号(尝试ID, dict(账号))
-        async with aiohttp.ClientSession(timeout=超时, headers=站点请求头) as 站点会话:
+        async with aiohttp.ClientSession(timeout=超时, headers=站点请求头, trust_env=False) as 站点会话:
             发码表单 = aiohttp.FormData()
             for 字段, 值 in 表单.items():
                 发码表单.add_field(字段, 值, content_type="text/plain")
@@ -500,14 +517,36 @@ async def 自动创建ZLibrary账号(
                 raise _ZLibrary注册错误("registration", "unconfirmed")
             账号["status"] = "registered"
             await 保存账号(尝试ID, dict(账号))
-        async with aiohttp.ClientSession(timeout=超时) as 登录会话:
+        async with aiohttp.ClientSession(timeout=超时, trust_env=False) as 登录会话:
             await _登录ZLibraryEAPI(登录会话, 账号)
         账号["status"] = "logged_in"
         await 保存账号(尝试ID, dict(账号))
     return 尝试ID
 
 
+async def _等待ZLibrary状态写入(函数, *参数):
+    # 线程写入开始后必须等到结果，再清理；避免取消后的迟到 INSERT 复活失败记录。
+    任务 = asyncio.create_task(asyncio.to_thread(函数, *参数))
+    try:
+        return await asyncio.shield(任务)
+    except asyncio.CancelledError:
+        await 任务
+        raise
+
+
+async def _清理ZLibrary未完成记录(配置: Any) -> None:
+    """仅清理已结束的 pending/registered；成功账号与在途任务不动。"""
+    作用域, 快照 = _ZLibrary注册配置快照(配置)
+    状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
+    for 标识, 账号 in _解析ZLibrary账号记录(状态):
+        if 账号.get("status") not in {"pending", "registered"} or (作用域, 标识) in ZLibrary活动注册记录:
+            continue
+        await _等待ZLibrary状态写入(运行状态数据库.比较并更新运行状态值, 快照, ZLibrary账号命名空间,
+                            {标识: 状态[标识]}, {}, [标识])
+
+
 async def _注册并保存ZLibrary账号(配置: Any) -> dict[str, str] | None:
+    作用域, 配置 = _ZLibrary注册配置快照(配置)
     分类 = 运行状态数据库.读取配置字段(配置, "zlibrary_account_settings") or 配置
     api_key = str(运行状态数据库.读取配置字段(分类, "zlibrary_mail_api_key") or "").strip()
     rx = str(运行状态数据库.读取配置字段(分类, "zlibrary_registration_rx") or "215").strip()
@@ -515,34 +554,43 @@ async def _注册并保存ZLibrary账号(配置: Any) -> dict[str, str] | None:
         return None
     if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
         return None
-
-    本次账号: dict[str, str] | None = None
-
+    本次账号 = None
+    本次记录 = {}
     async def 保存(标识: str, 数据: dict[str, Any]) -> None:
         nonlocal 本次账号
-        await asyncio.to_thread(
-            运行状态数据库.写入运行状态值,
-            配置,
-            ZLibrary账号命名空间,
-            标识,
-            json.dumps(数据, ensure_ascii=False),
-        )
+        原始 = json.dumps(数据, ensure_ascii=False)
+        本次记录[标识] = 原始
+        ZLibrary活动注册记录.add((作用域, 标识))
+        await _等待ZLibrary状态写入(运行状态数据库.写入运行状态值, 配置, ZLibrary账号命名空间, 标识, 原始)
         if 数据.get("status") == "logged_in":
             本次账号 = {"email": 数据["email"], "password": 数据["password"]}
-
     try:
         await 自动创建ZLibrary账号(api_key, 保存, rx)
     except _ZLibrary注册错误 as exc:
-        logger.warning(
-            "ZLibrary创建账号失败：阶段=%s 状态=%s HTTP=%s",
-            exc.阶段,
-            exc.状态,
-            exc.http状态,
-        )
+        logger.warning("ZLibrary创建账号失败：阶段=%s 状态=%s HTTP=%s", exc.阶段, exc.状态, exc.http状态)
         return None
     except Exception as exc:
         logger.warning("ZLibrary创建账号失败：类型=%s", type(exc).__name__)
         return None
+    finally:
+        try:
+            if 本次记录:
+                当前 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 配置, ZLibrary账号命名空间)
+                for 标识, 原始 in 本次记录.items():
+                    原账号 = json.loads(原始)
+                    try:
+                        未完成 = json.loads(当前.get(标识, "null"))
+                    except (ValueError, TypeError):
+                        continue
+                    if (isinstance(未完成, dict) and 未完成.get("status") in {"pending", "registered"}
+                            and all(未完成.get(k) == 原账号.get(k) for k in ("email", "password"))):
+                        await _等待ZLibrary状态写入(运行状态数据库.比较并更新运行状态值, 配置, ZLibrary账号命名空间,
+                                                {标识: 当前[标识]}, {}, [标识])
+        except Exception as exc:
+            logger.warning("ZLibrary失败注册记录清理失败：错误类型=%s", type(exc).__name__)
+        finally:
+            for 标识 in 本次记录:
+                ZLibrary活动注册记录.discard((作用域, 标识))
     return 本次账号
 
 
@@ -550,6 +598,7 @@ async def 获取ZLibrary搜索账号(配置: Any, *, 自动注册: bool = True) 
     if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
         return None
     try:
+        await _清理ZLibrary未完成记录(配置)
         状态列表 = await asyncio.to_thread(
             运行状态数据库.读取运行状态命名空间,
             配置,
@@ -766,8 +815,9 @@ async def 获取ZLibrary账号列表(配置: Any) -> dict[str, Any]:
     作用域, 快照 = _ZLibrary注册配置快照(配置)
     if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 快照) != "正常":
         return {"accounts": [], "message": "数据库未连接，无法读取账号"}
+    await _清理ZLibrary未完成记录(快照)
     状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
-    记录 = _解析ZLibrary账号记录(状态)
+    记录 = [项 for 项 in _解析ZLibrary账号记录(状态) if 项[1].get("status") == "logged_in"]
     额度状态 = _解析ZLibrary额度状态(状态)
     管理状态 = _解析ZLibrary管理状态(状态)
     当前 = _选取ZLibrary当前账号(记录, 作用域, 额度状态, 管理状态)
@@ -776,6 +826,41 @@ async def 获取ZLibrary账号列表(配置: Any) -> dict[str, Any]:
     return {"accounts": [_ZLibrary账号安全摘要(作用域, 标识, 账号, 当前标识, 额度状态, 管理状态) for 标识, 账号 in 记录],
             "groups": sorted({管理状态["accounts"].get(_ZLibrary账号资料键(作用域, *项), {}).get("group", "") for 项 in 记录} - {""}),
             "preferred_account_id": 管理状态["preferred"]}
+
+
+async def _读取ZLibrary账号资料(账号: dict[str, Any]) -> dict[str, Any]:
+    """同一账号重连一次；登录已给完整资料时不再追加冗余 GET。"""
+    async with _创建ZLibrary会话() as session:
+        for 尝试 in range(2):
+            try:
+                登录用户 = await _登录ZLibraryEAPI(session, 账号)
+                break
+            except _ZLibrary注册错误 as exc:
+                # 只重试尚未建立连接的登录；认证、业务、TLS 和已发送的未知结果不重放。
+                可重试 = isinstance(exc.__cause__, (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError))
+                if 尝试 or exc.状态 in {"tls_error", "http_error", "business_error", "unconfirmed"} or not 可重试:
+                    raise
+                await asyncio.sleep(0.5)
+        if 登录用户.get("email") and str(登录用户["email"]).casefold() != 账号["email"].casefold():
+            raise _ZLibrary注册错误("login", "identity_unconfirmed")
+        完整字段 = ("downloads_today", "downloads_limit", "isPremium", "confirmed")
+        登录资料 = _投影ZLibrary账号资料(登录用户)
+        if all(k in 登录用户 for k in 完整字段) and 登录资料["downloads_remaining"] is not None:
+            return 登录资料
+        for 尝试 in range(2):
+            try:
+                数据 = await _请求ZLibrary注册接口(session, "GET", ZLibrary搜索域名 + "/eapi/user/profile", "profile")
+                break
+            except _ZLibrary注册错误 as exc:
+                if 尝试 or exc.状态 not in {"connection_timeout", "network_timeout", "connection_error", "dns_error"}:
+                    raise
+                await asyncio.sleep(0.5)
+        用户 = 数据.get("user")
+        if (数据.get("success") != 1 or not isinstance(用户, dict)
+                or str(用户.get("id")) != str(登录用户.get("id"))
+                or (用户.get("email") and str(用户["email"]).casefold() != 账号["email"].casefold())):
+            raise _ZLibrary注册错误("profile", "identity_unconfirmed")
+        return _投影ZLibrary账号资料(用户)
 
 
 async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账号标识: str = "") -> dict[str, Any]:
@@ -814,29 +899,32 @@ async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账�
     任务 = ZLibrary账号资料任务.get(键)
     if 任务 is None or 任务.done():
         async def 查询():
-            try:
-                async with asyncio.timeout(45), ZLibrary账号资料并发:
-                    async with _创建ZLibrary会话() as session:
-                        登录用户 = await _登录ZLibraryEAPI(session, 账号)
-                        数据 = await _请求ZLibrary注册接口(session, "GET", ZLibrary搜索域名 + "/eapi/user/profile", "profile")
-                用户 = 数据.get("user")
-                if (数据.get("success") != 1 or not isinstance(用户, dict)
-                        or str(用户.get("id")) != str(登录用户.get("id"))
-                        or (用户.get("email") and str(用户["email"]).casefold() != 邮箱.casefold())):
-                    raise _ZLibrary注册错误("profile", "identity_unconfirmed")
-                资料 = _投影ZLibrary账号资料(用户)
-                await _保存ZLibrary额度状态(快照, 键, 资料)
-                失败 = False
-            except Exception as exc:
-                logger.warning("ZLibrary账号资料查询失败：阶段=%s HTTP=%s 错误类型=%s",
-                               getattr(exc, "阶段", "profile"), getattr(exc, "http状态", 0), type(exc).__name__)
-                资料 = {"available": False, "message": "账号资料查询失败，请稍后刷新"}
-                失败 = True
-            for 旧键, 旧缓存 in list(ZLibrary账号资料缓存.items()):
-                if 旧缓存["expires"] <= time.monotonic():
-                    ZLibrary账号资料缓存.pop(旧键, None)
-            ZLibrary账号资料缓存[键] = {"expires": time.monotonic() + 60, "failed": 失败, "profile": 资料}
-            return 资料
+            # 排队时间不计入网络时限，避免第三个及以后账号尚未开始就超时。
+            async with ZLibrary账号资料并发:
+                旧缓存 = ZLibrary账号资料缓存.get(键) or {}
+                旧资料 = 旧缓存.get("last_success") or (旧缓存.get("profile") if not 旧缓存.get("failed") else None)
+                try:
+                    async with asyncio.timeout(65):
+                        资料 = await _读取ZLibrary账号资料(账号)
+                    await _保存ZLibrary额度状态(快照, 键, 资料)
+                    失败 = False
+                except Exception as exc:
+                    阶段 = getattr(exc, "阶段", "profile")
+                    分类 = getattr(exc, "状态", "network_timeout" if isinstance(exc, TimeoutError) else "unknown")
+                    允许分类 = {"connection_timeout", "network_timeout", "connection_error", "dns_error", "tls_error", "http_error", "identity_unconfirmed", "business_error", "unconfirmed"}
+                    分类 = 分类 if 分类 in 允许分类 else "unknown"
+                    logger.warning("ZLibrary账号资料查询失败：阶段=%s 状态=%s HTTP=%s 错误类型=%s",
+                                   阶段, 分类, getattr(exc, "http状态", 0), type(exc).__name__)
+                    提示 = "连接超时，请稍后刷新" if 分类 in {"connection_timeout", "network_timeout"} else "连接失败，请稍后刷新" if 分类 in {"connection_error", "dns_error"} else "账号资料查询失败，请稍后刷新"
+                    资料 = {**(旧资料 or {}), "available": False, "message": 提示, "failure_category": 分类,
+                            "failure_stage": 阶段, "last_attempt_at": int(time.time()), "stale": bool(旧资料)}
+                    失败 = True
+                for 旧键, 项 in list(ZLibrary账号资料缓存.items()):
+                    if 项["expires"] <= time.monotonic() and time.monotonic() - 项["expires"] > 3600:
+                        ZLibrary账号资料缓存.pop(旧键, None)
+                ZLibrary账号资料缓存[键] = {"expires": time.monotonic() + 60, "failed": 失败, "profile": 资料,
+                                            "last_success": dict(旧资料) if 失败 and 旧资料 else None if 失败 else dict(资料)}
+                return 资料
         任务 = asyncio.create_task(查询())
         ZLibrary账号资料任务[键] = 任务
         ZLibrary注册任务集合.add(任务)
@@ -1029,29 +1117,7 @@ async def _准备ZLibrary自动账号(
         )
         if any(账号.get("status") == "logged_in" for _, 账号 in _解析ZLibrary账号记录(状态列表)):
             return None
-        待确认 = []
-        for 标识, 原始值 in 状态列表.items():
-            try:
-                账号 = json.loads(原始值)
-            except (TypeError, ValueError):
-                continue
-            if (isinstance(账号, dict) and 账号.get("status") in {"pending", "registered"}
-                    and isinstance(账号.get("email"), str) and 账号["email"]
-                    and isinstance(账号.get("password"), str) and 账号["password"]):
-                待确认.append((str(账号.get("created_at") or ""), 标识, 账号))
-        if 待确认:
-            # 注册提交成功但登录确认中断时继续验证原账号，不能另建账号。
-            _, 标识, 账号 = max(待确认, key=lambda 项: 项[0])
-            async with _创建ZLibrary会话() as session:
-                await _登录ZLibraryEAPI(session, 账号)
-            账号["status"] = "logged_in"
-            await asyncio.to_thread(
-                运行状态数据库.写入运行状态值, 配置, ZLibrary账号命名空间,
-                标识, json.dumps(账号, ensure_ascii=False),
-            )
-        else:
-            return await _注册并保存ZLibrary账号(配置)
-        return await 获取ZLibrary搜索账号(配置, 自动注册=False)
+        return await _注册并保存ZLibrary账号(配置)
 
 
 async def _确保ZLibrary自动账号(配置: Any, *, 手动测试: bool = False) -> dict[str, str] | None:
@@ -1497,7 +1563,7 @@ async def _请求详情(session: aiohttp.ClientSession, 来源: str) -> dict[str
 async def _请求详情含认证重试(
     session: aiohttp.ClientSession, 来源: str, 配置: Any
 ) -> dict[str, Any]:
-    if urlsplit(来源).hostname == "zh.zlib.bz":
+    if urlsplit(来源).hostname in {"zlib.bz", "zh.zlib.bz"}:
         账号 = getattr(session, "_mantou_zlibrary_download_account", None) or await 获取ZLibrary下载账号(配置)
         session._mantou_zlibrary_download_account = 账号
         if not 账号:
@@ -1513,7 +1579,7 @@ async def _请求详情含认证重试(
         if 数据.get("success") != 1 or not isinstance(书籍, dict) or str(书籍.get("id")) != 编号:
             raise _ZLibrary站点错误("Z-Library书籍详情未确认")
         下载地址 = urljoin(ZLibrary搜索域名, str(书籍.get("dl") or ""))
-        if (not 书籍.get("dl") or urlsplit(下载地址).netloc.lower() != "zh.zlib.bz"
+        if (not 书籍.get("dl") or urlsplit(下载地址).netloc.lower() != urlsplit(ZLibrary搜索域名).netloc
                 or urlsplit(下载地址).scheme != "https"):
             raise _ZLibrary站点错误("Z-Library下载地址无效")
         if str(书籍.get("extension") or "").lower() != "txt":
@@ -1555,7 +1621,7 @@ async def _登录ZLibrary转换账号(
     站点地址 = f"{地址.scheme}://{地址.netloc}"
     if not _是ZLibrary站点HTTPS地址(站点地址):
         raise _ZLibrary站点错误("Z-Library登录站点地址无效")
-    if 地址.hostname == "zh.zlib.bz":
+    if 地址.hostname in {"zlib.bz", "zh.zlib.bz"}:
         await _登录ZLibraryEAPI(session, 账号)
         return 站点地址
     现有Cookie = session.cookie_jar.filter_cookies(aiohttp.client_reqrep.URL(站点地址))
@@ -1860,7 +1926,7 @@ def _创建ZLibrary会话() -> aiohttp.ClientSession:
     return aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=ZLibrary请求超时秒数, sock_connect=10, sock_read=25),
         connector=aiohttp.TCPConnector(limit=4, limit_per_host=4, ttl_dns_cache=300),
-        trust_env=True,
+        trust_env=False,
         cookie_jar=aiohttp.CookieJar(unsafe=False),
     )
 
