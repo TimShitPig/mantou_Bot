@@ -266,14 +266,20 @@ async def _登录ZLibraryEAPI(session: aiohttp.ClientSession, 账号: dict[str, 
     )
 
 
-def _提取ZLibrary验证码(邮件: dict, 地址: str) -> str | None:
+def _提取ZLibrary验证码(
+    邮件: dict, 地址: str, *, 诊断: dict[str, int] | None = None,
+) -> str | None:
+    def 拒绝(原因: str) -> None:
+        if 诊断 is not None:
+            诊断[原因] = 诊断.get(原因, 0) + 1
+
     收件人列表 = 邮件.get("to")
     if not isinstance(收件人列表, list) or not any(
         isinstance(收件人, dict)
         and str(收件人.get("address", "")).lower() == 地址.lower()
         for 收件人 in 收件人列表
     ):
-        return None
+        return 拒绝("recipient_mismatch")
     发件人 = 邮件.get("from")
     发件地址 = 发件人.get("address", "") if isinstance(发件人, dict) else ""
     发件域名 = str(发件地址).rsplit("@", 1)[-1].lower()
@@ -281,14 +287,14 @@ def _提取ZLibrary验证码(邮件: dict, 地址: str) -> str | None:
         发件域名 == 域名 or 发件域名.endswith("." + 域名)
         for 域名 in ("libb.la", "z-lib.fm", "1lib.sk", "z-lib.gl")
     ):
-        return None
+        return 拒绝("sender_untrusted")
     主题 = str(邮件.get("subject", ""))
     if not re.search(
         r"verification|verify|confirmation|confirm|sign.?up|registration|验证码|验证|注册|确认码|確認碼",
         主题,
         re.I,
     ):
-        return None
+        return 拒绝("subject_unmatched")
     验证码 = 邮件.get("verificationCode")
     if isinstance(验证码, str) and re.fullmatch(r"[0-9]{4}", 验证码):
         return 验证码
@@ -308,7 +314,7 @@ def _提取ZLibrary验证码(邮件: dict, 地址: str) -> str | None:
         文本,
         re.I,
     )
-    return (匹配.group(1) or 匹配.group(2)) if 匹配 else None
+    return (匹配.group(1) or 匹配.group(2)) if 匹配 else 拒绝("code_missing")
 
 
 def _检查ZLibrary业务回复(数据: dict, 阶段: str) -> dict:
@@ -413,6 +419,10 @@ async def 自动创建ZLibrary账号(
                 raise _ZLibrary注册错误("send_code", "unconfirmed")
             验证码 = None
             已检查邮件: set[str] = set()
+            邮箱诊断: dict[str, int] = {}
+            轮询次数 = 0
+            非空轮询次数 = 0
+            邮件详情次数 = 0
             try:
                 async with asyncio.timeout(等待秒数):
                     while 验证码 is None:
@@ -431,6 +441,8 @@ async def 自动创建ZLibrary账号(
                         )
                         if 收件箱.get("success") is not True or not isinstance(邮件列表, list):
                             raise _ZLibrary注册错误("mail_read", "unconfirmed")
+                        轮询次数 += 1
+                        非空轮询次数 += int(bool(邮件列表))
                         for 邮件摘要 in 邮件列表:
                             if not isinstance(邮件摘要, dict):
                                 continue
@@ -452,23 +464,32 @@ async def 自动创建ZLibrary账号(
                             邮件 = 邮件详情.get("data")
                             if 邮件详情.get("success") is not True or not isinstance(邮件, dict):
                                 raise _ZLibrary注册错误("mail_read", "unconfirmed")
+                            邮件详情次数 += 1
                             try:
                                 时间戳 = dt.datetime.fromisoformat(
                                     str(邮件.get("createdAt") or 邮件摘要.get("createdAt") or "").replace("Z", "+00:00")
                                 )
                             except ValueError:
+                                邮箱诊断["timestamp_invalid"] = 邮箱诊断.get("timestamp_invalid", 0) + 1
                                 已检查邮件.add(邮件ID)
                                 continue
                             if 时间戳.tzinfo is None or 时间戳 < 开始时间:
+                                原因 = "timezone_missing" if 时间戳.tzinfo is None else "before_request"
+                                邮箱诊断[原因] = 邮箱诊断.get(原因, 0) + 1
                                 已检查邮件.add(邮件ID)
                                 continue
-                            验证码 = _提取ZLibrary验证码(邮件, 邮箱)
+                            验证码 = _提取ZLibrary验证码(邮件, 邮箱, 诊断=邮箱诊断)
                             if 验证码:
                                 break
                             已检查邮件.add(邮件ID)
                         if 验证码 is None:
                             await asyncio.sleep(轮询间隔)
             except TimeoutError as exc:
+                logger.warning(
+                    "ZLibrary验证码等待超时：polls=%s, nonempty_polls=%s, details=%s, rejected=%s",
+                    轮询次数, 非空轮询次数, 邮件详情次数,
+                    json.dumps(邮箱诊断, sort_keys=True),
+                )
                 raise _ZLibrary注册错误("mail_read", "code_timeout") from exc
             注册数据 = await _请求ZLibrary注册接口(
                 站点会话,
