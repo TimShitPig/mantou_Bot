@@ -320,8 +320,9 @@
         if (next !== previousView) closeMsgHeadMenu();
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
-        if (previousView === 'bot' && next !== 'bot') leaveQQReader();
+        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); stopZLibraryAccount(); }
         activeView = next;
+        if (next === 'bot') void loadZLibraryAccount();
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); nextParams.set('appid', consoleAppid); history.pushState({view:next,appid:consoleAppid}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
@@ -706,6 +707,88 @@
         renderQQAuthEditor(data.qq_reader || {});
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
+      };
+      const zlibraryAccountState = {request:0, abort:null, appid:'', data:null, loadedAt:0, loading:false, page:0, busy:new Set(), rowErrors:new Set()};
+      const stopZLibraryAccount = (clear = false) => {
+        const state = zlibraryAccountState;
+        state.request += 1; state.abort?.abort(); state.abort = null; state.loading = false; state.busy.clear();
+        if (clear) { state.appid = ''; state.data = null; state.loadedAt = 0; state.page = 0; state.rowErrors.clear(); $('zlibrary-account-editor')?.replaceChildren(); }
+      };
+      const zlibraryVisibleAccounts = () => (zlibraryAccountState.data?.accounts || []).slice(zlibraryAccountState.page * 10, (zlibraryAccountState.page + 1) * 10);
+      const renderZLibraryAccount = () => {
+        const host = $('zlibrary-account-editor'); if (!host) return;
+        const scroll = host.querySelector('.zlibrary-table-scroll'), scrollTop = scroll?.scrollTop || 0, scrollLeft = scroll?.scrollLeft || 0;
+        const focused = host.contains(document.activeElement) ? document.activeElement : null;
+        const focusKey = focused?.dataset.zlibraryRow;
+        const state = zlibraryAccountState, accounts = state.data?.accounts || [];
+        const value = (number) => Number.isSafeInteger(number) && number >= 0 ? number.toLocaleString('zh-CN') : '未知';
+        const pill = (text, kind = '') => `<span class="zlibrary-pill ${kind}">${esc(text)}</span>`;
+        const rows = zlibraryVisibleAccounts().map((account) => {
+          const profile = account.profile || {}, ready = account.status === 'logged_in', busy = state.busy.has(account.id);
+          const failed = state.rowErrors.has(account.id) || profile.available === false;
+          const exhausted = profile.available === true && profile.downloads_remaining === 0;
+          const status = busy ? '查询中' : !ready ? '待完成' : failed ? '查询失败' : exhausted ? '额度用尽' : profile.available ? '正常' : '待查询';
+          const vip = typeof profile.is_vip === 'boolean' ? (profile.is_vip ? 'VIP / Premium' : '普通账号') : '未知';
+          return `<tr class="${exhausted ? 'is-exhausted' : ''}" data-zlibrary-account="${esc(account.id)}"><td><div class="zlibrary-account-name"><strong>${esc(profile.name || account.name || '未返回昵称')}</strong>${account.is_current ? pill('当前使用','is-current') : ''}</div><small class="zlibrary-secondary">${esc(account.email_masked || '未知邮箱')}</small></td><td>${pill(status, failed ? 'is-danger' : exhausted ? 'is-warning' : profile.available ? 'is-ok' : '')}</td><td>${pill(vip, profile.is_vip === true ? 'is-vip' : '')}</td><td class="zlibrary-quota">${pill(value(profile.downloads_remaining), exhausted ? 'is-danger' : profile.available ? 'is-ok' : '')}<small class="zlibrary-secondary">已用 ${esc(value(profile.downloads_today))} / ${esc(value(profile.downloads_limit))}</small></td><td>${esc(qqReaderDate(account.created_at))}</td><td>${typeof profile.email_confirmed === 'boolean' ? (profile.email_confirmed ? '已验证' : '未验证') : '未知'}<small class="zlibrary-secondary">详细权限：接口未返回</small></td><td>${esc(profile.checked_at ? qqReaderDate(profile.checked_at) : '尚未查询')}</td><td><button class="zlibrary-action" type="button" data-zlibrary-row="${esc(account.id)}" ${!ready || busy || state.loading ? 'disabled' : ''}>${busy ? '查询中…' : '刷新'}</button></td></tr>`;
+        }).join('');
+        const pages = Math.max(1, Math.ceil(accounts.length / 10));
+        host.innerHTML = `<div class="zlibrary-toolbar"><div class="zlibrary-toolbar-summary">${pill('全部 ' + accounts.length)}${pill('已验证 ' + accounts.filter((account) => account.status === 'logged_in').length, 'is-ok')}${pill('未完成 ' + accounts.filter((account) => account.status !== 'logged_in').length)}</div><button class="zlibrary-action" type="button" data-zlibrary-refresh ${state.loading ? 'disabled' : ''}>${state.loading ? '读取中…' : '刷新列表'}</button></div><div class="zlibrary-table-scroll" role="region" aria-label="ZLibrary 账号列表" tabindex="0"><table class="zlibrary-table"><thead><tr><th scope="col">账号信息</th><th scope="col">状态</th><th scope="col">会员</th><th scope="col">今日剩余 / 额度</th><th scope="col">创建时间</th><th scope="col">验证 / 权限</th><th scope="col">资料更新时间</th><th scope="col">操作</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="zlibrary-empty">${esc(state.data?.message || (state.loading ? '正在读取账号…' : '暂无账号，发送“测试账号”注册并保存'))}</td></tr>`}</tbody></table></div><div class="zlibrary-footer"><span role="status">${esc(state.data?.message || '额度由平台每日刷新；资料自动更新，也可逐行刷新。')}</span><div class="zlibrary-pagination"><button class="zlibrary-action" type="button" data-zlibrary-page="-1" ${state.page <= 0 ? 'disabled' : ''} aria-label="上一页账号">上一页</button><span>${state.page + 1} / ${pages}</span><button class="zlibrary-action" type="button" data-zlibrary-page="1" ${state.page + 1 >= pages ? 'disabled' : ''} aria-label="下一页账号">下一页</button></div></div>`;
+        const restoredScroll = host.querySelector('.zlibrary-table-scroll'); if (restoredScroll) { restoredScroll.scrollTop = scrollTop; restoredScroll.scrollLeft = scrollLeft; }
+        if (focusKey) host.querySelector(`[data-zlibrary-row="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+        host.querySelector('[data-zlibrary-refresh]')?.addEventListener('click', () => { void loadZLibraryAccount(true); });
+        host.querySelectorAll('[data-zlibrary-row]').forEach((node) => node.addEventListener('click', () => { void refreshZLibraryRow(node.dataset.zlibraryRow, true); }));
+        host.querySelectorAll('[data-zlibrary-page]').forEach((node) => node.addEventListener('click', () => {
+          stopZLibraryAccount(); state.page += Number(node.dataset.zlibraryPage); state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false);
+        }));
+      };
+      const zlibraryRequestCurrent = (request, appid, generation) => request === zlibraryAccountState.request && appid === consoleAppid && generation === consoleGeneration && activeView === 'bot' && document.visibilityState !== 'hidden';
+      const refreshZLibraryRow = async (id, force = false) => {
+        const state = zlibraryAccountState, account = state.data?.accounts?.find((row) => row.id === id);
+        if (!account || account.status !== 'logged_in' || state.busy.has(id) || !state.abort || !zlibraryRequestCurrent(state.request, state.appid, consoleGeneration)) return;
+        const request = state.request, appid = state.appid, generation = consoleGeneration;
+        state.busy.add(id); state.rowErrors.delete(id); renderZLibraryAccount();
+        try {
+          const path = force ? 'zlibrary-account/refresh' : 'zlibrary-account';
+          const data = await api(`${path}?account_id=${encodeURIComponent(id)}`, {method:force ? 'POST' : 'GET', signal:state.abort.signal, botAppid:appid});
+          if (!zlibraryRequestCurrent(request, appid, generation)) return;
+          if (data.account?.id === id && data.profile) account.profile = data.profile;
+          else state.rowErrors.add(id);
+        } catch (error) {
+          if (!zlibraryRequestCurrent(request, appid, generation) || error.name === 'AbortError') return;
+          account.profile = null; state.rowErrors.add(id);
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          if (zlibraryRequestCurrent(request, appid, generation)) { state.busy.delete(id); renderZLibraryAccount(); }
+        }
+      };
+      const loadZLibraryVisibleProfiles = async (force) => {
+        const state = zlibraryAccountState, request = state.request;
+        const queue = zlibraryVisibleAccounts().filter((account) => account.status === 'logged_in' && (force || !account.profile)).map((account) => account.id);
+        const worker = async () => { while (queue.length && request === state.request) await refreshZLibraryRow(queue.shift(), force); };
+        await Promise.all([worker(), worker()]);
+      };
+      const loadZLibraryAccount = async (force = false) => {
+        if (!consoleAppid || activeView !== 'bot' || document.visibilityState === 'hidden') return;
+        const state = zlibraryAccountState;
+        if (state.loading && !force) return;
+        if (!force && state.appid === consoleAppid && state.data && Date.now() - state.loadedAt < 60000) {
+          if (!state.abort) state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false); return;
+        }
+        stopZLibraryAccount(); state.abort = new AbortController();
+        const request = state.request, appid = consoleAppid, generation = consoleGeneration;
+        if (state.appid !== appid) { state.data = null; state.page = 0; state.loadedAt = 0; }
+        state.appid = appid; state.loading = true; state.rowErrors.clear(); renderZLibraryAccount();
+        try {
+          const data = await api('zlibrary-accounts', {signal:state.abort.signal, botAppid:appid});
+          if (!zlibraryRequestCurrent(request, appid, generation)) return;
+          state.data = data; state.loadedAt = Date.now(); state.page = Math.min(state.page, Math.max(0, Math.ceil((data.accounts || []).length / 10) - 1));
+        } catch (error) {
+          if (!zlibraryRequestCurrent(request, appid, generation) || error.name === 'AbortError') return;
+          state.data = {accounts:[], message:'账号列表暂不可用，请稍后刷新'};
+          if (error.status === 401) showAuthError(error);
+        } finally {
+          if (zlibraryRequestCurrent(request, appid, generation)) { state.loading = false; renderZLibraryAccount(); void loadZLibraryVisibleProfiles(force); }
+        }
       };
       const qqReader = {auth:null, detailId:'', adding:false, method:'cookie', scanId:'', image:'', scanMessage:'', scanStatus:'', scanTimer:null, scanGeneration:0, scanIntent:0, scanStarting:false, scanCancel:null, keyRequest:0, keyShown:false, request:0, mutation:false, smsGeneration:0, smsStarting:false, smsActive:false, smsBusy:false, smsSent:false, smsPhone:'', smsMessage:'', smsOperation:'', smsRetryAt:0, smsTimer:null, smsAbort:null, smsCancel:null, captcha:null, captchaReject:null, modalFocus:null, modalGeneration:0, modalOverflow:null, modalRestoreFocus:true};
       const qqReaderAccount = (id = qqReader.detailId) => (qqReader.auth?.accounts || []).find((account) => String(account.id) === String(id));
@@ -1124,7 +1207,7 @@
         if (qqReader.scanId || qqReader.scanStarting) fetch(botApiUrl('qq-reader-auth/scan'), {method:'DELETE', credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({scan_id:qqReader.scanId})}).catch(() => {});
         qqReader.scanIntent += 1; qqReader.scanGeneration += 1; qqReader.scanStarting = false; qqReader.scanId = ''; qqReader.image = ''; clearTimeout(qqReader.scanTimer);
       });
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveQQReader(); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { leaveQQReader(); stopZLibraryAccount(); } else { void loadZLibraryAccount(); } });
 
        const addPanAccount = async (platform) => { const input = document.querySelector(`[data-pan-cookie="${CSS.escape(platform)}"]`); const button = document.querySelector(`[data-pan-add="${CSS.escape(platform)}"]`); const cookie = input?.value.trim(); if (!cookie) return toast('请先粘贴 Cookie'); if (button) button.disabled = true; try { await api(`pan-accounts/${encodeURIComponent(platform)}`, {method:'POST', body:JSON.stringify({cookie})}); if (input) input.value = ''; toast(`${platform}账号已保存`); await load(); } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); } finally { if (button) button.disabled = false; } };
        const startQuarkWebScan = async (button) => {
@@ -2162,7 +2245,7 @@
       };
       const exitBotConsole = (push = true) => {
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
-        void stopQuarkWebScan(); leaveQQReader(); closeMsgEvents();
+        void stopQuarkWebScan(); leaveQQReader(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;
         for (const controller of consoleRequests) controller.abort();
         consoleRequests.clear();
@@ -7366,7 +7449,7 @@
       window.addEventListener('pagehide', () => { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
-        if (document.visibilityState === 'visible') void loadBotProfile();
+        if (document.visibilityState === 'visible') { void loadBotProfile(); void loadZLibraryAccount(); }
       }, 60000);
       msgState.timer = setInterval(pollLocalMessages, 5000);
       msgState.muteTimer = setInterval(() => {

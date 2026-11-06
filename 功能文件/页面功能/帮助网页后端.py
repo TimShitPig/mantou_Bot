@@ -3046,6 +3046,25 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
         return _控制台错误(409, "群网盘选择保存失败")
 
 
+async def _处理ZLibrary账号资料(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    try:
+        import importlib
+
+        模块 = importlib.import_module("功能文件.管理功能.小说功能.小说.Z-Library小说")
+        if request.path == "/api/zlibrary-accounts":
+            摘要 = await 模块.获取ZLibrary账号列表(_当前作用域配置())
+        else:
+            摘要 = await 模块.获取ZLibrary账号摘要(_当前作用域配置(), 刷新=request.method == "POST", 账号标识=request.query.get("account_id", ""))
+        if not _请求已授权(request):
+            return _控制台错误(401, "请重新登录控制台")
+        return web.json_response({"ok": True, **摘要}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    except Exception as exc:
+        logger.warning("帮助控制台 ZLibrary账号资料读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(502, "账号资料暂不可用，请稍后刷新")
+
+
 def _QQ阅读JSON(数据: dict[str, Any]) -> web.Response:
     return web.json_response(数据, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 

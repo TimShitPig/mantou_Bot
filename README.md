@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.325-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.326-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.325 |
+| 版本 | v6.1.326 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -417,6 +417,8 @@ QQ 附件只返回文件名和大小、下载地址为空时，消息记录仍�
 `group_file_cleanup_admin_qq` 白名单内的 QQ 可使用帮助、状态、小说网盘切换、保存网盘与 QQ阅读 Cookie、ZLibrary账号创建、小说开关和群管指令。
 
 ### 自动创建 ZLibrary 账号
+
+选择机器人 → 机器人配置 → **ZLibrary 账号**，以表格查看当前机器人保存的账号：昵称、脱敏邮箱、当前使用标记、状态、VIP / Premium、今日已用/每日额度/今日剩余、创建时间、邮箱验证及资料更新时间。列表每页 10 条，支持逐行刷新和刷新列表；账号列表先显示，当前页资料后台最多两路补查，按账号缓存 60 秒。详细权限未返回时显示“接口未返回”，查询失败或缺字段显示未知，不把未知当成非 VIP。查看资料不会注册或修改账号，密码、Cookie 和认证键不会返回网页。
 
 可在本插件网页后台选择机器人后，进入“机器人配置 → ZLibrary 账号注册”填写邮箱 API Key 并保存（只写入、不回显，留空不修改）；也可在 AstrBot 插件配置填写 `zlibrary_account_settings.zlibrary_mail_api_key`。同时配置可用 MySQL；Key 默认空，禁止把真实 Key 写入源码。重载插件后，搜索或下载缺少账号时自动启动单次流程；白名单管理员可向服务器上运行的机器人发送 `测试账号`（也兼容 `注册ZLibrary` / `创建ZLibrary账号`），执行账号准备：没有账号时收码、注册、独立会话登录验证并自动保存到当前机器人的 MySQL；每次发送“测试账号”都独立注册一个新账号，收码并验证登录成功后追加保存，不使用数据库旧账号冒充本次结果，也不覆盖旧记录；注册失败明确返回失败。自动搜索、下载及旧的账号准备指令仍复用已有账号，不因额度或登录失败自动换号。邮箱域名由服务端随机选择，无需指定域名；密码和昵称自动生成。未配置 Key 或 MySQL 时不会创建邮箱；“测试账号”会分别提示邮箱 API Key 未配置、格式错误或数据库未连接，已有可用账号不要求补填邮箱 Key；发送成功后等待实际邮件验证码，超时结束，不把发码接口 HTTP 200 当作注册成功。超时时后端日志汇总 `polls`、`nonempty_polls`、`details` 和固定 `rejected` 原因计数；不记录邮箱、验证码或邮件正文。聊天只显示进度和固定结果提示，不显示邮箱、密码、Key、Token 或验证码。搜索使用 `POST /eapi/book/search`，详情读取 `/eapi/book/{id}/{hash}` 的 `dl` 字段；只下载站点提供的 TXT，不在本地转换其他格式，登录 Cookie 仅留在当前内存会话。账号注册、搜索和下载实现均位于 `功能文件/管理功能/小说功能/小说/Z-Library小说.py`。
 

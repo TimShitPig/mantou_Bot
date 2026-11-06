@@ -1941,4 +1941,33 @@
     @media (prefers-reduced-motion:reduce) {
       *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
     }
+    .zlibrary-accounts-card { margin-bottom:22px; min-width:0; }
+    .zlibrary-card-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    .zlibrary-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin:22px 0 14px; }
+    .zlibrary-toolbar-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .zlibrary-action { display:inline-flex; align-items:center; justify-content:center; padding:7px 16px; min-height:34px; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--ink); font-size:12px; font-weight:650; white-space:nowrap; }
+    .zlibrary-action:hover:not(:disabled) { background:var(--hover); border-color:var(--primary); }
+    .zlibrary-action:disabled { cursor:default; opacity:.5; }
+    .zlibrary-action:focus-visible,.zlibrary-table-scroll:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
+    .zlibrary-table-scroll { max-width:100%; max-height:min(560px,60vh); overflow:auto; scrollbar-width:thin; scrollbar-color:var(--muted) var(--raised); }
+    .zlibrary-table { width:100%; min-width:1050px; border-collapse:collapse; text-align:left; font-size:12px; }
+    .zlibrary-table th { position:sticky; top:0; z-index:1; background:var(--panel); padding:14px 16px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.3px; white-space:nowrap; border-bottom:1px solid var(--line); }
+    .zlibrary-table td { padding:20px 16px; vertical-align:middle; border-bottom:1px solid var(--line); white-space:nowrap; }
+    .zlibrary-table tbody tr:hover { background:var(--raised); }
+    .zlibrary-table tbody tr.is-exhausted { background:color-mix(in srgb,var(--yellow) 45%,transparent); }
+    .zlibrary-table th:first-child,.zlibrary-table td:first-child { padding-left:0; }
+    .zlibrary-table th:last-child,.zlibrary-table td:last-child { text-align:right; padding-right:0; }
+    .zlibrary-account-name { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .zlibrary-account-name strong { display:block; max-width:230px; overflow:hidden; text-overflow:ellipsis; font-size:13px; font-weight:650; }
+    .zlibrary-secondary { display:block; margin-top:5px; font-size:11px; font-weight:400; color:var(--muted); }
+    .zlibrary-pill { display:inline-flex; align-items:center; justify-content:center; padding:3px 11px; border:1px solid var(--line); border-radius:999px; color:var(--muted); background:transparent; font-size:11px; font-weight:650; white-space:nowrap; }
+    .zlibrary-pill.is-ok { color:var(--mint-ink); background:var(--mint); border-color:currentColor; }
+    .zlibrary-pill.is-danger { color:var(--danger); background:var(--danger-bg); border-color:var(--danger-line); }
+    .zlibrary-pill.is-warning { color:var(--yellow-ink); background:var(--yellow); border-color:currentColor; }
+    .zlibrary-pill.is-current,.zlibrary-pill.is-vip { color:var(--primary); background:var(--primary-soft); border-color:var(--primary); }
+    .zlibrary-quota > .zlibrary-pill { min-width:46px; font-variant-numeric:tabular-nums; }
+    .zlibrary-table .zlibrary-empty { padding:42px 16px; text-align:center; color:var(--muted); }
+    .zlibrary-footer { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; margin-top:16px; font-size:11px; color:var(--muted); }
+    .zlibrary-pagination { display:flex; align-items:center; gap:10px; }
+    @media (max-width:700px) { .zlibrary-accounts-card { padding:18px 16px; } .zlibrary-action { min-height:40px; } .zlibrary-table td { padding-top:17px; padding-bottom:17px; } }
     """
