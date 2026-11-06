@@ -653,9 +653,22 @@ async def _确保ZLibrary自动账号(配置: Any) -> dict[str, str] | None:
 
 
 async def _ZLibrary注册回复流(配置: Any):
+    if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
+        yield "数据库未连接，请先配置并连接数据库后重试"
+        return
     yield "正在准备账号，已有账号将直接复用，请稍等"
     账号 = await 获取ZLibrary搜索账号(配置)
-    yield "账号已就绪，已保存账号会持续复用" if 账号 else "账号准备未完成，请检查邮箱配置和数据库后重试"
+    if 账号:
+        yield "账号已就绪，已保存账号会持续复用"
+        return
+    分类 = 运行状态数据库.读取配置字段(配置, "zlibrary_account_settings") or 配置
+    api_key = str(运行状态数据库.读取配置字段(分类, "zlibrary_mail_api_key") or "").strip()
+    if not api_key:
+        yield "未配置邮箱 API Key，请在插件配置中填写后重试"
+    elif not api_key.startswith("AC-"):
+        yield "邮箱 API Key 格式不正确，请检查插件配置后重试"
+    else:
+        yield "账号准备未完成，请稍后重试"
 
 
 async def _ZLibrary静默回复流():

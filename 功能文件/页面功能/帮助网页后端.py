@@ -437,6 +437,14 @@ async def _后台刷新消息列表(
         "kind": "secret",
         "secret": True,
     },
+    "zlibrary_mail_api_key": {
+        "category": "zlibrary_account_settings",
+        "label": "ZLibrary 邮箱 API Key",
+        "kind": "secret",
+        "secret": True,
+        "placeholder": "输入 AC- 开头的邮箱 API Key",
+        "hint": "只写入、不回显；留空保持原值。保存后可发送“测试账号”，已有账号继续复用。",
+    },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
         "label": "UC 上传目录",
@@ -515,6 +523,7 @@ async def _后台刷新消息列表(
 }
 
 配置字段分类显示名 = {
+    "zlibrary_account_settings": "ZLibrary 账号注册",
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
     "uc_pan_settings": "UC 网盘",
@@ -763,6 +772,8 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             raise ValueError("敏感字段不能为空")
         if len(文本) > 20000:
             raise ValueError("配置值过长")
+        if 字段名 == "zlibrary_mail_api_key" and not re.fullmatch(r"AC-[A-Za-z0-9_-]{1,256}", 文本):
+            raise ValueError("邮箱 API Key 格式无效")
         return 文本
     if kind == "admin_list":
         原列表 = 值 if isinstance(值, list) else re.split(r"[,，\n\r\s]+", str(值 or ""))
