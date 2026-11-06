@@ -114,7 +114,7 @@
       "zlibrary_mail_api_key": {
         "description": "215邮箱 API Key",
         "type": "string",
-        "hint": "填写邮箱服务的 AC- API Key；仅用于管理员主动创建账号，不在聊天或帮助控制台回显。每次创建使用随机邮箱域名。",
+        "hint": "填写邮箱服务的 AC- API Key；搜索或下载缺少账号时自动创建并验证一个账号，已有账号长期复用，额度耗尽不换号。不在聊天或帮助控制台回显。创建时使用随机邮箱域名。",
         "default": ""
       },
       "zlibrary_registration_rx": {

@@ -1921,7 +1921,10 @@ async def _聚合搜索未缓存(
         ) -> Awaitable[list[Any]]:
             if 平台 not in 允许平台集合:
                 return _空搜索结果()
-            return _限时搜索(日志平台 or 平台, 工厂())
+            return _限时搜索(
+                日志平台 or 平台, 工厂(),
+                超时秒数=330 if 平台 == "ZLibrary" else 找书单平台超时秒数,
+            )
 
         搜索任务 = (
             平台搜索任务("番茄", lambda: 搜索番茄(session, 关键词, 需要数量=数量)),
