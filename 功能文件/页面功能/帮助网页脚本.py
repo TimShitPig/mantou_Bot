@@ -708,33 +708,51 @@
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
       };
-      const zlibraryAccountState = {request:0, abort:null, appid:'', data:null, loadedAt:0, loading:false, page:0, busy:new Set(), rowErrors:new Set()};
+      const zlibraryAccountState = {request:0, abort:null, appid:'', data:null, loadedAt:0, loading:false, page:0, busy:new Set(), rowErrors:new Set(), filter:'all', search:''};
       const stopZLibraryAccount = (clear = false) => {
         const state = zlibraryAccountState;
         state.request += 1; state.abort?.abort(); state.abort = null; state.loading = false; state.busy.clear();
-        if (clear) { state.appid = ''; state.data = null; state.loadedAt = 0; state.page = 0; state.rowErrors.clear(); $('zlibrary-account-editor')?.replaceChildren(); }
+        if (clear) { state.appid = ''; state.data = null; state.loadedAt = 0; state.page = 0; state.filter = 'all'; state.search = ''; state.rowErrors.clear(); $('zlibrary-account-editor')?.replaceChildren(); }
       };
-      const zlibraryVisibleAccounts = () => (zlibraryAccountState.data?.accounts || []).slice(zlibraryAccountState.page * 10, (zlibraryAccountState.page + 1) * 10);
+      const zlibraryFilteredAccounts = () => {
+        const state = zlibraryAccountState, query = state.search.trim().toLocaleLowerCase();
+        return (state.data?.accounts || []).filter((account) => {
+          const profile = account.profile || {}, paused = (profile.available === true && profile.downloads_remaining === 0) || (account.quota_paused && !(profile.available === true && profile.downloads_remaining > 0));
+          const matches = state.filter === 'all' || (state.filter === 'paused' ? paused : account.status === 'logged_in' && !paused);
+          return matches && (!query || [account.name, account.email, profile.name].some((value) => String(value || '').toLocaleLowerCase().includes(query)));
+        });
+      };
+      const zlibraryVisibleAccounts = () => zlibraryFilteredAccounts().slice(zlibraryAccountState.page * 10, (zlibraryAccountState.page + 1) * 10);
       const renderZLibraryAccount = () => {
         const host = $('zlibrary-account-editor'); if (!host) return;
         const scroll = host.querySelector('.zlibrary-table-scroll'), scrollTop = scroll?.scrollTop || 0, scrollLeft = scroll?.scrollLeft || 0;
         const focused = host.contains(document.activeElement) ? document.activeElement : null;
-        const focusKey = focused?.dataset.zlibraryRow;
+        const focusKey = focused?.dataset.zlibraryRow, searchFocused = focused?.hasAttribute('data-zlibrary-search'), selection = searchFocused ? [focused.selectionStart, focused.selectionEnd] : null;
         const state = zlibraryAccountState, accounts = state.data?.accounts || [];
+        state.page = Math.min(state.page, Math.max(0, Math.ceil(zlibraryFilteredAccounts().length / 10) - 1));
         const value = (number) => Number.isSafeInteger(number) && number >= 0 ? number.toLocaleString('zh-CN') : '未知';
         const pill = (text, kind = '') => `<span class="zlibrary-pill ${kind}">${esc(text)}</span>`;
         const rows = zlibraryVisibleAccounts().map((account) => {
           const profile = account.profile || {}, ready = account.status === 'logged_in', busy = state.busy.has(account.id);
           const failed = state.rowErrors.has(account.id) || profile.available === false;
-          const exhausted = profile.available === true && profile.downloads_remaining === 0;
-          const status = busy ? '查询中' : !ready ? '待完成' : failed ? '查询失败' : exhausted ? '额度用尽' : profile.available ? '正常' : '待查询';
+          const exhausted = (profile.available === true && profile.downloads_remaining === 0) || (account.quota_paused && !(profile.available === true && profile.downloads_remaining > 0));
+          const status = busy ? '查询中' : !ready ? '待完成' : exhausted ? '已暂停' : failed ? '查询失败' : profile.available ? '正常' : '待查询';
           const vip = typeof profile.is_vip === 'boolean' ? (profile.is_vip ? 'VIP / Premium' : '普通账号') : '未知';
-          return `<tr class="${exhausted ? 'is-exhausted' : ''}" data-zlibrary-account="${esc(account.id)}"><td><div class="zlibrary-account-name"><strong>${esc(profile.name || account.name || '未返回昵称')}</strong>${account.is_current ? pill('当前使用','is-current') : ''}</div><small class="zlibrary-secondary">${esc(account.email_masked || '未知邮箱')}</small></td><td>${pill(status, failed ? 'is-danger' : exhausted ? 'is-warning' : profile.available ? 'is-ok' : '')}</td><td>${pill(vip, profile.is_vip === true ? 'is-vip' : '')}</td><td class="zlibrary-quota">${pill(value(profile.downloads_remaining), exhausted ? 'is-danger' : profile.available ? 'is-ok' : '')}<small class="zlibrary-secondary">已用 ${esc(value(profile.downloads_today))} / ${esc(value(profile.downloads_limit))}</small></td><td>${esc(qqReaderDate(account.created_at))}</td><td>${typeof profile.email_confirmed === 'boolean' ? (profile.email_confirmed ? '已验证' : '未验证') : '未知'}<small class="zlibrary-secondary">详细权限：接口未返回</small></td><td>${esc(profile.checked_at ? qqReaderDate(profile.checked_at) : '尚未查询')}</td><td><button class="zlibrary-action" type="button" data-zlibrary-row="${esc(account.id)}" ${!ready || busy || state.loading ? 'disabled' : ''}>${busy ? '查询中…' : '刷新'}</button></td></tr>`;
+          return `<tr class="${exhausted ? 'is-exhausted' : ''}" data-zlibrary-account="${esc(account.id)}"><td><div class="zlibrary-account-name"><strong>${esc(account.email || '未知邮箱')}</strong>${account.is_current ? pill('当前使用','is-current') : ''}</div></td><td>${pill(status, failed ? 'is-danger' : exhausted ? 'is-warning' : profile.available ? 'is-ok' : '')}</td><td>${pill(vip, profile.is_vip === true ? 'is-vip' : '')}</td><td class="zlibrary-quota">${pill(value(profile.downloads_remaining), exhausted ? 'is-danger' : profile.available ? 'is-ok' : '')}<small class="zlibrary-secondary">已用 ${esc(value(profile.downloads_today))} / ${esc(value(profile.downloads_limit))}${exhausted ? ' · 等待恢复' : ''}</small></td><td>${esc(qqReaderDate(account.created_at))}</td><td>${typeof profile.email_confirmed === 'boolean' ? (profile.email_confirmed ? '已验证' : '未验证') : '未知'}<small class="zlibrary-secondary">详细权限：接口未返回</small></td><td>${esc(profile.checked_at ? qqReaderDate(profile.checked_at) : '尚未查询')}</td><td><button class="zlibrary-action" type="button" data-zlibrary-row="${esc(account.id)}" ${!ready || busy || state.loading ? 'disabled' : ''}>${busy ? '查询中…' : '刷新'}</button></td></tr>`;
         }).join('');
-        const pages = Math.max(1, Math.ceil(accounts.length / 10));
-        host.innerHTML = `<div class="zlibrary-toolbar"><div class="zlibrary-toolbar-summary">${pill('全部 ' + accounts.length)}${pill('已验证 ' + accounts.filter((account) => account.status === 'logged_in').length, 'is-ok')}${pill('未完成 ' + accounts.filter((account) => account.status !== 'logged_in').length)}</div><button class="zlibrary-action" type="button" data-zlibrary-refresh ${state.loading ? 'disabled' : ''}>${state.loading ? '读取中…' : '刷新列表'}</button></div><div class="zlibrary-table-scroll" role="region" aria-label="ZLibrary 账号列表" tabindex="0"><table class="zlibrary-table"><thead><tr><th scope="col">账号信息</th><th scope="col">状态</th><th scope="col">会员</th><th scope="col">今日剩余 / 额度</th><th scope="col">创建时间</th><th scope="col">验证 / 权限</th><th scope="col">资料更新时间</th><th scope="col">操作</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="zlibrary-empty">${esc(state.data?.message || (state.loading ? '正在读取账号…' : '暂无账号，发送“测试账号”注册并保存'))}</td></tr>`}</tbody></table></div><div class="zlibrary-footer"><span role="status">${esc(state.data?.message || '额度由平台每日刷新；资料自动更新，也可逐行刷新。')}</span><div class="zlibrary-pagination"><button class="zlibrary-action" type="button" data-zlibrary-page="-1" ${state.page <= 0 ? 'disabled' : ''} aria-label="上一页账号">上一页</button><span>${state.page + 1} / ${pages}</span><button class="zlibrary-action" type="button" data-zlibrary-page="1" ${state.page + 1 >= pages ? 'disabled' : ''} aria-label="下一页账号">下一页</button></div></div>`;
+        const filtered = zlibraryFilteredAccounts(), pages = Math.max(1, Math.ceil(filtered.length / 10));
+        host.innerHTML = `<div class="zlibrary-toolbar"><div class="zlibrary-tabs" role="group" aria-label="筛选账号">${[['all','全部账号'],['available','可选账号'],['paused','已暂停']].map(([key,label]) => `<button class="zlibrary-tab ${state.filter === key ? 'is-active' : ''}" type="button" data-zlibrary-filter="${key}" aria-pressed="${state.filter === key}">${label}<span>${key === 'all' ? accounts.length : accounts.filter((row) => { const p = row.profile || {}, paused = (p.available === true && p.downloads_remaining === 0) || (row.quota_paused && !(p.available === true && p.downloads_remaining > 0)); return key === 'paused' ? paused : row.status === 'logged_in' && !paused; }).length}</span></button>`).join('')}</div><div class="zlibrary-toolbar-tools"><label class="zlibrary-search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m12 12 5 5"/></svg><input type="search" data-zlibrary-search aria-label="搜索账号昵称或邮箱" placeholder="搜索账号" value="${esc(state.search)}"></label><button class="zlibrary-action" type="button" data-zlibrary-refresh ${state.loading ? 'disabled' : ''}>${state.loading ? '读取中…' : '刷新列表'}</button></div></div><div class="zlibrary-table-scroll" role="region" aria-label="ZLibrary 账号列表" tabindex="0"><table class="zlibrary-table"><thead><tr><th scope="col">账号信息</th><th scope="col">状态</th><th scope="col">会员</th><th scope="col">今日剩余 / 额度</th><th scope="col">创建时间</th><th scope="col">验证 / 权限</th><th scope="col">资料更新时间</th><th scope="col">操作</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="zlibrary-empty">${esc(state.data?.message || (state.loading ? '正在读取账号…' : accounts.length ? '没有匹配的账号' : '暂无账号，发送“测试账号”注册并保存'))}</td></tr>`}</tbody></table></div><div class="zlibrary-footer"><span role="status">${esc(state.data?.message || '额度耗尽自动暂停，平台额度恢复后重新使用。')}</span><div class="zlibrary-pagination"><button class="zlibrary-action" type="button" data-zlibrary-page="-1" ${state.page <= 0 ? 'disabled' : ''} aria-label="上一页账号">上一页</button><span>${state.page + 1} / ${pages}</span><button class="zlibrary-action" type="button" data-zlibrary-page="1" ${state.page + 1 >= pages ? 'disabled' : ''} aria-label="下一页账号">下一页</button></div></div>`;
         const restoredScroll = host.querySelector('.zlibrary-table-scroll'); if (restoredScroll) { restoredScroll.scrollTop = scrollTop; restoredScroll.scrollLeft = scrollLeft; }
+        if (searchFocused) { const input = host.querySelector('[data-zlibrary-search]'); input?.focus({preventScroll:true}); input?.setSelectionRange(...selection); }
         if (focusKey) host.querySelector(`[data-zlibrary-row="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+        host.querySelectorAll('[data-zlibrary-filter]').forEach((node) => node.addEventListener('click', () => {
+          stopZLibraryAccount(); state.filter = node.dataset.zlibraryFilter; state.page = 0; state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false);
+        }));
+        host.querySelector('[data-zlibrary-search]')?.addEventListener('input', (event) => {
+          const start = event.target.selectionStart; state.search = event.target.value; state.page = 0; renderZLibraryAccount();
+          const input = host.querySelector('[data-zlibrary-search]'); input?.focus({preventScroll:true}); input?.setSelectionRange(start,start);
+          void loadZLibraryVisibleProfiles(false);
+        });
         host.querySelector('[data-zlibrary-refresh]')?.addEventListener('click', () => { void loadZLibraryAccount(true); });
         host.querySelectorAll('[data-zlibrary-row]').forEach((node) => node.addEventListener('click', () => { void refreshZLibraryRow(node.dataset.zlibraryRow, true); }));
         host.querySelectorAll('[data-zlibrary-page]').forEach((node) => node.addEventListener('click', () => {
@@ -751,7 +769,10 @@
           const path = force ? 'zlibrary-account/refresh' : 'zlibrary-account';
           const data = await api(`${path}?account_id=${encodeURIComponent(id)}`, {method:force ? 'POST' : 'GET', signal:state.abort.signal, botAppid:appid});
           if (!zlibraryRequestCurrent(request, appid, generation)) return;
-          if (data.account?.id === id && data.profile) account.profile = data.profile;
+          if (data.account?.id === id && data.profile) {
+            account.profile = data.profile; account.quota_paused = data.account.quota_paused === true;
+            if (typeof data.current_account_id === 'string') state.data.accounts.forEach((row) => { row.is_current = row.id === data.current_account_id; });
+          }
           else state.rowErrors.add(id);
         } catch (error) {
           if (!zlibraryRequestCurrent(request, appid, generation) || error.name === 'AbortError') return;
@@ -781,7 +802,7 @@
         try {
           const data = await api('zlibrary-accounts', {signal:state.abort.signal, botAppid:appid});
           if (!zlibraryRequestCurrent(request, appid, generation)) return;
-          state.data = data; state.loadedAt = Date.now(); state.page = Math.min(state.page, Math.max(0, Math.ceil((data.accounts || []).length / 10) - 1));
+          state.data = data; state.loadedAt = Date.now(); state.page = Math.min(state.page, Math.max(0, Math.ceil(zlibraryFilteredAccounts().length / 10) - 1));
         } catch (error) {
           if (!zlibraryRequestCurrent(request, appid, generation) || error.name === 'AbortError') return;
           state.data = {accounts:[], message:'账号列表暂不可用，请稍后刷新'};
