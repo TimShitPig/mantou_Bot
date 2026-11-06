@@ -515,16 +515,19 @@ async def 自动创建ZLibrary账号(
     return 尝试ID
 
 
-async def _注册并保存ZLibrary账号(配置: Any) -> str:
+async def _注册并保存ZLibrary账号(配置: Any) -> dict[str, str] | None:
     分类 = 运行状态数据库.读取配置字段(配置, "zlibrary_account_settings") or 配置
     api_key = str(运行状态数据库.读取配置字段(分类, "zlibrary_mail_api_key") or "").strip()
     rx = str(运行状态数据库.读取配置字段(分类, "zlibrary_registration_rx") or "215").strip()
     if not api_key:
-        return "请先配置邮箱 API Key"
+        return None
     if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
-        return "请先配置并连接数据库"
+        return None
+
+    本次账号: dict[str, str] | None = None
 
     async def 保存(标识: str, 数据: dict[str, Any]) -> None:
+        nonlocal 本次账号
         await asyncio.to_thread(
             运行状态数据库.写入运行状态值,
             配置,
@@ -532,6 +535,8 @@ async def _注册并保存ZLibrary账号(配置: Any) -> str:
             标识,
             json.dumps(数据, ensure_ascii=False),
         )
+        if 数据.get("status") == "logged_in":
+            本次账号 = {"email": 数据["email"], "password": 数据["password"]}
 
     try:
         await 自动创建ZLibrary账号(api_key, 保存, rx)
@@ -542,11 +547,11 @@ async def _注册并保存ZLibrary账号(配置: Any) -> str:
             exc.状态,
             exc.http状态,
         )
-        return "账号创建流程未完成，请稍后再试"
+        return None
     except Exception as exc:
         logger.warning("ZLibrary创建账号失败：类型=%s", type(exc).__name__)
-        return "账号创建流程未完成，请稍后再试"
-    return "账号注册成功，登录返回成功，账号已保存到数据库"
+        return None
+    return 本次账号
 
 
 async def 获取ZLibrary搜索账号(配置: Any, *, 自动注册: bool = True) -> dict[str, str] | None:
@@ -599,8 +604,12 @@ def _ZLibrary注册配置快照(配置: Any) -> tuple[str, dict[str, Any]]:
     return 作用域, 快照
 
 
-async def _准备ZLibrary自动账号(配置: dict[str, Any]) -> dict[str, str] | None:
+async def _准备ZLibrary自动账号(
+    配置: dict[str, Any], *, 手动测试: bool = False,
+) -> dict[str, str] | None:
     async with asyncio.timeout(240):
+        if 手动测试:
+            return await _注册并保存ZLibrary账号(配置)
         # 并发等待者可能已由前一流程完成注册；创建前再查一次。
         已有 = await 获取ZLibrary搜索账号(配置, 自动注册=False)
         if 已有:
@@ -629,11 +638,11 @@ async def _准备ZLibrary自动账号(配置: dict[str, Any]) -> dict[str, str] 
                 标识, json.dumps(账号, ensure_ascii=False),
             )
         else:
-            await _注册并保存ZLibrary账号(配置)
+            return await _注册并保存ZLibrary账号(配置)
         return await 获取ZLibrary搜索账号(配置, 自动注册=False)
 
 
-async def _确保ZLibrary自动账号(配置: Any) -> dict[str, str] | None:
+async def _确保ZLibrary自动账号(配置: Any, *, 手动测试: bool = False) -> dict[str, str] | None:
     if _ZLibrary账号停止:
         return None
     try:
@@ -641,13 +650,16 @@ async def _确保ZLibrary自动账号(配置: Any) -> dict[str, str] | None:
     except Exception as exc:
         logger.warning("ZLibrary账号配置未就绪：错误类型=%s", type(exc).__name__)
         return None
+    if 手动测试:
+        # 每次明确指令独立注册；自动任务仍按机器人/数据库合并及冷却。
+        作用域 += ":test:" + uuid.uuid4().hex
     任务 = ZLibrary自动注册任务.get(作用域)
     if 任务 is None or 任务.done():
         if ZLibrary注册失败冷却.get(作用域, 0.0) > time.monotonic():
             return None
         async def 执行():
             try:
-                账号 = await _准备ZLibrary自动账号(快照)
+                账号 = await _准备ZLibrary自动账号(快照, 手动测试=手动测试)
                 if not 账号:
                     ZLibrary注册失败冷却[作用域] = time.monotonic() + 60
                 return 账号
@@ -673,14 +685,16 @@ async def _确保ZLibrary自动账号(配置: Any) -> dict[str, str] | None:
     return await asyncio.shield(任务)
 
 
-async def _ZLibrary注册回复流(配置: Any):
+async def _ZLibrary注册回复流(配置: Any, *, 手动测试: bool = False):
     if await asyncio.to_thread(运行状态数据库.检查运行状态数据库, 配置) != "正常":
         yield "数据库未连接，请先配置并连接数据库后重试"
         return
-    yield "正在准备账号，已有账号将直接复用，请稍等"
-    账号 = await 获取ZLibrary搜索账号(配置)
+    yield "正在注册新账号并验证登录，请稍等" if 手动测试 else "正在准备账号，已有账号将直接复用，请稍等"
+    账号 = None if 手动测试 else await 获取ZLibrary搜索账号(配置, 自动注册=False)
+    if not 账号:
+        账号 = await _确保ZLibrary自动账号(配置, 手动测试=手动测试)
     if 账号:
-        yield "账号已就绪，已保存账号会持续复用"
+        yield "新账号注册及登录验证成功，已自动保存到数据库" if 手动测试 else "账号已就绪，已保存账号会持续复用"
         return
     分类 = 运行状态数据库.读取配置字段(配置, "zlibrary_account_settings") or 配置
     api_key = str(运行状态数据库.读取配置字段(分类, "zlibrary_mail_api_key") or "").strip()
@@ -702,7 +716,7 @@ def 获取ZLibrary账号回复流(event: Any, 命令文本: str, 配置: Any):
         return None
     if not 权限工具.是QQ官方机器人(event) or not 权限工具.是群文件清理管理员(event, 配置):
         return _ZLibrary静默回复流()
-    return _ZLibrary注册回复流(配置)
+    return _ZLibrary注册回复流(配置, 手动测试=str(命令文本).strip() == "测试账号")
 
 
 async def 停止ZLibrary账号任务() -> None:
