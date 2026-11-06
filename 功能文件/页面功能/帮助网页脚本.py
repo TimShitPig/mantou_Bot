@@ -826,7 +826,7 @@
       const loadZLibraryAccount = async (force = false) => {
         if (!consoleAppid || activeView !== 'bot' || document.visibilityState === 'hidden') return;
         const state = zlibraryAccountState;
-        if (state.mutating || (state.loading && !force)) return;
+        if (state.modal || state.mutating || (state.loading && !force)) return;
         if (!force && state.appid === consoleAppid && state.data && Date.now() - state.loadedAt < 60000) {
           if (!state.abort) state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false); return;
         }
