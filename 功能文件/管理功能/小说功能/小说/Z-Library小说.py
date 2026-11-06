@@ -280,21 +280,6 @@ def _提取ZLibrary验证码(
         for 收件人 in 收件人列表
     ):
         return 拒绝("recipient_mismatch")
-    发件人 = 邮件.get("from")
-    发件地址 = 发件人.get("address", "") if isinstance(发件人, dict) else ""
-    发件域名 = str(发件地址).rsplit("@", 1)[-1].lower()
-    if not any(
-        发件域名 == 域名 or 发件域名.endswith("." + 域名)
-        for 域名 in ("libb.la", "z-lib.fm", "1lib.sk", "z-lib.gl", "z-library.im")
-    ):
-        return 拒绝("sender_untrusted")
-    主题 = str(邮件.get("subject", ""))
-    if not re.search(
-        r"verification|verify|confirmation|confirm|sign.?up|registration|验证码|验证|注册|确认码|確認碼",
-        主题,
-        re.I,
-    ):
-        return 拒绝("subject_unmatched")
     验证码 = 邮件.get("verificationCode")
     if isinstance(验证码, str) and re.fullmatch(r"[0-9]{4}", 验证码):
         return 验证码
