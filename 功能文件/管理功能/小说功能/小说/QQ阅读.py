@@ -4349,10 +4349,13 @@ async def 下载QQ阅读第三方正文(
                 payload = await response.json(content_type=None)
 
         if not isinstance(payload, dict):
-            raise RuntimeError("第三方正文响应格式无效")
+            raise _QQ阅读正文响应错误("响应包无效")
         result_code = payload.get("code")
         if result_code not in (None, "") and _安全整数(result_code, -1) != 0:
-            raise RuntimeError("第三方正文接口业务失败")
+            raise _QQ阅读正文响应错误(
+                "接口业务失败", http_status=response.status,
+                code=_规范QQ阅读正文业务码(result_code)
+            )
         chapter_contents = payload.get("data")
         if not isinstance(chapter_contents, list) or len(chapter_contents) != len(
             range_items
@@ -4369,7 +4372,7 @@ async def 下载QQ阅读第三方正文(
                 if isinstance(chapter_contents, list)
                 else "响应格式无效",
             )
-            raise RuntimeError("第三方正文章节数量不完整")
+            raise _QQ阅读正文响应错误("响应缺失")
 
         for offset, chapter_content in enumerate(chapter_contents):
             if isinstance(chapter_content, dict):
@@ -4381,7 +4384,7 @@ async def 下载QQ阅读第三方正文(
                 )
             text = str(chapter_content or "").strip()
             if not text:
-                raise RuntimeError("第三方正文返回空章节")
+                raise _QQ阅读正文响应错误("响应缺失")
             contents_by_source_index[range_start + offset] = text
 
     connector = aiohttp.TCPConnector(
@@ -4395,16 +4398,24 @@ async def 下载QQ阅读第三方正文(
         connector=connector,
         trust_env=True,
     ) as client:
-        await asyncio.gather(
-            *(fetch_range(client, start, end, items) for start, end, items in tasks)
-        )
+        请求任务 = [
+            asyncio.create_task(fetch_range(client, start, end, items))
+            for start, end, items in tasks
+        ]
+        try:
+            await asyncio.gather(*请求任务)
+        finally:
+            for 请求任务项 in 请求任务:
+                if not 请求任务项.done():
+                    请求任务项.cancel()
+            await asyncio.gather(*请求任务, return_exceptions=True)
 
     chapters: list[dict[str, Any]] = []
     for position, item in enumerate(catalog, start=1):
         source_index = _安全整数(item.get("_qq_source_index"), position)
         text = contents_by_source_index.get(source_index, "")
         if not text:
-            raise RuntimeError("第三方正文缺少章节")
+            raise _QQ阅读正文响应错误("响应缺失")
         chapters.append({**item, "content": text})
     return chapters
 
@@ -5486,7 +5497,26 @@ async def _生成固定账号QQ阅读下载回复流(
 
             stage = "content"
             if 使用第三方正文:
-                chapters = await 下载QQ阅读第三方正文(book_id, catalog)
+                try:
+                    chapters = await 下载QQ阅读第三方正文(book_id, catalog)
+                except (RuntimeError, ValueError, aiohttp.ClientError, asyncio.TimeoutError) as 正文异常:
+                    # 正文服务可能只提供免费部分。丢弃数量不完整的批次，
+                    # 按官方目录费用和免费边界重取，不能把缺失前后的正文顺移。
+                    免费目录 = 获取QQ阅读可下载目录(details, catalog, False)
+                    if not 免费目录 or len(免费目录) >= len(catalog):
+                        raise
+                    logger.warning(
+                        "QQ阅读正文回退免费章节：书籍编号=%s, 原始章节数=%s, "
+                        "免费章节数=%s, 跳过章节数=%s, 错误类型=%s, 错误分类=%s, code=%s",
+                        book_id, len(catalog), len(免费目录), len(catalog) - len(免费目录),
+                        type(正文异常).__name__,
+                        正文异常.category if isinstance(正文异常, _QQ阅读正文响应错误) else "source_failed",
+                        正文异常.code if isinstance(正文异常, _QQ阅读正文响应错误) else "",
+                    )
+                    catalog = 免费目录
+                    details["chapters"] = len(catalog)
+                    yield "部分章节暂不可获取，本次仅下载免费章节。"
+                    chapters = await 下载QQ阅读第三方正文(book_id, catalog)
             else:
                 chapters = (
                     await 下载参考出版书正文(book_id, catalog, session)
@@ -5525,7 +5555,12 @@ async def _生成固定账号QQ阅读下载回复流(
         yield 文件发送失败提示
     except Exception as exc:
         logger.warning(
-            f"QQ阅读参考下载失败：书籍编号={book_id}, 阶段={stage}, 错误={type(exc).__name__}"
+            "QQ阅读参考下载失败：书籍编号=%s, 阶段=%s, 错误=%s, 错误分类=%s, http_status=%s, code=%s",
+            book_id, stage, type(exc).__name__,
+            exc.category if isinstance(exc, _QQ阅读正文响应错误) else "unknown",
+            exc.http_status if isinstance(exc, _QQ阅读正文响应错误)
+            else exc.status if isinstance(exc, aiohttp.ClientResponseError) else "",
+            exc.code if isinstance(exc, _QQ阅读正文响应错误) else "",
         )
         yield 下载失败提示
 
