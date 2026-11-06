@@ -708,56 +708,91 @@
         $('updated').textContent = '刚刚更新';
         document.querySelectorAll('[data-switch]').forEach((node) => node.addEventListener('click', () => changeNovel(node)));
       };
-      const zlibraryAccountState = {request:0, abort:null, appid:'', data:null, loadedAt:0, loading:false, page:0, busy:new Set(), rowErrors:new Set(), filter:'all', search:''};
+      const zlibraryAccountState = {request:0, abort:null, appid:'', data:null, loadedAt:0, loading:false, page:0, busy:new Set(), rowErrors:new Set(), filter:'all', search:'', group:'', selected:new Set(), mutating:false, modal:null};
+      const closeZLibraryDialog = () => {
+        const state = zlibraryAccountState, modal = state.modal; if (!modal) return;
+        state.modal = null; modal.node.querySelectorAll('textarea,input[type=password]').forEach((el) => { el.value = ''; });
+        if ($('toast')?.parentElement === modal.node) document.body.appendChild($('toast'));
+        const appid=state.appid,detailId=modal.focus?.dataset.zlibraryDetail;
+        modal.node.close(); modal.node.remove();
+        queueMicrotask(()=>{if(activeView!=='bot'||consoleAppid!==appid)return;const target=modal.focus?.isConnected?modal.focus:detailId?$('zlibrary-account-editor')?.querySelector(`[data-zlibrary-detail="${CSS.escape(detailId)}"]`):$('zlibrary-account-editor')?.querySelector('[data-zlibrary-open]');target?.focus({preventScroll:true});});
+      };
       const stopZLibraryAccount = (clear = false) => {
         const state = zlibraryAccountState;
-        state.request += 1; state.abort?.abort(); state.abort = null; state.loading = false; state.busy.clear();
-        if (clear) { state.appid = ''; state.data = null; state.loadedAt = 0; state.page = 0; state.filter = 'all'; state.search = ''; state.rowErrors.clear(); $('zlibrary-account-editor')?.replaceChildren(); }
+        state.request += 1; state.abort?.abort(); state.abort = null; state.loading = false; state.busy.clear(); state.mutating = false; closeZLibraryDialog();
+        if (clear) { state.appid = ''; state.data = null; state.loadedAt = 0; state.page = 0; state.filter = 'all'; state.search = ''; state.group = ''; state.selected.clear(); state.rowErrors.clear(); $('zlibrary-account-editor')?.replaceChildren(); }
       };
+      const zlibraryPaused = (account) => { const p=account.profile || {}; return (p.available === true && p.downloads_remaining === 0) || (account.quota_paused && !(p.available === true && p.downloads_remaining > 0)); };
       const zlibraryFilteredAccounts = () => {
-        const state = zlibraryAccountState, query = state.search.trim().toLocaleLowerCase();
-        return (state.data?.accounts || []).filter((account) => {
-          const profile = account.profile || {}, paused = (profile.available === true && profile.downloads_remaining === 0) || (account.quota_paused && !(profile.available === true && profile.downloads_remaining > 0));
-          const matches = state.filter === 'all' || (state.filter === 'paused' ? paused : account.status === 'logged_in' && !paused);
-          return matches && (!query || [account.name, account.email, profile.name].some((value) => String(value || '').toLocaleLowerCase().includes(query)));
+        const state=zlibraryAccountState, query=state.search.trim().toLocaleLowerCase();
+        return (state.data?.accounts || []).filter((a) => (state.filter==='all' || (state.filter==='paused' ? zlibraryPaused(a) : state.filter==='disabled' ? a.enabled===false : a.status==='logged_in' && a.enabled!==false && !zlibraryPaused(a))) && (!state.group || a.group===state.group) && (!query || [a.email,a.name,a.note,a.group,a.profile?.name].some((x)=>String(x || '').toLocaleLowerCase().includes(query))));
+      };
+      const zlibraryVisibleAccounts = () => zlibraryFilteredAccounts().slice(zlibraryAccountState.page*10,(zlibraryAccountState.page+1)*10);
+      const zlibraryNumber = (n) => Number.isSafeInteger(n) && n>=0 ? n.toLocaleString('zh-CN') : '未知';
+      const zlibraryStatus = (a) => a.enabled===false ? '手动停用' : a.status!=='logged_in' ? '待完成' : zlibraryPaused(a) ? '额度耗尽' : a.profile?.available===false ? '查询失败' : a.profile?.available ? '正常' : '待查询';
+      const renderZLibraryAccount = () => {
+        const host=$('zlibrary-account-editor'); if (!host) return;
+        const s=zlibraryAccountState, accounts=s.data?.accounts || [], old=host.querySelector('.zlibrary-table-scroll'), left=old?.scrollLeft || 0, top=old?.scrollTop || 0;
+        const focus=host.contains(document.activeElement) ? document.activeElement : null, isSearch=focus?.hasAttribute('data-zlibrary-search'), caret=isSearch ? [focus.selectionStart,focus.selectionEnd] : null;
+        const focusId=focus?.dataset.zlibraryRow;
+        s.page=Math.min(s.page,Math.max(0,Math.ceil(zlibraryFilteredAccounts().length/10)-1));
+        const visible=zlibraryVisibleAccounts(), count=s.selected.size, disabled=s.mutating || s.loading;
+        const pill=(text,kind='')=>`<span class="zlibrary-pill ${kind}">${esc(text)}</span>`;
+        const rows=visible.map((a)=>{const p=a.profile || {}, busy=s.busy.has(a.id), ready=a.status==='logged_in', paused=zlibraryPaused(a);
+          return `<tr data-zlibrary-account="${esc(a.id)}" class="${s.selected.has(a.id)?'is-selected':paused?'is-exhausted':''}"><td><input type="checkbox" data-zlibrary-check="${esc(a.id)}" aria-label="选择 ${esc(a.email)}" ${s.selected.has(a.id)?'checked':''} ${disabled?'disabled':''}></td><td><button type="button" class="zlibrary-email" data-zlibrary-detail="${esc(a.id)}">${esc(a.email)}</button><div class="zlibrary-account-name">${a.is_current?pill('当前使用','is-current'):''}${a.is_preferred?pill('首选','is-current'):''}<small class="zlibrary-secondary">${esc(a.note || a.name || '未设置备注')}</small></div></td><td>${pill(busy?'查询中':zlibraryStatus(a),a.enabled===false?'':paused?'is-warning':p.available===false?'is-danger':p.available?'is-ok':'')}</td><td>${pill(typeof p.is_vip==='boolean'?(p.is_vip?'VIP / Premium':'普通账号'):'未知',p.is_vip?'is-vip':'')}<small class="zlibrary-secondary">${esc(a.group || '未分组')}</small></td><td class="zlibrary-quota">${pill(zlibraryNumber(p.downloads_remaining),paused?'is-danger':p.available?'is-ok':'')}<small class="zlibrary-secondary">已用 ${esc(zlibraryNumber(p.downloads_today))} / ${esc(zlibraryNumber(p.downloads_limit))}</small></td><td>${esc(qqReaderDate(a.created_at))}<small class="zlibrary-secondary">更新：${esc(p.checked_at?qqReaderDate(p.checked_at):'尚未查询')}</small></td><td><div class="zlibrary-row-actions"><button class="zlibrary-action" data-zlibrary-detail="${esc(a.id)}" type="button">查看 / 编辑</button><button class="zlibrary-action" data-zlibrary-row="${esc(a.id)}" type="button" ${!ready||busy||disabled?'disabled':''}>${busy?'查询中…':'刷新'}</button></div></td></tr>`;
+        }).join('');
+        host.innerHTML=`<div class="zlibrary-manager-tools"><div><button class="zlibrary-action is-primary" data-zlibrary-open="import" type="button" ${disabled?'disabled':''}>＋ 添加 / 批量导入</button><button class="zlibrary-action" data-zlibrary-export type="button">导出列表</button><button class="zlibrary-action" data-zlibrary-open="help" type="button">如何使用</button></div><button class="zlibrary-action" data-zlibrary-refresh type="button" ${disabled?'disabled':''}>${s.loading?'读取中…':'刷新列表'}</button></div><div class="zlibrary-toolbar"><div class="zlibrary-tabs" role="group" aria-label="筛选账号">${[['all','全部'],['available','可选'],['paused','额度耗尽'],['disabled','手动停用']].map(([key,label])=>`<button class="zlibrary-tab ${s.filter===key?'is-active':''}" data-zlibrary-filter="${key}" type="button" aria-pressed="${s.filter===key}">${label}</button>`).join('')}</div><div class="zlibrary-toolbar-tools"><select data-zlibrary-group aria-label="筛选分组"><option value="">全部分组</option>${(s.data?.groups || []).map((g)=>`<option ${s.group===g?'selected':''}>${esc(g)}</option>`).join('')}</select><label class="zlibrary-search"><input type="search" data-zlibrary-search aria-label="搜索账号昵称或邮箱" placeholder="搜索邮箱、备注、分组" value="${esc(s.search)}"></label></div></div><div class="zlibrary-bulk"><span>已选择 <strong>${count}</strong> / ${accounts.length}</span><button class="zlibrary-action" data-zlibrary-select-all type="button">选择筛选结果</button><button class="zlibrary-action" data-zlibrary-clear type="button">清空选择</button><select data-zlibrary-bulk aria-label="批量操作" ${!count||disabled?'disabled':''}><option value="">批量操作…</option><option value="refresh">刷新资料</option><option value="enable">启用账号</option><option value="disable">停用账号</option><option value="group">设置分组</option><option value="delete">移除本地账号</option></select></div><div class="zlibrary-table-scroll" role="region" aria-label="ZLibrary 账号列表" tabindex="0"><table class="zlibrary-table"><thead><tr><th><input type="checkbox" data-zlibrary-page-check aria-label="选择本页账号" ${visible.length&&visible.every(a=>s.selected.has(a.id))?'checked':''} ${disabled?'disabled':''}></th><th>账号信息</th><th>状态</th><th>会员 / 分组</th><th>今日剩余 / 额度</th><th>创建 / 更新时间</th><th>操作</th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="zlibrary-empty">${esc(s.data?.message || (s.loading?'正在读取账号…':accounts.length?'没有匹配的账号':'暂无账号，点击添加导入现有账号'))}</td></tr>`}</tbody></table></div><div class="zlibrary-footer"><span role="status">共 ${accounts.length} 个账号 · 额度耗尽自动换号，恢复后继续复用</span><div class="zlibrary-pagination"><button class="zlibrary-action" data-zlibrary-page="-1" type="button" aria-label="上一页账号" ${s.page<=0?'disabled':''}>上一页</button><span>${s.page+1} / ${Math.max(1,Math.ceil(zlibraryFilteredAccounts().length/10))}</span><button class="zlibrary-action" data-zlibrary-page="1" type="button" aria-label="下一页账号" ${(s.page+1)*10>=zlibraryFilteredAccounts().length?'disabled':''}>下一页</button></div></div>`;
+        const scroll=host.querySelector('.zlibrary-table-scroll');scroll.scrollLeft=left;scroll.scrollTop=top;
+        if(isSearch){const input=host.querySelector('[data-zlibrary-search]');input.focus({preventScroll:true});input.setSelectionRange(...caret);}
+        if(focusId)host.querySelector(`[data-zlibrary-row="${CSS.escape(focusId)}"]`)?.focus({preventScroll:true});
+        host.querySelectorAll('[data-zlibrary-check]').forEach(n=>n.onchange=()=>{n.checked?s.selected.add(n.dataset.zlibraryCheck):s.selected.delete(n.dataset.zlibraryCheck);renderZLibraryAccount();});
+        host.querySelector('[data-zlibrary-page-check]').onchange=(e)=>{visible.forEach(a=>e.target.checked?s.selected.add(a.id):s.selected.delete(a.id));renderZLibraryAccount();};
+        host.querySelector('[data-zlibrary-select-all]').onclick=()=>{zlibraryFilteredAccounts().forEach(a=>s.selected.add(a.id));renderZLibraryAccount();};
+        host.querySelector('[data-zlibrary-clear]').onclick=()=>{s.selected.clear();renderZLibraryAccount();};
+        host.querySelector('[data-zlibrary-bulk]').onchange=(e)=>{const action=e.target.value;e.target.value='';if(action==='group')openZLibraryDialog('group');else if(action)void mutateZLibrary(action,[...s.selected]);};
+        host.querySelectorAll('[data-zlibrary-filter]').forEach(n=>n.onclick=()=>{s.filter=n.dataset.zlibraryFilter;s.page=0;renderZLibraryAccount();void loadZLibraryVisibleProfiles(false);});
+        host.querySelector('[data-zlibrary-group]').onchange=(e)=>{s.group=e.target.value;s.page=0;renderZLibraryAccount();void loadZLibraryVisibleProfiles(false);};
+        host.querySelector('[data-zlibrary-search]').oninput=(e)=>{s.search=e.target.value;s.page=0;renderZLibraryAccount();void loadZLibraryVisibleProfiles(false);};
+        host.querySelectorAll('[data-zlibrary-page]').forEach(n=>n.onclick=()=>{s.page+=Number(n.dataset.zlibraryPage);renderZLibraryAccount();void loadZLibraryVisibleProfiles(false);});
+        host.querySelectorAll('[data-zlibrary-detail]').forEach(n=>n.onclick=()=>openZLibraryDialog('detail',n.dataset.zlibraryDetail));
+        host.querySelectorAll('[data-zlibrary-open]').forEach(n=>n.onclick=()=>openZLibraryDialog(n.dataset.zlibraryOpen));
+        host.querySelector('[data-zlibrary-refresh]').onclick=()=>{void loadZLibraryAccount(true);};
+        host.querySelectorAll('[data-zlibrary-row]').forEach(n=>n.onclick=()=>{void refreshZLibraryRow(n.dataset.zlibraryRow,true);});
+        host.querySelector('[data-zlibrary-export]').onclick=()=>{const chosen=count?accounts.filter(a=>s.selected.has(a.id)):accounts;const blob=new Blob([JSON.stringify(chosen.map(a=>({email:a.email,name:a.name,group:a.group||'',note:a.note||'',enabled:a.enabled!==false,status:zlibraryStatus(a),is_current:!!a.is_current,is_preferred:!!a.is_preferred,profile:a.profile||null})),null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='ZLibrary账号列表.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),0);};
+      };
+      const openZLibraryDialog = (kind,id='') => {
+        closeZLibraryDialog();const s=zlibraryAccountState,a=s.data?.accounts?.find(x=>x.id===id),p=a?.profile||{},node=document.createElement('dialog'),focus=document.activeElement;
+        node.className='zlibrary-dialog';node.setAttribute('aria-labelledby','zlibrary-dialog-title');
+        const titles={detail:'账号详情',import:'添加 / 批量导入',group:'设置分组',help:'如何使用'};
+        let body='';
+        if(kind==='detail'&&a)body=`<p class="zlibrary-detail-email">${esc(a.email)}</p><dl class="zlibrary-detail-grid"><dt>当前状态</dt><dd>${esc(zlibraryStatus(a))}${a.is_current?' · 当前使用':''}${a.is_preferred?' · 首选':''}</dd><dt>每日额度</dt><dd>剩余 ${esc(zlibraryNumber(p.downloads_remaining))} / ${esc(zlibraryNumber(p.downloads_limit))} · 已用 ${esc(zlibraryNumber(p.downloads_today))}</dd><dt>会员</dt><dd>${typeof p.is_vip==='boolean'?(p.is_vip?'VIP / Premium':'普通账号'):'未知'}</dd><dt>邮箱验证</dt><dd>${typeof p.email_confirmed==='boolean'?(p.email_confirmed?'已验证':'未验证'):'未知'}</dd><dt>详细权限</dt><dd>接口未返回</dd><dt>资料更新</dt><dd>${esc(p.checked_at?qqReaderDate(p.checked_at):'尚未查询')}</dd></dl><label>分组<input name="group" maxlength="40" value="${esc(a.group||'')}" placeholder="未分组"></label><label>备注<input name="note" maxlength="200" value="${esc(a.note||'')}" placeholder="添加便于辨认的备注"></label><div class="zlibrary-dialog-actions"><button class="zlibrary-action is-primary" data-z-save type="button">保存资料</button><button class="zlibrary-action" data-z-action="select" type="button" ${a.status!=='logged_in'||a.enabled===false?'disabled':''}>设为首选并切换</button><button class="zlibrary-action" data-z-action="${a.enabled===false?'enable':'disable'}" type="button">${a.enabled===false?'启用账号':'停用账号'}</button><button class="zlibrary-action is-delete" data-z-action="delete" type="button">移除本地账号</button></div>`;
+        if(kind==='import')body='<p>导入已有账号，验证登录和额度后保存。相同邮箱更新原账号，不重复添加。</p><label>账号内容（每次最多 50 个）<textarea name="accounts" rows="7" spellcheck="false" autocomplete="off" placeholder="邮箱----密码（每行一个）\n或 JSON 数组：[{&quot;email&quot;:&quot;…&quot;,&quot;password&quot;:&quot;…&quot;}]"></textarea></label><label>从本地文件读取<input type="file" name="file" accept=".txt,.json,text/plain,application/json"></label><p>密码仅用于登录验证和后端保存，不回显。此入口不注册新账号。</p><button class="zlibrary-action is-primary" data-z-import type="button">验证并导入</button><pre class="zlibrary-import-result" aria-live="polite"></pre>';
+        if(kind==='group')body=`<p>将已选 ${s.selected.size} 个账号移入分组，留空即移出分组。可输入新分组名。</p><label>分组名称<input name="group" maxlength="40" list="zlibrary-groups"></label><datalist id="zlibrary-groups">${(s.data?.groups||[]).map(g=>`<option value="${esc(g)}">`).join('')}</datalist><button class="zlibrary-action is-primary" data-z-group type="button">保存分组</button>`;
+        if(kind==='help')body='<ol class="zlibrary-help"><li><strong>添加账号</strong><p>导入已有邮箱和密码，逐个验证成功才保存；也可由管理员发送“测试账号”新建账号并保留。</p></li><li><strong>选择账号</strong><p>点击邮箱查看详情，设为首选并切换。下载前核实官方剩余额度，优先使用首选账号；首选耗尽则选其他已启用账号。</p></li><li><strong>额度与恢复</strong><p>额度为零自动暂停，不删除账号。后续使用时按冷却或跨日重新查询，官方确认额度恢复后复用。所有账号耗尽就等待，不因额度耗尽自动注册。</p></li><li><strong>批量管理</strong><p>勾选本页或全部筛选结果，批量刷新、启停、分组或移除；一次写操作最多 100 个。手动停用的账号不会随额度恢复而启用。</p></li><li><strong>登录与安全</strong><p>查询时使用保存的邮箱密码登录取得 Cookie，不假设固定失效时间。操作中的下载保持已绑定账号。移除只删除本插件保存记录；导出仅含列表资料，不含密码，不能作为登录备份。</p></li></ol>';
+        node.innerHTML=`<header><h2 id="zlibrary-dialog-title">${titles[kind]}</h2><button class="zlibrary-action" data-z-close type="button" aria-label="关闭账号窗口">×</button></header><div class="zlibrary-dialog-body">${body}</div><p class="zlibrary-dialog-message" role="status"></p>`;
+        document.body.append(node);s.modal={node,focus};node.showModal();node.querySelector('[data-z-close]').onclick=closeZLibraryDialog;node.addEventListener('cancel',(e)=>{e.preventDefault();closeZLibraryDialog();});node.addEventListener('click',e=>{if(e.target===node){const r=node.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeZLibraryDialog();}});
+        node.querySelector('[data-z-save]')?.addEventListener('click',()=>{void mutateZLibrary('edit',[id],{group:node.querySelector('[name=group]').value,note:node.querySelector('[name=note]').value});});
+        node.querySelectorAll('[data-z-action]').forEach(n=>n.onclick=()=>{void mutateZLibrary(n.dataset.zAction,[id]);});
+        node.querySelector('[data-z-group]')?.addEventListener('click',()=>{void mutateZLibrary('group',[...s.selected],{group:node.querySelector('[name=group]').value});});
+        node.querySelector('[name=file]')?.addEventListener('change',async(e)=>{const file=e.target.files[0];if(!file)return;if(file.size>100000){node.querySelector('.zlibrary-dialog-message').textContent='文件过大，请限制在 100 KB 内';return;}const text=await file.text();if(s.modal?.node===node)node.querySelector('[name=accounts]').value=text;});
+        node.querySelector('[data-z-import]')?.addEventListener('click',()=>{
+          const input=node.querySelector('[name=accounts]');let accounts;try{const text=input.value.trim();accounts=text.startsWith('[')?JSON.parse(text):text.split(/\r?\n/).filter(x=>x.trim()).map(line=>{const i=line.indexOf('----');if(i<1)throw Error();return {email:line.slice(0,i).trim(),password:line.slice(i+4)};});if(!Array.isArray(accounts)||!accounts.length||accounts.length>50)throw Error();}catch(_){node.querySelector('.zlibrary-dialog-message').textContent='请输入有效 JSON 数组或每行“邮箱----密码”，最多 50 个';return;}void mutateZLibrary('import',[],{accounts});
         });
       };
-      const zlibraryVisibleAccounts = () => zlibraryFilteredAccounts().slice(zlibraryAccountState.page * 10, (zlibraryAccountState.page + 1) * 10);
-      const renderZLibraryAccount = () => {
-        const host = $('zlibrary-account-editor'); if (!host) return;
-        const scroll = host.querySelector('.zlibrary-table-scroll'), scrollTop = scroll?.scrollTop || 0, scrollLeft = scroll?.scrollLeft || 0;
-        const focused = host.contains(document.activeElement) ? document.activeElement : null;
-        const focusKey = focused?.dataset.zlibraryRow, searchFocused = focused?.hasAttribute('data-zlibrary-search'), selection = searchFocused ? [focused.selectionStart, focused.selectionEnd] : null;
-        const state = zlibraryAccountState, accounts = state.data?.accounts || [];
-        state.page = Math.min(state.page, Math.max(0, Math.ceil(zlibraryFilteredAccounts().length / 10) - 1));
-        const value = (number) => Number.isSafeInteger(number) && number >= 0 ? number.toLocaleString('zh-CN') : '未知';
-        const pill = (text, kind = '') => `<span class="zlibrary-pill ${kind}">${esc(text)}</span>`;
-        const rows = zlibraryVisibleAccounts().map((account) => {
-          const profile = account.profile || {}, ready = account.status === 'logged_in', busy = state.busy.has(account.id);
-          const failed = state.rowErrors.has(account.id) || profile.available === false;
-          const exhausted = (profile.available === true && profile.downloads_remaining === 0) || (account.quota_paused && !(profile.available === true && profile.downloads_remaining > 0));
-          const status = busy ? '查询中' : !ready ? '待完成' : exhausted ? '已暂停' : failed ? '查询失败' : profile.available ? '正常' : '待查询';
-          const vip = typeof profile.is_vip === 'boolean' ? (profile.is_vip ? 'VIP / Premium' : '普通账号') : '未知';
-          return `<tr class="${exhausted ? 'is-exhausted' : ''}" data-zlibrary-account="${esc(account.id)}"><td><div class="zlibrary-account-name"><strong>${esc(account.email || '未知邮箱')}</strong>${account.is_current ? pill('当前使用','is-current') : ''}</div></td><td>${pill(status, failed ? 'is-danger' : exhausted ? 'is-warning' : profile.available ? 'is-ok' : '')}</td><td>${pill(vip, profile.is_vip === true ? 'is-vip' : '')}</td><td class="zlibrary-quota">${pill(value(profile.downloads_remaining), exhausted ? 'is-danger' : profile.available ? 'is-ok' : '')}<small class="zlibrary-secondary">已用 ${esc(value(profile.downloads_today))} / ${esc(value(profile.downloads_limit))}${exhausted ? ' · 等待恢复' : ''}</small></td><td>${esc(qqReaderDate(account.created_at))}</td><td>${typeof profile.email_confirmed === 'boolean' ? (profile.email_confirmed ? '已验证' : '未验证') : '未知'}<small class="zlibrary-secondary">详细权限：接口未返回</small></td><td>${esc(profile.checked_at ? qqReaderDate(profile.checked_at) : '尚未查询')}</td><td><button class="zlibrary-action" type="button" data-zlibrary-row="${esc(account.id)}" ${!ready || busy || state.loading ? 'disabled' : ''}>${busy ? '查询中…' : '刷新'}</button></td></tr>`;
-        }).join('');
-        const filtered = zlibraryFilteredAccounts(), pages = Math.max(1, Math.ceil(filtered.length / 10));
-        host.innerHTML = `<div class="zlibrary-toolbar"><div class="zlibrary-tabs" role="group" aria-label="筛选账号">${[['all','全部账号'],['available','可选账号'],['paused','已暂停']].map(([key,label]) => `<button class="zlibrary-tab ${state.filter === key ? 'is-active' : ''}" type="button" data-zlibrary-filter="${key}" aria-pressed="${state.filter === key}">${label}<span>${key === 'all' ? accounts.length : accounts.filter((row) => { const p = row.profile || {}, paused = (p.available === true && p.downloads_remaining === 0) || (row.quota_paused && !(p.available === true && p.downloads_remaining > 0)); return key === 'paused' ? paused : row.status === 'logged_in' && !paused; }).length}</span></button>`).join('')}</div><div class="zlibrary-toolbar-tools"><label class="zlibrary-search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m12 12 5 5"/></svg><input type="search" data-zlibrary-search aria-label="搜索账号昵称或邮箱" placeholder="搜索账号" value="${esc(state.search)}"></label><button class="zlibrary-action" type="button" data-zlibrary-refresh ${state.loading ? 'disabled' : ''}>${state.loading ? '读取中…' : '刷新列表'}</button></div></div><div class="zlibrary-table-scroll" role="region" aria-label="ZLibrary 账号列表" tabindex="0"><table class="zlibrary-table"><thead><tr><th scope="col">账号信息</th><th scope="col">状态</th><th scope="col">会员</th><th scope="col">今日剩余 / 额度</th><th scope="col">创建时间</th><th scope="col">验证 / 权限</th><th scope="col">资料更新时间</th><th scope="col">操作</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="zlibrary-empty">${esc(state.data?.message || (state.loading ? '正在读取账号…' : accounts.length ? '没有匹配的账号' : '暂无账号，发送“测试账号”注册并保存'))}</td></tr>`}</tbody></table></div><div class="zlibrary-footer"><span role="status">${esc(state.data?.message || '额度耗尽自动暂停，平台额度恢复后重新使用。')}</span><div class="zlibrary-pagination"><button class="zlibrary-action" type="button" data-zlibrary-page="-1" ${state.page <= 0 ? 'disabled' : ''} aria-label="上一页账号">上一页</button><span>${state.page + 1} / ${pages}</span><button class="zlibrary-action" type="button" data-zlibrary-page="1" ${state.page + 1 >= pages ? 'disabled' : ''} aria-label="下一页账号">下一页</button></div></div>`;
-        const restoredScroll = host.querySelector('.zlibrary-table-scroll'); if (restoredScroll) { restoredScroll.scrollTop = scrollTop; restoredScroll.scrollLeft = scrollLeft; }
-        if (searchFocused) { const input = host.querySelector('[data-zlibrary-search]'); input?.focus({preventScroll:true}); input?.setSelectionRange(...selection); }
-        if (focusKey) host.querySelector(`[data-zlibrary-row="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
-        host.querySelectorAll('[data-zlibrary-filter]').forEach((node) => node.addEventListener('click', () => {
-          stopZLibraryAccount(); state.filter = node.dataset.zlibraryFilter; state.page = 0; state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false);
-        }));
-        host.querySelector('[data-zlibrary-search]')?.addEventListener('input', (event) => {
-          const start = event.target.selectionStart; state.search = event.target.value; state.page = 0; renderZLibraryAccount();
-          const input = host.querySelector('[data-zlibrary-search]'); input?.focus({preventScroll:true}); input?.setSelectionRange(start,start);
-          void loadZLibraryVisibleProfiles(false);
-        });
-        host.querySelector('[data-zlibrary-refresh]')?.addEventListener('click', () => { void loadZLibraryAccount(true); });
-        host.querySelectorAll('[data-zlibrary-row]').forEach((node) => node.addEventListener('click', () => { void refreshZLibraryRow(node.dataset.zlibraryRow, true); }));
-        host.querySelectorAll('[data-zlibrary-page]').forEach((node) => node.addEventListener('click', () => {
-          stopZLibraryAccount(); state.page += Number(node.dataset.zlibraryPage); state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false);
-        }));
+      const mutateZLibrary = async (action,ids,extra={}) => {
+        const s=zlibraryAccountState;if(s.mutating)return;
+        if(action!=='import'&&(!ids.length||ids.length>100))return toast('每次请选择 1～100 个账号');
+        if(action==='delete'&&!confirm(`仅移除已选 ${ids.length} 个本地账号，不注销站点账号。确定继续？`))return;
+        if(action==='refresh'){const queue=[...ids],request=s.request,appid=s.appid;await Promise.all([0,1].map(async()=>{while(queue.length&&request===s.request&&appid===s.appid)await refreshZLibraryRow(queue.shift(),true);}));return;}
+        s.request+=1;s.abort?.abort();s.abort=new AbortController();s.busy.clear();
+        const request=s.request,appid=s.appid,generation=consoleGeneration,modal=s.modal?.node;s.mutating=true;renderZLibraryAccount();modal?.querySelectorAll('button,input,textarea').forEach(n=>{n.disabled=true;});
+        if(modal)modal.querySelector('.zlibrary-dialog-message').textContent=action==='import'?'正在验证账号，请稍候…':'正在保存…';
+        try{const data=await api(`zlibrary-accounts/${action==='import'?'import':'manage'}`,{method:'POST',body:JSON.stringify(action==='import'?extra:{action,ids,...extra}),signal:s.abort?.signal,botAppid:appid});if(!zlibraryRequestCurrent(request,appid,generation))return;
+          s.data=data;s.loadedAt=Date.now();s.selected=new Set([...s.selected].filter(id=>data.accounts.some(a=>a.id===id)));toast(data.message||'已保存');
+          if(action==='import'&&s.modal?.node===modal){modal.querySelector('[name=accounts]').value='';modal.querySelector('[name=file]').value='';modal.querySelector('.zlibrary-import-result').textContent=(data.results||[]).map(r=>`${r.success?'✓':'×'} ${r.email}：${r.message}`).join('\n');modal.querySelector('.zlibrary-dialog-message').textContent=data.message||'导入结束';}
+          else closeZLibraryDialog();
+        }catch(error){if(!zlibraryRequestCurrent(request,appid,generation)||error.name==='AbortError')return;if(error.status===401)showAuthError(error);else if(modal&&s.modal?.node===modal)modal.querySelector('.zlibrary-dialog-message').textContent=error.message;else toast(error.message);}
+        finally{if(zlibraryRequestCurrent(request,appid,generation)){s.mutating=false;renderZLibraryAccount();if(modal&&s.modal?.node===modal)modal.querySelectorAll('button,input,textarea').forEach(n=>{n.disabled=false;});}}
       };
       const zlibraryRequestCurrent = (request, appid, generation) => request === zlibraryAccountState.request && appid === consoleAppid && generation === consoleGeneration && activeView === 'bot' && document.visibilityState !== 'hidden';
       const refreshZLibraryRow = async (id, force = false) => {
@@ -791,18 +826,18 @@
       const loadZLibraryAccount = async (force = false) => {
         if (!consoleAppid || activeView !== 'bot' || document.visibilityState === 'hidden') return;
         const state = zlibraryAccountState;
-        if (state.loading && !force) return;
+        if (state.mutating || (state.loading && !force)) return;
         if (!force && state.appid === consoleAppid && state.data && Date.now() - state.loadedAt < 60000) {
           if (!state.abort) state.abort = new AbortController(); renderZLibraryAccount(); void loadZLibraryVisibleProfiles(false); return;
         }
         stopZLibraryAccount(); state.abort = new AbortController();
         const request = state.request, appid = consoleAppid, generation = consoleGeneration;
-        if (state.appid !== appid) { state.data = null; state.page = 0; state.loadedAt = 0; }
+        if (state.appid !== appid) { state.data = null; state.page = 0; state.loadedAt = 0; state.selected.clear(); state.group = ''; }
         state.appid = appid; state.loading = true; state.rowErrors.clear(); renderZLibraryAccount();
         try {
           const data = await api('zlibrary-accounts', {signal:state.abort.signal, botAppid:appid});
           if (!zlibraryRequestCurrent(request, appid, generation)) return;
-          state.data = data; state.loadedAt = Date.now(); state.page = Math.min(state.page, Math.max(0, Math.ceil(zlibraryFilteredAccounts().length / 10) - 1));
+          state.data = data; state.selected = new Set([...state.selected].filter(id => data.accounts.some(a => a.id === id))); state.loadedAt = Date.now(); state.page = Math.min(state.page, Math.max(0, Math.ceil(zlibraryFilteredAccounts().length / 10) - 1));
         } catch (error) {
           if (!zlibraryRequestCurrent(request, appid, generation) || error.name === 'AbortError') return;
           state.data = {accounts:[], message:'账号列表暂不可用，请稍后刷新'};

@@ -1984,4 +1984,37 @@
     .zlibrary-footer { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; margin-top:18px; font-size:11px; color:var(--muted); }
     .zlibrary-pagination { display:flex; align-items:center; gap:12px; }
     @media (max-width:700px) { .zlibrary-accounts-card { padding:20px 16px; } .zlibrary-toolbar { align-items:stretch; } .zlibrary-toolbar-tools { width:100%; } .zlibrary-search { flex:1; } .zlibrary-action { min-height:40px; } .zlibrary-table td { padding-top:18px; padding-bottom:18px; } .zlibrary-tabs { width:100%; } .zlibrary-tab { flex:1; justify-content:center; padding-inline:7px; } }
+    .zlibrary-manager-tools,.zlibrary-manager-tools>div,.zlibrary-bulk,.zlibrary-row-actions { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+    .zlibrary-manager-tools { justify-content:space-between;margin-bottom:22px; }
+    .zlibrary-bulk { padding:12px 0;border-top:1px solid var(--line);color:var(--muted);font-size:12px; }
+    .zlibrary-bulk>span { margin-right:8px; }
+    .zlibrary-bulk strong { color:var(--ink); }
+    .zlibrary-action.is-primary { color:#fff;background:var(--primary);border-color:var(--primary); }
+    .zlibrary-action.is-delete { color:var(--danger); }
+    .zlibrary-email { display:block;border:0;padding:0;background:none;color:var(--ink);font:inherit;font-size:14px;font-weight:600;text-align:left;cursor:pointer;white-space:normal;overflow-wrap:anywhere;max-width:280px; }
+    .zlibrary-email:hover { color:var(--primary); }
+    .zlibrary-email:focus-visible,.zlibrary-dialog input:focus-visible,.zlibrary-dialog textarea:focus-visible { outline:2px solid var(--primary);outline-offset:3px; }
+    .zlibrary-table input[type=checkbox] { width:16px;height:16px;accent-color:var(--primary);cursor:pointer; }
+    .zlibrary-table tbody tr.is-selected { background:var(--primary-soft); }
+    .zlibrary-table th:first-child,.zlibrary-table td:first-child { width:38px;padding-left:8px; }
+    .zlibrary-table td { padding-top:18px;padding-bottom:18px; }
+    .zlibrary-row-actions { flex-wrap:nowrap;justify-content:flex-end; }
+    .zlibrary-toolbar-tools select,.zlibrary-bulk select { min-height:34px;max-width:200px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink);padding:6px 10px;font:inherit; }
+    .zlibrary-dialog { width:min(620px,calc(100vw - 32px));max-height:85dvh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);box-shadow:0 24px 90px #0005; }
+    .zlibrary-dialog::backdrop { background:#0007;backdrop-filter:blur(4px); }
+    .zlibrary-dialog header { display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line); }
+    .zlibrary-dialog h2 { margin:0;font-size:18px; }
+    .zlibrary-dialog-body { padding:22px 24px; }
+    .zlibrary-dialog-body>p,.zlibrary-help p { font-size:13px;line-height:1.8;color:var(--muted);margin-top:0; }
+    .zlibrary-dialog-body label { display:flex;flex-direction:column;gap:8px;margin:16px 0;font-size:13px; }
+    .zlibrary-dialog-body input,.zlibrary-dialog-body textarea { width:100%;box-sizing:border-box;background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:10px 12px;color:var(--ink);font:inherit; }
+    .zlibrary-dialog-body textarea { resize:vertical;line-height:1.6; }
+    .zlibrary-dialog-actions { display:flex;gap:8px;flex-wrap:wrap;margin-top:22px; }
+    .zlibrary-detail-grid { display:grid;grid-template-columns:90px 1fr;gap:14px 18px;font-size:13px; }
+    .zlibrary-detail-grid dt { color:var(--muted); }.zlibrary-detail-grid dd { margin:0;overflow-wrap:anywhere; }
+    .zlibrary-dialog-body .zlibrary-detail-email { font-size:16px;font-weight:600;color:var(--ink);overflow-wrap:anywhere; }
+    .zlibrary-dialog-message { margin:0;padding:0 24px 20px;font-size:13px;color:var(--muted); }
+    .zlibrary-import-result { white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px;line-height:1.8;max-height:220px;overflow:auto; }
+    .zlibrary-help { margin:0;padding-left:22px; }.zlibrary-help li { padding-left:4px;margin-bottom:18px; }.zlibrary-help strong { font-size:14px; }
+    @media(max-width:700px) { .zlibrary-manager-tools { gap:12px; }.zlibrary-manager-tools>div { flex:1; }.zlibrary-tabs { flex-wrap:wrap; }.zlibrary-dialog header,.zlibrary-dialog-body { padding:18px; }.zlibrary-dialog-message { padding:0 18px 18px; }.zlibrary-manager-tools .zlibrary-action { flex:1;white-space:nowrap; }.zlibrary-toolbar-tools { flex-wrap:wrap; }.zlibrary-toolbar-tools select { flex:1; }.zlibrary-row-actions .zlibrary-action { min-height:40px; } }
     """

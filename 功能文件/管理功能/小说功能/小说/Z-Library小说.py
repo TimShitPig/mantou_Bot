@@ -65,6 +65,7 @@ ZLibrary账号资料任务: dict[str, asyncio.Task] = globals().get("ZLibrary账
 ZLibrary账号资料并发 = globals().get("ZLibrary账号资料并发") or asyncio.Semaphore(2)
 ZLibrary额度重查冷却: dict[str, float] = globals().get("ZLibrary额度重查冷却", {})
 ZLibrary额度恢复检查间隔 = 300
+ZLibrary账号管理锁: dict[str, asyncio.Lock] = globals().get("ZLibrary账号管理锁", {})
 _ZLibrary账号停止 = False
 ZLibrary下载失败提示 = "下载失败 请重试"
 ZLibrary文件发送失败提示 = "文件发送失败，请稍后再试"
@@ -563,8 +564,11 @@ async def 获取ZLibrary搜索账号(配置: Any, *, 自动注册: bool = True) 
         return await _确保ZLibrary自动账号(配置) if 自动注册 else None
     作用域, _ = _ZLibrary注册配置快照(配置)
     额度状态 = _解析ZLibrary额度状态(状态列表)
-    for 标识, 账号 in sorted(已验证, key=_ZLibrary账号排序键, reverse=True):
+    管理状态 = _解析ZLibrary管理状态(状态列表)
+    for 标识, 账号 in sorted(已验证, key=lambda 项: (_ZLibrary账号资料键(作用域, *项) == 管理状态["preferred"], _ZLibrary账号排序键(项)), reverse=True):
         键 = _ZLibrary账号资料键(作用域, 标识, 账号)
+        if 管理状态["accounts"].get(键, {}).get("enabled") is False:
+            continue
         额度 = 额度状态.get(键, {})
         if 额度.get("status") == "quota_paused":
             if not _ZLibrary额度可重查(键, 额度):
@@ -595,14 +599,39 @@ def _解析ZLibrary账号记录(状态列表: dict[str, str]) -> list[tuple[str,
     return 记录
 
 
+def _解析ZLibrary管理状态(状态: dict[str, str]) -> dict[str, Any]:
+    结果: dict[str, Any] = {"accounts": {}, "preferred": ""}
+    for 键, 原始 in 状态.items():
+        if 键 != "__selection__" and not re.fullmatch(r"__meta_[a-f0-9]{64}", 键):
+            continue
+        try:
+            值 = json.loads(原始)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(值, dict):
+            continue
+        if 键 == "__selection__":
+            首选 = str(值.get("preferred") or "")
+            结果["preferred"] = 首选 if re.fullmatch(r"[a-f0-9]{64}", 首选) else ""
+        else:
+            结果["accounts"][键[7:]] = {
+                "enabled": 值.get("enabled") is not False,
+                "group": str(值.get("group") or "")[:40],
+                "note": str(值.get("note") or "")[:200],
+            }
+    return 结果
+
+
 def _ZLibrary账号排序键(项):
     return str(项[1].get("created_at") or ""), 项[1]["email"], 项[1]["password"]
 
 
-def _选取ZLibrary当前账号(记录: list[tuple[str, dict[str, Any]]], 作用域: str = "", 额度状态: dict | None = None):
+def _选取ZLibrary当前账号(记录: list[tuple[str, dict[str, Any]]], 作用域: str = "", 额度状态: dict | None = None, 管理状态: dict | None = None):
+    管理状态 = 管理状态 or {"accounts": {}, "preferred": ""}
     候选 = [项 for 项 in 记录 if 项[1].get("status") == "logged_in"
-            and (额度状态 or {}).get(_ZLibrary账号资料键(作用域, *项), {}).get("status") != "quota_paused"]
-    return max(候选, key=_ZLibrary账号排序键) if 候选 else None
+            and (额度状态 or {}).get(_ZLibrary账号资料键(作用域, *项), {}).get("status") != "quota_paused"
+            and 管理状态["accounts"].get(_ZLibrary账号资料键(作用域, *项), {}).get("enabled") is not False]
+    return max(候选, key=lambda 项: (_ZLibrary账号资料键(作用域, *项) == 管理状态["preferred"], _ZLibrary账号排序键(项))) if 候选 else None
 
 
 def _解析ZLibrary额度状态(状态列表: dict[str, str]) -> dict[str, dict[str, Any]]:
@@ -660,6 +689,8 @@ async def 获取ZLibrary下载账号(配置: Any) -> dict[str, str]:
         剩余 = 资料.get("downloads_remaining")
         if 资料.get("available") is not True or not isinstance(剩余, int):
             raise _ZLibrary站点错误("账号额度未确认", 诊断原因="quota_unknown")
+        if 结果.get("account", {}).get("enabled") is False:
+            continue
         if 剩余 > 0:
             return 账号
         # 精确零额度已持久化暂停，下一轮只检查其他已有账号。
@@ -711,12 +742,17 @@ def _ZLibrary账号资料键(作用域: str, 标识: str, 账号: dict[str, Any]
     return hashlib.sha256((作用域 + "\x00" + 标识 + "\x00" + 凭据摘要).encode()).hexdigest()
 
 
-def _ZLibrary账号安全摘要(作用域: str, 标识: str, 账号: dict[str, Any], 当前标识: str, 额度状态: dict | None = None) -> dict[str, Any]:
+def _ZLibrary账号安全摘要(作用域: str, 标识: str, 账号: dict[str, Any], 当前标识: str, 额度状态: dict | None = None, 管理状态: dict | None = None) -> dict[str, Any]:
+    管理状态 = 管理状态 or {"accounts": {}, "preferred": ""}
     键 = _ZLibrary账号资料键(作用域, 标识, 账号)
     缓存 = ZLibrary账号资料缓存.get(键)
     return {
         "id": 键, "name": str(账号.get("name") or "")[:120],
         "email": 账号["email"],
+        "enabled": 管理状态["accounts"].get(键, {}).get("enabled") is not False,
+        "group": 管理状态["accounts"].get(键, {}).get("group", ""),
+        "note": 管理状态["accounts"].get(键, {}).get("note", ""),
+        "is_preferred": 键 == 管理状态["preferred"],
         "created_at": str(账号.get("created_at") or "")[:80],
         "is_current": 标识 == 当前标识,
         "quota_paused": (额度状态 or {}).get(键, {}).get("status") == "quota_paused",
@@ -733,10 +769,13 @@ async def 获取ZLibrary账号列表(配置: Any) -> dict[str, Any]:
     状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
     记录 = _解析ZLibrary账号记录(状态)
     额度状态 = _解析ZLibrary额度状态(状态)
-    当前 = _选取ZLibrary当前账号(记录, 作用域, 额度状态)
+    管理状态 = _解析ZLibrary管理状态(状态)
+    当前 = _选取ZLibrary当前账号(记录, 作用域, 额度状态, 管理状态)
     当前标识 = 当前[0] if 当前 else ""
     记录.sort(key=lambda 项: str(项[1].get("created_at") or ""), reverse=True)
-    return {"accounts": [_ZLibrary账号安全摘要(作用域, 标识, 账号, 当前标识, 额度状态) for 标识, 账号 in 记录]}
+    return {"accounts": [_ZLibrary账号安全摘要(作用域, 标识, 账号, 当前标识, 额度状态, 管理状态) for 标识, 账号 in 记录],
+            "groups": sorted({管理状态["accounts"].get(_ZLibrary账号资料键(作用域, *项), {}).get("group", "") for 项 in 记录} - {""}),
+            "preferred_account_id": 管理状态["preferred"]}
 
 
 async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账号标识: str = "") -> dict[str, Any]:
@@ -747,7 +786,8 @@ async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账�
     状态列表 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
     记录 = _解析ZLibrary账号记录(状态列表)
     额度状态 = _解析ZLibrary额度状态(状态列表)
-    当前 = _选取ZLibrary当前账号(记录, 作用域, 额度状态)
+    管理状态 = _解析ZLibrary管理状态(状态列表)
+    当前 = _选取ZLibrary当前账号(记录, 作用域, 额度状态, 管理状态)
     if 账号标识:
         if not re.fullmatch(r"[a-f0-9]{64}", 账号标识):
             return {"configured": False, "message": "账号不存在，请刷新列表"}
@@ -762,9 +802,9 @@ async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账�
     标识, 账号 = 当前
     邮箱 = 账号["email"]
     键 = _ZLibrary账号资料键(作用域, 标识, 账号)
-    当前可用 = _选取ZLibrary当前账号(记录, 作用域, 额度状态)
+    当前可用 = _选取ZLibrary当前账号(记录, 作用域, 额度状态, 管理状态)
     摘要["current_account_id"] = _ZLibrary账号资料键(作用域, *当前可用) if 当前可用 else ""
-    摘要["account"] = _ZLibrary账号安全摘要(作用域, 标识, 账号, (当前可用 or ("",))[0], 额度状态)
+    摘要["account"] = _ZLibrary账号安全摘要(作用域, 标识, 账号, (当前可用 or ("",))[0], 额度状态, 管理状态)
     摘要["account"].pop("profile", None)
     缓存 = ZLibrary账号资料缓存.get(键)
     if 缓存 and 缓存["expires"] > time.monotonic() and (not 刷新 or 缓存["failed"]):
@@ -811,15 +851,147 @@ async def 获取ZLibrary账号摘要(配置: Any, *, 刷新: bool = False, 账�
     # 查询期间若新注册、更换或删除当前账号，旧资料不得拼到新账号上。
     新状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
     新记录 = _解析ZLibrary账号记录(新状态)
-    仍有效 = next((项 for 项 in 新记录 if 项[0] == 标识), None) == 当前 if 账号标识 else _选取ZLibrary当前账号(新记录, 作用域, 额度状态) == 当前
+    仍有效 = next((项 for 项 in 新记录 if 项[0] == 标识), None) == 当前 if 账号标识 else _选取ZLibrary当前账号(新记录, 作用域, 额度状态, _解析ZLibrary管理状态(新状态)) == 当前
     if not 仍有效:
         return {"configured": False, "message": "当前账号已变化，请刷新"}
     新额度 = _解析ZLibrary额度状态(新状态)
-    当前可用 = _选取ZLibrary当前账号(新记录, 作用域, 新额度)
+    新管理 = _解析ZLibrary管理状态(新状态)
+    当前可用 = _选取ZLibrary当前账号(新记录, 作用域, 新额度, 新管理)
     摘要["current_account_id"] = _ZLibrary账号资料键(作用域, *当前可用) if 当前可用 else ""
     摘要["account"]["is_current"] = bool(当前可用 and 当前可用[0] == 标识)
-    摘要["account"]["quota_paused"] = 新额度.get(键, {}).get("status") == "quota_paused"
+    摘要["account"].update(_ZLibrary账号安全摘要(作用域, 标识, 账号, (当前可用 or ("",))[0], 新额度, 新管理))
+    摘要["account"].pop("profile", None)
     return {**摘要, "profile": dict(资料)}
+
+
+async def 管理ZLibrary账号(配置: Any, 数据: dict[str, Any], 授权检查=lambda: True) -> dict[str, Any]:
+    """仅操作本机器人已有账号；原值比较防止迟到请求覆盖新凭据。"""
+    作用域, 快照 = _ZLibrary注册配置快照(配置)
+    操作 = 数据.get("action")
+    编号 = 数据.get("ids")
+    if (操作 not in {"enable", "disable", "group", "edit", "select", "delete"}
+            or not isinstance(编号, list) or not 1 <= len(编号) <= 100
+            or any(not isinstance(x, str) or not re.fullmatch(r"[a-f0-9]{64}", x) for x in 编号)):
+        raise ValueError("账号操作参数无效")
+    编号 = list(dict.fromkeys(编号))
+    if 操作 in {"select", "edit"} and len(编号) != 1:
+        raise ValueError("请选择一个账号")
+    分组, 备注 = 数据.get("group", ""), 数据.get("note", "")
+    if not isinstance(分组, str) or len(分组) > 40 or not isinstance(备注, str) or len(备注) > 200:
+        raise ValueError("分组或备注过长")
+    async with ZLibrary账号管理锁.setdefault(作用域, asyncio.Lock()):
+        状态 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
+        记录 = {_ZLibrary账号资料键(作用域, *项): 项 for 项 in _解析ZLibrary账号记录(状态)}
+        if any(x not in 记录 or 记录[x][1].get("status") != "logged_in" for x in 编号):
+            raise ValueError("账号已变化或尚未完成注册，请刷新")
+        管理 = _解析ZLibrary管理状态(状态)
+        if 操作 == "select":
+            if 管理["accounts"].get(编号[0], {}).get("enabled") is False:
+                raise ValueError("请先启用账号")
+            摘要 = await 获取ZLibrary账号摘要(快照, 刷新=True, 账号标识=编号[0])
+            资料 = 摘要.get("profile", {})
+            if not 资料.get("available") or not isinstance(资料.get("downloads_remaining"), int) or 资料["downloads_remaining"] <= 0:
+                raise ValueError("账号额度未确认或已耗尽，暂不能切换")
+        期望, 写入, 删除 = {}, {}, []
+        for 键 in 编号:
+            原键, _ = 记录[键]
+            期望[原键] = 状态[原键]
+            元键 = "__meta_" + 键
+            期望[元键] = 状态.get(元键)
+            元 = dict(管理["accounts"].get(键, {"enabled": True, "group": "", "note": ""}))
+            if 操作 == "delete":
+                删除.append(原键)
+                for 附键 in (元键, "__quota_" + 键):
+                    期望[附键] = 状态.get(附键)
+                    删除.append(附键)
+            elif 操作 in {"enable", "disable", "group", "edit"}:
+                if 操作 in {"enable", "disable"}: 元["enabled"] = 操作 == "enable"
+                if 操作 in {"group", "edit"}: 元["group"] = 分组.strip()
+                if 操作 == "edit": 元["note"] = 备注.strip()
+                写入[元键] = json.dumps(元, ensure_ascii=False)
+        if 操作 == "select" or (操作 == "delete" and 管理["preferred"] in 编号):
+            期望["__selection__"] = 状态.get("__selection__")
+            写入["__selection__"] = json.dumps({"preferred": 编号[0] if 操作 == "select" else ""})
+        if not 授权检查():
+            raise PermissionError("登录已失效")
+        成功 = await asyncio.to_thread(运行状态数据库.比较并更新运行状态值, 快照, ZLibrary账号命名空间, 期望, 写入, 删除)
+        if not 成功:
+            raise ValueError("账号已变化，请刷新后重试")
+        for 键 in 编号:
+            if 操作 == "delete": ZLibrary账号资料缓存.pop(键, None)
+    return {"message": "账号操作已保存", **await 获取ZLibrary账号列表(快照)}
+
+
+async def 导入ZLibrary账号(配置: Any, 数据: dict[str, Any], 授权检查=lambda: True) -> dict[str, Any]:
+    """验证现有邮箱账号后保存；不创建远端账号，不返回凭据。"""
+    作用域, 快照 = _ZLibrary注册配置快照(配置)
+    输入 = 数据.get("accounts")
+    if not isinstance(输入, list) or not 1 <= len(输入) <= 50:
+        raise ValueError("每次导入 1～50 个账号")
+    账号集 = []
+    已见 = set()
+    for 项 in 输入:
+        if not isinstance(项, dict): raise ValueError("账号格式无效")
+        邮箱, 密码 = 项.get("email"), 项.get("password")
+        if (not isinstance(邮箱, str) or not re.fullmatch(r"[^\s@]{1,100}@[^\s@]{1,150}", 邮箱.strip())
+                or not isinstance(密码, str) or not 1 <= len(密码) <= 512):
+            raise ValueError("邮箱或密码格式无效")
+        邮箱 = 邮箱.strip().casefold()
+        if 邮箱 in 已见: raise ValueError("导入内容包含重复邮箱")
+        已见.add(邮箱)
+        账号集.append({"email": 邮箱, "password": 密码})
+    结果 = []
+    async with ZLibrary账号管理锁.setdefault(作用域, asyncio.Lock()):
+        初始 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
+        async def 验证(账号):
+            try:
+                async with asyncio.timeout(45), ZLibrary账号资料并发:
+                    async with _创建ZLibrary会话() as session:
+                        登录 = await _登录ZLibraryEAPI(session, 账号)
+                        响应 = await _请求ZLibrary注册接口(session, "GET", ZLibrary搜索域名 + "/eapi/user/profile", "profile")
+                用户 = 响应.get("user")
+                if (响应.get("success") != 1 or not isinstance(用户, dict) or str(用户.get("id")) != str(登录.get("id"))
+                        or not 用户.get("email") or str(用户["email"]).casefold() != 账号["email"]):
+                    return None
+                return _投影ZLibrary账号资料(用户)
+            except Exception as exc:
+                logger.warning("ZLibrary导入验证失败：HTTP=%s 错误类型=%s", getattr(exc, "http状态", 0), type(exc).__name__)
+                return None
+        资料集 = await asyncio.gather(*(验证(x) for x in 账号集))
+        for 账号, 资料 in zip(账号集, 资料集):
+            行结果 = {"email": 账号["email"], "success": False}
+            if 资料 is None:
+                结果.append({**行结果, "message": "登录或资料验证失败"}); continue
+            if not 授权检查(): raise PermissionError("登录已失效")
+            当前 = await asyncio.to_thread(运行状态数据库.读取运行状态命名空间, 快照, ZLibrary账号命名空间)
+            旧 = [x for x in _解析ZLibrary账号记录(初始) if x[1]["email"].casefold() == 账号["email"]]
+            新 = [x for x in _解析ZLibrary账号记录(当前) if x[1]["email"].casefold() == 账号["email"]]
+            if len(旧) > 1 or 新 != 旧 or (旧 and 旧[0][1].get("status") != "logged_in"):
+                结果.append({**行结果, "message": "账号已变化或正在注册，请刷新"}); continue
+            标识 = 旧[0][0] if 旧 else "import_" + hashlib.sha256(账号["email"].encode()).hexdigest()
+            新账号 = {**账号, "name": 资料.get("name", ""), "status": "logged_in",
+                      "created_at": 旧[0][1].get("created_at", "") if 旧 else dt.datetime.now(dt.timezone.utc).isoformat()}
+            新键 = _ZLibrary账号资料键(作用域, 标识, 新账号)
+            期望 = {标识: 初始.get(标识)}
+            写入 = {标识: json.dumps(新账号, ensure_ascii=False)}
+            删除 = []
+            if 旧:
+                旧键 = _ZLibrary账号资料键(作用域, *旧[0])
+                if 旧键 != 新键:
+                    元键 = "__meta_" + 旧键
+                    新元键 = "__meta_" + 新键
+                    期望.update({元键: 当前.get(元键), 新元键: 当前.get(新元键), "__selection__": 当前.get("__selection__")})
+                    写入[新元键] = 当前.get(元键) or json.dumps({"enabled": True})
+                    删除.append(元键)
+                    if _解析ZLibrary管理状态(当前)["preferred"] == 旧键:
+                        写入["__selection__"] = json.dumps({"preferred": 新键})
+            if not 授权检查(): raise PermissionError("登录已失效")
+            成功 = await asyncio.to_thread(运行状态数据库.比较并更新运行状态值, 快照, ZLibrary账号命名空间, 期望, 写入, 删除)
+            if 成功:
+                await _保存ZLibrary额度状态(快照, 新键, 资料)
+                ZLibrary账号资料缓存[新键] = {"expires": time.monotonic() + 60, "failed": False, "profile": 资料}
+            结果.append({**行结果, "success": 成功, "message": "已更新" if 成功 and 旧 else "已导入" if 成功 else "账号已变化，请刷新"})
+    return {"results": 结果, "message": f"导入成功 {sum(x['success'] for x in 结果)} / {len(结果)}", **await 获取ZLibrary账号列表(快照)}
 
 
 def _ZLibrary注册配置快照(配置: Any) -> tuple[str, dict[str, Any]]:

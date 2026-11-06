@@ -87,6 +87,8 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/pan-accounts/{platform}/default", 后端._处理网盘账号默认),
         ("post", "/api/pan-account-selection", 后端._处理网盘账号选择),
         ("get", "/api/qq-reader-auth", 后端._处理QQ阅读登录态),
+        ("post", "/api/zlibrary-accounts/manage", 后端._处理ZLibrary账号管理),
+        ("post", "/api/zlibrary-accounts/import", 后端._处理ZLibrary账号管理),
         ("get", "/api/zlibrary-accounts", 后端._处理ZLibrary账号资料),
         ("get", "/api/zlibrary-account", 后端._处理ZLibrary账号资料),
         ("post", "/api/zlibrary-account/refresh", 后端._处理ZLibrary账号资料),

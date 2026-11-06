@@ -186,6 +186,45 @@ def 批量写入运行状态值(
         连接.commit()
 
 
+def 比较并更新运行状态值(
+    配置: Any, 命名空间: str, 期望: dict[str, str | None],
+    写入: dict[str, str], 删除: list[str] | None = None,
+) -> bool:
+    """锁定明确状态键并比较原值后提交；新增键只 INSERT，不覆盖并发创建。"""
+    删除 = list(dict.fromkeys(删除 or []))
+    键集 = sorted(期望)
+    if (not 键集 or len(键集) > 1000 or not set(写入).issubset(期望)
+            or not set(删除).issubset(期望) or set(删除) & set(写入)
+            or not 已配置运行状态数据库(配置)):
+        return False
+    命名空间 = _机器人状态命名空间(配置, 命名空间)
+    数据库配置 = 获取数据库配置(配置)
+    表名 = 数据库配置.get("runtime_state_table") or 运行状态数据库表名
+    with 打开数据库连接(数据库配置) as 连接:
+        _确保运行状态表一次(连接, 数据库配置, 表名)
+        try:
+            连接.begin()
+            with 连接.cursor() as 游标:
+                占位 = ",".join(["%s"] * len(键集))
+                游标.execute(f"SELECT state_key,state_value FROM `{表名}` WHERE namespace=%s AND state_key IN ({占位}) ORDER BY state_key FOR UPDATE", (命名空间, *键集))
+                当前 = {str(行[0]): str(行[1]) for 行 in 游标.fetchall()}
+                if any(当前.get(键) != 值 for 键, 值 in 期望.items()):
+                    连接.rollback()
+                    return False
+                for 键, 值 in 写入.items():
+                    if 期望[键] is None:
+                        游标.execute(f"INSERT INTO `{表名}` (namespace,state_key,state_value,updated_at) VALUES (%s,%s,%s,%s)", (命名空间, 键, 值, int(time.time())))
+                    else:
+                        游标.execute(f"UPDATE `{表名}` SET state_value=%s,updated_at=%s WHERE namespace=%s AND state_key=%s", (值, int(time.time()), 命名空间, 键))
+                for 键 in 删除:
+                    游标.execute(f"DELETE FROM `{表名}` WHERE namespace=%s AND state_key=%s", (命名空间, 键))
+            连接.commit()
+            return True
+        except Exception:
+            连接.rollback()
+            raise
+
+
 def 读取运行状态命名空间(配置: Any, 命名空间: str) -> dict[str, str]:
     if not 已配置运行状态数据库(配置):
         return {}

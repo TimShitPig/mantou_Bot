@@ -144,6 +144,8 @@ def _待取消扫码所有者(会话值: str) -> set[str]:
 async def 机器人作用域中间件(request: web.Request, handler: Any) -> web.StreamResponse:
     """每次请求固定机器人身份，选择页面及登录不继承其他页面的身份。"""
     路径 = request.path
+    if 路径 in {"/api/zlibrary-accounts/manage", "/api/zlibrary-accounts/import"}:
+        request = request.clone(client_max_size=128 * 1024)
     if not 路径.startswith("/api/") or 路径 in {"/api/login", "/api/logout", "/api/bot-profile"}:
         with 绑定机器人作用域(""):
             return await handler(request)
@@ -3063,6 +3065,33 @@ async def _处理ZLibrary账号资料(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("帮助控制台 ZLibrary账号资料读取失败：错误类型=%s", type(exc).__name__)
         return _控制台错误(502, "账号资料暂不可用，请稍后刷新")
+
+
+async def _处理ZLibrary账号管理(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号未保存")
+    数据 = await _读取请求JSON(request)
+    if not 数据:
+        return _控制台错误(400, "账号参数无效")
+    try:
+        import importlib
+        模块 = importlib.import_module("功能文件.管理功能.小说功能.小说.Z-Library小说")
+        函数 = 模块.导入ZLibrary账号 if request.path.endswith("/import") else 模块.管理ZLibrary账号
+        摘要 = await 函数(获取控制台会话配置快照(), 数据, lambda: _请求已授权(request))
+        if not _请求已授权(request):
+            return _控制台错误(401, "请重新登录控制台")
+        return web.json_response({"ok": True, **摘要}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    except PermissionError:
+        return _控制台错误(401, "请重新登录控制台")
+    except ValueError as exc:
+        # 此业务层 ValueError 只含固定短提示，不含上游响应或凭据。
+        允许 = {"账号操作参数无效", "请选择一个账号", "分组或备注过长", "账号已变化或尚未完成注册，请刷新", "请先启用账号", "账号额度未确认或已耗尽，暂不能切换", "账号已变化，请刷新后重试", "每次导入 1～50 个账号", "账号格式无效", "邮箱或密码格式无效", "导入内容包含重复邮箱"}
+        return _控制台错误(409, str(exc) if str(exc) in 允许 else "账号参数无效")
+    except Exception as exc:
+        logger.warning("帮助控制台 ZLibrary账号操作失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(502, "账号操作失败，请刷新列表确认后重试")
 
 
 def _QQ阅读JSON(数据: dict[str, Any]) -> web.Response:
