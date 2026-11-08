@@ -407,7 +407,6 @@ async def 处理群成员加入事件(event: Any) -> bool:
 
     群号 = str(事件数据.get("group_openid") or "").strip()
     成员 = str(事件数据.get("member_openid") or "").strip()
-    有跨应用用户标识 = bool(str(事件数据.get("user_openid") or "").strip())
     if not 群号 or not 成员:
         logger.warning(
             "QQ官方群成员加入事件无效：has_group=%s, has_member=%s",
@@ -416,15 +415,7 @@ async def 处理群成员加入事件(event: Any) -> bool:
         )
         return True
 
-    logger.info(
-        "QQ官方群成员加入：group_openid=%s, member_openid=%s, has_user_openid=%s",
-        群号,
-        成员,
-        有跨应用用户标识,
-    )
     发送成功 = await _发送欢迎消息(event, 成员)
-    if 发送成功:
-        logger.info("QQ官方群成员欢迎消息已发送：group_openid=%s", 群号)
-    else:
+    if not 发送成功:
         logger.warning("QQ官方群成员欢迎消息发送失败：group_openid=%s", 群号)
     return True

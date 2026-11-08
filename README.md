@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.337 |
+| 版本 | v6.1.338 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -90,6 +90,8 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 群聊“已移除”只由当前机器人收到 QQ 官方 `GROUP_DEL_ROBOT` 事件确认；资料接口的 HTTP 404、未开放白名单权限（11253）、认证、限流或网络失败保留原有成员状态，群号和成员 OpenID 中包含 `404` 也不会判为移除。旧版没有明确退群事件依据的“已移除”恢复为待确认，保留聊天记录与群资料；`GROUP_ADD_ROBOT`、新收到的群消息或成功读取的群内状态可恢复在群。状态来源与修订号随缓存、热重载和网页更新保留，迟到结果不覆盖较新状态。依据：[官方群退出事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_del_robot.html)、[官方状态接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)及[官方错误说明](https://bot.q.qq.com/wiki/develop/api-v2/openapi/error/error.html)。
 
 入群和退群记录优先使用事件真实昵称、当前群资料及已保存的身份关联资料，历史分页批量补齐已知姓名；后续收到真实昵称时更新原通知，不新增消息或未读。欢迎消息中的 `@成员` 由 QQ 客户端显示姓名，接口未返回的名字不凭空推断；从未收到姓名且成员资料接口无权限的用户保留占位。当前页面的实时资料按群、聊天类型和 AppID 隔离。
+
+群成员事件不输出正常解析、回调、欢迎投递/发送成功及人数调整的逐事件日志；保留必要标识缺失、订阅或解析器同步失败、欢迎投递及发送失败等受控告警。热重载同步替换旧版插件注入的解析器。
 
 QQ 官方 `FRIEND_ADD`、`FRIEND_DEL` 事件会按机器人和用户记录好友关系，并在对应私聊显示添加或删除好友的系统通知；删除好友保留原聊天记录。重复事件不重复计数，迟到事件不覆盖较新的关系状态。
 

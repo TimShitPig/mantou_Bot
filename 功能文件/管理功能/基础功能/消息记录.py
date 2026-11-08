@@ -7806,11 +7806,6 @@ def 调整群成员人数(
     if not isinstance(信息, dict) or 当前成员数 <= 0 or 资料更新时间 <= 0:
         标记群信息待刷新(群标识, appid)
         安排待处理群信息刷新()
-        logger.info(
-            "QQ官方群人数基线缺失，安排官方资料刷新：event=%s, group_id=%s",
-            事件名,
-            群标识,
-        )
         return False
 
     新成员数 = max(0, 当前成员数 + 变化量)
@@ -7823,13 +7818,6 @@ def 调整群成员人数(
             dict(信息),
             str(appid or 信息.get("appid") or "").strip(),
         )
-    logger.info(
-        "QQ官方群人数已按成员事件调整：event=%s, group_id=%s, delta=%s, member_num=%s",
-        事件名,
-        群标识,
-        变化量,
-        新成员数,
-    )
     return True
 
 
