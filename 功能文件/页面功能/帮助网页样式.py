@@ -270,20 +270,7 @@
      .config-saved-password { margin-inline-start:4px; padding:3px 6px; border:0; border-radius:5px; background:var(--primary-soft); color:var(--primary-dark); font:inherit; font-weight:700; }
      .config-saved-password:hover { text-decoration:underline; }
      .config-saved-password:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-     .saved-password-dialog { width:min(420px,calc(100% - 32px)); max-height:calc(100dvh - 32px); padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--panel); color:var(--ink); box-shadow:0 16px 50px #1b122b40; }
-     .saved-password-dialog::backdrop { background:#1d172c75; }
-     .saved-password-dialog h2 { margin:0; font-size:18px; }
-     .saved-password-dialog p { margin:6px 0 12px; color:var(--muted); }
-     .saved-password-dialog label { display:block; margin-bottom:5px; font-size:13px; font-weight:650; }
-     .saved-password-dialog input { width:100%; min-height:44px; padding:7px 10px; border:1px solid var(--line); border-radius:9px; background:var(--input); color:var(--ink); }
-     .saved-password-dialog input:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-     .saved-password-dialog [hidden] { display:none; }
-     .saved-password-result { display:grid; gap:5px; padding:10px; border:1px solid var(--line); border-radius:9px; background:var(--raised); }
-     .saved-password-result span { color:var(--muted); font-size:11px; }
-     .saved-password-result output { overflow-wrap:anywhere; white-space:pre-wrap; font-family:ui-monospace,monospace; }
-     #saved-password-status:empty { display:none; }
-     .saved-password-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:14px; }
-
+     .config-saved-value:not([hidden]) { display:block; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--raised); color:var(--ink); overflow-wrap:anywhere; white-space:pre-wrap; font:12px/1.55 ui-monospace,monospace; }
      .config-field textarea { min-height:74px; resize:vertical; }
      .config-field input:focus,.config-field textarea:focus,.config-field select:focus,.account-add input:focus,.group-account input:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft); }
      .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }

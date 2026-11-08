@@ -314,7 +314,7 @@
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { hideMsgCtx(); groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
-        if (next !== previousView) { closeMsgHeadMenu(); closeSavedPassword(); }
+        if (next !== previousView) { closeMsgHeadMenu(); clearSavedPassword(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); stopZLibraryAccount(); }
@@ -357,102 +357,58 @@
         if (field.kind === 'boolean') return Boolean(field.value);
         return field.secret ? '' : String(field.value ?? '');
       };
-      const savedPasswordDialog = $('saved-password-dialog');
-      const savedPasswordConfirm = $('saved-password-confirm');
-      const savedPasswordSubmit = $('saved-password-submit');
-      const savedPasswordStatus = $('saved-password-status');
-      const savedPasswordResult = $('saved-password-result');
-      let savedPasswordRequest = null;
-      let savedPasswordTimer = null;
-      let savedPasswordField = '';
+      let savedPasswordView = null;
 
       const clearSavedPassword = () => {
-        savedPasswordRequest?.abort();
-        savedPasswordRequest = null;
-        clearTimeout(savedPasswordTimer);
-        savedPasswordTimer = null;
-        savedPasswordField = '';
-        savedPasswordConfirm.value = '';
-        savedPasswordConfirm.disabled = false;
-        savedPasswordSubmit.disabled = false;
-        savedPasswordSubmit.hidden = false;
-        savedPasswordConfirm.hidden = false;
-        savedPasswordDialog.querySelector('label').hidden = false;
-        $('saved-password-value').textContent = '';
-        savedPasswordResult.hidden = true;
-        savedPasswordStatus.textContent = '';
+        if (!savedPasswordView) return;
+        const {button, output, request} = savedPasswordView;
+        savedPasswordView = null;
+        request.abort();
+        output.textContent = '';
+        output.hidden = true;
+        button.textContent = '显示已保存';
+        button.setAttribute('aria-pressed', 'false');
       };
 
-      const closeSavedPassword = () => {
-        if (!savedPasswordDialog.open) return;
+      const toggleSavedPassword = async (button) => {
+        const wasOpen = savedPasswordView?.button === button;
         clearSavedPassword();
-        savedPasswordDialog.close();
-      };
+        if (wasOpen) return;
+        const output = $(button.getAttribute('aria-controls'));
+        if (!output) return;
 
-      const openSavedPassword = (field) => {
-        if (!window.isSecureContext) {
-          toast('请通过 HTTPS 或服务器本机连接查看已保存密码');
-          return;
-        }
-        if (savedPasswordDialog.open) return;
-        clearSavedPassword();
-        savedPasswordField = field;
-        $('saved-password-title').textContent = field === 'database_password' ? '查看已保存数据库密码' : '查看已保存网页密码';
-        savedPasswordDialog.showModal();
-        savedPasswordConfirm.focus();
-      };
-
-      $('saved-password-form').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        if (!savedPasswordField || !savedPasswordConfirm.value || savedPasswordRequest) return;
         const request = new AbortController();
-        savedPasswordRequest = request;
-        const body = JSON.stringify({field:savedPasswordField, password:savedPasswordConfirm.value});
-        savedPasswordConfirm.value = '';
-        savedPasswordConfirm.disabled = true;
-        savedPasswordSubmit.disabled = true;
-        savedPasswordStatus.textContent = '正在验证…';
+        const current = {button, output, request};
+        savedPasswordView = current;
+        button.textContent = '隐藏已保存';
+        button.setAttribute('aria-pressed', 'true');
+        output.textContent = '正在读取…';
+        output.hidden = false;
         try {
+          const body = JSON.stringify({field:button.dataset.configSavedPassword});
           const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
-          if (!savedPasswordDialog.open || savedPasswordRequest !== request || typeof data.value !== 'string') return;
-          savedPasswordStatus.textContent = '';
-          savedPasswordConfirm.hidden = true;
-          savedPasswordSubmit.hidden = true;
-          savedPasswordDialog.querySelector('label').hidden = true;
-          $('saved-password-value').textContent = data.value;
-          savedPasswordResult.hidden = false;
-          $('saved-password-close').focus();
-          savedPasswordTimer = setTimeout(closeSavedPassword, 20000);
+          if (savedPasswordView !== current) return;
+          if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的密码');
+          output.textContent = data.value;
         } catch (error) {
-          if (!savedPasswordDialog.open || savedPasswordRequest !== request) return;
-          savedPasswordStatus.textContent = error.message || '无法查看已保存密码，请重试';
-          if (error.status === 401) { closeSavedPassword(); showAuthError(error); }
-        } finally {
-          if (savedPasswordRequest === request) {
-            savedPasswordRequest = null;
-            if (savedPasswordResult.hidden) {
-              savedPasswordConfirm.disabled = false;
-              savedPasswordSubmit.disabled = false;
-              savedPasswordConfirm.focus();
-            }
-          }
+          if (savedPasswordView !== current) return;
+          clearSavedPassword();
+          if (error.status === 401) showAuthError(error);
+          else if (error.name !== 'AbortError') toast(error.message || '无法查看已保存密码，请重试');
         }
+      };
+      document.addEventListener('visibilitychange', () => { if (document.hidden) clearSavedPassword(); });
+      window.addEventListener('pagehide', clearSavedPassword);
+      const botTabs = document.querySelector('.studio-bot-tabs');
+      botTabs?.addEventListener('click', clearSavedPassword);
+      botTabs?.addEventListener('keydown', (event) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedPassword();
       });
-      $('saved-password-close').addEventListener('click', closeSavedPassword);
-      savedPasswordDialog.addEventListener('cancel', (event) => {
-        event.preventDefault();
-        closeSavedPassword();
-      });
-      savedPasswordDialog.addEventListener('close', () => {
-        if (!savedPasswordDialog.open) clearSavedPassword();
-      });
-      document.addEventListener('visibilitychange', () => { if (document.hidden) closeSavedPassword(); });
-      window.addEventListener('blur', closeSavedPassword);
-      window.addEventListener('pagehide', closeSavedPassword);
 
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
+        if (savedPasswordView && node.contains(savedPasswordView.output)) clearSavedPassword();
         const selected = (fields || []).filter((field) => {
           if (filter && !filter(field)) return false;
           // 展示教程尺寸、端口和登录凭据；监听地址/域名继续由后端读取。
@@ -486,8 +442,11 @@
           const secretAttr = field.secret ? ' data-config-secret autocomplete="new-password"' : '';
           const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}"${secretAttr} ${editable ? '' : 'disabled'} value="${esc(safeFieldValue(field))}" placeholder="${esc(placeholder)}">`;
           const toggle = passwordField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" disabled aria-label="显示正在输入的新密码" aria-pressed="false">显示输入</button>` : '';
-          const reveal = passwordField && field.configured ? `<button class="config-saved-password" type="button" data-config-saved-password="${esc(field.key)}">查看已保存</button>` : '';
-          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint} ${reveal}</small></div>`;
+          const savedValueId = `saved-${inputId}`;
+          const canReveal = passwordField && field.configured;
+          const reveal = canReveal ? `<button class="config-saved-password" type="button" data-config-saved-password="${esc(field.key)}" aria-controls="${savedValueId}" aria-pressed="false">显示已保存</button>` : '';
+          const savedValue = canReveal ? `<output id="${savedValueId}" class="config-saved-value" hidden></output>` : '';
+          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint} ${reveal}</small>${savedValue}</div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
@@ -518,7 +477,7 @@
           update();
         });
         node.querySelectorAll('[data-config-saved-password]').forEach((button) => {
-          button.addEventListener('click', () => openSavedPassword(button.dataset.configSavedPassword));
+          button.addEventListener('click', () => void toggleSavedPassword(button));
         });
       };
        const renderDatabaseStatus = (database = {}) => {
@@ -2404,7 +2363,7 @@
         $('updated').textContent = '--';
       };
       const exitBotConsole = (push = true) => {
-        closeSavedPassword();
+        clearSavedPassword();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
         void stopQuarkWebScan(); leaveQQReader(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;

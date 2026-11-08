@@ -217,23 +217,6 @@ from .帮助网页脚本 import 控制台脚本
       <button class="msg-lightbox-close" id="msg-lightbox-close" type="button" title="关闭">&times;</button>
     </div>
   </div>
-  <dialog id="saved-password-dialog" class="saved-password-dialog" aria-labelledby="saved-password-title" aria-describedby="saved-password-instructions">
-    <form id="saved-password-form" method="dialog">
-      <h2 id="saved-password-title">查看已保存密码</h2>
-      <p id="saved-password-instructions">输入当前控制台登录密码以验证身份。</p>
-      <label for="saved-password-confirm">当前控制台登录密码</label>
-      <input id="saved-password-confirm" type="password" autocomplete="current-password" maxlength="1024" required>
-      <div id="saved-password-result" class="saved-password-result" hidden>
-        <span>已保存密码 · 20 秒后隐藏</span>
-        <output id="saved-password-value"></output>
-      </div>
-      <p id="saved-password-status" role="status"></p>
-      <div class="saved-password-actions">
-        <button id="saved-password-close" class="outline-button" type="button">关闭</button>
-        <button id="saved-password-submit" class="primary-button" type="submit">验证并查看</button>
-      </div>
-    </form>
-  </dialog>
   <div id="toast" class="toast" role="status"></div>
 """
 脚本标签前缀 = """
