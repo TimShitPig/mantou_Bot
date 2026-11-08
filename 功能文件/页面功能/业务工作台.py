@@ -2,52 +2,45 @@
 
 业务页面 = """
         <section id="page-bot" class="page-view studio-service-page" data-page="bot" hidden>
-          <div class="studio-bot-grid">
-            <article id="overview" class="studio-card studio-bot-identity">
-              <span class="studio-kicker">当前机器人</span>
-              <h2>身份与状态</h2>
+          <div class="studio-card studio-bot-workspace">
+            <header id="overview" class="studio-bot-identity">
               <div class="studio-bot-badge">
-                <div class="bot-avatar" data-bot-avatar>
-                  <span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span>
-                </div>
-                <div><strong data-bot-name>馒头助手</strong><span class="bot-profile-status" data-bot-status>状态未知</span></div>
-              </div>
-              <dl class="studio-bot-facts">
-                <div><dt>QQ 号</dt><dd data-bot-id>由适配器提供</dd></div>
-                <div><dt>消息渠道</dt><dd>QQ 官方机器人</dd></div>
-              </dl>
-            </article>
-            <article id="config" class="studio-card studio-bot-permissions">
-              <header class="studio-service-head">
+                <div class="bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div>
                 <div>
-                  <span class="studio-kicker">配置</span>
-                  <h2>访问权限与帮助网页</h2>
-                  <p>管理管理员白名单、帮助网页与 ZLibrary 邮箱设置。</p>
+                  <h2 data-bot-name>馒头助手</h2>
+                  <span class="bot-profile-status" data-bot-status>状态未知</span>
                 </div>
+              </div>
+              <dl class="studio-bot-facts"><dt>QQ 号</dt><dd data-bot-id>由适配器提供</dd></dl>
+            </header>
+
+            <div class="studio-bot-tabs" role="tablist" aria-label="机器人与账号分区">
+              <button id="bot-tab-basic" type="button" role="tab" aria-selected="true" aria-controls="config">基础设置</button>
+              <button id="bot-tab-qq" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-qq" tabindex="-1">QQ 阅读</button>
+              <button id="bot-tab-zlibrary" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-zlibrary" tabindex="-1">ZLibrary</button>
+            </div>
+
+            <section id="config" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-basic" tabindex="0">
+              <header class="studio-service-head">
+                <div><h3>权限与网页设置</h3><p>管理员白名单、帮助网页及 ZLibrary 注册邮箱设置。</p></div>
               </header>
               <div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置…</div></div>
-            </article>
-          </div>
+            </section>
 
-          <section class="studio-reading-group" aria-labelledby="studio-reading-title">
-            <header class="studio-service-head">
-              <div><span class="studio-kicker">账号管理</span><h2 id="studio-reading-title">阅读账号</h2></div>
-            </header>
-            <article class="studio-card studio-qq-card">
+            <section id="bot-panel-qq" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-qq" tabindex="0" hidden>
               <header class="studio-service-head">
-                <div><h3>QQ 阅读</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
-                <span class="studio-service-icon studio-icon-peach" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v14M3 5c4-1 6 0 9 2 3-2 5-3 9-2v13c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span>
+                <div><h3>QQ 阅读账号</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
               </header>
               <div id="qq-auth-editor"><div class="empty">正在读取登录态…</div></div>
-            </article>
-            <article class="studio-card zlibrary-accounts-card">
-              <header class="studio-service-head zlibrary-card-heading">
-                <div><h3>ZLibrary</h3><p>限流账号自动跳过，额度恢复后重新参与轮询。</p></div>
-                <span class="studio-service-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5h4v14m0 0V7h5v12m0 0 1-13 5 1-1 12M3 19h18"/></svg></span>
+            </section>
+
+            <section id="bot-panel-zlibrary" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-zlibrary" tabindex="0" hidden>
+              <header class="studio-service-head">
+                <div><h3>ZLibrary 账号</h3><p>搜索、导入账号或按分组管理。</p></div>
               </header>
               <div id="zlibrary-account-editor" aria-live="polite"><div class="empty">正在读取账号…</div></div>
-            </article>
-          </section>
+            </section>
+          </div>
         </section>
 
         <section id="page-novels" class="page-view studio-service-page" data-page="novels" hidden>

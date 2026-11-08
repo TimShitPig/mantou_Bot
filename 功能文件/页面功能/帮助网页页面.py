@@ -5,6 +5,7 @@
 
 from .业务工作台 import 业务页面
 from .业务工作台样式 import 业务样式
+from .业务工作台脚本 import 业务脚本
 from .工作台框架 import 工作台侧栏, 工作台总览, 机器人选择
 from .工作台样式 import 工作台样式
 from .帮助网页样式 import 控制台样式
@@ -260,6 +261,7 @@ def 渲染控制台页面() -> str:
             + 页面主体
             + 脚本标签前缀
             + 控制台脚本
+            + 业务脚本
             + 脚本标签后缀
         )
     return _控制台页面缓存

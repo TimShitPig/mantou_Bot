@@ -46,7 +46,6 @@
       background: var(--studio-peach);
       color: var(--peach-ink, var(--studio-ink));
     }
-    .studio-bot-grid,
     .studio-novel-grid,
     #pans.studio-pans-grid {
       display: grid;
@@ -54,41 +53,75 @@
       align-items: start;
       gap: var(--service-gap);
     }
-    .studio-bot-grid { grid-template-columns: minmax(200px, .7fr) minmax(0, 2fr); }
-    #page-bot .studio-bot-identity {
-      background: linear-gradient(160deg, var(--studio-accent-soft) 0%, var(--studio-card) 62%);
-    }
-    .studio-bot-badge {
+    .studio-bot-workspace { display: grid; gap: 18px; }
+    .studio-bot-identity {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 13px;
-      min-width: 0;
-      margin: 22px 0;
+      justify-content: space-between;
+      gap: 9px 18px;
+      padding: 12px 15px;
+      border-radius: 13px;
+      background: var(--studio-wash);
     }
-    .studio-bot-badge > div:last-child { display: grid; gap: 4px; min-width: 0; }
-    .studio-bot-badge strong { color: var(--studio-ink); font-size: 16px; overflow-wrap: anywhere; }
-    .studio-bot-badge .bot-profile-status { color: var(--studio-muted); font-size: 12px; }
+    .studio-bot-badge { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .studio-bot-badge h2 { font-size: 17px; overflow-wrap: anywhere; }
+    .studio-bot-badge .bot-profile-status { display: inline-flex; font-size: 12px; }
     #page-bot .studio-bot-badge .bot-avatar {
-      flex: 0 0 53px;
-      width: 53px;
-      height: 53px;
-      border: 2px solid var(--studio-card);
+      flex: 0 0 42px;
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--studio-border);
       background: var(--studio-accent-soft);
-      box-shadow: 0 4px 12px color-mix(in srgb, var(--studio-accent) 16%, transparent);
+      box-shadow: none;
     }
-    #page-bot .studio-bot-badge .avatar-face { color: var(--studio-accent); }
-    .studio-bot-facts { display: grid; gap: 11px; margin: 0; }
-    .studio-bot-facts > div {
-      display: grid;
-      grid-template-columns: minmax(0, auto) minmax(0, 1fr);
-      align-items: start;
-      gap: 10px;
-      padding-top: 10px;
-      border-top: 1px solid var(--studio-border);
+    #page-bot .studio-bot-badge .avatar-face { color: var(--studio-accent); font-size: 14px; }
+    .studio-bot-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 7px;
+      margin: 0;
       font-size: 12px;
     }
     .studio-bot-facts dt { color: var(--studio-muted); }
-    .studio-bot-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-weight: 650; }
+    .studio-bot-facts dd { margin: 0; overflow-wrap: anywhere; font-weight: 650; }
+    .studio-bot-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      width: min(100%, 420px);
+      padding: 4px;
+      border: 1px solid var(--studio-border);
+      border-radius: 12px;
+      background: var(--studio-soft);
+    }
+    .studio-bot-tabs button {
+      min-width: 0;
+      min-height: 38px;
+      padding: 6px 4px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--studio-muted);
+      font-size: 13px;
+      font-weight: 680;
+      white-space: nowrap;
+    }
+    .studio-bot-tabs button:hover { color: var(--studio-accent); }
+    .studio-bot-tabs button[aria-selected="true"] {
+      border-color: var(--studio-border);
+      background: var(--studio-card);
+      color: var(--studio-accent);
+    }
+    .studio-bot-tabs button:focus-visible, .studio-bot-panel:focus-visible {
+      outline: 2px solid var(--studio-accent);
+      outline-offset: 2px;
+    }
+    .studio-bot-panel { min-width: 0; }
+    .studio-bot-panel[hidden] { display: none; }
+    #page-bot .config-fields {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+    }
     #page-bot .config-group {
       padding: 15px 16px;
       border-color: var(--studio-border);
@@ -105,8 +138,7 @@
       border-color: var(--studio-accent);
       box-shadow: 0 0 0 3px var(--studio-accent-soft);
     }
-    .studio-reading-group { display: grid; gap: var(--service-gap); margin-top: 24px; min-width: 0; }
-    .studio-reading-group > .studio-service-head { margin: 0; }
+    #page-bot .qq-reader-toolbar { flex-wrap: wrap; }
     #page-bot .qq-reader-account {
       padding: 14px;
       border-color: var(--studio-border);
@@ -117,7 +149,7 @@
       border-color: var(--studio-accent);
       background: var(--studio-accent-soft);
     }
-    #page-bot .zlibrary-accounts-card {
+    #bot-panel-zlibrary {
       --ink: var(--studio-ink);
       --muted: var(--studio-muted);
       --line: var(--studio-border);
@@ -126,10 +158,6 @@
       --hover: var(--studio-accent-soft);
       --primary: var(--studio-accent);
       --primary-soft: var(--studio-accent-soft);
-      margin: 0;
-      border-color: var(--studio-border);
-      background: var(--studio-card);
-      box-shadow: var(--studio-shadow);
     }
     #page-bot .zlibrary-toolbar { margin-top: 14px; }
     #page-bot .zlibrary-manager-tools { margin-bottom: 14px; }
@@ -335,20 +363,14 @@
       box-shadow: none;
     }
 
-    @media (max-width: 1120px) {
-      #page-bot .config-fields { grid-template-columns: minmax(0, 1fr); }
-    }
     @media (max-width: 900px) {
-      .studio-bot-grid,
       .studio-novel-grid,
       #pans.studio-pans-grid { grid-template-columns: minmax(0, 1fr); }
       .studio-novel-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .studio-novel-settings .studio-service-head { grid-column: 1 / -1; }
-      #page-bot .config-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
-      .studio-novel-settings,
-      #page-bot .config-fields { grid-template-columns: minmax(0, 1fr); }
+      .studio-novel-settings { grid-template-columns: minmax(0, 1fr); }
       #page-novels #novel-grid {
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
         gap: 8px;
