@@ -1,13 +1,16 @@
 """运营工作台的设计变量与响应式页面样式。"""
 
 工作台样式 = """
-    body:not(.messages-workspace) {
+    body {
       --studio-canvas:#f4f1fc; --studio-card:#fffdfd; --studio-ink:#27213d; --studio-muted:#625c75;
       --studio-border:#e5dfef; --studio-accent:#6659c1; --studio-accent-soft:#eee9ff;
       --studio-soft:#f7f4fc; --studio-peach:#ffe9d8; --studio-peach-ink:#87462e;
       --studio-mint:#e6f5ed; --studio-mint-ink:#2d6950; --studio-hover:#f1ecfa;
       --studio-wash:linear-gradient(112deg,#f4eeff 1%,#f8f2ff 53%,#fff0e4 100%);
       --studio-shadow:0 8px 24px #40316b0d,0 2px 4px #40316b06;
+      --studio-space:clamp(12px,2vw,24px); --studio-sidebar-width:236px;
+    }
+    body:not(.messages-workspace) {
       --ink:var(--studio-ink); --muted:var(--studio-muted); --soft:var(--studio-muted); --line:var(--studio-border);
       --bg:var(--studio-canvas); --panel:var(--studio-card); --raised:var(--studio-soft);
       --input:var(--studio-soft); --hover:var(--studio-hover); --shadow:var(--studio-shadow);
@@ -22,36 +25,40 @@
       overflow-x:clip;
       overflow-y:visible;
     }
-    :root[data-theme="dark"] body:not(.messages-workspace) {
+    :root[data-theme="dark"] body {
       --studio-canvas:#211c2e; --studio-card:#2d263d; --studio-ink:#fbf4ff; --studio-muted:#c3b8d4;
       --studio-border:#493d5d; --studio-accent:#c6b6ff; --studio-accent-soft:#3e325a;
       --studio-soft:#332b45; --studio-peach:#48332e; --studio-peach-ink:#ffd0b4;
       --studio-mint:#263c35; --studio-mint-ink:#a2dcc0; --studio-hover:#3c3153;
       --studio-wash:linear-gradient(112deg,#382a50 1%,#332744 58%,#422d36 100%);
       --studio-shadow:0 8px 24px #160e2354;
+    }
+    :root[data-theme="dark"] body:not(.messages-workspace) {
       --primary-dark:#e2d7ff; --accent-fill:#9e88ef; --accent-hover:#b9a7ff;
       background:radial-gradient(ellipse at 0 0,#49334799,transparent 33rem),
                  radial-gradient(ellipse at 94% 0,#403259aa,transparent 44rem),var(--studio-canvas);
     }
-    .studio-sidebar { display:none; }
     body:not(.messages-workspace) .shell {
-      --studio-space:clamp(12px,2vw,24px);
       display:grid; width:min(1740px,100%); height:auto; min-height:100vh; min-height:100dvh;
       margin:0 auto; padding:12px var(--studio-space) var(--studio-space);
-      grid-template-columns:218px minmax(0,1fr);
+      grid-template-columns:var(--studio-sidebar-width) minmax(0,1fr);
       grid-template-rows:auto minmax(0,1fr); grid-template-areas:"top top" "side main";
       gap:var(--studio-space); align-content:start; overflow:visible;
     }
     body:not(.messages-workspace) .shell.bot-picker-open {
       grid-template-columns:minmax(0,1fr); grid-template-areas:"top" "main";
     }
-    body:not(.messages-workspace) .shell > #console-sidebar { display:none; }
-    body:not(.messages-workspace) .shell:not(.bot-picker-open) > .studio-sidebar {
+    .shell > .studio-sidebar:not([hidden]) {
       grid-area:side; display:flex; flex-direction:column; align-self:start; position:sticky; top:16px;
-      min-width:0; padding:13px; gap:15px;
+      min-width:0; max-height:calc(100dvh - 32px); padding:16px; gap:18px;
       border:1px solid var(--studio-border); border-radius:22px;
       background:var(--studio-card); box-shadow:var(--studio-shadow);
     }
+    .messages-workspace .shell > .studio-sidebar:not([hidden]) {
+      position:static; align-self:stretch; min-height:0; max-height:none;
+      margin:var(--studio-space) 0 var(--studio-space) var(--studio-space);
+    }
+    .studio-sidebar :focus-visible { outline:2px solid var(--studio-accent); outline-offset:2px; }
     body:not(.messages-workspace) .shell > .topbar {
       position:relative; display:flex; gap:16px; min-width:0; min-height:61px;
       padding:3px 5px; background:transparent; border:0;
@@ -86,7 +93,7 @@
     body:not(.messages-workspace) .topbar .admin-popover { z-index:30; border-radius:15px; }
     .studio-robot {
       display:grid; grid-template-columns:39px minmax(0,1fr); gap:10px; align-items:center;
-      padding:12px 10px; border-radius:14px; background:var(--studio-wash);
+      flex:none; padding:12px; border-radius:14px; background:var(--studio-wash);
     }
     .studio-robot strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
     .studio-robot small { display:inline-flex; font-size:11px; }
@@ -96,16 +103,17 @@
     }
     .studio-bot-avatar .avatar-face { inset:0; display:grid; place-items:center; font-size:14px; letter-spacing:0; color:inherit; }
     .studio-bot-avatar.has-image .avatar-face { display:none; }
-    .studio-nav { display:grid; gap:12px; }
-    .studio-nav-group { display:grid; gap:4px; }
+    .studio-nav { display:grid; align-content:start; gap:15px; min-height:0; overflow-y:auto; scrollbar-width:thin; padding:2px; }
+    .studio-nav-group { display:grid; gap:7px; }
     .studio-nav-group > p {
-      margin:0 0 3px; padding:0 10px; color:var(--studio-muted);
+      margin:0 0 3px; padding:0 9px; color:var(--studio-muted);
       font-size:11px; font-weight:720; letter-spacing:.075em;
     }
     .studio-nav-group a {
-      display:flex; align-items:center; gap:9px; min-height:40px; padding:7px 10px;
+      display:flex; align-items:center; gap:10px; min-height:43px; padding:8px 9px;
       border-radius:11px; text-decoration:none; color:var(--studio-ink); font-weight:620;
     }
+    .studio-nav-group a:focus-visible { outline-offset:-2px; }
     .studio-nav-group a:hover { background:var(--studio-hover); }
     .studio-nav-group a[aria-current="page"] { background:var(--studio-accent-soft); color:var(--studio-accent); }
     .studio-nav-icon {
@@ -115,9 +123,22 @@
     .studio-nav-group:nth-child(2) .studio-nav-icon { background:var(--studio-peach); color:var(--studio-peach-ink); }
     .studio-nav-group:nth-child(3) .studio-nav-icon { background:var(--studio-mint); color:var(--studio-mint-ink); }
     .studio-nav-icon svg,.studio-exit svg { width:17px; height:17px; }
+    .studio-sidebar-actions { display:flex; flex:none; align-items:stretch; gap:5px; }
+    .messages-workspace .studio-sidebar-actions { margin-top:auto; }
+    .studio-message-tools { display:none; }
+    .messages-workspace .studio-message-tools { display:flex; flex:none; gap:5px; }
+    .studio-message-tools button {
+      display:grid; place-items:center; width:31px; padding:0;
+      border:1px solid var(--studio-border); border-radius:9px;
+      background:var(--studio-soft); color:var(--studio-muted);
+    }
+    .studio-message-tools button:hover,.studio-message-tools button[aria-expanded="true"] {
+      background:var(--studio-accent-soft); color:var(--studio-accent);
+    }
+    .studio-message-tools svg { width:17px; height:17px; }
     .studio-exit {
-      display:flex; align-items:center; justify-content:center; gap:7px; min-height:38px;
-      padding:7px; background:var(--studio-soft); border:1px solid var(--studio-border);
+      display:flex; align-items:center; justify-content:center; gap:5px; min-height:40px; flex:1;
+      padding:6px; background:var(--studio-soft); border:1px solid var(--studio-border);
       border-radius:11px; color:var(--studio-muted); font-weight:650; white-space:nowrap;
     }
     .studio-exit:hover { color:var(--studio-accent); background:var(--studio-accent-soft); }
@@ -247,29 +268,33 @@
     body:not(.messages-workspace) .studio-picker .bot-picker-error { border-radius:12px; }
 
     @media (max-width:1100px) {
-      body:not(.messages-workspace) .shell { grid-template-columns:184px minmax(0,1fr); }
+      body { --studio-sidebar-width:204px; }
       .studio-nav-group a { padding-inline:7px; }
     }
     @media (max-width:900px) {
       .studio-dashboard-grid { grid-template-columns:minmax(0,1fr); }
       .studio-dashboard-side { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
     }
-    @media (max-width:740px) {
+    @media (max-width:760px) {
       body:not(.messages-workspace) .shell {
         grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr);
         grid-template-areas:"top" "side" "main"; gap:10px;
       }
       body:not(.messages-workspace) .shell.bot-picker-open { grid-template-rows:auto minmax(0,1fr); }
-      body:not(.messages-workspace) .shell:not(.bot-picker-open) > .studio-sidebar {
+      .shell > .studio-sidebar:not([hidden]) {
         position:static; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px;
-        padding:9px; border-radius:17px;
+        padding:9px; border-radius:17px; max-height:none;
       }
+      .messages-workspace .shell > .studio-sidebar:not([hidden]) { margin:8px 10px 0; }
+      :root body.messages-workspace.msg-mobile-chat-view .shell > .studio-sidebar { display:none; }
       .studio-robot { grid-template-columns:29px minmax(0,1fr); padding:5px 8px; gap:7px; }
       .studio-bot-avatar { width:29px; height:29px; border-radius:9px; }
       .studio-robot strong { font-size:12px; }
       .studio-robot small { font-size:10px; }
-      .studio-exit { grid-area:1 / 2; align-self:center; padding-inline:8px; min-height:34px; font-size:11px; }
-      .studio-nav { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px 8px; }
+      .studio-sidebar-actions { grid-area:1 / 2; align-self:center; }
+      .messages-workspace .studio-sidebar-actions { margin-top:0; }
+      .studio-exit { padding-inline:7px; min-height:34px; font-size:11px; }
+      .studio-nav { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px 8px; overflow:visible; padding:0; }
       .studio-nav-group { display:flex; flex-wrap:wrap; gap:4px; }
       .studio-nav-group > p { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
       .studio-nav-group a { min-height:34px; padding:4px 6px; gap:4px; font-size:12px; }

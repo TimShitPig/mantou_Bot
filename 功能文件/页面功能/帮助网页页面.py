@@ -12,6 +12,7 @@ from .帮助网页样式 import 控制台样式
 from .消息记录皮肤 import 消息记录皮肤
 from .系统工作台 import 系统页面
 from .系统工作台样式 import 系统样式
+from .系统工作台脚本 import 系统脚本
 from .帮助网页脚本 import 控制台脚本
 
 页面头部前缀 = """<!doctype html>
@@ -57,26 +58,6 @@ from .帮助网页脚本 import 控制台脚本
         </div>
       </div>
     </header>
-    <aside class="sidebar" id="console-sidebar" hidden>
-      <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><strong data-bot-name>馒头助手</strong><span class="bot-profile-status" data-bot-status>状态未知</span></div>
-      <button id="bot-exit" class="bot-workspace-exit" type="button">退出机器人</button>
-      <div><div class="nav-label">工作台</div><nav class="nav" aria-label="控制台导航">
-        <a href="?view=dashboard" data-view="dashboard" title="控制台"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>控制台</a>
-        <a href="?view=bot" data-view="bot" title="机器人配置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span>机器人配置</a>
-        <a href="?view=novels" data-view="novels" title="小说功能"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span>小说功能</a>
-        <a href="?view=pans" data-view="pans" title="网盘配置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span>网盘配置</a>
-        <a href="?view=messages" data-view="messages" title="消息记录"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg></span>消息记录</a>
-        <a href="?view=runtime" data-view="runtime" title="运行状态"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>运行状态</a>
-        <a href="?view=help" data-view="help" title="帮助指令"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 1 1 5 2c-1 1-2 1-2 3m0 3h.01"/></svg></span>帮助指令</a>
-        <a href="?view=settings" data-view="settings" title="系统设置"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg></span>系统设置</a>
-      </nav></div>
-      <div class="sidebar-foot"><span class="spark" aria-hidden="true">✧</span><strong>馒头工作台</strong><span>消息、小说与网盘，在这里有序运转。</span></div>
-      <div class="msg-rail-tools" aria-label="消息工作台工具">
-        <button id="msg-rail-theme" type="button" aria-label="切换主题" title="切换主题"><span class="theme-control-icon" aria-hidden="true">◐</span></button>
-        <button id="msg-rail-admin" type="button" aria-label="管理员菜单" title="管理员菜单" aria-expanded="false" aria-controls="admin-popover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></button>
-        <button id="msg-rail-exit" type="button" aria-label="退出机器人" title="退出机器人"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4H4v16h6m5-4 4-4-4-4m-7 4h11"/></svg></button>
-      </div>
-    </aside>
 """ + 工作台侧栏 + """
     <main class="main">
 """ + 机器人选择 + """
@@ -236,6 +217,23 @@ from .帮助网页脚本 import 控制台脚本
       <button class="msg-lightbox-close" id="msg-lightbox-close" type="button" title="关闭">&times;</button>
     </div>
   </div>
+  <dialog id="saved-password-dialog" class="saved-password-dialog" aria-labelledby="saved-password-title" aria-describedby="saved-password-instructions">
+    <form id="saved-password-form" method="dialog">
+      <h2 id="saved-password-title">查看已保存密码</h2>
+      <p id="saved-password-instructions">输入当前控制台登录密码以验证身份。</p>
+      <label for="saved-password-confirm">当前控制台登录密码</label>
+      <input id="saved-password-confirm" type="password" autocomplete="current-password" maxlength="1024" required>
+      <div id="saved-password-result" class="saved-password-result" hidden>
+        <span>已保存密码 · 20 秒后隐藏</span>
+        <output id="saved-password-value"></output>
+      </div>
+      <p id="saved-password-status" role="status"></p>
+      <div class="saved-password-actions">
+        <button id="saved-password-close" class="outline-button" type="button">关闭</button>
+        <button id="saved-password-submit" class="primary-button" type="submit">验证并查看</button>
+      </div>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status"></div>
 """
 脚本标签前缀 = """
@@ -260,6 +258,7 @@ def 渲染控制台页面() -> str:
             + 页面头部后缀
             + 页面主体
             + 脚本标签前缀
+            + 系统脚本
             + 控制台脚本
             + 业务脚本
             + 脚本标签后缀

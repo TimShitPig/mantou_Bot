@@ -87,25 +87,25 @@
         <section id="page-settings" class="page-view studio-system" data-page="settings" hidden>
           <div id="settings" class="studio-settings-layout">
             <article class="studio-card studio-system-card studio-database-form">
-              <div class="studio-system-heading"><div><p class="studio-kicker">服务共用</p><h2>连接参数</h2></div><span class="studio-system-source">MySQL</span></div>
-              <p class="studio-system-description">这些参数适用于本服务下的所有机器人。保存后重载插件生效。</p>
+              <div class="studio-system-heading">
+                <div><p class="studio-kicker">服务共用</p><h2>数据库连接</h2></div>
+                <div class="studio-db-tags">
+                  <span class="studio-system-source">MySQL</span>
+                  <span class="studio-db-status">已保存连接 <strong class="studio-system-state" id="settings-db-status">读取中</strong></span>
+                </div>
+              </div>
+              <p class="studio-system-description">这些参数适用于当前服务下的所有机器人。</p>
               <div id="database-config-editor" class="config-editor"><div class="empty">正在读取数据库配置…</div></div>
             </article>
-            <aside class="studio-settings-side" aria-label="数据库连接信息">
-              <section class="studio-card studio-system-card">
-                <div class="studio-system-heading"><div><p class="studio-kicker">已保存配置</p><h2>连接概况</h2></div></div>
-                <dl class="studio-system-detail">
-                  <div><dt>连接状态</dt><dd><strong class="studio-system-state" id="settings-db-status">读取中</strong></dd></div>
-                  <div><dt>数据库名称</dt><dd id="settings-db-name">读取中</dd></div>
-                </dl>
-              </section>
-              <section class="studio-card studio-system-card studio-settings-guide">
-                <div class="studio-system-heading"><h2>修改前须知</h2></div>
-                <ul>
-                  <li>留空密码会保留原密码。已保存的密码不会在页面显示。</li>
-                  <li>测试连接使用当前表单参数，不会保存。上方状态对应已保存的参数。</li>
-                </ul>
-              </section>
+            <aside class="studio-card studio-system-card studio-settings-guide" aria-labelledby="settings-db-guide-title">
+              <p class="studio-kicker">数据存储</p>
+              <h2 id="settings-db-guide-title">数据库有什么用？</h2>
+              <p class="studio-system-description">MySQL 保存聊天记录、账号与网盘配置、功能开关等数据。连接异常时，依赖数据库的功能可能无法读取或保存数据。</p>
+              <ul>
+                <li>可以先测试当前填写的参数，测试不会保存。</li>
+                <li>密码留空会保留已保存的密码。</li>
+                <li>保存修改后，重载插件才会使用新的连接参数。</li>
+              </ul>
             </aside>
           </div>
         </section>

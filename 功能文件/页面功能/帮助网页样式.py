@@ -267,6 +267,23 @@
      .config-input-wrap input { padding-right:62px; }
      .config-secret-toggle { position:absolute; top:50%; right:8px; transform:translateY(-50%); padding:3px 5px; border:0; background:transparent; color:var(--primary); cursor:pointer; font-size:11px; font-weight:700; }
      .config-secret-toggle:disabled { cursor:not-allowed; opacity:.45; }
+     .config-saved-password { margin-inline-start:4px; padding:3px 6px; border:0; border-radius:5px; background:var(--primary-soft); color:var(--primary-dark); font:inherit; font-weight:700; }
+     .config-saved-password:hover { text-decoration:underline; }
+     .config-saved-password:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+     .saved-password-dialog { width:min(420px,calc(100% - 32px)); max-height:calc(100dvh - 32px); padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--panel); color:var(--ink); box-shadow:0 16px 50px #1b122b40; }
+     .saved-password-dialog::backdrop { background:#1d172c75; }
+     .saved-password-dialog h2 { margin:0; font-size:18px; }
+     .saved-password-dialog p { margin:6px 0 12px; color:var(--muted); }
+     .saved-password-dialog label { display:block; margin-bottom:5px; font-size:13px; font-weight:650; }
+     .saved-password-dialog input { width:100%; min-height:44px; padding:7px 10px; border:1px solid var(--line); border-radius:9px; background:var(--input); color:var(--ink); }
+     .saved-password-dialog input:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+     .saved-password-dialog [hidden] { display:none; }
+     .saved-password-result { display:grid; gap:5px; padding:10px; border:1px solid var(--line); border-radius:9px; background:var(--raised); }
+     .saved-password-result span { color:var(--muted); font-size:11px; }
+     .saved-password-result output { overflow-wrap:anywhere; white-space:pre-wrap; font-family:ui-monospace,monospace; }
+     #saved-password-status:empty { display:none; }
+     .saved-password-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:14px; }
+
      .config-field textarea { min-height:74px; resize:vertical; }
      .config-field input:focus,.config-field textarea:focus,.config-field select:focus,.account-add input:focus,.group-account input:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft); }
      .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }
@@ -1631,37 +1648,18 @@
       --msg-self-inset:#244e7d; --msg-self-inset-hover:#2c5b8e; --msg-self-muted:#c5d5ec; --msg-self-link:#b9deff;
       --msg-scroll-track:#232932; --msg-scroll-thumb:#8291a8; --msg-scroll-thumb-hover:#a5b5cd;
     }
-    :root body.messages-workspace .shell { display:grid; height:100%; min-height:0; grid-template-columns:83.25px minmax(0,1fr); grid-template-rows:minmax(0,1fr); grid-template-areas:"side main"; overflow:hidden; border-radius:13.5px; }
+    :root body.messages-workspace .shell { display:grid; height:100%; min-height:0; grid-template-columns:calc(var(--studio-sidebar-width) + var(--studio-space)) minmax(0,1fr); grid-template-rows:minmax(0,1fr); grid-template-areas:"side main"; column-gap:var(--studio-space); overflow:hidden; border-radius:13.5px; }
     :root body.messages-workspace::after { position:fixed; inset:0; z-index:90; border:1px solid var(--line); border-radius:13.5px; pointer-events:none; content:""; }
     :root body.messages-workspace .topbar { display:none; }
     :root body.messages-workspace .main { height:100%; min-height:0; overflow:hidden; background:var(--panel); }
     :root body.messages-workspace .content,:root body.messages-workspace .content:has(#page-messages:not([hidden])) { width:100%; max-width:none; height:100%; margin:0; padding:0; overflow:hidden; }
     :root body.messages-workspace #page-messages { height:100%; min-height:0; margin:0; }
-    :root body.messages-workspace .sidebar { position:static; display:flex; flex-direction:column; align-items:stretch; gap:13.5px; height:100%; min-height:0; padding:18.75px 10.5px 10.5px; overflow-y:auto; scrollbar-gutter:auto; background:var(--rail); border-right:1px solid var(--line); }
-    :root body.messages-workspace .profile { display:grid; flex:0 0 auto; place-items:center; padding:3px 0 9px; margin:0; border:0; background:none; }
-    :root body.messages-workspace .profile::before,:root body.messages-workspace .profile > strong,:root body.messages-workspace .profile > .bot-profile-status,:root body.messages-workspace .bot-workspace-exit,:root body.messages-workspace .sidebar-foot,:root body.messages-workspace .nav-label { display:none; }
-    :root body.messages-workspace .profile .bot-avatar { width:42px; height:42px; border:0; border-radius:50%; background:var(--primary-soft); box-shadow:none; }
-    :root body.messages-workspace .profile .bot-avatar::before,:root body.messages-workspace .profile .bot-avatar::after { display:none; }
-    :root body.messages-workspace .profile .avatar-face { inset:0; display:grid; place-items:center; color:var(--primary); }
-    :root body.messages-workspace .profile .avatar-face svg { width:27px; height:27px; }
-    :root body.messages-workspace .profile .has-image .avatar-face { display:none; }
-    :root body.messages-workspace .sidebar > div:has(> .nav) { flex:1 0 auto; }
-    :root body.messages-workspace .nav { display:flex; flex-direction:column; gap:7.5px; }
-    :root body.messages-workspace .nav a { position:relative; display:grid; place-items:center; width:100%; min-height:48px; padding:7.5px; border:0; border-radius:11.25px; background:transparent; color:#414b5d; font-size:0; line-height:1; transform:none; box-shadow:none; }
-    :root[data-theme="dark"] body.messages-workspace .nav a { color:#e5eaf1; }
-    :root body.messages-workspace .nav a::before { display:none; }
-    :root body.messages-workspace .nav a:hover { color:var(--primary); background:var(--hover); transform:none; }
-    :root body.messages-workspace .nav a.active,:root body.messages-workspace .nav a[aria-current="page"] { color:var(--primary); background:var(--primary-soft); box-shadow:none; }
-    :root body.messages-workspace .nav a .nav-icon { width:22.5px; height:22.5px; color:inherit; }
-    :root body.messages-workspace .nav a .nav-icon svg { width:22.5px; height:22.5px; }
-    :root body.messages-workspace .nav a[data-view="messages"] { order:-1; }
-    :root body.messages-workspace .nav a[data-view="settings"] { margin-top:9px; }
-    .msg-rail-tools { display:none; }
-    :root body.messages-workspace .msg-rail-tools { display:grid; flex:0 0 auto; justify-items:center; gap:5px; margin-top:auto; padding-top:10px; border-top:1px solid var(--line); }
-    :root body.messages-workspace .msg-rail-tools button { display:grid; place-items:center; width:40px; height:36px; padding:0; border:0; border-radius:9px; background:transparent; color:var(--muted); }
-    :root body.messages-workspace .msg-rail-tools button:hover,:root body.messages-workspace .msg-rail-tools button[aria-expanded="true"] { color:var(--primary); background:var(--primary-soft); }
-    :root body.messages-workspace .msg-rail-tools svg { width:21px; height:21px; }
-    :root body.messages-workspace > #admin-popover { position:fixed; z-index:140; top:auto; right:auto; bottom:20px; left:90px; width:240px; max-width:calc(100vw - 138px); background:var(--panel); color:var(--ink); }
+    :root body.messages-workspace > #admin-popover {
+      position:fixed; z-index:140; top:auto; right:auto; bottom:var(--studio-space);
+      left:calc(var(--studio-sidebar-width) + var(--studio-space) + 7px);
+      width:240px; max-width:calc(100vw - var(--studio-sidebar-width) - var(--studio-space) - 20px);
+      background:var(--panel); color:var(--ink);
+    }
     :root body.messages-workspace .msg-shell { height:100%; min-height:0; border:0; border-radius:0; box-shadow:none; transition:none; grid-template-columns:minmax(220px,var(--msg-list-width,273px)) minmax(0,1fr); }
     :root body.messages-workspace .chat-list-panel { height:100%; min-height:0; max-height:none; background:var(--msg-list-bg); }
     :root body.messages-workspace .msg-list-head { flex:0 0 auto; min-height:60px; justify-content:center; padding:10.5px 28.5px 9px 18px; background:transparent; border-bottom:1px solid var(--line); }
@@ -1793,32 +1791,16 @@
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { min-height:31.5px; }
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-send-shortcut { font-size:10.5px; }
     :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send { min-width:81px; min-height:31.5px; font-size:13.5px; }
-    @media (max-height:850px) and (min-width:761px) {
-      :root body.messages-workspace .sidebar { gap:7.5px; padding-top:12px; }
-      :root body.messages-workspace .nav { gap:3.75px; }
-      :root body.messages-workspace .nav a { min-height:34.5px; }
-      :root body.messages-workspace .profile { padding-bottom:3px; }
-      :root body.messages-workspace .profile .bot-avatar { width:34.5px; height:34.5px; }
-    }
     @media (max-width:1050px) and (min-width:761px) {
-      :root body.messages-workspace .shell { grid-template-columns:78px minmax(0,1fr); }
-      :root body.messages-workspace .sidebar { padding-inline:8px; }
-      :root body.messages-workspace .msg-shell { grid-template-columns:minmax(220px,min(var(--msg-list-width,273px),273px)) minmax(0,1fr); }
+      :root body.messages-workspace .msg-shell { grid-template-columns:minmax(220px,min(var(--msg-list-width,273px),273px,calc(100% - 285px))) minmax(0,1fr); }
       :root body.messages-workspace .msg-head { padding-inline:18px; }
-      :root body.messages-workspace > #admin-popover { left:88px; }
     }
     @media (max-width:760px) {
-      :root body.messages-workspace .shell { border-radius:0; }
+      :root body.messages-workspace .shell {
+        border-radius:0; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr);
+        grid-template-areas:"side" "main"; gap:8px;
+      }
       :root body.messages-workspace::after { display:none; }
-      :root body.messages-workspace .shell { grid-template-columns:58px minmax(0,1fr); }
-      :root body.messages-workspace .sidebar { display:flex; padding:14px 5px 10px; gap:14px; }
-      :root body.messages-workspace .profile { padding:0; }
-      :root body.messages-workspace .profile .bot-avatar { width:38px; height:38px; }
-      :root body.messages-workspace .nav { display:flex; flex-direction:column; gap:9px; overflow:visible; }
-      :root body.messages-workspace .nav a { width:46px; min-height:42px; padding:9px; border-radius:10px; }
-      :root body.messages-workspace .nav a .nav-icon,:root body.messages-workspace .nav a .nav-icon svg { width:23px; height:23px; }
-      :root body.messages-workspace .msg-rail-tools { gap:4px; padding-top:7px; }
-      :root body.messages-workspace .msg-rail-tools button { width:38px; height:33px; }
       :root body.messages-workspace .msg-shell,:root body.messages-workspace .msg-shell.msg-list-collapsed { height:100%; min-height:0; grid-template-columns:minmax(0,1fr); }
       :root body.messages-workspace .chat-list-panel { min-height:0; max-height:none; }
       :root body.messages-workspace .msg-list-head { min-height:66px; padding:8px 38px 8px 12px; }
@@ -1827,9 +1809,8 @@
       :root body.messages-workspace .msg-chat { gap:10px; padding-inline:7px; }
       :root body.messages-workspace .msg-chat-top strong { font-size:15px; }
       :root body.messages-workspace .msg-chat-avatar { width:46px; height:46px; }
-      :root body.messages-workspace > #admin-popover { bottom:12px; left:65px; max-width:calc(100vw - 77px); }
-      :root body.messages-workspace.msg-mobile-chat-view .shell { grid-template-columns:minmax(0,1fr); grid-template-areas:"main"; }
-      :root body.messages-workspace.msg-mobile-chat-view .sidebar { display:none; }
+      :root body.messages-workspace > #admin-popover { top:54px; right:10px; bottom:auto; left:auto; max-width:calc(100vw - 20px); }
+      :root body.messages-workspace.msg-mobile-chat-view .shell { grid-template-rows:minmax(0,1fr); grid-template-areas:"main"; gap:0; }
       :root body.messages-workspace .msg-head { display:flex; height:auto; min-height:76px; padding:12px; gap:8px; }
       :root body.messages-workspace .msg-head > div:not(.msg-head-actions) { flex:1; }
       :root body.messages-workspace .msg-head-name { font-size:18px; }

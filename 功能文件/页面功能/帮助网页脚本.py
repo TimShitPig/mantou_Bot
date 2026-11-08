@@ -314,7 +314,7 @@
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { hideMsgCtx(); groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
-        if (next !== previousView) closeMsgHeadMenu();
+        if (next !== previousView) { closeMsgHeadMenu(); closeSavedPassword(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); stopZLibraryAccount(); }
@@ -324,7 +324,7 @@
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
-        document.querySelectorAll('.sidebar [data-view], .studio-nav [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
+        document.querySelectorAll('.studio-nav [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
         $('page-eyebrow').textContent = `${window.msgBotProfile?.username || '机器人'} / ${next === 'dashboard' ? '管理台' : '功能页面'}`;
         if (next !== 'messages' && previousView === 'messages') setMsgMobileChatOpen(false);
         if (next === 'messages') {
@@ -357,6 +357,99 @@
         if (field.kind === 'boolean') return Boolean(field.value);
         return field.secret ? '' : String(field.value ?? '');
       };
+      const savedPasswordDialog = $('saved-password-dialog');
+      const savedPasswordConfirm = $('saved-password-confirm');
+      const savedPasswordSubmit = $('saved-password-submit');
+      const savedPasswordStatus = $('saved-password-status');
+      const savedPasswordResult = $('saved-password-result');
+      let savedPasswordRequest = null;
+      let savedPasswordTimer = null;
+      let savedPasswordField = '';
+
+      const clearSavedPassword = () => {
+        savedPasswordRequest?.abort();
+        savedPasswordRequest = null;
+        clearTimeout(savedPasswordTimer);
+        savedPasswordTimer = null;
+        savedPasswordField = '';
+        savedPasswordConfirm.value = '';
+        savedPasswordConfirm.disabled = false;
+        savedPasswordSubmit.disabled = false;
+        savedPasswordSubmit.hidden = false;
+        savedPasswordConfirm.hidden = false;
+        savedPasswordDialog.querySelector('label').hidden = false;
+        $('saved-password-value').textContent = '';
+        savedPasswordResult.hidden = true;
+        savedPasswordStatus.textContent = '';
+      };
+
+      const closeSavedPassword = () => {
+        if (!savedPasswordDialog.open) return;
+        clearSavedPassword();
+        savedPasswordDialog.close();
+      };
+
+      const openSavedPassword = (field) => {
+        if (!window.isSecureContext) {
+          toast('请通过 HTTPS 或服务器本机连接查看已保存密码');
+          return;
+        }
+        if (savedPasswordDialog.open) return;
+        clearSavedPassword();
+        savedPasswordField = field;
+        $('saved-password-title').textContent = field === 'database_password' ? '查看已保存数据库密码' : '查看已保存网页密码';
+        savedPasswordDialog.showModal();
+        savedPasswordConfirm.focus();
+      };
+
+      $('saved-password-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!savedPasswordField || !savedPasswordConfirm.value || savedPasswordRequest) return;
+        const request = new AbortController();
+        savedPasswordRequest = request;
+        const body = JSON.stringify({field:savedPasswordField, password:savedPasswordConfirm.value});
+        savedPasswordConfirm.value = '';
+        savedPasswordConfirm.disabled = true;
+        savedPasswordSubmit.disabled = true;
+        savedPasswordStatus.textContent = '正在验证…';
+        try {
+          const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
+          if (!savedPasswordDialog.open || savedPasswordRequest !== request || typeof data.value !== 'string') return;
+          savedPasswordStatus.textContent = '';
+          savedPasswordConfirm.hidden = true;
+          savedPasswordSubmit.hidden = true;
+          savedPasswordDialog.querySelector('label').hidden = true;
+          $('saved-password-value').textContent = data.value;
+          savedPasswordResult.hidden = false;
+          $('saved-password-close').focus();
+          savedPasswordTimer = setTimeout(closeSavedPassword, 20000);
+        } catch (error) {
+          if (!savedPasswordDialog.open || savedPasswordRequest !== request) return;
+          savedPasswordStatus.textContent = error.message || '无法查看已保存密码，请重试';
+          if (error.status === 401) { closeSavedPassword(); showAuthError(error); }
+        } finally {
+          if (savedPasswordRequest === request) {
+            savedPasswordRequest = null;
+            if (savedPasswordResult.hidden) {
+              savedPasswordConfirm.disabled = false;
+              savedPasswordSubmit.disabled = false;
+              savedPasswordConfirm.focus();
+            }
+          }
+        }
+      });
+      $('saved-password-close').addEventListener('click', closeSavedPassword);
+      savedPasswordDialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        closeSavedPassword();
+      });
+      savedPasswordDialog.addEventListener('close', () => {
+        if (!savedPasswordDialog.open) clearSavedPassword();
+      });
+      document.addEventListener('visibilitychange', () => { if (document.hidden) closeSavedPassword(); });
+      window.addEventListener('blur', closeSavedPassword);
+      window.addEventListener('pagehide', closeSavedPassword);
+
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
@@ -389,10 +482,14 @@
           }
           const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
           const placeholder = field.placeholder || (field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : ''));
-          const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}" value="${esc(safeFieldValue(field))}" ${editable ? '' : 'disabled'} placeholder="${esc(placeholder)}">`;
-          const toggle = field.key === 'help_web_admin_password' ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${editable ? '' : 'disabled'} aria-label="显示或隐藏登录密码" aria-pressed="false">显示</button>` : '';
-          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint}</small></div>`;
+          const passwordField = ['help_web_admin_password', 'database_password'].includes(field.key);
+          const secretAttr = field.secret ? ' data-config-secret autocomplete="new-password"' : '';
+          const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}"${secretAttr} ${editable ? '' : 'disabled'} value="${esc(safeFieldValue(field))}" placeholder="${esc(placeholder)}">`;
+          const toggle = passwordField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" disabled aria-label="显示正在输入的新密码" aria-pressed="false">显示输入</button>` : '';
+          const reveal = passwordField && field.configured ? `<button class="config-saved-password" type="button" data-config-saved-password="${esc(field.key)}">查看已保存</button>` : '';
+          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint} ${reveal}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
+        if (targetId === 'database-config-editor') 整理数据库连接表单(node);
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
         if (targetId === 'database-config-editor') {
           databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
@@ -400,30 +497,40 @@
           node.querySelectorAll('[data-config-field]').forEach((input) => input.addEventListener('input', () => {
             databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
             const button = node.querySelector('[data-database-test]'); if (button) { button.disabled = !editable; button.textContent = '测试当前连接'; }
-            const result = node.querySelector('[data-database-test-result]'); if (result) { result.hidden = false; result.className = 'database-test-result'; result.textContent = '当前表单已更改，尚未测试；连接概况显示已保存的配置。'; }
+            const result = node.querySelector('[data-database-test-result]'); if (result) { result.hidden = false; result.className = 'database-test-result'; result.textContent = '当前表单已更改，尚未测试；上方连接状态对应已保存的配置。'; }
           }));
         }
-        node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => button.addEventListener('click', () => {
+        node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => {
           const input = $(button.dataset.configSecretToggle);
-          if (!input) return;
-          const visible = input.type === 'text';
-          input.type = visible ? 'password' : 'text';
-          button.textContent = visible ? '显示' : '隐藏';
-          button.setAttribute('aria-pressed', String(!visible));
-        }));
+          const update = () => {
+            button.disabled = input.disabled || !input.value;
+            if (button.disabled) input.type = 'password';
+            const visible = input.type === 'text';
+            button.textContent = visible ? '隐藏输入' : '显示输入';
+            button.setAttribute('aria-label', visible ? '隐藏正在输入的新密码' : '显示正在输入的新密码');
+            button.setAttribute('aria-pressed', String(visible));
+          };
+          input.addEventListener('input', update);
+          button.addEventListener('click', () => {
+            input.type = input.type === 'text' ? 'password' : 'text';
+            update();
+          });
+          update();
+        });
+        node.querySelectorAll('[data-config-saved-password]').forEach((button) => {
+          button.addEventListener('click', () => openSavedPassword(button.dataset.configSavedPassword));
+        });
       };
        const renderDatabaseStatus = (database = {}) => {
         const status = String(database.status || '--');
         const statusNode = $('settings-db-status');
-        const nameNode = $('settings-db-name');
         if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }
-        if (nameNode) nameNode.textContent = String(database.name || '--');
       };
       const collectConfigFields = (editor) => {
         const fields = {};
         editor.querySelectorAll('[data-config-field]').forEach((input) => {
           const value = input.type === 'checkbox' ? input.checked : input.value;
-          if (input.type === 'password' && !value.trim()) return;
+          if (input.hasAttribute('data-config-secret') && !value.trim()) return;
            if (input.dataset.configField === 'group_file_cleanup_admin_qq') {
              fields[input.dataset.configField] = value.split(/[\s,，]+/).filter(Boolean);
           } else fields[input.dataset.configField] = value;
@@ -1393,7 +1500,6 @@
         event.stopPropagation(); adminChip?.click();
         if (event.detail === 0 && adminPopover && !adminPopover.hidden) modalFocusable(adminPopover)[0]?.focus({preventScroll:true});
       });
-      $('msg-rail-exit')?.addEventListener('click', () => $('bot-exit')?.click());
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
@@ -2298,6 +2404,7 @@
         $('updated').textContent = '--';
       };
       const exitBotConsole = (push = true) => {
+        closeSavedPassword();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
         void stopQuarkWebScan(); leaveQQReader(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;
@@ -7512,7 +7619,6 @@
         if (msgState.chatType === 'group' && msgState.chatId) void loadMuteStates();
       }, 1000);
 
-      $('bot-exit').addEventListener('click', () => exitBotConsole());
       $('studio-bot-exit').addEventListener('click', () => exitBotConsole());
       $('bot-picker-refresh').addEventListener('click', async () => {
         if (consoleEntering) return;

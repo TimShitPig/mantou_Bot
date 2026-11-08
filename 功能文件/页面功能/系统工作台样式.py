@@ -95,23 +95,63 @@
     }
     .studio-commands dd { margin: 5px 0 0; color: var(--system-muted); font-size: 12px; }
 
-    .studio-settings-layout { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); align-items: start; }
-    .studio-settings-side { display: grid; gap: 16px; min-width: 0; }
+    .studio-settings-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+    .studio-db-tags {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px; min-width: 0;
+    }
+    .studio-db-status { color: var(--system-muted); font-size: 12px; }
+    .studio-db-status strong { margin-inline-start: 3px; }
     #database-config-editor { margin-top: 18px; gap: 14px; }
     #database-config-editor .config-group {
       padding: 0; border: 0; background: transparent; border-radius: 0;
     }
     #database-config-editor .config-group > h3 { margin-bottom: 10px; }
-    #database-config-editor .config-fields { gap: 14px 16px; }
+    #database-config-editor .config-fields {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+      gap: 14px 16px;
+      align-items: start;
+    }
     #database-config-editor .config-field label { color: var(--system-muted); font-size: 12px; }
     #database-config-editor .config-field small { font-size: 11px; }
-    #database-config-editor .config-field input {
+    #database-config-editor .config-field :is(input, select) {
       min-height: 42px; border-radius: 10px; border-color: var(--system-border);
       background: var(--system-soft); color: var(--studio-ink, #27213d);
     }
-    #database-config-editor .config-field input:focus {
+    #database-config-editor .config-field :is(input, select):focus {
       border-color: var(--system-accent); box-shadow: 0 0 0 3px var(--studio-accent-soft, #ece6ff);
     }
+    .studio-db-account, .studio-db-advanced { grid-column: 1 / -1; }
+    .studio-db-account {
+      min-width: 0; margin: 0; padding: 12px;
+      border: 1px solid var(--system-border); border-radius: 12px;
+    }
+    .studio-db-account legend { padding: 0 5px; font-weight: 700; font-size: 13px; }
+    .studio-db-details { min-width: 0; }
+    .studio-db-advanced {
+      border: 1px solid var(--system-border); border-radius: 12px;
+    }
+    .studio-db-name { margin-top: 10px; }
+    .studio-db-details > summary {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px;
+      min-height: 44px; padding: 8px 11px; border-radius: 11px;
+      background: var(--system-soft); color: var(--system-accent);
+      cursor: pointer; list-style: none; font-weight: 700;
+    }
+    .studio-db-details > summary::-webkit-details-marker { display: none; }
+    .studio-db-details > summary::after {
+      content: ""; width: 6px; height: 6px; margin-inline-start: auto;
+      border: solid currentColor; border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }
+    .studio-db-details[open] > summary::after { transform: rotate(225deg); }
+    .studio-db-details > summary:focus-visible {
+      outline: 2px solid var(--system-accent); outline-offset: 2px;
+    }
+    .studio-db-details > summary small {
+      color: var(--system-muted); font-size: 11px; font-weight: 550;
+    }
+    .studio-db-name[open] > .config-field { margin-top: 12px; }
+    .studio-db-advanced[open] > .config-fields { padding: 12px; }
     #database-config-editor .config-actions {
       flex-wrap: wrap; padding-top: 15px; border-top: 1px solid var(--system-border);
     }
@@ -121,6 +161,7 @@
       color: var(--system-muted); background: var(--system-soft);
     }
     .studio-system-state.good { color: var(--mint-ink); background: var(--mint); }
+    .studio-settings-guide .studio-kicker { margin: 0 0 4px; }
     .studio-settings-guide ul {
       margin: 10px 0 0; padding-left: 18px; color: var(--system-muted);
       font-size: 13px; line-height: 1.65;
@@ -128,7 +169,6 @@
     .studio-settings-guide li + li { margin-top: 6px; }
     @media (max-width: 900px) {
       .studio-settings-layout { grid-template-columns: minmax(0, 1fr); }
-      .studio-settings-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
       .studio-resource-grid, .studio-system-split, .studio-help-catalog {
@@ -136,7 +176,6 @@
       }
     }
     @media (max-width: 520px) {
-      .studio-settings-side, #database-config-editor .config-fields { grid-template-columns: minmax(0, 1fr); }
       .studio-system-detail > div { flex-wrap: wrap; }
       .studio-system-detail dd { text-align: start; }
     }

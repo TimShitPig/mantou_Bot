@@ -41,7 +41,6 @@
       --msg-control-ink:#55486e;
       --msg-quote-line:#a298d4;
       --msg-quote-fill:#f3eefb;
-      --msg-rail-fill:linear-gradient(180deg,#fcf7f3,#eee9fa 40%,#f1edfb);
       --msg-list-fill:linear-gradient(160deg,#fffafd,#f7f3fc 48%,#fbf9ff);
       --msg-button-fill:linear-gradient(135deg,#7263cd,#5c4db8);
       --msg-button-hover:linear-gradient(135deg,#6555bf,#5241a7);
@@ -95,7 +94,6 @@
       --msg-control-ink:#d9cce8;
       --msg-quote-line:#9580ba;
       --msg-quote-fill:#30263e;
-      --msg-rail-fill:linear-gradient(180deg,#35283f,#292034 60%,#2d233a);
       --msg-list-fill:linear-gradient(155deg,#30263e,#292136 70%);
       --msg-button-fill:linear-gradient(135deg,#7460c2,#6b52b6);
       --msg-button-hover:linear-gradient(135deg,#7964c4,#735bbe);
@@ -111,14 +109,9 @@
     }
 
     /* 仅覆盖硬编码的旧色值；布局尺寸、字体和可见性由消息工作区样式负责。 */
-    :root body.messages-workspace .sidebar { background:var(--msg-rail-fill); }
     :root body.messages-workspace .chat-list-panel { background:var(--msg-list-fill); }
-    :root[data-theme] body.messages-workspace .nav a,
     :root[data-theme] body.messages-workspace .msg-tool-btn,
     :root[data-theme] body.messages-workspace .msg-file-action { color:var(--msg-control-ink); }
-    :root[data-theme] body.messages-workspace .nav a:hover,
-    :root[data-theme] body.messages-workspace .nav a.active,
-    :root[data-theme] body.messages-workspace .nav a[aria-current="page"],
     :root[data-theme] body.messages-workspace .msg-tool-btn:hover,
     :root[data-theme] body.messages-workspace .msg-file-action:hover { color:var(--primary-dark); }
     :root body.messages-workspace .msg-chat.pinned:not(.active) { background:var(--primary-soft); }

@@ -9,6 +9,7 @@
     "runtime": '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
     "settings": '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 4 14 4 14 0V6M5 12c0 4 14 4 14 0"/>',
     "help": '<circle cx="12" cy="12" r="9"/><path d="M9.4 9a2.7 2.7 0 1 1 4.4 2.2c-1.2.9-1.8 1.4-1.8 2.8m0 3h.01"/>',
+    "admin": '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
     "exit": '<path d="M10 4H5v16h5m4-12 4 4-4 4m-5-4h11"/>',
     "next": '<path d="m9 6 6 6-6 6"/>',
 }
@@ -39,7 +40,7 @@ def _导航分组(标题: str, 链接: tuple) -> str:
 
 
 工作台侧栏 = """
-    <aside class="studio-sidebar" aria-label="工作台侧栏">
+    <aside class="studio-sidebar" id="console-sidebar" aria-label="工作台侧栏" hidden>
       <div class="studio-robot">
         <div class="studio-bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div>
         <div><strong data-bot-name>馒头助手</strong><small class="bot-profile-status" data-bot-status>状态未知</small></div>
@@ -47,7 +48,13 @@ def _导航分组(标题: str, 链接: tuple) -> str:
       <nav class="studio-nav" aria-label="工作台导航">
 """ + "".join(_导航分组(标题, 链接) for 标题, 链接 in 导航分组) + """
       </nav>
-      <button class="studio-exit" id="studio-bot-exit" type="button">""" + _图标("exit") + """退出机器人</button>
+      <div class="studio-sidebar-actions">
+        <div class="studio-message-tools" aria-label="消息工作台工具">
+          <button id="msg-rail-theme" type="button" aria-label="切换主题" title="切换主题"><span class="theme-control-icon" aria-hidden="true">◐</span></button>
+          <button id="msg-rail-admin" type="button" aria-label="管理员菜单" title="管理员菜单" aria-expanded="false" aria-controls="admin-popover">""" + _图标("admin") + """</button>
+        </div>
+        <button class="studio-exit" id="studio-bot-exit" type="button">""" + _图标("exit") + """退出机器人</button>
+      </div>
     </aside>
 """
 

@@ -32,11 +32,13 @@ from . import (
     工作台样式,
     帮助网页样式,
     帮助网页脚本,
+    控制台密码,
     消息记录皮肤,
     登录页面样式,
     登录页面脚本,
     系统工作台,
     系统工作台样式,
+    系统工作台脚本,
 )
 
 # AstrBot 重载主模块时显式刷新页面依赖，避免继续使用旧的 HTML/CSS/JS。
@@ -49,6 +51,7 @@ for _页面模块 in (
     消息记录皮肤,
     系统工作台,
     系统工作台样式,
+    系统工作台脚本,
     帮助网页样式,
     帮助网页脚本,
     登录页面样式,
@@ -56,11 +59,13 @@ for _页面模块 in (
     页面,
     登录页面,
     后端,
+    控制台密码,
 ):
     if _页面模块.__name__ in _载入前已有页面模块:
         importlib.reload(_页面模块)
 
 帮助网页服务 = 后端.帮助网页服务
+保存密码路由 = "/api/config/saved-password"
 
 
 def 获取帮助网页地址(配置: Any = None) -> str:
@@ -96,6 +101,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/pan-enable", 后端._处理网盘开关),
         ("get", "/api/config", 后端._处理插件配置数据),
         ("post", "/api/config", 后端._处理插件配置写入),
+        ("post", 保存密码路由, 控制台密码.处理保存密码),
         ("post", "/api/database/test", 后端._处理数据库连接测试),
         ("get", "/api/pan-accounts/{platform}", 后端._处理网盘账号列表),
         ("post", "/api/pan-accounts/{platform}", 后端._处理网盘账号新增),
@@ -164,10 +170,27 @@ def _注册路由(app: web.Application) -> None:
 
 
 @web.middleware
+async def _限制保存密码请求(request: web.Request, handler: Any) -> web.StreamResponse:
+    if request.path != 保存密码路由:
+        return await handler(request)
+    if request.method != "POST":
+        return web.json_response(
+            {"ok": False, "error": "只允许 POST 请求"},
+            status=405, headers={"Allow": "POST", "Cache-Control": "private, no-store"},
+        )
+    try:
+        响应 = await handler(request.clone(client_max_size=控制台密码.密码显示请求上限))
+    except web.HTTPRequestEntityTooLarge:
+        响应 = web.json_response({"ok": False, "error": "密码查看请求过大"}, status=413)
+    响应.headers["Cache-Control"] = "private, no-store"
+    return 响应
+
+
+@web.middleware
 async def _压缩控制台响应(request: web.Request, handler: Any) -> web.StreamResponse:
     """压缩控制台 HTML/JSON，实时事件流和 WebSocket 保持原样。"""
     响应 = await handler(request)
-    if not isinstance(响应, web.Response):
+    if request.path == 保存密码路由 or not isinstance(响应, web.Response):
         return 响应
     if 响应.headers.get("Content-Encoding"):
         return 响应
@@ -236,7 +259,7 @@ async def 启动帮助网页服务(配置: Any = None, *, 插件版本: str = ""
     host, port = 后端._读取监听配置(配置)
     app = web.Application(
         client_max_size=300 * 1024 * 1024,
-        middlewares=[_等待控制台会话恢复, 后端.机器人作用域中间件, _压缩控制台响应],
+        middlewares=[_等待控制台会话恢复, _限制保存密码请求, 后端.机器人作用域中间件, _压缩控制台响应],
     )
     _注册路由(app)
     runner = web.AppRunner(app, access_log=None, shutdown_timeout=2.0)
