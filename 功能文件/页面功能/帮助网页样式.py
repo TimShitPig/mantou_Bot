@@ -267,10 +267,8 @@
      .config-input-wrap input { padding-right:62px; }
      .config-secret-toggle { position:absolute; top:50%; right:8px; transform:translateY(-50%); padding:3px 5px; border:0; background:transparent; color:var(--primary); cursor:pointer; font-size:11px; font-weight:700; }
      .config-secret-toggle:disabled { cursor:not-allowed; opacity:.45; }
-     .config-saved-password { margin-inline-start:4px; padding:3px 6px; border:0; border-radius:5px; background:var(--primary-soft); color:var(--primary-dark); font:inherit; font-weight:700; }
-     .config-saved-password:hover { text-decoration:underline; }
-     .config-saved-password:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-     .config-saved-value:not([hidden]) { display:block; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--raised); color:var(--ink); overflow-wrap:anywhere; white-space:pre-wrap; font:12px/1.55 ui-monospace,monospace; }
+     .config-input-wrap input[hidden] { display:none; }
+     .config-secret-toggle:focus-visible { outline:2px solid var(--primary); outline-offset:2px; border-radius:4px; }
      .config-field textarea { min-height:74px; resize:vertical; }
      .config-field input:focus,.config-field textarea:focus,.config-field select:focus,.account-add input:focus,.group-account input:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft); }
      .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }

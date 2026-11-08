@@ -359,37 +359,52 @@
       };
       let savedPasswordView = null;
 
-      const clearSavedPassword = () => {
-        if (!savedPasswordView) return;
-        const {button, output, request} = savedPasswordView;
-        savedPasswordView = null;
-        request.abort();
-        output.textContent = '';
-        output.hidden = true;
-        button.textContent = '显示已保存';
-        button.setAttribute('aria-pressed', 'false');
+      const updatePasswordToggle = (button, input, saved) => {
+        const visible = input.type === 'text' || Boolean(saved && !saved.hidden);
+        button.disabled = !saved && (input.disabled || !input.value);
+        button.textContent = visible ? '隐藏' : '显示';
+        button.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+        button.setAttribute('aria-pressed', String(visible));
       };
 
-      const toggleSavedPassword = async (button) => {
+      const clearSavedPassword = () => {
+        if (!savedPasswordView) return;
+        const {button, input, saved, request} = savedPasswordView;
+        savedPasswordView = null;
+        request.abort();
+        saved.value = '';
+        saved.placeholder = '';
+        saved.hidden = true;
+        input.hidden = false;
+        updatePasswordToggle(button, input, saved);
+      };
+
+      const toggleConfigPassword = async (button, input, saved) => {
         const wasOpen = savedPasswordView?.button === button;
         clearSavedPassword();
         if (wasOpen) return;
-        const output = $(button.getAttribute('aria-controls'));
-        if (!output) return;
+        if (input.value && !input.disabled) {
+          input.type = input.type === 'text' ? 'password' : 'text';
+          updatePasswordToggle(button, input, saved);
+          return;
+        }
+        if (!saved) return;
 
         const request = new AbortController();
-        const current = {button, output, request};
+        const current = {button, input, saved, request};
         savedPasswordView = current;
-        button.textContent = '隐藏已保存';
-        button.setAttribute('aria-pressed', 'true');
-        output.textContent = '正在读取…';
-        output.hidden = false;
+        input.type = 'password';
+        input.hidden = true;
+        saved.placeholder = '正在读取…';
+        saved.hidden = false;
+        updatePasswordToggle(button, input, saved);
         try {
-          const body = JSON.stringify({field:button.dataset.configSavedPassword});
+          const body = JSON.stringify({field:input.dataset.configField});
           const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
           if (savedPasswordView !== current) return;
           if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的密码');
-          output.textContent = data.value;
+          saved.value = data.value;
+          saved.placeholder = '';
         } catch (error) {
           if (savedPasswordView !== current) return;
           clearSavedPassword();
@@ -408,7 +423,7 @@
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
-        if (savedPasswordView && node.contains(savedPasswordView.output)) clearSavedPassword();
+        if (savedPasswordView && node.contains(savedPasswordView.input)) clearSavedPassword();
         const selected = (fields || []).filter((field) => {
           if (filter && !filter(field)) return false;
           // 展示教程尺寸、端口和登录凭据；监听地址/域名继续由后端读取。
@@ -441,12 +456,13 @@
           const passwordField = ['help_web_admin_password', 'database_password'].includes(field.key);
           const secretAttr = field.secret ? ' data-config-secret autocomplete="new-password"' : '';
           const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}"${secretAttr} ${editable ? '' : 'disabled'} value="${esc(safeFieldValue(field))}" placeholder="${esc(placeholder)}">`;
-          const toggle = passwordField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" disabled aria-label="显示正在输入的新密码" aria-pressed="false">显示输入</button>` : '';
           const savedValueId = `saved-${inputId}`;
           const canReveal = passwordField && field.configured;
-          const reveal = canReveal ? `<button class="config-saved-password" type="button" data-config-saved-password="${esc(field.key)}" aria-controls="${savedValueId}" aria-pressed="false">显示已保存</button>` : '';
-          const savedValue = canReveal ? `<output id="${savedValueId}" class="config-saved-value" hidden></output>` : '';
-          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${toggle}</div><small>${hint} ${reveal}</small>${savedValue}</div>`;
+          // 已保存的密码仅使用同位置的只读输入，不参与配置提交或连接测试。
+          const savedValue = canReveal ? `<input id="${savedValueId}" class="config-saved-value" type="text" readonly hidden autocomplete="off" aria-label="${esc(field.label || field.key)}（已保存）">` : '';
+          const controls = canReveal ? `${inputId} ${savedValueId}` : inputId;
+          const toggle = passwordField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${canReveal ? '' : 'disabled'} aria-controls="${controls}" aria-label="显示密码" aria-pressed="false">显示</button>` : '';
+          return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${savedValue}${toggle}</div><small>${hint}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
@@ -461,23 +477,13 @@
         }
         node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => {
           const input = $(button.dataset.configSecretToggle);
-          const update = () => {
-            button.disabled = input.disabled || !input.value;
-            if (button.disabled) input.type = 'password';
-            const visible = input.type === 'text';
-            button.textContent = visible ? '隐藏输入' : '显示输入';
-            button.setAttribute('aria-label', visible ? '隐藏正在输入的新密码' : '显示正在输入的新密码');
-            button.setAttribute('aria-pressed', String(visible));
-          };
-          input.addEventListener('input', update);
-          button.addEventListener('click', () => {
-            input.type = input.type === 'text' ? 'password' : 'text';
-            update();
+          const saved = $(`saved-${input.id}`);
+          input.addEventListener('input', () => {
+            if (!input.value) input.type = 'password';
+            updatePasswordToggle(button, input, saved);
           });
-          update();
-        });
-        node.querySelectorAll('[data-config-saved-password]').forEach((button) => {
-          button.addEventListener('click', () => void toggleSavedPassword(button));
+          button.addEventListener('click', () => void toggleConfigPassword(button, input, saved));
+          updatePasswordToggle(button, input, saved);
         });
       };
        const renderDatabaseStatus = (database = {}) => {
@@ -489,7 +495,7 @@
         const fields = {};
         editor.querySelectorAll('[data-config-field]').forEach((input) => {
           const value = input.type === 'checkbox' ? input.checked : input.value;
-          if (input.hasAttribute('data-config-secret') && !value.trim()) return;
+          if (input.hasAttribute('data-config-secret') && (input.hidden || !value.trim())) return;
            if (input.dataset.configField === 'group_file_cleanup_admin_qq') {
              fields[input.dataset.configField] = value.split(/[\s,，]+/).filter(Boolean);
           } else fields[input.dataset.configField] = value;
