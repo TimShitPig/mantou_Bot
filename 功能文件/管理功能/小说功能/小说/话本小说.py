@@ -156,7 +156,7 @@ class AsyncHuabenClient:
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://wwwapp.ihuaben.com/",
             "plantype": "ANDROID",
-            "version": "7.5.0",
+            "version": "7.6.1",
             "packageid": "com.huabenapp",
             "umengchannel": "official",
             "device-brand": "google",
@@ -274,13 +274,21 @@ class AsyncHuabenClient:
     async def get_catalog(self, book_id: Any) -> list[dict[str, Any]]:
         book_id = _positive_id(book_id)
         data = await self._request_json(
-            f"{API_BASE}/book/read/chapter/{book_id}/{time.time_ns() // 1_000_000}"
+            f"{API_BASE}/book/read/volume/v2/{book_id}/{time.time_ns() // 1_000_000}"
         )
-        if not isinstance(data, list) or not data:
+        if not isinstance(data, dict) or not isinstance(data.get("volumeList"), list):
+            raise HuabenError("invalid_catalog")
+        # App 阅读页按返回卷序展开 chapterList；旧平铺接口会漏掉彩蛋和番外。
+        items: list[dict[str, Any]] = []
+        for volume in data["volumeList"]:
+            if not isinstance(volume, dict) or not isinstance(volume.get("chapterList"), list):
+                raise HuabenError("invalid_catalog")
+            items.extend(volume["chapterList"])
+        if not items:
             raise HuabenError("empty_catalog")
         chapters: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for index, item in enumerate(data, 1):
+        for index, item in enumerate(items, 1):
             if not isinstance(item, dict):
                 raise HuabenError("invalid_catalog")
             chapter_id = _positive_id(item.get("chapterId"))
