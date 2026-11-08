@@ -57,6 +57,7 @@ SEARCH_NO_SIGN_KEYS = {
 }
 下载并发数 = 16
 单章重试次数 = 3
+目录重试次数 = 3
 进度日志分段数 = 4
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -105,6 +106,7 @@ def 获取书旗小说回复流(
 
 async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> AsyncIterator[str]:
     阶段 = "share_link"
+    书籍编号 = ""
     try:
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=60)
         connector = aiohttp.TCPConnector(
@@ -119,10 +121,11 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
         ) as session:
             最终链接 = await 解析书旗短链(session, 链接)
             目标 = 解析书旗下载目标(最终链接)
+            书籍编号 = 目标["book_id"]
             阶段 = "catalog"
-            书籍 = await 获取书籍(session, 目标["book_id"])
+            书籍 = await 获取书籍(session, 书籍编号)
             if not 书籍.chapters:
-                raise ShuqiError("没有获取到章节目录")
+                raise ShuqiError("没有获取到章节目录", reason="empty_catalog")
             logger.info(
                 f"书旗小说开始下载：书籍编号={书籍.book_id}, "
                 f"书名={书籍.book_name}, 作者={书籍.author_name}, "
@@ -138,7 +141,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
             ]
             成功数 = len(章节内容)
             if not 成功数:
-                raise ShuqiError("没有获取到可用章节正文")
+                raise ShuqiError("没有获取到可用章节正文", reason="all_chapters_failed")
             if 成功数 != len(书籍.chapters):
                 logger.warning(
                     "书旗小说正文部分获取：book_id=%s, success=%s, catalog=%s, declared=%s",
@@ -147,6 +150,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                     len(书籍.chapters),
                     书籍.chapter_num,
                 )
+            阶段 = "file"
             文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
             logger.info(
                 f"书旗小说章节下载完成：书籍编号={书籍.book_id}, "
@@ -154,7 +158,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"文件大小={len(文件内容)}"
             )
 
-        阶段 = "send"
+        阶段 = "upload_send"
         发送结果 = await 准备发送文本文件给当前会话(
             event,
             文件名,
@@ -171,13 +175,18 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 yield 降级文本
                 return
             logger.warning(
-                "书旗小说完成消息发送失败：book_id=%s", 书籍.book_id
+                "书旗小说完成消息发送失败：stage=upload_send, book_id=%s, reason=%s",
+                书籍.book_id, 发送结果.get("reason") or "upload_or_delivery_failed",
             )
             yield "文件发送失败，请稍后再试"
         finally:
             删除小说缓存文件(发送结果.get("source_cache_path"))
     except Exception as exc:
-        logger.warning("书旗小说下载失败：阶段=%s，错误类型=%s", 阶段, type(exc).__name__)
+        logger.warning(
+            "书旗小说下载失败：stage=%s, book_id=%s, error_type=%s, reason=%s, http_status=%s",
+            阶段, 书籍编号, type(exc).__name__, 书旗失败原因(exc),
+            getattr(exc, "http_status", None) or "none",
+        )
         yield "下载失败 请重试"
 
 
@@ -433,7 +442,7 @@ async def 获取书旗详情(
     except Exception as exc:
         logger.debug(
             "书旗详情补充失败：book_id=%s, reason=%s, error_type=%s",
-            书籍编号, 书旗章节失败原因(exc), type(exc).__name__,
+            书籍编号, 书旗失败原因(exc), type(exc).__name__,
         )
         return {}
 
@@ -443,7 +452,7 @@ async def 获取书籍(
     书籍编号: str,
 ) -> Book:
     if not re.fullmatch(r"\d+", str(书籍编号)):
-        raise ShuqiError("书籍编号无效")
+        raise ShuqiError("书籍编号无效", reason="invalid_book_id")
     详情任务 = asyncio.create_task(获取书旗详情(session, 书籍编号))
     try:
         XML资料, XML章节 = await 获取书旗XML目录(session, 书籍编号)
@@ -579,7 +588,7 @@ async def 下载全部章节(
                     "书旗章节下载失败，准备重试：book_id=%s, chapter_id=%s, "
                     "try=%s/%s, reason=%s, http_status=%s",
                     书籍.book_id, 章节.chapter_id, 尝试次数, 单章重试次数,
-                    书旗章节失败原因(exc), getattr(exc, "http_status", None) or "none",
+                    书旗失败原因(exc), getattr(exc, "http_status", None) or "none",
                 )
                 if 尝试次数 < 单章重试次数:
                     if getattr(exc, "http_status", None) in {403, 429}:
@@ -588,7 +597,7 @@ async def 下载全部章节(
                         await asyncio.sleep(min(1.5, 0.3 * 尝试次数))
         await 记录进度(
             False,
-            失败原因=书旗章节失败原因(最后异常),
+            失败原因=书旗失败原因(最后异常),
             HTTP状态=getattr(最后异常, "http_status", None),
             失败章节=章节.chapter_id,
         )
@@ -643,7 +652,7 @@ async def 获取章节正文(session: aiohttp.ClientSession, 书籍: Book, 章�
     return "full", 正文
 
 
-def 书旗章节失败原因(exc: Exception | None) -> str:
+def 书旗失败原因(exc: BaseException | None) -> str:
     if isinstance(exc, ShuqiError):
         return exc.reason
     if isinstance(exc, asyncio.TimeoutError):
@@ -657,7 +666,7 @@ async def 请求书旗XML目录(
     session: aiohttp.ClientSession, 书籍编号: str, 分卷编号: str = ""
 ) -> ET.Element:
     if not re.fullmatch(r"\d+", str(书籍编号)):
-        raise ShuqiError("书籍编号无效")
+        raise ShuqiError("书籍编号无效", reason="invalid_book_id")
     参数 = {
         "pagesize": "99999999",
         "bookId": str(书籍编号),
@@ -665,31 +674,59 @@ async def 请求书旗XML目录(
     }
     if 分卷编号:
         if not re.fullmatch(r"\d+", 分卷编号):
-            raise ShuqiError("分卷编号无效")
+            raise ShuqiError("分卷编号无效", reason="invalid_volume_id")
         参数["vid"] = 分卷编号
     headers = {
         "User-Agent": XML_USER_AGENT,
         "Accept": "application/xml,text/xml,*/*",
         "Accept-Encoding": "identity",
     }
-    async with session.get(
-        f"{XML_CHAPTERLIST_URL}?{urllib.parse.urlencode(参数)}", headers=headers,
-        allow_redirects=False,
-    ) as resp:
-        if resp.status < 200 or resp.status >= 300:
-            raise ShuqiError(f"目录接口 HTTP {int(resp.status)}")
-        内容 = await resp.read()
-    try:
-        root = ET.fromstring(内容)
-    except ET.ParseError as exc:
-        raise ShuqiError("XML目录格式异常") from exc
+    # 根目录和分卷共用恢复逻辑；只有瞬时请求错误重试，不因声明章数差异反复请求。
+    for 尝试次数 in range(1, 目录重试次数 + 1):
+        try:
+            async with session.get(
+                f"{XML_CHAPTERLIST_URL}?{urllib.parse.urlencode(参数)}", headers=headers,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=20, sock_connect=10, sock_read=15),
+            ) as resp:
+                if not 200 <= resp.status < 300:
+                    raise ShuqiError(
+                        "目录接口 HTTP 状态异常", reason="catalog_http_status",
+                        http_status=int(resp.status),
+                    )
+                内容 = await resp.read()
+            if not 内容.strip():
+                raise ShuqiError("XML目录响应为空", reason="catalog_empty_body")
+            try:
+                root = ET.fromstring(内容)
+            except ET.ParseError as exc:
+                raise ShuqiError("XML目录格式异常", reason="catalog_xml_parse") from exc
+            break
+        except (ShuqiError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            状态 = getattr(exc, "http_status", None)
+            可重试 = isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)) or (
+                isinstance(exc, ShuqiError) and (
+                    exc.reason in {"catalog_empty_body", "catalog_xml_parse"}
+                    or (exc.reason == "catalog_http_status" and (
+                        状态 in {408, 429} or (状态 is not None and 500 <= 状态 < 600)
+                    ))
+                )
+            )
+            if not 可重试 or 尝试次数 >= 目录重试次数:
+                raise
+            logger.debug(
+                "书旗XML目录请求重试：book_id=%s, vid=%s, try=%s/%s, reason=%s, http_status=%s",
+                书籍编号, 分卷编号 or "0", 尝试次数, 目录重试次数,
+                书旗失败原因(exc), 状态 or "none",
+            )
+            await asyncio.sleep((3.0 if 状态 == 429 else 0.5) * 尝试次数)
     if root.tag.rsplit("}", 1)[-1] != "BookInfos":
-        raise ShuqiError("XML目录根节点异常")
+        raise ShuqiError("XML目录根节点异常", reason="catalog_xml_root")
     返回书籍编号 = str(root.attrib.get("BookId") or "").strip()
     if 返回书籍编号 != str(书籍编号):
-        raise ShuqiError("XML目录书籍编号不匹配")
+        raise ShuqiError("XML目录书籍编号不匹配", reason="catalog_book_id_mismatch")
     if 分卷编号 and str(root.attrib.get("Vid") or "") != 分卷编号:
-        raise ShuqiError("XML目录分卷编号不匹配")
+        raise ShuqiError("XML目录分卷编号不匹配", reason="catalog_volume_id_mismatch")
     return root
 
 
@@ -701,7 +738,7 @@ def 提取XML目录节点(root: ET.Element) -> list[dict[str, str]]:
     声明数量 = 安全整数(root.attrib.get("TotalCount"), -1)
     if 声明数量 != len(节点):
         logger.warning(
-            "书旗XML分卷条目数量不一致：book_id=%s, vid=%s, expected=%s, actual=%s",
+            "书旗XML目录返回条目数量不一致：reason=entry_count_mismatch, book_id=%s, vid=%s, expected=%s, actual=%s",
             root.attrib.get("BookId", ""),
             root.attrib.get("Vid", ""),
             声明数量,
@@ -749,7 +786,7 @@ async def 获取书旗XML目录(
                 重复分卷数,
             )
         if not 分卷编号:
-            raise ShuqiError("没有有效XML分卷")
+            raise ShuqiError("没有有效XML分卷", reason="empty_volumes")
         分卷信号量 = asyncio.Semaphore(4)
 
         async def 读取分卷(编号: str) -> list[dict[str, str]]:
@@ -778,10 +815,12 @@ async def 获取书旗XML目录(
         for 编号, 结果 in zip(分卷编号, 分卷结果):
             if isinstance(结果, BaseException):
                 logger.warning(
-                    "书旗XML分卷读取失败：book_id=%s, vid=%s, error_type=%s",
+                    "书旗XML分卷读取失败：book_id=%s, vid=%s, error_type=%s, reason=%s, http_status=%s",
                     书籍编号,
                     编号,
                     type(结果).__name__,
+                    书旗失败原因(结果),
+                    getattr(结果, "http_status", None) or "none",
                 )
                 continue
             节点列表.extend(结果)
@@ -813,17 +852,11 @@ async def 获取书旗XML目录(
             重复数量,
         )
     if not 有效节点:
-        raise ShuqiError("没有获取到有效XML章节")
-    if 总章数 > 0 and len(有效节点) < 总章数:
-        logger.warning(
-            "书旗XML目录不完整：reason=chapter_count, book_id=%s, expected=%s, actual=%s",
-            书籍编号,
-            总章数,
-            len(有效节点),
-        )
-    elif 总章数 > 0 and len(有效节点) > 总章数:
-        logger.info(
-            "书旗XML目录章数以有效目录为准：book_id=%s, declared=%s, actual=%s",
+        raise ShuqiError("没有获取到有效XML章节", reason="empty_catalog")
+    if 总章数 > 0 and len(有效节点) != 总章数:
+        # NumChapter 与实际发布的 XML 列表可能更新不同步；真实丢条/坏条/失败卷已单独告警。
+        logger.debug(
+            "书旗XML声明与有效目录数量不同：reason=declared_count_mismatch, book_id=%s, declared=%s, actual=%s, action=continue",
             书籍编号,
             总章数,
             len(有效节点),
