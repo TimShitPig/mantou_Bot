@@ -3,20 +3,27 @@
 页面结构、样式和脚本分别维护，后端只负责把模板作为 HTML 响应返回。
 """
 
+from .业务工作台 import 业务页面
+from .业务工作台样式 import 业务样式
+from .工作台框架 import 工作台侧栏, 工作台总览, 机器人选择
+from .工作台样式 import 工作台样式
 from .帮助网页样式 import 控制台样式
+from .消息记录皮肤 import 消息记录皮肤
+from .系统工作台 import 系统页面
+from .系统工作台样式 import 系统样式
 from .帮助网页脚本 import 控制台脚本
 
 页面头部前缀 = """<!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#081423">
+  <meta name="theme-color" content="#f4f1fc">
   <title>馒头控制台</title>
   <script>
     (() => {
       try {
-        const preference = localStorage.getItem('mantou-theme') === 'light' ? 'light' : 'dark';
+        const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
         const dark = preference === 'dark';
         document.documentElement.dataset.themePreference = preference;
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -32,8 +39,22 @@ from .帮助网页脚本 import 控制台脚本
   <svg class="msg-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="msg-document-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3ba2ff"/><stop offset=".55" stop-color="#168bff"/><stop offset="1" stop-color="#0075ff"/></linearGradient><symbol id="msg-document-symbol" viewBox="0 0 42 50"><path fill="url(#msg-document-fill)" d="M6 0h21l15 15v30a5 5 0 0 1-5 5H6a5 5 0 0 1-5-5V5a5 5 0 0 1 5-5Z"/><path fill="#0878ee" d="m27 0 15 15H31a4 4 0 0 1-4-4Z"/><path fill="none" stroke="#e6f6ff" stroke-width="3" stroke-linecap="round" d="M12 22h17M12 29h17M12 36h10"/></symbol></defs></svg>
   <div class="shell bot-picker-open">
     <header class="topbar">
-        <div class="brand"><div class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></div><div><strong id="console-brand-name">馒头Bot</strong><span class="version-badge" id="console-version">加载中</span></div></div>
-      <div class="top-actions"><span class="status-dot">服务在线</span><div class="theme-control" role="group" aria-label="主题模式"><span class="theme-control-label">主题</span><button id="theme-toggle" class="theme-toggle-button" type="button" aria-label="切换到深色模式" title="切换到深色模式" aria-pressed="false"><span class="theme-control-icon" aria-hidden="true">◐</span></button><label class="theme-select-wrap" for="theme-select"><select id="theme-select" aria-label="选择主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select></label></div><div class="admin-menu"><button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron">⌄</span></button><div class="admin-popover" id="admin-popover" hidden><strong id="admin-popover-name">管理员</strong><small id="admin-popover-role">控制台管理员 · 当前会话</small><small id="admin-popover-scope">插件管理员白名单：读取中</small><button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button></div></div></div>
+      <div class="brand">
+        <div class="brand-mark"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/></svg></div>
+        <div class="studio-brand-copy"><strong class="studio-brand-title">馒头运营工作台</strong><span class="version-badge" id="console-version" hidden></span></div>
+      </div>
+      <div class="top-actions">
+        <div class="theme-control"><button id="theme-toggle" class="theme-toggle-button" type="button" aria-label="切换到深色模式" title="切换到深色模式" aria-pressed="false"><span class="theme-control-icon" aria-hidden="true">☾</span></button></div>
+        <div class="admin-menu">
+          <button class="admin-chip" id="admin-chip" type="button" aria-expanded="false" aria-controls="admin-popover"><span class="admin-avatar" id="admin-avatar">管</span><span id="admin-name">管理员</span><span class="admin-chevron" aria-hidden="true">⌄</span></button>
+          <div class="admin-popover" id="admin-popover" hidden>
+            <strong id="admin-popover-name">管理员</strong>
+            <small id="admin-popover-role">控制台管理员 · 当前会话</small>
+            <small id="admin-popover-scope">插件管理员白名单：读取中</small>
+            <button class="popover-logout" id="popover-logout" type="button" hidden>退出登录</button>
+          </div>
+        </div>
+      </div>
     </header>
     <aside class="sidebar" id="console-sidebar" hidden>
       <div class="profile"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><strong data-bot-name>馒头助手</strong><span class="bot-profile-status" data-bot-status>状态未知</span></div>
@@ -55,56 +76,13 @@ from .帮助网页脚本 import 控制台脚本
         <button id="msg-rail-exit" type="button" aria-label="退出机器人" title="退出机器人"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4H4v16h6m5-4 4-4-4-4m-7 4h11"/></svg></button>
       </div>
     </aside>
+""" + 工作台侧栏 + """
     <main class="main">
-      <section id="bot-picker" class="bot-picker" aria-labelledby="bot-picker-title" tabindex="-1">
-        <div class="bot-picker-heading"><div><h1 id="bot-picker-title" tabindex="-1">选择机器人</h1><p>选择卡片进入机器人的控制台，管理它的配置和聊天记录。</p></div><button id="bot-picker-refresh" class="outline-button" type="button">刷新列表</button></div>
-        <p id="bot-picker-error" class="bot-picker-error" role="status" hidden></p>
-        <div id="bot-profile-list" class="bot-profile-list" aria-label="机器人列表" aria-live="polite"><div class="bot-selector-empty">正在读取机器人…</div></div>
-      </section>
+""" + 机器人选择 + """
       <div class="content" id="console-workspace" hidden>
         <div class="page-heading"><div><p id="page-eyebrow" class="page-kicker">馒头Bot / 管理台</p><h1 id="page-title">控制台</h1><p id="page-subtitle">查看机器人和小说服务的实时状态</p></div><div class="heading-actions"><span id="updated" class="updated-label">--</span></div></div>
         <div id="notice" class="notice"></div>
-        <section id="page-dashboard" class="page-view" data-page="dashboard">
-          <div class="section-head page-view-head"><div><h2>服务总览</h2><p>小说服务、分享网盘与数据库的当前状态。</p></div></div>
-          <div class="summary-grid">
-            <article class="summary-card"><span>小说总开关</span><strong id="metric-global">--</strong><small id="metric-global-meta">加载中</small><button class="text-button" type="button" data-view="novels">管理小说功能</button></article>
-            <article class="summary-card"><span>当前分享网盘</span><strong id="metric-pan">--</strong><small id="metric-pan-meta">加载中</small><button class="text-button" type="button" data-view="pans">管理网盘</button></article>
-            <article class="summary-card"><span>数据库状态</span><strong id="metric-db">--</strong><small id="metric-db-meta">加载中</small><button class="text-button" type="button" data-view="settings">查看数据库状态</button></article>
-            <article class="summary-card"><span>插件版本</span><strong id="metric-version">--</strong><small id="metric-version-meta">馒头Bot</small><button class="text-button" type="button" data-view="runtime">查看运行状态</button></article>
-          </div>
-          <div class="page-grid dashboard-grid"><article class="console-card"><h2>快捷入口</h2><p class="card-subtitle">点击入口直接打开对应功能页面。</p><div class="shortcut-grid"><button class="shortcut-card" type="button" data-view="bot"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M12 2v4m-5 6h.01M17 12h.01M9 16h6M1 11v4m22-4v4"/></svg></span><strong>机器人配置</strong><small>查看安全摘要与监听配置</small></button><button class="shortcut-card" type="button" data-view="novels"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v16M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></svg></span><strong>小说功能</strong><small>开关平台和管理员测试模式</small></button><button class="shortcut-card" type="button" data-view="pans"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12h-1M12 12v10m-3-3 3 3 3-3"/></svg></span><strong>网盘配置</strong><small>选择主分享网盘和查看账号摘要</small></button><button class="shortcut-card" type="button" data-view="runtime"><span class="shortcut-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span><strong>运行状态</strong><small>查看服务器实时指标</small></button></div></article><article class="console-card"><h2>当前状态</h2><p class="card-subtitle">最近一次读取：<span id="dashboard-updated">--</span></p><div class="status-list compact-status"><div class="status-item"><span>CPU 占用</span><strong id="dashboard-cpu">--</strong></div><div class="status-item"><span>物理内存</span><strong id="dashboard-memory">--</strong></div><div class="status-item"><span>系统运行时间</span><strong id="dashboard-runtime">--</strong></div></div></article></div>
-        </section>
-
-        <section id="page-bot" class="page-view" data-page="bot" hidden>
-          <article class="console-card zlibrary-accounts-card"><div class="zlibrary-card-heading"><div><h2>ZLibrary 账号</h2><p class="card-subtitle">自动轮询可用账号，限流自动跳过，额度恢复后继续复用。</p></div></div><div id="zlibrary-account-editor" aria-live="polite"><div class="empty">进入此页后读取账号...</div></div></article><div class="workspace-grid"><div class="workspace-left"><article id="overview" class="console-card"><h2>基本信息</h2><p class="card-subtitle">当前插件的安全摘要和运行身份</p><div class="profile-fields"><div class="profile-field"><span>机器人名称</span><div class="readonly-value"><strong data-bot-name>馒头助手</strong><small>来自 QQ 官方资料</small></div></div><div class="profile-field"><span>机器人 QQ 号</span><div class="readonly-value"><strong data-bot-id>由适配器提供</strong><small>页面不读取账号信息</small></div></div><div class="profile-field"><span>机器人头像</span><div class="avatar-inline"><div class="bot-avatar" data-bot-avatar><span class="avatar-face"><svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/><path d="M12 18l-2 5m7-6 1 6m5-4 1 4"/></svg></span></div><small>QQ 官方资料头像</small></div></div><div class="profile-field"><span>机器人简介</span><div class="readonly-value"><strong>小说下载、网盘分享与群聊管理</strong></div></div><div class="profile-field"><span>运行状态</span><div class="state-line"><span class="bot-profile-status" data-bot-status>状态未知</span></div></div></div></article><article id="config" class="console-card"><h2>机器人配置</h2><p class="card-subtitle">管理员白名单、帮助网页账号和 ZLibrary 邮箱 Key；敏感字段只写入，不在网页回显。</p><div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置...</div></div></article><article class="console-card"><h2>QQ阅读账号</h2><p class="card-subtitle">点击账号卡片打开配置；支持Cookie、QQ扫码和手机号登录。</p><div id="qq-auth-editor"><div class="empty">正在读取登录态...</div></div></article></div><div class="workspace-right"><article class="console-card"><h2>安全说明</h2><p class="card-subtitle">页面只展示后端允许的摘要。</p><div class="safe-list"><div><span>QQ阅读密钥</span><strong>点击后查看</strong></div><div><span>数据库连接参数</span><strong>登录后可编辑</strong></div><div><span>数据库密码</span><strong>只写入、不回显</strong></div><div><span>网盘 Cookie</span><strong>只写不回显</strong></div><div><span>会话 Cookie</span><strong>仅 HttpOnly 保存</strong></div></div></article></div></div>
-        </section>
-
-        <section id="page-novels" class="page-view" data-page="novels" hidden><article id="novels" class="novel-console standalone-card">
-          <header class="novel-console-head"><div><span class="novel-overline">小说服务</span><h2>小说功能</h2><p class="card-subtitle">集中管理找书、下载与各平台开关。</p></div><div id="novel-state-pill" class="novel-state-pill"><span class="novel-state-dot"></span><strong>读取中</strong></div></header>
-          <div class="novel-control-grid">
-            <section class="novel-master-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">全</span><span>本机器人总开关</span></div><div class="novel-master-copy"><h3>全部小说功能</h3><p>控制本机器人的下载、找书和翻页。关闭后本机器人的所有平台都会暂停响应。</p></div><div class="novel-master-actions"><div class="novel-master-state"><strong id="novel-master-label">读取中</strong><span id="novel-platform-summary">正在读取平台状态</span></div><button id="global-switch" class="switch" type="button" aria-label="切换本机器人的小说功能"><span></span></button></div></section>
-            <section class="novel-test-panel"><div class="novel-panel-kicker"><span class="novel-panel-icon">测</span><span>测试模式</span></div><h3>管理员测试模式</h3><p>只影响管理员测试，不会绕过普通用户的平台开关。</p><div class="novel-test-actions"><span id="novel-test-label" class="novel-test-note">状态读取中</span><button id="test-switch" class="switch" type="button" aria-label="切换管理员测试模式"><span></span></button></div></section>
-          </div>
-          <div class="novel-platform-head"><div><span class="novel-platform-overline">已接入平台</span><h3>平台开关</h3></div><span id="novel-enabled-count" class="novel-platform-count">-- / -- 已开启</span></div>
-          <div id="novel-grid" class="novel-grid"><div class="empty">正在读取小说平台...</div></div>
-        </article></section>
-
-        <section id="page-pans" class="page-view" data-page="pans" hidden>
-          <div id="pans" class="pan-page">
-            <nav class="pan-tabs" role="tablist" aria-label="选择网盘">
-              <button id="pan-tab-UC" class="pan-tab" type="button" role="tab" data-pan-tab="UC" aria-controls="pan-card-UC" aria-selected="false"><span class="pan-tab-mark pan-tab-uc">U</span><span class="pan-tab-copy"><span>UC网盘</span><small data-pan-tab-meta="UC">读取中</small></span></button>
-              <button id="pan-tab-夸克" class="pan-tab" type="button" role="tab" data-pan-tab="夸克" aria-controls="pan-card-夸克" aria-selected="false"><span class="pan-tab-mark pan-tab-quark">夸</span><span class="pan-tab-copy"><span>夸克网盘</span><small data-pan-tab-meta="夸克">读取中</small></span></button>
-              <button id="pan-tab-百度" class="pan-tab" type="button" role="tab" data-pan-tab="百度" aria-controls="pan-card-百度" aria-selected="false"><span class="pan-tab-mark pan-tab-baidu">度</span><span class="pan-tab-copy"><span>百度网盘</span><small data-pan-tab-meta="百度">读取中</small></span></button>
-            </nav>
-            <div id="pan-grid" class="pan-grid"><div class="empty">正在读取网盘状态...</div></div>
-          </div>
-        </section>
-
-        <section id="page-runtime" class="page-view" data-page="runtime" hidden><article class="console-card standalone-card"><h2>运行状态</h2><p class="card-subtitle">这些数据来自服务器当前运行状态。</p><div class="runtime-grid runtime-page-grid"><div class="runtime-item"><span>CPU占用</span><strong id="runtime-cpu">--</strong></div><div class="runtime-item"><span>物理内存</span><strong id="runtime-memory">--</strong></div><div class="runtime-item"><span>磁盘空间</span><strong id="runtime-disk">--</strong></div><div class="runtime-item"><span>系统运行时间</span><strong id="runtime-runtime">--</strong></div><div class="runtime-item"><span>操作系统</span><strong id="runtime-os">--</strong></div></div><div class="runtime-detail"><div class="status-item"><span>数据库</span><strong id="runtime-db">--</strong></div><div class="status-item"><span>当前网盘</span><strong id="runtime-pan">--</strong></div><div class="status-item"><span>插件版本</span><strong id="runtime-version">--</strong></div></div></article></section>
-
-        <section id="page-help" class="page-view" data-page="help" hidden><div class="section-head page-view-head"><div><h2>帮助指令</h2><p>这里列出机器人当前支持的聊天指令；网页不代替群聊执行指令。</p></div></div><div class="help-grid"><article class="console-card help-card"><h3>管理与状态</h3><p>需要管理员权限的指令。</p><div class="command-list"><span>帮助</span><span>状态</span><span>小说</span><span>开小说 / 关小说</span><span>开测试 / 关测试</span><span>网盘状态</span><span>换UC / 换夸克 / 换百度</span><span>夸克登录</span></div></article><article class="console-card help-card"><h3>小说入口</h3><p>在群聊或私聊发送链接即可识别。</p><div class="command-list"><span>找关键词</span><span>找书 关键词</span><span>找作者 关键词</span><span>上一页 / 下一页</span><span>小说平台分享链接</span><span>小说分享卡片</span></div></article><article class="console-card help-card"><h3>群聊管理</h3><p>由插件管理员和群身份规则共同决定。</p><div class="command-list"><span>禁言 @成员</span><span>禁 @成员 1</span><span>解 @成员</span><span>数字撤回</span><span>卡片撤回</span><span>合并转发撤回</span></div></article></div></section>
-        <section id="page-settings" class="page-view" data-page="settings" hidden><article id="settings" class="console-card standalone-card"><h2>系统设置</h2><p class="card-subtitle">UC、夸克和百度账号及上传目录请在“网盘配置”中管理；数据库连接参数可在这里查看和编辑。</p><div class="runtime-detail settings-db-grid"><div class="status-item"><span>已保存配置的连接状态</span><strong id="settings-db-status">读取中</strong></div><div class="status-item"><span>已保存的数据库名</span><strong id="settings-db-name">读取中</strong></div></div><div id="database-config-editor" class="config-editor"><div class="empty">正在读取数据库配置...</div></div><p class="card-subtitle settings-db-note">密码只写入、不回显，留空表示保持现有密码。“测试当前连接”使用当前表单，不保存配置；上方状态对应已保存配置。修改并保存后需要重载插件生效。</p></article></section>
-
+""" + 工作台总览 + 业务页面 + 系统页面 + """
         <section id="page-messages" class="page-view" data-page="messages" hidden>
           <div class="msg-shell" id="msg-shell">
             <div class="msg-panel chat-list-panel" id="msg-chat-list-panel">
@@ -274,6 +252,10 @@ def 渲染控制台页面() -> str:
         _控制台页面缓存 = (
             页面头部前缀
             + 控制台样式
+            + 工作台样式
+            + 业务样式
+            + 系统样式
+            + 消息记录皮肤
             + 页面头部后缀
             + 页面主体
             + 脚本标签前缀

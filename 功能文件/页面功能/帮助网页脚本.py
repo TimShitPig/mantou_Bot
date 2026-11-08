@@ -7,11 +7,9 @@
       const $ = (id) => document.getElementById(id);
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const themeStorageKey = 'mantou-theme';
-      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'light' ? 'light' : 'dark'; } catch (_) { return 'dark'; } };
-      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); const color = theme === 'dark' ? '#081423' : '#edf4fa'; if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color); };
+      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
+      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); const color = theme === 'dark' ? '#211c2e' : '#f4f1fc'; if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color); };
       const updateThemeControl = (theme) => {
-        const select = $('theme-select');
-        if (select && select.value !== theme) select.value = theme;
         const dark = theme === 'dark';
         const label = dark ? '切换到浅色模式' : '切换到深色模式';
         ['theme-toggle', 'msg-rail-theme'].forEach((id) => {
@@ -110,13 +108,12 @@
       window.addEventListener('pagehide', stopThemeUpdate);
       themeMotion?.addEventListener?.('change', (event) => { if (event.matches) stopThemeUpdate(); });
       applyTheme(readThemePreference(), false);
-      $('theme-select')?.addEventListener('change', (event) => applyTheme(event.target.value));
       $('theme-toggle')?.addEventListener('click', () => applyTheme(requestedTheme === 'dark' ? 'light' : 'dark'));
       const views = {
-        dashboard: ['控制台', '查看机器人和小说服务的实时状态'],
-        bot: ['机器人配置', '查看安全摘要、监听地址和访问策略'],
-        novels: ['小说功能', '管理本机器人的小说开关、测试模式和平台开关'],
-        pans: ['网盘配置', '管理多网盘分享和账号安全摘要'],
+        dashboard: ['工作台总览', '查看当前机器人的业务和服务器状态'],
+        bot: ['机器人与账号', '集中管理机器人身份、权限和阅读账号'],
+        novels: ['小说服务', '管理找书、下载和各平台开关'],
+        pans: ['网盘与分享', '选择分享网盘并管理各平台账号'],
         runtime: ['运行状态', '查看服务器、数据库和插件实时指标'],
         help: ['帮助指令', '查看机器人当前支持的聊天指令'],
          settings: ['系统设置', '查看状态并编辑数据库连接参数'],
@@ -327,7 +324,7 @@
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = node.dataset.page !== next; });
-        document.querySelectorAll('.sidebar [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
+        document.querySelectorAll('.sidebar [data-view], .studio-nav [data-view]').forEach((node) => { const active = node.dataset.view === next; node.classList.toggle('active', active); node.setAttribute('aria-current', active ? 'page' : 'false'); });
         $('page-eyebrow').textContent = `${window.msgBotProfile?.username || '机器人'} / ${next === 'dashboard' ? '管理台' : '功能页面'}`;
         if (next !== 'messages' && previousView === 'messages') setMsgMobileChatOpen(false);
         if (next === 'messages') {
@@ -403,7 +400,7 @@
           node.querySelectorAll('[data-config-field]').forEach((input) => input.addEventListener('input', () => {
             databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
             const button = node.querySelector('[data-database-test]'); if (button) { button.disabled = !editable; button.textContent = '测试当前连接'; }
-            const result = node.querySelector('[data-database-test-result]'); if (result) { result.hidden = false; result.className = 'database-test-result'; result.textContent = '当前表单已更改，尚未测试；上方状态对应已保存配置。'; }
+            const result = node.querySelector('[data-database-test-result]'); if (result) { result.hidden = false; result.className = 'database-test-result'; result.textContent = '当前表单已更改，尚未测试；连接概况显示已保存的配置。'; }
           }));
         }
         node.querySelectorAll('[data-config-secret-toggle]').forEach((button) => button.addEventListener('click', () => {
@@ -649,8 +646,8 @@
            const tabs = Array.from(document.querySelectorAll('[data-pan-tab]'));
            const current = tabs.indexOf(node);
            let next = current;
-           if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
-           else if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+           if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % tabs.length;
+           else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + tabs.length) % tabs.length;
            else if (event.key === 'Home') next = 0;
            else if (event.key === 'End') next = tabs.length - 1;
            else return;
@@ -671,8 +668,10 @@
         if ($('admin-popover-scope')) $('admin-popover-scope').textContent = `插件管理员白名单：${Number(auth.admin_count || 0)} 个`;
         $('metric-global').textContent = novels.global_enabled ? '已开启' : '已关闭'; $('metric-global-meta').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('metric-pan').textContent = pans.active || '--'; const activePan = (pans.items || []).find((item) => item.active); $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
-        $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '状态可持久化' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`; $('console-version').textContent = `v${data.version || '--'}`;
-        $('dashboard-cpu').textContent = server.cpu || '--'; $('dashboard-memory').textContent = server.memory || '--'; $('dashboard-runtime').textContent = server.runtime || '--'; $('dashboard-updated').textContent = '刚刚';
+        $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '已配置数据库' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`;
+        $('console-version').textContent = data.version ? `v${data.version}` : '';
+        $('console-version').hidden = !data.version; $('metric-version-meta').textContent = '当前加载版本';
+        $('dashboard-cpu').textContent = server.cpu || '--'; $('dashboard-memory').textContent = server.memory || '--'; $('dashboard-runtime').textContent = server.runtime || '--';
         [['global-switch', '__global__', novels.global_enabled, '切换本机器人的小说功能'], ['test-switch', '__test__', novels.test_mode, '切换管理员测试模式']].forEach(([id, key, enabled, label]) => { const node = $(id); node.className = `switch ${enabled ? 'on' : ''}`; node.dataset.switch = key; node.dataset.enabled = String(Boolean(enabled)); node.disabled = !novels.editable; node.setAttribute('aria-label', label); node.setAttribute('aria-pressed', String(Boolean(enabled))); });
         const platforms = novels.platforms || [];
         const enabledCount = platforms.filter((item) => item.enabled).length;
@@ -2296,7 +2295,6 @@
         $('console-sidebar').hidden = true; $('console-workspace').hidden = true; $('bot-picker').hidden = false;
         $('bot-picker-error').textContent = message; $('bot-picker-error').hidden = !message;
         document.title = '选择机器人 · 馒头控制台';
-        $('console-brand-name').textContent = '馒头Bot';
         $('updated').textContent = '--';
       };
       const exitBotConsole = (push = true) => {
@@ -2377,7 +2375,7 @@
           const available = /^\d{4,32}$/.test(profile.appid);
           const status = consoleEntering && profile.appid === consoleAppid ? '正在进入…' : !available ? '等待认证' : botPickerStatusLabel(profile);
           const stats = profile.stats || {};
-          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" data-bot-unavailable="${!available}" aria-label="进入${esc(name)}控制台${profile.appid ? '，AppID ' + esc(profile.appid) : ''}" title="${esc(profile.appid ? 'AppID：' + profile.appid : '等待机器人认证')}" ${consoleEntering || !available ? 'disabled' : ''}><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name, profile.appid)}</span><span class="bot-selector-copy"><span class="bot-selector-title"><strong>${esc(name)}</strong><span class="bot-selector-admin" title="当前登录身份：控制台管理员"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 2 6 2.5V10c0 4-6 7-6 7s-6-3-6-7V4.5L10 2Z"/><path d="m7 9 2 2 4-4"/></svg>管理员</span></span><small><span class="bot-selector-status ${profile.status === 'running' ? 'is-running' : ''}">${esc(status)}</span></small></span><span class="bot-selector-arrow" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 4 6 6-6 6"/></svg></span><span class="bot-selector-stats"><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="6" r="2.5"/><path d="M2.5 16v-2a5 5 0 0 1 10 0v2h-10Zm11-12a2.5 2.5 0 0 1 0 5m1 2a4 4 0 0 1 3 4v1h-2"/></svg><span>已记录群聊</span><strong data-bot-stat="groups">${esc(botStatValue(stats.group_count))}</strong></span><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>已记录用户</span><strong data-bot-stat="users">${esc(botStatValue(stats.user_count))}</strong></span></span></button>`;
+          return `<button type="button" class="bot-selector-item" data-bot-select="${esc(profile.key)}" data-bot-unavailable="${!available}" aria-label="进入${esc(name)}控制台${profile.appid ? '，AppID ' + esc(profile.appid) : ''}" title="${esc(profile.appid ? 'AppID：' + profile.appid : '等待机器人认证')}" ${consoleEntering || !available ? 'disabled' : ''}><span class="bot-selector-avatar">${avatarHtml(profile.avatar, name, profile.appid)}</span><span class="bot-selector-copy"><span class="bot-selector-title"><strong>${esc(name)}</strong></span><small><span class="bot-selector-status ${profile.status === 'running' ? 'is-running' : ''}">${esc(status)}</span></small></span><span class="bot-selector-arrow" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 4 6 6-6 6"/></svg></span><span class="bot-selector-stats"><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="6" r="2.5"/><path d="M2.5 16v-2a5 5 0 0 1 10 0v2h-10Zm11-12a2.5 2.5 0 0 1 0 5m1 2a4 4 0 0 1 3 4v1h-2"/></svg><span>已记录群聊</span><strong data-bot-stat="groups">${esc(botStatValue(stats.group_count))}</strong></span><span class="bot-selector-stat"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6" r="3"/><path d="M4 17v-2a6 6 0 0 1 12 0v2"/></svg><span>已记录用户</span><strong data-bot-stat="users">${esc(botStatValue(stats.user_count))}</strong></span></span></button>`;
         }).join('') || '<span class="bot-selector-empty">暂无已加载机器人</span>';
         host.querySelectorAll('[data-bot-select]').forEach((button) => button.addEventListener('click', () => {
           const profile = profiles.find((item) => item.key === button.dataset.botSelect);
@@ -2392,7 +2390,6 @@
         if (!consoleAppid || String(data.appid || '') !== consoleAppid) return;
         switchMsgBotScope(consoleAppid);
         window.msgBotProfile = {...data, id, username:name, avatar};
-        $('console-brand-name').textContent = name;
         document.querySelectorAll('[data-bot-name]').forEach((node) => { node.textContent = name; });
         document.querySelectorAll('[data-bot-id]').forEach((node) => { node.textContent = id || '由适配器提供'; });
         document.querySelectorAll('[data-bot-status]').forEach((node) => {
@@ -7516,6 +7513,7 @@
       }, 1000);
 
       $('bot-exit').addEventListener('click', () => exitBotConsole());
+      $('studio-bot-exit').addEventListener('click', () => exitBotConsole());
       $('bot-picker-refresh').addEventListener('click', async () => {
         if (consoleEntering) return;
         const button = $('bot-picker-refresh'); button.disabled = true; botProfileLoadedAt = 0;

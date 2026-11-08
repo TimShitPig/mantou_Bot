@@ -3,7 +3,7 @@
 登录页脚本 = r"""
     (() => {
       const themeStorageKey = 'mantou-theme';
-      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'light' ? 'light' : 'dark'; } catch (_) { return 'dark'; } };
+      const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
       const updateThemeControl = (next) => {
         const select = document.getElementById('login-theme-select');
         if (select && select.value !== next) select.value = next;
@@ -12,7 +12,7 @@
         const root = document.documentElement;
         if (root.dataset.theme !== next) root.dataset.theme = next;
         const meta = document.querySelector('meta[name="theme-color"]');
-        const color = next === 'dark' ? '#081423' : '#edf4fa';
+        const color = next === 'dark' ? '#201a2d' : '#f4f1fc';
         if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color);
       };
       let requestedTheme = readThemePreference();
