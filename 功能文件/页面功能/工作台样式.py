@@ -17,6 +17,10 @@
       background:radial-gradient(ellipse at 0 0,#fff0ddad,transparent 33rem),
                  radial-gradient(ellipse at 94% 0,#e5e7ffb3,transparent 44rem),var(--studio-canvas);
       color:var(--studio-ink);
+      /* 工作台随文档滚动。消息记录仍由原来的视口内面板滚动。 */
+      height:auto;
+      overflow-x:clip;
+      overflow-y:visible;
     }
     :root[data-theme="dark"] body:not(.messages-workspace) {
       --studio-canvas:#211c2e; --studio-card:#2d263d; --studio-ink:#fbf4ff; --studio-muted:#c3b8d4;
