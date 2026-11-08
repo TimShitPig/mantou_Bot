@@ -314,7 +314,7 @@
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { hideMsgCtx(); groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
         const previousView = activeView;
-        if (next !== previousView) { closeMsgHeadMenu(); clearSavedPassword(); }
+        if (next !== previousView) { closeMsgHeadMenu(); clearSavedCredential(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
         if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); stopZLibraryAccount(); }
@@ -357,31 +357,52 @@
         if (field.kind === 'boolean') return Boolean(field.value);
         return field.secret ? '' : String(field.value ?? '');
       };
-      let savedPasswordView = null;
+      let savedCredentialView = null;
 
-      const updatePasswordToggle = (button, input, saved) => {
-        const visible = input.type === 'text' || Boolean(saved && !saved.hidden);
-        button.disabled = !saved && (input.disabled || !input.value);
+      const updateCredentialToggle = (button, visible) => {
         button.textContent = visible ? '隐藏' : '显示';
         button.setAttribute('aria-label', (visible ? '隐藏' : '显示') + button.dataset.configSecretLabel);
         button.setAttribute('aria-pressed', String(visible));
       };
 
-      const clearSavedPassword = () => {
-        if (!savedPasswordView) return;
-        const {button, input, saved, request} = savedPasswordView;
-        savedPasswordView = null;
-        request.abort();
-        saved.value = '';
-        saved.placeholder = '';
-        saved.hidden = true;
-        input.hidden = false;
-        updatePasswordToggle(button, input, saved);
+      const updatePasswordToggle = (button, input, saved) => {
+        button.disabled = !saved && (input.disabled || !input.value);
+        updateCredentialToggle(button, input.type === 'text' || Boolean(saved && !saved.hidden));
       };
 
-      const toggleConfigPassword = async (button, input, saved) => {
-        const wasOpen = savedPasswordView?.button === button;
-        clearSavedPassword();
+      const clearSavedCredential = () => {
+        if (!savedCredentialView) return;
+        const {input, request, placeholder, reset} = savedCredentialView;
+        savedCredentialView = null;
+        request.abort();
+        input.value = '';
+        input.placeholder = placeholder;
+        reset();
+      };
+
+      const showSavedCredential = async (button, input, payload, reset) => {
+        const request = new AbortController();
+        const current = {button, input, request, placeholder:input.placeholder, reset};
+        savedCredentialView = current;
+        input.placeholder = '正在读取…';
+        updateCredentialToggle(button, true);
+        try {
+          const body = JSON.stringify(payload);
+          const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
+          if (savedCredentialView !== current) return;
+          if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的值');
+          input.value = data.value;
+          input.placeholder = '';
+        } catch (error) {
+          if (savedCredentialView !== current) return;
+          clearSavedCredential();
+          if (error.status === 401) showAuthError(error);
+          else if (error.name !== 'AbortError') toast(error.message || '无法查看已保存的值，请重试');
+        }
+      };
+      const toggleConfigPassword = (button, input, saved) => {
+        const wasOpen = savedCredentialView?.button === button;
+        clearSavedCredential();
         if (wasOpen) return;
         if (input.value && !input.disabled) {
           input.type = input.type === 'text' ? 'password' : 'text';
@@ -389,41 +410,27 @@
           return;
         }
         if (!saved) return;
-
-        const request = new AbortController();
-        const current = {button, input, saved, request};
-        savedPasswordView = current;
         input.type = 'password';
         input.hidden = true;
-        saved.placeholder = '正在读取…';
         saved.hidden = false;
-        updatePasswordToggle(button, input, saved);
-        try {
-          const body = JSON.stringify({field:input.dataset.configField});
-          const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
-          if (savedPasswordView !== current) return;
-          if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的值');
-          saved.value = data.value;
-          saved.placeholder = '';
-        } catch (error) {
-          if (savedPasswordView !== current) return;
-          clearSavedPassword();
-          if (error.status === 401) showAuthError(error);
-          else if (error.name !== 'AbortError') toast(error.message || '无法查看已保存的值，请重试');
-        }
+        void showSavedCredential(button, saved, {field:input.dataset.configField}, () => {
+          saved.hidden = true;
+          input.hidden = false;
+          updatePasswordToggle(button, input, saved);
+        });
       };
-      document.addEventListener('visibilitychange', () => { if (document.hidden) clearSavedPassword(); });
-      window.addEventListener('pagehide', clearSavedPassword);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) clearSavedCredential(); });
+      window.addEventListener('pagehide', clearSavedCredential);
       const botTabs = document.querySelector('.studio-bot-tabs');
-      botTabs?.addEventListener('click', clearSavedPassword);
+      botTabs?.addEventListener('click', clearSavedCredential);
       botTabs?.addEventListener('keydown', (event) => {
-        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedPassword();
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedCredential();
       });
 
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
-        if (savedPasswordView && node.contains(savedPasswordView.input)) clearSavedPassword();
+        if (savedCredentialView && node.contains(savedCredentialView.input)) clearSavedCredential();
         const selected = (fields || []).filter((field) => {
           if (filter && !filter(field)) return false;
           // 展示教程尺寸、端口和登录凭据；监听地址/域名继续由后端读取。
@@ -611,11 +618,21 @@
            const profileName = account.name && account.name !== '未命名账号' ? account.name : '未命名账号';
            const avatar = panAccountAvatarHtml(account, profileName);
            const accountMetadata = item.key === '夸克' ? panAccountStatsHtml(account) : '';
-           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息</span><h3>${esc(profileName)}</h3>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div><p class="pan-security-note">Cookie 仅用于登录态，页面不回显。</p><section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
+           const cookieInputId = `pan-saved-cookie-${esc(item.key)}`;
+           const cookieLabel = `${esc(item.name)} Cookie`;
+           const cookieField = account.credential_ref ? `
+             <section class="pan-detail-section config-field">
+               <label for="${cookieInputId}">${cookieLabel}</label>
+               <div class="config-input-wrap">
+                 <input id="${cookieInputId}" data-pan-saved-cookie type="password" readonly autocomplete="off" spellcheck="false" placeholder="已保存 Cookie">
+                 <button class="config-secret-toggle" type="button" data-pan-cookie-toggle data-index="${esc(index)}" data-credential-ref="${esc(account.credential_ref)}" data-config-secret-label="${cookieLabel}" aria-label="显示${cookieLabel}" aria-controls="${cookieInputId}" aria-pressed="false">显示</button>
+               </div>
+             </section>` : '';
+           return `<div class="pan-object-account-detail">${avatar}<div class="pan-object-account-copy"><span class="pan-section-kicker">账号信息</span><h3>${esc(profileName)}</h3>${accountMetadata}</div><span class="tag ${enabled ? 'ok' : 'off'}">${enabled ? '运行中' : '已停用'}</span></div><div class="pan-object-detail-actions"><span>账号状态</span><button class="switch pan-account-switch ${enabled ? 'on' : ''}" type="button" data-pan-account-enable="${esc(item.key)}" data-index="${esc(index)}" data-enabled="${enabled}" ${pansEditable ? '' : 'disabled'} aria-label="${enabled ? '停用' : '启用'}${esc(item.name)}账号${esc(index)}" aria-pressed="${enabled}"><span></span></button>${isDefault ? '<span class="tag ok pan-account-default-tag">默认账号</span>' : enabled ? `<button class="pan-account-default" type="button" data-pan-account-default="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>设为默认</button>` : ''}<button class="pan-account-delete" type="button" data-pan-delete="${esc(item.key)}" data-index="${esc(index)}" ${pansEditable ? '' : 'disabled'}>删除账号</button></div>${cookieField}<section class="pan-detail-section"><div class="pan-detail-section-head"><div><span class="pan-section-kicker">上传</span><h3>上传目录</h3></div></div><div class="pan-directory"><input id="pan-dir-${esc(item.key)}" type="text" data-pan-dir="${esc(item.key)}" data-pan-dir-field="${esc(directoryField)}" value="${esc(item.directory || '')}" placeholder="/小说机器人" ${configEditable ? '' : 'disabled'} aria-label="${esc(item.name)}上传目录"><button class="outline-button" type="button" data-pan-dir-save="${esc(item.key)}" ${configEditable ? '' : 'disabled'}>保存目录</button></div></section>`;
          }
          if (type === 'add') {
            const isQuark = item.key === '夸克';
-           return `<div class="pan-object-form">${isQuark ? `<div class="pan-add-method" role="group" aria-label="选择夸克账号添加方式"><button type="button" data-quark-mode="cookie" aria-pressed="true">Cookie</button><button type="button" data-quark-mode="scan" aria-pressed="false">扫码</button></div>` : ''}<section data-quark-cookie-panel><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie（只写入）" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">Cookie 只提交给后端，不在页面回显。</p></section>${isQuark ? `<section class="pan-quark-scan" data-quark-scan-panel hidden><p class="pan-security-note">使用夸克 App 扫描网页二维码，确认后自动保存账号。</p><button class="outline-button" type="button" data-quark-scan-start ${pansEditable ? '' : 'disabled'}>获取二维码</button><img class="pan-quark-scan-image" data-quark-scan-image alt="夸克登录二维码" hidden><p class="pan-quark-scan-status" data-quark-scan-status aria-live="polite">获取二维码后使用夸克 App 扫描。</p><button class="pan-account-delete" type="button" data-quark-scan-cancel hidden>取消扫码</button></section>` : ''}</div>`;
+           return `<div class="pan-object-form">${isQuark ? `<div class="pan-add-method" role="group" aria-label="选择夸克账号添加方式"><button type="button" data-quark-mode="cookie" aria-pressed="true">Cookie</button><button type="button" data-quark-mode="scan" aria-pressed="false">扫码</button></div>` : ''}<section data-quark-cookie-panel><label class="pan-field-label" for="pan-cookie-${esc(item.key)}">${esc(item.name)} Cookie</label><div class="account-add pan-account-add"><input id="pan-cookie-${esc(item.key)}" type="password" data-pan-cookie="${esc(item.key)}" placeholder="粘贴 Cookie" autocomplete="off" ${pansEditable ? '' : 'disabled'} aria-label="添加${esc(item.name)}账号 Cookie"><button class="outline-button" type="button" data-pan-add="${esc(item.key)}" ${pansEditable ? '' : 'disabled'}>添加账号</button></div><p class="pan-security-note">保存后可在对应账号详情查看。</p></section>${isQuark ? `<section class="pan-quark-scan" data-quark-scan-panel hidden><p class="pan-security-note">使用夸克 App 扫描网页二维码，确认后自动保存账号。</p><button class="outline-button" type="button" data-quark-scan-start ${pansEditable ? '' : 'disabled'}>获取二维码</button><img class="pan-quark-scan-image" data-quark-scan-image alt="夸克登录二维码" hidden><p class="pan-quark-scan-status" data-quark-scan-status aria-live="polite">获取二维码后使用夸克 App 扫描。</p><button class="pan-account-delete" type="button" data-quark-scan-cancel hidden>取消扫码</button></section>` : ''}</div>`;
          }
          return '';
        };
@@ -624,6 +641,19 @@
          const card = document.querySelector(`[data-pan-card="${CSS.escape(platform)}"]`);
          const pane = card?.querySelector('[data-pan-object-pane]');
          if (!pane) return;
+         pane.querySelector('[data-pan-cookie-toggle]')?.addEventListener('click', (event) => {
+           const button = event.currentTarget;
+           const wasOpen = savedCredentialView?.button === button;
+           clearSavedCredential();
+           if (wasOpen) return;
+           const input = pane.querySelector('[data-pan-saved-cookie]');
+           const payload = {field:'pan_cookie', platform, index:Number(button.dataset.index), credential_ref:button.dataset.credentialRef};
+           input.type = 'text';
+           void showSavedCredential(button, input, payload, () => {
+             input.type = 'password';
+             updateCredentialToggle(button, false);
+           });
+         });
          pane.querySelectorAll('[data-pan-add]').forEach((node) => node.addEventListener('click', () => addPanAccount(node.dataset.panAdd)));
          pane.querySelectorAll('[data-quark-mode]').forEach((node) => node.addEventListener('click', async () => {
            await stopQuarkWebScan();
@@ -658,6 +688,7 @@
          const detail = card.querySelector('[data-pan-object-detail]');
          const title = card.querySelector('[data-pan-object-title]');
          const pane = card.querySelector('[data-pan-object-pane]');
+         if (pane.contains(savedCredentialView?.input)) clearSavedCredential();
          browser.hidden = true;
          detail.hidden = false;
          title.textContent = panObjectTitle(object.type);
@@ -675,6 +706,7 @@
        const closePanObject = (platform) => {
          const previous = activePanObject;
          if (!previous || previous.platform !== platform) return;
+         if (savedCredentialView?.input.matches('[data-pan-saved-cookie]')) clearSavedCredential();
          if (previous.type === 'add') void stopQuarkWebScan();
          activePanObject = null;
          if (platform === '夸克') renderQuarkAccountCards();
@@ -774,6 +806,7 @@
           if (meta) meta.textContent = `${accounts.length} 个账号 · ${enabled} 启用`;
         });
         const panGrid = $('pan-grid');
+        if (panGrid?.contains(savedCredentialView?.input)) clearSavedCredential();
         if (panGrid) panGrid.innerHTML = panItems.map((item) => renderPanCard(item, pans.editable, pans.config_editable)).join('') || '<div class="empty">没有网盘数据</div>';
         bindPanWorkspaceControls();
         let savedPanTab = activePanTab;
@@ -2380,7 +2413,7 @@
         $('updated').textContent = '--';
       };
       const exitBotConsole = (push = true) => {
-        clearSavedPassword();
+        clearSavedCredential();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
         void stopQuarkWebScan(); leaveQQReader(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;

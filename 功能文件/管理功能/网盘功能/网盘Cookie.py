@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import hmac
 import io
 import inspect
 import json
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -71,6 +73,7 @@ Cookie名称模式 = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
     "mantou_current_pan_account_override", default=None
 )
 网盘账号写入锁 = threading.RLock()
+_网盘凭据引用密钥 = secrets.token_bytes(32)
 夸克账号资料刷新间隔 = 300
 夸克账号资料刷新锁 = asyncio.Lock()
 夸克账号资料缓存: dict[str, dict[str, Any]] = {}
@@ -953,6 +956,19 @@ def _读取保存的网盘账号列表(配置: Any, 平台: str) -> list[str]:
     return [记录["cookie"] for 记录 in _读取保存的网盘账号记录(配置, 平台)]
 
 
+def _网盘凭据引用(Cookie: str) -> str:
+    return hmac.new(_网盘凭据引用密钥, Cookie.encode("utf-8"), "sha256").hexdigest()
+
+
+def 读取指定网盘账号Cookie(配置: Any, 平台: str, 序号: int, 凭据引用: str) -> str:
+    """索引和凭据引用都匹配时才返回 Cookie，避免账号顺序变化时取到其他账号。"""
+    账号列表 = _读取保存的网盘账号列表(配置, 平台)
+    if not 1 <= 序号 <= len(账号列表):
+        return ""
+    Cookie = 账号列表[序号 - 1]
+    return Cookie if hmac.compare_digest(_网盘凭据引用(Cookie), 凭据引用) else ""
+
+
 def _写入网盘账号记录(
     配置: Any, 平台: str, 账号记录: list[dict[str, Any]]
 ) -> None:
@@ -1559,7 +1575,8 @@ def 获取启用网盘账号列表(配置: Any, 平台: str) -> list[tuple[int, 
 def _网盘账号摘要(账号记录: list[dict[str, Any]]) -> list[dict[str, Any]]:
     摘要列表: list[dict[str, Any]] = []
     for 序号, 记录 in enumerate(账号记录, start=1):
-        if not str(记录.get("cookie") or "").strip():
+        Cookie = str(记录.get("cookie") or "")
+        if not Cookie.strip():
             continue
         摘要列表.append(
             {
@@ -1576,6 +1593,7 @@ def _网盘账号摘要(账号记录: list[dict[str, Any]]) -> list[dict[str, An
                     记录.get("space_total_bytes")
                 ),
                 "configured": True,
+                "credential_ref": _网盘凭据引用(Cookie),
                 "enabled": _解析网盘账号启用状态(记录.get("enabled")),
             }
         )
