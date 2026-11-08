@@ -53,101 +53,247 @@
       align-items: start;
       gap: var(--service-gap);
     }
-    .studio-bot-workspace { display: grid; gap: 18px; }
+    .studio-bot-workspace {
+      --bot-action: linear-gradient(115deg, #5b42b5, #3f56af);
+      --bot-action-hover: linear-gradient(115deg, #4d359c, #33499d);
+      display: grid;
+      gap: clamp(14px, 2vw, 22px);
+    }
     .studio-bot-identity {
+      position: relative;
+      isolation: isolate;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 9px 18px;
-      padding: 12px 15px;
-      border-radius: 13px;
-      background: var(--studio-wash);
+      gap: 14px 20px;
+      padding: clamp(16px, 2.5vw, 28px);
+      border: 1px solid #b2a0ff5c;
+      border-radius: 17px;
+      overflow: hidden;
+      color: #faf7ff;
+      background:
+        radial-gradient(ellipse at 83% -28%, #8666d6c4, transparent 64%),
+        radial-gradient(ellipse at 103% 110%, #236296a6, transparent 61%),
+        linear-gradient(115deg, #261943, #3a286f 66%, #263a69);
+      box-shadow: 0 10px 25px #33246933, inset 0 1px #e7dcff26;
     }
-    .studio-bot-badge { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .studio-bot-badge h2 { font-size: 17px; overflow-wrap: anywhere; }
-    .studio-bot-badge .bot-profile-status { display: inline-flex; font-size: 12px; }
+    .studio-bot-identity::before,
+    .studio-bot-identity::after {
+      position: absolute;
+      z-index: -1;
+      content: "";
+      pointer-events: none;
+    }
+    .studio-bot-identity::before {
+      inset: 0 0 0 50%;
+      background:
+        linear-gradient(90deg, transparent 0%, #ffffff12 100%),
+        repeating-linear-gradient(0deg, transparent 0 23px, #dce5ff17 23px 24px),
+        repeating-linear-gradient(90deg, transparent 0 23px, #dce5ff17 23px 24px);
+      mask-image: linear-gradient(90deg, transparent, #000);
+    }
+    .studio-bot-identity::after {
+      top: -103px;
+      right: -40px;
+      width: 400px;
+      height: 290px;
+      border: 1px solid #e1d1ff3d;
+      border-radius: 50%;
+      box-shadow: 0 0 0 27px #d4c2ff0e, 0 0 0 59px #d4c2ff0e;
+      transform: rotate(-18deg);
+    }
+    .studio-bot-badge {
+      display: flex;
+      align-items: center;
+      gap: clamp(11px, 1.5vw, 17px);
+      min-width: 0;
+    }
+    .studio-bot-copy { min-width: 0; }
+    .studio-bot-kicker {
+      display: block;
+      color: #dcd1fb;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+    }
+    #page-bot .studio-bot-badge h2 {
+      margin: 2px 0 5px;
+      color: #fff;
+      font-size: clamp(18px, 2.4vw, 25px);
+      overflow-wrap: anywhere;
+    }
+    .studio-bot-badge .bot-profile-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border: 1px solid #f0e7ff35;
+      border-radius: 999px;
+      background: #1c153b72;
+      color: #e6ddfa;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .studio-bot-badge .bot-profile-status.online { color: #b8f6d9; }
+    .studio-bot-badge .online::before {
+      background: #7be4b6;
+      box-shadow: 0 0 7px #7be4b69c;
+    }
     #page-bot .studio-bot-badge .bot-avatar {
-      flex: 0 0 42px;
-      width: 42px;
-      height: 42px;
-      border: 1px solid var(--studio-border);
-      background: var(--studio-accent-soft);
-      box-shadow: none;
+      --bot-avatar-size: clamp(47px, 6vw, 62px);
+      flex: 0 0 var(--bot-avatar-size);
+      width: var(--bot-avatar-size);
+      height: var(--bot-avatar-size);
+      border: 2px solid #e7dfff;
+      background: #534099;
+      box-shadow: 0 0 0 4px #bda8ff3b, 0 0 23px #a18aff65;
     }
-    #page-bot .studio-bot-badge .avatar-face { color: var(--studio-accent); font-size: 14px; }
+    #page-bot .studio-bot-badge .avatar-face { color: #fff; font-size: 18px; }
     .studio-bot-facts {
       display: flex;
       flex-wrap: wrap;
-      gap: 2px 7px;
+      align-items: baseline;
+      gap: 2px 9px;
+      min-width: 0;
+      max-width: 100%;
       margin: 0;
+      padding: 7px 11px;
+      border: 1px solid #f0e7ff35;
+      border-radius: 9px;
+      background: #1c153b72;
       font-size: 12px;
     }
-    .studio-bot-facts dt { color: var(--studio-muted); }
-    .studio-bot-facts dd { margin: 0; overflow-wrap: anywhere; font-weight: 650; }
+    .studio-bot-facts dt { color: #ded4f8; }
+    .studio-bot-facts dd { margin: 0; overflow-wrap: anywhere; font-weight: 680; font-variant-numeric: tabular-nums; }
     .studio-bot-tabs {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 4px;
-      width: min(100%, 420px);
+      width: min(100%, 510px);
       padding: 4px;
       border: 1px solid var(--studio-border);
-      border-radius: 12px;
+      border-radius: 14px;
       background: var(--studio-soft);
     }
     .studio-bot-tabs button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: clamp(4px, 1vw, 8px);
       min-width: 0;
-      min-height: 38px;
-      padding: 6px 4px;
+      min-height: 44px;
+      padding: 6px 3px;
       border: 1px solid transparent;
-      border-radius: 8px;
+      border-radius: 10px;
       background: transparent;
       color: var(--studio-muted);
       font-size: 13px;
-      font-weight: 680;
+      font-weight: 720;
       white-space: nowrap;
+      transition: color .16s ease, background-color .16s ease, box-shadow .16s ease;
     }
-    .studio-bot-tabs button:hover { color: var(--studio-accent); }
+    .studio-bot-tabs svg { width: 17px; height: 17px; flex: 0 0 auto; }
+    .studio-bot-tabs button:hover { color: var(--studio-accent); background: var(--studio-accent-soft); }
     .studio-bot-tabs button[aria-selected="true"] {
-      border-color: var(--studio-border);
-      background: var(--studio-card);
-      color: var(--studio-accent);
+      border-color: #b9b1ff4d;
+      background: var(--bot-action);
+      color: #fff;
+      box-shadow: 0 3px 9px #4738aa4d, inset 0 1px #ffffff32;
     }
-    .studio-bot-tabs button:focus-visible, .studio-bot-panel:focus-visible {
+    .studio-bot-tabs button:focus-visible,
+    .studio-bot-panel:focus-visible,
+    #page-bot .config-actions button:focus-visible {
       outline: 2px solid var(--studio-accent);
       outline-offset: 2px;
     }
     .studio-bot-panel { min-width: 0; }
     .studio-bot-panel[hidden] { display: none; }
-    #page-bot .config-fields {
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+    .studio-bot-panel > .studio-service-head {
+      padding-left: 11px;
+      border-left: 3px solid var(--studio-accent);
     }
-    #page-bot .config-group {
-      padding: 15px 16px;
-      border-color: var(--studio-border);
+    .studio-bot-panel > .studio-service-head h3 { font-size: 18px; }
+    @media (prefers-reduced-motion: no-preference) {
+      .studio-bot-panel:not([hidden]) { animation: studio-bot-panel-in .18s ease-out both; }
+      @keyframes studio-bot-panel-in {
+        from { opacity: .65; }
+        to { opacity: 1; }
+      }
+    }
+    #basic-config-editor { gap: 13px; }
+    #basic-config-editor .config-fields {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+      align-items: start;
+    }
+    #basic-config-editor .config-group {
+      --bot-group-mark: #9d7ce5;
+      min-width: 0;
+      padding: clamp(13px, 1.7vw, 19px);
+      border: 1px solid var(--studio-border);
+      border-top: 2px solid var(--bot-group-mark);
       border-radius: 13px;
-      background: var(--studio-soft);
+      background: linear-gradient(135deg, var(--studio-soft), var(--studio-card));
     }
-    #page-bot .config-group h3 { margin: 0 0 12px; font-size: 14px; }
-    #page-bot .config-field :is(input, select, textarea) {
-      background: var(--studio-card);
+    #basic-config-editor [data-config-category="help_web_settings"] { --bot-group-mark: #78a6d9; }
+    #basic-config-editor [data-config-category="zlibrary_account_settings"] { --bot-group-mark: #dc9e7b; }
+    #basic-config-editor .config-group h3 { margin: 0 0 12px; font-size: 15px; }
+    #basic-config-editor .config-field label { font-size: 12px; }
+    #basic-config-editor .config-field small { font-size: 11px; }
+    #basic-config-editor .config-scope-label {
+      display: inline-block;
+      margin-inline-start: 6px;
+      padding: 1px 6px;
+      border-radius: 6px;
+      background: var(--studio-accent-soft);
+      color: var(--studio-muted);
+      white-space: nowrap;
+    }
+    #basic-config-editor .config-field :is(input, select, textarea) {
+      min-height: 44px;
       border-color: var(--studio-border);
+      border-radius: 9px;
+      background: var(--studio-card);
       color: var(--studio-ink);
     }
-    #page-bot .config-field :is(input, select, textarea):focus {
+    #basic-config-editor .config-field textarea { min-height: 82px; }
+    #basic-config-editor .config-field :is(input, select, textarea):focus {
       border-color: var(--studio-accent);
       box-shadow: 0 0 0 3px var(--studio-accent-soft);
+    }
+    #basic-config-editor .config-actions { flex-wrap: wrap; }
+    #basic-config-editor .config-actions .primary-button {
+      min-height: 44px;
+      padding-inline: 18px;
+      border-radius: 10px;
+      background: var(--bot-action);
+      color: #fff;
+    }
+    #basic-config-editor .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    @media (min-width: 1080px) {
+      #basic-config-editor:has(> [data-config-category="basic_settings"]):has(> [data-config-category="help_web_settings"]) {
+        grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
+      }
+      #basic-config-editor > :is([data-config-category="zlibrary_account_settings"], .config-actions) { grid-column: 1 / -1; }
+      #basic-config-editor [data-config-category="help_web_settings"] .config-fields {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      #basic-config-editor [data-config-category="zlibrary_account_settings"] .config-fields { max-width: 45rem; }
+    }
+    @media (max-width: 410px) {
+      .studio-bot-tabs button { font-size: 12px; }
+      .studio-bot-tabs svg { width: 14px; height: 14px; }
     }
     #page-bot .qq-reader-toolbar { flex-wrap: wrap; }
     #page-bot .qq-reader-account {
       padding: 14px;
       border-color: var(--studio-border);
       border-radius: 13px;
-      background: var(--studio-soft);
+      background: linear-gradient(140deg, var(--studio-soft), var(--studio-card));
     }
     #page-bot .qq-reader-account.is-current {
       border-color: var(--studio-accent);
-      background: var(--studio-accent-soft);
+      background: linear-gradient(140deg, var(--studio-accent-soft), var(--studio-card));
     }
     #bot-panel-zlibrary {
       --ink: var(--studio-ink);

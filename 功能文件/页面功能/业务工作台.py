@@ -6,7 +6,8 @@
             <header id="overview" class="studio-bot-identity">
               <div class="studio-bot-badge">
                 <div class="bot-avatar" data-bot-avatar><span class="avatar-face">•ᴗ•</span></div>
-                <div>
+                <div class="studio-bot-copy">
+                  <span class="studio-bot-kicker">机器人档案</span>
                   <h2 data-bot-name>馒头助手</h2>
                   <span class="bot-profile-status" data-bot-status>状态未知</span>
                 </div>
@@ -15,14 +16,23 @@
             </header>
 
             <div class="studio-bot-tabs" role="tablist" aria-label="机器人与账号分区">
-              <button id="bot-tab-basic" type="button" role="tab" aria-selected="true" aria-controls="config">基础设置</button>
-              <button id="bot-tab-qq" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-qq" tabindex="-1">QQ 阅读</button>
-              <button id="bot-tab-zlibrary" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-zlibrary" tabindex="-1">ZLibrary</button>
+              <button id="bot-tab-basic" type="button" role="tab" aria-selected="true" aria-controls="config">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 7h5m4 0h7M4 17h9m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg>
+                基础设置
+              </button>
+              <button id="bot-tab-qq" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-qq" tabindex="-1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6v14M3 5c4-1 6 0 9 2 3-2 5-3 9-2v13c-4-1-6 0-9 2-3-2-5-3-9-2z"/></svg>
+                QQ 阅读
+              </button>
+              <button id="bot-tab-zlibrary" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-zlibrary" tabindex="-1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19V5h4v14m0 0V7h5v12m0 0 1-13 5 1-1 12M3 19h18"/></svg>
+                ZLibrary
+              </button>
             </div>
 
             <section id="config" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-basic" tabindex="0">
               <header class="studio-service-head">
-                <div><h3>权限与网页设置</h3><p>管理员白名单、帮助网页及 ZLibrary 注册邮箱设置。</p></div>
+                <div><h3>权限与网页设置</h3><p>管理访问权限、帮助网页和注册邮箱。</p></div>
               </header>
               <div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置…</div></div>
             </section>
