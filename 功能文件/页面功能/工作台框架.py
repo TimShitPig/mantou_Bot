@@ -99,7 +99,7 @@ def _导航分组(标题: str, 链接: tuple) -> str:
 
 服务行 = (
     ("novels", "小说服务", "metric-global", "metric-global-meta", "管理小说服务"),
-    ("pans", "分享网盘", "metric-pan", "metric-pan-meta", "管理分享网盘"),
+    ("pans", "可用分享网盘", "metric-pan", "metric-pan-meta", "管理分享网盘"),
     ("settings", "数据库", "metric-db", "metric-db-meta", "管理数据库"),
     ("runtime", "插件版本", "metric-version", "metric-version-meta", "查看运行状态"),
 )

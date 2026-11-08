@@ -363,7 +363,7 @@
         const visible = input.type === 'text' || Boolean(saved && !saved.hidden);
         button.disabled = !saved && (input.disabled || !input.value);
         button.textContent = visible ? '隐藏' : '显示';
-        button.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+        button.setAttribute('aria-label', (visible ? '隐藏' : '显示') + button.dataset.configSecretLabel);
         button.setAttribute('aria-pressed', String(visible));
       };
 
@@ -402,14 +402,14 @@
           const body = JSON.stringify({field:input.dataset.configField});
           const data = await api('config/saved-password', {method:'POST', body, signal:request.signal});
           if (savedPasswordView !== current) return;
-          if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的密码');
+          if (typeof data.value !== 'string' || !data.value) throw new Error('没有已保存的值');
           saved.value = data.value;
           saved.placeholder = '';
         } catch (error) {
           if (savedPasswordView !== current) return;
           clearSavedPassword();
           if (error.status === 401) showAuthError(error);
-          else if (error.name !== 'AbortError') toast(error.message || '无法查看已保存密码，请重试');
+          else if (error.name !== 'AbortError') toast(error.message || '无法查看已保存的值，请重试');
         }
       };
       document.addEventListener('visibilitychange', () => { if (document.hidden) clearSavedPassword(); });
@@ -453,15 +453,16 @@
           }
           const type = field.secret ? 'password' : (field.kind === 'number' ? 'number' : 'text');
           const placeholder = field.placeholder || (field.secret && field.configured ? '已配置，输入新密码可替换' : (field.secret ? '留空不修改' : ''));
-          const passwordField = ['help_web_admin_password', 'database_password'].includes(field.key);
+          const revealableField = ['help_web_admin_password', 'database_password', 'zlibrary_mail_api_key'].includes(field.key);
+          const fieldLabel = esc(field.label || field.key);
           const secretAttr = field.secret ? ' data-config-secret autocomplete="new-password"' : '';
           const input = `<input id="${inputId}" type="${type}" data-config-field="${esc(field.key)}"${secretAttr} ${editable ? '' : 'disabled'} value="${esc(safeFieldValue(field))}" placeholder="${esc(placeholder)}">`;
           const savedValueId = `saved-${inputId}`;
-          const canReveal = passwordField && field.configured;
-          // 已保存的密码仅使用同位置的只读输入，不参与配置提交或连接测试。
-          const savedValue = canReveal ? `<input id="${savedValueId}" class="config-saved-value" type="text" readonly hidden autocomplete="off" aria-label="${esc(field.label || field.key)}（已保存）">` : '';
+          const canReveal = revealableField && field.configured;
+          // 已保存的值仅使用同位置的只读输入，不参与配置提交或连接测试。
+          const savedValue = canReveal ? `<input id="${savedValueId}" class="config-saved-value" type="text" readonly hidden autocomplete="off" aria-label="${fieldLabel}（已保存）">` : '';
           const controls = canReveal ? `${inputId} ${savedValueId}` : inputId;
-          const toggle = passwordField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" ${canReveal ? '' : 'disabled'} aria-controls="${controls}" aria-label="显示密码" aria-pressed="false">显示</button>` : '';
+          const toggle = revealableField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" data-config-secret-label="${fieldLabel}" ${canReveal ? '' : 'disabled'} aria-controls="${controls}" aria-label="显示${fieldLabel}" aria-pressed="false">显示</button>` : '';
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${savedValue}${toggle}</div><small>${hint}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
@@ -739,7 +740,18 @@
         if ($('admin-popover-role')) $('admin-popover-role').textContent = `${auth.role || '控制台管理员'} · 当前会话`;
         if ($('admin-popover-scope')) $('admin-popover-scope').textContent = `插件管理员白名单：${Number(auth.admin_count || 0)} 个`;
         $('metric-global').textContent = novels.global_enabled ? '已开启' : '已关闭'; $('metric-global-meta').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
-        $('metric-pan').textContent = pans.active || '--'; const activePan = (pans.items || []).find((item) => item.active); $('metric-pan-meta').textContent = activePan ? `${activePan.accounts} 个账号 · ${activePan.configured ? '已配置' : '未配置'}` : '未选择';
+        const panItems = Array.isArray(pans.items) ? pans.items : [];
+        const availablePans = panItems.filter((item) => item.enabled === true
+          && Array.isArray(item.account_summary) && item.account_summary.some((account) => account.enabled === true));
+        const availablePanNames = availablePans.map((item) => item.key).join('、') || '暂无可用网盘';
+        const preferredPan = availablePans.find((item) => item.key === pans.active);
+        $('metric-pan').textContent = availablePanNames;
+        $('metric-pan-meta').textContent = preferredPan
+          ? `主分享偏好：${preferredPan.key}`
+          : (availablePans.length ? '已开启且有启用账号' : '开启网盘并启用账号后可用');
+        $('runtime-pan').textContent = availablePanNames;
+        $('runtime-pan-preference-row').hidden = !preferredPan;
+        $('runtime-pan-preference').textContent = preferredPan?.key || '';
         $('metric-db').textContent = database.status || '--'; $('metric-db-meta').textContent = database.configured ? '已配置数据库' : '未配置数据库'; $('metric-version').textContent = `v${data.version || '--'}`;
         $('console-version').textContent = data.version ? `v${data.version}` : '';
         $('console-version').hidden = !data.version; $('metric-version-meta').textContent = '当前加载版本';
@@ -755,7 +767,6 @@
         if ($('novel-enabled-count')) $('novel-enabled-count').textContent = `${enabledCount} / ${totalCount} 已开启`;
         if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('novel-grid').innerHTML = platforms.map((item) => `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接'}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`).join('') || '<div class="empty">没有可用小说平台</div>';
-        const panItems = Array.isArray(pans.items) ? pans.items : [];
         panItems.forEach((item) => {
           const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
           const enabled = accounts.filter((account) => account?.enabled !== false).length;
@@ -769,7 +780,7 @@
         if (!savedPanTab) { try { savedPanTab = sessionStorage.getItem(botStorageKey('mantou-pan-tab')); } catch (_) {} }
         applyPanTab(savedPanTab || panItems.find((item) => item.active)?.key || panItems[0]?.key || '');
         if (activePanObject) showPanObject(false);
-        $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-pan').textContent = pans.active || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
+        $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings', 'zlibrary_account_settings'].includes(field.category));

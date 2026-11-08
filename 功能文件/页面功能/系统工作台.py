@@ -32,7 +32,8 @@
               <div class="studio-system-heading"><div><p class="studio-kicker">服务</p><h2>依赖状态</h2></div><a class="studio-system-link" href="?view=settings" data-view="settings">连接设置 <span aria-hidden="true">↗</span></a></div>
               <dl class="studio-system-detail">
                 <div><dt>数据库</dt><dd id="runtime-db">—</dd></div>
-                <div><dt>当前分享网盘</dt><dd id="runtime-pan">—</dd></div>
+                <div><dt>可用分享网盘</dt><dd id="runtime-pan">—</dd></div>
+                <div id="runtime-pan-preference-row" hidden><dt>主分享偏好</dt><dd id="runtime-pan-preference"></dd></div>
                 <div><dt>插件版本</dt><dd id="runtime-version">—</dd></div>
               </dl>
             </article>
@@ -88,25 +89,13 @@
           <div id="settings" class="studio-settings-layout">
             <article class="studio-card studio-system-card studio-database-form">
               <div class="studio-system-heading">
-                <div><p class="studio-kicker">服务共用</p><h2>数据库连接</h2></div>
-                <div class="studio-db-tags">
-                  <span class="studio-system-source">MySQL</span>
-                  <span class="studio-db-status">已保存连接 <strong class="studio-system-state" id="settings-db-status">读取中</strong></span>
-                </div>
+                <div><p class="studio-kicker">MySQL · 服务共用</p><h2>数据库连接</h2></div>
+                <span class="studio-db-status">已保存连接 <strong class="studio-system-state" id="settings-db-status">读取中</strong></span>
               </div>
-              <p class="studio-system-description">这些参数适用于当前服务下的所有机器人。</p>
+              <p class="studio-system-description">为当前服务下的所有机器人保存聊天记录、账号与网盘配置、功能开关等数据。</p>
               <div id="database-config-editor" class="config-editor"><div class="empty">正在读取数据库配置…</div></div>
+              <p class="studio-db-footnote">测试使用当前填写的参数。保存后，重载插件使新配置生效。</p>
             </article>
-            <aside class="studio-card studio-system-card studio-settings-guide" aria-labelledby="settings-db-guide-title">
-              <p class="studio-kicker">数据存储</p>
-              <h2 id="settings-db-guide-title">数据库有什么用？</h2>
-              <p class="studio-system-description">MySQL 保存聊天记录、账号与网盘配置、功能开关等数据。连接异常时，依赖数据库的功能可能无法读取或保存数据。</p>
-              <ul>
-                <li>可以先测试当前填写的参数，测试不会保存。</li>
-                <li>密码留空会保留已保存的密码。</li>
-                <li>保存修改后，重载插件才会使用新的连接参数。</li>
-              </ul>
-            </aside>
           </div>
         </section>
 """

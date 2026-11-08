@@ -1,4 +1,4 @@
-"""仅向同源、已登录的管理页面返回指定的已保存密码。"""
+"""仅向同源、已登录的管理页面返回明确允许查看的已保存字段。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from . import 帮助网页后端 as 后端
 
 
 密码显示请求上限 = 16 * 1024
-_允许显示字段 = frozenset({"help_web_admin_password", "database_password"})
+_允许显示字段 = frozenset({"help_web_admin_password", "database_password", "zlibrary_mail_api_key"})
 
 
 def _响应(状态: int, 数据: dict, **附加头: str) -> web.Response:
@@ -67,8 +67,10 @@ async def 处理保存密码(请求: web.Request) -> web.Response:
     配置 = 后端._当前作用域配置()
     if 字段 == "help_web_admin_password":
         值 = str(后端._读取帮助网页字段(配置, 字段) or "")
-    else:
+    elif 字段 == "database_password":
         值 = 后端.获取控制台会话配置快照(配置)["database_settings"]["database_password"]
+    else:
+        值 = str(后端._读取插件配置值(配置, "zlibrary_account_settings", 字段, "") or "")
     if not 值:
-        return _错误(404, "没有已保存的密码")
+        return _错误(404, "没有已保存的值")
     return _响应(200, {"ok": True, "value": 值})
