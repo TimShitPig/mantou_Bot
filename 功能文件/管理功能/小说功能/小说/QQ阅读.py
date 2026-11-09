@@ -5301,11 +5301,11 @@ async def 准备发送文本文件(
                 "source_cache_path": None,
                 "error": str(upload.get("error") or "小说网盘上传失败"),
             }
-        completed = await 小说网盘.发送小说下载完成链接(
+        completed = await 小说网盘.发送小说下载结果(
             event,
             书名,
             作者,
-            str(upload.get("share_url") or ""),
+            upload,
         )
         if completed.get("sent"):
             return {
@@ -5454,13 +5454,33 @@ async def _生成固定账号QQ阅读下载回复流(
         yield 下载失败提示
 
 
+def 规范QQ阅读章节范围(值: Any = "1-n") -> str:
+    """章节范围是目录序号（从 1 开始），n 表示末章，不是章节 ID。"""
+    if not isinstance(值, str):
+        raise ValueError("invalid_chapter_range")
+    匹配 = re.fullmatch(r"\s*([1-9][0-9]*)\s*-\s*([1-9][0-9]*|[nN])\s*", 值)
+    if not 匹配:
+        raise ValueError("invalid_chapter_range")
+    起点, 终点 = 匹配.groups()
+    if 终点.lower() != "n" and int(终点) < int(起点):
+        raise ValueError("invalid_chapter_range")
+    return f"{int(起点)}-{终点.lower() if 终点.lower() == 'n' else int(终点)}"
+
+
+def _筛选QQ阅读章节范围(目录: list[dict[str, Any]], 范围: str) -> list[dict[str, Any]]:
+    起点, 终点 = 范围.split("-")
+    return [项 for 项 in 目录 if int(起点) <= 项["_qq_source_index"]
+            and (终点 == "n" or 项["_qq_source_index"] <= int(终点))]
+
+
 async def 生成QQ阅读下载文件流(
-    来源: str, *, 分享文本: str = "",
+    来源: str, *, 分享文本: str = "", 章节范围: str = "1-n",
 ) -> AsyncIterator[dict[str, Any]]:
     """在调用方已固定的账号上下文中生成 TXT，不发送消息或上传网盘。"""
     book_id = ""
     stage = "link"
     try:
+        章节范围 = 规范QQ阅读章节范围(章节范围)
         async with 创建QQ阅读HTTP会话(
             concurrency=max(
                 QQ阅读批量最大动态并发数,
@@ -5511,6 +5531,10 @@ async def 生成QQ阅读下载文件流(
             if not catalog:
                 raise RuntimeError("目录为空")
             原始目录数 = len(catalog)
+            完整目录 = catalog
+            if int(章节范围.split("-")[0]) > 原始目录数:
+                yield {"kind": "error", "stage": stage, "code": "chapter_range_out_of_bounds", "message": "章节起点超出目录范围"}
+                return
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
             使用第三方正文 = not 账号有VIP and 付费类型 in {"free", "vip"}
             if 使用第三方正文:
@@ -5518,6 +5542,10 @@ async def 生成QQ阅读下载文件流(
                 catalog = _获取QQ阅读带原始序号目录(catalog)
             else:
                 catalog = 获取QQ阅读可下载目录(details, catalog, 账号有VIP)
+            if not catalog:
+                yield {"kind": "error", "stage": stage, "code": "paid_chapters", "message": 章节单独付费提示}
+                return
+            catalog = _筛选QQ阅读章节范围(catalog, 章节范围)
             if not catalog:
                 yield {"kind": "error", "stage": stage, "code": "paid_chapters", "message": 章节单独付费提示}
                 return
@@ -5541,7 +5569,9 @@ async def 生成QQ阅读下载文件流(
                 except (RuntimeError, ValueError, aiohttp.ClientError, asyncio.TimeoutError) as 正文异常:
                     # 正文服务可能只提供免费部分。丢弃数量不完整的批次，
                     # 按官方目录费用和免费边界重取，不能把缺失前后的正文顺移。
-                    免费目录 = 获取QQ阅读可下载目录(details, catalog, False)
+                    免费目录 = _筛选QQ阅读章节范围(
+                        获取QQ阅读可下载目录(details, 完整目录, False), 章节范围,
+                    )
                     if not 免费目录 or len(免费目录) >= len(catalog):
                         raise
                     logger.warning(
@@ -5568,6 +5598,8 @@ async def 生成QQ阅读下载文件流(
         filename, content = await _异步QQ阅读CPU函数(
             生成小说文件内容, book_id, details, catalog, chapters,
         )
+        if 章节范围 != "1-n":
+            filename = filename.removesuffix(".txt") + f" [章节{章节范围}].txt"
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
             f"成功={len(chapters)}, 总数={len(catalog)}, 文件大小={len(content)}"
@@ -5576,7 +5608,8 @@ async def 生成QQ阅读下载文件流(
         yield {"kind": "file", "stage": "completed", "filename": filename,
                "content": content, "chapter_count": len(chapters),
                "title": str(details.get("title") or ""),
-               "author": str(details.get("author") or "")}
+               "author": str(details.get("author") or ""),
+               "chapter_range": 章节范围}
 
     except Exception as exc:
         logger.warning(

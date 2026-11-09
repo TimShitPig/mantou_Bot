@@ -52,6 +52,7 @@ def _公开任务(任务: dict[str, Any]) -> dict[str, Any]:
     for 键 in ("title", "author", "chapter_count", "size_bytes", "error"):
         if 键 in 任务:
             结果[键] = 任务[键]
+    结果["chapter_range"] = 任务.get("chapter_range", "1-n")
     结果["status_url"] = f"{接口前缀}/tasks/{任务['task_id']}"
     if 任务["status"] == "succeeded":
         结果["download_url"] = 结果["status_url"] + "/file"
@@ -201,38 +202,54 @@ class QQ阅读接口服务:
         book_id = str(原值) if type(原值) in (str, int) else ""
         return book_id if re.fullmatch(r"[1-9][0-9]{0,19}", book_id) else ""
 
+    @staticmethod
+    def _章节范围(数据: dict[str, Any]) -> str:
+        from 功能文件.管理功能.小说功能.小说 import QQ阅读
+        return QQ阅读.规范QQ阅读章节范围(数据.get("chapter_range", "1-n"))
+
     async def 创建任务(self, request: web.Request) -> web.Response:
         数据 = await self._读取提交(request)
         if isinstance(数据, web.Response):
             return 数据
-        if not isinstance(数据, dict) or set(数据) != {"book_id"}:
-            return _错误(400, "invalid_book_id", "仅允许提交 book_id")
+        if not isinstance(数据, dict) or "book_id" not in 数据 or set(数据) - {"book_id", "chapter_range"}:
+            return _错误(400, "invalid_book_id", "请提交 book_id，可选 chapter_range")
         book_id = self._书籍编号(数据["book_id"])
         if not book_id:
             return _错误(400, "invalid_book_id", "书籍 ID 无效")
-        return await self._提交任务(request, [book_id])
+        try:
+            范围 = self._章节范围(数据)
+        except ValueError:
+            return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
+        return await self._提交任务(request, [book_id], 章节范围=范围)
 
     async def 批量创建任务(self, request: web.Request) -> web.Response:
         数据 = await self._读取提交(request, 批量=True)
         if isinstance(数据, web.Response):
             return 数据
-        if not isinstance(数据, dict) or set(数据) != {"book_ids"} or not isinstance(数据["book_ids"], list) or not 数据["book_ids"]:
+        if not isinstance(数据, dict) or set(数据) - {"book_id", "book_ids", "chapter_range"} or ("book_id" in 数据) == ("book_ids" in 数据):
+            return _错误(400, "invalid_book_ids", "请提交 book_id 或非空 book_ids 数组，可选 chapter_range")
+        原编号 = [数据["book_id"]] if "book_id" in 数据 else 数据["book_ids"]
+        if not isinstance(原编号, list) or not 原编号:
             return _错误(400, "invalid_book_ids", "请提交非空 book_ids 数组")
-        编号列表 = [self._书籍编号(值) for 值 in 数据["book_ids"]]
+        编号列表 = [self._书籍编号(值) for 值 in 原编号]
         if not all(编号列表):
             return _错误(400, "invalid_book_ids", "书籍 ID 无效，整批未提交")
-        return await self._提交任务(request, list(dict.fromkeys(编号列表)), 批量=True)
+        try:
+            范围 = self._章节范围(数据)
+        except ValueError:
+            return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
+        return await self._提交任务(request, list(dict.fromkeys(编号列表)), 批量=True, 章节范围=范围)
 
-    async def _提交任务(self, request: web.Request, 编号列表: list[str], *, 批量: bool = False) -> web.Response:
+    async def _提交任务(self, request: web.Request, 编号列表: list[str], *, 批量: bool = False, 章节范围: str = "1-n") -> web.Response:
         await self.清理()
-        已有 = {任务["book_id"]: 任务 for 任务 in 任务表.values()
+        已有 = {(任务["book_id"], 任务.get("chapter_range", "1-n")): 任务 for 任务 in 任务表.values()
                 if 任务["owner"] == request["qq_api_owner"] and 任务["status"] != "failed"}
         提交结果, 新任务 = [], []
         for book_id in 编号列表:
-            任务 = 已有.get(book_id)
+            任务 = 已有.get((book_id, 章节范围))
             if 任务 is None:
                 任务 = {
-                    "task_id": secrets.token_hex(16), "book_id": book_id,
+                    "task_id": secrets.token_hex(16), "book_id": book_id, "chapter_range": 章节范围,
                     "appid": request["qq_api_appid"], "owner": request["qq_api_owner"],
                     "status": "queued", "stage": "queued", "created_at": int(time.time()),
                     "expires_at": None, "initializing": True,
@@ -322,7 +339,7 @@ class QQ阅读接口服务:
             _删除文件(任务)
             async with asyncio.timeout(下载超时秒数):
                 with 绑定机器人作用域(任务["appid"]), QQ阅读.QQ阅读账号上下文(任务["account"]):
-                    async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"]):
+                    async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"], 章节范围=任务.get("chapter_range", "1-n")):
                         任务["stage"] = 结果["stage"]
                         if 结果["kind"] == "error":
                             任务["error"] = {"code": 结果["code"], "message": 结果["message"]}

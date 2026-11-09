@@ -630,8 +630,8 @@ async def _准备发送文本文件(
         if not 上传结果.get("success"):
             删除小米缓存文件(路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None}
-        完成结果 = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(上传结果.get("share_url") or "")
+        完成结果 = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, 上传结果
         )
         if 完成结果.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": 路径}

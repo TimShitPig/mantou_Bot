@@ -1707,15 +1707,10 @@ def 获取群网盘选择摘要(配置: Any, 群标识: str) -> dict[str, Any]:
             默认选项,
         )
     原选择 = 状态.get((网盘账号选择命名空间, _账号选择状态键("group", 群标识)), "")
-    try:
-        选择 = json.loads(str(原选择 or ""))
-        平台 = _规范化平台名称(选择.get("platform")) if isinstance(选择, dict) else ""
-        序号 = int(选择.get("index")) if isinstance(选择, dict) else 0
-        已保存选择 = {"platform": 平台, "index": 序号} if 平台 and 序号 > 0 else None
-    except (TypeError, ValueError, json.JSONDecodeError):
-        已保存选择 = None
-    已保存值 = f"{已保存选择['platform']}:{已保存选择['index']}" if 已保存选择 else ""
-    if 已保存值 not in {选项["value"] for 选项 in choices}:
+    已保存选择 = _解析群网盘选择(原选择)
+    已保存值 = ("__file__" if 已保存选择.get("mode") == "file" else
+              f"{已保存选择['platform']}:{已保存选择['index']}") if 已保存选择 else ""
+    if 已保存值 != "__file__" and 已保存值 not in {选项["value"] for 选项 in choices}:
         已保存选择, 已保存值 = None, ""
     return {
         "choices": choices, "default": 默认选项, "selected": 已保存选择,
@@ -1989,19 +1984,39 @@ def 获取群网盘账号选择(配置: Any, 群标识: str = "") -> dict[str, A
             _账号选择状态键("group", 群标识),
             "",
         )
+        return _解析群网盘选择(原值)
+    except Exception as 异常:
+        logger.warning("群网盘账号选择读取失败：error=%s", type(异常).__name__)
+        return None
+
+
+def _解析群网盘选择(原值: Any) -> dict[str, Any] | None:
+    try:
         选择 = json.loads(str(原值 or ""))
-        平台 = _规范化平台名称(选择.get("platform")) if isinstance(选择, dict) else ""
-        序号 = int(选择.get("index")) if isinstance(选择, dict) else 0
+        if not isinstance(选择, dict):
+            return None
+        if 选择.get("mode") == "file":
+            return {"mode": "file"}
+        平台 = _规范化平台名称(选择.get("platform"))
+        序号 = int(选择.get("index"))
+        return {"platform": 平台, "index": 序号} if 平台 and 序号 > 0 else None
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def 设置群小说文件直发(配置: Any, 群标识: str) -> tuple[bool, str]:
+    群标识 = str(群标识 or "").strip()
+    if not 群标识 or len(群标识) > 128:
+        return False, "请在群聊中使用此指令"
+    if not 已配置运行状态数据库(配置):
+        return False, "数据库未配置，群网盘选择未保存"
+    try:
+        写入运行状态值(配置, 网盘账号选择命名空间,
+                 _账号选择状态键("group", 群标识), '{"mode":"file"}')
     except Exception as 异常:
-        logger.warning(
-            "群网盘账号选择读取失败：error=%s", type(异常).__name__
-        )
-        return None
-    if not 平台 or 序号 < 1:
-        return None
-    return {"platform": 平台, "index": 序号}
+        logger.warning("群文件直发设置失败：error_type=%s", type(异常).__name__)
+        return False, "群网盘选择保存失败，请稍后再试"
+    return True, ""
 
 
 def 设置群网盘账号选择(

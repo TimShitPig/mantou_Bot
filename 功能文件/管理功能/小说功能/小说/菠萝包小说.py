@@ -376,8 +376,8 @@ async def _发送(
         if not uploaded.get("success"):
             文件缓存工具.删除小说缓存文件(path)
             return {"sent": False, "source_cache_path": None}
-        sent = await 小说网盘.发送小说下载完成链接(
-            event, title, author, str(uploaded.get("share_url") or "")
+        sent = await 小说网盘.发送小说下载结果(
+            event, title, author, uploaded
         )
         return {
             "sent": bool(sent.get("sent")),

@@ -123,6 +123,12 @@ def 登记当前小说上传(
             记录["title"], 记录["author"] = 匹配.groups()
 
 
+def 标记当前小说文件已提交() -> None:
+    记录 = _当前小说任务.get()
+    if isinstance(记录, dict) and 记录.get("upload"):
+        记录["upload"]["direct_submitted"] = True
+
+
 def 标记当前小说完成通知(书名: Any = "", 作者: Any = "") -> None:
     """官方发送确认成功后调用，已经通知的任务不在重载后重发。"""
     记录 = _当前小说任务.get()
@@ -174,9 +180,14 @@ async def _恢复小说上传(记录: dict[str, Any], 帮助功能: Any, 权限�
     路径 = Path(上传["path"])
     文件缓存.标记小说缓存正在使用(路径)
     try:
+        if 上传.get("direct_submitted"):
+            # 文件消息已提交但结果未知，不能在重载后再次发送。
+            await _发送回复内容(记录["event"], "文件发送结果未确认，请检查群消息", 帮助功能, 权限工具)
+            return
         旧任务 = 文件缓存.读取上传任务(路径) or {}
         分享链接 = str(旧任务.get("share_url") or "")
-        if str(旧任务.get("state") or "") != "primary_done" or not 分享链接:
+        结果 = {"share_url": 分享链接}
+        if 上传.get("platform") == "file" or str(旧任务.get("state") or "") != "primary_done" or not 分享链接:
             结果 = await 小说网盘.上传小说并获取分享链接(
                 上传["config"], 路径, 上传["filename"],
                 _指定网盘=上传.get("platform"),
@@ -187,9 +198,9 @@ async def _恢复小说上传(记录: dict[str, Any], 帮助功能: Any, 权限�
                 return
             分享链接 = str(结果.get("share_url") or "")
         if not 记录.get("notified"):
-            结果 = await 小说网盘.发送小说下载完成链接(
+            结果 = await 小说网盘.发送小说下载结果(
                 记录["event"], 记录.get("title") or "未知",
-                记录.get("author") or "未知", 分享链接,
+                记录.get("author") or "未知", 结果,
             )
             if 结果.get("sent"):
                 标记当前小说完成通知()

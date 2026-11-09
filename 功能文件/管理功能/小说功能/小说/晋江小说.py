@@ -503,8 +503,8 @@ async def 准备发送晋江文本文件(
         if not upload.get("success"):
             删除晋江缓存文件(path)
             return {"sent": False, "fallback_text": "", "source_cache_path": None}
-        sent = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(upload.get("share_url") or "")
+        sent = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, upload
         )
         if sent.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": path}

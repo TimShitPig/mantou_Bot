@@ -1907,8 +1907,8 @@ async def _发送小说文件(
         if not 上传.get("success"):
             await asyncio.to_thread(文件缓存工具.删除小说缓存文件, 路径)
             return {"sent": False, "fallback_text": "", "path": None}
-        完成 = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(上传.get("share_url") or "")
+        完成 = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, 上传
         )
         if 完成.get("sent"):
             await asyncio.to_thread(文件缓存工具.删除小说缓存文件, 路径)

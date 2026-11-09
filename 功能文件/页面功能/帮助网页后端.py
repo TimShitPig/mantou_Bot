@@ -3043,6 +3043,11 @@ async def _处理群网盘选择(request: web.Request) -> web.Response:
             if not 成功:
                 return _控制台错误(409, "群网盘选择清除失败")
             return web.json_response({"ok": True, "message": "已恢复全局默认网盘"})
+        if 操作 == "file":
+            成功, _ = await _控制台线程执行(网盘Cookie.设置群小说文件直发, _当前作用域配置(), 群标识)
+            if not 成功:
+                return _控制台错误(409, "群文件直发设置失败")
+            return web.json_response({"ok": True, "message": "本群已关闭网盘，小说将直接发送文件"})
         if 操作 != "set":
             return _控制台错误(400, "群网盘操作无效")
         平台 = _规范化网盘平台((数据 or {}).get("platform"))

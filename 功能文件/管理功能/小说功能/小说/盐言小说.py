@@ -749,8 +749,8 @@ async def 准备发送文本文件(
                 "source_cache_path": None,
                 "error": "上传失败",
             }
-        完成结果 = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(上传结果.get("share_url") or "")
+        完成结果 = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, 上传结果
         )
         if 完成结果.get("sent"):
             return {

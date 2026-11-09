@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
+
+import aiohttp
+from urllib.parse import quote
 from datetime import date, datetime
 import json
 import re
@@ -214,10 +218,19 @@ def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str 
         账号匹配 is None
         and 文本 not in 切换命令
         and 文本 not in 状态命令
+        and 文本 not in {"关网盘", "关闭网盘", "开网盘", "开启网盘"}
     ):
         return None
     if not 是群文件清理管理员(event, 配置):
         return None
+    if 文本 in {"关网盘", "关闭网盘", "开网盘", "开启网盘"}:
+        群标识 = 网盘Cookie.获取网盘群标识(event)
+        if not 群标识:
+            return "请在群聊中使用此指令"
+        关闭 = 文本 in {"关网盘", "关闭网盘"}
+        函数 = 网盘Cookie.设置群小说文件直发 if 关闭 else 网盘Cookie.清除群网盘账号选择
+        成功, 错误 = 函数(配置, 群标识)
+        return ("本群已关闭网盘，小说将直接发送文件" if 关闭 else "本群已恢复默认网盘") if 成功 else 错误
     if 账号匹配 is not None:
         平台 = 账号选择前缀[账号匹配.group(1)]
         序号 = int(账号匹配.group(2))
@@ -229,7 +242,10 @@ def 处理网盘切换指令(event: Any, 命令文本: str, 配置: Any) -> str 
         return f"当前群已切换到{网盘显示名[平台]}账号{序号}"
     if 文本 in 状态命令:
         当前网盘 = 获取当前主网盘(配置)
+        群选择 = 网盘Cookie.获取群网盘账号选择(配置)
         状态列表 = [f"当前小说网盘：{网盘显示名[当前网盘]}"]
+        if 群选择 and 群选择.get("mode") == "file":
+            状态列表.insert(0, "本群网盘已关闭：直接发送文件")
         for 网盘名称 in ("UC", "夸克", "百度"):
             if not 网盘状态.网盘开关是否开启(配置, 网盘名称):
                 配置状态 = "已关闭"
@@ -458,6 +474,9 @@ async def _上传小说并获取分享链接内部(
 
 def _获取当前群上传网盘(配置: Any) -> tuple[str, int]:
     群标识 = 网盘Cookie.获取网盘群标识()
+    群选择 = 网盘Cookie.获取群网盘账号选择(配置, 群标识)
+    if 群选择 and 群选择.get("mode") == "file":
+        return "file", 0
     可用账号 = {
         平台: {
             序号
@@ -468,7 +487,6 @@ def _获取当前群上传网盘(配置: Any) -> tuple[str, int]:
     }
     可用账号 = {平台: 序号集合 for 平台, 序号集合 in 可用账号.items() if 序号集合}
 
-    群选择 = 网盘Cookie.获取群网盘账号选择(配置, 群标识)
     if 群选择:
         平台 = str(群选择.get("platform") or "")
         try:
@@ -502,12 +520,23 @@ async def 上传小说并获取分享链接(
 
     # TXT 已生成即登记，账号读取等待期间重载也能复用源文件。
     小说下载任务.登记当前小说上传(配置, 源缓存路径, 文件名, _指定网盘, _账号索引)
-    if _指定网盘 not in 网盘模块映射:
+    if _指定网盘 not in {*网盘模块映射, "file"}:
         _指定网盘, 默认账号序号 = await asyncio.to_thread(
             _获取当前群上传网盘, 配置
         )
         if _账号序号 is None:
             _账号序号 = 默认账号序号
+    if _指定网盘 == "file":
+        小说下载任务.登记当前小说上传(配置, 源缓存路径, 文件名, "file", {})
+        路径 = Path(源缓存路径)
+        if not 路径.is_file():
+            return {"success": False, "error": "文件不存在"}
+        # 待发送文件同样受清理保护；全局续传不得把它转成网盘上传。
+        文件缓存.登记上传任务(路径, 文件名, "直接文件", 待处理平台=[],
+                     appid=机器人作用域.获取当前机器人AppID(配置))
+        文件缓存.更新上传任务(路径, "primary_pending", delivery_mode="file")
+        return {"success": True, "delivery_mode": "file", "path": str(路径),
+                "filename": 文件名, "provider": "直接文件", "share_url": ""}
     if _账号索引 is None:
         if _账号序号 is None:
             _账号序号 = await asyncio.to_thread(
@@ -549,6 +578,12 @@ async def 恢复待续传上传任务(配置: Any) -> int:
         if not 路径.is_file():
             continue
         状态 = str(任务.get("state") or "primary_pending")
+        if 任务.get("delivery_mode") == "file":
+            # 同进程任务由调度器提前保护；进程重启后的孤立文件只清理，不猜测会话。
+            if not 文件缓存.小说缓存正在使用(路径):
+                文件缓存.更新上传任务(路径, "primary_done")
+                文件缓存.删除小说缓存文件(路径)
+            continue
         if 文件缓存.小说缓存正在使用(路径):
             continue
         appid = str(任务.get("bot_appid") or "").strip()
@@ -671,13 +706,100 @@ def 启动恢复待续传上传任务(配置: Any) -> asyncio.Task[Any] | None:
     return 恢复上传任务句柄
 
 
-async def 发送小说下载完成链接(
-    event: Any, 书名: Any, 作者: Any, 分享链接: Any
+async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) -> dict[str, Any]:
+    """复用官方适配器文件上传，单次提交消息并校验实际响应；不回退网盘。"""
+    from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
+    from 功能文件.管理功能.基础功能 import 消息记录
+    from 功能文件.管理功能.小说功能.功能 import 小说下载任务
+
+    路径 = Path(交付结果["path"])
+    阶段 = "init"
+    状态码 = None
+    业务码 = None
+    try:
+        if not 是QQ官方机器人(event):
+            raise ValueError("unsupported_platform")
+        群 = 网盘Cookie.获取网盘群标识(event)
+        appid = 机器人作用域.获取事件机器人AppID(event)
+        http = getattr(getattr(getattr(event, "bot", None), "api", None), "_http", None)
+        def 身份有效() -> bool:
+            return bool(群 and appid and http is not None
+                        and str(getattr(getattr(http, "_token", None), "app_id", "")) == appid
+                        and 机器人作用域.获取当前机器人AppID() == appid)
+        if not 身份有效() or not callable(getattr(event, "upload_group_and_c2c_media", None)):
+            raise ValueError("identity_or_uploader_missing")
+        文件名 = Path(交付结果["filename"]).name
+        大小 = (await asyncio.to_thread(路径.stat)).st_size
+        阶段 = "upload"
+        媒体 = await event.upload_group_and_c2c_media(
+            str(路径.absolute()), 4, file_name=文件名, group_openid=群,
+        )
+        if not isinstance(媒体, dict) or not isinstance(媒体.get("file_info"), str) or not 媒体["file_info"]:
+            raise ValueError("upload_unconfirmed")
+        await http.check_session()
+        if not 身份有效():
+            raise ValueError("identity_changed")
+        消息体 = {"msg_type": 7, "media": {"file_info": 媒体["file_info"]},
+               "msg_seq": secrets.randbelow(10000) + 1}
+        消息ID = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+        if 消息ID:
+            消息体["msg_id"] = 消息ID
+        阶段 = "send"
+        # 网络异常或未知结果也不自动重放已经提交的文件消息。
+        小说下载任务.标记当前小说文件已提交()
+        主机 = "sandbox.api.sgroup.qq.com" if getattr(http, "is_sandbox", False) else "api.bot.qq.com"
+        async with http._session.post(
+            f"https://{主机}/v2/groups/{quote(群, safe='')}/messages",
+            json=消息体, headers=dict(getattr(http, "_headers", {}) or {}),
+            allow_redirects=False, timeout=aiohttp.ClientTimeout(total=60),
+        ) as 响应:
+            状态码 = 响应.status
+            数据 = bytearray()
+            async for 块 in 响应.content.iter_chunked(16384):
+                数据.extend(块)
+                if len(数据) > 65536:
+                    raise ValueError("response_too_large")
+            返回 = json.loads(数据)
+            if not isinstance(返回, dict):
+                raise ValueError("invalid_response")
+            码字段 = [返回[键] for 键 in ("code", "err_code") if 键 in 返回]
+            业务码 = next((int(值) for 值 in 码字段 if type(值) in (int, str)
+                        and re.fullmatch(r"-?[0-9]{1,12}", str(值))), None)
+            码有效 = all(type(值) in (int, str) and 值 in (0, "0") for 值 in 码字段)
+            if not 200 <= 状态码 < 300 or not 码有效 or not isinstance(返回.get("id"), str) or not 返回["id"]:
+                raise ValueError("send_unconfirmed")
+        # 确认先于记账；记账异常不能使文件再次发送。
+        小说下载任务.标记当前小说完成通知()
+        try:
+            消息记录.记录发送消息(群, "group", "[文件] " + 文件名, appid,
+                消息ID=返回["id"], 来源="bot_novel_file",
+                媒体={"type": "文件", "src": "", "name": 文件名,
+                    "size": 大小, "content_type": "text/plain"})
+        except Exception as 异常:
+            logger.warning("小说文件发送记账失败：error_type=%s", type(异常).__name__)
+        return {"sent": True, "fallback_text": "", "error": ""}
+    except Exception as 异常:
+        logger.warning("小说文件直发失败：stage=%s, http_status=%s, code=%s, error_type=%s",
+                       阶段, 状态码, 业务码, type(异常).__name__)
+        return {"sent": False, "fallback_text": "", "error": "文件发送失败，请稍后再试"}
+    finally:
+        try:
+            文件缓存.更新上传任务(路径, "primary_done")
+            文件缓存.删除小说缓存文件(路径)
+        except OSError as 异常:
+            logger.warning("小说直发缓存清理失败：error_type=%s", type(异常).__name__)
+
+
+async def 发送小说下载结果(
+    event: Any, 书名: Any, 作者: Any, 交付结果: dict[str, Any]
 ) -> dict[str, Any]:
     from 功能文件.管理功能.小说功能.功能 import 小说下载任务
 
     async def _发送并确认() -> dict[str, Any]:
-        结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, 分享链接)
+        if 交付结果.get("delivery_mode") == "file":
+            结果 = await _直接发送小说文件(event, 交付结果)
+        else:
+            结果 = await UC网盘.发送小说下载完成链接(event, 书名, 作者, 交付结果.get("share_url", ""))
         if 结果.get("sent"):
             小说下载任务.标记当前小说完成通知(str(书名 or ""), str(作者 or ""))
         return 结果

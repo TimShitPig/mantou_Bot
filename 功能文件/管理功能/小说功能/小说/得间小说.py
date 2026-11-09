@@ -1585,8 +1585,8 @@ async def 准备发送文本文件(
                 "source_cache_path": None,
                 "error": str(网盘结果.get("error") or "小说网盘未启用"),
             }
-        完成结果 = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(网盘结果.get("share_url") or "")
+        完成结果 = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, 网盘结果
         )
         if 完成结果.get("sent"):
             return {

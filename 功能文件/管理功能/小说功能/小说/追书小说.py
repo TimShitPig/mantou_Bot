@@ -1060,8 +1060,8 @@ async def 准备发送文本文件给当前会话(
             logger.warning("追书小说主网盘上传失败：文件=%s", 文件名)
             删除小说缓存文件(缓存路径)
             return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "上传失败"}
-        完成结果 = await 小说网盘.发送小说下载完成链接(
-            event, 书名, 作者, str(网盘结果.get("share_url") or "")
+        完成结果 = await 小说网盘.发送小说下载结果(
+            event, 书名, 作者, 网盘结果
         )
         if 完成结果.get("sent"):
             return {"sent": True, "fallback_text": "", "source_cache_path": 缓存路径, "error": ""}

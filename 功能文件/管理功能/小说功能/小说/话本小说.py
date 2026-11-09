@@ -643,8 +643,8 @@ async def 生成话本下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield 话本文件发送失败提示
             return
         阶段 = "share"
-        发送 = await 小说网盘.发送小说下载完成链接(event, 书籍信息["title"], 书籍信息["author"],
-                                                 str(上传.get("share_url") or ""))
+        发送 = await 小说网盘.发送小说下载结果(event, 书籍信息["title"], 书籍信息["author"],
+                                                 上传)
         if not 发送.get("sent"):
             yield str(发送.get("fallback_text") or 话本文件发送失败提示)
     except Exception as exc:

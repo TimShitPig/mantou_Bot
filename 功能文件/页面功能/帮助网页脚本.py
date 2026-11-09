@@ -3916,12 +3916,12 @@
         }
         const choices = Array.isArray(data.choices) ? data.choices : [];
         const defaultLabel = data.default?.label ? `跟随本机器人默认 · ${data.default.label}` : '跟随本机器人默认 · 暂无可用账号';
-        const options = [`<option value="__default__">${esc(defaultLabel)}</option>`, ...choices.map((choice) => `<option value="${esc(choice.value)}">${esc(choice.label)}</option>`)];
+        const options = [`<option value="__default__">${esc(defaultLabel)}</option>`, '<option value="__file__">关闭网盘，直接发送文件</option>', ...choices.map((choice) => `<option value="${esc(choice.value)}">${esc(choice.label)}</option>`)];
         const selectedValue = msgState.panSelectionSaving ? select.value : data.selected_value;
         select.innerHTML = options.join('');
         select.value = selectedValue || '__default__';
-        select.disabled = !data.editable || msgState.panSelectionSaving || !choices.length;
-        select.title = data.editable ? '只影响当前群；跟随默认会使用本机器人网盘配置页中的默认网盘' : '数据库未配置，群网盘选择不能保存';
+        select.disabled = !data.editable || msgState.panSelectionSaving;
+        select.title = data.editable ? '只影响当前群；可关闭网盘直接发送文件，或跟随本机器人默认网盘' : '数据库未配置，群网盘选择不能保存';
       };
       const isMsgPanSelectionCurrent = (request, chatId, appid) => request === msgState.panSelectionRequest
         && msgState.chatId === chatId && msgState.chatType === 'group'
@@ -3961,7 +3961,9 @@
         const value = String(select?.value || '');
         if (!select || !chatId || msgState.chatType !== 'group' || msgState.chatRemoved || !msgState.panSelectionData?.editable || msgState.panSelectionSaving || msgState.panSelectionLoading) return;
         let payload = {chat_id:chatId, action:'reset'};
-        if (value !== '__default__') {
+        if (value === '__file__') {
+          payload = {chat_id:chatId, action:'file'};
+        } else if (value !== '__default__') {
           const separator = value.lastIndexOf(':');
           const platform = separator > 0 ? value.slice(0, separator) : '';
           const index = Number(value.slice(separator + 1));
