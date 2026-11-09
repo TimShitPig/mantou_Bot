@@ -9,6 +9,7 @@ import mimetypes
 import re
 import time
 import weakref
+import xml.etree.ElementTree as ET
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,14 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 查询失败重试次数 = 3
+OSS分片上传尝试次数 = 3
+OSS可重试状态 = frozenset({408, 429, 500, 502, 503, 504})
+OSS错误码白名单 = frozenset({
+    "ServiceUnavailable", "InternalError", "RequestTimeout", "SlowDown",
+    "RequestTimeTooSkewed", "AccessDenied", "SignatureDoesNotMatch",
+    "InvalidAccessKeyId", "NoSuchUpload", "InvalidPart", "InvalidPartOrder",
+    "BadDigest", "InvalidDigest", "CallbackFailed",
+})
 可重试查询路径 = frozenset({"/file/sort", "/task", "/share/mypage/detail"})
 请求阶段 = {
     "/file/sort": "directory_list",
@@ -86,6 +95,46 @@ class 夸克网盘请求错误(RuntimeError):
             f"夸克网盘请求失败：阶段={self.阶段}, HTTP状态={HTTP状态}, "
             f"业务码={业务码}, 原因={原因}, 页码={页码}"
         )
+
+
+class 夸克OSS请求错误(RuntimeError):
+    def __init__(
+        self, 阶段: str, *, HTTP状态: int | None = None,
+        原因: str = "http_error", OSS码: str | None = None,
+    ) -> None:
+        self.阶段 = 阶段
+        self.HTTP状态 = self.状态码 = HTTP状态
+        self.业务码 = None
+        self.原因 = 原因
+        self.OSS码 = OSS码 if OSS码 in OSS错误码白名单 else None
+        super().__init__(
+            f"夸克OSS请求失败：stage={阶段}, http_status={HTTP状态}, "
+            f"reason={原因}, oss_code={self.OSS码 or 'unknown'}"
+        )
+
+
+async def 读取OSS错误码(响应: aiohttp.ClientResponse) -> str | None:
+    """只解析完整且至多16 KiB的错误XML，不保留响应原文、票据或RequestId。"""
+    内容 = bytearray()
+    try:
+        async with asyncio.timeout(10):
+            while True:
+                块 = await 响应.content.read(min(4096, 16385 - len(内容)))
+                if not 块:
+                    break
+                内容.extend(块)
+                if len(内容) > 16384:
+                    return None
+        root = ET.fromstring(内容)
+    except (ET.ParseError, ValueError, aiohttp.ClientError, asyncio.TimeoutError):
+        return None
+    if root.tag.rsplit("}", 1)[-1] != "Error":
+        return None
+    for 节点 in root:
+        if 节点.tag.rsplit("}", 1)[-1] == "Code":
+            值 = (节点.text or "").strip()
+            return 值 if 值 in OSS错误码白名单 else None
+    return None
 
 
 class 夸克网盘客户端:
@@ -536,36 +585,60 @@ class 夸克网盘客户端:
         OSS用户代理 = "aliyun-sdk-js/1.0.0 Chrome 150.0.0.0 on Windows 10 64-bit"
         内容类型 = mimetypes.guess_type(路径.name)[0] or "application/octet-stream"
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?partNumber=1&uploadId={上传ID}"
-        for 尝试次数 in range(2):
-            当前时间 = self.获取OSS时间()
-            鉴权元数据 = (
-                f"PUT\n\n{内容类型}\n{当前时间}\n"
-                f"x-oss-date:{当前时间}\n"
-                f"x-oss-user-agent:{OSS用户代理}\n"
-                f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
-            )
-            鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
-            请求头 = {
-                "authorization": 鉴权键,
-                "x-oss-date": 当前时间,
-                "x-oss-user-agent": OSS用户代理,
-                "content-type": 内容类型,
-            }
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
-            ) as 会话:
-                with 路径.open("rb") as 文件:
-                    async with 会话.put(地址, data=文件, headers=请求头) as 响应:
-                        响应文本 = await 响应.text()
-                        if 响应.status in (200, 201):
-                            return 提取ETag(响应.headers) or MD5
-                        if 尝试次数 == 0 and 响应.status == 403 and "requesttimeskewed" in 响应文本.lower():
-                            self.同步服务器时间(响应.headers)
-                            continue
-                        raise RuntimeError(
-                            f"夸克网盘OSS上传失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
-                        )
-        raise RuntimeError("夸克网盘OSS上传失败：时间校准后仍未成功")
+        已校准时间 = False
+        失败次数 = 0
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
+        ) as 会话:
+            # aiohttp新版本会隐式重发PUT并复用已耗尽文件流；由本层重开文件、刷新签名。
+            if getattr(会话, "_retry_connection", False):
+                会话._retry_connection = False
+            while True:
+                当前时间 = self.获取OSS时间()
+                鉴权元数据 = (
+                    f"PUT\n\n{内容类型}\n{当前时间}\n"
+                    f"x-oss-date:{当前时间}\n"
+                    f"x-oss-user-agent:{OSS用户代理}\n"
+                    f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
+                )
+                鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
+                请求头 = {
+                    "authorization": 鉴权键,
+                    "x-oss-date": 当前时间,
+                    "x-oss-user-agent": OSS用户代理,
+                    "content-type": 内容类型,
+                }
+                try:
+                    # UploadPart以uploadId+partNumber覆盖同一分片；每次重开文件，禁止重放预上传/合并/分享。
+                    with 路径.open("rb") as 文件:
+                        async with 会话.put(
+                            地址, data=文件, headers=请求头, allow_redirects=False,
+                        ) as 响应:
+                            if 响应.status in (200, 201):
+                                return 提取ETag(响应.headers) or MD5
+                            OSS码 = await 读取OSS错误码(响应)
+                            if not 已校准时间 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
+                                self.同步服务器时间(响应.headers)
+                                已校准时间 = True
+                                continue
+                            错误 = 夸克OSS请求错误(
+                                "oss_part_upload", HTTP状态=响应.status, OSS码=OSS码,
+                            )
+                            if 响应.status not in OSS可重试状态:
+                                raise 错误
+                except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
+                    错误 = 夸克OSS请求错误(
+                        "oss_part_upload", 原因="timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error",
+                    )
+                失败次数 += 1
+                if 失败次数 >= OSS分片上传尝试次数:
+                    raise 错误 from None
+                logger.warning(
+                    "夸克OSS分片上传失败重试：stage=%s, http_status=%s, reason=%s, oss_code=%s, attempt=%s/%s",
+                    错误.阶段, 错误.HTTP状态, 错误.原因, 错误.OSS码 or "unknown",
+                    失败次数, OSS分片上传尝试次数,
+                )
+                await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (失败次数 - 1))
 
     async def 完成OSS单分片(self, ETag: str, 上传参数: dict[str, Any]) -> None:
         存储桶 = str(上传参数.get("bucket") or "")
@@ -611,23 +684,23 @@ class 夸克网盘客户端:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
             ) as 会话:
-                async with 会话.post(地址, data=XML字节, headers=请求头) as 响应:
-                    响应文本 = await 响应.text()
-                    if 响应.status == 203 and "CallbackFailed" in 响应文本:
+                async with 会话.post(地址, data=XML字节, headers=请求头, allow_redirects=False) as 响应:
+                    if 响应.status in (200, 201):
+                        return
+                    OSS码 = await 读取OSS错误码(响应)
+                    if 响应.status == 203 and OSS码 == "CallbackFailed":
                         logger.warning(
                             "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
                             响应.status,
                         )
                         return
-                    if 响应.status in (200, 201):
-                        return
-                    if 尝试次数 == 0 and 响应.status == 403 and "requesttimeskewed" in 响应文本.lower():
+                    if 尝试次数 == 0 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
                         self.同步服务器时间(响应.headers)
                         continue
-                    raise RuntimeError(
-                        f"夸克网盘合并分片失败：HTTP {响应.status}: {限制文本长度(响应文本, 200)}"
+                    raise 夸克OSS请求错误(
+                        "oss_complete", HTTP状态=响应.status, OSS码=OSS码,
                     )
-        raise RuntimeError("夸克网盘OSS合并分片失败：时间校准后仍未成功")
+        raise 夸克OSS请求错误("oss_complete", 原因="clock_skew")
 
     async def 获取上传鉴权(self, 上传参数: dict[str, Any], 鉴权元数据: str) -> str:
         数据 = await self.请求JSON(
