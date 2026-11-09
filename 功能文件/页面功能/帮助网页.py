@@ -24,6 +24,7 @@ _载入前已有页面模块 = set(sys.modules)
 from . import 帮助网页后端 as 后端
 from . import 帮助网页页面 as 页面
 from . import 登录页面
+from . import QQ阅读开放接口
 from . import (
     业务工作台,
     业务工作台样式,
@@ -59,6 +60,7 @@ for _页面模块 in (
     页面,
     登录页面,
     后端,
+    QQ阅读开放接口,
     控制台密码,
 ):
     if _页面模块.__name__ in _载入前已有页面模块:
@@ -89,6 +91,7 @@ async def _处理帮助网页(request: web.Request) -> web.Response:
 
 
 def _注册路由(app: web.Application) -> None:
+    QQ阅读开放接口.注册路由(app, lambda: 后端.当前帮助网页配置)
     路由 = (
         ("get", "/", _处理帮助网页),
         ("get", "/tutorial-images/{filename}", 后端._处理教程图片),
@@ -283,6 +286,7 @@ async def 启动帮助网页服务(配置: Any = None, *, 插件版本: str = ""
 
 async def 停止帮助网页服务(服务: 帮助网页服务 | None, *, 保留会话: bool = False) -> None:
     try:
+        await QQ阅读开放接口.停止接口服务(保留任务=保留会话)
         await 后端._取消全部夸克网页扫码()
         await 后端._取消全部QQ阅读网页扫码()
         await 后端._取消全部QQ阅读网页短信()

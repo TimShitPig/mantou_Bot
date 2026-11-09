@@ -5422,6 +5422,42 @@ async def _生成固定账号QQ阅读下载回复流(
     *,
     分享文本: str = "",
 ) -> AsyncIterator[Any]:
+    try:
+        async for 结果 in 生成QQ阅读下载文件流(来源, 分享文本=分享文本):
+            if 结果["kind"] != "file":
+                yield 结果["message"]
+                continue
+            filename, content = 结果["filename"], 结果["content"]
+            details = {"title": 结果["title"], "author": 结果["author"]}
+            result = await 准备发送文本文件(
+                event,
+                filename,
+                content,
+                配置,
+                书名=details.get("title"),
+                作者=details.get("author"),
+            )
+            source_path = result.get("source_cache_path")
+            if result.get("sent"):
+                启动百度后台上传并清理源文件(配置, source_path, filename)
+                return
+            fallback_text = str(result.get("fallback_text") or "")
+            if fallback_text:
+                try:
+                    yield fallback_text
+                finally:
+                    启动百度后台上传并清理源文件(配置, source_path, filename)
+                return
+            yield 文件发送失败提示
+    except Exception as exc:
+        logger.warning("QQ阅读文件发送失败：stage=upload, error_type=%s", type(exc).__name__)
+        yield 下载失败提示
+
+
+async def 生成QQ阅读下载文件流(
+    来源: str, *, 分享文本: str = "",
+) -> AsyncIterator[dict[str, Any]]:
+    """在调用方已固定的账号上下文中生成 TXT，不发送消息或上传网盘。"""
     book_id = ""
     stage = "link"
     try:
@@ -5431,7 +5467,8 @@ async def _生成固定账号QQ阅读下载回复流(
                 QQ阅读出版书最大动态并发数,
             )
         ) as session:
-            book_id = 解析书籍编号(来源) or await 解析QQ阅读分享页书籍编号(
+            book_id = (str(来源) if re.fullmatch(r"[1-9][0-9]{0,19}", str(来源))
+                       else 解析书籍编号(来源)) or await 解析QQ阅读分享页书籍编号(
                 来源, session
             )
             if not book_id:
@@ -5440,7 +5477,7 @@ async def _生成固定账号QQ阅读下载回复流(
                     book_id = await 按QQ阅读分享书名解析编号(分享书名)
             if not book_id:
                 logger.warning("QQ阅读分享链接解析失败：错误分类=book_id_missing")
-                yield 下载失败提示
+                yield {"kind": "error", "stage": stage, "code": "download_failed", "message": 下载失败提示}
                 return
 
             stage = "details"
@@ -5482,7 +5519,7 @@ async def _生成固定账号QQ阅读下载回复流(
             else:
                 catalog = 获取QQ阅读可下载目录(details, catalog, 账号有VIP)
             if not catalog:
-                yield 章节单独付费提示
+                yield {"kind": "error", "stage": stage, "code": "paid_chapters", "message": 章节单独付费提示}
                 return
             details["chapters"] = len(catalog)
             正文来源 = "第三方正文接口" if 使用第三方正文 else "官方账号接口"
@@ -5495,7 +5532,7 @@ async def _生成固定账号QQ阅读下载回复流(
                 f"正文来源={正文来源}, "
                 f"书籍类型={'published' if published else 'novel'}"
             )
-            yield 格式化下载提示(details, len(catalog))
+            yield {"kind": "progress", "stage": "content", "message": 格式化下载提示(details, len(catalog))}
 
             stage = "content"
             if 使用第三方正文:
@@ -5517,7 +5554,7 @@ async def _生成固定账号QQ阅读下载回复流(
                     )
                     catalog = 免费目录
                     details["chapters"] = len(catalog)
-                    yield "部分章节暂不可获取，本次仅下载免费章节。"
+                    yield {"kind": "progress", "stage": "content", "message": "部分章节暂不可获取，本次仅下载免费章节。"}
                     chapters = await 下载QQ阅读第三方正文(book_id, catalog)
             else:
                 chapters = (
@@ -5528,33 +5565,19 @@ async def _生成固定账号QQ阅读下载回复流(
                 if published:
                     catalog = chapters
                     details["chapters"] = len(chapters)
-        filename, content = 生成小说文件内容(book_id, details, catalog, chapters)
+        filename, content = await _异步QQ阅读CPU函数(
+            生成小说文件内容, book_id, details, catalog, chapters,
+        )
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
             f"成功={len(chapters)}, 总数={len(catalog)}, 文件大小={len(content)}"
         )
 
-        stage = "upload"
-        result = await 准备发送文本文件(
-            event,
-            filename,
-            content,
-            配置,
-            书名=details.get("title"),
-            作者=details.get("author"),
-        )
-        source_path = result.get("source_cache_path")
-        if result.get("sent"):
-            启动百度后台上传并清理源文件(配置, source_path, filename)
-            return
-        fallback_text = str(result.get("fallback_text") or "")
-        if fallback_text:
-            try:
-                yield fallback_text
-            finally:
-                启动百度后台上传并清理源文件(配置, source_path, filename)
-            return
-        yield 文件发送失败提示
+        yield {"kind": "file", "stage": "completed", "filename": filename,
+               "content": content, "chapter_count": len(chapters),
+               "title": str(details.get("title") or ""),
+               "author": str(details.get("author") or "")}
+
     except Exception as exc:
         logger.warning(
             "QQ阅读参考下载失败：书籍编号=%s, 阶段=%s, 错误=%s, 错误分类=%s, http_status=%s, code=%s",
@@ -5564,7 +5587,7 @@ async def _生成固定账号QQ阅读下载回复流(
             else exc.status if isinstance(exc, aiohttp.ClientResponseError) else "",
             exc.code if isinstance(exc, _QQ阅读正文响应错误) else "",
         )
-        yield 下载失败提示
+        yield {"kind": "error", "stage": stage, "code": "download_failed", "message": 下载失败提示}
 
 
 

@@ -453,6 +453,7 @@
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
+          if (field.kind === 'boolean') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}><option value="false" ${field.value ? '' : 'selected'}>关闭</option><option value="true" ${field.value ? 'selected' : ''}>开启</option></select><small>${esc(hint)}</small></div>`;
           if (field.kind === 'select') {
             const rawOptions = field.options || field.choices || [];
             const options = Array.isArray(rawOptions) ? rawOptions : Object.entries(rawOptions).map(([value, label]) => ({value, label}));
@@ -816,7 +817,7 @@
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
-        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings', 'zlibrary_account_settings'].includes(field.category));
+        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings', 'zlibrary_account_settings', 'qq_reader_api_settings'].includes(field.category));
         renderConfigEditor('database-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'database_settings');
         renderDatabaseStatus(database);
         renderQQAuthEditor(data.qq_reader || {});

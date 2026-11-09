@@ -402,6 +402,21 @@ async def _后台刷新消息列表(
         "kind": "admin_list",
         "secret": False,
     },
+    "qq_reader_api_enabled": {
+        "category": "qq_reader_api_settings", "label": "开启 QQ 阅读开放接口",
+        "kind": "boolean", "secret": False, "default": False,
+        "hint": "服务共用，复用帮助网页端口；先填写绑定 AppID 和独立 API Key。",
+    },
+    "qq_reader_api_appid": {
+        "category": "qq_reader_api_settings", "label": "接口绑定机器人 AppID",
+        "kind": "text", "secret": False,
+        "hint": "明确填写已配置的 QQ 官方机器人 AppID，使用它当前选中的 QQ 阅读账号。",
+    },
+    "qq_reader_api_key": {
+        "category": "qq_reader_api_settings", "label": "QQ 阅读 API Key",
+        "kind": "secret", "secret": True,
+        "hint": "32～128 位随机字母、数字、下划线或短横线；只写入、不回显。更换后旧任务无法读取。",
+    },
     "welcome_tutorial_image_width": {
         "category": "help_web_settings",
         "label": "使用教程图片宽度（像素）",
@@ -525,6 +540,7 @@ async def _后台刷新消息列表(
 }
 
 配置字段分类显示名 = {
+    "qq_reader_api_settings": "QQ 阅读开放接口",
     "zlibrary_account_settings": "ZLibrary 账号注册",
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
@@ -774,6 +790,8 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             raise ValueError("敏感字段不能为空")
         if len(文本) > 20000:
             raise ValueError("配置值过长")
+        if 字段名 == "qq_reader_api_key" and not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", 文本):
+            raise ValueError("API Key 应为 32 至 128 位随机字母、数字、下划线或短横线")
         if 字段名 == "zlibrary_mail_api_key" and not re.fullmatch(r"AC-[A-Za-z0-9_-]{1,256}", 文本):
             raise ValueError("邮箱 API Key 格式无效")
         return 文本
@@ -792,6 +810,10 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     文本 = str(值 or "").strip()
     if len(文本) > 500:
         raise ValueError("配置值过长")
+    if 字段名 == "qq_reader_api_appid":
+        if 文本 and not 规范化机器人AppID(文本):
+            raise ValueError("机器人 AppID 无效")
+        return 文本
     if 字段名 == "welcome_tutorial_image_width":
         if not 文本.isdigit() or not 160 <= int(文本) <= 1080:
             raise ValueError("教程图片宽度应为 160 至 1080 像素")
