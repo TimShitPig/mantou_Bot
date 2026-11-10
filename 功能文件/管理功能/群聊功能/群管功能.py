@@ -29,6 +29,7 @@ try:
 except Exception:
     Comp = None
 
+from 功能文件.管理功能.基础功能.消息工具 import 是本地系统消息
 from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
     是群文件清理管理员,
@@ -1798,6 +1799,8 @@ async def 使用QQ官方消息撤回(bot: Any, 消息编号: Any, 群号: str = 
     """复用官方认证会话；只按明确 HTTP 响应确认，不自动重放 DELETE。"""
     群号文本 = str(群号 or "").strip()
     消息编号文本 = str(消息编号 or "").strip()
+    if 是本地系统消息(消息编号文本):
+        raise QQ官方撤回错误("local_system_event")
     if (not 用户编号规则.fullmatch(群号文本) or not 消息编号文本
             or len(消息编号文本) > 512
             or any(ord(字符) < 33 or 127 <= ord(字符) <= 159 for 字符 in 消息编号文本)):

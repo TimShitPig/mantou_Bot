@@ -46,6 +46,8 @@ except Exception as 导入异常:
     _消息存储 = None
     logger.warning("消息记录存储模块加载失败：错误类型=%s", type(导入异常).__name__)
 
+from 功能文件.管理功能.基础功能.消息工具 import 是本地系统消息
+
 消息记录版本 = 1
 # 以下仅限制内存热点缓存；MySQL 历史不按数量/时间自动删除。
 缓存最大会话数 = 200
@@ -5628,7 +5630,7 @@ async def 获取群成员最近消息编号(
     会话标识 = str(会话标识 or "").strip()
     用户标识 = str(用户标识 or "").strip()
     当前消息 = _规范消息ID(当前消息)
-    if not 会话标识 or not 用户标识 or not 当前消息:
+    if not 会话标识 or not 用户标识 or not 当前消息 or 是本地系统消息(当前消息):
         return []
     上限 = max(1, min(30, int(上限)))
     会话 = 消息缓存.get(会话标识) or {}
@@ -5649,7 +5651,8 @@ async def 获取群成员最近消息编号(
 
     def 当前作用域(记录: dict[str, Any]) -> bool:
         return (
-            str(记录.get("user_id") or "") == 用户标识
+            not 是本地系统消息(记录.get("message_id"), 记录.get("source"))
+            and str(记录.get("user_id") or "") == 用户标识
             and str(记录.get("chat_type") or 会话.get("chat_type") or "") == "group"
             and str(记录.get("_session") or 会话标识) == 会话标识
             and (not appid or str(记录.get("appid") or "") == appid)
@@ -5696,7 +5699,7 @@ async def 获取群成员最近消息编号(
     候选: dict[str, dict[str, Any]] = {}
     for 记录 in [*内存记录, *数据库记录]:
         编号 = _规范消息ID(记录.get("message_id"))
-        if not 编号 or 编号 == 当前消息:
+        if not 编号 or 编号 == 当前消息 or 是本地系统消息(编号, 记录.get("source")):
             continue
         if 编号 in 候选:
             候选[编号]["recalled"] |= bool(记录.get("recalled"))
@@ -9538,6 +9541,8 @@ async def 撤回消息(
     消息ID = str(消息ID or "").strip()
     if not 会话标识 or not 消息ID:
         return {"ok": False, "message": "参数无效"}
+    if 是本地系统消息(消息ID):
+        return {"ok": False, "message": "系统通知不能撤回"}
     平台, appid = _获取消息操作平台(appid)
     通道 = 获取HTTP通道(平台)
     if 通道 is None:

@@ -25,6 +25,10 @@ except Exception:
 
     logger = logging.getLogger(__name__)
 
+from 功能文件.管理功能.基础功能.消息工具 import (
+    是本地系统消息, 本地系统消息来源, 本地系统消息编号前缀,
+)
+
 消息记录表名 = "mantou_message_records"
 会话索引表名 = "mantou_message_conversations_v2"
 会话索引状态表名 = "mantou_message_conversation_state"
@@ -2176,7 +2180,7 @@ def 读取群成员最近消息(
     appid: str = "",
 ) -> list[dict[str, Any]]:
     """有界读取撤回身份；旧截断 ID 仅由同一行原文按需恢复并 CAS 写回。"""
-    if not 会话标识 or not 用户标识 or not _MySQL可用():
+    if not 会话标识 or not 用户标识 or 是本地系统消息(当前消息) or not _MySQL可用():
         return []
     appid = str(appid or "").strip()
     连接 = _打开连接()
@@ -2186,6 +2190,13 @@ def 读取群成员最近消息(
         with 连接.cursor() as 游标:
             范围条件 = "会话标识=%s AND user_id=%s AND 消息类型='group'"
             范围参数: list[Any] = [会话标识, 用户标识]
+            # 在 LIMIT 前排除系统通知，避免它们占掉最近真实消息的名额。
+            来源占位 = ",".join(["%s"] * len(本地系统消息来源))
+            范围条件 += f" AND COALESCE(source,'') NOT IN ({来源占位})"
+            范围参数.extend(本地系统消息来源)
+            for 前缀 in 本地系统消息编号前缀:
+                范围条件 += " AND message_id NOT LIKE %s"
+                范围参数.append(前缀 + "%")
             if appid:
                 范围条件 += " AND appid=%s"
                 范围参数.append(appid)

@@ -4,6 +4,16 @@ import re
 from typing import Any
 
 
+本地系统消息来源 = ("group_member_join", "group_member_leave", "friend_add", "friend_del")
+本地系统消息编号前缀 = ("group-event:", "friend-event:")
+
+
+def 是本地系统消息(消息编号: Any, 来源: Any = "") -> bool:
+    """入群/退群及好友通知仅用于本地展示，没有可撤回的官方消息 ID。"""
+    return (str(来源 or "").strip() in 本地系统消息来源
+            or str(消息编号 or "").strip().startswith(本地系统消息编号前缀))
+
+
 def 获取命令文本(event: Any) -> str:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (event, 消息对象):
