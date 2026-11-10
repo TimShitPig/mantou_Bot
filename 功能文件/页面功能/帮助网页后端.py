@@ -457,6 +457,12 @@ async def _后台刷新消息列表(
         "placeholder": "输入 AC- 开头的邮箱 API Key",
         "hint": "只写入、不回显；留空保持原值。保存后可发送“测试账号”，已有账号继续复用。",
     },
+    "zlibrary_registration_rx": {
+        "category": "zlibrary_account_settings",
+        "label": "ZLibrary 注册表单 rx",
+        "kind": "text", "secret": False, "default": "215",
+        "hint": "默认 215，仅在远端注册表单变更时调整。",
+    },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
         "label": "UC 上传目录",
