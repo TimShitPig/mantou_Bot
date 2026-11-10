@@ -36,7 +36,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 Key 属于同一服务的公共设置。不同 Key 的任务与文件独立隔离，撤销一个不影响其他 Key；被撤销 Key 的任务不可再读取，后台回收其结果。
 
-下载无需配置机器人。只有唯一已配置 QQ 官方机器人时复用其选中的 QQ 阅读账号；没有机器人或有多个机器人时使用匿名阅读，不借用控制台当前选中的机器人。一批任务固定提交时的阅读账号，之后切换账号不影响已提交任务。实际章节、付费类型和免费边界与现有 QQ 阅读下载流程一致。
+下载无需调用方提交机器人身份。自动检查已配置机器人的当前 QQ 阅读账号：只有一个机器人选中了账号时复用该账号，即使共配置多个机器人；没有账号或多个机器人均选中账号时使用匿名阅读，不猜选首个账号或借用控制台当前作用域。一批任务固定提交时的阅读账号，切换后不修改已提交任务；新请求按账号快照隔离缓存，登录后不会继续复用旧匿名结果。账号是否仍有效及可读范围由现有 QQ 阅读流程校验。
 
 ## 浏览器直达下载（v6.1.344 起）
 
@@ -50,7 +50,38 @@ http://你的服务器:8090/openapi/qq-reader/v1/download?key=你的API_KEY&book
 
 与任务接口共用两路队列、账号快照、任务复用、正文时限、文件上限与过期清理。相同 Key、书籍和范围复用未失败且未过期的任务。浏览器关闭不取消下载，重新打开同链接继续等待或获取已完成文件；反向代理或浏览器自身超时后也可重新打开。下载失败返回502 `download_failed`，Key 撤销返回401；其他参数和开关错误沿用下表。未完成任务的队列等待可能较长，自动化调用仍可使用异步任务接口。
 
-URL Key 只用于这个入口，其他任务与文件接口仍要求 Bearer。插件关闭访问日志，并返回 `Cache-Control: private, no-store`、`Referrer-Policy: no-referrer`；URL 仍会出现在浏览器历史及由管理员配置的代理日志中，不应公开分享个人 Key。没有配置或启用 API 时不会启动下载。
+URL Key 只用于 `/download`、`/chapter`、`/chapters` 三个浏览器 GET 入口，其他任务与文件接口仍要求 Bearer。插件关闭访问日志，并返回 `Cache-Control: private, no-store`、`Referrer-Policy: no-referrer`；URL 仍会出现在浏览器历史及由管理员配置的代理日志中，不应公开分享个人 Key。没有配置或启用 API 时不会启动下载。
+
+## 单章与多章 JSON（v6.1.345 起）
+
+整本继续用 `/download?key=KEY&book_id=ID`，直接返回 TXT 附件。单章、多章使用以下两个浏览器 GET 入口，等待正文完成后直接显示 `application/json`，不设置附件下载头；只需 Key，无需 AppID 或章节 ID。
+
+```text
+/openapi/qq-reader/v1/chapter?key=KEY&book_id=ID&chapter=1
+/openapi/qq-reader/v1/chapters?key=KEY&book_id=ID&chapter_range=1-1000
+```
+
+`chapter` 为必填正整数目录序号；多章 `chapter_range` 默认 `1-n`，支持 `1-1000`、`101-200`、`101-n`。只处理实际存在且可获取的目录项：例如总共80章，请求 `1-1000` 只处理这80章，不提交不存在的第81～1000章，不以1000作为等待完成条件。起点超出目录或该范围没有可获取正文时返回受控错误。
+
+两个入口共用 JSON 结构，单章的 `chapters` 最多一项。`total_chapters` 是实际原目录总数，`chapter_count` 是本次实际返回的章数；`index` 保留原目录序号，即使免费章节筛选或跳过图片章也不重排。仅输出以下公开字段，不输出资源地址或账号凭据。
+
+```json
+{
+  "ok": true,
+  "book_id": "123456",
+  "title": "示例书名",
+  "author": "作者",
+  "chapter_range": "1-1000",
+  "total_chapters": 2,
+  "chapter_count": 2,
+  "chapters": [
+    {"index": 1, "title": "第一章", "content": "第一章正文"},
+    {"index": 2, "title": "第二章", "content": "第二章正文"}
+  ]
+}
+```
+
+复用原有两路队列、账号冻结、超时、64 MiB 单结果上限及1小时清理；JSON 与 TXT 分别缓存，互不混用。浏览器断开不取消共享正文，Key 撤销后不可读取。旧 `/download` 的 `chapter_range` 参数仍可用于范围 TXT；浏览器要 JSON 时使用 `/chapter` 或 `/chapters`。
 
 ## 2. 鉴权与地址
 
@@ -60,7 +91,7 @@ URL Key 只用于这个入口，其他任务与文件接口仍要求 Bearer。�
 Authorization: Bearer API_KEY
 ```
 
-除上面的直达下载入口外，不支持通过 URL 查询参数或控制台 Cookie 代替 Key。提交任务使用 `Content-Type: application/json`，不要提交 `appid` 或章节 ID。返回地址 `status_url` / `download_url` 是相对于服务域名的路径，调用时仍需同一 Key。
+除上面三个浏览器 GET 入口外，不支持通过 URL 查询参数或控制台 Cookie 代替 Key。提交任务使用 `Content-Type: application/json`，不要提交 `appid` 或章节 ID。返回地址 `status_url` / `download_url` 是相对于服务域名的路径，调用时仍需同一 Key。
 
 ## 3. 提交任务
 
@@ -77,7 +108,7 @@ Authorization: Bearer API_KEY
 
 范围示例：`1-n` 全部、`1-100` 前100章、`101-n` 第101章至目录末尾、`20-30` 第20～30章。终点超出目录时截到末章，起点超出目录时任务失败；不是章节 ID，不需要先获取目录或填写章节 ID。可读范围受原下载流程约束，实际章数看成功结果 `chapter_count`。
 
-新任务返回 HTTP 202，`Location` 为查询路径；相同 Key、书籍 ID 和规范章节范围复用排队中或下载中任务，复用尚未过期的成功结果返回200。失败后重新提交会创建新任务。除表内字段外的参数会被拒绝。
+新任务返回 HTTP 202，`Location` 为查询路径；相同 Key、书籍 ID、规范章节范围、结果格式及账号快照复用排队中或下载中任务，复用尚未过期的成功结果返回200。失败后重新提交会创建新任务。除表内字段外的参数会被拒绝。
 
 ```bash
 BASE='https://你的域名/openapi/qq-reader/v1'

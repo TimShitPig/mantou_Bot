@@ -5231,6 +5231,29 @@ def 生成小说文件内容(
     return filename, text.replace("\n", "\r\n").encode("utf-8")
 
 
+def 生成QQ阅读章节JSON(
+    book_id: str, details: dict[str, Any], chapters: list[dict[str, Any]],
+    目录总数: int, 章节范围: str,
+) -> bytes:
+    # 只投影可公开正文，不携带目录里的资源地址、票据和内部字段。
+    章节列表 = []
+    已有序号 = set()
+    for chapter in chapters:
+        序号 = int(chapter["_qq_source_index"])
+        if 序号 < 1 or 序号 > 目录总数 or 序号 in 已有序号:
+            raise ValueError("invalid_chapter_index")
+        已有序号.add(序号)
+        标题 = str(chapter.get("title") or f"第{序号}章").strip()
+        章节列表.append({"index": 序号, "title": 标题,
+                         "content": 去除章节正文重复标题(标题, chapter.get("content"))})
+    return json.dumps({"ok": True, "book_id": book_id,
+                       "title": str(details.get("title") or ""),
+                       "author": str(details.get("author") or ""),
+                       "chapter_range": 章节范围, "total_chapters": 目录总数,
+                       "chapter_count": len(章节列表), "chapters": 章节列表},
+                      ensure_ascii=False, indent=2).encode("utf-8")
+
+
 def 格式化下载提示(details: dict[str, Any], catalog_count: int) -> str:
     return "\n".join(
         [
@@ -5469,14 +5492,16 @@ def 规范QQ阅读章节范围(值: Any = "1-n") -> str:
 
 def _筛选QQ阅读章节范围(目录: list[dict[str, Any]], 范围: str) -> list[dict[str, Any]]:
     起点, 终点 = 范围.split("-")
-    return [项 for 项 in 目录 if int(起点) <= 项["_qq_source_index"]
-            and (终点 == "n" or 项["_qq_source_index"] <= int(终点))]
+    下限 = int(起点)
+    实际末章 = max((项["_qq_source_index"] for 项 in 目录), default=0)
+    上限 = 实际末章 if 终点 == "n" else min(int(终点), 实际末章)
+    return [项 for 项 in 目录 if 下限 <= 项["_qq_source_index"] <= 上限]
 
 
 async def 生成QQ阅读下载文件流(
-    来源: str, *, 分享文本: str = "", 章节范围: str = "1-n",
+    来源: str, *, 分享文本: str = "", 章节范围: str = "1-n", 返回章节: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
-    """在调用方已固定的账号上下文中生成 TXT，不发送消息或上传网盘。"""
+    """在固定账号上下文中生成 TXT 或章节 JSON，不发送消息或上传网盘。"""
     book_id = ""
     stage = "link"
     try:
@@ -5595,11 +5620,18 @@ async def 生成QQ阅读下载文件流(
                 if published:
                     catalog = chapters
                     details["chapters"] = len(chapters)
-        filename, content = await _异步QQ阅读CPU函数(
-            生成小说文件内容, book_id, details, catalog, chapters,
-        )
+        if 返回章节:
+            filename = 生成小说文件名(book_id, details).removesuffix(".txt") + ".json"
+            content = await _异步QQ阅读CPU函数(
+                生成QQ阅读章节JSON, book_id, details, chapters, 原始目录数, 章节范围,
+            )
+        else:
+            filename, content = await _异步QQ阅读CPU函数(
+                生成小说文件内容, book_id, details, catalog, chapters,
+            )
         if 章节范围 != "1-n":
-            filename = filename.removesuffix(".txt") + f" [章节{章节范围}].txt"
+            后缀 = ".json" if 返回章节 else ".txt"
+            filename = filename.removesuffix(后缀) + f" [章节{章节范围}]{后缀}"
         logger.info(
             f"QQ阅读章节下载完成：书籍编号={book_id}, 书名={details.get('title')}, "
             f"成功={len(chapters)}, 总数={len(catalog)}, 文件大小={len(content)}"

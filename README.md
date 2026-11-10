@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.344-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.345-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.344 |
+| 版本 | v6.1.345 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -49,7 +49,7 @@ QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret �
 
 ## QQ 阅读开放 API
 
-浏览器可直接访问 `/openapi/qq-reader/v1/download?key=你的Key&book_id=书籍ID&chapter_range=1-n`，等待完成后返回 TXT 下载。只在这个 GET 入口接受 URL Key；其他任务接口继续使用 Bearer 请求头。支持范围序号，不需要章节 ID；同链接复用同 Key、书籍和范围的有效任务，浏览器断开不取消后台下载。
+浏览器三个入口：整本 `/openapi/qq-reader/v1/download?key=你的Key&book_id=书籍ID` 返回 TXT；单章 `/chapter?key=你的Key&book_id=书籍ID&chapter=1`、多章 `/chapters?key=你的Key&book_id=书籍ID&chapter_range=1-1000` 返回 JSON 正文（后两者同样使用 `/openapi/qq-reader/v1` 前缀）。范围不足时只取已有章节，不等待凑满请求上限。三个 GET 入口接受 URL Key，其他任务接口继续使用 Bearer。唯一已选 QQ 阅读账号可跨多机器人自动识别，多个已选账号时不猜选；账号变化后不复用旧匿名缓存。
 
 第三方只需 `Authorization: Bearer <API_KEY>`，无需配置或提交 AppID，也无需控制台 Cookie。支持单本、1～N多本批量、`chapter_range: "1-n"` 章节序号范围、任务状态及 UTF-8 TXT。接口复用帮助网页域名和端口，前缀 `/openapi/qq-reader/v1`。
 

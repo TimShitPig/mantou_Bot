@@ -83,12 +83,26 @@ def 读取接口密钥摘要(配置: Any) -> list[dict[str, str]]:
     return [{"id": _所有者(key)[:16]} for key in 读取接口密钥(配置)]
 
 
-def _下载账号作用域() -> str:
-    # 无需配置或提交 AppID。只有唯一机器人时复用其账号；多机器人不猜选。
+async def _下载账号快照(配置: Any) -> tuple[str, dict[str, Any] | None]:
+    # 调用方仍只提供 Key；按实际已选账号判断，不能把多机器人等同于匿名。
     from 功能文件.管理功能.基础功能 import 消息记录
-    appids = {规范化机器人AppID(x) for x in 消息记录.获取已配置机器人AppID列表()}
-    appids.discard("")
-    return next(iter(appids)) if len(appids) == 1 else ""
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读
+    appids = sorted({规范化机器人AppID(x) for x in 消息记录.获取已配置机器人AppID列表()} - {""})
+    快照 = [(appid, dict(获取机器人配置(配置, appid))) for appid in appids]
+
+    def 读取() -> tuple[str, dict[str, Any] | None]:
+        候选 = []
+        for appid, 机器人配置 in 快照:
+            账号 = QQ阅读._读取QQ阅读登录态(机器人配置)
+            if 账号:
+                候选.append((appid, dict(账号)))
+                if len(候选) > 1:
+                    return "", None
+        if 候选:
+            return 候选[0]
+        return (appids[0], None) if len(appids) == 1 else ("", None)
+
+    return await asyncio.to_thread(读取)
 
 
 def _公开任务(任务: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +113,7 @@ def _公开任务(任务: dict[str, Any]) -> dict[str, Any]:
         if 键 in 任务:
             结果[键] = 任务[键]
     结果["chapter_range"] = 任务.get("chapter_range", "1-n")
+    结果["result_format"] = 任务.get("result_format", "txt")
     结果["status_url"] = f"{接口前缀}/tasks/{任务['task_id']}"
     if 任务["status"] == "succeeded":
         结果["download_url"] = 结果["status_url"] + "/file"
@@ -146,8 +161,8 @@ class QQ阅读接口服务:
                 header = request.headers.get("Authorization", "")
                 parts = header.split(" ", 1)
                 候选 = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
-                # 仅浏览器直达下载允许 URL Key；显式 Authorization 始终优先。
-                if not header and request.method == "GET" and request.path == f"{接口前缀}/download":
+                # 仅这三个浏览器入口允许 URL Key；显式 Authorization 始终优先。
+                if not header and request.method == "GET" and request.path in {f"{接口前缀}/{项}" for 项 in ("download", "chapter", "chapters")}:
                     参数密钥 = request.query.getall("key", [])
                     候选 = 参数密钥[0] if len(参数密钥) == 1 else ""
                 key = ""
@@ -280,17 +295,33 @@ class QQ阅读接口服务:
         return await self._提交任务(request, [book_id], 章节范围=范围)
 
     async def 直达下载(self, request: web.Request) -> web.StreamResponse:
+        return await self._直达结果(request)
+
+    async def 单章正文(self, request: web.Request) -> web.StreamResponse:
+        return await self._直达结果(request, 单章=True, 结果格式="json")
+
+    async def 多章正文(self, request: web.Request) -> web.StreamResponse:
+        return await self._直达结果(request, 结果格式="json")
+
+    async def _直达结果(self, request: web.Request, *, 单章: bool = False, 结果格式: str = "txt") -> web.StreamResponse:
         参数 = request.query
-        if set(参数) - {"key", "book_id", "chapter_range"} or any(len(参数.getall(键)) != 1 for 键 in 参数):
+        允许参数 = {"key", "book_id", "chapter" if 单章 else "chapter_range"}
+        if set(参数) - 允许参数 or any(len(参数.getall(键)) != 1 for 键 in 参数):
             return _错误(400, "invalid_request", "请求参数无效")
         book_id = self._书籍编号(参数.get("book_id"))
         if not book_id:
             return _错误(400, "invalid_book_id", "书籍 ID 无效")
+        数据 = dict(参数)
+        if 单章:
+            章节 = 参数.get("chapter", "")
+            if not re.fullmatch(r"[1-9][0-9]{0,19}", 章节):
+                return _错误(400, "invalid_chapter", "章节序号须为正整数")
+            数据["chapter_range"] = f"{章节}-{章节}"
         try:
-            范围 = self._章节范围(dict(参数))
+            范围 = self._章节范围(数据)
         except ValueError:
             return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
-        响应 = await self._提交任务(request, [book_id], 章节范围=范围)
+        响应 = await self._提交任务(request, [book_id], 章节范围=范围, 结果格式=结果格式)
         if 响应.status not in {200, 202}:
             return 响应
         编号 = json.loads(响应.body)["task"]["task_id"]
@@ -329,16 +360,22 @@ class QQ阅读接口服务:
             return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
         return await self._提交任务(request, list(dict.fromkeys(编号列表)), 批量=True, 章节范围=范围)
 
-    async def _提交任务(self, request: web.Request, 编号列表: list[str], *, 批量: bool = False, 章节范围: str = "1-n") -> web.Response:
+    async def _提交任务(self, request: web.Request, 编号列表: list[str], *, 批量: bool = False, 章节范围: str = "1-n", 结果格式: str = "txt") -> web.Response:
+        appid, 账号 = await _下载账号快照(self.读取配置())
+        账号指纹 = hashlib.sha256(json.dumps(账号, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if 账号 else ""
+        if self.已停止:
+            return _错误(503, "api_disabled", "接口暂不可用")
         await self.清理()
-        已有 = {(任务["book_id"], 任务.get("chapter_range", "1-n")): 任务 for 任务 in 任务表.values()
-                if 任务["owner"] == request["qq_api_owner"] and 任务["status"] != "failed"}
+        已有 = {(任务["book_id"], 任务.get("chapter_range", "1-n"), 任务.get("result_format", "txt")): 任务 for 任务 in 任务表.values()
+                if 任务["owner"] == request["qq_api_owner"] and 任务["status"] != "failed"
+                and 任务.get("account_fingerprint", "") == 账号指纹}
         提交结果, 新任务 = [], []
         for book_id in 编号列表:
-            任务 = 已有.get((book_id, 章节范围))
+            任务 = 已有.get((book_id, 章节范围, 结果格式))
             if 任务 is None:
                 任务 = {
                     "task_id": secrets.token_hex(16), "book_id": book_id, "chapter_range": 章节范围,
+                    "result_format": 结果格式, "account_fingerprint": 账号指纹,
                     "appid": "", "owner": request["qq_api_owner"],
                     "status": "queued", "stage": "queued", "created_at": int(time.time()),
                     "expires_at": None, "initializing": True,
@@ -348,13 +385,7 @@ class QQ阅读接口服务:
             提交结果.append(任务)
         try:
             if 新任务:
-                from 功能文件.管理功能.小说功能.小说 import QQ阅读
-                appid = _下载账号作用域()
-                # 一批任务固定同一账号；零个或多个机器人时使用明确的匿名上下文。
-                账号 = None
-                if appid:
-                    配置 = 获取机器人配置(self.读取配置(), appid)
-                    账号 = await asyncio.to_thread(QQ阅读._读取QQ阅读登录态, 配置)
+                # 一批任务固定提交时的账号；已有任务继续保留原快照。
                 if self.已停止:
                     for 任务 in 新任务:
                         任务表.pop(任务["task_id"], None)
@@ -404,13 +435,14 @@ class QQ阅读接口服务:
                 return _错误(410, "file_expired", "文件已失效，请重新提交任务")
             with 文件:
                 响应 = web.StreamResponse(headers={
-                    "Content-Type": "text/plain; charset=utf-8",
+                    "Content-Type": "application/json; charset=utf-8" if 任务.get("result_format") == "json" else "text/plain; charset=utf-8",
                     "Content-Length": str(任务["size_bytes"]),
-                    "Content-Disposition": f"attachment; filename=qq-reader-{任务['book_id']}.txt; filename*=UTF-8''{quote(任务['filename'], safe='')}",
                     "Cache-Control": "private, no-store",
                     "X-Content-Type-Options": "nosniff",
                     "Referrer-Policy": "no-referrer",
                 })
+                if 任务.get("result_format", "txt") == "txt":
+                    响应.headers["Content-Disposition"] = f"attachment; filename=qq-reader-{任务['book_id']}.txt; filename*=UTF-8''{quote(任务['filename'], safe='')}"
                 try:
                     await 响应.prepare(request)
                     if request.method != "HEAD":
@@ -436,7 +468,10 @@ class QQ阅读接口服务:
             _删除文件(任务)
             async with asyncio.timeout(下载超时秒数):
                 with 绑定机器人作用域(任务["appid"]), QQ阅读.QQ阅读账号上下文(任务["account"]):
-                    async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"], 章节范围=任务.get("chapter_range", "1-n")):
+                    参数 = {"章节范围": 任务.get("chapter_range", "1-n")}
+                    if 任务.get("result_format") == "json":
+                        参数["返回章节"] = True
+                    async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"], **参数):
                         if not self._已授权(任务):
                             raise ValueError("api_key_revoked")
                         任务["stage"] = 结果["stage"]
@@ -447,7 +482,7 @@ class QQ阅读接口服务:
                             content = 结果["content"]
                             if len(content) > 文件大小上限:
                                 raise ValueError("result_too_large")
-                            路径 = 文件缓存.创建临时缓存文件("qq-reader-api-", ".txt")
+                            路径 = 文件缓存.创建临时缓存文件("qq-reader-api-", ".json" if 任务.get("result_format") == "json" else ".txt")
                             任务["path"] = str(路径)
                             文件缓存.标记临时缓存正在使用(路径)
                             文件缓存.标记小说缓存正在使用(路径)
@@ -487,9 +522,11 @@ async def _未知路由(request: web.Request) -> web.Response:
 def 注册路由(app: web.Application, 读取配置: Any) -> None:
     global 当前服务
     服务 = 当前服务 = QQ阅读接口服务(读取配置)
-    # 外部路由只接受独立 Bearer Key，不依赖控制台会话或调用方 AppID。
+    # 外部路由使用独立 Key；浏览器三个入口支持 URL Key，不依赖控制台会话或调用方 AppID。
     app.middlewares.append(服务.中间件)
     app.router.add_get(f"{接口前缀}/download", 服务.直达下载, allow_head=False)
+    app.router.add_get(f"{接口前缀}/chapter", 服务.单章正文, allow_head=False)
+    app.router.add_get(f"{接口前缀}/chapters", 服务.多章正文, allow_head=False)
     app.router.add_post(f"{接口前缀}/tasks", 服务.创建任务)
     app.router.add_post(f"{接口前缀}/tasks/batch", 服务.批量创建任务)
     app.router.add_get(f"{接口前缀}/tasks/{{task_id}}", 服务.查询任务)
