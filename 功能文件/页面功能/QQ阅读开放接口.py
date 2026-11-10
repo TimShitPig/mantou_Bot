@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import re
 import secrets
@@ -145,6 +146,10 @@ class QQ阅读接口服务:
                 header = request.headers.get("Authorization", "")
                 parts = header.split(" ", 1)
                 候选 = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+                # 仅浏览器直达下载允许 URL Key；显式 Authorization 始终优先。
+                if not header and request.method == "GET" and request.path == f"{接口前缀}/download":
+                    参数密钥 = request.query.getall("key", [])
+                    候选 = 参数密钥[0] if len(参数密钥) == 1 else ""
                 key = ""
                 if re.fullmatch(r"[A-Za-z0-9_-]{32,128}", 候选):
                     for 已配置 in keys:
@@ -168,6 +173,7 @@ class QQ阅读接口服务:
         if not 响应.prepared:
             响应.headers["Cache-Control"] = "private, no-store"
             响应.headers["X-Content-Type-Options"] = "nosniff"
+            响应.headers["Referrer-Policy"] = "no-referrer"
         return 响应
 
     async def 启动(self, app: web.Application) -> None:
@@ -273,6 +279,38 @@ class QQ阅读接口服务:
             return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
         return await self._提交任务(request, [book_id], 章节范围=范围)
 
+    async def 直达下载(self, request: web.Request) -> web.StreamResponse:
+        参数 = request.query
+        if set(参数) - {"key", "book_id", "chapter_range"} or any(len(参数.getall(键)) != 1 for 键 in 参数):
+            return _错误(400, "invalid_request", "请求参数无效")
+        book_id = self._书籍编号(参数.get("book_id"))
+        if not book_id:
+            return _错误(400, "invalid_book_id", "书籍 ID 无效")
+        try:
+            范围 = self._章节范围(dict(参数))
+        except ValueError:
+            return _错误(400, "invalid_chapter_range", "章节范围须为 1-100 或 1-n 等正序范围")
+        响应 = await self._提交任务(request, [book_id], 章节范围=范围)
+        if 响应.status not in {200, 202}:
+            return 响应
+        编号 = json.loads(响应.body)["task"]["task_id"]
+        # 等待的是共享队列任务；浏览器断开不取消正文，重新打开同链接可复用。
+        while True:
+            if self.已停止:
+                return _错误(503, "api_disabled", "接口暂不可用")
+            任务 = 任务表.get(编号)
+            if 任务 is None or (任务["expires_at"] and 任务["expires_at"] <= time.time()):
+                return _错误(404, "task_not_found", "任务不存在或已过期")
+            if not self._已授权(任务):
+                return _错误(401, "unauthorized", "API Key 无效")
+            if 任务["status"] == "succeeded":
+                return await self._发送文件(request, 任务)
+            if 任务["status"] == "failed":
+                return _错误(502, "download_failed", "下载失败，请稍后重试")
+            if request.transport is None or request.transport.is_closing():
+                raise asyncio.CancelledError
+            await asyncio.sleep(0.5)
+
     async def 批量创建任务(self, request: web.Request) -> web.Response:
         数据 = await self._读取提交(request, 批量=True)
         if isinstance(数据, web.Response):
@@ -353,6 +391,9 @@ class QQ阅读接口服务:
         任务 = self._查任务(request)
         if 任务 is None:
             return _错误(404, "task_not_found", "任务不存在或已过期")
+        return await self._发送文件(request, 任务)
+
+    async def _发送文件(self, request: web.Request, 任务: dict[str, Any]) -> web.StreamResponse:
         if 任务["status"] != "succeeded":
             return _错误(409, "file_not_ready", "任务尚未完成或已失败")
         任务["readers"] = 任务.get("readers", 0) + 1
@@ -368,6 +409,7 @@ class QQ阅读接口服务:
                     "Content-Disposition": f"attachment; filename=qq-reader-{任务['book_id']}.txt; filename*=UTF-8''{quote(任务['filename'], safe='')}",
                     "Cache-Control": "private, no-store",
                     "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
                 })
                 try:
                     await 响应.prepare(request)
@@ -447,6 +489,7 @@ def 注册路由(app: web.Application, 读取配置: Any) -> None:
     服务 = 当前服务 = QQ阅读接口服务(读取配置)
     # 外部路由只接受独立 Bearer Key，不依赖控制台会话或调用方 AppID。
     app.middlewares.append(服务.中间件)
+    app.router.add_get(f"{接口前缀}/download", 服务.直达下载, allow_head=False)
     app.router.add_post(f"{接口前缀}/tasks", 服务.创建任务)
     app.router.add_post(f"{接口前缀}/tasks/batch", 服务.批量创建任务)
     app.router.add_get(f"{接口前缀}/tasks/{{task_id}}", 服务.查询任务)

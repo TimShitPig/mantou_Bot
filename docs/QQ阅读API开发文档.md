@@ -38,6 +38,20 @@ Key 属于同一服务的公共设置。不同 Key 的任务与文件独立隔�
 
 下载无需配置机器人。只有唯一已配置 QQ 官方机器人时复用其选中的 QQ 阅读账号；没有机器人或有多个机器人时使用匿名阅读，不借用控制台当前选中的机器人。一批任务固定提交时的阅读账号，之后切换账号不影响已提交任务。实际章节、付费类型和免费边界与现有 QQ 阅读下载流程一致。
 
+## 浏览器直达下载（v6.1.344 起）
+
+把以下链接中的服务地址、Key 和书籍 ID 换成自己的值，然后直接粘贴到浏览器地址栏：
+
+```text
+http://你的服务器:8090/openapi/qq-reader/v1/download?key=你的API_KEY&book_id=123456&chapter_range=1-n
+```
+
+这是 GET 下载接口，等待完成后直接返回 UTF-8 TXT 附件，不需要网页、请求头、AppID 或章节 ID。`book_id` 必填，`chapter_range` 默认 `1-n`；也可用 `1-100`、`101-n`。仅允许 `key`、`book_id`、`chapter_range`，不接受重复参数。支持以 Bearer 头调用；明确提供请求头时优先校验请求头，不回退 URL Key。
+
+与任务接口共用两路队列、账号快照、任务复用、正文时限、文件上限与过期清理。相同 Key、书籍和范围复用未失败且未过期的任务。浏览器关闭不取消下载，重新打开同链接继续等待或获取已完成文件；反向代理或浏览器自身超时后也可重新打开。下载失败返回502 `download_failed`，Key 撤销返回401；其他参数和开关错误沿用下表。未完成任务的队列等待可能较长，自动化调用仍可使用异步任务接口。
+
+URL Key 只用于这个入口，其他任务与文件接口仍要求 Bearer。插件关闭访问日志，并返回 `Cache-Control: private, no-store`、`Referrer-Policy: no-referrer`；URL 仍会出现在浏览器历史及由管理员配置的代理日志中，不应公开分享个人 Key。没有配置或启用 API 时不会启动下载。
+
 ## 2. 鉴权与地址
 
 统一前缀：`/openapi/qq-reader/v1`。所有请求，包括状态和 TXT，携带：
@@ -46,7 +60,7 @@ Key 属于同一服务的公共设置。不同 Key 的任务与文件独立隔�
 Authorization: Bearer API_KEY
 ```
 
-不支持通过 URL 查询参数或控制台 Cookie 代替 Key。提交任务使用 `Content-Type: application/json`，不要提交 `appid` 或章节 ID。返回地址 `status_url` / `download_url` 是相对于服务域名的路径，调用时仍需同一 Key。
+除上面的直达下载入口外，不支持通过 URL 查询参数或控制台 Cookie 代替 Key。提交任务使用 `Content-Type: application/json`，不要提交 `appid` 或章节 ID。返回地址 `status_url` / `download_url` 是相对于服务域名的路径，调用时仍需同一 Key。
 
 ## 3. 提交任务
 

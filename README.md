@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.343-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.344-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.343 |
+| 版本 | v6.1.344 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -48,6 +48,8 @@ QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret �
 找书使用 `找书名` 或 `找作者` 等文字查询；含分享链接的输入不作为搜索词，交由已有平台链接识别流程处理，避免将链接参数误送到搜索接口。QQ 官方发送记录使用实际认证 AppID 与真实会话目标；旧平台名称作用域保留历史记录，不提交错误群资料请求。
 
 ## QQ 阅读开放 API
+
+浏览器可直接访问 `/openapi/qq-reader/v1/download?key=你的Key&book_id=书籍ID&chapter_range=1-n`，等待完成后返回 TXT 下载。只在这个 GET 入口接受 URL Key；其他任务接口继续使用 Bearer 请求头。支持范围序号，不需要章节 ID；同链接复用同 Key、书籍和范围的有效任务，浏览器断开不取消后台下载。
 
 第三方只需 `Authorization: Bearer <API_KEY>`，无需配置或提交 AppID，也无需控制台 Cookie。支持单本、1～N多本批量、`chapter_range: "1-n"` 章节序号范围、任务状态及 UTF-8 TXT。接口复用帮助网页域名和端口，前缀 `/openapi/qq-reader/v1`。
 
