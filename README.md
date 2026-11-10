@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.351-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.352-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.351 |
+| 版本 | v6.1.352 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -66,7 +66,6 @@ QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret �
 
 批量与排队数量无上限，固定两路下载；单任务正文超时30分钟、TXT上限64 MiB，结果保留1小时。同进程重载保留任务，进程重启需重新提交。
 
-完整参数、响应、错误码、cURL 和可运行的 Python 批量客户端见 **[QQ阅读 API 开发文档](docs/QQ阅读API开发文档.md)**。
 
 ## 快速开始
 
