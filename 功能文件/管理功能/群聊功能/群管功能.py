@@ -1094,7 +1094,9 @@ async def 获取QQ官方机器人群角色(bot: Any, 群号: str) -> str:
         "/v2/groups/{group_openid}/bot_state",
         group_openid=群号文本,
     )
-    响应 = await http客户端.request(路由)
+    from 功能文件.管理功能.基础功能 import 消息记录
+
+    响应 = await 消息记录._请求群资料GET(http客户端, 路由)
     角色 = 提取QQ官方机器人群角色(响应)
     if not 角色:
         raise RuntimeError("QQ 官方 bot_state 未返回 member_role")

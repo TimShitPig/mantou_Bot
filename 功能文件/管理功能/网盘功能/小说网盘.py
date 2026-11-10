@@ -714,7 +714,7 @@ def _写入小说直发压缩包(源路径: Path, 压缩路径: Path, 文件名:
 
 
 async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) -> dict[str, Any]:
-    """将小说打包为 ZIP，复用官方上传及单次发送确认；不回退网盘。"""
+    """先发送原文件；官方明确拒绝后才尝试 ZIP，未知发送结果不重放。"""
     from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
     from 功能文件.管理功能.基础功能 import 消息记录
     from 功能文件.管理功能.小说功能.功能 import 小说下载任务
@@ -738,61 +738,71 @@ async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) ->
         if not 身份有效() or not callable(getattr(event, "upload_group_and_c2c_media", None)):
             raise ValueError("identity_or_uploader_missing")
         原文件名 = Path(交付结果["filename"]).name
-        文件名 = str(Path(原文件名).with_suffix(".zip"))
-        阶段 = "archive"
-        压缩路径 = 文件缓存.创建临时缓存文件("mantou-novel-", ".zip")
-        文件缓存.标记临时缓存正在使用(压缩路径)
-        压缩任务 = asyncio.create_task(
-            asyncio.to_thread(_写入小说直发压缩包, 路径, 压缩路径, 原文件名),
-            name="小说直发ZIP打包",
-        )
-        await asyncio.shield(压缩任务)
-        大小 = (await asyncio.to_thread(压缩路径.stat)).st_size
-        阶段 = "upload"
-        媒体 = await event.upload_group_and_c2c_media(
-            str(压缩路径.absolute()), 4, file_name=文件名, group_openid=群,
-        )
-        if not isinstance(媒体, dict) or not isinstance(媒体.get("file_info"), str) or not 媒体["file_info"]:
-            raise ValueError("upload_unconfirmed")
-        await http.check_session()
-        if not 身份有效():
-            raise ValueError("identity_changed")
-        消息体 = {"msg_type": 7, "media": {"file_info": 媒体["file_info"]},
-               "msg_seq": secrets.randbelow(10000) + 1}
-        消息ID = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
-        if 消息ID:
-            消息体["msg_id"] = 消息ID
-        阶段 = "send"
-        # 网络异常或未知结果也不自动重放已经提交的文件消息。
-        小说下载任务.标记当前小说文件已提交()
-        主机 = "sandbox.api.sgroup.qq.com" if getattr(http, "is_sandbox", False) else "api.bot.qq.com"
-        async with http._session.post(
-            f"https://{主机}/v2/groups/{quote(群, safe='')}/messages",
-            json=消息体, headers=dict(getattr(http, "_headers", {}) or {}),
-            allow_redirects=False, timeout=aiohttp.ClientTimeout(total=60),
-        ) as 响应:
-            状态码 = 响应.status
-            数据 = bytearray()
-            async for 块 in 响应.content.iter_chunked(16384):
-                数据.extend(块)
-                if len(数据) > 65536:
-                    raise ValueError("response_too_large")
-            返回 = json.loads(数据)
-            if not isinstance(返回, dict):
-                raise ValueError("invalid_response")
-            码字段 = [返回[键] for 键 in ("code", "err_code") if 键 in 返回]
-            业务码 = next((int(值) for 值 in 码字段 if type(值) in (int, str)
-                        and re.fullmatch(r"-?[0-9]{1,12}", str(值))), None)
-            码有效 = all(type(值) in (int, str) and 值 in (0, "0") for 值 in 码字段)
-            if not 200 <= 状态码 < 300 or not 码有效 or not isinstance(返回.get("id"), str) or not 返回["id"]:
-                raise ValueError("send_unconfirmed")
+        for 使用压缩包 in (False, True):
+            文件名 = str(Path(原文件名).with_suffix(".zip")) if 使用压缩包 else 原文件名
+            发送路径 = 路径
+            状态码 = 业务码 = None
+            if 使用压缩包:
+                阶段 = "archive"
+                压缩路径 = 文件缓存.创建临时缓存文件("mantou-novel-", ".zip")
+                文件缓存.标记临时缓存正在使用(压缩路径)
+                压缩任务 = asyncio.create_task(
+                    asyncio.to_thread(_写入小说直发压缩包, 路径, 压缩路径, 原文件名),
+                    name="小说直发ZIP打包",
+                )
+                await asyncio.shield(压缩任务)
+                发送路径 = 压缩路径
+            大小 = (await asyncio.to_thread(发送路径.stat)).st_size
+            阶段 = "upload"
+            媒体 = await event.upload_group_and_c2c_media(
+                str(发送路径.absolute()), 4, file_name=文件名, group_openid=群,
+            )
+            if not isinstance(媒体, dict) or not isinstance(媒体.get("file_info"), str) or not 媒体["file_info"]:
+                raise ValueError("upload_unconfirmed")
+            await http.check_session()
+            if not 身份有效():
+                raise ValueError("identity_changed")
+            消息体 = {"msg_type": 7, "media": {"file_info": 媒体["file_info"]},
+                   "msg_seq": secrets.randbelow(10000) + 1}
+            消息ID = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+            if 消息ID:
+                消息体["msg_id"] = 消息ID
+            阶段 = "send"
+            # 网络异常或未知结果也不自动重放已经提交的文件消息。
+            小说下载任务.标记当前小说文件已提交()
+            主机 = "sandbox.api.sgroup.qq.com" if getattr(http, "is_sandbox", False) else "api.bot.qq.com"
+            async with http._session.post(
+                f"https://{主机}/v2/groups/{quote(群, safe='')}/messages",
+                json=消息体, headers=dict(getattr(http, "_headers", {}) or {}),
+                allow_redirects=False, timeout=aiohttp.ClientTimeout(total=60),
+            ) as 响应:
+                状态码 = 响应.status
+                数据 = bytearray()
+                async for 块 in 响应.content.iter_chunked(16384):
+                    数据.extend(块)
+                    if len(数据) > 65536:
+                        raise ValueError("response_too_large")
+                返回 = json.loads(数据)
+                if not isinstance(返回, dict):
+                    raise ValueError("invalid_response")
+                码字段 = [返回[键] for 键 in ("code", "err_code") if 键 in 返回]
+                业务码 = next((int(值) for 值 in 码字段 if type(值) in (int, str)
+                            and re.fullmatch(r"-?[0-9]{1,12}", str(值))), None)
+                码有效 = all(type(值) in (int, str) and 值 in (0, "0") for 值 in 码字段)
+                if not 200 <= 状态码 < 300 or not 码有效 or not isinstance(返回.get("id"), str) or not 返回["id"]:
+                    # 完整官方失败响应才允许改发 ZIP；超时、断流和响应不明不重试。
+                    if not 使用压缩包 and not 200 <= 状态码 < 300 and 状态码 not in (401, 403, 429) and 业务码 not in (None, 0) and not 返回.get("id"):
+                        logger.warning("小说原文件发送被拒绝，尝试压缩包：http_status=%s, code=%s", 状态码, 业务码)
+                        continue
+                    raise ValueError("send_unconfirmed")
+            break
         # 确认先于记账；记账异常不能使文件再次发送。
         小说下载任务.标记当前小说完成通知()
         try:
             消息记录.记录发送消息(群, "group", "[文件] " + 文件名, appid,
                 消息ID=返回["id"], 来源="bot_novel_file",
                 媒体={"type": "文件", "src": "", "name": 文件名,
-                    "size": 大小, "content_type": "application/zip"})
+                    "size": 大小, "content_type": "application/zip" if 使用压缩包 else "text/plain"})
         except Exception as 异常:
             logger.warning("小说文件发送记账失败：error_type=%s", type(异常).__name__)
         return {"sent": True, "fallback_text": "", "error": ""}

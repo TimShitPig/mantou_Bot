@@ -63,6 +63,12 @@ from 功能文件.管理功能.基础功能.消息工具 import 是本地系统�
 群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
 群资源失效移除来源 = "resource_unavailable_11255_40011028"
+群非成员移除来源 = "bot_not_member_11293_40011026"
+# 各接口按 AppID 共用滚动60秒额度，换 Token 和同进程重载均不重置。
+群资料每分钟请求上限 = 30
+群资料配额迁移截止: float = globals().get("群资料配额迁移截止", time.monotonic() + 60.0 if "_群资料GET任务" in globals() else 0.0)
+群资料请求尝试: dict[tuple[str, str], list[float]] = globals().get("群资料请求尝试", {})
+群资料限流截止: dict[tuple[str, str], float] = globals().get("群资料限流截止", {})
 好友关系状态命名空间 = "qq_friend_membership"
 好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
 _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
@@ -6381,7 +6387,7 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
         修订 = max(0, int(原始.get("revision") or 检查时间 * 1000))
     except (TypeError, ValueError, OverflowError):
         修订 = max(0, 检查时间 * 1000)
-    旧误判 = 状态 == "removed" and 来源 not in {"GROUP_DEL_ROBOT", 群资源失效移除来源}
+    旧误判 = 状态 == "removed" and 来源 not in {"GROUP_DEL_ROBOT", 群资源失效移除来源, 群非成员移除来源}
     if 旧误判:
         # 旧版曾将404、NotFound及任意正文中的“不存在”持久化为退群。
         # 未命中明确退群事件或指定资源错误来源时只回到待确认，不删历史资料。
@@ -6612,19 +6618,27 @@ def _群资料资源不可用(异常: Exception) -> bool:
     return 字段["code"] == "11255" and 字段["err_code"] == "40011028"
 
 
-def _处理群资源失效(
+def _群资料机器人非成员(异常: Exception) -> bool:
+    """只识别已核对的完整非成员数字码对；不读取错误文字。"""
+    字段 = _提取群资料错误字段(异常)
+    return (字段["code"] == "11293" and 字段["err_code"] == "40011026"
+            and 字段["http_status"] in {"", "400"})
+
+
+def _处理群失效成员状态(
     会话标识: str, appid: str, 异常: Exception, 请求代次: int,
 ) -> dict[str, Any] | None:
     """按指定资源错误将本群置为已移除，迟到响应不得覆盖新活动。"""
     if (not 会话标识 or not re.fullmatch(r"[0-9]{4,32}", appid)
-        or not _群资料资源不可用(异常)
+        or not (_群资料资源不可用(异常) or _群资料机器人非成员(异常))
         or _提取群资料错误字段(异常)["http_status"] not in {"", "400"}):
         return None
     缓存键 = _群作用域缓存键(会话标识, appid)
     if 群机器人状态代次.get(缓存键, 0) != 请求代次:
         return _读取群机器人状态(会话标识, appid)
     return _设置群机器人状态(
-        会话标识, "removed", appid, 持久化=True, 来源=群资源失效移除来源,
+        会话标识, "removed", appid, 持久化=True,
+        来源=群非成员移除来源 if _群资料机器人非成员(异常) else 群资源失效移除来源,
     )
 
 
@@ -6663,6 +6677,9 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     elif 字段["http_status"] == "429":
         分类 = "rate_limit"
         文本 = "群资料请求触发频率限制"
+    elif _群资料机器人非成员(异常):
+        分类 = "bot_not_member"
+        文本 = "QQ明确返回机器人不在该群，按已移出群处理并保留聊天记录"
     elif _群资料资源不可用(异常) and 字段["http_status"] in {"", "400"}:
         分类 = "resource_unavailable"
         文本 = "群资源失效，按已移出群处理并保留聊天记录"
@@ -6791,7 +6808,7 @@ async def _查询群机器人状态(
             详情["err_code"] or "unknown",
             详情["detail"],
         )
-        return _处理群资源失效(会话标识, appid, 异常, 请求代次) or 现有
+        return _处理群失效成员状态(会话标识, appid, 异常, 请求代次) or 现有
 
 
 async def 查询群主动消息权限(会话标识: str, appid: str = "") -> bool | None:
@@ -6887,6 +6904,26 @@ class _群资料请求错误(RuntimeError):
         super().__init__("群资料请求失败（" + self.reason + "）")
 
 
+class _群资料配额耗尽(_群资料查询冷却中):
+    """本地额度或官方限流冷却中，不代表权限或成员关系变化。"""
+
+
+def _领取群资料查询额度(appid: str, 端点: str) -> None:
+    """所有群共用同 AppID/接口的30 QPM；计数与检查之间不让出循环。"""
+    键 = (appid, 端点)
+    现在 = time.monotonic()
+    if 群资料配额迁移截止 > 现在:
+        raise _群资料配额耗尽("群资料配额升级等待旧请求窗口结束")
+    if 群资料限流截止.get(键, 0.0) > 现在:
+        raise _群资料配额耗尽("群资料官方限流冷却中")
+    群资料限流截止.pop(键, None)
+    已用 = [时间 for 时间 in 群资料请求尝试.get(键, []) if 时间 > 现在 - 60.0]
+    群资料请求尝试[键] = 已用
+    if len(已用) >= 群资料每分钟请求上限:
+        raise _群资料配额耗尽("群资料每分钟请求额度已用完")
+    已用.append(现在)
+
+
 async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
     """复用已认证 SDK 会话，完整读取有界群资料响应并保留数字错误码。"""
     if str(getattr(route, "method", "")).upper() != "GET" or getattr(route, "path", "") not in {
@@ -6910,11 +6947,19 @@ async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
         or 地址.query or 地址.fragment
         or not re.fullmatch(r"/v2/groups/[^/?#]+/(bot_state|info)", 地址.path)):
         raise ValueError("群资料请求仅接受固定群信息GET")
+    async def 配额中间件(请求: Any, 发送: Any) -> Any:
+        # aiohttp 的内部连接重试也会重新经过中间件，逐次计算实际请求。
+        _领取群资料查询额度(appid, route.path)
+        return await 发送(请求)
+
     async with 会话.request(
         method="GET", url=route.url, headers=请求头,
         timeout=ClientTimeout(total=http.timeout), allow_redirects=False,
+        middlewares=(配额中间件,),
     ) as 响应:
         状态码 = 响应.status
+        if 状态码 == 429:
+            群资料限流截止[(appid, route.path)] = time.monotonic() + 60.0
         内容 = bytearray()
         async for 片段 in 响应.content.iter_chunked(8192):
             内容.extend(片段)
@@ -7551,7 +7596,7 @@ def _群信息冷却秒数(异常: Exception) -> int:
         return 群信息认证失败冷却秒
     if _提取群资料错误字段(异常)["http_status"] == "429":
         return 群信息限流冷却秒
-    if _群资料资源不可用(异常):
+    if _群资料资源不可用(异常) or _群资料机器人非成员(异常):
         return 86400
     try:
         文本 = str(异常)
@@ -7736,7 +7781,7 @@ async def 刷新群信息(
             详情["detail"],
             冷却秒数,
         )
-        移除状态 = _处理群资源失效(会话标识, appid, exc, 状态代次)
+        移除状态 = _处理群失效成员状态(会话标识, appid, exc, 状态代次)
         if 移除状态 is not None and 移除状态.get("status") == "removed":
             return _构造已移除群摘要(会话标识, appid=appid)
         return None
@@ -9448,7 +9493,7 @@ async def 发送消息(
     发送群状态代次 = 群机器人状态代次.get(_群作用域缓存键(会话标识, appid), 0)
 
     def _群资源失败结果(异常: Exception) -> dict[str, Any] | None:
-        移除状态 = (_处理群资源失效(会话标识, appid, 异常, 发送群状态代次)
+        移除状态 = (_处理群失效成员状态(会话标识, appid, 异常, 发送群状态代次)
                 if 会话类型 == "group" else None)
         if 移除状态 is None:
             return None
