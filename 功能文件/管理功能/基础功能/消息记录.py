@@ -62,6 +62,7 @@ from 功能文件.管理功能.基础功能.消息工具 import 是本地系统�
 群信息人工最短间隔秒 = 60
 群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
+群资源失效移除来源 = "resource_unavailable_11255_40011028"
 好友关系状态命名空间 = "qq_friend_membership"
 好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
 _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
@@ -5202,8 +5203,13 @@ async def _消息接收工作() -> None:
                 记录 = 记录收到消息(消息, 类型, appid)
                 if 类型 == "group" and 记录:
                     会话标识 = str(记录.get("_session") or "").strip()
-                    if 会话标识 and 获取群机器人状态(会话标识, appid) != "active":
-                        _设置群机器人状态(会话标识, "active", appid, 持久化=True, 来源="group_message")
+                    if 会话标识:
+                        if 获取群机器人状态(会话标识, appid) != "active":
+                            _设置群机器人状态(会话标识, "active", appid, 持久化=True, 来源="group_message")
+                        else:
+                            # 每条真实群消息都推进代次，阻止在途旧错误覆盖新活动。
+                            状态键 = _群作用域缓存键(会话标识, appid)
+                            群机器人状态代次[状态键] = 群机器人状态代次.get(状态键, 0) + 1
                 if 类型 == "user" and 记录:
                     用户标识 = str(记录.get("user_id") or "").strip()
                     会话标识 = str(记录.get("_session") or "").strip()
@@ -6375,10 +6381,10 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
         修订 = max(0, int(原始.get("revision") or 检查时间 * 1000))
     except (TypeError, ValueError, OverflowError):
         修订 = max(0, 检查时间 * 1000)
-    旧误判 = 状态 == "removed" and 来源 != "GROUP_DEL_ROBOT"
+    旧误判 = 状态 == "removed" and 来源 not in {"GROUP_DEL_ROBOT", 群资源失效移除来源}
     if 旧误判:
         # 旧版曾将404、NotFound及任意正文中的“不存在”持久化为退群。
-        # 无正式事件依据时只能回到待确认，不推断仍在群或删历史资料。
+        # 未命中明确退群事件或指定资源错误来源时只回到待确认，不删历史资料。
         状态, 来源, 修订 = "unknown", "legacy_unverified", 修订 + 1
     允许主动消息 = None if 旧误判 else 原始.get("allow_proactive_msg")
     if isinstance(允许主动消息, str):
@@ -6601,9 +6607,25 @@ def _群信息凭据无效(异常: Exception) -> bool:
 
 
 def _群资料资源不可用(异常: Exception) -> bool:
-    """仅识别完整数字码对；资源失效或作用域错误不能证明机器人已离群。"""
+    """只识别指定的完整数字码对，不扫描响应文字或 OpenID。"""
     字段 = _提取群资料错误字段(异常)
     return 字段["code"] == "11255" and 字段["err_code"] == "40011028"
+
+
+def _处理群资源失效(
+    会话标识: str, appid: str, 异常: Exception, 请求代次: int,
+) -> dict[str, Any] | None:
+    """按指定资源错误将本群置为已移除，迟到响应不得覆盖新活动。"""
+    if (not 会话标识 or not re.fullmatch(r"[0-9]{4,32}", appid)
+        or not _群资料资源不可用(异常)
+        or _提取群资料错误字段(异常)["http_status"] not in {"", "400"}):
+        return None
+    缓存键 = _群作用域缓存键(会话标识, appid)
+    if 群机器人状态代次.get(缓存键, 0) != 请求代次:
+        return _读取群机器人状态(会话标识, appid)
+    return _设置群机器人状态(
+        会话标识, "removed", appid, 持久化=True, 来源=群资源失效移除来源,
+    )
 
 
 class _群资料查询冷却中(RuntimeError):
@@ -6641,9 +6663,9 @@ def _群信息异常摘要(异常: Exception) -> dict[str, str]:
     elif 字段["http_status"] == "429":
         分类 = "rate_limit"
         文本 = "群资料请求触发频率限制"
-    elif _群资料资源不可用(异常):
+    elif _群资料资源不可用(异常) and 字段["http_status"] in {"", "400"}:
         分类 = "resource_unavailable"
-        文本 = "群资源不可用，请核对资源有效性及机器人会话作用域，保留原成员状态"
+        文本 = "群资源失效，按已移出群处理并保留聊天记录"
     elif "11253" in (字段["code"], 字段["err_code"]) or 字段["http_status"] == "403":
         分类 = "access_denied"
         文本 = "群资料接口访问权限未通过，保留原成员状态"
@@ -6769,7 +6791,7 @@ async def _查询群机器人状态(
             详情["err_code"] or "unknown",
             详情["detail"],
         )
-        return 现有
+        return _处理群资源失效(会话标识, appid, 异常, 请求代次) or 现有
 
 
 async def 查询群主动消息权限(会话标识: str, appid: str = "") -> bool | None:
@@ -6936,6 +6958,12 @@ async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None
         状态表 = {"token": http._token, "queries": {}}
         http._mantou_group_get_state = 状态表
     查询表 = 状态表["queries"]
+    if 状态表.get("policy_version") != 2:
+        # 新移除规则需要复核旧失败；保留在途请求，不绕过认证通道冷却。
+        for 旧键, 旧状态 in list(查询表.items()):
+            if 旧状态["task"] is None:
+                查询表.pop(旧键, None)
+        状态表["policy_version"] = 2
     现在 = time.monotonic()
     for 旧键, 旧状态 in list(查询表.items()):
         if 旧状态["task"] is None and 旧状态["failed_until"] <= 现在:
@@ -7708,6 +7736,9 @@ async def 刷新群信息(
             详情["detail"],
             冷却秒数,
         )
+        移除状态 = _处理群资源失效(会话标识, appid, exc, 状态代次)
+        if 移除状态 is not None and 移除状态.get("status") == "removed":
+            return _构造已移除群摘要(会话标识, appid=appid)
         return None
 
 
@@ -9108,6 +9139,8 @@ async def 发送消息(
         return {"ok": False, "message": "会话参数无效"}
     平台实例, appid = _获取消息操作平台(appid)
     权限会话类型 = 会话类型
+    if 会话类型 == "group" and _读取群机器人状态(会话标识, appid).get("status") == "removed":
+        return {"ok": False, "message": "发送失败：机器人已移出该群"}
     通道 = 获取HTTP通道(平台实例)
     if 通道 is None:
         return {"ok": False, "message": "QQ官方平台未加载"}
@@ -9412,6 +9445,21 @@ async def 发送消息(
     if not 会话类型:
         会话缓存 = _读取作用域会话缓存(会话标识, 会话类型, appid)
         会话类型 = str(会话缓存.get("chat_type") or "group")
+    发送群状态代次 = 群机器人状态代次.get(_群作用域缓存键(会话标识, appid), 0)
+
+    def _群资源失败结果(异常: Exception) -> dict[str, Any] | None:
+        移除状态 = (_处理群资源失效(会话标识, appid, 异常, 发送群状态代次)
+                if 会话类型 == "group" else None)
+        if 移除状态 is None:
+            return None
+        字段 = _提取群资料错误字段(异常)
+        logger.warning(
+            "消息记录群资源失效：stage=send, http_status=%s, code=%s, err_code=%s",
+            字段["http_status"] or "unknown", 字段["code"], 字段["err_code"],
+        )
+        提示 = "发送失败：机器人已移出该群" if 移除状态.get("status") == "removed" else "发送失败：群资源暂不可用"
+        return {"ok": False, "message": 提示}
+
     try:
         from botpy.http import Route
 
@@ -9427,6 +9475,9 @@ async def 发送消息(
         if 实际使用主动消息:
             记录主动消息权限(会话标识, 权限会话类型, True, appid)
     except Exception as exc:
+        资源失败结果 = _群资源失败结果(exc)
+        if 资源失败结果 is not None:
+            return 资源失败结果
         if 实际使用主动消息 and 主动消息无权限(exc):
             记录主动消息权限(会话标识, 权限会话类型, False, appid)
         logger.warning(
@@ -9444,6 +9495,9 @@ async def 发送消息(
                 结果 = await _http.request(route, json=消息体)
                 记录主动消息权限(会话标识, 权限会话类型, True, appid)
             except Exception as 重试异常:
+                资源失败结果 = _群资源失败结果(重试异常)
+                if 资源失败结果 is not None:
+                    return 资源失败结果
                 if 主动消息无权限(重试异常):
                     记录主动消息权限(会话标识, 权限会话类型, False, appid)
                 错误文本 = str(重试异常)

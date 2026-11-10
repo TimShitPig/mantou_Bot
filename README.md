@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.347-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.348-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.347 |
+| 版本 | v6.1.348 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -110,7 +110,7 @@ git clone https://github.com/TimShitPig/mantou_Bot.git /AstrBot/data/plugins/馒
 
 消息历史按页查询，同参数的并发请求复用一次查询，完成后释放；消息展示使用副本，保留完整原始记录并合并最新撤回状态。
 
-群聊“已移除”只由当前机器人收到 QQ 官方 `GROUP_DEL_ROBOT` 事件确认；资料接口的 HTTP 404、未开放白名单权限（11253）、认证、限流或网络失败保留原有成员状态，群号和成员 OpenID 中包含 `404` 也不会判为移除。旧版没有明确退群事件依据的“已移除”恢复为待确认，保留聊天记录与群资料；`GROUP_ADD_ROBOT`、新收到的群消息或成功读取的群内状态可恢复在群。状态来源与修订号随缓存、热重载和网页更新保留，迟到结果不覆盖较新状态。依据：[官方群退出事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_del_robot.html)、[官方状态接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)及[官方错误说明](https://bot.q.qq.com/wiki/develop/api-v2/openapi/error/error.html)。
+群聊收到当前机器人的 QQ 官方 `GROUP_DEL_ROBOT` 事件，或群资料/群消息接口明确返回完整错误码对 `11255/40011028`（HTTP400，SDK 缺少 HTTP 状态时仍须两码齐全），均按“已移除”处理；资源错误保留独立来源，不冒充退群事件。资料接口的 HTTP 404、未开放白名单权限（11253）、认证、限流或网络失败保留原有成员状态，群号和成员 OpenID 中包含 `404` 也不会判为移除。旧版既没有明确退群事件也没有上述指定资源错误来源的“已移除”恢复为待确认，保留聊天记录与群资料；`GROUP_ADD_ROBOT`、新收到的群消息或成功读取的群内状态可恢复在群。状态来源与修订号随缓存、热重载和网页更新保留，迟到结果不覆盖较新状态。依据：[官方群退出事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_del_robot.html)、[官方状态接口](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_bot_state.get.html)及[官方错误说明](https://bot.q.qq.com/wiki/develop/api-v2/openapi/error/error.html)。
 
 入群和退群记录优先使用事件真实昵称、当前群资料及已保存的身份关联资料，历史分页批量补齐已知姓名；后续收到真实昵称时更新原通知，不新增消息或未读。欢迎消息中的 `@成员` 由 QQ 客户端显示姓名，接口未返回的名字不凭空推断；从未收到姓名且成员资料接口无权限的用户保留占位。当前页面的实时资料按群、聊天类型和 AppID 隔离。
 
