@@ -405,17 +405,12 @@ async def _后台刷新消息列表(
     "qq_reader_api_enabled": {
         "category": "qq_reader_api_settings", "label": "开启 QQ 阅读开放接口",
         "kind": "boolean", "secret": False, "default": False,
-        "hint": "服务共用，复用帮助网页端口；先填写绑定 AppID 和独立 API Key。",
+        "hint": "服务共用，复用帮助网页端口；只需 API Key，无需 AppID。",
     },
-    "qq_reader_api_appid": {
-        "category": "qq_reader_api_settings", "label": "接口绑定机器人 AppID",
-        "kind": "text", "secret": False,
-        "hint": "明确填写已配置的 QQ 官方机器人 AppID，使用它当前选中的 QQ 阅读账号。",
-    },
-    "qq_reader_api_key": {
-        "category": "qq_reader_api_settings", "label": "QQ 阅读 API Key",
-        "kind": "secret", "secret": True,
-        "hint": "32～128 位随机字母、数字、下划线或短横线；只写入、不回显。更换后旧任务无法读取。",
+    "qq_reader_api_keys": {
+        "category": "qq_reader_api_settings", "label": "QQ 阅读 API Keys",
+        "kind": "api_keys", "secret": True,
+        "hint": "每行一个 Key。填写后保存将替换全部 Key；留空不修改。可随机生成并追加，或单独撤销。",
     },
     "welcome_tutorial_image_width": {
         "category": "help_web_settings",
@@ -734,7 +729,12 @@ def _读取插件配置摘要() -> dict[str, Any]:
             项目["placeholder"] = str(定义["placeholder"])
         if 定义.get("options"):
             项目["options"] = list(定义["options"])
-        if 定义["kind"] == "admin_list":
+        if 定义["kind"] == "api_keys":
+            from 功能文件.页面功能 import QQ阅读开放接口
+            项目["keys"] = QQ阅读开放接口.读取接口密钥摘要(配置)
+            项目["count"] = len(项目["keys"])
+            项目["configured"] = bool(项目["keys"])
+        elif 定义["kind"] == "admin_list":
             值列表 = 原值 if isinstance(原值, list) else str(原值 or "").split(",")
             值列表 = [str(值).strip() for 值 in 值列表 if str(值).strip()]
             项目["count"] = len(值列表)
@@ -769,6 +769,9 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     if not 定义:
         raise ValueError("配置字段不支持")
     kind = 定义["kind"]
+    if kind == "api_keys":
+        from 功能文件.页面功能 import QQ阅读开放接口
+        return QQ阅读开放接口.规范接口密钥列表(值)
     if kind == "select":
         文本 = str(值 or "").strip()
         允许值 = {str(项.get("value")) if isinstance(项, dict) else str(项) for 项 in 定义.get("options", [])}
@@ -790,8 +793,6 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             raise ValueError("敏感字段不能为空")
         if len(文本) > 20000:
             raise ValueError("配置值过长")
-        if 字段名 == "qq_reader_api_key" and not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", 文本):
-            raise ValueError("API Key 应为 32 至 128 位随机字母、数字、下划线或短横线")
         if 字段名 == "zlibrary_mail_api_key" and not re.fullmatch(r"AC-[A-Za-z0-9_-]{1,256}", 文本):
             raise ValueError("邮箱 API Key 格式无效")
         return 文本
@@ -810,10 +811,6 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
     文本 = str(值 or "").strip()
     if len(文本) > 500:
         raise ValueError("配置值过长")
-    if 字段名 == "qq_reader_api_appid":
-        if 文本 and not 规范化机器人AppID(文本):
-            raise ValueError("机器人 AppID 无效")
-        return 文本
     if 字段名 == "welcome_tutorial_image_width":
         if not 文本.isdigit() or not 160 <= int(文本) <= 1080:
             raise ValueError("教程图片宽度应为 160 至 1080 像素")
@@ -2468,21 +2465,88 @@ async def _处理插件配置数据(request: web.Request) -> web.Response:
     )
 
 
-async def _处理插件配置写入(request: web.Request) -> web.Response:
-    if not _请求已授权(request):
-        return _控制台错误(401, "请先登录控制台")
+async def _串行写入插件配置(request: web.Request, 处理函数: Any) -> web.Response:
     配置 = _当前作用域配置()
-    键 = (id(getattr(配置, "基础配置", 配置)), 获取当前机器人AppID(配置))
+    # API Keys 为服务共用；所有控制台配置写入共享同一锁，跨机器人也不能丢更新。
+    键 = (id(getattr(配置, "基础配置", 配置)), "shared_config")
     项 = _机器人配置请求锁.setdefault(键, {"lock": asyncio.Lock(), "users": 0})
     项["users"] += 1
     try:
-        # 同一机器人覆盖整个快照、持久化和失败还原，避免较早失败抹掉较晚成功。
         async with 项["lock"]:
-            return await _处理当前机器人配置写入(request)
+            return await 处理函数(request)
     finally:
         项["users"] -= 1
         if 项["users"] == 0 and _机器人配置请求锁.get(键) is 项:
             _机器人配置请求锁.pop(键, None)
+
+
+async def _处理插件配置写入(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    return await _串行写入插件配置(request, _处理当前机器人配置写入)
+
+
+async def _处理QQ阅读API密钥(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    return await _串行写入插件配置(request, _修改QQ阅读API密钥)
+
+
+async def _修改QQ阅读API密钥(request: web.Request) -> web.Response:
+    from 功能文件.页面功能 import QQ阅读开放接口
+    数据 = await _读取请求JSON(request)
+    if not isinstance(数据, dict) or 数据.get("action") not in ("generate", "delete"):
+        return _控制台错误(400, "密钥操作无效")
+    配置 = _当前作用域配置()
+    if 配置 is None:
+        return _控制台错误(503, "插件配置不可用")
+    分类名 = "qq_reader_api_settings"
+    字典 = _读取插件配置字典(配置)
+    if not isinstance(字典, dict):
+        return _控制台错误(503, "插件配置不可用")
+    旧分类 = copy.deepcopy(字典.get(分类名))
+    keys = QQ阅读开放接口.读取接口密钥(配置)
+    新密钥 = ""
+    if 数据["action"] == "generate":
+        新密钥 = secrets.token_urlsafe(32)
+        while 新密钥 in keys:
+            新密钥 = secrets.token_urlsafe(32)
+        keys.append(新密钥)
+    else:
+        标识 = 数据.get("id")
+        if not isinstance(标识, str) or not re.fullmatch(r"[a-f0-9]{16}", 标识):
+            return _控制台错误(400, "密钥标识无效")
+        摘要 = QQ阅读开放接口.读取接口密钥摘要(配置)
+        匹配 = [key for key, 项 in zip(keys, 摘要) if hmac.compare_digest(项["id"], 标识)]
+        if len(匹配) != 1:
+            return _控制台错误(404, "密钥不存在")
+        keys.remove(匹配[0])
+    try:
+        _设置插件配置值(配置, 分类名, "qq_reader_api_keys", keys)
+        _设置插件配置值(配置, 分类名, "qq_reader_api_key", "")
+        if _插件配置可持久化(配置):
+            await _持久化插件配置()
+        elif not isinstance(配置, dict):
+            raise RuntimeError("插件配置不可保存")
+    except BaseException as exc:
+        if 旧分类 is None:
+            字典.pop(分类名, None)
+        else:
+            字典[分类名] = 旧分类
+        清除 = getattr(配置, "清除待保存字段", None)
+        if callable(清除):
+            清除()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        if not isinstance(exc, Exception):
+            raise
+        logger.warning("QQ阅读API密钥保存失败：error_type=%s", type(exc).__name__)
+        return _控制台错误(409, "密钥保存失败，请稍后重试")
+    响应 = {"ok": True, "keys": QQ阅读开放接口.读取接口密钥摘要(配置),
+            "message": "新 Key 已添加，请立即复制保存，仅显示本次" if 新密钥 else "Key 已撤销"}
+    if 新密钥:
+        响应["key"] = 新密钥
+    return web.json_response(响应, headers={"Cache-Control": "no-store"})
 
 
 async def _处理当前机器人配置写入(request: web.Request) -> web.Response:
@@ -2511,7 +2575,7 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
             定义 = 插件配置字段定义.get(字段名)
             if not 定义:
                 raise ValueError("配置字段不支持")
-            if 定义.get("secret") and not str(原值 or "").strip():
+            if 定义.get("secret") and (原值 is None or isinstance(原值, str) and not 原值.strip()):
                 continue
             值 = _校验插件配置字段(字段名, 原值)
             待更新.append((字段名, 定义, 值))
@@ -2525,6 +2589,8 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
                 字段名,
                 值,
             )
+            if 字段名 == "qq_reader_api_keys":
+                _设置插件配置值(_当前作用域配置(), "qq_reader_api_settings", "qq_reader_api_key", "")
             已更新.append(字段名)
         阶段 = "持久化配置"
         if 已更新 and _插件配置可持久化(_当前作用域配置()):
@@ -2566,6 +2632,9 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
         if isinstance(配置字典, dict) and isinstance(原配置快照, dict):
             配置字典.clear()
             配置字典.update(原配置快照)
+        清除 = getattr(配置字典, "清除待保存字段", None)
+        if callable(清除):
+            清除()
         logger.warning(
             "帮助控制台插件配置保存失败：阶段=%s，错误类型=%s",
             阶段,

@@ -61,19 +61,13 @@
         "description": "开启 QQ 阅读开放接口",
         "type": "bool",
         "default": false,
-        "hint": "服务共用，复用帮助网页端口。支持单本及1～N批量下载任务、查询状态和获取 TXT；需独立 API Key 与明确绑定 AppID。"
+        "hint": "服务共用，复用帮助网页端口。支持单本及1～N批量下载任务、查询状态和获取 TXT；只需独立 API Key，无需配置或提交 AppID；支持多个 Key。"
       },
-      "qq_reader_api_appid": {
-        "description": "接口绑定机器人 AppID",
-        "type": "string",
-        "default": "",
-        "hint": "填写已配置的数字 AppID，只使用该机器人当前选中的 QQ 阅读账号，不借用其他机器人。"
-      },
-      "qq_reader_api_key": {
-        "description": "QQ 阅读 API Key",
-        "type": "string",
-        "default": "",
-        "hint": "32～128 位随机字母、数字、下划线或短横线。调用时放在 Authorization: Bearer 请求头；不要放在 URL。只写入、不回显。"
+      "qq_reader_api_keys": {
+        "description": "QQ 阅读 API Keys",
+        "type": "list",
+        "default": [],
+        "hint": "支持多个独立 Key，每项 32～128 位字母、数字、下划线或短横线。控制台可随机生成、添加及撤销；调用只需 Authorization: Bearer Key，无需 AppID。"
       }
     }
   },

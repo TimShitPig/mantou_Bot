@@ -41,8 +41,53 @@ def _读取接口配置(配置: Any) -> dict[str, Any]:
     return 值 if isinstance(值, dict) else {}
 
 
-def _所有者(appid: str, key: str) -> str:
-    return hashlib.sha256((appid + "\x1f" + key).encode()).hexdigest()
+def 规范接口密钥列表(值: Any) -> list[str]:
+    """配置可使用字符串列表或每行一个 Key；空列表表示撤销全部。"""
+    if isinstance(值, str):
+        值 = 值.splitlines()
+    if not isinstance(值, list):
+        raise ValueError("API Key 列表格式无效")
+    结果 = []
+    for key in 值:
+        if not isinstance(key, str):
+            raise ValueError("API Key 格式无效")
+        key = key.strip()
+        if not key:
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", key):
+            raise ValueError("API Key 应为 32 至 128 位字母、数字、下划线或短横线")
+        if key not in 结果:
+            结果.append(key)
+    return 结果
+
+
+def 读取接口密钥(配置: Any) -> list[str]:
+    设置 = _读取接口配置(配置)
+    try:
+        结果 = 规范接口密钥列表(设置.get("qq_reader_api_keys", []))
+    except ValueError:
+        return []
+    # 旧单 Key 继续有效；首次管理或替换列表时将它一并迁移并清空旧字段。
+    旧值 = 设置.get("qq_reader_api_key")
+    if isinstance(旧值, str) and re.fullmatch(r"[A-Za-z0-9_-]{32,128}", 旧值) and 旧值 not in 结果:
+        结果.append(旧值)
+    return 结果
+
+
+def _所有者(key: str) -> str:
+    return hashlib.sha256(("qq-reader-key-v2\x1f" + key).encode()).hexdigest()
+
+
+def 读取接口密钥摘要(配置: Any) -> list[dict[str, str]]:
+    return [{"id": _所有者(key)[:16]} for key in 读取接口密钥(配置)]
+
+
+def _下载账号作用域() -> str:
+    # 无需配置或提交 AppID。只有唯一机器人时复用其账号；多机器人不猜选。
+    from 功能文件.管理功能.基础功能 import 消息记录
+    appids = {规范化机器人AppID(x) for x in 消息记录.获取已配置机器人AppID列表()}
+    appids.discard("")
+    return next(iter(appids)) if len(appids) == 1 else ""
 
 
 def _公开任务(任务: dict[str, Any]) -> dict[str, Any]:
@@ -79,12 +124,9 @@ class QQ阅读接口服务:
         self.已停止 = False
 
     def _已授权(self, 任务: dict[str, Any]) -> bool:
-        配置 = _读取接口配置(self.读取配置())
-        return 配置.get("qq_reader_api_enabled") is True and hmac.compare_digest(
-            任务["owner"], _所有者(
-                规范化机器人AppID(配置.get("qq_reader_api_appid")),
-                str(配置.get("qq_reader_api_key") or ""),
-            ),
+        配置 = self.读取配置()
+        return _读取接口配置(配置).get("qq_reader_api_enabled") is True and any(
+            hmac.compare_digest(任务["owner"], _所有者(key)) for key in 读取接口密钥(配置)
         )
 
     @web.middleware
@@ -92,28 +134,30 @@ class QQ阅读接口服务:
         if not request.path.startswith("/openapi/qq-reader/"):
             return await handler(request)
         try:
-            配置 = _读取接口配置(self.读取配置())
-            key = str(配置.get("qq_reader_api_key") or "")
-            if 配置.get("qq_reader_api_enabled") is not True or self.已停止:
+            配置 = self.读取配置()
+            设置 = _读取接口配置(配置)
+            keys = 读取接口密钥(配置)
+            if 设置.get("qq_reader_api_enabled") is not True or self.已停止:
                 响应 = _错误(503, "api_disabled", "接口未开启")
-            elif not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", key):
+            elif not keys:
                 响应 = _错误(503, "api_not_configured", "接口尚未配置完成")
             else:
                 header = request.headers.get("Authorization", "")
                 parts = header.split(" ", 1)
-                if len(parts) != 2 or parts[0].lower() != "bearer" or not hmac.compare_digest(parts[1].encode(), key.encode()):
+                候选 = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+                key = ""
+                if re.fullmatch(r"[A-Za-z0-9_-]{32,128}", 候选):
+                    for 已配置 in keys:
+                        if hmac.compare_digest(候选.encode(), 已配置.encode()):
+                            key = 已配置
+                if not key:
                     响应 = _错误(401, "unauthorized", "API Key 无效")
                     响应.headers["WWW-Authenticate"] = "Bearer"
                 else:
-                    appid = 规范化机器人AppID(配置.get("qq_reader_api_appid"))
-                    from 功能文件.管理功能.基础功能 import 消息记录
-                    if not appid or appid not in 消息记录.获取已配置机器人AppID列表():
-                        响应 = _错误(503, "bot_unavailable", "绑定机器人不可用")
-                    else:
-                        request["qq_api_owner"] = _所有者(appid, key)
-                        request["qq_api_appid"] = appid
-                        with 绑定机器人作用域(appid):
-                            响应 = await handler(request)
+                    request["qq_api_owner"] = _所有者(key)
+                    # 外部 Key 是独立作用域，不继承控制台当前选中的机器人。
+                    with 绑定机器人作用域(""):
+                        响应 = await handler(request)
         except web.HTTPException as exc:
             响应 = _错误(exc.status, "invalid_request", "请求无效")
         except (ValueError, UnicodeDecodeError):
@@ -127,6 +171,13 @@ class QQ阅读接口服务:
         return 响应
 
     async def 启动(self, app: web.Application) -> None:
+        # 兼容旧版同进程任务，保留已捕获的账号及原始执行作用域。
+        for 任务 in 任务表.values():
+            for key in 读取接口密钥(self.读取配置()):
+                旧所有者 = hashlib.sha256((str(任务.get("appid") or "") + "\x1f" + key).encode()).hexdigest()
+                if hmac.compare_digest(任务["owner"], 旧所有者):
+                    任务["owner"] = _所有者(key)
+                    break
         await self.清理()
         for 任务 in list(任务表.values()):
             if 任务["status"] == "queued":
@@ -250,7 +301,7 @@ class QQ阅读接口服务:
             if 任务 is None:
                 任务 = {
                     "task_id": secrets.token_hex(16), "book_id": book_id, "chapter_range": 章节范围,
-                    "appid": request["qq_api_appid"], "owner": request["qq_api_owner"],
+                    "appid": "", "owner": request["qq_api_owner"],
                     "status": "queued", "stage": "queued", "created_at": int(time.time()),
                     "expires_at": None, "initializing": True,
                 }
@@ -260,14 +311,18 @@ class QQ阅读接口服务:
         try:
             if 新任务:
                 from 功能文件.管理功能.小说功能.小说 import QQ阅读
-                配置 = 获取机器人配置(self.读取配置(), request["qq_api_appid"])
-                # 一批任务共用提交时捕获的同一账号快照。
-                账号 = await asyncio.to_thread(QQ阅读._读取QQ阅读登录态, 配置)
+                appid = _下载账号作用域()
+                # 一批任务固定同一账号；零个或多个机器人时使用明确的匿名上下文。
+                账号 = None
+                if appid:
+                    配置 = 获取机器人配置(self.读取配置(), appid)
+                    账号 = await asyncio.to_thread(QQ阅读._读取QQ阅读登录态, 配置)
                 if self.已停止:
                     for 任务 in 新任务:
                         任务表.pop(任务["task_id"], None)
                     return _错误(503, "api_disabled", "接口暂不可用")
                 for 任务 in 新任务:
+                    任务["appid"] = appid
                     任务["account"] = 账号
                     任务.pop("initializing", None)
                     self._安排(任务)
@@ -340,6 +395,8 @@ class QQ阅读接口服务:
             async with asyncio.timeout(下载超时秒数):
                 with 绑定机器人作用域(任务["appid"]), QQ阅读.QQ阅读账号上下文(任务["account"]):
                     async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"], 章节范围=任务.get("chapter_range", "1-n")):
+                        if not self._已授权(任务):
+                            raise ValueError("api_key_revoked")
                         任务["stage"] = 结果["stage"]
                         if 结果["kind"] == "error":
                             任务["error"] = {"code": 结果["code"], "message": 结果["message"]}
@@ -388,7 +445,7 @@ async def _未知路由(request: web.Request) -> web.Response:
 def 注册路由(app: web.Application, 读取配置: Any) -> None:
     global 当前服务
     服务 = 当前服务 = QQ阅读接口服务(读取配置)
-    # 在控制台中间件清空公开路由作用域后，再绑定 API 的明确 AppID。
+    # 外部路由只接受独立 Bearer Key，不依赖控制台会话或调用方 AppID。
     app.middlewares.append(服务.中间件)
     app.router.add_post(f"{接口前缀}/tasks", 服务.创建任务)
     app.router.add_post(f"{接口前缀}/tasks/batch", 服务.批量创建任务)

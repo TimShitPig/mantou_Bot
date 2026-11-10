@@ -358,6 +358,7 @@
         return field.secret ? '' : String(field.value ?? '');
       };
       let savedCredentialView = null;
+      let readerApiKeyGeneration = 0;
 
       const updateCredentialToggle = (button, visible) => {
         button.textContent = visible ? '隐藏' : '显示';
@@ -371,6 +372,9 @@
       };
 
       const clearSavedCredential = () => {
+        ++readerApiKeyGeneration;
+        document.querySelectorAll('[data-api-key-created]').forEach((input) => { input.value = ''; });
+        document.querySelectorAll('[data-api-key-result]').forEach((node) => { node.hidden = true; });
         if (!savedCredentialView) return;
         const {input, request, placeholder, reset} = savedCredentialView;
         savedCredentialView = null;
@@ -452,6 +456,10 @@
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
+          if (field.kind === 'api_keys') {
+            const keys = Array.isArray(field.keys) ? field.keys : [];
+            return `<div class="config-field full" data-api-key-manager><label for="${inputId}">${label}</label><small>已配置 ${keys.length} 个 Key；请求只需 Bearer Key，无需 AppID。</small><div class="config-actions"><button class="outline-button" type="button" data-api-key-generate ${editable ? '' : 'disabled'}>随机生成并添加</button>${keys.map((item) => `<button class="outline-button" type="button" data-api-key-delete="${esc(item.id)}" ${editable ? '' : 'disabled'}>撤销 ${esc(item.id)}</button>`).join('')}</div><div data-api-key-result hidden role="status" aria-live="polite"><small>仅本次显示，请复制保存：</small><div class="config-input-wrap"><input type="text" data-api-key-created readonly autocomplete="off" aria-label="本次新生成的 API Key"><button type="button" class="outline-button" data-api-key-copy>复制</button></div></div><textarea id="${inputId}" data-config-field="${esc(field.key)}" data-config-secret autocomplete="off" ${editable ? '' : 'disabled'} placeholder="可选：每行一个 Key；保存时替换全部，留空不修改"></textarea><small>${esc(field.hint || '')}</small><span class="config-message" data-api-key-message></span></div>`;
+          }
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
           if (field.kind === 'boolean') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}><option value="false" ${field.value ? '' : 'selected'}>关闭</option><option value="true" ${field.value ? 'selected' : ''}>开启</option></select><small>${esc(hint)}</small></div>`;
           if (field.kind === 'select') {
@@ -474,6 +482,15 @@
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${savedValue}${toggle}</div><small>${hint}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
+        node.querySelectorAll('[data-api-key-generate], [data-api-key-delete]').forEach((button) => {
+          button.addEventListener('click', () => manageReaderApiKey(node, button));
+        });
+        node.querySelectorAll('[data-api-key-copy]').forEach((button) => button.addEventListener('click', async () => {
+          const input = button.closest('[data-api-key-result]')?.querySelector('[data-api-key-created]');
+          if (!input?.value) return;
+          try { await navigator.clipboard.writeText(input.value); toast('Key 已复制'); }
+          catch (_) { input.focus(); input.select(); toast('请手动复制选中的 Key'); }
+        }));
         node.querySelector('[data-config-save]')?.addEventListener('click', () => saveConfig(node));
         if (targetId === 'database-config-editor') {
           databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
@@ -495,7 +512,45 @@
           updatePasswordToggle(button, input, saved);
         });
       };
-       const renderDatabaseStatus = (database = {}) => {
+       const manageReaderApiKey = async (editor, button) => {
+        const manager = button.closest('[data-api-key-manager]');
+        if (!manager || button.disabled) return;
+        const scopeGeneration = consoleGeneration, appid = consoleAppid, keyGeneration = readerApiKeyGeneration;
+        const isCurrent = () => scopeGeneration === consoleGeneration && appid === consoleAppid && keyGeneration === readerApiKeyGeneration && manager.isConnected;
+        const message = manager.querySelector('[data-api-key-message]');
+        const buttons = [...manager.querySelectorAll('[data-api-key-generate], [data-api-key-delete]')];
+        buttons.forEach((item) => { item.disabled = true; });
+        const action = button.hasAttribute('data-api-key-generate') ? 'generate' : 'delete';
+        // 新操作开始时清空上一次仅显示的密钥，不将其写入存储或通知。
+        const resultNode = manager.querySelector('[data-api-key-result]');
+        const created = manager.querySelector('[data-api-key-created]');
+        created.value = ''; resultNode.hidden = true;
+        try {
+          const result = await api('qq-reader-api/keys', {method:'POST', body:JSON.stringify({action, ...(action === 'delete' ? {id:button.dataset.apiKeyDelete} : {})})});
+          if (!isCurrent()) return;
+          if (action === 'delete') { await load(); toast('Key 已撤销'); return; }
+          created.value = String(result.key || ''); resultNode.hidden = !created.value;
+          message.textContent = result.message || 'Key 已添加'; message.className = 'config-message ok';
+          // 只更新当前 Key 管理区的摘要，避免刷新配置丢掉仅显示一次的新 Key。
+          const summary = manager.querySelector('small');
+          summary.textContent = `已配置 ${(result.keys || []).length} 个 Key；请求只需 Bearer Key，无需 AppID。`;
+          const actions = button.closest('.config-actions');
+          actions.querySelectorAll('[data-api-key-delete]').forEach((item) => item.remove());
+          (result.keys || []).forEach((item) => {
+            const revoke = document.createElement('button'); revoke.type = 'button'; revoke.className = 'outline-button';
+            revoke.dataset.apiKeyDelete = item.id; revoke.textContent = `撤销 ${item.id}`;
+            revoke.addEventListener('click', () => manageReaderApiKey(editor, revoke)); actions.appendChild(revoke);
+          });
+          created.focus(); created.select();
+        } catch (error) {
+          if (!isCurrent()) return;
+          if (error.status === 401) showAuthError(error);
+          message.textContent = '密钥操作未完成，请刷新摘要后再试'; message.className = 'config-message error';
+        } finally {
+          if (manager.isConnected) manager.querySelectorAll('[data-api-key-generate], [data-api-key-delete]').forEach((item) => { item.disabled = false; });
+        }
+      };
+      const renderDatabaseStatus = (database = {}) => {
         const status = String(database.status || '--');
         const statusNode = $('settings-db-status');
         if (statusNode) { statusNode.textContent = status; statusNode.classList.toggle('good', status === '正常'); }

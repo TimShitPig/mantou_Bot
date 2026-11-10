@@ -2,7 +2,7 @@
 
 适用于 AstrBot 的小说下载与群聊管理插件。
 
-![version](https://img.shields.io/badge/version-v6.1.342-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.343-2ea44f)
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
@@ -11,7 +11,7 @@
 | --- | --- |
 | 插件名 | 馒头bot |
 | 作者 | 馒头 |
-| 版本 | v6.1.342 |
+| 版本 | v6.1.343 |
 
 | 仓库 | https://github.com/TimShitPig/mantou_Bot |
 
@@ -49,70 +49,22 @@ QQ 群资料查询遇到 `100016` 时，表示机器人 AppID 或 ClientSecret �
 
 ## QQ 阅读开放 API
 
-支持第三方通过 HTTP 单本或批量提交 QQ 阅读书籍 ID，查询下载任务并获取 UTF-8 TXT。批量支持1～N，不设每批数量和排队任务数上限；后台固定两路执行，其余排队。接口复用帮助网页的域名和端口，前缀为 `/openapi/qq-reader/v1`；不需要登录控制台，不发送 QQ 消息、不上传网盘。目录、正文、付费类型和免费章节边界与机器人下载共用同一实现。
+第三方只需 `Authorization: Bearer <API_KEY>`，无需配置或提交 AppID，也无需控制台 Cookie。支持单本、1～N多本批量、`chapter_range: "1-n"` 章节序号范围、任务状态及 UTF-8 TXT。接口复用帮助网页域名和端口，前缀 `/openapi/qq-reader/v1`。
 
-在 AstrBot 插件配置的「QQ阅读开放接口」或控制台「机器人与账号 → 基础设置 → QQ 阅读开放接口」填写服务共用的配置：
+在 AstrBot 插件配置的「QQ阅读开放接口」填写 `qq_reader_api_enabled` 和 `qq_reader_api_keys` 列表；也可在控制台「机器人与账号 → 基础设置 → QQ 阅读开放接口」点击**随机生成并添加**，复制本次生成的 Key 后开启接口。可添加多个 Key、按指纹单独撤销；已有 Key 不回显，新 Key 只显示一次。填写替换框后保存会替换全部 Key，留空不修改。旧单 Key 自动兼容，首次管理迁入列表。
 
-| 字段 | 含义 |
+每个 Key 独立拥有任务，其他 Key 无法查询或下载；撤销仅影响该 Key。无需机器人也能提交，零个或多个机器人时使用匿名阅读，只有唯一机器人时复用其选中 QQ 阅读账号；一批固定提交时账号。章节及可读范围沿用现有下载流程，不发送 QQ 消息、不上传网盘。
+
+| 方法与路径（相对前缀） | 请求/用途 |
 | --- | --- |
-| `qq_reader_api_enabled` | 开关，默认关闭 |
-| `qq_reader_api_appid` | 明确绑定已配置的数字机器人 AppID，使用它当前选中的 QQ 阅读账号；未登录时沿用现有匿名下载流程 |
-| `qq_reader_api_key` | 独立的 32～128 位随机字母、数字、`_` 或 `-`，只写入、不回显 |
+| `POST /tasks` | `{"book_id":"123456","chapter_range":"1-n"}` |
+| `POST /tasks/batch` | `{"book_ids":["123456","234567"],"chapter_range":"1-n"}`；也支持单个 `book_id` |
+| `GET /tasks/{task_id}` | 查询任务状态 |
+| `GET /tasks/{task_id}/file` | 成功后用同一 Key 下载 TXT |
 
-密钥可使用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成。先保存密钥与 AppID，再开启接口；AstrBot 配置修改后重载插件。外部调用只使用 `Authorization: Bearer <API_KEY>` 请求头，控制台 Cookie 和 URL 中的 Key 均不用于授权。公网调用使用已配置的 HTTPS 反向代理域名。更换 Key 或绑定 AppID 后，旧任务不可读取。
+批量与排队数量无上限，固定两路下载；单任务正文超时30分钟、TXT上限64 MiB，结果保留1小时。同进程重载保留任务，进程重启需重新提交。
 
-| 方法与路径 | 行为 |
-| --- | --- |
-| `POST /openapi/qq-reader/v1/tasks` | JSON `{"book_id":"书籍数字ID"}`，返回 HTTP 202 和任务；相同 Key、AppID、书籍 ID 的排队中/下载中任务复用，尚未过期的成功任务返回 200 |
-| `POST /openapi/qq-reader/v1/tasks/batch` | JSON `{"book_ids":["123456","234567"]}`，支持1～N，按首次出现顺序去重；返回 `count` 和 `tasks` 数组，每项包含独立的任务 ID、状态和地址 |
-| `GET /openapi/qq-reader/v1/tasks/{task_id}` | 查询 `queued`、`running`、`succeeded` 或 `failed` |
-| `GET /openapi/qq-reader/v1/tasks/{task_id}/file` | 成功后下载 TXT，仍需同一 Bearer Key |
-
-例如（替换域名、密钥和书籍 ID）：
-
-```bash
-BASE='https://你的域名/openapi/qq-reader/v1'
-API_KEY='你保存的独立API密钥'
-curl -X POST "$BASE/tasks" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"book_id":"123456"}'
-
-# 使用上一步返回的 task_id，每 3～5 秒查询一次。
-TASK_ID='返回的task_id'
-curl "$BASE/tasks/$TASK_ID" -H "Authorization: Bearer $API_KEY"
-
-# status=succeeded 后下载，download_url 是相对于帮助网页域名的路径。
-curl "$BASE/tasks/$TASK_ID/file" -H "Authorization: Bearer $API_KEY" -o novel.txt
-
-# 批量提交；book_ids 可包含任意数量的数字 ID。
-curl -X POST "$BASE/tasks/batch" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"book_ids":["123456","234567","345678"]}'
-```
-
-批量参数必须全部有效，否则整批返回400，不新增任务。全部复用已完成结果时返回200，其余返回202。每项下载独立成功或失败，逐项使用返回的 `status_url` 和 `download_url` 查询/下载；相同 ID 只返回一项。整批新任务在提交时固定同一个阅读账号，排队后更换账号不影响该批任务。接口不设批量数量或正文等待队列上限，调用方及反向代理若自行限制请求体大小或超时，需按实际批量调整。
-
-提交/查询响应示例：
-
-```json
-{"ok":true,"task":{"task_id":"32位随机任务ID","book_id":"123456","status":"queued","stage":"queued","created_at":1794225600,"expires_at":null,"status_url":"/openapi/qq-reader/v1/tasks/32位随机任务ID"}}
-```
-
-成功后增加 `title`、`author`、`filename`、`chapter_count`、`size_bytes` 和 `download_url`；`expires_at` 为结果失效的 Unix 秒时间戳。失败任务仍用 HTTP 200 返回状态，`task.error` 包含固定 `code/message`；只开放免费部分时，实际下载章节数以 `chapter_count` 为准。
-
-接口错误统一返回 `{"ok":false,"error":{"code":"固定错误码","message":"固定短提示"}}`，不返回账号票据、异常原文或本地文件路径：
-
-| HTTP | 常见错误码 |
-| --- | --- |
-| 400 / 413 / 415 | `invalid_book_id`、`invalid_book_ids` / `request_too_large`（仅单本请求体至多8 KiB，批量不设此限制）/ `json_required` |
-| 401 | `unauthorized`，缺少或错误的 API Key |
-| 404 / 410 | `task_not_found`（不存在、其他 Key 或过期）/ `file_expired` |
-| 409 | `file_not_ready`，任务尚未成功 |
-| 503 | `api_disabled` / `api_not_configured` / `bot_unavailable` |
-
-正文最多同时下载2本，只有2个后台工作任务消费队列，提交N本不会创建N个并发下载协程。单任务开始下载后的正文超时30分钟、TXT上限64 MiB，排队时间不计入正文超时。已完成或失败任务保留1小时，过期返回404，后台每分钟清理临时文件；同进程热重载保留任务ID、固定账号和成功文件，未完成正文重新执行，进程重启后需重新提交任务。临时文件保存在统一「临时缓存」并带活动占用，不进入网盘续传队列。
+完整参数、响应、错误码、cURL 和可运行的 Python 批量客户端见 **[QQ阅读 API 开发文档](docs/QQ阅读API开发文档.md)**。
 
 ## 快速开始
 
