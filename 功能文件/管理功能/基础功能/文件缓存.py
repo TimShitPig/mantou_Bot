@@ -20,10 +20,11 @@ _进程活动临时缓存路径: set[str] = globals().get("_进程活动临时�
 旧本地小说缓存目录 = 插件根目录 / "功能文件" / "下载缓存"
 旧媒体缓存目录列表: tuple[Path, ...] = ()
 旧临时缓存目录列表: tuple[Path, ...] = ()
+旧分类缓存目录: Path | None = None
 if 插件根目录.parent.name.lower() == "plugins":
-    # AstrBot 重装会替换插件目录，所有运行文件都放在稳定的数据目录。
+    # 外部旧缓存仅用于兼容读取和迁移；新文件统一写入项目内部。
     _AstrBot数据目录 = 插件根目录.parent.parent
-    文件缓存目录 = _AstrBot数据目录 / "mantou_bot_file_cache"
+    旧分类缓存目录 = _AstrBot数据目录 / "mantou_bot_file_cache"
     _旧稳定小说缓存目录 = _AstrBot数据目录 / "mantou_bot_download_cache"
     旧媒体缓存目录列表 = (
         _AstrBot数据目录 / "mantou_bot_media",
@@ -69,7 +70,10 @@ def 创建临时缓存文件(前缀: str = "mantou-", 后缀: str = "") -> Path:
 def 获取小说缓存目录列表() -> tuple[Path, ...]:
     """返回小说缓存目录与旧路径，兼容迁移过程中的上传续传任务。"""
     结果: list[Path] = [小说缓存目录]
-    for 目录 in (_旧稳定小说缓存目录, 旧本地小说缓存目录):
+    旧目录列表 = [_旧稳定小说缓存目录, 旧本地小说缓存目录]
+    if 旧分类缓存目录 is not None:
+        旧目录列表.insert(0, 旧分类缓存目录 / "小说缓存")
+    for 目录 in 旧目录列表:
         if 目录 not in 结果:
             结果.append(目录)
     return tuple(结果)
@@ -478,6 +482,28 @@ def 迁移旧文件缓存() -> dict[str, int]:
                     类型,
                     type(异常).__name__,
                 )
+    # 仅迁移旧分类目录，不在外部创建目录；活动临时文件继续由原任务持有。
+    if 旧分类缓存目录 is not None:
+        for 分类, 目标目录, 类型 in (
+            ("媒体缓存", 媒体缓存目录, "media"),
+            ("临时缓存", 临时缓存目录, "temporary"),
+            ("消息记录缓存", 消息记录缓存目录, "message"),
+            ("其他缓存", 其他缓存目录, "other"),
+        ):
+            旧目录 = 旧分类缓存目录 / 分类
+            if not 旧目录.is_dir() or 旧目录.is_symlink():
+                continue
+            for 旧文件 in 旧目录.rglob("*"):
+                if (not 旧文件.is_file() or 旧文件.is_symlink()
+                        or str(旧文件.absolute()) in _进程活动临时缓存路径):
+                    continue
+                if any((旧目录 / 父目录).is_symlink() for 父目录 in 旧文件.relative_to(旧目录).parents if 父目录 != Path(".")):
+                    continue
+                try:
+                    if _移动或合并重复缓存文件(旧文件, 目标目录 / 旧文件.relative_to(旧目录).parent):
+                        结果[类型] += 1
+                except (OSError, RuntimeError) as 异常:
+                    日志.warning("文件缓存迁移失败：类型=%s，错误类型=%s", 类型, type(异常).__name__)
     return 结果
 
 
