@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import zipfile
 
 import aiohttp
 from urllib.parse import quote
@@ -706,13 +707,21 @@ def 启动恢复待续传上传任务(配置: Any) -> asyncio.Task[Any] | None:
     return 恢复上传任务句柄
 
 
+def _写入小说直发压缩包(源路径: Path, 压缩路径: Path, 文件名: str) -> None:
+    """流式打包原文件，保留文件名和原字节，不加密或修改正文。"""
+    with zipfile.ZipFile(压缩路径, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as 压缩包:
+        压缩包.write(源路径, arcname=文件名)
+
+
 async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) -> dict[str, Any]:
-    """复用官方适配器文件上传，单次提交消息并校验实际响应；不回退网盘。"""
+    """将小说打包为 ZIP，复用官方上传及单次发送确认；不回退网盘。"""
     from 功能文件.管理功能.基础功能.权限工具 import 是QQ官方机器人
     from 功能文件.管理功能.基础功能 import 消息记录
     from 功能文件.管理功能.小说功能.功能 import 小说下载任务
 
     路径 = Path(交付结果["path"])
+    压缩路径: Path | None = None
+    压缩任务: asyncio.Task[None] | None = None
     阶段 = "init"
     状态码 = None
     业务码 = None
@@ -728,11 +737,20 @@ async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) ->
                         and 机器人作用域.获取当前机器人AppID() == appid)
         if not 身份有效() or not callable(getattr(event, "upload_group_and_c2c_media", None)):
             raise ValueError("identity_or_uploader_missing")
-        文件名 = Path(交付结果["filename"]).name
-        大小 = (await asyncio.to_thread(路径.stat)).st_size
+        原文件名 = Path(交付结果["filename"]).name
+        文件名 = str(Path(原文件名).with_suffix(".zip"))
+        阶段 = "archive"
+        压缩路径 = 文件缓存.创建临时缓存文件("mantou-novel-", ".zip")
+        文件缓存.标记临时缓存正在使用(压缩路径)
+        压缩任务 = asyncio.create_task(
+            asyncio.to_thread(_写入小说直发压缩包, 路径, 压缩路径, 原文件名),
+            name="小说直发ZIP打包",
+        )
+        await asyncio.shield(压缩任务)
+        大小 = (await asyncio.to_thread(压缩路径.stat)).st_size
         阶段 = "upload"
         媒体 = await event.upload_group_and_c2c_media(
-            str(路径.absolute()), 4, file_name=文件名, group_openid=群,
+            str(压缩路径.absolute()), 4, file_name=文件名, group_openid=群,
         )
         if not isinstance(媒体, dict) or not isinstance(媒体.get("file_info"), str) or not 媒体["file_info"]:
             raise ValueError("upload_unconfirmed")
@@ -774,7 +792,7 @@ async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) ->
             消息记录.记录发送消息(群, "group", "[文件] " + 文件名, appid,
                 消息ID=返回["id"], 来源="bot_novel_file",
                 媒体={"type": "文件", "src": "", "name": 文件名,
-                    "size": 大小, "content_type": "text/plain"})
+                    "size": 大小, "content_type": "application/zip"})
         except Exception as 异常:
             logger.warning("小说文件发送记账失败：error_type=%s", type(异常).__name__)
         return {"sent": True, "fallback_text": "", "error": ""}
@@ -783,11 +801,29 @@ async def _直接发送小说文件(event: Any, 交付结果: dict[str, Any]) ->
                        阶段, 状态码, 业务码, type(异常).__name__)
         return {"sent": False, "fallback_text": "", "error": "文件发送失败，请稍后再试"}
     finally:
+        # 线程打包不能被协程取消打断；完成前保留源文件和临时文件占用。
+        清理时取消 = False
+        while 压缩任务 is not None and not 压缩任务.done():
+            try:
+                await asyncio.shield(压缩任务)
+            except asyncio.CancelledError:
+                清理时取消 = True
+            except Exception:
+                break
+        if 压缩路径 is not None:
+            try:
+                压缩路径.unlink(missing_ok=True)
+            except OSError as 异常:
+                logger.warning("小说直发压缩包清理失败：error_type=%s", type(异常).__name__)
+            finally:
+                文件缓存.解除临时缓存占用(压缩路径)
         try:
             文件缓存.更新上传任务(路径, "primary_done")
             文件缓存.删除小说缓存文件(路径)
         except OSError as 异常:
             logger.warning("小说直发缓存清理失败：error_type=%s", type(异常).__name__)
+        if 清理时取消:
+            raise asyncio.CancelledError
 
 
 async def 发送小说下载结果(
