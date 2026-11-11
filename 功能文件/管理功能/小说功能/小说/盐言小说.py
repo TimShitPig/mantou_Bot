@@ -665,6 +665,9 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                     启动百度后台上传并清理(配置, 源缓存路径, 文件名)
                 return
             yield "文件发送失败，请稍后再试"
+    except _盐言正文未就绪:
+        logger.info("盐言小说正文正在补录中，请次日查看：状态=body_pending")
+        yield "正文正在补录中，请次日查看"
     except Exception as exc:
         logger.warning(
             f"盐言小说下载失败：阶段={阶段}, 错误类型={type(exc).__name__}, "
