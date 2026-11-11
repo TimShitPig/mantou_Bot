@@ -35,6 +35,8 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
 请求超时秒数 = 20
+正文提取总超时秒数 = 90
+正文提取读取超时秒数 = 75
 盐言网页请求头 = {
     "Accept": "application/json,text/plain,*/*",
     "Accept-Encoding": "identity",
@@ -62,7 +64,15 @@ class _盐言查询错误(RuntimeError):
         super().__init__(f"HTTP {http状态}" if http状态 else "盐言查询暂不可用")
 
 
-async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, headers: dict, params=None, 上限: int = 8 * 1024 * 1024) -> bytes:
+def _盐言超时分类(异常: BaseException) -> str:
+    for 类名, 分类 in (("ConnectionTimeoutError", "connect_timeout"), ("SocketTimeoutError", "read_timeout"), ("ServerTimeoutError", "server_timeout")):
+        类型 = getattr(aiohttp, 类名, None)
+        if 类型 is not None and isinstance(异常, 类型):
+            return 分类
+    return "total_timeout"
+
+
+async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, headers: dict, params=None, 上限: int = 8 * 1024 * 1024, timeout: aiohttp.ClientTimeout | None = None) -> bytes:
     # 一个通道串行，等待后再次查缓存，实现同资源并发请求合并。
     async with 盐言查询锁.setdefault(通道, asyncio.Lock()):
         当前 = time.monotonic()
@@ -82,7 +92,8 @@ async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, 
             await asyncio.sleep(等待)
         盐言查询下次时间[通道] = time.monotonic() + 盐言查询最短间隔
         try:
-            async with session.get(地址, headers=headers, params=params, allow_redirects=False) as response:
+            请求参数 = {"timeout": timeout} if timeout is not None else {}
+            async with session.get(地址, headers=headers, params=params, allow_redirects=False, **请求参数) as response:
                 if response.status != 200:
                     raise _盐言查询错误("http_" + str(response.status), response.status)
                 原始 = bytearray()
@@ -95,7 +106,7 @@ async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, 
             raise
         except Exception as exc:
             状态 = exc.http状态 if isinstance(exc, _盐言查询错误) else 0
-            分类 = exc.分类 if isinstance(exc, _盐言查询错误) else "timeout" if isinstance(exc, TimeoutError) else "http_client_error" if isinstance(exc, aiohttp.ClientError) else "query_failed"
+            分类 = exc.分类 if isinstance(exc, _盐言查询错误) else _盐言超时分类(exc) if isinstance(exc, TimeoutError) else "http_client_error" if isinstance(exc, aiohttp.ClientError) else "query_failed"
             if 状态 in {403, 429}:
                 盐言查询拒绝冷却[通道] = (time.monotonic() + 盐言访问拒绝冷却秒数, 状态)
             # 缓存固定错误分类，不保存异常对象、响应正文或请求票据。
@@ -479,6 +490,8 @@ async def _请求外部提取(
         session, 外部提取地址, ("extract", 业务编号, 章节编号), "extract",
         params={"q": 业务编号, "a": 章节编号},
         headers={"Accept": "application/json,text/plain,*/*", "User-Agent": "mantoubot/yanyan"},
+        # 提取服务可能先获取并解析远端正文，不能沿用详情 GET 的 15 秒读取时限。
+        timeout=aiohttp.ClientTimeout(total=正文提取总超时秒数, connect=10, sock_connect=8, sock_read=正文提取读取超时秒数),
     )
 
 
@@ -487,7 +500,7 @@ def _盐言错误分类(异常: BaseException, 深度: int = 0) -> str:
     if isinstance(异常, _盐言查询错误):
         return 异常.分类
     if isinstance(异常, asyncio.TimeoutError):
-        return "timeout"
+        return _盐言超时分类(异常)
     if isinstance(异常, aiohttp.ClientResponseError):
         return f"http_{int(异常.status)}"
     if isinstance(异常, aiohttp.ClientError):

@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.353-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.354-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.353 |
+| 版本 | v6.1.354 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -106,7 +106,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 晋江 | 仅公开且未锁定的章节；未发布、仅公开文案与下载失败分别处理 |
 | 话本 | 官方链接、卡片和找书；App 分卷目录包含番外/彩蛋，保留原文图片标记与位置 |
 | 疯狂追书、梧桐 | `疯狂追书 书籍ID`、`梧桐 书籍ID` 或找书结果，身份与开关独立 |
-| 盐言 / 知乎文章 | `story.zhihu.com`、market 章节链接、`zhuanlan.zhihu.com/p/`；只下载当前分享文章 |
+| 盐言 / 知乎文章 | `story.zhihu.com`、market 章节链接、`zhuanlan.zhihu.com/p/`；只下载当前分享文章；正文提取最多等待 90 秒，连续读取等待 75 秒，失败不立即重试 |
 | Z-Library | 找书及公开书籍链接；保存站点提供的 TXT 或官方转换结果，不在本地转换 EPUB/PDF |
 
 下载前显示书名、作者、状态、章节和字数。无有效字段时显示未知，不估算正文或伪造成功。除书旗、百度等明确保留可用内容的平台外，完整性校验失败不生成残缺 TXT；晋江只对允许请求的公开章节校验完整性。话本纯图片章节有效，不因缺少文字而丢弃。
