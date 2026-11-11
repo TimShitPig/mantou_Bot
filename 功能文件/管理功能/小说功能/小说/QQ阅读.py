@@ -2438,6 +2438,41 @@ async def 异步构造QQ阅读账号请求头(
     )
 
 
+def _QQ阅读检查代次(value: Any) -> int:
+    # 纳秒代次直接转整数，不能经过 float 丢失精度。
+    if type(value) not in (int, str):
+        return 0
+    try:
+        return max(0, int(value))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _QQ阅读登录状态(data: Any) -> str:
+    """只接受账号接口明确的未登录结果，不从网络失败或章节提示推断。"""
+    if not isinstance(data, dict):
+        return "unknown"
+    code = data.get("code")
+    if type(code) not in (str, int):
+        return "unknown"
+    if str(code) == "-100" and data.get("msg") == "no login":
+        return "invalid"
+    if str(code) != "0":
+        return "unknown"
+    def flag(value):
+        if type(value) is bool:
+            return value
+        if type(value) in (str, int) and str(value).lower() in {"0", "1", "true", "false"}:
+            return str(value).lower() in {"1", "true"}
+        return None
+    login, guest = flag(data.get("isLogin")), flag(data.get("isGuest"))
+    if login is False or guest is True:
+        return "invalid"
+    if login is True and guest in (None, False):
+        return "valid"
+    return "unknown"
+
+
 def 解析QQ阅读账号会员状态(data: Any) -> dict[str, Any]:
     """解析官方 getAcctInfo 的顶层账号会员字段。"""
     不可用 = {"available": False, "is_vip": False, "vip_type": "",
@@ -2601,8 +2636,10 @@ async def _请求QQ阅读账号信息(session: aiohttp.ClientSession) -> dict[st
 async def 查询QQ阅读账号资料(
     session: aiohttp.ClientSession,
 ) -> dict[str, Any]:
+    检查时间 = time.time_ns()
     data = await _请求QQ阅读账号信息(session)
     资料 = 解析QQ阅读账号资料(data)
+    资料.update(auth_status=_QQ阅读登录状态(data), auth_checked_at=检查时间)
     if not 资料.get("available"):
         return 资料
     config = ConfigManager.get_instance()
@@ -2643,7 +2680,10 @@ async def 查询QQ阅读账号VIP状态(
     session: aiohttp.ClientSession,
 ) -> dict[str, Any]:
     """通过官方账号接口判断当前登录态是否有有效会员。"""
-    result = 解析QQ阅读账号会员状态(await _请求QQ阅读账号信息(session))
+    检查时间 = time.time_ns()
+    data = await _请求QQ阅读账号信息(session)
+    result = 解析QQ阅读账号会员状态(data)
+    result.update(auth_status=_QQ阅读登录状态(data), auth_checked_at=检查时间)
     if not result.get("available"):
         logger.debug("QQ阅读账号会员查询未返回有效登录态")
     return result
@@ -3661,6 +3701,8 @@ def _解析QQ阅读账号项(数据: Any) -> dict[str, Any] | None:
         "phone": str(资料.get("phone") or "")[:32],
         "updated_at": max(0, _安全整数(数据.get("updated_at"), 0)),
         "profile_updated_at": max(0, _安全整数(数据.get("profile_updated_at"), 0)),
+        "auth_status": 数据.get("auth_status") if 数据.get("auth_status") in {"valid", "invalid"} else "unknown",
+        "auth_checked_at": _QQ阅读检查代次(数据.get("auth_checked_at")),
         "vip": {
             "available": vip.get("available") is True,
             "is_vip": vip.get("is_vip") is True,
@@ -3748,7 +3790,8 @@ def 保存QQ阅读账号(
         if 原值:
             # 换票据后保留已有资料，但下次刷新重新核对官方会员状态。
             原值.update({"ywkey": 凭据["ywkey"], "enabled": True,
-                         "updated_at": int(time.time())})
+                         "updated_at": int(time.time()),
+                         "auth_status": "unknown", "auth_checked_at": time.time_ns()})
             for 键 in ("nickname", "avatar_url", "phone"):
                 if 凭据[键]:
                     原值[键] = 凭据[键]
@@ -3807,7 +3850,18 @@ def _合并QQ阅读账号资料(
         状态 = _读取QQ阅读账号状态(配置)
         账号 = next((项 for 项 in 状态["accounts"] if 项["id"] == 凭据["id"]), None)
         # 刷新期间删除、重登或改票据时，迟到资料不新增账号也不覆盖新资料。
-        if 账号 is None or 账号["ywkey"] != 凭据["ywkey"]:
+        if 账号 is None or 账号["ywkey"] != 凭据["ywkey"] or 账号["ywguid"] != 凭据["ywguid"]:
+            return _QQ阅读账号摘要(状态)
+        检查时间 = _QQ阅读检查代次(资料.get("auth_checked_at"))
+        if 检查时间 < _QQ阅读检查代次(账号.get("auth_checked_at")):
+            return _QQ阅读账号摘要(状态)
+        登录状态 = 资料.get("auth_status")
+        if 登录状态 in {"valid", "invalid"}:
+            账号.update(auth_status=登录状态, auth_checked_at=检查时间)
+        if 登录状态 == "invalid":
+            账号["vip"] = {"available": False, "is_vip": False, "vip_type": "",
+                           "vip_expire_at": 0, "vip_expire_text": "", "checked_at": int(time.time())}
+            _写入QQ阅读账号状态(配置, 状态)
             return _QQ阅读账号摘要(状态)
         for 键 in ("nickname", "avatar_url", "phone"):
             值 = (规范QQ阅读头像地址(资料.get(键))
@@ -3828,7 +3882,7 @@ async def 刷新QQ阅读账号资料(配置: Any, 账号ID: str = "") -> dict[st
     with QQ阅读账号上下文(凭据):
         async with 创建QQ阅读HTTP会话(concurrency=2) as session:
             资料 = await 查询QQ阅读账号资料(session)
-    if not 资料.get("available"):
+    if not 资料.get("available") and 资料.get("auth_status") != "invalid":
         raise ValueError("QQ阅读账号资料暂未获取")
     return await asyncio.to_thread(_合并QQ阅读账号资料, 配置, 凭据, 资料)
 
@@ -5446,7 +5500,7 @@ async def _生成固定账号QQ阅读下载回复流(
     分享文本: str = "",
 ) -> AsyncIterator[Any]:
     try:
-        async for 结果 in 生成QQ阅读下载文件流(来源, 分享文本=分享文本):
+        async for 结果 in 生成QQ阅读下载文件流(来源, 分享文本=分享文本, 状态配置=配置):
             if 结果["kind"] != "file":
                 yield 结果["message"]
                 continue
@@ -5499,7 +5553,7 @@ def _筛选QQ阅读章节范围(目录: list[dict[str, Any]], 范围: str) -> li
 
 
 async def 生成QQ阅读下载文件流(
-    来源: str, *, 分享文本: str = "", 章节范围: str = "1-n", 返回章节: bool = False,
+    来源: str, *, 分享文本: str = "", 章节范围: str = "1-n", 返回章节: bool = False, 状态配置: Any = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """在固定账号上下文中生成 TXT 或章节 JSON，不发送消息或上传网盘。"""
     book_id = ""
@@ -5542,6 +5596,19 @@ async def 生成QQ阅读下载文件流(
 
             stage = "account"
             account_vip = await 查询QQ阅读账号VIP状态(session)
+            当前账号 = ConfigManager.get_instance()
+            if 状态配置 is not None and 当前账号.uid and 当前账号.usid and account_vip.get("auth_status") in {"valid", "invalid"}:
+                凭据 = {"id": "qr_" + hashlib.sha256(当前账号.uid.encode("ascii")).hexdigest()[:20],
+                        "ywguid": 当前账号.uid, "ywkey": 当前账号.usid}
+                try:
+                    await asyncio.to_thread(_合并QQ阅读账号资料, 状态配置, 凭据,
+                                            {键: account_vip[键] for 键 in ("auth_status", "auth_checked_at")})
+                except Exception as exc:
+                    logger.warning("QQ阅读登录状态保存失败：错误类型=%s", type(exc).__name__)
+            if account_vip.get("auth_status") == "invalid":
+                logger.warning("QQ阅读账号登录已失效：阶段=account, 分类=login_required")
+                yield {"kind": "error", "stage": stage, "code": "account_expired", "message": "阅读账号登录已失效，请联系管理员重新登录"}
+                return
             账号有VIP = bool(
                 account_vip.get("available") and account_vip.get("is_vip")
             )

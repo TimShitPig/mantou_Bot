@@ -468,7 +468,7 @@ class QQ阅读接口服务:
             _删除文件(任务)
             async with asyncio.timeout(下载超时秒数):
                 with 绑定机器人作用域(任务["appid"]), QQ阅读.QQ阅读账号上下文(任务["account"]):
-                    参数 = {"章节范围": 任务.get("chapter_range", "1-n")}
+                    参数 = {"章节范围": 任务.get("chapter_range", "1-n"), "状态配置": dict(获取机器人配置(self.读取配置(), 任务["appid"]))}
                     if 任务.get("result_format") == "json":
                         参数["返回章节"] = True
                     async for 结果 in QQ阅读.生成QQ阅读下载文件流(任务["book_id"], **参数):

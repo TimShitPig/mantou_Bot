@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.355-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.356-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.355 |
+| 版本 | v6.1.356 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -205,3 +205,5 @@ metadata.yaml                   插件信息
 开发约束见 [AGENTS.md](AGENTS.md)，历史版本见 [CHANGELOG.md](CHANGELOG.md)，第三方来源见 [LICENSE](LICENSE)。项目不保留独立 `docs/` 目录和测试源码；临时验证资料放在仓库外。
 
 本项目采用 [GNU AGPL-3.0](LICENSE)。参考：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)。
+
+QQ 阅读在下载或主动刷新资料时核对登录状态。官方明确返回未登录后，后台账号卡片和详情显示“登录已失效，请重新登录”，下载提示联系管理员重新登录；网络超时不会标记失效。重新保存账号后恢复待验证，验证成功恢复正常状态。
