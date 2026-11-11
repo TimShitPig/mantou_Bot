@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.356-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.357-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.356 |
+| 版本 | v6.1.357 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -70,6 +70,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 
 | 使用者 | 指令 | 作用 |
 | --- | --- | --- |
+| 所有人 | `番茄找关键词` / `七猫找关键词` / `QQ阅读找关键词` / `QQ浏览器找关键词` / `书旗找关键词` / `得间找关键词` 等 | 仅搜索指定平台；支持平台名后加“小说”、空格及 QQ 大小写，沿用翻页和选书 |
 | 所有人 | `找关键词` / `找书 关键词` / `找书名 关键词` / `找作者 关键词` | 聚合找书，每页 5 条；`上一页`、`下一页` 翻页，`选1`～`选5` 下载 |
 | 所有人 | `帮助`；群内单独 @机器人 | 公开菜单、小说列表、使用教程、添加机器人 |
 | 插件管理员 | `帮助` / `状态` | 管理菜单与系统运行状态 |

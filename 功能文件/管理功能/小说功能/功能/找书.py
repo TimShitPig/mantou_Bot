@@ -192,6 +192,18 @@ except Exception as exc:
 空找书模式正则 = re.compile(r"^找(?:书名|小说名|作者|作家)\s*[:：]?\s*$")
 查询书名模式正则 = re.compile(r"^(?:书名|小说名)\s*[:：]?\s*(.+)$")
 查询作者模式正则 = re.compile(r"^(?:作者|作家)\s*[:：]?\s*(.+)$")
+找书指定平台 = (
+    "番茄", "七猫", "书旗", "QQ阅读", "QQ浏览器", "得间", "点众", "塔读",
+    "百度", "小米", "宜搜", "米读", "猫眼", "酷我", "酷匠", "连城", "菠萝包",
+    "晋江", "话本", "疯狂追书", "梧桐", "追书", "ZLibrary",
+)
+指定平台找书正则 = re.compile(
+    r"^(" + "|".join(
+        r"QQ\s*阅读" if 平台 == "QQ阅读" else r"QQ\s*浏览器" if 平台 == "QQ浏览器"
+        else r"Z[-\s]*Library" if 平台 == "ZLibrary" else re.escape(平台)
+        for 平台 in sorted(找书指定平台, key=len, reverse=True)
+    ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
+)
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
 分隔线 = "————————"
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
@@ -241,6 +253,8 @@ def _过滤不可用平台结果(
 
 def _更新会话可用结果(会话: dict[str, Any], 允许平台: frozenset[str]) -> bool:
     """刷新会话中的平台结果并返回是否因开关变化而移除了项目。"""
+    if 会话.get("requested_platform"):
+        允许平台 = 允许平台 & {会话["requested_platform"]}
     原结果 = 会话.get("results")
     新结果 = _过滤不可用平台结果(原结果, 允许平台)
     会话["results"] = 新结果
@@ -488,6 +502,12 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     文本 = str(命令文本 or "").strip()
     if not 文本:
         return None
+    指定平台 = ""
+    平台匹配 = 指定平台找书正则.fullmatch(文本)
+    if 平台匹配:
+        平台名 = re.sub(r"[\s-]+", "", 平台匹配.group(1)).casefold()
+        指定平台 = next(平台 for 平台 in 找书指定平台 if 平台.casefold() == 平台名)
+        文本 = 平台匹配.group(2)
     if 空找书模式正则.fullmatch(文本):
         return None
     搜索类型 = "auto"
@@ -521,7 +541,10 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     # 避免误伤其他「找」开头命令
     if 关键词.startswith(("书登录", "书状态", "书清理")):
         return None
-    return {"keyword": 关键词, "type": 搜索类型}
+    查询 = {"keyword": 关键词, "type": 搜索类型}
+    if 指定平台:
+        查询["platform"] = 指定平台
+    return 查询
 
 
 async def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str | None:
@@ -2428,6 +2451,12 @@ async def 处理找书指令(
     )
     会话 = None
     if 查询 is not None:
+        指定平台 = 查询.get("platform", "")
+        if 指定平台:
+            if 指定平台 not in 允许平台:
+                找书会话.pop(会话键, None)
+                return 小说功能开关.获取小说功能关闭回复(指定平台, 配置)
+            允许平台 = 允许平台 & {指定平台}
         关键词 = 查询["keyword"]
         搜索类型 = 查询["type"]
         try:
@@ -2455,6 +2484,7 @@ async def 处理找书指令(
         会话 = {
             "keyword": 关键词,
             "search_type": 搜索类型,
+            "requested_platform": 指定平台,
             "results": 结果,
             "allowed_platforms": tuple(sorted(允许平台)),
             "page": 1,
