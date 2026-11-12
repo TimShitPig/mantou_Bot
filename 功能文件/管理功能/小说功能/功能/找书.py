@@ -553,6 +553,9 @@ async def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str
     查询 = 解析找书查询(命令文本)
     if 查询 is None or not await 小说功能开关.异步小说总开关是否开启(配置):
         return None
+    平台 = 查询.get("platform", "")
+    if 平台:
+        return f"正在为您在{平台}查找「{查询['keyword']}」，请稍等"
     return f"正在为您找{查询['keyword']}请稍等"
 
 
@@ -1009,28 +1012,35 @@ async def 搜索番茄(
     session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30
 ) -> list[dict[str, Any]]:
     if 番茄小说 is None:
-        return []
-    结果: list[dict[str, str]] = []
+        raise _找书平台查询错误("platform_unavailable")
+    结果: list[dict[str, Any]] = []
     偏移 = 0
-    每批 = 10
+    每批 = 30
     while len(结果) < 需要数量 and 偏移 < 60:
         try:
             data = await asyncio.to_thread(
                 番茄小说.signed_app_json,
                 "/novelfm/bookmall/search/page/v1/",
-                {"query": 关键词, "offset": 偏移, "limit": 每批},
-                method="POST",
+                query={"query": 关键词, "offset": str(偏移), "limit": str(每批)},
+                method="GET",
+                timeout=8,
+                unsigned_fallback=False,
             )
         except Exception as exc:
             logger.warning(
-                f"找书番茄搜索失败：关键词={关键词}, 偏移={偏移}, 错误={exc}"
+                f"找书番茄搜索失败：偏移={偏移}, 错误={type(exc).__name__}"
             )
-            break
-        if not isinstance(data, dict) or data.get("code") not in (0, "0", None):
-            break
-        d = data.get("data") if isinstance(data.get("data"), dict) else {}
-        rows = d.get("search_data") or []
-        if not isinstance(rows, list) or not rows:
+            raise _找书平台查询错误("search_unavailable") from None
+        if not isinstance(data, dict) or data.get("code") not in (0, "0"):
+            code = data.get("code") if isinstance(data, dict) else None
+            数字码 = int(code) if str(code).lstrip("-").isdigit() else None
+            logger.warning(f"找书番茄搜索失败：category=business_error, code={数字码}")
+            raise _找书平台查询错误("search_rejected")
+        d = data.get("data")
+        rows = d.get("search_data") if isinstance(d, dict) else None
+        if not isinstance(rows, list):
+            raise _找书平台查询错误("invalid_response")
+        if not rows:
             break
         for row in rows:
             # 作者卡片和系列书单可能把多本书放在同一个 books 数组中。
@@ -1040,9 +1050,10 @@ async def 搜索番茄(
                     结果.append(item)
         if not d.get("has_more"):
             break
-        偏移 = int(d.get("next_offset") or (偏移 + 每批))
-        if 偏移 <= 0:
-            偏移 += 每批
+        下一偏移 = int(d.get("next_offset") or (偏移 + 每批))
+        if 下一偏移 <= 偏移:
+            break
+        偏移 = 下一偏移
     return 结果[:需要数量]
 
 
@@ -1941,7 +1952,7 @@ async def _聚合搜索未缓存(
             return _限时搜索(
                 日志平台 or 平台, 工厂(),
                 超时秒数=330 if 平台 == "ZLibrary" else 找书单平台超时秒数,
-                失败抛出=平台 == "QQ阅读" and 允许平台集合 == {"QQ阅读"},
+                失败抛出=允许平台集合 == {平台},
             )
 
         搜索任务 = (
@@ -2168,7 +2179,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v5",
+        tuple(_拆分查询词(关键词)), "search-rank-v6",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2228,7 +2239,8 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
         会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
     当前页 = 结果[起始 : 起始 + 每页数量]
-    行: list[str] = []
+    平台 = 会话.get("requested_platform", "")
+    行: list[str] = [f"{平台}找书结果"] if 平台 else []
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
@@ -2275,7 +2287,8 @@ def 格式化找书结果MD(会话: dict[str, Any]) -> str:
         会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
     当前页 = 结果[起始 : 起始 + 每页数量]
-    行: list[str] = ["**找书结果**", ""]
+    平台 = 会话.get("requested_platform", "")
+    行: list[str] = [f"**{平台}找书结果**", ""]
     if not 当前页:
         行.append("没有找到相关书籍")
     else:
@@ -2471,14 +2484,15 @@ async def 处理找书指令(
             logger.warning(
                 f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}"
             )
-            return "搜索失败，请稍后再试"
+            找书会话.pop(会话键, None)
+            return f"{指定平台}搜索失败，请稍后再试"
         logger.info(
             f"找书搜索完成：关键词={关键词}, 类型={搜索类型}, "
-            f"总数={len(结果)}, 会话={会话键}"
+            f"平台={指定平台 or '全部可用平台'}, 总数={len(结果)}, 会话={会话键}"
         )
         if not 结果:
             找书会话.pop(会话键, None)
-            return f"没有找到和「{关键词}」相关的书"
+            return f"{指定平台}没有找到和「{关键词}」相关的书"
         会话 = {
             "keyword": 关键词,
             "search_type": 搜索类型,

@@ -2348,8 +2348,8 @@ def 获取番茄同书精确字数(
     try:
         响应 = signed_app_json(
             "/novelfm/bookmall/search/page/v1/",
-            {"query": 标题, "offset": 0, "limit": 20},
-            method="POST",
+            query={"query": 标题, "offset": "0", "limit": "20"},
+            method="GET",
             timeout=20,
         )
     except Exception as 异常:
@@ -2446,8 +2446,8 @@ async def 异步获取番茄同书精确字数(
         response = await 异步签名番茄JSON(
             client,
             "/novelfm/bookmall/search/page/v1/",
-            {"query": title, "offset": 0, "limit": 20},
-            method="POST",
+            query={"query": title, "offset": "0", "limit": "20"},
+            method="GET",
         )
     except Exception as exc:
         logger.debug(
