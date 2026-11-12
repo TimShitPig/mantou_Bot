@@ -4124,9 +4124,20 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
     if not isinstance(cards, list):
         return []
     result: list[dict[str, Any]] = []
+    expanded: list[dict[str, Any]] = []
     for card in cards:
         if not isinstance(card, dict):
             continue
+        info = card.get("info") if isinstance(card.get("info"), dict) else {}
+        # 系列卡片的 id 是书单编号，只有 bookList 内的书才可查询目录。
+        if isinstance(info.get("bookList"), list):
+            for book in info["bookList"]:
+                if isinstance(book, dict):
+                    expanded.append(book if isinstance(book.get("info"), dict) else {**book, "info": book})
+        else:
+            expanded.append(card)
+    seen: set[str] = set()
+    for card in expanded:
         info = card.get("info") if isinstance(card.get("info"), dict) else {}
         book_id = str(
             info.get("bid") or card.get("bid") or card.get("id") or ""
@@ -4134,8 +4145,9 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
         title = _清理QQ阅读搜索文本(
             info.get("title") or info.get("bookName") or card.get("title") or ""
         )
-        if not book_id.isdigit() or not title:
+        if not book_id.isdigit() or not title or book_id in seen:
             continue
+        seen.add(book_id)
         result.append(
             {
                 "platform": "QQ阅读",
@@ -4169,6 +4181,8 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         ) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
+    if not isinstance(data, dict) or not isinstance(data.get("cardlist", data.get("cardList")), list):
+        raise RuntimeError("QQ阅读搜索响应无效")
     return 解析QQ阅读搜索结果(data)[:size]
 
 

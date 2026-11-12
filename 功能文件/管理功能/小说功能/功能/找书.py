@@ -181,10 +181,10 @@ except Exception as exc:
 找书结果缓存上限 = 128
 找书会话: dict[str, dict[str, Any]] = {}
 找书结果缓存: dict[
-    tuple[str, str, tuple[str, ...]], tuple[float, list[dict[str, Any]]]
+    tuple[str, str, tuple[str, ...], str], tuple[float, list[dict[str, Any]]]
 ] = {}
 找书进行中任务: dict[
-    tuple[str, str, tuple[str, ...]], asyncio.Task[list[dict[str, Any]]]
+    tuple[str, str, tuple[str, ...], str], asyncio.Task[list[dict[str, Any]]]
 ] = globals().get("找书进行中任务") or {}
 找书命令正则 = re.compile(r"^(?:找书|找)\s*(.+)$")
 找书名命令正则 = re.compile(r"^找(?:书名|小说名)\s*[:：]?\s*(.+)$")
@@ -1366,16 +1366,20 @@ async def 搜索追书(
     return 结果[: max(1, int(需要数量 or 20))]
 
 
+class _找书平台查询错误(RuntimeError):
+    """平台异常不能伪装成成功的空搜索结果。"""
+
+
 async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
     if QQ阅读小说 is None:
-        return []
+        raise _找书平台查询错误("platform_unavailable")
     try:
         原始结果 = await QQ阅读小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
         logger.warning(
             f"找书QQ阅读搜索失败：关键词={关键词}, 错误={type(exc).__name__}"
         )
-        return []
+        raise _找书平台查询错误("search_unavailable") from None
 
     结果: list[dict[str, Any]] = []
     for 书籍 in 原始结果:
@@ -1911,6 +1915,7 @@ async def _限时搜索(
     平台: str,
     任务: Awaitable[list[Any]],
     超时秒数: float = 找书单平台超时秒数,
+    *, 失败抛出: bool = False,
 ) -> list[Any]:
     """限制单个平台的等待时间，避免一个慢源拖住全部找书结果。"""
     try:
@@ -1918,8 +1923,12 @@ async def _限时搜索(
         return 结果 if isinstance(结果, list) else []
     except asyncio.TimeoutError:
         logger.debug(f"找书平台搜索超时：平台={平台}")
+        if 失败抛出:
+            raise _找书平台查询错误("search_timeout") from None
     except Exception as exc:
         logger.debug(f"找书平台搜索异常：平台={平台}, 错误={type(exc).__name__}")
+        if 失败抛出:
+            raise _找书平台查询错误("search_unavailable") from None
     return []
 
 
@@ -1947,6 +1956,7 @@ async def _聚合搜索未缓存(
             return _限时搜索(
                 日志平台 or 平台, 工厂(),
                 超时秒数=330 if 平台 == "ZLibrary" else 找书单平台超时秒数,
+                失败抛出=平台 == "QQ阅读" and 允许平台集合 == {"QQ阅读"},
             )
 
         搜索任务 = (
@@ -2171,7 +2181,7 @@ async def 聚合搜索(
     if not 缓存键[0]:
         return []
     允许平台集合 = _规范化允许平台(允许平台)
-    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)))
+    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)), "qq-search-v2")
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
     if 缓存 is not None:

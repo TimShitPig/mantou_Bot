@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.357-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.358-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.357 |
+| 版本 | v6.1.358 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -208,3 +208,5 @@ metadata.yaml                   插件信息
 本项目采用 [GNU AGPL-3.0](LICENSE)。参考：[AstrBot](https://github.com/AstrBotDevs/AstrBot)、[插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)。
 
 QQ 阅读在下载或主动刷新资料时核对登录状态。官方明确返回未登录后，后台账号卡片和详情显示“登录已失效，请重新登录”，下载提示联系管理员重新登录；网络超时不会标记失效。重新保存账号后恢复待验证，验证成功恢复正常状态。
+
+QQ 阅读搜索支持展开系列书单中的单本书，不把系列编号当作书籍编号。指定 QQ 阅读搜索遇到空响应、格式异常或超时时提示“搜索失败，请稍后再试”，不缓存为无结果；正常空列表仍提示没有相关书籍，候选目录与免费章节校验保持不变。
