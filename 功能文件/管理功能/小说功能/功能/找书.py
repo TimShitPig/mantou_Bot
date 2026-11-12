@@ -1377,7 +1377,9 @@ async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict
         原始结果 = await QQ阅读小说.搜索小说(关键词, 需要数量=需要数量)
     except Exception as exc:
         logger.warning(
-            f"找书QQ阅读搜索失败：关键词={关键词}, 错误={type(exc).__name__}"
+            f"找书QQ阅读搜索失败：错误={type(exc).__name__}, "
+            f"category={getattr(exc, 'reason', 'unknown')}, "
+            f"http_status={getattr(exc, 'http_status', 0)}, code={getattr(exc, 'code', None)}"
         )
         raise _找书平台查询错误("search_unavailable") from None
 
@@ -2181,7 +2183,7 @@ async def 聚合搜索(
     if not 缓存键[0]:
         return []
     允许平台集合 = _规范化允许平台(允许平台)
-    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)), "qq-search-v2")
+    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)), "qq-search-v3")
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
     if 缓存 is not None:

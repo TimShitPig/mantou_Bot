@@ -4166,24 +4166,90 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
     return result
 
 
+class _QQ阅读搜索错误(RuntimeError):
+    def __init__(self, reason: str, *, http_status: int = 0, code: int | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.http_status = http_status
+        self.code = code
+
+
 async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
-    """使用 QQ 阅读 App 搜索接口获取找书候选。"""
+    """App 搜索不依赖正文密钥；瞬时空响应在总预算内有限重试。"""
     keyword = str(关键词 or "").strip()
     if not keyword:
         return []
+    load_config_once()
     size = max(1, min(int(需要数量 or 20), 30))
-    async with 创建QQ阅读HTTP会话(concurrency=2) as session:
-        await 确保QQ阅读密钥池(session)
-        async with session.get(
-            QQ阅读搜索地址,
-            params={"key": keyword, "start": 0, "size": size},
-            headers=await 异步构造QQ阅读鉴权请求头(int(time.time() * 1000)),
-        ) as response:
-            response.raise_for_status()
-            data = await response.json(content_type=None)
-    if not isinstance(data, dict) or not isinstance(data.get("cardlist", data.get("cardList")), list):
-        raise RuntimeError("QQ阅读搜索响应无效")
-    return 解析QQ阅读搜索结果(data)[:size]
+    deadline = asyncio.get_running_loop().time() + 10.0
+    failure = _QQ阅读搜索错误("timeout")
+    async with 创建QQ阅读HTTP会话(concurrency=1) as session:
+        for attempt in range(3):
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                headers = await asyncio.wait_for(
+                    异步构造QQ阅读鉴权请求头(int(time.time() * 1000)),
+                    timeout=remaining,
+                )
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                async with session.get(
+                    QQ阅读搜索地址,
+                    params={"key": keyword, "start": 0, "size": size},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(
+                        total=min(4.0, remaining),
+                        connect=min(2.0, remaining),
+                        sock_read=min(3.0, remaining),
+                    ),
+                ) as response:
+                    response.raise_for_status()
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(65536):
+                        body.extend(chunk)
+                        if len(body) > 2 * 1024 * 1024:
+                            raise _QQ阅读搜索错误("response_too_large", http_status=response.status)
+                    if not body.strip():
+                        raise _QQ阅读搜索错误("empty_response", http_status=response.status)
+                    try:
+                        data = json.loads(body)
+                    except (ValueError, UnicodeError):
+                        raise _QQ阅读搜索错误("invalid_json", http_status=response.status) from None
+                    if not isinstance(data, dict):
+                        raise _QQ阅读搜索错误("invalid_response", http_status=response.status)
+                    raw_code = data.get("code")
+                    code = (
+                        int(raw_code)
+                        if type(raw_code) in (int, str)
+                        and re.fullmatch(r"-?[0-9]{1,10}", str(raw_code))
+                        else None
+                    )
+                    if code is not None and code != 0:
+                        raise _QQ阅读搜索错误("business_error", http_status=response.status, code=code)
+                    if not isinstance(data.get("cardlist", data.get("cardList")), list):
+                        raise _QQ阅读搜索错误("invalid_response", http_status=response.status, code=code)
+                    return 解析QQ阅读搜索结果(data)[:size]
+            except _QQ阅读搜索错误 as exc:
+                if exc.reason in {"business_error", "response_too_large"}:
+                    raise
+                failure = exc
+            except aiohttp.ClientResponseError as exc:
+                failure = _QQ阅读搜索错误("http_error", http_status=exc.status)
+                if exc.status not in {408, 500, 502, 503, 504}:
+                    raise failure from None
+            except asyncio.TimeoutError:
+                failure = _QQ阅读搜索错误("timeout")
+            except aiohttp.ClientError:
+                failure = _QQ阅读搜索错误("network_error")
+            if attempt < 2:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(0.5 * (attempt + 1), remaining))
+    raise failure from None
 
 
 async def 获取参考书籍详情(
