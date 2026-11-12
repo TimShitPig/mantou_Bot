@@ -610,7 +610,7 @@ def _提取发送响应字段(响应: Any, *字段名: str) -> Any:
 
 
 def _提取发送响应消息ID(响应: Any) -> str:
-    return str(_提取发送响应字段(响应, "id", "message_id") or "").strip()
+    return _规范消息ID(_提取发送响应字段(响应, "id", "message_id"))
 
 
 def _提取发送响应时间(响应: Any) -> int | None:
@@ -955,7 +955,9 @@ def _历史消息排序键(记录: dict[str, Any]) -> tuple[int, int, str]:
 
 
 def _规范消息ID(值: Any) -> str:
-    """统一消息 ID 的空白表示，兼容旧记录和不同适配器字段。"""
+    """消息 ID 只接受字符串或整数，不把消息对象和容器序列化为编号。"""
+    if isinstance(值, bool) or not isinstance(值, (str, int)):
+        return ""
     return str(值 or "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "").strip()
 
 
@@ -1659,7 +1661,7 @@ async def _消息持久化工作() -> None:
                         批次.append(await asyncio.wait_for(队列.get(), timeout=剩余时间))
                     except TimeoutError:
                         break
-                # 入队项目只有写入成功后才 task_done；热重载或临时断库期间，
+                # 正常项目写入成功、无效标识明确拒绝后才task_done；临时断库期间，
                 # 失败批次仍会留在当前进程并优先于新消息继续重试。
                 _消息持久化失败批次 = list(批次)
 
@@ -1675,6 +1677,22 @@ async def _消息持久化工作() -> None:
                     待重试.extend(子批次)
                     失败详情.append((项目类型, len(子批次), "等待系统消息持久化"))
                     continue
+                if 项目类型 == "message":
+                    筛选 = getattr(_消息存储, "_筛选有效消息标识记录", None)
+                    if callable(筛选):
+                        有效消息 = 筛选([数据 for _, 数据 in 子批次 if isinstance(数据, dict)])
+                        有效对象 = {id(数据) for 数据 in 有效消息}
+                        拒绝项 = [项目 for 项目 in 子批次 if id(项目[1]) not in 有效对象]
+                        if 拒绝项:
+                            拒绝对象 = {id(项目) for 项目 in 拒绝项}
+                            for _ in 拒绝项:
+                                队列.task_done()
+                            _消息持久化失败批次 = [
+                                项目 for 项目 in _消息持久化失败批次 if id(项目) not in 拒绝对象
+                            ]
+                            子批次 = [项目 for 项目 in 子批次 if id(项目) not in 拒绝对象]
+                            if not 子批次:
+                                continue
                 写入成功, 错误类型 = await _写入消息持久化子批次(项目类型, 子批次)
                 if 写入成功:
                     for _ in 子批次:

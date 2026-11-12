@@ -1378,10 +1378,36 @@ def _规范消息ID(值: Any) -> str:
 
 
 def _完整写入消息ID(值: Any) -> str:
+    if 值 is not None and (isinstance(值, bool) or not isinstance(值, (str, int))):
+        raise ValueError("message_id has invalid type")
     文本 = _规范消息ID(值)
     if len(文本) > _列最大长度["message_id"]:
         raise ValueError("message_id exceeds storage limit")
     return 文本
+
+
+def _筛选有效消息标识记录(记录列表: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """拒绝不可恢复的标识错误；拒绝项已处理，不能当数据库故障重试。"""
+    有效记录: list[dict[str, Any]] = []
+    超限数量 = 类型异常数量 = 最大长度 = 0
+    for 记录 in 记录列表:
+        值 = 记录.get("message_id")
+        try:
+            _完整写入消息ID(值)
+        except ValueError:
+            if isinstance(值, (str, int)) and not isinstance(值, bool):
+                超限数量 += 1
+                最大长度 = max(最大长度, len(_规范消息ID(值)))
+            else:
+                类型异常数量 += 1
+            continue
+        有效记录.append(记录)
+    if 超限数量 or 类型异常数量:
+        logger.warning(
+            "消息记录已拒绝无效消息标识，停止该项重试：超限数量=%d，类型异常数量=%d，最大长度=%d，上限=%d",
+            超限数量, 类型异常数量, 最大长度, _列最大长度["message_id"],
+        )
+    return 有效记录
 
 
 def 恢复群消息完整编号(
@@ -1738,6 +1764,8 @@ def _写入消息记录(记录: dict[str, Any]) -> bool:
 def _实际写入消息记录(记录: dict[str, Any]) -> bool:
     if _记录已被清理(记录):
         return True
+    if not _筛选有效消息标识记录([记录]):
+        return True
     连接 = _打开连接()
     if 连接 is None:
         return False
@@ -1795,7 +1823,7 @@ def _实际写入消息记录(记录: dict[str, Any]) -> bool:
 
 
 def 写入消息(记录: dict[str, Any]) -> bool:
-    """写入一条消息记录，返回是否已提交。"""
+    """返回是否已处理；无效标识明确拒绝，数据库失败返回False以便重试。"""
     if not 记录 or not 记录.get("_session"):
         return False
     if not _MySQL可用():
@@ -2097,13 +2125,8 @@ def _实际批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         return True
     去重记录: list[dict[str, Any]] = []
     已见索引: dict[tuple[str, str, str, str], int] = {}
-    超限数量 = 0
-    for 记录 in 有效记录:
-        try:
-            键 = _消息记录去重键(记录)
-        except ValueError:
-            超限数量 += 1
-            continue
+    for 记录 in _筛选有效消息标识记录(有效记录):
+        键 = _消息记录去重键(记录)
         消息ID = 键[3]
         if 消息ID and 键 in 已见索引:
             去重记录[已见索引[键]] = 记录
@@ -2111,10 +2134,9 @@ def _实际批量写入消息(记录列表: list[dict[str, Any]]) -> bool:
         if 消息ID:
             已见索引[键] = len(去重记录)
         去重记录.append(记录)
-    if 超限数量:
-        logger.warning("消息记录消息标识超限，已拒绝截断写入：数量=%s", 超限数量)
     if not 去重记录:
-        return False
+        # 永久无效项已明确拒绝；返回已处理，释放队列，不能阻塞后续消息。
+        return True
     连接 = _打开连接()
     if 连接 is None:
         return False
