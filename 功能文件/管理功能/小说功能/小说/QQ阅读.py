@@ -3334,7 +3334,8 @@ def _parse_teb_info_blob(blob: bytes) -> list[dict]:
 
 QQ阅读详情地址 = "https://commontgw.reader.qq.com/book/queryBookInfo"
 QQ阅读目录地址 = "https://newminerva-tgw.reader.qq.com/ChapBatAuthWithPD"
-QQ阅读搜索地址 = "https://newzxsearch.reader.qq.com/v7_5_1/search"
+# Android App 的 search_txt_control 文本搜索分支；旧 newzx 路径会间歇返回空正文。
+QQ阅读搜索地址 = "https://commontgw.reader.qq.com/common/result/search_txt"
 QQ阅读第三方正文地址 = "http://154.12.91.167:7000/content"
 # 每批固定 25 章，避免第三方服务对大范围请求截断；整本按连续区间分段并发完成。
 QQ阅读第三方正文批量章节数 = 25
@@ -4198,7 +4199,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                     break
                 async with session.get(
                     QQ阅读搜索地址,
-                    params={"key": keyword, "start": 0, "size": size},
+                    params={"key": keyword, "start": 0, "size": size, "type": 1},
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(
                         total=min(4.0, remaining),

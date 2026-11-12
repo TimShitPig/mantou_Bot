@@ -2183,7 +2183,7 @@ async def 聚合搜索(
     if not 缓存键[0]:
         return []
     允许平台集合 = _规范化允许平台(允许平台)
-    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)), "qq-search-v3")
+    缓存键 = (缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)), "qq-search-v4")
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
     if 缓存 is not None:
