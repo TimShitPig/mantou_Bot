@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import gzip
 import hashlib
 import html
@@ -20,6 +21,7 @@ import ssl
 import struct
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
@@ -3017,6 +3019,165 @@ def 构造番茄阅读请求头(
     return 请求头
 
 
+class FanqieReaderError(RuntimeError):
+    """只保留受控阶段、分类和数字状态，不保留上游正文或密钥。"""
+
+    def __init__(
+        self,
+        stage: str,
+        category: str,
+        *,
+        code: Any = None,
+        http_status: Any = None,
+        error_type: str = "",
+        attempts: int = 1,
+    ):
+        self.stage = stage
+        self.category = category
+        self.code = _番茄数字错误码(code)
+        self.http_status = _番茄数字错误码(http_status)
+        self.error_type = (
+            error_type if re.fullmatch(r"[A-Za-z0-9_.]{1,100}", error_type) else ""
+        )
+        self.attempts = attempts
+        super().__init__(category)
+
+    def __str__(self) -> str:
+        return (
+            f"stage={self.stage}, category={self.category}, code={self.code}, "
+            f"http_status={self.http_status}, error_type={self.error_type}, attempts={self.attempts}"
+        )
+
+
+def _番茄数字错误码(value: Any) -> int | None:
+    if type(value) is int and abs(value) <= 2**63 - 1:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,18}", value):
+        return int(value)
+    return None
+
+
+def _番茄阅读错误(exc: Exception, stage: str) -> FanqieReaderError:
+    chain = [exc]
+    for _ in range(4):
+        cause = chain[-1].__cause__
+        if not isinstance(cause, Exception) or any(cause is item for item in chain):
+            break
+        chain.append(cause)
+    for cause in chain:
+        if isinstance(cause, FanqieReaderError):
+            return cause
+    selected = chain[-1]
+    status = None
+    category = "processing_error"
+    # httpx会将httpcore/OSError放入cause；不能只检查最深层而丢掉外层语义。
+    for cause in chain:
+        status = _番茄数字错误码(
+            getattr(getattr(cause, "response", None), "status_code", None)
+        )
+        if isinstance(cause, urllib.error.HTTPError):
+            status = _番茄数字错误码(cause.code)
+        if status is not None:
+            selected, category = cause, "http_error"
+            break
+    if status is None:
+        checks = (
+            ("invalid_base64", lambda error: isinstance(error, binascii.Error)),
+            ("invalid_json", lambda error: isinstance(error, json.JSONDecodeError)),
+            ("invalid_encoding", lambda error: isinstance(error, UnicodeError)),
+            (
+                "timeout",
+                lambda error: (
+                    isinstance(error, (TimeoutError, socket.timeout))
+                    or (httpx and isinstance(error, httpx.TimeoutException))
+                ),
+            ),
+            (
+                "connection_error",
+                lambda error: (
+                    isinstance(error, (ConnectionError, urllib.error.URLError))
+                    or (httpx and isinstance(error, httpx.NetworkError))
+                ),
+            ),
+            (
+                "invalid_payload",
+                lambda error: isinstance(
+                    error, (ValueError, gzip.BadGzipFile, EOFError, zlib.error)
+                ),
+            ),
+        )
+        for candidate_category, matches in checks:
+            matched = next((cause for cause in chain if matches(cause)), None)
+            if matched is not None:
+                selected, category = matched, candidate_category
+                break
+    return FanqieReaderError(
+        stage,
+        category,
+        http_status=status,
+        error_type=f"{type(selected).__module__}.{type(selected).__name__}",
+    )
+
+
+def _番茄阅读网络可重试(error: FanqieReaderError) -> bool:
+    return error.category in {"timeout", "connection_error"} or (
+        error.category == "http_error"
+        and error.http_status in {408, 500, 502, 503, 504}
+    )
+
+
+def _番茄阅读章节可重试(error: FanqieReaderError) -> bool:
+    # 密钥失败是共享前置条件；业务拒绝、权限、限流和已耗尽的网络预算不再重放。
+    return (
+        error.code is None
+        and error.http_status is None
+        and (
+            error.stage
+            in {"chapter_content_decode", "chapter_decrypt", "chapter_decompress"}
+            and error.category
+            in {"invalid_base64", "invalid_payload", "invalid_encoding"}
+            or error.stage == "chapter_response"
+            and error.category == "missing_content"
+        )
+    )
+
+
+def _解析番茄阅读注册密钥(response: Dict[str, Any], 需要版本: int) -> bytes:
+    code = _番茄数字错误码(response.get("code"))
+    if code != 0:
+        raise FanqieReaderError(
+            "register_key_response",
+            "business_error" if code is not None else "invalid_response",
+            code=code,
+        )
+    data = response.get("data")
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("key"), str)
+        or not data["key"]
+    ):
+        raise FanqieReaderError("register_key_response", "invalid_response")
+    try:
+        raw = base64.b64decode(data["key"])
+    except Exception as exc:
+        raise _番茄阅读错误(exc, "register_key_decode") from None
+    if len(raw) < 32:
+        raise FanqieReaderError("register_key_decode", "invalid_payload")
+    try:
+        plaintext = aes_cbc_decrypt(raw[16:], 番茄阅读注册AES密钥, raw[:16])
+        version = int(data.get("keyver") or 0)
+    except Exception as exc:
+        raise _番茄阅读错误(exc, "register_key_decrypt") from None
+    if len(plaintext) < 16:
+        raise FanqieReaderError("register_key_decrypt", "invalid_payload")
+    key = plaintext[:16]
+    if version:
+        番茄阅读注册密钥缓存[version] = key
+    if 需要版本:
+        番茄阅读注册密钥缓存[需要版本] = key
+    return key
+
+
 def 请求番茄阅读JSON(
     路径: str,
     额外参数: Iterable[Tuple[str, Any]] = (),
@@ -3031,8 +3192,26 @@ def 请求番茄阅读JSON(
     请求头 = 构造番茄阅读请求头(
         原始查询, 毫秒时间戳, 内容类型="application/json" if body is not None else None
     )
-    响应 = http_json_bytes(地址, method, 请求头, 请求体, timeout=60, retries=2)
-    return 响应 if isinstance(响应, dict) else {}
+    stage = (
+        "register_key_request"
+        if 路径 == "/reading/crypt/registerkey"
+        else "chapter_request"
+    )
+    for attempt in range(2):
+        try:
+            response = http_json_bytes(
+                地址, method, 请求头, 请求体, timeout=60, retries=1
+            )
+            if not isinstance(response, dict):
+                raise FanqieReaderError(stage, "invalid_response")
+            return response
+        except Exception as exc:
+            error = _番茄阅读错误(exc, stage)
+            error.attempts = max(error.attempts, attempt + 1)
+            if attempt == 0 and _番茄阅读网络可重试(error):
+                time.sleep(0.2)
+                continue
+            raise error from None
 
 
 def _获取番茄阅读注册密钥异步锁() -> asyncio.Lock:
@@ -3059,14 +3238,29 @@ async def 异步请求番茄阅读JSON(
         毫秒时间戳,
         内容类型="application/json" if body is not None else None,
     )
-    return await 异步番茄JSON请求(
-        client,
-        地址,
-        method=method,
-        headers=请求头,
-        content=请求体,
-        retries=2,
+    stage = (
+        "register_key_request"
+        if 路径 == "/reading/crypt/registerkey"
+        else "chapter_request"
     )
+    for attempt in range(2):
+        try:
+            response = await 异步番茄JSON请求(
+                client,
+                地址,
+                method=method,
+                headers=请求头,
+                content=请求体,
+                retries=1,
+            )
+            return response
+        except Exception as exc:
+            error = _番茄阅读错误(exc, stage)
+            error.attempts = max(error.attempts, attempt + 1)
+            if attempt == 0 and _番茄阅读网络可重试(error):
+                await asyncio.sleep(0.2)
+                continue
+            raise error from None
 
 
 def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
@@ -3082,24 +3276,7 @@ def 获取番茄阅读注册密钥(需要版本: int = 0) -> bytes:
         method="POST",
         body={"content": content, "keyver": 1},
     )
-    data = 响应.get("data") or {}
-    if 响应.get("code") != 0 or not isinstance(data, dict) or not data.get("key"):
-        raise RuntimeError(
-            f"番茄阅读注册密钥失败：code={响应.get('code')}, message={响应.get('message') or 响应.get('msg')}"
-        )
-    raw = base64.b64decode(str(data["key"]))
-    if len(raw) < 32:
-        raise RuntimeError("番茄阅读注册密钥响应过短")
-    明文 = aes_cbc_decrypt(raw[16:], 番茄阅读注册AES密钥, raw[:16])
-    if len(明文) < 16:
-        raise RuntimeError("番茄阅读注册密钥明文过短")
-    版本 = int(data.get("keyver") or 0)
-    密钥 = 明文[:16]
-    if 版本:
-        番茄阅读注册密钥缓存[版本] = 密钥
-    if 需要版本:
-        番茄阅读注册密钥缓存[需要版本] = 密钥
-    return 密钥
+    return _解析番茄阅读注册密钥(响应, 需要版本)
 
 
 async def 异步获取番茄阅读注册密钥(client: Any, 需要版本: int = 0) -> bytes:
@@ -3118,46 +3295,31 @@ async def 异步获取番茄阅读注册密钥(client: Any, 需要版本: int = 
             method="POST",
             body={"content": content, "keyver": 1},
         )
-        data = response.get("data") or {}
-        if (
-            response.get("code") != 0
-            or not isinstance(data, dict)
-            or not data.get("key")
-        ):
-            raise RuntimeError("番茄阅读注册密钥失败")
-        raw = base64.b64decode(str(data["key"]))
-        if len(raw) < 32:
-            raise RuntimeError("番茄阅读注册密钥响应过短")
-        plaintext = await asyncio.to_thread(
-            aes_cbc_decrypt,
-            raw[16:],
-            番茄阅读注册AES密钥,
-            raw[:16],
-        )
-        if len(plaintext) < 16:
-            raise RuntimeError("番茄阅读注册密钥明文过短")
-        version = int(data.get("keyver") or 0)
-        key = plaintext[:16]
-        if version:
-            番茄阅读注册密钥缓存[version] = key
-        if 需要版本:
-            番茄阅读注册密钥缓存[需要版本] = key
-        return key
+        return await asyncio.to_thread(_解析番茄阅读注册密钥, response, 需要版本)
 
 
 def 解密番茄阅读正文(content: str, 密钥: bytes) -> str:
-    raw = base64.b64decode(content)
+    try:
+        raw = base64.b64decode(content)
+    except Exception as exc:
+        raise _番茄阅读错误(exc, "chapter_content_decode") from None
     if len(raw) < 32:
-        raise RuntimeError("番茄阅读章节密文过短")
-    明文 = aes_cbc_decrypt(raw[16:], 密钥[:16], raw[:16])
-    if 明文[:2] == b"\x1f\x8b":
-        明文 = gzip.decompress(明文)
-    elif 明文[:1] == b"\x78":
-        try:
-            明文 = zlib.decompress(明文)
-        except zlib.error:
-            pass
-    return 明文.decode("utf-8", "replace")
+        raise FanqieReaderError("chapter_content_decode", "invalid_payload")
+    try:
+        明文 = aes_cbc_decrypt(raw[16:], 密钥[:16], raw[:16])
+    except Exception as exc:
+        raise _番茄阅读错误(exc, "chapter_decrypt") from None
+    try:
+        if 明文[:2] == b"\x1f\x8b":
+            明文 = gzip.decompress(明文)
+        elif 明文[:1] == b"\x78":
+            try:
+                明文 = zlib.decompress(明文)
+            except zlib.error:
+                pass
+        return 明文.decode("utf-8", "replace")
+    except Exception as exc:
+        raise _番茄阅读错误(exc, "chapter_decompress") from None
 
 
 def 请求番茄阅读原始正文(item_ids: List[str]) -> Dict[str, Any]:
@@ -3246,179 +3408,301 @@ async def 异步解析番茄阅读章节书籍编号(
     return book_id, metadata
 
 
-def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str, Any]:
-    """读取番茄阅读正文，并转换成 full/mget 风格响应。"""
-    ids = [str(item_id) for item_id in item_ids]
-    if len(ids) > 番茄阅读正文单次上限:
-        合并: Dict[str, Dict[str, Any]] = {}
-        for 分段 in batches(ids, 番茄阅读正文单次上限):
-            部分响应 = 读取番茄阅读正文(书籍编号, list(分段))
-            if 部分响应.get("code") != 0:
-                return 部分响应
-            部分正文 = (部分响应.get("data") or {}).get("item_infos") or {}
-            if not isinstance(部分正文, dict):
-                raise RuntimeError("番茄阅读正文分段响应格式错误")
-            合并.update(部分正文)
-        return {
-            "code": 0,
-            "message": "",
-            "data": {"item_infos": 合并},
-            "source": "novelapp_reader_batch_full",
-            "request_book_id": 番茄阅读请求书籍编号,
-        }
+def _番茄阅读分组数据(response: Dict[str, Any]) -> Dict[str, Any]:
+    code = _番茄数字错误码(response.get("code"))
+    if code != 0:
+        raise FanqieReaderError(
+            "chapter_response",
+            "business_error" if code is not None else "invalid_response",
+            code=code,
+        )
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise FanqieReaderError("chapter_response", "invalid_response")
+    return data
 
-    响应 = 请求番茄阅读原始正文(ids)
-    if 响应.get("code") != 0:
-        return 响应
-    原始章节 = 响应.get("data") or {}
-    if not isinstance(原始章节, dict):
-        raise RuntimeError("番茄阅读正文响应格式错误")
-    infos: Dict[str, Dict[str, Any]] = {}
-    for item_id in ids:
-        item = 原始章节.get(item_id)
-        if not isinstance(item, dict):
-            continue
-        密文 = str(item.get("content") or "")
-        if not 密文:
-            continue
-        版本 = int(item.get("key_version") or 0)
-        明文 = 解密番茄阅读正文(密文, 获取番茄阅读注册密钥(版本))
-        info = dict(item)
-        info["content"] = 明文
-        info["crypt_status"] = 0
-        info.setdefault("title", item.get("title") or "")
-        infos[item_id] = info
+
+def _番茄阅读章节数据(items: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+    item = items.get(item_id)
+    if not isinstance(item, dict):
+        raise FanqieReaderError("chapter_response", "missing_content")
+    code = _番茄数字错误码(item.get("code"))
+    if code is not None and code != 0:
+        raise FanqieReaderError("chapter_response", "business_error", code=code)
+    if not isinstance(item.get("content"), str) or not item["content"]:
+        raise FanqieReaderError("chapter_response", "missing_content")
+    return item
+
+
+def _构造番茄阅读补拉响应(
+    infos: Dict[str, Any], errors: Dict[str, FanqieReaderError]
+) -> Dict[str, Any]:
+    # 错误与成功项并存；非零业务码不转成正常空结果，不触发外层缺章拆分。
+    code = next(
+        (error.code for error in errors.values() if error.code is not None),
+        -1 if errors else 0,
+    )
     return {
-        "code": 0,
-        "message": 响应.get("message") or "",
+        "code": code,
+        "message": "",
         "data": {"item_infos": infos},
+        "item_errors": errors,
         "source": "novelapp_reader_batch_full",
         "request_book_id": 番茄阅读请求书籍编号,
     }
+
+
+def 读取番茄阅读正文(书籍编号: str, item_ids: List[str]) -> Dict[str, Any]:
+    """分组与单章失败独立保存；仅补请求一次可恢复的缺章/格式异常。"""
+    infos: Dict[str, Any] = {}
+    errors: Dict[str, FanqieReaderError] = {}
+    keys: Dict[int, bytes | FanqieReaderError] = {}
+    for part in batches([str(item_id) for item_id in item_ids], 番茄阅读正文单次上限):
+        pending = list(part)
+        for attempt in range(2):
+            try:
+                items = _番茄阅读分组数据(请求番茄阅读原始正文(pending))
+            except Exception as exc:
+                error = _番茄阅读错误(exc, "chapter_request")
+                errors.update((item_id, error) for item_id in pending)
+                break
+            retry_ids = []
+            for item_id in pending:
+                try:
+                    item = _番茄阅读章节数据(items, item_id)
+                    try:
+                        version = int(item.get("key_version") or 0)
+                    except Exception as exc:
+                        raise _番茄阅读错误(exc, "chapter_response") from None
+                    if version not in keys:
+                        try:
+                            keys[version] = 获取番茄阅读注册密钥(version)
+                        except Exception as exc:
+                            keys[version] = _番茄阅读错误(exc, "register_key_request")
+                    key = keys[version]
+                    if isinstance(key, FanqieReaderError):
+                        raise key
+                    info = dict(item)
+                    info["content"] = 解密番茄阅读正文(item["content"], key)
+                    info["crypt_status"] = 0
+                    info.setdefault("title", "")
+                    infos[item_id] = info
+                    errors.pop(item_id, None)
+                except Exception as exc:
+                    error = _番茄阅读错误(exc, "chapter_decrypt")
+                    error.attempts = max(error.attempts, attempt + 1)
+                    errors[item_id] = error
+                    if attempt == 0 and _番茄阅读章节可重试(error):
+                        retry_ids.append(item_id)
+            if not retry_ids:
+                break
+            pending = retry_ids
+            time.sleep(0.2)
+    return _构造番茄阅读补拉响应(infos, errors)
+
+
+async def _收齐番茄补拉任务(coroutines: Iterable[Any]) -> list:
+    """普通失败收齐为结果；任一取消向上传播并回收全部兄弟任务。"""
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            if any(task.cancelled() for task in done):
+                raise asyncio.CancelledError()
+        return await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def 异步读取番茄阅读正文(
-    client: Any,
-    书籍编号: str,
-    item_ids: List[str],
+    client: Any, 书籍编号: str, item_ids: List[str]
 ) -> Dict[str, Any]:
-    """异步读取阅读 App 正文，并用 PyCryptodome 的 AES-CBC 解密补拉内容。"""
-    ids = [str(item_id) for item_id in item_ids]
-    if len(ids) > 番茄阅读正文单次上限:
-        merged: Dict[str, Dict[str, Any]] = {}
-        parts = [list(part) for part in batches(ids, 番茄阅读正文单次上限)]
-        gate = asyncio.Semaphore(min(番茄正文最大动态并发数, len(parts)))
-
-        async def 读取分段(part: List[str]) -> Dict[str, Any]:
-            async with gate:
-                return await 异步读取番茄阅读正文(client, 书籍编号, part)
-
-        for partial in await asyncio.gather(*(读取分段(part) for part in parts)):
-            if partial.get("code") != 0:
-                return partial
-            item_infos = (partial.get("data") or {}).get("item_infos") or {}
-            if not isinstance(item_infos, dict):
-                raise RuntimeError("番茄阅读正文分段响应格式错误")
-            merged.update(item_infos)
-        return {
-            "code": 0,
-            "message": "",
-            "data": {"item_infos": merged},
-            "source": "novelapp_reader_batch_full",
-            "request_book_id": 番茄阅读请求书籍编号,
-        }
-
-    response = await 异步请求番茄阅读原始正文(client, ids)
-    if response.get("code") != 0:
-        return response
-    raw_items = response.get("data") or {}
-    if not isinstance(raw_items, dict):
-        raise RuntimeError("番茄阅读正文响应格式错误")
-    decrypt_gate = asyncio.Semaphore(max(1, min(64, (os.cpu_count() or 4) * 2)))
-
-    async def 解密章节(item_id: str) -> tuple[str, Dict[str, Any] | None]:
-        item = raw_items.get(item_id)
-        if not isinstance(item, dict):
-            return item_id, None
-        ciphertext = str(item.get("content") or "")
-        if not ciphertext:
-            return item_id, None
-        version = int(item.get("key_version") or 0)
-        key = await 异步获取番茄阅读注册密钥(client, version)
-        async with decrypt_gate:
-            plaintext = await asyncio.to_thread(解密番茄阅读正文, ciphertext, key)
-        info = dict(item)
-        info["content"] = plaintext
-        info["crypt_status"] = 0
-        info.setdefault("title", item.get("title") or "")
-        return item_id, info
-
-    infos: Dict[str, Dict[str, Any]] = {
-        item_id: item
-        for item_id, item in await asyncio.gather(
-            *(解密章节(item_id) for item_id in ids)
+    """收齐各组和各章结果，密钥请求在本次补拉内按版本共享成功或失败。"""
+    parts = [
+        list(part)
+        for part in batches(
+            [str(item_id) for item_id in item_ids], 番茄阅读正文单次上限
         )
-        if item is not None
-    }
-    return {
-        "code": 0,
-        "message": response.get("message") or "",
-        "data": {"item_infos": infos},
-        "source": "novelapp_reader_batch_full",
-        "request_book_id": 番茄阅读请求书籍编号,
-    }
+    ]
+    gate = asyncio.Semaphore(max(1, min(番茄正文最大动态并发数, len(parts))))
+    decrypt_gate = asyncio.Semaphore(max(1, min(64, (os.cpu_count() or 4) * 2)))
+    key_tasks: Dict[int, asyncio.Task] = {}
+
+    async def 获取共享密钥(version: int) -> bytes:
+        if version not in key_tasks:
+            key_tasks[version] = asyncio.create_task(
+                异步获取番茄阅读注册密钥(client, version)
+            )
+        try:
+            return await asyncio.shield(key_tasks[version])
+        except Exception as exc:
+            raise _番茄阅读错误(exc, "register_key_request") from None
+
+    async def 解密章节(
+        item_id: str, items: Dict[str, Any]
+    ) -> tuple[str, Dict[str, Any] | FanqieReaderError]:
+        try:
+            item = _番茄阅读章节数据(items, item_id)
+            try:
+                version = int(item.get("key_version") or 0)
+            except Exception as exc:
+                raise _番茄阅读错误(exc, "chapter_response") from None
+            key = await 获取共享密钥(version)
+            async with decrypt_gate:
+                plaintext = await asyncio.to_thread(
+                    解密番茄阅读正文, item["content"], key
+                )
+            info = dict(item)
+            info["content"] = plaintext
+            info["crypt_status"] = 0
+            info.setdefault("title", "")
+            return item_id, info
+        except Exception as exc:
+            return item_id, _番茄阅读错误(exc, "chapter_decrypt")
+
+    async def 读取分段(
+        part: List[str],
+    ) -> tuple[Dict[str, Any], Dict[str, FanqieReaderError]]:
+        infos: Dict[str, Any] = {}
+        errors: Dict[str, FanqieReaderError] = {}
+        pending = part
+        async with gate:
+            for attempt in range(2):
+                try:
+                    items = _番茄阅读分组数据(
+                        await 异步请求番茄阅读原始正文(client, pending)
+                    )
+                except Exception as exc:
+                    error = _番茄阅读错误(exc, "chapter_request")
+                    errors.update((item_id, error) for item_id in pending)
+                    break
+                retry_ids = []
+                decrypted = await _收齐番茄补拉任务(
+                    解密章节(item_id, items) for item_id in pending
+                )
+                for item_id, outcome in zip(pending, decrypted):
+                    if isinstance(outcome, Exception):
+                        result = _番茄阅读错误(outcome, "chapter_decrypt")
+                    else:
+                        _returned_id, result = outcome
+                    if isinstance(result, FanqieReaderError):
+                        result.attempts = max(result.attempts, attempt + 1)
+                        errors[item_id] = result
+                        if attempt == 0 and _番茄阅读章节可重试(result):
+                            retry_ids.append(item_id)
+                    else:
+                        infos[item_id] = result
+                        errors.pop(item_id, None)
+                if not retry_ids:
+                    break
+                pending = retry_ids
+                await asyncio.sleep(0.2)
+        return infos, errors
+
+    try:
+        results = await _收齐番茄补拉任务(读取分段(part) for part in parts)
+        infos: Dict[str, Any] = {}
+        errors: Dict[str, FanqieReaderError] = {}
+        for part, result in zip(parts, results):
+            if isinstance(result, BaseException):
+                if not isinstance(result, Exception):
+                    raise result
+                error = _番茄阅读错误(result, "chapter_request")
+                errors.update((item_id, error) for item_id in part)
+            else:
+                part_infos, part_errors = result
+                infos.update(part_infos)
+                errors.update(part_errors)
+        return _构造番茄阅读补拉响应(infos, errors)
+    finally:
+        for task in key_tasks.values():
+            if not task.done():
+                task.cancel()
+        if key_tasks:
+            await asyncio.gather(*key_tasks.values(), return_exceptions=True)
+
+
+def _记录番茄阅读补拉结果(
+    书籍编号: str, item_ids: List[str], 原因: str, response: Dict[str, Any]
+) -> None:
+    infos = (response.get("data") or {}).get("item_infos") or {}
+    errors = response.get("item_errors") or {}
+    if errors:
+        counts: Dict[tuple, int] = {}
+        for error in errors.values():
+            fields = (
+                error.stage,
+                error.category,
+                error.code,
+                error.http_status,
+                error.error_type,
+                error.attempts,
+            )
+            counts[fields] = counts.get(fields, 0) + 1
+        # 同类失败合并，一次补拉至多八类明细，不逐章刷日志。
+        for fields, count in list(counts.items())[:8]:
+            stage, category, code, status, error_type, attempts = fields
+            logger.warning(
+                f"番茄小说正文补拉失败汇总：书籍编号={书籍编号}, 原因={原因}, "
+                f"stage={stage}, category={category}, code={code}, http_status={status}, "
+                f"error_type={error_type}, attempts={attempts}, 数量={count}, 成功={len(infos)}/{len(item_ids)}"
+            )
+    else:
+        logger.debug(
+            f"番茄小说正文补拉成功：书籍编号={书籍编号}, 原因={原因}, 成功={len(infos)}/{len(item_ids)}"
+        )
 
 
 def 尝试番茄阅读正文补拉(
     书籍编号: str, item_ids: List[str], 原因: str
 ) -> Optional[Dict[str, Any]]:
     try:
-        响应 = 读取番茄阅读正文(书籍编号, item_ids)
-        infos = (响应.get("data") or {}).get("item_infos") or {}
-        if 响应.get("code") == 0 and infos:
-            logger.debug(
-                f"番茄小说正文补拉成功：书籍编号={书籍编号}, 原因={原因}, "
-                f"成功={len(infos)}/{len(item_ids)}"
-            )
-            return 响应
-        logger.debug(
-            f"番茄小说正文补拉无可用章节：书籍编号={书籍编号}, 原因={原因}, "
-            f"业务代码={响应.get('code')}, 消息={限制番茄日志文本(str(响应.get('message') or 响应.get('msg') or ''), 200)}, "
-            f"成功={len(infos)}/{len(item_ids)}"
-        )
-    except Exception as 异常:
+        response = 读取番茄阅读正文(书籍编号, item_ids)
+        _记录番茄阅读补拉结果(书籍编号, item_ids, 原因, response)
+        return response
+    except Exception as exc:
         logger.warning(
-            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 原因={原因}, "
-            f"错误={限制番茄日志文本(str(异常), 200)}"
+            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 错误={_番茄阅读错误(exc, 'fallback')}"
         )
-    return None
+        return None
 
 
 async def 异步尝试番茄阅读正文补拉(
-    client: Any,
-    书籍编号: str,
-    item_ids: List[str],
-    原因: str,
+    client: Any, 书籍编号: str, item_ids: List[str], 原因: str
 ) -> Optional[Dict[str, Any]]:
     try:
         response = await 异步读取番茄阅读正文(client, 书籍编号, item_ids)
-        infos = (response.get("data") or {}).get("item_infos") or {}
-        if response.get("code") == 0 and infos:
-            logger.debug(
-                f"番茄小说正文补拉成功：书籍编号={书籍编号}, 原因={原因}, "
-                f"成功={len(infos)}/{len(item_ids)}"
-            )
-            return response
-        logger.debug(
-            f"番茄小说正文补拉无可用章节：书籍编号={书籍编号}, 原因={原因}, "
-            f"业务代码={response.get('code')}, 成功={len(infos)}/{len(item_ids)}"
-        )
+        _记录番茄阅读补拉结果(书籍编号, item_ids, 原因, response)
+        return response
     except Exception as exc:
         logger.warning(
-            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 原因={原因}, "
-            f"错误={type(exc).__name__}"
+            f"番茄小说正文补拉失败：书籍编号={书籍编号}, 错误={_番茄阅读错误(exc, 'fallback')}"
         )
-    return None
+        return None
+
+
+def _番茄补拉批次结果(response: Dict[str, Any], batch: List[str]) -> list:
+    infos = (response.get("data") or {}).get("item_infos") or {}
+    errors = response.get("item_errors") or {}
+    return [
+        (item_id, infos[str(item_id)], 0, None)
+        if str(item_id) in infos
+        else (
+            item_id,
+            None,
+            None,
+            errors.get(str(item_id))
+            or FanqieReaderError("chapter_response", "missing_content"),
+        )
+        for item_id in batch
+    ]
 
 
 # ===== 正文下载 =====
@@ -3453,7 +3737,7 @@ def full_mget(
 
 
 class FullMgetBusinessError(RuntimeError):
-    """full/mget 明确返回业务错误时使用；这类错误拆分重试也不会恢复。"""
+    """明确业务拒绝时停止拆分，避免放大请求；不表示书籍永久下架。"""
 
     pass
 
@@ -3486,18 +3770,18 @@ def download_batch(
         if resp.get("code") != 0:
             if _is_full_mget_non_split_error(resp):
                 补拉响应 = 尝试番茄阅读正文补拉(
-                    book_id, batch, f"full_mget code={resp.get('code')}"
+                    book_id,
+                    batch,
+                    f"full_mget code={_番茄数字错误码(resp.get('code'))}",
                 )
                 if 补拉响应:
-                    补拉正文 = (补拉响应.get("data") or {}).get("item_infos") or {}
-                    return [
-                        (item_id, 补拉正文.get(str(item_id)), 0, None)
-                        for item_id in batch
-                    ]
+                    return _番茄补拉批次结果(补拉响应, batch)
                 raise FullMgetBusinessError(
-                    f"full_mget 业务错误: code={resp.get('code')}, message={_full_mget_response_message(resp)}"
+                    f"full_mget 业务拒绝: code={_番茄数字错误码(resp.get('code'))}"
                 )
-            raise RuntimeError(f"full_mget 错误: {resp}")
+            raise RuntimeError(
+                f"full_mget 响应失败: code={_番茄数字错误码(resp.get('code'))}"
+            )
         infos = (resp.get("data") or {}).get("item_infos") or {}
         if allow_split and len(batch) > 1 and len(infos) < len(batch):
             mid = max(1, len(batch) // 2)
@@ -3509,9 +3793,7 @@ def download_batch(
                 book_id, batch, "full_mget missing item_info"
             )
             if 补拉响应:
-                补拉正文 = (补拉响应.get("data") or {}).get("item_infos") or {}
-                if 补拉正文.get(str(batch[0])):
-                    return [(batch[0], 补拉正文.get(str(batch[0])), 0, None)]
+                return _番茄补拉批次结果(补拉响应, batch)
         return [(item_id, infos.get(str(item_id)), x, None) for item_id in batch]
     except Exception as e:
         if isinstance(e, FullMgetBusinessError):
@@ -3543,16 +3825,12 @@ async def 异步下载番茄正文批次(
                     client,
                     book_id,
                     batch,
-                    f"full_mget code={response.get('code')}",
+                    f"full_mget code={_番茄数字错误码(response.get('code'))}",
                 )
                 if fallback:
-                    infos = (fallback.get("data") or {}).get("item_infos") or {}
-                    return [
-                        (item_id, infos.get(str(item_id)), 0, None) for item_id in batch
-                    ]
+                    return _番茄补拉批次结果(fallback, batch)
                 raise FullMgetBusinessError(
-                    f"full_mget 业务错误: code={response.get('code')}, "
-                    f"message={_full_mget_response_message(response)}"
+                    f"full_mget 业务拒绝: code={_番茄数字错误码(response.get('code'))}"
                 )
             raise RuntimeError("full_mget 响应失败")
 
@@ -3576,9 +3854,7 @@ async def 异步下载番茄正文批次(
                 "full_mget missing item_info",
             )
             if fallback:
-                infos = (fallback.get("data") or {}).get("item_infos") or {}
-                if infos.get(str(batch[0])):
-                    return [(batch[0], infos.get(str(batch[0])), 0, None)]
+                return _番茄补拉批次结果(fallback, batch)
         return [(item_id, infos.get(str(item_id)), client_x, None) for item_id in batch]
     except Exception as exc:
         if isinstance(exc, FullMgetBusinessError):
@@ -4145,8 +4421,8 @@ async def 异步下载番茄全部章节(
     下次进度 = max(1, (总数 + 番茄进度日志分段数 - 1) // 番茄进度日志分段数)
     结果按序号: dict[int, dict[str, Any]] = {}
     logger.info(
-        f"番茄小说章节进度：书籍编号={书籍编号}, 进度=0/{总数}, "
-        f"百分比=0%, 批次数={len(任务列表)}, 批量章节数={批量章节数}, "
+        f"番茄小说章节进度：书籍编号={书籍编号}, 已处理=0/{总数}, "
+        f"处理百分比=0%, 成功=0, 失败=0, 批次数={len(任务列表)}, 批量章节数={批量章节数}, "
         f"并发数={动态并发数}, 解密并发数={min(番茄解密最大动态并发数, 总数)}, "
         f"HTTP会话复用={'开启' if FULL_MGET_HTTP_REUSE else 'off'}"
     )
@@ -4287,8 +4563,9 @@ async def 异步下载番茄全部章节(
                 百分比 = int(min(100, 已完成 * 100 / max(1, 总数)))
                 当前成功 = sum(1 for 项目 in 结果按序号.values() if 项目.get("success"))
                 logger.info(
-                    f"番茄小说章节进度：书籍编号={书籍编号}, 进度={min(已完成, 总数)}/{总数}, "
-                    f"百分比={百分比}%, 成功={当前成功}, 本批成功={批次成功}/{批次数量}"
+                    f"番茄小说章节进度：书籍编号={书籍编号}, 已处理={min(已完成, 总数)}/{总数}, "
+                    f"处理百分比={百分比}%, 成功={当前成功}, 失败={min(已完成, 总数) - 当前成功}, "
+                    f"本批成功={批次成功}/{批次数量}"
                 )
                 下次进度 += max(
                     1,
