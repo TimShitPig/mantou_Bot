@@ -1891,6 +1891,8 @@
           || validMsgNickname(profile.nickname || profile.username, id);
         return name || (message?.nickname_blank || profile.nickname_blank || isBlankMsgNickname(message?.nickname) ? '\u00a0' : fallback);
       };
+      const msgLivePrivateNickname = (chat, id) => validMsgNickname(chat?._private_nickname, id)
+        || (chat?._private_nickname_blank ? '\u00a0' : '');
       const mergeMsgProfileMaps = (...sources) => {
         const merged = {};
         sources.forEach((source) => {
@@ -2732,7 +2734,7 @@
         if (viewing) msgState.historyData = {...(msgState.historyData || {}), ...state};
         return state;
       };
-      const mergeMsgRealtimeChats = (serverChats) => {
+      const mergeMsgRealtimeChats = (serverChats, {serverSnapshot = false} = {}) => {
         const byId = new Map((serverChats || []).filter(msgInSelectedBot).map((chat) => [msgChatKey(chat), {
           ...chat, ...(chat.chat_type === 'group' ? syncMsgGroupState(chat.chat_id, chat, chat.appid) : {}),
         }]));
@@ -2758,8 +2760,17 @@
           const groupState = isPrivate ? {} : syncMsgGroupState(chatId, overlay, overlayAppid || currentAppid);
           const keepFriendOverlay = isPrivate && (Number(friendState.friend_checked_at || 0) > Number(current.friend_checked_at || 0)
             || (Number(friendState.friend_checked_at || 0) === Number(current.friend_checked_at || 0) && Number(friendState._friend_live_order || 0) > Number(current._friend_live_order || 0)));
+          let liveContactName = isPrivate ? msgLivePrivateNickname(overlay, chatId) : '';
+          // 只有服务端列表确认同名才释放来信覆盖；本地重绘不代表服务端已同步。
+          if (serverSnapshot && liveContactName && !current.remark && String(current.nickname || '') === liveContactName) {
+            delete overlay._private_nickname;
+            delete overlay._private_nickname_blank;
+            liveContactName = '';
+          }
+          const currentContactName = isPrivate ? validMsgNickname(current.nickname, chatId) : '';
+          const keepContactOverlay = Boolean(liveContactName);
           const contactName = isPrivate
-            ? (validMsgNickname(current.nickname, chatId) || validMsgNickname(overlay.nickname, chatId))
+            ? (validMsgNickname(liveContactName, chatId) || currentContactName || validMsgNickname(overlay.nickname, chatId) || liveContactName)
             : '';
           const contactAvatar = isPrivate ? String(current.avatar || overlay.avatar || '') : '';
           const serverTs = Number(current.last_ts || 0);
@@ -2767,10 +2778,11 @@
           if (serverTs > eventTs && Number(current.group_info_updated_at || 0) >= Number(overlay.group_info_updated_at || 0)
             && (isPrivate || msgKnownGroupMemberCount(current.member_num, current.group_member_num) !== null
               || msgKnownGroupMemberCount(overlay.member_num, overlay.group_member_num) === null)) {
-            if (isPrivate && (keepFriendOverlay || (!validMsgNickname(current.nickname, chatId) && contactName)
+            if (isPrivate && (keepFriendOverlay || keepContactOverlay || (!validMsgNickname(current.nickname, chatId) && contactName)
               || (!current.avatar && contactAvatar))) {
-              // 消息摘要跟随较新服务器记录，只保留后台已取得的联系人资料。
-              const profile = {...current, ...friendState, nickname:current.remark || contactName || current.nickname, avatar:contactAvatar};
+              // 机器人回复可能更新摘要时间，不能据此覆盖尚未确认的对方姓名。
+              const profile = {...current, ...friendState, nickname:current.remark || contactName || current.nickname, avatar:contactAvatar,
+                ...(keepContactOverlay ? {_private_nickname:overlay._private_nickname, _private_nickname_blank:overlay._private_nickname_blank, _private_nickname_ts:overlay._private_nickname_ts} : {})};
               byId.set(chatKey, profile);
               msgState.realtimeChats.set(chatKey, profile);
             } else msgState.realtimeChats.delete(chatKey);
@@ -3197,7 +3209,7 @@
             }, 0);
           }
         };
-        const chats = mergeMsgRealtimeChats(data.chats || []);
+        const chats = mergeMsgRealtimeChats(data.chats || [], {serverSnapshot:Boolean(data._server_snapshot)});
         const localAdmins = getLocalAdminGroups();
         chats.forEach((c) => {
           if (c.chat_type === 'group') {
@@ -3215,7 +3227,7 @@
         });
         saveLocalAdminGroups(localAdmins);
         msgState.chats = chats;
-        if (msgState.chatId && msgState.chatType === 'group') updateMsgHead({});
+        if (msgState.chatId) updateMsgHead({});
         const visibleChats = chats.filter((chat) => msgChatMatchesView(chat));
         const knownChatIds = new Set(chats.map((chat) => String(chat.chat_id || '')).filter(Boolean));
         [msgState.adminByChat, msgState.adminScanAttempted, msgState.adminScanFailures, msgState.adminCheckedAt]
@@ -3513,7 +3525,7 @@
               msgState.chatListServerLoaded = true;
               msgState.chatListTopPending = true;
             }
-            renderMsgChats(data);
+            renderMsgChats({...data, _server_snapshot:true});
             return data;
           }
           catch (error) {
@@ -4060,8 +4072,13 @@
         const knownInfo = data.group_info || {};
         const newerGroupInfo = Number(knownInfo.updated_at || 0) > Number(curChat?.group_info_updated_at || 0);
         const groupName = newerGroupInfo ? (knownInfo.group_name || curChat?.group_name) : (curChat?.group_name || knownInfo.group_name);
-        const knownName = curChat?.remark || (msgState.chatType === 'group' ? groupName : '') || data.chat_name || curChat?.nickname;
         const headKey = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
+        const liveContactName = msgState.chatType === 'user'
+          ? msgLivePrivateNickname(msgState.realtimeChats.get(headKey), msgState.chatId) : '';
+        const currentContactName = msgState.chatType === 'user'
+          ? validMsgNickname(curChat?.nickname, msgState.chatId) : '';
+        const knownName = curChat?.remark || (msgState.chatType === 'group' ? groupName : '')
+          || validMsgNickname(liveContactName, msgState.chatId) || currentContactName || data.chat_name || curChat?.nickname || liveContactName;
         const previousName = nameEl.dataset.chatKey === headKey ? nameEl.textContent : '';
         const blankContact = msgState.chatType === 'user' && !curChat?.remark && msgState.profiles?.[msgState.chatId]?.nickname_blank && !validMsgNickname(knownName, msgState.chatId);
         nameEl.textContent = blankContact ? '\u00a0' : (knownName || previousName || String(msgState.chatId || '') || '未命名会话');
@@ -6442,11 +6459,18 @@
           }
           return;
         }
+        const eventUserId = String(message.user_id || '').trim();
+        const eventSource = String(message.source || '').trim();
+        const eventIsSelf = Boolean(message.is_self)
+          || eventSource.startsWith('bot_')
+          || eventSource === 'web_panel';
+        const eventIsContact = chatType === 'user' && eventUserId === chatId && !eventIsSelf
+          && !msgIsBot(message, payload.member_profiles?.[eventUserId] || {});
         const isNewEvent = rememberMsgEvent(chatId, message);
         const friendState = chatType === 'user' ? syncMsgFriendState(chatId, {...payload, chat_type:chatType, appid:eventAppid}, isNewEvent && ['friend_add','friend_del'].includes(String(message.source || ''))) : {};
         const friendChanged = chatType === 'user' && (String(friendState.friend_status || '') !== String(existing.friend_status || '') || Number(friendState.friend_checked_at || 0) !== Number(existing.friend_checked_at || 0));
         let profilesChanged = false;
-        if (matchesCurrent) {
+        if (matchesCurrent && (chatType !== 'user' || eventIsContact)) {
           const oldProfiles = JSON.stringify(msgState.profiles || {});
           msgState.profiles = mergeMsgProfiles(
             mergeMsgProfileMaps(msgState.profiles, payload.member_profiles),
@@ -6475,33 +6499,41 @@
         const unread = followLatest
           ? 0
           : (Number.isFinite(payloadUnread) ? Math.max(0, payloadUnread) : fallbackUnread);
-        const eventUserId = String(message.user_id || '').trim();
-        const eventSource = String(message.source || '').trim();
-        const eventIsSelf = Boolean(message.is_self)
-          || eventSource.startsWith('bot_')
-          || eventSource === 'web_panel';
         const eventAvatar = String(
           message.avatar
           || payload.member_profiles?.[eventUserId]?.avatar
           || '',
         ).trim();
         const existingAvatar = String(existing.avatar || existing.avatar_url || '').trim();
-        const contactProfile = (matchesCurrent ? msgState.profiles?.[chatId] : payload.member_profiles?.[chatId]) || {};
+        const contactProfile = (matchesCurrent ? msgState.profiles?.[chatId] : eventIsContact ? payload.member_profiles?.[chatId] : {}) || {};
         const contactAvatar = String(contactProfile.avatar || '').trim();
         const botAvatar = String(botProfileForAppid(payload.appid || message.appid || existing.appid).avatar || '').trim();
         const preservedAvatar = contactAvatar
           || (existingAvatar && (!botAvatar || existingAvatar !== botAvatar) ? existingAvatar : '');
-        const overlayAvatar = chatType === 'user' && eventIsSelf
+        const overlayAvatar = chatType === 'user' && !eventIsContact
           ? preservedAvatar
           : (eventAvatar || preservedAvatar);
+        const eventContactName = eventIsContact ? validMsgNickname(message.nickname, chatId) : '';
+        const previousContactName = validMsgNickname(existing._private_nickname, chatId)
+          || validMsgNickname(existing.nickname, chatId) || validMsgNickname(contactProfile.nickname || contactProfile.username, chatId);
+        const eventContactBlank = eventIsContact && !eventContactName && !previousContactName
+          && Boolean(message.nickname_blank || isBlankMsgNickname(message.nickname));
+        const contactNameTs = Number(message.ts || 0);
+        const oldContactNameTs = Number(existing._private_nickname_ts || 0);
+        const contactNameChanged = (eventContactName || eventContactBlank)
+          && (!oldContactNameTs || !contactNameTs || contactNameTs >= oldContactNameTs)
+          && (isNewEvent || !previousContactName || contactNameTs > oldContactNameTs);
+        const contactPatch = contactNameChanged
+          ? {_private_nickname:eventContactName, _private_nickname_blank:eventContactBlank, _private_nickname_ts:contactNameTs} : {};
+        const contactName = contactNameChanged ? (eventContactName || '\u00a0')
+          : (msgLivePrivateNickname(existing, chatId) || existing.nickname || chatId);
         const overlay = {
           ...existing,
           chat_id:chatId,
           chat_type:chatType,
           appid:String(payload.appid || message.appid || existing.appid || ''),
-          nickname:chatType === 'user' && !eventIsSelf
-            ? (existing.remark || displayMsgNickname({user_id:chatId, nickname:validMsgNickname(existing.nickname, chatId) || payload.last_nickname || message.nickname, nickname_blank:message.nickname_blank}, contactProfile, existing.nickname || chatId))
-            : (existing.nickname || chatId),
+          nickname:chatType === 'user' ? (existing.remark || contactName) : (existing.nickname || chatId),
+          ...contactPatch,
           avatar:overlayAvatar,
           ...msgRealtimeChatSummary(payload, message, existing),
           ...friendState,
@@ -6509,12 +6541,12 @@
           unread,
         };
         msgState.realtimeChats.set(chatKey, overlay);
-        if (friendChanged || isNewEvent || overlay.last_content !== existing.last_content || overlay.last_ts !== existing.last_ts
+        if (friendChanged || contactNameChanged || isNewEvent || overlay.last_content !== existing.last_content || overlay.last_ts !== existing.last_ts
           || !msgState.chats.some((chat) => msgChatKey(chat) === chatKey)) {
           scheduleMsgChatRender();
         }
         if (!isViewing) return;
-        if (friendChanged) updateMsgHead({...msgState.historyData, ...friendState});
+        if (friendChanged || contactNameChanged) updateMsgHead({...msgState.historyData, ...friendState, chat_name:overlay.nickname});
         const realtimeMessage = {...message, chat_type:chatType, appid:String(payload.appid || message.appid || '')};
         const existingIndex = msgState.messages.findIndex((item) => msgMessagesMatch(item, realtimeMessage));
         if (existingIndex >= 0) {

@@ -109,9 +109,43 @@ _控制台执行器锁 = globals().get("_控制台执行器锁") or threading.Lo
 消息列表缓存: dict[tuple[str, str, int, int, str | None], tuple[float, dict[str, Any]]] = globals().get("消息列表缓存") or {}
 消息列表缓存锁: dict[tuple[str, str, int, int, str | None], asyncio.Lock] = globals().get("消息列表缓存锁") or {}
 消息列表后台刷新: set[tuple[str, str, int, int, str | None]] = globals().get("消息列表后台刷新") or set()
-消息列表昵称回填任务: dict[tuple[str, str, int, int, str | None], asyncio.Task[Any]] = (
-    globals().get("消息列表昵称回填任务") or {}
-)
+def _清理旧消息列表昵称任务() -> None:
+    """停用旧版补名任务，等旧协程及完成回调退出后移除兼容引用。"""
+    模块状态 = globals()
+    旧任务表 = 模块状态.get("消息列表昵称回填任务")
+    if not isinstance(旧任务表, dict):
+        return
+    旧任务 = [任务 for 任务 in 旧任务表.values() if isinstance(任务, asyncio.Task)]
+    旧任务表.clear()
+
+    def 移除旧引用() -> None:
+        if any(not 任务.done() for 任务 in 旧任务):
+            return
+        if 模块状态.get("消息列表昵称回填任务") is 旧任务表:
+            模块状态.pop("消息列表昵称回填任务", None)
+        模块状态.pop("_后台回填消息列表昵称", None)
+        模块状态.pop("_安排消息列表昵称回填", None)
+
+    def 已结束(任务: asyncio.Task[Any]) -> None:
+        # 旧回调仍按全局名称访问任务表；让它们先完成，下一轮再删引用。
+        循环 = 任务.get_loop()
+        if not 循环.is_closed():
+            循环.call_soon(移除旧引用)
+
+    if not 旧任务:
+        移除旧引用()
+        return
+    for 任务 in 旧任务:
+        控制台后台任务.add(任务)
+        任务.add_done_callback(控制台后台任务.discard)
+        if 任务.done():
+            已结束(任务)
+        else:
+            任务.add_done_callback(已结束)
+            任务.cancel()
+
+
+_清理旧消息列表昵称任务()
 消息列表缓存版本 = int(globals().get("消息列表缓存版本", 0) or 0) + 1
 消息历史查询任务: dict[tuple[Any, ...], asyncio.Task[Any]] = (
     globals().get("消息历史查询任务") or {}
@@ -304,83 +338,7 @@ async def _构建消息列表(
     结果 = await _控制台线程执行(
         消息记录.获取聊天列表, 过滤, 搜索, 页码, 每页, appid
     )
-    _安排消息列表昵称回填((过滤, 搜索, 页码, 每页, appid), 结果.get("chats") or [])
     return 结果
-
-
-async def _后台回填消息列表昵称(
-    缓存键: tuple[str, str, int, int, str | None], 聊天项列表: list[dict[str, Any]]
-) -> None:
-    try:
-        from 功能文件.管理功能.基础功能 import 消息记录
-
-        await 消息记录.补查缺失私聊昵称(聊天项列表)
-        缓存项 = 消息列表缓存.get(缓存键)
-        if not 缓存项:
-            return
-        缓存结果 = copy.deepcopy(缓存项[1])
-        缓存聊天 = {
-            (str(聊天.get("appid") or ""), str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or "")): 聊天
-            for 聊天 in 缓存结果.get("chats") or []
-            if isinstance(聊天, dict)
-        }
-        for 聊天 in 聊天项列表:
-            if not isinstance(聊天, dict):
-                continue
-            键 = (str(聊天.get("appid") or ""), str(聊天.get("chat_type") or ""), str(聊天.get("chat_id") or ""))
-            目标 = 缓存聊天.get(键)
-            if not 目标:
-                continue
-            for 字段 in ("nickname", "avatar"):
-                if 聊天.get(字段):
-                    目标[字段] = 聊天[字段]
-        消息列表缓存[缓存键] = (time.monotonic(), 缓存结果)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.debug("帮助控制台私聊昵称后台回填失败：错误类型=%s", type(exc).__name__)
-    finally:
-        当前任务 = asyncio.current_task()
-        if 当前任务 is not None and 消息列表昵称回填任务.get(缓存键) is 当前任务:
-            消息列表昵称回填任务.pop(缓存键, None)
-
-
-def _安排消息列表昵称回填(
-    缓存键: tuple[str, str, int, int, str | None], 聊天项列表: list[dict[str, Any]]
-) -> None:
-    if not any(
-        isinstance(聊天, dict)
-        and str(聊天.get("chat_type") or "") == "user"
-        and (
-            not str(聊天.get("nickname") or "").strip()
-            or str(聊天.get("nickname") or "").strip()
-            == str(聊天.get("chat_id") or "").strip()
-            or str(聊天.get("nickname") or "").strip()
-            == "用户" + str(聊天.get("chat_id") or "").strip()[-6:]
-            or str(聊天.get("nickname") or "").strip() in {"未知", "未知用户"}
-        )
-        for 聊天 in 聊天项列表
-    ):
-        return
-    现有任务 = 消息列表昵称回填任务.get(缓存键)
-    if 现有任务 is not None and not 现有任务.done():
-        return
-    try:
-        任务 = asyncio.create_task(
-            _后台回填消息列表昵称(缓存键, 聊天项列表),
-            name="帮助控制台私聊昵称回填",
-        )
-    except RuntimeError:
-        return
-    消息列表昵称回填任务[缓存键] = 任务
-    控制台后台任务.add(任务)
-    def _清理回填任务(已完成: asyncio.Task[Any]) -> None:
-        控制台后台任务.discard(已完成)
-        if 消息列表昵称回填任务.get(缓存键) is 已完成:
-            消息列表昵称回填任务.pop(缓存键, None)
-        if not 已完成.cancelled():
-            已完成.exception()
-    任务.add_done_callback(_清理回填任务)
 
 
 async def _后台刷新消息列表(
@@ -3859,13 +3817,6 @@ async def _处理消息历史(request: web.Request) -> web.Response:
                     消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         try:
             消息记录.安排待处理群信息刷新()
-        except Exception:
-            pass
-        try:
-            if 类型 == "user":
-                排队补查 = getattr(消息记录, "排队私聊昵称补查", None)
-                if callable(排队补查):
-                    排队补查(会话标识, str((数据 or {}).get("appid") or ""))
         except Exception:
             pass
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})

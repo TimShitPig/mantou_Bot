@@ -160,16 +160,6 @@ _消息接收队列: asyncio.Queue[tuple[Any, Any, str]] = (
 _消息接收任务: asyncio.Task[Any] | None = globals().get("_消息接收任务")
 _消息接收入队 = globals().get("_消息接收入队", True)
 _消息接收溢出数 = int(globals().get("_消息接收溢出数", 0) or 0)
-_昵称补查队列上限 = 1024
-_昵称补查工作数 = 2
-_昵称补查队列: asyncio.Queue[tuple[str, str, str]] = (
-    globals().get("_昵称补查队列") or asyncio.Queue(maxsize=_昵称补查队列上限)
-)
-_昵称补查任务: list[asyncio.Task[Any]] = list(globals().get("_昵称补查任务") or [])
-_昵称补查等待中: set[tuple[str, str]] = globals().get("_昵称补查等待中") or set()
-_昵称补查失败项目: list[tuple[str, str, str]] = list(globals().get("_昵称补查失败项目") or [])
-_昵称补查接收入队 = globals().get("_昵称补查接收入队", True)
-_昵称补查溢出数 = int(globals().get("_昵称补查溢出数", 0) or 0)
 _消息事件订阅: dict[asyncio.Queue[Any], asyncio.AbstractEventLoop] = globals().get("_消息事件订阅") or {}
 _消息事件队列上限 = 512
 成员资料缓存: dict[str, dict[str, dict[str, Any]]] = globals().get("成员资料缓存") or {}
@@ -1294,6 +1284,10 @@ def _读取作用域会话缓存(会话标识: str, 类型: str, appid: str = ""
         会话 = {**旧, "messages": 匹配消息, "appid": appid, "chat_type": 类型,
               "msg_count": len(匹配消息), "unread": 0, "last_ts": 0,
               "last_content": "", "last_nickname": "", "last_message_id": ""}
+        if str(旧.get("appid") or "").strip() != appid:
+            会话.pop("private_author_nickname", None)
+            会话.pop("private_author_nickname_blank", None)
+            会话.pop("private_author_nickname_ts", None)
         if 匹配消息:
             最后 = max(匹配消息, key=lambda 项: int(项.get("ts") or 0))
             会话.update(last_ts=int(最后.get("ts") or 0), last_content=_替换消息提及名称(_消息列表摘要(最后), 最后, 会话标识),
@@ -1816,9 +1810,9 @@ async def 等待消息记录写入(超时: float = 10.0) -> bool:
 
 
 async def 停止消息记录(超时: float = 15.0) -> bool:
-    """插件重载/退出前按接收、昵称、持久化顺序冲刷，避免最后消息丢失。"""
-    global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
-    global _消息接收任务, _消息持久化任务, _昵称补查任务, _群信息刷新任务
+    """插件重载/退出前按接收、持久化顺序冲刷，避免最后消息丢失。"""
+    global _消息接收入队, _消息持久化接收入队
+    global _消息接收任务, _消息持久化任务, _群信息刷新任务
     global _群信息轮询任务, _消息数据库维护任务, _消息资料回填任务
     global _消息数据库恢复任务, _消息数据库恢复接收启动
     _消息数据库恢复接收启动 = False
@@ -1868,26 +1862,10 @@ async def 停止消息记录(超时: float = 15.0) -> bool:
         接收任务.cancel()
         await asyncio.gather(接收任务, return_exceptions=True)
 
-    _昵称补查接收入队 = False
-    昵称队列 = _准备昵称补查队列()
-    昵称冲刷 = True
-    try:
-        剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
-        await asyncio.wait_for(昵称队列.join(), timeout=剩余)
-    except Exception as 异常:
-        昵称冲刷 = False
-        logger.warning("私聊昵称补查队列未在限定时间内冲刷：错误类型=%s，剩余=%d", type(异常).__name__, 昵称队列.qsize())
-    昵称任务列表 = [任务 for 任务 in _昵称补查任务 if not 任务.done()]
-    _昵称补查任务 = []
-    for 任务 in 昵称任务列表:
-        任务.cancel()
-    if 昵称任务列表:
-        await asyncio.gather(*昵称任务列表, return_exceptions=True)
-
     _消息持久化接收入队 = False
     剩余 = max(0.01, 截止时间 - asyncio.get_running_loop().time())
     持久化冲刷 = await 等待消息记录写入(剩余)
-    已冲刷 = 接收冲刷 and 昵称冲刷 and 持久化冲刷 and not _好友事件待恢复
+    已冲刷 = 接收冲刷 and 持久化冲刷 and not _好友事件待恢复
     任务 = _消息持久化任务
     if 任务 is not None and not 任务.done():
         任务.cancel()
@@ -2397,49 +2375,6 @@ def _推送群人数事件(会话标识: str, 成员数: int | None, appid: str 
             "member_num": _规范群成员人数(成员数),
             "group_name": str(信息.get("group_name") or ""),
             "updated_at": int(信息.get("updated_at") or 0),
-        },
-    }
-
-    def 投递(队列: asyncio.Queue[Any]) -> None:
-        try:
-            队列.put_nowait(载荷)
-        except asyncio.QueueFull:
-            try:
-                队列.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                队列.put_nowait(载荷)
-            except asyncio.QueueFull:
-                pass
-
-    try:
-        当前循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        当前循环 = None
-    for 队列, 循环 in list(_消息事件订阅.items()):
-        if 当前循环 is 循环:
-            投递(队列)
-        elif 循环.is_closed():
-            _消息事件订阅.pop(队列, None)
-        else:
-            try:
-                循环.call_soon_threadsafe(投递, 队列)
-            except RuntimeError:
-                _消息事件订阅.pop(队列, None)
-
-
-def _推送私聊昵称事件(用户标识: str, appid: str, 昵称: str) -> None:
-    """昵称补查完成后立即更新打开的控制台列表。"""
-    if not _消息事件订阅:
-        return
-    载荷 = {
-        "type": "nickname",
-        "data": {
-            "chat_id": str(用户标识 or "").strip(),
-            "chat_type": "user",
-            "appid": str(appid or "").strip(),
-            "nickname": str(昵称 or "").strip(),
         },
     }
 
@@ -3881,26 +3816,6 @@ def _裁剪成员资料缓存() -> None:
                 break
 
 
-_群消息昵称补查失败冷却: dict[tuple[str, str], float] = globals().get("_群消息昵称补查失败冷却") or {}
-_群消息昵称补查失败冷却秒 = 5 * 60
-_私聊列表批量昵称回查冷却秒 = 15
-
-
-def _昵称需要补查(
-    会话标识: str, 会话: dict[str, Any] | None, 候选昵称: Any = ""
-) -> bool:
-    """私聊会话昵称缺失（空/未知/openid）时需要补查。"""
-    昵称值 = 候选昵称 or (会话 or {}).get("last_nickname")
-    昵称 = _有效用户昵称(昵称值, 会话标识)
-    if not 昵称 or "未知" in 昵称:
-        return True
-    if 昵称 == _私聊兜底昵称(会话标识):
-        return True
-    if 会话标识 and 昵称 == 会话标识:
-        return True
-    return False
-
-
 def _私聊兜底昵称(会话标识: str) -> str:
     """私聊昵称无法从 QQ 官方事件/接口获取时，用 Elaina 同款可读兜底名。"""
     try:
@@ -3920,6 +3835,36 @@ def _明确空白昵称(值: Any) -> bool:
         字符.isspace() or unicodedata.category(字符) in {"Cc", "Cf", "Zs", "Zl", "Zp"}
         for 字符 in 值
     )
+
+
+def _提取私聊作者昵称(消息: Any, 用户标识: str = "") -> tuple[str, bool]:
+    """只读私聊当前作者和原始事件包装，不扫描引用、群资料或保存昵称。"""
+    待查 = [(消息, 0)]
+    已查: set[int] = set()
+    有空白 = False
+    for _ in range(24):
+        if not 待查:
+            break
+        当前, 深度 = 待查.pop(0)
+        当前 = _解析消息结构(当前) or 当前
+        if 当前 is None or isinstance(当前, (str, bytes)) or id(当前) in 已查:
+            continue
+        已查.add(id(当前))
+        作者 = _读取字段(当前, "author")
+        作者标识 = str(_读取字段(作者, "user_openid") or _读取字段(作者, "id") or "").strip()
+        if 作者 is not None and (not 作者标识 or not 用户标识 or 作者标识 == 用户标识):
+            for 字段 in ("username", "nickname", "user_name", "nick", "name"):
+                值 = _读取字段(作者, 字段)
+                昵称 = _有效用户昵称(值, 用户标识)
+                if 昵称:
+                    return 昵称, False
+                有空白 = 有空白 or _明确空白昵称(值)
+        if 深度 < 4:
+            for 字段 in ("raw_data", "d", "data", "event", "payload"):
+                子项 = _读取字段(当前, 字段)
+                if 子项 is not None:
+                    待查.append((子项, 深度 + 1))
+    return "", 有空白
 
 
 def _提取昵称展示状态(消息: Any, 用户标识: str = "") -> tuple[str, bool]:
@@ -3959,6 +3904,19 @@ def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None, 
         记录["nickname_blank"] = False
         return
     用户标识 = str(记录.get("user_id") or "")
+    if 记录.get("chat_type") == "user":
+        昵称, 空白 = _提取私聊作者昵称(
+            原始消息 if 原始消息 is not None else 记录.get("raw_message"), 用户标识,
+        )
+        if 昵称:
+            记录["nickname"] = 昵称
+            记录["nickname_blank"] = False
+        elif 空白:
+            记录["nickname"] = _私聊兜底昵称(用户标识)
+            记录["nickname_blank"] = True
+        else:
+            记录["nickname_blank"] = bool(记录.get("nickname_blank"))
+        return
     当前昵称 = _有效用户昵称(记录.get("nickname"), 用户标识)
     if 当前昵称:
         记录["nickname_blank"] = False
@@ -4063,415 +4021,6 @@ def _读取群缓存昵称(
     return ""
 
 
-def _从已知群缓存读取昵称(
-    用户标识: str, appid: str = "", *, 扫描消息: bool = True
-) -> str:
-    """只复用同应用的已确认身份关系；热点缓存有界，不执行数据库或网络请求。"""
-    用户标识 = str(用户标识 or "").strip()
-    if not 用户标识:
-        return ""
-    应用 = str(appid or (消息缓存.get(用户标识) or {}).get("appid") or "").strip()
-    from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
-
-    已查: set[tuple[str, str]] = set()
-    候选 = list(获取官方群成员映射列表(用户标识))
-    候选.extend(
-        (群标识, 用户标识)
-        for 群标识, 会话 in 消息缓存.items()
-        if str(会话.get("chat_type") or "") == "group"
-    )
-    for 群标识, 成员标识 in 候选:
-        键 = (str(群标识 or "").strip(), str(成员标识 or "").strip())
-        if not all(键) or 键 in 已查:
-            continue
-        已查.add(键)
-        会话 = 消息缓存.get(键[0]) or {}
-        群资料 = 群信息缓存.get(键[0]) or {}
-        群应用 = str(会话.get("appid") or 群资料.get("appid") or "").strip()
-        # 未知应用只复用同为未知应用的旧缓存，不借用其他机器人的资料。
-        if 群应用 != 应用:
-            continue
-        昵称 = _读取群缓存昵称(键[0], 键[1], 应用, 扫描消息=扫描消息)
-        if 昵称:
-            return 昵称
-    return ""
-
-
-async def _批量从已知群缓存读取昵称(
-    查询列表: list[dict[str, str]],
-) -> dict[tuple[str, str], str]:
-    """同批查询只遍历每群消息一次，分片让出主循环；不写共享状态。"""
-    from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
-
-    候选表: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
-    需求: dict[tuple[str, str], set[str]] = {}
-    全部群 = tuple(
-        群标识 for 群标识, 会话 in tuple(消息缓存.items())
-        if str(会话.get("chat_type") or "") == "group"
-    )
-    工作项 = 0
-    上次让出 = time.monotonic()
-
-    async def 适时让出() -> None:
-        nonlocal 工作项, 上次让出
-        工作项 += 1
-        if 工作项 >= 128 or time.monotonic() - 上次让出 >= 0.008:
-            await asyncio.sleep(0)
-            工作项 = 0
-            上次让出 = time.monotonic()
-
-    for 查询 in 查询列表:
-        用户 = str(查询.get("user_id") or "").strip()
-        if not 用户:
-            continue
-        应用 = str(查询.get("appid") or (消息缓存.get(用户) or {}).get("appid") or "").strip()
-        查询键 = (应用, 用户)
-        if 查询键 in 候选表:
-            continue
-        候选 = list(获取官方群成员映射列表(用户))
-        候选.extend((群标识, 用户) for 群标识 in 全部群)
-        已查: set[tuple[str, str]] = set()
-        用户候选: list[tuple[str, str, str]] = []
-        for 群标识, 成员标识 in 候选:
-            await 适时让出()
-            群标识, 成员标识 = str(群标识 or "").strip(), str(成员标识 or "").strip()
-            if not 群标识 or not 成员标识 or (群标识, 成员标识) in 已查:
-                continue
-            已查.add((群标识, 成员标识))
-            会话 = 消息缓存.get(群标识) or {}
-            群资料 = 群信息缓存.get(群标识) or {}
-            if str(会话.get("chat_type") or "") != "group" and not 群资料:
-                continue
-            if str(会话.get("appid") or 群资料.get("appid") or "").strip() != 应用:
-                continue
-            用户候选.append((应用, 群标识, 成员标识))
-            需求.setdefault((应用, 群标识), set()).add(成员标识)
-        候选表[查询键] = 用户候选
-
-    昵称索引: dict[tuple[str, str, str], str] = {}
-    for (应用, 群标识), 成员集合 in 需求.items():
-        会话 = 消息缓存.get(群标识) or {}
-        群资料 = 群信息缓存.get(群标识) or {}
-        if str(会话.get("appid") or 群资料.get("appid") or "").strip() != 应用:
-            continue
-        未命中 = set(成员集合)
-        for 成员标识 in 成员集合:
-            await 适时让出()
-            资料 = (成员资料缓存.get(群标识) or {}).get(成员标识) or {}
-            if not isinstance(资料, dict) or 资料.get("is_bot"):
-                continue
-            昵称 = next((值 for 字段 in ("nickname", "username")
-                         if (值 := _有效用户昵称(资料.get(字段), 成员标识))), "")
-            if 昵称:
-                昵称索引[(应用, 群标识, 成员标识)] = 昵称
-                未命中.discard(成员标识)
-        if not 未命中:
-            continue
-        for 记录 in reversed(tuple(会话.get("messages") or [])):
-            await 适时让出()
-            if not isinstance(记录, dict) or bool(记录.get("is_self")):
-                continue
-            if 应用 and str(记录.get("appid") or 应用).strip() != 应用:
-                continue
-            原始 = _解析消息结构(记录.get("raw_message"))
-            标识集合 = {str(记录.get("user_id") or "").strip()}
-            if isinstance(原始, dict):
-                容器列表 = [原始]
-                容器列表.extend(值 for 字段 in ("data", "d", "raw_data")
-                              if isinstance((值 := 原始.get(字段)), dict))
-                for 容器 in 容器列表:
-                    for 作者字段 in ("author", "member", "user"):
-                        作者 = 容器.get(作者字段)
-                        if isinstance(作者, dict):
-                            标识集合.update(str(作者.get(字段) or "").strip()
-                                          for 字段 in ("member_openid", "user_openid", "openid", "id"))
-            for 成员标识 in 未命中.intersection(标识集合):
-                昵称 = _有效用户昵称(记录.get("nickname"), str(记录.get("user_id") or 成员标识))
-                if not 昵称 and isinstance(原始, dict):
-                    昵称 = _有效用户昵称(_提取成员昵称(原始), 成员标识)
-                if 昵称:
-                    昵称索引[(应用, 群标识, 成员标识)] = 昵称
-                    未命中.discard(成员标识)
-            if not 未命中:
-                break
-
-    结果: dict[tuple[str, str], str] = {}
-    for 查询键, 用户候选 in 候选表.items():
-        for 键 in 用户候选:
-            await 适时让出()
-            会话 = 消息缓存.get(键[1]) or {}
-            群资料 = 群信息缓存.get(键[1]) or {}
-            if str(会话.get("appid") or 群资料.get("appid") or "").strip() != 键[0]:
-                continue
-            # 让出期间群事件可能刚补充资料，当前详情仍须优先于本轮历史快照。
-            昵称 = _读取群缓存昵称(键[1], 键[2], 键[0], 扫描消息=False) or 昵称索引.get(键)
-            if 昵称:
-                结果[查询键] = 昵称
-                break
-    return 结果
-
-
-def _私聊昵称作用域匹配(会话标识: str, appid: str) -> bool:
-    """只核对该私聊作用域，不让同 OpenID 的另一机器人阻挡资料补查。"""
-    应用 = str(appid or "").strip()
-    会话 = _读取作用域会话缓存(会话标识, "user", 应用)
-    return not 会话 or (会话.get("chat_type") == "user" and str(会话.get("appid") or "").strip() == 应用)
-
-
-def _私聊昵称读取快照(会话标识: str, appid: str = "") -> tuple[str, str]:
-    会话 = _读取作用域会话缓存(会话标识, "user", appid)
-    return (str(_私聊联系人资料(会话标识, 会话).get("nickname") or ""),
-            _有效用户昵称(会话.get("last_nickname"), 会话标识))
-
-
-def _私聊昵称读取期间新名(会话标识: str, 快照: tuple[str, str], appid: str = "") -> str:
-    """新消息已提供姓名时，迟到的历史回查不得重新覆盖。"""
-    for 原值, 当前值 in zip(快照, _私聊昵称读取快照(会话标识, appid)):
-        if 当前值 and 当前值 != 原值:
-            return 当前值
-    return ""
-
-
-def _回填私聊昵称(
-    会话标识: str, 用户标识: str, 昵称: str, appid: str | None = None, *, 更新已有: bool = False
-) -> bool:
-    会话标识 = str(会话标识 or "").strip()
-    用户标识 = str(用户标识 or "").strip()
-    昵称 = _有效用户昵称(昵称, 用户标识)
-    if not 会话标识 or 会话标识 != 用户标识 or not 昵称:
-        return False
-    应用 = str(appid if appid is not None else (消息缓存.get(会话标识) or {}).get("appid") or "").strip()
-    if not _私聊昵称作用域匹配(会话标识, 应用):
-        return False
-    会话 = _读取作用域会话缓存(会话标识, "user", 应用)
-    # 数据库独有的联系人也要保留已查资料；不为昵称补查创建消息会话。
-    资料 = 成员资料缓存.setdefault(会话标识, {})
-    旧资料 = 资料.get(用户标识) or {}
-    if str(旧资料.get("appid") or "").strip() not in {"", 应用}:
-        旧资料 = {}
-    if 更新已有 or not _有效用户昵称(旧资料.get("nickname") or 旧资料.get("username"), 用户标识):
-        旧资料["nickname"] = 昵称
-        旧资料["nickname_blank"] = False
-        旧资料["appid"] = 应用
-        资料[用户标识] = 旧资料
-    if not 会话:
-        return True
-    if 更新已有 or _昵称需要补查(会话标识, 会话):
-        会话["last_nickname"] = 昵称
-    for 记录 in 会话.get("messages") or []:
-        if not isinstance(记录, dict):
-            continue
-        if str(记录.get("user_id") or "").strip() != 用户标识:
-            continue
-        if str(记录.get("appid") or "").strip() != 应用:
-            continue
-        if not _有效用户昵称(记录.get("nickname"), 用户标识):
-            记录["nickname"] = 昵称
-    return True
-
-
-async def _从群消息读取昵称(用户标识: str, appid: str = "") -> str:
-    """从已保存的群消息按 OpenID 跨群复用昵称，不请求内邀资料接口。"""
-    appid = str(appid or (消息缓存.get(用户标识) or {}).get("appid") or "").strip()
-    if _消息存储 is not None and _消息数据库已配置():
-        读取历史昵称 = getattr(_消息存储, "批量读取历史用户昵称", None)
-        if callable(读取历史昵称):
-            try:
-                历史昵称表 = await _异步执行消息记录同步(
-                    读取历史昵称, [{"appid": appid, "user_id": 用户标识}]
-                ) or {}
-                昵称 = _有效用户昵称(历史昵称表.get((appid, 用户标识)), 用户标识)
-                if 昵称:
-                    return 昵称
-            except Exception as 异常:
-                logger.debug("私聊昵称已存消息读取失败：错误类型=%s", type(异常).__name__)
-    缓存表 = await _批量从已知群缓存读取昵称([{"appid": appid, "user_id": 用户标识}]) if appid else {}
-    缓存昵称 = 缓存表.get((appid, 用户标识), "")
-    if 缓存昵称:
-        return 缓存昵称
-    if _消息存储 is not None and _消息数据库已配置():
-        读取资料昵称 = getattr(_消息存储, "批量读取用户昵称", None)
-        if callable(读取资料昵称):
-            try:
-                资料昵称表 = await _异步执行消息记录同步(
-                    读取资料昵称, [{"appid": appid, "user_id": 用户标识}]
-                ) or {}
-            except Exception as 异常:
-                logger.debug("私聊昵称用户资料读取失败：错误类型=%s", type(异常).__name__)
-            else:
-                昵称 = _有效用户昵称(资料昵称表.get((appid, 用户标识)), 用户标识)
-                if 昵称:
-                    return 昵称
-
-        读取用户昵称 = getattr(_消息存储, "读取用户最近群聊昵称", None)
-        if appid and callable(读取用户昵称):
-            try:
-                候选昵称 = await _异步执行消息记录同步(读取用户昵称, 用户标识, appid)
-            except Exception as 异常:
-                logger.debug("私聊昵称跨群回查失败：错误类型=%s", type(异常).__name__)
-            else:
-                昵称 = _有效用户昵称(候选昵称, 用户标识)
-                if 昵称:
-                    return 昵称
-
-    if not appid:
-        return ""
-
-    from 功能文件.管理功能.群聊功能.群列表工具 import 获取官方群成员映射列表
-
-    群成员列表 = 获取官方群成员映射列表(用户标识)
-    for 群标识, 成员标识 in 群成员列表:
-        昵称 = _读取群缓存昵称(群标识, 成员标识, appid, 扫描消息=False)
-        if 昵称:
-            return 昵称
-        if _消息存储 is None or not _消息数据库已配置():
-            continue
-        读取昵称 = getattr(_消息存储, "读取群成员最近昵称", None)
-        if not callable(读取昵称):
-            continue
-        try:
-            候选昵称 = await _异步执行消息记录同步(
-                读取昵称, 群标识, 成员标识, appid
-            )
-        except Exception as 异常:
-            logger.debug("私聊昵称群消息回查失败：错误类型=%s", type(异常).__name__)
-            continue
-        昵称 = _有效用户昵称(候选昵称, 用户标识)
-        if 昵称:
-            return 昵称
-
-    return ""
-
-
-async def _补查用户昵称(会话标识: str, 用户标识: str, appid: str = "") -> None:
-    """从已保存的群消息作者资料复用昵称，并回写私聊缓存。"""
-    用户标识 = str(用户标识 or "").strip()
-    应用标识 = str(appid or (消息缓存.get(会话标识) or {}).get("appid") or "").strip()
-    冷却键 = (应用标识, 用户标识)
-    if not 用户标识:
-        return
-    if _群消息昵称补查失败冷却.get(冷却键, 0.0) > time.monotonic():
-        return
-    读取前快照 = _私聊昵称读取快照(会话标识, 应用标识)
-    try:
-        昵称 = _有效用户昵称(await _从群消息读取昵称(用户标识, 应用标识), 用户标识)
-        if _私聊昵称读取期间新名(会话标识, 读取前快照, 应用标识):
-            return
-        if not 昵称:
-            _群消息昵称补查失败冷却[冷却键] = time.monotonic() + _群消息昵称补查失败冷却秒
-            return
-        _群消息昵称补查失败冷却.pop(冷却键, None)
-        if not _回填私聊昵称(会话标识, 用户标识, 昵称, 应用标识):
-            return
-        # 姓名来源已经持久保存，补查只同步显示，不反写覆盖较新的事件资料。
-        _推送私聊昵称事件(会话标识, 应用标识, 昵称)
-    except Exception as exc:
-        _群消息昵称补查失败冷却[冷却键] = time.monotonic() + _群消息昵称补查失败冷却秒
-        logger.warning("私聊昵称群消息回填失败：错误类型=%s", type(exc).__name__)
-
-
-def _准备昵称补查队列() -> asyncio.Queue[tuple[str, str, str]]:
-    """换事件循环时迁移全部排队和已取项目的未完成计数。"""
-    global _昵称补查队列
-    try:
-        当前循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        return _昵称补查队列
-    队列循环 = getattr(_昵称补查队列, "_loop", None)
-    有效任务 = any(not 任务.done() for 任务 in _昵称补查任务)
-    可恢复 = _昵称补查队列.qsize() + len(_昵称补查失败项目)
-    if not 有效任务 and (
-        队列循环 not in (None, 当前循环)
-        or int(getattr(_昵称补查队列, "_unfinished_tasks", 0)) != 可恢复
-    ):
-        新队列: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue(maxsize=_昵称补查队列上限)
-        for 项目 in _昵称补查失败项目:
-            新队列.put_nowait(项目)
-            新队列.get_nowait()
-        while not _昵称补查队列.empty():
-            新队列.put_nowait(_昵称补查队列.get_nowait())
-        _昵称补查队列 = 新队列
-    return _昵称补查队列
-
-
-async def _昵称补查工作() -> None:
-    队列 = _准备昵称补查队列()
-    while True:
-        项目 = _昵称补查失败项目.pop(0) if _昵称补查失败项目 else await 队列.get()
-        会话标识, 用户标识, appid = 项目
-        已取消 = False
-        try:
-            await _补查用户昵称(会话标识, 用户标识, appid)
-        except asyncio.CancelledError:
-            # 已取项目继续持有未完成计数，重载后的消费者优先恢复。
-            已取消 = True
-            _昵称补查失败项目.append(项目)
-            raise
-        except Exception as 异常:
-            logger.warning("私聊昵称补查任务失败：错误类型=%s", type(异常).__name__)
-        finally:
-            if not 已取消:
-                _昵称补查等待中.discard((会话标识, 用户标识))
-                队列.task_done()
-
-
-def _启动昵称补查任务() -> None:
-    global _昵称补查任务
-    try:
-        循环 = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    _准备昵称补查队列()
-    当前循环任务 = [
-        任务
-        for 任务 in _昵称补查任务
-        if not 任务.done() and getattr(任务, "get_loop", lambda: None)() is 循环
-    ]
-    while len(当前循环任务) < _昵称补查工作数:
-        当前循环任务.append(循环.create_task(_昵称补查工作()))
-    _昵称补查任务 = 当前循环任务
-
-
-def _排队昵称补查(会话标识: str, 用户标识: str, appid: str = "") -> bool:
-    """同一私聊用户同时最多存在一个补查项目，避免消息洪峰生成无限任务。"""
-    global _昵称补查溢出数
-    if not _昵称补查接收入队:
-        return False
-    会话标识 = str(会话标识 or "").strip()
-    用户标识 = str(用户标识 or "").strip()
-    if not 会话标识 or not 用户标识:
-        return False
-    键 = (会话标识, 用户标识)
-    if 键 in _昵称补查等待中:
-        return True
-    队列 = _准备昵称补查队列()
-    _昵称补查等待中.add(键)
-    try:
-        队列.put_nowait((会话标识, 用户标识, str(appid or "")))
-    except asyncio.QueueFull:
-        _昵称补查等待中.discard(键)
-        _昵称补查溢出数 += 1
-        if _昵称补查溢出数 == 1 or _昵称补查溢出数 % 100 == 0:
-            logger.warning(
-                "私聊昵称补查队列已满：上限=%d，累计未入队=%d",
-                _昵称补查队列上限,
-                _昵称补查溢出数,
-            )
-        return False
-    _启动昵称补查任务()
-    return True
-
-
-def 排队私聊昵称补查(会话标识: str, appid: str = "") -> bool:
-    """把私聊昵称回查放进有界后台队列，不阻塞历史接口响应。"""
-    会话标识 = str(会话标识 or "").strip()
-    if not _昵称需要补查(
-        会话标识, 消息缓存.get(会话标识), _私聊联系人资料(会话标识).get("nickname")
-    ):
-        return False
-    return _排队昵称补查(会话标识, 会话标识, appid)
-
-
 def 记录收到消息(
     消息: Any,
     类型: str,
@@ -4545,7 +4094,10 @@ def 记录收到消息(
                     "member_openid": 群成员标识,
                 },
             )
-        昵称 = _有效用户昵称(_提取成员昵称(消息), 成员标识)
+        昵称 = (
+            _提取私聊作者昵称(消息, 成员标识)[0]
+            if 类型 == "user" else _有效用户昵称(_提取成员昵称(消息), 成员标识)
+        )
         是机器人 = _提取作者机器人状态(消息)
         角色 = _提取QQ群消息作者角色(消息) if 类型 == "group" else ""
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
@@ -4573,12 +4125,6 @@ def 记录收到消息(
         引用ID = 引用索引["reference_id"]
         自身REFIDX = 引用索引["refidx"]
         作者头像 = _提取成员头像(消息)
-        if 类型 == "user" and not is_self and not 是机器人 and not 昵称:
-            昵称 = _从已知群缓存读取昵称(
-                成员标识,
-                str(appid or (_读取作用域会话缓存(会话标识, 类型, appid)).get("appid") or ""),
-                扫描消息=False,
-            )
         _记录成员资料(
             会话标识,
             成员标识,
@@ -4630,6 +4176,7 @@ def 记录收到消息(
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
         _补充记录昵称状态(记录, 消息)
+        _记录私聊作者昵称(会话, 记录, 消息)
         _归一化记录媒体文字(记录)
         内容 = str(记录.get("content") or "")
         if (
@@ -5234,11 +4781,6 @@ async def _消息接收工作() -> None:
                             # 每条真实群消息都推进代次，阻止在途旧错误覆盖新活动。
                             状态键 = _群作用域缓存键(会话标识, appid)
                             群机器人状态代次[状态键] = 群机器人状态代次.get(状态键, 0) + 1
-                if 类型 == "user" and 记录:
-                    用户标识 = str(记录.get("user_id") or "").strip()
-                    会话标识 = str(记录.get("_session") or "").strip()
-                    if _昵称需要补查(会话标识, 消息缓存.get(会话标识)):
-                        _排队昵称补查(会话标识, 用户标识, appid)
             except asyncio.CancelledError:
                 raise
             except Exception as 异常:
@@ -7931,135 +7473,106 @@ def _限制聊天列表预览(内容: Any) -> str:
     未闭合标签 = 文本.rfind("<") > 文本.rfind(">")
     return 文本[:文本.rfind("<")] if 未闭合标签 else 文本
 
+def _记录私聊作者昵称(会话: dict[str, Any], 记录: dict[str, Any], 消息: Any) -> None:
+    """保留本私聊作者的最新事件快照，迟到旧消息不能回退姓名。"""
+    来源 = str(记录.get("source") or "")
+    if (记录.get("chat_type") != "user" or 记录.get("is_self") or 记录.get("is_bot") is True
+            or 来源.startswith("bot_") or 来源 == "web_panel"):
+        return
+    if (str(记录.get("appid") or "").strip() != str(会话.get("appid") or "").strip()
+            or str(记录.get("user_id") or "").strip() != str(记录.get("_session") or "").strip()):
+        return
+    昵称, 空白 = _提取私聊作者昵称(消息, str(记录.get("user_id") or ""))
+    时间戳 = int(记录.get("ts") or 0)
+    if 时间戳 < int(会话.get("private_author_nickname_ts") or 0):
+        return
+    if 昵称:
+        会话["private_author_nickname"] = 昵称
+        会话["private_author_nickname_blank"] = False
+        会话["private_author_nickname_ts"] = 时间戳
+    elif 空白 and not 会话.get("private_author_nickname"):
+        会话["private_author_nickname_blank"] = True
+        会话["private_author_nickname_ts"] = 时间戳
+
+
 def _私聊联系人资料(
     会话标识: str,
     会话: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """返回私聊对方资料，不把机器人最后一条回复当成联系人资料。"""
+    """展示本私聊真实作者资料；当前事件优先，昵称不再匹配已保存用户/群资料。"""
     标识 = str(会话标识 or "").strip()
+    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False}
     if not 标识:
-        return {"nickname": "", "avatar": "", "nickname_blank": False}
-    资料表 = 成员资料缓存.get(标识) or {}
-    候选: list[dict[str, Any]] = []
+        return 结果
     当前会话 = 会话 if isinstance(会话, dict) else (消息缓存.get(标识) or {})
     应用 = str(当前会话.get("appid") or "").strip()
-    精确资料 = 资料表.get(标识)
-    if isinstance(精确资料, dict) and str(精确资料.get("appid") or "").strip() == 应用:
-        候选.append(精确资料)
-    for 记录 in reversed(当前会话.get("messages") or []):
-        if not isinstance(记录, dict):
+    实时会话 = _读取作用域会话缓存(标识, "user", 应用)
+    会话列表 = [实时会话, 当前会话] if 实时会话 is not 当前会话 else [当前会话]
+    for 候选会话 in 会话列表:
+        if str(候选会话.get("appid") or "").strip() != 应用 or 候选会话.get("chat_type") != "user":
             continue
-        if str(记录.get("user_id") or "").strip() != 标识:
-            continue
-        if str(记录.get("appid") or "").strip() != 应用:
-            continue
-        来源 = str(记录.get("source") or "").strip()
-        if bool(记录.get("is_self")) or 来源.startswith("bot_") or 来源 == "web_panel":
-            continue
-        候选.append(记录)
-    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False}
-    for 资料 in 候选:
-        昵称 = _有效用户昵称(
-            资料.get("nickname")
-            or 资料.get("username")
-            or 资料.get("member_name")
-            or "",
-            标识,
-        )
-        原文昵称, 空白 = _提取昵称展示状态(资料.get("raw_message") or 资料, 标识)
-        昵称 = 昵称 or 原文昵称
-        头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
-        if not (头像.startswith("https://") or 头像.startswith("http://")):
-            头像 = ""
+        昵称 = _有效用户昵称(候选会话.get("private_author_nickname"), 标识)
         if 昵称 and not 结果["nickname"]:
             结果["nickname"] = 昵称
-        if 头像 and not 结果["avatar"]:
-            结果["avatar"] = 头像
-        结果["nickname_blank"] = bool(结果["nickname_blank"] or 资料.get("nickname_blank") or 空白)
+        结果["nickname_blank"] = bool(结果["nickname_blank"] or 候选会话.get("private_author_nickname_blank"))
+        for 记录 in reversed(候选会话.get("messages") or []):
+            if not isinstance(记录, dict) or str(记录.get("user_id") or "").strip() != 标识:
+                continue
+            if str(记录.get("appid") or "").strip() != 应用 or 记录.get("chat_type", "user") != "user":
+                continue
+            来源 = str(记录.get("source") or "")
+            原始 = _解析消息结构(记录.get("raw_message"))
+            if (记录.get("is_self") or 记录.get("is_bot") is True
+                    or 来源.startswith("bot_") or 来源 == "web_panel"
+                    or _提取作者机器人状态(原始) is True):
+                continue
+            昵称, 空白 = _提取私聊作者昵称(原始, 标识)
+            # 受限历史原文可能不完整，保留该条私聊来信自身的作者字段，不跨记录匹配。
+            if not 昵称 and not 空白 and not 记录.get("nickname_blank"):
+                昵称 = _有效用户昵称(记录.get("nickname"), 标识)
+            if 昵称 and not 结果["nickname"]:
+                结果["nickname"] = 昵称
+            结果["nickname_blank"] = bool(结果["nickname_blank"] or 空白 or 记录.get("nickname_blank"))
+            头像 = str(记录.get("avatar") or "").strip()
+            if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
+                结果["avatar"] = 头像
+            if 结果["nickname"] and 结果["avatar"]:
+                break
         if 结果["nickname"] and 结果["avatar"]:
             break
+    # 头像独立合并；旧通用成员资料中的名字可能来自历史回查，不能继续作为私聊姓名。
+    资料 = (成员资料缓存.get(标识) or {}).get(标识) or {}
+    if isinstance(资料, dict) and str(资料.get("appid") or "").strip() == 应用:
+        头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
+        if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
+            结果["avatar"] = 头像
     if 结果["nickname"]:
         结果["nickname_blank"] = False
     return 结果
 
 
 async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, Any]:
-    """管理员主动刷新：即时查已存资料，绕过失败冷却，不调用群成员详情接口。"""
+    """返回当前私聊事件资料；不再发起保存昵称或关联群的回查。"""
     标识 = str(会话标识 or "").strip()
     if not 标识 or len(标识) > 128:
         raise ValueError("invalid conversation")
     应用 = str(appid or "").strip()
-    _群消息昵称补查失败冷却.pop((应用, 标识), None)
-    资料 = _私聊联系人资料(标识, _读取作用域会话缓存(标识, "user", 应用))
-    读取前快照 = _私聊昵称读取快照(标识, 应用)
-    数据库可用 = _消息存储 is not None and _消息数据库已配置()
-    if 数据库可用:
-        历史 = await _异步执行消息记录同步(
-            _消息存储.读取会话消息, 标识, 100, "user", 应用
-        ) or []
-        for 记录 in reversed(历史):
-            if str(记录.get("user_id") or "") != 标识 or 记录.get("is_self"):
-                continue
-            if str(记录.get("appid") or "").strip() != 应用:
-                continue
-            原始 = _解析消息结构(记录.get("raw_message"))
-            _, 空白 = _提取昵称展示状态(原始, 标识)
-            资料["nickname_blank"] = bool(资料.get("nickname_blank") or 空白)
-            资料["nickname"] = 资料["nickname"] or _有效用户昵称(
-                _提取成员昵称(原始) or 记录.get("nickname"), 标识
-            )
-            资料["avatar"] = 资料["avatar"] or _提取成员头像(原始) or str(记录.get("avatar") or "")
-        查询 = [{"appid": 应用, "user_id": 标识}]
-        for 名称 in ("批量读取历史用户昵称", "批量读取用户昵称", "批量读取用户最近群聊昵称"):
-            if not 应用 and 名称 == "批量读取用户最近群聊昵称":
-                continue
-            读取 = getattr(_消息存储, 名称, None)
-            if not callable(读取):
-                continue
-            昵称表 = await _异步执行消息记录同步(读取, 查询) or {}
-            候选 = _有效用户昵称(昵称表.get((应用, 标识)), 标识)
-            if 候选:
-                资料["nickname"] = 候选
-                break
-    if 应用 and not 资料["nickname"]:
-        缓存表 = await _批量从已知群缓存读取昵称([{"appid": 应用, "user_id": 标识}])
-        资料["nickname"] = _有效用户昵称(缓存表.get((应用, 标识)), 标识)
-    if 应用 and not 资料["nickname"]:
-        本地资料 = await _异步执行消息记录同步(_读取本地缓存文件)
-        资料["nickname"] = _有效用户昵称((本地资料.get("nicknames") or {}).get(_会话作用域键(标识, "user", 应用)) or ((本地资料.get("nicknames") or {}).get(标识) if _旧会话元数据可复用(标识, "user", 应用) else ""), 标识)
-    if not _私聊昵称作用域匹配(标识, 应用):
-        raise ValueError("conversation scope changed")
-    新名 = _私聊昵称读取期间新名(标识, 读取前快照, 应用)
-    if 新名:
-        资料["nickname"] = 新名
-        资料["avatar"] = _私聊联系人资料(标识, _读取作用域会话缓存(标识, "user", 应用)).get("avatar") or 资料["avatar"]
-    else:
-        if 资料["nickname"] or 资料["avatar"]:
-            _记录成员资料(标识, 标识, 资料["nickname"], 头像=资料["avatar"], appid=应用)
-        if 资料["nickname"]:
-            _回填私聊昵称(标识, 标识, 资料["nickname"], 应用, 更新已有=True)
-            _推送私聊昵称事件(标识, 应用, 资料["nickname"])
-    资料["nickname_blank"] = bool(资料.get("nickname_blank") and not 资料["nickname"])
-    return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料, "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
+    会话 = _读取作用域会话缓存(标识, "user", 应用)
+    资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
+    return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料,
+            "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
 
 
 def _聊天显示名(
     会话标识: str,
     会话: dict[str, Any],
     备注表: dict[str, Any] | None = None,
-    昵称表: dict[str, Any] | None = None,
 ) -> str:
-    默认备注表, 默认昵称表 = 备注表 is None, 昵称表 is None
-    if 备注表 is None or 昵称表 is None:
-        本地数据 = _读取本地缓存文件()
-        if 备注表 is None:
-            备注表 = 本地数据.get("remarks") or {}
-        if 昵称表 is None:
-            昵称表 = 本地数据.get("nicknames") or {}
+    默认备注表 = 备注表 is None
+    if 备注表 is None:
+        备注表 = _读取本地缓存文件().get("remarks") or {}
     if not isinstance(备注表, dict):
         备注表 = {}
-    if not isinstance(昵称表, dict):
-        昵称表 = {}
     类型 = str(会话.get("chat_type") or "group")
     appid = str(会话.get("appid") or "").strip()
     作用域键 = _会话作用域键(会话标识, 类型, appid)
@@ -8078,45 +7591,14 @@ def _聊天显示名(
         联系人 = _私聊联系人资料(会话标识, 会话)
         if 联系人["nickname"]:
             return 联系人["nickname"]
-        本地昵称 = _有效用户昵称(
-            _读取会话元数据项(昵称表, 会话标识, 类型, appid)
-            if 默认昵称表 else 昵称表.get(作用域键, 昵称表.get(会话标识)),
-            会话标识,
-        )
-        if 本地昵称:
-            return 本地昵称
-    最近昵称 = str(会话.get("last_nickname") or "")
-    if 类型 == "user":
-        最近昵称 = _有效用户昵称(最近昵称, 会话标识)
-    # 群会话不把机器人和网页发送昵称当作群名退路，避免群名被"机器人"/"我"污染
-    if 最近昵称 and (
-        (类型 == "user" and 最近昵称 not in {"机器人", "我", "未知用户", "未知", 会话标识})
-        or (类型 != "user" and 最近昵称 not in ("机器人", "我"))
-    ):
-        return 最近昵称
-    if 类型 == "user":
-        if _私聊联系人资料(会话标识, 会话).get("nickname_blank"):
+        if 联系人["nickname_blank"]:
             return "\u00a0"
         return _私聊兜底昵称(会话标识)
+    最近昵称 = str(会话.get("last_nickname") or "")
+    # 群会话不把机器人和网页发送昵称当作群名退路，避免群名被"机器人"/"我"污染
+    if 最近昵称 and 最近昵称 not in ("机器人", "我"):
+        return 最近昵称
     return 会话标识
-
-
-def _私聊历史显示名(会话标识: str, 会话: dict[str, Any], 显示名: str) -> str:
-    """历史工作线程只投影缺失姓名，不修改共享联系人缓存。"""
-    应用 = str(会话.get("appid") or "").strip()
-    备注项 = _读取会话元数据项(_读取本地缓存文件().get("remarks") or {}, 会话标识, "user", 应用) or {}
-    备注 = 备注项.get("remark")
-    if 备注 or not _昵称需要补查(会话标识, 会话, 显示名) or _消息存储 is None:
-        return 显示名
-    读取 = getattr(_消息存储, "批量读取历史用户昵称", None)
-    if not callable(读取) or not _私聊昵称作用域匹配(会话标识, 应用):
-        return 显示名
-    try:
-        昵称表 = 读取([{"appid": 应用, "user_id": 会话标识}]) or {}
-        return _有效用户昵称(昵称表.get((应用, 会话标识)), 会话标识) or 显示名
-    except Exception as 异常:
-        logger.debug("私聊历史标题昵称读取失败：错误类型=%s", type(异常).__name__)
-        return 显示名
 
 
 def _聊天群成员状态(会话标识: str, 类型: str, appid: str = "") -> dict[str, Any]:
@@ -8176,167 +7658,6 @@ def _会话列表头像(
     return ""
 
 
-async def 补查缺失私聊昵称(聊天项列表: list[dict[str, Any]]) -> int:
-    """批量补全私聊昵称，避免聊天列表为每个用户单独扫描历史记录。"""
-    待补查: list[tuple[dict[str, Any], str, str]] = []
-    读取前快照: dict[tuple[str, str], tuple[str, str]] = {}
-    if not 聊天项列表:
-        return 0
-    try:
-        本地资料 = await _异步执行消息记录同步(_读取本地缓存文件)
-        本地昵称表 = 本地资料.get("nicknames") or {}
-        for 聊天 in 聊天项列表:
-            if str(聊天.get("chat_type") or "") != "user":
-                continue
-            会话标识 = str(聊天.get("chat_id") or "").strip()
-            if not 会话标识:
-                continue
-            appid = str(聊天.get("appid") or "").strip()
-            会话 = _读取作用域会话缓存(会话标识, "user", appid)
-            if not _私聊昵称作用域匹配(会话标识, appid):
-                continue
-            联系人 = _私聊联系人资料(会话标识, 会话)
-            if 联系人["avatar"] and not str(聊天.get("avatar") or "").strip():
-                聊天["avatar"] = 联系人["avatar"]
-            本地昵称 = _有效用户昵称(
-                本地昵称表.get(会话标识) if appid else "",
-                会话标识,
-            )
-            if 本地昵称:
-                if _回填私聊昵称(会话标识, 会话标识, 本地昵称, appid):
-                    聊天["nickname"] = 本地昵称
-                continue
-            if not _昵称需要补查(会话标识, 会话, 聊天.get("nickname")):
-                continue
-            if _群消息昵称补查失败冷却.get((appid, 会话标识), 0.0) > time.monotonic():
-                continue
-            待补查.append((聊天, 会话标识, appid))
-            读取前快照[(appid, 会话标识)] = _私聊昵称读取快照(会话标识, appid)
-        if not 待补查:
-            return 0
-
-        缓存表 = await _批量从已知群缓存读取昵称([
-            {"appid": appid, "user_id": 会话标识}
-            for _, 会话标识, appid in 待补查 if appid
-        ])
-        未命中列表 = []
-        for 聊天, 会话标识, appid in 待补查:
-            if not _私聊昵称作用域匹配(会话标识, appid):
-                continue
-            新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)], appid)
-            if 新名:
-                聊天["nickname"] = 新名
-                continue
-            缓存昵称 = _有效用户昵称(缓存表.get((appid, 会话标识)), 会话标识)
-            if 缓存昵称:
-                _群消息昵称补查失败冷却.pop((appid, 会话标识), None)
-                聊天["nickname"] = 缓存昵称
-                if _回填私聊昵称(会话标识, 会话标识, 缓存昵称, appid):
-                    _推送私聊昵称事件(会话标识, appid, 缓存昵称)
-            else:
-                未命中列表.append((聊天, 会话标识, appid))
-        待补查 = 未命中列表
-        if not 待补查:
-            return 0
-
-        if _消息存储 is not None and _消息数据库已配置():
-            用户资料表: dict[tuple[str, str], str] = {}
-            for 方法名 in ("批量读取历史用户昵称", "批量读取用户昵称"):
-                读取用户资料 = getattr(_消息存储, 方法名, None)
-                if not callable(读取用户资料):
-                    continue
-                缺名查询 = [
-                    {"appid": appid, "user_id": 会话标识}
-                    for _, 会话标识, appid in 待补查
-                    if not _有效用户昵称(用户资料表.get((appid, 会话标识)), 会话标识)
-                ]
-                if 缺名查询:
-                    try:
-                        本轮昵称表 = await _异步执行消息记录同步(读取用户资料, 缺名查询) or {}
-                    except Exception as 异常:
-                        logger.debug("私聊昵称已存资料读取失败：错误类型=%s", type(异常).__name__)
-                        continue
-                    for 键, 值 in 本轮昵称表.items():
-                        if isinstance(键, tuple) and len(键) == 2 and _有效用户昵称(值, 键[1]):
-                            用户资料表.setdefault(键, 值)
-
-            def 应用昵称(聊天: dict[str, Any], 会话标识: str, 昵称: str, 应用: str) -> bool:
-                if not _私聊昵称作用域匹配(会话标识, 应用):
-                    return False
-                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(应用, 会话标识)], 应用)
-                if 新名:
-                    聊天["nickname"] = 新名
-                    return False
-                _群消息昵称补查失败冷却.pop(
-                    (应用, 会话标识), None
-                )
-                if not _回填私聊昵称(会话标识, 会话标识, 昵称, 应用):
-                    return False
-                聊天["nickname"] = 昵称
-                _推送私聊昵称事件(
-                    会话标识,
-                    应用,
-                    昵称,
-                )
-                return True
-
-            剩余: list[tuple[dict[str, Any], str, str]] = []
-            for 聊天, 会话标识, appid in 待补查:
-                if not _私聊昵称作用域匹配(会话标识, appid):
-                    continue
-                新名 = _私聊昵称读取期间新名(会话标识, 读取前快照[(appid, 会话标识)], appid)
-                if 新名:
-                    聊天["nickname"] = 新名
-                    continue
-                资料昵称 = _有效用户昵称(
-                    用户资料表.get((appid, 会话标识)),
-                    会话标识,
-                )
-                if 资料昵称:
-                    应用昵称(聊天, 会话标识, 资料昵称, appid)
-                else:
-                    if appid:
-                        剩余.append((聊天, 会话标识, appid))
-
-            读取群昵称 = getattr(_消息存储, "批量读取用户最近群聊昵称", None)
-            if 剩余 and callable(读取群昵称):
-                群昵称表 = await _异步执行消息记录同步(
-                    读取群昵称,
-                    [{"appid": appid, "user_id": 会话标识} for _, 会话标识, appid in 剩余],
-                ) or {}
-                for 聊天, 会话标识, appid in 剩余:
-                    群昵称 = _有效用户昵称(
-                        群昵称表.get((appid, 会话标识)),
-                        会话标识,
-                    )
-                    if not 群昵称:
-                        continue
-                    应用昵称(聊天, 会话标识, 群昵称, appid)
-            命中会话 = {
-                str(聊天.get("chat_id") or "")
-                for 聊天, _, _ in 待补查
-                if not _昵称需要补查(
-                    str(聊天.get("chat_id") or ""),
-                    None,
-                    聊天.get("nickname"),
-                )
-            }
-            冷却截止 = time.monotonic() + _私聊列表批量昵称回查冷却秒
-            for _, 会话标识, appid in 待补查:
-                if 会话标识 not in 命中会话:
-                    _群消息昵称补查失败冷却[(appid, 会话标识)] = 冷却截止
-            # 已批量查过用户资料和群消息；不要再为未匹配用户逐个全表扫描。
-            return 0
-
-        排队数 = 0
-        for _, 会话标识, _ in 待补查:
-            排队数 += int(_排队昵称补查(会话标识, 会话标识, ""))
-        return 排队数
-    except Exception as exc:
-        logger.warning("私聊昵称批量补查失败：错误类型=%s", type(exc).__name__)
-    return 0
-
-
 
 
 def _旧会话元数据可复用(会话标识: str, 类型: str, appid: str) -> bool:
@@ -8391,22 +7712,7 @@ def _数据库聚合聊天项(
             最后 = 旧最后
         来源[键] = (最后, 会话, 数量)
     未读表 = _读取全部持久化未读数()
-    私聊查询 = [{"appid": 应用, "user_id": 标识} for (应用, 类型, 标识) in 来源 if 类型 == "user"]
-    用户昵称表: dict[tuple[str, str], str] = {}
-    if 私聊查询 and _消息存储 is not None:
-        try:
-            批量资料 = getattr(_消息存储, "批量读取用户昵称", None)
-            if callable(批量资料):
-                用户昵称表.update(批量资料(私聊查询) or {})
-            缺失 = [项 for 项 in 私聊查询 if not _有效用户昵称(用户昵称表.get((项["appid"], 项["user_id"])), 项["user_id"])]
-            批量历史 = getattr(_消息存储, "批量读取历史用户昵称", None)
-            if 缺失 and callable(批量历史):
-                for 键, 昵称 in (批量历史(缺失) or {}).items():
-                    if not 用户昵称表.get(键):
-                        用户昵称表[键] = 昵称
-        except Exception as 异常:
-            logger.debug("消息记录作用域私聊昵称批量读取失败：错误类型=%s", type(异常).__name__)
-    备注表, 昵称表 = 本地数据.get("remarks") or {}, 本地数据.get("nicknames") or {}
+    备注表 = 本地数据.get("remarks") or {}
     聊天项 = []
     for (应用, 类型, 标识), (最后, 会话, 数量) in 来源.items():
         if 过滤 in {"group", "user"} and 类型 != 过滤:
@@ -8425,10 +7731,7 @@ def _数据库聚合聊天项(
             名称 = 备注 or str(信息.get("group_name") or 标识)
             头像 = _会话列表头像(标识, 类型, 最后, 信息)
         else:
-            名称 = 备注 or _聊天显示名(标识, 轻量, {标识:备注项}, {标识:昵称表.get(作用域键) or (昵称表.get(标识) if _旧会话元数据可复用(标识, 类型, 应用) else "")})
-            已存昵称 = _有效用户昵称(用户昵称表.get((应用, 标识)), 标识)
-            if not 备注 and 已存昵称 and _昵称需要补查(标识, 轻量, 名称):
-                名称 = 已存昵称
+            名称 = 备注 or _聊天显示名(标识, 轻量, {标识:备注项})
             联系人 = _私聊联系人资料(标识, 轻量)
             头像 = str(联系人.get("avatar") or "")
         if 搜索 and 搜索 not in 名称 and 搜索 not in 标识:
@@ -8545,11 +7848,6 @@ def _数据库历史消息(
         引用映射 = _构造引用映射(
             会话标识, 类型, appid, 返回消息,
         )
-        for 历史项 in 返回消息:
-            if isinstance(历史项, dict) and 历史项.get("raw_message"):
-                历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
-            if isinstance(历史项, dict) and 历史项.get("content"):
-                历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
         内存会话 = _读取作用域会话缓存(会话标识, 类型, appid)
         轻量会话 = {
             "chat_type": 类型,
@@ -8558,8 +7856,11 @@ def _数据库历史消息(
             "messages": 返回消息,
         }
         显示名 = _聊天显示名(会话标识, 轻量会话)
-        if 类型 == "user":
-            显示名 = _私聊历史显示名(会话标识, 轻量会话, 显示名)
+        for 历史项 in 返回消息:
+            if isinstance(历史项, dict) and 历史项.get("raw_message"):
+                历史项["raw_message"] = _序列化原始消息(历史项.get("raw_message"), 3000)
+            if isinstance(历史项, dict) and 历史项.get("content"):
+                历史项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(历史项.get("content") or ""))
         return {
             "messages": 返回消息,
             "chat_id": 会话标识, "chat_type": 类型, "appid": appid,
@@ -10546,16 +9847,44 @@ def _平台实例appid(客户端: Any) -> str:
     return ""
 
 
+def _停止旧私聊昵称补查() -> None:
+    """热升级取消已移除的补名工作，等待旧 finally 收尾后丢弃其队列。"""
+    旧任务 = list(globals().pop("_昵称补查任务", None) or [])
+    旧字段 = (
+        "_昵称补查接收入队", "_昵称补查队列", "_昵称补查等待中", "_昵称补查失败项目",
+        "_昵称补查队列上限", "_昵称补查工作数", "_昵称补查溢出数",
+        "_群消息昵称补查失败冷却", "_群消息昵称补查失败冷却秒", "_私聊列表批量昵称回查冷却秒",
+        "_昵称需要补查", "_从已知群缓存读取昵称", "_批量从已知群缓存读取昵称",
+        "_私聊昵称作用域匹配", "_私聊昵称读取快照", "_私聊昵称读取期间新名", "_回填私聊昵称",
+        "_从群消息读取昵称", "_补查用户昵称", "_准备昵称补查队列", "_昵称补查工作",
+        "_启动昵称补查任务", "_排队昵称补查", "排队私聊昵称补查", "_私聊历史显示名",
+        "补查缺失私聊昵称", "_推送私聊昵称事件",
+    )
+    if not 旧任务 and not any(字段 in globals() for 字段 in 旧字段):
+        return
+    globals()["_昵称补查接收入队"] = False
+
+    def 清理(_: Any = None) -> None:
+        if all(任务.done() for 任务 in 旧任务):
+            for 字段 in 旧字段:
+                globals().pop(字段, None)
+    for 任务 in 旧任务:
+        if not 任务.done():
+            任务.cancel()
+            任务.add_done_callback(清理)
+    清理()
+
+
 def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
     """先恢复接收入口；建表和摘要读取放到单个后台任务。"""
     global 当前插件上下文, 当前插件配置
-    global _消息接收入队, _昵称补查接收入队, _消息持久化接收入队
+    global _消息接收入队, _消息持久化接收入队
     global _消息数据库配置缓存, _消息数据库配置缓存时间
     global _消息数据库恢复接收启动
     _停止旧消息裁剪任务()
+    _停止旧私聊昵称补查()
     _消息数据库恢复接收启动 = True
     _消息接收入队 = True
-    _昵称补查接收入队 = True
     _消息持久化接收入队 = True
     _消息数据库配置缓存 = None
     _消息数据库配置缓存时间 = 0.0
@@ -10573,8 +9902,6 @@ def 安装消息记录(上下文: Any = None, 配置: Any = None) -> bool:
         _启动消息数据库恢复任务()
         if _好友事件待恢复 or not _准备消息接收队列().empty():
             _启动消息接收任务()
-        if _昵称补查失败项目 or not _准备昵称补查队列().empty():
-            _启动昵称补查任务()
         if _消息持久化失败批次 or not _准备消息持久化队列().empty():
             _启动消息持久化任务()
         _启动群信息轮询任务()

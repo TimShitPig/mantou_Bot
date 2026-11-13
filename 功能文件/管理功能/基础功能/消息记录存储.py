@@ -2312,65 +2312,6 @@ def 读取群成员最近消息(
         _关闭连接(连接)
 
 
-def _读取最近群消息昵称(用户标识: str, 会话标识: str = "", appid: str = "") -> str:
-    """跨群复用索引查询；仅指定群的旧原文身份允许在该群内回查。"""
-    用户标识 = str(用户标识 or "").strip()
-    会话标识 = str(会话标识 or "").strip()
-    appid = str(appid or "").strip()
-    if not 用户标识 or not _MySQL可用():
-        return ""
-    if not 会话标识:
-        昵称表 = 批量读取用户最近群聊昵称([{"user_id": 用户标识, "appid": appid}])
-        return _有效用户昵称(用户标识, 昵称表.get((appid, 用户标识)) or 昵称表.get(("", 用户标识)))
-
-    连接 = _打开连接()
-    if 连接 is None:
-        return ""
-    阶段 = "group_user_index"
-    try:
-        昵称表达式 = _原始消息昵称表达式("m", "m.user_id")
-        群条件 = "m.会话标识=%s AND m.消息类型='group' AND m.is_self=0"
-        参数: tuple[str, ...] = (会话标识,)
-        if appid:
-            群条件 += " AND m.appid=%s"
-            参数 += (appid,)
-        with 连接.cursor() as 游标:
-            游标.execute(
-                f"SELECT {昵称表达式} AS nickname FROM `{消息记录表名}` m "
-                f"WHERE {群条件} AND m.user_id=%s AND {昵称表达式}<>'' "
-                "ORDER BY m.id DESC LIMIT 1", 参数 + (用户标识,),
-            )
-            行 = 游标.fetchone()
-            昵称 = _有效用户昵称(用户标识, _行字段(行, 0, "nickname", 默认值=""))
-            if 昵称:
-                return 昵称
-            阶段 = "group_raw_identity"
-            身份路径 = (
-                "$.author.member_openid", "$.author.user_openid", "$.author.id",
-                "$.member.member_openid", "$.member.user_openid",
-                "$.data.author.member_openid", "$.data.author.user_openid",
-                "$.d.author.member_openid", "$.d.author.user_openid",
-            )
-            身份条件 = " OR ".join(
-                "CASE WHEN JSON_VALID(m.raw_message) THEN "
-                f"JSON_UNQUOTE(JSON_EXTRACT(m.raw_message, '{路径}')) ELSE '' END=%s"
-                for 路径 in 身份路径
-            )
-            游标.execute(
-                f"SELECT {昵称表达式} AS nickname FROM `{消息记录表名}` m "
-                f"WHERE {群条件} AND JSON_VALID(m.raw_message) AND ({身份条件}) "
-                f"AND {昵称表达式}<>'' ORDER BY m.id DESC LIMIT 1",
-                参数 + (用户标识,) * len(身份路径),
-            )
-            行 = 游标.fetchone()
-            return _有效用户昵称(用户标识, _行字段(行, 0, "nickname", 默认值=""))
-    except Exception as exc:
-        logger.warning("群成员昵称回查失败：阶段=%s，错误类型=%s，%s", 阶段, type(exc).__name__, _MySQL错误摘要(exc))
-        return ""
-    finally:
-        _关闭连接(连接)
-
-
 
 def _有效用户昵称(用户标识: str, 昵称: Any) -> str:
     if isinstance(昵称, str) and 昵称 and all(
@@ -2612,44 +2553,6 @@ def _批量读取历史昵称行(
     return list(已找到.values())
 
 
-def 批量读取历史用户昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
-    """同 AppID、同用户 OpenID 直接复用群聊及私聊历史中的真实姓名。"""
-    结果: dict[tuple[str, str], str] = {}
-    if not 用户列表 or not _MySQL可用():
-        return 结果
-    分组: dict[str, list[str]] = {}
-    for 项 in 用户列表:
-        if not isinstance(项, dict):
-            continue
-        appid = str(项.get("appid") or "").strip()
-        用户标识 = str(项.get("user_id") or "").strip()
-        if not 用户标识 or len(用户标识) > 128 or len(appid) > 64:
-            continue
-        if 用户标识 not in 分组.setdefault(appid, []):
-            分组[appid].append(用户标识)
-    if not 分组:
-        return 结果
-    连接 = _打开连接()
-    if 连接 is None:
-        return 结果
-    try:
-        for appid, 标识列表 in 分组.items():
-            for 起点 in range(0, len(标识列表), 200):
-                分块 = 标识列表[起点 : 起点 + 200]
-                for 行 in _批量读取历史昵称行(连接, appid, 分块):
-                    记录appid = str(_行字段(行, 0, "appid", 默认值="") or "").strip()
-                    标识 = str(_行字段(行, 1, "user_id", 默认值="") or "").strip()
-                    昵称 = _有效用户昵称(标识, _行字段(行, 2, "nickname", 默认值=""))
-                    if 记录appid == appid and 标识 in 分块 and 昵称:
-                        结果[(appid, 标识)] = 昵称
-        return 结果
-    except Exception as exc:
-        logger.warning("QQ用户历史昵称读取失败：错误类型=%s，%s", type(exc).__name__, _MySQL错误摘要(exc))
-        return 结果
-    finally:
-        _关闭连接(连接)
-
-
 def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
     """兼容入口：直接匹配全部聊天历史，再补充已确认的跨群身份关联。"""
     结果: dict[tuple[str, str], str] = {}
@@ -2810,19 +2713,6 @@ def 批量读取用户最近群聊昵称(用户列表: list[dict[str, Any]]) -> 
         return 结果
     finally:
         _关闭连接(连接)
-
-
-def 读取群成员最近昵称(会话标识: str, 用户标识: str, appid: str = "") -> str:
-    """从该群成员最近保存的消息或原始事件字段读取有效昵称。"""
-    会话标识 = str(会话标识 or "").strip()
-    if not 会话标识:
-        return ""
-    return _读取最近群消息昵称(用户标识, 会话标识=会话标识, appid=appid)
-
-
-def 读取用户最近群聊昵称(用户标识: str, appid: str = "") -> str:
-    """按用户 OpenID 跨群读取最近有效昵称，供私聊联系人资料复用。"""
-    return _读取最近群消息昵称(用户标识, appid=appid)
 
 
 def 读取会话消息(
