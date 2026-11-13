@@ -5584,7 +5584,8 @@ async def _生成固定账号QQ阅读下载回复流(
     try:
         async for 结果 in 生成QQ阅读下载文件流(来源, 分享文本=分享文本, 状态配置=配置):
             if 结果["kind"] != "file":
-                yield 结果["message"]
+                if 结果["message"]:
+                    yield 结果["message"]
                 continue
             filename, content = 结果["filename"], 结果["content"]
             details = {"title": 结果["title"], "author": 结果["author"]}
@@ -5736,13 +5737,11 @@ async def 生成QQ阅读下载文件流(
             )
             # 第三方 VIP 正文可能缩小范围，官方出版书也可能跳过没有可读文本的条目。
             章节数待确认 = 付费类型 == "vip" if 使用第三方正文 else published
-            if not 章节数待确认:
-                yield {
-                    "kind": "progress", "stage": "content",
-                    "message": 格式化下载提示(details, len(catalog)),
-                }
-
             stage = "content"
+            yield {
+                "kind": "progress", "stage": stage,
+                "message": "" if 章节数待确认 else 格式化下载提示(details, len(catalog)),
+            }
             if 使用第三方正文:
                 try:
                     chapters = await 下载QQ阅读第三方正文(book_id, catalog)
