@@ -11,7 +11,7 @@ import urllib.parse
 from collections import Counter
 from contextvars import ContextVar
 from difflib import SequenceMatcher
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Iterable
 
 import aiohttp
 from yarl import URL
@@ -403,8 +403,12 @@ def 生成找书容错查询(关键词: str, 搜索类型: str = "auto") -> list
     )
     加入(中文书名)
     if len(书名词) >= 3:
-        加入(书名词[:max(2, (len(书名词) + 1) // 2)])
-        加入(书名词[-max(2, len(书名词) // 2):])
+        # 长标题的片段至少达到反向包含匹配的长度。
+        最短片段 = 8 if len(书名词) >= 12 else 2
+        前缀长度 = max(最短片段, (len(书名词) + 1) // 2)
+        后缀长度 = max(最短片段, len(书名词) // 2)
+        加入(书名词[:前缀长度])
+        加入(书名词[-后缀长度:])
     return 结果[:找书容错补搜上限]
 
 
@@ -1253,36 +1257,50 @@ async def _请求番茄搜索页(
 
 
 async def 搜索番茄(
-    session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30
+    session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30,
+    原始关键词: str = "", 搜索类型: str = "auto", 截止时间: float | None = None,
 ) -> list[dict[str, Any]]:
     if 番茄小说 is None:
         raise _找书平台查询错误("platform_unavailable")
     结果: list[dict[str, Any]] = []
     偏移 = 0
     每批 = 30
-    截止时间 = asyncio.get_running_loop().time() + 10.0
+    搜索截止 = asyncio.get_running_loop().time() + 10.0
+    if 截止时间 is not None:
+        搜索截止 = min(搜索截止, 截止时间)
+    原始关键词 = 原始关键词 or 关键词
     while len(结果) < 需要数量 and 偏移 < 60:
-        data = await _请求番茄搜索页(session, 关键词, 偏移, 每批, 截止时间)
-        if not isinstance(data, dict) or data.get("code") not in (0, "0"):
-            code = data.get("code") if isinstance(data, dict) else None
-            数字码 = int(code) if str(code).lstrip("-").isdigit() else None
-            logger.warning(f"找书番茄搜索失败：category=business_error, code={数字码}, offset={偏移}")
-            raise _找书平台查询错误("search_rejected")
-        d = data.get("data")
-        rows = d.get("search_data") if isinstance(d, dict) else None
-        if not isinstance(rows, list):
-            raise _找书平台查询错误("invalid_response")
+        try:
+            data = await _请求番茄搜索页(session, 关键词, 偏移, 每批, 搜索截止)
+            if not isinstance(data, dict) or data.get("code") not in (0, "0"):
+                code = data.get("code") if isinstance(data, dict) else None
+                数字码 = int(code) if str(code).lstrip("-").isdigit() else None
+                logger.warning("找书番茄搜索失败：category=business_error, code=%s, offset=%s", 数字码, 偏移)
+                raise _找书平台查询错误("search_rejected")
+            页数据 = data.get("data")
+            rows = 页数据.get("search_data") if isinstance(页数据, dict) else None
+            if not isinstance(rows, list):
+                raise _找书平台查询错误("invalid_response")
+        except _找书平台查询错误:
+            if not 结果:
+                raise
+            _标记找书平台失败()
+            break
         if not rows:
             break
+        本页结果 = []
         for row in rows:
             # 作者卡片和系列书单可能把多本书放在同一个 books 数组中。
             for book in 番茄小说.提取番茄搜索书籍行(row):
                 item = 提取番茄搜索书({**row, "books": None, "book": book})
                 if item:
-                    结果.append(item)
-        if not d.get("has_more"):
+                    item["_platform_rank"] = 偏移 + len(本页结果)
+                    本页结果.append(item)
+        # 先按用户原词筛选，再限制数量，避免本页后部唯一命中的书被截掉。
+        结果 = 排序找书结果(去重合并([结果, 本页结果]), 原始关键词, 搜索类型)
+        if not 页数据.get("has_more"):
             break
-        下一偏移 = int(d.get("next_offset") or (偏移 + 每批))
+        下一偏移 = _安全整数热度(页数据.get("next_offset")) or (偏移 + 每批)
         if 下一偏移 <= 偏移:
             break
         偏移 = 下一偏移
@@ -1344,6 +1362,7 @@ async def 过滤无目录番茄搜索结果(
     *,
     搜索类型: str = "auto",
     最大数量: int = 番茄目录预检最大候选数,
+    超时: float | None = None,
 ) -> list[dict[str, Any]]:
     """过滤已明确无目录的番茄候选，保留网络状态未知的候选。"""
     if not 结果 or 番茄小说 is None:
@@ -1365,10 +1384,7 @@ async def 过滤无目录番茄搜索结果(
         async with 限流:
             return 书籍编号, await 预检番茄目录(书籍编号)
 
-    预检结果 = await asyncio.gather(*(检查(项) for 项 in 候选), return_exceptions=True)
-    状态表 = dict(项 for 项 in 预检结果 if isinstance(项, tuple))
-    if any(isinstance(项, BaseException) for 项 in 预检结果):
-        _标记找书平台失败()
+    状态表 = dict(await _收集已完成目录预检((检查(项) for 项 in 候选), 超时))
     筛选后: list[dict[str, Any]] = []
     for 项 in 结果:
         书籍编号 = str(项.get("book_id") or "").strip()
@@ -2043,8 +2059,35 @@ async def 预检QQ阅读候选(
     return allowed
 
 
+async def _收集已完成目录预检(
+    检查列表: Iterable[Coroutine[Any, Any, tuple[str, bool | None]]],
+    超时: float | None,
+) -> list[tuple[str, bool | None]]:
+    任务 = [asyncio.create_task(检查) for 检查 in 检查列表]
+    if not 任务:
+        return []
+    try:
+        完成, 未完成 = await asyncio.wait(任务, timeout=超时)
+        结果 = []
+        if 未完成:
+            _标记找书平台失败()
+        for 项 in 任务:
+            if 项 not in 完成:
+                continue
+            if 项.cancelled() or 项.exception() is not None:
+                _标记找书平台失败()
+                continue
+            结果.append(项.result())
+        return 结果
+    finally:
+        for 项 in 任务:
+            if not 项.done():
+                项.cancel()
+        await asyncio.gather(*任务, return_exceptions=True)
+
+
 async def 过滤章节单独付费QQ阅读搜索结果(
-    结果: list[dict[str, Any]],
+    结果: list[dict[str, Any]], *, 超时: float | None = None,
 ) -> list[dict[str, Any]]:
     """找书保留全免费、VIP 或含免费章节的单章付费 QQ 阅读书籍。"""
     if not 结果 or QQ阅读小说 is None:
@@ -2071,12 +2114,10 @@ async def 过滤章节单独付费QQ阅读搜索结果(
     创建会话 = getattr(QQ阅读小说, "创建QQ阅读HTTP会话", None)
     if callable(创建会话):
         async with 创建会话(concurrency=QQ阅读预检并发数) as session:
-            检查结果 = await asyncio.gather(*(检查(项, session) for 项 in 结果), return_exceptions=True)
+            检查结果 = await _收集已完成目录预检((检查(项, session) for 项 in 结果), 超时)
     else:
-        检查结果 = await asyncio.gather(*(检查(项) for 项 in 结果), return_exceptions=True)
-    if any(isinstance(项, BaseException) for 项 in 检查结果):
-        _标记找书平台失败()
-    可用书籍编号 = {项[0] for 项 in 检查结果 if isinstance(项, tuple) and 项[1]}
+        检查结果 = await _收集已完成目录预检((检查(项) for 项 in 结果), 超时)
+    可用书籍编号 = {编号 for 编号, 可用 in 检查结果 if 可用}
     return [项 for 项 in 结果 if str(项.get("book_id") or "").strip() in 可用书籍编号]
 
 
@@ -2298,9 +2339,13 @@ async def _聚合搜索未缓存(
                     记录失败(平台, 当前阶段, 失败原因)
                 _找书平台调用状态.reset(标记)
 
-        def 平台搜索工厂(词: str, 数量: int) -> tuple[tuple[str, Callable[[], Awaitable[list[Any]]]], ...]:
+        def 平台搜索工厂(
+            词: str, 数量: int, 截止: float | None = None,
+        ) -> tuple[tuple[str, Callable[[], Awaitable[list[Any]]]], ...]:
             return (
-                ("番茄", lambda: 搜索番茄(session, 词, 需要数量=数量)),
+                ("番茄", lambda: 搜索番茄(
+                    session, 词, 需要数量=数量, 原始关键词=关键词, 搜索类型=搜索类型, 截止时间=截止,
+                )),
                 ("七猫", lambda: 搜索七猫(session, 词, 需要数量=数量)),
                 ("QQ阅读", lambda: 搜索QQ阅读(词, 需要数量=数量)),
                 ("QQ浏览器", lambda: 搜索QQ浏览器(词, 需要数量=数量)),
@@ -2326,7 +2371,7 @@ async def _聚合搜索未缓存(
             )
 
         async def 预检平台结果(
-            平台: str, 结果: list[dict[str, Any]], 阶段: str,
+            平台: str, 结果: list[dict[str, Any]], 阶段: str, 截止: float | None,
         ) -> list[dict[str, Any]]:
             结果 = [项 for 项 in 结果 if isinstance(项, dict)]
             for 排名, 项 in enumerate(结果):
@@ -2335,13 +2380,16 @@ async def _聚合搜索未缓存(
                 return 结果
             状态: dict[str, bool] = {}
             标记 = _找书平台调用状态.set(状态)
+            # 在平台任务的截止时间前汇总已完成的章检，给清理和合并留出时间。
+            超时 = None if 截止 is None else max(0, 截止 - asyncio.get_running_loop().time() - 0.05)
             try:
                 if 平台 == "番茄":
                     return await 过滤无目录番茄搜索结果(
                         结果, 关键词, 搜索类型=搜索类型,
                         最大数量=5 if 阶段 == "补搜" else 番茄目录预检最大候选数,
+                        超时=超时,
                     )
-                return await 过滤章节单独付费QQ阅读搜索结果(结果)
+                return await 过滤章节单独付费QQ阅读搜索结果(结果, 超时=超时)
             except Exception:
                 状态["failed"] = True
                 return []
@@ -2387,12 +2435,14 @@ async def _聚合搜索未缓存(
                 await asyncio.gather(*任务表, return_exceptions=True)
 
         原查询阶段: dict[str, str] = {}
+        循环 = asyncio.get_running_loop()
+        原查询截止 = 循环.time() + 找书单平台超时秒数 if len(允许平台集合) > 1 else None
 
         async def 搜索并预检(平台: str, 工厂: Callable[[], Awaitable[list[Any]]]) -> list[dict[str, Any]]:
             原查询阶段[平台] = "search"
             结果 = await 平台搜索任务(平台, 工厂)
             原查询阶段[平台] = "precheck"
-            return await 预检平台结果(平台, 结果, "原查询")
+            return await 预检平台结果(平台, 结果, "原查询", 原查询截止)
 
         原查询任务 = {
             asyncio.create_task(搜索并预检(平台, 工厂)): 平台
@@ -2401,7 +2451,7 @@ async def _聚合搜索未缓存(
         }
         原查询结果 = await 收集平台结果(
             原查询任务, 原查询阶段, "原查询",
-            找书单平台超时秒数 if len(允许平台集合) > 1 else None,
+            max(0, 原查询截止 - 循环.time()) if 原查询截止 is not None else None,
         )
         已完成平台 = sorted(原查询结果.keys() - 失败平台)
         结果集合 = list(原查询结果.values())
@@ -2460,11 +2510,11 @@ async def _聚合搜索未缓存(
                             补搜超时=min(找书联想超时秒数, 剩余时间),
                         )
                         平台阶段[平台] = "precheck"
-                        return await 预检平台结果(平台, 结果, "补搜")
+                        return await 预检平台结果(平台, 结果, "补搜", 轮次截止时间)
 
                 任务表 = {
                     asyncio.create_task(补搜平台(平台, 工厂)): 平台
-                    for 平台, 工厂 in 平台搜索工厂(词, 10)
+                    for 平台, 工厂 in 平台搜索工厂(词, 10, 轮次截止时间 - 0.15)
                     if 平台 in 允许平台集合 and 平台 not in 失败平台
                 }
                 if not 任务表:
@@ -2512,7 +2562,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v12-recall-variants",
+        tuple(_拆分查询词(关键词)), "search-rank-v13-preserve-matches",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
