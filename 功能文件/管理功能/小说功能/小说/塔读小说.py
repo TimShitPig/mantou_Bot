@@ -931,6 +931,7 @@ def 解析塔读搜索书籍(response: Mapping[str, Any]) -> list[dict[str, Any]
         author = str(book.get("authorName") or book.get("author") or "未知").strip()
         result.append(
             {
+                "_search_status": {key: book[key] for key in ("status", "statusText", "isEnd", "isFinished", "finish",) if key in book},
                 "title": title or "未知",
                 "author": author or "未知",
                 "book_id": book_id,

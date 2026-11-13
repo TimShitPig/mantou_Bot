@@ -4151,6 +4151,7 @@ def 解析QQ阅读搜索结果(data: Any) -> list[dict[str, Any]]:
         seen.add(book_id)
         result.append(
             {
+                "_search_status": {key: info.get(key, card.get(key)) for key in ("status", "statusText", "isfinished", "isFinished", "finished", "finishstate",) if key in info or key in card},
                 "platform": "QQ阅读",
                 "book_id": book_id,
                 "title": title,

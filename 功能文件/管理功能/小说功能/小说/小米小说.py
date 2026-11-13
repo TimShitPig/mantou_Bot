@@ -813,6 +813,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                 continue
             结果.append(
                 {
+                    "_search_status": {key: 项目[key] for key in ("status", "bookStatus", "finish",) if key in 项目},
                     "book_id": 编号,
                     "title": 标题,
                     "author": _小米搜索作者(项目),

@@ -149,7 +149,7 @@ async def 搜索梧桐小说(关键词: str, 数量上限: int = 20) -> list[dic
         async with AsyncWutongClient(concurrency=2) as client:
             搜索 = await client.search(关键词, page=1, page_size=上限)
         return [
-            {"platform": "梧桐", "book_id": str(书["book_id"]),
+            {"status": 书.get("status"), "platform": "梧桐", "book_id": str(书["book_id"]),
              "title": 书["title"], "author": 书.get("author") or "未知", "url": "",
              "word_count": 书.get("word_count"), "chapter_count": 书.get("chapter_count"),
              "intro": 书.get("intro") or "", "score": 书.get("score"), "heat": 书.get("read_num")}

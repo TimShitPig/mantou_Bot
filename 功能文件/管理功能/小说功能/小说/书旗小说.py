@@ -292,6 +292,7 @@ def _从搜索对象提取书籍(obj: dict[str, Any]) -> dict[str, Any] | None:
     if not 书籍编号.isdigit() or not 标题:
         return None
     return {
+        "_search_status": {key: obj[key] for key in ("status", "statusText", "state", "stateText", "bookStatus", "bookStatusText",) if key in obj},
         "book_id": 书籍编号,
         "title": 标题,
         "author": 清理网页文本(obj.get("authorName") or obj.get("author") or "未知")

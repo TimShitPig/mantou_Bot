@@ -993,6 +993,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             continue
         结果.append(
             {
+                "_search_status": {key: book[key] for key in ("status", "serialStatus", "isEnd",) if key in book},
                 "title": book.get("bookName") or book.get("title") or "未知",
                 "author": book.get("authorName") or book.get("author") or "未知",
                 "book_id": book_id,

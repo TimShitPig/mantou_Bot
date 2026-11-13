@@ -1574,6 +1574,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
                         continue
                     已见.add(编号)
                     结果.append({
+                        "_search_status": {key: 项目[key] for key in ("status", "statusText",) if key in 项目},
                         "book_id": 编号, "doc_id": 编号, "title": 标题,
                         "novel_book_id": str(项目.get("novel_book_id") or ""),
                         "author": str(项目.get("author") or "未知").strip(),

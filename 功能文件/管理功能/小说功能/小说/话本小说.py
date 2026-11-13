@@ -673,7 +673,7 @@ async def 搜索话本小说(关键词: str, 数量上限: int = 20) -> list[dic
         上限 = max(1, min(int(数量上限), 30))
         async with AsyncHuabenClient(concurrency=2) as client:
             搜索 = await client.search(关键词, page=1, page_size=上限)
-        return [{"platform": "话本", "book_id": str(书["book_id"]),
+        return [{"status": 书.get("serial_state_text"), "platform": "话本", "book_id": str(书["book_id"]),
                  "title": 书["book_name"], "author": 书.get("author_name") or "未知",
                  "url": f"https://www.ihuaben.com/book/{书['book_id']}.html",
                  "word_count": 书.get("word_count"), "chapter_count": 书.get("chapter_count"),

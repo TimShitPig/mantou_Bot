@@ -1052,6 +1052,7 @@ def 解析晋江搜索结果(data: Mapping[str, Any]) -> list[dict[str, Any]]:
             continue
         result.append(
             {
+                "_search_status": {key: item[key] for key in ("status", "novelStep", "novelstep", "novelStepText",) if key in item},
                 "platform": "晋江",
                 "book_id": book_id,
                 "title": title,

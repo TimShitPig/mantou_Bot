@@ -513,6 +513,7 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
                 continue
             result.append(
                 {
+                    "_search_status": {key: info[key] for key in ("status", "completeState",) if key in info},
                     "book_id": book_id,
                     "title": title.replace("《", "").replace("》", ""),
                     "author": _文本(info.get("bookAuthor") or "未知"),

@@ -502,6 +502,7 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
                 continue
             result.append(
                 {
+                    "status": item.get("status"),
                     "book_id": book_id,
                     "title": title,
                     "author": _文本(item.get("penname") or "未知"),

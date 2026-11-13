@@ -212,7 +212,6 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
     ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
 )
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
-分隔线 = "————————"
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
 # 搜索时只预检最可能展示在前面的候选，避免用户点击后才发现没有目录。
 番茄目录预检缓存秒数 = 600
@@ -1068,6 +1067,74 @@ def 排序找书结果(
     return 筛选后
 
 
+def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") -> str:
+    """只采用当前书籍的明确状态；未知字段或缺失值不猜测为连载。"""
+    if isinstance(value, dict):
+        字段 = (
+            "status", "status_text", "statusText", "bookStatusText", "book_status_text",
+            "creation_status_text", "serial_state_text", "stateText", "novelStepText",
+            "creation_status", "book_status", "bookStatus", "novelStep", "novelstep",
+            "novelStatus", "NovelStatus", "state", "STATE", "serialStatus", "completeState",
+            "isfinished", "isFinished", "finished", "finishstate", "is_finished",
+            "is_over", "is_finish", "finish", "completed", "isEnd", "isSerial", "is_serial",
+        )
+        原始状态 = value.get("_search_status")
+        已知状态: set[str] = set()
+        for 来源 in (value, 原始状态 if isinstance(原始状态, dict) else {}):
+            for 键 in 字段:
+                状态 = 规范化找书状态(来源.get(键), platform=platform, field=键)
+                if 状态 != "未知":
+                    已知状态.add(状态)
+        # 七猫搜索把状态与字数放在副标题中，只读取有明确分隔的状态词。
+        if platform == "七猫":
+            匹配 = re.search(
+                r"(?:^|[\s|·/，,])((?:已)?完结|完本|连载(?:中)?)(?=$|[\s|·/，,])",
+                str(value.get("sub_title") or ""),
+            )
+            if 匹配:
+                已知状态.add(规范化找书状态(匹配.group(1)))
+        return 已知状态.pop() if len(已知状态) == 1 else "未知"
+    if value is None or not isinstance(value, (str, int, float, bool)):
+        return "未知"
+    文本 = str(value).strip().casefold()
+    if 文本 in {"完结", "已完结", "完本", "已完本", "全本", "已完成", "finish", "finished", "completed", "complete"}:
+        return "完结"
+    if 文本 in {"连载", "连载中", "更新中", "连载更新", "未完结", "尚未完结", "未完本", "ongoing", "serial", "serializing", "updating"}:
+        return "连载"
+    键 = field.casefold()
+    # 数值含义只沿用各平台现有详情/下载解析，不能跨平台套用。
+    枚举: dict[tuple[str, str], dict[str, str]] = {
+        ("番茄", "creation_status"): {"0": "完结", "2": "完结", "1": "连载", "3": "连载", "4": "连载"},
+        ("番茄", "status"): {"0": "完结", "2": "完结", "1": "连载", "3": "连载", "4": "连载"},
+        ("番茄", "book_status"): {"1": "完结", "2": "完结", "0": "连载", "3": "连载", "4": "连载"},
+        ("书旗", "state"): {"1": "连载", "2": "完结"},
+        ("晋江", "novelstep"): {"1": "连载", "2": "完结"},
+        ("得间", "completestate"): {"y": "完结", "n": "连载"},
+        ("猫眼", "completestate"): {"y": "完结", "n": "连载"},
+        ("宜搜", "status"): {"1": "完结", "2": "完结", "0": "连载"},
+        ("连城", "state"): {"1": "完结", "0": "连载"},
+    }
+    if (platform, 键) in 枚举:
+        return 枚举[(platform, 键)].get(文本, "未知")
+    if platform in {"米读", "猫眼", "酷我", "酷匠"} and 键 == "status":
+        return {"1": "完结", "0": "连载"}.get(文本, "未知")
+    if platform == "菠萝包" and 键 in {"novelstatus", "status", "state"}:
+        return {"1": "完结", "2": "完结", "0": "连载"}.get(文本, "未知")
+    正向字段 = {
+        "七猫": {"is_over", "is_finish", "finish", "completed"},
+        "QQ阅读": {"status", "isfinished", "finished", "finishstate"},
+        "QQ浏览器": {"is_finished"}, "小米": {"finish"},
+        "点众": {"isend"}, "塔读": {"isend", "isfinished", "finish"},
+    }
+    反向 = platform in {"追书", "疯狂追书", "梧桐"} and 键 in {"isserial", "is_serial"}
+    if 反向 or 键 in 正向字段.get(platform, set()):
+        if 文本 in {"1", "true", "yes", "y"}:
+            return "连载" if 反向 else "完结"
+        if 文本 in {"0", "false", "no", "n"}:
+            return "完结" if 反向 else "连载"
+    return "未知"
+
+
 def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
@@ -1102,6 +1169,7 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     字数 = _安全整数热度(原始字数)
     热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
     return {
+        "status": 规范化找书状态(book, platform="番茄"),
         "platform": "番茄",
         "book_id": book_id,
         "title": title,
@@ -1387,6 +1455,7 @@ async def 搜索七猫(
             热度值 = 计算热度排序值(评分=评分, 字数=字数)
             结果.append(
                 {
+                    "status": 规范化找书状态(书籍, platform="七猫"),
                     "platform": "七猫",
                     "book_id": book_id,
                     "title": title,
@@ -1435,6 +1504,7 @@ async def 搜索书旗(
         热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="书旗"),
                 "platform": "书旗",
                 "book_id": book_id,
                 "title": title,
@@ -1512,6 +1582,7 @@ async def 搜索追书(
         热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="追书"),
                 "platform": "追书",
                 "book_id": 书籍编号,
                 "title": 书名,
@@ -1562,6 +1633,7 @@ async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict
         热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="QQ阅读"),
                 "platform": "QQ阅读",
                 "book_id": book_id,
                 "title": title,
@@ -1605,6 +1677,7 @@ async def 搜索QQ浏览器(关键词: str, *, 需要数量: int = 20) -> list[d
             热度值 = 计算热度排序值(字数=字数)
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="QQ浏览器"),
                 "platform": "QQ浏览器",
                 "book_id": book_id,
                 "title": title,
@@ -1642,6 +1715,7 @@ async def 搜索百度(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         字数 = _安全整数热度(书籍.get("word_count"))
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="百度"),
                 "platform": "百度",
                 "book_id": book_id,
                 "title": title,
@@ -1679,6 +1753,7 @@ async def 搜索小米(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         热度 = _安全整数热度(书籍.get("heat"))
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform="小米"),
                 "platform": "小米",
                 "book_id": book_id,
                 "title": title,
@@ -1714,6 +1789,7 @@ def _整理新增平台搜索结果(
         热度 = _安全整数热度(书籍.get("heat"))
         结果.append(
             {
+                "status": 规范化找书状态(书籍, platform=平台),
                 "platform": 平台,
                 "book_id": 书籍编号,
                 "title": 书名,
@@ -2451,7 +2527,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v8-fuzzy",
+        tuple(_拆分查询词(关键词)), "search-rank-v9-status",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2502,32 +2578,37 @@ async def 聚合搜索(
     return [dict(项) for 项 in 结果]
 
 
-def 格式化找书结果(会话: dict[str, Any]) -> str:
+def _获取找书分页(会话: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
     结果: list[dict[str, Any]] = 会话.get("results") or []
-    页码 = max(1, int(会话.get("page") or 1))
-    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
-    if 页码 > 总页:
-        页码 = 总页
-        会话["page"] = 页码
+    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量)
+    页码 = min(总页, max(1, int(会话.get("page") or 1)))
+    会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
-    当前页 = 结果[起始 : 起始 + 每页数量]
-    平台 = 会话.get("requested_platform", "")
-    行: list[str] = [f"{平台}找书结果"] if 平台 else []
+    return 结果[起始 : 起始 + 每页数量], 页码, 总页
+
+
+def _找书展示字段(项: dict[str, Any]) -> tuple[str, str, str, str]:
+    书名 = 清理文本(项.get("title") or "未知") or "未知"
+    作者 = 清理文本(项.get("author") or "未知") or "未知"
+    平台 = 清理文本(项.get("platform") or "未知") or "未知"
+    return 书名, 作者, 平台, 规范化找书状态(项, platform=平台)
+
+
+def 格式化找书结果(会话: dict[str, Any]) -> str:
+    当前页, 页码, 总页 = _获取找书分页(会话)
+    平台 = 清理文本(会话.get("requested_platform") or "")
+    行: list[str] = [f"{平台}找书结果 · {页码}/{总页}", ""]
+    for 项 in 当前页:
+        书名, 作者, 来源, 状态 = _找书展示字段(项)
+        行.extend([书名, f"{作者} · {来源} · {状态}", ""])
     if not 当前页:
         行.append("没有找到相关书籍")
-    else:
-        for 项 in 当前页:
-            行.append(分隔线)
-            行.append(f"书名：{项.get('title') or '未知'}")
-            行.append(f"作者：{项.get('author') or '未知'}")
-        行.append(分隔线)
-    行.append(f"当前页数：{页码}/{总页}")
-    左 = "上一页" if 页码 > 1 else ""
-    右 = "下一页" if 页码 < 总页 else ""
-    if 左 or 右:
-        行.append(f"       {左}                           {右}".rstrip())
+    翻页 = (["上一页"] if 页码 > 1 else []) + (["下一页"] if 页码 < 总页 else [])
+    if 翻页:
+        行.append("  ".join(翻页))
     if 当前页:
-        行.append("发送 选1～选5 下载当前页对应书籍")
+        选择 = "选1" if len(当前页) == 1 else f"选1～选{len(当前页)}"
+        行.append(f"发送 {选择} 下载")
     return "\n".join(行)
 
 
@@ -2550,39 +2631,47 @@ def _生成找书文字指令(发送文本: str, 外显文本: str) -> str:
 
 
 def 格式化找书结果MD(会话: dict[str, Any]) -> str:
-    """官方机器人 Markdown 找书结果：正文书名和作者均为可点文字。"""
-    结果: list[dict[str, Any]] = 会话.get("results") or []
-    页码 = max(1, int(会话.get("page") or 1))
-    总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量) if 结果 else 1
-    if 页码 > 总页:
-        页码 = 总页
-        会话["page"] = 页码
-    起始 = (页码 - 1) * 每页数量
-    当前页 = 结果[起始 : 起始 + 每页数量]
-    平台 = 会话.get("requested_platform", "")
-    行: list[str] = [f"**{平台}找书结果**", ""]
-    if not 当前页:
-        行.append("没有找到相关书籍")
-    else:
-        for 序号, 项 in enumerate(当前页, start=1):
-            书名 = 清理文本(项.get("title") or "未知") or "未知"
-            作者 = 清理文本(项.get("author") or "未知") or "未知"
-            选书指令 = f"选{序号}"
-            行.append(分隔线)
-            行.append(f"书名：{_生成找书文字指令(选书指令, 书名)}")
-            行.append(f"作者：{_生成找书文字指令(选书指令, 作者)}")
-        行.append(分隔线)
-    行.append(f"当前页数：{页码}/{总页}")
-    翻页: list[str] = []
-    if 页码 > 1:
-        翻页.append(_生成找书文字指令("上一页", "上一页"))
-    if 页码 < 总页:
-        翻页.append(_生成找书文字指令("下一页", "下一页"))
-    if 翻页:
-        行.append("  ".join(翻页))
+    """每本两行保留可点书名/作者；平台和状态复用当前来源的搜索字段。"""
+    当前页, 页码, 总页 = _获取找书分页(会话)
+    平台 = 清理文本(会话.get("requested_platform") or "")
+    行: list[str] = [f"**{平台}找书结果 · {页码}/{总页}**", ""]
+    for 序号, 项 in enumerate(当前页, start=1):
+        书名, 作者, 来源, 状态 = _找书展示字段(项)
+        指令 = f"选{序号}"
+        行.extend([
+            _生成找书文字指令(指令, 书名),
+            f"{_生成找书文字指令(指令, 作者)} · {来源} · {状态}",
+            "",
+        ])
     if 当前页:
-        行.append("点击书名或作者后发送即可下载")
+        行.append("点击书名或作者，发送后下载")
+    else:
+        行.append("没有找到相关书籍")
     return "\n".join(行)
+
+
+def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[str, Any] | None:
+    当前页, 页码, 总页 = _获取找书分页(会话)
+    if not 当前页 or 总页 <= 1 or not 用户标识:
+        return None
+    方向 = ([('search_prev', '上一页')] if 页码 > 1 else []) + (
+        [('search_next', '下一页')] if 页码 < 总页 else []
+    )
+    return {"rows": [{"buttons": [
+        {
+            "id": 编号,
+            "render_data": {"label": 标签, "visited_label": 标签, "style": 1},
+            "action": {
+                "type": 2,
+                "permission": {"type": 0, "specify_user_ids": [用户标识]},
+                "data": 标签,
+                "enter": True,
+                "reply": False,
+                "unsupport_tips": f"请发送{标签}",
+            },
+        }
+        for 编号, 标签 in 方向
+    ]}]}
 
 
 def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2713,7 +2802,7 @@ async def 获取找书下载回复流(
 async def 处理找书指令(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> str | dict[str, Any] | None:
-    """返回纯文本；官方机器人返回内嵌文字指令链的 Markdown。"""
+    """返回纯文本；官方机器人返回可点书名/作者及本人翻页键盘。"""
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     会话键 = 获取找书会话键(event)
@@ -2805,7 +2894,7 @@ async def 处理找书指令(
     if 是QQ官方机器人(event):
         return {
             "md": 格式化找书结果MD(会话),
-            "keyboard": None,
+            "keyboard": 生成找书翻页键盘(会话, 获取找书用户标识(event)),
             "text": 格式化找书结果(会话),
         }
     return 格式化找书结果(会话)

@@ -470,7 +470,7 @@ def 解析QQ浏览器搜索结果(数据: Any) -> list[dict[str, Any]]:
                     "score": 0,
                     "read_count": 0,
                     "heat": max(0, 1000 - len(结果)),
-                    "is_finished": _QQ浏览器真值(项目.get("is_finished")),
+                    "is_finished": 项目.get("is_finished"),
                 }
             )
     return 结果

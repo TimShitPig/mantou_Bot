@@ -983,6 +983,7 @@ def 解析得间搜索数据(data: Any) -> Dict[str, Any]:
 
         results.append(
             {
+                "_search_status": {key: info[key] for key in ("completeState",) if key in info},
                 "title": title,
                 "author": str(info.get("bookAuthor") or ""),
                 "abstract": str(info.get("bookDescription") or ""),
@@ -1746,6 +1747,7 @@ async def 搜索小说(关键词: str, *, 需要数量: int = 20) -> list[dict[s
             continue
         结果.append(
             {
+                "_search_status": item.get("_search_status") or {},
                 "title": item.get("title") or "未知",
                 "author": item.get("author") or "未知",
                 "book_id": book_id,
