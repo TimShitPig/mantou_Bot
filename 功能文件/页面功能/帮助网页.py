@@ -136,6 +136,15 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码开始),
         ("get", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码状态),
         ("delete", "/api/qq-reader-auth/scan", 后端._处理QQ阅读网页扫码取消),
+        ("get", "/api/jinjiang-auth", 后端._处理晋江登录态),
+        ("post", "/api/jinjiang-auth", 后端._处理晋江登录态保存),
+        ("delete", "/api/jinjiang-auth", 后端._处理晋江登录态删除),
+        ("post", "/api/jinjiang-auth/select", 后端._处理晋江账号选择),
+        ("post", "/api/jinjiang-auth/enable", 后端._处理晋江账号启用),
+        ("post", "/api/jinjiang-auth/refresh", 后端._处理晋江账号刷新),
+        ("post", "/api/jinjiang-auth/scan", 后端._处理晋江网页扫码开始),
+        ("get", "/api/jinjiang-auth/scan", 后端._处理晋江网页扫码状态),
+        ("delete", "/api/jinjiang-auth/scan", 后端._处理晋江网页扫码取消),
         ("post", "/api/message/chats", 后端._处理消息聊天列表),
         ("post", "/api/message/history", 后端._处理消息历史),
         ("post", "/api/message/clear/preview", 后端._处理聊天清理预览),
@@ -290,6 +299,7 @@ async def 停止帮助网页服务(服务: 帮助网页服务 | None, *, 保留�
         await QQ阅读开放接口.停止接口服务(保留任务=保留会话)
         await 后端._取消全部夸克网页扫码()
         await 后端._取消全部QQ阅读网页扫码()
+        await 后端._取消全部晋江网页扫码()
         await 后端._取消全部QQ阅读网页短信()
         await 后端.停止实时连接()
         if 服务 is not None:

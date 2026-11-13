@@ -24,6 +24,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6v14M3 5c4-1 6 0 9 2 3-2 5-3 9-2v13c-4-1-6 0-9 2-3-2-5-3-9-2z"/></svg>
                 QQ 阅读
               </button>
+              <button id="bot-tab-jinjiang" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-jinjiang" tabindex="-1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 4h16v16H4zM8 4v16m4-12h5m-5 4h5m-5 4h5"/></svg>
+                晋江
+              </button>
               <button id="bot-tab-zlibrary" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-zlibrary" tabindex="-1">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19V5h4v14m0 0V7h5v12m0 0 1-13 5 1-1 12M3 19h18"/></svg>
                 ZLibrary
@@ -42,6 +46,13 @@
                 <div><h3>QQ 阅读账号</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
               </header>
               <div id="qq-auth-editor"><div class="empty">正在读取登录态…</div></div>
+            </section>
+
+            <section id="bot-panel-jinjiang" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-jinjiang" tabindex="0" hidden>
+              <header class="studio-service-head">
+                <div><h3>晋江账号</h3><p>使用晋江小说阅读 App 扫码登录，或手动添加账号。</p></div>
+              </header>
+              <div id="jinjiang-auth-editor"><div class="empty">选择晋江分区后读取账号…</div></div>
             </section>
 
             <section id="bot-panel-zlibrary" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-zlibrary" tabindex="0" hidden>

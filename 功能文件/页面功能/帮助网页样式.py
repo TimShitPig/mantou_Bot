@@ -356,6 +356,10 @@
      .qq-auth-tab.active { background:var(--primary-soft); color:var(--primary-dark); }
      #qq-reader-manual-panel { display:grid; gap:9px; }
      .qq-reader-cookie { width:100%; min-height:76px; resize:vertical; font-family:inherit; }
+     #jinjiang-detail[hidden],#jinjiang-add-panel[hidden],#jinjiang-scan-panel[hidden],#jinjiang-manual-panel[hidden],#jinjiang-qr-image[hidden] { display:none !important; }
+     .jinjiang-manual-panel { display:grid; gap:9px; }
+     .jinjiang-manual-panel input.qq-reader-cookie { min-height:38px; }
+     #page-bot .studio-bot-tabs { grid-template-columns:repeat(4,minmax(0,1fr)); width:min(100%,680px); }
      .qq-reader-field-hint { margin:0; color:var(--muted); font-size:11px; line-height:1.6; }
      .qq-auth-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; min-width:0; }
      .qq-auth-row > input { min-width:0; width:100%; }

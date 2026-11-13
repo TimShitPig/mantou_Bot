@@ -317,9 +317,9 @@
         if (next !== previousView) { closeMsgHeadMenu(); clearSavedCredential(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
-        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); stopZLibraryAccount(); }
+        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); leaveJinjiang(); stopZLibraryAccount(); }
         activeView = next;
-        if (next === 'bot') void loadZLibraryAccount();
+        if (next === 'bot') { void loadZLibraryAccount(); syncJinjiangTab(); }
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); nextParams.set('appid', consoleAppid); history.pushState({view:next,appid:consoleAppid}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
@@ -1425,6 +1425,251 @@
         } finally { if (generation === qqReader.smsGeneration) { qqReader.smsBusy = false; qqReader.smsAbort = null; updateQQReaderSms(); } }
       };
 
+      const jinjiang = {auth:null, request:0, loading:false, mutation:false, generation:0, adding:false, detailId:'', method:'scan', modalFocus:null, modalGeneration:0, modalOverflow:null, restoreFocus:true, scanId:'', scanAppid:'', image:'', scanMessage:'', scanStatus:'', scanTimer:null, scanGeneration:0, scanIntent:0, scanStarting:false, scanCancel:null};
+      const jinjiangAccount = (id = jinjiang.detailId) => (jinjiang.auth?.accounts || []).find((account) => String(account.id) === String(id));
+      const jinjiangEditable = () => Boolean(jinjiang.auth?.editable);
+      const jinjiangTabVisible = () => Boolean(consoleAppid && activeView === 'bot' && !$('bot-panel-jinjiang')?.hidden && document.visibilityState !== 'hidden');
+      const jinjiangScopeCurrent = (appid, generation) => appid === consoleAppid && generation === consoleGeneration;
+      const jinjiangLoginLabel = (account) => account.auth_status === 'invalid' ? '登录已失效，请重新登录' : account.auth_status === 'valid' ? '登录已验证' : '登录状态待验证';
+      const clearJinjiangManual = () => {
+        for (const id of ['jinjiang-token', 'jinjiang-reader-id']) if ($(id)) $(id).value = '';
+      };
+      const updateJinjiangScan = () => {
+        const image = $('jinjiang-qr-image');
+        if (image) {
+          if (jinjiang.image) { image.src = jinjiang.image; image.hidden = false; }
+          else { image.removeAttribute('src'); image.hidden = true; }
+        }
+        if ($('jinjiang-qr-message')) $('jinjiang-qr-message').textContent = jinjiang.scanMessage || '使用晋江小说阅读 App 扫码，并在手机上确认登录。';
+        if ($('jinjiang-scan-cancel')) $('jinjiang-scan-cancel').hidden = !jinjiang.scanId && !jinjiang.scanStarting;
+        const button = $('jinjiang-scan-start');
+        if (button) {
+          button.disabled = !jinjiangEditable() || jinjiang.scanStarting || Boolean(jinjiang.scanCancel) || jinjiang.mutation;
+          button.textContent = jinjiang.scanStarting ? '正在获取二维码' : jinjiang.scanId ? '更换二维码' : '获取二维码';
+        }
+      };
+      const cancelJinjiangScan = async (scanId, appid, keepalive = false) => {
+        if (!appid) return;
+        const options = {method:'DELETE', body:JSON.stringify({scan_id:scanId})};
+        try {
+          if (keepalive) await fetch(botApiUrl('jinjiang-auth/scan', appid), {...options, credentials:'same-origin', keepalive:true, headers:{'Content-Type':'application/json'}});
+          else await api('jinjiang-auth/scan', {...options, botAppid:appid, scopeCleanup:true});
+        } catch (_) {}
+      };
+      const stopJinjiangScan = async (clearMessage = true, keepalive = false) => {
+        const appid = jinjiang.scanAppid || consoleAppid, scanId = jinjiang.scanId, starting = jinjiang.scanStarting, previous = jinjiang.scanCancel;
+        jinjiang.scanIntent += 1; jinjiang.scanGeneration += 1;
+        jinjiang.scanStarting = false; jinjiang.scanId = ''; jinjiang.scanAppid = ''; jinjiang.image = ''; jinjiang.scanStatus = '';
+        clearTimeout(jinjiang.scanTimer); jinjiang.scanTimer = null;
+        if (clearMessage) jinjiang.scanMessage = '';
+        updateJinjiangScan();
+        if (scanId || starting) {
+          const cancellation = (async () => { if (previous) await previous; await cancelJinjiangScan(scanId, appid, keepalive); })();
+          jinjiang.scanCancel = cancellation; updateJinjiangScan();
+          try { await cancellation; }
+          finally { if (jinjiang.scanCancel === cancellation) { jinjiang.scanCancel = null; updateJinjiangScan(); } }
+        } else if (previous) await previous;
+      };
+      const jinjiangModalFocusable = () => [...($('jinjiang-account-dialog')?.querySelectorAll('button,input,textarea,a[href],[tabindex]') || [])].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+      const jinjiangModalKeydown = (event) => {
+        const modal = $('jinjiang-account-dialog'); if (!modal?.open) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); leaveJinjiang(true); return; }
+        if (event.key !== 'Tab') return;
+        event.stopPropagation();
+        const nodes = jinjiangModalFocusable(), index = nodes.indexOf(document.activeElement);
+        if (!nodes.length) { event.preventDefault(); modal.focus({preventScroll:true}); }
+        else if (event.shiftKey && index <= 0) { event.preventDefault(); nodes.at(-1).focus(); }
+        else if (!event.shiftKey && (index < 0 || index === nodes.length - 1)) { event.preventDefault(); nodes[0].focus(); }
+      };
+      const syncJinjiangModal = () => {
+        const modal = $('jinjiang-account-dialog'); if (!modal) return;
+        const wanted = jinjiangTabVisible() && (jinjiang.adding || Boolean(jinjiangAccount()));
+        if ($('jinjiang-modal-title')) $('jinjiang-modal-title').textContent = jinjiang.adding ? '添加晋江账号' : '晋江账号详情';
+        if (wanted && !modal.open) {
+          jinjiang.modalGeneration += 1; jinjiang.modalOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
+          modal.showModal(); document.addEventListener('keydown', jinjiangModalKeydown, true);
+        } else if (!wanted && (modal.open || jinjiang.modalOverflow !== null)) {
+          const generation = ++jinjiang.modalGeneration, focus = jinjiang.modalFocus, restore = jinjiang.restoreFocus;
+          jinjiang.modalFocus = null;
+          if ($('toast')?.parentElement === modal) document.body.appendChild($('toast'));
+          if (modal.open) modal.close();
+          if (jinjiang.modalOverflow !== null) document.body.style.overflow = jinjiang.modalOverflow;
+          jinjiang.modalOverflow = null; document.removeEventListener('keydown', jinjiangModalKeydown, true);
+          if (restore) queueMicrotask(() => {
+            if (generation !== jinjiang.modalGeneration || modal.open || !jinjiangTabVisible()) return;
+            const target = focus?.accountId ? $('jinjiang-accounts')?.querySelector(`[data-jinjiang-open="${CSS.escape(focus.accountId)}"]`) : focus?.node;
+            (target?.isConnected && !target.disabled ? target : $('jinjiang-add'))?.focus({preventScroll:true});
+          });
+        }
+      };
+      const leaveJinjiang = (restoreFocus = false, keepalive = false) => {
+        jinjiang.request += 1; jinjiang.generation += 1; jinjiang.loading = false; jinjiang.mutation = false;
+        jinjiang.adding = false; jinjiang.detailId = ''; jinjiang.restoreFocus = restoreFocus;
+        clearJinjiangManual(); void stopJinjiangScan(true, keepalive); syncJinjiangModal();
+      };
+      const setJinjiangMethod = (method) => {
+        const next = method === 'token' ? 'token' : 'scan';
+        if (next !== jinjiang.method) { clearJinjiangManual(); if (next !== 'scan') void stopJinjiangScan(); }
+        jinjiang.method = next;
+        for (const value of ['scan','token']) {
+          const button = $(`jinjiang-method-${value}`); button?.classList.toggle('active', value === next); button?.setAttribute('aria-pressed', String(value === next));
+        }
+        if ($('jinjiang-scan-panel')) $('jinjiang-scan-panel').hidden = next !== 'scan';
+        if ($('jinjiang-manual-panel')) $('jinjiang-manual-panel').hidden = next !== 'token';
+      };
+      const renderJinjiangAccounts = (auth) => {
+        const node = $('jinjiang-auth-editor'); if (!node || !Array.isArray(auth?.accounts)) return;
+        jinjiang.auth = {...auth, accounts:auth.accounts.map((account) => ({...account, selected:String(account.id) === String(auth.selected_id || '')}))};
+        if (jinjiang.detailId && !jinjiangAccount()) jinjiang.detailId = '';
+        if (!$('jinjiang-accounts')) {
+          node.innerHTML = `<div class="qq-reader-toolbar"><span id="jinjiang-summary"></span><div class="qq-auth-actions"><button class="outline-button" id="jinjiang-refresh" type="button">刷新列表</button><button class="outline-button" id="jinjiang-add" type="button">添加账号</button></div></div><div id="jinjiang-accounts" class="qq-reader-accounts"></div>`;
+          const modal = document.createElement('dialog'); modal.id = 'jinjiang-account-dialog'; modal.className = 'qq-reader-modal';
+          modal.setAttribute('aria-labelledby','jinjiang-modal-title'); modal.setAttribute('aria-modal','true'); modal.tabIndex = -1;
+          modal.innerHTML = `<div class="qq-reader-modal-head"><h3 id="jinjiang-modal-title">晋江账号</h3><button class="qq-reader-modal-close" id="jinjiang-modal-close" type="button" aria-label="关闭账号窗口">×</button></div><div class="qq-reader-modal-body"><section id="jinjiang-detail" class="qq-reader-detail" hidden></section><section id="jinjiang-add-panel" class="qq-reader-add-panel" hidden><div class="qq-auth-tabs" role="group" aria-label="选择晋江登录方式"><button class="qq-auth-tab active" id="jinjiang-method-scan" type="button" aria-pressed="true">App 扫码登录</button><button class="qq-auth-tab" id="jinjiang-method-token" type="button" aria-pressed="false">手动添加</button></div><div id="jinjiang-scan-panel" class="qq-reader-scan-panel"><button class="outline-button" id="jinjiang-scan-start" type="button">获取二维码</button><img id="jinjiang-qr-image" class="qq-reader-qr-image" alt="晋江 App 登录二维码" hidden><p id="jinjiang-qr-message" class="qq-reader-field-hint" aria-live="polite"></p><button class="text-button" id="jinjiang-scan-cancel" type="button" hidden>取消扫码</button></div><div id="jinjiang-manual-panel" class="jinjiang-manual-panel" hidden><label class="qq-reader-field-label" for="jinjiang-token">Token</label><input id="jinjiang-token" class="qq-reader-cookie" type="password" autocomplete="off" spellcheck="false" placeholder="填写晋江登录 Token"><label class="qq-reader-field-label" for="jinjiang-reader-id">读者编号</label><input id="jinjiang-reader-id" class="qq-reader-cookie" type="text" inputmode="numeric" autocomplete="off" placeholder="readerId"><p class="qq-reader-field-hint">登录凭据仅用于当前机器人的晋江账号，不会在账号列表中回显。</p><div class="qq-auth-actions"><button class="primary-button" id="jinjiang-save" type="button">添加并使用</button></div></div></section></div>`;
+          document.body.appendChild(modal);
+          let backdropDown = false;
+          const outside = (event) => { const rect = modal.getBoundingClientRect(); return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom; };
+          modal.addEventListener('pointerdown', (event) => { backdropDown = event.target === modal && outside(event); });
+          modal.addEventListener('click', (event) => { if (event.target === modal && backdropDown && outside(event)) leaveJinjiang(true); backdropDown = false; });
+          modal.addEventListener('cancel', (event) => { event.preventDefault(); leaveJinjiang(true); });
+          modal.addEventListener('close', () => { if (!modal.open && (jinjiang.adding || jinjiang.detailId || jinjiang.modalOverflow !== null)) leaveJinjiang(true); });
+          $('jinjiang-modal-close').addEventListener('click', () => leaveJinjiang(true));
+          $('jinjiang-refresh').addEventListener('click', () => void loadJinjiangAccounts());
+          $('jinjiang-add').addEventListener('click', (event) => {
+            leaveQQReader(); closeZLibraryDialog(); clearJinjiangManual(); jinjiang.modalFocus = {node:event.currentTarget}; jinjiang.restoreFocus = true;
+            jinjiang.detailId = ''; jinjiang.adding = true; renderJinjiangAccounts(jinjiang.auth);
+          });
+          $('jinjiang-method-scan').addEventListener('click', () => setJinjiangMethod('scan'));
+          $('jinjiang-method-token').addEventListener('click', () => setJinjiangMethod('token'));
+          $('jinjiang-scan-start').addEventListener('click', () => void startJinjiangScan());
+          $('jinjiang-scan-cancel').addEventListener('click', () => void stopJinjiangScan());
+          $('jinjiang-save').addEventListener('click', () => void saveJinjiangAccount());
+        }
+        const accounts = jinjiang.auth.accounts, editable = jinjiangEditable() && !jinjiang.mutation;
+        $('jinjiang-summary').textContent = `${accounts.length} 个账号 · ${accounts.filter((account) => account.enabled !== false).length} 个启用${auth.configured ? '' : ' · 当前未登录'}`;
+        $('jinjiang-add').disabled = !editable; $('jinjiang-refresh').disabled = jinjiang.loading || jinjiang.mutation; $('jinjiang-save').disabled = !editable;
+        $('jinjiang-accounts').innerHTML = accounts.map((account) => `<article class="qq-reader-account ${account.selected ? 'is-current' : ''} ${account.enabled === false ? 'is-disabled' : ''}"><div class="qq-reader-account-top"><span class="tag ${account.selected ? 'ok' : account.enabled === false ? 'off' : ''}">${account.selected ? '当前使用' : account.enabled === false ? '已停用' : '已启用'}</span><button class="switch qq-reader-account-switch ${account.enabled !== false ? 'on' : ''}" type="button" data-jinjiang-enable="${esc(account.id)}" aria-label="${account.enabled === false ? '启用' : '停用'}晋江账号" aria-pressed="${account.enabled !== false}" ${editable ? '' : 'disabled'}><span></span></button></div><button class="qq-reader-account-open" type="button" data-jinjiang-open="${esc(account.id)}" aria-expanded="${!jinjiang.adding && String(account.id) === jinjiang.detailId}"><span class="qq-reader-avatar" aria-hidden="true">晋</span><span><strong>${esc(account.nickname || '晋江读者')}</strong><small>读者 ${esc(account.readerId || '待查询')}</small></span><span class="qq-reader-arrow" aria-hidden="true">›</span></button><div class="qq-reader-account-vip"><span>${esc(jinjiangLoginLabel(account))}</span></div></article>`).join('') || '<div class="empty qq-reader-empty">还没有晋江账号，请添加账号。</div>';
+        $('jinjiang-accounts').querySelectorAll('[data-jinjiang-open]').forEach((button) => button.addEventListener('click', () => {
+          leaveQQReader(); closeZLibraryDialog(); void stopJinjiangScan(); clearJinjiangManual();
+          jinjiang.modalFocus = {accountId:button.dataset.jinjiangOpen}; jinjiang.restoreFocus = true; jinjiang.adding = false; jinjiang.detailId = button.dataset.jinjiangOpen;
+          renderJinjiangAccounts(jinjiang.auth);
+        }));
+        $('jinjiang-accounts').querySelectorAll('[data-jinjiang-enable]').forEach((button) => button.addEventListener('click', () => {
+          const account = jinjiangAccount(button.dataset.jinjiangEnable); if (account) void mutateJinjiangAccount('enable', account.id, {enabled:account.enabled === false});
+        }));
+        const detail = $('jinjiang-detail'), account = jinjiangAccount(), focused = detail.contains(document.activeElement) ? document.activeElement.id : '';
+        detail.hidden = jinjiang.adding || !account;
+        if (account) {
+          detail.innerHTML = `<div class="qq-reader-detail-head"><span class="qq-reader-avatar" aria-hidden="true">晋</span><div class="qq-reader-detail-copy"><strong>${esc(account.nickname || '晋江读者')}</strong><small>读者 ${esc(account.readerId || '待查询')}</small></div><button class="outline-button" id="jinjiang-profile-refresh" type="button" ${editable ? '' : 'disabled'}>刷新资料</button></div><dl class="qq-reader-profile"><div><dt>登录状态</dt><dd>${esc(jinjiangLoginLabel(account))}</dd></div><div><dt>账号状态</dt><dd>${account.enabled === false ? '已停用' : '已启用'}</dd></div><div><dt>最近验证</dt><dd>${esc(['valid','invalid'].includes(account.auth_status) && Number(account.profile_updated_at) > 0 ? qqReaderDate(account.profile_updated_at) : '未验证')}</dd></div><div><dt>资料更新</dt><dd>${esc(qqReaderDate(account.profile_updated_at))}</dd></div></dl><div class="qq-auth-actions"><button class="outline-button" id="jinjiang-select" type="button" ${editable && account.enabled !== false && !account.selected ? '' : 'disabled'}>${account.selected ? '当前使用账号' : '切换到此账号'}</button><button class="qq-reader-delete" id="jinjiang-delete" type="button" ${editable ? '' : 'disabled'}>删除账号</button></div>`;
+          $('jinjiang-profile-refresh').addEventListener('click', () => void mutateJinjiangAccount('refresh', account.id));
+          $('jinjiang-select').addEventListener('click', () => void mutateJinjiangAccount('select', account.id));
+          $('jinjiang-delete').addEventListener('click', () => { if (confirm('确定删除此晋江账号吗？')) void mutateJinjiangAccount('delete', account.id); });
+        } else detail.replaceChildren();
+        $('jinjiang-add-panel').hidden = !jinjiang.adding; setJinjiangMethod(jinjiang.method); updateJinjiangScan(); syncJinjiangModal();
+        if (focused && $('jinjiang-account-dialog')?.open) $(focused)?.focus({preventScroll:true});
+      };
+      const loadJinjiangAccounts = async () => {
+        if (!jinjiangTabVisible() || jinjiang.loading || jinjiang.mutation) return;
+        const request = ++jinjiang.request, appid = consoleAppid, generation = consoleGeneration;
+        jinjiang.loading = true; if ($('jinjiang-refresh')) $('jinjiang-refresh').disabled = true;
+        try {
+          const data = await api('jinjiang-auth', {botAppid:appid});
+          if (request === jinjiang.request && jinjiangScopeCurrent(appid, generation) && jinjiangTabVisible()) renderJinjiangAccounts(data);
+        } catch (error) {
+          if (request !== jinjiang.request || !jinjiangScopeCurrent(appid, generation) || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error);
+          else if (jinjiang.auth) toast(error.message);
+          else {
+            const node = $('jinjiang-auth-editor'); if (node) { node.innerHTML = '<div class="empty">晋江账号暂时无法读取。<button class="text-button" id="jinjiang-retry" type="button">重新读取</button></div>'; $('jinjiang-retry')?.addEventListener('click', () => void loadJinjiangAccounts()); }
+          }
+        } finally {
+          if (request === jinjiang.request && jinjiangScopeCurrent(appid, generation)) { jinjiang.loading = false; if ($('jinjiang-refresh')) $('jinjiang-refresh').disabled = jinjiang.mutation; }
+        }
+      };
+      const mutateJinjiangAccount = async (action, id, extra = {}) => {
+        if (!jinjiangEditable() || jinjiang.mutation) return;
+        const appid = consoleAppid, scope = consoleGeneration, generation = jinjiang.generation;
+        jinjiang.request += 1; jinjiang.loading = false; jinjiang.mutation = true; renderJinjiangAccounts(jinjiang.auth);
+        try {
+          const data = await api(action === 'delete' ? 'jinjiang-auth' : `jinjiang-auth/${action}`, {method:action === 'delete' ? 'DELETE' : 'POST', body:JSON.stringify({account_id:id, ...extra}), botAppid:appid});
+          if (!jinjiangScopeCurrent(appid, scope) || generation !== jinjiang.generation) return;
+          if (action === 'delete') jinjiang.detailId = '';
+          renderJinjiangAccounts(data); toast(action === 'refresh' ? '晋江账号资料已刷新' : action === 'delete' ? '晋江账号已删除' : action === 'select' ? '晋江账号已切换' : '晋江账号状态已更新');
+        } catch (error) {
+          if (!jinjiangScopeCurrent(appid, scope) || generation !== jinjiang.generation || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error); else toast(error.message);
+        } finally {
+          if (jinjiangScopeCurrent(appid, scope) && generation === jinjiang.generation) { jinjiang.mutation = false; if (jinjiang.auth) renderJinjiangAccounts(jinjiang.auth); }
+        }
+      };
+      const saveJinjiangAccount = async () => {
+        const token = $('jinjiang-token')?.value.trim(), readerId = $('jinjiang-reader-id')?.value.trim();
+        if (!token) return toast('请填写晋江登录 Token');
+        if (!readerId || !/^[0-9]{1,32}$/.test(readerId) || !/[1-9]/.test(readerId)) return toast('请填写有效的读者编号（1～32位正整数）');
+        if (!jinjiangEditable() || jinjiang.mutation) return;
+        const appid = consoleAppid, scope = consoleGeneration, generation = jinjiang.generation;
+        jinjiang.request += 1; jinjiang.loading = false; jinjiang.mutation = true; renderJinjiangAccounts(jinjiang.auth);
+        try {
+          const data = await api('jinjiang-auth', {method:'POST', body:JSON.stringify({token, readerId, select:true}), botAppid:appid});
+          if (!jinjiangScopeCurrent(appid, scope) || generation !== jinjiang.generation) return;
+          clearJinjiangManual(); jinjiang.adding = false; jinjiang.detailId = ''; renderJinjiangAccounts(data); toast('晋江账号已添加并切换');
+        } catch (error) {
+          if (!jinjiangScopeCurrent(appid, scope) || generation !== jinjiang.generation || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error); else toast(error.message);
+        } finally {
+          if (jinjiangScopeCurrent(appid, scope) && generation === jinjiang.generation) { jinjiang.mutation = false; if (jinjiang.auth) renderJinjiangAccounts(jinjiang.auth); }
+        }
+      };
+      const startJinjiangScan = async () => {
+        if (!jinjiangEditable() || jinjiang.mutation) return;
+        const appid = consoleAppid, scope = consoleGeneration, cancellation = stopJinjiangScan(), intent = jinjiang.scanIntent;
+        await cancellation;
+        const current = () => jinjiangScopeCurrent(appid, scope) && jinjiangTabVisible() && jinjiang.adding && jinjiang.method === 'scan';
+        if (intent !== jinjiang.scanIntent || !current()) return;
+        const generation = ++jinjiang.scanGeneration;
+        jinjiang.scanStarting = true; jinjiang.scanAppid = appid; jinjiang.scanMessage = '正在生成二维码…'; updateJinjiangScan();
+        try {
+          const result = await api('jinjiang-auth/scan', {method:'POST', body:'{}', botAppid:appid});
+          if (generation !== jinjiang.scanGeneration || !current()) { if (result.scan_id) await cancelJinjiangScan(String(result.scan_id), appid); return; }
+          if (!result.scan_id || !/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(String(result.qr_image || ''))) throw new Error('二维码获取失败，请重试');
+          jinjiang.scanStarting = false; jinjiang.scanId = String(result.scan_id); jinjiang.image = result.qr_image;
+          jinjiang.scanStatus = result.status || 'waiting'; jinjiang.scanMessage = result.message || '请使用晋江小说阅读 App 扫码确认。'; updateJinjiangScan();
+          const scanId = jinjiang.scanId, expires = Date.now() + Math.max(10, Math.min(600, Number(result.expires_in) || 120)) * 1000;
+          let failures = 0;
+          const poll = async () => {
+            if (scanId !== jinjiang.scanId || generation !== jinjiang.scanGeneration) return;
+            if (!current()) { await stopJinjiangScan(); return; }
+            if (Date.now() >= expires) { jinjiang.scanMessage = '二维码已过期，请重新获取。'; await stopJinjiangScan(false); return; }
+            try {
+              const state = await api(`jinjiang-auth/scan?scan_id=${encodeURIComponent(scanId)}`, {botAppid:appid});
+              if (scanId !== jinjiang.scanId || generation !== jinjiang.scanGeneration || !current()) return;
+              failures = 0; jinjiang.scanStatus = state.status; jinjiang.scanMessage = state.message || '正在等待扫码。'; updateJinjiangScan();
+              if (['waiting','scanned','saving'].includes(state.status)) { jinjiang.scanTimer = setTimeout(poll, 2000); return; }
+              await stopJinjiangScan(false);
+              if (!current()) return;
+              if (state.status === 'success') { clearJinjiangManual(); jinjiang.adding = false; jinjiang.detailId = ''; await loadJinjiangAccounts(); if (jinjiangScopeCurrent(appid, scope)) toast('晋江账号已扫码登录'); }
+            } catch (error) {
+              if (scanId !== jinjiang.scanId || generation !== jinjiang.scanGeneration || !current()) return;
+              if (error.status === 401) { await stopJinjiangScan(); showAuthError(error); return; }
+              failures += 1; jinjiang.scanMessage = failures >= 3 ? '状态查询暂时失败，请重新获取二维码。' : '正在重试查询扫码状态…'; updateJinjiangScan();
+              if (failures >= 3) { await stopJinjiangScan(false); return; }
+              jinjiang.scanTimer = setTimeout(poll, 3000);
+            }
+          };
+          jinjiang.scanTimer = setTimeout(poll, 1500);
+        } catch (error) {
+          if (generation !== jinjiang.scanGeneration || !current() || error.name === 'AbortError') return;
+          jinjiang.scanMessage = error.message || '二维码获取失败，请重试。'; updateJinjiangScan();
+          await stopJinjiangScan(false);
+          if (error.status === 401) showAuthError(error);
+        } finally { if (generation === jinjiang.scanGeneration) { jinjiang.scanStarting = false; updateJinjiangScan(); } }
+      };
+      const syncJinjiangTab = () => { if (jinjiangTabVisible()) void loadJinjiangAccounts(); else leaveJinjiang(); };
+      botTabs?.addEventListener('click', () => queueMicrotask(syncJinjiangTab));
+      botTabs?.addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) queueMicrotask(syncJinjiangTab); });
+      window.addEventListener('pagehide', () => leaveJinjiang(false, true));
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
+
       const leaveQQReader = () => backQQReaderList(false);
       window.addEventListener('pagehide', () => {
         hideQQReaderKey(); clearQQReaderManual();
@@ -1567,7 +1812,7 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
-      $('popover-logout').addEventListener('click', async () => { leaveQQReader(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
+      $('popover-logout').addEventListener('click', async () => { leaveQQReader(); leaveJinjiang(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => {
         const appid = String(new URLSearchParams(location.search).get('appid') || '').trim();
@@ -2518,7 +2763,7 @@
       const exitBotConsole = (push = true) => {
         clearSavedCredential();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
-        void stopQuarkWebScan(); leaveQQReader(); stopZLibraryAccount(true); closeMsgEvents();
+        void stopQuarkWebScan(); leaveQQReader(); leaveJinjiang(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;
         for (const controller of consoleRequests) controller.abort();
         consoleRequests.clear();
@@ -2529,6 +2774,10 @@
         qqReader.request += 1; qqReader.keyRequest += 1; qqReader.auth = null; qqReader.mutation = false;
         qqReader.detailId = ''; qqReader.adding = false; qqReader.modalRestoreFocus = false; qqReader.method = 'cookie';
         clearQQReaderManual(); syncQQReaderModal();
+        jinjiang.auth = null; jinjiang.method = 'scan';
+        if ($('jinjiang-accounts')) $('jinjiang-accounts').replaceChildren();
+        if ($('jinjiang-summary')) $('jinjiang-summary').textContent = '正在读取账号…';
+        if ($('jinjiang-detail')) $('jinjiang-detail').replaceChildren();
         switchMsgBotScope(''); setMsgMobileChatOpen(false);
         msgState.historyCache.clear(); msgState.readInFlight.clear(); msgReadAgain.clear(); msgReadOverrides.clear(); msgState.optimisticSends.clear();
         msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
@@ -2537,7 +2786,7 @@
         window.msgBotProfile = {};
         clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
         if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
-        document.querySelectorAll('#console-workspace input,#console-workspace textarea,#qq-reader-account-dialog input').forEach((node) => { node.value = ''; });
+        document.querySelectorAll('#console-workspace input,#console-workspace textarea,#qq-reader-account-dialog input,#jinjiang-account-dialog input').forEach((node) => { node.value = ''; });
         for (const id of ['pan-grid','basic-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
         showNotice(''); showBotPicker(); renderBotProfiles();
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; });

@@ -99,6 +99,8 @@ _聊天清理执行任务: set[asyncio.Task[Any]] = globals().get("_聊天清理
 扫码所有者会话: dict[str, str] = globals().get("扫码所有者会话") or {}
 QQ阅读网页扫码会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页扫码会话") or {}
 QQ阅读扫码启动代次: dict[str, str] = globals().get("QQ阅读扫码启动代次") or {}
+晋江网页扫码会话: dict[str, dict[str, Any]] = globals().get("晋江网页扫码会话") or {}
+晋江扫码启动代次: dict[str, str] = globals().get("晋江扫码启动代次") or {}
 QQ阅读网页短信会话: dict[str, dict[str, Any]] = globals().get("QQ阅读网页短信会话") or {}
 QQ阅读短信启动代次: dict[str, str] = globals().get("QQ阅读短信启动代次") or {}
 _控制台执行器: ThreadPoolExecutor | None = globals().get("_控制台执行器")
@@ -1059,9 +1061,11 @@ def 同步控制台会话认证(配置: Any) -> bool:
     一致 = bool(控制台会话认证指纹) and hmac.compare_digest(控制台会话认证指纹, 新指纹)
     if not 一致:
         QQ阅读扫码启动代次.clear()
+        晋江扫码启动代次.clear()
         QQ阅读短信启动代次.clear()
         try:
             asyncio.get_running_loop().create_task(_取消全部QQ阅读网页扫码())
+            asyncio.get_running_loop().create_task(_取消全部晋江网页扫码())
             asyncio.get_running_loop().create_task(_取消全部QQ阅读网页短信())
         except RuntimeError:
             pass
@@ -1151,6 +1155,9 @@ def _清理控制台会话() -> None:
                 asyncio.get_running_loop().create_task(_移除QQ阅读网页短信会话(所有者, 状态))
             except RuntimeError:
                 pass
+    for scan_id, 状态 in list(晋江网页扫码会话.items()):
+        if 状态.get("status") in {"success", "expired", "cancelled", "error"} and 截止时间 - float(状态.get("updated_at") or 0) > 300:
+            晋江网页扫码会话.pop(scan_id, None)
     for 会话值, 到期时间 in list(控制台会话.items()):
         if 到期时间 <= 截止时间:
             控制台会话恢复排除.add(会话值)
@@ -1163,6 +1170,7 @@ def _清理控制台会话() -> None:
                     _取消夸克网页扫码所有者(会话值)
                 )
                 asyncio.get_running_loop().create_task(_取消QQ阅读网页扫码所有者(会话值))
+                asyncio.get_running_loop().create_task(_取消晋江网页扫码所有者(会话值))
                 asyncio.get_running_loop().create_task(_取消QQ阅读网页短信所有者(会话值))
             except RuntimeError:
                 pass
@@ -2000,6 +2008,7 @@ async def _处理控制台退出(request: web.Request) -> web.Response:
     控制台会话最后持久化.pop(会话值, None)
     await _取消夸克网页扫码所有者(会话值)
     await _取消QQ阅读网页扫码所有者(会话值)
+    await _取消晋江网页扫码所有者(会话值)
     await _取消QQ阅读网页短信所有者(会话值)
     await _控制台线程执行(_删除持久化控制台会话, 会话值, 配置快照)
     响应 = web.json_response({"ok": True})
@@ -3668,6 +3677,390 @@ async def _处理QQ阅读网页扫码取消(request: web.Request) -> web.Respons
     else:
         await _移除QQ阅读网页扫码会话(scan_id, 所有者)
     return _QQ阅读JSON({"ok": True, "message": "扫码会话已结束"})
+
+
+def _晋江JSON(数据: dict[str, Any]) -> web.Response:
+    return web.json_response(数据, headers={
+        "Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer",
+    })
+
+
+def _晋江操作上下文(request: web.Request) -> dict[str, Any]:
+    return {
+        "session": _取得请求会话(request), "auth": 控制台会话认证指纹,
+        "appid": 获取当前机器人AppID(), "config": 获取控制台会话配置快照(),
+    }
+
+
+def _晋江操作仍有效(状态: dict[str, Any]) -> bool:
+    return (
+        bool(状态.get("appid")) and not 状态.get("cancelled")
+        and 控制台会话.get(状态["session"], 0) > time.time()
+        and 状态["appid"] == 获取当前机器人AppID(状态["config"])
+        and hmac.compare_digest(状态["auth"], 控制台会话认证指纹)
+        and hmac.compare_digest(状态["auth"], 获取控制台认证指纹(_当前作用域配置()))
+    )
+
+
+async def _晋江受保护写入(函数: Any, *参数: Any, **关键字参数: Any) -> Any:
+    """取消时等已接受的写库结束；存储层在锁内及提交前检查授权代次。"""
+    async def 执行写入() -> tuple[bool, Any]:
+        try:
+            return True, await _控制台线程执行(函数, *参数, **关键字参数)
+        except Exception as exc:
+            # 被取消的 shield 在部分 Python 版本会打印内部异常；统一由请求层受控处理。
+            return False, exc
+
+    任务 = asyncio.create_task(执行写入())
+    try:
+        成功, 结果 = await asyncio.shield(任务)
+    except asyncio.CancelledError:
+        # 注销、替换扫码和停止服务可能同时取消同一个任务，重复取消也不得遗留写线程。
+        while not 任务.done():
+            try:
+                await asyncio.shield(任务)
+            except asyncio.CancelledError:
+                continue
+        raise
+    if not 成功:
+        raise 结果
+    return 结果
+
+
+async def _刷新晋江网页账号资料(状态: dict[str, Any], 账号ID: str) -> dict[str, Any]:
+    from 功能文件.管理功能.小说功能.功能 import 晋江账号
+    from 功能文件.管理功能.小说功能.小说 import 晋江小说
+
+    凭据 = await _控制台线程执行(晋江账号.读取晋江账号凭据, 状态["config"], 账号ID)
+    if not 凭据 or not _晋江操作仍有效(状态):
+        raise PermissionError("账号状态已变化")
+    资料 = await asyncio.wait_for(晋江小说.查询晋江账号资料(凭据), timeout=25)
+    if not _晋江操作仍有效(状态):
+        raise PermissionError("会话已结束")
+    await _晋江受保护写入(
+        晋江账号.合并晋江账号资料, 状态["config"], 凭据, 资料,
+        提交前校验=lambda: _晋江操作仍有效(状态),
+    )
+    return await _控制台线程执行(晋江账号.读取晋江账号列表, 状态["config"])
+
+
+async def _处理晋江登录态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    状态 = _晋江操作上下文(request)
+    try:
+        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+
+        摘要 = await _控制台线程执行(晋江账号.读取晋江账号列表, 状态["config"])
+        if not _晋江操作仍有效(状态):
+            return _控制台错误(401, "请重新登录控制台")
+        return _晋江JSON({"ok": True, "editable": _数据库会话可用(状态["config"]), **摘要})
+    except Exception as exc:
+        logger.warning("帮助控制台 晋江账号读取失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(500, "晋江账号读取失败")
+
+
+async def _处理晋江登录态保存(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号未保存")
+    数据 = await _读取请求JSON(request)
+    if not 数据 or not isinstance(数据.get("select", True), bool):
+        return _控制台错误(400, "账号参数无效")
+    if not isinstance(数据.get("token"), str) or not isinstance(数据.get("readerId"), (str, int)) or isinstance(数据.get("readerId"), bool):
+        return _控制台错误(400, "晋江登录态格式无效")
+    状态 = _晋江操作上下文(request)
+    try:
+        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+
+        摘要 = await _晋江受保护写入(
+            晋江账号.保存晋江账号, 状态["config"],
+            {"token": 数据["token"], "readerId": 数据["readerId"]},
+            str(数据.get("account_id") or ""), 数据.get("select", True),
+            提交前校验=lambda: _晋江操作仍有效(状态),
+        )
+        if not _晋江操作仍有效(状态):
+            return _控制台错误(401, "请重新登录控制台")
+        return _晋江JSON({"ok": True, "editable": True, "message": "晋江账号已保存", **摘要})
+    except PermissionError:
+        return _控制台错误(401, "请重新登录控制台")
+    except ValueError:
+        return _控制台错误(400, "晋江账号格式或身份无效")
+    except Exception as exc:
+        logger.warning("帮助控制台 晋江账号保存失败：错误类型=%s", type(exc).__name__)
+        return _控制台错误(409, "晋江账号保存失败")
+
+
+async def _晋江账号操作(request: web.Request, 操作: str) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，账号操作未保存")
+    数据 = await _读取请求JSON(request)
+    账号ID = str((数据 or {}).get("account_id") or "").strip()
+    if not 账号ID or len(账号ID) > 80:
+        return _控制台错误(400, "请选择晋江账号")
+    状态 = _晋江操作上下文(request)
+    try:
+        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+
+        if 操作 == "refresh":
+            摘要 = await _刷新晋江网页账号资料(状态, 账号ID)
+        elif 操作 == "enable":
+            if not isinstance(数据.get("enabled"), bool):
+                return _控制台错误(400, "账号开关参数无效")
+            摘要 = await _晋江受保护写入(
+                晋江账号.设置晋江账号启用, 状态["config"], 账号ID, 数据["enabled"],
+                提交前校验=lambda: _晋江操作仍有效(状态),
+            )
+        else:
+            函数 = 晋江账号.删除晋江账号 if 操作 == "delete" else 晋江账号.切换晋江账号
+            摘要 = await _晋江受保护写入(
+                函数, 状态["config"], 账号ID, 提交前校验=lambda: _晋江操作仍有效(状态),
+            )
+        if not _晋江操作仍有效(状态):
+            return _控制台错误(401, "请重新登录控制台")
+        return _晋江JSON({"ok": True, "editable": True, **摘要})
+    except PermissionError:
+        return _控制台错误(401, "请重新登录控制台")
+    except ValueError:
+        return _控制台错误(409, "晋江账号状态已变化，请刷新后重试")
+    except Exception as exc:
+        logger.warning("帮助控制台 晋江账号操作失败：阶段=%s，错误类型=%s", 操作, type(exc).__name__)
+        return _控制台错误(502 if 操作 == "refresh" else 409, "晋江账号操作失败，请稍后重试")
+
+
+async def _处理晋江登录态删除(request: web.Request) -> web.Response:
+    return await _晋江账号操作(request, "delete")
+
+
+async def _处理晋江账号选择(request: web.Request) -> web.Response:
+    return await _晋江账号操作(request, "select")
+
+
+async def _处理晋江账号启用(request: web.Request) -> web.Response:
+    return await _晋江账号操作(request, "enable")
+
+
+async def _处理晋江账号刷新(request: web.Request) -> web.Response:
+    return await _晋江账号操作(request, "refresh")
+
+
+def _晋江扫码仍有效(状态: dict[str, Any]) -> bool:
+    return _晋江操作仍有效(状态) and 晋江扫码启动代次.get(状态["owner"]) == 状态["generation"]
+
+
+async def _移除晋江网页扫码会话(scan_id: str, 所有者: str | None = None) -> bool:
+    状态 = 晋江网页扫码会话.get(scan_id)
+    if not 状态 or (所有者 is not None and 状态.get("owner") != 所有者):
+        return False
+    状态["cancelled"] = True
+    if 晋江扫码启动代次.get(状态["owner"]) == 状态["generation"]:
+        晋江扫码启动代次.pop(状态["owner"], None)
+    任务 = 状态.get("task")
+    if isinstance(任务, asyncio.Task) and not 任务.done():
+        任务.cancel()
+        await asyncio.gather(任务, return_exceptions=True)
+    try:
+        await 状态["client"].close()
+    except Exception as exc:
+        logger.debug("晋江扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+    if 晋江网页扫码会话.get(scan_id) is 状态:
+        晋江网页扫码会话.pop(scan_id, None)
+    return True
+
+
+async def _取消晋江网页扫码所有者(会话值: str, *, 取消启动: bool = True) -> None:
+    if not 会话值:
+        return
+    所有者集合 = _待取消扫码所有者(会话值)
+    if 取消启动:
+        for 所有者 in 所有者集合:
+            晋江扫码启动代次.pop(所有者, None)
+    for scan_id, 状态 in list(晋江网页扫码会话.items()):
+        if 状态.get("owner") in 所有者集合:
+            await _移除晋江网页扫码会话(scan_id, 状态.get("owner"))
+
+
+async def _取消全部晋江网页扫码() -> None:
+    晋江扫码启动代次.clear()
+    for scan_id in list(晋江网页扫码会话):
+        await _移除晋江网页扫码会话(scan_id)
+
+
+def _晋江扫码响应(scan_id: str, 状态: dict[str, Any]) -> dict[str, Any]:
+    当前状态 = str(状态.get("status") or "waiting")
+    文案 = {
+        "waiting": "请使用晋江小说阅读App扫码并确认登录。",
+        "saving": "登录成功，正在保存账号。", "success": "晋江账号已添加并设为当前账号。",
+        "expired": "二维码已过期，请重新获取。", "cancelled": "扫码已取消。",
+        "error": "扫码登录失败，请重新获取二维码。",
+    }
+    return {
+        "ok": True, "scan_id": scan_id, "status": 当前状态,
+        "account_id": str(状态.get("account_id") or ""),
+        "expires_at": 状态["expires_at"],
+        "expires_in": max(0, int(状态["expires_at"] - time.time())),
+        "message": 文案.get(当前状态, 文案["error"]),
+    }
+
+
+def _记录晋江扫码失败(exc: BaseException, 阶段: str) -> None:
+    if 阶段 not in {"qr_start", "wait_login", "save_account", "refresh_profile"}:
+        阶段 = "unknown"
+    logger.warning("帮助控制台 晋江扫码失败：阶段=%s，错误类型=%s", 阶段, type(exc).__name__)
+
+
+def _记录晋江扫码状态错误(结果: dict[str, Any]) -> None:
+    允许原因 = {
+        "timeout", "network_error", "http_error", "response_too_large", "invalid_encoding",
+        "invalid_envelope", "invalid_envelope_json", "invalid_response", "decrypt_failed",
+        "response_too_deep", "invalid_encrypt_fields", "unsupported_encryption",
+        "missing_encrypt_field", "business_error", "unknown_login_state",
+    }
+    原因 = 结果.get("reason")
+    if type(原因) is not str or 原因 not in 允许原因:
+        原因 = "unknown_login_state"
+    业务码 = 结果.get("code")
+    if type(业务码) is int:
+        业务码 = str(业务码)
+    if type(业务码) is not str or not re.fullmatch(r"-?[0-9]{1,12}", 业务码):
+        业务码 = "none"
+    logger.warning("帮助控制台 晋江扫码失败：阶段=wait_login，原因=%s，业务码=%s", 原因, 业务码)
+
+
+async def _运行晋江网页扫码(scan_id: str) -> None:
+    状态 = 晋江网页扫码会话[scan_id]
+    阶段 = "wait_login"
+    try:
+        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+
+        while _晋江扫码仍有效(状态):
+            if 状态["expires_at"] <= time.time():
+                状态["status"] = "expired"
+                return
+            结果 = await 状态["client"].poll()
+            if not _晋江扫码仍有效(状态):
+                状态["status"] = "cancelled"
+                return
+            当前状态 = 结果.get("status")
+            if 当前状态 == "waiting":
+                await asyncio.sleep(2)
+                continue
+            if 当前状态 != "success":
+                状态["status"] = "expired" if 当前状态 == "expired" else "error"
+                if 当前状态 != "expired":
+                    _记录晋江扫码状态错误(结果)
+                return
+            登录态 = 结果.get("credentials")
+            if not isinstance(登录态, dict):
+                状态["status"] = "error"
+                return
+            状态["status"] = "saving"
+            状态["updated_at"] = time.time()
+            阶段 = "save_account"
+            try:
+                摘要 = await _晋江受保护写入(
+                    晋江账号.保存晋江账号, 状态["config"], 登录态,
+                    提交前校验=lambda: _晋江扫码仍有效(状态),
+                )
+            finally:
+                登录态.clear()
+            if not _晋江扫码仍有效(状态):
+                状态["status"] = "cancelled"
+                return
+            状态["account_id"] = str(摘要.get("selected_id") or "")
+            状态["status"] = "success"
+            return
+        状态["status"] = "cancelled"
+    except asyncio.CancelledError:
+        状态["status"] = "cancelled"
+        raise
+    except PermissionError:
+        状态["status"] = "cancelled"
+    except TimeoutError:
+        状态["status"] = "expired"
+    except Exception as exc:
+        状态["status"] = "error"
+        _记录晋江扫码失败(exc, 阶段)
+    finally:
+        状态["updated_at"] = time.time()
+        try:
+            await 状态["client"].close()
+        except Exception as exc:
+            logger.debug("晋江扫码会话关闭失败：错误类型=%s", type(exc).__name__)
+
+
+async def _处理晋江网页扫码开始(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    if not _数据库会话可用():
+        return _控制台错误(409, "数据库未配置，扫码账号未保存")
+    from 功能文件.管理功能.小说功能.小说 import 晋江小说
+
+    状态 = _晋江操作上下文(request)
+    所有者 = _扫码所有者(状态["session"])
+    代次 = secrets.token_urlsafe(16)
+    晋江扫码启动代次[所有者] = 代次
+    await _取消晋江网页扫码所有者(状态["session"], 取消启动=False)
+    状态.update({
+        "owner": 所有者, "generation": 代次, "client": 晋江小说.晋江扫码登录客户端(),
+        "status": "waiting", "updated_at": time.time(), "expires_at": time.time() + 60,
+    })
+    已登记 = False
+    try:
+        if not _晋江扫码仍有效(状态):
+            return _控制台错误(409, "扫码会话已更新")
+        结果 = await asyncio.wait_for(状态["client"].start(), timeout=30)
+        if not _晋江扫码仍有效(状态):
+            return _控制台错误(409, "扫码会话已更新")
+        图片 = 结果.get("qr_image")
+        if not isinstance(图片, str) or not re.fullmatch(r"data:image/png;base64,[A-Za-z0-9+/=]{1,1048576}", 图片):
+            return _控制台错误(502, "晋江二维码获取失败，请稍后重试")
+        状态["expires_at"] = min(time.time() + 60, float(结果.get("expires_at") or time.time() + 60))
+        scan_id = secrets.token_urlsafe(24)
+        晋江网页扫码会话[scan_id] = 状态
+        状态["task"] = asyncio.create_task(_运行晋江网页扫码(scan_id))
+        已登记 = True
+        return _晋江JSON({**_晋江扫码响应(scan_id, 状态), "qr_image": 图片})
+    except Exception as exc:
+        _记录晋江扫码失败(exc, "qr_start")
+        return _控制台错误(502, "晋江二维码获取失败，请稍后重试")
+    finally:
+        if not 已登记:
+            try:
+                await 状态["client"].close()
+            except Exception:
+                pass
+
+
+async def _处理晋江网页扫码状态(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    scan_id = str(request.query.get("scan_id") or "")
+    状态 = 晋江网页扫码会话.get(scan_id)
+    所有者 = _扫码所有者(_取得请求会话(request))
+    if not 状态 or 状态.get("owner") != 所有者:
+        return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    if not _晋江扫码仍有效(状态):
+        await _移除晋江网页扫码会话(scan_id, 所有者)
+        return _控制台错误(404, "扫码会话已结束，请重新获取二维码")
+    return _晋江JSON(_晋江扫码响应(scan_id, 状态))
+
+
+async def _处理晋江网页扫码取消(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _控制台错误(401, "请先登录控制台")
+    数据 = await _读取请求JSON(request)
+    scan_id = str((数据 or {}).get("scan_id") or "")
+    会话值 = _取得请求会话(request)
+    所有者 = _扫码所有者(会话值)
+    if scan_id:
+        await _移除晋江网页扫码会话(scan_id, 所有者)
+    else:
+        await _取消晋江网页扫码所有者(会话值)
+    return _晋江JSON({"ok": True, "message": "扫码会话已结束"})
 
 
 async def _处理消息聊天列表(request: web.Request) -> web.Response:

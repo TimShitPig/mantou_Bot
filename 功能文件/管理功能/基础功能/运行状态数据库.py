@@ -19,7 +19,7 @@ _已确保运行状态表: set[tuple[int, str]] = globals().get("_已确保运�
 _运行状态表锁 = globals().get("_运行状态表锁") or threading.Lock()
 机器人业务状态命名空间 = frozenset({
     "admin_whitelist", "novel_pan_auth", "novel_pan_account_selection",
-    "novel_pan_enabled", "novel_share_pan", "qq_reader_auth",
+    "novel_pan_enabled", "novel_share_pan", "qq_reader_auth", "jinjiang_auth",
     "zlibrary_accounts", "novel_feature_switch", "msg_console_layout", "group_ad_protection",
 })
 _机器人状态快照缓存 = globals().get("_机器人状态快照缓存") or set()
