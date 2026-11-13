@@ -965,21 +965,7 @@ async def 生成晋江下载回复流(
                 免费章节数,
                 len(可下载目录) - 免费章节数,
             )
-            章节提示 = (
-                f"章节：免费 {免费章节数} 章，付费章节仅下载已解锁部分"
-                if 凭据 else f"章节：{免费章节数} 章（免费）"
-            )
-            yield "\n".join(
-                [
-                    f"书名：{详情.get('title') or '未知'}",
-                    f"作者：{详情.get('author') or '未知'}",
-                    f"状态：{详情.get('status') or '连载'}",
-                    章节提示,
-                    f"字数：{详情.get('word_count') or '未知'}",
-                    "",
-                    "正在下载中请稍等.....",
-                ]
-            )
+            yield "正在确认可下载章节，请稍等……"
             stage = "正文"
             章节结果 = await 下载晋江正文(session, 书籍编号, 可下载目录, 凭据, 配置)
             if not 章节结果:
@@ -989,6 +975,17 @@ async def 生成晋江下载回复流(
             可下载目录 = [item for item in 可下载目录 if item["id"] in 已读取]
             详情["catalog_chapter_count"] = len(全部目录)
         文件名, 内容 = 生成晋江小说文件内容(书籍编号, 详情, 可下载目录, 章节结果)
+        yield "\n".join(
+            [
+                f"书名：{详情.get('title') or '未知'}",
+                f"作者：{详情.get('author') or '未知'}",
+                f"状态：{详情.get('status') or '连载'}",
+                f"可下载章节：{len(章节结果)} 章",
+                f"字数：{详情.get('word_count') or '未知'}",
+                "",
+                "正在准备文件，请稍等……",
+            ]
+        )
         发送结果 = await 准备发送晋江文本文件(
             event,
             文件名,

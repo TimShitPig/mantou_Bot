@@ -158,6 +158,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"文件大小={len(文件内容)}"
             )
 
+        yield f"可下载章节：{成功数} 章"
         阶段 = "upload_send"
         发送结果 = await 准备发送文本文件给当前会话(
             event,
@@ -989,13 +990,12 @@ def 生成小说文件名(书籍: Book) -> str:
 
 
 def 格式化下载提示(书籍: Book) -> str:
-    章节提示 = f"章节：{max(书籍.chapter_num, len(书籍.chapters))} 章"
     return "\n".join(
         [
             f"书名：{书籍.book_name or '未知'}",
             f"作者：{书籍.author_name or '未知'}",
             f"状态：{获取状态文本(书籍)}",
-            章节提示,
+            "可下载章节：正在确认",
             f"字数：{格式化字数(书籍.word_count)}",
             "",
             "正在下载中请稍等.....",

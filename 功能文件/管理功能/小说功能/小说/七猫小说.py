@@ -184,8 +184,6 @@ async def 生成下载回复流(
                 )
                 if 目录字数:
                     详情["words_num"] = str(目录字数)
-            if not str(详情.get("chapters") or "").strip():
-                详情["chapters"] = str(len(目录))
 
             logger.info(
                 f"七猫小说开始下载：书籍编号={书籍编号}, "
@@ -631,7 +629,7 @@ def 格式化下载提示(详情: dict[str, Any], 目录数量: int) -> str:
             f"书名：{详情.get('title') or '未知'}",
             f"作者：{详情.get('author') or '未知'}",
             f"状态：{获取状态文本(详情)}",
-            f"章节：{获取章节数量文本(详情, 目录数量)}",
+            f"可下载章节：{目录数量} 章",
             f"字数：{格式化字数(详情.get('words_num'))}",
             "",
             "正在下载中请稍等.....",
@@ -649,13 +647,6 @@ def 获取状态文本(详情: dict[str, Any]) -> str:
         if "连载" in 文本:
             return "连载"
     return "连载"
-
-
-def 获取章节数量文本(详情: dict[str, Any], 目录数量: int) -> str:
-    章节数 = str(详情.get("chapters") or "").strip()
-    if not 章节数:
-        章节数 = str(目录数量)
-    return f"{章节数} 章"
 
 
 def 格式化字数(字数: Any) -> str:
