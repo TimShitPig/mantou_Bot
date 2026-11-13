@@ -1,7 +1,7 @@
 """晋江 Android App 协议、账号扫码与异步小说下载。
 
-沿用 App 520 的章节签名、动态报文和字段解密；账号只读取本人已有权限，
-不调用购买接口。TXT 与发送仍复用插件统一缓存、网盘和机器人作用域。
+沿用 App 520 的章节签名、动态报文和字段解密；无账号使用游客且只选免费章。
+登录身份仅用于确认已有读取权限，不调用购买接口。TXT 与发送仍复用统一缓存、网盘和机器人作用域。
 """
 
 from __future__ import annotations
@@ -520,14 +520,6 @@ def _安全整数(值: Any, 默认值: int = 0) -> int:
         return 默认值
 
 
-def _是真值(值: Any) -> bool:
-    if isinstance(值, bool):
-        return 值
-    if isinstance(值, (int, float)):
-        return 值 != 0
-    return str(值 or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def 格式化晋江字数(值: Any, 格式化值: Any = "") -> str:
     原始 = str(格式化值 or 值 or "").strip()
     if not 原始:
@@ -572,14 +564,15 @@ async def 获取晋江详情(
 
 
 def _章节可下载(章节: Mapping[str, Any], 凭据: Mapping[str, Any] | None = None) -> bool:
-    if _安全整数(章节.get("islock"), 0) != 0:
+    """游客只选明确免费章；登录后的付费候选仍须由正文响应确认权限。"""
+    if str(章节.get("islock", "0")).strip() != "0":
         return False
-    if 凭据 and 凭据.get("token"):
+    # 不把限免文案、价格或小数截断结果当成游客读取权限。
+    vip = _晋江数字码(章节.get("isvip"))
+    if vip == "0":
         return True
-    vip = _安全整数(章节.get("isvip"), -1)
-    if vip == 0:
-        return True
-    return _是真值(章节.get("pointfreevip")) and _安全整数(章节.get("point"), 1) <= 0
+    token = (凭据 or {}).get("token")
+    return vip is not None and isinstance(token, str) and bool(token.strip())
 
 
 async def 获取晋江目录(
@@ -666,6 +659,8 @@ async def 下载晋江正文(
     凭据: Mapping[str, Any] | None = None,
     配置: Any = None,
 ) -> list[dict[str, Any]]:
+    # 正文入口再次按任务身份筛选，不信任调用方缓存的 available 标记。
+    目录 = [chapter for chapter in 目录 if _章节可下载(chapter, 凭据)]
     total = len(目录)
     if not total:
         return []
@@ -703,7 +698,8 @@ async def 下载晋江正文(
                 content = await 获取晋江正文(session, 书籍编号, str(chapter["id"]), 凭据)
         except Exception as exc:
             需要核实身份 = 需要核实身份 or getattr(exc, "code", None) == "1004"
-            无权限 = getattr(exc, "reason", None) == "chapter_access_denied" and _安全整数(chapter.get("isvip"), 0) > 0
+            # 目录可能尚未同步免费转付费；明确权限拒绝以正文响应为准。
+            无权限 = getattr(exc, "reason", None) == "chapter_access_denied"
             if not 无权限:
                 errors.append(exc)
             logger.debug(
@@ -957,21 +953,28 @@ async def 生成晋江下载回复流(
                 )
                 yield 晋江没有可下载章节提示
                 return
+            免费章节数 = sum(_晋江数字码(item.get("isvip")) == "0" for item in 可下载目录)
             logger.info(
                 "晋江小说开始下载：书籍编号=%s, 书名=%s, 作者=%s, "
-                "总章节=%s, 可下载章节=%s",
+                "身份=%s, 总章节=%s, 免费章节=%s, 付费权限待确认=%s",
                 书籍编号,
                 详情.get("title"),
                 详情.get("author"),
+                "登录账号" if 凭据 else "游客",
                 len(全部目录),
-                len(可下载目录),
+                免费章节数,
+                len(可下载目录) - 免费章节数,
+            )
+            章节提示 = (
+                f"章节：免费 {免费章节数} 章，付费章节仅下载已解锁部分"
+                if 凭据 else f"章节：{免费章节数} 章（免费）"
             )
             yield "\n".join(
                 [
                     f"书名：{详情.get('title') or '未知'}",
                     f"作者：{详情.get('author') or '未知'}",
                     f"状态：{详情.get('status') or '连载'}",
-                    f"章节：{len(可下载目录)} 章",
+                    章节提示,
                     f"字数：{详情.get('word_count') or '未知'}",
                     "",
                     "正在下载中请稍等.....",
