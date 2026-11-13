@@ -5,6 +5,7 @@ import html
 import importlib
 import json
 import re
+import secrets
 import time
 import unicodedata
 import urllib.parse
@@ -176,7 +177,7 @@ except Exception as exc:
 
 
 每页数量 = 5
-会话等待秒数 = 300
+会话等待秒数 = 600
 找书搜索候选数量 = 15
 找书单平台超时秒数 = 12.0
 找书ZLibrary单独查询超时秒数 = 330.0
@@ -188,6 +189,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
 找书结果缓存秒数 = 60.0
 找书结果缓存上限 = 128
 找书会话: dict[str, dict[str, Any]] = {}
+正在处理的找书: dict[str, object] = {}
 找书结果缓存: dict[
     tuple[str, str, tuple[str, ...], str], tuple[float, list[dict[str, Any]]]
 ] = {}
@@ -213,6 +215,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
     ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
 )
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
+翻页按钮命令正则 = re.compile(r"(上一页|下一页) #([0-9a-f]{12})")
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
 # 搜索时只预检最可能展示在前面的候选，避免用户点击后才发现没有目录。
 番茄目录预检缓存秒数 = 600
@@ -256,32 +259,6 @@ def _过滤不可用平台结果(
         if isinstance(项, dict)
         and str(项.get("platform") or "").strip() in 允许平台
     ]
-
-
-def _更新会话可用结果(会话: dict[str, Any], 允许平台: frozenset[str]) -> bool:
-    """刷新会话中的平台结果并返回是否因开关变化而移除了项目。"""
-    if 会话.get("requested_platform"):
-        允许平台 = 允许平台 & {会话["requested_platform"]}
-    原结果 = 会话.get("results")
-    新结果 = _过滤不可用平台结果(原结果, 允许平台)
-    会话["results"] = 新结果
-    当前平台快照 = tuple(sorted(允许平台))
-    旧平台快照 = 会话.get("allowed_platforms")
-    平台集合已变化 = (
-        isinstance(旧平台快照, (list, tuple, set, frozenset))
-        and tuple(sorted(str(平台) for 平台 in 旧平台快照)) != 当前平台快照
-    )
-    会话["allowed_platforms"] = 当前平台快照
-    return (
-        平台集合已变化
-        or not isinstance(原结果, list)
-        or len(新结果) != len(原结果)
-    )
-
-
-async def _空搜索结果() -> list[Any]:
-    """占位搜索任务；平台关闭时不创建任何网络请求。"""
-    return []
 
 
 def 清理文本(值: Any) -> str:
@@ -596,10 +573,8 @@ def 获取群号(event: Any) -> str:
 
 
 def 清理过期会话() -> None:
-    现在 = time.time()
-    for 键 in [
-        k for k, v in 找书会话.items() if 现在 - float(v.get("ts") or 0) > 会话等待秒数
-    ]:
+    截止时间 = time.monotonic() - 会话等待秒数
+    for 键 in [键 for 键, 会话 in 找书会话.items() if 会话["ts"] <= 截止时间]:
         找书会话.pop(键, None)
 
 
@@ -652,11 +627,7 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     return 查询
 
 
-async def 获取找书等待提示(命令文本: str, 配置: Any = None) -> str | None:
-    """返回搜索开始前立即发送的等待提示；翻页和选书不重复提示。"""
-    查询 = 解析找书查询(命令文本)
-    if 查询 is None or not await 小说功能开关.异步小说总开关是否开启(配置):
-        return None
+def _格式化找书等待提示(查询: dict[str, str]) -> str:
     平台 = 查询.get("platform", "")
     if 平台:
         return f"正在为您在{平台}查找「{查询['keyword']}」，请稍等"
@@ -2614,8 +2585,8 @@ async def 聚合搜索(
     return [dict(项) for 项 in 结果]
 
 
-def _获取找书分页(会话: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
-    结果: list[dict[str, Any]] = 会话.get("results") or []
+def _获取找书分页(会话: dict[str, Any]) -> tuple[list[dict[str, Any] | None], int, int]:
+    结果: list[dict[str, Any] | None] = 会话["results"]
     总页 = max(1, (len(结果) + 每页数量 - 1) // 每页数量)
     页码 = min(总页, max(1, int(会话.get("page") or 1)))
     会话["page"] = 页码
@@ -2641,19 +2612,22 @@ def 格式化找书结果(会话: dict[str, Any]) -> str:
     if 关键词:
         行.append(f"关键词：{关键词}")
     行.append("")
-    for 序号, 项 in enumerate(当前页, start=1):
-        if 序号 > 1:
+    起始编号 = (页码 - 1) * 每页数量 + 1
+    for 序号, 项 in enumerate(当前页, start=起始编号):
+        if 序号 > 起始编号:
             行.extend([找书书目分隔线, ""])
+        if 项 is None:
+            行.extend([f"{序号}、暂不可用", ""])
+            continue
         书名, 作者, 来源, 状态 = _找书展示字段(项)
-        行.extend([f"书名：{书名}", f"作者：{作者} · {来源} · {状态}", ""])
+        行.extend([f"{序号}、书名：{书名}", f"作者：{作者} · {来源} · {状态}", ""])
     if not 当前页:
         行.append("没有找到相关书籍")
     翻页 = (["上一页"] if 页码 > 1 else []) + (["下一页"] if 页码 < 总页 else [])
     if 翻页:
         行.append("  ".join(翻页))
     if 当前页:
-        选择 = "选1" if len(当前页) == 1 else f"选1～选{len(当前页)}"
-        行.append(f"发送 {选择} 下载")
+        行.append("直接发送编号下载")
     return "\n".join(行)
 
 
@@ -2684,18 +2658,22 @@ def 格式化找书结果MD(会话: dict[str, Any]) -> str:
     if 关键词:
         行.extend(["", f"关键词：{关键词}"])
     行.append("")
-    for 序号, 项 in enumerate(当前页, start=1):
-        if 序号 > 1:
+    起始编号 = (页码 - 1) * 每页数量 + 1
+    for 序号, 项 in enumerate(当前页, start=起始编号):
+        if 序号 > 起始编号:
             行.extend([找书书目分隔线, ""])
+        if 项 is None:
+            行.extend([f"{序号}、暂不可用", ""])
+            continue
         书名, 作者, 来源, 状态 = _找书展示字段(项)
-        指令 = f"选{序号}"
+        指令 = f"选{序号} #{会话['id']}"
         行.extend([
-            f"书名：{_生成找书文字指令(指令, 书名)}",
+            f"{序号}、书名：{_生成找书文字指令(指令, 书名)}",
             f"作者：{_生成找书文字指令(指令, 作者)} · {来源} · {状态}",
             "",
         ])
     if 当前页:
-        行.append("点击书名或作者，发送后下载")
+        行.append("直接发送编号，或点击书名、作者后发送")
     else:
         行.append("没有找到相关书籍")
     return "\n".join(行)
@@ -2715,7 +2693,7 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
             "action": {
                 "type": 2,
                 "permission": {"type": 0, "specify_user_ids": [用户标识]},
-                "data": 标签,
+                "data": f"{标签} #{会话['id']}",
                 "enter": True,
                 "reply": False,
                 "unsupport_tips": f"请发送{标签}",
@@ -2725,65 +2703,44 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
     ]}]}
 
 
-def 获取当前页结果(会话: dict[str, Any]) -> list[dict[str, Any]]:
-    结果: list[dict[str, Any]] = 会话.get("results") or []
-    页码 = max(1, int(会话.get("page") or 1))
-    起始 = (页码 - 1) * 每页数量
-    return 结果[起始 : 起始 + 每页数量]
-
-
-选书命令正则 = re.compile(r"^选([1-5])$")
-
-
-async def 解析找书选中项(
-    event: Any, 命令文本: str, 配置: Any = None
-) -> dict[str, Any] | str | None:
-    """识别点击指令链发来的 选N，映射当前页第 N 本并交给下载流。"""
-    清理过期会话()
-    文本 = str(命令文本 or "").strip()
-    匹配 = 选书命令正则.fullmatch(文本)
-    if not 匹配:
-        return None
-    会话 = 找书会话.get(获取找书会话键(event))
-    if not 会话:
-        return "找书结果已过期，请重新发送 找 关键词"
-    会话["ts"] = time.time()
-    允许平台 = _规范化允许平台(
-        await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
-    )
-    if _更新会话可用结果(会话, 允许平台):
-        找书会话.pop(获取找书会话键(event), None)
-        return "找书结果已更新，请重新发送 找 关键词"
-    当前页 = 获取当前页结果(会话)
-    if not 当前页:
-        return "没有可选书籍"
-    序号 = int(匹配.group(1))
-    if 序号 < 1 or 序号 > len(当前页):
-        return "下载失败 请重试"
-    return 当前页[序号 - 1]
+选书命令正则 = re.compile(
+    r"(?:(选)\s*)?([1-9][0-9]{0,3}|[零〇一二两三四五六七八九十百千]{1,8})(?: #([0-9a-f]{12}))?"
+)
 
 
 async def 获取找书下载回复流(
     event: Any, 命令文本: str, 配置: Any = None
 ) -> AsyncIterator[Any] | str | None:
-    """main 优先调用：用户点击指令链发出 选N 后，这里直接进入各平台下载流。"""
-    文本 = str(命令文本 or "").strip()
-    if not 选书命令正则.fullmatch(文本):
+    """用当前用户的整份结果解析编号，再调用对应平台的下载流程。"""
+    匹配 = 选书命令正则.fullmatch(str(命令文本 or "").strip())
+    if 匹配 is None:
         return None
-    if not await 小说功能开关.异步小说总开关是否开启(配置):
-        找书会话.clear()
-        return 小说功能开关.获取小说功能关闭回复("", 配置)
-    选中 = await 解析找书选中项(event, 命令文本, 配置)
-    if 选中 is None:
+    显式选书, 编号文本, 结果标识 = 匹配.groups()
+    if not 显式选书 and (结果标识 or not 编号文本.isascii()):
         return None
-    if isinstance(选中, str):
-        return 选中
+    if not 编号文本.isascii():
+        编号文本 = re.sub(r".+", _中文数字转阿拉伯, 编号文本)
+        if not 编号文本.isascii():
+            return None
+    清理过期会话()
+    会话键 = 获取找书会话键(event)
+    会话 = 找书会话.get(会话键)
+    if not 会话 or (结果标识 and 结果标识 != 会话["id"]):
+        return None
+    序号 = int(编号文本)
+    if not 1 <= 序号 <= len(会话["results"]):
+        return "没有这个书目编号" if 显式选书 else None
+    会话["ts"] = time.monotonic()
+    选中 = 会话["results"][序号 - 1]
     平台 = str(选中.get("platform") or "")
+    可下载 = await 小说功能开关.异步当前事件可使用小说功能(event, 平台, 配置)
+    if 找书会话.get(会话键) is not 会话:
+        return None
+    if not 可下载:
+        return 小说功能开关.获取小说功能关闭回复(平台, 配置)
     链接 = str(选中.get("url") or "")
     书籍编号 = str(选中.get("book_id") or "").strip()
     标题 = 选中.get("title") or ""
-    if not await 小说功能开关.异步当前事件可使用小说功能(event, 平台, 配置):
-        return 小说功能开关.获取小说功能关闭回复(平台, 配置)
     logger.info(f"找书选择下载：平台={平台}, 书名={标题}, 书籍编号={书籍编号}")
     if 平台 == "番茄" and 番茄小说 is not None:
         # 找书结果只在内部把已校验的书籍 ID 交给下载器，不开放裸 ID 消息入口。
@@ -2850,106 +2807,139 @@ async def 获取找书下载回复流(
     return "下载失败 请重试"
 
 
-async def 处理找书指令(
-    event: Any, 命令文本: str, 配置: Any = None
-) -> str | dict[str, Any] | None:
-    """返回纯文本；官方机器人返回可点书名/作者及本人翻页键盘。"""
-    清理过期会话()
-    文本 = str(命令文本 or "").strip()
-    会话键 = 获取找书会话键(event)
-    查询 = 解析找书查询(文本)
-    if not 会话键 and 查询 is not None:
-        return "暂时无法识别当前用户，请稍后再试"
-    是当前会话翻页 = 文本 in 翻页命令集合 and 会话键 in 找书会话
-    if 查询 is None and not 是当前会话翻页:
-        # 找书处理器会被主分发器对每条消息调用；非找书消息不读取开关状态。
-        return None
-    if (查询 is not None or 是当前会话翻页) and not await 小说功能开关.异步小说总开关是否开启(
-        配置
-    ):
-        找书会话.clear()
-        return 小说功能开关.获取小说功能关闭回复("", 配置)
-    允许平台 = _规范化允许平台(
-        await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
-    )
-    会话 = None
-    if 查询 is not None:
-        指定平台 = 查询.get("platform", "")
+async def _开始找书(
+    event: Any,
+    会话键: str,
+    查询: dict[str, str],
+    配置: Any,
+    发送等待提示: Callable[[str], Awaitable[Any]] | None,
+) -> dict[str, Any] | str | None:
+    找书会话.pop(会话键, None)
+    查询标记 = object()
+    正在处理的找书[会话键] = 查询标记
+    指定平台 = 查询.get("platform", "")
+    关键词 = 查询["keyword"]
+    搜索类型 = 查询["type"]
+    try:
+        总开关开启 = await 小说功能开关.异步小说总开关是否开启(配置)
+        if 正在处理的找书.get(会话键) is not 查询标记:
+            return None
+        if not 总开关开启:
+            return 小说功能开关.获取小说功能关闭回复("", 配置)
+
+        允许平台 = _规范化允许平台(
+            await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
+        )
+        if 正在处理的找书.get(会话键) is not 查询标记:
+            return None
         if 指定平台:
             if 指定平台 not in 允许平台:
-                找书会话.pop(会话键, None)
                 return 小说功能开关.获取小说功能关闭回复(指定平台, 配置)
             允许平台 = 允许平台 & {指定平台}
-        关键词 = 查询["keyword"]
-        搜索类型 = 查询["type"]
+        if 发送等待提示 is not None:
+            await 发送等待提示(_格式化找书等待提示(查询))
+            if 正在处理的找书.get(会话键) is not 查询标记:
+                return None
         try:
             结果 = _过滤不可用平台结果(
                 await 聚合搜索(
-                    关键词,
-                    搜索类型,
-                    允许平台=允许平台,
-                    配置=配置,
+                    关键词, 搜索类型, 允许平台=允许平台, 配置=配置,
                 ),
                 允许平台,
             )
         except Exception as exc:
             原因 = exc.reason if isinstance(exc, _找书平台查询错误) else "unexpected_error"
             诊断 = exc.diagnostics if isinstance(exc, _找书平台查询错误) else {}
-            部分平台无匹配 = 原因 == "search_incomplete" and not 指定平台 and bool(诊断.get("completed_primary_platforms"))
+            部分平台无匹配 = (
+                原因 == "search_incomplete" and not 指定平台
+                and bool(诊断.get("completed_primary_platforms"))
+            )
             记录日志 = logger.info if 部分平台无匹配 else logger.warning
             记录日志(
                 "找书未返回结果：关键词=%s, 类型=%s, 平台=%s, category=%s, 错误类型=%s, diagnostics=%s",
                 关键词, 搜索类型, 指定平台 or "全部可用平台", 原因, type(exc).__name__,
                 json.dumps(诊断, ensure_ascii=False, sort_keys=True),
             )
-            找书会话.pop(会话键, None)
+            if 正在处理的找书.get(会话键) is not 查询标记:
+                return None
             if 部分平台无匹配:
                 return f"已完成的查询未找到和「{关键词}」相关的书，部分平台查询未完成。"
             return f"{指定平台}搜索失败，请稍后再试"
+        if 正在处理的找书.get(会话键) is not 查询标记:
+            return None
         logger.info(
             f"找书搜索完成：关键词={关键词}, 类型={搜索类型}, "
             f"平台={指定平台 or '全部可用平台'}, 总数={len(结果)}, 会话={会话键}"
         )
         if not 结果:
-            找书会话.pop(会话键, None)
             return f"{指定平台}没有找到和「{关键词}」相关的书"
         会话 = {
+            "id": secrets.token_hex(6),
             "keyword": 关键词,
-            "search_type": 搜索类型,
             "requested_platform": 指定平台,
             "results": 结果,
-            "allowed_platforms": tuple(sorted(允许平台)),
             "page": 1,
-            "ts": time.time(),
+            "ts": time.monotonic(),
         }
         找书会话[会话键] = 会话
-    else:
-        # 选书指令由 获取找书下载回复流 处理，这里直接跳过
-        会话 = 找书会话.get(会话键)
-        if not 会话:
-            return None
-        会话["ts"] = time.time()
-        if _更新会话可用结果(会话, 允许平台):
-            找书会话.pop(会话键, None)
-            return "找书结果已更新，请重新发送 找 关键词"
-        if not 会话["results"]:
-            找书会话.pop(会话键, None)
-            return "没有可用书籍，请重新发送 找 关键词"
-        页码 = max(1, int(会话.get("page") or 1))
-        总页 = max(1, (len(会话.get("results") or []) + 每页数量 - 1) // 每页数量)
-        if 文本 in {"上一页", "上页", "上"}:
-            if 页码 <= 1:
-                return "已经是第一页了"
-            会话["page"] = 页码 - 1
-        elif 文本 in {"下一页", "下页", "下"}:
-            if 页码 >= 总页:
-                return "已经是最后一页了"
-            会话["page"] = 页码 + 1
-        else:
-            return None
+        return 会话
+    finally:
+        if 正在处理的找书.get(会话键) is 查询标记:
+            正在处理的找书.pop(会话键, None)
 
-    if 会话 is None:
+
+async def _翻阅找书结果(
+    event: Any, 会话键: str, 文本: str, 配置: Any, 结果标识: str = "",
+) -> dict[str, Any] | str | None:
+    会话 = 找书会话.get(会话键)
+    if not 会话 or (结果标识 and 结果标识 != 会话["id"]):
         return None
+    会话["ts"] = time.monotonic()
+    总开关开启 = await 小说功能开关.异步小说总开关是否开启(配置)
+    if 找书会话.get(会话键) is not 会话:
+        return None
+    if not 总开关开启:
+        return 小说功能开关.获取小说功能关闭回复("", 配置)
+    允许平台 = _规范化允许平台(
+        await 小说功能开关.异步获取当前事件可用小说平台(event, 配置)
+    )
+    if 找书会话.get(会话键) is not 会话:
+        return None
+    _, 页码, 总页 = _获取找书分页(会话)
+    if 文本 in {"上一页", "上页", "上"}:
+        if 页码 <= 1:
+            return "已经是第一页了"
+        会话["page"] = 页码 - 1
+    else:
+        if 页码 >= 总页:
+            return "已经是最后一页了"
+        会话["page"] = 页码 + 1
+    # 保留原序号；关闭的平台只隐藏对应书目，避免数字指向其他书。
+    展示结果 = [项 if 项["platform"] in 允许平台 else None for 项 in 会话["results"]]
+    return {**会话, "results": 展示结果}
+
+
+async def 处理找书指令(
+    event: Any, 命令文本: str, 配置: Any = None, *,
+    发送等待提示: Callable[[str], Awaitable[Any]] | None = None,
+) -> str | dict[str, Any] | None:
+    """返回纯文本；官方机器人返回可点书名/作者及本人翻页键盘。"""
+    清理过期会话()
+    文本 = str(命令文本 or "").strip()
+    查询 = 解析找书查询(文本)
+    翻页按钮 = 翻页按钮命令正则.fullmatch(文本)
+    if 查询 is None and 文本 not in 翻页命令集合 and not 翻页按钮:
+        return None
+    会话键 = 获取找书会话键(event)
+    if 查询 is not None:
+        if not 会话键:
+            return "暂时无法识别当前用户，请稍后再试"
+        会话 = await _开始找书(event, 会话键, 查询, 配置, 发送等待提示)
+    else:
+        方向, 结果标识 = 翻页按钮.groups() if 翻页按钮 else (文本, "")
+        会话 = await _翻阅找书结果(event, 会话键, 方向, 配置, 结果标识)
+    if not isinstance(会话, dict):
+        return 会话
     if 是QQ官方机器人(event):
         return {
             "md": 格式化找书结果MD(会话),
@@ -2957,8 +2947,3 @@ async def 处理找书指令(
             "text": 格式化找书结果(会话),
         }
     return 格式化找书结果(会话)
-
-
-def 是否找书翻页会话(event: Any) -> bool:
-    清理过期会话()
-    return 获取找书会话键(event) in 找书会话

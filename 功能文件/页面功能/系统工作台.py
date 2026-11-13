@@ -55,6 +55,7 @@
               <dl class="studio-commands">
                 <div><dt><code>找关键词</code> <code>找书 关键词</code> <code>找作者 关键词</code></dt><dd>按书名或作者搜索</dd></div>
                 <div><dt><code>上一页</code> <code>下一页</code></dt><dd>翻阅搜索结果</dd></div>
+                <div><dt><code>1</code> <code>2</code> <code>选一</code></dt><dd>按找书结果编号下载，编号跨页连续</dd></div>
                 <div><dt><span>小说平台分享链接、小说分享卡片</span></dt><dd>识别并处理受支持的小说来源</dd></div>
               </dl>
             </article>
