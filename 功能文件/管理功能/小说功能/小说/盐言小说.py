@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import html
 import json
+import math
 import re
 import time
 from html.parser import HTMLParser
@@ -59,8 +60,10 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 
 class _盐言查询错误(RuntimeError):
-    def __init__(self, 分类: str, http状态: int = 0):
+    def __init__(self, 分类: str, http状态: int = 0, *, 来源: str = "remote", 剩余秒数: int = 0):
         self.分类, self.http状态 = 分类, http状态
+        self.来源 = 来源 if 来源 in {"remote", "error_cache", "channel_cooldown"} else "remote"
+        self.剩余秒数 = max(0, min(盐言访问拒绝冷却秒数, int(剩余秒数)))
         super().__init__(f"HTTP {http状态}" if http状态 else "盐言查询暂不可用")
 
 
@@ -82,11 +85,19 @@ async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, 
         缓存 = 盐言查询缓存.get(键)
         if 缓存:
             if "error" in 缓存:
-                raise _盐言查询错误(*缓存["error"])
+                raise _盐言查询错误(*缓存["error"], 来源="error_cache", 剩余秒数=math.ceil(缓存["expires"] - 当前))
             return 缓存["body"]
-        冷却 = 盐言查询拒绝冷却.get(通道)
-        if 冷却 and 冷却[0] > 当前:
-            raise _盐言查询错误("http_" + str(冷却[1]), 冷却[1])
+        # 403只冷却被拒绝的主机；429与旧版本通道冷却继续共同生效至到期。
+        拒绝范围 = (通道, urlsplit(地址).hostname or "")
+        for 冷却键 in (通道, 拒绝范围):
+            冷却 = 盐言查询拒绝冷却.get(冷却键)
+            if 冷却 and 冷却[0] > 当前:
+                raise _盐言查询错误(
+                    "http_" + str(冷却[1]), 冷却[1], 来源="channel_cooldown",
+                    剩余秒数=math.ceil(冷却[0] - 当前),
+                )
+            if 冷却:
+                盐言查询拒绝冷却.pop(冷却键, None)
         等待 = 盐言查询下次时间.get(通道, 0) - 当前
         if 等待 > 0:
             await asyncio.sleep(等待)
@@ -108,12 +119,12 @@ async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, 
             状态 = exc.http状态 if isinstance(exc, _盐言查询错误) else 0
             分类 = exc.分类 if isinstance(exc, _盐言查询错误) else _盐言超时分类(exc) if isinstance(exc, TimeoutError) else "http_client_error" if isinstance(exc, aiohttp.ClientError) else "query_failed"
             if 状态 in {403, 429}:
-                盐言查询拒绝冷却[通道] = (time.monotonic() + 盐言访问拒绝冷却秒数, 状态)
+                盐言查询拒绝冷却[通道 if 状态 == 429 else 拒绝范围] = (time.monotonic() + 盐言访问拒绝冷却秒数, 状态)
             # 缓存固定错误分类，不保存异常对象、响应正文或请求票据。
             while len(盐言查询缓存) >= 16:
                 盐言查询缓存.pop(next(iter(盐言查询缓存)))
             盐言查询缓存[键] = {"expires": time.monotonic() + (600 if 状态 in {403, 429} else 60), "error": (分类, 状态)}
-            raise _盐言查询错误(分类, 状态) from exc
+            raise _盐言查询错误(分类, 状态, 剩余秒数=盐言访问拒绝冷却秒数 if 状态 in {403, 429} else 0) from exc
         else:
             # 原始字节总量至多 16 MiB，至多 16 项，淘汰最早条目。
             while 盐言查询缓存 and (len(盐言查询缓存) >= 16 or sum(len(x.get("body", b"")) for x in 盐言查询缓存.values()) + len(内容) > 16 * 1024 * 1024):
@@ -669,6 +680,15 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
         logger.info("盐言小说正文正在补录中，请次日查看：状态=body_pending")
         yield "正文正在补录中，请次日查看"
     except Exception as exc:
+        if isinstance(exc, _盐言查询错误) and exc.http状态 in {403, 429}:
+            # 缓存/冷却命中没有发出HTTP请求，不能重复报作新的远端下载失败。
+            写日志 = logger.warning if exc.来源 == "remote" else logger.debug
+            写日志(
+                "盐言小说请求暂缓：stage=%s, category=%s, http_status=%d, source=%s, retry_after=%d",
+                阶段, exc.分类, exc.http状态, exc.来源, exc.剩余秒数,
+            )
+            yield "当前访问受限，请稍后再试" if exc.http状态 == 403 else "请求较多，请稍后再试"
+            return
         logger.warning(
             f"盐言小说下载失败：阶段={阶段}, 错误类型={type(exc).__name__}, "
             f"错误分类={_盐言错误分类(exc)}"
