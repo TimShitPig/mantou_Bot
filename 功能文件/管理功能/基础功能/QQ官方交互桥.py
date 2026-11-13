@@ -18,7 +18,7 @@ except Exception:
 群成员加入事件标记 = "mantou_group_member_add"
 群成员事件意图位 = 1 << 24
 群机器人退出事件意图位 = 1 << 25
-群成员加入桥版本 = 15
+群成员加入桥版本 = 16
 QQ官方语音Silk补丁版本 = 1
 当前插件上下文: Any = None
 平台同步任务: asyncio.Task | None = None
@@ -437,6 +437,43 @@ def _安装好友事件回调(客户端类: Any) -> None:
         setattr(客户端类, 方法名, 好友事件回调)
 
 
+def _注册机器人退出解析器(连接状态类: Any) -> None:
+    """旧 GroupManageEvent 会丢弃 dismiss，解析时保留原事件及 SDK 类型。"""
+    当前 = getattr(连接状态类, "parse_group_del_robot", None)
+    if getattr(当前, "_mantou_group_del_parser_version", 0) == 1:
+        return
+    try:
+        from botpy.manage import GroupManageEvent as 群事件基类
+    except ImportError:
+        群事件基类 = object
+
+    class 扩展机器人退出事件(群事件基类):
+        def __init__(self, api: Any, event_id: Any, data: dict[str, Any]) -> None:
+            if 群事件基类 is not object:
+                super().__init__(api, event_id, data)
+            else:
+                self._api = api
+                self.event_id = event_id
+                self.timestamp = data.get("timestamp")
+                self.group_openid = data.get("group_openid")
+                self.op_member_openid = data.get("op_member_openid")
+            self.raw_data = dict(data)
+            self._mantou_event_id = event_id
+            # 严格保留三态；不能把缺字段、0、字符串 false 当作明确未解散。
+            self.dismiss = data.get("dismiss") if type(data.get("dismiss")) is bool else None
+
+    def 解析机器人退出事件(self: Any, 负载: Any) -> None:
+        外层 = 负载 if isinstance(负载, dict) else {}
+        数据 = 外层.get("d")
+        if not isinstance(数据, dict):
+            return
+        事件 = 扩展机器人退出事件(_读取字段(self, "api"), 外层.get("id"), 数据)
+        self._dispatch("group_del_robot", 事件)
+
+    解析机器人退出事件._mantou_group_del_parser_version = 1
+    setattr(连接状态类, "parse_group_del_robot", 解析机器人退出事件)
+
+
 def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None) -> bool:
     """补齐旧版 qq-botpy 未内置的官方群聊事件解析器。"""
     连接状态类 = _读取字段(适配器模块, "ConnectionState")
@@ -448,6 +485,9 @@ def _注册群成员加入解析器(适配器模块: Any, 客户端: Any = None)
             return False
 
     def 安装解析器(解析器名称: str) -> None:
+        if 解析器名称 == "group_del_robot":
+            _注册机器人退出解析器(连接状态类)
+            return
         方法名 = "parse_" + 解析器名称
         原解析器 = getattr(连接状态类, 方法名, None)
         if callable(原解析器) and getattr(原解析器, "__module__", "") != __name__:
@@ -609,6 +649,11 @@ def _提取群成员加入数据(原始事件: Any) -> dict[str, Any]:
             值 = 读取容器字段(容器字段, 字段名)
             if 值 is not None:
                 结果[字段名] = 值
+    for 数据 in 展开数据:
+        解散 = _读取字段(数据, "dismiss")
+        if type(解散) is bool:
+            结果["dismiss"] = 解散
+            break
     for 字段名 in ("username", "member_name", "nickname", "user_name", "nick", "name"):
         for 数据 in 展开数据:
             值 = _读取字段(数据, 字段名)
@@ -962,14 +1007,10 @@ def 安装QQ官方帮助交互(上下文: Any = None) -> bool:
                 from 功能文件.管理功能.基础功能 import 消息记录
 
                 事件数据 = _提取群成员加入数据(原始事件)
-                群号 = str(事件数据.get("group_openid") or "").strip()
-                if 群号:
-                    appid = str(
-                        _读取字段(self, "appid")
-                        or _读取字段(_读取字段(self, "platform"), "appid")
-                        or ""
-                    ).strip()
-                    消息记录.标记群机器人已移除(群号, appid)
+                群标识 = 事件数据.get("group_openid")
+                群号 = 群标识.strip() if isinstance(群标识, str) else ""
+                appid = 消息记录._平台实例appid(self)
+                消息记录.标记群机器人已移除(群号, appid, 原始事件=原始事件)
             except Exception as 异常:
                 logger.warning(
                     "QQ官方群机器人退出状态记录失败：error_type=%s",

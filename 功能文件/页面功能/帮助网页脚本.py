@@ -2708,8 +2708,13 @@
         if (!status) return null;
         const checked = Number(source?.membership_checked_at || 0);
         const revision = Number(source?.membership_revision || 0);
+        const origin = String(source?.membership_source || '').trim();
+        const dismiss = status === 'removed' && origin === 'GROUP_DEL_ROBOT'
+          && typeof source?.membership_dismiss === 'boolean' ? source.membership_dismiss : null;
         return {
           membership_status:status,
+          membership_source:origin,
+          membership_dismiss:dismiss,
           membership_checked_at:Number.isFinite(checked) && checked > 0 ? checked : 0,
           membership_revision:Number.isSafeInteger(revision) && revision > 0 ? revision : (Number.isFinite(checked) && checked > 0 ? checked * 1000 : 0),
           in_group:status === 'unknown' ? null : status === 'active',
@@ -2717,7 +2722,7 @@
       };
       const pickMsgGroupState = (current = {}, incoming = {}) => {
         const previous = readMsgGroupState(current), next = readMsgGroupState(incoming);
-        if (!previous) return next || {membership_status:'unknown', membership_checked_at:0, membership_revision:0, in_group:null};
+        if (!previous) return next || {membership_status:'unknown', membership_source:'', membership_dismiss:null, membership_checked_at:0, membership_revision:0, in_group:null};
         if (!next || next.membership_revision < previous.membership_revision) return previous;
         if (next.membership_revision === previous.membership_revision && previous.membership_status !== 'unknown') return previous;
         return next;
@@ -2726,7 +2731,8 @@
         chatId = String(chatId || '').trim(); appid = String(appid || '').trim();
         if (!chatId || !appid || appid !== msgState.selectedAppid) return pickMsgGroupState();
         const matches = (source) => source && (!source.chat_id || String(source.chat_id) === chatId)
-          && (!source.chat_type || source.chat_type === 'group') && (!source.appid || String(source.appid).trim() === appid);
+          && (!source.chat_type || source.chat_type === 'group') && (!source.appid || String(source.appid).trim() === appid)
+          && (!source.group_openid || String(source.group_openid) === chatId);
         const scope = msgScopeKey('group', chatId, appid);
         const current = msgState.chats.find((chat) => chat.chat_type === 'group' && String(chat.chat_id || '') === chatId && matches(chat));
         const overlay = msgState.realtimeChats.get(scope);
@@ -2744,6 +2750,15 @@
       const msgChatIsRemoved = (chat) => String(chat?.chat_type || 'group') === 'user'
         ? (String(chat?.friend_status || '').toLowerCase() === 'removed' || chat?.is_friend === false)
         : readMsgGroupState(chat)?.membership_status === 'removed';
+      const msgChatRemovedText = (chat = {}) => {
+        if (String(chat.chat_type || 'group') === 'user') return '对方已删除机器人好友';
+        const state = readMsgGroupState(chat);
+        if (state?.membership_status === 'removed' && state.membership_source === 'GROUP_DEL_ROBOT') {
+          if (state.membership_dismiss === true) return '群已解散';
+          if (state.membership_dismiss === false) return '你已被移除群聊（非群解散）';
+        }
+        return '你已被移除群聊';
+      };
       let msgFriendEventOrder = 0;
       const pickMsgFriendState = (current = {}, incoming = {}, authoritative = false) => {
         const read = (source) => {
@@ -3149,7 +3164,7 @@
         const viewingAtBottom = viewing && !$('page-messages')?.hidden && msgState.pendingNewMessages === 0 && msgBodyNearBottom($('msg-body'));
         const unread = viewingAtBottom ? 0 : Number(chat.unread || 0);
         if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id, false, chat.chat_type, chat.appid));
-        const removedText = chat.chat_type === 'user' ? '对方已删除机器人好友' : '你已被移除群聊';
+        const removedText = msgChatRemovedText(chat);
         const preview = removed ? removedText : (item.preview || '（无文本内容）');
         return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-appid="${esc(chat.appid)}" data-msg-key="${esc(msgChatKey(chat))}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? removedText : (chat.pinned ? '取消置顶' : '置顶')}">
           <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
@@ -3308,6 +3323,8 @@
             chat.is_friend === null ? 'unknown' : chat.is_friend === false ? 0 : 1,
             chat.membership_status,
             chat.membership_revision,
+            chat.membership_source,
+            chat.membership_dismiss === null ? 'unknown' : chat.membership_dismiss === true ? 1 : chat.membership_dismiss === false ? 0 : 'unknown',
             chat.in_group === false ? 0 : 1,
             chat.group_avatar || chat.group_avatar_url || (chat.chat_type === 'group' ? '' : (chat.avatar || chat.avatar_url || '')),
           ].join(':');
@@ -4087,9 +4104,11 @@
           || (responseInfo.group_openid && String(responseInfo.group_openid) !== String(msgState.chatId || ''))) {
           data = {...data, group_info:{}};
         }
-        const previousGroupStatus = msgState.chatType === 'group' ? msgState.chats.find((chat) => chat.chat_type === 'group' && String(chat.chat_id || '') === msgState.chatId && String(chat.appid || '') === msgState.chatAppid)?.membership_status : null;
+        const previousGroupState = msgState.chatType === 'group' ? readMsgGroupState(msgState.chats.find((chat) => chat.chat_type === 'group' && String(chat.chat_id || '') === msgState.chatId && String(chat.appid || '') === msgState.chatAppid)) : null;
         const groupState = msgState.chatType === 'group' ? syncMsgGroupState(msgState.chatId, data.group_info || {}, msgState.chatAppid) : null;
-        if (previousGroupStatus != null && previousGroupStatus !== groupState?.membership_status) scheduleMsgChatRender();
+        if (previousGroupState && (previousGroupState.membership_status !== groupState?.membership_status
+          || previousGroupState.membership_source !== groupState?.membership_source
+          || previousGroupState.membership_dismiss !== groupState?.membership_dismiss)) scheduleMsgChatRender();
         const nameEl = $('msg-head-name');
         const curChat = (msgState.chats || []).find((c) => String(c.chat_id || '') === String(msgState.chatId || '')
           && String(c.chat_type || 'group') === msgState.chatType
@@ -4143,9 +4162,10 @@
         nameEl.setAttribute('aria-label', canOpenGroupInfo ? `${nameEl.textContent}，查看群信息` : nameEl.textContent);
         const hasMemberCount = gNum !== null;
         const headDetails = msgState.chatType === 'group'
-          ? `群聊 · ${msgState.chatId}${hasMemberCount ? ` · 群成员 ${gNum} 人` : ' · 人数未知'}${removed ? ' · 你已被移除群聊' : ''}`
+          ? `群聊 · ${msgState.chatId}${hasMemberCount ? ` · 群成员 ${gNum} 人` : ' · 人数未知'}${removed ? ` · ${msgChatRemovedText(groupState)}` : ''}`
           : `私聊 · ${msgState.chatId}${removed ? ' · 对方已删除机器人好友 · 保留聊天记录' : ''}`;
-        $('msg-head-sub').textContent = msgState.chatType === 'group' ? (hasMemberCount ? `${gNum}人` : '人数未知') : '私聊';
+        $('msg-head-sub').textContent = msgState.chatType === 'group'
+          ? (removed ? msgChatRemovedText(groupState) : (hasMemberCount ? `${gNum}人` : '人数未知')) : '私聊';
         $('msg-head-sub').title = headDetails; nameEl.title = canOpenGroupInfo ? '查看群信息' : headDetails;
         $('msg-composer').hidden = removed;
         for (const id of ['msg-refresh-info','msg-remark','msg-group-settings-open']) $(id).hidden = msgState.chatType !== 'group' || removed;
@@ -6607,7 +6627,7 @@
         if (isNewEvent && followLatest) markMsgRead(chatId, true, chatType, eventAppid);
       };
       const applyMsgGroupStatus = (payload) => {
-        if (!msgInSelectedBot(payload)) return;
+        if (!msgInSelectedBot(payload) || (payload.chat_type && payload.chat_type !== 'group')) return;
         const chatId = String(payload?.chat_id || '').trim();
         if (!chatId) return;
         const membership = syncMsgGroupState(chatId, payload, payload.appid);
@@ -6625,13 +6645,14 @@
         renderMsgChats({chats:msgState.chats});
       };
       const applyMsgGroupInfo = (payload) => {
-        if (!msgInSelectedBot(payload)) return;
+        if (!msgInSelectedBot(payload) || (payload.chat_type && payload.chat_type !== 'group')) return;
         const chatId = String(payload?.chat_id || payload?.group_openid || '').trim();
         if (!chatId) return;
         const memberNum = msgKnownGroupMemberCount(payload?.member_num, payload?.group_member_num);
         const groupName = String(payload?.group_name || '').trim();
         const appid = String(payload?.appid || '').trim();
         const updatedAt = Number(payload?.updated_at || 0);
+        const membership = syncMsgGroupState(chatId, payload, appid);
         const update = (chat) => {
           if (String(chat.chat_id || '') !== chatId || String(chat.chat_type || 'group') !== 'group' || (appid && chat.appid && String(chat.appid) !== appid)) return chat;
           if (updatedAt && Number(chat.group_info_updated_at || 0) > updatedAt) return chat;
@@ -6651,11 +6672,11 @@
         const overlay = msgState.realtimeChats.get(msgScopeKey('group', chatId));
         if (overlay || current) msgState.realtimeChats.set(msgScopeKey('group', chatId), update(overlay || current));
         if (msgState.chatId === chatId && msgState.chatType === 'group') {
-          updateMsgHead({group_info:current ? {group_name:current.group_name, member_num:current.member_num ?? current.group_member_num, updated_at:current.group_info_updated_at, membership_status:current.membership_status} : payload});
+          updateMsgHead({group_info:current ? {group_name:current.group_name, member_num:current.member_num ?? current.group_member_num, updated_at:current.group_info_updated_at, ...membership} : payload});
         }
         const session = groupSettingsState.session;
         if (groupSettingsCurrent(session) && session.target.chat_id === chatId) renderGroupSettingsProfile(session, payload);
-        if (groupName) renderMsgChats({chats:msgState.chats});
+        if (groupName || readMsgGroupState(payload)) renderMsgChats({chats:msgState.chats});
       };
 
       const toggleMsgSelect = (row, mid) => {
@@ -7404,7 +7425,9 @@
       };
       const sendMessage = () => {
         if (!msgState.chatId || !msgState.chatAppid || msgState.chatAppid !== msgState.selectedAppid) return toast('请先选择当前机器人的会话');
-        if (msgState.chatRemoved) return toast(msgState.chatType === 'user' ? '对方已删除机器人好友' : '你已被移除群聊');
+        if (msgState.chatRemoved) return toast(msgChatRemovedText({
+          ...(msgState.groupMembership.get(msgScopeKey('group', msgState.chatId, msgState.chatAppid)) || {}), chat_type:msgState.chatType,
+        }));
         const hasImage = composerHasImage();
         const hasMedia = composerHasMedia();
         const editorText = getComposerText();

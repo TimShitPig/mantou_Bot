@@ -2355,6 +2355,8 @@ def _推送群状态事件(会话标识: str, 状态: str, appid: str = "") -> N
             "membership_status": str(状态 or "unknown").strip().lower(),
             "membership_checked_at": int(记录.get("checked_at") or 0),
             "membership_revision": int(记录.get("revision") or 0),
+            "membership_source": str(记录.get("source") or ""),
+            "membership_dismiss": 记录.get("dismiss"),
         },
     }
 
@@ -5918,6 +5920,7 @@ def _规范群成员状态信息(信息: dict[str, Any]) -> dict[str, Any]:
         "status": 信息.get("membership_status"),
         "checked_at": 信息.get("membership_checked_at") or 0,
         "source": 信息.get("membership_source"),
+        "dismiss": 信息.get("membership_dismiss"),
         "revision": 信息.get("membership_revision"),
         "member_role": 信息.get("member_role"),
         "allow_proactive_msg": 信息.get("allow_proactive_msg"),
@@ -5926,6 +5929,7 @@ def _规范群成员状态信息(信息: dict[str, Any]) -> dict[str, Any]:
     信息.update({
         "membership_status": 状态["status"], "membership_source": 状态["source"],
         "membership_revision": 状态["revision"], "membership_checked_at": 状态["checked_at"],
+        "membership_dismiss": 状态["dismiss"],
     })
     if 状态["source"] == "legacy_unverified":
         信息.update({"member_role": "", "is_admin": False, "allow_proactive_msg": None,
@@ -6018,6 +6022,7 @@ def _解析群机器人状态值(值: Any) -> dict[str, Any]:
         "allow_proactive_msg": 允许主动消息,
         "recv_msg_setting": "" if 旧误判 else str(原始.get("recv_msg_setting") or "").strip().lower(),
         "source": 来源,
+        "dismiss": 原始.get("dismiss") if 状态 == "removed" and 来源 == "GROUP_DEL_ROBOT" and type(原始.get("dismiss")) is bool else None,
         "revision": 修订,
     }
 
@@ -6036,6 +6041,7 @@ def _读取群机器人状态(会话标识: str, appid: str = "") -> dict[str, A
             {
                 "status": 信息.get("membership_status"),
                 "source": 信息.get("membership_source"),
+                "dismiss": 信息.get("membership_dismiss"),
                 "revision": 信息.get("membership_revision"),
                 "checked_at": 信息.get("membership_checked_at") or 信息.get("updated_at") or 0,
                 "appid": 信息.get("appid") or "",
@@ -6065,6 +6071,7 @@ def _设置群机器人状态(
     *,
     持久化: bool = True,
     来源: str = "",
+    解散: bool | None = None,
 ) -> dict[str, Any]:
     会话标识 = str(会话标识 or "").strip()
     appid = str(appid or "").strip() or _获取群信息appid(会话标识)
@@ -6076,8 +6083,15 @@ def _设置群机器人状态(
     缓存键 = _群作用域缓存键(会话标识, appid)
     原记录 = _读取群机器人状态(会话标识, appid)
     旧状态 = str(原记录.get("status") or "unknown")
+    # 明确退群事件的原因不能被后续接口错误或旧包装缺字段降级。
+    if 状态 == 旧状态 == "removed" and 原记录.get("source") == "GROUP_DEL_ROBOT":
+        if 来源 != "GROUP_DEL_ROBOT":
+            来源, 解散 = "GROUP_DEL_ROBOT", 原记录.get("dismiss")
+        elif type(解散) is not bool and type(原记录.get("dismiss")) is bool:
+            解散 = 原记录["dismiss"]
     记录 = _解析群机器人状态值({
         "source": 来源,
+        "dismiss": 解散,
         "revision": max(time.time_ns() // 1_000_000, int(原记录.get("revision") or 0) + 1),
         "group_openid": 会话标识,
         "status": 状态,
@@ -6103,6 +6117,7 @@ def _设置群机器人状态(
     信息["membership_checked_at"] = 记录["checked_at"]
     信息["membership_source"] = 记录["source"]
     信息["membership_revision"] = 记录["revision"]
+    信息["membership_dismiss"] = 记录["dismiss"]
     if 记录["appid"]:
         信息["appid"] = 记录["appid"]
     if 记录["member_role"]:
@@ -6116,7 +6131,7 @@ def _设置群机器人状态(
     elif 状态 == "removed":
         信息["is_admin"] = False
     _写入群作用域信息(会话标识, 信息, appid)
-    if 状态 != 旧状态:
+    if (状态, 记录["source"], 记录["dismiss"]) != (旧状态, 原记录["source"], 原记录["dismiss"]):
         _推送群状态事件(会话标识, 状态, appid)
     if 持久化 and _消息数据库已配置():
         try:
@@ -6135,9 +6150,49 @@ def _设置群机器人状态(
     return 记录
 
 
-def 标记群机器人已移除(会话标识: str, appid: str = "") -> dict[str, Any]:
-    """处理官方 GROUP_DEL_ROBOT 事件，立即把群标记为已移除并持久化。"""
-    return _设置群机器人状态(会话标识, "removed", appid, 持久化=True, 来源="GROUP_DEL_ROBOT")
+def _提取群移除解散标记(事件: Any) -> bool | None:
+    """只读取退群事件白名单包装中的真实布尔值，不把缺失或字符串当作 false。"""
+    目标群 = _提取群机器人退出群号(事件)
+    待查 = [(事件, 0)]
+    已查: set[int] = set()
+    while 待查 and len(已查) < 24:
+        当前, 深度 = 待查.pop(0)
+        if 当前 is None or id(当前) in 已查:
+            continue
+        已查.add(id(当前))
+        当前群 = _读取字段(当前, "group_openid") or _读取字段(当前, "group_id")
+        if 当前群 and str(当前群).strip() != 目标群:
+            continue
+        值 = _读取字段(当前, "dismiss")
+        if type(值) is bool:
+            return 值
+        if 深度 < 4:
+            for 字段 in ("raw_data", "d", "data", "payload", "event"):
+                子项 = _读取字段(当前, 字段)
+                if 子项 is not None:
+                    待查.append((子项, 深度 + 1))
+    return None
+
+
+def 标记群机器人已移除(
+    会话标识: str, appid: str = "", *, 原始事件: Any = None,
+) -> dict[str, Any]:
+    """保存可信 GROUP_DEL_ROBOT 的三态解散原因，不推测缺失的群或机器人身份。"""
+    会话标识, appid = str(会话标识 or "").strip(), str(appid or "").strip()
+    解散 = _提取群移除解散标记(原始事件)
+    if not 会话标识:
+        logger.warning("QQ官方群移除事件无法定位：stage=group_removed, reason=missing_group_openid, dismiss=%s",
+                       "true" if 解散 is True else "false" if 解散 is False else "unknown")
+        return _解析群机器人状态值({})
+    if not re.fullmatch(r"[0-9]{4,32}", appid):
+        logger.warning("QQ官方群移除事件无法定位：stage=group_removed, reason=missing_appid")
+        return _解析群机器人状态值({})
+    原始群 = _提取群机器人退出群号(原始事件)
+    if 原始群 and 原始群 != 会话标识:
+        logger.warning("QQ官方群移除事件无法定位：stage=group_removed, reason=group_mismatch")
+        return _读取群机器人状态(会话标识, appid)
+    return _设置群机器人状态(会话标识, "removed", appid, 持久化=True,
+                         来源="GROUP_DEL_ROBOT", 解散=解散)
 
 
 def 标记群机器人已加入(会话标识: str, appid: str = "") -> dict[str, Any]:
@@ -6334,6 +6389,7 @@ def _构造已移除群摘要(
     摘要["membership_checked_at"] = 状态["checked_at"]
     摘要["membership_source"] = 状态["source"]
     摘要["membership_revision"] = 状态["revision"]
+    摘要["membership_dismiss"] = 状态["dismiss"]
     if str(appid or "").strip():
         摘要.setdefault("appid", str(appid).strip())
     摘要["is_admin"] = False
@@ -7342,6 +7398,7 @@ async def 刷新群信息(
             "membership_checked_at": int(成员状态.get("checked_at") or time.time()),
             "membership_source": str(成员状态.get("source") or ""),
             "membership_revision": int(成员状态.get("revision") or 0),
+            "membership_dismiss": 成员状态.get("dismiss"),
             "updated_at": int(time.time()),
             "last_request_at": int(已有.get("last_request_at") or 0),
         }
@@ -7432,6 +7489,7 @@ def 获取缓存的群信息(会话标识: str, appid: str = "") -> dict[str, An
     返回["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
     返回["membership_source"] = str(成员状态.get("source") or "")
     返回["membership_revision"] = int(成员状态.get("revision") or 0)
+    返回["membership_dismiss"] = 成员状态.get("dismiss")
     if isinstance(成员状态.get("allow_proactive_msg"), bool):
         返回.setdefault("allow_proactive_msg", 成员状态["allow_proactive_msg"])
     else:
@@ -7673,6 +7731,8 @@ def _聊天群成员状态(会话标识: str, 类型: str, appid: str = "") -> d
         "membership_status": str(状态.get("status") or "unknown"),
         "membership_checked_at": int(状态.get("checked_at") or 0),
         "membership_revision": int(状态.get("revision") or 0),
+        "membership_source": str(状态.get("source") or ""),
+        "membership_dismiss": 状态.get("dismiss"),
     }
 
 
@@ -8133,6 +8193,8 @@ def _构造群角色结果(会话标识: str, 状态: dict[str, Any], appid: str
         "membership_status": str(状态.get("status") or "unknown"),
         "membership_checked_at": int(状态.get("checked_at") or 0),
         "membership_revision": int(状态.get("revision") or 0),
+        "membership_source": str(状态.get("source") or ""),
+        "membership_dismiss": 状态.get("dismiss"),
         "allow_proactive_msg": 状态.get("allow_proactive_msg"),
         "recv_msg_setting": str(状态.get("recv_msg_setting") or ""),
     }
@@ -9497,7 +9559,7 @@ def _安装消息撤回事件挂钩(客户端类: Any) -> bool:
 def _安装消息事件挂钩() -> bool:
     """为 QQ 官方 botClient 包装消息事件回调，把收到的消息写入缓存。"""
     global _挂钩已安装, _消息事件挂钩版本
-    if _挂钩已安装 and _消息事件挂钩版本 >= 4 and _消息撤回事件挂钩版本 >= 1:
+    if _挂钩已安装 and _消息事件挂钩版本 >= 5 and _消息撤回事件挂钩版本 >= 1:
         return True
     try:
         from astrbot.core.platform.sources.qqofficial import (
@@ -9526,7 +9588,7 @@ def _安装消息事件挂钩() -> bool:
         if getattr(原回调, "__module__", "") == __name__:
             if 类型 not in {"group_removed", "group_added"}:
                 continue
-            if getattr(原回调, "__mantou_membership_hook_version__", 0) >= 4:
+            if getattr(原回调, "__mantou_membership_hook_version__", 0) >= 5:
                 continue
             原回调 = getattr(原回调, "__mantou_message_hook_original__", None) or (getattr(原回调, "__defaults__", ()) or (None,))[0]
             if not callable(原回调):
@@ -9539,9 +9601,10 @@ def _安装消息事件挂钩() -> bool:
                 # 解析、缓存、未读计数、昵称补查和数据库写入由独立 worker 顺序处理。
                 if _类型 in {"group_removed", "group_added"}:
                     群号 = _提取群机器人退出群号(消息)
-                    if 群号:
-                        更新状态 = 标记群机器人已移除 if _类型 == "group_removed" else 标记群机器人已加入
-                        更新状态(群号, _平台实例appid(self))
+                    if _类型 == "group_removed":
+                        标记群机器人已移除(群号, _平台实例appid(self), 原始事件=消息)
+                    elif 群号:
+                        标记群机器人已加入(群号, _平台实例appid(self))
                 else:
                     _排队收到消息(self, 消息, _类型)
             except Exception as exc:
@@ -9551,11 +9614,11 @@ def _安装消息事件挂钩() -> bool:
                 return await 结果
             return 结果
 
-        新回调.__mantou_membership_hook_version__ = 4
+        新回调.__mantou_membership_hook_version__ = 5
         新回调.__mantou_message_hook_original__ = 原回调
         setattr(客户端类, 事件名, 新回调)
     _挂钩已安装 = True
-    _消息事件挂钩版本 = 4
+    _消息事件挂钩版本 = 5
     logger.info("消息记录事件挂钩已安装：group/user 消息已接入缓存")
     return True
 
@@ -9868,27 +9931,23 @@ def _安装消息发送挂钩() -> bool:
 
 
 def _提取群机器人退出群号(事件: Any) -> str:
-    候选对象 = [
-        事件,
-        _读取字段(事件, "raw_data"),
-        _读取字段(事件, "data"),
-        _读取字段(事件, "__dict__"),
-    ]
-    for 对象 in 候选对象:
-        if not isinstance(对象, dict):
+    """仅遍历事件自身的有限包装，不从历史会话或引用推测空群标识。"""
+    待查 = [(事件, 0)]
+    已查: set[int] = set()
+    while 待查 and len(已查) < 24:
+        当前, 深度 = 待查.pop(0)
+        if 当前 is None or id(当前) in 已查:
             continue
-        数据 = 对象.get("d") if isinstance(对象.get("d"), dict) else 对象
-        群号 = str(
-            数据.get("group_openid")
-            or 数据.get("group_id")
-            or ""
-        ).strip()
-        if 群号:
-            return 群号
-    for 字段名 in ("group_openid", "group_id"):
-        群号 = str(_读取字段(事件, 字段名) or "").strip()
-        if 群号:
-            return 群号
+        已查.add(id(当前))
+        for 字段 in ("group_openid", "group_id"):
+            值 = _读取字段(当前, 字段)
+            if isinstance(值, str) and 值.strip():
+                return 值.strip()
+        if 深度 < 4:
+            for 字段 in ("raw_data", "d", "data", "payload", "event"):
+                子项 = _读取字段(当前, 字段)
+                if 子项 is not None:
+                    待查.append((子项, 深度 + 1))
     return ""
 
 
@@ -10114,6 +10173,7 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
         信息.update({"membership_status": 记录["status"],
                    "membership_checked_at": 记录["checked_at"],
                    "membership_source": 记录["source"], "membership_revision": 记录["revision"],
+                   "membership_dismiss": 记录["dismiss"],
                    "member_role": 记录["member_role"]})
         for 字段 in ("appid", "allow_proactive_msg", "recv_msg_setting"):
             if 记录.get(字段) is not None:
@@ -10159,6 +10219,7 @@ def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
             资料["membership_checked_at"] = int(成员状态.get("checked_at") or 0)
             资料["membership_source"] = str(成员状态.get("source") or "")
             资料["membership_revision"] = int(成员状态.get("revision") or 0)
+            资料["membership_dismiss"] = 成员状态.get("dismiss")
             资料["member_role"] = str(成员状态.get("member_role") or "")
             for 字段 in ("allow_proactive_msg", "recv_msg_setting"):
                 资料[字段] = 成员状态.get(字段)
