@@ -132,7 +132,6 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"章节数={len(书籍.chapters)}, 模式=XML目录+XML单章正文, "
                 f"会话复用=开启, 最大并发数={下载并发数}"
             )
-            yield 格式化下载提示(书籍)
 
             阶段 = "content"
             所有章节内容 = await 下载全部章节(session, 书籍)
@@ -158,7 +157,7 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"文件大小={len(文件内容)}"
             )
 
-        yield f"章节：{成功数} 章"
+        yield 格式化下载提示(书籍, 成功数)
         阶段 = "upload_send"
         发送结果 = await 准备发送文本文件给当前会话(
             event,
@@ -989,13 +988,13 @@ def 生成小说文件名(书籍: Book) -> str:
     return f"[{获取状态文本(书籍)}]书名：{标题} 作者：{作者}.txt"
 
 
-def 格式化下载提示(书籍: Book) -> str:
+def 格式化下载提示(书籍: Book, 章节数: int) -> str:
     return "\n".join(
         [
             f"书名：{书籍.book_name or '未知'}",
             f"作者：{书籍.author_name or '未知'}",
             f"状态：{获取状态文本(书籍)}",
-            "章节：正在确认",
+            f"章节：{章节数} 章",
             f"字数：{格式化字数(书籍.word_count)}",
             "",
             "正在下载中请稍等.....",

@@ -5390,14 +5390,13 @@ def 生成QQ阅读章节JSON(
                       ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def 格式化下载提示(details: dict[str, Any], catalog_count: int | None) -> str:
-    章节提示 = f"{catalog_count} 章" if catalog_count is not None else "正在确认"
+def 格式化下载提示(details: dict[str, Any], catalog_count: int) -> str:
     return "\n".join(
         [
             f"书名：{details.get('title') or '未知'}",
             f"作者：{details.get('author') or '未知'}",
             f"状态：{details.get('status') or '连载'}",
-            f"章节：{章节提示}",
+            f"章节：{catalog_count} 章",
             f"字数：{格式化字数(details.get('words_num'))}",
             "",
             "正在下载中请稍等.....",
@@ -5737,11 +5736,11 @@ async def 生成QQ阅读下载文件流(
             )
             # 第三方 VIP 正文可能缩小范围，官方出版书也可能跳过没有可读文本的条目。
             章节数待确认 = 付费类型 == "vip" if 使用第三方正文 else published
-            初始下载章节数 = len(catalog)
-            yield {
-                "kind": "progress", "stage": "content",
-                "message": 格式化下载提示(details, None if 章节数待确认 else 初始下载章节数),
-            }
+            if not 章节数待确认:
+                yield {
+                    "kind": "progress", "stage": "content",
+                    "message": 格式化下载提示(details, len(catalog)),
+                }
 
             stage = "content"
             if 使用第三方正文:
@@ -5793,10 +5792,10 @@ async def 生成QQ阅读下载文件流(
         )
 
         if 章节数待确认:
-            章节提示 = f"章节：{len(chapters)} 章"
-            if len(chapters) < 初始下载章节数:
-                章节提示 += "（其余章节未收录）"
-            yield {"kind": "progress", "stage": "content", "message": 章节提示}
+            yield {
+                "kind": "progress", "stage": "content",
+                "message": 格式化下载提示(details, len(chapters)),
+            }
         yield {"kind": "file", "stage": "completed", "filename": filename,
                "content": content, "chapter_count": len(chapters),
                "title": str(details.get("title") or ""),
