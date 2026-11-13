@@ -1356,6 +1356,19 @@ def 启动百度后台上传并清理源文件(配置: Any, 路径: Any, 文件�
         删除百度缓存文件(路径)
 
 
+def _统计百度目录可下载章数(目录: list[dict[str, Any]], 出版模式: bool) -> int:
+    if 出版模式:
+        return sum(_百度出版章节切片(章节)[0] is not None for 章节 in 目录)
+    可下载章数 = 0
+    for 章节 in 目录:
+        try:
+            _检查百度章节权限(章节, 检查公开状态=False)
+        except _百度访问错误:
+            continue
+        可下载章数 += 1
+    return 可下载章数
+
+
 async def 生成百度下载回复流(
     event: Any, 来源: str, 配置: Any = None
 ) -> AsyncIterator[Any]:
@@ -1415,6 +1428,19 @@ async def 生成百度下载回复流(
                 return
             _校验百度目录(目录)
             logger.info("百度小说开始下载：书籍编号=%s, 章节数=%s", 书籍编号, len(目录))
+            可下载章数 = _统计百度目录可下载章数(目录, 出版模式)
+            if 可下载章数:
+                yield "\n".join(
+                    [
+                        f"书名：{详情.get('title') or '未知'}",
+                        f"作者：{详情.get('author') or '未知'}",
+                        f"状态：{详情.get('status') or '连载'}",
+                        f"章节：{可下载章数} 章",
+                        f"字数：{格式化百度字数(详情.get('word_count'))}",
+                        "",
+                        "正在下载中请稍等.....",
+                    ]
+                )
             stage = "正文"
             失败原因: dict[int, str] = {}
             if 出版模式:
@@ -1440,17 +1466,6 @@ async def 生成百度下载回复流(
             yield "未获取到可下载章节"
             return
         文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
-        yield "\n".join(
-            [
-                f"书名：{详情.get('title') or '未知'}",
-                f"作者：{详情.get('author') or '未知'}",
-                f"状态：{详情.get('status') or '连载'}",
-                f"章节：{成功数} 章",
-                f"字数：{格式化百度字数(详情.get('word_count'))}",
-                "",
-                "正在下载中请稍等.....",
-            ]
-        )
         发送结果 = await _准备发送文本文件(
             event,
             文件名,

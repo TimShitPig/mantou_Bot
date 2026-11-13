@@ -133,6 +133,8 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"会话复用=开启, 最大并发数={下载并发数}"
             )
 
+            yield 格式化下载提示(书籍, len(书籍.chapters))
+
             阶段 = "content"
             所有章节内容 = await 下载全部章节(session, 书籍)
             章节内容 = [
@@ -157,7 +159,6 @@ async def 生成下载回复流(event: Any, 链接: str, 配置: Any = None) -> 
                 f"文件大小={len(文件内容)}"
             )
 
-        yield 格式化下载提示(书籍, 成功数)
         阶段 = "upload_send"
         发送结果 = await 准备发送文本文件给当前会话(
             event,
