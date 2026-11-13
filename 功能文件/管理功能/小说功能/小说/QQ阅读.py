@@ -5397,7 +5397,7 @@ def 格式化下载提示(details: dict[str, Any], catalog_count: int | None) ->
             f"书名：{details.get('title') or '未知'}",
             f"作者：{details.get('author') or '未知'}",
             f"状态：{details.get('status') or '连载'}",
-            f"可下载章节：{章节提示}",
+            f"章节：{章节提示}",
             f"字数：{格式化字数(details.get('words_num'))}",
             "",
             "正在下载中请稍等.....",
@@ -5793,7 +5793,7 @@ async def 生成QQ阅读下载文件流(
         )
 
         if 章节数待确认:
-            章节提示 = f"可下载章节：{len(chapters)} 章"
+            章节提示 = f"章节：{len(chapters)} 章"
             if len(chapters) < 初始下载章节数:
                 章节提示 += "（其余章节未收录）"
             yield {"kind": "progress", "stage": "content", "message": 章节提示}
