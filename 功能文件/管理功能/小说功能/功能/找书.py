@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from typing import Any, AsyncIterator, Awaitable
 
 import aiohttp
+from yarl import URL
 
 try:
     from astrbot.api import logger
@@ -770,7 +771,10 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
         }
 
     最少反向长度 = max(3 if 字段类型 == "title" else 2, (len(查询) * 2 + 2) // 3)
-    if 候选 in 查询 and len(候选) >= 最少反向长度:
+    if 候选 in 查询 and (
+        len(候选) >= 最少反向长度
+        or (字段类型 == "title" and len(候选) >= 8 and len(候选) * 2 >= len(查询))
+    ):
         return {
             "tier": 2,
             "score": 4800.0 + 覆盖率 * 600.0,
@@ -1008,6 +1012,71 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     }
 
 
+async def _请求番茄搜索页(
+    session: aiohttp.ClientSession, 关键词: str, 偏移: int, 每批: int, 截止时间: float,
+) -> dict[str, Any]:
+    """搜索GET至多三次，共享总预算；不重放认证拒绝、限流或未知业务码。"""
+    for 尝试 in range(3):
+        剩余 = 截止时间 - asyncio.get_running_loop().time()
+        if 剩余 <= 0:
+            raise _找书平台查询错误("search_timeout")
+        状态 = 0
+        分类 = "network_error"
+        data = None
+        try:
+            url = 番茄小说.make_url(
+                "/novelfm/bookmall/search/page/v1/",
+                {"query": 关键词, "offset": str(偏移), "limit": str(每批)},
+            )
+            headers = 番茄小说.make_app_headers(url)
+            async with session.get(
+                URL(url, encoded=True), headers=headers, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=min(4.0, 剩余)),
+            ) as 响应:
+                状态 = 响应.status
+                if 状态 != 200:
+                    分类 = "http_error"
+                    可重试 = 状态 in {408, 500, 502, 503, 504}
+                else:
+                    原文 = bytearray()
+                    async for 块 in 响应.content.iter_chunked(16384):
+                        原文.extend(块)
+                        if len(原文) > 2 * 1024 * 1024:
+                            raise _找书平台查询错误("response_too_large")
+                    try:
+                        data = json.loads(原文)
+                    except (ValueError, UnicodeError):
+                        raise _找书平台查询错误("invalid_response") from None
+                    if not isinstance(data, dict):
+                        raise _找书平台查询错误("invalid_response")
+                    # 5000只作有界同页验证，不据此判断限流、账号或书籍状态。
+                    if data.get("code") not in (5000, "5000"):
+                        return data
+                    分类 = "business_error"
+                    可重试 = True
+        except asyncio.TimeoutError:
+            分类 = "timeout"
+            可重试 = True
+        except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError):
+            可重试 = True
+        if not 可重试 or 尝试 == 2:
+            if data is not None:
+                return data
+            logger.warning(
+                "找书番茄搜索失败：category=%s, http_status=%d, offset=%d, attempts=%d",
+                分类, 状态, 偏移, 尝试 + 1,
+            )
+            raise _找书平台查询错误("search_unavailable")
+        延迟 = 0.2 * (尝试 + 1)
+        if 截止时间 - asyncio.get_running_loop().time() <= 延迟:
+            if data is not None:
+                return data
+            raise _找书平台查询错误("search_timeout")
+        logger.debug("找书番茄搜索重试：category=%s, http_status=%d, offset=%d, attempt=%d", 分类, 状态, 偏移, 尝试 + 1)
+        await asyncio.sleep(延迟)
+    raise _找书平台查询错误("search_unavailable")
+
+
 async def 搜索番茄(
     session: aiohttp.ClientSession, 关键词: str, *, 需要数量: int = 30
 ) -> list[dict[str, Any]]:
@@ -1016,25 +1085,13 @@ async def 搜索番茄(
     结果: list[dict[str, Any]] = []
     偏移 = 0
     每批 = 30
+    截止时间 = asyncio.get_running_loop().time() + 10.0
     while len(结果) < 需要数量 and 偏移 < 60:
-        try:
-            data = await asyncio.to_thread(
-                番茄小说.signed_app_json,
-                "/novelfm/bookmall/search/page/v1/",
-                query={"query": 关键词, "offset": str(偏移), "limit": str(每批)},
-                method="GET",
-                timeout=8,
-                unsigned_fallback=False,
-            )
-        except Exception as exc:
-            logger.warning(
-                f"找书番茄搜索失败：偏移={偏移}, 错误={type(exc).__name__}"
-            )
-            raise _找书平台查询错误("search_unavailable") from None
+        data = await _请求番茄搜索页(session, 关键词, 偏移, 每批, 截止时间)
         if not isinstance(data, dict) or data.get("code") not in (0, "0"):
             code = data.get("code") if isinstance(data, dict) else None
             数字码 = int(code) if str(code).lstrip("-").isdigit() else None
-            logger.warning(f"找书番茄搜索失败：category=business_error, code={数字码}")
+            logger.warning(f"找书番茄搜索失败：category=business_error, code={数字码}, offset={偏移}")
             raise _找书平台查询错误("search_rejected")
         d = data.get("data")
         rows = d.get("search_data") if isinstance(d, dict) else None
@@ -1942,18 +1999,26 @@ async def _聚合搜索未缓存(
         数量 = 找书搜索候选数量
         允许平台集合 = _规范化允许平台(允许平台)
 
-        def 平台搜索任务(
+        失败平台: set[str] = set()
+
+        async def 平台搜索任务(
             平台: str,
             工厂: Any,
             日志平台: str | None = None,
-        ) -> Awaitable[list[Any]]:
+        ) -> list[Any]:
             if 平台 not in 允许平台集合:
-                return _空搜索结果()
-            return _限时搜索(
-                日志平台 or 平台, 工厂(),
-                超时秒数=330 if 平台 == "ZLibrary" else 找书单平台超时秒数,
-                失败抛出=允许平台集合 == {平台},
-            )
+                return []
+            try:
+                return await _限时搜索(
+                    日志平台 or 平台, 工厂(),
+                    超时秒数=330 if 平台 == "ZLibrary" else 找书单平台超时秒数,
+                    失败抛出=True,
+                )
+            except _找书平台查询错误:
+                失败平台.add(平台)
+                if 允许平台集合 == {平台}:
+                    raise
+                return []
 
         搜索任务 = (
             平台搜索任务("番茄", lambda: 搜索番茄(session, 关键词, 需要数量=数量)),
@@ -2160,7 +2225,10 @@ async def _聚合搜索未缓存(
                 补搜项[3] = r4
                 补结果集合.extend(补搜项)
             合并 = 去重合并(补结果集合)
-        return 排序找书结果(合并, 关键词, 搜索类型)
+        最终结果 = 排序找书结果(合并, 关键词, 搜索类型)
+        if not 最终结果 and 失败平台:
+            raise _找书平台查询错误("search_incomplete")
+        return 最终结果
 
 
 async def 聚合搜索(
@@ -2179,7 +2247,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v6",
+        tuple(_拆分查询词(关键词)), "search-rank-v7",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
