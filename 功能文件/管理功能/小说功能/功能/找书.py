@@ -393,12 +393,15 @@ def 生成找书容错查询(关键词: str, 搜索类型: str = "auto") -> list
             结果.append(词)
 
     数字书名 = re.sub(r"[零〇一二两三四五六七八九十百千]+", _中文数字转阿拉伯, 书名词)
-    if 数字书名 != 书名词:
-        加入(数字书名)
-    else:
-        加入(re.sub(r"[0-9]+", lambda 匹配: _数字转中文(int(匹配.group()))
-                  if len(匹配.group()) <= 4 and not (len(匹配.group()) > 1 and 匹配.group().startswith("0"))
-                  else 匹配.group(), 书名词))
+    加入(数字书名)
+    中文书名 = re.sub(
+        r"[0-9]+",
+        lambda 匹配: _数字转中文(int(匹配.group()))
+        if len(匹配.group()) <= 4 and not (len(匹配.group()) > 1 and 匹配.group().startswith("0"))
+        else 匹配.group(),
+        书名词,
+    )
+    加入(中文书名)
     if len(书名词) >= 3:
         加入(书名词[:max(2, (len(书名词) + 1) // 2)])
         加入(书名词[-max(2, len(书名词) // 2):])
@@ -2131,14 +2134,14 @@ def _书籍优劣键(项: dict[str, Any]) -> tuple:
 
 
 def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """同书去重并保留跨平台共识数量，供推荐排序使用。"""
+    """只合并相同显示书名与作者身份的结果，匹配键不参与去重。"""
     合并: list[dict[str, Any]] = []
-    书名作者位置: dict[str, int] = {}
+    书名作者位置: dict[tuple[str, str], int] = {}
     for 列表 in 结果列表:
         for 排名, 原项 in enumerate(列表):
             项 = dict(原项)
             平台 = str(项.get("platform") or "")
-            标题 = 规范标题(项.get("title"))
+            标题 = 清理文本(项.get("title"))
             作者 = 规范标题(项.get("author"))
             if not 标题:
                 continue
@@ -2150,7 +2153,7 @@ def 去重合并(结果列表: list[list[dict[str, Any]]]) -> list[dict[str, Any
             位次 = 位次 if type(位次) is int and 位次 >= 0 else 排名
             项["_platform_rank"] = 位次
             项["_source_ranks"] = {平台: 位次} if 平台 else {}
-            书名键 = f"{标题}|{作者}"
+            书名键 = (标题, 作者)
             if 书名键 in 书名作者位置:
                 旧位 = 书名作者位置[书名键]
                 旧项 = 合并[旧位]
@@ -2404,13 +2407,13 @@ async def _聚合搜索未缓存(
         结果集合 = list(原查询结果.values())
         合并 = 去重合并(结果集合)
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
-        # 找到精确书名/作者或明确版本后直接使用；否则先本地换写和片段召回。
-        需要补搜 = not any(int(项.get("_match_tier") or 0) >= 5 for 项 in 初步结果)
-        补搜词 = 生成找书容错查询(关键词, 搜索类型) if 需要补搜 else []
+        # 精确命中只影响排序。数字写法和相近书名可能只会在补搜中返回。
+        已有强匹配 = any(int(项.get("_match_tier") or 0) >= 5 for 项 in 初步结果)
+        补搜词 = 生成找书容错查询(关键词, 搜索类型)
         补搜截止时间 = asyncio.get_running_loop().time() + 找书容错补搜预算秒数
         补搜超时 = False
         联想词: list[str] = []
-        if 需要补搜 and len(补搜词) < 找书容错补搜上限 and "书旗" in 允许平台集合 and "书旗" not in 失败平台:
+        if not 已有强匹配 and len(补搜词) < 找书容错补搜上限 and "书旗" in 允许平台集合 and "书旗" not in 失败平台:
             联想预算 = 找书容错补搜预算秒数 / 3 if 补搜词 else 找书容错补搜预算秒数
             (联想结果,) = await asyncio.gather(
                 平台搜索任务(
@@ -2473,7 +2476,7 @@ async def _聚合搜索未缓存(
                 补搜超时 |= len(待完成阶段) > 待完成数
                 结果集合.extend(完成结果.values())
                 合并 = 去重合并(结果集合)
-                if any(
+                if 搜索类型 == "author" and any(
                     int(项.get("_match_tier") or 0) >= 5
                     for 项 in 排序找书结果(合并, 关键词, 搜索类型)
                 ):
@@ -2509,7 +2512,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v11-platform-isolation",
+        tuple(_拆分查询词(关键词)), "search-rank-v12-recall-variants",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
