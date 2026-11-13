@@ -1145,8 +1145,32 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     新原始消息 = str(新记录.get("raw_message") or "")
     旧原始结构 = _解析消息结构(旧原始消息) if 旧原始消息 else None
     新原始结构 = _解析消息结构(新原始消息) if 新原始消息 else None
-    if 新原始消息 and (
-        not 旧原始消息
+    同私聊作者 = (
+        bool(新消息ID) and 新消息ID == 旧消息ID
+        and 新记录.get("chat_type") == 已有记录.get("chat_type") == "user"
+        and str(新记录.get("appid") or "").strip() == str(已有记录.get("appid") or "").strip()
+        and bool(新记录.get("user_id"))
+        and 新记录.get("user_id") == 已有记录.get("user_id") == 新记录.get("_session") == 已有记录.get("_session")
+        and not 新记录.get("is_self") and not 已有记录.get("is_self")
+        and 新记录.get("is_bot") is not True and _提取作者机器人状态(新原始结构) is not True
+        and not str(新记录.get("source") or "").startswith("bot_") and 新记录.get("source") != "web_panel"
+    )
+    新作者昵称, 新作者空白 = _提取私聊作者昵称(新原始结构, str(新记录.get("user_id") or "")) if 同私聊作者 else ("", False)
+    旧作者昵称, 旧作者空白 = _提取私聊作者昵称(旧原始结构, str(已有记录.get("user_id") or "")) if 同私聊作者 else ("", False)
+    if 同私聊作者 and not 旧作者昵称 and not 旧作者空白:
+        旧作者空白 = 已有记录.get("nickname_blank") is True
+    作者不同 = (新作者昵称, 新作者空白) != (旧作者昵称, 旧作者空白)
+    新昵称时间 = _整数时间戳(新记录.get("ts"))
+    旧昵称时间 = _整数时间戳(已有记录.get("ts"))
+    保留旧作者 = 同私聊作者 and bool(旧作者昵称 or 旧作者空白) and (
+        not (新作者昵称 or 新作者空白)
+        or (作者不同 and (新昵称时间 < 旧昵称时间
+            or (新昵称时间 == 旧昵称时间 and 旧作者空白 and not 新作者空白)))
+    )
+    作者更新 = bool(新作者昵称 or 新作者空白) and 作者不同 and not 保留旧作者
+    if 新原始消息 and not 保留旧作者 and (
+        作者更新
+        or not 旧原始消息
         or (
             新原始结构 is not None
             and (旧原始结构 is None or len(新原始消息) > len(旧原始消息))
@@ -2200,6 +2224,24 @@ def _获取消息相关成员资料(
         资料["nickname_blank"] = False
         if 应用:
             资料["appid"] = 应用
+    私聊应用 = {
+        str(消息.get("appid") or "").strip()
+        for 消息 in 消息列表 or ()
+        if isinstance(消息, dict) and 消息.get("chat_type") == "user"
+        and str(消息.get("_session") or "").strip() == str(会话标识 or "").strip()
+    }
+    对方标识 = str(会话标识 or "").strip()
+    if len(私聊应用) == 1 and 对方标识 in 相关标识:
+        应用 = next(iter(私聊应用))
+        联系人 = _私聊联系人资料(对方标识, {
+            "chat_type": "user", "appid": 应用, "messages": list(消息列表 or ()),
+        })
+        if 联系人["nickname"] or 联系人["nickname_blank"]:
+            资料 = 结果.setdefault(对方标识, {})
+            资料.update(nickname=联系人["nickname"], username=联系人["nickname"],
+                      nickname_blank=联系人["nickname_blank"], nickname_ts=联系人["nickname_ts"], appid=应用)
+            if 联系人["avatar"]:
+                资料["avatar"] = 联系人["avatar"]
     return 结果
 
 
@@ -3858,7 +3900,9 @@ def _提取私聊作者昵称(消息: Any, 用户标识: str = "") -> tuple[str,
                 昵称 = _有效用户昵称(值, 用户标识)
                 if 昵称:
                     return 昵称, False
-                有空白 = 有空白 or _明确空白昵称(值)
+                if _明确空白昵称(值):
+                    # 已明确提供的作者昵称是权威状态，不能再被旧别名补成可见名字。
+                    return "", True
         if 深度 < 4:
             for 字段 in ("raw_data", "d", "data", "event", "payload"):
                 子项 = _读取字段(当前, 字段)
@@ -3912,10 +3956,12 @@ def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None, 
             记录["nickname"] = 昵称
             记录["nickname_blank"] = False
         elif 空白:
-            记录["nickname"] = _私聊兜底昵称(用户标识)
+            记录["nickname"] = ""
             记录["nickname_blank"] = True
         else:
             记录["nickname_blank"] = bool(记录.get("nickname_blank"))
+            if 记录["nickname_blank"]:
+                记录["nickname"] = ""
         return
     当前昵称 = _有效用户昵称(记录.get("nickname"), 用户标识)
     if 当前昵称:
@@ -7490,35 +7536,58 @@ def _记录私聊作者昵称(会话: dict[str, Any], 记录: dict[str, Any], �
         会话["private_author_nickname"] = 昵称
         会话["private_author_nickname_blank"] = False
         会话["private_author_nickname_ts"] = 时间戳
-    elif 空白 and not 会话.get("private_author_nickname"):
+    elif 空白:
+        会话["private_author_nickname"] = ""
         会话["private_author_nickname_blank"] = True
         会话["private_author_nickname_ts"] = 时间戳
+    else:
+        return
+    资料 = (成员资料缓存.get(str(记录.get("_session") or "")) or {}).get(str(记录.get("user_id") or ""))
+    if isinstance(资料, dict) and str(资料.get("appid") or "").strip() == str(记录.get("appid") or "").strip():
+        资料.update(nickname=昵称, username=昵称, nickname_blank=空白, nickname_ts=时间戳)
 
 
 def _私聊联系人资料(
     会话标识: str,
     会话: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """展示本私聊真实作者资料；当前事件优先，昵称不再匹配已保存用户/群资料。"""
+    """按真实私聊作者事件时间合并昵称，明确空白与可见名字同等有效。"""
     标识 = str(会话标识 or "").strip()
-    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False}
+    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False, "nickname_ts": 0}
     if not 标识:
         return 结果
     当前会话 = 会话 if isinstance(会话, dict) else (消息缓存.get(标识) or {})
     应用 = str(当前会话.get("appid") or "").strip()
     实时会话 = _读取作用域会话缓存(标识, "user", 应用)
     会话列表 = [实时会话, 当前会话] if 实时会话 is not 当前会话 else [当前会话]
+    最新姓名键 = (-1, -1, -1)
+
+    def 接纳姓名(昵称: str, 空白: bool, 时间戳: Any, 优先级: tuple[int, int]) -> None:
+        nonlocal 最新姓名键
+        if not 昵称 and not 空白:
+            return
+        try:
+            时间 = max(0, int(时间戳 or 0))
+        except (TypeError, ValueError, OverflowError):
+            时间 = 0
+        键 = (时间, *优先级)
+        if 键 > 最新姓名键:
+            最新姓名键 = 键
+            结果.update(nickname="" if 空白 else 昵称, nickname_blank=空白, nickname_ts=时间)
+
     for 候选会话 in 会话列表:
         if str(候选会话.get("appid") or "").strip() != 应用 or 候选会话.get("chat_type") != "user":
             continue
-        昵称 = _有效用户昵称(候选会话.get("private_author_nickname"), 标识)
-        if 昵称 and not 结果["nickname"]:
-            结果["nickname"] = 昵称
-        结果["nickname_blank"] = bool(结果["nickname_blank"] or 候选会话.get("private_author_nickname_blank"))
+        实时优先级 = int(候选会话 is 实时会话)
+        空白 = 候选会话.get("private_author_nickname_blank") is True
+        昵称 = "" if 空白 else _有效用户昵称(候选会话.get("private_author_nickname"), 标识)
+        接纳姓名(昵称, 空白, 候选会话.get("private_author_nickname_ts"), (实时优先级, 0))
         for 记录 in reversed(候选会话.get("messages") or []):
             if not isinstance(记录, dict) or str(记录.get("user_id") or "").strip() != 标识:
                 continue
             if str(记录.get("appid") or "").strip() != 应用 or 记录.get("chat_type", "user") != "user":
+                continue
+            if 记录.get("_session") and str(记录["_session"]).strip() != 标识:
                 continue
             来源 = str(记录.get("source") or "")
             原始 = _解析消息结构(记录.get("raw_message"))
@@ -7527,27 +7596,20 @@ def _私聊联系人资料(
                     or _提取作者机器人状态(原始) is True):
                 continue
             昵称, 空白 = _提取私聊作者昵称(原始, 标识)
-            # 受限历史原文可能不完整，保留该条私聊来信自身的作者字段，不跨记录匹配。
-            if not 昵称 and not 空白 and not 记录.get("nickname_blank"):
-                昵称 = _有效用户昵称(记录.get("nickname"), 标识)
-            if 昵称 and not 结果["nickname"]:
-                结果["nickname"] = 昵称
-            结果["nickname_blank"] = bool(结果["nickname_blank"] or 空白 or 记录.get("nickname_blank"))
+            if not 昵称 and not 空白:
+                空白 = 记录.get("nickname_blank") is True
+                if not 空白:
+                    昵称 = _有效用户昵称(记录.get("nickname"), 标识)
+            接纳姓名(昵称, 空白, 记录.get("ts"), (实时优先级, 1))
             头像 = str(记录.get("avatar") or "").strip()
             if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
                 结果["avatar"] = 头像
-            if 结果["nickname"] and 结果["avatar"]:
-                break
-        if 结果["nickname"] and 结果["avatar"]:
-            break
-    # 头像独立合并；旧通用成员资料中的名字可能来自历史回查，不能继续作为私聊姓名。
+    # 头像独立合并；通用成员资料的名字不能替代当前私聊明确提供的姓名状态。
     资料 = (成员资料缓存.get(标识) or {}).get(标识) or {}
     if isinstance(资料, dict) and str(资料.get("appid") or "").strip() == 应用:
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
         if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
             结果["avatar"] = 头像
-    if 结果["nickname"]:
-        结果["nickname_blank"] = False
     return 结果
 
 
@@ -7741,6 +7803,7 @@ def _数据库聚合聊天项(
         最后预览 = _替换消息提及名称(_消息列表摘要(最后), 最后, 标识)
         聊天项.append({"chat_id": 标识, "chat_type": 类型, "appid": 应用, "nickname": 名称,
                     "avatar": 头像 if 类型 == "user" else "", "group_avatar": 头像 if 类型 == "group" else "",
+                    **({"nickname_blank": 联系人["nickname_blank"], "nickname_ts": 联系人["nickname_ts"]} if 类型 == "user" else {}),
                     "group_qq": str(备注项.get("group_qq") or ""), "last_content": _限制聊天列表预览(最后预览),
                     "last_time": _格式化时间戳(最后.get("ts")), "last_ts": int(最后.get("ts") or 0),
                     "msg_count": 数量, "unread": max(0, int(未读 or 0)), "remark": 备注,
@@ -9126,7 +9189,7 @@ def _修补botpy昵称() -> bool:
     下游按当前 AppID 保存身份关系；缺失字段保持为空，不从引用作者推断。
     """
     global _昵称修补已安装, _昵称修补安装版本
-    修补版本 = 2
+    修补版本 = 3
     if _昵称修补已安装 and _昵称修补安装版本 == 修补版本:
         return True
     try:
@@ -9212,8 +9275,9 @@ def _修补botpy昵称() -> bool:
                             作者.bot = 作者数据["bot"]
                         except Exception:
                             pass
-                    昵称 = str(作者数据.get("username") or "").strip()
-                    if 昵称 and 作者 is not None:
+                    昵称 = 作者数据.get("username")
+                    if isinstance(昵称, str) and 作者 is not None:
+                        # 保留原字段用于明确空白判断；展示和资料写入由受限昵称状态处理。
                         作者.username = 昵称
                 if 作者 is not None:
                     for 资料 in 资料对象列表:

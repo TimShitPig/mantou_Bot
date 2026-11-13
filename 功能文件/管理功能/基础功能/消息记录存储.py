@@ -186,6 +186,45 @@ def _生成历史作者机器人SQL() -> str:
 
 _历史作者机器人SQL = _生成历史作者机器人SQL()
 
+
+def _生成历史作者昵称SQL() -> str:
+    """私聊原文截断前投影当前作者昵称，保留明确空白而不读取引用作者。"""
+    def 字符串(路径: str, *, 限长: bool = False) -> str:
+        值 = f"JSON_EXTRACT(raw_message, '{路径}')"
+        文本 = f"JSON_UNQUOTE({值})"
+        返回 = f"LEFT({文本}, 255)" if 限长 else 文本
+        return f"CASE WHEN JSON_TYPE({值})='STRING' AND CHAR_LENGTH({文本})>0 THEN {返回} END"
+
+    分支: list[str] = []
+    for 包装 in ("$", "$.raw_data", "$.raw_data.d", "$.d", "$.data", "$.payload", "$.message"):
+        作者 = f"{包装}.author"
+        # author 的明确用户 ID 与消息行冲突时，不把其姓名带到另一位私聊联系人。
+        # 外层只核对 user 字段；顶层 id 是消息 ID，不参与用户判断。
+        身份条件 = []
+        for 路径 in (f"{作者}.user_openid", f"{作者}.id", f"{包装}.user_openid", f"{包装}.user_id"):
+            标识 = 字符串(路径)
+            身份条件.append(f"({标识} IS NULL OR BINARY {标识}=BINARY user_id)")
+        值 = f"JSON_EXTRACT(raw_message, '{作者}.username')"
+        文本 = f"JSON_UNQUOTE({值})"
+        别名 = ', '.join(字符串(f"{作者}.{字段}", 限长=True) for 字段 in ("nickname", "user_name", "nick", "name"))
+        # 非空 username（包括 DEL 等不可见值）权威；仅缺失/null/空串才读作者别名。
+        昵称 = (
+            f"CASE WHEN {值} IS NULL OR JSON_TYPE({值})='NULL' "
+            f"OR (JSON_TYPE({值})='STRING' AND CHAR_LENGTH({文本})=0) "
+            f"THEN COALESCE({别名}) ELSE {字符串(f'{作者}.username', 限长=True)} END"
+        )
+        分支.append(
+            f"CASE WHEN JSON_TYPE(JSON_EXTRACT(raw_message, '{作者}'))='OBJECT' "
+            f"AND {' AND '.join(身份条件)} THEN {昵称} END"
+        )
+    return (
+        "CASE WHEN 消息类型<>'user' OR is_self<>0 OR LOCATE('\"author\"', raw_message)=0 THEN NULL "
+        f"WHEN JSON_VALID(raw_message) THEN COALESCE({', '.join(分支)}) ELSE NULL END"
+    )
+
+
+_历史作者昵称SQL = _生成历史作者昵称SQL()
+
 # 历史页只需要截断后的原始消息用于时间/提及解析和原始数据预览。
 # 显式列出字段避免 SELECT * 搬运未来新增列；正文与媒体字段保持完整。
 # 额外白名单投影保留首项引用摘要，避免长原文在 SQL 截断后成为不完整 JSON。
@@ -193,7 +232,8 @@ _历史查询字段SQL = (
     "id, 会话标识, 消息类型, appid, message_id, user_id, nickname, content, "
     "timestamp, ts, is_self, source, recalled, media, reference_id, refidx, "
     "avatar, LEFT(raw_message, 4096) AS raw_message, member_role, msg_seq, "
-    f"{_历史引用快照SQL} AS reference_payload, {_历史作者机器人SQL} AS author_is_bot, history_origin, history_order"
+    f"{_历史引用快照SQL} AS reference_payload, {_历史作者机器人SQL} AS author_is_bot, history_origin, history_order, "
+    f"{_历史作者昵称SQL} AS author_nickname"
 )
 
 # 各 VARCHAR 列的最大字符数，写入前按列宽截断，避免 DataError (1406 Data too long)
@@ -2932,7 +2972,9 @@ def 批量读取最后消息摘要(id列表: list[int]) -> dict[int, dict[str, A
                      f"LEFT(content, 1024) AS content, timestamp, ts, is_self, source, recalled, "
                      f"{_聊天摘要媒体SQL} AS media, reference_id, refidx, avatar, "
                      f"CASE WHEN CHAR_LENGTH(raw_message) <= 2560 THEN raw_message "
-                     f"ELSE CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) END AS raw_message, member_role, msg_seq "
+                     f"ELSE CONCAT(LEFT(raw_message, 2048), RIGHT(raw_message, 512)) END AS raw_message, member_role, msg_seq, "
+                    f"NULL AS reference_payload, {_历史作者机器人SQL} AS author_is_bot, history_origin, history_order, "
+                    f"{_历史作者昵称SQL} AS author_nickname "
                     f"FROM `{消息记录表名}` WHERE id IN ({占位})",
                     tuple(分块),
                 )
@@ -3288,7 +3330,7 @@ def _行转记录(行: Any) -> dict[str, Any]:
         "history_order": int(_行字段(行, 23, "history_order", 默认值=0) or 0),
         "_history_db_id": int(取值(0, "0") or 0),
     }
-    # 兼容旧的二十列查询和默认/字典游标；只供展示规范化消费，不持久化或回传。
+    # 兼容旧的二十/二十四列查询和默认/字典游标；投影只供展示，不持久化或回传。
     引用快照 = _行字段(行, 20, "reference_payload", 默认值=None)
     if isinstance(引用快照, (str, bytes, bytearray)):
         try:
@@ -3300,4 +3342,22 @@ def _行转记录(行: Any) -> dict[str, Any]:
     作者机器人 = _行字段(行, 21, "author_is_bot", 默认值=None)
     if isinstance(作者机器人, (bool, int)) and 作者机器人 in (0, 1):
         记录["is_bot"] = bool(作者机器人)
+    作者昵称 = _行字段(行, 24, "author_nickname", 默认值=None)
+    if (
+        记录["chat_type"] == "user" and not 记录["is_self"] and not 记录.get("is_bot")
+        and not 记录["source"].startswith("bot_") and 记录["source"] != "web_panel"
+    ):
+        昵称 = _有效用户昵称(记录["user_id"], 作者昵称) if isinstance(作者昵称, str) else ""
+        if 昵称:
+            记录["nickname"] = 昵称
+            记录["nickname_blank"] = False
+        elif isinstance(作者昵称, str) and 作者昵称 and all(
+            字符.isspace() or unicodedata.category(字符) in {"Cc", "Cf", "Zs", "Zl", "Zp"}
+            for 字符 in 作者昵称
+        ):
+            记录["nickname"] = ""
+            记录["nickname_blank"] = True
+        elif any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 记录["nickname"]):
+            # 旧记录可能曾直接保存控制字符；展示不泄漏它，缺失投影不误标空白。
+            记录["nickname"] = ""
     return 记录
