@@ -169,7 +169,7 @@ def _检查百度章节权限(数据: Any, *, 检查公开状态: bool = True) -
         (("need_login", "needLogin", "login_required"), "chapter_login_required"),
         (("need_pay", "needPay", "need_purchase", "purchase_required"), "chapter_purchase_required"),
     ):
-        if any(str(数据.get(键) or "").lower() in {"1", "true"} for 键 in 键列表):
+        if any(str(数据.get(键) or "").strip().lower() in {"1", "true"} for 键 in 键列表):
             raise _百度访问错误(原因)
     状态 = 数据.get("status") if isinstance(数据.get("status"), dict) else {}
     消息 = " ".join(str(值 or "") for 值 in (状态.get("msg"), 数据.get("message"), 数据.get("msg"), 数据.get("error_msg")))
@@ -177,7 +177,7 @@ def _检查百度章节权限(数据: Any, *, 检查公开状态: bool = True) -
         raise _百度访问错误("chapter_login_required")
     if re.search(r"purchase|payment.required|pay.required|购买|付费", 消息, re.IGNORECASE):
         raise _百度访问错误("chapter_purchase_required")
-    if "free" in 数据 and str(数据["free"]) == "0" and str(数据.get("purchase") or "0") != "1":
+    if str(数据.get("free")).strip().lower() in {"0", "false"}:
         raise _百度访问错误("chapter_purchase_required")
     if 检查公开状态 and "public_status" in 数据 and str(数据["public_status"]) != "1":
         raise _百度章节不可用错误(
@@ -756,8 +756,8 @@ def _从百度出版图书提取目录(
 ) -> list[dict[str, Any]]:
     """保留真实目录次序及边界；缺标题、坏 map 不伪造为可读正文。
 
-    缺少完整分片元数据时返回空目录。单章 map 不可用或越过免费边界
-    时仍保留该真实目录项，在生成的部分正文中标明未获取原因。
+    缺少完整分片元数据时返回空目录。保留真实目录项用于校验章节范围，
+    正文调度时再筛除不可完整读取的章节。
     """
     if not isinstance(图书数据, dict):
         return []
@@ -883,8 +883,8 @@ def _百度出版标题键(值: Any) -> str:
 
 def _百度出版章节切片(
     章节: dict[str, Any],
-) -> tuple[tuple[int, int, bool, bool] | None, str]:
-    """按官方排他坐标规划分片，独立标记边界前的试读片段。"""
+) -> tuple[tuple[int, int, bool] | None, str]:
+    """仅规划完整落在官方公开范围内的章节。"""
     起点 = _百度出版坐标(章节.get("id"))
     范围 = 章节.get("source_map")
     范围项 = 范围.split(",") if isinstance(范围, str) else []
@@ -923,21 +923,18 @@ def _百度出版章节切片(
         else:
             # 已超出免费范围的跨片章优先记录平台边界，避免误报解析缺失。
             return None, "free_boundary" if 起点 >= 免费边界 else "unsupported_span"
-    if 起点 >= 免费边界:
+    # 结束下标也是本章最后一段的一基编号，公开边界本身不包含在内。
+    if (起点[0], 结束下标) >= 免费边界:
         return None, "free_boundary"
-    试读片段 = 起点[0] == 免费边界[0] and 结束下标 >= 免费边界[1]
-    if 试读片段:
-        # 官方从边界段本身起隐藏正文；只取之前的段落，不以半章冒充完整章。
-        结束下标 = 免费边界[1] - 1
     if 结束下标 <= 起点[1]:
-        return None, "free_boundary" if 试读片段 else "empty_chapter"
-    return (起点[1] - 1, 结束下标, 页末, 试读片段), ""
+        return None, "empty_chapter"
+    return (起点[1] - 1, 结束下标, 页末), ""
 
 
 def _拆分百度出版页面正文(
     内容: Any, 页面目录: list[dict[str, Any]]
 ) -> dict[str, str]:
-    """返回已核实的完整章节或免费边界前的试读片段。
+    """返回已核实的完整章节。
 
     下一分片第 1 段不属于本章；真实末章的本片 0 段标记表示读至页末。
     需要多个分片正文的章节仍保持失败，不推测补齐，也不越过免费边界。
@@ -970,10 +967,10 @@ def _拆分百度出版页面正文(
         切片, _ = _百度出版章节切片(章节)
         if 切片 is None or 段数 != len(区块列表) or str(章节.get("source_page")) != str(页码):
             continue
-        起始下标, 结束下标, 页末, 试读片段 = 切片
+        起始下标, 结束下标, 页末 = 切片
         if not _百度出版标题匹配(区块列表[起始下标], 标题):
             continue
-        if not 试读片段 and not 页末 and not _百度出版标题匹配(区块列表[结束下标], 章节.get("source_next_title")):
+        if not 页末 and not _百度出版标题匹配(区块列表[结束下标], 章节.get("source_next_title")):
             continue
         正文区块 = 区块列表[起始下标 + 1 : 结束下标]
         if any(
@@ -994,15 +991,10 @@ async def 下载百度出版正文(
     目录: list[dict[str, Any]],
     版本: str,
     *, 失败原因: dict[int, str] | None = None,
-    试读章节: set[int] | None = None,
-    付费章节: set[int] | None = None,
-) -> list[str | None]:
+) -> list[str]:
     _校验百度目录(目录)
     失败原因 = 失败原因 if 失败原因 is not None else {}
-    试读章节 = 试读章节 if 试读章节 is not None else set()
-    付费章节 = 付费章节 if 付费章节 is not None else set()
-    结果: list[str | None] = [None] * len(目录)
-    片段候选: set[int] = set()
+    结果 = [""] * len(目录)
     分组: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     范围失败: dict[str, int] = {}
     for 下标, 章节 in enumerate(目录):
@@ -1011,29 +1003,26 @@ async def 下载百度出版正文(
         切片, 原因 = _百度出版章节切片(章节)
         if 切片 is None:
             范围失败[原因] = 范围失败.get(原因, 0) + 1
-            if 原因 == "free_boundary":
-                付费章节.add(下标)
             失败原因[下标] = {
-                "free_boundary": "付费章节",
+                "free_boundary": "该章节不在完整公开范围内",
                 "unsupported_span": "该章节跨正文分片，当前解析未能取得完整内容",
                 "catalog_range_invalid": "该章节的目录范围校验失败",
                 "empty_chapter": "目录指定的章节正文范围为空",
             }.get(原因, "该章节的正文范围校验失败")
             continue
-        if 切片[3]:
-            片段候选.add(下标)
+
         页面编号 = str(章节.get("source_page") or "").strip()
         if 页面编号:
             分组.setdefault(页面编号, []).append((下标, 章节))
         else:
             失败原因[下标] = "目录未提供该章节的正文分片"
-    付费章节数 = 范围失败.get("free_boundary", 0)
+    超出公开范围章节数 = 范围失败.get("free_boundary", 0)
     其他范围失败 = {原因: 数量 for 原因, 数量 in 范围失败.items() if 原因 != "free_boundary"}
-    if 付费章节数:
+    if 超出公开范围章节数:
         logger.info(
-            "百度出版付费章节已跳过：书籍编号=%s, 章节=%s",
+            "百度出版非完整公开章节已跳过：书籍编号=%s, 章节=%s",
             文档编号,
-            付费章节数,
+            超出公开范围章节数,
         )
     if 其他范围失败:
         logger.warning(
@@ -1085,8 +1074,7 @@ async def 下载百度出版正文(
                 for 下标, 章节 in 页面目录:
                     if str(章节.get("id") or "") not in 拆分结果:
                         失败原因[下标] = "正文分片未包含该章节，或与目录校验不一致"
-                    elif 下标 in 片段候选:
-                        试读章节.add(下标)
+
                 async with 页面锁:
                     页面结果[页面编号] = 拆分结果
             except Exception as 异常:
@@ -1102,12 +1090,11 @@ async def 下载百度出版正文(
                     已完成页面 += 1
                     if 已完成页面 >= 下次页面日志 or 已完成页面 == len(分组):
                         logger.info(
-                            "百度出版正文进度：书籍编号=%s, 分片=%s/%s, 完整章节=%s, 试读片段=%s, 总章节=%s",
+                            "百度出版正文进度：书籍编号=%s, 分片=%s/%s, 完整章节=%s, 总章节=%s",
                             文档编号,
                             已完成页面,
                             len(分组),
-                            sum(len(项目) for 项目 in 页面结果.values()) - len(试读章节),
-                            len(试读章节),
+                            sum(len(项目) for 项目 in 页面结果.values()),
                             len(目录),
                         )
                         下次页面日志 += max(1, (len(分组) + 3) // 4)
@@ -1206,7 +1193,7 @@ async def _下载百度章节(
                 if len(密文) > 16 * 1024 * 1024:
                     raise RuntimeError("content_too_large")
                 正文 = _解密百度正文(密文)
-                if 正文:
+                if 去除章节正文重复标题(章节.get("title"), 正文):
                     return 正文
                 raise RuntimeError("invalid_content")
             except (_百度访问错误, _百度章节不可用错误):
@@ -1274,9 +1261,6 @@ def 生成百度小说文件内容(
     详情: dict[str, Any],
     目录: list[dict[str, Any]],
     正文列表: list[str],
-    *, 失败原因: dict[int, str] | None = None,
-    试读章节: set[int] | None = None,
-    跳过章节: set[int] | None = None,
 ) -> tuple[str, bytes]:
     _校验百度目录(目录)
     预期 = _安全整数(详情.get("chapter_count"))
@@ -1284,25 +1268,9 @@ def 生成百度小说文件内容(
         raise RuntimeError("incomplete_book_catalog")
     if len(目录) != len(正文列表) or any(not isinstance(正文, str) for 正文 in 正文列表):
         raise RuntimeError("incomplete_book_content")
-    跳过章节 = {
-        下标 for 下标 in (跳过章节 or ())
-        if 下标 in range(len(目录))
-    }
-    输出章节 = [
-        (下标, 章节, 正文)
-        for 下标, (章节, 正文) in enumerate(zip(目录, 正文列表))
-        if 下标 not in 跳过章节
-    ]
-    可用数 = sum(bool(正文.strip()) for _, _, 正文 in 输出章节)
-    if not 可用数:
+    输出章节 = [(章节, 正文) for 章节, 正文 in zip(目录, 正文列表) if 正文.strip()]
+    if not 输出章节:
         raise RuntimeError("empty_book_content")
-    试读章节 = {
-        下标 for 下标 in (试读章节 or ())
-        if 下标 not in 跳过章节 and 下标 in range(len(目录)) and 正文列表[下标].strip()
-    }
-    成功数 = 可用数 - len(试读章节)
-    缺失数 = len(输出章节) - 可用数
-    失败原因 = 失败原因 or {}
     状态 = str(详情.get("status") or "连载")
     书名 = _清理文件名(详情.get("title") or f"百度小说{书籍编号}")
     作者 = _清理文件名(详情.get("author") or "未知")
@@ -1316,24 +1284,14 @@ def 生成百度小说文件内容(
         f"字数：{格式化百度字数(详情.get('word_count'))}",
         f"书籍ID：{书籍编号}",
         f"章节数：{len(输出章节)}",
+        "",
     ]
-    if 缺失数 or 试读章节:
-        行列表.extend([
-            f"正文获取：完整 {成功数} 章，试读片段 {len(试读章节)} 章，未获取 {缺失数} 章",
-            "说明：本文件包含部分正文；试读章节注明本章未完，未获取章节在原位置注明原因，不代表完整正文。",
-        ])
-    行列表.append("")
     简介 = str(详情.get("intro") or "").strip()
     if 简介:
         行列表.extend(["简介：", 简介, ""])
-    for 下标, 章节, 正文 in 输出章节:
+    for 章节, 正文 in 输出章节:
         标题 = str(章节.get("title") or "章节")
-        展示正文 = 去除章节正文重复标题(标题, 正文) if 正文.strip() else (
-            "【本章正文未获取：" + 失败原因.get(下标, "平台未返回该章节正文") + "】"
-        )
-        if 下标 in 试读章节:
-            展示正文 += "\n\n【本章未完：平台仅提供以上试读内容】"
-        行列表.extend([标题, "", 展示正文, ""])
+        行列表.extend([标题, "", 去除章节正文重复标题(标题, 正文), ""])
     文本 = "\n".join(行列表).replace("\r\n", "\n").replace("\r", "\n")
     return 文件名, 文本.replace("\n", "\r\n").encode("utf-8")
 
@@ -1457,68 +1415,43 @@ async def 生成百度下载回复流(
                 return
             _校验百度目录(目录)
             logger.info("百度小说开始下载：书籍编号=%s, 章节数=%s", 书籍编号, len(目录))
-            yield "\n".join(
-                [
-                    f"书名：{详情.get('title') or '未知'}",
-                    f"作者：{详情.get('author') or '未知'}",
-                    f"状态：{详情.get('status') or '连载'}",
-                    "可下载章节：正在确认",
-                    f"字数：{格式化百度字数(详情.get('word_count'))}",
-                    "",
-                    "正在下载中请稍等.....",
-                ]
-            )
+            yield "正在下载中请稍等....."
             stage = "正文"
             失败原因: dict[int, str] = {}
-            试读章节: set[int] = set()
-            付费章节: set[int] = set()
             if 出版模式:
-                出版正文列表 = await 下载百度出版正文(
+                正文列表 = await 下载百度出版正文(
                     会话, 书籍编号, 目录, 正文版本, 失败原因=失败原因,
-                    试读章节=试读章节, 付费章节=付费章节,
                 )
-                正文列表 = [正文 or "" for 正文 in 出版正文列表]
             else:
                 正文列表 = await 下载百度正文(会话, 书籍编号, 目录, 失败原因=失败原因)
         if len(正文列表) != len(目录):
             raise RuntimeError("incomplete_book_content")
-        可用数 = sum(bool(正文.strip()) for 正文 in 正文列表)
-        成功数 = 可用数 - len(试读章节)
-        缺失下标 = [
-            下标 for 下标, 正文 in enumerate(正文列表)
-            if not 正文.strip() and 下标 not in 付费章节
-        ]
-        缺失数 = len(缺失下标)
-        分类: dict[str, int] = {}
-        if 缺失数 or 试读章节:
-            for 下标 in 缺失下标:
-                原因 = 失败原因.setdefault(下标, "平台未返回该章节正文")
-                分类[原因] = 分类.get(原因, 0) + 1
-            if 缺失数:
-                logger.warning(
-                    "百度小说免费正文部分未获取：书籍编号=%s, 完整=%s, 试读片段=%s, 未获取=%s, 总数=%s, 分类=%s, 缺失章节=%s",
-                    书籍编号, 成功数, len(试读章节), 缺失数, len(目录), 分类,
-                    ",".join(f"{下标 + 1}:{目录[下标]['id']}" for 下标 in 缺失下标[:10]),
-                )
-            else:
-                logger.info(
-                    "百度小说免费试读范围结束：书籍编号=%s, 完整=%s, 试读片段=%s, 付费章节=%s",
-                    书籍编号, 成功数, len(试读章节), len(付费章节),
-                )
-        if not 可用数:
-            if 分类:
-                yield "未获取到可用章节正文：" + "；".join(f"{原因}（{数量}章）" for 原因, 数量 in list(分类.items())[:4])
-            else:
-                yield "未获取到可免费阅读的章节正文"
+        成功数 = sum(bool(正文.strip()) for 正文 in 正文列表)
+        if 成功数 < len(目录):
+            分类: dict[str, int] = {}
+            for 下标, 正文 in enumerate(正文列表):
+                if not 正文.strip():
+                    原因 = 失败原因.get(下标, "平台未返回该章节正文")
+                    分类[原因] = 分类.get(原因, 0) + 1
+            logger.info(
+                "百度小说正文取得：书籍编号=%s, 完整章节=%s, 目录数=%s, 分类=%s",
+                书籍编号, 成功数, len(目录), 分类,
+            )
+        if not 成功数:
+            yield "未获取到可下载章节"
             return
-        文件名, 内容 = 生成百度小说文件内容(
-            书籍编号, 详情, 目录, 正文列表, 失败原因=失败原因,
-            试读章节=试读章节, 跳过章节=付费章节,
+        文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
+        yield "\n".join(
+            [
+                f"书名：{详情.get('title') or '未知'}",
+                f"作者：{详情.get('author') or '未知'}",
+                f"状态：{详情.get('status') or '连载'}",
+                f"章节：{成功数} 章",
+                f"字数：{格式化百度字数(详情.get('word_count'))}",
+                "",
+                "正在准备文件，请稍等……",
+            ]
         )
-        章节提示 = f"可下载章节：{成功数} 章"
-        if 试读章节:
-            章节提示 += f"（另有 {len(试读章节)} 章为试读片段）"
-        yield 章节提示
         发送结果 = await _准备发送文本文件(
             event,
             文件名,
