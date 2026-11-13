@@ -14,6 +14,11 @@ from 功能文件.管理功能.基础功能.权限工具 import (
     读取字段,
 )
 
+from .QQ官方消息发送 import (
+    提交QQ消息, 提取QQ消息错误字段, QQ消息错误分类, 被动回复已过期,
+)
+
+
 帮助选择等待秒数 = 120
 每行按钮数 = 2
 待选择帮助会话: dict[str, dict[str, Any]] = {}
@@ -1074,32 +1079,16 @@ async def 发送QQ官方提及Markdown(event: Any, 文本: str) -> bool:
     return await 发送Markdown键盘消息(event, 文本, None)
 
 
-def _记录QQ官方Markdown发送失败(异常: Exception, 阶段: str = "http_send") -> None:
-    """仅记录发送阶段、分类和数字状态，不输出响应原文或凭据。"""
-    文本 = str(异常 or "").lower()
-    if any(关键词 in 文本 for 关键词 in ("40034105", "主动消息无权限", "主动消息发送失败，无权限", "主动消息失败", "no permission")):
-        原因 = "permissions_denied"
-    elif any(关键词 in 文本 for 关键词 in ("内容违规", "content violation", "40034006")):
-        原因 = "content_violation"
-    elif any(关键词 in 文本 for 关键词 in ("timeout", "timed out", "超时")):
-        原因 = "timeout"
-    else:
-        原因 = "request_failed"
-
-    def 数字字段(*名称: str) -> str:
-        for 字段 in 名称:
-            值 = str(getattr(异常, 字段, "") or "").strip()
-            if re.fullmatch(r"-?\d{1,12}", 值):
-                return 值
-        return "none"
-
+def _记录QQ官方Markdown发送失败(
+    异常: Exception, 阶段: str = "http_send", *, 回复模式: str = "", 目标类型: str = "",
+) -> None:
+    """只输出固定原因与数字诊断，区分事件回复、消息回复和主动发送。"""
+    字段 = 提取QQ消息错误字段(异常)
     logger.warning(
-        "QQ官方Markdown发送失败：stage=%s, reason=%s, error_type=%s, http_status=%s, code=%s",
-        阶段,
-        原因,
-        type(异常).__name__,
-        数字字段("status", "status_code", "http_status"),
-        数字字段("code", "ret_code", "error_code", "err_code"),
+        "QQ官方Markdown发送失败：stage=%s, reason=%s, error_type=%s, http_status=%s, code=%s, err_code=%s, reply_mode=%s, target_type=%s",
+        阶段, QQ消息错误分类(异常), type(异常).__name__,
+        *[字段[键] if 字段[键] is not None else "none" for 键 in ("http_status", "code", "err_code")],
+        回复模式 or "unknown", 目标类型 or "unknown",
     )
 
 
@@ -1149,7 +1138,7 @@ async def 发送Markdown键盘消息(
         当前AppID = str(getattr(getattr(_http, "_token", None), "app_id", "") or "").strip()
         if 当前AppID != 发送AppID:
             raise RuntimeError("QQ官方认证身份已变化")
-        return await _http.request(route, json=消息体)
+        return await 提交QQ消息(_http, route, 消息体, 发送AppID)
 
     try:
         import random as _random
@@ -1165,6 +1154,12 @@ async def 发送Markdown键盘消息(
         return False
 
     消息对象 = getattr(event, "message_obj", None)
+    if 被动事件ID is None and 读取字段(消息对象, "mantou_help_callback") is True:
+        # 由交互桥保存的外层网关事件编号；按钮 interaction.id 不是消息编号。
+        被动事件ID = 读取字段(消息对象, "mantou_callback_event_id")
+        if not isinstance(被动事件ID, str) or not 被动事件ID.strip():
+            logger.warning("QQ官方Markdown发送失败：stage=init, reason=callback_event_id_missing")
+            return False
     消息ID = ""
     if 被动事件ID is None:
         for 对象 in (event, 消息对象):
@@ -1190,7 +1185,7 @@ async def 发送Markdown键盘消息(
     用户openid = 获取用户openid同步(event)
     if 被动事件ID is not None and (
         主动发送
-        or not 群openid
+        or not (群openid or 用户openid)
         or not isinstance(被动事件ID, str)
         or not 被动事件ID
         or 被动事件ID != 被动事件ID.strip()
@@ -1232,7 +1227,7 @@ async def 发送Markdown键盘消息(
             return False
         if 目标类型 == "group" and 查询权限 is None:
             # 未知权限不等于明确禁止；完成预检查后由官方发送接口判定。
-            logger.info(
+            logger.debug(
                 "QQ官方Markdown发送诊断：stage=permissions, reason=permissions_unknown, target_type=group"
             )
     if 群openid:
@@ -1245,16 +1240,19 @@ async def 发送Markdown键盘消息(
             消息体["msg_id"] = 消息ID
     elif 用户openid:
         route = Route("POST", "/v2/users/{openid}/messages", openid=用户openid)
-        if 消息ID and not 主动发送:
+        if 被动事件ID is not None:
+            消息体["event_id"] = 被动事件ID
+        elif 消息ID and not 主动发送:
             消息体["msg_id"] = 消息ID
     else:
         logger.warning("[帮助MD键盘] 无法获取 group_openid 和 user_openid")
         return False
 
+    回复模式 = "event" if 被动事件ID is not None else "proactive" if 实际主动发送 else "message"
     记录文本 = md文本
     try:
         if 实际主动发送:
-            logger.info(
+            logger.debug(
                 "QQ官方Markdown发送诊断：stage=http_send, reason=request_started, target_type=%s",
                 目标类型,
             )
@@ -1275,11 +1273,7 @@ async def 发送Markdown键盘消息(
     except Exception as e:
         if 实际主动发送 and 目标会话 and 主动消息无权限(e):
             记录主动消息权限(目标会话, 目标类型, False, 发送AppID)
-        错误文本 = str(e or "").lower()
-        内容违规 = any(
-            关键词 in 错误文本
-            for 关键词 in ("消息内容违规", "内容违规", "content violation")
-        )
+        内容违规 = QQ消息错误分类(e) == "content_violation"
         if 内容违规:
             降级文本 = 清空QQ官方书名作者(md文本)
             if 降级文本:
@@ -1305,19 +1299,15 @@ async def 发送Markdown键盘消息(
                     return True
                 except Exception as 降级异常:
                     e = 降级异常
-                    错误文本 = str(e or "").lower()
                     logger.debug(
                         "[帮助MD键盘] 书名作者清空后发送失败：错误类型=%s",
                         type(e).__name__,
                     )
-        被动消息已过期 = (
-            any(关键词 in 错误文本 for 关键词 in ("过期", "expired"))
-            and any(关键词 in 错误文本 for 关键词 in ("msg_id", "msgid", "消息id", "消息 id"))
-        )
+        被动消息已过期 = 被动回复已过期(e)
         # 只有官方明确指出被动 msg_id 失效时才改用主动发送。
         # 网络超时/连接异常不能确认首个 POST 是否已成功，盲目重发会造成两条消息。
         if 被动事件ID is not None or not 消息ID or 主动发送 or not 被动消息已过期:
-            _记录QQ官方Markdown发送失败(e)
+            _记录QQ官方Markdown发送失败(e, 回复模式=回复模式, 目标类型=目标类型)
             return False
 
         # 下载等耗时任务完成时，原消息可能已经超过被动回复窗口。
@@ -1341,7 +1331,7 @@ async def 发送Markdown键盘消息(
                 )
                 return False
             if 目标类型 == "group" and 查询权限 is None:
-                logger.info(
+                logger.debug(
                     "QQ官方Markdown发送诊断：stage=permissions_retry, reason=permissions_unknown, target_type=group"
                 )
         try:
@@ -1361,7 +1351,7 @@ async def 发送Markdown键盘消息(
         except Exception as 主动异常:
             if 目标会话 and 主动消息无权限(主动异常):
                 记录主动消息权限(目标会话, 目标类型, False, 发送AppID)
-            _记录QQ官方Markdown发送失败(主动异常, "http_send_retry")
+            _记录QQ官方Markdown发送失败(主动异常, "http_send_retry", 回复模式="proactive", 目标类型=目标类型)
             return False
 
 

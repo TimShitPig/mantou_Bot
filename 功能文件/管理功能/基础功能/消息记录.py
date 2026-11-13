@@ -47,6 +47,7 @@ except Exception as 导入异常:
     logger.warning("消息记录存储模块加载失败：错误类型=%s", type(导入异常).__name__)
 
 from 功能文件.管理功能.基础功能.消息工具 import 是本地系统消息
+from .QQ官方消息发送 import 主动消息权限被拒绝, 被动回复已过期
 
 消息记录版本 = 1
 # 以下仅限制内存热点缓存；MySQL 历史不按数量/时间自动删除。
@@ -177,9 +178,9 @@ _消息撤回事件挂钩版本 = int(globals().get("_消息撤回事件挂钩�
 _发送挂钩已安装 = globals().get("_发送挂钩已安装", False)
 主动消息权限缓存: dict[tuple[str, str, str], tuple[str, float]] = (
     globals().get("主动消息权限缓存") or {}
-    if globals().get("主动消息权限缓存版本") == 2 else {}
+    if globals().get("主动消息权限缓存版本") == 3 else {}
 )
-主动消息权限缓存版本 = 2
+主动消息权限缓存版本 = 3
 主动消息权限缓存有效期秒 = 30 * 60
 
 _OPENID规则 = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
@@ -497,36 +498,13 @@ def 清除主动消息权限(会话标识: str, 会话类型: str = "", appid: s
 
 
 def 主动消息无权限(异常: Any) -> bool:
-    """识别 QQ 官方发送接口返回的主动消息权限错误。"""
-    文本 = str(异常 or "").lower()
-    return any(
-        关键词 in 文本
-        for 关键词 in (
-            "主动消息失败",
-            "主动发送失败",
-            "主动消息发送失败，无权限",
-            "主动消息无权限",
-            "主动发送无权限",
-            "40034105",
-            "no permission",
-            "not allowed",
-        )
-    )
+    """仅明确的官方主动权限码可写入拒绝缓存，不按笼统失败文字猜测。"""
+    return 主动消息权限被拒绝(异常)
 
 
 def 被动消息ID已过期(异常: Any) -> bool:
-    """只识别官方明确的被动消息 ID 失效，避免未知错误触发重复重发。"""
-    文本 = str(异常 or "").lower()
-    return (
-        (
-            any(关键词 in 文本 for 关键词 in ("过期", "expired", "timeout"))
-            and any(
-                关键词 in 文本
-                for 关键词 in ("msg_id", "msgid", "消息id", "消息 id")
-            )
-        )
-        or any(关键词 in 文本 for 关键词 in ("40034005", "40034006", "msg_id已过期"))
-    )
+    """内容违规、频控及事件编号错误不得触发主动重发。"""
+    return 被动回复已过期(异常)
 
 
 def _转数字时间戳(时间戳: Any) -> int | None:

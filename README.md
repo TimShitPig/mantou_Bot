@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.371-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.372-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.371 |
+| 版本 | v6.1.372 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -201,6 +201,9 @@ http://服务器IP:8090/openapi/qq-reader/v1/chapters?key=你的Key&book_id=书�
 | 群状态被标记已移除 | 可信退群事件，或 HTTP400/SDK 缺失 HTTP 时完整码对 `11255/40011028`、`11293/40011026`；429、权限、认证、网络失败不能据此判离群 |
 | 凭据错误 `100016` | 检查当前 QQ 官方平台 AppID/ClientSecret；认证通道冷却 60 秒，保留状态与历史 |
 | 下载/发送失败 | 核对同一任务的阶段、数字状态码和版本；不要只凭目录数量差异、单次超时或 Event loop lag 猜原因 |
+| QQ 官方 Markdown 发送失败 | 核对 `reply_mode`、`target_type`、HTTP、`code` 和 `err_code`；只有 `40034105` 表示主动推送被拒绝，不能把所有发送异常当权限问题 |
+
+欢迎/帮助按钮回调使用外层事件编号被动回复群聊或私聊，缺少编号或发送失败时不改为主动推送。`40034100` 为频控、`40034127` 为 Markdown 权限、`40034006` 为内容违规、`40034005` 为消息引用编号过期；旧版仅有异常类型、没有数字码的日志无法还原具体原因。正常请求开始诊断改为 DEBUG。遇到旧日志，请先通过 GitHub 更新或重装、重载并确认启动版本，再用同一次失败的新日志判断。
 
 同进程热重载交接原事件、选书结果、账号、TXT、媒体进度和已确认发送状态，避免重复发送。进程重启仅恢复已有落盘 TXT 的上传续传，不保证恢复未完成正文或纯内存媒体任务。数据库配置、账号或登录凭据改变后，旧网页登录/扫码会话失效。
 

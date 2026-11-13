@@ -249,6 +249,9 @@ async def _投递帮助回调(客户端: Any, 交互: Any, 数据: str, 适配�
         if callable(记录场景):
             记录场景(用户, "friend")
 
+    # 事件回复使用网关外层编号，不能使用按钮交互 id 或旧消息缓存。
+    解析结果.mantou_help_callback = True
+    解析结果.mantou_callback_event_id = 事件编号
     平台.commit_event(平台.create_event(解析结果))
 
 
