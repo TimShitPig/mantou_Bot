@@ -2338,10 +2338,15 @@ def _番茄详情字数(详情: Dict[str, Any]) -> int:
     )
 
 
+def _番茄作者署名(详情: Dict[str, Any]) -> str:
+    return html.unescape(str(详情.get("author") or 详情.get("author_name") or "")).strip()
+
+
 def _番茄书籍身份(详情: Dict[str, Any]) -> tuple[str, str]:
+    作者 = re.sub(r"\s+著$", "", _番茄作者署名(详情))
     return (
         标准化番茄书籍比对文本(详情.get("book_name") or 详情.get("title")),
-        标准化番茄书籍比对文本(详情.get("author") or 详情.get("author_name")),
+        标准化番茄书籍比对文本(作者),
     )
 
 
@@ -2350,7 +2355,7 @@ def _番茄字数查询词(详情: Dict[str, Any]) -> tuple[str, ...]:
     规范标题, 作者 = _番茄书籍身份(详情)
     if not 规范标题 or 作者 in {"", "未知", "unknown"} or _番茄详情字数(详情):
         return ()
-    return tuple(dict.fromkeys((标题, 规范标题)))
+    return tuple(dict.fromkeys((规范标题, 标题)))
 
 
 def _番茄详情章节数(详情: Dict[str, Any]) -> int:
@@ -2388,7 +2393,39 @@ def _核验番茄字数详情(详情: Any, 身份: tuple[str, str], 书籍编号
 
 
 def _番茄字数目录指纹(标题列表: Iterable[str]) -> tuple[str, ...]:
-    """目录条数不同，只在两边的实质章节标题逐项一致时认定同一版本。"""
+    """统一畅听合并标题与阅读分卷目录，保留分组和正文顺序。"""
+    标题列表 = [unicodedata.normalize("NFKC", 标题).strip() for 标题 in 标题列表]
+    畅听条目 = [
+        re.fullmatch(
+            r"([^-]+)-([0-9]{2})-(第[0-9一二三四五六七八九十百千零〇]+卷\s+[^-]+|附录)-(.+)",
+            标题,
+        )
+        for 标题 in 标题列表
+    ]
+    if 畅听条目 and all(畅听条目):
+        前缀 = 畅听条目[0].group(1)
+        if all(项.group(1) == 前缀 and int(项.group(2)) == 序号 for 序号, 项 in enumerate(畅听条目, 1)):
+            展开标题 = []
+            当前分组 = ""
+            分段标题 = ""
+            下一段 = 1
+            for 项 in 畅听条目:
+                分组, 章节 = 项.group(3, 4)
+                if 分组 != 当前分组:
+                    展开标题.append(分组)
+                    当前分组 = 分组
+                    分段标题 = ""
+                    下一段 = 1
+                分段 = re.fullmatch(r"(.+?)([0-9]{2})", 章节) if 分组 == "附录" else None
+                if 分段 and 分段.group(1) == 分段标题 and int(分段.group(2)) == 下一段:
+                    下一段 += 1
+                    if 下一段 == 3:
+                        展开标题[-1] = 分段标题
+                    continue
+                分段标题 = 分段.group(1) if 分段 and 分段.group(2) == "01" else ""
+                下一段 = 2 if 分段标题 else 1
+                展开标题.append(章节)
+            标题列表 = 展开标题
     指纹 = []
     for 标题 in 标题列表:
         文本 = 标准化番茄书籍比对文本(标题)
@@ -2403,10 +2440,13 @@ def _番茄字数目录指纹(标题列表: Iterable[str]) -> tuple[str, ...]:
     return tuple(指纹)
 
 
-def _番茄字数详情已确认(详情: Dict[str, Any], 搜索章数: int, 目标章数: int) -> bool:
+def _番茄字数详情已确认(
+    详情: Dict[str, Any], 搜索章数: int, 目标章数: int, 目标署名: str,
+) -> bool:
     详情章数 = _番茄详情章节数(详情)
     return (
-        目标章数 > 0 and 详情章数 > 0
+        标准化番茄书籍比对文本(_番茄作者署名(详情)) == 标准化番茄书籍比对文本(目标署名)
+        and 目标章数 > 0 and 详情章数 > 0
         and abs(详情章数 - 目标章数) <= 1
         and (not 搜索章数 or abs(搜索章数 - 详情章数) <= 1)
     )
@@ -2430,11 +2470,11 @@ def 获取番茄同书精确字数(
             响应 = signed_app_json(
                 _番茄字数搜索路径,
                 query={"query": 查询词, "offset": "0", "limit": "20"},
-                method="GET", timeout=4,
+                method="GET", timeout=12,
             )
         except Exception as 异常:
             logger.debug("番茄字数搜索失败：错误类型=%s", type(异常).__name__)
-            break
+            continue
         for 编号, 搜索章数, 同号字数 in _番茄字数候选(响应, 身份, 书籍编号):
             if 同号字数:
                 return 同号字数
@@ -2450,7 +2490,7 @@ def 获取番茄同书精确字数(
                     continue
                 if 编号 == str(书籍编号):
                     return 字数
-                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数):
+                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数, _番茄作者署名(详情)):
                     if not 指纹:
                         continue
                     项目 = resolve_directory(编号)
@@ -2461,6 +2501,8 @@ def 获取番茄同书精确字数(
                 核验字数.add(字数)
             except Exception as 异常:
                 logger.debug("番茄字数候选核验失败：错误类型=%s", type(异常).__name__)
+        if 核验字数:
+            break
     return next(iter(核验字数)) if len(核验字数) == 1 else 0
 
 
@@ -2476,10 +2518,10 @@ async def 异步获取番茄同书精确字数(
     已查编号: set[str] = set()
     核验字数: set[int] = set()
     循环 = asyncio.get_running_loop()
-    截止时间 = 循环.time() + 12
+    截止时间 = 循环.time() + 40
 
     async def 限时请求(请求):
-        return await asyncio.wait_for(请求, timeout=max(0, min(4, 截止时间 - 循环.time())))
+        return await asyncio.wait_for(请求, timeout=max(0, min(12, 截止时间 - 循环.time())))
 
     for 查询词 in _番茄字数查询词(详情):
         if len(已查编号) >= _番茄字数补查候选上限 or 循环.time() >= 截止时间:
@@ -2494,7 +2536,7 @@ async def 异步获取番茄同书精确字数(
             )
         except Exception as 异常:
             logger.debug("番茄字数搜索失败：错误类型=%s", type(异常).__name__)
-            break
+            continue
         for 编号, 搜索章数, 同号字数 in _番茄字数候选(响应, 身份, 书籍编号):
             if 同号字数:
                 return 同号字数
@@ -2510,7 +2552,7 @@ async def 异步获取番茄同书精确字数(
                     continue
                 if 编号 == str(书籍编号):
                     return 字数
-                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数):
+                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数, _番茄作者署名(详情)):
                     if not 指纹:
                         continue
                     项目 = await 限时请求(异步解析番茄目录(client, 编号))
@@ -2521,6 +2563,8 @@ async def 异步获取番茄同书精确字数(
                 核验字数.add(字数)
             except Exception as 异常:
                 logger.debug("番茄字数候选核验失败：错误类型=%s", type(异常).__name__)
+        if 核验字数:
+            break
     return next(iter(核验字数)) if len(核验字数) == 1 else 0
 
 
