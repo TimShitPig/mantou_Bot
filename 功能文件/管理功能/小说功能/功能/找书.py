@@ -1599,7 +1599,15 @@ async def 搜索追书(
 
 
 class _找书平台查询错误(RuntimeError):
-    """平台异常不能伪装成成功的空搜索结果。"""
+    """平台异常不能伪装成成功的空搜索结果；只携带受控归因。"""
+
+    def __init__(self, reason: str, *, diagnostics: dict[str, Any] | None = None):
+        self.reason = reason if reason in {
+            "platform_unavailable", "search_timeout", "search_unavailable", "search_incomplete",
+            "search_rejected", "invalid_response", "response_too_large",
+        } else "search_unavailable"
+        self.diagnostics = diagnostics or {}
+        super().__init__(self.reason)
 
 
 async def 搜索QQ阅读(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
@@ -2205,6 +2213,9 @@ async def _限时搜索(
     try:
         结果 = await asyncio.wait_for(任务, timeout=max(1.0, float(超时秒数)))
         return 结果 if isinstance(结果, list) else []
+    except _找书平台查询错误:
+        if 失败抛出:
+            raise
     except asyncio.TimeoutError:
         logger.debug(f"找书平台搜索超时：平台={平台}")
         if 失败抛出:
@@ -2231,16 +2242,21 @@ async def _聚合搜索未缓存(
         允许平台集合 = _规范化允许平台(允许平台)
 
         失败平台: set[str] = set()
+        失败明细: dict[str, str] = {}
+        待完成阶段: set[str] = set()
 
         async def 平台搜索任务(
             平台: str,
             工厂: Any,
             日志平台: str | None = None,
             *, 补搜: bool = False, 补搜超时: float = 找书联想超时秒数,
+            阶段: str = "",
         ) -> list[Any]:
             if 平台 not in 允许平台集合:
                 return []
             状态: dict[str, bool] = {}
+            当前阶段 = 阶段 or ("补搜" if 补搜 else "原查询")
+            失败原因 = "platform_error"
             标记 = _找书平台调用状态.set(状态)
             try:
                 结果 = await _限时搜索(
@@ -2251,14 +2267,20 @@ async def _聚合搜索未缓存(
                 if 状态.get("failed") and not 结果 and 允许平台集合 == {平台} and not 补搜:
                     raise _找书平台查询错误("search_unavailable")
                 return 结果
-            except _找书平台查询错误:
+            except _找书平台查询错误 as exc:
                 状态["failed"] = True
+                失败原因 = exc.reason
                 if 允许平台集合 == {平台} and not 补搜:
+                    exc.diagnostics = {
+                        "failed_platforms": [平台],
+                        "failures": {f"{平台}:{当前阶段}": 失败原因},
+                    }
                     raise
                 return []
             finally:
                 if 状态.get("failed"):
                     失败平台.add(平台)
+                    失败明细[f"{平台}:{当前阶段}"] = 失败原因
                 _找书平台调用状态.reset(标记)
 
         搜索任务 = (
@@ -2391,6 +2413,7 @@ async def _聚合搜索未缓存(
             联想词 = await 平台搜索任务(
                 "书旗", lambda: 搜索书旗联想(session, 关键词), "书旗联想",
                 补搜=True, 补搜超时=min(找书联想超时秒数, 找书容错补搜预算秒数),
+                阶段="联想",
             )
         已查词 = {关键词.casefold(), *(词.casefold() for 词 in 补搜词)}
         for 词 in 联想词:
@@ -2428,86 +2451,128 @@ async def _聚合搜索未缓存(
             补搜并发 = asyncio.Semaphore(找书容错补搜并发数)
             平台补搜锁: dict[str, asyncio.Lock] = {}
 
-            async def 补搜平台(平台: str, 工厂: Any, 日志平台: str | None = None) -> list[Any]:
-                # 明确失败的原查询不换词重放；同平台补搜串行，全部补搜共享时限。
-                if 平台 not in 允许平台集合 or 平台 in 失败平台:
-                    return []
+            平台阶段: dict[str, str] = {}
+
+            async def 补搜平台(平台: str, 工厂: Any) -> list[dict[str, Any]]:
+                # 本平台搜索和必要预检是一个提交单元，互不等待其他平台。
+                nonlocal 补搜超时
+                平台阶段[平台] = "queue"
                 async with 平台补搜锁.setdefault(平台, asyncio.Lock()):
                     async with 补搜并发:
                         剩余 = 补搜截止时间 - asyncio.get_running_loop().time()
                         if 剩余 < 1.0:
+                            补搜超时 = True
+                            待完成阶段.add(f"{平台}:queue")
                             return []
-                        return await 平台搜索任务(
-                            平台, 工厂, 日志平台, 补搜=True,
+                        平台阶段[平台] = "search"
+                        结果 = await 平台搜索任务(
+                            平台, 工厂, f"{平台}补搜", 补搜=True,
                             补搜超时=min(找书联想超时秒数, 剩余),
                         )
+                        for 排名, 项 in enumerate(结果):
+                            if isinstance(项, dict):
+                                项.setdefault("_platform_rank", 排名)
+                        平台阶段[平台] = "precheck"
+                        try:
+                            if 平台 == "番茄":
+                                结果 = await 过滤无目录番茄搜索结果(
+                                    结果, 关键词, 搜索类型=搜索类型, 最大数量=5,
+                                )
+                            elif 平台 == "QQ阅读":
+                                结果 = await 过滤章节单独付费QQ阅读搜索结果(结果)
+                        except Exception:
+                            失败平台.add(平台)
+                            失败明细[f"{平台}:补搜预检"] = "precheck_error"
+                            return []
+                        return 结果
 
-            async def 补搜一个词(w: str) -> tuple[list[dict[str, Any]], ...]:
-                return await asyncio.gather(
-                    补搜平台("番茄", lambda: 搜索番茄(session, w, 需要数量=10), "番茄联想"),
-                    补搜平台("七猫", lambda: 搜索七猫(session, w, 需要数量=10), "七猫联想"),
-                    补搜平台("书旗", lambda: 搜索书旗(session, w, 需要数量=10), "书旗联想结果"),
-                    补搜平台("QQ阅读", lambda: 搜索QQ阅读(w, 需要数量=10), "QQ阅读联想"),
-                    补搜平台("QQ浏览器", lambda: 搜索QQ浏览器(w, 需要数量=10), "QQ浏览器联想"),
-                    补搜平台("得间", lambda: 搜索得间(w, 需要数量=10), "得间联想"),
-                    补搜平台("点众", lambda: 搜索点众(w, 需要数量=10), "点众联想"),
-                    补搜平台("塔读", lambda: 搜索塔读(w, 需要数量=10), "塔读联想"),
-                    补搜平台("百度", lambda: 搜索百度(w, 需要数量=10), "百度联想"),
-                    补搜平台("小米", lambda: 搜索小米(w, 需要数量=10), "小米联想"),
-                    补搜平台("宜搜", lambda: 搜索宜搜(w, 需要数量=10), "宜搜联想"),
-                    补搜平台("米读", lambda: 搜索米读(w, 需要数量=10), "米读联想"),
-                    补搜平台("猫眼", lambda: 搜索猫眼(w, 需要数量=10), "猫眼联想"),
-                    补搜平台("酷我", lambda: 搜索酷我(w, 需要数量=10), "酷我联想"),
-                    补搜平台("酷匠", lambda: 搜索酷匠(w, 需要数量=10), "酷匠联想"),
-                    补搜平台("连城", lambda: 搜索连城(w, 需要数量=10), "连城联想"),
-                    补搜平台("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10), "菠萝包联想"),
-                    补搜平台("晋江", lambda: 搜索晋江(w, 需要数量=10), "晋江联想"),
-                    补搜平台("话本", lambda: 搜索话本(w, 需要数量=10), "话本联想"),
-                    补搜平台("疯狂追书", lambda: 搜索疯狂追书(w, 需要数量=10), "疯狂追书联想"),
-                    补搜平台("梧桐", lambda: 搜索梧桐(w, 需要数量=10), "梧桐联想"),
-                    补搜平台("追书", lambda: 搜索追书(session, w, 需要数量=10), "追书联想"),
-                    补搜平台(
-                        "ZLibrary",
-                        lambda: 搜索ZLibrary(w, 需要数量=10, 配置=配置),
-                        "ZLibrary联想",
-                    ),
+            async def 补搜一个词(w: str) -> list[list[dict[str, Any]]]:
+                nonlocal 补搜超时
+                工厂列表 = (
+                    ("番茄", lambda: 搜索番茄(session, w, 需要数量=10)),
+                    ("七猫", lambda: 搜索七猫(session, w, 需要数量=10)),
+                    ("书旗", lambda: 搜索书旗(session, w, 需要数量=10)),
+                    ("QQ阅读", lambda: 搜索QQ阅读(w, 需要数量=10)),
+                    ("QQ浏览器", lambda: 搜索QQ浏览器(w, 需要数量=10)),
+                    ("得间", lambda: 搜索得间(w, 需要数量=10)),
+                    ("点众", lambda: 搜索点众(w, 需要数量=10)),
+                    ("塔读", lambda: 搜索塔读(w, 需要数量=10)),
+                    ("百度", lambda: 搜索百度(w, 需要数量=10)),
+                    ("小米", lambda: 搜索小米(w, 需要数量=10)),
+                    ("宜搜", lambda: 搜索宜搜(w, 需要数量=10)),
+                    ("米读", lambda: 搜索米读(w, 需要数量=10)),
+                    ("猫眼", lambda: 搜索猫眼(w, 需要数量=10)),
+                    ("酷我", lambda: 搜索酷我(w, 需要数量=10)),
+                    ("酷匠", lambda: 搜索酷匠(w, 需要数量=10)),
+                    ("连城", lambda: 搜索连城(w, 需要数量=10)),
+                    ("菠萝包", lambda: 搜索菠萝包(w, 需要数量=10)),
+                    ("晋江", lambda: 搜索晋江(w, 需要数量=10)),
+                    ("话本", lambda: 搜索话本(w, 需要数量=10)),
+                    ("疯狂追书", lambda: 搜索疯狂追书(w, 需要数量=10)),
+                    ("梧桐", lambda: 搜索梧桐(w, 需要数量=10)),
+                    ("追书", lambda: 搜索追书(session, w, 需要数量=10)),
+                    ("ZLibrary", lambda: 搜索ZLibrary(w, 需要数量=10, 配置=配置)),
                 )
-
-            async def 补搜并预检(w: str) -> list[list[dict[str, Any]]]:
-                补搜项 = list(await 补搜一个词(w))
-                for 平台结果 in 补搜项:
-                    for 排名, 项 in enumerate(平台结果):
-                        if isinstance(项, dict):
-                            项.setdefault("_platform_rank", 排名)
-                r1 = await 过滤无目录番茄搜索结果(
-                    补搜项[0],
-                    关键词,
-                    搜索类型=搜索类型,
-                    最大数量=5,
-                )
-                r4 = await 过滤章节单独付费QQ阅读搜索结果(补搜项[3])
-                补搜项[0] = r1
-                补搜项[3] = r4
-                return 补搜项
+                任务表: dict[asyncio.Task[list[dict[str, Any]]], str] = {}
+                try:
+                    for 平台, 工厂 in 工厂列表:
+                        if 平台 in 允许平台集合 and 平台 not in 失败平台:
+                            任务 = asyncio.create_task(补搜平台(平台, 工厂))
+                            任务表[任务] = 平台
+                    if not 任务表:
+                        return []
+                    已完成, 未完成 = await asyncio.wait(
+                        任务表, timeout=max(0.0, 补搜截止时间 - asyncio.get_running_loop().time()),
+                    )
+                    if 未完成:
+                        补搜超时 = True
+                        for 任务 in 未完成:
+                            平台 = 任务表[任务]
+                            待完成阶段.add(f"{平台}:{平台阶段.get(平台, 'queue')}")
+                    # 保持工厂顺序和平台内排名，不把完成先后当作相关性。
+                    完成结果: list[list[dict[str, Any]]] = []
+                    for 任务, 平台 in 任务表.items():
+                        if 任务 not in 已完成:
+                            continue
+                        if 任务.cancelled():
+                            失败平台.add(平台)
+                            失败明细[f"{平台}:补搜"] = "task_cancelled"
+                            continue
+                        try:
+                            完成结果.append(任务.result())
+                        except Exception:
+                            失败平台.add(平台)
+                            失败明细[f"{平台}:补搜"] = "task_error"
+                    return 完成结果
+                finally:
+                    for 任务 in 任务表:
+                        if not 任务.done():
+                            任务.cancel()
+                    if 任务表:
+                        await asyncio.gather(*任务表, return_exceptions=True)
 
             for w in 补搜词:
                 剩余 = 补搜截止时间 - asyncio.get_running_loop().time()
                 if 剩余 < 1.0:
                     补搜超时 = True
                     break
-                try:
-                    # 本轮请求与目录预检共用剩余时间；超时不合并未校验候选。
-                    补搜项 = await asyncio.wait_for(补搜并预检(w), timeout=剩余)
-                except asyncio.TimeoutError:
-                    补搜超时 = True
-                    break
-                补结果集合.extend(补搜项)
+                补结果集合.extend(await 补搜一个词(w))
                 合并 = 去重合并(补结果集合)
-                if any(int(项.get("_match_tier") or 0) >= 5 for 项 in 排序找书结果(合并, 关键词, 搜索类型)):
+                if 补搜超时 or any(
+                    int(项.get("_match_tier") or 0) >= 5
+                    for 项 in 排序找书结果(合并, 关键词, 搜索类型)
+                ):
                     break
         最终结果 = 排序找书结果(合并, 关键词, 搜索类型)
         if not 最终结果 and (失败平台 or 补搜超时):
-            raise _找书平台查询错误("search_incomplete")
+            raise _找书平台查询错误("search_incomplete", diagnostics={
+                "failed_platforms": sorted(失败平台),
+                "failures": dict(sorted(失败明细.items())),
+                "supplement_timeout": 补搜超时,
+                "pending_stages": sorted(待完成阶段),
+                "candidate_count": len(合并),
+                "matched_count": len(最终结果),
+            })
         return 最终结果
 
 
@@ -2527,7 +2592,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v9-status",
+        tuple(_拆分查询词(关键词)), "search-rank-v10-partial",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2842,8 +2907,12 @@ async def 处理找书指令(
                 允许平台,
             )
         except Exception as exc:
+            原因 = exc.reason if isinstance(exc, _找书平台查询错误) else "unexpected_error"
+            诊断 = exc.diagnostics if isinstance(exc, _找书平台查询错误) else {}
             logger.warning(
-                f"找书搜索失败：关键词={关键词}, 类型={搜索类型}, 错误={exc}"
+                "找书搜索失败：关键词=%s, 类型=%s, 平台=%s, category=%s, 错误类型=%s, diagnostics=%s",
+                关键词, 搜索类型, 指定平台 or "全部可用平台", 原因, type(exc).__name__,
+                json.dumps(诊断, ensure_ascii=False, sort_keys=True),
             )
             找书会话.pop(会话键, None)
             return f"{指定平台}搜索失败，请稍后再试"
