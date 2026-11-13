@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.375-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.376-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.375 |
+| 版本 | v6.1.376 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -69,7 +69,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 
 ## 常用指令
 
-直接发送支持平台的分享链接或卡片即可下载。找书结果每本两行，显示书名及“作者 · 平台 · 完结/连载”，未取得状态时显示“未知”。点击书名/作者会填入选书指令，**仍需发送该指令**；点击翻页按钮则直接翻页。
+直接发送支持平台的分享链接或卡片即可下载。找书结果每本两行，显示“书名：作品名”和“作者：作者名 · 平台 · 完结/连载”，未取得状态时显示“未知”。点击书名/作者会填入选书指令，**仍需发送该指令**；点击翻页按钮则直接翻页。
 
 | 使用者 | 指令 | 作用 |
 | --- | --- | --- |
