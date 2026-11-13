@@ -21,6 +21,7 @@ import ssl
 import struct
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2308,7 +2309,7 @@ async def 异步获取番茄书籍详情(client: Any, book_id: str) -> Dict[str,
 
 
 def 标准化番茄书籍比对文本(值: Any) -> str:
-    文本 = html.unescape(str(值 or "")).strip().casefold()
+    文本 = unicodedata.normalize("NFKC", html.unescape(str(值 or ""))).strip().casefold()
     return re.sub(
         r"[\s\-_/\\|·•【】\[\]（）()《》<>\"'“”‘’：:，,。.!！?？~～]+", "", 文本
     )
@@ -2327,101 +2328,140 @@ def 提取番茄搜索书籍行(行: Any) -> list[Dict[str, Any]]:
     return [行]
 
 
+_番茄字数搜索路径 = "/novelfm/bookmall/search/page/v1/"
+_番茄字数补查候选上限 = 3
+
+
+def _番茄详情字数(详情: Dict[str, Any]) -> int:
+    return 提取有效番茄字数(
+        详情.get("word_number"), 详情.get("word_count"), 详情.get("words"),
+    )
+
+
+def _番茄书籍身份(详情: Dict[str, Any]) -> tuple[str, str]:
+    return (
+        标准化番茄书籍比对文本(详情.get("book_name") or 详情.get("title")),
+        标准化番茄书籍比对文本(详情.get("author") or 详情.get("author_name")),
+    )
+
+
+def _番茄字数查询词(详情: Dict[str, Any]) -> tuple[str, ...]:
+    标题 = str(详情.get("book_name") or 详情.get("title") or "").strip()
+    规范标题, 作者 = _番茄书籍身份(详情)
+    if not 规范标题 or 作者 in {"", "未知", "unknown"} or _番茄详情字数(详情):
+        return ()
+    return tuple(dict.fromkeys((标题, 规范标题)))
+
+
+def _番茄详情章节数(详情: Dict[str, Any]) -> int:
+    return 提取有效番茄字数(详情.get("chapter_number"), 详情.get("serial_count"))
+
+
+def _番茄字数候选(响应: Any, 身份: tuple[str, str], 书籍编号: str) -> list[tuple[str, int, int]]:
+    if not isinstance(响应, dict) or str(响应.get("code")) != "0":
+        return []
+    数据 = 响应.get("data")
+    行列表 = 数据.get("search_data") if isinstance(数据, dict) else None
+    if not isinstance(行列表, list):
+        return []
+    候选 = {}
+    for 行 in 行列表:
+        for 书籍 in 提取番茄搜索书籍行(行):
+            编号 = str(书籍.get("book_id") or 书籍.get("id") or "").strip()
+            if re.fullmatch(r"[0-9]{8,32}", 编号) and _番茄书籍身份(书籍) == 身份:
+                # 只有明确指向当前书号的 App 搜索字段可以直接补齐当前详情。
+                同号字数 = _番茄详情字数(书籍) if str(书籍.get("book_id")) == str(书籍编号) else 0
+                候选.setdefault(编号, (_番茄详情章节数(书籍), 同号字数))
+    return [
+        (编号, *候选[编号])
+        for 编号 in sorted(候选, key=lambda 编号: 编号 != str(书籍编号))
+    ]
+
+
+def _核验番茄字数详情(详情: Any, 身份: tuple[str, str], 书籍编号: str) -> int:
+    if not isinstance(详情, dict) or _番茄书籍身份(详情) != 身份:
+        return 0
+    返回编号 = str(详情.get("book_id") or "").strip()
+    if 返回编号 and 返回编号 != 书籍编号:
+        return 0
+    return _番茄详情字数(详情)
+
+
+def _番茄字数目录指纹(标题列表: Iterable[str]) -> tuple[str, ...]:
+    """目录条数不同，只在两边的实质章节标题逐项一致时认定同一版本。"""
+    指纹 = []
+    for 标题 in 标题列表:
+        文本 = 标准化番茄书籍比对文本(标题)
+        if not 文本 or 文本 == "第0章":
+            return ()
+        if 文本 in {"书封页", "封面", "版权", "版权信息", "版权信息页", "版权页", "扉页", "目录"}:
+            continue
+        指纹.append(文本)
+    # 默认生成的“第N章”不能作为证明同一版本的依据。
+    if len({标题 for 标题 in 指纹 if not re.fullmatch(r"第[0-9一二三四五六七八九十百千零〇]+章", 标题)}) < 3:
+        return ()
+    return tuple(指纹)
+
+
+def _番茄字数详情已确认(详情: Dict[str, Any], 搜索章数: int, 目标章数: int) -> bool:
+    详情章数 = _番茄详情章节数(详情)
+    return (
+        目标章数 > 0 and 详情章数 > 0
+        and abs(详情章数 - 目标章数) <= 1
+        and (not 搜索章数 or abs(搜索章数 - 详情章数) <= 1)
+    )
+
+
 def 获取番茄同书精确字数(
     书籍编号: str,
     详情: Dict[str, Any],
     章节数: int = 0,
+    目录标题: Iterable[str] = (),
 ) -> int:
-    """为缺少字数的畅听副本查询同书的规范记录，并二次详情确认。"""
-    if (
-        提取有效番茄字数(
-            详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
-        )
-        > 0
-    ):
-        return 0
-    标题 = str(详情.get("book_name") or 详情.get("title") or "").strip()
-    作者 = str(详情.get("author") or 详情.get("author_name") or "").strip()
-    标准标题 = 标准化番茄书籍比对文本(标题)
-    标准作者 = 标准化番茄书籍比对文本(作者)
-    目标章节数 = max(0, int(章节数 or 0))
-    if not 标准标题 or not 标准作者:
-        return 0
-    try:
-        响应 = signed_app_json(
-            "/novelfm/bookmall/search/page/v1/",
-            query={"query": 标题, "offset": "0", "limit": "20"},
-            method="GET",
-            timeout=20,
-        )
-    except Exception as 异常:
-        logger.debug(
-            f"番茄小说精确字数补查失败：书籍编号={书籍编号}, "
-            f"错误={限制番茄日志文本(str(异常), 160)}"
-        )
-        return 0
-
-    数据 = 响应.get("data") if isinstance(响应, dict) else None
-    行列表 = 数据.get("search_data") if isinstance(数据, dict) else None
-    候选列表: list[tuple[int, str, int]] = []
-    for 行 in 行列表 if isinstance(行列表, list) else []:
-        for 候选 in 提取番茄搜索书籍行(行):
-            候选编号 = str(候选.get("book_id") or 候选.get("id") or "").strip()
-            候选字数 = 提取有效番茄字数(
-                候选.get("word_number"), 候选.get("word_count"), 候选.get("words")
-            )
-            if not 候选编号 or 候选编号 == str(书籍编号) or 候选字数 <= 0:
-                continue
-            if (
-                标准化番茄书籍比对文本(候选.get("book_name") or 候选.get("title"))
-                != 标准标题
-            ):
-                continue
-            if (
-                标准化番茄书籍比对文本(候选.get("author") or 候选.get("author_name"))
-                != 标准作者
-            ):
-                continue
-            候选章节数 = 安全番茄整数(
-                候选.get("serial_count") or 候选.get("chapter_number"), 0
-            )
-            差异 = abs(候选章节数 - 目标章节数) if 候选章节数 and 目标章节数 else 0
-            if 候选章节数 and 目标章节数 and 差异 > 1:
-                continue
-            候选列表.append((差异, 候选编号, 候选字数))
-
-    for _差异, 候选编号, 搜索字数 in sorted(候选列表):
+    """在番茄 App 搜索和详情中查找可核验的精确总字数。"""
+    身份 = _番茄书籍身份(详情)
+    指纹 = _番茄字数目录指纹(目录标题)
+    已查编号: set[str] = set()
+    核验字数: set[int] = set()
+    for 查询词 in _番茄字数查询词(详情):
+        if len(已查编号) >= _番茄字数补查候选上限:
+            break
         try:
-            候选详情 = book_detail(候选编号)
+            响应 = signed_app_json(
+                _番茄字数搜索路径,
+                query={"query": 查询词, "offset": "0", "limit": "20"},
+                method="GET", timeout=4,
+            )
         except Exception as 异常:
-            logger.debug(
-                f"番茄小说规范字数详情失败：书籍编号={书籍编号}, "
-                f"候选编号={候选编号}, 错误={限制番茄日志文本(str(异常), 160)}"
-            )
-            continue
-        if (
-            标准化番茄书籍比对文本(候选详情.get("book_name") or 候选详情.get("title"))
-            != 标准标题
-        ):
-            continue
-        if (
-            标准化番茄书籍比对文本(
-                候选详情.get("author") or 候选详情.get("author_name")
-            )
-            != 标准作者
-        ):
-            continue
-        详情字数 = 提取有效番茄字数(
-            候选详情.get("word_number"),
-            候选详情.get("word_count"),
-            候选详情.get("words"),
-        )
-        if 详情字数 == 搜索字数:
-            logger.debug(
-                f"番茄小说精确字数补查成功：书籍编号={书籍编号}, 候选编号={候选编号}"
-            )
-            return 详情字数
-    return 0
+            logger.debug("番茄字数搜索失败：错误类型=%s", type(异常).__name__)
+            break
+        for 编号, 搜索章数, 同号字数 in _番茄字数候选(响应, 身份, 书籍编号):
+            if 同号字数:
+                return 同号字数
+            if 编号 in 已查编号:
+                continue
+            if len(已查编号) >= _番茄字数补查候选上限:
+                break
+            已查编号.add(编号)
+            try:
+                候选详情 = book_detail(编号)
+                字数 = _核验番茄字数详情(候选详情, 身份, 编号)
+                if not 字数:
+                    continue
+                if 编号 == str(书籍编号):
+                    return 字数
+                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数):
+                    if not 指纹:
+                        continue
+                    项目 = resolve_directory(编号)
+                    元数据 = 读取番茄目录元数据(编号, 项目)
+                    标题 = (获取番茄目录标题(元数据.get(章节编号) or {}, 0) for 章节编号 in 项目)
+                    if _番茄字数目录指纹(标题) != 指纹:
+                        continue
+                核验字数.add(字数)
+            except Exception as 异常:
+                logger.debug("番茄字数候选核验失败：错误类型=%s", type(异常).__name__)
+    return next(iter(核验字数)) if len(核验字数) == 1 else 0
 
 
 async def 异步获取番茄同书精确字数(
@@ -2429,107 +2469,59 @@ async def 异步获取番茄同书精确字数(
     书籍编号: str,
     详情: Dict[str, Any],
     章节数: int = 0,
+    目录标题: Iterable[str] = (),
 ) -> int:
-    if (
-        提取有效番茄字数(
-            详情.get("word_number"), 详情.get("word_count"), 详情.get("words")
-        )
-        > 0
-    ):
-        return 0
-    title = str(详情.get("book_name") or 详情.get("title") or "").strip()
-    author = str(详情.get("author") or 详情.get("author_name") or "").strip()
-    normalized_title = 标准化番茄书籍比对文本(title)
-    normalized_author = 标准化番茄书籍比对文本(author)
-    target_count = max(0, int(章节数 or 0))
-    if not normalized_title or not normalized_author:
-        return 0
-    try:
-        response = await 异步签名番茄JSON(
-            client,
-            "/novelfm/bookmall/search/page/v1/",
-            query={"query": title, "offset": "0", "limit": "20"},
-            method="GET",
-        )
-    except Exception as exc:
-        logger.debug(
-            f"番茄小说精确字数补查失败：书籍编号={书籍编号}, 错误={type(exc).__name__}"
-        )
-        return 0
-    data = response.get("data") if isinstance(response, dict) else None
-    rows = data.get("search_data") if isinstance(data, dict) else None
-    candidates: list[tuple[int, str, int]] = []
-    for row in rows if isinstance(rows, list) else []:
-        for candidate in 提取番茄搜索书籍行(row):
-            candidate_id = str(
-                candidate.get("book_id") or candidate.get("id") or ""
-            ).strip()
-            word_count = 提取有效番茄字数(
-                candidate.get("word_number"),
-                candidate.get("word_count"),
-                candidate.get("words"),
-            )
-            if not candidate_id or candidate_id == str(书籍编号) or word_count <= 0:
-                continue
-            if (
-                标准化番茄书籍比对文本(
-                    candidate.get("book_name") or candidate.get("title")
-                )
-                != normalized_title
-            ):
-                continue
-            if (
-                标准化番茄书籍比对文本(
-                    candidate.get("author") or candidate.get("author_name")
-                )
-                != normalized_author
-            ):
-                continue
-            candidate_chapters = 安全番茄整数(
-                candidate.get("serial_count") or candidate.get("chapter_number"), 0
-            )
-            difference = (
-                abs(candidate_chapters - target_count)
-                if candidate_chapters and target_count
-                else 0
-            )
-            if candidate_chapters and target_count and difference > 1:
-                continue
-            candidates.append((difference, candidate_id, word_count))
-    for _difference, candidate_id, expected_words in sorted(candidates):
+    身份 = _番茄书籍身份(详情)
+    指纹 = _番茄字数目录指纹(目录标题)
+    已查编号: set[str] = set()
+    核验字数: set[int] = set()
+    循环 = asyncio.get_running_loop()
+    截止时间 = 循环.time() + 12
+
+    async def 限时请求(请求):
+        return await asyncio.wait_for(请求, timeout=max(0, min(4, 截止时间 - 循环.time())))
+
+    for 查询词 in _番茄字数查询词(详情):
+        if len(已查编号) >= _番茄字数补查候选上限 or 循环.time() >= 截止时间:
+            break
         try:
-            candidate_detail = await 异步获取番茄书籍详情(client, candidate_id)
-        except Exception as exc:
-            logger.debug(
-                f"番茄小说规范字数详情失败：书籍编号={书籍编号}, 候选编号={candidate_id}, "
-                f"错误={type(exc).__name__}"
+            响应 = await 限时请求(
+                异步签名番茄JSON(
+                    client, _番茄字数搜索路径,
+                    query={"query": 查询词, "offset": "0", "limit": "20"},
+                    method="GET",
+                ),
             )
-            continue
-        if (
-            标准化番茄书籍比对文本(
-                candidate_detail.get("book_name") or candidate_detail.get("title")
-            )
-            != normalized_title
-        ):
-            continue
-        if (
-            标准化番茄书籍比对文本(
-                candidate_detail.get("author") or candidate_detail.get("author_name")
-            )
-            != normalized_author
-        ):
-            continue
-        actual_words = 提取有效番茄字数(
-            candidate_detail.get("word_number"),
-            candidate_detail.get("word_count"),
-            candidate_detail.get("words"),
-        )
-        if actual_words == expected_words:
-            logger.debug(
-                f"番茄小说精确字数补查成功：书籍编号={书籍编号}, 候选编号={candidate_id}"
-            )
-            return actual_words
-    return 0
+        except Exception as 异常:
+            logger.debug("番茄字数搜索失败：错误类型=%s", type(异常).__name__)
+            break
+        for 编号, 搜索章数, 同号字数 in _番茄字数候选(响应, 身份, 书籍编号):
+            if 同号字数:
+                return 同号字数
+            if 编号 in 已查编号:
+                continue
+            if len(已查编号) >= _番茄字数补查候选上限:
+                break
+            已查编号.add(编号)
+            try:
+                候选详情 = await 限时请求(异步获取番茄书籍详情(client, 编号))
+                字数 = _核验番茄字数详情(候选详情, 身份, 编号)
+                if not 字数:
+                    continue
+                if 编号 == str(书籍编号):
+                    return 字数
+                if not _番茄字数详情已确认(候选详情, 搜索章数, 章节数):
+                    if not 指纹:
+                        continue
+                    项目 = await 限时请求(异步解析番茄目录(client, 编号))
+                    元数据 = await 限时请求(异步读取番茄目录元数据(client, 编号, 项目))
+                    标题 = (获取番茄目录标题(元数据.get(章节编号) or {}, 0) for 章节编号 in 项目)
+                    if _番茄字数目录指纹(标题) != 指纹:
+                        continue
+                核验字数.add(字数)
+            except Exception as 异常:
+                logger.debug("番茄字数候选核验失败：错误类型=%s", type(异常).__name__)
+    return next(iter(核验字数)) if len(核验字数) == 1 else 0
 
 
 def unique_item_ids(ids: Iterable[Any], book_id: str = "") -> List[str]:
@@ -4186,17 +4178,20 @@ def 准备番茄下载数据同步(
     ]
     书籍信息 = 规范化番茄书籍信息(书籍编号, 详情, len(目录))
     候选信息 = 找书候选 if isinstance(找书候选, dict) else {}
-    详情字数 = 提取有效番茄字数(书籍信息.get("word_count"))
+    详情字数 = _番茄详情字数(详情)
     候选字数 = 提取有效番茄字数(
         候选信息.get("word_count"),
         候选信息.get("word_number"),
         候选信息.get("words"),
     )
-    if 详情字数 <= 0 and 候选字数 > 0:
+    if 详情字数 <= 0 and 候选字数 > 0 and str(候选信息.get("book_id")) == str(书籍编号):
         书籍信息["word_count"] = 格式化番茄字数(候选字数)
         详情字数 = 候选字数
     if 详情字数 <= 0:
-        精确字数 = 获取番茄同书精确字数(书籍编号, 详情, len(目录))
+        精确字数 = 获取番茄同书精确字数(
+            书籍编号, 详情, len(目录),
+            (获取番茄目录标题(目录元数据.get(章节["id"]) or {}, 0) for 章节 in 目录),
+        )
         if 精确字数 > 0:
             书籍信息["word_count"] = 格式化番茄字数(精确字数)
     return {"book_id": 书籍编号, "book_info": 书籍信息, "chapters": 目录}
@@ -4319,18 +4314,19 @@ async def 异步准备番茄下载数据(
     ]
     book_info = 规范化番茄书籍信息(str(书籍编号), detail, len(catalog))
     candidate = 找书候选 if isinstance(找书候选, dict) else {}
-    detail_words = 提取有效番茄字数(book_info.get("word_count"))
+    detail_words = _番茄详情字数(detail)
     candidate_words = 提取有效番茄字数(
         candidate.get("word_count"),
         candidate.get("word_number"),
         candidate.get("words"),
     )
-    if detail_words <= 0 and candidate_words > 0:
+    if detail_words <= 0 and candidate_words > 0 and str(candidate.get("book_id")) == str(书籍编号):
         book_info["word_count"] = 格式化番茄字数(candidate_words)
         detail_words = candidate_words
     if detail_words <= 0:
         exact_words = await 异步获取番茄同书精确字数(
-            client, str(书籍编号), detail, len(catalog)
+            client, str(书籍编号), detail, len(catalog),
+            (获取番茄目录标题(metadata.get(chapter["id"]) or {}, 0) for chapter in catalog),
         )
         if exact_words > 0:
             book_info["word_count"] = 格式化番茄字数(exact_words)
@@ -4616,11 +4612,7 @@ def 规范化番茄书籍信息(
     书籍编号: str, 详情: dict[str, Any], 章节数: int
 ) -> dict[str, Any]:
     详情 = 详情 if isinstance(详情, dict) else {}
-    字数 = 提取有效番茄字数(
-        详情.get("word_number"),
-        详情.get("word_count"),
-        详情.get("words"),
-    )
+    字数 = _番茄详情字数(详情)
     return {
         "book_id": 书籍编号,
         "title": 清理番茄网页文本(
