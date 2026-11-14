@@ -3,25 +3,24 @@
 登录页样式 = """
     :root {
       color-scheme: light;
-      --canvas: #f4f1fc;
-      --canvas-warm: #fff1e4;
-      --surface: #fffdfd;
-      --stage: #f8f5ff;
-      --stage-tint: #eae3fb;
-      --ink: #27213d;
-      --muted: #685f7b;
-      --line: #e5ddef;
-      --field-line: #d7cce7;
-      --field: #faf8fd;
-      --accent: #6659c1;
-      --accent-hover: #5646aa;
+      --canvas: #f6f5f8;
+      --surface: #ffffff;
+      --stage: #f5f3f8;
+      --ink: #282632;
+      --muted: #696574;
+      --line: #e6e3eb;
+      --field-line: #d4cedf;
+      --field: #f5f3f8;
+      --accent: #6554b2;
+      --button-fill: #6554b2;
+      --button-hover: #54439b;
       --on-accent: #fff;
-      --accent-soft: #eee9fb;
-      --peach: #ffdfc4;
-      --peach-ink: #864622;
+      --accent-soft: #eeeaf8;
+      --peach: #f8eee5;
+      --peach-ink: #865d40;
       --danger: #a52649;
-      --focus: #6659c130;
-      --shadow: 0 20px 50px #3f29661a, 0 3px 9px #3f296609;
+      --focus: #6554b22b;
+      --shadow: 0 6px 22px #2826320a;
       --art-line: #8d77a5;
       --art-paper: #fff9ee;
       --art-lavender: #d3c3ed;
@@ -31,25 +30,24 @@
     }
     :root[data-theme="dark"] {
       color-scheme: dark;
-      --canvas: #201a2d;
-      --canvas-warm: #352635;
-      --surface: #2d263d;
-      --stage: #251f35;
-      --stage-tint: #322548;
-      --ink: #f6f0ff;
-      --muted: #c5b8d5;
-      --line: #453954;
-      --field-line: #5b4c6d;
-      --field: #251f33;
-      --accent: #c6b7ff;
-      --accent-hover: #d7caff;
-      --on-accent: #261c3f;
-      --accent-soft: #3c3155;
-      --peach: #503246;
-      --peach-ink: #ffc9a8;
+      --canvas: #19171f;
+      --surface: #24212c;
+      --stage: #2b2735;
+      --ink: #eeeaf3;
+      --muted: #b1aabc;
+      --line: #3d3747;
+      --field-line: #595064;
+      --field: #2b2735;
+      --accent: #c1b0ef;
+      --button-fill: #7963c0;
+      --button-hover: #745cba;
+      --on-accent: #fff;
+      --accent-soft: #342c47;
+      --peach: #3a2e2b;
+      --peach-ink: #dfb99c;
       --danger: #ffb2c1;
-      --focus: #c6b7ff3b;
-      --shadow: 0 20px 50px #110b1d50, 0 3px 9px #110b1d38;
+      --focus: #c1b0ef30;
+      --shadow: 0 8px 26px #00000026;
       --art-line: #b7a0cf;
       --art-paper: #47394e;
       --art-lavender: #625079;
@@ -62,13 +60,11 @@
     body {
       margin: 0;
       color: var(--ink);
-      background:
-        radial-gradient(ellipse at 5% 0, var(--canvas-warm), transparent 42%),
-        radial-gradient(ellipse at 100% 14%, var(--stage-tint), transparent 47%),
-        var(--canvas);
+      background: var(--canvas);
       font: 14px/1.6 "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
+    ::selection { color: var(--ink); background: var(--accent-soft); }
     button, input, select { font: inherit; }
     button { cursor: pointer; }
     button:focus-visible, select:focus-visible {
@@ -157,19 +153,17 @@
       padding: clamp(28px, 5vw, 58px) 20px;
       overflow: hidden;
       border: 1px solid var(--line);
-      border-radius: 33px;
-      background:
-        radial-gradient(ellipse at 6% 87%, var(--canvas-warm), transparent 49%),
-        radial-gradient(ellipse at 100% 0, var(--stage-tint), transparent 53%),
-        var(--stage);
-      box-shadow: 0 14px 48px #36245012;
+      border-radius: 16px;
+      background: var(--stage);
+      box-shadow: none;
     }
     .login-stage::before {
       position: absolute;
       z-index: -1;
       inset: 15px;
       border: 1px solid var(--line);
-      border-radius: 24px;
+      border-color: transparent;
+      border-radius: 16px;
       content: "";
       pointer-events: none;
     }
@@ -197,7 +191,7 @@
       width: min(432px, 100%);
       padding: 30px clamp(21px, 4vw, 40px) 28px;
       border: 1px solid var(--line);
-      border-radius: 25px;
+      border-radius: 16px;
       background: var(--surface);
       box-shadow: var(--shadow);
     }
@@ -242,9 +236,10 @@
       min-height: 49px;
       padding: 11px 13px 11px 42px;
       border: 1px solid var(--field-line);
-      border-radius: 13px;
+      border-radius: 10px;
       background: var(--field);
       color: var(--ink);
+      caret-color: var(--accent);
       font-size: 16px;
       outline: none;
     }
@@ -281,14 +276,14 @@
       margin-top: 4px;
       padding: 10px 16px;
       border: 0;
-      border-radius: 13px;
+      border-radius: 10px;
       color: var(--on-accent);
-      background: var(--accent);
+      background: var(--button-fill);
       font-weight: 750;
       transition: background .18s ease, box-shadow .18s ease;
     }
     .login-button svg { width: 18px; height: 18px; }
-    .login-button:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 0 0 4px var(--focus); }
+    .login-button:hover:not(:disabled) { background: var(--button-hover); box-shadow: 0 3px 8px #2826321a; }
     .login-button:disabled { cursor: wait; opacity: .65; }
     .login-message { min-height: 20px; margin: 9px 0 0; color: var(--danger); font-size: 12px; }
     .login-note {
@@ -304,15 +299,15 @@
 
     @media (max-width: 760px) {
       .login-page { gap: 15px; padding: 18px 14px; }
-      .login-stage { min-height: 0; padding: 23px 16px; border-radius: 24px; }
-      .login-stage::before { inset: 8px; border-radius: 18px; }
+      .login-stage { min-height: 0; padding: 23px 16px; border-radius: 16px; }
+      .login-stage::before { inset: 8px; border-radius: 16px; }
       .login-art { display: none; }
     }
     @media (max-width: 410px) {
       .login-page { padding: 14px 12px; }
       .login-stage { padding: 0; border: 0; background: none; box-shadow: none; }
       .login-stage::before { display: none; }
-      .login-panel { padding-top: 22px; border-radius: 21px; }
+      .login-panel { padding-top: 22px; border-radius: 16px; }
       .login-panel-lights { margin-bottom: 16px; }
     }
 

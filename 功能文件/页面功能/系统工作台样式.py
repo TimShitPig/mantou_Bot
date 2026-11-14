@@ -44,8 +44,8 @@
       width: 24px; height: 24px; fill: none; stroke: currentColor;
       stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
     }
-    .studio-system-icon.is-peach { color: #8f4a32; background: #ffe5d6; }
-    .studio-system-icon.is-mint { color: #326859; background: #dff2e8; }
+    .studio-system-icon.is-peach { color: var(--studio-peach-ink); background: var(--studio-peach); }
+    .studio-system-icon.is-mint { color: var(--studio-mint-ink); background: var(--studio-mint); }
     .studio-resource h3 { margin: 0; font-size: 13px; color: var(--system-muted); }
     .studio-resource strong {
       margin-top: 4px; font-size: clamp(16px, 2.1vw, 24px);
@@ -75,7 +75,7 @@
     .studio-system .studio-help-intro {
       display: flex; align-items: center; justify-content: space-between; gap: 20px;
       min-height: 120px; padding: clamp(16px, 2.5vw, 26px); margin-bottom: 16px;
-      background: linear-gradient(116deg, var(--system-soft), var(--studio-card, #fffdfd) 72%, var(--system-soft));
+      background: var(--system-soft);
     }
     .studio-help-intro h2 { font-size: clamp(20px, 2.5vw, 27px); }
     .studio-help-intro p:not(.studio-kicker), .studio-system-description {

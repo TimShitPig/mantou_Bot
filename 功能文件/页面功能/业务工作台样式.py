@@ -54,8 +54,8 @@
       gap: var(--service-gap);
     }
     .studio-bot-workspace {
-      --bot-action: linear-gradient(115deg, #5b42b5, #3f56af);
-      --bot-action-hover: linear-gradient(115deg, #4d359c, #33499d);
+      --bot-action: var(--accent-fill);
+      --bot-action-hover: var(--accent-hover);
       display: grid;
       gap: clamp(14px, 2vw, 22px);
     }
@@ -68,15 +68,12 @@
       justify-content: space-between;
       gap: 14px 20px;
       padding: clamp(16px, 2.5vw, 28px);
-      border: 1px solid #b2a0ff5c;
-      border-radius: 17px;
+      border: 1px solid var(--studio-border);
+      border-radius: 14px;
       overflow: hidden;
-      color: #faf7ff;
-      background:
-        radial-gradient(ellipse at 83% -28%, #8666d6c4, transparent 64%),
-        radial-gradient(ellipse at 103% 110%, #236296a6, transparent 61%),
-        linear-gradient(115deg, #261943, #3a286f 66%, #263a69);
-      box-shadow: 0 10px 25px #33246933, inset 0 1px #e7dcff26;
+      color: var(--studio-ink);
+      background: var(--studio-wash);
+      box-shadow: none;
     }
     .studio-bot-identity::before,
     .studio-bot-identity::after {
@@ -87,10 +84,7 @@
     }
     .studio-bot-identity::before {
       inset: 0 0 0 50%;
-      background:
-        linear-gradient(90deg, transparent 0%, #ffffff12 100%),
-        repeating-linear-gradient(0deg, transparent 0 23px, #dce5ff17 23px 24px),
-        repeating-linear-gradient(90deg, transparent 0 23px, #dce5ff17 23px 24px);
+      background: none;
       mask-image: linear-gradient(90deg, transparent, #000);
     }
     .studio-bot-identity::after {
@@ -98,9 +92,9 @@
       right: -40px;
       width: 400px;
       height: 290px;
-      border: 1px solid #e1d1ff3d;
+      border: 1px solid transparent;
       border-radius: 50%;
-      box-shadow: 0 0 0 27px #d4c2ff0e, 0 0 0 59px #d4c2ff0e;
+      box-shadow: none;
       transform: rotate(-18deg);
     }
     .studio-bot-badge {
@@ -112,14 +106,14 @@
     .studio-bot-copy { min-width: 0; }
     .studio-bot-kicker {
       display: block;
-      color: #dcd1fb;
+      color: var(--studio-muted);
       font-size: 11px;
       font-weight: 700;
       letter-spacing: .08em;
     }
     #page-bot .studio-bot-badge h2 {
       margin: 2px 0 5px;
-      color: #fff;
+      color: var(--studio-ink);
       font-size: clamp(18px, 2.4vw, 25px);
       overflow-wrap: anywhere;
     }
@@ -128,28 +122,28 @@
       align-items: center;
       gap: 5px;
       padding: 2px 8px;
-      border: 1px solid #f0e7ff35;
+      border: 1px solid var(--studio-border);
       border-radius: 999px;
-      background: #1c153b72;
-      color: #e6ddfa;
+      background: var(--studio-card);
+      color: var(--studio-muted);
       font-size: 11px;
       font-weight: 650;
     }
-    .studio-bot-badge .bot-profile-status.online { color: #b8f6d9; }
+    .studio-bot-badge .bot-profile-status.online { color: var(--studio-mint-ink); }
     .studio-bot-badge .online::before {
-      background: #7be4b6;
-      box-shadow: 0 0 7px #7be4b69c;
+      background: var(--studio-mint-ink);
+      box-shadow: none;
     }
     #page-bot .studio-bot-badge .bot-avatar {
       --bot-avatar-size: clamp(47px, 6vw, 62px);
       flex: 0 0 var(--bot-avatar-size);
       width: var(--bot-avatar-size);
       height: var(--bot-avatar-size);
-      border: 2px solid #e7dfff;
-      background: #534099;
-      box-shadow: 0 0 0 4px #bda8ff3b, 0 0 23px #a18aff65;
+      border: 2px solid var(--studio-border);
+      background: var(--studio-accent-soft);
+      box-shadow: none;
     }
-    #page-bot .studio-bot-badge .avatar-face { color: #fff; font-size: 18px; }
+    #page-bot .studio-bot-badge .avatar-face { color: var(--studio-accent); font-size: 18px; }
     .studio-bot-facts {
       display: flex;
       flex-wrap: wrap;
@@ -159,12 +153,12 @@
       max-width: 100%;
       margin: 0;
       padding: 7px 11px;
-      border: 1px solid #f0e7ff35;
+      border: 1px solid var(--studio-border);
       border-radius: 9px;
-      background: #1c153b72;
+      background: var(--studio-card);
       font-size: 12px;
     }
-    .studio-bot-facts dt { color: #ded4f8; }
+    .studio-bot-facts dt { color: var(--studio-muted); }
     .studio-bot-facts dd { margin: 0; overflow-wrap: anywhere; font-weight: 680; font-variant-numeric: tabular-nums; }
     .studio-bot-tabs {
       display: grid;
@@ -196,10 +190,10 @@
     .studio-bot-tabs svg { width: 17px; height: 17px; flex: 0 0 auto; }
     .studio-bot-tabs button:hover { color: var(--studio-accent); background: var(--studio-accent-soft); }
     .studio-bot-tabs button[aria-selected="true"] {
-      border-color: #b9b1ff4d;
-      background: var(--bot-action);
-      color: #fff;
-      box-shadow: 0 3px 9px #4738aa4d, inset 0 1px #ffffff32;
+      border-color: var(--studio-border);
+      background: var(--studio-card);
+      color: var(--studio-accent);
+      box-shadow: none;
     }
     .studio-bot-tabs button:focus-visible,
     .studio-bot-panel:focus-visible,
@@ -211,7 +205,7 @@
     .studio-bot-panel[hidden] { display: none; }
     .studio-bot-panel > .studio-service-head {
       padding-left: 11px;
-      border-left: 3px solid var(--studio-accent);
+      border-left: 3px solid transparent;
     }
     .studio-bot-panel > .studio-service-head h3 { font-size: 18px; }
     @media (prefers-reduced-motion: no-preference) {
@@ -227,16 +221,13 @@
       align-items: start;
     }
     #basic-config-editor .config-group {
-      --bot-group-mark: #9d7ce5;
       min-width: 0;
       padding: clamp(13px, 1.7vw, 19px);
       border: 1px solid var(--studio-border);
-      border-top: 2px solid var(--bot-group-mark);
+      border-top: 2px solid var(--studio-border);
       border-radius: 13px;
-      background: linear-gradient(135deg, var(--studio-soft), var(--studio-card));
+      background: var(--studio-soft);
     }
-    #basic-config-editor [data-config-category="help_web_settings"] { --bot-group-mark: #78a6d9; }
-    #basic-config-editor [data-config-category="zlibrary_account_settings"] { --bot-group-mark: #dc9e7b; }
     #basic-config-editor .config-group h3 { margin: 0 0 12px; font-size: 15px; }
     #basic-config-editor .config-field label { font-size: 12px; }
     #basic-config-editor .config-field small { font-size: 11px; }
@@ -289,11 +280,11 @@
       padding: 14px;
       border-color: var(--studio-border);
       border-radius: 13px;
-      background: linear-gradient(140deg, var(--studio-soft), var(--studio-card));
+      background: var(--studio-card);
     }
     #page-bot .qq-reader-account.is-current {
       border-color: var(--studio-accent);
-      background: linear-gradient(140deg, var(--studio-accent-soft), var(--studio-card));
+      background: var(--studio-accent-soft);
     }
     #bot-panel-zlibrary {
       --ink: var(--studio-ink);
@@ -327,20 +318,20 @@
       --raised: var(--studio-soft);
       --primary: var(--studio-accent);
       --primary-soft: var(--studio-accent-soft);
-      border-radius: 18px;
+      border-radius: 14px;
       background: var(--studio-card);
-      box-shadow: var(--studio-shadow);
+      box-shadow: var(--studio-float-shadow);
     }
     body:not(.messages-workspace) .zlibrary-dialog .zlibrary-action.is-primary,
     #page-bot .zlibrary-action.is-primary {
-      background: #6254ad;
-      border-color: #6254ad;
+      background: var(--accent-fill);
+      border-color: var(--accent-fill);
       color: #fff;
     }
     body:not(.messages-workspace) .zlibrary-dialog .zlibrary-action.is-primary:hover:not(:disabled),
     #page-bot .zlibrary-action.is-primary:hover:not(:disabled) {
-      background: #514592;
-      border-color: #514592;
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
     }
 
     .studio-novel-settings { display: grid; gap: 13px; }
@@ -475,14 +466,14 @@
     #page-pans .pan-add-account {
       min-height: 38px;
       padding-inline: 14px;
-      border-color: #6254ad;
+      border-color: var(--accent-fill);
       border-radius: 10px;
-      background: #6254ad;
+      background: var(--accent-fill);
       color: #fff;
     }
     #page-pans .pan-add-account:hover:not(:disabled) {
-      background: #514592;
-      border-color: #514592;
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
     }
     #page-pans .pan-object-grid {
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 195px), 1fr));

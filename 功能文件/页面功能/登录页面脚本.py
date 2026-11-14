@@ -12,7 +12,7 @@
         const root = document.documentElement;
         if (root.dataset.theme !== next) root.dataset.theme = next;
         const meta = document.querySelector('meta[name="theme-color"]');
-        const color = next === 'dark' ? '#201a2d' : '#f4f1fc';
+        const color = next === 'dark' ? '#19171f' : '#f6f5f8';
         if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color);
       };
       let requestedTheme = readThemePreference();

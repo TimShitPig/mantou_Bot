@@ -2,114 +2,122 @@
 
 消息记录皮肤 = """
     :root body.messages-workspace {
-      --bg:#f4f1fc;
-      --ink:#28233c;
-      --muted:#605975;
-      --soft:#6b6380;
-      --line:#e1daee;
-      --panel:#fffdfd;
-      --raised:#f4f0fa;
-      --input:#f6f2fb;
-      --hover:#eee8f9;
-      --primary:#6659c1;
-      --primary-dark:#5346a6;
-      --primary-soft:#ede8fc;
-      --accent-fill:#6659c1;
-      --accent-hover:#5748ac;
-      --rail:#eee9fa;
-      --msg-list-bg:#f9f6fd;
-      --msg-head-bg:#fffdfd;
-      --msg-composer-bg:#fffdfd;
-      --msg-chat-active-bg:#e8e0fb;
-      --msg-surface:radial-gradient(ellipse at 94% 0%, #fff1e8 0, transparent 39%),
-                    linear-gradient(140deg,#f4f1fc,#faf8fe 62%,#f6f2fc);
-      --msg-incoming-fill:linear-gradient(145deg,#fffdfd,#faf7ff);
-      --msg-bubble-line:#e6deef;
-      --msg-file-fill:linear-gradient(145deg,#fffdfd,#f9f5ff);
-      --msg-file-line:#e1d7ef;
-      --msg-self-fill:linear-gradient(145deg,#ebe6ff,#e4dcfb);
-      --msg-self-bg:#e8e1fc;
-      --msg-self-ink:#322658;
-      --msg-self-line:#d5c8ee;
-      --msg-self-inset:#f4efff;
-      --msg-self-inset-hover:#ebe4fb;
-      --msg-self-muted:#5d527b;
-      --msg-self-link:#504197;
-      --msg-scroll-track:#f1ecf8;
-      --msg-scroll-thumb:#9c8eaf;
-      --msg-scroll-thumb-hover:#756585;
-      --msg-control-ink:#55486e;
-      --msg-quote-line:#a298d4;
-      --msg-quote-fill:#f3eefb;
-      --msg-list-fill:linear-gradient(160deg,#fffafd,#f7f3fc 48%,#fbf9ff);
-      --msg-button-fill:linear-gradient(135deg,#7263cd,#5c4db8);
-      --msg-button-hover:linear-gradient(135deg,#6555bf,#5241a7);
-      --msg-owner-fill:#fcebd9;
-      --msg-owner-ink:#82552c;
-      --msg-overlay:#2e224e59;
-      --msg-document-light:#b2a4ed;
-      --msg-document-mid:#8c7ad9;
-      --msg-document-dark:#7161c2;
-      --msg-document-fold:#6454ae;
-      --msg-document-lines:#fff8ff;
-      --shadow:0 9px 28px #44366324;
+      --bg:#f6f5f8;
+      --ink:#282632;
+      --muted:#696574;
+      --soft:#696574;
+      --line:#e6e3eb;
+      --panel:#ffffff;
+      --raised:#f5f3f8;
+      --input:#f5f3f8;
+      --hover:#eeebf4;
+      --primary:#6554b2;
+      --primary-dark:#54439b;
+      --primary-soft:#eeeaf8;
+      --accent-fill:#6554b2;
+      --accent-hover:#54439b;
+      --rail:#f5f3f8;
+      --msg-list-bg:#ffffff;
+      --msg-head-bg:#ffffff;
+      --msg-composer-bg:#ffffff;
+      --msg-chat-active-bg:#eeeaf8;
+      --msg-surface:#f6f5f8;
+      --msg-incoming-fill:#ffffff;
+      --msg-bubble-line:#e6e3eb;
+      --msg-file-fill:#ffffff;
+      --msg-file-line:#e6e3eb;
+      --msg-self-fill:#eeeaf8;
+      --msg-self-bg:#eeeaf8;
+      --msg-self-ink:#362c50;
+      --msg-self-line:#ded5ef;
+      --msg-self-inset:#f6f3fc;
+      --msg-self-inset-hover:#e6def4;
+      --msg-self-muted:#6b5e82;
+      --msg-self-link:#554399;
+      --msg-scroll-track:#f1eef5;
+      --msg-scroll-thumb:#9b91ab;
+      --msg-scroll-thumb-hover:#746980;
+      --msg-control-ink:#655f72;
+      --msg-quote-line:#aa9cc9;
+      --msg-quote-fill:#f5f3f8;
+      --msg-list-fill:#ffffff;
+      --msg-button-fill:#6554b2;
+      --msg-button-hover:#54439b;
+      --msg-owner-fill:#f7ede2;
+      --msg-owner-ink:#855b37;
+      --msg-overlay:#21182f55;
+      --msg-document-light:#baaddb;
+      --msg-document-mid:#9280bd;
+      --msg-document-dark:#74639c;
+      --msg-document-fold:#615084;
+      --msg-document-lines:#ffffff;
+      --shadow:0 8px 28px #28203214;
     }
     :root[data-theme="dark"] body.messages-workspace {
-      --bg:#211b2d;
-      --ink:#f5effc;
-      --muted:#d0c4e1;
-      --soft:#b8accb;
-      --line:#463a57;
-      --panel:#2b2238;
-      --raised:#352a46;
-      --input:#31273f;
-      --hover:#3b2e4e;
-      --primary:#c6b7ff;
-      --primary-dark:#d4c8ff;
-      --primary-soft:#42355b;
-      --accent-fill:#7660c3;
-      --accent-hover:#7964c4;
-      --rail:#292034;
-      --msg-list-bg:#292136;
-      --msg-head-bg:#2a2237;
-      --msg-composer-bg:#2b2339;
-      --msg-chat-active-bg:#44365e;
-      --msg-surface:radial-gradient(ellipse at 94% 0%, #372839 0, transparent 48%),
-                    linear-gradient(140deg,#211b2d,#292037 66%,#251d33);
-      --msg-incoming-fill:linear-gradient(145deg,#392e4a,#34293f);
-      --msg-bubble-line:#4a3c58;
-      --msg-file-fill:linear-gradient(145deg,#392e4a,#342a43);
-      --msg-file-line:#4f405f;
-      --msg-self-fill:linear-gradient(145deg,#554383,#48366f);
-      --msg-self-bg:#4e3c78;
-      --msg-self-ink:#faf4ff;
-      --msg-self-line:#675294;
-      --msg-self-inset:#40315f;
-      --msg-self-inset-hover:#47366b;
-      --msg-self-muted:#e4d9f4;
-      --msg-self-link:#eee1ff;
-      --msg-scroll-track:#30263f;
-      --msg-scroll-thumb:#9787ad;
-      --msg-scroll-thumb-hover:#bdabd0;
-      --msg-control-ink:#d9cce8;
-      --msg-quote-line:#9580ba;
-      --msg-quote-fill:#30263e;
-      --msg-list-fill:linear-gradient(155deg,#30263e,#292136 70%);
-      --msg-button-fill:linear-gradient(135deg,#7460c2,#6b52b6);
-      --msg-button-hover:linear-gradient(135deg,#7964c4,#735bbe);
-      --msg-owner-fill:#503748;
-      --msg-owner-ink:#ffd1ad;
-      --msg-overlay:#120c1cb3;
-      --msg-document-light:#a991e5;
-      --msg-document-mid:#8771cd;
-      --msg-document-dark:#7159bb;
-      --msg-document-fold:#644da8;
-      --msg-document-lines:#fff8ff;
-      --shadow:0 9px 28px #10091670;
+      --bg:#19171f;
+      --ink:#eeeaf3;
+      --muted:#b1aabc;
+      --soft:#b1aabc;
+      --line:#3d3747;
+      --panel:#24212c;
+      --raised:#2b2735;
+      --input:#2b2735;
+      --hover:#332d40;
+      --primary:#c1b0ef;
+      --primary-dark:#d4c6f6;
+      --primary-soft:#342c47;
+      --accent-fill:#7963c0;
+      --accent-hover:#745cba;
+      --rail:#201d28;
+      --msg-list-bg:#24212c;
+      --msg-head-bg:#24212c;
+      --msg-composer-bg:#24212c;
+      --msg-chat-active-bg:#342c47;
+      --msg-surface:#19171f;
+      --msg-incoming-fill:#2b2735;
+      --msg-bubble-line:#3d3747;
+      --msg-file-fill:#2b2735;
+      --msg-file-line:#3d3747;
+      --msg-self-fill:#413458;
+      --msg-self-bg:#413458;
+      --msg-self-ink:#eeeaf3;
+      --msg-self-line:#54426f;
+      --msg-self-inset:#342942;
+      --msg-self-inset-hover:#453758;
+      --msg-self-muted:#c6b8d8;
+      --msg-self-link:#d8c8ff;
+      --msg-scroll-track:#24212c;
+      --msg-scroll-thumb:#83778f;
+      --msg-scroll-thumb-hover:#a99cba;
+      --msg-control-ink:#bbb3c9;
+      --msg-quote-line:#76618f;
+      --msg-quote-fill:#24212c;
+      --msg-list-fill:#24212c;
+      --msg-button-fill:#7963c0;
+      --msg-button-hover:#745cba;
+      --msg-owner-fill:#49382f;
+      --msg-owner-ink:#e8c19e;
+      --msg-overlay:#100d16a6;
+      --msg-document-light:#b9a8e1;
+      --msg-document-mid:#9580c4;
+      --msg-document-dark:#7963a6;
+      --msg-document-fold:#65508f;
+      --msg-document-lines:#f9f5ff;
+      --shadow:0 10px 32px #00000040;
     }
 
     /* 仅覆盖硬编码的旧色值；布局尺寸、字体和可见性由消息工作区样式负责。 */
     :root body.messages-workspace .chat-list-panel { background:var(--msg-list-fill); }
+    :root body.messages-workspace .msg-head { background:var(--msg-head-bg); }
+    :root body.messages-workspace .msg-composer { background:var(--msg-composer-bg); }
+    :root body.messages-workspace .msg-chat.active,
+    :root body.messages-workspace .msg-chat.pinned.active,
+    :root body.messages-workspace .msg-bubble,
+    :root body.messages-workspace .msg-file-card { box-shadow:none; }
+    :root body.messages-workspace ::selection { background:var(--primary-soft); color:var(--ink); }
+    :root body.messages-workspace input,
+    :root body.messages-workspace textarea,
+    :root body.messages-workspace .msg-editor { caret-color:var(--primary); }
     :root[data-theme] body.messages-workspace .msg-tool-btn,
     :root[data-theme] body.messages-workspace .msg-file-action { color:var(--msg-control-ink); }
     :root[data-theme] body.messages-workspace .msg-tool-btn:hover,
@@ -161,7 +169,7 @@
       background:var(--msg-button-fill);
       border-color:var(--accent-fill);
       color:#fff;
-      box-shadow:inset 0 1px 0 #fff3,0 1px 3px #33236626;
+      box-shadow:none;
     }
     :root body.messages-workspace #msg-send:not(:disabled):hover { background:var(--msg-button-hover); border-color:var(--accent-hover); }
     :root body.messages-workspace .msg-new-messages,

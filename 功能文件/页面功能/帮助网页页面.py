@@ -20,7 +20,7 @@ from .帮助网页脚本 import 控制台脚本
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f1fc">
+  <meta name="theme-color" content="#f6f5f8">
   <title>馒头控制台</title>
   <script>
     (() => {

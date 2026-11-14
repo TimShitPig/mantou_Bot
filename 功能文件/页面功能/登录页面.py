@@ -8,7 +8,7 @@ from .登录页面脚本 import 登录页脚本
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f1fc">
+  <meta name="theme-color" content="#f6f5f8">
   <title>管理员登录 · 馒头工作台</title>
   <script>
     (() => {
@@ -16,7 +16,7 @@ from .登录页面脚本 import 登录页脚本
         const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
         document.documentElement.dataset.themePreference = preference;
         document.documentElement.dataset.theme = preference;
-        if (preference === 'dark') document.querySelector('meta[name="theme-color"]').content = '#201a2d';
+        if (preference === 'dark') document.querySelector('meta[name="theme-color"]').content = '#19171f';
       } catch (_) { document.documentElement.dataset.theme = 'light'; }
     })();
   </script>
