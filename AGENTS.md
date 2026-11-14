@@ -179,6 +179,8 @@
 
 ### 小说平台协议与下载
 
+- 连城协议保留在 `小说功能/小说/连城小说.py`，使用 6.0.102 App 固定基址 `http://a.lc1001.com`，游客 uID/token=0，不读取或内置账号。搜索、详情、目录、公开正文分别使用 `/app/query/keybooks`、`/app/info/bookindex`、`/app/info/bookcata`、`/app/book/pubchapter`；全部参数在 query，POST 空正文。签名方法与实际 HTTP 方法独立维护，公开正文实际 POST、签名 GET，按指定字段顺序直接拼接，再作 Java URLEncoder 和 MD5。仅 RETCODE=200 为成功，DATA 按新字段解析；目录仅下载明确 ISVC=0 的公开章，遍历全部卷保留后部免费番外，正文校验 BID、CNAME 及存在时的 CID，不将占位提示当正文。复用 PyCryptodome DES-CBC、严格 Base64/PKCS7/UTF-8，不复制手写 DES 或独立 CLI；固定端点不跟随重定向，成功响应完整读取且至多4 MiB，仅瞬时网络及408/500/502/503/504最多三次尝试，取消传播，搜索失败向聚合搜索传递。连城和酷匠均逐章请求、200 路异步并发，同本书的详情、目录、正文复用一个 HTTP 会话；保留现有显示、TXT、缓存与交付流程。
+
 - 酷匠协议保留在 `小说功能/小说/酷匠小说.py`，使用 3.9.69 App 公共头和游客空 auth-code；设备头为 uid + Base64(Android ID)，不硬编码账号。搜索使用 `/v1/book/search202107` 的 `body.list`，详情/目录仅接受 result=0，下载逐章调用 `/v1/book/cache_chapter`，仅 result=2 且章节编号匹配、正文非空才成功；订阅/预览与其他业务拒绝不重试，不把预览当完整正文。正文按 a2o@ 分隔动态 IV 和密文，复用 PyCryptodome AES-CBC、严格 PKCS7、Base64 和 GZIP；不复制手写 AES 或独立 CLI。创作状态只取已核实 fullflag，未知不套用 status/show_status；保持现有提示、TXT、缓存和交付。固定 App HTTPS 请求不跟随重定向，响应完整读取且至多4 MiB；仅瞬时网络及408/500/502/503/504最多三次尝试，取消传播，业务失败向聚合搜索传递，日志仅固定分类和数字码。
 
 - 话本下载提示和 TXT 头部共用规范化后的字数展示：原始整数达到 10000 时换算为万字，最多两位小数并去掉末尾零；不足 10000 显示整数字数，零、缺失及无效值保持未知。仅转换话本展示字段，不修改接口原始整数或其他平台格式。
