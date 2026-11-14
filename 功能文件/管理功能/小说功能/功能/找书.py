@@ -984,7 +984,7 @@ def 排序找书结果(
     关键词: str,
     搜索类型: str = "auto",
 ) -> list[dict[str, Any]]:
-    """按书名/作者意图、匹配字数和覆盖率过滤排序，无直接关系的候选不展示。"""
+    """过滤无关候选后按平台分组，同一平台按书名/作者相关度排序。"""
     if not 结果:
         return []
     全部评估 = [_评估找书项(项, 关键词) for 项 in 结果]
@@ -1029,6 +1029,8 @@ def 排序找书结果(
         共识平台数 = max(1, int(项.get("_source_count") or 1))
         有效作者 = 1 if 作者规范 not in 无效作者名称 else 0
         return (
+            _平台优先级值(项.get("platform")),
+            str(项.get("platform") or ""),
             int(项.get("_match_tier") or 0),
             float(项.get("_match_coverage") or 0),
             int(项.get("_match_chars") or 0),
@@ -1039,7 +1041,6 @@ def 排序找书结果(
             平台内相对热度(项),
             有效作者,
             -len(标题规范),
-            _平台优先级值(项.get("platform")),
         )
 
     筛选后.sort(key=排序键, reverse=True)
@@ -2102,16 +2103,16 @@ async def 过滤章节单独付费QQ阅读搜索结果(
 
 
 def _平台优先级值(平台: Any) -> int:
-    """跨平台同书优先：主流平台优先，新增平台作为后置候选。"""
+    """平台展示和同书择优顺序；QQ阅读在QQ浏览器之前。"""
     return {
         "番茄": 11,
         "七猫": 10,
         "书旗": 9,
         "塔读": 8,
         "追书": 7,
-        "QQ浏览器": 6,
-        "米读": 5,
-        "QQ阅读": 4,
+        "QQ阅读": 6,
+        "QQ浏览器": 5,
+        "米读": 4,
         "得间": 3,
         "点众": 2,
         "百度": 1,
@@ -2542,7 +2543,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v15-fanqie-novel-metadata",
+        tuple(_拆分查询词(关键词)), "search-v16-platform-order",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
