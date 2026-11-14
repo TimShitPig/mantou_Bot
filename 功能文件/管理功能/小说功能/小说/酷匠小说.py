@@ -172,12 +172,24 @@ async def _请求(
     *,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
+    截止时间: float | None = None,
+    单次超时: float | None = None,
 ) -> dict[str, Any]:
     last: _酷匠请求错误 | None = None
     for attempt in range(酷匠重试次数):
+        请求选项: dict[str, Any] = {}
+        if 截止时间 is not None:
+            剩余 = 截止时间 - asyncio.get_running_loop().time()
+            if 剩余 <= 0:
+                raise _酷匠请求错误("timeout")
+            时限 = min(剩余, 单次超时 or 剩余)
+            请求选项["timeout"] = aiohttp.ClientTimeout(
+                total=时限, connect=min(3, 时限), sock_connect=min(3, 时限), sock_read=时限
+            )
         try:
             async with session.get(
-                酷匠基础地址 + path, params=params, headers=headers, allow_redirects=False
+                酷匠基础地址 + path, params=params, headers=headers,
+                allow_redirects=False, **请求选项,
             ) as response:
                 if response.status != 200:
                     raise _酷匠请求错误(
@@ -205,7 +217,12 @@ async def _请求(
                 "timeout" if isinstance(exc, asyncio.TimeoutError) else "network_error"
             )
         if attempt + 1 < 酷匠重试次数:
-            await asyncio.sleep(0.2 * (attempt + 1))
+            退避 = 0.2 * (attempt + 1)
+            if 截止时间 is not None:
+                剩余 = 截止时间 - asyncio.get_running_loop().time()
+                if 剩余 <= 退避:
+                    raise last or _酷匠请求错误("timeout")
+            await asyncio.sleep(退避)
     raise last or _酷匠请求错误("network_error")
 
 
@@ -510,13 +527,28 @@ def 获取酷匠小说回复流(
     return 生成酷匠下载回复流(event, source, config) if source else None
 
 
-async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+async def 搜索小说(
+    keyword: str, *, 需要数量: int = 20,
+    会话: aiohttp.ClientSession | None = None, 截止时间: float | None = None,
+) -> list[dict[str, Any]]:
     keyword = str(keyword or "").strip()
     if not keyword:
         return []
+    当前截止 = asyncio.get_running_loop().time() + 10
+    截止时间 = min(当前截止, 截止时间) if 截止时间 is not None else 当前截止
+
+    async def 查询(session: aiohttp.ClientSession) -> dict[str, Any]:
+        return await _请求(
+            session, "/search202107", params={"keyword": keyword},
+            截止时间=截止时间, 单次超时=5,
+        )
+
     try:
-        async with 创建酷匠HTTP会话(4) as session:
-            data = await _请求(session, "/search202107", params={"keyword": keyword})
+        if 会话 is None:
+            async with 创建酷匠HTTP会话(4) as session:
+                data = await 查询(session)
+        else:
+            data = await 查询(会话)
         if not _成功(data):
             raise _酷匠请求错误("business_error", code=_业务码(data))
         body = data.get("body")

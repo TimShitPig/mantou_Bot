@@ -4261,7 +4261,7 @@ async def 获取参考书籍详情(
     if session is None:
         async with 创建QQ阅读HTTP会话(concurrency=2) as local_session:
             return await 获取参考书籍详情(book_id, local_session)
-    await 确保QQ阅读密钥池(session)
+    load_config_once()
     async with session.get(
         QQ阅读详情地址,
         params={"bid": book_id, "types": "1,2,3,4,5"},
@@ -4565,7 +4565,7 @@ async def 获取参考书籍目录(
     if session is None:
         async with 创建QQ阅读HTTP会话(concurrency=2) as local_session:
             return await 获取参考书籍目录(book_id, local_session)
-    await 确保QQ阅读密钥池(session)
+    load_config_once()
     params = {
         "bookId": book_id,
         "type": "0",
@@ -4673,7 +4673,7 @@ async def 获取参考出版书目录(
         concurrency = max(1, min(QQ阅读批量最大动态并发数, (total + 199) // 200))
         async with 创建QQ阅读HTTP会话(concurrency=concurrency) as local_session:
             return await 获取参考出版书目录(book_id, total, local_session)
-    await 确保QQ阅读密钥池(session)
+    load_config_once()
     config = ConfigManager.get_instance()
     chapter_ids = [str(index) for index in range(1, total + 1)]
     batches = [chapter_ids[start : start + 200] for start in range(0, total, 200)]
