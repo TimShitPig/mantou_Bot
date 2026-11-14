@@ -1058,17 +1058,14 @@ def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") ->
             "is_over", "is_finish", "finish", "completed", "isEnd", "isSerial", "is_serial",
         )
         原始状态 = value.get("_search_status")
+        if platform == "番茄" and 番茄小说 is not None:
+            for 来源 in (value, 原始状态 if isinstance(原始状态, dict) else {}):
+                末章状态 = 番茄小说.提取番茄末章状态标签(来源)
+                if 末章状态 != "未知":
+                    return 末章状态
         已知状态: set[str] = set()
         for 来源 in (value, 原始状态 if isinstance(原始状态, dict) else {}):
             for 键 in 字段:
-                # 番茄阅读书的 book_status 数值在连载和完结样本中相同。
-                if (
-                    platform == "番茄" and 键 == "book_status"
-                    and str(来源.get("genre_type")) == "0"
-                    and str(来源.get("creation_status")) in {"0", "1", "2", "3", "4"}
-                    and str(来源.get(键)).strip().isdigit()
-                ):
-                    continue
                 状态 = 规范化找书状态(来源.get(键), platform=platform, field=键)
                 if 状态 != "未知":
                     已知状态.add(状态)
@@ -1093,7 +1090,6 @@ def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") ->
     枚举: dict[tuple[str, str], dict[str, str]] = {
         ("番茄", "creation_status"): {"0": "完结", "2": "完结", "1": "连载", "3": "连载", "4": "连载"},
         ("番茄", "status"): {"0": "完结", "2": "完结", "1": "连载", "3": "连载", "4": "连载"},
-        ("番茄", "book_status"): {"1": "完结", "2": "完结", "0": "连载", "3": "连载", "4": "连载"},
         ("书旗", "state"): {"1": "连载", "2": "完结"},
         ("晋江", "novelstep"): {"1": "连载", "2": "完结"},
         ("得间", "completestate"): {"y": "完结", "n": "连载"},
@@ -1158,8 +1154,10 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
         book.get("word_number"), book.get("word_count"), book.get("words"),
     )
     热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
+    状态 = 规范化找书状态(book, platform="番茄")
     return {
-        "status": 规范化找书状态(book, platform="番茄"),
+        "status": 状态,
+        "_番茄末章待核验": str(book.get("genre_type")) == "1" and 状态 == "连载",
         "platform": "番茄",
         "book_id": book_id,
         "title": title,
@@ -2544,7 +2542,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v14-fanqie-word-count",
+        tuple(_拆分查询词(关键词)), "search-v15-fanqie-novel-metadata",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2606,13 +2604,17 @@ def _获取找书分页(会话: dict[str, Any]) -> tuple[list[dict[str, Any] | N
 
 
 async def _补全本页番茄状态(会话: dict[str, Any]) -> None:
-    """只补查本页状态未知的番茄书，超时时保留已有结果。"""
+    """本页状态或字数缺失时补查同书及官方原著关联，超时保留已有结果。"""
     if 番茄小说 is None:
         return
     当前页, _, _ = _获取找书分页(会话)
     待补项 = [
         项 for 项 in 当前页
-        if 项 and 项["platform"] == "番茄" and 项.get("status") == "未知"
+        if 项 and 项["platform"] == "番茄"
+        and (
+            项.get("status") == "未知" or 项.get("_番茄末章待核验")
+            or not 项.get("word_count")
+        )
         and not 项.get("_番茄详情已核验")
     ]
     if not 待补项:
@@ -2634,18 +2636,25 @@ async def _补全本页番茄状态(会话: dict[str, Any]) -> None:
             return
 
         状态 = 规范化找书状态(详情, platform="番茄")
-        if 状态 == "未知":
-            # 仅使用明确的状态标签，例如「标题（已完结）」，不从普通章名猜测。
-            章名 = unicodedata.normalize("NFKC", 清理文本(详情.get("last_chapter_title")))
-            标签 = re.search(r"[（(【\[]((?:已)?完结|连载中)[）)】\]]$", 章名)
-            if 标签:
-                状态 = 规范化找书状态(标签.group(1))
-        项["status"] = 状态
+        if 状态 != "未知":
+            项["status"] = 状态
+        # 先保留已取得的状态，目录或原著补查超时不丢失当前页结果。
+        补查完成 = True
+        if 状态 == "未知" or (
+            not 番茄小说.提取有效番茄字数(
+                详情.get("word_number"), 详情.get("word_count"), 详情.get("words"),
+            ) and not 项.get("word_count")
+        ):
+            详情 = await 番茄小说.异步补全番茄书籍展示元数据(客户端, 书号, 详情)
+            补查完成 = 详情.get("_番茄展示补查完成") is True
+            状态 = 规范化找书状态(详情, platform="番茄")
+            if 状态 != "未知":
+                项["status"] = 状态
         if not 项.get("word_count"):
             项["word_count"] = 番茄小说.提取有效番茄字数(
                 详情.get("word_number"), 详情.get("word_count"), 详情.get("words"),
             )
-        项["_番茄详情已核验"] = True
+        项["_番茄详情已核验"] = 补查完成
 
     try:
         async with asyncio.timeout(2.5):

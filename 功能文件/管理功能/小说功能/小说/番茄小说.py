@@ -2350,6 +2350,236 @@ def _番茄书籍身份(详情: Dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _番茄有效书籍编号(值: Any, 当前编号: str = "") -> str:
+    编号 = str(值 or "").strip()
+    return 编号 if re.fullmatch(r"[0-9]{8,32}", 编号) and 编号 != 当前编号 else ""
+
+
+def _番茄有效创作状态(详情: Dict[str, Any]) -> bool:
+    return str(详情.get("creation_status")) in {"0", "1", "3"}
+
+
+def _番茄展示元数据已完整(详情: Dict[str, Any]) -> bool:
+    return _番茄详情字数(详情) > 0 and (
+        _番茄有效创作状态(详情) or 提取番茄末章状态标签(详情) != "未知"
+    )
+
+
+def _番茄关联资料为文字书(资料: Any) -> bool:
+    if not isinstance(资料, dict):
+        return False
+    类型 = str(资料.get("genre_type") if 资料.get("genre_type") is not None else "").strip()
+    return 类型 == "0" or (not 类型 and str(资料.get("is_ebook")) == "1")
+
+
+def _番茄目录展示资料(
+    书籍编号: str, 详情: Dict[str, Any], 响应: Any
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    if not isinstance(响应, dict) or str(响应.get("code")) != "0":
+        return {}, {}
+    数据 = 响应.get("data")
+    自身 = 数据.get("book_info") if isinstance(数据, dict) else None
+    if not isinstance(自身, dict) or str(自身.get("book_id") or "").strip() != 书籍编号:
+        return {}, {}
+    原编号 = str(详情.get("book_id") or "").strip()
+    if 原编号 and 原编号 != 书籍编号:
+        return {}, {}
+    原身份, 新身份 = _番茄书籍身份(详情), _番茄书籍身份(自身)
+    if any(原 and 原 not in {"未知", "unknown"} and 原 != 新 for 原, 新 in zip(原身份, 新身份)):
+        return {}, {}
+    额外 = 数据.get("page_extra_info")
+    return 自身, 额外 if isinstance(额外, dict) else {}
+
+
+def _番茄目录缺少展示资料(响应: Any, 书籍编号: str) -> bool:
+    数据 = 响应.get("data") if isinstance(响应, dict) else None
+    return (
+        isinstance(响应, dict) and str(响应.get("code")) == "0"
+        and isinstance(数据, dict) and not 数据.get("book_info")
+        and _番茄目录展示章数(响应, 书籍编号) > 0
+    )
+
+
+def _合并番茄自身展示元数据(详情: Dict[str, Any], 自身: Dict[str, Any]) -> Dict[str, Any]:
+    结果 = dict(详情)
+    for 字段 in (
+        "book_id", "book_name", "title", "author", "author_name", "creation_status",
+        "genre_type", "genre", "type", "is_ebook", "is_real_person", "have_stt",
+        "chapter_number", "serial_count", "last_chapter_title",
+    ):
+        if 结果.get(字段) in (None, "") and 自身.get(字段) not in (None, ""):
+            结果[字段] = 自身[字段]
+    if not _番茄有效创作状态(结果) and _番茄有效创作状态(自身):
+        结果["creation_status"] = 自身["creation_status"]
+    if not _番茄详情字数(结果) and _番茄详情字数(自身):
+        结果["word_number"] = _番茄详情字数(自身)
+    if 提取番茄末章状态标签(结果) == "未知" and 提取番茄末章状态标签(自身) != "未知":
+        结果["last_chapter_title"] = 自身["last_chapter_title"]
+    return 结果
+
+
+def _番茄关联小说资料(
+    书籍编号: str, 详情: Dict[str, Any], 自身: Dict[str, Any], 额外: Dict[str, Any]
+) -> tuple[str, Dict[str, Any]]:
+    if str(详情.get("book_id") or 书籍编号).strip() != 书籍编号:
+        return "", {}
+    映射 = 自身.get("related_ids_map") or 详情.get("related_ids_map")
+    文字书号 = 映射.get("tts") if isinstance(映射, dict) else None
+    嵌套列表 = [自身.get("related_novel_info"), 详情.get("related_novel_info")]
+    候选 = [
+        额外.get("related_novel_book_id"), 自身.get("related_novel_bookid"),
+        文字书号[0] if isinstance(文字书号, list) and 文字书号 else None,
+        详情.get("related_novel_bookid"),
+        *(资料.get("book_id") for 资料 in 嵌套列表 if isinstance(资料, dict)),
+    ]
+    关联编号 = next((编号 for 值 in 候选 if (编号 := _番茄有效书籍编号(值, 书籍编号))), "")
+    if not 关联编号:
+        return "", {}
+    嵌套 = next((资料 for 资料 in 嵌套列表 if isinstance(资料, dict)
+                 and str(资料.get("book_id") or "").strip() == 关联编号), {})
+    return 关联编号, 嵌套
+
+
+def _番茄目录展示章数(响应: Any, 书籍编号: str) -> int:
+    项目 = 解析番茄目录项目(响应, 书籍编号)
+    数据 = 响应.get("data") if isinstance(响应, dict) else None
+    原目录 = 数据.get("item_list") if isinstance(数据, dict) else None
+    if isinstance(原目录, list):
+        项目 = unique_item_ids([
+            *项目, *(项.get("item_id") if isinstance(项, dict) else 项 for 项 in 原目录)
+        ], 书籍编号)
+    return len(项目)
+
+
+def _番茄关联资料可核验(资料: Any) -> bool:
+    if not isinstance(资料, dict):
+        return False
+    return (
+        _番茄关联资料为文字书(资料) and _番茄详情字数(资料) > 0
+        and _番茄详情章节数(资料) > 0
+        and all(值 and 值 not in {"未知", "unknown"} for 值 in _番茄书籍身份(资料))
+    )
+
+
+def _合并番茄关联版本展示元数据(
+    详情: Dict[str, Any], 关联编号: str, 关联资料: Any, 目录章数: int
+) -> Dict[str, Any]:
+    结果 = dict(详情)
+    if not isinstance(关联资料, dict) or str(关联资料.get("book_id") or "").strip() != 关联编号:
+        return 结果
+    身份 = _番茄书籍身份(结果)
+    if (not _番茄关联资料为文字书(关联资料)
+            or not all(值 and 值 not in {"未知", "unknown"} for 值 in 身份)
+            or _番茄书籍身份(关联资料) != 身份
+            or 目录章数 <= 0 or _番茄详情章节数(关联资料) != 目录章数):
+        return 结果
+    if (not _番茄有效创作状态(结果) and _番茄有效创作状态(关联资料)
+            and 提取番茄末章状态标签(结果) == "未知"):
+        结果["creation_status"] = 关联资料["creation_status"]
+    字数 = _番茄详情字数(关联资料)
+    if 字数 > 0 and not _番茄详情字数(结果):
+        结果["word_number"] = 字数
+    return 结果
+
+
+def 补全番茄书籍展示元数据(
+    book_id: str, 详情: Dict[str, Any], 目录响应: Any = None
+) -> Dict[str, Any]:
+    """复用官方目录补齐当前书；关联资料须核对同署名、同标题及有效章数。"""
+    书籍编号 = str(book_id or "").strip()
+    结果 = dict(详情) if isinstance(详情, dict) else {}
+    结果["_番茄展示补查完成"] = False
+    if _番茄展示元数据已完整(结果):
+        结果["_番茄展示补查完成"] = True
+        return 结果
+    if not _番茄有效书籍编号(书籍编号):
+        return 结果
+    if 目录响应 is None:
+        目录响应 = {}
+        try:
+            resolve_directory(书籍编号, 目录响应容器=目录响应)
+        except Exception as 异常:
+            logger.debug("番茄展示目录补全失败：错误类型=%s", type(异常).__name__)
+    目录章数 = _番茄目录展示章数(目录响应, 书籍编号)
+    自身, 额外 = _番茄目录展示资料(书籍编号, 结果, 目录响应)
+    if _番茄目录缺少展示资料(目录响应, 书籍编号):
+        try:
+            _, 展示响应 = app_directory_items(书籍编号, version=1)
+            自身, 额外 = _番茄目录展示资料(书籍编号, 结果, 展示响应)
+        except Exception as 异常:
+            logger.debug("番茄目录展示资料兼容读取失败：错误类型=%s", type(异常).__name__)
+    结果 = _合并番茄自身展示元数据(结果, 自身)
+    if not 自身:
+        return 结果
+    关联编号, 关联资料 = _番茄关联小说资料(书籍编号, 结果, 自身, 额外)
+    if 关联编号 and not _番茄展示元数据已完整(结果):
+        if not _番茄关联资料可核验(关联资料):
+            try:
+                关联资料 = book_detail(关联编号)
+            except Exception as 异常:
+                logger.debug("番茄关联小说资料补全失败：错误类型=%s", type(异常).__name__)
+                return 结果
+        if (not isinstance(关联资料, dict)
+                or str(关联资料.get("book_id") or "").strip() != 关联编号
+                or not all(_番茄书籍身份(关联资料))):
+            return 结果
+        结果 = _合并番茄关联版本展示元数据(结果, 关联编号, 关联资料, 目录章数)
+    结果["_番茄展示补查完成"] = True
+    return 结果
+
+
+async def 异步补全番茄书籍展示元数据(
+    client: Any, book_id: str, 详情: Dict[str, Any], 目录响应: Any = None
+) -> Dict[str, Any]:
+    """目录和关联详情共用八秒预算，取消保持向上传递。"""
+    书籍编号 = str(book_id or "").strip()
+    结果 = dict(详情) if isinstance(详情, dict) else {}
+    结果["_番茄展示补查完成"] = False
+    if _番茄展示元数据已完整(结果):
+        结果["_番茄展示补查完成"] = True
+        return 结果
+    if not _番茄有效书籍编号(书籍编号):
+        return 结果
+
+    async def 补全() -> Dict[str, Any]:
+        nonlocal 结果
+        响应 = 目录响应
+        if 响应 is None:
+            响应 = {}
+            try:
+                await 异步解析番茄目录(client, 书籍编号, 目录响应容器=响应)
+            except Exception as 异常:
+                logger.debug("番茄展示目录补全失败：错误类型=%s", type(异常).__name__)
+        目录章数 = _番茄目录展示章数(响应, 书籍编号)
+        自身, 额外 = _番茄目录展示资料(书籍编号, 结果, 响应)
+        if _番茄目录缺少展示资料(响应, 书籍编号):
+            try:
+                _, 展示响应 = await 异步获取番茄目录项目(client, 书籍编号, version=1)
+                自身, 额外 = _番茄目录展示资料(书籍编号, 结果, 展示响应)
+            except Exception as 异常:
+                logger.debug("番茄目录展示资料兼容读取失败：错误类型=%s", type(异常).__name__)
+        结果 = _合并番茄自身展示元数据(结果, 自身)
+        if not 自身:
+            return 结果
+        关联编号, 关联资料 = _番茄关联小说资料(书籍编号, 结果, 自身, 额外)
+        if 关联编号 and not _番茄展示元数据已完整(结果):
+            if not _番茄关联资料可核验(关联资料):
+                关联资料 = await 异步获取番茄书籍详情(client, 关联编号)
+            if (not isinstance(关联资料, dict)
+                    or str(关联资料.get("book_id") or "").strip() != 关联编号
+                    or not all(_番茄书籍身份(关联资料))):
+                return 结果
+            结果 = _合并番茄关联版本展示元数据(结果, 关联编号, 关联资料, 目录章数)
+        结果["_番茄展示补查完成"] = True
+        return 结果
+
+    try:
+        return await asyncio.wait_for(补全(), timeout=8.0)
+    except Exception as 异常:
+        logger.debug("番茄展示元数据补全失败：错误类型=%s", type(异常).__name__)
+        return 结果
+
+
 def _番茄字数查询词(详情: Dict[str, Any]) -> tuple[str, ...]:
     标题 = str(详情.get("book_name") or 详情.get("title") or "").strip()
     规范标题, 作者 = _番茄书籍身份(详情)
@@ -2584,7 +2814,9 @@ def unique_item_ids(ids: Iterable[Any], book_id: str = "") -> List[str]:
     return out
 
 
-def resolve_directory(book_id: str) -> List[str]:
+def resolve_directory(
+    book_id: str, *, 目录响应容器: Dict[str, Any] | None = None
+) -> List[str]:
     """通过番茄畅听目录接口获取章节 ID。"""
     last_error: Exception | None = None
     for version in (2, 1):
@@ -2593,6 +2825,8 @@ def resolve_directory(book_id: str) -> List[str]:
                 book_id, version=version, sign_mode="auto"
             )
             if item_ids:
+                if 目录响应容器 is not None:
+                    目录响应容器.update(_response)
                 return item_ids
         except Exception as error:
             last_error = error
@@ -2762,6 +2996,8 @@ async def 异步获取番茄目录项目(
 async def 异步解析番茄目录(
     client: Any,
     book_id: str,
+    *,
+    目录响应容器: Dict[str, Any] | None = None,
 ) -> List[str]:
     latest_error: BaseException | None = None
     for version in (2, 1):
@@ -2770,6 +3006,8 @@ async def 异步解析番茄目录(
                 client, book_id, version=version
             )
             if item_ids:
+                if 目录响应容器 is not None:
+                    目录响应容器.update(_response)
                 return item_ids
         except Exception as exc:
             latest_error = exc
@@ -4184,14 +4422,15 @@ def 准备番茄下载数据同步(
 ) -> dict[str, Any]:
     原始书籍编号 = str(书籍编号 or "").strip()
     直接正文书籍元数据: dict[str, Any] = {}
+    目录响应: Dict[str, Any] = {}
     try:
-        item_ids = resolve_directory(原始书籍编号)
+        item_ids = resolve_directory(原始书籍编号, 目录响应容器=目录响应)
     except Exception as 目录异常:
         try:
             真实书籍编号, 直接正文书籍元数据 = 解析番茄阅读章节书籍编号(原始书籍编号)
             if 真实书籍编号 == 原始书籍编号:
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
-            item_ids = resolve_directory(真实书籍编号)
+            item_ids = resolve_directory(真实书籍编号, 目录响应容器=目录响应)
             书籍编号 = 真实书籍编号
             logger.debug(f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}")
         except Exception as 直接正文异常:
@@ -4209,6 +4448,7 @@ def 准备番茄下载数据同步(
         logger.warning(f"番茄小说详情请求失败：书籍编号={书籍编号}, 错误={异常}")
     if not 详情 and 直接正文书籍元数据:
         详情 = 直接正文书籍元数据
+    详情 = 补全番茄书籍展示元数据(书籍编号, 详情, 目录响应)
 
     目录元数据 = 读取番茄目录元数据(书籍编号, item_ids)
     目录 = [
@@ -4310,8 +4550,9 @@ async def 异步准备番茄下载数据(
 ) -> dict[str, Any]:
     original_id = str(书籍编号 or "").strip()
     reader_metadata: dict[str, Any] = {}
+    directory_response: Dict[str, Any] = {}
     try:
-        item_ids = await 异步解析番茄目录(client, original_id)
+        item_ids = await 异步解析番茄目录(client, original_id, 目录响应容器=directory_response)
     except Exception as directory_error:
         try:
             real_book_id, reader_metadata = await 异步解析番茄阅读章节书籍编号(
@@ -4319,7 +4560,7 @@ async def 异步准备番茄下载数据(
             )
             if real_book_id == original_id:
                 raise RuntimeError("番茄阅读章节未映射到其他书籍编号")
-            item_ids = await 异步解析番茄目录(client, real_book_id)
+            item_ids = await 异步解析番茄目录(client, real_book_id, 目录响应容器=directory_response)
             书籍编号 = real_book_id
             logger.debug(f"番茄小说目录回退成功：来源=阅读正文, 章节数={len(item_ids)}")
         except Exception as reader_error:
@@ -4338,6 +4579,7 @@ async def 异步准备番茄下载数据(
         )
     if not detail and reader_metadata:
         detail = reader_metadata
+    detail = await 异步补全番茄书籍展示元数据(client, str(书籍编号), detail, directory_response)
     if (
         not detail
         or not (detail.get("book_name") or detail.get("title"))
@@ -4691,7 +4933,19 @@ def 默认番茄书籍信息(书籍编号: str) -> dict[str, Any]:
     }
 
 
+def 提取番茄末章状态标签(详情: dict[str, Any]) -> str:
+    """仅认末章末尾的明确标签，不从普通章名推断完结。"""
+    章名 = unicodedata.normalize("NFKC", 清理番茄网页文本(详情.get("last_chapter_title")))
+    标签 = re.search(r"[（(【\[]((?:已)?完结|连载中)[）)】\]]$", 章名)
+    if not 标签:
+        return "未知"
+    return "连载" if 标签.group(1) == "连载中" else "完结"
+
+
 def 获取番茄状态文本(详情: dict[str, Any]) -> str:
+    末章状态 = 提取番茄末章状态标签(详情)
+    if 末章状态 != "未知":
+        return 末章状态
     文本 = " ".join(
         str(详情.get(字段) or "")
         for 字段 in (
@@ -4699,9 +4953,10 @@ def 获取番茄状态文本(详情: dict[str, Any]) -> str:
             "status_text",
             "book_status_text",
             "creation_status_text",
-            "last_chapter_title",
         )
-    )
+    ).casefold()
+    if any(关键词 in 文本 for 关键词 in ("未完结", "尚未完结", "未完本")):
+        return "连载"
     if any(
         关键词 in 文本
         for 关键词 in (
@@ -4717,17 +4972,13 @@ def 获取番茄状态文本(详情: dict[str, Any]) -> str:
         return "完结"
     if any(关键词 in 文本 for 关键词 in ("连载", "更新中", "ongoing", "serial")):
         return "连载"
-    创作状态 = (
-        str(详情.get("creation_status") or 详情.get("status") or "").strip().lower()
-    )
+    原始创作状态 = 详情.get("creation_status")
+    if 原始创作状态 in (None, ""):
+        原始创作状态 = 详情.get("status")
+    创作状态 = str(原始创作状态 if 原始创作状态 is not None else "").strip().lower()
     if 创作状态 in ("0", "2"):
         return "完结"
     if 创作状态 in ("1", "3", "4"):
-        return "连载"
-    书籍状态 = str(详情.get("book_status") or "").strip().lower()
-    if 书籍状态 in ("1", "2"):
-        return "完结"
-    if 书籍状态 in ("0", "3", "4"):
         return "连载"
     return "连载"
 

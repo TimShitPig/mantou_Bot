@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.394-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.395-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.394 |
+| 版本 | v6.1.395 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -100,7 +100,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 
 | 平台 | 入口与关键说明 |
 | --- | --- |
-| 番茄 | 书籍链接、分享卡片和短篇；搜索页链接需先选具体书籍。详情缺字数时用 App 搜索及同卷详情补查 |
+| 番茄 | 书籍链接、分享卡片和短篇；搜索页链接需先选具体书籍。缺失状态、字数时补查同书目录及经同版本核验的官方关联小说资料，取不到有效数据时保留未知，提示格式不变 |
 | 七猫 | 长篇/短篇链接、分享卡片；纯图片版提示无文字正文 |
 | 书旗 | 官网、分享短链、章节链接和卡片；每本复用一个异步 HTTP 会话，正文最多 200 路并发；目录数不一致或部分章节失败时，保留可获取正文 |
 | 追书 | 追书神器链接及分享卡片，与疯狂追书分别处理 |
