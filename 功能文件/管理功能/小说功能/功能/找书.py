@@ -2704,7 +2704,7 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
 
 
 选书命令正则 = re.compile(
-    r"(?:(选)\s*)?([1-9][0-9]{0,3}|[零〇一二两三四五六七八九十百千]{1,8})(?: #([0-9a-f]{12}))?"
+    r"(?:(选)\s*)?([1-9][0-9]{0,3}|[零〇一二两三四五六七八九十百千]{1,8})"
 )
 
 
@@ -2715,8 +2715,8 @@ async def 获取找书下载回复流(
     匹配 = 选书命令正则.fullmatch(str(命令文本 or "").strip())
     if 匹配 is None:
         return None
-    显式选书, 编号文本, 结果标识 = 匹配.groups()
-    if not 显式选书 and (结果标识 or not 编号文本.isascii()):
+    显式选书, 编号文本 = 匹配.groups()
+    if not 显式选书 and not 编号文本.isascii():
         return None
     if not 编号文本.isascii():
         编号文本 = re.sub(r".+", _中文数字转阿拉伯, 编号文本)
@@ -2725,7 +2725,7 @@ async def 获取找书下载回复流(
     清理过期会话()
     会话键 = 获取找书会话键(event)
     会话 = 找书会话.get(会话键)
-    if not 会话 or (结果标识 and 结果标识 != 会话["id"]):
+    if not 会话:
         return None
     序号 = int(编号文本)
     if not 1 <= 序号 <= len(会话["results"]):
