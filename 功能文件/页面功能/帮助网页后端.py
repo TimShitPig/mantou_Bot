@@ -3728,20 +3728,19 @@ async def _晋江受保护写入(函数: Any, *参数: Any, **关键字参数: A
 
 
 async def _刷新晋江网页账号资料(状态: dict[str, Any], 账号ID: str) -> dict[str, Any]:
-    from 功能文件.管理功能.小说功能.功能 import 晋江账号
     from 功能文件.管理功能.小说功能.小说 import 晋江小说
 
-    凭据 = await _控制台线程执行(晋江账号.读取晋江账号凭据, 状态["config"], 账号ID)
+    凭据 = await _控制台线程执行(晋江小说.读取晋江账号凭据, 状态["config"], 账号ID)
     if not 凭据 or not _晋江操作仍有效(状态):
         raise PermissionError("账号状态已变化")
     资料 = await asyncio.wait_for(晋江小说.查询晋江账号资料(凭据), timeout=25)
     if not _晋江操作仍有效(状态):
         raise PermissionError("会话已结束")
     await _晋江受保护写入(
-        晋江账号.合并晋江账号资料, 状态["config"], 凭据, 资料,
+        晋江小说.合并晋江账号资料, 状态["config"], 凭据, 资料,
         提交前校验=lambda: _晋江操作仍有效(状态),
     )
-    return await _控制台线程执行(晋江账号.读取晋江账号列表, 状态["config"])
+    return await _控制台线程执行(晋江小说.读取晋江账号列表, 状态["config"])
 
 
 async def _处理晋江登录态(request: web.Request) -> web.Response:
@@ -3749,9 +3748,9 @@ async def _处理晋江登录态(request: web.Request) -> web.Response:
         return _控制台错误(401, "请先登录控制台")
     状态 = _晋江操作上下文(request)
     try:
-        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+        from 功能文件.管理功能.小说功能.小说 import 晋江小说
 
-        摘要 = await _控制台线程执行(晋江账号.读取晋江账号列表, 状态["config"])
+        摘要 = await _控制台线程执行(晋江小说.读取晋江账号列表, 状态["config"])
         if not _晋江操作仍有效(状态):
             return _控制台错误(401, "请重新登录控制台")
         return _晋江JSON({"ok": True, "editable": _数据库会话可用(状态["config"]), **摘要})
@@ -3772,10 +3771,10 @@ async def _处理晋江登录态保存(request: web.Request) -> web.Response:
         return _控制台错误(400, "晋江登录态格式无效")
     状态 = _晋江操作上下文(request)
     try:
-        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+        from 功能文件.管理功能.小说功能.小说 import 晋江小说
 
         摘要 = await _晋江受保护写入(
-            晋江账号.保存晋江账号, 状态["config"],
+            晋江小说.保存晋江账号, 状态["config"],
             {"token": 数据["token"], "readerId": 数据["readerId"]},
             str(数据.get("account_id") or ""), 数据.get("select", True),
             提交前校验=lambda: _晋江操作仍有效(状态),
@@ -3803,7 +3802,7 @@ async def _晋江账号操作(request: web.Request, 操作: str) -> web.Response
         return _控制台错误(400, "请选择晋江账号")
     状态 = _晋江操作上下文(request)
     try:
-        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+        from 功能文件.管理功能.小说功能.小说 import 晋江小说
 
         if 操作 == "refresh":
             摘要 = await _刷新晋江网页账号资料(状态, 账号ID)
@@ -3811,11 +3810,11 @@ async def _晋江账号操作(request: web.Request, 操作: str) -> web.Response
             if not isinstance(数据.get("enabled"), bool):
                 return _控制台错误(400, "账号开关参数无效")
             摘要 = await _晋江受保护写入(
-                晋江账号.设置晋江账号启用, 状态["config"], 账号ID, 数据["enabled"],
+                晋江小说.设置晋江账号启用, 状态["config"], 账号ID, 数据["enabled"],
                 提交前校验=lambda: _晋江操作仍有效(状态),
             )
         else:
-            函数 = 晋江账号.删除晋江账号 if 操作 == "delete" else 晋江账号.切换晋江账号
+            函数 = 晋江小说.删除晋江账号 if 操作 == "delete" else 晋江小说.切换晋江账号
             摘要 = await _晋江受保护写入(
                 函数, 状态["config"], 账号ID, 提交前校验=lambda: _晋江操作仍有效(状态),
             )
@@ -3934,7 +3933,7 @@ async def _运行晋江网页扫码(scan_id: str) -> None:
     状态 = 晋江网页扫码会话[scan_id]
     阶段 = "wait_login"
     try:
-        from 功能文件.管理功能.小说功能.功能 import 晋江账号
+        from 功能文件.管理功能.小说功能.小说 import 晋江小说
 
         while _晋江扫码仍有效(状态):
             if 状态["expires_at"] <= time.time():
@@ -3962,7 +3961,7 @@ async def _运行晋江网页扫码(scan_id: str) -> None:
             阶段 = "save_account"
             try:
                 摘要 = await _晋江受保护写入(
-                    晋江账号.保存晋江账号, 状态["config"], 登录态,
+                    晋江小说.保存晋江账号, 状态["config"], 登录态,
                     提交前校验=lambda: _晋江扫码仍有效(状态),
                 )
             finally:

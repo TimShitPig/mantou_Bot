@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.400-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.401-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.400 |
+| 版本 | v6.1.401 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -122,6 +122,8 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后续任务。VIP 书按真实会员权限处理，单章付费书仍仅请求允许的免费范围。ZLibrary 已验证账号长期保留，额度为零暂停，网络或认证失败不自动注册替代账号；后台只补查当前页，避免遍历大账号池。
 
 ### 晋江账号与扫码
+
+账号管理、扫码登录和小说协议统一维护在 `功能文件/管理功能/小说功能/小说/晋江小说.py`。
 
 登录控制台并选择机器人，在“账号管理 → 晋江账号”添加账号。点击“晋江 App 扫码”，使用晋江小说阅读 App 扫描二维码并确认；二维码有效期约 60 秒，过期后重新获取。也可用已有 Token 和必填读者编号手动添加。多个账号可切换、启停、删除和刷新资料；凭据保存在 MySQL，不回显 Token，也不读取本地 `.jj-session.json`。未配置账号、未选账号、账号停用或已标失效时自动使用游客，只请求目录明确标为免费的未锁章节，不依据“限免”标签或零价格猜测权限。已登录只表示能够确认账号已有权限；未购买或未解锁章节跳过，不自动购买、不扣费，TXT 只包含成功读取的正文并注明实际章数。
 
