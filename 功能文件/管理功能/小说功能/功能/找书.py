@@ -348,8 +348,10 @@ def _书名仅差一字(候选: str, 查询: str) -> bool:
     return 长串[位置 + 1:] == 短串[位置:]
 
 
-def 生成找书容错查询(关键词: str, 搜索类型: str = "auto") -> list[str]:
-    """先换写数字，再取前后片段召回；补回候选仍须按完整原词相关性过滤。"""
+def 生成找书容错查询(
+    关键词: str, 搜索类型: str = "auto", 候选: Iterable[dict[str, Any]] = (),
+) -> list[str]:
+    """优先数字换写和首轮候选命中的有效短语，补回后按原查询分层排序。"""
     if 搜索类型 == "author":
         return []
     查询 = 清理搜索关键词(关键词)
@@ -378,6 +380,14 @@ def 生成找书容错查询(关键词: str, 搜索类型: str = "auto") -> list
         书名词,
     )
     加入(中文书名)
+    片段计数: Counter[str] = Counter()
+    for 项 in 候选:
+        片段计数.update(set(_提取书名公共片段(项.get("title") or "", 书名词)))
+    查询键 = 规范书名匹配键(书名词)
+    for 片段 in sorted(片段计数, key=lambda 词: (-len(词), -片段计数[词], 查询键.find(词), 词)):
+        加入(片段)
+        if len(结果) >= 找书容错补搜上限:
+            break
     if len(书名词) >= 3:
         # 长标题的片段至少达到反向包含匹配的长度。
         最短片段 = 8 if len(书名词) >= 12 else 2
@@ -783,6 +793,61 @@ def 计算匹配字数(候选文本: Any, 关键词: Any) -> int:
     return sum((Counter(候选) & Counter(查询)).values())
 
 
+# 虚词不能单独成为相关依据；保留“不”等会改变书名含义的字。
+找书片段停用字 = frozenset("的地得了着过是在和与及或而也又都就还被把让我你他她它们这那个有要能会吗呢啊吧")
+找书英文停用词 = frozenset({
+    "a", "an", "the", "of", "to", "in", "on", "and", "or", "is", "it", "my", "me",
+    "as", "for", "by", "at", "be", "we", "you", "your", "with",
+})
+
+
+def _提取书名公共片段(候选文本: Any, 关键词: Any) -> list[str]:
+    """中文保留至少两个实字的连续命中，英文保留共同完整单词。"""
+    候选, 查询 = 规范书名匹配键(候选文本), 规范书名匹配键(关键词)
+    片段: set[str] = set()
+    # 每个位置独立查找，词序变化不能让整体对齐跳过已有的关键词。
+    for 匹配 in re.finditer(r"[\u3400-\u9fff]+", 查询):
+        中文 = 匹配.group()
+        for 起点 in range(len(中文) - 1):
+            终点 = 起点 + 2
+            if 中文[起点:终点] not in 候选:
+                continue
+            while 终点 < len(中文) and 中文[起点:终点 + 1] in 候选:
+                终点 += 1
+            词 = 中文[起点:终点].strip("".join(找书片段停用字))
+            if len(词) >= 2 and sum(字 not in 找书片段停用字 for 字 in 词) >= 2:
+                片段.add(词)
+
+    def 英文词(值: Any) -> set[str]:
+        文本 = unicodedata.normalize("NFKC", 清理文本(值)).casefold()
+        return set(re.findall(r"(?<![a-z0-9])[a-z][a-z0-9]*(?![a-z0-9])", 文本)) - 找书英文停用词
+    片段.update(词 for 词 in 英文词(候选文本) & 英文词(关键词) if len(词) >= 2)
+    片段 = {词 for 词 in 片段 if not any(词 != 长词 and 词 in 长词 for 长词 in 片段)}
+    return sorted(片段, key=lambda 词: (查询.find(词), 词))
+
+
+def _计算书名片段匹配(候选文本: Any, 关键词: Any) -> dict[str, Any] | None:
+    片段 = _提取书名公共片段(候选文本, 关键词)
+    if not 片段:
+        return None
+    查询 = 规范书名匹配键(关键词)
+    有效查询 = Counter(字 for 字 in 查询 if 字 not in 找书片段停用字 and not 字.isdigit())
+    命中: Counter[str] = Counter()
+    for 词 in 片段:
+        命中 |= Counter(字 for 字 in 词 if 字 not in 找书片段停用字 and not 字.isdigit())
+    字数 = sum((命中 & 有效查询).values())
+    覆盖率 = 字数 / max(1, sum(有效查询.values()))
+    最长片段 = max(map(len, 片段))
+    相似度 = SequenceMatcher(None, 查询, 规范书名匹配键(候选文本), autojunk=False).ratio()
+    return {
+        "tier": 1,
+        "score": 800.0 + 覆盖率 * 700.0 + 最长片段 * 80.0 + 相似度 * 200.0,
+        "chars": 字数,
+        "coverage": 覆盖率,
+        "ratio": 相似度,
+    }
+
+
 def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型: str) -> dict[str, Any]:
     原文 = 清理文本(候选文本)
     候选 = 规范标题(原文)
@@ -881,12 +946,16 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
         )
     if 可模糊:
         return {
-            "tier": 1,
+            "tier": 2 if 字段类型 == "title" else 1,
             "score": 1800.0 + 匹配字数 * 260.0 + 覆盖率 * 700.0 + 相似度 * 700.0,
             "chars": 匹配字数,
             "coverage": 覆盖率,
             "ratio": 相似度,
         }
+    if 字段类型 == "title" and len(查询) >= 3:
+        部分匹配 = _计算书名片段匹配(原文, 关键词)
+        if 部分匹配 is not None:
+            return 部分匹配
     return {
         "tier": 0,
         "score": 0.0,
@@ -2454,7 +2523,7 @@ async def _聚合搜索未缓存(
         初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
         # 精确命中只影响排序。数字写法和相近书名可能只会在补搜中返回。
         已有强匹配 = any(int(项.get("_match_tier") or 0) >= 5 for 项 in 初步结果)
-        补搜词 = 生成找书容错查询(关键词, 搜索类型)
+        补搜词 = 生成找书容错查询(关键词, 搜索类型, 候选=合并)
         补搜截止时间 = asyncio.get_running_loop().time() + 找书容错补搜预算秒数
         补搜超时 = False
         联想词: list[str] = []
@@ -2565,7 +2634,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v19-precheck-pipeline",
+        tuple(_拆分查询词(关键词)), "search-v20-partial-title-recall",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
