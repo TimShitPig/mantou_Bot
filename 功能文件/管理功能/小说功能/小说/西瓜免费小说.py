@@ -244,7 +244,7 @@ async def _确保游客(session: aiohttp.ClientSession) -> None:
 
 
 def 构造西瓜链接(book_id: Any) -> str:
-    # 提供的 App 项目没有可核实的分享 URL，选书使用平台名＋书号内部来源。
+    # 仅供找书选中及在途任务恢复，不作为聊天书号下载指令。
     return "西瓜免费小说 " + _书号(book_id)
 
 
@@ -253,10 +253,6 @@ def 解析西瓜书籍编号(source: Any) -> str:
         return ""
     match = _西瓜指令正则.fullmatch(source.strip())
     return match.group(1) if match else ""
-
-
-def 获取西瓜小说回复流(event: Any, command: str, config: Any = None) -> AsyncIterator[Any] | None:
-    return 生成西瓜下载回复流(event, command, config) if 解析西瓜书籍编号(command) else None
 
 
 async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:

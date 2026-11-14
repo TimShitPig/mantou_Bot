@@ -216,7 +216,8 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
 指定平台找书正则 = re.compile(
     r"^(" + "|".join(
         r"QQ\s*阅读" if 平台 == "QQ阅读" else r"QQ\s*浏览器" if 平台 == "QQ浏览器"
-        else r"Z[-\s]*Library" if 平台 == "ZLibrary" else re.escape(平台)
+        else r"Z[-\s]*Library" if 平台 == "ZLibrary"
+        else r"西瓜" if 平台 == "西瓜免费小说" else re.escape(平台)
         for 平台 in sorted(找书指定平台, key=len, reverse=True)
     ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
 )
@@ -601,6 +602,7 @@ def 解析找书查询(命令文本: str) -> dict[str, str] | None:
     平台匹配 = 指定平台找书正则.fullmatch(文本)
     if 平台匹配:
         平台名 = re.sub(r"[\s-]+", "", 平台匹配.group(1)).casefold()
+        平台名 = "西瓜免费小说" if 平台名 == "西瓜" else 平台名
         指定平台 = next(平台 for 平台 in 找书指定平台 if 平台.casefold() == 平台名)
         文本 = 平台匹配.group(2)
     if 空找书模式正则.fullmatch(文本):
