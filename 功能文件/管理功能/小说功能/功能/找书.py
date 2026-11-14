@@ -5,7 +5,6 @@ import html
 import importlib
 import json
 import re
-import secrets
 import time
 import unicodedata
 import urllib.parse
@@ -216,7 +215,6 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
     ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
 )
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
-翻页按钮命令正则 = re.compile(r"(上一页|下一页) ([0-9a-f]{12})")
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
 # 搜索时只预检最可能展示在前面的候选，避免用户点击后才发现没有目录。
 番茄目录预检缓存秒数 = 600
@@ -2790,7 +2788,7 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
             "action": {
                 "type": 1,
                 "permission": {"type": 0, "specify_user_ids": [用户标识]},
-                "data": f"{帮助命令回调前缀}{标签} {会话['id']}",
+                "data": f"{帮助命令回调前缀}{标签}",
                 "unsupport_tips": f"请发送{标签}",
             },
         }
@@ -2969,7 +2967,6 @@ async def _开始找书(
         if not 结果:
             return f"{指定平台}没有找到和「{关键词}」相关的书"
         会话 = {
-            "id": secrets.token_hex(6),
             "keyword": 关键词,
             "requested_platform": 指定平台,
             "results": 结果,
@@ -2984,10 +2981,10 @@ async def _开始找书(
 
 
 async def _翻阅找书结果(
-    event: Any, 会话键: str, 文本: str, 配置: Any, 结果标识: str = "",
+    event: Any, 会话键: str, 文本: str, 配置: Any,
 ) -> dict[str, Any] | str | None:
     会话 = 找书会话.get(会话键)
-    if not 会话 or (结果标识 and 结果标识 != 会话["id"]):
+    if not 会话:
         return None
     会话["ts"] = time.monotonic()
     总开关开启 = await 小说功能开关.异步小说总开关是否开启(配置)
@@ -3022,8 +3019,7 @@ async def 处理找书指令(
     清理过期会话()
     文本 = str(命令文本 or "").strip()
     查询 = 解析找书查询(文本)
-    翻页按钮 = 翻页按钮命令正则.fullmatch(文本)
-    if 查询 is None and 文本 not in 翻页命令集合 and not 翻页按钮:
+    if 查询 is None and 文本 not in 翻页命令集合:
         return None
     会话键 = 获取找书会话键(event)
     if 查询 is not None:
@@ -3031,8 +3027,7 @@ async def 处理找书指令(
             return "暂时无法识别当前用户，请稍后再试"
         会话 = await _开始找书(event, 会话键, 查询, 配置, 发送等待提示)
     else:
-        方向, 结果标识 = 翻页按钮.groups() if 翻页按钮 else (文本, "")
-        会话 = await _翻阅找书结果(event, 会话键, 方向, 配置, 结果标识)
+        会话 = await _翻阅找书结果(event, 会话键, 文本, 配置)
     if not isinstance(会话, dict):
         return 会话
     当前会话 = 找书会话.get(会话键)
