@@ -1061,6 +1061,14 @@ def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") ->
         已知状态: set[str] = set()
         for 来源 in (value, 原始状态 if isinstance(原始状态, dict) else {}):
             for 键 in 字段:
+                # 番茄阅读书的 book_status 数值在连载和完结样本中相同。
+                if (
+                    platform == "番茄" and 键 == "book_status"
+                    and str(来源.get("genre_type")) == "0"
+                    and str(来源.get("creation_status")) in {"0", "1", "2", "3", "4"}
+                    and str(来源.get(键)).strip().isdigit()
+                ):
+                    continue
                 状态 = 规范化找书状态(来源.get(键), platform=platform, field=键)
                 if 状态 != "未知":
                     已知状态.add(状态)
@@ -1146,6 +1154,9 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
     评分 = _安全浮点(book.get("score"))
     原始字数 = book.get("word_number") or book.get("word_count")
     字数 = _安全整数热度(原始字数)
+    下载候选字数 = 番茄小说.提取有效番茄字数(
+        book.get("word_number"), book.get("word_count"), book.get("words"),
+    )
     热度值 = 计算热度排序值(阅读量=阅读量, 评分=评分, 字数=字数)
     return {
         "status": 规范化找书状态(book, platform="番茄"),
@@ -1158,7 +1169,7 @@ def 提取番茄搜索书(row: Any) -> dict[str, Any] | None:
         "heat_text": 格式化热度显示(热度值, 评分=评分, 阅读量=阅读量),
         "score": 评分,
         "read_count": 阅读量,
-        "word_count": 原始字数,
+        "word_count": 下载候选字数,
     }
 
 
@@ -2533,7 +2544,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-rank-v13-preserve-matches",
+        tuple(_拆分查询词(关键词)), "search-v14-fanqie-word-count",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2592,6 +2603,56 @@ def _获取找书分页(会话: dict[str, Any]) -> tuple[list[dict[str, Any] | N
     会话["page"] = 页码
     起始 = (页码 - 1) * 每页数量
     return 结果[起始 : 起始 + 每页数量], 页码, 总页
+
+
+async def _补全本页番茄状态(会话: dict[str, Any]) -> None:
+    """只补查本页状态未知的番茄书，超时时保留已有结果。"""
+    if 番茄小说 is None:
+        return
+    当前页, _, _ = _获取找书分页(会话)
+    待补项 = [
+        项 for 项 in 当前页
+        if 项 and 项["platform"] == "番茄" and 项.get("status") == "未知"
+        and not 项.get("_番茄详情已核验")
+    ]
+    if not 待补项:
+        return
+
+    async def 补查(客户端: Any, 项: dict[str, Any]) -> None:
+        书号 = str(项["book_id"])
+        try:
+            详情 = await 番茄小说.异步获取番茄书籍详情(客户端, 书号)
+        except Exception as exc:
+            logger.debug("找书番茄状态补查失败：错误类型=%s", type(exc).__name__)
+            return
+        同书 = 番茄小说.标准化番茄书籍比对文本
+        if (
+            str(详情.get("book_id") or "") != 书号
+            or 同书(清理文本(详情.get("book_name") or 详情.get("title"))) != 同书(项.get("title"))
+            or 同书(清理文本(详情.get("author") or 详情.get("author_name"))) != 同书(项.get("author"))
+        ):
+            return
+
+        状态 = 规范化找书状态(详情, platform="番茄")
+        if 状态 == "未知":
+            # 仅使用明确的状态标签，例如「标题（已完结）」，不从普通章名猜测。
+            章名 = unicodedata.normalize("NFKC", 清理文本(详情.get("last_chapter_title")))
+            标签 = re.search(r"[（(【\[]((?:已)?完结|连载中)[）)】\]]$", 章名)
+            if 标签:
+                状态 = 规范化找书状态(标签.group(1))
+        项["status"] = 状态
+        if not 项.get("word_count"):
+            项["word_count"] = 番茄小说.提取有效番茄字数(
+                详情.get("word_number"), 详情.get("word_count"), 详情.get("words"),
+            )
+        项["_番茄详情已核验"] = True
+
+    try:
+        async with asyncio.timeout(2.5):
+            async with 番茄小说.创建番茄正文HTTP客户端(len(待补项)) as 客户端:
+                await asyncio.gather(*(补查(客户端, 项) for 项 in 待补项))
+    except Exception as exc:
+        logger.debug("找书番茄状态补查提前结束：错误类型=%s", type(exc).__name__)
 
 
 def _找书展示字段(项: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -2940,6 +3001,13 @@ async def 处理找书指令(
         会话 = await _翻阅找书结果(event, 会话键, 方向, 配置, 结果标识)
     if not isinstance(会话, dict):
         return 会话
+    当前会话 = 找书会话.get(会话键)
+    if 当前会话 is None:
+        return None
+    页码 = 会话["page"]
+    await _补全本页番茄状态(会话)
+    if 找书会话.get(会话键) is not 当前会话 or 当前会话["page"] != 页码:
+        return None
     if 是QQ官方机器人(event):
         return {
             "md": 格式化找书结果MD(会话),
