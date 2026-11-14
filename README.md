@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.398-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.399-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.398 |
+| 版本 | v6.1.399 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -109,7 +109,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 得间、点众、塔读 | 对应平台书籍链接和分享卡片 |
 | 百度 | 官方分享链接；下载可完整公开读取的章节，详情和 TXT 按实际取得的章数显示 |
 | 小米 | 小米链接和旧 `reader.browser.miui.com` 分享链接 |
-| 宜搜、米读、猫眼、酷我、酷匠、连城 | 对应平台链接或分享卡片 |
+| 宜搜、米读、猫眼、酷我、酷匠、连城 | 对应平台链接或分享卡片；酷匠使用 3.9.69 App 搜索、详情、目录和缓存正文接口，以游客身份读取服务端允许的正文 |
 | 菠萝包 | `m.sfacg.com/Novel/{书籍ID}`、`m.sfacg.com/b/{书籍ID}` |
 | 晋江 | Android App 520 版接口、签名和解密；无账号自动用游客，只下载明确免费且未锁章节；登录后仅收入实际可读正文，未解锁付费章跳过 |
 | 话本 | 官方链接、卡片和找书；App 分卷目录包含番外/彩蛋，保留原文图片标记与位置 |

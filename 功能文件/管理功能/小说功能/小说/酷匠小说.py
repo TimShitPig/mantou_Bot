@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import gzip
 import html
 import json
 import re
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -16,6 +18,7 @@ import aiohttp
 
 try:
     from Crypto.Cipher import AES
+    from Crypto.Util.Padding import unpad
 except Exception:
     AES = None
 try:
@@ -38,26 +41,36 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 酷匠重试次数 = 3
 酷匠缓存目录 = 文件缓存工具.小说缓存目录
 酷匠声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
-酷匠目录请求头 = {
-    "auth-code": "dc67efdd82941586e69207b3374037b2",
-    "app": "com.dpx.kujiang",
-    "platform": "android",
-    "device-uuid": "5dd1f054b2f013b9",
-    "version": "3.9.7",
-    "channel": "XIAOMI",
-    "User-Agent": "KuJiang/3.9.7",
-    "Accept": "application/json",
-}
-酷匠正文请求头 = {
-    "auth-code": "440590fab1b828085ab67fdc9fc40cbb",
-    "app": "com.dpx.kujiang",
-    "platform": "android",
-    "device-uuid": "A589D18F6E1F84A2",
-    "version": "3.9.14",
-    "channel": "QQ",
-    "User-Agent": "KuJiang/3.9.14(Android;P40;7.1.2)",
-    "Accept": "application/json",
-}
+酷匠应用版本 = "3.9.69"
+酷匠响应大小上限 = 4 * 1024 * 1024
+
+
+class _酷匠请求错误(RuntimeError):
+    def __init__(
+        self, category: str, *, http_status: int | None = None, code: int | None = None
+    ) -> None:
+        super().__init__(category)
+        self.category = category
+        self.http_status = http_status
+        self.code = code
+
+
+def _业务码(data: dict[str, Any]) -> int | None:
+    header = data.get("header")
+    value = header.get("result") if isinstance(header, dict) else None
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,10}", value):
+        return int(value)
+    return None
+
+
+def _状态(info: dict[str, Any]) -> str:
+    # App 详情使用 fullflag；status/show_status 不是创作状态。
+    value = info.get("fullflag")
+    if isinstance(value, bool):
+        return "未知"
+    return {"1": "完结", "0": "连载"}.get(str(value), "未知")
 
 
 def _文本(value: Any) -> str:
@@ -139,8 +152,15 @@ def 创建酷匠HTTP会话(concurrency: int = 酷匠并发数) -> aiohttp.Client
         limit_per_host=max(1, int(concurrency)),
         ttl_dns_cache=300,
     )
+    android_id = uuid.uuid4().hex[:16]
     return aiohttp.ClientSession(
-        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        headers={
+            "app": "com.dpx.kujiang", "platform": "android",
+            "version": 酷匠应用版本, "auth-code": "", "channel": "KUJIANG",
+            "device-uuid": "uid" + base64.b64encode(android_id.encode()).decode("ascii"),
+            "User-Agent": f"KuJiang/{酷匠应用版本}(Android;23113RKC6C;15)",
+            "Accept": "application/json",
+        },
         timeout=timeout,
         connector=connector,
     )
@@ -153,105 +173,110 @@ async def _请求(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    last: Exception | None = None
+    last: _酷匠请求错误 | None = None
     for attempt in range(酷匠重试次数):
         try:
             async with session.get(
-                酷匠基础地址 + path, params=params, headers=headers
+                酷匠基础地址 + path, params=params, headers=headers, allow_redirects=False
             ) as response:
-                response.raise_for_status()
-                data = json.loads(
-                    (await response.read()).decode("utf-8-sig", "replace")
-                )
-            return data if isinstance(data, dict) else {}
-        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
+                if response.status != 200:
+                    raise _酷匠请求错误(
+                        "rate_limited" if response.status == 429 else "http_error",
+                        http_status=response.status,
+                    )
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    if len(raw) + len(chunk) > 酷匠响应大小上限:
+                        raise _酷匠请求错误("response_too_large", http_status=200)
+                    raw.extend(chunk)
+                try:
+                    data = json.loads(raw.decode("utf-8-sig"))
+                except (json.JSONDecodeError, UnicodeError) as exc:
+                    raise _酷匠请求错误("invalid_response", http_status=200) from exc
+            if not isinstance(data, dict) or _业务码(data) is None:
+                raise _酷匠请求错误("invalid_response", http_status=200)
+            return data
+        except _酷匠请求错误 as exc:
+            if exc.category != "http_error" or exc.http_status not in {408, 500, 502, 503, 504}:
+                raise
             last = exc
-            if attempt + 1 < 酷匠重试次数:
-                await asyncio.sleep(0.2 * (attempt + 1))
-    raise RuntimeError("酷匠接口请求失败") from last
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            last = _酷匠请求错误(
+                "timeout" if isinstance(exc, asyncio.TimeoutError) else "network_error"
+            )
+        if attempt + 1 < 酷匠重试次数:
+            await asyncio.sleep(0.2 * (attempt + 1))
+    raise last or _酷匠请求错误("network_error")
 
 
 def _成功(data: Any) -> bool:
-    return (
-        isinstance(data, dict) and str((data.get("header") or {}).get("result")) == "0"
-    )
+    return isinstance(data, dict) and _业务码(data) == 0
 
 
 async def 获取酷匠详情(
     session: aiohttp.ClientSession, book_id: str
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     detail = await _请求(
-        session,
-        f"/get_book_infos",
-        params={"book": book_id, "subsite": "m", "from": "search"},
+        session, "/get_book_infos", params={"book": book_id, "subsite": "m"}
     )
     if not _成功(detail):
-        return {}, []
-    info = (
-        (detail.get("body") or {}).get("bookinfo")
-        if isinstance(detail.get("body"), dict)
-        else {}
-    )
-    info = info if isinstance(info, dict) else {}
+        raise _酷匠请求错误("business_error", code=_业务码(detail))
+    body = detail.get("body")
+    info = body.get("bookinfo") if isinstance(body, dict) else None
+    if (
+        not isinstance(info, dict)
+        or str(info.get("book")) != str(book_id)
+        or not _文本(info.get("v_book"))
+    ):
+        raise _酷匠请求错误("invalid_detail")
     catalog = await _请求(
-        session,
-        "/catalog",
-        params={
-            "book": book_id,
-            "auth_code": "dc67efdd82941586e69207b3374037b2",
-            "sort": "asc",
-        },
-        headers=酷匠目录请求头,
+        session, "/catalog", params={"book": book_id, "auth_code": "", "sort": "asc"}
     )
+    if not _成功(catalog):
+        raise _酷匠请求错误("business_error", code=_业务码(catalog))
+    body = catalog.get("body")
+    volumes = body.get("catalog") if isinstance(body, dict) else None
+    if not isinstance(volumes, list):
+        raise _酷匠请求错误("invalid_catalog")
     chapters: list[dict[str, str]] = []
-    volumes = (
-        (catalog.get("body") or {}).get("catalog")
-        if isinstance(catalog.get("body"), dict)
-        else []
-    )
-    for volume in volumes if isinstance(volumes, list) else []:
-        if not isinstance(volume, dict):
-            continue
-        chapters.extend(
-            {
-                "id": str(chapter.get("chapter")),
-                "title": _文本(chapter.get("v_chapter") or "章节"),
-            }
-            for chapter in (
-                volume.get("chapters")
-                if isinstance(volume.get("chapters"), list)
-                else []
-            )
-            if isinstance(chapter, dict) and str(chapter.get("chapter") or "")
-        )
+    seen: set[str] = set()
+    for volume in volumes:
+        if not isinstance(volume, dict) or not isinstance(volume.get("chapters"), list):
+            raise _酷匠请求错误("invalid_catalog")
+        for chapter in volume["chapters"]:
+            chapter_id = str(chapter.get("chapter") or "") if isinstance(chapter, dict) else ""
+            if not chapter_id.isascii() or not chapter_id.isdigit() or chapter_id in seen:
+                raise _酷匠请求错误("invalid_catalog")
+            seen.add(chapter_id)
+            chapters.append({"id": chapter_id, "title": _文本(chapter.get("v_chapter") or "章节")})
     detail_info = {
         "title": _文本(info.get("v_book")),
         "author": _文本(info.get("penname") or "未知"),
         "intro": _文本(info.get("intro")),
-        "status": "完结"
-        if str(info.get("status") or "").lower() in {"1", "finish", "完结"}
-        else "连载",
+        "status": _状态(info),
         "word_count": info.get("public_size") or info.get("word_count") or 0,
     }
     return detail_info, chapters
 
 
 def _解密正文(value: str) -> str:
-    if AES is None or len(value) <= 28:
-        return ""
+    if not isinstance(value, str):
+        raise _酷匠请求错误("invalid_content")
+    if "a2o@" not in value:
+        return value
+    if AES is None:
+        raise _酷匠请求错误("crypto_unavailable")
     try:
-        encrypted = base64.b64decode(value[28:])
-        decrypted = AES.new(
-            b"KujiangApp747605", AES.MODE_CBC, b"5efd3f6060e20330"
-        ).decrypt(encrypted)
-        # PKCS7 padding is removed by the library-compatible path.
-        padding = decrypted[-1]
-        if 0 < padding <= 16 and decrypted.endswith(bytes([padding]) * padding):
-            decrypted = decrypted[:-padding]
-        packed = base64.b64decode(decrypted)
-        return gzip.decompress(packed).decode("utf-8", "replace")
-    except Exception:
-        return ""
+        iv_text, cipher_text = value.split("a2o@", 1)
+        iv = base64.b64decode("".join(iv_text.split()), validate=True)
+        encrypted = base64.b64decode("".join(cipher_text.split()), validate=True)
+        if len(iv) != AES.block_size or not encrypted or len(encrypted) % AES.block_size:
+            raise ValueError("invalid_cipher")
+        decrypted = unpad(AES.new(b"KujiangApp747605", AES.MODE_CBC, iv).decrypt(encrypted), AES.block_size)
+        packed = base64.b64decode("".join(decrypted.decode("utf-8").split()), validate=True)
+        return gzip.decompress(packed).decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeError, OSError, EOFError) as exc:
+        raise _酷匠请求错误("decrypt_error") from exc
 
 
 async def _下载章节(
@@ -261,31 +286,27 @@ async def _下载章节(
     sem: asyncio.Semaphore,
 ) -> str:
     async with sem:
-        for attempt in range(酷匠重试次数):
-            try:
-                data = await _请求(
-                    session,
-                    "/read",
-                    params={"book": book_id, "chapter": chapter["id"]},
-                    headers=酷匠正文请求头,
-                )
-                node = (
-                    (data.get("body") or {})
-                    if isinstance(data.get("body"), dict)
-                    else {}
-                )
-                content = _解密正文(str(node.get("content") or ""))
-                if content:
-                    return _文本(content).strip()
-                raise RuntimeError("正文为空或解密失败")
-            except Exception as exc:
-                logger.debug(
-                    "酷匠小说章节获取失败：章节=%s, 错误类型=%s",
-                    chapter.get("id"),
-                    type(exc).__name__,
-                )
-                if attempt + 1 < 酷匠重试次数:
-                    await asyncio.sleep(0.2 * (attempt + 1))
+        try:
+            data = await _请求(
+                session, "/cache_chapter", params={"book": book_id, "chapter": chapter["id"]}
+            )
+            # 缓存正文只有 result=2 表示完整内容；订阅及预览状态不得作为成功正文。
+            if _业务码(data) != 2:
+                raise _酷匠请求错误("chapter_unavailable", code=_业务码(data))
+            node = data.get("body")
+            if not isinstance(node, dict) or str(node.get("chapter")) != chapter["id"]:
+                raise _酷匠请求错误("chapter_mismatch")
+            content = _文本(_解密正文(node.get("content")))
+            if not content:
+                raise _酷匠请求错误("empty_content")
+            return content
+        except Exception as exc:
+            logger.debug(
+                "酷匠小说章节获取失败：章节=%s, 错误类型=%s, category=%s, http_status=%s, code=%s",
+                chapter.get("id"), type(exc).__name__,
+                getattr(exc, "category", "unknown"), getattr(exc, "http_status", None),
+                getattr(exc, "code", None),
+            )
     return ""
 
 
@@ -474,7 +495,11 @@ async def 生成酷匠下载回复流(
         else:
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning("酷匠小说下载失败：错误类型=%s", type(exc).__name__)
+        logger.warning(
+            "酷匠小说下载失败：错误类型=%s, category=%s, http_status=%s, code=%s",
+            type(exc).__name__, getattr(exc, "category", "unknown"),
+            getattr(exc, "http_status", None), getattr(exc, "code", None),
+        )
         yield "下载失败 请重试"
 
 
@@ -491,18 +516,23 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
         return []
     try:
         async with 创建酷匠HTTP会话(4) as session:
-            data = await _请求(session, "/search", params={"keyword": keyword})
-        rows = data.get("body") if isinstance(data.get("body"), list) else []
+            data = await _请求(session, "/search202107", params={"keyword": keyword})
+        if not _成功(data):
+            raise _酷匠请求错误("business_error", code=_业务码(data))
+        body = data.get("body")
+        rows = body.get("list") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            raise _酷匠请求错误("invalid_search")
         result = []
         for item in rows:
             if not isinstance(item, dict):
                 continue
             book_id, title = str(item.get("book") or ""), _文本(item.get("v_book"))
-            if not book_id or not title:
+            if not book_id.isascii() or not book_id.isdigit() or not title:
                 continue
             result.append(
                 {
-                    "status": item.get("status"),
+                    "status": _状态(item),
                     "book_id": book_id,
                     "title": title,
                     "author": _文本(item.get("penname") or "未知"),
@@ -515,5 +545,9 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
             )
         return result[: max(1, min(30, int(需要数量 or 20)))]
     except Exception as exc:
-        logger.debug("酷匠小说搜索失败：错误类型=%s", type(exc).__name__)
-        return []
+        logger.debug(
+            "酷匠小说搜索失败：错误类型=%s, category=%s, http_status=%s, code=%s",
+            type(exc).__name__, getattr(exc, "category", "unknown"),
+            getattr(exc, "http_status", None), getattr(exc, "code", None),
+        )
+        raise

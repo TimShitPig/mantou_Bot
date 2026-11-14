@@ -2543,7 +2543,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v16-platform-order",
+        tuple(_拆分查询词(关键词)), "search-v17-kujiang-app",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
