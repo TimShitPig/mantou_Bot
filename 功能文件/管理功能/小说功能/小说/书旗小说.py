@@ -55,7 +55,7 @@ SEARCH_NO_SIGN_KEYS = {
     "X-NEBULAXMLHTTPREQUEST",
     "callbackUrl",
 }
-下载并发数 = 16
+下载并发数 = 200
 单章重试次数 = 3
 目录重试次数 = 3
 进度日志分段数 = 4
