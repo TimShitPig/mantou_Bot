@@ -1984,15 +1984,40 @@ async def 搜索连城(关键词: str, *, 需要数量: int = 20) -> list[dict[s
 async def 搜索西瓜免费小说(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
     if 西瓜免费小说 is None:
         _标记找书平台失败()
-        return []
+        logger.warning("找书西瓜免费小说搜索失败：category=platform_unavailable")
+        raise _找书平台查询错误("platform_unavailable")
     try:
         return _整理新增平台搜索结果(
             "西瓜免费小说", await 西瓜免费小说.搜索小说(关键词, 需要数量=需要数量), 需要数量
         )
     except Exception as exc:
         _标记找书平台失败()
-        logger.debug("找书西瓜免费小说搜索失败：错误类型=%s", type(exc).__name__)
-        return []
+        category = getattr(exc, "category", "unknown")
+        if not isinstance(category, str) or category not in {
+            "timeout", "network_error", "http_error", "rate_limited", "business_error",
+            "access_restricted", "invalid_response", "invalid_search", "response_too_large",
+        }:
+            category = "unknown"
+        http_status, code = getattr(exc, "http_status", None), getattr(exc, "code", None)
+        if isinstance(http_status, bool) or not isinstance(http_status, int) or not 100 <= http_status <= 599:
+            http_status = None
+        if isinstance(code, bool) or not isinstance(code, int):
+            code = None
+        logger.warning("找书西瓜免费小说搜索失败：错误类型=%s, category=%s, http_status=%s, code=%s",
+                       type(exc).__name__, category, http_status, code)
+        if category == "timeout" or isinstance(exc, asyncio.TimeoutError):
+            reason = "search_timeout"
+        elif category in {"invalid_response", "invalid_search"}:
+            reason = "invalid_response"
+        elif category == "response_too_large":
+            reason = "response_too_large"
+        elif category in {"business_error", "access_restricted", "rate_limited"} or (
+            http_status is not None and 400 <= http_status < 500
+        ):
+            reason = "search_rejected"
+        else:
+            reason = "search_unavailable"
+        raise _找书平台查询错误(reason) from None
 
 
 async def 搜索菠萝包(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:

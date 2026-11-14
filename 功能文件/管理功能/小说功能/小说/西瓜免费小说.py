@@ -298,16 +298,24 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
             response = await _请求(session, "1141", {"keyword": keyword, "index": page,
                                    "size": 15, "searchType": "4"}, deadline=deadline)
             data = response.get("data")
-            rows = data.get("searchList") if isinstance(data, dict) else None
+            if not isinstance(data, dict):
+                raise _西瓜请求错误("invalid_search")
+            total = _整数(data.get("totalCount"))
+            rows = data.get("searchList")
+            # App 将缺失/null 列表作为空页；保留前页结果，不把终页当作请求失败。
+            if rows is None:
+                rows = []
             if not isinstance(rows, list):
                 raise _西瓜请求错误("invalid_search")
+            valid_rows = 0
             for row in rows:
                 if not isinstance(row, dict):
-                    raise _西瓜请求错误("invalid_search")
+                    continue
                 book_id = _书号(row.get("bookId"))
                 title = _文本(row.get("bookName"))
                 if not book_id or not title:
-                    raise _西瓜请求错误("invalid_search")
+                    continue
+                valid_rows += 1
                 if book_id in seen:
                     continue
                 seen.add(book_id)
@@ -316,7 +324,9 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
                                 "url": 构造西瓜链接(book_id), "intro": _文本(row.get("introduction")),
                                 "status": _状态(row.get("status")), "word_count": row.get("totalWordSize") or 0,
                                 "_search_status": {"status": row.get("status")}, "score": 0, "heat": 0})
-            total = _整数(data.get("totalCount"))
+            # 有结果数却无首屏列表，或整页全部无效，仍是协议异常而非正常没书。
+            if (rows and not valid_rows) or (not rows and not results and total is not None and total > 0):
+                raise _西瓜请求错误("invalid_search")
             if len(results) >= maximum or len(rows) < 15 or (total is not None and len(seen) >= total):
                 break
     return results[:maximum]
