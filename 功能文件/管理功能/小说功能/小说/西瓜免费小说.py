@@ -38,7 +38,6 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 
 西瓜基础地址 = "https://xgmf.zuanqianyi.com"
 西瓜并发数 = 200
-西瓜批量章节数 = 3
 西瓜重试次数 = 3
 西瓜正文请求间隔 = 0.5
 西瓜响应大小上限 = 4 * 1024 * 1024
@@ -446,29 +445,35 @@ async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapt
     if not chapters:
         raise _西瓜请求错误("empty_catalog")
     await _确保游客(session)
-    # 先验证首批阅读状态，业务拒绝不再向整本目录扇出重复请求。
-    first = await _正文元数据(session, book_id, chapters[:西瓜批量章节数])
-    batches = iter(range(0, len(chapters), 西瓜批量章节数))
+    # 一次提交完整目录，校验全部阅读状态后再并发下载正文。
+    received = await _正文元数据(session, book_id, chapters)
+    worker_count = min(西瓜并发数, len(chapters))
+    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue(maxsize=西瓜并发数 * 2)
     results = [""] * len(chapters)
     done = 0
     next_log = max(1, (len(chapters) + 3) // 4)
     logger.info("西瓜免费小说章节进度：书籍编号=%s, 进度=0/%s, 百分比=0%%, 并发数=%s, HTTP会话复用=开启",
                 book_id, len(chapters), 西瓜并发数)
 
+    async def produce() -> None:
+        # 获取地址与逐章下载独立，整本一次取址仍保留 200 路正文工作协程。
+        for index, chapter in enumerate(chapters):
+            await queue.put((index, received[chapter["id"]]))
+        for _ in range(worker_count):
+            await queue.put(None)
+
     async def worker() -> None:
         nonlocal done, next_log
-        while (start := next(batches, None)) is not None:
-            batch = chapters[start:start + 西瓜批量章节数]
-            received = first if start == 0 else await _正文元数据(session, book_id, batch)
-            for offset, chapter in enumerate(batch):
-                results[start + offset] = await _下载正文(session, received[chapter["id"]])
-                done += 1
-                if done >= next_log or done == len(chapters):
-                    logger.info("西瓜免费小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 并发数=%s, HTTP会话复用=开启",
-                                book_id, done, len(chapters), int(done * 100 / len(chapters)), done, 西瓜并发数)
-                    next_log += max(1, (len(chapters) + 3) // 4)
+        while (item := await queue.get()) is not None:
+            index, chapter = item
+            results[index] = await _下载正文(session, chapter)
+            done += 1
+            if done >= next_log or done == len(chapters):
+                logger.info("西瓜免费小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 并发数=%s, HTTP会话复用=开启",
+                            book_id, done, len(chapters), int(done * 100 / len(chapters)), done, 西瓜并发数)
+                next_log += max(1, (len(chapters) + 3) // 4)
 
-    tasks = [asyncio.create_task(worker()) for _ in range(min(西瓜并发数, (len(chapters) + 2) // 3))]
+    tasks = [asyncio.create_task(produce())] + [asyncio.create_task(worker()) for _ in range(worker_count)]
     try:
         await asyncio.gather(*tasks)
     finally:
