@@ -40,6 +40,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 西瓜并发数 = 200
 西瓜批量章节数 = 3
 西瓜重试次数 = 3
+西瓜正文请求间隔 = 0.5
 西瓜响应大小上限 = 4 * 1024 * 1024
 西瓜文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 _AES密钥 = b"dzkjgfyxgshylgzm"
@@ -123,7 +124,11 @@ def _解密(value: bytes) -> dict[str, Any]:
 def _初始化同步器() -> None:
     loop = asyncio.get_running_loop()
     if _游客状态.get("loop") is not loop:
-        _游客状态.update(loop=loop, lock=asyncio.Lock(), cpu=asyncio.Semaphore(4))
+        _游客状态.update(loop=loop, lock=asyncio.Lock(), cpu=asyncio.Semaphore(4), chapter_lock=asyncio.Lock())
+    elif "chapter_lock" not in _游客状态:
+        _游客状态["chapter_lock"] = asyncio.Lock()
+    _游客状态.setdefault("chapter_next_at", 0.0)
+    _游客状态.setdefault("chapter_restricted_until", 0.0)
 
 
 def _同步签名(value: str, sign_type: int) -> str:
@@ -174,10 +179,29 @@ async def _请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, 
               sign_type: int = 1, *, deadline: float | None = None) -> dict[str, Any]:
     if call_no not in {"1141", "1110", "111", "1121", "1153"}:
         raise _西瓜请求错误("invalid_endpoint")
+    if call_no == "1153":
+        _初始化同步器()
+        # 同一游客的阅读接口不可跟随 200 个 CDN 工作协程同时扇出。
+        # 锁覆盖传输重试；跨书籍及热重载共用节奏，取消不清空已计入的请求。
+        async with _游客状态["chapter_lock"]:
+            if time.monotonic() < _游客状态["chapter_restricted_until"]:
+                raise _西瓜请求错误("access_restricted", code=8)
+            return await _执行请求(session, call_no, body, sign_type, deadline=deadline)
+    return await _执行请求(session, call_no, body, sign_type, deadline=deadline)
+
+
+async def _执行请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, Any],
+                sign_type: int, *, deadline: float | None) -> dict[str, Any]:
     last: _西瓜请求错误 | None = None
     # f0 会初始化游客，断流后结果不明时不自动重复提交。
     attempts = 1 if call_no == "1121" else 西瓜重试次数
     for attempt in range(attempts):
+        if call_no == "1153":
+            delay = max(0.0, _游客状态["chapter_next_at"] - time.monotonic())
+            if deadline is not None and time.monotonic() + delay >= deadline:
+                raise last or _西瓜请求错误("timeout")
+            if delay:
+                await asyncio.sleep(delay)
         options: dict[str, Any] = {}
         if deadline is not None:
             remaining = deadline - time.monotonic()
@@ -192,6 +216,8 @@ async def _请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, 
             "signType": str(sign_type), "sign": await _签名(query + plaintext, sign_type),
         }
         try:
+            if call_no == "1153":
+                _游客状态["chapter_next_at"] = time.monotonic() + 西瓜正文请求间隔
             async with session.post(URL(西瓜基础地址 + "/glory/free/" + call_no + "?" + query, encoded=True),
                                     data=("start_" + _加密(plaintext)).encode("ascii"), headers=headers,
                                     allow_redirects=False, **options) as response:
@@ -200,6 +226,11 @@ async def _请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, 
             if code is None:
                 raise _西瓜请求错误("invalid_response", http_status=200)
             if code != 0:
+                if call_no == "1153" and code == 8:
+                    # 实测响应为“访问受限”；不假定一分钟后解封，不重建游客绕过。
+                    # 本地冷却仅抑制后续任务继续提交，不自动重放被拒绝的请求。
+                    _游客状态["chapter_restricted_until"] = time.monotonic() + 60
+                    raise _西瓜请求错误("access_restricted", http_status=200, code=code)
                 raise _西瓜请求错误("business_error", http_status=200, code=code)
             return result
         except _西瓜请求错误 as exc:
