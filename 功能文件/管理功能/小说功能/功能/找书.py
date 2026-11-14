@@ -215,7 +215,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
     ) + r")(?:\s*小说)?\s*(找.*)$", re.I,
 )
 翻页命令集合 = {"上一页", "下一页", "上页", "下页", "上", "下"}
-翻页按钮命令正则 = re.compile(r"(上一页|下一页) #([0-9a-f]{12})")
+翻页按钮命令正则 = re.compile(r"(上一页|下一页) ([0-9a-f]{12})")
 # 找书列表中的番茄记录有一部分已下线，只能从搜索接口拿到壳信息。
 # 搜索时只预检最可能展示在前面的候选，避免用户点击后才发现没有目录。
 番茄目录预检缓存秒数 = 600
@@ -2683,6 +2683,8 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
     当前页, 页码, 总页 = _获取找书分页(会话)
     if not 当前页 or 总页 <= 1 or not 用户标识:
         return None
+    from 功能文件.管理功能.基础功能.帮助功能 import 帮助命令回调前缀
+
     方向 = ([('search_prev', '上一页')] if 页码 > 1 else []) + (
         [('search_next', '下一页')] if 页码 < 总页 else []
     )
@@ -2691,11 +2693,9 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
             "id": 编号,
             "render_data": {"label": 标签, "visited_label": 标签, "style": 1},
             "action": {
-                "type": 2,
+                "type": 1,
                 "permission": {"type": 0, "specify_user_ids": [用户标识]},
-                "data": f"{标签} #{会话['id']}",
-                "enter": True,
-                "reply": False,
+                "data": f"{帮助命令回调前缀}{标签} {会话['id']}",
                 "unsupport_tips": f"请发送{标签}",
             },
         }
