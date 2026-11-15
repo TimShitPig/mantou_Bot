@@ -36,6 +36,9 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 分享链接重试次数 = 12
 查询失败重试次数 = 3
 OSS分片上传尝试次数 = 3
+上传鉴权尝试次数 = 3
+上传鉴权超时秒数 = 45
+上传鉴权可重试状态 = frozenset({408, 429, 500, 502, 503, 504})
 OSS可重试状态 = frozenset({408, 429, 500, 502, 503, 504})
 OSS错误码白名单 = frozenset({
     "ServiceUnavailable", "InternalError", "RequestTimeout", "SlowDown",
@@ -703,21 +706,45 @@ class 夸克网盘客户端:
         raise 夸克OSS请求错误("oss_complete", 原因="clock_skew")
 
     async def 获取上传鉴权(self, 上传参数: dict[str, Any], 鉴权元数据: str) -> str:
-        数据 = await self.请求JSON(
-            "POST",
-            "/file/upload/auth",
-            json_data={
-                "task_id": 上传参数.get("task_id"),
-                "auth_info": 上传参数.get("auth_info"),
-                "auth_meta": 鉴权元数据,
-            },
-        )
-        if not 接口成功(数据):
-            raise RuntimeError(f"夸克网盘上传鉴权失败：{限制文本长度(数据)}")
-        鉴权键 = str((数据.get("data") or {}).get("auth_key") or "")
-        if not 鉴权键:
-            raise RuntimeError("夸克网盘上传鉴权没有返回 auth_key")
-        return 鉴权键
+        # 这里只为同一上传任务取得签名，不提交文件、合并或分享写入。
+        鉴权参数 = {
+            "task_id": 上传参数.get("task_id"),
+            "auth_info": 上传参数.get("auth_info"),
+            "auth_meta": 鉴权元数据,
+        }
+        for 尝试次数 in range(1, 上传鉴权尝试次数 + 1):
+            try:
+                数据 = await asyncio.wait_for(
+                    self.请求JSON("POST", "/file/upload/auth", json_data=鉴权参数),
+                    timeout=上传鉴权超时秒数,
+                )
+            except (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch):
+                raise 夸克网盘请求错误("/file/upload/auth", 原因="tls_error") from None
+            except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
+                错误 = 夸克网盘请求错误(
+                    "/file/upload/auth",
+                    原因="timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error",
+                )
+            except 夸克网盘请求错误 as 异常:
+                if 异常.HTTP状态 not in 上传鉴权可重试状态:
+                    raise
+                错误 = 异常
+            else:
+                if not 接口成功(数据):
+                    raise 夸克网盘请求错误("/file/upload/auth", 原因="business_error")
+                鉴权数据 = 数据.get("data")
+                鉴权键 = 鉴权数据.get("auth_key") if isinstance(鉴权数据, dict) else None
+                if not isinstance(鉴权键, str) or not 鉴权键:
+                    raise 夸克网盘请求错误("/file/upload/auth", 原因="invalid_auth_response")
+                return 鉴权键
+            if 尝试次数 >= 上传鉴权尝试次数:
+                raise 错误 from None
+            logger.warning(
+                "夸克网盘上传授权失败重试：stage=%s, http_status=%s, code=%s, reason=%s, attempt=%s/%s",
+                错误.阶段, 错误.HTTP状态, 错误.业务码, 错误.原因,
+                尝试次数, 上传鉴权尝试次数,
+            )
+            await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (尝试次数 - 1))
 
     async def 等待文件可见(self, 文件名: str, 父目录ID: str, 文件大小: int) -> str:
         for 尝试次数 in range(1, 文件可见重试次数 + 1):
