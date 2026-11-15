@@ -31,7 +31,7 @@ except Exception as exc:
     logger.warning(f"小说网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 USER_ID = "8000000"
 XML_CHAPTERLIST_URL = "http://api.shuqireader.com/reader/bc_chapter.php"
@@ -1012,11 +1012,7 @@ def 获取状态文本(书籍: Book) -> str:
 
 
 def 格式化字数(字数: int) -> str:
-    if not 字数:
-        return "未知"
-    if 字数 >= 10000:
-        return f"{round(字数 / 10000, 1)}万字"
-    return f"{字数}字"
+    return 格式化小说字数(字数)
 
 
 async def 准备发送文本文件给当前会话(

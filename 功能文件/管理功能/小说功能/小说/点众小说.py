@@ -27,7 +27,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -948,18 +948,15 @@ def 提取书籍编号(来源: str) -> str:
 
 def 格式化字数(字数: Any) -> str:
     文本 = str(字数 or "").strip()
-    if not 文本:
-        return "未知"
     数字文本 = re.sub(r"[\s,，]", "", 文本)
     if 数字文本.endswith("字"):
         数字文本 = 数字文本[:-1]
     if 数字文本.replace(".", "", 1).isdigit():
         try:
-            n = int(float(数字文本))
-        except Exception:
-            return 文本
-        return f"{round(n / 10000, 1)}万字" if n >= 10000 else f"{n}字"
-    return 文本
+            return 格式化小说字数(int(float(数字文本)))
+        except (ValueError, OverflowError):
+            return "未知"
+    return 格式化小说字数(字数)
 
 
 def 清理文件名(文件名: str) -> str:

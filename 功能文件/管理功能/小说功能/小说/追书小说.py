@@ -37,7 +37,7 @@ except Exception as exc:
 
 from 功能文件.管理功能.基础功能.权限工具 import 读取字段
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 try:
     from Crypto.Cipher import AES
@@ -1043,12 +1043,7 @@ def 格式化下载提示(书籍: 追书书籍) -> str:
 
 
 def 格式化字数(value: Any) -> str:
-    number = _安全整数(value, 0)
-    if number <= 0:
-        return "未知"
-    if number >= 10000:
-        return f"{number / 10000:.1f}".rstrip("0").rstrip(".") + "万字"
-    return f"{number}字"
+    return 格式化小说字数(_安全整数(value, 0))
 
 
 async def 准备发送文本文件给当前会话(

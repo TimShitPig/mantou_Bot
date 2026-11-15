@@ -32,7 +32,7 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 外部提取地址 = "http://154.12.91.167:17324/extract"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
 请求超时秒数 = 20
@@ -745,13 +745,7 @@ def 格式化下载提示(书籍: dict[str, Any]) -> str:
 
 
 def 格式化字数(值: Any) -> str:
-    数值 = 解析字数(值)
-    if 数值 <= 0:
-        return "未知"
-    if 数值 >= 10000:
-        万字 = f"{数值 / 10000:.1f}".rstrip("0").rstrip(".")
-        return f"{万字}万字"
-    return f"{数值}字"
+    return 格式化小说字数(解析字数(值))
 
 
 async def 准备发送文本文件(

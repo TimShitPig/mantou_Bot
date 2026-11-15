@@ -25,7 +25,7 @@ except Exception as exc:
     logger.warning("QQ浏览器小说网盘模块加载失败：错误=%s", type(exc).__name__)
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 QQ浏览器搜索地址 = "https://so.html5.qq.com/ajax/real/search_result"
 QQ浏览器详情地址 = "https://novel.html5.qq.com/qbread/api/novel/bookInfo"
@@ -149,20 +149,7 @@ def _清理QQ浏览器文本(值: Any, *, 保留换行: bool = False) -> str:
 
 
 def 格式化QQ浏览器字数(值: Any) -> str:
-    if isinstance(值, bool):
-        return "未知"
-    文本 = re.sub(r"[\s,，]", "", str(值 or ""))
-    if 文本.endswith("字"):
-        文本 = 文本[:-1]
-    if not 文本.isdigit():
-        return "未知"
-    字数 = int(文本)
-    if 字数 <= 0:
-        return "未知"
-    if 字数 >= 10000:
-        万字 = f"{字数 / 10000:.1f}".rstrip("0").rstrip(".")
-        return f"{万字}万字"
-    return f"{字数}字"
+    return 格式化小说字数(值)
 
 
 def _QQ浏览器安全整数(值: Any, 默认值: int = 0) -> int:

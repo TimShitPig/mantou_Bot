@@ -36,7 +36,7 @@ try:
 except Exception:
     小说网盘 = None
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 西瓜基础地址 = "https://xgmf.zuanqianyi.com"
 西瓜重试次数 = 3
@@ -597,7 +597,7 @@ def _文件名(value: Any) -> str:
 def 格式化西瓜下载提示(detail: dict[str, Any], count: int) -> str:
     return "\n".join([f"书名：{detail.get('title') or '未知'}", f"作者：{detail.get('author') or '未知'}",
                       f"状态：{detail.get('status') or '未知'}", f"章节：{count} 章",
-                      f"字数：{detail.get('word_count') or '未知'}", "", "正在下载中请稍等....."])
+                      f"字数：{格式化小说字数(detail.get('word_count'))}", "", "正在下载中请稍等....."])
 
 
 def 生成西瓜文件(book_id: str, detail: dict[str, Any], chapters: list[dict[str, str]], contents: list[str]) -> tuple[str, bytes]:
@@ -606,7 +606,7 @@ def 生成西瓜文件(book_id: str, detail: dict[str, Any], chapters: list[dict
     title, author = str(detail.get("title") or "未知"), str(detail.get("author") or "未知")
     status = str(detail.get("status") or "未知")
     lines = [西瓜文件声明, "", f"名称：{title}", f"作者：{author}", f"状态：{status}",
-             f"字数：{detail.get('word_count') or '未知'}", f"书籍ID：{book_id}", f"章节数：{len(chapters)}", ""]
+             f"字数：{格式化小说字数(detail.get('word_count'))}", f"书籍ID：{book_id}", f"章节数：{len(chapters)}", ""]
     if detail.get("intro"):
         lines.extend(["简介：", str(detail["intro"]), ""])
     for chapter, content in zip(chapters, contents):

@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.420-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.421-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.420 |
+| 版本 | v6.1.421 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -117,6 +117,8 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 疯狂追书、梧桐 | `疯狂追书 书籍ID`、`梧桐 书籍ID` 或找书结果，身份与开关独立 |
 | 盐言 / 知乎文章 | `story.zhihu.com`、market 章节链接、`zhuanlan.zhihu.com/p/`；只下载当前分享文章；正文提取最多等待 90 秒，连续读取等待 75 秒，失败不立即重试；补录状态明确提示“正文正在补录中，请次日查看”；403提示访问受限，429提示请求较多，冷却期内不重复请求 |
 | Z-Library | 找书及公开书籍链接；保存站点提供的 TXT 或官方转换结果，不在本地转换 EPUB/PDF |
+
+所有小说平台现有下载提示和 TXT 头部的有效字数满一万统一转换为万字，最多保留两位小数并去尾零，例如 `611,655字` 显示为 `61.17万字`；不足一万保留整数，内部精确字数不变，缺失时仍显示未知。
 
 米读使用详情实际返回的字数和完结/连载状态，满一万字以“万字”显示（保留最多两位小数），原始字数不变；搜索接口缺少状态时只补查当前页，失败保留未知，不拉取目录或估算字数。
 

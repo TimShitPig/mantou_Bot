@@ -23,7 +23,7 @@ try:
 except Exception:
     百度网盘 = 小说网盘 = None
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 猫眼搜索地址 = "https://ah2.zhangyue.com/zybook3/u/p/api.php"
 猫眼详情地址 = "https://ah2.zhangyue.com/zybk/api/detail/index"
@@ -314,11 +314,7 @@ async def 下载猫眼正文(
 
 
 def _字数(value: Any) -> str:
-    try:
-        number = int(str(value or "").replace(",", ""))
-        return f"{number:,}字" if number > 0 else "未知"
-    except Exception:
-        return "未知"
+    return 格式化小说字数(value)
 
 
 def _文件名(value: Any) -> str:

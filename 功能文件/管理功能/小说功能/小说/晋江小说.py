@@ -50,7 +50,7 @@ from 功能文件.管理功能.基础功能.运行状态数据库 import (
     读取运行状态值,
     写入运行状态值,
 )
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 晋江详情地址 = "https://android.jjwxc.net/androidapi/novelbasicinfo"
 晋江目录地址 = "https://android.jjwxc.net/androidapi/chapterList"
@@ -820,16 +820,8 @@ def _安全整数(值: Any, 默认值: int = 0) -> int:
 
 
 def 格式化晋江字数(值: Any, 格式化值: Any = "") -> str:
-    原始 = str(格式化值 or 值 or "").strip()
-    if not 原始:
-        return "未知"
-    if "万" in 原始:
-        return 原始 if 原始.endswith("字") else f"{原始}字"
-    数字文本 = re.sub(r"[\s,，]", "", str(值 or 原始))
-    if 数字文本.isdigit():
-        数字 = int(数字文本)
-        return f"{数字}字" if 数字 < 10000 else f"{数字 / 10000:.1f}万字"
-    return 原始 if 原始.endswith("字") else f"{原始}字"
+    字数 = 格式化小说字数(值)
+    return 字数 if 字数 != "未知" else 格式化小说字数(格式化值)
 
 
 def _清理正文(值: Any) -> str:

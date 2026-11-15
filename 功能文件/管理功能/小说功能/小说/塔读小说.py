@@ -640,7 +640,7 @@ except Exception as exc:
     logger.warning("塔读小说百度网盘模块加载失败：错误类型=%s", type(exc).__name__)
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
@@ -877,18 +877,15 @@ def _提取列表(data: Mapping[str, Any], keys: tuple[str, ...]) -> list[Any]:
 
 def _格式化字数(value: Any) -> str:
     text = str(value or "").strip()
-    if not text:
-        return "未知"
     number_text = re.sub(r"[\s,，]", "", text)
     if number_text.endswith("字"):
         number_text = number_text[:-1]
     if number_text.replace(".", "", 1).isdigit():
         try:
-            number = int(float(number_text))
-        except Exception:
-            return text
-        return f"{round(number / 10000, 1)}万字" if number >= 10000 else f"{number}字"
-    return text
+            return 格式化小说字数(int(float(number_text)))
+        except (ValueError, OverflowError):
+            return "未知"
+    return 格式化小说字数(value)
 
 
 def _清理文件名(value: Any) -> str:

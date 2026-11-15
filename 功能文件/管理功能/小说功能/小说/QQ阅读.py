@@ -73,7 +73,7 @@ from Crypto.Hash import MD2, MD4
 from Crypto.Util import Counter
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # === decrypt ===
 """Pure-Python QQRead chapter decrypt (libfock algorithm recovery).
@@ -5316,19 +5316,7 @@ def 清理文件名(value: Any) -> str:
 
 
 def 格式化字数(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "未知"
-    normalized = re.sub(r"[\s,，]", "", text)
-    if normalized.endswith("字"):
-        normalized = normalized[:-1]
-    number = _安全整数(normalized, -1)
-    if number < 0:
-        return text
-    if number >= 10000:
-        formatted = f"{number / 10000:.1f}".rstrip("0").rstrip(".")
-        return f"{formatted}万字"
-    return f"{number}字"
+    return 格式化小说字数(value)
 
 
 def 生成小说文件名(book_id: str, details: dict[str, Any]) -> str:

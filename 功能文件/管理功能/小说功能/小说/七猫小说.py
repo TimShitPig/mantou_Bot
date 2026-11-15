@@ -31,7 +31,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：错误={exc}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 try:
     from Crypto.Cipher import AES
@@ -650,19 +650,7 @@ def 获取状态文本(详情: dict[str, Any]) -> str:
 
 
 def 格式化字数(字数: Any) -> str:
-    文本 = str(字数 or "").strip()
-    if not 文本:
-        return "未知"
-    数字文本 = re.sub(r"[\s,，]", "", 文本)
-    if 数字文本.endswith("字"):
-        数字文本 = 数字文本[:-1]
-    if 数字文本.isdigit():
-        数值 = int(数字文本)
-        if 数值 >= 10000:
-            万字 = f"{数值 / 10000:.1f}".rstrip("0").rstrip(".")
-            return f"{万字}万字"
-        return f"{数值}字"
-    return 文本
+    return 格式化小说字数(字数)
 
 
 async def 准备发送文本文件给当前会话(

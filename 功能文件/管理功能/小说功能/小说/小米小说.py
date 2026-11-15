@@ -33,7 +33,7 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # 小米阅读网页的旧 /api/v2/search 目前只返回固定推荐项；搜索改用当前 dushu
 # 网页的 onebox 接口。旧 reader.browser 接口仍保留，用于兼容用户已有的分享链接。
@@ -326,10 +326,7 @@ def _安全整数(值: Any, 默认值: int = 0) -> int:
 
 
 def 格式化小米字数(值: Any) -> str:
-    数字 = _安全整数(值)
-    if 数字 >= 10000:
-        return f"{数字 / 10000:.2f}".rstrip("0").rstrip(".") + "万字"
-    return f"{数字:,}字" if 数字 > 0 else "未知"
+    return 格式化小说字数(值)
 
 
 async def 获取小米详情(会话: aiohttp.ClientSession, 书籍编号: str) -> dict[str, Any]:

@@ -71,7 +71,7 @@ except Exception as 异常:
     logger.warning(f"百度网盘模块加载失败, 错误={异常}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
 NOVELFM_REQUEST_BOOK_ID = (
@@ -5403,13 +5403,7 @@ def 规范化番茄正文(正文: Any) -> str:
 
 
 def 格式化番茄字数(值: Any) -> str:
-    字数 = 提取有效番茄字数(值)
-    if 字数 <= 0:
-        return "未知"
-    if 字数 >= 10000:
-        万字 = f"{字数 / 10000:.1f}".rstrip("0").rstrip(".")
-        return f"{万字}万字"
-    return f"{字数}字"
+    return 格式化小说字数(提取有效番茄字数(值))
 
 
 def 清理番茄网页文本(文本: Any) -> str:

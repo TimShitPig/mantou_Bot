@@ -38,7 +38,7 @@ except Exception as exc:
     logger.warning(f"百度网盘模块加载失败：错误类型={type(exc).__name__}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 TOKEN_KEY_BASE0 = bytes.fromhex("5a0b1252b41e6bf509dd542a66d25a47")
 TOKEN_KEY_BASE1 = bytes.fromhex("16a7f4c45ec7a517d82f84e753fc5ecd")
@@ -1724,16 +1724,7 @@ def 提取书籍编号(来源: str) -> str:
 
 
 def 格式化字数(字数: Any) -> str:
-    文本 = str(字数 or "").strip()
-    if not 文本:
-        return "未知"
-    数字文本 = re.sub(r"[\s,，]", "", 文本)
-    if 数字文本.endswith("字"):
-        数字文本 = 数字文本[:-1]
-    if 数字文本.isdigit():
-        n = int(数字文本)
-        return f"{round(n / 10000, 1)}万字" if n >= 10000 else f"{n}字"
-    return 文本
+    return 格式化小说字数(字数)
 
 
 def 清理文件名(文件名: str) -> str:

@@ -25,7 +25,7 @@ except Exception:
     百度网盘 = 小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
-from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
+from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 菠萝包搜索地址 = "https://m.sfacg.com/API/HTML5.ashx"
 菠萝包API地址 = "https://minipapi.sfacg.com/pas/mpapi"
@@ -307,11 +307,7 @@ async def 下载菠萝包正文(
 
 
 def _字数(value: Any) -> str:
-    try:
-        number = int(str(value or "").replace(",", ""))
-        return f"{number:,}字" if number > 0 else "未知"
-    except Exception:
-        return "未知"
+    return 格式化小说字数(value)
 
 
 def _文件名(value: Any) -> str:
