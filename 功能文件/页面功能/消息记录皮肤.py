@@ -1,5 +1,7 @@
 """消息记录的浅紫皮肤，与三栏布局和交互样式分开维护。"""
 
+from .新版外观样式 import 新版外观样式
+
 消息记录皮肤 = """
     :root body.messages-workspace {
       --bg:#f6f5f8;
@@ -303,3 +305,6 @@
       :root body.messages-workspace .msg-shell.msg-composer-collapsed .msg-composer-topbar { min-height:44px; }
     }
 """
+
+# 新版外观覆盖层追加在样式链末尾，统一覆盖控制台与消息记录的外观。
+消息记录皮肤 = 消息记录皮肤 + "\n" + 新版外观样式
