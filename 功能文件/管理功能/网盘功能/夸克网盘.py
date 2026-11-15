@@ -24,8 +24,9 @@ from 功能文件.管理功能.网盘功能.网盘Cookie import (
 from 功能文件.管理功能.网盘功能 import 网盘状态
 from 功能文件.管理功能.网盘功能 import 网盘清理工具
 
-基础接口地址 = "https://drive-pc.quark.cn/1/clouddrive"
+基础接口地址 = "https://drive-m.quark.cn/1/clouddrive"
 默认上传目录 = "/小说机器人"
+App单片上传最大字节 = 2 * 1024 * 1024
 PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表每页数量 = 200
 目录列表最大并发数 = 4
@@ -54,6 +55,7 @@ OSS错误码白名单 = frozenset({
     "/file/sort": "directory_list",
     "/file": "directory_create",
     "/file/upload/pre": "upload_pre",
+    "/file/upload/getUploadUrls": "upload_part_auth",
     "/file/update/hash": "upload_hash",
     "/file/upload/auth": "upload_auth",
     "/file/upload/finish": "upload_finish",
@@ -449,6 +451,8 @@ class 夸克网盘客户端:
         文件大小 = 路径.stat().st_size
         文件状态 = 路径.stat()
         内容类型 = mimetypes.guess_type(文件名)[0] or "application/octet-stream"
+        if 文件大小 <= App单片上传最大字节:
+            return await self.上传App单片文件(路径, 父目录ID, 文件名, MD5, SHA1, 文件状态, 内容类型)
         try:
             预上传数据 = await self.请求JSON(
                 "POST",
@@ -511,6 +515,122 @@ class 夸克网盘客户端:
             if not 文件ID:
                 raise 夸克网盘请求错误("/file/upload/finish", 原因="upload_file_id_missing")
         return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
+
+    async def 上传App单片文件(
+        self, 路径: Path, 父目录ID: str, 文件名: str, MD5: str, SHA1: str,
+        文件状态: Any, 内容类型: str,
+    ) -> str:
+        # App 小文件 std 流程直接在 pre 带哈希，省去 hash/auth 和客户端 XML 合并。
+        try:
+            数据 = await self.请求JSON("POST", "/file/upload/pre", json_data={
+                "pdir_fid": str(父目录ID), "file_name": 文件名, "size": 文件状态.st_size,
+                "format_type": 内容类型, "fetch_file_name": True,
+                "l_updated_at": int(文件状态.st_mtime * 1000),
+                "l_created_at": int(文件状态.st_ctime * 1000),
+                "md5": base64.b64encode(bytes.fromhex(MD5)).decode("ascii"),
+                "sha1": SHA1, "source_file_sha1": SHA1,
+                "header_ver": "v4", "pds_version": "std", "upload_type": "single_part",
+                "parallel_upload": False, "ccp_hash_update": False,
+                "part_info_list": [{"content_type": "application/octet-stream",
+                                    "part_number": 1, "part_size": 文件状态.st_size}],
+            })
+        except Exception:
+            清除夸克目录缓存(self.cookie)
+            raise
+        参数 = 数据.get("data")
+        if not isinstance(参数, dict):
+            raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_response")
+        文件ID = 读取文件ID(参数)
+        if 解析布尔值(参数.get("finish")):
+            if not 文件ID:
+                raise 夸克网盘请求错误("/file/upload/pre", 原因="upload_file_id_missing")
+            return 文件ID
+        if not all(isinstance(参数.get(键), str) and 参数[键] for 键 in ("task_id", "upload_id")):
+            raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_response")
+        ETag = await self.上传App签名单片(路径, 参数, MD5, 文件状态.st_size)
+        完成数据 = await self.请求JSON("POST", "/file/upload/finish", json_data={
+            "task_id": 参数["task_id"], "pds_version": "std", "fetch_file_name": True,
+            # App finish 要求带引号的原始 ETag；去掉引号会触发 43001。
+            "part_info_list": [{"part_number": 1, "etag": ETag}],
+        })
+        文件ID = 读取文件ID(完成数据.get("data"))
+        if not 文件ID:
+            raise 夸克网盘请求错误("/file/upload/finish", 原因="upload_file_id_missing")
+        return 文件ID
+
+    async def 刷新App单片签名(self, 参数: dict[str, Any], MD5: str, 文件大小: int) -> dict[str, Any]:
+        请求体 = {
+            "task_id": 参数["task_id"], "upload_id": 参数["upload_id"], "header_ver": "v4",
+            "part_info_list": [{"part_number": 1, "part_size": 文件大小,
+                                "content_md5": base64.b64encode(bytes.fromhex(MD5)).decode("ascii"),
+                                "content_type": "application/octet-stream"}],
+        }
+        for 次数 in range(1, 上传鉴权尝试次数 + 1):
+            try:
+                数据 = await asyncio.wait_for(
+                    self.请求JSON("POST", "/file/upload/getUploadUrls", json_data=请求体),
+                    timeout=上传鉴权超时秒数,
+                )
+            except (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch):
+                raise 夸克网盘请求错误("/file/upload/getUploadUrls", 原因="tls_error") from None
+            except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
+                错误 = 夸克网盘请求错误("/file/upload/getUploadUrls", 原因=(
+                    "timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error"))
+            except 夸克网盘请求错误 as 异常:
+                if 异常.HTTP状态 not in 上传鉴权可重试状态:
+                    raise
+                错误 = 异常
+            else:
+                主体 = 数据.get("data")
+                if not isinstance(主体, dict) or not isinstance(主体.get("upload_urls"), list):
+                    raise 夸克网盘请求错误("/file/upload/getUploadUrls", 原因="invalid_auth_response")
+                return {**参数, "headers": 主体.get("headers"), "part_info_list": 主体["upload_urls"]}
+            if 次数 >= 上传鉴权尝试次数:
+                raise 错误 from None
+            logger.warning("夸克App分片授权失败重试：stage=%s, http_status=%s, reason=%s, attempt=%s/%s",
+                           错误.阶段, 错误.HTTP状态, 错误.原因, 次数, 上传鉴权尝试次数)
+            await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (次数 - 1))
+        raise 夸克网盘请求错误("/file/upload/getUploadUrls", 原因="invalid_auth_response")
+
+    async def 上传App签名单片(self, 路径: Path, 参数: dict[str, Any], MD5: str, 文件大小: int) -> str:
+        会话 = self.获取OSS会话()
+        if getattr(会话, "_retry_connection", False):
+            会话._retry_connection = False
+        已校准时间 = False
+        失败次数 = 0
+        while True:
+            if 失败次数 or 已校准时间:
+                参数 = await self.刷新App单片签名(参数, MD5, 文件大小)
+            地址, 请求头 = 解析App单片上传参数(参数, 文件大小)
+            try:
+                with 路径.open("rb") as 文件:
+                    async with 会话.put(地址, data=文件, headers=请求头, allow_redirects=False) as 响应:
+                        if 响应.status in (200, 201):
+                            值 = str(响应.headers.get("ETag") or "").strip()
+                            if re.fullmatch(r'"[0-9a-fA-F]{32}"', 值):
+                                return 值
+                            if re.fullmatch(r"[0-9a-fA-F]{32}", 值):
+                                return '"' + 值 + '"'
+                            raise 夸克OSS请求错误("oss_part_upload", 原因="invalid_etag")
+                        OSS码 = await 读取OSS错误码(响应)
+                        if not 已校准时间 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
+                            self.同步服务器时间(响应.headers)
+                            已校准时间 = True
+                            continue
+                        错误 = 夸克OSS请求错误("oss_part_upload", HTTP状态=响应.status, OSS码=OSS码)
+                        if 响应.status not in OSS可重试状态:
+                            raise 错误
+            except (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch):
+                raise 夸克OSS请求错误("oss_part_upload", 原因="tls_error") from None
+            except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
+                错误 = 夸克OSS请求错误("oss_part_upload", 原因=(
+                    "timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error"))
+            失败次数 += 1
+            if 失败次数 >= OSS分片上传尝试次数:
+                raise 错误 from None
+            logger.warning("夸克App分片上传失败重试：stage=%s, http_status=%s, reason=%s, oss_code=%s, attempt=%s/%s",
+                           错误.阶段, 错误.HTTP状态, 错误.原因, 错误.OSS码 or "unknown", 失败次数, OSS分片上传尝试次数)
+            await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (失败次数 - 1))
 
     async def 获取文件下载地址(self, 文件ID: str) -> str:
         """解析当前登录账号内精确文件的原文件地址；调用方负责同源代理。"""
@@ -863,9 +983,12 @@ class 夸克网盘客户端:
         会话 = self.获取会话()
         请求参数 = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         请求参数.update(params or {})
-        地址 = 路径 if 路径.startswith("http") else f"{基础接口地址}{路径}"
+        # 业务仅向 App 网关发送现有 Cookie；扫码换票仍由账号模块独立处理。
+        if not isinstance(路径, str) or not 路径.startswith("/") or 路径.startswith("//") or "?" in 路径 or "#" in 路径:
+            raise 夸克网盘请求错误("unknown", 原因="invalid_api_path")
+        地址 = f"{基础接口地址}{路径}"
         for 尝试次数 in range(1, 查询失败重试次数 + 1):
-            async with 会话.request(方法, 地址, params=请求参数, json=json_data) as 响应:
+            async with 会话.request(方法, 地址, params=请求参数, json=json_data, allow_redirects=False) as 响应:
                 self.同步服务器时间(响应.headers)
                 文本 = await 响应.text()
                 self.刷新会话Cookie(响应)
@@ -875,7 +998,7 @@ class 夸克网盘客户端:
             except (TypeError, ValueError):
                 raise 夸克网盘请求错误(
                     路径, HTTP状态=HTTP状态,
-                    原因="http_error" if HTTP状态 >= 400 else "invalid_json"
+                    原因="http_error" if HTTP状态 != 200 else "invalid_json"
                 ) from None
             if not isinstance(数据, dict):
                 raise 夸克网盘请求错误(路径, HTTP状态=HTTP状态, 原因="invalid_shape")
@@ -885,11 +1008,11 @@ class 夸克网盘客户端:
                 and 业务码 == 15020
                 and str(数据.get("message") or "").strip() == "query fail [61004]"
             )
-            if HTTP状态 >= 400 or not 接口成功(数据):
+            if HTTP状态 != 200 or not 接口成功(数据):
                 异常 = 夸克网盘请求错误(
                     路径, HTTP状态=HTTP状态, 业务码=业务码,
                     原因="query_failed" if 查询失败 else (
-                        "http_error" if HTTP状态 >= 400 else "business_error"
+                        "http_error" if HTTP状态 != 200 else "business_error"
                     ),
                     页码=安全整数(请求参数.get("_page"), 0) or None,
                 )
@@ -1041,6 +1164,40 @@ def 读取配置字段(配置: Any, 字段名: str) -> Any:
         return 值
     分类 = getattr(配置, "quark_pan_settings", None)
     return getattr(分类, 字段名, None) if 分类 is not None else None
+
+
+def 解析App单片上传参数(参数: dict[str, Any], 文件大小: int) -> tuple[str, dict[str, str]]:
+    分片 = 参数.get("part_info_list")
+    if not isinstance(分片, list) or len(分片) != 1 or not isinstance(分片[0], dict):
+        raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_part")
+    项目 = 分片[0]
+    if 项目.get("part_number") != 1 or ("part_size" in 项目 and 项目["part_size"] != 文件大小):
+        raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_part")
+    地址 = 项目.get("upload_url")
+    try:
+        解析 = urlsplit(地址) if isinstance(地址, str) else None
+        有效 = (解析 is not None and 解析.scheme == "https" and 解析.port in (None, 443)
+                and 解析.username is None and 解析.password is None and not 解析.fragment
+                and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.pds\.quark\.cn", str(解析.hostname or ""))
+                and not any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 地址))
+    except ValueError:
+        有效 = False
+    签名 = 项目.get("signature_info")
+    鉴权 = 签名.get("signature") if isinstance(签名, dict) else None
+    if not 有效 or not isinstance(鉴权, str) or not 鉴权 or len(鉴权) > 8192 or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 鉴权):
+        raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_part")
+    请求头 = {"Authorization": 鉴权, "Content-Type": "application/octet-stream"}
+    头部 = 参数.get("headers")
+    if not isinstance(头部, dict):
+        raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_headers")
+    for 名称, 值 in 头部.items():
+        if not isinstance(名称, str) or not isinstance(值, str):
+            raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_headers")
+        if 名称.lower().startswith("x-oss-") or 名称.lower() == "content-md5":
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", 名称) or len(值) > 8192 or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 值):
+                raise 夸克网盘请求错误("/file/upload/pre", 原因="invalid_upload_headers")
+            请求头[名称] = 值
+    return 地址, 请求头
 
 
 def 计算文件哈希(路径: Path) -> tuple[str, str]:
