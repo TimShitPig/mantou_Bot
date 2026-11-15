@@ -1,89 +1,126 @@
-"""登录页模板，独立拼接登录页样式与脚本。"""
+"""帮助网页的独立登录页模板。"""
 
-from .登录页面样式 import 登录页面样式
-from .登录页面脚本 import 登录页面脚本
+from .登录页面样式 import 登录页样式
 from .新版外观样式 import 新版外观样式
+from .登录页面脚本 import 登录页脚本
 
-页面头部前缀 = """<!doctype html>
-<html lang="zh-CN" data-theme="light">
+登录页前缀 = """<!doctype html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4efe4">
-  <title>登录 · 馒头工作台</title>
+  <title>管理员登录 · 馒头工作台</title>
   <script>
     (() => {
       try {
         const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
-        const dark = preference === 'dark';
         document.documentElement.dataset.themePreference = preference;
-        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.theme = preference;
         if (preference === 'dark') document.querySelector('meta[name="theme-color"]').content = '#141310';
-      } catch (_) {}
+      } catch (_) { document.documentElement.dataset.theme = 'light'; }
     })();
   </script>
   <style>"""
-
-页面头部后缀 = """</style>
+登录页样式后缀 = """</style>
 </head>
-"""
-
-页面主体 = """<body class="login-page">
-  <div class="login-shell">
-    <header class="login-topbar">
-      <div class="login-brand">
-        <div class="login-brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 10c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7m7 7c-3-3 3-4 0-7"/><path d="M5 24a11 11 0 0 1 22 0c0 4-22 4-22 0Z"/></svg></div>
-        <div class="login-brand-copy"><strong>馒头工作台</strong><span>MANTOU BOT</span></div>
-      </div>
-      <label class="login-theme-control">
-        <span class="login-theme-icon" aria-hidden="true">☾</span>
-        <span class="login-theme-label" id="login-theme-label">浅色模式</span>
-        <button class="login-theme-select" id="login-theme-select" type="button" aria-label="切换主题" aria-haspopup="listbox" aria-expanded="false"><span aria-hidden="true">⌄</span></button>
-        <div class="login-theme-menu" id="login-theme-menu" hidden role="listbox">
-          <button type="button" role="option" data-theme-option="light" aria-selected="true">浅色模式</button>
-          <button type="button" role="option" data-theme-option="dark" aria-selected="false">深色模式</button>
-        </div>
-      </label>
-    </header>
-    <main class="login-stage">
-      <div class="login-art login-art-book" aria-hidden="true"><svg viewBox="0 0 320 300" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M50 230c-6-28 16-52 44-56 18-2 32 6 40 18" stroke="currentColor" opacity=".35"/><ellipse cx="160" cy="248" rx="112" ry="14" fill="var(--art-shadow)" stroke="none"/><path d="M62 222c26-8 52-4 72 12v42c-20-16-46-20-72-12Z" fill="var(--art-lavender)" stroke="none"/><path d="M140 234c20-16 46-20 74-12v42c-26-8-54-4-74 12Z" fill="var(--art-peach)" stroke="none"/><path d="M140 124c20-16 44-20 70-12v108c-26-8-50-4-70 12Z" fill="var(--art-paper)" stroke="var(--art-line)" stroke-width="1.6"/><path d="M62 112c26-8 50-4 78 12v108c-28-16-52-20-78-12Z" fill="var(--art-paper)" stroke="var(--art-line)" stroke-width="1.6"/><path d="M140 124c20-16 44-20 70-12" stroke="var(--art-line)" stroke-width="1.6"/><path d="M84 142c16-2 32 4 46 14m-46 22c16-2 32 4 46 14m-46 22c16-2 32 4 46 14" stroke="var(--art-line)" stroke-width="1.2" opacity=".7"/><path d="M164 142c14-6 28-8 40-6m-40 22c14-6 28-8 40-6m-40 22c14-6 28-8 40-6" stroke="var(--art-line)" stroke-width="1.2" opacity=".7"/><path d="M236 96c16 6 26 22 24 40" stroke="var(--art-line)" stroke-width="1.4"/><path d="M228 108c22-46 34-58 46-62-4 16-16 38-38 66Z" fill="var(--art-blush)" stroke="var(--art-line)" stroke-width="1.3"/><path d="M60 92l3 9 9 3-9 3-3 9-3-9-9-3 9-3Z" fill="var(--art-peach)" stroke="none"/><path d="M246 56l2 7 7 2-7 2-2 7-2-7-7-2 7-2Z" fill="var(--art-lavender)" stroke="none"/></svg></div>
-      <form class="login-panel" id="login-form" method="post" action="/login" autocomplete="off">
-        <div class="login-panel-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+<body class="login-page">
+  <header class="login-topbar">
+    <div class="login-brand">
+      <span class="login-brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0v2a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z"/><path d="M4 19h16M10 8.5a3 3 0 0 1 2.5-1"/></svg>
+      </span>
+      <div><strong>馒头工作台</strong><small>MANTOU BOT</small></div>
+    </div>
+    <label class="login-theme-control" for="login-theme-select">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a8.5 8.5 0 0 1-11-11 8.5 8.5 0 1 0 11 11Z"/><path d="M17 3v4m-2-2h4"/></svg>
+      <select id="login-theme-select" aria-label="主题模式"><option value="light">浅色模式</option><option value="dark">深色模式</option></select>
+    </label>
+  </header>
+  <main class="login-stage">
+    <svg class="login-art login-book" viewBox="0 0 290 232" aria-hidden="true">
+      <ellipse class="art-shadow" cx="140" cy="205" rx="119" ry="14"/>
+      <path class="art-lavender" d="M13 151q59-34 116-5 64-34 134-17l19 61q-86 1-145 29-59-13-112-8Z"/>
+      <path class="art-peach" d="M15 139q62-31 115 1 64-35 126-16l17 60q-76 0-138 29-53-22-111-14Z"/>
+      <path class="art-paper" d="M11 119q61-32 116 16 64-51 126-39l13 84q-71-10-132 31-50-42-113-26Z"/>
+      <path class="art-ink" d="m127 135 7 76M29 137q41-13 82 13m-80-1q42-12 82 14m-79-2q41-10 80 15m-78-2q41-9 78 14m29-38q42-31 90-29m-89 41q42-29 91-28m-91 40q42-26 93-27m-92 38q43-26 94-25"/>
+      <path class="art-ribbon" d="m189 109 7 50 8-11 11 4-9-49"/>
+      <path class="art-paper" d="M196 137q-4-44 24-82 21-27 56-35-6 43-26 64l-19 7 11 2q-19 29-46 44Z"/>
+      <path class="art-ink" d="M182 164q32-72 78-126m-55 83 3-24m6 10 28-12m-22 2 1-23m6 12 28-17m-19 5 2-22"/>
+      <path class="art-peach" d="m190 141 7 3-14 20-2-6Z"/>
+      <path class="art-spark" d="M49 49q3 14 16 16-13 2-16 16-3-14-16-16 13-2 16-16Zm116-30q2 10 12 12-10 2-12 12-2-10-12-12 10-2 12-12Z"/>
+      <circle class="art-dot" cx="92" cy="58" r="3"/>
+    </svg>
+    <section class="login-panel" aria-labelledby="login-heading">
+      <div class="login-panel-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="login-intro">
         <span class="login-kicker">管理员入口</span>
-        <h1>欢迎回来</h1>
-        <p class="login-lede">登录馒头工作台，管理你的 QQ 机器人。</p>
-        <label class="login-field">
-          <span>管理员账号</span>
+        <h1 id="login-heading">欢迎回来</h1>
+        <p>登录馒头工作台，管理你的 QQ 机器人。</p>
+      </div>
+      <form id="login-form" class="login-form" method="post" action="/api/login">
+        <div class="login-field">
+          <label for="login-username">管理员账号</label>
           <div class="login-field-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>
-            <input id="login-username" name="username" type="text" placeholder="输入管理员账号" autocomplete="username" required>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3"/><path d="M5 19v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"/></svg>
+            <input id="login-username" name="username" autocomplete="username" placeholder="输入管理员账号" required>
           </div>
-        </label>
-        <label class="login-field">
-          <span>密码</span>
-          <div class="login-field-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-            <input id="login-password" name="password" type="password" placeholder="输入密码" autocomplete="current-password" required>
-            <button class="login-field-action" id="login-password-toggle" type="button" aria-label="显示密码" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+        <div class="login-field">
+          <label for="login-password">密码</label>
+          <div class="login-field-control login-password-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/></svg>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+            <button id="login-password-toggle" class="login-password-toggle" type="button" aria-label="显示密码" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
           </div>
-        </label>
-        <div class="login-error" id="login-error" role="alert" hidden></div>
-        <button class="login-button" id="login-submit" type="submit"><span>登录工作台</span><span class="login-button-arrow" aria-hidden="true">→</span></button>
-        <div class="login-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>登录状态在本设备保留 30 天，更换设备需重新登录。</span></div>
+        </div>
+        <button class="login-button" type="submit">
+          <span>登录工作台</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+        </button>
       </form>
-      <div class="login-art login-art-cat" aria-hidden="true"><svg viewBox="0 0 320 280" fill="none" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="160" cy="238" rx="86" ry="12" fill="var(--art-shadow)" stroke="none"/><path d="M96 232c-6-34 14-62 46-66 6-26 12-38 18-44 10 10 18 22 24 44 30 6 48 32 42 66Z" fill="var(--art-paper)" stroke="var(--art-line)" stroke-width="1.6"/><path d="M108 150l-8-34 30 14m72 20 8-34-30 14" fill="var(--art-peach)" stroke="var(--art-line)" stroke-width="1.4"/><path d="M138 196c4-5 12-5 16 0m28 0c4-5 12-5 16 0" stroke="var(--art-line)" stroke-width="1.6"/><path d="M156 210c4 4 10 4 14 0" stroke="var(--art-line)" stroke-width="1.4"/><path d="M120 214c-4 4-10 6-16 4m92-4c4 4 10 6 16 4" stroke="var(--art-line)" stroke-width="1.2" opacity=".7"/><ellipse cx="160" cy="244" rx="52" ry="14" fill="var(--art-lavender)" stroke="none"/><path d="M222 96c14-2 22 8 18 22-4 12-16 16-24 10" fill="var(--art-peach)" stroke="var(--art-line)" stroke-width="1.3"/><path d="M84 72l2 7 7 2-7 2-2 7-2-7-7-2 7-2Z" fill="var(--art-blush)" stroke="none"/></svg></div>
-    </main>
-  </div>
+      <p id="login-message" class="login-message" role="alert" aria-live="polite"></p>
+      <div class="login-note">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 5 3 8 7 10 4-2 7-5 7-10V6Z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>登录状态在本设备保留 30 天，更换设备需重新登录。</span>
+      </div>
+    </section>
+    <svg class="login-art login-cat" viewBox="0 0 213 223" aria-hidden="true">
+      <ellipse class="art-shadow" cx="107" cy="199" rx="86" ry="12"/>
+      <path class="art-lavender" d="M25 169q-4-29 56-29h59q42 1 46 25 6 26-45 29H80q-53 0-55-25Z"/>
+      <path class="art-paper" d="M53 146q-7-8-7-24 0-20 13-31-4-32 5-38 6-4 30 20 15-6 34-4 24-24 31-21 11 5 5 39 16 14 16 35 0 38-45 40H94q-29 0-41-16Z"/>
+      <path class="art-blush" d="m65 63 15 14-13 8Zm91-5-13 15 14 8Z"/>
+      <path class="art-ink" d="M82 117q4-6 9 0m36 0q5-6 10 0m-33 10q6 7 11 0m-7-3h4m-49-3-10-2m12 10-9 2m92-9 11-3m-11 11 9 2"/>
+      <ellipse class="art-blush" cx="78" cy="128" rx="8" ry="4"/>
+      <ellipse class="art-blush" cx="140" cy="128" rx="8" ry="4"/>
+      <path class="art-paper" d="M70 149q-7 16 7 19 14 2 15-13m43 0q2 15 14 13 14-3 7-17"/>
+      <path class="art-peach" d="M22 28q0-10 12-10h24q12 0 12 10v9q0 10-12 10H47l-9 8v-8h-4q-12 0-12-10Z"/>
+      <path class="art-ink" d="M36 33h1m9 0h1m9 0h1"/>
+      <path class="art-spark" d="M180 17q2 10 13 13-11 2-13 13-3-11-13-13 10-3 13-13ZM19 108q2 8 10 10-8 2-10 10-2-8-10-10 8-2 10-10Z"/>
+      <circle class="art-dot" cx="199" cy="97" r="3"/>
+    </svg>
+  </main>"""
+登录页脚本前缀 = """
   <script>"""
-
-页面后缀 = """</script>
+登录页脚本后缀 = """</script>
 </body>
 </html>
 """
-
-登录页样式串 = """
-""" + 登录页面样式 + "\n" + 新版外观样式
+_登录页面缓存: str | None = None
 
 
-def 渲染登录页面():
-    return 页面头部前缀 + 登录页样式串 + 页面头部后缀 + 页面主体 + 登录页面脚本 + 页面后缀
+def 渲染登录页面() -> str:
+    global _登录页面缓存
+    if _登录页面缓存 is None:
+        _登录页面缓存 = (
+            登录页前缀
+            + 登录页样式
+            + 新版外观样式
+            + 登录页样式后缀
+            + 登录页脚本前缀
+            + 登录页脚本
+            + 登录页脚本后缀
+        )
+    return _登录页面缓存
