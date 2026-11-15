@@ -202,8 +202,8 @@ async def _签名(value: str, sign_type: int) -> str:
         return await asyncio.to_thread(_同步签名, value, sign_type)
 
 
-def 创建西瓜HTTP会话(concurrency: int = 0) -> aiohttp.ClientSession:
-    # 正文并发由本书实际章节工作协程控制，连接池不再额外限制为固定路数。
+def 创建西瓜HTTP会话(concurrency: int = 500) -> aiohttp.ClientSession:
+    # 正文最多 500 路异步并发，连接池使用相同上限。
     session = aiohttp.ClientSession(
         headers={"User-Agent": "okhttp/4.9.2", "Accept": "application/json"},
         timeout=aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20),
@@ -551,7 +551,7 @@ async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapt
         raise _西瓜请求错误("empty_catalog")
     # 一次提交完整目录，校验全部阅读状态后再并发下载正文。
     received = await _正文元数据(session, book_id, chapters)
-    worker_count = len(chapters)
+    worker_count = min(500, len(chapters))
     queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue(maxsize=worker_count * 2)
     results = [""] * len(chapters)
     done = 0
@@ -560,7 +560,7 @@ async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapt
                 book_id, len(chapters), worker_count)
 
     async def produce() -> None:
-        # 获取地址与逐章下载独立，有多少章就使用多少个正文工作协程。
+        # 获取地址与逐章下载独立，最多使用 500 个正文工作协程。
         for index, chapter in enumerate(chapters):
             await queue.put((index, received[chapter["id"]]))
         for _ in range(worker_count):
