@@ -217,4 +217,93 @@
       .dash-biz-row { grid-template-columns: 26px minmax(0, 1fr) 30px; }
       .dash-biz-note { display: none; }
     }
+
+    /* ========== 17. 全站轮廓统一：细线卡片、行式列表、统一控件 ========== */
+    /* 外层卡片：统一 12px 圆角 + 1px 细线，只留一层近乎不可见的投影 */
+    .studio-card:not(.dash-snap) {
+      border: 1px solid var(--studio-border);
+      border-radius: 12px;
+      background: var(--studio-card);
+      box-shadow: 0 1px 0 #211e1906;
+    }
+    :root[data-theme="dark"] .studio-card:not(.dash-snap) { box-shadow: none; }
+    /* 卡片头：衬线标题 + 统一灰色眉标，底部一条细线收边 */
+    .studio-card-head, .studio-service-head { padding-bottom: 12px; border-bottom: 1px solid var(--studio-border); }
+    .studio-card-head h2, .studio-service-head h2, .studio-bot-panel h2 {
+      margin: 0;
+      font-family: var(--brand-serif);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      line-height: 1.4;
+    }
+    .studio-kicker, .studio-bot-kicker {
+      font-size: 11px;
+      letter-spacing: .12em;
+      color: var(--studio-muted);
+      text-transform: none;
+    }
+    .studio-card-head p, .studio-service-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 11.5px; }
+
+    /* 内嵌开关改成“行”，去掉卡中卡的双层边框 */
+    .studio-novel-control, .studio-novel-switch-row {
+      border: 0;
+      border-top: 1px solid var(--studio-border);
+      border-radius: 0;
+      background: transparent;
+      padding: 14px 0;
+      margin: 0;
+    }
+    .studio-novel-settings .studio-novel-control:first-of-type,
+    .studio-novel-settings .studio-novel-switch-row:first-of-type { border-top: 0; }
+
+    /* 页头：衬线大标题，收窄字距 */
+    .page-heading h1 { font-family: var(--brand-serif); font-size: 27px; font-weight: 700; letter-spacing: .01em; }
+    .page-heading p { max-width: 62ch; }
+
+    /* 控件：统一 8px 圆角与高度，焦点环改成竹青细环 */
+    .studio-primary, .outline-button, .primary-button { border-radius: 8px; }
+    .studio-primary, .primary-button { min-height: 36px; }
+    .outline-button { min-height: 36px; }
+    :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+      outline: 2px solid var(--studio-accent);
+      outline-offset: 2px;
+    }
+
+    /* 侧栏：导航项统一 8px 圆角，选中态用竹青底色 */
+    .studio-nav a { border-radius: 8px; }
+    .studio-nav a.active { background: var(--studio-accent-soft); color: var(--studio-ink); }
+    :root[data-theme="dark"] .studio-nav a.active { background: #22302a; color: var(--studio-ink); }
+
+    /* 列表行：hover 温和染色，分隔线统一细线 */
+    .studio-service-row, .dash-biz-row { transition: background .16s ease; }
+    .studio-service-row:hover, .dash-biz-row:hover { background: var(--studio-wash); }
+
+    /* 滚动条与新外观一致 */
+    :root body:not(.messages-workspace) * { scrollbar-color: #b9ad96 transparent; }
+    :root[data-theme="dark"] body:not(.messages-workspace) * { scrollbar-color: #4a4438 transparent; }
+
+    /* ========== 18. 细节过渡与内层控件统一 ========== */
+    /* 深色下让“系统快照”仍保持一块更深的底，不被普通卡片吞掉 */
+    :root[data-theme="dark"] .dash-snap { background: #100f0c; border-color: #3a3327; }
+
+    /* 视图切换轻微淡入，操作反馈更连贯（尊重 reduced-motion） */
+    body:not(.messages-workspace) .page-view { animation: studioFade .22s ease both; }
+    @keyframes studioFade {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body:not(.messages-workspace) .page-view { animation: none; }
+    }
+
+    /* 内层平台选择块：统一 8px 圆角与细线，选中态用竹青底 */
+    .pan-tab, .novel-grid, .pan-grid { border-radius: 8px; }
+    .pan-tab { border: 1px solid var(--studio-border); border-radius: 8px; background: var(--studio-wash); }
+    .pan-tab:hover { border-color: #1c665040; background: var(--studio-soft); }
+    .pan-tab.is-active, .pan-tab.active { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+    .novel-grid { border: 1px solid var(--studio-border); overflow: hidden; }
+
+    /* 空状态统一成细线提示块 */
+    .empty { border: 1px dashed var(--studio-border); border-radius: 10px; color: var(--studio-muted); }
 """
