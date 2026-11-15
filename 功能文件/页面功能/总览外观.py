@@ -306,4 +306,66 @@
 
     /* 空状态统一成细线提示块 */
     .empty { border: 1px dashed var(--studio-border); border-radius: 10px; color: var(--studio-muted); }
+
+    /* ========== 19. 页面级结构：网盘单卡、小说统计、运行数值 ========== */
+    /* 网盘页：平台切换收进卡片头，账号区整幅展开 */
+    .studio-pan-page { display: block; }
+    .studio-pan-head { align-items: flex-start; gap: 16px; }
+    .studio-pan-head .pan-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      width: 100%;
+      max-width: 560px;
+      margin: 2px 0 0;
+    }
+    .studio-pan-head .pan-tab {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 56px;
+      padding: 10px 12px;
+      text-align: left;
+    }
+    .studio-pan-head .pan-tab .pan-tab-copy { min-width: 0; }
+    .studio-pan-head .pan-tab .pan-tab-copy small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pan-grid { margin-top: 4px; }
+
+    /* 小说页：开启数量当成主统计 */
+    .novel-stat { text-align: right; }
+    .novel-stat strong {
+      display: block;
+      font-family: var(--brand-serif);
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.3;
+      color: var(--studio-ink);
+      white-space: nowrap;
+    }
+    .novel-stat span { display: block; margin-top: 2px; color: var(--studio-muted); font-size: 10.5px; letter-spacing: .1em; }
+    .studio-novel-metrics { flex-direction: row-reverse; align-items: center; justify-content: flex-start; gap: 12px; }
+    @media (max-width: 760px) {
+      .novel-stat strong { font-size: 18px; }
+      .studio-pan-head { flex-direction: column; gap: 12px; }
+      .studio-pan-head .pan-tabs { max-width: none; margin: 0; }
+      .studio-pan-head .pan-tab { min-height: 48px; padding: 8px 10px; }
+    }
+    @media (max-width: 560px) {
+      .studio-pan-head .pan-tabs { grid-template-columns: 1fr; }
+    }
+
+    /* 运行状态：数值当主角，单位与说明退后 */
+    .studio-resource strong {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      font-size: clamp(24px, 2.6vw, 32px);
+      font-weight: 500;
+      letter-spacing: -.01em;
+      font-variant-numeric: tabular-nums;
+    }
+    .studio-resource h3 { color: var(--studio-muted); font-size: 11.5px; letter-spacing: .1em; }
 """
