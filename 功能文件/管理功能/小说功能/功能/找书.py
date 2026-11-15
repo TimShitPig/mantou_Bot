@@ -1291,7 +1291,7 @@ def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") ->
         "QQ浏览器": {"is_finished"}, "小米": {"finish"},
         "点众": {"isend"}, "塔读": {"isend", "isfinished", "finish"},
     }
-    反向 = platform in {"追书", "疯狂追书", "梧桐"} and 键 in {"isserial", "is_serial"}
+    反向 = platform in {"追书", "疯狂追书", "梧桐", "塔读"} and 键 in {"isserial", "is_serial"}
     if 反向 or 键 in 正向字段.get(platform, set()):
         if 文本 in {"1", "true", "yes", "y"}:
             return "连载" if 反向 else "完结"
@@ -2804,7 +2804,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v22-title-author",
+        tuple(_拆分查询词(关键词)), "search-v23-platform-status",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -2967,6 +2967,66 @@ async def _补全本页米读状态(会话: dict[str, Any]) -> None:
                 await asyncio.gather(*(补查(客户端, 项) for 项 in 待补项))
     except Exception as exc:
         logger.debug("找书米读状态补查提前结束：错误类型=%s", type(exc).__name__)
+
+
+async def _补全本页平台状态(会话: dict[str, Any]) -> None:
+    """限时补全当前页同书详情，只读取百度、小米及酷匠元数据。"""
+    接口表 = {
+        "百度": (百度小说, "创建百度HTTP会话", "获取百度详情"),
+        "小米": (小米小说, "创建小米HTTP会话", "获取小米详情"),
+        "酷匠": (酷匠小说, "创建酷匠HTTP会话", "获取酷匠元数据"),
+    }
+    当前页, _, _ = _获取找书分页(会话)
+    分组: dict[str, list[dict[str, Any]]] = {}
+    for 项 in 当前页:
+        if not 项 or 项.get("platform") not in 接口表:
+            continue
+        平台 = 项["platform"]
+        if (
+            接口表[平台][0] is not None
+            and 规范化找书状态(项, platform=平台) == "未知"
+            and not 项.get("_平台详情已核验")
+        ):
+            分组.setdefault(平台, []).append(项)
+    if not 分组:
+        return
+    信号量 = asyncio.Semaphore(4)
+
+    async def 补查(客户端: Any, 平台: str, 查询: Any, 项: dict[str, Any]) -> None:
+        书号 = str(项["book_id"])
+        try:
+            async with 信号量:
+                详情 = await 查询(客户端, f"dushu:{书号}" if 平台 == "小米" else 书号)
+        except Exception as exc:
+            logger.debug("找书平台状态补查失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+            return
+        if (
+            not isinstance(详情, dict)
+            or str(详情.get("doc_id" if 平台 == "百度" else "book_id") or "") != 书号
+            or 规范标题(详情.get("title")) != 规范标题(项.get("title"))
+            or 规范标题(详情.get("author")) != 规范标题(项.get("author"))
+        ):
+            return
+        状态 = 规范化找书状态(详情, platform=平台)
+        if 状态 != "未知":
+            项["status"] = 状态
+            项["_平台详情已核验"] = True
+        if not 项.get("word_count"):
+            项["word_count"] = _安全整数热度(详情.get("word_count"))
+
+    async def 补查平台(平台: str, 项目: list[dict[str, Any]]) -> None:
+        模块, 会话函数, 查询函数 = 接口表[平台]
+        try:
+            async with getattr(模块, 会话函数)(4) as 客户端:
+                await asyncio.gather(*(补查(客户端, 平台, getattr(模块, 查询函数), 项) for 项 in 项目))
+        except Exception as exc:
+            logger.debug("找书平台状态会话失败：平台=%s, 错误类型=%s", 平台, type(exc).__name__)
+
+    try:
+        async with asyncio.timeout(2.5):
+            await asyncio.gather(*(补查平台(平台, 项目) for 平台, 项目 in 分组.items()))
+    except Exception as exc:
+        logger.debug("找书平台状态补查提前结束：错误类型=%s", type(exc).__name__)
 
 
 def _找书展示字段(项: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -3318,7 +3378,7 @@ async def 处理找书指令(
     if 当前会话 is None:
         return None
     页码 = 会话["page"]
-    await asyncio.gather(_补全本页番茄状态(会话), _补全本页米读状态(会话))
+    await asyncio.gather(_补全本页番茄状态(会话), _补全本页米读状态(会话), _补全本页平台状态(会话))
     if 找书会话.get(会话键) is not 当前会话 or 当前会话["page"] != 页码:
         return None
     if 是QQ官方机器人(event):

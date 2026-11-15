@@ -85,9 +85,9 @@ except Exception:
     r"(?::\d+)?(?:[/?:#]|$)|zssq(?:free)?://)",
     re.I,
 )
-追书正文最大动态并发数 = 400
+追书正文最大动态并发数 = 300
 追书正文最大尝试次数 = 3
-追书解密并发数 = max(4, min(32, (os.cpu_count() or 4) * 2))
+追书解密并发数 = 300
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 正文降级提示 = (
@@ -843,7 +843,18 @@ async def 下载全部章节(
             if 待处理 and 尝试次数 < 追书正文最大尝试次数:
                 await asyncio.sleep(min(1.0, 0.25 * 尝试次数))
     finally:
-        解密执行器.shutdown(wait=False, cancel_futures=True)
+        关闭任务 = asyncio.create_task(
+            asyncio.to_thread(解密执行器.shutdown, wait=True, cancel_futures=True)
+        )
+        收尾取消 = False
+        while not 关闭任务.done():
+            try:
+                await asyncio.shield(关闭任务)
+            except asyncio.CancelledError:
+                收尾取消 = True
+        关闭任务.result()
+        if 收尾取消:
+            raise asyncio.CancelledError
 
     if 待处理 or len(结果) != 总数:
         raise ZhuishuError(f"章节正文不完整：success={len(结果)}, total={总数}")

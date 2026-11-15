@@ -933,9 +933,13 @@ def 解码章节正文(encoded: str) -> str:
     if len(b64) % 4:
         b64 += "=" * (4 - len(b64) % 4)
     try:
-        return base64.b64decode(b64, validate=True).decode("utf-8")
+        decoded = base64.b64decode(b64, validate=True)
     except (ValueError, UnicodeError) as exc:
         raise ShuqiError("章节正文解码失败", reason="decrypt_failed") from exc
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ShuqiError("章节正文字符编码损坏", reason="invalid_text_encoding") from exc
 
 
 def 清理正文(decoded_html: str) -> str:

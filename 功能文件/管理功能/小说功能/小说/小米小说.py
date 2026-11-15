@@ -327,6 +327,8 @@ def _安全整数(值: Any, 默认值: int = 0) -> int:
 
 def 格式化小米字数(值: Any) -> str:
     数字 = _安全整数(值)
+    if 数字 >= 10000:
+        return f"{数字 / 10000:.2f}".rstrip("0").rstrip(".") + "万字"
     return f"{数字:,}字" if 数字 > 0 else "未知"
 
 
@@ -343,11 +345,16 @@ async def 获取小米详情(会话: aiohttp.ClientSession, 书籍编号: str) -
         信息 = 数据.get("item")
         if not isinstance(信息, dict) or not str(信息.get("title") or "").strip():
             return {}
+        if str(信息.get("source_id") or 信息.get("fiction_id") or "") != 实际编号:
+            return {}
         return {
+            "book_id": 实际编号,
             "title": str(信息.get("title") or "未知").strip(),
             "author": str(信息.get("authors") or "未知").strip(),
             "intro": str(信息.get("summary") or 信息.get("content") or "").strip(),
-            "status": "完结" if 信息.get("finish") else "连载",
+            "status": {"1": "完结", "true": "完结", "0": "连载", "false": "连载"}.get(
+                str(信息.get("finish", "")).strip().lower(), "未知"
+            ),
             "word_count": 信息.get("word_count") or 0,
             "chapter_count": _安全整数(信息.get("chapter_count")),
         }

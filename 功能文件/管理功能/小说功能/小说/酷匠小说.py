@@ -230,9 +230,9 @@ def _成功(data: Any) -> bool:
     return isinstance(data, dict) and _业务码(data) == 0
 
 
-async def 获取酷匠详情(
+async def 获取酷匠元数据(
     session: aiohttp.ClientSession, book_id: str
-) -> tuple[dict[str, Any], list[dict[str, str]]]:
+) -> dict[str, Any]:
     detail = await _请求(
         session, "/get_book_infos", params={"book": book_id, "subsite": "m"}
     )
@@ -246,6 +246,20 @@ async def 获取酷匠详情(
         or not _文本(info.get("v_book"))
     ):
         raise _酷匠请求错误("invalid_detail")
+    return {
+        "book_id": str(book_id),
+        "title": _文本(info.get("v_book")),
+        "author": _文本(info.get("penname") or "未知"),
+        "intro": _文本(info.get("intro")),
+        "status": _状态(info),
+        "word_count": info.get("public_size") or info.get("word_count") or 0,
+    }
+
+
+async def 获取酷匠详情(
+    session: aiohttp.ClientSession, book_id: str
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    detail_info = await 获取酷匠元数据(session, book_id)
     catalog = await _请求(
         session, "/catalog", params={"book": book_id, "auth_code": "", "sort": "asc"}
     )
@@ -266,13 +280,8 @@ async def 获取酷匠详情(
                 raise _酷匠请求错误("invalid_catalog")
             seen.add(chapter_id)
             chapters.append({"id": chapter_id, "title": _文本(chapter.get("v_chapter") or "章节")})
-    detail_info = {
-        "title": _文本(info.get("v_book")),
-        "author": _文本(info.get("penname") or "未知"),
-        "intro": _文本(info.get("intro")),
-        "status": _状态(info),
-        "word_count": info.get("public_size") or info.get("word_count") or 0,
-    }
+    if not chapters:
+        raise _酷匠请求错误("catalog_empty")
     return detail_info, chapters
 
 
@@ -512,6 +521,10 @@ async def 生成酷匠下载回复流(
         else:
             yield "文件发送失败，请稍后再试"
     except Exception as exc:
+        if isinstance(exc, _酷匠请求错误) and exc.category == "catalog_empty":
+            logger.info("酷匠小说暂无可下载章节：书籍编号=%s, category=catalog_empty", book_id)
+            yield "暂无可下载章节"
+            return
         logger.warning(
             "酷匠小说下载失败：错误类型=%s, category=%s, http_status=%s, code=%s",
             type(exc).__name__, getattr(exc, "category", "unknown"),

@@ -579,7 +579,7 @@ def _取详情字段(数据: dict[str, Any]) -> dict[str, Any]:
         "title": str(节点.get("title") or "未知").strip(),
         "author": str(节点.get("author") or "未知").strip(),
         "intro": str(节点.get("summary") or "").strip(),
-        "status": str(节点.get("status") or "连载").strip(),
+        "status": str(节点.get("status") or "未知").strip(),
         "word_count": 节点.get("words_num") or 节点.get("wordCount") or "",
         "chapter_count": _安全整数(节点.get("chapter_num")),
     }
@@ -674,7 +674,7 @@ def _取百度出版详情字段(数据: dict[str, Any]) -> dict[str, Any]:
         "title": str(节点["title"]).strip(),
         "author": str(节点.get("author") or "未知").strip(),
         "intro": str(节点.get("description") or 节点.get("summary") or "").strip(),
-        "status": str(节点.get("status") or "连载").strip(),
+        "status": str(节点.get("status") or "未知").strip(),
         "word_count": 节点.get("words_num") or 节点.get("wordCount") or "",
         "chapter_count": _安全整数(节点.get("chapter_num")),
         "is_yuedu_source": str(节点.get("is_yuedu_source") or "0").lower() in {"1", "true"},
