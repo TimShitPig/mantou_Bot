@@ -10,6 +10,7 @@ import re
 import socket
 import sys
 import time
+import weakref
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,8 @@ from .媒体归档工具 import (
 )
 
 媒体最大字节数 = 5 * 1024 * 1024 * 1024
+媒体归档最大并发数 = 8
+账号下载最大并发数 = 8
 归档目录 = "/QQ聊天媒体"
 直链复用秒 = 300
 下载请求头 = {"User-Agent": "Mozilla/5.0", "Referer": "https://pan.quark.cn/"}
@@ -39,7 +42,16 @@ _QQ源请求头已修正 = globals().get("_QQ源请求头已修正", False)
 _QQ源错误分类已启用 = globals().get("_QQ源错误分类已启用", False)
 _已应用媒体大小上限 = globals().get("_已应用媒体大小上限", 100 * 1024 * 1024)
 _唤醒: asyncio.TimerHandle | None = globals().get("_唤醒")
-_上传并发 = globals().get("_上传并发", asyncio.Semaphore(2))
+# 保留旧门控及其在途/排队任务；额度变更延后至业务所在事件循环。
+_上传并发 = globals().get("_上传并发")
+if isinstance(_上传并发, asyncio.Semaphore):
+    _已应用归档并发数 = int(globals().get("_已应用归档并发数", 2))
+else:
+    _上传并发 = asyncio.Semaphore(媒体归档最大并发数)
+    _已应用归档并发数 = 媒体归档最大并发数
+_账号下载并发 = globals().get("_账号下载并发")
+if not isinstance(_账号下载并发, weakref.WeakValueDictionary):
+    _账号下载并发 = weakref.WeakValueDictionary()
 
 
 class 媒体归档错误(RuntimeError):
@@ -52,6 +64,16 @@ class 媒体归档错误(RuntimeError):
         self.原因 = 原因
         self.实际字节数 = 实际字节数
         self.限制字节数 = 限制字节数
+
+
+def _获取归档上传额度() -> asyncio.Semaphore:
+    global _已应用归档并发数
+    asyncio.get_running_loop()
+    # 只补差额，保留已持有及排队的旧任务，重复重载不累加额度。
+    for _ in range(max(0, 媒体归档最大并发数 - _已应用归档并发数)):
+        _上传并发.release()
+    _已应用归档并发数 = 媒体归档最大并发数
+    return _上传并发
 
 
 def _配置快照(配置: Any, appid: str = "") -> dict[str, Any]:
@@ -157,6 +179,30 @@ def _新建会话() -> aiohttp.ClientSession:
                                  cookie_jar=aiohttp.DummyCookieJar(), trust_env=True)
 
 
+def _获取账号下载额度(账号ID: str) -> asyncio.BoundedSemaphore:
+    键 = (asyncio.get_running_loop(), 账号ID)
+    额度 = _账号下载并发.get(键)
+    if 额度 is None:
+        额度 = asyncio.BoundedSemaphore(账号下载最大并发数)
+        _账号下载并发[键] = 额度
+    return 额度
+
+
+@asynccontextmanager
+async def _新建夸克下载会话() -> AsyncIterator[aiohttp.ClientSession]:
+    from .夸克网盘 import 获取夸克连接池, 释放夸克连接池
+    池 = 获取夸克连接池()
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=None, connect=20, sock_read=90),
+            connector=池["connector"], connector_owner=False,
+            cookie_jar=aiohttp.DummyCookieJar(), trust_env=True,
+        ) as 会话:
+            yield 会话
+    finally:
+        释放夸克连接池(池)
+
+
 async def _解析QQ源错误(响应: aiohttp.ClientResponse) -> 媒体归档错误:
     """只提取有界 JSON 数字码；不保留响应文本、地址或票据。"""
     业务码 = None
@@ -244,7 +290,7 @@ def _日期目录(记录: dict[str, Any]) -> str:
 
 
 async def _归档单项(参数: dict[str, Any], 索引: int, 项目: dict[str, Any], 进度: dict[str, Any]) -> dict[str, Any]:
-    async with _上传并发:
+    async with _获取归档上传额度():
         return await _执行归档单项(参数, 索引, 项目, 进度)
 
 
@@ -353,7 +399,7 @@ async def _完成旧归档(参数: dict[str, Any], 进度: dict[str, Any]) -> di
     Cookie, UID = 旧模块._解析Cookie(旧模块._配置值(参数["legacy_config"]))
     if 旧进度.get("uid") not in (None, UID):
         raise 媒体归档错误("legacy_account_changed")
-    async with _上传并发:
+    async with _获取归档上传额度():
         return await 旧模块._上传并取得归档资料(Cookie, UID, 旧进度, None)
 
 
@@ -486,13 +532,13 @@ def _排空队列() -> None:
         if 截止 > 循环.time():
             最早 = 截止 if 最早 is None else min(最早, 截止)
             continue
-        if len(图片归档任务) >= 2:
+        if len(图片归档任务) >= 媒体归档最大并发数:
             break
         任务 = asyncio.create_task(_处理记录(键, 参数))
         参数["task"] = 任务
         图片归档任务.add(任务)
         任务.add_done_callback(_完成)
-    if 最早 is not None and len(图片归档任务) < 2:
+    if 最早 is not None and len(图片归档任务) < 媒体归档最大并发数:
         _唤醒 = 循环.call_at(最早, _排空队列)
 
 
@@ -634,46 +680,48 @@ def 构造网页媒体字段(
 @asynccontextmanager
 async def 打开归档媒体(配置: Any, 归档: dict[str, Any], *, 范围: str = "", 保存直链: Any = None) -> AsyncIterator[aiohttp.ClientResponse]:
     from .夸克网盘 import 夸克网盘客户端
-    Cookie = await asyncio.to_thread(_读取绑定账号, _配置快照(配置), str(归档.get("account_id") or ""))
-    try:
-        年龄 = time.time() - float(归档.get("direct_url_cached_at") or 0)
-    except (ValueError, TypeError):
-        年龄 = -1
-    缓存 = str(归档.get("direct_url") or "") if 0 <= 年龄 < 直链复用秒 else ""
-    async with _新建会话() as 会话:
-        响应 = None
-        获取时间 = 0.0
-        if 缓存:
-            try:
-                响应 = await _请求原字节(会话, 缓存, 范围=范围, Cookie=Cookie)
-                if 响应.status not in {200, 206}:
-                    响应.release()
-                    响应 = None
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                响应 = None
-        if 响应 is None:
-            async with 夸克网盘客户端(Cookie) as 客户端:
-                地址 = await 客户端.获取文件下载地址(str(归档.get("file_id") or ""))
-                Cookie = 客户端.cookie
-            获取时间 = time.time()
-            响应 = await _请求原字节(会话, 地址, 范围=范围, Cookie=Cookie)
-        else:
-            地址 = 缓存
+    账号ID = str(归档.get("account_id") or "")
+    Cookie = await asyncio.to_thread(_读取绑定账号, _配置快照(配置), 账号ID)
+    async with _获取账号下载额度(账号ID):
         try:
-            if 响应.status not in {200, 206}:
-                raise 媒体归档错误("download_status", 响应.status)
-            yield 响应
-        finally:
-            响应.release()
-        if 获取时间 and callable(保存直链):
+            年龄 = time.time() - float(归档.get("direct_url_cached_at") or 0)
+        except (ValueError, TypeError):
+            年龄 = -1
+        缓存 = str(归档.get("direct_url") or "") if 0 <= 年龄 < 直链复用秒 else ""
+        async with _新建夸克下载会话() as 会话:
+            响应 = None
+            获取时间 = 0.0
+            if 缓存:
+                try:
+                    响应 = await _请求原字节(会话, 缓存, 范围=范围, Cookie=Cookie)
+                    if 响应.status not in {200, 206}:
+                        响应.release()
+                        响应 = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    响应 = None
+            if 响应 is None:
+                async with 夸克网盘客户端(Cookie) as 客户端:
+                    地址 = await 客户端.获取文件下载地址(str(归档.get("file_id") or ""))
+                    Cookie = 客户端.cookie
+                获取时间 = time.time()
+                响应 = await _请求原字节(会话, 地址, 范围=范围, Cookie=Cookie)
+            else:
+                地址 = 缓存
             try:
-                await 保存直链(地址, 获取时间)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.debug("夸克媒体直链缓存未更新：错误类型=%s", type(exc).__name__)
+                if 响应.status not in {200, 206}:
+                    raise 媒体归档错误("download_status", 响应.status)
+                yield 响应
+            finally:
+                响应.release()
+            if 获取时间 and callable(保存直链):
+                try:
+                    await 保存直链(地址, 获取时间)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.debug("夸克媒体直链缓存未更新：错误类型=%s", type(exc).__name__)
 
 
 async def 读取归档媒体块(上游: aiohttp.ClientResponse, 归档: dict[str, Any], 起点: int, 终点: int) -> AsyncIterator[bytes]:

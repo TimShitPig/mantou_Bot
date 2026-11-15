@@ -32,7 +32,7 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表最大并发数 = 4
 目录扫描完整性重试次数 = 3
 目录扫描重试每页数量 = 100
-账号上传最大并发数 = 4
+账号上传最大并发数 = 8
 目录缓存有效秒数 = 300
 目录缓存最大条目 = 1024
 连接池空闲秒数 = 30
@@ -1243,7 +1243,7 @@ class 夸克交接上传额度(asyncio.BoundedSemaphore):
 
 
 def 获取夸克账号操作锁(cookie: str) -> asyncio.Semaphore:
-    """小说与媒体共用四路额度；旧串行队列完成后统一交接新任务。"""
+    """小说与媒体共用八路额度，热升级保留旧任务及同一份计数。"""
     循环 = asyncio.get_running_loop()
     账号摘要 = 获取夸克账号摘要(cookie)
     键 = (循环, 账号摘要)
@@ -1274,6 +1274,13 @@ def 获取夸克账号操作锁(cookie: str) -> asyncio.Semaphore:
         else:
             额度 = asyncio.BoundedSemaphore(账号上传最大并发数)
         _夸克账号操作锁表[键] = 额度
+    else:
+        # 原地扩容保留旧持有者和等待者；不能另建八路与旧四路叠加。
+        旧容量 = 额度._bound_value
+        if 旧容量 < 账号上传最大并发数:
+            额度._bound_value = 账号上传最大并发数
+            for _ in range(账号上传最大并发数 - 旧容量):
+                额度.release()
     return 额度
 
 
