@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.424-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.425-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.424 |
+| 版本 | v6.1.425 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -153,6 +153,8 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 所有新缓存统一写入项目内 **`功能文件/文件缓存/`**，按小说、媒体、临时、消息记录和其他缓存分类，不再在项目外创建 `mantou_bot_file_cache/`。旧外部缓存兼容迁移，活动任务暂留原路径；不要手动删除正在使用的 TXT、`.uploading` 或 `.upload_jobs`。
 
 UC、夸克、百度以配置目录为总目录，小说上传进入 `总目录/YYYY年M月D日/`。每天服务器本地零点清理前两天及更早的小说 TXT，保留今天、昨天和活动/待续传文件；远端只删除已确认空的过期日期目录，不删除总目录或其他文件。启动/重载也清理无占用残留。
+
+夸克小说直接上传到当天目录，不扫描或删除同名书籍；分享只使用本次上传返回的文件 ID，不按同名旧文件匹配。
 
 夸克 OSS 分片对 408/429/500/502/503/504、断流、超时最多尝试三次，每次重开文件、刷新签名；只重试同一上传 ID 和分片号，不盲目重放预上传、合并、完成或创建分享。权限/签名拒绝不循环重试。上传授权在同一任务内对瞬时网络错误及上述 HTTP 状态最多尝试三次，单次限时45秒并递增退避；失败日志只显示阶段和分类，持续失败沿用TXT续传保护。
 

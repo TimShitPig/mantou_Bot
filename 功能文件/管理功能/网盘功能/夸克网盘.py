@@ -173,11 +173,10 @@ class 夸克网盘客户端:
         上传目录 = 网盘清理工具.生成每日上传目录(上传目录)
         上传锁 = 获取夸克同名上传锁(self.cookie, 上传目录, 文件名)
         async with 上传锁:
-            # 目录使用偏移分页；同账号不同小说的写入也会使正在扫描的页错位。
+            # 目录解析和上传沿用账号写入窗口，避免与每日清理的分页扫描交错。
             async with 获取夸克账号操作锁(self.cookie):
                 目录ID = await self.确保目录路径(上传目录)
-                await self.删除同名普通文件(文件名, 目录ID)
-                文件ID = await self.上传文件(本地路径, 目录ID, 文件名)
+                文件ID = await self.上传文件(本地路径, 目录ID, 文件名, 允许同名回查=False)
                 if not 文件ID:
                     raise RuntimeError("夸克网盘上传后没有返回文件ID")
             分享链接 = await self.创建分享(文件ID, 文件名)
@@ -257,57 +256,6 @@ class 夸克网盘客户端:
             if 安全整数(任务结果.get("status"), -1) != 2:
                 raise RuntimeError("夸克网盘删除文件任务未完成")
         return len(去重ID)
-
-    async def 删除同名普通文件(self, 文件名: str, 父目录ID: str) -> None:
-        已删除ID: set[str] = set()
-        for 尝试次数 in range(1, 文件可见重试次数 + 1):
-            文件ID列表 = await self.查找同名普通文件ID列表(文件名, 父目录ID)
-            if not 文件ID列表:
-                logger.debug(
-                    f"夸克网盘同名清理确认完成：file={文件名}, "
-                    f"deleted={len(已删除ID)}, parent_id={父目录ID}"
-                )
-                return
-            待删ID = [文件ID for 文件ID in 文件ID列表 if 文件ID not in 已删除ID]
-            if 待删ID:
-                try:
-                    await self.删除文件ID列表(待删ID)
-                    已删除ID.update(待删ID)
-                except Exception as 异常:
-                    logger.warning(
-                        f"夸克网盘删除同名旧文件重试：file={文件名}, "
-                        f"attempt={尝试次数}/{文件可见重试次数}, "
-                        f"error_type={type(异常).__name__}"
-                    )
-                    if 尝试次数 == 文件可见重试次数:
-                        raise RuntimeError("夸克网盘删除同名旧文件失败") from 异常
-            if 尝试次数 < 文件可见重试次数:
-                await asyncio.sleep(计算等待秒数(尝试次数))
-
-        剩余ID = await self.查找同名普通文件ID列表(文件名, 父目录ID)
-        if 剩余ID:
-            raise RuntimeError(
-                f"夸克网盘同名旧文件仍可见，停止上传：file={文件名}, "
-                f"count={len(剩余ID)}, parent_id={父目录ID}"
-            )
-        logger.debug(
-            f"夸克网盘同名清理确认完成：file={文件名}, "
-            f"deleted={len(已删除ID)}, parent_id={父目录ID}"
-        )
-
-    async def 查找同名普通文件ID列表(
-        self, 文件名: str, 父目录ID: str
-    ) -> list[str]:
-        文件ID列表 = []
-        for 项目 in await self.列出目录全部项目(父目录ID):
-            if not isinstance(项目, dict):
-                continue
-            if 是文件夹项目(项目) or 读取文件名(项目) != 文件名:
-                continue
-            文件ID = 读取文件ID(项目)
-            if 文件ID and 文件ID not in 文件ID列表:
-                文件ID列表.append(文件ID)
-        return 文件ID列表
 
     async def 清理早于当天小说(
         self, 上传目录: str, 当前日期: date | None = None
@@ -480,7 +428,10 @@ class 夸克网盘客户端:
         raise RuntimeError("夸克网盘目录扫描不完整，已停止后续文件操作")
 
 
-    async def 上传文件(self, 本地路径: str | Path, 父目录ID: str, 文件名: str) -> str:
+    async def 上传文件(
+        self, 本地路径: str | Path, 父目录ID: str, 文件名: str,
+        *, 允许同名回查: bool = True,
+    ) -> str:
         路径 = Path(本地路径)
         if not 路径.is_file():
             raise RuntimeError("夸克网盘上传文件不存在")
@@ -525,6 +476,10 @@ class 夸克网盘客户端:
         )
         if 接口成功(秒传数据) and 解析布尔值(秒传结果.get("finish")):
             文件ID = 读取文件ID(秒传结果)
+            if not 文件ID and not 允许同名回查:
+                文件ID = 读取文件ID(上传参数)
+                if not 文件ID:
+                    raise 夸克网盘请求错误("/file/update/hash", 原因="upload_file_id_missing")
             return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
 
         ETag = await self.上传OSS单分片(路径, MD5, 上传参数)
@@ -537,6 +492,10 @@ class 夸克网盘客户端:
         if not 接口成功(完成数据):
             raise RuntimeError(f"夸克网盘完成上传失败：{限制文本长度(完成数据)}")
         文件ID = 读取文件ID(完成数据.get("data"))
+        if not 文件ID and not 允许同名回查:
+            文件ID = 读取文件ID(上传参数)
+            if not 文件ID:
+                raise 夸克网盘请求错误("/file/upload/finish", 原因="upload_file_id_missing")
         return 文件ID or await self.等待文件可见(文件名, 父目录ID, 文件大小)
 
     async def 获取文件下载地址(self, 文件ID: str) -> str:
