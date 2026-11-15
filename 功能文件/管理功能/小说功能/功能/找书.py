@@ -355,16 +355,71 @@ def _书名仅差一字(候选: str, 查询: str) -> bool:
     return 长串[位置 + 1:] == 短串[位置:]
 
 
+def _显式书名作者查询(关键词: str) -> tuple[str, str] | None:
+    匹配 = re.fullmatch(r"(.+?)\s*(?:作者|作家)\s*[:：]?\s*(.+)", 清理文本(关键词))
+    if not 匹配:
+        return None
+    书名, 作者 = (清理搜索关键词(值) for 值 in 匹配.groups())
+    return (书名, 作者) if 书名 and 作者 else None
+
+
+def _识别书名作者查询(
+    关键词: str, 搜索类型: str = "auto", 候选: Iterable[dict[str, Any]] = (),
+) -> tuple[str, str] | None:
+    """无分隔查询只以候选真实作者为锚点，不猜测任意两个字是作者。"""
+    if 搜索类型 != "auto":
+        return None
+    候选 = list(候选)
+    查询 = 规范标题(关键词)
+    显式 = _显式书名作者查询(关键词)
+    if 显式:
+        return 显式
+    # 未写作者标记时，完整书名也可能包含作者姓名，保留其书名身份。
+    if any(规范书名匹配键(项.get("title")) == 规范书名匹配键(关键词) for 项 in 候选):
+        return None
+    拆分: dict[tuple[str, str], tuple[int, float, int]] = {}
+    for 项 in 候选:
+        作者 = 规范标题(项.get("author"))
+        if 作者 in 无效作者名称 or len(作者) < 2:
+            continue
+        for 书名 in (
+            查询[:-len(作者)] if 查询.endswith(作者) else "",
+            查询[len(作者):] if 查询.startswith(作者) else "",
+        ):
+            if len(书名) < 2:
+                continue
+            详情 = _计算文本匹配详情(项.get("title"), 书名, 字段类型="title")
+            if int(详情["tier"]) < 2:
+                continue
+            键 = (书名, 作者)
+            强度 = (int(详情["tier"]), float(详情["coverage"]), int(详情["chars"]))
+            拆分[键] = max(拆分.get(键, (0, 0.0, 0)), 强度)
+    if not 拆分:
+        return None
+    最强 = max(拆分.values())
+    命中 = [键 for 键, 强度 in 拆分.items() if 强度 == 最强]
+    return 命中[0] if len(命中) == 1 else None
+
+
 def 生成找书容错查询(
     关键词: str, 搜索类型: str = "auto", 候选: Iterable[dict[str, Any]] = (),
 ) -> list[str]:
-    """优先数字换写和首轮候选命中的有效短语，补回后按原查询分层排序。"""
+    """数字等价优先；没有强匹配时才补搜受约束的书名片段。"""
     if 搜索类型 == "author":
         return []
     查询 = 清理搜索关键词(关键词)
     词组 = 查询.split()
     if not 词组:
         return []
+    候选 = list(候选)
+    组合 = _识别书名作者查询(关键词, 搜索类型, 候选)
+    已匹配 = 排序找书结果(候选, 关键词, 搜索类型)
+    if 搜索类型 == "auto" and 组合 is None and any(
+        项.get("_match_type") == "author" for 项 in 已匹配
+    ):
+        return []
+    if 组合:
+        词组 = [组合[0]]
     书名词 = 词组[0]
     结果: list[str] = []
     已见 = {查询.casefold()}
@@ -387,6 +442,12 @@ def 生成找书容错查询(
         书名词,
     )
     加入(中文书名)
+    if any(int(项.get("_match_tier") or 0) >= 3 for 项 in 已匹配):
+        return 结果[:找书容错补搜上限]
+    if 组合:
+        # 上游只需召回候选，最终仍严格校验原查询中的书名和作者。
+        加入(书名词)
+        加入(组合[1])
     片段计数: Counter[str] = Counter()
     for 项 in 候选:
         片段计数.update(set(_提取书名公共片段(项.get("title") or "", 书名词)))
@@ -395,6 +456,9 @@ def 生成找书容错查询(
         加入(片段)
         if len(结果) >= 找书容错补搜上限:
             break
+    if 组合 is None and 5 <= len(书名词) <= 6:
+        # 短书名加三四字作者时，中点未必正好是书名边界；只补召回，不放宽校验。
+        加入(书名词[:2])
     if len(书名词) >= 3:
         # 长标题的片段至少达到反向包含匹配的长度。
         最短片段 = 8 if len(书名词) >= 12 else 2
@@ -847,6 +911,9 @@ def _计算书名片段匹配(候选文本: Any, 关键词: Any) -> dict[str, An
     覆盖率 = 字数 / max(1, sum(有效查询.values()))
     最长片段 = max(map(len, 片段))
     相似度 = SequenceMatcher(None, 查询, 规范书名匹配键(候选文本), autojunk=False).ratio()
+    # 两字偶合、低覆盖及相距很远的散片段不作为书名相关依据。
+    if 最长片段 < 3 or 覆盖率 < 0.6 or 相似度 < 0.55:
+        return None
     return {
         "tier": 1,
         "score": 800.0 + 覆盖率 * 700.0 + 最长片段 * 80.0 + 相似度 * 200.0,
@@ -945,12 +1012,12 @@ def _计算文本匹配详情(候选文本: Any, 关键词: Any, *, 字段类型
             and 相似度 >= 0.78
         )
     else:
-        最少匹配字数 = max(2, (len(查询) * 65 + 99) // 100)
+        最少匹配字数 = max(3, (len(查询) * 80 + 99) // 100)
         可模糊 = _书名仅差一字(候选, 查询) or (
-            len(查询) >= 3
+            len(查询) >= 5
             and 匹配字数 >= 最少匹配字数
-            and 覆盖率 >= 0.65
-            and 相似度 >= 0.68
+            and 覆盖率 >= 0.8
+            and 相似度 >= 0.82
         )
     if 可模糊:
         return {
@@ -990,12 +1057,28 @@ def _拆分查询词(关键词: str) -> list[str]:
     return 结果 or ([规范标题(关键词)] if 规范标题(关键词) else [])
 
 
-def _评估找书项(项: dict[str, Any], 关键词: str) -> dict[str, Any]:
+def _评估找书项(
+    项: dict[str, Any], 关键词: str, *, 组合: tuple[str, str] | None = None,
+) -> dict[str, Any]:
     标题 = 清理文本(项.get("title") or "")
     作者 = 清理文本(项.get("author") or "")
-    标题匹配 = _计算文本匹配详情(标题, 关键词, 字段类型="title")
-    作者匹配 = _计算文本匹配详情(作者, 关键词, 字段类型="author")
-    查询词 = _拆分查询词(关键词)
+    标题匹配 = _计算文本匹配详情(标题, 组合[0] if 组合 else 关键词, 字段类型="title")
+    作者匹配 = _计算文本匹配详情(作者, 组合[1] if 组合 else 关键词, 字段类型="author")
+    if 组合 is None:
+        for 匹配, 字段键, 查询键 in (
+            (标题匹配, 规范书名匹配键(标题), 规范书名匹配键(关键词)),
+            (作者匹配, 规范标题(作者), 规范标题(关键词)),
+        ):
+            if int(匹配["tier"]) not in {1, 2}:
+                continue
+            余词 = 查询键[len(字段键):] if 字段键 and 查询键.startswith(字段键) else ""
+            if not 余词 and 字段键 and 查询键.endswith(字段键):
+                余词 = 查询键[:-len(字段键)]
+            版本后缀 = 匹配 is 标题匹配 and 余词 in {规范书名匹配键(词) for 词 in 书名噪声后缀}
+            if len(余词) >= 2 and not 版本后缀:
+                # 完整书名或作者前后还有实词，不能只凭反向包含忽略另一字段。
+                匹配.update(tier=0, score=0.0)
+    查询词 = list(组合) if 组合 else _拆分查询词(关键词)
     标题词详情 = [_计算文本匹配详情(标题, 词, 字段类型="title") for 词 in 查询词]
     作者词详情 = [_计算文本匹配详情(作者, 词, 字段类型="author") for 词 in 查询词]
     标题词全匹配 = bool(查询词) and all(详情["score"] > 0 for 详情 in 标题词详情)
@@ -1009,7 +1092,7 @@ def _评估找书项(项: dict[str, Any], 关键词: str) -> dict[str, Any]:
         for 标题词, 作者词 in zip(标题词详情, 作者词详情)
     ]
     混合词全匹配 = bool(查询词) and all(详情["score"] > 0 for 详情 in 混合词详情)
-    return {
+    详情 = {
         "title": 标题匹配,
         "author": 作者匹配,
         "tokens": 查询词,
@@ -1020,6 +1103,17 @@ def _评估找书项(项: dict[str, Any], 关键词: str) -> dict[str, Any]:
         "author_all": 作者词全匹配,
         "mixed_all": 混合词全匹配,
     }
+    if 组合:
+        # 已识别的组合要求两个字段同时命中，作者必须是同一完整姓名。
+        有效 = int(标题匹配["tier"]) >= 2 and 作者匹配["tier"] == 6
+        详情["combined"] = {
+            "tier": int(标题匹配["tier"]) if 有效 else 0,
+            "score": (标题匹配["score"] + 作者匹配["score"]) / 2 if 有效 else 0.0,
+            "chars": 标题匹配["chars"] + 作者匹配["chars"] if 有效 else 0,
+            "coverage": 标题匹配["coverage"] if 有效 else 0.0,
+            "ratio": 标题匹配["ratio"] if 有效 else 0.0,
+        }
+    return 详情
 
 
 def _推断找书搜索类型(评估结果: list[dict[str, Any]], 搜索类型: str) -> str:
@@ -1027,13 +1121,21 @@ def _推断找书搜索类型(评估结果: list[dict[str, Any]], 搜索类型: 
         return 搜索类型
     if not 评估结果:
         return "auto"
+    if any("combined" in 详情 for 详情 in 评估结果):
+        return "mixed"
     if any(len(详情["tokens"]) > 1 and 详情["mixed_all"] for 详情 in 评估结果):
         return "mixed"
-    # 每本候选分别识别书名和作者；不根据整批候选数量猜测用户意图。
+    if not any(详情["title"]["tier"] >= 5 for 详情 in 评估结果) and any(
+        详情["author"]["tier"] == 6 for 详情 in 评估结果
+    ):
+        return "author"
+    # 其余情况按每本候选的书名/作者相关性比较，不按候选数量判断意图。
     return "auto"
 
 
 def _选择主匹配(详情: dict[str, Any], 搜索类型: str) -> dict[str, Any]:
+    if "combined" in 详情:
+        return 详情["combined"]
     字段 = [搜索类型] if 搜索类型 in {"title", "author"} else ["title", "author"]
     整体 = max(
         (详情[字段名] for 字段名 in 字段),
@@ -1063,7 +1165,8 @@ def 排序找书结果(
     """过滤无关候选后按平台分组，同一平台按书名/作者相关度排序。"""
     if not 结果:
         return []
-    全部评估 = [_评估找书项(项, 关键词) for 项 in 结果]
+    组合 = _识别书名作者查询(关键词, 搜索类型, 结果)
+    全部评估 = [_评估找书项(项, 关键词, 组合=组合) for 项 in 结果]
     实际类型 = _推断找书搜索类型(全部评估, 搜索类型)
     筛选后: list[dict[str, Any]] = []
     for 原项, 详情 in zip(结果, 全部评估):
@@ -1083,6 +1186,8 @@ def 排序找书结果(
         筛选后.append(项)
     if not 筛选后:
         return []
+    if any(项["_match_tier"] >= 3 for 项 in 筛选后):
+        筛选后 = [项 for 项 in 筛选后 if 项["_match_tier"] >= 2]
 
     平台原始: dict[str, list[float]] = {}
     for 项 in 筛选后:
@@ -2390,6 +2495,9 @@ async def _聚合搜索未缓存(
     关键词 = 清理搜索关键词(关键词)
     if not 关键词:
         return [], True
+    组合查询 = _识别书名作者查询(关键词, 搜索类型)
+    平台关键词 = 组合查询[0] if 组合查询 else 关键词
+    匹配关键词 = 关键词
     async with aiohttp.ClientSession(timeout=timeout) as session, AsyncExitStack() as 资源:
         允许平台集合 = _规范化允许平台(允许平台)
         酷匠会话 = None
@@ -2449,7 +2557,7 @@ async def _聚合搜索未缓存(
         ) -> tuple[tuple[str, Callable[[], Awaitable[list[Any]]]], ...]:
             return (
                 ("番茄", lambda: 搜索番茄(
-                    session, 词, 需要数量=数量, 原始关键词=关键词, 搜索类型=搜索类型, 截止时间=截止,
+                    session, 词, 需要数量=数量, 原始关键词=匹配关键词, 搜索类型=搜索类型, 截止时间=截止,
                 )),
                 ("七猫", lambda: 搜索七猫(session, 词, 需要数量=数量)),
                 ("QQ阅读", lambda: 搜索QQ阅读(词, 需要数量=数量)),
@@ -2493,12 +2601,12 @@ async def _聚合搜索未缓存(
             try:
                 if 平台 == "番茄":
                     return await 过滤无目录番茄搜索结果(
-                        结果, 关键词, 搜索类型=搜索类型,
+                        结果, 匹配关键词, 搜索类型=搜索类型,
                         最大数量=5 if 阶段 == "补搜" else 番茄目录预检最大候选数,
                         超时=超时,
                     )
                 # QQ 搜索还会附带推荐书；无关候选不应消耗目录预算或标记本次失败。
-                候选 = 排序找书结果(结果, 关键词, 搜索类型)
+                候选 = 排序找书结果(结果, 匹配关键词, 搜索类型)
                 return await 过滤章节单独付费QQ阅读搜索结果(候选, 超时=超时)
             except Exception:
                 状态["failed"] = True
@@ -2557,7 +2665,7 @@ async def _聚合搜索未缓存(
         原查询任务 = {
             asyncio.create_task(搜索并预检(平台, 工厂)): 平台
             for 平台, 工厂 in 平台搜索工厂(
-                关键词, 找书搜索候选数量,
+                平台关键词, 找书搜索候选数量,
                 原查询截止 if 原查询截止 is not None else 循环.time() + 找书单平台超时秒数,
             )
             if 平台 in 允许平台集合
@@ -2569,14 +2677,24 @@ async def _聚合搜索未缓存(
         已完成平台 = sorted(原查询结果.keys() - 失败平台)
         结果集合 = list(原查询结果.values())
         合并 = 去重合并(结果集合)
-        初步结果 = 排序找书结果(合并, 关键词, 搜索类型)
-        # 精确命中只影响排序。数字写法和相近书名可能只会在补搜中返回。
-        已有强匹配 = any(int(项.get("_match_tier") or 0) >= 5 for 项 in 初步结果)
-        补搜词 = 生成找书容错查询(关键词, 搜索类型, 候选=合并)
+        组合查询 = _识别书名作者查询(关键词, 搜索类型, 合并)
+        if 组合查询:
+            匹配关键词 = f"{组合查询[0]} 作者 {组合查询[1]}"
+        初步结果 = 排序找书结果(合并, 匹配关键词, 搜索类型)
+        # 已有可靠命中时只保留数字等价补搜，不再泛化为任意前后片段。
+        已有强匹配 = any(int(项.get("_match_tier") or 0) >= 3 for 项 in 初步结果)
+        补搜词 = [
+            词 for 词 in 生成找书容错查询(匹配关键词, 搜索类型, 候选=合并)
+            if 词.casefold() != 平台关键词.casefold()
+        ]
         补搜截止时间 = asyncio.get_running_loop().time() + 找书容错补搜预算秒数
         补搜超时 = False
         联想词: list[str] = []
-        if not 已有强匹配 and len(补搜词) < 找书容错补搜上限 and "书旗" in 允许平台集合 and "书旗" not in 失败平台:
+        if (
+            not 已有强匹配 and 组合查询 is None and 搜索类型 != "author"
+            and len(补搜词) < 找书容错补搜上限
+            and "书旗" in 允许平台集合 and "书旗" not in 失败平台
+        ):
             联想预算 = 找书容错补搜预算秒数 / 3 if 补搜词 else 找书容错补搜预算秒数
             (联想结果,) = await asyncio.gather(
                 平台搜索任务(
@@ -2591,7 +2709,7 @@ async def _聚合搜索未缓存(
                 记录失败("书旗", "联想", 原因)
             else:
                 联想词 = 联想结果
-        已查词 = {关键词.casefold(), *(词.casefold() for 词 in 补搜词)}
+        已查词 = {关键词.casefold(), 平台关键词.casefold(), *(词.casefold() for 词 in 补搜词)}
         for 词 in 联想词:
             词 = 清理搜索关键词(词)
             if 词 and 词.casefold() not in 已查词 and len(补搜词) < 找书容错补搜上限:
@@ -2630,7 +2748,7 @@ async def _聚合搜索未缓存(
                     按词结果[词序][平台] = 结果
                     if 搜索类型 == "author" and any(
                         int(项.get("_match_tier") or 0) >= 5
-                        for 项 in 排序找书结果(结果, 关键词, 搜索类型)
+                        for 项 in 排序找书结果(结果, 匹配关键词, 搜索类型)
                     ):
                         作者命中词序 = min(作者命中词序, 词序)
                         break
@@ -2652,7 +2770,10 @@ async def _聚合搜索未缓存(
                     break
                 结果集合.extend(当前词结果[平台] for 平台 in 平台顺序 if 平台 in 当前词结果)
             合并 = 去重合并(结果集合)
-        最终结果 = 排序找书结果(合并, 关键词, 搜索类型)
+        组合查询 = _识别书名作者查询(关键词, 搜索类型, 合并)
+        if 组合查询:
+            匹配关键词 = f"{组合查询[0]} 作者 {组合查询[1]}"
+        最终结果 = 排序找书结果(合并, 匹配关键词, 搜索类型)
         查询完整 = not (失败平台 or 待完成阶段 or 补搜超时)
         if not 最终结果 and not 查询完整:
             raise _找书平台查询错误("search_incomplete", diagnostics={
@@ -2683,7 +2804,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v21-xigua-free",
+        tuple(_拆分查询词(关键词)), "search-v22-title-author",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
