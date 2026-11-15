@@ -130,9 +130,9 @@ def 解析米读书籍编号(source: str) -> str:
                 if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
                     return value
     except Exception:
-        pass
+        return ""
     match = re.search(
-        r"(?:book|detail|fiction)[^A-Za-z0-9_-]{0,10}([A-Za-z0-9_-]{8,128})", text, re.I
+        r"(?:book|detail|fiction)[^A-Za-z0-9_-]{0,10}([A-Za-z0-9_-]{8,128})", parsed.path, re.I
     )
     return match.group(1) if match else ""
 
