@@ -1,6 +1,7 @@
 """帮助网页的独立登录页模板。"""
 
 from .登录页面样式 import 登录页样式
+from .新版外观样式 import 新版外观样式
 from .登录页面脚本 import 登录页脚本
 
 登录页前缀 = """<!doctype html>
@@ -8,7 +9,7 @@ from .登录页面脚本 import 登录页脚本
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f5f8">
+  <meta name="theme-color" content="#f4efe4">
   <title>管理员登录 · 馒头工作台</title>
   <script>
     (() => {
@@ -16,7 +17,7 @@ from .登录页面脚本 import 登录页脚本
         const preference = localStorage.getItem('mantou-theme') === 'dark' ? 'dark' : 'light';
         document.documentElement.dataset.themePreference = preference;
         document.documentElement.dataset.theme = preference;
-        if (preference === 'dark') document.querySelector('meta[name="theme-color"]').content = '#19171f';
+        if (preference === 'dark') document.querySelector('meta[name="theme-color"]').content = '#141310';
       } catch (_) { document.documentElement.dataset.theme = 'light'; }
     })();
   </script>
@@ -116,6 +117,7 @@ def 渲染登录页面() -> str:
         _登录页面缓存 = (
             登录页前缀
             + 登录页样式
+            + 新版外观样式
             + 登录页样式后缀
             + 登录页脚本前缀
             + 登录页脚本
