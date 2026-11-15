@@ -97,57 +97,64 @@ def _导航分组(标题: str, 链接: tuple) -> str:
       </section>
 """
 
-服务行 = (
-    ("novels", "小说服务", "metric-global", "metric-global-meta", "管理小说服务"),
-    ("pans", "可用分享网盘", "metric-pan", "metric-pan-meta", "管理分享网盘"),
-    ("settings", "数据库", "metric-db", "metric-db-meta", "管理数据库"),
-    ("runtime", "插件版本", "metric-version", "metric-version-meta", "查看运行状态"),
+
+总览业务行 = (
+    ("novels", "小说服务", "metric-global-meta", "开关、测试模式与平台状态", "管理小说服务"),
+    ("pans", "分享网盘", "metric-pan-meta", "账号、默认项与上传目录", "管理分享网盘"),
+    ("settings", "数据库", "metric-db-meta", "连接状态与建表结果", "管理数据库"),
+    ("runtime", "运行状态", "metric-version-meta", "版本、资源与依赖", "查看运行状态"),
 )
 
 
-def _服务行(页面: str, 名称: str, 值: str, 摘要: str, 操作: str) -> str:
+def _总览业务行(序号: int, 页面: str, 名称: str, 摘要: str, 说明: str, 操作: str) -> str:
     return (
-        f'<div class="studio-service-row"><span class="studio-service-icon">{_图标(页面)}</span>'
-        f'<div><h3>{名称}</h3><small id="{摘要}">读取中</small></div>'
-        f'<strong class="studio-service-value" id="{值}">—</strong>'
+        f'<div class="dash-biz-row"><span class="dash-biz-index">{序号:02d}</span>'
+        f'<div class="dash-biz-copy"><h3>{名称}</h3><small id="{摘要}">读取中</small></div>'
+        f'<span class="dash-biz-note">{说明}</span>'
         f'<button type="button" data-view="{页面}" aria-label="{操作}" title="{操作}">{_图标("next")}</button></div>'
     )
 
 
 工作台总览 = """
         <section id="page-dashboard" class="page-view studio-dashboard" data-page="dashboard">
-          <article class="studio-card studio-hero">
-            <div>
-              <span class="studio-kicker">BOT OPERATIONS</span>
-              <h2>你好，<span data-bot-name>馒头助手</span></h2>
-              <p>从这里查看服务状态，处理群聊消息，或管理机器人的日常业务。</p>
-              <a class="studio-primary" href="?view=messages" data-view="messages">""" + _图标("messages") + """打开消息记录</a>
-            </div>
-""" + 书与馒头插画 + """
-          </article>
-          <div class="studio-dashboard-grid">
-            <article class="studio-card studio-service-card">
-              <header class="studio-card-head"><div><span class="studio-kicker">SERVICES</span><h2>业务一览</h2></div></header>
-              <div class="studio-service-list">
-""" + "".join(_服务行(*行) for 行 in 服务行) + """
+          <div class="dash-top">
+            <article class="studio-card dash-greet">
+              <p class="dash-greet-line"><i class="dash-dot" aria-hidden="true"></i>服务运行概况 · 数据每 30 秒采集一次</p>
+              <h2 class="dash-greet-title">你好，<span data-bot-name>馒头助手</span>。</h2>
+              <p class="dash-greet-sub">小说、网盘、数据库与聊天状态，都收在这一屏。</p>
+              <div class="dash-metrics">
+                <div class="dash-metric"><strong id="metric-global">—</strong><span>小说服务</span></div>
+                <div class="dash-metric"><strong id="metric-pan">—</strong><span>可用分享网盘</span></div>
+                <div class="dash-metric"><strong id="metric-db">—</strong><span>数据库</span></div>
+              </div>
+              <div class="dash-actions">
+                <a class="studio-primary" href="?view=messages" data-view="messages">""" + _图标("messages") + """打开消息记录</a>
+                <a class="outline-button" href="?view=novels" data-view="novels">管理小说服务</a>
               </div>
             </article>
-            <div class="studio-dashboard-side">
-              <article class="studio-card studio-health">
-                <header class="studio-card-head"><div><span class="studio-kicker">SYSTEM</span><h2>系统快照</h2></div></header>
-                <dl>
-                  <div><dt>CPU 占用</dt><dd id="dashboard-cpu">—</dd></div>
-                  <div><dt>物理内存</dt><dd id="dashboard-memory">—</dd></div>
-                  <div><dt>系统运行时间</dt><dd id="dashboard-runtime">—</dd></div>
-                </dl>
-                <a href="?view=runtime" data-view="runtime">查看详情 """ + _图标("next") + """</a>
-              </article>
-              <article class="studio-card studio-guide">
-                <span class="studio-service-icon">""" + _图标("help") + """</span>
-                <div><h2>帮助指令</h2><p>找书、下载和管理命令随手查。</p></div>
-                <a href="?view=help" data-view="help" aria-label="查看帮助指令">""" + _图标("next") + """</a>
-              </article>
-            </div>
+            <article class="studio-card dash-snap">
+              <header class="dash-snap-head"><span>系统快照</span><a href="?view=runtime" data-view="runtime">详情 """ + _图标("next") + """</a></header>
+              <dl class="dash-snap-list">
+                <div><dt>CPU 占用</dt><dd id="dashboard-cpu">—</dd></div>
+                <div><dt>物理内存</dt><dd id="dashboard-memory">—</dd></div>
+                <div><dt>系统运行时间</dt><dd id="dashboard-runtime">—</dd></div>
+              </dl>
+              <footer class="dash-snap-foot"><span>插件版本</span><strong id="metric-version">—</strong></footer>
+            </article>
           </div>
+          <article class="studio-card dash-biz">
+            <header class="dash-biz-head">
+              <div><h2>业务一览</h2><p>点开任一行即可进入对应的管理页</p></div>
+              <span class="dash-biz-tag">4 项服务</span>
+            </header>
+            <div class="dash-biz-list">
+""" + "".join(_总览业务行(i + 1, *行) for i, 行 in enumerate(总览业务行)) + """
+            </div>
+          </article>
+          <article class="studio-card dash-guide">
+            <span class="dash-guide-icon">""" + _图标("help") + """</span>
+            <div><h2>帮助指令</h2><p>找书、下载和管理命令随手查。</p></div>
+            <a href="?view=help" data-view="help" aria-label="查看帮助指令">""" + _图标("next") + """</a>
+          </article>
         </section>
 """
