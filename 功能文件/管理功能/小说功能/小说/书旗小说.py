@@ -738,7 +738,8 @@ def 提取XML目录节点(root: ET.Element) -> list[dict[str, str]]:
         if item is not root and item.tag.rsplit("}", 1)[-1] == "Book"
     ]
     声明数量 = 安全整数(root.attrib.get("TotalCount"), -1)
-    if 声明数量 != len(节点):
+    # 缺失或负数代表未知，不把默认值 -1 当作服务端声明的条目数。
+    if 声明数量 >= 0 and 声明数量 != len(节点):
         logger.warning(
             "书旗XML目录返回条目数量不一致：reason=entry_count_mismatch, book_id=%s, vid=%s, expected=%s, actual=%s",
             root.attrib.get("BookId", ""),
