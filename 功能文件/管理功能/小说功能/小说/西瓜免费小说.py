@@ -39,7 +39,6 @@ from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存�
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题
 
 西瓜基础地址 = "https://xgmf.zuanqianyi.com"
-西瓜并发数 = 200
 西瓜重试次数 = 3
 西瓜正文请求间隔 = 0.5
 西瓜响应大小上限 = 4 * 1024 * 1024
@@ -203,12 +202,13 @@ async def _签名(value: str, sign_type: int) -> str:
         return await asyncio.to_thread(_同步签名, value, sign_type)
 
 
-def 创建西瓜HTTP会话(concurrency: int = 西瓜并发数) -> aiohttp.ClientSession:
+def 创建西瓜HTTP会话(concurrency: int = 0) -> aiohttp.ClientSession:
+    # 正文并发由本书实际章节工作协程控制，连接池不再额外限制为固定路数。
     session = aiohttp.ClientSession(
         headers={"User-Agent": "okhttp/4.9.2", "Accept": "application/json"},
         timeout=aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20),
-        connector=aiohttp.TCPConnector(limit=max(1, int(concurrency)),
-                                       limit_per_host=max(1, int(concurrency)), ttl_dns_cache=300),
+        connector=aiohttp.TCPConnector(limit=max(0, int(concurrency)),
+                                       limit_per_host=max(0, int(concurrency)), ttl_dns_cache=300),
         cookie_jar=aiohttp.DummyCookieJar(), trust_env=True,
     )
     if hasattr(session, "_retry_connection"):
@@ -234,7 +234,7 @@ async def _请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, 
         raise _西瓜请求错误("invalid_endpoint")
     _初始化同步器()
     if call_no == "1153":
-        # 同一设备的阅读请求仍共享串行节奏，CDN 的 200 路工作协程不受影响。
+        # 同一设备的阅读请求仍共享串行节奏，CDN 章节工作协程不受影响。
         async with _游客状态["chapter_lock"]:
             return await _设备请求(session, call_no, body, sign_type, deadline=deadline)
     return await _设备请求(session, call_no, body, sign_type, deadline=deadline)
@@ -551,16 +551,16 @@ async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapt
         raise _西瓜请求错误("empty_catalog")
     # 一次提交完整目录，校验全部阅读状态后再并发下载正文。
     received = await _正文元数据(session, book_id, chapters)
-    worker_count = min(西瓜并发数, len(chapters))
-    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue(maxsize=西瓜并发数 * 2)
+    worker_count = len(chapters)
+    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue(maxsize=worker_count * 2)
     results = [""] * len(chapters)
     done = 0
     next_log = max(1, (len(chapters) + 3) // 4)
     logger.info("西瓜免费小说章节进度：书籍编号=%s, 进度=0/%s, 百分比=0%%, 并发数=%s, HTTP会话复用=开启",
-                book_id, len(chapters), 西瓜并发数)
+                book_id, len(chapters), worker_count)
 
     async def produce() -> None:
-        # 获取地址与逐章下载独立，整本一次取址仍保留 200 路正文工作协程。
+        # 获取地址与逐章下载独立，有多少章就使用多少个正文工作协程。
         for index, chapter in enumerate(chapters):
             await queue.put((index, received[chapter["id"]]))
         for _ in range(worker_count):
@@ -574,7 +574,7 @@ async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapt
             done += 1
             if done >= next_log or done == len(chapters):
                 logger.info("西瓜免费小说章节进度：书籍编号=%s, 进度=%s/%s, 百分比=%s%%, 成功=%s, 并发数=%s, HTTP会话复用=开启",
-                            book_id, done, len(chapters), int(done * 100 / len(chapters)), done, 西瓜并发数)
+                            book_id, done, len(chapters), int(done * 100 / len(chapters)), done, worker_count)
                 next_log += max(1, (len(chapters) + 3) // 4)
 
     tasks = [asyncio.create_task(produce())] + [asyncio.create_task(worker()) for _ in range(worker_count)]
