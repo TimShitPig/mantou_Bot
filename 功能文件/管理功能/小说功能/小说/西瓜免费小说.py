@@ -10,13 +10,15 @@ import hmac
 import html
 import json
 import re
+import secrets
+import struct
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 import aiohttp
-from Crypto.Cipher import AES
+from Crypto.Cipher import AES, ARC4
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
@@ -52,18 +54,66 @@ _RSA私钥 = RSA.import_key(base64.b64decode(_RSA私钥编码))
 _固定查询 = "appId=100398183&country=CN&lang=zh_CN&ver=10009264&appVer=1.0.9.264&timestamp="
 _西瓜指令正则 = re.compile(r"^西瓜免费小说(?:下载)?[\s:：]+([0-9]{5,20})\s*$")
 
-# 游客只在内存中保留，热重载不重复生成，也不使用便携项目的设备或游客资料。
+# UTDID 的密钥解码及校验布局与原 App 注册实现一致，密码运算复用 PyCryptodome。
+_UTDID密钥 = ARC4.new(
+    b"QrMgt8GGYI6T52ZY5AnhtxkLzb8egpFn3j5JELI8H6wtACbUnZ5cc3aYTsTRbmk"
+    b"AkRJeYbtx92LPBWm7nBO9UIl7y5i5MQNmUZNf5QENurR5tGyo7yJ2G0MBjWvy6i"
+    b"AtlAbacKP0SwOUeUWx5dsBdyhxa7Id1APtybSdDgicBDuNjI0mlZFUzZSS9dmN8l"
+    b"BD0WTVOMz0pRZbR3cysomRXOO1ghqjJdTcyDIxzpNAEszN8RMGjrzyU7Hjbmwi6YNK"
+).decrypt(bytes(value & 255 for value in (
+    69, 114, 116, -33, 125, -54, -31, 86, -11, 11, -78, -96, -17, -99,
+    64, 23, -95, -126, -82, -64, 113, 116, -16, -103, 49, -30, 9, -39,
+    33, -80, -68, -78, -117, 53, 30, -122, 64, -104, 74, -49, 106, 85,
+    -38, -93,
+)))
+
+
+def _UTDID哈希(value: str) -> int:
+    raw = value.encode("utf-16-be", "surrogatepass")
+    result = 0
+    for offset in range(0, len(raw), 2):
+        result = (31 * result + int.from_bytes(raw[offset:offset + 2], "big")) & 0xFFFFFFFF
+    return result
+
+
+def _UTDID校验(prefix: bytes) -> bytes:
+    digest = hmac.new(_UTDID密钥, prefix, hashlib.sha1).digest()
+    return struct.pack(">I", _UTDID哈希(base64.b64encode(digest).decode("ascii")))
+
+
+def _生成UTDID(android_id: str) -> str:
+    prefix = (struct.pack(">II", int(time.time()) & 0xFFFFFFFF, secrets.randbits(32))
+              + b"\x03\x00" + struct.pack(">I", _UTDID哈希(android_id)))
+    return base64.b64encode(prefix + _UTDID校验(prefix)).decode("ascii")
+
+
+def _有效UTDID(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 24:
+        return False
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except ValueError:
+        return False
+    return (len(raw) == 18 and raw[8:10] == b"\x03\x00"
+            and hmac.compare_digest(raw[14:], _UTDID校验(raw[:14])))
+
+
+def _新建设备参数() -> dict[str, str]:
+    android_id = secrets.token_hex(8)
+    return {
+        "utdid": _生成UTDID(android_id), "oaid": str(uuid.uuid4()),
+        "sex": "0", "channelCode": "wb1001925", "domain": "2", "p": "35",
+        "brand": "Xiaomi", "model": "2201123C", "ver": "10009264",
+        "appVer": "1.0.9.264", "osVer": "android35", "androidId": android_id,
+        "rtype": "2", "deviceType": "-1", "pname": "com.dzmf.zmfxsdq",
+    }
+
+
+# 已注册设备只保留在内存并跨热重载复用，不读取或生成 profile/设备文件。
 if "_游客状态" not in globals():
     _游客状态: dict[str, Any] = {
-        "param": {
-            "utdid": base64.b64encode(uuid.uuid4().bytes + b"\x00\x00").decode("ascii"),
-            "oaid": str(uuid.uuid4()), "sex": "0", "channelCode": "wb1001925",
-            "domain": "2", "p": "35", "brand": "Xiaomi", "model": "2201123C",
-            "ver": "10009264", "appVer": "1.0.9.264", "osVer": "android35",
-            "androidId": uuid.uuid4().hex[:16], "rtype": "2", "deviceType": "-1",
-            "pname": "com.dzmf.zmfxsdq",
-        },
-        "loop": None, "lock": None, "cpu": None, "failed_until": 0.0,
+        "param": _新建设备参数(), "loop": None, "lock": None, "cpu": None,
+        "failed_until": 0.0, "invalid_param": None, "device_generation": 0,
     }
 
 
@@ -127,7 +177,11 @@ def _初始化同步器() -> None:
     elif "chapter_lock" not in _游客状态:
         _游客状态["chapter_lock"] = asyncio.Lock()
     _游客状态.setdefault("chapter_next_at", 0.0)
-    _游客状态.setdefault("chapter_restricted_until", 0.0)
+    _游客状态.setdefault("invalid_param", None)
+    _游客状态.setdefault("device_generation", 0)
+    # 旧版拒绝冷却只标记旧设备失效，新版首次使用立即注册替换。
+    if _游客状态.pop("chapter_restricted_until", 0.0) > time.monotonic():
+        _游客状态["invalid_param"] = _游客状态["param"]
 
 
 def _同步签名(value: str, sign_type: int) -> str:
@@ -176,21 +230,40 @@ async def _读取(response: aiohttp.ClientResponse) -> bytes:
 
 async def _请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, Any],
               sign_type: int = 1, *, deadline: float | None = None) -> dict[str, Any]:
-    if call_no not in {"1141", "1110", "111", "1121", "1153"}:
+    if call_no not in {"1141", "1110", "111", "1153"}:
         raise _西瓜请求错误("invalid_endpoint")
+    _初始化同步器()
     if call_no == "1153":
-        _初始化同步器()
-        # 同一游客的阅读接口不可跟随 200 个 CDN 工作协程同时扇出。
-        # 锁覆盖传输重试；跨书籍及热重载共用节奏，取消不清空已计入的请求。
+        # 同一设备的阅读请求仍共享串行节奏，CDN 的 200 路工作协程不受影响。
         async with _游客状态["chapter_lock"]:
-            if time.monotonic() < _游客状态["chapter_restricted_until"]:
-                raise _西瓜请求错误("access_restricted", code=8)
-            return await _执行请求(session, call_no, body, sign_type, deadline=deadline)
-    return await _执行请求(session, call_no, body, sign_type, deadline=deadline)
+            return await _设备请求(session, call_no, body, sign_type, deadline=deadline)
+    return await _设备请求(session, call_no, body, sign_type, deadline=deadline)
+
+
+async def _设备请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, Any],
+                 sign_type: int, *, deadline: float | None) -> dict[str, Any]:
+    params = await _确保游客(session, deadline=deadline)
+    try:
+        return await _执行请求(session, call_no, body, sign_type, params=params, deadline=deadline)
+    except _西瓜请求错误 as exc:
+        if exc.category != "access_restricted" or exc.code != 8:
+            raise
+    # 明确的业务拒绝才更换设备；迟到的旧设备拒绝复用已完成的新注册。
+    params = await _确保游客(session, rejected=params, deadline=deadline)
+    try:
+        return await _执行请求(session, call_no, body, sign_type, params=params, deadline=deadline)
+    except _西瓜请求错误 as exc:
+        if exc.category == "access_restricted" and exc.code == 8:
+            async with _游客状态["lock"]:
+                if _游客状态["param"] is params:
+                    _游客状态["invalid_param"] = params
+                    _游客状态["failed_until"] = time.monotonic() + 60
+        # 每次业务请求最多换设备重试一次，持续拒绝不循环注册。
+        raise
 
 
 async def _执行请求(session: aiohttp.ClientSession, call_no: str, body: dict[str, Any],
-                sign_type: int, *, deadline: float | None) -> dict[str, Any]:
+                sign_type: int, *, params: dict[str, Any], deadline: float | None = None) -> dict[str, Any]:
     last: _西瓜请求错误 | None = None
     # f0 会初始化游客，断流后结果不明时不自动重复提交。
     attempts = 1 if call_no == "1121" else 西瓜重试次数
@@ -211,7 +284,7 @@ async def _执行请求(session: aiohttp.ClientSession, call_no: str, body: dict
         plaintext = _JSON(body)
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "param": _加密(_JSON(_游客状态["param"])),
+            "param": _加密(_JSON(params)),
             "signType": str(sign_type), "sign": await _签名(query + plaintext, sign_type),
         }
         try:
@@ -225,10 +298,7 @@ async def _执行请求(session: aiohttp.ClientSession, call_no: str, body: dict
             if code is None:
                 raise _西瓜请求错误("invalid_response", http_status=200)
             if code != 0:
-                if call_no == "1153" and code == 8:
-                    # 实测响应为“访问受限”；不假定一分钟后解封，不重建游客绕过。
-                    # 本地冷却仅抑制后续任务继续提交，不自动重放被拒绝的请求。
-                    _游客状态["chapter_restricted_until"] = time.monotonic() + 60
+                if code == 8:
                     raise _西瓜请求错误("access_restricted", http_status=200, code=code)
                 raise _西瓜请求错误("business_error", http_status=200, code=code)
             return result
@@ -246,24 +316,40 @@ async def _执行请求(session: aiohttp.ClientSession, call_no: str, body: dict
     raise last or _西瓜请求错误("network_error")
 
 
-async def _确保游客(session: aiohttp.ClientSession) -> None:
+async def _确保游客(session: aiohttp.ClientSession, *, rejected: dict[str, Any] | None = None,
+                deadline: float | None = None) -> dict[str, Any]:
     _初始化同步器()
-    async with _游客状态["lock"]:
-        params = _游客状态["param"]
-        if _书号(params.get("uid")):
-            return
+    lock = _游客状态["lock"]
+    if deadline is None:
+        await lock.acquire()
+    else:
+        try:
+            await asyncio.wait_for(lock.acquire(), max(0.0, deadline - time.monotonic()))
+        except asyncio.TimeoutError:
+            raise _西瓜请求错误("timeout") from None
+    try:
+        current = _游客状态["param"]
+        if rejected is current:
+            _游客状态["invalid_param"] = current
+        if (_书号(current.get("uid")) and _有效UTDID(current.get("utdid"))
+                and _游客状态["invalid_param"] is not current):
+            return current
         if time.monotonic() < _游客状态["failed_until"]:
+            if _游客状态["invalid_param"] is current:
+                raise _西瓜请求错误("access_restricted", code=8)
             raise _西瓜请求错误("guest_cooldown")
+        params = _新建设备参数()
         body = {"f": "f0", "rCode": 10009264, "domain": 2,
                 "brand": params["brand"], "model": params["model"],
                 "attributionId": "|" + params["oaid"], "utdid": params["utdid"],
                 "channelCode": params["channelCode"]}
         try:
-            response = await _请求(session, "1121", body, 2)
+            # 候选设备与 f0 请求体一致；1121 结果不明时不自动重复注册。
+            response = await _执行请求(session, "1121", body, 2, params=params, deadline=deadline)
             data = response.get("data")
             info = data.get("f0") if isinstance(data, dict) else None
             uid = _书号(info.get("userId")) if isinstance(info, dict) else ""
-            if not uid:
+            if not uid or uid == _书号(current.get("uid")):
                 raise _西瓜请求错误("invalid_guest")
             params["uid"] = uid
             if isinstance(info.get("channelCode"), str) and info["channelCode"]:
@@ -271,6 +357,15 @@ async def _确保游客(session: aiohttp.ClientSession) -> None:
         except BaseException:
             _游客状态["failed_until"] = time.monotonic() + 60
             raise
+        # 注册成功后原子发布；旧请求始终使用自己的参数快照。
+        _游客状态.update(param=params, invalid_param=None, failed_until=0.0,
+                     device_generation=_游客状态["device_generation"] + 1)
+        logger.info("西瓜免费小说设备注册完成：stage=device_register, reason=%s, generation=%s",
+                    "access_restricted" if rejected is not None else "initialize",
+                    _游客状态["device_generation"])
+        return params
+    finally:
+        lock.release()
 
 
 def 构造西瓜链接(book_id: Any) -> str:
@@ -454,7 +549,6 @@ async def _下载正文(session: aiohttp.ClientSession, chapter: dict[str, Any])
 async def 下载西瓜正文(session: aiohttp.ClientSession, book_id: str, chapters: list[dict[str, str]]) -> list[str]:
     if not chapters:
         raise _西瓜请求错误("empty_catalog")
-    await _确保游客(session)
     # 一次提交完整目录，校验全部阅读状态后再并发下载正文。
     received = await _正文元数据(session, book_id, chapters)
     worker_count = min(西瓜并发数, len(chapters))
