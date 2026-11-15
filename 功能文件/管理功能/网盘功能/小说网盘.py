@@ -63,6 +63,7 @@ async def 停止网盘后台任务() -> None:
     await 停止恢复待续传上传任务()
     await 停止每日网盘远端清理任务()
     await 网盘Cookie.停止全部夸克扫码登录任务()
+    await 夸克网盘.关闭闲置连接池()
 
 
 async def 停止恢复待续传上传任务() -> None:
@@ -117,15 +118,14 @@ async def _清理当前机器人网盘过期小说(
     配置: Any, 当前日期: date | None,
     已检查账号: set[tuple[str, str, str]],
 ) -> dict[str, int]:
-    """清理各账号过期 TXT 及已清空的日期目录，保留今天和昨天。"""
+    """仅清理 UC/百度过期 TXT 及空日期目录；夸克文件保留。"""
     日期 = 当前日期 or datetime.now().astimezone().date()
     客户端映射 = {
         "UC": (UC网盘.UC网盘客户端, UC网盘.读取UC上传目录),
-        "夸克": (夸克网盘.夸克网盘客户端, 夸克网盘.读取夸克上传目录),
         "百度": (百度网盘.百度网盘客户端, 百度网盘.读取百度上传目录),
     }
     统计: dict[str, int] = {}
-    for 平台 in 网盘顺序:
+    for 平台 in 客户端映射:
         if not 网盘状态.网盘开关是否开启(配置, 平台):
             continue
         账号列表 = 网盘Cookie.获取启用网盘账号列表(配置, 平台)

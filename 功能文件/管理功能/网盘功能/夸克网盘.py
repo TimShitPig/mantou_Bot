@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import date
 import hashlib
 import json
 import mimetypes
@@ -32,6 +31,10 @@ PDS_ID = "ccp-sz3-zjk-1609940055"
 目录列表最大并发数 = 4
 目录扫描完整性重试次数 = 3
 目录扫描重试每页数量 = 100
+账号上传最大并发数 = 4
+目录缓存有效秒数 = 300
+目录缓存最大条目 = 1024
+连接池空闲秒数 = 30
 文件可见重试次数 = 12
 分享链接重试次数 = 12
 查询失败重试次数 = 3
@@ -50,7 +53,6 @@ OSS错误码白名单 = frozenset({
 请求阶段 = {
     "/file/sort": "directory_list",
     "/file": "directory_create",
-    "/file/delete": "file_delete",
     "/file/upload/pre": "upload_pre",
     "/file/update/hash": "upload_hash",
     "/file/upload/auth": "upload_auth",
@@ -67,6 +69,15 @@ if not isinstance(_夸克同名上传锁表, weakref.WeakValueDictionary):
 _夸克账号操作锁表 = globals().get("_夸克账号操作锁表")
 if not isinstance(_夸克账号操作锁表, weakref.WeakValueDictionary):
     _夸克账号操作锁表 = weakref.WeakValueDictionary()
+_夸克上传交接任务 = globals().get("_夸克上传交接任务")
+if not isinstance(_夸克上传交接任务, dict):
+    _夸克上传交接任务 = {}
+_夸克目录缓存 = globals().get("_夸克目录缓存")
+if not isinstance(_夸克目录缓存, dict):
+    _夸克目录缓存 = {}
+_夸克连接池表 = globals().get("_夸克连接池表")
+if not isinstance(_夸克连接池表, dict):
+    _夸克连接池表 = {}
 浏览器请求头 = {
     "accept": "application/json, text/plain, */*",
     "content-type": "application/json",
@@ -144,6 +155,8 @@ class 夸克网盘客户端:
     def __init__(self, cookie: str):
         self.cookie = 清理Cookie(cookie)
         self.session: aiohttp.ClientSession | None = None
+        self.oss_session: aiohttp.ClientSession | None = None
+        self._连接池: dict[str, Any] | None = None
         self.服务器时间偏移秒 = 0.0
 
     async def __aenter__(self) -> "夸克网盘客户端":
@@ -157,15 +170,30 @@ class 夸克网盘客户端:
         await self.关闭()
         请求头 = dict(浏览器请求头)
         请求头["cookie"] = self.cookie
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
-            headers=请求头,
-        )
+        self._连接池 = 获取夸克连接池()
+        try:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
+                headers=请求头, connector=self._连接池["connector"], connector_owner=False,
+            )
+        except BaseException:
+            释放夸克连接池(self._连接池)
+            self._连接池 = None
+            raise
 
     async def 关闭(self) -> None:
-        if self.session is not None:
-            await self.session.close()
-            self.session = None
+        会话, OSS会话, 连接池 = self.session, self.oss_session, self._连接池
+        self.session = self.oss_session = self._连接池 = None
+        try:
+            if 会话 is not None:
+                await 会话.close()
+        finally:
+            try:
+                if OSS会话 is not None:
+                    await OSS会话.close()
+            finally:
+                if 连接池 is not None:
+                    释放夸克连接池(连接池)
 
     async def 上传文件并创建分享(
         self, 本地路径: str | Path, 文件名: str, 上传目录: str
@@ -173,7 +201,7 @@ class 夸克网盘客户端:
         上传目录 = 网盘清理工具.生成每日上传目录(上传目录)
         上传锁 = 获取夸克同名上传锁(self.cookie, 上传目录, 文件名)
         async with 上传锁:
-            # 目录解析和上传沿用账号写入窗口，避免与每日清理的分页扫描交错。
+            # 不同文件共用账号并发额度，同名文件仍完整串行至分享确认。
             async with 获取夸克账号操作锁(self.cookie):
                 目录ID = await self.确保目录路径(上传目录)
                 文件ID = await self.上传文件(本地路径, 目录ID, 文件名, 允许同名回查=False)
@@ -191,8 +219,22 @@ class 夸克网盘客户端:
         return 当前目录ID
 
     async def 确保文件夹(self, 目录名: str, 父目录ID: str) -> str:
+        缓存键 = (asyncio.get_running_loop(), 获取夸克账号摘要(self.cookie), str(父目录ID), 目录名)
         async with 网盘清理工具.获取目录创建锁(self.cookie, 父目录ID, 目录名):
-            return await self._确保文件夹(目录名, 父目录ID)
+            当前时间 = time.monotonic()
+            缓存 = _夸克目录缓存.get(缓存键)
+            if 缓存 and 缓存[1] > 当前时间:
+                return 缓存[0]
+            _夸克目录缓存.pop(缓存键, None)
+            文件ID = await self._确保文件夹(目录名, 父目录ID)
+            if 文件ID:
+                for 键, 值 in list(_夸克目录缓存.items()):
+                    if 值[1] <= 当前时间 or 键[0].is_closed():
+                        _夸克目录缓存.pop(键, None)
+                if len(_夸克目录缓存) >= 目录缓存最大条目:
+                    _夸克目录缓存.pop(min(_夸克目录缓存, key=lambda 键: _夸克目录缓存[键][1]), None)
+                _夸克目录缓存[缓存键] = (文件ID, time.monotonic() + 目录缓存有效秒数)
+            return 文件ID
 
     async def _确保文件夹(self, 目录名: str, 父目录ID: str) -> str:
         已有ID = await self.查找文件夹ID(目录名, 父目录ID)
@@ -234,38 +276,6 @@ class 夸克网盘客户端:
             if 是文件夹项目(项目) and 读取文件名(项目) == 目录名:
                 return 读取文件ID(项目)
         return ""
-
-    async def 删除文件ID列表(self, 文件ID列表: list[str]) -> int:
-        去重ID = list(dict.fromkeys(str(值).strip() for 值 in 文件ID列表 if str(值).strip()))
-        if not 去重ID:
-            return 0
-        数据 = await self.请求JSON(
-            "POST",
-            "/file/delete",
-            json_data={"action_type": 2, "filelist": 去重ID, "exclude_fids": []},
-        )
-        if not 接口成功(数据):
-            raise RuntimeError(f"夸克网盘删除文件失败：{限制文本长度(数据)}")
-        返回数据 = 数据.get("data") if isinstance(数据.get("data"), dict) else {}
-        任务ID = str(返回数据.get("task_id") or "")
-        if 任务ID:
-            任务数据 = await self.轮询任务(任务ID)
-            任务结果 = (
-                任务数据.get("data") if isinstance(任务数据.get("data"), dict) else {}
-            )
-            if 安全整数(任务结果.get("status"), -1) != 2:
-                raise RuntimeError("夸克网盘删除文件任务未完成")
-        return len(去重ID)
-
-    async def 清理早于当天小说(
-        self, 上传目录: str, 当前日期: date | None = None
-    ) -> int:
-        """清理前两天及更早小说，并删除确认清空的日期子目录。"""
-        目录片段 = 拆分上传目录(上传目录)
-        if 目录片段 and 目录片段[0] == "QQ聊天媒体":
-            return 0
-        async with 获取夸克账号操作锁(self.cookie):
-            return await 网盘清理工具.清理日期目录小说(self, 上传目录, 当前日期)
 
     async def 列出目录全部项目(
         self, 父目录ID: str, *, _完整性重试次数: int = 0,
@@ -439,23 +449,27 @@ class 夸克网盘客户端:
         文件大小 = 路径.stat().st_size
         文件状态 = 路径.stat()
         内容类型 = mimetypes.guess_type(文件名)[0] or "application/octet-stream"
-        预上传数据 = await self.请求JSON(
-            "POST",
-            "/file/upload/pre",
-            json_data={
-                "ccp_hash_update": True,
-                "parallel_upload": True,
-                "pdir_fid": str(父目录ID),
-                "dir_name": "",
-                "size": 文件大小,
-                "file_name": 文件名,
-                "format_type": 内容类型,
-                "l_updated_at": int(文件状态.st_mtime * 1000),
-                "l_created_at": int(文件状态.st_ctime * 1000),
-            },
-        )
-        if not 接口成功(预上传数据):
-            raise RuntimeError(f"夸克网盘预上传失败：{限制文本长度(预上传数据)}")
+        try:
+            预上传数据 = await self.请求JSON(
+                "POST",
+                "/file/upload/pre",
+                json_data={
+                    "ccp_hash_update": True,
+                    "parallel_upload": True,
+                    "pdir_fid": str(父目录ID),
+                    "dir_name": "",
+                    "size": 文件大小,
+                    "file_name": 文件名,
+                    "format_type": 内容类型,
+                    "l_updated_at": int(文件状态.st_mtime * 1000),
+                    "l_created_at": int(文件状态.st_ctime * 1000),
+                },
+            )
+            if not 接口成功(预上传数据):
+                raise RuntimeError(f"夸克网盘预上传失败：{限制文本长度(预上传数据)}")
+        except Exception:
+            清除夸克目录缓存(self.cookie)
+            raise
         上传参数 = (
             预上传数据.get("data") if isinstance(预上传数据.get("data"), dict) else {}
         )
@@ -549,58 +563,56 @@ class 夸克网盘客户端:
         地址 = f"https://{存储桶}.pds.quark.cn/{对象键}?partNumber=1&uploadId={上传ID}"
         已校准时间 = False
         失败次数 = 0
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
-        ) as 会话:
-            # aiohttp新版本会隐式重发PUT并复用已耗尽文件流；由本层重开文件、刷新签名。
-            if getattr(会话, "_retry_connection", False):
-                会话._retry_connection = False
-            while True:
-                当前时间 = self.获取OSS时间()
-                鉴权元数据 = (
-                    f"PUT\n\n{内容类型}\n{当前时间}\n"
-                    f"x-oss-date:{当前时间}\n"
-                    f"x-oss-user-agent:{OSS用户代理}\n"
-                    f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
+        会话 = self.获取OSS会话()
+        # aiohttp新版本会隐式重发PUT并复用已耗尽文件流；由本层重开文件、刷新签名。
+        if getattr(会话, "_retry_connection", False):
+            会话._retry_connection = False
+        while True:
+            当前时间 = self.获取OSS时间()
+            鉴权元数据 = (
+                f"PUT\n\n{内容类型}\n{当前时间}\n"
+                f"x-oss-date:{当前时间}\n"
+                f"x-oss-user-agent:{OSS用户代理}\n"
+                f"/{PDS编号}/{存储桶}/{对象键}?partNumber=1&uploadId={上传ID}"
+            )
+            鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
+            请求头 = {
+                "authorization": 鉴权键,
+                "x-oss-date": 当前时间,
+                "x-oss-user-agent": OSS用户代理,
+                "content-type": 内容类型,
+            }
+            try:
+                # UploadPart以uploadId+partNumber覆盖同一分片；每次重开文件，禁止重放预上传/合并/分享。
+                with 路径.open("rb") as 文件:
+                    async with 会话.put(
+                        地址, data=文件, headers=请求头, allow_redirects=False,
+                    ) as 响应:
+                        if 响应.status in (200, 201):
+                            return 提取ETag(响应.headers) or MD5
+                        OSS码 = await 读取OSS错误码(响应)
+                        if not 已校准时间 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
+                            self.同步服务器时间(响应.headers)
+                            已校准时间 = True
+                            continue
+                        错误 = 夸克OSS请求错误(
+                            "oss_part_upload", HTTP状态=响应.status, OSS码=OSS码,
+                        )
+                        if 响应.status not in OSS可重试状态:
+                            raise 错误
+            except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
+                错误 = 夸克OSS请求错误(
+                    "oss_part_upload", 原因="timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error",
                 )
-                鉴权键 = await self.获取上传鉴权(上传参数, 鉴权元数据)
-                请求头 = {
-                    "authorization": 鉴权键,
-                    "x-oss-date": 当前时间,
-                    "x-oss-user-agent": OSS用户代理,
-                    "content-type": 内容类型,
-                }
-                try:
-                    # UploadPart以uploadId+partNumber覆盖同一分片；每次重开文件，禁止重放预上传/合并/分享。
-                    with 路径.open("rb") as 文件:
-                        async with 会话.put(
-                            地址, data=文件, headers=请求头, allow_redirects=False,
-                        ) as 响应:
-                            if 响应.status in (200, 201):
-                                return 提取ETag(响应.headers) or MD5
-                            OSS码 = await 读取OSS错误码(响应)
-                            if not 已校准时间 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
-                                self.同步服务器时间(响应.headers)
-                                已校准时间 = True
-                                continue
-                            错误 = 夸克OSS请求错误(
-                                "oss_part_upload", HTTP状态=响应.status, OSS码=OSS码,
-                            )
-                            if 响应.status not in OSS可重试状态:
-                                raise 错误
-                except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, asyncio.TimeoutError) as 异常:
-                    错误 = 夸克OSS请求错误(
-                        "oss_part_upload", 原因="timeout" if isinstance(异常, asyncio.TimeoutError) else "network_error",
-                    )
-                失败次数 += 1
-                if 失败次数 >= OSS分片上传尝试次数:
-                    raise 错误 from None
-                logger.warning(
-                    "夸克OSS分片上传失败重试：stage=%s, http_status=%s, reason=%s, oss_code=%s, attempt=%s/%s",
-                    错误.阶段, 错误.HTTP状态, 错误.原因, 错误.OSS码 or "unknown",
-                    失败次数, OSS分片上传尝试次数,
-                )
-                await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (失败次数 - 1))
+            失败次数 += 1
+            if 失败次数 >= OSS分片上传尝试次数:
+                raise 错误 from None
+            logger.warning(
+                "夸克OSS分片上传失败重试：stage=%s, http_status=%s, reason=%s, oss_code=%s, attempt=%s/%s",
+                错误.阶段, 错误.HTTP状态, 错误.原因, 错误.OSS码 or "unknown",
+                失败次数, OSS分片上传尝试次数,
+            )
+            await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (失败次数 - 1))
 
     async def 完成OSS单分片(self, ETag: str, 上传参数: dict[str, Any]) -> None:
         存储桶 = str(上传参数.get("bucket") or "")
@@ -643,25 +655,26 @@ class 夸克网盘客户端:
                 "x-oss-user-agent": OSS用户代理,
                 "x-oss-callback": 回调编码,
             }
-            async with aiohttp.ClientSession(
+            会话 = self.获取OSS会话()
+            async with 会话.post(
+                地址, data=XML字节, headers=请求头, allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=120),
-            ) as 会话:
-                async with 会话.post(地址, data=XML字节, headers=请求头, allow_redirects=False) as 响应:
-                    if 响应.status in (200, 201):
-                        return
-                    OSS码 = await 读取OSS错误码(响应)
-                    if 响应.status == 203 and OSS码 == "CallbackFailed":
-                        logger.warning(
-                            "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
-                            响应.status,
-                        )
-                        return
-                    if 尝试次数 == 0 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
-                        self.同步服务器时间(响应.headers)
-                        continue
-                    raise 夸克OSS请求错误(
-                        "oss_complete", HTTP状态=响应.status, OSS码=OSS码,
+            ) as 响应:
+                if 响应.status in (200, 201):
+                    return
+                OSS码 = await 读取OSS错误码(响应)
+                if 响应.status == 203 and OSS码 == "CallbackFailed":
+                    logger.warning(
+                        "夸克网盘OSS合并分片回调未确认，继续请求上传完成：status=%s",
+                        响应.status,
                     )
+                    return
+                if 尝试次数 == 0 and 响应.status == 403 and OSS码 == "RequestTimeTooSkewed":
+                    self.同步服务器时间(响应.headers)
+                    continue
+                raise 夸克OSS请求错误(
+                    "oss_complete", HTTP状态=响应.status, OSS码=OSS码,
+                )
         raise 夸克OSS请求错误("oss_complete", 原因="clock_skew")
 
     async def 获取上传鉴权(self, 上传参数: dict[str, Any], 鉴权元数据: str) -> str:
@@ -915,6 +928,20 @@ class 夸克网盘客户端:
             raise RuntimeError("夸克网盘客户端未初始化")
         return self.session
 
+    def 获取OSS会话(self) -> aiohttp.ClientSession:
+        if self._连接池 is None:
+            raise RuntimeError("夸克网盘客户端未初始化")
+        if self.oss_session is None:
+            self.oss_session = aiohttp.ClientSession(
+                connector=self._连接池["connector"], connector_owner=False,
+                cookie_jar=aiohttp.DummyCookieJar(),
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300),
+            )
+            # 重用连接不能恢复aiohttp对已耗尽文件流的隐式重放。
+            if getattr(self.oss_session, "_retry_connection", False):
+                self.oss_session._retry_connection = False
+        return self.oss_session
+
 
 async def 上传小说并获取分享链接(
     配置: Any, 源缓存路径: str | Path, 文件名: str
@@ -1037,39 +1064,118 @@ def 拆分上传目录(上传目录: str) -> list[str]:
     ]
 
 
-def 获取夸克账号操作锁(cookie: str) -> asyncio.Lock:
-    """账号级写入窗口跨客户端共用，刷新 __puus 不生成另一把锁。"""
+def 获取夸克账号摘要(cookie: str) -> str:
     稳定Cookie = sorted(
         片段.strip()
         for 片段 in 清理Cookie(cookie).split(";")
         if 片段.strip()
         and 片段.split("=", 1)[0].strip().lower() not in {"__puus", "ctoken"}
     )
-    键 = hashlib.sha256(";".join(稳定Cookie).encode("utf-8")).hexdigest()
-    锁 = _夸克账号操作锁表.get(键)
-    if 锁 is None:
-        锁 = asyncio.Lock()
-        _夸克账号操作锁表[键] = 锁
-    return 锁
+    return hashlib.sha256(";".join(稳定Cookie).encode("utf-8")).hexdigest()
+
+
+class 夸克交接上传额度(asyncio.BoundedSemaphore):
+    def __init__(self) -> None:
+        super().__init__(账号上传最大并发数)
+        self.交接就绪 = asyncio.get_running_loop().create_future()
+
+    async def acquire(self) -> bool:
+        # 单个排队任务取消不能取消共享交接，旧窗口取消则所有等待者退出。
+        await asyncio.shield(self.交接就绪)
+        return await super().acquire()
+
+
+def 获取夸克账号操作锁(cookie: str) -> asyncio.Semaphore:
+    """小说与媒体共用四路额度；旧串行队列完成后统一交接新任务。"""
+    循环 = asyncio.get_running_loop()
+    账号摘要 = 获取夸克账号摘要(cookie)
+    键 = (循环, 账号摘要)
+    额度 = _夸克账号操作锁表.get(键)
+    if 额度 is None:
+        旧锁 = _夸克账号操作锁表.get(账号摘要)
+        if 旧锁 is not None and getattr(旧锁, "_loop", None) in (None, 循环):
+            额度 = 夸克交接上传额度()
+
+            async def 交接旧窗口() -> None:
+                async with 旧锁:
+                    额度.交接就绪.set_result(None)
+
+            def 清理交接(任务: asyncio.Task[Any]) -> None:
+                # done回调也覆盖协程首次运行前取消，不留下永远无法获取的额度。
+                if not 额度.交接就绪.done():
+                    额度.交接就绪.cancel()
+                    if _夸克账号操作锁表.get(键) is 额度:
+                        _夸克账号操作锁表.pop(键, None)
+                if _夸克上传交接任务.get(键) is 任务:
+                    _夸克上传交接任务.pop(键, None)
+                if not 任务.cancelled():
+                    任务.exception()
+
+            任务 = 循环.create_task(交接旧窗口())
+            _夸克上传交接任务[键] = 任务
+            任务.add_done_callback(清理交接)
+        else:
+            额度 = asyncio.BoundedSemaphore(账号上传最大并发数)
+        _夸克账号操作锁表[键] = 额度
+    return 额度
+
+
+def 清除夸克目录缓存(cookie: str) -> None:
+    循环, 账号摘要 = asyncio.get_running_loop(), 获取夸克账号摘要(cookie)
+    for 键 in list(_夸克目录缓存):
+        if 键[0] is 循环 and 键[1] == 账号摘要:
+            _夸克目录缓存.pop(键, None)
+
+
+def 获取夸克连接池() -> dict[str, Any]:
+    循环 = asyncio.get_running_loop()
+    池 = _夸克连接池表.get(循环)
+    if 池 is None or 池["connector"].closed:
+        池 = {"loop": 循环, "connector": aiohttp.TCPConnector(
+            limit=64, limit_per_host=16, keepalive_timeout=30, ttl_dns_cache=300,
+        ), "users": 0, "idle": None}
+        _夸克连接池表[循环] = 池
+    if 池["idle"] is not None:
+        池["idle"].cancel()
+        池["idle"] = None
+    池["users"] += 1
+    return 池
+
+
+def 释放夸克连接池(池: dict[str, Any]) -> None:
+    池["users"] -= 1
+    if 池["users"] == 0 and not 池["loop"].is_closed():
+        池["idle"] = 池["loop"].call_later(
+            连接池空闲秒数, lambda: 池["loop"].create_task(关闭闲置连接池(池)),
+        )
+
+
+async def 关闭闲置连接池(预期连接池: dict[str, Any] | None = None) -> None:
+    """停止或空闲时只回收无人使用的连接，不中断重载保留的媒体上传。"""
+    循环 = asyncio.get_running_loop()
+    池 = _夸克连接池表.get(循环)
+    if 池 is not None and (预期连接池 is None or 池 is 预期连接池) and 池["users"] == 0:
+        _夸克连接池表.pop(循环, None)
+        if 池["idle"] is not None:
+            池["idle"].cancel()
+        await 池["connector"].close()
 
 
 def 获取夸克同名上传锁(cookie: str, 上传目录: str, 文件名: str) -> asyncio.Lock:
-    稳定Cookie片段 = [
-        片段.strip()
-        for 片段 in 清理Cookie(cookie).split(";")
-        if 片段.strip()
-        and 片段.split("=", 1)[0].strip().lower() not in {"__puus", "ctoken"}
-    ]
-    稳定Cookie片段.sort()
-    账号摘要 = hashlib.sha256(";".join(稳定Cookie片段).encode("utf-8")).hexdigest()
+    账号摘要 = 获取夸克账号摘要(cookie)
     目录路径 = "/".join(拆分上传目录(上传目录))
     锁键 = hashlib.sha256(
         f"{账号摘要}\0{目录路径}\0{文件名}".encode("utf-8")
     ).hexdigest()
-    锁 = _夸克同名上传锁表.get(锁键)
+    键 = (asyncio.get_running_loop(), 锁键)
+    # 旧客户端仍持有的同名锁先复用，避免热升级期间并发提交同名任务。
+    旧锁 = _夸克同名上传锁表.get(锁键)
+    if 旧锁 is not None and getattr(旧锁, "_loop", None) not in (None, asyncio.get_running_loop()):
+        旧锁 = None
+    锁 = 旧锁 or _夸克同名上传锁表.get(键)
     if 锁 is None:
         锁 = asyncio.Lock()
-        _夸克同名上传锁表[锁键] = 锁
+        _夸克同名上传锁表[键] = 锁
     return 锁
 
 
