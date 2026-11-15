@@ -190,4 +190,116 @@
     :root body.messages-workspace .msg-remark-box,
     :root body.messages-workspace .msg-clear-box,
     :root body.messages-workspace .msg-group-drawer { box-shadow:var(--shadow); }
+
+    /* 手机聊天沿用 QQ 的紧凑顶栏、输入行与底部附件工具；桌面保持原布局。 */
+    @media (max-width:760px) {
+      :root body.messages-workspace.msg-mobile-chat-view {
+        --msg-head-bg:#f1f1f3;
+        --msg-surface:#f1f1f3;
+        --msg-composer-bg:#f7f7f8;
+        --msg-incoming-fill:#ffffff;
+        --msg-bubble-line:transparent;
+        --msg-self-fill:#ffffff;
+        --msg-self-bg:#ffffff;
+        --msg-self-ink:#25262b;
+        --msg-self-line:transparent;
+        --msg-self-inset:#f2f3f6;
+        --msg-self-inset-hover:#e8edf4;
+        --msg-self-muted:#686c74;
+        --msg-self-link:#245889;
+        --msg-file-fill:#ffffff;
+        --msg-file-line:#e5e6e9;
+        --msg-control-ink:#3e4148;
+        --msg-button-fill:#0872df;
+        --msg-button-hover:#0063cb;
+        --msg-link-color:#245889;
+        --msg-link-hover:#164d80;
+        --msg-action-ink:#245889;
+        --msg-action-line:#86abc9;
+        --msg-mobile-input:#ffffff;
+      }
+      :root[data-theme="dark"] body.messages-workspace.msg-mobile-chat-view {
+        --msg-head-bg:#202125;
+        --msg-surface:#18191d;
+        --msg-composer-bg:#202125;
+        --msg-incoming-fill:#2b2c32;
+        --msg-self-fill:#29394d;
+        --msg-self-bg:#29394d;
+        --msg-self-ink:#f0f2f5;
+        --msg-self-inset:#263344;
+        --msg-self-inset-hover:#33455a;
+        --msg-self-muted:#b8c6d9;
+        --msg-self-link:#a8d1ff;
+        --msg-file-fill:#2b2c32;
+        --msg-file-line:#3d3f47;
+        --msg-control-ink:#d0d2da;
+        --msg-button-fill:#0872df;
+        --msg-button-hover:#0063cb;
+        --msg-link-color:#9bc8ff;
+        --msg-link-hover:#c1ddff;
+        --msg-action-ink:#9bc8ff;
+        --msg-action-line:#607c9a;
+        --msg-mobile-input:#2b2c32;
+      }
+      :root body.messages-workspace .msg-head {
+        min-height:56px; height:56px; padding:4px 10px 4px 4px; gap:4px;
+        border-bottom:0;
+      }
+      :root body.messages-workspace .msg-head-name { font-size:17px; line-height:1.35; }
+      :root body.messages-workspace .msg-head-sub { font-size:12px; line-height:1.35; }
+      :root body.messages-workspace .msg-mobile-back,
+      :root body.messages-workspace .msg-head-menu-toggle { width:44px; height:44px; min-width:44px; color:var(--ink); }
+      :root body.messages-workspace .msg-mobile-back { font-size:34px; }
+      :root body.messages-workspace .msg-head-menu-toggle span {
+        position:relative; width:20px; height:16px; border-block:2px solid currentColor; font-size:0;
+      }
+      :root body.messages-workspace .msg-head-menu-toggle span::before {
+        position:absolute; top:5px; left:0; width:100%; height:2px; background:currentColor; content:"";
+      }
+      :root body.messages-workspace .msg-body { padding:16px 12px 8px; }
+      :root body.messages-workspace .msg-bubble { font-size:16px; font-weight:400; line-height:1.5; border-radius:12px; }
+      :root body.messages-workspace .msg-row.self .msg-bubble { border-radius:12px; }
+      :root body.messages-workspace .msg-bubble-name { font-size:12px; line-height:1.4; }
+      :root body.messages-workspace .msg-composer,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer {
+        display:grid; grid-template-columns:minmax(0,1fr) 68px;
+        grid-template-rows:auto minmax(44px,auto) 44px; gap:6px 10px;
+        height:auto !important; min-height:112px; max-height:52%;
+        padding:8px 12px max(8px,env(safe-area-inset-bottom)); border-top:0; overflow:auto;
+      }
+      :root body.messages-workspace .msg-composer > .msg-extra { grid-column:1 / -1; grid-row:1; }
+      :root body.messages-workspace .msg-input-box,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-input-box {
+        grid-column:1; grid-row:2; align-self:end; min-height:44px; max-height:24dvh;
+        border:0; border-radius:12px; background:var(--msg-mobile-input); overflow:auto;
+      }
+      :root body.messages-workspace .msg-editor,
+      :root body.messages-workspace .msg-editor:focus,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-editor {
+        min-height:44px; padding:10px 12px; font-size:16px; line-height:1.5; background:transparent;
+      }
+      :root body.messages-workspace .msg-composer-topbar,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-topbar {
+        grid-column:1 / -1; grid-row:3; top:0; min-height:44px; margin:0; gap:12px; justify-content:space-between;
+      }
+      :root body.messages-workspace .msg-tool-btn,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-tool-btn {
+        width:44px; height:44px; padding:8px; border-radius:10px;
+      }
+      :root body.messages-workspace .msg-tool-btn svg,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-tool-btn svg { width:26px; height:26px; }
+      :root body.messages-workspace .msg-composer-toggle { width:44px; height:44px; margin:0; opacity:1; }
+      :root body.messages-workspace .msg-toolbar,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { display:contents; }
+      :root body.messages-workspace .msg-send-shortcut { display:none; }
+      :root body.messages-workspace #msg-send,
+      :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send {
+        grid-column:2; grid-row:2; align-self:end; min-width:68px; min-height:44px;
+        padding:8px 12px; border:0; border-radius:12px; font-size:16px; font-weight:500;
+      }
+      :root body.messages-workspace .msg-shell.msg-composer-collapsed .msg-composer {
+        display:flex; min-height:52px; max-height:52px; padding:4px 12px;
+      }
+      :root body.messages-workspace .msg-shell.msg-composer-collapsed .msg-composer-topbar { min-height:44px; }
+    }
 """
