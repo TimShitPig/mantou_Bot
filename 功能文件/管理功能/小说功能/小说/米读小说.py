@@ -186,9 +186,34 @@ def _成功(data: Any) -> bool:
     return isinstance(data, dict) and str(data.get("code", "0")) in {"0", "200"}
 
 
-async def 获取米读详情(
+def _米读元数据(raw: dict[str, Any]) -> dict[str, Any]:
+    状态 = {"1": "完结", "2": "连载"}.get(str(raw.get("end_status", "")).strip(), "未知")
+    if 状态 == "未知":
+        状态 = {
+            "完结": "完结", "已完结": "完结", "连载": "连载", "连载中": "连载",
+        }.get(_文本(raw.get("updateStatus")), "未知")
+    字数 = 0
+    for 字段 in ("word_count", "wordCount", "words"):
+        值 = raw.get(字段)
+        if isinstance(值, bool) or not isinstance(值, (str, int)):
+            continue
+        文本 = str(值).strip()
+        if re.fullmatch(r"[0-9]+", 文本) and int(文本) > 0:
+            字数 = int(文本)
+            break
+    return {
+        "book_id": str(raw.get("book_id") or raw.get("bookId") or ""),
+        "title": _文本(raw.get("title") or raw.get("bookName")),
+        "author": _文本(raw.get("author") or "未知"),
+        "intro": _文本(raw.get("description")),
+        "status": 状态,
+        "word_count": 字数,
+    }
+
+
+async def 获取米读元数据(
     session: aiohttp.ClientSession, book_id: str
-) -> tuple[dict[str, Any], list[dict[str, str]]]:
+) -> dict[str, Any]:
     detail_data = await _请求(
         session,
         "POST",
@@ -196,8 +221,20 @@ async def 获取米读详情(
         data={"app": "midu", "book_id": book_id, "source": "midu", "token": ""},
     )
     if not _成功(detail_data):
-        return {}, []
+        return {}
     raw = detail_data.get("data") if isinstance(detail_data.get("data"), dict) else {}
+    detail = _米读元数据(raw)
+    if detail["book_id"] != book_id or not detail["title"]:
+        return {}
+    return detail
+
+
+async def 获取米读详情(
+    session: aiohttp.ClientSession, book_id: str
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    detail = await 获取米读元数据(session, book_id)
+    if not detail:
+        return {}, []
     catalog_raw = await _请求(
         session,
         "GET",
@@ -226,15 +263,6 @@ async def 获取米读详情(
                         "title": _文本(item.get("title") or f"第{len(chapters) + 1}章"),
                     }
                 )
-    detail = {
-        "title": _文本(raw.get("title") or raw.get("bookName")),
-        "author": _文本(raw.get("author") or "未知"),
-        "intro": _文本(raw.get("description")),
-        "status": "完结"
-        if str(raw.get("status") or "").lower() in {"1", "finish", "完结"}
-        else "连载",
-        "word_count": raw.get("wordCount") or raw.get("words") or 0,
-    }
     return detail, chapters
 
 
@@ -312,6 +340,8 @@ async def 下载米读正文(
 def _字数(value: Any) -> str:
     try:
         number = int(str(value or "").replace(",", ""))
+        if number >= 10000:
+            return f"{number / 10000:.2f}".rstrip("0").rstrip(".") + "万字"
         return f"{number:,}字" if number > 0 else "未知"
     except Exception:
         return "未知"
@@ -500,9 +530,12 @@ async def 搜索小说(keyword: str, *, 需要数量: int = 20) -> list[dict[str
             title = _文本(book.get("title") or book.get("bookName"))
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", book_id) or not title:
                 continue
+            metadata = _米读元数据(book)
             result.append(
                 {
-                    "_search_status": {key: book[key] for key in ("status", "statusText",) if key in book},
+                    "_search_status": {key: book[key] for key in ("end_status", "updateStatus") if key in book},
+                    "status": metadata["status"],
+                    "word_count": metadata["word_count"],
                     "book_id": book_id,
                     "title": title,
                     "author": _文本(

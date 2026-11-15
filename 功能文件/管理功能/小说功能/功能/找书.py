@@ -2805,6 +2805,49 @@ async def _补全本页番茄状态(会话: dict[str, Any]) -> None:
         logger.debug("找书番茄状态补查提前结束：错误类型=%s", type(exc).__name__)
 
 
+async def _补全本页米读状态(会话: dict[str, Any]) -> None:
+    """只补当前页同一本米读书的真实详情，不为搜索候选拉取目录。"""
+    if 米读小说 is None:
+        return
+    当前页, _, _ = _获取找书分页(会话)
+    待补项 = [
+        项 for 项 in 当前页
+        if 项 and 项["platform"] == "米读"
+        and 规范化找书状态(项, platform="米读") == "未知"
+        and not 项.get("_米读详情已核验")
+    ]
+    if not 待补项:
+        return
+    信号量 = asyncio.Semaphore(4)
+
+    async def 补查(客户端: Any, 项: dict[str, Any]) -> None:
+        try:
+            async with 信号量:
+                详情 = await 米读小说.获取米读元数据(客户端, str(项["book_id"]))
+        except Exception as exc:
+            logger.debug("找书米读状态补查失败：错误类型=%s", type(exc).__name__)
+            return
+        if (
+            str(详情.get("book_id") or "") != str(项["book_id"])
+            or 规范标题(详情.get("title")) != 规范标题(项.get("title"))
+            or 规范标题(详情.get("author")) != 规范标题(项.get("author"))
+        ):
+            return
+        状态 = 规范化找书状态(详情, platform="米读")
+        if 状态 != "未知":
+            项["status"] = 状态
+            项["_米读详情已核验"] = True
+        if not 项.get("word_count"):
+            项["word_count"] = _安全整数热度(详情.get("word_count"))
+
+    try:
+        async with asyncio.timeout(2.5):
+            async with 米读小说.创建米读HTTP会话(4) as 客户端:
+                await asyncio.gather(*(补查(客户端, 项) for 项 in 待补项))
+    except Exception as exc:
+        logger.debug("找书米读状态补查提前结束：错误类型=%s", type(exc).__name__)
+
+
 def _找书展示字段(项: dict[str, Any]) -> tuple[str, str, str, str]:
     书名 = 清理文本(项.get("title") or "未知") or "未知"
     作者 = 清理文本(项.get("author") or "未知") or "未知"
@@ -3154,7 +3197,7 @@ async def 处理找书指令(
     if 当前会话 is None:
         return None
     页码 = 会话["page"]
-    await _补全本页番茄状态(会话)
+    await asyncio.gather(_补全本页番茄状态(会话), _补全本页米读状态(会话))
     if 找书会话.get(会话键) is not 当前会话 or 当前会话["page"] != 页码:
         return None
     if 是QQ官方机器人(event):
