@@ -3114,7 +3114,9 @@ def 格式化找书结果MD(会话: dict[str, Any]) -> str:
     return "\n".join(行)
 
 
-def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[str, Any] | None:
+def 生成找书翻页键盘(
+    会话: dict[str, Any], 用户标识: str, *, 私聊: bool = False,
+) -> dict[str, Any] | None:
     当前页, 页码, 总页 = _获取找书分页(会话)
     if not 当前页 or 总页 <= 1 or not 用户标识:
         return None
@@ -3129,7 +3131,7 @@ def 生成找书翻页键盘(会话: dict[str, Any], 用户标识: str) -> dict[
             "render_data": {"label": 标签, "visited_label": 标签, "style": 1},
             "action": {
                 "type": 1,
-                "permission": {"type": 0, "specify_user_ids": [用户标识]},
+                "permission": {"type": 2} if 私聊 else {"type": 0, "specify_user_ids": [用户标识]},
                 "data": f"{帮助命令回调前缀}{标签}",
                 "unsupport_tips": f"请发送{标签}",
             },
@@ -3384,7 +3386,9 @@ async def 处理找书指令(
     if 是QQ官方机器人(event):
         return {
             "md": 格式化找书结果MD(会话),
-            "keyboard": 生成找书翻页键盘(会话, 获取找书用户标识(event)),
+            "keyboard": 生成找书翻页键盘(
+                会话, 获取找书用户标识(event), 私聊=not bool(获取群号(event)),
+            ),
             "text": 格式化找书结果(会话),
         }
     return 格式化找书结果(会话)
