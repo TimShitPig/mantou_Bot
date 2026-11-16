@@ -3701,6 +3701,10 @@ def _STV操作错误(异常: Exception, 操作: str) -> web.Response:
         提示 = "账号登录态无效，请重新登录或在官方 App 完成验证"
     elif 分类 in {"database_unavailable", "database_required"}:
         提示 = "数据库暂时不可用，账号设置未保存"
+    elif 分类 == "timeout":
+        提示 = "STV 查询超时，请稍后重试"
+    elif 分类 == "network_error":
+        提示 = "STV 网络连接暂时异常，请稍后重试"
     else:
         提示 = "STV 账号操作未完成，请稍后查询状态"
     return _STVJSON({"ok": False, "error": 提示}, 409)

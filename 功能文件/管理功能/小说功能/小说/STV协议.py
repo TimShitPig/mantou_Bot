@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import re
+import ssl
 import time
 import unicodedata
 from html.parser import HTMLParser
@@ -36,6 +37,8 @@ _PATHS = {
     "/io/grantcontext/context", "/io/user/online", "/io/userinfo/getuseritems",
 }
 _CONNECTION_POOLS = globals().get("_CONNECTION_POOLS") or {}
+_ACCOUNT_QUERY_TIMEOUTS = (30.0, 60.0)
+_ACCOUNT_QUERY_RETRY_DELAY = 0.5
 
 
 def _acquire_connector() -> dict[str, Any]:
@@ -536,10 +539,12 @@ class STVClient:
         try:
             body, _ = await self._account_query("/user/0/", account=False, limit=2 * 1024 * 1024)
         except STVError as exc:
-            if exc.http_status == 401:
-                raise STVError("credential_invalid", 401) from exc
-            if exc.http_status == 403:
-                raise STVError("verification_required", 403) from exc
+            if exc.http_status in {401, 403}:
+                failure = STVError("credential_invalid" if exc.http_status == 401 else "verification_required", exc.http_status)
+                for field in ("request_stage", "attempts", "timeout_kind"):
+                    if hasattr(exc, field):
+                        setattr(failure, field, getattr(exc, field))
+                raise failure from exc
             raise
         if not self._has_access():
             raise STVError("credential_invalid")
@@ -592,13 +597,99 @@ class STVClient:
 
     async def _account_query(self, path: str, params: dict[str, Any] | None = None,
                              **kwargs: Any) -> tuple[str, dict[str, str]]:
-        """独立的身份与资料读取并行；两者均成功才返回，不缓存身份或数据。"""
-        if not self._has_access():
-            raise STVError("credential_invalid")
-        tasks = [asyncio.create_task(self.account_info()),
-                 asyncio.create_task(self._request("GET", path, params, **kwargs))]
+        """仅修为查询的身份与资料各恢复一次；成功子请求不重复，总预算不增加。"""
+        if path != "/user/0/" or params or kwargs.get("mutation"):
+            raise STVError("invalid_endpoint")
+        fixed_uid = self.uid
+
+        def validate() -> None:
+            self._session()
+            if not self._has_access() or self.uid != fixed_uid:
+                raise STVError("credential_invalid")
+            if self.mutation_guard is not None and self.mutation_guard() is False:
+                raise PermissionError("STV管理权限已失效")
+
+        async def identity() -> dict[str, Any]:
+            nonlocal fixed_uid
+            info = await self.account_info()
+            uid = str(info.get("id") or "")
+            if not re.fullmatch(r"[1-9]\d*", uid) or self.uid != uid or (fixed_uid and fixed_uid != uid):
+                raise STVError("credential_invalid", 200)
+            fixed_uid = uid
+            return info
+
+        def causes(exc: Exception) -> list[BaseException]:
+            chain = []
+            while exc is not None and all(exc is not item for item in chain) and len(chain) < 16:
+                chain.append(exc)
+                exc = exc.__cause__
+            return chain
+
+        def retryable(exc: Exception) -> bool:
+            chain = causes(exc)
+            if any(isinstance(item, (ssl.SSLError, aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch,
+                                     UnicodeError, aiohttp.InvalidURL)) for item in chain):
+                return False
+            if isinstance(exc, STVError) and (
+                exc.category not in {"timeout", "network_error"} or exc.http_status is not None or exc.code is not None
+            ):
+                return False
+            return any(isinstance(item, (asyncio.TimeoutError, aiohttp.ClientConnectionError,
+                                          aiohttp.ClientPayloadError)) for item in chain)
+
+        def timeout_kind(exc: Exception) -> str:
+            chain = causes(exc)
+            if any(isinstance(item, getattr(aiohttp, "ConnectionTimeoutError", ())) for item in chain):
+                return "connection_timeout"
+            if any(isinstance(item, getattr(aiohttp, "SocketTimeoutError", ())) for item in chain):
+                return "read_timeout"
+            return "total_timeout" if any(isinstance(item, asyncio.TimeoutError) for item in chain) else "none"
+
+        async def read(operation: Any, stage: str, budget: float) -> Any:
+            attempts = 1
+            kind = "none"
+            total = asyncio.timeout(budget)
+            try:
+                async with total:
+                    for attempts in (1, 2):
+                        remaining = max(0.0, total.when() - asyncio.get_running_loop().time())
+                        attempt = asyncio.timeout(min(budget / 2, remaining) if attempts == 1 else remaining)
+                        try:
+                            async with attempt:
+                                validate()
+                                result = await operation()
+                                validate()
+                                return result
+                        except asyncio.TimeoutError as exc:
+                            failure = STVError("timeout")
+                            failure.__cause__ = exc
+                            kind = "attempt_timeout" if attempt.expired() else timeout_kind(exc)
+                        except Exception as exc:
+                            failure = exc
+                            kind = timeout_kind(exc)
+                        if attempts == 2 or not retryable(failure):
+                            raise failure
+                        # 等待、排队及两次请求均在同一个原始总预算中；取消直接传播。
+                        await asyncio.sleep(_ACCOUNT_QUERY_RETRY_DELAY)
+            except asyncio.TimeoutError as exc:
+                failure = STVError("timeout")
+                failure.__cause__ = exc
+                kind = "total_timeout" if total.expired() else timeout_kind(exc)
+            except Exception as exc:
+                failure = exc
+            else:
+                raise RuntimeError("STV只读查询未返回结果")
+            failure.request_stage = stage
+            failure.attempts = attempts
+            failure.timeout_kind = kind
+            raise failure
+
+        tasks = [asyncio.create_task(read(identity, "account_info", _ACCOUNT_QUERY_TIMEOUTS[0])),
+                 asyncio.create_task(read(lambda: self._request("GET", path, params, **kwargs),
+                                          "cultivation_page", _ACCOUNT_QUERY_TIMEOUTS[1]))]
         try:
             _, result = await asyncio.gather(*tasks)
+            validate()
             return result
         except BaseException:
             for task in tasks:

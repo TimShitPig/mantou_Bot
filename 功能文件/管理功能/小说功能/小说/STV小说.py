@@ -198,11 +198,23 @@ def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | Non
         logger.info("STV账号任务未提交：appid=%s, uid=%s, stage=%s, reason=breakthrough_unavailable",
                     _作用域(配置), state.get("uid") or "none", event)
     else:
-        logger.warning("STV账号任务失败：appid=%s, uid=%s, stage=%s, error_type=%s, category=%s, http_status=%s, code=%s",
-                       _作用域(配置), state.get("uid") or "none", event, type(exc).__name__,
-                       exc.reason if isinstance(exc, 数据库连接错误) else getattr(exc, "category", "unknown"),
-                       getattr(exc, "http_status", None),
-                       exc.mysql_code if isinstance(exc, 数据库连接错误) else getattr(exc, "code", None))
+        message = "STV账号任务失败：appid=%s, uid=%s, stage=%s, error_type=%s, category=%s, http_status=%s, code=%s"
+        values = [_作用域(配置), state.get("uid") or "none", event, type(exc).__name__,
+                  exc.reason if isinstance(exc, 数据库连接错误) else getattr(exc, "category", "unknown"),
+                  getattr(exc, "http_status", None),
+                  exc.mysql_code if isinstance(exc, 数据库连接错误) else getattr(exc, "code", None)]
+        if event == "cultivation":
+            stage = getattr(exc, "request_stage", "unknown")
+            stage = stage if isinstance(stage, str) and stage in {"account_info", "cultivation_page"} else "unknown"
+            attempts = getattr(exc, "attempts", None)
+            attempts = attempts if type(attempts) is int and attempts in {1, 2} else "none"
+            kind = getattr(exc, "timeout_kind", "none")
+            kind = kind if isinstance(kind, str) and kind in {
+                "connection_timeout", "read_timeout", "total_timeout", "attempt_timeout", "none",
+            } else "unknown"
+            message += ", request_stage=%s, attempts=%s, timeout_kind=%s"
+            values.extend((stage, attempts, kind))
+        logger.warning(message, *values)
 
 
 def _摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
