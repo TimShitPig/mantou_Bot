@@ -13,7 +13,7 @@ from . import QQ官方交互桥, 文件缓存, 权限工具, 消息记录, 机�
 from 功能文件.页面功能 import 帮助网页
 from 功能文件.管理功能.网盘功能 import 小说网盘, 夸克媒体归档
 from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关
-from 功能文件.管理功能.小说功能.小说 import QQ阅读, 得间小说, 塔读小说
+from 功能文件.管理功能.小说功能.小说 import QQ阅读, 得间小说, 塔读小说, STV小说
 
 _ZLibrary = importlib.import_module("功能文件.管理功能.小说功能.小说.Z-Library小说")
 _缓存准备任务: asyncio.Task[Any] | None = globals().get("_缓存准备任务")
@@ -90,7 +90,13 @@ async def _同步当前机器人账号状态(配置: Any) -> None:
         except Exception as 异常:
             logger.warning("插件后台状态同步失败：stage=reader, error_type=%s", type(异常).__name__)
 
-    await asyncio.gather(_白名单(), _阅读())
+    async def _STV() -> None:
+        try:
+            await STV小说.启动STV后台任务(配置)
+        except Exception as 异常:
+            logger.warning("插件后台状态同步失败：stage=stv, error_type=%s", type(异常).__name__)
+
+    await asyncio.gather(_白名单(), _阅读(), _STV())
 
 
 async def _同步账号状态(配置: Any, 上下文: Any = None) -> None:
@@ -150,6 +156,7 @@ async def 停止插件(句柄: dict[str, Any] | None) -> None:
     await _停止("novels", 小说下载任务.停止小说下载任务, 保留待恢复=True)
     await _停止("pan", 小说网盘.停止网盘后台任务)
     await _停止("accounts", _ZLibrary.停止ZLibrary账号任务)
+    await _停止("stv", STV小说.停止STV后台任务)
     await _停止("images", 夸克媒体归档.停止图片归档任务)
     await _停止("web", 帮助网页.停止帮助网页服务, 句柄["web"], 保留会话=True)
     await _停止("cache_daily", 文件缓存.停止每日文件缓存任务, 句柄["cache_daily"])

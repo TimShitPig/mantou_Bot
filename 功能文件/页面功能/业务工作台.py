@@ -32,6 +32,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19V5h4v14m0 0V7h5v12m0 0 1-13 5 1-1 12M3 19h18"/></svg>
                 ZLibrary
               </button>
+              <button id="bot-tab-stv" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-stv" tabindex="-1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6v14M3 5c4-1 6 0 9 2 3-2 5-3 9-2v13c-4-1-6 0-9 2-3-2-5-3-9-2z"/></svg>
+                STV
+              </button>
             </div>
 
             <section id="config" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-basic" tabindex="0">
@@ -60,6 +64,26 @@
                 <div><h3>ZLibrary 账号</h3><p>搜索、导入账号或按分组管理。</p></div>
               </header>
               <div id="zlibrary-account-editor" aria-live="polite"><div class="empty">正在读取账号…</div></div>
+            </section>
+            <section id="bot-panel-stv" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-stv" tabindex="0" hidden>
+              <header class="studio-service-head">
+                <div><h3>STV 账号</h3><p>Sáng Tác Việt · 登录、修为和背包。</p></div>
+                <button id="stv-refresh" class="outline-button" type="button">刷新资料</button>
+              </header>
+              <p id="stv-summary" role="status" aria-live="polite">选择 STV 分区后读取账号…</p>
+              <form id="stv-login-form" class="config-editor" autocomplete="off">
+                <div class="config-field"><label for="stv-username">用户名</label><input id="stv-username" type="text" maxlength="128" autocomplete="off" required></div>
+                <div class="config-field"><label for="stv-password">密码</label><input id="stv-password" type="password" maxlength="4096" autocomplete="new-password" required></div>
+                <div class="config-field"><label for="stv-repeat-password">确认密码（注册时填写）</label><input id="stv-repeat-password" type="password" maxlength="4096" autocomplete="new-password"></div>
+                <div class="config-actions"><button id="stv-login" class="outline-button" type="submit">登录</button><button id="stv-register" class="outline-button" type="button">注册</button><button id="stv-delete" class="outline-button" type="button">退出账号</button></div>
+              </form>
+              <div class="config-actions">
+                <label>挂时长 <button id="stv-online" class="switch" type="button" aria-label="挂时长" aria-pressed="false" disabled><span></span></button></label>
+                <label>领取奖励 <button id="stv-rewards" class="switch" type="button" aria-label="领取奖励" aria-pressed="false" disabled><span></span></button></label>
+              </div>
+              <div class="config-actions"><button id="stv-cultivation" class="outline-button" type="button" disabled>查询修为</button><button id="stv-breakthrough" class="outline-button" type="button" disabled>突破</button><button id="stv-inventory" class="outline-button" type="button" disabled>查询背包</button></div>
+              <div class="config-field"><label for="stv-item-id">物品实例 ID</label><input id="stv-item-id" type="text" maxlength="128" autocomplete="off"><div class="config-actions"><button id="stv-item" class="outline-button" type="button" disabled>物品详情</button><button id="stv-use" class="outline-button" type="button" disabled>使用物品</button></div></div>
+              <div id="stv-result" class="config-message" role="status" aria-live="polite"></div>
             </section>
           </div>
         </section>

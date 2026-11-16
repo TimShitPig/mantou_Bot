@@ -3679,6 +3679,118 @@ async def _处理QQ阅读网页扫码取消(request: web.Request) -> web.Respons
     return _QQ阅读JSON({"ok": True, "message": "扫码会话已结束"})
 
 
+def _STVJSON(数据: dict[str, Any], 状态码: int = 200) -> web.Response:
+    return web.json_response(数据, status=状态码, headers={
+        "Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer",
+    })
+
+
+def _STV操作错误(异常: Exception, 操作: str) -> web.Response:
+    """只返回固定分类提示，不把服务端原文或账号凭据带到浏览器。"""
+    logger.warning("帮助控制台 STV账号操作失败：阶段=%s，错误类型=%s", 操作, type(异常).__name__)
+    if isinstance(异常, PermissionError):
+        return _STVJSON({"ok": False, "error": "登录状态已更新，请重新登录控制台"}, 401)
+    if isinstance(异常, ValueError):
+        return _STVJSON({"ok": False, "error": "账号或操作参数无效，请检查后重试"}, 400)
+    分类 = getattr(异常, "category", "")
+    if 分类 in {"operation_unconfirmed", "reward_unconfirmed", "result_unknown"}:
+        提示 = "操作结果未确认，请先查询修为或背包，勿重复提交"
+    elif 分类 in {"credential_invalid", "account_required", "not_logged_in"}:
+        提示 = "账号登录态无效，请重新登录或在官方 App 完成验证"
+    elif 分类 in {"database_unavailable", "database_required"}:
+        提示 = "数据库暂时不可用，账号设置未保存"
+    else:
+        提示 = "STV 账号操作未完成，请稍后查询状态"
+    return _STVJSON({"ok": False, "error": 提示}, 409)
+
+
+async def _处理STV账号(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _STVJSON({"ok": False, "error": "请先登录控制台"}, 401)
+    状态 = _晋江操作上下文(request)
+    try:
+        from 功能文件.管理功能.小说功能.小说 import STV小说
+
+        摘要 = await STV小说.读取STV账号摘要(状态["config"])
+        if not _晋江操作仍有效(状态):
+            raise PermissionError()
+        return _STVJSON({"ok": True, "editable": _数据库会话可用(状态["config"]), **摘要})
+    except Exception as exc:
+        return _STV操作错误(exc, "summary")
+
+
+async def _STV修改请求(request: web.Request, 操作: str) -> web.Response:
+    if not _请求已授权(request):
+        return _STVJSON({"ok": False, "error": "请先登录控制台"}, 401)
+    if not _请求来自同源(request):
+        return _STVJSON({"ok": False, "error": "请求来源无效"}, 403)
+    if not _数据库会话可用():
+        return _STVJSON({"ok": False, "error": "数据库未配置，账号设置未保存"}, 409)
+    数据 = await _读取请求JSON(request)
+    if not isinstance(数据, dict):
+        return _STVJSON({"ok": False, "error": "请求参数无效"}, 400)
+    状态 = _晋江操作上下文(request)
+    仍有效 = lambda: _晋江操作仍有效(状态)
+    try:
+        from 功能文件.管理功能.小说功能.小说 import STV小说
+
+        if not 仍有效():
+            raise PermissionError()
+        if 操作 == "auth":
+            动作 = 数据.get("action")
+            用户名, 密码, 重复密码 = 数据.get("username"), 数据.get("password"), 数据.get("repeat_password", "")
+            if (动作 not in {"login", "register"} or not isinstance(用户名, str)
+                    or not 0 < len(用户名.strip()) <= 128 or not isinstance(密码, str)
+                    or not 0 < len(密码) <= 4096 or not isinstance(重复密码, str)
+                    or len(重复密码) > 4096 or (动作 == "register" and 密码 != 重复密码)):
+                raise ValueError()
+            摘要 = await STV小说.登录STV账号(
+                状态["config"], 用户名, 密码, 注册=动作 == "register", 重复密码=重复密码,
+                提交前校验=仍有效,
+            )
+            响应 = {"ok": True, "editable": True, **摘要}
+        elif 操作 == "delete":
+            摘要 = await STV小说.删除STV账号(状态["config"], 提交前校验=仍有效)
+            响应 = {"ok": True, "editable": True, **摘要}
+        else:
+            动作 = 数据.get("action")
+            if 动作 in {"online", "rewards"}:
+                if not isinstance(数据.get("enabled"), bool):
+                    raise ValueError()
+                摘要 = await STV小说.设置STV开关(
+                    状态["config"], 名称=动作, 启用=数据["enabled"], 提交前校验=仍有效,
+                )
+                响应 = {"ok": True, "editable": True, **摘要}
+            elif 动作 in {"refresh", "cultivation", "breakthrough", "inventory", "item", "use"}:
+                物品ID = 数据.get("item_id", "")
+                if not isinstance(物品ID, str) or len(物品ID) > 128 or (动作 in {"item", "use"} and not 物品ID.strip()):
+                    raise ValueError()
+                结果 = await STV小说.执行STV账号操作(
+                    状态["config"], 操作=动作, 物品ID=物品ID, 提交前校验=仍有效,
+                )
+                摘要 = await STV小说.读取STV账号摘要(状态["config"])
+                响应 = {"ok": True, "editable": True, **摘要, "result": 结果}
+            else:
+                raise ValueError()
+        if not 仍有效():
+            raise PermissionError()
+        return _STVJSON(响应)
+    except Exception as exc:
+        return _STV操作错误(exc, 操作)
+
+
+async def _处理STV账号登录(request: web.Request) -> web.Response:
+    return await _STV修改请求(request, "auth")
+
+
+async def _处理STV账号删除(request: web.Request) -> web.Response:
+    return await _STV修改请求(request, "delete")
+
+
+async def _处理STV账号操作(request: web.Request) -> web.Response:
+    return await _STV修改请求(request, "action")
+
+
 def _晋江JSON(数据: dict[str, Any]) -> web.Response:
     return web.json_response(数据, headers={
         "Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer",

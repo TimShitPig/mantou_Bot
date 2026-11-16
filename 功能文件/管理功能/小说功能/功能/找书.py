@@ -150,6 +150,12 @@ except Exception as exc:
     logger.warning("找书加载疯读失败：错误类型=%s", type(exc).__name__)
 
 try:
+    from 功能文件.管理功能.小说功能.小说 import STV小说
+except Exception as exc:
+    STV小说 = None
+    logger.warning("找书加载STV失败：错误类型=%s", type(exc).__name__)
+
+try:
     from 功能文件.管理功能.小说功能.小说 import 菠萝包小说
 except Exception as exc:
     菠萝包小说 = None
@@ -217,7 +223,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
 找书指定平台 = (
     "番茄", "七猫", "书旗", "QQ阅读", "QQ浏览器", "得间", "点众", "塔读",
     "百度", "小米", "宜搜", "米读", "猫眼", "酷我", "酷匠", "连城", "菠萝包",
-    "晋江", "话本", "疯狂追书", "梧桐", "追书", "西瓜免费小说", "ZLibrary", "疯读",
+    "晋江", "话本", "疯狂追书", "梧桐", "追书", "西瓜免费小说", "ZLibrary", "疯读", "STV",
 )
 指定平台找书正则 = re.compile(
     r"^(" + "|".join(
@@ -2146,6 +2152,20 @@ async def 搜索疯读(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索STV(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if STV小说 is None:
+        _标记找书平台失败()
+        return []
+    try:
+        return _整理新增平台搜索结果(
+            "STV", await STV小说.搜索STV小说(关键词, limit=需要数量), 需要数量
+        )
+    except Exception as exc:
+        _标记找书平台失败()
+        logger.warning("找书STV搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
 async def 搜索菠萝包(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
     if 菠萝包小说 is None:
         _标记找书平台失败()
@@ -2376,6 +2396,7 @@ def _平台优先级值(平台: Any) -> int:
         "ZLibrary": -8,
         "西瓜免费小说": -9,
         "疯读": -10,
+        "STV": -11,
     }.get(str(平台 or ""), 0)
 
 
@@ -2607,6 +2628,7 @@ async def _聚合搜索未缓存(
                 ("梧桐", lambda: 搜索梧桐(词, 需要数量=数量)),
                 ("ZLibrary", lambda: 搜索ZLibrary(词, 需要数量=数量, 配置=配置)),
                 ("疯读", lambda: 搜索疯读(词, 需要数量=数量)),
+                ("STV", lambda: 搜索STV(词, 需要数量=数量)),
             )
 
         async def 预检平台结果(
@@ -3258,6 +3280,8 @@ async def 获取找书下载回复流(
         return 西瓜免费小说.生成西瓜下载回复流(event, 链接, 配置)
     if 平台 == "疯读" and 疯读小说 is not None:
         return 疯读小说.生成疯读下载回复流(event, 链接, 配置)
+    if 平台 == "STV" and STV小说 is not None:
+        return STV小说.生成STV下载回复流(event, 链接, 配置)
     if 平台 == "菠萝包" and 菠萝包小说 is not None:
         return 菠萝包小说.生成菠萝包下载回复流(event, 链接, 配置)
     if 平台 == "晋江" and 晋江小说 is not None:

@@ -317,9 +317,9 @@
         if (next !== previousView) { closeMsgHeadMenu(); clearSavedCredential(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
-        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); leaveJinjiang(); stopZLibraryAccount(); }
+        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); leaveJinjiang(); leaveSTV(); stopZLibraryAccount(); }
         activeView = next;
-        if (next === 'bot') { void loadZLibraryAccount(); syncJinjiangTab(); }
+        if (next === 'bot') { void loadZLibraryAccount(); syncJinjiangTab(); syncSTVTab(); }
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); nextParams.set('appid', consoleAppid); history.pushState({view:next,appid:consoleAppid}, '', `${location.pathname}?${nextParams.toString()}`); }
         const meta = views[next];
         $('page-title').textContent = meta[0]; $('page-subtitle').textContent = meta[1];
@@ -1670,6 +1670,119 @@
       window.addEventListener('pagehide', () => leaveJinjiang(false, true));
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
 
+      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:''};
+      const stvVisible = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && document.visibilityState !== 'hidden' && Boolean(consoleAppid);
+      const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvVisible();
+      const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password','stv-item-id']) if ($(id)) $(id).value = ''; };
+      const renderSTV = (auth = stv.auth) => {
+        stv.auth = auth;
+        const busy = Boolean(stv.inFlight), editable = Boolean(auth?.editable) && !busy;
+        const loggedIn = auth?.logged_in === true;
+        if ($('stv-summary')) $('stv-summary').textContent = !auth ? stv.error || '选择 STV 分区后读取账号…' : auth.registered && auth.registration_logged_in !== true ? '注册已成功，请登录新账号' : auth.auth_status === 'invalid' && auth.uid ? `${auth.username || 'STV 用户'} · UID ${auth.uid} · 登录已失效，请重新登录` : loggedIn ? `${auth.username || 'STV 用户'} · UID ${auth.uid || '未知'} · 已登录 · ${auth.running ? '挂时长运行中' : '挂时长未运行'}` : '尚未登录账号';
+        for (const id of ['stv-login','stv-register','stv-username','stv-password','stv-repeat-password']) if ($(id)) $(id).disabled = !editable;
+        if ($('stv-delete')) $('stv-delete').disabled = !editable || !auth?.uid;
+        if ($('stv-refresh')) $('stv-refresh').disabled = busy || stv.loading || !consoleAppid;
+        for (const name of ['online','rewards']) {
+          const button = $(`stv-${name}`), enabled = auth?.[`${name}_enabled`] === true;
+          if (button) { button.disabled = !editable || !loggedIn; button.classList.toggle('on', enabled); button.setAttribute('aria-pressed', String(enabled)); }
+        }
+        for (const id of ['stv-cultivation','stv-breakthrough','stv-inventory','stv-item','stv-use','stv-item-id']) if ($(id)) $(id).disabled = !editable || !loggedIn;
+      };
+      const leaveSTV = () => {
+        stv.generation += 1; stv.request += 1; stv.loading = false; stv.auth = null; stv.error = '';
+        clearSTVFields(); $('stv-result')?.replaceChildren(); renderSTV();
+      };
+      const showSTVResult = (action, result) => {
+        const target = $('stv-result'); if (!target) return;
+        target.replaceChildren();
+        const line = (label, value) => { const node = document.createElement('p'); node.textContent = `${label}：${value === null || value === undefined || value === '' ? '未知' : value}`; target.appendChild(node); };
+        const cultivation = (info) => {
+          if (!info || typeof info !== 'object') return;
+          line('境界', info.realm); line('修为', info.cultivation?.text || `${info.cultivation?.current ?? '未知'} / ${info.cultivation?.next ?? '未知'}`);
+          line('根基', info.foundation?.text || `${info.foundation?.current ?? '未知'} / ${info.foundation?.maximum ?? '未知'}`);
+          line('修炼速度', info.speed?.text); line('状态', info.status); line('修炼时长', info.training_minutes === null || info.training_minutes === undefined ? '未知' : `${info.training_minutes} 分钟`);
+          line('已读章节', info.read_chapters); line('可否突破', info.breakthrough_available === true ? '可以' : '当前不可突破');
+        };
+        const item = (info, active = false) => {
+          if (!info || typeof info !== 'object') return;
+          const row = document.createElement('div'), button = document.createElement('button'); button.type = 'button'; button.className = 'text-button';
+          button.textContent = `${info.name || info.n || '物品'} · 实例 ${info.i ?? info.item_id ?? '未知'}${active || String(info.ac) === '1' ? ' · 生效中' : ''}`;
+          button.disabled = info.i === null || info.i === undefined;
+          button.addEventListener('click', () => { $('stv-item-id').value = String(info.i); $('stv-item-id').focus(); });
+          row.appendChild(button); target.appendChild(row);
+          if (info.info) line('说明', info.info);
+          if (info.level !== undefined) line('等级', info.level);
+        };
+        if (action === 'cultivation') cultivation(result);
+        else if (action === 'breakthrough') { line('突破', result?.success === true ? '成功' : '服务器未确认成功，请先查询修为'); if (result?.after) cultivation(result.after); else if (result?.refresh_error) line('资料', '刷新未完成，请先查询修为，勿重复提交'); }
+        else if (action === 'inventory') {
+          const available = Array.isArray(result?.list) ? result.list : [], active = Array.isArray(result?.act) ? result.act : [];
+          const activeIds = new Set(active.map((row) => String(row.i)));
+          for (const row of available) if (!activeIds.has(String(row.i))) item(row);
+          for (const row of active) item(row, true);
+          if (!target.childNodes.length) line('背包', '暂无物品');
+        } else if (action === 'item') item(result);
+        else if (action === 'use') line('物品使用', result?.used === true ? '成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交');
+        else if (action === 'refresh') line('账号资料', '已刷新');
+      };
+      const loadSTV = async () => {
+        if (!stvVisible() || stv.loading || stv.inFlight) return;
+        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, request = ++stv.request;
+        stv.loading = true; stv.error = '';
+        try {
+          const data = await api('stv-auth', {botAppid:appid});
+          if (request === stv.request && stvScopeCurrent(appid, scope, generation)) renderSTV(data);
+        } catch (error) {
+          if (request !== stv.request || !stvScopeCurrent(appid, scope, generation) || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error); else { stv.error = error.message; $('stv-summary').textContent = error.message; toast(error.message); }
+        } finally { if (request === stv.request && stvScopeCurrent(appid, scope, generation)) { stv.loading = false; renderSTV(); } }
+      };
+      const mutateSTV = async (action, extra = {}) => {
+        if (!stvVisible() || !stv.auth?.editable || stv.inFlight) return;
+        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, marker = {};
+        const authAction = action === 'login' || action === 'register';
+        stv.inFlight = marker; stv.request += 1; stv.loading = false; renderSTV();
+        const payload = JSON.stringify({action, ...extra});
+        // 密码只存在于本次请求；表单在提交后立即清空。
+        if (authAction) clearSTVFields();
+        try {
+          const data = await api(action === 'delete' || authAction ? 'stv-auth' : 'stv-auth/action', {method:action === 'delete' ? 'DELETE' : 'POST', body:payload, botAppid:appid});
+          if (!stvScopeCurrent(appid, scope, generation)) return;
+          renderSTV(data);
+          if (['cultivation','breakthrough','inventory','item','use','refresh'].includes(action)) showSTVResult(action, data.result);
+          else { $('stv-result')?.replaceChildren(); toast(data.registered && data.registration_logged_in !== true ? '注册已成功，请登录新账号' : action === 'delete' ? 'STV 账号已退出' : authAction ? 'STV 账号已登录' : 'STV 开关已保存'); }
+        } catch (error) {
+          if (!stvScopeCurrent(appid, scope, generation) || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error); else { $('stv-result').textContent = error.message; toast(error.message); }
+        } finally {
+          if (stv.inFlight === marker) stv.inFlight = null;
+          if (stvScopeCurrent(appid, scope, generation)) renderSTV();
+        }
+      };
+      const submitSTV = (register = false) => {
+        if (!$('stv-login-form')?.reportValidity()) return;
+        const username = $('stv-username').value.trim(), password = $('stv-password').value, repeat = $('stv-repeat-password').value;
+        if (register && password !== repeat) { toast('两次密码输入不一致'); return; }
+        void mutateSTV(register ? 'register' : 'login', {username, password, repeat_password:repeat});
+      };
+      $('stv-login-form')?.addEventListener('submit', (event) => { event.preventDefault(); submitSTV(false); });
+      $('stv-register')?.addEventListener('click', () => submitSTV(true));
+      $('stv-delete')?.addEventListener('click', () => { if (confirm('退出当前 STV 账号并停止挂时长？')) void mutateSTV('delete'); });
+      $('stv-refresh')?.addEventListener('click', () => { if (stv.auth?.logged_in && stv.auth?.editable) void mutateSTV('refresh'); else void loadSTV(); });
+      for (const name of ['online','rewards']) $(`stv-${name}`)?.addEventListener('click', () => void mutateSTV(name, {enabled:stv.auth?.[`${name}_enabled`] !== true}));
+      for (const action of ['cultivation','inventory']) $(`stv-${action}`)?.addEventListener('click', () => void mutateSTV(action));
+      $('stv-breakthrough')?.addEventListener('click', () => { if (confirm('确认提交一次突破？结果未确认时，请先查询修为，勿重复提交。')) void mutateSTV('breakthrough'); });
+      for (const action of ['item','use']) $(`stv-${action}`)?.addEventListener('click', () => {
+        const itemId = $('stv-item-id').value.trim(); if (!itemId) return toast('请填写物品实例 ID');
+        if (action === 'use' && !confirm('确认使用这一件物品？结果未确认时，请先查询背包，勿重复提交。')) return;
+        void mutateSTV(action, {item_id:itemId});
+      });
+      const syncSTVTab = () => { if (stvVisible()) void loadSTV(); else leaveSTV(); };
+      botTabs?.addEventListener('click', () => queueMicrotask(syncSTVTab));
+      botTabs?.addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) queueMicrotask(syncSTVTab); });
+      window.addEventListener('pagehide', leaveSTV);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveSTV(); else syncSTVTab(); });
+
       const leaveQQReader = () => backQQReaderList(false);
       window.addEventListener('pagehide', () => {
         hideQQReaderKey(); clearQQReaderManual();
@@ -1812,7 +1925,7 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
-      $('popover-logout').addEventListener('click', async () => { leaveQQReader(); leaveJinjiang(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
+      $('popover-logout').addEventListener('click', async () => { leaveQQReader(); leaveJinjiang(); leaveSTV(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => {
         const appid = String(new URLSearchParams(location.search).get('appid') || '').trim();
@@ -2763,7 +2876,7 @@
       const exitBotConsole = (push = true) => {
         clearSavedCredential();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
-        void stopQuarkWebScan(); leaveQQReader(); leaveJinjiang(); stopZLibraryAccount(true); closeMsgEvents();
+        void stopQuarkWebScan(); leaveQQReader(); leaveJinjiang(); leaveSTV(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;
         for (const controller of consoleRequests) controller.abort();
         consoleRequests.clear();
