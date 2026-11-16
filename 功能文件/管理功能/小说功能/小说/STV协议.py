@@ -799,6 +799,86 @@ class _CultivationParser(HTMLParser):
             self.stack[-1].parts.append(data)
 
 
+def _inventory_chinese_text(value: str) -> bool:
+    # 中文自定义内容允许 S/SSR、HP 等短大写缩写，不将普通外语句子当成中文。
+    han = r"[\u3400-\u9fff\U00020000-\U0003134f]"
+    if not re.search(han, value) or re.search(r"[A-Z]{1,4}\s+[A-Z]{1,4}", value):
+        return False
+    text = re.sub(r"(?<![A-Za-z])[A-Z]{1,4}(?![A-Za-z])", "", value)
+    return all(not unicodedata.category(char).startswith("L") or bool(re.fullmatch(han, char)) for char in text)
+
+
+def _inventory_name_text(value: str) -> str:
+    text = " ".join(unicodedata.normalize("NFC", value).split())
+    if _inventory_chinese_text(text):
+        return text
+    # 仅匹配实际名称；不根据 tag 用类别名称冒充物品名称。
+    return {
+        "mảnh vụn linh thạch": "灵石碎片", "thiên vận đan": "天运丹",
+        "linh thạch": "灵石", "đan dược": "丹药", "công pháp": "功法", "võ kỹ": "武技",
+    }.get(text.casefold(), "名称暂未翻译")
+
+
+def _inventory_description_text(value: str) -> str:
+    text = " ".join(unicodedata.normalize("NFC", value).split())
+    if not text or _inventory_chinese_text(text):
+        return text
+    # 对照官方 ItemTool 的完整说明模板；数字、百分号来自响应，不用 b/l 重算。
+    number = r"([0-9]+(?:[.,][0-9]+)*(?:[eE][+-]?[0-9]+)?)"
+    templates = (
+        (rf"Linh thạch sinh sản trong tự nhiên, hấp thu có thể tăng cường {number} tu vi\.?",
+         "天然形成的灵石，吸收后可增加{0}点修为。"),
+        (rf"Hấp thu tăng {number} tu vi\.?", "吸收后增加{0}点修为。"),
+        (rf"Sử dụng tăng {number} tu vi\.?", "使用后增加{0}点修为。"),
+        (rf"Sử dụng tăng {number}\s*% tốc độ hấp thu linh khí, hiệu lực trong {number} giờ, hiệu lực tối đa {number} viên cùng lúc\.?",
+         "使用后灵气吸收速度增加{0}%，持续{1}小时，最多同时生效{2}颗。"),
+        (rf"Sử dụng tăng {number}\s*% tốc độ hấp thu linh khí, hiệu lực trong {number} giờ, dùng chồng sẽ không có hiệu quả\.?",
+         "使用后灵气吸收速度增加{0}%，持续{1}小时，重复使用不叠加效果。"),
+        (rf"Sử dụng bồi bổ {number}\s*(%)? điểm căn cơ\.?", "使用后补充{0}{1}根基。"),
+        (rf"Sử dụng tăng {number} điểm vận khí\.?", "使用后增加{0}点气运。"),
+        (r"Sử dụng lập tức thoát khỏi (?:trạng thái )?trọng thương\.?", "使用后立即脱离重伤状态。"),
+        (rf"Tu luyện gia tăng {number}\s*% tốc độ tu luyện và toàn bộ thuộc tính\.?",
+         "修炼后提升{0}%修炼速度及全部属性。"),
+    )
+    for pattern, translated in templates:
+        match = re.fullmatch(pattern, text, re.IGNORECASE)
+        if match:
+            values = list(match.groups())
+            # 官网的新旧根基说明分别有百分号和点数，按实际返回单位保留。
+            if translated == "使用后补充{0}{1}根基。":
+                values[1] = values[1] or "点"
+            return translated.format(*values)
+    attributes = {
+        "lực tay": "臂力", "lực tay và tốc độ": "臂力和速度", "tinh thần lực": "精神力",
+        "lực phòng ngự": "防御力", "tốc độ": "速度", "thực lực": "实力",
+        "huyết khí": "血气", "huyết khí và phòng ngự": "血气和防御",
+    }
+    for source, translated in attributes.items():
+        match = re.fullmatch(rf"Tu luyện gia tăng {number}\s*% {re.escape(source)}\.?", text, re.IGNORECASE)
+        if match:
+            return f"修炼后提升{match[1]}%{translated}。"
+    return "说明暂未翻译"
+
+
+def _inventory_info_text(name: str, info: _CultivationNode) -> str:
+    text = " ".join(unicodedata.normalize("NFC", info.text()).split())
+    title = next((part for part in info.parts if not isinstance(part, str) or part.strip()), None)
+    heading = title.text() if isinstance(title, _CultivationNode) and title.tag == "b" else name
+    heading = " ".join(unicodedata.normalize("NFC", heading).split())
+    pieces = []
+    if text == heading or text.startswith(heading + " "):
+        pieces.append(_inventory_name_text(name))
+        text = text[len(heading):].strip()
+    level = re.match(r"(?:Cấp|等级)\s*[:：]\s*([0-9]{1,12})(?:\s+|$)", text, re.IGNORECASE)
+    if level:
+        pieces.append("等级：" + level[1])
+        text = text[level.end():]
+    description = _inventory_description_text(text)
+    if description:
+        pieces.append(description)
+    return " ".join(pieces)
+
+
 def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[str, Any]]:
     """解析官网库存片段；HTML 的 n 是数量，不沿用 App JSON 的名称含义。"""
     if not body.strip():
@@ -839,7 +919,7 @@ def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[s
         if not name or not info.text():
             raise STVError("invalid_response", 200)
         row = {"i": item_id, "t": kind, "ac": active or active_value in {"1", "true"},
-               "name": name, "info": info.text()}
+               "name": _inventory_name_text(name), "info": _inventory_info_text(name, info)}
         for attribute, field in (("l", "level"), ("n", "count")):
             if attribute in item.attrs:
                 value = (item.attrs[attribute] or "").strip()

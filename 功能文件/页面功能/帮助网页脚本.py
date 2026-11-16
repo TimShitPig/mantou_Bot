@@ -1816,7 +1816,7 @@
           if (!info || typeof info !== 'object' || !target) return;
           const row = document.createElement('article'), button = document.createElement('button'), name = document.createElement('strong'), meta = document.createElement('span');
           const id = info.i ?? info.item_id; row.className = 'stv-item-card'; button.className = 'stv-item-open'; button.type = 'button';
-          name.textContent = info.name || info.n || '物品'; meta.className = 'stv-item-state'; meta.textContent = `实例 ${value(id)}${active || String(info.ac) === '1' ? ' · 生效中' : ''}`;
+          name.textContent = info.name || info.n || '物品'; meta.className = 'stv-item-state'; meta.textContent = `实例 ${value(id)}${active || ['1','true'].includes(String(info.ac).toLowerCase()) ? ' · 生效中' : ''}`;
           button.disabled = id === null || id === undefined; button.append(name,meta);
           button.addEventListener('click', () => { if (stv.inFlight) return; $('stv-item-id').value = String(id); if (!detail) void mutateSTV('item', {item_id:String(id)}); else $('stv-item-id').focus(); });
           row.appendChild(button);
