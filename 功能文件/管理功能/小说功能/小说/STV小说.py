@@ -27,12 +27,14 @@ from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存�
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库, 读取运行状态值, 写入运行状态值, 获取数据库配置, 数据库连接错误,
-    比较并更新运行状态值,
+    比较并更新运行状态值, 批量读取运行状态值,
 )
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 _锁表 = globals().get("_锁表") or {}
 _任务表 = globals().get("_任务表") or {}
+_资料任务表 = globals().get("_资料任务表") or {}
+_资料快照 = globals().get("_资料快照") or {}
 _运行状态 = globals().get("_运行状态") or {}
 _阅读记录 = globals().get("_阅读记录") or {}
 _待写阅读记录 = globals().get("_待写阅读记录") or {}
@@ -54,6 +56,7 @@ _服务运行 = globals().get("_服务运行", True)
 _命名空间 = "stv_auth"
 _状态键 = "account"
 _阅读状态键 = "reading_runtime"
+_资料状态键 = "account_panel"
 _随机 = random.SystemRandom()
 _声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -343,6 +346,244 @@ async def _清理阅读记录(配置: Any, state: dict[str, Any]) -> None:
     await _冲刷阅读记录(配置)
 
 
+def _空资料() -> dict[str, Any]:
+    return {"profile": None, "inventory": None, "profile_updated_at": 0, "inventory_updated_at": 0}
+
+
+def _资料分片数(raw: str) -> int:
+    try:
+        meta = json.loads(raw) if raw else {}
+        count = meta.get("parts", 0)
+        return count if type(count) is int and 0 <= count <= 512 else 0
+    except (ValueError, TypeError, AttributeError):
+        return 0
+
+
+def _资料批读(配置: Any, keys: list[str]) -> dict[str, str]:
+    values = 批量读取运行状态值(配置, tuple((_命名空间, key) for key in keys))
+    return {key: values[(_命名空间, key)] for key in keys if (_命名空间, key) in values}
+
+
+def _解读资料(values: dict[str, str], state: dict[str, Any]) -> dict[str, Any]:
+    try:
+        raw = values.get(_资料状态键, "")
+        meta = json.loads(raw) if raw else {}
+        if (meta.get("schema_version") != 1 or meta.get("uid") != state["uid"]
+                or meta.get("revision") != state["revision"]):
+            return _空资料()
+        count = _资料分片数(raw)
+        if not count:
+            return _空资料()
+        payload = "".join(values[f"{_资料状态键}:{i}"] for i in range(count))
+        if hashlib.sha256(payload.encode()).hexdigest() != meta.get("sha256"):
+            return _空资料()
+        data = json.loads(payload)
+        result = _空资料()
+        for field in ("profile", "inventory"):
+            value = data.get(field)
+            stamp = data.get(field + "_updated_at")
+            if not isinstance(value, dict) or type(stamp) is not int or not 0 < stamp < 10**12:
+                continue
+            if field == "profile" and str(value.get("user_id")) != state["uid"]:
+                continue
+            if field == "inventory" and not all(isinstance(value.get(name), list) for name in ("list", "act")):
+                continue
+            result[field] = _安全资料(value)
+            result[field + "_updated_at"] = stamp
+        return result
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return _空资料()
+
+
+def _读取资料同步(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
+    for _ in range(3):
+        raw = 读取运行状态值(配置, _命名空间, _资料状态键, "")
+        keys = [_状态键, _资料状态键, *[f"{_资料状态键}:{i}" for i in range(_资料分片数(raw))]]
+        values = _资料批读(配置, keys)
+        if values.get(_资料状态键, "") != raw:
+            continue
+        try:
+            account = json.loads(values.get(_状态键, "{}"))
+        except (ValueError, TypeError):
+            return _空资料()
+        if account.get("uid") != state["uid"] or account.get("revision") != state["revision"]:
+            return _空资料()
+        return _解读资料(values, state)
+    raise STVError("snapshot_changed")
+
+
+async def _加载资料快照(配置: Any, state: dict[str, Any]) -> None:
+    if not state.get("uid") or not 已配置运行状态数据库(配置):
+        return
+    key = _阅读记录键(配置, state)
+    if key in _资料快照:
+        return
+    data = await asyncio.to_thread(_读取资料同步, 配置, state)
+    # 并发摘要不能覆盖刚完成的刷新；身份由键和数据库二次核验隔离。
+    if key not in _资料快照:
+        while len(_资料快照) >= 128:
+            _资料快照.pop(next(iter(_资料快照)))
+        _资料快照[key] = data
+
+
+def _写资料同步(配置: Any, state: dict[str, Any], updates: dict[str, Any], 清空: bool = False,
+                期望资料: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    for _ in range(3):
+        raw = 读取运行状态值(配置, _命名空间, _资料状态键, "")
+        old_count = _资料分片数(raw)
+        keys = [_状态键, _资料状态键, *[f"{_资料状态键}:{i}" for i in range(old_count)]]
+        values = _资料批读(配置, keys)
+        if values.get(_资料状态键, "") != raw:
+            continue
+        try:
+            account = json.loads(values.get(_状态键, "{}"))
+        except (ValueError, TypeError):
+            return None
+        if (account.get("uid", "") != state["uid"] or account.get("revision", "") != state["revision"]
+                or (not 清空 and account.get("cookies") != state["cookies"])
+                or (not 清空 and account.get("auth_status") == "invalid")):
+            return None
+        expected = {key: values.get(key) for key in keys}
+        if 清空:
+            if 比较并更新运行状态值(配置, _命名空间, expected, {}, 删除=keys[1:]):
+                return _空资料()
+            continue
+        result = _解读资料(values, state)
+        accepted = copy.deepcopy(updates)
+        if 期望资料 is not None:
+            # 查询期间突破等操作已保存新资料时，旧查询不得把同字段写回旧值。
+            for field in ("profile", "inventory"):
+                stamp = field + "_updated_at"
+                if (field in accepted and (result.get(field) != 期望资料.get(field)
+                                          or result.get(stamp) != 期望资料.get(stamp))):
+                    accepted.pop(field, None)
+                    accepted.pop(stamp, None)
+        if not accepted:
+            return result
+        result.update(accepted)
+        payload = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        # MySQL TEXT 按 UTF-8 字节限额；分片与索引在同一事务提交，不截断库存。
+        parts = [payload[i:i + 12000] for i in range(0, len(payload), 12000)]
+        if len(parts) > 512:
+            raise STVError("response_too_large")
+        extra = [f"{_资料状态键}:{i}" for i in range(old_count, len(parts))]
+        extra_values = _资料批读(配置, extra) if extra else {}
+        expected.update({key: extra_values.get(key) for key in extra})
+        meta = {"schema_version": 1, "uid": state["uid"], "revision": state["revision"],
+                "parts": len(parts), "sha256": hashlib.sha256(payload.encode()).hexdigest()}
+        writes = {_资料状态键: json.dumps(meta, separators=(",", ":"))}
+        writes.update({f"{_资料状态键}:{i}": part for i, part in enumerate(parts)})
+        removed = [f"{_资料状态键}:{i}" for i in range(len(parts), old_count)]
+        if 比较并更新运行状态值(配置, _命名空间, expected, writes, 删除=removed):
+            return result
+    raise STVError("snapshot_changed")
+
+
+async def _保存资料(配置: Any, state: dict[str, Any], updates: dict[str, Any], *, 清空: bool = False,
+                  期望资料: dict[str, Any] | None = None) -> None:
+    task = asyncio.create_task(asyncio.to_thread(_写资料同步, 配置, copy.deepcopy(state), updates, 清空, 期望资料))
+    result = await _等待阅读写入(task)
+    if result is None:
+        raise STVError("snapshot_changed")
+    if 清空:
+        for key in list(_资料快照):
+            if key[0] == _任务键(配置):
+                _资料快照.pop(key, None)
+    elif state.get("uid"):
+        _资料快照[_阅读记录键(配置, state)] = result
+
+
+def _资料锁(配置: Any) -> asyncio.Lock:
+    key = _任务键(配置) + ":details"
+    loop = asyncio.get_running_loop()
+    if key not in _锁表 or _锁表[key][0] is not loop:
+        _锁表[key] = (loop, asyncio.Lock())
+    return _锁表[key][1]
+
+
+async def _刷新资料(配置: Any, fields: tuple[str, ...] = ("profile", "inventory"), *,
+                  检查: Callable[[], bool] | None = None, 后台: bool = False,
+                  预期身份: tuple[str, str] | None = None) -> dict[str, Any]:
+    async with _资料锁(配置):
+        _校验(检查)
+        async with _锁(配置):
+            state = await _读状态(配置)
+            if 预期身份 is not None and (state["uid"], state["revision"]) != 预期身份:
+                raise STVError("snapshot_changed")
+            if not state["uid"] or not state["cookies"] or state["auth_status"] == "invalid":
+                raise STVError("credential_invalid")
+        if 后台 and not _服务运行:
+            return {}
+        await _加载资料快照(配置, state)
+        expected_details = copy.deepcopy(_资料快照.get(_阅读记录键(配置, state), _空资料()))
+        methods = {"profile": "cultivation", "inventory": "inventory"}
+        async with STVClient(cookies=state["cookies"], uid=state["uid"]) as client:
+            tasks = [asyncio.create_task(getattr(client, methods[field])()) for field in fields]
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                updated_cookies = client.export_cookies()
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+        _校验(检查)
+        async with _锁(配置):
+            latest = await _读状态(配置)
+            if (latest["uid"] != state["uid"] or latest["revision"] != state["revision"]
+                    or latest["cookies"] != state["cookies"] or (后台 and not _服务运行)):
+                raise STVError("snapshot_changed")
+            updates = {}
+            errors = []
+            for field, result in zip(fields, results):
+                if isinstance(result, BaseException):
+                    if not isinstance(result, Exception):
+                        raise result
+                    errors.append(result)
+                    logger.warning("STV资料同步失败：stage=%s, error_type=%s, category=%s",
+                                   field, type(result).__name__, getattr(result, "category", "unknown"))
+                    if getattr(result, "category", "") == "credential_invalid":
+                        await _失效(配置, latest, result)
+                        raise result
+                else:
+                    updates[field] = _安全资料(result)
+                    updates[field + "_updated_at"] = int(time.time())
+            if updates:
+                if latest["cookies"] != updated_cookies:
+                    latest.update(cookies=updated_cookies, auth_status="valid")
+                    await _写状态(配置, latest, 检查)
+                await _保存资料(配置, latest, updates, 期望资料=expected_details)
+            if errors and not 后台:
+                raise errors[0]
+            return _摘要(配置, latest)
+
+
+async def _资料后台任务(配置: Any, revision: str | None) -> None:
+    uid = None
+    try:
+        while _服务运行:
+            started = time.monotonic()
+            try:
+                state = await _读状态(配置)
+                if (not state["uid"] or not state["cookies"] or state["auth_status"] == "invalid"
+                        or (revision is not None and revision != state["revision"])
+                        or (uid is not None and uid != state["uid"])):
+                    return
+                uid, revision = state["uid"], state["revision"]
+                await _加载资料快照(配置, state)
+                await _刷新资料(配置, 后台=True, 预期身份=(uid, revision))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("STV资料同步失败：stage=refresh, error_type=%s, category=%s",
+                               type(exc).__name__, getattr(exc, "category", "unknown"))
+            await asyncio.sleep(max(1, 60 - (time.monotonic() - started)))
+    finally:
+        key = _任务键(配置)
+        if _资料任务表.get(key) is asyncio.current_task():
+            _资料任务表.pop(key, None)
+
+
 def _奖励日志摘要(result: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(result, dict):
         return {}
@@ -472,12 +713,15 @@ def _摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
         "running": bool(state["online_enabled"] and state["auth_status"] != "invalid" and task and not task.done()),
         **_运行状态.get(_任务键(配置), {}),
         **_阅读摘要(配置, state),
+        "details": copy.deepcopy(_资料快照.get(_阅读记录键(配置, state), _空资料())),
     }
 
 
 async def 读取STV账号摘要(配置: Any) -> dict[str, Any]:
     # 只读取已持久化的整行快照，不等待后台网络或消耗操作持有的账号锁。
-    return _摘要(配置, await _读状态(配置))
+    state = await _读状态(配置)
+    await _加载资料快照(配置, state)
+    return _摘要(配置, state)
 
 
 async def _失效(配置: Any, state: dict[str, Any], exc: Exception) -> None:
@@ -513,6 +757,7 @@ async def 登录STV账号(配置: Any, username: str, password: str, *, 注册: 
                          "auth_status": "valid", "last_event": stage, "last_time": int(time.time())}
                 await _写状态(配置, state, 提交前校验)
                 await _清理阅读记录(配置, state)
+                await _保存资料(配置, state, {}, 清空=True)
                 _日志(配置, state, stage)
         except Exception as exc:
             _日志(配置, old, stage, exc)
@@ -528,6 +773,7 @@ async def 删除STV账号(配置: Any, *, 提交前校验: Callable[[], bool] | 
         state = await _读状态(配置)
         await _写状态(配置, _空状态(), 提交前校验)
         await _清理阅读记录(配置, _空状态())
+        await _保存资料(配置, _空状态(), {}, 清空=True)
         _日志(配置, state, "logout")
     await _同步任务(配置)
     return await 读取STV账号摘要(配置)
@@ -558,14 +804,17 @@ def _安全资料(value: Any) -> Any:
                    "read_chapters", "attributes", "breakthrough_available", "current", "maximum", "minimum", "next",
                    "per_minute", "basis", "text", "max", "min", "value",
                    "success", "used", "item_id", "type", "before", "after", "refresh_error", "list", "act",
-                   "name", "info", "level", "i", "n", "t", "ac", "l", "d", "id", "title", "amount", "count"}
+                   "name", "info", "level", "i", "n", "t", "ac", "l", "d", "id", "title", "amount", "count", "group_key"}
         result = {key: _安全资料(item) for key, item in value.items() if key in allowed}
+        if "icon" in value:
+            from .STV协议 import _inventory_icon_url
+            result["icon"] = _inventory_icon_url(value["icon"])
         if isinstance(value.get("attributes"), dict):
             result["attributes"] = {_文本(key)[:80]: _安全资料(item)
                                     for key, item in list(value["attributes"].items())[:100]}
         return result
     if isinstance(value, list):
-        return [_安全资料(item) for item in value[:1000]]
+        return [_安全资料(item) for item in value]
     if isinstance(value, str):
         text = html.unescape(re.sub(r"<[^>]*>", "", value))
         return re.sub(r"https?://\S+", "", text)[:4000]
@@ -581,6 +830,11 @@ async def 执行STV账号操作(配置: Any, 操作: str, 物品ID: str = "", *,
                "inventory": "inventory", "item": "inventory_item", "use": "use_item"}
     if 操作 not in methods:
         raise ValueError("账号操作无效")
+    if 操作 in {"cultivation", "inventory"}:
+        field = "profile" if 操作 == "cultivation" else "inventory"
+        summary = await _刷新资料(配置, (field,), 检查=提交前校验)
+        result = summary["details"][field]
+        return {"summary": summary, "result": result} if 附带摘要 else result
     async with _锁(配置):
         _校验(提交前校验)
         state = await _读状态(配置)
@@ -597,6 +851,10 @@ async def 执行STV账号操作(配置: Any, 操作: str, 物品ID: str = "", *,
                              last_event=操作, last_time=int(time.time()))
                 await _写状态(配置, state, 提交前校验)
                 _日志(配置, state, 操作)
+                if 操作 == "breakthrough" and isinstance(result.get("after"), dict):
+                    await _保存资料(配置, state, {"profile": _安全资料(result["after"]),
+                                                "profile_updated_at": int(time.time())})
+                await _加载资料快照(配置, state)
                 summary = _摘要(配置, state)
                 result = summary if 操作 == "refresh" else _安全资料(result)
                 return {"summary": summary, "result": result} if 附带摘要 else result
@@ -613,13 +871,16 @@ async def _同步任务(配置: Any) -> None:
 
 async def _替换任务(配置: Any) -> None:
     key = _任务键(配置)
-    tasks = [_任务表.pop(old_key) for old_key in list(_任务表)
-             if old_key.startswith(_作用域(配置) + ":")]
-    for task in tasks:
+    old_tasks = []
+    for table in (_任务表, _资料任务表):
+        for old_key in list(table):
+            if old_key.startswith(_作用域(配置) + ":") and old_key != key:
+                old_tasks.append(table.pop(old_key))
+    for task in old_tasks:
         if task is not asyncio.current_task() and not task.done():
             task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if old_tasks:
+        await asyncio.gather(*old_tasks, return_exceptions=True)
     if not _服务运行:
         return
     async with _锁(配置):
@@ -628,15 +889,29 @@ async def _替换任务(配置: Any) -> None:
         except Exception as exc:
             if not _可恢复后台错误(exc):
                 raise
-            # 启动时的瞬时读库失败也交给同一任务恢复，不能只留下已开启的配置。
             state = None
-        if _服务运行 and (state is None or (
-            state["online_enabled"] and state["uid"] and state["cookies"] and state["auth_status"] != "invalid"
-        )):
-            snapshot = copy.deepcopy(dict(配置))
-            snapshot["__mantou_bot_appid__"] = _作用域(配置)
-            task = asyncio.create_task(_后台任务(snapshot, state["revision"] if state else None), name="STV在线任务:" + _作用域(配置))
-            _任务表[key] = task
+    identity = (state["uid"], state["revision"]) if state else None
+    snapshot = copy.deepcopy(dict(配置))
+    snapshot["__mantou_bot_appid__"] = _作用域(配置)
+    logged_in = state is None or bool(state["uid"] and state["cookies"] and state["auth_status"] != "invalid")
+    for table, enabled, worker, name in (
+        (_任务表, logged_in and (state is None or state["online_enabled"]), _后台任务, "STV在线任务:"),
+        (_资料任务表, logged_in, _资料后台任务, "STV资料同步:"),
+    ):
+        task = table.get(key)
+        if (enabled and task and not task.done() and
+                (state is None or getattr(task, "_stv_identity", None) == identity)):
+            continue
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if _服务运行 and enabled:
+            task = asyncio.create_task(worker(snapshot, state["revision"] if state else None),
+                                       name=name + _作用域(配置))
+            task._stv_identity = identity
+            table[key] = task
+        elif table.get(key) is task:
+            table.pop(key, None)
 
 
 async def _取消作用域任务(配置: Any) -> None:
@@ -660,8 +935,9 @@ async def 启动STV后台任务(配置: Any) -> None:
 async def 停止STV后台任务() -> None:
     global _服务运行
     _服务运行 = False
-    tasks = list(_任务表.values())
+    tasks = list(_任务表.values()) + list(_资料任务表.values())
     _任务表.clear()
+    _资料任务表.clear()
     for task in tasks:
         if not task.done():
             task.cancel()

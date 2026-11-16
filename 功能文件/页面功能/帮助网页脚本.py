@@ -1670,15 +1670,15 @@
       window.addEventListener('pagehide', () => leaveJinjiang(false, true));
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
 
-      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null, requestedTabs:new Set()};
+      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null};
       const stvActive = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && Boolean(consoleAppid);
       const stvVisible = () => stvActive() && document.visibilityState !== 'hidden';
       const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvActive();
-      const stvReadingVisible = () => stvVisible() && stv.mode === 'detail' && stv.tab === 'reading' && $('stv-account-dialog')?.open;
+      const stvDetailVisible = () => stvVisible() && stv.mode === 'detail' && $('stv-account-dialog')?.open;
       const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password','stv-item-id']) if ($(id)) $(id).value = ''; };
       const setSTVMessage = (text, source = 'action') => { stv.messageSource = source; if ($('stv-result')) $('stv-result').textContent = text; };
       const clearSTVMessage = (source) => { if (source && stv.messageSource !== source) return; stv.messageSource = ''; $('stv-result')?.replaceChildren(); };
-      const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result','stv-item-result']) $(id)?.replaceChildren(); };
+      const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result','stv-item-result']) { const target = $(id); if (target) { target.replaceChildren(); delete target.dataset.snapshot; } } };
       const stvTime = (value) => { const date = new Date(Number(value) * 1000); return Number(value) > 0 && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {hour12:false}) : '暂无记录'; };
       const stvEventLabels = {online:'初始化阅读', online_started:'开始阅读', online_stopped:'阅读已停止', online_retry_wait:'等待恢复', online_state:'读取状态', online_error:'阅读已停止', heartbeat:'在线心跳', reading_book:'选择书籍', reading_detail:'读取书籍详情', reading_catalog:'读取目录', reading_chapter:'读取正文', reading_completed:'已完成本章阅读', reward_status:'检查奖励', reward_collect:'领取奖励', reward_collected:'奖励已领取', reward_not_collected:'未领取奖励', reward_unavailable:'暂无可领取奖励', reward_cancelled:'奖励领取已取消', credential_invalid:'登录已失效'};
       const stvErrorLabels = {timeout:'请求超时', network_error:'连接失败', network:'连接失败', dns:'域名解析失败', server_busy:'服务繁忙', credential_invalid:'登录已失效', verification_required:'需要验证', access_denied:'访问被拒绝', operation_unconfirmed:'结果未确认', cancelled:'已取消', reward_unavailable:'暂无可领取奖励', reward_expired:'奖励已失效', reward_not_found:'未拾得物品', reward_rejected:'服务未接受领取', database_error:'状态存储异常', session_closed:'连接已关闭', business_error:'服务未接受操作', invalid_response:'响应格式异常', empty_response:'响应为空', response_too_large:'响应超出限制', invalid_cookie:'登录资料无效', empty_recommendations:'暂无可阅读书籍', empty_catalog:'目录为空', empty_content:'正文为空', catalog_empty:'目录为空', chapter_empty:'正文为空', chinese_body_missing:'暂无中文正文', js_runtime_missing:'阅读组件不可用', js_decode_failed:'正文解析失败', unknown:'操作未完成'};
@@ -1699,7 +1699,7 @@
       const stopSTVPoll = () => { clearTimeout(stv.timer); stv.timer = null; };
       const scheduleSTVPoll = () => {
         stopSTVPoll();
-        if (stvReadingVisible()) stv.timer = setTimeout(() => { stv.timer = null; if (stv.inFlight || stv.loading) scheduleSTVPoll(); else void loadSTV(); }, 5000);
+        if (stvDetailVisible()) stv.timer = setTimeout(() => { stv.timer = null; if (stv.inFlight || stv.loading) scheduleSTVPoll(); else void loadSTV(); }, 5000);
       };
       const renderSTVReading = (auth) => {
         const reading = auth?.reading || {};
@@ -1720,7 +1720,7 @@
       };
       const closeSTVModal = (restoreFocus = true) => {
         const modal = $('stv-account-dialog'), focus = stv.modalFocus, serial = ++stv.modalGeneration;
-        stv.mode = ''; stv.modalUid = ''; stv.modalFocus = null; stv.requestedTabs.clear(); stopSTVPoll(); clearSTVFields(); clearSTVResults();
+        stv.mode = ''; stv.modalUid = ''; stv.modalFocus = null; stopSTVPoll(); clearSTVFields(); clearSTVResults();
         if ($('toast')?.parentElement === modal) document.body.appendChild($('toast'));
         if (modal?.open) modal.close();
         if (stv.modalOverflow !== null) document.body.style.overflow = stv.modalOverflow;
@@ -1770,7 +1770,7 @@
         if ($('stv-modal-subtitle')) $('stv-modal-subtitle').textContent = stv.mode === 'login' ? '使用用户名和密码登录或注册。' : uid ? `UID ${uid} · ${loggedIn ? '已登录' : '需要重新登录'}` : '';
         if ($('stv-login-panel')) $('stv-login-panel').hidden = stv.mode !== 'login';
         if ($('stv-detail-panel')) $('stv-detail-panel').hidden = stv.mode !== 'detail';
-        renderSTVReading(auth);
+        renderSTVReading(auth); renderSTVSavedDetails(auth);
       };
       const stvModalKeydown = (event) => {
         const modal = $('stv-account-dialog'); if (!modal?.open) return;
@@ -1781,10 +1781,17 @@
         else if (event.shiftKey && index <= 0) { event.preventDefault(); nodes.at(-1).focus(); }
         else if (!event.shiftKey && (index < 0 || index === nodes.length - 1)) { event.preventDefault(); nodes[0].focus(); }
       };
-      const ensureSTVPanel = () => {
-        if (!stvVisible() || stv.mode !== 'detail' || !stv.auth?.logged_in || stv.inFlight || stv.requestedTabs.has(stv.tab) || stv.tab === 'reading') return;
-        stv.requestedTabs.add(stv.tab);
-        void mutateSTV(stv.tab === 'inventory' ? 'inventory' : 'cultivation');
+      const renderSTVSavedDetails = (auth = stv.auth) => {
+        if (stv.mode !== 'detail' || String(auth?.uid || '') !== stv.modalUid) return;
+        const details = auth?.details || {};
+        for (const [field, action, id] of [['profile','cultivation','stv-profile-result'],['inventory','inventory','stv-inventory-result']]) {
+          const target = $(id), result = details[field]; if (!target) continue;
+          const signature = JSON.stringify(result ?? null);
+          if (target.dataset.snapshot === signature) continue;
+          target.dataset.snapshot = signature;
+          if (result && typeof result === 'object') showSTVResult(action, result);
+          else { target.replaceChildren(); const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '等待后台更新'; target.appendChild(empty); }
+        }
       };
       const setSTVTab = (tab, focus = false) => {
         if (!['profile','inventory','reading'].includes(tab)) return;
@@ -1795,8 +1802,7 @@
           if (panel) panel.hidden = !selected;
         }
         if (focus) $(`stv-tab-${tab}`)?.focus();
-        if (tab === 'reading') { renderSTVReading(stv.auth); void loadSTV(); scheduleSTVPoll(); }
-        else ensureSTVPanel();
+        renderSTVSavedDetails(); renderSTVReading(stv.auth); scheduleSTVPoll();
       };
       const openSTVModal = (mode, focus) => {
         if (!stvVisible() || !stv.auth || !['login','detail'].includes(mode) || (mode === 'detail' && !stv.auth.uid)) return;
@@ -1822,14 +1828,35 @@
           for (const [label, content] of rows) { const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value(content); row.append(dt,dd); list.appendChild(row); }
           target.appendChild(list);
         };
-        const item = (info, target, active = false, detail = false) => {
+        const item = (info, target, active = false, detail = false, instances = [info]) => {
           if (!info || typeof info !== 'object' || !target) return;
-          const row = document.createElement('article'), button = document.createElement('button'), name = document.createElement('strong'), meta = document.createElement('span');
-          const id = info.i ?? info.item_id; row.className = 'stv-item-card'; button.className = 'stv-item-open'; button.type = 'button';
-          name.textContent = info.name || info.n || '物品'; meta.className = 'stv-item-state'; meta.textContent = `实例 ${value(id)}${active || ['1','true'].includes(String(info.ac).toLowerCase()) ? ' · 生效中' : ''}`;
-          button.disabled = id === null || id === undefined; button.append(name,meta);
-          button.addEventListener('click', () => { if (stv.inFlight) return; $('stv-item-id').value = String(id); if (!detail) void mutateSTV('item', {item_id:String(id)}); else $('stv-item-id').focus(); });
+          const row = document.createElement('article'), button = document.createElement('button'), name = document.createElement('strong'), meta = document.createElement('span'), copy = document.createElement('span');
+          const ids = instances.map((entry) => entry.i ?? entry.item_id).filter((id) => id !== null && id !== undefined).map(String);
+          const selectedId = ids.includes($('stv-item-id')?.value) ? $('stv-item-id').value : ids[0];
+          const counts = instances.map((entry) => entry.count), knownCount = counts.every((count) => Number.isSafeInteger(count) && count > 0);
+          const sum = knownCount ? counts.reduce((total, count) => total + count, 0) : null;
+          const count = Number.isSafeInteger(sum) && sum > 0 ? sum : null;
+          let select = null;
+          row.className = 'stv-item-card'; button.className = 'stv-item-open'; button.type = 'button'; copy.className = 'stv-item-copy';
+          name.textContent = info.name || '物品'; meta.className = 'stv-item-state';
+          const effective = active || ['1','true'].includes(String(info.ac).toLowerCase());
+          meta.textContent = `${instances.length > 1 ? `数量 ${value(count)}` : `实例 ${value(selectedId)}`}${effective ? ' · 生效中' : ''}`;
+          const icon = typeof info.icon === 'string' && /^https:\/\/sangtacviet\.com\/(?:linhthach\.jpg|danduoc\.jpg|congphap\.jpg|vuky\.jpg|asset\/(?:hoa|thuy|kim|moc|tho|phong|loi|quang|bang|am)\.jpg|game\/asset\/item\/(?:thon-thien-ma-cong-than-quyen\.png|thu-hon-dan\.png))$/.test(info.icon) ? info.icon : '';
+          if (icon) {
+            const picture = document.createElement('span'), image = document.createElement('img'); picture.className = 'stv-item-picture';
+            if (String(info.t) !== '1' && [2,3,4].includes(Number(info.level))) picture.dataset.level = String(info.level);
+            image.src = icon; image.alt = ''; image.width = 40; image.height = 40; image.referrerPolicy = 'no-referrer'; picture.appendChild(image);
+            if (count > 1) { const amount = document.createElement('span'); amount.className = 'stv-item-count'; amount.textContent = String(count); picture.appendChild(amount); }
+            button.appendChild(picture);
+          }
+          copy.append(name,meta); button.appendChild(copy); button.disabled = !ids.length;
+          button.addEventListener('click', () => { if (stv.inFlight) return; const id = select?.value || selectedId; if (!id) return; $('stv-item-id').value = id; if (!detail) void mutateSTV('item', {item_id:id}); else $('stv-item-id').focus(); });
           row.appendChild(button);
+          if (ids.length > 1) {
+            select = document.createElement('select'); select.className = 'stv-item-instance'; select.setAttribute('aria-label', '选择物品实例');
+            for (const id of ids) { const option = document.createElement('option'); option.value = id; option.textContent = `实例 ${id}`; select.appendChild(option); }
+            select.value = selectedId; select.addEventListener('change', () => { $('stv-item-id').value = select.value; }); row.appendChild(select);
+          }
           for (const [label, content] of [['说明',info.info],['等级',info.level]]) if (content !== undefined && content !== null && content !== '') { const text = document.createElement('p'); text.textContent = `${label}：${content}`; row.appendChild(text); }
           target.appendChild(row);
         };
@@ -1838,8 +1865,14 @@
         else if (action === 'inventory') {
           const target = $('stv-inventory-result'); target.replaceChildren();
           const available = Array.isArray(result?.list) ? result.list : [], active = Array.isArray(result?.act) ? result.act : [], activeIds = new Set(active.map((row) => String(row.i)));
-          for (const row of available) if (!activeIds.has(String(row.i))) item(row, target);
-          for (const row of active) item(row, target, true);
+          for (const [rows, isActive] of [[available.filter((entry) => !activeIds.has(String(entry.i))), false], [active, true]]) {
+            const groups = new Map();
+            for (const entry of rows) {
+              const key = typeof entry.group_key === 'string' && /^[a-f0-9]{64}$/.test(entry.group_key) ? entry.group_key : Symbol();
+              if (groups.has(key)) groups.get(key).push(entry); else groups.set(key, [entry]);
+            }
+            for (const entries of groups.values()) item(entries[0], target, isActive, false, entries);
+          }
           if (!target.childNodes.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '暂无物品'; target.appendChild(empty); }
         } else if (action === 'item') { const target = $('stv-item-result'); target.replaceChildren(); item(result, target, false, true); }
         else if (action === 'use') message.textContent = result?.used === true ? '使用成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交';
@@ -1896,7 +1929,7 @@
           else toast(error.message);
         } finally {
           if (stv.inFlight === marker) stv.inFlight = null;
-          if (stvScopeCurrent(appid, scope, generation)) { renderSTV(); ensureSTVPanel(); scheduleSTVPoll(); }
+          if (stvScopeCurrent(appid, scope, generation)) { renderSTV(); scheduleSTVPoll(); }
           else if (stvVisible() && !stv.inFlight) void loadSTV();
         }
       };

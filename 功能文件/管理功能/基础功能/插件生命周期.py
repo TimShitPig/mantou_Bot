@@ -90,17 +90,7 @@ async def _同步当前机器人账号状态(配置: Any) -> None:
         except Exception as 异常:
             logger.warning("插件后台状态同步失败：stage=reader, error_type=%s", type(异常).__name__)
 
-    async def _STV() -> None:
-        try:
-            await STV小说.启动STV后台任务(配置)
-        except Exception as 异常:
-            分类 = getattr(异常, "category", "unknown")
-            if 分类 not in {"invalid_scope", "account_state_invalid", "account_identity_invalid"}:
-                分类 = "unknown"
-            logger.warning("插件后台状态同步失败：stage=stv, appid=%s, error_type=%s, category=%s",
-                           机器人作用域.获取当前机器人AppID(配置) or "none", type(异常).__name__, 分类)
-
-    await asyncio.gather(_白名单(), _阅读(), _STV())
+    await asyncio.gather(_白名单(), _阅读())
 
 
 async def _同步账号状态(配置: Any, 上下文: Any = None) -> None:
@@ -109,10 +99,45 @@ async def _同步账号状态(配置: Any, 上下文: Any = None) -> None:
             await _同步当前机器人账号状态(当前配置)
 
 
+async def 同步STV后台任务(句柄: dict[str, Any] | None) -> None:
+    # 平台可能在插件初始化之后才加载；补启动只接受仍存活的当前代句柄。
+    if not 句柄 or 句柄 is not _当前句柄 or 句柄.get("stopped"):
+        return
+
+    async def _同步(当前配置: Any) -> None:
+        appid = 机器人作用域.获取当前机器人AppID(当前配置)
+        if not appid or 句柄 is not _当前句柄 or 句柄.get("stopped"):
+            return
+        with 机器人作用域.绑定机器人作用域(appid):
+            try:
+                await STV小说.启动STV后台任务(当前配置)
+            except Exception as 异常:
+                分类 = getattr(异常, "category", "unknown")
+                if 分类 not in {"invalid_scope", "account_state_invalid", "account_identity_invalid"}:
+                    分类 = "unknown"
+                logger.warning("插件后台状态同步失败：stage=stv, appid=%s, error_type=%s, category=%s",
+                               appid, type(异常).__name__, 分类)
+
+    配置列表 = 机器人作用域.枚举机器人配置(句柄["config"], 句柄["context"])
+    tasks = [asyncio.create_task(_同步(配置)) for 配置 in 配置列表]
+    # on_platform_loaded 触发的补启动也纳入句柄，停止期间回收并等待。
+    句柄["background"].extend(tasks)
+    try:
+        if tasks:
+            await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        句柄["background"] = [task for task in 句柄["background"] if task not in tasks]
+
+
 async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: Any) -> dict[str, Any]:
     global _当前句柄
-    if _当前句柄 and not _当前句柄["stopped"]:
-        if (_当前句柄["context"] is 上下文 and _当前句柄["config"] is 配置
+    if _当前句柄:
+        if (not _当前句柄["stopped"] and _当前句柄["context"] is 上下文 and _当前句柄["config"] is 配置
                 and _当前句柄.get("version") == 版本):
             return _当前句柄
         await 停止插件(_当前句柄)
@@ -132,6 +157,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
             asyncio.create_task(_同步账号状态(配置, 上下文), name="插件账号状态同步"),
+            asyncio.create_task(同步STV后台任务(句柄), name="插件STV任务恢复"),
         ]
     except BaseException:
         await 停止插件(句柄)
@@ -141,10 +167,31 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
 
 
 async def 停止插件(句柄: dict[str, Any] | None) -> None:
-    global _当前句柄
-    if not 句柄 or 句柄.get("stopped"):
+    if not 句柄:
         return
-    句柄["stopped"] = True
+    task = 句柄.get("stop_task")
+    if task is None:
+        if 句柄.get("stopped"):
+            return
+        句柄["stopped"] = True
+        task = asyncio.create_task(_完成停止插件(句柄), name="插件停止交接")
+        句柄["stop_task"] = task
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # 标记停止不等于交接完成；取消调用方也须等旧任务收尾后再允许新版启动。
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
+async def _完成停止插件(句柄: dict[str, Any]) -> None:
+    global _当前句柄
     开始 = time.monotonic()
     for 任务 in 句柄["background"]:
         任务.cancel()

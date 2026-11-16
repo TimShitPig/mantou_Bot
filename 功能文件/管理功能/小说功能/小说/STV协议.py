@@ -931,6 +931,7 @@ def _inventory_name_text(value: str) -> str:
     # 仅匹配实际名称；不根据 tag 用类别名称冒充物品名称。
     return {
         "mảnh vụn linh thạch": "灵石碎片", "thiên vận đan": "天运丹",
+        "hạ phẩm tẩy tủy đan": "下品洗髓丹",
         "linh thạch": "灵石", "đan dược": "丹药", "công pháp": "功法", "võ kỹ": "武技",
     }.get(text.casefold(), "名称暂未翻译")
 
@@ -944,6 +945,8 @@ def _inventory_description_text(value: str) -> str:
     templates = (
         (rf"Linh thạch sinh sản trong tự nhiên, hấp thu có thể tăng cường {number} tu vi\.?",
          "天然形成的灵石，吸收后可增加{0}点修为。"),
+        (rf"Tẩy Tủy Đan, loại đan được thường nhe thấy, sử dụng bồi bổ {number} căn cơ\. Khi căn cơ vượt mức lịch luyện sẽ không nhận thêm căn cơ\.",
+         "洗髓丹，一种常见丹药，使用后补充{0}点根基。根基超过历练上限时不再增加。"),
         (rf"Hấp thu tăng {number} tu vi\.?", "吸收后增加{0}点修为。"),
         (rf"Sử dụng tăng {number} tu vi\.?", "使用后增加{0}点修为。"),
         (rf"Sử dụng tăng {number}\s*% tốc độ hấp thu linh khí, hiệu lực trong {number} giờ, hiệu lực tối đa {number} viên cùng lúc\.?",
@@ -995,6 +998,45 @@ def _inventory_info_text(name: str, info: _CultivationNode) -> str:
     return " ".join(pieces)
 
 
+_INVENTORY_ICON_PATHS = frozenset({
+    "/linhthach.jpg", "/danduoc.jpg", "/congphap.jpg", "/vuky.jpg",
+    "/asset/hoa.jpg", "/asset/thuy.jpg", "/asset/kim.jpg", "/asset/moc.jpg", "/asset/tho.jpg",
+    "/asset/phong.jpg", "/asset/loi.jpg", "/asset/quang.jpg", "/asset/bang.jpg", "/asset/am.jpg",
+    "/game/asset/item/thon-thien-ma-cong-than-quyen.png", "/game/asset/item/thu-hon-dan.png",
+})
+
+
+def _inventory_icon_url(value: Any) -> str:
+    """只返回已核实且可访问的官方物品图片，拒绝任意 URL 或查询参数。"""
+    if not isinstance(value, str):
+        return ""
+    path = value[len(BASE):] if value.startswith(BASE + "/") else value
+    return BASE + path if path in _INVENTORY_ICON_PATHS else ""
+
+
+def _inventory_icon(attrs: dict[str, str], kind: str, level: int | None) -> str:
+    # 官网 main.css 与用户页的物品图标级联；不执行 HTML 中的样式或脚本。
+    backgrounds = [part.strip() for part in str(attrs.get("style") or "").split(";")
+                   if re.match(r"\s*background(?:-image)?\s*:", part, re.IGNORECASE)]
+    if backgrounds:
+        match = re.fullmatch(r"background(?:-image)?\s*:\s*url\(\s*['\"]?([^'\"()\s]+)['\"]?\s*\)",
+                             backgrounds[-1], re.IGNORECASE)
+        return _inventory_icon_url(match[1]) if match else ""
+    if kind == "3" and level == 50:
+        return _inventory_icon_url("/game/asset/item/thon-thien-ma-cong-than-quyen.png")
+    if attrs.get("b") == "3000000":
+        return _inventory_icon_url("/game/asset/item/thu-hon-dan.png")
+    if attrs.get("b") == "10000":
+        # 官方此项图片目前返回 404，不用其他物品图片代替。
+        return ""
+    effects = {"19": "hoa", "20": "thuy", "21": "kim", "22": "moc", "23": "tho",
+               "24": "phong", "25": "loi", "26": "quang", "27": "bang", "28": "am"}
+    if attrs.get("e") in effects:
+        return _inventory_icon_url("/asset/" + effects[attrs["e"]] + ".jpg")
+    return _inventory_icon_url({"1": "/linhthach.jpg", "2": "/danduoc.jpg",
+                                "3": "/congphap.jpg", "4": "/vuky.jpg"}.get(kind))
+
+
 def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[str, Any]]:
     """解析官网库存片段；HTML 的 n 是数量，不沿用 App JSON 的名称含义。"""
     if not body.strip():
@@ -1035,15 +1077,28 @@ def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[s
         if not name or not info.text():
             raise STVError("invalid_response", 200)
         row = {"i": item_id, "t": kind, "ac": active or active_value in {"1", "true"},
-               "name": _inventory_name_text(name), "info": _inventory_info_text(name, info)}
+               "name": _inventory_name_text(name), "info": _inventory_info_text(name, info),
+               # 官网按每个原始实例计一件，仅多件合并后生成 n；缺少 n 不是未知数量。
+               "count": 1}
         for attribute, field in (("l", "level"), ("n", "count")):
             if attribute in item.attrs:
                 value = (item.attrs[attribute] or "").strip()
-                if not re.fullmatch(r"[0-9]{1,12}", value):
+                if (not re.fullmatch(r"[0-9]{1,12}", value)
+                        or (attribute == "n" and int(value) <= 0)):
                     raise STVError("invalid_response", 200)
                 row[field] = int(value)
                 if attribute == "l":
                     row["l"] = value
+        row["icon"] = _inventory_icon(item.attrs, kind, row.get("level"))
+        # 使用原字段分组；两个未翻译名称或不同效果不能因显示占位相同而合并。
+        normalize = lambda text: " ".join(unicodedata.normalize("NFC", text or "").split())
+        identity = [normalize(name), normalize(info.text()), kind, item.attrs.get("e"),
+                    item.attrs.get("l"), item.attrs.get("b"), row["ac"], row["icon"]]
+        # 官网功法/武技保留独立实例，升级与消耗仍必须使用原实例 ID。
+        if kind in {"3", "4"}:
+            identity.append(item_id)
+        row["group_key"] = hashlib.sha256(json.dumps(identity, ensure_ascii=False,
+                                                   separators=(",", ":")).encode("utf-8")).hexdigest()
         result.append(row)
     return result
 

@@ -81,7 +81,7 @@ ZLibrary小说功能 = 加载功能模块("功能文件.管理功能.小说功�
 小说下载任务 = 加载功能模块("功能文件.管理功能.小说功能.功能.小说下载任务")
 插件生命周期 = 加载功能模块("功能文件.管理功能.基础功能.插件生命周期")
 获取命令文本 = getattr(消息工具, "获取命令文本")
-插件版本 = "6.1.444"
+插件版本 = "6.1.445"
 
 
 
@@ -104,6 +104,7 @@ class MyPlugin(Star):
     async def _QQ官方平台加载后同步(self):
         await QQ官方交互桥.QQ官方平台加载后同步(self.context)
         消息记录.安装消息记录(self.context, self.config)
+        await 插件生命周期.同步STV后台任务(self._生命周期句柄)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     @机器人作用域.包装机器人事件入口
