@@ -44,7 +44,7 @@ _阅读错误分类 = frozenset({
     "access_denied", "operation_unconfirmed", "business_error", "invalid_response", "empty_response",
     "response_too_large", "invalid_cookie", "empty_recommendations", "empty_catalog", "empty_content",
     "catalog_empty", "chapter_empty", "chinese_body_missing", "js_runtime_missing", "js_decode_failed",
-    "reward_unavailable", "database_error",
+    "reward_unavailable", "database_error", "reward_expired", "reward_not_found", "reward_rejected",
 })
 _服务运行 = globals().get("_服务运行", True)
 _命名空间 = "stv_auth"
@@ -150,8 +150,39 @@ def _清理阅读记录(配置: Any) -> None:
             _阅读记录.pop(key, None)
 
 
+def _奖励日志摘要(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    category = result.get("category")
+    if result.get("collected") is False and isinstance(category, str) and category in {
+        "reward_expired", "reward_not_found", "reward_rejected",
+    }:
+        summary["category"] = category
+    code = (result.get("result") or {}).get("code") if isinstance(result.get("result"), dict) else None
+    if type(code) is int or type(code) is str:
+        value = str(code)
+        if re.fullmatch(r"-?[0-9]{1,12}", value):
+            summary["code"] = value
+    reward = result.get("reward")
+    if result.get("collected") is True and isinstance(reward, dict):
+        name = reward.get("name")
+        if (isinstance(name, str) and 0 < len(name) <= 80
+                and not any(ord(char) < 32 or ord(char) == 127 for char in name)):
+            from .STV协议 import _inventory_chinese_text
+            if _inventory_chinese_text(name):
+                item = {"name": name}
+                for field in ("level", "count"):
+                    value = reward.get(field)
+                    if type(value) is int and 0 <= value <= 999999999999 and (field != "count" or value > 0):
+                        item[field] = value
+                summary["reward"] = item
+    return summary
+
+
 def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
-                    success: bool | None = None, exc: Exception | None = None) -> None:
+                    success: bool | None = None, exc: Exception | None = None,
+                    奖励结果: dict[str, Any] | None = None) -> None:
     if event not in _阅读事件 or not state.get("uid"):
         return
     category = ""
@@ -172,7 +203,12 @@ def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
         while len(_阅读记录) >= 128:
             _阅读记录.pop(next(iter(_阅读记录)))
         _阅读记录[key] = {"reading": {}, "reward_logs": []}
+    reward = _奖励日志摘要(奖励结果)
+    if exc is None and event == "reward_not_collected" and success is False:
+        category = reward.get("category", "")
     record = {"event": event, "time": int(time.time()), "success": success, "category": category}
+    if event == "reward_collected" and success is True and "reward" in reward:
+        record["reward"] = reward["reward"]
     bucket = _阅读记录[key]
     bucket["reading"] = record
     if event in _奖励事件 and success is not None:
@@ -182,18 +218,34 @@ def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
 def _阅读摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
     bucket = _阅读记录.get(_阅读记录键(配置, state), {})
     return {
-        "reading": dict(bucket.get("reading") or {"event": "", "time": 0, "success": None, "category": ""}),
-        "reward_logs": [dict(row) for row in bucket.get("reward_logs", [])],
+        "reading": copy.deepcopy(bucket.get("reading") or {"event": "", "time": 0, "success": None, "category": ""}),
+        "reward_logs": copy.deepcopy(bucket.get("reward_logs", [])),
     }
 
 
-def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | None = None, *, 记录活动: bool = True) -> None:
+def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | None = None, *,
+          记录活动: bool = True, 奖励结果: dict[str, Any] | None = None) -> None:
     if 记录活动:
-        _记录阅读活动(配置, state, event, success=exc is None and event != "reward_not_collected", exc=exc)
+        _记录阅读活动(配置, state, event, success=exc is None and event != "reward_not_collected",
+                  exc=exc, 奖励结果=奖励结果)
     now = int(time.time())
     _运行状态[_任务键(配置)] = {"last_event": event, "last_time": now}
     if exc is None:
-        logger.info("STV账号任务：appid=%s, uid=%s, event=%s", _作用域(配置), state.get("uid") or "none", event)
+        message = "STV账号任务：appid=%s, uid=%s, event=%s"
+        values = [_作用域(配置), state.get("uid") or "none", event]
+        if event in {"reward_collected", "reward_not_collected"}:
+            result = _奖励日志摘要(奖励结果)
+            if event == "reward_not_collected":
+                message += ", category=%s, code=%s"
+                values.extend((result.get("category", "unknown"), result.get("code", "none")))
+            elif "reward" in result:
+                message += ", 领取物品=%s"
+                values.append(result["reward"]["name"])
+                for field, label in (("level", "等级"), ("count", "数量")):
+                    if field in result["reward"]:
+                        message += ", " + label + "=%s"
+                        values.append(result["reward"][field])
+        logger.info(message, *values)
     elif getattr(exc, "category", "") == "breakthrough_unavailable":
         logger.info("STV账号任务未提交：appid=%s, uid=%s, stage=%s, reason=breakthrough_unavailable",
                     _作用域(配置), state.get("uid") or "none", event)
@@ -497,6 +549,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
     stage = "online"
     reward_pending = False
     reward_result = None
+    reward_details = None
     try:
         state = await _读状态(配置)
 
@@ -564,15 +617,17 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                 if offered and state["rewards_enabled"]:
                                     stage = "reward_collect"
                                     reward_result = None
+                                    reward_details = None
                                     # 消耗仍串行；领取前持久关闭，取消或未知结果不重放。
                                     state["rewards_enabled"] = False
                                     await _写状态(配置, state)
                                     _记录阅读活动(配置, state, stage)
                                     reward_pending, reward_result = True, None
-                                    result = await client.collect_reward(reward_cid)
-                                    reward_result = bool(result.get("collected"))
+                                    reward_details = await client.collect_reward(reward_cid)
+                                    reward_result = reward_details.get("collected") is True
                                     # 领奖结果已经明确，后续状态保存失败也不能改写成领取失败。
-                                    _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected")
+                                    _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected",
+                                        奖励结果=reward_details)
                                     reward_pending = False
                                     reward_cid = ""
                                     state["rewards_enabled"] = True
@@ -667,7 +722,8 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
             if reward_result is None:
                 _日志(配置, state, "reward_collect", STVError("operation_unconfirmed"))
             else:
-                _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected")
+                _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected",
+                    奖励结果=reward_details)
         raise
     except Exception as exc:
         if stage == "reward_collect" and reward_result is not None:

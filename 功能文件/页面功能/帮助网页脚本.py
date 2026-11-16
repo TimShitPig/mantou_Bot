@@ -1681,9 +1681,19 @@
       const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result','stv-item-result']) $(id)?.replaceChildren(); };
       const stvTime = (value) => { const date = new Date(Number(value) * 1000); return Number(value) > 0 && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {hour12:false}) : '暂无记录'; };
       const stvEventLabels = {online:'初始化阅读', online_started:'开始阅读', online_stopped:'阅读已停止', online_retry_wait:'等待恢复', online_state:'读取状态', online_error:'阅读已停止', heartbeat:'在线心跳', reading_book:'选择书籍', reading_detail:'读取书籍详情', reading_catalog:'读取目录', reading_chapter:'读取正文', reading_completed:'已完成本章阅读', reward_status:'检查奖励', reward_collect:'领取奖励', reward_collected:'奖励已领取', reward_not_collected:'未领取奖励', reward_unavailable:'暂无可领取奖励', reward_cancelled:'奖励领取已取消', credential_invalid:'登录已失效'};
-      const stvErrorLabels = {timeout:'请求超时', network_error:'连接失败', network:'连接失败', dns:'域名解析失败', server_busy:'服务繁忙', credential_invalid:'登录已失效', verification_required:'需要验证', access_denied:'访问被拒绝', operation_unconfirmed:'结果未确认', cancelled:'已取消', reward_unavailable:'暂无可领取奖励', database_error:'状态存储异常', session_closed:'连接已关闭', business_error:'服务未接受操作', invalid_response:'响应格式异常', empty_response:'响应为空', response_too_large:'响应超出限制', invalid_cookie:'登录资料无效', empty_recommendations:'暂无可阅读书籍', empty_catalog:'目录为空', empty_content:'正文为空', catalog_empty:'目录为空', chapter_empty:'正文为空', chinese_body_missing:'暂无中文正文', js_runtime_missing:'阅读组件不可用', js_decode_failed:'正文解析失败', unknown:'操作未完成'};
+      const stvErrorLabels = {timeout:'请求超时', network_error:'连接失败', network:'连接失败', dns:'域名解析失败', server_busy:'服务繁忙', credential_invalid:'登录已失效', verification_required:'需要验证', access_denied:'访问被拒绝', operation_unconfirmed:'结果未确认', cancelled:'已取消', reward_unavailable:'暂无可领取奖励', reward_expired:'奖励已失效', reward_not_found:'未拾得物品', reward_rejected:'服务未接受领取', database_error:'状态存储异常', session_closed:'连接已关闭', business_error:'服务未接受操作', invalid_response:'响应格式异常', empty_response:'响应为空', response_too_large:'响应超出限制', invalid_cookie:'登录资料无效', empty_recommendations:'暂无可阅读书籍', empty_catalog:'目录为空', empty_content:'正文为空', catalog_empty:'目录为空', chapter_empty:'正文为空', chinese_body_missing:'暂无中文正文', js_runtime_missing:'阅读组件不可用', js_decode_failed:'正文解析失败', unknown:'操作未完成'};
       const stvEventText = (row, fallback) => {
         const text = stvEventLabels[row?.event] || fallback;
+        if (row?.event === 'reward_collected' && row.success === true) {
+          const reward = row.reward, name = typeof reward?.name === 'string' ? reward.name.trim() : '';
+          if (name) {
+            const parts = [text, name];
+            if (Number.isSafeInteger(reward.level) && reward.level >= 0) parts.push(`等级 ${reward.level}`);
+            if (Number.isSafeInteger(reward.count) && reward.count > 0) parts.push(`数量 ${reward.count}`);
+            return parts.join(' · ');
+          }
+        }
+        if (row?.event === 'reward_not_collected' && row.success === false && !row.category) return text;
         return row?.success === false ? `${text} · ${stvErrorLabels[row.category] || '操作未完成'}` : row?.success === null ? `${text}…` : text;
       };
       const stopSTVPoll = () => { clearTimeout(stv.timer); stv.timer = null; };

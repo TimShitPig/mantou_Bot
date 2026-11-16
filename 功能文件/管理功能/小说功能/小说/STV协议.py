@@ -531,9 +531,32 @@ class STVClient:
             form.update(newname=name, newinfo=info)
         body, _ = await self._request("POST", "/index.php", {"ngmar": "fcl"}, form, mutation=True, account=True, limit=1024 * 1024)
         result = self._json(body, mutation=True)
-        if not isinstance(result.get("code"), (str, int)) or isinstance(result.get("code"), bool):
+        code = result.get("code")
+        if (not isinstance(code, (str, int)) or isinstance(code, bool)
+                or not re.fullmatch(r"-?[0-9]{1,12}", str(code))):
             raise STVError("operation_unconfirmed", 200)
-        return {"collected": str(result["code"]) == "1", "cid": cid, "item": item, "result": result}
+        collected = str(code) == "1"
+        category = ""
+        if not collected:
+            reason = result.get("err")
+            reason = unicodedata.normalize("NFC", reason).strip().casefold() if isinstance(reason, str) else ""
+            category = {
+                "cơ duyên của ngươi đã bay mất, thật xui xẻo.": "reward_expired",
+                "không nhặt được gì": "reward_not_found",
+            }.get(reason, "reward_rejected")
+        outcome = {"collected": collected, "cid": cid, "item": item, "result": result, "category": category}
+        if collected:
+            # 预览不代表入包；只在 fcollect 明确成功后记录服务端实际物品资料。
+            name = "".join(" " if unicodedata.category(char).startswith("C") else char
+                           for char in _html_text(item["name"]))
+            name = _inventory_name_text(name)
+            reward = {"name": name if len(name) <= 80 else "名称暂未翻译"}
+            level = item.get("level")
+            if isinstance(level, (str, int)) and not isinstance(level, bool) and re.fullmatch(r"[0-9]{1,12}", str(level)):
+                reward["level"] = int(level)
+            # 已核实 collect 只返回 name/info/level/type，没有数量；不得猜成一个。
+            outcome["reward"] = reward
+        return outcome
 
     async def cultivation(self) -> dict[str, Any]:
         try:
