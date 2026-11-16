@@ -34,6 +34,40 @@ _PATHS = {
     "/mobile/bookinfo.php", "/io/searchtp/searchBooks", "/user/0/",
     "/io/grantcontext/context", "/io/user/online",
 }
+_CONNECTION_POOLS = globals().get("_CONNECTION_POOLS") or {}
+
+
+def _acquire_connector() -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    pool = _CONNECTION_POOLS.get(loop)
+    if pool is None or pool["connector"].closed:
+        pool = {"loop": loop, "connector": aiohttp.TCPConnector(
+            limit=8, limit_per_host=8, ttl_dns_cache=300, keepalive_timeout=30,
+        ), "users": 0, "idle": None}
+        _CONNECTION_POOLS[loop] = pool
+    if pool["idle"] is not None:
+        pool["idle"].cancel()
+        pool["idle"] = None
+    pool["users"] += 1
+    return pool
+
+
+def _release_connector(pool: dict[str, Any]) -> None:
+    pool["users"] -= 1
+    if pool["users"] == 0 and not pool["loop"].is_closed():
+        pool["idle"] = pool["loop"].call_later(
+            30, lambda: pool["loop"].create_task(_close_idle_connector(pool)),
+        )
+
+
+async def _close_idle_connector(expected: dict[str, Any] | None = None) -> None:
+    loop = asyncio.get_running_loop()
+    pool = _CONNECTION_POOLS.get(loop)
+    if pool is not None and (expected is None or pool is expected) and pool["users"] == 0:
+        _CONNECTION_POOLS.pop(loop, None)
+        if pool["idle"] is not None:
+            pool["idle"].cancel()
+        await pool["connector"].close()
 
 
 class STVError(RuntimeError):
@@ -135,6 +169,7 @@ class STVClient:
         self.uid = str(uid)
         self._initial_cookies = list(cookies or [])
         self.session: aiohttp.ClientSession | None = None
+        self._connection_pool: dict[str, Any] | None = None
         self._reading_lock = asyncio.Lock()
         self._key_target: tuple[str, str] | None = None
         self._key = ""
@@ -166,20 +201,30 @@ class STVClient:
                 cookie[name]["expires"] = str(item["expires"])
             jar.update_cookies(cookie, response_url=URL(BASE + path))
         jar.update_cookies({"mac_tt": "true", "transmode": "chinese", "foreignlang": "vi"}, response_url=URL(BASE))
-        self.session = aiohttp.ClientSession(
-            headers=HEADERS,
-            cookie_jar=jar,
-            connector=aiohttp.TCPConnector(limit=8, limit_per_host=8, ttl_dns_cache=300),
-            timeout=aiohttp.ClientTimeout(total=60, sock_connect=15, sock_read=45),
-        )
+        self._connection_pool = _acquire_connector()
+        try:
+            self.session = aiohttp.ClientSession(
+                headers=HEADERS, cookie_jar=jar,
+                connector=self._connection_pool["connector"], connector_owner=False,
+                timeout=aiohttp.ClientTimeout(total=60, sock_connect=15, sock_read=45),
+            )
+        except BaseException:
+            _release_connector(self._connection_pool)
+            self._connection_pool = None
+            raise
         if hasattr(self.session, "_retry_connection"):
             self.session._retry_connection = False
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self.session is not None:
-            await self.session.close()
+        try:
+            if self.session is not None:
+                await self.session.close()
+        finally:
             self.session = None
+            if self._connection_pool is not None:
+                _release_connector(self._connection_pool)
+                self._connection_pool = None
 
     def _session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -487,9 +532,8 @@ class STVClient:
         return {"collected": str(result["code"]) == "1", "cid": cid, "item": item, "result": result}
 
     async def cultivation(self) -> dict[str, Any]:
-        await self.account_info()
         try:
-            body, _ = await self._request("GET", "/user/0/", account=False, limit=2 * 1024 * 1024)
+            body, _ = await self._account_query("/user/0/", account=False, limit=2 * 1024 * 1024)
         except STVError as exc:
             if exc.http_status == 401:
                 raise STVError("credential_invalid", 401) from exc
@@ -516,8 +560,7 @@ class STVClient:
         return result
 
     async def inventory(self) -> dict[str, Any]:
-        await self.account_info()
-        body, _ = await self._request("GET", "/mobile/jsonify.php", {"ajax": "getinv"}, account=True)
+        body, _ = await self._account_query("/mobile/jsonify.php", {"ajax": "getinv"}, account=True)
         data = self._json(body)
         self._code(data, "100")
         if any(not isinstance(data.get(field), list) or any(not isinstance(item, dict) for item in data[field]) for field in ("list", "act")):
@@ -525,6 +568,23 @@ class STVClient:
         if not self._has_access():
             raise STVError("credential_invalid", 200)
         return data
+
+    async def _account_query(self, path: str, params: dict[str, Any] | None = None,
+                             **kwargs: Any) -> tuple[str, dict[str, str]]:
+        """独立的身份与资料读取并行；两者均成功才返回，不缓存身份或数据。"""
+        if not self._has_access():
+            raise STVError("credential_invalid")
+        tasks = [asyncio.create_task(self.account_info()),
+                 asyncio.create_task(self._request("GET", path, params, **kwargs))]
+        try:
+            _, result = await asyncio.gather(*tasks)
+            return result
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     @staticmethod
     def _find_item(data: dict[str, Any], item_id: str) -> tuple[dict[str, Any], bool]:

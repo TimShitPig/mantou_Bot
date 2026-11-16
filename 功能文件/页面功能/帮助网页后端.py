@@ -3767,11 +3767,10 @@ async def _STV修改请求(request: web.Request, 操作: str) -> web.Response:
                 物品ID = 数据.get("item_id", "")
                 if not isinstance(物品ID, str) or len(物品ID) > 128 or (动作 in {"item", "use"} and not 物品ID.strip()):
                     raise ValueError()
-                结果 = await STV小说.执行STV账号操作(
-                    状态["config"], 操作=动作, 物品ID=物品ID, 提交前校验=仍有效,
+                操作结果 = await STV小说.执行STV账号操作(
+                    状态["config"], 操作=动作, 物品ID=物品ID, 提交前校验=仍有效, 附带摘要=True,
                 )
-                摘要 = await STV小说.读取STV账号摘要(状态["config"])
-                响应 = {"ok": True, "editable": True, **摘要, "result": 结果}
+                响应 = {"ok": True, "editable": True, **操作结果["summary"], "result": 操作结果["result"]}
             else:
                 raise ValueError()
         if not 仍有效():

@@ -21,7 +21,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from .STV协议 import STVClient, STVError
+from .STV协议 import STVClient, STVError, _close_idle_connector
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
@@ -149,8 +149,8 @@ def _摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
 
 
 async def 读取STV账号摘要(配置: Any) -> dict[str, Any]:
-    async with _锁(配置):
-        return _摘要(配置, await _读状态(配置))
+    # 只读取已持久化的整行快照，不等待后台网络或消耗操作持有的账号锁。
+    return _摘要(配置, await _读状态(配置))
 
 
 async def _失效(配置: Any, state: dict[str, Any], exc: Exception) -> None:
@@ -246,7 +246,8 @@ def _安全资料(value: Any) -> Any:
 
 
 async def 执行STV账号操作(配置: Any, 操作: str, 物品ID: str = "", *,
-                        提交前校验: Callable[[], bool] | None = None) -> dict[str, Any]:
+                        提交前校验: Callable[[], bool] | None = None,
+                        附带摘要: bool = False) -> dict[str, Any]:
     methods = {"refresh": "account_info", "cultivation": "cultivation", "breakthrough": "breakthrough",
                "inventory": "inventory", "item": "inventory_item", "use": "use_item"}
     if 操作 not in methods:
@@ -267,7 +268,9 @@ async def 执行STV账号操作(配置: Any, 操作: str, 物品ID: str = "", *,
                              last_event=操作, last_time=int(time.time()))
                 await _写状态(配置, state, 提交前校验)
                 _日志(配置, state, 操作)
-                return _摘要(配置, state) if 操作 == "refresh" else _安全资料(result)
+                summary = _摘要(配置, state)
+                result = summary if 操作 == "refresh" else _安全资料(result)
+                return {"summary": summary, "result": result} if 附带摘要 else result
         except Exception as exc:
             await _失效(配置, state, exc)
             _日志(配置, state, 操作, exc)
@@ -327,6 +330,7 @@ async def 停止STV后台任务() -> None:
             task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    await _close_idle_connector()
 
 
 async def _后台任务(配置: Any, revision: str) -> None:
@@ -334,46 +338,77 @@ async def _后台任务(配置: Any, revision: str) -> None:
     stage = "online"
     try:
         state = await _读状态(配置)
-        async with STVClient(cookies=state["cookies"], uid=state["uid"]) as client:
-            heartbeat_due = reading_due = time.monotonic()
-            reward_due = float("inf")
-            reward_cid = ""
-            recent: list[tuple[str, str, str]] = []
-            last_book = None
-            reading_stage = "book"
-            book: dict[str, Any] = {}
-            chapter: dict[str, Any] = {}
-            failures = 0
-            _日志(配置, state, "online_started")
-            while True:
-                async with _锁(配置):
-                    state = await _读状态(配置)
-                    if state["revision"] != revision or not state["online_enabled"] or state["auth_status"] == "invalid":
-                        return
+        uid = state["uid"]
+
+        def current(row: dict[str, Any]) -> bool:
+            return (_服务运行 and row["revision"] == revision and row["uid"] == uid
+                    and row["online_enabled"] and row["auth_status"] != "invalid")
+
+        heartbeat_due = reading_due = time.monotonic()
+        reward_due = float("inf")
+        reward_cid = ""
+        recent: list[tuple[str, str, str]] = []
+        last_book = None
+        reading_stage = "book"
+        chapter: dict[str, Any] = {}
+        failures = 0
+        _日志(配置, state, "online_started")
+        while True:
+            async with _锁(配置):
+                state = await _读状态(配置)
+                if not current(state):
+                    return
+                cookies = copy.deepcopy(state["cookies"])
+            async with STVClient(cookies=cookies, uid=uid) as client:
+                # 前台刷新可能更新 Cookie；旧会话不能覆盖它或据其失败误标失效。
+                # 发生变化时关闭旧会话，按最新持久快照重建，奖励通知不跨会话复用。
+                reward_cid = ""
+                reward_due = float("inf")
+                while True:
+                    async with _锁(配置):
+                        state = await _读状态(配置)
+                        if not current(state):
+                            return
+                        if state["cookies"] != cookies:
+                            break
                     now = time.monotonic()
                     try:
                         if now >= heartbeat_due:
                             stage = "heartbeat"
                             await client.heartbeat()
                             heartbeat_due = time.monotonic() + 120
-                            state.update(cookies=client.export_cookies(), auth_status="valid")
-                            await _写状态(配置, state)
-                            _日志(配置, state, "heartbeat")
+                            async with _锁(配置):
+                                state = await _读状态(配置)
+                                if not current(state):
+                                    return
+                                if state["cookies"] != cookies:
+                                    break
+                                cookies = client.export_cookies()
+                                state.update(cookies=cookies, auth_status="valid")
+                                await _写状态(配置, state)
+                                _日志(配置, state, "heartbeat")
                         if reward_cid and state["rewards_enabled"] and now >= reward_due:
                             stage = "reward_status"
                             reward_due = time.monotonic() + 300
-                            if await client.reward_status():
-                                stage = "reward_collect"
-                                # 先关闭再单次领取；取消、重载或结果未知均不会再次自动提交。
-                                state["rewards_enabled"] = False
-                                await _写状态(配置, state)
-                                result = await client.collect_reward(reward_cid)
-                                reward_cid = ""
-                                state["rewards_enabled"] = True
-                                await _写状态(配置, state)
-                                _日志(配置, state, "reward_collected" if result.get("collected") else "reward_not_collected")
-                            else:
-                                _日志(配置, state, "reward_unavailable")
+                            offered = await client.reward_status()
+                            async with _锁(配置):
+                                state = await _读状态(配置)
+                                if not current(state):
+                                    return
+                                if state["cookies"] != cookies:
+                                    break
+                                if offered and state["rewards_enabled"]:
+                                    stage = "reward_collect"
+                                    # 消耗仍串行；领取前持久关闭，取消或未知结果不重放。
+                                    state["rewards_enabled"] = False
+                                    await _写状态(配置, state)
+                                    result = await client.collect_reward(reward_cid)
+                                    reward_cid = ""
+                                    state["rewards_enabled"] = True
+                                    await _写状态(配置, state)
+                                    _日志(配置, state, "reward_collected" if result.get("collected") else "reward_not_collected")
+                                elif not offered:
+                                    _日志(配置, state, "reward_unavailable")
                         if now >= reading_due:
                             stage = "reading_" + reading_stage
                             reading_due = time.monotonic() + 2
@@ -384,45 +419,63 @@ async def _后台任务(配置: Any, revision: str) -> None:
                                 if not choices:
                                     raise STVError("empty_recommendations")
                                 book = _随机.choice(choices)
-                                last_book = (str(book["host"]), str(book["id"]))
-                                reading_stage = "detail"
                             elif reading_stage == "detail":
                                 await client.detail(*last_book)
-                                reading_stage = "catalog"
                             elif reading_stage == "catalog":
                                 catalog = await client.catalog(*last_book)
                                 choices = [row for row in catalog if (*last_book, str(row["cid"])) not in recent]
                                 if not choices:
                                     raise STVError("empty_catalog")
-                                chapter = _随机.choice(choices)
-                                recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
-                                reading_stage = "chapter"
+                                next_chapter = _随机.choice(choices)
                             else:
                                 body = await client.chapter(*last_book, str(chapter["cid"]))
                                 chars = len(re.sub(r"\s", "", body["content"]))
                                 if not chars:
                                     raise STVError("empty_content")
-                                reading_due = time.monotonic() + round(max(60, min(600, chars / _随机.uniform(6, 12))))
-                                if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
-                                    reward_cid = str(chapter["cid"])
-                                    reward_due = time.monotonic() + 15
-                                reading_stage = "book"
-                                _日志(配置, state, "reading_completed")
+                            # 只接受仍属于当前账号/开关的结果；网络期间不占账号锁。
+                            async with _锁(配置):
+                                state = await _读状态(配置)
+                                if not current(state):
+                                    return
+                                if state["cookies"] != cookies:
+                                    break
+                                if reading_stage == "book":
+                                    last_book = (str(book["host"]), str(book["id"]))
+                                    reading_stage = "detail"
+                                elif reading_stage == "detail":
+                                    reading_stage = "catalog"
+                                elif reading_stage == "catalog":
+                                    chapter = next_chapter
+                                    recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
+                                    reading_stage = "chapter"
+                                else:
+                                    reading_due = time.monotonic() + round(max(60, min(600, chars / _随机.uniform(6, 12))))
+                                    if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
+                                        reward_cid = str(chapter["cid"])
+                                        reward_due = time.monotonic() + 15
+                                    reading_stage = "book"
+                                    _日志(配置, state, "reading_completed")
                         failures = 0
                     except Exception as exc:
-                        _日志(配置, state, stage, exc)
-                        if getattr(exc, "category", "") == "credential_invalid":
-                            await _失效(配置, state, exc)
-                            return
-                        if stage == "reward_collect":
-                            # 包括响应拒绝、网络异常和未确认结果，需管理员核实再开启。
-                            state["rewards_enabled"] = False
-                            await _写状态(配置, state)
-                            reward_cid = ""
-                        if getattr(exc, "category", "") in {"verification_required", "access_denied"}:
-                            state["online_enabled"] = False
-                            await _写状态(配置, state)
-                            return
+                        async with _锁(配置):
+                            state = await _读状态(配置)
+                            if not current(state):
+                                return
+                            if state["cookies"] != cookies:
+                                break
+                            _日志(配置, state, stage, exc)
+                            if getattr(exc, "category", "") == "credential_invalid":
+                                await _失效(配置, state, exc)
+                                return
+                            if stage == "reward_collect":
+                                # 拒绝、异常和未确认结果需管理员核实后再开启。
+                                state["rewards_enabled"] = False
+                                await _写状态(配置, state)
+                                reward_cid = ""
+                            if getattr(exc, "category", "") in {"verification_required", "access_denied"}:
+                                state["online_enabled"] = False
+                                await _写状态(配置, state)
+                                return
                         failures += 1
                         delay = min(120 * 2 ** min(failures - 1, 3), 600)
                         if stage == "heartbeat":
@@ -433,7 +486,7 @@ async def _后台任务(配置: Any, revision: str) -> None:
                     deadlines = [heartbeat_due, reading_due]
                     if reward_cid and state["rewards_enabled"]:
                         deadlines.append(reward_due)
-                await asyncio.sleep(max(0.1, min(deadlines) - time.monotonic()))
+                    await asyncio.sleep(max(0.1, min(deadlines) - time.monotonic()))
     except asyncio.CancelledError:
         _日志(配置, state, "online_stopped")
         raise
