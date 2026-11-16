@@ -36,6 +36,7 @@ except Exception:
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 外部提取地址 = "http://154.12.91.167:17324/extract"
+知乎分享提取地址 = "http://103.236.77.248:32838/fetch"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
 请求超时秒数 = 20
 正文提取总超时秒数 = 90
@@ -152,8 +153,8 @@ class _盐言正文未就绪(RuntimeError):
     re.I,
 )
 允许主机 = {"story.zhihu.com", "zhuanlan.zhihu.com", "www.zhihu.com"}
-知乎分享提取链接正则 = re.compile(
-    r"http://103\.236\.77\.248:32838/fetch\?[^\s'\"<>，。；;！!]+", re.I,
+知乎分享链接正则 = re.compile(
+    r"https?://[^\s'\"<>，。；;！!]+", re.I,
 )
 正文键 = {
     "content",
@@ -564,7 +565,7 @@ async def _获取单章正文(
 async def _准备盐言分享章节书籍(
     session: aiohttp.ClientSession, 来源: str
 ) -> dict[str, Any]:
-    if _是知乎分享提取链接(来源):
+    if _知乎分享提取来源(来源):
         return await _请求知乎分享提取书籍(session, 来源)
     文章编号 = 解析知乎文章编号(来源)
     if 文章编号:
@@ -594,7 +595,7 @@ async def _下载盐言分享章节(
     章节列表 = list(书籍.get("chapters") or [])
     if len(章节列表) != 1:
         raise RuntimeError("盐言分享章节数量异常")
-    if _是知乎分享提取链接(来源):
+    if _知乎分享提取来源(来源):
         if 书籍.get("share_source_hash") != _知乎分享来源摘要(来源) or not 章节列表[0].get("content"):
             raise RuntimeError("盐言章节正文不完整")
         return 书籍
@@ -645,7 +646,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
     阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
-            阶段 = "share_fetch" if _是知乎分享提取链接(来源) else "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
+            阶段 = "share_fetch" if _知乎分享提取来源(来源) else "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
             书籍 = await _准备盐言分享章节书籍(session, 来源)
             logger.info(
                 f"盐言小说开始下载：业务编号={书籍.get('column_id')}, "
@@ -929,7 +930,7 @@ def 解析盐言编号(来源: str) -> tuple[str, str]:
 
 
 def _是盐言链接(值: str) -> bool:
-    if _是知乎分享提取链接(值):
+    if _知乎分享提取来源(值):
         return True
     try:
         地址 = urlsplit(值)
@@ -937,6 +938,21 @@ def _是盐言链接(值: str) -> bool:
         return False
     主机 = (地址.hostname or "").lower().strip(".")
     return 主机 in 允许主机 and bool(解析盐言编号(值)[0] or 解析知乎文章编号(值))
+
+
+def _是知乎原始分享链接(值: str) -> bool:
+    if len(值) > 16384 or re.search(r"\s", 值):
+        return False
+    try:
+        地址 = urlsplit(值)
+        return (
+            地址.scheme.lower() == "https"
+            and 地址.netloc.lower() == "soia.zhihu.com"
+            and 地址.path == "/km_paid_content/share"
+            and not 地址.fragment
+        )
+    except ValueError:
+        return False
 
 
 def _是知乎分享提取链接(值: str) -> bool:
@@ -957,27 +973,32 @@ def _是知乎分享提取链接(值: str) -> bool:
             if 内链.lower().startswith("https://"):
                 break
             内链 = unquote(内链)
-        分享地址 = urlsplit(内链)
-        return (
-            分享地址.scheme.lower() == "https"
-            and 分享地址.netloc.lower() == "soia.zhihu.com"
-            and 分享地址.path == "/km_paid_content/share"
-            and not 分享地址.fragment
-        )
+        return _是知乎原始分享链接(内链)
     except ValueError:
         return False
 
 
+def _知乎分享提取来源(来源: str) -> str:
+    if _是知乎分享提取链接(来源):
+        return 来源
+    if _是知乎原始分享链接(来源):
+        # 保留分享票据的原始编码，不将 & 拆成外层参数后重新编码。
+        包装地址 = 知乎分享提取地址 + "?url=" + 来源
+        return 包装地址 if _是知乎分享提取链接(包装地址) else ""
+    return ""
+
+
 def _知乎分享来源摘要(来源: str) -> str:
-    return hashlib.sha256(来源.encode("utf-8")).hexdigest()
+    return hashlib.sha256((_知乎分享提取来源(来源) or 来源).encode("utf-8")).hexdigest()
 
 
 async def _请求知乎分享提取书籍(session: aiohttp.ClientSession, 来源: str) -> dict[str, Any]:
-    if not _是知乎分享提取链接(来源):
+    请求地址 = _知乎分享提取来源(来源)
+    if not 请求地址:
         raise _盐言查询错误("link_fields_missing")
     摘要 = _知乎分享来源摘要(来源)
     原始 = await _盐言低频读取(
-        session, URL(来源, encoded=True), ("share_fetch", 摘要), "share_fetch",
+        session, URL(请求地址, encoded=True), ("share_fetch", 摘要), "share_fetch",
         headers={"Accept": "application/json", "User-Agent": "mantoubot/yanyan"},
         timeout=aiohttp.ClientTimeout(total=正文提取总超时秒数, connect=10, sock_connect=8, sock_read=正文提取读取超时秒数),
     )
@@ -1028,10 +1049,10 @@ def 提取盐言链接(值: Any) -> str:
         return ""
     文本 = html.unescape(str(值)).replace("\\/", "/")
     for 次数 in range(3):
-        # 先取原始包装链接，保留 mst 等参数的 +/% 字节；只对整体编码消息解码。
-        for 匹配 in 知乎分享提取链接正则.finditer(文本):
+        # 按整条 URL 检查，兼容原始分享/包装链接并保留票据的 +/% 字节。
+        for 匹配 in 知乎分享链接正则.finditer(文本):
             链接 = 匹配.group(0).rstrip("`)]}>，。；;！!")
-            if _是知乎分享提取链接(链接):
+            if _知乎分享提取来源(链接):
                 return 链接
         if 次数 == 2:
             break
