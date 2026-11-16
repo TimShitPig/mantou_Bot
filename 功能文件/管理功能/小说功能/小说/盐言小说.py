@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import html
 import json
 import math
@@ -13,6 +14,7 @@ from typing import Any, AsyncIterator, Iterable
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
+from yarl import URL
 
 try:
     from astrbot.api import logger
@@ -75,7 +77,7 @@ def _盐言超时分类(异常: BaseException) -> str:
     return "total_timeout"
 
 
-async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, headers: dict, params=None, 上限: int = 8 * 1024 * 1024, timeout: aiohttp.ClientTimeout | None = None) -> bytes:
+async def _盐言低频读取(session, 地址: str | URL, 键: tuple, 通道: str, *, headers: dict, params=None, 上限: int = 8 * 1024 * 1024, timeout: aiohttp.ClientTimeout | None = None) -> bytes:
     # 一个通道串行，等待后再次查缓存，实现同资源并发请求合并。
     async with 盐言查询锁.setdefault(通道, asyncio.Lock()):
         当前 = time.monotonic()
@@ -88,7 +90,7 @@ async def _盐言低频读取(session, 地址: str, 键: tuple, 通道: str, *, 
                 raise _盐言查询错误(*缓存["error"], 来源="error_cache", 剩余秒数=math.ceil(缓存["expires"] - 当前))
             return 缓存["body"]
         # 403只冷却被拒绝的主机；429与旧版本通道冷却继续共同生效至到期。
-        拒绝范围 = (通道, urlsplit(地址).hostname or "")
+        拒绝范围 = (通道, urlsplit(str(地址)).hostname or "")
         for 冷却键 in (通道, 拒绝范围):
             冷却 = 盐言查询拒绝冷却.get(冷却键)
             if 冷却 and 冷却[0] > 当前:
@@ -150,6 +152,9 @@ class _盐言正文未就绪(RuntimeError):
     re.I,
 )
 允许主机 = {"story.zhihu.com", "zhuanlan.zhihu.com", "www.zhihu.com"}
+知乎分享提取链接正则 = re.compile(
+    r"http://103\.236\.77\.248:32838/fetch\?[^\s'\"<>，。；;！!]+", re.I,
+)
 正文键 = {
     "content",
     "body",
@@ -559,6 +564,8 @@ async def _获取单章正文(
 async def _准备盐言分享章节书籍(
     session: aiohttp.ClientSession, 来源: str
 ) -> dict[str, Any]:
+    if _是知乎分享提取链接(来源):
+        return await _请求知乎分享提取书籍(session, 来源)
     文章编号 = 解析知乎文章编号(来源)
     if 文章编号:
         return await _请求知乎专栏文章(session, 文章编号)
@@ -587,6 +594,10 @@ async def _下载盐言分享章节(
     章节列表 = list(书籍.get("chapters") or [])
     if len(章节列表) != 1:
         raise RuntimeError("盐言分享章节数量异常")
+    if _是知乎分享提取链接(来源):
+        if 书籍.get("share_source_hash") != _知乎分享来源摘要(来源) or not 章节列表[0].get("content"):
+            raise RuntimeError("盐言章节正文不完整")
+        return 书籍
     if 解析知乎文章编号(来源):
         if 书籍.get("article_id") != 解析知乎文章编号(来源) or not 章节列表[0].get("content"):
             raise RuntimeError("盐言章节正文不完整")
@@ -634,7 +645,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
     阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
-            阶段 = "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
+            阶段 = "share_fetch" if _是知乎分享提取链接(来源) else "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
             书籍 = await _准备盐言分享章节书籍(session, 来源)
             logger.info(
                 f"盐言小说开始下载：业务编号={书籍.get('column_id')}, "
@@ -918,12 +929,86 @@ def 解析盐言编号(来源: str) -> tuple[str, str]:
 
 
 def _是盐言链接(值: str) -> bool:
+    if _是知乎分享提取链接(值):
+        return True
     try:
         地址 = urlsplit(值)
     except ValueError:
         return False
     主机 = (地址.hostname or "").lower().strip(".")
     return 主机 in 允许主机 and bool(解析盐言编号(值)[0] or 解析知乎文章编号(值))
+
+
+def _是知乎分享提取链接(值: str) -> bool:
+    """仅接受指定服务包装的知乎分享地址，不拆分或重写实际请求参数。"""
+    if len(值) > 16384 or re.search(r"\s", 值):
+        return False
+    try:
+        地址 = urlsplit(值)
+        if 地址.scheme.lower() != "http" or 地址.netloc.lower() != "103.236.77.248:32838" or 地址.path != "/fetch" or 地址.fragment:
+            return False
+        if not 地址.query.startswith("url="):
+            return False
+        内链 = 地址.query[4:]
+        # url= 后未编码的 & 也是分享参数；只拒绝重复目标，不把这些参数截掉。
+        if any(unquote(项.split("=", 1)[0]).lower() == "url" for 项 in 内链.split("&")[1:]):
+            return False
+        for _ in range(2):
+            if 内链.lower().startswith("https://"):
+                break
+            内链 = unquote(内链)
+        分享地址 = urlsplit(内链)
+        return (
+            分享地址.scheme.lower() == "https"
+            and 分享地址.netloc.lower() == "soia.zhihu.com"
+            and 分享地址.path == "/km_paid_content/share"
+            and not 分享地址.fragment
+        )
+    except ValueError:
+        return False
+
+
+def _知乎分享来源摘要(来源: str) -> str:
+    return hashlib.sha256(来源.encode("utf-8")).hexdigest()
+
+
+async def _请求知乎分享提取书籍(session: aiohttp.ClientSession, 来源: str) -> dict[str, Any]:
+    if not _是知乎分享提取链接(来源):
+        raise _盐言查询错误("link_fields_missing")
+    摘要 = _知乎分享来源摘要(来源)
+    原始 = await _盐言低频读取(
+        session, URL(来源, encoded=True), ("share_fetch", 摘要), "share_fetch",
+        headers={"Accept": "application/json", "User-Agent": "mantoubot/yanyan"},
+        timeout=aiohttp.ClientTimeout(total=正文提取总超时秒数, connect=10, sock_connect=8, sock_read=正文提取读取超时秒数),
+    )
+    数据 = _解析响应对象(原始)
+    if not isinstance(数据, dict):
+        raise _盐言查询错误("share_response_invalid")
+    if 数据.get("ok") is not True:
+        raise _盐言查询错误("provider_rejected")
+    项目列表 = 数据.get("items")
+    if not isinstance(项目列表, list) or len(项目列表) != 1:
+        raise _盐言查询错误("share_item_count")
+    项目 = 项目列表[0]
+    if not isinstance(项目, dict) or 项目.get("ok") is not True:
+        raise _盐言查询错误("provider_rejected")
+    标题 = 清理正文(项目.get("title")) if isinstance(项目.get("title"), str) else ""
+    书号 = str(项目.get("book_id") or "")
+    if not 标题 or not isinstance(项目.get("content"), str) or not re.fullmatch(r"[1-9][0-9]{0,29}", 书号):
+        raise _盐言查询错误("share_fields_missing")
+    章节 = 解析盐言章节正文(json.dumps({"title": 标题, "content": 项目["content"]}, ensure_ascii=False).encode("utf-8"), 标题)
+    章节.pop("source_title", None)
+    章节["id"] = 书号
+    return {
+        "title": 标题,
+        "author": 清理正文(项目.get("author")) if isinstance(项目.get("author"), str) and 项目["author"].strip() else "未知",
+        "intro": "",
+        "status": "完结",
+        "word_count": len(re.sub(r"\s+", "", 章节["content"])),
+        "column_id": 书号,
+        "chapters": [章节],
+        "share_source_hash": 摘要,
+    }
 
 
 def 提取盐言链接(值: Any) -> str:
@@ -942,7 +1027,14 @@ def 提取盐言链接(值: Any) -> str:
                 return 结果
         return ""
     文本 = html.unescape(str(值)).replace("\\/", "/")
-    for _ in range(2):
+    for 次数 in range(3):
+        # 先取原始包装链接，保留 mst 等参数的 +/% 字节；只对整体编码消息解码。
+        for 匹配 in 知乎分享提取链接正则.finditer(文本):
+            链接 = 匹配.group(0).rstrip("`)]}>，。；;！!")
+            if _是知乎分享提取链接(链接):
+                return 链接
+        if 次数 == 2:
+            break
         解码 = unquote(文本)
         if 解码 == 文本:
             break
