@@ -32,6 +32,20 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 _锁表 = globals().get("_锁表") or {}
 _任务表 = globals().get("_任务表") or {}
 _运行状态 = globals().get("_运行状态") or {}
+_阅读记录 = globals().get("_阅读记录") or {}
+_阅读事件 = frozenset({
+    "online", "online_state", "online_started", "online_retry_wait", "online_stopped", "heartbeat",
+    "reading_book", "reading_detail", "reading_catalog", "reading_chapter", "reading_completed",
+    "reward_status", "reward_collect", "reward_collected", "reward_not_collected", "reward_unavailable",
+})
+_奖励事件 = frozenset({"reward_status", "reward_collect", "reward_collected", "reward_not_collected", "reward_unavailable"})
+_阅读错误分类 = frozenset({
+    "unknown", "timeout", "network_error", "session_closed", "credential_invalid", "verification_required",
+    "access_denied", "operation_unconfirmed", "business_error", "invalid_response", "empty_response",
+    "response_too_large", "invalid_cookie", "empty_recommendations", "empty_catalog", "empty_content",
+    "catalog_empty", "chapter_empty", "chinese_body_missing", "js_runtime_missing", "js_decode_failed",
+    "reward_unavailable", "database_error",
+})
 _服务运行 = globals().get("_服务运行", True)
 _命名空间 = "stv_auth"
 _状态键 = "account"
@@ -125,7 +139,57 @@ async def _写状态(配置: Any, state: dict[str, Any], 检查: Callable[[], bo
         raise
 
 
-def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | None = None) -> None:
+def _阅读记录键(配置: Any, state: dict[str, Any]) -> tuple[str, str, str]:
+    return _任务键(配置), str(state.get("uid") or ""), str(state.get("revision") or "")
+
+
+def _清理阅读记录(配置: Any) -> None:
+    scope = _任务键(配置)
+    for key in list(_阅读记录):
+        if key[0] == scope:
+            _阅读记录.pop(key, None)
+
+
+def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
+                    success: bool | None = None, exc: Exception | None = None) -> None:
+    if event not in _阅读事件 or not state.get("uid"):
+        return
+    category = ""
+    if exc is not None:
+        if isinstance(exc, 数据库连接错误):
+            category = "database_error"
+        elif isinstance(exc, TimeoutError):
+            category = "timeout"
+        elif isinstance(exc, ConnectionError):
+            category = "network_error"
+        else:
+            raw = getattr(exc, "category", "unknown")
+            category = raw if isinstance(raw, str) and raw in _阅读错误分类 else "unknown"
+        success = False
+    key = _阅读记录键(配置, state)
+    if key not in _阅读记录:
+        # 长期进程的历史账号记录也有上限，不把账号身份放进返回内容。
+        while len(_阅读记录) >= 128:
+            _阅读记录.pop(next(iter(_阅读记录)))
+        _阅读记录[key] = {"reading": {}, "reward_logs": []}
+    record = {"event": event, "time": int(time.time()), "success": success, "category": category}
+    bucket = _阅读记录[key]
+    bucket["reading"] = record
+    if event in _奖励事件 and success is not None:
+        bucket["reward_logs"] = [*bucket["reward_logs"], record][-100:]
+
+
+def _阅读摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
+    bucket = _阅读记录.get(_阅读记录键(配置, state), {})
+    return {
+        "reading": dict(bucket.get("reading") or {"event": "", "time": 0, "success": None, "category": ""}),
+        "reward_logs": [dict(row) for row in bucket.get("reward_logs", [])],
+    }
+
+
+def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | None = None, *, 记录活动: bool = True) -> None:
+    if 记录活动:
+        _记录阅读活动(配置, state, event, success=exc is None and event != "reward_not_collected", exc=exc)
     now = int(time.time())
     _运行状态[_任务键(配置)] = {"last_event": event, "last_time": now}
     if exc is None:
@@ -147,6 +211,7 @@ def _摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
         "logged_in": bool(state["uid"] and state["cookies"] and state["auth_status"] != "invalid"),
         "running": bool(state["online_enabled"] and state["auth_status"] != "invalid" and task and not task.done()),
         **_运行状态.get(_任务键(配置), {}),
+        **_阅读摘要(配置, state),
     }
 
 
@@ -187,6 +252,7 @@ async def 登录STV账号(配置: Any, username: str, password: str, *, 注册: 
                          "cookies": client.export_cookies(), "revision": uuid.uuid4().hex,
                          "auth_status": "valid", "last_event": stage, "last_time": int(time.time())}
                 await _写状态(配置, state, 提交前校验)
+                _清理阅读记录(配置)
                 _日志(配置, state, stage)
         except Exception as exc:
             _日志(配置, old, stage, exc)
@@ -201,6 +267,7 @@ async def 删除STV账号(配置: Any, *, 提交前校验: Callable[[], bool] | 
     async with _锁(配置):
         state = await _读状态(配置)
         await _写状态(配置, _空状态(), 提交前校验)
+        _清理阅读记录(配置)
         _日志(配置, state, "logout")
     await _同步任务(配置)
     return await 读取STV账号摘要(配置)
@@ -416,6 +483,8 @@ async def _后台任务(配置: Any, revision: str | None) -> None:
 async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dict[str, Any], Exception] | None:
     state = _空状态()
     stage = "online"
+    reward_pending = False
+    reward_result = None
     try:
         state = await _读状态(配置)
 
@@ -456,6 +525,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                     try:
                         if now >= heartbeat_due:
                             stage = "heartbeat"
+                            _记录阅读活动(配置, state, stage)
                             await client.heartbeat()
                             heartbeat_due = time.monotonic() + 120
                             async with _锁(配置):
@@ -470,6 +540,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                 _日志(配置, state, "heartbeat")
                         if reward_cid and state["rewards_enabled"] and now >= reward_due:
                             stage = "reward_status"
+                            _记录阅读活动(配置, state, stage)
                             reward_due = time.monotonic() + 300
                             offered = await client.reward_status()
                             async with _锁(配置):
@@ -480,18 +551,25 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     break
                                 if offered and state["rewards_enabled"]:
                                     stage = "reward_collect"
+                                    reward_result = None
                                     # 消耗仍串行；领取前持久关闭，取消或未知结果不重放。
                                     state["rewards_enabled"] = False
                                     await _写状态(配置, state)
+                                    _记录阅读活动(配置, state, stage)
+                                    reward_pending, reward_result = True, None
                                     result = await client.collect_reward(reward_cid)
+                                    reward_result = bool(result.get("collected"))
+                                    # 领奖结果已经明确，后续状态保存失败也不能改写成领取失败。
+                                    _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected")
+                                    reward_pending = False
                                     reward_cid = ""
                                     state["rewards_enabled"] = True
                                     await _写状态(配置, state)
-                                    _日志(配置, state, "reward_collected" if result.get("collected") else "reward_not_collected")
                                 elif not offered:
                                     _日志(配置, state, "reward_unavailable")
                         if now >= reading_due:
                             stage = "reading_" + reading_stage
+                            _记录阅读活动(配置, state, stage)
                             reading_due = time.monotonic() + 2
                             if reading_stage == "book":
                                 reward_cid = ""
@@ -544,7 +622,11 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                 return
                             if state["cookies"] != cookies:
                                 break
-                            _日志(配置, state, stage, exc)
+                            if stage == "reward_collect" and reward_result is not None:
+                                _日志(配置, state, stage, exc, 记录活动=False)
+                            else:
+                                _日志(配置, state, stage, exc)
+                            reward_pending = False
                             if getattr(exc, "category", "") == "credential_invalid":
                                 await _失效(配置, state, exc)
                                 return
@@ -569,9 +651,17 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                         deadlines.append(reward_due)
                     await asyncio.sleep(max(0.1, min(deadlines) - time.monotonic()))
     except asyncio.CancelledError:
+        if reward_pending:
+            if reward_result is None:
+                _日志(配置, state, "reward_collect", STVError("operation_unconfirmed"))
+            else:
+                _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected")
         raise
     except Exception as exc:
-        _日志(配置, state, stage, exc)
+        if stage == "reward_collect" and reward_result is not None:
+            _日志(配置, state, stage, exc, 记录活动=False)
+        else:
+            _日志(配置, state, stage, exc)
         return state, exc
 
 

@@ -517,4 +517,92 @@
       #page-novels .novel-badge { width: 28px; height: 28px; border-radius: 9px; }
       #page-pans .pan-tab { min-height: 47px; }
     }
+
+    /* STV 账号卡片与账号详情弹窗。 */
+    #bot-panel-stv .studio-service-head { flex-wrap: wrap; }
+    #bot-panel-stv .stv-page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    #bot-panel-stv .outline-button,
+    .stv-modal .outline-button { min-height: 44px; padding: 9px 14px; font-size: 13px; }
+    #stv-summary { margin: 0 0 16px; color: var(--studio-muted); font-size: 13px; line-height: 1.6; }
+    .stv-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 320px)); gap: 16px; }
+    .stv-account-card { min-width: 0; overflow: hidden; border: 1px solid var(--studio-border); border-radius: 14px; background: var(--studio-card); }
+    .stv-card-open { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 104px; padding: 20px 18px; border: 0; border-radius: 0; background: transparent; color: var(--studio-ink); text-align: left; font: inherit; }
+    .stv-card-open:hover { background: var(--studio-soft); }
+    .stv-card-avatar { display: grid; place-items: center; width: 46px; height: 46px; flex: 0 0 46px; border-radius: 12px; background: var(--studio-accent-soft); color: var(--studio-accent); font-size: 18px; font-weight: 650; }
+    .stv-card-copy { display: grid; gap: 5px; min-width: 0; flex: 1; }
+    .stv-card-name { color: var(--studio-ink); font-size: 15px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+    .stv-card-meta { color: var(--studio-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .stv-card-arrow { flex: 0 0 auto; color: var(--studio-muted); }
+    .stv-card-arrow svg { display: block; width: 18px; height: 18px; }
+    .stv-card-state { margin: 0; padding: 11px 18px; border-top: 1px solid var(--studio-border); background: var(--studio-soft); color: var(--studio-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+    .stv-card-state.is-running { background: var(--mint); color: var(--mint-ink); }
+    .stv-card-state.is-error { color: var(--danger); }
+    .stv-modal { width: min(640px, calc(100vw - 32px)); }
+    .stv-modal .qq-reader-modal-head { gap: 12px; padding: 16px 20px; }
+    .stv-modal-heading { min-width: 0; }
+    .stv-modal-heading h3 { overflow-wrap: anywhere; }
+    #stv-modal-subtitle { margin: 5px 0 0; color: var(--studio-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    #stv-modal-subtitle:empty { display: none; }
+    .stv-modal .qq-reader-modal-close { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 10px; }
+    .stv-modal .qq-reader-modal-close svg { width: 20px; height: 20px; }
+    .stv-modal .stv-modal-body { padding: 0 20px 20px; }
+    .stv-modal [hidden] { display: none !important; }
+    #stv-login-panel { padding-top: 20px; }
+    #stv-login-form { display: grid; gap: 16px; }
+    .stv-modal .config-field label { color: var(--studio-muted); font-size: 12px; font-weight: 550; }
+    .stv-modal .config-field input { min-height: 44px; border-radius: 9px; font-size: 14px; }
+    .stv-modal .config-actions { flex-wrap: wrap; gap: 8px; }
+    .stv-detail-tabs { display: flex; gap: 4px; margin: 0; border-bottom: 1px solid var(--studio-border); }
+    .stv-detail-tabs button { min-width: 0; min-height: 52px; flex: 1; padding: 12px 8px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--studio-muted); font: inherit; font-size: 14px; }
+    .stv-detail-tabs button:hover { color: var(--studio-ink); background: var(--studio-soft); }
+    .stv-detail-tabs button[aria-selected="true"] { border-bottom-color: var(--studio-accent); color: var(--studio-accent); font-weight: 650; }
+    .stv-detail-pane:not([hidden]) { display: grid; gap: 20px; padding-top: 20px; }
+    .stv-section-result { color: var(--studio-ink); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+    .stv-section-result:empty { display: none; }
+    .stv-profile-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 24px; margin: 0; }
+    .stv-profile-grid > div { min-width: 0; padding-bottom: 12px; border-bottom: 1px solid var(--studio-border); }
+    .stv-profile-grid dt { margin: 0 0 5px; color: var(--studio-muted); font-size: 12px; }
+    .stv-profile-grid dd { margin: 0; color: var(--studio-ink); font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+    .stv-modal .stv-logout { margin-left: auto; }
+    #stv-inventory-result:not(:empty) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+    .stv-item-card { min-width: 0; padding: 12px; border: 1px solid var(--studio-border); border-radius: 10px; background: var(--studio-soft); }
+    .stv-item-open { display: block; width: 100%; min-height: 44px; padding: 4px 0; border: 0; background: transparent; color: var(--studio-ink); text-align: left; font: inherit; font-weight: 600; overflow-wrap: anywhere; }
+    .stv-item-open:hover { color: var(--studio-accent); }
+    .stv-item-state { display: block; color: var(--studio-muted); font-size: 12px; overflow-wrap: anywhere; }
+    .stv-item-detail { display: grid; gap: 12px; padding-top: 18px; border-top: 1px solid var(--studio-border); }
+    .stv-reading-status { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; border-radius: 10px; background: var(--studio-soft); }
+    .stv-reading-status > div { display: grid; gap: 7px; min-width: 0; }
+    .stv-reading-status span { color: var(--studio-muted); font-size: 12px; }
+    .stv-reading-status strong { color: var(--studio-ink); font-size: 15px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+    .stv-reading-controls { display: grid; }
+    .stv-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; border-bottom: 1px solid var(--studio-border); font-size: 13px; color: var(--studio-ink); }
+    .stv-switch-row .switch { width: 48px; height: 44px; background: transparent; }
+    .stv-switch-row .switch::before { content: ""; position: absolute; inset: 10px 0; border-radius: 999px; background: var(--studio-border); }
+    .stv-switch-row .switch.on::before { background: var(--studio-accent); }
+    .stv-switch-row .switch span { top: 13px; left: 3px; width: 18px; height: 18px; background: var(--studio-card); }
+    .stv-switch-row .switch.on span { transform: translateX(24px); }
+    .stv-log-section { min-width: 0; }
+    .stv-log-section h4 { margin: 0 0 12px; color: var(--studio-ink); font-size: 13px; font-weight: 650; }
+    .stv-reward-logs { list-style: none; margin: 0; padding: 0; }
+    .stv-log-row { display: grid; grid-template-columns: 126px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--studio-border); font-size: 12px; line-height: 1.6; }
+    .stv-log-row time { color: var(--studio-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .stv-log-copy { color: var(--studio-ink); overflow-wrap: anywhere; }
+    .stv-log-row.is-error .stv-log-copy { color: var(--danger); }
+    .stv-log-empty { padding: 16px 0; color: var(--studio-muted); font-size: 13px; line-height: 1.6; }
+    #stv-result { margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
+    #stv-result:empty { display: none; }
+    #bot-panel-stv button:focus-visible,
+    .stv-modal :is(button, input, [role="tabpanel"]):focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
+    #bot-panel-stv .stv-card-open:focus-visible { outline-offset: -3px; }
+    @media (max-width: 520px) {
+      .stv-accounts { grid-template-columns: minmax(0, 1fr); }
+      .stv-modal { width: calc(100vw - 20px); }
+      .stv-modal .qq-reader-modal-head { padding: 12px 14px; }
+      .stv-modal .stv-modal-body { padding: 0 14px 16px; }
+      .stv-detail-pane:not([hidden]) { gap: 18px; padding-top: 18px; }
+      .stv-profile-grid { gap: 12px; }
+      .stv-reading-status { gap: 12px; padding: 13px; }
+      .stv-log-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+      .stv-modal .stv-logout { margin-left: 0; }
+    }
 """

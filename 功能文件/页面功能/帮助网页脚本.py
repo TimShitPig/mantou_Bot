@@ -1670,101 +1670,249 @@
       window.addEventListener('pagehide', () => leaveJinjiang(false, true));
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
 
-      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:''};
+      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null, requestedTabs:new Set()};
       const stvVisible = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && document.visibilityState !== 'hidden' && Boolean(consoleAppid);
       const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvVisible();
+      const stvReadingVisible = () => stvVisible() && stv.mode === 'detail' && stv.tab === 'reading' && $('stv-account-dialog')?.open;
       const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password','stv-item-id']) if ($(id)) $(id).value = ''; };
+      const setSTVMessage = (text, source = 'action') => { stv.messageSource = source; if ($('stv-result')) $('stv-result').textContent = text; };
+      const clearSTVMessage = (source) => { if (source && stv.messageSource !== source) return; stv.messageSource = ''; $('stv-result')?.replaceChildren(); };
+      const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result','stv-item-result']) $(id)?.replaceChildren(); };
+      const stvTime = (value) => { const date = new Date(Number(value) * 1000); return Number(value) > 0 && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {hour12:false}) : '暂无记录'; };
+      const stvEventLabels = {online:'初始化阅读', online_started:'开始阅读', online_stopped:'阅读已停止', online_retry_wait:'等待恢复', online_state:'读取状态', online_error:'阅读已停止', heartbeat:'在线心跳', reading_book:'选择书籍', reading_detail:'读取书籍详情', reading_catalog:'读取目录', reading_chapter:'读取正文', reading_completed:'已完成本章阅读', reward_status:'检查奖励', reward_collect:'领取奖励', reward_collected:'奖励已领取', reward_not_collected:'未领取奖励', reward_unavailable:'暂无可领取奖励', reward_cancelled:'奖励领取已取消', credential_invalid:'登录已失效'};
+      const stvErrorLabels = {timeout:'请求超时', network_error:'连接失败', network:'连接失败', dns:'域名解析失败', server_busy:'服务繁忙', credential_invalid:'登录已失效', verification_required:'需要验证', access_denied:'访问被拒绝', operation_unconfirmed:'结果未确认', cancelled:'已取消', reward_unavailable:'暂无可领取奖励', database_error:'状态存储异常', session_closed:'连接已关闭', business_error:'服务未接受操作', invalid_response:'响应格式异常', empty_response:'响应为空', response_too_large:'响应超出限制', invalid_cookie:'登录资料无效', empty_recommendations:'暂无可阅读书籍', empty_catalog:'目录为空', empty_content:'正文为空', catalog_empty:'目录为空', chapter_empty:'正文为空', chinese_body_missing:'暂无中文正文', js_runtime_missing:'阅读组件不可用', js_decode_failed:'正文解析失败', unknown:'操作未完成'};
+      const stvEventText = (row, fallback) => {
+        const text = stvEventLabels[row?.event] || fallback;
+        return row?.success === false ? `${text} · ${stvErrorLabels[row.category] || '操作未完成'}` : row?.success === null ? `${text}…` : text;
+      };
+      const stopSTVPoll = () => { clearTimeout(stv.timer); stv.timer = null; };
+      const scheduleSTVPoll = () => {
+        stopSTVPoll();
+        if (stvReadingVisible()) stv.timer = setTimeout(() => { stv.timer = null; if (stv.inFlight || stv.loading) scheduleSTVPoll(); else void loadSTV(); }, 5000);
+      };
+      const renderSTVReading = (auth) => {
+        const reading = auth?.reading || {};
+        if ($('stv-reading-state')) $('stv-reading-state').textContent = auth?.running ? '挂时长运行中' : '挂时长未运行';
+        if ($('stv-reading-time')) $('stv-reading-time').textContent = reading.event ? `${stvEventText(reading, '阅读状态更新')} · ${stvTime(reading.time)}` : '暂无阅读记录';
+        const target = $('stv-reward-logs'); if (!target) return;
+        const rows = Array.isArray(auth?.reward_logs) ? auth.reward_logs.slice(-100).reverse() : [];
+        const signature = JSON.stringify(rows);
+        if (target.dataset.records === signature) return;
+        target.dataset.records = signature; target.replaceChildren();
+        if (!rows.length) { const empty = document.createElement('li'); empty.className = 'stv-log-empty'; empty.textContent = '暂无奖励记录'; target.appendChild(empty); return; }
+        for (const entry of rows) {
+          const row = document.createElement('li'), time = document.createElement('time'), text = document.createElement('span');
+          row.className = `stv-log-row${entry.success === false ? ' is-error' : ''}`;
+          time.textContent = stvTime(entry.time); text.className = 'stv-log-copy'; text.textContent = stvEventText(entry, '奖励状态更新');
+          row.append(time, text); target.appendChild(row);
+        }
+      };
+      const closeSTVModal = (restoreFocus = true) => {
+        const modal = $('stv-account-dialog'), focus = stv.modalFocus, serial = ++stv.modalGeneration;
+        stv.mode = ''; stv.modalUid = ''; stv.modalFocus = null; stv.requestedTabs.clear(); stopSTVPoll(); clearSTVFields(); clearSTVResults();
+        if ($('toast')?.parentElement === modal) document.body.appendChild($('toast'));
+        if (modal?.open) modal.close();
+        if (stv.modalOverflow !== null) document.body.style.overflow = stv.modalOverflow;
+        stv.modalOverflow = null; document.removeEventListener('keydown', stvModalKeydown, true);
+        $('stv-accounts')?.querySelectorAll('[data-stv-account]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+        if (restoreFocus) queueMicrotask(() => {
+          if (serial !== stv.modalGeneration || modal?.open || !stvVisible()) return;
+          const target = focus?.uid ? $('stv-accounts')?.querySelector(`[data-stv-account="${CSS.escape(focus.uid)}"]`) : focus?.node;
+          const fallback = $('stv-add')?.disabled ? $('bot-tab-stv') : $('stv-add');
+          (target?.isConnected && !target.disabled && target.getClientRects().length ? target : fallback)?.focus({preventScroll:true});
+        });
+      };
       const renderSTV = (auth = stv.auth) => {
         stv.auth = auth;
-        const busy = Boolean(stv.inFlight), editable = Boolean(auth?.editable) && !busy;
-        const loggedIn = auth?.logged_in === true;
-        if ($('stv-summary')) $('stv-summary').textContent = !auth ? stv.error || '选择 STV 分区后读取账号…' : auth.registered && auth.registration_logged_in !== true ? '注册已成功，请登录新账号' : auth.auth_status === 'invalid' && auth.uid ? `${auth.username || 'STV 用户'} · UID ${auth.uid} · 登录已失效，请重新登录` : loggedIn ? `${auth.username || 'STV 用户'} · UID ${auth.uid || '未知'} · 已登录 · ${auth.running ? '挂时长运行中' : '挂时长未运行'}` : '尚未登录账号';
+        const busy = Boolean(stv.inFlight), editable = Boolean(auth?.editable) && !busy, loggedIn = auth?.logged_in === true;
+        if (stv.mode === 'detail' && String(auth?.uid || '') !== stv.modalUid) closeSTVModal(false);
+        const summary = $('stv-summary');
+        if (summary) { summary.textContent = stv.error || (!auth ? '选择 STV 分区后读取账号…' : !auth.uid ? '尚未登录账号' : ''); summary.hidden = !summary.textContent; }
+        const accounts = $('stv-accounts'), uid = String(auth?.uid || '');
+        if (accounts) {
+          let card = accounts.querySelector('.stv-account-card');
+          if (!uid) accounts.replaceChildren();
+          else {
+            if (!card || card.dataset.uid !== uid) {
+              card = document.createElement('article'); card.className = 'stv-account-card'; card.dataset.uid = uid;
+              card.innerHTML = '<button class="stv-card-open" type="button" aria-haspopup="dialog" aria-controls="stv-account-dialog"><span class="stv-card-avatar" aria-hidden="true">STV</span><span class="stv-card-copy"><strong class="stv-card-name"></strong><small class="stv-card-meta"></small></span><span class="stv-card-arrow" aria-hidden="true">›</span></button><p class="stv-card-state"></p>';
+              const button = card.querySelector('.stv-card-open'); button.dataset.stvAccount = uid;
+              button.addEventListener('click', () => openSTVModal('detail', {uid})); accounts.replaceChildren(card);
+            }
+            card.querySelector('.stv-card-name').textContent = auth.username || 'STV 用户'; card.querySelector('.stv-card-meta').textContent = `UID ${uid}`;
+            const status = card.querySelector('.stv-card-state');
+            status.textContent = auth.auth_status === 'invalid' ? '登录已失效，请重新登录' : loggedIn ? `已登录 · ${auth.running ? '挂时长运行中' : '挂时长未运行'}` : '需要重新登录';
+            status.classList.toggle('is-running', loggedIn && auth.running === true); status.classList.toggle('is-error', auth.auth_status === 'invalid');
+            card.querySelector('.stv-card-open').setAttribute('aria-expanded', String(stv.mode === 'detail' && stv.modalUid === uid));
+          }
+        }
+        if ($('stv-add')) { $('stv-add').textContent = uid ? '重新登录' : '登录账号'; $('stv-add').disabled = !editable; }
         for (const id of ['stv-login','stv-register','stv-username','stv-password','stv-repeat-password']) if ($(id)) $(id).disabled = !editable;
-        if ($('stv-delete')) $('stv-delete').disabled = !editable || !auth?.uid;
+        if ($('stv-delete')) $('stv-delete').disabled = !editable || !uid;
         if ($('stv-refresh')) $('stv-refresh').disabled = busy || stv.loading || !consoleAppid;
         for (const name of ['online','rewards']) {
           const button = $(`stv-${name}`), enabled = auth?.[`${name}_enabled`] === true;
           if (button) { button.disabled = !editable || !loggedIn; button.classList.toggle('on', enabled); button.setAttribute('aria-pressed', String(enabled)); }
         }
         for (const id of ['stv-cultivation','stv-breakthrough','stv-inventory','stv-item','stv-use','stv-item-id']) if ($(id)) $(id).disabled = !editable || !loggedIn;
+        if ($('stv-modal-title')) $('stv-modal-title').textContent = stv.mode === 'login' ? uid ? '重新登录 STV' : '登录 STV' : auth?.username || 'STV 账号';
+        if ($('stv-modal-subtitle')) $('stv-modal-subtitle').textContent = stv.mode === 'login' ? '使用用户名和密码登录或注册。' : uid ? `UID ${uid} · ${loggedIn ? '已登录' : '需要重新登录'}` : '';
+        if ($('stv-login-panel')) $('stv-login-panel').hidden = stv.mode !== 'login';
+        if ($('stv-detail-panel')) $('stv-detail-panel').hidden = stv.mode !== 'detail';
+        renderSTVReading(auth);
+      };
+      const stvModalKeydown = (event) => {
+        const modal = $('stv-account-dialog'); if (!modal?.open) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); closeSTVModal(); return; }
+        if (event.key !== 'Tab') return;
+        const nodes = modalFocusable(modal), index = nodes.indexOf(document.activeElement);
+        if (!nodes.length) { event.preventDefault(); modal.focus(); }
+        else if (event.shiftKey && index <= 0) { event.preventDefault(); nodes.at(-1).focus(); }
+        else if (!event.shiftKey && (index < 0 || index === nodes.length - 1)) { event.preventDefault(); nodes[0].focus(); }
+      };
+      const ensureSTVPanel = () => {
+        if (!stvVisible() || stv.mode !== 'detail' || !stv.auth?.logged_in || stv.inFlight || stv.requestedTabs.has(stv.tab) || stv.tab === 'reading') return;
+        stv.requestedTabs.add(stv.tab);
+        void mutateSTV(stv.tab === 'inventory' ? 'inventory' : 'cultivation');
+      };
+      const setSTVTab = (tab, focus = false) => {
+        if (!['profile','inventory','reading'].includes(tab)) return;
+        stv.tab = tab; stopSTVPoll(); clearSTVMessage();
+        for (const name of ['profile','inventory','reading']) {
+          const selected = name === tab, button = $(`stv-tab-${name}`), panel = $(`stv-panel-${name}`);
+          button?.setAttribute('aria-selected', String(selected)); if (button) button.tabIndex = selected ? 0 : -1;
+          if (panel) panel.hidden = !selected;
+        }
+        if (focus) $(`stv-tab-${tab}`)?.focus();
+        if (tab === 'reading') { renderSTVReading(stv.auth); void loadSTV(); scheduleSTVPoll(); }
+        else ensureSTVPanel();
+      };
+      const openSTVModal = (mode, focus) => {
+        if (!stvVisible() || !stv.auth || !['login','detail'].includes(mode) || (mode === 'detail' && !stv.auth.uid)) return;
+        leaveQQReader(); leaveJinjiang(); closeZLibraryDialog(); closeSTVModal(false);
+        const modal = $('stv-account-dialog'); if (!modal) return;
+        stv.modalGeneration += 1; stv.mode = mode; stv.modalUid = String(stv.auth.uid || ''); stv.modalFocus = focus;
+        stv.modalOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
+        renderSTV(); modal.showModal(); document.addEventListener('keydown', stvModalKeydown, true);
+        if (mode === 'detail') { setSTVTab('profile'); $('stv-tab-profile')?.focus({preventScroll:true}); }
+        else $('stv-username')?.focus({preventScroll:true});
       };
       const leaveSTV = () => {
-        stv.generation += 1; stv.request += 1; stv.loading = false; stv.auth = null; stv.error = '';
-        clearSTVFields(); $('stv-result')?.replaceChildren(); renderSTV();
+        closeSTVModal(false); stv.generation += 1; stv.request += 1; stv.loading = false; stv.auth = null; stv.error = ''; renderSTV();
       };
       const showSTVResult = (action, result) => {
-        const target = $('stv-result'); if (!target) return;
-        target.replaceChildren();
-        const line = (label, value) => { const node = document.createElement('p'); node.textContent = `${label}：${value === null || value === undefined || value === '' ? '未知' : value}`; target.appendChild(node); };
-        const cultivation = (info) => {
-          if (!info || typeof info !== 'object') return;
-          line('境界', info.realm); line('修为', info.cultivation?.text || `${info.cultivation?.current ?? '未知'} / ${info.cultivation?.next ?? '未知'}`);
-          line('根基', info.foundation?.text || `${info.foundation?.current ?? '未知'} / ${info.foundation?.maximum ?? '未知'}`);
-          line('修炼速度', info.speed?.text); line('状态', info.status); line('修炼时长', info.training_minutes === null || info.training_minutes === undefined ? '未知' : `${info.training_minutes} 分钟`);
-          line('已读章节', info.read_chapters); line('可否突破', info.breakthrough_available === true ? '可以' : '当前不可突破');
+        const message = $('stv-result');
+        if (!['cultivation','inventory','item'].includes(action)) stv.messageSource = 'action';
+        const value = (input) => input === null || input === undefined || input === '' ? '未知' : String(input);
+        const profile = (info) => {
+          const target = $('stv-profile-result'); if (!target || !info || typeof info !== 'object') return;
+          target.replaceChildren(); const list = document.createElement('dl'); list.className = 'stv-profile-grid';
+          const rows = [['境界',info.realm],['修为',info.cultivation?.text || `${value(info.cultivation?.current)} / ${value(info.cultivation?.next)}`],['根基',info.foundation?.text || `${value(info.foundation?.current)} / ${value(info.foundation?.maximum)}`],['修炼速度',info.speed?.text],['状态',info.status],['修炼时长',info.training_minutes == null ? '未知' : `${info.training_minutes} 分钟`],['已读章节',info.read_chapters],['可否突破',info.breakthrough_available === true ? '可以' : '当前不可突破']];
+          for (const [label, content] of rows) { const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value(content); row.append(dt,dd); list.appendChild(row); }
+          target.appendChild(list);
         };
-        const item = (info, active = false) => {
-          if (!info || typeof info !== 'object') return;
-          const row = document.createElement('div'), button = document.createElement('button'); button.type = 'button'; button.className = 'text-button';
-          button.textContent = `${info.name || info.n || '物品'} · 实例 ${info.i ?? info.item_id ?? '未知'}${active || String(info.ac) === '1' ? ' · 生效中' : ''}`;
-          button.disabled = info.i === null || info.i === undefined;
-          button.addEventListener('click', () => { $('stv-item-id').value = String(info.i); $('stv-item-id').focus(); });
-          row.appendChild(button); target.appendChild(row);
-          if (info.info) line('说明', info.info);
-          if (info.level !== undefined) line('等级', info.level);
+        const item = (info, target, active = false, detail = false) => {
+          if (!info || typeof info !== 'object' || !target) return;
+          const row = document.createElement('article'), button = document.createElement('button'), name = document.createElement('strong'), meta = document.createElement('span');
+          const id = info.i ?? info.item_id; row.className = 'stv-item-card'; button.className = 'stv-item-open'; button.type = 'button';
+          name.textContent = info.name || info.n || '物品'; meta.className = 'stv-item-state'; meta.textContent = `实例 ${value(id)}${active || String(info.ac) === '1' ? ' · 生效中' : ''}`;
+          button.disabled = id === null || id === undefined; button.append(name,meta);
+          button.addEventListener('click', () => { if (stv.inFlight) return; $('stv-item-id').value = String(id); if (!detail) void mutateSTV('item', {item_id:String(id)}); else $('stv-item-id').focus(); });
+          row.appendChild(button);
+          for (const [label, content] of [['说明',info.info],['等级',info.level]]) if (content !== undefined && content !== null && content !== '') { const text = document.createElement('p'); text.textContent = `${label}：${content}`; row.appendChild(text); }
+          target.appendChild(row);
         };
-        if (action === 'cultivation') cultivation(result);
-        else if (action === 'breakthrough') { line('突破', result?.success === true ? '成功' : '服务器未确认成功，请先查询修为'); if (result?.after) cultivation(result.after); else if (result?.refresh_error) line('资料', '刷新未完成，请先查询修为，勿重复提交'); }
+        if (action === 'cultivation') profile(result);
+        else if (action === 'breakthrough') { message.textContent = result?.success === true ? '突破成功' : '服务器未确认成功，请先查询修为'; if (result?.after) profile(result.after); else if (result?.refresh_error) message.textContent += '；资料刷新未完成，请先查询修为，勿重复提交'; }
         else if (action === 'inventory') {
-          const available = Array.isArray(result?.list) ? result.list : [], active = Array.isArray(result?.act) ? result.act : [];
-          const activeIds = new Set(active.map((row) => String(row.i)));
-          for (const row of available) if (!activeIds.has(String(row.i))) item(row);
-          for (const row of active) item(row, true);
-          if (!target.childNodes.length) line('背包', '暂无物品');
-        } else if (action === 'item') item(result);
-        else if (action === 'use') line('物品使用', result?.used === true ? '成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交');
-        else if (action === 'refresh') line('账号资料', '已刷新');
+          const target = $('stv-inventory-result'); target.replaceChildren();
+          const available = Array.isArray(result?.list) ? result.list : [], active = Array.isArray(result?.act) ? result.act : [], activeIds = new Set(active.map((row) => String(row.i)));
+          for (const row of available) if (!activeIds.has(String(row.i))) item(row, target);
+          for (const row of active) item(row, target, true);
+          if (!target.childNodes.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '暂无物品'; target.appendChild(empty); }
+        } else if (action === 'item') { const target = $('stv-item-result'); target.replaceChildren(); item(result, target, false, true); }
+        else if (action === 'use') message.textContent = result?.used === true ? '使用成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交';
+        else if (action === 'refresh') message.textContent = '账号资料已刷新';
       };
       const loadSTV = async () => {
         if (!stvVisible() || stv.loading || stv.inFlight) return;
-        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, request = ++stv.request;
-        stv.loading = true; stv.error = '';
+        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, request = ++stv.request, modal = stv.modalGeneration, tab = stv.tab;
+        stv.loading = true; stv.error = ''; renderSTV();
         try {
           const data = await api('stv-auth', {botAppid:appid});
-          if (request === stv.request && stvScopeCurrent(appid, scope, generation)) renderSTV(data);
+          if (request === stv.request && stvScopeCurrent(appid, scope, generation)) {
+            renderSTV(data);
+            if (modal === stv.modalGeneration && tab === stv.tab) clearSTVMessage('load');
+          }
         } catch (error) {
           if (request !== stv.request || !stvScopeCurrent(appid, scope, generation) || error.name === 'AbortError') return;
-          if (error.status === 401) showAuthError(error); else { stv.error = error.message; $('stv-summary').textContent = error.message; toast(error.message); }
-        } finally { if (request === stv.request && stvScopeCurrent(appid, scope, generation)) { stv.loading = false; renderSTV(); } }
+          if (error.status === 401) showAuthError(error);
+          else if (modal === stv.modalGeneration && tab === stv.tab) {
+            stv.error = error.message;
+            if ($('stv-account-dialog')?.open) {
+              if (stv.messageSource !== 'action' || !$('stv-result')?.textContent) setSTVMessage(error.message, 'load');
+            } else toast(error.message);
+          }
+        } finally { if (request === stv.request && stvScopeCurrent(appid, scope, generation)) { stv.loading = false; renderSTV(); scheduleSTVPoll(); } }
       };
       const mutateSTV = async (action, extra = {}) => {
         if (!stvVisible() || !stv.auth?.editable || stv.inFlight) return;
-        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, marker = {};
-        const authAction = action === 'login' || action === 'register';
-        stv.inFlight = marker; stv.request += 1; stv.loading = false; renderSTV();
-        const payload = JSON.stringify({action, ...extra});
-        // 密码只存在于本次请求；表单在提交后立即清空。
-        if (authAction) clearSTVFields();
+        const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, modal = stv.modalGeneration, tab = stv.tab, marker = {};
+        const authAction = action === 'login' || action === 'register', tabRead = ['cultivation','inventory','item'].includes(action);
+        stv.inFlight = marker; stv.request += 1; stv.loading = false; stopSTVPoll(); stv.error = ''; renderSTV();
+        if ($('stv-account-dialog')?.open) setSTVMessage(['cultivation','inventory','item','refresh'].includes(action) ? '正在查询…' : '正在处理…');
+        const payload = JSON.stringify({action, ...extra}); if (authAction) clearSTVFields();
         try {
           const data = await api(action === 'delete' || authAction ? 'stv-auth' : 'stv-auth/action', {method:action === 'delete' ? 'DELETE' : 'POST', body:payload, botAppid:appid});
           if (!stvScopeCurrent(appid, scope, generation)) return;
+          if (action === 'delete' && modal === stv.modalGeneration) closeSTVModal();
           renderSTV(data);
-          if (['cultivation','breakthrough','inventory','item','use','refresh'].includes(action)) showSTVResult(action, data.result);
-          else { $('stv-result')?.replaceChildren(); toast(data.registered && data.registration_logged_in !== true ? '注册已成功，请登录新账号' : action === 'delete' ? 'STV 账号已退出' : authAction ? 'STV 账号已登录' : 'STV 开关已保存'); }
+          const currentModal = modal === stv.modalGeneration && $('stv-account-dialog')?.open;
+          if (currentModal) {
+            if (!tabRead || tab === stv.tab) clearSTVMessage();
+            if (['cultivation','breakthrough','inventory','item','use','refresh'].includes(action)) showSTVResult(action, data.result);
+            else if (data.registered && data.registration_logged_in !== true) setSTVMessage('注册已成功，请登录新账号');
+          }
+          if (action === 'delete' || (authAction && (!data.registered || data.registration_logged_in === true))) {
+            if (currentModal) closeSTVModal();
+            toast(action === 'delete' ? 'STV 账号已退出' : 'STV 账号已登录');
+          } else if (['online','rewards'].includes(action)) toast('STV 开关已保存');
         } catch (error) {
           if (!stvScopeCurrent(appid, scope, generation) || error.name === 'AbortError') return;
-          if (error.status === 401) showAuthError(error); else { $('stv-result').textContent = error.message; toast(error.message); }
+          if (error.status === 401) showAuthError(error);
+          else if (tabRead && (modal !== stv.modalGeneration || tab !== stv.tab || !$('stv-account-dialog')?.open)) return;
+          else if (modal === stv.modalGeneration && $('stv-account-dialog')?.open) { setSTVMessage(error.message); toast(error.message); }
+          else toast(error.message);
         } finally {
           if (stv.inFlight === marker) stv.inFlight = null;
-          if (stvScopeCurrent(appid, scope, generation)) renderSTV();
+          if (stvScopeCurrent(appid, scope, generation)) { renderSTV(); ensureSTVPanel(); scheduleSTVPoll(); }
+          else if (stvVisible() && !stv.inFlight) void loadSTV();
         }
       };
       const submitSTV = (register = false) => {
-        if (!$('stv-login-form')?.reportValidity()) return;
+        if (stv.mode !== 'login' || !$('stv-login-form')?.reportValidity()) return;
         const username = $('stv-username').value.trim(), password = $('stv-password').value, repeat = $('stv-repeat-password').value;
-        if (register && password !== repeat) { toast('两次密码输入不一致'); return; }
+        if (register && password !== repeat) return toast('两次密码输入不一致');
         void mutateSTV(register ? 'register' : 'login', {username, password, repeat_password:repeat});
       };
+      const stvModal = $('stv-account-dialog');
+      if (stvModal) {
+        document.body.appendChild(stvModal); stvModal.tabIndex = -1;
+        let backdropDown = false;
+        const outside = (event) => { const rect = stvModal.getBoundingClientRect(); return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom; };
+        stvModal.addEventListener('pointerdown', (event) => { backdropDown = event.target === stvModal && outside(event); });
+        stvModal.addEventListener('click', (event) => { if (event.target === stvModal && backdropDown && outside(event)) closeSTVModal(); backdropDown = false; });
+        stvModal.addEventListener('cancel', (event) => { event.preventDefault(); closeSTVModal(); });
+        stvModal.addEventListener('close', () => { if (!stvModal.open && stv.mode) closeSTVModal(); });
+      }
+      $('stv-modal-close')?.addEventListener('click', () => closeSTVModal());
+      $('stv-add')?.addEventListener('click', (event) => openSTVModal('login', {node:event.currentTarget}));
+      $('stv-detail-tabs')?.addEventListener('click', (event) => { const tab = event.target.closest('[data-stv-tab]'); if (tab) setSTVTab(tab.dataset.stvTab); });
+      $('stv-detail-tabs')?.addEventListener('keydown', (event) => {
+        const tabs = ['profile','inventory','reading'], index = tabs.indexOf(event.target.dataset.stvTab); if (index < 0) return;
+        const next = event.key === 'ArrowRight' ? (index + 1) % 3 : event.key === 'ArrowLeft' ? (index + 2) % 3 : event.key === 'Home' ? 0 : event.key === 'End' ? 2 : -1;
+        if (next >= 0) { event.preventDefault(); setSTVTab(tabs[next], true); }
+      });
       $('stv-login-form')?.addEventListener('submit', (event) => { event.preventDefault(); submitSTV(false); });
       $('stv-register')?.addEventListener('click', () => submitSTV(true));
       $('stv-delete')?.addEventListener('click', () => { if (confirm('退出当前 STV 账号并停止挂时长？')) void mutateSTV('delete'); });

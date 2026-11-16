@@ -68,22 +68,55 @@
             <section id="bot-panel-stv" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-stv" tabindex="0" hidden>
               <header class="studio-service-head">
                 <div><h3>STV 账号</h3><p>Sáng Tác Việt · 登录、修为和背包。</p></div>
-                <button id="stv-refresh" class="outline-button" type="button">刷新资料</button>
+                <div class="stv-page-actions"><button id="stv-refresh" class="outline-button" type="button">刷新资料</button><button id="stv-add" class="outline-button" type="button">登录账号</button></div>
               </header>
               <p id="stv-summary" role="status" aria-live="polite">选择 STV 分区后读取账号…</p>
-              <form id="stv-login-form" class="config-editor" autocomplete="off">
-                <div class="config-field"><label for="stv-username">用户名</label><input id="stv-username" type="text" maxlength="128" autocomplete="off" required></div>
-                <div class="config-field"><label for="stv-password">密码</label><input id="stv-password" type="password" maxlength="4096" autocomplete="new-password" required></div>
-                <div class="config-field"><label for="stv-repeat-password">确认密码（注册时填写）</label><input id="stv-repeat-password" type="password" maxlength="4096" autocomplete="new-password"></div>
-                <div class="config-actions"><button id="stv-login" class="outline-button" type="submit">登录</button><button id="stv-register" class="outline-button" type="button">注册</button><button id="stv-delete" class="outline-button" type="button">退出账号</button></div>
-              </form>
-              <div class="config-actions">
-                <label>挂时长 <button id="stv-online" class="switch" type="button" aria-label="挂时长" aria-pressed="false" disabled><span></span></button></label>
-                <label>领取奖励 <button id="stv-rewards" class="switch" type="button" aria-label="领取奖励" aria-pressed="false" disabled><span></span></button></label>
-              </div>
-              <div class="config-actions"><button id="stv-cultivation" class="outline-button" type="button" disabled>查询修为</button><button id="stv-breakthrough" class="outline-button" type="button" disabled>突破</button><button id="stv-inventory" class="outline-button" type="button" disabled>查询背包</button></div>
-              <div class="config-field"><label for="stv-item-id">物品实例 ID</label><input id="stv-item-id" type="text" maxlength="128" autocomplete="off"><div class="config-actions"><button id="stv-item" class="outline-button" type="button" disabled>物品详情</button><button id="stv-use" class="outline-button" type="button" disabled>使用物品</button></div></div>
-              <div id="stv-result" class="config-message" role="status" aria-live="polite"></div>
+              <div id="stv-accounts" class="stv-accounts"></div>
+              <dialog id="stv-account-dialog" class="qq-reader-modal stv-modal" aria-labelledby="stv-modal-title" aria-modal="true" tabindex="-1">
+                <header class="qq-reader-modal-head">
+                  <div class="stv-modal-heading"><h3 id="stv-modal-title">STV 账号</h3><p id="stv-modal-subtitle"></p></div>
+                  <button id="stv-modal-close" class="qq-reader-modal-close" type="button" aria-label="关闭 STV 账号弹窗"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+                </header>
+                <div class="qq-reader-modal-body stv-modal-body">
+                  <section id="stv-login-panel" hidden>
+                    <form id="stv-login-form" class="config-editor" autocomplete="off">
+                      <div class="config-field"><label for="stv-username">用户名</label><input id="stv-username" type="text" maxlength="128" autocomplete="off" required></div>
+                      <div class="config-field"><label for="stv-password">密码</label><input id="stv-password" type="password" maxlength="4096" autocomplete="new-password" required></div>
+                      <div class="config-field"><label for="stv-repeat-password">确认密码（注册时填写）</label><input id="stv-repeat-password" type="password" maxlength="4096" autocomplete="new-password"></div>
+                      <div class="config-actions"><button id="stv-login" class="outline-button" type="submit">登录</button><button id="stv-register" class="outline-button" type="button">注册</button></div>
+                    </form>
+                  </section>
+                  <section id="stv-detail-panel" hidden>
+                    <div id="stv-detail-tabs" class="stv-detail-tabs" role="tablist" aria-label="STV 账号详情">
+                      <button id="stv-tab-profile" type="button" role="tab" data-stv-tab="profile" aria-controls="stv-panel-profile" aria-selected="true">个人页</button>
+                      <button id="stv-tab-inventory" type="button" role="tab" data-stv-tab="inventory" aria-controls="stv-panel-inventory" aria-selected="false" tabindex="-1">背包</button>
+                      <button id="stv-tab-reading" type="button" role="tab" data-stv-tab="reading" aria-controls="stv-panel-reading" aria-selected="false" tabindex="-1">阅读</button>
+                    </div>
+                    <section id="stv-panel-profile" class="stv-detail-pane" role="tabpanel" aria-labelledby="stv-tab-profile" tabindex="0">
+                      <div id="stv-profile-result" class="stv-section-result" aria-live="polite"></div>
+                      <div class="config-actions"><button id="stv-cultivation" class="outline-button" type="button" disabled>查询修为</button><button id="stv-breakthrough" class="outline-button" type="button" disabled>突破</button><button id="stv-delete" class="outline-button stv-logout" type="button">退出账号</button></div>
+                    </section>
+                    <section id="stv-panel-inventory" class="stv-detail-pane" role="tabpanel" aria-labelledby="stv-tab-inventory" tabindex="0" hidden>
+                      <div class="config-actions"><button id="stv-inventory" class="outline-button" type="button" disabled>查询背包</button></div>
+                      <div id="stv-inventory-result" class="stv-section-result" aria-live="polite"></div>
+                      <div class="stv-item-detail">
+                        <div class="config-field"><label for="stv-item-id">物品实例 ID</label><input id="stv-item-id" type="text" maxlength="128" autocomplete="off"></div>
+                        <div class="config-actions"><button id="stv-item" class="outline-button" type="button" disabled>物品详情</button><button id="stv-use" class="outline-button" type="button" disabled>使用物品</button></div>
+                        <div id="stv-item-result" class="stv-section-result" aria-live="polite"></div>
+                      </div>
+                    </section>
+                    <section id="stv-panel-reading" class="stv-detail-pane" role="tabpanel" aria-labelledby="stv-tab-reading" tabindex="0" hidden>
+                      <div class="stv-reading-status"><div><span>阅读状态</span><strong id="stv-reading-state">未读取</strong></div><div><span>最近活动</span><strong id="stv-reading-time">—</strong></div></div>
+                      <div class="stv-reading-controls">
+                        <div class="stv-switch-row"><span id="stv-online-label">挂时长</span><button id="stv-online" class="switch" type="button" aria-labelledby="stv-online-label" aria-pressed="false" disabled><span></span></button></div>
+                        <div class="stv-switch-row"><span id="stv-rewards-label">领取奖励</span><button id="stv-rewards" class="switch" type="button" aria-labelledby="stv-rewards-label" aria-pressed="false" disabled><span></span></button></div>
+                      </div>
+                      <section class="stv-log-section" aria-labelledby="stv-logs-title"><h4 id="stv-logs-title">领取奖励日志</h4><ol id="stv-reward-logs" class="stv-reward-logs" aria-live="polite"><li class="stv-log-empty">暂无领取记录</li></ol></section>
+                    </section>
+                  </section>
+                  <div id="stv-result" class="config-message" role="status" aria-live="polite"></div>
+                </div>
+              </dialog>
             </section>
           </div>
         </section>
