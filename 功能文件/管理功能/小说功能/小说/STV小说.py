@@ -608,7 +608,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
                                     reading_stage = "chapter"
                                 else:
-                                    reading_due = time.monotonic() + round(max(60, min(600, chars / _随机.uniform(6, 12))))
+                                    reading_due = time.monotonic() + _随机.randint(180, 300)
                                     if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
                                         reward_cid = str(chapter["cid"])
                                         reward_due = time.monotonic() + 15
