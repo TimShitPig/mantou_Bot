@@ -33,7 +33,7 @@ HEADERS = {
 _PATHS = {
     "/", "/index.php", "/mobile/userinfo.php", "/mobile/jsonify.php",
     "/mobile/bookinfo.php", "/io/searchtp/searchBooks", "/user/0/",
-    "/io/grantcontext/context", "/io/user/online",
+    "/io/grantcontext/context", "/io/user/online", "/io/userinfo/getuseritems",
 }
 _CONNECTION_POOLS = globals().get("_CONNECTION_POOLS") or {}
 
@@ -561,14 +561,34 @@ class STVClient:
         return result
 
     async def inventory(self) -> dict[str, Any]:
-        body, _ = await self._account_query("/mobile/jsonify.php", {"ajax": "getinv"}, account=True)
-        data = self._json(body)
-        self._code(data, "100")
-        if any(not isinstance(data.get(field), list) or any(not isinstance(item, dict) for item in data[field]) for field in ("list", "act")):
-            raise STVError("invalid_response", 200)
+        # App getinv 会把官网已有物品返回为空，使用官网同账号的库存和激活列表。
         if not self._has_access():
-            raise STVError("credential_invalid", 200)
-        return data
+            raise STVError("credential_invalid")
+        checked = None
+        if not self.uid:
+            checked = await self.account_info()
+        uid = self.uid
+        if not re.fullmatch(r"[1-9]\d*", uid):
+            raise STVError("credential_invalid")
+        tasks = [
+            asyncio.create_task(self._request("POST", "/io/userinfo/getuseritems", {"uid": uid}, "", account=True, limit=2 * 1024 * 1024)),
+            asyncio.create_task(self._request("POST", "/index.php", {"ngmar": "getactiv"}, {"ajax": "getactivateditem"}, account=True, limit=2 * 1024 * 1024)),
+        ]
+        if checked is None:
+            tasks.append(asyncio.create_task(self.account_info()))
+        try:
+            responses = await asyncio.gather(*tasks)
+            identity = checked if checked is not None else responses[2]
+            if str(identity.get("id") or "") != uid or self.uid != uid or not self._has_access():
+                raise STVError("credential_invalid", 200)
+            return {"list": _parse_inventory_fragment(responses[0][0]),
+                    "act": _parse_inventory_fragment(responses[1][0], active=True)}
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _account_query(self, path: str, params: dict[str, Any] | None = None,
                              **kwargs: Any) -> tuple[str, dict[str, str]]:
@@ -777,6 +797,59 @@ class _CultivationParser(HTMLParser):
     def handle_data(self, data):
         if not any(node.tag in ("script", "style", "template") for node in self.stack):
             self.stack[-1].parts.append(data)
+
+
+def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[str, Any]]:
+    """解析官网库存片段；HTML 的 n 是数量，不沿用 App JSON 的名称含义。"""
+    if not body.strip():
+        return []
+    if body.strip().lower() == "captcha" or re.match(r"\s*(?:<!doctype|<html)", body, re.IGNORECASE):
+        raise STVError("verification_required", 200)
+    parser = _CultivationParser()
+    parser.feed(body)
+    parser.close()
+    items = [node for node in parser.root.walk() if node.has_class("item")]
+    if not items or len(parser.stack) != 1:
+        raise STVError("invalid_response", 200)
+    result = []
+    seen = set()
+    for item in items:
+        parent = item.parent
+        while parent is not None:
+            if parent.tag in {"script", "style", "template"} or parent.has_class("item"):
+                raise STVError("invalid_response", 200)
+            parent = parent.parent
+        try:
+            item_id = _item_id(item.attrs.get("i"))
+        except STVError:
+            raise STVError("invalid_response", 200) from None
+        if item_id in seen:
+            raise STVError("ambiguous_item", 200)
+        seen.add(item_id)
+        kind = (item.attrs.get("tag") or "").strip()
+        active_value = (item.attrs.get("ac", "true" if active else "") or "").strip().lower()
+        info_nodes = [node for node in item.walk() if node.has_class("iinfo")]
+        if not re.fullmatch(r"[1-9]\d*", kind) or active_value not in {"0", "1", "false", "true"} or len(info_nodes) != 1:
+            raise STVError("invalid_response", 200)
+        info = info_nodes[0]
+        name = (item.attrs.get("itn") or "").strip()
+        if not name:
+            title = next((part for part in info.parts if not isinstance(part, str) or part.strip()), None)
+            name = title.text() if isinstance(title, _CultivationNode) and title.tag == "b" else ""
+        if not name or not info.text():
+            raise STVError("invalid_response", 200)
+        row = {"i": item_id, "t": kind, "ac": active or active_value in {"1", "true"},
+               "name": name, "info": info.text()}
+        for attribute, field in (("l", "level"), ("n", "count")):
+            if attribute in item.attrs:
+                value = (item.attrs[attribute] or "").strip()
+                if not re.fullmatch(r"[0-9]{1,12}", value):
+                    raise STVError("invalid_response", 200)
+                row[field] = int(value)
+                if attribute == "l":
+                    row["l"] = value
+        result.append(row)
+    return result
 
 
 def _cultivation_number(value):
