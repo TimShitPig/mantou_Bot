@@ -3687,12 +3687,14 @@ def _STVJSON(数据: dict[str, Any], 状态码: int = 200) -> web.Response:
 
 def _STV操作错误(异常: Exception, 操作: str) -> web.Response:
     """只返回固定分类提示，不把服务端原文或账号凭据带到浏览器。"""
+    分类 = getattr(异常, "category", "")
+    if 分类 == "breakthrough_unavailable":
+        return _STVJSON({"ok": False, "error": "当前境界未提供可用突破入口，未提交突破；请先查询修为"}, 409)
     logger.warning("帮助控制台 STV账号操作失败：阶段=%s，错误类型=%s", 操作, type(异常).__name__)
     if isinstance(异常, PermissionError):
         return _STVJSON({"ok": False, "error": "登录状态已更新，请重新登录控制台"}, 401)
     if isinstance(异常, ValueError):
         return _STVJSON({"ok": False, "error": "账号或操作参数无效，请检查后重试"}, 400)
-    分类 = getattr(异常, "category", "")
     if 分类 in {"operation_unconfirmed", "reward_unconfirmed", "result_unknown"}:
         提示 = "操作结果未确认，请先查询修为或背包，勿重复提交"
     elif 分类 in {"credential_invalid", "account_required", "not_logged_in"}:

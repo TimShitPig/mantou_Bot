@@ -130,6 +130,9 @@ def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | Non
     _运行状态[_任务键(配置)] = {"last_event": event, "last_time": now}
     if exc is None:
         logger.info("STV账号任务：appid=%s, uid=%s, event=%s", _作用域(配置), state.get("uid") or "none", event)
+    elif getattr(exc, "category", "") == "breakthrough_unavailable":
+        logger.info("STV账号任务未提交：appid=%s, uid=%s, stage=%s, reason=breakthrough_unavailable",
+                    _作用域(配置), state.get("uid") or "none", event)
     else:
         logger.warning("STV账号任务失败：appid=%s, uid=%s, stage=%s, error_type=%s, category=%s, http_status=%s, code=%s",
                        _作用域(配置), state.get("uid") or "none", event, type(exc).__name__,
