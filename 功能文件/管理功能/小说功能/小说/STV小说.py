@@ -7,6 +7,7 @@ import copy
 import hashlib
 import html
 import json
+import math
 from pathlib import Path
 import random
 import re
@@ -26,6 +27,7 @@ from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存�
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库, 读取运行状态值, 写入运行状态值, 获取数据库配置, 数据库连接错误,
+    比较并更新运行状态值,
 )
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
@@ -33,6 +35,8 @@ _锁表 = globals().get("_锁表") or {}
 _任务表 = globals().get("_任务表") or {}
 _运行状态 = globals().get("_运行状态") or {}
 _阅读记录 = globals().get("_阅读记录") or {}
+_待写阅读记录 = globals().get("_待写阅读记录") or {}
+_阅读写入任务 = globals().get("_阅读写入任务") or {}
 _阅读事件 = frozenset({
     "online", "online_state", "online_started", "online_retry_wait", "online_stopped", "heartbeat",
     "reading_book", "reading_detail", "reading_catalog", "reading_chapter", "reading_completed",
@@ -49,6 +53,7 @@ _阅读错误分类 = frozenset({
 _服务运行 = globals().get("_服务运行", True)
 _命名空间 = "stv_auth"
 _状态键 = "account"
+_阅读状态键 = "reading_runtime"
 _随机 = random.SystemRandom()
 _声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
@@ -109,7 +114,9 @@ def _读取(配置: Any) -> dict[str, Any]:
 
 
 async def _读状态(配置: Any) -> dict[str, Any]:
-    return await asyncio.to_thread(_读取, 配置)
+    state = await asyncio.to_thread(_读取, 配置)
+    await _加载阅读记录(配置, state)
+    return state
 
 
 def _校验(检查: Callable[[], bool] | None) -> None:
@@ -143,11 +150,197 @@ def _阅读记录键(配置: Any, state: dict[str, Any]) -> tuple[str, str, str]
     return _任务键(配置), str(state.get("uid") or ""), str(state.get("revision") or "")
 
 
-def _清理阅读记录(配置: Any) -> None:
+def _规范阅读活动(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(value.get("event"), str) or value["event"] not in _阅读事件:
+        return {}
+    stamp = value.get("time")
+    if type(stamp) is not int or not 0 < stamp < 10**12:
+        return {}
+    success = value.get("success")
+    category = value.get("category")
+    result = {"event": value["event"], "time": stamp,
+              "success": success if type(success) is bool else None,
+              "category": category if isinstance(category, str) and category in _阅读错误分类 else ""}
+    if result["event"] == "reward_collected" and result["success"] is True:
+        reward = _奖励日志摘要({"collected": True, "reward": value.get("reward")}).get("reward")
+        if reward:
+            result["reward"] = reward
+    return result
+
+
+def _规范阅读进度(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    due = value.get("next_read_at")
+    if type(due) not in (int, float) or not 0 < due < 10**12 or not math.isfinite(due):
+        return {}
+
+    def identity(row: Any, count: int) -> bool:
+        return (isinstance(row, (list, tuple)) and len(row) == count
+                and isinstance(row[0], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", row[0])
+                and isinstance(row[1], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", row[1])
+                and (count == 2 or (isinstance(row[2], str) and 0 < len(row[2]) <= 200
+                                    and not any(ord(c) < 32 or ord(c) == 127 for c in row[2]))))
+
+    book = value.get("last_book")
+    recent = value.get("recent")
+    return {"next_read_at": due, "last_book": list(book) if identity(book, 2) else None,
+            "recent": [list(row) for row in recent[-256:] if identity(row, 3)] if isinstance(recent, list) else []}
+
+
+async def _加载阅读记录(配置: Any, state: dict[str, Any]) -> None:
+    if not state.get("uid") or not 已配置运行状态数据库(配置):
+        return
+    key = _阅读记录键(配置, state)
+    if _阅读记录.get(key, {}).get("loaded"):
+        return
+    lock_key = key[0] + ":reading_load"
+    loop = asyncio.get_running_loop()
+    if lock_key not in _锁表 or _锁表[lock_key][0] is not loop:
+        _锁表[lock_key] = (loop, asyncio.Lock())
+    async with _锁表[lock_key][1]:
+        if _阅读记录.get(key, {}).get("loaded"):
+            return
+        try:
+            raw = await asyncio.to_thread(读取运行状态值, 配置, _命名空间, _阅读状态键, "")
+        except Exception as exc:
+            logger.warning("STV阅读记录读取失败：error_type=%s", type(exc).__name__)
+            # 未取得持久进度时交给原任务退避，不能空状态起步再覆盖旧记录。
+            raise
+        try:
+            saved = json.loads(raw) if raw and len(raw) <= 256 * 1024 else {}
+        except (TypeError, ValueError):
+            saved = {}
+        if (not isinstance(saved, dict) or saved.get("schema_version") != 1
+                or saved.get("uid") != state["uid"] or saved.get("revision") != state["revision"]):
+            saved = {}
+        bucket = _阅读记录.get(key, {})
+        memory = _规范阅读活动(bucket.get("reading"))
+        stored = _规范阅读活动(saved.get("reading"))
+        reading = memory if memory.get("time", 0) >= stored.get("time", 0) else stored
+        old_logs = bucket.get("reward_logs")
+        disk_logs = saved.get("reward_logs")
+        old_logs = [_规范阅读活动(row) for row in old_logs[-100:]] if isinstance(old_logs, list) else []
+        disk_logs = [_规范阅读活动(row) for row in disk_logs[-100:]] if isinstance(disk_logs, list) else []
+        old_logs = [row for row in old_logs if row.get("event") in _奖励事件 and row.get("success") is not None]
+        disk_logs = [row for row in disk_logs if row.get("event") in _奖励事件 and row.get("success") is not None]
+        if "new_logs" in bucket:
+            new_logs = [_规范阅读活动(row) for row in bucket["new_logs"][-100:]]
+            logs = (disk_logs + [row for row in new_logs if row.get("event") in _奖励事件 and row.get("success") is not None])[-100:]
+        else:
+            logs = old_logs if old_logs and (not disk_logs or old_logs[-1]["time"] >= disk_logs[-1]["time"]) else disk_logs
+        progress = _规范阅读进度(bucket.get("progress")) or _规范阅读进度(saved.get("progress"))
+        # 热重载可能保留旧模块的内存桶；成功读库后立即迁入持久状态，
+        # 即使挂时长已关闭且之后没有新事件，也不能在进程重启时丢失日志。
+        migrate_memory = bool(bucket.get("reading") or bucket.get("reward_logs")
+                              or bucket.get("progress") or bucket.get("new_logs"))
+        while key not in _阅读记录 and len(_阅读记录) >= 128:
+            _阅读记录.pop(next(iter(_阅读记录)))
+        merged = {"reading": reading, "reward_logs": logs, "progress": progress, "loaded": True}
+        _阅读记录[key] = merged
+        if migrate_memory:
+            _排队阅读记录(配置, state, merged)
+
+
+def _写阅读记录同步(配置: Any, snapshot: dict[str, Any]) -> bool:
+    snapshot = copy.deepcopy(snapshot)
+    payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    # 运行状态列为 MySQL TEXT；保留全部100条受控日志，超预算时仅裁掉最早章节索引。
+    recent = snapshot.get("progress", {}).get("recent", [])
+    while len(payload.encode("utf-8")) > 60 * 1024 and recent:
+        recent.pop(0)
+        payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    for _ in range(3):
+        account = 读取运行状态值(配置, _命名空间, _状态键, "")
+        try:
+            current = json.loads(account) if account else {}
+        except (TypeError, ValueError):
+            return True
+        # 记录不能覆盖换号/退出后的状态，且账号本身始终由原账号路径维护。
+        if (not isinstance(current, dict) or current.get("uid", "") != snapshot["uid"]
+                or current.get("revision", "") != snapshot["revision"]):
+            return True
+        old = 读取运行状态值(配置, _命名空间, _阅读状态键, "")
+        expected = {_状态键: account or None, _阅读状态键: old or None}
+        values = {_阅读状态键: payload} if snapshot["uid"] else {}
+        if 比较并更新运行状态值(配置, _命名空间, expected, values,
+                              删除=None if snapshot["uid"] else [_阅读状态键]):
+            return True
+    return False
+
+
+async def _等待阅读写入(task: Any) -> Any:
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # 不留下取消后仍可能写库的线程；等它结束后继续传播取消。
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
+async def _执行阅读写入(scope: str) -> None:
+    try:
+        while (pending := _待写阅读记录.get(scope)) is not None:
+            config, snapshot = pending
+            task = asyncio.create_task(asyncio.to_thread(_写阅读记录同步, config, snapshot))
+            written = await _等待阅读写入(task)
+            if not written:
+                logger.warning("STV阅读记录保存暂缓：reason=state_changed")
+                return
+            if _待写阅读记录.get(scope) is pending:
+                _待写阅读记录.pop(scope, None)
+    except Exception as exc:
+        logger.warning("STV阅读记录保存失败：error_type=%s", type(exc).__name__)
+    finally:
+        if _阅读写入任务.get(scope) is asyncio.current_task():
+            _阅读写入任务.pop(scope, None)
+
+
+def _启动阅读写入(scope: str) -> None:
+    task = _阅读写入任务.get(scope)
+    if scope in _待写阅读记录 and (task is None or task.done()):
+        _阅读写入任务[scope] = asyncio.create_task(_执行阅读写入(scope), name="STV阅读记录保存")
+
+
+def _排队阅读记录(配置: Any, state: dict[str, Any], bucket: dict[str, Any], *, 清空: bool = False) -> None:
+    if not 已配置运行状态数据库(配置) or (not 清空 and not bucket.get("loaded")):
+        return
+    config = copy.deepcopy(dict(配置))
+    config["__mantou_bot_appid__"] = _作用域(配置)
+    snapshot = {"schema_version": 1, "uid": str(state.get("uid") or ""),
+                "revision": str(state.get("revision") or ""),
+                "reading": _规范阅读活动(bucket.get("reading")),
+                "reward_logs": copy.deepcopy(bucket.get("reward_logs", [])[-100:]),
+                "progress": _规范阅读进度(bucket.get("progress"))}
+    scope = _任务键(配置)
+    _待写阅读记录[scope] = (config, snapshot)
+    _启动阅读写入(scope)
+
+
+async def _冲刷阅读记录(配置: Any = None) -> None:
+    scopes = [_任务键(配置)] if 配置 is not None else list(set(_待写阅读记录) | set(_阅读写入任务))
+    for scope in scopes:
+        _启动阅读写入(scope)
+    tasks = [_阅读写入任务[scope] for scope in scopes if scope in _阅读写入任务]
+    if tasks:
+        await _等待阅读写入(asyncio.gather(*tasks, return_exceptions=True))
+
+
+async def _清理阅读记录(配置: Any, state: dict[str, Any]) -> None:
     scope = _任务键(配置)
     for key in list(_阅读记录):
         if key[0] == scope:
             _阅读记录.pop(key, None)
+    _排队阅读记录(配置, state, {}, 清空=True)
+    await _冲刷阅读记录(配置)
 
 
 def _奖励日志摘要(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -202,7 +395,7 @@ def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
         # 长期进程的历史账号记录也有上限，不把账号身份放进返回内容。
         while len(_阅读记录) >= 128:
             _阅读记录.pop(next(iter(_阅读记录)))
-        _阅读记录[key] = {"reading": {}, "reward_logs": []}
+        _阅读记录[key] = {"reading": {}, "reward_logs": [], "new_logs": []}
     reward = _奖励日志摘要(奖励结果)
     if exc is None and event == "reward_not_collected" and success is False:
         category = reward.get("category", "")
@@ -213,6 +406,9 @@ def _记录阅读活动(配置: Any, state: dict[str, Any], event: str, *,
     bucket["reading"] = record
     if event in _奖励事件 and success is not None:
         bucket["reward_logs"] = [*bucket["reward_logs"], record][-100:]
+        if not bucket.get("loaded"):
+            bucket["new_logs"] = [*bucket.get("new_logs", []), record][-100:]
+    _排队阅读记录(配置, state, bucket)
 
 
 def _阅读摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
@@ -316,7 +512,7 @@ async def 登录STV账号(配置: Any, username: str, password: str, *, 注册: 
                          "cookies": client.export_cookies(), "revision": uuid.uuid4().hex,
                          "auth_status": "valid", "last_event": stage, "last_time": int(time.time())}
                 await _写状态(配置, state, 提交前校验)
-                _清理阅读记录(配置)
+                await _清理阅读记录(配置, state)
                 _日志(配置, state, stage)
         except Exception as exc:
             _日志(配置, old, stage, exc)
@@ -331,7 +527,7 @@ async def 删除STV账号(配置: Any, *, 提交前校验: Callable[[], bool] | 
     async with _锁(配置):
         state = await _读状态(配置)
         await _写状态(配置, _空状态(), 提交前校验)
-        _清理阅读记录(配置)
+        await _清理阅读记录(配置, _空状态())
         _日志(配置, state, "logout")
     await _同步任务(配置)
     return await 读取STV账号摘要(配置)
@@ -471,6 +667,7 @@ async def 停止STV后台任务() -> None:
             task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    await _冲刷阅读记录()
     await _close_idle_connector()
 
 
@@ -557,11 +754,13 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
             return (_服务运行 and row["revision"] == revision and row["uid"] == uid
                     and row["online_enabled"] and row["auth_status"] != "invalid")
 
-        heartbeat_due = reading_due = time.monotonic()
+        progress = _规范阅读进度(_阅读记录.get(_阅读记录键(配置, state), {}).get("progress"))
+        heartbeat_due = time.monotonic()
+        reading_due = heartbeat_due + max(0, min(300, progress.get("next_read_at", 0) - time.time()))
         reward_due = float("inf")
         reward_cid = ""
-        recent: list[tuple[str, str, str]] = []
-        last_book = None
+        recent: list[tuple[str, str, str]] = [tuple(row) for row in progress.get("recent", [])]
+        last_book = tuple(progress["last_book"]) if progress.get("last_book") else None
         reading_stage = "book"
         chapter: dict[str, Any] = {}
         failures = 0
@@ -629,6 +828,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected",
                                         奖励结果=reward_details)
                                     reward_pending = False
+                                    await _冲刷阅读记录(配置)
                                     reward_cid = ""
                                     state["rewards_enabled"] = True
                                     await _写状态(配置, state)
@@ -675,12 +875,18 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
                                     reading_stage = "chapter"
                                 else:
-                                    reading_due = time.monotonic() + _随机.randint(180, 300)
+                                    delay = _随机.randint(180, 300)
+                                    reading_due = time.monotonic() + delay
+                                    _阅读记录[_阅读记录键(配置, state)]["progress"] = {
+                                        "next_read_at": time.time() + delay,
+                                        "last_book": list(last_book), "recent": [list(row) for row in recent],
+                                    }
                                     if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
                                         reward_cid = str(chapter["cid"])
                                         reward_due = time.monotonic() + 15
                                     reading_stage = "book"
                                     _日志(配置, state, "reading_completed")
+                                    await _冲刷阅读记录(配置)
                         failures = 0
                     except Exception as exc:
                         async with _锁(配置):
