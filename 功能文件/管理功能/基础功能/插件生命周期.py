@@ -94,7 +94,11 @@ async def _同步当前机器人账号状态(配置: Any) -> None:
         try:
             await STV小说.启动STV后台任务(配置)
         except Exception as 异常:
-            logger.warning("插件后台状态同步失败：stage=stv, error_type=%s", type(异常).__name__)
+            分类 = getattr(异常, "category", "unknown")
+            if 分类 not in {"invalid_scope", "account_state_invalid", "account_identity_invalid"}:
+                分类 = "unknown"
+            logger.warning("插件后台状态同步失败：stage=stv, appid=%s, error_type=%s, category=%s",
+                           机器人作用域.获取当前机器人AppID(配置) or "none", type(异常).__name__, 分类)
 
     await asyncio.gather(_白名单(), _阅读(), _STV())
 

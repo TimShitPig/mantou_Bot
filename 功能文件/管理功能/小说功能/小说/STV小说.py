@@ -39,6 +39,14 @@ _随机 = random.SystemRandom()
 _声明 = "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。内容版权归原作者及相关平台所有，请勿用于商业用途或二次传播。如喜欢本书，请支持正版。"
 
 
+class _STV账号状态错误(ValueError):
+    def __init__(self, category: str):
+        提示 = {"invalid_scope": "请选择有效机器人", "account_state_invalid": "STV账号状态无效",
+              "account_identity_invalid": "STV账号身份无效"}
+        self.category = category if category in 提示 else "account_state_invalid"
+        super().__init__(提示[self.category])
+
+
 def _空状态() -> dict[str, Any]:
     return {"uid": "", "username": "", "cookies": [], "revision": "",
             "auth_status": "unknown", "online_enabled": False, "rewards_enabled": False,
@@ -48,12 +56,12 @@ def _空状态() -> dict[str, Any]:
 def _作用域(配置: Any) -> str:
     appid = 获取当前机器人AppID(配置)
     if not re.fullmatch(r"[0-9]{4,32}", str(appid or "")):
-        raise ValueError("请选择有效机器人")
+        raise _STV账号状态错误("invalid_scope")
     return appid
 
 
 def _任务键(配置: Any) -> str:
-    values = json.dumps(获取数据库配置(配置), sort_keys=True, default=str)
+    values = json.dumps(获取数据库配置(配置) if 已配置运行状态数据库(配置) else {}, sort_keys=True, default=str)
     return _作用域(配置) + ":" + hashlib.sha256(values.encode()).hexdigest()
 
 
@@ -72,11 +80,14 @@ def _读取(配置: Any) -> dict[str, Any]:
     raw = 读取运行状态值(配置, _命名空间, _状态键, "")
     if not raw:
         return _空状态()
-    state = json.loads(raw)
+    try:
+        state = json.loads(raw)
+    except (TypeError, ValueError):
+        raise _STV账号状态错误("account_state_invalid") from None
     if not isinstance(state, dict) or not isinstance(state.get("cookies"), list):
-        raise ValueError("STV账号状态无效")
+        raise _STV账号状态错误("account_state_invalid")
     if state.get("uid") and not re.fullmatch(r"[1-9][0-9]{0,31}", str(state["uid"])):
-        raise ValueError("STV账号身份无效")
+        raise _STV账号状态错误("account_identity_invalid")
     result = {**_空状态(), **{key: state[key] for key in _空状态() if key in state}}
     for field in ("online_enabled", "rewards_enabled"):
         result[field] = result[field] is True
@@ -297,6 +308,9 @@ async def _取消作用域任务(配置: Any) -> None:
 async def 启动STV后台任务(配置: Any) -> None:
     global _服务运行
     _服务运行 = True
+    # 生命周期尚未枚举到机器人时没有账号作用域，不能恢复任务或借用其他机器人。
+    if not 获取当前机器人AppID(配置):
+        return
     await _同步任务(配置)
 
 
