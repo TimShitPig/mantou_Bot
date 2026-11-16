@@ -25,7 +25,7 @@ from .STV协议 import STVClient, STVError, _close_idle_connector
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
-    已配置运行状态数据库, 读取运行状态值, 写入运行状态值, 获取数据库配置,
+    已配置运行状态数据库, 读取运行状态值, 写入运行状态值, 获取数据库配置, 数据库连接错误,
 )
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
@@ -136,7 +136,9 @@ def _日志(配置: Any, state: dict[str, Any], event: str, exc: Exception | Non
     else:
         logger.warning("STV账号任务失败：appid=%s, uid=%s, stage=%s, error_type=%s, category=%s, http_status=%s, code=%s",
                        _作用域(配置), state.get("uid") or "none", event, type(exc).__name__,
-                       getattr(exc, "category", "unknown"), getattr(exc, "http_status", None), getattr(exc, "code", None))
+                       exc.reason if isinstance(exc, 数据库连接错误) else getattr(exc, "category", "unknown"),
+                       getattr(exc, "http_status", None),
+                       exc.mysql_code if isinstance(exc, 数据库连接错误) else getattr(exc, "code", None))
 
 
 def _摘要(配置: Any, state: dict[str, Any]) -> dict[str, Any]:
@@ -294,11 +296,19 @@ async def _替换任务(配置: Any) -> None:
     if not _服务运行:
         return
     async with _锁(配置):
-        state = await _读状态(配置)
-        if _服务运行 and state["online_enabled"] and state["uid"] and state["auth_status"] != "invalid":
+        try:
+            state = await _读状态(配置)
+        except Exception as exc:
+            if not _可恢复后台错误(exc):
+                raise
+            # 启动时的瞬时读库失败也交给同一任务恢复，不能只留下已开启的配置。
+            state = None
+        if _服务运行 and (state is None or (
+            state["online_enabled"] and state["uid"] and state["cookies"] and state["auth_status"] != "invalid"
+        )):
             snapshot = copy.deepcopy(dict(配置))
             snapshot["__mantou_bot_appid__"] = _作用域(配置)
-            task = asyncio.create_task(_后台任务(snapshot, state["revision"]), name="STV在线任务:" + _作用域(配置))
+            task = asyncio.create_task(_后台任务(snapshot, state["revision"] if state else None), name="STV在线任务:" + _作用域(配置))
             _任务表[key] = task
 
 
@@ -333,12 +343,81 @@ async def 停止STV后台任务() -> None:
     await _close_idle_connector()
 
 
-async def _后台任务(配置: Any, revision: str) -> None:
+def _可恢复后台错误(exc: Exception) -> bool:
+    if isinstance(exc, 数据库连接错误):
+        return exc.reason in {"dns", "timeout", "network", "server_busy"} or exc.mysql_code in {2006, 2013}
+    return isinstance(exc, (TimeoutError, ConnectionError)) or (
+        isinstance(exc, STVError) and exc.category in {"timeout", "network_error", "session_closed"}
+    )
+
+
+async def _后台任务(配置: Any, revision: str | None) -> None:
+    state = _空状态()
+    uid = None
+    failures = 0
+    try:
+        while _服务运行:
+            entered = False
+            try:
+                state = await _读状态(配置)
+                if (not _服务运行 or not state["online_enabled"] or not state["uid"] or not state["cookies"]
+                        or state["auth_status"] == "invalid"
+                        or (revision is not None and state["revision"] != revision)
+                        or (uid is not None and state["uid"] != uid)):
+                    return
+                revision, uid = state["revision"], state["uid"]
+                entered = True
+                failure = await _执行在线任务(配置, revision, uid)
+                if failure is None:
+                    return
+                failed_state, exc = failure
+                if failed_state["revision"] == revision and failed_state["uid"] == uid:
+                    state = failed_state
+                raise exc
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not entered:
+                    _日志(配置, state, "online_state", exc)
+                if _可恢复后台错误(exc):
+                    failures += 1
+                    _日志(配置, state, "online_retry_wait")
+                    await asyncio.sleep(min(5 * 2 ** min(failures - 1, 6), 300))
+                    # 每次恢复都重新校验固定账号代次、身份和最新开关；不保存旧会话奖励。
+                    continue
+                # 无法恢复时同步关闭当前账号的挂时长，避免开关亮着但任务已消失。
+                while _服务运行:
+                    try:
+                        async with _锁(配置):
+                            latest = await _读状态(配置)
+                            if (_服务运行 and revision is not None and latest["revision"] == revision
+                                    and latest["uid"] == uid and latest["online_enabled"]):
+                                if latest["cookies"] != state["cookies"]:
+                                    break
+                                latest.update(online_enabled=False, last_event="online_error", last_time=int(time.time()))
+                                await _写状态(配置, latest)
+                        return
+                    except Exception as update_exc:
+                        _日志(配置, state, "online_state", update_exc)
+                        if not _可恢复后台错误(update_exc):
+                            return
+                        # 只恢复关闭状态的读写，不因同步失败重跑在线或领奖操作。
+                        failures += 1
+                        await asyncio.sleep(min(5 * 2 ** min(failures - 1, 6), 300))
+    except asyncio.CancelledError:
+        _日志(配置, state, "online_stopped")
+        raise
+    finally:
+        key = _任务键(配置)
+        if _任务表.get(key) is asyncio.current_task():
+            _任务表.pop(key, None)
+
+
+async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dict[str, Any], Exception] | None:
     state = _空状态()
     stage = "online"
     try:
         state = await _读状态(配置)
-        uid = state["uid"]
 
         def current(row: dict[str, Any]) -> bool:
             return (_服务运行 and row["revision"] == revision and row["uid"] == uid
@@ -352,6 +431,8 @@ async def _后台任务(配置: Any, revision: str) -> None:
         reading_stage = "book"
         chapter: dict[str, Any] = {}
         failures = 0
+        if not current(state):
+            return
         _日志(配置, state, "online_started")
         while True:
             async with _锁(配置):
@@ -488,14 +569,10 @@ async def _后台任务(配置: Any, revision: str) -> None:
                         deadlines.append(reward_due)
                     await asyncio.sleep(max(0.1, min(deadlines) - time.monotonic()))
     except asyncio.CancelledError:
-        _日志(配置, state, "online_stopped")
         raise
     except Exception as exc:
         _日志(配置, state, stage, exc)
-    finally:
-        key = _任务键(配置)
-        if _任务表.get(key) is asyncio.current_task():
-            _任务表.pop(key, None)
+        return state, exc
 
 
 def 提取STV书籍编号(source: Any) -> str:
