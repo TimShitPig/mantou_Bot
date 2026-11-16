@@ -883,7 +883,8 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     }
                                     if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
                                         reward_cid = str(chapter["cid"])
-                                        reward_due = time.monotonic() + 15
+                                        # 本章停留结束、切章前查询新通知，避免过早检查后漏掉晚到奖励。
+                                        reward_due = reading_due
                                     reading_stage = "book"
                                     _日志(配置, state, "reading_completed")
                                     await _冲刷阅读记录(配置)
