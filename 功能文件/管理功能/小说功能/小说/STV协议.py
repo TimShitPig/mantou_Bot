@@ -351,6 +351,8 @@ class STVClient:
         host, bookid = _identity(host, bookid)
         body, _ = await self._request("GET", "/mobile/bookinfo.php", {"host": host, "hid": bookid})
         data = self._json(body)
+        if str(data.get("code")) == "101":
+            raise STVError("book_unavailable", 200, data.get("code"))
         self._code(data, "100")
         if not isinstance(data.get("book"), dict):
             raise STVError("invalid_response", 200)

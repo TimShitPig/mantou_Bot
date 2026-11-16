@@ -1275,6 +1275,8 @@ def 规范化找书状态(value: Any, *, platform: str = "", field: str = "") ->
     if value is None or not isinstance(value, (str, int, float, bool)):
         return "未知"
     文本 = str(value).strip().casefold()
+    if platform == "STV" and 文本 == "暂停":
+        return "暂停"
     if 文本 in {"完结", "已完结", "完本", "已完本", "全本", "已完成", "finish", "finished", "completed", "complete"}:
         return "完结"
     if 文本 in {"连载", "连载中", "更新中", "连载更新", "未完结", "尚未完结", "未完本", "ongoing", "serial", "serializing", "updating"}:
@@ -3078,7 +3080,10 @@ def _找书展示字段(项: dict[str, Any]) -> tuple[str, str, str, str]:
     书名 = 清理文本(项.get("title") or "未知") or "未知"
     作者 = 清理文本(项.get("author") or "未知") or "未知"
     平台 = 清理文本(项.get("platform") or "未知") or "未知"
-    return 书名, 作者, 平台, 规范化找书状态(项, platform=平台)
+    状态 = 规范化找书状态(项, platform=平台)
+    if 平台 == "STV":
+        平台 = STV小说.获取STV书源名称(项.get("book_id")) if STV小说 is not None else "未知书源"
+    return 书名, 作者, 平台, 状态
 
 
 找书书目分隔线 = "──────────"

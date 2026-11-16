@@ -766,14 +766,33 @@ def 构造STV链接(book_id: str) -> str:
     return f"https://sangtacviet.com/truyen/{host}/1/{number}/"
 
 
+def 获取STV书源名称(identity: Any) -> str:
+    """只显示官方书源标识已核实的中文站名，不根据未知标识猜测。"""
+    book_id = 提取STV书籍编号(identity)
+    host = book_id.partition("/")[0] if book_id else ""
+    names = {
+        "qidian": "起点中文网", "idejian": "得间小说", "qimao": "七猫小说",
+        "fanqie": "番茄小说", "jjwxc": "晋江文学城", "sfacg": "菠萝包轻小说",
+        "kujiang": "酷匠网", "tadu": "塔读小说", "zongheng": "纵横中文网",
+        "69shuorg": "69书吧", "acqq": "腾讯动漫", "ciweimao": "刺猬猫阅读",
+        "faloo": "飞卢小说网", "linovel": "轻之文库", "kanman": "看漫网",
+        "ptwxz": "飘天文学", "quanben5": "全本小说网", "biquge5200": "新笔趣阁5200",
+    }
+    return names.get(host, "未知书源")
+
+
 def _文本(value: Any) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", "", html.unescape(re.sub(r"<[^>]*>", "", str(value or "")))).strip()
 
 
 def _元数据(row: dict[str, Any], identity: str) -> dict[str, Any]:
-    status_raw = _文本(row.get("status")).casefold()
+    status_value = row.get("status")
+    status_raw = _文本(status_value).casefold()
     status = "完结" if status_raw in {"hoàn thành", "hoàn tất", "已完结", "完结", "completed"} else (
-        "连载" if status_raw in {"còn tiếp", "đang ra", "连载", "连载中", "ongoing"} else "未知")
+        "连载" if status_raw in {"còn tiếp", "đang ra", "连载", "连载中", "ongoing"} else
+        "暂停" if status_raw == "tạm ngưng" else "未知")
+    if isinstance(status_value, (int, str)) and not isinstance(status_value, bool):
+        status = {"0": "未知", "1": "连载", "2": "暂停", "3": "完结"}.get(str(status_value).strip(), status)
     count = row.get("word_count")
     if isinstance(count, bool) or not re.fullmatch(r"[1-9][0-9]*", str(count or "")):
         count = 0
