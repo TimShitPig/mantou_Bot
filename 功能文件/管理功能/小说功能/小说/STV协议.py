@@ -8,6 +8,7 @@ import html
 import json
 import re
 import time
+import unicodedata
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from typing import Any
@@ -785,6 +786,42 @@ def _cultivation_number(value):
     return float(value) if "." in value else int(value)
 
 
+def _cultivation_realm_text(value: str) -> str:
+    # 当前截图的玄道和官方新手说明第5节的明确汉越境界；未知名称不套用已有境界。
+    realms = {
+        "huyền đạo": "玄道", "võ đồ": "武徒", "võ sư": "武师", "võ tông": "武宗",
+        "võ vương": "武王", "võ hoàng": "武皇", "võ đế": "武帝", "võ thánh": "武圣",
+        "võ thần": "武神", "tiêu dao": "逍遥", "vô cực": "无极", "thái thượng": "太上",
+    }
+    ranks = {"nhất": "一", "nhị": "二", "tam": "三", "tứ": "四", "ngũ": "五",
+             "lục": "六", "thất": "七", "bát": "八", "cửu": "九"}
+    phases = {"sơ kỳ": "初期", "trung kỳ": "中期", "hậu kỳ": "后期"}
+    text = " ".join(unicodedata.normalize("NFC", value).split())
+    if re.fullmatch(r"[\u3400-\u9fff0-9\s]+", text) and re.search(r"[\u3400-\u9fff]", text):
+        return text
+    normalized = text.casefold()
+    if normalized in realms:
+        return realms[normalized]
+    for source, translated in realms.items():
+        if not normalized.startswith(source + " "):
+            continue
+        suffix = normalized[len(source) + 1:]
+        if suffix in phases:
+            return translated + phases[suffix]
+        match = re.fullmatch(r"(nhất|nhị|tam|tứ|ngũ|lục|thất|bát|cửu|[1-9]) trọng", suffix)
+        if match:
+            rank = ranks.get(match[1]) or "一二三四五六七八九"[int(match[1]) - 1]
+            return translated + rank + "重"
+    return "暂未识别境界"
+
+
+def _cultivation_status_text(value: str) -> str:
+    text = " ".join(unicodedata.normalize("NFC", value).split())
+    if re.fullmatch(r"[\u3400-\u9fff\s]+", text):
+        return text
+    return {"đang lịch luyện": "正在历练", "đang tu luyện": "正在修炼"}.get(text.casefold(), "暂未识别状态")
+
+
 def _parse_cultivation_profile(html, user_id):
     parser = _CultivationParser()
     parser.feed(html)
@@ -861,11 +898,13 @@ def _parse_cultivation_profile(html, user_id):
     available = any(enabled(node) and re.fullmatch(
         r"\s*(?:return\s+)?UserTool\.showBreakThongThan\(\s*(?:this)?\s*\)\s*;?\s*",
         node.attrs.get("onclick") or "") for node in page.walk())
-    return {"user_id": str(user_id), "realm": realm,
+    speed_per_minute = _cultivation_number(speed_match[1])
+    speed_display = str(speed_per_minute).removesuffix(".0")
+    return {"user_id": str(user_id), "realm": _cultivation_realm_text(realm),
             "cultivation": {"current": current, "minimum": minimum, "next": next_value, "text": cultivation.text()},
             "foundation": {"current": foundation_current, "maximum": foundation_max, "text": foundation.text()},
-            "speed": {"per_minute": _cultivation_number(speed_match[1]), "text": speed_node.text(),
+            "speed": {"per_minute": speed_per_minute, "text": f"每分钟 +{speed_display} 修为",
                       "basis": speed_node.attrs.get("title", "")},
-            "status": status, "training_minutes": count("Đã tu luyện", "phút"),
+            "status": _cultivation_status_text(status), "training_minutes": count("Đã tu luyện", "phút"),
             "read_chapters": count("Đã đọc", "chương"), "attributes": attributes,
             "breakthrough_available": available}

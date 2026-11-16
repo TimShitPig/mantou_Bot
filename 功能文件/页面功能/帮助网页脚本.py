@@ -1671,8 +1671,9 @@
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
 
       const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null, requestedTabs:new Set()};
-      const stvVisible = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && document.visibilityState !== 'hidden' && Boolean(consoleAppid);
-      const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvVisible();
+      const stvActive = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && Boolean(consoleAppid);
+      const stvVisible = () => stvActive() && document.visibilityState !== 'hidden';
+      const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvActive();
       const stvReadingVisible = () => stvVisible() && stv.mode === 'detail' && stv.tab === 'reading' && $('stv-account-dialog')?.open;
       const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password','stv-item-id']) if ($(id)) $(id).value = ''; };
       const setSTVMessage = (text, source = 'action') => { stv.messageSource = source; if ($('stv-result')) $('stv-result').textContent = text; };
@@ -1925,11 +1926,11 @@
         if (action === 'use' && !confirm('确认使用这一件物品？结果未确认时，请先查询背包，勿重复提交。')) return;
         void mutateSTV(action, {item_id:itemId});
       });
-      const syncSTVTab = () => { if (stvVisible()) void loadSTV(); else leaveSTV(); };
+      const syncSTVTab = () => { if (!stvActive()) leaveSTV(); else if (stvVisible()) void loadSTV(); else stopSTVPoll(); };
       botTabs?.addEventListener('click', () => queueMicrotask(syncSTVTab));
       botTabs?.addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) queueMicrotask(syncSTVTab); });
       window.addEventListener('pagehide', leaveSTV);
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveSTV(); else syncSTVTab(); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') stopSTVPoll(); else syncSTVTab(); });
 
       const leaveQQReader = () => backQQReaderList(false);
       window.addEventListener('pagehide', () => {
