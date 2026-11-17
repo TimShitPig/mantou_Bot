@@ -261,12 +261,18 @@ def 获取事件配置(event: Any, 配置: Any) -> Any:
     return 获取机器人配置(配置, 获取事件机器人AppID(event))
 
 
+def _获取基础配置(配置: Any) -> Any:
+    # AstrBotConfig 的缺失属性返回 None，getattr 的默认值不会生效。
+    基础 = getattr(配置, "基础配置", None)
+    return 配置 if 基础 is None else 基础
+
+
 def 机器人作用域缓存键(配置: Any) -> tuple[int, str]:
-    return id(getattr(配置, "基础配置", 配置)), 获取当前机器人AppID(配置)
+    return id(_获取基础配置(配置)), 获取当前机器人AppID(配置)
 
 
 def 枚举机器人配置(配置: Any, 上下文: Any = None) -> list[Any]:
-    基础 = getattr(配置, "基础配置", 配置)
+    基础 = _获取基础配置(配置)
     数据 = _原配置字典(基础) or {}
     appids = {规范化机器人AppID(值) for 值 in (数据.get("bot_profiles") or {})}
     if 上下文 is None:
