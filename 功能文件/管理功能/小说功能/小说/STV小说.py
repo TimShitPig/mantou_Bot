@@ -923,9 +923,12 @@ async def _取消作用域任务(配置: Any) -> None:
             await asyncio.gather(task, return_exceptions=True)
 
 
-async def 启动STV后台任务(配置: Any) -> None:
+async def 启动STV后台任务(配置: Any = None) -> None:
     global _服务运行
     _服务运行 = True
+    # 先恢复服务生命周期；无配置时不借用调用方的机器人作用域。
+    if 配置 is None:
+        return
     # 生命周期尚未枚举到机器人时没有账号作用域，不能恢复任务或借用其他机器人。
     if not 获取当前机器人AppID(配置):
         return

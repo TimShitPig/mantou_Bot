@@ -103,6 +103,8 @@ async def 同步STV后台任务(句柄: dict[str, Any] | None) -> None:
     # 平台可能在插件初始化之后才加载；补启动只接受仍存活的当前代句柄。
     if not 句柄 or 句柄 is not _当前句柄 or 句柄.get("stopped"):
         return
+    # 空枚举也须恢复服务标记，后续带有效作用域的开关请求才能创建任务。
+    await STV小说.启动STV后台任务()
 
     async def _同步(当前配置: Any) -> None:
         appid = 机器人作用域.获取当前机器人AppID(当前配置)
