@@ -412,35 +412,46 @@ class STVClient:
         )
         raise STVError(category, 200, data.get("code"))
 
-    async def chapter(self, host: str, bookid: str, cid: str) -> dict[str, Any]:
+    async def chapter(self, host: str, bookid: str, cid: str, *, reward_reading: bool = False) -> dict[str, Any]:
         host, bookid = _identity(host, bookid)
         cid = _item_id(cid)
         async with self._reading_lock:
-            if self._key_target != (host, bookid) or not self._key:
-                await self._chapter_key(host, bookid)
-            data = await self._chapter_raw(host, bookid, cid)
-            if str(data.get("code")) == "10002":
-                await self._chapter_key(host, bookid)
-                data = await self._chapter_raw(host, bookid, cid)
-            self._chapter_code(data)
-            try:
-                content = html_to_chinese_text(data.get("data") or "")
-            except (ValueError, TypeError):
-                jar = self._session().cookie_jar
+            jar = self._session().cookie_jar
+            saved_mode = jar.filter_cookies(URL(BASE)).get("transmode")
+            old_mode = saved_mode.value if saved_mode is not None else "chinese"
+            if reward_reading:
+                # 官方普通阅读使用 name 模式，保留真实 i[t] 词条供奖励条件判断。
                 jar.update_cookies({"transmode": "name"}, response_url=URL(BASE))
-                try:
+            try:
+                if self._key_target != (host, bookid) or not self._key:
+                    await self._chapter_key(host, bookid)
+                data = await self._chapter_raw(host, bookid, cid)
+                if str(data.get("code")) == "10002":
+                    await self._chapter_key(host, bookid)
                     data = await self._chapter_raw(host, bookid, cid)
-                finally:
-                    jar.update_cookies({"transmode": "chinese"}, response_url=URL(BASE))
                 self._chapter_code(data)
                 try:
                     content = html_to_chinese_text(data.get("data") or "")
-                except (ValueError, TypeError) as exc:
-                    raise STVError("chinese_body_missing", 200) from exc
-            if not content.strip():
-                raise STVError("chapter_empty", 200)
-            return {"title": str(data.get("chaptername") or ""), "content": content,
-                    "reward_token_count": len(re.findall(r"<i(?:\s|>)", data.get("data") or "", re.IGNORECASE))}
+                except (ValueError, TypeError):
+                    jar = self._session().cookie_jar
+                    jar.update_cookies({"transmode": "name"}, response_url=URL(BASE))
+                    try:
+                        data = await self._chapter_raw(host, bookid, cid)
+                    finally:
+                        jar.update_cookies({"transmode": "chinese"}, response_url=URL(BASE))
+                    self._chapter_code(data)
+                    try:
+                        content = html_to_chinese_text(data.get("data") or "")
+                    except (ValueError, TypeError) as exc:
+                        raise STVError("chinese_body_missing", 200) from exc
+                if not content.strip():
+                    raise STVError("chapter_empty", 200)
+                return {"title": str(data.get("chaptername") or ""), "content": content,
+                        "reward_token_count": len(re.findall(r"<i(?:\s|>)", data.get("data") or "", re.IGNORECASE))}
+            finally:
+                if reward_reading:
+                    jar.update_cookies({"transmode": old_mode}, response_url=URL(BASE))
+
 
     def _clear_account(self) -> None:
         self._session().cookie_jar.clear(lambda cookie: cookie.key in {"access", "useri2", "readcontextid"})
@@ -514,6 +525,16 @@ class STVClient:
             self._reward_offer = (self.uid, time.monotonic())
         return available
 
+    def _reward_json(self, body: str) -> dict[str, Any]:
+        data = self._json(body, mutation=True)
+        reason = data.get("err")
+        if (str(data.get("code")) != "1" and isinstance(reason, str)
+                and unicodedata.normalize("NFC", reason).strip().casefold() in {
+                    "bạn chưa đăng nhập", "bạn chưa đăng nhập!",
+                }):
+            raise STVError("reward_login_required", 200, data.get("code"))
+        return data
+
     async def collect_reward(self, cid: str) -> dict[str, Any]:
         cid = _item_id(cid)
         offer, self._reward_offer = self._reward_offer, None
@@ -522,7 +543,7 @@ class STVClient:
         if not offer or offer[0] != self.uid or not 0 <= time.monotonic() - offer[1] <= 300:
             raise STVError("reward_unavailable")
         body, _ = await self._request("POST", "/index.php", {"ngmar": "collect"}, {"sajax": "collect"}, mutation=True, account=True, limit=1024 * 1024)
-        item = self._json(body, mutation=True)
+        item = self._reward_json(body)
         if not all(key in item for key in ("name", "info", "level", "type")) or not isinstance(item["name"], str) or not item["name"].strip() or not isinstance(item["info"], str):
             raise STVError("operation_unconfirmed", 200)
         form = {"ajax": "fcollect", "c": cid}
@@ -532,7 +553,7 @@ class STVClient:
                 raise STVError("operation_unconfirmed", 200)
             form.update(newname=name, newinfo=info)
         body, _ = await self._request("POST", "/index.php", {"ngmar": "fcl"}, form, mutation=True, account=True, limit=1024 * 1024)
-        result = self._json(body, mutation=True)
+        result = self._reward_json(body)
         code = result.get("code")
         if (not isinstance(code, (str, int)) or isinstance(code, bool)
                 or not re.fullmatch(r"-?[0-9]{1,12}", str(code))):

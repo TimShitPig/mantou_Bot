@@ -50,7 +50,7 @@ _阅读错误分类 = frozenset({
     "access_denied", "operation_unconfirmed", "business_error", "invalid_response", "empty_response",
     "response_too_large", "invalid_cookie", "empty_recommendations", "empty_catalog", "empty_content",
     "catalog_empty", "chapter_empty", "chinese_body_missing", "js_runtime_missing", "js_decode_failed",
-    "reward_unavailable", "database_error", "reward_expired", "reward_not_found", "reward_rejected",
+    "reward_unavailable", "database_error", "reward_expired", "reward_not_found", "reward_rejected", "reward_login_required",
 })
 _服务运行 = globals().get("_服务运行", True)
 _命名空间 = "stv_auth"
@@ -1130,7 +1130,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     raise STVError("empty_catalog")
                                 next_chapter = _随机.choice(choices)
                             else:
-                                body = await client.chapter(*last_book, str(chapter["cid"]))
+                                body = await client.chapter(*last_book, str(chapter["cid"]), reward_reading=True)
                                 chars = len(re.sub(r"\s", "", body["content"]))
                                 if not chars:
                                     raise STVError("empty_content")
