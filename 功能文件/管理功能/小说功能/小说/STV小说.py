@@ -1122,6 +1122,8 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                 books = await client.recommended()
                                 choices = [row for row in books if (str(row["host"]), str(row["id"])) != last_book]
                                 if not choices:
+                                    choices = books
+                                if not choices:
                                     raise STVError("empty_recommendations")
                                 book = _随机.choice(choices)
                             elif reading_stage == "detail":
@@ -1151,9 +1153,9 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     reading_stage = "catalog"
                                 elif reading_stage == "catalog":
                                     chapter = next_chapter
-                                    recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
                                     reading_stage = "chapter"
                                 else:
+                                    recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
                                     delay = _随机.randint(180, 300)
                                     reading_due = time.monotonic() + delay
                                     _阅读记录[_阅读记录键(配置, state)]["progress"] = {
