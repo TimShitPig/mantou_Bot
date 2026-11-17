@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.447-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.448-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.447 |
+| 版本 | v6.1.448 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -141,6 +141,8 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 扫码票据按管理员会话和机器人隔离；关闭登录框、切换机器人、退出登录或服务停止会结束旧流程，迟到结果不保存为新账号。资料刷新只有身份接口明确返回失效时才标记失效，单章需要登录或网络失败不会直接判整个账号失效。扫码成功仅表示收到登录凭据，章节权限仍以实际响应为准。
 
 ## STV 账号与修炼
+
+STV 协议请求使用官方 App 网关 `sangtacviet.app`，兼容已有官网域名登录态，无需因本次更换网关重新登录；账号身份、背包及原有操作校验保持不变。
 
 STV 找书的书目来源显示实际书源的中文名称，选书仍通过原 STV 条目下载，不切换到同名平台的其他版本。找书与下载共用官方 App 的书籍状态：1 为连载、2 为暂停、3 为完结，0 或未识别值保持未知；不按其他来源或原著状态替换当前条目。搜索仍可能返回已不可用的旧条目，详情返回 101 时记录书籍不可用，不误判账号失效或继续下载。
 

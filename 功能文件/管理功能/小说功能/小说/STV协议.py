@@ -18,7 +18,10 @@ from urllib.parse import urlencode
 import aiohttp
 from yarl import URL
 
-BASE = "https://sangtacviet.com"
+BASE = "https://sangtacviet.app"
+_DOMAIN = "sangtacviet.app"
+_LEGACY_BASE = "https://sangtacviet.com"
+_COOKIE_DOMAINS = frozenset({_DOMAIN, "sangtacviet.com"})
 UA = (
     "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -192,13 +195,14 @@ class STVClient:
                 not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", name)
                 or not isinstance(value, str) or len(value) > 16384
                 or any(ord(c) < 32 or ord(c) == 127 for c in value)
-                or domain != "sangtacviet.com" or not path.startswith("/") or len(path) > 300
+                or domain not in _COOKIE_DOMAINS or not path.startswith("/") or len(path) > 300
                 or name in {"readcontextid", "transmode", "foreignlang"}
             ):
                 raise STVError("invalid_cookie")
             cookie = SimpleCookie()
             cookie[name] = value
-            cookie[name]["domain"] = domain
+            # 官方 App 在已确认的域名间携带同一登录态；旧会话仅定向迁至当前网关。
+            cookie[name]["domain"] = _DOMAIN
             cookie[name]["path"] = path
             cookie[name]["secure"] = bool(item.get("secure", True))
             if item.get("expires"):
@@ -241,10 +245,10 @@ class STVClient:
 
     def export_cookies(self) -> list[dict[str, Any]]:
         return [
-            {"name": value.key, "value": value.value, "domain": value["domain"] or "sangtacviet.com",
+            {"name": value.key, "value": value.value, "domain": value["domain"] or _DOMAIN,
              "path": value["path"] or "/", "secure": bool(value["secure"]), "expires": value["expires"]}
             for value in self._session().cookie_jar
-            if value["domain"].lstrip(".") == "sangtacviet.com"
+            if value["domain"].lstrip(".") == _DOMAIN
             and value.key not in {"readcontextid", "transmode", "foreignlang"}
         ]
 
@@ -808,7 +812,7 @@ MOCK_ENV = r"""
 var navigator  = { userAgent: __UA__, platform: "Linux armv8l" };
 var document   = { cookie: "mac_tt=true", addEventListener: function(){},
                    createElement: function(){ return {style:{}}; } };
-var location   = { href: "https://sangtacviet.com/app.v2.php", hostname: "sangtacviet.com" };
+var location   = { href: "https://sangtacviet.app/app.v2.php", hostname: "sangtacviet.app" };
 var Capacitor  = { isNativePlatform: function(){ return true; },
                    getPlatformId: function(){ return "android"; }, Plugins: {} };
 var __registered = {};
@@ -1031,8 +1035,13 @@ def _inventory_icon_url(value: Any) -> str:
     """只返回已核实且可访问的官方物品图片，拒绝任意 URL 或查询参数。"""
     if not isinstance(value, str):
         return ""
-    path = value[len(BASE):] if value.startswith(BASE + "/") else value
-    return BASE + path if path in _INVENTORY_ICON_PATHS else ""
+    path = value
+    for origin in (BASE, _LEGACY_BASE):
+        if value.startswith(origin + "/"):
+            path = value[len(origin):]
+            break
+    # 保留已保存的官方图标和分组身份，只切换协议请求网关。
+    return _LEGACY_BASE + path if path in _INVENTORY_ICON_PATHS else ""
 
 
 def _inventory_icon(attrs: dict[str, str], kind: str, level: int | None) -> str:
