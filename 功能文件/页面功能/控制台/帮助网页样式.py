@@ -803,7 +803,7 @@
             .msg-chat.pinned .msg-chat-top strong { color:var(--primary-dark); }
             .msg-chat.pinned .msg-chat-top small { color:var(--primary-dark); }
             .msg-chat-top strong.admin,
-            .msg-chat.pinned .msg-chat-top strong.admin { color:#dc2626 !important; font-weight:700; }
+            .msg-chat.pinned .msg-chat-top strong.admin { color:var(--ink); font-weight:700; }
             .msg-chat-avatar { position:relative; width:40px; height:40px; flex:0 0 auto; display:grid; place-items:center; border-radius:50%; background:var(--primary-soft); color:var(--primary); font-size:14px; font-weight:800; overflow:hidden; }
             .msg-chat-avatar img { width:100%; height:100%; object-fit:cover; position:relative; z-index:1; border-radius:50%; }
             .msg-chat-avatar .avatar-letter { position:absolute; inset:0; display:grid; place-items:center; font-size:14px; font-weight:800; color:var(--primary); }
@@ -1220,7 +1220,7 @@
               :root[data-theme="dark"] .msg-chat.pinned.active { background:var(--primary-soft); }
               :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong { color:var(--primary); }
               :root[data-theme="dark"] .msg-chat.pinned .msg-chat-top small { color:var(--muted); }
-              :root[data-theme="dark"] .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-head-name.admin { color:var(--danger) !important; }
+              :root[data-theme="dark"] .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-chat.pinned .msg-chat-top strong.admin,:root[data-theme="dark"] .msg-head-name.admin { color:var(--ink) !important; }
               :root[data-theme="dark"] .msg-chat-top strong,:root[data-theme="dark"] .msg-head-name { color:var(--ink); }
               :root[data-theme="dark"] .msg-chat-top small,:root[data-theme="dark"] .msg-chat-sub,:root[data-theme="dark"] .msg-bubble-name,:root[data-theme="dark"] .msg-head-sub { color:var(--muted); }
               :root[data-theme="dark"] .msg-chat-avatar,:root[data-theme="dark"] .msg-avatar { background:#2c3b50; color:#b0c6e4; }
@@ -1636,7 +1636,9 @@
     :root body.messages-workspace .msg-chats { --msg-chat-row-height:66px; padding:5.25px 6.75px 5.25px 7.5px; scrollbar-width:thin; scrollbar-gutter:auto; }
     :root body.messages-workspace .msg-chat { height:66px; min-height:66px; max-height:66px; align-items:center; gap:13.5px; padding:7.5px 10.5px; border-radius:9px; }
     :root body.messages-workspace .msg-chat:hover { background:var(--hover); }
-    :root body.messages-workspace .msg-chat.active,:root body.messages-workspace .msg-chat.pinned.active { background:var(--msg-chat-active-bg); box-shadow:inset 4px 0 var(--primary),inset 0 0 0 1px color-mix(in srgb,var(--primary) 24%,transparent); }
+    :root body.messages-workspace .msg-chat.active,:root body.messages-workspace .msg-chat.pinned.active { background:var(--msg-chat-active-bg); box-shadow:inset 4px 0 var(--primary),inset 0 0 0 1px color-mix(in srgb,var(--primary) 30%,var(--line)); }
+    :root body.messages-workspace .msg-chat.active .msg-chat-top strong { color:var(--ink) !important; font-weight:700; }
+    :root body.messages-workspace .msg-chat.active .msg-chat-top small { color:var(--muted); }
     :root body.messages-workspace .msg-chat-avatar { width:43.5px; height:43.5px; }
     :root body.messages-workspace .msg-chat-top strong { font-size:16.5px; font-weight:500; }
     :root body.messages-workspace .msg-chat-top small { font-size:13.5px; }
