@@ -956,7 +956,9 @@ def _inventory_name_text(value: str) -> str:
     # 仅匹配实际名称；不根据 tag 用类别名称冒充物品名称。
     return {
         "mảnh vụn linh thạch": "灵石碎片", "thiên vận đan": "天运丹",
-        "hạ phẩm tẩy tủy đan": "下品洗髓丹",
+        "hạ phẩm thiên vận đan": "下品天运丹", "thượng phẩm tụ khí đan": "上品聚气丹",
+        "hạ phẩm tẩy tủy đan": "下品洗髓丹", "trung phẩm tẩy tủy đan": "中品洗髓丹",
+        "công kích bí kỹ": "攻击秘技",
         "linh thạch": "灵石", "đan dược": "丹药", "công pháp": "功法", "võ kỹ": "武技",
     }.get(text.casefold(), "名称暂未翻译")
 
@@ -972,14 +974,18 @@ def _inventory_description_text(value: str) -> str:
          "天然形成的灵石，吸收后可增加{0}点修为。"),
         (rf"Tẩy Tủy Đan, loại đan được thường nhe thấy, sử dụng bồi bổ {number} căn cơ\. Khi căn cơ vượt mức lịch luyện sẽ không nhận thêm căn cơ\.",
          "洗髓丹，一种常见丹药，使用后补充{0}点根基。根基超过历练上限时不再增加。"),
+        (rf"Loại đan dược trong truyền thuyết, có thể tăng may mắn cho người sử dụng\. Tăng {number} vận khí\.?",
+         "传说中的丹药，可提升使用者的运气。增加{0}点气运。"),
+        (rf"Tụ Khí Đan là nhất bình thường đan được, chứa bàng bạc linh khí, sử dụng tăng {number} tu vi\.?",
+         "聚气丹是一种普通丹药，蕴含充沛灵气，使用后增加{0}点修为。"),
         (rf"Hấp thu tăng {number} tu vi\.?", "吸收后增加{0}点修为。"),
-        (rf"Sử dụng tăng {number} tu vi\.?", "使用后增加{0}点修为。"),
+        (rf"(?:Sử dụng )?Tăng {number} tu vi\.?", "使用后增加{0}点修为。"),
         (rf"Sử dụng tăng {number}\s*% tốc độ hấp thu linh khí, hiệu lực trong {number} giờ, hiệu lực tối đa {number} viên cùng lúc\.?",
          "使用后灵气吸收速度增加{0}%，持续{1}小时，最多同时生效{2}颗。"),
         (rf"Sử dụng tăng {number}\s*% tốc độ hấp thu linh khí, hiệu lực trong {number} giờ, dùng chồng sẽ không có hiệu quả\.?",
          "使用后灵气吸收速度增加{0}%，持续{1}小时，重复使用不叠加效果。"),
         (rf"Sử dụng bồi bổ {number}\s*(%)? điểm căn cơ\.?", "使用后补充{0}{1}根基。"),
-        (rf"Sử dụng tăng {number} điểm vận khí\.?", "使用后增加{0}点气运。"),
+        (rf"(?:Sử dụng )?Tăng {number} (?:điểm )?vận khí\.?", "使用后增加{0}点气运。"),
         (r"Sử dụng lập tức thoát khỏi (?:trạng thái )?trọng thương\.?", "使用后立即脱离重伤状态。"),
         (rf"Tu luyện gia tăng {number}\s*% tốc độ tu luyện và toàn bộ thuộc tính\.?",
          "修炼后提升{0}%修炼速度及全部属性。"),
@@ -1004,18 +1010,23 @@ def _inventory_description_text(value: str) -> str:
     return "说明暂未翻译"
 
 
-def _inventory_info_text(name: str, info: _CultivationNode) -> str:
+def _inventory_info_text(name: str, info: _CultivationNode, item_level: int | None) -> str:
     text = " ".join(unicodedata.normalize("NFC", info.text()).split())
+    heading = " ".join(unicodedata.normalize("NFC", name).split())
+    level_line = r"(?:Cấp|等级)\s*[:：]\s*([0-9]{1,12})(?:\s+|$)"
     title = next((part for part in info.parts if not isinstance(part, str) or part.strip()), None)
-    heading = title.text() if isinstance(title, _CultivationNode) and title.tag == "b" else name
-    heading = " ".join(unicodedata.normalize("NFC", heading).split())
+    if isinstance(title, _CultivationNode) and title.tag == "b":
+        display_title = unicodedata.normalize("NFC", title.text())
+        # 自定义 itn 可能不同于官网加粗标题；后接等级才能确认是标题。
+        if text.startswith(display_title + " ") and re.match(level_line, text[len(display_title):].lstrip(), re.IGNORECASE):
+            heading = display_title
     pieces = []
     if text == heading or text.startswith(heading + " "):
-        pieces.append(_inventory_name_text(name))
         text = text[len(heading):].strip()
-    level = re.match(r"(?:Cấp|等级)\s*[:：]\s*([0-9]{1,12})(?:\s+|$)", text, re.IGNORECASE)
+    level = re.match(level_line, text, re.IGNORECASE)
     if level:
-        pieces.append("等级：" + level[1])
+        if int(level[1]) != item_level:
+            pieces.append("等级：" + level[1])
         text = text[level.end():]
     description = _inventory_description_text(text)
     if description:
@@ -1107,7 +1118,7 @@ def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[s
         if not name or not info.text():
             raise STVError("invalid_response", 200)
         row = {"i": item_id, "t": kind, "ac": active or active_value in {"1", "true"},
-               "name": _inventory_name_text(name), "info": _inventory_info_text(name, info),
+               "name": _inventory_name_text(name),
                # 官网按每个原始实例计一件，仅多件合并后生成 n；缺少 n 不是未知数量。
                "count": 1}
         for attribute, field in (("l", "level"), ("n", "count")):
@@ -1119,6 +1130,7 @@ def _parse_inventory_fragment(body: str, *, active: bool = False) -> list[dict[s
                 row[field] = int(value)
                 if attribute == "l":
                     row["l"] = value
+        row["info"] = _inventory_info_text(name, info, row.get("level"))
         row["icon"] = _inventory_icon(item.attrs, kind, row.get("level"))
         # 使用原字段分组；两个未翻译名称或不同效果不能因显示占位相同而合并。
         normalize = lambda text: " ".join(unicodedata.normalize("NFC", text or "").split())

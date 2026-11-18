@@ -99,11 +99,6 @@
                     <section id="stv-panel-inventory" class="stv-detail-pane" role="tabpanel" aria-labelledby="stv-tab-inventory" tabindex="0" hidden>
                       <div class="config-actions"><button id="stv-inventory" class="outline-button" type="button" disabled>查询背包</button></div>
                       <div id="stv-inventory-result" class="stv-section-result" aria-live="polite"></div>
-                      <div class="stv-item-detail">
-                        <div class="config-field"><label for="stv-item-id">物品实例 ID</label><input id="stv-item-id" type="text" maxlength="128" autocomplete="off"></div>
-                        <div class="config-actions"><button id="stv-item" class="outline-button" type="button" disabled>物品详情</button><button id="stv-use" class="outline-button" type="button" disabled>使用物品</button></div>
-                        <div id="stv-item-result" class="stv-section-result" aria-live="polite"></div>
-                      </div>
                     </section>
                     <section id="stv-panel-reading" class="stv-detail-pane" role="tabpanel" aria-labelledby="stv-tab-reading" tabindex="0" hidden>
                       <div class="stv-reading-status"><div><span>阅读状态</span><strong id="stv-reading-state">未读取</strong></div><div><span>最近活动</span><strong id="stv-reading-time">—</strong></div></div>
@@ -116,6 +111,21 @@
                   </section>
                   <div id="stv-result" class="config-message" role="status" aria-live="polite"></div>
                 </div>
+                <div id="stv-item-tooltip" class="stv-item-tooltip" role="tooltip" hidden></div>
+                <dialog id="stv-item-dialog" class="qq-reader-modal stv-item-dialog" aria-labelledby="stv-item-title" aria-modal="true" tabindex="-1">
+                  <header class="qq-reader-modal-head">
+                    <h3 id="stv-item-title">物品详情</h3>
+                    <button id="stv-item-close" class="qq-reader-modal-close" type="button" aria-label="关闭物品详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+                  </header>
+                  <div class="qq-reader-modal-body stv-item-dialog-body">
+                    <div id="stv-item-result" class="stv-section-result" aria-live="polite"></div>
+                    <label id="stv-item-choice" for="stv-item-instance" hidden>选择物品实例
+                      <select id="stv-item-instance" class="stv-item-instance"></select>
+                    </label>
+                    <div id="stv-item-message" class="config-message" role="status" aria-live="polite"></div>
+                    <div class="config-actions stv-item-actions"><button id="stv-use" type="button" disabled>使用</button></div>
+                  </div>
+                </dialog>
               </dialog>
             </section>
           </div>

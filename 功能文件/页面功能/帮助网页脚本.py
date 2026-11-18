@@ -1670,15 +1670,15 @@
       window.addEventListener('pagehide', () => leaveJinjiang(false, true));
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leaveJinjiang(); else syncJinjiangTab(); });
 
-      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null};
+      const stv = {auth:null, request:0, generation:0, loading:false, inFlight:null, error:'', messageSource:'', mode:'', tab:'profile', modalUid:'', modalGeneration:0, modalFocus:null, modalOverflow:null, timer:null, item:null, tooltipOwner:null};
       const stvActive = () => activeView === 'bot' && !$('bot-panel-stv')?.hidden && Boolean(consoleAppid);
       const stvVisible = () => stvActive() && document.visibilityState !== 'hidden';
       const stvScopeCurrent = (appid, scope, generation) => appid === consoleAppid && scope === consoleGeneration && generation === stv.generation && stvActive();
       const stvDetailVisible = () => stvVisible() && stv.mode === 'detail' && $('stv-account-dialog')?.open;
-      const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password','stv-item-id']) if ($(id)) $(id).value = ''; };
+      const clearSTVFields = () => { for (const id of ['stv-username','stv-password','stv-repeat-password']) if ($(id)) $(id).value = ''; };
       const setSTVMessage = (text, source = 'action') => { stv.messageSource = source; if ($('stv-result')) $('stv-result').textContent = text; };
       const clearSTVMessage = (source) => { if (source && stv.messageSource !== source) return; stv.messageSource = ''; $('stv-result')?.replaceChildren(); };
-      const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result','stv-item-result']) { const target = $(id); if (target) { target.replaceChildren(); delete target.dataset.snapshot; } } };
+      const clearSTVResults = () => { clearSTVMessage(); for (const id of ['stv-profile-result','stv-inventory-result']) { const target = $(id); if (target) { target.replaceChildren(); delete target.dataset.snapshot; } } };
       const stvTime = (value) => { const date = new Date(Number(value) * 1000); return Number(value) > 0 && Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {hour12:false}) : '暂无记录'; };
       const stvEventLabels = {online:'初始化阅读', online_started:'开始阅读', online_stopped:'阅读已停止', online_retry_wait:'等待恢复', online_state:'读取状态', online_error:'阅读已停止', heartbeat:'在线心跳', reading_book:'选择书籍', reading_detail:'读取书籍详情', reading_catalog:'读取目录', reading_chapter:'读取正文', reading_completed:'已完成本章阅读', reward_status:'检查奖励', reward_collect:'领取奖励', reward_collected:'奖励已领取', reward_not_collected:'未领取奖励', reward_unavailable:'暂无可领取奖励', reward_cancelled:'奖励领取已取消', credential_invalid:'登录已失效'};
       const stvErrorLabels = {timeout:'请求超时', network_error:'连接失败', network:'连接失败', dns:'域名解析失败', server_busy:'服务繁忙', credential_invalid:'登录已失效', verification_required:'需要验证', access_denied:'访问被拒绝', operation_unconfirmed:'结果未确认', cancelled:'已取消', reward_unavailable:'暂无可领取奖励', reward_expired:'奖励已失效', reward_not_found:'未拾得物品', reward_rejected:'服务未接受领取', reward_login_required:'领奖登录状态未被接受', database_error:'状态存储异常', session_closed:'连接已关闭', business_error:'服务未接受操作', invalid_response:'响应格式异常', empty_response:'响应为空', response_too_large:'响应超出限制', invalid_cookie:'登录资料无效', empty_recommendations:'暂无可阅读书籍', empty_catalog:'目录为空', empty_content:'正文为空', catalog_empty:'目录为空', chapter_empty:'正文为空', chinese_body_missing:'暂无中文正文', js_runtime_missing:'阅读组件不可用', js_decode_failed:'正文解析失败', unknown:'操作未完成'};
@@ -1718,8 +1718,93 @@
           row.append(time, text); target.appendChild(row);
         }
       };
+      const stvItemId = (info) => String(info?.i ?? info?.item_id ?? '');
+      const stvItemActive = (info) => ['1','true'].includes(String(info?.ac).toLowerCase());
+      const stvItemName = (info) => info.name || '物品';
+      const stvItemDescription = (info) => {
+        let text = String(info.info || '').trim();
+        const name = stvItemName(info);
+        if (text === name || text.startsWith(`${name} `)) text = text.slice(name.length).trimStart();
+        const level = /^等级[:：]\s*(\d+)(?:\s+|$)/.exec(text);
+        if (level && level[1] === String(info.level)) text = text.slice(level[0].length);
+        return text;
+      };
+      const hideSTVItemTooltip = (owner = stv.tooltipOwner) => {
+        if (!owner || owner !== stv.tooltipOwner) return;
+        owner.removeAttribute('aria-describedby'); stv.tooltipOwner = null;
+        $('stv-item-tooltip').hidden = true;
+      };
+      const showSTVItemTooltip = (button, info) => {
+        const tooltip = $('stv-item-tooltip');
+        if (!tooltip || $('stv-item-dialog')?.open || stv.tab !== 'inventory') return;
+        hideSTVItemTooltip();
+        const name = document.createElement('strong'), level = document.createElement('p'), description = document.createElement('p');
+        name.textContent = stvItemName(info);
+        level.textContent = info.level == null ? '' : `等级：${info.level}`;
+        description.textContent = stvItemDescription(info);
+        tooltip.replaceChildren(name, ...[level, description].filter((entry) => entry.textContent));
+        tooltip.style.left = tooltip.style.top = '0px';
+        tooltip.hidden = false;
+        const anchor = button.getBoundingClientRect(), box = tooltip.getBoundingClientRect();
+        const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
+        const below = anchor.bottom + 4, above = anchor.top - box.height - 4;
+        tooltip.style.left = `${Math.max(8, Math.min(anchor.left, width - box.width - 8))}px`;
+        tooltip.style.top = `${Math.max(8, below + box.height <= height - 8 ? below : above)}px`;
+        stv.tooltipOwner = button; button.setAttribute('aria-describedby', tooltip.id);
+      };
+      const syncSTVItemControls = () => {
+        const selected = stv.item, editable = stv.auth?.editable && stv.auth?.logged_in === true && !stv.inFlight;
+        const use = $('stv-use'), choice = $('stv-item-instance');
+        use.hidden = !selected || selected.active || !['1','2','3','4','5'].includes(String(selected.info.t));
+        use.disabled = !editable || !selected?.verified || use.hidden;
+        choice.disabled = Boolean(stv.inFlight);
+      };
+      const paintSTVItem = (selected, info) => {
+        selected.info = info;
+        const name = document.createElement('strong'), level = document.createElement('p'), description = document.createElement('p');
+        name.textContent = stvItemName(info);
+        level.className = 'stv-item-level'; level.textContent = info.level == null ? '' : `等级：${info.level}`;
+        description.textContent = stvItemDescription(info);
+        $('stv-item-result').replaceChildren(name, ...[level, description].filter((entry) => entry.textContent));
+        syncSTVItemControls();
+      };
+      const closeSTVItem = (restoreFocus = true) => {
+        const dialog = $('stv-item-dialog'), selected = stv.item;
+        stv.item = null;
+        if (dialog?.open) dialog.close();
+        if (!selected) return;
+        $('stv-item-message').replaceChildren(); $('stv-item-instance').replaceChildren();
+        $('stv-item-result').replaceChildren(); syncSTVItemControls();
+        if (restoreFocus) queueMicrotask(() => {
+          if (stv.item || stv.tab !== 'inventory' || !$('stv-account-dialog')?.open) return;
+          const target = selected.trigger;
+          (target.isConnected && target.getClientRects().length ? target : $('stv-tab-inventory'))?.focus({preventScroll:true});
+        });
+      };
+      const selectSTVItem = (id) => {
+        const selected = stv.item, info = selected?.entries.get(id);
+        if (!info || stv.inFlight) return;
+        selected.id = id; selected.verified = false; selected.active = stvItemActive(info);
+        $('stv-item-message').replaceChildren();
+        paintSTVItem(selected, info);
+        if (stv.auth?.editable && stv.auth?.logged_in) void mutateSTV('item', {item_id:id});
+      };
+      const openSTVItem = (entries, trigger) => {
+        if (stv.inFlight || stv.tab !== 'inventory' || !$('stv-account-dialog')?.open) return;
+        hideSTVItemTooltip();
+        const dialog = $('stv-item-dialog'), select = $('stv-item-instance'), items = new Map(entries.map((entry) => [stvItemId(entry), entry]).filter(([id]) => id));
+        const id = items.keys().next().value;
+        if (!id || dialog.open) return;
+        stv.item = {trigger, entries:items, id, active:false, verified:false, info:items.get(id)};
+        select.replaceChildren(...Array.from(items.keys(), (key, index) => {
+          const option = document.createElement('option'); option.value = key; option.textContent = `第 ${index + 1} 件`; return option;
+        }));
+        $('stv-item-choice').hidden = items.size < 2;
+        dialog.showModal(); selectSTVItem(id);
+      };
       const closeSTVModal = (restoreFocus = true) => {
         const modal = $('stv-account-dialog'), focus = stv.modalFocus, serial = ++stv.modalGeneration;
+        hideSTVItemTooltip(); closeSTVItem(false);
         stv.mode = ''; stv.modalUid = ''; stv.modalFocus = null; stopSTVPoll(); clearSTVFields(); clearSTVResults();
         if ($('toast')?.parentElement === modal) document.body.appendChild($('toast'));
         if (modal?.open) modal.close();
@@ -1765,7 +1850,8 @@
           const button = $(`stv-${name}`), enabled = auth?.[`${name}_enabled`] === true;
           if (button) { button.disabled = !editable || !loggedIn; button.classList.toggle('on', enabled); button.setAttribute('aria-pressed', String(enabled)); }
         }
-        for (const id of ['stv-cultivation','stv-breakthrough','stv-inventory','stv-item','stv-use','stv-item-id']) if ($(id)) $(id).disabled = !editable || !loggedIn;
+        for (const id of ['stv-cultivation','stv-breakthrough','stv-inventory']) if ($(id)) $(id).disabled = !editable || !loggedIn;
+        syncSTVItemControls();
         if ($('stv-modal-title')) $('stv-modal-title').textContent = stv.mode === 'login' ? uid ? '重新登录 STV' : '登录 STV' : auth?.username || 'STV 账号';
         if ($('stv-modal-subtitle')) $('stv-modal-subtitle').textContent = stv.mode === 'login' ? '使用用户名和密码登录或注册。' : uid ? `UID ${uid} · ${loggedIn ? '已登录' : '需要重新登录'}` : '';
         if ($('stv-login-panel')) $('stv-login-panel').hidden = stv.mode !== 'login';
@@ -1773,8 +1859,15 @@
         renderSTVReading(auth); renderSTVSavedDetails(auth);
       };
       const stvModalKeydown = (event) => {
-        const modal = $('stv-account-dialog'); if (!modal?.open) return;
-        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); closeSTVModal(); return; }
+        const account = $('stv-account-dialog'); if (!account?.open) return;
+        const item = $('stv-item-dialog'), modal = item?.open ? item : account;
+        if (event.key === 'Escape') {
+          event.preventDefault(); event.stopImmediatePropagation();
+          if (modal === item) closeSTVItem();
+          else if (stv.tooltipOwner) hideSTVItemTooltip();
+          else closeSTVModal();
+          return;
+        }
         if (event.key !== 'Tab') return;
         const nodes = modalFocusable(modal), index = nodes.indexOf(document.activeElement);
         if (!nodes.length) { event.preventDefault(); modal.focus(); }
@@ -1795,6 +1888,7 @@
       };
       const setSTVTab = (tab, focus = false) => {
         if (!['profile','inventory','reading'].includes(tab)) return;
+        if (tab !== 'inventory') { hideSTVItemTooltip(); closeSTVItem(false); }
         stv.tab = tab; stopSTVPoll(); clearSTVMessage();
         for (const name of ['profile','inventory','reading']) {
           const selected = name === tab, button = $(`stv-tab-${name}`), panel = $(`stv-panel-${name}`);
@@ -1828,54 +1922,65 @@
           for (const [label, content] of rows) { const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value(content); row.append(dt,dd); list.appendChild(row); }
           target.appendChild(list);
         };
-        const item = (info, target, active = false, detail = false, instances = [info]) => {
-          if (!info || typeof info !== 'object' || !target) return;
-          const row = document.createElement('article'), button = document.createElement('button'), name = document.createElement('strong'), meta = document.createElement('span'), copy = document.createElement('span');
-          const ids = instances.map((entry) => entry.i ?? entry.item_id).filter((id) => id !== null && id !== undefined).map(String);
-          const selectedId = ids.includes($('stv-item-id')?.value) ? $('stv-item-id').value : ids[0];
-          const counts = instances.map((entry) => entry.count), knownCount = counts.every((count) => Number.isSafeInteger(count) && count > 0);
-          const sum = knownCount ? counts.reduce((total, count) => total + count, 0) : null;
-          const count = Number.isSafeInteger(sum) && sum > 0 ? sum : null;
-          let select = null;
-          row.className = 'stv-item-card'; button.className = 'stv-item-open'; button.type = 'button'; copy.className = 'stv-item-copy';
-          name.textContent = info.name || '物品'; meta.className = 'stv-item-state';
-          const effective = active || ['1','true'].includes(String(info.ac).toLowerCase());
-          meta.textContent = `${instances.length > 1 ? `数量 ${value(count)}` : `实例 ${value(selectedId)}`}${effective ? ' · 生效中' : ''}`;
+        const itemIcon = (info, instances) => {
+          const button = document.createElement('button'), picture = document.createElement('span');
+          const counts = instances.map((entry) => entry.count);
+          const count = counts.every((n) => Number.isSafeInteger(n) && n > 0) ? counts.reduce((total, n) => total + n, 0) : null;
+          const stacked = Number.isSafeInteger(count) && count > 1;
+          button.className = 'stv-item-open'; button.type = 'button';
+          button.setAttribute('aria-haspopup', 'dialog');
+          button.setAttribute('aria-label', `${stvItemName(info)}${stacked ? `，数量 ${count}` : ''}${stvItemActive(info) ? '，生效中' : ''}`);
+          button.disabled = !instances.some((entry) => stvItemId(entry));
+          picture.className = 'stv-item-picture'; picture.setAttribute('aria-hidden','true');
+          if (String(info.t) !== '1' && [2,3,4].includes(Number(info.level))) picture.dataset.level = String(info.level);
           const icon = typeof info.icon === 'string' && /^https:\/\/sangtacviet\.com\/(?:linhthach\.jpg|danduoc\.jpg|congphap\.jpg|vuky\.jpg|asset\/(?:hoa|thuy|kim|moc|tho|phong|loi|quang|bang|am)\.jpg|game\/asset\/item\/(?:thon-thien-ma-cong-than-quyen\.png|thu-hon-dan\.png))$/.test(info.icon) ? info.icon : '';
           if (icon) {
-            const picture = document.createElement('span'), image = document.createElement('img'); picture.className = 'stv-item-picture';
-            if (String(info.t) !== '1' && [2,3,4].includes(Number(info.level))) picture.dataset.level = String(info.level);
-            image.src = icon; image.alt = ''; image.width = 40; image.height = 40; image.referrerPolicy = 'no-referrer'; picture.appendChild(image);
-            if (count > 1) { const amount = document.createElement('span'); amount.className = 'stv-item-count'; amount.textContent = String(count); picture.appendChild(amount); }
-            button.appendChild(picture);
+            const image = document.createElement('img');
+            image.src = icon; image.alt = ''; image.width = 44; image.height = 44; image.referrerPolicy = 'no-referrer';
+            image.addEventListener('error', () => image.remove(), {once:true});
+            picture.appendChild(image);
           }
-          copy.append(name,meta); button.appendChild(copy); button.disabled = !ids.length;
-          button.addEventListener('click', () => { if (stv.inFlight) return; const id = select?.value || selectedId; if (!id) return; $('stv-item-id').value = id; if (!detail) void mutateSTV('item', {item_id:id}); else $('stv-item-id').focus(); });
-          row.appendChild(button);
-          if (ids.length > 1) {
-            select = document.createElement('select'); select.className = 'stv-item-instance'; select.setAttribute('aria-label', '选择物品实例');
-            for (const id of ids) { const option = document.createElement('option'); option.value = id; option.textContent = `实例 ${id}`; select.appendChild(option); }
-            select.value = selectedId; select.addEventListener('change', () => { $('stv-item-id').value = select.value; }); row.appendChild(select);
-          }
-          for (const [label, content] of [['说明',info.info],['等级',info.level]]) if (content !== undefined && content !== null && content !== '') { const text = document.createElement('p'); text.textContent = `${label}：${content}`; row.appendChild(text); }
-          target.appendChild(row);
+          if (stacked) { const amount = document.createElement('span'); amount.className = 'stv-item-count'; amount.textContent = String(count); picture.appendChild(amount); }
+          button.appendChild(picture);
+          button.addEventListener('pointerenter', (event) => { if (event.pointerType === 'mouse') showSTVItemTooltip(button, info); });
+          button.addEventListener('pointerleave', () => hideSTVItemTooltip(button));
+          button.addEventListener('focus', () => { if (button.matches(':focus-visible')) showSTVItemTooltip(button, info); });
+          button.addEventListener('blur', () => hideSTVItemTooltip(button));
+          button.addEventListener('click', () => openSTVItem(instances, button));
+          return button;
         };
         if (action === 'cultivation') profile(result);
         else if (action === 'breakthrough') { message.textContent = result?.success === true ? '突破成功' : '服务器未确认成功，请先查询修为'; if (result?.after) profile(result.after); else if (result?.refresh_error) message.textContent += '；资料刷新未完成，请先查询修为，勿重复提交'; }
         else if (action === 'inventory') {
-          const target = $('stv-inventory-result'); target.replaceChildren();
-          const available = Array.isArray(result?.list) ? result.list : [], active = Array.isArray(result?.act) ? result.act : [], activeIds = new Set(active.map((row) => String(row.i)));
-          for (const [rows, isActive] of [[available.filter((entry) => !activeIds.has(String(entry.i))), false], [active, true]]) {
+          const target = $('stv-inventory-result');
+          hideSTVItemTooltip(); target.replaceChildren();
+          const active = Array.isArray(result?.act) ? result.act.filter(Boolean) : [];
+          const activeIds = new Set(active.map(stvItemId));
+          const available = Array.isArray(result?.list) ? result.list.filter((entry) => entry && !activeIds.has(stvItemId(entry))) : [];
+          const categories = new Map([['3','功法'], ['4','武技'], ['2','丹药'], ['1','灵石'], ['other','其他']]);
+          const rows = [...available, ...active.map((entry) => ({...entry, ac:true}))];
+          for (const [type, label] of categories) {
             const groups = new Map();
             for (const entry of rows) {
-              const key = typeof entry.group_key === 'string' && /^[a-f0-9]{64}$/.test(entry.group_key) ? entry.group_key : Symbol();
+              const kind = String(entry.t);
+              if ((categories.has(kind) ? kind : 'other') !== type) continue;
+              const key = typeof entry.group_key === 'string' && /^[a-f0-9]{64}$/.test(entry.group_key) ? `${stvItemActive(entry)}:${entry.group_key}` : Symbol();
               if (groups.has(key)) groups.get(key).push(entry); else groups.set(key, [entry]);
             }
-            for (const entries of groups.values()) item(entries[0], target, isActive, false, entries);
+            if (!groups.size) continue;
+            const section = document.createElement('section'), heading = document.createElement('h4'), icons = document.createElement('div');
+            section.className = 'stv-item-group'; heading.textContent = label; icons.className = 'stv-item-row';
+            for (const entries of groups.values()) icons.appendChild(itemIcon(entries[0], entries));
+            section.append(heading, icons); target.appendChild(section);
           }
           if (!target.childNodes.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '暂无物品'; target.appendChild(empty); }
-        } else if (action === 'item') { const target = $('stv-item-result'); target.replaceChildren(); item(result, target, false, true); }
-        else if (action === 'use') message.textContent = result?.used === true ? '使用成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交';
+        } else if (action === 'item') {
+          const selected = stv.item;
+          if (!selected || stvItemId(result) !== selected.id) { $('stv-item-message').textContent = '未能确认当前物品，请查询背包'; return; }
+          selected.active ||= stvItemActive(result);
+          selected.verified = true;
+          paintSTVItem(selected, result);
+        } else if (action === 'use') $('stv-item-message').textContent = result?.used === true ? '使用成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交';
         else if (action === 'refresh') message.textContent = '账号资料已刷新';
       };
       const loadSTV = async () => {
@@ -1902,9 +2007,13 @@
       const mutateSTV = async (action, extra = {}) => {
         if (!stvVisible() || !stv.auth?.editable || stv.inFlight) return;
         const appid = consoleAppid, scope = consoleGeneration, generation = stv.generation, modal = stv.modalGeneration, tab = stv.tab, marker = {};
-        const authAction = action === 'login' || action === 'register', tabRead = ['cultivation','inventory','item'].includes(action);
+        const authAction = action === 'login' || action === 'register', tabRead = ['cultivation','inventory'].includes(action);
+        const itemAction = action === 'item' || action === 'use', item = stv.item;
+        const currentItem = () => item && item === stv.item && item.id === extra.item_id && $('stv-item-dialog')?.open;
+        if (itemAction && !currentItem()) return;
         stv.inFlight = marker; stv.request += 1; stv.loading = false; stopSTVPoll(); stv.error = ''; renderSTV();
-        if ($('stv-account-dialog')?.open) setSTVMessage(['cultivation','inventory','item','refresh'].includes(action) ? '正在查询…' : '正在处理…');
+        if (itemAction) $('stv-item-message').textContent = action === 'item' ? '正在查询…' : '正在使用…';
+        else if ($('stv-account-dialog')?.open) setSTVMessage(['cultivation','inventory','refresh'].includes(action) ? '正在查询…' : '正在处理…');
         const payload = JSON.stringify({action, ...extra}); if (authAction) clearSTVFields();
         try {
           const data = await api(action === 'delete' || authAction ? 'stv-auth' : 'stv-auth/action', {method:action === 'delete' ? 'DELETE' : 'POST', body:payload, botAppid:appid});
@@ -1912,9 +2021,11 @@
           if (action === 'delete' && modal === stv.modalGeneration) closeSTVModal();
           renderSTV(data);
           const currentModal = modal === stv.modalGeneration && $('stv-account-dialog')?.open;
-          if (currentModal) {
+          if (itemAction) {
+            if (currentItem()) { $('stv-item-message').replaceChildren(); showSTVResult(action, data.result); }
+          } else if (currentModal) {
             if (!tabRead || tab === stv.tab) clearSTVMessage();
-            if (['cultivation','breakthrough','inventory','item','use','refresh'].includes(action)) showSTVResult(action, data.result);
+            if (['cultivation','breakthrough','inventory','refresh'].includes(action)) showSTVResult(action, data.result);
             else if (data.registered && data.registration_logged_in !== true) setSTVMessage('注册已成功，请登录新账号');
           }
           if (action === 'delete' || (authAction && (!data.registered || data.registration_logged_in === true))) {
@@ -1924,6 +2035,7 @@
         } catch (error) {
           if (!stvScopeCurrent(appid, scope, generation) || error.name === 'AbortError') return;
           if (error.status === 401) showAuthError(error);
+          else if (itemAction) { if (currentItem()) $('stv-item-message').textContent = error.message; }
           else if (tabRead && (modal !== stv.modalGeneration || tab !== stv.tab || !$('stv-account-dialog')?.open)) return;
           else if (modal === stv.modalGeneration && $('stv-account-dialog')?.open) { setSTVMessage(error.message); toast(error.message); }
           else toast(error.message);
@@ -1948,7 +2060,20 @@
         stvModal.addEventListener('click', (event) => { if (event.target === stvModal && backdropDown && outside(event)) closeSTVModal(); backdropDown = false; });
         stvModal.addEventListener('cancel', (event) => { event.preventDefault(); closeSTVModal(); });
         stvModal.addEventListener('close', () => { if (!stvModal.open && stv.mode) closeSTVModal(); });
+        stvModal.addEventListener('scroll', () => hideSTVItemTooltip(), true);
       }
+      window.addEventListener('resize', () => hideSTVItemTooltip());
+      const stvItemDialog = $('stv-item-dialog');
+      stvItemDialog?.addEventListener('cancel', (event) => { event.preventDefault(); event.stopPropagation(); closeSTVItem(); });
+      stvItemDialog?.addEventListener('close', () => { if (!stvItemDialog.open && stv.item) closeSTVItem(); });
+      $('stv-item-close')?.addEventListener('click', () => closeSTVItem());
+      $('stv-item-instance')?.addEventListener('change', (event) => selectSTVItem(event.target.value));
+      $('stv-use')?.addEventListener('click', (event) => {
+        const selected = stv.item;
+        if (!selected?.verified || selected.active || stv.inFlight || event.currentTarget.disabled || !stvVisible()) return;
+        selected.verified = false;
+        void mutateSTV('use', {item_id:selected.id});
+      });
       $('stv-modal-close')?.addEventListener('click', () => closeSTVModal());
       $('stv-add')?.addEventListener('click', (event) => openSTVModal('login', {node:event.currentTarget}));
       $('stv-detail-tabs')?.addEventListener('click', (event) => { const tab = event.target.closest('[data-stv-tab]'); if (tab) setSTVTab(tab.dataset.stvTab); });
@@ -1964,11 +2089,6 @@
       for (const name of ['online','rewards']) $(`stv-${name}`)?.addEventListener('click', () => void mutateSTV(name, {enabled:stv.auth?.[`${name}_enabled`] !== true}));
       for (const action of ['cultivation','inventory']) $(`stv-${action}`)?.addEventListener('click', () => void mutateSTV(action));
       $('stv-breakthrough')?.addEventListener('click', () => { if (confirm('确认提交一次突破？结果未确认时，请先查询修为，勿重复提交。')) void mutateSTV('breakthrough'); });
-      for (const action of ['item','use']) $(`stv-${action}`)?.addEventListener('click', () => {
-        const itemId = $('stv-item-id').value.trim(); if (!itemId) return toast('请填写物品实例 ID');
-        if (action === 'use' && !confirm('确认使用这一件物品？结果未确认时，请先查询背包，勿重复提交。')) return;
-        void mutateSTV(action, {item_id:itemId});
-      });
       const syncSTVTab = () => { if (!stvActive()) leaveSTV(); else if (stvVisible()) void loadSTV(); else stopSTVPoll(); };
       botTabs?.addEventListener('click', () => queueMicrotask(syncSTVTab));
       botTabs?.addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) queueMicrotask(syncSTVTab); });
