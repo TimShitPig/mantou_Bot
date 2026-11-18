@@ -431,6 +431,61 @@
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedCredential();
       });
 
+      const readerApiKeyRows = (keys, editable) => keys.length
+        ? keys.map((item) => `<li class="qq-api-key-row">
+            <code>${esc(item.id)}</code>
+            <button class="qq-api-revoke" type="button" data-api-key-delete="${esc(item.id)}" aria-label="撤销 Key ${esc(item.id)}" ${editable ? '' : 'disabled'}>撤销</button>
+          </li>`).join('')
+        : '<li class="qq-api-empty">还没有 Key，生成一个即可开始调用。</li>';
+
+      const renderReaderApiConfig = (fields, editable) => {
+        const enabled = fields.find((field) => field.key === 'qq_reader_api_enabled');
+        const keyField = fields.find((field) => field.key === 'qq_reader_api_keys');
+        const keys = Array.isArray(keyField?.keys) ? keyField.keys : [];
+        return `<section class="qq-api-card" data-config-category="qq_reader_api_settings">
+          <header class="qq-api-header">
+            <div>
+              <div class="qq-api-title"><h3>QQ 阅读开放接口</h3><span class="qq-api-scope">服务共用</span></div>
+              <p>使用 API Key 获取整本 TXT 与章节 JSON。</p>
+            </div>
+            <label class="qq-api-toggle">
+              <span>开启接口</span>
+              <input id="cfg-qq_reader_api_enabled" type="checkbox" role="switch" aria-label="开启 QQ 阅读开放接口" data-config-field="qq_reader_api_enabled" ${enabled?.value ? 'checked' : ''} ${editable && enabled ? '' : 'disabled'}>
+              <span class="qq-api-toggle-track" aria-hidden="true"></span>
+            </label>
+          </header>
+          <div class="qq-api-keys" data-api-key-manager>
+            <div class="qq-api-toolbar">
+              <div><h4>API Keys</h4><small data-api-key-summary>已配置 ${keys.length} 个 Key</small></div>
+              <button class="outline-button" type="button" data-api-key-generate ${editable && keyField ? '' : 'disabled'}>生成 Key</button>
+            </div>
+            <div class="qq-api-created" data-api-key-result hidden role="status" aria-live="polite">
+              <strong>新 Key 已生成</strong><p>仅显示这一次，请复制保存。</p>
+              <div class="qq-api-copy">
+                <input type="text" data-api-key-created readonly autocomplete="off" aria-label="本次新生成的 API Key">
+                <button type="button" class="outline-button" data-api-key-copy>复制</button>
+              </div>
+            </div>
+            <ul class="qq-api-key-list" data-api-key-list aria-label="已配置的 API Key 标识">${readerApiKeyRows(keys, editable)}</ul>
+            <span class="config-message" data-api-key-message role="status" aria-live="polite"></span>
+            <details class="qq-api-import">
+              <summary>批量替换 Key</summary>
+              <div>
+                <label for="cfg-qq_reader_api_keys">每行一个 Key，保存后替换全部；留空保持当前列表。</label>
+                <textarea id="cfg-qq_reader_api_keys" rows="3" data-config-field="qq_reader_api_keys" data-config-secret autocomplete="off" spellcheck="false" ${editable && keyField ? '' : 'disabled'} placeholder="粘贴要保留的全部 Key"></textarea>
+              </div>
+            </details>
+          </div>
+          <footer class="qq-api-footer">
+            <small>服务开关与批量替换需保存。</small>
+            <div>
+              <span class="config-message" data-config-message role="status" aria-live="polite"></span>
+              <button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存设置</button>
+            </div>
+          </footer>
+        </section>`;
+      };
+
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
@@ -450,14 +505,11 @@
           group[1].push(field);
         });
         if (!groups.length) { node.innerHTML = '<div class="empty">暂无可编辑配置</div>'; return; }
-        node.innerHTML = groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
+        node.innerHTML = targetId === 'qq-reader-api-config-editor' ? renderReaderApiConfig(selected, editable)
+          : groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
-          if (field.kind === 'api_keys') {
-            const keys = Array.isArray(field.keys) ? field.keys : [];
-            return `<div class="config-field full" data-api-key-manager><label for="${inputId}">${label}</label><small>已配置 ${keys.length} 个 Key；请求只需 Bearer Key，无需 AppID。</small><div class="config-actions"><button class="outline-button" type="button" data-api-key-generate ${editable ? '' : 'disabled'}>随机生成并添加</button>${keys.map((item) => `<button class="outline-button" type="button" data-api-key-delete="${esc(item.id)}" ${editable ? '' : 'disabled'}>撤销 ${esc(item.id)}</button>`).join('')}</div><div data-api-key-result hidden role="status" aria-live="polite"><small>仅本次显示，请复制保存：</small><div class="config-input-wrap"><input type="text" data-api-key-created readonly autocomplete="off" aria-label="本次新生成的 API Key"><button type="button" class="outline-button" data-api-key-copy>复制</button></div></div><textarea id="${inputId}" data-config-field="${esc(field.key)}" data-config-secret autocomplete="off" ${editable ? '' : 'disabled'} placeholder="可选：每行一个 Key；保存时替换全部，留空不修改"></textarea><small>${esc(field.hint || '')}</small><span class="config-message" data-api-key-message></span></div>`;
-          }
           if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
           if (field.kind === 'boolean') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}><option value="false" ${field.value ? '' : 'selected'}>关闭</option><option value="true" ${field.value ? 'selected' : ''}>开启</option></select><small>${esc(hint)}</small></div>`;
           if (field.kind === 'select') {
@@ -530,14 +582,12 @@
           created.value = String(result.key || ''); resultNode.hidden = !created.value;
           message.textContent = result.message || 'Key 已添加'; message.className = 'config-message ok';
           // 只更新当前 Key 管理区的摘要，避免刷新配置丢掉仅显示一次的新 Key。
-          const summary = manager.querySelector('small');
-          summary.textContent = `已配置 ${(result.keys || []).length} 个 Key；请求只需 Bearer Key，无需 AppID。`;
-          const actions = button.closest('.config-actions');
-          actions.querySelectorAll('[data-api-key-delete]').forEach((item) => item.remove());
-          (result.keys || []).forEach((item) => {
-            const revoke = document.createElement('button'); revoke.type = 'button'; revoke.className = 'outline-button';
-            revoke.dataset.apiKeyDelete = item.id; revoke.textContent = `撤销 ${item.id}`;
-            revoke.addEventListener('click', () => manageReaderApiKey(editor, revoke)); actions.appendChild(revoke);
+          const keys = Array.isArray(result.keys) ? result.keys : [];
+          manager.querySelector('[data-api-key-summary]').textContent = `已配置 ${keys.length} 个 Key`;
+          const list = manager.querySelector('[data-api-key-list]');
+          list.innerHTML = readerApiKeyRows(keys, true);
+          list.querySelectorAll('[data-api-key-delete]').forEach((revoke) => {
+            revoke.addEventListener('click', () => manageReaderApiKey(editor, revoke));
           });
           created.focus(); created.select();
         } catch (error) {

@@ -212,12 +212,12 @@
       }
     }
     #qq-reader-api-config-editor { margin-top: var(--service-gap); }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) { gap: 13px; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-fields {
+    #basic-config-editor { gap: 13px; }
+    #basic-config-editor .config-fields {
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
       align-items: start;
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-group {
+    #basic-config-editor .config-group {
       min-width: 0;
       padding: clamp(13px, 1.7vw, 19px);
       border: 1px solid var(--studio-border);
@@ -225,10 +225,10 @@
       border-radius: 13px;
       background: var(--studio-soft);
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-group h3 { margin: 0 0 12px; font-size: 15px; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field label { font-size: 12px; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field small { font-size: 11px; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-scope-label {
+    #basic-config-editor .config-group h3 { margin: 0 0 12px; font-size: 15px; }
+    #basic-config-editor .config-field label { font-size: 12px; }
+    #basic-config-editor .config-field small { font-size: 11px; }
+    #basic-config-editor .config-scope-label {
       display: inline-block;
       margin-inline-start: 6px;
       padding: 1px 6px;
@@ -237,27 +237,122 @@
       color: var(--studio-muted);
       white-space: nowrap;
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field :is(input, select, textarea) {
+    #basic-config-editor .config-field :is(input, select, textarea) {
       min-height: 44px;
       border-color: var(--studio-border);
       border-radius: 9px;
       background: var(--studio-card);
       color: var(--studio-ink);
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field textarea { min-height: 82px; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field :is(input, select, textarea):focus {
+    #basic-config-editor .config-field textarea { min-height: 82px; }
+    #basic-config-editor .config-field :is(input, select, textarea):focus {
       border-color: var(--studio-accent);
       box-shadow: 0 0 0 3px var(--studio-accent-soft);
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions { flex-wrap: wrap; }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions .primary-button {
+    #basic-config-editor .config-actions { flex-wrap: wrap; }
+    #basic-config-editor .config-actions .primary-button {
       min-height: 44px;
       padding-inline: 18px;
       border-radius: 10px;
       background: var(--bot-action);
       color: #fff;
     }
-    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    #basic-config-editor .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    .qq-api-card {
+      min-width: 0;
+      border: 1px solid var(--studio-border);
+      border-radius: 14px;
+      background: var(--studio-card);
+    }
+    .qq-api-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px;
+      border-bottom: 1px solid var(--studio-border);
+    }
+    .qq-api-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .qq-api-header h3 { font-size: 16px; }
+    .qq-api-header p { margin: 7px 0 0; color: var(--studio-muted); font-size: 12px; }
+    .qq-api-scope {
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: var(--studio-accent-soft);
+      color: var(--studio-accent);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .qq-api-toggle {
+      position: relative;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+      gap: 10px;
+      min-height: 44px;
+      color: var(--studio-muted);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .qq-api-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .qq-api-toggle-track {
+      width: 42px;
+      height: 24px;
+      padding: 3px;
+      border: 1px solid var(--studio-border);
+      border-radius: 20px;
+      background: var(--studio-soft);
+    }
+    .qq-api-toggle-track::after {
+      display: block;
+      content: "";
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--studio-muted);
+    }
+    .qq-api-toggle input:checked + .qq-api-toggle-track { background: var(--bot-action); border-color: var(--bot-action); }
+    .qq-api-toggle input:checked + .qq-api-toggle-track::after { transform: translateX(18px); background: #fff; }
+    .qq-api-toggle input:focus-visible + .qq-api-toggle-track { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
+    .qq-api-toggle:has(input:disabled) { opacity: .55; cursor: default; }
+    .qq-api-keys { display: grid; gap: 14px; padding: 20px; min-width: 0; }
+    .qq-api-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .qq-api-toolbar h4 { margin: 0 0 5px; font-size: 13px; color: var(--studio-ink); }
+    .qq-api-toolbar small { color: var(--studio-muted); font-size: 11px; }
+    .qq-api-card .outline-button,
+    .qq-api-card [data-config-save] { min-height: 44px; padding: 8px 14px; border-radius: 8px; white-space: nowrap; }
+    .qq-api-card .outline-button { border-color: var(--studio-border); background: var(--studio-card); color: var(--studio-ink); }
+    .qq-api-key-list { margin: 0; padding: 0 14px; list-style: none; border: 1px solid var(--studio-border); border-radius: 9px; background: var(--studio-soft); }
+    .qq-api-key-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 54px; }
+    .qq-api-key-row + .qq-api-key-row { border-top: 1px solid var(--studio-border); }
+    .qq-api-key-row code { min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--studio-ink); }
+    .qq-api-revoke { min-height: 44px; padding: 6px 0 6px 12px; border: 0; background: transparent; color: var(--danger); font: inherit; font-size: 12px; cursor: pointer; }
+    .qq-api-revoke:hover:not(:disabled) { text-decoration: underline; }
+    .qq-api-revoke:disabled { opacity: .5; cursor: default; }
+    .qq-api-empty { padding: 19px 0; color: var(--studio-muted); font-size: 12px; }
+    .qq-api-created { padding: 14px; border: 1px solid var(--studio-accent); border-radius: 9px; background: var(--studio-accent-soft); }
+    .qq-api-created[hidden] { display: none; }
+    .qq-api-created strong { color: var(--studio-accent); font-size: 13px; }
+    .qq-api-created p { margin: 5px 0 10px; color: var(--studio-muted); font-size: 11px; }
+    .qq-api-copy { display: flex; align-items: stretch; gap: 8px; }
+    .qq-api-card input[data-api-key-created],
+    .qq-api-import textarea { min-width: 0; width: 100%; padding: 10px 12px; border: 1px solid var(--studio-border); border-radius: 8px; background: var(--studio-card); color: var(--studio-ink); font-family: ui-monospace, monospace; font-size: 12px; }
+    .qq-api-card input[data-api-key-created] { flex: 1; }
+    .qq-api-import { border-top: 1px solid var(--studio-border); }
+    .qq-api-import summary { width: fit-content; padding: 12px 0 0; color: var(--studio-muted); font-size: 12px; cursor: pointer; }
+    .qq-api-import > div { display: grid; gap: 9px; padding-top: 12px; }
+    .qq-api-import label { color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
+    .qq-api-import textarea { resize: vertical; min-height: 92px; }
+    .qq-api-keys > .config-message:empty { display: none; }
+    .qq-api-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--studio-border); }
+    .qq-api-footer small { color: var(--studio-muted); font-size: 11px; }
+    .qq-api-footer > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-left: auto; }
+    @media (max-width: 560px) {
+      .qq-api-header { align-items: stretch; flex-direction: column; gap: 12px; padding: 16px; }
+      .qq-api-toggle { justify-content: space-between; }
+      .qq-api-keys { padding: 16px; }
+      .qq-api-footer { padding: 14px 16px; }
+    }
     @media (min-width: 1080px) {
       #basic-config-editor:has(> [data-config-category="basic_settings"]):has(> [data-config-category="help_web_settings"]) {
         grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);

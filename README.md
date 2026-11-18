@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.463-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.464-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.463 |
+| 版本 | v6.1.464 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -200,7 +200,7 @@ UC、夸克、百度以配置目录为总目录，小说上传进入 `总目录/
 
 ## QQ 阅读开放 API
 
-在插件网页后台的“机器人配置 → QQ 阅读”分区开启开放接口，随机生成并添加 Key。支持多个 Key、单独撤销；新 Key 只展示一次，已有 Key 不回显。服务复用帮助网页地址，前缀为 **`/openapi/qq-reader/v1`**。
+在插件网页后台的“机器人配置 → QQ 阅读”分区开启开放接口，点击“保存设置”生效。点击“生成 Key”立即添加，列表按标识逐个撤销；新 Key 只展示一次，已有 Key 不回显。需要替换全部 Key 时展开“批量替换 Key”，每行填写一个后保存，留空保持当前列表。服务复用帮助网页地址，前缀为 **`/openapi/qq-reader/v1`**。
 
 浏览器可直接访问以下入口，示例需替换地址、Key 和书籍 ID：
 
