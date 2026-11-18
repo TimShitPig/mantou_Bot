@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.466-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.467-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.466 |
+| 版本 | v6.1.467 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -54,7 +54,8 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 后台入口 | 设置内容 |
 | --- | --- |
 | 系统设置 | 网页监听地址、外网地址、登录信息、数据库 TLS/CA/超时等连接设置 |
-| 机器人配置 | 当前机器人的管理员、教程图片宽度、ZLibrary 邮箱 API Key 与注册 rx |
+| 机器人配置 → 基础设置 | 当前机器人的管理员名单与教程图片宽度；名单支持批量添加及逐项移除，保存后生效 |
+| 机器人配置 → ZLibrary | 账号导入与分组管理、邮箱 API Key 和注册 rx；注册设置独立保存，Key 留空保持原值 |
 | 网盘配置 | UC、夸克、百度账号、上传目录、默认账号及启停 |
 | QQ 阅读账号 | Cookie、手机号/扫码登录、账号选择和会员资料 |
 | 晋江账号 | 晋江 App 扫码、Token/读者编号添加、多账号选择、启停及资料刷新 |

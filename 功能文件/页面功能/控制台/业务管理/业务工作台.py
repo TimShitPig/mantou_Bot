@@ -40,16 +40,18 @@
 
             <section id="config" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-basic" tabindex="0">
               <header class="studio-service-head">
-                <div><h3>权限与网页设置</h3><p>管理访问权限、帮助网页和注册邮箱。</p></div>
+                <div><h3>权限与网页设置</h3><p>管理当前机器人的管理员和帮助网页。</p></div>
               </header>
               <div id="basic-config-editor" class="config-editor"><div class="empty">正在读取配置…</div></div>
             </section>
 
             <section id="bot-panel-qq" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-qq" tabindex="0" hidden>
-              <header class="studio-service-head">
-                <div><h3>QQ 阅读账号</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
-              </header>
-              <div id="qq-auth-editor"><div class="empty">正在读取登录态…</div></div>
+              <section class="studio-account-section" aria-labelledby="qq-reader-section-title">
+                <header class="studio-service-head">
+                  <div><h3 id="qq-reader-section-title">QQ 阅读账号</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
+                </header>
+                <div id="qq-auth-editor" class="studio-panel-body"><div class="empty">正在读取登录态…</div></div>
+              </section>
               <div id="qq-reader-api-config-editor" class="config-editor"><div class="empty">正在读取开放接口配置…</div></div>
             </section>
 
@@ -65,6 +67,7 @@
                 <div><h3>ZLibrary 账号</h3><p>搜索、导入账号或按分组管理。</p></div>
               </header>
               <div id="zlibrary-account-editor" aria-live="polite"><div class="empty">正在读取账号…</div></div>
+              <div id="zlibrary-registration-config-editor" class="config-editor"><div class="empty">正在读取注册配置…</div></div>
             </section>
             <section id="bot-panel-stv" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-stv" tabindex="0" hidden>
               <header class="studio-service-head">

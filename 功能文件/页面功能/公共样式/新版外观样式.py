@@ -35,7 +35,7 @@
       --studio-mint-ink: #2f6a52;
       --studio-hover: #ece4d3;
       --studio-wash: #f8f3e6;
-      --studio-shadow: none;
+      --studio-shadow: 0 1px 2px #30281b05, 0 6px 20px #30281b04;
       --studio-float-shadow: 0 12px 30px #2a241812;
       --studio-sidebar-width: 232px;
 
@@ -83,6 +83,7 @@
       --studio-mint-ink: #9cc7af;
       --studio-hover: #272319;
       --studio-wash: #1b1813;
+      --studio-shadow: inset 0 1px 0 #ffffff03, 0 3px 12px #00000018;
       --studio-float-shadow: 0 14px 34px #00000059;
       --paper-line: #332e25;
       --paper-gold: #c9a967;
@@ -292,9 +293,9 @@
     .studio-card {
       padding: clamp(16px, 2.1vw, 24px);
       border: 1px solid var(--studio-border);
-      border-radius: 10px;
+      border-radius: 12px;
       background: var(--studio-card);
-      box-shadow: none;
+      box-shadow: var(--studio-shadow);
     }
     .studio-kicker + h2,
     .studio-service-head h2 {
@@ -348,7 +349,7 @@
 
     /* ========== 9. 控件 ========== */
     :root body:not(.messages-workspace) .primary-button {
-      border-radius: 6px;
+      border-radius: 8px;
       background: var(--accent-fill);
       color: #fff;
       font-weight: 600;
@@ -358,12 +359,13 @@
     :root body:not(.messages-workspace) .outline-button,
     body:not(.messages-workspace) .outline-button {
       border: 1px solid var(--studio-border);
-      border-radius: 6px;
+      border-radius: 8px;
       background: transparent;
       color: var(--studio-ink);
       font-weight: 560;
     }
-    body:not(.messages-workspace) .outline-button:hover { border-color: var(--studio-accent); color: var(--studio-accent); }
+    body:not(.messages-workspace) .outline-button:hover:not(:disabled) { border-color: var(--studio-accent); color: var(--studio-accent); background: var(--studio-accent-soft); }
+    body:not(.messages-workspace) :is(.primary-button, .outline-button):disabled { cursor: default; opacity: .5; }
     body:not(.messages-workspace) .switch {
       width: 40px;
       height: 22px;
@@ -378,14 +380,14 @@
     body:not(.messages-workspace) select,
     body:not(.messages-workspace) textarea {
       border-color: var(--studio-border);
-      border-radius: 6px;
+      border-radius: 8px;
       background: var(--studio-soft);
     }
     body:not(.messages-workspace) input:focus,
     body:not(.messages-workspace) select:focus,
     body:not(.messages-workspace) textarea:focus,
     body:not(.messages-workspace) [contenteditable="true"]:focus {
-      outline: 2px solid #1c66502e;
+      outline: 2px solid color-mix(in srgb, var(--studio-accent) 30%, transparent);
       outline-offset: 1px;
     }
     body:not(.messages-workspace) ::selection { color: var(--studio-ink); background: #1c665024; }
@@ -415,25 +417,15 @@
 
     /* ========== 10. 业务页 ========== */
     .studio-service-head { border-bottom: 1px solid var(--studio-border); padding-bottom: 12px; }
-    .studio-bot-badge {
-      border: 1px solid var(--studio-border);
-      border-radius: 999px;
-      background: transparent;
-      color: var(--studio-muted);
-      font-size: 11px;
-      font-weight: 500;
-    }
     .studio-bot-workspace,
-    .studio-bot-panel,
     .studio-novel-control,
     .studio-pan-card,
     .pan-card,
-    .pan-object-card,
-    .config-editor {
+    .pan-object-card {
       border: 1px solid var(--studio-border);
-      border-radius: 8px;
+      border-radius: 12px;
       background: var(--studio-card);
-      box-shadow: none;
+      box-shadow: var(--studio-shadow);
     }
     .studio-bot-identity { border-radius: 8px; }
     .studio-bot-kicker { color: var(--studio-muted); letter-spacing: .14em; }

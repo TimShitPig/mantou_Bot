@@ -3,6 +3,7 @@
 业务样式 = """
     .studio-service-page {
       --service-gap: clamp(14px, 2vw, 22px);
+      --service-inset: clamp(16px, 2vw, 22px);
       min-width: 0;
       color: var(--studio-ink);
     }
@@ -52,11 +53,11 @@
       --bot-action: var(--accent-fill);
       --bot-action-hover: var(--accent-hover);
       display: grid;
+      align-content: start;
       gap: clamp(14px, 2vw, 22px);
     }
     .studio-bot-identity {
       position: relative;
-      isolation: isolate;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
@@ -69,28 +70,6 @@
       color: var(--studio-ink);
       background: var(--studio-wash);
       box-shadow: none;
-    }
-    .studio-bot-identity::before,
-    .studio-bot-identity::after {
-      position: absolute;
-      z-index: -1;
-      content: "";
-      pointer-events: none;
-    }
-    .studio-bot-identity::before {
-      inset: 0 0 0 50%;
-      background: none;
-      mask-image: linear-gradient(90deg, transparent, #000);
-    }
-    .studio-bot-identity::after {
-      top: -103px;
-      right: -40px;
-      width: 400px;
-      height: 290px;
-      border: 1px solid transparent;
-      border-radius: 50%;
-      box-shadow: none;
-      transform: rotate(-18deg);
     }
     .studio-bot-badge {
       display: flex;
@@ -200,8 +179,7 @@
     .studio-bot-panel { min-width: 0; }
     .studio-bot-panel[hidden] { display: none; }
     .studio-bot-panel > .studio-service-head {
-      padding-left: 11px;
-      border-left: 3px solid transparent;
+      margin-bottom: 18px;
     }
     .studio-bot-panel > .studio-service-head h3 { font-size: 18px; }
     @media (prefers-reduced-motion: no-preference) {
@@ -212,64 +190,107 @@
       }
     }
     #qq-reader-api-config-editor { margin-top: var(--service-gap); }
-    #basic-config-editor { gap: 13px; }
-    #basic-config-editor .config-fields {
+    .studio-account-section {
+      min-width: 0;
+      border: 1px solid var(--studio-border);
+      border-radius: 12px;
+      background: var(--studio-card);
+      box-shadow: var(--studio-shadow);
+    }
+    .studio-account-section > .studio-service-head {
+      margin: 0;
+      padding: var(--service-inset);
+      border-bottom: 1px solid var(--studio-border);
+    }
+    .studio-panel-body { min-width: 0; padding: var(--service-inset); }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) { gap: 16px; align-items: start; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-fields {
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
       align-items: start;
     }
-    #basic-config-editor .config-group {
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-group {
       min-width: 0;
-      padding: clamp(13px, 1.7vw, 19px);
+      align-self: start;
+      padding: var(--service-inset);
       border: 1px solid var(--studio-border);
-      border-top: 2px solid var(--studio-border);
-      border-radius: 13px;
-      background: var(--studio-soft);
+      border-radius: 12px;
+      background: var(--studio-card);
+      box-shadow: var(--studio-shadow);
     }
-    #basic-config-editor .config-group h3 { margin: 0 0 12px; font-size: 15px; }
-    #basic-config-editor .config-field label { font-size: 12px; }
-    #basic-config-editor .config-field small { font-size: 11px; }
-    #basic-config-editor .config-scope-label {
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-group h3 { margin: 0 0 18px; padding-bottom: 13px; border-bottom: 1px solid var(--studio-border); font-size: 15px; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field label { font-size: 12px; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field small { font-size: 11px; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-scope-label {
       display: inline-block;
       margin-inline-start: 6px;
       padding: 1px 6px;
       border-radius: 6px;
       background: var(--studio-accent-soft);
-      color: var(--studio-muted);
+      color: var(--studio-accent);
       white-space: nowrap;
     }
-    #basic-config-editor .config-field :is(input, select, textarea) {
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field :is(input, select, textarea) {
       min-height: 44px;
       border-color: var(--studio-border);
       border-radius: 9px;
-      background: var(--studio-card);
+      background: var(--studio-soft);
       color: var(--studio-ink);
     }
-    #basic-config-editor .config-field textarea { min-height: 82px; }
-    #basic-config-editor .config-field :is(input, select, textarea):focus {
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field textarea { min-height: 82px; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field :is(input, select, textarea):focus {
       border-color: var(--studio-accent);
       box-shadow: 0 0 0 3px var(--studio-accent-soft);
     }
-    #basic-config-editor .config-actions { flex-wrap: wrap; }
-    #basic-config-editor .config-actions .primary-button {
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) > .config-actions {
+      grid-column: 1 / -1;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      padding: 14px 0 0;
+      border-top: 1px solid var(--studio-border);
+    }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) > .config-actions .config-message:empty { display: none; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-actions .primary-button {
       min-height: 44px;
       padding-inline: 18px;
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--bot-action);
       color: #fff;
     }
-    #basic-config-editor .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    #zlibrary-registration-config-editor { margin-top: var(--service-gap); }
+    #zlibrary-registration-config-editor .config-fields { max-width: 56rem; }
+    .admin-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+    .admin-list-value[hidden] { display: none !important; }
+    .admin-list-heading > label { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+    .admin-list-count { display: inline-flex; align-items: center; padding: 3px 8px; border: 1px solid var(--studio-border); border-radius: 999px; color: var(--studio-muted); background: var(--studio-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .admin-list-roster { display: grid; gap: 8px; max-height: 310px; overflow-y: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
+    .admin-list-item { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 6px 5px 10px; border: 1px solid var(--studio-border); border-radius: 9px; background: var(--studio-soft); }
+    .admin-list-index { flex: 0 0 auto; color: var(--studio-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .admin-list-item code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--studio-ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+    .admin-list-remove { flex: 0 0 auto; min-height: 36px; min-width: 44px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-muted); font: inherit; font-size: 11px; cursor: pointer; }
+    .admin-list-remove:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); }
+    .admin-list-remove:disabled { opacity: .5; cursor: default; }
+    .admin-list-empty { margin: 0; padding: 20px 12px; border: 1px dashed var(--studio-border); border-radius: 9px; color: var(--studio-muted); font-size: 12px; text-align: center; }
+    .admin-list-add { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; min-width: 0; }
+    .admin-list-add input { flex: 1; min-width: 0; }
+    .admin-list-add .outline-button { flex: 0 0 auto; min-height: 44px; padding-inline: 14px; white-space: nowrap; }
+    .admin-list-feedback { margin: 0; color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
+    .admin-list-feedback.is-error { color: var(--danger); }
+    .admin-list-feedback:empty { display: none; }
+    .admin-list-remove:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
     .qq-api-card {
       min-width: 0;
       border: 1px solid var(--studio-border);
-      border-radius: 14px;
+      border-radius: 12px;
       background: var(--studio-card);
+      box-shadow: var(--studio-shadow);
     }
     .qq-api-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 20px;
-      padding: 20px;
+      padding: var(--service-inset);
       border-bottom: 1px solid var(--studio-border);
     }
     .qq-api-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -315,7 +336,7 @@
     .qq-api-toggle input:checked + .qq-api-toggle-track::after { transform: translateX(18px); background: #fff; }
     .qq-api-toggle input:focus-visible + .qq-api-toggle-track { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
     .qq-api-toggle:has(input:disabled) { opacity: .55; cursor: default; }
-    .qq-api-keys { display: grid; gap: 14px; padding: 20px; min-width: 0; }
+    .qq-api-keys { display: grid; gap: 16px; padding: var(--service-inset); min-width: 0; }
     .qq-api-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .qq-api-toolbar h4 { margin: 0 0 5px; font-size: 13px; color: var(--studio-ink); }
     .qq-api-toolbar small { color: var(--studio-muted); font-size: 11px; }
@@ -329,6 +350,7 @@
     .qq-api-revoke { min-height: 44px; padding: 6px 0 6px 12px; border: 0; background: transparent; color: var(--danger); font: inherit; font-size: 12px; cursor: pointer; }
     .qq-api-revoke:hover:not(:disabled) { text-decoration: underline; }
     .qq-api-revoke:disabled { opacity: .5; cursor: default; }
+    .qq-api-card :is(button, summary):focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; border-radius: 6px; }
     .qq-api-empty { padding: 19px 0; color: var(--studio-muted); font-size: 12px; }
     .qq-api-created { padding: 14px; border: 1px solid var(--studio-accent); border-radius: 9px; background: var(--studio-accent-soft); }
     .qq-api-created[hidden] { display: none; }
@@ -344,7 +366,7 @@
     .qq-api-import label { color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
     .qq-api-import textarea { resize: vertical; min-height: 92px; }
     .qq-api-keys > .config-message:empty { display: none; }
-    .qq-api-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--studio-border); }
+    .qq-api-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px var(--service-inset); border-top: 1px solid var(--studio-border); background: color-mix(in srgb, var(--studio-soft) 45%, transparent); border-radius: 0 0 11px 11px; }
     .qq-api-footer small { color: var(--studio-muted); font-size: 11px; }
     .qq-api-footer > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-left: auto; }
     @media (max-width: 560px) {
@@ -352,32 +374,38 @@
       .qq-api-toggle { justify-content: space-between; }
       .qq-api-keys { padding: 16px; }
       .qq-api-footer { padding: 14px 16px; }
+      .admin-list-item { gap: 6px; padding-left: 8px; }
+      .admin-list-item code { font-size: 11px; }
+      .admin-list-remove { min-height: 44px; }
     }
     @media (min-width: 1080px) {
       #basic-config-editor:has(> [data-config-category="basic_settings"]):has(> [data-config-category="help_web_settings"]) {
         grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
       }
-      #basic-config-editor > :is([data-config-category="zlibrary_account_settings"], .config-actions) { grid-column: 1 / -1; }
       #basic-config-editor [data-config-category="help_web_settings"] .config-fields {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
-      #basic-config-editor [data-config-category="zlibrary_account_settings"] .config-fields { max-width: 45rem; }
     }
     @media (max-width: 410px) {
       .studio-bot-tabs button { font-size: 12px; }
       .studio-bot-tabs svg { width: 14px; height: 14px; }
     }
-    #page-bot .qq-reader-toolbar { flex-wrap: wrap; }
+    #page-bot .qq-reader-toolbar { flex-wrap: wrap; margin: 0 0 16px; gap: 10px; font-size: 12px; }
+    #page-bot .qq-reader-accounts { gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 226px), 280px)); }
     #page-bot .qq-reader-account {
-      padding: 14px;
+      padding: 16px;
       border-color: var(--studio-border);
-      border-radius: 13px;
+      border-radius: 11px;
       background: var(--studio-card);
+      box-shadow: var(--studio-shadow);
     }
     #page-bot .qq-reader-account.is-current {
       border-color: var(--studio-accent);
       background: var(--studio-accent-soft);
     }
+    #page-bot .qq-reader-account-open { margin: 16px 0 14px; }
+    #page-bot .qq-reader-account-vip { padding-top: 12px; gap: 5px; }
+    #page-bot .qq-reader-empty { padding: 24px 16px; background: var(--studio-soft); }
     #bot-panel-zlibrary {
       --ink: var(--studio-ink);
       --muted: var(--studio-muted);
@@ -397,6 +425,8 @@
     }
     #page-bot .zlibrary-table { min-width: 940px; }
     #page-bot .zlibrary-table th { background: var(--studio-soft); }
+    #page-bot .zlibrary-table :is(th, td):first-child { padding-left: 14px; }
+    #page-bot .zlibrary-table :is(th, td):last-child { padding-right: 14px; }
     #page-bot .zlibrary-table tr:last-child td { border-bottom: 0; }
     #page-bot .zlibrary-tab.is-active {
       background: var(--studio-accent-soft);
@@ -583,6 +613,7 @@
     }
     @media (max-width: 560px) {
       .studio-novel-settings { grid-template-columns: minmax(0, 1fr); }
+      #page-bot .qq-reader-accounts { grid-template-columns: minmax(0, 1fr); }
       #page-novels #novel-grid {
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
         gap: 8px;

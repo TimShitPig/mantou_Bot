@@ -359,6 +359,7 @@
       };
       let savedCredentialView = null;
       let readerApiKeyGeneration = 0;
+      const configSaves = new WeakSet();
 
       const updateCredentialToggle = (button, visible) => {
         button.textContent = visible ? '隐藏' : '显示';
@@ -430,6 +431,70 @@
       botTabs?.addEventListener('keydown', (event) => {
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedCredential();
       });
+
+      const adminListValues = (value) => [...new Set(String(value || '').split(/[\s,，]+/).filter(Boolean))];
+      const renderAdminListField = (field, editable) => {
+        const inputId = `cfg-${field.key}`;
+        const values = adminListValues(safeFieldValue(field));
+        return `<div class="config-field full admin-list-editor" data-admin-list-editor>
+          <div class="admin-list-heading">
+            <label for="${inputId}-draft">${esc(field.label || field.key)}${field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : ''}</label>
+            <span class="admin-list-count" data-admin-list-count>${values.length} 位管理员</span>
+          </div>
+          <textarea id="${inputId}" class="admin-list-value" data-config-field="${esc(field.key)}" hidden ${editable ? '' : 'disabled'}>${esc(values.join('\n'))}</textarea>
+          <ul class="admin-list-roster" data-admin-list-roster aria-label="已添加的管理员"></ul>
+          <div class="admin-list-add">
+            <input id="${inputId}-draft" data-admin-draft type="text" autocomplete="off" spellcheck="false" aria-describedby="${inputId}-hint" placeholder="输入 QQ 号或 OpenID" ${editable ? '' : 'disabled'}>
+            <button class="outline-button" data-admin-add type="button" ${editable ? '' : 'disabled'}>添加管理员</button>
+          </div>
+          <small id="${inputId}-hint">可一次粘贴多个，以空格、逗号或换行分隔。保存后生效。</small>
+          <small class="admin-list-feedback" data-admin-feedback role="status" aria-live="polite"></small>
+        </div>`;
+      };
+      const bindAdminListEditor = (node, editable) => {
+        node.querySelectorAll('[data-admin-list-editor]').forEach((editor) => {
+          const value = editor.querySelector('[data-config-field]');
+          const roster = editor.querySelector('[data-admin-list-roster]');
+          const draft = editor.querySelector('[data-admin-draft]');
+          const feedback = editor.querySelector('[data-admin-feedback]');
+          const setFeedback = (text, error = false) => { feedback.textContent = text; feedback.classList.toggle('is-error', error); };
+          const update = (values) => {
+            value.value = values.join('\n');
+            editor.querySelector('[data-admin-list-count]').textContent = `${values.length} 位管理员`;
+            roster.innerHTML = values.length ? values.map((item, index) => `<li class="admin-list-item"><span class="admin-list-index" aria-hidden="true">${String(index + 1).padStart(2, '0')}</span><code>${esc(item)}</code><button class="admin-list-remove" type="button" data-admin-remove="${index}" aria-label="移除管理员 ${esc(item)}" ${editable ? '' : 'disabled'}>移除</button></li>`).join('') : '<li class="admin-list-empty">尚未添加管理员</li>';
+          };
+          update(adminListValues(value.value));
+          const add = () => {
+            if (!editable) return;
+            const entries = adminListValues(draft.value), existing = adminListValues(value.value);
+            if (!entries.length) { setFeedback('请先填写 QQ 号或 OpenID。', true); draft.focus(); return; }
+            if (entries.some((entry) => entry.length > 128)) { setFeedback('单个管理员标识最多 128 个字符。', true); draft.focus(); return; }
+            const merged = [...new Set([...existing, ...entries])];
+            if (merged.length > 200) { setFeedback('最多添加 200 位管理员。', true); draft.focus(); return; }
+            update(merged);
+            setFeedback(merged.length === existing.length ? '这些管理员已在名单中。' : `已添加 ${merged.length - existing.length} 位，保存后生效。`);
+            draft.value = ''; draft.focus();
+          };
+          editor.querySelector('[data-admin-add]').addEventListener('click', add);
+          draft.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); add(); } });
+          draft.addEventListener('paste', (event) => {
+            const text = event.clipboardData?.getData('text');
+            if (!text || !/[\r\n]/.test(text)) return;
+            event.preventDefault();
+            draft.setRangeText(text.replace(/[\r\n]+/g, ' '), draft.selectionStart, draft.selectionEnd, 'end');
+          });
+          roster.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-admin-remove]');
+            if (!button || !editable) return;
+            const entries = adminListValues(value.value), index = Number(button.dataset.adminRemove);
+            if (!Number.isInteger(index) || index < 0 || index >= entries.length) return;
+            entries.splice(index, 1); update(entries);
+            setFeedback('已移除，保存后生效。');
+            const next = roster.querySelectorAll('[data-admin-remove]');
+            (next[Math.min(index, next.length - 1)] || draft).focus();
+          });
+        });
+      };
 
       const readerApiKeyRows = (keys, editable) => keys.length
         ? keys.map((item) => `<li class="qq-api-key-row">
@@ -510,7 +575,7 @@
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
-          if (field.kind === 'admin_list') return `<div class="config-field full"><label for="${inputId}">${label}</label><textarea id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'} placeholder="每行一个 QQ 号">${esc(safeFieldValue(field))}</textarea><small>${hint || '共 ' + esc(field.count || 0) + ' 个管理员'}</small></div>`;
+          if (field.kind === 'admin_list') return renderAdminListField(field, editable);
           if (field.kind === 'boolean') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}><option value="false" ${field.value ? '' : 'selected'}>关闭</option><option value="true" ${field.value ? 'selected' : ''}>开启</option></select><small>${esc(hint)}</small></div>`;
           if (field.kind === 'select') {
             const rawOptions = field.options || field.choices || [];
@@ -530,7 +595,8 @@
           const controls = canReveal ? `${inputId} ${savedValueId}` : inputId;
           const toggle = revealableField ? `<button class="config-secret-toggle" type="button" data-config-secret-toggle="${inputId}" data-config-secret-label="${fieldLabel}" ${canReveal ? '' : 'disabled'} aria-controls="${controls}" aria-label="显示${fieldLabel}" aria-pressed="false">显示</button>` : '';
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${savedValue}${toggle}</div><small>${hint}</small></div>`;
-        }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>保存配置</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
+        }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>${targetId === 'zlibrary-registration-config-editor' ? '保存注册设置' : '保存配置'}</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message role="status" aria-live="polite"></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
+        bindAdminListEditor(node, editable);
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
         node.querySelectorAll('[data-api-key-generate], [data-api-key-delete]').forEach((button) => {
           button.addEventListener('click', () => manageReaderApiKey(node, button));
@@ -642,20 +708,41 @@
         }
       };
        const saveConfig = async (editor) => {
+        const button = editor.querySelector('[data-config-save]');
+        if (!button || button.disabled || configSaves.has(editor)) return;
+        for (const adminEditor of editor.querySelectorAll('[data-admin-list-editor]')) {
+          const draft = adminEditor.querySelector('[data-admin-draft]');
+          if (draft?.value.trim()) {
+            adminEditor.querySelector('[data-admin-add]').click();
+            if (draft.value.trim()) return;
+          }
+        }
         const fields = collectConfigFields(editor);
         const message = editor.querySelector('[data-config-message]');
+        const appid = consoleAppid, generation = consoleGeneration, label = button.textContent;
+        const isCurrent = () => appid === consoleAppid && generation === consoleGeneration && editor.isConnected && editor.querySelector('[data-config-save]') === button;
+        configSaves.add(editor); button.disabled = true; button.textContent = '正在保存…'; button.setAttribute('aria-busy', 'true');
+        if (message) { message.textContent = '正在保存当前设置…'; message.className = 'config-message'; }
         try {
           const result = await api('config', {method:'POST', body:JSON.stringify({fields})});
+          if (!isCurrent()) return;
           if (message) { message.textContent = result.message || '配置已保存'; message.className = 'config-message ok'; }
           toast(result.message || '配置已保存');
           if (editor.id === 'database-config-editor' && result.auth_changed) {
             if (message) message.textContent = '数据库配置已保存。当前登录已结束，请稍候重新登录；重载插件后新连接参数生效。';
-            window.setTimeout(() => location.reload(), 1800);
+            window.setTimeout(() => { if (appid === consoleAppid && generation === consoleGeneration && editor.isConnected) location.reload(); }, 1800);
             return;
           }
           await load();
         }
-         catch (error) { if (error.status === 401) showAuthError(error); if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message); }
+        catch (error) {
+          if (!isCurrent() || error.name === 'AbortError') return;
+          if (error.status === 401) showAuthError(error);
+          if (message) { message.textContent = error.message; message.className = 'config-message error'; } else toast(error.message);
+        } finally {
+          configSaves.delete(editor);
+          if (isCurrent()) { button.disabled = false; button.textContent = label; button.removeAttribute('aria-busy'); }
+        }
       };
       const panAccountRows = (item, editable) => {
          const accounts = Array.isArray(item.account_summary) ? item.account_summary : [];
@@ -920,7 +1007,8 @@
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
-        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings', 'zlibrary_account_settings'].includes(field.category));
+        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
+        renderConfigEditor('zlibrary-registration-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'zlibrary_account_settings');
         renderConfigEditor('qq-reader-api-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'qq_reader_api_settings');
         renderConfigEditor('database-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'database_settings');
         renderDatabaseStatus(database);
@@ -3276,7 +3364,7 @@
         clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
         if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
         document.querySelectorAll('#console-workspace input,#console-workspace textarea,#qq-reader-account-dialog input,#jinjiang-account-dialog input').forEach((node) => { node.value = ''; });
-        for (const id of ['pan-grid','basic-config-editor','qq-reader-api-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
+        for (const id of ['pan-grid','basic-config-editor','zlibrary-registration-config-editor','qq-reader-api-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
         showNotice(''); showBotPicker(); renderBotProfiles();
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; });
         for (const url of browserMediaObjectUrls.values()) { try { URL.revokeObjectURL(url); } catch (_) {} }
