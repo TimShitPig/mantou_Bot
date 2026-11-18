@@ -50,6 +50,7 @@
                 <div><h3>QQ 阅读账号</h3><p>支持 Cookie、QQ 扫码和手机号登录。</p></div>
               </header>
               <div id="qq-auth-editor"><div class="empty">正在读取登录态…</div></div>
+              <div id="qq-reader-api-config-editor" class="config-editor"><div class="empty">正在读取开放接口配置…</div></div>
             </section>
 
             <section id="bot-panel-jinjiang" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-jinjiang" tabindex="0" hidden>

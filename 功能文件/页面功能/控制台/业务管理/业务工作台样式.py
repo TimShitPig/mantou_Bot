@@ -211,12 +211,13 @@
         to { opacity: 1; }
       }
     }
-    #basic-config-editor { gap: 13px; }
-    #basic-config-editor .config-fields {
+    #qq-reader-api-config-editor { margin-top: var(--service-gap); }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) { gap: 13px; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-fields {
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
       align-items: start;
     }
-    #basic-config-editor .config-group {
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-group {
       min-width: 0;
       padding: clamp(13px, 1.7vw, 19px);
       border: 1px solid var(--studio-border);
@@ -224,10 +225,10 @@
       border-radius: 13px;
       background: var(--studio-soft);
     }
-    #basic-config-editor .config-group h3 { margin: 0 0 12px; font-size: 15px; }
-    #basic-config-editor .config-field label { font-size: 12px; }
-    #basic-config-editor .config-field small { font-size: 11px; }
-    #basic-config-editor .config-scope-label {
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-group h3 { margin: 0 0 12px; font-size: 15px; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field label { font-size: 12px; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field small { font-size: 11px; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-scope-label {
       display: inline-block;
       margin-inline-start: 6px;
       padding: 1px 6px;
@@ -236,27 +237,27 @@
       color: var(--studio-muted);
       white-space: nowrap;
     }
-    #basic-config-editor .config-field :is(input, select, textarea) {
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field :is(input, select, textarea) {
       min-height: 44px;
       border-color: var(--studio-border);
       border-radius: 9px;
       background: var(--studio-card);
       color: var(--studio-ink);
     }
-    #basic-config-editor .config-field textarea { min-height: 82px; }
-    #basic-config-editor .config-field :is(input, select, textarea):focus {
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field textarea { min-height: 82px; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-field :is(input, select, textarea):focus {
       border-color: var(--studio-accent);
       box-shadow: 0 0 0 3px var(--studio-accent-soft);
     }
-    #basic-config-editor .config-actions { flex-wrap: wrap; }
-    #basic-config-editor .config-actions .primary-button {
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions { flex-wrap: wrap; }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions .primary-button {
       min-height: 44px;
       padding-inline: 18px;
       border-radius: 10px;
       background: var(--bot-action);
       color: #fff;
     }
-    #basic-config-editor .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
+    :is(#basic-config-editor, #qq-reader-api-config-editor) .config-actions .primary-button:hover:not(:disabled) { background: var(--bot-action-hover); }
     @media (min-width: 1080px) {
       #basic-config-editor:has(> [data-config-category="basic_settings"]):has(> [data-config-category="help_web_settings"]) {
         grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);

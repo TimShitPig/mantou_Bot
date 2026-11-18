@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.462-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.463-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.462 |
+| 版本 | v6.1.463 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -58,7 +58,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 网盘配置 | UC、夸克、百度账号、上传目录、默认账号及启停 |
 | QQ 阅读账号 | Cookie、手机号/扫码登录、账号选择和会员资料 |
 | 晋江账号 | 晋江 App 扫码、Token/读者编号添加、多账号选择、启停及资料刷新 |
-| QQ 阅读开放接口 | 服务公共开关、随机生成与撤销多个 Key |
+| 机器人配置 → QQ 阅读 → 开放接口 | 服务公共开关、随机生成与撤销多个 Key |
 | 消息记录 → 群菜单 | 当前群的网盘账号、文件直发和群管理 |
 
 [_conf_schema.json](_conf_schema.json) 仍保留隐藏字段及默认值，避免升级或保存配置时丢失已有账号、Key 和 `bot_profiles` 机器人配置；隐藏不代表删除数据。无需手动编辑这些内部字段。
@@ -200,7 +200,7 @@ UC、夸克、百度以配置目录为总目录，小说上传进入 `总目录/
 
 ## QQ 阅读开放 API
 
-在插件网页后台开启 QQ 阅读开放接口，随机生成并添加 Key。支持多个 Key、单独撤销；新 Key 只展示一次，已有 Key 不回显。服务复用帮助网页地址，前缀为 **`/openapi/qq-reader/v1`**。
+在插件网页后台的“机器人配置 → QQ 阅读”分区开启开放接口，随机生成并添加 Key。支持多个 Key、单独撤销；新 Key 只展示一次，已有 Key 不回显。服务复用帮助网页地址，前缀为 **`/openapi/qq-reader/v1`**。
 
 浏览器可直接访问以下入口，示例需替换地址、Key 和书籍 ID：
 
