@@ -95,8 +95,6 @@ from .总览外观 import 总览外观
     :root body.messages-workspace .chat-list-panel { background:var(--msg-list-fill); }
     :root body.messages-workspace .msg-head { background:var(--msg-head-bg); }
     :root body.messages-workspace .msg-composer { background:var(--msg-composer-bg); }
-    :root body.messages-workspace .msg-chat.active,
-    :root body.messages-workspace .msg-chat.pinned.active,
     :root body.messages-workspace .msg-bubble,
     :root body.messages-workspace .msg-file-card { box-shadow:none; }
     :root body.messages-workspace ::selection { background:var(--primary-soft); color:var(--ink); }
