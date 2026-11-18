@@ -2266,23 +2266,26 @@ async def _处理消息布局(request: web.Request) -> web.Response:
 
 
 async def _处理机器人资料(request: web.Request) -> web.Response:
-    """返回全部 QQ 官方机器人公开资料，兼容单资料读取。"""
+    """返回 QQ 官方机器人公开资料；首屏只取本地快照。"""
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
     目标AppID = str(request.query.get("appid") or "").strip()
     if 目标AppID and not re.fullmatch(r"[0-9]{4,32}", 目标AppID):
         return _控制台错误(400, "机器人参数无效")
+    仅缓存 = request.query.get("summary") == "1"
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        资料列表 = await 消息记录.获取机器人资料列表()
+        资料列表 = await 消息记录.获取机器人资料列表(仅缓存=仅缓存)
         字段 = ("appid", "platform_id", "id", "username", "avatar", "status", "profile_status")
         资料列表 = [
             {键: str(资料.get(键) or "") for 键 in 字段}
             for 资料 in 资料列表 if isinstance(资料, dict)
         ]
         try:
-            统计列表 = await 消息记录.获取机器人消息统计([项["appid"] for 项 in 资料列表])
+            统计列表 = await 消息记录.获取机器人消息统计(
+                [项["appid"] for 项 in 资料列表], 仅缓存=仅缓存,
+            )
             if not isinstance(统计列表, dict):
                 统计列表 = {}
         except Exception as 统计异常:
@@ -2300,6 +2303,8 @@ async def _处理机器人资料(request: web.Request) -> web.Response:
         )
     except Exception as exc:
         logger.debug("帮助控制台机器人资料读取失败：错误类型=%s", type(exc).__name__)
+        if 仅缓存:
+            return _控制台错误(500, "机器人列表暂时不可用")
         return web.json_response(
             {"ok": True, "profile": {}, "profiles": [], "version": 控制台版本},
             headers={"Cache-Control": "no-store"},

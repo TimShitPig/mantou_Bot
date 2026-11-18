@@ -309,7 +309,7 @@
       });
       const viewFromUrl = () => { const current = new URLSearchParams(location.search).get('view'); return views[current] ? current : 'dashboard'; };
       const setView = (view, push = true, resetScroll = (view !== activeView)) => {
-        if (!consoleAppid) return;
+        if (!consoleAppid || consoleEntering) return;
         const next = views[view] ? view : 'dashboard';
         if (groupSettingsState.mutating && next !== activeView) return toast('正在更新本群设置，请稍候');
         if (next !== 'messages' && activeView === 'messages') { hideMsgCtx(); groupSettingsState.remarkTarget = null; msgModalIds.forEach((id) => setMsgModal(id, false, false)); closeMsgLightbox(); closeComposerMentionPicker(); closeGroupSettings(); stopMsgGroupSnapshots(); }
@@ -3065,6 +3065,11 @@
         document.title = '选择机器人 · 馒头控制台';
         $('updated').textContent = '--';
       };
+      const setConsoleEntryBusy = (busy) => {
+        if (busy) $('console-workspace').setAttribute('aria-busy', 'true');
+        else $('console-workspace').removeAttribute('aria-busy');
+        document.querySelector('#console-sidebar .studio-nav')?.toggleAttribute('inert', busy);
+      };
       const exitBotConsole = (push = true) => {
         clearSavedCredential();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
@@ -3073,6 +3078,7 @@
         for (const controller of consoleRequests) controller.abort();
         consoleRequests.clear();
         consoleEntering = false; consoleAppid = '';
+        setConsoleEntryBusy(false);
         databaseTestState.generation += 1; databaseTestState.abort?.abort(); databaseTestState.abort = null;
         snapshot = null; activeView = null; activePanTab = null; activePanObject = null;
         quarkProfileRefreshAfter = 0; quarkProfileRefreshPromise = null;
@@ -3109,31 +3115,49 @@
         if (consoleAppid && consoleAppid !== appid) exitBotConsole(false);
         consoleEntering = true; consoleAppid = appid; ++consoleGeneration;
         const generation = consoleGeneration;
-        showBotPicker(); $('bot-profile-list').setAttribute('aria-busy', 'true'); renderBotProfiles();
-        applyBotProfile(profile);
+        const pickerUrl = location.pathname + location.search + location.hash;
+        const pickerState = history.state;
         try {
-          const data = await api('dashboard');
-          if (generation !== consoleGeneration || appid !== consoleAppid) return;
-          if (String(data.bot?.appid || data.appid || appid) !== appid) throw new Error('机器人资料不匹配，请重新选择');
-          render(data);
-          $('bot-picker').hidden = true; $('console-sidebar').hidden = false; $('console-workspace').hidden = false;
-          document.querySelector('.shell')?.classList.remove('bot-picker-open');
-          document.title = `${window.msgBotProfile.username || '机器人'} · 馒头控制台`;
           const params = new URLSearchParams(location.search); params.set('appid', appid);
           const view = push ? 'dashboard' : viewFromUrl(); params.set('view', view);
           if (push) history.pushState({appid,view}, '', `${location.pathname}?${params.toString()}`);
           else history.replaceState({appid,view}, '', `${location.pathname}?${params.toString()}`);
-          setView(view, false); void loadMsgLayout();
-          if ($('popover-logout')) $('popover-logout').hidden = false;
+          // 工作台先呈现当前身份；后台数据通过作用域校验后才显示，避免露出上个机器人的内容。
+          document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; });
+          document.querySelectorAll('.studio-nav [data-view]').forEach((node) => {
+            node.classList.remove('active'); node.setAttribute('aria-current', 'false');
+          });
+          setMessagesWorkspace(false);
+          applyBotProfile(profile);
+          $('page-title').textContent = views[view][0];
+          $('page-subtitle').textContent = views[view][1];
+          $('page-eyebrow').textContent = `${window.msgBotProfile.username || '机器人'} / ${view === 'dashboard' ? '管理台' : '功能页面'}`;
+          $('updated').textContent = '正在加载…';
+          showNotice('');
+          setConsoleEntryBusy(true);
+          $('bot-picker').hidden = true; $('console-sidebar').hidden = false; $('console-workspace').hidden = false;
+          document.querySelector('.shell')?.classList.remove('bot-picker-open');
+          document.title = `${window.msgBotProfile.username || '机器人'} · 馒头控制台`;
           $('page-title').tabIndex = -1; $('page-title').focus({preventScroll:true});
+          const data = await api('dashboard');
+          if (generation !== consoleGeneration || appid !== consoleAppid) return;
+          if (String(data.bot?.appid || data.appid || appid) !== appid) throw new Error('机器人资料不匹配，请重新选择');
+          render(data);
+          consoleEntering = false;
+          setView(viewFromUrl(), false); void loadMsgLayout();
+          if ($('popover-logout')) $('popover-logout').hidden = false;
         } catch (error) {
-          if (generation !== consoleGeneration || error.name === 'AbortError') return;
+          if (generation !== consoleGeneration) return;
           exitBotConsole(false);
+          if (push) history.replaceState(pickerState, '', pickerUrl);
           showBotPicker(error.status === 401 ? '登录已过期，请重新登录。' : (error.message || '机器人控制台暂时不可用，请重试。'));
+          $('bot-picker-title').focus?.({preventScroll:true});
           if (error.status === 401) showAuthError(error);
         } finally {
-          if (generation === consoleGeneration) consoleEntering = false;
-          $('bot-profile-list').removeAttribute('aria-busy'); renderBotProfiles();
+          if (generation === consoleGeneration) {
+            consoleEntering = false;
+            setConsoleEntryBusy(false);
+          }
         }
       };
       const botStatusLabel = (status) => ({running:'运行中', pending:'连接中', error:'连接异常', stopped:'已停止', disabled:'已停用'})[status] || '状态未知';
@@ -3187,31 +3211,72 @@
       };
       let botProfileRequest = null;
       let botProfileLoadedAt = 0;
+      let botProfileDetailsController = null;
+      const normalizedBotProfiles = (data) => {
+        const profiles = Array.isArray(data.profiles) ? data.profiles : (data.profile?.appid ? [data.profile] : []);
+        return profiles.filter((profile) => profile && typeof profile === 'object').map((profile, index) => ({
+          ...profile,
+          appid:String(profile.appid || '').trim(),
+          avatar:safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim()),
+          key:String(profile.appid || profile.platform_id || `bot-${index}`),
+        }));
+      };
+      const applyBotProfiles = (next, authoritative) => {
+        const previous = window.msgBotProfiles;
+        window.msgBotProfiles = next;
+        if (JSON.stringify(previous) !== JSON.stringify(next)) renderBotProfiles();
+        const current = next.find((profile) => profile.appid === consoleAppid);
+        if (current && consoleAppid) {
+          const old = previous?.find((profile) => profile.appid === consoleAppid);
+          const changed = ['id','username','avatar','status'].some((key) => current[key] !== old?.[key]);
+          if (changed || window.msgBotProfile?.appid !== consoleAppid) applyBotProfile(current, changed);
+          if (changed && !$('console-workspace').hidden) {
+            const name = window.msgBotProfile?.username || '机器人';
+            const view = activeView || viewFromUrl();
+            document.title = `${name} · 馒头控制台`;
+            $('page-eyebrow').textContent = `${name} / ${view === 'dashboard' ? '管理台' : '功能页面'}`;
+          }
+        } else if (authoritative && consoleAppid && !consoleEntering) {
+          exitBotConsole(false); showBotPicker('当前机器人已停止加载，请重新选择。');
+        }
+      };
+      const loadBotProfileDetails = async () => {
+        const controller = new AbortController();
+        botProfileDetailsController = controller;
+        try {
+          const data = await api('bot-profile', {signal:controller.signal});
+          if (controller.signal.aborted) return;
+          const details = new Map(normalizedBotProfiles(data).filter((profile) => profile.appid).map((profile) => [profile.appid, profile]));
+          // 异步补全只更新同一 AppID，不覆盖列表成员和连接状态。
+          const next = (window.msgBotProfiles || []).map((profile) => {
+            const detail = details.get(profile.appid);
+            if (!detail) return profile;
+            const {id, username, avatar, profile_status, stats} = detail;
+            return {...profile, id, username, avatar, profile_status, stats};
+          });
+          applyBotProfiles(next, false);
+        } catch (error) {
+          if (!controller.signal.aborted && error.status === 401) showAuthError(error);
+        } finally {
+          if (botProfileDetailsController === controller) botProfileDetailsController = null;
+        }
+      };
       const loadBotProfile = async () => {
         if (botProfileRequest) return botProfileRequest;
         if (Date.now() - botProfileLoadedAt < 60000) return;
+        botProfileDetailsController?.abort();
         botProfileRequest = (async () => {
-        try {
-          const data = await api('bot-profile');
-          const profiles = Array.isArray(data.profiles) ? data.profiles : (data.profile?.appid ? [data.profile] : []);
-          const previousProfiles = JSON.stringify(window.msgBotProfiles || []);
-          window.msgBotProfiles = profiles.filter((profile) => profile && typeof profile === 'object').map((profile, index) => ({
-            ...profile,
-            appid:String(profile.appid || '').trim(),
-            avatar:safeMediaUrl(String(profile.avatar || profile.avatar_url || '').trim()),
-            key:String(profile.appid || profile.platform_id || `bot-${index}`),
-          }));
-          renderBotProfiles();
-          const current = window.msgBotProfiles.find((profile) => profile.appid === consoleAppid);
-          if (current) applyBotProfile(current, previousProfiles !== JSON.stringify(window.msgBotProfiles));
-          else if (consoleAppid && !consoleEntering) { exitBotConsole(false); showBotPicker('当前机器人已停止加载，请重新选择。'); }
-          botProfileLoadedAt = Date.now();
-          if (data.version) $('console-version').textContent = `v${data.version}`;
-          if ($('popover-logout')) $('popover-logout').hidden = false;
-        } catch (error) {
-          if (error.status === 401) showAuthError(error);
-          else if (!consoleAppid) showBotPicker('机器人列表读取失败，请点击刷新列表重试。');
-        }
+          try {
+            const data = await api('bot-profile?summary=1');
+            applyBotProfiles(normalizedBotProfiles(data), true);
+            botProfileLoadedAt = Date.now();
+            if (data.version) $('console-version').textContent = `v${data.version}`;
+            if ($('popover-logout')) $('popover-logout').hidden = false;
+            if (window.msgBotProfiles?.length) void loadBotProfileDetails();
+          } catch (error) {
+            if (error.status === 401) showAuthError(error);
+            else if (!consoleAppid) showBotPicker('机器人列表读取失败，请点击刷新列表重试。');
+          }
         })().finally(() => { botProfileRequest = null; });
         return botProfileRequest;
       };

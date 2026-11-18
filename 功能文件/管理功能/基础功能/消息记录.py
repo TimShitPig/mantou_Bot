@@ -5571,25 +5571,28 @@ async def _统计内存机器人消息(appid列表: list[str], *, 读取失败: 
     } for 应用 in appid列表}
 
 
-async def 获取机器人消息统计(appid列表: list[str]) -> dict[str, dict[str, Any]]:
-    """选择页批量统计，数据库在线程读取，同一请求集单飞并短时缓存。"""
+async def 获取机器人消息统计(appid列表: list[str], *, 仅缓存: bool = False) -> dict[str, dict[str, Any]]:
+    """选择页批量统计；仅缓存模式不等待在途任务，也不扫描消息。"""
     应用列表 = sorted({str(值).strip() for 值 in appid列表
                        if re.fullmatch(r"[0-9]{4,32}", str(值).strip())})
     if not 应用列表:
         return {}
     存储统计 = getattr(_消息存储, "批量统计机器人消息", None)
     if not _消息数据库已配置() or not callable(存储统计):
-        return await _统计内存机器人消息(应用列表)
+        return {} if 仅缓存 else await _统计内存机器人消息(应用列表)
     try:
         数据库快照 = _消息存储.获取数据库配置快照(当前插件配置)
         数据库键 = _消息存储.获取数据库初始化键(数据库快照)
     except Exception as 异常:
         logger.debug("机器人统计配置读取失败：错误类型=%s", type(异常).__name__)
-        return await _统计内存机器人消息(应用列表, 读取失败=True)
+        return {} if 仅缓存 else await _统计内存机器人消息(应用列表, 读取失败=True)
     键 = (数据库键, tuple(应用列表), _聊天记录清理序号)
     缓存 = _机器人消息统计缓存.get(键)
-    if 缓存 and 缓存[0] > time.monotonic():
+    # 首屏保留同库、同机器人集合的旧计数；常规请求仍按有效期刷新。
+    if 缓存 and (仅缓存 or 缓存[0] > time.monotonic()):
         return copy.deepcopy(缓存[1])
+    if 仅缓存:
+        return {}
     任务 = _机器人消息统计任务.get(键)
     if 任务 is None or 任务.done() or 任务.get_loop() is not asyncio.get_running_loop():
         async def 读取() -> dict[str, dict[str, Any]]:
@@ -5622,8 +5625,8 @@ async def 获取机器人消息统计(appid列表: list[str]) -> dict[str, dict[
     return copy.deepcopy(await asyncio.shield(任务))
 
 
-async def 获取机器人资料列表() -> list[dict[str, str]]:
-    """合并已配置和已加载机器人；停用项只读取该 AppID 的历史公开缓存。"""
+async def 获取机器人资料列表(*, 仅缓存: bool = False) -> list[dict[str, str]]:
+    """合并已配置和已加载机器人；首屏或停用项只读取该 AppID 的公开缓存。"""
     配置映射: dict[str, dict[str, Any]] = {}
     for 配置 in _读取已配置QQ官方机器人():
         appid = 配置["appid"]
@@ -5657,6 +5660,7 @@ async def 获取机器人资料列表() -> list[dict[str, str]]:
                 状态值 = _读取字段(平台, "status")
                 状态 = str(_读取字段(状态值, "value", 状态值) or "unknown").strip().lower()
                 结果["status"] = 状态 if 状态 in {"pending", "running", "error", "stopped"} else "unknown"
+            if 平台 is not None and not 停用 and not 仅缓存:
                 资料 = await _读取机器人公开资料(平台, appid)
                 资料状态 = "ok" if 资料 else "unavailable"
             else:
