@@ -13,7 +13,6 @@ import ipaddress
 import mimetypes
 import json
 import logging
-import os
 from pathlib import Path
 import re
 import secrets
@@ -29,7 +28,6 @@ from 功能文件.管理功能.基础功能.机器人作用域 import (
     规范化机器人AppID, 机器人独立配置分类, 机器人独立帮助字段,
 )
 
-import aiohttp
 from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector, web
 
 try:
@@ -1912,20 +1910,6 @@ def _清理本地发送媒体同步(现在: float | None = None) -> None:
                 continue
     except OSError:
         return
-
-
-def _保存本地发送媒体同步(数据: bytes, 文件名: str, 内容类型: str) -> str:
-    """旧接口兼容占位；新发送媒体不再写入服务器硬盘。"""
-    return ""
-
-
-async def 保存本地发送媒体(
-    数据: bytes,
-    文件名: str = "",
-    内容类型: str = "application/octet-stream",
-) -> str:
-    """兼容旧调用方；实际媒体副本由浏览器 Cache API 保存。"""
-    return ""
 
 
 async def _处理本地发送媒体(request: web.Request) -> web.Response:

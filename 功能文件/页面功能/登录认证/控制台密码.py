@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 from aiohttp import web
 
-from . import 帮助网页后端 as 后端
+from .. import 帮助网页后端 as 后端
 
 
 密码显示请求上限 = 16 * 1024

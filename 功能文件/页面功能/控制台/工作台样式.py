@@ -176,15 +176,8 @@
     .studio-kicker {
       display:block; color:var(--studio-accent); font-size:10px; font-weight:800; letter-spacing:.11em;
     }
-    .studio-card-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
-    .studio-card-head h2 { margin:3px 0 0; font-size:18px; font-weight:750; }
     #page-dashboard.studio-dashboard:not([hidden]) { display:grid; gap:16px; margin:0; }
-    .studio-hero {
-      display:grid; grid-template-columns:minmax(0,1fr) clamp(142px,27%,245px);
-      align-items:center; gap:12px; background:var(--studio-wash);
-    }
-    .studio-hero h2 { margin:5px 0 6px; font-size:clamp(20px,3vw,32px); line-height:1.3; overflow-wrap:anywhere; }
-    .studio-hero p,.studio-picker-banner p { max-width:58ch; margin:0; color:var(--studio-muted); }
+    .studio-picker-banner p { max-width:58ch; margin:0; color:var(--studio-muted); }
     .studio-book-art { display:block; width:100%; }
     .studio-primary {
       display:inline-flex; align-items:center; gap:7px; min-height:38px; margin-top:15px;
@@ -194,43 +187,11 @@
     :root[data-theme="dark"] .studio-primary { color:#fff; }
     .studio-primary:hover { background:var(--accent-hover); }
     .studio-primary svg { width:17px; height:17px; }
-    .studio-dashboard-grid { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:16px; align-items:start; }
-    .studio-dashboard-side { display:grid; gap:16px; }
-    .studio-service-list { display:grid; margin-top:12px; }
-    .studio-service-row {
-      display:grid; grid-template-columns:38px minmax(0,1fr) minmax(0,max-content) 33px;
-      align-items:center; gap:9px; min-height:60px; padding:9px 0; border-top:1px solid var(--studio-border);
-    }
     .studio-service-icon {
       display:grid; place-items:center; width:36px; height:36px;
       border-radius:11px; color:var(--studio-accent); background:var(--studio-accent-soft);
     }
-    .studio-service-row:nth-child(2) .studio-service-icon,.studio-guide .studio-service-icon {
-      color:var(--studio-peach-ink); background:var(--studio-peach);
-    }
-    .studio-service-row:nth-child(3) .studio-service-icon { color:var(--studio-mint-ink); background:var(--studio-mint); }
     .studio-service-icon svg { width:20px; height:20px; }
-    .studio-service-row h3 { margin:0; font-size:14px; font-weight:720; }
-    .studio-service-row small { display:block; color:var(--studio-muted); font-size:11px; overflow-wrap:anywhere; }
-    .studio-service-value {
-      padding:4px 8px; border-radius:999px; background:var(--studio-soft); color:var(--studio-ink);
-      font-size:12px; font-weight:700; text-align:right; overflow-wrap:anywhere;
-    }
-    .studio-service-row > button,.studio-guide > a {
-      display:grid; place-items:center; width:33px; height:33px; padding:0;
-      border:1px solid var(--studio-border); border-radius:10px; background:var(--studio-card); color:var(--studio-accent);
-    }
-    .studio-service-row > button:hover,.studio-guide > a:hover { background:var(--studio-accent-soft); }
-    .studio-service-row > button svg,.studio-guide > a svg,.studio-health > a svg { width:17px; height:17px; }
-    .studio-health dl { margin:10px 0; }
-    .studio-health dl div { display:flex; flex-wrap:wrap; justify-content:space-between; gap:2px 9px; padding:8px 0; border-bottom:1px solid var(--studio-border); }
-    .studio-health dt { color:var(--studio-muted); font-size:12px; }
-    .studio-health dd { margin:0; font-weight:680; font-size:12px; overflow-wrap:anywhere; }
-    .studio-health > a { display:inline-flex; align-items:center; gap:4px; color:var(--studio-accent); text-decoration:none; font-weight:700; font-size:12px; }
-    .studio-health > a:hover { text-decoration:underline; }
-    .studio-guide { display:grid; grid-template-columns:36px minmax(0,1fr) 33px; align-items:center; gap:10px; }
-    .studio-guide h2 { margin:0; font-size:15px; }
-    .studio-guide p { margin:3px 0 0; color:var(--studio-muted); font-size:12px; }
 
     body:not(.messages-workspace) .studio-picker {
       width:min(1100px,100%); margin:0 auto; padding:clamp(6px,2vw,24px) 0 32px;
@@ -282,10 +243,6 @@
       body { --studio-sidebar-width:204px; }
       .studio-nav-group a { padding-inline:7px; }
     }
-    @media (max-width:900px) {
-      .studio-dashboard-grid { grid-template-columns:minmax(0,1fr); }
-      .studio-dashboard-side { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
-    }
     @media (max-width:760px) {
       body:not(.messages-workspace) .shell {
         grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr);
@@ -320,13 +277,8 @@
       body:not(.messages-workspace) .topbar #admin-name { max-width:65px; }
     }
     @media (max-width:470px) {
-      .studio-dashboard-side { grid-template-columns:minmax(0,1fr); }
-      .studio-hero,.studio-picker-banner { grid-template-columns:minmax(0,1fr) 85px; gap:5px; }
-      .studio-hero p,.studio-picker-banner p { font-size:12px; }
-      .studio-service-row { grid-template-columns:32px minmax(0,1fr) minmax(0,max-content) 30px; gap:6px; }
-      .studio-service-row .studio-service-icon { width:30px; height:30px; }
-      .studio-service-row > button { width:30px; height:30px; }
-      .studio-service-value { max-width:84px; font-size:11px; }
+      .studio-picker-banner { grid-template-columns:minmax(0,1fr) 85px; gap:5px; }
+      .studio-picker-banner p { font-size:12px; }
       body:not(.messages-workspace) .topbar #admin-name { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
     }
 """

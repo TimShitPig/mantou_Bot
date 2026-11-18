@@ -3117,8 +3117,6 @@
           history_order:Number(message.history_order || 0),
         };
       };
-      const msgComposerTabs = [['text','文本'],['markdown','Markdown'],['media','媒体'],['ark','ARK模板'],['card','图文卡片']];
-      const msgFilterLabels = { all:'全量', remark:'备注', group:'群聊', user:'私聊' };
       const avatarUrl = (openid, type, appid) => {
         const id = String(openid || '').trim();
         if (!id) return '';
@@ -3403,13 +3401,6 @@
           }
         })().finally(() => { botProfileRequest = null; });
         return botProfileRequest;
-      };
-      const msgTypeName = (m) => {
-        const c = String(m.content || '');
-        if (c.startsWith('[媒体]')) return '媒体';
-        if (c.startsWith('[ARK卡片]')) return 'ARK';
-        if (c.startsWith('[图文卡片]')) return '卡片';
-        return '文本';
       };
       const fmtChatTime = (ts) => {
         const s = String(ts || '').trim();

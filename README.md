@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.459-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.460-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.459 |
+| 版本 | v6.1.460 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -251,7 +251,13 @@ metadata.yaml                   插件信息
 │   ├── 小说功能/小说/           各平台下载与账号协议
 │   ├── 网盘功能/                小说交付、网盘账号及媒体归档
 │   └── 群聊功能/                欢迎、群管与群设置
-├── 页面功能/                    网页服务、界面、教程配图及开放 API
+├── 页面功能/                    网页服务、后端及 QQ 阅读开放 API
+│   ├── 登录认证/                登录页和凭据查看处理
+│   ├── 控制台/                  控制台框架、消息记录界面和页面资源
+│   │   ├── 业务管理/            业务工作台
+│   │   └── 系统运维/            系统工作台
+│   ├── 公共样式/                登录页与控制台共用的主题
+│   └── 教程图片/                QQ 使用教程配图
 └── 文件缓存/                    项目内运行缓存，不提交生成文件
 ```
 

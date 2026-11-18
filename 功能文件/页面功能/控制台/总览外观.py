@@ -228,8 +228,8 @@
     }
     :root[data-theme="dark"] .studio-card:not(.dash-snap) { box-shadow: none; }
     /* 卡片头：衬线标题 + 统一灰色眉标，底部一条细线收边 */
-    .studio-card-head, .studio-service-head { padding-bottom: 12px; border-bottom: 1px solid var(--studio-border); }
-    .studio-card-head h2, .studio-service-head h2, .studio-bot-panel h2 {
+    .studio-service-head { padding-bottom: 12px; border-bottom: 1px solid var(--studio-border); }
+    .studio-service-head h2, .studio-bot-panel h2 {
       margin: 0;
       font-family: var(--brand-serif);
       font-size: 18px;
@@ -243,7 +243,7 @@
       color: var(--studio-muted);
       text-transform: none;
     }
-    .studio-card-head p, .studio-service-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 11.5px; }
+    .studio-service-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 11.5px; }
 
     /* 内嵌开关改成“行”，去掉卡中卡的双层边框 */
     .studio-novel-control, .studio-novel-switch-row {
@@ -276,8 +276,8 @@
     :root[data-theme="dark"] .studio-nav a.active { background: #22302a; color: var(--studio-ink); }
 
     /* 列表行：hover 温和染色，分隔线统一细线 */
-    .studio-service-row, .dash-biz-row { transition: background .16s ease; }
-    .studio-service-row:hover, .dash-biz-row:hover { background: var(--studio-wash); }
+    .dash-biz-row { transition: background .16s ease; }
+    .dash-biz-row:hover { background: var(--studio-wash); }
 
     /* 滚动条与新外观一致 */
     :root body:not(.messages-workspace) * { scrollbar-color: #b9ad96 transparent; }

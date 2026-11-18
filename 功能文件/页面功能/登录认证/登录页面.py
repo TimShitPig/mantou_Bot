@@ -1,7 +1,7 @@
 """帮助网页的独立登录页模板。"""
 
 from .登录页面样式 import 登录页样式
-from .新版外观样式 import 新版外观样式
+from ..公共样式.新版外观样式 import 新版外观样式
 from .登录页面脚本 import 登录页脚本
 
 登录页前缀 = """<!doctype html>

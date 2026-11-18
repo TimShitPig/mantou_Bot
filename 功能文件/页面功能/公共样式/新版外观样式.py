@@ -296,14 +296,12 @@
       background: var(--studio-card);
       box-shadow: none;
     }
-    .studio-card-head h2,
     .studio-kicker + h2,
     .studio-service-head h2 {
       font-family: var(--brand-serif);
       font-weight: 700;
       letter-spacing: .02em;
     }
-    .studio-card-head h2 { font-size: 19px; }
     .studio-kicker {
       display: block;
       margin: 0 0 4px;
@@ -313,23 +311,8 @@
       letter-spacing: .18em;
     }
     #page-dashboard .studio-kicker { display: none; }
-    .studio-card-head h2 { margin-top: 0; }
 
     /* ========== 8. 总览：hero 与服务目录 ========== */
-    .studio-hero {
-      grid-template-columns: minmax(0, 1fr) clamp(132px, 24%, 220px);
-      background: var(--studio-wash);
-      border: 1px solid var(--studio-border);
-    }
-    .studio-hero h2 {
-      margin: 0 0 8px;
-      font-family: var(--brand-serif);
-      font-size: clamp(22px, 2.7vw, 30px);
-      font-weight: 700;
-      letter-spacing: .02em;
-      line-height: 1.35;
-    }
-    .studio-hero p { color: var(--studio-muted); font-size: 13px; line-height: 1.75; }
     .studio-book-art {
       display: block;
       max-width: 168px;
@@ -353,21 +336,7 @@
       letter-spacing: .04em;
     }
     .studio-primary:hover { background: var(--accent-hover); }
-    .studio-dashboard-grid { grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); gap: 14px; }
-    .studio-dashboard-side { gap: 14px; }
-    .studio-service-list { margin-top: 14px; }
-    .studio-service-row {
-      grid-template-columns: 34px minmax(0, 1fr) minmax(0, max-content) 30px;
-      min-height: 56px;
-      gap: 11px;
-      border-top: 1px dotted var(--studio-border);
-    }
-    .studio-service-row h3 { font-size: 13.5px; font-weight: 640; letter-spacing: .01em; }
-    .studio-service-row small { color: var(--studio-muted); font-size: 11.5px; }
-    .studio-service-icon,
-    .studio-service-row:nth-child(2) .studio-service-icon,
-    .studio-service-row:nth-child(3) .studio-service-icon,
-    .studio-guide .studio-service-icon {
+    .studio-service-icon {
       width: 32px;
       height: 32px;
       border: 1px solid var(--studio-border);
@@ -375,39 +344,7 @@
       background: transparent;
       color: var(--studio-accent);
     }
-    .studio-service-row:nth-child(2) .studio-service-icon { color: var(--paper-gold); }
-    .studio-service-row:nth-child(3) .studio-service-icon { color: var(--paper-clay); }
     .studio-service-icon svg { width: 17px; height: 17px; }
-    .studio-service-value {
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: var(--studio-muted);
-      font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-      font-size: 11.5px;
-      font-weight: 500;
-      letter-spacing: .03em;
-      font-variant-numeric: tabular-nums;
-    }
-    .studio-service-row > button,
-    .studio-guide > a {
-      width: 30px;
-      height: 30px;
-      border: 1px solid var(--studio-border);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--studio-muted);
-    }
-    .studio-service-row > button:hover,
-    .studio-guide > a:hover { border-color: var(--studio-accent); color: var(--studio-accent); background: transparent; }
-    .studio-health dl { margin: 12px 0 10px; }
-    .studio-health dl div { padding: 9px 0; border-bottom: 1px dotted var(--studio-border); }
-    .studio-health dt { color: var(--studio-muted); font-size: 11.5px; letter-spacing: .04em; }
-    .studio-health dd { font-size: 12px; font-weight: 600; }
-    .studio-health > a { color: var(--studio-accent); font-weight: 600; font-size: 11.5px; }
-    .studio-guide { grid-template-columns: 32px minmax(0, 1fr) 30px; gap: 11px; }
-    .studio-guide h2 { font-family: var(--brand-serif); font-size: 15px; font-weight: 700; }
-    .studio-guide p { font-size: 11.5px; color: var(--studio-muted); }
 
     /* ========== 9. 控件 ========== */
     :root body:not(.messages-workspace) .primary-button {
@@ -478,7 +415,6 @@
 
     /* ========== 10. 业务页 ========== */
     .studio-service-head { border-bottom: 1px solid var(--studio-border); padding-bottom: 12px; }
-    .studio-count-pill,
     .studio-bot-badge {
       border: 1px solid var(--studio-border);
       border-radius: 999px;
@@ -487,7 +423,6 @@
       font-size: 11px;
       font-weight: 500;
     }
-    .studio-count-pill.is-on { border-color: #1c66503d; color: var(--studio-accent); }
     .studio-bot-workspace,
     .studio-bot-panel,
     .studio-novel-control,
@@ -762,10 +697,6 @@
       .studio-nav-group > p { letter-spacing: .1em; }
       .studio-nav-group a { border-radius: 5px; }
       body:not(.messages-workspace) #console-workspace > .page-heading { margin-bottom: 14px; padding-bottom: 10px; }
-    }
-    @media (max-width: 470px) {
-      .studio-hero { grid-template-columns: minmax(0, 1fr) 78px; }
-      .studio-hero h2 { font-size: 21px; }
     }
     @media (prefers-reduced-motion: reduce) {
       * { transition-duration: .01ms !important; animation-duration: .01ms !important; }

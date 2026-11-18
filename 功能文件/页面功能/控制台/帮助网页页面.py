@@ -3,16 +3,16 @@
 页面结构、样式和脚本分别维护，后端只负责把模板作为 HTML 响应返回。
 """
 
-from .业务工作台 import 业务页面
-from .业务工作台样式 import 业务样式
-from .业务工作台脚本 import 业务脚本
+from .业务管理.业务工作台 import 业务页面
+from .业务管理.业务工作台样式 import 业务样式
+from .业务管理.业务工作台脚本 import 业务脚本
 from .工作台框架 import 工作台侧栏, 工作台总览, 机器人选择
 from .工作台样式 import 工作台样式
 from .帮助网页样式 import 控制台样式
 from .消息记录皮肤 import 消息记录皮肤
-from .系统工作台 import 系统页面
-from .系统工作台样式 import 系统样式
-from .系统工作台脚本 import 系统脚本
+from .系统运维.系统工作台 import 系统页面
+from .系统运维.系统工作台样式 import 系统样式
+from .系统运维.系统工作台脚本 import 系统脚本
 from .帮助网页脚本 import 控制台脚本
 
 页面头部前缀 = """<!doctype html>
