@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.471-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.472-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.471 |
+| 版本 | v6.1.472 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -28,6 +28,8 @@
 书旗 XML 目录仅在返回有效非负 `TotalCount` 时核对条目数量；缺失计数不作数量不一致告警。接口未提供任何有效章节时仍停止下载，不生成空文件。
 
 番茄正文补拉按分组和章节保存成功结果，缺章或正文格式异常仅追加一轮失败章节补拉；每轮请求的超时、连接异常和408/指定5xx最多额外尝试一次，明确业务拒绝、403、429不自动重放。日志分别显示已处理、成功和失败数量，并记录受控失败阶段与数字状态。最终仍缺章时停止整本交付，不生成缺章占位文件。
+
+**聊天日志防护**：插件运行期间，AstrBot 核心接收消息的日志摘要如包含连续超过 8 个组合符号，或同一组合符号连续超过 3 次，仅显示有界前缀及“异常叠加字符消息已隐藏”提示。正常多语言文字照常输出；收到的事件、指令解析和消息记录原文不变，不自动撤回或处罚发送者。
 
 ## 安装与更新
 

@@ -9,7 +9,7 @@ from typing import Any
 
 from astrbot.api import logger
 
-from . import QQ官方交互桥, 文件缓存, 权限工具, 消息记录, 机器人作用域
+from . import QQ官方交互桥, 文件缓存, 权限工具, 消息日志防护, 消息记录, 机器人作用域
 from 功能文件.页面功能 import 帮助网页
 from 功能文件.管理功能.网盘功能 import 小说网盘, 夸克媒体归档
 from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关
@@ -147,14 +147,15 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
 
     开始 = time.monotonic()
     句柄 = {"context": 上下文, "config": 配置, "version": 版本, "stopped": False,
-          "help": 帮助功能, "web": None, "cache_daily": None, "background": []}
+          "help": 帮助功能, "web": None, "cache_daily": None, "background": [], "log_filter": None}
     _当前句柄 = 句柄
-    QQ官方交互桥.安装QQ官方帮助交互(上下文)
-    消息记录.安装消息记录(上下文, 配置)
-    文件缓存.重置进程上传占用()
-    小说下载任务.保护中断小说缓存()
-    夸克媒体归档.启动图片归档任务(配置)
     try:
+        句柄["log_filter"] = 消息日志防护.安装消息日志过滤器()
+        QQ官方交互桥.安装QQ官方帮助交互(上下文)
+        消息记录.安装消息记录(上下文, 配置)
+        文件缓存.重置进程上传占用()
+        小说下载任务.保护中断小说缓存()
+        夸克媒体归档.启动图片归档任务(配置)
         句柄["web"] = await 帮助网页.启动帮助网页服务(配置, 插件版本=版本)
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
@@ -224,6 +225,7 @@ async def _完成停止插件(句柄: dict[str, Any]) -> None:
             关闭()
         except Exception as 异常:
             logger.warning("插件资源关闭失败：stage=%s, error_type=%s", 阶段, type(异常).__name__)
+    消息日志防护.移除消息日志过滤器(句柄.get("log_filter"))
     if _当前句柄 is 句柄:
         _当前句柄 = None
     logger.info("馒头bot重载交接完成：用时=%.3f秒", time.monotonic() - 开始)
