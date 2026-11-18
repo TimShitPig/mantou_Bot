@@ -1111,8 +1111,9 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     reward_pending = False
                                     await _冲刷阅读记录(配置)
                                     reward_cid = ""
-                                    state["rewards_enabled"] = True
-                                    await _写状态(配置, state)
+                                    if reward_result or reward_details.get("category") != "reward_expired":
+                                        state["rewards_enabled"] = True
+                                        await _写状态(配置, state)
                                 elif not offered:
                                     _日志(配置, state, "reward_unavailable")
                         if now >= reading_due:
