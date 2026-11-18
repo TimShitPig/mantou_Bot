@@ -1038,6 +1038,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
         reading_due = heartbeat_due + max(0, min(300, progress.get("next_read_at", 0) - time.time()))
         reward_due = float("inf")
         reward_cid = ""
+        reward_needs_clear = False
         recent: list[tuple[str, str, str]] = [tuple(row) for row in progress.get("recent", [])]
         last_book = tuple(progress["last_book"]) if progress.get("last_book") else None
         reading_stage = "book"
@@ -1085,7 +1086,8 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                         if reward_cid and state["rewards_enabled"] and now >= reward_due:
                             stage = "reward_status"
                             _记录阅读活动(配置, state, stage)
-                            reward_due = time.monotonic() + 300
+                            final_check = now >= reading_due
+                            reward_due = float("inf") if final_check else reading_due
                             offered = await client.reward_status()
                             async with _锁(配置):
                                 state = await _读状态(配置)
@@ -1093,7 +1095,9 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     return
                                 if state["cookies"] != cookies:
                                     break
-                                if offered and state["rewards_enabled"]:
+                                if not offered:
+                                    reward_needs_clear = False
+                                if offered and not reward_needs_clear and state["rewards_enabled"]:
                                     stage = "reward_collect"
                                     reward_result = None
                                     reward_details = None
@@ -1105,17 +1109,20 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     reward_attempted = True
                                     reward_details = await client.collect_reward(reward_cid)
                                     reward_result = reward_details.get("collected") is True
+                                    # 无通知 ID；拒绝后的连续可领标记不可当作新通知。
+                                    reward_needs_clear = not reward_result
                                     # 领奖结果已经明确，后续状态保存失败也不能改写成领取失败。
                                     _日志(配置, state, "reward_collected" if reward_result else "reward_not_collected",
                                         奖励结果=reward_details)
                                     reward_pending = False
                                     await _冲刷阅读记录(配置)
                                     reward_cid = ""
-                                    if reward_result or reward_details.get("category") != "reward_expired":
-                                        state["rewards_enabled"] = True
-                                        await _写状态(配置, state)
-                                elif not offered:
-                                    _日志(配置, state, "reward_unavailable")
+                                    state["rewards_enabled"] = True
+                                    await _写状态(配置, state)
+                                elif final_check:
+                                    reward_cid = ""
+                                    if not offered and state["rewards_enabled"]:
+                                        _日志(配置, state, "reward_unavailable")
                         if now >= reading_due:
                             stage = "reading_" + reading_stage
                             _记录阅读活动(配置, state, stage)
@@ -1160,7 +1167,8 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                 else:
                                     recent = [*recent, (*last_book, str(chapter["cid"]))][-256:]
                                     delay = _随机.randint(180, 300)
-                                    reading_due = time.monotonic() + delay
+                                    chapter_ready_at = time.monotonic()
+                                    reading_due = chapter_ready_at + delay
                                     _阅读记录[_阅读记录键(配置, state)]["progress"] = {
                                         "next_read_at": time.time() + delay,
                                         "last_book": list(last_book), "recent": [list(row) for row in recent],
@@ -1168,8 +1176,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
                                         reward_cid = str(chapter["cid"])
                                         reward_attempted = False
-                                        # 本章停留结束、切章前查询新通知，避免过早检查后漏掉晚到奖励。
-                                        reward_due = reading_due
+                                        reward_due = chapter_ready_at + 60
                                     reading_stage = "book"
                                     _日志(配置, state, "reading_completed")
                                     await _冲刷阅读记录(配置)
@@ -1202,7 +1209,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                         delay = min(120 * 2 ** min(failures - 1, 3), 600)
                         if stage == "heartbeat":
                             heartbeat_due = time.monotonic() + delay
-                        else:
+                        elif stage not in {"reward_status", "reward_collect"}:
                             reading_due = time.monotonic() + delay
                             reading_stage = "book"
                     deadlines = [heartbeat_due, reading_due]
