@@ -1141,9 +1141,9 @@ def _cultivation_number(value):
 
 
 def _cultivation_realm_text(value: str) -> str:
-    # 当前截图的玄道和官方新手说明第5节的明确汉越境界；未知名称不套用已有境界。
+    # 官方个人页已核实词条及新手说明第5节的明确汉越境界；未知名称不套用。
     realms = {
-        "huyền đạo": "玄道", "võ đồ": "武徒", "võ sư": "武师", "võ tông": "武宗",
+        "huyền đạo": "玄道", "phong vương": "封王", "võ đồ": "武徒", "võ sư": "武师", "võ tông": "武宗",
         "võ vương": "武王", "võ hoàng": "武皇", "võ đế": "武帝", "võ thánh": "武圣",
         "võ thần": "武神", "tiêu dao": "逍遥", "vô cực": "无极", "thái thượng": "太上",
     }
