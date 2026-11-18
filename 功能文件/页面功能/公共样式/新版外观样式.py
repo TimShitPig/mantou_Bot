@@ -20,6 +20,7 @@
     html body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 
     /* ========== 2. 设计令牌（浅色） ========== */
+    body,
     body:not(.messages-workspace) {
       --studio-canvas: #f4efe4;
       --studio-card: #fcfaf4;
@@ -27,6 +28,9 @@
       --studio-muted: #6b645a;
       --studio-border: #e3dac8;
       --studio-accent: #1c6650;
+      --studio-accent-strong: #164f3e;
+      --studio-button-fill: #1c6650;
+      --studio-button-hover: #164f3e;
       --studio-accent-soft: #e7efe8;
       --studio-soft: #f1ebde;
       --studio-peach: #f3e7d5;
@@ -37,7 +41,6 @@
       --studio-wash: #f8f3e6;
       --studio-shadow: 0 1px 2px #30281b05, 0 6px 20px #30281b04;
       --studio-float-shadow: 0 12px 30px #2a241812;
-      --studio-sidebar-width: 232px;
 
       --ink: #1d1b16;
       --muted: #6b645a;
@@ -49,10 +52,10 @@
       --input: #f7f2e6;
       --hover: #ece4d3;
       --primary: #1c6650;
-      --primary-dark: #164f3e;
+      --primary-dark: var(--studio-accent-strong);
       --primary-soft: #e7efe8;
-      --accent-fill: #1c6650;
-      --accent-hover: #164f3e;
+      --accent-fill: var(--studio-button-fill);
+      --accent-hover: var(--studio-button-hover);
       --danger: #a9472f;
       --danger-bg: #f8ece7;
       --danger-line: #e3c6ba;
@@ -60,7 +63,9 @@
       --yellow-ink: #85652a;
       --pink: #f7ece7;
       --pink-ink: #a0472f;
-
+    }
+    body:not(.messages-workspace) {
+      --studio-sidebar-width: 232px;
       background-color: var(--studio-canvas);
       background-image: radial-gradient(circle at 1px 1px, #211e1910 1px, transparent 0);
       background-size: 26px 26px;
@@ -68,6 +73,7 @@
     }
 
     /* ========== 3. 设计令牌（深色） ========== */
+    :root[data-theme="dark"] body,
     :root[data-theme="dark"] body:not(.messages-workspace) {
       --studio-canvas: #141310;
       --studio-card: #1c1a16;
@@ -75,6 +81,9 @@
       --studio-muted: #a39b8b;
       --studio-border: #332e25;
       --studio-accent: #86b79e;
+      --studio-accent-strong: #a7cdb6;
+      --studio-button-fill: #2a6550;
+      --studio-button-hover: #31765d;
       --studio-accent-soft: #22302a;
       --studio-soft: #221f19;
       --studio-peach: #2e251b;
@@ -100,14 +109,15 @@
       --input: #221f19;
       --hover: #272319;
       --primary: #86b79e;
-      --primary-dark: #a7cdb6;
+      --primary-dark: var(--studio-accent-strong);
       --primary-soft: #22302a;
-      --accent-fill: #2a6550;
-      --accent-hover: #31765d;
+      --accent-fill: var(--studio-button-fill);
+      --accent-hover: var(--studio-button-hover);
       --danger: #d2705a;
       --danger-bg: #33211c;
       --danger-line: #4b2f28;
-
+    }
+    :root[data-theme="dark"] body:not(.messages-workspace) {
       background-color: var(--studio-canvas);
       background-image: radial-gradient(circle at 1px 1px, #ffffff0b 1px, transparent 0);
       background-size: 26px 26px;
@@ -516,94 +526,7 @@
       background: transparent;
     }
 
-    /* ========== 13. 消息记录 ========== */
-    :root body.messages-workspace {
-      --bg: #f1ebdd;
-      --panel: #fcfaf4;
-      --raised: #f7f2e6;
-      --input: #f7f2e6;
-      --hover: #ece4d3;
-      --line: #e3dac8;
-      --ink: #1d1b16;
-      --muted: #6b645a;
-      --soft: #857c6d;
-      --primary: #1c6650;
-      --primary-dark: #164f3e;
-      --primary-soft: #e7efe8;
-      --accent-fill: #1c6650;
-      --accent-hover: #164f3e;
-      --rail: #efe8d8;
-      --msg-list-bg: #f7f2e6;
-      --msg-head-bg: #fcfaf4;
-      --msg-composer-bg: #fcfaf4;
-      --msg-chat-active-bg: #e9e1cf;
-      --msg-surface: #fcfaf4;
-      --msg-incoming-fill: #f6f1e4;
-      --msg-file-fill: #fcfaf4;
-      --msg-file-line: #e3dac8;
-      --msg-bubble-line: #e9e1d0;
-      --msg-self-fill: #dce9e2;
-      --msg-self-bg: #dce9e2;
-      --msg-self-ink: #16342a;
-      --msg-self-line: #c7dccf;
-      --msg-self-inset: #eaf2ec;
-      --msg-self-inset-hover: #dfebe3;
-      --msg-self-muted: #4f6a5c;
-      --msg-self-link: #164f3e;
-      --msg-link-color: #164f3e;
-      --msg-link-hover: #1c6650;
-      --msg-scroll-track: #ece5d5;
-      --msg-scroll-thumb: #b6ab94;
-      --msg-scroll-thumb-hover: #8d8168;
-      background-color: var(--bg);
-    }
-    :root[data-theme="dark"] body.messages-workspace {
-      --bg: #141310;
-      --panel: #1c1a16;
-      --raised: #221f19;
-      --input: #221f19;
-      --hover: #272319;
-      --line: #332e25;
-      --ink: #f2ecdf;
-      --muted: #a39b8b;
-      --soft: #8f8676;
-      --primary: #86b79e;
-      --primary-dark: #a7cdb6;
-      --primary-soft: #22302a;
-      --accent-fill: #2a6550;
-      --accent-hover: #31765d;
-      --rail: #1a1712;
-      --msg-list-bg: #1a1712;
-      --msg-head-bg: #1c1a16;
-      --msg-composer-bg: #1c1a16;
-      --msg-chat-active-bg: #2b271e;
-      --msg-surface: #1c1a16;
-      --msg-incoming-fill: #242019;
-      --msg-file-fill: #1f1c17;
-      --msg-file-line: #332e25;
-      --msg-bubble-line: #2e2a22;
-      --msg-self-fill: #27473a;
-      --msg-self-bg: #27473a;
-      --msg-self-ink: #eaf3ed;
-      --msg-self-line: #33574a;
-      --msg-self-inset: #2f5344;
-      --msg-self-inset-hover: #38604e;
-      --msg-self-muted: #c2d7cb;
-      --msg-self-link: #c6e4d2;
-      --msg-link-color: #a7cdb6;
-      --msg-link-hover: #86b79e;
-      --msg-scroll-track: #221f19;
-      --msg-scroll-thumb: #6d6354;
-      --msg-scroll-thumb-hover: #8d8168;
-      background-color: var(--bg);
-    }
-    .studio-sidebar .studio-message-tools,
-    body.messages-workspace .studio-robot { color: #f4eee2; }
-    body.messages-workspace .msg-panel,
-    body.messages-workspace .msg-list-head,
-    body.messages-workspace .msg-head { border-color: var(--line); }
-    body.messages-workspace .msg-btn { border-radius: 5px; }
-    body.messages-workspace .msg-btn.primary { border-radius: 5px; background: var(--accent-fill); }
+    /* 消息配色与组件外观由独立的消息记录皮肤维护。 */
 
     /* ========== 14. 登录页 ========== */
     :root {

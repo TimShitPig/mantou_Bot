@@ -1,112 +1,94 @@
-"""消息记录的浅紫皮肤，与三栏布局和交互样式分开维护。"""
+"""消息记录的纸感竹青皮肤，与三栏布局和交互样式分开维护。"""
 
 from ..公共样式.新版外观样式 import 新版外观样式
 from .总览外观 import 总览外观
 
 消息记录皮肤 = """
+    /* 与后台共用表面及控件色；气泡保留独立色值，手机 QQ 配色在下方覆盖。 */
     :root body.messages-workspace {
-      --bg:#f6f5f8;
-      --ink:#282632;
-      --muted:#696574;
-      --soft:#696574;
-      --line:#e6e3eb;
-      --panel:#ffffff;
-      --raised:#f5f3f8;
-      --input:#f5f3f8;
-      --hover:#eeebf4;
-      --primary:#6554b2;
-      --primary-dark:#54439b;
-      --primary-soft:#eeeaf8;
-      --accent-fill:#6554b2;
-      --accent-hover:#54439b;
-      --rail:#f5f3f8;
-      --msg-list-bg:#ffffff;
-      --msg-head-bg:#ffffff;
-      --msg-composer-bg:#ffffff;
-      --msg-chat-active-bg:#eeeaf8;
-      --msg-surface:#f6f5f8;
-      --msg-incoming-fill:#ffffff;
-      --msg-bubble-line:#e6e3eb;
-      --msg-file-fill:#ffffff;
-      --msg-file-line:#e6e3eb;
-      --msg-self-fill:#eeeaf8;
-      --msg-self-bg:#eeeaf8;
-      --msg-self-ink:#362c50;
-      --msg-self-line:#ded5ef;
-      --msg-self-inset:#f6f3fc;
-      --msg-self-inset-hover:#e6def4;
-      --msg-self-muted:#6b5e82;
-      --msg-self-link:#554399;
-      --msg-scroll-track:#f1eef5;
-      --msg-scroll-thumb:#9b91ab;
-      --msg-scroll-thumb-hover:#746980;
-      --msg-control-ink:#655f72;
-      --msg-quote-line:#aa9cc9;
-      --msg-quote-fill:#f5f3f8;
-      --msg-list-fill:#ffffff;
-      --msg-button-fill:#6554b2;
-      --msg-button-hover:#54439b;
-      --msg-owner-fill:#f7ede2;
-      --msg-owner-ink:#855b37;
-      --msg-overlay:#21182f55;
-      --msg-document-light:#baaddb;
-      --msg-document-mid:#9280bd;
-      --msg-document-dark:#74639c;
-      --msg-document-fold:#615084;
+      --bg:var(--studio-canvas);
+      --ink:var(--studio-ink);
+      --muted:var(--studio-muted);
+      --soft:var(--studio-muted);
+      --line:var(--studio-border);
+      --panel:var(--studio-card);
+      --raised:var(--studio-soft);
+      --input:var(--studio-soft);
+      --hover:var(--studio-hover);
+      --primary:var(--studio-accent);
+      --primary-dark:var(--studio-accent-strong);
+      --primary-soft:var(--studio-accent-soft);
+      --accent-fill:var(--studio-button-fill);
+      --accent-hover:var(--studio-button-hover);
+      --mint:var(--studio-mint);
+      --mint-ink:var(--studio-mint-ink);
+      --peach:var(--studio-peach);
+      --peach-ink:var(--studio-peach-ink);
+      --danger:var(--paper-clay);
+      --danger-bg:color-mix(in srgb,var(--danger) 10%,var(--panel));
+      --danger-line:color-mix(in srgb,var(--danger) 28%,var(--line));
+      --yellow:var(--studio-peach);
+      --yellow-ink:var(--paper-gold);
+      --pink:var(--danger-bg);
+      --pink-ink:var(--danger);
+      --rail:var(--studio-soft);
+      --msg-list-bg:var(--studio-wash);
+      --msg-list-fill:var(--msg-list-bg);
+      --msg-head-bg:var(--panel);
+      --msg-composer-bg:var(--panel);
+      --msg-chat-active-bg:var(--primary-soft);
+      --msg-surface:var(--panel);
+      --msg-incoming-fill:var(--studio-wash);
+      --msg-bubble-line:var(--line);
+      --msg-file-fill:var(--panel);
+      --msg-file-line:var(--line);
+      --msg-self-fill:#dce9e2;
+      --msg-self-bg:var(--msg-self-fill);
+      --msg-self-ink:#16342a;
+      --msg-self-line:#c7dccf;
+      --msg-self-inset:#eaf2ec;
+      --msg-self-inset-hover:#dfebe3;
+      --msg-self-muted:#4f6a5c;
+      --msg-self-link:var(--primary-dark);
+      --msg-link-color:var(--primary-dark);
+      --msg-link-hover:var(--primary);
+      --msg-action-ink:var(--primary-dark);
+      --msg-action-line:color-mix(in srgb,var(--primary) 34%,var(--line));
+      --msg-scroll-track:var(--studio-soft);
+      --msg-scroll-thumb:#b6ab94;
+      --msg-scroll-thumb-hover:#8d8168;
+      --msg-control-ink:var(--muted);
+      --msg-quote-line:color-mix(in srgb,var(--primary) 45%,var(--line));
+      --msg-quote-fill:var(--raised);
+      --msg-button-fill:var(--accent-fill);
+      --msg-button-hover:var(--accent-hover);
+      --msg-owner-fill:var(--studio-peach);
+      --msg-owner-ink:var(--paper-gold);
+      --msg-overlay:#211e1955;
+      --msg-document-light:#83b39a;
+      --msg-document-mid:#4e8a6f;
+      --msg-document-dark:#2d6950;
+      --msg-document-fold:#23523f;
       --msg-document-lines:#ffffff;
-      --shadow:0 8px 28px #28203214;
+      --shadow:var(--studio-float-shadow);
+      background-color:var(--bg);
     }
     :root[data-theme="dark"] body.messages-workspace {
-      --bg:#19171f;
-      --ink:#eeeaf3;
-      --muted:#b1aabc;
-      --soft:#b1aabc;
-      --line:#3d3747;
-      --panel:#24212c;
-      --raised:#2b2735;
-      --input:#2b2735;
-      --hover:#332d40;
-      --primary:#c1b0ef;
-      --primary-dark:#d4c6f6;
-      --primary-soft:#342c47;
-      --accent-fill:#7963c0;
-      --accent-hover:#745cba;
-      --rail:#201d28;
-      --msg-list-bg:#24212c;
-      --msg-head-bg:#24212c;
-      --msg-composer-bg:#24212c;
-      --msg-chat-active-bg:#342c47;
-      --msg-surface:#19171f;
-      --msg-incoming-fill:#2b2735;
-      --msg-bubble-line:#3d3747;
-      --msg-file-fill:#2b2735;
-      --msg-file-line:#3d3747;
-      --msg-self-fill:#413458;
-      --msg-self-bg:#413458;
-      --msg-self-ink:#eeeaf3;
-      --msg-self-line:#54426f;
-      --msg-self-inset:#342942;
-      --msg-self-inset-hover:#453758;
-      --msg-self-muted:#c6b8d8;
-      --msg-self-link:#d8c8ff;
-      --msg-scroll-track:#24212c;
-      --msg-scroll-thumb:#83778f;
-      --msg-scroll-thumb-hover:#a99cba;
-      --msg-control-ink:#bbb3c9;
-      --msg-quote-line:#76618f;
-      --msg-quote-fill:#24212c;
-      --msg-list-fill:#24212c;
-      --msg-button-fill:#7963c0;
-      --msg-button-hover:#745cba;
-      --msg-owner-fill:#49382f;
-      --msg-owner-ink:#e8c19e;
-      --msg-overlay:#100d16a6;
-      --msg-document-light:#b9a8e1;
-      --msg-document-mid:#9580c4;
-      --msg-document-dark:#7963a6;
-      --msg-document-fold:#65508f;
-      --msg-document-lines:#f9f5ff;
-      --shadow:0 10px 32px #00000040;
+      --msg-self-fill:#27473a;
+      --msg-self-ink:#eaf3ed;
+      --msg-self-line:#33574a;
+      --msg-self-inset:#2f5344;
+      --msg-self-inset-hover:#38604e;
+      --msg-self-muted:#c2d7cb;
+      --msg-self-link:#c6e4d2;
+      --msg-scroll-thumb:#6d6354;
+      --msg-scroll-thumb-hover:#8d8168;
+      --msg-overlay:#141310a6;
+      --msg-document-light:#a2c7b1;
+      --msg-document-mid:#79a68d;
+      --msg-document-dark:#4a8065;
+      --msg-document-fold:#365f4a;
+      --msg-document-lines:#f1f7f3;
     }
 
     /* 仅覆盖硬编码的旧色值；布局尺寸、字体和可见性由消息工作区样式负责。 */
@@ -145,8 +127,7 @@ from .总览外观 import 总览外观
     :root body.messages-workspace .msg-row.self .msg-bubble .msg-quote-jump:hover { background:var(--msg-self-inset-hover); }
     :root body.messages-workspace .msg-quote-preview { border-color:var(--msg-quote-line); }
     :root body.messages-workspace .msg-mention-chip,
-    :root body.messages-workspace .msg-group-role,
-    :root body.messages-workspace .msg-tag.bot {
+    :root body.messages-workspace .msg-group-role {
       background:var(--primary-soft);
       color:var(--primary-dark);
     }
@@ -165,8 +146,6 @@ from .总览外观 import 总览外观
     :root body.messages-workspace #msg-document-fill stop:nth-child(1) { stop-color:var(--msg-document-light); }
     :root body.messages-workspace #msg-document-fill stop:nth-child(2) { stop-color:var(--msg-document-mid); }
     :root body.messages-workspace #msg-document-fill stop:nth-child(3) { stop-color:var(--msg-document-dark); }
-    :root body.messages-workspace #msg-document-symbol path:nth-of-type(2) { fill:var(--msg-document-fold); }
-    :root body.messages-workspace #msg-document-symbol path:nth-of-type(3) { stroke:var(--msg-document-lines); }
 
     :root body.messages-workspace #msg-send {
       background:var(--msg-button-fill);
@@ -182,6 +161,13 @@ from .总览外观 import 总览外观
     :root body.messages-workspace .msg-head-menu-panel { box-shadow:var(--shadow); }
     :root body.messages-workspace .msg-group-member-detail { border-color:var(--line); }
     :root body.messages-workspace .msg-ctx-sep { background:var(--line); }
+    :root body.messages-workspace .msg-composer-tabs button.active,
+    :root body.messages-workspace .msg-mute-presets button.active { border-color:var(--primary); }
+    :root body.messages-workspace .msg-multi-bar { border-bottom-color:var(--line); }
+    :root body.messages-workspace .msg-btn.primary { background:var(--accent-fill); }
+    :root body.messages-workspace .msg-panel,
+    :root body.messages-workspace .msg-list-head,
+    :root body.messages-workspace .msg-head { border-color:var(--line); }
     :root body.messages-workspace .msg-ctx-item.danger:hover { background:var(--danger-bg); }
     :root body.messages-workspace .msg-raw-modal,
     :root body.messages-workspace .msg-mute-modal,

@@ -1600,41 +1600,10 @@
       .profile .online { display:none; }
     }
     .msg-svg-defs { position:absolute; width:0; height:0; overflow:hidden; pointer-events:none; }
-    /* 消息页独立占满视口，沿用已确认的 QQ 三栏；离开时恢复控制台布局。 */
+    /* 消息页只在此维护三栏布局；浅深配色由消息记录皮肤统一提供。 */
     :root body.messages-workspace {
-      --ink:#080a0d; --muted:#747c8d; --soft:#9299a8; --line:#e4e7ed;
-      --panel:#fdfdfd; --raised:#f5f6f9; --input:#f5f6f9; --hover:#edf1f7;
-      --msg-list-bg:#f5f6f9; --msg-head-bg:#fdfdfd; --msg-composer-bg:#fdfdfd;
-      --primary:#087cff; --primary-dark:#086cdb; --primary-soft:#dcecff; --msg-chat-active-bg:#cbdff4;
-      --accent-fill:#087cff; --accent-hover:#086cdb; --rail:#eef1f6;
-      --msg-surface:linear-gradient(112deg,#fdfdfd,#fefefe 64%,#fdfdfd);
-      --msg-incoming-fill:linear-gradient(135deg,#f6f7fa,#f3f4f7);
-      --msg-file-fill:linear-gradient(135deg,#fefefe,#fdfdfd);
-      --msg-file-line:#e1e5ed; --msg-bubble-line:#eef0f5;
-      --msg-self-fill:linear-gradient(135deg,#cfe6fd,#c9e2fb);
-      --msg-self-bg:#cce4fc; --msg-self-ink:#080a0d; --msg-self-line:#c8e1fa;
-      --msg-self-inset:#e7f2ff; --msg-self-inset-hover:#dfedfc; --msg-self-muted:#566d88; --msg-self-link:#126ac3;
-      --msg-link-color:var(--primary-dark); --msg-link-hover:var(--primary);
-      --msg-action-line:color-mix(in srgb,var(--primary) 34%,var(--line));
-      --msg-action-ink:var(--primary-dark);
-      --msg-scroll-track:#eef1f6; --msg-scroll-thumb:#7a889c; --msg-scroll-thumb-hover:#53667f;
       height:100vh; height:100dvh; overflow:hidden; background:var(--panel);
       font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
-    }
-    :root[data-theme="dark"] body.messages-workspace {
-      --ink:#f5f6f8; --muted:#b9bfcb; --soft:#b0b7c4; --line:#303640;
-      --panel:#1f232a; --raised:#2d333d; --input:#272d37; --hover:#293340;
-      --msg-list-bg:#1f232a; --msg-head-bg:#1a1e24; --msg-composer-bg:#161920;
-      --primary:#268dff; --primary-dark:#5ca9ff; --primary-soft:#253446; --msg-chat-active-bg:#294968;
-      --accent-fill:#087cff; --accent-hover:#248dff; --rail:#191e25;
-      --msg-surface:linear-gradient(112deg,#1f232a,#20242b 64%,#1e2229);
-      --msg-incoming-fill:linear-gradient(135deg,#303640,#2c323c);
-      --msg-file-fill:linear-gradient(135deg,#303640,#2c323d);
-      --msg-file-line:#3a414c; --msg-bubble-line:#343b46;
-      --msg-self-fill:linear-gradient(135deg,#285b9c,#255494);
-      --msg-self-bg:#275898; --msg-self-ink:#fff; --msg-self-line:#3062a1;
-      --msg-self-inset:#244e7d; --msg-self-inset-hover:#2c5b8e; --msg-self-muted:#c5d5ec; --msg-self-link:#b9deff;
-      --msg-scroll-track:#232932; --msg-scroll-thumb:#8291a8; --msg-scroll-thumb-hover:#a5b5cd;
     }
     :root body.messages-workspace .shell { display:grid; height:100%; min-height:0; grid-template-columns:calc(var(--studio-sidebar-width) + var(--studio-space)) minmax(0,1fr); grid-template-rows:minmax(0,1fr); grid-template-areas:"side main"; column-gap:var(--studio-space); overflow:hidden; border-radius:13.5px; }
     :root body.messages-workspace::after { position:fixed; inset:0; z-index:90; border:1px solid var(--line); border-radius:13.5px; pointer-events:none; content:""; }

@@ -38,7 +38,7 @@ from .帮助网页脚本 import 控制台脚本
 """
 页面主体 = """
 <body>
-  <svg class="msg-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="msg-document-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3ba2ff"/><stop offset=".55" stop-color="#168bff"/><stop offset="1" stop-color="#0075ff"/></linearGradient><symbol id="msg-document-symbol" viewBox="0 0 42 50"><path fill="url(#msg-document-fill)" d="M6 0h21l15 15v30a5 5 0 0 1-5 5H6a5 5 0 0 1-5-5V5a5 5 0 0 1 5-5Z"/><path fill="#0878ee" d="m27 0 15 15H31a4 4 0 0 1-4-4Z"/><path fill="none" stroke="#e6f6ff" stroke-width="3" stroke-linecap="round" d="M12 22h17M12 29h17M12 36h10"/></symbol></defs></svg>
+  <svg class="msg-svg-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="msg-document-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3ba2ff"/><stop offset=".55" stop-color="#168bff"/><stop offset="1" stop-color="#0075ff"/></linearGradient><symbol id="msg-document-symbol" viewBox="0 0 42 50"><path fill="url(#msg-document-fill)" d="M6 0h21l15 15v30a5 5 0 0 1-5 5H6a5 5 0 0 1-5-5V5a5 5 0 0 1 5-5Z"/><path fill="var(--msg-document-fold, #0878ee)" d="m27 0 15 15H31a4 4 0 0 1-4-4Z"/><path fill="none" stroke="var(--msg-document-lines, #e6f6ff)" stroke-width="3" stroke-linecap="round" d="M12 22h17M12 29h17M12 36h10"/></symbol></defs></svg>
   <div class="shell bot-picker-open">
     <header class="topbar">
       <div class="brand">
