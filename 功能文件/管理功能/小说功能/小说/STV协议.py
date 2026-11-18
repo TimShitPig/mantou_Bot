@@ -146,26 +146,19 @@ def _js_eval(source: str, expression: str, data: dict[str, Any] | None = None) -
     """独立无宿主绑定的 JS 环境；网络、文件和 Python 回调均不可用。"""
     try:
         import quickjs
-    except ImportError:
-        quickjs = None
+    except ImportError as exc:
+        raise STVError("js_runtime_missing") from exc
     try:
         program = POLYFILL + "\n" + MOCK_ENV.replace("__UA__", json.dumps(UA))
         if data is not None:
             program += "\nvar x=" + json.dumps(data, ensure_ascii=True) + ";"
         program += "\n" + source + "\n" + expression
-        if quickjs is not None:
-            context = quickjs.Context()
-            context.set_memory_limit(96 * 1024 * 1024)
-            context.set_max_stack_size(2 * 1024 * 1024)
-            context.set_time_limit(5)
-            result = context.eval(program)
-        else:
-            try:
-                from py_mini_racer import py_mini_racer
-            except ImportError as exc:
-                raise STVError("js_runtime_missing") from exc
-            context = py_mini_racer.MiniRacer()
-            result = context.eval(program, timeout=5000, max_memory=96 * 1024 * 1024)
+        # Windows 由 quickjs-ng 提供相同 API，避免旧 MiniRacer 在实测脚本中耗满时限。
+        context = quickjs.Context()
+        context.set_memory_limit(96 * 1024 * 1024)
+        context.set_max_stack_size(2 * 1024 * 1024)
+        context.set_time_limit(5)
+        result = context.eval(program)
         if not isinstance(result, str):
             raise STVError("invalid_response")
         return result

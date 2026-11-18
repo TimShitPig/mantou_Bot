@@ -10,5 +10,5 @@ bcrypt>=4.0.1
 PyMySQL[rsa]>=1.1.1,<2
 pypdf
 qrcode[pil]
-quickjs
-py-mini-racer>=0.6,<0.7; sys_platform == "win32"
+quickjs; sys_platform != "win32"
+quickjs-ng==0.18.0.2; sys_platform == "win32"
