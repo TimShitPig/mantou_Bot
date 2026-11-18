@@ -1980,8 +1980,12 @@
           selected.active ||= stvItemActive(result);
           selected.verified = true;
           paintSTVItem(selected, result);
-        } else if (action === 'use') $('stv-item-message').textContent = result?.used === true ? '使用成功，请查询背包确认最新状态' : '结果未确认，请先查询背包，勿重复提交';
-        else if (action === 'refresh') message.textContent = '账号资料已刷新';
+        } else if (action === 'use') {
+          if (result?.used === true) {
+            closeSTVItem();
+            toast('使用成功，请查询背包确认最新状态');
+          } else $('stv-item-message').textContent = '结果未确认，请先查询背包，勿重复提交';
+        } else if (action === 'refresh') message.textContent = '账号资料已刷新';
       };
       const loadSTV = async () => {
         if (!stvVisible() || stv.loading || stv.inFlight) return;
