@@ -1143,13 +1143,14 @@ def _cultivation_number(value):
 def _cultivation_realm_text(value: str) -> str:
     # 官方个人页已核实词条及新手说明第5节的明确汉越境界；未知名称不套用。
     realms = {
-        "huyền đạo": "玄道", "phong vương": "封王", "võ đồ": "武徒", "võ sư": "武师", "võ tông": "武宗",
+        "huyền đạo": "玄道", "phong vương": "封王", "thông thần": "通神",
+        "võ đồ": "武徒", "võ sư": "武师", "võ tông": "武宗",
         "võ vương": "武王", "võ hoàng": "武皇", "võ đế": "武帝", "võ thánh": "武圣",
         "võ thần": "武神", "tiêu dao": "逍遥", "vô cực": "无极", "thái thượng": "太上",
     }
     ranks = {"nhất": "一", "nhị": "二", "tam": "三", "tứ": "四", "ngũ": "五",
              "lục": "六", "thất": "七", "bát": "八", "cửu": "九"}
-    phases = {"sơ kỳ": "初期", "trung kỳ": "中期", "hậu kỳ": "后期"}
+    phases = {"sơ kỳ": "初期", "trung kỳ": "中期", "hậu kỳ": "后期", "viên mãn": "圆满"}
     text = " ".join(unicodedata.normalize("NFC", value).split())
     if re.fullmatch(r"[\u3400-\u9fff0-9\s]+", text) and re.search(r"[\u3400-\u9fff]", text):
         return text
