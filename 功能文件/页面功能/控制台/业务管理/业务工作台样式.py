@@ -157,9 +157,10 @@
     .studio-bot-facts dd { margin: 0; overflow-wrap: anywhere; font-weight: 680; font-variant-numeric: tabular-nums; }
     .studio-bot-tabs {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(max-content, 1fr));
       gap: 4px;
-      width: min(100%, 510px);
+      width: min(100%, 850px);
+      overflow-x: auto;
       padding: 4px;
       border: 1px solid var(--studio-border);
       border-radius: 14px;
