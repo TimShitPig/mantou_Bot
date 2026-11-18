@@ -73,7 +73,7 @@ from .QQ官方消息发送 import 主动消息权限被拒绝, 被动回复已�
 _用户资料端点 = "/v2/users/{user_openid}/info"
 _用户资料请求尝试: dict[str, list[float]] = globals().get("_用户资料请求尝试", {})
 _用户资料限流截止: dict[str, float] = globals().get("_用户资料限流截止", {})
-_私聊官方头像缓存: dict[tuple[str, str], tuple[float, str]] = globals().get("_私聊官方头像缓存", {})
+_私聊官方资料缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("_私聊官方资料缓存", {})
 好友关系状态命名空间 = "qq_friend_membership"
 好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
 _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
@@ -2241,7 +2241,8 @@ def _获取消息相关成员资料(
         if 联系人["nickname"] or 联系人["nickname_blank"]:
             资料 = 结果.setdefault(对方标识, {})
             资料.update(nickname=联系人["nickname"], username=联系人["nickname"],
-                      nickname_blank=联系人["nickname_blank"], nickname_ts=联系人["nickname_ts"], appid=应用)
+                      nickname_blank=联系人["nickname_blank"], nickname_ts=联系人["nickname_ts"],
+                      nickname_source=联系人["nickname_source"], appid=应用)
             if 联系人["avatar"]:
                 资料["avatar"] = 联系人["avatar"]
     return 结果
@@ -7729,9 +7730,12 @@ def _私聊联系人资料(
     会话标识: str,
     会话: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """按真实私聊作者事件时间合并昵称，明确空白与可见名字同等有效。"""
+    """真实私聊作者优先；缺失姓名时使用同作用域的官方用户资料。"""
     标识 = str(会话标识 or "").strip()
-    结果: dict[str, Any] = {"nickname": "", "avatar": "", "nickname_blank": False, "nickname_ts": 0}
+    结果: dict[str, Any] = {
+        "nickname": "", "avatar": "", "nickname_blank": False,
+        "nickname_ts": 0, "nickname_source": "event",
+    }
     if not 标识:
         return 结果
     当前会话 = 会话 if isinstance(会话, dict) else (消息缓存.get(标识) or {})
@@ -7788,60 +7792,96 @@ def _私聊联系人资料(
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
         if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
             结果["avatar"] = 头像
-    if not 结果["avatar"] and 获取好友关系状态(标识, 应用)["is_friend"] is not False:
-        已查头像 = _私聊官方头像缓存.get((应用, 标识))
-        if 已查头像 and 已查头像[0] > time.monotonic():
-            结果["avatar"] = 已查头像[1]
+    官方资料 = _读取私聊官方资料(标识, 应用)
+    if 官方资料:
+        if (not 结果["nickname"] and not 结果["nickname_blank"]
+                and (官方资料.get("nickname") or 官方资料.get("nickname_blank") is True)):
+            结果.update(
+                nickname=官方资料.get("nickname", ""),
+                nickname_blank=官方资料.get("nickname_blank") is True,
+                nickname_ts=官方资料.get("nickname_ts", 0),
+                nickname_source="profile",
+            )
+        if not 结果["avatar"]:
+            结果["avatar"] = 官方资料.get("avatar", "")
     return 结果
 
 
-def _已核实私聊联系人(标识: str, 应用: str, 会话: dict[str, Any]) -> bool:
-    好友 = 获取好友关系状态(标识, 应用)["is_friend"]
-    if 好友 is not None:
-        return 好友
-    return any(
-        isinstance(消息, dict)
-        and 消息.get("source") == "qq_official"
-        and not 消息.get("is_self") and 消息.get("is_bot") is not True
-        and 消息.get("user_id") == 标识 and 消息.get("appid") == 应用
-        and 消息.get("chat_type") == "user" and 消息.get("_session") in (None, "", 标识)
-        for 消息 in 会话.get("messages") or ()
+def _私聊资料身份(标识: str, 应用: str) -> tuple[str, dict[str, Any]]:
+    from .运行状态数据库 import 读取数据库配置值
+
+    字段列表 = (
+        ("database_host", "user_activation_database_host"),
+        ("database_port", "user_activation_database_port"),
+        ("database_user", "user_activation_database_user"),
+        ("database_password", "user_activation_database_password"),
+        ("database_name", "user_activation_database_name"),
+        ("database_ssl_mode",), ("database_ssl_ca",), ("database_connect_timeout",),
     )
+    数据库 = [读取数据库配置值(当前插件配置, *字段) for 字段 in 字段列表]
+    数据库键 = hashlib.sha256(json.dumps(
+        数据库, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    好友 = copy.deepcopy(好友关系缓存.get((应用, 标识)) or {})
+    return 数据库键, 好友
+
+
+def _读取私聊官方资料(标识: str, 应用: str) -> dict[str, Any]:
+    已查 = _私聊官方资料缓存.get((应用, 标识))
+    if not 已查 or float(已查.get("expires_at") or 0) <= time.monotonic():
+        return {}
+    数据库键, 好友 = _私聊资料身份(标识, 应用)
+    if 已查.get("database_key") != 数据库键 or 已查.get("friend_state") != 好友:
+        return {}
+    return 已查
 
 
 async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, Any]:
-    """当前私聊事件提供昵称，头像缺失时限同机器人已知联系人补查。"""
+    """按明确的机器人和用户 OpenID 查询官方资料，当前事件姓名优先。"""
     标识 = str(会话标识 or "").strip()
     if not 标识 or len(标识) > 128:
         raise ValueError("invalid conversation")
     应用 = str(appid or "").strip()
     会话 = _读取作用域会话缓存(标识, "user", 应用)
     资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
-    if (
-        not 资料["avatar"] and _OPENID规则.fullmatch(标识)
-        and re.fullmatch(r"[0-9]{4,32}", 应用) and _已核实私聊联系人(标识, 应用, 会话)
-    ):
+    if _OPENID规则.fullmatch(标识) and re.fullmatch(r"[0-9]{4,32}", 应用):
         平台, 认证AppID = _获取消息操作平台(应用)
         通道 = 获取HTTP通道(平台) if 认证AppID == 应用 else None
         if 通道 is not None:
             try:
                 from botpy.http import Route
 
+                数据库键, 好友 = _私聊资料身份(标识, 应用)
+                原令牌 = 通道[1]._token
+                查询时间 = int(time.time())
                 路由 = Route("GET", _用户资料端点, user_openid=标识)
                 响应 = await _请求群资料GET(通道[1], 路由, 用户资料AppID=应用)
-                头像 = 响应.get("avatar")
-                地址 = _解析网址(头像) if isinstance(头像, str) and len(头像) <= 2048 else None
-                最新会话 = _读取作用域会话缓存(标识, "user", 应用)
                 当前平台, 当前AppID = _获取消息操作平台(应用)
                 if (
-                    地址 is not None and 地址.scheme == "https" and not 地址.fragment
-                    and 地址.netloc in {"q.qlogo.cn", "thirdqq.qlogo.cn", "qlogo.cn"}
-                    and 当前平台 is 平台 and 当前AppID == 应用
-                    and _已核实私聊联系人(标识, 应用, 最新会话)
+                    当前平台 is 平台 and 当前AppID == 应用
+                    and getattr(通道[1], "_token", None) is 原令牌
+                    and _私聊资料身份(标识, 应用) == (数据库键, 好友)
                 ):
-                    if len(_私聊官方头像缓存) >= 512:
-                        _私聊官方头像缓存.pop(next(iter(_私聊官方头像缓存)))
-                    _私聊官方头像缓存[(应用, 标识)] = (time.monotonic() + 300.0, 头像)
+                    新资料 = dict(_读取私聊官方资料(标识, 应用))
+                    用户名 = 响应.get("username")
+                    昵称 = _有效用户昵称(用户名, 标识) if isinstance(用户名, str) else ""
+                    空白 = _明确空白昵称(用户名)
+                    if 昵称 or 空白:
+                        新资料.update(nickname=昵称, nickname_blank=空白, nickname_ts=查询时间)
+                    原头像 = 响应.get("avatar")
+                    头像 = _规范QQ群作者头像(原头像) if isinstance(原头像, str) else ""
+                    地址 = _解析网址(头像) if 头像 else None
+                    if (地址 is not None and 地址.scheme == "https" and not 地址.fragment
+                            and 地址.netloc in {"q.qlogo.cn", "thirdqq.qlogo.cn", "qlogo.cn"}):
+                        新资料["avatar"] = 头像
+                    if 新资料:
+                        if len(_私聊官方资料缓存) >= 512 and (应用, 标识) not in _私聊官方资料缓存:
+                            _私聊官方资料缓存.pop(next(iter(_私聊官方资料缓存)))
+                        新资料.update(
+                            expires_at=time.monotonic() + 300.0,
+                            database_key=数据库键, friend_state=好友,
+                        )
+                        _私聊官方资料缓存[(应用, 标识)] = 新资料
             except _群资料查询冷却中:
                 pass
             except Exception as 异常:
@@ -8032,7 +8072,8 @@ def _数据库聚合聊天项(
         最后预览 = _替换消息提及名称(_消息列表摘要(最后), 最后, 标识)
         聊天项.append({"chat_id": 标识, "chat_type": 类型, "appid": 应用, "nickname": 名称,
                     "avatar": 头像 if 类型 == "user" else "", "group_avatar": 头像 if 类型 == "group" else "",
-                    **({"nickname_blank": 联系人["nickname_blank"], "nickname_ts": 联系人["nickname_ts"]} if 类型 == "user" else {}),
+                    **({"nickname_blank": 联系人["nickname_blank"], "nickname_ts": 联系人["nickname_ts"],
+                        "nickname_source": 联系人["nickname_source"]} if 类型 == "user" else {}),
                     "group_qq": str(备注项.get("group_qq") or ""), "last_content": _限制聊天列表预览(最后预览),
                     "last_time": _格式化时间戳(最后.get("ts")), "last_ts": int(最后.get("ts") or 0),
                     "msg_count": 数量, "unread": max(0, int(未读 or 0)), "remark": 备注,

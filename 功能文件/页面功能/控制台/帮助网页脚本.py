@@ -2619,13 +2619,18 @@
         const nickname = blank ? '' : validMsgNickname(raw, id);
         if (!blank && !nickname) return null;
         const ts = Number(live ? source._private_nickname_ts : (source.nickname_ts ?? source.ts ?? 0));
-        return {nickname, nickname_blank:blank, nickname_ts:Number.isFinite(ts) && ts > 0 ? ts : 0};
+        const nameSource = (live ? source._private_nickname_source : source.nickname_source) === 'profile' ? 'profile' : 'event';
+        return {nickname, nickname_blank:blank, nickname_ts:Number.isFinite(ts) && ts > 0 ? ts : 0, nickname_source:nameSource};
       };
-      const pickMsgNicknameState = (id, ...sources) => sources.reduce((current, source) => {
-        const next = msgNicknameState(source, id);
-        return next && (!current || next.nickname_ts > current.nickname_ts
-          || (next.nickname_ts === current.nickname_ts && (!current.nickname_blank || next.nickname_blank))) ? next : current;
-      }, null);
+      const preferMsgNicknameState = (current, next) => {
+        if (!next) return current;
+        if (!current) return next;
+        if (next.nickname_source !== current.nickname_source) return next.nickname_source === 'event' ? next : current;
+        return next.nickname_ts > current.nickname_ts
+          || (next.nickname_ts === current.nickname_ts && (!current.nickname_blank || next.nickname_blank)) ? next : current;
+      };
+      const pickMsgNicknameState = (id, ...sources) => sources.reduce(
+        (current, source) => preferMsgNicknameState(current, msgNicknameState(source, id)), null);
       const msgPrivateContactScope = (id, source = {}) => msgState.chatType === 'user'
         && String(id || '') === String(msgState.chatId || '')
         && (!source.user_id || String(source.user_id) === String(id || ''))
@@ -2663,7 +2668,7 @@
             const next = {...(merged[key] || {})};
             const nameState = isPrivateContact ? pickMsgNicknameState(key, next, profile) : null;
             Object.entries(profile).forEach(([field, value]) => {
-              if (isPrivateContact && ['nickname','username','nickname_blank','nickname_ts'].includes(field)) return;
+              if (isPrivateContact && ['nickname','username','nickname_blank','nickname_ts','nickname_source'].includes(field)) return;
               if (field === 'nickname' || field === 'username') {
                 const name = validMsgNickname(value, key);
                 if (name) next[field] = name;
@@ -2730,7 +2735,7 @@
             ...(role ? {role} : {}),
             ...(botKnown ? {is_bot:message.is_bot} : {}),
             ...(blank ? {nickname_blank:true} : {}),
-            ...(isPrivateContact ? {appid:message.appid || msgState.chatAppid, chat_type:'user', nickname_ts:Number(message.nickname_ts ?? message.ts ?? 0)} : {}),
+            ...(isPrivateContact ? {appid:message.appid || msgState.chatAppid, chat_type:'user', nickname_ts:Number(message.nickname_ts ?? message.ts ?? 0), nickname_source:message.nickname_source || 'event'} : {}),
           }})[id];
         });
         return merged;
@@ -3614,9 +3619,10 @@
             && currentContactState.nickname === liveContactState.nickname;
           // 当前作者快照按昵称时间更新；机器人最后回复的时间不代表昵称时间。
           if (serverSnapshot && liveContactState && (serverConfirmed
-            || (currentContactState && currentContactState.nickname_ts > liveContactState.nickname_ts))) {
+            || (currentContactState && preferMsgNicknameState(liveContactState, currentContactState) === currentContactState))) {
             delete overlay._private_nickname;
             delete overlay._private_nickname_blank;
+            delete overlay._private_nickname_source;
             liveContactName = '';
           }
           const keepContactOverlay = Boolean(liveContactName);
@@ -3634,7 +3640,7 @@
               || (!current.avatar && contactAvatar))) {
               // 机器人回复可能更新摘要时间，不能据此覆盖尚未确认的对方姓名。
               const profile = {...current, ...friendState, ...(contactState || {}), nickname:current.remark || contactName || current.nickname, avatar:contactAvatar,
-                ...(keepContactOverlay ? {_private_nickname:overlay._private_nickname, _private_nickname_blank:overlay._private_nickname_blank, _private_nickname_ts:overlay._private_nickname_ts} : {})};
+                ...(keepContactOverlay ? {_private_nickname:overlay._private_nickname, _private_nickname_blank:overlay._private_nickname_blank, _private_nickname_ts:overlay._private_nickname_ts, _private_nickname_source:overlay._private_nickname_source} : {})};
               byId.set(chatKey, profile);
               msgState.realtimeChats.set(chatKey, profile);
             } else msgState.realtimeChats.delete(chatKey);
@@ -5646,8 +5652,7 @@
             merged[field] = next;
           }
         });
-        if (privateContact && newNameState && (!oldNameState || newNameState.nickname_ts >= oldNameState.nickname_ts)
-          && !(oldNameState?.nickname_blank && !newNameState.nickname_blank && newNameState.nickname_ts === oldNameState.nickname_ts)) {
+        if (privateContact && newNameState && preferMsgNicknameState(oldNameState, newNameState) === newNameState) {
           Object.assign(merged, newNameState);
         } else if (!privateContact && validMsgNickname(merged.nickname, merged.user_id)) merged.nickname_blank = false;
         else if (!privateContact && incoming?.nickname_blank) merged.nickname_blank = true;
@@ -7367,14 +7372,15 @@
         const previousContactState = pickMsgNicknameState(chatId, existing, contactProfile);
         const oldContactNameTs = Number(previousContactState?.nickname_ts || 0);
         const previousContactKnown = Boolean(previousContactName || previousContactState?.nickname_blank);
+        const replacesProfileName = previousContactState?.nickname_source === 'profile';
         const contactNameChanged = (eventContactName || eventContactBlank)
-          && (!oldContactNameTs || (contactNameTs && contactNameTs >= oldContactNameTs))
-          && !(previousContactState?.nickname_blank && !eventContactBlank && contactNameTs === oldContactNameTs)
-          && (isNewEvent || !previousContactKnown || contactNameTs > oldContactNameTs
+          && (replacesProfileName || !oldContactNameTs || (contactNameTs && contactNameTs >= oldContactNameTs))
+          && (replacesProfileName || !(previousContactState?.nickname_blank && !eventContactBlank && contactNameTs === oldContactNameTs))
+          && (replacesProfileName || isNewEvent || !previousContactKnown || contactNameTs > oldContactNameTs
             || (eventContactBlank && !previousContactState?.nickname_blank && contactNameTs === oldContactNameTs));
         const contactPatch = contactNameChanged
           ? {_private_nickname:eventContactBlank ? '' : eventContactName, _private_nickname_blank:eventContactBlank, _private_nickname_ts:contactNameTs,
-            nickname_blank:eventContactBlank, nickname_ts:contactNameTs} : {};
+            _private_nickname_source:'event', nickname_blank:eventContactBlank, nickname_ts:contactNameTs, nickname_source:'event'} : {};
         const contactName = contactNameChanged ? (eventContactBlank ? '\u00a0' : eventContactName)
           : (msgLivePrivateNickname(existing, chatId) || (existing.nickname_blank ? '\u00a0' : existing.nickname) || chatId);
         const overlay = {
@@ -7729,7 +7735,7 @@
             const contact = matches(overlay) ? overlay : msgState.chats.find(matches);
             if (contact) msgState.realtimeChats.set(scope, {...applyProfile(contact),
               ...(nameState ? {_private_nickname:nameState.nickname, _private_nickname_blank:nameState.nickname_blank,
-                _private_nickname_ts:nameState.nickname_ts} : {})});
+                _private_nickname_ts:nameState.nickname_ts, _private_nickname_source:nameState.nickname_source} : {})});
             if (isCurrent()) {
               msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:profile});
               msgState.messageRenderSignature = null;
