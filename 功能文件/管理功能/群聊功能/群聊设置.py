@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import json
 import re
 import time
 from collections import deque
@@ -110,9 +111,9 @@ def _事件通道(event):
 
 
 def _受控失败(chat_id, appid, stage, status=None, code=None, error_type="response"):
-    if code in {11253, 11254, 40012010}:
+    if code in {11253, 11254, 40012010} or (stage == "remove" and code == 40103011):
         结果 = _错误("api_permission", "机器人尚未开通此群管理接口", 403, code)
-    elif code == 11282:
+    elif code == 11282 or (stage == "remove" and code == 40103012):
         结果 = _错误("group_permission", "该群尚未授予机器人所需管理权限", 403, code)
     elif code == 11243 or status == 401:
         结果 = _错误("auth_expired", "机器人登录状态暂时失效，请稍后重试", 502, code)
@@ -134,6 +135,15 @@ def _整数错误码(响应):
             except (TypeError, ValueError):
                 return -1
     return None
+
+
+async def _读取移除响应(响应):
+    原文 = bytearray()
+    async for 片段 in 响应.content.iter_chunked(4096):
+        if len(原文) + len(片段) > 16 * 1024:
+            return None
+        原文.extend(片段)
+    return json.loads(原文)
 
 
 async def _请求(chat_id, appid, http, stage, method, path, *, params=None, body=None):
@@ -160,7 +170,7 @@ async def _请求(chat_id, appid, http, stage, method, path, *, params=None, bod
         请求已提交 = True
         async with http._session.request(method, "https://api.bot.qq.com" + path, **参数) as 响应:
             状态 = 响应.status
-            数据 = await 响应.json(content_type=None)
+            数据 = await _读取移除响应(响应) if stage == "remove" else await 响应.json(content_type=None)
         if not isinstance(数据, dict):
             结果 = _受控失败(chat_id, appid, stage, 状态, error_type="invalid_response")
             if stage == "remove" and 200 <= 状态 < 300:
@@ -204,7 +214,7 @@ def _成员(数据, chat_id, appid, 黑名单=False):
     空白 = not 昵称 and 消息记录._明确空白昵称(数据.get("username"))
     # 列表 API 没有头像字段；只复用同 AppID 群资料及官方作用域头像地址。
     资料 = (消息记录.成员资料缓存.get(chat_id) or {}).get(标识) or {}
-    头像 = 资料.get("avatar") if isinstance(资料, dict) else ""
+    头像 = 资料.get("avatar") if isinstance(资料, dict) and 资料.get("appid") == appid else ""
     if not isinstance(头像, str) or not re.match(r"https?://", 头像) or len(头像) > 2048:
         头像 = "https://q.qlogo.cn/qqapp/%s/%s/0" % (appid, 标识)
     结果 = {"member_openid": 标识, "username": 昵称, "nickname": 昵称,
@@ -369,22 +379,33 @@ async def 批量移除事件群成员(event, member_openids=None):
 
 
 async def _执行批量移除(chat_id, appid, http, member_openids, add_to_member_blacklist):
+    请求体 = {"member_openids": list(member_openids)}
+    if add_to_member_blacklist:
+        请求体["add_to_member_blacklist"] = True
     async with _群写入锁.setdefault((appid, chat_id), asyncio.Lock()):
         try:
             结果 = await _请求(chat_id, appid, http, "remove", "POST", "/v2/groups/%s/batch_remove_members" % chat_id,
-                           body={"member_openids": list(member_openids), "add_to_member_blacklist": add_to_member_blacklist})
+                           body=请求体)
         finally:
             # 超时或热重载取消后也失效旧列表，不重放操作或宣称成功。
             _清缓存(appid, chat_id)
         if not 结果["ok"]:
             return 结果
         数据 = 结果["data"]
-        失败 = _失败成员(数据, "add_to_member_blacklist_fail_openids", member_openids)
-        if 数据.get("remove_members_result") != "success" or 失败 is None:
+        if 数据.get("remove_members_result") != "success":
             return _错误("remove_unconfirmed", "成员移除结果未确认，请刷新成员列表", 502)
-        消息记录.标记群信息待刷新(chat_id)
-        return {"ok": True, "partial": bool(失败), "member_openids": list(member_openids), "removed_openids": list(member_openids),
-                "add_to_member_blacklist_fail_openids": 失败, "message": "成员已移除，部分成员加入黑名单失败" if 失败 else "成员已移除"}
+        消息记录.标记群信息待刷新(chat_id, appid)
+        失败 = _失败成员(数据, "add_to_member_blacklist_fail_openids", member_openids) if add_to_member_blacklist else []
+        黑名单未确认 = 失败 is None
+        文案 = "成员已移除"
+        if 黑名单未确认:
+            文案 += "，加入黑名单结果未确认，请查看黑名单"
+        elif 失败:
+            文案 += "，部分成员加入黑名单失败"
+        return {"ok": True, "partial": bool(失败) or 黑名单未确认,
+                "member_openids": list(member_openids), "removed_openids": list(member_openids),
+                "add_to_member_blacklist_fail_openids": 失败 or [], "blacklist_unconfirmed": 黑名单未确认,
+                "message": 文案}
 
 
 async def 操作群黑名单(chat_id, appid="", op="", member_openids=None, 上下文=None):

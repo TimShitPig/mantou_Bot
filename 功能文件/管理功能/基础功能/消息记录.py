@@ -70,6 +70,10 @@ from .QQ官方消息发送 import 主动消息权限被拒绝, 被动回复已�
 群资料配额迁移截止: float = globals().get("群资料配额迁移截止", time.monotonic() + 60.0 if "_群资料GET任务" in globals() else 0.0)
 群资料请求尝试: dict[tuple[str, str], list[float]] = globals().get("群资料请求尝试", {})
 群资料限流截止: dict[tuple[str, str], float] = globals().get("群资料限流截止", {})
+_用户资料端点 = "/v2/users/{user_openid}/info"
+_用户资料请求尝试: dict[str, list[float]] = globals().get("_用户资料请求尝试", {})
+_用户资料限流截止: dict[str, float] = globals().get("_用户资料限流截止", {})
+_私聊官方头像缓存: dict[tuple[str, str], tuple[float, str]] = globals().get("_私聊官方头像缓存", {})
 好友关系状态命名空间 = "qq_friend_membership"
 好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
 _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
@@ -652,9 +656,7 @@ def _规范化历史消息(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
-    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message")) or str(
-        记录.get("avatar") or ""
-    ).strip()
+    作者头像 = str(记录.get("avatar") or "").strip() or _提取成员头像(原始消息 or 记录.get("raw_message"))
     if 作者头像:
         记录["avatar"] = 作者头像
     if (
@@ -768,6 +770,9 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
                 作者头像 = _提取成员头像(原始消息)
                 if 作者头像:
                     记录["avatar"] = 作者头像
+    _补充记录昵称状态(记录, 原始消息, 允许缓存=允许成员缓存)
+    作者昵称 = str(记录.get("nickname") or "").strip()
+    作者头像 = str(记录.get("avatar") or "").strip()
     if (
         允许成员缓存 and 会话标识
         and 作者标识
@@ -790,7 +795,6 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
         记录时间 = int(记录.get("ts") or 0)
     except (TypeError, ValueError):
         记录时间 = 0
-    _补充记录昵称状态(记录, 原始消息, 允许缓存=允许成员缓存)
     _补充记录引用索引(记录, 原始消息)
     标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
     if not 标准时间 and 原始消息 is not None:
@@ -878,9 +882,7 @@ def _规范化聊天摘要(记录: dict[str, Any]) -> dict[str, Any]:
     会话标识 = str(记录.get("_session") or "").strip()
     作者标识 = str(记录.get("user_id") or "").strip()
     作者昵称 = str(记录.get("nickname") or "").strip()
-    作者头像 = _提取成员头像(原始消息 or 记录.get("raw_message")) or str(
-        记录.get("avatar") or ""
-    ).strip()
+    作者头像 = str(记录.get("avatar") or "").strip() or _提取成员头像(原始消息 or 记录.get("raw_message"))
     if 作者头像:
         记录["avatar"] = 作者头像
     if (
@@ -1123,6 +1125,28 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     新原始消息 = str(新记录.get("raw_message") or "")
     旧原始结构 = _解析消息结构(旧原始消息) if 旧原始消息 else None
     新原始结构 = _解析消息结构(新原始消息) if 新原始消息 else None
+    同官方群作者 = (
+        bool(新消息ID) and 新消息ID == 旧消息ID
+        and 新记录.get("chat_type") == 已有记录.get("chat_type") == "group"
+        and 新记录.get("source") == 已有记录.get("source") == "qq_official"
+        and not 新记录.get("is_self") and not 已有记录.get("is_self")
+        and 新记录.get("appid") == 已有记录.get("appid")
+        and 新记录.get("_session") == 已有记录.get("_session")
+        and 新记录.get("user_id") == 已有记录.get("user_id")
+    )
+    群作者补全 = False
+    保留旧群作者 = False
+    if 同官方群作者:
+        成员标识 = str(已有记录.get("user_id") or "")
+        群标识 = str(已有记录.get("_session") or "")
+        新群资料 = _提取QQ群作者资料(新原始结构, 成员标识, 群标识)
+        旧群资料 = _提取QQ群作者资料(旧原始结构, 成员标识, 群标识)
+        for 字段, 新资料, 旧资料 in zip(("nickname", "avatar"), 新群资料, 旧群资料):
+            if 新资料 and not 旧资料:
+                已有记录[字段] = 新资料
+                群作者补全 = True
+            elif 旧资料 and not 新资料:
+                保留旧群作者 = True
     同私聊作者 = (
         bool(新消息ID) and 新消息ID == 旧消息ID
         and 新记录.get("chat_type") == 已有记录.get("chat_type") == "user"
@@ -1146,8 +1170,8 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
             or (新昵称时间 == 旧昵称时间 and 旧作者空白 and not 新作者空白)))
     )
     作者更新 = bool(新作者昵称 or 新作者空白) and 作者不同 and not 保留旧作者
-    if 新原始消息 and not 保留旧作者 and (
-        作者更新
+    if 新原始消息 and not 保留旧作者 and not 保留旧群作者 and (
+        作者更新 or 群作者补全
         or not 旧原始消息
         or (
             新原始结构 is not None
@@ -3602,6 +3626,55 @@ def _提取成员昵称(消息: Any) -> str:
     return ""
 
 
+def _提取QQ群作者资料(消息: Any, 成员标识: str, 群标识: str) -> tuple[str, str]:
+    """只读当前官方群消息的 author，不从提及、引用或成员列表取资料。"""
+    if not 成员标识 or not 群标识:
+        return "", ""
+    待查 = [(消息, 0)]
+    已查: set[int] = set()
+    昵称 = 头像 = ""
+    while 待查 and len(已查) < 16:
+        当前, 深度 = 待查.pop(0)
+        当前 = _解析消息结构(当前) or 当前
+        if 当前 is None or isinstance(当前, (str, bytes)) or id(当前) in 已查:
+            continue
+        已查.add(id(当前))
+        当前群 = _读取字段(当前, "group_openid")
+        if 当前群 and 当前群 != 群标识:
+            continue
+        if _提取成员标识(当前, "group") == 成员标识:
+            作者 = _读取字段(当前, "author")
+            群昵称 = _读取字段(作者, "member_nickname")
+            原头像 = _读取字段(作者, "avatar")
+            if not 昵称 and isinstance(群昵称, str):
+                昵称 = _有效用户昵称(群昵称, 成员标识)
+            if not 头像 and isinstance(原头像, str):
+                头像 = _规范QQ群作者头像(原头像)
+            if 昵称 and 头像:
+                break
+        if 深度 < 3:
+            for 字段 in ("raw_data", "d", "data", "event", "payload"):
+                子项 = _读取字段(当前, 字段)
+                if 子项 is not None:
+                    待查.append((子项, 深度 + 1))
+    return 昵称, 头像
+
+
+def _规范QQ群作者头像(值: str) -> str:
+    地址 = 值.strip()
+    if not 地址 or len(地址) > 1024 or any(c.isspace() or ord(c) < 32 for c in 地址):
+        return ""
+    if 地址.startswith("//"):
+        地址 = "https:" + 地址
+    try:
+        解析地址 = _解析网址(地址)
+        if 解析地址.scheme in {"https", "http"} and 解析地址.hostname and 解析地址.username is None and 解析地址.password is None:
+            return 地址
+    except ValueError:
+        pass
+    return ""
+
+
 def _提取成员头像(消息: Any) -> str:
     """读取官方事件扩展中的头像地址，不调用其他适配器接口。
 
@@ -3634,10 +3707,7 @@ def _提取成员头像(消息: Any) -> str:
                 or 值.get("href")
                 or 值.get("value")
             )
-        地址 = str(值 or "").strip()
-        if 地址.startswith("//"):
-            地址 = "https:" + 地址
-        return 地址 if 地址.startswith(("https://", "http://")) else ""
+        return _规范QQ群作者头像(值) if isinstance(值, str) else ""
 
     while 待检查:
         当前, 深度 = 待检查.pop()
@@ -3943,11 +4013,25 @@ def _补充记录昵称状态(记录: dict[str, Any], 原始消息: Any = None, 
             if 记录["nickname_blank"]:
                 记录["nickname"] = ""
         return
+    if 记录.get("chat_type") == "group" and 来源 == "qq_official":
+        群昵称, 头像 = _提取QQ群作者资料(
+            原始消息 if 原始消息 is not None else 记录.get("raw_message"),
+            用户标识, str(记录.get("_session") or ""),
+        )
+        if 头像:
+            记录["avatar"] = 头像
+        if 群昵称:
+            记录["nickname"] = 群昵称
+            记录["nickname_blank"] = False
+            return
     当前昵称 = _有效用户昵称(记录.get("nickname"), 用户标识)
     if 当前昵称:
         记录["nickname_blank"] = False
         return
     资料 = ((成员资料缓存.get(str(记录.get("_session") or "")) or {}).get(用户标识) or {}) if 允许缓存 else {}
+    应用 = str(记录.get("appid") or "").strip()
+    if 资料 and (not isinstance(资料, dict) or str(资料.get("appid") or "").strip() != 应用):
+        资料 = {}
     缓存昵称 = _有效用户昵称(资料.get("nickname") or 资料.get("username"), 用户标识) if isinstance(资料, dict) else ""
     昵称, 空白 = _提取昵称展示状态(原始消息 if 原始消息 is not None else 记录.get("raw_message"), 用户标识)
     if 缓存昵称 or 昵称:
@@ -4120,10 +4204,15 @@ def 记录收到消息(
                     "member_openid": 群成员标识,
                 },
             )
-        昵称 = (
+        通用昵称 = (
             _提取私聊作者昵称(消息, 成员标识)[0]
             if 类型 == "user" else _有效用户昵称(_提取成员昵称(消息), 成员标识)
         )
+        群昵称, 群头像 = (
+            _提取QQ群作者资料(消息, 成员标识, 会话标识)
+            if 类型 == "group" and 源 == "qq_official" else ("", "")
+        )
+        昵称 = 群昵称 or 通用昵称
         是机器人 = _提取作者机器人状态(消息)
         角色 = _提取QQ群消息作者角色(消息) if 类型 == "group" else ""
         时间戳 = _读取字段(消息, "timestamp") or int(time.time())
@@ -4150,7 +4239,7 @@ def 记录收到消息(
         _补充记录引用索引(引用索引, 消息)
         引用ID = 引用索引["reference_id"]
         自身REFIDX = 引用索引["refidx"]
-        作者头像 = _提取成员头像(消息)
+        作者头像 = 群头像 or _提取成员头像(消息)
         _记录成员资料(
             会话标识,
             成员标识,
@@ -4173,6 +4262,19 @@ def 记录收到消息(
         elif 源 == "group_member_leave":
             默认记录昵称 = "成员"
         原始消息负载 = _读取字段(消息, "raw_data") or 消息
+        if 群昵称 and not isinstance(原始消息负载, dict):
+            # 旧 botpy 对象没有 raw_data，repr 还会把作者转成嵌套字符串。
+            # 将同一作者的字段还原为对象，历史查询可识别群昵称的作用域。
+            原始结构 = _解析消息结构(_序列化原始消息(原始消息负载))
+            if isinstance(原始结构, dict):
+                旧作者 = _解析消息结构(原始结构.get("author"))
+                原始结构 = {**原始结构, "group_openid": 会话标识, "author": {
+                    **(旧作者 if isinstance(旧作者, dict) else {}),
+                    "member_openid": 成员标识,
+                    "member_nickname": 群昵称,
+                    **({"avatar": 群头像} if 群头像 else {}),
+                }}
+                原始消息负载 = 原始结构
         键盘按钮 = 提取消息键盘按钮(消息)
         记录: dict[str, Any] = {
             "id": 发送序号,
@@ -4210,7 +4312,7 @@ def 记录收到消息(
             and not 是机器人
             and 类型 in {"group", "user"}
             and 源 in {"qq_official", "group_member_join", "group_member_leave", "friend_add", "friend_del"}
-            and (昵称 or 统一用户标识)
+            and (通用昵称 or 统一用户标识)
             and _消息数据库已配置()
         ):
             for 用户资料标识 in dict.fromkeys((成员标识, 群用户标识)):
@@ -4220,7 +4322,7 @@ def 记录收到消息(
                         {
                             "appid": 记录["appid"],
                             "user_id": 用户资料标识,
-                            "nickname": 昵称,
+                            "nickname": 通用昵称,
                             "union_openid": 统一用户标识,
                         },
                     )
@@ -6568,18 +6670,34 @@ def _领取群资料查询额度(appid: str, 端点: str) -> None:
     已用.append(现在)
 
 
-async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
-    """复用已认证 SDK 会话，完整读取有界群资料响应并保留数字错误码。"""
-    if str(getattr(route, "method", "")).upper() != "GET" or getattr(route, "path", "") not in {
-        "/v2/groups/{group_openid}/bot_state", "/v2/groups/{group_openid}/info"
+def _领取用户资料查询额度(appid: str) -> None:
+    """用户资料独立计算同一 AppID 的滚动 10 QPS。"""
+    现在 = time.monotonic()
+    if _用户资料限流截止.get(appid, 0.0) > 现在:
+        raise _群资料配额耗尽("用户资料官方限流冷却中")
+    _用户资料限流截止.pop(appid, None)
+    已用 = [时间 for 时间 in _用户资料请求尝试.get(appid, []) if 时间 > 现在 - 1.0]
+    if len(已用) >= 10:
+        raise _群资料配额耗尽("用户资料每秒请求额度已用完")
+    已用.append(现在)
+    _用户资料请求尝试[appid] = 已用
+
+
+async def _读取群资料官方响应(http: Any, route: Any, *, 用户资料AppID: str = "") -> dict[str, Any]:
+    """复用已认证 SDK 会话，完整读取有界官方资料响应并保留数字错误码。"""
+    端点 = getattr(route, "path", "")
+    用户资料 = 端点 == _用户资料端点
+    if str(getattr(route, "method", "")).upper() != "GET" or 端点 not in {
+        "/v2/groups/{group_openid}/bot_state", "/v2/groups/{group_openid}/info", _用户资料端点,
     }:
-        raise ValueError("群资料请求仅接受固定群信息GET")
+        raise ValueError("资料请求仅接受固定官方GET")
     令牌 = getattr(http, "_token", None)
     会话 = getattr(http, "_session", None)
     请求头 = dict(getattr(http, "_headers", None) or {})
     appid = str(getattr(令牌, "app_id", "") or "").strip()
     访问令牌 = getattr(令牌, "access_token", None)
     if (not re.fullmatch(r"[0-9]{4,32}", appid)
+        or (用户资料 and appid != 用户资料AppID)
         or str(请求头.get("X-Union-Appid") or "").strip() != appid
         or not isinstance(访问令牌, str) or not 访问令牌.strip()
         or 请求头.get("Authorization") != "QQBot " + 访问令牌
@@ -6587,23 +6705,31 @@ async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
         raise ValueError("群资料认证 AppID 缺失或不匹配")
     route.is_sandbox = http.is_sandbox
     地址 = _解析网址(route.url)
+    路径规则 = r"/v2/users/[A-Za-z0-9_-]{5,128}/info" if 用户资料 else r"/v2/groups/[^/?#]+/(bot_state|info)"
     if (地址.scheme != "https" or 地址.netloc not in {"api.sgroup.qq.com", "sandbox.api.sgroup.qq.com"}
         or 地址.query or 地址.fragment
-        or not re.fullmatch(r"/v2/groups/[^/?#]+/(bot_state|info)", 地址.path)):
-        raise ValueError("群资料请求仅接受固定群信息GET")
+        or not re.fullmatch(路径规则, 地址.path)):
+        raise ValueError("资料请求仅接受固定官方GET")
     async def 配额中间件(请求: Any, 发送: Any) -> Any:
         # aiohttp 的内部连接重试也会重新经过中间件，逐次计算实际请求。
-        _领取群资料查询额度(appid, route.path)
+        if 用户资料:
+            _领取用户资料查询额度(appid)
+        else:
+            _领取群资料查询额度(appid, 端点)
         return await 发送(请求)
 
+    超时 = min(10.0, http.timeout) if 用户资料 else http.timeout
     async with 会话.request(
         method="GET", url=route.url, headers=请求头,
-        timeout=ClientTimeout(total=http.timeout), allow_redirects=False,
+        timeout=ClientTimeout(total=超时), allow_redirects=False,
         middlewares=(配额中间件,),
     ) as 响应:
         状态码 = 响应.status
         if 状态码 == 429:
-            群资料限流截止[(appid, route.path)] = time.monotonic() + 60.0
+            if 用户资料:
+                _用户资料限流截止[appid] = time.monotonic() + 60.0
+            else:
+                群资料限流截止[(appid, 端点)] = time.monotonic() + 60.0
         内容 = bytearray()
         async for 片段 in 响应.content.iter_chunked(8192):
             内容.extend(片段)
@@ -6624,7 +6750,10 @@ async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
             for 原值, 规范值 in ((业务码, 错误.code), (扩展码, 错误.err_code))
         ):
             raise _群资料请求错误(状态码, 业务码, 扩展码, reason="business_error")
-        if route.path.endswith("/bot_state"):
+        if 用户资料:
+            if not any(字段 in 资料 for 字段 in ("username", "avatar", "allow_proactive_msg")):
+                raise _群资料请求错误(状态码, 业务码, 扩展码, reason="invalid_response")
+        elif 端点.endswith("/bot_state"):
             if not isinstance(资料.get("member_openid"), str) or not 资料["member_openid"].strip():
                 raise _群资料请求错误(状态码, 业务码, 扩展码, reason="invalid_response")
         elif not any(字段 in 资料 for 字段 in (
@@ -6634,12 +6763,21 @@ async def _读取群资料官方响应(http: Any, route: Any) -> dict[str, Any]:
         return 资料
 
 
-async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None) -> Any:
-    """同一 Token、群和端点合并在途 GET；强制刷新也遵守失败冷却。"""
+async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None, 用户资料AppID: str = "") -> Any:
+    """同一 Token、对象和端点合并在途 GET；强制刷新也遵守失败冷却。"""
     if str(getattr(route, "method", "")).upper() != "GET":
         raise ValueError("群资料认证重试仅接受 GET")
     if 请求实现 is not None:
         return await _执行群资料认证GET(http, route, 请求实现=请求实现)
+    用户资料 = getattr(route, "path", "") == _用户资料端点
+    if 用户资料:
+        if not 用户资料AppID or 用户资料AppID != str(getattr(http._token, "app_id", "") or "").strip():
+            raise ValueError("用户资料认证 AppID 缺失或不匹配")
+
+        async def 读取用户资料() -> dict[str, Any]:
+            return await _读取群资料官方响应(http, route, 用户资料AppID=用户资料AppID)
+
+        请求实现 = 读取用户资料
     route.is_sandbox = http.is_sandbox
     请求键 = route.url
     状态表 = getattr(http, "_mantou_group_get_state", None)
@@ -6672,7 +6810,7 @@ async def _请求群资料GET(http: Any, route: Any, *, 请求实现: Any = None
         except _群资料查询冷却中:
             raise
         except Exception as 异常:
-            状态["failed_until"] = time.monotonic() + _群信息冷却秒数(异常)
+            状态["failed_until"] = time.monotonic() + (60 if 用户资料 else _群信息冷却秒数(异常))
             raise
         finally:
             状态["task"] = None
@@ -7650,17 +7788,66 @@ def _私聊联系人资料(
         头像 = str(资料.get("avatar") or 资料.get("avatar_url") or "").strip()
         if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
             结果["avatar"] = 头像
+    if not 结果["avatar"] and 获取好友关系状态(标识, 应用)["is_friend"] is not False:
+        已查头像 = _私聊官方头像缓存.get((应用, 标识))
+        if 已查头像 and 已查头像[0] > time.monotonic():
+            结果["avatar"] = 已查头像[1]
     return 结果
 
 
+def _已核实私聊联系人(标识: str, 应用: str, 会话: dict[str, Any]) -> bool:
+    好友 = 获取好友关系状态(标识, 应用)["is_friend"]
+    if 好友 is not None:
+        return 好友
+    return any(
+        isinstance(消息, dict)
+        and 消息.get("source") == "qq_official"
+        and not 消息.get("is_self") and 消息.get("is_bot") is not True
+        and 消息.get("user_id") == 标识 and 消息.get("appid") == 应用
+        and 消息.get("chat_type") == "user" and 消息.get("_session") in (None, "", 标识)
+        for 消息 in 会话.get("messages") or ()
+    )
+
+
 async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, Any]:
-    """返回当前私聊事件资料；不再发起保存昵称或关联群的回查。"""
+    """当前私聊事件提供昵称，头像缺失时限同机器人已知联系人补查。"""
     标识 = str(会话标识 or "").strip()
     if not 标识 or len(标识) > 128:
         raise ValueError("invalid conversation")
     应用 = str(appid or "").strip()
     会话 = _读取作用域会话缓存(标识, "user", 应用)
     资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
+    if (
+        not 资料["avatar"] and _OPENID规则.fullmatch(标识)
+        and re.fullmatch(r"[0-9]{4,32}", 应用) and _已核实私聊联系人(标识, 应用, 会话)
+    ):
+        平台, 认证AppID = _获取消息操作平台(应用)
+        通道 = 获取HTTP通道(平台) if 认证AppID == 应用 else None
+        if 通道 is not None:
+            try:
+                from botpy.http import Route
+
+                路由 = Route("GET", _用户资料端点, user_openid=标识)
+                响应 = await _请求群资料GET(通道[1], 路由, 用户资料AppID=应用)
+                头像 = 响应.get("avatar")
+                地址 = _解析网址(头像) if isinstance(头像, str) and len(头像) <= 2048 else None
+                最新会话 = _读取作用域会话缓存(标识, "user", 应用)
+                当前平台, 当前AppID = _获取消息操作平台(应用)
+                if (
+                    地址 is not None and 地址.scheme == "https" and not 地址.fragment
+                    and 地址.netloc in {"q.qlogo.cn", "thirdqq.qlogo.cn", "qlogo.cn"}
+                    and 当前平台 is 平台 and 当前AppID == 应用
+                    and _已核实私聊联系人(标识, 应用, 最新会话)
+                ):
+                    if len(_私聊官方头像缓存) >= 512:
+                        _私聊官方头像缓存.pop(next(iter(_私聊官方头像缓存)))
+                    _私聊官方头像缓存[(应用, 标识)] = (time.monotonic() + 300.0, 头像)
+            except _群资料查询冷却中:
+                pass
+            except Exception as 异常:
+                logger.debug("QQ用户资料查询失败：error_type=%s", type(异常).__name__)
+            会话 = _读取作用域会话缓存(标识, "user", 应用)
+            资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
     return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料,
             "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
 
@@ -9233,7 +9420,7 @@ def _修补botpy昵称() -> bool:
     下游按当前 AppID 保存身份关系；缺失字段保持为空，不从引用作者推断。
     """
     global _昵称修补已安装, _昵称修补安装版本
-    修补版本 = 3
+    修补版本 = 4
     if _昵称修补已安装 and _昵称修补安装版本 == 修补版本:
         return True
     try:
@@ -9320,16 +9507,28 @@ def _修补botpy昵称() -> bool:
                         except Exception:
                             pass
                     昵称 = 作者数据.get("username")
-                    if isinstance(昵称, str) and 作者 is not None:
-                        # 保留原字段用于明确空白判断；展示和资料写入由受限昵称状态处理。
-                        作者.username = 昵称
+                    if 作者 is not None:
+                        if isinstance(昵称, str):
+                            # 保留原字段用于明确空白判断；展示和资料写入由受限昵称状态处理。
+                            try:
+                                作者.username = 昵称
+                            except (AttributeError, TypeError):
+                                pass
+                        群昵称 = 作者数据.get("member_nickname")
+                        if isinstance(群昵称, str) and _读取字段(self, "group_openid"):
+                            try:
+                                作者.member_nickname = 群昵称
+                            except (AttributeError, TypeError):
+                                pass
                 if 作者 is not None:
+                    已保留头像字段: set[str] = set()
                     for 资料 in 资料对象列表:
                         for 字段 in ("avatar", "avatar_url", "avatarUrl", "icon"):
                             头像 = 资料.get(字段)
-                            if 头像 not in (None, ""):
+                            if isinstance(头像, str) and 头像 and 字段 not in 已保留头像字段:
                                 try:
-                                    setattr(作者, 字段, str(头像).strip())
+                                    setattr(作者, 字段, 头像.strip())
+                                    已保留头像字段.add(字段)
                                 except Exception:
                                     pass
                 原始提及 = 数据.get("mentions") or []

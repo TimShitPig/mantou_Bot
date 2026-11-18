@@ -6910,6 +6910,7 @@
               msgIsRecalled(message) ? 1 : 0,
               message.nickname || '',
               Boolean(message.nickname_blank),
+              message.avatar || message.avatar_url || '',
               Boolean(profile.nickname_blank),
               profile.nickname || profile.username || '',
               profile.avatar || profile.avatar_url || '',
@@ -6984,7 +6985,10 @@
               ? (botProfileName || (rawNickname && !['未知用户', '未知', '机器人', '我'].includes(rawNickname) ? rawNickname : '机器人'))
               : (rawNickname && rawNickname !== '未知用户' ? rawNickname : '我'))
             : displayMsgNickname(m, profile);
-          const av = isSelf && botMessage ? botProfileAvatar : (isSelf ? '' : (profileAvatar || avatarUrl(m.user_id, 'user', m.appid || msgState.chatAppid)));
+          const groupAuthorAvatar = msgState.chatType === 'group'
+            ? safeMediaUrl(String(m.avatar || m.avatar_url || '').trim()) : '';
+          const av = isSelf && botMessage ? botProfileAvatar
+            : (isSelf ? '' : (groupAuthorAvatar || profileAvatar || avatarUrl(m.user_id, 'user', m.appid || msgState.chatAppid)));
           const tags = [];
           if (msgIsBot(m, profile)) tags.push('<span class="msg-tag bot">BOT</span>');
           else if (isSelf) tags.push('<span class="msg-tag self">我</span>');
@@ -8028,7 +8032,7 @@
         const ids = Array.from(session.members.selected);
         const addToBlacklist = $('msg-group-remove-blacklist').checked;
         if (ids.length < 1 || ids.length > 20) return groupSettingsMessage('members', '每次请选择 1 至 20 位成员', true);
-        if (!confirm(`确认从「${session.name}」移除选中的 ${ids.length} 位成员？${addToBlacklist ? '\n这些成员还会加入本群黑名单。' : ''}`)) return;
+        if (!confirm(`确认从「${session.name}」移除选中的 ${ids.length} 位成员？${addToBlacklist ? '\n同时请求将这些成员加入本群黑名单。' : ''}`)) return;
         await mutateGroupSettings(session, 'members', async () => {
           const data = await groupSettingsRequest(session, 'message/group-members/remove', {member_openids:ids, add_to_member_blacklist:addToBlacklist});
           if (!groupSettingsCurrent(session)) return;
@@ -8039,7 +8043,7 @@
           session.members.rows = session.members.rows.filter((member) => !removed.has(member.member_openid));
           session.members.selected = new Set(failed.filter((id) => ids.includes(id)));
           const resultMessage = data.message || `已移除 ${removed.size} 人${failed.length ? `，${failed.length} 人未移除，已保留选择` : ''}`;
-          groupSettingsMessage('members', resultMessage + (session.blacklistPendingIds.length ? `；加入黑名单失败的 OpenID：${session.blacklistPendingIds.join('、')}` : ''), Boolean(failed.length || blacklistFailed.length));
+          groupSettingsMessage('members', resultMessage + (session.blacklistPendingIds.length ? `；加入黑名单失败的 OpenID：${session.blacklistPendingIds.join('、')}` : ''), Boolean(failed.length || blacklistFailed.length || data.blacklist_unconfirmed === true));
           renderGroupSettingsRows(session, 'members');
           session.blacklist.loaded = false;
           session.blacklist.selected.clear();

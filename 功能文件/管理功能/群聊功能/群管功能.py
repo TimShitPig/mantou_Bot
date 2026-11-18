@@ -220,6 +220,20 @@ async def 处理广告开关指令(
     if not await asyncio.to_thread(写入群广告开关, 配置, 群号, 目标状态):
         return "广告开关保存失败，请稍后再试"
     return f"本群广告拦截已{'开启' if 目标状态 else '关闭'}"
+
+
+_踢人提及标记 = re.compile(
+    r'\[At:([A-Za-z0-9_-]{1,128})\]|<@!?([A-Za-z0-9_-]{1,128})>'
+    r'|<qqbot-at-user\s+id="([A-Za-z0-9_-]{1,128})"\s*/>',
+    re.IGNORECASE,
+)
+
+
+def _踢人提及编号(对象: Any, 字段名: str) -> str:
+    值 = 读取字段(对象, 字段名)
+    return 规范化用户编号(值) if isinstance(值, str) else ""
+
+
 def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[str, Any] | None:
     """仅解析当前顶层文字与 @；引用、卡片及其子节点不参与命令。"""
     消息对象 = getattr(event, "message_obj", None)
@@ -243,10 +257,9 @@ def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[st
             类型 = str(读取字段(类型值, "value") or 类型值 or "").lower()
             if 是否At类型值(类型值):
                 数据 = 读取字段(消息段, "data")
-                用户 = next((规范化用户编号(读取字段(对象, 字段))
+                用户 = next((编号 for 字段 in ("member_openid", "qq", "user_id", "openid")
                              for 对象 in (消息段, 数据)
-                             for 字段 in ("qq", "user_id", "member_openid", "user_openid", "openid")
-                             if 规范化用户编号(读取字段(对象, 字段))), "")
+                             if (编号 := _踢人提及编号(对象, 字段))), "")
                 if 用户:
                     目标.append(用户)
             elif 类型 in {"plain", "text"} or 类型.endswith((".plain", ".text")):
@@ -260,18 +273,12 @@ def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[st
                 return None
         文本 = "".join(文本片段)
     else:
-        # 无组件链时只读取适配器公开的当前可见文本，不遍历 raw_message。
         文本 = next((值 for 值 in (读取字段(event, "message_str"),
                               读取字段(消息对象, "message_str"), 命令文本)
                    if isinstance(值, str) and 值), "")
-    def 去除提及(匹配):
-        用户 = 规范化用户编号(匹配.group(1) or 匹配.group(2))
-        if 用户:
-            目标.append(用户)
-        return " "
-    文本 = re.sub(r"\[At:([A-Za-z0-9_-]{1,128})\]|<@!?([A-Za-z0-9_-]{1,128})>",
-                去除提及, 文本, flags=re.IGNORECASE).strip()
-    if 文本 not in {"踢", "踢了"}:
+
+    # 普通聊天在这里结束，不读取管理员名单。
+    if _踢人提及标记.sub(" ", 文本).strip() not in {"踢", "踢了"}:
         return None
     忽略用户 = 获取应忽略At用户(event)
     获取自身 = getattr(event, "get_self_id", None)
@@ -282,7 +289,54 @@ def 解析群踢人参数(event: AstrMessageEvent, 命令文本: str) -> dict[st
             自身 = None
         if isinstance(自身, str):
             忽略用户.add(自身)
-    return {"command": 文本, "targets": [用户 for 用户 in 去重保序(目标) if 用户 not in 忽略用户]}
+
+    # AstrBot QQ 官方适配器可能只为机器人生成 At，其余提及留在 Plain，
+    # 以 QQ 当前事件顶层 mentions 验证这些标签；普通用户可手输同样的文本。
+    原消息 = 读取字段(消息对象, "raw_message")
+    原数据 = 读取字段(原消息, "raw_data")
+    if not isinstance(原数据, dict):
+        原数据 = 原消息
+    if (
+        读取字段(原数据, "attachments") or 读取字段(原数据, "ark_data")
+        or 读取字段(原数据, "message_type") in (3, 101, 102, 103)
+    ):
+        return None
+    提及列表 = 读取字段(原数据, "mentions")
+    if not isinstance(提及列表, (list, tuple)):
+        提及列表 = 读取字段(原消息, "mentions")
+    已验证提及 = {用户: 用户 for 用户 in 目标}
+    if isinstance(提及列表, (list, tuple)):
+        for 提及 in 提及列表:
+            if 读取字段(提及, "scope") == "all":
+                return None
+            标签 = _踢人提及编号(提及, "id")
+            用户 = _踢人提及编号(提及, "member_openid")
+            if 读取字段(提及, "is_you") is True:
+                忽略用户.update((用户, 标签))
+                continue
+            if not 用户:
+                continue
+            目标.append(用户)
+            已验证提及[用户] = 用户
+            if 标签:
+                已验证提及[标签] = 用户
+
+    def 去除已验证提及(匹配: re.Match[str]) -> str:
+        编号 = next(组 for 组 in 匹配.groups() if 组 is not None)
+        if 编号 in 已验证提及 or 编号 in 忽略用户 or 编号 == "qq_official":
+            return " "
+        return 匹配.group()
+
+    命令 = _踢人提及标记.sub(去除已验证提及, 文本).strip()
+    if 命令 not in {"踢", "踢了"}:
+        return None
+    return {
+        "command": 命令,
+        "targets": 去重保序([
+            已验证提及[用户] for 用户 in 目标
+            if 用户 not in 忽略用户 and 已验证提及[用户] not in 忽略用户
+        ]),
+    }
 
 
 async def 处理群踢人(event: AstrMessageEvent, 命令文本: str, 配置: Any) -> str | None:
@@ -312,8 +366,10 @@ async def 处理群踢人(event: AstrMessageEvent, 命令文本: str, 配置: An
     if 结果.get("reason") == "duplicate_event":
         return None
     if 结果.get("ok") is True:
-        return "成员已移除"
-    if 结果.get("reason") in {"api_permission", "group_permission"}:
+        return f"已移除 {len(目标)} 位成员"
+    if 结果.get("reason") == "group_permission":
+        return "成员移除失败：请群主开启移除成员权限"
+    if 结果.get("reason") == "api_permission":
         return "成员移除失败：当前操作未获授权"
     if 结果.get("reason") == "remove_unconfirmed":
         return "成员移除结果未确认，请查看群成员"

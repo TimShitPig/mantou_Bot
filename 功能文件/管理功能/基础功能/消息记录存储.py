@@ -367,9 +367,13 @@ def _原始消息昵称表达式(别名: str, 用户字段: str) -> str:
         ) for 路径 in 路径列表
     )
     保存昵称 = _有效用户昵称SQL(f"{别名}.nickname", 用户字段)
+    # 跨群资料回查只能复用通用昵称。若行里的展示昵称来自群内称呼，改读作者通用资料。
+    群昵称路径 = tuple(f"{包装}.author.member_nickname" for 包装 in ("$", "$.data", "$.d", "$.raw_data"))
+    群昵称值 = ",".join(f"NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT({别名}.raw_message, '{路径}'))),'null')" for 路径 in 群昵称路径)
+    可复用昵称 = f"CASE WHEN {别名}.nickname IN ({群昵称值}) THEN NULL ELSE {保存昵称} END"
     return (
         f"CASE WHEN JSON_VALID({别名}.raw_message) THEN "
-        f"COALESCE({保存昵称},{原始候选},'') "
+        f"COALESCE({可复用昵称},{原始候选},'') "
         f"ELSE COALESCE({保存昵称},'') END"
     )
 
@@ -1164,6 +1168,8 @@ def _历史消息本人资料(原文: Any, 用户标识: str, 已存昵称: Any,
             原始 = {}
     if not isinstance(原始, Mapping):
         原始 = {}
+    保存名 = _有效用户昵称(用户标识, 已存昵称)
+    保存名是群昵称 = False
 
     def 标识(值: Any) -> str:
         if not isinstance(值, str):
@@ -1175,6 +1181,7 @@ def _历史消息本人资料(原文: Any, 用户标识: str, 已存昵称: Any,
         return 文本 if all(ord(字符) > 32 and not 127 <= ord(字符) <= 159 for 字符 in 文本) else ""
 
     def 信息(对象: Mapping[str, Any], 包装: Mapping[str, Any], 是根: bool) -> dict[str, Any] | None:
+        nonlocal 保存名是群昵称
         用户 = 标识(对象.get("user_openid"))
         成员 = 标识(对象.get("member_openid"))
         对象ID = "" if 是根 else 标识(对象.get("id"))
@@ -1190,6 +1197,10 @@ def _历史消息本人资料(原文: Any, 用户标识: str, 已存昵称: Any,
         包装别名 = {值 for 值 in (包装用户, 包装成员, 标识(包装.get("user_id"))) if 值}
         if not 显式别名 and 包装别名 and 用户标识 not in 包装别名:
             return None
+        if 类型 == "group" and 保存名 and 对象 is 包装.get("author"):
+            群昵称 = 对象.get("member_nickname")
+            if isinstance(群昵称, str) and 保存名 == 群昵称.strip():
+                保存名是群昵称 = True
         包装一致 = not 包装别名 or 用户标识 in 包装别名 or bool(显式别名 & 包装别名)
         if not 是根:
             # 同一消息根的另一种主体 ID 仅在无冲突时补上；operator 不参与。
@@ -1235,8 +1246,7 @@ def _历史消息本人资料(原文: Any, 用户标识: str, 已存昵称: Any,
                 if isinstance(子包装, Mapping):
                     待看.append((子包装, 深度 + 1))
     # 无原始资料的老消息仍可恢复已经按消息本人保存的有效昵称。
-    保存名 = _有效用户昵称(用户标识, 已存昵称)
-    if 保存名:
+    if 保存名 and not 保存名是群昵称:
         资料列表.append({
             "nickname": 保存名[:255], "union_openid": "", "user_openid": "",
             "member_openid": "", "aliases": (用户标识,),
@@ -2569,14 +2579,15 @@ def _批量读取历史昵称行(
             键 = (记录appid, 标识)
             if 键 in 已找到:
                 continue
-            昵称 = _有效用户昵称(标识, _行字段(行, 2, "nickname", 默认值=""))
-            if not 昵称:
-                原文 = _行字段(行, 5, "raw_message", 默认值="")
-                类型 = str(_行字段(行, 6, "消息类型", 默认值="") or "")
-                for 资料 in _历史消息本人资料(原文, 标识, "", 类型):
-                    昵称 = _有效用户昵称(标识, 资料.get("nickname"))
-                    if 昵称:
-                        break
+            已存昵称 = _行字段(行, 2, "nickname", 默认值="")
+            原文 = _行字段(行, 5, "raw_message", 默认值="")
+            类型 = str(_行字段(行, 6, "消息类型", 默认值="") or "")
+            昵称 = _有效用户昵称(标识, 已存昵称)
+            if not 昵称 or (类型 == "group" and isinstance(原文, str) and '"member_nickname"' in 原文):
+                昵称 = next(
+                    (资料["nickname"] for 资料 in _历史消息本人资料(原文, 标识, 已存昵称, 类型) if 资料["nickname"]),
+                    "",
+                )
             if 昵称:
                 已找到[键] = (
                     记录appid, 标识, 昵称,
