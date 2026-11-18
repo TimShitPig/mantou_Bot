@@ -1057,6 +1057,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                 # 发生变化时关闭旧会话，按最新持久快照重建，奖励通知不跨会话复用。
                 reward_cid = ""
                 reward_due = float("inf")
+                reward_attempted = False
                 while True:
                     async with _锁(配置):
                         state = await _读状态(配置)
@@ -1101,6 +1102,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     await _写状态(配置, state)
                                     _记录阅读活动(配置, state, stage)
                                     reward_pending, reward_result = True, None
+                                    reward_attempted = True
                                     reward_details = await client.collect_reward(reward_cid)
                                     reward_result = reward_details.get("collected") is True
                                     # 领奖结果已经明确，后续状态保存失败也不能改写成领取失败。
@@ -1164,6 +1166,7 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                                     }
                                     if body.get("reward_token_count", 0) >= 400 and state["rewards_enabled"]:
                                         reward_cid = str(chapter["cid"])
+                                        reward_attempted = False
                                         # 本章停留结束、切章前查询新通知，避免过早检查后漏掉晚到奖励。
                                         reward_due = reading_due
                                     reading_stage = "book"
@@ -1205,6 +1208,9 @@ async def _执行在线任务(配置: Any, revision: str, uid: str) -> tuple[dic
                     if reward_cid and state["rewards_enabled"]:
                         deadlines.append(reward_due)
                     await asyncio.sleep(max(0.1, min(deadlines) - time.monotonic()))
+                if reward_cid and not reward_attempted and state["rewards_enabled"]:
+                    logger.info("STV奖励未提交：appid=%s, uid=%s, reason=session_changed_before_submit",
+                                _作用域(配置), uid)
     except asyncio.CancelledError:
         if reward_pending:
             if reward_result is None:
