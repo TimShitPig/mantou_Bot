@@ -10,6 +10,7 @@ import re
 import ssl
 import time
 import unicodedata
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from typing import Any
@@ -42,6 +43,11 @@ _PATHS = {
 _CONNECTION_POOLS = globals().get("_CONNECTION_POOLS") or {}
 _ACCOUNT_QUERY_TIMEOUTS = (30.0, 60.0)
 _ACCOUNT_QUERY_RETRY_DELAY = 0.5
+_CHAPTER_DOWNLOAD_GATES = globals().get("_CHAPTER_DOWNLOAD_GATES") or {}
+_CHAPTER_DOWNLOAD_INTERVAL = 1.0
+_CHAPTER_DOWNLOAD_ATTEMPTS = 3
+_CHAPTER_DOWNLOAD_MAX_WAIT = 60.0
+_CHAPTER_DOWNLOAD_BUDGET = 120.0
 
 
 def _acquire_connector() -> dict[str, Any]:
@@ -78,12 +84,38 @@ async def _close_idle_connector(expected: dict[str, Any] | None = None) -> None:
 
 
 class STVError(RuntimeError):
-    def __init__(self, category: str, http_status: int | None = None, code: Any = None):
+    def __init__(self, category: str, http_status: int | None = None, code: Any = None,
+                 *, retry_after: float | None = None):
         self.category = category
         self.http_status = http_status
         value = str(code) if isinstance(code, (str, int)) and not isinstance(code, bool) else ""
         self.code = value if re.fullmatch(r"-?\d{1,12}", value) else None
+        self.retry_after = retry_after
         super().__init__(category)
+
+
+def _retry_after_seconds(value: Any, server_date: Any = None) -> float | None:
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9]+", value):
+        return float(value)
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is not None:
+            target = parsed.timestamp()
+            delay = max(0.0, target - time.time())
+            if isinstance(server_date, str) and len(server_date) <= 128:
+                try:
+                    date = parsedate_to_datetime(server_date)
+                    if date.tzinfo is not None:
+                        delay = max(delay, target - date.timestamp())
+                except (ValueError, TypeError, OverflowError):
+                    pass
+            return delay
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return None
 
 
 def _identity(host: Any, bookid: Any) -> tuple[str, str]:
@@ -170,7 +202,8 @@ async def _run_js(source: str, expression: str, data: dict[str, Any] | None = No
 class STVClient:
     """一次会话保存一个账号的 Cookie；正文 key 与 readcontextid 始终成对使用。"""
 
-    def __init__(self, cookies: list[dict[str, Any]] | None = None, uid: str = ""):
+    def __init__(self, cookies: list[dict[str, Any]] | None = None, uid: str = "",
+                 *, chapter_download: bool = False):
         if uid and not re.fullmatch(r"[1-9]\d*", str(uid)):
             raise STVError("invalid_input")
         self.uid = str(uid)
@@ -182,6 +215,7 @@ class STVClient:
         self._key = ""
         self._reward_offer: tuple[str, float] | None = None
         self.mutation_guard = None
+        self._chapter_download = chapter_download
 
     async def __aenter__(self) -> STVClient:
         jar = aiohttp.CookieJar()
@@ -257,6 +291,48 @@ class STVClient:
         data: dict[str, Any] | str | None = None, *, limit: int = 16 * 1024 * 1024,
         mutation: bool = False, account: bool = False,
     ) -> tuple[str, dict[str, str]]:
+        chapter_read = path == "/io/grantcontext/context" or (
+            path == "/index.php" and (params or {}).get("sajax") == "readchapter"
+        )
+        if not (self._chapter_download and method == "GET" and chapter_read and not mutation and not account):
+            return await self._request_once(method, path, params, data, limit=limit, mutation=mutation, account=account)
+        loop = asyncio.get_running_loop()
+        gate = _CHAPTER_DOWNLOAD_GATES.setdefault(
+            loop, {"lock": asyncio.Lock(), "next_at": 0.0, "cooldown_until": 0.0},
+        )
+        deadline = time.monotonic() + _CHAPTER_DOWNLOAD_BUDGET
+        last_error = None
+        try:
+            async with asyncio.timeout(_CHAPTER_DOWNLOAD_BUDGET):
+                for attempt in range(1, _CHAPTER_DOWNLOAD_ATTEMPTS + 1):
+                    async with gate["lock"]:
+                        now = time.monotonic()
+                        delay = max(0.0, gate["next_at"] - now, gate["cooldown_until"] - now)
+                        if delay > _CHAPTER_DOWNLOAD_MAX_WAIT or now + delay >= deadline:
+                            raise last_error or STVError("rate_limited")
+                        if delay:
+                            await asyncio.sleep(delay)
+                        # 本地保守节奏，并非声明官方配额；不同下载会话共用。
+                        gate["next_at"] = time.monotonic() + _CHAPTER_DOWNLOAD_INTERVAL
+                        try:
+                            return await self._request_once(method, path, params, data, limit=limit)
+                        except STVError as exc:
+                            if exc.category != "rate_limited" or exc.http_status != 429:
+                                raise
+                            last_error = exc
+                            delay = exc.retry_after if exc.retry_after is not None else 5.0 * 2 ** (attempt - 1)
+                            gate["cooldown_until"] = max(gate["cooldown_until"], time.monotonic() + delay)
+                            if attempt == _CHAPTER_DOWNLOAD_ATTEMPTS or delay > _CHAPTER_DOWNLOAD_MAX_WAIT:
+                                raise
+        except asyncio.TimeoutError:
+            raise last_error or STVError("timeout") from None
+        raise last_error or STVError("rate_limited")
+
+    async def _request_once(
+        self, method: str, path: str, params: dict[str, Any] | None = None,
+        data: dict[str, Any] | str | None = None, *, limit: int = 16 * 1024 * 1024,
+        mutation: bool = False, account: bool = False,
+    ) -> tuple[str, dict[str, str]]:
         if path not in _PATHS or method not in {"GET", "POST"}:
             raise STVError("invalid_endpoint")
         query = urlencode(params or {})
@@ -279,7 +355,12 @@ class STVClient:
                         "verification_required" if 300 <= response.status < 400 else
                         "rate_limited" if response.status == 429 else "http_error"
                     )
-                    raise STVError(category, response.status)
+                    raise STVError(
+                        category, response.status,
+                        retry_after=_retry_after_seconds(
+                            response.headers.get("Retry-After"), response.headers.get("Date"),
+                        ) if response.status == 429 else None,
+                    )
                 raw = bytearray()
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     if len(raw) + len(chunk) > limit:

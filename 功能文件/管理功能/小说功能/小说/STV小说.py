@@ -1405,7 +1405,7 @@ async def 生成STV下载回复流(event: Any, source: str, config: Any = None) 
         if state["auth_status"] == "invalid":
             state = _空状态()
         host, number = identity.split("/", 1)
-        async with STVClient(cookies=state["cookies"], uid=state["uid"]) as client:
+        async with STVClient(cookies=state["cookies"], uid=state["uid"], chapter_download=True) as client:
             detail = _元数据(await client.detail(host, number), identity)
             if not detail["title"]:
                 raise STVError("invalid_detail")
@@ -1461,4 +1461,9 @@ async def 生成STV下载回复流(event: Any, source: str, config: Any = None) 
         logger.warning("STV小说处理失败：stage=%s, book_id=%s, error_type=%s, category=%s, http_status=%s, code=%s",
                        stage, identity, type(exc).__name__, getattr(exc, "category", "unknown"),
                        getattr(exc, "http_status", None), getattr(exc, "code", None))
-        yield "文件发送失败，请稍后再试" if stage == "upload_send" else "下载失败 请重试"
+        if stage == "upload_send":
+            yield "文件发送失败，请稍后再试"
+        elif getattr(exc, "category", "") == "rate_limited":
+            yield "请求较多，请稍后再试"
+        else:
+            yield "下载失败 请重试"
