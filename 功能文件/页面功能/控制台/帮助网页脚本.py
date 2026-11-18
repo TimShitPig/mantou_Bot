@@ -148,6 +148,15 @@
       const modalFocusable = (node) => [...node.querySelectorAll('button,input,select,textarea,a[href],[tabindex]')].filter((item) => !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
       const msgFocusReturnTarget = (node = document.activeElement) => node?.closest?.('#msg-head-menu-panel') ? $('msg-head-menu-toggle') : node;
       const adminPopoverHome = $('admin-popover')?.parentElement;
+      const compactMessageViewport = window.matchMedia('(max-width:760px)');
+      const syncAdminPopoverPlacement = () => {
+        const popover = $('admin-popover');
+        if (!popover || !adminPopoverHome) return;
+        const parent = document.body.classList.contains('messages-workspace') && compactMessageViewport.matches
+          ? document.body : adminPopoverHome;
+        if (popover.parentElement !== parent) parent.appendChild(popover);
+      };
+      compactMessageViewport.addEventListener?.('change', syncAdminPopoverPlacement);
       const closeAdminPopover = () => {
         ['admin-chip', 'msg-rail-admin'].forEach((id) => $(id)?.setAttribute('aria-expanded', 'false'));
         if ($('admin-popover')) $('admin-popover').hidden = true;
@@ -175,9 +184,7 @@
         if (active === enabled) return;
         closeMsgHeadMenu(); closeAdminPopover();
         document.body.classList.toggle('messages-workspace', enabled);
-        const popover = $('admin-popover');
-        if (popover && enabled) document.body.appendChild(popover);
-        else if (popover && adminPopoverHome) adminPopoverHome.appendChild(popover);
+        syncAdminPopoverPlacement();
       };
       const setMsgModal = (id, open, restoreFocus = true) => {
         const node = $(id);
@@ -2370,7 +2377,7 @@
       document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape' || !adminPopover || adminPopover.hidden) return;
         event.preventDefault(); closeAdminPopover();
-        $(document.body.classList.contains('messages-workspace') ? 'msg-rail-admin' : 'admin-chip')?.focus({preventScroll:true});
+        [$('admin-chip'), $('msg-rail-admin')].find((trigger) => trigger?.getClientRects().length)?.focus({preventScroll:true});
       });
       $('msg-rail-theme')?.addEventListener('click', () => $('theme-toggle')?.click());
       $('msg-rail-admin')?.addEventListener('click', (event) => {

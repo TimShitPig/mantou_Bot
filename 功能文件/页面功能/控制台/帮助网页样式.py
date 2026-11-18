@@ -1602,20 +1602,28 @@
     .msg-svg-defs { position:absolute; width:0; height:0; overflow:hidden; pointer-events:none; }
     /* 消息页只在此维护三栏布局；浅深配色由消息记录皮肤统一提供。 */
     :root body.messages-workspace {
-      height:100vh; height:100dvh; overflow:hidden; background:var(--panel);
-      font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+      height:100vh; height:100dvh; overflow:hidden; background:var(--studio-canvas);
+      font-family:var(--brand-sans,system-ui,sans-serif);
     }
-    :root body.messages-workspace .shell { display:grid; height:100%; min-height:0; grid-template-columns:calc(var(--studio-sidebar-width) + var(--studio-space)) minmax(0,1fr); grid-template-rows:minmax(0,1fr); grid-template-areas:"side main"; column-gap:var(--studio-space); overflow:hidden; border-radius:13.5px; }
-    :root body.messages-workspace::after { position:fixed; inset:0; z-index:90; border:1px solid var(--line); border-radius:13.5px; pointer-events:none; content:""; }
-    :root body.messages-workspace .topbar { display:none; }
-    :root body.messages-workspace .main { height:100%; min-height:0; overflow:hidden; background:var(--panel); }
-    :root body.messages-workspace .content,:root body.messages-workspace .content:has(#page-messages:not([hidden])) { width:100%; max-width:none; height:100%; margin:0; padding:0; overflow:hidden; }
-    :root body.messages-workspace #page-messages { height:100%; min-height:0; margin:0; }
-    :root body.messages-workspace > #admin-popover {
-      position:fixed; z-index:140; top:auto; right:auto; bottom:var(--studio-space);
-      left:calc(var(--studio-sidebar-width) + var(--studio-space) + 7px);
-      width:240px; max-width:calc(100vw - var(--studio-sidebar-width) - var(--studio-space) - 20px);
-      background:var(--panel); color:var(--ink);
+    @media (min-width:761px) {
+      :root body.messages-workspace .shell {
+        display:grid; width:min(1740px,100%); height:100vh; height:100dvh; min-height:0;
+        margin:0 auto; padding:12px var(--studio-space) var(--studio-space);
+        grid-template-columns:var(--studio-sidebar-width,232px) minmax(0,1fr);
+        grid-template-rows:auto minmax(0,1fr); grid-template-areas:"top top" "side main";
+        gap:var(--studio-space); overflow:hidden;
+      }
+      :root body.messages-workspace .shell > .topbar { display:flex; grid-area:top; }
+      :root body.messages-workspace .studio-message-tools { display:none; }
+      :root body.messages-workspace .studio-sidebar-actions { margin-top:0; }
+      :root body.messages-workspace .main { grid-area:main; min-width:0; height:100%; min-height:0; overflow:hidden; background:transparent; }
+      :root body.messages-workspace .content,:root body.messages-workspace .content:has(#page-messages:not([hidden])) { width:100%; max-width:none; height:100%; margin:0; padding:0; overflow:hidden; }
+      :root body.messages-workspace #page-messages { height:100%; min-height:0; margin:0; }
+    }
+    @media (max-width:760px) {
+      :root body.messages-workspace .shell > .studio-sidebar:not([hidden]) { margin:8px 10px 0; }
+      :root body.messages-workspace .shell > .topbar { display:none; }
+      :root body.messages-workspace > #admin-popover { position:fixed; z-index:140; top:54px; right:10px; bottom:auto; left:auto; max-width:calc(100vw - 20px); }
     }
     :root body.messages-workspace .msg-shell { height:100%; min-height:0; border:0; border-radius:0; box-shadow:none; transition:none; grid-template-columns:minmax(220px,var(--msg-list-width,273px)) minmax(0,1fr); }
     :root body.messages-workspace .chat-list-panel { height:100%; min-height:0; max-height:none; background:var(--msg-list-bg); }
@@ -1754,9 +1762,21 @@
     }
     @media (max-width:760px) {
       :root body.messages-workspace .shell {
-        border-radius:0; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr);
+        display:grid; height:100dvh; min-height:0; border-radius:0; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr);
         grid-template-areas:"side" "main"; gap:8px;
       }
+      :root body.messages-workspace .main {
+        display:flex; flex-direction:column; height:auto; min-height:0; overflow:hidden;
+      }
+      :root body.messages-workspace .content,
+      :root body.messages-workspace .content:has(#page-messages:not([hidden])) {
+        display:flex; flex:1 1 0; flex-direction:column; width:100%; min-width:0; height:auto;
+        min-height:0; margin:0; padding:0; overflow:hidden;
+      }
+      :root body.messages-workspace #page-messages {
+        display:flex; flex:1 1 0; flex-direction:column; height:100%; min-height:0; margin:0;
+      }
+      :root body.messages-workspace #msg-shell { flex:1 1 0; height:100%; min-height:0; }
       :root body.messages-workspace::after { display:none; }
       :root body.messages-workspace .msg-shell,:root body.messages-workspace .msg-shell.msg-list-collapsed { height:100%; min-height:0; grid-template-columns:minmax(0,1fr); }
       :root body.messages-workspace .chat-list-panel { min-height:0; max-height:none; }
@@ -1767,7 +1787,14 @@
       :root body.messages-workspace .msg-chat-top strong { font-size:15px; }
       :root body.messages-workspace .msg-chat-avatar { width:46px; height:46px; }
       :root body.messages-workspace > #admin-popover { top:54px; right:10px; bottom:auto; left:auto; max-width:calc(100vw - 20px); }
-      :root body.messages-workspace.msg-mobile-chat-view .shell { grid-template-rows:minmax(0,1fr); grid-template-areas:"main"; gap:0; }
+      :root body.messages-workspace.msg-mobile-chat-view .shell {
+        height:100dvh; grid-template-rows:minmax(0,1fr); grid-template-areas:"main"; gap:0;
+      }
+      :root body.messages-workspace.msg-mobile-chat-view .main,
+      :root body.messages-workspace.msg-mobile-chat-view .content,
+      :root body.messages-workspace.msg-mobile-chat-view #page-messages {
+        width:100%; height:100dvh; min-height:0; margin:0; padding:0;
+      }
       :root body.messages-workspace .msg-head { display:flex; height:auto; min-height:76px; padding:12px; gap:8px; }
       :root body.messages-workspace .msg-head > div:not(.msg-head-actions) { flex:1; }
       :root body.messages-workspace .msg-head-name { font-size:18px; }

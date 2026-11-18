@@ -78,7 +78,7 @@
       --studio-canvas: #141310;
       --studio-card: #1c1a16;
       --studio-ink: #f2ecdf;
-      --studio-muted: #a39b8b;
+      --studio-muted: #b0a99c;
       --studio-border: #332e25;
       --studio-accent: #86b79e;
       --studio-accent-strong: #a7cdb6;
@@ -100,8 +100,8 @@
       --paper-ink-soft: #cdc5b4;
 
       --ink: #f2ecdf;
-      --muted: #a39b8b;
-      --soft: #8f8676;
+      --muted: var(--studio-muted);
+      --soft: #a69d8d;
       --line: #332e25;
       --bg: #141310;
       --panel: #1c1a16;
@@ -145,7 +145,7 @@
       gap: 9px;
     }
     .studio-robot strong { color: #f4eee2; font-weight: 640; }
-    .studio-robot small { color: #a89f8d; }
+    .studio-robot small { color: #b0a99c; }
     .studio-bot-avatar {
       border: 1px solid #4a4336;
       border-radius: 8px;
@@ -157,7 +157,7 @@
     .studio-nav-group > p {
       margin: 0 0 6px;
       padding: 0 8px;
-      color: #8f8676;
+      color: #a69d8d;
       font-size: 11px;
       font-weight: 620;
       letter-spacing: .14em;

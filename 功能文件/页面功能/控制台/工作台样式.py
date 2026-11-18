@@ -8,7 +8,7 @@
       --studio-mint:#eaf3ee; --studio-mint-ink:#356850; --studio-hover:#eeebf4;
       --studio-wash:#f1edf8;
       --studio-shadow:none; --studio-float-shadow:0 8px 28px #28203214;
-      --studio-space:clamp(12px,2vw,24px); --studio-sidebar-width:236px;
+      --studio-space:clamp(12px,2vw,24px); --studio-sidebar-width:232px;
     }
     body:not(.messages-workspace) {
       --ink:var(--studio-ink); --muted:var(--studio-muted); --soft:var(--studio-muted); --line:var(--studio-border);
@@ -52,43 +52,39 @@
       border:1px solid var(--studio-border); border-radius:16px;
       background:var(--studio-card); box-shadow:var(--studio-shadow);
     }
-    .messages-workspace .shell > .studio-sidebar:not([hidden]) {
-      position:static; align-self:stretch; min-height:0; max-height:none;
-      margin:var(--studio-space) 0 var(--studio-space) var(--studio-space);
-    }
     .studio-sidebar :focus-visible { outline:2px solid var(--studio-accent); outline-offset:2px; }
-    body:not(.messages-workspace) .shell > .topbar {
+    .shell > .topbar {
       position:relative; display:flex; gap:16px; min-width:0; min-height:61px;
       padding:3px 5px; background:transparent; border:0;
     }
-    body:not(.messages-workspace) .topbar .brand { gap:11px; flex:1 1 auto; }
-    body:not(.messages-workspace) .topbar .brand-mark {
+    .topbar .brand { gap:11px; flex:1 1 auto; }
+    .topbar .brand-mark {
       width:43px; height:43px; flex:0 0 43px; border:0; border-radius:15px;
       background:var(--studio-peach); color:var(--studio-peach-ink); box-shadow:none;
     }
-    body:not(.messages-workspace) .topbar .brand-mark svg { width:26px; height:26px; }
-    body:not(.messages-workspace) .topbar .studio-brand-copy { max-width:none; display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; }
-    body:not(.messages-workspace) .topbar .studio-brand-title {
+    .topbar .brand-mark svg { width:26px; height:26px; }
+    .topbar .studio-brand-copy { max-width:none; display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; }
+    .topbar .studio-brand-title {
       margin:0; color:var(--studio-ink); font:800 clamp(17px,2.1vw,29px)/1.18 system-ui,sans-serif;
       letter-spacing:.01em; overflow:visible; text-overflow:clip; white-space:normal;
     }
-    body:not(.messages-workspace) .topbar .version-badge {
+    .topbar .version-badge {
       margin:0; border:1px solid var(--studio-border); border-radius:999px; padding:2px 8px;
       color:var(--studio-muted); background:var(--studio-card);
     }
-    body:not(.messages-workspace) .topbar .version-badge[hidden] { display:none; }
-    body:not(.messages-workspace) .topbar .top-actions { gap:8px; flex:0 0 auto; }
-    body:not(.messages-workspace) .topbar .theme-control { padding:0; border:0; background:none; }
-    body:not(.messages-workspace) .topbar .theme-toggle-button,
-    body:not(.messages-workspace) .topbar .admin-chip {
+    .topbar .version-badge[hidden] { display:none; }
+    .topbar .top-actions { gap:8px; flex:0 0 auto; }
+    .topbar .theme-control { padding:0; border:0; background:none; }
+    .topbar .theme-toggle-button,
+    .topbar .admin-chip {
       min-height:41px; border:1px solid var(--studio-border); border-radius:13px;
       background:var(--studio-card); color:var(--studio-ink);
     }
-    body:not(.messages-workspace) .topbar .theme-toggle-button { width:41px; color:var(--studio-accent); }
-    body:not(.messages-workspace) .topbar .theme-toggle-button:hover,
-    body:not(.messages-workspace) .topbar .admin-chip:hover,
-    body:not(.messages-workspace) .topbar .admin-chip[aria-expanded="true"] { background:var(--studio-accent-soft); }
-    body:not(.messages-workspace) .topbar .admin-popover { z-index:30; border-radius:12px; box-shadow:var(--studio-float-shadow); }
+    .topbar .theme-toggle-button { width:41px; color:var(--studio-accent); }
+    .topbar .theme-toggle-button:hover,
+    .topbar .admin-chip:hover,
+    .topbar .admin-chip[aria-expanded="true"] { background:var(--studio-accent-soft); }
+    .topbar .admin-popover { z-index:30; border-radius:12px; box-shadow:var(--studio-float-shadow); }
     .studio-robot {
       display:grid; grid-template-columns:39px minmax(0,1fr); gap:10px; align-items:center;
       flex:none; padding:12px; border-radius:14px; background:var(--studio-wash);
@@ -122,9 +118,7 @@
     .studio-nav-group:nth-child(3) .studio-nav-icon { background:var(--studio-mint); color:var(--studio-mint-ink); }
     .studio-nav-icon svg,.studio-exit svg { width:17px; height:17px; }
     .studio-sidebar-actions { display:flex; flex:none; align-items:stretch; gap:5px; }
-    .messages-workspace .studio-sidebar-actions { margin-top:auto; }
     .studio-message-tools { display:none; }
-    .messages-workspace .studio-message-tools { display:flex; flex:none; gap:5px; }
     .studio-message-tools button {
       display:grid; place-items:center; width:31px; padding:0;
       border:1px solid var(--studio-border); border-radius:9px;
@@ -253,7 +247,6 @@
         position:static; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px;
         padding:9px; border-radius:14px; max-height:none;
       }
-      .messages-workspace .shell > .studio-sidebar:not([hidden]) { margin:8px 10px 0; }
       :root body.messages-workspace.msg-mobile-chat-view .shell > .studio-sidebar { display:none; }
       .studio-robot { grid-template-columns:29px minmax(0,1fr); padding:5px 8px; gap:7px; }
       .studio-bot-avatar { width:29px; height:29px; border-radius:9px; }
@@ -268,6 +261,7 @@
       .studio-nav-group a { min-height:34px; padding:4px 6px; gap:4px; font-size:12px; }
       .studio-nav-icon { width:22px; height:22px; border-radius:6px; }
       .studio-nav-icon svg { width:14px; height:14px; }
+      .messages-workspace .studio-message-tools { display:flex; flex:none; gap:5px; }
       body:not(.messages-workspace) .topbar .brand-mark { width:35px; height:35px; flex-basis:35px; border-radius:12px; }
       body:not(.messages-workspace) .topbar .brand-mark svg { width:22px; height:22px; }
       body:not(.messages-workspace) .shell > .topbar { gap:5px; min-height:47px; padding-inline:1px; }
