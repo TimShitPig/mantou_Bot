@@ -48,6 +48,8 @@ _CHAPTER_DOWNLOAD_INTERVAL = 1.0
 _CHAPTER_DOWNLOAD_ATTEMPTS = 3
 _CHAPTER_DOWNLOAD_MAX_WAIT = 60.0
 _CHAPTER_DOWNLOAD_BUDGET = 120.0
+_CHAPTER_KEY_PATH = "/io/grantcontext/context"
+_CHAPTER_READ_PATH = "/"
 
 
 def _acquire_connector() -> dict[str, Any]:
@@ -284,8 +286,8 @@ class STVClient:
         data: dict[str, Any] | str | None = None, *, limit: int = 16 * 1024 * 1024,
         mutation: bool = False, account: bool = False,
     ) -> tuple[str, dict[str, str]]:
-        chapter_read = path == "/io/grantcontext/context" or (
-            path == "/index.php" and (params or {}).get("sajax") == "readchapter"
+        chapter_read = path == _CHAPTER_KEY_PATH or (
+            path in {_CHAPTER_READ_PATH, "/index.php"} and (params or {}).get("sajax") == "readchapter"
         )
         if not (self._chapter_download and method == "GET" and chapter_read and not mutation and not account):
             return await self._request_once(method, path, params, data, limit=limit, mutation=mutation, account=account)
@@ -330,7 +332,7 @@ class STVClient:
             raise STVError("invalid_endpoint")
         query = urlencode(params or {})
         url = URL(BASE + path + ("?" + query if query else ""), encoded=True)
-        headers = {"Origin": BASE} if method == "POST" else {}
+        headers = {"Origin": BASE, "Content-Type": "application/x-www-form-urlencoded"} if method == "POST" else {}
         if query:
             canonical = "".join(part + "&" for part in sorted(query.replace("?", "").split("&")))
             headers["X-STV-Sign"] = hashlib.md5((canonical + "erogh982^%*%^*").encode()).hexdigest()
@@ -464,7 +466,9 @@ class STVClient:
         return list(reversed(result)) if host == "uukanshu" else result
 
     async def _chapter_key(self, host: str, bookid: str) -> str:
-        body, _ = await self._request("GET", "/io/grantcontext/context", {"hostid": host, "bookid": bookid}, limit=2 * 1024 * 1024)
+        # 取密钥可能同时更新 readcontextid，旧密钥不能再与新上下文配对。
+        self._key, self._key_target = "", None
+        body, _ = await self._request("GET", _CHAPTER_KEY_PATH, {"hostid": host, "bookid": bookid}, limit=2 * 1024 * 1024)
         if len(body) < 1000:
             raise STVError("invalid_response", 200)
         key = await _run_js(body, "String(__registered.chapterkey.call(app.reader))")
@@ -474,7 +478,8 @@ class STVClient:
         return key
 
     async def _chapter_raw(self, host: str, bookid: str, cid: str) -> dict[str, Any]:
-        body, _ = await self._request("GET", "/index.php", {"sajax": "readchapter", "h": host, "bookid": bookid, "c": cid, "key": self._key})
+        # App 原生阅读直接提交绝对 URL，根路径不会被通用请求层改写。
+        body, _ = await self._request("GET", _CHAPTER_READ_PATH, {"sajax": "readchapter", "h": host, "bookid": bookid, "c": cid, "key": self._key})
         return self._json(body, prefix=True)
 
     def _chapter_code(self, data: dict[str, Any]) -> None:
@@ -495,40 +500,35 @@ class STVClient:
         cid = _item_id(cid)
         async with self._reading_lock:
             jar = self._session().cookie_jar
-            saved_mode = jar.filter_cookies(URL(BASE)).get("transmode")
+            origin = URL(BASE)
+            saved_mode = jar.filter_cookies(origin).get("transmode")
             old_mode = saved_mode.value if saved_mode is not None else "chinese"
-            if reward_reading:
-                # 官方普通阅读使用 name 模式，保留真实 i[t] 词条供奖励条件判断。
-                jar.update_cookies({"transmode": "name"}, response_url=URL(BASE))
             try:
-                if self._key_target != (host, bookid) or not self._key:
-                    await self._chapter_key(host, bookid)
-                data = await self._chapter_raw(host, bookid, cid)
-                if str(data.get("code")) == "10002":
-                    await self._chapter_key(host, bookid)
+                # App 默认 vp 对应 name；下载仅在中文提取失败时尝试原文模式。
+                modes = ("name",) if reward_reading else ("name", "chinese")
+                refreshed = False
+                for mode in modes:
+                    jar.update_cookies({"transmode": mode}, response_url=origin)
+                    if self._key_target != (host, bookid) or not self._key:
+                        await self._chapter_key(host, bookid)
                     data = await self._chapter_raw(host, bookid, cid)
-                self._chapter_code(data)
-                try:
-                    content = html_to_chinese_text(data.get("data") or "")
-                except (ValueError, TypeError):
-                    jar = self._session().cookie_jar
-                    jar.update_cookies({"transmode": "name"}, response_url=URL(BASE))
-                    try:
+                    if not refreshed and str(data.get("code")) in {"10001", "10002"}:
+                        refreshed = True
+                        await self._chapter_key(host, bookid)
                         data = await self._chapter_raw(host, bookid, cid)
-                    finally:
-                        jar.update_cookies({"transmode": "chinese"}, response_url=URL(BASE))
                     self._chapter_code(data)
                     try:
                         content = html_to_chinese_text(data.get("data") or "")
                     except (ValueError, TypeError) as exc:
-                        raise STVError("chinese_body_missing", 200) from exc
-                if not content.strip():
-                    raise STVError("chapter_empty", 200)
-                return {"title": str(data.get("chaptername") or ""), "content": content,
-                        "reward_token_count": len(re.findall(r"<i(?:\s|>)", data.get("data") or "", re.IGNORECASE))}
+                        if mode == modes[-1]:
+                            raise STVError("chinese_body_missing", 200) from exc
+                        continue
+                    if not content.strip():
+                        raise STVError("chapter_empty", 200)
+                    return {"title": str(data.get("chaptername") or ""), "content": content,
+                            "reward_token_count": len(re.findall(r"<i(?:\s|>)", data.get("data") or "", re.IGNORECASE))}
             finally:
-                if reward_reading:
-                    jar.update_cookies({"transmode": old_mode}, response_url=URL(BASE))
+                jar.update_cookies({"transmode": old_mode}, response_url=origin)
 
 
     def _clear_account(self) -> None:
@@ -559,7 +559,7 @@ class STVClient:
     async def login(self, username: str, password: str) -> dict[str, Any]:
         self._credentials(username, password)
         self._clear_account()
-        body, _ = await self._request("POST", "/", {"ajax": "login"}, {"username": username, "psw": password}, mutation=True, account=True, limit=1024 * 1024)
+        body, _ = await self._request("POST", "/index.php", {"ajax": "login"}, {"username": username, "psw": password}, mutation=True, account=True, limit=1024 * 1024)
         if body.strip() != "success" or not self._has_access():
             raise STVError("credential_invalid", 200)
         return await self.account_info()
@@ -569,7 +569,7 @@ class STVClient:
         if password != repeat_password:
             raise STVError("password_mismatch")
         self._clear_account()
-        body, _ = await self._request("POST", "/", {"ajax": "register"}, {"username": username, "psw": password, "repsw": repeat_password}, mutation=True, account=True, limit=1024 * 1024)
+        body, _ = await self._request("POST", "/index.php", {"ajax": "register"}, {"username": username, "psw": password, "repsw": repeat_password}, mutation=True, account=True, limit=1024 * 1024)
         if body.strip() != "success":
             raise STVError("registration_rejected", 200)
         result: dict[str, Any] = {"registered": True, "logged_in": False, "info": None}
