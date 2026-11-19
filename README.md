@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.474-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.475-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.474 |
+| 版本 | v6.1.475 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -151,7 +151,7 @@ STV 搜索、详情、目录、登录、注册和心跳使用 App 对应请求�
 
 STV 整本下载的正文和密钥请求采用同进程共享的串行节奏，请求间隔至少 1 秒。HTTP 429 优先按服务器 `Retry-After` 等待，只在原会话恢复被拒绝的当前请求，已下载章节继续保留；每个请求最多尝试三次，排队、等待和请求共用 120 秒预算。服务器要求等待超过 60 秒或超出剩余预算时结束本次下载并保留冷却，提示“请求较多，请稍后再试”。
 
-STV 密钥在首次读取某本书时按需取得，整本下载复用异步 HTTP 会话、连接池和当前密钥。切书时重新取得密钥，正文返回 `10001` 或 `10002` 时在原会话更新密钥并补读当前章节一次。Windows 使用 `quickjs-ng`，其他平台沿用 `quickjs`；两者提供相同导入接口，按 `requirements.txt` 的平台条件安装。密钥脚本在线程中运行，限制 5 秒、96 MiB 内存和 2 MiB 栈空间。
+STV 在首次读取某本书时获取并执行官方密钥脚本，兼容脚本直接返回字符串和注册取值函数两种格式。有效密钥绑定当前书和同一会话的 `readcontextid`。整本下载复用异步 HTTP 会话、连接池和当前密钥。切书时重新取得密钥，正文返回 `10001` 或 `10002` 时在原会话更新密钥并补读当前章节一次。Windows 使用 `quickjs-ng`，其他平台沿用 `quickjs`，按 `requirements.txt` 的平台条件安装。密钥脚本在线程中运行，限制 5 秒、96 MiB 内存和 2 MiB 栈空间。
 
 STV 找书的书目来源显示实际书源的中文名称，选书仍通过原 STV 条目下载，不切换到同名平台的其他版本。找书与下载共用官方 App 的书籍状态：1 为连载、2 为暂停、3 为完结，0 或未识别值保持未知；不按其他来源或原著状态替换当前条目。搜索仍可能返回已不可用的旧条目，详情返回 101 时记录书籍不可用，不误判账号失效或继续下载。
 

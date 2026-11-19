@@ -144,7 +144,7 @@ def _html_text(value: Any) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
 
 
-def _js_eval(source: str, expression: str, data: dict[str, Any] | None = None) -> str:
+def _js_eval(source: str, expression: str | None, data: dict[str, Any] | None = None) -> str:
     """独立无宿主绑定的 JS 环境；网络、文件和 Python 回调均不可用。"""
     try:
         import quickjs
@@ -154,7 +154,15 @@ def _js_eval(source: str, expression: str, data: dict[str, Any] | None = None) -
         program = POLYFILL + "\n" + MOCK_ENV.replace("__UA__", json.dumps(UA))
         if data is not None:
             program += "\nvar x=" + json.dumps(data, ensure_ascii=True) + ";"
-        program += "\n" + source + "\n" + expression
+        if expression is None:
+            # App 读取 eval 的返回值；当前脚本也可能通过 reader 的 getter 提供密钥。
+            program += (
+                "\nvar __keyResult = eval(" + json.dumps(source, ensure_ascii=True) + ");\n"
+                "typeof __keyResult === 'undefined' && typeof __registered.chapterkey === 'function'"
+                " ? __registered.chapterkey.call(app.reader) : __keyResult;"
+            )
+        else:
+            program += "\n" + source + "\n" + expression
         # Windows 由 quickjs-ng 提供相同 API，避免旧 MiniRacer 在实测脚本中耗满时限。
         context = quickjs.Context()
         context.set_memory_limit(96 * 1024 * 1024)
@@ -170,7 +178,7 @@ def _js_eval(source: str, expression: str, data: dict[str, Any] | None = None) -
         raise STVError("js_decode_failed") from exc
 
 
-async def _run_js(source: str, expression: str, data: dict[str, Any] | None = None) -> str:
+async def _run_js(source: str, expression: str | None, data: dict[str, Any] | None = None) -> str:
     async def execute() -> tuple[bool, Any]:
         try:
             return True, await asyncio.to_thread(_js_eval, source, expression, data)
@@ -208,6 +216,7 @@ class STVClient:
         self._reading_lock = asyncio.Lock()
         self._key_target: tuple[str, str] | None = None
         self._key = ""
+        self._key_context = ""
         self._reward_offer: tuple[str, float] | None = None
         self.mutation_guard = None
         self._chapter_download = chapter_download
@@ -259,6 +268,7 @@ class STVClient:
                 await self.session.close()
         finally:
             self.session = None
+            self._clear_reading_key()
             if self._connection_pool is not None:
                 _release_connector(self._connection_pool)
                 self._connection_pool = None
@@ -465,19 +475,33 @@ class STVClient:
             raise STVError("catalog_empty", 200)
         return list(reversed(result)) if host == "uukanshu" else result
 
+    def _clear_reading_key(self) -> None:
+        self._key, self._key_target, self._key_context = "", None, ""
+
+    def _reading_context(self) -> str:
+        cookie = self._session().cookie_jar.filter_cookies(URL(BASE)).get("readcontextid")
+        return cookie.value if cookie is not None else ""
+
     async def _chapter_key(self, host: str, bookid: str) -> str:
         # 取密钥可能同时更新 readcontextid，旧密钥不能再与新上下文配对。
-        self._key, self._key_target = "", None
+        self._clear_reading_key()
         body, _ = await self._request("GET", _CHAPTER_KEY_PATH, {"hostid": host, "bookid": bookid}, limit=2 * 1024 * 1024)
-        if len(body) < 1000:
+        context = self._reading_context()
+        script = body.lstrip()
+        if not context or not script or script.startswith("<"):
             raise STVError("invalid_response", 200)
-        key = await _run_js(body, "String(__registered.chapterkey.call(app.reader))")
-        if not key or len(key) > 16384 or key in {"undefined", "null"}:
+        key = await _run_js(body, None)
+        if (not key or len(key) > 16384 or key.strip() != key or key in {"undefined", "null"}
+                or re.search(r"[\x00-\x1f\x7f-\x9f]", key) or self._reading_context() != context):
             raise STVError("invalid_response", 200)
-        self._key, self._key_target = key, (host, bookid)
+        self._key, self._key_target, self._key_context = key, (host, bookid), context
         return key
 
     async def _chapter_raw(self, host: str, bookid: str, cid: str) -> dict[str, Any]:
+        if (self._key_target != (host, bookid) or not self._key
+                or not self._key_context or self._key_context != self._reading_context()):
+            self._clear_reading_key()
+            raise STVError("invalid_response")
         # App 原生阅读直接提交绝对 URL，根路径不会被通用请求层改写。
         body, _ = await self._request("GET", _CHAPTER_READ_PATH, {"sajax": "readchapter", "h": host, "bookid": bookid, "c": cid, "key": self._key})
         return self._json(body, prefix=True)
@@ -533,7 +557,8 @@ class STVClient:
 
     def _clear_account(self) -> None:
         self._session().cookie_jar.clear(lambda cookie: cookie.key in {"access", "useri2", "readcontextid"})
-        self.uid, self._key, self._key_target, self._reward_offer = "", "", None, None
+        self._clear_reading_key()
+        self.uid, self._reward_offer = "", None
 
     async def account_info(self) -> dict[str, Any]:
         if not self._has_access():
