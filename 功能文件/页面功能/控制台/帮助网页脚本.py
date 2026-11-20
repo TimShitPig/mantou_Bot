@@ -2684,6 +2684,7 @@
       const setMsgMobileChatOpen = (open) => {
         const shell = $('msg-shell');
         const back = $('msg-mobile-back');
+        if (!open) resetMsgScrollDate();
         if (back && !open && document.activeElement === back) back.blur();
         if (shell) shell.classList.toggle('msg-mobile-chat-open', Boolean(open));
         document.body.classList.toggle('msg-mobile-chat-view', Boolean(open));
@@ -3221,8 +3222,19 @@
       };
       const canRetryMsgHistory = (error, timedOut) => timedOut
         || error instanceof TypeError || [408, 500, 502, 503, 504].includes(error.status);
+      const msgScrollDateState = {inputUntil:0, fadeTimer:0, scrollbarPointerId:null};
+      const hideMsgScrollDate = () => {
+        clearTimeout(msgScrollDateState.fadeTimer);
+        msgScrollDateState.inputUntil = 0;
+        $('msg-scroll-date')?.classList.remove('is-visible', 'is-fading');
+      };
+      const resetMsgScrollDate = () => {
+        msgScrollDateState.scrollbarPointerId = null;
+        hideMsgScrollDate();
+      };
       const cancelMsgQuoteJump = (clearWindow = false) => {
         cancelMsgHistoryEdge();
+        resetMsgScrollDate();
         msgQuoteJump.generation += 1;
         msgQuoteJump.abort?.abort();
         msgQuoteJump.pageAbort?.abort();
@@ -7465,7 +7477,7 @@
             const label = fmtDayLabel(m.timestamp);
             const clock = fmtMsgTime(m.timestamp);
             const separator = label === '今天' ? clock : [label, clock].filter(Boolean).join(' ');
-            html += `<div class="msg-day" title="${esc(label)}">${esc(separator)}</div>`;
+            html += `<div class="msg-day" data-msg-scroll-day="${esc(day)}" title="${esc(label)}">${esc(separator)}</div>`;
             lastDay = day;
           }
           const systemSource = String(m.source || '');
@@ -9337,12 +9349,54 @@
         }
       }, {passive:true});
       const msgScrollBody = $('msg-body');
+      const markMsgScrollDateInput = () => {
+        msgScrollDateState.inputUntil = performance.now() + 1200;
+      };
+      const updateMsgScrollDate = (upwardDistance) => {
+        const body = msgScrollBody;
+        if (upwardDistance < -0.5) {
+          hideMsgScrollDate();
+          return;
+        }
+        const hasScrollInput = msgScrollDateState.scrollbarPointerId !== null
+          || performance.now() <= msgScrollDateState.inputUntil;
+        if (upwardDistance < 0.5 || !hasScrollInput
+          || !msgState.chatId || msgState.initialScrollChatId || msgQuoteJump.pending || msgQuoteJump.anchorAbort
+          || $('page-messages')?.hidden || document.visibilityState === 'hidden'
+          || body._msgRenderScope !== msgQuoteJumpScope()) return;
+        const viewport = body.getBoundingClientRect();
+        const rows = body.querySelectorAll(':scope > [data-msg-render-key]');
+        let start = 0;
+        let end = rows.length;
+        while (start < end) {
+          const middle = (start + end) >> 1;
+          if (rows[middle].getBoundingClientRect().bottom > viewport.top) end = middle;
+          else start = middle + 1;
+        }
+        let row = rows[start];
+        if (!row || row.getBoundingClientRect().top >= viewport.bottom) return;
+        while (row && !row.dataset.msgScrollDay) row = row.previousElementSibling;
+        const date = /^(?:[0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(row?.dataset.msgScrollDay || '');
+        const label = $('msg-scroll-date');
+        if (!date || !label) return;
+        const text = Number(date[1]) + '月' + Number(date[2]) + '日';
+        if (label.textContent !== text) label.textContent = text;
+        label.classList.remove('is-fading');
+        label.classList.add('is-visible');
+        clearTimeout(msgScrollDateState.fadeTimer);
+        msgScrollDateState.fadeTimer = setTimeout(() => {
+          label.classList.add('is-fading');
+          label.classList.remove('is-visible');
+        }, 900);
+      };
       let msgScrollbarTimer;
       msgScrollBody.addEventListener('wheel', (event) => {
         if (event.deltaY >= 0) {
+          if (event.deltaY > 0) resetMsgScrollDate();
           if (msgBodyNearBottom(msgScrollBody, 2)) maybeLoadNewerMessages(msgScrollBody, -event.deltaY);
           return;
         }
+        markMsgScrollDateInput();
         releaseMsgBottomFollow(msgScrollBody);
         if (msgScrollBody.scrollTop <= 2) maybeLoadOlderMessages(msgScrollBody, -event.deltaY);
       }, {passive:true});
@@ -9351,6 +9405,10 @@
       msgScrollBody.addEventListener('touchmove', (event) => {
         releaseMsgBottomFollow(msgScrollBody);
         const y = event.touches[0]?.clientY ?? null;
+        if (msgTouchY !== null && y !== null) {
+          if (y > msgTouchY) markMsgScrollDateInput();
+          else if (y < msgTouchY) resetMsgScrollDate();
+        }
         if (msgTouchY !== null && y !== null && msgScrollBody.scrollTop <= 2) {
           maybeLoadOlderMessages(msgScrollBody, y - msgTouchY);
         }
@@ -9360,16 +9418,27 @@
         msgTouchY = y;
       }, {passive:true});
       msgScrollBody.addEventListener('pointerdown', (event) => {
-        if (event.target !== msgScrollBody || event.pointerType === 'touch') return;
+        if (event.target !== msgScrollBody || event.pointerType === 'touch' || event.button !== 0) return;
         const left = msgScrollBody.getBoundingClientRect().left + msgScrollBody.clientLeft;
-        if (event.clientX >= left + msgScrollBody.clientWidth) releaseMsgBottomFollow(msgScrollBody);
+        if (event.clientX >= left + msgScrollBody.clientWidth) {
+          msgScrollDateState.scrollbarPointerId = event.pointerId;
+          releaseMsgBottomFollow(msgScrollBody);
+        }
       }, {passive:true});
+      const finishMsgScrollbarDrag = (event) => {
+        if (msgScrollDateState.scrollbarPointerId === event.pointerId) msgScrollDateState.scrollbarPointerId = null;
+      };
+      window.addEventListener('pointerup', finishMsgScrollbarDrag, true);
+      window.addEventListener('pointercancel', finishMsgScrollbarDrag, true);
+      window.addEventListener('blur', resetMsgScrollDate);
       msgScrollBody.addEventListener('keydown', (event) => {
         if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) {
+          markMsgScrollDateInput();
           releaseMsgBottomFollow(msgScrollBody);
           if (msgScrollBody.scrollTop <= 2) queueMsgHistoryEdge(msgScrollBody, 'before');
-        } else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key) && msgBodyNearBottom(msgScrollBody, 2)) {
-          queueMsgHistoryEdge(msgScrollBody, 'after');
+        } else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) {
+          resetMsgScrollDate();
+          if (msgBodyNearBottom(msgScrollBody, 2)) queueMsgHistoryEdge(msgScrollBody, 'after');
         }
       });
       msgScrollBody.addEventListener('scroll', () => {
@@ -9379,6 +9448,7 @@
         const upwardDistance = msgState.historyScrollTop - msgScrollBody.scrollTop;
         msgState.historyScrollTop = msgScrollBody.scrollTop;
         if (msgBottomFollowMovedUp(msgScrollBody)) releaseMsgBottomFollow(msgScrollBody);
+        updateMsgScrollDate(upwardDistance);
         syncMsgNewMessagesDisplay();
         if (msgState.bottomFollowPaused || msgState.historyWindow) maybeLoadOlderMessages(msgScrollBody, upwardDistance);
         maybeLoadNewerMessages(msgScrollBody, upwardDistance);

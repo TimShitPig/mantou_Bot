@@ -1702,6 +1702,19 @@
     @media (forced-colors:active) {
       :root body.messages-workspace .msg-body { scrollbar-width:auto; scrollbar-color:auto; }
     }
+    :root body.messages-workspace .msg-scroll-date {
+      position:absolute; z-index:4; top:12px; left:50%; transform:translateX(-50%);
+      border:1px solid var(--line); border-radius:999px; padding:5px 16px;
+      background:var(--raised); color:var(--ink); font-size:13px; font-weight:650;
+      white-space:nowrap; opacity:0; visibility:hidden; pointer-events:none;
+    }
+    :root body.messages-workspace .msg-scroll-date.is-visible { opacity:1; visibility:visible; }
+    :root body.messages-workspace .msg-scroll-date.is-fading {
+      transition:opacity 250ms ease, visibility 0s linear 250ms;
+    }
+    @media (prefers-reduced-motion:reduce) {
+      :root body.messages-workspace .msg-scroll-date.is-fading { transition:none; }
+    }
     :root body.messages-workspace .msg-new-messages { right:24px; bottom:16px; min-height:38px; max-width:calc(100% - 48px); padding:0 14px; border-color:var(--primary); border-radius:20px; font-size:13px; font-weight:600; }
     :root body.messages-workspace .msg-new-messages:hover,:root body.messages-workspace .msg-new-messages:focus-visible { background:var(--primary-soft); }
     :root body.messages-workspace .msg-media img { max-width:180px; max-height:180px; }
