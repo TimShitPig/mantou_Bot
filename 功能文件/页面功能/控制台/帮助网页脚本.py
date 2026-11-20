@@ -8903,6 +8903,7 @@
         }
       }, {passive:true});
       const msgScrollBody = $('msg-body');
+      let msgScrollbarTimer;
       msgScrollBody.addEventListener('wheel', (event) => {
         if (event.deltaY >= 0) return;
         releaseMsgBottomFollow(msgScrollBody);
@@ -8929,6 +8930,9 @@
         }
       });
       msgScrollBody.addEventListener('scroll', () => {
+        msgScrollBody.classList.add('msg-scroll-active');
+        clearTimeout(msgScrollbarTimer);
+        msgScrollbarTimer = setTimeout(() => msgScrollBody.classList.remove('msg-scroll-active'), 650);
         const upwardDistance = msgState.historyScrollTop - msgScrollBody.scrollTop;
         msgState.historyScrollTop = msgScrollBody.scrollTop;
         if (msgBottomFollowMovedUp(msgScrollBody)) releaseMsgBottomFollow(msgScrollBody);

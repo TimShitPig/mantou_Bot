@@ -1667,13 +1667,40 @@
     :root body.messages-workspace .msg-head-menu-panel .msg-clear-open { color:var(--danger); }
     :root body.messages-workspace .msg-pan-account-control { flex-wrap:wrap; gap:8px; padding:9px 10px; border:0; background:var(--input); font-size:12px; }
     :root body.messages-workspace .msg-pan-account-control select { flex:1; width:100%; max-width:100%; min-height:30px; color:var(--ink); }
-    :root body.messages-workspace .msg-body { isolation:isolate; padding:12.75px 21px 9px 18px; scrollbar-gutter:stable; scrollbar-width:auto; scrollbar-color:var(--msg-scroll-thumb) var(--msg-scroll-track); }
-    :root body.messages-workspace .msg-body::-webkit-scrollbar { width:14px; height:14px; }
-    :root body.messages-workspace .msg-body::-webkit-scrollbar-track { border-radius:10px; background:var(--msg-scroll-track); }
-    :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb { min-height:48px; border:2px solid var(--msg-scroll-track); border-radius:10px; background:var(--msg-scroll-thumb); }
-    :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:hover,:root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:active { background:var(--msg-scroll-thumb-hover); }
-    @supports selector(::-webkit-scrollbar) {
-      :root body.messages-workspace .msg-body { scrollbar-color:auto; }
+    :root body.messages-workspace .msg-body { isolation:isolate; padding:12.75px 21px 9px 18px; }
+    @media (forced-colors:none) {
+      :root body.messages-workspace .msg-body {
+        --msg-body-scroll-thumb:transparent;
+        scrollbar-width:thin;
+        scrollbar-color:var(--msg-body-scroll-thumb) transparent;
+      }
+      :root body.messages-workspace .msg-body.msg-scroll-active,
+      :root body.messages-workspace .msg-body:focus-visible {
+        --msg-body-scroll-thumb:color-mix(in srgb,var(--muted) 75%,transparent);
+      }
+      @media (hover:hover) {
+        :root body.messages-workspace .msg-body:hover {
+          --msg-body-scroll-thumb:color-mix(in srgb,var(--muted) 75%,transparent);
+        }
+      }
+      @supports selector(::-webkit-scrollbar) {
+        :root body.messages-workspace .msg-body { scrollbar-width:auto; scrollbar-color:auto; }
+        :root body.messages-workspace .msg-body::-webkit-scrollbar { width:8px; height:8px; background:transparent; }
+        :root body.messages-workspace .msg-body::-webkit-scrollbar-track { background:transparent; }
+        :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb {
+          min-height:24px;
+          border:1px solid transparent;
+          border-radius:8px;
+          background:var(--msg-body-scroll-thumb) padding-box;
+        }
+        @media (hover:hover) {
+          :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:hover,
+          :root body.messages-workspace .msg-body::-webkit-scrollbar-thumb:active { background-color:var(--muted); }
+        }
+      }
+    }
+    @media (forced-colors:active) {
+      :root body.messages-workspace .msg-body { scrollbar-width:auto; scrollbar-color:auto; }
     }
     :root body.messages-workspace .msg-new-messages { right:24px; bottom:16px; min-height:38px; max-width:calc(100% - 48px); padding:0 14px; border-color:var(--primary); border-radius:20px; font-size:13px; font-weight:600; }
     :root body.messages-workspace .msg-new-messages:hover,:root body.messages-workspace .msg-new-messages:focus-visible { background:var(--primary-soft); }
