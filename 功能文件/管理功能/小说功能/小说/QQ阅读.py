@@ -3777,6 +3777,10 @@ def 读取QQ阅读账号凭据(配置: Any, 账号ID: str = "") -> dict[str, Any
     return None
 
 
+class QQ阅读重登账号错误(ValueError):
+    """新登录凭据不属于现有目标账号，或目标账号已被移除。"""
+
+
 def 保存QQ阅读账号(
     配置: Any, 登录态: dict[str, Any], 账号ID: str = "", 设为当前: bool = True,
 ) -> dict[str, Any]:
@@ -3785,21 +3789,24 @@ def 保存QQ阅读账号(
         raise ValueError("QQ阅读登录态格式无效")
     with _QQ阅读账号状态锁:
         状态 = _读取QQ阅读账号状态(配置)
-        if 账号ID and 账号ID != 凭据["id"]:
-            raise ValueError("账号身份不匹配")
-        原值 = next((项 for 项 in 状态["accounts"] if 项["id"] == 凭据["id"]), None)
+        目标ID = 账号ID or 凭据["id"]
+        原值 = next((项 for 项 in 状态["accounts"] if 项["id"] == 目标ID), None)
+        if 账号ID and (原值 is None or 原值["ywguid"] != 凭据["ywguid"]):
+            raise QQ阅读重登账号错误("账号身份不匹配或已删除")
         if 原值:
             # 换票据后保留已有资料，但下次刷新重新核对官方会员状态。
-            原值.update({"ywkey": 凭据["ywkey"], "enabled": True,
+            原值.update({"ywkey": 凭据["ywkey"],
                          "updated_at": int(time.time()),
                          "auth_status": "unknown", "auth_checked_at": time.time_ns()})
+            if not 账号ID:
+                原值["enabled"] = True
             for 键 in ("nickname", "avatar_url", "phone"):
                 if 凭据[键]:
                     原值[键] = 凭据[键]
         else:
             凭据["updated_at"] = int(time.time())
             状态["accounts"].append(凭据)
-        if 设为当前 or not 状态["selected_id"]:
+        if not 账号ID and (设为当前 or not 状态["selected_id"]):
             状态["selected_id"] = 凭据["id"]
         _写入QQ阅读账号状态(配置, 状态)
         return _QQ阅读账号摘要(状态)

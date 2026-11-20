@@ -1145,7 +1145,7 @@ def _清理控制台会话() -> None:
         ):
             夸克网页扫码会话.pop(scan_id, None)
     for scan_id, 状态 in list(QQ阅读网页扫码会话.items()):
-        if 状态.get("status") in {"success", "expired", "cancelled", "error"} and 截止时间 - float(状态.get("updated_at") or 0) > 300:
+        if 状态.get("status") in {"success", "expired", "cancelled", "error", "relogin_rejected"} and 截止时间 - float(状态.get("updated_at") or 0) > 300:
             QQ阅读网页扫码会话.pop(scan_id, None)
     for 所有者, 状态 in list(QQ阅读网页短信会话.items()):
         if 状态.get("expires_at", 0) <= 截止时间:
@@ -3169,6 +3169,16 @@ async def _处理QQ阅读登录态(request: web.Request) -> web.Response:
         return _控制台错误(500, "QQ阅读账号读取失败")
 
 
+QQ阅读重登失败文案 = "重新登录失败，请使用原QQ阅读账号"
+
+
+def _QQ阅读重登账号ID(数据: dict[str, Any] | None) -> str:
+    账号ID = (数据 or {}).get("account_id", "")
+    if not isinstance(账号ID, str) or (账号ID and not re.fullmatch(r"qr_[a-f0-9]{20}", 账号ID)):
+        raise ValueError("QQ阅读账号参数无效")
+    return 账号ID
+
+
 async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
@@ -3183,18 +3193,21 @@ async def _处理QQ阅读登录态保存(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
+        账号ID = _QQ阅读重登账号ID(数据)
         登录态 = QQ阅读.解析QQ阅读Cookie(文本)
         if not 登录态:
             return _控制台错误(400, "QQ阅读登录态格式无效")
         配置 = 获取控制台会话配置快照()
-        摘要 = await _控制台线程执行(
-            QQ阅读.保存QQ阅读账号, 配置, 登录态, str(数据.get("account_id") or "")
-        )
         try:
-            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(配置, 摘要["selected_id"]), timeout=20)
+            摘要 = await _控制台线程执行(QQ阅读.保存QQ阅读账号, 配置, 登录态, 账号ID)
+        except QQ阅读.QQ阅读重登账号错误:
+            return _控制台错误(409, QQ阅读重登失败文案)
+        try:
+            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(配置, 账号ID or 摘要["selected_id"]), timeout=20)
         except Exception as exc:
             logger.debug("QQ阅读新账号资料暂未更新：错误类型=%s", type(exc).__name__)
-        return _QQ阅读JSON({"ok": True, "message": "QQ阅读账号已保存并设为当前账号", **摘要})
+        文案 = "账号已重新登录" if 账号ID else "QQ阅读账号已保存并设为当前账号"
+        return _QQ阅读JSON({"ok": True, "message": 文案, **摘要})
     except ValueError:
         return _控制台错误(400, "账号格式或账号身份无效")
     except Exception as exc:
@@ -3305,6 +3318,10 @@ async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
     手机号 = str((数据 or {}).get("phone") or "").strip()
     if not re.fullmatch(r"1[0-9]{10}", 手机号):
         return _控制台错误(400, "请输入有效的11位手机号")
+    try:
+        账号ID = _QQ阅读重登账号ID(数据)
+    except ValueError:
+        return _控制台错误(400, "QQ阅读账号参数无效")
     会话值 = _取得请求会话(request)
     所有者 = _扫码所有者(会话值)
     原状态 = QQ阅读网页短信会话.get(所有者)
@@ -3324,7 +3341,7 @@ async def _处理QQ阅读短信预请求(request: web.Request) -> web.Response:
     from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
     状态 = {"owner": 所有者, "session": 会话值, "appid": 获取当前机器人AppID(), "auth": 认证, "generation": 代次,
-            "config": 配置, "phone": 手机号,
+            "config": 配置, "phone": 手机号, "target_account_id": 账号ID,
             "expires_at": time.time() + 600, "busy": True, "sent_at": 0,
             "client": QQ阅读.QQ阅读手机号登录客户端()}
     QQ阅读网页短信会话[所有者] = 状态
@@ -3357,7 +3374,7 @@ def _保存QQ阅读短信账号(状态: dict[str, Any], 登录态: dict[str, Any
         return None
     from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-    return QQ阅读.保存QQ阅读账号(状态["config"], 登录态)
+    return QQ阅读.保存QQ阅读账号(状态["config"], 登录态, 状态.get("target_account_id", ""))
 
 
 async def _QQ阅读短信操作(request: web.Request, 操作: str) -> web.Response:
@@ -3411,15 +3428,21 @@ async def _QQ阅读短信操作(request: web.Request, 操作: str) -> web.Respon
             return _控制台错误(409, "登录会话已更新，请重新获取验证码")
         from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
-        摘要 = await _控制台线程执行(_保存QQ阅读短信账号, 状态, 登录态)
+        账号ID = 状态.get("target_account_id", "")
+        try:
+            摘要 = await _控制台线程执行(_保存QQ阅读短信账号, 状态, 登录态)
+        except QQ阅读.QQ阅读重登账号错误:
+            await _移除QQ阅读网页短信会话(所有者, 状态)
+            return _控制台错误(409, QQ阅读重登失败文案)
         if 摘要 is None:
             return _控制台错误(409, "登录会话已更新，请重新获取验证码")
         try:
-            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 摘要["selected_id"]), timeout=20)
+            摘要 = await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 账号ID or 摘要["selected_id"]), timeout=20)
         except Exception as exc:
             logger.debug("QQ阅读手机号账号资料暂未更新：错误类型=%s", type(exc).__name__)
         await _移除QQ阅读网页短信会话(所有者, 状态)
-        return _QQ阅读JSON({"ok": True, "message": "账号已添加并设为当前账号", **摘要})
+        文案 = "账号已重新登录" if 账号ID else "账号已添加并设为当前账号"
+        return _QQ阅读JSON({"ok": True, "message": 文案, **摘要})
     except Exception as exc:
         logger.warning("QQ阅读短信操作失败：阶段=%s，错误类型=%s", 操作, type(exc).__name__)
         return _控制台错误(502, "验证码校验或登录失败，请检查后重试")
@@ -3494,7 +3517,8 @@ def _QQ阅读扫码响应(scan_id: str, 状态: dict[str, Any]) -> dict[str, Any
         "waiting": "请使用手机QQ扫码并确认登录QQ阅读。",
         "scanned": "二维码已扫描，请在手机QQ确认登录。",
         "saving": "登录成功，正在保存账号。",
-        "success": "QQ阅读账号已添加并设为当前账号。",
+        "success": "账号已重新登录" if 状态.get("target_account_id") else "QQ阅读账号已添加并设为当前账号。",
+        "relogin_rejected": QQ阅读重登失败文案,
         "expired": "二维码已过期，请重新获取。",
         "cancelled": "扫码已取消。",
         "error": "扫码登录失败，请重新获取二维码。",
@@ -3560,6 +3584,14 @@ def _记录QQ阅读扫码失败(客户端: Any, exc: BaseException, 阶段: str)
     )
 
 
+def _保存QQ阅读扫码账号(状态: dict[str, Any], 登录态: dict[str, Any]) -> dict[str, Any] | None:
+    if not _QQ阅读扫码仍有效(状态):
+        return None
+    from 功能文件.管理功能.小说功能.小说 import QQ阅读
+
+    return QQ阅读.保存QQ阅读账号(状态["config"], 登录态, 状态.get("target_account_id", ""))
+
+
 async def _运行QQ阅读网页扫码(scan_id: str) -> None:
     状态 = QQ阅读网页扫码会话[scan_id]
     阶段 = "wait_login"
@@ -3573,11 +3605,18 @@ async def _运行QQ阅读网页扫码(scan_id: str) -> None:
         状态["status"] = "saving"
         状态["updated_at"] = time.time()
         阶段 = "save_account"
-        摘要 = await _控制台线程执行(QQ阅读.保存QQ阅读账号, 状态["config"], 登录态)
-        状态["account_id"] = 摘要["selected_id"]
+        try:
+            摘要 = await _控制台线程执行(_保存QQ阅读扫码账号, 状态, 登录态)
+        except QQ阅读.QQ阅读重登账号错误:
+            状态["status"] = "relogin_rejected"
+            return
+        if 摘要 is None:
+            状态["status"] = "cancelled"
+            return
+        状态["account_id"] = 状态.get("target_account_id") or 摘要["selected_id"]
         阶段 = "refresh_profile"
         try:
-            await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 摘要["selected_id"]), timeout=20)
+            await asyncio.wait_for(QQ阅读.刷新QQ阅读账号资料(状态["config"], 状态["account_id"]), timeout=20)
         except Exception as exc:
             _记录QQ阅读扫码失败(状态["client"], exc, 阶段)
         状态["status"] = "success"
@@ -3604,6 +3643,10 @@ async def _处理QQ阅读网页扫码开始(request: web.Request) -> web.Respons
         return _控制台错误(409, "数据库未配置，扫码账号未保存")
     from 功能文件.管理功能.小说功能.小说 import QQ阅读
 
+    try:
+        账号ID = _QQ阅读重登账号ID(await _读取请求JSON(request))
+    except ValueError:
+        return _控制台错误(400, "QQ阅读账号参数无效")
     会话值 = _取得请求会话(request)
     所有者 = _扫码所有者(会话值)
     代次 = secrets.token_urlsafe(16)
@@ -3612,7 +3655,7 @@ async def _处理QQ阅读网页扫码开始(request: web.Request) -> web.Respons
     状态: dict[str, Any] = {
         "owner": 所有者, "session": 会话值, "appid": 获取当前机器人AppID(), "generation": 代次,
         "auth": 控制台会话认证指纹, "config": 获取控制台会话配置快照(),
-        "client": QQ阅读.QQ阅读扫码登录客户端(), "status": "waiting",
+        "client": QQ阅读.QQ阅读扫码登录客户端(), "status": "waiting", "target_account_id": 账号ID,
         "updated_at": time.time(), "expires_at": time.time() + 300,
     }
     客户端 = 状态["client"]

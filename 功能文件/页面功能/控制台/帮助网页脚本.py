@@ -1228,7 +1228,7 @@
         }
       };
       const rememberQQReaderFocus = (target) => {
-        qqReader.modalFocus = {node:target, id:target?.id || '', accountId:target?.dataset?.qqReaderOpen || ''};
+        qqReader.modalFocus = {node:target, id:target?.id || '', accountId:target?.dataset?.qqReaderOpen || target?.dataset?.qqReaderRelogin || ''};
         qqReader.modalRestoreFocus = true;
       };
       const qqReaderModalFocusable = () => [...($('qq-reader-account-dialog')?.querySelectorAll('button,input,select,textarea,a[href],iframe,[tabindex]') || [])].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
@@ -1248,7 +1248,10 @@
         const modal = $('qq-reader-account-dialog');
         if (!modal) return;
         const wanted = (qqReader.adding || Boolean(qqReaderAccount())) && activeView === 'bot';
-        if ($('qq-reader-modal-title')) $('qq-reader-modal-title').textContent = qqReader.adding ? '添加QQ阅读账号' : 'QQ阅读账号详情';
+        if ($('qq-reader-modal-title')) {
+          $('qq-reader-modal-title').textContent = !qqReader.adding ? 'QQ阅读账号详情'
+            : qqReader.detailId ? '重新登录QQ阅读账号' : '添加QQ阅读账号';
+        }
         if (wanted && !modal.open) {
           qqReader.modalGeneration += 1;
           qqReader.modalOverflow = document.body.style.overflow;
@@ -1279,9 +1282,10 @@
         hideQQReaderKey();
         const account = qqReaderAccount();
         detail.hidden = !account || qqReader.adding;
-        if (!account) { detail.innerHTML = ''; return; }
+        if (detail.hidden) { detail.innerHTML = ''; return; }
         const vip = qqReaderVip(account);
-        detail.innerHTML = `<div class="qq-reader-detail-head">${qqReaderAvatarHtml(account)}<div class="qq-reader-detail-copy"><strong>${esc(account.nickname || '书友用户')}</strong><small>账号 ${esc(account.ywguid || '')}</small></div><button class="outline-button" id="qq-reader-profile-refresh" type="button" ${qqReaderEditable() ? '' : 'disabled'}>刷新资料</button></div><dl class="qq-reader-profile"><div><dt>登录状态</dt><dd>${account.auth_status === 'invalid' ? '已失效，请重新登录' : account.auth_status === 'valid' ? '已验证' : '待验证'}</dd></div><div><dt>会员状态</dt><dd>${vip.active ? '已开通' : account.vip?.available !== false && account.vip?.is_vip === false ? '未开通' : '待查询'}</dd></div><div><dt>会员类型</dt><dd>${esc(vip.label)}</dd></div><div><dt>到期时间</dt><dd>${esc(vip.expires)}</dd></div><div><dt>资料更新</dt><dd>${esc(qqReaderDate(account.profile_updated_at))}</dd></div></dl><div class="qq-reader-key-row"><label for="qq-reader-key">ywkey / usid</label><div><input id="qq-reader-key" type="password" readonly autocomplete="off" placeholder="点击显示密钥" aria-label="已保存的QQ阅读密钥"><button class="outline-button" id="qq-reader-key-toggle" type="button" aria-pressed="false" ${qqReaderEditable() ? '' : 'disabled'}>显示密钥</button></div></div><div class="qq-auth-actions"><button class="outline-button" type="button" id="qq-reader-select" ${!qqReaderEditable() || account.enabled === false || account.selected ? 'disabled' : ''}>${account.selected ? '当前使用账号' : '切换到此账号'}</button><button class="qq-reader-delete" type="button" id="qq-reader-delete" ${qqReaderEditable() ? '' : 'disabled'}>删除账号</button></div>`;
+        detail.innerHTML = `<div class="qq-reader-detail-head">${qqReaderAvatarHtml(account)}<div class="qq-reader-detail-copy"><strong>${esc(account.nickname || '书友用户')}</strong><small>账号 ${esc(account.ywguid || '')}</small></div><button class="outline-button" id="qq-reader-profile-refresh" type="button" ${qqReaderEditable() ? '' : 'disabled'}>刷新资料</button></div><dl class="qq-reader-profile"><div><dt>登录状态</dt><dd>${account.auth_status === 'invalid' ? '已失效，请重新登录' : account.auth_status === 'valid' ? '已验证' : '待验证'}</dd></div><div><dt>会员状态</dt><dd>${vip.active ? '已开通' : account.vip?.available !== false && account.vip?.is_vip === false ? '未开通' : '待查询'}</dd></div><div><dt>会员类型</dt><dd>${esc(vip.label)}</dd></div><div><dt>到期时间</dt><dd>${esc(vip.expires)}</dd></div><div><dt>资料更新</dt><dd>${esc(qqReaderDate(account.profile_updated_at))}</dd></div></dl><div class="qq-reader-key-row"><label for="qq-reader-key">ywkey / usid</label><div><input id="qq-reader-key" type="password" readonly autocomplete="off" placeholder="点击显示密钥" aria-label="已保存的QQ阅读密钥"><button class="outline-button" id="qq-reader-key-toggle" type="button" aria-pressed="false" ${qqReaderEditable() ? '' : 'disabled'}>显示密钥</button></div></div><div class="qq-auth-actions">${account.auth_status === 'invalid' && qqReaderEditable() ? '<button class="primary-button" type="button" id="qq-reader-relogin">重新登录</button>' : ''}<button class="outline-button" type="button" id="qq-reader-select" ${!qqReaderEditable() || account.enabled === false || account.selected ? 'disabled' : ''}>${account.selected ? '当前使用账号' : '切换到此账号'}</button><button class="qq-reader-delete" type="button" id="qq-reader-delete" ${qqReaderEditable() ? '' : 'disabled'}>删除账号</button></div>`;
+        $('qq-reader-relogin')?.addEventListener('click', () => openQQReaderLogin(account.id));
         $('qq-reader-profile-refresh')?.addEventListener('click', (event) => mutateQQReader('refresh', account.id, {}, event.currentTarget, '账号资料已刷新'));
         $('qq-reader-key-toggle')?.addEventListener('click', showQQReaderKey);
         $('qq-reader-select')?.addEventListener('click', (event) => mutateQQReader('select', account.id, {}, event.currentTarget, '当前账号已切换'));
@@ -1292,9 +1296,9 @@
         const node = $('qq-auth-editor');
         if (!node || !auth || !Array.isArray(auth.accounts)) return;
         qqReader.auth = {...auth, accounts:auth.accounts.map((account) => ({...account, selected:String(account.id) === String(auth.selected_id || '')}))};
-        if (qqReader.detailId && !qqReaderAccount()) qqReader.detailId = '';
+        if (!qqReader.adding && qqReader.detailId && !qqReaderAccount()) qqReader.detailId = '';
         if (!$('qq-reader-accounts')) {
-          node.innerHTML = `<div id="qq-reader-list"><div class="qq-reader-toolbar"><span id="qq-reader-summary"></span><button class="outline-button" id="qq-reader-add" type="button">添加账号</button></div><div id="qq-reader-accounts" class="qq-reader-accounts"></div></div><dialog id="qq-reader-account-dialog" class="qq-reader-modal" aria-labelledby="qq-reader-modal-title" aria-modal="true" tabindex="-1"><div class="qq-reader-modal-head"><h3 id="qq-reader-modal-title">QQ阅读账号详情</h3><button class="qq-reader-modal-close" id="qq-reader-modal-close" type="button" aria-label="关闭账号窗口">×</button></div><div class="qq-reader-modal-body"><section id="qq-reader-detail" class="qq-reader-detail" hidden></section><section id="qq-reader-add-panel" class="qq-reader-add-panel" hidden><div class="qq-auth-tabs" role="group" aria-label="选择QQ阅读登录方式"><button class="qq-auth-tab active" id="qq-reader-method-cookie" type="button" aria-pressed="true">手动配置</button><button class="qq-auth-tab" id="qq-reader-method-scan" type="button" aria-pressed="false">QQ扫码登录</button><button class="qq-auth-tab" id="qq-reader-method-phone" type="button" aria-pressed="false">手机号登录</button></div><div id="qq-reader-manual-panel"><label class="qq-reader-field-label" for="qq-reader-cookie">Cookie</label><textarea id="qq-reader-cookie" class="qq-reader-cookie" rows="3" autocomplete="off" spellcheck="false" placeholder="粘贴含 ywguid / ywkey 的 Cookie"></textarea><p class="qq-reader-field-hint">也可以直接填写下面两个字段。</p><div class="qq-auth-row"><input type="text" id="qq-ywguid" placeholder="ywguid / uid" autocomplete="off" aria-label="QQ阅读账号ID"><div class="qq-reader-new-key"><input type="password" id="qq-ywkey" placeholder="ywkey / usid" autocomplete="off" aria-label="QQ阅读密钥"><button class="text-button" id="qq-reader-new-key-toggle" type="button" aria-pressed="false">显示</button></div></div><div class="qq-auth-actions"><button class="primary-button" id="qq-auth-save" type="button">添加并使用</button></div></div><div id="qq-reader-phone-panel" class="qq-reader-phone-panel" hidden><label class="qq-reader-field-label" for="qq-reader-phone">手机号</label><div class="qq-reader-phone-row"><input id="qq-reader-phone" type="tel" inputmode="tel" maxlength="11" autocomplete="off" placeholder="请输入11位手机号"><button class="outline-button" id="qq-reader-phone-send" type="button">获取验证码</button></div><label class="qq-reader-field-label" for="qq-reader-phone-code">短信验证码</label><div class="qq-reader-phone-row"><input id="qq-reader-phone-code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="请输入6位验证码"><button class="primary-button" id="qq-reader-phone-login" type="button" disabled>登录并添加</button></div><p id="qq-reader-phone-status" class="qq-reader-field-hint" aria-live="polite"></p><div id="qq-reader-captcha-frame" class="qq-reader-captcha-frame" hidden><div id="qq-reader-captcha" class="qq-reader-captcha" aria-label="短信安全验证"></div></div></div><div id="qq-reader-scan-panel" class="qq-reader-scan-panel" hidden><button class="outline-button" id="qq-reader-scan-start" type="button">获取二维码</button><img class="qq-reader-qr-image" id="qq-reader-qr-image" alt="QQ阅读登录二维码" hidden><p id="qq-reader-qr-message" class="qq-reader-field-hint" aria-live="polite"></p><button class="text-button" id="qq-reader-scan-cancel" type="button" hidden>取消扫码</button></div></section></div></dialog>`;
+          node.innerHTML = `<div id="qq-reader-list"><div class="qq-reader-toolbar"><span id="qq-reader-summary"></span><button class="outline-button" id="qq-reader-add" type="button">添加账号</button></div><div id="qq-reader-accounts" class="qq-reader-accounts"></div></div><dialog id="qq-reader-account-dialog" class="qq-reader-modal" aria-labelledby="qq-reader-modal-title" aria-modal="true" tabindex="-1"><div class="qq-reader-modal-head"><h3 id="qq-reader-modal-title">QQ阅读账号详情</h3><button class="qq-reader-modal-close" id="qq-reader-modal-close" type="button" aria-label="关闭账号窗口">×</button></div><div class="qq-reader-modal-body"><section id="qq-reader-detail" class="qq-reader-detail" hidden></section><section id="qq-reader-add-panel" class="qq-reader-add-panel" hidden><p id="qq-reader-relogin-target" class="qq-reader-field-hint" hidden></p><div class="qq-auth-tabs" role="group" aria-label="选择QQ阅读登录方式"><button class="qq-auth-tab active" id="qq-reader-method-cookie" type="button" aria-pressed="true">手动配置</button><button class="qq-auth-tab" id="qq-reader-method-scan" type="button" aria-pressed="false">QQ扫码登录</button><button class="qq-auth-tab" id="qq-reader-method-phone" type="button" aria-pressed="false">手机号登录</button></div><div id="qq-reader-manual-panel"><label class="qq-reader-field-label" for="qq-reader-cookie">Cookie</label><textarea id="qq-reader-cookie" class="qq-reader-cookie" rows="3" autocomplete="off" spellcheck="false" placeholder="粘贴含 ywguid / ywkey 的 Cookie"></textarea><p class="qq-reader-field-hint">也可以直接填写下面两个字段。</p><div class="qq-auth-row"><input type="text" id="qq-ywguid" placeholder="ywguid / uid" autocomplete="off" aria-label="QQ阅读账号ID"><div class="qq-reader-new-key"><input type="password" id="qq-ywkey" placeholder="ywkey / usid" autocomplete="off" aria-label="QQ阅读密钥"><button class="text-button" id="qq-reader-new-key-toggle" type="button" aria-pressed="false">显示</button></div></div><div class="qq-auth-actions"><button class="primary-button" id="qq-auth-save" type="button">添加并使用</button></div></div><div id="qq-reader-phone-panel" class="qq-reader-phone-panel" hidden><label class="qq-reader-field-label" for="qq-reader-phone">手机号</label><div class="qq-reader-phone-row"><input id="qq-reader-phone" type="tel" inputmode="tel" maxlength="11" autocomplete="off" placeholder="请输入11位手机号"><button class="outline-button" id="qq-reader-phone-send" type="button">获取验证码</button></div><label class="qq-reader-field-label" for="qq-reader-phone-code">短信验证码</label><div class="qq-reader-phone-row"><input id="qq-reader-phone-code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="请输入6位验证码"><button class="primary-button" id="qq-reader-phone-login" type="button" disabled>登录并添加</button></div><p id="qq-reader-phone-status" class="qq-reader-field-hint" aria-live="polite"></p><div id="qq-reader-captcha-frame" class="qq-reader-captcha-frame" hidden><div id="qq-reader-captcha" class="qq-reader-captcha" aria-label="短信安全验证"></div></div></div><div id="qq-reader-scan-panel" class="qq-reader-scan-panel" hidden><button class="outline-button" id="qq-reader-scan-start" type="button">获取二维码</button><img class="qq-reader-qr-image" id="qq-reader-qr-image" alt="QQ阅读登录二维码" hidden><p id="qq-reader-qr-message" class="qq-reader-field-hint" aria-live="polite"></p><button class="text-button" id="qq-reader-scan-cancel" type="button" hidden>取消扫码</button></div></section></div></dialog>`;
           const modal = $('qq-reader-account-dialog'); document.body.appendChild(modal);
           let backdropDown = false;
           const outside = (event) => { const rect = modal.getBoundingClientRect(); return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom; };
@@ -1302,7 +1306,7 @@
           modal.addEventListener('click', (event) => { if (event.target === modal && backdropDown && outside(event)) backQQReaderList(); backdropDown = false; });
           modal.addEventListener('cancel', (event) => { event.preventDefault(); backQQReaderList(); });
           modal.addEventListener('close', () => { if (!modal.open && (qqReader.adding || qqReader.detailId || qqReader.modalOverflow !== null)) backQQReaderList(); });
-          $('qq-reader-add').addEventListener('click', (event) => { rememberQQReaderFocus(event.currentTarget); hideQQReaderKey(); qqReader.detailId = ''; qqReader.adding = true; renderQQAuthEditor(qqReader.auth); });
+          $('qq-reader-add').addEventListener('click', (event) => openQQReaderLogin('', event.currentTarget));
           $('qq-reader-modal-close').addEventListener('click', () => backQQReaderList());
           $('qq-reader-method-cookie').addEventListener('click', () => setQQReaderMethod('cookie'));
           $('qq-reader-method-scan').addEventListener('click', () => setQQReaderMethod('scan'));
@@ -1320,13 +1324,25 @@
         $('qq-reader-add').disabled = !qqReaderEditable() || qqReader.mutation;
         $('qq-reader-accounts').innerHTML = accounts.map((account) => {
           const vip = qqReaderVip(account);
-          return `<article class="qq-reader-account ${account.selected ? 'is-current' : ''} ${account.enabled === false ? 'is-disabled' : ''}"><div class="qq-reader-account-top"><span class="tag ${account.selected ? 'ok' : account.enabled === false ? 'off' : ''}">${account.selected ? '当前使用' : account.enabled === false ? '已停用' : '已启用'}</span><button class="switch qq-reader-account-switch ${account.enabled !== false ? 'on' : ''}" type="button" data-qq-reader-enable="${esc(account.id)}" aria-label="${account.enabled === false ? '启用' : '停用'}${esc(account.nickname || 'QQ阅读账号')}" aria-pressed="${account.enabled !== false}" ${qqReaderEditable() && !qqReader.mutation ? '' : 'disabled'}><span></span></button></div><button class="qq-reader-account-open" type="button" data-qq-reader-open="${esc(account.id)}" aria-expanded="${!qqReader.adding && String(account.id) === qqReader.detailId}">${qqReaderAvatarHtml(account)}<span><strong>${esc(account.nickname || '书友用户')}</strong><small>${esc(account.ywguid || '')}</small></span><span class="qq-reader-arrow" aria-hidden="true">›</span></button><div class="qq-reader-account-vip"><span class="${vip.active ? 'is-vip' : ''}">${esc(vip.label)}</span><small>到期 ${esc(vip.expires)}</small></div></article>`;
+          return `<article class="qq-reader-account ${account.selected ? 'is-current' : ''} ${account.enabled === false ? 'is-disabled' : ''}"><div class="qq-reader-account-top"><span class="tag ${account.selected ? 'ok' : account.enabled === false ? 'off' : ''}">${account.selected ? '当前使用' : account.enabled === false ? '已停用' : '已启用'}</span><button class="switch qq-reader-account-switch ${account.enabled !== false ? 'on' : ''}" type="button" data-qq-reader-enable="${esc(account.id)}" aria-label="${account.enabled === false ? '启用' : '停用'}${esc(account.nickname || 'QQ阅读账号')}" aria-pressed="${account.enabled !== false}" ${qqReaderEditable() && !qqReader.mutation ? '' : 'disabled'}><span></span></button></div><button class="qq-reader-account-open" type="button" data-qq-reader-open="${esc(account.id)}" aria-expanded="${!qqReader.adding && String(account.id) === qqReader.detailId}">${qqReaderAvatarHtml(account)}<span><strong>${esc(account.nickname || '书友用户')}</strong><small>${esc(account.ywguid || '')}</small></span><span class="qq-reader-arrow" aria-hidden="true">›</span></button><div class="qq-reader-account-vip"><span class="${vip.active ? 'is-vip' : ''}">${esc(vip.label)}</span><small>到期 ${esc(vip.expires)}</small>${account.auth_status === 'invalid' && qqReaderEditable() ? `<button class="outline-button" type="button" data-qq-reader-relogin="${esc(account.id)}" ${qqReader.mutation ? 'disabled' : ''}>重新登录</button>` : ''}</div></article>`;
         }).join('') || '<div class="empty qq-reader-empty">还没有QQ阅读账号，请添加账号。</div>';
         $('qq-reader-accounts').querySelectorAll('[data-qq-reader-open]').forEach((button) => button.addEventListener('click', () => { rememberQQReaderFocus(button); void stopQQReaderScan(); void stopQQReaderSms(); qqReader.adding = false; qqReader.detailId = button.dataset.qqReaderOpen; clearQQReaderManual(); renderQQAuthEditor(qqReader.auth); }));
+        $('qq-reader-accounts').querySelectorAll('[data-qq-reader-relogin]').forEach((button) => {
+          button.addEventListener('click', () => openQQReaderLogin(button.dataset.qqReaderRelogin, button));
+        });
         $('qq-reader-accounts').querySelectorAll('[data-qq-reader-enable]').forEach((button) => button.addEventListener('click', () => { const account = qqReaderAccount(button.dataset.qqReaderEnable); if (account) void mutateQQReader('enable', account.id, {enabled:account.enabled === false}, button, account.enabled === false ? '账号已启用' : '账号已停用'); }));
         $('qq-reader-list').hidden = false;
         $('qq-reader-add-panel').hidden = !qqReader.adding;
+        const relogin = qqReader.adding && Boolean(qqReader.detailId);
+        const loginTarget = $('qq-reader-relogin-target');
+        const account = relogin ? qqReaderAccount() : null;
+        loginTarget.hidden = !relogin;
+        loginTarget.textContent = !relogin ? '' : account
+          ? `请使用原账号登录 · ${account.nickname || '书友用户'}（${account.ywguid}）`
+          : '请使用原账号登录';
+        $('qq-auth-save').textContent = relogin ? '更新登录状态' : '添加并使用';
         $('qq-auth-save').disabled = !qqReaderEditable() || qqReader.mutation;
+        ['cookie', 'scan', 'phone'].forEach((method) => { $(`qq-reader-method-${method}`).disabled = qqReader.mutation; });
         renderQQReaderDetail();
         updateQQReaderScan();
         updateQQReaderSms();
@@ -1348,6 +1364,7 @@
         if (qqReader.auth) renderQQAuthEditor(qqReader.auth); else syncQQReaderModal();
       };
       const setQQReaderMethod = (method) => {
+        if (qqReader.mutation) return;
         const next = ['cookie', 'scan', 'phone'].includes(method) ? method : 'cookie';
         if (next !== qqReader.method) { void stopQQReaderSms(); if (next !== 'scan') void stopQQReaderScan(); clearQQReaderManual(); }
         qqReader.method = next;
@@ -1355,6 +1372,20 @@
         if ($('qq-reader-manual-panel')) $('qq-reader-manual-panel').hidden = next !== 'cookie';
         if ($('qq-reader-scan-panel')) $('qq-reader-scan-panel').hidden = next !== 'scan';
         if ($('qq-reader-phone-panel')) $('qq-reader-phone-panel').hidden = next !== 'phone';
+      };
+      const openQQReaderLogin = (accountId, trigger) => {
+        if (!qqReaderEditable() || qqReader.mutation) return;
+        if (accountId && qqReaderAccount(accountId)?.auth_status !== 'invalid') return;
+        if (trigger) rememberQQReaderFocus(trigger);
+        hideQQReaderKey();
+        void stopQQReaderScan();
+        void stopQQReaderSms();
+        clearQQReaderManual();
+        qqReader.detailId = String(accountId || '');
+        qqReader.adding = true;
+        if (accountId) setQQReaderMethod('scan');
+        renderQQAuthEditor(qqReader.auth);
+        if (!trigger) $('qq-reader-scan-start')?.focus({preventScroll:true});
       };
       const loadQQReaderAccounts = async () => {
         const request = ++qqReader.request;
@@ -1393,15 +1424,36 @@
         const ywguid = $('qq-ywguid')?.value.trim();
         const ywkey = $('qq-ywkey')?.value.trim();
         if (!cookie && (!ywguid || !ywkey)) return toast('请粘贴 Cookie，或填写 ywguid 和 ywkey');
-        if (qqReader.mutation) return;
+        if (!qqReaderEditable() || !qqReader.adding || qqReader.mutation) return;
+        const accountId = qqReader.detailId;
+        const scope = consoleGeneration;
+        const modalGeneration = qqReader.modalGeneration;
+        const current = () => scope === consoleGeneration && modalGeneration === qqReader.modalGeneration
+          && qqReader.adding && accountId === qqReader.detailId && activeView === 'bot';
+        const payload = cookie ? {cookie} : {ywguid, ywkey};
+        if (accountId) payload.account_id = accountId;
+        else payload.select = true;
         qqReader.mutation = true;
         qqReader.request += 1;
         $('qq-auth-save').disabled = true;
+        ['cookie', 'scan', 'phone'].forEach((method) => { $(`qq-reader-method-${method}`).disabled = true; });
         try {
-          await api('qq-reader-auth', {method:'POST', body:JSON.stringify(cookie ? {cookie, select:true} : {ywguid, ywkey, select:true})});
-          clearQQReaderManual(); qqReader.adding = false; qqReader.detailId = ''; await loadQQReaderAccounts(); toast('QQ阅读账号已添加并切换');
-        } catch (error) { if (error.status === 401) showAuthError(error); else toast(error.message); }
-        finally { qqReader.mutation = false; if (qqReader.auth) renderQQAuthEditor(qqReader.auth); }
+          await api('qq-reader-auth', {method:'POST', body:JSON.stringify(payload)});
+          if (!current()) return;
+          clearQQReaderManual();
+          qqReader.adding = false;
+          qqReader.detailId = '';
+          await loadQQReaderAccounts();
+          if (scope === consoleGeneration && activeView === 'bot') toast(accountId ? '账号已重新登录' : 'QQ阅读账号已添加并切换');
+        } catch (error) {
+          if (error.status === 401) showAuthError(error);
+          else if (current()) toast(error.message);
+        } finally {
+          if (scope === consoleGeneration) {
+            qqReader.mutation = false;
+            if (qqReader.auth) renderQQAuthEditor(qqReader.auth);
+          }
+        }
       };
       const deleteQQReaderAccount = async (id, button) => {
         if (!confirm('确定删除此QQ阅读账号吗？')) return;
@@ -1418,8 +1470,9 @@
         if (!qqReaderEditable()) return;
         const appid = consoleAppid;
         const scope = consoleGeneration;
+        const accountId = qqReader.detailId;
         const active = () => appid === consoleAppid && scope === consoleGeneration
-          && qqReader.adding && qqReader.method === 'scan' && activeView === 'bot';
+          && qqReader.adding && accountId === qqReader.detailId && qqReader.method === 'scan' && activeView === 'bot';
         const cancellation = stopQQReaderScan();
         const intent = qqReader.scanIntent;
         await cancellation;
@@ -1428,7 +1481,7 @@
         qqReader.scanStarting = true;
         qqReader.scanMessage = '正在生成二维码…'; updateQQReaderScan();
         try {
-          const result = await api('qq-reader-auth/scan', {method:'POST', body:'{}'});
+          const result = await api('qq-reader-auth/scan', {method:'POST', body:JSON.stringify(accountId ? {account_id:accountId} : {})});
           if (generation !== qqReader.scanGeneration || !active()) {
             if (result.scan_id && String(result.scan_id) !== qqReader.scanId) {
               try { await api('qq-reader-auth/scan', {method:'DELETE', body:JSON.stringify({scan_id:String(result.scan_id)}), botAppid:appid, scopeCleanup:true}); } catch (_) {}
@@ -1469,7 +1522,7 @@
                 await cleanup;
                 if (scope !== consoleGeneration || appid !== consoleAppid || resultGeneration !== qqReader.scanGeneration || activeView !== 'bot') return;
                 await loadQQReaderAccounts();
-                toast('QQ阅读账号已扫码登录');
+                if (scope === consoleGeneration && activeView === 'bot') toast(accountId ? '账号已重新登录' : 'QQ阅读账号已扫码登录');
               } else {
                 await cleanup;
               }
@@ -1497,7 +1550,7 @@
       const updateQQReaderSms = () => {
         const remaining = Math.max(0, Math.ceil((qqReader.smsRetryAt - Date.now()) / 1000));
         if ($('qq-reader-phone-send')) { $('qq-reader-phone-send').disabled = !qqReaderEditable() || qqReader.smsBusy || Boolean(qqReader.smsCancel) || remaining > 0; $('qq-reader-phone-send').textContent = remaining ? `${remaining}秒后重发` : qqReader.smsBusy && qqReader.smsOperation === 'send' ? '正在发送' : '获取验证码'; }
-        if ($('qq-reader-phone-login')) { $('qq-reader-phone-login').disabled = !qqReaderEditable() || qqReader.smsBusy || !qqReader.smsSent; $('qq-reader-phone-login').textContent = qqReader.smsBusy && qqReader.smsOperation === 'login' ? '正在登录' : '登录并添加'; }
+        if ($('qq-reader-phone-login')) { $('qq-reader-phone-login').disabled = !qqReaderEditable() || qqReader.smsBusy || !qqReader.smsSent; $('qq-reader-phone-login').textContent = qqReader.smsBusy && qqReader.smsOperation === 'login' ? '正在登录' : qqReader.detailId ? '重新登录' : '登录并添加'; }
         if ($('qq-reader-phone-status')) $('qq-reader-phone-status').textContent = qqReader.smsMessage || '';
         if (!remaining && qqReader.smsTimer) { clearInterval(qqReader.smsTimer); qqReader.smsTimer = null; }
       };
@@ -1543,13 +1596,14 @@
         const phone = $('qq-reader-phone')?.value.trim();
         if (!/^1\d{10}$/.test(phone || '')) return toast('请输入正确的11位手机号');
         if (!qqReaderEditable() || qqReader.smsBusy || qqReader.smsRetryAt > Date.now()) return;
+        const accountId = qqReader.detailId;
         const cancellation = stopQQReaderSms(false); const intent = qqReader.smsGeneration; await cancellation;
-        if (!qqReaderSmsCurrent(intent) || $('qq-reader-phone')?.value.trim() !== phone) return;
+        if (!qqReaderSmsCurrent(intent) || qqReader.detailId !== accountId || $('qq-reader-phone')?.value.trim() !== phone) return;
         const generation = ++qqReader.smsGeneration;
         const controller = new AbortController(); qqReader.smsAbort = controller;
         qqReader.smsStarting = true; qqReader.smsBusy = true; qqReader.smsOperation = 'send'; qqReader.smsMessage = '正在准备短信验证…'; updateQQReaderSms();
         try {
-          const pre = await api('qq-reader-auth/pre-send', {method:'POST', body:JSON.stringify({phone}), signal:controller.signal});
+          const pre = await api('qq-reader-auth/pre-send', {method:'POST', body:JSON.stringify(accountId ? {phone, account_id:accountId} : {phone}), signal:controller.signal});
           if (!qqReaderSmsCurrent(generation)) return;
           qqReader.smsActive = true; qqReader.smsStarting = false;
           let response = pre;
@@ -1596,16 +1650,34 @@
         if (!qqReader.smsSent || phone !== qqReader.smsPhone) return toast('请先获取当前手机号的验证码');
         if (!/^\d{6}$/.test(code || '')) return toast('请输入6位短信验证码');
         if (qqReader.smsBusy) return;
+        const accountId = qqReader.detailId;
+        const scope = consoleGeneration;
         const generation = ++qqReader.smsGeneration;
         const controller = new AbortController(); qqReader.smsAbort = controller;
         qqReader.smsBusy = true; qqReader.smsOperation = 'login'; qqReader.smsMessage = '正在登录…'; updateQQReaderSms();
         try {
           await api('qq-reader-auth/sms-login', {method:'POST', body:JSON.stringify({phone, code}), signal:controller.signal});
           if (!qqReaderSmsCurrent(generation)) return;
-          qqReader.adding = false; qqReader.detailId = ''; await stopQQReaderSms(); clearQQReaderManual(); await loadQQReaderAccounts(); toast('QQ阅读账号已添加并切换');
+          qqReader.adding = false;
+          qqReader.detailId = '';
+          clearQQReaderManual();
+          const cleanup = stopQQReaderSms();
+          const resultGeneration = qqReader.smsGeneration;
+          syncQQReaderModal();
+          await cleanup;
+          if (scope !== consoleGeneration || resultGeneration !== qqReader.smsGeneration || activeView !== 'bot') return;
+          await loadQQReaderAccounts();
+          if (scope === consoleGeneration && activeView === 'bot') toast(accountId ? '账号已重新登录' : 'QQ阅读账号已添加并切换');
         } catch (error) {
           if (!qqReaderSmsCurrent(generation) || error.name === 'AbortError') return;
-          qqReader.smsMessage = error.message || '登录失败，请重试'; if (error.status === 401) showAuthError(error); else toast(qqReader.smsMessage);
+          if (accountId && error.status === 409 && error.message === '重新登录失败，请使用原QQ阅读账号') {
+            void stopQQReaderSms(false);
+            qqReader.smsMessage = error.message;
+            updateQQReaderSms();
+          } else {
+            qqReader.smsMessage = error.message || '登录失败，请重试';
+          }
+          if (error.status === 401) showAuthError(error); else toast(qqReader.smsMessage);
         } finally { if (generation === qqReader.smsGeneration) { qqReader.smsBusy = false; qqReader.smsAbort = null; updateQQReaderSms(); } }
       };
 
