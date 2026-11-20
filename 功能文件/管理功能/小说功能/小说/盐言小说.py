@@ -643,6 +643,9 @@ def 获取盐言小说回复流(
 
 
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[str]:
+    if _是知乎盐言专栏分享页(来源):
+        yield "已识别知乎盐言专栏。请打开你要下载的章节，再分享该章节的链接。"
+        return
     阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
@@ -940,6 +943,20 @@ def _是盐言链接(值: str) -> bool:
     return 主机 in 允许主机 and bool(解析盐言编号(值)[0] or 解析知乎文章编号(值))
 
 
+def _是知乎盐言专栏分享页(值: str) -> bool:
+    if len(值) > 16384 or re.search(r"\s", 值):
+        return False
+    try:
+        地址 = urlsplit(值)
+    except ValueError:
+        return False
+    return (
+        地址.scheme.lower() == "https"
+        and 地址.netloc.lower() == "www.zhihu.com"
+        and re.fullmatch(r"/xen/market/remix/paid_column/[0-9]{8,30}/?", 地址.path) is not None
+    )
+
+
 def _是知乎原始分享链接(值: str) -> bool:
     if len(值) > 16384 or re.search(r"\s", 值):
         return False
@@ -1036,17 +1053,18 @@ def 提取盐言链接(值: Any) -> str:
     if 值 is None:
         return ""
     if isinstance(值, dict):
-        for 子值 in 值.values():
-            结果 = 提取盐言链接(子值)
-            if 结果:
-                return 结果
-        return ""
+        值 = list(值.values())
+    候选专栏页 = ""
     if isinstance(值, (list, tuple, set)):
         for 子值 in 值:
             结果 = 提取盐言链接(子值)
-            if 结果:
+            if not 结果:
+                continue
+            if not _是知乎盐言专栏分享页(结果):
                 return 结果
-        return ""
+            if not 候选专栏页:
+                候选专栏页 = 结果
+        return 候选专栏页
     文本 = html.unescape(str(值)).replace("\\/", "/")
     for 次数 in range(3):
         # 按整条 URL 检查，兼容原始分享/包装链接并保留票据的 +/% 字节。
@@ -1054,6 +1072,9 @@ def 提取盐言链接(值: Any) -> str:
             链接 = 匹配.group(0).rstrip("`)]}>，。；;！!")
             if _知乎分享提取来源(链接):
                 return 链接
+            专栏候选 = 链接.partition("](")[0]
+            if not 候选专栏页 and _是知乎盐言专栏分享页(专栏候选):
+                候选专栏页 = 专栏候选
         if 次数 == 2:
             break
         解码 = unquote(文本)
@@ -1064,7 +1085,7 @@ def 提取盐言链接(值: Any) -> str:
         链接 = 匹配.group(0).rstrip("`)]}>，。；;！!")
         if _是盐言链接(链接):
             return 链接
-    return ""
+    return 候选专栏页
 
 
 def 提取直接盐言来源(命令文本: Any) -> str | None:
