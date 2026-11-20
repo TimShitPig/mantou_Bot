@@ -77,6 +77,7 @@ _私聊官方资料缓存: dict[tuple[str, str], dict[str, Any]] = globals().get
 好友关系状态命名空间 = "qq_friend_membership"
 好友关系缓存: dict[tuple[str, str], dict[str, Any]] = globals().get("好友关系缓存") or {}
 _好友事件待恢复: list[tuple[Any, Any, str]] = globals().get("_好友事件待恢复") or []
+_新好友资料任务: dict[tuple[str, str], asyncio.Task[None]] = globals().get("_新好友资料任务", {})
 # 官方 bot_state 限制为 30 QPM；半小时复核一次，避免已退出群长期显示为正常。
 群机器人状态缓存有效期秒 = 30 * 60
 未读状态命名空间 = "msg_console_unread"
@@ -1874,6 +1875,12 @@ async def 停止消息记录(超时: float = 15.0) -> bool:
     if 群信息任务 is not None and not 群信息任务.done():
         群信息任务.cancel()
         await asyncio.gather(群信息任务, return_exceptions=True)
+    好友资料任务 = list(_新好友资料任务.values())
+    _新好友资料任务.clear()
+    for 任务 in 好友资料任务:
+        任务.cancel()
+    if 好友资料任务:
+        await asyncio.gather(*好友资料任务, return_exceptions=True)
     群资料任务 = [任务 for 任务 in _群资料GET任务 if not 任务.done()]
     for 任务 in 群资料任务:
         任务.cancel()
@@ -2317,10 +2324,11 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
 
 def _推送消息事件(记录: dict[str, Any], 会话: dict[str, Any]) -> None:
     """把已进入内存的消息放入网页队列，不等待网络或数据库。"""
-    if not _消息事件订阅:
-        return
-    载荷 = {"type": "message", "data": _消息事件载荷(记录, 会话)}
+    if _消息事件订阅:
+        _投递网页消息事件({"type": "message", "data": _消息事件载荷(记录, 会话)})
 
+
+def _投递网页消息事件(载荷: dict[str, Any]) -> None:
     def 投递(队列: asyncio.Queue[Any]) -> None:
         try:
             队列.put_nowait(载荷)
@@ -4438,6 +4446,7 @@ def 获取好友关系状态(用户标识: str, appid: str = "") -> dict[str, An
 
 
 def _恢复好友关系状态(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
+    数据库键 = _私聊资料数据库键()
     for 状态键, 原值 in (快照.get("friend_states") or {}).items():
         try:
             值 = json.loads(原值) if isinstance(原值, str) else 原值
@@ -4453,8 +4462,12 @@ def _恢复好友关系状态(快照: dict[str, Any], 基线: dict[str, Any]) ->
             if 现有 != (基线.get("friend_states") or {}).get(键, {}) or _好友事件时间(现有.get("event_ts")) > 值["event_ts"]:
                 continue
             已见 = 值.get("seen") or []
+            好友资料 = _好友资料昵称(值, 键[1], 已从当前库读取=True)
             值 = {"appid": 键[0], "openid": 键[1], "status": 值["status"], "event_ts": 值["event_ts"],
                   "seen": [项 for 项 in 已见 if isinstance(项, str) and re.fullmatch(r"[0-9a-f]{64}", 项)][-32:]}
+            if 好友资料:
+                值["profile_nickname"] = 好友资料
+                值["_profile_database_key"] = 数据库键
             好友关系缓存[键] = 值
         except (TypeError, ValueError):
             continue
@@ -4479,7 +4492,7 @@ def _写入好友关系状态(项目: list[dict[str, Any]], 配置: Any) -> bool
             continue
         状态键 = ":".join(键)
         if _好友事件时间(值.get("event_ts")) >= _好友事件时间((状态表.get(状态键) or {}).get("event_ts")):
-            状态表[状态键] = dict(值)
+            状态表[状态键] = {字段: 内容 for 字段, 内容 in 值.items() if 字段 != "_profile_database_key"}
     if 状态表:
         已序列化 = {键: json.dumps(值, ensure_ascii=False, separators=(",", ":")) for 键, 值 in 状态表.items()}
         return 运行状态数据库.批量写入运行状态值(配置, 好友关系状态命名空间, 已序列化) is not False
@@ -4512,6 +4525,11 @@ def 记录好友关系事件(数据: dict[str, Any], 事件名: str, appid: str)
     状态 = "active" if 事件名 == "friend_add" else "removed"
     新值 = {"appid": appid, "openid": 用户, "status": 状态, "event_ts": 时间戳,
             "seen": [*(旧值.get("seen") or []), 指纹][-32:]}
+    if 状态 == "active" and 旧值.get("status") == 状态:
+        已查昵称 = _好友资料昵称(旧值, 用户)
+        if 已查昵称:
+            新值["profile_nickname"] = 已查昵称
+            新值["_profile_database_key"] = 旧值["_profile_database_key"]
     try:
         好友关系缓存[键] = 新值
         已有会话 = 消息缓存.get(用户) or {}
@@ -4909,7 +4927,12 @@ async def _消息接收工作() -> None:
                         _好友事件待恢复.append((客户端, 消息, 类型))
                         _启动消息数据库恢复任务()
                         continue
-                    记录好友关系事件(消息, 类型, appid)
+                    记录 = 记录好友关系事件(消息, 类型, appid)
+                    if 记录 is not None:
+                        if 类型 == "friend_add":
+                            _安排新好友资料查询(消息["openid"], appid)
+                        elif (任务 := _新好友资料任务.pop((appid, 消息["openid"]), None)) is not None:
+                            任务.cancel()
                     continue
                 记录 = 记录收到消息(消息, 类型, appid)
                 if 类型 == "group" and 记录:
@@ -7815,10 +7838,28 @@ def _私聊联系人资料(
             )
         if not 结果["avatar"]:
             结果["avatar"] = 官方资料.get("avatar", "")
+    if not 结果["nickname"] and not 结果["nickname_blank"]:
+        已保存昵称 = _好友资料昵称(好友关系缓存.get((应用, 标识)) or {}, 标识)
+        if 已保存昵称:
+            结果.update(已保存昵称, nickname_source="profile")
     return 结果
 
 
-def _私聊资料身份(标识: str, 应用: str) -> tuple[str, dict[str, Any]]:
+def _好友资料昵称(状态: dict[str, Any], 标识: str, *, 已从当前库读取: bool = False) -> dict[str, Any]:
+    资料 = 状态.get("profile_nickname")
+    if 状态.get("status") != "active" or not isinstance(资料, dict):
+        return {}
+    if not 已从当前库读取 and 状态.get("_profile_database_key") != _私聊资料数据库键():
+        return {}
+    时间戳 = _好友事件时间(资料.get("nickname_ts"))
+    昵称 = _有效用户昵称(资料.get("nickname"), 标识) if isinstance(资料.get("nickname"), str) else ""
+    空白 = 资料.get("nickname_blank") is True
+    if not 时间戳 or not (昵称 or 空白):
+        return {}
+    return {"nickname": "" if 空白 else 昵称, "nickname_blank": 空白, "nickname_ts": 时间戳}
+
+
+def _私聊资料数据库键() -> str:
     from .运行状态数据库 import 读取数据库配置值
 
     字段列表 = (
@@ -7830,11 +7871,15 @@ def _私聊资料身份(标识: str, 应用: str) -> tuple[str, dict[str, Any]]:
         ("database_ssl_mode",), ("database_ssl_ca",), ("database_connect_timeout",),
     )
     数据库 = [读取数据库配置值(当前插件配置, *字段) for 字段 in 字段列表]
-    数据库键 = hashlib.sha256(json.dumps(
+    return hashlib.sha256(json.dumps(
         数据库, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
-    好友 = copy.deepcopy(好友关系缓存.get((应用, 标识)) or {})
-    return 数据库键, 好友
+
+
+def _私聊资料身份(标识: str, 应用: str) -> tuple[str, dict[str, Any]]:
+    好友 = {字段: 值 for 字段, 值 in (好友关系缓存.get((应用, 标识)) or {}).items()
+          if 字段 not in {"profile_nickname", "_profile_database_key"}}
+    return _私聊资料数据库键(), 好友
 
 
 def _读取私聊官方资料(标识: str, 应用: str) -> dict[str, Any]:
@@ -7847,7 +7892,7 @@ def _读取私聊官方资料(标识: str, 应用: str) -> dict[str, Any]:
     return 已查
 
 
-async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, Any]:
+async def 刷新私聊资料(会话标识: str, appid: str = "", *, 仅补缺名: bool = False) -> dict[str, Any]:
     """按明确的机器人和用户 OpenID 查询官方资料，当前事件姓名优先。"""
     标识 = str(会话标识 or "").strip()
     if not 标识 or len(标识) > 128:
@@ -7855,7 +7900,11 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
     应用 = str(appid or "").strip()
     会话 = _读取作用域会话缓存(标识, "user", 应用)
     资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
-    if _OPENID规则.fullmatch(标识) and re.fullmatch(r"[0-9]{4,32}", 应用):
+    关系 = 获取好友关系状态(标识, 应用)
+    要查询 = not 仅补缺名 or (
+        关系["friend_status"] == "active" and not (资料["nickname"] or 资料["nickname_blank"])
+    )
+    if 要查询 and _OPENID规则.fullmatch(标识) and re.fullmatch(r"[0-9]{4,32}", 应用):
         平台, 认证AppID = _获取消息操作平台(应用)
         通道 = 获取HTTP通道(平台) if 认证AppID == 应用 else None
         if 通道 is not None:
@@ -7893,6 +7942,14 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
                             database_key=数据库键, friend_state=好友,
                         )
                         _私聊官方资料缓存[(应用, 标识)] = 新资料
+                    if 好友.get("status") == "active" and (昵称 or 空白):
+                        状态 = dict(好友关系缓存[(应用, 标识)])
+                        状态["_profile_database_key"] = 数据库键
+                        状态["profile_nickname"] = {
+                            "nickname": 昵称, "nickname_blank": 空白, "nickname_ts": 查询时间,
+                        }
+                        if not _消息数据库已配置() or _排队消息持久化("friend_state", 状态) is not False:
+                            好友关系缓存[(应用, 标识)] = 状态
             except _群资料查询冷却中:
                 pass
             except Exception as 异常:
@@ -7900,7 +7957,36 @@ async def 刷新私聊资料(会话标识: str, appid: str = "") -> dict[str, An
             会话 = _读取作用域会话缓存(标识, "user", 应用)
             资料 = _私聊联系人资料(标识, 会话 or {"chat_type": "user", "appid": 应用})
     return {"chat_id": 标识, "chat_type": "user", "appid": 应用, **资料,
-            "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
+            **获取好友关系状态(标识, 应用), "nickname_found": bool(资料["nickname"] or 资料["nickname_blank"])}
+
+
+def _安排新好友资料查询(标识: str, 应用: str) -> None:
+    键 = (应用, 标识)
+    if not _消息数据库恢复接收启动 or 键 in _新好友资料任务 or len(_新好友资料任务) >= 8:
+        return
+    预期身份 = _私聊资料身份(标识, 应用)
+
+    async def 查询并推送() -> None:
+        if not _消息数据库恢复接收启动 or _私聊资料身份(标识, 应用) != 预期身份:
+            return
+        资料 = await 刷新私聊资料(标识, 应用, 仅补缺名=True)
+        if (
+            _消息数据库恢复接收启动 and _私聊资料身份(标识, 应用) == 预期身份
+            and 资料["nickname_found"] and 资料["nickname_source"] == "profile"
+        ):
+            公开字段 = ("chat_id", "chat_type", "appid", "nickname", "nickname_blank",
+                      "nickname_ts", "nickname_source", "avatar", "friend_checked_at")
+            _投递网页消息事件({"type": "private_profile", "data": {字段: 资料[字段] for 字段 in 公开字段}})
+
+    def 收尾(已完成: asyncio.Task[None]) -> None:
+        if _新好友资料任务.get(键) is 已完成:
+            _新好友资料任务.pop(键, None)
+        if not 已完成.cancelled() and (异常 := 已完成.exception()) is not None:
+            logger.debug("新好友资料查询失败：错误类型=%s", type(异常).__name__)
+
+    任务 = asyncio.create_task(查询并推送(), name="新好友资料查询")
+    _新好友资料任务[键] = 任务
+    任务.add_done_callback(收尾)
 
 
 def _聊天显示名(

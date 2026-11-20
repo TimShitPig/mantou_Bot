@@ -5102,8 +5102,10 @@ async def _处理私聊资料刷新(request: web.Request) -> web.Response:
     try:
         from 功能文件.管理功能.基础功能 import 消息记录
 
-        结果 = await 消息记录.刷新私聊资料(标识, request["机器人AppID"])
-        清理消息列表缓存()
+        仅补缺名 = (数据 or {}).get("only_missing") is True
+        结果 = await 消息记录.刷新私聊资料(标识, request["机器人AppID"], 仅补缺名=仅补缺名)
+        if not 仅补缺名 or 结果["nickname_found"]:
+            清理消息列表缓存()
         return web.json_response({"ok": True, **结果}, headers={"Cache-Control": "no-store"})
     except Exception as exc:
         logger.warning("帮助控制台私聊资料刷新失败：错误类型=%s", type(exc).__name__)

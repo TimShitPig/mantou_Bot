@@ -4694,6 +4694,7 @@
           msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
         }
         updateMsgPanSelector();
+        if (chatType === 'user') maybeRefreshMsgPrivateProfile(chat);
       };
       const scheduleMsgHistoryLoad = (chatId) => {
         const id = String(chatId || '').trim();
@@ -4991,6 +4992,9 @@
           if (envelope?.type === 'message') { applyMsgRealtimeEvent(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
           else if (envelope?.type === 'group_status') applyMsgGroupStatus(envelope.data || {});
           else if (envelope?.type === 'group_info') applyMsgGroupInfo(envelope.data || {});
+          else if (envelope?.type === 'private_profile' && Number(envelope.data?.friend_checked_at) > 0) {
+            applyMsgPrivateProfile(envelope.data, {friendCheckedAt:envelope.data.friend_checked_at});
+          }
           else if (envelope?.type === 'history_cleared') applyMsgHistoryCleared(envelope.data || {});
         } catch (_) {}
       };
@@ -8312,12 +8316,84 @@
           if (msgState.chatId === chatId && msgState.chatType === requestType) void loadMsgHistory();
         } catch (error) { toast(error.message); }
       };
+      const msgPrivateProfileCooldown = new Map();
+      const getMsgPrivateProfileTarget = (chatId, appid) => {
+        const matches = (chat) => chat?.chat_type === 'user' && String(chat.chat_id || '') === chatId
+          && String(chat.appid || '').trim() === appid;
+        const scope = msgScopeKey('user', chatId, appid);
+        const current = msgState.chats.find(matches);
+        const overlay = msgState.realtimeChats.get(scope);
+        const viewing = msgMatchesCurrent('user', chatId, appid);
+        const contact = matches(overlay) ? overlay : current;
+        const friend = pickMsgFriendState(pickMsgFriendState(current, contact), viewing ? msgState.historyData : null);
+        return {matches, scope, current, contact, friend, viewing};
+      };
+      const msgPrivateProfileName = (chat) => chat?.remark && chat.nickname === chat.remark
+        ? {...chat, nickname:''} : chat;
+      const applyMsgPrivateProfile = (data, {friendCheckedAt = null, refreshAvatar = false} = {}) => {
+        const chatId = String(data?.chat_id || '').trim();
+        const appid = String(data?.appid || '').trim();
+        if (!chatId || !appid || appid !== msgState.selectedAppid || data.chat_type !== 'user') return null;
+        const {matches, scope, current, contact, friend, viewing} = getMsgPrivateProfileTarget(chatId, appid);
+        if (!contact && !viewing) return null;
+        if (friendCheckedAt !== null && (friend.friend_status !== 'active'
+          || friend.friend_checked_at !== Number(friendCheckedAt)
+          || (data.friend_checked_at != null && Number(data.friend_checked_at) !== friend.friend_checked_at))) return null;
+        const name = pickMsgNicknameState(chatId, msgPrivateProfileName(current), msgPrivateProfileName(contact),
+          viewing ? msgState.profiles?.[chatId] : null, data);
+        const avatar = typeof data.avatar === 'string' ? data.avatar.trim() : '';
+        const profile = {...(name || {}), appid, chat_type:'user', avatar};
+        if (!name && !avatar) return profile;
+        const applyProfile = (chat) => ({...chat, ...(name || {}),
+          ...(name ? {nickname:chat.remark || (name.nickname_blank ? '\u00a0' : name.nickname)} : {}),
+          ...(avatar ? {avatar} : {})});
+        msgState.chats = msgState.chats.map((chat) => matches(chat) ? applyProfile(chat) : chat);
+        if (contact) msgState.realtimeChats.set(scope, {...applyProfile(contact),
+          ...(name ? {_private_nickname:name.nickname, _private_nickname_blank:name.nickname_blank,
+            _private_nickname_ts:name.nickname_ts, _private_nickname_source:name.nickname_source} : {})});
+        if (refreshAvatar) {
+          msgState.avatarRefresh = msgState.avatarRefresh || new Map();
+          if (msgState.avatarRefresh.size >= 256) msgState.avatarRefresh.clear();
+          const nonce = Date.now();
+          [avatar, current?.avatar, avatarUrl(chatId, 'user', appid)].filter(Boolean)
+            .forEach((url) => msgState.avatarRefresh.set(String(url), nonce));
+        }
+        msgState.historyCache.delete(scope);
+        if (viewing && !$('page-messages')?.hidden) {
+          msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:profile});
+          updateMsgHead({});
+        }
+        scheduleMsgChatRender();
+        return profile;
+      };
+      const maybeRefreshMsgPrivateProfile = (chat) => {
+        const chatId = String(chat?.chat_id || '').trim();
+        const appid = String(chat?.appid || '').trim();
+        if (!msgMatchesCurrent('user', chatId, appid) || !/^[A-Za-z0-9_-]{1,128}$/.test(chatId)
+          || !/^\d{4,32}$/.test(appid)) return;
+        const {scope, current, contact, friend} = getMsgPrivateProfileTarget(chatId, appid);
+        if (friend.friend_status !== 'active' || !friend.friend_checked_at
+          || pickMsgNicknameState(chatId, msgPrivateProfileName(chat), msgPrivateProfileName(current),
+            msgPrivateProfileName(contact), msgState.profiles?.[chatId])) return;
+        const now = Date.now();
+        if ((msgPrivateProfileCooldown.get(scope) || 0) > now) return;
+        if (msgPrivateProfileCooldown.size >= 128) msgPrivateProfileCooldown.delete(msgPrivateProfileCooldown.keys().next().value);
+        msgPrivateProfileCooldown.set(scope, now + 60000);
+        const generation = msgState.scopeGeneration;
+        const friendCheckedAt = friend.friend_checked_at;
+        void api('message/user-profile/refresh', {method:'POST',
+          body:JSON.stringify({chat_id:chatId, chat_type:'user', appid, only_missing:true})}).then((data) => {
+          if (generation !== msgState.scopeGeneration || !msgMatchesCurrent('user', chatId, appid)
+            || $('page-messages')?.hidden || document.visibilityState === 'hidden'
+            || data?.chat_id !== chatId || String(data?.appid || '') !== appid) return;
+          applyMsgPrivateProfile(data, {friendCheckedAt});
+        }).catch(() => {});
+      };
       const refreshMsgConversation = async () => {
         const button = $('msg-reload');
         if (button.disabled) return;
         const chatId = String(msgState.chatId || '');
         const chatType = msgState.chatType;
-        const current = (msgState.chats || []).find((chat) => String(chat.chat_id || '') === chatId && chat.chat_type === chatType);
         const appid = String(msgState.chatAppid || msgState.selectedAppid || '');
         const isCurrent = () => msgMatchesCurrent(chatType, chatId, appid);
         button.disabled = true;
@@ -8326,31 +8402,9 @@
             const data = await api('message/user-profile/refresh', {method:'POST', body:JSON.stringify({chat_id:chatId, chat_type:'user', appid})});
             if (!isCurrent() || (data.appid && String(data.appid) !== appid)
               || (data.chat_id && String(data.chat_id) !== chatId) || (data.chat_type && data.chat_type !== 'user')) return;
-            const scope = msgScopeKey('user', chatId, appid);
-            const overlay = msgState.realtimeChats.get(scope);
-            const nameState = pickMsgNicknameState(chatId, msgState.profiles?.[chatId], overlay, data);
-            const profile = {...(nameState || {}), appid, chat_type:'user', avatar:String(data.avatar || '')};
-            msgState.avatarRefresh = msgState.avatarRefresh || new Map();
-            if (msgState.avatarRefresh.size >= 256) msgState.avatarRefresh.clear();
-            const nonce = Date.now();
-            [profile.avatar, current?.avatar, avatarUrl(chatId, 'user', data.appid || appid)].filter(Boolean).forEach((url) => msgState.avatarRefresh.set(String(url), nonce));
-            msgState.historyCache.delete(msgScopeKey('user', chatId, appid));
-            const matches = (chat) => String(chat?.chat_id || '') === chatId && chat?.chat_type === 'user'
-              && String(chat.appid || '').trim() === appid;
-            const applyProfile = (chat) => ({...chat, ...(nameState || {}),
-              ...(nameState ? {nickname:chat.remark || (nameState.nickname_blank ? '\u00a0' : nameState.nickname)} : {}),
-              ...(profile.avatar ? {avatar:profile.avatar} : {})});
-            msgState.chats = msgState.chats.map((chat) => matches(chat) ? applyProfile(chat) : chat);
-            const contact = matches(overlay) ? overlay : msgState.chats.find(matches);
-            if (contact) msgState.realtimeChats.set(scope, {...applyProfile(contact),
-              ...(nameState ? {_private_nickname:nameState.nickname, _private_nickname_blank:nameState.nickname_blank,
-                _private_nickname_ts:nameState.nickname_ts, _private_nickname_source:nameState.nickname_source} : {})});
-            if (isCurrent()) {
-              msgState.profiles = mergeMsgProfileMaps(msgState.profiles, {[chatId]:profile});
-              msgState.messageRenderSignature = null;
-              updateMsgHead({});
-              toast(profile.nickname || profile.nickname_blank ? '私聊资料已刷新' : '已重新查询；当前记录未提供有效昵称');
-            }
+            const profile = applyMsgPrivateProfile(data, {refreshAvatar:true});
+            msgState.messageRenderSignature = null;
+            toast(profile?.nickname || profile?.nickname_blank ? '私聊资料已刷新' : '已重新查询；当前记录未提供有效昵称');
           }
           await loadMsgChats(true);
           if (chatId && isCurrent()) await loadMsgHistory(false, false, true);
