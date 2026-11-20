@@ -2531,7 +2531,9 @@
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
       const msgHistoryInitialPageSize = 16;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgHistoryMinScrollBatch = 8;
+      const msgHistoryMaxScrollBatch = 24;
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyPreloadKey:'', historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
         if (!button) return;
@@ -3337,7 +3339,7 @@
           }
         }
       };
-      const loadMsgWindowPage = async (direction) => {
+      const loadMsgWindowPage = async (direction, limit = msgHistoryInitialPageSize) => {
         const windowState = msgState.historyWindow;
         if (!windowState || windowState.scope !== msgQuoteJumpScope() || msgQuoteJump.pending || msgQuoteJump.pagePending) return;
         const older = direction === 'before';
@@ -3354,7 +3356,7 @@
         try {
           const data = await api('message/history', {method:'POST', signal:controller.signal, body:JSON.stringify({
             chat_id:msgState.chatId, chat_type:msgState.chatType, appid:String(msgState.chatAppid || ''),
-            history_window:true, [older ? 'before_id' : 'after_id']:cursor, limit:msgHistoryPageSize,
+            history_window:true, [older ? 'before_id' : 'after_id']:cursor, limit,
           })});
           if (!current()) return;
           if (data.chat_id !== msgState.chatId || data.chat_type !== msgState.chatType
@@ -4524,6 +4526,8 @@
         msgState.historyRequest = Number(msgState.historyRequest || 0) + 1;
         msgState.historyOlderRequest = Number(msgState.historyOlderRequest || 0) + 1;
         msgState.historyOlderLoading = false;
+        msgState.historyScrollTop = 0;
+        msgState.historyPreloadKey = '';
         msgState.chatId = chatId;
         msgState.chatType = chatType;
         msgState.chatAppid = String(chat?.appid || '').trim();
@@ -7169,6 +7173,24 @@
         }
         body._msgRenderScope = scope;
       };
+      const captureMsgHistoryAnchor = (body) => {
+        const viewportTop = body.getBoundingClientRect().top;
+        for (const row of body.querySelectorAll('[data-msg-render-key]')) {
+          const rect = row.getBoundingClientRect();
+          if (rect.bottom > viewportTop) return {row, key:row.dataset.msgRenderKey, top:rect.top};
+        }
+        return null;
+      };
+      const restoreMsgHistoryAnchor = (body, anchor, scroll) => {
+        const row = anchor && (body.contains(anchor.row) ? anchor.row
+          : body.querySelector('[data-msg-render-key="' + CSS.escape(anchor.key) + '"]'));
+        if (row) {
+          body.scrollTop += row.getBoundingClientRect().top - anchor.top;
+        } else {
+          body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
+        }
+        msgState.historyScrollTop = body.scrollTop;
+      };
       const renderMsgMessages = (data, scroll = {}) => {
         if (!msgState.chatId || !msgState.chatAppid || msgState.chatAppid !== msgState.selectedAppid) return;
         if (data.appid && String(data.appid).trim() !== msgState.chatAppid) return;
@@ -7421,6 +7443,7 @@
         });
         if (initialPositioning) body.classList.add('msg-positioning');
         if (msgState.historyWindow?.has_newer) html += '<button class="msg-load-older" id="msg-load-newer" type="button">加载后续消息</button>';
+        const historyAnchor = scroll.prepend ? captureMsgHistoryAnchor(body) : null;
         renderMsgMessageDom(body, html, renderScope);
         Object.keys(rawStore).forEach((key) => {
           if (!renderedRawKeys.has(key)) delete rawStore[key];
@@ -7432,7 +7455,7 @@
         });
         if (scroll.prepend) {
           cancelMsgBottomPosition(body, true);
-          body.scrollTop = Math.max(0, Number(scroll.previousTop || 0) + body.scrollHeight - Number(scroll.previousHeight || 0));
+          restoreMsgHistoryAnchor(body, historyAnchor, scroll);
         } else if (keepLatestVisible) {
           // 缓存、实时和资料刷新都独立完成定位，展示不再等待首轮网络响应。
           scrollMsgBodyToBottom(body, msgState.chatId);
@@ -7765,10 +7788,10 @@
         else { msgState.selected.add(mid); row.classList.add('selected'); }
         $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
-      const loadMsgHistory = async (older = false, quiet = false, authoritative = false, opening = false) => {
+      const loadMsgHistory = async (older = false, quiet = false, authoritative = false, opening = false, olderLimit = msgHistoryInitialPageSize) => {
         if (!msgState.chatId) return;
         if (msgQuoteJump.pending || (quiet && msgState.historyWindow)) return;
-        if (older && msgState.historyWindow) return loadMsgWindowPage('before');
+        if (older && msgState.historyWindow) return loadMsgWindowPage('before', olderLimit);
         const returningWindow = !older ? msgState.historyWindow : null;
         if (returningWindow) cancelMsgQuoteJump();
         const requestScope = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
@@ -7803,7 +7826,8 @@
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
           const smallPage = opening && !older && !quiet && !returningWindow;
-          const historyLimit = smallPage ? msgHistoryInitialPageSize : msgHistoryPageSize;
+          const historyLimit = older ? olderLimit
+            : (smallPage || quiet) ? msgHistoryInitialPageSize : msgHistoryPageSize;
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, appid:requestAppid, before_date:beforeId ? '' : before, before_id:beforeId, limit:historyLimit}), signal:controller.signal});
           if (!requestIsCurrent() || (data.appid && String(data.appid).trim() !== requestAppid) || (data.chat_id && String(data.chat_id) !== requestChatId) || (data.chat_type && data.chat_type !== requestChatType)) return;
           data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid
@@ -7844,6 +7868,9 @@
           // 轮询可能在上翻页完成后才返回；保留当前已展开的更早消息，避免刷新把它们截掉。
           const currentMessages = Array.isArray(msgState.messages) ? msgState.messages : [];
           const preserveLoadedHistory = !returningWindow && !older && !newChat && currentMessages.length > incoming.length;
+          if (quiet && preserveLoadedHistory && msgState.historyData && !msgState.historyData.has_more) {
+            data.has_more = false;
+          }
           const preserveAfterClear = [...msgHistoryClearBoundaries.values()].some((boundary) => msgClearScopeMatches(boundary, requestChatType, requestChatId, requestAppid));
           if (returningWindow) msgState.historyWindow = null;
           msgState.messages = older
@@ -8748,12 +8775,24 @@
         readComposerMediaFile(file, 4);
       });
       $('msg-media-clear').addEventListener('click', clearComposerMedia);
-      const maybeLoadOlderMessages = () => {
-        const body = $('msg-body');
-        if (!body || msgState.initialScrollChatId || msgQuoteJump.anchorAbort
-          || msgQuoteJump.pending || msgQuoteJump.pagePending || body.scrollTop > 20
+      const maybeLoadOlderMessages = (body, upwardDistance) => {
+        if (upwardDistance <= 0 || !msgState.chatId || !body.clientHeight
+          || msgState.initialScrollChatId || msgQuoteJump.anchorAbort || msgQuoteJump.pending || msgQuoteJump.pagePending
           || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
-        loadMsgHistory(true);
+        const threshold = Math.max(120, Math.min(700, body.clientHeight));
+        const top = Math.max(0, body.scrollTop);
+        if (top > threshold) return;
+        const oldest = msgState.messages[0];
+        const cursor = msgState.historyWindow?.oldest_id || oldest?.id || oldest?.timestamp;
+        if (!cursor) return;
+        const key = JSON.stringify([msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid),
+          Boolean(msgState.historyWindow), cursor]);
+        if (key === msgState.historyPreloadKey) return;
+        msgState.historyPreloadKey = key;
+        const rowHeight = Math.max(30, body.scrollHeight / Math.max(1, msgState.messages.length));
+        const desiredHeight = threshold * 2 - top + Math.min(threshold, upwardDistance);
+        const limit = Math.min(msgHistoryMaxScrollBatch, Math.max(msgHistoryMinScrollBatch, Math.ceil(desiredHeight / rowHeight)));
+        void loadMsgHistory(true, true, false, false, limit);
       };
       const msgChatsNode = $('msg-chats');
       const flushPendingMsgChats = () => {
@@ -8800,9 +8839,20 @@
       }, {passive:true});
       const msgScrollBody = $('msg-body');
       msgScrollBody.addEventListener('wheel', (event) => {
-        if (event.deltaY < 0) releaseMsgBottomFollow(msgScrollBody);
+        if (event.deltaY >= 0) return;
+        releaseMsgBottomFollow(msgScrollBody);
+        if (msgScrollBody.scrollTop <= 2) maybeLoadOlderMessages(msgScrollBody, -event.deltaY);
       }, {passive:true});
-      msgScrollBody.addEventListener('touchmove', () => releaseMsgBottomFollow(msgScrollBody), {passive:true});
+      let msgTouchY = null;
+      msgScrollBody.addEventListener('touchstart', (event) => { msgTouchY = event.touches[0]?.clientY ?? null; }, {passive:true});
+      msgScrollBody.addEventListener('touchmove', (event) => {
+        releaseMsgBottomFollow(msgScrollBody);
+        const y = event.touches[0]?.clientY ?? null;
+        if (msgTouchY !== null && y !== null && msgScrollBody.scrollTop <= 2) {
+          maybeLoadOlderMessages(msgScrollBody, y - msgTouchY);
+        }
+        msgTouchY = y;
+      }, {passive:true});
       msgScrollBody.addEventListener('pointerdown', (event) => {
         if (event.target !== msgScrollBody || event.pointerType === 'touch') return;
         const left = msgScrollBody.getBoundingClientRect().left + msgScrollBody.clientLeft;
@@ -8814,9 +8864,11 @@
         }
       });
       msgScrollBody.addEventListener('scroll', () => {
+        const upwardDistance = msgState.historyScrollTop - msgScrollBody.scrollTop;
+        msgState.historyScrollTop = msgScrollBody.scrollTop;
         if (msgBottomFollowMovedUp(msgScrollBody)) releaseMsgBottomFollow(msgScrollBody);
         syncMsgNewMessagesDisplay();
-        maybeLoadOlderMessages();
+        if (msgState.bottomFollowPaused || msgState.historyWindow) maybeLoadOlderMessages(msgScrollBody, upwardDistance);
         if (msgState.historyWindow || msgQuoteJump.pending || msgQuoteJump.anchorAbort) return;
         if (msgState.positionBody !== msgScrollBody && msgState.renderedChatId === msgState.chatId
           && msgScrollBody.scrollTop > 0 && msgBodyNearBottom(msgScrollBody, 2)) {
