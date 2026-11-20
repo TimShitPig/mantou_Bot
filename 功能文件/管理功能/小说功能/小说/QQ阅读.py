@@ -6202,7 +6202,9 @@ class QQ阅读手机号登录客户端:
     """当前官网手机号登录；Cookie 和两阶段 sessionKey 只保留于本实例。"""
 
     _回调 = "mantouReaderSms"
-    _官网地址 = "https://login.book.qq.com/login.html"
+    # login.book.qq.com 当前会将手机号登录页重定向到 Passport；直接使用
+    # 已核实的官方最终入口，避免在禁止任意跳转的读取层放宽重定向规则。
+    _官网地址 = "https://passport.yuewen.com/yuewen.html"
     _接口地址 = "https://ptlogin.yuewen.com"
 
     def __init__(self) -> None:
@@ -6229,7 +6231,7 @@ class QQ阅读手机号登录客户端:
         self._检查有效()
         parsed = urlsplit(url)
         if (parsed.scheme != "https" or parsed.hostname not in {
-            "login.book.qq.com", "ptlogin.yuewen.com", "book.qq.com",
+            "login.book.qq.com", "passport.yuewen.com", "ptlogin.yuewen.com", "book.qq.com",
             "ywloginstatic.yuewen.com",
         } or parsed.username or parsed.password or parsed.port not in (None, 443)):
             raise RuntimeError("qqreader_sms_address_invalid")
