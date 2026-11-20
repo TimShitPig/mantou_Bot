@@ -8297,11 +8297,17 @@ def _数据库历史消息(
 def 获取引用定位历史(
     会话标识: str, 类型: str, appid: str, limit: int = 100,
     引用标识: str = "", before_id: int = 0, after_id: int = 0,
+    before_message_id: str = "", after_message_id: str = "",
 ) -> dict[str, Any] | None:
-    """引用跳转专用历史窗口；原有最新页与倒序历史接口保持原行为。"""
+    """按游标读取独立历史窗口，也用于引用跳转。"""
     会话标识, 类型, appid = str(会话标识 or "").strip(), str(类型 or "").strip(), str(appid or "").strip()
     limit = max(1, min(100, int(limit)))
-    if not 会话标识 or 类型 not in {"group", "user"} or (before_id and after_id):
+    内存游标 = before_message_id or after_message_id
+    if (
+        not 会话标识 or 类型 not in {"group", "user"}
+        or sum(map(bool, (引用标识, before_id, after_id, before_message_id, after_message_id))) != 1
+        or (内存游标 and not appid)
+    ):
         raise ValueError("invalid history window")
     def 数字ID(项: dict[str, Any]) -> int:
         try:
@@ -8310,12 +8316,35 @@ def 获取引用定位历史(
             return 0
 
     读取 = getattr(_消息存储, "读取引用定位窗口", None)
-    窗口 = 读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id) if callable(读取) else None
+    窗口 = 读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id) if not 内存游标 and callable(读取) else None
     if 窗口 and 窗口.get("failure") == "conflict":
         return None
     会话 = _读取作用域会话缓存(会话标识, 类型, appid)
     缓存作用域匹配 = str(会话.get("chat_type") or "") == 类型 and str(会话.get("appid") or "").strip() == appid
-    if 窗口 is None or (引用标识 and not 窗口.get("found")):
+    if 内存游标:
+        if not 缓存作用域匹配:
+            return None
+        缓存消息 = [
+            项 for 项 in list(会话.get("messages") or [])[-每会话缓存消息数:]
+            if _引用作用域匹配(项, 会话标识, 类型, appid)
+        ]
+        缓存消息.sort(key=_历史消息排序键)
+        匹配位置 = [
+            位置 for 位置, 项 in enumerate(缓存消息)
+            if _规范消息ID(项.get("message_id")) == 内存游标
+        ]
+        if len(匹配位置) != 1:
+            return None
+        锚点 = 匹配位置[0]
+        if before_message_id:
+            起点, 终点 = max(0, 锚点 - limit), 锚点
+        else:
+            起点, 终点 = 锚点 + 1, min(len(缓存消息), 锚点 + 1 + limit)
+        窗口 = {
+            "messages": 缓存消息[起点:终点],
+            "has_more": 起点 > 0, "has_newer": 终点 < len(缓存消息),
+        }
+    elif 窗口 is None or (引用标识 and not 窗口.get("found")):
         # 未落库的新消息只在本会话热点缓存精确查找，不逐页扫描持久化历史。
         缓存消息 = [
             dict(项) for 项 in list(会话.get("messages") or [])
@@ -8374,6 +8403,10 @@ def 获取引用定位历史(
         "oldest_date": str(最旧.get("timestamp") or ""),
         "oldest_id": min((数字ID(项) for 项 in 返回消息 if 数字ID(项)), default=0),
         "newest_id": max((数字ID(项) for 项 in 返回消息), default=0),
+        **({
+            "oldest_message_id": str(最旧.get("message_id") or ""),
+            "newest_message_id": str(最新.get("message_id") or ""),
+        } if 内存游标 else {}),
         "has_more": bool(窗口.get("has_more")), "has_newer": bool(窗口.get("has_newer")),
         "located_message_id": str(窗口.get("located_message_id") or ""),
         "located_refidx": str(窗口.get("located_refidx") or ""),

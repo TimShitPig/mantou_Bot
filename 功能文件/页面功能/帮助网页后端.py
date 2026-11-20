@@ -4263,16 +4263,23 @@ async def _处理消息聊天列表(request: web.Request) -> web.Response:
 async def _合并查询消息历史(
     会话标识: str, 类型: str, before_date: str, limit: int, before_id: int,
     appid: str = "", 引用标识: str = "", after_id: int = 0, 历史窗口: bool = False,
+    *, before_message_id: str = "", after_message_id: str = "",
 ) -> dict[str, Any] | None:
     """相同历史请求共享正在执行的查询，完成后立即释放，不缓存历史结果。"""
     from 功能文件.管理功能.基础功能 import 消息记录
 
     # 网页发送/撤回等写操作会推进版本，新请求不能加入写操作前的查询。
-    键 = (会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口, 消息列表缓存版本)
+    键 = (
+        会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口,
+        before_message_id, after_message_id, 消息列表缓存版本,
+    )
     任务 = 消息历史查询任务.get(键)
     if 任务 is None or 任务.done():
         查询 = (
-            _控制台线程执行(消息记录.获取引用定位历史, 会话标识, 类型, appid, limit, 引用标识, before_id, after_id)
+            _控制台线程执行(
+                消息记录.获取引用定位历史, 会话标识, 类型, appid, limit, 引用标识, before_id, after_id,
+                before_message_id, after_message_id,
+            )
             if 历史窗口 else
             _控制台线程执行(消息记录.获取消息历史, 会话标识, 类型, before_date, limit, before_id, appid)
         )
@@ -4305,7 +4312,20 @@ async def _处理消息历史(request: web.Request) -> web.Response:
     before_date = str((数据 or {}).get("before_date") or "")
     appid = str((数据 or {}).get("appid") or "").strip()
     引用标识 = str((数据 or {}).get("locate_reference_id") or "").strip()
-    历史窗口 = bool(引用标识 or (数据 or {}).get("history_window") is True)
+    明确请求窗口 = (数据 or {}).get("history_window") is True
+    历史窗口 = bool(引用标识 or 明确请求窗口)
+    内存游标 = (数据 or {}).keys() & {"before_message_id", "after_message_id"}
+    before_message_id = (数据 or {}).get("before_message_id", "")
+    after_message_id = (数据 or {}).get("after_message_id", "")
+    if 内存游标:
+        if not 明确请求窗口 or not appid or len(内存游标) != 1 or before_date:
+            return _控制台错误(400, "会话参数无效")
+        游标 = (数据 or {})[next(iter(内存游标))]
+        if (
+            not isinstance(游标, str) or not 1 <= len(游标) <= 512 or not 游标.strip()
+            or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 or 0xD800 <= ord(字符) <= 0xDFFF for 字符 in 游标)
+        ):
+            return _控制台错误(400, "会话参数无效")
     try:
         before_id = max(0, int((数据 or {}).get("before_id") or 0))
     except (TypeError, ValueError):
@@ -4324,8 +4344,7 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         历史窗口 and (
             类型 not in {"group", "user"} or len(appid) > 64 or len(引用标识) > 512
             or any(ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 引用标识)
-            or (before_id and after_id) or (引用标识 and (before_id or after_id))
-            or (not 引用标识 and not before_id and not after_id)
+            or sum(map(bool, (引用标识, before_id, after_id, before_message_id, after_message_id))) != 1
         )
     ) or (after_id and not 历史窗口):
         return _控制台错误(400, "会话参数无效")
@@ -4333,7 +4352,8 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         from 功能文件.管理功能.基础功能 import 消息记录
 
         结果 = await _合并查询消息历史(
-            会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口
+            会话标识, 类型, before_date, limit, before_id, appid, 引用标识, after_id, 历史窗口,
+            before_message_id=before_message_id, after_message_id=after_message_id,
         )
         if 结果 is None:
             return _控制台错误(404, "原消息未保存或已删除")
