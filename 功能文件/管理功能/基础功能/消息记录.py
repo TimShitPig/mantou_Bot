@@ -8245,7 +8245,8 @@ def _数据库历史消息(
             if isinstance(项, dict)
             and str(项.get("appid") or "").strip() == appid
             and str(项.get("chat_type") or 类型) == 类型
-            and (not before_id or int(项.get("id") or 0) < before_id)
+            # 未持久化消息没有可比较的数据库序号，不能混入数字游标之前的历史。
+            and (not before_id or 0 < _整数时间戳(项.get("id")) < before_id)
         ]
         候选 = 热点记录
         if not before_date and len(会话消息) >= limit and len(热点记录) > limit:
@@ -8462,7 +8463,7 @@ def 获取消息历史(
     except (TypeError, ValueError):
         before_id = 0
     if before_id:
-        会话消息 = [m for m in 会话消息 if int(m.get("id") or 0) < before_id]
+        会话消息 = [m for m in 会话消息 if 0 < _整数时间戳(m.get("id")) < before_id]
     elif before_date:
         before_date = str(before_date or "").strip()
         before_ts = int(_转数字时间戳(before_date) or 0)

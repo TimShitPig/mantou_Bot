@@ -2534,7 +2534,8 @@
       const msgHistoryMinScrollBatch = 8;
       const msgHistoryMaxScrollBatch = 24;
       const msgHistoryPrefetchLifetime = 30000;
-      let msgHistoryPrefetch = null;
+      const msgHistoryPrefetchSize = 48;
+      const msgHistoryPrefetch = new Map();
       const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyPreloadKey:'', historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
@@ -3388,9 +3389,9 @@
         if (!cursor) return;
         const scope = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
         const windowKey = JSON.stringify(cursor);
-        if (currentMsgHistoryPrefetch(scope, 0, '', windowKey)) return;
-        startMsgHistoryPrefetch({scope, beforeId:0, beforeDate:'', windowKey},
-          (signal) => requestMsgWindowPage(cursor, msgHistoryInitialPageSize, signal));
+        if (currentMsgHistoryPrefetch(direction, scope, windowKey)) return;
+        startMsgHistoryPrefetch(direction, scope, windowKey,
+          (signal) => requestMsgWindowPage(cursor, msgHistoryPrefetchSize, signal));
       };
       const loadMsgWindowPage = async (direction, limit = msgHistoryInitialPageSize, automatic = false) => {
         if (!canPageMsgWindow(direction) || msgQuoteJump.pending || msgQuoteJump.pagePending) return;
@@ -3400,8 +3401,8 @@
         if (!cursor) return;
         const {chatType, chatId, chatAppid} = msgState;
         const generation = msgQuoteJump.generation;
-        const prefetched = currentMsgHistoryPrefetch(msgScopeKey(chatType, chatId, chatAppid), 0, '', JSON.stringify(cursor));
-        if (prefetched) msgHistoryPrefetch = null;
+        const scope = msgScopeKey(chatType, chatId, chatAppid);
+        const prefetched = takeMsgHistoryPrefetch(direction, scope, JSON.stringify(cursor));
         const controller = prefetched?.controller || new AbortController();
         msgQuoteJump.pageAbort = controller;
         msgQuoteJump.pagePending = true;
@@ -3415,14 +3416,22 @@
           if (!data) data = await requestMsgWindowPage(cursor, limit, controller.signal);
           if (!current() || data.chat_id !== chatId || data.chat_type !== chatType
             || String(data.appid || '') !== chatAppid) return;
-          const incoming = mergeMsgRecalledStates(dedupeMsgMessages((data.messages || []).filter((message) =>
-            String(message?.appid || '') === chatAppid && !msgIsKnownCleared(message, chatType, chatId, chatAppid))));
           const body = $('msg-body');
-          // A response from a slow page must not replace the opposite edge after the reader reverses.
-          if (automatic && (older ? body.scrollTop : body.scrollHeight - body.clientHeight - body.scrollTop) > 1000) return;
+          const distance = older ? body.scrollTop : body.scrollHeight - body.clientHeight - body.scrollTop;
+          // Keep a completed page ready if the reader has already moved away.
+          if (automatic && distance > msgHistorySwitchDistance(body, 350)) {
+            if (prefetched) rememberMsgHistoryPrefetch(direction, prefetched);
+            return;
+          }
+          const {page, remainder} = splitMsgHistoryPage(data, direction, cursor, limit, chatType, chatId, chatAppid);
+          data = page;
+          const incoming = mergeMsgRecalledStates(data.messages);
           const previousTop = body.scrollTop;
           const previousHeight = body.scrollHeight;
           const existing = msgState.messages;
+          const reverseDirection = older ? 'after' : 'before';
+          const reverseCursor = msgWindowCursor(reverseDirection);
+          const reverseHasMore = older ? windowState.has_newer : Boolean(msgState.historyData?.has_more);
           const merged = dedupeMsgMessages(older ? [...incoming, ...existing] : [...existing, ...incoming]);
           const trimmed = merged.length > msgHistoryPageSize;
           const messages = older ? merged.slice(0, msgHistoryPageSize) : merged.slice(-msgHistoryPageSize);
@@ -3438,7 +3447,17 @@
             member_profiles:mergeMsgProfileMaps(history.member_profiles, data.member_profiles),
           };
           renderMsgMessages(next, {prepend:older, preservePosition:true, preserveAnchor:true, previousTop, previousHeight});
-          if (!msgState.historyWindow) cacheMsgHistory(msgScopeKey(chatType, chatId, chatAppid), next);
+          if (!msgState.historyWindow) cacheMsgHistory(scope, next);
+          else {
+            if (remainder && merged.length > existing.length) {
+              const nextCursor = msgWindowCursor(direction);
+              if (nextCursor) cacheMsgHistoryRemainder(direction, JSON.stringify(nextCursor), remainder, prefetched);
+            }
+            if (trimmed) {
+              const removed = older ? merged.slice(msgHistoryPageSize) : merged.slice(0, -msgHistoryPageSize);
+              cacheMsgHistoryReversal(reverseDirection, scope, reverseCursor, removed, history, reverseHasMore);
+            }
+          }
           advanced = merged.length > existing.length;
         } catch (error) {
           if (!current()) return;
@@ -3450,8 +3469,10 @@
             msgQuoteJump.pageAbort = null;
             msgQuoteJump.pagePending = false;
             if (advanced) {
-              if (msgState.historyWindow) warmMsgWindow(direction);
-              else warmMsgOlderHistory();
+              if (msgState.historyWindow) {
+                warmMsgWindow(direction);
+                warmMsgWindow(older ? 'after' : 'before');
+              } else warmMsgOlderHistory();
             }
           }
         }
@@ -5824,6 +5845,10 @@
         const keys = [];
         const primary = msgMessageKey(message);
         if (primary) keys.push(`id:${primary}`);
+        const rowId = Number(message.id);
+        if (Number.isSafeInteger(rowId) && rowId > 0 && message.appid) {
+          keys.push(`row:${msgScopeKey(message.chat_type || msgState.chatType, message._session || message.chat_id || msgState.chatId, message.appid)}:${rowId}`);
+        }
         const isOfficial = String(message.source || '').trim().toLowerCase() === 'qq_official';
         const sessionId = normalizeMsgIdentity(message._session || msgState.chatId);
         const userId = normalizeMsgIdentity(message.user_id);
@@ -7291,6 +7316,7 @@
         if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
         let serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
         if (serverMessages.length > msgHistoryPageSize) {
+          const untrimmed = serverMessages;
           const keepOlder = scroll.prepend || (!keepLatestVisible && !opening && !msgState.historyWindow && !scroll.toBottom);
           serverMessages = keepOlder ? serverMessages.slice(0, msgHistoryPageSize) : serverMessages.slice(-msgHistoryPageSize);
           if (keepOlder) {
@@ -7298,6 +7324,9 @@
             updateMsgWindowCursors(detached, serverMessages);
             msgState.historyWindow = detached;
             discardMsgHistoryPrefetch();
+            const removed = untrimmed.slice(msgHistoryPageSize);
+            cacheMsgHistoryReversal('after', msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid),
+              null, removed, {...data, chat_id:msgState.chatId, chat_type:msgState.chatType}, false);
           } else {
             data.has_more = true;
             scroll = {...scroll, preserveAnchor:!keepLatestVisible};
@@ -7696,7 +7725,7 @@
         const messageKey = msgMessageKey(message);
         if (msgIsRecalled(message)) {
           msgState.historyCache.delete(chatKey);
-          if (msgHistoryPrefetch?.scope === chatKey) discardMsgHistoryPrefetch();
+          if ([...msgHistoryPrefetch.values()].some((entry) => entry.scope === chatKey)) discardMsgHistoryPrefetch();
         }
         const recalledIndex = matchesCurrent && messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
         if (msgIsRecalled(message) && recalledIndex >= 0) {
@@ -7882,8 +7911,8 @@
         $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
       const discardMsgHistoryPrefetch = () => {
-        msgHistoryPrefetch?.controller.abort();
-        msgHistoryPrefetch = null;
+        for (const entry of msgHistoryPrefetch.values()) entry.controller.abort();
+        msgHistoryPrefetch.clear();
       };
       const requestMsgHistoryPage = (chatId, chatType, appid, beforeId, beforeDate, limit, signal) => api('message/history', {
         method:'POST', body:JSON.stringify({
@@ -7891,24 +7920,81 @@
           before_date:beforeId ? '' : beforeDate, before_id:beforeId, limit,
         }), signal,
       });
-      const currentMsgHistoryPrefetch = (scope, beforeId, beforeDate, windowKey = '') => {
-        const entry = msgHistoryPrefetch;
+      const msgOlderPrefetchKey = (beforeId, beforeDate) => JSON.stringify(['latest', beforeId || beforeDate]);
+      const currentMsgHistoryPrefetch = (direction, scope, key) => {
+        const entry = msgHistoryPrefetch.get(direction);
         if (!entry) return null;
-        if (entry.scope === scope && entry.windowKey === windowKey
-          && entry.beforeId === beforeId && entry.beforeDate === (beforeId ? '' : beforeDate)
-          && !entry.controller.signal.aborted && Date.now() - entry.startedAt < msgHistoryPrefetchLifetime) return entry;
-        discardMsgHistoryPrefetch();
+        if (entry.scope === scope && entry.key === key && !entry.controller.signal.aborted
+          && Date.now() - entry.startedAt < msgHistoryPrefetchLifetime) return entry;
+        entry.controller.abort();
+        msgHistoryPrefetch.delete(direction);
         return null;
       };
-      const startMsgHistoryPrefetch = (key, request) => {
+      const takeMsgHistoryPrefetch = (direction, scope, key) => {
+        const entry = currentMsgHistoryPrefetch(direction, scope, key);
+        if (entry) msgHistoryPrefetch.delete(direction);
+        return entry;
+      };
+      const rememberMsgHistoryPrefetch = (direction, entry) => {
+        msgHistoryPrefetch.get(direction)?.controller.abort();
+        msgHistoryPrefetch.set(direction, entry);
+      };
+      const startMsgHistoryPrefetch = (direction, scope, key, request) => {
         const controller = new AbortController();
-        const entry = {...key, controller, startedAt:Date.now(), promise:null};
-        msgHistoryPrefetch = entry;
+        const entry = {scope, key, controller, startedAt:Date.now(), promise:null};
+        rememberMsgHistoryPrefetch(direction, entry);
         const timeout = setTimeout(() => controller.abort(), 18000);
         entry.promise = request(controller.signal).catch(() => {
-          if (msgHistoryPrefetch === entry) msgHistoryPrefetch = null;
+          if (msgHistoryPrefetch.get(direction) === entry) msgHistoryPrefetch.delete(direction);
           return null;
         }).finally(() => clearTimeout(timeout));
+      };
+      const cacheMsgHistoryRemainder = (direction, key, remainder, source) => {
+        if (!source || source.controller.signal.aborted || Date.now() - source.startedAt >= msgHistoryPrefetchLifetime) return;
+        rememberMsgHistoryPrefetch(direction, {...source, key, local:source.local ? remainder : null, promise:Promise.resolve(remainder)});
+      };
+      const cacheMsgHistoryReversal = (direction, scope, previousCursor, removed, history, hasBeyond) => {
+        const cursor = msgWindowCursor(direction);
+        if (!cursor) return;
+        const previous = previousCursor && currentMsgHistoryPrefetch(direction, scope, JSON.stringify(previousCursor));
+        const older = direction === 'before';
+        const flag = older ? 'has_more' : 'has_newer';
+        const buffered = previous?.local;
+        const messages = dedupeMsgMessages(older
+          ? [...(buffered?.messages || []), ...removed]
+          : [...removed, ...(buffered?.messages || [])]);
+        const limit = msgHistoryPrefetchSize;
+        const data = {
+          ...history,
+          messages:older ? messages.slice(-limit) : messages.slice(0, limit),
+          references:{...(buffered?.references || {}), ...(history.references || {})},
+          [flag]:Boolean(buffered ? buffered[flag] : hasBeyond) || messages.length > limit,
+        };
+        const entry = {scope, key:JSON.stringify(cursor), controller:new AbortController(),
+          startedAt:buffered ? previous.startedAt : Date.now(), local:data, promise:Promise.resolve(data)};
+        rememberMsgHistoryPrefetch(direction, entry);
+      };
+      const sanitizeMsgHistoryPage = (data, direction, cursor, chatType, chatId, appid) => {
+        const boundary = Number(cursor?.[direction + '_id'] || 0);
+        return dedupeMsgMessages((data.messages || []).filter((message) => {
+          if (String(message?.appid || '').trim() !== appid
+            || (message.chat_type && String(message.chat_type) !== chatType)
+            || (message._session && String(message._session) !== chatId)
+            || (message.chat_id && String(message.chat_id) !== chatId)
+            || msgIsKnownCleared(message, chatType, chatId, appid)) return false;
+          if (!boundary) return true;
+          const id = Number(message.id);
+          return Number.isSafeInteger(id) && id > 0 && (direction === 'before' ? id < boundary : id > boundary);
+        }));
+      };
+      const splitMsgHistoryPage = (data, direction, cursor, limit, chatType, chatId, appid) => {
+        const messages = sanitizeMsgHistoryPage(data, direction, cursor, chatType, chatId, appid);
+        if (messages.length <= limit) return {page:{...data, messages}, remainder:null};
+        const older = direction === 'before';
+        const page = {...data, messages:older ? messages.slice(-limit) : messages.slice(0, limit),
+          [older ? 'has_more' : 'has_newer']:true};
+        const remainder = {...data, messages:older ? messages.slice(0, -limit) : messages.slice(limit)};
+        return {page, remainder};
       };
       const warmMsgOlderHistory = () => {
         if (!msgState.chatId || !msgState.historyData?.has_more || msgState.historyOlderLoading
@@ -7920,9 +8006,10 @@
         const beforeDate = beforeId ? '' : (oldest?.timestamp || '');
         if (!beforeId && !beforeDate) return;
         const scope = msgScopeKey(chatType, chatId, chatAppid);
-        if (currentMsgHistoryPrefetch(scope, beforeId, beforeDate)) return;
-        startMsgHistoryPrefetch({scope, beforeId, beforeDate, windowKey:''}, (signal) =>
-          requestMsgHistoryPage(chatId, chatType, chatAppid, beforeId, beforeDate, msgHistoryInitialPageSize, signal));
+        const key = msgOlderPrefetchKey(beforeId, beforeDate);
+        if (currentMsgHistoryPrefetch('before', scope, key)) return;
+        startMsgHistoryPrefetch('before', scope, key, (signal) => requestMsgHistoryPage(chatId, chatType, chatAppid,
+          beforeId, beforeDate, beforeId ? msgHistoryPrefetchSize : msgHistoryInitialPageSize, signal));
       };
       const loadMsgHistory = async (older = false, quiet = false, authoritative = false, opening = false, olderLimit = msgHistoryInitialPageSize) => {
         if (!msgState.chatId) return;
@@ -7946,8 +8033,7 @@
         if (previousAbort) previousAbort.abort();
         const before = older ? (msgState.messages[0]?.timestamp || '') : '';
         const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-        const prefetched = older ? currentMsgHistoryPrefetch(requestScope, beforeId, before) : null;
-        if (prefetched) msgHistoryPrefetch = null;
+        const prefetched = older ? takeMsgHistoryPrefetch('before', requestScope, msgOlderPrefetchKey(beforeId, before)) : null;
         const controller = prefetched?.controller || new AbortController();
         msgState[older ? 'historyOlderAbort' : 'historyAbort'] = controller;
         if (!older) msgState.historyActiveScope = requestScope;
@@ -7975,9 +8061,14 @@
           if (!data) data = await requestMsgHistoryPage(requestChatId, requestChatType, requestAppid,
             beforeId, before, historyLimit, controller.signal);
           if ((!older && !returningWindow && msgState.historyWindow) || !requestIsCurrent() || (data.appid && String(data.appid).trim() !== requestAppid) || (data.chat_id && String(data.chat_id) !== requestChatId) || (data.chat_type && data.chat_type !== requestChatType)) return;
-          data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid
-            && !msgIsKnownCleared(message, requestChatType, requestChatId, requestAppid));
-          const incoming = mergeMsgRecalledStates(dedupeMsgMessages(data.messages));
+          let remainder = null;
+          if (older) {
+            const split = splitMsgHistoryPage(data, 'before', {before_id:beforeId},
+              beforeId ? Math.max(olderLimit, msgHistoryInitialPageSize) : olderLimit, requestChatType, requestChatId, requestAppid);
+            data = split.page;
+            remainder = beforeId ? split.remainder : null;
+          } else data.messages = sanitizeMsgHistoryPage(data, 'after', null, requestChatType, requestChatId, requestAppid);
+          const incoming = mergeMsgRecalledStates(data.messages);
           // 等待期间实时消息可能已首屏渲染，按当前页面状态判断是否仍是第一次显示。
           const newChat = msgState.renderedChatId !== requestChatId;
           const forceInitialBottom = !older && msgState.initialScrollChatId === requestChatId;
@@ -8038,6 +8129,14 @@
             msgState.initialScrollChatId = '';
           }
           if (!older && !msgState.historyWindow) cacheMsgHistory(historyCacheKey, {...data, messages:msgState.messages});
+          if (remainder) {
+            const windowCursor = msgState.historyWindow ? msgWindowCursor('before') : null;
+            const nextBeforeId = Number(msgState.messages[0]?.id || 0);
+            if (windowCursor || nextBeforeId > 0) {
+              const key = windowCursor ? JSON.stringify(windowCursor) : msgOlderPrefetchKey(nextBeforeId, '');
+              cacheMsgHistoryRemainder('before', key, remainder, prefetched);
+            }
+          }
           loadedPage = !older || (incoming.length > 0 && (beforeId
             ? Number(msgState.messages[0]?.id || 0) !== beforeId
             : msgState.messages[0]?.timestamp !== before));
@@ -8077,8 +8176,10 @@
             if (!loadedPage) msgState.historyPreloadKey = '';
           }
           if (loadedPage && requestIsCurrent()) {
-            if (msgState.historyWindow) warmMsgWindow('before');
-            else warmMsgOlderHistory();
+            if (msgState.historyWindow) {
+              warmMsgWindow('before');
+              warmMsgWindow('after');
+            } else warmMsgOlderHistory();
           }
         }
       };
@@ -8930,11 +9031,13 @@
         readComposerMediaFile(file, 4);
       });
       $('msg-media-clear').addEventListener('click', clearComposerMedia);
+      const msgHistorySwitchDistance = (body, delta = 0) => Math.min(2200,
+        Math.max(750, body.clientHeight * 1.5) + Math.min(700, Math.abs(delta) * 2));
       const maybeLoadOlderMessages = (body, upwardDistance) => {
         if (upwardDistance <= 0 || !msgState.chatId || !body.clientHeight
           || msgState.initialScrollChatId || msgQuoteJump.anchorAbort || msgQuoteJump.pending || msgQuoteJump.pagePending
           || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
-        const threshold = 750;
+        const threshold = msgHistorySwitchDistance(body, upwardDistance);
         const top = Math.max(0, body.scrollTop);
         if (top > threshold) return;
         const oldest = msgState.messages[0];
@@ -8955,7 +9058,7 @@
       const maybeLoadNewerMessages = (body, upwardDistance) => {
         if (upwardDistance >= 0 || !canPageMsgWindow('after') || msgQuoteJump.anchorAbort
           || msgQuoteJump.pending || msgQuoteJump.pagePending || !body.clientHeight) return;
-        if (body.scrollHeight - body.clientHeight - body.scrollTop > 750) return;
+        if (body.scrollHeight - body.clientHeight - body.scrollTop > msgHistorySwitchDistance(body, upwardDistance)) return;
         void loadMsgWindowPage('after', msgHistoryInitialPageSize, true);
       };
       const msgChatsNode = $('msg-chats');
