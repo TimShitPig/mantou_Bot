@@ -38,6 +38,9 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 外部提取地址 = "http://154.12.91.167:17324/extract"
 知乎分享提取地址 = "http://103.236.77.248:32838/fetch"
 章节详情地址模板 = "https://api.zhihu.com/km-indep-home/manuscript/{}/{}/header"
+盐言目录地址模板 = "https://api.zhihu.com/km-indep-home/catalog/{}"
+盐言目录页大小 = 100
+盐言目录章节上限 = 10000
 请求超时秒数 = 20
 正文提取总超时秒数 = 90
 正文提取读取超时秒数 = 75
@@ -562,6 +565,78 @@ async def _获取单章正文(
     return 结果
 
 
+async def _读取盐言专栏目录(session: aiohttp.ClientSession, 专栏编号: str) -> dict[str, Any]:
+    目录: list[dict[str, Any]] = []
+    已见章节: set[str] = set()
+    总章节数 = 0
+    书籍: dict[str, Any] = {}
+    while True:
+        偏移 = len(目录)
+        原始 = await _盐言低频读取(
+            session, 盐言目录地址模板.format(专栏编号), ("catalog", 专栏编号, 偏移), "zhihu",
+            headers=盐言网页请求头, params={"limit": 盐言目录页大小, "offset": 偏移},
+        )
+        数据 = _解析响应对象(原始)
+        if not isinstance(数据, dict) or 数据.get("error") or 数据.get("code") not in (None, 0, "0"):
+            raise _盐言查询错误("catalog_invalid")
+        项目, 分页 = 数据.get("data"), 数据.get("paging")
+        if not isinstance(分页, dict) or not isinstance(项目, list):
+            raise _盐言查询错误("catalog_invalid")
+        本页总数, 页结束 = 分页.get("total"), 分页.get("is_end")
+        页偏移, 页大小 = 分页.get("offset"), 分页.get("limit")
+        if (type(本页总数) is not int or not 1 <= 本页总数 <= 盐言目录章节上限
+                or type(页结束) is not bool or type(页偏移) is not int or 页偏移 != 偏移
+                or type(页大小) is not int or not 1 <= 页大小 <= 盐言目录页大小
+                or not 1 <= len(项目) <= 页大小 or 偏移 + len(项目) > 本页总数
+                or 页结束 != (偏移 + len(项目) == 本页总数)
+                or (not 页结束 and len(项目) != 页大小)):
+            raise _盐言查询错误("catalog_incomplete")
+        if 偏移 == 0:
+            总章节数 = 本页总数
+            专栏信息 = 数据.get("parent")
+            if not isinstance(专栏信息, dict):
+                专栏信息 = {}
+            书籍 = {
+                "title": 清理正文(专栏信息.get("title")) or "盐言专栏",
+                "author": _解析盐言作者(数据.get("author")) or "未知",
+                "intro": 清理正文(专栏信息.get("introduction")),
+                "status": "完结",
+                "column_id": 专栏编号,
+            }
+        elif 本页总数 != 总章节数:
+            raise _盐言查询错误("catalog_incomplete")
+        for 章节 in 项目:
+            if not isinstance(章节, dict):
+                raise _盐言查询错误("catalog_invalid")
+            章节编号 = str(章节.get("section_id") or "")
+            序号 = 章节.get("idx")
+            标题 = 清理正文(章节.get("title")) if isinstance(章节.get("title"), str) else ""
+            if (not re.fullmatch(r"[0-9]{8,30}", 章节编号) or 章节编号 in 已见章节
+                    or str(章节.get("business_id") or "") != 专栏编号
+                    or type(序号) is not int or 序号 != len(目录) or not 标题):
+                raise _盐言查询错误("catalog_invalid")
+            已见章节.add(章节编号)
+            目录.append({"id": 章节编号, "title": 标题})
+        if 页结束:
+            return {**书籍, "chapters": 目录}
+
+
+async def _下载盐言专栏(
+    session: aiohttp.ClientSession, 来源: str, 书籍: dict[str, Any]
+) -> dict[str, Any]:
+    正文章节: list[dict[str, str]] = []
+    总字数 = 0
+    for 目录章节 in 书籍["chapters"]:
+        章节 = await _获取单章正文(session, 来源, 书籍["column_id"], 目录章节)
+        正文 = 章节.get("content", "")
+        if (章节.get("section_id") != 目录章节["id"]
+                or not 去除章节正文重复标题(目录章节["title"], 正文).strip()):
+            raise _盐言查询错误("body_incomplete")
+        总字数 += len(re.sub(r"\s+", "", 正文))
+        正文章节.append(章节)
+    return {**书籍, "chapters": 正文章节, "word_count": 总字数}
+
+
 async def _准备盐言分享章节书籍(
     session: aiohttp.ClientSession, 来源: str
 ) -> dict[str, Any]:
@@ -629,6 +704,10 @@ def _创建盐言会话() -> aiohttp.ClientSession:
 
 async def 获取盐言正文(来源: str) -> dict[str, Any]:
     async with _创建盐言会话() as session:
+        专栏编号 = _解析知乎盐言专栏编号(来源)
+        if 专栏编号:
+            书籍 = await _读取盐言专栏目录(session, 专栏编号)
+            return await _下载盐言专栏(session, 来源, 书籍)
         书籍 = await _准备盐言分享章节书籍(session, 来源)
         return await _下载盐言分享章节(session, 来源, 书籍)
 
@@ -643,31 +722,37 @@ def 获取盐言小说回复流(
 
 
 async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[str]:
-    if _是知乎盐言专栏分享页(来源):
-        yield "已识别知乎盐言专栏。请打开你要下载的章节，再分享该章节的链接。"
-        return
+    专栏编号 = _解析知乎盐言专栏编号(来源)
     阶段 = "create_session"
     try:
         async with _创建盐言会话() as session:
-            阶段 = "share_fetch" if _知乎分享提取来源(来源) else "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
-            书籍 = await _准备盐言分享章节书籍(session, 来源)
+            if 专栏编号:
+                阶段 = "column_catalog"
+                书籍 = await _读取盐言专栏目录(session, 专栏编号)
+            else:
+                阶段 = "share_fetch" if _知乎分享提取来源(来源) else "article_fetch" if 解析知乎文章编号(来源) else "chapter_header"
+                书籍 = await _准备盐言分享章节书籍(session, 来源)
+            预期章数 = len(书籍["chapters"]) if 专栏编号 else 1
             logger.info(
                 f"盐言小说开始下载：业务编号={书籍.get('column_id')}, "
                 f"书名={书籍.get('title')}, 作者={书籍.get('author')}, "
-                "章节数=1"
+                f"章节数={预期章数}"
             )
             阶段 = "body_extract"
-            书籍 = await _下载盐言分享章节(session, 来源, 书籍)
+            if 专栏编号:
+                书籍 = await _下载盐言专栏(session, 来源, 书籍)
+            else:
+                书籍 = await _下载盐言分享章节(session, 来源, 书籍)
             阶段 = "body_validate"
             章节 = list(书籍.get("chapters") or [])
-            if len(章节) != 1 or not 章节[0].get("content"):
+            if not 预期章数 or len(章节) != 预期章数 or any(not 项.get("content") for 项 in 章节):
                 raise RuntimeError("盐言章节正文不完整")
             阶段 = "txt_assemble"
             yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
                 f"盐言小说章节下载完成：业务编号={书籍.get('column_id')}, "
-                f"成功={len(章节)}, 总数=1, 字数={书籍.get('word_count')}, "
+                f"成功={len(章节)}, 总数={预期章数}, 字数={书籍.get('word_count')}, "
                 f"文件大小={len(文件内容)}"
             )
             阶段 = "cache_and_share_upload"
@@ -943,18 +1028,17 @@ def _是盐言链接(值: str) -> bool:
     return 主机 in 允许主机 and bool(解析盐言编号(值)[0] or 解析知乎文章编号(值))
 
 
-def _是知乎盐言专栏分享页(值: str) -> bool:
+def _解析知乎盐言专栏编号(值: str) -> str:
     if len(值) > 16384 or re.search(r"\s", 值):
-        return False
+        return ""
     try:
         地址 = urlsplit(值)
     except ValueError:
-        return False
-    return (
-        地址.scheme.lower() == "https"
-        and 地址.netloc.lower() == "www.zhihu.com"
-        and re.fullmatch(r"/xen/market/remix/paid_column/[0-9]{8,30}/?", 地址.path) is not None
-    )
+        return ""
+    if 地址.scheme.lower() != "https" or 地址.netloc.lower() != "www.zhihu.com":
+        return ""
+    匹配 = re.fullmatch(r"/xen/market/remix/paid_column/([0-9]{8,30})/?", 地址.path)
+    return 匹配.group(1) if 匹配 else ""
 
 
 def _是知乎原始分享链接(值: str) -> bool:
@@ -1060,7 +1144,7 @@ def 提取盐言链接(值: Any) -> str:
             结果 = 提取盐言链接(子值)
             if not 结果:
                 continue
-            if not _是知乎盐言专栏分享页(结果):
+            if not _解析知乎盐言专栏编号(结果):
                 return 结果
             if not 候选专栏页:
                 候选专栏页 = 结果
@@ -1073,7 +1157,7 @@ def 提取盐言链接(值: Any) -> str:
             if _知乎分享提取来源(链接):
                 return 链接
             专栏候选 = 链接.partition("](")[0]
-            if not 候选专栏页 and _是知乎盐言专栏分享页(专栏候选):
+            if not 候选专栏页 and _解析知乎盐言专栏编号(专栏候选):
                 候选专栏页 = 专栏候选
         if 次数 == 2:
             break
