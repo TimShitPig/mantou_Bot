@@ -350,7 +350,7 @@
           }
           if (previousView !== 'messages' && msgState.chatId) {
             msgState.initialScrollChatId = msgState.chatId;
-            void loadMsgHistory(false, false, true);
+            void loadMsgHistory(false, false, true, true);
           }
         }
         else if (msgState.eventSource || msgState.eventSocket || msgState.eventReconnect) closeMsgEvents();
@@ -2529,7 +2529,7 @@
 
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
-      const msgHistoryInitialPageSize = 50;
+      const msgHistoryInitialPageSize = 16;
       const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionAbort:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
@@ -2967,8 +2967,13 @@
       const cacheMsgHistory = (key, data) => {
         if (!key || !data) return;
         msgState.historyCache.delete(key);
-        msgState.historyCache.set(key, data);
-         while (msgState.historyCache.size > 6) {
+        const messages = Array.isArray(data.messages) ? data.messages : [];
+        msgState.historyCache.set(key, {
+          ...data,
+          messages:messages.slice(-msgHistoryPageSize),
+          has_more:Boolean(data.has_more) || messages.length > msgHistoryPageSize,
+        });
+        while (msgState.historyCache.size > 6) {
           const oldest = msgState.historyCache.keys().next().value;
           if (oldest === undefined) break;
           msgState.historyCache.delete(oldest);
@@ -4547,10 +4552,16 @@
           body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
           body.scrollTop = 0;
           const cachedHistory = msgState.historyCache.get(msgScopeKey(chatType, chatId, chat.appid));
-          if (cachedHistory && Array.isArray(cachedHistory.messages) && cachedHistory.messages.length) {
-            msgState.messages = dedupeMsgMessages(cachedHistory.messages);
-            // 先显示上次已读内容，网络结果返回后再合并新消息。
-            renderMsgMessages({...cachedHistory, messages:msgState.messages}, {toBottom:true});
+          if (cachedHistory?.messages?.length) {
+            const messages = cachedHistory.messages.filter((message) =>
+              String(message?.appid || '').trim() === msgState.chatAppid
+              && !msgIsKnownCleared(message, chatType, chatId, msgState.chatAppid));
+            msgState.messages = dedupeMsgMessages(messages.slice(-msgHistoryInitialPageSize));
+            // 缓存只作为首屏预览，服务端最新页返回后替换旧快照。
+            if (msgState.messages.length) renderMsgMessages({
+              ...cachedHistory, messages:msgState.messages,
+              has_more:Boolean(cachedHistory.has_more) || messages.length > msgHistoryInitialPageSize,
+            }, {toBottom:true});
           }
         }
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
@@ -4576,7 +4587,7 @@
         const run = () => {
           msgState.historyScheduleFrame = null;
           if (token !== msgState.historyScheduleToken || msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid) !== scope) return;
-          loadMsgHistory();
+          void loadMsgHistory(false, false, false, true);
         };
         if (typeof requestAnimationFrame === 'function') msgState.historyScheduleFrame = requestAnimationFrame(run);
         else msgState.historyScheduleFrame = setTimeout(run, 0);
@@ -7578,6 +7589,7 @@
           && (!currentAppid || currentAppid === eventAppid);
         // 实时事件不能改变当前选中的机器人身份。
         const messageKey = msgMessageKey(message);
+        if (msgIsRecalled(message)) msgState.historyCache.delete(chatKey);
         const recalledIndex = matchesCurrent && messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
         if (msgIsRecalled(message) && recalledIndex >= 0) {
           msgState.messages = msgState.messages.map((item, index) => index === recalledIndex ? {...item, recalled:true} : item);
@@ -7619,7 +7631,6 @@
         if (matchesCurrent && payload.references) {
           msgState.historyData = {...(msgState.historyData || {}), references:{...(msgState.historyData?.references || {}), ...payload.references}};
         }
-        if (isNewEvent) msgState.historyCache.delete(msgScopeKey(chatType, chatId));
         const isViewing = matchesCurrent && !$('page-messages')?.hidden;
         const body = $('msg-body');
         const followLatest = isViewing && !msgQuoteJump.pending && !msgState.historyWindow
@@ -7761,7 +7772,7 @@
         else { msgState.selected.add(mid); row.classList.add('selected'); }
         $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
-      const loadMsgHistory = async (older = false, quiet = false, authoritative = false) => {
+      const loadMsgHistory = async (older = false, quiet = false, authoritative = false, opening = false) => {
         if (!msgState.chatId) return;
         if (msgQuoteJump.pending || (quiet && msgState.historyWindow)) return;
         if (older && msgState.historyWindow) return loadMsgWindowPage('before');
@@ -7798,9 +7809,8 @@
         try {
           const before = older ? (msgState.messages[0]?.timestamp || '') : '';
           const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-          const historyLimit = older || msgState.historyCache.has(historyCacheKey)
-            ? msgHistoryPageSize
-            : msgHistoryInitialPageSize;
+          const smallPage = opening && !older && !quiet && !returningWindow;
+          const historyLimit = smallPage ? msgHistoryInitialPageSize : msgHistoryPageSize;
           const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, appid:requestAppid, before_date:beforeId ? '' : before, before_id:beforeId, limit:historyLimit}), signal:controller.signal});
           if (!requestIsCurrent() || (data.appid && String(data.appid).trim() !== requestAppid) || (data.chat_id && String(data.chat_id) !== requestChatId) || (data.chat_type && data.chat_type !== requestChatType)) return;
           data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid
@@ -7845,7 +7855,7 @@
           if (returningWindow) msgState.historyWindow = null;
           msgState.messages = older
             ? dedupeMsgMessages([...incoming, ...currentMessages])
-            : authoritative
+            : (authoritative || smallPage)
               ? dedupeMsgMessages([...incoming, ...currentMessages.filter((message) => !messagesAtRequest.has(msgMessageKey(message)))])
               : ((preserveLoadedHistory || preserveAfterClear) ? dedupeMsgMessages([...currentMessages, ...incoming]) : incoming);
           renderMsgMessages(
@@ -7884,7 +7894,7 @@
             body.querySelector('[data-msg-history-retry]')?.addEventListener('click', () => {
               if (!msgMatchesCurrent(requestChatType, requestChatId, requestAppid)) return;
               body.innerHTML = '<div class="msg-loading" role="status" aria-label="正在加载消息"><span></span><span></span><span></span></div>';
-              void loadMsgHistory();
+              void loadMsgHistory(false, false, authoritative, opening);
             });
           } else if (!quiet || timedOut) toast(message);
         }

@@ -3043,6 +3043,11 @@ def _补充记录引用索引(记录: dict[str, Any], 原始消息: Any = None) 
     """接收与旧历史共用，只补缺失字段，不把引用索引写成消息自身 ID。"""
     原始消息 = 原始消息 if 原始消息 is not None else 记录.get("raw_message")
     引用负载 = 记录.pop("_reference_payload", None)
+    # 引用候选、自身索引和预览共用解析后的结构。
+    if isinstance(原始消息, (str, bytes)):
+        原始消息 = _解析消息结构(原始消息)
+    if isinstance(引用负载, (str, bytes)):
+        引用负载 = _解析消息结构(引用负载)
     候选 = _提取引用候选(原始消息) + _提取引用候选(引用负载)
     已有候选 = 记录.get("reference_ids")
     if isinstance(已有候选, list):
@@ -3127,21 +3132,21 @@ def _构造引用映射(
     引用标识 = list(dict.fromkeys(值 for 候选 in 引用候选.values() for 值 in sorted(候选)))
     if not 引用标识:
         return {}
+    目标标识 = set(引用标识)
     索引: dict[str, dict[str, Any]] = {}
     冲突: set[str] = set()
 
     def 加入(记录: dict[str, Any]) -> None:
         if not _引用作用域匹配(记录, 会话标识, 类型, appid):
             return
-        # 索引仅补顶层身份/昵称字段；媒体和原始负载只读，不复制大型归档对象。
-        记录 = dict(记录)
-        if not _规范消息ID(记录.get("refidx")):
-            _补充记录引用索引(记录)
         消息ID = _规范消息ID(记录.get("message_id"))
-        自身索引 = _规范消息ID(记录.get("refidx"))
-        for 别名 in (消息ID, 自身索引):
-            if not 别名:
-                continue
+        自身索引 = _规范消息ID(记录.get("refidx")) or _提取REFIDX(记录.get("raw_message"))
+        别名列表 = [别名 for 别名 in (消息ID, 自身索引) if 别名 and 别名 in 目标标识]
+        if not 别名列表:
+            return
+        # 命中的引用目标仅需自身索引和顶层昵称，完整消息始终只读。
+        记录 = {**记录, "refidx": 自身索引}
+        for 别名 in 别名列表:
             已有 = 索引.get(别名)
             if 已有 and (消息ID or 自身索引) != (_规范消息ID(已有.get("message_id")) or _规范消息ID(已有.get("refidx"))):
                 冲突.add(别名)
